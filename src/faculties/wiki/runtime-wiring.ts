@@ -18,6 +18,8 @@ import {
   type SharedWikiPgvectorProjectionStore,
 } from './shared-pgvector-projection.js';
 import { WikiRetrievalService } from './retrieval.js';
+import { createWikiAdmissionGate, type WikiAdmissionGate } from './admission.js';
+import type { CogSecArtifactAdmissionPort } from '../../core/cogsec/intake/durable-admission.js';
 import type {
   WikiDocument,
   WikiSemanticSearchFn,
@@ -80,6 +82,14 @@ export interface WikiRuntimeDeps {
   postgresRole?: string;
   /** Screen-then-gate runtime threaded to companion-authored wiki writes. */
   intake: SelfAuthoredMutationIntakeRuntime;
+  /**
+   * Content-addressed CogSec admission for prompt-bearing wiki documents
+   * (psfn-framework-1fjvm.2). Wired, a document is served into a prompt — the
+   * retrieval context block, the wiki tool, the semantic projection — only
+   * after its exact canonical bytes hold an admitted receipt or are admitted by
+   * a fresh screen. Absent, wiki reads behave exactly as before.
+   */
+  admission?: CogSecArtifactAdmissionPort;
   /** Runtime identity stamped on companion-authored shared-world proposals. */
   companionId?: string;
   /** System owner root containing places.json; used only to validate proposal site ids. */
@@ -90,6 +100,8 @@ export interface WikiRuntimeDeps {
 
 export interface WikiRuntimeWiring {
   store: WikiStore;
+  /** Present only when a CogSec admission port was wired (1fjvm.2). */
+  admissionGate: WikiAdmissionGate | null;
   personalProjects: PersonalProjectLibrary;
   personalWishlist: PersonalWishlist;
   projection: WikiPgvectorProjectionStore | null;
@@ -237,14 +249,62 @@ export async function wireWikiRuntime(
     }
   }
 
-  const store = new WikiStore(workspacePath, projection
+  // psfn-framework-1fjvm.2: the admission gate is the single place a wiki
+  // document earns the right to be served. It sits ON the upsert hook rather
+  // than inside WikiStore because the store is synchronous and admission is
+  // not — and because the hook is the one seam every canonical write already
+  // passes through.
+  const admissionGate = deps.admission ? createWikiAdmissionGate(deps.admission) : null;
+  const activeProjectionForUpsert = projection;
+  const onUpsert = admissionGate || activeProjectionForUpsert
+    ? async (document: WikiDocument): Promise<void> => {
+      if (admissionGate) {
+        const outcome = await admissionGate.admit(document);
+        if (outcome.state !== 'admitted') {
+          // A held document must not remain retrievable through chunks
+          // projected from an earlier, admitted version of itself.
+          await activeProjectionForUpsert?.removeDocument(document.id);
+          log.warn('Wiki document held by CogSec admission; withheld from retrieval', {
+            documentId: document.id,
+            sourceClass: document.sourceClass,
+            state: outcome.state,
+          });
+          return;
+        }
+      }
+      await activeProjectionForUpsert?.syncDocument(document);
+    }
+    : undefined;
+  const store = new WikiStore(workspacePath, onUpsert
     ? {
       // Return the promise so WikiStore's canonical hook boundary reports any
       // unexpected rejection through the Garden-visible diagnostic log ring.
       // Expected projection failures still emit wiki.projection.sync outcomes.
-      onUpsert: (document: WikiDocument) => projection!.syncDocument(document),
+      onUpsert,
     }
     : {});
+
+  /**
+   * Whether the document behind a projected chunk is admitted RIGHT NOW
+   * (psfn-framework-1fjvm.2). Reads the canonical file, so a document that was
+   * restored or rewritten since it was admitted reads back as unadmitted. A
+   * missing document, an unreadable one, and a checksum mismatch are all
+   * withheld: the read paths fail closed, never open.
+   */
+  const isPersonalDocumentAdmitted = admissionGate
+    ? (documentId: string): boolean => {
+      try {
+        const document = store.get(documentId);
+        return document !== null && admissionGate.status(document).state === 'admitted';
+      } catch (error) {
+        log.warn('Wiki admission check could not read the canonical document; withholding it', {
+          documentId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return false;
+      }
+    }
+    : undefined;
 
   let retrievalService: WikiRetrievalService | null = null;
   let semanticSearch: WikiSemanticSearchFn | undefined;
@@ -266,7 +326,12 @@ export async function wireWikiRuntime(
         // Manual search surface uses a permissive threshold (>= 0 similarity) so
         // the operator/agent can browse the whole projection; the gated chat RAG
         // path applies its own stricter, config-owned thresholds separately.
-        const matches = await activeProjection.search(vector, 0, limit);
+        const found = await activeProjection.search(vector, 0, limit);
+        // psfn-framework-1fjvm.2: chunk text is document body text, so an
+        // unadmitted document is withheld from this surface too.
+        const matches = isPersonalDocumentAdmitted
+          ? found.filter(match => isPersonalDocumentAdmitted(match.documentId))
+          : found;
         return {
           query,
           count: matches.length,
@@ -297,6 +362,7 @@ export async function wireWikiRuntime(
         ...(deps.eventBus ? { eventBus: deps.eventBus } : {}),
         getSettings: () => resolveWikiRetrievalSettings(getConfig()),
         ...(deps.getMultiCompanion ? { getMultiCompanion: deps.getMultiCompanion } : {}),
+        ...(isPersonalDocumentAdmitted ? { isPersonalDocumentAdmitted } : {}),
       });
     }
   }
@@ -353,6 +419,7 @@ export async function wireWikiRuntime(
   try {
     target.registerTool(createWikiTool(store, {
       ...(semanticSearch ? { semanticSearch } : {}),
+      ...(admissionGate ? { admissionGate } : {}),
       intake: deps.intake,
       ...(sharedWorldProposal ? { sharedWorldProposal } : {}),
       personalProjects,
@@ -362,19 +429,47 @@ export async function wireWikiRuntime(
     await closeWikiRuntimeAfterFailure(error, resources);
   }
 
-  if (projection) {
-    // Startup repair pass: rebuild the projection from the canonical workspace
-    // files. computeWikiProjectionDrift only re-embeds documents whose checksum
-    // drifted (or that are missing) and deletes orphaned projected documents,
-    // so a lost/stale projection self-heals from the source of truth on boot.
-    const activeProjection = projection;
+  // Startup admission + projection repair pass.
+  //
+  // This is the seam a RESTORE lands on. A fleet restore copies documents and
+  // metadata straight onto disk with their original `bodySha256`, never
+  // touching `upsert`, so nothing else in the runtime would ever look at those
+  // bytes again. Here every canonical document is re-admitted from disk before
+  // it can be projected, and only admitted documents are handed to `rebuild` —
+  // whose drift computation then deletes the projected chunks of everything
+  // else, including chunks left behind by an earlier admitted version.
+  //
+  // With receipts wired this costs one content-addressed lookup per unchanged
+  // document and no screening at all.
+  const startupAdmissionGate = admissionGate;
+  const startupProjection = projection;
+  if (startupAdmissionGate || startupProjection) {
     void (async () => {
       try {
         const documents = store
           .list()
           .map(entry => store.get(entry.id))
           .filter((document): document is WikiDocument => document !== null);
-        const result = await activeProjection.rebuild(documents);
+        let admitted = documents;
+        if (startupAdmissionGate) {
+          const gate = startupAdmissionGate;
+          const outcomes = await Promise.all(documents.map(async (document) => ({
+            document,
+            state: (await gate.admit(document)).state,
+          })));
+          admitted = outcomes
+            .filter((entry) => entry.state === 'admitted')
+            .map((entry) => entry.document);
+          const held = outcomes.length - admitted.length;
+          if (held > 0) {
+            log.warn('Wiki documents held by CogSec admission at startup', {
+              held,
+              scanned: outcomes.length,
+            });
+          }
+        }
+        if (!startupProjection) return;
+        const result = await startupProjection.rebuild(admitted);
         if (result.reembedded.length > 0 || result.deleted.length > 0 || result.failed.length > 0) {
           log.info('Wiki projection startup repair completed', {
             reembedded: result.reembedded.length,
@@ -392,6 +487,7 @@ export async function wireWikiRuntime(
 
   return {
     store,
+    admissionGate,
     personalProjects,
     personalWishlist,
     projection,

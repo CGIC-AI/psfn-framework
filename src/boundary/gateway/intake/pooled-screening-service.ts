@@ -237,6 +237,11 @@ export function createPooledIntakeScreeningService(
   return {
     mode,
     globalMode: underlying.globalMode,
+    // The pool can synthesize a fail-closed result whose contract is not the
+    // underlying service's, so this wrapper answers only what the underlying
+    // service can prove about itself. A null answer denies receipt reuse and
+    // forces a rescreen; it can never admit anything.
+    screeningContractDigest: (input) => underlying.screeningContractDigest(input),
     async screen(text, input: IntakeScreeningInput): Promise<IntakeScreeningResult> {
       try {
         return await pool.run(

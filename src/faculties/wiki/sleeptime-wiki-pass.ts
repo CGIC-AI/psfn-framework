@@ -57,6 +57,7 @@ import type {
   WikiSearchInput,
   WikiSearchResult,
 } from './types.js';
+import type { WikiAdmissionGate } from './admission.js';
 
 const log = createComponentLogger('SleeptimeWikiPass');
 
@@ -127,6 +128,14 @@ export interface SleeptimeWikiPassOptions {
   personaPreamble?: PersonaPreamblePort | null;
   /** Typed gate telemetry sink (jpvd.4); wired to the event bus by composition. */
   onGateEvent?: (event: DeterministicGateEvent) => void;
+  /**
+   * Content-addressed CogSec admission for the model-generated synthesis this
+   * pass writes (psfn-framework-1fjvm.2). Model output written straight to the
+   * wiki is exactly the case the receipt port exists for, so the pass awaits
+   * its own writes' admission instead of relying on the store's fire-and-forget
+   * projection hook. Absent, the pass behaves as before.
+   */
+  admissionGate?: WikiAdmissionGate;
   now?: () => Date;
   /** Bounds how many active memories are scanned to find the review window. */
   memoryScanLimit?: number;
@@ -149,6 +158,13 @@ export interface SleeptimeWikiPassRunResult {
   entriesCreated: number;
   entriesUpdated: number;
   proposalsRejected: number;
+  /**
+   * Generated syntheses that were written but held by CogSec admission
+   * (psfn-framework-1fjvm.2). They are durable on disk for the operator to
+   * review and are not retrievable; the rest of the run's entries continue
+   * normally, so one hostile synthesis never stops the pass.
+   */
+  entriesHeld: number;
 }
 
 export type WikiPassProposalOperation = 'create' | 'update';
@@ -375,6 +391,7 @@ export class SleeptimeWikiPass {
   private readonly promptRegistry: PromptRegistryStatePort | null;
   private readonly personaPreamble: PersonaPreamblePort | null;
   private readonly onGateEvent: ((event: DeterministicGateEvent) => void) | null;
+  private readonly admissionGate: WikiAdmissionGate | null;
   private readonly now: () => Date;
   private readonly memoryScanLimit: number;
   private readonly gate: DeterministicGateDefinition;
@@ -388,6 +405,7 @@ export class SleeptimeWikiPass {
     this.promptRegistry = options.promptRegistry ?? null;
     this.personaPreamble = options.personaPreamble ?? null;
     this.onGateEvent = options.onGateEvent ?? null;
+    this.admissionGate = options.admissionGate ?? null;
     this.now = options.now ?? (() => new Date());
     this.memoryScanLimit = options.memoryScanLimit && options.memoryScanLimit > 0
       ? Math.floor(options.memoryScanLimit)
@@ -403,6 +421,7 @@ export class SleeptimeWikiPass {
       entriesCreated: 0,
       entriesUpdated: 0,
       proposalsRejected: 0,
+      entriesHeld: 0,
     };
 
     if (!this.config.enabled) {
@@ -515,10 +534,26 @@ export class SleeptimeWikiPass {
 
     let entriesCreated = 0;
     let entriesUpdated = 0;
+    let entriesHeld = 0;
     for (const proposal of guarded.accepted) {
       if (entriesCreated + entriesUpdated >= this.config.maxEntriesPerRun) break;
       const written = this.writeProposal(proposal, input.sessionId);
       if (!written) continue;
+      // Awaited, not fire-and-forget: the run must be able to report which of
+      // its own generated syntheses were held, and a held one must be inert
+      // before the pass claims it created an entry.
+      if (this.admissionGate) {
+        const admission = await this.admissionGate.admit(written);
+        if (admission.state !== 'admitted') {
+          entriesHeld += 1;
+          log.warn('Sleeptime wiki pass synthesis held by CogSec admission', {
+            sessionId: input.sessionId,
+            documentId: written.id,
+            state: admission.state,
+          });
+          continue;
+        }
+      }
       if (written.version > 1) entriesUpdated += 1;
       else entriesCreated += 1;
     }
@@ -539,6 +574,7 @@ export class SleeptimeWikiPass {
           reviewedMemories: worldMemories.length,
           entriesCreated,
           entriesUpdated,
+          entriesHeld,
           proposalsRejected: guarded.rejected.length,
         },
       },
@@ -554,6 +590,7 @@ export class SleeptimeWikiPass {
       entriesCreated,
       entriesUpdated,
       proposalsRejected: guarded.rejected.length,
+      entriesHeld,
     };
     log.info('Sleeptime wiki pass complete', { sessionId: input.sessionId, ...result });
     return result;

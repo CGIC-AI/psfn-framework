@@ -14,13 +14,20 @@ import {
   applySkillPrecedence,
   buildSkillFileSignature,
   cooperativeSort,
+  createSkillDocumentReadBudget,
   DEFAULT_SKILL_COLLECTION_LIMITS,
   loadSkillEntries,
+  readSkillBodyFromDocument,
   readSkillContent,
   readSkillContents as readSkillContentBatch,
+  readSkillDocument,
   resolveSkillDirectories,
   scanSkillRoots,
+  type SkillDocumentReadOptions,
 } from './loader.js';
+import type {
+  CogSecArtifactAdmissionPort,
+} from '../../core/cogsec/intake/durable-admission.js';
 import {
   normalizeSkillCategory,
   normalizeSkillDescription,
@@ -41,6 +48,14 @@ import type {
   SkillUsageStats,
 } from './types.js';
 
+/**
+ * A skill body read for execution, or the typed reason it stays inert
+ * (psfn-framework-1fjvm.1). The held branch never carries the body.
+ */
+export type SkillContentReadResult =
+  | { lookup: SkillLookupResult; content: string }
+  | { lookup: SkillLookupResult; held: SkillSkipRecord };
+
 export interface SkillsRuntimeOptions {
   dataDir: string;
   seedDir?: string;
@@ -50,6 +65,18 @@ export interface SkillsRuntimeOptions {
   isBinaryAvailable?: (binaryName: string) => boolean | Promise<boolean>;
   now?: () => Date;
   collectionLimits?: Partial<SkillCollectionLimits>;
+  /**
+   * Content-addressed CogSec admission for executable skill bodies
+   * (psfn-framework-1fjvm.1). Wired, no skill's frontmatter, description, or
+   * body reaches model context or a callable skill view until the exact
+   * document bytes hold an admitted receipt or are admitted by a fresh screen.
+   *
+   * Absent (maintenance CLIs, focused tests, compositions with no CogSec
+   * intake), skills load exactly as before. That is a composition-level
+   * decision recorded here, never a per-skill exemption: no source, precedence,
+   * or bundled/system origin can skip the gate once it is wired.
+   */
+  admission?: CogSecArtifactAdmissionPort;
 }
 
 interface SkillSnapshotCache {
@@ -164,26 +191,129 @@ export class SkillsRuntime {
     return this.store;
   }
 
-  async readSkillContent(name: string): Promise<{
-    lookup: SkillLookupResult;
-    content: string;
-  } | null> {
+  /**
+   * Admit ONE skill's exact complete SKILL.md bytes (psfn-framework-1fjvm.1).
+   *
+   * The document is read once, through the loader's TOCTOU-guarded stable
+   * read, and those same bytes are what the admission gate hashes, looks up a
+   * receipt for, and — on any refusal — re-screens. Nothing about the entry
+   * (path, source, precedence, mtime, prior admission of an earlier version)
+   * participates: only the bytes in hand.
+   *
+   * With no admission port wired the skill loads as before; that is a
+   * composition decision, not a per-skill exemption.
+   */
+  private async admitSkillDocument(
+    entry: SkillEntry,
+    options: SkillDocumentReadOptions = {},
+  ): Promise<{ admitted: true; body: string } | { admitted: false; skip: SkillSkipRecord }> {
+    const document = await readSkillDocument(entry, options);
+    const admission = this.options.admission;
+    if (!admission) {
+      return { admitted: true, body: readSkillBodyFromDocument(document, entry.relativePath) };
+    }
+    const outcome = await admission.admit({
+      content: document,
+      artifactRef: entry.relativePath,
+      origin: { ref: `skill:${entry.relativePath}`, detail: entry.source },
+    });
+    if (!outcome.admitted) {
+      return {
+        admitted: false,
+        skip: {
+          kind: 'admission_held',
+          name: entry.name,
+          relativePath: entry.relativePath,
+          source: entry.source,
+          reason: outcome.detail,
+          details: [
+            `hold reason: ${outcome.reason}`,
+            ...(outcome.riskLabels.length > 0
+              ? [`screening labels: ${outcome.riskLabels.join(', ')}`]
+              : []),
+          ],
+        },
+      };
+    }
+    // Parse the ADMITTED bytes, not the bytes read from disk: a 'sanitize'
+    // decision admits a transformed document, and the body handed onward must
+    // be the one that was admitted.
+    return {
+      admitted: true,
+      body: readSkillBodyFromDocument(outcome.content, entry.relativePath),
+    };
+  }
+
+  /**
+   * Admission failures that are not a screening verdict — an unreadable or
+   * mid-write file, an oversized document, an exhausted read budget — hold the
+   * skill too. A skill whose bytes could not be admitted must never be served
+   * on the strength of frontmatter that was read earlier.
+   */
+  private async admitSkillDocumentOrHold(
+    entry: SkillEntry,
+    options: SkillDocumentReadOptions = {},
+  ): Promise<{ admitted: true; body: string } | { admitted: false; skip: SkillSkipRecord }> {
+    try {
+      return await this.admitSkillDocument(entry, options);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      return {
+        admitted: false,
+        skip: {
+          kind: 'admission_held',
+          name: entry.name,
+          relativePath: entry.relativePath,
+          source: entry.source,
+          reason: `CogSec admission could not read this skill: ${detail}`,
+          details: ['hold reason: admission_unavailable'],
+        },
+      };
+    }
+  }
+
+  /**
+   * The skill body, or a typed hold record when CogSec admission refuses it.
+   *
+   * Re-admitting here rather than trusting the cache is the point: cache
+   * admission proved the bytes that existed at scan time; this proves the bytes
+   * that are about to be handed to the model. A byte-identical document costs
+   * one content-addressed receipt lookup and no scan.
+   */
+  async readSkillContent(name: string): Promise<SkillContentReadResult | null> {
     const lookup = await this.findSkill(name);
     if (!lookup) return null;
-    return {
-      lookup,
-      content: await readSkillContent(lookup.entry),
-    };
+    if (!this.options.admission) {
+      return { lookup, content: await readSkillContent(lookup.entry) };
+    }
+    const outcome = await this.admitSkillDocumentOrHold(lookup.entry);
+    return outcome.admitted
+      ? { lookup, content: outcome.body }
+      : { lookup, held: outcome.skip };
   }
 
   async readSkillContents(entries: SkillEntry[]): Promise<Map<string, string>> {
     const limits = this.getCollectionLimits();
-    const contents = await readSkillContentBatch(
-      entries,
-      limits.maxContentBytes,
-      limits.yieldEvery,
-    );
-    return new Map(entries.map((entry, index) => [entry.id, contents[index]!]));
+    if (!this.options.admission) {
+      const contents = await readSkillContentBatch(
+        entries,
+        limits.maxContentBytes,
+        limits.yieldEvery,
+      );
+      return new Map(entries.map((entry, index) => [entry.id, contents[index]!]));
+    }
+    const readOptions = createSkillDocumentReadBudget(limits.maxContentBytes);
+    const contents = new Map<string, string>();
+    for (const [index, entry] of entries.entries()) {
+      const outcome = await this.admitSkillDocumentOrHold(entry, readOptions);
+      // A held skill is omitted, never returned with placeholder prose: the
+      // caller's `has(id)` check is the single fail-closed test.
+      if (outcome.admitted) contents.set(entry.id, outcome.body);
+      if ((index + 1) % limits.yieldEvery === 0) {
+        await new Promise<void>(resolveYield => setImmediate(resolveYield));
+      }
+    }
+    return contents;
   }
 
   async recordSkillInvocation(
@@ -269,7 +399,12 @@ export class SkillsRuntime {
         (left, right) => left.name.localeCompare(right.name),
         limits.yieldEvery,
       ),
-      skipped: [],
+      // Garden is the operator's only repair surface for a managed skill, so a
+      // skill held by CogSec admission must appear here as a typed hold rather
+      // than silently vanish from the list (psfn-framework-1fjvm.1).
+      skipped: cache.snapshot.skipped.filter(skip => (
+        skip.kind === 'admission_held' && skip.source === 'custom'
+      )),
     };
   }
 
@@ -375,14 +510,18 @@ export class SkillsRuntime {
       initialRetainedBytes: scan.collection.candidateBytesRetained,
     });
     const deduped = await applySkillPrecedence(parsed.entries, limits.yieldEvery);
+    // CogSec admission (psfn-framework-1fjvm.1) runs BEFORE eligibility,
+    // formatting, and the by-name lookup map, so a held skill's frontmatter
+    // never reaches the prompt XML and `findSkill` cannot resolve it.
+    const admission = await this.admitSkillEntries(deduped.entries, limits);
     const eligibility: Awaited<ReturnType<typeof filterEligibleSkills>> = {
       evaluations: [],
       eligible: [],
       skipped: [],
     };
-    for (let offset = 0; offset < deduped.entries.length; offset += limits.yieldEvery) {
+    for (let offset = 0; offset < admission.entries.length; offset += limits.yieldEvery) {
       const chunk = await filterEligibleSkills(
-        deduped.entries.slice(offset, offset + limits.yieldEvery),
+        admission.entries.slice(offset, offset + limits.yieldEvery),
         {
           runtimeConfig,
           environment: this.options.environment,
@@ -421,7 +560,7 @@ export class SkillsRuntime {
       directories,
       roots: scan.roots,
       scannedFiles: files.length,
-      loadedSkills: deduped.entries.length,
+      loadedSkills: admission.entries.length,
       collection: {
         ...scan.collection,
         metadataBytesRead: parsed.metadataBytesRead,
@@ -435,6 +574,7 @@ export class SkillsRuntime {
         ...scan.skipped,
         ...parsed.skipped,
         ...deduped.skipped,
+        ...admission.skipped,
         ...eligibility.skipped,
         ...formatted.excluded,
       ],
@@ -453,13 +593,41 @@ export class SkillsRuntime {
       snapshot,
       evaluations: eligibility.evaluations,
       byName,
-      managedEntries: parsed.entries.filter(entry => entry.source === 'custom'),
+      managedEntries: admission.entries.filter(entry => entry.source === 'custom'),
     };
 
     if (generation === this.cacheGeneration) {
       this.cache = nextCache;
     }
     return nextCache;
+  }
+
+  /**
+   * Admit every discovered skill's exact document bytes before any of them can
+   * be formatted into the prompt or resolved by name.
+   *
+   * Runs only when the snapshot fingerprint changed, so an unchanged skill
+   * collection pays nothing here; a changed one pays one content-addressed
+   * receipt lookup per skill and a real screen only for the bytes that have no
+   * admitted receipt under the current screening contract.
+   */
+  private async admitSkillEntries(
+    entries: SkillEntry[],
+    limits: SkillCollectionLimits,
+  ): Promise<{ entries: SkillEntry[]; skipped: SkillSkipRecord[] }> {
+    if (!this.options.admission) return { entries, skipped: [] };
+    const readOptions = createSkillDocumentReadBudget(limits.maxContentBytes);
+    const admitted: SkillEntry[] = [];
+    const skipped: SkillSkipRecord[] = [];
+    for (const [index, entry] of entries.entries()) {
+      const outcome = await this.admitSkillDocumentOrHold(entry, readOptions);
+      if (outcome.admitted) admitted.push(entry);
+      else skipped.push(outcome.skip);
+      if ((index + 1) % limits.yieldEvery === 0) {
+        await new Promise<void>(resolveYield => setImmediate(resolveYield));
+      }
+    }
+    return { entries: admitted, skipped };
   }
 
   private loadRuntimeConfig(): SkillsRuntimeConfig {

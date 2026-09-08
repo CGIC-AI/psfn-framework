@@ -76,6 +76,7 @@ const HEALTH_EVENT_COMPONENTS = [
   'scheduler',
   'persistence',
   'memory',
+  'automata',
 ] as const;
 
 export type HealthEventComponent = typeof HEALTH_EVENT_COMPONENTS[number];
@@ -118,6 +119,14 @@ const HEALTH_EVENT_CODES = [
   'background_work_failures_opened',
   /** That lane stopped failing for a full window. */
   'background_work_failures_closed',
+  /**
+   * One automata run or scheduler task started and reached no terminal state
+   * inside its owner-file budget. Grouped by a digest of the RUN or TASK, so a
+   * stuck job is one incident rather than one per detector cycle.
+   */
+  'stuck_runtime_job_opened',
+  /** That run or task finished, was cancelled, or left the retained view. */
+  'stuck_runtime_job_closed',
 ] as const;
 
 export type HealthEventCode = typeof HEALTH_EVENT_CODES[number];
@@ -151,6 +160,10 @@ const HEALTH_INCIDENT_FAMILY_CODES = {
   background_work_failures: {
     opened: 'background_work_failures_opened',
     closed: 'background_work_failures_closed',
+  },
+  stuck_runtime_job: {
+    opened: 'stuck_runtime_job_opened',
+    closed: 'stuck_runtime_job_closed',
   },
 } as const satisfies Readonly<Record<string, { opened: HealthEventCode; closed: HealthEventCode }>>;
 
@@ -221,6 +234,7 @@ const HEALTH_EVENT_EVIDENCE_KEYS = [
   'attemptCount',
   'configuredSinkCount',
   'durationMs',
+  'elapsedMs',
   'failureCount',
   'jobAgeMs',
   'poolCapacity',

@@ -323,6 +323,7 @@ export function hydrateCanonicalStartupConfig(
       incidentScanLimit: persistedScheduler.healthDetectors.incidentScanLimit,
       postgresPressure: { ...persistedScheduler.healthDetectors.postgresPressure },
       backgroundFailures: { ...persistedScheduler.healthDetectors.backgroundFailures },
+      stuckJobs: { ...persistedScheduler.healthDetectors.stuckJobs },
     },
     backgroundWork: {
       supervisor: { ...persistedScheduler.backgroundWork.supervisor },

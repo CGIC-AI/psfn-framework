@@ -442,6 +442,7 @@ describe('migrateLegacySchedulerOwner', () => {
         'healthDetectors.incidentScanLimit',
         'healthDetectors.postgresPressure',
         'healthDetectors.backgroundFailures',
+        'healthDetectors.stuckJobs',
       ],
     });
     const migrated = loadSchedulerConfig(dataDir).healthDetectors;

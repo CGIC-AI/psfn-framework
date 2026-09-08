@@ -868,6 +868,8 @@ async function main(): Promise<void> {
     healthDetectors: {
       stream: persistenceRuntime.healthEventStore,
       postgresPoolTelemetry: getPostgresPoolTelemetry,
+      // Public runtime read API only: this lane never mutates a run.
+      automataRuns: () => persistenceRuntime.automataRunRegistry.listRetainedRunsForRuntime(),
     },
   });
   // Letters land in their own L0 channel, which no completed turn ever points

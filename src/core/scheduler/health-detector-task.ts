@@ -11,7 +11,7 @@
 import type { Scheduler } from './scheduler.js';
 import type { HealthDetectorCycle } from '../../shared/observability/health-detectors/cycle.js';
 
-const RUNTIME_HEALTH_DETECTOR_TASK_ID = 'runtime-health-detectors';
+export const RUNTIME_HEALTH_DETECTOR_TASK_ID = 'runtime-health-detectors';
 
 const RUNTIME_HEALTH_DETECTOR_SCHEDULE_SOURCE =
   'scheduler.json > healthDetectors.intervalMs';

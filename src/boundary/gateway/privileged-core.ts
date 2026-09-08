@@ -9,6 +9,7 @@ import { GatewayCapabilityTierResolver } from './capability-tier-resolver.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { GitOps } from '../integrations/git/ops.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import { resolveGatewayReceiptStoreTargets } from './intake/receipt-store-targets.js';
 import { createPostgresGatewayAuditStore } from './postgres-audit.js';
 import type { GatewayBootstrapInput } from './bootstrap-input.js';
 import { createGatewayPrivilegedServiceRegistry } from './privileged-services.js';
@@ -236,6 +237,12 @@ export async function buildGatewayPrivilegedCore(
   // scoped to that companion's schema exactly like the fleet-wide read stores,
   // because a receipt is owned by exactly one companion.
   //
+  // Each store is opened on that companion's OWN schema AND role, exactly like
+  // the agent's `cogsec_receipts` store: whichever process connects first
+  // creates the receipts table, and the creating role owns it. A gateway that
+  // connected on the bare login role would leave the agent's REQUIRED readiness
+  // failing on a table its tenant role cannot touch.
+  //
   // The store is an OPTIONAL readiness entry: a receipt is admission PROOF, not
   // an admission gate, and its absence only forces the next consumer to screen
   // again (the safe direction). A schema failure is therefore recorded as a
@@ -247,27 +254,16 @@ export async function buildGatewayPrivilegedCore(
     loadIntakePolicyConfig(input.startupHydration.systemDataDir).receipts,
   );
   const receiptStoresByCompanionId = new Map<string, PostgresCogSecReceiptStore>();
-  const receiptSchemas: ReadonlyArray<{ companionId?: CompanionId; schema?: string }> =
-    input.config.companionFleet
-      ? input.config.companionFleet.companions.map(companion => ({
-        companionId: companion.companionId,
-        schema: companion.postgresSchema,
-      }))
-      : [{ ...(input.config.postgresSchema?.trim()
-        ? { schema: input.config.postgresSchema.trim() }
-        : {}) }];
-  for (const entry of receiptSchemas) {
+  for (const entry of resolveGatewayReceiptStoreTargets(input.config)) {
     const store = await awaitOptionalPostgresStoreReadiness(
       'gateway_cogsec_receipts',
-      () => PostgresCogSecReceiptStore.connect(
-        databaseUrl,
-        entry.schema ? { schema: entry.schema } : {},
-      ),
+      () => PostgresCogSecReceiptStore.connect(databaseUrl, entry.connectOptions),
     );
     if (!store) {
       receiptLog.warn('Gateway ingress admission receipts unavailable for companion', {
         ...(entry.companionId ? { companionId: entry.companionId } : {}),
-        ...(entry.schema ? { schema: entry.schema } : {}),
+        ...(entry.connectOptions.schema ? { schema: entry.connectOptions.schema } : {}),
+        ...(entry.connectOptions.role ? { role: entry.connectOptions.role } : {}),
       });
       continue;
     }

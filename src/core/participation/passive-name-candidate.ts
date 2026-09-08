@@ -24,7 +24,6 @@ import {
 } from './room-observation.js';
 import {
   evaluateRoomSignalEligibility,
-  normalizeRoomContent,
   toRoomNomination,
   type RoomCompanionProfile,
   type RoomMessageFeatureExtractor,
@@ -426,7 +425,11 @@ export class PassiveNameCandidateBuilder {
     const features = runtime.extractor.extract(observation);
     const eligibility = evaluateRoomSignalEligibility({
       features,
-      normalizedContent: normalizeRoomContent(observation.content),
+      // vprcm: the canonical detector owns normalization and the authoritative
+      // `<@id>` cue, so the raw line and this companion's own connector ids go
+      // in exactly as they do for the group-salience match above.
+      content: observation.content,
+      companionAuthorIds: this.companionAuthorIds,
       profile: runtime.profile,
       settings: runtime.settings,
     });

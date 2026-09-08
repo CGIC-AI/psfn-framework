@@ -1,7 +1,10 @@
 import type { Event as NostrEvent } from 'nostr-tools';
 import { screenChatMessageEnvelope } from '../../core/cogsec/intake/chat-message-screening.js';
 import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
-import { parseMessageAddressingMetadata } from '../../shared/contracts/message-addressing.js';
+import {
+  parseMessageAddressingMetadata,
+  type MessageAuthorSourceClass,
+} from '../../shared/contracts/message-addressing.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import {
   buzzChannelId,
@@ -17,6 +20,23 @@ export interface BuzzMessageContext {
   companionPubkey: string;
   authorIsMachine: boolean;
   intakeScreening: IntakeScreeningService | null;
+}
+
+/**
+ * The one cross-connector author trust floor (psfn-framework-vprcm). Discord
+ * (`resolveMessageSourceClass`) and Telegram (`resolveInboundSourceClass`)
+ * answer this same DM-conditioned question, so Buzz answers it the same way
+ * instead of asserting a second, more permissive policy for one connector.
+ *
+ * A Nostr relay asserts no room membership, role, or prior relationship for an
+ * `h`-tagged post, so an unknown room author lands on the least-privileged chat
+ * class. The DM branch exists so the policy keeps one shape if Nostr private
+ * messaging is ever admitted, not because Buzz can reach it today.
+ */
+export function resolveBuzzAuthorSourceClass(
+  isDirectMessage: boolean,
+): MessageAuthorSourceClass {
+  return isDirectMessage ? 'regular_contact' : 'public_contact';
 }
 
 export async function toBuzzSubstrateMessage(
@@ -41,6 +61,9 @@ export async function toBuzzSubstrateMessage(
   }));
   const companionMentioned = buzzTagValues(event, 'p').includes(context.companionPubkey);
   const thread = parseBuzzThreadReference(event);
+  // Buzz has no private-message surface: every admitted event is a room post.
+  const isDirectMessage = false;
+  const sourceClass = resolveBuzzAuthorSourceClass(isDirectMessage);
   const channel = {
     scope: 'group' as const,
     channelId,
@@ -58,7 +81,7 @@ export async function toBuzzSubstrateMessage(
     // screening below. Nostr asserts neither a room role nor a member count, so
     // both stay `unknown` — the untrusted/large case for participation policy.
     authorClass: {
-      sourceClass: 'regular_contact',
+      sourceClass,
       roomRole: 'unknown',
       roomSize: 'unknown',
     },
@@ -74,7 +97,7 @@ export async function toBuzzSubstrateMessage(
   const screened = await screenChatMessageEnvelope({
     envelope: { content: event.content, addressing },
     screening: context.intakeScreening,
-    sourceClass: 'regular_contact',
+    sourceClass,
     surface: 'buzz',
     channelId,
     messageId: event.id,
@@ -89,7 +112,7 @@ export async function toBuzzSubstrateMessage(
     authorName: author.authorName,
     content: screened.envelope.content,
     timestamp: new Date(event.created_at * 1_000),
-    isDirectMessage: false,
+    isDirectMessage,
     ...(thread ? { replyToMessageId: thread.parentEventId } : {}),
     routing: {
       source: 'buzz',

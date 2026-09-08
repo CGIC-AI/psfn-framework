@@ -8,7 +8,6 @@ import {
   RoomMessageFeatureExtractor,
   SharedRoomClassifier,
   evaluateRoomSignalEligibility,
-  normalizeRoomContent,
   toRoomNomination,
   type RoomAmbiguityClassifierPort,
   type RoomClassificationClaimPort,
@@ -50,13 +49,21 @@ function observation(overrides: Partial<RoomObservation> = {}): RoomObservation 
   };
 }
 
+const COMPANION_AUTHOR_IDS = ['bot-1'] as const;
+
 function evaluate(
-  input: { observation: RoomObservation; settings: RoomSignalSettings; profile?: RoomCompanionProfile },
+  input: {
+    observation: RoomObservation;
+    settings: RoomSignalSettings;
+    profile?: RoomCompanionProfile;
+    companionAuthorIds?: readonly string[];
+  },
 ) {
   const extractor = new RoomMessageFeatureExtractor({ settings: input.settings });
   return evaluateRoomSignalEligibility({
     features: extractor.extract(input.observation),
-    normalizedContent: normalizeRoomContent(input.observation.content),
+    content: input.observation.content,
+    companionAuthorIds: input.companionAuthorIds ?? COMPANION_AUTHOR_IDS,
     profile: input.profile ?? PROFILE,
     settings: input.settings,
   });
@@ -186,7 +193,8 @@ describe('evaluateRoomSignalEligibility', () => {
     for (const [index, id] of ['a', 'b', 'c'].entries()) {
       last = evaluateRoomSignalEligibility({
         features: extractor.extract(observation({ messageId: id, timestampMs: base + index })),
-        normalizedContent: normalizeRoomContent('the migration is stuck again'),
+        content: 'the migration is stuck again',
+        companionAuthorIds: COMPANION_AUTHOR_IDS,
         profile: PROFILE,
         settings: config,
       });
@@ -217,6 +225,118 @@ describe('evaluateRoomSignalEligibility', () => {
       observation: observation({ content: 'what do we do about that thing' }),
       settings: settings({ topicTags: { persistence: ['migration'] } }),
     })).toEqual({ outcome: 'ambiguous', reasonCodes: ['trusted_source_class'] });
+  });
+});
+
+// psfn-framework-vprcm. Room signal used to carry its own alias matcher whose
+// boundary rules differed from the canonical `detectCompanionNameMatch` used by
+// group-memory salience and the passive-name gate. These cases pin the single
+// detector: the addressing forms the local matcher dropped are now admitted,
+// and the one form it over-matched is now refused the same way everywhere else.
+describe('evaluateRoomSignalEligibility canonical name detection', () => {
+  const untrustedAuthor = {
+    ...observation().author,
+    sourceClass: 'public_contact' as const,
+    roomRole: 'unknown' as const,
+  };
+
+  it('admits a bare platform mention with no alias text as a direct address', () => {
+    // The old local matcher only read alias prose, so a first-contact line that
+    // addressed the companion by its connector id alone was ambient chatter.
+    expect(evaluate({
+      observation: observation({ author: untrustedAuthor, content: '<@bot-1> can you look?' }),
+      settings: settings(),
+    })).toEqual({
+      outcome: 'eligible',
+      trigger: 'direct_mention',
+      reasonCodes: ['alias_leading_address'],
+    });
+  });
+
+  it('admits an alias followed by punctuation as a direct address', () => {
+    // `startsWith('lyra ')` missed every "Lyra, ..." opening; the canonical
+    // normalizer strips the comma before matching.
+    expect(evaluate({
+      observation: observation({ author: untrustedAuthor, content: 'Lyra, can you help?' }),
+      settings: settings(),
+    })).toEqual({
+      outcome: 'eligible',
+      trigger: 'direct_mention',
+      reasonCodes: ['alias_leading_address'],
+    });
+  });
+
+  it('reads a mid-line platform mention as a mention, not an opening address', () => {
+    expect(evaluate({
+      observation: observation({ content: 'ask <@bot-1> about the migration' }),
+      settings: settings({ topicTags: { persistence: ['migration'] } }),
+    })).toMatchObject({
+      outcome: 'eligible',
+      trigger: 'passive_name',
+      reasonCodes: expect.arrayContaining(['alias_mention']),
+    });
+  });
+
+  it('no longer treats a possessive as a bare alias mention', () => {
+    // Divergence in the other direction, accepted deliberately: the canonical
+    // normalizer keeps the apostrophe inside the token, so "lyra's" is one word
+    // and does not match the alias. Group-memory salience already behaved this
+    // way; room signal now agrees instead of scoring it more permissively.
+    expect(evaluate({
+      observation: observation({ author: untrustedAuthor, content: "that was lyra's call" }),
+      settings: settings(),
+    })).toEqual({ outcome: 'ineligible', suppression: 'untrusted_room_member' });
+  });
+
+  it('reads the same line identically on every connector', () => {
+    // Cross-connector parity: nothing in the staged decision may depend on
+    // which adapter translated the event.
+    const connectors = ['discord', 'telegram', 'buzz'] as const;
+    for (const content of [
+      'Lyra, can you help?',
+      '<@bot-1> can you look?',
+      'ask lyra about it later',
+      'nothing to see here',
+    ]) {
+      const results = connectors.map(connector => evaluate({
+        observation: observation({
+          connector,
+          channelType: connector,
+          author: untrustedAuthor,
+          content,
+        }),
+        settings: settings(),
+      }));
+      expect(results[1]).toEqual(results[0]);
+      expect(results[2]).toEqual(results[0]);
+    }
+  });
+
+  it('gives an untrusted author the same direct-address-only bar on every connector', () => {
+    // The Buzz trust floor now matches Discord/Telegram (a room author the
+    // connector cannot vouch for is `public_contact`), so the same untrusted
+    // author is admitted only when actually addressed — never contextually.
+    for (const connector of ['discord', 'telegram', 'buzz'] as const) {
+      expect(evaluate({
+        observation: observation({
+          connector,
+          channelType: connector,
+          author: untrustedAuthor,
+          content: 'the migration is stuck again',
+        }),
+        settings: settings({ topicTags: { persistence: ['migration'] } }),
+      })).toEqual({ outcome: 'ineligible', suppression: 'untrusted_room_member' });
+
+      expect(evaluate({
+        observation: observation({
+          connector,
+          channelType: connector,
+          author: untrustedAuthor,
+          content: 'Lyra, the migration is stuck again',
+        }),
+        settings: settings({ topicTags: { persistence: ['migration'] } }),
+      })).toMatchObject({ outcome: 'eligible', trigger: 'direct_mention' });
+    }
   });
 });
 

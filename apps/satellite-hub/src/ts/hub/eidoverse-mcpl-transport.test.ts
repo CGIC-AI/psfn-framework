@@ -136,19 +136,110 @@ test("the default selection keeps travel and disables only the cosmetic set", as
     tokens: [TOKEN],
     travelWorlds: ["annex"],
   });
-  const client = new EidoverseMcplClient(config(door), credential);
+  const warnings: string[] = [];
+  const client = new EidoverseMcplClient(config(door), credential, {
+    logger: { info: () => undefined, warn: (message) => warnings.push(message) },
+  });
   try {
     await client.start();
     await door.waitForHandshake();
     assert.deepEqual(door.enabledFeatureSets, [FEATURE_SETS]);
     assert.deepEqual(door.disabledFeatureSets, [["eidoverse.typing"]]);
     assert.equal(client.grantsTravel(), true);
+    assert.equal(
+      warnings.some((message) => message.includes("degraded")),
+      false,
+      "a set the operator withheld coming back unavailable is not drift",
+    );
     assert.match(await client.travel("annex"), /Arrived in "annex"/u);
     assert.deepEqual(door.toolCalls, ["travel"]);
     assert.deepEqual(door.prepared, ["annex"]);
   } finally {
     await client.close();
     await door.close();
+  }
+});
+
+test("a door that degrades a selected feature set is heard, named, and failed closed", async () => {
+  // Mirror drift, the routine kind: upstream gives `eidoverse.travel` one more
+  // capability than the Hub's hand-maintained table knows to grant. The door
+  // reports it in the §6.7 receipt and disables the set.
+  const door = await EidoverseMcplDoor.start({
+    world: "commons",
+    tokens: [TOKEN],
+    travelWorlds: ["annex"],
+    featureSetUses: {
+      "eidoverse.world": [
+        "channels.register",
+        "channels.lifecycle",
+        "channels.publish",
+        "channels.incoming",
+      ],
+      "eidoverse.embodiment": ["tools"],
+      "eidoverse.travel": ["channels.lifecycle", "tools", "channels.streaming"],
+    },
+  });
+  const warnings: string[] = [];
+  const client = new EidoverseMcplClient(config(door), credential, {
+    logger: { info: () => undefined, warn: (message) => warnings.push(message) },
+  });
+  try {
+    await client.start();
+    await door.waitForHandshake();
+    assert.deepEqual(
+      warnings.filter((message) => message.includes("degraded")),
+      ["Eidoverse MCPL feature sets degraded: eidoverse.travel [channels.streaming]"],
+      "the drifted set is named, with no door prose",
+    );
+    assert.equal(client.grantsTravel(), false, "a degraded set takes its surface with it");
+    await assert.rejects(() => client.travel("annex"), /travel request failed/u);
+    assert.deepEqual(door.toolCalls, []);
+    // Everything the door did NOT degrade keeps working.
+    assert.equal(await client.look(), "A sunlit atrium.");
+  } finally {
+    await client.close();
+    await door.close();
+  }
+});
+
+test("a refused or unreadable policy receipt degrades every selected feature set", async () => {
+  for (const testCase of [
+    {
+      label: "refused",
+      receipt: { accepted: false, fallback: "mcp-only", reason: "policy refused" },
+      warning: "Eidoverse MCPL door refused the feature-set policy; every selected set is degraded",
+    },
+    {
+      label: "unreadable",
+      receipt: { ok: "sure" },
+      warning: "Eidoverse MCPL feature-set receipt was unreadable; every selected set is degraded",
+    },
+  ]) {
+    const door = await EidoverseMcplDoor.start({
+      world: "commons",
+      tokens: [TOKEN],
+      travelWorlds: ["annex"],
+      policyReceipt: testCase.receipt,
+    });
+    const warnings: string[] = [];
+    const client = new EidoverseMcplClient(config(door), credential, {
+      logger: { info: () => undefined, warn: (message) => warnings.push(message) },
+    });
+    try {
+      await client.start();
+      await door.waitForHandshake();
+      assert.equal(
+        warnings.includes(testCase.warning),
+        true,
+        `${testCase.label} receipts are reported once, content-free`,
+      );
+      assert.equal(client.grantsTravel(), false);
+      await assert.rejects(() => client.travel("annex"), /travel request failed/u);
+      assert.deepEqual(door.toolCalls, []);
+    } finally {
+      await client.close();
+      await door.close();
+    }
   }
 });
 

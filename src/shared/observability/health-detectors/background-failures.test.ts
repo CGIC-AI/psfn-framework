@@ -23,10 +23,11 @@ const POLICY = {
   cooldownMs: DEFAULT_HEALTH_DETECTORS_CONFIG.cooldownMs,
   incidentScanLimit: DEFAULT_HEALTH_DETECTORS_CONFIG.incidentScanLimit,
 };
+const COMPANION_ID = '11111111-1111-4111-8111-111111111111';
 const MEMORY_LANE_SUBJECT = hashHealthEventSubject('memory_refresh:active_context');
 const WIKI_LANE_SUBJECT = hashHealthEventSubject('memory_refresh:wiki_retrieval');
 
-function harness(): {
+function harness(source: HealthEventSource = SOURCE): {
   runAt: (nowMs: number) => Promise<void>;
   record: (event: HealthEvent) => void;
   events: HealthEvent[];
@@ -53,7 +54,7 @@ function harness(): {
       },
     },
     publisher,
-    source: SOURCE,
+    source,
     policy: POLICY,
     now: () => clock,
   });
@@ -131,6 +132,30 @@ describe('repeated background-work failure detector', () => {
     const opened = detector.events.filter(e => e.code === 'background_work_failures_opened');
     expect(closed[0]!.correlationId).toBe(opened[0]!.correlationId);
     expect(closed[0]!.evidence.terminal).toBe(true);
+  });
+
+  it('counts only its own tenant\'s failures in a fleet', async () => {
+    // The agent emits every health event with resolveHealthEventOwner(companionId),
+    // and so does this cycle. A sibling companion's failures must never reach
+    // this companion's incident, even where a shared read surface returns them.
+    const owner = { kind: 'companion', companionId: COMPANION_ID } as const;
+    const detector = harness({ owner, process: 'agent' });
+    for (let index = 0; index < 3; index += 1) {
+      detector.record(failure({ owner, observedAtMs: NOW_MS + index * MINUTE_MS }));
+      detector.record(failure({
+        owner: {
+          kind: 'companion',
+          companionId: '22222222-2222-4222-8222-222222222222',
+        },
+        observedAtMs: NOW_MS + index * MINUTE_MS,
+      }));
+    }
+    await detector.runAt(NOW_MS + 4 * MINUTE_MS);
+
+    const opened = detector.events.filter(e => e.code === 'background_work_failures_opened');
+    expect(opened).toHaveLength(1);
+    expect(opened[0]!.owner).toEqual(owner);
+    expect(opened[0]!.evidence.failureCount).toBe(3);
   });
 
   it('keeps two lanes as two incidents and never counts scheduler task failures', async () => {

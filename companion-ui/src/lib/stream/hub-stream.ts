@@ -72,6 +72,7 @@ export interface HubStreamFailure {
   recoverable: boolean;
   at: string;
   cause?: unknown;
+  scope?: 'speech';
 }
 
 export type ApprovalEntryStatus = 'pending' | ApprovalResolvedStatus;
@@ -681,6 +682,18 @@ function applyInboundMessage(
         voicePlayback: resetVoicePlayback(base.voicePlayback),
       };
     case 'error-event':
+      if (message.data.scope === 'speech') {
+        return {
+          ...base,
+          voicePlayback: resetVoicePlayback(base.voicePlayback),
+          failure: base.connection === 'failed' ? base.failure : {
+            message: 'Spoken reply unavailable. The text reply is still available in chat.',
+            recoverable: true,
+            scope: 'speech',
+            at,
+          },
+        };
+      }
       return {
         ...base,
         connection: 'failed',
@@ -881,6 +894,10 @@ function applyConversationMessage(
   at: string,
   sequence: number,
 ): HubStreamState {
+  // Keep the speech notice through the final text frame; clear it on the next turn.
+  if (message.data.role === 'user' && state.failure?.scope === 'speech') {
+    state = { ...state, failure: null };
+  }
   const streamMessage: HubStreamMessage = {
     id: `${state.session?.sessionId ?? 'session'}:${sequence}:${message.data.role}`,
     role: message.data.role,

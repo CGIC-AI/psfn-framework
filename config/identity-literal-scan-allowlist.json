@@ -1925,6 +1925,12 @@
       "contains": "applicationName: 'psfn-runtime-health-stream'",
       "reason": "Runtime health-event persistence uses a project-scoped PostgreSQL application_name for operational connection attribution.",
       "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/channels/api/companion-ui-hub-proxy.ts",
+      "contains": "psfn",
+      "reason": "The Hub proxy rejects browser-supplied x-psfn-* authority headers and checks the __Host-psfn_session cookie name; these are the framework's wire protocol identifiers, not a companion identity.",
+      "pattern": "identity-legacy-slug"
     }
   ]
 }

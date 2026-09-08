@@ -106,6 +106,14 @@ export const POSTGRES_STORE_READINESS_CATALOG = {
       message: 'CogSec admission receipt schema migration failed',
     },
   },
+  gateway_cogsec_receipts: {
+    label: 'gateway CogSec admission receipts',
+    requirement: 'optional',
+    failureDiagnostic: {
+      component: 'GatewayCogSecReceiptStore',
+      message: 'Gateway CogSec admission receipt schema migration failed',
+    },
+  },
   custody_snapshots: {
     label: 'CogSec turn custody snapshots',
     requirement: 'required',

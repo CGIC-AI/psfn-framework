@@ -130,6 +130,14 @@ export const POSTGRES_STORE_READINESS_CATALOG = {
       message: 'CogSec custody snapshot schema migration failed',
     },
   },
+  egress_delivery_records: {
+    label: 'CogSec egress delivery records',
+    requirement: 'required',
+    failureDiagnostic: {
+      component: 'EgressDeliveryRecordStore',
+      message: 'CogSec egress delivery record schema migration failed',
+    },
+  },
 } as const satisfies Record<string, PostgresStoreReadinessCatalogEntry>;
 
 export type PostgresStoreReadinessId = keyof typeof POSTGRES_STORE_READINESS_CATALOG;

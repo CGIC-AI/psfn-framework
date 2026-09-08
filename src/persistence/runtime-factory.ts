@@ -99,6 +99,8 @@ import { PostgresCogSecReceiptStore } from './postgres/cogsec-receipt-store.js';
 import type { CogSecReceiptStorePort } from '../core/cogsec/receipts/contracts.js';
 import { PostgresCustodySnapshotStore } from './postgres/custody-snapshot-store.js';
 import type { CustodySnapshotStorePort } from '../core/cogsec/disclosure/custody-snapshot.js';
+import { PostgresEgressDeliveryRecordStore } from './postgres/egress-delivery-record-store.js';
+import type { EgressDeliveryRecordStorePort } from '../core/cogsec/disclosure/egress-delivery-record.js';
 import type { LetterStorePort } from '../core/letters/contracts.js';
 import { PostgresDoingMirrorStore } from './postgres/doing-mirror-store.js';
 import type { DoingMirrorStorePort } from '../core/doing-mirror/contracts.js';
@@ -165,6 +167,14 @@ export interface AgentPersistenceRuntime {
    * queries. Content-free by contract, retention bound owned by settings.json.
    */
   custodySnapshotStore: CustodySnapshotStorePort;
+  /**
+   * Durable egress delivery records (psfn-framework-ccgdz.6). Written on every
+   * social, tool, and artifact egress, binding the delivered bytes' digest to
+   * the turn, its custody snapshot, the resolved disclosure destination, and
+   * the decision outcome. Shares the custody snapshots' retention horizon so a
+   * delivery never outlives the proof it cites. Content-free by contract.
+   */
+  egressDeliveryRecordStore: EgressDeliveryRecordStorePort;
   /**
    * Bounded runtime health-event stream (bead psfn-framework-7qeo1.24.1).
    * Written by the bus sink that drains `runtime.health.event`; read by
@@ -564,6 +574,14 @@ export async function createAgentPersistenceRuntime(
     custodySnapshotStore: await awaitPostgresStoreReadiness(
       'custody_snapshots',
       () => PostgresCustodySnapshotStore.connect(
+        databaseUrl,
+        options.config.custodySnapshotRetentionDays,
+        { schema, role: tenantRole },
+      ),
+    ),
+    egressDeliveryRecordStore: await awaitPostgresStoreReadiness(
+      'egress_delivery_records',
+      () => PostgresEgressDeliveryRecordStore.connect(
         databaseUrl,
         options.config.custodySnapshotRetentionDays,
         { schema, role: tenantRole },

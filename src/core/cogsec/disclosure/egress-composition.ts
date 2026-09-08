@@ -127,20 +127,39 @@ export function deriveDisclosureDestination(input: {
   const channelId = typeof rawChannelId === 'string' ? rawChannelId.trim() : '';
   if (!channelId) return null;
 
-  const disclosure = input.resolveChannel(channelId);
+  return deriveRoomDisclosureDestination(channelId, input.resolveChannel);
+}
+
+/**
+ * Classify one channel id into its outward room `DisclosureDestination`, or
+ * `null` when it is not an outward social room.
+ *
+ * Shared by every egress surface that resolves a destination from a channel —
+ * the tool guard's `deriveDisclosureDestination`, the autonomous reply sender,
+ * and artifact egress (psfn-framework-ccgdz.6) — so one classification answers
+ * for all of them rather than three lossy surface→kind maps drifting apart.
+ *
+ * A private (non-broadcast) channel is not an outward social room, so it fails
+ * closed to `null` and the existing sink gate — not a guessed destination —
+ * governs.
+ */
+export function deriveRoomDisclosureDestination(
+  channelId: string,
+  resolveChannel: ChannelDisclosureResolver,
+): DisclosureDestination | null {
+  const trimmed = channelId.trim();
+  if (!trimmed) return null;
+  const disclosure = resolveChannel(trimmed);
   const currentEpoch = typeof disclosure.classificationEpoch === 'number'
     && Number.isFinite(disclosure.classificationEpoch)
     ? disclosure.classificationEpoch
     : undefined;
   if (disclosure.channelPrivacy === 'invite_only') {
-    return { kind: 'invite_only_room', channelId, ...(currentEpoch !== undefined ? { currentEpoch } : {}) };
+    return { kind: 'invite_only_room', channelId: trimmed, ...(currentEpoch !== undefined ? { currentEpoch } : {}) };
   }
   if (disclosure.channelPrivacy === 'public' || disclosure.broadcast) {
-    return { kind: 'public_room', channelId, ...(currentEpoch !== undefined ? { currentEpoch } : {}) };
+    return { kind: 'public_room', channelId: trimmed, ...(currentEpoch !== undefined ? { currentEpoch } : {}) };
   }
-  // A private (non-broadcast) channel is not an outward social room, and no DM
-  // contact was resolvable: no outward destination is derivable. Fail closed to
-  // null so the existing sink gate — not a guessed destination — governs.
   return null;
 }
 

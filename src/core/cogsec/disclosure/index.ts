@@ -31,6 +31,7 @@ export {
   DISCLOSURE_SOCIAL_EGRESS_METHODS,
   composeEgressDisclosureDecision,
   deriveDisclosureDestination,
+  deriveRoomDisclosureDestination,
   isDisclosureSocialEgressInvocation,
   isDisclosureSocialEgressMethod,
   type ChannelDisclosureResolver,
@@ -77,6 +78,34 @@ export {
   type ProvenanceSourceView,
   type PublicationProvenanceView,
 } from './publication-provenance.js';
+export {
+  EGRESS_CUSTODY_HOLD_REASONS,
+  EGRESS_DELIVERY_DISPOSITIONS,
+  EGRESS_DELIVERY_SURFACES,
+  destinationRequiresCustodyProof,
+  egressContentSha256,
+  egressDeliveryDestination,
+  egressDeliveryRecordContentDigest,
+  egressDeliveryRef,
+  evaluateEgressCustodyHold,
+  isCustodyDurabilityHoldReason,
+  turnEgressCustodyProof,
+  validateEgressDeliveryRecord,
+  type EgressCustodyHoldReason,
+  type EgressDeliveryDestination,
+  type EgressDeliveryDisposition,
+  type EgressDeliveryRecord,
+  type EgressDeliveryRecordOutcome,
+  type EgressDeliveryRecordStorePort,
+  type EgressDeliverySurface,
+  type TurnEgressCustodyProof,
+} from './egress-delivery-record.js';
+export {
+  EgressDeliveryRecorder,
+  type EgressDeliveryRecordRequest,
+  type EgressDeliveryRecordResult,
+  type EgressDeliveryRecorderOptions,
+} from './egress-delivery-recorder.js';
 export {
   DEFAULT_MAX_ACTIVE_CAPSULES,
   SHARE_CAPSULE_APPROVAL_ACTION,

@@ -16,7 +16,7 @@ import {
   type InternalState,
 } from '../../self-model/state.js';
 import { extractRelayAcacAxisScores } from '../../emotion/relay-emotion-snapshot.js';
-import type { ChannelMeta } from '../../../system/trust/policy.js';
+import { classifyChannelDisclosure, type ChannelMeta } from '../../../system/trust/policy.js';
 import { currentChannelClassificationEpoch } from '../../../system/trust/runtime-classification-epochs.js';
 import type {
   AgentResponse,
@@ -57,6 +57,8 @@ import { recordReplyCanaryToken } from '../../cogsec/canary/reply-canary.js';
 import {
   DISCLOSURE_CLASSIFIER_VERSION,
   buildGenerationDisclosureLineage,
+  turnEgressCustodyProof,
+  type TurnEgressCustodyProof,
 } from '../../cogsec/disclosure/index.js';
 import { runWithMcpTurnDisclosureContext } from '../../cogsec/disclosure/mcp-turn-context.js';
 import {
@@ -717,6 +719,10 @@ export async function handleMessageForTurn(
   // (psfn-framework-ccgdz.1). Absent until the generation context is folded and
   // recorded; absent thereafter only when the write failed visibly.
   let custodySnapshotRef: string | undefined;
+  // ccgdz.6: the content-free custody proof handed to whatever delivers this
+  // turn's output — the autonomous reply sender, artifact egress, the tool
+  // guard. Undefined until the lineage is folded and the snapshot write settles.
+  let turnEgressCustody: TurnEgressCustodyProof | undefined;
   // ccgdz.5: the observed tool results' custody edges, keyed by the lineage ref
   // they fold into. Empty until tool observations are recorded.
   let toolResultCustody: ReadonlyMap<string, TurnToolResultCustodyRecord> = new Map();
@@ -1411,6 +1417,11 @@ export async function handleMessageForTurn(
         [...toolResultCustody].map(([ref, record]) => [ref, record.custody]),
       ),
     });
+    // ccgdz.6: publish the durable proof (ref + the lineage facts the hold
+    // rules read) so an outward egress later in this turn can be held when the
+    // chain is incomplete, and so its delivery record is keyed to this turn.
+    turnEgressCustody = turnEgressCustodyProof(generationDisclosureLineage, custodySnapshotRef);
+    runtime.setCurrentTurnEgressCustody({ turnId, proof: turnEgressCustody });
     let responseAttachments = honorNoReply
       ? []
       : recoveredResponse?.attachments
@@ -1447,10 +1458,24 @@ export async function handleMessageForTurn(
                 ? 'conversation'
                 : 'external',
       };
+      const artifactEgressRecorder = runtime.getEgressDeliveryRecorder();
       const egressDeps = {
         approvalQueue: runtime.artifactApprovalQueue,
         notifier: runtime.artifactApprovalNotifier,
         readCurrentClassifications: readGeneratedImageSensitivityClassifications,
+        // ccgdz.6: outward file/image egress carries the same chain-of-custody
+        // requirement as text. The proof is this run's, so a recovered turn is
+        // re-checked rather than inheriting the interrupted run's release.
+        ...(artifactEgressRecorder
+          ? {
+            custody: {
+              recorder: artifactEgressRecorder,
+              turnId,
+              proof: turnEgressCustody,
+              resolveChannel: (channelId: string) => classifyChannelDisclosure(channelId),
+            },
+          }
+          : {}),
         executeApprovedShare: async (
           approvedAttachments: readonly Attachment[],
           approvedDestination: ArtifactEgressDestination,
@@ -1485,6 +1510,22 @@ export async function handleMessageForTurn(
           'artifact_egress_approval',
           turnSessionIdentity.sourceChannelId,
         );
+      }
+      if (egress.disposition === 'held') {
+        // Not an approval decision: the chain of custody for this share is
+        // incomplete, so there is nothing an operator could approve yet.
+        runtime.sessionManager.appendSystemNote(
+          turnSessionIdentity.logicalSessionId,
+          'Artifact share held because its chain of custody is incomplete '
+            + `(${egress.holdReason}); the artifact remains in the personal gallery.`,
+          'artifact_egress_custody_hold',
+          turnSessionIdentity.sourceChannelId,
+        );
+        log.warn('Artifact egress held by the fail-closed provenance rule', {
+          turnId,
+          requestId,
+          holdReason: egress.holdReason,
+        });
       }
     }
 
@@ -1763,6 +1804,13 @@ export async function handleMessageForTurn(
           },
         }
       : buildGeneratedResponse();
+    // ccgdz.6: hand this turn's custody proof to whoever delivers the response.
+    // Attached AFTER the recovered/generated split deliberately: a recovered
+    // turn re-folds its lineage and re-writes (or re-recognizes) its snapshot on
+    // this run, so its proof is THIS run's, not the interrupted run's spread
+    // metadata. Absent proof means the turn folded no lineage, and an outward
+    // delivery on it holds rather than claiming an unprovable chain.
+    agentResponse.metadata.egressCustody = turnEgressCustody;
     if (runtime.fatigueRegulationReservations
       && message.routing?.icpCorrelation
       && durableFatigueReservation

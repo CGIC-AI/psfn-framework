@@ -76,7 +76,7 @@ const CUSTODY_SAFE_IDENTIFIER_PATTERN = /^[A-Za-z0-9_:.@+-]{1,128}$/u;
 const CUSTODY_VERSION_LABEL_PATTERN = /^[A-Za-z0-9_./-]{1,64}$/u;
 
 /** Bounded identity for one runtime reference: always a hash, sometimes an id. */
-interface CustodyIdentity {
+export interface CustodyIdentity {
   /** sha256 of the exact original reference string; the durable join key. */
   readonly digest: string;
   /** The literal reference, retained only when structurally safe to store. */
@@ -134,9 +134,11 @@ export function custodySha256(value: string): string {
 
 /**
  * Bound one free-form runtime reference. The digest is unconditional; the
- * literal survives only when it is a bounded safe token.
+ * literal survives only when it is a bounded safe token. Shared with the egress
+ * delivery record (psfn-framework-ccgdz.6) so every content-free custody row
+ * reduces a runtime string exactly one way.
  */
-function custodyIdentity(reference: string): CustodyIdentity {
+export function custodyIdentity(reference: string): CustodyIdentity {
   const digest = custodySha256(reference);
   return CUSTODY_SAFE_IDENTIFIER_PATTERN.test(reference)
     ? { digest, id: reference }
@@ -256,7 +258,7 @@ function invalid(field: string, requirement: string): Error {
   return new Error(`Custody snapshot ${field} ${requirement}`);
 }
 
-function validateIdentity(value: unknown, field: string): CustodyIdentity {
+export function validateCustodyIdentity(value: unknown, field: string): CustodyIdentity {
   if (!isRecord(value)) throw invalid(field, 'must be an object');
   if (typeof value.digest !== 'string' || !SHA256_HEX_PATTERN.test(value.digest)) {
     throw invalid(`${field}.digest`, 'must be 64 lowercase hex characters');
@@ -305,7 +307,7 @@ function validateSource(value: unknown, index: number): CustodySnapshotSource {
   }
   return {
     kind: value.kind,
-    ref: validateIdentity(value.ref, `${field}.ref`),
+    ref: validateCustodyIdentity(value.ref, `${field}.ref`),
     sensitivity: value.sensitivity as SensitivityLevel,
     classified: value.classified,
     permittedDestinationKinds: validateDestinationKinds(
@@ -317,7 +319,7 @@ function validateSource(value: unknown, index: number): CustodySnapshotSource {
       `${field}.subjectContactCount`,
     ),
     ...(value.sourceChannel !== undefined
-      ? { sourceChannel: validateIdentity(value.sourceChannel, `${field}.sourceChannel`) }
+      ? { sourceChannel: validateCustodyIdentity(value.sourceChannel, `${field}.sourceChannel`) }
       : {}),
     ...(value.toolResult !== undefined
       ? { toolResult: validateToolResultCustodyEdge(value.toolResult, `${field}.toolResult`) }
@@ -363,7 +365,7 @@ export function validateCustodySnapshot(value: unknown): CustodySnapshot {
     schemaVersion: CUSTODY_SNAPSHOT_SCHEMA_VERSION,
     generationContextRef: value.generationContextRef,
     turnId: value.turnId,
-    requestId: validateIdentity(value.requestId, 'requestId'),
+    requestId: validateCustodyIdentity(value.requestId, 'requestId'),
     classification: value.classification,
     effectiveSensitivity: value.effectiveSensitivity as SensitivityLevel,
     sourceCount: validateCount(value.sourceCount, 'sourceCount'),

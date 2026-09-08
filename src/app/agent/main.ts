@@ -670,6 +670,10 @@ async function main(): Promise<void> {
     // runtime records the folded disclosure lineage here before the reply is
     // composed, so an egress claim stays provable after the turn ends.
     custodySnapshotStore: persistenceRuntime.custodySnapshotStore,
+    // Durable egress delivery records (psfn-framework-ccgdz.6): every social,
+    // tool, and artifact egress binds its delivered bytes to that custody
+    // snapshot, and an outward egress with an incomplete chain is held.
+    egressDeliveryRecordStore: persistenceRuntime.egressDeliveryRecordStore,
     automataRuntime: {
       registry: persistenceRuntime.automataRunRegistry,
       runs: persistenceRuntime.automataRunStore,
@@ -1869,6 +1873,7 @@ async function main(): Promise<void> {
       await persistenceRuntime.partnerAffectShadowStore.close();
       await persistenceRuntime.cogSecReceiptStore.close();
       await persistenceRuntime.custodySnapshotStore.close();
+      await persistenceRuntime.egressDeliveryRecordStore.close();
       await persistenceRuntime.companionAvailabilityStore.close();
       await persistenceRuntime.letterStore.close();
       await persistenceRuntime.doingMirrorStore.close();

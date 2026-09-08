@@ -397,6 +397,16 @@ export function hashHealthEventSubject(subject: string): string {
   return createHash('sha256').update(normalized).digest('hex');
 }
 
+/**
+ * Validate an owner envelope read back from storage or handed in by a sibling
+ * custody surface (the egress delivery record, psfn-framework-ccgdz.6). Shared
+ * so ownership is one contract across every content-free custody row rather
+ * than a second, drifting `{system|companion}` shape.
+ */
+export function validateHealthEventOwner(value: unknown): HealthEventOwner {
+  return normalizeOwner(value);
+}
+
 function normalizeOwner(value: unknown): HealthEventOwner {
   if (!isRecord(value)) {
     throw invalid('owner', 'must be an object');

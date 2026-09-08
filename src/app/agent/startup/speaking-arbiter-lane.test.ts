@@ -19,7 +19,7 @@ function makeDeps(mode: 'off' | 'shadow' | 'on'): SpeakingArbiterLaneDeps {
     } as SubstrateConfig,
     schedulerConfig,
     llmProvider: { complete: vi.fn() } as never,
-    agentLoop: { handleMessage: vi.fn() } as never,
+    agentLoop: { handleMessage: vi.fn(), getEgressDeliveryRecorder: () => null } as never,
     companionName: 'Selene',
     observedGroupMemoryScheduler: {
       classifyChannelMemoryScope: vi.fn(async () => 'group'),

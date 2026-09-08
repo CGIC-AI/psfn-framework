@@ -37,6 +37,13 @@ export interface EidoverseMcplDoorOptions {
   travelWorlds?: readonly string[];
   /** Delay before the `travel` tool answers, for exercising request timeouts. */
   travelDelayMs?: number;
+  /**
+   * The door's own feature-set table, overriding the declared one. The Hub
+   * mirrors this table by hand, so an override models the one thing that
+   * mirror cannot see: an upstream door whose feature set now needs a
+   * capability the Hub never learned to grant.
+   */
+  featureSetUses?: Readonly<Record<string, readonly string[]>>;
   /** Text the `look` tool returns. */
   lookText?: string;
   /** Drop the socket immediately after the policy receipt, once. */
@@ -65,6 +72,12 @@ export class EidoverseMcplDoor {
   readonly grants: string[][] = [];
   /** Feature-set names each policy message enabled. */
   readonly enabledFeatureSets: string[][] = [];
+  /** Feature-set names each policy message named as disabled. */
+  readonly disabledFeatureSets: string[][] = [];
+  /** The §6.7 degradation receipt the door answered each policy message with. */
+  readonly receipts: Record<string, unknown>[] = [];
+  /** Every tool the host asked this door to call, in order. */
+  readonly toolCalls: string[] = [];
   /** Destination world of every PREPARE the door asked about. */
   readonly prepared: string[] = [];
   /** Whether the host accepted each PREPARE, in the same order. */
@@ -265,10 +278,24 @@ export class EidoverseMcplDoor {
         const enabled = Array.isArray(params.enabled)
           ? (params.enabled as unknown[]).map(String)
           : [];
+        const disabled = Array.isArray(params.disabled)
+          ? (params.disabled as unknown[]).map(String)
+          : [];
         connection.grant = new Set(effective);
         this.grants.push(effective);
         this.enabledFeatureSets.push(enabled);
-        this.respond(connection, frame.id, { accepted: true, mode: "full", notes: [] });
+        this.disabledFeatureSets.push(disabled);
+        // The reference door's `applyPolicy`: a set whose `uses` the grant does
+        // not cover is degraded WHOLE, a set the host named in `disabled` is
+        // degraded by name, and the receipt is consequence testimony — this
+        // door never answers `accepted: false`.
+        const receipt = policyReceipt(
+          connection.grant,
+          disabled,
+          this.options.featureSetUses ?? DECLARED_FEATURE_SET_USES,
+        );
+        this.receipts.push(receipt);
+        this.respond(connection, frame.id, receipt);
         this.connection = connection;
         if (this.policyDropsRemaining > 0) {
           this.policyDropsRemaining -= 1;
@@ -281,6 +308,9 @@ export class EidoverseMcplDoor {
       }
       case "tools/call":
         await this.handleTool(connection, frame);
+        return;
+      case "channels/list":
+        this.respond(connection, frame.id, { channels: [this.descriptorFor(connection)] });
         return;
       case "channels/publish": {
         if (!connection.grant.has("channels.publish")) {
@@ -299,6 +329,7 @@ export class EidoverseMcplDoor {
     const params = frame.params ?? {};
     const name = String(params.name ?? "");
     const args = (params.arguments ?? {}) as Record<string, unknown>;
+    this.toolCalls.push(name);
     if (!connection.grant.has("tools")) {
       this.respondError(connection, frame.id, -32_601, "tools are not granted to this host");
       return;
@@ -395,7 +426,16 @@ export class EidoverseMcplDoor {
   }
 
   private descriptor(): Record<string, unknown> {
-    const connection = this.connection;
+    return this.descriptorFor(this.connection);
+  }
+
+  /**
+   * The current world's descriptor for one connection. `channels/list` is
+   * ungated on the reference door and always answers for the world the
+   * connection is attached to right now, which is what makes it the
+   * authoritative answer after a reconnect reseats the body.
+   */
+  private descriptorFor(connection: DoorConnection | null): Record<string, unknown> {
     const world = connection?.world ?? this.options.world;
     return {
       id: `world:${world}`,
@@ -451,6 +491,37 @@ export class EidoverseMcplDoor {
   }
 }
 
+/**
+ * The reference door's degradation receipt, computed the way `applyPolicy`
+ * does: every declared set is checked against the adopted grant, then against
+ * the names the host disabled.
+ */
+function policyReceipt(
+  grant: ReadonlySet<string>,
+  disabled: readonly string[],
+  featureSetUses: Readonly<Record<string, readonly string[]>>,
+): Record<string, unknown> {
+  const unavailable: Array<{
+    featureSet: string;
+    missingCapabilities: string[];
+    effect: string;
+  }> = [];
+  for (const [name, uses] of Object.entries(featureSetUses)) {
+    const missing = uses.filter((path) => !grant.has(path));
+    if (missing.length > 0) {
+      unavailable.push({ featureSet: name, missingCapabilities: missing, effect: "disabled" });
+    } else if (disabled.includes(name)) {
+      unavailable.push({ featureSet: name, missingCapabilities: [], effect: "disabled" });
+    }
+  }
+  return {
+    accepted: true,
+    mode: unavailable.length > 0 ? "degraded" : "full",
+    ...(unavailable.length > 0 ? { unavailableFeatures: unavailable } : {}),
+    notes: [],
+  };
+}
+
 /** The door's PREPARE budget: an unanswered question is a decline. */
 const PREPARE_BUDGET_MS = 5_000;
 
@@ -479,6 +550,13 @@ const MANIFEST = {
     "eidoverse.typing": { description: "Typing dots.", uses: ["channels.streaming"] },
   },
 } as const;
+
+/** The declared `uses` table, read off the manifest this door advertises. */
+const DECLARED_FEATURE_SET_USES: Readonly<Record<string, readonly string[]>> = Object.freeze(
+  Object.fromEntries(
+    Object.entries(MANIFEST.featureSets).map(([name, declaration]) => [name, declaration.uses]),
+  ),
+);
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {

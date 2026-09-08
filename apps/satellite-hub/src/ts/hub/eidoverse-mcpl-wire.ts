@@ -91,6 +91,13 @@ export const EIDOVERSE_FEATURE_SET_USES: Readonly<
   "eidoverse.typing": Object.freeze([MCPL_CAPABILITY.channelsStreaming]),
 });
 
+/**
+ * The one feature set whose absence removes a Hub-side surface rather than a
+ * door-side one: without it there is no travel port at all, so the companion
+ * command is refused before the wire is touched.
+ */
+export const EIDOVERSE_TRAVEL_FEATURE_SET = "eidoverse.travel";
+
 /** Reserved cross-platform tag core (§16.2) the Hub routes on. */
 export const MCPL_CHAT_TAG = {
   addressed: "chat:addressed",
@@ -203,7 +210,31 @@ export interface McplChannelsIncomingResult {
 
 export interface McplFeatureSetsUpdateParams {
   enabled?: string[];
+  /**
+   * Declared feature sets the operator did not select. Feature-set names carry
+   * no authority of their own (§6.4) — `effectiveCapabilities` is the sole
+   * allowlist — but naming them is what makes the door's receipt say the set is
+   * off rather than leaving the omission ambiguous.
+   */
+  disabled?: string[];
   effectiveCapabilities?: string[];
+}
+
+/** One degraded feature set in the door's §6.7 receipt. */
+export interface McplUnavailableFeature {
+  featureSet: string;
+  missingCapabilities: string[];
+  effect: string;
+}
+
+/**
+ * The `featureSets/update` response: a degradation receipt, never an
+ * acknowledgement. It states what the door will stop doing.
+ */
+export interface McplFeatureSetsUpdateResult {
+  accepted: boolean;
+  mode?: string;
+  unavailableFeatures?: McplUnavailableFeature[];
 }
 
 /** The host's own `capabilities.experimental.mcpl` manifest. */
@@ -237,6 +268,58 @@ export function effectiveCapabilitiesForFeatureSets(
     for (const path of EIDOVERSE_FEATURE_SET_USES[name] ?? []) granted.add(path);
   }
   return [...granted];
+}
+
+/**
+ * The declared feature sets the operator did not select.
+ *
+ * A capability-only grant cannot express this: `eidoverse.travel` draws on
+ * `channels.lifecycle` and `tools`, both of which `eidoverse.world` and
+ * `eidoverse.embodiment` already need, so withholding travel narrows no
+ * capability path. Naming the set in `disabled` is the only wire form the
+ * operator's intent has.
+ */
+export function disabledFeatureSetsForSelection(
+  featureSets: readonly string[],
+): string[] {
+  return Object.keys(EIDOVERSE_FEATURE_SET_USES).filter((name) => !featureSets.includes(name));
+}
+
+/**
+ * Read one §6.7 degradation receipt. Anything that is not a well-formed
+ * receipt is reported as unreadable rather than guessed at, and an unreadable
+ * receipt is treated as a refusal by the caller.
+ */
+export function parseFeatureSetsUpdateResult(
+  result: unknown,
+): McplFeatureSetsUpdateResult | null {
+  if (!isRecord(result)) return null;
+  if (typeof result.accepted !== "boolean") return null;
+  const raw = result.unavailableFeatures;
+  if (raw === undefined) {
+    return {
+      accepted: result.accepted,
+      ...(typeof result.mode === "string" ? { mode: result.mode } : {}),
+    };
+  }
+  if (!Array.isArray(raw)) return null;
+  const unavailableFeatures: McplUnavailableFeature[] = [];
+  for (const entry of raw) {
+    if (!isRecord(entry) || typeof entry.featureSet !== "string") return null;
+    const missing = Array.isArray(entry.missingCapabilities)
+      ? entry.missingCapabilities.filter((path): path is string => typeof path === "string")
+      : [];
+    unavailableFeatures.push({
+      featureSet: entry.featureSet,
+      missingCapabilities: missing,
+      effect: typeof entry.effect === "string" ? entry.effect : "disabled",
+    });
+  }
+  return {
+    accepted: result.accepted,
+    ...(typeof result.mode === "string" ? { mode: result.mode } : {}),
+    unavailableFeatures,
+  };
 }
 
 /** The host manifest implied by a grant: advertise only what was granted. */

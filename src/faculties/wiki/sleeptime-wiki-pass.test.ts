@@ -466,3 +466,166 @@ describe('wiki-pass classifiers and parsing', () => {
     expect(() => parseWikiPassProposals('{"nope":1}')).toThrow('missing the proposals array');
   });
 });
+
+// psfn-framework-lpxg3.3: evidence-backed revision over near-duplicate creation,
+// and an explicit no-op when nothing durable was learned.
+describe('SleeptimeWikiPass quiet revision loop', () => {
+  function seededDay(): {
+    episodicStore: FakeEpisodicStore;
+    memoryStore: FakeMemoryStore;
+  } {
+    const episodicStore = new FakeEpisodicStore();
+    episodicStore.episodes.push(fakeEpisode({
+      id: 'ep-async',
+      title: 'Read about Rust async runtimes',
+      themes: ['rust', 'async'],
+      createdAt: new Date(NOW - 3_600_000).toISOString(),
+    }));
+    const memoryStore = new FakeMemoryStore();
+    for (const index of [1, 2, 3]) {
+      memoryStore.memories.push(fakeMemory({
+        id: `mem-async-${index}`,
+        type: 'semantic',
+        text: 'Rust async runtimes schedule futures on a reactor and an executor.',
+        sensitivity: 'public',
+        extractedAt: NOW - 3_600_000,
+      }));
+    }
+    return { episodicStore, memoryStore };
+  }
+
+  function proposal(overrides: Record<string, unknown>): string {
+    return JSON.stringify({
+      proposals: [{
+        operation: 'create',
+        title: 'Rust async runtimes',
+        body: 'Rust async runtimes pair a reactor with an executor to drive futures.',
+        tags: ['rust'],
+        source_episode_ids: ['ep-async'],
+        source_memory_ids: ['mem-async-1'],
+        ...overrides,
+      }],
+    });
+  }
+
+  it('folds a near-duplicate proposal into the existing entry instead of creating one', async () => {
+    const wikiStore = new WikiStore(makeWorkspace());
+    const existing = wikiStore.upsert({
+      title: 'Rust async runtime notes',
+      body: 'Older notes about Rust async runtimes.',
+      tags: ['rust'],
+      sourceClass: 'generated_synthesis',
+      provenanceRefs: ['episode:ep-seed'],
+      sensitivity: 'personal',
+      updatedBy: 'sleeptime_wiki_pass',
+    });
+    const { episodicStore, memoryStore } = seededDay();
+    const { provider } = fakeLlm(proposal({}));
+    const pass = buildPass({
+      wikiStore,
+      episodicStore,
+      memoryStore,
+      llm: provider,
+      gateEvents: [],
+    });
+
+    const result = await pass.run({ sessionId: SESSION_ID });
+
+    expect(result).toMatchObject({
+      ran: true,
+      entriesCreated: 0,
+      entriesUpdated: 1,
+      nearDuplicatesFolded: 1,
+    });
+    expect(wikiStore.list()).toHaveLength(1);
+    expect(wikiStore.get(existing.id)?.version).toBe(2);
+  });
+
+  it('records a byte-identical proposal as unchanged without a new version', async () => {
+    const wikiStore = new WikiStore(makeWorkspace());
+    const existing = wikiStore.upsert({
+      title: 'Rust async runtimes',
+      body: 'Rust async runtimes pair a reactor with an executor to drive futures.',
+      tags: ['rust', 'wiki-pass'],
+      sourceClass: 'generated_synthesis',
+      provenanceRefs: ['episode:ep-seed'],
+      sensitivity: 'personal',
+      updatedBy: 'sleeptime_wiki_pass',
+    });
+    const { episodicStore, memoryStore } = seededDay();
+    const { provider } = fakeLlm(proposal({}));
+    const pass = buildPass({
+      wikiStore,
+      episodicStore,
+      memoryStore,
+      llm: provider,
+      gateEvents: [],
+    });
+
+    const result = await pass.run({ sessionId: SESSION_ID });
+
+    expect(result).toMatchObject({
+      ran: true,
+      entriesCreated: 0,
+      entriesUpdated: 0,
+      entriesUnchanged: 1,
+      skippedReason: 'nothing_durable',
+    });
+    expect(wikiStore.get(existing.id)?.version).toBe(1);
+  });
+
+  it('records an explicit no-op when a reviewed day yields no durable entry', async () => {
+    const wikiStore = new WikiStore(makeWorkspace());
+    const { episodicStore, memoryStore } = seededDay();
+    const { provider, complete } = fakeLlm('{"proposals":[]}');
+    const pass = buildPass({
+      wikiStore,
+      episodicStore,
+      memoryStore,
+      llm: provider,
+      gateEvents: [],
+    });
+
+    const result = await pass.run({ sessionId: SESSION_ID });
+
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      ran: true,
+      entriesCreated: 0,
+      entriesUpdated: 0,
+      skippedReason: 'nothing_durable',
+    });
+    expect(wikiStore.list()).toHaveLength(0);
+  });
+
+  it('leaves an unrelated entry alone rather than folding into it', async () => {
+    const wikiStore = new WikiStore(makeWorkspace());
+    wikiStore.upsert({
+      title: 'Balcony gardening calendar',
+      body: 'Seasonal watering notes.',
+      tags: ['home'],
+      sourceClass: 'generated_synthesis',
+      provenanceRefs: ['episode:ep-seed'],
+      sensitivity: 'personal',
+      updatedBy: 'sleeptime_wiki_pass',
+    });
+    const { episodicStore, memoryStore } = seededDay();
+    const { provider } = fakeLlm(proposal({}));
+    const pass = buildPass({
+      wikiStore,
+      episodicStore,
+      memoryStore,
+      llm: provider,
+      gateEvents: [],
+    });
+
+    const result = await pass.run({ sessionId: SESSION_ID });
+
+    expect(result).toMatchObject({
+      ran: true,
+      entriesCreated: 1,
+      nearDuplicatesFolded: 0,
+    });
+    expect(wikiStore.list()).toHaveLength(2);
+  });
+});

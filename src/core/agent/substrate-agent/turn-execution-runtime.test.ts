@@ -2011,6 +2011,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     recordAssistantMessage?: ReturnType<typeof vi.fn>;
     consumeIntentionalNoReplyDecision?: ReturnType<typeof vi.fn>;
     durableChargeRecorder?: TurnExecutionRuntime['durableChargeRecorder'];
+    imageVisionReviewer?: TurnExecutionRuntime['imageVisionReviewer'];
   }) {
     const buildContext = params.buildContext ?? vi.fn(async () => ({
       systemPrompt: 'System prompt',
@@ -2025,6 +2026,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
       awaitPendingAutoCompaction: vi.fn(async () => undefined),
       recordUserMessage: vi.fn(() => 1),
       recordAssistantMessage: params.recordAssistantMessage ?? vi.fn(() => 2),
+      ...(params.imageVisionReviewer ? { imageVisionReviewer: params.imageVisionReviewer } : {}),
       consumeIntentionalNoReplyDecision:
         params.consumeIntentionalNoReplyDecision ?? vi.fn(() => null),
       fatigueBudget: params.fatigueBudget,
@@ -2142,6 +2144,74 @@ describe('handleMessageForTurn fatigue enforcement', () => {
       expectedChannelId: message.channelId,
       expectedSourceMessageId: message.id,
     })).toEqual(response);
+  });
+
+  // psfn-framework-lpxg3.1 — a recovered turn replays a response that already
+  // exists and skips `invokeAgentForTurn` entirely. Perception staging moved
+  // the vision review out of that skipped invocation, so the replay must not
+  // start paying for intake screening and a vision model call it discards.
+  it('does not stage perception for a recovered image turn (lpxg3.1)', async () => {
+    const { fatigueBudget } = createFatigueBudgetHarness();
+    const localCompanionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const peerCompanionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const messageId = 'recovered-vision-turn';
+    const turnId = createTurnId();
+    const message = createInboundIcpFatigueMessage({
+      id: messageId,
+      localCompanionId,
+      peerCompanionId,
+      turnId,
+    });
+    message.attachments = [{
+      url: 'https://cdn.example.test/attachments/1/2/recovered-image.png',
+      contentType: 'image/png',
+      name: 'recovered-image.png',
+    }];
+    const baseCorrelation = message.routing?.icpCorrelation;
+    if (!baseCorrelation) throw new Error('test message requires ICP correlation');
+    const recoveredResponse: AgentResponse = {
+      content: 'Recovered reply.',
+      channelId: message.channelId,
+      metadata: {
+        model: 'recovered-model',
+        inputTokens: 0,
+        outputTokens: 0,
+        durationMs: 1,
+        turnId,
+        requestId: messageId,
+        icpCorrelation: {
+          ...baseCorrelation,
+          localCompanionId,
+          peerCompanionId,
+          peerContactId: 'contact-mi',
+          turnId,
+          messageId,
+          requestId: messageId,
+          costOriginStage: 'reply',
+          fatigueDecision: 'not_evaluated',
+        },
+      },
+    };
+    const analyze = vi.fn(async () => ({
+      question: 'q',
+      summary: 'this review must never be paid for',
+      model: 'vision-model',
+      imageCount: 1,
+    }));
+    const { runtime } = createFatigueRuntime({
+      fatigueBudget,
+      configOverrides: { companionId: localCompanionId },
+      imageVisionReviewer: { analyze },
+    });
+
+    await handleMessageForTurn(runtime, message, {
+      recoveredResponse,
+      sourceAlreadyPersisted: true,
+      finalizeDelivery: vi.fn(async () => undefined),
+    });
+
+    expect(analyze).not.toHaveBeenCalled();
+    expect(runtime.agent.prompt).not.toHaveBeenCalled();
   });
 
   it('re-authorizes recovered private artifacts from current sidecars without duplicate delivery or approval', async () => {

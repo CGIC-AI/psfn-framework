@@ -26,7 +26,12 @@ export interface VerifiedContactDepthEvidence {
   readonly governedContexts: readonly VerifiedGovernedContextEvidence[];
 }
 
-function hasAuthorityRef(value: string): boolean {
+/**
+ * Shape of a governance authority reference (`authority:id`). Shared with the
+ * synthesis target port so group-membership evidence is held to exactly the
+ * same bar as trust, relationship and governed-context evidence (uz787).
+ */
+export function hasAuthorityRef(value: string): boolean {
   return /^[a-z][a-z0-9_-]*:[^\s]+$/u.test(value);
 }
 

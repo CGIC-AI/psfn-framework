@@ -307,6 +307,11 @@ describe('skill store', () => {
       });
       expect(tombstone.previousDocument).toContain('Revised body content.');
 
+      // Unreadable journal lines survive too: the archive copies bytes.
+      const archiveRootPath = store.getHistoryArchiveRootDir();
+      expect(readFileSync(join(archiveRootPath, 'self-erasing-skill.jsonl'), 'utf-8'))
+        .toContain('Revised body content.');
+
       // The archive lives outside the managed skills root the delete removes.
       const archiveRoot = store.getHistoryArchiveRootDir();
       expect(archiveRoot.startsWith(store.getManagedRootDir())).toBe(false);

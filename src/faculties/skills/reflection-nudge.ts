@@ -16,6 +16,7 @@
 // Nothing in this file writes. The companion may ignore, revise, or reject
 // every opportunity, and the actual write still travels the governed skill tool.
 
+import { createComponentLogger } from '../../shared/logger.js';
 import type { ToolCallOutcomeCounts } from '../../shared/contracts/tool-call-outcome.js';
 import {
   DEFAULT_SKILL_REUSE_CONFIG,
@@ -28,6 +29,8 @@ import {
   type SkillOutcomeEvidenceIndex,
 } from './reuse.js';
 import type { SkillEntry } from './types.js';
+
+const log = createComponentLogger('skills.reflection-nudge');
 
 export interface ReflectionNudgeConfig extends SkillReuseConfig {
   /** Also qualify if the analysis workbench tool was used. Default: true. */
@@ -78,7 +81,8 @@ export interface ReflectionNudgeTrackerOptions {
   resolveOutcomeEvidence?: () => SkillOutcomeEvidenceIndex;
   /**
    * Attribute this completed turn's structural outcome to the skills it used.
-   * Durable, so the evidence outlives the process; never throws into the turn.
+   * Durable, so the evidence outlives the process. A throw here is contained
+   * and logged: telemetry never fails a turn.
    */
   recordPostUseOutcome?: (input: { demonstratedValue: boolean }) => void;
 }
@@ -120,15 +124,21 @@ export class ReflectionNudgeTracker {
    */
   evaluate(summary: TurnToolSummary): string | null {
     const config = this.config;
-    if (!this.isQualifyingTurn(summary, config)) return null;
-
     const demonstratedValue = turnDemonstratedReusableValue(summary.outcomes);
-    // Record the post-use evidence for EVERY qualifying turn whose census was
-    // observed, independently of the quietness budget (sap72): what a skill's
-    // uses led to is durable evidence, not a nudge.
-    if (summary.outcomes) {
-      this.recordPostUseOutcome?.({ demonstratedValue });
+    // Record the post-use evidence for EVERY turn whose census was observed,
+    // before the complexity and quietness gates (sap72): a skill used in a
+    // simple turn must be answered for by THAT turn, not by the next complex
+    // one. Telemetry never fails a turn — the loop is an offer, not the work.
+    if (summary.outcomes && this.recordPostUseOutcome) {
+      try {
+        this.recordPostUseOutcome({ demonstratedValue });
+      } catch (error) {
+        log.warn('Skill post-use outcome evidence was not recorded', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
+    if (!this.isQualifyingTurn(summary, config)) return null;
 
     this.qualifyingTurnCount += 1;
     if (this.qualifyingTurnCount % config.nudgeEveryNthTurn !== 0) {
@@ -144,9 +154,7 @@ export class ReflectionNudgeTracker {
         cue: summary.taskCue,
         entries: this.resolveAdmittedSkills(),
         config,
-        ...(this.resolveOutcomeEvidence
-          ? { outcomeEvidence: this.resolveOutcomeEvidence() }
-          : {}),
+        ...(this.outcomeEvidence() ? { outcomeEvidence: this.outcomeEvidence()! } : {}),
       }).filter(candidate => !this.offeredSkillNames.has(candidate.name))
       : [];
 
@@ -157,6 +165,23 @@ export class ReflectionNudgeTracker {
     const offered = candidates[0];
     if (opportunity && offered) this.offeredSkillNames.add(offered.name);
     return opportunity;
+  }
+
+  /**
+   * Recorded evidence for ranking, or null when there is none to read. An
+   * unreadable telemetry file degrades ordering to pure relevance; it never
+   * fails the turn.
+   */
+  private outcomeEvidence(): SkillOutcomeEvidenceIndex | null {
+    if (!this.resolveOutcomeEvidence) return null;
+    try {
+      return this.resolveOutcomeEvidence();
+    } catch (error) {
+      log.warn('Skill outcome evidence was unreadable; ranking on relevance alone', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
   }
 
   private isQualifyingTurn(

@@ -412,8 +412,9 @@ describe('persisted automata terminal claim', () => {
   it('refuses a claim it did not write or that belongs to another class', async () => {
     expect(() => parseTerminalClaim('Some unrelated finding claim.', 'subagent.bounded'))
       .toThrow(/lifecycle state/u);
-    expect(async () => parseTerminalClaim(await claimFor(), 'memory.sleeptime'))
-      .rejects.toThrow(/different automaton class/u);
+    const claim = await claimFor();
+    expect(() => parseTerminalClaim(claim, 'memory.sleeptime'))
+      .toThrow(/different automaton class/u);
   });
 });
 

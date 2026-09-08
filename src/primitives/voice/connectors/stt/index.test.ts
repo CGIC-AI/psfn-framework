@@ -96,18 +96,32 @@ describe('createStreamingSttConnector', () => {
     });
   });
 
-  it('resolves built-in runtime config from the credential vault when inline secrets are absent', () => {
+  it('consumes the gateway-resolved credential and never reaches for a vault (mp1pf)', () => {
+    // hydrateSecretBearingConfig resolves DEEPGRAM_API_KEY (inline, vault, or
+    // env) on the gateway side and writes the plain value onto the substrate
+    // config. The shared index only reads that resolved value.
     expect(resolveStreamingSttRuntimeConfig('deepgram', {
-      credentialVault: createEnvCredentialVault({
-        DEEPGRAM_API_KEY: 'vault-key',
-      }),
+      deepgramApiKey: 'gateway-resolved-key',
       deepgramModel: 'nova-3',
       deepgramSttEndpoint: 'wss://api.deepgram.com/v1/listen',
     })).toEqual({
-      apiKey: 'vault-key',
+      apiKey: 'gateway-resolved-key',
       model: 'nova-3',
       endpoint: 'wss://api.deepgram.com/v1/listen',
     });
+
+    // A config that carries only a vault handle is unconfigured here: the index
+    // must not resolve credentials itself, and must fail closed rather than
+    // silently importing the secret-bearing custody module.
+    const vaultOnlyConfig = {
+      credentialVault: createEnvCredentialVault({ DEEPGRAM_API_KEY: 'vault-key' }),
+      deepgramModel: 'nova-3',
+      deepgramSttEndpoint: 'wss://api.deepgram.com/v1/listen',
+    };
+    expect(getStreamingSttProviderMetadata('deepgram')?.isConfigured(vaultOnlyConfig)).toBe(false);
+    expect(() => resolveStreamingSttRuntimeConfig('deepgram', vaultOnlyConfig)).toThrow(
+      'Deepgram STT provider selected but DEEPGRAM_API_KEY is not configured',
+    );
   });
 
   it('resolves registered provider runtime config without core switch edits', () => {

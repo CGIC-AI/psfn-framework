@@ -7,7 +7,11 @@ import {
   type SkillReuseConfig,
   type SkillsRuntimeConfig,
 } from '../../system/config/skills-config.js';
-import { filterEligibleSkills } from './filter.js';
+import {
+  createBinaryAvailabilityProbe,
+  createSkillBinaryCheckLedger,
+  filterEligibleSkills,
+} from './filter.js';
 import {
   compareSkillsForPrompt,
   formatSkillsForPrompt,
@@ -512,6 +516,7 @@ export class SkillsRuntime {
         maxLoadedSkills: runtimeConfig.maxLoadedSkills,
         maxSkillChars: runtimeConfig.maxSkillChars,
         disabledSkills: runtimeConfig.disabledSkills,
+        eligibility: runtimeConfig.eligibility,
       },
       directories: directories.map(directory => ({
         relativePath: directory.relativePath,
@@ -548,14 +553,24 @@ export class SkillsRuntime {
       eligible: [],
       skipped: [],
     };
+    // psfn-framework-7wggj: one PATH-scan-memoizing probe and one aggregate
+    // check ledger for the whole build. Both are created here, outside the
+    // chunk loop, because a per-chunk probe would re-walk PATH for every chunk
+    // and a per-chunk ledger would be no aggregate bound at all.
+    const isBinaryAvailable = this.options.isBinaryAvailable
+      ?? createBinaryAvailabilityProbe().isAvailable;
+    const binaryCheckLedger = createSkillBinaryCheckLedger(
+      runtimeConfig.eligibility.maxTotalBinaryChecks,
+    );
     for (let offset = 0; offset < admission.entries.length; offset += limits.yieldEvery) {
       const chunk = await filterEligibleSkills(
         admission.entries.slice(offset, offset + limits.yieldEvery),
         {
           runtimeConfig,
           environment: this.options.environment,
-          isBinaryAvailable: this.options.isBinaryAvailable,
+          isBinaryAvailable,
           maxBinaryRequirements: limits.maxBinaryRequirements,
+          binaryCheckLedger,
         },
       );
       eligibility.evaluations.push(...chunk.evaluations);

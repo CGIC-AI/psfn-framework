@@ -48,6 +48,32 @@ export const DEFAULT_SKILL_REUSE_CONFIG: SkillReuseConfig = {
   nudgeEveryNthTurn: 3,
 };
 
+/**
+ * Eligibility-evaluation budgets (psfn-framework-7wggj).
+ *
+ * Skill eligibility asks the host whether each declared binary requirement is
+ * on PATH. `maxBinaryRequirements` (a collection limit) already bounds one
+ * skill, but nothing bounded the *whole* collection: a corpus of many skills
+ * that each stay within the per-skill bound could still force hundreds of
+ * thousands of filesystem probes inside a single prompt assembly. This block
+ * bounds that aggregate. It is optional in the owner file — an existing
+ * deployment keeps working and picks up {@link DEFAULT_SKILL_ELIGIBILITY_CONFIG}
+ * until the operator writes explicit values.
+ */
+export interface SkillEligibilityConfig {
+  /**
+   * Most binary-availability checks the runtime may perform across every skill
+   * in one snapshot build. Once the budget cannot cover a skill's remaining
+   * declared binaries, that skill fails closed (ineligible, none evaluated)
+   * rather than spending unbounded time on the event loop.
+   */
+  maxTotalBinaryChecks: number;
+}
+
+export const DEFAULT_SKILL_ELIGIBILITY_CONFIG: SkillEligibilityConfig = {
+  maxTotalBinaryChecks: 4096,
+};
+
 export interface SkillsRuntimeConfig {
   enabled: boolean;
   directories: string[];
@@ -56,6 +82,7 @@ export interface SkillsRuntimeConfig {
   maxSkillChars: number;
   disabledSkills: string[];
   reuse: SkillReuseConfig;
+  eligibility: SkillEligibilityConfig;
 }
 
 interface SkillsRuntimeLoadOptions {
@@ -108,6 +135,29 @@ function validateSkillReuseConfig(raw: unknown, sourcePath: string): SkillReuseC
   };
 }
 
+function validateSkillEligibilityConfig(raw: unknown, sourcePath: string): SkillEligibilityConfig {
+  if (raw === undefined) return { ...DEFAULT_SKILL_ELIGIBILITY_CONFIG };
+  if (!isRecord(raw)) {
+    throw new Error(`Invalid skills config at ${sourcePath}: eligibility must be an object`);
+  }
+  const unknownKeys = Object.keys(raw).filter(
+    key => !Object.hasOwn(DEFAULT_SKILL_ELIGIBILITY_CONFIG, key),
+  );
+  if (unknownKeys.length > 0) {
+    throw new Error(
+      `Invalid skills config at ${sourcePath}: eligibility has unsupported keys: ${unknownKeys.join(', ')}`,
+    );
+  }
+  return {
+    maxTotalBinaryChecks: normalizePositiveInteger(
+      raw.maxTotalBinaryChecks ?? DEFAULT_SKILL_ELIGIBILITY_CONFIG.maxTotalBinaryChecks,
+      'eligibility.maxTotalBinaryChecks',
+      1,
+      131_072,
+    ),
+  };
+}
+
 function normalizePositiveInteger(value: unknown, field: string, min: number, max: number): number {
   return assertPositiveInteger(value, field, {
     min,
@@ -137,6 +187,7 @@ export function validateSkillsConfig(raw: unknown, sourcePath: string): SkillsRu
     maxSkillChars: normalizePositiveInteger(raw.maxSkillChars, 'maxSkillChars', 256, 1_000_000),
     disabledSkills: normalizeStringArray(raw.disabledSkills, 'disabledSkills', { errorPrefix: 'Invalid skills config' }),
     reuse: validateSkillReuseConfig(raw.reuse, sourcePath),
+    eligibility: validateSkillEligibilityConfig(raw.eligibility, sourcePath),
   };
 }
 

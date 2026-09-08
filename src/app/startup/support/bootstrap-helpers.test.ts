@@ -337,8 +337,12 @@ describe('resolveRuntimeVoiceProviderGate', () => {
     expect(relaxedGate.ttsEnabled).toBe(true);
   });
 
-  it('treats vault-backed voice credentials as configured during provider gating', () => {
-    const gate = resolveRuntimeVoiceProviderGate(fromPartial({
+  it('treats vault-backed voice credentials as configured once the gateway has hydrated them (mp1pf)', async () => {
+    // The shared connector indexes no longer import the credential vault, so
+    // credential resolution happens exactly once, on the gateway side, in
+    // hydrateSecretBearingConfig. Gating before hydration fails closed; gating
+    // after it is unchanged for a vault-only deployment.
+    const config: SubstrateConfig = fromPartial({
       credentialVault: createEnvCredentialVault({
         DEEPGRAM_API_KEY: 'deepgram-key',
         ELEVENLABS_API_KEY: 'elevenlabs-key',
@@ -346,9 +350,18 @@ describe('resolveRuntimeVoiceProviderGate', () => {
       sttProvider: 'deepgram',
       ttsProvider: 'elevenlabs',
       elevenLabsVoiceId: 'voice-id',
-    }));
+    });
 
-    expect(gate).toEqual({
+    expect(resolveRuntimeVoiceProviderGate(config)).toMatchObject({
+      sttEnabled: false,
+      ttsEnabled: false,
+    });
+
+    await hydrateSecretBearingConfig(config, { env: {} });
+
+    expect(config.deepgramApiKey).toBe('deepgram-key');
+    expect(config.elevenLabsApiKey).toBe('elevenlabs-key');
+    expect(resolveRuntimeVoiceProviderGate(config)).toEqual({
       sttProvider: 'deepgram',
       ttsProvider: 'elevenlabs',
       sttEnabled: true,

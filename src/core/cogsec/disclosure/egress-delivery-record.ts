@@ -138,6 +138,27 @@ export interface TurnEgressCustodyProof {
   readonly effectiveSensitivity: SensitivityLevel;
 }
 
+/**
+ * One completed turn's custody proof together with the correlation it is keyed
+ * by. This is a LIVE in-process handoff, never durable state: the durable form
+ * is the custody snapshot itself, and the turn's persisted delivery-recovery row
+ * is a closed contract that must not grow a second copy of the same fact.
+ */
+export interface CompletedTurnEgressCustody {
+  readonly turnId: string;
+  readonly proof: TurnEgressCustodyProof;
+}
+
+/**
+ * One-shot capture of a completed turn's egress custody, taken just before the
+ * live per-turn state is cleared. Out-of-turn deliverers (the speaking
+ * arbiter's autonomous reply sender) read the proof through this rather than
+ * off the response, so nothing durable has to carry it.
+ */
+export type CompletedTurnEgressCustodyCapture = (
+  custody: CompletedTurnEgressCustody | null,
+) => void;
+
 /** Project a folded lineage plus its durable ref into the deliverer's proof. */
 export function turnEgressCustodyProof(
   lineage: DisclosureLineage,

@@ -909,6 +909,8 @@ function createRuntime(params: {
     recordTurnContextManifest: vi.fn(async (
       input: Parameters<TurnExecutionRuntime['recordTurnContextManifest']>[0],
     ) => `turn:${input.turnId}`),
+    setCurrentTurnEgressCustody: vi.fn(),
+    getEgressDeliveryRecorder: vi.fn(() => null),
     recordAssistantMessage: params.recordAssistantMessage,
     buildTurnToolSummary: vi.fn(() => ({ toolCalls: [] })),
     inferPostTurnActions: vi.fn(async () => []),

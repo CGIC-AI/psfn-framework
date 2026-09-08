@@ -56,6 +56,10 @@ const TEST_WYOMING_SHARD_ROUTING = {
   enabled: false,
 };
 
+// settings.json-owned in production; small here so one fixture corpus spans
+// several pages and the continuation path is actually exercised.
+const SHARED_WORKSPACE_TEST_BOUNDS = { pageSize: 2, pageBytes: 8_000_000 };
+
 const EMPTY_SATELLITE_REGISTRY: SatelliteRegistryConfig = {
   schemaVersion: 1,
   enabled: false,
@@ -2135,6 +2139,7 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
       const { connect } = await setupServer({
         ...createMinimalOptions(),
         multiCompanion: config,
+        sharedWorkspaceListBounds: SHARED_WORKSPACE_TEST_BOUNDS,
       });
       const connA = await connect();
       const connB = await connect();
@@ -2172,6 +2177,93 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
       writeFileSync(join(root, 'artifacts', 'world', 'guide.md'), 'unreviewed mutation\n');
       const tamperedList = await invokeRpc(connA, 9, 'shared.workspace.list', {});
       expect(tamperedList.error.message).toContain('no longer matches its approved revision');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('serves a large reviewed corpus in bounded pages and rejects a stale cursor', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-shared-reader-paged-'));
+    mkdirSync(join(root, 'artifacts', 'world'), { recursive: true });
+    mkdirSync(join(root, 'reviews'), { recursive: true });
+    mkdirSync(join(root, 'provenance', 'events'), { recursive: true });
+    const artifactCount = 7;
+    const expected: Array<{ artifactPath: string; revision: string }> = [];
+    for (let index = 0; index < artifactCount; index += 1) {
+      const artifactPath = `world/guide-${String(index).padStart(2, '0')}.md`;
+      const content = `# Reviewed guide ${index}\n`;
+      const revision = createHash('sha256').update(content).digest('hex');
+      const reviewId = `1111111${index}-1111-4111-8111-111111111111`;
+      writeFileSync(join(root, 'artifacts', artifactPath), content);
+      writeFileSync(join(root, 'reviews', `${reviewId}.json`), JSON.stringify({
+        reviewId,
+        artifactPath,
+        proposedRevision: revision,
+        status: 'approved',
+      }));
+      writeFileSync(join(root, 'provenance', 'events', `${reviewId}.approved.json`), JSON.stringify({
+        schemaVersion: 1,
+        event: 'approved',
+        at: '2026-07-13T00:00:00.000Z',
+        reviewId,
+        artifactPath,
+        proposedRevision: revision,
+      }));
+      expected.push({ artifactPath, revision });
+    }
+
+    try {
+      const config = multiCompanion({});
+      config.sharedWorkspacePath = root;
+      const { connect } = await setupServer({
+        ...createMinimalOptions(),
+        multiCompanion: config,
+        sharedWorkspaceListBounds: SHARED_WORKSPACE_TEST_BOUNDS,
+      });
+      const conn = await connect();
+      await identifyAgent(conn, '11111111-1111-4111-8111-111111111111', 1);
+
+      // Every page yields to the event loop between calls; a primary-loop timer
+      // must keep ticking while the whole corpus is walked.
+      let ticks = 0;
+      const timer = setInterval(() => { ticks += 1; }, 1);
+      const collected: Array<{ artifactPath: string; revision: string }> = [];
+      let cursor: string | null = null;
+      let pages = 0;
+      let requestId = 100;
+      try {
+        do {
+          const response = await invokeRpc(
+            conn,
+            requestId += 1,
+            'shared.workspace.list',
+            cursor === null ? {} : { cursor },
+          );
+          expect(response.error).toBeUndefined();
+          expect(response.result.artifacts.length)
+            .toBeLessThanOrEqual(SHARED_WORKSPACE_TEST_BOUNDS.pageSize);
+          collected.push(...response.result.artifacts);
+          cursor = response.result.nextCursor;
+          pages += 1;
+          await new Promise(resolve => setTimeout(resolve, 2));
+        } while (cursor !== null);
+      } finally {
+        clearInterval(timer);
+      }
+
+      expect(pages).toBe(Math.ceil(artifactCount / SHARED_WORKSPACE_TEST_BOUNDS.pageSize));
+      expect(collected).toEqual(expected);
+      expect(ticks).toBeGreaterThanOrEqual(pages - 1);
+
+      // Page size is operator policy, not a client parameter.
+      const widened = await invokeRpc(conn, 200, 'shared.workspace.list', { limit: 1000 });
+      expect(widened.error.message)
+        .toContain('accepts no parameters or identity assertions');
+
+      const staleCursor = await invokeRpc(conn, 201, 'shared.workspace.list', {
+        cursor: 'world/never-approved.md',
+      });
+      expect(staleCursor.error.message).toContain('restart the listing');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

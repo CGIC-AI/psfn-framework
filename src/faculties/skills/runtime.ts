@@ -462,9 +462,13 @@ export class SkillsRuntime {
     return { name: record.name, description: record.description, category: record.category, version: record.version, content: record.content, createdAt: record.createdAt, updatedAt: record.updatedAt };
   }
 
-  /** Delete a managed skill by name. */
+  /**
+   * Delete a managed skill by name. Garden is the operator-facing authority,
+   * so the delete carries operator provenance into the skill's archived audit
+   * trail, which survives the deletion (psfn-framework-ft69n).
+   */
   deleteSkill(name: string): void {
-    this.store.delete(name);
+    this.store.delete(name, { updatedBy: 'operator:garden', reason: 'Deleted from the Garden skills admin surface' });
     this.invalidate();
   }
 

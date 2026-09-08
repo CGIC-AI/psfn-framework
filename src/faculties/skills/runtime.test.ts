@@ -393,6 +393,46 @@ describe('skills runtime', () => {
     }
   });
 
+  it('preserves a deleted skill\'s audit trail through the Garden delete path (ft69n)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'skills-runtime-delete-audit-'));
+    const dataDir = join(root, 'data');
+    const seedDir = join(root, 'config');
+    const managedRoot = join(root, 'personal', 'skills');
+    mkdirSync(dataDir, { recursive: true });
+    mkdirSync(seedDir, { recursive: true });
+    writeSkillsConfig(dataDir, seedDir);
+
+    try {
+      const runtime = new SkillsRuntime({
+        dataDir,
+        seedDir,
+        repoRoot: root,
+        managedRootDir: managedRoot,
+        isBinaryAvailable: () => true,
+        now: () => new Date('2026-07-28T12:00:00.000Z'),
+      });
+      runtime.createSkill({
+        name: 'transient',
+        category: 'operator',
+        description: 'A skill the operator later removes',
+        content: '# Transient body',
+      });
+
+      runtime.deleteSkill('transient');
+
+      const history = runtime.getStore().getHistory('transient');
+      expect(history.map(entry => entry.action)).toEqual(['create', 'delete']);
+      // Operator provenance rides the delete into the surviving trail.
+      expect(history.at(-1)).toMatchObject({
+        action: 'delete',
+        updatedBy: 'operator:garden',
+        deletedCategory: 'operator',
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('builds Garden managed records from bounded async content reads', async () => {
     const root = mkdtempSync(join(tmpdir(), 'skills-runtime-managed-bounded-'));
     const dataDir = join(root, 'data');

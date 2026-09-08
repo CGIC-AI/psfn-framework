@@ -16,6 +16,7 @@ import {
   CHANNEL_TYPES,
   isToolCallErrorOutcome,
   isToolCallOutcome,
+  isTurnCustodySnapshotAbsenceReason,
   type ChannelType,
   type ParentTurnContinuationStop,
   type TurnID,
@@ -881,6 +882,19 @@ export function normalizeTurnRecord(raw: unknown, expectedChannelId: string): Tu
     && (typeof custodySnapshotRef !== 'string' || custodySnapshotRef !== `turn:${turnId}`)) {
     throw new Error('TurnRecord field "custodySnapshotRef" must be turn:<turnId> for this turn');
   }
+  // ccgdz.1: a turn that reached the custody seam says either which snapshot
+  // proves it or why none does — never both, and never an unknown reason that
+  // a later reader would have to interpret.
+  const custodySnapshotAbsence = raw.custodySnapshotAbsence;
+  if (custodySnapshotAbsence !== undefined
+    && !isTurnCustodySnapshotAbsenceReason(custodySnapshotAbsence)) {
+    throw new Error('TurnRecord field "custodySnapshotAbsence" must be a known absence reason');
+  }
+  if (custodySnapshotRef !== undefined && custodySnapshotAbsence !== undefined) {
+    throw new Error(
+      'TurnRecord carries a custodySnapshotRef and a custodySnapshotAbsence; exactly one is allowed',
+    );
+  }
   const internalStateSnapshotRef = raw.internalStateSnapshotRef;
   const observability = parseTurnObservability(raw.observability, {
     turnId,
@@ -942,6 +956,7 @@ export function normalizeTurnRecord(raw: unknown, expectedChannelId: string): Tu
       ? { contextManifestRef: contextManifestRef.trim() }
       : {}),
     ...(custodySnapshotRef !== undefined ? { custodySnapshotRef } : {}),
+    ...(custodySnapshotAbsence !== undefined ? { custodySnapshotAbsence } : {}),
     ...(typeof internalStateSnapshotRef === 'string' && internalStateSnapshotRef.trim().length > 0
       ? { internalStateSnapshotRef: internalStateSnapshotRef.trim() }
       : {}),

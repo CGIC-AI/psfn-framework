@@ -150,6 +150,49 @@ describe('human escalation raise', () => {
     expect(rows[0]?.raiseCount).toBe(1);
   });
 
+  it('pages once when two raises for one new condition overlap', async () => {
+    const plane = bench();
+
+    // Neither raise has committed an attempt when the other checks for one, so
+    // the replay lookup cannot separate them. Only the attempt claim can.
+    const [first, second] = await Promise.all([plane.raise(), plane.raise()]);
+
+    expect(plane.delivered).toHaveLength(1);
+    const statuses = [first.status, second.status].sort();
+    expect(statuses).toEqual(['delivered', 'replayed']);
+    await expect(plane.ledger.findAttempt('incident-a:opened:1')).resolves.toMatchObject({
+      outcome: 'delivered',
+    });
+  });
+
+  it('claims the attempt fail-closed before the sink is ever reached', async () => {
+    // The row must exist, and must not assert a delivery, at the moment the
+    // sink is entered: a process that dies mid-dispatch may not leave behind a
+    // claim of something nobody can prove happened.
+    const ledger = createInMemoryHumanEscalationLedger();
+    let atDispatch: unknown = 'sink never reached';
+    const plane = createHumanEscalationControlPlane<Notice>({
+      ledger,
+      routing: () => PAGING_ROUTES,
+      sinks: [{
+        id: 'operator_alert',
+        async deliver() {
+          atDispatch = await ledger.findAttempt('incident-a:opened:1');
+          return 'delivered';
+        },
+      }],
+      now: () => NOW_MS,
+      logger: { info: () => undefined, warn: () => undefined },
+    });
+
+    await plane.raise(request());
+
+    expect(atDispatch).toMatchObject({ sink: 'operator_alert', outcome: 'delivery_failed' });
+    await expect(ledger.findAttempt('incident-a:opened:1')).resolves.toMatchObject({
+      outcome: 'delivered',
+    });
+  });
+
   it('groups repeats of one condition under a single escalation', async () => {
     const plane = bench();
     await plane.raise();

@@ -11,7 +11,7 @@ import type { ImageVisionReviewer } from '../../../../primitives/images/types.js
 import type { VisionIntakeImageScreenerPort } from '../vision-attachments.js';
 import type { SessionManager } from '../../../session/manager.js';
 import type { CapturedSessionReads } from '../../../session/manager/captured-session-owner.js';
-import type { TurnToolResultCustodyRecord } from '../turn-records.js';
+import type { TurnToolResultCustodyRecord } from '../turn-tool-result-custody.js';
 import type { DisclosureLineage } from '../../../cogsec/disclosure/contracts.js';
 import type { ToolResultCustodyEdge } from '../../../../shared/contracts/tool-result-custody.js';
 import type { MetacognitiveFlag } from '../../../self-model/metacognition.js';
@@ -33,6 +33,7 @@ import type {
   ParentTurnContinuationStop,
   ResponseStyle,
   SubstrateMessage,
+  TurnCustodySnapshotOutcome,
   TurnID,
   TurnRecord,
   TurnUsage,
@@ -302,17 +303,17 @@ export interface TurnExecutionRuntime {
   getCurrentTurnDisclosureLineage: () => DisclosureLineage | undefined;
   /**
    * Persist the folded lineage as a durable custody snapshot
-   * (psfn-framework-ccgdz.1) and return its resolvable ref
-   * (`turn:<turnId>`), or undefined when no custody store is wired or the
-   * write failed visibly. Never throws: a custody-store outage must not
-   * convert into a turn failure.
+   * (psfn-framework-ccgdz.1) and return its resolvable ref (`turn:<turnId>`),
+   * or a NAMED absence reason when no custody store is wired, the write failed,
+   * or the stored snapshot disagreed with this fold. Never throws: a
+   * custody-store outage must not convert into a turn failure.
    */
   recordTurnCustodySnapshot: (input: {
     lineage: DisclosureLineage;
     turnId: TurnID;
     requestId: string;
     toolResultEdges?: ReadonlyMap<string, ToolResultCustodyEdge>;
-  }) => Promise<string | undefined>;
+  }) => Promise<TurnCustodySnapshotOutcome>;
   buildRuntimeContext: (
     message: SubstrateMessage,
     resolvedUserName: string,

@@ -229,6 +229,33 @@ describe('deduplicated operator alert delivery', () => {
     expect(bench.sent).toEqual([]);
   });
 
+  it('treats a concurrent process winning the attempt claim as already notified', async () => {
+    // Two processes reacting to one new incident both read a raise count of
+    // zero and both mint `:opened:1`. The plane lets exactly one of them page
+    // and reports `replayed` to the other. That is a normal race outcome, not a
+    // routing fault, so this path must not blame the operator's owner file.
+    const ledger = createInMemoryHumanEscalationLedger();
+    const bench = harness({ ledger });
+    const opened = event({ code: 'stuck_runtime_job_opened' });
+    await ledger.claimAttempt({
+      idempotencyKey: `${opened.correlationId}:opened:1`,
+      escalationId: '019d2326-0000-7000-8000-00000000000e',
+      sink: 'operator_alert',
+      outcome: 'delivered',
+      attemptedAtMs: NOW_MS,
+    });
+
+    const outcome = await state(bench, opened);
+
+    expect(outcome).toEqual({
+      status: 'suppressed',
+      incidentId: opened.correlationId,
+      reason: 'already_notified',
+    });
+    expect(bench.sent).toEqual([]);
+    expect(bench.errors).toEqual([]);
+  });
+
   it('re-alerts after a restart only once the incident has been silent for the cooldown', async () => {
     const bench = harness();
     const opened = event({ code: 'stuck_runtime_job_opened' });

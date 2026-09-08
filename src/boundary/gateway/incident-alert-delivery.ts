@@ -258,6 +258,22 @@ export function createIncidentAlertDelivery(
       }
       return { status: 'undeliverable', incidentId, phase, reason: raised.reason };
     }
+    if (raised.status === 'replayed') {
+      // Another process was raising this same notice at the same instant and won
+      // the plane's attempt claim, so a human HAS been paged — by them, once.
+      // This is a normal outcome of two processes reacting to one incident, not
+      // a routing fault: the sequence comes from a durable count read before the
+      // raise, so two racers legitimately mint the same key and exactly one of
+      // them dispatches.
+      logger.info('Runtime incident alert was already dispatched by a concurrent raise', {
+        incidentId,
+        phase,
+        code: bundle.incident.code,
+        outcome: raised.outcome,
+        escalationId: raised.escalationId,
+      });
+      return { status: 'suppressed', incidentId, reason: 'already_notified' };
+    }
     // Everything below is a state the owner file makes unreachable for this
     // kind, so reaching it means the routing invariants were bypassed rather
     // than that an alert was quietly dropped. Failing loudly is the only
@@ -265,7 +281,7 @@ export function createIncidentAlertDelivery(
     throw new Error(
       `Runtime incident ${incidentId} was escalated but not alerted (${raised.status}); `
       + 'humanEscalation.routes.runtime_incident must route to operator_alert with a zero '
-      + 'cooldown, and each rendered alert must carry a fresh idempotency key',
+      + 'cooldown',
     );
   }
 

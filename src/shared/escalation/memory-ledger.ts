@@ -14,6 +14,8 @@ import { randomUUID } from 'node:crypto';
 import {
   HUMAN_ESCALATION_SCHEMA_VERSION,
   type HumanEscalationAttempt,
+  type HumanEscalationAttemptClaim,
+  type HumanEscalationDeliveryOutcome,
   type HumanEscalationFacts,
   type HumanEscalationLedgerPort,
   type HumanEscalationListQuery,
@@ -91,13 +93,28 @@ export function createInMemoryHumanEscalationLedger(): HumanEscalationLedgerPort
       return attempt ? { ...attempt } : null;
     },
 
-    async recordAttempt(attempt: HumanEscalationAttempt): Promise<void> {
-      if (attempts.has(attempt.idempotencyKey)) {
-        throw new Error(
-          `Human escalation attempt ${attempt.idempotencyKey} is already recorded`,
-        );
-      }
+    /**
+     * The map is the primary key. A single-threaded claim looks trivial, but it
+     * is the same contract the Postgres ledger takes with `ON CONFLICT DO
+     * NOTHING`: whoever gets here first owns the dispatch, and everyone else is
+     * handed the owner's row rather than a second notice.
+     */
+    async claimAttempt(attempt: HumanEscalationAttempt): Promise<HumanEscalationAttemptClaim> {
+      const existing = attempts.get(attempt.idempotencyKey);
+      if (existing) return { claimed: false, existing: { ...existing } };
       attempts.set(attempt.idempotencyKey, { ...attempt });
+      return { claimed: true };
+    },
+
+    async settleAttempt(
+      idempotencyKey: string,
+      outcome: HumanEscalationDeliveryOutcome,
+    ): Promise<void> {
+      const attempt = attempts.get(idempotencyKey);
+      if (!attempt) {
+        throw new Error(`Human escalation attempt ${idempotencyKey} is not in the ledger`);
+      }
+      attempts.set(idempotencyKey, { ...attempt, outcome });
     },
 
     async markNotified(escalationId: string, notifiedAtMs: number): Promise<void> {

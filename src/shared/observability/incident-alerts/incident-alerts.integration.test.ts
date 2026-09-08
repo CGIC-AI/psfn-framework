@@ -21,6 +21,7 @@ import {
 import {
   createHumanEscalationControlPlane,
 } from '../../escalation/control-plane.js';
+import type { HumanEscalationLedgerPort } from '../../escalation/contracts.js';
 import {
   DEFAULT_HUMAN_ESCALATION_CONFIG,
 } from '../../../system/config/scheduler-config/human-escalation.js';
@@ -89,6 +90,8 @@ interface Runtime {
    * in-process state, which is what a restarted process actually is.
    */
   restartedPlane: () => ReturnType<typeof createHumanEscalationControlPlane<NotifyNtfyParams>>;
+  /** The same operator-alert dispatcher the wired plane pages through. */
+  alertDispatcher: OperatorIncidentAlertSink;
   eventBus: EventBus;
   sent: NotifyNtfyParams[];
   garden: AdminIncidentTimelineDataService;
@@ -164,6 +167,7 @@ async function withRuntime(
           now: () => clock,
           logger: { info: () => undefined, warn: () => undefined },
         }),
+        alertDispatcher: sink,
         eventBus,
         sent,
         garden: new AdminIncidentTimelineDataService({
@@ -211,6 +215,55 @@ function soleAlertIncidentId(sent: readonly NotifyNtfyParams[]): string {
   expect(incidentId).not.toBe('');
   expect(sent[0]!.message).toContain(incidentId);
   return incidentId;
+}
+
+interface RaceBarrier {
+  /** How many callers have entered the window. */
+  readonly held: number;
+  wait(): Promise<void>;
+}
+
+/** Releases every caller only once `participants` of them are inside. */
+function raceBarrier(participants: number): RaceBarrier {
+  let arrived = 0;
+  let open: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => { open = resolve; });
+  return {
+    get held(): number { return arrived; },
+    async wait(): Promise<void> {
+      arrived += 1;
+      if (arrived >= participants) open?.();
+      await gate;
+    },
+  };
+}
+
+/**
+ * The real Postgres ledger, held open at the exact window the duplicate-page
+ * race lives in: after the control plane's replay lookup returns nothing, and
+ * before it opens the escalation or claims the attempt. Every method is the
+ * store's own.
+ */
+function holdAfterReplayLookup(
+  ledger: HumanEscalationLedgerPort,
+  barrier: RaceBarrier,
+): HumanEscalationLedgerPort {
+  return {
+    openOrReopen: facts => ledger.openOrReopen(facts),
+    findByCondition: (kind, dedupeKey) => ledger.findByCondition(kind, dedupeKey),
+    async findAttempt(idempotencyKey) {
+      const found = await ledger.findAttempt(idempotencyKey);
+      await barrier.wait();
+      return found;
+    },
+    claimAttempt: attempt => ledger.claimAttempt(attempt),
+    settleAttempt: (idempotencyKey, outcome) => ledger.settleAttempt(idempotencyKey, outcome),
+    markNotified: (escalationId, notifiedAtMs) => ledger.markNotified(escalationId, notifiedAtMs),
+    list: query => ledger.list(query),
+    countByState: () => ledger.countByState(),
+    getById: escalationId => ledger.getById(escalationId),
+    applyResolution: input => ledger.applyResolution(input),
+  };
 }
 
 describe('incident alert and Garden timeline over the persisted stream', () => {
@@ -492,6 +545,80 @@ describe('incident alert and Garden timeline over the persisted stream', () => {
         await expect(runtime.restartedPlane().raiseCount('runtime_incident', incidentId))
           .resolves.toBe(1);
         expect(idempotencyKey).toBe(`${incidentId}:opened:1`);
+      });
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  it(
+    'pages once when two processes raise the same new incident simultaneously',
+    async () => {
+      await withRuntime(async (runtime) => {
+        // Two processes — the gateway and the agent — reacting to one incident
+        // at the same instant. Both read a raise count of zero, both mint
+        // `:opened:1`, and both find no recorded attempt, because neither has
+        // written anything yet: the replay lookup structurally cannot separate
+        // them. Only the attempt claim taken BEFORE dispatch can, and that
+        // claim is a PRIMARY KEY insert executed here against real Postgres.
+        //
+        // The overlap is forced rather than hoped for. Left to chance the two
+        // raises serialize behind the pool and the loser replays off the
+        // committed attempt row, which proves nothing about the window this
+        // fixes. The barrier holds both raises inside that window — past the
+        // replay lookup, before either has opened or claimed anything — and
+        // every ledger call after it is the unmodified Postgres store.
+        const incidentId = 'incident-race-0001';
+        const barrier = raceBarrier(2);
+        const racing = holdAfterReplayLookup(runtime.escalations, barrier);
+        const plane = () => createHumanEscalationControlPlane<NotifyNtfyParams>({
+          ledger: racing,
+          routing: () => DEFAULT_HUMAN_ESCALATION_CONFIG.routes,
+          sinks: [createOperatorAlertEscalationSink({
+            resolveDispatcher: () => runtime.alertDispatcher,
+          })],
+          now: () => NOW_MS,
+          logger: { info: () => undefined, warn: () => undefined },
+        });
+        const idempotencyKey = `${incidentId}:opened:1`;
+        const notice: NotifyNtfyParams = {
+          sender: { kind: 'system', provenance: 'system.operator_alert.runtime_incident' },
+          title: 'PSFN incident opened: race',
+          message: `Garden: /subsystem-health, incident ${incidentId}`,
+          idempotencyKey,
+        };
+        const raise = () => plane().raise({
+          kind: 'runtime_incident',
+          severity: 'critical',
+          owner: { kind: 'system' },
+          dedupeKey: incidentId,
+          idempotencyKey,
+          sourceRef: incidentId,
+          labels: ['postgres_pool_pressure_opened'],
+          evidence: { failureCount: 1 },
+          detailPath: '/subsystem-health',
+          raisedAtMs: NOW_MS,
+          notice,
+        });
+
+        const [first, second] = await Promise.all([raise(), raise()]);
+
+        // Both raises were inside the window together...
+        expect(barrier.held).toBe(2);
+        // ...and exactly one human was paged.
+        expect(runtime.sent).toHaveLength(1);
+        expect(runtime.sent[0]!.idempotencyKey).toBe(idempotencyKey);
+        expect([first.status, second.status].sort()).toEqual(['delivered', 'replayed']);
+        // One condition, one escalation row, one settled attempt.
+        const rows = await runtime.escalations.list({ limit: 50 });
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({ dedupeKey: incidentId, state: 'open' });
+        await expect(runtime.escalations.findAttempt(idempotencyKey))
+          .resolves.toMatchObject({ sink: 'operator_alert', outcome: 'delivered' });
+        // Accepted side effect: the losing raise still opened the escalation, so
+        // the durable raise count is 2 and the next re-alert is `:opened:3`. The
+        // key scheme is intact; only a sequence number is skipped.
+        await expect(runtime.escalations.findByCondition('runtime_incident', incidentId))
+          .resolves.toMatchObject({ raiseCount: 2 });
       });
     },
     INTEGRATION_TIMEOUT_MS,

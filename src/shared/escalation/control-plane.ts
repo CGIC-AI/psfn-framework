@@ -12,10 +12,18 @@
 //   3. Replays idempotently. An `idempotencyKey` already in the ledger is a
 //      redelivery of a notice that was already attempted; the plane returns the
 //      recorded outcome and dispatches nothing.
-//   4. Opens (or reopens) the durable escalation for the condition, then
-//      dispatches to the routed sink — or, for `garden_only`, records that the
-//      ledger row IS the notice.
-//   5. Records the attempt durably, so step 3 survives a restart.
+//   4. Opens (or reopens) the durable escalation for the condition, CLAIMS the
+//      attempt row for this notice, and only then dispatches to the routed sink
+//      — or, for `garden_only`, records that the ledger row IS the notice.
+//   5. Settles the claimed attempt with what the sink said, so step 3 survives
+//      a restart.
+//
+// Step 4 claims before it dispatches, and that ordering is the whole
+// concurrency argument. Step 3's lookup is a fast path over a committed row; it
+// cannot stop two overlapping raises about one NEW condition, which both find
+// no attempt and both open the same escalation. The attempt key is a primary
+// key, so exactly one of them wins the claim and pages, and the loser is handed
+// the winner's outcome as a replay.
 //
 // What it deliberately does NOT do: own a sink, own retry, own rendering, or
 // own any domain's decision. `operator-alert-dispatcher.ts` is untouched and
@@ -184,16 +192,42 @@ export function createHumanEscalationControlPlane<TNotice>(
       const record = await options.ledger.openOrReopen(facts);
       const nowMs = now();
 
-      if (route.cooldownMs > 0
-        && record.lastNotifiedAtMs !== null
-        && nowMs - record.lastNotifiedAtMs < route.cooldownMs) {
-        await options.ledger.recordAttempt({
+      /**
+       * Take the attempt row BEFORE anything is dispatched for it. The replay
+       * lookup above is a fast path over a committed row; it cannot stop two
+       * overlapping raises that both read no attempt and both reach here. This
+       * can, because the attempt key is a primary key: exactly one caller owns
+       * the dispatch, and every other caller is told who already does.
+       */
+      const claim = async (
+        provisionalOutcome: HumanEscalationDeliveryOutcome,
+      ): Promise<HumanEscalationRaiseResult | null> => {
+        const claimed = await options.ledger.claimAttempt({
           idempotencyKey,
           escalationId: record.escalationId,
           sink: route.sink,
-          outcome: 'suppressed',
+          outcome: provisionalOutcome,
           attemptedAtMs: nowMs,
         });
+        if (claimed.claimed) return null;
+        logger.info('Human escalation raise lost the attempt claim and dispatched nothing', {
+          kind: facts.kind,
+          sink: route.sink,
+          outcome: claimed.existing.outcome,
+          escalationId: claimed.existing.escalationId,
+        });
+        return {
+          status: 'replayed',
+          escalationId: claimed.existing.escalationId,
+          outcome: claimed.existing.outcome,
+        };
+      };
+
+      if (route.cooldownMs > 0
+        && record.lastNotifiedAtMs !== null
+        && nowMs - record.lastNotifiedAtMs < route.cooldownMs) {
+        const lost = await claim('suppressed');
+        if (lost) return lost;
         logger.info('Human escalation suppressed inside its routed cooldown', {
           kind: facts.kind,
           severity: facts.severity,
@@ -205,6 +239,8 @@ export function createHumanEscalationControlPlane<TNotice>(
 
       let outcome: HumanEscalationDeliveryOutcome;
       if (route.sink === 'garden_only') {
+        const lost = await claim('recorded');
+        if (lost) return lost;
         outcome = 'recorded';
       } else {
         const sink = sinks.get(route.sink);
@@ -213,11 +249,16 @@ export function createHumanEscalationControlPlane<TNotice>(
             `Human escalation sink ${route.sink} disappeared after construction`,
           );
         }
+        // The provisional outcome is the fail-closed one. A process that dies
+        // between the claim and the settle leaves a row that does not claim a
+        // delivery nobody can prove happened.
+        const lost = await claim('delivery_failed');
+        if (lost) return lost;
         try {
           outcome = await sink.deliver(request.notice, record);
         } catch (error) {
           // Contained, never swallowed: a sink adapter that throws is itself
-          // news, and the attempt row below is what stops the next raise from
+          // news, and the claimed attempt row is what stops the next raise from
           // re-paging on the same key.
           logger.warn('Human escalation sink threw while delivering', {
             kind: facts.kind,
@@ -227,15 +268,8 @@ export function createHumanEscalationControlPlane<TNotice>(
           });
           outcome = 'delivery_failed';
         }
+        await options.ledger.settleAttempt(idempotencyKey, outcome);
       }
-
-      await options.ledger.recordAttempt({
-        idempotencyKey,
-        escalationId: record.escalationId,
-        sink: route.sink,
-        outcome,
-        attemptedAtMs: nowMs,
-      });
 
       if (outcome === 'delivered') {
         await options.ledger.markNotified(record.escalationId, nowMs);

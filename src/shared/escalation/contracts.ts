@@ -434,6 +434,15 @@ export interface HumanEscalationAttempt {
 }
 
 /**
+ * The answer to an attempt claim. `claimed: false` carries the attempt that
+ * already owns the key, so the loser of a race can report the winner's outcome
+ * as a replay instead of dispatching a second notice.
+ */
+export type HumanEscalationAttemptClaim =
+  | { claimed: true }
+  | { claimed: false; existing: HumanEscalationAttempt };
+
+/**
  * Re-validate a row read back from storage. A row written by a newer schema,
  * hand-edited, or corrupted fails here rather than reaching an operator surface
  * as a half-typed object.
@@ -557,7 +566,28 @@ export interface HumanEscalationLedgerPort {
    */
   findByCondition(kind: HumanEscalationKind, dedupeKey: string): Promise<HumanEscalationRecord | null>;
   findAttempt(idempotencyKey: string): Promise<HumanEscalationAttempt | null>;
-  recordAttempt(attempt: HumanEscalationAttempt): Promise<void>;
+  /**
+   * Atomically take ownership of one delivery attempt BEFORE anything is
+   * dispatched for it.
+   *
+   * This is the only thing standing between two overlapping raises about one
+   * new condition and two operator pages. The replay lookup above is a
+   * fast path, not a guard: two callers can both read no attempt, both open the
+   * same escalation, and both reach the sink. Whoever wins this insert owns the
+   * dispatch; every other caller is told the attempt already exists and
+   * dispatches nothing.
+   *
+   * The claimed row carries a PROVISIONAL outcome, settled by
+   * {@link HumanEscalationLedgerPort.settleAttempt} once the sink answers. The
+   * provisional value is the fail-closed one — a process that dies mid-dispatch
+   * leaves a row that does not claim a delivery it cannot prove.
+   */
+  claimAttempt(attempt: HumanEscalationAttempt): Promise<HumanEscalationAttemptClaim>;
+  /** Replace a claimed attempt's provisional outcome with what the sink said. */
+  settleAttempt(
+    idempotencyKey: string,
+    outcome: HumanEscalationDeliveryOutcome,
+  ): Promise<void>;
   /** Stamp the newest attempt that actually reached a sink. */
   markNotified(escalationId: string, notifiedAtMs: number): Promise<void>;
   list(query: HumanEscalationListQuery): Promise<HumanEscalationRecord[]>;

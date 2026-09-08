@@ -10,6 +10,7 @@ import type {
   MessagePromptOverrideMode,
   LLMContext,
   SubstrateMessage,
+  TurnCustodySnapshotAbsenceReason,
   TurnID,
   TurnUsage,
 } from '../../../../shared/contracts/runtime.js';
@@ -42,7 +43,7 @@ import {
   type EnqueueBackgroundWorkInput,
 } from '../../background-work/types.js';
 import type { TurnExecutionRuntime, TurnSessionIdentity } from './contracts.js';
-import type { TurnToolResultCustodyRecord } from '../turn-records.js';
+import type { TurnToolResultCustodyRecord } from '../turn-tool-result-custody.js';
 import type { CapturedSessionReads } from '../../../session/manager/captured-session-owner.js';
 
 const log = createComponentLogger('SubstrateAgent');
@@ -141,6 +142,8 @@ export async function schedulePostTurnWork(input: {
   persistedUserMessageContent?: string;
   /** Resolvable ref to this turn's durable custody snapshot, when one was written. */
   custodySnapshotRef?: string;
+  /** Why no ref, when none was written. Exactly one of the two is present. */
+  custodySnapshotAbsence?: TurnCustodySnapshotAbsenceReason;
   /** Per-tool-result custody edges, keyed by lineage ref (ccgdz.5). */
   toolResultCustody?: ReadonlyMap<string, TurnToolResultCustodyRecord>;
   onTurnRecordPersisted?: () => void;
@@ -250,6 +253,9 @@ export async function schedulePostTurnWork(input: {
     },
     internalStateSnapshotRef,
     ...(input.custodySnapshotRef ? { custodySnapshotRef: input.custodySnapshotRef } : {}),
+    ...(input.custodySnapshotAbsence
+      ? { custodySnapshotAbsence: input.custodySnapshotAbsence }
+      : {}),
     ...(input.toolResultCustody ? { toolResultCustody: input.toolResultCustody } : {}),
   }, sessionReads);
 

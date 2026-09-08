@@ -413,6 +413,7 @@ export class FleetAuthHttpRoutes {
           sendJson(response, 200, {
             schemaVersion: 1,
             state: 'signed_in',
+            displayStateBinding: this.broker.displayStateBinding(context),
             guestMode: this.companionUi.guestMode,
             websocketPath: `/companion-ui/companions/${this.companionUi.companionId}/ws`,
             human: {

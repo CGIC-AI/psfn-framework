@@ -8,6 +8,14 @@ import {
 
 const COMPANION_ID = '11111111-1111-4111-8111-111111111111';
 const WS_PATH = `/companion-ui/companions/${COMPANION_ID}/ws`;
+const SIGNED_IN = {
+  schemaVersion: 1,
+  state: 'signed_in',
+  displayStateBinding: 'a'.repeat(64),
+  guestMode: 'disabled',
+  websocketPath: WS_PATH,
+  human: { provider: 'discord', label: 'Discord user', role: 'member' },
+};
 
 function json(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
@@ -36,13 +44,7 @@ afterEach(() => {
 
 describe('fleet session protocol', () => {
   it('accepts only exact sanitized status variants', () => {
-    expect(parseFleetSessionStatus({
-      schemaVersion: 1,
-      state: 'signed_in',
-      guestMode: 'disabled',
-      websocketPath: WS_PATH,
-      human: { provider: 'discord', label: 'Discord user', role: 'member' },
-    })).toEqual(expect.objectContaining({ state: 'signed_in', websocketPath: WS_PATH }));
+    expect(parseFleetSessionStatus(SIGNED_IN)).toEqual(SIGNED_IN);
     expect(parseFleetSessionStatus({
       schemaVersion: 1,
       state: 'signed_out',
@@ -52,12 +54,29 @@ describe('fleet session protocol', () => {
   });
 
   it.each([
-    { schemaVersion: 1, state: 'signed_in', guestMode: 'disabled', websocketPath: `${WS_PATH}?token=x`, human: { provider: 'discord', label: 'Discord user', role: 'member' } },
-    { schemaVersion: 1, state: 'signed_in', guestMode: 'disabled', websocketPath: WS_PATH, human: { provider: 'discord', label: 'Discord user', role: 'member', subjectId: 'secret' } },
+    { ...SIGNED_IN, websocketPath: `${WS_PATH}?token=x` },
+    { ...SIGNED_IN, human: { ...SIGNED_IN.human, subjectId: 'secret' } },
     { schemaVersion: 1, state: 'signed_out', guestMode: 'disabled', websocketPath: WS_PATH },
     { schemaVersion: 1, state: 'signed_out', guestMode: 'surprise' },
+    { schemaVersion: 1, state: 'signed_out', guestMode: 'disabled', displayStateBinding: 'a'.repeat(64) },
   ])('rejects malformed or authority-bearing status %#', (value) => {
     expect(() => parseFleetSessionStatus(value)).toThrow(FleetSessionProtocolError);
+  });
+
+  it.each([undefined, null, '', 'a'.repeat(63), 'a'.repeat(65), 'A'.repeat(64), 'g'.repeat(64), COMPANION_ID, 7, {}])(
+    'rejects signed-in status with a missing or malformed display binding %j', displayStateBinding => {
+      const value = { ...SIGNED_IN, displayStateBinding };
+      if (displayStateBinding === undefined) delete value.displayStateBinding;
+      expect(() => parseFleetSessionStatus(value)).toThrow(FleetSessionProtocolError);
+    },
+  );
+
+  it('retains display ownership only in parsed state without sending it as authority', async () => {
+    const fetchImpl = vi.fn(async () => json(SIGNED_IN));
+    const client = new FleetSessionClient(fetchImpl as typeof fetch);
+    await expect(client.readStatus()).resolves.toEqual(SIGNED_IN);
+    await client.readStatus();
+    expect(JSON.stringify(fetchImpl.mock.calls)).not.toContain(SIGNED_IN.displayStateBinding);
   });
 
   it('reads no-store status and keeps cookies browser-owned', async () => {

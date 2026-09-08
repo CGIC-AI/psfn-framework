@@ -15,7 +15,10 @@ import {
   createWeightedThoughtContradictionDamper,
   type WeightedThoughtContradictionDamperDeps,
 } from '../../../core/intention/weighted-thought-contradiction.js';
-import { createConcernWeightedThoughtProducer } from '../../../core/intention/concern-weighted-thought-producer.js';
+import {
+  createConcernWeightedThoughtProducer,
+  createCreatedConcernWeightedThoughtProducer,
+} from '../../../core/intention/concern-weighted-thought-producer.js';
 import type { WeightedThoughtStorePort } from '../../../core/intention/weighted-thought-store-port.js';
 import { registerWeightedThoughtOutreachTask } from '../../../core/scheduler/weighted-thought-outreach-lane.js';
 import type { EventBus } from '../../../shared/event-bus.js';
@@ -77,13 +80,22 @@ export function registerWeightedThoughtOutreachLane(deps: WeightedThoughtOutreac
     // lifecycle, carrying its own concern id as live provenance. That
     // provenance is what the contradiction damper below scopes to, and what the
     // outbound gate re-verifies at dispatch.
+    const concernThoughtDeps = {
+      concernStore,
+      thoughtStore: weightedThoughtStore,
+      lifecycleConfig: schedulerConfig.weightedThoughtOutreach.lifecycle,
+    };
+    // Both production concern-creation paths: extraction-derived candidates
+    // reviewed by the candidate worker, and concerns the post-turn appraisal
+    // raises directly. Covering one alone would leave the dampening guard
+    // inert for concerns raised by the other.
     eventBus.on(
       'intention.concern_candidate.reviewed',
-      createConcernWeightedThoughtProducer({
-        concernStore,
-        thoughtStore: weightedThoughtStore,
-        lifecycleConfig: schedulerConfig.weightedThoughtOutreach.lifecycle,
-      }),
+      createConcernWeightedThoughtProducer(concernThoughtDeps),
+    );
+    eventBus.on(
+      'intention.concern.created',
+      createCreatedConcernWeightedThoughtProducer(concernThoughtDeps),
     );
     // ── Charter Law 27 contradiction dampening (g1v99) ──
     // "Said fine but context suggests otherwise should reduce weight rather than

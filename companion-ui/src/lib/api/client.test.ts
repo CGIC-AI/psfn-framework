@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildSatelliteHello } from './auth.js';
+import { HubStreamStore } from '../stream/hub-stream.js';
 import {
   resolveHubWebSocketUrl,
   SatelliteHubClient,
@@ -306,6 +307,48 @@ describe('satellite hub websocket client', () => {
       status: 'rejected',
       reason: 'transition_delivery_failed',
     });
+  });
+
+  it('preserves the speech notice and text reply through the real client and stream store', async () => {
+    const socket = new FakeSocket();
+    const client = new SatelliteHubClient({
+      url: 'ws://127.0.0.1:8787/',
+      webSocketFactory: () => socket,
+    });
+    const store = new HubStreamStore(client);
+    const transportErrors: string[] = [];
+    client.on('error', (error) => transportErrors.push(error.message));
+    const connecting = store.connect();
+    socket.open();
+    await connecting;
+    socket.message({
+      type: 'session.ready', sessionId: 'session-1', channelId: 'channel-1',
+      deviceId: 'phone', deviceName: 'Phone', satelliteId: 'phone',
+      audioFormat: 'text', capabilities: { output: ['text', 'streamed_audio'] },
+    });
+    socket.message({ type: 'message', data: { role: 'assistant', content: 'The useful text reply.', final: true } });
+    socket.message({ type: 'text', data: 'audio-init' });
+    socket.message({ type: 'audio', data: 'AAAA' });
+    await flushAsyncMessage();
+    const generation = store.snapshot().voicePlayback.resetGeneration;
+    socket.message({ type: 'error-event', data: { message: 'Untrusted provider detail', scope: 'speech' } });
+    await flushAsyncMessage();
+
+    expect(client.snapshot().state).toBe('ready');
+    expect(store.snapshot().connection).toBe('ready');
+    expect(socket.readyState).toBe(1);
+    expect(store.snapshot().messages[0]?.content).toBe('The useful text reply.');
+    expect(store.snapshot().failure).toMatchObject({
+      scope: 'speech', recoverable: true,
+      message: 'Spoken reply unavailable. The text reply is still available in chat.',
+    });
+    expect(store.snapshot().voicePlayback.resetGeneration).toBe(generation + 1);
+    expect(store.snapshot().voicePlayback.pending).toEqual([]);
+    expect(transportErrors).toEqual([]);
+    store.sendUserText('Continue in text.');
+    expect(socket.sent.map((frame) => JSON.parse(frame)))
+      .toContainEqual({ type: 'user.text', text: 'Continue in text.', interrupt: true });
+    store.disconnect();
   });
 
   it('rejects discriminator-only and authority-injected hello acknowledgements', async () => {

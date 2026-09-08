@@ -405,6 +405,8 @@ export class SatelliteHubClient {
         this.handlePong(message);
         return;
       case 'error-event':
+        // Speech errors are projected by the stream store from the inbound frame.
+        if (message.data.scope === 'speech') return;
         this.emit('error', {
           // Hub error text is untrusted diagnostic input and can accidentally
           // contain credentials. Keep the detailed frame in volatile protocol

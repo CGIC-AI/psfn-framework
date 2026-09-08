@@ -49,8 +49,8 @@ const KNOWN_VIOLATIONS = new Map<string, string>([
   // and a dozen further owner-file/channel-config modules that value-import
   // `envCredential`. Removing this entry needs the agent entrypoint to stop
   // pulling gateway bootstrap and owner-file loading in by value, which is a
-  // separate, larger seam than mp1pf.
-  ['src/boundary/custody/credential-vault.ts', 'psfn-framework-mp1pf'],
+  // separate, larger seam than mp1pf, tracked as psfn-framework-f77ca.
+  ['src/boundary/custody/credential-vault.ts', 'psfn-framework-f77ca'],
 ]);
 
 /**

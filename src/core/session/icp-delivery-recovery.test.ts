@@ -10,6 +10,7 @@ import {
   InternalStateComputer,
   serializeInternalState,
 } from '../self-model/state.js';
+import { createEmptyToolCallOutcomeCounts } from '../../shared/contracts/tool-call-outcome.js';
 import {
   CHANNEL,
   FATIGUE_TIMESTAMP_MS,
@@ -186,6 +187,66 @@ describe('ICP delivery recovery codec', () => {
       expectedChannelId: CHANNEL,
       expectedSourceMessageId: SOURCE,
     })).toEqual(extended);
+  });
+
+  it('round-trips the content-free tool-call census an intentional no-reply turn records', () => {
+    const census = {
+      ...createEmptyToolCallOutcomeCounts(),
+      success: 1,
+      content_withheld: 2,
+    };
+    const withCensus = {
+      ...recoveryResponse,
+      content: '',
+      metadata: {
+        ...recoveryResponse.metadata,
+        toolCallOutcomes: census,
+        noReply: {
+          schemaVersion: 1,
+          disposition: 'intentional_no_reply',
+          source: 'response_control_tool',
+          auditId: 'no-reply-census',
+          decidedAt: 1_700_000_000_000,
+          turnId: correlation.turnId,
+          requestId: correlation.requestId,
+          channelId: CHANNEL,
+        },
+      },
+    };
+
+    expect(parseIcpRecoveryResponse(withCensus, {
+      label: 'test recovery response',
+      expectedChannelId: CHANNEL,
+      expectedSourceMessageId: SOURCE,
+    })).toEqual(withCensus);
+  });
+
+  it.each([
+    ['an unknown outcome', {
+      ...createEmptyToolCallOutcomeCounts(),
+      quarantined: 1,
+    }, /toolCallOutcomes contains unknown fields: quarantined/i],
+    ['a missing outcome', (() => {
+      const { partial_result: _dropped, ...rest } = createEmptyToolCallOutcomeCounts();
+      return rest;
+    })(), /toolCallOutcomes\.partial_result must be a non-negative finite number/i],
+    ['a negative count', {
+      ...createEmptyToolCallOutcomeCounts(),
+      policy_denial: -1,
+    }, /toolCallOutcomes\.policy_denial must be a non-negative finite number/i],
+    ['a fractional count', {
+      ...createEmptyToolCallOutcomeCounts(),
+      success: 1.5,
+    }, /toolCallOutcomes\.success must be a whole count/i],
+  ])('rejects a recorded tool-call census with %s', (_label, toolCallOutcomes, expected) => {
+    const malformed = {
+      ...recoveryResponse,
+      metadata: { ...recoveryResponse.metadata, toolCallOutcomes },
+    };
+
+    expect(() => parseIcpRecoveryResponse(malformed, {
+      label: 'test recovery response',
+    })).toThrow(expected);
   });
 
   it.each([

@@ -490,6 +490,12 @@ async function main(): Promise<void> {
           effectiveSchedulerConfig: startup.schedulerConfig,
         }),
         operatorLeaseTtlMs: startup.schedulerConfig.icpAutonomy.availability.operatorLeaseTtlMs,
+        // psfn-framework-2vd7s: the certification Garden gates lifecycle
+        // readmission on the same boot-resolved manifest the runtime Garden
+        // uses, so the harness cannot diverge from production wiring.
+        fleetCompanionIds: startup.config.companionFleet?.companions.map(
+          entry => entry.companionId,
+        ) ?? [],
       })
     : undefined;
   const autonomousTriggerEpoch = randomUUID();

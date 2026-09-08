@@ -239,10 +239,11 @@ function readFatigueSnapshot(
   }
 }
 
-function readCompanionSocialCharge(companionDataDir: string): number {
-  return readRunChargeRollingWindowFromLedger(
+async function readCompanionSocialCharge(companionDataDir: string): Promise<number> {
+  const snapshot = await readRunChargeRollingWindowFromLedger(
     resolveChargeLedgerPath(companionDataDir),
-  ).spentByLane.companion_social ?? 0;
+  );
+  return snapshot.spentByLane.companion_social ?? 0;
 }
 
 function fatigueDelta(before: FatigueSnapshot, after: FatigueSnapshot): FatigueSnapshot {
@@ -350,9 +351,9 @@ async function validateCompanionRoom(
   const fatigueBefore = fixture.companions.map(companion => (
     readFatigueSnapshot(companion.companionDataDir)
   ));
-  const chargeBefore = fixture.companions.map(companion => (
+  const chargeBefore = await Promise.all(fixture.companions.map(companion => (
     readCompanionSocialCharge(companion.companionDataDir)
-  ));
+  )));
   const modelRequestsBefore = harness.modelRequestCount;
 
   const initiated = await agentA.runRoomWeightedThoughtScheduler();
@@ -368,9 +369,9 @@ async function validateCompanionRoom(
   const fatigueAfter = fixture.companions.map(companion => (
     readFatigueSnapshot(companion.companionDataDir)
   ));
-  const chargeAfter = fixture.companions.map(companion => (
+  const chargeAfter = await Promise.all(fixture.companions.map(companion => (
     readCompanionSocialCharge(companion.companionDataDir)
-  ));
+  )));
   const fatigueDeltas = fatigueAfter.map((after, index) => (
     fatigueDelta(
       requireDefined(fatigueBefore[index], 'companion_room_fatigue_baseline_missing'),

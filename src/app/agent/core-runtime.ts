@@ -553,7 +553,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     sessionIntegrityRepairBackupRootDir: pathSnapshot.runtimePathLayout.backupsDir,
     automataRetentionCompanionId: resolveCompanionIdFromConfig(config),
   });
-  const fatigueRuntime = composeFatigueBudgetRuntime({ config, eventBus });
+  const fatigueRuntime = await composeFatigueBudgetRuntime({ config, eventBus });
   const fatigueRegulationReservations = config.multiCompanion === true
     ? await awaitPostgresStoreReadiness(
         'icp_fatigue_reservations',

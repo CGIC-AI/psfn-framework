@@ -1,4 +1,11 @@
-import { appendJsonLine, readJsonLines } from '../jsonl.js';
+import {
+  appendJsonLine,
+  resolveJsonLinesReadLimits,
+  streamJsonLines,
+  streamJsonLinesSync,
+  type JsonLinesReadLimitSettings,
+  type JsonLinesReadLimits,
+} from '../jsonl.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { ValuesMetacognitiveFlag } from '../../faculties/values/narrative-context-types.js';
 import {
@@ -281,34 +288,98 @@ function normalizePersistedReflectionEntry(raw: unknown): ReflectionJournalEntry
   }
 }
 
+export interface ReflectionJournalStoreOptions {
+  /** Owner-file bounded-read budgets (settings.json ledgerRead* keys). */
+  readLimitSettings?: JsonLinesReadLimitSettings | null;
+}
+
+/**
+ * `left` sorts strictly ahead of `right` under the journal's canonical
+ * newest-first order (createdAt descending, then id descending) — the exact
+ * comparator the previous sort-then-slice path used.
+ */
+function isNewerReflectionEntry(
+  left: ReflectionJournalEntry,
+  right: ReflectionJournalEntry,
+): boolean {
+  const createdAtDelta = Date.parse(right.createdAt) - Date.parse(left.createdAt);
+  if (createdAtDelta !== 0) return createdAtDelta < 0;
+  return right.id.localeCompare(left.id) < 0;
+}
+
+function isNewerConcernArc(
+  left: ReflectionConcernArcRecord,
+  right: ReflectionConcernArcRecord,
+): boolean {
+  const createdAtDelta = Date.parse(right.createdAt) - Date.parse(left.createdAt);
+  if (createdAtDelta !== 0) return createdAtDelta < 0;
+  return right.entryId.localeCompare(left.entryId) < 0;
+}
+
 export class ReflectionJournalStore {
   private readonly filePath: string;
+  private readonly readLimits: JsonLinesReadLimits;
 
-  constructor(filePath: string) {
+  constructor(filePath: string, options: ReflectionJournalStoreOptions = {}) {
     this.filePath = filePath;
+    this.readLimits = resolveJsonLinesReadLimits(options.readLimitSettings);
+  }
+
+  /**
+   * Retain at most `keep` entries while streaming the whole journal
+   * (psfn-framework-z3e2x). The comparator is the same total order the previous
+   * full-materialize-then-sort-then-slice path used, so `listRecent` and
+   * `listConcernArcs` return byte-identical results while retaining O(keep)
+   * rather than O(file).
+   */
+  private static retainTop<T>(
+    heap: T[],
+    candidate: T,
+    keep: number,
+    isBefore: (left: T, right: T) => boolean,
+  ): void {
+    let index = heap.length;
+    heap.push(candidate);
+    while (index > 0 && isBefore(heap[index]!, heap[index - 1]!)) {
+      const previous = heap[index - 1]!;
+      heap[index - 1] = heap[index]!;
+      heap[index] = previous;
+      index -= 1;
+    }
+    if (heap.length > keep) heap.pop();
   }
 
   append(input: ReflectionJournalEntryInput): ReflectionJournalEntry {
     return this.appendWithId(input, undefined);
   }
 
-  hasEntry(id: string): boolean {
+  async hasEntry(id: string): Promise<boolean> {
     const normalizedId = id.trim();
     if (!normalizedId) return false;
-    return readJsonLines(this.filePath, normalizePersistedReflectionEntry).entries
-      .some(entry => entry.id === normalizedId);
+    return (await this.findEntry(normalizedId)) !== null;
   }
 
-  appendOnce(id: string, input: ReflectionJournalEntryInput): {
+  /** Stream until the id is found; retains one entry, never the whole journal. */
+  private async findEntry(normalizedId: string): Promise<ReflectionJournalEntry | null> {
+    let found: ReflectionJournalEntry | null = null;
+    await streamJsonLines(this.filePath, this.readLimits, (parsed) => {
+      const entry = normalizePersistedReflectionEntry(parsed);
+      if (!entry || entry.id !== normalizedId) return;
+      found = entry;
+      return true;
+    });
+    return found;
+  }
+
+  async appendOnce(id: string, input: ReflectionJournalEntryInput): Promise<{
     entry: ReflectionJournalEntry;
     appended: boolean;
-  } {
+  }> {
     const normalizedId = id.trim();
     if (!normalizedId) {
       throw new Error('Reflection journal appendOnce id must be non-empty');
     }
-    const existing = readJsonLines(this.filePath, normalizePersistedReflectionEntry).entries
-      .find(entry => entry.id === normalizedId);
+    const existing = await this.findEntry(normalizedId);
     if (existing) return { entry: existing, appended: false };
     return { entry: this.appendWithId(input, normalizedId), appended: true };
   }
@@ -353,47 +424,49 @@ export class ReflectionJournalStore {
     if (!Number.isInteger(limitRaw) || limitRaw < 1) {
       throw new Error('Reflection journal listRecent limit must be a positive integer when provided');
     }
-    return readJsonLines(this.filePath, normalizePersistedReflectionEntry).entries
-      .sort((left, right) => {
-        const createdAtDelta = Date.parse(right.createdAt) - Date.parse(left.createdAt);
-        if (createdAtDelta !== 0) {
-          return createdAtDelta;
-        }
-        return right.id.localeCompare(left.id);
-      })
-      .slice(0, limitRaw);
+    // Bounded top-K over a streamed scan: the full journal is still inspected,
+    // but only `limitRaw` entries are ever retained (psfn-framework-z3e2x).
+    const recent: ReflectionJournalEntry[] = [];
+    streamJsonLinesSync(this.filePath, this.readLimits, (parsed) => {
+      const entry = normalizePersistedReflectionEntry(parsed);
+      if (!entry) return;
+      ReflectionJournalStore.retainTop(recent, entry, limitRaw, isNewerReflectionEntry);
+    });
+    return recent;
   }
 
-  listConcernArcs(options: ReflectionConcernArcListOptions = {}): ReflectionConcernArcRecord[] {
+  async listConcernArcs(
+    options: ReflectionConcernArcListOptions = {},
+  ): Promise<ReflectionConcernArcRecord[]> {
     const limit = options.limit ?? 20;
     if (!Number.isInteger(limit) || limit < 1) {
       throw new Error('Reflection journal listConcernArcs limit must be a positive integer');
     }
     const concernId = options.concernId?.trim();
     const provenanceRef = options.provenanceRef?.trim();
-    return readJsonLines(this.filePath, normalizePersistedReflectionEntry).entries
-      .flatMap((entry): ReflectionConcernArcRecord[] => {
-        let arc: ReflectionConcernArc | undefined;
-        try {
-          arc = normalizeConcernArc(entry.telemetry?.concernArc);
-        } catch {
-          return [];
-        }
-        if (!arc || (concernId && arc.concernId !== concernId)) return [];
-        const provenanceRefs = entry.substrateProvenanceRefs ?? [];
-        if (provenanceRef && !provenanceRefs.includes(provenanceRef)) return [];
-        return [{
-          entryId: entry.id,
-          createdAt: entry.createdAt,
-          ...(entry.substrateBoundary ? { substrateBoundary: entry.substrateBoundary } : {}),
-          provenanceRefs: [...provenanceRefs],
-          arc,
-        }];
-      })
-      .sort((left, right) => (
-        Date.parse(right.createdAt) - Date.parse(left.createdAt)
-        || right.entryId.localeCompare(left.entryId)
-      ))
-      .slice(0, limit);
+    // Bounded top-K over a streamed scan: retains at most `limit` arcs while
+    // still inspecting the whole journal (psfn-framework-z3e2x).
+    const arcs: ReflectionConcernArcRecord[] = [];
+    await streamJsonLines(this.filePath, this.readLimits, (parsed) => {
+      const entry = normalizePersistedReflectionEntry(parsed);
+      if (!entry) return;
+      let arc: ReflectionConcernArc | undefined;
+      try {
+        arc = normalizeConcernArc(entry.telemetry?.concernArc);
+      } catch {
+        return;
+      }
+      if (!arc || (concernId && arc.concernId !== concernId)) return;
+      const provenanceRefs = entry.substrateProvenanceRefs ?? [];
+      if (provenanceRef && !provenanceRefs.includes(provenanceRef)) return;
+      ReflectionJournalStore.retainTop(arcs, {
+        entryId: entry.id,
+        createdAt: entry.createdAt,
+        ...(entry.substrateBoundary ? { substrateBoundary: entry.substrateBoundary } : {}),
+        provenanceRefs: [...provenanceRefs],
+        arc,
+      }, limit, isNewerConcernArc);
+    });
+    return arcs;
   }
 }

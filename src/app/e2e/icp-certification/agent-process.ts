@@ -238,7 +238,7 @@ async function main(): Promise<void> {
     registry: { getByKey: () => undefined },
     personaVariables: () => characterPromptVariables,
   });
-  const fatigue = composeFatigueBudgetRuntime({
+  const fatigue = await composeFatigueBudgetRuntime({
     config: startup.config,
     eventBus: startup.eventBus,
   });
@@ -259,7 +259,7 @@ async function main(): Promise<void> {
     backgroundWorkWelfare: startup.schedulerConfig.backgroundWorkWelfare,
     streamTransport: { stream: gateway.stream.bind(gateway) },
   });
-  const chargeLedger = new RunChargeLedger(
+  const chargeLedger = await RunChargeLedger.open(
     resolveChargeLedgerPath(startup.pathSnapshot.companionDataDir),
     startup.eventBus,
   );

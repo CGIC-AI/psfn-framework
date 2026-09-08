@@ -273,7 +273,7 @@ describe('RunChargeLedger', () => {
     rebootedLedger.close();
   });
 
-  it('freshly reads the canonical rolling balance without process hydration', () => {
+  it('freshly reads the canonical rolling balance without process hydration', async () => {
     const nowMs = 1_800_000_000_000;
     const ledgerPath = join(makeTempDir(), 'charge-ledger.jsonl');
     const ledger = new RunChargeLedger(ledgerPath, null, { now: () => nowMs });
@@ -285,7 +285,7 @@ describe('RunChargeLedger', () => {
     ledger.close();
     resetRunChargeRollingWindowForTests();
 
-    expect(readRunChargeRollingWindowFromLedger(ledgerPath, nowMs)).toEqual({
+    await expect(readRunChargeRollingWindowFromLedger(ledgerPath, nowMs)).resolves.toEqual({
       windowMs: 24 * 60 * 60_000,
       spentByLane: { companion_social: 11 },
       entryCount: 1,

@@ -560,21 +560,28 @@ export interface FatigueBudgetCompositionOptions {
   now?: () => number;
 }
 
-export function composeFatigueBudgetRuntime(
+export async function composeFatigueBudgetRuntime(
   options: FatigueBudgetCompositionOptions,
-): FatigueBudgetComposition {
+): Promise<FatigueBudgetComposition> {
   const companionDataDir = resolveConfiguredCompanionDataDir(options.config);
   migrateLegacyPersistenceLayout(companionDataDir);
-  const sharedOptions = options.now ? { now: options.now } : {};
-  const fatigueLedger = new FatigueLedger(
+  // Bounded, cooperative ledger hydration (psfn-framework-z3e2x): startup
+  // streams both append-only ledgers off the blocking path so timers and admin
+  // work keep advancing on multi-megabyte files.
+  const sharedOptions = {
+    ...(options.now ? { now: options.now } : {}),
+    readLimitSettings: options.config,
+  };
+  const fatigueLedger = await FatigueLedger.open(
     resolveFatigueLedgerPath(companionDataDir),
     options.eventBus ?? null,
     sharedOptions,
   );
-  const humanAttentionLedger = new HumanAttentionPressureLedger(
+  const humanAttentionLedger = await HumanAttentionPressureLedger.open(
     resolveHumanAttentionLedgerPath(companionDataDir),
     null,
     options.now ?? Date.now,
+    { readLimitSettings: options.config },
   );
   const humanAttentionPolicy = options.config.chargePolicy?.fatigue.humanAttention;
   if (!humanAttentionPolicy) {

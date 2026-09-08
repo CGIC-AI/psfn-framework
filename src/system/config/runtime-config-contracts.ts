@@ -416,6 +416,9 @@ export interface SubstrateConfig {
   documentIngestPromptChars?: number;
   /** Char cap on parsed attachment text written to the sidecar file (zet.7). */
   documentIngestSidecarChars?: number;
+  ledgerReadChunkBytes?: number;
+  ledgerReadMaxRowBytes?: number;
+  ledgerReadYieldRows?: number;
   /** Overall wait cap (ms) for FAL image queue results (zet.7). */
   imageFalTimeoutMs?: number;
   /** Poll cadence (ms) for FAL image queue status (zet.7). */

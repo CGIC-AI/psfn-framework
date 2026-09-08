@@ -44,6 +44,7 @@ export function resolveRuntimeSchedulerConfig(
       incidentScanLimit: persisted.healthDetectors.incidentScanLimit,
       postgresPressure: { ...persisted.healthDetectors.postgresPressure },
       backgroundFailures: { ...persisted.healthDetectors.backgroundFailures },
+      stuckJobs: { ...persisted.healthDetectors.stuckJobs },
     },
     artifactLifecycle: { ...persisted.artifactLifecycle },
     episodicProcessing: { ...persisted.episodicProcessing },

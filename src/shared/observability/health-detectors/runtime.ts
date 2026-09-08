@@ -22,6 +22,11 @@ import {
   type PostgresPoolTelemetryReader,
 } from './postgres-pressure.js';
 import { createBackgroundFailureDetector } from './background-failures.js';
+import {
+  createStuckJobDetector,
+  type StuckJobRunView,
+  type StuckJobTaskView,
+} from './stuck-jobs.js';
 
 export interface RuntimeHealthDetectorOptions {
   stream: HealthDetectorStreamReader;
@@ -33,6 +38,17 @@ export interface RuntimeHealthDetectorOptions {
    * owns no pool authority.
    */
   postgresPoolTelemetry?: PostgresPoolTelemetryReader;
+  /**
+   * Live job state this process can see. Each half is optional in the way the
+   * runtime is: the gateway runs no automata, and a process with neither is
+   * simply not evaluated for stuck jobs rather than closing episodes it cannot
+   * see.
+   */
+  stuckJobs?: {
+    listRuns?: () => readonly StuckJobRunView[];
+    listTasks?: () => readonly StuckJobTaskView[];
+    ignoreTaskIds?: readonly string[];
+  };
 }
 
 export function createRuntimeHealthDetectorCycle(
@@ -50,6 +66,16 @@ export function createRuntimeHealthDetectorCycle(
   detectors.push(createBackgroundFailureDetector({
     config: options.config.backgroundFailures,
   }));
+  if (options.stuckJobs?.listRuns || options.stuckJobs?.listTasks) {
+    detectors.push(createStuckJobDetector({
+      config: options.config.stuckJobs,
+      ...(options.stuckJobs.listRuns ? { listRuns: options.stuckJobs.listRuns } : {}),
+      ...(options.stuckJobs.listTasks ? { listTasks: options.stuckJobs.listTasks } : {}),
+      ...(options.stuckJobs.ignoreTaskIds
+        ? { ignoreTaskIds: options.stuckJobs.ignoreTaskIds }
+        : {}),
+    }));
+  }
   return createHealthDetectorCycle({
     detectors,
     stream: options.stream,

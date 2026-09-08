@@ -12752,6 +12752,20 @@
       "note": "Canonical scheduler.json owner-file default for the runtime health detectors (psfn-framework-7qeo1.24.2-.4); operators tune healthDetectors.* in scheduler.json, the owner migration seeds this exact value into files written before the block existed, and every detector reads the loaded owner value rather than this literal, so it is a seed default rather than a code-owned policy constant."
     },
     {
+      "file": "src/system/config/scheduler-config/health-detectors.ts",
+      "name": "DEFAULT_HEALTH_DETECTORS_CONFIG.stuckJobs.automataRunBudgetMs",
+      "value": "3_600_000",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default for the runtime health detectors (psfn-framework-7qeo1.24.2-.4); operators tune healthDetectors.* in scheduler.json, the owner migration seeds this exact value into files written before the block existed, and every detector reads the loaded owner value rather than this literal, so it is a seed default rather than a code-owned policy constant."
+    },
+    {
+      "file": "src/system/config/scheduler-config/health-detectors.ts",
+      "name": "DEFAULT_HEALTH_DETECTORS_CONFIG.stuckJobs.schedulerTaskBudgetMs",
+      "value": "1_800_000",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default for the runtime health detectors (psfn-framework-7qeo1.24.2-.4); operators tune healthDetectors.* in scheduler.json, the owner migration seeds this exact value into files written before the block existed, and every detector reads the loaded owner value rather than this literal, so it is a seed default rather than a code-owned policy constant."
+    },
+    {
       "file": "src/system/config/scheduler-config/introspection.ts",
       "name": "DEFAULT_INTROSPECTION_AUDIT_CONFIG.comparisonMaxTokens",
       "value": "300",

@@ -32,6 +32,10 @@
     "backgroundFailures": {
       "failureThreshold": 3,
       "windowMs": 3600000
+    },
+    "stuckJobs": {
+      "automataRunBudgetMs": 3600000,
+      "schedulerTaskBudgetMs": 1800000
     }
   },
   "backgroundWork": {

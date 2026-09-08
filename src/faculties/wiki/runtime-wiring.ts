@@ -291,17 +291,24 @@ export async function wireWikiRuntime(
    * missing document, an unreadable one, and a checksum mismatch are all
    * withheld: the read paths fail closed, never open.
    */
-  const isPersonalDocumentAdmitted = admissionGate
-    ? (documentId: string): boolean => {
+  const resolvePersonalDocumentAdmission = admissionGate
+    ? (documentId: string): { contentSha256: string } | null => {
       try {
         const document = store.get(documentId);
-        return document !== null && admissionGate.status(document).state === 'admitted';
+        if (!document) return null;
+        // ccgdz.4: the gate's hash is of the bytes on disk RIGHT NOW, and
+        // `admitted` says those exact bytes hold a receipt. A document rewritten
+        // since admission reads back `unknown`, so the hash returned here can
+        // only ever name bytes that were actually cleared.
+        const admission = admissionGate.status(document);
+        if (admission.state !== 'admitted') return null;
+        return { contentSha256: admission.contentSha256 };
       } catch (error) {
         log.warn('Wiki admission check could not read the canonical document; withholding it', {
           documentId,
           error: error instanceof Error ? error.message : String(error),
         });
-        return false;
+        return null;
       }
     }
     : undefined;
@@ -329,8 +336,8 @@ export async function wireWikiRuntime(
         const found = await activeProjection.search(vector, 0, limit);
         // psfn-framework-1fjvm.2: chunk text is document body text, so an
         // unadmitted document is withheld from this surface too.
-        const matches = isPersonalDocumentAdmitted
-          ? found.filter(match => isPersonalDocumentAdmitted(match.documentId))
+        const matches = resolvePersonalDocumentAdmission
+          ? found.filter(match => resolvePersonalDocumentAdmission(match.documentId) !== null)
           : found;
         return {
           query,
@@ -362,7 +369,7 @@ export async function wireWikiRuntime(
         ...(deps.eventBus ? { eventBus: deps.eventBus } : {}),
         getSettings: () => resolveWikiRetrievalSettings(getConfig()),
         ...(deps.getMultiCompanion ? { getMultiCompanion: deps.getMultiCompanion } : {}),
-        ...(isPersonalDocumentAdmitted ? { isPersonalDocumentAdmitted } : {}),
+        ...(resolvePersonalDocumentAdmission ? { resolvePersonalDocumentAdmission } : {}),
       });
     }
   }

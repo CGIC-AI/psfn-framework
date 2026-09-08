@@ -22,12 +22,23 @@
 import { createHash } from 'node:crypto';
 
 import { canonicalJsonString } from '../../../shared/utils/json-serialization.js';
+import {
+  CUSTODY_SAFE_IDENTIFIER_PATTERN,
+  custodyIdentity,
+  custodyRefForTurn,
+  validateCustodyIdentity,
+  type CustodyIdentity,
+} from './custody-identity.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import {
   validateToolResultCustodyEdge,
   type ToolResultCustodyEdge,
 } from '../../../shared/contracts/tool-result-custody.js';
 import { VALID_SENSITIVITY_LEVELS, type SensitivityLevel } from '../../../system/trust/types.js';
+import type {
+  ContextSourceManifest,
+  ContextSourceManifestRecordOutcome,
+} from './context-source-manifest.js';
 import {
   DISCLOSURE_DESTINATION_KINDS,
   isDisclosureClassification,
@@ -62,26 +73,8 @@ function isCustodySourceKind(value: unknown): value is CustodySourceKind {
     && (CUSTODY_SOURCE_KINDS as readonly string[]).includes(value);
 }
 
-const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/u;
-
-/**
- * A literal reference is retained only when it matches this shape: a bounded
- * run of identifier/id-punctuation characters. No whitespace, no slash, no
- * quote, no newline — so a path, a sentence, or a message body can never be
- * mistaken for an id and stored verbatim.
- */
-const CUSTODY_SAFE_IDENTIFIER_PATTERN = /^[A-Za-z0-9_:.@+-]{1,128}$/u;
-
 /** Compile-time version labels (`disclosure/v1`) additionally allow a slash. */
 const CUSTODY_VERSION_LABEL_PATTERN = /^[A-Za-z0-9_./-]{1,64}$/u;
-
-/** Bounded identity for one runtime reference: always a hash, sometimes an id. */
-interface CustodyIdentity {
-  /** sha256 of the exact original reference string; the durable join key. */
-  readonly digest: string;
-  /** The literal reference, retained only when structurally safe to store. */
-  readonly id?: string;
-}
 
 /** One admitted source's content-free custody row. */
 interface CustodySnapshotSource {
@@ -121,26 +114,7 @@ export interface CustodySnapshot {
 
 /** The custody-snapshot key for a turn. No new identifier is minted. */
 export function custodySnapshotRefForTurn(turnId: string): string {
-  const trimmed = turnId.trim();
-  if (trimmed.length === 0) {
-    throw new Error('Custody snapshot ref requires a non-empty turn id');
-  }
-  return `turn:${trimmed}`;
-}
-
-export function custodySha256(value: string): string {
-  return createHash('sha256').update(value, 'utf8').digest('hex');
-}
-
-/**
- * Bound one free-form runtime reference. The digest is unconditional; the
- * literal survives only when it is a bounded safe token.
- */
-function custodyIdentity(reference: string): CustodyIdentity {
-  const digest = custodySha256(reference);
-  return CUSTODY_SAFE_IDENTIFIER_PATTERN.test(reference)
-    ? { digest, id: reference }
-    : { digest };
+  return custodyRefForTurn(turnId);
 }
 
 function custodySourceKindForRef(reference: string): CustodySourceKind {
@@ -256,21 +230,6 @@ function invalid(field: string, requirement: string): Error {
   return new Error(`Custody snapshot ${field} ${requirement}`);
 }
 
-function validateIdentity(value: unknown, field: string): CustodyIdentity {
-  if (!isRecord(value)) throw invalid(field, 'must be an object');
-  if (typeof value.digest !== 'string' || !SHA256_HEX_PATTERN.test(value.digest)) {
-    throw invalid(`${field}.digest`, 'must be 64 lowercase hex characters');
-  }
-  if (value.id === undefined) return { digest: value.digest };
-  if (typeof value.id !== 'string' || !CUSTODY_SAFE_IDENTIFIER_PATTERN.test(value.id)) {
-    throw invalid(`${field}.id`, 'must be a bounded safe identifier');
-  }
-  if (custodySha256(value.id) !== value.digest) {
-    throw invalid(`${field}.id`, 'does not match its digest');
-  }
-  return { digest: value.digest, id: value.id };
-}
-
 function validateCount(value: unknown, field: string): number {
   if (!Number.isSafeInteger(value) || (value as number) < 0) {
     throw invalid(field, 'must be a non-negative safe integer');
@@ -305,7 +264,7 @@ function validateSource(value: unknown, index: number): CustodySnapshotSource {
   }
   return {
     kind: value.kind,
-    ref: validateIdentity(value.ref, `${field}.ref`),
+    ref: validateCustodyIdentity(value.ref, `${field}.ref`),
     sensitivity: value.sensitivity as SensitivityLevel,
     classified: value.classified,
     permittedDestinationKinds: validateDestinationKinds(
@@ -317,7 +276,7 @@ function validateSource(value: unknown, index: number): CustodySnapshotSource {
       `${field}.subjectContactCount`,
     ),
     ...(value.sourceChannel !== undefined
-      ? { sourceChannel: validateIdentity(value.sourceChannel, `${field}.sourceChannel`) }
+      ? { sourceChannel: validateCustodyIdentity(value.sourceChannel, `${field}.sourceChannel`) }
       : {}),
     ...(value.toolResult !== undefined
       ? { toolResult: validateToolResultCustodyEdge(value.toolResult, `${field}.toolResult`) }
@@ -363,7 +322,7 @@ export function validateCustodySnapshot(value: unknown): CustodySnapshot {
     schemaVersion: CUSTODY_SNAPSHOT_SCHEMA_VERSION,
     generationContextRef: value.generationContextRef,
     turnId: value.turnId,
-    requestId: validateIdentity(value.requestId, 'requestId'),
+    requestId: validateCustodyIdentity(value.requestId, 'requestId'),
     classification: value.classification,
     effectiveSensitivity: value.effectiveSensitivity as SensitivityLevel,
     sourceCount: validateCount(value.sourceCount, 'sourceCount'),
@@ -393,9 +352,24 @@ export type CustodySnapshotRecordOutcome =
    */
   | 'diverged';
 
-/** Durable custody-snapshot sink. */
+/**
+ * Durable custody sink for one turn.
+ *
+ * The context source manifest (psfn-framework-ccgdz.4) lives behind the SAME
+ * port and the same `turn:<turnId>` key as the snapshot: they are two records
+ * of one generation's custody, written in one turn, retained under one
+ * operator-owned horizon. They stay separate ROWS because the snapshot's
+ * content digest drives divergence detection and a replayed turn legitimately
+ * re-assembles a different prompt.
+ */
 export interface CustodySnapshotStorePort {
   record(snapshot: CustodySnapshot): Promise<CustodySnapshotRecordOutcome>;
   getByGenerationContextRef(ref: string): Promise<CustodySnapshot | null>;
+  recordContextManifest(
+    manifest: ContextSourceManifest,
+  ): Promise<ContextSourceManifestRecordOutcome>;
+  getContextManifestByGenerationContextRef(
+    ref: string,
+  ): Promise<ContextSourceManifest | null>;
   close(): Promise<void>;
 }

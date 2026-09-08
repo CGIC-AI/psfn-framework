@@ -719,6 +719,7 @@ export async function handleMessageForTurn(
   // recorded; absent thereafter only when the write failed visibly.
   let custodySnapshotRef: string | undefined;
   let custodySnapshotAbsence: TurnCustodySnapshotAbsenceReason | undefined;
+  let contextManifestRef: string | undefined;
   // ccgdz.5: the observed tool results' custody edges, keyed by the lineage ref
   // they fold into. Empty until tool observations are recorded.
   let toolResultCustody: ReadonlyMap<string, TurnToolResultCustodyRecord> = new Map();
@@ -806,8 +807,6 @@ export async function handleMessageForTurn(
         turnMessages: [],
         promptMode,
         promptText: fullPrompt,
-        contextMessageCount,
-        memoryContextChars,
         trustLevel,
         speakerRole,
         canonicalContactKey,
@@ -952,8 +951,6 @@ export async function handleMessageForTurn(
         turnMessages: [],
         promptMode,
         promptText: fullPrompt,
-        contextMessageCount,
-        memoryContextChars,
         trustLevel,
         speakerRole,
         canonicalContactKey,
@@ -1049,6 +1046,9 @@ export async function handleMessageForTurn(
       emotionAppraisalChain: preTurnState.emotionAppraisalChain,
       memoryContextBlock,
       wikiContextBlock,
+      disclosureMemorySources: preTurnState.disclosureMemorySources,
+      disclosureBiographicalSources: preTurnState.disclosureBiographicalSources,
+      disclosureWikiSources: preTurnState.disclosureWikiSources,
       scratchpadBlock: preTurnState.scratchpadBlock,
       turnBudgetCharacteristics,
       continuitySubjectKey,
@@ -1418,6 +1418,24 @@ export async function handleMessageForTurn(
     } else {
       custodySnapshotAbsence = custodyOutcome.absenceReason;
     }
+    // ccgdz.4: the per-block source manifest is written beside the snapshot,
+    // under the same `turn:<turnId>` key. It is what makes
+    // `TurnRecord.contextManifestRef` a reference that resolves instead of the
+    // synthesized display string it replaced.
+    contextManifestRef = await runtime.recordTurnContextManifest({
+      turnId,
+      requestId,
+      blocks: promptAssembly.plan.blocks.map(block => ({
+        id: block.id,
+        layer: block.layer,
+        volatility: block.volatility,
+        producer: block.producer,
+        ...(block.scopeKey ? { scopeKey: block.scopeKey } : {}),
+        tokensEst: block.tokensEst,
+        renderedText: block.renderedText,
+        ...(block.sources ? { sources: block.sources } : {}),
+      })),
+    });
     let responseAttachments = honorNoReply
       ? []
       : recoveredResponse?.attachments
@@ -1858,8 +1876,6 @@ export async function handleMessageForTurn(
       assistantSessionEntryId,
       promptMode,
       fullPrompt,
-      contextMessageCount,
-      memoryContextChars,
       memoryContextBlock,
       trustLevel,
       speakerRole,
@@ -1877,6 +1893,7 @@ export async function handleMessageForTurn(
       persistedUserMessageContent,
       ...(custodySnapshotRef ? { custodySnapshotRef } : {}),
       ...(custodySnapshotAbsence ? { custodySnapshotAbsence } : {}),
+      ...(contextManifestRef ? { contextManifestRef } : {}),
       toolResultCustody,
       onTurnRecordPersisted: () => {
         completedTurnRecordState.persisted = true;
@@ -1997,8 +2014,6 @@ export async function handleMessageForTurn(
         model: runtime.agent.state.model.id,
         promptMode,
         promptText: fullPrompt,
-        contextMessageCount,
-        memoryContextChars,
         trustLevel,
         speakerRole,
         canonicalContactKey,
@@ -2014,6 +2029,7 @@ export async function handleMessageForTurn(
         ...(custodySnapshotRef ? { custodySnapshotRef } : {}),
         ...(custodySnapshotAbsence ? { custodySnapshotAbsence } : {}),
       ...(custodySnapshotAbsence ? { custodySnapshotAbsence } : {}),
+        ...(contextManifestRef ? { contextManifestRef } : {}),
         toolResultCustody,
       }, sessionReads));
     }

@@ -116,6 +116,27 @@ export function createMemoryExtractionAutomataRunPort(
   };
 }
 
+/**
+ * The run id a memory derived by this extraction may record as its
+ * `AutomataWorkerLineage.runId` (psfn-framework-ccgdz.3).
+ *
+ * Verified, never inferred: the id is returned only when the authoritative run
+ * registry holds a `memory.extraction` run under it. The governed Bus lifecycle
+ * hands its binding's lineage directly; this covers the Bus-ineligible path,
+ * where the background-work supervisor registered the run but no governed
+ * lifecycle opened. A correlation id that merely happens to equal a run id is
+ * never accepted as one.
+ */
+export function resolveMemoryExtractionDerivationRunId(
+  registry: AutomataRunRegistry | null | undefined,
+  runId: string,
+): string | undefined {
+  if (!registry) return undefined;
+  const run = registry.getRun(runId);
+  if (!run || run.automatonClass !== 'memory.extraction') return undefined;
+  return run.runId;
+}
+
 async function completeMemoryExtractionAutomataRun(
   registry: AutomataRunRegistry,
   runId: string,

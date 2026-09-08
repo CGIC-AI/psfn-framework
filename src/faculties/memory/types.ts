@@ -6,6 +6,10 @@ import type {
 } from '../../system/trust/types.js';
 import { clampSigned, clampUnit } from '../../shared/utils/numeric.js';
 import {
+  normalizeCogSecStructuredProvenanceRefs,
+  type CogSecStructuredProvenanceRef,
+} from '../../shared/contracts/provenance-ref.js';
+import {
   MEMORY_POLICY_TYPES,
   resolveMemoryRetrievalPolicy,
   resolveMemorySalienceFloor,
@@ -140,6 +144,32 @@ export interface MemoryProvenance {
    * `extractedAt`, which is exactly the widening this field prevents.
    */
   sourceConversationAt?: number;
+  /**
+   * Admission identity of the SOURCE bytes this memory was derived from
+   * (psfn-framework-ccgdz.3): the intake envelope that admitted them and, when
+   * the ingress path issued one, the content-addressed receipt
+   * (psfn-framework-ccgdz.2).
+   *
+   * This is what lets `buildCogSecLineagePreview` classify a descendant of a
+   * poisoned envelope as `tainted` by identity instead of by string-matching an
+   * `intake-envelope:<id>` provenance ref. Absent on every memory written before
+   * this bead and on every path with no upstream envelope; absence classifies as
+   * `uncertain`, never as clean.
+   *
+   * Deliberately NOT a content hash of the stored source text: the receipt hashes
+   * the ADMITTED bytes, while the persisted session entry may hold the screening's
+   * `effectiveText` after marking or withholding. A hash of the latter would be a
+   * false join key -- worse than an absent one.
+   */
+  sourceAdmissions?: CogSecStructuredProvenanceRef[];
+  /**
+   * `AutomataWorkerLineage.runId` of the derivation run that produced this
+   * memory (psfn-framework-ccgdz.3). Memory extraction is a governed automata
+   * class whose terminal handoff already records the run -> memory-id edge; this
+   * is the reverse edge, so a memory can name the run that derived it without
+   * scanning every handoff. Set only from an authoritative run record.
+   */
+  derivationRunId?: string;
 }
 export interface MemoryScopeRef {
   kind: MemoryScopeKind;
@@ -609,6 +639,14 @@ export function normalizeMemoryProvenance(value: unknown): MemoryProvenance | un
   const sourceConversationAt = normalizeOptionalFiniteTimestamp(record.sourceConversationAt);
   if (sourceConversationAt !== undefined) {
     provenance.sourceConversationAt = sourceConversationAt;
+  }
+  const sourceAdmissions = normalizeCogSecStructuredProvenanceRefs(record.sourceAdmissions);
+  if (sourceAdmissions.length > 0) {
+    provenance.sourceAdmissions = sourceAdmissions;
+  }
+  const derivationRunId = normalizeOptionalString(record.derivationRunId);
+  if (derivationRunId) {
+    provenance.derivationRunId = derivationRunId;
   }
   const actor = normalizeOptionalString(record.actor);
   if (actor && ['companion', 'operator', 'system', 'shard', 'subagent', 'repl'].includes(actor)) {

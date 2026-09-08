@@ -1,4 +1,5 @@
 import { isRecord } from '../utils/types.js';
+import { normalizeCogSecStructuredProvenanceRef } from './provenance-ref.js';
 
 /**
  * Current write version. Bumped to 2 for the affect-authorship split
@@ -56,6 +57,21 @@ export interface EpisodeProvenanceRef {
   kind: 'l0_span' | 'l0_artifact' | 'turn' | 'session' | 'operator_note';
   refId: string;
   note?: string;
+  /**
+   * Admission identity of the source bytes this ref points at
+   * (psfn-framework-ccgdz.3), carrying the same evidence as
+   * `CogSecStructuredProvenanceRef`: the intake envelope that admitted them and
+   * the content-addressed ingress receipt when one was issued
+   * (psfn-framework-ccgdz.2).
+   *
+   * An episode derived from specific turns can therefore be matched to a
+   * poisoned envelope by identity instead of by session co-location. Absent on
+   * every episode synthesized before this bead and on every unscreened source;
+   * absence classifies as `uncertain`, never as clean.
+   */
+  receiptId?: string;
+  contentSha256?: string;
+  envelopeId?: string;
 }
 
 export interface EpisodeSalience {
@@ -204,7 +220,14 @@ const ARTIFACT_REF_KEYS = new Set([
   'path',
   'createdAt',
 ]);
-const PROVENANCE_REF_KEYS = new Set(['kind', 'refId', 'note']);
+const PROVENANCE_REF_KEYS = new Set([
+  'kind',
+  'refId',
+  'note',
+  'receiptId',
+  'contentSha256',
+  'envelopeId',
+]);
 const SALIENCE_KEYS = new Set(['score', 'novelty', 'emotionalIntensity']);
 const AFFECT_KEYS = new Set(['valence', 'arousal', 'dominance', 'labels']);
 const PROVENANCE_KINDS = new Set([
@@ -342,10 +365,24 @@ function parseProvenanceRef(value: unknown, field: string): EpisodeProvenanceRef
   }
   const refId = parseRequiredString(record.refId, `${field}.refId`);
   const note = parseOptionalString(record.note, `${field}.note`);
+  // ccgdz.3: identity fields are validated through the one shared normalizer so
+  // an episode ref and a memory ref can never disagree about what a valid
+  // receipt/envelope/content hash looks like. A malformed field is dropped,
+  // which loses verification (degrading to `uncertain`) rather than asserting it.
+  const admission = normalizeCogSecStructuredProvenanceRef({
+    kind,
+    refId,
+    ...(record.receiptId !== undefined ? { receiptId: record.receiptId } : {}),
+    ...(record.contentSha256 !== undefined ? { contentSha256: record.contentSha256 } : {}),
+    ...(record.envelopeId !== undefined ? { envelopeId: record.envelopeId } : {}),
+  });
   return {
     kind: kind as EpisodeProvenanceRef['kind'],
     refId,
     ...(note ? { note } : {}),
+    ...(admission?.receiptId ? { receiptId: admission.receiptId } : {}),
+    ...(admission?.contentSha256 ? { contentSha256: admission.contentSha256 } : {}),
+    ...(admission?.envelopeId ? { envelopeId: admission.envelopeId } : {}),
   };
 }
 

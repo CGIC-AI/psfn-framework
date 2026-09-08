@@ -5,6 +5,7 @@ import type {
   GroupMemoryAddressMode,
   MemoryScopeRef,
 } from '../types.js';
+import type { CogSecStructuredProvenanceRef } from '../../../shared/contracts/provenance-ref.js';
 import { isExtractionTranscriptEntry } from './chunk-compose.js';
 import {
   hasSpeakerWord,
@@ -57,6 +58,15 @@ export interface ExtractionFactRouting {
   icpDyadId?: string;
   sourceActivityIds?: string[];
   sourceTurnIds?: string[];
+  /**
+   * Admission identity of the source bytes this fact was attributed to
+   * (psfn-framework-ccgdz.3). Resolved from the SAME envelope index the
+   * memory_write sink gate reads, so the recorded provenance and the gate
+   * decision describe one set of source bytes.
+   */
+  sourceAdmissions?: CogSecStructuredProvenanceRef[];
+  /** `AutomataWorkerLineage.runId` of the extraction run that derived the fact. */
+  derivationRunId?: string;
   routingReason: ExtractionFactRoutingReason;
 }
 

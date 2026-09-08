@@ -8,6 +8,12 @@ import { resolveCachedPromptRuntimeLayoutStore } from '../../../identity/prompt-
 import { getDefaultRuntimePromptSections } from '../../../identity/runtime-prompt-layers.js';
 import { buildSystemContextPromptBlock } from '../../../../primitives/llm/message-conversion.js';
 import type { PiChatMessage } from '../../../../primitives/llm/message-conversion.js';
+import type { CogSecStructuredProvenanceRef } from '../../../../shared/contracts/provenance-ref.js';
+import type { DisclosureSourceContribution } from '../../../cogsec/disclosure/contracts.js';
+import type {
+  DisclosureMemorySource,
+  DisclosureWikiSource,
+} from '../../../cogsec/disclosure/generation-lineage.js';
 import {
   buildCurrentDatetimeProximityAnchor,
   computePromptPlanCachePrefixes,
@@ -154,6 +160,65 @@ function buildCurrentUserRuntimeProfile(input: {
   };
 }
 
+// ── Per-block source identity (psfn-framework-ccgdz.4) ──
+//
+// The disclosure fold already answers "which identified sources were admitted
+// into this generation". These projections answer the finer question the
+// prompt plan needs: which of them are rendered into WHICH block. Content-free
+// throughout — a `kind`, a ref id, and the admission evidence from ccgdz.3.
+
+/** Split a `<kind>:<rest>` runtime ref into the structured ref shape. */
+function structuredRefFromDisclosureRef(
+  ref: string,
+): { kind: string; refId: string } | null {
+  const separator = ref.indexOf(':');
+  if (separator <= 0 || separator === ref.length - 1) return null;
+  return { kind: ref.slice(0, separator), refId: ref.slice(separator + 1) };
+}
+
+function buildRefOnlySources(
+  sources: readonly { ref: string }[],
+): CogSecStructuredProvenanceRef[] {
+  return sources.flatMap((source) => {
+    const structured = structuredRefFromDisclosureRef(source.ref);
+    return structured ? [structured] : [];
+  });
+}
+
+function buildMemoryBlockSources(
+  sources: readonly DisclosureMemorySource[],
+): CogSecStructuredProvenanceRef[] {
+  return sources.flatMap((source) => {
+    const structured = structuredRefFromDisclosureRef(source.ref);
+    if (!structured) return [];
+    // The memory ref identifies WHAT was rendered; its admission refs identify
+    // the ingress-proved bytes that memory was derived from. Both are listed:
+    // one without the other cannot answer "which admitted message reached this
+    // prompt?" (ccgdz.3 -> epic AC 3).
+    return [
+      structured,
+      ...(source.sourceAdmissions ?? []).map(admission => ({ ...admission })),
+    ];
+  });
+}
+
+function buildWikiBlockSources(
+  sources: readonly DisclosureWikiSource[],
+): CogSecStructuredProvenanceRef[] {
+  return sources.flatMap((source) => {
+    const structured = structuredRefFromDisclosureRef(source.ref);
+    if (!structured) return [];
+    // The admission hash is the AC that matters here: a document rewritten
+    // since admission is already withheld by retrieval, so a block can never
+    // claim an admitted hash for bytes that changed. A shared-world document
+    // carries no hash and says so by its absence.
+    return [{
+      ...structured,
+      ...(source.contentSha256 ? { contentSha256: source.contentSha256 } : {}),
+    }];
+  });
+}
+
 export async function assembleTurnPrompt(input: {
   runtime: TurnExecutionRuntime;
   sessionReads: CapturedSessionReads;
@@ -171,6 +236,15 @@ export async function assembleTurnPrompt(input: {
   emotionAppraisalChain: readonly EmotionAppraisalEntry[];
   memoryContextBlock: string;
   wikiContextBlock: string;
+  /**
+   * ccgdz.4: the identified sources whose text the memory and wiki blocks
+   * render, so the plan can carry their ids and admission hashes instead of
+   * shipping them as anonymous prompt text. Content-free and provider-inert —
+   * nothing here reaches a prompt byte.
+   */
+  disclosureMemorySources: readonly DisclosureMemorySource[];
+  disclosureBiographicalSources: readonly DisclosureSourceContribution[];
+  disclosureWikiSources: readonly DisclosureWikiSource[];
   scratchpadBlock: string;
   turnBudgetCharacteristics: ContextBudgetTurnCharacteristics;
   continuitySubjectKey: string | undefined;
@@ -210,6 +284,9 @@ export async function assembleTurnPrompt(input: {
     emotionAppraisalChain,
     memoryContextBlock,
     wikiContextBlock,
+    disclosureMemorySources,
+    disclosureBiographicalSources,
+    disclosureWikiSources,
     scratchpadBlock,
     turnBudgetCharacteristics,
     continuitySubjectKey,
@@ -536,10 +613,21 @@ export async function assembleTurnPrompt(input: {
     'memory.core': 'core_memory',
     'memory.retrieval': 'memory_context',
   };
+  // ccgdz.4: `memory.retrieval` is the block the context builder renders from
+  // `memoryContextBlock` — the biographical projection plus the active memory
+  // context. Both contributed identified items, so both are listed here; every
+  // other session block renders text the turn did not retrieve by id.
+  const memoryRetrievalBlockSources = [
+    ...buildMemoryBlockSources(disclosureMemorySources),
+    ...buildRefOnlySources(disclosureBiographicalSources),
+  ];
   for (const sessionBlock of context.sessionPromptBlocks ?? []) {
     const sessionScope = resolveSectionScope(
       SESSION_BLOCK_SCOPE_IDS[sessionBlock.id] ?? sessionBlock.id,
     );
+    const blockSources = sessionBlock.id === 'memory.retrieval'
+      ? memoryRetrievalBlockSources
+      : [];
     planBlocks.push(createPromptPlanBlock({
       id: sessionBlock.id,
       layer: 'session',
@@ -547,6 +635,7 @@ export async function assembleTurnPrompt(input: {
       producer: sessionScope?.producer ?? 'session.context-builder',
       ...(sessionScope?.scopeKey ? { scopeKey: sessionScope.scopeKey } : {}),
       renderedText: sessionBlock.content,
+      ...(blockSources.length > 0 ? { sources: blockSources } : {}),
     }));
   }
   // E8.3: supplemental wiki RAG block, appended to the plan AFTER all memory
@@ -555,12 +644,14 @@ export async function assembleTurnPrompt(input: {
   // retrieval service; here it is only positioned, never re-budgeted against
   // memory.
   if (wikiContextBlock.trim().length > 0) {
+    const wikiBlockSources = buildWikiBlockSources(disclosureWikiSources);
     planBlocks.push(createPromptPlanBlock({
       id: 'wiki.retrieval',
       layer: 'session',
       volatility: 'turn',
       producer: 'wiki.retrieval-service',
       renderedText: wikiContextBlock,
+      ...(wikiBlockSources.length > 0 ? { sources: wikiBlockSources } : {}),
     }));
   }
   const {

@@ -4,6 +4,11 @@ import type { ExtractedFact } from '../types.js';
 import { MemoryWritePolicyError, type WriteResult } from '../writer.js';
 import type { ExtractionFactRouting, FactRoutingDecision } from './speaker-routing.js';
 import type { RoutedAcceptedFactCandidate } from './fact-acceptance.js';
+import {
+  buildAdmissionProvenanceRefs,
+  buildExtractionAdmissionIndex,
+  resolveAdmissionEnvelopesForSource,
+} from './admission-identity.js';
 import { ExtractionIntegrityError } from './integrity-error.js';
 import { createEmptyRejectionBreakdown } from './rejection-breakdown.js';
 import type {
@@ -76,6 +81,13 @@ export interface FactWriteExecutionInput {
   turnId: TurnID | undefined;
   sourceEntries: readonly SessionEntry[];
   icpCorrelation?: IcpConversationCorrelation;
+  /**
+   * `AutomataWorkerLineage.runId` of the run deriving these memories
+   * (psfn-framework-ccgdz.3). Absent when no authoritative run owns the
+   * extraction; never synthesized from a correlation id that merely happens to
+   * share the value.
+   */
+  derivationRunId?: string;
   telemetryEnabled: boolean;
   isAcceptingExtractions: () => boolean;
   processFact: (
@@ -118,6 +130,10 @@ export async function executeAcceptedFactWrites(
   const routedContactIds = new Set<string>();
   const sourceSpeakerNames = new Set<string>();
   const writePolicyRejections = createEmptyRejectionBreakdown();
+  // ccgdz.3: one parse of the source entries' intake-screening metadata for the
+  // whole write loop, so each written memory records the admission identity of
+  // the exact source entries its fact was attributed to.
+  const admissionIndex = buildExtractionAdmissionIndex(input.sourceEntries, input.channelId);
 
   for (const candidate of selectedCandidates) {
     if (!input.isAcceptingExtractions()) {
@@ -132,6 +148,9 @@ export async function executeAcceptedFactWrites(
     const { routing } = candidate;
 
     const routingTelemetry = buildExtractionFactRoutingTelemetry(routing, canonicalContactId);
+    const sourceAdmissions = buildAdmissionProvenanceRefs(
+      resolveAdmissionEnvelopesForSource(admissionIndex, routing.sourceMessageIds).envelopes,
+    );
     const icpLineage = resolveIcpExtractionLineage({
       channelId: input.channelId,
       entries: input.sourceEntries,
@@ -143,6 +162,8 @@ export async function executeAcceptedFactWrites(
       const result = await input.processFact(fact, sourceRef, routing.contactId, {
         ...routingTelemetry,
         ...icpLineage,
+        ...(sourceAdmissions.length > 0 ? { sourceAdmissions } : {}),
+        ...(input.derivationRunId ? { derivationRunId: input.derivationRunId } : {}),
       });
       durableMemoryIds.add(result.memory.id);
       for (const supersededMemoryId of result.supersededMemoryIds ?? []) {

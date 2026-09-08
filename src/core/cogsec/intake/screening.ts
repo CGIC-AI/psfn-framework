@@ -470,21 +470,19 @@ export interface IntakeScreeningResult {
  * screening completed. The rest mirror `cogSecReceiptSuppression`: properties
  * of the RESULT that make it not a complete admission of fully screened bytes.
  */
-const INTAKE_RECEIPT_ABSENCE_REASONS = [
-  'no_receipt_writer',
-  'sync_screening',
-  'clean_bubble',
-  'screening_incomplete',
-  'deep_screening_pending',
-  'not_admitted',
-  'withheld',
-  'envelope_not_consumable',
-  'scan_truncated',
-  'scanner_error',
-  'injection_scorer_error',
-] as const;
 
-export type IntakeReceiptAbsenceReason = typeof INTAKE_RECEIPT_ABSENCE_REASONS[number];
+export type IntakeReceiptAbsenceReason =
+  | 'no_receipt_writer'
+  | 'sync_screening'
+  | 'clean_bubble'
+  | 'screening_incomplete'
+  | 'deep_screening_pending'
+  | 'not_admitted'
+  | 'withheld'
+  | 'envelope_not_consumable'
+  | 'scan_truncated'
+  | 'scanner_error'
+  | 'injection_scorer_error';
 
 /**
  * Stamp a receipt-absence reason only when the result has not already

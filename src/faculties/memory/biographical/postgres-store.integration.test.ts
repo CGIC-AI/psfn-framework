@@ -260,6 +260,238 @@ describe('PostgresBiographicalProfileStore — schema and roundtrip', () => {
     });
   });
 
+  it('persists background-stage cursors and the staged review audit vocabulary', async () => {
+    await withStore(async (store, pool) => {
+      expect(await store.getStageCursor('biography_synthesis', 'contact:absent'))
+        .toBeUndefined();
+      const digest = 'c'.repeat(64);
+      await store.writeStageCursor({
+        stage: 'biography_synthesis',
+        cursorKey: 'contact:cursor-subject',
+        observedDigest: digest,
+        now: NOW,
+      });
+      // A durable cursor is what makes a no-change window free after restart.
+      const restarted = await createPostgresBiographicalProfileStore(pool);
+      expect(await restarted.getStageCursor('biography_synthesis', 'contact:cursor-subject'))
+        .toEqual({
+          stage: 'biography_synthesis',
+          cursorKey: 'contact:cursor-subject',
+          observedDigest: digest,
+          observedAt: NOW.toISOString(),
+        });
+      // Same key under a different stage is a different cursor.
+      expect(await restarted.getStageCursor(
+        'biography_companion_review',
+        'contact:cursor-subject',
+      )).toBeUndefined();
+      const next = 'd'.repeat(64);
+      await restarted.writeStageCursor({
+        stage: 'biography_synthesis',
+        cursorKey: 'contact:cursor-subject',
+        observedDigest: next,
+        now: NOW,
+      });
+      expect((await restarted.getStageCursor('biography_synthesis', 'contact:cursor-subject'))
+        ?.observedDigest).toBe(next);
+      // @ts-expect-error an unknown stage must reject rather than widen
+      await expect(restarted.getStageCursor('invented_stage', 'k')).rejects
+        .toThrow('unknown biography background stage');
+
+      // The o61vb.14/.15 review actions and reason codes must be accepted by
+      // the database, not just by the service that writes them.
+      const claim = await restarted.writeClaim({
+        subject: companion('purrs-audit-vocab'),
+        kind: 'nickname',
+        value: { kind: 'nickname', nickname: 'Sprout', scope: 'self' },
+        basis: 'observed',
+        confidence: 1,
+        sources: [source()],
+        now: NOW,
+      });
+      for (const [action, reason] of [
+        ['stage-approve', 'stage-approved'],
+        ['stage-reject', 'stage-rejected'],
+        ['set-portability', 'portability-set'],
+        ['set-portability', 'portability-refused'],
+      ] as const) {
+        await restarted.recordReviewAudit({
+          claimId: claim.id,
+          claimDigest: claim.claimDigest,
+          sourceSetDigest: claim.sourceSetDigest,
+          action,
+          decision: reason === 'portability-refused' ? 'denied' : 'allowed',
+          reason,
+          actorAuthorityRef: 'garden-standalone:operator',
+          now: NOW,
+        });
+      }
+      expect(await restarted.listReviewAudits(claim.id, 20)).toHaveLength(4);
+    });
+  });
+
+  it('round-trips reviewed portability and an n-ary participant set across a restart', async () => {
+    await withStore(async (store, pool) => {
+      const publicSource = source({ sensitivityAtProjection: 'public' });
+      const group = await store.writeClaim({
+        subject: companion('purrs-group'),
+        participants: [contact('contact-b'), contact('contact-a')],
+        kind: 'shared-language',
+        value: {
+          kind: 'shared-language',
+          schemaVersion: 1,
+          languageType: 'ritual',
+          phrase: 'third coffee',
+          meaning: 'the point in a work session where everything gets funny',
+        },
+        basis: 'observed',
+        status: 'active',
+        proposedSensitivity: 'public',
+        portabilityScope: 'subject_present',
+        confidence: 1,
+        sources: [publicSource],
+        now: NOW,
+      });
+      // The participant set is stored canonically ordered, so the same group
+      // always digests the same way whatever order it was written in.
+      expect(group.participants?.map(p => (p.kind === 'contact' ? p.contactId : '')))
+        .toEqual(['contact-a', 'contact-b']);
+
+      // A claim that binds nobody defaults to origin_only and stays there.
+      const unreviewed = await store.writeClaim({
+        subject: companion('purrs-group'),
+        kind: 'nickname',
+        value: { kind: 'nickname', nickname: 'Sprout', scope: 'self' },
+        basis: 'observed',
+        status: 'active',
+        confidence: 1,
+        sources: [publicSource],
+        now: NOW,
+      });
+      expect(unreviewed.portabilityScope).toBe('origin_only');
+
+      const restarted = await createPostgresBiographicalProfileStore(pool);
+      const reloaded = await restarted.getClaim(group.id);
+      expect(reloaded).toEqual(group);
+      expect((await restarted.getClaim(unreviewed.id))?.portabilityScope).toBe('origin_only');
+
+      const widened = await restarted.setClaimPortability({
+        claimId: unreviewed.id,
+        portabilityScope: 'universal',
+        now: NOW,
+      });
+      expect(widened.portabilityScope).toBe('universal');
+      expect((await restarted.getClaim(unreviewed.id))?.portabilityScope).toBe('universal');
+      // Widening a claim that names a human is refused at the database boundary.
+      await expect(restarted.setClaimPortability({
+        claimId: group.id,
+        portabilityScope: 'universal',
+        now: NOW,
+      })).rejects.toThrow('universal portability is reserved');
+      expect((await restarted.getClaim(group.id))?.portabilityScope).toBe('subject_present');
+    });
+  });
+
+  it('scopes a subject biography view to one canonical identity on either side of a dyad', async () => {
+    await withStore(async (store) => {
+      const about = await store.writeClaim({
+        subject: contact('contact-bio-view'),
+        kind: 'stable-preference',
+        value: {
+          kind: 'stable-preference',
+          schemaVersion: 1,
+          domain: 'food',
+          target: 'tea',
+          polarity: 'likes',
+        },
+        basis: 'explicit',
+        confidence: 1,
+        sources: [source()],
+        now: NOW,
+      });
+      const dyad = await store.writeClaim({
+        subject: companion('purrs-bio-view'),
+        relatedSubject: contact('contact-bio-view'),
+        kind: 'relationship',
+        value: { kind: 'relationship', relationshipType: 'friend' },
+        basis: 'explicit',
+        confidence: 1,
+        sources: [source()],
+        now: NOW,
+      });
+      await store.writeClaim({
+        subject: contact('contact-bio-view-other'),
+        kind: 'stable-preference',
+        value: {
+          kind: 'stable-preference',
+          schemaVersion: 1,
+          domain: 'food',
+          target: 'coffee',
+          polarity: 'likes',
+        },
+        basis: 'explicit',
+        confidence: 1,
+        sources: [source()],
+        now: NOW,
+      });
+
+      const scoped = await store.listClaims({
+        anySubjectIdentity: { kind: 'contact', contactId: 'contact-bio-view' },
+        limit: 20,
+      });
+      expect(scoped.map(claim => claim.id).sort()).toEqual([about.id, dyad.id].sort());
+      // Identity, not stored subject version: a merged contact keeps one biography.
+      const merged = await store.writeClaim({
+        subject: contact('contact-bio-view', 2),
+        kind: 'nickname',
+        value: { kind: 'nickname', nickname: 'V', scope: 'self' },
+        basis: 'explicit',
+        confidence: 1,
+        sources: [source()],
+        now: NOW,
+      });
+      expect((await store.listClaims({
+        anySubjectIdentity: { kind: 'contact', contactId: 'contact-bio-view' },
+        limit: 20,
+      })).map(claim => claim.id).sort()).toEqual([about.id, dyad.id, merged.id].sort());
+      expect((await store.listClaims({
+        anySubjectIdentity: { kind: 'companion', companionId: 'purrs-bio-view' },
+        limit: 20,
+      })).map(claim => claim.id)).toEqual([dyad.id]);
+    });
+  });
+
+  it('lists the exact staging record for one claim id', async () => {
+    await withStore(async (store) => {
+      const policy = createDefaultBiographicalCandidatePolicy();
+      const stageOne = async (nickname: string) => await store.writeCandidate({
+        automataRunId: 'automata-run-claim-id-filter',
+        automataAuthorityRef: 'maintenance:biography-synthesis',
+        policy,
+        socialContext: { kind: 'companion_self', companionId: 'companion-claim-id-filter' },
+        rationale: 'new_subject_claim',
+        claim: {
+          subject: companion('companion-claim-id-filter'),
+          kind: 'nickname',
+          value: { kind: 'nickname', nickname, scope: 'self' },
+          basis: 'explicit',
+          confidence: 1,
+          sources: [source({ sourceType: 'semantic', lifecycleStateAtProjection: 'active' })],
+          now: NOW,
+        },
+      });
+      const first = await stageOne('Sprout');
+      const second = await stageOne('Sunbeam');
+
+      expect((await store.listCandidates({ claimId: first.claimId, limit: 10 }))
+        .map(record => record.id)).toEqual([first.id]);
+      expect((await store.listCandidates({ claimId: second.claimId, limit: 10 }))
+        .map(record => record.id)).toEqual([second.id]);
+      expect(await store.listCandidates({ claimId: 'claim-that-does-not-exist', limit: 10 }))
+        .toEqual([]);
+    });
+  });
+
   it('refuses to stage a candidate whose source exceeds the owner privacy policy', async () => {
     await withStore(async (store) => {
       const policy = createDefaultBiographicalCandidatePolicy();
@@ -511,12 +743,16 @@ describe('PostgresBiographicalProfileStore — schema and roundtrip', () => {
       const first = await synthesis(store, ['memory-invented-service-1'], 'run-1').run();
       expect(first).toMatchObject({ candidatesStaged: 1, sourcesWithheldByPolicy: 1 });
 
-      // A restart is a fresh store instance and a fresh run id. The durable row
-      // written through the nested claim transaction must be found again, so
-      // the identical proposal writes nothing the second time.
+      // A restart is a fresh store instance and a fresh run id. The durable
+      // stage cursor written by the first pass survives it, so the unchanged
+      // silo is skipped entirely: idempotence costs zero model calls.
       const restarted = new PostgresBiographicalProfileStore(pool, () => NOW);
       const second = await synthesis(restarted, ['memory-invented-service-1'], 'run-2').run();
-      expect(second).toMatchObject({ candidatesStaged: 0, candidatesDuplicate: 1 });
+      expect(second).toMatchObject({
+        candidatesStaged: 0,
+        targetsUnchanged: 1,
+        outcome: 'complete',
+      });
       expect(await restarted.listCandidates({ limit: 10 })).toHaveLength(1);
 
       // Drifted evidence for the same claim supersedes rather than accumulates.

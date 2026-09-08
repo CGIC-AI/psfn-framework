@@ -161,6 +161,13 @@
       "note": "Observer-sidecar fresh tenant-schema migration suite against the real containerized Postgres harness. Baseline 11.47s file wall (2 tests, local implementation run, 2026-07-30); 120000/11470 = 10.46x headroom for cold-start and shared-heavy-phase variance."
     },
     {
+      "file": "src/faculties/memory/biographical/cross-channel-conformance.integration.test.ts",
+      "timeoutMs": 90000,
+      "measuredBaselineMs": 8709,
+      "baselineSource": "measured",
+      "note": "Cross-channel biographical privacy and continuity conformance matrix (o61vb.10) against real containerized Postgres: two companions on one database, four scopes, restart, and whole-database backup/restore. Baseline 8.709s file wall (5 tests, warm harness, this host, 2026-09-07); 90s matches the sibling biographical suite and leaves ~10x headroom dominated by cold-start and pg_dump/pg_restore variance."
+    },
+    {
       "file": "src/faculties/automata/bus/postgres-store.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": 2680,

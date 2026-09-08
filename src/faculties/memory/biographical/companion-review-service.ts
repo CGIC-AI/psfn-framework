@@ -44,6 +44,11 @@ import type {
   BiographicalCompanionReviewSubject,
 } from './companion-review.js';
 import { renderBiographicalClaimForReview } from './projection-rendering.js';
+import { computeStageInputDigest } from './stage-cursor.js';
+import type {
+  BiographyStageControl,
+  BiographyStageOutcome,
+} from './synthesis-service.js';
 import type {
   BiographicalCandidateReceiptInput,
   BiographicalProfileStorePort,
@@ -59,6 +64,10 @@ const log = createComponentLogger('Biography');
 /** Content-free review telemetry: counts and outcomes, never claim content. */
 export interface BiographyCompanionReviewTelemetry {
   readonly reviewRunId: string;
+  readonly outcome: BiographyStageOutcome;
+  /** The pending candidate revisions have not changed since the last pass. */
+  readonly unchanged: boolean;
+  readonly candidatesRemaining: number;
   readonly candidatesConsidered: number;
   readonly candidatesOutsideAuthority: number;
   readonly candidatesReplayed: number;
@@ -128,9 +137,14 @@ function reviewSchemaBlock(): string {
 }
 
 function contextLabel(context: BiographicalCandidateSocialContext): string {
-  return context.kind === 'companion_self'
-    ? `companion_self(companionId=${context.companionId})`
-    : `companion_contact_dyad(companionId=${context.companionId}, contactId=${context.contactId})`;
+  if (context.kind === 'companion_self') {
+    return `companion_self(companionId=${context.companionId})`;
+  }
+  if (context.kind === 'companion_group') {
+    return `companion_group(companionId=${context.companionId}, `
+      + `contactIds=[${context.contactIds.join(', ')}])`;
+  }
+  return `companion_contact_dyad(companionId=${context.companionId}, contactId=${context.contactId})`;
 }
 
 function candidateBlock(subject: BiographicalCompanionReviewSubject): string {
@@ -172,13 +186,46 @@ export class BiographyCompanionReviewService {
    * Per-candidate failures are isolated and counted: one unreadable candidate
    * must not stop the companion from reviewing the rest of its own biography.
    */
-  async run(): Promise<BiographyCompanionReviewTelemetry> {
+  async run(control: BiographyStageControl = {}): Promise<BiographyCompanionReviewTelemetry> {
     const policy = this.options.candidatePolicy();
     const reviewRunId = this.options.newRunId?.() ?? `biography-review:${crypto.randomUUID()}`;
     const pending = await this.options.profileStore.listCandidates({
       stages: ['automata_synthesis', 'companion_review'],
       limit: policy.budgets.maxPendingCandidates,
     });
+    // Durable no-change gate (o61vb.16). The digest covers the exact candidate
+    // revisions awaiting this companion, so a window with nothing new costs one
+    // cursor read and zero model calls. A revised candidate bumps its revision,
+    // which changes the digest and correctly re-opens the pass.
+    const cursorKey = `companion:${this.options.companionId}`;
+    const pendingDigest = computeStageInputDigest(
+      pending.map(candidate => `${candidate.id}@${candidate.revision}`),
+    );
+    const cursor = await this.options.profileStore.getStageCursor(
+      'biography_companion_review',
+      cursorKey,
+    );
+    if (cursor?.observedDigest === pendingDigest) {
+      const unchangedTelemetry: BiographyCompanionReviewTelemetry = {
+        reviewRunId,
+        outcome: 'complete',
+        unchanged: true,
+        candidatesRemaining: 0,
+        candidatesConsidered: 0,
+        candidatesOutsideAuthority: 0,
+        candidatesReplayed: 0,
+        approved: 0,
+        rejected: 0,
+        flagged: 0,
+        revised: 0,
+        escalatedToHumanReview: 0,
+        autoactivated: 0,
+        malformedDecisions: 0,
+        failures: 0,
+      };
+      this.options.onComplete?.(unchangedTelemetry);
+      return unchangedTelemetry;
+    }
     const counts: Record<ReviewOutcome, number> = {
       approved: 0,
       rejected: 0,
@@ -192,7 +239,17 @@ export class BiographyCompanionReviewService {
     let autoactivated = 0;
     let failures = 0;
 
+    let outcomeState: BiographyStageOutcome = 'complete';
+    let processed = 0;
     for (const candidate of pending) {
+      // Safe boundary between whole candidates: each candidate's decision is
+      // already written in one subject transaction, so yielding here loses no
+      // partial review and the next pass picks up the untouched remainder.
+      if (processed > 0 && await control.onSafeBoundary?.() === 'yield') {
+        outcomeState = 'yield';
+        break;
+      }
+      processed += 1;
       try {
         const result = await this.reviewCandidate({ candidate, policy, reviewRunId });
         counts[result.outcome] += 1;
@@ -208,8 +265,23 @@ export class BiographyCompanionReviewService {
       }
     }
 
+    // The cursor advances only when the pass actually resolved everything it
+    // saw. A yield, a failure, or a malformed model decision all leave a
+    // candidate undecided at the same revision, and advancing the cursor there
+    // would strand it forever behind its own no-change gate.
+    if (outcomeState === 'complete' && failures === 0 && counts.malformed === 0) {
+      await this.options.profileStore.writeStageCursor({
+        stage: 'biography_companion_review',
+        cursorKey,
+        observedDigest: pendingDigest,
+        now: this.now(),
+      });
+    }
     const telemetry: BiographyCompanionReviewTelemetry = {
       reviewRunId,
+      outcome: outcomeState,
+      unchanged: false,
+      candidatesRemaining: Math.max(0, pending.length - processed),
       candidatesConsidered: pending.length,
       candidatesOutsideAuthority: counts.outside_authority,
       candidatesReplayed: counts.replayed,
@@ -318,8 +390,12 @@ export class BiographyCompanionReviewService {
         existing.kind === context.kind
         && existing.companionId === context.companionId
         && (existing.kind === 'companion_self'
-          || (context.kind === 'companion_contact_dyad'
-            && existing.contactId === context.contactId))
+          || (existing.kind === 'companion_group'
+            ? context.kind === 'companion_group'
+              && existing.contactIds.length === context.contactIds.length
+              && existing.contactIds.every((id, index) => id === context.contactIds[index])
+            : context.kind === 'companion_contact_dyad'
+              && existing.contactId === context.contactId))
       ));
       if (!duplicate) contexts.push(context);
     };
@@ -530,7 +606,8 @@ export class BiographyCompanionReviewService {
       merge: 'reviewer_merged',
     } as const)[input.decision.action];
     for (const proposal of input.decision.proposals) {
-      const { status: _ignoredStatus, ...claimWrite } = proposal.write;
+      const { status: _ignoredStatus, portabilityScope: _ignoredScope, ...claimWrite } =
+        proposal.write;
       const written = await input.store.writeCandidate({
         claim: { ...claimWrite, now: input.now },
         automataRunId: input.reviewRunId,

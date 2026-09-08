@@ -67,6 +67,7 @@ export const DEFAULT_RESTORE_CRITICAL_TABLES = [
   'biographical_grants',
   'biographical_rebuild_queue',
   'biographical_review_audits',
+  'biographical_stage_cursors',
 ] as const;
 
 export interface PostgresRestoreVerificationOptions {

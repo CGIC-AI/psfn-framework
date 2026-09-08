@@ -118,6 +118,7 @@ async function seedName(input: {
   input.revalidator.seed(sources);
   const result = await ingestCurrentAuthorIdentityEvidence({
     store: input.store,
+    portabilityScope: 'subject_present',
     evidence: {
       currentAuthorSubject: input.subject,
       companionSubject: COMPANION,
@@ -214,6 +215,89 @@ function verified(
     }
     : { status: 'verified', subject, trustLevel: 'regular', currentParticipation: { status: 'unproven' } };
 }
+
+describe('n-ary group portability — o61vb.15', () => {
+  it('renders a group fact only when its whole bound participant set is in the turn', async () => {
+    const store = new InMemoryBiographicalProfileStore(() => NOW);
+    const revalidator = new MemoryRevalidator();
+    const publicSource = { ...source('memory:group-ritual'), sensitivityAtProjection: 'public' as const };
+    revalidator.seed([publicSource]);
+    const claim = await store.writeClaim({
+      subject: COMPANION,
+      participants: [AUTHOR, EVE],
+      kind: 'shared-language',
+      value: {
+        kind: 'shared-language',
+        schemaVersion: 1,
+        languageType: 'ritual',
+        phrase: 'third coffee',
+        meaning: 'the point in a work session where everything gets funny',
+      },
+      basis: 'observed',
+      status: 'active',
+      proposedSensitivity: 'public',
+      portabilityScope: 'subject_present',
+      confidence: 1,
+      sources: [publicSource],
+      now: NOW,
+    });
+    // The group chose to share this ritual outside its origin room.
+    await makePublic(store, claim);
+    const scope = group('public');
+    const project = async (mentioned: readonly string[]) =>
+      await projectBiographicalContext(
+        {
+          store,
+          revalidator,
+          rebuildQueueMaxPending: 8,
+          explicitAddressing: {
+            resolver: new AddressedContactResolver(new Map([
+              ['discord-eve', verified(EVE, 'unproven')],
+              ['discord-mallory', verified(MALLORY, 'unproven')],
+            ])),
+            maxSubjects: 2,
+          },
+        },
+        {
+          companionSubject: COMPANION,
+          currentAuthor: { status: 'verified', subject: AUTHOR, trustLevel: 'regular' },
+          conversationScope: scope,
+          messageAddressing: addressedParticipants({
+            channelId: scope.channelId,
+            participants: mentioned.map(id => ({
+              id,
+              name: id,
+              evidence: ['mention'] as const,
+            })),
+          }),
+          now: NOW,
+        },
+      );
+
+    // Author + the other bound participant, explicitly addressed: the whole set
+    // is present, so the shared ritual renders — without naming who shares it.
+    const whole = await project(['discord-eve']);
+    expect(whole.admittedClaimIds).toEqual([claim.id]);
+    // Exactly the header and the one shared phrase. Who the group is was
+    // proven by the presence gate and is never republished into the prompt.
+    expect(whole.promptSection.split('\n').filter(line => line.startsWith('- '))).toEqual([
+      '- Shared ritual \u201Cthird coffee\u201D means '
+        + 'the point in a work session where everything gets funny.',
+    ]);
+    expect(whole.promptSection).toContain('## Shared in this group');
+    expect(whole.promptSection).not.toContain('discord-');
+    expect(whole.disclosureSources.map(item => item.ref)).toEqual([`biographical:${claim.id}`]);
+
+    // Swap one bound participant for an unrelated addressee: a fact about this
+    // group must not surface in front of a group that is not it.
+    const wrong = await project(['discord-mallory']);
+    expect(wrong.admittedClaimIds).toEqual([]);
+    expect(wrong.withheld).toEqual(expect.arrayContaining([
+      expect.objectContaining({ claimId: claim.id, reason: 'group-participants-unverified' }),
+    ]));
+    expect(wrong.promptSection).toBe('');
+  });
+});
 
 describe('projectBiographicalContext — explicit reply and mention subjects', () => {
   it('projects a verified mentioned subject public claim without fuzzy-matching its display name', async () => {

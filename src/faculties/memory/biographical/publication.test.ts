@@ -133,6 +133,7 @@ describe('revokeCompanionPublicationChoice — immediate restriction', () => {
     const revoked = await revokeCompanionPublicationChoice({
       store: s,
       grantId: grant.id,
+      claimId: a.id,
       revoke: { reason: 'I changed my mind', now: NOW },
     });
     expect(revoked.revokedAt).toBeDefined();
@@ -140,6 +141,50 @@ describe('revokeCompanionPublicationChoice — immediate restriction', () => {
     const refreshed = await s.getClaim(a.id);
     expect(refreshed?.effectiveSensitivity).toBe('personal');
     expect(refreshed?.appliedGrantId).toBeUndefined();
+  });
+
+  it('grants universal portability with the choice and withdraws it on revoke', async () => {
+    const s = store();
+    const { claim } = await seed(s, 'Sunbeam loaf');
+    // Before the companion chooses, her nickname is not portable at all.
+    expect((await s.getClaim(claim.id))?.portabilityScope).toBe('origin_only');
+
+    const grant = await recordCompanionPublicationChoice({
+      store: s,
+      choice: { claimId: claim.id, reason: 'publish', now: NOW },
+    });
+    expect((await s.getClaim(claim.id))?.portabilityScope).toBe('universal');
+
+    await revokeCompanionPublicationChoice({
+      store: s,
+      grantId: grant.id,
+      claimId: claim.id,
+      revoke: { reason: 'no longer', now: NOW },
+    });
+    // Withdrawing the choice withdraws the reach it authorized.
+    expect((await s.getClaim(claim.id))?.portabilityScope).toBe('origin_only');
+    expect((await s.getClaim(claim.id))?.effectiveSensitivity).toBe('personal');
+  });
+
+  it('refuses to publish a claim that names a human', async () => {
+    const s = store();
+    const claim = await s.writeClaim({
+      subject: { kind: 'contact', contactId: 'v', subjectVersion: 1 },
+      relatedSubject: { kind: 'companion', companionId: 'purrs', subjectVersion: 1 },
+      kind: 'relationship',
+      value: { kind: 'relationship', relationshipType: 'partner' },
+      basis: 'explicit',
+      status: 'active',
+      confidence: 1,
+      sources: [source('memory:relationship')],
+      now: NOW,
+    });
+    await expect(recordCompanionPublicationChoice({
+      store: s,
+      choice: { claimId: claim.id, reason: 'publish', now: NOW },
+    })).rejects.toThrow('only a companion-self claim may be published');
+    expect(await s.listGrantsForClaim(claim.id)).toEqual([]);
+    expect((await s.getClaim(claim.id))?.portabilityScope).toBe('origin_only');
   });
 
   it('revoking one nickname does not affect another', async () => {
@@ -158,6 +203,7 @@ describe('revokeCompanionPublicationChoice — immediate restriction', () => {
     await revokeCompanionPublicationChoice({
       store: s,
       grantId: grantA.id,
+      claimId: a.id,
       revoke: { reason: 'revoke A only', now: NOW },
     });
 

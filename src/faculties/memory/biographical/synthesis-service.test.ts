@@ -301,19 +301,66 @@ describe('BiographySynthesisService', () => {
       targets: [CONTACT_TARGET],
       runId: 'biography-synthesis:run-1',
     }).run();
-    // A restart gives the pass a new run id; the candidate must not duplicate.
+    // A restart gives the pass a new run id. The durable stage cursor survives
+    // it, so the unchanged silo is skipped before any model call: idempotence
+    // is now free rather than paid for with a duplicate synthesis.
+    const restartModel = recordingModel([response]);
     const second = await buildService({
       memoryStore: memories.asPort(),
       profileStore,
-      model: recordingModel([response]),
+      model: restartModel,
       targets: [CONTACT_TARGET],
       runId: 'biography-synthesis:run-2',
     }).run();
 
     expect(first.candidatesStaged).toBe(1);
+    expect(first.targetsUnchanged).toBe(0);
     expect(second.candidatesStaged).toBe(0);
-    expect(second.candidatesDuplicate).toBe(1);
+    expect(second.targetsUnchanged).toBe(1);
+    expect(second.outcome).toBe('complete');
+    expect(restartModel.prompts).toEqual([]);
     expect(await profileStore.listCandidates({ limit: 10 })).toHaveLength(1);
+  });
+
+  it('re-opens a target whose admitted evidence changed, and yields at a safe boundary', async () => {
+    const memories = new InMemoryMemoryStore();
+    memories.insertMemory(memory('mem-stable'));
+    const profileStore = new InMemoryBiographicalProfileStore(() => NOW);
+    const response = candidatesResponse([preferenceCandidate(['mem-stable'])]);
+    await buildService({
+      memoryStore: memories.asPort(),
+      profileStore,
+      model: recordingModel([response]),
+      targets: [CONTACT_TARGET],
+      runId: 'biography-synthesis:run-1',
+    }).run();
+
+    // New admitted evidence changes the digest, so the cursor no longer holds.
+    memories.insertMemory(memory('mem-new'));
+    const changedModel = recordingModel([
+      candidatesResponse([preferenceCandidate(['mem-stable', 'mem-new'])]),
+    ]);
+    const changed = await buildService({
+      memoryStore: memories.asPort(),
+      profileStore,
+      model: changedModel,
+      targets: [CONTACT_TARGET],
+      runId: 'biography-synthesis:run-3',
+    }).run();
+    expect(changed.targetsUnchanged).toBe(0);
+    expect(changedModel.prompts).toHaveLength(1);
+
+    // A yield at the first safe boundary stops the pass with work remaining and
+    // reports it, rather than silently dropping the untouched targets.
+    const yielded = await buildService({
+      memoryStore: memories.asPort(),
+      profileStore,
+      model: recordingModel([response, response]),
+      targets: [CONTACT_TARGET, COMPANION_TARGET],
+      runId: 'biography-synthesis:run-4',
+    }).run({ onSafeBoundary: async () => 'yield' });
+    expect(yielded.outcome).toBe('yield');
+    expect(yielded.targetsRemaining).toBe(1);
   });
 
   it('supersedes rather than duplicates when the same claim recurs over drifted sources', async () => {

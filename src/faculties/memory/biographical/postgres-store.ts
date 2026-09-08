@@ -30,7 +30,9 @@ import {
   type BiographicalSupersessionResult,
   type BiographicalTransitionInput,
   type PreparedBiographicalClaim,
+  applyClaimPortability,
   assertClaimTransition,
+  type BiographicalPortabilityInput,
 } from './store-port.js';
 import {
   assertCandidateClaimBinding,
@@ -52,6 +54,15 @@ import type {
   BiographicalSensitivityGrant,
   BiographicalSubjectRef,
 } from './types.js';
+import {
+  assertBiographyStage,
+  assertStageCursorDigest,
+  assertStageCursorKey,
+  deserializeStageCursor,
+  type BiographyStage,
+  type BiographyStageCursor,
+  type BiographyStageCursorWriteInput,
+} from './stage-cursor.js';
 import {
   computeBiographicalRebuildId,
   deserializeBiographicalRebuildRequest,
@@ -95,6 +106,13 @@ interface RebuildRow {
 
 interface ReviewAuditRow {
   audit_json: unknown;
+}
+
+interface StageCursorRow {
+  stage: string;
+  cursor_key: string;
+  observed_digest: string;
+  observed_at: string | Date;
 }
 
 function deserializeCandidateRow(row: CandidateRow): BiographicalCandidateRecord {
@@ -338,6 +356,10 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
       values.push(options.claimDigest);
       filters.push(`claim_digest = $${values.length}`);
     }
+    if (options.claimId !== undefined) {
+      values.push(options.claimId);
+      filters.push(`claim_id = $${values.length}`);
+    }
     if (options.automataRunId !== undefined) {
       values.push(options.automataRunId);
       filters.push(`automata_run_id = $${values.length}`);
@@ -387,11 +409,11 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
       });
       if (updated.stage === 'active') {
         assertClaimTransition(claim, 'active', now);
-        const active: BiographicalClaim = {
-          ...claim,
-          status: 'active',
-          lastSourceValidatedAt: now.toISOString(),
-        };
+        const active = applyClaimPortability(
+          { ...claim, status: 'active', lastSourceValidatedAt: now.toISOString() },
+          input.portabilityScope ?? 'origin_only',
+          now,
+        );
         const claimUpdate = await client.query(
           `UPDATE biographical_claims
            SET status = 'active', claim_json = $2::jsonb, updated_at = $3
@@ -493,6 +515,21 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
         `claim_json->'relatedSubject'->>'kind' = $${params.length - 2}
          AND claim_json->'relatedSubject'->>'${idField}' = $${params.length - 1}
          AND (claim_json->'relatedSubject'->>'subjectVersion')::bigint = $${params.length}`,
+      );
+    }
+    if (options.anySubjectIdentity !== undefined) {
+      const identity = options.anySubjectIdentity;
+      const idField = identity.kind === 'companion' ? 'companionId' : 'contactId';
+      params.push(
+        identity.kind,
+        identity.kind === 'companion' ? identity.companionId : identity.contactId,
+      );
+      // Identity only, never subject version: one canonical person keeps one
+      // biography across merges and stored subject revisions.
+      conditions.push(
+        `((subject_kind = $${params.length - 1} AND subject_id = $${params.length})
+          OR (claim_json->'relatedSubject'->>'kind' = $${params.length - 1}
+             AND claim_json->'relatedSubject'->>'${idField}' = $${params.length}))`,
       );
     }
     if (options.kind !== undefined) {
@@ -652,6 +689,28 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
            status = $2, claim_json = $3::jsonb, updated_at = $4
          WHERE id = $1`,
         [updated.id, updated.status, serializeClaim(updated), now.toISOString()],
+      );
+      return updated;
+    });
+  }
+
+  async setClaimPortability(input: BiographicalPortabilityInput): Promise<BiographicalClaim> {
+    const now = input.now ?? this.now();
+    return await this.inTransaction(async (_store, client) => {
+      const row = await client.query<ClaimRow>(
+        'SELECT claim_json FROM biographical_claims WHERE id = $1 FOR UPDATE',
+        [input.claimId],
+      );
+      const current = row.rows.at(0);
+      if (!current) throw new Error(`biographical claim not found: ${input.claimId}`);
+      const updated = applyClaimPortability(
+        deserializeClaim(current.claim_json),
+        input.portabilityScope,
+        now,
+      );
+      await client.query(
+        'UPDATE biographical_claims SET claim_json = $2::jsonb, updated_at = $3 WHERE id = $1',
+        [updated.id, serializeClaim(updated), now.toISOString()],
       );
       return updated;
     });
@@ -880,6 +939,43 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
       );
       return await operation(store);
     });
+  }
+
+  async getStageCursor(
+    stage: BiographyStage,
+    cursorKey: string,
+  ): Promise<BiographyStageCursor | undefined> {
+    const row = await this.queryOne<StageCursorRow>(
+      `SELECT stage, cursor_key, observed_digest, observed_at
+       FROM biographical_stage_cursors WHERE stage = $1 AND cursor_key = $2`,
+      [assertBiographyStage(stage), assertStageCursorKey(cursorKey)],
+    );
+    if (!row) return undefined;
+    return deserializeStageCursor({
+      stage: row.stage,
+      cursorKey: row.cursor_key,
+      observedDigest: row.observed_digest,
+      observedAt: new Date(row.observed_at).toISOString(),
+    });
+  }
+
+  async writeStageCursor(
+    input: BiographyStageCursorWriteInput,
+  ): Promise<BiographyStageCursor> {
+    const cursor: BiographyStageCursor = {
+      stage: assertBiographyStage(input.stage),
+      cursorKey: assertStageCursorKey(input.cursorKey),
+      observedDigest: assertStageCursorDigest(input.observedDigest),
+      observedAt: (input.now ?? this.now()).toISOString(),
+    };
+    await (this.client ?? this.pool).query(
+      `INSERT INTO biographical_stage_cursors (stage, cursor_key, observed_digest, observed_at)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (stage, cursor_key)
+       DO UPDATE SET observed_digest = EXCLUDED.observed_digest, observed_at = EXCLUDED.observed_at`,
+      [cursor.stage, cursor.cursorKey, cursor.observedDigest, cursor.observedAt],
+    );
+    return cursor;
   }
 
   async recordReviewAudit(

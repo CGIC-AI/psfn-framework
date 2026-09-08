@@ -3,7 +3,22 @@ import { randomUUID } from 'node:crypto';
 import { hasExactKeys, isCanonicalIsoTimestamp, isRecord } from '../../../shared/utils/types.js';
 import type { SensitivityLevel } from '../../../system/trust/types.js';
 
-const BIOGRAPHICAL_REVIEW_ACTIONS = ['approve', 'deny', 'revoke', 'regrant'] as const;
+const BIOGRAPHICAL_REVIEW_ACTIONS = [
+  'approve',
+  'deny',
+  'revoke',
+  'regrant',
+  /**
+   * Human review of an exact staged candidate revision (o61vb.14). Distinct
+   * from `approve`/`deny`, which act only on a claim with no staging record:
+   * a staged candidate must move through the receipt-gated stage machine, so
+   * the companion-review stage can never be bypassed by an operator action.
+   */
+  'stage-approve',
+  'stage-reject',
+  /** Set or withdraw one active claim's reviewed portability (o61vb.15). */
+  'set-portability',
+] as const;
 export type BiographicalReviewAction = (typeof BIOGRAPHICAL_REVIEW_ACTIONS)[number];
 
 const BIOGRAPHICAL_REVIEW_REASONS = [
@@ -19,6 +34,12 @@ const BIOGRAPHICAL_REVIEW_REASONS = [
   'grant-not-found',
   'grant-digest-mismatch',
   'invalid-state',
+  'stage-approved',
+  'stage-rejected',
+  'candidate-not-found',
+  'stale-candidate-revision',
+  'portability-set',
+  'portability-refused',
 ] as const;
 export type BiographicalReviewReason = (typeof BIOGRAPHICAL_REVIEW_REASONS)[number];
 

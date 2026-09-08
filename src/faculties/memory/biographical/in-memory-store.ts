@@ -34,7 +34,17 @@ import {
   type BiographicalSupersessionResult,
   type BiographicalTransitionInput,
   type PreparedBiographicalClaim,
+  applyClaimPortability,
+  type BiographicalPortabilityInput,
 } from './store-port.js';
+import {
+  assertBiographyStage,
+  assertStageCursorDigest,
+  assertStageCursorKey,
+  type BiographyStage,
+  type BiographyStageCursor,
+  type BiographyStageCursorWriteInput,
+} from './stage-cursor.js';
 import {
   assertCandidateClaimBinding,
   assertCandidateListLimit,
@@ -89,6 +99,23 @@ function matchesSubject(
       && subject.subjectVersion === candidate.subject.subjectVersion;
 }
 
+/**
+ * Canonical-identity match that ignores the stored subject version: a person's
+ * biography is one biography across contact merges and subject revisions.
+ */
+function sameSubjectIdentity(
+  expected:
+    | { readonly kind: 'companion'; readonly companionId: string }
+    | { readonly kind: 'contact'; readonly contactId: string }
+    | undefined,
+  actual: BiographicalSubjectRef | undefined,
+): boolean {
+  if (expected === undefined || actual === undefined || expected.kind !== actual.kind) return false;
+  return expected.kind === 'companion'
+    ? actual.kind === 'companion' && expected.companionId === actual.companionId
+    : actual.kind === 'contact' && expected.contactId === actual.contactId;
+}
+
 function sameSubjectRef(
   expected: BiographicalSubjectRef,
   actual: BiographicalSubjectRef | undefined,
@@ -114,6 +141,7 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
   private readonly grants = new Map<string, StoredGrantRow>();
   private readonly rebuilds = new Map<string, StoredRebuildRow>();
   private readonly reviewAudits = new Map<string, BiographicalReviewAuditRecord>();
+  private readonly stageCursors = new Map<string, BiographyStageCursor>();
   private transactionTail: Promise<void> = Promise.resolve();
 
   constructor(private readonly now: () => Date = () => new Date()) {}
@@ -196,6 +224,7 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
       .filter(candidate => (
         (options.stages === undefined || options.stages.includes(candidate.stage))
         && (options.claimDigest === undefined || candidate.claimDigest === options.claimDigest)
+        && (options.claimId === undefined || candidate.claimId === options.claimId)
         && (options.automataRunId === undefined
           || candidate.automataRunId === options.automataRunId)
       ))
@@ -232,11 +261,11 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
     });
     if (updated.stage === 'active') {
       assertClaimTransition(claim, 'active', now);
-      this.storeClaim({
-        ...claim,
-        status: 'active',
-        lastSourceValidatedAt: now.toISOString(),
-      });
+      this.storeClaim(applyClaimPortability(
+        { ...claim, status: 'active', lastSourceValidatedAt: now.toISOString() },
+        input.portabilityScope ?? 'origin_only',
+        now,
+      ));
     }
     this.storeCandidate(updated);
     return updated;
@@ -328,6 +357,12 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
       const claim = this.projectClaimAtReadTime(storedClaim, readAt);
       if (options.subject !== undefined && !matchesSubject(options.subject, claim)) continue;
       if (
+        options.anySubjectIdentity !== undefined
+        && ![claim.subject, claim.relatedSubject].some(
+          subject => sameSubjectIdentity(options.anySubjectIdentity, subject),
+        )
+      ) continue;
+      if (
         options.relatedSubject !== undefined
         && !sameSubjectRef(options.relatedSubject, claim.relatedSubject)
       ) continue;
@@ -403,6 +438,14 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
       status: input.to,
       lastSourceValidatedAt: now.toISOString(),
     };
+    this.storeClaim(updated);
+    return updated;
+  }
+
+  async setClaimPortability(input: BiographicalPortabilityInput): Promise<BiographicalClaim> {
+    const now = input.now ?? new Date();
+    const claim = this.readClaim(input.claimId);
+    const updated = applyClaimPortability(claim, input.portabilityScope, now);
     this.storeClaim(updated);
     return updated;
   }
@@ -571,6 +614,28 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
     operation: (store: BiographicalProfileStorePort) => Promise<T>,
   ): Promise<T> {
     return await this.runTransaction(operation);
+  }
+
+  async getStageCursor(
+    stage: BiographyStage,
+    cursorKey: string,
+  ): Promise<BiographyStageCursor | undefined> {
+    return this.stageCursors.get(
+      `${assertBiographyStage(stage)}\u0000${assertStageCursorKey(cursorKey)}`,
+    );
+  }
+
+  async writeStageCursor(
+    input: BiographyStageCursorWriteInput,
+  ): Promise<BiographyStageCursor> {
+    const cursor: BiographyStageCursor = {
+      stage: assertBiographyStage(input.stage),
+      cursorKey: assertStageCursorKey(input.cursorKey),
+      observedDigest: assertStageCursorDigest(input.observedDigest),
+      observedAt: (input.now ?? this.now()).toISOString(),
+    };
+    this.stageCursors.set(`${cursor.stage}\u0000${cursor.cursorKey}`, cursor);
+    return cursor;
   }
 
   async recordReviewAudit(

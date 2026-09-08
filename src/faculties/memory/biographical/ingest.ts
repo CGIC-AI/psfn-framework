@@ -23,6 +23,7 @@
 import type { SensitivityLevel } from '../../../system/trust/types.js';
 import type {
   BiographicalClaim,
+  BiographicalPortabilityScope,
   BiographicalClaimSource,
   BiographicalSubjectRef,
 } from './types.js';
@@ -131,6 +132,12 @@ export async function ingestSelfNicknameEvidence(input: {
   store: BiographicalProfileStorePort;
   evidence: SelfNicknameEvidence;
   synthesize?: SelfNicknameSynthesizer;
+  /**
+   * Portability the CALLER asserts a reviewer granted. Ingest is a conduit, not
+   * a portability authority: it defaults to `origin_only`, so evidence that
+   * never passed review cannot make a claim travel.
+   */
+  portabilityScope?: BiographicalPortabilityScope;
 }): Promise<SelfNicknameIngestResult> {
   if (input.evidence.companionSubject.kind !== 'companion') {
     throw new Error('ingestSelfNicknameEvidence requires a companion self subject');
@@ -177,9 +184,14 @@ export async function ingestSelfNicknameEvidence(input: {
     });
     // The supersession row is created as a candidate; admit it to the active
     // profile so it replaces the prior active claim for this nickname.
-    const activated = await input.store.transitionClaim({
+    await input.store.transitionClaim({
       claimId: superseding.id,
       to: 'active',
+      ...(input.evidence.now !== undefined ? { now: input.evidence.now } : {}),
+    });
+    const activated = await input.store.setClaimPortability({
+      claimId: superseding.id,
+      portabilityScope: input.portabilityScope ?? 'origin_only',
       ...(input.evidence.now !== undefined ? { now: input.evidence.now } : {}),
     });
     return { claim: activated, status: 'superseded', superseded };
@@ -192,6 +204,7 @@ export async function ingestSelfNicknameEvidence(input: {
     value: { kind: 'nickname', nickname: synthesized.nickname, scope: 'self' },
     basis: 'observed',
     status: 'active',
+    portabilityScope: input.portabilityScope ?? 'origin_only',
     ...(input.evidence.proposedSensitivity !== undefined
       ? { proposedSensitivity: input.evidence.proposedSensitivity }
       : {}),

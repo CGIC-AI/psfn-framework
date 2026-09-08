@@ -62,6 +62,18 @@ export async function recordCompanionPublicationChoice(input: {
       `cannot publish a claim that is not active (status ${claim.status}): ${input.choice.claimId}`,
     );
   }
+  // The contract has always been "one exact SELF nickname"; until now only the
+  // caller enforced it. A claim that names a human is not the companion's to
+  // publish, so it fails closed here rather than acquiring universal reach.
+  if (
+    claim.subject.kind !== 'companion'
+    || claim.relatedSubject !== undefined
+    || claim.participants !== undefined
+  ) {
+    throw new Error(
+      `only a companion-self claim may be published: ${input.choice.claimId}`,
+    );
+  }
   const grantInput: BiographicalGrantWriteInput = {
     claimDigest: claim.claimDigest,
     sourceSetDigest: claim.sourceSetDigest,
@@ -71,7 +83,17 @@ export async function recordCompanionPublicationChoice(input: {
     reason: input.choice.reason,
     ...(input.choice.now !== undefined ? { now: input.choice.now } : {}),
   };
-  return input.store.recordGrant(grantInput);
+  const grant = await input.store.recordGrant(grantInput);
+  // The companion's own publication choice IS the review that makes her
+  // baseline identity portable, so it also grants `universal` scope. Without
+  // this the grant would lower sensitivity while the claim stayed origin-only
+  // and never actually travelled.
+  await input.store.setClaimPortability({
+    claimId: claim.id,
+    portabilityScope: 'universal',
+    ...(input.choice.now !== undefined ? { now: input.choice.now } : {}),
+  });
+  return grant;
 }
 
 /**
@@ -82,10 +104,22 @@ export async function recordCompanionPublicationChoice(input: {
 export async function revokeCompanionPublicationChoice(input: {
   store: BiographicalProfileStorePort;
   grantId: string;
+  /** Claim the revoked choice published; its portability reverts with the grant. */
+  claimId: string;
   revoke: Pick<BiographicalGrantRevokeInput, 'reason'> & { now?: Date };
 }): Promise<BiographicalSensitivityGrant> {
-  return input.store.revokeGrant(input.grantId, {
+  const revoked = await input.store.revokeGrant(input.grantId, {
     reason: input.revoke.reason,
     ...(input.revoke.now !== undefined ? { now: input.revoke.now } : {}),
   });
+  // Withdrawing the choice withdraws the reach it authorized. Tightening back
+  // to `origin_only` always succeeds, so a revoke can never be half-applied —
+  // and the claim id is required precisely so a caller cannot revoke the grant
+  // while leaving the claim universally portable.
+  await input.store.setClaimPortability({
+    claimId: input.claimId,
+    portabilityScope: 'origin_only',
+    ...(input.revoke.now !== undefined ? { now: input.revoke.now } : {}),
+  });
+  return revoked;
 }

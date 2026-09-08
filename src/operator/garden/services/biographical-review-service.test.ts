@@ -81,6 +81,46 @@ function fleetContext(
   };
 }
 
+/**
+ * A companion-self candidate staged exactly as synthesis + companion review
+ * leaves it: written by the automaton, then moved into companion review.
+ */
+async function stagedCompanionSelfCandidate(store: InMemoryBiographicalProfileStore) {
+  const written = await store.writeCandidate({
+    automataRunId: 'biography-synthesis:garden',
+    automataAuthorityRef: 'maintenance:biography-synthesis',
+    policy: createDefaultBiographicalCandidatePolicy(),
+    socialContext: { kind: 'companion_self', companionId: 'companion-garden' },
+    rationale: 'new_subject_claim',
+    claim: {
+      subject: { kind: 'companion', companionId: 'companion-garden', subjectVersion: 1 },
+      kind: 'nickname',
+      value: { kind: 'nickname', nickname: 'Sprout', scope: 'self' },
+      basis: 'explicit',
+      confidence: 1,
+      sources: [{
+        ...source(),
+        sensitivityAtProjection: 'personal',
+        sourceType: 'semantic',
+        lifecycleStateAtProjection: 'active',
+      }],
+      now: NOW,
+    },
+  });
+  return await store.transitionCandidate({
+    candidateId: written.id,
+    expectedRevision: written.revision,
+    to: 'companion_review',
+    receipts: [{
+      authority: 'companion',
+      decision: 'approved',
+      actorAuthorityRef: 'companion:companion-garden',
+      reason: 'reviewer_approved',
+    }],
+    now: NOW,
+  });
+}
+
 describe('AdminBiographicalReviewService', () => {
   it('applies D1 subject authorization to multi-admin biography reads and reviews', async () => {
     const store = new InMemoryBiographicalProfileStore(() => NOW);
@@ -476,8 +516,8 @@ describe('AdminBiographicalReviewService', () => {
         'actorAuthorityRef', 'authority', 'candidateRevision', 'decision', 'reason', 'recordedAt',
       ]);
     }
-    // The Garden surface is read-only for candidates: the operator review verbs
-    // still act on claims, and none of them can move a candidate stage.
+    // Stage is never a free-form field on the review body: only the closed
+    // stage actions move a candidate, and an invented key is malformed.
     await expect(service.review(candidate.claimId, {
       action: 'approve',
       claimDigest: candidate.claimDigest,
@@ -485,6 +525,231 @@ describe('AdminBiographicalReviewService', () => {
       stage: 'active',
     }, ACTOR)).rejects.toMatchObject({ reason: 'malformed' });
     expect((await store.getCandidate(candidate.id))?.stage).toBe('companion_review');
+  });
+
+  it('gates human activation on the exact staged revision and refuses the claim-only bypass', async () => {
+    const store = new InMemoryBiographicalProfileStore(() => NOW);
+    const candidate = await stagedCompanionSelfCandidate(store);
+    const service = new AdminBiographicalReviewService({ store, queryLimit: 20, now: () => NOW });
+    const claim = (await store.getClaim(candidate.claimId))!;
+    const digests = {
+      claimDigest: claim.claimDigest,
+      sourceSetDigest: claim.sourceSetDigest,
+    };
+
+    // The staged candidate is still with the companion, so neither the legacy
+    // claim-only approval nor a premature human stage decision may land.
+    await expect(service.review(claim.id, { action: 'approve', ...digests }, ACTOR))
+      .rejects.toMatchObject({ reason: 'invalid-state' });
+    await expect(service.review(claim.id, { action: 'deny', ...digests }, ACTOR))
+      .rejects.toMatchObject({ reason: 'invalid-state' });
+    await expect(service.review(
+      claim.id,
+      { action: 'stage-approve', ...digests, candidateRevision: 2 },
+      ACTOR,
+    )).rejects.toMatchObject({ reason: 'invalid-state' });
+    expect((await store.getClaim(claim.id))?.status).toBe('candidate');
+
+    const forwarded = await store.transitionCandidate({
+      candidateId: candidate.id,
+      expectedRevision: 2,
+      to: 'human_review',
+      receipts: [{
+        authority: 'companion',
+        decision: 'approved',
+        actorAuthorityRef: 'companion:companion-garden',
+        reason: 'reviewer_approved',
+      }],
+      now: NOW,
+    });
+
+    await expect(service.review(
+      claim.id,
+      { action: 'stage-approve', ...digests, candidateRevision: forwarded.revision - 1 },
+      ACTOR,
+    )).rejects.toMatchObject({ reason: 'stale-candidate-revision' });
+    expect((await store.getClaim(claim.id))?.status).toBe('candidate');
+
+    const detail = await service.review(
+      claim.id,
+      { action: 'stage-approve', ...digests, candidateRevision: forwarded.revision },
+      ACTOR,
+    );
+    expect(detail.claim.status).toBe('active');
+    expect(detail.claim.candidateStage).toBe('active');
+    expect(detail.claim.derivation).toBe('companion_derived');
+    expect(detail.claim.withheldReasons).toEqual([]);
+    expect(detail.candidate?.receipts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        authority: 'human',
+        decision: 'approved',
+        reason: 'reviewer_approved',
+      }),
+    ]));
+    expect(await store.listReviewAudits(claim.id, 20)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: 'stage-approve', decision: 'allowed', reason: 'stage-approved' }),
+      expect.objectContaining({ action: 'approve', decision: 'denied', reason: 'invalid-state' }),
+      expect.objectContaining({
+        action: 'stage-approve',
+        decision: 'denied',
+        reason: 'stale-candidate-revision',
+      }),
+    ]));
+  });
+
+  it('grants portability at activation and audits a refused widening', async () => {
+    const store = new InMemoryBiographicalProfileStore(() => NOW);
+    const candidate = await stagedCompanionSelfCandidate(store);
+    const forwarded = await store.transitionCandidate({
+      candidateId: candidate.id,
+      expectedRevision: 2,
+      to: 'human_review',
+      receipts: [{
+        authority: 'companion',
+        decision: 'approved',
+        actorAuthorityRef: 'companion:companion-garden',
+        reason: 'reviewer_approved',
+      }],
+      now: NOW,
+    });
+    const service = new AdminBiographicalReviewService({ store, queryLimit: 20, now: () => NOW });
+    const claim = (await store.getClaim(candidate.claimId))!;
+    const digests = { claimDigest: claim.claimDigest, sourceSetDigest: claim.sourceSetDigest };
+
+    const activated = await service.review(claim.id, {
+      action: 'stage-approve',
+      ...digests,
+      candidateRevision: forwarded.revision,
+      portabilityScope: 'universal',
+    }, ACTOR);
+    expect(activated.claim.status).toBe('active');
+    expect(activated.claim.portabilityScope).toBe('universal');
+
+    // Tightening is always available.
+    const tightened = await service.review(claim.id, {
+      action: 'set-portability',
+      ...digests,
+      portabilityScope: 'origin_only',
+    }, ACTOR);
+    expect(tightened.claim.portabilityScope).toBe('origin_only');
+
+    // A claim that names a human is nobody's baseline identity: the widening is
+    // refused and the refusal is audited rather than swallowed.
+    const dyad = await store.writeClaim({
+      subject: { kind: 'contact', contactId: 'contact-v', subjectVersion: 1 },
+      relatedSubject: { kind: 'companion', companionId: 'companion-garden', subjectVersion: 1 },
+      kind: 'relationship',
+      value: { kind: 'relationship', relationshipType: 'friend' },
+      basis: 'explicit',
+      status: 'active',
+      confidence: 1,
+      sources: [source()],
+      now: NOW,
+    });
+    await expect(service.review(dyad.id, {
+      action: 'set-portability',
+      claimDigest: dyad.claimDigest,
+      sourceSetDigest: dyad.sourceSetDigest,
+      portabilityScope: 'universal',
+    }, ACTOR)).rejects.toMatchObject({ reason: 'portability-refused' });
+    expect((await store.getClaim(dyad.id))?.portabilityScope).toBe('origin_only');
+    expect(await store.listReviewAudits(dyad.id, 20)).toEqual([
+      expect.objectContaining({
+        action: 'set-portability',
+        decision: 'denied',
+        reason: 'portability-refused',
+      }),
+    ]);
+    await expect(service.review(dyad.id, {
+      action: 'set-portability',
+      claimDigest: dyad.claimDigest,
+      sourceSetDigest: dyad.sourceSetDigest,
+      portabilityScope: 'everywhere',
+    }, ACTOR)).rejects.toMatchObject({ reason: 'malformed' });
+  });
+
+  it('records a declined candidate as a closed reason code and revokes the claim', async () => {
+    const store = new InMemoryBiographicalProfileStore(() => NOW);
+    const candidate = await stagedCompanionSelfCandidate(store);
+    const forwarded = await store.transitionCandidate({
+      candidateId: candidate.id,
+      expectedRevision: 2,
+      to: 'human_review',
+      receipts: [{
+        authority: 'companion',
+        decision: 'approved',
+        actorAuthorityRef: 'companion:companion-garden',
+        reason: 'reviewer_approved',
+      }],
+      now: NOW,
+    });
+    const service = new AdminBiographicalReviewService({ store, queryLimit: 20, now: () => NOW });
+    const claim = (await store.getClaim(candidate.claimId))!;
+
+    // Review prose is never accepted: a decline reason is a closed code.
+    await expect(service.review(claim.id, {
+      action: 'stage-reject',
+      claimDigest: claim.claimDigest,
+      sourceSetDigest: claim.sourceSetDigest,
+      candidateRevision: forwarded.revision,
+      reason: 'it felt wrong',
+    }, ACTOR)).rejects.toMatchObject({ reason: 'malformed' });
+
+    const detail = await service.review(claim.id, {
+      action: 'stage-reject',
+      claimDigest: claim.claimDigest,
+      sourceSetDigest: claim.sourceSetDigest,
+      candidateRevision: forwarded.revision,
+      reason: 'reviewer_flagged_sensitive',
+    }, ACTOR);
+    expect(detail.claim.status).toBe('revoked');
+    expect(detail.candidate?.stage).toBe('rejected');
+    expect(detail.candidate?.receipts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        authority: 'human',
+        decision: 'rejected',
+        reason: 'reviewer_flagged_sensitive',
+      }),
+    ]));
+  });
+
+  it('narrows the queue to one canonical subject on either side of a dyad', async () => {
+    const store = new InMemoryBiographicalProfileStore(() => NOW);
+    const about = await store.writeClaim({
+      subject: { kind: 'contact', contactId: 'contact-v', subjectVersion: 1 },
+      kind: 'stable-preference',
+      value: {
+        kind: 'stable-preference', schemaVersion: 1, domain: 'food', target: 'tea', polarity: 'likes',
+      },
+      basis: 'explicit', confidence: 1, sources: [source()], now: NOW,
+    });
+    const dyad = await store.writeClaim({
+      subject: { kind: 'companion', companionId: 'purrs', subjectVersion: 1 },
+      relatedSubject: { kind: 'contact', contactId: 'contact-v', subjectVersion: 1 },
+      kind: 'relationship',
+      value: { kind: 'relationship', relationshipType: 'friend' },
+      basis: 'explicit', confidence: 1, sources: [source()], now: NOW,
+    });
+    await store.writeClaim({
+      subject: { kind: 'contact', contactId: 'contact-other', subjectVersion: 1 },
+      kind: 'stable-preference',
+      value: {
+        kind: 'stable-preference', schemaVersion: 1, domain: 'food', target: 'coffee', polarity: 'likes',
+      },
+      basis: 'explicit', confidence: 1, sources: [source()], now: NOW,
+    });
+    const service = new AdminBiographicalReviewService({ store, queryLimit: 20, now: () => NOW });
+
+    const scoped = await service.listClaims(undefined, { subjectContactId: 'contact-v' });
+    expect(scoped.claims.map(claim => claim.id).sort()).toEqual([about.id, dyad.id].sort());
+    // Both sides of the dyad are human-derived; a companion-only claim is not.
+    expect(scoped.claims.every(claim => claim.derivation === 'human_derived')).toBe(true);
+    expect((await service.listClaims(undefined, { subjectCompanionId: 'purrs' })).claims
+      .map(claim => claim.id)).toEqual([dyad.id]);
+    await expect(service.listClaims(undefined, {
+      subjectContactId: 'contact-v',
+      subjectCompanionId: 'purrs',
+    })).rejects.toMatchObject({ reason: 'malformed' });
   });
 
   it('rejects request-body actor injection before mutating or fabricating an audit', async () => {

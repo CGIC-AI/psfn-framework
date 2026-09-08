@@ -17,6 +17,8 @@ import type {
   AdminBiographicalClaimList,
 } from '$lib/types';
 
+export type BiographicalPortabilityScope = 'origin_only' | 'universal' | 'subject_present';
+
 export type BiographicalReviewRequest =
   | { action: 'approve' | 'deny'; claimDigest: string; sourceSetDigest: string }
   | { action: 'revoke'; claimDigest: string; sourceSetDigest: string; grantId: string }
@@ -25,10 +27,49 @@ export type BiographicalReviewRequest =
       claimDigest: string;
       sourceSetDigest: string;
       grantedSensitivity: 'public' | 'personal' | 'intimate' | 'confidential';
+    }
+  /** Human review of an exact staged candidate revision (o61vb.14). */
+  | {
+      action: 'stage-approve';
+      claimDigest: string;
+      sourceSetDigest: string;
+      candidateRevision: number;
+      reason?: 'reviewer_approved';
+      portabilityScope?: BiographicalPortabilityScope;
+    }
+  /** Set or withdraw one active claim's reviewed portability (o61vb.15). */
+  | {
+      action: 'set-portability';
+      claimDigest: string;
+      sourceSetDigest: string;
+      portabilityScope: BiographicalPortabilityScope;
+    }
+  | {
+      action: 'stage-reject';
+      claimDigest: string;
+      sourceSetDigest: string;
+      candidateRevision: number;
+      reason?:
+        | 'reviewer_rejected'
+        | 'reviewer_flagged_sensitive'
+        | 'reviewer_flagged_ambiguous';
     };
 
-export function listBiographicalClaims(): Promise<AdminBiographicalClaimList> {
-  return apiGet<AdminBiographicalClaimList>('/api/admin/biographical-claims');
+/** Canonical-subject filter for a Contact or companion-self biography view. */
+export interface BiographicalClaimListParams {
+  subjectContactId?: string;
+  subjectCompanionId?: string;
+}
+
+export function listBiographicalClaims(
+  params?: BiographicalClaimListParams,
+): Promise<AdminBiographicalClaimList> {
+  const search = new URLSearchParams();
+  if (params?.subjectContactId) search.set('subjectContactId', params.subjectContactId);
+  if (params?.subjectCompanionId) search.set('subjectCompanionId', params.subjectCompanionId);
+  return apiGet<AdminBiographicalClaimList>(
+    withQuery('/api/admin/biographical-claims', search),
+  );
 }
 
 export function getBiographicalClaim(id: string): Promise<AdminBiographicalClaimDetail> {

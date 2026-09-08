@@ -343,20 +343,31 @@ export function detectCompanionNameMatch(
   params: {
     companionNames: readonly string[];
     companionAuthorIds: readonly string[];
+    /**
+     * Reviewed relationship-scoped biography aliases this exact speaker may use
+     * (psfn-framework-o61vb.17). They join the canonical name list and go
+     * through the same normalization and word-boundary matching, so an alias is
+     * not a second matcher and produces no distinguishable result: a speaker
+     * with no aliases sees exactly what a companion with none would produce.
+     */
+    speakerAliases?: readonly string[];
   },
 ): CompanionNameMatch {
   const normalized = normalizeContent(content);
+  const names = params.speakerAliases === undefined || params.speakerAliases.length === 0
+    ? params.companionNames
+    : [...params.companionNames, ...params.speakerAliases];
   return {
     mentioned: containsCompanionMention(
       content,
       normalized,
-      params.companionNames,
+      names,
       params.companionAuthorIds,
     ),
     directAddress: isDirectAddress(
       content,
       normalized,
-      params.companionNames,
+      names,
       params.companionAuthorIds,
     ),
   };

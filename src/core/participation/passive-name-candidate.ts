@@ -34,6 +34,8 @@ import {
   type SharedRoomClassifier,
 } from './room-signal.js';
 import type { RoomSignalSettings } from '../../system/config/participation-config.js';
+import type { BiographicalAliasResolver } from '../../faculties/memory/biographical/alias-address.js';
+import { resolveIdentityChannel } from '../agent/substrate-agent/runtime-context.js';
 
 /**
  * Deterministic passive-name participation candidate gate (free-time social
@@ -107,6 +109,14 @@ export interface PassiveNameCandidateBuilderOptions {
    * enables it; absent runtimes keep the pre-signal behavior exactly.
    */
   roomSignal?: RoomSignalRuntime;
+  /**
+   * Reviewed relationship-scoped biography aliases (o61vb.17). Optional: a
+   * runtime without it behaves exactly as before, and a speaker with no bound
+   * aliases is indistinguishable from that. Consulted ONLY after the canonical
+   * name detector and the connector's own addressing have both come up empty,
+   * so an already-matched or plainly ambient message costs no extra read.
+   */
+  aliasResolver?: BiographicalAliasResolver;
   nowMs?: () => number;
 }
 
@@ -170,6 +180,7 @@ export class PassiveNameCandidateBuilder {
   private readonly settings: PassiveNameCandidateSettings;
   private readonly roomParticipationLease: RoomParticipationContinuationPort | undefined;
   private readonly roomSignal: RoomSignalRuntime | undefined;
+  private readonly aliasResolver: BiographicalAliasResolver | undefined;
   private readonly nowMs: () => number;
   private readonly dedupeByChannel = new Map<string, ChannelDedupeState>();
 
@@ -181,6 +192,7 @@ export class PassiveNameCandidateBuilder {
     this.settings = options.settings ?? createDefaultPassiveNameCandidateSettings();
     this.roomParticipationLease = options.roomParticipationLease;
     this.roomSignal = options.roomSignal;
+    this.aliasResolver = options.aliasResolver;
     this.nowMs = options.nowMs ?? (() => Date.now());
   }
 
@@ -230,12 +242,40 @@ export class PassiveNameCandidateBuilder {
     // for the authoritative one. A platform mention or a reply to this
     // companion is a direct address on EVERY connector, even when the body
     // never names it; prose alone can no longer be the only way in.
-    const match = detectCompanionNameMatch(message.content, {
+    let match = detectCompanionNameMatch(message.content, {
       companionNames: this.companionNames,
       companionAuthorIds: this.companionAuthorIds,
     });
     const connectorAddressed = observation !== null
       && (observation.addressedByMention || observation.addressedByReply);
+    // 5b. Relationship-scoped biography aliases (o61vb.17). A reviewed nickname
+    // the speaker actually uses is a cheap deterministic address cue, so it
+    // reruns the SAME canonical detector with that speaker's alias list rather
+    // than adding a second matcher. Resolution happens only when nothing has
+    // matched yet, and an unrelated speaker resolves to nothing — so a private
+    // term of address is never revealed by the fact that it failed to match.
+    if (
+      !match.mentioned && !match.directAddress && !connectorAddressed
+      && this.aliasResolver !== undefined && observation !== null
+    ) {
+      const aliases = await this.aliasResolver.resolve({
+        // The same canonical identity-channel resolution every other
+        // contact lookup uses; a raw channelType would miss the satellite,
+        // voice and terminal mappings and silently resolve nobody.
+        source: resolveIdentityChannel(message),
+        transportParticipantId: observation.author.authorId,
+      });
+      const admitted = aliases.filter(
+        alias => alias.trim().length >= this.settings.aliasMinLength,
+      );
+      if (admitted.length > 0) {
+        match = detectCompanionNameMatch(message.content, {
+          companionNames: this.companionNames,
+          companionAuthorIds: this.companionAuthorIds,
+          speakerAliases: admitted,
+        });
+      }
+    }
     const matchedName = match.mentioned || connectorAddressed;
     const matchedDirectAddress = match.directAddress || connectorAddressed;
     const nameMatched = matchedName || matchedDirectAddress;

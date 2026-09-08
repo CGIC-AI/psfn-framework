@@ -92,7 +92,22 @@ import type { ProductionAutomataClassId } from '../../faculties/automata/registr
 import {
   runGovernedAutomataClass,
   type AutomataClassLifecycleRuntime,
+  type AutomataClassWorkResult,
 } from '../../faculties/automata/bus/class-lifecycle.js';
+import type { FleetMaintenanceCoordinator } from '../../core/scheduler/fleet-maintenance-coordinator.js';
+import { runWithFleetMaintenanceBaton } from '../../core/scheduler/fleet-maintenance-runner.js';
+import type { BiographyStageControl } from '../../faculties/memory/biographical/synthesis-service.js';
+
+/**
+ * The fleet maintenance authority a serialized lane needs: who owns the baton
+ * and how long a turn at it lasts. Mirrors the post-turn lane's shape so both
+ * halves of serialized maintenance are configured identically.
+ */
+interface FleetMaintenanceRuntime {
+  coordinator: FleetMaintenanceCoordinator;
+  leaseDurationMs: number;
+  retryDelayMs: number;
+}
 import {
   resolveCharacterCardHistoryPath,
   resolveMemoryJournalPath,
@@ -111,6 +126,10 @@ const AUTOMATA_BUS_REVIEWER_CLASS: ProductionAutomataClassId = 'scheduler.automa
 const AUTOMATA_BUS_REVIEWER_BRIEFING_QUERY = 'automata bus evidence review consistency';
 const SOCIAL_GRAPH_BUILDER_CLASS: ProductionAutomataClassId = 'memory.social_graph_builder';
 const SOCIAL_GRAPH_BUILDER_BRIEFING_QUERY = 'social graph proposal evidence scan';
+const BIOGRAPHY_SYNTHESIS_CLASS: ProductionAutomataClassId = 'memory.biography_synthesis';
+const BIOGRAPHY_SYNTHESIS_BRIEFING_QUERY = 'portable biography candidate synthesis evidence';
+const BIOGRAPHY_REVIEW_CLASS: ProductionAutomataClassId = 'memory.biography_review';
+const BIOGRAPHY_REVIEW_BRIEFING_QUERY = 'companion biography candidate self review';
 export const AUTOMATA_RETENTION_OPERATION_ID = 'automata-raw-session-retention';
 
 export interface AgentSchedulerRuntime {
@@ -182,6 +201,11 @@ export interface BuildAgentSchedulerRuntimeOptions {
   biographySynthesis?: Pick<BiographySynthesisService, 'run'>;
   /** Companion protected self-review of biography candidates (o61vb.13). */
   biographyCompanionReview?: Pick<BiographyCompanionReviewService, 'run'>;
+  /**
+   * Fleet-wide serialized maintenance authority (y0bft.4). Absent in a
+   * single-companion deployment, where there is no baton to contend for.
+   */
+  fleetMaintenance?: FleetMaintenanceRuntime;
   /** Doing-mirror disposition lifecycle whose Letter deliveries this lane redrives. */
   doingMirrorService: Pick<DoingMirrorService, 'drainPendingLetters'>;
 }
@@ -269,10 +293,81 @@ export const BIOGRAPHY_COMPANION_REVIEW_TASK_ID = 'biography-companion-review';
  * tuning value. It stages review decisions only; activation stays with owner
  * policy and human review.
  */
+/**
+ * Fleet-serialized ownership for one biography stage (o61vb.16).
+ *
+ * Both stages are heavy background cognition, so exactly one companion in the
+ * fleet runs one at a time. The stage keeps its own content and durable
+ * cursors; this helper owns only the baton, the safe-boundary checkpoints, and
+ * translating the result into a governed terminal handoff. A pass that never
+ * won the baton did no work and settles as a typed no-finding rather than a
+ * useful one.
+ *
+ * Resume cadence limit: a scheduler `every` task has no per-run reschedule
+ * hook, so a preempted or baton-blocked pass resumes on the next owner-file
+ * biography tick rather than after `retryDelayMs`. Nothing is lost — the
+ * durable stage cursors hold the progress — but the remainder waits a full
+ * cadence.
+ */
+async function runBiographyStageUnderBaton<
+  T extends { readonly outcome: 'complete' | 'yield' },
+>(input: {
+  fleetMaintenance?: FleetMaintenanceRuntime;
+  phase: string;
+  label: string;
+  run: (control: BiographyStageControl) => Promise<T>;
+  summarize: (telemetry: T) => string;
+}): Promise<AutomataClassWorkResult<T | undefined>> {
+  const fleetMaintenance = input.fleetMaintenance;
+  if (!fleetMaintenance) {
+    // A single-companion deployment has no baton to contend for, so no
+    // safe-boundary hook is supplied and the stage cannot be asked to yield.
+    const telemetry = await input.run({});
+    if (telemetry.outcome === 'yield') {
+      throw new Error(
+        `${input.label} yielded without fleet maintenance authority to yield to`,
+      );
+    }
+    return { value: telemetry, summary: input.summarize(telemetry) };
+  }
+  const batonRun = await runWithFleetMaintenanceBaton({
+    coordinator: fleetMaintenance.coordinator,
+    leaseDurationMs: fleetMaintenance.leaseDurationMs,
+    retryDelayMs: fleetMaintenance.retryDelayMs,
+    phase: input.phase,
+    run: async control => await input.run({
+      onSafeBoundary: async () => await control.checkpoint({
+        phase: input.phase,
+        checkpointRef: null,
+      }),
+    }),
+  });
+  if (batonRun.outcome === 'waiting') {
+    return {
+      value: undefined,
+      lifecycleState: 'cancelled',
+      outcome: 'cancelled',
+      resultKind: 'none',
+    };
+  }
+  const telemetry = batonRun.result;
+  if (telemetry.outcome === 'yield') {
+    return {
+      value: telemetry,
+      outcome: 'budget_limited',
+      resultKind: 'partial',
+      summary: `${input.label} yielded for fleet preemption: ${input.summarize(telemetry)}`,
+    };
+  }
+  return { value: telemetry, summary: input.summarize(telemetry) };
+}
+
 export function registerBiographyCompanionReviewTask(input: {
   scheduler: Scheduler;
   review: Pick<BiographyCompanionReviewService, 'run'>;
   intervalMs: number;
+  automataLifecycle?: AutomataClassLifecycleRuntime;
+  fleetMaintenance?: FleetMaintenanceRuntime;
   eventBus?: EventBus;
 }): void {
   input.scheduler.register({
@@ -280,55 +375,116 @@ export function registerBiographyCompanionReviewTask(input: {
     name: 'Companion Biography Review',
     description:
       'The companion reviews staged biography candidates about itself and its relationships, '
-      + 'with agency to approve, refuse, revise, reassign, split, merge, or flag.',
+      + 'with agency to approve, refuse, revise, reassign, split, merge, or flag. '
+      + 'Runs as a governed automata class under the fleet maintenance baton.',
     scheduleSource: 'settings.json > biographicalDepthPolicy.full.refreshIntervalMs',
     type: 'every',
     intervalMs: input.intervalMs,
     availability: 'do_not_disturb',
     state: 'idle',
     handler: async () => {
-      const telemetry = await input.review.run();
-      // Content-free: decision counts only. No candidate id, claim value, or
-      // review reasoning ever reaches the event bus.
+      const runId = `biography-review:${randomUUID()}`;
+      const governed = await runGovernedAutomataClass({
+        runtime: input.automataLifecycle,
+        spec: {
+          automatonClass: BIOGRAPHY_REVIEW_CLASS,
+          runId,
+          workerId: BIOGRAPHY_COMPANION_REVIEW_TASK_ID,
+          taskId: BIOGRAPHY_COMPANION_REVIEW_TASK_ID,
+          taskLabel: 'Review my own biography proposals',
+          taskSummary:
+            'Decide a bounded batch of staged biography candidates about myself and my relationships.',
+        },
+        briefingQuery: BIOGRAPHY_REVIEW_BRIEFING_QUERY,
+        work: async () => await runBiographyStageUnderBaton({
+          ...(input.fleetMaintenance ? { fleetMaintenance: input.fleetMaintenance } : {}),
+          phase: 'biography_companion_review',
+          label: 'Companion biography review',
+          run: async control => await input.review.run(control),
+          // Counts only: no candidate id, claim value, or review reasoning
+          // reaches the Bus or the event bus from this lane.
+          summarize: telemetry => (
+            `considered=${telemetry.candidatesConsidered} approved=${telemetry.approved} `
+            + `rejected=${telemetry.rejected} escalated=${telemetry.escalatedToHumanReview} `
+            + `remaining=${telemetry.candidatesRemaining}`
+          ),
+        }),
+      });
+      if (governed.status === 'replayed' || governed.value === undefined) return;
       void input.eventBus?.emit('memory.biography.companion_review', {
-        ...telemetry,
+        ...governed.value,
         timestamp: Date.now(),
       });
     },
   }, { skipFirstRun: true });
 }
 
-export const BIOGRAPHY_SYNTHESIS_OPERATION_ID = 'biography-candidate-synthesis';
+export const BIOGRAPHY_SYNTHESIS_TASK_ID = 'biography-candidate-synthesis';
 
 /**
- * Cross-silo portable biography candidate synthesis (o61vb.12). Runs on the
- * serialized background-maintenance lane: it only ever stages review
- * candidates, so a slow or skipped pass delays review rather than changing what
- * the companion may say. Serialized maintenance ownership is hardened further
- * by psfn-framework-o61vb.16.
+ * Cross-silo portable biography candidate synthesis (o61vb.12/.16).
+ *
+ * This is heavy cognition over authorized memory silos, so it is NOT on the
+ * shared background-maintenance lane: that lane is per-companion sequential and
+ * would let every companion in a fleet scan at once. It is its own
+ * `do_not_disturb` task, opened as a governed automata class and run under the
+ * fleet maintenance baton so exactly one companion synthesizes at a time. It
+ * only ever stages review candidates, so a preempted pass delays review rather
+ * than changing what the companion may say.
  */
-export function registerBiographySynthesisOperation(input: {
-  backgroundMaintenance: BackgroundMaintenanceRegistrar;
+export function registerBiographySynthesisTask(input: {
+  scheduler: Scheduler;
   synthesis: Pick<BiographySynthesisService, 'run'>;
+  intervalMs: number;
+  automataLifecycle?: AutomataClassLifecycleRuntime;
+  fleetMaintenance?: FleetMaintenanceRuntime;
   eventBus?: EventBus;
 }): void {
-  input.backgroundMaintenance.registerOperation({
-    id: BIOGRAPHY_SYNTHESIS_OPERATION_ID,
+  input.scheduler.register({
+    id: BIOGRAPHY_SYNTHESIS_TASK_ID,
     name: 'Biography Candidate Synthesis',
     description:
       'Mines subject-authorized memory silos for typed biography candidates and stages them '
       + 'for companion and human review. Never activates a claim.',
+    scheduleSource: 'settings.json > biographicalDepthPolicy.full.refreshIntervalMs',
+    type: 'every',
+    intervalMs: input.intervalMs,
+    availability: 'do_not_disturb',
+    state: 'idle',
     handler: async () => {
-      const telemetry = await input.synthesis.run();
-      // Content-free: run counts only. No subject id, claim value, or source
-      // body ever reaches the event bus from this lane.
+      const runId = `biography-synthesis:${randomUUID()}`;
+      const governed = await runGovernedAutomataClass({
+        runtime: input.automataLifecycle,
+        spec: {
+          automatonClass: BIOGRAPHY_SYNTHESIS_CLASS,
+          runId,
+          workerId: BIOGRAPHY_SYNTHESIS_TASK_ID,
+          taskId: BIOGRAPHY_SYNTHESIS_TASK_ID,
+          taskLabel: 'Synthesize portable biography candidates',
+          taskSummary:
+            'Scan changed subject-authorized silos for typed biography candidates and stage them for review.',
+        },
+        briefingQuery: BIOGRAPHY_SYNTHESIS_BRIEFING_QUERY,
+        work: async () => await runBiographyStageUnderBaton({
+          ...(input.fleetMaintenance ? { fleetMaintenance: input.fleetMaintenance } : {}),
+          phase: 'biography_synthesis',
+          label: 'Biography synthesis',
+          run: async control => await input.synthesis.run(control),
+          // Counts only: no subject id, claim value, or source body ever
+          // reaches the Bus or the event bus from this lane.
+          summarize: telemetry => (
+            `targets=${telemetry.targetsScanned} unchanged=${telemetry.targetsUnchanged} `
+            + `staged=${telemetry.candidatesStaged} remaining=${telemetry.targetsRemaining}`
+          ),
+        }),
+      });
+      if (governed.status === 'replayed' || governed.value === undefined) return;
       void input.eventBus?.emit('memory.biography.synthesis', {
-        ...telemetry,
+        ...governed.value,
         timestamp: Date.now(),
       });
     },
-    eligibility: { requiredTokens: ['memory.write'] },
-  });
+  }, { skipFirstRun: true });
 }
 
 export const DOING_MIRROR_LETTER_DRAIN_OPERATION_ID = 'doing-mirror-letter-drain';
@@ -641,21 +797,27 @@ export function buildAgentSchedulerRuntime(
     config: options.config,
   });
 
+  const biographyRefreshIntervalMs = (
+    options.config.biographicalDepthPolicy ?? createDefaultBiographicalDepthPolicy()
+  ).full.refreshIntervalMs;
   if (options.biographyCompanionReview) {
     registerBiographyCompanionReviewTask({
       scheduler,
       review: options.biographyCompanionReview,
-      intervalMs: (
-        options.config.biographicalDepthPolicy ?? createDefaultBiographicalDepthPolicy()
-      ).full.refreshIntervalMs,
+      intervalMs: biographyRefreshIntervalMs,
+      ...(options.automataLifecycle ? { automataLifecycle: options.automataLifecycle } : {}),
+      ...(options.fleetMaintenance ? { fleetMaintenance: options.fleetMaintenance } : {}),
       eventBus: options.eventBus,
     });
   }
 
   if (options.biographySynthesis) {
-    registerBiographySynthesisOperation({
-      backgroundMaintenance,
+    registerBiographySynthesisTask({
+      scheduler,
       synthesis: options.biographySynthesis,
+      intervalMs: biographyRefreshIntervalMs,
+      ...(options.automataLifecycle ? { automataLifecycle: options.automataLifecycle } : {}),
+      ...(options.fleetMaintenance ? { fleetMaintenance: options.fleetMaintenance } : {}),
       eventBus: options.eventBus,
     });
   }

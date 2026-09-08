@@ -139,22 +139,57 @@ export function assertCompanionReviewAuthority(input: {
   }
 }
 
+/** Exact ordered contact-id list equality for a group social context. */
+function sameContactIdList(expected: readonly string[], actual: unknown): boolean {
+  return Array.isArray(actual)
+    && expected.length === actual.length
+    && expected.every((contactId, index) => contactId === actual[index]);
+}
+
 function sameContext(
   left: BiographicalCandidateSocialContext,
   right: BiographicalCandidateSocialContext,
 ): boolean {
   if (left.kind !== right.kind || left.companionId !== right.companionId) return false;
-  return left.kind === 'companion_self'
-    || (right.kind === 'companion_contact_dyad' && left.contactId === right.contactId);
+  if (left.kind === 'companion_self') return true;
+  if (left.kind === 'companion_group') {
+    return right.kind === 'companion_group'
+      && left.contactIds.length === right.contactIds.length
+      && left.contactIds.every((contactId, index) => contactId === right.contactIds[index]);
+  }
+  return right.kind === 'companion_contact_dyad' && left.contactId === right.contactId;
 }
 
 function subjectForContext(
   context: BiographicalCandidateSocialContext,
   subjectVersion: number,
 ): BiographicalSubjectRef {
-  return context.kind === 'companion_self'
-    ? { kind: 'companion', companionId: context.companionId, subjectVersion }
-    : { kind: 'contact', contactId: context.contactId, subjectVersion };
+  if (context.kind === 'companion_self') {
+    return { kind: 'companion', companionId: context.companionId, subjectVersion };
+  }
+  if (context.kind === 'companion_group') {
+    // A group proposal is about the companion and the bound participant set;
+    // the participants ride on `participants`, never as the singular subject.
+    return { kind: 'companion', companionId: context.companionId, subjectVersion };
+  }
+  return { kind: 'contact', contactId: context.contactId, subjectVersion };
+}
+
+/**
+ * Canonical participant set a group proposal binds. Only a group context
+ * produces one, so a reviewer cannot attach participants to a dyad or self
+ * proposal and quietly turn it into an n-ary fact.
+ */
+function participantsForContext(
+  context: BiographicalCandidateSocialContext,
+  subjectVersion: number,
+): readonly BiographicalSubjectRef[] | undefined {
+  if (context.kind !== 'companion_group') return undefined;
+  return context.contactIds.map(contactId => ({
+    kind: 'contact' as const,
+    contactId,
+    subjectVersion,
+  }));
 }
 
 function relatedSubjectForContext(
@@ -198,7 +233,9 @@ function parseProposal(
       && candidateContext.kind === requested.kind
       && candidateContext.companionId === requested.companionId
       && (candidateContext.kind === 'companion_self'
-        || candidateContext.contactId === requested.contactId)
+        || (candidateContext.kind === 'companion_group'
+          ? sameContactIdList(candidateContext.contactIds, requested.contactIds)
+          : candidateContext.contactId === requested.contactId))
     ));
   if (context === undefined) {
     reviewFailure('companion review proposal names an unauthorized social context');
@@ -232,11 +269,13 @@ function parseProposal(
     raw.value,
     subjectVersion,
   );
+  const participants = participantsForContext(context, subjectVersion);
   let write: BiographicalClaimWriteInput;
   try {
     write = parsePortableStableCandidate({
       subject: claimSubject,
       ...(relatedSubject !== undefined ? { relatedSubject } : {}),
+      ...(participants !== undefined ? { participants } : {}),
       kind: raw.kind,
       value: raw.value,
       basis: raw.basis,

@@ -190,6 +190,14 @@ type BiographicalWithheldReason =
   | 'source-invalid'
   | 'no-publication-choice'
   | 'destination-disallowed'
+  /** No reviewer made this claim portable; it stays in the room it came from. */
+  | 'portability-origin-only'
+  /** Live sensitivity drifted above what any portable scope admits. */
+  | 'portability-sensitivity'
+  /** A subject_present claim whose bound person is not part of this turn. */
+  | 'subject-not-present'
+  /** A group claim whose exact participant set is not all present. */
+  | 'group-participants-unverified'
   | 'token-budget-exhausted'
   | 'participation-unproven'
   | 'explicit-resolver-unavailable'
@@ -304,7 +312,11 @@ interface AdmittedClaim {
 interface ProjectionCandidate {
   readonly claim: BiographicalClaim;
   readonly presentation: ProjectionPresentation;
-  readonly audienceRole: 'companion-self' | 'current-author' | 'explicit-subject';
+  readonly audienceRole:
+    | 'companion-self'
+    | 'current-author'
+    | 'explicit-subject'
+    | 'group-context';
   readonly trustLevel?: TrustLevel;
   readonly currentParticipation?: VerifiedExplicitSubject['currentParticipation'];
 }
@@ -412,6 +424,14 @@ export async function projectBiographicalContext(
       resolver: deps.explicitAddressing.resolver,
       maxSubjects: deps.explicitAddressing.maxSubjects,
     });
+  // Every canonical contact this turn can prove is part of it: the verified
+  // current author, and every explicitly addressed verified contact. Room
+  // membership is deliberately absent — an unproven roster is not presence, and
+  // a display name is never identity.
+  const presentContactIds = new Set<string>([
+    ...(currentAuthor !== undefined ? [currentAuthor.subject.contactId] : []),
+    ...explicitSelection.subjects.map(subject => subject.subject.contactId),
+  ]);
   const explicitClaimsBySubject = await Promise.all(explicitSelection.subjects.map(
     async subject => ({
       subject,
@@ -422,7 +442,34 @@ export async function projectBiographicalContext(
       }),
     }),
   ));
+  // N-ary group claims (o61vb.15). Selected by canonical participant identity,
+  // never by room membership: a group fact is a candidate only when someone
+  // this turn can prove is present is one of its bound participants, and the
+  // presence gate below still demands the whole set.
+  const groupClaims = presentContactIds.size === 0
+    ? []
+    : (await deps.store.listClaims({
+      subject: turn.companionSubject,
+      status: 'active',
+    })).filter(claim => (
+      claim.participants !== undefined
+      && claim.participants.some(
+        subject => subject.kind === 'contact' && presentContactIds.has(subject.contactId),
+      )
+    ));
+
   const candidates: ProjectionCandidate[] = [
+    ...groupClaims.flatMap(claim => {
+      const presentation = presentBiographicalClaim(claim, 'group-context');
+      return presentation === undefined
+        ? []
+        : [{
+          claim,
+          presentation: projectionPresentation(presentation),
+          audienceRole: 'group-context' as const,
+          ...(currentAuthor === undefined ? {} : { trustLevel: currentAuthor.trustLevel }),
+        }];
+    }),
     ...selfClaims.flatMap(claim => {
       const presentation = presentBiographicalClaim(claim, 'companion-self');
       return presentation === undefined
@@ -550,6 +597,36 @@ export async function projectBiographicalContext(
       continue;
     }
 
+    // ── Reviewed portability (o61vb.15) ──
+    //
+    // Applied after revalidation and drift so a drifted claim still reports the
+    // drift reason, and before the destination gate so scope narrows the
+    // audience rather than pretending to widen it: a portable claim still has
+    // to clear sensitivity, trust, ContextEnvelope and CogSec exactly as before.
+    if (claim.portabilityScope === 'origin_only') {
+      withheld.push({
+        claimId: claim.id,
+        reason: 'portability-origin-only',
+        detail: 'no reviewer made this claim portable beyond its origin room',
+      });
+      continue;
+    }
+    if (effectiveSensitivity !== 'public' && effectiveSensitivity !== 'personal') {
+      withheld.push({
+        claimId: claim.id,
+        reason: 'portability-sensitivity',
+        detail: `effective sensitivity ${effectiveSensitivity} is never portable`,
+      });
+      continue;
+    }
+    if (claim.portabilityScope === 'subject_present') {
+      const presence = subjectPresence(claim, candidate, presentContactIds);
+      if (presence !== undefined) {
+        withheld.push({ claimId: claim.id, ...presence });
+        continue;
+      }
+    }
+
     const originChannelId = currentSources[0]?.sourceChannelId;
     const eligible = effectiveEligibleInDestination(
       effectiveSensitivity,
@@ -642,6 +719,49 @@ export async function projectBiographicalContext(
     disclosureSources,
     admittedClaimIds: budgeted.map(entry => entry.claim.id),
     withheld,
+  };
+}
+
+/**
+ * Whether a `subject_present` claim's bound people are actually part of this
+ * turn, or the reason it is withheld.
+ *
+ * A dyad renders only while the bound contact is the current author or was
+ * explicitly addressed. A group claim needs its *exact* participant set present
+ * — a partial set would let a fact about four people surface in front of two,
+ * which is precisely the collapse the n-ary shape exists to prevent.
+ */
+function subjectPresence(
+  claim: BiographicalClaim,
+  candidate: ProjectionCandidate,
+  presentContactIds: ReadonlySet<string>,
+): Pick<BiographicalWithheldEntry, 'reason' | 'detail'> | undefined {
+  const participants = claim.participants;
+  if (participants !== undefined) {
+    const missing = participants.filter(
+      subject => subject.kind !== 'contact' || !presentContactIds.has(subject.contactId),
+    );
+    return missing.length === 0
+      ? undefined
+      : {
+        reason: 'group-participants-unverified',
+        detail: `${missing.length} of ${participants.length} bound participants are not part of this turn`,
+      };
+  }
+  const bound = [claim.subject, claim.relatedSubject].flatMap(
+    subject => (subject?.kind === 'contact' ? [subject] : []),
+  );
+  if (bound.length === 0) {
+    // subject_present with no bound contact cannot be satisfied by anyone.
+    return { reason: 'subject-not-present', detail: 'this claim binds no canonical contact' };
+  }
+  const present = bound.every(subject => presentContactIds.has(subject.contactId));
+  if (present) return undefined;
+  return {
+    reason: 'subject-not-present',
+    detail: candidate.audienceRole === 'companion-self'
+      ? 'the bound person is not the current author and was not explicitly addressed'
+      : 'this claim binds a person who is not part of the current turn',
   };
 }
 

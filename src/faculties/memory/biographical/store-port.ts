@@ -18,6 +18,7 @@ import type {
   BiographicalCandidateSocialContext,
   BiographicalCandidateStage,
   BiographicalCollectionDepth,
+  BiographicalPortabilityScope,
   BiographicalSensitivityGrant,
   BiographicalSubjectRef,
 } from './types.js';
@@ -44,6 +45,8 @@ import {
   assertConfidence,
   assertGrantInput,
   assertLifecycleTransition,
+  assertParticipantSet,
+  assertPortabilityScope,
   assertSources,
   assertSubjectRef,
   assertValidInterval,
@@ -51,6 +54,11 @@ import {
   computeClaimDigest,
   computeSourceSetDigest,
 } from './kernel.js';
+import type {
+  BiographyStage,
+  BiographyStageCursor,
+  BiographyStageCursorWriteInput,
+} from './stage-cursor.js';
 import type {
   BiographicalRebuildEnqueueInput,
   BiographicalRebuildEnqueueResult,
@@ -77,6 +85,10 @@ export interface BiographicalClaimWriteInput {
   readonly id?: string;
   readonly subject: BiographicalSubjectRef;
   readonly relatedSubject?: BiographicalSubjectRef;
+  /** Exact canonical participant set for an n-ary group claim (o61vb.15). */
+  readonly participants?: readonly BiographicalSubjectRef[];
+  /** Reviewed portability. Defaults to `origin_only`: portability is granted, never assumed. */
+  readonly portabilityScope?: BiographicalPortabilityScope;
   readonly kind: BiographicalClaimKind;
   readonly value: BiographicalClaimValue;
   readonly basis: BiographicalClaimBasis;
@@ -96,6 +108,17 @@ export interface BiographicalClaimWriteInput {
 export interface BiographicalClaimListOptions {
   readonly subject?: BiographicalSubjectRef;
   readonly relatedSubject?: BiographicalSubjectRef;
+  /**
+   * Matches a claim whose subject OR relatedSubject is this canonical identity.
+   * Contact- and companion-centered biography views need every claim one person
+   * is part of, on either side of a dyad, and filtering a bounded page after the
+   * fact would silently drop authorized rows. Identity only: the subject version
+   * is deliberately not part of the match, because a canonical person keeps one
+   * biography across merges rather than one per stored subject revision.
+   */
+  readonly anySubjectIdentity?:
+    | { readonly kind: 'companion'; readonly companionId: string }
+    | { readonly kind: 'contact'; readonly contactId: string };
   readonly kind?: BiographicalClaimKind;
   readonly status?: BiographicalClaimStatus;
   /** Include terminal (superseded/revoked) history rows. Defaults to false. */
@@ -110,6 +133,7 @@ export interface BiographicalSupersessionInput {
   readonly supersededClaimId: string;
   readonly subject: BiographicalSubjectRef;
   readonly relatedSubject?: BiographicalSubjectRef;
+  readonly participants?: readonly BiographicalSubjectRef[];
   readonly kind: BiographicalClaimKind;
   readonly value: BiographicalClaimValue;
   readonly basis: BiographicalClaimBasis;
@@ -133,6 +157,12 @@ export interface BiographicalTransitionInput {
   readonly now?: Date;
 }
 
+export interface BiographicalPortabilityInput {
+  readonly claimId: string;
+  readonly portabilityScope: BiographicalPortabilityScope;
+  readonly now?: Date;
+}
+
 export interface BiographicalCandidateReceiptInput {
   readonly authority: BiographicalCandidateReceiptAuthority;
   readonly decision: BiographicalCandidateReceiptDecision;
@@ -141,7 +171,13 @@ export interface BiographicalCandidateReceiptInput {
 }
 
 export interface BiographicalCandidateWriteInput {
-  readonly claim: Omit<BiographicalClaimWriteInput, 'status'> & { readonly status?: never };
+  /**
+   * Neither lifecycle status nor portability is a synthesizer's to propose: a
+   * staged candidate is always `candidate` + `origin_only` until a reviewer
+   * decides otherwise.
+   */
+  readonly claim: Omit<BiographicalClaimWriteInput, 'status' | 'portabilityScope'>
+    & { readonly status?: never; readonly portabilityScope?: never };
   readonly automataRunId: string;
   readonly automataAuthorityRef: string;
   readonly policy: BiographicalCandidatePolicy;
@@ -158,6 +194,12 @@ export interface BiographicalCandidateWriteInput {
 export interface BiographicalCandidateListOptions {
   readonly stages?: readonly BiographicalCandidateStage[];
   readonly claimDigest?: string;
+  /**
+   * Exact claim identity. A claim digest is content-scoped and can be shared by
+   * several rows, so review surfaces that need *this* claim's staging record
+   * filter on the claim id instead.
+   */
+  readonly claimId?: string;
   readonly automataRunId?: string;
   readonly limit: number;
   readonly offset?: number;
@@ -170,6 +212,12 @@ export interface BiographicalCandidateTransitionInput {
   readonly receipts: readonly BiographicalCandidateReceiptInput[];
   /** Required only for companion-only autoactivation; must match the creation policy digest. */
   readonly policy?: BiographicalCandidatePolicy;
+  /**
+   * Portability the activating reviewer grants. Honored only on the transition
+   * to `active` and defaulted to `origin_only`, so a candidate can never carry
+   * portability forward from an earlier stage.
+   */
+  readonly portabilityScope?: BiographicalPortabilityScope;
   readonly now?: Date;
 }
 
@@ -199,10 +247,12 @@ export interface PreparedBiographicalClaim {
   readonly id: string;
   readonly subject: BiographicalSubjectRef;
   readonly relatedSubject?: BiographicalSubjectRef;
+  readonly participants?: readonly BiographicalSubjectRef[];
   readonly kind: BiographicalClaimKind;
   readonly value: BiographicalClaimValue;
   readonly basis: BiographicalClaimBasis;
   readonly status: BiographicalClaimStatus;
+  readonly portabilityScope: BiographicalPortabilityScope;
   readonly sources: readonly BiographicalClaimSource[];
   readonly proposedSensitivity: SensitivityLevel;
   readonly confidence: number;
@@ -216,6 +266,40 @@ export interface PreparedBiographicalClaim {
   readonly validTo?: string;
   readonly supersedesClaimId?: string;
   readonly depthDecision?: BiographicalCollectionDepth;
+}
+
+/**
+ * Apply a reviewed portability decision to one claim.
+ *
+ * Tightening to `origin_only` is always allowed and never fails: an operator or
+ * a lifecycle event must always be able to stop a claim travelling, instantly.
+ * Widening is the guarded direction — only an active claim whose live effective
+ * sensitivity and bound subjects support the scope may become portable, so a
+ * claim that drifted above `personal`, or was never activated, cannot be
+ * granted portability at all.
+ */
+export function applyClaimPortability(
+  claim: BiographicalClaim,
+  scope: BiographicalPortabilityScope,
+  now: Date,
+): BiographicalClaim {
+  if (scope === 'origin_only') {
+    return { ...claim, portabilityScope: 'origin_only', lastSourceValidatedAt: now.toISOString() };
+  }
+  if (claim.status !== 'active') {
+    throw new BiographicalClaimValidationError(
+      `only an active claim may be made portable (status ${claim.status})`,
+    );
+  }
+  return {
+    ...claim,
+    portabilityScope: assertPortabilityScope({
+      claim,
+      scope,
+      effectiveSensitivity: claim.effectiveSensitivity,
+    }),
+    lastSourceValidatedAt: now.toISOString(),
+  };
 }
 
 function canonicalNow(now: Date): string {
@@ -240,8 +324,11 @@ export function prepareBiographicalClaim(
     input.relatedSubject !== undefined
       ? assertSubjectRef(input.relatedSubject, 'relatedSubject')
       : undefined;
+  const participants = input.participants !== undefined
+    ? assertParticipantSet(input.participants, 'participants', relatedSubject)
+    : undefined;
   const value = canonicalizeClaimValue(input.kind, input.value);
-  assertRelatedSubjectShape(input.kind, value, relatedSubject, subject);
+  assertRelatedSubjectShape(input.kind, value, relatedSubject, subject, participants);
   const basis = assertClaimBasis(input.basis);
   const status = assertClaimStatus(input.status ?? options.defaultStatus ?? 'candidate');
   const sources = assertSources(input.sources);
@@ -269,18 +356,33 @@ export function prepareBiographicalClaim(
     normalizerVersion: BIOGRAPHICAL_CLAIM_NORMALIZER_VERSION,
     subject,
     ...(relatedSubject !== undefined ? { relatedSubject } : {}),
+    ...(participants !== undefined ? { participants } : {}),
     kind: input.kind,
     value,
   });
   const sourceSetDigest = computeSourceSetDigest(sources);
+  // Portability is checked against the automatic sensitivity here; the read-time
+  // projection re-checks it against the live effective sensitivity, so drift
+  // that raises a claim above `personal` withholds it without a write.
+  const portabilityScope = assertPortabilityScope({
+    claim: {
+      subject,
+      ...(relatedSubject !== undefined ? { relatedSubject } : {}),
+      ...(participants !== undefined ? { participants } : {}),
+    },
+    scope: input.portabilityScope ?? 'origin_only',
+    effectiveSensitivity: automaticSensitivity,
+  });
   return {
     id: input.id ?? randomUUID(),
     subject,
     ...(relatedSubject !== undefined ? { relatedSubject } : {}),
+    ...(participants !== undefined ? { participants } : {}),
     kind: input.kind,
     value,
     basis,
     status,
+    portabilityScope,
     sources,
     confidence,
     proposedSensitivity,
@@ -322,10 +424,12 @@ export function finalizeBiographicalClaim(
     id: prepared.id,
     subject: prepared.subject,
     ...(prepared.relatedSubject !== undefined ? { relatedSubject: prepared.relatedSubject } : {}),
+    ...(prepared.participants !== undefined ? { participants: prepared.participants } : {}),
     kind: prepared.kind,
     value: prepared.value,
     basis: prepared.basis,
     status: prepared.status,
+    portabilityScope: prepared.portabilityScope,
     sources: prepared.sources,
     proposedSensitivity: prepared.proposedSensitivity,
     effectiveSensitivity: result.effectiveSensitivity,
@@ -467,6 +571,10 @@ export function deserializeClaim(stored: unknown): BiographicalClaim {
     ],
     [
       'relatedSubject',
+      'participants',
+      // Absent on every row written before o61vb.15. An absent scope reads as
+      // `origin_only`, so an unreviewed legacy claim is simply not portable.
+      'portabilityScope',
       'validFrom',
       'validTo',
       'supersedesClaimId',
@@ -488,10 +596,13 @@ export function deserializeClaim(stored: unknown): BiographicalClaim {
     record.relatedSubject !== undefined
       ? assertSubjectRef(record.relatedSubject, 'relatedSubject')
       : undefined;
+  const participants = record.participants !== undefined
+    ? assertParticipantSet(record.participants, 'participants', relatedSubject)
+    : undefined;
   const kind = record.kind;
   assertKnownClaimKind(kind);
   const claimValue = canonicalizeClaimValue(kind, record.value);
-  assertRelatedSubjectShape(kind, claimValue, relatedSubject, subject);
+  assertRelatedSubjectShape(kind, claimValue, relatedSubject, subject, participants);
   const basis = assertClaimBasis(record.basis);
   const status = assertClaimStatus(record.status);
   const sources = assertSources(record.sources);
@@ -518,6 +629,7 @@ export function deserializeClaim(stored: unknown): BiographicalClaim {
     normalizerVersion: BIOGRAPHICAL_CLAIM_NORMALIZER_VERSION,
     subject,
     ...(relatedSubject !== undefined ? { relatedSubject } : {}),
+    ...(participants !== undefined ? { participants } : {}),
     kind,
     value: claimValue,
   });
@@ -548,10 +660,21 @@ export function deserializeClaim(stored: unknown): BiographicalClaim {
     id: record.id,
     subject,
     ...(relatedSubject !== undefined ? { relatedSubject } : {}),
+    ...(participants !== undefined ? { participants } : {}),
     kind,
     value: claimValue,
     basis,
     status,
+    portabilityScope: assertPortabilityScope({
+      claim: {
+        subject,
+        ...(relatedSubject !== undefined ? { relatedSubject } : {}),
+        ...(participants !== undefined ? { participants } : {}),
+      },
+      scope: (record.portabilityScope as BiographicalPortabilityScope | undefined)
+        ?? 'origin_only',
+      effectiveSensitivity: effective as SensitivityLevel,
+    }),
     schemaVersion: BIOGRAPHICAL_CLAIM_SCHEMA_VERSION,
     normalizerVersion: BIOGRAPHICAL_CLAIM_NORMALIZER_VERSION,
     claimDigest: record.claimDigest,
@@ -617,6 +740,14 @@ export interface BiographicalProfileStorePort {
   supersedeClaim(input: BiographicalSupersessionInput): Promise<BiographicalSupersessionResult>;
   /** Lifecycle transition (candidate→active, active→contested, …). */
   transitionClaim(input: BiographicalTransitionInput): Promise<BiographicalClaim>;
+  /**
+   * Set one active claim's reviewed portability (o61vb.15). Separate from the
+   * lifecycle transition because portability is an audited review decision in
+   * its own right: tightening back to `origin_only` is always allowed, and
+   * widening is refused whenever the claim's live sensitivity or bound subjects
+   * do not support the requested scope.
+   */
+  setClaimPortability(input: BiographicalPortabilityInput): Promise<BiographicalClaim>;
   recordGrant(input: BiographicalGrantWriteInput): Promise<BiographicalSensitivityGrant>;
   /** All grants for the exact claim digest; callers enforce source-set equality. */
   listGrantsForClaim(claimId: string): Promise<BiographicalSensitivityGrant[]>;
@@ -629,6 +760,12 @@ export interface BiographicalProfileStorePort {
     completion: NonNullable<BiographicalRebuildRequest['completion']>,
     now: Date,
   ): Promise<BiographicalRebuildRequest>;
+  /**
+   * Durable background-stage cursor (o61vb.16). `undefined` means this stage
+   * has never processed that key, so the next pass is the first one.
+   */
+  getStageCursor(stage: BiographyStage, cursorKey: string): Promise<BiographyStageCursor | undefined>;
+  writeStageCursor(input: BiographyStageCursorWriteInput): Promise<BiographyStageCursor>;
   recordReviewAudit(input: BiographicalReviewAuditInput): Promise<BiographicalReviewAuditRecord>;
   listReviewAudits(claimId: string, limit: number): Promise<BiographicalReviewAuditRecord[]>;
   /** Serializes one subject+kind admission and rolls every write back on error. */

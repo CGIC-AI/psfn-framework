@@ -259,6 +259,22 @@ export function wireSpeakingArbiterLane(deps: SpeakingArbiterLaneDeps): Speaking
         companionName,
         outboundReplyGuard,
         resolveDestinationDisclosure: (channelId) => classifyChannelDisclosure(channelId),
+        // jp36.5.6: the companion's own delivered autonomous reply is recorded
+        // on the ROOM's transcript. Generation happens on a synthetic
+        // `internal:egress-reply:*` channel and both adapters drop self
+        // messages, so without this append the room's continuation transcript
+        // would show every participant except the companion.
+        roomTranscript: {
+          recordCompanionRoomReply: (entry) => {
+            sessionStore.append({
+              channelId: entry.channelId,
+              role: 'assistant',
+              content: entry.content,
+              timestamp: entry.timestampMs,
+              channelVisibility: entry.channelVisibility,
+            });
+          },
+        },
       }),
       config: {
         mode: egressLeaseSettings.mode,

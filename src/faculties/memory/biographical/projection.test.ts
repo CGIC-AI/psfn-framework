@@ -105,6 +105,8 @@ async function seed(h: Harness, nickname: string, ref: string) {
   h.revalidator.seed(sources);
   return ingestSelfNicknameEvidence({
     store: h.store,
+    // A self nickname the companion reviewed is her own baseline identity.
+    portabilityScope: 'universal',
     evidence: {
       companionSubject: COMPANION,
       nickname,

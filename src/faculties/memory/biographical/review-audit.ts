@@ -16,6 +16,8 @@ const BIOGRAPHICAL_REVIEW_ACTIONS = [
    */
   'stage-approve',
   'stage-reject',
+  /** Set or withdraw one active claim's reviewed portability (o61vb.15). */
+  'set-portability',
 ] as const;
 export type BiographicalReviewAction = (typeof BIOGRAPHICAL_REVIEW_ACTIONS)[number];
 
@@ -36,6 +38,8 @@ const BIOGRAPHICAL_REVIEW_REASONS = [
   'stage-rejected',
   'candidate-not-found',
   'stale-candidate-revision',
+  'portability-set',
+  'portability-refused',
 ] as const;
 export type BiographicalReviewReason = (typeof BIOGRAPHICAL_REVIEW_REASONS)[number];
 

@@ -20,6 +20,7 @@ import {
   BIOGRAPHICAL_COLLECTION_DEPTHS,
   BIOGRAPHICAL_GRANT_DECISION_REVISION,
   BIOGRAPHICAL_GRANT_SCHEMA_VERSION,
+  BIOGRAPHICAL_PORTABILITY_SCOPES,
   BIOGRAPHICAL_TERMINAL_STATUSES,
 } from './types.js';
 import type {
@@ -30,6 +31,7 @@ import type {
   BiographicalClaimStatus,
   BiographicalClaimValue,
   BiographicalCollectionDepth,
+  BiographicalPortabilityScope,
   BiographicalSensitivityGrant,
   BiographicalSubjectRef,
 } from './types.js';
@@ -95,6 +97,8 @@ export function computeClaimDigest(input: {
   normalizerVersion: number;
   subject: BiographicalSubjectRef;
   relatedSubject?: BiographicalSubjectRef;
+  /** Canonical participant set for an n-ary group claim. */
+  participants?: readonly BiographicalSubjectRef[];
   kind: BiographicalClaimKind;
   value: BiographicalClaimValue;
 }): string {
@@ -103,6 +107,12 @@ export function computeClaimDigest(input: {
     normalizerVersion: input.normalizerVersion,
     subject: subjectDigestIdentity(input.subject),
     ...(input.relatedSubject ? { relatedSubject: subjectDigestIdentity(input.relatedSubject) } : {}),
+    // Spread conditionally, exactly like relatedSubject: a claim that binds no
+    // participant set digests identically to one written before group claims
+    // existed, so no stored digest or digest-bound grant moves.
+    ...(input.participants
+      ? { participants: input.participants.map(subjectDigestIdentity) }
+      : {}),
     kind: input.kind,
     value: input.value,
   };
@@ -188,6 +198,83 @@ export function assertSubjectRef(value: unknown, field: string): BiographicalSub
     return { kind: 'contact', contactId, subjectVersion };
   }
   fail(`${field}.kind must be one of: companion, contact`);
+}
+
+/**
+ * Canonical participant set for an n-ary group claim (o61vb.15). Every entry is
+ * a verified contact, the set has at least two distinct members, and the order
+ * is canonical so the same group always digests the same way. A group claim
+ * never carries a `relatedSubject`: that pairing is what would let an n-ary fact
+ * read as a misleading singular relationship.
+ */
+export function assertParticipantSet(
+  value: unknown,
+  field: string,
+  relatedSubject: BiographicalSubjectRef | undefined,
+): readonly BiographicalSubjectRef[] {
+  if (!Array.isArray(value)) fail(`${field} must be an array of canonical contact subjects`);
+  if (relatedSubject !== undefined) {
+    fail(`${field} and relatedSubject are mutually exclusive`);
+  }
+  // Two is what makes a set a group rather than a dyad; this is the definition
+  // of the shape, not a tunable budget.
+  if (value.length < 2) fail(`${field} must name at least two contacts`);
+  const participants = value.map((entry, index) => {
+    const subject = assertSubjectRef(entry, `${field}[${index}]`);
+    if (subject.kind !== 'contact') fail(`${field}[${index}] must be a canonical contact subject`);
+    return subject;
+  });
+  const seen = new Set<string>();
+  for (const participant of participants) {
+    if (seen.has(participant.contactId)) fail(`${field} must not repeat a contact`);
+    seen.add(participant.contactId);
+  }
+  return [...participants].sort(
+    (left, right) => left.contactId.localeCompare(right.contactId),
+  );
+}
+
+/**
+ * Whether one reviewed portability scope is coherent with what the claim
+ * actually binds, and with the sensitivity it currently carries.
+ *
+ * `universal` is reserved for the companion's own baseline identity: a claim
+ * that names any human cannot be universally portable, because no human
+ * reviewed being carried everywhere. `subject_present` needs someone to be
+ * present for, so it requires at least one bound contact. Nothing above
+ * `personal` travels at all; intimate and confidential stay in their origin.
+ */
+export function assertPortabilityScope(input: {
+  claim: Pick<BiographicalClaim, 'subject' | 'relatedSubject' | 'participants'>;
+  scope: BiographicalPortabilityScope;
+  effectiveSensitivity: SensitivityLevel;
+}): BiographicalPortabilityScope {
+  if (!(BIOGRAPHICAL_PORTABILITY_SCOPES as readonly string[]).includes(input.scope)) {
+    fail('portabilityScope must be a supported portability scope');
+  }
+  if (input.scope === 'origin_only') return 'origin_only';
+  // Intimate and confidential never travel. This is an epic-level privacy
+  // invariant, deliberately not an owner-file ceiling: no settings value may
+  // authorize carrying intimate content out of the room it came from.
+  if (input.effectiveSensitivity !== 'public' && input.effectiveSensitivity !== 'personal') {
+    fail(`a ${input.effectiveSensitivity} claim is not portable beyond its origin room`);
+  }
+  const bound = [
+    input.claim.subject,
+    ...(input.claim.relatedSubject ? [input.claim.relatedSubject] : []),
+    ...(input.claim.participants ?? []),
+  ];
+  const contacts = bound.filter(subject => subject.kind === 'contact');
+  if (input.scope === 'universal') {
+    if (input.claim.subject.kind !== 'companion' || contacts.length > 0) {
+      fail('universal portability is reserved for companion-only baseline identity');
+    }
+    return 'universal';
+  }
+  if (contacts.length === 0) {
+    fail('subject_present portability requires at least one bound canonical contact');
+  }
+  return 'subject_present';
 }
 
 function assertPositiveInteger(value: unknown, field: string): number {
@@ -671,10 +758,12 @@ export interface CanonicalClaimInput {
   readonly id: string;
   readonly subject: BiographicalSubjectRef;
   readonly relatedSubject?: BiographicalSubjectRef;
+  readonly participants?: readonly BiographicalSubjectRef[];
   readonly kind: BiographicalClaimKind;
   readonly value: BiographicalClaimValue;
   readonly basis: BiographicalClaimBasis;
   readonly status: BiographicalClaimStatus;
+  readonly portabilityScope: BiographicalPortabilityScope;
   readonly sources: readonly BiographicalClaimSource[];
   readonly proposedSensitivity: SensitivityLevel;
   readonly effectiveSensitivity: SensitivityLevel;
@@ -696,6 +785,7 @@ export function assembleCanonicalClaim(input: CanonicalClaimInput): Biographical
     normalizerVersion: BIOGRAPHICAL_CLAIM_NORMALIZER_VERSION,
     subject: input.subject,
     ...(input.relatedSubject !== undefined ? { relatedSubject: input.relatedSubject } : {}),
+    ...(input.participants !== undefined ? { participants: input.participants } : {}),
     kind: input.kind,
     value: input.value,
   });
@@ -704,10 +794,12 @@ export function assembleCanonicalClaim(input: CanonicalClaimInput): Biographical
     id: input.id,
     subject: input.subject,
     ...(input.relatedSubject !== undefined ? { relatedSubject: input.relatedSubject } : {}),
+    ...(input.participants !== undefined ? { participants: input.participants } : {}),
     kind: input.kind,
     value: input.value,
     basis: input.basis,
     status: input.status,
+    portabilityScope: input.portabilityScope,
     schemaVersion: BIOGRAPHICAL_CLAIM_SCHEMA_VERSION,
     normalizerVersion: BIOGRAPHICAL_CLAIM_NORMALIZER_VERSION,
     claimDigest,

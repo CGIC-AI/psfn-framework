@@ -260,6 +260,68 @@ describe('PostgresBiographicalProfileStore — schema and roundtrip', () => {
     });
   });
 
+  it('round-trips reviewed portability and an n-ary participant set across a restart', async () => {
+    await withStore(async (store, pool) => {
+      const publicSource = source({ sensitivityAtProjection: 'public' });
+      const group = await store.writeClaim({
+        subject: companion('purrs-group'),
+        participants: [contact('contact-b'), contact('contact-a')],
+        kind: 'shared-language',
+        value: {
+          kind: 'shared-language',
+          schemaVersion: 1,
+          languageType: 'ritual',
+          phrase: 'third coffee',
+          meaning: 'the point in a work session where everything gets funny',
+        },
+        basis: 'observed',
+        status: 'active',
+        proposedSensitivity: 'public',
+        portabilityScope: 'subject_present',
+        confidence: 1,
+        sources: [publicSource],
+        now: NOW,
+      });
+      // The participant set is stored canonically ordered, so the same group
+      // always digests the same way whatever order it was written in.
+      expect(group.participants?.map(p => (p.kind === 'contact' ? p.contactId : '')))
+        .toEqual(['contact-a', 'contact-b']);
+
+      // A claim that binds nobody defaults to origin_only and stays there.
+      const unreviewed = await store.writeClaim({
+        subject: companion('purrs-group'),
+        kind: 'nickname',
+        value: { kind: 'nickname', nickname: 'Sprout', scope: 'self' },
+        basis: 'observed',
+        status: 'active',
+        confidence: 1,
+        sources: [publicSource],
+        now: NOW,
+      });
+      expect(unreviewed.portabilityScope).toBe('origin_only');
+
+      const restarted = await createPostgresBiographicalProfileStore(pool);
+      const reloaded = await restarted.getClaim(group.id);
+      expect(reloaded).toEqual(group);
+      expect((await restarted.getClaim(unreviewed.id))?.portabilityScope).toBe('origin_only');
+
+      const widened = await restarted.setClaimPortability({
+        claimId: unreviewed.id,
+        portabilityScope: 'universal',
+        now: NOW,
+      });
+      expect(widened.portabilityScope).toBe('universal');
+      expect((await restarted.getClaim(unreviewed.id))?.portabilityScope).toBe('universal');
+      // Widening a claim that names a human is refused at the database boundary.
+      await expect(restarted.setClaimPortability({
+        claimId: group.id,
+        portabilityScope: 'universal',
+        now: NOW,
+      })).rejects.toThrow('universal portability is reserved');
+      expect((await restarted.getClaim(group.id))?.portabilityScope).toBe('subject_present');
+    });
+  });
+
   it('scopes a subject biography view to one canonical identity on either side of a dyad', async () => {
     await withStore(async (store) => {
       const about = await store.writeClaim({

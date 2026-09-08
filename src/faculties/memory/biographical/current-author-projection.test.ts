@@ -91,6 +91,9 @@ async function seedIdentity(input: {
   const dyadic = input.value.kind !== 'name';
   const result = await ingestCurrentAuthorIdentityEvidence({
     store: input.store,
+    // These fixtures stand in for reviewed claims: a current-author fact binds
+    // a canonical human, so its reviewed scope is subject_present.
+    portabilityScope: 'subject_present',
     evidence: {
       currentAuthorSubject,
       companionSubject: COMPANION,
@@ -119,6 +122,173 @@ async function makePublic(store: InMemoryBiographicalProfileStore, claim: Biogra
     now: NOW,
   });
 }
+
+describe('portability scope — o61vb.15', () => {
+  it('never projects an origin_only claim, whatever its sensitivity or audience', async () => {
+    const store = new InMemoryBiographicalProfileStore(() => NOW);
+    const revalidator = new MemoryRevalidator();
+    const sources = [source('contact:v')];
+    revalidator.seed(sources);
+    const claim = await ingestCurrentAuthorIdentityEvidence({
+      store,
+      evidence: {
+        currentAuthorSubject: Morgan,
+        companionSubject: COMPANION,
+        value: { kind: 'name', name: 'Morgan', role: 'primary' },
+        sources,
+        confidence: 1,
+        basis: 'explicit',
+        attribution: { status: 'complete', participantSubjects: [Morgan] },
+        now: NOW,
+      },
+    });
+    expect(claim.claim.portabilityScope).toBe('origin_only');
+    await makePublic(store, claim.claim);
+
+    const result = await projectBiographicalContext(
+      { store, revalidator, rebuildQueueMaxPending: 8 },
+      {
+        companionSubject: COMPANION,
+        currentAuthor: { status: 'verified', subject: Morgan, trustLevel: 'primary' },
+        conversationScope: group('public', [{ authorId: 'discord-v', name: 'Morgan' }]),
+        now: NOW,
+      },
+    );
+    expect(result.admittedClaimIds).toEqual([]);
+    expect(result.withheld).toEqual([
+      expect.objectContaining({ claimId: claim.claim.id, reason: 'portability-origin-only' }),
+    ]);
+  });
+
+  it('renders a subject_present claim only while its bound person is the turn author', async () => {
+    const store = new InMemoryBiographicalProfileStore(() => NOW);
+    const revalidator = new MemoryRevalidator();
+    const nickname = await seedIdentity({
+      store,
+      revalidator,
+      value: { kind: 'relational_nickname', nickname: 'Sunbeam loaf' },
+      ref: 'memory:nickname-v',
+    });
+    await makePublic(store, nickname);
+    expect(nickname.portabilityScope).toBe('subject_present');
+
+    const present = await projectBiographicalContext(
+      { store, revalidator, rebuildQueueMaxPending: 8 },
+      {
+        companionSubject: COMPANION,
+        currentAuthor: { status: 'verified', subject: Morgan, trustLevel: 'primary' },
+        conversationScope: group('public', [{ authorId: 'discord-v', name: 'Morgan' }]),
+        now: NOW,
+      },
+    );
+    expect(present.admittedClaimIds).toEqual([nickname.id]);
+
+    // Same room, same claim, a different verified author: the bound person is
+    // not part of this turn, so the shared nickname simply is not there.
+    const absent = await projectBiographicalContext(
+      { store, revalidator, rebuildQueueMaxPending: 8 },
+      {
+        companionSubject: COMPANION,
+        currentAuthor: { status: 'verified', subject: EVE, trustLevel: 'primary' },
+        conversationScope: group('public', [{ authorId: 'discord-eve', name: 'Eve' }]),
+        now: NOW,
+      },
+    );
+    expect(absent.admittedClaimIds).toEqual([]);
+    expect(absent.promptSection).toBe('');
+  });
+
+  it('withholds a group claim until its exact bound participant set is present', async () => {
+    const store = new InMemoryBiographicalProfileStore(() => NOW);
+    const revalidator = new MemoryRevalidator();
+    const sources = [source('memory:group-ritual')];
+    revalidator.seed(sources);
+    const claim = await store.writeClaim({
+      subject: COMPANION,
+      participants: [Morgan, EVE],
+      kind: 'shared-language',
+      value: {
+        kind: 'shared-language',
+        schemaVersion: 1,
+        languageType: 'ritual',
+        phrase: 'third coffee',
+        meaning: 'the point in a work session where everything gets funny',
+      },
+      basis: 'observed',
+      status: 'active',
+      proposedSensitivity: 'public',
+      portabilityScope: 'subject_present',
+      confidence: 1,
+      sources: [{ ...sources[0]!, sensitivityAtProjection: 'public' }],
+      now: NOW,
+    });
+    revalidator.seed(claim.sources);
+
+    // Only one of the two bound participants is part of this turn.
+    const partial = await projectBiographicalContext(
+      { store, revalidator, rebuildQueueMaxPending: 8 },
+      {
+        companionSubject: COMPANION,
+        currentAuthor: { status: 'verified', subject: Morgan, trustLevel: 'primary' },
+        conversationScope: group('public', [{ authorId: 'discord-v', name: 'Morgan' }]),
+        now: NOW,
+      },
+    );
+    expect(partial.admittedClaimIds).toEqual([]);
+    expect(partial.withheld).toEqual([
+      expect.objectContaining({
+        claimId: claim.id,
+        reason: 'group-participants-unverified',
+      }),
+    ]);
+    // The group's membership never reaches the prompt either.
+    expect(partial.promptSection).toBe('');
+  });
+
+  it('refuses to make an intimate or human-bound claim universally portable', async () => {
+    const store = new InMemoryBiographicalProfileStore(() => NOW);
+    const revalidator = new MemoryRevalidator();
+    const dyad = await seedIdentity({
+      store,
+      revalidator,
+      value: { kind: 'relationship', relationshipType: 'partner' },
+      ref: 'memory:relationship-v',
+    });
+    // A claim that names a human is nobody's baseline identity.
+    await expect(store.setClaimPortability({
+      claimId: dyad.id,
+      portabilityScope: 'universal',
+      now: NOW,
+    })).rejects.toThrow('universal portability is reserved');
+
+    const intimateSource = {
+      ...source('memory:intimate'),
+      sensitivityAtProjection: 'intimate' as const,
+    };
+    revalidator.seed([intimateSource]);
+    const intimate = await store.writeClaim({
+      subject: COMPANION,
+      kind: 'nickname',
+      value: { kind: 'nickname', nickname: 'Only here', scope: 'self' },
+      basis: 'observed',
+      status: 'active',
+      confidence: 1,
+      sources: [intimateSource],
+      now: NOW,
+    });
+    await expect(store.setClaimPortability({
+      claimId: intimate.id,
+      portabilityScope: 'universal',
+      now: NOW,
+    })).rejects.toThrow('not portable beyond its origin room');
+    // Tightening is always available, even for a claim that can never widen.
+    await expect(store.setClaimPortability({
+      claimId: intimate.id,
+      portabilityScope: 'origin_only',
+      now: NOW,
+    })).resolves.toMatchObject({ portabilityScope: 'origin_only' });
+  });
+});
 
 describe('projectBiographicalContext — verified current author', () => {
   it('recognizes Morgan as the partner and nickname source in a public group without raw memories', async () => {

@@ -34,6 +34,8 @@ import {
   type BiographicalSupersessionResult,
   type BiographicalTransitionInput,
   type PreparedBiographicalClaim,
+  applyClaimPortability,
+  type BiographicalPortabilityInput,
 } from './store-port.js';
 import {
   assertCandidateClaimBinding,
@@ -250,11 +252,11 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
     });
     if (updated.stage === 'active') {
       assertClaimTransition(claim, 'active', now);
-      this.storeClaim({
-        ...claim,
-        status: 'active',
-        lastSourceValidatedAt: now.toISOString(),
-      });
+      this.storeClaim(applyClaimPortability(
+        { ...claim, status: 'active', lastSourceValidatedAt: now.toISOString() },
+        input.portabilityScope ?? 'origin_only',
+        now,
+      ));
     }
     this.storeCandidate(updated);
     return updated;
@@ -427,6 +429,14 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
       status: input.to,
       lastSourceValidatedAt: now.toISOString(),
     };
+    this.storeClaim(updated);
+    return updated;
+  }
+
+  async setClaimPortability(input: BiographicalPortabilityInput): Promise<BiographicalClaim> {
+    const now = input.now ?? new Date();
+    const claim = this.readClaim(input.claimId);
+    const updated = applyClaimPortability(claim, input.portabilityScope, now);
     this.storeClaim(updated);
     return updated;
   }

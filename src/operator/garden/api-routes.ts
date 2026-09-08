@@ -129,6 +129,7 @@ import type { AdminChatBootstrapUpdateInput } from './chat/types.js';
 import { isShardFoldReviewUnavailableError } from './services/shard-fold-review-service.js';
 import type { AdminObserverEvalSidecarService } from './services/observer-eval-sidecar-service.js';
 import { isRecord } from '../../shared/utils/types.js';
+import { SkillVersionConflictError } from '../../faculties/skills/store.js';
 import type { GroupMemoryBackfillInput } from '../../faculties/memory/extraction/group-backfill.js';
 import type { AdminSharedWorkspaceService } from './services/shared-workspace-service.js';
 import { buildAdminSharedWorkspaceRoutes } from './api-routes-shared-workspace.js';
@@ -151,6 +152,12 @@ const ADMIN_CHAT_MODEL_ROOM_BOOTSTRAP_API_PATH = '/api/admin/chat/model-room/boo
 const MODEL_DISCOVERY_UNAVAILABLE_ERROR = 'Model discovery backend unavailable';
 const WIKI_UNAVAILABLE_ERROR = 'Wiki backend unavailable';
 const GROUP_MEMORY_UNAVAILABLE_ERROR = 'Group memory diagnostics backend unavailable';
+/**
+ * Machine-readable discriminator on the 409 a stale operator skill save
+ * receives, so a client can tell a lost compare-and-swap apart from any other
+ * rejected write and reload instead of retrying blindly (psfn-framework-2ug9l).
+ */
+const SKILL_VERSION_CONFLICT_CODE = 'skill_version_conflict';
 
 const GROUP_MEMORY_BACKFILL_KEYS = new Set<string>([
   'mode',
@@ -1221,12 +1228,50 @@ export function buildAdminApiRoutes(options: {
             sendJson(res, 400, { error: parsed.error });
             return;
           }
+          const input = parsed.value as {
+            name?: unknown;
+            content?: unknown;
+            description?: unknown;
+            expectedVersion?: unknown;
+          };
+          // The operator edits a document read minutes earlier in a browser, so
+          // the save must name the base version it screened. Without it the
+          // write is unconditional and silently discards a concurrent agent
+          // revision, so an absent or malformed version fails closed rather
+          // than defaulting (psfn-framework-2ug9l).
+          if (typeof input.expectedVersion !== 'number'
+            || !Number.isInteger(input.expectedVersion)
+            || input.expectedVersion < 1) {
+            sendJson(res, 400, {
+              error: 'expectedVersion must be the positive integer version this edit was based on',
+            });
+            return;
+          }
+          if (typeof input.name !== 'string' || typeof input.content !== 'string') {
+            sendJson(res, 400, { error: 'name and content are required' });
+            return;
+          }
           try {
-            const input = parsed.value as { name: string; content: string; description?: string };
-            const result = skillsRuntime!.updateSkill(input);
+            const result = skillsRuntime!.updateSkill({
+              name: input.name,
+              content: input.content,
+              ...(typeof input.description === 'string' ? { description: input.description } : {}),
+              expectedVersion: input.expectedVersion,
+            });
             skillsRuntime!.invalidate();
             sendJson(res, 200, { ok: true, skill: result });
           } catch (e) {
+            if (e instanceof SkillVersionConflictError) {
+              sendJson(res, 409, {
+                error: e.message,
+                code: SKILL_VERSION_CONFLICT_CODE,
+                skillName: e.skillName,
+                expectedVersion: e.expectedVersion,
+                currentVersion: e.currentVersion,
+                reloadRequired: true,
+              });
+              return;
+            }
             sendJson(res, 400, { error: String(e instanceof Error ? e.message : e) });
           }
         });

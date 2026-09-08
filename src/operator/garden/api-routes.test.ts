@@ -40,6 +40,7 @@ import { createPromptStatePort } from '../../core/identity/prompt-state-port.js'
 import { CharacterCardVersionStore } from '../../core/identity/card-versioning.js';
 import type { ConcernStorePort } from '../../core/intention/concern-store-port.js';
 import type { SkillsRuntime } from '../../faculties/skills/runtime.js';
+import { SkillVersionConflictError } from '../../faculties/skills/store.js';
 import { createPostgresIntentionPortsFromPool } from '../../core/intention/postgres-adapters.js';
 import { FakeEpisodicPool } from '../../test-support/fake-postgres-episodic-pool.js';
 import { FakeIntentionPool } from '../../test-support/fake-postgres-intention-pool.js';
@@ -530,6 +531,7 @@ describe('AdminServer JSON API routes', () => {
   let refreshModelsSpy: ReturnType<typeof vi.fn>;
   let refreshCapabilitiesSpy: ReturnType<typeof vi.fn>;
   let invalidateSkillsSpy: ReturnType<typeof vi.fn>;
+  let updateSkillSpy: ReturnType<typeof vi.fn>;
   const token = 'test-admin-token';
   const authHeaders = {
     Authorization: `Bearer ${token}`,
@@ -541,6 +543,7 @@ describe('AdminServer JSON API routes', () => {
     refreshModelsSpy = vi.fn();
     refreshCapabilitiesSpy = vi.fn();
     invalidateSkillsSpy = vi.fn();
+    updateSkillSpy = vi.fn();
     testConfig.runtimeHooks = {
       refreshModels: refreshModelsSpy,
       refreshCapabilities: refreshCapabilitiesSpy,
@@ -778,7 +781,7 @@ describe('AdminServer JSON API routes', () => {
         getSnapshot: () => null,
         listManaged: async () => ({ managed: [], skipped: [] }),
         createSkill: vi.fn(),
-        updateSkill: vi.fn(),
+        updateSkill: updateSkillSpy,
         deleteSkill: vi.fn(),
         invalidate: invalidateSkillsSpy,
       }),
@@ -853,6 +856,89 @@ describe('AdminServer JSON API routes', () => {
     });
     expect(loadSkillsConfig(tempDir).disabledSkills).toEqual([]);
     expect(readFileSync(join(companionBDir, 'skills.json'), 'utf8')).toBe(companionBBefore);
+    expect(invalidateSkillsSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a managed skill save that omits the version it was built from', async () => {
+    const response = await request(
+      port,
+      'PATCH',
+      '/api/admin/skills',
+      JSON.stringify({ name: 'gardening', content: '# revised\n' }),
+      authHeaders,
+    );
+
+    expect(response.status).toBe(400);
+    expect(JSON.parse(response.body)).toEqual({
+      error: 'expectedVersion must be the positive integer version this edit was based on',
+    });
+    expect(updateSkillSpy).not.toHaveBeenCalled();
+    expect(invalidateSkillsSpy).not.toHaveBeenCalled();
+  });
+
+  it('answers a lost managed skill compare-and-swap with a typed 409 reload hint', async () => {
+    updateSkillSpy.mockImplementation(() => {
+      throw new SkillVersionConflictError('gardening', 3, 5);
+    });
+
+    const response = await request(
+      port,
+      'PATCH',
+      '/api/admin/skills',
+      JSON.stringify({ name: 'gardening', content: '# revised\n', expectedVersion: 3 }),
+      authHeaders,
+    );
+
+    expect(response.status).toBe(409);
+    expect(JSON.parse(response.body)).toEqual({
+      error: expect.stringContaining('expected v3, found v5'),
+      code: 'skill_version_conflict',
+      skillName: 'gardening',
+      expectedVersion: 3,
+      currentVersion: 5,
+      reloadRequired: true,
+    });
+    expect(updateSkillSpy).toHaveBeenCalledWith({
+      name: 'gardening',
+      content: '# revised\n',
+      expectedVersion: 3,
+    });
+    // The refused write must not invalidate the snapshot cache: nothing changed.
+    expect(invalidateSkillsSpy).not.toHaveBeenCalled();
+  });
+
+  it('threads the operator base version through an accepted managed skill save', async () => {
+    updateSkillSpy.mockImplementation(() => ({
+      name: 'gardening',
+      description: 'Tend the beds',
+      category: 'custom',
+      version: 4,
+      content: '# revised\n',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-02T00:00:00.000Z',
+    }));
+
+    const response = await request(
+      port,
+      'PATCH',
+      '/api/admin/skills',
+      JSON.stringify({
+        name: 'gardening',
+        content: '# revised\n',
+        description: 'Tend the beds',
+        expectedVersion: 3,
+      }),
+      authHeaders,
+    );
+
+    expect(response.status).toBe(200);
+    expect(JSON.parse(response.body)).toMatchObject({ ok: true, skill: { version: 4 } });
+    expect(updateSkillSpy).toHaveBeenCalledWith({
+      name: 'gardening',
+      content: '# revised\n',
+      description: 'Tend the beds',
+      expectedVersion: 3,
+    });
     expect(invalidateSkillsSpy).toHaveBeenCalledTimes(1);
   });
 

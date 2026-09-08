@@ -52,7 +52,22 @@ export type GatewayIntakeScreeningRuntimeInput = Omit<
   | 'onScreeningTiming'
   | 'onPostEscalation'
   | 'onInlineShadowFinding'
+  | 'receipts'
 > & {
+  /**
+   * Per-companion admission-receipt sink (psfn-framework-ccgdz.2). Resolved per
+   * composition rather than shared, because a receipt is owned by exactly one
+   * companion and must land in that companion's durable store.
+   */
+  resolveReceipts?: (
+    companionId?: CompanionId,
+  ) => BaseCompositionInput['receipts'] | undefined;
+  /**
+   * Caller-owned resources released with the screening runtime — the receipt
+   * stores the caller opened for `resolveReceipts`. Run after the compositions
+   * dispose so a close failure cannot strand them.
+   */
+  disposeReceipts?: () => Promise<void>;
   /** Existing single-companion root; used byte-for-byte when fleet mode is disabled. */
   companionDataDir: string;
   multiCompanion: boolean;
@@ -184,6 +199,8 @@ export async function composeGatewayIntakeScreeningRuntime(
     onInlineShadowFinding,
     onScreeningPoolTelemetry,
     singleStreamKey,
+    resolveReceipts,
+    disposeReceipts,
     ...baseInput
   } = input;
   const compositions: GatewayIntakeScreeningComposition[] = [];
@@ -193,9 +210,11 @@ export async function composeGatewayIntakeScreeningRuntime(
     ownedCompanionDataDir: string,
     companionId?: CompanionId,
   ): Promise<GatewayIntakeScreeningComposition> => {
+    const receipts = resolveReceipts?.(companionId);
     const composition = await composeGatewayIntakeScreening({
       ...baseInput,
       companionDataDir: ownedCompanionDataDir,
+      ...(receipts ? { receipts } : {}),
       ...(onQuarantineHeld
         ? { onQuarantineHeld: () => onQuarantineHeld(companionId) }
         : {}),
@@ -364,7 +383,13 @@ export async function composeGatewayIntakeScreeningRuntime(
       // dispose() never throws, but never let pool cleanup block composition
       // teardown if an observer misbehaved.
     }
-    await disposeCompositions(compositions);
+    try {
+      await disposeCompositions(compositions);
+    } finally {
+      // Caller-owned receipt stores close last: a composition teardown failure
+      // must not strand their pools.
+      await disposeReceipts?.();
+    }
   };
 
   return {

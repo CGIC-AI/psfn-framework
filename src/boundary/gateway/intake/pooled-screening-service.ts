@@ -181,6 +181,9 @@ export function synthesizeFailClosedScreeningResult(
  };
 
   return {
+    // Screening never completed, so there is nothing to certify. Naming the
+    // gap keeps a pool failure from looking like an ordinary unreceipted pass.
+    receiptAbsence: 'screening_incomplete',
     envelope,
     snapshot,
     report,

@@ -26,6 +26,7 @@ import { createComponentLogger } from '../../../shared/logger.js';
 import {
   createIntakeScreeningService,
   type IntakeEscalationPort,
+  type IntakeScreeningReceiptOptions,
   type IntakeScreeningServiceOptions,
   type IntakeScreeningService,
 } from '../../../core/cogsec/intake/screening.js';
@@ -175,6 +176,14 @@ export async function composeGatewayIntakeScreening(input: {
    * weights from `modelDir`.
    */
   injectionBackendFactory?: InjectionClassifierBackendFactory;
+  /**
+   * Durable content-addressed admission receipts (psfn-framework-ccgdz.2).
+   * Wired, the highest-volume channel ingress produces a persisted receipt for
+   * the exact admitted bytes and stamps its id on the envelope snapshot.
+   * Absent, every screening result names `no_receipt_writer` explicitly — the
+   * chain reads as unanchored rather than silently unproved.
+   */
+  receipts?: IntakeScreeningReceiptOptions;
 }): Promise<GatewayIntakeScreeningComposition> {
   const modelDir = resolveInjectionModelDir(input.env ?? process.env);
   const policy = loadIntakePolicyConfig(input.systemDataDir);
@@ -323,6 +332,7 @@ export async function composeGatewayIntakeScreening(input: {
       : {}),
     escalation,
     quarantine,
+    ...(input.receipts ? { receipts: input.receipts } : {}),
     actor: 'gateway:intake-screening',
     ...(input.onFailClosedScreening ? { onFailClosed: input.onFailClosedScreening } : {}),
     ...(input.onScreeningTiming ? { onTiming: input.onScreeningTiming } : {}),
@@ -385,6 +395,7 @@ export async function composeGatewayIntakeScreening(input: {
 
   log.info('Gateway intake screening composed', {
     mode: policy.mode,
+    receiptsWired: input.receipts !== undefined,
     l15Enabled: classifier !== null,
     l15Degraded: injectionClassifierDegraded,
     escalationWired: true,

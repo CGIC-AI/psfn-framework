@@ -67,7 +67,7 @@ interface CogSecScreenedAdmission {
   injectionScorerError?: string;
 }
 
-type CogSecReceiptSuppression =
+export type CogSecReceiptSuppression =
   | 'deep_screening_pending'
   | 'not_admitted'
   | 'withheld'
@@ -80,7 +80,7 @@ type CogSecReceiptSuppression =
  * Why this screening result must NOT produce a receipt, or null when it is a
  * complete admission of fully screened bytes.
  */
-function cogSecReceiptSuppression(
+export function cogSecReceiptSuppression(
   result: CogSecScreenedAdmission,
 ): CogSecReceiptSuppression | null {
   if (result.postEscalation === 'pending') return 'deep_screening_pending';

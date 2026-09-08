@@ -563,3 +563,99 @@ describe('composeGatewayIntakeScreening L1.5 provisioning gate (cyy7l)', () => {
     await composition.dispose();
   });
 });
+
+describe('gateway ingress admission receipts (psfn-framework-ccgdz.2)', () => {
+  it('issues a receipt per companion into that companion\'s own store', async () => {
+    const input = makeDataDirs('strict', false);
+    const companionA = createCompanionId(
+      'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      'receipt companion A',
+    );
+    const companionB = createCompanionId(
+      'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      'receipt companion B',
+    );
+    const companionBDataDir = mkdtempSync(join(tmpdir(), 'psfn-intake-receipt-b-'));
+    tempDirs.push(companionBDataDir);
+    const recordedByCompanion = new Map<string, string[]>([
+      [companionA, []],
+      [companionB, []],
+    ]);
+    const disposed: string[] = [];
+
+    const runtime = await composeGatewayIntakeScreeningRuntime({
+      config: input.config,
+      systemDataDir: input.systemDataDir,
+      companionDataDir: input.companionDataDir,
+      operatorAlerting: input.operatorAlerting,
+      onInlineShadowFinding: input.onInlineShadowFinding,
+      env: input.env,
+      multiCompanion: true,
+      companions: [
+        { companionId: companionA, companionDataDir: input.companionDataDir },
+        { companionId: companionB, companionDataDir: companionBDataDir },
+      ],
+      screenerBackend: TEST_SCREENER_BACKEND,
+      screenerTestCompletion: unusedScreenerCompletion,
+      injectionBackendFactory: fakeInjectionBackendFactory,
+      resolveReceipts: (companionId) => (companionId
+        ? fromAny({
+          store: {
+            record: async (receipt: { receiptId: string }) => {
+              recordedByCompanion.get(companionId)?.push(receipt.receiptId);
+            },
+          },
+          issuerId: 'cogsec:intake-firewall',
+          ttlMs: 3_600_000,
+        })
+        : undefined),
+      disposeReceipts: async () => { disposed.push('receipts'); },
+    });
+
+    const admitted = await runtime.screeningFor(companionB)!.screen(
+      'The tram to Belem was on time and the pasteis were still warm.',
+      {
+        sourceClass: 'regular_contact',
+        origin: { ref: 'discord:channel-1:message-1' },
+        scope: 'context',
+      },
+    );
+
+    expect(admitted.action).toBe('pass');
+    expect(admitted.receipt).toBeDefined();
+    // The receipt lands in B's store only; A's chain is untouched.
+    expect(recordedByCompanion.get(companionB)).toEqual([admitted.receipt!.receiptId]);
+    expect(recordedByCompanion.get(companionA)).toEqual([]);
+    // The snapshot that travels with the admitted body carries the proof id.
+    expect(admitted.snapshot.receiptId).toBe(admitted.receipt!.receiptId);
+
+    await runtime.dispose();
+    expect(disposed).toEqual(['receipts']);
+  });
+
+  it('reports an unwired writer instead of an unexplained missing proof', async () => {
+    const input = makeDataDirs('strict', false);
+    const runtime = await composeGatewayIntakeScreeningRuntime({
+      ...input,
+      multiCompanion: false,
+      screenerBackend: TEST_SCREENER_BACKEND,
+      screenerTestCompletion: unusedScreenerCompletion,
+      injectionBackendFactory: fakeInjectionBackendFactory,
+    });
+
+    const admitted = await runtime.screeningFor()!.screen(
+      'The tram to Belem was on time.',
+      {
+        sourceClass: 'regular_contact',
+        origin: { ref: 'discord:channel-1:message-2' },
+        scope: 'context',
+      },
+    );
+
+    expect(admitted.action).toBe('pass');
+    expect(admitted.receipt).toBeUndefined();
+    expect(admitted.receiptAbsence).toBe('no_receipt_writer');
+
+    await runtime.dispose();
+  });
+});

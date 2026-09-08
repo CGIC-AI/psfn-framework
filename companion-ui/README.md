@@ -8,6 +8,9 @@ Choose any authorized companion from the cluster picker. Each companion has a
 separate draft and appearance; companions without an avatar remain fully usable
 through text and voice. The Thread and Avatar views share approval prompts,
 spoken replies, and the same authenticated connection.
+Returning to a companion restores its completed messages for the open account.
+This local view history excludes transport authority and live operations; shard
+history continues to come from the server. Reload or authority loss clears it.
 
 It does not run PSFN server logic, does not own memory or identity, and does
 not talk to PSFN core directly.
@@ -151,7 +154,7 @@ the current hashed asset list, and versions its cache with
 `COMPANION_UI_BUILD_REVISION`. Container builds set that value to the pinned
 source commit; local builds fall back to a deterministic bundle hash.
 Updates activate without navigating an open client. The current page keeps its
-draft, selected attachments, and live session state, and
+draft, local appearance choices, and live session state, and
 shows an update-ready notice so the Partner can reload at a safe point.
 The client checks for a new worker at startup, once per minute, and when the app
 returns online or to the foreground, so a deployed build is ready before that
@@ -269,7 +272,8 @@ npm run build
 npm audit --omit=dev
 ```
 
-The browser gate runs the legacy-root-worker-to-scoped-worker migration and a
+The browser gate runs full-app companion routing, appearance, playback, account
+replacement, the legacy-root-worker-to-scoped-worker migration, and a
 deterministic fake OAuth/Hub lifecycle in real Chromium. It proves fresh
 connections across login and Partner switch, authority clearing on logout,
 revocation and offline transitions, fleet/Garden/callback pages remain
@@ -277,6 +281,10 @@ uncontrolled, and cache keys, bodies, browser stores, URLs, and protocol frames
 contain no authority secrets. It also verifies install, update, rollback, and
 offline reloads. Install the pinned Playwright Chromium runtime once with
 `npx playwright install chromium` when preparing a fresh test machine.
+
+The full-app suite also runs in WebKit with `npm run test:browser -- --browser
+webkit companion-application.spec.ts`. This is browser-engine validation; physical
+iPhone/Android microphones, Bluetooth, and installation still need device checks.
 
 For tracked repo work, the parent repository requires `npm run lint` before
 closing the bead. Run that from the repo root:
@@ -328,7 +336,7 @@ conversation lists, sidebars, top banners, or always-visible debug panels.
   listening, thinking, tool-use, or error. Tapping her gives immediate local
   headpat feedback; taps are coalesced for three seconds and sent as one bounded
   typed interaction through Satellite Hub.
-- Contextual toast layer: holds errors and any future approval/artifact cards
+- Contextual toast layer: holds errors and approval/artifact cards
   above the composer.
 
 Long replies preserve the reader’s scroll position while new text arrives. A
@@ -364,13 +372,13 @@ The plus button opens one attachment menu:
 - Upload image
 - Take photo
 
-Selected files are staged as removable local-only cards above the composer. The
-current client does not send file payloads to the hub because the scoped
-artifact/file transport is not implemented here yet.
+These actions are visibly disabled because file sharing has no authenticated
+upload transport yet. The app does not collect a file that Send cannot deliver.
+Local avatar and sprite import are available separately in Appearance settings.
 
-The mic button defaults to Dictation and can toggle to Voice Chat. Both modes
-are compact composer states, not separate tabs. Text remains the canonical
-conversation record.
+The microphone button starts Voice chat and sends spoken turns to the selected
+companion automatically. Use the text composer to review a message before
+sending it. There is no draft-only dictation mode.
 
 Browser voice follows the gateway-owned contract, capability-gated and
 fail-closed:

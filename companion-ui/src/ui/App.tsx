@@ -22,10 +22,7 @@ import {
   routeFleetApprovalDecision,
 } from '../lib/fleet-approval-routing.js';
 import { deriveArtifactShelfState, readArtifactPreview } from '../lib/artifacts.js';
-import {
-  FleetSessionClient,
-  type FleetSessionStatus,
-} from '../lib/fleet-session.js';
+import { FleetSessionClient } from '../lib/fleet-session.js';
 import {
   getServiceWorkerUpdateReady,
   subscribeToServiceWorkerUpdates,
@@ -54,12 +51,11 @@ import {
   resolveCompanionUiWebSocketUrl,
   type CompanionUiRuntimeConfig,
 } from './config.js';
-import { AttachmentTray, ToastLayer } from './context-layers.js';
+import { ToastLayer } from './context-layers.js';
 import { OverlayFrame } from './overlay-drawer.js';
 import {
   describeLocationNotice,
   SettingsDrawer,
-  type CompanionUiAccessPresentation,
 } from './settings-drawer.js';
 import { ThreadView } from './thread-view.js';
 import type { ActivityFilter, OverlayDrawer } from './types.js';
@@ -73,12 +69,10 @@ import { useZ02Link } from './use-z02-link.js';
 import { WishlistDrawer } from './wishlist-drawer.js';
 import { useCompanionTouch } from './use-companion-touch.js';
 import { useCompanionDisplay } from './use-companion-display.js';
+import { CompanionThreadMemory } from '../lib/stream/companion-thread-memory.js';
 import { VrmAvatarPlayer } from './vrm-avatar-player.js';
 import { useSpriteInputs } from './use-sprite-inputs.js';
-
-type AccessState = FleetSessionStatus
-  | Readonly<{ state: 'loading' | 'offline' }>
-  | Readonly<{ state: 'guest'; guestMode: 'explicit'; websocketPath: string }>;
+import { getConnectionTone, presentAccess, websocketPath, type AccessState } from './companion-access.js';
 
 export function App() {
   const [runtime, setRuntime] = useState<CompanionUiRuntimeConfig | null>(null);
@@ -99,6 +93,7 @@ export function App() {
   );
   const fleetSessionRef = useRef<FleetSessionClient | null>(null);
   const storeRef = useRef<HubStreamStore | null>(null);
+  const threadMemoryRef = useRef(new CompanionThreadMemory());
   const browserMicStoreRef = useRef<HubStreamStore | null>(null);
   const z02AudioStoreRef = useRef<HubStreamStore | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
@@ -137,10 +132,7 @@ export function App() {
     reportError: setConfigError,
     verifyAccount,
   });
-  const composer = useComposerController({
-    captureReady: captureAuthorized,
-    playbackReady: streamState.voicePlayback.supported,
-  }, `${fleet.activeCompanionId ?? 'guest'}:${streamState.session?.activeShardId ?? 'companion'}`);
+  const composer = useComposerController(`${fleet.activeCompanionId ?? 'guest'}:${streamState.session?.activeShardId ?? 'companion'}`);
   const display = useCompanionDisplay(fleet.activeCompanionId ?? (access.state === 'guest' ? access.websocketPath : null));
   const { base: avatarEmotion } = useSpriteInputs(streamState.emotion, null, activeView === 'avatar' && display.mode === 'model');
   const spriteEnabled = display.mode === 'sprite';
@@ -149,6 +141,9 @@ export function App() {
     ?? (spriteManifest.state === 'ready' ? spriteManifest.manifest : null);
   const canSend = (access.state === 'signed_in' || access.state === 'guest')
     && streamState.connection === 'ready' && !connecting;
+  useEffect(() => {
+    threadMemoryRef.current.retain(fleet.roster.map(companion => companion.companionId));
+  }, [fleet.roster]);
   const touch = useCompanionTouch(storeRef.current, canSend);
   const z02AudioRelay = useMemo(() => ({
     async start(): Promise<void> {
@@ -300,8 +295,9 @@ export function App() {
     || Boolean(streamState.liveAssistant)
     || (latestTrace?.operationClass === 'relay_tts' && latestTrace.status === 'active');
   const voiceStopActive = voicePlayback.active;
-  const generationStopActive = Boolean(streamState.liveAssistant)
-    || (z02Link.state.phase === 'linked' && streamState.phase === 'responding');
+  const generationStopActive = Boolean(streamState.session?.capabilities?.control?.includes('interrupt'))
+    && (Boolean(streamState.liveAssistant)
+      || (z02Link.state.phase === 'linked' && streamState.phase === 'responding'));
 
   useEffect(() => {
     const liveUser = streamState.liveUser;
@@ -406,10 +402,14 @@ export function App() {
         setStreamState(current => ({ ...current, connection: 'disconnected' }));
       },
     });
-    const store = new HubStreamStore(client);
+    const companionId = path.split('/')[3]!;
+    const store = new HubStreamStore(client, threadMemoryRef.current.restore(companionId));
     storeRef.current = store;
     store.subscribe((state) => {
-      if (storeRef.current === store) setStreamState(state);
+      if (storeRef.current === store) {
+        if (state.connection === 'ready') threadMemoryRef.current.save(companionId, state);
+        setStreamState(state);
+      }
     });
     try {
       await store.connect();
@@ -451,6 +451,7 @@ export function App() {
   function clearHumanScopedState() {
     authorityEpochRef.current += 1;
     displayStateBindingRef.current = null;
+    threadMemoryRef.current.clear();
     void browserMic.stop();
     const store = storeRef.current;
     storeRef.current = null;
@@ -634,9 +635,6 @@ export function App() {
                 toolActivity={latestToolActivity}
               />
             )}
-            {composer.pendingAttachments.length > 0 && (
-              <AttachmentTray attachments={composer.pendingAttachments} onRemove={composer.removeAttachment} />
-            )}
             <Composer
               canSend={canSend}
               controller={composer}
@@ -691,7 +689,6 @@ export function App() {
         locationNotice={locationNotice}
         onApprovalDecision={(id, decision) => { void decideApproval(id, decision); }}
         onArtifactPreview={previewArtifact}
-        stacked={composer.pendingAttachments.length > 0}
         updateReady={updateReady}
         voiceNotice={composer.voiceNotice}
       />
@@ -704,7 +701,6 @@ export function App() {
               activeCompanionId={fleet.activeCompanionId}
               companions={fleet.roster}
               connecting={connecting}
-              micMode={composer.micMode}
               spriteAnimations={spriteAnimations}
               display={display}
               companionLabel={identityLabel}
@@ -724,10 +720,6 @@ export function App() {
               onLogout={() => {
                 setOverlay(null);
                 void logout();
-              }}
-              onMicModeChange={(mode) => {
-                void browserMic.stop();
-                composer.selectMicMode(mode);
               }}
               onCompanionChange={(companionId) => { void fleet.select(companionId); }}
               onSpriteAnimationsChange={setSpriteAnimations}
@@ -778,33 +770,4 @@ export function App() {
       )}
     </main>
   );
-}
-
-function websocketPath(access: AccessState): string | undefined {
-  return access.state === 'signed_in' || access.state === 'guest'
-    || (access.state === 'signed_out' && access.guestMode === 'explicit')
-    ? access.websocketPath
-    : undefined;
-}
-
-function presentAccess(access: AccessState): CompanionUiAccessPresentation {
-  switch (access.state) {
-    case 'loading':
-      return { state: 'loading', humanLabel: 'Checking session', humanDetail: 'No authority yet', guestAvailable: false };
-    case 'offline':
-      return { state: 'offline', humanLabel: 'Unavailable offline', humanDetail: 'Offline shell is not authenticated', guestAvailable: false };
-    case 'signed_out':
-      return { state: 'signed_out', humanLabel: 'Signed out', humanDetail: 'No Partner attached', guestAvailable: access.guestMode === 'explicit' };
-    case 'signed_in':
-      return { state: 'signed_in', humanLabel: access.human.label, humanDetail: `Discord · ${access.human.role}`, guestAvailable: false };
-    case 'guest':
-      return { state: 'guest', humanLabel: 'Guest', humanDetail: 'No cluster Partner attached', guestAvailable: true };
-  }
-}
-
-function getConnectionTone(connection: HubStreamState['connection'], connecting: boolean): 'good' | 'wait' | 'bad' {
-  if (connecting || connection === 'connecting') return 'wait';
-  if (connection === 'ready' || connection === 'connected') return 'good';
-  if (connection === 'failed' || connection === 'disconnected') return 'bad';
-  return 'wait';
 }

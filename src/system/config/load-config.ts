@@ -53,8 +53,8 @@ import {
 } from '../../boundary/gateway/companion-auth.js';
 import { resolveRuntimeCredentialFromEnvironment } from '../../boundary/custody/runtime-credential-source.js';
 import {
-  assertRetiredFleetWelfareVerifier,
   resolveFleetAuthOwnerFile,
+  withRetiredFleetWelfareVerifierRemoved,
 } from './fleet-auth-config.js';
 import {
   loadTestingHarnessGardenAdminConfig,
@@ -387,10 +387,6 @@ function loadConfigForMode(
     ?? `${configuredCompanionDataDir}/${DEFAULT_COMPANION_CARD_FILE_NAME}`;
   const configuredPostgresSchema = parsePostgresSchemaEnv(env.COMPANION_PG_SCHEMA);
 
-  assertRetiredFleetWelfareVerifier({
-    multiCompanion,
-    ...(fleetAuthProjection?.kind === 'gateway' ? { fleetAuth: fleetAuthProjection.config } : {}),
-  });
   const companionFleet = resolveCompanionFleetPaths(
     rawCompanionFleet,
     runtimePathLayout.runtimeRootDir,
@@ -482,8 +478,17 @@ function loadConfigForMode(
     dataDir,
     databasePath,
     persistenceBackend,
+    // psfn-framework-znuav: an owner file inherited from before the fleet
+    // welfare verifier was retired still declares the block. Warn and drop it
+    // rather than refusing the boot; the shared-schema startup authority
+    // revokes the retired role's tenant privileges.
     ...(fleetAuthProjection?.kind === 'gateway'
-      ? { fleetAuth: fleetAuthProjection.config }
+      ? {
+          fleetAuth: withRetiredFleetWelfareVerifierRemoved(
+            fleetAuthProjection.config,
+            { multiCompanion },
+          ),
+        }
       : fleetAuthProjection
         ? { fleetAuthVerifier: fleetAuthProjection }
         : {}),

@@ -255,8 +255,15 @@ async function bindMutationTarget(
           try {
             await assertCommittedIdentity(stablePath, temporaryIdentity);
             await assertParentAttached(identity, parentHandle);
+            // link(2) is atomic but not durable: the new directory entry can
+            // still be unflushed when the machine dies, so a crash here would
+            // revert a commit this call already reported as successful. Sync
+            // the pinned parent descriptor before returning, and fail the
+            // commit — rolling the entry back — if durability cannot be
+            // proven. Mirrors writeFileDurableAtomicSync in shared/utils/fs.
+            await parentHandle.sync();
           } catch (error) {
-            await rollBackCreatedTarget(stablePath, temporaryIdentity);
+            await rollBackCreatedTarget(stablePath, temporaryIdentity, parentHandle);
             throw error;
           }
           return;
@@ -269,6 +276,10 @@ async function bindMutationTarget(
         await rename(temporaryPath, stablePath);
         await assertCommittedIdentity(stablePath, temporaryIdentity);
         await assertParentAttached(identity, parentHandle);
+        // Same durability requirement as the create path: rename(2) publishes
+        // atomically, but only fsync of the parent directory makes the
+        // replacement survive a crash.
+        await parentHandle.sync();
         if (linksBefore !== null) {
           const linksAfter = (await boundExistingHandle!.stat({ bigint: true })).nlink;
           if (linksAfter !== linksBefore - 1n) {
@@ -310,6 +321,7 @@ async function assertCommittedIdentity(
 async function rollBackCreatedTarget(
   stablePath: string,
   temporaryIdentity: FilesystemIdentity,
+  parentHandle: FileHandle,
 ): Promise<void> {
   let current: FilesystemIdentity | null;
   try {
@@ -320,6 +332,9 @@ async function rollBackCreatedTarget(
   if (!current || !sameFilesystemIdentity(current, temporaryIdentity)) return;
   try {
     await unlink(stablePath);
+    // Make the removal as durable as the publication would have been, so a
+    // crash cannot resurrect an entry this path just withdrew.
+    await parentHandle.sync();
   } catch {
     // Best effort: the caller is already failing closed with the original cause.
   }

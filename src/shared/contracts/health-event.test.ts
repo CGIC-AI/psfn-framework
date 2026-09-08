@@ -99,8 +99,12 @@ describe('health event envelope', () => {
   it('binds ownership from a routing identity and never guesses a companion', () => {
     expect(resolveHealthEventOwner(COMPANION_ID))
       .toEqual({ kind: 'companion', companionId: COMPANION_ID });
+    // Defensive floor only: loadConfig already validates COMPANION_ID through
+    // createCompanionId for the agent and gateway processes, so neither an
+    // absent nor an unrecognized identity reaches an emitter in a real
+    // runtime. It must still refuse to invent a tenant.
     expect(resolveHealthEventOwner(undefined)).toEqual({ kind: 'system' });
-    expect(resolveHealthEventOwner('shard:flagship-research')).toEqual({ kind: 'system' });
+    expect(resolveHealthEventOwner('not-a-routing-identity')).toEqual({ kind: 'system' });
   });
 
   it('stamps one observer identity for every emitter in the process', () => {

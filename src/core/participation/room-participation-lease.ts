@@ -281,8 +281,10 @@ export interface RoomParticipationLeaseStorePort {
    */
   open(input: OpenRoomParticipationLeaseInput): Promise<RoomParticipationLeaseSnapshot | null>;
   /**
-   * Extend a live lease's deadline and clear the ignore streak. Returns null
-   * when no active lease exists — refresh never creates membership.
+   * Extend a live lease's deadline and, for a human-authored act, clear the
+   * ignore streak; a machine-authored refresh keeps it, because only a human
+   * turn clears a streak. Returns null when no active lease exists — refresh
+   * never creates membership.
    */
   refresh(
     input: RefreshRoomParticipationLeaseInput,

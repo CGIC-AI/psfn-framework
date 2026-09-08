@@ -593,6 +593,27 @@
       "measuredBaselineMs": 900,
       "baselineSource": "measured",
       "note": "psfn-framework-yxz0z.3: the passive Blind Reviewer's durable window over the real containerized PostgreSQL harness, proving restart recovery, a bounded rolling window under sustained ingest, retention expiry with pinned alert evidence surviving it, and one identical durable outcome per CogSec mode. Focused local full-file wall baseline was 0.86s on 2026-09-07 with a warm harness slot; 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
+    },
+    {
+      "file": "src/persistence/postgres/custody-snapshot-store.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 3000,
+      "baselineSource": "measured",
+      "note": "S12B custody stores: real-Postgres suite measured warm under 3s; 120s cap keeps >2x headroom on cold container start."
+    },
+    {
+      "file": "src/persistence/postgres/egress-delivery-record.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 3000,
+      "baselineSource": "measured",
+      "note": "S12B custody stores: real-Postgres suite measured warm under 3s; 120s cap keeps >2x headroom on cold container start."
+    },
+    {
+      "file": "src/persistence/postgres/gateway-ingress-receipt.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 3000,
+      "baselineSource": "measured",
+      "note": "S12B custody stores: real-Postgres suite measured warm under 3s; 120s cap keeps >2x headroom on cold container start."
     }
   ]
 }

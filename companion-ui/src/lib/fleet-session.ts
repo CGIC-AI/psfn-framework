@@ -11,6 +11,7 @@ const fleetSessionTransitionSignals = new WeakSet<AbortSignal>();
 const ROLES = ['owner', 'admin', 'member', 'guest'] as const;
 const WEBSOCKET_PATH = /^\/companion-ui\/companions\/[0-9a-f-]{36}\/ws$/u;
 const CSRF_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
+const DISPLAY_STATE_BINDING_PATTERN = /^[0-9a-f]{64}$/u;
 
 export type FleetSessionStatus = Readonly<{
   schemaVersion: 1;
@@ -20,6 +21,8 @@ export type FleetSessionStatus = Readonly<{
 }> | Readonly<{
   schemaVersion: 1;
   state: 'signed_in';
+  /** Opaque local display ownership comparison; never sent as action authority. */
+  displayStateBinding: string;
   guestMode: 'disabled' | 'explicit';
   websocketPath: string;
   human: Readonly<{
@@ -69,7 +72,9 @@ export function parseFleetSessionStatus(value: unknown): FleetSessionStatus {
     });
   }
   if (value.state !== 'signed_in'
-    || !hasExactKeys(value, ['schemaVersion', 'state', 'guestMode', 'websocketPath', 'human'])
+    || !hasExactKeys(value, ['schemaVersion', 'state', 'guestMode', 'websocketPath', 'human', 'displayStateBinding'])
+    || typeof value.displayStateBinding !== 'string'
+    || !DISPLAY_STATE_BINDING_PATTERN.test(value.displayStateBinding)
     || !validWebsocketPath(value.websocketPath)
     || !isRecord(value.human)
     || !hasExactKeys(value.human, ['provider', 'label', 'role'])
@@ -83,6 +88,7 @@ export function parseFleetSessionStatus(value: unknown): FleetSessionStatus {
   return Object.freeze({
     schemaVersion: 1,
     state: 'signed_in',
+    displayStateBinding: value.displayStateBinding,
     guestMode: value.guestMode,
     websocketPath: value.websocketPath,
     human: Object.freeze({

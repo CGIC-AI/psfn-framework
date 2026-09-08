@@ -175,6 +175,7 @@ describe('shared_wiki_chunks shared-schema integration (s10f9)', () => {
           { version: 18, name: 'fleet-maintenance-process-fencing' },
           { version: 19, name: 'room-participation-lease' },
           { version: 20, name: 'icp-lifecycle-admission-fence' },
+          { version: 21, name: 'fleet-system-health-and-escalations' },
         ]);
 
         // Idempotent re-provisioning (advisory-lock serialized).
@@ -182,7 +183,7 @@ describe('shared_wiki_chunks shared-schema integration (s10f9)', () => {
         const ledgerAgain = await pool.query<{ count: string }>(
           `SELECT COUNT(*)::text AS count FROM shared.shared_schema_migrations`,
         );
-        expect(ledgerAgain.rows[0]?.count).toBe('20');
+        expect(ledgerAgain.rows[0]?.count).toBe('21');
       } finally {
         await pool.end();
         await store.close();

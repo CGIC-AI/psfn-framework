@@ -462,6 +462,13 @@
       "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
     },
     {
+      "file": "src/persistence/postgres/room-participation-lease-store.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 1000,
+      "baselineSource": "measured",
+      "note": "psfn-framework-jp36.5.5: bounded room-participation lease store against the real containerized PostgreSQL harness (restart watermark, concurrent consider-once claim, in-SQL budget/bot-loop fences, two-companion independence). Focused local full-file wall baseline was 0.95s on 2026-09-07 with a warm harness slot; 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
+    },
+    {
       "file": "src/persistence/postgres/speaking-arbiter-store.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": null,
@@ -537,6 +544,13 @@
       "measuredBaselineMs": 1400,
       "baselineSource": "measured",
       "note": "y0bft.2 stable episode-claim restart regression against the real containerized Postgres workset. Baseline 1.35s full-file wall (one restart test, warm harness, this host, 2026-08-29); the repo-standard 120s cap preserves headroom for cold-start and shared harness-slot contention."
+    },
+    {
+      "file": "src/faculties/automata/bus/worker-execution-restart.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 11000,
+      "baselineSource": "measured",
+      "note": "psfn-framework-mgdks.1: governed Automata Bus lifecycle restart certification (durable run + exactly-once terminal event across a full process restart, cross-companion rejection, typed no-finding terminal) against the real containerized PostgreSQL harness. Focused local full-file wall baseline was 10.9s cold and 0.83s warm on 2026-09-07; the conservative 11s cold baseline is retained and 120s matches the repo integration cap while preserving headroom for cold image startup and shared harness-slot contention."
     }
   ]
 }

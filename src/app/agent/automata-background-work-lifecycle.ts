@@ -6,78 +6,45 @@ import type {
   ClaimedBackgroundWorkJob,
   StoredBackgroundWorkJob,
 } from '../../core/agent/background-work/types.js';
+import type { AutomataRunRecord } from '../../faculties/automata/registry-contract.js';
 import type {
-  AutomataRunRecord,
-  ProductionAutomataClassId,
-} from '../../faculties/automata/registry-contract.js';
-import type { AutomataRunRegistry } from '../../faculties/automata/run-registry.js';
+  AutomataRunRegistry,
+  RegisterAutomataRunInput,
+} from '../../faculties/automata/run-registry.js';
 
-interface MemoryExtractionRunBinding {
-  runId: string;
-  automatonClass: ProductionAutomataClassId;
-  workerId: string;
-  taskId: string;
-  taskLabel: string;
-  taskSummary: string;
-  sessionIds: readonly string[];
-  createdAtMs: number;
-}
+type MemoryExtractionPayload = Extract<BackgroundWorkPayload, { kind: 'memory_extraction' }>;
 
-function uniqueSessionIds(payload: Extract<BackgroundWorkPayload, { kind: 'memory_extraction' }>): string[] {
-  return [...new Set([payload.source.logicalSessionId, payload.source.channelId])];
-}
+const MEMORY_EXTRACTION_TASK_LABEL = 'Memory extraction';
+const MEMORY_EXTRACTION_TASK_SUMMARY = 'Extract durable memory from a canonical source turn';
 
 function memoryExtractionBinding(
   job: ClaimedBackgroundWorkJob,
-  payload: Extract<BackgroundWorkPayload, { kind: 'memory_extraction' }>,
-): MemoryExtractionRunBinding {
+  payload: MemoryExtractionPayload,
+): RegisterAutomataRunInput {
   return {
     runId: payload.source.requestId,
     automatonClass: 'memory.extraction',
     workerId: `background-work:${job.jobId}`,
     taskId: payload.source.logicalSessionId,
-    taskLabel: 'Memory extraction',
-    taskSummary: 'Extract durable memory from a canonical source turn',
-    sessionIds: uniqueSessionIds(payload),
+    taskLabel: MEMORY_EXTRACTION_TASK_LABEL,
+    taskSummary: MEMORY_EXTRACTION_TASK_SUMMARY,
+    sessionIds: [...new Set([payload.source.logicalSessionId, payload.source.channelId])],
     createdAtMs: job.createdAtMs,
   };
-}
-
-function assertExactBinding(record: AutomataRunRecord, expected: MemoryExtractionRunBinding): void {
-  const sameSessions = record.sessionIds.length === expected.sessionIds.length
-    && record.sessionIds.every((sessionId, index) => sessionId === expected.sessionIds[index]);
-  if (
-    record.runId !== expected.runId
-    || record.automatonClass !== expected.automatonClass
-    || record.workerId !== expected.workerId
-    || record.taskId !== expected.taskId
-    || record.taskLabel !== expected.taskLabel
-    || record.taskSummary !== expected.taskSummary
-    || record.createdAtMs !== expected.createdAtMs
-    || !sameSessions
-  ) {
-    throw new Error(`Automata memory extraction run "${expected.runId}" conflicts with its background-work binding.`);
-  }
 }
 
 async function ensureMemoryExtractionRun(
   registry: AutomataRunRegistry,
   job: ClaimedBackgroundWorkJob,
-  payload: Extract<BackgroundWorkPayload, { kind: 'memory_extraction' }>,
+  payload: MemoryExtractionPayload,
 ): Promise<AutomataRunRecord> {
-  const binding = memoryExtractionBinding(job, payload);
-  const existing = registry.getRun(binding.runId);
-  if (existing) {
-    assertExactBinding(existing, binding);
-    return existing;
-  }
-  return registry.register(binding);
+  return await registry.ensureRun(memoryExtractionBinding(job, payload));
 }
 
 async function startMemoryExtractionRun(
   registry: AutomataRunRegistry,
   job: ClaimedBackgroundWorkJob,
-  payload: Extract<BackgroundWorkPayload, { kind: 'memory_extraction' }>,
+  payload: MemoryExtractionPayload,
 ): Promise<void> {
   const run = await ensureMemoryExtractionRun(registry, job, payload);
   if (run.status === 'queued') {
@@ -92,51 +59,39 @@ async function startMemoryExtractionRun(
   }
 }
 
-async function completeMemoryExtractionRun(
+/**
+ * The governed extraction lifecycle terminalizes its own run, so the supervisor
+ * only closes a run the worker never reached. An already-terminal run is
+ * accepted as-is: re-recording it would duplicate a terminal outcome.
+ */
+async function terminalizeMemoryExtractionRun(
   registry: AutomataRunRegistry,
   job: ClaimedBackgroundWorkJob,
-  payload: Extract<BackgroundWorkPayload, { kind: 'memory_extraction' }>,
+  payload: MemoryExtractionPayload,
+  terminal:
+    | { status: 'completed' }
+    | { status: 'failed'; reasonCode: StoredBackgroundWorkJob['reasonCode'] },
 ): Promise<void> {
   const run = await ensureMemoryExtractionRun(registry, job, payload);
-  if (run.status === 'completed') return;
+  if (run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled') return;
   if (run.status === 'queued') {
     await registry.transition(run.runId, {
       status: 'running',
       reason: 'background_work_claimed',
     });
-  } else if (run.status !== 'running') {
-    throw new Error(`Automata memory extraction run "${run.runId}" cannot complete from ${run.status}.`);
   }
-  await registry.transition(run.runId, {
-    status: 'completed',
-    reason: 'background_work_completed',
-    outcome: 'completed',
-  });
-}
-
-async function failMemoryExtractionRun(
-  registry: AutomataRunRegistry,
-  job: ClaimedBackgroundWorkJob,
-  payload: Extract<BackgroundWorkPayload, { kind: 'memory_extraction' }>,
-  reasonCode: StoredBackgroundWorkJob['reasonCode'],
-): Promise<void> {
-  const run = await ensureMemoryExtractionRun(registry, job, payload);
-  if (run.status === 'completed') return;
-  if (run.status === 'failed') {
-    if (run.statusReason !== 'background_work_failed' || run.failureReason !== reasonCode) {
-      throw new Error(`Automata memory extraction run "${run.runId}" has a conflicting terminal failure.`);
-    }
-    return;
-  }
-  if (run.status !== 'queued' && run.status !== 'running') {
-    throw new Error(`Automata memory extraction run "${run.runId}" cannot fail from ${run.status}.`);
-  }
-  await registry.transition(run.runId, {
-    status: 'failed',
-    reason: 'background_work_failed',
-    outcome: 'blocked',
-    failureReason: reasonCode,
-  });
+  await registry.transition(run.runId, terminal.status === 'completed'
+    ? {
+        status: 'completed',
+        reason: 'background_work_completed',
+        outcome: 'completed',
+      }
+    : {
+        status: 'failed',
+        reason: 'background_work_failed',
+        outcome: 'blocked',
+        failureReason: terminal.reasonCode,
+      });
 }
 
 export function createBackgroundWorkAutomataLifecycle(
@@ -149,11 +104,11 @@ export function createBackgroundWorkAutomataLifecycle(
     },
     async onCompleted({ job, payload }): Promise<void> {
       if (payload.kind !== 'memory_extraction') return;
-      await completeMemoryExtractionRun(registry, job, payload);
+      await terminalizeMemoryExtractionRun(registry, job, payload, { status: 'completed' });
     },
     async onFailed({ job, payload, reasonCode }): Promise<void> {
       if (payload.kind !== 'memory_extraction') return;
-      await failMemoryExtractionRun(registry, job, payload, reasonCode);
+      await terminalizeMemoryExtractionRun(registry, job, payload, { status: 'failed', reasonCode });
     },
   };
 }

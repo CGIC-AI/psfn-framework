@@ -73,20 +73,21 @@ import type { AutomataRunRegistry } from '../automata/run-registry.js';
 import type { AutomataArtifactRef } from '../automata/registry-contract.js';
 import type { AutomataSessionClassificationService } from '../automata/session-classification.js';
 import {
-  buildAutomataBusWorkerScope,
-  createAutomataBusTool,
   isAutomataBusWorkerEligible,
-  resolveAutomataBusWorkerFormation,
+  openAutomataBusWorkerRun,
   type AutomataBusWorkerAccess,
-  type AutomataBusWorkerScope,
+  type AutomataBusWorkerRun,
+  type AutomataWorkerOutcome,
+  type AutomataWorkerRunPort,
+  type AutomataWorkerTerminalRequest,
 } from '../automata/bus/worker-access.js';
+import { SUBAGENT_AUTOMATON_CLASS } from './automaton-class.js';
 import { buildSubagentWorkSpec, createSubagentWorkSpecProvider } from './work-spec.js';
 import {
-  buildSubagentTerminalHandoffKey,
-  type SubagentAutomataLifecyclePort,
-  type SubagentAutomataLifecycleDelivery,
-  type SubagentAutomataLineage,
-} from './automata-lifecycle.js';
+  type AutomataTerminalLifecyclePort,
+  type AutomataTerminalLifecycleDelivery,
+  type AutomataWorkerLineage,
+} from '../automata/terminal-lifecycle.js';
 import {
   deriveSubagentCapabilityGrant,
   type DerivedSubagentCapabilityGrant,
@@ -242,7 +243,7 @@ export interface SubagentFacultyDeps {
   /** Companion-bound Bus prompt/tool adapter. Absent means no Bus prompt or tool. */
   automataBusWorkerAccess?: AutomataBusWorkerAccess | null;
   /** Durable terminal handoff/inspection adapter; receives references, never raw worker text. */
-  automataLifecyclePort?: SubagentAutomataLifecyclePort | null;
+  automataLifecyclePort?: AutomataTerminalLifecyclePort | null;
 }
 
 export interface WyomingSubagentDelegationResult {
@@ -268,7 +269,8 @@ interface ActiveSubagentHandle {
   resolvedRole: ResolvedSubagentRole | null;
   /** bead 7ym.2.1 — effective system prompt: role instructions layered over inherited identity. */
   systemPrompt: string;
-  automataBusScope?: AutomataBusWorkerScope;
+  /** Governed Bus lifecycle owning this run's briefing, tool, and terminal. */
+  automataRun: AutomataBusWorkerRun;
   /** bead 7ym.2.2 — role wall-clock deadline (ms), enforced as a turn-boundary budget ceiling. */
   roleTimeoutMs?: number;
   capabilities: string[];
@@ -368,18 +370,15 @@ export class SubagentFaculty implements SubagentControlPort {
       }
     }
     const durableLineage = this.resolveAutomataLineage(request, subagentId, executionChannelId);
-    const automataBusAccess = this.deps.automataBusWorkerAccess;
     const roleAllowsAutomataBus = resolvedRole?.definition.allowedTools === undefined
       || resolvedRole.definition.allowedTools.includes('automata_bus');
-    const automataBusScope = automataBusAccess && roleAllowsAutomataBus
-      ? buildAutomataBusWorkerScope(automataBusAccess, {
-        automatonClass: 'subagent.bounded',
-        runId: subagentId,
-        taskId: durableLineage.taskId,
-      })
-      : undefined;
-    const automataBusEligible = automataBusScope !== undefined
-      && isAutomataBusWorkerEligible(automataBusAccess, 'subagent.bounded');
+    const automataBusAccess = roleAllowsAutomataBus
+      ? this.deps.automataBusWorkerAccess ?? null
+      : null;
+    const automataBusEligible = isAutomataBusWorkerEligible(
+      automataBusAccess,
+      SUBAGENT_AUTOMATON_CLASS,
+    );
 
     // bead 7ym.2.2: a role can only NARROW the parent tier. Enforce the per-role
     // concurrency ceiling before registration, then clamp turns and intersect
@@ -497,27 +496,33 @@ export class SubagentFaculty implements SubagentControlPort {
         },
       });
     }
-    let automataBusPrompt: string | undefined;
-    if (automataBusEligible) {
-      try {
-        const formation = await resolveAutomataBusWorkerFormation({
-          access: automataBusAccess,
-          scope: automataBusScope,
-          query: request.name,
-        });
-        automataBusPrompt = formation?.promptBlock;
-      } catch (error) {
-        const message = toErrorMessage(error);
-        await this.taskRegistry.markFailed(
+    // One governed Bus-aware lifecycle owns identity binding, the durable run
+    // start, the bounded briefing, tool formation, the deterministic terminal
+    // handoff, and exactly-once terminalization for this run.
+    let automataRun: AutomataBusWorkerRun;
+    try {
+      automataRun = await openAutomataBusWorkerRun({
+        access: automataBusAccess,
+        run: this.createSubagentRunPort(subagentId, durableLineage),
+        terminal: this.deps.automataLifecyclePort ?? null,
+        briefingQuery: request.name,
+        telemetry: event => this.auditTrail?.append('subagent.automata_lifecycle.stage', {
           subagentId,
-          'automata_bus_formation_failed',
-          message,
-          Date.now(),
-        );
-        await this.emitBlockedSpawnHandoff(request, subagentId, 'automata_bus_formation', message);
-        throw error instanceof Error ? error : new Error(message);
-      }
+          ...event,
+        }),
+      });
+    } catch (error) {
+      const message = toErrorMessage(error);
+      await this.taskRegistry.markFailed(
+        subagentId,
+        'automata_bus_formation_failed',
+        message,
+        Date.now(),
+      );
+      await this.emitBlockedSpawnHandoff(request, subagentId, 'automata_bus_formation', message);
+      throw error instanceof Error ? error : new Error(message);
     }
+    const automataBusPrompt = automataRun.promptBlock ?? undefined;
     // Stable public prompt order: inherited identity, bounded Bus layer, then
     // the owner-resolved role posture. The task remains the first user message.
     const systemPrompt = layerRoleSystemPrompt(
@@ -559,7 +564,7 @@ export class SubagentFaculty implements SubagentControlPort {
       maxTurns,
       resolvedRole,
       systemPrompt,
-      ...(automataBusPrompt && automataBusScope ? { automataBusScope } : {}),
+      automataRun,
       ...(resolvedRole?.definition.timeoutMs !== undefined
         ? { roleTimeoutMs: resolvedRole.definition.timeoutMs }
         : {}),
@@ -666,6 +671,7 @@ export class SubagentFaculty implements SubagentControlPort {
         .find(candidate => candidate.subagentId === subagentId);
     if (!task) return null;
     const lineage = task.lineage ?? {
+      automatonClass: SUBAGENT_AUTOMATON_CLASS,
       runId: task.subagentId,
       taskId: task.sourceContext?.originatingTaskId ?? task.subagentId,
       workerId: task.subagentId,
@@ -1111,7 +1117,10 @@ export class SubagentFaculty implements SubagentControlPort {
         error: completionHandoff.error,
       });
     }
-    const automataLifecycle = await this.recordAutomataTerminalHandoff(
+    // Governed order: the deterministic Bus terminal handoff is recorded first,
+    // then the durable run is terminalized exactly once. Registry-first would
+    // let a Bus failure leave a completed run with no event at all.
+    const automataLifecycle = await this.settleAutomataRun(
       handle,
       result,
       completionEmission?.handoff.handoffId,
@@ -1297,91 +1306,156 @@ export class SubagentFaculty implements SubagentControlPort {
     }
   }
 
-  private async recordAutomataTerminalHandoff(
+  /**
+   * Durable run adapter for one bounded subagent run. The task registry already
+   * owns registration and the queued -> running transition, so `begin` binds the
+   * authoritative record and `terminalize` is the only registry terminal write.
+   */
+  private createSubagentRunPort(
+    subagentId: string,
+    lineage: AutomataWorkerLineage,
+  ): AutomataWorkerRunPort {
+    return {
+      begin: async () => {
+        const registry = this.deps.automataRunRegistry;
+        const run = registry?.getRun(subagentId) ?? null;
+        if (registry && !run) {
+          throw new Error(`Automata subagent run "${subagentId}" is not registered.`);
+        }
+        if (run && (run.automatonClass !== lineage.automatonClass || run.taskId !== lineage.taskId)) {
+          throw new Error(`Automata subagent run "${subagentId}" conflicts with its worker lineage.`);
+        }
+        return {
+          companionId: this.deps.automataBusWorkerAccess?.identity.companionId
+            ?? registry?.getCompanionId()
+            ?? '',
+          lineage,
+          attempt: run?.workerGeneration ?? 1,
+          execute: run === null || run.status === 'queued' || run.status === 'running',
+        };
+      },
+      terminalize: async request => {
+        const previous = this.taskRegistry.getActiveTask(subagentId);
+        const record = await this.terminalizeTask(subagentId, request);
+        this.auditTrail?.append('subagent.lifecycle.transition', {
+          subagentId,
+          from: previous?.lifecycleState ?? 'running',
+          to: record.lifecycleState,
+          reason: record.stateReason,
+          outcome: request.outcome,
+          ...(request.failureReason ? { failureReason: request.failureReason } : {}),
+          workerLane: record.workerLane,
+          channelId: record.channelId,
+        });
+      },
+    };
+  }
+
+  private async terminalizeTask(
+    subagentId: string,
+    request: AutomataWorkerTerminalRequest,
+  ): Promise<SubagentTaskRecord> {
+    if (request.lifecycleState === 'completed') {
+      return await this.taskRegistry.markCompleted(subagentId, request.stateReason, request.atMs);
+    }
+    if (request.lifecycleState === 'cancelled') {
+      return await this.taskRegistry.markCancelled(
+        subagentId,
+        request.stateReason,
+        request.atMs,
+        request.failureReason,
+      );
+    }
+    return await this.taskRegistry.markFailed(
+      subagentId,
+      request.stateReason,
+      request.failureReason ?? request.stateReason,
+      request.atMs,
+      request.outcome === 'budget_limited' ? 'budget_limited' : 'blocked',
+    );
+  }
+
+  private buildAutomataOutcome(
     handle: ActiveSubagentHandle,
     result: SubagentExecutionResult,
     parentHandoffRef?: string,
-  ): Promise<SubagentAutomataLifecycleDelivery> {
-    const port = this.deps.automataLifecyclePort;
-    if (!port) return { status: 'not_configured' };
-    const idempotencyKey = buildSubagentTerminalHandoffKey(handle.subagentId);
-    try {
-      const task = this.taskRegistry.getRecentTasks(Number.MAX_SAFE_INTEGER)
-        .find(candidate => candidate.subagentId === handle.subagentId);
-      const lineage = task?.lineage
-        ?? this.resolveAutomataLineage(handle.request, handle.subagentId, handle.channelId);
-      const hasPartialOutput = result.partial?.latestCheckpoint.content.trim().length
-        ? true
-        : false;
-      const resultKind = result.outcome === 'completed'
-        ? 'final'
-        : hasPartialOutput
-          ? 'partial'
-          : 'none';
-      const outputRefs = resultKind === 'none' || !handle.latestOutputRef
-        ? []
-        : [{
-            kind: 'session_output',
-            ref: handle.latestOutputRef,
-            custody: 'pending' as const,
-          }];
-      const receipt = await port.recordTerminalHandoff({
-        idempotencyKey,
-        lineage,
-        lifecycleState: result.lifecycleState,
-        outcome: result.outcome,
-        stateReason: result.stateReason,
-        ...(result.failureReason ? { failureReason: result.failureReason } : {}),
-        resultKind,
-        usage: {
-          model: result.model,
-          inputTokens: result.inputTokens,
-          outputTokens: result.outputTokens,
-          durationMs: result.durationMs,
-          turns: result.turns,
-        },
-        outputRefs,
-        ...(parentHandoffRef ? { parentHandoffRef } : {}),
-        occurredAtMs: task?.finishedAt ?? handle.startTime + result.durationMs,
-      });
-      const handoffRef = normalizeRequiredText(receipt.handoffRef, 'automata handoff ref');
-      const findingRefs = normalizeReferenceList(receipt.findingRefs, 'finding ref');
-      const evidenceRefs = normalizeReferenceList(receipt.evidenceRefs, 'evidence ref');
-      const artifactRefs = dedupeArtifactRefs([
-        ...outputRefs,
-        ...receipt.artifactRefs,
-        { kind: 'automata_bus_handoff', ref: handoffRef, custody: 'durable' },
-        ...findingRefs.map(ref => ({ kind: 'automata_bus_finding', ref, custody: 'durable' as const })),
-        ...evidenceRefs.map(ref => ({ kind: 'automata_bus_evidence', ref, custody: 'durable' as const })),
-        ...(parentHandoffRef
-          ? [{ kind: 'parent_completion_handoff', ref: parentHandoffRef, custody: 'durable' as const }]
-          : []),
-      ]);
-      await this.taskRegistry.linkReferences(handle.subagentId, artifactRefs);
-      return {
-        status: 'recorded',
-        idempotencyKey,
-        handoffRef,
-        replay: !receipt.inserted,
-        findingRefs,
-        evidenceRefs,
-        artifactRefs: artifactRefs.map(reference => ({ ...reference })),
-      };
-    } catch (error) {
-      const message = toErrorMessage(error);
-      this.auditTrail?.append('subagent.automata_lifecycle.failed', {
-        subagentId: handle.subagentId,
-        outcome: result.outcome,
-        idempotencyKey,
-        error: message,
-      });
-      log.error('Durable Automata terminal handoff failed without changing the task result', {
-        subagentId: handle.subagentId,
-        lifecycleState: result.lifecycleState,
-        error: message,
-      });
-      return { status: 'failed', idempotencyKey, error: message };
+  ): AutomataWorkerOutcome {
+    const hasPartialOutput = result.partial?.latestCheckpoint.content.trim().length ? true : false;
+    const resultKind = result.outcome === 'completed'
+      ? 'final'
+      : hasPartialOutput
+        ? 'partial'
+        : 'none';
+    const outputRefs: AutomataArtifactRef[] = resultKind === 'none' || !handle.latestOutputRef
+      ? []
+      : [{ kind: 'session_output', ref: handle.latestOutputRef, custody: 'pending' }];
+    return {
+      lifecycleState: result.lifecycleState,
+      outcome: result.outcome,
+      stateReason: result.stateReason,
+      ...(result.failureReason ? { failureReason: result.failureReason } : {}),
+      resultKind,
+      usage: {
+        model: result.model,
+        inputTokens: result.inputTokens,
+        outputTokens: result.outputTokens,
+        durationMs: result.durationMs,
+        turns: result.turns,
+      },
+      outputRefs,
+      ...(parentHandoffRef ? { parentHandoffRef } : {}),
+      atMs: handle.startTime + result.durationMs,
+    };
+  }
+
+  /**
+   * Terminalize one bounded subagent run through the governed Bus lifecycle and
+   * link the resulting durable references onto the task record.
+   */
+  private async settleAutomataRun(
+    handle: ActiveSubagentHandle,
+    result: SubagentExecutionResult,
+    parentHandoffRef?: string,
+  ): Promise<AutomataTerminalLifecycleDelivery> {
+    const outcome = this.buildAutomataOutcome(handle, result, parentHandoffRef);
+    const settlement = await handle.automataRun.settle(outcome);
+    const delivery = settlement.handoff;
+    if (delivery.status !== 'recorded') {
+      if (delivery.status === 'failed') {
+        this.auditTrail?.append('subagent.automata_lifecycle.failed', {
+          subagentId: handle.subagentId,
+          outcome: result.outcome,
+          idempotencyKey: delivery.idempotencyKey,
+          error: delivery.error,
+        });
+        log.error('Durable Automata terminal handoff failed without changing the task result', {
+          subagentId: handle.subagentId,
+          lifecycleState: result.lifecycleState,
+          error: delivery.error,
+        });
+      }
+      return delivery;
     }
+    const artifactRefs = dedupeArtifactRefs([
+      ...(outcome.outputRefs ?? []),
+      ...delivery.artifactRefs,
+      { kind: 'automata_bus_handoff', ref: delivery.handoffRef, custody: 'durable' },
+      ...delivery.findingRefs.map(ref => ({
+        kind: 'automata_bus_finding',
+        ref,
+        custody: 'durable' as const,
+      })),
+      ...delivery.evidenceRefs.map(ref => ({
+        kind: 'automata_bus_evidence',
+        ref,
+        custody: 'durable' as const,
+      })),
+      ...(parentHandoffRef
+        ? [{ kind: 'parent_completion_handoff', ref: parentHandoffRef, custody: 'durable' as const }]
+        : []),
+    ]);
+    await this.taskRegistry.linkReferences(handle.subagentId, artifactRefs);
+    return { ...delivery, artifactRefs: artifactRefs.map(reference => ({ ...reference })) };
   }
 
   private resolveSourceContext(request: SubagentExecutionRequest): SubagentExecutionSourceContext | null {
@@ -1405,7 +1479,7 @@ export class SubagentFaculty implements SubagentControlPort {
     request: SubagentExecutionRequest,
     subagentId: string,
     executionChannelId: string,
-  ): SubagentAutomataLineage {
+  ): AutomataWorkerLineage {
     const correlation = request.workSpec.correlation;
     const taskId = normalizeOptionalText(request.sourceContext?.originatingTaskId)
       ?? normalizeOptionalText(correlation?.workloadId)
@@ -1421,6 +1495,7 @@ export class SubagentFaculty implements SubagentControlPort {
         : []),
     ])];
     return {
+      automatonClass: SUBAGENT_AUTOMATON_CLASS,
       runId: subagentId,
       taskId,
       workerId: subagentId,
@@ -1469,16 +1544,6 @@ export class SubagentFaculty implements SubagentControlPort {
     lastContent: string,
     turns: number,
   ): Promise<SubagentExecutionResult> {
-    const previous = this.taskRegistry.getActiveTask(handle.subagentId);
-    const completed = await this.taskRegistry.markCompleted(handle.subagentId, 'completed', Date.now());
-    this.auditTrail?.append('subagent.lifecycle.transition', {
-      subagentId: handle.subagentId,
-      from: previous?.lifecycleState ?? 'running',
-      to: completed.lifecycleState,
-      reason: completed.stateReason,
-      workerLane: completed.workerLane,
-      channelId: completed.channelId,
-    });
     const result: SubagentExecutionResult = {
       subagentId: handle.subagentId,
       name: handle.request.name,
@@ -1491,7 +1556,7 @@ export class SubagentFaculty implements SubagentControlPort {
       workerLane: SUBAGENT_WORKER_LANE,
       lifecycleState: 'completed',
       outcome: 'completed',
-      stateReason: completed.stateReason,
+      stateReason: 'completed',
       capabilities: [...handle.capabilities],
       requiredCapabilities: [...handle.requiredCapabilities],
     };
@@ -1513,22 +1578,6 @@ export class SubagentFaculty implements SubagentControlPort {
     lastContent: string,
     turns: number,
   ): Promise<SubagentExecutionResult> {
-    const previous = this.taskRegistry.getActiveTask(handle.subagentId);
-    const cancelled = await this.taskRegistry.markCancelled(
-      handle.subagentId,
-      'cancel_requested',
-      Date.now(),
-      handle.cancelReason,
-    );
-    this.auditTrail?.append('subagent.lifecycle.transition', {
-      subagentId: handle.subagentId,
-      from: previous?.lifecycleState ?? 'queued',
-      to: cancelled.lifecycleState,
-      reason: cancelled.stateReason,
-      ...(handle.cancelReason ? { failureReason: handle.cancelReason } : {}),
-      workerLane: cancelled.workerLane,
-      channelId: cancelled.channelId,
-    });
     const result: SubagentExecutionResult = {
       subagentId: handle.subagentId,
       name: handle.request.name,
@@ -1541,7 +1590,7 @@ export class SubagentFaculty implements SubagentControlPort {
       workerLane: SUBAGENT_WORKER_LANE,
       lifecycleState: 'cancelled',
       outcome: 'cancelled',
-      stateReason: cancelled.stateReason,
+      stateReason: 'cancel_requested',
       ...(handle.cancelReason ? { failureReason: handle.cancelReason } : {}),
       partial: this.buildPartialResult(handle, totalOutput, lastModel, lastContent, turns),
       capabilities: [...handle.capabilities],
@@ -1562,22 +1611,6 @@ export class SubagentFaculty implements SubagentControlPort {
     handle: ActiveSubagentHandle,
     failureReason: string,
   ): Promise<SubagentExecutionResult> {
-    const previous = this.taskRegistry.getActiveTask(handle.subagentId);
-    const failed = await this.taskRegistry.markFailed(
-      handle.subagentId,
-      'execution_failed',
-      failureReason,
-      Date.now(),
-    );
-    this.auditTrail?.append('subagent.lifecycle.transition', {
-      subagentId: handle.subagentId,
-      from: previous?.lifecycleState ?? 'queued',
-      to: failed.lifecycleState,
-      reason: failed.stateReason,
-      failureReason,
-      workerLane: failed.workerLane,
-      channelId: failed.channelId,
-    });
     const result: SubagentExecutionResult = {
       subagentId: handle.subagentId,
       name: handle.request.name,
@@ -1590,7 +1623,7 @@ export class SubagentFaculty implements SubagentControlPort {
       workerLane: SUBAGENT_WORKER_LANE,
       lifecycleState: 'failed',
       outcome: 'blocked',
-      stateReason: failed.stateReason,
+      stateReason: 'execution_failed',
       failureReason,
       partial: this.buildPartialResult(handle, 0, '', '', 0),
       capabilities: [...handle.capabilities],
@@ -1618,28 +1651,10 @@ export class SubagentFaculty implements SubagentControlPort {
     const failureReason = budget.reason === 'deadline'
       ? 'work spec deadline budget exhausted before completion'
       : 'work spec output-token budget exhausted before completion';
-    const previous = this.taskRegistry.getActiveTask(handle.subagentId);
-    // The registry lifecycle machine has no budget terminal; record the coarse
-    // non-completed terminal (failed) while the result reports the honest
-    // `budget_limited` outcome so it never masquerades as completed.
-    const stopped = await this.taskRegistry.markFailed(
-      handle.subagentId,
-      'budget_exhausted',
-      failureReason,
-      Date.now(),
-      'budget_limited',
-    );
-    this.auditTrail?.append('subagent.lifecycle.transition', {
-      subagentId: handle.subagentId,
-      from: previous?.lifecycleState ?? 'running',
-      to: stopped.lifecycleState,
-      reason: stopped.stateReason,
-      outcome: 'budget_limited',
-      budgetReason: budget.reason,
-      failureReason,
-      workerLane: stopped.workerLane,
-      channelId: stopped.channelId,
-    });
+    // The registry lifecycle machine has no budget terminal; the governed
+    // terminalization records the coarse non-completed terminal (failed) while
+    // the result reports the honest `budget_limited` outcome so it never
+    // masquerades as completed.
     const result: SubagentExecutionResult = {
       subagentId: handle.subagentId,
       name: handle.request.name,
@@ -1652,7 +1667,7 @@ export class SubagentFaculty implements SubagentControlPort {
       workerLane: SUBAGENT_WORKER_LANE,
       lifecycleState: 'failed',
       outcome: 'budget_limited',
-      stateReason: stopped.stateReason,
+      stateReason: 'budget_exhausted',
       failureReason,
       partial: this.buildPartialResult(handle, totalOutput, lastModel, lastContent, turns),
       capabilities: [...handle.capabilities],
@@ -1802,13 +1817,8 @@ export class SubagentFaculty implements SubagentControlPort {
       }
     }
 
-    const automataBusAccess = this.deps.automataBusWorkerAccess;
-    if (automataBusAccess && handle.automataBusScope) {
-      availableByName.set('automata_bus', createAutomataBusTool({
-        access: automataBusAccess,
-        scope: handle.automataBusScope,
-      }));
-    }
+    const automataBusTool = handle.automataRun.tool;
+    if (automataBusTool) availableByName.set('automata_bus', automataBusTool);
 
     return [...availableByName.values()];
   }
@@ -2070,14 +2080,6 @@ function normalizeRequiredText(value: string, field: string): string {
   const normalized = normalizeOptionalText(value);
   if (!normalized) {
     throw new Error(`${field} is required.`);
-  }
-  return normalized;
-}
-
-function normalizeReferenceList(values: readonly string[], field: string): string[] {
-  const normalized = values.map(value => normalizeRequiredText(value, field));
-  if (new Set(normalized).size !== normalized.length) {
-    throw new Error(`${field} list must not contain duplicates.`);
   }
   return normalized;
 }

@@ -24,6 +24,7 @@ import {
 import { migrateLegacySchedulerOwner } from './scheduler-owner-migration.js';
 import { DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG } from './icp-autonomy-scheduler-config.js';
 import { DEFAULT_INTENTION_FOLLOW_UP_SCHEDULER_CONFIG } from './scheduler-config/intention-follow-up.js';
+import { createDefaultRoomParticipationLeaseSettings } from './participation-config.js';
 
 const fixturePath = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -260,6 +261,43 @@ describe('migrateLegacySchedulerOwner', () => {
     });
     expect(readFileSync(filePath, 'utf8')).toBe(bytesAfterApply);
     expect(statSync(filePath).ino).toBe(inodeAfterApply);
+  });
+
+  it('seeds the missing room-participation lease posture into an existing socialAutonomy block', () => {
+    const { dataDir, filePath } = prepareOwner((owner) => {
+      makePreCaretakerCanonical(owner);
+      owner.socialAutonomy = {
+        passiveNameCandidate: { enabled: true },
+        appraiser: { enabled: true },
+      };
+    });
+    const before = readFileSync(filePath, 'utf8');
+
+    expect(migrateLegacySchedulerOwner({ dataDir })).toMatchObject({
+      mode: 'dry-run',
+      status: 'planned',
+      addedPaths: expect.arrayContaining(['socialAutonomy.roomParticipationLease']),
+    });
+    expect(readFileSync(filePath, 'utf8')).toBe(before);
+
+    expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
+      mode: 'apply',
+      status: 'applied',
+      addedPaths: expect.arrayContaining(['socialAutonomy.roomParticipationLease']),
+    });
+    // The seeded posture is the conservative public default: continuation off.
+    expect(loadSchedulerConfig(dataDir).socialAutonomy.roomParticipationLease)
+      .toEqual(createDefaultRoomParticipationLeaseSettings());
+    const migratedRaw = JSON.parse(readFileSync(filePath, 'utf8')) as Record<string, unknown>;
+    expect((migratedRaw.socialAutonomy as Record<string, unknown>).passiveNameCandidate)
+      .toEqual({ enabled: true });
+
+    const bytesAfterApply = readFileSync(filePath, 'utf8');
+    expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
+      mode: 'apply',
+      status: 'not_needed',
+    });
+    expect(readFileSync(filePath, 'utf8')).toBe(bytesAfterApply);
   });
 
   it('dry-runs, applies, and idempotently preserves the missing-only ICP hold policy upgrade', () => {

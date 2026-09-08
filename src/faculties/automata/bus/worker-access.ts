@@ -1,4 +1,5 @@
 export type {
+  AutomataBusToolAction,
   AutomataBusWorkerAccess,
   AutomataBusWorkerBounds,
   AutomataBusWorkerOperation,
@@ -12,3 +13,11 @@ export {
   resolveAutomataBusWorkerFormation,
 } from './worker-access-formation.js';
 export { createAutomataBusTool } from './worker-access-tool.js';
+export {
+  AutomataBusWorkerRun,
+  openAutomataBusWorkerRun,
+  type AutomataWorkerOutcome,
+  type AutomataWorkerRunBinding,
+  type AutomataWorkerRunPort,
+  type AutomataWorkerTerminalRequest,
+} from './worker-execution.js';

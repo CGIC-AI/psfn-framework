@@ -60,7 +60,9 @@ import type { CompanionPresenceStorePort } from '../core/agent/companion-presenc
 import { PostgresSocialPotStore } from './postgres/social-pot-store.js';
 import type { SocialPotPort } from '../core/agent/fatigue/social-pot.js';
 import { PostgresSpeakingArbiterStore } from './postgres/speaking-arbiter-store.js';
+import { PostgresRoomParticipationLeaseStore } from './postgres/room-participation-lease-store.js';
 import type { SpeakingArbiterStorePort } from '../core/agent/arbiter/speaking-arbiter-store-port.js';
+import type { RoomParticipationLeaseStorePort } from '../core/participation/room-participation-lease.js';
 import { createPostgresPool, ensurePostgresSchemaExists } from './postgres.js';
 import {
   assertPostgresTenantAccessProvisioned,
@@ -189,6 +191,14 @@ export interface AgentPersistenceRuntime {
    * flag-off never touches the shared schema.
    */
   speakingArbiterStore?: SpeakingArbiterStorePort;
+  /**
+   * Gateway-owned bounded room-participation leases (shared schema, jp36.5.5):
+   * one companion's durable membership in one verified group room, carrying the
+   * context watermark that keeps a restart from replaying old room chatter into
+   * consideration. Present ONLY in multi-companion mode, exactly like the
+   * arbiter store it sits beside.
+   */
+  roomParticipationLeaseStore?: RoomParticipationLeaseStorePort;
   /**
    * System-scoped heavy-maintenance scheduling authority. The coordinator is
    * content-free; episode/sleeptime runners commit private progress through its
@@ -398,6 +408,14 @@ export async function createAgentPersistenceRuntime(
         () => PostgresSpeakingArbiterStore.connect(databaseUrl),
       )
     : undefined;
+  // Bounded room-participation leases share the arbiter's gateway ownership and
+  // reboot-survival contract, so they share its shared-schema placement too.
+  const roomParticipationLeaseStore = fleetTenancy
+    ? await awaitPostgresStoreReadiness(
+        'room_participation_lease',
+        () => PostgresRoomParticipationLeaseStore.connect(databaseUrl),
+      )
+    : undefined;
 
   const intentionRuntime = await awaitPostgresStoreReadiness(
     'intention',
@@ -549,6 +567,7 @@ export async function createAgentPersistenceRuntime(
     ...(icpInitiationCandidateStore ? { icpInitiationCandidateStore } : {}),
     ...(socialPotStore ? { socialPotStore } : {}),
     ...(speakingArbiterStore ? { speakingArbiterStore } : {}),
+    ...(roomParticipationLeaseStore ? { roomParticipationLeaseStore } : {}),
     ...(fleetMaintenanceCoordinator ? { fleetMaintenanceCoordinator } : {}),
   };
   if (!options.contactLifecycleGateway) return runtime;

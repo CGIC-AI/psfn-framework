@@ -194,5 +194,36 @@
     "estimatorMaxTokens": 500,
     "comparisonMaxTokens": 300,
     "reflectionMaxTokens": 300
+  },
+  "blindReviewer": {
+    "enabled": false,
+    "intervalMs": 3600000,
+    "maxWorkers": 1,
+    "maxIngestPerRun": 64,
+    "recentSessionLimit": 16,
+    "alertMinConfidence": 0.7,
+    "batch": {
+      "maxItemsPerBatch": 24,
+      "minItemsPerBatch": 4,
+      "minBlindedCharsPerBatch": 0,
+      "maxBlindedCharsPerItem": 1200,
+      "maxToolNamesPerItem": 12
+    },
+    "window": {
+      "maxRows": 2000,
+      "retentionMs": 604800000,
+      "maxPinnedRows": 200
+    },
+    "cost": {
+      "maxReviewsPerRun": 2,
+      "maxOutputTokens": 400,
+      "deadlineMs": 60000,
+      "costCeilingUsd": 0.25
+    },
+    "retry": {
+      "maxAttempts": 3,
+      "baseDelayMs": 30000,
+      "maxDelayMs": 900000
+    }
   }
 }

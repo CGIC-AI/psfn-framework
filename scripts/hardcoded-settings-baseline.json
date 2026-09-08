@@ -3298,6 +3298,27 @@
       "note": "Existing mutable policy candidate object@L156.maxRunsPerSchedulerTick; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
+      "file": "src/core/cogsec/blind-review/contracts.ts",
+      "name": "emptyBlindReviewLaneState.retryNotBeforeMs",
+      "value": "0",
+      "form": "object-member",
+      "note": "Structural sentinel, not a tuning value: 0 means 'no retry backoff is in effect'. The backoff itself is owner-file governed by blindReviewer.retry.baseDelayMs/maxDelayMs (psfn-framework-yxz0z.3); this literal only clears that state."
+    },
+    {
+      "file": "src/core/cogsec/blind-review/lane.ts",
+      "name": "BlindReviewLane.settleState.store.writeState.arg0.retryNotBeforeMs@L453",
+      "value": "0",
+      "form": "object-member",
+      "note": "Structural sentinel, not a tuning value: 0 means 'no retry backoff is in effect'. The backoff itself is owner-file governed by blindReviewer.retry.baseDelayMs/maxDelayMs (psfn-framework-yxz0z.3); this literal only clears that state."
+    },
+    {
+      "file": "src/core/cogsec/blind-review/lane.ts",
+      "name": "BlindReviewLane.settleState.store.writeState.arg0.retryNotBeforeMs@L466",
+      "value": "0",
+      "form": "object-member",
+      "note": "Structural sentinel, not a tuning value: 0 means 'no retry backoff is in effect'. The backoff itself is owner-file governed by blindReviewer.retry.baseDelayMs/maxDelayMs (psfn-framework-yxz0z.3); this literal only clears that state."
+    },
+    {
       "file": "src/core/cogsec/canary/egress-scan.ts",
       "name": "MAX_DEPTH",
       "value": "8"
@@ -12697,6 +12718,125 @@
       "value": "8",
       "form": "object-member",
       "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 domain split; seed/default literal preserved, not an operator-tunable policy constant."
+    },
+    {
+      "file": "src/system/config/scheduler-config/blind-review.ts",
+      "name": "DEFAULT_BLIND_REVIEWER_CONFIG.alertMinConfidence",
+      "value": "0.7",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default for the passive Blind Reviewer (psfn-framework-yxz0z.3). Operators tune blindReviewer.* in scheduler.json and the lane reads the loaded owner value; this literal is the seed default the owner file is written from, never a value the lane consults directly."
+    },
+    {
+      "file": "src/system/config/scheduler-config/blind-review.ts",
+      "name": "DEFAULT_BLIND_REVIEWER_CONFIG.batch.maxBlindedCharsPerItem",
+      "value": "1_200",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default for the passive Blind Reviewer (psfn-framework-yxz0z.3). Operators tune blindReviewer.* in scheduler.json and the lane reads the loaded owner value; this literal is the seed default the owner file is written from, never a value the lane consults directly."
+    },
+    {
+      "file": "src/system/config/scheduler-config/blind-review.ts",
+      "name": "DEFAULT_BLIND_REVIEWER_CONFIG.batch.maxItemsPerBatch",
+      "value": "24",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default for the passive Blind Reviewer (psfn-framework-yxz0z.3). Operators tune blindReviewer.* in scheduler.json and the lane reads the loaded owner value; this literal is the seed default the owner file is written from, never a value the lane consults directly."
+    },
+    {
+      "file": "src/system/config/scheduler-config/blind-review.ts",
+      "name": "DEFAULT_BLIND_REVIEWER_CONFIG.batch.maxToolNamesPerItem",
+      "value": "12",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default for the passive Blind Reviewer (psfn-framework-yxz0z.3). Operators tune blindReviewer.* in scheduler.json and the lane reads the loaded owner value; this literal is the seed default the owner file is written from, never a value the lane consults directly."
+    },
+    {
+      "file": "src/system/config/scheduler-config/blind-review.ts",
+      "name": "DEFAULT_BLIND_REVIEWER_CONFIG.batch.minBlindedCharsPerBatch",
+      "value": "0",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default for the passive Blind Reviewer (psfn-framework-yxz0z.3). Operators tune blindReviewer.* in scheduler.json and the lane reads the loaded owner value; this literal is the seed default the owner file is written from, never a value the lane consults directly."
+    },
+    {
+      "file": "src/system/config/scheduler-config/blind-review.ts",
+      "name": "DEFAULT_BLIND_REVIEWER_CONFIG.batch.minItemsPerBatch",
+      "value": "4",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default for the passive Blind Reviewer (psfn-framework-yxz0z.3). Operators tune blindReviewer.* in scheduler.json and the lane reads the loaded owner value; this literal is the seed default the owner file is written from, never a value the lane consults directly."
+    },
+    {
+      "file": "src/system/config/scheduler-config/blind-review.ts",
+      "name": "DEFAULT_BLIND_REVIEWER_CONFIG.cost.maxOutputTokens",
+      "value": "400",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default for the passive Blind Reviewer (psfn-framework-yxz0z.3). Operators tune blindReviewer.* in scheduler.json and the lane reads the loaded owner value; this literal is the seed default the owner file is written from, never a value the lane consults directly."
+    },
+    {
+      "file": "src/system/config/scheduler-config/blind-review.ts",
+      "name": "DEFAULT_BLIND_REVIEWER_CONFIG.cost.maxReviewsPerRun",
+      "value": "2",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default for the passive Blind Reviewer (psfn-framework-yxz0z.3). Operators tune blindReviewer.* in scheduler.json and the lane reads the loaded owner value; this literal is the seed default the owner file is written from, never a value the lane consults directly."
+    },
+    {
+      "file": "src/system/config/scheduler-config/blind-review.ts",
+      "name": "DEFAULT_BLIND_REVIEWER_CONFIG.intervalMs",
+      "value": "3_600_000",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default for the passive Blind Reviewer (psfn-framework-yxz0z.3). Operators tune blindReviewer.* in scheduler.json and the lane reads the loaded owner value; this literal is the seed default the owner file is written from, never a value the lane consults directly."
+    },
+    {
+      "file": "src/system/config/scheduler-config/blind-review.ts",
+      "name": "DEFAULT_BLIND_REVIEWER_CONFIG.maxIngestPerRun",
+      "value": "64",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default for the passive Blind Reviewer (psfn-framework-yxz0z.3). Operators tune blindReviewer.* in scheduler.json and the lane reads the loaded owner value; this literal is the seed default the owner file is written from, never a value the lane consults directly."
+    },
+    {
+      "file": "src/system/config/scheduler-config/blind-review.ts",
+      "name": "DEFAULT_BLIND_REVIEWER_CONFIG.maxWorkers",
+      "value": "1",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default for the passive Blind Reviewer (psfn-framework-yxz0z.3). Operators tune blindReviewer.* in scheduler.json and the lane reads the loaded owner value; this literal is the seed default the owner file is written from, never a value the lane consults directly."
+    },
+    {
+      "file": "src/system/config/scheduler-config/blind-review.ts",
+      "name": "DEFAULT_BLIND_REVIEWER_CONFIG.recentSessionLimit",
+      "value": "16",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default for the passive Blind Reviewer (psfn-framework-yxz0z.3). Operators tune blindReviewer.* in scheduler.json and the lane reads the loaded owner value; this literal is the seed default the owner file is written from, never a value the lane consults directly."
+    },
+    {
+      "file": "src/system/config/scheduler-config/blind-review.ts",
+      "name": "DEFAULT_BLIND_REVIEWER_CONFIG.retry.baseDelayMs",
+      "value": "30_000",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default for the passive Blind Reviewer (psfn-framework-yxz0z.3). Operators tune blindReviewer.* in scheduler.json and the lane reads the loaded owner value; this literal is the seed default the owner file is written from, never a value the lane consults directly."
+    },
+    {
+      "file": "src/system/config/scheduler-config/blind-review.ts",
+      "name": "DEFAULT_BLIND_REVIEWER_CONFIG.retry.maxAttempts",
+      "value": "3",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default for the passive Blind Reviewer (psfn-framework-yxz0z.3). Operators tune blindReviewer.* in scheduler.json and the lane reads the loaded owner value; this literal is the seed default the owner file is written from, never a value the lane consults directly."
+    },
+    {
+      "file": "src/system/config/scheduler-config/blind-review.ts",
+      "name": "DEFAULT_BLIND_REVIEWER_CONFIG.retry.maxDelayMs",
+      "value": "900_000",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default for the passive Blind Reviewer (psfn-framework-yxz0z.3). Operators tune blindReviewer.* in scheduler.json and the lane reads the loaded owner value; this literal is the seed default the owner file is written from, never a value the lane consults directly."
+    },
+    {
+      "file": "src/system/config/scheduler-config/blind-review.ts",
+      "name": "DEFAULT_BLIND_REVIEWER_CONFIG.window.maxPinnedRows",
+      "value": "200",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default for the passive Blind Reviewer (psfn-framework-yxz0z.3). Operators tune blindReviewer.* in scheduler.json and the lane reads the loaded owner value; this literal is the seed default the owner file is written from, never a value the lane consults directly."
+    },
+    {
+      "file": "src/system/config/scheduler-config/blind-review.ts",
+      "name": "DEFAULT_BLIND_REVIEWER_CONFIG.window.maxRows",
+      "value": "2_000",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default for the passive Blind Reviewer (psfn-framework-yxz0z.3). Operators tune blindReviewer.* in scheduler.json and the lane reads the loaded owner value; this literal is the seed default the owner file is written from, never a value the lane consults directly."
     },
     {
       "file": "src/system/config/scheduler-config/free-time.ts",

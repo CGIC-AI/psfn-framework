@@ -242,6 +242,11 @@ const AGENT_HIDDEN_CASE_TYPES: ReadonlySet<CogSecEvent['type']> = new Set([
   // shadow mode passes content unchanged. Re-injecting case records into later
   // prompts creates pressure and makes an observational control disruptive.
   'intake_firewall',
+  // Blind Reviewer findings (yxz0z.3). The lane exists to observe the
+  // companion's reasoning longitudinally; surfacing its cases back into her
+  // prompt would make the observation self-referential and disruptive, and the
+  // bead's non-goals rule out forced companion disclosure. Operator-only.
+  'blind_review',
 ]);
 
 export function listAgentVisibleCogSecEvents(

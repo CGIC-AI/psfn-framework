@@ -432,6 +432,9 @@ export function hydrateCanonicalStartupConfig(
     ...(persistedScheduler.introspectionAudit
       ? { introspectionAudit: { ...persistedScheduler.introspectionAudit } }
       : {}),
+    ...(persistedScheduler.blindReviewer
+      ? { blindReviewer: { ...persistedScheduler.blindReviewer } }
+      : {}),
     ...(persistedScheduler.backgroundWorkWelfare
       ? { backgroundWorkWelfare: { ...persistedScheduler.backgroundWorkWelfare } }
       : {}),

@@ -7,7 +7,7 @@ import type { TurnID } from './turn-contracts.js';
 import type { ChannelType } from './channel-types.js';
 import type { InternalState, MetacognitiveFlag } from './self-model-contracts.js';
 import type { ModelContextBudgetConfig } from '../context-budget-contracts.js';
-import type { ToolCallOutcome } from './tool-call-outcome.js';
+import type { ToolCallOutcome, ToolCallOutcomeCounts } from './tool-call-outcome.js';
 import type {
   ChargePolicyRuntimeLane,
   ChargePolicySurface,
@@ -906,6 +906,14 @@ export interface ResponseMetadata {
   internalStateSnapshotRef?: string;
   metacognitiveFlags?: MetacognitiveFlag[];
   retrievalProvenanceRefs?: string[];
+  /**
+   * Content-free per-turn tool-call outcome census (psfn-framework-lpxg3.2).
+   * A caller that ran this turn to GATHER evidence — protected introspection,
+   * welfare review, daily review — reads it to learn that a read was withheld,
+   * unavailable, or partial, instead of silently reading missing evidence as
+   * absence. Counts only: never a tool name, argument, or result byte.
+   */
+  toolCallOutcomes?: ToolCallOutcomeCounts;
   diagnostics?: {
     fallback?: {
       code: 'vision_empty_response' | 'vision_content_unavailable' | 'vision_prompt_unavailable';

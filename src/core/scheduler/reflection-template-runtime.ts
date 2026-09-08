@@ -106,6 +106,8 @@ import {
 import {
   isRecoverableEvidenceGroundingExhaustion,
   REFLECTION_EVIDENCE_GROUNDING_DEGRADATION,
+  resolveCompletedGroundingDegradation,
+  type ReflectionEvidenceDegradation,
 } from './reflection-template-runtime/evidence-grounding-recovery.js';
 import {
   collectDailyReviewEvidence,
@@ -919,7 +921,11 @@ export function createReflectionTemplateRuntime(
     let reflectionMode: 'agent' | 'deliberation' = 'agent';
     let persistenceContext = internalStateContext;
     let reflectionProcessId: string | undefined;
-    let evidenceGroundingDegraded = false;
+    // lpxg3.2: which degraded-evidence cause (if any) this run carries. A
+    // bounded grounding exhaustion and a completed grounding turn whose optional
+    // reads were withheld/unverdictable/partial both land here, so the reflection
+    // states the gap once instead of reading missing evidence as absence.
+    let evidenceDegradation: ReflectionEvidenceDegradation | null = null;
     const reflectionWorkerRouting = {
       ...(reflectionScopeHint
         ? { reflectionScope: reflectionScopeHint }
@@ -971,11 +977,30 @@ export function createReflectionTemplateRuntime(
             ...groundingProvenanceRefs.map(ref => ref.trim()).filter(Boolean),
           ])];
         }
+        // The grounding turn COMPLETED. Its content-free outcome census still
+        // decides whether it saw everything it asked for: an optional read that
+        // was held, had no screening verdict, or came back partial degrades this
+        // reflection without failing it (psfn-framework-lpxg3.2 AC3).
+        evidenceDegradation = resolveCompletedGroundingDegradation(
+          groundingResponse.metadata?.toolCallOutcomes,
+        );
+        if (evidenceDegradation) {
+          reflectionPrompt = joinReflectionPromptSections(
+            reflectionPrompt,
+            evidenceDegradation.promptSection,
+          );
+          // Operator-visible, content-free: cause only, never the held bytes.
+          log.info(`Reflection "${template.id}" continued on degraded evidence`, {
+            templateId: template.id,
+            executionSource: source,
+            cause: evidenceDegradation.cause,
+          });
+        }
       } catch (error) {
         if (!isRecoverableEvidenceGroundingExhaustion(error)) {
           throw error;
         }
-        evidenceGroundingDegraded = true;
+        evidenceDegradation = REFLECTION_EVIDENCE_GROUNDING_DEGRADATION;
         reflectionPrompt = joinReflectionPromptSections(
           reflectionPrompt,
           REFLECTION_EVIDENCE_GROUNDING_DEGRADATION.promptSection,
@@ -1163,9 +1188,7 @@ export function createReflectionTemplateRuntime(
     const persistedMetacognitiveFlags = mergeMetacognitiveFlags(
       persistenceContext?.metacognitiveFlags,
       supportGapFlags,
-      evidenceGroundingDegraded
-        ? [REFLECTION_EVIDENCE_GROUNDING_DEGRADATION.metacognitiveFlag]
-        : [],
+      evidenceDegradation ? [evidenceDegradation.metacognitiveFlag] : [],
       dailyReviewEvidence?.degraded
         ? [DAILY_REVIEW_EVIDENCE_DEGRADATION.metacognitiveFlag]
         : [],
@@ -1273,9 +1296,7 @@ export function createReflectionTemplateRuntime(
           template.id,
           'reflection',
           reflectionMode,
-          ...(evidenceGroundingDegraded
-            ? REFLECTION_EVIDENCE_GROUNDING_DEGRADATION.dailyJournalTags
-            : []),
+          ...(evidenceDegradation ? evidenceDegradation.dailyJournalTags : []),
           ...(dailyReviewEvidence?.degraded
             ? DAILY_REVIEW_EVIDENCE_DEGRADATION.dailyJournalTags
             : []),

@@ -1404,9 +1404,12 @@ describe('tool-result intake screening at the scheduler seam (hrmrq.54)', () => 
       mode: 'enforce',
       withheld: true,
     });
-    // Screening is not an execution failure — the outcome stays a success so
-    // the guard does not degrade the tool signature.
+    // lpxg3.2: a hold is neither a success nor an execution failure. The typed
+    // outcome names it so self-work cannot read withheld evidence as absence,
+    // while isError stays false so the guard does not degrade the signature or
+    // raise a companion-facing operator notice for a benign hold.
     expect(message.isError).toBe(false);
+    expect((message as ObservedToolResult).outcome).toBe('content_withheld');
   });
 
   it('shadow mode leaves the content untouched while stashing the audited outcome', async () => {
@@ -1568,7 +1571,7 @@ describe('tool-result intake screening at the scheduler seam (hrmrq.54)', () => 
     );
     const message = result.toolResults[0] as ObservedToolResult;
     expect(message.isError).toBe(true);
-    expect(message.outcome).toBe('execution_failure');
+    expect(message.outcome).toBe('screening_unavailable');
     expect(JSON.stringify(message.content)).not.toContain('MARKER');
     expect(JSON.stringify(message.content)).not.toContain('ERROR_MARKER');
     expect(JSON.stringify(message.content)).toContain('intake screening failed');
@@ -1604,5 +1607,222 @@ describe('tool-result intake screening at the scheduler seam (hrmrq.54)', () => 
       toolName: 'fs',
       arguments: {},
     });
+  });
+});
+
+// psfn-framework-lpxg3.2: protected self-work must stay coherent when an
+// OPTIONAL read comes back withheld, unverdictable, or partial. The typed
+// outcome says which, and only an explicitly optional evidence edge lets the
+// rest of a sequential batch continue.
+describe('degraded-evidence continuation (psfn-framework-lpxg3.2)', () => {
+  const HELD_NOTICE = 'This content looked a little off, so it is being kept aside.';
+
+  function snapshot(state: 'quarantined' | 'released') {
+    return {
+      envelopeId: 'env-degraded-0001',
+      sourceClass: 'tool_output',
+      sourceRiskTier: 'untrusted',
+      state,
+      riskLabels: state === 'quarantined' ? ['injection/override_attempt'] : [],
+      subject: { kind: 'body' },
+    } as unknown as NonNullable<
+      ReturnType<typeof getToolResultIntakeScreening>
+    >['snapshot'];
+  }
+
+  function sequentialTool(name: string, executed: string[]) {
+    return makeTool(
+      name,
+      async (toolCallId: string) => {
+        executed.push(toolCallId);
+        return { content: [{ type: 'text', text: `read:${toolCallId}` }], details: {} };
+      },
+      {
+        concurrency: makeConcurrencyMeta('exclusive', {
+          exclusivityKeyPolicy: 'category_tool_name',
+          exclusivityKey: 'extended:memory',
+        }),
+      },
+    );
+  }
+
+  it('halts the sequential batch on a withheld read when the dependency is undeclared', async () => {
+    const executed: string[] = [];
+    const result = await executeToolCallsWithScheduler(
+      [sequentialTool('memory', executed)],
+      makeAssistantMessage(['memory', 'memory']),
+      undefined,
+      { stream: { push: () => undefined } },
+      {
+        maxParallelToolCalls: 1,
+        toolResultScreener: () => ({
+          mode: 'enforce' as const,
+          withheld: true,
+          effectiveText: HELD_NOTICE,
+          snapshot: snapshot('quarantined'),
+        }),
+      },
+    );
+
+    expect(executed).toEqual(['call-1']);
+    expect((result.toolResults[0] as ObservedToolResult).outcome).toBe('content_withheld');
+    expect((result.toolResults[1] as ObservedToolResult).outcome).toBe('dependency_skip');
+  });
+
+  it('continues past a withheld optional read and still delivers no withheld content', async () => {
+    const executed: string[] = [];
+    const telemetry = vi.fn();
+    const result = await executeToolCallsWithScheduler(
+      [sequentialTool('memory', executed)],
+      makeAssistantMessage(['memory', 'memory']),
+      undefined,
+      { stream: { push: () => undefined } },
+      {
+        maxParallelToolCalls: 1,
+        resolveEvidenceDependency: () => 'optional' as const,
+        onTelemetry: telemetry,
+        toolResultScreener: (input: { toolCallId: string }) => (
+          input.toolCallId === 'call-1'
+            ? {
+              mode: 'enforce' as const,
+              withheld: true,
+              effectiveText: HELD_NOTICE,
+              snapshot: snapshot('quarantined'),
+            }
+            : {
+              mode: 'enforce' as const,
+              withheld: false,
+              effectiveText: 'read:call-2',
+              snapshot: snapshot('released'),
+            }
+        ),
+      },
+    );
+
+    expect(executed).toEqual(['call-1', 'call-2']);
+    expect((result.toolResults[0] as ObservedToolResult).outcome).toBe('content_withheld');
+    expect((result.toolResults[0] as ToolResultMessage).content)
+      .toEqual([{ type: 'text', text: HELD_NOTICE }]);
+    expect((result.toolResults[1] as ObservedToolResult).outcome).toBe('success');
+    expect(telemetry).toHaveBeenCalledWith('agent.tools.evidence.degraded', {
+      toolName: 'memory',
+      toolCallId: 'call-1',
+      outcome: 'content_withheld',
+      evidenceDependency: 'optional',
+    });
+  });
+
+  it('lets an optional batch continue when the screener itself fails', async () => {
+    const executed: string[] = [];
+    const result = await executeToolCallsWithScheduler(
+      [sequentialTool('memory', executed)],
+      makeAssistantMessage(['memory', 'memory']),
+      undefined,
+      { stream: { push: () => undefined } },
+      {
+        maxParallelToolCalls: 1,
+        resolveEvidenceDependency: () => 'optional' as const,
+        toolResultScreener: (input: { toolCallId: string }) => {
+          if (input.toolCallId === 'call-1') throw new Error('screener down');
+          return {
+            mode: 'enforce' as const,
+            withheld: false,
+            effectiveText: 'read:call-2',
+            snapshot: snapshot('released'),
+          };
+        },
+      },
+    );
+
+    expect(executed).toEqual(['call-1', 'call-2']);
+    const held = result.toolResults[0] as ObservedToolResult;
+    expect(held.outcome).toBe('screening_unavailable');
+    expect(held.isError).toBe(true);
+    expect(JSON.stringify(held.content)).toContain('intake screening failed');
+    expect((result.toolResults[1] as ObservedToolResult).outcome).toBe('success');
+  });
+
+  it('keeps a real execution failure terminal even for an optional consumer', async () => {
+    const executed: string[] = [];
+    const failing = makeTool(
+      'memory',
+      async (toolCallId: string) => {
+        executed.push(toolCallId);
+        throw new Error('memory store unavailable');
+      },
+      {
+        concurrency: makeConcurrencyMeta('exclusive', {
+          exclusivityKeyPolicy: 'category_tool_name',
+          exclusivityKey: 'extended:memory',
+        }),
+      },
+    );
+    const result = await executeToolCallsWithScheduler(
+      [failing],
+      makeAssistantMessage(['memory', 'memory']),
+      undefined,
+      { stream: { push: () => undefined } },
+      { maxParallelToolCalls: 1, resolveEvidenceDependency: () => 'optional' as const },
+    );
+
+    expect(executed).toEqual(['call-1']);
+    expect((result.toolResults[0] as ObservedToolResult).outcome).toBe('execution_failure');
+    expect((result.toolResults[1] as ObservedToolResult).outcome).toBe('dependency_skip');
+  });
+
+  it('classifies a sanitizing admission as a partial result that never halts', async () => {
+    const executed: string[] = [];
+    const result = await executeToolCallsWithScheduler(
+      [sequentialTool('memory', executed)],
+      makeAssistantMessage(['memory', 'memory']),
+      undefined,
+      { stream: { push: () => undefined } },
+      {
+        maxParallelToolCalls: 1,
+        toolResultScreener: () => ({
+          mode: 'enforce' as const,
+          withheld: false,
+          effectiveText: 'read:[redacted]',
+          snapshot: snapshot('released'),
+        }),
+      },
+    );
+
+    expect(executed).toEqual(['call-1', 'call-2']);
+    const first = result.toolResults[0] as ObservedToolResult;
+    expect(first.outcome).toBe('partial_result');
+    expect(first.isError).toBe(false);
+  });
+
+  it('does not degrade a tool signature after repeated benign holds', async () => {
+    const executed: string[] = [];
+    const guard = createToolCallExecutionGuard();
+    const telemetry = vi.fn();
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await executeToolCallsWithScheduler(
+        [sequentialTool('memory', executed)],
+        makeAssistantMessage(['memory']),
+        undefined,
+        { stream: { push: () => undefined } },
+        {
+          maxParallelToolCalls: 1,
+          guard,
+          onTelemetry: telemetry,
+          toolResultScreener: () => ({
+            mode: 'enforce' as const,
+            withheld: true,
+            effectiveText: HELD_NOTICE,
+            snapshot: snapshot('quarantined'),
+          }),
+        },
+      );
+    }
+
+    expect(executed).toHaveLength(3);
+    expect(guard.failureCountsBySignature.size).toBe(0);
+    expect(telemetry).not.toHaveBeenCalledWith(
+      'agent.tools.scheduler.skipped',
+      expect.objectContaining({ reason: 'tool_signature_degraded' }),
+    );
   });
 });

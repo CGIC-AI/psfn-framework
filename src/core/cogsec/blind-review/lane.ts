@@ -67,6 +67,13 @@ export interface BlindReviewRunResult {
   evicted: number;
   /** Model calls this pass made. Zero whenever every batch was gated out. */
   modelCalls: number;
+  /**
+   * Model calls the change gate refused THIS pass. Counts only decisions the
+   * gate actually made over a candidate batch, so an idle window ticking with
+   * nothing to review adds nothing: a counter that grows on empty passes would
+   * be a clock, not a saving.
+   */
+  modelCallsAvoided: number;
   batches: BlindReviewBatchOutcome[];
   window: { total: number; pinned: number; unreviewed: number };
 }
@@ -158,11 +165,19 @@ export class BlindReviewLane {
 
     const batches: BlindReviewBatchOutcome[] = [];
     let modelCalls = 0;
+    let modelCallsAvoided = 0;
     const backoffActive = state.retryNotBeforeMs > this.now();
     if (!backoffActive) {
       const reviewed = await this.reviewPending(mode, state.lastBatchDigest);
       batches.push(...reviewed.outcomes);
       modelCalls = reviewed.modelCalls;
+      modelCallsAvoided = reviewed.modelCallsAvoided;
+      // Durable before the pass settles: the cumulative saving is the only
+      // evidence that "an unchanged or undersized batch costs zero model calls"
+      // is still true in production, and a per-pass number dies with the pass.
+      if (modelCallsAvoided > 0) {
+        await store.recordModelCallsAvoided(modelCallsAvoided, this.now());
+      }
       await this.settleState(state.ingestedThroughMs, ingested, reviewed);
     } else {
       log.info('Blind review pass deferred by retry backoff', {
@@ -179,6 +194,7 @@ export class BlindReviewLane {
       expired: pruned.expired,
       evicted: pruned.evicted,
       modelCalls,
+      modelCallsAvoided,
       batches,
       window,
     };
@@ -211,6 +227,7 @@ export class BlindReviewLane {
   ): Promise<{
       outcomes: BlindReviewBatchOutcome[];
       modelCalls: number;
+      modelCallsAvoided: number;
       lastReviewedDigest: string | null;
       failed: boolean;
     }> {
@@ -221,9 +238,13 @@ export class BlindReviewLane {
     const candidateBatches = chunk(pending, config.batch.maxItemsPerBatch)
       .slice(0, config.cost.maxReviewsPerRun);
     if (candidateBatches.length === 0) {
+      // No candidate batch exists, so the gate was never asked and nothing was
+      // avoided. Counting this would make the savings total grow on every idle
+      // tick of a window with no evidence in it.
       return {
         outcomes: [{ kind: 'skipped', reason: 'no_evidence' }],
         modelCalls: 0,
+        modelCallsAvoided: 0,
         lastReviewedDigest: null,
         failed: false,
       };
@@ -233,6 +254,10 @@ export class BlindReviewLane {
     // unchanged or undersized batch must cost zero model calls.
     const admitted: { digest: string; items: BlindReviewEvidenceItem[] }[] = [];
     const outcomes: BlindReviewBatchOutcome[] = [];
+    // Every gate refusal below is one model call that would otherwise have been
+    // made, whatever the reason: an undersized or unchanged batch is a batch a
+    // reviewer would have been paid to look at.
+    let modelCallsAvoided = 0;
     for (const batch of candidateBatches) {
       const decision = evaluateBlindReviewGate({
         items: batch,
@@ -241,6 +266,7 @@ export class BlindReviewLane {
       });
       if (!decision.review) {
         outcomes.push({ kind: 'skipped', reason: decision.reason });
+        modelCallsAvoided += 1;
         if (decision.reason === 'unchanged_digest') {
           // Byte-identical evidence already has an answer on record. Retire the
           // rows so the head advances instead of re-offering them forever.
@@ -251,7 +277,7 @@ export class BlindReviewLane {
       admitted.push({ digest: decision.digest, items: decision.items });
     }
     if (admitted.length === 0) {
-      return { outcomes, modelCalls: 0, lastReviewedDigest: null, failed: false };
+      return { outcomes, modelCalls: 0, modelCallsAvoided, lastReviewedDigest: null, failed: false };
     }
 
     const results = await withBoundedConcurrency(
@@ -264,6 +290,7 @@ export class BlindReviewLane {
     return {
       outcomes,
       modelCalls: admitted.length,
+      modelCallsAvoided,
       lastReviewedDigest: failed || !lastAdmitted ? null : lastAdmitted.digest,
       failed,
     };

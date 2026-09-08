@@ -26,6 +26,7 @@ import {
   BLIND_REVIEW_PROCESSOR,
   emptyBlindReviewLaneState,
   type BlindReviewEvidenceItem,
+  type BlindReviewGateSavings,
   type BlindReviewLaneState,
   type BlindReviewPinResult,
   type BlindReviewPruneRequest,
@@ -58,6 +59,11 @@ interface StateRow extends QueryResultRow {
   review_attempt: number;
   retry_not_before_ms: string | number;
   updated_at_ms: string | number;
+}
+
+interface SavingsRow extends QueryResultRow {
+  model_calls_avoided: string | number;
+  model_calls_avoided_at_ms: string | number;
 }
 
 interface CountRow extends QueryResultRow {
@@ -305,6 +311,52 @@ export class PostgresCogSecBlindReviewStore implements BlindReviewStorePort {
       pinned: toNumber(row.pinned, 'pinned'),
       unreviewed: toNumber(row.unreviewed, 'unreviewed'),
     };
+  }
+
+  /**
+   * Additive, single-statement increment. The `+` happens in SQL rather than in
+   * TypeScript so a cumulative total can never be rolled back to a stale value
+   * a caller happened to read earlier, and the row is created on first use with
+   * zeroed lane state — an untouched watermark, which is exactly what a lane
+   * that has only ever gated batches out has.
+   */
+  async recordModelCallsAvoided(count: number, atMs: number): Promise<void> {
+    if (!Number.isInteger(count) || count <= 0) {
+      throw new Error('Blind review avoided-call count must be a positive integer');
+    }
+    if (!Number.isInteger(atMs) || atMs < 0) {
+      throw new Error('Blind review avoided-call timestamp must be a non-negative integer');
+    }
+    await executeQuery(this.pool, `
+      INSERT INTO cogsec_blind_review_state (
+        processor, ingested_through_ms, last_batch_digest,
+        review_attempt, retry_not_before_ms, updated_at_ms,
+        model_calls_avoided, model_calls_avoided_at_ms
+      ) VALUES ($1, 0, NULL, 0, 0, 0, $2, $3)
+      ON CONFLICT (processor) DO UPDATE SET
+        model_calls_avoided
+          = cogsec_blind_review_state.model_calls_avoided + EXCLUDED.model_calls_avoided,
+        model_calls_avoided_at_ms = EXCLUDED.model_calls_avoided_at_ms
+    `, [BLIND_REVIEW_PROCESSOR, count, atMs]);
+  }
+
+  async readModelCallsAvoided(): Promise<BlindReviewGateSavings> {
+    const row = await queryOne<SavingsRow>(this.pool, `
+      SELECT model_calls_avoided, model_calls_avoided_at_ms
+      FROM cogsec_blind_review_state
+      WHERE processor = $1
+    `, [BLIND_REVIEW_PROCESSOR]);
+    if (!row) return { modelCallsAvoided: 0, lastAvoidedAtMs: 0 };
+    const savings = {
+      modelCallsAvoided: toNumber(row.model_calls_avoided, 'model_calls_avoided'),
+      lastAvoidedAtMs: toNumber(row.model_calls_avoided_at_ms, 'model_calls_avoided_at_ms'),
+    };
+    // The DDL floor is re-asserted on the way out: a row edited in the database
+    // past its CHECK is a load failure, not a quiet operator statistic.
+    if (savings.modelCallsAvoided < 0 || savings.lastAvoidedAtMs < 0) {
+      throw new Error('Blind review gate savings must be non-negative');
+    }
+    return savings;
   }
 
   async close(): Promise<void> {

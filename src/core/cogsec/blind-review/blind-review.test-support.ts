@@ -10,6 +10,7 @@ import {
   blindReviewSourceRef,
   emptyBlindReviewLaneState,
   type BlindReviewEvidenceItem,
+  type BlindReviewGateSavings,
   type BlindReviewLaneState,
   type BlindReviewStorePort,
 } from './contracts.js';
@@ -87,6 +88,10 @@ export class InMemoryBlindReviewStore implements BlindReviewStorePort {
   }>();
 
   private state: BlindReviewLaneState = emptyBlindReviewLaneState(0);
+
+  /** Separate from `state` for the same reason the column is: `writeState`
+   * replaces the whole row, and a cumulative counter must survive that. */
+  private savings: BlindReviewGateSavings = { modelCallsAvoided: 0, lastAvoidedAtMs: 0 };
 
   async appendEvidence(items: readonly BlindReviewEvidenceItem[]): Promise<number> {
     let admitted = 0;
@@ -179,6 +184,20 @@ export class InMemoryBlindReviewStore implements BlindReviewStorePort {
       pinned: rows.filter(row => row.pinnedCaseId !== null).length,
       unreviewed: rows.filter(row => row.reviewedAtMs === null).length,
     };
+  }
+
+  async recordModelCallsAvoided(count: number, atMs: number): Promise<void> {
+    if (!Number.isInteger(count) || count <= 0) {
+      throw new Error('Blind review avoided-call count must be a positive integer');
+    }
+    this.savings = {
+      modelCallsAvoided: this.savings.modelCallsAvoided + count,
+      lastAvoidedAtMs: atMs,
+    };
+  }
+
+  async readModelCallsAvoided(): Promise<BlindReviewGateSavings> {
+    return { ...this.savings };
   }
 
   async close(): Promise<void> {}

@@ -140,6 +140,21 @@ export interface BlindReviewPruneResult {
   evicted: number;
 }
 
+/**
+ * What the deterministic change gate has saved, cumulatively (33xah).
+ *
+ * Deliberately NOT part of `BlindReviewLaneState`: lane state is written as a
+ * whole row every pass, and a whole-row write would clobber a counter that only
+ * ever grows. The counter is incremented by its own additive statement and read
+ * back through its own narrow read, so the two can never race each other.
+ */
+export interface BlindReviewGateSavings {
+  /** Model calls the gate refused over the lane's whole life. Never decreases. */
+  modelCallsAvoided: number;
+  /** Epoch ms of the most recent refusal; 0 when the gate has never refused one. */
+  lastAvoidedAtMs: number;
+}
+
 export interface BlindReviewPinResult {
   pinned: number;
   /** Rows the pin ceiling refused. Non-zero is an operator-visible error. */
@@ -168,6 +183,15 @@ export interface BlindReviewStorePort {
   prune(request: BlindReviewPruneRequest): Promise<BlindReviewPruneResult>;
   /** Window census used by the lane's telemetry and by backpressure proofs. */
   countRows(): Promise<{ total: number; pinned: number; unreviewed: number }>;
+  /**
+   * Add `count` gate-refused model calls to the durable cumulative total and
+   * stamp the refusal time. Additive rather than read-modify-write: the total
+   * must survive a crash between two passes and must not depend on the caller
+   * having read the previous value.
+   */
+  recordModelCallsAvoided(count: number, atMs: number): Promise<void>;
+  /** The cumulative savings, for operator projections. */
+  readModelCallsAvoided(): Promise<BlindReviewGateSavings>;
   close(): Promise<void>;
 }
 

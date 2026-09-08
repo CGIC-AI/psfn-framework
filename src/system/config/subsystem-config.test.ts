@@ -538,6 +538,13 @@ describe('subsystem config round-trip', () => {
         minRelevanceScore: 0.25,
         minToolCalls: 3,
         nudgeEveryNthTurn: 3,
+        // sap72: post-use outcome evidence weight, contract default.
+        outcomeEvidenceWeight: 0.25,
+      },
+      // 7wggj: the eligibility block is optional in the owner file and fills in
+      // from the contract defaults, so the round-trip must state it too.
+      eligibility: {
+        maxTotalBinaryChecks: 4096,
       },
     };
 

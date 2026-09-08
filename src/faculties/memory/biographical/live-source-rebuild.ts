@@ -151,6 +151,14 @@ export async function resolveLiveBiographicalCandidates(input: {
   readonly depth: BiographicalCollectionDepth;
   readonly candidateLimit: number;
   readonly admittedKinds?: readonly BiographicalClaimKind[];
+  /**
+   * Exact canonical participant set every resolved candidate binds (uz787).
+   * Supplied by the runtime group authority, never parsed from the response:
+   * the model describes what was said, it never decides who was in the group.
+   * Mutually exclusive with a derived related subject, exactly as the claim
+   * shape requires.
+   */
+  readonly participants?: readonly BiographicalSubjectRef[];
   readonly now?: Date;
 }): Promise<LiveBiographicalCandidateResolution> {
   const records = candidateRecords(input.responseContent);
@@ -214,7 +222,10 @@ export async function resolveLiveBiographicalCandidates(input: {
       );
       parsed = parsePortableStableCandidate({
         subject: input.subject,
-        ...(relatedSubject !== undefined ? { relatedSubject } : {}),
+        ...(input.participants === undefined && relatedSubject !== undefined
+          ? { relatedSubject }
+          : {}),
+        ...(input.participants !== undefined ? { participants: input.participants } : {}),
         kind: rawCandidate.kind,
         value: rawCandidate.value,
         basis: rawCandidate.basis,

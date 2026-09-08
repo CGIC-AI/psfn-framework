@@ -128,6 +128,32 @@ function candidatesResponse(candidates: readonly unknown[]): string {
   return `<biographical_candidates>${JSON.stringify(candidates)}</biographical_candidates>`;
 }
 
+function sharedLanguageCandidate(sourceMemoryIds: readonly string[], phrase = 'pier o\'clock') {
+  return {
+    kind: 'shared-language',
+    value: {
+      kind: 'shared-language',
+      schemaVersion: 1,
+      languageType: 'phrase',
+      phrase,
+      meaning: 'time to go and watch the sunset together',
+    },
+    basis: 'explicit',
+    confidence: 0.9,
+    sourceMemoryIds: [...sourceMemoryIds],
+  };
+}
+
+const GROUP_TARGET: BiographySynthesisTarget = {
+  subject: COMPANION_SUBJECT,
+  socialContext: {
+    kind: 'companion_group',
+    companionId: COMPANION_SUBJECT.companionId,
+    contactIds: ['contact-a-invented', 'contact-b-invented'],
+  },
+  depth: 'full',
+};
+
 function preferenceCandidate(sourceMemoryIds: readonly string[], target = 'concise explanations') {
   return {
     kind: 'stable-preference',
@@ -175,6 +201,87 @@ function policyWithPendingCap(maxPendingCandidates: number): BiographicalCandida
 }
 
 describe('BiographySynthesisService', () => {
+  // psfn-framework-uz787 — a group target is anchored on the companion but is
+  // not autobiography: only shared-language is n-ary, and the participant set
+  // comes from the runtime authority that vouched for the membership.
+  describe('companion_group targets (uz787)', () => {
+    function groupFixture() {
+      const memories = new InMemoryMemoryStore();
+      memories.insertMemory(companionMemory('mem-group-a', {
+        text: "The three of us started saying pier o'clock when the light goes gold.",
+      }));
+      return { memories, profileStore: new InMemoryBiographicalProfileStore(() => NOW) };
+    }
+
+    it('binds the authority participant set, not anything the model names', async () => {
+      const { memories, profileStore } = groupFixture();
+      const model = recordingModel([candidatesResponse([sharedLanguageCandidate(['mem-group-a'])])]);
+
+      const telemetry = await buildService({
+        memoryStore: memories.asPort(),
+        profileStore,
+        model,
+        targets: [GROUP_TARGET],
+      }).run();
+
+      expect(telemetry.candidatesStaged).toBe(1);
+      const staged = await profileStore.listCandidates({ limit: 10 });
+      expect(staged[0]?.socialContext).toEqual(GROUP_TARGET.socialContext);
+      const claim = await profileStore.getClaim(staged[0]!.claimId);
+      expect(claim?.kind).toBe('shared-language');
+      expect(claim?.subject).toEqual(COMPANION_SUBJECT);
+      // The exact canonical set, canonically ordered, and no dyad fallback.
+      expect(claim?.participants?.map(participant => (
+        participant.kind === 'contact' ? participant.contactId : participant.kind
+      ))).toEqual(['contact-a-invented', 'contact-b-invented']);
+      expect(claim?.relatedSubject).toBeUndefined();
+      // The prompt states the set as fixed rather than inviting one.
+      expect(model.prompts[0]).toContain('contact-a-invented, contact-b-invented');
+      expect(model.prompts[0]).toContain('do not propose a different one');
+      expect(model.prompts[0]).toContain('shared-language');
+    });
+
+    it('admits only shared-language from a group scan', async () => {
+      const { memories, profileStore } = groupFixture();
+      // The synthesizer proposes a preference, which is not an n-ary kind.
+      const model = recordingModel([candidatesResponse([preferenceCandidate(['mem-group-a'])])]);
+
+      const telemetry = await buildService({
+        memoryStore: memories.asPort(),
+        profileStore,
+        model,
+        targets: [GROUP_TARGET],
+      }).run();
+
+      expect(telemetry.candidatesStaged).toBe(0);
+      expect(await profileStore.listCandidates({ limit: 10 })).toHaveLength(0);
+    });
+
+    it('keeps a group scan from overwriting the autobiography no-change cursor', async () => {
+      const { memories, profileStore } = groupFixture();
+      const model = recordingModel([candidatesResponse([sharedLanguageCandidate(['mem-group-a'])])]);
+      await buildService({
+        memoryStore: memories.asPort(),
+        profileStore,
+        model,
+        targets: [GROUP_TARGET],
+      }).run();
+
+      // The same evidence, scanned as the companion's own autobiography, is
+      // still open: the group pass wrote its own participant-keyed cursor.
+      const selfModel = recordingModel([candidatesResponse([preferenceCandidate(['mem-group-a'])])]);
+      const selfRun = await buildService({
+        memoryStore: memories.asPort(),
+        profileStore,
+        model: selfModel,
+        targets: [COMPANION_TARGET],
+        runId: 'biography-synthesis:self-run',
+      }).run();
+      expect(selfRun.targetsUnchanged).toBe(0);
+      expect(selfModel.prompts).toHaveLength(1);
+    });
+  });
+
   // psfn-framework-a18qq — under a saturated human-review backlog the pending
   // cap threw in `writeCandidate`, i.e. AFTER the model call. Every tick then
   // re-synthesized the same evidence and threw again. The pass now reads the

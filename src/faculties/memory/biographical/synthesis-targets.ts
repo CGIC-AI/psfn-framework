@@ -46,10 +46,71 @@ function depthRelationshipType(
  */
 const SCANNED_TRUST_LEVELS: readonly TrustLevel[] = HIGH_TIER_TRUST_LEVELS;
 
+/**
+ * One verified group the companion belongs to (psfn-framework-uz787).
+ *
+ * Membership is a governance fact, exactly like canonical-contact and
+ * relationship evidence: it must come from an authority that can vouch for the
+ * exact participant set. A room roster, a channel label or model output are
+ * deliberately NOT acceptable inputs — an n-ary claim binds real people, and
+ * getting the set wrong writes a durable fact about someone who was never
+ * there.
+ */
+export interface VerifiedBiographyGroupMembership {
+  /** Stable id of the governed context this membership comes from. */
+  readonly contextId: string;
+  /** `authority:id` reference for the source that vouches for the membership. */
+  readonly governanceAuthorityRef: string;
+  readonly verified: boolean;
+  /** Canonical contact ids, at least two, that make up the group. */
+  readonly contactIds: readonly string[];
+}
+
+/**
+ * The seam a future group-membership authority plugs into.
+ *
+ * NOTHING implements this today: no production source can currently vouch for a
+ * canonical group membership, which is why `deriveBiographicalCollectionDepth`
+ * still receives `governedContexts: []` below. Until an implementation exists,
+ * `createBiographySynthesisTargetPort` is constructed without it and group
+ * synthesis is OFF: zero group targets, zero group candidates. That is the
+ * fail-closed default, not a gap to be filled by a heuristic.
+ */
+export interface BiographyGroupMembershipAuthorityPort {
+  /** Verified groups the companion is a member of, bounded by `limit`. */
+  listVerifiedGroups(limit: number): Promise<readonly VerifiedBiographyGroupMembership[]>;
+}
+
+/**
+ * Canonicalize and validate one membership before it can become a target.
+ * Anything unverified, under-sized, duplicated, unreferenced or blank is
+ * dropped rather than repaired: a group fact built on an uncertain set is worse
+ * than no group fact.
+ */
+function admissibleGroupContactIds(
+  membership: VerifiedBiographyGroupMembership,
+): readonly string[] | null {
+  if (!membership.verified) return null;
+  if (!/^[a-z][a-z0-9_-]*:[^\s]+$/u.test(membership.governanceAuthorityRef)) return null;
+  if (membership.contextId.trim().length === 0) return null;
+  const contactIds = membership.contactIds.map(id => id.trim()).filter(id => id.length > 0);
+  const unique = [...new Set(contactIds)].sort((left, right) => left.localeCompare(right));
+  // Two is what makes a set a group rather than a dyad — the claim shape's own
+  // definition (`assertParticipantSet`), mirrored here so an inadmissible
+  // membership never reaches the synthesizer at all.
+  if (unique.length !== contactIds.length || unique.length < 2) return null;
+  return unique;
+}
+
 export function createBiographySynthesisTargetPort(input: {
   readonly contactStore: ContactStorePort;
   readonly companionSubject: Extract<BiographicalSubjectRef, { kind: 'companion' }>;
   readonly depthPolicy: () => BiographicalDepthPolicy;
+  /**
+   * uz787: absent (the production default today) means no group targets at all.
+   * Group synthesis exists only when an authority vouches for the membership.
+   */
+  readonly groupMembershipAuthority?: BiographyGroupMembershipAuthorityPort;
 }): BiographySynthesisTargetPort {
   const contactEvidence = async (
     contact: Contact,
@@ -113,6 +174,31 @@ export function createBiographySynthesisTargetPort(input: {
               contactId: contact.id,
             },
             depth,
+          });
+        }
+      }
+      // uz787: group targets exist only where an authority vouches for the
+      // exact membership. With no authority wired this loop does not run and
+      // the pass is byte-identical to the pre-uz787 behavior.
+      const authority = input.groupMembershipAuthority;
+      if (authority !== undefined && targets.length < limit) {
+        for (const membership of await authority.listVerifiedGroups(limit - targets.length)) {
+          if (targets.length >= limit) break;
+          const contactIds = admissibleGroupContactIds(membership);
+          if (contactIds === null) continue;
+          targets.push({
+            // A group claim is anchored on the companion subject and binds its
+            // participants explicitly; it is never a claim ABOUT one member.
+            subject: input.companionSubject,
+            socialContext: {
+              kind: 'companion_group',
+              companionId: input.companionSubject.companionId,
+              contactIds,
+            },
+            // Group evidence is collected from the companion's own silo at the
+            // same depth her autobiography uses; per-source admission still
+            // runs through owner candidate policy unchanged.
+            depth: 'full',
           });
         }
       }

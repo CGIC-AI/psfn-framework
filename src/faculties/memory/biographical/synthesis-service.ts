@@ -62,6 +62,14 @@ const DYADIC_CANDIDATE_KINDS: readonly BiographicalClaimKind[] = [
 ];
 
 /**
+ * The only kind an n-ary group claim may take (o61vb.15 / uz787). This is the
+ * claim shape talking, not a tuning choice: `assertRelatedSubjectShape` refuses
+ * a participant set on any other kind precisely so a group fact can never come
+ * to read as a singular one.
+ */
+const GROUP_CANDIDATE_KINDS: readonly BiographicalClaimKind[] = ['shared-language'];
+
+/**
  * One canonical subject to scan, with the social context its candidates are
  * grouped under. Subject selection is runtime authority: the synthesizer never
  * chooses whom it is writing about.
@@ -146,15 +154,57 @@ interface CoalescedCandidate {
   readonly mergedCount: number;
 }
 
-function admittedKindsForSubject(
-  subject: BiographicalSubjectRef,
+/**
+ * uz787: which claim kinds a scan may propose, decided by the target's social
+ * context rather than by the subject alone.
+ *
+ * A `companion_group` target is anchored on the companion subject but is NOT an
+ * autobiography scan: `shared-language` is the only n-ary kind the claim shape
+ * admits (`assertRelatedSubjectShape`), so a group scan proposes that and
+ * nothing else. Without the group context a companion-subject scan keeps its
+ * existing rule: no dyadic kinds at all.
+ */
+function admittedKindsForTarget(
+  target: BiographySynthesisTarget,
 ): readonly BiographicalClaimKind[] {
-  return subject.kind === 'companion'
+  if (target.socialContext.kind === 'companion_group') {
+    return GROUP_CANDIDATE_KINDS;
+  }
+  return target.subject.kind === 'companion'
     ? PORTABLE_BIOGRAPHY_CANDIDATE_KINDS.filter(kind => !DYADIC_CANDIDATE_KINDS.includes(kind))
     : PORTABLE_BIOGRAPHY_CANDIDATE_KINDS;
 }
 
+/**
+ * The exact canonical participant set a group target binds, as canonical
+ * contact subjects. Sourced from the target's authority-issued social context —
+ * never from the model, which cannot name who was in the room.
+ */
+function groupParticipantsForTarget(
+  target: BiographySynthesisTarget,
+): readonly BiographicalSubjectRef[] | undefined {
+  if (target.socialContext.kind !== 'companion_group') return undefined;
+  return target.socialContext.contactIds.map(contactId => ({
+    kind: 'contact' as const,
+    contactId,
+    subjectVersion: 1,
+  }));
+}
+
 function subjectContextBlock(target: BiographySynthesisTarget): string {
+  // uz787: a group scan is anchored on the companion but is not autobiography.
+  // The participant set is stated as a fact of the scan, not as something to
+  // propose: the runtime already decided who was in the group, and a candidate
+  // that tries to name a different set is rejected by the claim shape.
+  if (target.socialContext.kind === 'companion_group') {
+    return [
+      'Subject kind: a group the companion is part of',
+      `Canonical companion id: ${target.socialContext.companionId}`,
+      `Canonical group participants: ${target.socialContext.contactIds.join(', ')}`,
+      'Only shared-language claims about this exact group are available in this scan.',
+      'The participant set is fixed by the runtime; do not propose a different one.',
+    ].join('\n');
+  }
   return target.subject.kind === 'companion'
     ? [
         'Subject kind: the companion themself (autobiography)',
@@ -200,6 +250,19 @@ export function stageCursorKeyForSubject(subject: BiographicalSubjectRef): strin
   return subject.kind === 'companion'
     ? `companion:${subject.companionId}`
     : `contact:${subject.contactId}`;
+}
+
+/**
+ * Durable no-change cursor key for one target (uz787). Group targets share the
+ * companion subject, so keying on the subject alone would make every group
+ * overwrite the autobiography's cursor and each other's. The exact canonical
+ * participant set — which the group authority, not the model, decides — is what
+ * distinguishes them.
+ */
+export function stageCursorKeyForTarget(target: BiographySynthesisTarget): string {
+  const subjectKey = stageCursorKeyForSubject(target.subject);
+  if (target.socialContext.kind !== 'companion_group') return subjectKey;
+  return `${subjectKey}|group:${target.socialContext.contactIds.join(',')}`;
 }
 
 export class BiographySynthesisService {
@@ -377,7 +440,7 @@ export class BiographySynthesisService {
     // silo costs one cursor read and zero model calls. It is checked after the
     // policy filter on purpose: a source becoming inadmissible changes the
     // digest and correctly re-opens the target.
-    const cursorKey = stageCursorKeyForSubject(target.subject);
+    const cursorKey = stageCursorKeyForTarget(target);
     const evidenceDigest = computeStageInputDigest(collection.evidence.map(
       entry => `${entry.source.ref}@${entry.source.revision}@${entry.source.evidenceDigest}`,
     ));
@@ -389,7 +452,8 @@ export class BiographySynthesisService {
       return { ...empty, unchanged: true };
     }
 
-    const admittedKinds = admittedKindsForSubject(target.subject);
+    const admittedKinds = admittedKindsForTarget(target);
+    const groupParticipants = groupParticipantsForTarget(target);
     const now = this.now();
     const response = await this.synthesize({ target, collection, candidateLimit, admittedKinds });
     const resolution = await resolveLiveBiographicalCandidates({
@@ -401,6 +465,9 @@ export class BiographySynthesisService {
       depth: target.depth,
       candidateLimit,
       admittedKinds,
+      // Authority-issued, so a model that names its own participants cannot
+      // change who a group claim binds.
+      ...(groupParticipants ? { participants: groupParticipants } : {}),
       now,
     });
 

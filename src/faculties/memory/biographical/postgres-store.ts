@@ -30,7 +30,9 @@ import {
   type BiographicalSupersessionResult,
   type BiographicalTransitionInput,
   type PreparedBiographicalClaim,
+  applyClaimPortability,
   assertClaimTransition,
+  type BiographicalPortabilityInput,
 } from './store-port.js';
 import {
   assertCandidateClaimBinding,
@@ -391,11 +393,11 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
       });
       if (updated.stage === 'active') {
         assertClaimTransition(claim, 'active', now);
-        const active: BiographicalClaim = {
-          ...claim,
-          status: 'active',
-          lastSourceValidatedAt: now.toISOString(),
-        };
+        const active = applyClaimPortability(
+          { ...claim, status: 'active', lastSourceValidatedAt: now.toISOString() },
+          input.portabilityScope ?? 'origin_only',
+          now,
+        );
         const claimUpdate = await client.query(
           `UPDATE biographical_claims
            SET status = 'active', claim_json = $2::jsonb, updated_at = $3
@@ -671,6 +673,28 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
            status = $2, claim_json = $3::jsonb, updated_at = $4
          WHERE id = $1`,
         [updated.id, updated.status, serializeClaim(updated), now.toISOString()],
+      );
+      return updated;
+    });
+  }
+
+  async setClaimPortability(input: BiographicalPortabilityInput): Promise<BiographicalClaim> {
+    const now = input.now ?? this.now();
+    return await this.inTransaction(async (_store, client) => {
+      const row = await client.query<ClaimRow>(
+        'SELECT claim_json FROM biographical_claims WHERE id = $1 FOR UPDATE',
+        [input.claimId],
+      );
+      const current = row.rows.at(0);
+      if (!current) throw new Error(`biographical claim not found: ${input.claimId}`);
+      const updated = applyClaimPortability(
+        deserializeClaim(current.claim_json),
+        input.portabilityScope,
+        now,
+      );
+      await client.query(
+        'UPDATE biographical_claims SET claim_json = $2::jsonb, updated_at = $3 WHERE id = $1',
+        [updated.id, serializeClaim(updated), now.toISOString()],
       );
       return updated;
     });

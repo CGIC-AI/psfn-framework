@@ -390,7 +390,26 @@ export function assertRelatedSubjectShape(
   value: BiographicalClaimValue,
   relatedSubject: BiographicalSubjectRef | undefined,
   subject?: BiographicalSubjectRef,
+  /** Exact canonical participant set for an n-ary group claim (o61vb.15). */
+  participants?: readonly BiographicalSubjectRef[],
 ): void {
+  if (participants !== undefined) {
+    // Only shared language is n-ary. A name, role, preference, relationship or
+    // nickname is about one subject or one dyad; letting any of them carry a
+    // participant set is exactly how a group fact would come to read as a
+    // singular one.
+    if (kind !== 'shared-language') {
+      throw new BiographicalClaimValidationError(
+        `${kind} claim must not bind a participant set`,
+      );
+    }
+    if (subject !== undefined && subject.kind !== 'companion') {
+      throw new BiographicalClaimValidationError(
+        'a group shared-language claim is anchored on the companion subject',
+      );
+    }
+    return;
+  }
   if (kind === 'relationship') {
     if (!relatedSubject) {
       throw new BiographicalClaimValidationError('relationship claim requires a related subject');

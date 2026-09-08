@@ -162,11 +162,37 @@ export function findCandidateReceipt(
  * and two dyads sharing a room stay separate.
  */
 function assertCandidateSocialContext(
-  claim: Pick<BiographicalClaim, 'subject' | 'relatedSubject'>,
+  claim: Pick<BiographicalClaim, 'subject' | 'relatedSubject' | 'participants'>,
   context: BiographicalCandidateSocialContext,
 ): void {
-  const subjects = [claim.subject, ...(claim.relatedSubject ? [claim.relatedSubject] : [])];
+  const subjects = [
+    claim.subject,
+    ...(claim.relatedSubject ? [claim.relatedSubject] : []),
+    ...(claim.participants ?? []),
+  ];
   const companionId = nonEmpty(context.companionId, 'socialContext.companionId');
+  if (context.kind === 'companion_group') {
+    // A group context is the claim's exact participant set, not a superset a
+    // synthesizer chose: an n-ary fact never widens by naming extra people.
+    const participants = claim.participants ?? [];
+    const bound = participants.flatMap(
+      subject => (subject.kind === 'contact' ? [subject.contactId] : []),
+    );
+    const declared = context.contactIds.map(
+      (contactId, index) => nonEmpty(contactId, `socialContext.contactIds[${index}]`),
+    );
+    const exact = bound.length === declared.length
+      && [...bound].sort().every((contactId, index) => contactId === [...declared].sort()[index]);
+    const companionAgrees = subjects.every(
+      subject => subject.kind !== 'companion' || subject.companionId === companionId,
+    );
+    if (participants.length === 0 || !exact || !companionAgrees) {
+      throw new Error(
+        'biography candidate group context must be the exact claim participant set',
+      );
+    }
+    return;
+  }
   if (context.kind === 'companion_self') {
     if (
       subjects.some(subject => subject.kind === 'contact')
@@ -588,6 +614,19 @@ function deserializeSocialContext(value: unknown): BiographicalCandidateSocialCo
     return {
       kind: 'companion_self',
       companionId: nonEmpty(value.companionId, 'stored socialContext companionId'),
+    };
+  }
+  if (
+    value.kind === 'companion_group'
+    && hasExactKeys(value, ['kind', 'companionId', 'contactIds'])
+    && Array.isArray(value.contactIds)
+  ) {
+    return {
+      kind: 'companion_group',
+      companionId: nonEmpty(value.companionId, 'stored socialContext companionId'),
+      contactIds: value.contactIds.map(
+        (contactId, index) => nonEmpty(contactId, `stored socialContext contactIds[${index}]`),
+      ),
     };
   }
   if (

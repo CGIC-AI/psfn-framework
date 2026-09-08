@@ -17,6 +17,8 @@ import type {
   AdminBiographicalClaimList,
 } from '$lib/types';
 
+export type BiographicalPortabilityScope = 'origin_only' | 'universal' | 'subject_present';
+
 export type BiographicalReviewRequest =
   | { action: 'approve' | 'deny'; claimDigest: string; sourceSetDigest: string }
   | { action: 'revoke'; claimDigest: string; sourceSetDigest: string; grantId: string }
@@ -33,6 +35,14 @@ export type BiographicalReviewRequest =
       sourceSetDigest: string;
       candidateRevision: number;
       reason?: 'reviewer_approved';
+      portabilityScope?: BiographicalPortabilityScope;
+    }
+  /** Set or withdraw one active claim's reviewed portability (o61vb.15). */
+  | {
+      action: 'set-portability';
+      claimDigest: string;
+      sourceSetDigest: string;
+      portabilityScope: BiographicalPortabilityScope;
     }
   | {
       action: 'stage-reject';

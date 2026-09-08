@@ -456,10 +456,11 @@ export function registerSchedulerOwnedPostTurnLanes(
               rescheduleAt: batonRun.retryAtMs,
               detail: 'Sleeptime is waiting for the fleet maintenance baton',
             },
+            // No summary: an attempt that never won the baton did no work, so
+            // it settles as a typed no-finding rather than a useful handoff.
             lifecycleState: 'cancelled',
             outcome: 'cancelled',
             resultKind: 'none',
-            summary: 'Sleeptime attempt never won the fleet maintenance baton',
           };
         }
         const outcome = batonRun?.result ?? await sleeptimeAgent.execute(action);

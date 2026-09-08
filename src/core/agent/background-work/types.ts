@@ -56,7 +56,7 @@ export type BackgroundWorkKind = typeof BACKGROUND_WORK_KINDS[number];
  * begin/brief/tool/handoff/terminal ordering behind {@link
  * BackgroundWorkGovernedClassRunner}.
  */
-export interface BackgroundWorkGovernedClassRun {
+interface BackgroundWorkGovernedClassRun {
   runId: string;
   taskId: string;
   taskLabel: string;

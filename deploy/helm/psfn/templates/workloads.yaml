@@ -1002,12 +1002,29 @@ spec:
                  the reference itself travels through config. */}}
             - name: EIDOVERSE_MCP_ENABLED
               value: "true"
+            - name: EIDOVERSE_MCP_TRANSPORT
+              value: {{ .Values.satelliteHub.eidoverse.transport | quote }}
+            {{- if eq .Values.satelliteHub.eidoverse.transport "poll" }}
             - name: EIDOVERSE_MCP_COMMAND
               value: {{ .Values.satelliteHub.eidoverse.command | quote }}
             - name: EIDOVERSE_MCP_ARGS_JSON
               value: {{ toJson .Values.satelliteHub.eidoverse.args | quote }}
             - name: EIDOVERSE_MCP_WORLD_URL
               value: {{ .Values.satelliteHub.eidoverse.worldUrl | quote }}
+            {{- end }}
+            {{- if eq .Values.satelliteHub.eidoverse.transport "mcpl" }}
+            {{- /* Phase 2 MCPL door. The door URL is credential-free; the
+                 identity token is attached at dial time from the same
+                 tokenRef entry the stdio transport uses. */}}
+            - name: EIDOVERSE_MCPL_DOOR_URL
+              value: {{ .Values.satelliteHub.eidoverse.mcpl.doorUrl | quote }}
+            - name: EIDOVERSE_MCPL_FEATURE_SETS_JSON
+              value: {{ toJson .Values.satelliteHub.eidoverse.mcpl.featureSets | quote }}
+            - name: EIDOVERSE_MCPL_CATCHUP_WAKE
+              value: {{ .Values.satelliteHub.eidoverse.mcpl.catchupWake | quote }}
+            - name: EIDOVERSE_MCPL_HANDSHAKE_TIMEOUT_MS
+              value: {{ .Values.satelliteHub.eidoverse.mcpl.handshakeTimeoutMs | quote }}
+            {{- end }}
             - name: EIDOVERSE_MCP_WORLD_NAME
               value: {{ .Values.satelliteHub.eidoverse.worldName | quote }}
             - name: EIDOVERSE_MCP_AGENT_NAME
@@ -1022,8 +1039,10 @@ spec:
               value: {{ .Values.satelliteHub.eidoverse.reconnectMaxAttempts | quote }}
             - name: EIDOVERSE_MCP_REQUEST_TIMEOUT_MS
               value: {{ .Values.satelliteHub.eidoverse.requestTimeoutMs | quote }}
+            {{- if eq .Values.satelliteHub.eidoverse.transport "poll" }}
             - name: EIDOVERSE_MCP_PENDING_PINGS_POLL_INTERVAL_MS
               value: {{ .Values.satelliteHub.eidoverse.pendingPingsPollIntervalMs | quote }}
+            {{- end }}
             - name: EIDOVERSE_MCP_AMBIENT_SAY_DEBOUNCE_MS
               value: {{ .Values.satelliteHub.eidoverse.ambientSayDebounceMs | quote }}
             - name: {{ .Values.satelliteHub.eidoverse.tokenRef }}

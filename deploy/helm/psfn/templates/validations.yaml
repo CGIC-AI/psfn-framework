@@ -393,8 +393,9 @@ never back a ClusterIssuer. */ -}}
 {{- end -}}
 {{- if .Values.satelliteHub.eidoverse.enabled -}}
 {{- $eidoverse := .Values.satelliteHub.eidoverse -}}
-{{- if not (trim ($eidoverse.command | default "")) -}}
-{{- fail "satelliteHub.eidoverse.command is required when satelliteHub.eidoverse.enabled=true" -}}
+{{- $transport := trim ($eidoverse.transport | default "poll") -}}
+{{- if not (has $transport (list "poll" "mcpl")) -}}
+{{- fail "satelliteHub.eidoverse.transport must be \"poll\" or \"mcpl\"" -}}
 {{- end -}}
 {{- if not (trim ($eidoverse.worldName | default "")) -}}
 {{- fail "satelliteHub.eidoverse.worldName is required when satelliteHub.eidoverse.enabled=true" -}}
@@ -402,15 +403,49 @@ never back a ClusterIssuer. */ -}}
 {{- if not (trim ($eidoverse.agentName | default "")) -}}
 {{- fail "satelliteHub.eidoverse.agentName is required when satelliteHub.eidoverse.enabled=true" -}}
 {{- end -}}
+{{- if eq $transport "poll" -}}
+{{- if not (trim ($eidoverse.command | default "")) -}}
+{{- fail "satelliteHub.eidoverse.command is required when satelliteHub.eidoverse.transport=poll" -}}
+{{- end -}}
 {{- $worldUrl := trim ($eidoverse.worldUrl | default "") -}}
 {{- if not $worldUrl -}}
-{{- fail "satelliteHub.eidoverse.worldUrl is required when satelliteHub.eidoverse.enabled=true" -}}
+{{- fail "satelliteHub.eidoverse.worldUrl is required when satelliteHub.eidoverse.transport=poll" -}}
 {{- end -}}
 {{- if not (or (hasPrefix "ws://" $worldUrl) (hasPrefix "wss://" $worldUrl)) -}}
 {{- fail "satelliteHub.eidoverse.worldUrl must be a ws:// or wss:// URL" -}}
 {{- end -}}
 {{- if contains "@" (trimPrefix "wss://" (trimPrefix "ws://" $worldUrl)) -}}
 {{- fail "satelliteHub.eidoverse.worldUrl must be credential-free (no user:password@host)" -}}
+{{- end -}}
+{{- end -}}
+{{- if eq $transport "mcpl" -}}
+{{- $doorUrl := trim ($eidoverse.mcpl.doorUrl | default "") -}}
+{{- if not $doorUrl -}}
+{{- fail "satelliteHub.eidoverse.mcpl.doorUrl is required when satelliteHub.eidoverse.transport=mcpl" -}}
+{{- end -}}
+{{- if not (or (hasPrefix "ws://" $doorUrl) (hasPrefix "wss://" $doorUrl)) -}}
+{{- fail "satelliteHub.eidoverse.mcpl.doorUrl must be a ws:// or wss:// URL" -}}
+{{- end -}}
+{{- if contains "@" (trimPrefix "wss://" (trimPrefix "ws://" $doorUrl)) -}}
+{{- fail "satelliteHub.eidoverse.mcpl.doorUrl must be credential-free (no user:password@host)" -}}
+{{- end -}}
+{{- if or (contains "?" $doorUrl) (contains "#" $doorUrl) -}}
+{{- fail "satelliteHub.eidoverse.mcpl.doorUrl must not carry a query string or fragment; the identity token is attached at dial time" -}}
+{{- end -}}
+{{- if eq (len ($eidoverse.mcpl.featureSets | default list)) 0 -}}
+{{- fail "satelliteHub.eidoverse.mcpl.featureSets must name at least one feature set" -}}
+{{- end -}}
+{{- range $set := $eidoverse.mcpl.featureSets -}}
+{{- if not (has $set (list "eidoverse.world" "eidoverse.embodiment" "eidoverse.travel" "eidoverse.typing")) -}}
+{{- fail (printf "satelliteHub.eidoverse.mcpl.featureSets names an unknown feature set: %s" $set) -}}
+{{- end -}}
+{{- end -}}
+{{- if not (kindIs "bool" $eidoverse.mcpl.catchupWake) -}}
+{{- fail "satelliteHub.eidoverse.mcpl.catchupWake must be a boolean" -}}
+{{- end -}}
+{{- if lt (int $eidoverse.mcpl.handshakeTimeoutMs) 1 -}}
+{{- fail "satelliteHub.eidoverse.mcpl.handshakeTimeoutMs must be a positive integer" -}}
+{{- end -}}
 {{- end -}}
 {{- if not (regexMatch "^[A-Z][A-Z0-9_]*$" (trim ($eidoverse.tokenRef | default ""))) -}}
 {{- fail "satelliteHub.eidoverse.tokenRef must name an environment credential matching ^[A-Z][A-Z0-9_]*$" -}}

@@ -57,6 +57,7 @@
           "additionalProperties": false,
           "required": [
             "enabled",
+            "transport",
             "command",
             "args",
             "worldUrl",
@@ -71,11 +72,19 @@
             "ambientSayDebounceMs",
             "egressCIDRs",
             "egressPort",
-            "placeMap"
+            "placeMap",
+            "mcpl"
           ],
           "properties": {
             "enabled": {
               "type": "boolean"
+            },
+            "transport": {
+              "type": "string",
+              "enum": [
+                "poll",
+                "mcpl"
+              ]
             },
             "command": {
               "type": "string"
@@ -175,6 +184,41 @@
                       }
                     }
                   }
+                }
+              }
+            },
+            "mcpl": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "doorUrl",
+                "featureSets",
+                "catchupWake",
+                "handshakeTimeoutMs"
+              ],
+              "properties": {
+                "doorUrl": {
+                  "type": "string",
+                  "pattern": "^$|^wss?://"
+                },
+                "featureSets": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "eidoverse.world",
+                      "eidoverse.embodiment",
+                      "eidoverse.travel",
+                      "eidoverse.typing"
+                    ]
+                  }
+                },
+                "catchupWake": {
+                  "type": "boolean"
+                },
+                "handshakeTimeoutMs": {
+                  "type": "integer",
+                  "minimum": 1
                 }
               }
             }

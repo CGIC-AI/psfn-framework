@@ -6,6 +6,12 @@ import {
   loadEidoverseMcpConfig,
   resolveEidoverseCredentialFromEnv,
 } from "./eidoverse-mcp.js";
+import { EidoverseMcplClient } from "./eidoverse-mcpl-client.js";
+import {
+  loadEidoverseMcpTransport,
+  loadEidoverseMcplConfig,
+} from "./eidoverse-mcpl-config.js";
+import { createEidoverseMcplProductionLifecycle } from "./eidoverse-mcpl-runtime.js";
 import { createEidoverseProductionWakeLifecycle } from "./eidoverse-wake-runtime.js";
 import { RealtimeHubServer } from "./server.js";
 import { HomeAssistantClient } from "./home-assistant/client.js";
@@ -14,33 +20,57 @@ import { HomeAssistantControlServer } from "./home-assistant/control-server.js";
 async function main(): Promise<void> {
   const projectRoot = resolveProjectRoot();
   const config = loadHubConfig(projectRoot);
-  const eidoverseConfig = loadEidoverseMcpConfig();
+  // Transport selection is explicit and defaults to the Phase 1 poll, so a
+  // deployment whose world fronts only the stdio MCP door keeps working when
+  // this Hub learns to speak MCPL.
+  const eidoverseTransport = loadEidoverseMcpTransport();
+  const eidoverseConfig = eidoverseTransport === "poll" ? loadEidoverseMcpConfig() : null;
+  const eidoverseMcplConfig = eidoverseTransport === "mcpl" ? loadEidoverseMcplConfig() : null;
   fs.mkdirSync(config.artifactsRoot, { recursive: true });
   const homeAssistant = config.homeAssistant ? new HomeAssistantClient(config.homeAssistant) : null;
+  const hubLogger = {
+    info: (message: string) => console.info(message),
+    warn: (message: string) => console.warn(message),
+  };
   const eidoverse = eidoverseConfig
     ? new EidoverseMcpClient(eidoverseConfig, resolveEidoverseCredentialFromEnv, {
-        logger: {
-          info: (message) => console.info(message),
-          warn: (message) => console.warn(message),
-        },
+        logger: hubLogger,
+      })
+    : null;
+  const eidoverseMcpl = eidoverseMcplConfig
+    ? new EidoverseMcplClient(eidoverseMcplConfig, resolveEidoverseCredentialFromEnv, {
+        logger: hubLogger,
       })
     : null;
   const server = new RealtimeHubServer(config, {
-    eidoverse: eidoverseConfig && eidoverse
+    eidoverse: eidoverseMcplConfig && eidoverseMcpl
       ? {
-          worldName: eidoverseConfig.worldName,
-          agentName: eidoverseConfig.agentName,
-          look: eidoverse,
-          onLookError: () => console.warn("Eidoverse MCP look failed"),
-          say: eidoverse,
+          worldName: eidoverseMcplConfig.worldName,
+          agentName: eidoverseMcplConfig.agentName,
+          look: eidoverseMcpl,
+          onLookError: () => console.warn("Eidoverse MCPL look failed"),
+          say: eidoverseMcpl,
+          travel: eidoverseMcpl,
         }
-      : null,
+      : eidoverseConfig && eidoverse
+        ? {
+            worldName: eidoverseConfig.worldName,
+            agentName: eidoverseConfig.agentName,
+            look: eidoverse,
+            onLookError: () => console.warn("Eidoverse MCP look failed"),
+            say: eidoverse,
+          }
+        : null,
   });
-  const eidoverseProduction = eidoverseConfig && eidoverse
-    ? createEidoverseProductionWakeLifecycle(eidoverse, server, eidoverseConfig, {
+  const eidoverseProduction = eidoverseMcplConfig && eidoverseMcpl
+    ? createEidoverseMcplProductionLifecycle(eidoverseMcpl, server, eidoverseMcplConfig, {
         logger: { warn: (message) => console.warn(message) },
       })
-    : null;
+    : eidoverseConfig && eidoverse
+      ? createEidoverseProductionWakeLifecycle(eidoverse, server, eidoverseConfig, {
+          logger: { warn: (message) => console.warn(message) },
+        })
+      : null;
   const control = config.control && homeAssistant && config.deviceRegistry
     ? new HomeAssistantControlServer(config.control, homeAssistant, config.deviceRegistry)
     : null;

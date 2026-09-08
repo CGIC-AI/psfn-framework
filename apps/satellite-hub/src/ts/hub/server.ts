@@ -49,6 +49,7 @@ import {
   type EidoverseAddressedUtterance,
   type EidoverseEmbodiedSessionConfig,
   type EidoverseEmbodiedSessionDependencies,
+  type EidoverseTravelOutcome,
 } from "./eidoverse-adapter.js";
 import { VoxtaFacade, type VoxtaSttAdapter, type VoxtaTtsAdapter } from "./voxta-facade.js";
 import {
@@ -108,7 +109,10 @@ export class RealtimeHubServer {
       companion?: CompanionBridge | null;
       eidoverse?: (
         Pick<EidoverseEmbodiedSessionConfig, "worldName" | "agentName">
-        & Pick<EidoverseEmbodiedSessionDependencies, "look" | "onLookError" | "say" | "logger">
+        & Pick<
+          EidoverseEmbodiedSessionDependencies,
+          "look" | "onLookError" | "say" | "travel" | "logger"
+        >
       ) | null;
       locationNow?: () => number;
     } = {},
@@ -131,6 +135,7 @@ export class RealtimeHubServer {
           look: options.eidoverse.look,
           ...(options.eidoverse.onLookError ? { onLookError: options.eidoverse.onLookError } : {}),
           say: options.eidoverse.say,
+          ...(options.eidoverse.travel ? { travel: options.eidoverse.travel } : {}),
           ...(options.eidoverse.logger ? { logger: options.eidoverse.logger } : {}),
         })
       : null;
@@ -192,6 +197,7 @@ export class RealtimeHubServer {
         this.companion,
         this.config.deviceRegistry,
         this.locationGeofence,
+        this.eidoverse ? (world) => this.handleEidoverseTravelRequest(world) : null,
       );
       connection.run().catch((error) => {
         console.error("Realtime connection failed:", error);
@@ -222,6 +228,18 @@ export class RealtimeHubServer {
       throw new Error("Eidoverse embodied session is not configured");
     }
     return this.eidoverse.handleAddressedUtterance(input);
+  }
+
+  /**
+   * Execute one authorized world move. Authorization happened on the
+   * connection; this is the Hub's own policy and wire call, so a Hub with no
+   * Eidoverse emanation refuses rather than pretending.
+   */
+  handleEidoverseTravelRequest(world: string): Promise<EidoverseTravelOutcome> {
+    if (!this.eidoverse) {
+      throw new Error("Eidoverse embodied session is not configured");
+    }
+    return this.eidoverse.travelTo(world);
   }
 
   async close(): Promise<void> {
@@ -278,6 +296,9 @@ function resolveChannelType(config: HubConfig): string {
   return config.psfn.channelType;
 }
 
+/** Executes one authorized world move on behalf of a satellite connection. */
+type EidoverseTravelRequestHandler = (world: string) => Promise<EidoverseTravelOutcome>;
+
 class RealtimeConnection {
   private deviceId = `client-${Math.random().toString(16).slice(2, 10)}`;
   private deviceName = "Opanhome TS Client";
@@ -311,6 +332,12 @@ class RealtimeConnection {
     private readonly companion: CompanionBridge | null = null,
     private readonly deviceRegistry: HubDeviceRegistryAuthority | null = null,
     private readonly locationGeofence: HubLocationGeofence | null = null,
+    /**
+     * Present only when this Hub carries an Eidoverse emanation. Null makes the
+     * `world.travel` command structurally unavailable rather than merely
+     * unauthorized.
+     */
+    private readonly eidoverseTravel: EidoverseTravelRequestHandler | null = null,
   ) {
     this.authenticated = !this.deviceRegistry;
     if (!this.deviceRegistry) this.attachSatellite();
@@ -505,6 +532,9 @@ class RealtimeConnection {
         return;
       case "artifact.preview":
         await this.handleArtifactPreviewRequest(message);
+        return;
+      case "world.travel":
+        await this.handleWorldTravel(message);
         return;
       default:
         await this.send({
@@ -911,6 +941,66 @@ class RealtimeConnection {
         data: { message: detail },
       });
     }
+  }
+
+  /**
+   * The companion-facing travel verb.
+   *
+   * Two independent gates, both fail-closed. The Hub must actually carry an
+   * Eidoverse emanation, and this connection must hold the `world_travel`
+   * control capability — which comes from the server-owned device registry, so
+   * a browser client that writes the capability into its own hello never has
+   * it. The Hub answers exactly once, in its own refusal vocabulary; the door's
+   * prose never reaches a satellite.
+   */
+  private async handleWorldTravel(
+    message: Extract<ClientToHubMessage, { type: "world.travel" }>,
+  ): Promise<void> {
+    const world = typeof message.world === "string" ? message.world.trim() : "";
+    if (!this.eidoverseTravel) {
+      await this.send({
+        type: "world.travel.result",
+        accepted: false,
+        world,
+        reason: "not_configured",
+      });
+      return;
+    }
+    if (!this.authenticatedDevice || !this.capabilities.control.includes("world_travel")) {
+      await this.send({
+        type: "world.travel.result",
+        accepted: false,
+        world,
+        reason: "capability_denied",
+      });
+      return;
+    }
+    let outcome: EidoverseTravelOutcome;
+    try {
+      outcome = await this.eidoverseTravel(world);
+    } catch {
+      console.warn("Eidoverse travel request failed");
+      await this.send({
+        type: "world.travel.result",
+        accepted: false,
+        world,
+        reason: "unavailable",
+      });
+      return;
+    }
+    await this.send(outcome.accepted
+      ? {
+        type: "world.travel.result",
+        accepted: true,
+        world: outcome.world,
+        ...(outcome.placeId ? { placeId: outcome.placeId } : {}),
+      }
+      : {
+        type: "world.travel.result",
+        accepted: false,
+        world: outcome.world,
+        reason: outcome.reason,
+      });
   }
 
   private async handleArtifactPreviewRequest(

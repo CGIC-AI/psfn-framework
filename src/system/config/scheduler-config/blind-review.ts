@@ -84,7 +84,20 @@ interface BlindReviewRetryConfig {
 
 export interface BlindReviewerConfig {
   enabled: boolean;
-  /** Lane cadence. The lane is a poller: it never sits on the turn path. */
+  /**
+   * Lane cadence. The lane is a poller: it never sits on the turn path.
+   *
+   * This is a DUE-GATE, not a timer (psfn-framework-33xah). The lane is
+   * registered as a background-maintenance operation, so it only gets the
+   * chance to run when that registry's own tick fires. The cadence an operator
+   * actually gets is therefore
+   *
+   *     max(blindReviewer.intervalMs, backgroundMaintenance.intervalMs)
+   *
+   * Lowering this below `backgroundMaintenance.intervalMs` buys nothing; the
+   * maintenance tick is the floor. Garden shows the computed effective value
+   * next to both inputs so the two are never read as one.
+   */
   intervalMs: number;
   /**
    * Concurrent review workers. One keeps a companion's evidence strictly

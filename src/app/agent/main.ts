@@ -108,6 +108,7 @@ import { createAgentPersistenceRuntime } from '../../persistence/runtime-factory
 import { subscribeHealthEventStream } from '../../shared/observability/health-event-stream.js';
 import {
   PostgresPoolOwner,
+  getPostgresPoolTelemetry,
   runWithPostgresPoolOwner,
 } from '../../persistence/postgres.js';
 import { sealPostgresStoreReadinessBeforeReady } from '../../persistence/postgres/runtime-readiness.js';
@@ -850,6 +851,10 @@ async function main(): Promise<void> {
     },
     automataRetention: coreRuntime.automataRetention,
     doingMirrorService: coreRuntime.doingMirrorService,
+    healthDetectors: {
+      stream: persistenceRuntime.healthEventStore,
+      postgresPoolTelemetry: getPostgresPoolTelemetry,
+    },
   });
   // Letters land in their own L0 channel, which no completed turn ever points
   // the extractor at. Bind the bin to the same maybeExtract the post-turn path

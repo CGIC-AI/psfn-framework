@@ -4542,6 +4542,7 @@ describe('AdminServer JSON API routes', () => {
           maxActiveConcerns: 7,
         },
       },
+      healthDetectors: schedulerBaseline.healthDetectors,
       backgroundWork: schedulerBaseline.backgroundWork,
       artifactLifecycle: {
         scratchpadRetentionDays: 14,

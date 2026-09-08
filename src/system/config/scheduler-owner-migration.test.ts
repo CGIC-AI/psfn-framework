@@ -24,6 +24,7 @@ import {
 import { migrateLegacySchedulerOwner } from './scheduler-owner-migration.js';
 import { DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG } from './icp-autonomy-scheduler-config.js';
 import { DEFAULT_INTENTION_FOLLOW_UP_SCHEDULER_CONFIG } from './scheduler-config/intention-follow-up.js';
+import { DEFAULT_HEALTH_DETECTORS_CONFIG } from './scheduler-config/health-detectors.js';
 
 const fixturePath = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -280,6 +281,7 @@ describe('migrateLegacySchedulerOwner', () => {
         'backgroundWork.postTurn.maxAttempts',
         'icpAutonomy.policyHolds',
         'intentionFollowUp',
+        'healthDetectors',
       ],
     });
     expect(readFileSync(filePath, 'utf8')).toBe(before);
@@ -291,6 +293,7 @@ describe('migrateLegacySchedulerOwner', () => {
         'backgroundWork.postTurn.maxAttempts',
         'icpAutonomy.policyHolds',
         'intentionFollowUp',
+        'healthDetectors',
       ],
     });
     expect(loadSchedulerConfig(dataDir).icpAutonomy.policyHolds)
@@ -325,6 +328,7 @@ describe('migrateLegacySchedulerOwner', () => {
         'backgroundWork.postTurn.maxAttempts',
         'icpAutonomy.policyHolds',
         'intentionFollowUp',
+        'healthDetectors',
       ],
     });
     // The operator's own batch size survives; only the unknown key is seeded.
@@ -353,6 +357,7 @@ describe('migrateLegacySchedulerOwner', () => {
         'backgroundWork.postTurn.maxAttempts',
         'icpAutonomy.policyHolds',
         'intentionFollowUp',
+        'healthDetectors',
       ],
     });
     expect(loadSchedulerConfig(dataDir).backgroundMaintenance.doingMirrorLetters)
@@ -377,6 +382,7 @@ describe('migrateLegacySchedulerOwner', () => {
         'backgroundWork.postTurn.maxAttempts',
         'icpAutonomy.policyHolds',
         'intentionFollowUp',
+        'healthDetectors',
       ],
     });
     expect(readFileSync(filePath, 'utf8')).toBe(before);
@@ -389,6 +395,7 @@ describe('migrateLegacySchedulerOwner', () => {
         'backgroundWork.postTurn.maxAttempts',
         'icpAutonomy.policyHolds',
         'intentionFollowUp',
+        'healthDetectors',
       ],
     });
     const migratedRaw = JSON.parse(readFileSync(filePath, 'utf8')) as Record<string, unknown>;
@@ -407,6 +414,44 @@ describe('migrateLegacySchedulerOwner', () => {
     expect(statSync(filePath).ino).toBe(inodeAfterApply);
   });
 
+  it('seeds only the health-detector sub-blocks an owner file is missing', () => {
+    const { dataDir, filePath } = prepareOwner((owner) => {
+      delete owner.salienceDecayIntervalMs;
+      if (typeof owner.socialGraphBuilder === 'object' && owner.socialGraphBuilder !== null) {
+        delete (owner.socialGraphBuilder as Record<string, unknown>).intervalMs;
+      }
+      owner.backgroundMaintenance = structuredClone(DEFAULT_BACKGROUND_MAINTENANCE_CONFIG);
+      owner.backgroundWork = structuredClone(DEFAULT_BACKGROUND_WORK_TUNING);
+      (owner.icpAutonomy as Record<string, unknown>).policyHolds = structuredClone(
+        DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG.policyHolds,
+      );
+      owner.intentionFollowUp = structuredClone(DEFAULT_INTENTION_FOLLOW_UP_SCHEDULER_CONFIG);
+      // An owner file written between two detector children: the block exists
+      // and carries an operator's own cadence, but not the newer sub-block.
+      owner.healthDetectors = {
+        intervalMs: 120_000,
+        incidentWindowMs: DEFAULT_HEALTH_DETECTORS_CONFIG.incidentWindowMs,
+        cooldownMs: DEFAULT_HEALTH_DETECTORS_CONFIG.cooldownMs,
+      };
+    });
+
+    expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
+      mode: 'apply',
+      status: 'applied',
+      addedPaths: ['healthDetectors.incidentScanLimit', 'healthDetectors.postgresPressure'],
+    });
+    const migrated = loadSchedulerConfig(dataDir).healthDetectors;
+    // The operator's cadence survives; only the absent keys are seeded.
+    expect(migrated.intervalMs).toBe(120_000);
+    expect(migrated.postgresPressure).toEqual(DEFAULT_HEALTH_DETECTORS_CONFIG.postgresPressure);
+    expect(JSON.parse(readFileSync(filePath, 'utf8'))).toMatchObject({
+      healthDetectors: { intervalMs: 120_000 },
+    });
+    expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
+      status: 'not_needed',
+    });
+  });
+
   it('explicitly adds background-work tuning to owners written before it existed', () => {
     const { dataDir, filePath } = prepareOwner((owner) => {
       delete owner.salienceDecayIntervalMs;
@@ -421,12 +466,22 @@ describe('migrateLegacySchedulerOwner', () => {
     expect(migrateLegacySchedulerOwner({ dataDir })).toMatchObject({
       mode: 'dry-run',
       status: 'planned',
-      addedPaths: ['backgroundWork', 'icpAutonomy.policyHolds', 'intentionFollowUp'],
+      addedPaths: [
+        'backgroundWork',
+        'icpAutonomy.policyHolds',
+        'intentionFollowUp',
+        'healthDetectors',
+      ],
     });
     expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
       mode: 'apply',
       status: 'applied',
-      addedPaths: ['backgroundWork', 'icpAutonomy.policyHolds', 'intentionFollowUp'],
+      addedPaths: [
+        'backgroundWork',
+        'icpAutonomy.policyHolds',
+        'intentionFollowUp',
+        'healthDetectors',
+      ],
     });
     const migratedRaw = JSON.parse(readFileSync(filePath, 'utf8')) as Record<string, unknown>;
     expect(migratedRaw.backgroundWork).toEqual(DEFAULT_BACKGROUND_WORK_TUNING);
@@ -455,6 +510,7 @@ describe('migrateLegacySchedulerOwner', () => {
         'backgroundWork.postTurn.maxAttempts',
         'icpAutonomy.policyHolds',
         'intentionFollowUp',
+        'healthDetectors',
       ],
     });
     expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
@@ -464,6 +520,7 @@ describe('migrateLegacySchedulerOwner', () => {
         'backgroundWork.postTurn.maxAttempts',
         'icpAutonomy.policyHolds',
         'intentionFollowUp',
+        'healthDetectors',
       ],
     });
     expect(loadSchedulerConfig(dataDir).backgroundWork.postTurn.maxAttempts).toBe(5);

@@ -13,6 +13,7 @@ import { emitHealthEvent, processObserverId } from '../../shared/contracts/healt
 import { createComponentLogger } from '../../shared/logger.js';
 import {
   PostgresPoolOwner,
+  getPostgresPoolTelemetry,
   runWithPostgresPoolOwner,
 } from '../../persistence/postgres.js';
 import type { EventBus } from '../../shared/event-bus.js';
@@ -96,6 +97,12 @@ import {
   SCHEDULED_BACKUP_TASK_NAME,
 } from '../../persistence/backups/service.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
+import {
+  registerRuntimeHealthDetectorTask,
+} from '../../core/scheduler/health-detector-task.js';
+import {
+  createRuntimeHealthDetectorCycle,
+} from '../../shared/observability/health-detectors/runtime.js';
 import { createGatewayFleetChargePolicyResolver } from './fleet-charge-policy-resolver.js';
 import { parseVerifiedDiscordContactAuthoritySnapshot } from '../../shared/contracts/contact-authority-snapshot.js';
 import { evaluateProactiveOutboundTimeGate } from '../../core/intention/proactive-time-gate.js';
@@ -460,6 +467,23 @@ async function main(): Promise<void> {
           timestamp: Date.now(),
         });
       },
+    });
+    // The gateway owns its own PostgreSQL pool authorities, so its pressure is
+    // a different incident from the agent's. It has exactly one unconditional
+    // scheduler task registry — this one — so the detector lane rides it rather
+    // than inventing a second cadence. A gateway without fleet auth therefore
+    // runs no detector cycle: that gap is recorded on bead
+    // psfn-framework-7qeo1.24.2 rather than papered over with a private timer.
+    registerRuntimeHealthDetectorTask({
+      scheduler: fleetAuthBackupScheduler,
+      intervalMs: startupHydration.schedulerConfig.healthDetectors.intervalMs,
+      cycle: createRuntimeHealthDetectorCycle({
+        stream: healthEventStore,
+        publisher: eventBus,
+        source: { owner: { kind: 'system' }, process: 'gateway' },
+        config: startupHydration.schedulerConfig.healthDetectors,
+        postgresPoolTelemetry: getPostgresPoolTelemetry,
+      }),
     });
     log.info('Gateway-owned fleet auth consistent backups enabled', {
       companionCount: config.companionFleet.companions.length,

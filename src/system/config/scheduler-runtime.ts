@@ -37,6 +37,13 @@ export function resolveRuntimeSchedulerConfig(
       ambientPresence: { ...persisted.backgroundMaintenance.ambientPresence },
       concernGrooming: { ...persisted.backgroundMaintenance.concernGrooming },
     },
+    healthDetectors: {
+      intervalMs: persisted.healthDetectors.intervalMs,
+      incidentWindowMs: persisted.healthDetectors.incidentWindowMs,
+      cooldownMs: persisted.healthDetectors.cooldownMs,
+      incidentScanLimit: persisted.healthDetectors.incidentScanLimit,
+      postgresPressure: { ...persisted.healthDetectors.postgresPressure },
+    },
     artifactLifecycle: { ...persisted.artifactLifecycle },
     episodicProcessing: { ...persisted.episodicProcessing },
     nearTurnMemory: {

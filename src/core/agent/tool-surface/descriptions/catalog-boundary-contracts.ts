@@ -62,7 +62,9 @@ export const CATALOG_BOUNDARY_TOOL_CONTRACTS = {
       + 'automaton using analysis_workbench so its temporary context can be discarded after a bounded result; direct '
       + 'analysis_workbench use is still permitted but may occupy the primary turn for several minutes. Require '
       + 'provenance-bearing excerpts with the source path and line or byte ranges; do not rely on a summary-only handoff. '
-      + 'Do not use fs for git state; use repo.',
+      + 'To pull one arbitrary byte range instead of paging to it, use shell action exec with a byte-addressed filter '
+      + '(tail -c +OFFSET file | head -c LENGTH); the shell sandbox reads any range of any size inside the Personal '
+      + 'Workspace. Do not use fs for git state; use repo.',
     example: { action: 'search', query: 'TODO', glob: 'notes/**/*.md' },
   },
   repo: {
@@ -92,7 +94,8 @@ export const CATALOG_BOUNDARY_TOOL_CONTRACTS = {
       + 'The image carries analysis and document tooling — bash, rg, jq, file, unzip/zip, sqlite3, pdftotext (poppler), '
       + 'pandoc, python3, and uv — so prefer targeted CLI filters and small scripts over dumping whole files. '
       + 'Use a relative cwd to move around the workspace. Prefer fs or repo when their '
-      + 'structured action is clearer; use shell for direct CLI exploration, scripts, builds, tests, and Git commands.',
+      + 'structured action is clearer; use shell for direct CLI exploration, scripts, builds, tests, Git commands, and '
+      + 'for reading one arbitrary byte range of a document larger than a single fs read page.',
     example: {
       action: 'exec',
       command: 'bash',

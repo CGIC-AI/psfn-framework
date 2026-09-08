@@ -144,20 +144,35 @@ describe('createStreamingTtsConnector', () => {
     });
   });
 
-  it('resolves elevenlabs runtime config from the credential vault when inline secrets are absent', () => {
+  it('consumes the gateway-resolved credential and never reaches for a vault (mp1pf)', () => {
+    // hydrateSecretBearingConfig resolves ELEVENLABS_API_KEY (inline, vault, or
+    // env) on the gateway side and writes the plain value onto the substrate
+    // config. The shared index only reads that resolved value.
     expect(resolveStreamingTtsRuntimeConfig('elevenlabs', {
-      credentialVault: createEnvCredentialVault({
-        ELEVENLABS_API_KEY: 'vault-elevenlabs-key',
-      }),
+      elevenLabsApiKey: 'gateway-resolved-key',
       elevenLabsVoiceId: 'voice-id',
       elevenLabsModelId: 'eleven_turbo_v2_5',
       elevenLabsEndpointBase: 'https://api.elevenlabs.io/v1',
     })).toEqual({
-      apiKey: 'vault-elevenlabs-key',
+      apiKey: 'gateway-resolved-key',
       voiceId: 'voice-id',
       modelId: 'eleven_turbo_v2_5',
       endpointBase: 'https://api.elevenlabs.io/v1',
     });
+
+    // A config that carries only a vault handle is unconfigured here: the index
+    // must not resolve credentials itself, and must fail closed rather than
+    // silently importing the secret-bearing custody module.
+    const vaultOnlyConfig = {
+      credentialVault: createEnvCredentialVault({ ELEVENLABS_API_KEY: 'vault-key' }),
+      elevenLabsVoiceId: 'voice-id',
+      elevenLabsModelId: 'eleven_turbo_v2_5',
+      elevenLabsEndpointBase: 'https://api.elevenlabs.io/v1',
+    };
+    expect(getStreamingTtsProviderMetadata('elevenlabs')?.isConfigured(vaultOnlyConfig)).toBe(false);
+    expect(() => resolveStreamingTtsRuntimeConfig('elevenlabs', vaultOnlyConfig)).toThrow(
+      'ElevenLabs TTS provider selected but ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID are not configured',
+    );
   });
 
   it('resolves registered provider runtime config without core switch edits', () => {

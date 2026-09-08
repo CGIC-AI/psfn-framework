@@ -35,6 +35,13 @@
       "note": "psfn-framework-p4rmp: legacy Garden wishlist routes over the doing-mirror lifecycle plus the pre-lifecycle closed-wish reconcile, against the real containerized PostgreSQL harness. Focused local full-file wall baseline was 0.56s on 2026-09-07 with a warm harness slot; 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
     },
     {
+      "file": "src/persistence/postgres/doing-mirror-migration.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 500,
+      "baselineSource": "measured",
+      "note": "psfn-framework-p2jr0: seeds the pre-quarantine doing-mirror schema, replays POSTGRES_DOING_MIRROR_MIGRATIONS over populated rows, and reads them back through the real mapper, against the real containerized PostgreSQL harness. Focused local full-file wall baseline was 0.50s on 2026-09-08 with a warm harness slot; 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
+    },
+    {
       "file": "src/persistence/postgres/doing-mirror-store.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": 1450,
@@ -569,9 +576,9 @@
     {
       "file": "src/faculties/automata/bus/worker-execution-restart.integration.test.ts",
       "timeoutMs": 120000,
-      "measuredBaselineMs": 11000,
+      "measuredBaselineMs": 12000,
       "baselineSource": "measured",
-      "note": "psfn-framework-mgdks.1: governed Automata Bus lifecycle restart certification (durable run + exactly-once terminal event across a full process restart, cross-companion rejection, typed no-finding terminal) against the real containerized PostgreSQL harness. Focused local full-file wall baseline was 10.9s cold and 0.83s warm on 2026-09-07; the conservative 11s cold baseline is retained and 120s matches the repo integration cap while preserving headroom for cold image startup and shared harness-slot contention."
+      "note": "psfn-framework-mgdks.1 + psfn-framework-8n40k: governed Automata Bus lifecycle restart certification (durable run + exactly-once terminal event across a full process restart, cross-companion rejection, typed no-finding terminal, and convergence on the durable terminal after a crash between handoff and terminalize) against the real containerized PostgreSQL harness. Focused local full-file wall was 11.3s cold and 1.2s warm on 2026-09-08 with the added crash-window case; the 12s cold baseline covers it and the unchanged 120s cap matches the repo integration cap while preserving headroom for cold image startup and shared harness-slot contention."
     },
     {
       "file": "src/core/cogsec/intake/durable-admission.integration.test.ts",

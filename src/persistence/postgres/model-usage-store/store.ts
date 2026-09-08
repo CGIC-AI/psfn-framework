@@ -37,8 +37,10 @@ import type {
 } from '../../../shared/telemetry/model-usage.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import {
+  requirePostgresStoreReadinessRetry,
   startPostgresStoreReadiness,
   type PostgresStoreReadinessHandle,
+  type PostgresStoreReadinessRetryPolicy,
 } from '../runtime-readiness.js';
 import { assertModelUsageLedgerReadable } from '../model-usage-access.js';
 import { PostgresModelUsageCapture } from './capture.js';
@@ -60,6 +62,13 @@ export interface ModelUsageStoreConnectionOptions {
   access: 'migration_authority' | 'read_only';
   schema?: string;
   role?: string;
+  /**
+   * Bounded startup retry budget for this instance's readiness proof
+   * (psfn-framework-6c6cq). Absent, the proof runs exactly once — the
+   * historical behavior, kept for the gateway's migration authority, whose
+   * failure is `required` and already refuses Ready loudly.
+   */
+  readinessRetry?: PostgresStoreReadinessRetryPolicy;
 }
 
 function resolveStoreCompanionId(scope: unknown): string | undefined {
@@ -102,7 +111,7 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
   constructor(
     private readonly pool: Pool,
     options: ModelUsageStoreScope,
-    connection: Pick<ModelUsageStoreConnectionOptions, 'access'> = {
+    connection: Pick<ModelUsageStoreConnectionOptions, 'access' | 'readinessRetry'> = {
       access: 'migration_authority',
     },
   ) {
@@ -122,6 +131,7 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
             POSTGRES_MODEL_USAGE_MIGRATIONS,
             POSTGRES_MODEL_USAGE_MIGRATION_ADVISORY_LOCK,
           ),
+      connection.readinessRetry ? { retry: connection.readinessRetry } : {},
     );
     const waitUntilReady = (): Promise<void> => this.waitUntilReady();
     this.capture = new PostgresModelUsageCapture(pool, this.companionId, waitUntilReady);
@@ -224,6 +234,8 @@ export function createPostgresModelUsageStoreFromConfig(
     | 'multiCompanion'
     | 'postgresSchema'
     | 'postgresRole'
+    | 'postgresStoreReadinessRetryAttempts'
+    | 'postgresStoreReadinessRetryBackoffMs'
   >,
   scope?: ModelUsageStoreScope,
   access: ModelUsageStoreConnectionOptions['access'] = 'migration_authority',
@@ -247,10 +259,18 @@ export function createPostgresModelUsageStoreFromConfig(
     );
   }
   const connectionRole = access === 'read_only' ? currentRole ?? primaryRole : primaryRole;
+  // 6c6cq: the read-only diagnostic reader is the instance that quietly lost a
+  // first-boot credential race and left Garden Ready with blank cost
+  // telemetry, so it is the one that gets the operator-declared retry budget.
+  // The migration authority keeps a single attempt: its failure is `required`
+  // and already refuses Ready.
   const connection: ModelUsageStoreConnectionOptions = {
     access,
     ...(primarySchema ? { schema: primarySchema } : {}),
     ...(connectionRole ? { role: connectionRole } : {}),
+    ...(access === 'read_only'
+      ? { readinessRetry: requirePostgresStoreReadinessRetry(config) }
+      : {}),
   };
   if (scope) return PostgresModelUsageStore.connect(databaseUrl, scope, connection);
   const companionId = optionalText(config.companionId);

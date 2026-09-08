@@ -132,6 +132,7 @@ describe('buildApiHealthChecks', () => {
             store: 'analysis_workbench_trace',
             label: 'analysis workbench trace',
             requirement: 'optional',
+            degradesOperatorReadiness: false,
             mismatch: 'migration role cannot create relation',
           }],
         }),

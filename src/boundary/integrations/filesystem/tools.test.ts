@@ -6,6 +6,10 @@ import type { TextContent } from '@earendil-works/pi-ai';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { WorkspaceFilesystemOps } from './local-ops.js';
 import { createFsTool } from './tools.js';
+import {
+  classifyExecutedToolCallOutcome,
+  PARTIAL_TOOL_RESULT_DETAILS_KEY,
+} from '../../../shared/contracts/tool-call-outcome.js';
 
 function resultText(result: AgentToolResult<any>): string {
   return result.content
@@ -100,6 +104,42 @@ describe('fs tool', () => {
     ]);
   });
 
+  it('declares a truncated read as a partial result the scheduler can classify (sap72)', async () => {
+    writeFileSync(join(workspace, 'docs', 'long.txt'), 'x'.repeat(25_000), 'utf-8');
+    const tool = createFsTool(ops, { defaultMaxBytes: 20_000 });
+
+    const truncated = await tool.execute('read-truncated', {
+      action: 'read',
+      path: 'docs/long.txt',
+    });
+    expect(JSON.parse(resultText(truncated)).truncated).toBe(true);
+    expect(truncated.details).toMatchObject({ [PARTIAL_TOOL_RESULT_DETAILS_KEY]: true });
+    // The turn census sees degraded evidence, not a success and not an error.
+    expect(classifyExecutedToolCallOutcome({ details: truncated.details })).toBe('partial_result');
+
+    // A complete read declares nothing: it is an ordinary success.
+    const whole = await tool.execute('read-whole', {
+      action: 'read',
+      path: 'docs/notes.txt',
+    });
+    expect(JSON.parse(resultText(whole)).truncated).toBe(false);
+    expect(whole.details).toEqual({});
+    expect(classifyExecutedToolCallOutcome({ details: whole.details })).toBe('success');
+  });
+
+  it('declares a hit-limited search as a partial result (sap72)', async () => {
+    writeFileSync(join(workspace, 'docs', 'many.txt'), 'alpha\n'.repeat(20), 'utf-8');
+    const tool = createFsTool(ops);
+
+    const capped = await tool.execute('search-capped', {
+      action: 'search',
+      query: 'alpha',
+      max_matches: 2,
+    });
+    expect(JSON.parse(resultText(capped)).hit_limit).toBe(true);
+    expect(classifyExecutedToolCallOutcome({ details: capped.details })).toBe('partial_result');
+  });
+
   it('advertises the shared hard read cap and the provenance-preserving large-document path', () => {
     const tool = createFsTool(ops);
 
@@ -107,6 +147,10 @@ describe('fs tool', () => {
     expect(tool.description).toContain('analysis_workbench');
     expect(tool.description).toContain('bounded automaton');
     expect(tool.description).toContain('provenance-bearing excerpts');
+    // owffl.8 (b): the bash fallback for an arbitrary byte range was
+    // "unreachable in practice" because nothing in the read surface named it.
+    expect(tool.description).toContain('shell action exec');
+    expect(tool.description).toContain('tail -c +OFFSET file | head -c LENGTH');
     expect(tool.parameters).toMatchObject({
       properties: {
         max_bytes: {
@@ -183,6 +227,58 @@ describe('fs tool', () => {
     expect(result.details).toMatchObject({ isError: true });
     expect(resultText(result)).toContain('max_bytes');
     expect(resultText(result)).toContain('4 bytes');
+  });
+
+  it('consumes a >100 KB document to EOF through the sanctioned paging loop (owffl.8)', async () => {
+    // F8 incident shape: a ~100 KB document met a hard read cap with no paging,
+    // so the document was simply unreachable through the sanctioned tool. This
+    // pins the mechanical completion loop an agent is told to run: follow
+    // next_offset_bytes until eof, reassemble, and get the document back byte
+    // for byte. Multibyte characters straddle page boundaries on purpose.
+    const paragraph = `${'ascii filler '.repeat(64)}héllo 🙂 wörld ${'more filler '.repeat(64)}\n`;
+    const document = paragraph.repeat(160);
+    const documentBytes = Buffer.byteLength(document, 'utf-8');
+    expect(documentBytes).toBeGreaterThan(250_000);
+    writeFileSync(join(workspace, 'docs', 'incident-report.txt'), document, 'utf-8');
+
+    const tool = createFsTool(ops);
+    const pages: Record<string, unknown>[] = [];
+    let offset: number | null = 0;
+    // Bounded loop: a stuck or looping cursor must fail the test, not hang it.
+    for (let guard = 0; guard < 64 && offset !== null; guard += 1) {
+      const page = JSON.parse(resultText(await tool.execute(`page-${String(guard)}`, {
+        action: 'read',
+        path: 'docs/incident-report.txt',
+        offset_bytes: offset,
+      })));
+      pages.push(page);
+      offset = page.next_offset_bytes as number | null;
+    }
+
+    expect(offset).toBeNull();
+    // Default page size is 100,000 bytes, so a 250 KB+ document needs several.
+    expect(pages.length).toBeGreaterThanOrEqual(3);
+    expect(pages.map(page => String(page.content)).join('')).toBe(document);
+
+    const finalPage = pages.at(-1)!;
+    expect(finalPage).toMatchObject({ eof: true, truncated: false, next_offset_bytes: null });
+    expect(finalPage.next_action).toBeUndefined();
+
+    for (const page of pages.slice(0, -1)) {
+      // Every non-final page is explicitly incomplete and hands the agent the
+      // discoverable next step rather than silently dropping the remainder.
+      expect(page).toMatchObject({ eof: false, truncated: true });
+      expect(typeof page.next_offset_bytes).toBe('number');
+      expect(String(page.next_action)).toContain('analysis_workbench');
+    }
+
+    // Cursors are contiguous: no byte is skipped or read twice.
+    let expectedOffset = 0;
+    for (const page of pages) {
+      expect(page.offset_bytes).toBe(expectedOffset);
+      expectedOffset += Buffer.byteLength(String(page.content), 'utf-8');
+    }
+    expect(expectedOffset).toBe(documentBytes);
   });
 
   it('reads a 200,000-byte page and fails closed above the shared ceiling', async () => {

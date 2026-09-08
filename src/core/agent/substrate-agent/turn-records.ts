@@ -448,6 +448,10 @@ export function buildTurnRecord(input: {
    * the synthesized `session:<channelId>|messages:<n>|memory_chars:<n>` display
    * string this replaced, which always looked like a reference and resolved to
    * nothing.
+   *
+   * On a `diverged` same-turn re-assembly this ref is still produced and points
+   * at a SIBLING FOLD of the same turn (see the caveat on
+   * `TurnRecord.contextManifestRef` in shared/contracts/runtime.ts, 8nq3h).
    */
   contextManifestRef?: string;
   /** Per-tool-result custody edges, keyed by lineage ref (ccgdz.5). */

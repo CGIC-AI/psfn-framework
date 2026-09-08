@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
+  appendFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -20,6 +21,14 @@ import { parseSkillDocument } from './loader.js';
 const MANAGED_SKILLS_DIR = 'skills';
 const SKILL_FILE_NAME = 'SKILL.md';
 const SKILL_HISTORY_FILE_NAME = 'SKILL.history.jsonl';
+/**
+ * Durable audit archive for skills that no longer exist (psfn-framework-ft69n).
+ * Rooted in the runtime data directory, NEVER inside the managed skills root:
+ * the delete path removes the skill directory, so a journal that lived there
+ * would erase itself. A skill that acts and then deletes itself must still
+ * leave a complete, queryable trail behind.
+ */
+const SKILL_HISTORY_ARCHIVE_DIR = 'skill-history';
 const SKILL_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const SKILL_CATEGORY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const MAX_DESCRIPTION_CHARS = 240;
@@ -105,6 +114,14 @@ function ensurePathWithinRoot(root: string, candidate: string): void {
   if (normalizedCandidate === normalizedRoot) return;
   if (normalizedCandidate.startsWith(`${normalizedRoot}${sep}`)) return;
   throw new Error('Resolved skill path escapes managed skills root');
+}
+
+function pathsOverlap(first: string, second: string): boolean {
+  const left = resolve(first);
+  const right = resolve(second);
+  return left === right
+    || left.startsWith(`${right}${sep}`)
+    || right.startsWith(`${left}${sep}`);
 }
 
 interface SkillDocumentPayload {
@@ -201,25 +218,33 @@ export interface SkillWriteProvenance {
   reason?: string;
 }
 
-export type SkillHistoryAction = 'create' | 'update' | 'rollback';
+export type SkillHistoryAction = 'create' | 'update' | 'rollback' | 'delete';
 
 /**
- * One append-only line in `<skill dir>/SKILL.history.jsonl`. `newDocument` is
- * the full rendered SKILL.md text after the action, so any prior version can
- * be restored byte-exactly. `previous*` fields are null for the create entry.
+ * One append-only line in `<skill dir>/SKILL.history.jsonl`, or — once the
+ * skill is deleted — in its archived journal. `newDocument` is the full
+ * rendered SKILL.md text after the action, so any prior version can be
+ * restored byte-exactly. `previous*` fields are null for the create entry.
+ *
+ * A `delete` entry is a TOMBSTONE (ft69n): it closes the chain rather than
+ * producing a document, so `newChecksum`/`newDocument` are null and the
+ * removed document is preserved in `previousDocument`. `deletedCategory`
+ * records where the skill lived, since its directory no longer exists.
  */
 export interface ManagedSkillHistoryEntry {
   action: SkillHistoryAction;
-  /** Skill version resulting from this action. */
+  /** Skill version resulting from this action; for a tombstone, the version that follows the deleted one. */
   version: number;
   timestamp: string;
   updatedBy: string;
   reason?: string;
   previousVersion: number | null;
   previousChecksum: string | null;
-  newChecksum: string;
+  newChecksum: string | null;
   previousDocument: string | null;
-  newDocument: string;
+  newDocument: string | null;
+  /** Category the skill occupied when it was deleted. Tombstones only. */
+  deletedCategory?: string;
 }
 
 function documentChecksum(document: string): string {
@@ -274,13 +299,27 @@ function requireSkillRepoRoot(repoRoot: string): string {
 
 export class SkillStore {
   private readonly managedRootDir: string;
+  private readonly historyArchiveRootDir: string;
   private readonly repoRoot: string;
   private readonly now: () => Date;
 
   constructor(dataDir: string, options: SkillStoreOptions) {
     this.managedRootDir = resolve(options.managedRootDir?.trim() || resolve(dataDir, MANAGED_SKILLS_DIR));
+    // The archive is rooted in the runtime data directory and must never sit
+    // inside the managed skills root, whose subtrees the delete path removes.
+    this.historyArchiveRootDir = resolve(dataDir, SKILL_HISTORY_ARCHIVE_DIR);
+    if (pathsOverlap(this.historyArchiveRootDir, this.managedRootDir)) {
+      throw new Error(
+        'Skill history archive root must not overlap the managed skills root; '
+        + 'a deleted skill would erase its own audit trail',
+      );
+    }
     this.repoRoot = requireSkillRepoRoot(options.repoRoot);
     this.now = options.now ?? (() => new Date());
+  }
+
+  getHistoryArchiveRootDir(): string {
+    return this.historyArchiveRootDir;
   }
 
   getManagedRootDir(): string {
@@ -367,11 +406,20 @@ export class SkillStore {
    * version remains restorable after later overwrites.
    */
   getHistory(name: string): ManagedSkillHistoryEntry[] {
-    const existing = this.getByName(normalizeSkillName(name));
+    const normalizedName = normalizeSkillName(name);
+    const existing = this.getByName(normalizedName);
+    // Archived entries come first: they are the older incarnations of this
+    // name, each closed by a delete tombstone. A skill that was deleted keeps
+    // answering here — deletion removes the skill, never its audit trail
+    // (psfn-framework-ft69n).
+    const archived = this.readArchivedHistoryEntries(normalizedName);
     if (!existing) {
-      throw new Error(`Skill "${name}" does not exist`);
+      if (archived.length === 0) {
+        throw new Error(`Skill "${name}" does not exist`);
+      }
+      return archived;
     }
-    return this.readHistoryEntries(existing.absolutePath);
+    return [...archived, ...this.readHistoryEntries(existing.absolutePath)];
   }
 
   /**
@@ -393,8 +441,11 @@ export class SkillStore {
       throw new Error(`Skill rollback requires a positive integer version, got ${String(version)}`);
     }
 
+    // Only journaled DOCUMENT versions of the live skill are restorable: a
+    // tombstone carries no document, and an archived predecessor of this name
+    // is a different skill lifetime.
     const entry = this.readHistoryEntries(existing.absolutePath)
-      .find((candidate) => candidate.version === version);
+      .find((candidate) => candidate.version === version && candidate.newDocument !== null);
     if (!entry) {
       throw new Error(
         `Skill "${normalizedName}" has no history entry for version ${version}; `
@@ -402,7 +453,13 @@ export class SkillStore {
       );
     }
 
-    const restored = parseSkillDocument(entry.newDocument, `history:v${version}`);
+    const restoredDocument = entry.newDocument;
+    if (restoredDocument === null) {
+      throw new Error(
+        `Skill "${normalizedName}" history entry for version ${version} carries no document`,
+      );
+    }
+    const restored = parseSkillDocument(restoredDocument, `history:v${version}`);
     const normalizedProvenance = normalizeProvenance(provenance);
     return this.applyExistingSkillWrite(
       existing,
@@ -462,12 +519,22 @@ export class SkillStore {
     return this.readSkillRecord(existing.absolutePath);
   }
 
-  delete(name: string): void {
+  /**
+   * Remove a managed skill. The skill's audit trail is archived OUTSIDE the
+   * skill directory first, and a delete tombstone closes the chain; only then
+   * is the directory removed. An archive failure aborts the delete (fail
+   * closed) rather than removing a skill whose history could not be preserved
+   * — a skill must not be able to act and then erase the record of its own
+   * existence (psfn-framework-ft69n).
+   */
+  delete(name: string, provenance: SkillWriteProvenance): void {
     const normalizedName = normalizeSkillName(name);
     const existing = this.getByName(normalizedName);
     if (!existing) {
       throw new Error(`Skill "${normalizedName}" does not exist`);
     }
+
+    this.archiveSkillHistory(existing, provenance);
 
     // Remove the skill directory (category/name/) containing the SKILL.md file
     const skillDir = dirname(existing.absolutePath);
@@ -568,6 +635,62 @@ export class SkillStore {
 
   private appendHistoryEntry(skillDocumentPath: string, entry: ManagedSkillHistoryEntry): void {
     appendJsonLine(this.resolveHistoryPath(skillDocumentPath), entry);
+  }
+
+  private resolveArchivedHistoryPath(normalizedName: string): string {
+    const archivePath = join(
+      this.historyArchiveRootDir,
+      `${normalizedName.toLowerCase()}.jsonl`,
+    );
+    ensurePathWithinRoot(this.historyArchiveRootDir, archivePath);
+    return archivePath;
+  }
+
+  /**
+   * Copy the live journal into the durable archive and close it with a delete
+   * tombstone. Runs BEFORE the skill directory is removed and throws on any
+   * failure, so a delete either preserves the whole trail or does not happen.
+   */
+  private archiveSkillHistory(
+    existing: ManagedSkillRecord,
+    provenance: SkillWriteProvenance,
+  ): void {
+    const normalizedProvenance = normalizeProvenance(provenance);
+    const deletedDocument = readFileSync(existing.absolutePath, 'utf-8');
+    const archivePath = this.resolveArchivedHistoryPath(existing.name);
+    // Copy the journal's exact BYTES, not a re-serialization of the lines that
+    // happened to parse: a line this reader cannot understand is still part of
+    // the audit trail and must not disappear because it was archived.
+    const journalPath = this.resolveHistoryPath(existing.absolutePath);
+    if (existsSync(journalPath)) {
+      const journal = readFileSync(journalPath, 'utf-8');
+      if (journal.length > 0) {
+        mkdirSync(dirname(archivePath), { recursive: true });
+        appendFileSync(archivePath, journal.endsWith('\n') ? journal : `${journal}\n`, 'utf-8');
+      }
+    }
+    const tombstone: ManagedSkillHistoryEntry = {
+      action: 'delete',
+      version: existing.version + 1,
+      timestamp: this.now().toISOString(),
+      updatedBy: normalizedProvenance.updatedBy,
+      ...(normalizedProvenance.reason ? { reason: normalizedProvenance.reason } : {}),
+      previousVersion: existing.version,
+      previousChecksum: documentChecksum(deletedDocument),
+      newChecksum: null,
+      previousDocument: deletedDocument,
+      newDocument: null,
+      deletedCategory: existing.category,
+    };
+    appendJsonLine(archivePath, tombstone);
+  }
+
+  private readArchivedHistoryEntries(normalizedName: string): ManagedSkillHistoryEntry[] {
+    return readJsonLines<ManagedSkillHistoryEntry>(
+      this.resolveArchivedHistoryPath(normalizedName),
+      raw => raw as ManagedSkillHistoryEntry,
+      { warnLabel: 'Skipping unreadable archived managed skill history line' },
+    ).entries;
   }
 
   private readHistoryEntries(skillDocumentPath: string): ManagedSkillHistoryEntry[] {

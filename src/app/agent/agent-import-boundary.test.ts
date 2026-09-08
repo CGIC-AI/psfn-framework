@@ -11,6 +11,13 @@ import { describe, expect, it } from 'vitest';
 // agent reaches would compile, pass every test, and silently move secrets
 // across the gateway/agent trust boundary. This walks the real static import
 // closure of src/app/agent/** and fails closed on the forbidden set.
+//
+// The walk follows *value* edges only (psfn-framework-mp1pf). `import type` and
+// `export type` statements are erased by TypeScript before emit — this project
+// compiles with `verbatimModuleSyntax`, so a type-only statement provably emits
+// no `require`/`import` and moves no code, let alone a secret, into the agent
+// process. A mixed statement (`import { thing, type Thing }`) is still a value
+// edge and is still followed.
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../');
 const srcRoot = resolve(repoRoot, 'src');
@@ -31,13 +38,33 @@ const FORBIDDEN_MODULES = new Set([
  * kept) fails the test so the baseline can only shrink.
  */
 const KNOWN_VIOLATIONS = new Map<string, string>([
-  // Value import of resolveInlineOrEnvCredential in the shared TTS connector
-  // index pulls the vault into the agent closure via startup-guards ->
-  // bootstrap-helpers -> voice-provider-runtime -> plugin-eligibility.
-  ['src/boundary/custody/credential-vault.ts', 'psfn-framework-mp1pf'],
+  // The voice-connector chain named by psfn-framework-mp1pf is fixed (see the
+  // per-seam assertion below), but the vault is still reachable by value from
+  // the agent closure through the gateway bootstrap surface, e.g.
+  //   app/agent/startup-context -> app/startup/support/startup-preflight
+  //   -> app/startup/support/bootstrap-helpers -> persistence/cutover
+  //   -> system/config/settings-contract -> system/config/skills-config
+  //   -> system/config/owner-file-modes -> system/config/fleet-auth-config
+  //   -> boundary/custody/credential-vault
+  // and a dozen further owner-file/channel-config modules that value-import
+  // `envCredential`. Removing this entry needs the agent entrypoint to stop
+  // pulling gateway bootstrap and owner-file loading in by value, which is a
+  // separate, larger seam than mp1pf, tracked as psfn-framework-f77ca.
+  ['src/boundary/custody/credential-vault.ts', 'psfn-framework-f77ca'],
 ]);
 
+/**
+ * Subtrees that must never *directly* value-import a forbidden module
+ * (psfn-framework-mp1pf). This is the per-seam half of the boundary: the
+ * module-level baseline above can only shrink when the last chain is gone,
+ * which would let an individual fixed seam silently regress in the meantime.
+ */
+const SECRET_FREE_SUBTREES = ['src/primitives/voice/'];
+
 const IMPORT_PATTERN = /(?:import|export)\s+[^'"]*?from\s+['"]([^'"]+)['"]|import\s*\(\s*['"]([^'"]+)['"]\s*\)|require\s*\(\s*['"]([^'"]+)['"]\s*\)|^\s*import\s+['"]([^'"]+)['"]/gm;
+
+/** `import type X from` / `export type { X } from` — erased, never a value edge. */
+const TYPE_ONLY_STATEMENT = /^\s*(?:import|export)\s+type\s/;
 
 function listAgentEntryFiles(dir: string): string[] {
   const files: string[] = [];
@@ -72,6 +99,7 @@ function resolveRelativeImport(fromFile: string, specifier: string): string | un
 function extractSpecifiers(source: string): string[] {
   const specifiers: string[] = [];
   for (const match of source.matchAll(IMPORT_PATTERN)) {
+    if (TYPE_ONLY_STATEMENT.test(match[0])) continue;
     const specifier = match.slice(1).find((group): group is string => typeof group === 'string');
     if (specifier) specifiers.push(specifier);
   }
@@ -82,12 +110,15 @@ interface ClosureResult {
   files: Set<string>;
   packages: Map<string, string>;
   parents: Map<string, string>;
+  /** Direct value edges: importer (repo-relative) -> imported file. */
+  edges: [string, string][];
 }
 
 function walkImportClosure(entryFiles: string[]): ClosureResult {
   const files = new Set<string>();
   const packages = new Map<string, string>();
   const parents = new Map<string, string>();
+  const edges: [string, string][] = [];
   const queue = [...entryFiles];
   while (queue.length > 0) {
     const file = queue.pop()!;
@@ -97,6 +128,9 @@ function walkImportClosure(entryFiles: string[]): ClosureResult {
     for (const specifier of extractSpecifiers(source)) {
       if (specifier.startsWith('.')) {
         const resolved = resolveRelativeImport(file, specifier);
+        if (resolved) {
+          edges.push([relative(repoRoot, file), relative(repoRoot, resolved)]);
+        }
         if (resolved && !files.has(resolved)) {
           parents.set(resolved, file);
           queue.push(resolved);
@@ -109,7 +143,7 @@ function walkImportClosure(entryFiles: string[]): ClosureResult {
       }
     }
   }
-  return { files, packages, parents };
+  return { files, packages, parents, edges };
 }
 
 function importChain(parents: Map<string, string>, file: string): string {
@@ -156,6 +190,19 @@ describe('agent secrets import boundary (owffl.4)', () => {
         `stale baseline entry: ${modulePath} (${bead}) is no longer reached — remove the entry and close the bead`,
       ).toBe(true);
     }
+  });
+
+  it('keeps the shared voice connector surface free of secret-bearing value imports (mp1pf)', () => {
+    const offenders = closure.edges.filter(
+      ([importer, imported]) => SECRET_FREE_SUBTREES.some(prefix => importer.startsWith(prefix))
+        && FORBIDDEN_MODULES.has(imported),
+    );
+    expect(
+      offenders,
+      `value import of a secret-bearing module from a secret-free subtree:\n  ${
+        offenders.map(([importer, imported]) => `${importer} -> ${imported}`).join('\n  ')
+      }`,
+    ).toEqual([]);
   });
 
   it('walks a non-trivial closure (sanity: the walker is not silently empty)', () => {

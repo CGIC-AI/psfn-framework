@@ -36,6 +36,9 @@ const FLEET: CompanionsFleetConfig = {
   }],
 };
 
+/** Wide enough that the existing single-artifact assertions stay unpaged. */
+const TEST_LIST_BOUNDS = { pageSize: 100, pageBytes: 8_000_000 };
+
 describe('SharedCompanionWorkspaceStore', () => {
   const roots: string[] = [];
   afterEach(() => {
@@ -148,7 +151,7 @@ describe('SharedCompanionWorkspaceStore', () => {
       decision: 'reject',
       note: 'untrusted provenance',
     });
-    expect(store.listArtifacts()).toEqual([]);
+    expect(store.listArtifacts({ bounds: TEST_LIST_BOUNDS })).toEqual({ artifacts: [], nextCursor: null });
     expect(store.listReviews()[0]).toMatchObject({ status: 'rejected', provenance: 'reviewed source set 7' });
   });
 

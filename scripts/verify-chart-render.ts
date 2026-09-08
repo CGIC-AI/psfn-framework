@@ -219,6 +219,8 @@ function main(): number {
       // The exact set apps/satellite-hub reads: loadEidoverseMcpConfig() plus
       // the place-map path and the dereferenced join-token name.
       const expected = [
+        'EIDOVERSE_BODY_MAX_PENDING_NOTES',
+        'EIDOVERSE_BODY_WALK_TIMEOUT_MS',
         'EIDOVERSE_JOIN_TOKEN',
         'EIDOVERSE_MCP_AGENT_NAME',
         'EIDOVERSE_MCP_AMBIENT_SAY_DEBOUNCE_MS',
@@ -231,6 +233,7 @@ function main(): number {
         'EIDOVERSE_MCP_RECONNECT_MAX_MS',
         'EIDOVERSE_MCP_REQUEST_TIMEOUT_MS',
         'EIDOVERSE_MCP_TOKEN_REF',
+        'EIDOVERSE_MCP_TRANSPORT',
         'EIDOVERSE_MCP_WORLD_NAME',
         'EIDOVERSE_MCP_WORLD_URL',
         'EIDOVERSE_PLACE_MAP_PATH',
@@ -241,6 +244,7 @@ function main(): number {
         `rendered: ${rendered.join(',')}`,
       );
       checkEnv(env, 'EIDOVERSE_MCP_ENABLED', 'true');
+      checkEnv(env, 'EIDOVERSE_MCP_TRANSPORT', 'poll');
       checkEnv(env, 'EIDOVERSE_MCP_COMMAND', '/usr/local/bin/eidoverse-mcp');
       checkEnv(env, 'EIDOVERSE_MCP_ARGS_JSON', '["--stdio","--quiet"]');
       checkEnv(env, 'EIDOVERSE_MCP_WORLD_URL', 'wss://world.example.net/socket');
@@ -253,7 +257,13 @@ function main(): number {
       checkEnv(env, 'EIDOVERSE_MCP_REQUEST_TIMEOUT_MS', '10000');
       checkEnv(env, 'EIDOVERSE_MCP_PENDING_PINGS_POLL_INTERVAL_MS', '2000');
       checkEnv(env, 'EIDOVERSE_MCP_AMBIENT_SAY_DEBOUNCE_MS', '180000');
+      checkEnv(env, 'EIDOVERSE_BODY_WALK_TIMEOUT_MS', '95000');
+      checkEnv(env, 'EIDOVERSE_BODY_MAX_PENDING_NOTES', '4');
       checkEnv(env, 'EIDOVERSE_PLACE_MAP_PATH', '/app/config/eidoverse-place-map.json');
+      check(
+        !enabled.stdout.includes('EIDOVERSE_SNAPSHOT'),
+        'first-person vision renders nothing until it is explicitly enabled',
+      );
 
       const token = env.get('EIDOVERSE_JOIN_TOKEN');
       check(
@@ -292,6 +302,114 @@ function main(): number {
       );
     }
 
+    // ── Enabled on the MCPL door transport ──
+    // The MCPL render must carry the door's own keys and NONE of the stdio
+    // transport's: a rendered EIDOVERSE_MCP_COMMAND under transport: mcpl would
+    // describe a stdio server the hub never spawns.
+    const mcpl = helmTemplate([write('mcpl', deepMergeEidoverse({
+      transport: 'mcpl',
+      command: '',
+      args: [],
+      worldUrl: '',
+      mcpl: {
+        doorUrl: 'wss://world.example.net/mcpl',
+        featureSets: ['eidoverse.world', 'eidoverse.embodiment', 'eidoverse.travel'],
+        catchupWake: false,
+        handshakeTimeoutMs: 10000,
+      },
+    }))]);
+    check(mcpl.status === 0, 'render succeeds on the MCPL door transport', mcpl.stderr.trim());
+    if (mcpl.status === 0) {
+      const env = extractContainerEnv(mcpl.stdout, `${RELEASE_NAME}-satellite-hub`, 'satellite-hub');
+      const rendered = [...env.keys()].filter(name => name.startsWith('EIDOVERSE')).sort();
+      // The body runner works on either transport, so its bounds render here
+      // too; the snapshot source derives its origin from the stdio world URL
+      // and stays on that transport.
+      const expected = [
+        'EIDOVERSE_BODY_MAX_PENDING_NOTES',
+        'EIDOVERSE_BODY_WALK_TIMEOUT_MS',
+        'EIDOVERSE_JOIN_TOKEN',
+        'EIDOVERSE_MCPL_CATCHUP_WAKE',
+        'EIDOVERSE_MCPL_DOOR_URL',
+        'EIDOVERSE_MCPL_FEATURE_SETS_JSON',
+        'EIDOVERSE_MCPL_HANDSHAKE_TIMEOUT_MS',
+        'EIDOVERSE_MCP_AGENT_NAME',
+        'EIDOVERSE_MCP_AMBIENT_SAY_DEBOUNCE_MS',
+        'EIDOVERSE_MCP_ENABLED',
+        'EIDOVERSE_MCP_RECONNECT_BASE_MS',
+        'EIDOVERSE_MCP_RECONNECT_MAX_ATTEMPTS',
+        'EIDOVERSE_MCP_RECONNECT_MAX_MS',
+        'EIDOVERSE_MCP_REQUEST_TIMEOUT_MS',
+        'EIDOVERSE_MCP_TOKEN_REF',
+        'EIDOVERSE_MCP_TRANSPORT',
+        'EIDOVERSE_MCP_WORLD_NAME',
+        'EIDOVERSE_PLACE_MAP_PATH',
+      ];
+      check(
+        rendered.join(',') === expected.join(','),
+        'the MCPL render carries the door environment and no stdio transport keys',
+        `rendered: ${rendered.join(',')}`,
+      );
+      checkEnv(env, 'EIDOVERSE_MCP_TRANSPORT', 'mcpl');
+      checkEnv(env, 'EIDOVERSE_MCPL_DOOR_URL', 'wss://world.example.net/mcpl');
+      checkEnv(
+        env,
+        'EIDOVERSE_MCPL_FEATURE_SETS_JSON',
+        '["eidoverse.world","eidoverse.embodiment","eidoverse.travel"]',
+      );
+      checkEnv(env, 'EIDOVERSE_MCPL_CATCHUP_WAKE', 'false');
+      checkEnv(env, 'EIDOVERSE_MCPL_HANDSHAKE_TIMEOUT_MS', '10000');
+    }
+
+    const mcplNoDoor = helmTemplate([write('mcpl-no-door', deepMergeEidoverse({
+      transport: 'mcpl',
+      command: '',
+      args: [],
+      worldUrl: '',
+      mcpl: {
+        doorUrl: '',
+        featureSets: ['eidoverse.world'],
+        catchupWake: false,
+        handshakeTimeoutMs: 10000,
+      },
+    }))]);
+    check(mcplNoDoor.status !== 0, 'render fails closed: MCPL transport without a door URL');
+
+    const mcplTokenInDoorUrl = helmTemplate([write('mcpl-token-url', deepMergeEidoverse({
+      transport: 'mcpl',
+      command: '',
+      args: [],
+      worldUrl: '',
+      mcpl: {
+        doorUrl: 'wss://world.example.net/mcpl?token=example',
+        featureSets: ['eidoverse.world'],
+        catchupWake: false,
+        handshakeTimeoutMs: 10000,
+      },
+    }))]);
+    check(
+      mcplTokenInDoorUrl.status !== 0,
+      'render fails closed: a door URL carrying its own query string',
+    );
+
+    const mcplSnapshot = helmTemplate([write('mcpl-snapshot', deepMergeEidoverse({
+      transport: 'mcpl',
+      command: '',
+      args: [],
+      worldUrl: '',
+      mcpl: {
+        doorUrl: 'wss://world.example.net/mcpl',
+        featureSets: ['eidoverse.world'],
+        catchupWake: false,
+        handshakeTimeoutMs: 10000,
+      },
+      snapshot: { enabled: true, baseUrl: '', timeoutMs: 4000, maxBytes: 4000000 },
+    }))]);
+    check(
+      mcplSnapshot.status !== 0,
+      'render fails closed: snapshot enabled on the MCPL transport it cannot reach',
+    );
+
     // ── Enabled without the place map ──
     const noPlaceMap = helmTemplate([write('no-place-map', deepMergeEidoverse({
       placeMap: { enabled: false, mountPath: '/app/config/eidoverse-place-map.json', worlds: {} },
@@ -304,6 +422,35 @@ function main(): number {
         'the place map renders nothing when it is disabled',
       );
     }
+
+    // ── Enabled with first-person vision ──
+    const snapshot = helmTemplate([write('snapshot', deepMergeEidoverse({
+      snapshot: { enabled: true, baseUrl: '', timeoutMs: 2500, maxBytes: 2000000 },
+    }))]);
+    check(snapshot.status === 0, 'render succeeds with eidoverse snapshots enabled', snapshot.stderr.trim());
+    if (snapshot.status === 0) {
+      const env = extractContainerEnv(snapshot.stdout, `${RELEASE_NAME}-satellite-hub`, 'satellite-hub');
+      checkEnv(env, 'EIDOVERSE_SNAPSHOT_ENABLED', 'true');
+      checkEnv(env, 'EIDOVERSE_SNAPSHOT_TIMEOUT_MS', '2500');
+      checkEnv(env, 'EIDOVERSE_SNAPSHOT_MAX_BYTES', '2000000');
+      check(
+        !env.has('EIDOVERSE_SNAPSHOT_BASE_URL'),
+        'an empty snapshot baseUrl leaves the hub to derive it from the world URL',
+      );
+    }
+    const snapshotBaseUrl = helmTemplate([write('snapshot-base-url', deepMergeEidoverse({
+      snapshot: {
+        enabled: true,
+        baseUrl: 'https://snapshots.example.net/world',
+        timeoutMs: 4000,
+        maxBytes: 4000000,
+      },
+    }))]);
+    if (snapshotBaseUrl.status === 0) {
+      const env = extractContainerEnv(snapshotBaseUrl.stdout, `${RELEASE_NAME}-satellite-hub`, 'satellite-hub');
+      checkEnv(env, 'EIDOVERSE_SNAPSHOT_BASE_URL', 'https://snapshots.example.net/world');
+    }
+    check(snapshotBaseUrl.status === 0, 'render succeeds with an explicit snapshot origin', snapshotBaseUrl.stderr.trim());
 
     // ── Fail-closed negatives ──
     // values.schema.json rejects the shape-level violations before any
@@ -321,6 +468,23 @@ function main(): number {
       ['zero reconnect base', deepMergeEidoverse({ reconnectBaseMs: 0 }), "at '/satelliteHub/eidoverse/reconnectBaseMs': minimum"],
       ['inverted reconnect window', deepMergeEidoverse({ reconnectBaseMs: 9000 }), 'must be >= satelliteHub.eidoverse.reconnectBaseMs'],
       ['out-of-range egress port', deepMergeEidoverse({ egressPort: 70000 }), "at '/satelliteHub/eidoverse/egressPort': maximum"],
+      ['zero body walk timeout', deepMergeEidoverse({
+        body: { walkTimeoutMs: 0, maxPendingNotes: 4 },
+      }), "at '/satelliteHub/eidoverse/body/walkTimeoutMs': minimum"],
+      ['non-http snapshot origin', deepMergeEidoverse({
+        snapshot: { enabled: true, baseUrl: 'ws://world.example.net', timeoutMs: 4000, maxBytes: 4000000 },
+      }), "at '/satelliteHub/eidoverse/snapshot/baseUrl'"],
+      ['credential-bearing snapshot origin', deepMergeEidoverse({
+        snapshot: {
+          enabled: true,
+          baseUrl: 'https://user:pass@snapshots.example.net',
+          timeoutMs: 4000,
+          maxBytes: 4000000,
+        },
+      }), 'snapshot.baseUrl must be credential-free'],
+      ['zero snapshot size budget', deepMergeEidoverse({
+        snapshot: { enabled: true, baseUrl: '', timeoutMs: 4000, maxBytes: 0 },
+      }), "at '/satelliteHub/eidoverse/snapshot/maxBytes': minimum"],
       ['empty place map', deepMergeEidoverse({
         placeMap: { enabled: true, mountPath: '/app/config/eidoverse-place-map.json', worlds: {} },
       }), 'must contain at least one world'],

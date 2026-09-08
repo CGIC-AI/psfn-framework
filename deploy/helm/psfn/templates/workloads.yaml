@@ -1002,12 +1002,29 @@ spec:
                  the reference itself travels through config. */}}
             - name: EIDOVERSE_MCP_ENABLED
               value: "true"
+            - name: EIDOVERSE_MCP_TRANSPORT
+              value: {{ .Values.satelliteHub.eidoverse.transport | quote }}
+            {{- if eq .Values.satelliteHub.eidoverse.transport "poll" }}
             - name: EIDOVERSE_MCP_COMMAND
               value: {{ .Values.satelliteHub.eidoverse.command | quote }}
             - name: EIDOVERSE_MCP_ARGS_JSON
               value: {{ toJson .Values.satelliteHub.eidoverse.args | quote }}
             - name: EIDOVERSE_MCP_WORLD_URL
               value: {{ .Values.satelliteHub.eidoverse.worldUrl | quote }}
+            {{- end }}
+            {{- if eq .Values.satelliteHub.eidoverse.transport "mcpl" }}
+            {{- /* Phase 2 MCPL door. The door URL is credential-free; the
+                 identity token is attached at dial time from the same
+                 tokenRef entry the stdio transport uses. */}}
+            - name: EIDOVERSE_MCPL_DOOR_URL
+              value: {{ .Values.satelliteHub.eidoverse.mcpl.doorUrl | quote }}
+            - name: EIDOVERSE_MCPL_FEATURE_SETS_JSON
+              value: {{ toJson .Values.satelliteHub.eidoverse.mcpl.featureSets | quote }}
+            - name: EIDOVERSE_MCPL_CATCHUP_WAKE
+              value: {{ .Values.satelliteHub.eidoverse.mcpl.catchupWake | quote }}
+            - name: EIDOVERSE_MCPL_HANDSHAKE_TIMEOUT_MS
+              value: {{ .Values.satelliteHub.eidoverse.mcpl.handshakeTimeoutMs | quote }}
+            {{- end }}
             - name: EIDOVERSE_MCP_WORLD_NAME
               value: {{ .Values.satelliteHub.eidoverse.worldName | quote }}
             - name: EIDOVERSE_MCP_AGENT_NAME
@@ -1022,10 +1039,31 @@ spec:
               value: {{ .Values.satelliteHub.eidoverse.reconnectMaxAttempts | quote }}
             - name: EIDOVERSE_MCP_REQUEST_TIMEOUT_MS
               value: {{ .Values.satelliteHub.eidoverse.requestTimeoutMs | quote }}
+            {{- if eq .Values.satelliteHub.eidoverse.transport "poll" }}
             - name: EIDOVERSE_MCP_PENDING_PINGS_POLL_INTERVAL_MS
               value: {{ .Values.satelliteHub.eidoverse.pendingPingsPollIntervalMs | quote }}
+            {{- end }}
             - name: EIDOVERSE_MCP_AMBIENT_SAY_DEBOUNCE_MS
               value: {{ .Values.satelliteHub.eidoverse.ambientSayDebounceMs | quote }}
+            - name: EIDOVERSE_BODY_WALK_TIMEOUT_MS
+              value: {{ .Values.satelliteHub.eidoverse.body.walkTimeoutMs | int64 | quote }}
+            - name: EIDOVERSE_BODY_MAX_PENDING_NOTES
+              value: {{ .Values.satelliteHub.eidoverse.body.maxPendingNotes | int64 | quote }}
+            {{- if .Values.satelliteHub.eidoverse.snapshot.enabled }}
+            {{- /* loadEidoverseSnapshotConfig returns null unless
+                 EIDOVERSE_SNAPSHOT_ENABLED is exactly "true", so the disabled
+                 default renders none of these keys. */}}
+            - name: EIDOVERSE_SNAPSHOT_ENABLED
+              value: "true"
+            {{- with .Values.satelliteHub.eidoverse.snapshot.baseUrl }}
+            - name: EIDOVERSE_SNAPSHOT_BASE_URL
+              value: {{ . | quote }}
+            {{- end }}
+            - name: EIDOVERSE_SNAPSHOT_TIMEOUT_MS
+              value: {{ .Values.satelliteHub.eidoverse.snapshot.timeoutMs | int64 | quote }}
+            - name: EIDOVERSE_SNAPSHOT_MAX_BYTES
+              value: {{ .Values.satelliteHub.eidoverse.snapshot.maxBytes | int64 | quote }}
+            {{- end }}
             - name: {{ .Values.satelliteHub.eidoverse.tokenRef }}
               valueFrom:
                 secretKeyRef:

@@ -35,9 +35,12 @@ export interface EidoverseMcpLogger {
 export type EidoverseCredentialResolver = (reference: string) => Promise<string>;
 
 type EidoverseToolRequest =
-  | { name: "look"; arguments: Record<string, never> }
-  | { name: "say"; arguments: { text: string } }
-  | { name: "pending_pings"; arguments: Record<string, never> };
+  | { name: "look"; arguments: Record<string, never>; timeoutMs?: number }
+  | { name: "say"; arguments: { text: string }; timeoutMs?: number }
+  | { name: "pending_pings"; arguments: Record<string, never>; timeoutMs?: number }
+  | { name: "walk_to"; arguments: { x: number; z: number; run?: boolean }; timeoutMs?: number }
+  | { name: "face"; arguments: { target: string } | { x: number; z: number }; timeoutMs?: number }
+  | { name: "stop"; arguments: Record<string, never>; timeoutMs?: number };
 
 interface EidoverseMcpSession {
   connect(): Promise<void>;
@@ -124,6 +127,23 @@ export class EidoverseMcpClient {
     const result = await this.requestText({ name: "pending_pings", arguments: {} });
     if (result === "no pending pings") return [];
     return result.split("\n").filter((value) => value.length > 0);
+  }
+
+  /**
+   * Allowlisted locomotion. The door blocks until arrival, interruption, or its
+   * own walk timeout, so the caller supplies the bounded per-request budget
+   * instead of the short shared request timeout used by `look`/`say`.
+   */
+  async walkTo(x: number, z: number, run: boolean, timeoutMs: number): Promise<string> {
+    return this.requestText({ name: "walk_to", arguments: { x, z, run }, timeoutMs });
+  }
+
+  async face(target: string): Promise<string> {
+    return this.requestText({ name: "face", arguments: { target } });
+  }
+
+  async stop(): Promise<string> {
+    return this.requestText({ name: "stop", arguments: {} });
   }
 
   private async connectInitial(): Promise<void> {
@@ -364,10 +384,13 @@ function createStdioSession(
         maxTotalTimeout: config.requestTimeoutMs,
       });
     },
-    request: (request) => client.callTool(
-      { name: request.name, arguments: request.arguments },
-      { timeout: config.requestTimeoutMs, maxTotalTimeout: config.requestTimeoutMs },
-    ),
+    request: (request) => {
+      const timeout = request.timeoutMs ?? config.requestTimeoutMs;
+      return client.callTool(
+        { name: request.name, arguments: request.arguments },
+        { timeout, maxTotalTimeout: timeout },
+      );
+    },
     close: () => client.close(),
   };
 }
@@ -409,7 +432,10 @@ function parseWorldUrl(raw: string): string {
   return url.toString();
 }
 
-function positiveIntegerEnv(
+// Shared with the MCPL transport's config loader (eidoverse-mcpl-config.ts):
+// both transports read the same EIDOVERSE_MCP_* bootstrap entries, so the
+// parsing rules stay in one place rather than being restated per transport.
+export function positiveIntegerEnv(
   env: Readonly<Record<string, string | undefined>>,
   name: string,
   fallback: number,
@@ -423,13 +449,13 @@ function positiveIntegerEnv(
   return value;
 }
 
-function requiredEnv(env: Readonly<Record<string, string | undefined>>, name: string): string {
+export function requiredEnv(env: Readonly<Record<string, string | undefined>>, name: string): string {
   const value = optionalEnv(env, name);
   if (!value) throw new Error(`Missing required environment variable: ${name}`);
   return value;
 }
 
-function optionalEnv(
+export function optionalEnv(
   env: Readonly<Record<string, string | undefined>>,
   name: string,
 ): string | undefined {

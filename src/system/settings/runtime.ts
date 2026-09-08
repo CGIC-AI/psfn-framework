@@ -126,7 +126,11 @@ const DIRECT_DEFINED_CONFIG_SETTINGS = [
   'compactionEmotionalSalienceThresholdPct',
   'backgroundFailureEscalationThreshold',
   'healthEventStreamMaxRows',
+  'postgresStoreReadinessRetryAttempts',
+  'postgresStoreReadinessRetryBackoffMs',
   'custodySnapshotRetentionDays',
+  'sharedWorkspaceListPageSize',
+  'sharedWorkspaceListPageBytes',
   'memoryExtractionMinImportance',
   'memoryExtractionMinConfidence',
   'memoryExtractionMinNovelty',
@@ -243,7 +247,13 @@ function getContextSettingsSnapshot(config: SubstrateConfig) {
     backgroundFailureEscalationThreshold:
       config.backgroundFailureEscalationThreshold ?? null,
     healthEventStreamMaxRows: config.healthEventStreamMaxRows ?? null,
+    postgresStoreReadinessRetryAttempts:
+      config.postgresStoreReadinessRetryAttempts ?? null,
+    postgresStoreReadinessRetryBackoffMs:
+      config.postgresStoreReadinessRetryBackoffMs ?? null,
     custodySnapshotRetentionDays: config.custodySnapshotRetentionDays ?? null,
+    sharedWorkspaceListPageSize: config.sharedWorkspaceListPageSize ?? null,
+    sharedWorkspaceListPageBytes: config.sharedWorkspaceListPageBytes ?? null,
     sessionTailCache: structuredClone(
       config.sessionTailCache ?? createDefaultSessionTailCacheSettings(),
     ),
@@ -274,7 +284,11 @@ function getContextSettingsSnapshot(config: SubstrateConfig) {
     | 'compactionEmotionalSalienceThresholdPct'
     | 'backgroundFailureEscalationThreshold'
     | 'healthEventStreamMaxRows'
+    | 'postgresStoreReadinessRetryAttempts'
+    | 'postgresStoreReadinessRetryBackoffMs'
     | 'custodySnapshotRetentionDays'
+    | 'sharedWorkspaceListPageSize'
+    | 'sharedWorkspaceListPageBytes'
     | 'sessionTailCache'
   >;
 }

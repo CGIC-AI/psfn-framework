@@ -359,6 +359,22 @@ the scheduler task. Production registers salience decay, ambient presence, conce
 grooming, the social-graph builder, and the fleet-leader shared-world wiki caretaker
 through this registry.
 
+Operations registered here may carry their own due-gate on top of the shared
+cadence. The CogSec Blind Review operation is the clearest case: `runIfDue`
+returns immediately unless `scheduler.json` `blindReviewer.intervalMs` has
+elapsed since its last pass, and the handler itself is only invoked when the
+registry's `backgroundMaintenance.intervalMs` tick fires. The cadence an
+operator actually gets is therefore
+
+```
+max(blindReviewer.intervalMs, backgroundMaintenance.intervalMs)
+```
+
+never the smaller of the two. Setting a lane interval below the maintenance
+tick buys nothing. Garden's Intake Firewall page renders the computed effective
+value alongside both inputs, so the reviewer's real cadence is readable without
+multiplying two owner files together by hand.
+
 ## Outreach lanes
 
 Two scheduler lanes ride the same engine and share the delivery path: accepted output

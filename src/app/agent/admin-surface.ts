@@ -1,4 +1,5 @@
 import type { SatelliteDeviceHealthReader } from '../../shared/telemetry/satellite-device-health.js';
+import type { BlindReviewLaneRuntime } from './startup/blind-review-lane.js';
 import type { ShardExecutionPort } from '../../faculties/shards/port.js';
 import { createInProcessGardenAdminContract } from '../../operator/garden/local-admin-contract.js';
 import { createGatewayAdminToolHealthProvider } from '../../operator/garden/tool-health-provider.js';
@@ -107,6 +108,12 @@ export interface StartOptionalAdminTransportServerOptions {
     & CustodyChainDeliveryReadPort
     & CustodyChainDerivedArtifactReadPort
   ) | null;
+  /**
+   * The Blind Reviewer window's reader methods, for the Garden reviewer state
+   * section (33xah). Supplied by the composed lane so the projection reads the
+   * same lazily-opened, tenant-pinned window the lane writes.
+   */
+  blindReviewReader?: BlindReviewLaneRuntime['reader'] | null;
   /**
    * Bounded READ over this process's persisted health stream, for the Garden
    * incident timeline. Deliberately the read function rather than the store:
@@ -265,6 +272,7 @@ export async function startOptionalAdminTransportServer(
     subsystemOutputRefStore: options.subsystemOutputRefStore,
     episodicStore: options.episodicStore ?? null,
     custodyChainReader: options.custodyChainReader ?? null,
+    blindReviewReader: options.blindReviewReader ?? null,
     healthEventStreamRead: options.healthEventStreamRead ?? null,
     fleetSystemHealthEventStreamRead: options.fleetSystemHealthEventStreamRead ?? null,
     humanEscalationLedger: options.humanEscalationLedger ?? null,

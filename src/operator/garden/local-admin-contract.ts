@@ -37,6 +37,11 @@ import type {
   CustodyChainDerivedArtifactReadPort,
   CustodyChainSnapshotReadPort,
 } from '../../core/cogsec/disclosure/custody-chain-query.js';
+import { DEFAULT_BLIND_REVIEWER_CONFIG } from '../../system/config/scheduler-config/blind-review.js';
+import {
+  createAdminBlindReviewService,
+  type AdminBlindReviewReadPort,
+} from './services/blind-review-service.js';
 import { GardenCustodyQueryService } from './services/custody-query-service.js';
 import {
   DEFAULT_PASS_INTERVAL_MS as DREAM_MEANING_PASS_INTERVAL_MS,
@@ -189,6 +194,7 @@ import { AdminIcpAutonomyDataService } from './services/icp-autonomy-service.js'
 import type { SpeakingArbiterAdminStore } from '../../persistence/postgres/speaking-arbiter-admin-store.js';
 import { AdminRoomArbiterDataService } from './services/room-arbiter-service.js';
 import { AdminSharedWorkspaceService } from './services/shared-workspace-service.js';
+import { requireSharedWorkspaceListBounds } from '../../persistence/workspaces/shared-workspace-bounds.js';
 import { requireAuditOpaqueIdKeyring } from './audit-opaque-id-keyring.js';
 import type { BackgroundWorkStorePort } from '../../core/agent/background-work/store-port.js';
 import type { OperatorAlertSinkConfiguration } from '../../shared/contracts/operator-alerting.js';
@@ -285,6 +291,12 @@ export interface InProcessGardenAdminContractOptions {
     & CustodyChainDeliveryReadPort
     & CustodyChainDerivedArtifactReadPort
   ) | null;
+  /**
+   * The Blind Reviewer window's two reader methods (33xah). Absent when the
+   * reviewer is not composed in this process; the Garden section then reports
+   * an explicit unavailable rather than an empty window.
+   */
+  blindReviewReader?: AdminBlindReviewReadPort | null;
   /** Bounded read over the persisted health stream for the incident timeline. */
   healthEventStreamRead?: IncidentStreamRead | null;
   /**
@@ -882,6 +894,19 @@ export function createInProcessGardenAdminContract(
     // companion it is scoped to is the SAME `config.companionId` the delivery
     // recorder stamped on the rows — so the query's owner predicate and the
     // records' owner column are produced by one resolution, not two.
+    // 33xah: the reviewer's own state is projected whenever the scheduler
+    // config that bounds it is known. A disabled or unwired reviewer is a
+    // STATUS on that projection, not a missing section — "we cannot tell you"
+    // and "it is off" are different answers and an operator needs both.
+    blindReview: options.effectiveSchedulerConfig
+      ? createAdminBlindReviewService({
+        config: options.effectiveSchedulerConfig.blindReviewer
+          ?? DEFAULT_BLIND_REVIEWER_CONFIG,
+        backgroundMaintenanceIntervalMs:
+          options.effectiveSchedulerConfig.backgroundMaintenance.intervalMs,
+        ...(options.blindReviewReader ? { reader: options.blindReviewReader } : {}),
+      })
+      : null,
     custodyQuery: options.custodyChainReader
       ? new GardenCustodyQueryService({
         snapshots: options.custodyChainReader,
@@ -983,7 +1008,10 @@ export function createInProcessGardenAdminContract(
     settings: settingsService,
     ownerFileReloadWatcher,
     sharedWorkspace: options.config.sharedWorkspacePath
-      ? new AdminSharedWorkspaceService(options.config.sharedWorkspacePath)
+      ? new AdminSharedWorkspaceService(
+          options.config.sharedWorkspacePath,
+          requireSharedWorkspaceListBounds(options.config),
+        )
       : null,
     intakeQuarantine,
     driftReviews,

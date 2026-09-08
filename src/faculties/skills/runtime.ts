@@ -7,7 +7,11 @@ import {
   type SkillReuseConfig,
   type SkillsRuntimeConfig,
 } from '../../system/config/skills-config.js';
-import { filterEligibleSkills } from './filter.js';
+import {
+  createBinaryAvailabilityProbe,
+  createSkillBinaryCheckLedger,
+  filterEligibleSkills,
+} from './filter.js';
 import {
   compareSkillsForPrompt,
   formatSkillsForPrompt,
@@ -36,7 +40,11 @@ import {
   normalizeSkillName,
   SkillStore,
 } from './store.js';
-import { SkillUsageTelemetryStore } from './telemetry.js';
+import {
+  SkillUsageTelemetryStore,
+  type RecordSkillPostUseOutcomeInput,
+  type SkillOutcomeEvidence,
+} from './telemetry.js';
 import type {
   SkillInvocationRecordInput,
   SkillCollectionLimits,
@@ -353,6 +361,20 @@ export class SkillsRuntime {
     return this.telemetry.record(result.entry.name, input);
   }
 
+  /**
+   * Attribute one completed turn's structural outcome to the skills it used
+   * (psfn-framework-sap72). Durable, so the reuse loop keeps the evidence
+   * across a restart.
+   */
+  recordSkillPostUseOutcome(input: RecordSkillPostUseOutcomeInput): string[] {
+    return this.telemetry.recordPostUseOutcome(input);
+  }
+
+  /** Durable post-use outcome evidence, by lowercase skill name. */
+  getSkillOutcomeEvidence(): ReadonlyMap<string, SkillOutcomeEvidence> {
+    return this.telemetry.listOutcomeEvidence();
+  }
+
   getSkillUsageStats(name: string): SkillUsageStats | null {
     return this.telemetry.get(name);
   }
@@ -455,16 +477,30 @@ export class SkillsRuntime {
     return { name: record.name, description: record.description, category: record.category, version: record.version, content: record.content, createdAt: record.createdAt, updatedAt: record.updatedAt };
   }
 
-  /** Update an existing managed skill via the operator admin surface. */
-  updateSkill(input: { name: string; content: string; description?: string }): { name: string; description: string; category: string; version: number; content: string; createdAt: string; updatedAt: string } {
+  /**
+   * Update an existing managed skill via the operator admin surface.
+   *
+   * `expectedVersion` is REQUIRED here, unlike the optional compare-and-swap on
+   * {@link SkillUpdateInput}: an operator edits a document they read minutes
+   * earlier in a browser, so the Garden save is the write most likely to race a
+   * concurrent agent revision. The store raises
+   * {@link SkillVersionConflictError} when the base version moved; it
+   * propagates so the Garden route can answer a typed 409 instead of silently
+   * discarding the other writer (psfn-framework-2ug9l).
+   */
+  updateSkill(input: { name: string; content: string; description?: string; expectedVersion: number }): { name: string; description: string; category: string; version: number; content: string; createdAt: string; updatedAt: string } {
     const record = this.store.update(input, { updatedBy: 'operator:garden' });
     this.invalidate();
     return { name: record.name, description: record.description, category: record.category, version: record.version, content: record.content, createdAt: record.createdAt, updatedAt: record.updatedAt };
   }
 
-  /** Delete a managed skill by name. */
+  /**
+   * Delete a managed skill by name. Garden is the operator-facing authority,
+   * so the delete carries operator provenance into the skill's archived audit
+   * trail, which survives the deletion (psfn-framework-ft69n).
+   */
   deleteSkill(name: string): void {
-    this.store.delete(name);
+    this.store.delete(name, { updatedBy: 'operator:garden', reason: 'Deleted from the Garden skills admin surface' });
     this.invalidate();
   }
 
@@ -512,6 +548,7 @@ export class SkillsRuntime {
         maxLoadedSkills: runtimeConfig.maxLoadedSkills,
         maxSkillChars: runtimeConfig.maxSkillChars,
         disabledSkills: runtimeConfig.disabledSkills,
+        eligibility: runtimeConfig.eligibility,
       },
       directories: directories.map(directory => ({
         relativePath: directory.relativePath,
@@ -548,14 +585,24 @@ export class SkillsRuntime {
       eligible: [],
       skipped: [],
     };
+    // psfn-framework-7wggj: one PATH-scan-memoizing probe and one aggregate
+    // check ledger for the whole build. Both are created here, outside the
+    // chunk loop, because a per-chunk probe would re-walk PATH for every chunk
+    // and a per-chunk ledger would be no aggregate bound at all.
+    const isBinaryAvailable = this.options.isBinaryAvailable
+      ?? createBinaryAvailabilityProbe().isAvailable;
+    const binaryCheckLedger = createSkillBinaryCheckLedger(
+      runtimeConfig.eligibility.maxTotalBinaryChecks,
+    );
     for (let offset = 0; offset < admission.entries.length; offset += limits.yieldEvery) {
       const chunk = await filterEligibleSkills(
         admission.entries.slice(offset, offset + limits.yieldEvery),
         {
           runtimeConfig,
           environment: this.options.environment,
-          isBinaryAvailable: this.options.isBinaryAvailable,
+          isBinaryAvailable,
           maxBinaryRequirements: limits.maxBinaryRequirements,
+          binaryCheckLedger,
         },
       );
       eligibility.evaluations.push(...chunk.evaluations);

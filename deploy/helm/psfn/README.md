@@ -113,24 +113,53 @@ are disabled by default and are not additional public installation modes.
 reads (`apps/satellite-hub/src/ts/hub/eidoverse-mcp.ts`). It is disabled by
 default, and the disabled render contains no Eidoverse key at all.
 
-Enabling it requires `satelliteHub.enabled=true`, a `command` that resolves
-inside the Hub image, a credential-free `ws://`/`wss://` `worldUrl`, a
-`worldName`, and an `agentName`; partial configuration fails rendering rather
-than shipping a pod that cannot start. The join token is never a chart value on
-the container: `tokenRef` names the environment entry the Hub dereferences, and
-that entry is populated from the application Secret key
+Enabling it requires `satelliteHub.enabled=true`, a `worldName`, an `agentName`,
+and the keys its `transport` needs; partial configuration fails rendering rather
+than shipping a pod that cannot start. The identity token is never a chart value
+on the container: `tokenRef` names the environment entry the Hub dereferences,
+and that entry is populated from the application Secret key
 `secrets.keys.eidoverseJoinToken` (the two must match), mirroring the Home
 Assistant control-token pattern.
 
+`transport` selects how the Hub reaches the world, and each transport renders
+only its own keys:
+
+- `poll` (default, Phase 1) needs a `command` that resolves inside the Hub image
+  and a credential-free `ws://`/`wss://` `worldUrl`. The Hub spawns that stdio
+  MCP server and polls `pending_pings` on `pendingPingsPollIntervalMs`.
+- `mcpl` (Phase 2) needs `mcpl.doorUrl`, a credential-free `ws://`/`wss://` URL
+  including the door's path and carrying no query string of its own — the
+  identity token is attached at dial time. Knocks then arrive as pushed
+  `channels/incoming` traffic and no poll timer exists. `mcpl.featureSets` is
+  the grant the Hub issues; advertisement is not authorization, so nothing the
+  door declares about itself widens it. `mcpl.catchupWake` decides whether
+  mentions the door replays after a reconnect may start turns, and defaults to
+  `false`.
+
 Two operational consequences:
 
-- **The MCP server binary is not bundled.** `command` must already exist in the
-  Hub image or the pod cannot connect.
+- **The stdio MCP server binary is not bundled.** Under `transport: poll`,
+  `command` must already exist in the Hub image or the pod cannot connect.
 - **Connectivity becomes a startup requirement.** The Hub rethrows
   `EidoverseMcpUnavailableError`, so the pod crash-loops until the configured
-  command and world are reachable. With `networkPolicy.enabled=true`, a LAN or
-  non-443 world also needs `satelliteHub.eidoverse.egressCIDRs`/`egressPort`;
+  door (or command and world) is reachable. With `networkPolicy.enabled=true`, a
+  LAN or non-443 world also needs
+  `satelliteHub.eidoverse.egressCIDRs`/`egressPort`;
   `networkPolicy.satelliteHub.allowExternalEgress` only opens public 443.
+
+`satelliteHub.eidoverse.body` bounds the Hub-owned locomotion runner
+(`EIDOVERSE_BODY_*`). It always renders with the visitor path because the
+allowlist itself is the gate: `walk_to`/`face`/`stop` only, refused entirely
+unless the Hub's claim profile grants `avatar_action`. Keep `walkTimeoutMs`
+above the door's own ~90s walk budget.
+
+`satelliteHub.eidoverse.snapshot` renders the optional first-person vision
+environment (`EIDOVERSE_SNAPSHOT_*`) and is disabled by default; the disabled
+render contains no snapshot key. It needs a live spectator renderer attached to
+the world, which is a separate moving part from the world sequencer, so an
+enabled snapshot path still degrades to text `look()` notes rather than failing a
+turn. Leave `baseUrl` empty to let the Hub derive the origin from `worldUrl`;
+set it only for a separate credential-free `http://`/`https://` origin.
 
 `satelliteHub.eidoverse.placeMap` renders the optional Hub-owned world/region to
 `places.json` mapping into a ConfigMap mounted read-only at `mountPath`

@@ -5,6 +5,7 @@ import {
   type SharedWorkspaceProposalInput,
   type SharedWorkspaceReviewInput,
 } from '../../../persistence/workspaces/shared-workspace-store.js';
+import type { SharedWorkspaceListBounds } from '../../../persistence/workspaces/shared-workspace-bounds.js';
 import type { GardenRequestContext } from '../garden-request-context.js';
 
 type SharedWorkspacePrincipalRole = SharedWorkspaceActor['role'];
@@ -51,14 +52,30 @@ function authenticateRequest(
 export class AdminSharedWorkspaceService {
   private readonly store: SharedCompanionWorkspaceStore;
 
-  constructor(sharedWorkspacePath: string) {
+  constructor(
+    sharedWorkspacePath: string,
+    private readonly listBounds: SharedWorkspaceListBounds,
+  ) {
     this.store = new SharedCompanionWorkspaceStore(sharedWorkspacePath);
   }
 
-  getSnapshot() {
+  /**
+   * Governed workspace snapshot. Artifacts are served one operator-bounded page
+   * at a time and carry `nextArtifactCursor` when more remain, so a large
+   * reviewed corpus can no longer hold the Garden request loop while every
+   * artifact is re-hashed (psfn-framework-9jld5).
+   */
+  getSnapshot(request: { artifactCursor?: string } = {}) {
+    const artifacts = this.store.listArtifacts({
+      bounds: this.listBounds,
+      ...(request.artifactCursor !== undefined
+        ? { cursor: request.artifactCursor }
+        : {}),
+    });
     return {
       policy: this.store.getPolicy(),
-      artifacts: this.store.listArtifacts(),
+      artifacts: artifacts.artifacts,
+      nextArtifactCursor: artifacts.nextCursor,
       reviews: this.store.listReviews(),
     };
   }

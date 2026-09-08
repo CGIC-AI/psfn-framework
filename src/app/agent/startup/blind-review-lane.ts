@@ -47,6 +47,15 @@ export interface BlindReviewLaneDeps {
 export interface BlindReviewLaneRuntime {
   /** Runs one pass when the owner-file interval has elapsed; otherwise a no-op. */
   runIfDue(nowMs?: number): Promise<boolean>;
+  /**
+   * The two READER methods of the same window, for the Garden state projection
+   * (33xah). Deliberately the reads and not the store: an operator surface must
+   * not be able to append, mark, pin or prune the evidence it renders. It goes
+   * through the same lazy `openStore`, so opening the Garden section connects
+   * the window exactly as the first due pass would — and a database that is
+   * down answers with an error rather than an empty-looking healthy window.
+   */
+  readonly reader: Pick<BlindReviewStorePort, 'readState' | 'countRows'>;
 }
 
 /**
@@ -115,6 +124,10 @@ export function wireBlindReviewLane(deps: BlindReviewLaneDeps): BlindReviewLaneR
   let lane: BlindReviewLane | null = null;
   let lastRunAtMs = 0;
   return {
+    reader: {
+      readState: async () => (await openStore()).readState(),
+      countRows: async () => (await openStore()).countRows(),
+    },
     runIfDue: async (nowMs = Date.now()): Promise<boolean> => {
       if (lastRunAtMs !== 0 && nowMs - lastRunAtMs < config.intervalMs) return false;
       lane ??= new BlindReviewLane({

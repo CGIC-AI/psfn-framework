@@ -57,6 +57,7 @@
           "additionalProperties": false,
           "required": [
             "enabled",
+            "transport",
             "command",
             "args",
             "worldUrl",
@@ -71,11 +72,21 @@
             "ambientSayDebounceMs",
             "egressCIDRs",
             "egressPort",
-            "placeMap"
+            "body",
+            "snapshot",
+            "placeMap",
+            "mcpl"
           ],
           "properties": {
             "enabled": {
               "type": "boolean"
+            },
+            "transport": {
+              "type": "string",
+              "enum": [
+                "poll",
+                "mcpl"
+              ]
             },
             "command": {
               "type": "string"
@@ -136,6 +147,51 @@
               "minimum": 1,
               "maximum": 65535
             },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "walkTimeoutMs",
+                "maxPendingNotes"
+              ],
+              "properties": {
+                "walkTimeoutMs": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "maxPendingNotes": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            },
+            "snapshot": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "enabled",
+                "baseUrl",
+                "timeoutMs",
+                "maxBytes"
+              ],
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "baseUrl": {
+                  "type": "string",
+                  "pattern": "^$|^https?://"
+                },
+                "timeoutMs": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "maxBytes": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            },
             "placeMap": {
               "type": "object",
               "additionalProperties": false,
@@ -175,6 +231,41 @@
                       }
                     }
                   }
+                }
+              }
+            },
+            "mcpl": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "doorUrl",
+                "featureSets",
+                "catchupWake",
+                "handshakeTimeoutMs"
+              ],
+              "properties": {
+                "doorUrl": {
+                  "type": "string",
+                  "pattern": "^$|^wss?://"
+                },
+                "featureSets": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "eidoverse.world",
+                      "eidoverse.embodiment",
+                      "eidoverse.travel",
+                      "eidoverse.typing"
+                    ]
+                  }
+                },
+                "catchupWake": {
+                  "type": "boolean"
+                },
+                "handshakeTimeoutMs": {
+                  "type": "integer",
+                  "minimum": 1
                 }
               }
             }

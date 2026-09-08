@@ -302,12 +302,36 @@ export interface SubstrateConfig {
    */
   healthEventStreamMaxRows?: number;
   /**
+   * Bounded retry budget for a diagnostic PostgreSQL store's startup readiness
+   * task (psfn-framework-6c6cq). Owned by settings.json. A first-boot
+   * credential race used to burn the single attempt, log one ERROR, and leave
+   * the process advertising Ready with that store silently broken; the budget
+   * is spent before Ready, so it delays the Ready boundary by at most
+   * (attempts - 1) x backoff. Attempts include the first, so 1 is "no retry".
+   */
+  postgresStoreReadinessRetryAttempts?: number;
+  /** Fixed delay between readiness attempts. Owned by settings.json. */
+  postgresStoreReadinessRetryBackoffMs?: number;
+  /**
    * Days a per-turn CogSec custody snapshot is retained
    * (psfn-framework-ccgdz.1). Owned by settings.json; the store fails closed at
    * boot when it is absent, so the durable custody trail can never grow without
    * an operator-declared retention bound.
    */
   custodySnapshotRetentionDays?: number;
+  /**
+   * Artifacts served by one governed Shared Workspace list page. Owned by
+   * settings.json; the gateway and Garden refuse to expose a shared workspace
+   * without it, so a reviewed corpus can never be listed unbounded
+   * (psfn-framework-9jld5).
+   */
+  sharedWorkspaceListPageSize?: number;
+  /**
+   * Artifact bytes read and hashed for one governed Shared Workspace list page.
+   * Owned by settings.json alongside `sharedWorkspaceListPageSize`; both are
+   * required before a shared workspace is exposed.
+   */
+  sharedWorkspaceListPageBytes?: number;
   sessionMirrorEnabled?: boolean;
   sessionMirrorMaxChars?: number;
   sessionMirrorActiveWindowMs?: number;

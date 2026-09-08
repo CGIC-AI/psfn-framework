@@ -8151,24 +8151,24 @@
     },
     {
       "file": "src/faculties/shards/manager.ts",
-      "name": "ShardManager.assertShardRoutable.retryHint@L1563",
+      "name": "ShardManager.assertShardRoutable.retryHint@L1584",
       "value": "'retry_after_delay'",
       "form": "object-member",
-      "note": "Existing mutable policy candidate ShardManager.assertShardRoutable.retryHint@L1563; line relocation only, retaining the named migration debt from psfn-framework-7qeo1.18 rather than approving immutable code ownership."
+      "note": "Existing mutable policy candidate ShardManager.assertShardRoutable.retryHint@L1584; line relocation only, retaining the named migration debt from psfn-framework-7qeo1.18 rather than approving immutable code ownership."
     },
     {
       "file": "src/faculties/shards/manager.ts",
-      "name": "ShardManager.assertShardRoutable.retryHint@L1574",
+      "name": "ShardManager.assertShardRoutable.retryHint@L1595",
       "value": "'retry_after_delay'",
       "form": "object-member",
-      "note": "Existing mutable policy candidate ShardManager.assertShardRoutable.retryHint@L1574; line relocation only, retaining the named migration debt from psfn-framework-7qeo1.18 rather than approving immutable code ownership."
+      "note": "Existing mutable policy candidate ShardManager.assertShardRoutable.retryHint@L1595; line relocation only, retaining the named migration debt from psfn-framework-7qeo1.18 rather than approving immutable code ownership."
     },
     {
       "file": "src/faculties/shards/manager.ts",
-      "name": "ShardManager.assertShardRoutable.retryHint@L1587",
+      "name": "ShardManager.assertShardRoutable.retryHint@L1608",
       "value": "'try_alternative_input'",
       "form": "object-member",
-      "note": "Existing mutable policy candidate ShardManager.assertShardRoutable.retryHint@L1587; line relocation only, retaining the named migration debt from psfn-framework-7qeo1.18 rather than approving immutable code ownership."
+      "note": "Existing mutable policy candidate ShardManager.assertShardRoutable.retryHint@L1608; line relocation only, retaining the named migration debt from psfn-framework-7qeo1.18 rather than approving immutable code ownership."
     },
     {
       "file": "src/faculties/shards/manager.ts",
@@ -8179,17 +8179,17 @@
     },
     {
       "file": "src/faculties/shards/manager.ts",
-      "name": "ShardManager.executeShard.retryHint@L685",
+      "name": "ShardManager.executeShard.retryHint@L706",
       "value": "'retry_after_delay'",
       "form": "object-member",
-      "note": "Existing mutable policy candidate ShardManager.executeShard.retryHint@L685; line relocation only, retaining the named migration debt from psfn-framework-7qeo1.18 rather than approving immutable code ownership."
+      "note": "Existing mutable policy candidate ShardManager.executeShard.retryHint@L706; line relocation only, retaining the named migration debt from psfn-framework-7qeo1.18 rather than approving immutable code ownership."
     },
     {
       "file": "src/faculties/shards/manager.ts",
-      "name": "ShardManager.executeShard.retryHint@L709",
+      "name": "ShardManager.executeShard.retryHint@L730",
       "value": "'try_alternative_input'",
       "form": "object-member",
-      "note": "Existing mutable policy candidate ShardManager.executeShard.retryHint@L709; line relocation only, retaining the named migration debt from psfn-framework-7qeo1.18 rather than approving immutable code ownership."
+      "note": "Existing mutable policy candidate ShardManager.executeShard.retryHint@L730; line relocation only, retaining the named migration debt from psfn-framework-7qeo1.18 rather than approving immutable code ownership."
     },
     {
       "file": "src/faculties/shards/parent-icp-tool.ts",
@@ -11166,6 +11166,20 @@
     },
     {
       "file": "src/shared/contracts/settings-garden-contract.ts",
+      "name": "SETTINGS_GARDEN_FIELD_EXPOSURE.postgresStoreReadinessRetryAttempts",
+      "value": "{ sectionId: 'sessions', surface: 'advanced' }",
+      "form": "object-member",
+      "note": "Canonical Garden exposure metadata for the settings.json-owned PostgreSQL store readiness retry attempt budget; this literal locates the owned field and is not a runtime override."
+    },
+    {
+      "file": "src/shared/contracts/settings-garden-contract.ts",
+      "name": "SETTINGS_GARDEN_FIELD_EXPOSURE.postgresStoreReadinessRetryBackoffMs",
+      "value": "{ sectionId: 'sessions', surface: 'advanced' }",
+      "form": "object-member",
+      "note": "Canonical Garden exposure metadata for the settings.json-owned PostgreSQL store readiness retry backoff; this literal locates the owned field and is not a runtime override."
+    },
+    {
+      "file": "src/shared/contracts/settings-garden-contract.ts",
       "name": "SETTINGS_GARDEN_FIELD_EXPOSURE.profileSynthesisCooldownMs",
       "value": "{ sectionId: 'profile', surface: 'advanced' }",
       "form": "object-member",
@@ -13518,6 +13532,13 @@
     },
     {
       "file": "src/system/config/skills-config.ts",
+      "name": "DEFAULT_SKILL_ELIGIBILITY_CONFIG.maxTotalBinaryChecks",
+      "value": "4096",
+      "form": "object-member",
+      "note": "Skills owner-file default; operator-editable via skills.json eligibility.maxTotalBinaryChecks (psfn-framework-7wggj)."
+    },
+    {
+      "file": "src/system/config/skills-config.ts",
       "name": "DEFAULT_SKILL_REUSE_CONFIG.maxCandidates",
       "value": "3",
       "form": "object-member",
@@ -13771,6 +13792,20 @@
       "value": "{ min: 1000, max: 30000 }",
       "form": "object-member",
       "note": "Canonical owner-file/schema metadata SETTINGS_VALIDATION.obsidianTimeoutMs; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
+    },
+    {
+      "file": "src/system/settings/form.ts",
+      "name": "SETTINGS_VALIDATION.postgresStoreReadinessRetryAttempts",
+      "value": "{ min: 1, max: 20 }",
+      "form": "object-member",
+      "note": "Canonical owner-file validation bounds for the settings.json-owned readiness retry attempt budget; the literal defines the accepted range for the owned JSON contract rather than a parallel runtime override."
+    },
+    {
+      "file": "src/system/settings/form.ts",
+      "name": "SETTINGS_VALIDATION.postgresStoreReadinessRetryBackoffMs",
+      "value": "{ min: 100, max: 60000 }",
+      "form": "object-member",
+      "note": "Canonical owner-file validation bounds for the settings.json-owned readiness retry backoff; the literal defines the accepted range for the owned JSON contract rather than a parallel runtime override."
     },
     {
       "file": "src/system/settings/form.ts",

@@ -770,12 +770,21 @@ satelliteHub:
   # bundled in the hub image; command must resolve inside that image.
   eidoverse:
     enabled: false
+    # How the hub reaches the world.
+    #   poll  Phase 1. Spawns the local stdio MCP server named by command/args
+    #         and polls pending_pings. Uses worldUrl and
+    #         pendingPingsPollIntervalMs; the mcpl block is not rendered.
+    #   mcpl  Phase 2. Dials the world's MCPL door over WebSocket; knocks arrive
+    #         as pushed channel traffic and the poll timer does not exist. Uses
+    #         the mcpl block; command, args, worldUrl and
+    #         pendingPingsPollIntervalMs are not rendered.
+    transport: poll
     # Local stdio MCP server executable and its argument vector. Rendered as
-    # EIDOVERSE_MCP_COMMAND and EIDOVERSE_MCP_ARGS_JSON.
+    # EIDOVERSE_MCP_COMMAND and EIDOVERSE_MCP_ARGS_JSON (transport: poll only).
     command: ""
     args: []
     # Credential-free ws:// or wss:// world URL. The hub rejects any other
-    # scheme and any embedded userinfo.
+    # scheme and any embedded userinfo. (transport: poll only.)
     worldUrl: ""
     worldName: ""
     agentName: ""
@@ -792,6 +801,49 @@ satelliteHub:
     # override these.
     pendingPingsPollIntervalMs: 2000
     ambientSayDebounceMs: 180000
+    # Allowlisted locomotion (walk_to/face/stop). Rendered only when the hub's
+    # claim profile grants avatar_action; the runner refuses every other verb,
+    # so spawn/place stay unreachable. A walk blocks door-side until arrival,
+    # runs off the PSFN turn, and reports a content-free outcome on a later
+    # turn. Keep walkTimeoutMs above the door's own ~90s walk timeout.
+    body:
+      walkTimeoutMs: 95000
+      maxPendingNotes: 4
+    # Optional first-person vision over the world's own GET /snap surface. It
+    # needs a live spectator renderer attached to that world; when none is
+    # serving, the turn degrades to text look notes with no error. Disabled by
+    # default and additionally gated on the claim profile granting vision.
+    # Requires transport: poll — the origin is derived from worldUrl, which the
+    # MCPL door does not supply, so the pair is refused rather than rendered
+    # into config that would silently do nothing.
+    snapshot:
+      enabled: false
+      # Empty means "derive from worldUrl" (scheme swapped, /ws and query
+      # dropped). Set only for a separate credential-free http/https origin.
+      baseUrl: ""
+      timeoutMs: 4000
+      maxBytes: 4000000
+    # transport: mcpl only.
+    mcpl:
+      # Credential-free ws:// or wss:// door URL including its path, e.g.
+      # "wss://worlds.example.invalid/mcpl". The identity token is attached at
+      # dial time from the tokenRef entry above and never appears here.
+      doorUrl: ""
+      # Feature sets this hub grants the door. The capability allowlist is
+      # derived from this list: advertisement is not authorization, and nothing
+      # the door declares about itself widens the grant. eidoverse.typing is
+      # deliberately absent — it is cosmetic and draws only on
+      # channels.streaming, so refusing it cannot take world presence with it.
+      featureSets:
+        - eidoverse.world
+        - eidoverse.embodiment
+        - eidoverse.travel
+      # Whether mentions the door replays after a reconnect may start turns.
+      # false suppresses them: a reconnect replays up to ten missed mentions at
+      # once, and waking for each would make every network blip a burst of
+      # inference. The transcript still holds them; only the wake is withheld.
+      catchupWake: false
+      handshakeTimeoutMs: 10000
     # NetworkPolicy is deny-by-default for private LANs and
     # networkPolicy.satelliteHub.allowExternalEgress opens only public 443, so a
     # LAN or non-443 world must name its host/subnet and port explicitly.

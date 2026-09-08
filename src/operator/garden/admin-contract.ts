@@ -53,6 +53,7 @@ import type {
   AdminLetterService,
   AdminDoingMirrorService,
 } from './services/types.js';
+import type { AdminBlindReviewService } from './services/blind-review-service.js';
 import type { AdminCustodyQueryService } from './services/custody-query-service.js';
 import type { AdminObserverEvalSidecarService } from './services/observer-eval-sidecar-service.js';
 import type { AdminIntakeQuarantineService } from './services/intake-quarantine-service.js';
@@ -160,7 +161,13 @@ export interface AdminSkillsApi {
   getSnapshot(): SkillSnapshot | Promise<SkillSnapshot>;
   listManaged(): Promise<{ managed: AdminManagedSkillRecord[]; skipped: SkillSkipRecord[] }>;
   createSkill(input: { name: string; category: string; content: string; description?: string }): AdminManagedSkillRecord;
-  updateSkill(input: { name: string; content: string; description?: string }): AdminManagedSkillRecord;
+  /**
+   * Operator skill save. `expectedVersion` is the version the operator's editor
+   * was opened against; the store compare-and-swaps against it so a stale
+   * Garden save fails closed instead of overwriting a concurrent agent
+   * revision (psfn-framework-2ug9l).
+   */
+  updateSkill(input: { name: string; content: string; description?: string; expectedVersion: number }): AdminManagedSkillRecord;
   deleteSkill(name: string): void;
   toggleSkill(name: string): boolean;
   getDisabledSkills(): string[];
@@ -224,6 +231,12 @@ export interface GardenAdminDomainServices {
    * answers and only one of them is a finding.
    */
   custodyQuery?: AdminCustodyQueryService | null;
+  /**
+   * Content-free projection of the Blind Reviewer's own state (33xah). Null
+   * when this process composed no reviewer window; the route then answers 503
+   * rather than an empty-looking healthy body.
+   */
+  blindReview?: AdminBlindReviewService | null;
   groupMemory?: AdminGroupMemoryService | null;
   memory: AdminMemoryService;
   biographicalReview?: AdminBiographicalReviewService | null;

@@ -68,6 +68,11 @@ export interface AutomataBusReadScope {
   maxSensitivity: SensitivityLevel;
 }
 
+/** Exact single-event read by primary key (companion_id, event_id). */
+export interface AutomataBusEventReadScope extends AutomataBusReadScope {
+  eventId: string;
+}
+
 export interface AutomataBusCurrentFindingReadScope extends AutomataBusReadScope {
   eventIds: readonly string[];
 }
@@ -110,6 +115,12 @@ const CURRENT_FINDING_READ_SCOPE_KEYS = new Set([
   'audience',
   'maxSensitivity',
   'eventIds',
+]);
+const EVENT_READ_SCOPE_KEYS = new Set([
+  'companionId',
+  'audience',
+  'maxSensitivity',
+  'eventId',
 ]);
 
 function assertExactKeys(
@@ -249,6 +260,20 @@ function parseCurrentFindingReadScope(
     audience: input.audience,
     maxSensitivity: input.maxSensitivity,
     eventIds: [...eventIds].sort(),
+  };
+}
+
+function parseEventReadScope(input: AutomataBusEventReadScope): AutomataBusEventReadScope {
+  if (!isRecord(input)) throw new Error('Automata Bus event read scope must be an object');
+  assertExactKeys(input, EVENT_READ_SCOPE_KEYS, 'Automata Bus event read scope');
+  const companionId = requireNonEmptyString(input.companionId, 'companionId');
+  if (!isAudience(input.audience)) throw new Error('audience must be supported');
+  if (!isSensitivity(input.maxSensitivity)) throw new Error('maxSensitivity must be supported');
+  return {
+    companionId,
+    audience: input.audience,
+    maxSensitivity: input.maxSensitivity,
+    eventId: requireNonEmptyString(input.eventId, 'eventId'),
   };
 }
 
@@ -539,6 +564,31 @@ export class PostgresAutomataBusStore {
     const parsedRows = requireValidHistoryRows(rows.rows);
     parsedRows.forEach(row => assertRowWithinScope(row, scope));
     return parsedRows.map(row => row.event);
+  }
+
+  /**
+   * Exact primary-key read of one persisted ledger event, or null.
+   *
+   * Reads the immutable event ledger, not the current-finding projection: a
+   * superseded or retracted event must still be recoverable, because this is
+   * the path a replaying writer uses to re-read what it already committed
+   * instead of recomputing it (psfn-framework-8n40k).
+   */
+  async readEventById(input: AutomataBusEventReadScope): Promise<AutomataBusEvent | null> {
+    const scope = parseEventReadScope(input);
+    const rows = await this.pool.query<AutomataBusEventRow>(`
+      SELECT companion_id, event_id, sequence, audiences, sensitivity, event_json
+      FROM automata_bus_events
+      WHERE companion_id = $1 AND event_id = $2
+    `, [scope.companionId, scope.eventId]);
+    const row = rows.rows[0];
+    if (!row) return null;
+    const parsed = parseEventRow(row);
+    assertRowWithinScope(parsed, scope);
+    if (parsed.eventId !== scope.eventId) {
+      throw new Error('Automata Bus database returned an unrequested event');
+    }
+    return parsed.event;
   }
 
   async readCurrentFindingsByEventIds(

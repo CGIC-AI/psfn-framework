@@ -45,6 +45,7 @@ export function resolveRuntimeSchedulerConfig(
       postgresPressure: { ...persisted.healthDetectors.postgresPressure },
       backgroundFailures: { ...persisted.healthDetectors.backgroundFailures },
       stuckJobs: { ...persisted.healthDetectors.stuckJobs },
+      incidentAlerts: { ...persisted.healthDetectors.incidentAlerts },
     },
     artifactLifecycle: { ...persisted.artifactLifecycle },
     episodicProcessing: { ...persisted.episodicProcessing },

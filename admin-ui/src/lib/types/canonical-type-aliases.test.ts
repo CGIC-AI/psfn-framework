@@ -67,6 +67,14 @@ import type {
   SubsystemLaneStatus as CanonicalSubsystemLaneStatus,
 } from '../../../../src/operator/garden/services/subsystem-health-service.js';
 import type {
+  IncidentTimelineSnapshot as CanonicalIncidentTimelineSnapshot,
+  IncidentTimelineScope as CanonicalIncidentTimelineScope,
+} from '../../../../src/operator/garden/services/incident-timeline-service.js';
+import type {
+  IncidentSummary as CanonicalIncidentSummary,
+  IncidentTimelineEntry as CanonicalIncidentTimelineEntry,
+} from '../../../../src/shared/observability/incident-alerts/contracts.js';
+import type {
   AdminSessionRoleEnvelopePreview as CanonicalAdminSessionRoleEnvelopePreview,
 } from '../../../../src/operator/garden/services/types/continuity.js';
 import type { ContactUpdateResult as CanonicalContactUpdateResult } from '../../../../src/operator/garden/services/types/contacts.js';
@@ -161,6 +169,10 @@ import type {
   SessionRoleEnvelopePreview,
   SocialGraphEntitySource,
   SocialRelationshipKind,
+  IncidentSummary,
+  IncidentTimelineEntry,
+  IncidentTimelineScope,
+  IncidentTimelineSnapshot,
   SubsystemHealthSnapshot,
   SubsystemLaneEvent,
   SubsystemLaneHealth,
@@ -239,6 +251,15 @@ describe('admin canonical type aliases', () => {
     expectTypeOf<SubsystemLaneEvent>().toEqualTypeOf<CanonicalSubsystemLaneEvent>();
     expectTypeOf<SubsystemLaneHealth>().toEqualTypeOf<CanonicalSubsystemLaneHealth>();
     expectTypeOf<SubsystemHealthSnapshot>().toEqualTypeOf<CanonicalSubsystemHealthSnapshot>();
+
+    expect(true).toBe(true);
+  });
+
+  it('keeps incident timeline types identical to the service contract', () => {
+    expectTypeOf<IncidentTimelineEntry>().toEqualTypeOf<CanonicalIncidentTimelineEntry>();
+    expectTypeOf<IncidentSummary>().toEqualTypeOf<CanonicalIncidentSummary>();
+    expectTypeOf<IncidentTimelineScope>().toEqualTypeOf<CanonicalIncidentTimelineScope>();
+    expectTypeOf<IncidentTimelineSnapshot>().toEqualTypeOf<CanonicalIncidentTimelineSnapshot>();
 
     expect(true).toBe(true);
   });

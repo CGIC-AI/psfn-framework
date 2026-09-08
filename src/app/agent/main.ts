@@ -107,6 +107,14 @@ import {
 import { createAgentPersistenceRuntime } from '../../persistence/runtime-factory.js';
 import { subscribeHealthEventStream } from '../../shared/observability/health-event-stream.js';
 import {
+  createIncidentInvestigator,
+} from '../../shared/observability/incident-alerts/investigator.js';
+import {
+  createIncidentAlertDelivery,
+  subscribeIncidentAlerts,
+  type OperatorIncidentAlertSink,
+} from '../../boundary/gateway/incident-alert-delivery.js';
+import {
   subscribeRefreshFailureHealthEvents,
 } from '../../shared/observability/refresh-failure-emitter.js';
 import { resolveHealthEventOwner } from '../../shared/contracts/health-event.js';
@@ -378,6 +386,25 @@ async function main(): Promise<void> {
   const detachHealthEventStream = subscribeHealthEventStream({
     eventBus,
     store: persistenceRuntime.healthEventStore,
+  });
+  // This companion's incidents reach the operator through the gateway's
+  // existing alert dispatcher over RPC: one deduplicated alert per incident
+  // correlation id, carrying the incident's own tenancy, never one per event.
+  // The agent's health stream is tenant-pinned, so an investigation can only
+  // ever read this companion's rows.
+  const agentIncidentAlertSink: OperatorIncidentAlertSink = {
+    dispatch: params => gateway.notifyOperator(params),
+  };
+  const detachIncidentAlerts = subscribeIncidentAlerts({
+    eventBus,
+    delivery: createIncidentAlertDelivery({
+      investigator: createIncidentInvestigator({
+        readStream: query => persistenceRuntime.healthEventStore.listRecent(query),
+        config: () => schedulerConfig.healthDetectors,
+      }),
+      resolveSink: () => agentIncidentAlertSink,
+      policy: () => schedulerConfig.healthDetectors.incidentAlerts,
+    }),
   });
   // Project the context-refresh lanes' own degradation events into content-free
   // failure observations. Subscribed here, beside the sink, so the repeated-
@@ -1689,6 +1716,10 @@ async function main(): Promise<void> {
     postTurnActions,
     outreachOutbox,
     episodicStore,
+    // Read-only seam onto this process's persisted health stream: the Garden
+    // incident timeline renders the same incidents the alert path paged on,
+    // and cannot write to the plane it renders.
+    healthEventStreamRead: query => persistenceRuntime.healthEventStore.listRecent(query),
     subsystemOutputRefStore: backgroundWorkStore,
     operatorAlerting,
     pendingContactApprovals,
@@ -1787,6 +1818,7 @@ async function main(): Promise<void> {
       await persistenceRuntime.letterStore.close();
       await persistenceRuntime.doingMirrorStore.close();
       detachRefreshFailureHealthEvents();
+      detachIncidentAlerts();
       detachHealthEventStream();
       await persistenceRuntime.healthEventStore.close();
       await postgresPoolOwner.close();

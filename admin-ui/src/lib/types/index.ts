@@ -66,6 +66,14 @@ import type {
   SubsystemLaneSource as CanonicalSubsystemLaneSource,
   SubsystemLaneStatus as CanonicalSubsystemLaneStatus,
 } from '../../../../src/operator/garden/services/subsystem-health-service.js';
+import type {
+  IncidentTimelineSnapshot as CanonicalIncidentTimelineSnapshot,
+  IncidentTimelineScope as CanonicalIncidentTimelineScope,
+} from '../../../../src/operator/garden/services/incident-timeline-service.js';
+import type {
+  IncidentSummary as CanonicalIncidentSummary,
+  IncidentTimelineEntry as CanonicalIncidentTimelineEntry,
+} from '../../../../src/shared/observability/incident-alerts/contracts.js';
 import type { AdminSessionRoleEnvelopePreview as CanonicalAdminSessionRoleEnvelopePreview } from '../../../../src/operator/garden/services/types/continuity.js';
 import type { ContactUpdateResult as CanonicalContactUpdateResult } from '../../../../src/operator/garden/services/types/contacts.js';
 import type {
@@ -879,6 +887,15 @@ export type SubsystemLaneSource = CanonicalSubsystemLaneSource;
 export type SubsystemLaneEvent = CanonicalSubsystemLaneEvent;
 
 export type SubsystemLaneHealth = CanonicalSubsystemLaneHealth;
+
+// Correlated runtime incidents (the same identity the operator alert carried)
+export type IncidentTimelineEntry = CanonicalIncidentTimelineEntry;
+
+export type IncidentSummary = CanonicalIncidentSummary;
+
+export type IncidentTimelineScope = CanonicalIncidentTimelineScope;
+
+export type IncidentTimelineSnapshot = CanonicalIncidentTimelineSnapshot;
 
 export type SubsystemHealthSnapshot = CanonicalSubsystemHealthSnapshot;
 

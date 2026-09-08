@@ -34,6 +34,7 @@ import { buildAdminOverviewRoutes } from './routes/overview-routes.js';
 import { buildAdminPromptRoutes } from './routes/prompt-routes.js';
 import { buildAdminSchedulerRoutes } from './routes/scheduler-routes.js';
 import { buildAdminSubsystemHealthRoutes } from './routes/subsystem-health-routes.js';
+import { buildAdminIncidentRoutes } from './routes/incident-routes.js';
 import { buildAdminPartnerAffectShadowRoutes } from './routes/partner-affect-shadow-routes.js';
 import { buildAdminAutomataRoutes } from './routes/automata-routes.js';
 import type { AdminPartnerAffectShadowService } from './services/partner-affect-shadow-service.js';
@@ -86,6 +87,7 @@ import type {
   AdminDoingMirrorService,
 } from './services/types.js';
 import type { AdminSubsystemHealthService } from './services/subsystem-health-service.js';
+import type { AdminIncidentTimelineService } from './services/incident-timeline-service.js';
 import type { AdminToolConformanceService } from './services/tool-conformance-service.js';
 import type {
   AdminChatBootstrapApi,
@@ -334,6 +336,7 @@ export function buildAdminApiRoutes(options: {
   concernService?: AdminConcernService | null;
   subjectAuditService?: AdminSubjectVisibleAuditService;
   subsystemHealthService?: AdminSubsystemHealthService | null;
+  incidentTimelineService?: AdminIncidentTimelineService | null;
   partnerAffectShadowService?: AdminPartnerAffectShadowService | null;
   toolConformanceService?: AdminToolConformanceService | null;
   icpAutonomyService?: AdminIcpAutonomyService | null;
@@ -399,6 +402,7 @@ export function buildAdminApiRoutes(options: {
     concernService,
     subjectAuditService,
     subsystemHealthService,
+    incidentTimelineService,
     partnerAffectShadowService,
     toolConformanceService,
     icpAutonomyService,
@@ -1103,6 +1107,7 @@ export function buildAdminApiRoutes(options: {
     ...buildAdminPromptRoutes({ promptsService, withBody }),
     ...buildAdminSchedulerRoutes({ scheduler, withBody }),
     ...buildAdminSubsystemHealthRoutes({ subsystemHealth: subsystemHealthService }),
+    ...buildAdminIncidentRoutes({ incidents: incidentTimelineService }),
     ...buildAdminPartnerAffectShadowRoutes({ partnerAffectShadow: partnerAffectShadowService }),
     ...buildAdminToolConformanceRoutes({ toolConformance: toolConformanceService, withBody }),
     ...(icpAutonomyService

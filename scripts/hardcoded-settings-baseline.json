@@ -9512,12 +9512,6 @@
       "note": "Code-owned default read-page size for the health-stream query surface, mirroring DEFAULT_PARTNER_AFFECT_SHADOW_LIST_LIMIT; callers that care pass an explicit limit, so this is API shape rather than operator tuning."
     },
     {
-      "file": "src/persistence/postgres/health-event-store.ts",
-      "name": "MAX_HEALTH_EVENT_LIST_LIMIT",
-      "value": "1_000",
-      "note": "Code-owned read-page ceiling on the health-stream query surface, mirroring MAX_PARTNER_AFFECT_SHADOW_LIST_LIMIT; it is a resource guard on an untrusted caller-supplied limit, not operator tuning. The operator-owned bound on this subsystem is settings.json healthEventStreamMaxRows."
-    },
-    {
       "file": "src/persistence/postgres/icp-admin-projection-store.ts",
       "name": "MAX_ADMIN_ROWS",
       "value": "100"
@@ -11418,6 +11412,19 @@
       "value": "256"
     },
     {
+      "file": "src/shared/observability/health-event-stream.ts",
+      "name": "MAX_HEALTH_EVENT_LIST_LIMIT",
+      "value": "1_000",
+      "note": "Code-owned read-page ceiling on the health-stream query surface, moved here from the Postgres adapter so the owner-file validator can reject an over-large healthDetectors.incidentAlerts.bundleEventLimit at load instead of throwing on every read. It is a resource guard on an untrusted caller-supplied limit, not operator tuning; the operator-owned bound on this subsystem is settings.json healthEventStreamMaxRows."
+    },
+    {
+      "file": "src/shared/observability/incident-alerts/investigator.ts",
+      "name": "DETECTOR_THRESHOLD_PATHS",
+      "value": "{ postgres_pool_pressure: 'healthDetectors.postgresPressure', background_work_failures: 'healthDetectors.backgroundFailures', stuck_runtime_job: 'healthDetectors.stuckJobs', }",
+      "form": "object",
+      "note": "Owner-file PATH labels, not tuning values: they name which scheduler.json block governs each incident family so an alert can tell the operator where to change the threshold. The values themselves are read from the loaded owner file."
+    },
+    {
       "file": "src/shared/process-termination-policy.ts",
       "name": "PROCESS_TERMINATION_GRACE_TIMEOUT_MS",
       "value": "250",
@@ -12743,6 +12750,20 @@
       "value": "900_000",
       "form": "object-member",
       "note": "Canonical scheduler.json owner-file default for the runtime health detectors (psfn-framework-7qeo1.24.2-.4); operators tune healthDetectors.* in scheduler.json, the owner migration seeds this exact value into files written before the block existed, and every detector reads the loaded owner value rather than this literal, so it is a seed default rather than a code-owned policy constant."
+    },
+    {
+      "file": "src/system/config/scheduler-config/health-detectors.ts",
+      "name": "DEFAULT_HEALTH_DETECTORS_CONFIG.incidentAlerts.bundleEventLimit",
+      "value": "50",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default for the runtime health detectors (psfn-framework-7qeo1.24.2-.5); operators tune healthDetectors.* in scheduler.json, the owner migration seeds this exact value into files written before the block existed, and the alert path reads the loaded owner value rather than this literal, so it is a seed default rather than a code-owned policy constant."
+    },
+    {
+      "file": "src/system/config/scheduler-config/health-detectors.ts",
+      "name": "DEFAULT_HEALTH_DETECTORS_CONFIG.incidentAlerts.realertCooldownMs",
+      "value": "3_600_000",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default for the runtime health detectors (psfn-framework-7qeo1.24.2-.5); operators tune healthDetectors.* in scheduler.json, the owner migration seeds this exact value into files written before the block existed, and the alert path reads the loaded owner value rather than this literal, so it is a seed default rather than a code-owned policy constant."
     },
     {
       "file": "src/system/config/scheduler-config/health-detectors.ts",

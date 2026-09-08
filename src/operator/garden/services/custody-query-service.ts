@@ -200,6 +200,13 @@ export class GardenCustodyQueryService implements AdminCustodyQueryService {
    * checked BEFORE the generation it names is read. The refusal is deliberately
    * the same 400 an unresolvable ref gets and carries no field of the foreign
    * record, so the answer distinguishes ownership, not existence.
+   *
+   * 8nq3h: ownership is proven, not merely disproven. A ref whose delivery
+   * record is ABSENT or MALFORMED cannot be shown to belong to this companion,
+   * so it is refused on the same terms as a foreign one instead of falling
+   * through to a generation ref sliced out of client-supplied text. Downstream
+   * reads are schema-scoped, so this was not exploitable — but "checked before
+   * read" is only true if every path through here is checked.
    */
   private async resolveGenerationContextRef(params: URLSearchParams): Promise<string> {
     const turnId = singleParam(params, 'turnId');
@@ -217,10 +224,10 @@ export class GardenCustodyQueryService implements AdminCustodyQueryService {
       throw invalidInput('deliveryRef must be turn:<turnId>#<sha256>');
     }
     const resolved = await this.options.deliveries.resolveDelivery(deliveryRef);
-    if (resolved.status === 'present' && !this.ownsRecord(resolved.record.owner)) {
+    if (resolved.status !== 'present' || !this.ownsRecord(resolved.record.owner)) {
       throw invalidInput('deliveryRef is not owned by this companion');
     }
-    return deliveryRef.slice(0, deliveryRef.indexOf('#'));
+    return resolved.record.generationContextRef;
   }
 
   private ownsRecord(owner: HealthEventOwner): boolean {

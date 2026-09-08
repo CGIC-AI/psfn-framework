@@ -65,9 +65,17 @@ describe('Postgres live schema migrations', () => {
       .sort((left, right) => left - right);
 
     expect(registeredVersions).toEqual([...POSTGRES_SHARED_ALL_MIGRATION_VERSIONS]);
-    expect(registeredVersions).toEqual(
-      Array.from({ length: registeredVersions.length }, (_, index) => index + 1),
-    );
+    // Strictly ascending with no repeats. Contiguity is deliberately NOT
+    // asserted: concurrent lanes reserve version slots before they land, and a
+    // gap is what a reservation looks like from the branch that did not take it
+    // (version 20 is the ICP lifecycle lane's; 21 is this chain's fleet health
+    // and escalation tables). What must never happen is two chains claiming the
+    // same number — a ledger that records one applied version for two different
+    // sets of DDL tells a deployment it is migrated when it is not — and that is
+    // exactly what this checks.
+    for (let index = 1; index < registeredVersions.length; index += 1) {
+      expect(registeredVersions[index]).toBeGreaterThan(registeredVersions[index - 1]!);
+    }
   });
 
   it('retains social-desire settlement identities across desire deletion and recreation', () => {

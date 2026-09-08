@@ -109,6 +109,7 @@ import {
 } from '../startup/composition/parity.js';
 import { createAgentPersistenceRuntime } from '../../persistence/runtime-factory.js';
 import { subscribeHealthEventStream } from '../../shared/observability/health-event-stream.js';
+import type { HealthEventQuery } from '../../shared/observability/health-event-stream.js';
 import {
   createIncidentInvestigator,
 } from '../../shared/observability/incident-alerts/investigator.js';
@@ -1812,9 +1813,25 @@ async function main(): Promise<void> {
     // incident timeline renders the same incidents the alert path paged on,
     // and cannot write to the plane it renders.
     healthEventStreamRead: query => persistenceRuntime.healthEventStore.listRecent(query),
+    // e5r0s: in fleet mode the gateway's own incidents live in a pool scope
+    // this process cannot otherwise read. Absent outside a fleet, where the two
+    // processes already resolve to one table.
+    ...(persistenceRuntime.fleetSystemHealthEventStore
+      ? {
+          fleetSystemHealthEventStreamRead: (query: HealthEventQuery) => (
+            persistenceRuntime.fleetSystemHealthEventStore!.listRecent(query)
+          ),
+        }
+      : {}),
     // Open human escalations, read and resolved on the same durable ledger the
     // incident alert path raises onto.
     humanEscalationLedger: persistenceRuntime.humanEscalationStore,
+    ...(persistenceRuntime.fleetSystemHumanEscalationStore
+      ? {
+          fleetSystemHumanEscalationLedger:
+            persistenceRuntime.fleetSystemHumanEscalationStore,
+        }
+      : {}),
     subsystemOutputRefStore: backgroundWorkStore,
     operatorAlerting,
     pendingContactApprovals,

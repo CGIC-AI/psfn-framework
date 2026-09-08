@@ -33,7 +33,9 @@ import {
   queryOne,
   queryRows,
 } from '../postgres.js';
-import { POSTGRES_HUMAN_ESCALATION_MIGRATIONS } from './migrations.js';
+import { POSTGRES_HUMAN_ESCALATION_MIGRATIONS, SHARED_SCHEMA_NAME } from './migrations.js';
+import { assertSharedSchemaReady } from './shared-schema.js';
+import { assertPostgresRelationColumns } from './relation-contract.js';
 import { requireSafeInteger as safeInteger } from './row-guards.js';
 import {
   HUMAN_ESCALATION_LIMITS,
@@ -196,6 +198,67 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
     });
     try {
       await ensurePostgresSchema(pool, POSTGRES_HUMAN_ESCALATION_MIGRATIONS);
+    } catch (error) {
+      await pool.end().catch(() => undefined);
+      throw error;
+    }
+    return new PostgresHumanEscalationStore(
+      pool,
+      bounds,
+      options.onSaturated ?? null,
+      options.now ?? (() => Date.now()),
+      true,
+    );
+  }
+
+  /**
+   * Open the FLEET-WIDE ledger in the shared schema (bead psfn-framework-e5r0s).
+   *
+   * Runs no DDL, for the same reason its health-stream sibling does not: the
+   * shared chain is the migration authority's, and an ordinary runtime
+   * credential has DML there but no CREATE. The gateway raises its system-owned
+   * escalations here; each companion's Garden reads and resolves them under its
+   * own tenant credential, which is what makes one operator surface able to
+   * answer a fault the gateway saw.
+   */
+  static async connectShared(
+    databaseUrl: string,
+    options: {
+      role?: string;
+      bounds: HumanEscalationLedgerBounds;
+      onSaturated?: HumanEscalationLedgerSaturationReporter;
+      now?: () => number;
+    },
+  ): Promise<PostgresHumanEscalationStore> {
+    const bounds = requireHumanEscalationLedgerBounds(options.bounds);
+    const pool = createPostgresPool(databaseUrl, {
+      applicationName: 'psfn-fleet-human-escalations',
+      allowExitOnIdle: true,
+      schema: SHARED_SCHEMA_NAME,
+      ...(options.role ? { role: options.role } : {}),
+      max: 2,
+    });
+    try {
+      await assertSharedSchemaReady(pool);
+      await assertPostgresRelationColumns(pool, {
+        schema: SHARED_SCHEMA_NAME,
+        relation: 'human_escalations',
+        columns: [
+          'escalation_id', 'schema_version', 'kind', 'severity', 'owner_kind',
+          'dedupe_key', 'source_ref', 'detail_path', 'state', 'raised_at_ms',
+          'last_raised_at_ms', 'raise_count',
+        ],
+        // A companion's Garden must be able to ANSWER a system-owned
+        // escalation, not merely read it, or the one place a human resolves
+        // things is read-only for exactly the faults nobody else can see.
+        privileges: ['SELECT', 'UPDATE'],
+      });
+      await assertPostgresRelationColumns(pool, {
+        schema: SHARED_SCHEMA_NAME,
+        relation: 'human_escalation_attempts',
+        columns: ['idempotency_key', 'escalation_id', 'sink', 'outcome', 'attempted_at_ms'],
+        privileges: ['SELECT'],
+      });
     } catch (error) {
       await pool.end().catch(() => undefined);
       throw error;
@@ -556,8 +619,12 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
  * health stream and every other unconditional gateway store: the gateway
  * credential owns its own default search_path and holds no companion tenant
  * role. Companion-owned escalations are raised by the agent process, whose
- * factory pins the tenant scope like its sibling stores — which is also why the
- * Garden attention surface reads the agent's ledger and says so.
+ * factory pins the tenant scope like its sibling stores.
+ *
+ * This is the SINGLE-COMPANION path, where both processes resolve to one table
+ * and that one table is the whole operator view. A fleet uses
+ * {@link createFleetSystemHumanEscalationStore} instead, because there they do
+ * not (bead psfn-framework-e5r0s).
  */
 export function createGatewayHumanEscalationStore(
   config: { postgresDatabaseUrl?: string },
@@ -571,6 +638,30 @@ export function createGatewayHumanEscalationStore(
     throw new Error('Human escalation ledger requires config.postgresDatabaseUrl');
   }
   return PostgresHumanEscalationStore.connect(databaseUrl, {
+    bounds: options.bounds,
+    ...(options.onSaturated ? { onSaturated: options.onSaturated } : {}),
+  });
+}
+
+/**
+ * Open the gateway's FLEET-WIDE escalation ledger in the shared schema
+ * (bead psfn-framework-e5r0s).
+ *
+ * Same owner-file bounds and validation as its single-companion sibling; the
+ * rows land where every companion's Garden can both read and answer them.
+ */
+export function createFleetSystemHumanEscalationStore(
+  config: { postgresDatabaseUrl?: string },
+  options: {
+    bounds: HumanEscalationLedgerBounds;
+    onSaturated?: HumanEscalationLedgerSaturationReporter;
+  },
+): Promise<PostgresHumanEscalationStore> {
+  const databaseUrl = config.postgresDatabaseUrl?.trim();
+  if (!databaseUrl) {
+    throw new Error('Fleet system escalation ledger requires config.postgresDatabaseUrl');
+  }
+  return PostgresHumanEscalationStore.connectShared(databaseUrl, {
     bounds: options.bounds,
     ...(options.onSaturated ? { onSaturated: options.onSaturated } : {}),
   });

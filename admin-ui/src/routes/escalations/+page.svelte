@@ -171,7 +171,7 @@
       <span>Resolved: <strong>{snapshot.counts.resolved}</strong></span>
       <span>Dismissed: <strong>{snapshot.counts.dismissed}</strong></span>
       <span class="text-shadow-400">
-        Ledger scope: {ownerLabel(snapshot.scope.owner)} · {snapshot.scope.process} process
+        Ledger scope: {ownerLabel(snapshot.scope.owner)} · {snapshot.scope.process} process · {snapshot.scope.ledgers.join(" + ")}
       </span>
     </div>
 

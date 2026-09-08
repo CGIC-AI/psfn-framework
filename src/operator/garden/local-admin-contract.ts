@@ -284,8 +284,16 @@ export interface InProcessGardenAdminContractOptions {
   ) | null;
   /** Bounded read over the persisted health stream for the incident timeline. */
   healthEventStreamRead?: IncidentStreamRead | null;
+  /**
+   * The fleet's system-owned health stream, read-only (bead
+   * psfn-framework-e5r0s). Present only in fleet mode, where the gateway writes
+   * into a different pool scope than this process reads.
+   */
+  fleetSystemHealthEventStreamRead?: IncidentStreamRead | null;
   /** Durable ledger behind the human escalation attention surface (bznbn). */
   humanEscalationLedger?: HumanEscalationLedgerPort | null;
+  /** The fleet's system-owned escalation ledger; fleet mode only (e5r0s). */
+  fleetSystemHumanEscalationLedger?: HumanEscalationLedgerPort | null;
   sessionStore: SessionStore;
   letterService?: LetterService | null;
   doingMirrorService?: DoingMirrorService | null;
@@ -494,6 +502,9 @@ export function createInProcessGardenAdminContract(
   const incidents = options.healthEventStreamRead
     ? new AdminIncidentTimelineDataService({
       readStream: options.healthEventStreamRead,
+      ...(options.fleetSystemHealthEventStreamRead
+        ? { fleetSystemReadStream: options.fleetSystemHealthEventStreamRead }
+        : {}),
       config: () => configStore.loadScheduler().healthDetectors,
       ...(options.config.companionId ? { companionId: options.config.companionId } : {}),
     })
@@ -504,6 +515,9 @@ export function createInProcessGardenAdminContract(
   const humanEscalations = options.humanEscalationLedger
     ? new AdminHumanEscalationDataService({
       ledger: options.humanEscalationLedger,
+      ...(options.fleetSystemHumanEscalationLedger
+        ? { fleetSystemLedger: options.fleetSystemHumanEscalationLedger }
+        : {}),
       config: () => configStore.loadScheduler().humanEscalation,
       ...(options.config.companionId ? { companionId: options.config.companionId } : {}),
     })

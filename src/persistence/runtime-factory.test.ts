@@ -82,6 +82,8 @@ const runtimeFactoryMocks = vi.hoisted(() => ({
   ensurePostgresSchemaExists: vi.fn(async () => undefined),
   ensurePostgresSchema: vi.fn(async () => undefined),
   assertSharedSchemaRuntimeAuthority: vi.fn(async () => undefined),
+  assertSharedSchemaReady: vi.fn(async () => undefined),
+  assertPostgresRelationColumns: vi.fn(async () => undefined),
   derivePostgresTenantRole: vi.fn((schema: string) => `psfn_role_${schema}`),
   planPostgresTenantAccess: vi.fn((plan: { schema: string; role: string }) => ({
     ...plan,
@@ -209,6 +211,11 @@ vi.mock('./postgres.js', () => ({
 
 vi.mock('./postgres/shared-schema.js', () => ({
   assertSharedSchemaRuntimeAuthority: runtimeFactoryMocks.assertSharedSchemaRuntimeAuthority,
+  assertSharedSchemaReady: runtimeFactoryMocks.assertSharedSchemaReady,
+}));
+
+vi.mock('./postgres/relation-contract.js', () => ({
+  assertPostgresRelationColumns: runtimeFactoryMocks.assertPostgresRelationColumns,
 }));
 
 vi.mock('./postgres/tenancy.js', () => ({

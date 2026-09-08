@@ -55,6 +55,9 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 
 describe('journal mutation publication durability', () => {
   let root: string;
+  // vi.clearAllMocks() does not restore implementations, so a test that swaps
+  // one in must not leak it into the next test's ordering assertions.
+  const tracingOpen = openMock.getMockImplementation()!;
 
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), 'journal-mutation-durability-'));
@@ -64,6 +67,7 @@ describe('journal mutation publication durability', () => {
   afterEach(() => {
     rmSync(root, { recursive: true, force: true });
     vi.clearAllMocks();
+    openMock.mockImplementation(tracingOpen);
   });
 
   it('fsyncs the pinned parent directory after the create path publishes with link(2)', async () => {
@@ -89,13 +93,12 @@ describe('journal mutation publication durability', () => {
 
   it('fails the create commit and withdraws the entry when the directory fsync fails', async () => {
     const notePath = join(root, 'undurable.md');
-    const openDirectory = openMock.getMockImplementation()!;
     openMock.mockImplementation(async (
       path: string,
       openFlags?: number,
       mode?: number,
     ) => {
-      const handle = await openDirectory(path, openFlags, mode) as {
+      const handle = await tracingOpen(path, openFlags, mode) as {
         sync: () => Promise<void>;
       };
       if (typeof openFlags === 'number' && (openFlags & constants.O_DIRECTORY) !== 0) {

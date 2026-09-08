@@ -1130,6 +1130,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     concernStore: intentionRuntime.concernStore,
     personaPreamble,
     routeDispatcher: concernRouteDispatcher,
+    ...(automataClassLifecycle ? { automataClassLifecycle } : {}),
   });
   const memoryExtractor = wireMemoryRuntime({
     agentLoop,

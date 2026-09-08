@@ -33,6 +33,12 @@ export interface SubagentExecutionSourceContext {
   turnId?: string;
   originatingTaskId?: string;
   originatingBeadId?: string;
+  /**
+   * Trusted runtime spawn origin. Runtime-supplied only: it selects the run's
+   * automata class, so a model-supplied value would let a worker elect its own
+   * policy and retention. Absent ⇒ ordinary tool-requested bounded spawn.
+   */
+  spawnOrigin?: 'post_turn';
   /** Trusted runtime run that directly spawned this worker. */
   parentRunId?: string;
   /** Trusted root/source run that led to this worker. */

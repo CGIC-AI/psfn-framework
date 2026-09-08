@@ -1014,6 +1014,9 @@ async function main(): Promise<void> {
     automataSessionClassification: persistenceRuntime.automataSessionClassification,
     automataBusWorkerAccess: coreRuntime.automataBus!.workerAccess,
     automataLifecyclePort: coreRuntime.automataBus!.lifecycle,
+    ...(coreRuntime.automataClassLifecycle
+      ? { automataClassLifecycle: coreRuntime.automataClassLifecycle }
+      : {}),
   });
   if (!shardManager.listFoldReviews || !shardManager.getFoldReview) {
     throw new Error('Doing-mirror fold source requires the canonical shard fold-review port');

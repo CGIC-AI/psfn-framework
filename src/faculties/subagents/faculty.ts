@@ -81,7 +81,7 @@ import {
   type AutomataWorkerRunPort,
   type AutomataWorkerTerminalRequest,
 } from '../automata/bus/worker-access.js';
-import { SUBAGENT_AUTOMATON_CLASS } from './automaton-class.js';
+import { resolveSubagentAutomatonClass } from './automaton-class.js';
 import { buildSubagentWorkSpec, createSubagentWorkSpecProvider } from './work-spec.js';
 import {
   type AutomataTerminalLifecyclePort,
@@ -377,7 +377,7 @@ export class SubagentFaculty implements SubagentControlPort {
       : null;
     const automataBusEligible = isAutomataBusWorkerEligible(
       automataBusAccess,
-      SUBAGENT_AUTOMATON_CLASS,
+      durableLineage.automatonClass,
     );
 
     // bead 7ym.2.2: a role can only NARROW the parent tier. Enforce the per-role
@@ -671,7 +671,7 @@ export class SubagentFaculty implements SubagentControlPort {
         .find(candidate => candidate.subagentId === subagentId);
     if (!task) return null;
     const lineage = task.lineage ?? {
-      automatonClass: SUBAGENT_AUTOMATON_CLASS,
+      automatonClass: resolveSubagentAutomatonClass(task.sourceContext),
       runId: task.subagentId,
       taskId: task.sourceContext?.originatingTaskId ?? task.subagentId,
       workerId: task.subagentId,
@@ -1495,7 +1495,7 @@ export class SubagentFaculty implements SubagentControlPort {
         : []),
     ])];
     return {
-      automatonClass: SUBAGENT_AUTOMATON_CLASS,
+      automatonClass: resolveSubagentAutomatonClass(request.sourceContext),
       runId: subagentId,
       taskId,
       workerId: subagentId,

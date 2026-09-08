@@ -1,5 +1,8 @@
 import { SUBAGENT_WORKER_LANE } from '../../core/agent/worker-lanes.js';
-import { SUBAGENT_AUTOMATON_CLASS } from './automaton-class.js';
+import {
+  resolveSubagentAutomatonClass,
+  SUBAGENT_AUTOMATON_CLASSES,
+} from './automaton-class.js';
 import type {
   AutomataArtifactRef,
   AutomataRunOutcome,
@@ -44,7 +47,7 @@ export class SubagentTaskRegistry {
     this.runRegistry = options.runRegistry ?? null;
     if (this.runRegistry) {
       for (const run of this.runRegistry.listRetainedRunsForRuntime()) {
-        if (run.automatonClass !== SUBAGENT_AUTOMATON_CLASS) continue;
+        if (!SUBAGENT_AUTOMATON_CLASSES.includes(run.automatonClass)) continue;
         const task = taskFromRun(run);
         if (task.lifecycleState === 'queued' || task.lifecycleState === 'running') {
           this.activeTasks.set(task.subagentId, task);
@@ -71,7 +74,7 @@ export class SubagentTaskRegistry {
       requiredCapabilities: [...input.requiredCapabilities],
       ...(input.sourceContext ? { sourceContext: cloneSourceContext(input.sourceContext) } : {}),
       lineage: {
-        automatonClass: SUBAGENT_AUTOMATON_CLASS,
+        automatonClass: resolveSubagentAutomatonClass(input.sourceContext),
         runId: input.subagentId,
         taskId: input.taskId ?? input.sourceContext?.originatingTaskId ?? input.subagentId,
         workerId: input.subagentId,
@@ -229,7 +232,7 @@ export class SubagentTaskRegistry {
     if (!lineage) throw new Error(`Automaton task "${record.subagentId}" is missing durable lineage.`);
     await this.runRegistry!.register({
       runId: lineage.runId,
-      automatonClass: SUBAGENT_AUTOMATON_CLASS,
+      automatonClass: lineage.automatonClass,
       workerId: lineage.workerId,
       taskId: lineage.taskId,
       taskLabel: record.name,
@@ -306,7 +309,7 @@ function taskFromRun(run: AutomataRunRecord): SubagentTaskRecord {
     capabilities: [],
     requiredCapabilities: [],
     lineage: {
-      automatonClass: SUBAGENT_AUTOMATON_CLASS,
+      automatonClass: run.automatonClass,
       runId: run.runId,
       taskId: run.taskId,
       workerId: run.workerId,
@@ -356,6 +359,7 @@ function cloneSourceContext(sourceContext: SubagentExecutionSourceContext): Suba
     ...(sourceContext.turnId ? { turnId: sourceContext.turnId } : {}),
     ...(sourceContext.originatingTaskId ? { originatingTaskId: sourceContext.originatingTaskId } : {}),
     ...(sourceContext.originatingBeadId ? { originatingBeadId: sourceContext.originatingBeadId } : {}),
+    ...(sourceContext.spawnOrigin ? { spawnOrigin: sourceContext.spawnOrigin } : {}),
     ...(sourceContext.parentRunId ? { parentRunId: sourceContext.parentRunId } : {}),
     ...(sourceContext.sourceRunId ? { sourceRunId: sourceContext.sourceRunId } : {}),
   };

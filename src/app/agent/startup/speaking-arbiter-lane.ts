@@ -158,6 +158,12 @@ export function wireSpeakingArbiterLane(deps: SpeakingArbiterLaneDeps): Speaking
     // Name-free follow-ups are considered ONLY through the lease gate above.
     ...(roomParticipationLease ? { roomParticipationLease } : {}),
     ...(roomSignal ? { roomSignal } : {}),
+    // Reviewed relationship-scoped biography aliases (o61vb.17). The same
+    // canonical detector, given the aliases this speaker is actually bound to;
+    // every downstream gate is unchanged.
+    aliasResolver: coreRuntime.biographicalAliasResolverFor(
+      schedulerConfig.socialAutonomy.passiveNameCandidate.aliasMinLength,
+    ),
   });
 
   // Cheap, tool-less participation appraiser (bible §8.2, jp36.3.3). Consumes the

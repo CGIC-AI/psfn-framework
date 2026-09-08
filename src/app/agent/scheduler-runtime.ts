@@ -302,6 +302,12 @@ export const BIOGRAPHY_COMPANION_REVIEW_TASK_ID = 'biography-companion-review';
  * translating the result into a governed terminal handoff. A pass that never
  * won the baton did no work and settles as a typed no-finding rather than a
  * useful one.
+ *
+ * Resume cadence limit: a scheduler `every` task has no per-run reschedule
+ * hook, so a preempted or baton-blocked pass resumes on the next owner-file
+ * biography tick rather than after `retryDelayMs`. Nothing is lost — the
+ * durable stage cursors hold the progress — but the remainder waits a full
+ * cadence.
  */
 async function runBiographyStageUnderBaton<
   T extends { readonly outcome: 'complete' | 'yield' },
@@ -314,8 +320,14 @@ async function runBiographyStageUnderBaton<
 }): Promise<AutomataClassWorkResult<T | undefined>> {
   const fleetMaintenance = input.fleetMaintenance;
   if (!fleetMaintenance) {
-    // A single-companion deployment has no baton to contend for.
+    // A single-companion deployment has no baton to contend for, so no
+    // safe-boundary hook is supplied and the stage cannot be asked to yield.
     const telemetry = await input.run({});
+    if (telemetry.outcome === 'yield') {
+      throw new Error(
+        `${input.label} yielded without fleet maintenance authority to yield to`,
+      );
+    }
     return { value: telemetry, summary: input.summarize(telemetry) };
   }
   const batonRun = await runWithFleetMaintenanceBaton({

@@ -29,7 +29,13 @@ function makeDeps(mode: 'off' | 'shadow' | 'on'): SpeakingArbiterLaneDeps {
       speakingArbiterStore: {},
       socialPotStore: {},
     } as never,
-    coreRuntime: { fatigueLedger: {} } as never,
+    coreRuntime: {
+      fatigueLedger: {},
+      // Reviewed relationship-scoped aliases (o61vb.17): the lane always asks
+      // for a resolver, and a stub with no aliases is exactly the pre-alias
+      // behavior.
+      biographicalAliasResolverFor: () => ({ resolve: async () => [] }),
+    } as never,
     gatewaySender: { send: vi.fn(async () => undefined) },
     outboundReplyGuard: new OutboundReplyDeduper(),
   };

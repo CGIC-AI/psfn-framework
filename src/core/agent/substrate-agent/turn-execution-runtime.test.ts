@@ -1077,6 +1077,53 @@ describe('handleMessageForTurn MCP disclosure context', () => {
     const recordInput = vi.mocked(runtime.buildTurnRecord).mock.calls.at(-1)?.[0];
     expect(recordInput?.custodySnapshotRef).toBe(`turn:${custodyInput?.turnId}`);
   });
+
+  it('feeds one tool-result custody edge to both the snapshot and the turn record', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: makeContextManifestFixture(),
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+    });
+    const custodyRecord = {
+      ref: 'tool:wiki_read:call-1',
+      disclosureSource: {
+        ref: 'tool:wiki_read:call-1',
+        intakeState: 'released' as const,
+        sourceRiskTier: 'untrusted' as const,
+      },
+      intakeEnvelope: {
+        envelopeId: 'env-wiki-1',
+        sourceClass: 'tool_output' as const,
+        sourceRiskTier: 'untrusted' as const,
+        state: 'released' as const,
+        riskLabels: [],
+        subject: { kind: 'body' as const },
+      },
+      custody: { envelopeId: 'env-wiki-1', contentSha256: 'a'.repeat(64) },
+    };
+    runtime.recordToolObservations = vi.fn(() => [custodyRecord]);
+
+    await handleMessageForTurn(runtime, createMessage('msg-tool-custody-edge'));
+
+    // ccgdz.5: one derivation, two consumers. The snapshot's tool-result
+    // contribution and the turn record's stamped edge are the SAME object.
+    const custodyInput = vi.mocked(runtime.recordTurnCustodySnapshot).mock.calls[0]?.[0];
+    expect(custodyInput?.toolResultEdges?.get('tool:wiki_read:call-1'))
+      .toBe(custodyRecord.custody);
+    const recordInput = vi.mocked(runtime.buildTurnRecord).mock.calls.at(-1)?.[0];
+    expect(recordInput?.toolResultCustody?.get('tool:wiki_read:call-1'))
+      .toBe(custodyRecord);
+  });
 });
 
 describe('handleMessageForTurn intentional no-reply', () => {

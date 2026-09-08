@@ -55,6 +55,8 @@ import {
 } from './turn-record-identity.js';
 import { streamTurnRecordRecoverySnapshot } from './turn-record-recovery.js';
 import { parseIcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
+import { parseIntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
+import { validateToolResultCustodyEdge } from '../../shared/contracts/tool-result-custody.js';
 import { resolveToolCallOutcome } from '../../shared/contracts/tool-call-outcome.js';
 import {
   createTurnRecordSharedStore,
@@ -488,6 +490,29 @@ function parseTurnRecordToolCalls(value: unknown): TurnRecordToolCall[] {
     ) {
       throw new Error(`TurnRecord fields "toolCalls[${index}].outcome" and "isError" conflict`);
     }
+    // ccgdz.5: the custody edge and its envelope are parsed through the same
+    // shared validators the screening metadata uses. A malformed edge is a
+    // refusal, never a silently dropped field — a dropped edge would read as
+    // "this result had no admission identity".
+    const intakeEnvelope = entry.intakeEnvelope === undefined
+      ? undefined
+      : parseIntakeEnvelopeSnapshot(
+          entry.intakeEnvelope,
+          `TurnRecord field "toolCalls[${index}].intakeEnvelope"`,
+        );
+    const resultCustody = entry.resultCustody === undefined
+      ? undefined
+      : validateToolResultCustodyEdge(
+          entry.resultCustody,
+          `TurnRecord field "toolCalls[${index}].resultCustody"`,
+        );
+    if (resultCustody?.envelopeId !== undefined
+      && intakeEnvelope !== undefined
+      && resultCustody.envelopeId !== intakeEnvelope.envelopeId) {
+      throw new Error(
+        `TurnRecord field "toolCalls[${index}].resultCustody" names a different envelope than its snapshot`,
+      );
+    }
 
     return {
       toolName,
@@ -508,6 +533,8 @@ function parseTurnRecordToolCalls(value: unknown): TurnRecordToolCall[] {
         : {}),
       ...(rationale ? { rationale } : {}),
       ...(thoughtSignature ? { thoughtSignature } : {}),
+      ...(intakeEnvelope ? { intakeEnvelope } : {}),
+      ...(resultCustody ? { resultCustody } : {}),
     };
   });
 }

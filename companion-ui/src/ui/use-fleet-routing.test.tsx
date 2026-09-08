@@ -31,6 +31,51 @@ afterEach(() => {
 });
 
 describe('fleet routing renewal recovery', () => {
+  it('does not restore a previous Partner roster after authority is cleared', async () => {
+    mocks.renewIfDue.mockResolvedValue(undefined);
+    let finish!: (value: unknown) => void;
+    mocks.readRoutingSnapshot.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    const connect = vi.fn(async () => true);
+    const { result } = renderHook(() => useFleetRouting({ accessState: 'signed_in', connect, reportError: vi.fn() }));
+    let loading!: Promise<void>;
+    await act(async () => {
+      loading = result.current.load({
+        schemaVersion: 1, state: 'signed_in', guestMode: 'disabled', websocketPath: WEBSOCKET_PATH,
+        human: { provider: 'discord', label: 'Partner', role: 'owner' },
+      }, 1, () => true, true);
+      await Promise.resolve();
+    });
+    act(() => result.current.clear());
+    await act(async () => {
+      finish({
+        roster: { schemaVersion: 1, companions: [{ companionId: COMPANION_ID, displayName: 'Canopy', websocketPath: WEBSOCKET_PATH }] },
+        approvals: { schemaVersion: 1, approvals: [] },
+      });
+      await loading;
+    });
+    expect(result.current.roster).toEqual([]);
+    expect(result.current.activeCompanionId).toBeNull();
+    expect(connect).not.toHaveBeenCalled();
+  });
+
+  it('does not surface late polling errors after the Partner logs out', async () => {
+    vi.useFakeTimers();
+    mocks.renewIfDue.mockResolvedValue(undefined);
+    let fail!: (reason: Error) => void;
+    mocks.readApprovals.mockReturnValue(new Promise((_, reject) => { fail = reject; }));
+    const reportError = vi.fn();
+    const { result, rerender } = renderHook(({ accessState }) => useFleetRouting({
+      accessState, connect: async () => true, reportError,
+    }), { initialProps: { accessState: 'signed_in' } });
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(mocks.readApprovals).toHaveBeenCalledOnce();
+    act(() => result.current.clear());
+    rerender({ accessState: 'signed_out' });
+    await act(async () => { fail(new Error('Old Partner approvals failed')); await Promise.resolve(); });
+    expect(reportError).not.toHaveBeenCalled();
+    expect(result.current.approvals).toEqual([]);
+  });
+
   it('loads with the proven session and retries after a transient startup renewal failure', async () => {
     vi.useFakeTimers();
     const renewalFailure = new Error('Fleet session renewal was unavailable');

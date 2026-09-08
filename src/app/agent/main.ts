@@ -55,6 +55,9 @@ import {
   registerIntrospectionLane,
 } from './startup/introspection-lane.js';
 import {
+  wireBlindReviewLane,
+} from './startup/blind-review-lane.js';
+import {
   registerWeightedThoughtOutreachLane,
 } from './startup/weighted-thought-outreach-lane.js';
 import { trustOrd } from '../../system/trust/types.js';
@@ -872,6 +875,21 @@ async function main(): Promise<void> {
     log.info('No persisted internal state snapshot found; starting fresh');
   }
 
+  // ── Continuous passive CogSec Blind Reviewer (yxz0z.3) ──
+  // Observational only: it reads already-durable turn evidence off the hot
+  // path and may raise an operator alert. It holds no reference to the agent
+  // loop, so no review outcome can reach a turn.
+  const blindReviewLane = wireBlindReviewLane({
+    schedulerConfig,
+    intakePolicy,
+    sessionManager,
+    sessionStore,
+    llmProvider,
+    postgresDatabaseUrl,
+    config,
+    companionDataDir: pathSnapshot.companionDataDir,
+    log,
+  });
   const {
     scheduler,
     postTurnActions,
@@ -904,6 +922,7 @@ async function main(): Promise<void> {
       ? { automataLifecycle: coreRuntime.automataClassLifecycle }
       : {}),
     automataRetention: coreRuntime.automataRetention,
+    ...(blindReviewLane ? { blindReview: blindReviewLane } : {}),
     doingMirrorService: coreRuntime.doingMirrorService,
     healthDetectors: {
       stream: persistenceRuntime.healthEventStore,

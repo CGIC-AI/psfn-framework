@@ -32,6 +32,12 @@ export type CogSecCaseType =
   // investigation. Excluded from agent-visible notices (see safe-log.ts) so the
   // alert reaches the operator in Garden, not the companion's context.
   | 'session_integrity'
+  // Continuous passive Blind Reviewer finding (bead psfn-framework-yxz0z.3).
+  // Operator-only, like session_integrity: the reviewer observes the
+  // companion's own reasoning and activity, so re-injecting its cases into her
+  // context would both pressure the subject and defeat the observation. It
+  // carries no CogSec action and never reflects a block or hold decision.
+  | 'blind_review'
   | 'unknown';
 
 export type CogSecSeverity = 'low' | 'medium' | 'high' | 'critical';
@@ -236,6 +242,7 @@ const CASE_TYPES: ReadonlySet<CogSecCaseType> = new Set([
   'intake_firewall',
   'persona_mutation_bypass',
   'session_integrity',
+  'blind_review',
   'unknown',
 ]);
 const SEVERITIES: ReadonlySet<CogSecSeverity> = new Set(['low', 'medium', 'high', 'critical']);

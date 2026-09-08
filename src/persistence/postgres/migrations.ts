@@ -4376,3 +4376,78 @@ export const POSTGRES_COGSEC_RECEIPT_MIGRATIONS: readonly string[] = [
     ON cogsec_receipts(expires_at_ms);
   `,
 ];
+
+/**
+ * Blind Reviewer rolling review window (bead psfn-framework-yxz0z.3).
+ *
+ * The window is deliberately durable rather than in-process: restart recovery,
+ * the unchanged-batch gate, and retention expiry all depend on knowing what was
+ * already ingested and already reviewed. `pinned_case_id` is the whole pinning
+ * mechanism — retention deletes only rows where it is NULL, so evidence an
+ * operator alert asks someone to investigate outlives the retention clock while
+ * ordinary evidence does not.
+ *
+ * Only reduced evidence is storable by construction: `blinded_excerpt` is
+ * non-empty exactly when the row is `blinded_excerpt`-classed, and a
+ * `structural_only` row is constrained to carry no text at all.
+ */
+export const POSTGRES_COGSEC_BLIND_REVIEW_MIGRATIONS: readonly string[] = [
+  `
+  CREATE TABLE IF NOT EXISTS cogsec_blind_review_evidence (
+    evidence_id TEXT PRIMARY KEY,
+    source_ref TEXT NOT NULL,
+    occurred_at_ms BIGINT NOT NULL,
+    captured_at_ms BIGINT NOT NULL,
+    disclosure TEXT NOT NULL,
+    activity_json JSONB NOT NULL,
+    blinded_excerpt TEXT NOT NULL,
+    content_digest TEXT NOT NULL,
+    reviewed_at_ms BIGINT,
+    pinned_case_id TEXT,
+    pinned_at_ms BIGINT,
+    CHECK (evidence_id ~ '^[a-f0-9]{32}$'),
+    CHECK (content_digest ~ '^[a-f0-9]{64}$'),
+    CHECK (length(btrim(source_ref)) > 0),
+    CHECK (occurred_at_ms > 0),
+    CHECK (captured_at_ms > 0),
+    CHECK (disclosure IN ('structural_only', 'blinded_excerpt')),
+    CHECK (jsonb_typeof(activity_json) = 'object'),
+    CHECK (
+      (disclosure = 'structural_only' AND blinded_excerpt = '')
+      OR (disclosure = 'blinded_excerpt' AND length(blinded_excerpt) > 0)
+    ),
+    CHECK ((pinned_case_id IS NULL) = (pinned_at_ms IS NULL)),
+    CHECK (pinned_case_id IS NULL OR pinned_case_id ~ '^cogsec_[A-Za-z0-9_-]+$')
+  );
+  `,
+  `
+  CREATE INDEX IF NOT EXISTS idx_cogsec_blind_review_unreviewed
+    ON cogsec_blind_review_evidence(occurred_at_ms, evidence_id)
+    WHERE reviewed_at_ms IS NULL;
+  `,
+  `
+  CREATE INDEX IF NOT EXISTS idx_cogsec_blind_review_retention
+    ON cogsec_blind_review_evidence(occurred_at_ms)
+    WHERE pinned_case_id IS NULL;
+  `,
+  `
+  CREATE INDEX IF NOT EXISTS idx_cogsec_blind_review_pinned_case
+    ON cogsec_blind_review_evidence(pinned_case_id)
+    WHERE pinned_case_id IS NOT NULL;
+  `,
+  `
+  CREATE TABLE IF NOT EXISTS cogsec_blind_review_state (
+    processor TEXT PRIMARY KEY,
+    ingested_through_ms BIGINT NOT NULL,
+    last_batch_digest TEXT,
+    review_attempt INTEGER NOT NULL,
+    retry_not_before_ms BIGINT NOT NULL,
+    updated_at_ms BIGINT NOT NULL,
+    CHECK (length(btrim(processor)) > 0),
+    CHECK (ingested_through_ms >= 0),
+    CHECK (review_attempt >= 0),
+    CHECK (retry_not_before_ms >= 0),
+    CHECK (last_batch_digest IS NULL OR last_batch_digest ~ '^[a-f0-9]{64}$')
+  );
+  `,
+];

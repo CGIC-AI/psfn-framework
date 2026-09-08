@@ -1683,6 +1683,22 @@ async function main(): Promise<void> {
     resolveChargeLedgerPath(pathSnapshot.companionDataDir),
     eventBus,
   );
+  // psfn-framework-h248l.7: this companion's own welfare-grant authority. The
+  // gateway re-verifies a caller-asserted `preemptionProtected` by asking THIS
+  // agent, which answers from its own background-work store over its own
+  // connection — so the gateway holds no sibling background-work privilege and
+  // a job id from another companion is simply not found. Registered for every
+  // posture: single-companion gateways may read their one shared schema
+  // directly, but the local authority is always the truthful answer.
+  gateway.onWelfareGrantAuthority({
+    verify: async (jobId: string): Promise<boolean> => {
+      const job = await backgroundWorkStore.get(jobId);
+      // Both conditions explicitly: a welfare claim is meaningful only while
+      // the job is actually running (the durable CHECK agrees, and this read
+      // must not depend on that agreement).
+      return job !== null && job.state === 'running' && job.welfareClaimed === true;
+    },
+  });
   let icpLocalPolicyAuthority: PostgresIcpLocalPolicyAuthority | null = null;
   let icpRuntimeAvailability: AgentIcpRuntimeAvailability | null = null;
   if (config.multiCompanion === true) {

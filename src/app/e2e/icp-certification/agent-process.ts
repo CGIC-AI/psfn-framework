@@ -183,6 +183,16 @@ async function main(): Promise<void> {
   });
   const contactStore = persistence.contactStore;
   if (!contactStore) throw new Error('ICP certification agent requires the Postgres contact store');
+  // psfn-framework-h248l.7: this companion answers welfare-grant questions from
+  // its OWN background-work store, over its own least-privilege tenant login.
+  // The gateway holds no sibling grant, so a job id belonging to another
+  // companion is simply absent here.
+  gateway.onWelfareGrantAuthority({
+    verify: async (jobId: string): Promise<boolean> => {
+      const job = await persistence.backgroundWorkStore.get(jobId);
+      return job !== null && job.state === 'running' && job.welfareClaimed === true;
+    },
+  });
   const peers = startup.config.companionFleet?.companions.filter(
     candidate => candidate.companionId !== companionId,
   ) ?? [];

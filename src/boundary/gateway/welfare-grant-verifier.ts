@@ -10,12 +10,20 @@
 // honoring the flag, and strips it on any failure (fail closed → preemptable).
 //
 // Companion ownership (design §8): background-work rows carry `logical_session_id`,
-// not a companionId, but a fleet companion's rows live in ITS OWN Postgres schema
-// (`config.postgresSchema`, distinct per companion — see composition.ts). Scoping
-// the verify query to the authenticated companion's schema IS the ownership
-// binding: companion A's connection resolves to companion A's schema, so a job id
-// from companion B's schema is simply not found → strip. A single-companion
-// deployment has one schema (possibly the default search_path).
+// not a companionId, but a companion's rows live in ITS OWN store. In a
+// single-companion deployment the gateway shares that one schema (possibly the
+// default search_path) and reads it directly.
+//
+// psfn-framework-h248l.7: a FLEET deployment does not. The gateway holds no
+// sibling background-work grant in an isolated-role topology, so the old
+// fleet-schema map probed relations it could never read, the optional verifier
+// went unavailable at readiness time, and every sibling companion's genuine
+// welfare claim was silently stripped. Fleet verification is now a companion-
+// local authority question asked over the authenticated reverse-RPC channel
+// (`welfare.grant.verify`), the same seam `icp.policy.*` uses: the companion
+// answers from its own store over its own connection, so a job id belonging to
+// another companion is simply not found. The gateway needs no fleet schema
+// map, no sibling privilege, and no dedicated verifier credential at all.
 //
 // Law 12.4: this is not a second admission/credential system. The caller declares
 // `preemptionProtected`; the gateway re-verifies against the single authority (the
@@ -30,8 +38,15 @@ import {
 } from '../../persistence/postgres.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { assertPostgresRelationColumns } from '../../persistence/postgres/relation-contract.js';
+import {
+  WELFARE_GRANT_VERIFY_METHOD,
+  parseWelfareGrantVerifyResult,
+} from './welfare-grant-contract.js';
 
 const log = createComponentLogger('GatewayWelfareGrant');
+
+/** JSON-RPC "Method not found" — an agent that predates this contract. */
+const METHOD_NOT_FOUND_JSONRPC_CODE = -32601;
 
 /**
  * Narrow read-only accessor the gateway RPC boundary calls to decide whether a
@@ -48,18 +63,14 @@ export interface WelfareGrantVerifier {
 }
 
 /**
- * How the verifier resolves an authenticated companion to the Postgres schema
- * holding its background-work rows.
- *  - `single`: one companion; one schema (undefined ⇒ default search_path).
- *  - `fleet`: strict companionId → schema map; an unknown companion fails closed.
+ * Single-companion scope: one companion, one schema (undefined ⇒ the default
+ * search_path). A fleet never uses this — see
+ * {@link CompanionAuthorityWelfareGrantVerifier}.
  */
-export type WelfareGrantVerifierScope =
-  | { readonly mode: 'single'; readonly schema?: string }
-  | { readonly mode: 'fleet'; readonly schemaByCompanionId: ReadonlyMap<string, string> };
-
-type ResolvedSchema =
-  | { readonly ok: true; readonly schema: string | undefined }
-  | { readonly ok: false };
+export interface WelfareGrantVerifierScope {
+  readonly mode: 'single';
+  readonly schema?: string;
+}
 
 class PostgresWelfareGrantVerifier implements WelfareGrantVerifier {
   constructor(
@@ -69,40 +80,25 @@ class PostgresWelfareGrantVerifier implements WelfareGrantVerifier {
 
   /** Privilege-safe catalog proof of every tenant relation/column consumed. */
   async assertReady(): Promise<void> {
-    const schemas = this.scope.mode === 'fleet'
-      ? [...new Set(this.scope.schemaByCompanionId.values())]
-      : [this.scope.schema];
-    for (const schema of schemas) {
-      await assertPostgresRelationColumns(this.pool, {
-        ...(schema ? { schema: assertValidPostgresSchemaName(schema) } : {}),
-        relation: 'agent_background_work_jobs',
-        columns: ['job_id', 'welfare_claimed', 'state'],
-        privileges: ['SELECT'],
-      });
-    }
+    const schema = this.scope.schema;
+    await assertPostgresRelationColumns(this.pool, {
+      ...(schema ? { schema: assertValidPostgresSchemaName(schema) } : {}),
+      relation: 'agent_background_work_jobs',
+      columns: ['job_id', 'welfare_claimed', 'state'],
+      privileges: ['SELECT'],
+    });
   }
 
   async verify(jobId: string, companionId: string): Promise<boolean> {
     if (typeof jobId !== 'string' || jobId.trim().length === 0) return false;
     if (typeof companionId !== 'string' || companionId.trim().length === 0) return false;
 
-    const resolved = this.resolveSchema(companionId);
-    if (!resolved.ok) {
-      // Unknown fleet companion: no schema to scope to → fail closed. Never
-      // query an unscoped table (that would let any companion borrow another's
-      // welfare-claimed job id on a shared endpoint).
-      log.debug('Welfare grant verify: no schema for authenticated companion; stripping', {
-        companionId,
-      });
-      return false;
-    }
-
     // Single indexed lookup (job_id is the PRIMARY KEY). The table is qualified
     // with the validated companion schema when present; the schema name is a
     // strictly-validated lowercase identifier (config guard + this re-check), so
     // interpolation is injection-safe.
-    const qualifier = resolved.schema
-      ? `"${assertValidPostgresSchemaName(resolved.schema)}".`
+    const qualifier = this.scope.schema
+      ? `"${assertValidPostgresSchemaName(this.scope.schema)}".`
       : '';
     const row = await queryOne<{ granted: boolean }>(
       this.pool,
@@ -117,31 +113,124 @@ class PostgresWelfareGrantVerifier implements WelfareGrantVerifier {
     return row?.granted === true;
   }
 
-  private resolveSchema(companionId: string): ResolvedSchema {
-    if (this.scope.mode === 'single') {
-      return { ok: true, schema: this.scope.schema };
-    }
-    const schema = this.scope.schemaByCompanionId.get(companionId);
-    if (schema === undefined) return { ok: false };
-    return { ok: true, schema };
-  }
-
   async close(): Promise<void> {
     await this.pool.end();
   }
 }
 
-export interface WelfareGrantVerifierConfig {
-  databaseUrl: string;
-  /** Single-companion schema (undefined ⇒ default search_path). Ignored when `fleet` is set. */
-  postgresSchema?: string;
-  /** Fleet companions; when present, verification is strict per-companion-schema. */
-  fleet?: ReadonlyArray<{ companionId: string; postgresSchema: string }>;
+/**
+ * Bounded, content-free evidence for a fleet verification that could not be
+ * completed. Never carries the job id (a bearer-ish token) or any store detail.
+ */
+type WelfareGrantVerifyFailureReason =
+  | 'timeout'
+  | 'method_unavailable'
+  | 'malformed_response'
+  | 'companion_mismatch'
+  | 'authority_unavailable';
+
+function classifyVerifyFailure(error: unknown): WelfareGrantVerifyFailureReason {
+  const code = (error as { code?: unknown } | null)?.code;
+  // JSON-RPC "Method not found": an agent older than this contract. Version
+  // skew is evidence, not a silent success — the caller still strips.
+  if (code === METHOD_NOT_FOUND_JSONRPC_CODE) return 'method_unavailable';
+  const message = error instanceof Error ? error.message : String(error);
+  if (/timed out/iu.test(message)) return 'timeout';
+  return 'authority_unavailable';
 }
 
 /**
- * Construct the Postgres-backed welfare grant verifier over the gateway's
- * existing companion database. Read-only: a small dedicated pool that runs one
+ * Fleet verification through the authenticated companion's own local authority.
+ *
+ * The gateway opens no tenant schema: it asks the companion named by the
+ * connection, and the companion answers from its own background-work store over
+ * its own database connection. That connection scoping IS the ownership binding
+ * — companion B's job id is simply absent from companion A's store — and the
+ * echoed companion id proves the answer came from the companion that was asked.
+ *
+ * Every failure mode (unknown companion, timeout, missing method, malformed
+ * response, identity mismatch, store failure) resolves to a strip with bounded
+ * evidence. Errors are normalized and rethrown, never swallowed: the RPC
+ * boundary logs the reason code and proceeds preemptable.
+ */
+export class CompanionAuthorityWelfareGrantVerifier implements WelfareGrantVerifier {
+  constructor(
+    private readonly options: {
+      readonly companionIds: ReadonlySet<string>;
+      requestCompanionAgent(
+        companionId: string,
+        method: string,
+        params: unknown,
+      ): Promise<unknown>;
+    },
+  ) {}
+
+  /**
+   * Nothing to probe. The authority is each companion's own store, proven by
+   * that companion at its own startup; the gateway holds no sibling grant and
+   * must not require one to become ready.
+   */
+  async assertReady(): Promise<void> {
+    return undefined;
+  }
+
+  async verify(jobId: string, companionId: string): Promise<boolean> {
+    if (typeof jobId !== 'string' || jobId.trim().length === 0) return false;
+    if (typeof companionId !== 'string' || companionId.trim().length === 0) return false;
+    if (!this.options.companionIds.has(companionId)) {
+      // Unknown companion: no authority to ask → fail closed. Never broadcast
+      // the question to the fleet (that would let any companion borrow
+      // another's welfare-claimed job id on a shared endpoint).
+      log.debug('Welfare grant verify: no fleet authority for authenticated companion; stripping', {
+        companionId,
+      });
+      return false;
+    }
+
+    let raw: unknown;
+    try {
+      raw = await this.options.requestCompanionAgent(
+        companionId,
+        WELFARE_GRANT_VERIFY_METHOD,
+        { jobId: jobId.trim(), companionId },
+      );
+    } catch (error) {
+      throw new Error(
+        `Welfare grant verification is unavailable (${classifyVerifyFailure(error)})`,
+        { cause: error },
+      );
+    }
+
+    let result;
+    try {
+      result = parseWelfareGrantVerifyResult(raw);
+    } catch (error) {
+      throw new Error(
+        'Welfare grant verification is unavailable (malformed_response)',
+        { cause: error },
+      );
+    }
+    if (result.companionId !== companionId) {
+      throw new Error('Welfare grant verification is unavailable (companion_mismatch)');
+    }
+    return result.granted;
+  }
+
+  async close(): Promise<void> {
+    return undefined;
+  }
+}
+
+export interface WelfareGrantVerifierConfig {
+  databaseUrl: string;
+  /** Single-companion schema (undefined ⇒ default search_path). */
+  postgresSchema?: string;
+}
+
+/**
+ * Construct the Postgres-backed SINGLE-COMPANION welfare grant verifier over the
+ * gateway's existing companion database. A fleet uses
+ * {@link CompanionAuthorityWelfareGrantVerifier} instead and needs no credential. Read-only: a small dedicated pool that runs one
  * indexed SELECT per verify. Returns `undefined` when there is no database URL
  * to bind — the caller then strips every asserted `preemptionProtected` (fail
  * closed), losing only the anti-starvation optimization.
@@ -158,17 +247,10 @@ export function createWelfareGrantVerifier(
     max: 4,
   });
 
-  const scope: WelfareGrantVerifierScope = config.fleet
-    ? {
-        mode: 'fleet',
-        schemaByCompanionId: new Map(
-          config.fleet.map(companion => [companion.companionId, companion.postgresSchema]),
-        ),
-      }
-    : {
-        mode: 'single',
-        ...(config.postgresSchema?.trim() ? { schema: config.postgresSchema.trim() } : {}),
-      };
+  const scope: WelfareGrantVerifierScope = {
+    mode: 'single',
+    ...(config.postgresSchema?.trim() ? { schema: config.postgresSchema.trim() } : {}),
+  };
 
   return new PostgresWelfareGrantVerifier(pool, scope);
 }

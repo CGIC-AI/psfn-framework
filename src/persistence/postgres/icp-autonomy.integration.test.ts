@@ -2121,4 +2121,383 @@ describe('ICP autonomy Postgres persistence', () => {
       await restartedAfterFleetRemoval.close();
     }
   }, TIMEOUT_MS);
+
+  // psfn-framework-h248l.9. The generation fence is a FRESHNESS fence: it only
+  // says "your captured view is stale", so a caller that re-captures is admitted
+  // again. Companion removal needs the opposite — a durable, non-expiring denial
+  // that survives an unattended crash between "revoke the permits" and "scale
+  // the workload down", and that never clears itself.
+  describe('non-expiring ICP lifecycle admission fence', () => {
+    function lifecycleEpisodeAndPermit(input: {
+      conversationId: string;
+      candidateId: string;
+      permitId: string;
+      issuedAtMs: number;
+    }) {
+      return {
+        episode: {
+          conversationId: input.conversationId,
+          channelId: CHANNEL,
+          participantCompanionIds: [A, B],
+          rootInitiationId: input.candidateId,
+          initiatedByCompanionId: A,
+          initiationSource: 'foreground' as const,
+          provenanceRef: `icp-prov:${input.candidateId}`,
+          openedAtMs: input.issuedAtMs,
+          lastActivityAtMs: input.issuedAtMs,
+          status: 'invited' as const,
+          revision: 1,
+        },
+        permit: {
+          permitId: input.permitId,
+          candidateId: input.candidateId,
+          conversationId: input.conversationId,
+          senderCompanionId: A,
+          recipientCompanionId: B,
+          channelId: CHANNEL,
+          provenanceRef: `icp-prov:${input.candidateId}`,
+          issuedAtMs: input.issuedAtMs,
+          expiresAtMs: 900_000,
+          status: 'issued' as const,
+          revision: 1,
+        },
+      };
+    }
+
+    async function readGeneration(databaseUrl: string, companionId: string): Promise<number> {
+      const pool = createPostgresPool(databaseUrl, { max: 1, allowExitOnIdle: true });
+      try {
+        const row = await pool.query<{ generation: string; lifecycle_fenced: boolean }>(`
+          SELECT generation::text AS generation, lifecycle_fenced
+          FROM ${SHARED_SCHEMA_NAME}.icp_autonomy_invalidation_fences
+          WHERE companion_id = $1
+        `, [companionId]);
+        const found = row.rows.at(0);
+        if (!found) throw new Error(`No invalidation fence row for ${companionId}`);
+        return Number(found.generation);
+      } finally {
+        await pool.end();
+      }
+    }
+
+    it('revokes outstanding permits and refuses a freshly captured generation while fenced', async () => {
+      const databaseUrl = await freshDatabaseUrl();
+      const store = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
+        knownCompanionIds: [A, B],
+      });
+      try {
+        await store.createEpisodeAndIssuePermit({
+          ...lifecycleEpisodeAndPermit({
+            conversationId: CONVERSATION_ID,
+            candidateId: CANDIDATE_ID,
+            permitId: PERMIT_ID,
+            issuedAtMs: 1_000,
+          }),
+          expectedInvalidationFence: await store.captureInvalidationFence(A, B),
+        });
+        const generationBefore = await readGeneration(databaseUrl, B);
+
+        const fenced = await store.fenceLifecycleAdmission(B, 2_000);
+
+        expect(fenced).toMatchObject({ companionId: B, lifecycleFenced: true, transitioned: true });
+        // Fencing revokes every outstanding permit before it returns.
+        expect(fenced.revokedPermits.map(permit => permit.permitId)).toEqual([PERMIT_ID]);
+        await expect(store.getPermit(PERMIT_ID)).resolves.toMatchObject({
+          status: 'revoked',
+          reasonCode: 'unknown_participant',
+        });
+        expect(await readGeneration(databaseUrl, B)).toBe(generationBefore + 1);
+        await expect(store.isLifecycleAdmissionFenced(B)).resolves.toBe(true);
+        await expect(store.isLifecycleAdmissionFenced(A)).resolves.toBe(false);
+
+        // THE POINT: capture the fence AFTER the removal, so the generation is
+        // perfectly current, and issue anyway. The durable bit still refuses.
+        const freshFence = await store.captureInvalidationFence(A, B);
+        await expect(store.createEpisodeAndIssuePermit({
+          ...lifecycleEpisodeAndPermit({
+            conversationId: SECOND_CONVERSATION_ID,
+            candidateId: SECOND_CANDIDATE_ID,
+            permitId: SECOND_PERMIT_ID,
+            issuedAtMs: 3_000,
+          }),
+          expectedInvalidationFence: freshFence,
+        })).rejects.toMatchObject({ reasonCode: 'unknown_participant' });
+      } finally {
+        await store.close();
+      }
+    }, TIMEOUT_MS);
+
+    it('refuses to consume a permit that outlived the fence, on a fresh capture', async () => {
+      const databaseUrl = await freshDatabaseUrl();
+      const store = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
+        knownCompanionIds: [A, B],
+      });
+      const pool = createPostgresPool(databaseUrl, { max: 1, allowExitOnIdle: true });
+      try {
+        await store.createEpisodeAndIssuePermit({
+          ...lifecycleEpisodeAndPermit({
+            conversationId: CONVERSATION_ID,
+            candidateId: CANDIDATE_ID,
+            permitId: PERMIT_ID,
+            issuedAtMs: 1_000,
+          }),
+          expectedInvalidationFence: await store.captureInvalidationFence(A, B),
+        });
+        await store.fenceLifecycleAdmission(B, 2_000);
+        // Reconstruct the exact durable state the bead is about: removal ran,
+        // but an outstanding permit survived it (a crash between revoke and
+        // scale-down, or a permit that raced the fence). Consumption is the
+        // last line, and it must still refuse.
+        await pool.query(`
+          UPDATE ${SHARED_SCHEMA_NAME}.icp_initiation_permits
+          SET status = 'issued', revoked_at_ms = NULL, reason_code = NULL
+          WHERE permit_id = $1
+        `, [PERMIT_ID]);
+
+        await expect(store.consumePermit({
+          permitId: PERMIT_ID,
+          conversationId: CONVERSATION_ID,
+          senderCompanionId: A,
+          recipientCompanionId: B,
+          channelId: CHANNEL,
+          consumedAtMs: 3_000,
+          // Captured after the fence, so the generation is perfectly current.
+          expectedInvalidationFence: await store.captureInvalidationFence(A, B),
+        })).rejects.toMatchObject({ reasonCode: 'unknown_participant' });
+        await expect(store.getPermit(PERMIT_ID)).resolves.toMatchObject({ status: 'issued' });
+      } finally {
+        await pool.end();
+        await store.close();
+      }
+    }, TIMEOUT_MS);
+
+    it('is idempotent, survives a restart, and reopens only after an explicit clear', async () => {
+      const databaseUrl = await freshDatabaseUrl();
+      const first = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
+        knownCompanionIds: [A, B],
+      });
+      try {
+        await first.fenceLifecycleAdmission(B, 1_000);
+        const generationAfterFence = await readGeneration(databaseUrl, B);
+        // Repeated fencing changes nothing: "advance exactly once" is once per
+        // transition, not once per call.
+        await expect(first.fenceLifecycleAdmission(B, 1_500)).resolves.toMatchObject({
+          lifecycleFenced: true,
+          transitioned: false,
+          revokedPermits: [],
+        });
+        expect(await readGeneration(databaseUrl, B)).toBe(generationAfterFence);
+      } finally {
+        await first.close();
+      }
+
+      // A new process, a new pool, arbitrary delay: the bit never expires and
+      // reconnecting never clears it (connect() only inserts missing rows).
+      const restarted = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
+        knownCompanionIds: [A, B],
+      });
+      try {
+        await expect(restarted.isLifecycleAdmissionFenced(B)).resolves.toBe(true);
+        await expect(restarted.createEpisodeAndIssuePermit({
+          ...lifecycleEpisodeAndPermit({
+            conversationId: CONVERSATION_ID,
+            candidateId: CANDIDATE_ID,
+            permitId: PERMIT_ID,
+            issuedAtMs: 2_000,
+          }),
+          expectedInvalidationFence: await restarted.captureInvalidationFence(A, B),
+        })).rejects.toBeInstanceOf(IcpAutonomyInvalidationConflictError);
+
+        const cleared = await restarted.clearLifecycleAdmission(B, 3_000);
+        expect(cleared).toMatchObject({ lifecycleFenced: false, transitioned: true });
+        const generationAfterClear = await readGeneration(databaseUrl, B);
+        await expect(restarted.clearLifecycleAdmission(B, 3_500)).resolves.toMatchObject({
+          lifecycleFenced: false,
+          transitioned: false,
+        });
+        expect(await readGeneration(databaseUrl, B)).toBe(generationAfterClear);
+
+        await expect(restarted.createEpisodeAndIssuePermit({
+          ...lifecycleEpisodeAndPermit({
+            conversationId: CONVERSATION_ID,
+            candidateId: CANDIDATE_ID,
+            permitId: PERMIT_ID,
+            issuedAtMs: 4_000,
+          }),
+          expectedInvalidationFence: await restarted.captureInvalidationFence(A, B),
+        })).resolves.toMatchObject({ permit: { permitId: PERMIT_ID, status: 'issued' } });
+      } finally {
+        await restarted.close();
+      }
+    }, TIMEOUT_MS);
+
+    it('fences a companion dropped from the manifest and never readmits it by booting', async () => {
+      const databaseUrl = await freshDatabaseUrl();
+      const full = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
+        knownCompanionIds: [A, B, C],
+      });
+      await full.close();
+
+      // C leaves the manifest. The connect-time sweep is the runtime's only
+      // durable "companion left the fleet" event, and it is exactly the
+      // post-crash reconciliation this fence exists for.
+      const shrunk = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
+        knownCompanionIds: [A, B],
+      });
+      try {
+        await expect(shrunk.isLifecycleAdmissionFenced(C)).resolves.toBe(true);
+        await expect(shrunk.isLifecycleAdmissionFenced(A)).resolves.toBe(false);
+      } finally {
+        await shrunk.close();
+      }
+      const generationAfterSweep = await readGeneration(databaseUrl, C);
+
+      // Booting again with the same manifest is idempotent — the old sweep
+      // advanced the generation on every restart.
+      const rebooted = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
+        knownCompanionIds: [A, B],
+      });
+      await rebooted.close();
+      expect(await readGeneration(databaseUrl, C)).toBe(generationAfterSweep);
+
+      // Putting C back in the manifest does NOT readmit it: clearing is
+      // explicit, and belongs to the lifecycle reconciler's reapproval guard.
+      const readded = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
+        knownCompanionIds: [A, B, C],
+      });
+      try {
+        await expect(readded.isLifecycleAdmissionFenced(C)).resolves.toBe(true);
+        await expect(readded.clearLifecycleAdmission(C, 9_000)).resolves.toMatchObject({
+          lifecycleFenced: false,
+          transitioned: true,
+        });
+        await expect(readded.isLifecycleAdmissionFenced(C)).resolves.toBe(false);
+      } finally {
+        await readded.close();
+      }
+    }, TIMEOUT_MS);
+
+    // Acceptance: "fence races linearize: a prior permit is revoked, and a later
+    // issue rejects". Both stores contend for the SAME companion fence row, so
+    // one of the two orderings must win completely -- there is no interleaving
+    // in which a permit ends up issued against a fenced companion.
+    it('linearizes a permit issue racing the fence, in either order', async () => {
+      const databaseUrl = await freshDatabaseUrl();
+      const issuer = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
+        knownCompanionIds: [A, B],
+      });
+      const remover = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
+        knownCompanionIds: [A, B],
+      });
+      try {
+        // Captured BEFORE the race, and still current when the race starts.
+        const capturedFence = await issuer.captureInvalidationFence(A, B);
+        const [issued, fenced] = await Promise.allSettled([
+          issuer.createEpisodeAndIssuePermit({
+            ...lifecycleEpisodeAndPermit({
+              conversationId: CONVERSATION_ID,
+              candidateId: CANDIDATE_ID,
+              permitId: PERMIT_ID,
+              issuedAtMs: 1_000,
+            }),
+            expectedInvalidationFence: capturedFence,
+          }),
+          remover.fenceLifecycleAdmission(B, 1_000),
+        ]);
+
+        // Removal always wins its own transaction.
+        expect(fenced.status).toBe('fulfilled');
+        if (fenced.status !== 'fulfilled') throw new Error('unreachable');
+        expect(fenced.value).toMatchObject({ lifecycleFenced: true, transitioned: true });
+        await expect(remover.isLifecycleAdmissionFenced(B)).resolves.toBe(true);
+
+        // THE INVARIANT, whichever order the row lock granted: no permit is left
+        // issued against a fenced companion. Either the issue lost outright, or
+        // it won and the fence revoked exactly that permit before returning.
+        const permit = await issuer.getPermit(PERMIT_ID);
+        if (issued.status === 'rejected') {
+          expect(issued.reason).toBeInstanceOf(IcpAutonomyInvalidationConflictError);
+          expect(issued.reason).toMatchObject({ reasonCode: 'unknown_participant' });
+          expect(permit).toBeNull();
+        } else {
+          expect(permit).toMatchObject({ status: 'revoked', reasonCode: 'unknown_participant' });
+          expect(fenced.value.revokedPermits.map(revoked => revoked.permitId)).toContain(PERMIT_ID);
+        }
+
+        // And a later issue rejects regardless, on a freshly captured fence.
+        await expect(issuer.createEpisodeAndIssuePermit({
+          ...lifecycleEpisodeAndPermit({
+            conversationId: SECOND_CONVERSATION_ID,
+            candidateId: SECOND_CANDIDATE_ID,
+            permitId: SECOND_PERMIT_ID,
+            issuedAtMs: 2_000,
+          }),
+          expectedInvalidationFence: await issuer.captureInvalidationFence(A, B),
+        })).rejects.toMatchObject({ reasonCode: 'unknown_participant' });
+      } finally {
+        await issuer.close();
+        await remover.close();
+      }
+    }, TIMEOUT_MS);
+
+    it('upgrades an existing pre-v20 fence table without readmitting or denying anyone', async () => {
+      if (!harness) throw new Error('Postgres integration harness is unavailable');
+      const databaseUrl = (await harness.createDatabase()).databaseUrl;
+      const lifecycleIndex = POSTGRES_SHARED_MIGRATIONS.findIndex(statement =>
+        statement.includes('ADD COLUMN IF NOT EXISTS lifecycle_fenced'));
+      expect(lifecycleIndex).toBeGreaterThan(0);
+
+      const pool = createPostgresPool(databaseUrl, { max: 1, allowExitOnIdle: true });
+      try {
+        await pool.query(`CREATE SCHEMA ${SHARED_SCHEMA_NAME}`);
+        await pool.query(`SET search_path TO ${SHARED_SCHEMA_NAME}`);
+        // Install the schema as it stood before this migration, then put a live
+        // row in it: an already-invalidated companion from a running fleet.
+        for (const statement of POSTGRES_SHARED_MIGRATIONS.slice(0, lifecycleIndex)) {
+          await pool.query(statement);
+        }
+        await pool.query(`
+          INSERT INTO icp_autonomy_invalidation_fences
+            (companion_id, generation, invalidated_at_ms, last_reason_code)
+          VALUES ($1, 4, 1234, 'peer_blocked'), ($2, 0, NULL, NULL)
+        `, [A, B]);
+
+        // The upgrade, run twice: additive and idempotent on a live deployment.
+        for (const pass of ['first upgrade', 'repeated upgrade']) {
+          for (const statement of POSTGRES_SHARED_MIGRATIONS.slice(lifecycleIndex)) {
+            await pool.query(statement);
+          }
+          const rows = await pool.query<{
+            companion_id: string;
+            generation: string;
+            last_reason_code: string | null;
+            lifecycle_fenced: boolean;
+          }>(`
+            SELECT companion_id, generation::text AS generation, last_reason_code, lifecycle_fenced
+            FROM icp_autonomy_invalidation_fences ORDER BY companion_id
+          `);
+          // Every pre-existing row keeps its exact state and means "admitted",
+          // which is precisely the pre-migration behavior.
+          expect({ pass, rows: rows.rows }).toEqual({
+            pass,
+            rows: [
+              { companion_id: A, generation: '4', last_reason_code: 'peer_blocked', lifecycle_fenced: false },
+              { companion_id: B, generation: '0', last_reason_code: null, lifecycle_fenced: false },
+            ],
+          });
+        }
+        await expect(pool.query(`
+          SELECT version FROM shared_schema_migrations WHERE version = 20
+        `)).resolves.toMatchObject({ rows: [{ version: 20 }] });
+        // The evidence CHECK: a fenced row can never sit at the pristine
+        // generation 0, because every transition advances it.
+        await expect(pool.query(
+          'UPDATE icp_autonomy_invalidation_fences SET lifecycle_fenced = true WHERE companion_id = $1',
+          [B],
+        )).rejects.toThrow(/lifecycle_evidence_check/u);
+      } finally {
+        await pool.end();
+      }
+    }, TIMEOUT_MS);
+  });
 });

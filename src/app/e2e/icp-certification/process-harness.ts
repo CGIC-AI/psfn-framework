@@ -4,6 +4,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 import { GatewayServer } from '../../../boundary/gateway/server.js';
+import { CompanionAuthorityWelfareGrantVerifier } from '../../../boundary/gateway/welfare-grant-verifier.js';
 import { GatewayCapabilityTierResolver } from '../../../boundary/gateway/capability-tier-resolver.js';
 import { deriveCompanionAuthToken } from '../../../boundary/gateway/companion-auth.js';
 import { createSocketClient, type GatewayRpcConnection } from '../../../boundary/gateway/transport.js';
@@ -463,6 +464,12 @@ export class IcpCertificationAgentProcess {
 export interface IcpCertificationProcessHarness {
   agents: CertificationAgentFleet;
   gateway: GatewayServer;
+  /**
+   * Exercise the production fleet welfare-grant verifier exactly as the LLM RPC
+   * boundary does. Resolves false for a strip, rejects with bounded evidence
+   * when the companion authority cannot answer.
+   */
+  verifyWelfareGrant(jobId: string, companionId: string): Promise<boolean>;
   readonly costDecisions: readonly IcpConversationCostBreakerEvent[];
   readonly modelRequestCount: number;
   queueConsentDecision(decision: IcpCertificationConsentDecision): void;
@@ -760,7 +767,19 @@ export async function startIcpCertificationProcessHarness(input: {
     ),
   };
   const eventBus = new EventBus();
-  const createGateway = () => new GatewayServer({
+  // psfn-framework-h248l.7: production fleet welfare verification. The gateway
+  // holds NO sibling background-work grant here (each companion logs in under
+  // its own least-privilege tenant role), so the verifier asks the authenticated
+  // companion's own local authority over the reverse-RPC channel.
+  const welfareGrantVerifier = new CompanionAuthorityWelfareGrantVerifier({
+    companionIds: new Set(input.fixture.companions.map(companion => companion.companionId)),
+    requestCompanionAgent: async (
+      companionId: string,
+      method: string,
+      params: unknown,
+    ): Promise<unknown> => await gateway.requestCompanionAgent(companionId, method, params),
+  });
+  const createGateway = (): GatewayServer => new GatewayServer({
     socketPath: input.fixture.gatewaySocketPath,
     llmProvider,
     embeddingService: {
@@ -790,6 +809,7 @@ export async function startIcpCertificationProcessHarness(input: {
       capabilityTierResolver.snapshotOwnerGrantStrict(companionId),
     eventBus,
     modelUsageRecorder: modelUsage,
+    welfareGrantVerifier,
   });
   let gateway = createGateway();
   gateway.start();
@@ -827,6 +847,9 @@ export async function startIcpCertificationProcessHarness(input: {
     },
     get gateway() {
       return gateway;
+    },
+    verifyWelfareGrant(jobId, companionId) {
+      return welfareGrantVerifier.verify(jobId, companionId);
     },
     get costDecisions() {
       return costDecisions;

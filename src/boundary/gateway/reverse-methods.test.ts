@@ -13,6 +13,7 @@ const expectedRegisteredNames = [
   'icp.policy.inspect',
   'icp.policy.acquire',
   'icp.policy.release',
+  'welfare.grant.verify',
   'memory.deletion.snapshot',
   'memory.deletion.partner_alerted',
   'memory.deletion.resolve',
@@ -36,7 +37,7 @@ const expectedRegisteredNames = [
   'telemetry.turn.performance',
 ] as const;
 
-function createRegisteredRuntime(): {
+function createRegisteredRuntime(overrides: Partial<ReverseGatewayMethodRuntime> = {}): {
   methods: Map<string, RegisteredHandler>;
   handleVoiceStreamChunk: ReturnType<typeof vi.fn>;
   handleApiHealth: ReturnType<typeof vi.fn>;
@@ -55,6 +56,7 @@ function createRegisteredRuntime(): {
     },
     handleVoiceStreamChunk,
     handleApiHealth,
+    ...overrides,
   } as unknown as ReverseGatewayMethodRuntime;
 
   registerReverseGatewayMethods(runtime);
@@ -126,6 +128,42 @@ describe('registered reverse RPC parameter boundary', () => {
       params,
     });
     expect(handleVoiceStreamChunk).toHaveBeenCalledExactlyOnceWith(params);
+  });
+
+  // psfn-framework-h248l.7: the welfare answer is content-free by construction.
+  // Anything but an exact { jobId, companionId } pair is refused at the boundary,
+  // so no session, payload, or schema detail can ride the question inward.
+  it.each([
+    ['a missing companion identity', { jobId: 'job-1' }, /companionId must be a non-empty string/i],
+    ['a blank job id', { jobId: '   ', companionId: 'companion-a' }, /jobId must be a non-empty string/i],
+    [
+      'a smuggled extra field',
+      { jobId: 'job-1', companionId: 'companion-a', schema: 'tenant_a' },
+      /params contain unknown fields: schema/i,
+    ],
+  ])('rejects welfare.grant.verify params carrying %s before its handler', (_label, params, expected) => {
+    const handleWelfareGrantVerify = vi.fn();
+    const { methods } = createRegisteredRuntime({ handleWelfareGrantVerify });
+    const invoke = requireMethod(methods, 'welfare.grant.verify');
+
+    expect(() => invoke(params)).toThrow(expected);
+    expect(handleWelfareGrantVerify).not.toHaveBeenCalled();
+  });
+
+  it('passes an exact welfare.grant.verify pair to the companion authority', async () => {
+    const handleWelfareGrantVerify = vi.fn(async () => ({
+      companionId: 'companion-a',
+      granted: true,
+    }));
+    const { methods } = createRegisteredRuntime({ handleWelfareGrantVerify });
+    const invoke = requireMethod(methods, 'welfare.grant.verify');
+
+    await expect(invoke({ jobId: ' job-1 ', companionId: 'companion-a' }))
+      .resolves.toEqual({ companionId: 'companion-a', granted: true });
+    expect(handleWelfareGrantVerify).toHaveBeenCalledExactlyOnceWith({
+      jobId: 'job-1',
+      companionId: 'companion-a',
+    });
   });
 
   it('preserves valid empty params for api.health', async () => {

@@ -508,12 +508,14 @@ async function runPostTurnBackgroundWork(
         await runHooks();
         return;
       }
-      // The run id is derived from the canonical source request, so a
-      // redelivered or restarted job re-enters its own durable run instead of
-      // opening a second one and duplicating its terminal event.
+      // The run id is derived from the canonical source request and the job's
+      // durable attempt, so a redelivered job or a restart within the same
+      // attempt re-enters its own run instead of duplicating a terminal event,
+      // while a genuine retry (which increments the attempt) opens a fresh run
+      // rather than colliding with the failed one.
       await automataRunner.run(
         {
-          runId: `intention-post-turn-hooks:${payload.source.requestId}`,
+          runId: `intention-post-turn-hooks:${payload.source.requestId}:${job.attemptCount}`,
           taskId: payload.source.logicalSessionId,
           taskLabel: INTENTION_HOOKS_TASK_LABEL,
           taskSummary: INTENTION_HOOKS_TASK_SUMMARY,

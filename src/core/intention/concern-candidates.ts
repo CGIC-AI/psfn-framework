@@ -12,6 +12,11 @@ import {
   evaluateDeterministicGate,
   type DeterministicGateDefinition,
 } from '../../shared/gating/deterministic-gate.js';
+import {
+  runGovernedAutomataClass,
+  type AutomataClassLifecycleRuntime,
+} from '../../faculties/automata/bus/class-lifecycle.js';
+import type { ProductionAutomataClassId } from '../../faculties/automata/registry-contract.js';
 import type { ConcernStorePort } from './concern-store-port.js';
 import {
   deriveConcernDueAtHint,
@@ -61,6 +66,12 @@ const log = createComponentLogger('ConcernCandidates');
 const DEFAULT_REVIEW_TURN_INTERVAL = 3;
 const DEFAULT_MAX_REVIEW_BATCH = 7;
 const CONCERN_REVIEW_LANE = 'concern_candidate_review';
+const CONCERN_CANDIDATE_REVIEW_CLASS: ProductionAutomataClassId =
+  'intention.concern_candidate_review';
+const CONCERN_CANDIDATE_REVIEW_TASK_LABEL = 'Concern candidate review';
+const CONCERN_CANDIDATE_REVIEW_TASK_SUMMARY =
+  'Review one bounded batch of extraction-derived concern candidates.';
+const CONCERN_CANDIDATE_REVIEW_BRIEFING_QUERY = 'concern candidate review batch';
 const DURABLE_CANDIDATE_DEDUPE_PREFIX = 'concern-candidate-dedupe:';
 
 /**
@@ -839,6 +850,8 @@ export interface ConcernCandidateWorkerOptions {
   reviewer: ConcernCandidateReviewer;
   concernStore: ConcernStorePort;
   eventBus?: EventBus | null;
+  /** Governed Automata Bus lifecycle. Absent where no durable Automata runtime is composed. */
+  automataClassLifecycle?: AutomataClassLifecycleRuntime | null;
   routeDispatcher?: ConcernRouteDispatcher;
   reviewTurnInterval?: number;
   maxReviewBatch?: number;
@@ -966,6 +979,38 @@ export class ConcernCandidateWorker {
   }
 
   private async runReview(): Promise<ConcernCandidateWorkerRunResult> {
+    // The review itself is unchanged; only its durable run identity, bounded
+    // briefing, governed tool, and settlement move into the shared lifecycle.
+    // Each turn-gated review batch is its own bounded run.
+    const governed = await runGovernedAutomataClass({
+      runtime: this.options.automataClassLifecycle,
+      spec: {
+        automatonClass: CONCERN_CANDIDATE_REVIEW_CLASS,
+        runId: `concern-candidate-review:${randomUUID()}`,
+        workerId: CONCERN_REVIEW_LANE,
+        taskId: CONCERN_REVIEW_LANE,
+        taskLabel: CONCERN_CANDIDATE_REVIEW_TASK_LABEL,
+        taskSummary: CONCERN_CANDIDATE_REVIEW_TASK_SUMMARY,
+      },
+      briefingQuery: CONCERN_CANDIDATE_REVIEW_BRIEFING_QUERY,
+      work: async () => {
+        const result = await this.reviewPendingBatch();
+        // Counts only: candidate text, concern content, and contact identity
+        // never reach the Bus.
+        return {
+          value: result,
+          summary: `Concern candidate review: reviewed=${result.reviewedCount ?? 0} `
+            + `outcomes=${result.outcomes?.length ?? 0} pending=${result.pendingCount}`,
+        };
+      },
+    });
+    if (governed.status === 'replayed') {
+      throw new Error('Concern candidate review re-entered an already terminal Automata run');
+    }
+    return governed.value;
+  }
+
+  private async reviewPendingBatch(): Promise<ConcernCandidateWorkerRunResult> {
     const candidates = this.options.queue.drainPending(this.maxReviewBatch);
     let outcomes: ConcernCandidateApplyOutcome[];
     try {
@@ -1013,6 +1058,8 @@ export interface AutomatedConcernRuntime {
 
 export interface CreateAutomatedConcernRuntimeOptions {
   eventBus: EventBus;
+  /** Governed Automata Bus lifecycle. Absent where no durable Automata runtime is composed. */
+  automataClassLifecycle?: AutomataClassLifecycleRuntime | null;
   llmProvider: LLMProviderPort;
   concernStore: ConcernStorePort;
   reviewTurnInterval?: number;
@@ -1110,6 +1157,9 @@ export async function createAutomatedConcernRuntime(
     reviewer,
     concernStore: options.concernStore,
     eventBus: options.eventBus,
+    ...(options.automataClassLifecycle
+      ? { automataClassLifecycle: options.automataClassLifecycle }
+      : {}),
     ...(options.routeDispatcher ? { routeDispatcher: options.routeDispatcher } : {}),
     ...(options.reviewTurnInterval ? { reviewTurnInterval: options.reviewTurnInterval } : {}),
     ...(options.now ? { now: options.now } : {}),

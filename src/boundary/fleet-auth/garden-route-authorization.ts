@@ -234,6 +234,12 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
         // read authority rather than minting a capability for the same act of
         // looking at what the firewall admitted.
         '/api/admin/custody/chain', '/api/admin/custody/sources',
+        // 33xah: the Blind Reviewer state projection is counts, config bounds
+        // and booleans about the reviewer ITSELF — no evidence, no digest, no
+        // finding. Looking at whether the passive reviewer is running is the
+        // same act of reading CogSec posture the custody and quarantine
+        // readers perform, so it shares that authority rather than minting one.
+        '/api/admin/cogsec/blind-review',
         '/api/admin/intake/drift-reviews', '/api/admin/intake/policy',
         '/api/admin/intake/quarantine', '/api/admin/intake/source-lists',
         '/api/admin/intake/drift-reviews/:id', '/api/admin/intake/quarantine/:id',

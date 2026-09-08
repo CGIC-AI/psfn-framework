@@ -2,10 +2,16 @@ import type {
   BackgroundWorkAutomataLifecyclePort,
 } from '../../core/agent/background-work/supervisor.js';
 import type {
+  BackgroundWorkGovernedClassRunner,
   BackgroundWorkPayload,
   ClaimedBackgroundWorkJob,
   StoredBackgroundWorkJob,
 } from '../../core/agent/background-work/types.js';
+import {
+  runGovernedAutomataClass,
+  type AutomataClassLifecycleRuntime,
+} from '../../faculties/automata/bus/class-lifecycle.js';
+import type { ProductionAutomataClassId } from '../../faculties/automata/registry-contract.js';
 import type { AutomataRunRecord } from '../../faculties/automata/registry-contract.js';
 import type {
   AutomataRunRegistry,
@@ -109,6 +115,43 @@ export function createBackgroundWorkAutomataLifecycle(
     async onFailed({ job, payload, reasonCode }): Promise<void> {
       if (payload.kind !== 'memory_extraction') return;
       await terminalizeMemoryExtractionRun(registry, job, payload, { status: 'failed', reasonCode });
+    },
+  };
+}
+
+const INTENTION_HOOKS_CLASS: ProductionAutomataClassId = 'background.intention_post_turn_hooks';
+const INTENTION_HOOKS_WORKER_ID = 'background-work:intention_post_turn_hooks';
+
+/**
+ * Bind one background-work class to the governed Bus lifecycle.
+ *
+ * Core owns the unchanged worker logic and names its own durable run; the class
+ * identity, Bus access, briefing, tool formation, terminal handoff, and
+ * exactly-once terminalization all stay here, shared with every other governed
+ * automata class.
+ */
+export function createIntentionPostTurnHooksAutomataRunner(
+  runtime: AutomataClassLifecycleRuntime,
+): BackgroundWorkGovernedClassRunner {
+  return {
+    run: async (binding, work) => {
+      await runGovernedAutomataClass({
+        runtime,
+        spec: {
+          automatonClass: INTENTION_HOOKS_CLASS,
+          runId: binding.runId,
+          workerId: INTENTION_HOOKS_WORKER_ID,
+          taskId: binding.taskId,
+          taskLabel: binding.taskLabel,
+          taskSummary: binding.taskSummary,
+          sessionIds: binding.sessionIds,
+        },
+        briefingQuery: binding.briefingQuery,
+        work: async () => {
+          const summary = await work();
+          return { value: undefined, ...(summary === undefined ? {} : { summary }) };
+        },
+      });
     },
   };
 }

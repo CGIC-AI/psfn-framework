@@ -136,6 +136,12 @@ import {
   AdminSubsystemHealthDataService,
   type EpisodicWatermarkLaneDefinition,
 } from './services/subsystem-health-service.js';
+import {
+  AdminIncidentTimelineDataService,
+} from './services/incident-timeline-service.js';
+import type {
+  IncidentStreamRead,
+} from '../../shared/observability/incident-alerts/investigator.js';
 import { createAdminToolConformanceService } from './services/tool-conformance-service.js';
 import type { ToolConformanceRunner } from '../../core/agent/tool-conformance/runner.js';
 import type { GatewaySystemDataWriterPort } from '../../boundary/gateway/system-data-writer.js';
@@ -255,6 +261,8 @@ export interface InProcessGardenAdminContractOptions {
    */
   resolveMemorySubjectAccessContext?: () => MemorySubjectAccessContext;
   episodicStore?: EpisodicStorePort | null;
+  /** Bounded read over the persisted health stream for the incident timeline. */
+  healthEventStreamRead?: IncidentStreamRead | null;
   sessionStore: SessionStore;
   letterService?: LetterService | null;
   doingMirrorService?: DoingMirrorService | null;
@@ -458,6 +466,15 @@ export function createInProcessGardenAdminContract(
       }
       : {}),
   });
+  // Correlated runtime incidents (7qeo1.24.6), rebuilt from the persisted
+  // health stream through the same projection the operator alert carried.
+  const incidents = options.healthEventStreamRead
+    ? new AdminIncidentTimelineDataService({
+      readStream: options.healthEventStreamRead,
+      config: () => configStore.loadScheduler().healthDetectors,
+      ...(options.config.companionId ? { companionId: options.config.companionId } : {}),
+    })
+    : null;
   const partnerAffectShadow = options.partnerAffectShadowStore
     ? new AdminPartnerAffectShadowDataService({
       store: options.partnerAffectShadowStore,
@@ -920,6 +937,7 @@ export function createInProcessGardenAdminContract(
     }),
     scheduler: schedulerService,
     subsystemHealth,
+    incidents,
     partnerAffectShadow,
     toolConformance,
     icpAutonomy,

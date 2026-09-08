@@ -39,6 +39,15 @@ export interface SkillReuseConfig {
    * quietness budget: raising it makes the loop rarer, never louder.
    */
   nudgeEveryNthTurn: number;
+  /**
+   * How much recorded POST-USE outcome evidence may move a candidate's
+   * ordering (0..1, psfn-framework-sap72). It never admits a candidate the
+   * relevance floor rejected and never removes one it accepted: it only orders
+   * skills that already qualify, so a skill whose past uses ended ambiguous
+   * yields to an equally relevant one that worked out. Zero disables the
+   * factor and restores pure lexical ordering.
+   */
+  outcomeEvidenceWeight: number;
 }
 
 export const DEFAULT_SKILL_REUSE_CONFIG: SkillReuseConfig = {
@@ -46,6 +55,7 @@ export const DEFAULT_SKILL_REUSE_CONFIG: SkillReuseConfig = {
   minRelevanceScore: 0.25,
   minToolCalls: 3,
   nudgeEveryNthTurn: 3,
+  outcomeEvidenceWeight: 0.25,
 };
 
 /**
@@ -131,6 +141,10 @@ function validateSkillReuseConfig(raw: unknown, sourcePath: string): SkillReuseC
       'reuse.nudgeEveryNthTurn',
       1,
       64,
+    ),
+    outcomeEvidenceWeight: normalizeUnitInterval(
+      raw.outcomeEvidenceWeight ?? DEFAULT_SKILL_REUSE_CONFIG.outcomeEvidenceWeight,
+      'reuse.outcomeEvidenceWeight',
     ),
   };
 }

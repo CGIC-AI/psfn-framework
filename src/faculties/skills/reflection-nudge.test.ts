@@ -168,6 +168,48 @@ describe('ReflectionNudgeTracker reuse loop', () => {
     expect(tracker.evaluate({ toolCalls: 5, usedThinkTool: false })).toBeNull();
   });
 
+  it('records post-use outcome evidence for every observed turn and ranks with it (sap72)', () => {
+    const recorded: boolean[] = [];
+    const alpha = ownedSkill({
+      name: 'release-alpha',
+      description: 'Steps for cutting and verifying a release build.',
+    });
+    const beta = ownedSkill({
+      name: 'release-beta',
+      description: 'Steps for cutting and verifying a release build.',
+    });
+    const evidenceTracker = new ReflectionNudgeTracker({
+      config: { nudgeEveryNthTurn: 1 },
+      resolveAdmittedSkills: () => [alpha, beta],
+      resolveOutcomeEvidence: () => new Map([['release-beta', {
+        name: 'release-beta',
+        demonstratedCount: 5,
+        ambiguousCount: 0,
+        lastOutcomeAt: null,
+      }]]),
+      recordPostUseOutcome: ({ demonstratedValue }) => { recorded.push(demonstratedValue); },
+    });
+
+    // A degraded turn raises no opportunity but its outcome is still recorded:
+    // evidence is not gated on the quietness budget.
+    expect(evidenceTracker.evaluate(complexTurn({
+      taskCue: 'cut and verify the release build',
+      outcomes: { ...createEmptyToolCallOutcomeCounts(), success: 1, partial_result: 1 },
+    }))).toBeNull();
+    expect(recorded).toEqual([false]);
+
+    // A clean turn records success and ranks the skill whose past uses worked
+    // out ahead of the equally relevant one with no history.
+    expect(evidenceTracker.evaluate(complexTurn({
+      taskCue: 'cut and verify the release build',
+    }))).toContain('release-beta');
+    expect(recorded).toEqual([false, true]);
+
+    // A turn whose census was never observed records nothing at all.
+    expect(evidenceTracker.evaluate({ toolCalls: 5, usedThinkTool: false })).toBeNull();
+    expect(recorded).toEqual([false, true]);
+  });
+
   it('offers the same skill at most once, so the loop never nags', () => {
     const tracker = trackerWith([RELEASE_SKILL]);
     const cue = { taskCue: 'walk through the release checklist and verify the release build' };

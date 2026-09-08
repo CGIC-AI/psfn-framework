@@ -6,6 +6,10 @@ import type { TextContent } from '@earendil-works/pi-ai';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { WorkspaceFilesystemOps } from './local-ops.js';
 import { createFsTool } from './tools.js';
+import {
+  classifyExecutedToolCallOutcome,
+  PARTIAL_TOOL_RESULT_DETAILS_KEY,
+} from '../../../shared/contracts/tool-call-outcome.js';
 
 function resultText(result: AgentToolResult<any>): string {
   return result.content
@@ -98,6 +102,42 @@ describe('fs tool', () => {
       expect.objectContaining({ path: 'docs/notes.txt', line: 1, column: 1 }),
       expect.objectContaining({ path: 'docs/notes.txt', line: 3, column: 1 }),
     ]);
+  });
+
+  it('declares a truncated read as a partial result the scheduler can classify (sap72)', async () => {
+    writeFileSync(join(workspace, 'docs', 'long.txt'), 'x'.repeat(25_000), 'utf-8');
+    const tool = createFsTool(ops, { defaultMaxBytes: 20_000 });
+
+    const truncated = await tool.execute('read-truncated', {
+      action: 'read',
+      path: 'docs/long.txt',
+    });
+    expect(JSON.parse(resultText(truncated)).truncated).toBe(true);
+    expect(truncated.details).toMatchObject({ [PARTIAL_TOOL_RESULT_DETAILS_KEY]: true });
+    // The turn census sees degraded evidence, not a success and not an error.
+    expect(classifyExecutedToolCallOutcome({ details: truncated.details })).toBe('partial_result');
+
+    // A complete read declares nothing: it is an ordinary success.
+    const whole = await tool.execute('read-whole', {
+      action: 'read',
+      path: 'docs/notes.txt',
+    });
+    expect(JSON.parse(resultText(whole)).truncated).toBe(false);
+    expect(whole.details).toEqual({});
+    expect(classifyExecutedToolCallOutcome({ details: whole.details })).toBe('success');
+  });
+
+  it('declares a hit-limited search as a partial result (sap72)', async () => {
+    writeFileSync(join(workspace, 'docs', 'many.txt'), 'alpha\n'.repeat(20), 'utf-8');
+    const tool = createFsTool(ops);
+
+    const capped = await tool.execute('search-capped', {
+      action: 'search',
+      query: 'alpha',
+      max_matches: 2,
+    });
+    expect(JSON.parse(resultText(capped)).hit_limit).toBe(true);
+    expect(classifyExecutedToolCallOutcome({ details: capped.details })).toBe('partial_result');
   });
 
   it('advertises the shared hard read cap and the provenance-preserving large-document path', () => {

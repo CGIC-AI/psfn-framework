@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LLMProviderPort } from '../agent/contracts.js';
 import { ParentTurnContinuationBudgetExceededError } from '../agent/turn-limits.js';
-import { EventBus } from '../../shared/event-bus.js';
+import { EventBus, type EventMap } from '../../shared/event-bus.js';
 import {
   resolveReflectionDailyJournalsDir,
   resolveReflectionMetacognitionJournalPath,
@@ -175,6 +175,52 @@ describe('createReflectionTemplateRuntime failure resilience', () => {
       expect(dailyEntries[0]?.prompt).toContain(promptFragment);
     },
   );
+
+  it('publishes the degraded-evidence cause as a typed bus event (sap72)', async () => {
+    tempDir = createDeliberationReflectionDataDir(
+      'reflection-template-runtime-degraded-event-',
+      'daily-review',
+    );
+    const eventBus = new EventBus();
+    const degraded: EventMap['reflection.evidence.degraded'][] = [];
+    eventBus.on('reflection.evidence.degraded', payload => { degraded.push(payload); });
+    const runtime = createReflectionTemplateRuntime({
+      scheduler: createScheduler(),
+      agentLoop: {
+        handleMessage: vi.fn<ReflectionAgent['handleMessage']>(async () => ({
+          content: 'Evidence note: one optional lookup came back partial.',
+          metadata: {
+            toolCallOutcomes: {
+              ...createEmptyToolCallOutcomeCounts(),
+              success: 1,
+              partial_result: 1,
+            },
+          },
+        })),
+        getCurrentAuthoritativeSystemPrompt: authoritativeSystemPrompt,
+      },
+      dataDir: tempDir,
+      runtimeOptions: { llmProvider: createSuccessfulDeliberationProvider(), eventBus },
+    });
+
+    await runtime.runTemplateNow('daily-review', { deferIfBusy: false });
+
+    expect(degraded).toHaveLength(1);
+    expect(degraded[0]).toMatchObject({
+      templateId: 'daily-review',
+      executionSource: 'manual',
+      cause: 'partial_result',
+    });
+    // Content-free: the event names the cause, never the withheld evidence.
+    expect(Object.keys(degraded[0]!).sort()).toEqual([
+      'cause',
+      'channelId',
+      'executionSource',
+      'templateId',
+      'templateName',
+      'timestamp',
+    ]);
+  });
 
   it('leaves a clean grounding run undegraded and unflagged', async () => {
     tempDir = createDailyReflectionDataDir('reflection-template-runtime-clean-grounding-');

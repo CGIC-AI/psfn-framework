@@ -116,6 +116,12 @@ const SKILL_REUSE_TASK_CUE_MAX_CHARS = 600;
 import { assembleTurnPrompt } from './turn-execution/prompt-assembly.js';
 import { computePreTurnState, prepareTurnIdentityState } from './turn-execution/pre-turn-state.js';
 import {
+  stageCurrentTurnPerception,
+  turnRequiresPerceptionStaging,
+  type StagedTurnPerception,
+} from './turn-execution/perception-staging.js';
+import { resolveVisionTurnDeadlineAt } from './turn-execution/vision-turn-deadline.js';
+import {
   collectTurnResponseAttachments,
   schedulePostTurnWork,
 } from './turn-execution/post-turn-scheduling.js';
@@ -979,6 +985,32 @@ export async function handleMessageForTurn(
     }
     runtime.ensureModel(message);
     responseModel = runtime.agent.state.model.id;
+    // lpxg3.1: stage the turn's perception BEFORE retrieval so a meaningful
+    // image can cue the recent episode, relationship, biography or wiki entry
+    // needed to understand it in the SAME response. Image turns only — a text
+    // turn never enters this path and its user content is still built inside
+    // `invokeAgentForTurn`. The staged build is handed straight to the
+    // invocation, so the vision model is called exactly once per turn, and the
+    // one 120s vision budget is anchored here instead of at prompt start.
+    const stagesPerception = turnRequiresPerceptionStaging(message);
+    const visionTurnDeadlineAt = resolveVisionTurnDeadlineAt({
+      hasVisionInputs: stagesPerception,
+      anchorMs: Date.now(),
+    });
+    let stagedPerception: StagedTurnPerception | null = null;
+    if (stagesPerception) {
+      const perceptionStagingStartedAt = performance.now();
+      stagedPerception = await stageCurrentTurnPerception({
+        runtime,
+        message,
+        turnId,
+        visionTurnDeadlineAt,
+        turnCorrelationBase,
+      });
+      observability.emitPerformanceStage('perception_staging', {
+        durationMs: Math.max(0, performance.now() - perceptionStagingStartedAt),
+      });
+    }
     const contextAssemblyStartedAt = performance.now();
     const preTurnState = await computePreTurnState({
       runtime,
@@ -1002,6 +1034,7 @@ export async function handleMessageForTurn(
       temporalRetrievalMode,
       viewerRequestContext,
       turnCorrelationBase,
+      ...(stagedPerception ? { perceptionCue: stagedPerception.cue } : {}),
       observability,
     });
     observability.emitPerformanceStage('context_assembly', {
@@ -1136,6 +1169,8 @@ export async function handleMessageForTurn(
           templateVariables: promptAssembly.templateVariables,
           speakerRole,
           mutableState: invocationState,
+          stagedPerception,
+          visionTurnDeadlineAt,
           observability,
         });
       } finally {

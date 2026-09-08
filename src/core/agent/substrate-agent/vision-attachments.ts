@@ -2,7 +2,7 @@ import type { ImageContent, UserMessage } from '@earendil-works/pi-ai';
 import type { Attachment, SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import type { LLMProviderPort } from '../contracts.js';
 import type { ToolWiringValidationMode } from '../tool-wiring-validator.js';
-import type { ImageVisionReviewer } from '../../../primitives/images/types.js';
+import type { ImageEmbodimentConsistency, ImageVisionReviewer } from '../../../primitives/images/types.js';
 import type { CurrentTurnVisionReviewContext } from '../../../primitives/images/request-context.js';
 import { VISION_IMAGE_MAX_BYTES } from '../../../primitives/images/vision-policy.js';
 import { inferImageMimeTypeFromAttachmentCandidate } from '../substrate-agent-helpers.js';
@@ -10,6 +10,7 @@ import { sanitizeDiagnosticText } from '../../../shared/diagnostics/redaction.js
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { chunk } from '../../../shared/utils/arrays.js';
 import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../../cogsec/intake-firewall-notice-templates.js';
+import type { TurnPerceptionFacts, TurnPerceptionStatus } from './perception-cue.js';
 
 interface VisionAttachmentFetchCapabilities {
   webFetchBinary?: (
@@ -97,6 +98,11 @@ export interface TurnUserContentBuildResult {
   content: UserMessage['content'];
   currentTurnVisionReview?: CurrentTurnVisionReviewContext;
   persistedUserContent?: string;
+  /**
+   * lpxg3.1: structural facts about what this turn's perception actually did,
+   * emitted on EVERY return path so the retrieval cue is never silently absent.
+   */
+  perception: TurnPerceptionFacts;
 }
 
 /** Max images per single vision-model call. */
@@ -215,6 +221,33 @@ export function buildPersistedVisionUnavailableUserContent(message: SubstrateMes
   }));
 }
 
+/**
+ * lpxg3.1: one builder for the perception facts every `buildTurnUserContent`
+ * return path must carry. Keeping it in one place is what makes "a cue is never
+ * silently absent" checkable rather than aspirational.
+ */
+function buildTurnPerceptionFacts(input: {
+  originalImageCount: number;
+  withheldCount: number;
+  enforcing: boolean;
+  semanticText: string;
+  status: TurnPerceptionStatus;
+  visionSummary?: string | null;
+  reviewedImageCount?: number;
+  embodiment?: ImageEmbodimentConsistency | null;
+}): TurnPerceptionFacts {
+  return {
+    imageCount: input.originalImageCount,
+    withheldCount: input.withheldCount,
+    reviewedImageCount: input.reviewedImageCount ?? 0,
+    semanticText: input.semanticText,
+    visionSummary: input.visionSummary ?? null,
+    status: input.status,
+    embodiment: input.embodiment ?? null,
+    enforcing: input.enforcing,
+  };
+}
+
 export async function buildTurnUserContent(input: {
   message: SubstrateMessage;
   llmClient: LLMProviderPort;
@@ -250,6 +283,9 @@ export async function buildTurnUserContent(input: {
   });
   const message = intake.message;
   const intakeNotes: string[] = intake.noticeText ? [intake.noticeText] : [];
+  // Counted on the ORIGINAL message: intake screening removes withheld
+  // attachments, and the cue must still report what the turn arrived with.
+  const originalImageCount = countVisionTurnImageInputs(input.message);
 
   const visionCollection = collectVisionAttachmentUrlsDetailed(message);
   const visionUrls = visionCollection.urls;
@@ -275,6 +311,13 @@ export async function buildTurnUserContent(input: {
         message.content,
         intake.noticeText ?? INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldImage,
       ),
+      perception: buildTurnPerceptionFacts({
+        originalImageCount,
+        withheldCount: intake.withheldCount,
+        enforcing: intake.enforcing,
+        semanticText,
+        status: 'withheld',
+      }),
     };
   }
 
@@ -321,6 +364,16 @@ export async function buildTurnUserContent(input: {
           question: review.question,
           summary: review.summary,
         },
+        perception: buildTurnPerceptionFacts({
+          originalImageCount,
+          withheldCount: intake.withheldCount,
+          enforcing: intake.enforcing,
+          semanticText,
+          status: review.failureNotes.length > 0 ? 'partially_reviewed' : 'reviewed',
+          visionSummary: review.summary,
+          reviewedImageCount: review.imageCount,
+          embodiment: review.embodiment ?? null,
+        }),
       };
     } catch (error) {
       const errorMessage = sanitizeDiagnosticText(toErrorMessage(error));
@@ -336,6 +389,13 @@ export async function buildTurnUserContent(input: {
           extraNotes: intakeNotes,
         }),
         persistedUserContent: buildPersistedVisionUnavailableUserContent(message),
+        perception: buildTurnPerceptionFacts({
+          originalImageCount,
+          withheldCount: intake.withheldCount,
+          enforcing: intake.enforcing,
+          semanticText,
+          status: 'failed',
+        }),
       };
     }
   }
@@ -351,20 +411,34 @@ export async function buildTurnUserContent(input: {
 
   if (resolved.blocks.length === 0) {
     if (resolved.failures.length === 0) {
+      const unreviewedPerception = buildTurnPerceptionFacts({
+        originalImageCount,
+        withheldCount: intake.withheldCount,
+        enforcing: intake.enforcing,
+        semanticText,
+        status: 'not_reviewed',
+      });
       if (intakeNotes.length === 0) {
-        return { content: message.content };
+        return { content: message.content, perception: unreviewedPerception };
       }
       const textParts = [...intakeNotes];
       if (message.content.trim().length > 0) {
         textParts.push(message.content);
       }
-      return { content: textParts.join('\n\n') };
+      return { content: textParts.join('\n\n'), perception: unreviewedPerception };
     }
     return {
       content: buildUnresolvedVisionTurnText({
         semanticText,
         failures: resolved.failures,
         extraNotes: intakeNotes,
+      }),
+      perception: buildTurnPerceptionFacts({
+        originalImageCount,
+        withheldCount: intake.withheldCount,
+        enforcing: intake.enforcing,
+        semanticText,
+        status: 'failed',
       }),
     };
   }
@@ -401,6 +475,17 @@ export async function buildTurnUserContent(input: {
       { type: 'text', text: textParts.join('\n\n') },
       ...resolved.blocks,
     ],
+    // The model inspects the pixels directly on this path, so there is no
+    // separate reviewer summary to cue retrieval with — only the Participant's
+    // own words. Reported honestly rather than fabricating a description.
+    perception: buildTurnPerceptionFacts({
+      originalImageCount,
+      withheldCount: intake.withheldCount,
+      enforcing: intake.enforcing,
+      semanticText,
+      status: 'embedded',
+      reviewedImageCount: resolved.blocks.length,
+    }),
   };
 }
 
@@ -607,6 +692,12 @@ interface ChunkedVisionReviewResult {
   model?: string;
   /** Explicit notes for chunks whose review failed — never silently dropped. */
   failureNotes: string[];
+  /**
+   * Active-reference embodiment read from the first chunk that produced one
+   * (lpxg3.1). Present only when the reviewer was asked to compare against the
+   * active reference; the current-turn path deliberately does not ask.
+   */
+  embodiment?: ImageEmbodimentConsistency;
 }
 
 /**
@@ -635,6 +726,7 @@ async function analyzeVisionUrlsInChunks(input: {
   const failureNotes: string[] = [];
   let reviewedImageCount = 0;
   let model: string | undefined;
+  let embodiment: ImageEmbodimentConsistency | undefined;
   settled.forEach((result, index) => {
     const imageChunk = chunks[index];
     if (imageChunk === undefined) return;
@@ -651,6 +743,9 @@ async function analyzeVisionUrlsInChunks(input: {
         : imageChunk.length;
       if (!model && typeof result.value.model === 'string' && result.value.model.trim().length > 0) {
         model = result.value.model.trim();
+      }
+      if (!embodiment && result.value.embodiment) {
+        embodiment = result.value.embodiment;
       }
       return;
     }
@@ -677,11 +772,12 @@ async function analyzeVisionUrlsInChunks(input: {
     reviewedUrls,
     imageCount: reviewedImageCount || reviewedUrls.length,
     ...(model ? { model } : {}),
+    ...(embodiment ? { embodiment } : {}),
     failureNotes,
   };
 }
 
-function countVisionTurnImageInputs(message?: SubstrateMessage): number {
+export function countVisionTurnImageInputs(message?: SubstrateMessage): number {
   return message?.attachments
     ?.filter((attachment) => resolveAttachmentImageContentType(attachment) !== null)
     .length ?? 0;

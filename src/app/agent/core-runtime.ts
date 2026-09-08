@@ -45,6 +45,7 @@ import { registerContactRuntime } from '../../core/contacts/runtime-wiring.js';
 import type { ContactRuntimeOptions } from '../../core/contacts/runtime-wiring.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import { wireSkillsRuntime } from '../../faculties/skills/runtime-wiring.js';
+import type { WikiAdmissionGate } from '../../faculties/wiki/admission.js';
 import { wireWikiRuntime } from '../../faculties/wiki/runtime-wiring.js';
 import type { PersonalProjectLibrary } from '../../faculties/wiki/personal-projects.js';
 import type { SharedWorldWikiCaretakerService } from '../../faculties/wiki/shared-world-caretaker.js';
@@ -325,6 +326,12 @@ export interface AgentCoreRuntime {
   icpTurnFenceReader?: IcpTurnFenceReader;
   toolConformanceRunner: ToolConformanceRunner;
   sharedWorldWikiCaretaker: SharedWorldWikiCaretakerService | null;
+  /**
+   * The wiki CogSec admission gate (psfn-framework-1fjvm.2), so background
+   * writers that hold their own WikiStore — the sleeptime synthesis pass —
+   * admit what they generate through the same gate as every other writer.
+   */
+  wikiAdmissionGate: WikiAdmissionGate | null;
   letterService: LetterService;
   doingMirrorService: DoingMirrorService;
   closeWikiRuntime: () => Promise<void>;
@@ -840,6 +847,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       ? { defaultReadMaxBytes: config.fsReadMaxBytes }
       : {}),
   });
+  const wikiAdmission = createArtifactAdmission('wiki_document');
   const wikiRuntime = await wireWikiRuntime(agentLoop, pathSnapshot.workspaceRoot, {
     databaseUrl: postgresDatabaseUrl,
     ...(config.postgresSchema?.trim() ? { postgresSchema: config.postgresSchema.trim() } : {}),
@@ -850,6 +858,10 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     getConfig: () => config,
     getMultiCompanion: () => config.multiCompanion === true,
     intake: selfAuthoredMutationIntake,
+    // psfn-framework-1fjvm.2: generated, imported, and restored wiki documents
+    // are not served into prompts until their exact canonical bytes are
+    // admitted.
+    ...(wikiAdmission ? { admission: wikiAdmission } : {}),
     ...(config.companionId ? { companionId: config.companionId } : {}),
     systemDataDir: pathSnapshot.systemDataDir,
     systemDataWriter: gateway,
@@ -1160,6 +1172,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       : {}),
     toolConformanceRunner,
     sharedWorldWikiCaretaker: wikiRuntime.sharedWorldCaretaker,
+    wikiAdmissionGate: wikiRuntime.admissionGate,
     letterService,
     doingMirrorService,
     closeWikiRuntime: wikiRuntime.close,

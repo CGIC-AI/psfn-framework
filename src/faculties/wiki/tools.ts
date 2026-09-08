@@ -22,6 +22,7 @@ import {
   isReservedManagedWikiWrite,
 } from './personal-projects.js';
 import { normalizeWikiDocumentId } from './store.js';
+import type { WikiAdmissionGate, WikiDocumentAdmission } from './admission.js';
 import {
   MAX_WISH_CONTEXT_CHARS,
   MAX_WISH_TEXT_CHARS,
@@ -101,6 +102,13 @@ export interface WikiToolDeps {
   personalProjects?: PersonalProjectLibrary;
   /** Existing personal-wiki storage interpreted as companion-authored wishes. */
   personalWishlist?: PersonalWishlist;
+  /**
+   * Content-addressed CogSec admission for wiki documents
+   * (psfn-framework-1fjvm.2). Wired, no document body, summary, or preview
+   * leaves this tool until its exact canonical bytes are admitted. Absent, the
+   * tool behaves exactly as before.
+   */
+  admissionGate?: WikiAdmissionGate;
 }
 
 interface WikiToolParams {
@@ -242,8 +250,29 @@ function isReservedManagedWikiParams(params: WikiToolParams): boolean {
   return isReservedManagedWikiWrite({ documentId: resolvedDocId, tags: params.tags });
 }
 
+/**
+ * The withheld stand-in for one wiki document (psfn-framework-1fjvm.2). It
+ * carries the document's identity and the typed hold reason so the operator and
+ * the companion can both see WHAT is being withheld and why, and none of the
+ * unadmitted text: no body, no summary, no preview.
+ */
+function withheldWikiDocument(
+  id: string,
+  title: string,
+  admission: WikiDocumentAdmission,
+): Record<string, unknown> {
+  return {
+    id,
+    title,
+    withheld: true,
+    admission: { state: admission.state, reason: admission.detail },
+    notice: INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldContent,
+  };
+}
+
 export function createWikiTool(store: WikiStorePort, deps: WikiToolDeps): SubstrateAgentTool {
   const semanticSearch = deps.semanticSearch;
+  const admissionGate = deps.admissionGate;
   const tool: SubstrateAgentTool = {
     name: 'wiki',
     label: 'wiki',
@@ -348,17 +377,45 @@ export function createWikiTool(store: WikiStorePort, deps: WikiToolDeps): Substr
       try {
         action = normalizeAction(params);
         switch (action) {
-          case 'list':
+          case 'list': {
+            const entries = store.list();
+            // Listing carries a body preview (or the summary), so it is a
+            // serving path and is gated like every other one. The recorded
+            // verdict is consulted rather than re-admitting N documents:
+            // anything not proved admitted for its CURRENT bytes is withheld.
+            const documents = admissionGate
+              ? entries.map((entry) => {
+                const document = store.get(entry.id);
+                const admission = document
+                  ? admissionGate.status(document)
+                  : { state: 'unknown' as const, detail: 'document is unreadable' };
+                return admission.state === 'admitted'
+                  ? entry
+                  : withheldWikiDocument(entry.id, entry.title, admission);
+              })
+              : entries;
             return textResult(JSON.stringify({
               action: 'list',
               roots: store.getRootInfo(),
-              documents: store.list(),
+              documents,
               boundary: 'Wiki/reference knowledge is separate from L0/L0.1/L2 memory.',
             }, null, 2));
+          }
           case 'read': {
             const document = store.get(requireString(params.id, 'id'));
             if (!document) {
               return textResultWithError(`wiki document not found: ${params.id}`, true);
+            }
+            // A single read re-admits live rather than trusting the recorded
+            // verdict: this is the seam that hands a whole body to the model,
+            // and for unchanged bytes it costs one receipt lookup and no scan.
+            const admission = admissionGate ? await admissionGate.admit(document) : null;
+            if (admission && admission.state !== 'admitted') {
+              return textResult(JSON.stringify({
+                action: 'read',
+                document: withheldWikiDocument(document.id, document.title, admission),
+                boundary: 'This is authored/imported reference knowledge, not transcript memory.',
+              }, null, 2));
             }
             return textResult(JSON.stringify({
               action: 'read',
@@ -366,15 +423,26 @@ export function createWikiTool(store: WikiStorePort, deps: WikiToolDeps): Substr
               boundary: 'This is authored/imported reference knowledge, not transcript memory.',
             }, null, 2));
           }
-          case 'search':
+          case 'search': {
+            const found = store.search({
+              query: requireString(params.query, 'query'),
+              ...(normalizeLimit(params.limit) ? { limit: normalizeLimit(params.limit) } : {}),
+            });
+            // Every match carries the matching body line as a preview.
+            const matches = admissionGate
+              ? found.matches.filter((match) => {
+                const document = store.get(match.id);
+                return document !== null && admissionGate.status(document).state === 'admitted';
+              })
+              : found.matches;
             return textResult(JSON.stringify({
               action: 'search',
-              ...store.search({
-                query: requireString(params.query, 'query'),
-                ...(normalizeLimit(params.limit) ? { limit: normalizeLimit(params.limit) } : {}),
-              }),
+              ...found,
+              count: matches.length,
+              matches,
               boundary: 'Search results are wiki/reference knowledge, not lived memory.',
             }, null, 2));
+          }
           case 'semantic_search': {
             const query = requireString(params.query, 'query');
             if (!semanticSearch) {

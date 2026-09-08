@@ -1249,7 +1249,14 @@ async function main(): Promise<void> {
   // non-private world knowledge into the wiki after episodes/memories settle.
   const sleeptimeWikiPass = new SleeptimeWikiPass({
     llmProvider,
+    // This pass holds its own store handle, so it carries no projection hook —
+    // and therefore no admission of its own. The gate is passed explicitly
+    // (psfn-framework-1fjvm.2) so model-generated synthesis is admitted before
+    // it counts as a written entry.
     wikiStore: new WikiStore(pathSnapshot.workspaceRoot),
+    ...(coreRuntime.wikiAdmissionGate
+      ? { admissionGate: coreRuntime.wikiAdmissionGate }
+      : {}),
     episodicStore,
     memoryStore,
     config: schedulerConfig.wikiPass,

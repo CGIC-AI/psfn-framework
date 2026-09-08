@@ -116,6 +116,18 @@ export const PARTICIPATION_SUPPRESSION_REASONS = [
   'lease_low_signal',
   /** Another observer claimed this message first (restart/redelivery race). */
   'lease_claim_lost',
+  // Channel-neutral room signal (jp36.5.6). All deterministic, pre-model, and
+  // content-free; each one is a refusal, never a route to participation.
+  /** The connector never asserted a verified group room. */
+  'room_unverified',
+  /** Untrusted/unknown room member: direct address only (owner policy). */
+  'untrusted_room_member',
+  /** The room is moving faster than contextual participation is allowed in. */
+  'room_velocity',
+  /** Reviewed coarse topics gave no relevance for this companion. */
+  'topic_mismatch',
+  /** Ambiguity remained and no shared bounded classifier could resolve it. */
+  'room_signal_ambiguous',
 ] as const;
 
 export type ParticipationSuppressionReason =

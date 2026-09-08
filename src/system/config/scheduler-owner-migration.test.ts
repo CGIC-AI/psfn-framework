@@ -24,7 +24,10 @@ import {
 import { migrateLegacySchedulerOwner } from './scheduler-owner-migration.js';
 import { DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG } from './icp-autonomy-scheduler-config.js';
 import { DEFAULT_INTENTION_FOLLOW_UP_SCHEDULER_CONFIG } from './scheduler-config/intention-follow-up.js';
-import { createDefaultRoomParticipationLeaseSettings } from './participation-config.js';
+import {
+  createDefaultRoomParticipationLeaseSettings,
+  createDefaultRoomSignalSettings,
+} from './participation-config.js';
 import { DEFAULT_HEALTH_DETECTORS_CONFIG } from './scheduler-config/health-detectors.js';
 
 const fixturePath = join(
@@ -262,6 +265,40 @@ describe('migrateLegacySchedulerOwner', () => {
     });
     expect(readFileSync(filePath, 'utf8')).toBe(bytesAfterApply);
     expect(statSync(filePath).ino).toBe(inodeAfterApply);
+  });
+
+  it('seeds the missing room-signal admission policy into an existing socialAutonomy block', () => {
+    const { dataDir, filePath } = prepareOwner((owner) => {
+      makePreCaretakerCanonical(owner);
+      owner.socialAutonomy = {
+        passiveNameCandidate: { enabled: true },
+        appraiser: { enabled: true },
+      };
+    });
+
+    expect(migrateLegacySchedulerOwner({ dataDir })).toMatchObject({
+      mode: 'dry-run',
+      status: 'planned',
+      addedPaths: expect.arrayContaining(['socialAutonomy.roomSignal']),
+    });
+    expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
+      mode: 'apply',
+      status: 'applied',
+      addedPaths: expect.arrayContaining(['socialAutonomy.roomSignal']),
+    });
+
+    // The seeded posture is the conservative public default: signal off and no
+    // contextual room role admitted, so untrusted members stay direct-address-only.
+    const seeded = loadSchedulerConfig(dataDir).socialAutonomy.roomSignal;
+    expect(seeded).toEqual(createDefaultRoomSignalSettings());
+    expect(seeded.enabled).toBe(false);
+    expect(seeded.classifier.enabled).toBe(false);
+    expect(seeded.contextualEligibleRoomRoles).toEqual([]);
+
+    const bytes = readFileSync(filePath, 'utf8');
+    expect(migrateLegacySchedulerOwner({ dataDir, apply: true }))
+      .toMatchObject({ status: 'not_needed' });
+    expect(readFileSync(filePath, 'utf8')).toBe(bytes);
   });
 
   it('seeds the missing room-participation lease posture into an existing socialAutonomy block', () => {

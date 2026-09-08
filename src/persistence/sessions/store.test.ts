@@ -1292,6 +1292,77 @@ describe('SessionStore', () => {
     expect(await collectRecoverableRecords(scanStore, [channelId])).toEqual([]);
   });
 
+  it('keeps the boot-pinned turn-tombstone baseline through ordinary list traffic', async () => {
+    const channelId = 'api:tombstone-baseline-pin';
+    const redactedTurnId = createTurnId(1_700_000_050_000);
+    const visibleTurnId = createTurnId(1_700_000_050_500);
+    const writer = new SessionStore(dir);
+    writer.append({
+      channelId,
+      role: 'user',
+      content: 'must stay redacted',
+      timestamp: 1_700_000_050_000,
+      metadata: buildSessionMetadataWithTurn(undefined, {
+        turnId: redactedTurnId,
+        requestId: 'req-tombstone-baseline-redacted',
+        role: 'user',
+      }),
+    });
+    writer.append({
+      channelId,
+      role: 'assistant',
+      content: 'visible reply',
+      timestamp: 1_700_000_050_500,
+      metadata: buildSessionMetadataWithTurn(undefined, {
+        turnId: visibleTurnId,
+        requestId: 'req-tombstone-baseline-visible',
+        role: 'assistant',
+      }),
+    });
+    await writer.redactTurn(channelId, redactedTurnId, {
+      actor: 'admin:test',
+      reason: 'privacy request',
+      timestamp: 1_700_000_050_900,
+    });
+
+    // A fresh process pins the floor the persisted index carried at startup.
+    const booted = new SessionStore(dir);
+
+    // Tamper after boot: a restored/rebuilt archive that no longer carries the
+    // redaction action, plus an unsigned index shrunk to agree with it.
+    const journalPath = findSessionJournalPath(dir, 'tombstone-baseline-pin');
+    const survivingRows = readFileSync(journalPath, 'utf8')
+      .split('\n')
+      .filter(line => line.trim().length > 0)
+      .filter(line => (JSON.parse(line) as { type?: string }).type !== 'tombstone');
+    writeFileSync(journalPath, `${survivingRows.join('\n')}\n`);
+    const indexPath = join(dir, '_channel_index.json');
+    const indexPayload = JSON.parse(readFileSync(indexPath, 'utf8')) as {
+      channels: Record<string, {
+        activeTurnTombstoneCount?: number;
+        activeTurnTombstoneIds?: string[];
+      }>;
+    };
+    indexPayload.channels[channelId]!.activeTurnTombstoneCount = 0;
+    indexPayload.channels[channelId]!.activeTurnTombstoneIds = [];
+    writeFileSync(indexPath, JSON.stringify(indexPayload));
+
+    // Every ordinary read that re-primes the index from disk: none of them may
+    // lower the floor captured at construction.
+    booted.listChannels();
+    booted.listSessionsByRecentActivity();
+    booted.getUncleanShutdownChannels();
+
+    expect(booted.getRecent(channelId, 10).map(entry => entry.content))
+      .toEqual(['visible reply']);
+
+    // The floor survives repeated list traffic, not just the first pass.
+    booted.listChannels();
+    expect(booted.getRecent(channelId, 10).map(entry => entry.content))
+      .toEqual(['visible reply']);
+  });
+
+
   it('skips only owners with malformed recovery authority and retries them next pass', async () => {
     const gapChannel = 'api:recovery-gapped-generation';
     const gapTurnId = createTurnId(1_700_000_039_000);

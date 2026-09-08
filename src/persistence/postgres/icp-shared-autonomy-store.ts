@@ -6,6 +6,7 @@ import {
   IcpOutstandingInvitationConflictError,
   IcpPermitRevocationConflictError,
   type IcpAutonomyInvalidationFence,
+  type IcpLifecycleAdmissionResult,
   type IcpPermitConsumptionInput,
   type IcpPermitConsumptionResult,
   type IcpSharedAutonomyStorePort,
@@ -131,6 +132,8 @@ interface InvalidationFenceRow extends QueryResultRow {
   generation: string | number;
   invalidated_at_ms: string | number | null;
   last_reason_code: string | null;
+  /** psfn-framework-h248l.9: the durable, non-expiring lifecycle admission bit. */
+  lifecycle_fenced: boolean;
 }
 
 interface EpisodeDyadRow extends QueryResultRow {
@@ -156,7 +159,7 @@ const PERMIT_COLUMNS = `
   expires_at_ms, status, consumed_at_ms, revoked_at_ms, reason_code, revision
 `;
 const INVALIDATION_FENCE_COLUMNS = `
-  companion_id, generation, invalidated_at_ms, last_reason_code
+  companion_id, generation, invalidated_at_ms, last_reason_code, lifecycle_fenced
 `;
 const DYAD_DELIVERY_COLUMNS = `
   delivery_id, dyad_id, conversation_id, sender_companion_id,
@@ -613,6 +616,14 @@ async function lockInvalidationFence(
     FOR UPDATE
   `, [ids]);
   if (result.rows.length !== 2) throw new Error('ICP invalidation fence is missing a companion row');
+  // psfn-framework-h248l.9: the non-expiring lifecycle admission bit is read
+  // under the SAME row lock as the generation, and BEFORE the generation
+  // comparison. Generation freshness proves only that a view is current; it
+  // proves nothing about membership, so a caller that captured the fence a
+  // microsecond ago is still refused while a participant is lifecycle-fenced.
+  if (result.rows.some(row => row.lifecycle_fenced === true)) {
+    return 'unknown_participant';
+  }
   const companionReason = fenceConflictReason(expected, result.rows);
   if (companionReason || !enforceDyadLifecycle) return companionReason;
   const pair = [firstCompanionId, secondCompanionId].sort();
@@ -658,6 +669,59 @@ async function invalidateCompanionWithClient(
     RETURNING ${PERMIT_COLUMNS}
   `, [companionId, revokedAtMs, reasonCode]);
   return permitResult.rows.map(mapPermit);
+}
+
+/**
+ * The lifecycle admission transition, linearized on the companion's existing
+ * fence row lock (psfn-framework-h248l.9).
+ *
+ * Insert-if-missing mirrors the fleet sweep below: a companion that never held
+ * a row can still be fenced ("denied before first admission"), and the
+ * reconciler never has to care whether the row exists.
+ *
+ * Idempotent by construction: when the bit already holds the requested value
+ * this returns without advancing the generation or touching a permit, so
+ * "advance exactly once" means once per real transition, not once per call.
+ */
+async function setLifecycleAdmissionWithClient(
+  client: PoolClient,
+  companionId: string,
+  lifecycleFenced: boolean,
+  nowMs: number,
+  reasonCode: IcpAutonomyReasonCode,
+): Promise<{ transitioned: boolean; revokedPermits: IcpInitiationPermit[] }> {
+  await client.query(`
+    INSERT INTO icp_autonomy_invalidation_fences (companion_id, generation)
+    VALUES ($1, 0)
+    ON CONFLICT (companion_id) DO NOTHING
+  `, [companionId]);
+  const locked = await client.query<InvalidationFenceRow>(`
+    SELECT ${INVALIDATION_FENCE_COLUMNS}
+    FROM icp_autonomy_invalidation_fences
+    WHERE companion_id = $1
+    FOR UPDATE
+  `, [companionId]);
+  const current = locked.rows.at(0);
+  if (!current) throw new Error(`ICP invalidation fence missing companion ${companionId}`);
+  if ((current.lifecycle_fenced === true) === lifecycleFenced) {
+    return { transitioned: false, revokedPermits: [] };
+  }
+  // Same transaction, same lock: the generation advance, the durable evidence,
+  // the revocation of every outstanding permit, and the bit itself either all
+  // land or none do. The generation moves FIRST so the row never transiently
+  // violates the fenced-implies-evidence CHECK (it is not deferrable).
+  const revokedPermits = await invalidateCompanionWithClient(
+    client,
+    companionId,
+    nowMs,
+    reasonCode,
+  );
+  await client.query(`
+    UPDATE icp_autonomy_invalidation_fences
+    SET lifecycle_fenced = $2
+    WHERE companion_id = $1
+  `, [companionId, lifecycleFenced]);
+  return { transitioned: true, revokedPermits };
 }
 
 async function revokePairPermitsWithClient(
@@ -1641,27 +1705,23 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
         ORDER BY companion_id
       `, [[...knownCompanionIds]]);
       const outsideIds = outsideResult.rows.map(row => requireUuid(row.companion_id, 'outsideFleetCompanionId'));
-      if (outsideIds.length > 0) {
-        await client.query(`
-          INSERT INTO icp_autonomy_invalidation_fences (companion_id, generation)
-          SELECT companion_id, 0
-          FROM unnest($1::uuid[]) AS companion_id
-          ON CONFLICT (companion_id) DO NOTHING
-        `, [outsideIds]);
-        await client.query(`
-          SELECT companion_id
-          FROM icp_autonomy_invalidation_fences
-          WHERE companion_id = ANY($1::uuid[])
-          ORDER BY companion_id
-          FOR UPDATE
-        `, [outsideIds]);
-        await client.query(`
-          UPDATE icp_autonomy_invalidation_fences
-          SET generation = generation + 1,
-              invalidated_at_ms = $2,
-              last_reason_code = 'unknown_participant'
-          WHERE companion_id = ANY($1::uuid[])
-        `, [outsideIds, normalizedRevokedAtMs]);
+      // psfn-framework-h248l.9: this connect-time sweep is the only durable
+      // "companion left the fleet" event the runtime has, and it is exactly the
+      // post-crash reconciliation the lifecycle fence exists for. Each departed
+      // companion is fenced through the idempotent transition (sorted, so the
+      // per-row lock order matches the batched lock this replaces), which also
+      // stops the old sweep from advancing the generation on EVERY restart.
+      //
+      // A companion still in the manifest is never touched here: readmission is
+      // explicit (clearLifecycleAdmission) and never a side effect of booting.
+      for (const outsideId of [...outsideIds].sort()) {
+        await setLifecycleAdmissionWithClient(
+          client,
+          outsideId,
+          true,
+          normalizedRevokedAtMs,
+          'unknown_participant',
+        );
       }
       const permitResult = await client.query<PermitRow>(`
         UPDATE icp_initiation_permits
@@ -1675,6 +1735,59 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
         RETURNING ${PERMIT_COLUMNS}
       `, [[...knownCompanionIds], normalizedRevokedAtMs]);
       return permitResult.rows.map(mapPermit);
+    });
+  }
+
+  async fenceLifecycleAdmission(
+    companionId: string,
+    nowMs: number,
+  ): Promise<IcpLifecycleAdmissionResult> {
+    return await this.setLifecycleAdmission(companionId, nowMs, true, 'unknown_participant');
+  }
+
+  async clearLifecycleAdmission(
+    companionId: string,
+    nowMs: number,
+  ): Promise<IcpLifecycleAdmissionResult> {
+    // Readmission is an explicit lifecycle act, and it advances the generation
+    // like any other: a view captured while the companion was fenced must not
+    // survive the clear.
+    return await this.setLifecycleAdmission(companionId, nowMs, false, 'operator_cancelled');
+  }
+
+  async isLifecycleAdmissionFenced(companionId: string): Promise<boolean> {
+    const row = await queryOne<Pick<InvalidationFenceRow, 'lifecycle_fenced'>>(this.pool, `
+      SELECT lifecycle_fenced
+      FROM icp_autonomy_invalidation_fences
+      WHERE companion_id = $1
+    `, [requireUuid(companionId, 'companionId')]);
+    return row?.lifecycle_fenced === true;
+  }
+
+  private async setLifecycleAdmission(
+    companionId: string,
+    nowMs: number,
+    lifecycleFenced: boolean,
+    reasonCode: IcpAutonomyReasonCode,
+  ): Promise<IcpLifecycleAdmissionResult> {
+    const normalizedCompanionId = requireUuid(companionId, 'companionId');
+    const normalizedNowMs = requireTimestamp(nowMs, 'nowMs');
+    // Deliberately NOT gated on knownCompanionIds: the companion this fence
+    // exists to deny is, by definition, the one leaving the fleet.
+    return await withPostgresClient(this.pool, async client => {
+      const outcome = await setLifecycleAdmissionWithClient(
+        client,
+        normalizedCompanionId,
+        lifecycleFenced,
+        normalizedNowMs,
+        reasonCode,
+      );
+      return {
+        companionId: normalizedCompanionId,
+        lifecycleFenced,
+        transitioned: outcome.transitioned,
+        revokedPermits: outcome.revokedPermits,
+      };
     });
   }
 

@@ -11,7 +11,10 @@ import type {
   IcpAdminSharedProjection,
 } from '../../../persistence/postgres/icp-admin-projection-store.js';
 import type { AdminSettingsService } from './types/settings.js';
-import { AdminIcpAutonomyDataService } from './icp-autonomy-service.js';
+import {
+  AdminIcpAutonomyDataService,
+  AdminIcpReadmissionRefusedError,
+} from './icp-autonomy-service.js';
 
 const LOCAL_ID = '11111111-1111-4111-8111-111111111111';
 const PEER_ID = '22222222-2222-4222-8222-222222222222';
@@ -95,8 +98,24 @@ function candidateStore(value: IcpInitiationCandidate): IcpInitiationCandidateSt
   };
 }
 
-function sharedStore(order: string[] = []): IcpSharedAutonomyStorePort {
+function sharedStore(
+  order: string[] = [],
+  lifecycle: { fenced?: ReadonlySet<string>; onClear?: (companionId: string) => void } = {},
+): IcpSharedAutonomyStorePort {
+  const fenced = new Set(lifecycle.fenced ?? []);
   return {
+    isLifecycleAdmissionFenced: vi.fn(async (companionId: string) => fenced.has(companionId)),
+    clearLifecycleAdmission: vi.fn(async (companionId: string) => {
+      order.push('clear-lifecycle');
+      lifecycle.onClear?.(companionId);
+      const transitioned = fenced.delete(companionId);
+      return {
+        companionId,
+        lifecycleFenced: false,
+        transitioned,
+        revokedPermits: [],
+      };
+    }),
     getAvailability: vi.fn(async () => null),
     publishAvailabilityAndInvalidate: vi.fn(async lease => {
       order.push('invalidate');
@@ -954,5 +973,87 @@ describe('content-free delivery telemetry (psfn-framework-req4p.3)', () => {
     expect(serialized).not.toContain(CANDIDATE_ID);
     expect(serialized).not.toContain(CONVERSATION_ID);
     expect(data.delivery.recentOutcome?.outcome).toBe('delivered');
+  });
+});
+
+describe('explicit lifecycle readmission (psfn-framework-2vd7s)', () => {
+  function readmitService(input: {
+    fenced?: readonly string[];
+    fleetCompanionIds?: readonly string[];
+    cleared?: string[];
+  } = {}) {
+    const cleared = input.cleared ?? [];
+    const shared = sharedStore([], {
+      fenced: new Set(input.fenced ?? [OTHER_B]),
+      onClear: companionId => cleared.push(companionId),
+    });
+    return {
+      cleared,
+      service: new AdminIcpAutonomyDataService({
+        localCompanionId: LOCAL_ID,
+        candidateStore: candidateStore(candidate()),
+        projectionStore: projectionStore(shared),
+        runtimeEnablement: createIcpAutonomyRuntimeEnablement(true),
+        settingsService: settings(true),
+        operatorLeaseTtlMs: 1_000,
+        ...(input.fleetCompanionIds ? { fleetCompanionIds: input.fleetCompanionIds } : {}),
+        now: () => 5_000,
+      }),
+    };
+  }
+
+  it('clears the fence only for a companion on the current manifest', async () => {
+    const { service, cleared } = readmitService({ fleetCompanionIds: [LOCAL_ID, OTHER_B] });
+    await expect(service.readmitCompanion({
+      companionId: OTHER_B,
+      confirmCompanionId: OTHER_B,
+    })).resolves.toMatchObject({
+      ok: true,
+      companionId: OTHER_B,
+      transitioned: true,
+      revokedPermitCount: 0,
+    });
+    expect(cleared).toEqual([OTHER_B]);
+  });
+
+  it('is idempotent: an already-admitted companion transitions nothing', async () => {
+    const { service } = readmitService({
+      fenced: [],
+      fleetCompanionIds: [LOCAL_ID, OTHER_B],
+    });
+    await expect(service.readmitCompanion({
+      companionId: OTHER_B,
+      confirmCompanionId: OTHER_B,
+    })).resolves.toMatchObject({ transitioned: false });
+  });
+
+  it('refuses a companion that is absent from the current manifest', async () => {
+    const { service, cleared } = readmitService({ fleetCompanionIds: [LOCAL_ID] });
+    await expect(service.readmitCompanion({
+      companionId: OTHER_B,
+      confirmCompanionId: OTHER_B,
+    })).rejects.toBeInstanceOf(AdminIcpReadmissionRefusedError);
+    expect(cleared).toEqual([]);
+  });
+
+  it('refuses a body whose confirmation does not echo the target', async () => {
+    const { service, cleared } = readmitService({ fleetCompanionIds: [LOCAL_ID, OTHER_B] });
+    await expect(service.readmitCompanion({
+      companionId: OTHER_B,
+      confirmCompanionId: OTHER_C,
+    })).rejects.toMatchObject({ refusal: 'confirmation_mismatch' });
+    expect(cleared).toEqual([]);
+  });
+
+  it('projects the manifest admission state for the Garden', async () => {
+    const { service } = readmitService({
+      fenced: [OTHER_B],
+      fleetCompanionIds: [LOCAL_ID, OTHER_B],
+    });
+    const data = await service.getData();
+    expect(data.lifecycleAdmission).toEqual([
+      { companionId: LOCAL_ID, local: true, fenced: false },
+      { companionId: OTHER_B, local: false, fenced: true },
+    ]);
   });
 });

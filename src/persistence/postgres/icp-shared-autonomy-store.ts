@@ -1752,7 +1752,7 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
     // Readmission is an explicit lifecycle act, and it advances the generation
     // like any other: a view captured while the companion was fenced must not
     // survive the clear.
-    return await this.setLifecycleAdmission(companionId, nowMs, false, 'operator_cancelled');
+    return await this.setLifecycleAdmission(companionId, nowMs, false, 'lifecycle_readmitted');
   }
 
   async isLifecycleAdmissionFenced(companionId: string): Promise<boolean> {

@@ -213,6 +213,12 @@ export interface AdminIcpAutonomyData {
    * channel id, contact identity, provenance text, or reason summaries.
    */
   delivery: AdminIcpDeliveryTelemetry;
+  /**
+   * Durable lifecycle-admission state for every companion on the current fleet
+   * manifest. Empty when no shared control plane is wired; a fenced row is the
+   * only readmittable state, and readmission is always explicit.
+   */
+  lifecycleAdmission: AdminIcpLifecycleAdmissionView[];
   reasonCounts: AdminIcpReasonCount[];
   failureCount: number;
   quietState: 'disabled' | 'unavailable_topology' | 'no_candidates' | 'active' | 'failures_observed';
@@ -223,6 +229,21 @@ export interface AdminIcpAutonomyData {
     permitBearerIds: 'withheld';
     transcripts: 'not_collected';
   };
+}
+
+/**
+ * Durable ICP lifecycle-admission state for one fleet-manifest companion
+ * (psfn-framework-2vd7s). `fenced` is the non-expiring admission bit on the
+ * shared fence row: while it is set, every permit issue, permit consume, and
+ * episode creation for that companion refuses even against a freshly captured
+ * invalidation generation. It clears only through an explicit, audited operator
+ * readmission, never by re-adding the companion to companions.json and booting.
+ */
+export interface AdminIcpLifecycleAdmissionView {
+  companionId: string;
+  /** True for the Garden's own companion; the row is otherwise a fleet sibling. */
+  local: boolean;
+  fenced: boolean;
 }
 
 export interface AdminIcpCandidateCancelInput {
@@ -252,11 +273,40 @@ export interface AdminIcpMutationResult {
   message: string;
 }
 
+/**
+ * Explicit operator readmission of a lifecycle-fenced companion.
+ *
+ * `confirmCompanionId` must equal `companionId` exactly. The route body policy
+ * and the `autonomy.manage` confirmation requirement already gate the call; this
+ * echo is the operator's own statement of intent, so a replayed or blind body
+ * can never clear a durable admission fence.
+ */
+export interface AdminIcpReadmitInput {
+  companionId: string;
+  confirmCompanionId: string;
+}
+
+/** Machine-readable refusal reasons for an explicit readmission attempt. */
+export type AdminIcpReadmitRefusal =
+  | 'manifest_unavailable'
+  | 'companion_not_on_manifest'
+  | 'confirmation_mismatch';
+
+export interface AdminIcpReadmitResult {
+  ok: true;
+  companionId: string;
+  /** False when the companion was already admitted; readmission is idempotent. */
+  transitioned: boolean;
+  revokedPermitCount: number;
+  message: string;
+}
+
 export interface AdminIcpAutonomyService {
   getData(): Promise<AdminIcpAutonomyData>;
   cancelCandidate(input: AdminIcpCandidateCancelInput): Promise<AdminIcpMutationResult>;
   setDoNotDisturb(): Promise<AdminIcpMutationResult>;
   emergencyDisable(): Promise<AdminIcpMutationResult>;
+  readmitCompanion(input: AdminIcpReadmitInput): Promise<AdminIcpReadmitResult>;
   triggerTestInitiation(input: AdminIcpTestInitiationInput): Promise<AdminIcpTestInitiationResult>;
   close?(): Promise<void>;
 }

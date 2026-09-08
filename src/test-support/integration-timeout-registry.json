@@ -28,6 +28,13 @@
       "note": "S12A letter lifecycle and restart persistence against the real containerized PostgreSQL harness. Focused local wall baseline was 8.194s on 2026-08-30; 120s preserves headroom for cold image startup and shared harness-slot contention."
     },
     {
+      "file": "src/operator/garden/services/icp-lifecycle-readmission.postgres.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 600,
+      "baselineSource": "measured",
+      "note": "psfn-framework-2vd7s: explicit operator readmission of a lifecycle-fenced companion driven through the real Garden admin route and service over the real containerized PostgreSQL shared control plane \u2014 manifest shrink sweep, refusal of a fresh permit, off-manifest and unconfirmed readmission refusals, the explicit clear, and permits issuing again. Focused local full-file wall baseline was 0.59s on 2026-09-08 with a warm harness slot; 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
+    },
+    {
       "file": "src/operator/garden/services/wishlist-disposition.postgres.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": 600,
@@ -516,13 +523,6 @@
       "measuredBaselineMs": null,
       "baselineSource": "inherited",
       "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
-    },
-    {
-      "file": "src/persistence/postgres/welfare-verifier-access.integration.test.ts",
-      "timeoutMs": 120000,
-      "measuredBaselineMs": 1900,
-      "baselineSource": "measured",
-      "note": "m8zdu follower welfare-verifier privilege repair suite against real containerized Postgres. Baseline 1.9s file wall (2 tests, warm tmpfs harness, this host, 2026-08-04); 120s is the repo-standard integration cap with headroom dominated by cold-start and harness-semaphore variance."
     },
     {
       "file": "src/persistence/sessions/message-addressing-migration.integration.test.ts",

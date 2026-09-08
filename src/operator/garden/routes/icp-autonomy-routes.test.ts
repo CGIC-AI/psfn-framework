@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { describe, expect, it, vi } from 'vitest';
 
+import { AdminIcpReadmissionRefusedError } from '../services/icp-autonomy-service.js';
 import type { AdminIcpAutonomyService } from '../services/types.js';
 import { buildAdminIcpAutonomyRoutes } from './icp-autonomy-routes.js';
 import type { AdminAuditTimelineAppender, AdminBodyReader } from './types.js';
@@ -314,6 +315,93 @@ describe('admin ICP autonomy routes', () => {
       'denied',
       expect.any(String),
       expect.any(Array),
+      'operator',
+    );
+  });
+
+  // psfn-framework-2vd7s: clearing a durable lifecycle-admission fence is the
+  // one ICP control that can put a removed companion back on the wire, so the
+  // route refuses every body that is not an explicit, echoed operator act.
+  it('requires an echoed confirmation before readmitting a fenced companion', async () => {
+    const readmitCompanion = vi.fn(async () => ({
+      ok: true as const,
+      companionId: PEER_ID,
+      transitioned: true,
+      revokedPermitCount: 0,
+      message: 'Companion readmitted to ICP; the invalidation generation advanced once',
+    }));
+    const audit = vi.fn<AdminAuditTimelineAppender>();
+
+    const blind = await invoke({
+      method: 'POST',
+      path: '/api/admin/icp-autonomy/lifecycle/readmit',
+      body: { companionId: PEER_ID },
+      service: { readmitCompanion },
+      audit,
+    });
+    expect(blind.statusCode).toBe(400);
+    expect(readmitCompanion).not.toHaveBeenCalled();
+    expect(audit).toHaveBeenCalledWith(
+      'autonomy_control',
+      'denied',
+      expect.stringContaining('readmission rejected invalid fields'),
+      [],
+      'operator',
+    );
+
+    const unknownField = await invoke({
+      method: 'POST',
+      path: '/api/admin/icp-autonomy/lifecycle/readmit',
+      body: { companionId: PEER_ID, confirmCompanionId: PEER_ID, force: true },
+      service: { readmitCompanion },
+    });
+    expect(unknownField.statusCode).toBe(400);
+    expect(readmitCompanion).not.toHaveBeenCalled();
+
+    const accepted = await invoke({
+      method: 'POST',
+      path: '/api/admin/icp-autonomy/lifecycle/readmit',
+      body: { companionId: PEER_ID, confirmCompanionId: PEER_ID },
+      service: { readmitCompanion },
+      audit,
+    });
+    expect(accepted.statusCode).toBe(200);
+    expect(readmitCompanion).toHaveBeenCalledWith({
+      companionId: PEER_ID,
+      confirmCompanionId: PEER_ID,
+    });
+    expect(audit).toHaveBeenCalledWith(
+      'autonomy_control',
+      'allowed',
+      expect.stringContaining('readmitted a lifecycle-fenced companion'),
+      [`companionId=${PEER_ID}`, 'transitioned=true', 'revokedPermits=0'],
+      'operator',
+    );
+  });
+
+  it('answers an off-manifest readmission with a legible refusal, not a 500', async () => {
+    const readmitCompanion = vi.fn(async () => {
+      throw new AdminIcpReadmissionRefusedError(
+        'companion_not_on_manifest',
+        'ICP readmission refuses a companion that is absent from the current companions.json manifest',
+      );
+    });
+    const audit = vi.fn<AdminAuditTimelineAppender>();
+
+    const refused = await invoke({
+      method: 'POST',
+      path: '/api/admin/icp-autonomy/lifecycle/readmit',
+      body: { companionId: PEER_ID, confirmCompanionId: PEER_ID },
+      service: { readmitCompanion },
+      audit,
+    });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.body).toMatchObject({ refusal: 'companion_not_on_manifest' });
+    expect(audit).toHaveBeenCalledWith(
+      'autonomy_control',
+      'denied',
+      expect.stringContaining('readmission was refused'),
+      expect.arrayContaining(['refusal=companion_not_on_manifest']),
       'operator',
     );
   });

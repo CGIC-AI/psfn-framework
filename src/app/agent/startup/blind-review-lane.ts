@@ -102,6 +102,12 @@ export function wireBlindReviewLane(deps: BlindReviewLaneDeps): BlindReviewLaneR
     }).then((connected) => {
       store = connected;
       return connected;
+    }).catch((error: unknown) => {
+      // Clear the memo so a failed connect is retried on the next due tick.
+      // Caching the rejected promise would turn one transient database outage
+      // into a lane that is dead until the process restarts.
+      connecting = null;
+      throw error;
     });
     return connecting;
   };

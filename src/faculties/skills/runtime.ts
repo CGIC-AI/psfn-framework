@@ -40,7 +40,11 @@ import {
   normalizeSkillName,
   SkillStore,
 } from './store.js';
-import { SkillUsageTelemetryStore } from './telemetry.js';
+import {
+  SkillUsageTelemetryStore,
+  type RecordSkillPostUseOutcomeInput,
+  type SkillOutcomeEvidence,
+} from './telemetry.js';
 import type {
   SkillInvocationRecordInput,
   SkillCollectionLimits,
@@ -357,6 +361,20 @@ export class SkillsRuntime {
     return this.telemetry.record(result.entry.name, input);
   }
 
+  /**
+   * Attribute one completed turn's structural outcome to the skills it used
+   * (psfn-framework-sap72). Durable, so the reuse loop keeps the evidence
+   * across a restart.
+   */
+  recordSkillPostUseOutcome(input: RecordSkillPostUseOutcomeInput): string[] {
+    return this.telemetry.recordPostUseOutcome(input);
+  }
+
+  /** Durable post-use outcome evidence, by lowercase skill name. */
+  getSkillOutcomeEvidence(): ReadonlyMap<string, SkillOutcomeEvidence> {
+    return this.telemetry.listOutcomeEvidence();
+  }
+
   getSkillUsageStats(name: string): SkillUsageStats | null {
     return this.telemetry.get(name);
   }
@@ -476,9 +494,13 @@ export class SkillsRuntime {
     return { name: record.name, description: record.description, category: record.category, version: record.version, content: record.content, createdAt: record.createdAt, updatedAt: record.updatedAt };
   }
 
-  /** Delete a managed skill by name. */
+  /**
+   * Delete a managed skill by name. Garden is the operator-facing authority,
+   * so the delete carries operator provenance into the skill's archived audit
+   * trail, which survives the deletion (psfn-framework-ft69n).
+   */
   deleteSkill(name: string): void {
-    this.store.delete(name);
+    this.store.delete(name, { updatedBy: 'operator:garden', reason: 'Deleted from the Garden skills admin surface' });
     this.invalidate();
   }
 

@@ -9,6 +9,26 @@ import {
   FILESYSTEM_READ_PAGE_CONTRACT,
   validateFilesystemReadMaxBytes,
 } from '../../../shared/contracts/filesystem.js';
+import { PARTIAL_TOOL_RESULT_DETAILS_KEY } from '../../../shared/contracts/tool-call-outcome.js';
+
+/**
+ * A result the tool itself declares as carrying only PART of what was asked
+ * for (psfn-framework-sap72). The scheduler classifies a declared partial as
+ * `partial_result` — degraded evidence, not success and not a broken tool — so
+ * protected self-work can see that a bound was hit rather than reading a
+ * truncated page as the whole story. Never inferred from result text: only a
+ * bound the tool actually applied sets this.
+ */
+function partialTextResult(text: string): AgentToolResult<Record<string, boolean>> {
+  return {
+    content: [{ type: 'text', text }],
+    details: { [PARTIAL_TOOL_RESULT_DETAILS_KEY]: true },
+  };
+}
+
+function boundedTextResult(text: string, partial: boolean): AgentToolResult<Record<string, never> | Record<string, boolean>> {
+  return partial ? partialTextResult(text) : textResult(text);
+}
 
 const DEFAULT_LIST_MAX_ENTRIES = 200;
 const MAX_LIST_MAX_ENTRIES = 500;
@@ -235,7 +255,7 @@ export function createFsTool(
                   : {}),
               },
             );
-            return textResult(JSON.stringify({
+            return boundedTextResult(JSON.stringify({
               action: 'list',
               ...(path ? { path } : {}),
               glob: glob ?? '*',
@@ -247,7 +267,7 @@ export function createFsTool(
               scan_limit_reached: result.scanLimitReached,
               entry_limit_reached: result.entryLimitReached,
               paths: result.paths,
-            }, null, 2));
+            }, null, 2), result.truncated);
           }
 
           case 'read': {
@@ -270,7 +290,7 @@ export function createFsTool(
               maxBytes,
               offsetBytes,
             });
-            return textResult(JSON.stringify({
+            return boundedTextResult(JSON.stringify({
               action: 'read',
               path,
               offset_bytes: result.offsetBytes,
@@ -279,7 +299,7 @@ export function createFsTool(
               truncated: result.truncated,
               ...(result.truncated ? { next_action: LARGE_DOCUMENT_HANDOFF } : {}),
               content: result.content,
-            }, null, 2));
+            }, null, 2), result.truncated);
           }
 
           case 'search': {
@@ -293,7 +313,7 @@ export function createFsTool(
               ...(typeof params.max_bytes_per_file === 'number' ? { maxBytesPerFile: params.max_bytes_per_file } : {}),
               ...(typeof params.context_lines === 'number' ? { contextLines: params.context_lines } : {}),
             });
-            return textResult(JSON.stringify({
+            return boundedTextResult(JSON.stringify({
               action: 'search',
               query: result.query,
               glob: result.glob,
@@ -303,7 +323,7 @@ export function createFsTool(
               hit_limit: result.hitLimit,
               truncated_files: result.truncatedFiles,
               matches: result.matches,
-            }, null, 2));
+            }, null, 2), result.hitLimit || result.truncatedFiles.length > 0);
           }
 
           case 'write': {

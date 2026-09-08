@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -254,6 +254,105 @@ describe('skill store', () => {
 
       expect(unchanged.version).toBe(1);
       expect(store.getHistory('noop-skill')).toHaveLength(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a deleted skill\'s history queryable behind a tombstone (ft69n)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'skill-store-delete-history-'));
+    const dataDir = join(root, 'data');
+    mkdirSync(dataDir, { recursive: true });
+    let now = new Date('2026-03-01T09:00:00.000Z');
+    const store = new SkillStore(dataDir, { repoRoot: root, now: () => now });
+
+    try {
+      store.create({
+        name: 'self-erasing-skill',
+        category: 'ops',
+        description: 'A skill that later deletes itself.',
+        content: 'Original body content.',
+      }, AGENT);
+      now = new Date('2026-03-01T09:30:00.000Z');
+      store.update({
+        name: 'self-erasing-skill',
+        content: 'Revised body content.',
+      }, AGENT);
+      expect(store.getHistory('self-erasing-skill')).toHaveLength(2);
+
+      const skillDir = join(dataDir, 'skills', 'ops', 'self-erasing-skill');
+      expect(existsSync(join(skillDir, 'SKILL.history.jsonl'))).toBe(true);
+
+      now = new Date('2026-03-01T10:00:00.000Z');
+      store.delete('self-erasing-skill', { updatedBy: 'operator:garden', reason: 'Removed after review' });
+
+      // The skill itself is gone, journal directory and all.
+      expect(store.getByName('self-erasing-skill')).toBeNull();
+      expect(existsSync(skillDir)).toBe(false);
+
+      // Its audit trail is not: create, update, and a closing tombstone.
+      const history = store.getHistory('self-erasing-skill');
+      expect(history.map(entry => entry.action)).toEqual(['create', 'update', 'delete']);
+      const tombstone = history.at(-1)!;
+      expect(tombstone).toMatchObject({
+        action: 'delete',
+        version: 3,
+        previousVersion: 2,
+        timestamp: '2026-03-01T10:00:00.000Z',
+        updatedBy: 'operator:garden',
+        reason: 'Removed after review',
+        newChecksum: null,
+        newDocument: null,
+        deletedCategory: 'ops',
+      });
+      expect(tombstone.previousDocument).toContain('Revised body content.');
+
+      // Unreadable journal lines survive too: the archive copies bytes.
+      const archiveRootPath = store.getHistoryArchiveRootDir();
+      expect(readFileSync(join(archiveRootPath, 'self-erasing-skill.jsonl'), 'utf-8'))
+        .toContain('Revised body content.');
+
+      // The archive lives outside the managed skills root the delete removes.
+      const archiveRoot = store.getHistoryArchiveRootDir();
+      expect(archiveRoot.startsWith(store.getManagedRootDir())).toBe(false);
+      expect(existsSync(join(archiveRoot, 'self-erasing-skill.jsonl'))).toBe(true);
+
+      // Re-creating the same name continues the chain rather than replacing it.
+      now = new Date('2026-03-01T11:00:00.000Z');
+      store.create({
+        name: 'self-erasing-skill',
+        category: 'ops',
+        description: 'A second incarnation.',
+        content: 'Fresh body content.',
+      }, AGENT);
+      expect(store.getHistory('self-erasing-skill').map(entry => entry.action))
+        .toEqual(['create', 'update', 'delete', 'create']);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses to delete a skill whose history cannot be archived (fail closed)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'skill-store-archive-fail-'));
+    const dataDir = join(root, 'data');
+    mkdirSync(dataDir, { recursive: true });
+    const store = new SkillStore(dataDir, { repoRoot: root });
+
+    try {
+      store.create({
+        name: 'protected-skill',
+        category: 'ops',
+        description: 'A skill whose trail must survive.',
+        content: 'Body content.',
+      }, AGENT);
+
+      // Block the archive root with a regular file so the append cannot land.
+      writeFileSync(store.getHistoryArchiveRootDir(), 'not a directory', 'utf-8');
+
+      expect(() => store.delete('protected-skill', { updatedBy: 'operator:garden' })).toThrow();
+      // The skill is still there: no delete without a preserved audit trail.
+      expect(store.getByName('protected-skill')?.version).toBe(1);
+      expect(existsSync(join(dataDir, 'skills', 'ops', 'protected-skill', 'SKILL.md'))).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

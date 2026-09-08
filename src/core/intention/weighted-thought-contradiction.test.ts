@@ -82,11 +82,14 @@ describe('detectSaidFineContradiction', () => {
   });
 });
 
-function resolutionEvent(concern: ActiveConcern): ConcernResolutionAppraisalEvent {
+function resolutionEvent(
+  concern: ActiveConcern,
+  source: ConcernResolutionAppraisalEvent['source'] = 'decision',
+): ConcernResolutionAppraisalEvent {
   return {
     concernId: concern.id,
     resolutionGenerationId: concern.resolutionGenerationId!,
-    source: 'decision',
+    source,
     formationVad: concern.formationVAD!,
     resolutionVad: concern.resolutionVAD!,
     reliefDelta: {
@@ -131,6 +134,7 @@ describe('applyWeightedThoughtContradictionDampening (production path)', () => {
       thoughtClass: 'standard',
       contactId: 'contact-v',
       emotionalIntensity: 0.8,
+      provenance: { concernId: 'concern-1' },
     }, CONFIG, T0);
     await store.save(seeded);
 
@@ -169,6 +173,7 @@ describe('applyWeightedThoughtContradictionDampening (production path)', () => {
       thoughtClass: 'standard',
       contactId: 'contact-v',
       emotionalIntensity: 0.8,
+      provenance: { concernId: 'concern-1' },
     }, CONFIG, T0);
     await store.save(seeded);
 
@@ -228,6 +233,7 @@ describe('applyWeightedThoughtContradictionDampening (production path)', () => {
       source: 'concern',
       thoughtClass: 'standard',
       contactId: 'contact-v',
+      provenance: { concernId: 'concern-1' },
     }, CONFIG, T0);
     await store.save(seeded);
 
@@ -245,6 +251,130 @@ describe('applyWeightedThoughtContradictionDampening (production path)', () => {
 
     expect(result.contradiction).toBe(false);
     expect(result.dampenedThoughtIds).toEqual([]);
+  });
+
+  it('leaves the contact\'s other active concerns undamped (concern-scoped, 99ugi)', async () => {
+    const backend = createInMemoryWeightedThoughtBackend();
+    const store = createWeightedThoughtStorePort(backend);
+    const contradicted = createThoughtWeight({
+      id: 'care-thought-contradicted',
+      content: 'Check in on Morgan about the move',
+      source: 'concern',
+      thoughtClass: 'standard',
+      contactId: 'contact-v',
+      provenance: { concernId: 'concern-1' },
+    }, CONFIG, T0);
+    const otherConcern = createThoughtWeight({
+      id: 'care-thought-other-concern',
+      content: 'Morgan\'s recital is Friday',
+      source: 'concern',
+      thoughtClass: 'standard',
+      contactId: 'contact-v',
+      provenance: { concernId: 'concern-2' },
+    }, CONFIG, T0);
+    const followUp = createThoughtWeight({
+      id: 'care-thought-follow-up',
+      content: 'Send Morgan the reading list',
+      source: 'follow_up',
+      thoughtClass: 'standard',
+      contactId: 'contact-v',
+      provenance: { pendingFollowUpId: 'follow-up-9' },
+    }, CONFIG, T0);
+    await store.save(contradicted);
+    await store.save(otherConcern);
+    await store.save(followUp);
+
+    const nowMs = T0 + HOUR;
+    const concern = stubConcern({});
+    const result = await applyWeightedThoughtContradictionDampening(
+      {
+        concernStore: { getById: async () => concern },
+        thoughtStore: store,
+        lifecycleConfig: CONFIG,
+        now: () => nowMs,
+      },
+      resolutionEvent(concern),
+    );
+
+    expect(result.contradiction).toBe(true);
+    // Only the contradicted concern's own thought is dampened.
+    expect(result.dampenedThoughtIds).toEqual(['care-thought-contradicted']);
+
+    const dampened = await store.getById('care-thought-contradicted');
+    expect(dampened!.accumulatedWeight).toBeCloseTo(
+      decayedWeight(contradicted, nowMs) * CONFIG.contradictionDampeningFactor,
+      6,
+    );
+    // The contact's other live threads keep their full accumulated weight.
+    const survivingConcern = await store.getById('care-thought-other-concern');
+    expect(survivingConcern!.accumulatedWeight).toBeCloseTo(otherConcern.accumulatedWeight, 6);
+    const survivingFollowUp = await store.getById('care-thought-follow-up');
+    expect(survivingFollowUp!.accumulatedWeight).toBeCloseTo(followUp.accumulatedWeight, 6);
+  });
+
+  it.each(['grooming_stale', 'grooming_cap'] as const)(
+    'never damps on an administrative %s resolution (99ugi)',
+    async (source) => {
+      const backend = createInMemoryWeightedThoughtBackend();
+      const store = createWeightedThoughtStorePort(backend);
+      const seeded = createThoughtWeight({
+        id: 'care-thought-v',
+        content: 'Check in on Morgan',
+        source: 'concern',
+        thoughtClass: 'standard',
+        contactId: 'contact-v',
+        provenance: { concernId: 'concern-1' },
+      }, CONFIG, T0);
+      await store.save(seeded);
+
+      // The concern's VAD pair WOULD read as a contradiction; the grooming
+      // source is what stops the damping.
+      const concern = stubConcern({});
+      const result = await applyWeightedThoughtContradictionDampening(
+        {
+          concernStore: { getById: async () => concern },
+          thoughtStore: store,
+          lifecycleConfig: CONFIG,
+          now: () => T0 + HOUR,
+        },
+        resolutionEvent(concern, source),
+      );
+
+      expect(result.contradiction).toBe(false);
+      expect(result.dampenedThoughtIds).toEqual([]);
+      const persisted = await store.getById('care-thought-v');
+      expect(persisted!.accumulatedWeight).toBeCloseTo(seeded.accumulatedWeight, 6);
+    },
+  );
+
+  it('never damps a contact thought that tracks no concern at all', async () => {
+    const backend = createInMemoryWeightedThoughtBackend();
+    const store = createWeightedThoughtStorePort(backend);
+    const coLocation = createThoughtWeight({
+      id: 'co-location-thought',
+      content: 'Ran into Morgan at the studio',
+      source: 'co_location',
+      thoughtClass: 'trivial',
+      contactId: 'contact-v',
+      provenance: { coLocationRef: 'arrival-7' },
+    }, CONFIG, T0);
+    await store.save(coLocation);
+
+    const concern = stubConcern({});
+    const result = await applyWeightedThoughtContradictionDampening(
+      {
+        concernStore: { getById: async () => concern },
+        thoughtStore: store,
+        lifecycleConfig: CONFIG,
+        now: () => T0 + HOUR,
+      },
+      resolutionEvent(concern),
+    );
+
+    expect(result.contradiction).toBe(true);
+    expect(result.dampenedThoughtIds).toEqual([]);
+    const persisted = await store.getById('co-location-thought');
+    expect(persisted!.accumulatedWeight).toBeCloseTo(coLocation.accumulatedWeight, 6);
   });
 
   it('skips a contact-less concern', async () => {

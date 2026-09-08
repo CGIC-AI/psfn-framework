@@ -1,5 +1,5 @@
 import * as fs from 'node:fs';
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -30,6 +30,82 @@ describe('SkillUsageTelemetryStore debounced persistence (psfn-framework-ol0b)',
     store?.close();
     vi.useRealTimers();
     rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('attributes post-use outcomes to the skills a turn used and survives a restart (sap72)', () => {
+    let clock = new Date('2024-01-01T00:00:00.000Z');
+    store = new SkillUsageTelemetryStore(tmpDir, { flushDelayMs: 1_000, now: () => clock });
+
+    // Turn one uses two skills and demonstrates reusable value.
+    store.record('used-skill', { outcome: 'success' });
+    store.record('other-skill', { outcome: 'success' });
+    clock = new Date('2024-01-01T00:01:00.000Z');
+    expect(store.recordPostUseOutcome({ demonstratedValue: true }))
+      .toEqual(['other-skill', 'used-skill']);
+
+    // Turn two uses only one of them and ends ambiguous. The skill that was
+    // not used this turn is not answerable for it.
+    clock = new Date('2024-01-01T00:02:00.000Z');
+    store.record('used-skill', { outcome: 'success' });
+    clock = new Date('2024-01-01T00:03:00.000Z');
+    expect(store.recordPostUseOutcome({ demonstratedValue: false })).toEqual(['used-skill']);
+
+    // A turn that used nothing records nothing.
+    clock = new Date('2024-01-01T00:04:00.000Z');
+    expect(store.recordPostUseOutcome({ demonstratedValue: true })).toEqual([]);
+    store.flush();
+
+    // Restart: a cold store over the same file keeps the evidence and the
+    // watermark, so nothing is re-attributed.
+    const restarted = new SkillUsageTelemetryStore(tmpDir, { now: () => clock });
+    try {
+      const evidence = restarted.listOutcomeEvidence();
+      expect(evidence.get('used-skill')).toMatchObject({
+        name: 'used-skill',
+        demonstratedCount: 1,
+        ambiguousCount: 1,
+      });
+      expect(evidence.get('other-skill')).toMatchObject({
+        demonstratedCount: 1,
+        ambiguousCount: 0,
+      });
+      clock = new Date('2024-01-01T00:05:00.000Z');
+      expect(restarted.recordPostUseOutcome({ demonstratedValue: true })).toEqual([]);
+    } finally {
+      restarted.close();
+    }
+  });
+
+  it('loads a telemetry file written before post-use evidence existed', () => {
+    mkdirSync(tmpDir, { recursive: true });
+    writeFileSync(filePath, JSON.stringify({
+      version: 1,
+      skills: {
+        'legacy-skill': {
+          name: 'legacy-skill',
+          firstUsedAt: '2024-01-01T00:00:00.000Z',
+          lastUsedAt: '2024-01-01T00:00:00.000Z',
+          invocationCount: 1,
+          successCount: 1,
+          failureCount: 0,
+          durationSampleCount: 0,
+          totalDurationMs: 0,
+          lastDurationMs: null,
+          lastOutcome: 'success',
+        },
+      },
+    }, null, 2), 'utf-8');
+    store = new SkillUsageTelemetryStore(tmpDir, { now: fixedNow });
+
+    expect(store.listOutcomeEvidence().get('legacy-skill')).toEqual({
+      name: 'legacy-skill',
+      demonstratedCount: 0,
+      ambiguousCount: 0,
+      lastOutcomeAt: null,
+    });
+    // The first turn after the upgrade answers for what IT used, never for a
+    // whole pre-existing history of uses.
+    expect(store.recordPostUseOutcome({ demonstratedValue: true })).toEqual([]);
   });
 
   it('serves reads from memory and coalesces many records into one debounced flush', () => {

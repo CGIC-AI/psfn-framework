@@ -74,6 +74,19 @@ export interface RecordAutomataTerminalHandoffInput {
   occurredAtMs: number;
 }
 
+/**
+ * Terminal facts read back OUT of an already-persisted handoff (8n40k). A run
+ * that crashed between its Bus handoff and its registry terminalization replays
+ * with freshly computed work; these are the durable facts the Bus already
+ * recorded, so the registry converges on them instead of on the re-run.
+ */
+export interface PersistedAutomataTerminalOutcome {
+  lifecycleState: 'completed' | 'failed' | 'cancelled';
+  outcome: AutomataRunOutcome;
+  stateReason: string;
+  failureReason?: string;
+}
+
 export interface AutomataTerminalHandoffReceipt {
   /** Stable durable Bus handoff/event reference. */
   handoffRef: string;
@@ -82,6 +95,10 @@ export interface AutomataTerminalHandoffReceipt {
   findingRefs: readonly string[];
   evidenceRefs: readonly string[];
   artifactRefs: readonly AutomataArtifactRef[];
+  /** When the durable terminal was actually recorded. Replays only. */
+  occurredAtMs?: number;
+  /** The durable terminal facts. Replays only. */
+  persistedOutcome?: PersistedAutomataTerminalOutcome;
 }
 
 export interface AutomataWorkerRunInspection {
@@ -111,6 +128,9 @@ export type AutomataTerminalLifecycleDelivery =
       findingRefs: string[];
       evidenceRefs: string[];
       artifactRefs: AutomataArtifactRef[];
+      /** Durable terminal facts and time, present only on a replay hit. */
+      occurredAtMs?: number;
+      persistedOutcome?: PersistedAutomataTerminalOutcome;
     }
   | {
       status: 'failed';

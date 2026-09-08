@@ -16,6 +16,7 @@
 // Nothing in this file writes. The companion may ignore, revise, or reject
 // every opportunity, and the actual write still travels the governed skill tool.
 
+import { createComponentLogger } from '../../shared/logger.js';
 import type { ToolCallOutcomeCounts } from '../../shared/contracts/tool-call-outcome.js';
 import {
   DEFAULT_SKILL_REUSE_CONFIG,
@@ -25,8 +26,11 @@ import {
   buildSkillReuseOpportunity,
   rankOwnedSkillsForCue,
   turnDemonstratedReusableValue,
+  type SkillOutcomeEvidenceIndex,
 } from './reuse.js';
 import type { SkillEntry } from './types.js';
+
+const log = createComponentLogger('skills.reflection-nudge');
 
 export interface ReflectionNudgeConfig extends SkillReuseConfig {
   /** Also qualify if the analysis workbench tool was used. Default: true. */
@@ -70,12 +74,26 @@ export interface ReflectionNudgeTrackerOptions {
    * held or has changed simply is not in it.
    */
   resolveAdmittedSkills?: () => readonly SkillEntry[];
+  /**
+   * Durable post-use outcome evidence for ranking (psfn-framework-sap72).
+   * Synchronous and cache-only, like the admitted-skill index.
+   */
+  resolveOutcomeEvidence?: () => SkillOutcomeEvidenceIndex;
+  /**
+   * Attribute this completed turn's structural outcome to the skills it used.
+   * Durable, so the evidence outlives the process. A throw here is contained
+   * and logged: telemetry never fails a turn.
+   */
+  recordPostUseOutcome?: (input: { demonstratedValue: boolean }) => void;
 }
 
 export class ReflectionNudgeTracker {
   private readonly overrides: Partial<ReflectionNudgeConfig>;
   private readonly resolveOwnerConfig: (() => SkillReuseConfig) | undefined;
   private resolveAdmittedSkills: () => readonly SkillEntry[];
+  private readonly resolveOutcomeEvidence: (() => SkillOutcomeEvidenceIndex) | undefined;
+  private readonly recordPostUseOutcome:
+    ((input: { demonstratedValue: boolean }) => void) | undefined;
   private qualifyingTurnCount = 0;
   /** Skills already offered for revision this process; never offered twice. */
   private offeredSkillNames = new Set<string>();
@@ -87,6 +105,8 @@ export class ReflectionNudgeTracker {
     this.overrides = normalized.config ?? {};
     this.resolveOwnerConfig = normalized.resolveConfig;
     this.resolveAdmittedSkills = normalized.resolveAdmittedSkills ?? (() => []);
+    this.resolveOutcomeEvidence = normalized.resolveOutcomeEvidence;
+    this.recordPostUseOutcome = normalized.recordPostUseOutcome;
   }
 
   /** Explicit constructor overrides win over the owner file, which wins over defaults. */
@@ -104,6 +124,20 @@ export class ReflectionNudgeTracker {
    */
   evaluate(summary: TurnToolSummary): string | null {
     const config = this.config;
+    const demonstratedValue = turnDemonstratedReusableValue(summary.outcomes);
+    // Record the post-use evidence for EVERY turn whose census was observed,
+    // before the complexity and quietness gates (sap72): a skill used in a
+    // simple turn must be answered for by THAT turn, not by the next complex
+    // one. Telemetry never fails a turn — the loop is an offer, not the work.
+    if (summary.outcomes && this.recordPostUseOutcome) {
+      try {
+        this.recordPostUseOutcome({ demonstratedValue });
+      } catch (error) {
+        log.warn('Skill post-use outcome evidence was not recorded', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
     if (!this.isQualifyingTurn(summary, config)) return null;
 
     this.qualifyingTurnCount += 1;
@@ -113,13 +147,14 @@ export class ReflectionNudgeTracker {
 
     // An unknown census is not a success. A turn whose outcomes were never
     // observed cannot demonstrate reusable value, so it stays silent.
-    if (!turnDemonstratedReusableValue(summary.outcomes)) return null;
+    if (!demonstratedValue) return null;
 
     const candidates = summary.taskCue
       ? rankOwnedSkillsForCue({
         cue: summary.taskCue,
         entries: this.resolveAdmittedSkills(),
         config,
+        ...(this.outcomeEvidence() ? { outcomeEvidence: this.outcomeEvidence()! } : {}),
       }).filter(candidate => !this.offeredSkillNames.has(candidate.name))
       : [];
 
@@ -130,6 +165,23 @@ export class ReflectionNudgeTracker {
     const offered = candidates[0];
     if (opportunity && offered) this.offeredSkillNames.add(offered.name);
     return opportunity;
+  }
+
+  /**
+   * Recorded evidence for ranking, or null when there is none to read. An
+   * unreadable telemetry file degrades ordering to pure relevance; it never
+   * fails the turn.
+   */
+  private outcomeEvidence(): SkillOutcomeEvidenceIndex | null {
+    if (!this.resolveOutcomeEvidence) return null;
+    try {
+      return this.resolveOutcomeEvidence();
+    } catch (error) {
+      log.warn('Skill outcome evidence was unreadable; ranking on relevance alone', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
   }
 
   private isQualifyingTurn(
@@ -157,5 +209,9 @@ function isTrackerOptions(
   value: Partial<ReflectionNudgeConfig> | ReflectionNudgeTrackerOptions | undefined,
 ): value is ReflectionNudgeTrackerOptions {
   if (!value) return false;
-  return 'config' in value || 'resolveAdmittedSkills' in value || 'resolveConfig' in value;
+  return 'config' in value
+    || 'resolveAdmittedSkills' in value
+    || 'resolveConfig' in value
+    || 'resolveOutcomeEvidence' in value
+    || 'recordPostUseOutcome' in value;
 }

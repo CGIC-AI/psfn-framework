@@ -377,6 +377,13 @@ export class SubstrateAgent {
     resolveConfig: () => (
       this.skillsRuntime?.getCachedReuseConfig() ?? { ...DEFAULT_SKILL_REUSE_CONFIG }
     ),
+    // psfn-framework-sap72: how the turns that USED a skill actually went is
+    // durable evidence, so the ordering survives a restart instead of starting
+    // from scratch each process.
+    resolveOutcomeEvidence: () => this.skillsRuntime?.getSkillOutcomeEvidence() ?? new Map(),
+    recordPostUseOutcome: (input) => {
+      this.skillsRuntime?.recordSkillPostUseOutcome(input);
+    },
   });
   private readonly promptCacheRuntime = new PromptCacheTurnRuntime();
   private readonly turnRunReservation = new TurnRunReservation();

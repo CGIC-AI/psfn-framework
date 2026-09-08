@@ -12,9 +12,14 @@
 // that resolves ("the person indicated it's handled / said fine") while the
 // resolution VAD still reads non-positive valence with no genuine relief is the
 // charter's "said fine but context suggests otherwise": the surface closure and
-// the affective signals disagree. We do not drop that contact's remaining care
+// the affective signals disagree. We do not drop that concern's remaining care
 // thoughts to zero — we dampen them (reduce, keep a residual) so they defer yet
 // can re-accumulate.
+//
+// The signal is scoped to the concern that actually resolved, and only to a
+// genuine decision resolution (psfn-framework-99ugi): one contradicted concern
+// never damps the contact's other live concerns, and administrative grooming
+// closures never damp at all.
 //
 // No fabrication (charter 8.3): when either VAD snapshot is absent the condition
 // is not met and nothing is dampened. Absence is never treated as a contradiction.
@@ -75,16 +80,28 @@ export interface WeightedThoughtContradictionDampenResult {
 }
 
 /**
- * Apply "said fine but signals disagree" contradiction dampening to a resolving
- * concern's contact. Re-reads the concern (the authoritative source of contactId
- * and the VAD pair), computes the detector, and — when it fires — dampens every
- * ACTIVE weighted thought scoped to that contact via `applyContradictionDampening`
- * (reduce, never zero). Returns what happened for telemetry/tests.
+ * Apply "said fine but signals disagree" contradiction dampening to the thoughts
+ * of the RESOLVING CONCERN. Re-reads the concern (the authoritative source of
+ * contactId and the VAD pair), computes the detector, and — when it fires —
+ * dampens every ACTIVE weighted thought carrying that concern's live provenance
+ * via `applyContradictionDampening` (reduce, never zero). Returns what happened
+ * for telemetry/tests.
+ *
+ * Concern-scoped, not contact-wide (psfn-framework-99ugi): one contradicted
+ * resolution must not taint the contact's other live concerns. A thought that
+ * does not carry this concern's id is not this concern's thought and keeps its
+ * full weight — that includes contact thoughts tracking a different concern, a
+ * pending follow-up, or a personal project.
+ *
+ * Only a genuine `decision` resolution feeds the signal. Administrative grooming
+ * resolutions (`grooming_stale`, `grooming_cap`) close a concern because it went
+ * stale or the cap evicted it; they carry no evidence that the person's surface
+ * closure disagreed with their affect, so they never dampen.
  *
  * A vanished or superseded concern is skipped (resolution persistence, not this
  * enrichment, is the source of truth). Contact-less concerns and contact-less
- * thoughts are never touched — dampening is strictly contact-scoped so an
- * unrelated global thought is never reduced.
+ * thoughts are never touched — dampening stays contact-scoped on top of the
+ * concern scope, so an unrelated global thought is never reduced.
  */
 export async function applyWeightedThoughtContradictionDampening(
   deps: WeightedThoughtContradictionDamperDeps,
@@ -97,6 +114,17 @@ export async function applyWeightedThoughtContradictionDampening(
     contradiction: false,
     dampenedThoughtIds: [],
   };
+
+  // Administrative grooming closes a concern for bookkeeping reasons (stale or
+  // capped), never because the person said fine while their signals disagreed.
+  // Only a decision resolution can carry that contradiction (99ugi).
+  if (event.source !== 'decision') {
+    log.debug('Contradiction dampening skipped: administrative grooming resolution', {
+      concernId: event.concernId,
+      source: event.source,
+    });
+    return empty;
+  }
 
   const concern = await deps.concernStore.getById(event.concernId);
   if (!concern) {
@@ -130,12 +158,16 @@ export async function applyWeightedThoughtContradictionDampening(
   for (const thought of thoughts) {
     // Strict contact scope: never dampen a contact-less (global) thought.
     if (thought.contactId !== contactId) continue;
+    // Strict concern scope (99ugi): only the thoughts this resolution actually
+    // contradicts. A thought tracking another concern, a follow-up, or a
+    // project keeps its full weight — one bad thought does not taint them all.
+    if (thought.provenance.concernId !== event.concernId) continue;
     const dampened = applyContradictionDampening(thought, deps.lifecycleConfig, nowMs);
     await deps.thoughtStore.save(dampened);
     dampenedThoughtIds.push(thought.id);
   }
   if (dampenedThoughtIds.length > 0) {
-    log.debug('Applied said-fine contradiction dampening to contact weighted thoughts', {
+    log.debug('Applied said-fine contradiction dampening to this concern\'s weighted thoughts', {
       concernId: event.concernId,
       contactId,
       dampenedCount: dampenedThoughtIds.length,

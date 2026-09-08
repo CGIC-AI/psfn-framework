@@ -21,6 +21,9 @@ import type {
   ApprovalQueuePort,
   ConfirmationQueueEntry,
 } from '../../system/capabilities/approval-queue-port.js';
+import { createComponentLogger } from '../../shared/logger.js';
+
+const skillToolLog = createComponentLogger('skills.tools');
 
 const SKILL_TOOL_ACTION_NAMES = [
   'list',
@@ -309,6 +312,8 @@ async function screenSkillWrite(
 
   if (!screening) {
     const turnIdentity = intake.getActiveTurnSessionIdentity?.() ?? null;
+    // The gate evaluation still runs so the refused attempt is audited with
+    // its attempt/correlation refs and the `screening: 'unavailable'` context.
     const unscreenedDecision = gate.evaluate('skill_write', [], {
       tool: 'skill',
       action,
@@ -325,7 +330,20 @@ async function screenSkillWrite(
           }
         : {}),
     });
-    return { allowed: unscreenedDecision.allowed, ...input };
+    // Fail closed in CODE, not only by owner-file policy (psfn-framework-ft69n,
+    // qg13 posture family). `skill_write` is a durable, prompt-bearing,
+    // self-authored sink: content written through it becomes the model's own
+    // future instruction surface, so an unscreened write is refused here even
+    // if a decision ever came back permissive. The refusal is legible in the
+    // operator log; the companion still sees the standard held notice.
+    if (unscreenedDecision.allowed) {
+      skillToolLog.warn(
+        'Refusing an unscreened self-authored skill write: the intake sink gate is active '
+        + 'but intake screening is unavailable',
+        { action, attemptRef, sinkDecision: 'allowed_but_refused_in_code' },
+      );
+    }
+    return { allowed: false, ...input };
   }
 
   const screenedContent = await screening.screen(input.content, {
@@ -988,7 +1006,7 @@ export function createSkillTool(
                 previousChecksum: entry.previousChecksum,
                 newChecksum: entry.newChecksum,
                 previousLength: entry.previousDocument?.length ?? null,
-                newLength: entry.newDocument.length,
+                newLength: entry.newDocument?.length ?? null,
               })),
             }, null, 2));
           }

@@ -49,6 +49,7 @@ import type { EmoSimProactivityImpulse } from '../core/emotion/emosim-proactivit
 import type { IcpConversationCostBreakerEvent } from './telemetry/model-usage.js';
 import type { TurnPerformanceEvent } from './telemetry/turn-performance.js';
 import type { ToolCallOutcome } from './contracts/tool-call-outcome.js';
+import type { ReflectionEvidenceDegradationCause } from './contracts/reflection-degradation.js';
 import type { ContextCoherenceEvent } from './contracts/context-coherence.js';
 import type { HealthEvent } from './contracts/health-event.js';
 import type {
@@ -1530,6 +1531,20 @@ export interface EventMap {
     name: string;
     ok: boolean;
     details?: string;
+  };
+  /**
+   * A protected reflection continued on LESS evidence than it asked for
+   * (psfn-framework-sap72, cause taxonomy from lpxg3.2). Content-free: the
+   * cause and the run's identity only, never the withheld bytes. Typed so the
+   * degradation is observable on the bus rather than only in a log line.
+   */
+  'reflection.evidence.degraded': {
+    templateId: string;
+    templateName: string;
+    channelId: string;
+    executionSource: string;
+    cause: ReflectionEvidenceDegradationCause;
+    timestamp: number;
   };
   'reflection.guardrail': {
     templateId: string;

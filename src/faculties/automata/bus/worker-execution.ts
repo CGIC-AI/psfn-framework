@@ -331,16 +331,30 @@ export class AutomataBusWorkerRun {
       return { handoff: { status: 'not_configured' }, handoffKind, terminalized: false };
     }
     const handoff = await this.recordHandoff(outcome, handoffKind);
-    // Terminalization is the last act on every path, including a failed Bus
-    // handoff, and it is never swallowed: an unterminalized run is an orphan.
-    await this.options.run.terminalize({
+    // Convergence on replay (psfn-framework-8n40k): when this run already has a
+    // durable terminal handoff, the Bus finding — not this post-crash re-run —
+    // is the authoritative terminal. Terminalize the registry with the facts
+    // read back off that finding, at the time it was actually recorded, so the
+    // two never disagree about how the run ended.
+    const durable = handoff.status === 'recorded' && handoff.replay
+      ? handoff
+      : null;
+    const terminal = durable?.persistedOutcome ?? {
       lifecycleState: outcome.lifecycleState,
       outcome: outcome.outcome,
       stateReason: outcome.stateReason,
       ...(outcome.failureReason ? { failureReason: outcome.failureReason } : {}),
-      atMs: outcome.atMs ?? Date.now(),
+    };
+    // Terminalization is the last act on every path, including a failed Bus
+    // handoff, and it is never swallowed: an unterminalized run is an orphan.
+    await this.options.run.terminalize({
+      lifecycleState: terminal.lifecycleState,
+      outcome: terminal.outcome,
+      stateReason: terminal.stateReason,
+      ...(terminal.failureReason ? { failureReason: terminal.failureReason } : {}),
+      atMs: durable?.occurredAtMs ?? outcome.atMs ?? Date.now(),
     });
-    this.emit('terminal', 'ok', { detail: outcome.lifecycleState });
+    this.emit('terminal', durable ? 'replayed' : 'ok', { detail: terminal.lifecycleState });
     return { handoff, handoffKind, terminalized: true };
   }
 
@@ -386,6 +400,10 @@ export class AutomataBusWorkerRun {
           findingRefs: normalizeReceiptRefs(receipt.findingRefs, 'finding refs'),
           evidenceRefs: normalizeReceiptRefs(receipt.evidenceRefs, 'evidence refs'),
           artifactRefs: receipt.artifactRefs.map(reference => ({ ...reference })),
+          ...(receipt.occurredAtMs === undefined ? {} : { occurredAtMs: receipt.occurredAtMs }),
+          ...(receipt.persistedOutcome
+            ? { persistedOutcome: { ...receipt.persistedOutcome } }
+            : {}),
         };
       },
       onFailure: (error, disposition) => {

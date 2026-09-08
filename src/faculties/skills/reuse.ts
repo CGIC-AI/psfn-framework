@@ -21,6 +21,7 @@
 
 import type { ToolCallOutcomeCounts } from '../../shared/contracts/tool-call-outcome.js';
 import type { SkillReuseConfig } from '../../system/config/skills-config.js';
+import type { SkillOutcomeEvidence } from './telemetry.js';
 import type { SkillEntry } from './types.js';
 
 /** One admitted, companion-owned skill offered back to the companion. */
@@ -31,6 +32,36 @@ export interface SkillReuseCandidate {
   score: number;
   /** The version a revision must bind to, when the entry declares one. */
   version?: number;
+  /**
+   * -1..1 ordering signal from recorded post-use outcomes (sap72). Positive
+   * when past turns that used this skill demonstrated reusable value, negative
+   * when they ended ambiguous, 0 with no recorded evidence. Reported so the
+   * ordering is inspectable; it never changes `score`.
+   */
+  outcomeSignal: number;
+}
+
+/**
+ * Durable evidence about turns that USED a skill, keyed by lowercase skill
+ * name — the shape `SkillUsageTelemetryStore.listOutcomeEvidence()` returns.
+ */
+export type SkillOutcomeEvidenceIndex = ReadonlyMap<string, SkillOutcomeEvidence>;
+
+/**
+ * Net post-use signal in -1..1: the share of recorded outcomes that
+ * demonstrated value, minus the share that did not. No evidence is 0, which
+ * leaves ordering exactly where lexical relevance put it — an unused skill is
+ * never punished for having no history.
+ */
+function outcomeSignal(
+  name: string,
+  evidence: SkillOutcomeEvidenceIndex | undefined,
+): number {
+  const recorded = evidence?.get(name.toLowerCase());
+  if (!recorded) return 0;
+  const total = recorded.demonstratedCount + recorded.ambiguousCount;
+  if (total === 0) return 0;
+  return (recorded.demonstratedCount - recorded.ambiguousCount) / total;
 }
 
 const CUE_STOP_WORDS = new Set([
@@ -87,9 +118,15 @@ export function rankOwnedSkillsForCue(input: {
   cue: string;
   entries: readonly SkillEntry[];
   config: SkillReuseConfig;
+  /**
+   * Recorded post-use outcomes (sap72). Absent means no evidence, which ranks
+   * exactly as today's pure lexical ordering.
+   */
+  outcomeEvidence?: SkillOutcomeEvidenceIndex;
 }): SkillReuseCandidate[] {
   const cue = cueTokens(input.cue);
   if (cue.size === 0) return [];
+  const weight = input.config.outcomeEvidenceWeight;
   return input.entries
     // Companion-owned only: bundled and extra skills are not the companion's to
     // revise, so offering them as revision targets would be a false promise.
@@ -98,11 +135,16 @@ export function rankOwnedSkillsForCue(input: {
       name: entry.name,
       description: entry.description,
       score: relevanceScore(entry, cue),
+      outcomeSignal: outcomeSignal(entry.name, input.outcomeEvidence),
       ...(entry.version === undefined ? {} : { version: entry.version }),
     }))
+    // The floor is judged on relevance ALONE: recorded outcomes order the
+    // skills that already qualify, they never admit or evict one.
     .filter(candidate => candidate.score >= input.config.minRelevanceScore)
     .sort((left, right) => (
-      right.score - left.score || left.name.localeCompare(right.name)
+      (right.score + weight * right.outcomeSignal)
+        - (left.score + weight * left.outcomeSignal)
+      || left.name.localeCompare(right.name)
     ))
     .slice(0, input.config.maxCandidates);
 }

@@ -404,6 +404,78 @@ describe('governed Automata lifecycle restart certification', () => {
     INTEGRATION_TIMEOUT_MS,
   );
 
+  it('converges the run registry on the durable terminal after a crash between handoff and terminalize', async () => {
+    await withDatabase(async databaseUrl => {
+      const spec: AutomataClassRunSpec = {
+        automatonClass: 'shard.long_horizon',
+        runId: 'shard-public-example-crash-window',
+        workerId: 'shard-public-example-crash-window',
+        taskId: 'shard-public-example-crash-window',
+        taskLabel: 'Long-horizon shard',
+        taskSummary: 'Execute one long-horizon shard workload to a terminal outcome.',
+        sessionIds: ['shard:shard-public-example-crash-window'],
+      };
+
+      // Crash INSIDE settle: the Bus handoff commits, then terminalization
+      // dies. This is the window psfn-framework-8n40k describes.
+      const crashed = await startProcess(databaseUrl, COMPANION_A);
+      const crashingRunPort = createAutomataClassRunPort(crashed.registry, spec);
+      const opened = await openAutomataBusWorkerRun({
+        access: crashed.access,
+        run: {
+          begin: () => crashingRunPort.begin(),
+          terminalize: async () => { throw new Error('crashed before terminalize committed'); },
+        },
+        terminal: crashed.terminal,
+        briefingQuery: spec.taskLabel,
+      });
+      await expect(opened.settle({
+        lifecycleState: 'completed',
+        outcome: 'completed',
+        stateReason: 'run_completed',
+        resultKind: 'final',
+        summary: 'shard.long_horizon process result',
+      })).rejects.toThrow(/crashed before terminalize committed/u);
+      const committed = await terminalEvents(crashed);
+      expect(committed).toHaveLength(1);
+      const durableOccurredAt = Date.parse(committed[0]!.occurredAt);
+      // The registry never reached a terminal state.
+      expect(crashed.registry.getRun(spec.runId)).toMatchObject({ status: 'running' });
+      await crashed.close();
+
+      // Restart: the work re-runs and this time reports a DIFFERENT outcome.
+      const restarted = await startProcess(databaseUrl, COMPANION_A);
+      const resumedRunPort = createAutomataClassRunPort(restarted.registry, spec);
+      const resumed = await openAutomataBusWorkerRun({
+        access: restarted.access,
+        run: resumedRunPort,
+        terminal: restarted.terminal,
+        briefingQuery: spec.taskLabel,
+      });
+      expect(resumed.binding.execute).toBe(true);
+      const settlement = await resumed.settle({
+        lifecycleState: 'failed',
+        outcome: 'blocked',
+        stateReason: 'run_failed',
+        failureReason: 'the post-crash re-run failed',
+        resultKind: 'none',
+      });
+
+      // One terminal event, re-read rather than recomputed: no degraded handoff.
+      expect(settlement.handoff).toMatchObject({ status: 'recorded', replay: true });
+      expect(settlement.terminalized).toBe(true);
+      expect(await terminalEvents(restarted)).toHaveLength(1);
+      // The registry converges on the durable Bus finding, at its recorded time.
+      expect(restarted.registry.getRun(spec.runId)).toMatchObject({
+        status: 'completed',
+        outcome: 'completed',
+        finishedAtMs: durableOccurredAt,
+      });
+      expect(restarted.registry.getRun(spec.runId)?.failureReason).toBeUndefined();
+      await restarted.close();
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+
   it('exposes the briefing contract version the runtime accepts', () => {
     expect(AUTOMATA_BUS_WORKER_BRIEFING_SCHEMA_VERSION).toBe(1);
   });

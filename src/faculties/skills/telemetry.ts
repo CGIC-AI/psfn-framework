@@ -32,11 +32,41 @@ interface StoredSkillUsageRecord {
   totalDurationMs: number;
   lastDurationMs: number | null;
   lastOutcome: SkillInvocationOutcome;
+  /** Turns that USED this skill and then demonstrated reusable value (sap72). */
+  postUseDemonstratedCount?: number;
+  /** Turns that used it and ended ambiguous: a failure, denial, or degraded read. */
+  postUseAmbiguousCount?: number;
+  lastPostUseOutcomeAt?: string;
 }
 
 interface StoredSkillUsageTelemetry {
   version: typeof TELEMETRY_VERSION;
   skills: Record<string, StoredSkillUsageRecord | undefined>;
+  /**
+   * Last moment already attributed to a post-use outcome. Uses recorded after
+   * it are the ones the next completed turn answers for, which is what makes
+   * the attribution survive a restart (sap72).
+   */
+  postUseWatermark?: string;
+}
+
+/**
+ * Durable, content-free evidence about how turns went AFTER a skill was used
+ * (psfn-framework-sap72). Structural only: it comes from the scheduler's own
+ * outcome census, never from the model's account of its work, so a skill
+ * cannot report its own success.
+ */
+export interface SkillOutcomeEvidence {
+  name: string;
+  demonstratedCount: number;
+  ambiguousCount: number;
+  lastOutcomeAt: string | null;
+}
+
+export interface RecordSkillPostUseOutcomeInput {
+  /** Whether the completed turn demonstrated reusable value. */
+  demonstratedValue: boolean;
+  occurredAt?: Date | string;
 }
 
 interface SkillUsageTelemetryStoreOptions {
@@ -159,6 +189,42 @@ function parseStoredRecord(key: string, value: unknown): StoredSkillUsageRecord 
     totalDurationMs: readNonNegativeNumber(value, 'totalDurationMs'),
     lastDurationMs: readOptionalDuration(value, 'lastDurationMs'),
     lastOutcome: normalizeOutcome(value.lastOutcome),
+    // Absent in files written before sap72; absence means "no evidence yet",
+    // which is exactly zero counts, so an older file loads unchanged.
+    ...(readOptionalNonNegativeInteger(value, 'postUseDemonstratedCount') === undefined
+      ? {}
+      : { postUseDemonstratedCount: readOptionalNonNegativeInteger(value, 'postUseDemonstratedCount')! }),
+    ...(readOptionalNonNegativeInteger(value, 'postUseAmbiguousCount') === undefined
+      ? {}
+      : { postUseAmbiguousCount: readOptionalNonNegativeInteger(value, 'postUseAmbiguousCount')! }),
+    ...(readOptionalIsoTimestamp(value, 'lastPostUseOutcomeAt') === undefined
+      ? {}
+      : { lastPostUseOutcomeAt: readOptionalIsoTimestamp(value, 'lastPostUseOutcomeAt')! }),
+  };
+}
+
+function readOptionalNonNegativeInteger(
+  record: Record<string, unknown>,
+  field: string,
+): number | undefined {
+  if (record[field] === undefined) return undefined;
+  return readNonNegativeInteger(record, field);
+}
+
+function readOptionalIsoTimestamp(
+  record: Record<string, unknown>,
+  field: string,
+): string | undefined {
+  if (record[field] === undefined) return undefined;
+  return readIsoTimestamp(record, field);
+}
+
+function toOutcomeEvidence(record: StoredSkillUsageRecord): SkillOutcomeEvidence {
+  return {
+    name: record.name,
+    demonstratedCount: record.postUseDemonstratedCount ?? 0,
+    ambiguousCount: record.postUseAmbiguousCount ?? 0,
+    lastOutcomeAt: record.lastPostUseOutcomeAt ?? null,
   };
 }
 
@@ -232,11 +298,64 @@ export class SkillUsageTelemetryStore {
       totalDurationMs: nextTotalDurationMs,
       lastDurationMs: durationMs,
       lastOutcome: outcome,
+      // Post-use evidence accumulates across uses; a fresh invocation adds a
+      // use, it does not erase what earlier turns proved (sap72).
+      ...(existing?.postUseDemonstratedCount === undefined
+        ? {}
+        : { postUseDemonstratedCount: existing.postUseDemonstratedCount }),
+      ...(existing?.postUseAmbiguousCount === undefined
+        ? {}
+        : { postUseAmbiguousCount: existing.postUseAmbiguousCount }),
+      ...(existing?.lastPostUseOutcomeAt === undefined
+        ? {}
+        : { lastPostUseOutcomeAt: existing.lastPostUseOutcomeAt }),
     };
 
     telemetry.skills[key] = record;
     this.markDirty();
     return toPublicStats(record);
+  }
+
+  /**
+   * Attribute one completed turn's structural outcome to the skills that turn
+   * actually used (psfn-framework-sap72).
+   *
+   * "Used" means invoked since the last attributed moment: the durable
+   * watermark is what makes this survive a restart, so a skill used just before
+   * a crash is still answered for by the turn that follows. Returns the skill
+   * names the evidence landed on; an ordinary turn that used no skill records
+   * nothing and still advances the watermark.
+   */
+  recordPostUseOutcome(input: RecordSkillPostUseOutcomeInput): string[] {
+    const telemetry = this.ensureLoaded();
+    const occurredAt = normalizeOccurredAt(input.occurredAt, this.now());
+    const watermark = telemetry.postUseWatermark;
+    const attributed: string[] = [];
+    for (const record of Object.values(telemetry.skills)) {
+      if (!record) continue;
+      if (watermark !== undefined && record.lastUsedAt <= watermark) continue;
+      if (record.lastUsedAt > occurredAt) continue;
+      if (input.demonstratedValue) {
+        record.postUseDemonstratedCount = (record.postUseDemonstratedCount ?? 0) + 1;
+      } else {
+        record.postUseAmbiguousCount = (record.postUseAmbiguousCount ?? 0) + 1;
+      }
+      record.lastPostUseOutcomeAt = occurredAt;
+      attributed.push(record.name);
+    }
+    telemetry.postUseWatermark = occurredAt;
+    this.markDirty();
+    return attributed.sort((left, right) => left.localeCompare(right));
+  }
+
+  /** Durable post-use evidence for every skill that has any, by lowercase key. */
+  listOutcomeEvidence(): Map<string, SkillOutcomeEvidence> {
+    const evidence = new Map<string, SkillOutcomeEvidence>();
+    for (const [key, record] of Object.entries(this.ensureLoaded().skills)) {
+      if (!record) continue;
+      evidence.set(key, toOutcomeEvidence(record));
+    }
+    return evidence;
   }
 
   get(name: string): SkillUsageStats | null {
@@ -320,6 +439,21 @@ export class SkillUsageTelemetryStore {
     const telemetry = emptyTelemetry();
     for (const [key, value] of Object.entries(parsed.skills)) {
       telemetry.skills[key] = parseStoredRecord(key, value);
+    }
+    if (parsed.postUseWatermark !== undefined) {
+      telemetry.postUseWatermark = readIsoTimestamp(parsed, 'postUseWatermark');
+    } else {
+      // A file written before post-use evidence existed carries a whole
+      // history of uses that no turn is answerable for. Seed the watermark at
+      // the latest recorded use so the first turn after the upgrade credits
+      // only what it actually used, not every skill ever opened (sap72).
+      const latestUse = Object.values(telemetry.skills)
+        .reduce<string | undefined>((latest, record) => (
+          record && (latest === undefined || record.lastUsedAt > latest)
+            ? record.lastUsedAt
+            : latest
+        ), undefined);
+      if (latestUse !== undefined) telemetry.postUseWatermark = latestUse;
     }
     return telemetry;
   }

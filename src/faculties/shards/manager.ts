@@ -270,6 +270,17 @@ export interface ShardManagerDeps {
 }
 
 const SHARD_AUTOMATON_CLASS: ProductionAutomataClassId = 'shard.long_horizon';
+/**
+ * Automata Bus run id for one GOVERNED ATTEMPT at a shard (8n40k). The shard id
+ * alone is stable for the shard's whole life, so a second governed attempt
+ * under it would re-enter a terminal run and fail closed forever. Binding the
+ * attempt into the run id opens a fresh run instead, which is exactly what the
+ * class-lifecycle contract asks a re-attempting class to do. `workerId` and
+ * `taskId` stay the bare shard id so lineage still points at one shard.
+ */
+function buildShardAutomataRunId(shardId: string, attempt: number): string {
+  return attempt > 1 ? `${shardId}#attempt-${attempt}` : shardId;
+}
 const SHARD_TASK_LABEL = 'Long-horizon shard';
 const SHARD_TASK_SUMMARY = 'Execute one long-horizon shard workload to a terminal outcome.';
 
@@ -286,6 +297,11 @@ export class ShardManager implements ShardExecutionPort {
   private heartbeatDisconnectAfterMs: number;
   private activeShards = new Map<string, ActiveShard>();
   private workloadHandles = new Map<string, AuthenticatedShardWorkloadHandle>();
+  /**
+   * Governed Automata attempts per live shard id (8n40k). Entries live exactly
+   * as long as the shard does; see `buildShardAutomataRunId`.
+   */
+  private governedShardAttempts = new Map<string, number>();
   readonly shardDirectory: LiveShardDirectory;
   readonly shardParentIcp: LiveShardParentIcpRuntime;
   private activeShardChannels = new Map<string, Set<string>>();
@@ -484,11 +500,13 @@ export class ShardManager implements ShardExecutionPort {
     name: string;
     execute: () => Promise<ShardResult>;
   }): Promise<ShardResult> {
+    const attempt = (this.governedShardAttempts.get(input.shardId) ?? 0) + 1;
+    this.governedShardAttempts.set(input.shardId, attempt);
     const governed = await runGovernedAutomataClass({
       runtime: this.deps.automataClassLifecycle,
       spec: {
         automatonClass: SHARD_AUTOMATON_CLASS,
-        runId: input.shardId,
+        runId: buildShardAutomataRunId(input.shardId, attempt),
         workerId: input.shardId,
         taskId: input.shardId,
         taskLabel: SHARD_TASK_LABEL,
@@ -512,7 +530,10 @@ export class ShardManager implements ShardExecutionPort {
       },
     });
     if (governed.status === 'replayed') {
-      throw new Error(`Shard "${input.shardId}" re-entered an already terminal Automata run`);
+      throw new Error(
+        `Shard "${input.shardId}" re-entered an already terminal Automata run `
+        + `(attempt ${attempt})`,
+      );
     }
     return governed.value;
   }
@@ -1603,6 +1624,9 @@ export class ShardManager implements ShardExecutionPort {
       }
     }
     const deleted = this.activeShards.delete(shardId);
+    // The shard id is retired here, so its governed-attempt counter goes with
+    // it — nothing can re-attempt a shard that no longer exists.
+    this.governedShardAttempts.delete(shardId);
     this.shardDirectory.release(shardId);
     this.configurationRegistry.release(shardId);
     this.unregisterActiveShardChannel(channelId, shardId);

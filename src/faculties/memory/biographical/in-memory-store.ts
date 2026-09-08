@@ -166,6 +166,17 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
     this.candidates.set(candidate.id, { candidateJson: serializeCandidate(candidate) });
   }
 
+  /** Advisory pending-budget read (a18qq); `writeCandidate` stays authoritative. */
+  async countPendingCandidates(): Promise<number> {
+    return this.pendingCandidates().length;
+  }
+
+  private pendingCandidates(): BiographicalCandidateRecord[] {
+    return [...this.candidates.values()]
+      .map(row => deserializeCandidate(row.candidateJson))
+      .filter(candidate => !['active', 'rejected', 'superseded'].includes(candidate.stage));
+  }
+
   async writeCandidate(
     input: BiographicalCandidateWriteInput,
   ): Promise<BiographicalCandidateRecord> {
@@ -183,9 +194,7 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
     if (this.claims.has(claim.id)) {
       throw new Error(`biographical claim already exists: ${claim.id}`);
     }
-    const pending = [...this.candidates.values()]
-      .map(row => deserializeCandidate(row.candidateJson))
-      .filter(candidate => !['active', 'rejected', 'superseded'].includes(candidate.stage));
+    const pending = this.pendingCandidates();
     if (pending.length >= policy.budgets.maxPendingCandidates) {
       throw new Error('biography candidate pending budget exhausted');
     }

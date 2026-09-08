@@ -11,6 +11,7 @@ import type {
   BiographicalClaimSource,
   BiographicalSubjectRef,
 } from './types.js';
+import type { BiographicalProfileStorePort } from './store-port.js';
 
 const SHA = 'a'.repeat(64);
 const NOW = new Date('2026-08-10T12:00:00.000Z');
@@ -185,6 +186,65 @@ describe('revokeCompanionPublicationChoice — immediate restriction', () => {
     })).rejects.toThrow('only a companion-self claim may be published');
     expect(await s.listGrantsForClaim(claim.id)).toEqual([]);
     expect((await s.getClaim(claim.id))?.portabilityScope).toBe('origin_only');
+  });
+
+  // psfn-framework-a18qq — the two writes a revoke performs (grant revocation
+  // and portability tightening) are one transaction. A mid-write failure must
+  // leave the published state entirely intact, not a revoked grant beside a
+  // still-universally-portable claim.
+  it('rolls the whole revoke back when the portability write fails (a18qq)', async () => {
+    const s = store();
+    const { claim } = await seed(s, 'Sunbeam loaf');
+    const grant = await recordCompanionPublicationChoice({
+      store: s,
+      choice: { claimId: claim.id, reason: 'publish', now: NOW },
+    });
+    expect((await s.getClaim(claim.id))?.portabilityScope).toBe('universal');
+
+    // The second write of the revoke fails; the first must not survive it.
+    const failing: BiographicalProfileStorePort = Object.assign(
+      Object.create(Object.getPrototypeOf(s) as object) as BiographicalProfileStorePort,
+      s,
+      {
+        setClaimPortability: async () => {
+          throw new Error('simulated mid-write failure');
+        },
+      },
+    );
+
+    await expect(revokeCompanionPublicationChoice({
+      store: failing,
+      grantId: grant.id,
+      claimId: claim.id,
+      revoke: { reason: 'I changed my mind', now: NOW },
+    })).rejects.toThrow('simulated mid-write failure');
+
+    // Nothing was half-applied: the grant is still live and the claim is still
+    // published at the reach the choice authorized.
+    expect((await s.getGrant(grant.id))?.revokedAt).toBeUndefined();
+    const refreshed = await s.getClaim(claim.id);
+    expect(refreshed?.effectiveSensitivity).toBe('public');
+    expect(refreshed?.portabilityScope).toBe('universal');
+  });
+
+  it('fails closed rather than revoking against an unknown claim (a18qq)', async () => {
+    const s = store();
+    const { claim } = await seed(s, 'Sunbeam loaf');
+    const grant = await recordCompanionPublicationChoice({
+      store: s,
+      choice: { claimId: claim.id, reason: 'publish', now: NOW },
+    });
+
+    await expect(revokeCompanionPublicationChoice({
+      store: s,
+      grantId: grant.id,
+      claimId: 'claim-that-does-not-exist',
+      revoke: { reason: 'oops', now: NOW },
+    })).rejects.toThrow('cannot revoke a publication choice for an unknown claim');
+
+    // The real grant is untouched by the refused revoke.
+    expect((await s.getGrant(grant.id))?.revokedAt).toBeUndefined();
+    expect((await s.getClaim(claim.id))?.effectiveSensitivity).toBe('public');
   });
 
   it('revoking one nickname does not affect another', async () => {

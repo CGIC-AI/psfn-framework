@@ -1048,6 +1048,54 @@ describe('handleMessageForTurn MCP disclosure context', () => {
     expect(runtime.agent.prompt).toHaveBeenCalledOnce();
   });
 
+  it('publishes the turn egress correlation before generation and the folded proof after', async () => {
+    // ccgdz.6 timing (S12B lane B24): a model-invoked egress tool runs INSIDE
+    // the generation, and the turn's custody snapshot is folded only after the
+    // tool loop returns. The correlation must therefore be published before the
+    // model runs — without it the egress guard's record-first commit has no key
+    // to bind the delivered bytes to, and every proof-requiring destination is
+    // refused mid-turn as a custody-store outage.
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: makeContextManifestFixture(),
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+    });
+    let custodyPublishedBeforeGeneration: (
+      Parameters<TurnExecutionRuntime['setCurrentTurnEgressCustody']>[0]
+    )[] = [];
+    runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
+      custodyPublishedBeforeGeneration = vi
+        .mocked(runtime.setCurrentTurnEgressCustody).mock.calls.map(([custody]) => custody);
+      runtime.agent.state.messages.push({ role: 'user', content: promptMessage.content });
+      runtime.agent.state.messages.push({ role: 'assistant', content: 'assistant reply' });
+    });
+
+    await handleMessageForTurn(runtime, createMessage('msg-egress-custody-correlation'));
+
+    // Exactly one publish before the model: the correlation, with no proof —
+    // the snapshot it would cite does not exist yet.
+    expect(custodyPublishedBeforeGeneration).toHaveLength(1);
+    const correlation = custodyPublishedBeforeGeneration[0];
+    expect(typeof correlation?.turnId).toBe('string');
+    expect(correlation?.proof).toBeUndefined();
+
+    // The fold upgrades the SAME turn's state to the durable proof.
+    const folded = vi.mocked(runtime.setCurrentTurnEgressCustody).mock.calls.at(-1)?.[0];
+    expect(folded?.turnId).toBe(correlation?.turnId);
+    expect(folded?.proof?.custodySnapshotRef).toBe(`turn:${correlation?.turnId}`);
+    expect(folded?.proof?.sourceCount).toBeGreaterThan(0);
+  });
+
   it('records the folded lineage as a durable custody snapshot on the real turn path', async () => {
     const eventBus = new EventBus();
     const buildContext = vi.fn(async () => ({

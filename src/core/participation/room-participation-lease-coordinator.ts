@@ -41,6 +41,14 @@ export interface RoomParticipationDispositionInput {
   /** The disposition's own room message id (already-considered watermark seed). */
   sourceMessageId: string;
   sourceTimestampMs: number;
+  /**
+   * Whether the act that produced this disposition was machine-authored: a
+   * sibling bot's summons, a reply to one, or the companion's own endogenous
+   * room entry. Required and never inferred — it is the bot-loop fence input on
+   * the opening path, and an absent value would fail open into the loop the
+   * fence exists to stop.
+   */
+  authorIsMachine: boolean;
   isDirectMessage?: boolean;
   nowMs?: number;
 }
@@ -57,7 +65,9 @@ type RoomParticipationDispositionSkipReason =
   | 'not_group'
   | 'unsupported_channel'
   | 'invalid_source'
-  | 'disposition_not_admitted';
+  | 'disposition_not_admitted'
+  /** The bot-loop fence closed this room; only a human turn re-opens it. */
+  | 'machine_fenced';
 
 export type RoomParticipationContinuationOutcome =
   | { outcome: 'admitted' }
@@ -148,6 +158,10 @@ export class RoomParticipationLeaseCoordinator {
    * owner-admitted dispositions may OPEN membership; any of them refreshes a
    * lease that is already live, because each one is the companion or the room
    * re-engaging.
+   *
+   * The bot-loop fence outranks both: a machine-authored disposition carries the
+   * machine streak forward instead of clearing it, and it can never re-open a
+   * lease closed for `machine_streak`. Only a human turn re-opens that room.
    */
   async recordDisposition(
     input: RoomParticipationDispositionInput,
@@ -183,6 +197,7 @@ export class RoomParticipationLeaseCoordinator {
       expiresAtMs,
       watermarkMessageId: sourceMessageId,
       watermarkTimestampMs: input.sourceTimestampMs,
+      authorIsMachine: input.authorIsMachine,
     });
     if (refreshed) {
       return { outcome: 'refreshed', expiresAtMs: refreshed.expiresAtMs };
@@ -190,15 +205,22 @@ export class RoomParticipationLeaseCoordinator {
     if (!this.settings.openOn[OPEN_ON_KEYS[input.disposition]]) {
       return { outcome: 'skipped', reason: 'disposition_not_admitted' };
     }
+    // A machine-authored disposition cannot re-open a lease the bot-loop fence
+    // closed: the store refuses it atomically and reports null, so two sibling
+    // bots cannot mention each other back into a room they were cut off from.
     const opened = await this.store.open({
       companionId: this.companionId,
       channelId: input.channelId,
       disposition: input.disposition,
       watermarkMessageId: sourceMessageId,
       watermarkTimestampMs: input.sourceTimestampMs,
+      authorIsMachine: input.authorIsMachine,
       nowMs,
       expiresAtMs,
     });
+    if (!opened) {
+      return { outcome: 'skipped', reason: 'machine_fenced' };
+    }
     return {
       outcome: 'opened',
       disposition: opened.openedDisposition,

@@ -338,6 +338,10 @@ export function createProductionSocialImpulseOutreachRuntime(
         disposition: 'endogenous_room_entry',
         sourceMessageId: candidate.sourceEventId,
         sourceTimestampMs: candidate.occurredAtMs,
+        // The companion itself is the author of an endogenous entry: there is
+        // no human turn here, so the bot-loop fence keeps its streak and a room
+        // the fence closed stays closed until a human speaks in it.
+        authorIsMachine: true,
         nowMs: candidate.occurredAtMs,
       });
       return { outcome: 'delivered' };

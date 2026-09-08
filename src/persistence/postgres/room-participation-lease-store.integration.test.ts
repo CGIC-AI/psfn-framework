@@ -81,6 +81,7 @@ describe('room participation lease store integration', () => {
           disposition: 'reply',
           watermarkMessageId: 'msg-0',
           watermarkTimestampMs: NOW - 1_000,
+          authorIsMachine: false,
           nowMs: NOW,
           expiresAtMs: NOW + TTL_MS,
         });
@@ -139,6 +140,7 @@ describe('room participation lease store integration', () => {
           disposition: 'reaction',
           watermarkMessageId: 'msg-0',
           watermarkTimestampMs: NOW - 1_000,
+          authorIsMachine: false,
           nowMs: NOW,
           expiresAtMs: NOW + TTL_MS,
         });
@@ -169,6 +171,7 @@ describe('room participation lease store integration', () => {
           disposition: 'reply',
           watermarkMessageId: 'msg-0',
           watermarkTimestampMs: NOW - 1_000,
+          authorIsMachine: false,
           nowMs: NOW,
           expiresAtMs: NOW + TTL_MS,
         });
@@ -222,6 +225,7 @@ describe('room participation lease store integration', () => {
           expiresAtMs: lapsed + TTL_MS,
           watermarkMessageId: 'msg-7',
           watermarkTimestampMs: lapsed,
+          authorIsMachine: false,
         })).toBeNull();
       } finally {
         await store.shutdown();
@@ -243,6 +247,7 @@ describe('room participation lease store integration', () => {
             disposition: 'reply',
             watermarkMessageId: 'msg-0',
             watermarkTimestampMs: NOW - 1_000,
+            authorIsMachine: false,
             nowMs: NOW,
             expiresAtMs: NOW + TTL_MS,
           });
@@ -289,12 +294,13 @@ describe('room participation lease store integration', () => {
           disposition: 'endogenous_room_entry',
           watermarkMessageId: 'msg-9',
           watermarkTimestampMs: NOW + 9_000,
+          authorIsMachine: false,
           nowMs: NOW + 9_000,
           expiresAtMs: NOW + 9_000 + TTL_MS,
         });
-        expect(reopened.status).toBe('active');
-        expect(reopened.consideredCount).toBe(0);
-        expect(reopened.closeReason).toBeNull();
+        expect(reopened?.status).toBe('active');
+        expect(reopened?.consideredCount).toBe(0);
+        expect(reopened?.closeReason).toBeNull();
       } finally {
         await store.shutdown();
       }
@@ -314,6 +320,7 @@ describe('room participation lease store integration', () => {
           disposition: 'reply',
           watermarkMessageId: 'msg-0',
           watermarkTimestampMs: NOW - 1_000,
+          authorIsMachine: false,
           nowMs: NOW,
           expiresAtMs: NOW + TTL_MS,
         });
@@ -338,6 +345,160 @@ describe('room participation lease store integration', () => {
           nowMs: NOW + 3_000,
         });
         expect(engaged?.ignoreStreak).toBe(0);
+      } finally {
+        await store.shutdown();
+      }
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  it(
+    'refuses a machine-authored re-open of a lease the bot-loop fence closed',
+    async () => {
+      const databaseUrl = await freshDatabaseUrl();
+      const store = await PostgresRoomParticipationLeaseStore.connect(databaseUrl);
+      try {
+        await store.open({
+          companionId: COMPANION_A,
+          channelId: CHANNEL,
+          disposition: 'reply',
+          watermarkMessageId: 'msg-0',
+          watermarkTimestampMs: NOW - 1_000,
+          authorIsMachine: false,
+          nowMs: NOW,
+          expiresAtMs: NOW + TTL_MS,
+        });
+        // Two sibling-bot continuations spend the fence.
+        for (const [index, messageId] of ['msg-1', 'msg-2'].entries()) {
+          const claimed = await store.claimContinuation(claimInput({
+            messageId,
+            timestampMs: NOW + (index + 1) * 1_000,
+            authorIsMachine: true,
+            nowMs: NOW + (index + 1) * 1_000,
+          }));
+          expect(claimed?.machineStreak).toBe(index + 1);
+        }
+        const fenced = await store.close({
+          companionId: COMPANION_A,
+          channelId: CHANNEL,
+          reason: 'machine_streak',
+          nowMs: NOW + 3_000,
+        });
+        expect(fenced?.closeReason).toBe('machine_streak');
+
+        // The regression: a peer bot's own direct summons must not resurrect the
+        // lease, and must not zero the streak that fenced it.
+        expect(await store.open({
+          companionId: COMPANION_A,
+          channelId: CHANNEL,
+          disposition: 'direct_summons',
+          watermarkMessageId: 'msg-3',
+          watermarkTimestampMs: NOW + 4_000,
+          authorIsMachine: true,
+          nowMs: NOW + 4_000,
+          expiresAtMs: NOW + 4_000 + TTL_MS,
+        })).toBeNull();
+        const stillFenced = await store.read({
+          companionId: COMPANION_A,
+          channelId: CHANNEL,
+        });
+        expect(stillFenced?.status).toBe('closed');
+        expect(stillFenced?.closeReason).toBe('machine_streak');
+        expect(stillFenced?.machineStreak).toBe(2);
+
+        // Only a human turn re-opens the room, and it resets the fence.
+        const reopened = await store.open({
+          companionId: COMPANION_A,
+          channelId: CHANNEL,
+          disposition: 'direct_summons',
+          watermarkMessageId: 'msg-4',
+          watermarkTimestampMs: NOW + 5_000,
+          authorIsMachine: false,
+          nowMs: NOW + 5_000,
+          expiresAtMs: NOW + 5_000 + TTL_MS,
+        });
+        expect(reopened?.status).toBe('active');
+        expect(reopened?.machineStreak).toBe(0);
+        expect(reopened?.closeReason).toBeNull();
+      } finally {
+        await store.shutdown();
+      }
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  it(
+    'carries the machine streak through a machine-authored re-open of a lapsed lease',
+    async () => {
+      const databaseUrl = await freshDatabaseUrl();
+      const store = await PostgresRoomParticipationLeaseStore.connect(databaseUrl);
+      try {
+        await store.open({
+          companionId: COMPANION_A,
+          channelId: CHANNEL,
+          disposition: 'reply',
+          watermarkMessageId: 'msg-0',
+          watermarkTimestampMs: NOW - 1_000,
+          authorIsMachine: false,
+          nowMs: NOW,
+          expiresAtMs: NOW + TTL_MS,
+        });
+        const claimed = await store.claimContinuation(claimInput({
+          messageId: 'msg-1',
+          timestampMs: NOW + 1_000,
+          authorIsMachine: true,
+          nowMs: NOW + 1_000,
+        }));
+        expect(claimed?.machineStreak).toBe(1);
+        await store.close({
+          companionId: COMPANION_A,
+          channelId: CHANNEL,
+          reason: 'silence',
+          nowMs: NOW + 2_000,
+        });
+        // A lapse is not the fence, so a machine-authored disposition may
+        // re-open — but it re-enters mid-fence rather than with a clean slate.
+        const reopened = await store.open({
+          companionId: COMPANION_A,
+          channelId: CHANNEL,
+          disposition: 'endogenous_room_entry',
+          watermarkMessageId: 'msg-2',
+          watermarkTimestampMs: NOW + 3_000,
+          authorIsMachine: true,
+          nowMs: NOW + 3_000,
+          expiresAtMs: NOW + 3_000 + TTL_MS,
+        });
+        expect(reopened?.status).toBe('active');
+        expect(reopened?.consideredCount).toBe(0);
+        expect(reopened?.machineStreak).toBe(1);
+
+        // The refresh path keeps the same rule for the withdrawal streak.
+        await store.recordAppraisal({
+          companionId: COMPANION_A,
+          channelId: CHANNEL,
+          action: 'ignore',
+          nowMs: NOW + 4_000,
+        });
+        const machineRefreshed = await store.refresh({
+          companionId: COMPANION_A,
+          channelId: CHANNEL,
+          nowMs: NOW + 5_000,
+          expiresAtMs: NOW + 5_000 + TTL_MS,
+          watermarkMessageId: 'msg-3',
+          watermarkTimestampMs: NOW + 5_000,
+          authorIsMachine: true,
+        });
+        expect(machineRefreshed?.ignoreStreak).toBe(1);
+        const humanRefreshed = await store.refresh({
+          companionId: COMPANION_A,
+          channelId: CHANNEL,
+          nowMs: NOW + 6_000,
+          expiresAtMs: NOW + 6_000 + TTL_MS,
+          watermarkMessageId: 'msg-4',
+          watermarkTimestampMs: NOW + 6_000,
+          authorIsMachine: false,
+        });
+        expect(humanRefreshed?.ignoreStreak).toBe(0);
       } finally {
         await store.shutdown();
       }

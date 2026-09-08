@@ -52,6 +52,7 @@ import { PassiveNameCandidateBuilder } from '../../core/participation/passive-na
 import { RoomParticipationLeaseCoordinator } from '../../core/participation/room-participation-lease-coordinator.js';
 import { FakeRoomParticipationLeaseStore } from '../../test-support/room-participation-lease-store-fake.js';
 import {
+  createDefaultPassiveNameCandidateSettings,
   createDefaultRoomParticipationLeaseSettings,
   type RoomParticipationLeaseSettings,
 } from '../../system/config/participation-config.js';
@@ -1168,6 +1169,7 @@ describe('registerGatewayMessageHandlers', () => {
       sourceMessageId: message.id,
       trigger: 'direct_address',
       triggerAuthorId: message.authorId,
+      triggerAuthorIsMachine: false,
       triggerAuthorName: message.authorName,
       triggerContent: message.content,
       triggerTimestampMs: message.timestamp.getTime(),
@@ -1433,6 +1435,8 @@ describe('registerGatewayMessageHandlers', () => {
         channelId: ICP_CHANNEL,
         sourceMessageId: INBOUND_ICP_MESSAGE_ID,
         triggerAuthorId: ICP_A,
+        // An authenticated inbound ICP turn is a peer companion.
+        triggerAuthorIsMachine: true,
       }));
       expect(harness.agentLoop.handleMessage).toHaveBeenCalledOnce();
     });
@@ -2216,6 +2220,7 @@ describe('registerGatewayMessageHandlers — participation appraiser wiring (jp3
       sourceMessageId: 'discord-observe-participation-1',
       trigger: 'passive_name',
       triggerAuthorId: 'human-alice',
+      triggerAuthorIsMachine: false,
       triggerAuthorName: 'Alice',
       triggerContent: 'I wonder what Selene thinks about that',
       triggerTimestampMs: 1_000_000,
@@ -2528,6 +2533,7 @@ describe('registerGatewayMessageHandlers — reservation phase wiring (jp36.5.1.
       sourceMessageId: SOURCE_MESSAGE_ID,
       trigger: 'passive_name',
       triggerAuthorId: 'human-alice',
+      triggerAuthorIsMachine: false,
       triggerAuthorName: 'Alice',
       triggerContent: 'I wonder what Selene thinks',
       triggerTimestampMs: 1_000_000,
@@ -3062,6 +3068,8 @@ describe('registerGatewayMessageHandlers — bounded room participation lease (j
   function createParticipationHarness(input?: {
     settings?: RoomParticipationLeaseSettings;
     sessionEntries?: SessionEntry[];
+    /** Disables the name-spam debounce so one test may send several summonses. */
+    debounceWindowMs?: number;
   }) {
     const store = new FakeRoomParticipationLeaseStore();
     const coordinator = new RoomParticipationLeaseCoordinator({
@@ -3078,6 +3086,14 @@ describe('registerGatewayMessageHandlers — bounded room participation lease (j
       companionNames: ['Selene'],
       companionAuthorIds: ['bot-selene'],
       roomParticipationLease: coordinator,
+      ...(input?.debounceWindowMs === undefined
+        ? {}
+        : {
+          settings: {
+            ...createDefaultPassiveNameCandidateSettings(),
+            debounceWindowMs: input.debounceWindowMs,
+          },
+        }),
     });
     const appraise = vi.fn(async (): Promise<ParticipationAppraisalResult> => ({
       appraisal: { action: 'ignore', reasonCode: 'nothing_to_add', confidence: 0.9 },
@@ -3221,6 +3237,7 @@ describe('registerGatewayMessageHandlers — bounded room participation lease (j
             sourceMessageId: 'discord-room-3',
             trigger: 'contextual_continuation',
             triggerAuthorId: 'human-alice',
+            triggerAuthorIsMachine: false,
             triggerAuthorName: 'Alice',
             triggerContent: 'still going on about it',
             triggerTimestampMs: NOW + 60_000,
@@ -3256,5 +3273,77 @@ describe('registerGatewayMessageHandlers — bounded room participation lease (j
     const lease = await store.read({ companionId: COMPANION_ID, channelId: ROOM });
     expect(lease?.status).toBe('closed');
     expect(lease?.closeReason).toBe('room_pressure');
+  });
+
+  it('refuses a fenced peer bot the re-open and admits the human turn after it', async () => {
+    const base = leaseSettings();
+    const { harness, store } = createParticipationHarness({
+      settings: {
+        ...base,
+        maxConsecutiveMachineContinuations: 1,
+        // The fence, not owner policy, must be what refuses the bot's summons.
+        openOn: { ...base.openOn, directSummons: true },
+      },
+      debounceWindowMs: 0,
+    });
+
+    function peerBotMessage(id: string, content: string, offsetMs: number): SubstrateMessage {
+      return roomMessage({
+        id,
+        authorId: 'bot-peer',
+        authorName: 'Peer',
+        content,
+        timestamp: new Date(NOW + offsetMs),
+        routing: {
+          source: 'discord',
+          responseMode: 'observe',
+          authorIsMachineIntelligence: true,
+        },
+      });
+    }
+
+    // A human summons answered through the ordinary reply path opens membership.
+    await harness.onDiscordMessage(roomMessage());
+    await settleDiscordPump();
+    expect((await store.read({ companionId: COMPANION_ID, channelId: ROOM }))?.status)
+      .toBe('active');
+
+    // Two sibling-bot follow-ups spend the bot-loop fence and close the lease.
+    await harness.onDiscordMessage(
+      peerBotMessage('discord-room-2', 'and it would still hold under real load', 30_000),
+    );
+    await settleDiscordPump();
+    await harness.onDiscordMessage(
+      peerBotMessage('discord-room-3', 'though the retry budget worries me', 60_000),
+    );
+    await settleDiscordPump();
+    const fenced = await store.read({ companionId: COMPANION_ID, channelId: ROOM });
+    expect(fenced?.status).toBe('closed');
+    expect(fenced?.closeReason).toBe('machine_streak');
+    expect(fenced?.machineStreak).toBe(1);
+
+    // The regression: one direct mention from the peer bot must not resurrect
+    // the lease and resume the loop the fence just stopped.
+    await harness.onDiscordMessage(
+      peerBotMessage('discord-room-4', 'Selene are you still there', 90_000),
+    );
+    await settleDiscordPump();
+    const stillFenced = await store.read({ companionId: COMPANION_ID, channelId: ROOM });
+    expect(stillFenced?.status).toBe('closed');
+    expect(stillFenced?.closeReason).toBe('machine_streak');
+    expect(stillFenced?.machineStreak).toBe(1);
+
+    // Only a human turn re-opens the room, and it clears the fence.
+    await harness.onDiscordMessage(roomMessage({
+      id: 'discord-room-5',
+      content: 'Selene are you still with us',
+      timestamp: new Date(NOW + 120_000),
+      routing: { source: 'discord', responseMode: 'observe' },
+    }));
+    await settleDiscordPump();
+    const reopened = await store.read({ companionId: COMPANION_ID, channelId: ROOM });
+    expect(reopened?.status).toBe('active');
+    expect(reopened?.openedDisposition).toBe('direct_summons');
+    expect(reopened?.machineStreak).toBe(0);
   });
 });

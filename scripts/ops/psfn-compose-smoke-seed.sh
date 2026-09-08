@@ -6,6 +6,9 @@
 #   * lays the split-root owner files into their canonical roots — cluster-global
 #     owners under SYSTEM_DATA_DIR, per-companion owners under
 #     COMPANION_DATA_DIR (setup.md "What Goes In JSON Owner Files"),
+#   * lays this stack's OWN providers.json/models.json fixtures (never the
+#     repository seeds) so every model purpose routes at the in-stack
+#     provider-stub double and the stack needs no provider account,
 #   * writes a first-run starter companion card at CHARACTER_CARD_PATH,
 #   * chowns the shared named volumes to the runtime UID (999) so the non-root
 #     gateway/agent can write runtime state and bind the gateway socket.
@@ -30,6 +33,9 @@ WORKSPACE_PATH="${WORKSPACE_PATH:-/app/runtime-root/workspaces/personal/main}"
 SHARED_WORKSPACE_DIR="${PSFN_RUNTIME_ROOT:-/app/runtime-root}/workspaces/shared"
 GATEWAY_SOCKET_DIR="$(dirname "${GATEWAY_SOCKET:-/run/psfn/gateway.sock}")"
 CONFIG_DIR="${PSFN_SEED_CONFIG_DIR:-/app/config}"
+# Smoke-only owner fixtures (psfn-framework-j3iol). Mounted read-only from the
+# repository at docker/smoke-fixtures; see SMOKE_FIXTURE_OWNERS below.
+SMOKE_FIXTURE_DIR="${PSFN_SMOKE_FIXTURE_DIR:-/app/docker/smoke-fixtures}"
 CHARACTER_CARD_PATH="${CHARACTER_CARD_PATH:-${COMPANION_DATA_DIR}/companion.json}"
 COMPANION_NAME="${PSFN_SMOKE_COMPANION_NAME:-Smoke}"
 MODEL_CACHE_DIR="${PSFN_SMOKE_MODEL_CACHE_ROOT:-/app/models}"
@@ -39,7 +45,10 @@ RUNTIME_GID="${PSFN_RUNTIME_GID:-999}"
 # Cluster-global owner files (SYSTEM_DATA_DIR). Startup no longer copies seed
 # templates into runtime state, so every owner the runtime requires must be laid
 # down here or the process fails closed on the first missing one.
-SYSTEM_OWNERS="settings models providers trust-policy intake-policy backup places runtime-prompt-layers automata-policy mcp-servers"
+# providers/models are deliberately absent: this disposable stack takes them
+# from its own fixtures (see SMOKE_FIXTURE_OWNERS below), never from the
+# repository seeds.
+SYSTEM_OWNERS="settings trust-policy intake-policy backup places runtime-prompt-layers automata-policy mcp-servers"
 # Per-companion owner files (COMPANION_DATA_DIR) — startup never reads a
 # system-root copy of these as a fallback.
 COMPANION_OWNERS="scheduler capability-tier charge-policy skills"
@@ -82,6 +91,30 @@ for owner in $COMPANION_ONLY_OWNERS; do
   seed_owner "$COMPANION_DATA_DIR" "$owner"
 done
 
+# ── Smoke-only provider/model owners (psfn-framework-j3iol) ──
+# The repository seeds point at OpenRouter, so a keyless stack cannot start:
+# intake screening fails closed at gateway startup when its screener provider
+# has no gateway-resolved credential. This stack instead routes every model
+# purpose at the in-stack `provider-stub` service through its OWN fixtures under
+# docker/smoke-fixtures. Nothing outside this disposable Compose profile reads
+# them, and the production seeds are untouched — a real deployment still points
+# at a real provider and still fails closed without its credential.
+SMOKE_FIXTURE_OWNERS="providers models"
+for owner in $SMOKE_FIXTURE_OWNERS; do
+  fixture_file="${SMOKE_FIXTURE_DIR}/${owner}.json"
+  fixture_target="${SYSTEM_DATA_DIR}/${owner}.json"
+  if [ ! -f "$fixture_file" ]; then
+    echo "[smoke-seed] missing smoke owner fixture: $fixture_file" >&2
+    exit 1
+  fi
+  if [ -f "$fixture_target" ]; then
+    echo "[smoke-seed] keep existing owner: $fixture_target"
+  else
+    cp "$fixture_file" "$fixture_target"
+    echo "[smoke-seed] seeded smoke owner fixture: $fixture_target"
+  fi
+done
+
 # This harness certifies the Autonomous runtime path. Keep the general-purpose
 # seed at its safe nursery default, but make the disposable Compose owners
 # explicit so a green smoke cannot accidentally certify only nursery behavior.
@@ -98,19 +131,6 @@ for capability_owner in \
   ' "$capability_owner"
   echo "[smoke-seed] configured Autonomous capability tier: $capability_owner"
 done
-
-# ── Database tenancy roles (psfn-framework-e5aoa) ──
-# The gateway's topology check requires the shared migration authority and this
-# companion's runtime to authenticate as their own configured PostgreSQL roles.
-# The smoke Postgres ships one superuser, so provision the same roles/schemas the
-# supported compose path provisions, through the shared tenancy module. Without
-# this the gateway exits before it ever binds its API edge.
-if [ -n "${POSTGRES_ADMIN_DATABASE_URL:-}" ]; then
-  node /app/scripts/ops/psfn-compose-smoke-provision-db.mjs
-else
-  echo "[smoke-seed] POSTGRES_ADMIN_DATABASE_URL is required to provision tenancy roles" >&2
-  exit 2
-fi
 
 # ── Fleet manifest ──
 # Every PSFN deployment is a fleet of one or more companions and the gateway
@@ -193,6 +213,24 @@ else
     fs.writeFileSync(process.argv[1], `${JSON.stringify(card, null, 2)}\n`);
   ' "$CHARACTER_CARD_PATH"
   echo "[smoke-seed] wrote starter card: $CHARACTER_CARD_PATH"
+fi
+
+# ── Database tenancy roles (psfn-framework-e5aoa) ──
+# The gateway's topology check requires the shared migration authority and this
+# companion's runtime to authenticate as their own configured PostgreSQL roles.
+# The smoke Postgres ships one superuser, so provision the same roles/schemas the
+# supported compose path provisions, through the shared tenancy module. Without
+# this the gateway exits before it ever binds its API edge.
+#
+# Ordered AFTER every owner/manifest/registry/card write on purpose: the
+# file-laying phase depends on nothing external, so it completes (and is
+# unit-testable) without a database, and this step is the seed's single
+# external-state boundary.
+if [ -n "${POSTGRES_ADMIN_DATABASE_URL:-}" ]; then
+  node /app/scripts/ops/psfn-compose-smoke-provision-db.mjs
+else
+  echo "[smoke-seed] POSTGRES_ADMIN_DATABASE_URL is required to provision tenancy roles" >&2
+  exit 2
 fi
 
 # ── Derive the agent's role-bound gateway auth proofs ──

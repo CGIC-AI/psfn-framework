@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "promptCaching": {
+    "enabled": false
+  },
+  "models": [
+    {
+      "id": "smoke-stub-chat",
+      "rank": 100,
+      "apiKind": "openai-completions",
+      "identity": {
+        "provider": "smoke-stub",
+        "model": "smoke-stub-chat",
+        "source": {
+          "type": "configured",
+          "label": "Compose smoke provider stub"
+        }
+      },
+      "purposes": [
+        { "purpose": "chat", "primary": true },
+        { "purpose": "summary", "primary": true },
+        { "purpose": "reasoning", "primary": true },
+        { "purpose": "longContext", "primary": true },
+        { "purpose": "moa", "primary": true },
+        { "purpose": "vision", "primary": true }
+      ],
+      "capabilities": {
+        "maxOutputTokens": 1024,
+        "contextWindow": 32768,
+        "supportsVision": true
+      },
+      "tuning": {
+        "maxOutputTokens": 1024
+      }
+    },
+    {
+      "id": "smoke-stub-background",
+      "rank": 90,
+      "apiKind": "openai-completions",
+      "identity": {
+        "provider": "smoke-stub",
+        "model": "smoke-stub-background",
+        "source": {
+          "type": "configured",
+          "label": "Compose smoke provider stub"
+        }
+      },
+      "purposes": [
+        { "purpose": "background", "primary": true },
+        { "purpose": "memory", "primary": true },
+        { "purpose": "extraction", "primary": true },
+        { "purpose": "import_processing", "primary": true }
+      ],
+      "capabilities": {
+        "maxOutputTokens": 1024,
+        "contextWindow": 32768
+      },
+      "tuning": {
+        "maxOutputTokens": 1024
+      }
+    }
+  ]
+}

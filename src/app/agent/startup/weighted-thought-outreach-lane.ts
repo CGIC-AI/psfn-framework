@@ -15,6 +15,7 @@ import {
   createWeightedThoughtContradictionDamper,
   type WeightedThoughtContradictionDamperDeps,
 } from '../../../core/intention/weighted-thought-contradiction.js';
+import { createConcernWeightedThoughtProducer } from '../../../core/intention/concern-weighted-thought-producer.js';
 import type { WeightedThoughtStorePort } from '../../../core/intention/weighted-thought-store-port.js';
 import { registerWeightedThoughtOutreachTask } from '../../../core/scheduler/weighted-thought-outreach-lane.js';
 import type { EventBus } from '../../../shared/event-bus.js';
@@ -71,6 +72,19 @@ export function registerWeightedThoughtOutreachLane(deps: WeightedThoughtOutreac
         (await contactStore.getById(contactId))?.timezone ?? null
       ),
     });
+    // ── Concern-derived weighted thoughts (99ugi) ──
+    // A live concern keeps competing for attention through the weighted-thought
+    // lifecycle, carrying its own concern id as live provenance. That
+    // provenance is what the contradiction damper below scopes to, and what the
+    // outbound gate re-verifies at dispatch.
+    eventBus.on(
+      'intention.concern_candidate.reviewed',
+      createConcernWeightedThoughtProducer({
+        concernStore,
+        thoughtStore: weightedThoughtStore,
+        lifecycleConfig: schedulerConfig.weightedThoughtOutreach.lifecycle,
+      }),
+    );
     // ── Charter Law 27 contradiction dampening (g1v99) ──
     // "Said fine but context suggests otherwise should reduce weight rather than
     // zero it out." When a care concern resolves while its resolution VAD still

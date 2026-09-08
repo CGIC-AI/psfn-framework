@@ -74,7 +74,11 @@ export class SatelliteDeviceHealthTracker implements SatelliteDeviceHealthReader
   private unsubscribe: (() => void) | undefined;
 
   constructor(private readonly deps: {
-    /** Re-read on every heartbeat so an operator registry edit takes effect. */
+    /**
+     * Resolves the satellite registry that bounds and authorizes this tracker.
+     * The agent process supplies its startup snapshot (satellites.json is read
+     * once there), so a registry edit takes effect on restart, not live.
+     */
     readonly registry: () => SatelliteRegistryConfig | undefined;
     /** Heartbeat silence after which a satellite reads degraded. */
     readonly staleAfterMs: number;

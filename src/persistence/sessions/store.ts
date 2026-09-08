@@ -446,12 +446,13 @@ export class SessionStore implements TranscriptSearchPort {
     // only over-hide, and without it a tampered restore whose own signature no
     // longer verifies would silently revoke an indexed redaction on the first
     // read of a fresh process.
+    const conservativeBaseline = this.conservativeTurnTombstoneBaseline(
+      params.sessionId,
+      [...(params.cache?.turnTombstones ?? [])],
+    );
     const scanned = this.journalRuntime.readTurnTombstoneAuthorityFromChain(
       archives,
-      new Set(this.conservativeTurnTombstoneBaseline(
-        params.sessionId,
-        [...(params.cache?.turnTombstones ?? [])],
-      )),
+      new Set(conservativeBaseline),
     );
     if (!scanned) {
       const loaded = this.journalRuntime.loadChannelChain(archives);
@@ -459,7 +460,15 @@ export class SessionStore implements TranscriptSearchPort {
       if (!loadedFingerprint) {
         throw new Error(`Cannot establish turn-tombstone authority for L0 session ${params.sessionId}`);
       }
-      const tombstones = new Set(loaded.turnTombstones);
+      // The scan refuses whenever the chain is untrusted — a quarantined row,
+      // an archive that moved underneath it. A full chain load is the fallback,
+      // and it is no more able to authorize an unredaction than the scan was:
+      // carry the same conservative baseline, or a journal corrupted just
+      // enough to trip the scan would revoke the boot-pinned floor the scan
+      // path honours. The union can only over-hide, so a restore this path
+      // cannot re-verify keeps the turn hidden until the chain reads cleanly
+      // again.
+      const tombstones = new Set([...conservativeBaseline, ...loaded.turnTombstones]);
       this.rememberTurnTombstoneAuthority(params.sessionId, loadedFingerprint, tombstones);
       this.syncCacheTurnTombstoneAuthority(params.cache, tombstones);
       return new Set(tombstones);

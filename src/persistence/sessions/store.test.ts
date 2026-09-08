@@ -1362,6 +1362,82 @@ describe('SessionStore', () => {
       .toEqual(['visible reply']);
   });
 
+  it('keeps the boot-pinned baseline when a corrupted chain forces the full-load fallback', async () => {
+    const channelId = 'api:tombstone-baseline-fallback';
+    const redactedTurnId = createTurnId(1_700_000_060_000);
+    const visibleTurnId = createTurnId(1_700_000_060_500);
+    const writer = new SessionStore(dir);
+    writer.append({
+      channelId,
+      role: 'user',
+      content: 'must stay redacted',
+      timestamp: 1_700_000_060_000,
+      metadata: buildSessionMetadataWithTurn(undefined, {
+        turnId: redactedTurnId,
+        requestId: 'req-tombstone-fallback-redacted',
+        role: 'user',
+      }),
+    });
+    writer.append({
+      channelId,
+      role: 'assistant',
+      content: 'visible reply',
+      timestamp: 1_700_000_060_500,
+      metadata: buildSessionMetadataWithTurn(undefined, {
+        turnId: visibleTurnId,
+        requestId: 'req-tombstone-fallback-visible',
+        role: 'assistant',
+      }),
+    });
+    await writer.redactTurn(channelId, redactedTurnId, {
+      actor: 'admin:test',
+      reason: 'privacy request',
+      timestamp: 1_700_000_060_900,
+    });
+
+    const archivePort = createFilesystemSessionArchivePort();
+    const booted = new SessionStore(dir, { sessionArchivePort: archivePort });
+
+    // Tamper after boot: drop the redaction action and leave a truncated row
+    // behind. The unreadable row quarantines, so the bounded tombstone scan
+    // refuses the chain and the resolver falls back to a full chain load.
+    const journalPath = findSessionJournalPath(dir, 'tombstone-baseline-fallback');
+    const survivingRows = readFileSync(journalPath, 'utf8')
+      .split('\n')
+      .filter(line => line.trim().length > 0)
+      .filter(line => (JSON.parse(line) as { type?: string }).type !== 'tombstone');
+    writeFileSync(
+      journalPath,
+      `${survivingRows.join('\n')}\n{"type":"message","id":3,"channelId":"${channelId}"\n`,
+    );
+    const indexPath = join(dir, '_channel_index.json');
+    const indexPayload = JSON.parse(readFileSync(indexPath, 'utf8')) as {
+      channels: Record<string, {
+        activeTurnTombstoneCount?: number;
+        activeTurnTombstoneIds?: string[];
+      }>;
+    };
+    indexPayload.channels[channelId]!.activeTurnTombstoneCount = 0;
+    indexPayload.channels[channelId]!.activeTurnTombstoneIds = [];
+    writeFileSync(indexPath, JSON.stringify(indexPayload));
+
+    // The scan really does refuse this chain: it quarantines rather than
+    // returning an authority the fallback would never be asked for.
+    const scanResult = archivePort.readJournalMatchingEntriesBackward(
+      archivePort.openArchive(channelId, journalPath),
+      { limit: Number.MAX_SAFE_INTEGER, matches: () => true },
+    );
+    expect(scanResult.quarantined.length).toBeGreaterThan(0);
+
+    booted.listChannels();
+    const fullLoad = vi.spyOn(archivePort, 'readJournalFile');
+    const entries = booted.getRecent(channelId, 10);
+
+    // Proof the fallback branch ran, not the bounded scan.
+    expect(fullLoad).toHaveBeenCalled();
+    expect(entries.map(entry => entry.content)).toEqual(['visible reply']);
+  });
+
 
   it('skips only owners with malformed recovery authority and retries them next pass', async () => {
     const gapChannel = 'api:recovery-gapped-generation';

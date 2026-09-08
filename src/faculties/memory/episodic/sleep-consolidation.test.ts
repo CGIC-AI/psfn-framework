@@ -7,6 +7,7 @@ import {
   type Episode,
 } from '../../../shared/contracts/episodic-memory.js';
 import { FakeEpisodicPool } from '../../../test-support/fake-postgres-episodic-pool.js';
+import { RUNTIME_FALLBACK_NOTICE_TEMPLATES } from '../../../shared/runtime-fallback-provenance.js';
 import { PostgresEpisodicStore } from './postgres-store.js';
 import {
   type EpisodeCreateInput,
@@ -58,7 +59,13 @@ describe('SleepCycleEpisodeConsolidator', () => {
     };
   }
 
-  function entry(id: number, timestamp: string, role: 'user' | 'assistant', content: string): SessionEntry {
+  function entry(
+    id: number,
+    timestamp: string,
+    role: 'user' | 'assistant',
+    content: string,
+    metadata: Record<string, unknown> = {},
+  ): SessionEntry {
     return {
       id,
       channelId: 'discord:main',
@@ -67,8 +74,20 @@ describe('SleepCycleEpisodeConsolidator', () => {
       authorId: role === 'user' ? 'contact:morgan' : 'assistant:psfn',
       authorName: role === 'user' ? 'Morgan' : 'Companion',
       timestamp: Date.parse(timestamp),
-      metadata: '{}',
+      metadata: JSON.stringify(metadata),
     };
+  }
+
+  /** A persisted runtime-authored fallback notice (f54sx via ccgdz.8). */
+  function runtimeFallbackEntry(id: number, timestamp: string): SessionEntry {
+    return entry(id, timestamp, 'assistant', RUNTIME_FALLBACK_NOTICE_TEMPLATES.visionUnavailableImageOnly, {
+      runtimeFallbackProvenance: {
+        schemaVersion: 1,
+        authoredBy: 'runtime',
+        model: 'runtime-fallback',
+        strategy: 'runtime_nonfabricating_notice',
+      },
+    });
   }
 
   function refinementResponse(overrides: Record<string, unknown> = {}): { content: string } {
@@ -149,6 +168,50 @@ describe('SleepCycleEpisodeConsolidator', () => {
     expect(folded).toBeDefined();
     expect(await store.listEpisodes()).toHaveLength(1);
     expect(complete).toHaveBeenCalledTimes(1);
+  });
+
+  // psfn-framework-f54sx (via ccgdz.8) — the consolidation excerpt is what the
+  // model reads to decide what an episode is ABOUT. A runtime-authored fallback
+  // notice is delivered in her channel voice but the runtime wrote it, so it
+  // must never reach that excerpt; the episode's inherited provenance refs still
+  // record that the turn happened.
+  it('keeps a runtime-authored fallback notice out of the refinement excerpt (f54sx)', async () => {
+    const store = makeStore();
+    await store.createEpisode(episodeInput('ep-1', '2026-06-10T00:53:00.000Z', '2026-06-10T01:21:00.000Z'));
+
+    const complete = vi.fn(async () => refinementResponse());
+    const reader = {
+      getRecentMessages: () => [
+        entry(1, '2026-06-10T00:55:00.000Z', 'user', 'look at this photo from the pier'),
+        runtimeFallbackEntry(2, '2026-06-10T01:00:00.000Z'),
+        entry(3, '2026-06-10T01:10:00.000Z', 'user', 'the pier at sunset is my favourite'),
+      ],
+    };
+    const consolidator = new SleepCycleEpisodeConsolidator(store, reader, { complete }, {
+      now: () => NOW,
+    });
+
+    const result = await consolidator.run({ sessionId: 'discord:main' });
+
+    expect(result.refinedEpisodes).toBe(1);
+    expect(complete).toHaveBeenCalledTimes(1);
+    const requestPrompt = String(
+      (complete.mock.calls[0]?.[0] as { messages: Array<{ content: string }> }).messages[0]?.content,
+    );
+    // Her own words ground the excerpt...
+    expect(requestPrompt).toContain('the pier at sunset is my favourite');
+    // ...but the runtime's notice never becomes what the episode is about.
+    expect(requestPrompt).not.toContain('image reader');
+    expect(requestPrompt).not.toContain(RUNTIME_FALLBACK_NOTICE_TEMPLATES.visionUnavailableImageOnly);
+
+    // The chain is preserved: refinement rewrites narrative fields only and
+    // carries the episode's provenance refs through untouched.
+    const refined = await store.getEpisode('ep-1');
+    expect(refined?.title).toBe('Sharing photos together late at night');
+    expect(refined?.provenanceRefs).toEqual([{ kind: 'session', refId: 'discord:main' }]);
+    // The notice's turn still sits inside the episode's span — nothing is hidden.
+    expect(Date.parse(refined!.startedAt)).toBeLessThanOrEqual(Date.parse('2026-06-10T01:00:00.000Z'));
+    expect(Date.parse(refined!.endedAt)).toBeGreaterThanOrEqual(Date.parse('2026-06-10T01:00:00.000Z'));
   });
 
   it('does not merge across channels or large time gaps', async () => {

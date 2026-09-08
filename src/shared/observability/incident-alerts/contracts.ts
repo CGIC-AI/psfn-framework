@@ -39,7 +39,7 @@ import type { SandboxDeniedCapability } from '../../contracts/sandbox-analysis-c
  * partner, and no recovery event — the gateway emits it once per boot with its
  * own correlation id — so it is alerted on sight and never re-stated.
  */
-export const STANDALONE_INCIDENT_CODES = [
+const STANDALONE_INCIDENT_CODES = [
   'operator_alert_sinks_unconfigured',
 ] as const satisfies readonly HealthEventCode[];
 

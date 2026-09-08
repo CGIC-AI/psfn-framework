@@ -1044,6 +1044,7 @@ describe('Postgres schema tenancy plumbing', () => {
           { version: 18, name: 'fleet-maintenance-process-fencing' },
           { version: 19, name: 'room-participation-lease' },
           { version: 20, name: 'icp-lifecycle-admission-fence' },
+          { version: 21, name: 'fleet-system-health-and-escalations' },
         ]);
 
         const sharedTables = await pool.query<{ table_name: string }>(
@@ -1055,6 +1056,8 @@ describe('Postgres schema tenancy plumbing', () => {
           'fleet_maintenance_baton',
           'fleet_maintenance_checkpoints',
           'fleet_maintenance_demands',
+          'human_escalation_attempts',
+          'human_escalations',
           'icp_autonomy_invalidation_fences',
           'icp_availability_leases',
           'icp_conversation_episodes',
@@ -1063,6 +1066,7 @@ describe('Postgres schema tenancy plumbing', () => {
           'icp_fatigue_turn_reservations',
           'icp_initiation_permits',
           'room_participation_leases',
+          'runtime_health_events',
           'shared_schema_migrations',
           'speaking_egress_leases',
           'speaking_episode_participation',

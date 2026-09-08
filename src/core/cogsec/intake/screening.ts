@@ -109,7 +109,7 @@ import {
   type CogSecReceipt,
 } from '../../../shared/contracts/cogsec-receipt.js';
 import type { CogSecReceiptWriterPort } from '../receipts/contracts.js';
-import { buildCogSecReceipt } from '../receipts/issuance.js';
+import { buildCogSecReceipt, cogSecReceiptSuppression } from '../receipts/issuance.js';
 import { classifyToolResultBenignClass } from './tool-result-benign-classes.js';
 
 export { INTAKE_QUARANTINE_RISK_LABELS, INTAKE_SANITIZE_RISK_LABELS } from './risk-label-families.js';
@@ -450,6 +450,53 @@ export interface IntakeScreeningResult {
    * lost, so the next consumer of these bytes screens them again.
    */
   receiptIssuanceError?: string;
+  /**
+   * Why this result carries no receipt (psfn-framework-ccgdz.2). Every
+   * completed screening answers the receipt question with exactly one of
+   * `receipt`, `receiptIssuanceError`, or this typed reason — a result never
+   * says nothing about its own admission proof, so "no receipt" can never be
+   * read as either "admitted" or "an oversight".
+   */
+  receiptAbsence?: IntakeReceiptAbsenceReason;
+}
+
+/**
+ * Closed vocabulary for "this screening produced no admission receipt".
+ *
+ * The first four are properties of the CALL: no writer is wired, the caller
+ * used the synchronous path (durable receipt persistence is asynchronous),
+ * zero scanners ran (clean bubble — certifying it would let a consumer skip
+ * screening that never happened), or the bounded pool failed closed before
+ * screening completed. The rest mirror `cogSecReceiptSuppression`: properties
+ * of the RESULT that make it not a complete admission of fully screened bytes.
+ */
+export const INTAKE_RECEIPT_ABSENCE_REASONS = [
+  'no_receipt_writer',
+  'sync_screening',
+  'clean_bubble',
+  'screening_incomplete',
+  'deep_screening_pending',
+  'not_admitted',
+  'withheld',
+  'envelope_not_consumable',
+  'scan_truncated',
+  'scanner_error',
+  'injection_scorer_error',
+] as const;
+
+export type IntakeReceiptAbsenceReason = typeof INTAKE_RECEIPT_ABSENCE_REASONS[number];
+
+/**
+ * Stamp a receipt-absence reason only when the result has not already
+ * answered the receipt question. The innermost path that knows the real reason
+ * wins; outer wrappers only fill a genuine gap.
+ */
+export function withIntakeReceiptAbsence(
+  result: IntakeScreeningResult,
+  reason: IntakeReceiptAbsenceReason,
+): IntakeScreeningResult {
+  if (result.receipt || result.receiptIssuanceError || result.receiptAbsence) return result;
+  return { ...result, receiptAbsence: reason };
 }
 
 export interface IntakePostEscalationEvent {
@@ -953,6 +1000,9 @@ export function createIntakeScreeningService(
       originRef: input.origin.ref.slice(0, 256),
     });
     return {
+      // Zero scanners ran, so there is nothing to certify: a clean-bubble
+      // release must never be provable as screened.
+      receiptAbsence: 'clean_bubble',
       envelope,
       snapshot,
       report,
@@ -1846,7 +1896,10 @@ export function createIntakeScreeningService(
     input: IntakeScreeningInput,
     result: IntakeScreeningResult,
   ): Promise<IntakeScreeningResult> {
-    if (!receipts || !resolveItemPosture(input).screens) return result;
+    if (!receipts) return withIntakeReceiptAbsence(result, 'no_receipt_writer');
+    if (!resolveItemPosture(input).screens) return result;
+    const suppression = cogSecReceiptSuppression(result);
+    if (suppression) return withIntakeReceiptAbsence(result, suppression);
     try {
       policyDigestMemo ??= cogSecPolicyDigest(policy);
       const receipt = buildCogSecReceipt({
@@ -1862,9 +1915,20 @@ export function createIntakeScreeningService(
         ...(input.surface !== undefined ? { surface: input.surface } : {}),
         issuedAtMs: input.atMs ?? now(),
       });
-      if (!receipt) return result;
+      if (!receipt) {
+        // The suppression predicate already ran, so a null receipt here means
+        // the two disagreed. Refuse to leave the question unanswered.
+        throw new Error('CogSec receipt issuance was refused after passing its own predicate');
+      }
       await receipts.store.record(receipt);
-      return { ...result, receipt };
+      // ccgdz.2: the admitted item's envelope snapshot carries the receipt id,
+      // so an admission can be joined back to its ingress proof downstream
+      // without re-screening.
+      return {
+        ...result,
+        receipt,
+        snapshot: { ...result.snapshot, receiptId: receipt.receiptId },
+      };
     } catch (error) {
       const receiptIssuanceError = error instanceof Error ? error.message : String(error);
       log.error('CogSec admission receipt issuance failed; admitted content is not reusable', {
@@ -1993,10 +2057,14 @@ export function createIntakeScreeningService(
     mode,
     globalMode,
     screeningContractDigest,
-    screen: receipts
-      ? async (text, input) => issueAdmissionReceipt(text, input, await screen(text, input))
-      : screen,
-    screenSync,
+    screen: async (text, input) => issueAdmissionReceipt(text, input, await screen(text, input)),
+    // Durable receipt persistence is asynchronous, so the synchronous seam can
+    // never issue one. It says so explicitly rather than returning a result
+    // that is silent about its own admission proof (ccgdz.2).
+    screenSync: (text, input) => withIntakeReceiptAbsence(
+      screenSync(text, input),
+      'sync_screening',
+    ),
   };
 }
 

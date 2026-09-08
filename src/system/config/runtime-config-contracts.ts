@@ -301,6 +301,13 @@ export interface SubstrateConfig {
    * stream can never grow without an operator-declared bound.
    */
   healthEventStreamMaxRows?: number;
+  /**
+   * Days a per-turn CogSec custody snapshot is retained
+   * (psfn-framework-ccgdz.1). Owned by settings.json; the store fails closed at
+   * boot when it is absent, so the durable custody trail can never grow without
+   * an operator-declared retention bound.
+   */
+  custodySnapshotRetentionDays?: number;
   sessionMirrorEnabled?: boolean;
   sessionMirrorMaxChars?: number;
   sessionMirrorActiveWindowMs?: number;

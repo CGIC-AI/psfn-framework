@@ -487,6 +487,8 @@ export interface SubstrateAgentCompositionOptions {
   backgroundWorkAutomataLifecycle?: SubstrateAgentOptions['backgroundWorkAutomataLifecycle'];
   intentionHooksAutomataRunner?: SubstrateAgentOptions['intentionHooksAutomataRunner'];
   classifySessionAtCreation?: SubstrateAgentOptions['classifySessionAtCreation'];
+  /** Durable per-turn custody snapshot sink (psfn-framework-ccgdz.1). */
+  custodySnapshotStore?: SubstrateAgentOptions['custodySnapshotStore'];
 }
 
 export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions): SubstrateAgent {
@@ -532,6 +534,9 @@ export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions)
         : {}),
       ...(options.classifySessionAtCreation
         ? { classifySessionAtCreation: options.classifySessionAtCreation }
+        : {}),
+      ...(options.custodySnapshotStore
+        ? { custodySnapshotStore: options.custodySnapshotStore }
         : {}),
     },
   );

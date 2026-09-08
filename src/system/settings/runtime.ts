@@ -126,6 +126,7 @@ const DIRECT_DEFINED_CONFIG_SETTINGS = [
   'compactionEmotionalSalienceThresholdPct',
   'backgroundFailureEscalationThreshold',
   'healthEventStreamMaxRows',
+  'custodySnapshotRetentionDays',
   'memoryExtractionMinImportance',
   'memoryExtractionMinConfidence',
   'memoryExtractionMinNovelty',
@@ -242,6 +243,7 @@ function getContextSettingsSnapshot(config: SubstrateConfig) {
     backgroundFailureEscalationThreshold:
       config.backgroundFailureEscalationThreshold ?? null,
     healthEventStreamMaxRows: config.healthEventStreamMaxRows ?? null,
+    custodySnapshotRetentionDays: config.custodySnapshotRetentionDays ?? null,
     sessionTailCache: structuredClone(
       config.sessionTailCache ?? createDefaultSessionTailCacheSettings(),
     ),
@@ -272,6 +274,7 @@ function getContextSettingsSnapshot(config: SubstrateConfig) {
     | 'compactionEmotionalSalienceThresholdPct'
     | 'backgroundFailureEscalationThreshold'
     | 'healthEventStreamMaxRows'
+    | 'custodySnapshotRetentionDays'
     | 'sessionTailCache'
   >;
 }

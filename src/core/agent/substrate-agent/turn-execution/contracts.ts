@@ -11,8 +11,9 @@ import type { ImageVisionReviewer } from '../../../../primitives/images/types.js
 import type { VisionIntakeImageScreenerPort } from '../vision-attachments.js';
 import type { SessionManager } from '../../../session/manager.js';
 import type { CapturedSessionReads } from '../../../session/manager/captured-session-owner.js';
-import type { DisclosureToolResultSource } from '../../../cogsec/disclosure/generation-lineage.js';
+import type { TurnToolResultCustodyRecord } from '../turn-records.js';
 import type { DisclosureLineage } from '../../../cogsec/disclosure/contracts.js';
+import type { ToolResultCustodyEdge } from '../../../../shared/contracts/tool-result-custody.js';
 import type { MetacognitiveFlag } from '../../../self-model/metacognition.js';
 import type { InternalState } from '../../../self-model/state.js';
 import type { SkillsRuntime } from '../../../../faculties/skills/runtime.js';
@@ -299,6 +300,19 @@ export interface TurnExecutionRuntime {
    */
   setCurrentTurnDisclosureLineage: (lineage: DisclosureLineage) => void;
   getCurrentTurnDisclosureLineage: () => DisclosureLineage | undefined;
+  /**
+   * Persist the folded lineage as a durable custody snapshot
+   * (psfn-framework-ccgdz.1) and return its resolvable ref
+   * (`turn:<turnId>`), or undefined when no custody store is wired or the
+   * write failed visibly. Never throws: a custody-store outage must not
+   * convert into a turn failure.
+   */
+  recordTurnCustodySnapshot: (input: {
+    lineage: DisclosureLineage;
+    turnId: TurnID;
+    requestId: string;
+    toolResultEdges?: ReadonlyMap<string, ToolResultCustodyEdge>;
+  }) => Promise<string | undefined>;
   buildRuntimeContext: (
     message: SubstrateMessage,
     resolvedUserName: string,
@@ -373,7 +387,7 @@ export interface TurnExecutionRuntime {
     requestId: string,
     turnMessages: AgentMessage[],
     trustLevel: TrustLevel,
-  ) => DisclosureToolResultSource[];
+  ) => TurnToolResultCustodyRecord[];
   recordAssistantMessage: (
     message: SubstrateMessage,
     turnSessionIdentity: TurnSessionIdentity,
@@ -424,6 +438,8 @@ export interface TurnExecutionRuntime {
     turnObservability?: TurnObservabilityRecord;
     internalStateSnapshotRef?: string;
     persistedUserMessageContent?: string;
+    custodySnapshotRef?: string;
+    toolResultCustody?: ReadonlyMap<string, TurnToolResultCustodyRecord>;
   }, sessionReads: CapturedSessionReads) => TurnRecord;
   emitTelemetry: (event: string, payload: Record<string, unknown>) => void;
   consumeIntentionalNoReplyDecision: (turnId: TurnID) => AgentResponse['metadata']['noReply'] | null;

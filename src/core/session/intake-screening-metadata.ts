@@ -16,10 +16,7 @@
 
 import { isRecord } from '../../shared/utils/types.js';
 import {
-  isIntakeEnvelopeState,
-  isIntakeRiskLabel,
-  isIntakeSourceClass,
-  isIntakeSourceRiskTier,
+  parseIntakeEnvelopeSnapshot,
   resolveIntakeSnapshotEnforcementPosture,
   type IntakeEnvelopeSnapshot,
 } from '../../shared/contracts/intake-envelope.js';
@@ -103,55 +100,6 @@ export function buildSessionMetadataWithIntakeScreening(
   });
 }
 
-function parseSnapshot(value: unknown, index: number): IntakeEnvelopeSnapshot {
-  if (!isRecord(value)) {
-    throw new Error(`Intake screening metadata envelopes[${String(index)}] must be an object`);
-  }
-  const {
-    envelopeId, sourceClass, sourceRiskTier, state, riskLabels, enforcementPosture, subject,
-  } = value;
-  if (typeof envelopeId !== 'string' || !envelopeId.trim()) {
-    throw new Error(`Intake screening metadata envelopes[${String(index)}].envelopeId must be a non-empty string`);
-  }
-  if (!isIntakeSourceClass(sourceClass)) {
-    throw new Error(`Intake screening metadata envelopes[${String(index)}].sourceClass is not a known source class`);
-  }
-  if (!isIntakeSourceRiskTier(sourceRiskTier)) {
-    throw new Error(`Intake screening metadata envelopes[${String(index)}].sourceRiskTier is not a known risk tier`);
-  }
-  if (!isIntakeEnvelopeState(state)) {
-    throw new Error(`Intake screening metadata envelopes[${String(index)}].state is not a known envelope state`);
-  }
-  if (!Array.isArray(riskLabels) || riskLabels.some((label) => !isIntakeRiskLabel(label))) {
-    throw new Error(`Intake screening metadata envelopes[${String(index)}].riskLabels contains unknown labels`);
-  }
-  if (enforcementPosture !== undefined
-    && enforcementPosture !== 'shadow'
-    && enforcementPosture !== 'enforce') {
-    throw new Error(
-      `Intake screening metadata envelopes[${String(index)}].enforcementPosture is invalid`,
-    );
-  }
-  if (!isRecord(subject) || (subject.kind !== 'body' && subject.kind !== 'attachment')) {
-    throw new Error(`Intake screening metadata envelopes[${String(index)}].subject is malformed`);
-  }
-  if (subject.kind === 'attachment'
-    && (typeof subject.index !== 'number' || !Number.isInteger(subject.index) || subject.index < 0)) {
-    throw new Error(`Intake screening metadata envelopes[${String(index)}].subject.index must be a non-negative integer`);
-  }
-  return {
-    envelopeId: envelopeId.trim(),
-    sourceClass,
-    sourceRiskTier,
-    state,
-    riskLabels,
-    ...(enforcementPosture ? { enforcementPosture } : {}),
-    subject: subject.kind === 'body'
-      ? { kind: 'body' }
-      : { kind: 'attachment', index: subject.index as number },
-  };
-}
-
 export function parseIntakeScreeningMetadata(
   metadata: string | undefined,
 ): IntakeScreeningSessionMetadata | null {
@@ -193,7 +141,10 @@ export function parseIntakeScreeningMetadata(
     schemaVersion: INTAKE_SCREENING_METADATA_SCHEMA_VERSION,
     mode: raw.mode,
     withheld: raw.withheld,
-    envelopes: raw.envelopes.map((snapshot, index) => parseSnapshot(snapshot, index)),
+    envelopes: raw.envelopes.map((snapshot, index) => parseIntakeEnvelopeSnapshot(
+      snapshot,
+      `Intake screening metadata envelopes[${String(index)}]`,
+    )),
     ...(marking ? { marking } : {}),
   };
 }

@@ -41,7 +41,13 @@ import type { GatewayContactLifecycleAuthorityPort } from './contact-lifecycle-a
 import type { ShardWorkloadLifecycleRegistryPort } from '../../system/capabilities/shard-approval-grant-contracts.js';
 import { createOwnerFileConfigStore } from '../../system/config/config-store.js';
 import { GatewaySystemDataWriter } from './system-data-writer.js';
-import { awaitPostgresStoreReadiness } from '../../persistence/postgres/runtime-readiness.js';
+import {
+  awaitOptionalPostgresStoreReadiness,
+  awaitPostgresStoreReadiness,
+} from '../../persistence/postgres/runtime-readiness.js';
+import { PostgresCogSecReceiptStore } from '../../persistence/postgres/cogsec-receipt-store.js';
+import { COGSEC_INTAKE_FIREWALL_ISSUER_ID } from '../../shared/contracts/cogsec-receipt.js';
+import { intakeReceiptTtlMs, loadIntakePolicyConfig } from '../../system/config/intake-policy-config.js';
 import { composeMcpGatewayRuntime, type McpGatewayRuntime } from './mcp/runtime.js';
 import { emitTurnPerformance } from '../../shared/telemetry/turn-performance.js';
 import { createCompanionDisplayIdentityResolver } from '../../shared/companion-display-identity.js';
@@ -223,6 +229,62 @@ export async function buildGatewayPrivilegedCore(
     'gateway_audit',
     () => createPostgresGatewayAuditStore(databaseUrl),
   );
+  // ── Gateway ingress admission receipts (psfn-framework-ccgdz.2) ──
+  // Receipt issuance was wired in the agent process but NOT here, so the
+  // highest-volume channel ingress (Discord/Telegram/buzz/multica/api) admitted
+  // bytes with no content-addressed proof. One receipt store per companion,
+  // scoped to that companion's schema exactly like the fleet-wide read stores,
+  // because a receipt is owned by exactly one companion.
+  //
+  // The store is an OPTIONAL readiness entry: a receipt is admission PROOF, not
+  // an admission gate, and its absence only forces the next consumer to screen
+  // again (the safe direction). A schema failure is therefore recorded as a
+  // named degradation and every screening result then reports
+  // `no_receipt_writer` rather than staying silent — it never takes ingress
+  // down, and it never converts an unproved admission into a proved one.
+  const receiptLog = createComponentLogger('GatewayIntakeReceipts');
+  const intakeReceiptTtl = intakeReceiptTtlMs(
+    loadIntakePolicyConfig(input.startupHydration.systemDataDir).receipts,
+  );
+  const receiptStoresByCompanionId = new Map<string, PostgresCogSecReceiptStore>();
+  const receiptSchemas: ReadonlyArray<{ companionId?: CompanionId; schema?: string }> =
+    input.config.companionFleet
+      ? input.config.companionFleet.companions.map(companion => ({
+        companionId: companion.companionId,
+        schema: companion.postgresSchema,
+      }))
+      : [{ ...(input.config.postgresSchema?.trim()
+        ? { schema: input.config.postgresSchema.trim() }
+        : {}) }];
+  for (const entry of receiptSchemas) {
+    const store = await awaitOptionalPostgresStoreReadiness(
+      'gateway_cogsec_receipts',
+      () => PostgresCogSecReceiptStore.connect(
+        databaseUrl,
+        entry.schema ? { schema: entry.schema } : {},
+      ),
+    );
+    if (!store) {
+      receiptLog.warn('Gateway ingress admission receipts unavailable for companion', {
+        ...(entry.companionId ? { companionId: entry.companionId } : {}),
+        ...(entry.schema ? { schema: entry.schema } : {}),
+      });
+      continue;
+    }
+    receiptStoresByCompanionId.set(entry.companionId ?? '', store);
+  }
+  const resolveIntakeReceipts = (
+    companionId?: CompanionId,
+  ) => {
+    const store = receiptStoresByCompanionId.get(companionId ?? '');
+    if (!store) return undefined;
+    return {
+      store,
+      issuerId: COGSEC_INTAKE_FIREWALL_ISSUER_ID,
+      ttlMs: intakeReceiptTtl,
+    };
+  };
+
   const kubeSelfManagement = resolveKubeSelfManagementController({
     env: input.env,
     lifecycleKubernetes: input.config.lifecycleKubernetes,
@@ -236,6 +298,12 @@ export async function buildGatewayPrivilegedCore(
   // provisioned-but-broken L1.5 model fails startup.
   const intakeScreening = await composeGatewayIntakeScreeningRuntime({
     config: input.config,
+    resolveReceipts: resolveIntakeReceipts,
+    disposeReceipts: async () => {
+      for (const store of receiptStoresByCompanionId.values()) {
+        await store.close();
+      }
+    },
     systemDataDir: input.startupHydration.systemDataDir,
     companionDataDir: input.startupHydration.companionDataDir,
     multiCompanion: input.bootstrap.server.multiCompanion.enabled,

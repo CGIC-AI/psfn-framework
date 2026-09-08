@@ -903,6 +903,9 @@ function createRuntime(params: {
       toolCalls: 0,
     })),
     recordToolObservations: vi.fn(() => []),
+    recordTurnCustodySnapshot: vi.fn(async (
+      input: Parameters<TurnExecutionRuntime['recordTurnCustodySnapshot']>[0],
+    ) => `turn:${input.turnId}`),
     recordAssistantMessage: params.recordAssistantMessage,
     buildTurnToolSummary: vi.fn(() => ({ toolCalls: [] })),
     inferPostTurnActions: vi.fn(async () => []),
@@ -1038,6 +1041,88 @@ describe('handleMessageForTurn MCP disclosure context', () => {
 
     expect(runtime.setCurrentTurnDisclosureLineage).toHaveBeenCalled();
     expect(runtime.agent.prompt).toHaveBeenCalledOnce();
+  });
+
+  it('records the folded lineage as a durable custody snapshot on the real turn path', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: makeContextManifestFixture(),
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+    });
+
+    await handleMessageForTurn(runtime, createMessage('msg-custody-snapshot'));
+
+    // ccgdz.1: exactly one custody write per turn, carrying the SAME lineage
+    // object the egress guard was handed, keyed by the lineage's own
+    // generation context — never a second identifier.
+    expect(runtime.recordTurnCustodySnapshot).toHaveBeenCalledOnce();
+    const custodyInput = vi.mocked(runtime.recordTurnCustodySnapshot).mock.calls[0]?.[0];
+    expect(custodyInput?.requestId).toBe('msg-custody-snapshot');
+    expect(custodyInput?.lineage.generationContextRef).toBe(`turn:${custodyInput?.turnId}`);
+    const publishedLineage = vi.mocked(runtime.setCurrentTurnDisclosureLineage)
+      .mock.calls.at(-1)?.[0];
+    expect(custodyInput?.lineage).toBe(publishedLineage);
+
+    // The written ref reaches the TurnRecord, so the chain resolves later.
+    const recordInput = vi.mocked(runtime.buildTurnRecord).mock.calls.at(-1)?.[0];
+    expect(recordInput?.custodySnapshotRef).toBe(`turn:${custodyInput?.turnId}`);
+  });
+
+  it('feeds one tool-result custody edge to both the snapshot and the turn record', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: makeContextManifestFixture(),
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+    });
+    const custodyRecord = {
+      ref: 'tool:wiki_read:call-1',
+      disclosureSource: {
+        ref: 'tool:wiki_read:call-1',
+        intakeState: 'released' as const,
+        sourceRiskTier: 'untrusted' as const,
+      },
+      intakeEnvelope: {
+        envelopeId: 'env-wiki-1',
+        sourceClass: 'tool_output' as const,
+        sourceRiskTier: 'untrusted' as const,
+        state: 'released' as const,
+        riskLabels: [],
+        subject: { kind: 'body' as const },
+      },
+      custody: { envelopeId: 'env-wiki-1', contentSha256: 'a'.repeat(64) },
+    };
+    runtime.recordToolObservations = vi.fn(() => [custodyRecord]);
+
+    await handleMessageForTurn(runtime, createMessage('msg-tool-custody-edge'));
+
+    // ccgdz.5: one derivation, two consumers. The snapshot's tool-result
+    // contribution and the turn record's stamped edge are the SAME object.
+    const custodyInput = vi.mocked(runtime.recordTurnCustodySnapshot).mock.calls[0]?.[0];
+    expect(custodyInput?.toolResultEdges?.get('tool:wiki_read:call-1'))
+      .toBe(custodyRecord.custody);
+    const recordInput = vi.mocked(runtime.buildTurnRecord).mock.calls.at(-1)?.[0];
+    expect(recordInput?.toolResultCustody?.get('tool:wiki_read:call-1'))
+      .toBe(custodyRecord);
   });
 });
 

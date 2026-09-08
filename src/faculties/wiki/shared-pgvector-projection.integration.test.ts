@@ -173,6 +173,7 @@ describe('shared_wiki_chunks shared-schema integration (s10f9)', () => {
           { version: 16, name: 'icp-dyad-participant-lifecycle' },
           { version: 17, name: 'fleet-heavy-maintenance-baton' },
           { version: 18, name: 'fleet-maintenance-process-fencing' },
+          { version: 19, name: 'room-participation-lease' },
         ]);
 
         // Idempotent re-provisioning (advisory-lock serialized).

@@ -12,6 +12,19 @@ import {
 import type { AgentMessage } from '../../../boundary/pi-agent/index.js';
 import { executeToolCallsWithScheduler } from '../tool-call-scheduler.js';
 import type { ToolResultMessage } from '@earendil-works/pi-ai';
+import { createHash } from 'node:crypto';
+import {
+  accumulateDisclosureSource,
+  beginDisclosureAccumulation,
+} from '../../cogsec/disclosure/decision.js';
+import {
+  DISCLOSURE_CLASSIFIER_VERSION,
+  toolResultDisclosureContribution,
+} from '../../cogsec/disclosure/generation-lineage.js';
+import {
+  buildCustodySnapshot,
+  custodySnapshotRefForTurn,
+} from '../../cogsec/disclosure/custody-snapshot.js';
 
 const AUDIT_TURN_ID = '019d2326-d9e1-701d-bcee-250d2cbb0e4e';
 const AUDIT_REQUEST_ID = 'request-audit-privacy';
@@ -1798,5 +1811,279 @@ describe('turn-records tool persistence', () => {
     ]);
     expect(record.toolCalls[0]?.rationale).toBeUndefined();
     expect(record.observability?.snapshot?.promptContext?.response?.reasoning).toBeUndefined();
+  });
+});
+
+// ── Tool-call custody edge (psfn-framework-ccgdz.5) ──
+
+const CUSTODY_TURN_ID = '019d2326-d9e1-701d-bcee-250d2cbb0e4f';
+const CUSTODY_REQUEST_ID = 'request-tool-custody';
+
+function toolEnvelope(envelopeId: string, state: 'released' | 'quarantined' = 'released') {
+  return {
+    envelopeId,
+    sourceClass: 'tool_output' as const,
+    sourceRiskTier: 'untrusted' as const,
+    state,
+    riskLabels: [],
+    subject: { kind: 'body' as const },
+  };
+}
+
+function toolResultMessage(input: {
+  toolCallId: string;
+  toolName: string;
+  text: string;
+  screening?: { withheld: boolean; envelopeId: string };
+}): ToolResultMessage {
+  return {
+    role: 'toolResult',
+    toolCallId: input.toolCallId,
+    toolName: input.toolName,
+    content: [{ type: 'text', text: input.text }],
+    isError: false,
+    timestamp: 1_700_000_000_000,
+    ...(input.screening
+      ? {
+        psfnIntakeScreening: {
+          mode: 'strict',
+          withheld: input.screening.withheld,
+          effectiveText: input.text,
+          snapshot: toolEnvelope(input.screening.envelopeId),
+        },
+      }
+      : {}),
+  } as unknown as ToolResultMessage;
+}
+
+function observeToolResults(
+  turnMessages: ToolResultMessage[],
+  snapshots: readonly (ReturnType<typeof toolEnvelope> | null)[],
+) {
+  let call = 0;
+  const recordToolObservation = vi.fn(() => ({
+    entryId: 10 + call,
+    intakeSnapshot: snapshots[call++] ?? null,
+  }));
+  const records = recordToolObservations({
+    sessionManager: { recordToolObservation } as unknown as TurnSessionWriteManager,
+    message: {
+      id: CUSTODY_REQUEST_ID,
+      channelId: 'api:test',
+      channelType: 'api',
+      authorId: 'user-1',
+      authorName: 'User',
+      content: 'Use the tool.',
+      timestamp: new Date(1_700_000_000_000),
+    },
+    turnSessionIdentity: { sourceChannelId: 'api:test', logicalSessionId: 'api:test' },
+    turnId: CUSTODY_TURN_ID,
+    requestId: CUSTODY_REQUEST_ID,
+    turnMessages: fromAny<AgentMessage[]>(turnMessages),
+    trustLevel: 'regular',
+  });
+  return records;
+}
+
+function buildCustodyTurnRecord(
+  turnMessages: ToolResultMessage[],
+  toolResultCustody: ReadonlyMap<string, ReturnType<typeof observeToolResults>[number]>,
+) {
+  return buildTurnRecord({
+    message: {
+      id: CUSTODY_REQUEST_ID,
+      channelId: 'api:test',
+      channelType: 'api',
+      authorId: 'user-1',
+      authorName: 'User',
+      content: 'Use the tool.',
+      timestamp: new Date(1_700_000_000_000),
+    },
+    turnId: CUSTODY_TURN_ID,
+    requestId: CUSTODY_REQUEST_ID,
+    startedAt: 1_700_000_000_000,
+    completedAt: 1_700_000_000_250,
+    userSessionEntryId: 1,
+    assistantSessionEntryId: 2,
+    model: 'test-model',
+    assistantMessageContent: 'Done.',
+    turnMessages: fromAny<AgentMessage[]>(turnMessages),
+    promptMode: 'default',
+    promptText: 'system prompt',
+    contextMessageCount: 1,
+    memoryContextChars: 0,
+    trustLevel: 'regular',
+    speakerRole: 'user',
+    retrievalProvenanceRefs: [],
+    hashPromptText: () => 'prompt-hash',
+    toolResultCustody,
+  });
+}
+
+describe('tool-call custody edge', () => {
+  it('binds the admitting envelope and the hash of the bytes the model saw', () => {
+    const message = toolResultMessage({
+      toolCallId: 'call-1',
+      toolName: 'wiki_read',
+      text: 'admitted tool output',
+      screening: { withheld: false, envelopeId: 'env-wiki-1' },
+    });
+    const records = observeToolResults([message], [toolEnvelope('env-wiki-1')]);
+
+    expect(records).toHaveLength(1);
+    expect(records[0]?.ref).toBe('tool:wiki_read:call-1');
+    expect(records[0]?.custody).toEqual({
+      envelopeId: 'env-wiki-1',
+      contentSha256: createHash('sha256').update('admitted tool output', 'utf8').digest('hex'),
+    });
+    expect(records[0]?.intakeEnvelope?.envelopeId).toBe('env-wiki-1');
+  });
+
+  it('records the withheld state rather than a hash of the placeholder', () => {
+    const placeholder = 'Internal tool status: content was withheld by intake screening.';
+    const message = toolResultMessage({
+      toolCallId: 'call-2',
+      toolName: 'fs_read',
+      text: placeholder,
+      screening: { withheld: true, envelopeId: 'env-fs-2' },
+    });
+    const records = observeToolResults([message], [toolEnvelope('env-fs-2', 'quarantined')]);
+
+    expect(records[0]?.custody).toEqual({
+      envelopeId: 'env-fs-2',
+      absenceReason: 'withheld',
+    });
+    expect(records[0]?.custody.contentSha256).toBeUndefined();
+  });
+
+  it('names the gap when the firewall produced no envelope for the result', () => {
+    const message = toolResultMessage({
+      toolCallId: 'call-3',
+      toolName: 'shell',
+      text: 'unscreened output',
+    });
+    const records = observeToolResults([message], [null]);
+
+    expect(records[0]?.custody).toEqual({ absenceReason: 'unscreened' });
+  });
+
+  it('stamps each tool call with its own edge and never cross-binds two calls', () => {
+    const first = toolResultMessage({
+      toolCallId: 'call-a',
+      toolName: 'wiki_read',
+      text: 'first result',
+      screening: { withheld: false, envelopeId: 'env-a' },
+    });
+    const second = toolResultMessage({
+      toolCallId: 'call-b',
+      toolName: 'wiki_read',
+      text: 'second result',
+      screening: { withheld: true, envelopeId: 'env-b' },
+    });
+    const records = observeToolResults(
+      [first, second],
+      [toolEnvelope('env-a'), toolEnvelope('env-b', 'quarantined')],
+    );
+    const custodyByRef = new Map(records.map(record => [record.ref, record]));
+    const turnRecord = buildCustodyTurnRecord([first, second], custodyByRef);
+
+    expect(turnRecord.toolCalls).toHaveLength(2);
+    const [callA, callB] = turnRecord.toolCalls;
+    expect(callA?.toolCallId).toBe('call-a');
+    expect(callA?.intakeEnvelope?.envelopeId).toBe('env-a');
+    expect(callA?.resultCustody).toEqual({
+      envelopeId: 'env-a',
+      contentSha256: createHash('sha256').update('first result', 'utf8').digest('hex'),
+    });
+    expect(callB?.toolCallId).toBe('call-b');
+    expect(callB?.intakeEnvelope?.envelopeId).toBe('env-b');
+    expect(callB?.resultCustody).toEqual({ envelopeId: 'env-b', absenceReason: 'withheld' });
+  });
+
+  it('leaves a tool call without an edge when no custody record was keyed to it', () => {
+    const message = toolResultMessage({
+      toolCallId: 'call-unmapped',
+      toolName: 'wiki_read',
+      text: 'result',
+      screening: { withheld: false, envelopeId: 'env-x' },
+    });
+    const turnRecord = buildCustodyTurnRecord([message], new Map());
+    expect(turnRecord.toolCalls[0]?.resultCustody).toBeUndefined();
+    expect(turnRecord.toolCalls[0]?.intakeEnvelope).toBeUndefined();
+  });
+
+  it('matches the custody snapshot tool-result contributions exactly', () => {
+    const first = toolResultMessage({
+      toolCallId: 'call-a',
+      toolName: 'wiki_read',
+      text: 'first result',
+      screening: { withheld: false, envelopeId: 'env-a' },
+    });
+    const second = toolResultMessage({
+      toolCallId: 'call-b',
+      toolName: 'shell',
+      text: 'second result',
+    });
+    const records = observeToolResults([first, second], [toolEnvelope('env-a'), null]);
+    const custodyByRef = new Map(records.map(record => [record.ref, record]));
+    const turnRecord = buildCustodyTurnRecord([first, second], custodyByRef);
+
+    let lineage = beginDisclosureAccumulation({
+      generationContextRef: custodySnapshotRefForTurn(CUSTODY_TURN_ID),
+      classifierVersion: DISCLOSURE_CLASSIFIER_VERSION,
+      classifiedAt: new Date(1_700_000_000_000).toISOString(),
+    });
+    for (const record of records) {
+      lineage = accumulateDisclosureSource(
+        lineage,
+        toolResultDisclosureContribution(record.disclosureSource),
+      );
+    }
+    const snapshot = buildCustodySnapshot({
+      lineage,
+      turnId: CUSTODY_TURN_ID,
+      requestId: CUSTODY_REQUEST_ID,
+      toolResultEdges: new Map(records.map(record => [record.ref, record.custody])),
+    });
+
+    const snapshotEdges = snapshot.sources
+      .filter(source => source.kind === 'tool')
+      .map(source => source.toolResult);
+    const turnRecordEdges = turnRecord.toolCalls.map(call => call.resultCustody);
+    expect(snapshotEdges).toEqual(turnRecordEdges);
+    expect(snapshotEdges).toHaveLength(2);
+  });
+
+  it('keeps one edge per tool call id when a retried result replaces an earlier one', () => {
+    const firstAttempt = toolResultMessage({
+      toolCallId: 'call-retry',
+      toolName: 'wiki_read',
+      text: 'transient failure',
+      screening: { withheld: false, envelopeId: 'env-retry-1' },
+    });
+    const retry = toolResultMessage({
+      toolCallId: 'call-retry',
+      toolName: 'wiki_read',
+      text: 'final result',
+      screening: { withheld: false, envelopeId: 'env-retry-2' },
+    });
+    const records = observeToolResults(
+      [firstAttempt, retry],
+      [toolEnvelope('env-retry-1'), toolEnvelope('env-retry-2')],
+    );
+    const custodyByRef = new Map(records.map(record => [record.ref, record]));
+    const turnRecord = buildCustodyTurnRecord([firstAttempt, retry], custodyByRef);
+
+    // One tool call id, one record, one custody edge — the last observed
+    // attempt. A retry never leaves two entries competing over one admission
+    // identity, and never picks up the envelope of a different call.
+    expect(custodyByRef.size).toBe(1);
+    expect(turnRecord.toolCalls).toHaveLength(1);
+    expect(turnRecord.toolCalls[0]?.toolCallId).toBe('call-retry');
+    expect(turnRecord.toolCalls[0]?.resultText).toBe('final result');
+    expect(turnRecord.toolCalls[0]?.resultCustody).toEqual({
+      envelopeId: 'env-retry-2',
+      contentSha256: createHash('sha256').update('final result', 'utf8').digest('hex'),
+    });
   });
 });

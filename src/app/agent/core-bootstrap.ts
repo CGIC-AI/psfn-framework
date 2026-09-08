@@ -35,6 +35,7 @@ import type {
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import type { ContactTrackingGate } from '../../core/contacts/tracking-gate.js';
 import type { CogSecReceiptStorePort } from '../../core/cogsec/receipts/contracts.js';
+import type { CustodySnapshotStorePort } from '../../core/cogsec/disclosure/custody-snapshot.js';
 import type { HubIdentityEnrollmentStorePort } from '../../core/enrollment/enrollment-store-port.js';
 import type {
   IntentionRuntimeProviders,
@@ -98,6 +99,11 @@ export interface BootstrapAgentCoreRuntimeOptions {
    * (psfn-framework-1fjvm.1/.2).
    */
   cogSecReceiptStore?: CogSecReceiptStorePort;
+  /**
+   * Durable per-turn custody snapshots (psfn-framework-ccgdz.1), written by the
+   * substrate agent's turn runtime.
+   */
+  custodySnapshotStore?: CustodySnapshotStorePort;
   intentionRuntime?: IntentionRuntimeWiring;
   intentionProviders?: IntentionRuntimeProviders;
   intentionFollowUpHorizonMs: number;
@@ -203,6 +209,9 @@ export async function bootstrapAgentCoreRuntime(
       : {}),
     ...(options.cogSecReceiptStore
       ? { cogSecReceiptStore: options.cogSecReceiptStore }
+      : {}),
+    ...(options.custodySnapshotStore
+      ? { custodySnapshotStore: options.custodySnapshotStore }
       : {}),
     card,
     systemPrompt,

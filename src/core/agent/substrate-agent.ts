@@ -42,6 +42,7 @@ import {
   type CapsuleCustodyService,
   type DisclosureLineage,
 } from '../cogsec/disclosure/index.js';
+import type { CustodySnapshotStorePort } from '../cogsec/disclosure/custody-snapshot.js';
 import { applyAdmittedToolResultDisclosureFloor } from '../cogsec/disclosure/mcp-turn-context.js';
 import type { ChannelPromptRegistryPort } from '../../channels/backplane/registry-port.js';
 import type { MessageHandlerOptions } from '../../channels/backplane/types.js';
@@ -278,6 +279,11 @@ export interface SubstrateAgentOptions {
   intentionHooksAutomataRunner?: BackgroundWorkGovernedClassRunner;
   /** Durable creation gate that must complete before any raw session append. */
   classifySessionAtCreation?: (message: SubstrateMessage) => Promise<void>;
+  /**
+   * Durable per-turn custody snapshot sink (psfn-framework-ccgdz.1). Absent,
+   * the folded disclosure lineage stays in-process exactly as before.
+   */
+  custodySnapshotStore?: CustodySnapshotStorePort;
 }
 
 function requireBackgroundWorkTuning(
@@ -760,6 +766,9 @@ export class SubstrateAgent {
         this.agent.state.model as { contextWindow?: unknown } | undefined,
       ),
       companionId: this.config.companionId,
+      ...(options.custodySnapshotStore
+        ? { custodySnapshotStore: options.custodySnapshotStore }
+        : {}),
     });
     installContextCoherenceMonitor({
       eventBus: this.eventBus,

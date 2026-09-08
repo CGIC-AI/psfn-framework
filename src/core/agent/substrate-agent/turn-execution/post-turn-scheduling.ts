@@ -42,6 +42,7 @@ import {
   type EnqueueBackgroundWorkInput,
 } from '../../background-work/types.js';
 import type { TurnExecutionRuntime, TurnSessionIdentity } from './contracts.js';
+import type { TurnToolResultCustodyRecord } from '../turn-records.js';
 import type { CapturedSessionReads } from '../../../session/manager/captured-session-owner.js';
 
 const log = createComponentLogger('SubstrateAgent');
@@ -138,6 +139,10 @@ export async function schedulePostTurnWork(input: {
   conversationScope: ConversationScope;
   turnBudgetCharacteristics: ContextBudgetTurnCharacteristics;
   persistedUserMessageContent?: string;
+  /** Resolvable ref to this turn's durable custody snapshot, when one was written. */
+  custodySnapshotRef?: string;
+  /** Per-tool-result custody edges, keyed by lineage ref (ccgdz.5). */
+  toolResultCustody?: ReadonlyMap<string, TurnToolResultCustodyRecord>;
   onTurnRecordPersisted?: () => void;
   observability: Pick<
     TurnExecutionObservability,
@@ -244,6 +249,8 @@ export async function schedulePostTurnWork(input: {
       ...(observability.getObservedTurnSnapshot() ? { snapshot: observability.getObservedTurnSnapshot() } : {}),
     },
     internalStateSnapshotRef,
+    ...(input.custodySnapshotRef ? { custodySnapshotRef: input.custodySnapshotRef } : {}),
+    ...(input.toolResultCustody ? { toolResultCustody: input.toolResultCustody } : {}),
   }, sessionReads);
 
   await runtime.eventBus.emit('agent.turn.end', {

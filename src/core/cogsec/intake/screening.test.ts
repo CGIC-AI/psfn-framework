@@ -2,6 +2,7 @@
 // Runs the REAL L1 scanner pipeline against the checked-in rule file, with a
 // fake L1.5 scorer where a score signal is needed (no ONNX weights required).
 
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -1608,5 +1609,93 @@ describe('prior screening signals (htm9.8 vision screener seam)', () => {
     });
     expect(result.action).toBe('quarantine');
     expect(result.envelope.decision?.reason).toContain('l1:');
+  });
+});
+
+// ── The receipt question is always answered (psfn-framework-ccgdz.2) ──
+
+describe('intake screening admission receipts', () => {
+  function receiptAnswer(result: {
+    receipt?: unknown;
+    receiptIssuanceError?: string;
+    receiptAbsence?: string;
+  }): string[] {
+    return [
+      ...(result.receipt ? ['receipt'] : []),
+      ...(result.receiptIssuanceError ? ['error'] : []),
+      ...(result.receiptAbsence ? ['absence'] : []),
+    ];
+  }
+
+  it('names the missing writer rather than leaving an admitted body unexplained', async () => {
+    const result = await makeService('strict').screen(CLEAN_TEXT, screenInput);
+    expect(result.action).toBe('pass');
+    expect(receiptAnswer(result)).toEqual(['absence']);
+    expect(result.receiptAbsence).toBe('no_receipt_writer');
+  });
+
+  it('says a synchronous screen can never carry a durable receipt', () => {
+    const result = makeService('strict').screenSync(CLEAN_TEXT, screenInput);
+    expect(receiptAnswer(result)).toEqual(['absence']);
+    expect(result.receiptAbsence).toBe('sync_screening');
+  });
+
+  it('refuses to certify a clean-bubble release, where zero scanners ran', () => {
+    const result = makeService('boundary').screenSync(CLEAN_TEXT, {
+      sourceClass: 'companion_self',
+      origin: { ref: 'internal:companion-self' },
+      scope: 'context',
+      structuralProvenance: 'internal_chat',
+    });
+    expect(result.receiptAbsence).toBe('clean_bubble');
+    expect(receiptAnswer(result)).toEqual(['absence']);
+  });
+
+  it('issues over the exact admitted bytes and stamps the id on the snapshot', async () => {
+    const recorded: { receiptId: string; contentSha256: string }[] = [];
+    const service = createIntakeScreeningService({
+      policy: makePolicy('strict'),
+      l1: createIntakeL1Scanner({ rulesPath: RULES_PATH, reloadCheckIntervalMs: -1 }),
+      actor: 'gateway:intake-screening',
+      receipts: {
+        store: { record: async (receipt) => { recorded.push(receipt); } },
+        issuerId: 'cogsec:intake-firewall',
+        ttlMs: 3_600_000,
+      },
+    });
+
+    const admitted = await service.screen(CLEAN_TEXT, screenInput);
+    expect(receiptAnswer(admitted)).toEqual(['receipt']);
+    expect(recorded).toHaveLength(1);
+    expect(admitted.snapshot.receiptId).toBe(recorded[0]?.receiptId);
+    expect(recorded[0]?.contentSha256).toBe(
+      createHash('sha256').update(admitted.effectiveText, 'utf8').digest('hex'),
+    );
+
+    const refused = await service.screen(HOSTILE_TEXT, screenInput);
+    expect(refused.action).toBe('quarantine');
+    expect(receiptAnswer(refused)).toEqual(['absence']);
+    expect(refused.snapshot.receiptId).toBeUndefined();
+    expect(recorded).toHaveLength(1);
+  });
+
+  it('keeps a store failure visible without changing the screening verdict', async () => {
+    const service = createIntakeScreeningService({
+      policy: makePolicy('strict'),
+      l1: createIntakeL1Scanner({ rulesPath: RULES_PATH, reloadCheckIntervalMs: -1 }),
+      actor: 'gateway:intake-screening',
+      receipts: {
+        store: { record: async () => { throw new Error('receipt store unavailable'); } },
+        issuerId: 'cogsec:intake-firewall',
+        ttlMs: 3_600_000,
+      },
+    });
+
+    const admitted = await service.screen(CLEAN_TEXT, screenInput);
+    expect(admitted.action).toBe('pass');
+    expect(admitted.effectiveText).toBe(CLEAN_TEXT);
+    expect(receiptAnswer(admitted)).toEqual(['error']);
+    expect(admitted.receiptIssuanceError).toMatch(/receipt store unavailable/);
+    expect(admitted.snapshot.receiptId).toBeUndefined();
   });
 });

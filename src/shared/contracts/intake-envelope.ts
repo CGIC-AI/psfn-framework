@@ -1193,6 +1193,14 @@ export interface IntakeEnvelopeSnapshot {
   enforcementPosture?: 'shadow' | 'enforce';
   /** What the envelope covers on this message. */
   subject: IntakeEnvelopeSubject;
+  /**
+   * The content-addressed admission receipt issued for these exact bytes
+   * (psfn-framework-ccgdz.2), when screening issued one. Carrying it on the
+   * snapshot is what lets an admitted item be joined back to its ingress proof
+   * without re-screening. Its absence is never a claim about the content — the
+   * screening result names the reason separately.
+   */
+  receiptId?: string;
 }
 
 export function snapshotIntakeEnvelope(
@@ -1212,6 +1220,70 @@ export function snapshotIntakeEnvelope(
     riskLabels: [...envelope.riskLabels],
     ...(enforcementPosture ? { enforcementPosture } : {}),
     subject,
+  };
+}
+
+/**
+ * Re-derive one persisted envelope snapshot, failing closed on anything that is
+ * not a known source class, risk tier, state, label set, posture, or subject.
+ * Every persistence boundary that carries a snapshot (session-entry screening
+ * metadata, TurnRecord tool calls) parses through THIS function, so a snapshot
+ * can never enter the runtime by widening a vocabulary from stored data.
+ */
+export function parseIntakeEnvelopeSnapshot(
+  value: unknown,
+  field: string,
+): IntakeEnvelopeSnapshot {
+  if (!isRecord(value)) {
+    throw new Error(`${field} must be an object`);
+  }
+  const {
+    envelopeId, sourceClass, sourceRiskTier, state, riskLabels, enforcementPosture, subject,
+  } = value;
+  if (typeof envelopeId !== 'string' || !envelopeId.trim()) {
+    throw new Error(`${field}.envelopeId must be a non-empty string`);
+  }
+  const receiptId = value.receiptId;
+  if (receiptId !== undefined && (typeof receiptId !== 'string' || !receiptId.trim())) {
+    throw new Error(`${field}.receiptId must be a non-empty string`);
+  }
+  if (!isIntakeSourceClass(sourceClass)) {
+    throw new Error(`${field}.sourceClass is not a known source class`);
+  }
+  if (!isIntakeSourceRiskTier(sourceRiskTier)) {
+    throw new Error(`${field}.sourceRiskTier is not a known risk tier`);
+  }
+  if (!isIntakeEnvelopeState(state)) {
+    throw new Error(`${field}.state is not a known envelope state`);
+  }
+  if (!Array.isArray(riskLabels) || riskLabels.some(label => !isIntakeRiskLabel(label))) {
+    throw new Error(`${field}.riskLabels contains unknown labels`);
+  }
+  if (enforcementPosture !== undefined
+    && enforcementPosture !== 'shadow'
+    && enforcementPosture !== 'enforce') {
+    throw new Error(`${field}.enforcementPosture is invalid`);
+  }
+  if (!isRecord(subject) || (subject.kind !== 'body' && subject.kind !== 'attachment')) {
+    throw new Error(`${field}.subject is malformed`);
+  }
+  if (subject.kind === 'attachment'
+    && (typeof subject.index !== 'number'
+      || !Number.isInteger(subject.index)
+      || subject.index < 0)) {
+    throw new Error(`${field}.subject.index must be a non-negative integer`);
+  }
+  return {
+    envelopeId: envelopeId.trim(),
+    sourceClass,
+    sourceRiskTier,
+    state,
+    riskLabels,
+    ...(enforcementPosture ? { enforcementPosture } : {}),
+    ...(receiptId !== undefined ? { receiptId: (receiptId as string).trim() } : {}),
+    subject: subject.kind === 'body'
+      ? { kind: 'body' }
+      : { kind: 'attachment', index: subject.index as number },
   };
 }
 

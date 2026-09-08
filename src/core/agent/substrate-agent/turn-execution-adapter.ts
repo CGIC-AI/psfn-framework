@@ -401,6 +401,8 @@ export function createTurnExecutionRuntimeAdapter(
       options.callbacks.setCurrentTurnDisclosureLineage(lineage),
     getCurrentTurnDisclosureLineage: () =>
       options.callbacks.getCurrentTurnDisclosureLineage(),
+    recordTurnCustodySnapshot: (input) =>
+      options.turnSupportRuntime.recordTurnCustodySnapshot(input),
     buildRuntimeContext: (
       message,
       resolvedUserName,
@@ -488,7 +490,6 @@ export function createTurnExecutionRuntimeAdapter(
       turnMessages,
       trustLevel,
     ),
-    // (returns DisclosureToolResultSource[] — arrow body already returns it)
     recordAssistantMessage: (
       message,
       turnSessionIdentity,

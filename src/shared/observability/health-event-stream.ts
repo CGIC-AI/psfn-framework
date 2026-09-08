@@ -24,6 +24,16 @@ import { toErrorMessage } from '../utils/errors.js';
 
 const log = createComponentLogger('HealthEventStream');
 
+/**
+ * Structural ceiling on one `listRecent` page. It is a schema-shape bound, not
+ * operator policy: it caps what a single read can pull into memory, and every
+ * owner-file value that becomes a read limit (the detector scan limit, the
+ * investigator's bundle window) is validated against it at config load so an
+ * over-large owner value fails the owner file closed instead of throwing on
+ * every read.
+ */
+export const MAX_HEALTH_EVENT_LIST_LIMIT = 1_000;
+
 /** Read filter for the stream. Every field narrows; absence means "no filter". */
 export interface HealthEventQuery {
   limit?: number;

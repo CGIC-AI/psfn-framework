@@ -13,8 +13,16 @@
 // never fires.
 
 import { isRecord } from '../../../shared/utils/types.js';
+import {
+  MAX_HEALTH_EVENT_LIST_LIMIT,
+} from '../../../shared/observability/health-event-stream.js';
 import { assertNoUnknownKeys } from '../validators.js';
-import { toInterval, toNonNegativeInteger, toPositiveInteger } from './primitives.js';
+import {
+  toBoolean,
+  toInterval,
+  toNonNegativeInteger,
+  toPositiveInteger,
+} from './primitives.js';
 
 /** Sustained PostgreSQL pool saturation / queueing thresholds. */
 export interface PostgresPressureDetectorConfig {
@@ -59,6 +67,47 @@ export interface StuckJobDetectorConfig {
   schedulerTaskBudgetMs: number;
 }
 
+/**
+ * Operator-alert delivery policy for detected incidents (bead
+ * psfn-framework-7qeo1.24.5).
+ *
+ * Delivery is keyed on the incident's `correlationId`, never on an event: one
+ * alert when an episode opens, and nothing further until the incident has been
+ * open for `realertCooldownMs`. That is a different and deliberately longer
+ * clock than the detector `cooldownMs`, which only bounds how often an open
+ * episode re-states itself in the stream. An operator wants the stream to stay
+ * current far more often than they want to be paged again.
+ */
+export interface IncidentAlertsConfig {
+  /**
+   * Minimum gap between two operator alerts for the SAME incident id. It must
+   * be at least the detector cooldown: alerting more often than the episode
+   * re-states itself is impossible, and configuring it would only look like a
+   * promise the runtime cannot keep.
+   */
+  realertCooldownMs: number;
+  /**
+   * Deliver one notice when an incident closes. Off by default is not offered:
+   * the choice is the operator's, but an incident that was alerted and never
+   * resolved in the operator's mailbox is the failure mode this exists to
+   * avoid.
+   */
+  closeNotice: boolean;
+  /**
+   * Stream rows the read-only investigator may read for one incident bundle.
+   * It bounds the timeline attached to an alert and the evidence Garden shows
+   * for the same incident.
+   */
+  bundleEventLimit: number;
+  /**
+   * Incidents the in-process alert ledger remembers before pruning the oldest.
+   * The ledger only accelerates the common case — the durable dedup anchor is
+   * the persisted stream itself — so a pruned entry costs a stream read, never
+   * a duplicate alert.
+   */
+  ledgerCapacity: number;
+}
+
 export interface HealthDetectorsConfig {
   /** Cadence of the single scheduler task that runs every detector. */
   intervalMs: number;
@@ -80,6 +129,7 @@ export interface HealthDetectorsConfig {
   postgresPressure: PostgresPressureDetectorConfig;
   backgroundFailures: BackgroundFailureDetectorConfig;
   stuckJobs: StuckJobDetectorConfig;
+  incidentAlerts: IncidentAlertsConfig;
 }
 
 export const DEFAULT_HEALTH_DETECTORS_CONFIG: HealthDetectorsConfig = {
@@ -100,6 +150,12 @@ export const DEFAULT_HEALTH_DETECTORS_CONFIG: HealthDetectorsConfig = {
   stuckJobs: {
     automataRunBudgetMs: 3_600_000,
     schedulerTaskBudgetMs: 1_800_000,
+  },
+  incidentAlerts: {
+    realertCooldownMs: 3_600_000,
+    closeNotice: true,
+    bundleEventLimit: 50,
+    ledgerCapacity: 256,
   },
 };
 
@@ -132,6 +188,7 @@ export function validateHealthDetectorsConfig(
       'postgresPressure',
       'backgroundFailures',
       'stuckJobs',
+      'incidentAlerts',
     ],
     `${sourcePath}.healthDetectors`,
     { errorPrefix: 'Invalid scheduler config' },
@@ -157,6 +214,17 @@ export function validateHealthDetectorsConfig(
     backgroundFailuresRaw,
     ['failureThreshold', 'windowMs'],
     `${sourcePath}.healthDetectors.backgroundFailures`,
+    { errorPrefix: 'Invalid scheduler config' },
+  );
+  const incidentAlertsRaw = requireObject(
+    root.incidentAlerts,
+    sourcePath,
+    'healthDetectors.incidentAlerts',
+  );
+  assertNoUnknownKeys(
+    incidentAlertsRaw,
+    ['realertCooldownMs', 'closeNotice', 'bundleEventLimit', 'ledgerCapacity'],
+    `${sourcePath}.healthDetectors.incidentAlerts`,
     { errorPrefix: 'Invalid scheduler config' },
   );
   const stuckJobsRaw = requireObject(root.stuckJobs, sourcePath, 'healthDetectors.stuckJobs');
@@ -218,6 +286,26 @@ export function validateHealthDetectorsConfig(
         'healthDetectors.stuckJobs.schedulerTaskBudgetMs',
       ),
     },
+    incidentAlerts: {
+      realertCooldownMs: toInterval(
+        incidentAlertsRaw.realertCooldownMs,
+        'healthDetectors.incidentAlerts.realertCooldownMs',
+      ),
+      closeNotice: toBoolean(
+        incidentAlertsRaw.closeNotice,
+        'healthDetectors.incidentAlerts.closeNotice',
+      ),
+      bundleEventLimit: toPositiveInteger(
+        incidentAlertsRaw.bundleEventLimit,
+        'healthDetectors.incidentAlerts.bundleEventLimit',
+        1,
+      ),
+      ledgerCapacity: toPositiveInteger(
+        incidentAlertsRaw.ledgerCapacity,
+        'healthDetectors.incidentAlerts.ledgerCapacity',
+        1,
+      ),
+    },
   };
 
   if (config.cooldownMs >= config.incidentWindowMs) {
@@ -244,6 +332,26 @@ export function validateHealthDetectorsConfig(
       + `(${config.backgroundFailures.windowMs}) must not exceed healthDetectors.incidentWindowMs `
       + `(${config.incidentWindowMs}); the failure count is taken over the ledger's scanned `
       + 'window, so a longer failure window would silently count only part of itself',
+    );
+  }
+
+  if (config.incidentAlerts.realertCooldownMs < config.cooldownMs) {
+    throw new Error(
+      `Invalid scheduler config at ${sourcePath}: `
+      + `healthDetectors.incidentAlerts.realertCooldownMs `
+      + `(${config.incidentAlerts.realertCooldownMs}) must be at least `
+      + `healthDetectors.cooldownMs (${config.cooldownMs}); an open incident only re-states `
+      + 'itself in the stream at the detector cooldown, so a shorter alert cooldown promises '
+      + 'a re-alert cadence the runtime can never deliver',
+    );
+  }
+  if (config.incidentAlerts.bundleEventLimit > MAX_HEALTH_EVENT_LIST_LIMIT) {
+    throw new Error(
+      `Invalid scheduler config at ${sourcePath}: `
+      + `healthDetectors.incidentAlerts.bundleEventLimit `
+      + `(${config.incidentAlerts.bundleEventLimit}) must not exceed the health-event stream's `
+      + `structural read ceiling (${MAX_HEALTH_EVENT_LIST_LIMIT}); a larger value would throw on `
+      + 'every incident read instead of failing this owner file closed',
     );
   }
 

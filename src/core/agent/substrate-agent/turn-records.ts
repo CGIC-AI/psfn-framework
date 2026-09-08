@@ -23,12 +23,12 @@ import type { SessionActorKind } from '../../session/turn-provenance.js';
 import type { IntrospectionTurnSensitivityDecision } from '../../../faculties/introspection/turn-sensitivity.js';
 import { resolveMessagePlaceId } from './message-location.js';
 import type { TurnSessionIdentity } from './turn-execution/contracts.js';
-import type { DisclosureToolResultSource } from '../../cogsec/disclosure/generation-lineage.js';
 import type { IntakeEnvelopeSnapshot } from '../../../shared/contracts/intake-envelope.js';
 import {
   toolResultLineageRef,
   type ToolResultCustodyEdge,
 } from '../../../shared/contracts/tool-result-custody.js';
+import type { TurnToolResultCustodyRecord } from './turn-tool-result-custody.js';
 import {
   isToolCallErrorOutcome,
   isToolCallOutcome,
@@ -291,25 +291,6 @@ export function recordAssistantMessage(input: {
       channelMeta: resolveSessionChannelMeta(input.message),
     },
   );
-}
-
-/**
- * One observed tool result's content-free custody row (psfn-framework-ccgdz.5).
- *
- * The edge is derived ONCE, here, where the post-record envelope snapshot is in
- * hand. Both the turn's custody snapshot and the `TurnRecordToolCall` consume
- * this same value, so the two cannot drift and "the snapshot's tool-result
- * contributions match the TurnRecord's" holds by construction rather than by
- * two implementations agreeing.
- */
-export interface TurnToolResultCustodyRecord {
-  /** The content-free lineage ref this result folds into (`tool:<name>[:<id>]`). */
-  readonly ref: string;
-  /** The disclosure fold's view of this result. */
-  readonly disclosureSource: DisclosureToolResultSource;
-  /** The envelope that admitted the result, when the firewall produced one. */
-  readonly intakeEnvelope?: IntakeEnvelopeSnapshot;
-  readonly custody: ToolResultCustodyEdge;
 }
 
 /**

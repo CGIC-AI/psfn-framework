@@ -42,7 +42,7 @@ import {
   type EnqueueBackgroundWorkInput,
 } from '../../background-work/types.js';
 import type { TurnExecutionRuntime, TurnSessionIdentity } from './contracts.js';
-import type { TurnToolResultCustodyRecord } from '../turn-records.js';
+import type { TurnToolResultCustodyRecord } from '../turn-tool-result-custody.js';
 import type { CapturedSessionReads } from '../../../session/manager/captured-session-owner.js';
 
 const log = createComponentLogger('SubstrateAgent');

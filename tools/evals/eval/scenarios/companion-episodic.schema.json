@@ -1,0 +1,272 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://psfn.local/eval/scenarios/companion-episodic.schema.json",
+  "title": "PSFN Companion-Salient Episodic Retention Scenario Set",
+  "description": "Fail-closed shape for the companion-salient episodic retention and recall scenario pack (PSFN-bin3). Scores timely meaningful recall at a cue, not factual retrieval alone.",
+  "type": "array",
+  "minItems": 15,
+  "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "description",
+      "vars",
+      "metadata"
+    ],
+    "properties": {
+      "description": {
+        "type": "string",
+        "minLength": 1
+      },
+      "vars": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "participant_message",
+          "seeded_history"
+        ],
+        "properties": {
+          "participant_message": {
+            "type": "string",
+            "description": "The cue as the participant actually sends it, including deliberately sparse ones."
+          },
+          "attachment": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "synthetic_content"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "image"
+                ]
+              },
+              "synthetic_content": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Invented description of the attachment. Fixtures carry no real or private media."
+              }
+            }
+          },
+          "runtime_state": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "restarted": {
+                "type": "boolean"
+              },
+              "context_compacted": {
+                "type": "boolean"
+              },
+              "optional_read_withheld": {
+                "type": "boolean"
+              },
+              "withheld_read": {
+                "type": "string"
+              },
+              "screening_verdict": {
+                "type": "string",
+                "enum": [
+                  "withheld",
+                  "unavailable"
+                ]
+              }
+            }
+          },
+          "seeded_history": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "id",
+                "occurred_at",
+                "text"
+              ],
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "episode",
+                    "memory",
+                    "wiki",
+                    "image_description"
+                  ]
+                },
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "occurred_at": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "text": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        }
+      },
+      "metadata": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "scenario_id",
+          "event_classes",
+          "retention_signals",
+          "scenario_dimensions",
+          "attribution_stages",
+          "expected",
+          "negative",
+          "rationale"
+        ],
+        "properties": {
+          "scenario_id": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+          },
+          "event_classes": {
+            "type": "array",
+            "minItems": 0,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "birthday_anniversary",
+                "first_or_ritual",
+                "shared_artifact",
+                "emotional_repair",
+                "trust_building",
+                "loss",
+                "boundary",
+                "promise",
+                "recurring_motif"
+              ]
+            },
+            "description": "Companion-salient episodic classes that deserve landmark treatment."
+          },
+          "retention_signals": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "explicit_favorite",
+                "participant_revisited",
+                "affective_peak",
+                "artifact_attached",
+                "commitment_made",
+                "symbol_recurrence",
+                "relationship_state_change"
+              ]
+            },
+            "description": "Durable-retention INPUTS present in this scenario. Inputs to salience, never the whole mechanism."
+          },
+          "scenario_dimensions": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "image_sparse_text_cue",
+                "current_pixels_versus_stale_description",
+                "absent_or_weak_embodiment_reference",
+                "uncertainty_over_forced_recognition",
+                "restart_or_compaction_projection",
+                "optional_evidence_withheld",
+                "one_relevant_versus_many",
+                "negative_semantic_neighbor"
+              ]
+            }
+          },
+          "attribution_stages": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "perception",
+                "cue_construction",
+                "retrieval_ranking",
+                "cache_freshness",
+                "security_withholding",
+                "downstream_orchestration"
+              ]
+            },
+            "description": "Stages a failure on this scenario must be attributed to, scored separately."
+          },
+          "expected": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "recall",
+              "landmark_ids",
+              "must_not_surface_ids",
+              "max_surfaced_landmarks",
+              "degraded_evidence_flag"
+            ],
+            "properties": {
+              "recall": {
+                "type": "string",
+                "enum": [
+                  "landmark",
+                  "uncertainty",
+                  "none"
+                ],
+                "description": "landmark: the named episodes must be used in the SAME response. uncertainty: the honest answer is that it cannot be determined. none: nothing should be surfaced."
+              },
+              "landmark_ids": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "type": "string"
+                }
+              },
+              "must_not_surface_ids": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "type": "string"
+                }
+              },
+              "max_surfaced_landmarks": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "degraded_evidence_flag": {
+                "type": "boolean",
+                "description": "Whether the run must carry an explicit degraded-evidence flag rather than reading a withheld read as absence."
+              },
+              "must_not_assert": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          "negative": {
+            "type": "boolean",
+            "description": "True when the scored outcome is a restraint: something plausible that must NOT be surfaced or claimed."
+          },
+          "rationale": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  }
+}

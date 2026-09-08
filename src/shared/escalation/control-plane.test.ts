@@ -372,3 +372,73 @@ describe('human escalation resolution', () => {
     });
   });
 });
+
+describe('settleAttempt compare-and-set', () => {
+  const attempt = {
+    idempotencyKey: 'incident-a.1',
+    escalationId: '',
+    sink: 'operator_alert' as const,
+    outcome: 'delivery_failed' as const,
+    attemptedAtMs: 1_800_000_000_000,
+  };
+
+  async function claimed(): Promise<{
+    ledger: ReturnType<typeof createInMemoryHumanEscalationLedger>;
+    key: string;
+  }> {
+    const ledger = createInMemoryHumanEscalationLedger();
+    const record = await ledger.openOrReopen({
+      kind: 'runtime_incident',
+      severity: 'critical',
+      owner: { kind: 'system' },
+      dedupeKey: 'incident-a',
+      sourceRef: 'incident-a',
+      labels: ['operator_alerting'],
+      evidence: {},
+      detailPath: '/subsystem-health',
+      raisedAtMs: 1_800_000_000_000,
+    });
+    await ledger.claimAttempt({ ...attempt, escalationId: record.escalationId });
+    return { ledger, key: attempt.idempotencyKey };
+  }
+
+  it('settles a row that still holds the provisional outcome it was claimed with', async () => {
+    const { ledger, key } = await claimed();
+
+    await ledger.settleAttempt({
+      idempotencyKey: key,
+      expectedOutcome: 'delivery_failed',
+      outcome: 'delivered',
+    });
+
+    expect(await ledger.findAttempt(key)).toMatchObject({ outcome: 'delivered' });
+  });
+
+  it('refuses to overwrite an outcome another settle already wrote', async () => {
+    const { ledger, key } = await claimed();
+    await ledger.settleAttempt({
+      idempotencyKey: key,
+      expectedOutcome: 'delivery_failed',
+      outcome: 'delivered',
+    });
+
+    // A slow settle from an earlier attempt at the same key would otherwise
+    // demote a proved delivery back to the fail-closed provisional value.
+    await expect(ledger.settleAttempt({
+      idempotencyKey: key,
+      expectedOutcome: 'delivery_failed',
+      outcome: 'unconfigured',
+    })).rejects.toThrow(/holds outcome delivered, not the expected delivery_failed/u);
+    expect(await ledger.findAttempt(key)).toMatchObject({ outcome: 'delivered' });
+  });
+
+  it('still reports a key nobody claimed as absent rather than mismatched', async () => {
+    const ledger = createInMemoryHumanEscalationLedger();
+
+    await expect(ledger.settleAttempt({
+      idempotencyKey: 'never-claimed',
+      expectedOutcome: 'delivery_failed',
+      outcome: 'delivered',
+    })).rejects.toThrow(/is not in the ledger/u);
+  });
+});

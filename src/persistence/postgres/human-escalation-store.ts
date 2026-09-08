@@ -339,23 +339,41 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
   }
 
   /**
-   * Settle a claimed attempt with what the sink actually said. The row must
-   * already exist: settling a key nobody claimed would mean the claim was
-   * skipped, which is exactly the path that pages twice.
+   * Settle a claimed attempt with what the sink actually said, conditional on
+   * the row still holding the provisional outcome this caller claimed it with
+   * (bead psfn-framework-8nq3h).
+   *
+   * The row must already exist: settling a key nobody claimed would mean the
+   * claim was skipped, which is exactly the path that pages twice. And the
+   * `outcome = $3` predicate makes the write a compare-and-set in the database
+   * rather than a read-then-write in the process, so a settle that lost a race
+   * to a newer one cannot silently demote a proved `delivered` back to the
+   * fail-closed provisional value it was claimed with. A missing row and a
+   * moved row are distinguished by a second read, so the error names which
+   * happened instead of guessing.
    */
-  async settleAttempt(
-    idempotencyKey: string,
-    outcome: HumanEscalationDeliveryOutcome,
-  ): Promise<void> {
+  async settleAttempt(input: {
+    idempotencyKey: string;
+    expectedOutcome: HumanEscalationDeliveryOutcome;
+    outcome: HumanEscalationDeliveryOutcome;
+  }): Promise<void> {
     const row = await queryOne<AttemptRow>(this.pool, `
       UPDATE human_escalation_attempts
       SET outcome = $2
-      WHERE idempotency_key = $1
+      WHERE idempotency_key = $1 AND outcome = $3
       RETURNING idempotency_key, escalation_id, sink, outcome, attempted_at_ms
-    `, [idempotencyKey, outcome]);
-    if (!row) {
-      throw new Error(`Human escalation attempt ${idempotencyKey} is not in the ledger`);
+    `, [input.idempotencyKey, input.outcome, input.expectedOutcome]);
+    if (row) return;
+    const existing = await this.findAttempt(input.idempotencyKey);
+    if (!existing) {
+      throw new Error(
+        `Human escalation attempt ${input.idempotencyKey} is not in the ledger`,
+      );
     }
+    throw new Error(
+      `Human escalation attempt ${input.idempotencyKey} holds outcome `
+      + `${existing.outcome}, not the expected ${input.expectedOutcome}`,
+    );
   }
 
   async markNotified(escalationId: string, notifiedAtMs: number): Promise<void> {

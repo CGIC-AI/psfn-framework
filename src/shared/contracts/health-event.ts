@@ -315,10 +315,14 @@ function normalizeOwner(value: unknown): HealthEventOwner {
 
 /**
  * Resolve envelope ownership from a runtime identity. A core companion routing
- * identity binds the event to that tenant. Anything else — a derived shard
- * identity, or no identity at all — has no core tenancy to attribute the
- * observation to, so it is recorded as system-owned rather than guessed onto a
- * companion that did not produce it.
+ * identity binds the event to that tenant.
+ *
+ * Anything else — an absent identity, or one the routing contract does not
+ * recognize — has no core tenancy to attribute the observation to, so it is
+ * recorded as system-owned rather than guessed onto a companion that did not
+ * produce it. `loadConfig` already validates `COMPANION_ID` through
+ * `createCompanionId` for both the agent and gateway processes, so in a real
+ * runtime that branch is a defensive floor rather than an expected path.
  */
 export function resolveHealthEventOwner(companionId: string | undefined): HealthEventOwner {
   const parsed = parseCompanionId(companionId);

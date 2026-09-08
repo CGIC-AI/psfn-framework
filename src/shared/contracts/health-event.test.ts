@@ -4,6 +4,7 @@ import {
   emitHealthEvent,
   hashHealthEventSubject,
   processObserverId,
+  resolveHealthEventOwner,
   validateHealthEvent,
   type HealthEvent,
   type HealthEventInput,
@@ -95,6 +96,13 @@ describe('health event envelope', () => {
       .toThrow(/occurrenceCount/u);
   });
 
+  it('binds ownership from a routing identity and never guesses a companion', () => {
+    expect(resolveHealthEventOwner(COMPANION_ID))
+      .toEqual({ kind: 'companion', companionId: COMPANION_ID });
+    expect(resolveHealthEventOwner(undefined)).toEqual({ kind: 'system' });
+    expect(resolveHealthEventOwner('shard:flagship-research')).toEqual({ kind: 'system' });
+  });
+
   it('stamps one observer identity for every emitter in the process', () => {
     expect(processObserverId()).toBe(processObserverId());
     expect(processObserverId()).toMatch(/^[0-9a-f-]{36}$/u);
@@ -174,7 +182,7 @@ describe('health event content-free guarantee', () => {
         process: 'agent',
         component: 'scheduler',
         observerId: processObserverId(),
-        detail: 'ECONNREFUSED 10.0.0.4:5432',
+        detail: 'ECONNREFUSED 192.0.2.4:5432',
       },
     }))).toThrow(/provenance has unsupported keys: detail/u);
     expect(() => validateHealthEvent(persistedShape({

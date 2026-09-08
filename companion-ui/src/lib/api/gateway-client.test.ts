@@ -79,6 +79,93 @@ async function connectClient(socket: FakeSocket, requestIds = ['request-1']) {
 }
 
 describe('CompanionGatewayClient', () => {
+  it('reads redacted embodiment status and sends only an explicit generation-checked handoff', async () => {
+    const socket = new FakeSocket();
+    const client = await connectClient(socket, ['status-1', 'handoff-1']);
+    const store = new HubStreamStore(client);
+    expect(socket.sent).toEqual([]);
+    const reading = store.primaryEmbodiment!.read();
+    expect(JSON.parse(String(socket.sent[0]))).toEqual({
+      schemaVersion: 1, requestId: 'status-1', action: 'companion.read', resource: 'embodiment.status', body: {},
+    });
+    const status = { generation: 8, version: 9, primaryPresent: true, currentDeviceIsPrimary: false, lastDecision: null };
+    socket.message({ schemaVersion: 1, type: 'result', requestId: 'status-1', ok: true, result: status });
+    await expect(reading).resolves.toEqual(status);
+    expect(socket.sent).toHaveLength(1);
+
+    const switching = store.primaryEmbodiment!.handoff(status.generation);
+    expect(JSON.parse(String(socket.sent[1]))).toEqual({
+      schemaVersion: 1, requestId: 'handoff-1', action: 'embodiment.handoff', resource: 'embodiment.handoff',
+      body: { expectedGeneration: 8, decisionId: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u), reason: 'user_requested' },
+    });
+    socket.message({ schemaVersion: 1, type: 'result', requestId: 'handoff-1', ok: true, result: { ...status, generation: 9, version: 10, currentDeviceIsPrimary: true } });
+    await expect(switching).resolves.toMatchObject({ generation: 9, currentDeviceIsPrimary: true });
+    store.destroy();
+  });
+
+  it('rejects denied embodiment operations and permits a fresh read without retrying handoff', async () => {
+    const socket = new FakeSocket();
+    const client = await connectClient(socket, ['handoff-1', 'status-1']);
+    const denied = expect(client.primaryEmbodiment!.handoff(4)).rejects.toThrow(/denied/);
+    socket.message({ schemaVersion: 1, type: 'result', requestId: '', ok: false, error: { code: 'denied' } });
+    await denied;
+    const reading = client.primaryEmbodiment!.read();
+    socket.message({ schemaVersion: 1, type: 'result', requestId: 'status-1', ok: true, result: {
+      generation: 5, version: 6, primaryPresent: true, currentDeviceIsPrimary: false, lastDecision: null,
+    } });
+    await expect(reading).resolves.toMatchObject({ generation: 5 });
+    expect(socket.sent).toHaveLength(2);
+    expect(JSON.parse(String(socket.sent[1])).resource).toBe('embodiment.status');
+  });
+
+  it('rejects malformed embodiment responses and clears the attachment', async () => {
+    const socket = new FakeSocket();
+    const client = await connectClient(socket, ['status-1']);
+    const reading = expect(client.primaryEmbodiment!.read()).rejects.toThrow(/invalid/);
+    socket.message({ schemaVersion: 1, type: 'result', requestId: 'status-1', ok: true, result: {
+      generation: 0, version: 0, primaryPresent: false, currentDeviceIsPrimary: true, lastDecision: null,
+    } });
+    await reading;
+    expect(socket.closeCalls.at(-1)?.[0]).toBe(1002);
+    expect(client.primaryEmbodiment).toBeUndefined();
+  });
+
+  it('binds embodiment operations to one attachment and ignores old socket replies and close events', async () => {
+    const firstSocket = new FakeSocket();
+    const nextSocket = new FakeSocket();
+    const sockets = [firstSocket, nextSocket];
+    let requestId = 0;
+    const client = new CompanionGatewayClient({
+      url: 'wss://fleet.example.test/companion-ui/ws',
+      webSocketFactory: () => sockets.shift()!,
+      requestIdFactory: () => `request-${++requestId}`,
+    });
+    const firstConnect = client.connect();
+    firstSocket.open();
+    firstSocket.message(READY);
+    await firstConnect;
+    const firstPort = client.primaryEmbodiment!;
+    const cancelled = expect(firstPort.read()).rejects.toThrow(/disconnected/);
+    client.disconnect();
+    await cancelled;
+    expect(client.primaryEmbodiment).toBeUndefined();
+    const nextConnect = client.connect();
+    nextSocket.open();
+    nextSocket.message(READY);
+    await nextConnect;
+    const nextPort = client.primaryEmbodiment!;
+    expect(nextPort).not.toBe(firstPort);
+    await expect(firstPort.handoff(1)).rejects.toThrow(/no longer current/);
+    const reading = nextPort.read();
+    const status = { generation: 1, version: 1, primaryPresent: false, currentDeviceIsPrimary: false, lastDecision: null };
+    firstSocket.message({ schemaVersion: 1, type: 'result', requestId: 'request-2', ok: true, result: { ...status, generation: 99 } });
+    firstSocket.serverClose(1000);
+    nextSocket.message({ schemaVersion: 1, type: 'result', requestId: 'request-2', ok: true, result: status });
+    await expect(reading).resolves.toEqual(status);
+    expect(client.snapshot().state).toBe('ready');
+    expect(nextSocket.sent).toHaveLength(2);
+  });
+
   it('starts one authenticated PCM stream and sends sequenced binary chunks', async () => {
     const socket = new FakeSocket();
     const client = await connectClient(socket, ['audio-request-1']);

@@ -298,6 +298,7 @@ export const BIOGRAPHICAL_CANDIDATE_RATIONALES = [
   'recurring_evidence',
   'coalesced_duplicate_evidence',
   'contradicts_active_claim',
+  'companion_revision',
 ] as const;
 export type BiographicalCandidateRationale =
   (typeof BIOGRAPHICAL_CANDIDATE_RATIONALES)[number];

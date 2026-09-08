@@ -19,6 +19,7 @@
 import { buildLLMWorkSpec, completeWithWorkSpec } from '../../../primitives/llm/work-spec.js';
 import { COMPANION_PRIVATE_BACKGROUND_TELEMETRY } from '../../../shared/telemetry/model-usage.js';
 import { isRecord } from '../../../shared/utils/types.js';
+import { COGSEC_EVENT_SAFE_TEXT_MAX_CHARS } from '../intake/screening-envelope-policy.js';
 import {
   isBlindReviewConcernLevel,
   type BlindReviewFinding,
@@ -29,11 +30,11 @@ import type { LLMProviderPort } from '../../agent/contracts.js';
 import type { LLMContext } from '../../../shared/contracts/runtime.js';
 
 /**
- * Safe-summary ceiling. It sits under the CogSec event store's own safe-text
- * limit so a valid finding can never be rejected at the alert boundary — the
- * reviewer is told the bound and the parser enforces it regardless.
+ * Safe-summary ceiling. Derived from the CogSec event store's own safe-text
+ * limit, leaving room for the lane's provenance prefix, so a valid finding can
+ * never be rejected at the alert boundary.
  */
-const MAX_SAFE_SUMMARY_CHARS = 400;
+const MAX_SAFE_SUMMARY_CHARS = Math.floor(COGSEC_EVENT_SAFE_TEXT_MAX_CHARS * 2 / 3);
 
 const REVIEWER_SYSTEM_PROMPT = [
   'You are a sealed, blinded cognitive-security reviewer.',

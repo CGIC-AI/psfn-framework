@@ -173,11 +173,6 @@ export {
   type ToolUsageEvaluatorWindow,
 } from './scheduler-config/tool-usage.js';
 export {
-  DEFAULT_BLIND_REVIEWER_CONFIG,
-  type BlindReviewBatchConfig,
-  type BlindReviewerConfig,
-} from './scheduler-config/blind-review.js';
-export {
   MAX_NEAR_TERM_FOLLOW_UP_HORIZON_MS,
 } from './scheduler-config/intention-follow-up.js';
 export {

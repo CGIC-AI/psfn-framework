@@ -27,10 +27,11 @@ export type BlindReviewGateDecision =
 
 /**
  * Total blinded characters a batch would put in front of a reviewer. Structural
- * rows contribute zero, so a window of purely structural evidence has to build
- * up more rows before it is worth a call — which is the intended behavior.
+ * rows contribute zero, which is why `minBlindedCharsPerBatch` defaults to 0:
+ * a batch of purely structural evidence is legitimate review material and must
+ * not be starved by a text floor it can never reach.
  */
-export function blindReviewBatchBlindedChars(items: readonly BlindReviewEvidenceItem[]): number {
+function blindReviewBatchBlindedChars(items: readonly BlindReviewEvidenceItem[]): number {
   return items.reduce((total, item) => total + item.blindedExcerpt.length, 0);
 }
 

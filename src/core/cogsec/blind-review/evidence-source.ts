@@ -14,7 +14,10 @@
 //      marked verbatim-public and non-intimate (the same `auditPrivacy` gate
 //      `faculties/introspection/source.ts` applies), and even then it is put
 //      through `blindPublicStimulus` and truncated. Every other turn yields a
-//      `structural_only` row with an empty excerpt.
+//      `structural_only` row with an empty excerpt. The excerpt is the
+//      assistant's PUBLIC reply only: tool-call `rationale` is internal
+//      reasoning that was never part of the exchange the companion classified,
+//      so admitting it would widen a consent envelope she did not open.
 //
 // The reviewer therefore never sees private content, and the durable window
 // never stores any.
@@ -31,11 +34,8 @@ import {
 } from './contracts.js';
 import type { TurnRecord } from '../../../shared/contracts/runtime.js';
 
-/** Bounded tool-name list per evidence row; names are identifiers, not content. */
-const MAX_TOOL_NAMES_PER_ITEM = 12;
-
 /** The narrow read surface this adapter needs from the live session runtime. */
-export interface BlindReviewTurnRecordReader {
+interface BlindReviewTurnRecordReader {
   listRecentSessions(limit: number): Array<{ sessionId: string; sourceChannelId: string }>;
   getRecentSourceTurnRecords(sourceChannelId: string, limit: number): TurnRecord[];
   isSessionRetiredOrQuarantined(sessionId: string): boolean;
@@ -44,6 +44,8 @@ export interface BlindReviewTurnRecordReader {
 export interface BlindReviewEvidenceSourceOptions {
   reader: BlindReviewTurnRecordReader;
   recentSessionLimit: number;
+  /** Tool identifiers retained per row; owner-file governed, never a literal. */
+  maxToolNamesPerItem: number;
 }
 
 /**
@@ -61,15 +63,18 @@ function permitsBlindedExcerpt(record: TurnRecord): boolean {
   if (privacy.channelPrivacy !== 'public') return false;
   if (privacy.contentSensitivity !== 'non_intimate') return false;
   if (privacy.reason !== 'explicit_public_non_dm') return false;
+  // The contract admits only a companion actor, so the remaining question is
+  // whether that mark was drawn for THIS turn and request: a mismatched or
+  // absent actor yields `structural_only` rather than disclosure.
   const actor = privacy.contentSensitivityActor;
-  if (!actor || actor.kind !== 'companion') return false;
+  if (!actor) return false;
   return actor.turnId === record.turnId && actor.requestId === record.requestId;
 }
 
-function toActivitySignals(record: TurnRecord): BlindReviewActivitySignals {
+function toActivitySignals(record: TurnRecord, maxToolNames: number): BlindReviewActivitySignals {
   const toolNames = [...new Set(record.toolCalls.map(call => call.toolName))]
     .sort()
-    .slice(0, MAX_TOOL_NAMES_PER_ITEM);
+    .slice(0, maxToolNames);
   const durationMs = record.completedAt > record.startedAt
     ? record.completedAt - record.startedAt
     : 0;
@@ -84,28 +89,20 @@ function toActivitySignals(record: TurnRecord): BlindReviewActivitySignals {
   };
 }
 
-/**
- * Build the excerpt. Assistant reply first, then the rationales the companion
- * attached to her tool calls — that ordering keeps the bounded budget spent on
- * the reasoning most likely to carry drift. Blinding runs on the joined text so
- * a cue split across two fragments is still reduced.
- */
+/** Blind, then truncate. The companion's public reply only. */
 function toBlindedExcerpt(record: TurnRecord, maxChars: number): string {
-  const fragments: string[] = [];
   const assistant = record.assistantMessage?.content.trim();
-  if (assistant) fragments.push(assistant);
-  for (const call of record.toolCalls) {
-    const rationale = call.rationale?.trim();
-    if (rationale) fragments.push(rationale);
-  }
-  if (fragments.length === 0) return '';
-  return blindPublicStimulus(fragments.join(' ')).slice(0, maxChars);
+  if (!assistant) return '';
+  return blindPublicStimulus(assistant).slice(0, maxChars);
 }
 
-function toEvidenceItem(record: TurnRecord, maxBlindedCharsPerItem: number): BlindReviewEvidenceItem {
-  const activity = toActivitySignals(record);
+function toEvidenceItem(
+  record: TurnRecord,
+  bounds: { maxBlindedCharsPerItem: number; maxToolNamesPerItem: number },
+): BlindReviewEvidenceItem {
+  const activity = toActivitySignals(record, bounds.maxToolNamesPerItem);
   const blindedExcerpt = permitsBlindedExcerpt(record)
-    ? toBlindedExcerpt(record, maxBlindedCharsPerItem)
+    ? toBlindedExcerpt(record, bounds.maxBlindedCharsPerItem)
     : '';
   const disclosure: BlindReviewDisclosure = blindedExcerpt.length > 0
     ? 'blinded_excerpt'
@@ -134,7 +131,7 @@ function toEvidenceItem(record: TurnRecord, maxBlindedCharsPerItem: number): Bli
 export function createTurnRecordBlindReviewEvidenceSource(
   options: BlindReviewEvidenceSourceOptions,
 ): BlindReviewEvidenceSourcePort {
-  const { reader, recentSessionLimit } = options;
+  const { reader, recentSessionLimit, maxToolNamesPerItem } = options;
   return {
     async listEvidence(input): Promise<BlindReviewEvidenceItem[]> {
       if (input.limit <= 0) return [];
@@ -149,7 +146,10 @@ export function createTurnRecordBlindReviewEvidenceSource(
         for (const record of records) {
           if (record.status !== 'completed') continue;
           if (record.completedAt <= input.sinceMs) continue;
-          items.push(toEvidenceItem(record, input.maxBlindedCharsPerItem));
+          items.push(toEvidenceItem(record, {
+            maxBlindedCharsPerItem: input.maxBlindedCharsPerItem,
+            maxToolNamesPerItem,
+          }));
         }
       }
       // Oldest-first so the durable window, the review batch, and the watermark

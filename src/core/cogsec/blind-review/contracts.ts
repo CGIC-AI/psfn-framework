@@ -30,8 +30,6 @@ export const BLIND_REVIEW_CHANNEL_ID = 'internal:cogsec:blind-review';
 export const BLIND_REVIEW_ACTOR = 'system:cogsec-blind-review';
 /** Durable processor identity for the lane's cursor and review watermark. */
 export const BLIND_REVIEW_PROCESSOR = 'cogsec.blind_review';
-/** Provenance ref scheme for one reviewed turn. */
-export const BLIND_REVIEW_SOURCE_REF_SCHEME = 'turn';
 
 /** Whether an evidence row carries text at all. */
 export type BlindReviewDisclosure = 'structural_only' | 'blinded_excerpt';
@@ -195,7 +193,7 @@ export function blindReviewEvidenceId(sourceRef: string): string {
 
 /** `turn://<channelId>/<turnId>`; matches the CogSec event ref pattern. */
 export function blindReviewSourceRef(channelId: string, turnId: string): string {
-  return `${BLIND_REVIEW_SOURCE_REF_SCHEME}://${encodeURIComponent(channelId)}/${encodeURIComponent(turnId)}`;
+  return `turn://${encodeURIComponent(channelId)}/${encodeURIComponent(turnId)}`;
 }
 
 /**

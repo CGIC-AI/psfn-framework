@@ -50,6 +50,9 @@
     "itemTtlHours": 168,
     "maxHeldItems": 500
   },
+  "receipts": {
+    "ttlHours": 720
+  },
   "injectionClassifier": {
     "labelThreshold": 0.5,
     "scoreThresholdsByTier": {

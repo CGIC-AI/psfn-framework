@@ -89,6 +89,14 @@ export const POSTGRES_STORE_READINESS_CATALOG = {
     requirement: 'optional',
   },
   welfare_grant_verifier: { label: 'welfare grant verifier', requirement: 'optional' },
+  cogsec_receipts: {
+    label: 'CogSec admission receipts',
+    requirement: 'required',
+    failureDiagnostic: {
+      component: 'CogSecReceiptStore',
+      message: 'CogSec admission receipt schema migration failed',
+    },
+  },
 } as const satisfies Record<string, PostgresStoreReadinessCatalogEntry>;
 
 export type PostgresStoreReadinessId = keyof typeof POSTGRES_STORE_READINESS_CATALOG;

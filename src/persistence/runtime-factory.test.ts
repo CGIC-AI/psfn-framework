@@ -423,6 +423,7 @@ describe('createAgentPersistenceRuntime', () => {
       automataPurgeSagaStore: expect.any(Object),
       introspectionLandmarkStore: expect.any(Object),
       letterStore: expect.any(Object),
+      cogSecReceiptStore: expect.any(Object),
       doingMirrorStore: expect.any(Object),
       weightedThoughtStore: undefined,
       socialDesireStore: undefined,

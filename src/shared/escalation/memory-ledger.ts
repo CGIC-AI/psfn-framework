@@ -106,15 +106,28 @@ export function createInMemoryHumanEscalationLedger(): HumanEscalationLedgerPort
       return { claimed: true };
     },
 
-    async settleAttempt(
-      idempotencyKey: string,
-      outcome: HumanEscalationDeliveryOutcome,
-    ): Promise<void> {
-      const attempt = attempts.get(idempotencyKey);
+    /**
+     * Check-then-set, matching the Postgres adapter's conditional UPDATE. The
+     * map is single-threaded, so the read and the write cannot interleave here
+     * — the check exists to reject a settle whose attempt row has already moved
+     * on, not to serialize one.
+     */
+    async settleAttempt(input: {
+      idempotencyKey: string;
+      expectedOutcome: HumanEscalationDeliveryOutcome;
+      outcome: HumanEscalationDeliveryOutcome;
+    }): Promise<void> {
+      const attempt = attempts.get(input.idempotencyKey);
       if (!attempt) {
-        throw new Error(`Human escalation attempt ${idempotencyKey} is not in the ledger`);
+        throw new Error(`Human escalation attempt ${input.idempotencyKey} is not in the ledger`);
       }
-      attempts.set(idempotencyKey, { ...attempt, outcome });
+      if (attempt.outcome !== input.expectedOutcome) {
+        throw new Error(
+          `Human escalation attempt ${input.idempotencyKey} holds outcome `
+          + `${attempt.outcome}, not the expected ${input.expectedOutcome}`,
+        );
+      }
+      attempts.set(input.idempotencyKey, { ...attempt, outcome: input.outcome });
     },
 
     async markNotified(escalationId: string, notifiedAtMs: number): Promise<void> {

@@ -695,11 +695,26 @@ export interface HumanEscalationLedgerPort {
    * leaves a row that does not claim a delivery it cannot prove.
    */
   claimAttempt(attempt: HumanEscalationAttempt): Promise<HumanEscalationAttemptClaim>;
-  /** Replace a claimed attempt's provisional outcome with what the sink said. */
-  settleAttempt(
-    idempotencyKey: string,
-    outcome: HumanEscalationDeliveryOutcome,
-  ): Promise<void>;
+  /**
+   * Replace a claimed attempt's provisional outcome with what the sink said,
+   * only if the row still holds the provisional value this caller wrote
+   * (bead psfn-framework-8nq3h).
+   *
+   * The compare-and-set is the point. A settle is the LAST word about one
+   * delivery attempt, and an unconditional write lets a slow settle overwrite a
+   * newer, truer one — a retry that already recorded `delivered` silently
+   * demoted to the `delivery_failed` an earlier attempt was carrying, or the
+   * reverse, which claims a delivery nobody can prove. A settle that does not
+   * find its own provisional outcome throws rather than overwriting: the
+   * attempt row already says something a caller did not put there, and that is
+   * news, not a value to replace.
+   */
+  settleAttempt(input: {
+    idempotencyKey: string;
+    /** The provisional outcome this caller claimed the attempt with. */
+    expectedOutcome: HumanEscalationDeliveryOutcome;
+    outcome: HumanEscalationDeliveryOutcome;
+  }): Promise<void>;
   /** Stamp the newest attempt that actually reached a sink. */
   markNotified(escalationId: string, notifiedAtMs: number): Promise<void>;
   list(query: HumanEscalationListQuery): Promise<HumanEscalationRecord[]>;

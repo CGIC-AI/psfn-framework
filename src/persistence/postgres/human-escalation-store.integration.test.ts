@@ -312,4 +312,37 @@ describe('PostgresHumanEscalationStore bounds', () => {
       expect(counts.resolved).toBe(BOUNDS.maxResolvedRowsPerKind);
     });
   });
+
+  it('refuses a settle whose attempt row already moved on', async () => {
+    await withStore(async ({ store }) => {
+      const record = await store.openOrReopen(facts({ dedupeKey: 'settle' }));
+      await store.claimAttempt({
+        idempotencyKey: 'settle.1',
+        escalationId: record.escalationId,
+        sink: 'operator_alert',
+        outcome: 'delivery_failed',
+        attemptedAtMs: NOW_MS,
+      });
+      await store.settleAttempt({
+        idempotencyKey: 'settle.1',
+        expectedOutcome: 'delivery_failed',
+        outcome: 'delivered',
+      });
+
+      // The compare-and-set is in the database, so a slow settle from the same
+      // provisional claim cannot demote a delivery the ledger already proved.
+      await expect(store.settleAttempt({
+        idempotencyKey: 'settle.1',
+        expectedOutcome: 'delivery_failed',
+        outcome: 'unconfigured',
+      })).rejects.toThrow(/holds outcome delivered/u);
+      expect(await store.findAttempt('settle.1')).toMatchObject({ outcome: 'delivered' });
+
+      await expect(store.settleAttempt({
+        idempotencyKey: 'settle.absent',
+        expectedOutcome: 'delivery_failed',
+        outcome: 'delivered',
+      })).rejects.toThrow(/is not in the ledger/u);
+    });
+  });
 });

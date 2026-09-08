@@ -150,6 +150,7 @@ function buildService(input: {
   model: RecordingModel;
   targets: readonly BiographySynthesisTarget[];
   runId?: string;
+  policy?: BiographicalCandidatePolicy;
 }): BiographySynthesisService {
   return new BiographySynthesisService({
     memoryStore: input.memoryStore,
@@ -158,14 +159,156 @@ function buildService(input: {
     promptRegistry: null,
     targets: targetPort(input.targets),
     companionSubject: COMPANION_SUBJECT,
-    candidatePolicy: () => POLICY,
+    candidatePolicy: () => input.policy ?? POLICY,
     depthPolicy: () => createDefaultBiographicalDepthPolicy(),
     now: () => NOW,
     newRunId: () => input.runId ?? 'biography-synthesis:test-run',
   });
 }
 
+/** POLICY with a different fleet-wide pending cap (a18qq). */
+function policyWithPendingCap(maxPendingCandidates: number): BiographicalCandidatePolicy {
+  return normalizeBiographicalCandidatePolicy({
+    ...POLICY,
+    budgets: { ...POLICY.budgets, maxPendingCandidates },
+  });
+}
+
 describe('BiographySynthesisService', () => {
+  // psfn-framework-a18qq — under a saturated human-review backlog the pending
+  // cap threw in `writeCandidate`, i.e. AFTER the model call. Every tick then
+  // re-synthesized the same evidence and threw again. The pass now reads the
+  // pending budget first and declines to spend anything it cannot stage.
+  describe('pending candidate budget (a18qq)', () => {
+    function fixture() {
+      const memories = new InMemoryMemoryStore();
+      memories.insertMemory(memory('mem-contact-a', {
+        text: 'They asked for short answers again today.',
+      }));
+      memories.insertMemory(companionMemory('mem-self-a', {
+        text: 'I keep choosing concise explanations when I write.',
+        provenance: {},
+      }));
+      return { memories, profileStore: new InMemoryBiographicalProfileStore(() => NOW) };
+    }
+
+    it('makes no model call when the pending cap is already full', async () => {
+      const { memories, profileStore } = fixture();
+      // Fill the budget with one real staged candidate.
+      const first = recordingModel([candidatesResponse([preferenceCandidate(['mem-contact-a'])])]);
+      const firstRun = await buildService({
+        memoryStore: memories.asPort(),
+        profileStore,
+        model: first,
+        targets: [CONTACT_TARGET],
+      }).run();
+      expect(firstRun.candidatesStaged).toBe(1);
+      expect(firstRun.pendingBudgetExhausted).toBe(false);
+      expect(await profileStore.countPendingCandidates()).toBe(1);
+
+      // A cap of one is now exhausted. A DIFFERENT target with unseen evidence
+      // would otherwise be synthesized; the pass must not spend a model call.
+      const second = recordingModel([candidatesResponse([preferenceCandidate(['mem-self-a'])])]);
+      const blocked = await buildService({
+        memoryStore: memories.asPort(),
+        profileStore,
+        model: second,
+        targets: [COMPANION_TARGET],
+        runId: 'biography-synthesis:blocked-run',
+        policy: policyWithPendingCap(1),
+      }).run();
+
+      expect(second.prompts).toHaveLength(0);
+      expect(blocked.pendingBudgetExhausted).toBe(true);
+      expect(blocked.outcome).toBe('complete');
+      expect(blocked.candidatesStaged).toBe(0);
+      expect(blocked.targetsScanned).toBe(0);
+      expect(blocked.targetsFailed).toBe(0);
+      // Nothing was staged, so the durable cursor never advanced: the target is
+      // still open for the pass that runs once the backlog drains.
+      expect(await profileStore.countPendingCandidates()).toBe(1);
+    });
+
+    it('resumes synthesis as soon as the backlog leaves headroom', async () => {
+      const { memories, profileStore } = fixture();
+      const first = recordingModel([candidatesResponse([preferenceCandidate(['mem-contact-a'])])]);
+      await buildService({
+        memoryStore: memories.asPort(),
+        profileStore,
+        model: first,
+        targets: [CONTACT_TARGET],
+      }).run();
+      expect(await profileStore.countPendingCandidates()).toBe(1);
+
+      // One slot of headroom is enough: the gate is headroom-driven, never a
+      // latch that stays closed once tripped.
+      const second = recordingModel([candidatesResponse([preferenceCandidate(['mem-self-a'])])]);
+      const resumed = await buildService({
+        memoryStore: memories.asPort(),
+        profileStore,
+        model: second,
+        targets: [COMPANION_TARGET],
+        runId: 'biography-synthesis:resumed-run',
+        policy: policyWithPendingCap(2),
+      }).run();
+
+      expect(second.prompts).toHaveLength(1);
+      expect(resumed.pendingBudgetExhausted).toBe(false);
+      expect(resumed.candidatesStaged).toBe(1);
+      expect(await profileStore.countPendingCandidates()).toBe(2);
+    });
+
+    it('keeps writeCandidate as the authority: the advisory read never admits', async () => {
+      const { memories, profileStore } = fixture();
+      const first = recordingModel([candidatesResponse([preferenceCandidate(['mem-contact-a'])])]);
+      await buildService({
+        memoryStore: memories.asPort(),
+        profileStore,
+        model: first,
+        targets: [CONTACT_TARGET],
+      }).run();
+
+      // The advisory read says there is headroom, but the authoritative check
+      // inside writeCandidate re-counts under the capacity lock and refuses.
+      expect(await profileStore.countPendingCandidates()).toBe(1);
+      const second = recordingModel([candidatesResponse([preferenceCandidate(['mem-self-a'])])]);
+      const racy = await buildService({
+        memoryStore: memories.asPort(),
+        profileStore,
+        model: second,
+        targets: [COMPANION_TARGET],
+        runId: 'biography-synthesis:racy-run',
+        // Headroom of one by the advisory read, but the store's own policy…
+        policy: policyWithPendingCap(2),
+      }).run();
+      expect(racy.candidatesStaged).toBe(1);
+
+      // …a third pass under the now-exhausted cap declines before the model,
+      // and even a caller that skipped the pre-check would still be refused.
+      await expect(profileStore.writeCandidate({
+        claim: {
+          subject: COMPANION_SUBJECT,
+          kind: 'nickname',
+          value: { kind: 'nickname', nickname: 'Moth', scope: 'self' },
+          basis: 'explicit',
+          confidence: 1,
+          sources: [{
+            ref: 'memory:mem-self-a',
+            revision: '2026-02-01T00:00:00.000Z',
+            evidenceDigest: 'b'.repeat(64),
+            sensitivityAtProjection: 'personal',
+            subjectEvidenceDigest: 'b'.repeat(64),
+            consentFingerprint: 'b'.repeat(64),
+          }],
+          now: NOW,
+        },
+        automataRunId: 'biography-synthesis:direct-write',
+        automataAuthorityRef: 'automata:test',
+        policy: policyWithPendingCap(2),
+      })).rejects.toThrow('biography candidate pending budget exhausted');
+    });
+  });
+
   it('stages typed candidates from sources in different sessions without activating them', async () => {
     const memories = new InMemoryMemoryStore();
     // Two independent silos-in-time: different sessions and channels, one

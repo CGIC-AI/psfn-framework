@@ -715,6 +715,13 @@ export class SleeptimeWikiPass {
    * whose title overlap clears the owner-file threshold becomes the update
    * target, so "Rust async runtimes" revises "Rust async runtime notes" instead
    * of sitting beside it. Below the threshold the proposal is a genuine create.
+   *
+   * A FUZZY target is additionally restricted to entries this pass authored
+   * (`generated_synthesis`). An update replaces the whole body, and an exact
+   * title match at least implies the proposal is about that document; a 0.6
+   * token overlap does not. Without the restriction a nightly job could
+   * silently overwrite a companion-authored or imported document it merely
+   * resembles.
    */
   private resolveNearDuplicateTarget(title: string): { id: string; exact: boolean } | null {
     const found = this.wikiStore.search({ query: title, limit: 3 });
@@ -723,6 +730,7 @@ export class SleeptimeWikiPass {
     if (exact) return { id: exact.id, exact: true };
     let best: { id: string; similarity: number } | null = null;
     for (const match of found.matches) {
+      if (match.sourceClass !== 'generated_synthesis') continue;
       const similarity = titleTokenSimilarity(title, match.title);
       if (similarity < this.config.nearDuplicateTitleSimilarity) continue;
       if (!best || similarity > best.similarity) best = { id: match.id, similarity };

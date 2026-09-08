@@ -28,11 +28,27 @@ describe('reflection evidence degradation causes (psfn-framework-lpxg3.2)', () =
     })).toBeNull();
   });
 
-  it('never reclassifies an ordinary tool failure as degraded evidence', () => {
+  it('degrades on a failed, denied, or skipped optional read', () => {
+    // The grounding turn absorbed these; if the reflection did not learn the
+    // evidence is missing here, it would reason as if the read came back empty.
+    for (const counts of [
+      { execution_failure: 2 },
+      { policy_denial: 1 },
+      { dependency_skip: 1 },
+    ]) {
+      expect(resolveReflectionEvidenceDegradationCause({
+        ...createEmptyToolCallOutcomeCounts(),
+        success: 1,
+        ...counts,
+      })).toBe('read_failed');
+    }
+  });
+
+  it('leaves a clean run with skipped duplicates undegraded', () => {
     expect(resolveReflectionEvidenceDegradationCause({
       ...createEmptyToolCallOutcomeCounts(),
-      execution_failure: 2,
-      policy_denial: 1,
+      success: 2,
+      duplicate_skip: 1,
     })).toBeNull();
   });
 
@@ -48,6 +64,11 @@ describe('reflection evidence degradation causes (psfn-framework-lpxg3.2)', () =
       partial_result: 3,
       content_withheld: 1,
     })).toBe('content_withheld');
+    expect(resolveReflectionEvidenceDegradationCause({
+      ...createEmptyToolCallOutcomeCounts(),
+      partial_result: 3,
+      execution_failure: 1,
+    })).toBe('read_failed');
     expect(resolveReflectionEvidenceDegradationCause({
       ...createEmptyToolCallOutcomeCounts(),
       partial_result: 1,

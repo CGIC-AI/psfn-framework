@@ -121,6 +121,12 @@ describe('createReflectionTemplateRuntime failure resilience', () => {
       tag: 'evidence-screening-unavailable',
       promptFragment: 'could not reach a verdict',
     },
+    {
+      templateId: 'daily-review',
+      outcome: 'execution_failure' as const,
+      tag: 'evidence-read-failed',
+      promptFragment: 'did not complete for this run',
+    },
   ])(
     'continues $templateId from starter evidence when an optional read reports $outcome',
     async ({ templateId, outcome, tag, promptFragment }) => {

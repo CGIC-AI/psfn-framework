@@ -1667,6 +1667,10 @@ describe('degraded-evidence continuation (psfn-framework-lpxg3.2)', () => {
     expect(executed).toEqual(['call-1']);
     expect((result.toolResults[0] as ObservedToolResult).outcome).toBe('content_withheld');
     expect((result.toolResults[1] as ObservedToolResult).outcome).toBe('dependency_skip');
+    // The notice must not say the earlier call failed: it did not.
+    const skipText = JSON.stringify((result.toolResults[1] as ToolResultMessage).content);
+    expect(skipText).toContain('Nothing failed');
+    expect(skipText).not.toContain('an earlier sequential tool call failed');
   });
 
   it('continues past a withheld optional read and still delivers no withheld content', async () => {

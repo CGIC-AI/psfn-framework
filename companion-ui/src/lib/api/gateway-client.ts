@@ -118,6 +118,8 @@ export class CompanionGatewayClient {
   private state: SatelliteHubConnectionState = 'idle';
   private ready = false;
   private activeInteraction: ActiveInteraction | null = null;
+  // Speech can outlive the text result; keep its selector only for an explicit Stop.
+  private lastCompletedInteraction: ActiveInteraction | null = null;
   private activeAudio: ActiveAudioStream | null = null;
   private authorizedShardId: string | null = null;
   private session: SatelliteHubSession = {};
@@ -229,6 +231,7 @@ export class CompanionGatewayClient {
         this.ready = false;
         this.pending.clear();
         this.activeInteraction = null;
+        this.lastCompletedInteraction = null;
         this.authorizedShardId = null;
         this.session = {};
         this.setState('closed');
@@ -244,6 +247,7 @@ export class CompanionGatewayClient {
     this.ready = false;
     this.pending.clear();
     this.activeInteraction = null;
+    this.lastCompletedInteraction = null;
     this.authorizedShardId = null;
     this.clearAudio(new Error('Companion gateway disconnected during audio streaming'));
     this.session = {};
@@ -276,6 +280,7 @@ export class CompanionGatewayClient {
       requestId,
       ...(shardId ? { shardId } : {}),
     };
+    this.lastCompletedInteraction = null;
     this.emitInbound({ type: 'message', data: { role: 'user', content, final: true } });
   }
 
@@ -375,7 +380,7 @@ export class CompanionGatewayClient {
   interrupt(): void {
     const audio = this.activeAudio;
     const socket = this.socket;
-    if (audio?.phase === 'ready' && audio.turnActive
+    if (audio?.phase === 'ready' && (audio.turnActive || !this.activeInteraction)
       && socket?.readyState === SOCKET_OPEN) {
       try {
         socket.send(JSON.stringify({
@@ -388,7 +393,7 @@ export class CompanionGatewayClient {
       }
       return;
     }
-    const interaction = this.activeInteraction;
+    const interaction = this.activeInteraction ?? this.lastCompletedInteraction;
     if (!interaction) return;
     const { requestId: interactionId, shardId } = interaction;
     this.sendAction(
@@ -541,6 +546,7 @@ export class CompanionGatewayClient {
   }
 
   private applyReady(ready: AttachmentReady): void {
+    this.lastCompletedInteraction = null;
     const capabilities = mapCapabilities(ready.capabilities, ready.telemetryScopes);
     this.session = {
       deviceId: ready.device.id,
@@ -643,6 +649,7 @@ export class CompanionGatewayClient {
         if (pending.resource === 'conversation.interact'
           && this.activeInteraction?.requestId === requestId
           && this.activeInteraction.shardId === undefined) {
+          this.lastCompletedInteraction = this.activeInteraction;
           this.activeInteraction = null;
         }
         if (response.content
@@ -702,6 +709,7 @@ export class CompanionGatewayClient {
         }
         if (this.activeInteraction?.requestId === requestId
           && this.activeInteraction.shardId === shardId) {
+          this.lastCompletedInteraction = this.activeInteraction;
           this.activeInteraction = null;
         }
         if (response.content && this.session.activeShardId === shardId
@@ -721,6 +729,9 @@ export class CompanionGatewayClient {
         if (this.activeInteraction?.requestId === pending.interactionId) {
           this.activeInteraction = null;
         }
+        if (this.lastCompletedInteraction?.requestId === pending.interactionId) {
+          this.lastCompletedInteraction = null;
+        }
         return;
       case 'shards.interrupt': {
         const shardId = pending.shardId;
@@ -734,6 +745,10 @@ export class CompanionGatewayClient {
           && activeInteraction.requestId === pending.interactionId
           && activeInteraction.shardId === shardId) {
           this.activeInteraction = null;
+        }
+        if (this.lastCompletedInteraction?.requestId === pending.interactionId
+          && this.lastCompletedInteraction.shardId === shardId) {
+          this.lastCompletedInteraction = null;
         }
         return;
       }

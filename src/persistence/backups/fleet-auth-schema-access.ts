@@ -11,6 +11,13 @@ import {
 import { parseExactPostgresCredential } from '../../shared/utils/postgres-credential.js';
 import { assertPostgresRolesAreLeastPrivilege } from '../postgres/role-posture.js';
 import { grantBackupReadAccessToTenantSchema } from '../postgres/backup-schema-access.js';
+import {
+  partitionRetiredGrantees,
+  revokeRetiredFleetGranteesFromSchema,
+} from '../postgres/retired-fleet-grantees.js';
+import { createComponentLogger } from '../../shared/logger.js';
+
+const log = createComponentLogger('fleet-auth-schema-access');
 
 export interface FleetAuthSchemaAccessContract {
   kind: 'companion' | 'shared';
@@ -463,6 +470,99 @@ export async function assertFleetAuthSchemaAccessTargets(options: {
   }
 }
 
+async function readUnexpectedSchemaGrantees(
+  client: PoolClient,
+  schema: string,
+  allowedGrantees: readonly string[],
+): Promise<string[]> {
+  const result = await client.query<{ role_name: string }>(`
+    WITH acl_grantees AS (
+      SELECT acl.grantee
+      FROM pg_namespace AS namespace
+      CROSS JOIN LATERAL aclexplode(namespace.nspacl) AS acl
+      WHERE namespace.nspname = $1
+      UNION
+      SELECT acl.grantee
+      FROM pg_class AS relation
+      JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+      CROSS JOIN LATERAL aclexplode(relation.relacl) AS acl
+      WHERE namespace.nspname = $1
+      UNION
+      SELECT acl.grantee
+      FROM pg_proc AS routine
+      JOIN pg_namespace AS namespace ON namespace.oid = routine.pronamespace
+      CROSS JOIN LATERAL aclexplode(routine.proacl) AS acl
+      WHERE namespace.nspname = $1
+    )
+    SELECT DISTINCT CASE
+      WHEN grantee = 0 THEN 'PUBLIC'
+      ELSE pg_get_userbyid(grantee)
+    END AS role_name
+    FROM acl_grantees
+    WHERE grantee = 0 OR pg_get_userbyid(grantee) <> ALL($2::text[])
+    ORDER BY role_name
+  `, [schema, allowedGrantees]);
+  return result.rows.map(row => row.role_name).filter(Boolean);
+}
+
+/**
+ * Prove the exact grantee set for one schema, tolerating only the closed
+ * retired-role allowlist.
+ *
+ * An already-provisioned fleet carries the retired welfare verifier's
+ * cross-schema USAGE/SELECT on every companion schema (psfn-framework-h248l.7
+ * removed the consumer, not the standing grant), so refusing that grantee would
+ * fail every existing deployment closed on upgrade. The reconciliation is
+ * idempotent and runs before the proof: the retired role's privileges are
+ * revoked here, by the schema owner, inside the same transaction. Only if the
+ * revoke could not remove the grant -- a foreign grantor, or a process that
+ * reaches this proof without owner authority -- does the retired grantee
+ * survive, and then it is warned about rather than refused. Every other
+ * unexpected grantee, PUBLIC included, still fails closed.
+ */
+async function assertExactSchemaGrantees(
+  client: PoolClient,
+  input: {
+    schema: string;
+    allowedGrantees: readonly string[];
+  },
+): Promise<void> {
+  const observed = await readUnexpectedSchemaGrantees(
+    client,
+    input.schema,
+    input.allowedGrantees,
+  );
+  let partition = partitionRetiredGrantees(observed);
+  if (partition.retired.length > 0) {
+    const revoked = await revokeRetiredFleetGranteesFromSchema(client, {
+      schema: input.schema,
+      retiredGrantees: partition.retired,
+    });
+    log.warn('Revoking retired fleet grantee privileges on tenant schema', {
+      schema: input.schema,
+      retiredGrantees: partition.retired,
+      revokedGrantees: revoked,
+    });
+    partition = partitionRetiredGrantees(await readUnexpectedSchemaGrantees(
+      client,
+      input.schema,
+      input.allowedGrantees,
+    ));
+    if (partition.retired.length > 0) {
+      log.warn('Tolerating retired fleet grantee that survived privilege cleanup', {
+        schema: input.schema,
+        retiredGrantees: partition.retired,
+      });
+    }
+  }
+  if (partition.unexpected.length > 0) {
+    throw new Error(
+      `Fleet auth family restore schema ${input.schema} has unexpected PostgreSQL grantees: `
+      + partition.unexpected.join(', '),
+    );
+  }
+}
+
 export async function applyFleetAuthSchemaAccessContracts(options: {
   contracts: readonly FleetAuthSchemaAccessContract[];
   ownerDatabaseUrls: Readonly<Record<string, string>>;
@@ -562,39 +662,10 @@ export async function applyFleetAuthSchemaAccessContracts(options: {
         ...(backupRole ? [backupRole] : []),
         ...contract.runtimeRoles,
       ];
-      const unexpectedGrantees = await client.query<{ role_name: string }>(`
-        WITH acl_grantees AS (
-          SELECT acl.grantee
-          FROM pg_namespace AS namespace
-          CROSS JOIN LATERAL aclexplode(namespace.nspacl) AS acl
-          WHERE namespace.nspname = $1
-          UNION
-          SELECT acl.grantee
-          FROM pg_class AS relation
-          JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
-          CROSS JOIN LATERAL aclexplode(relation.relacl) AS acl
-          WHERE namespace.nspname = $1
-          UNION
-          SELECT acl.grantee
-          FROM pg_proc AS routine
-          JOIN pg_namespace AS namespace ON namespace.oid = routine.pronamespace
-          CROSS JOIN LATERAL aclexplode(routine.proacl) AS acl
-          WHERE namespace.nspname = $1
-        )
-        SELECT DISTINCT CASE
-          WHEN grantee = 0 THEN 'PUBLIC'
-          ELSE pg_get_userbyid(grantee)
-        END AS role_name
-        FROM acl_grantees
-        WHERE grantee = 0 OR pg_get_userbyid(grantee) <> ALL($2::text[])
-        ORDER BY role_name
-      `, [contract.schema, allowedGrantees]);
-      if (unexpectedGrantees.rows.length > 0) {
-        throw new Error(
-          `Fleet auth family restore schema ${contract.schema} has unexpected PostgreSQL grantees: `
-          + unexpectedGrantees.rows.map(row => row.role_name).filter(Boolean).join(', '),
-        );
-      }
+      await assertExactSchemaGrantees(client, {
+        schema: contract.schema,
+        allowedGrantees,
+      });
       await client.query('COMMIT');
     } catch (error) {
       try {

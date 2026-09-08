@@ -12,7 +12,9 @@ export type ClientToHubMessage =
   | TouchInteractionMessage
   | DeviceLocationMessage
   | ApprovalDecisionMessage
-  | ArtifactPreviewRequestMessage;
+  | ArtifactPreviewRequestMessage
+  | WorldTravelRequestMessage
+  | WorldBodyActionMessage;
 
 export type HubToClientMessage =
   | SessionReadyMessage
@@ -36,7 +38,9 @@ export type HubToClientMessage =
   | ArtifactPreviewErrorMessage
   | ToolActivityMessage
   | EmotionSnapshotMessage
-  | DeviceLocationStatusMessage;
+  | DeviceLocationStatusMessage
+  | WorldTravelResultMessage
+  | WorldBodyActionResultMessage;
 
 export interface HelloMessage {
   type: "hello";
@@ -54,6 +58,31 @@ export interface HelloMessage {
 export interface AudioMessage {
   type: "audio";
   audio: string;
+}
+
+/**
+ * Ask the Hub to move its world-avatar emanation to another world.
+ *
+ * The Hub, not the satellite, owns the move: it holds the door credential, the
+ * place map, and the refusal policy. This message is only a request, and it is
+ * answered by exactly one `world.travel.result`.
+ */
+export interface WorldTravelRequestMessage {
+  type: "world.travel";
+  world: string;
+}
+
+/**
+ * Ask the Hub's world-avatar emanation to move its body inside the world it is
+ * already in. The Hub owns the allowlist (`walk_to`, `face`, `stop`); a name
+ * outside it is refused here rather than forwarded, so world-editing verbs stay
+ * unreachable through this surface. Submission is fire-and-forget: a walk can
+ * take a minute and reports its content-free outcome on a later turn.
+ */
+export interface WorldBodyActionMessage {
+  type: "world.body";
+  action: string;
+  arguments?: unknown;
 }
 
 export interface UserTextMessage {
@@ -204,6 +233,55 @@ export type DeviceLocationStatusMessage =
     type: "device.location.status";
     status: "rejected";
     reason: DeviceLocationRejectionReason;
+  };
+
+/**
+ * Why a `world.travel` request did not move the emanation. A fixed Hub-owned
+ * vocabulary: the door's own prose never reaches a satellite.
+ */
+export type WorldTravelRejectionReason =
+  | "not_configured"
+  | "capability_denied"
+  | "unavailable"
+  | "invalid_world"
+  | "unmapped_world"
+  | "refused";
+
+/** The single answer to one `world.travel` request. */
+export type WorldTravelResultMessage =
+  | {
+    type: "world.travel.result";
+    accepted: true;
+    world: string;
+    placeId?: string;
+  }
+  | {
+    type: "world.travel.result";
+    accepted: false;
+    world: string;
+    reason: WorldTravelRejectionReason;
+  };
+
+/** Why a `world.body` request was not submitted. */
+export type WorldBodyRejectionReason =
+  | "not_configured"
+  | "capability_denied"
+  | "not_allowlisted";
+
+/** The single answer to one `world.body` request. Acceptance is submission,
+ *  never completion — the outcome reaches the companion as a later turn's
+ *  context note. */
+export type WorldBodyActionResultMessage =
+  | {
+    type: "world.body.result";
+    accepted: true;
+    action: string;
+  }
+  | {
+    type: "world.body.result";
+    accepted: false;
+    action: string;
+    reason: WorldBodyRejectionReason;
   };
 
 export interface RelaySttResultMessage {
@@ -384,7 +462,19 @@ export type SatelliteControlCapability =
   | "presence"
   | "session_attach"
   | "touch"
-  | "approvals";
+  | "approvals"
+  /**
+   * Authority to move the Hub's world-avatar emanation between worlds. Granted
+   * per device in the server-owned registry: a satellite that merely asks for
+   * it in its hello does not receive it.
+   */
+  | "world_travel"
+  /**
+   * Authority to move the world avatar's body inside its current world. Granted
+   * per device in the server-owned registry, separately from `world_travel`:
+   * walking across a room and moving to another world are different powers.
+   */
+  | "world_body";
 
 export type SatelliteSafetyCapability =
   | "action_allowlist"

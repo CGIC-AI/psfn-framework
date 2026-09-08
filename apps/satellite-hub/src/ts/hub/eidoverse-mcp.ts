@@ -432,7 +432,10 @@ function parseWorldUrl(raw: string): string {
   return url.toString();
 }
 
-function positiveIntegerEnv(
+// Shared with the MCPL transport's config loader (eidoverse-mcpl-config.ts):
+// both transports read the same EIDOVERSE_MCP_* bootstrap entries, so the
+// parsing rules stay in one place rather than being restated per transport.
+export function positiveIntegerEnv(
   env: Readonly<Record<string, string | undefined>>,
   name: string,
   fallback: number,
@@ -446,13 +449,13 @@ function positiveIntegerEnv(
   return value;
 }
 
-function requiredEnv(env: Readonly<Record<string, string | undefined>>, name: string): string {
+export function requiredEnv(env: Readonly<Record<string, string | undefined>>, name: string): string {
   const value = optionalEnv(env, name);
   if (!value) throw new Error(`Missing required environment variable: ${name}`);
   return value;
 }
 
-function optionalEnv(
+export function optionalEnv(
   env: Readonly<Record<string, string | undefined>>,
   name: string,
 ): string | undefined {

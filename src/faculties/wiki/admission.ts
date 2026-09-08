@@ -1,0 +1,140 @@
+// ── Content-addressed CogSec admission for wiki documents (1fjvm.2) ──
+//
+// A wiki document is a prompt-bearing artifact: its body reaches model context
+// through semantic retrieval and through the wiki tool. Its `bodySha256` is an
+// INTEGRITY check — it proves the body matches the metadata that was written
+// beside it — and is never a security verdict: a restore or an out-of-band
+// rewrite that updates both stays perfectly consistent and completely
+// unscreened.
+//
+// So admission is content-addressed over the CANONICAL PROMPT REPRESENTATION:
+// the body plus every security-relevant metadata field that travels with it
+// into a prompt. A body-only tamper, a body+metadata tamper with a matching
+// checksum, and a metadata-only change to the fields that shape how the text is
+// trusted all produce a different hash, therefore no receipt, therefore a
+// rescreen.
+//
+// Version, timestamps, and `updatedBy` are deliberately EXCLUDED: an exact
+// restore of an already-admitted document must hash identically to the document
+// that was admitted, or a restore would re-screen the entire wiki for no
+// security reason. They are audit fields; they do not change what the text says
+// or how far it is trusted.
+//
+// The gate keeps a small in-process registry so the SYNCHRONOUS read paths
+// (`WikiStore.list`, `WikiStore.search`) can ask a question the asynchronous
+// receipt store cannot answer in time. The registry is keyed by the document's
+// canonical hash, not its id, so a document that changed since it was admitted
+// reads back as `unknown` — never as its previous verdict.
+
+import { canonicalJsonString } from '../../shared/utils/json-serialization.js';
+import { cogSecContentSha256 } from '../../shared/contracts/cogsec-receipt.js';
+import type { CogSecArtifactAdmissionPort } from '../../core/cogsec/intake/durable-admission.js';
+import type { WikiDocument } from './types.js';
+
+/**
+ * The exact bounded bytes admission hashes and screens for one document.
+ *
+ * Every field here either IS prompt text or governs how that text is trusted
+ * downstream (source class, sensitivity, scope, lineage). Adding a field is a
+ * screening-surface change; removing one opens a channel that reaches the
+ * prompt without admission.
+ */
+export function wikiAdmissionContent(document: WikiDocument): string {
+  return canonicalJsonString({
+    id: document.id,
+    title: document.title,
+    summary: document.summary ?? null,
+    tags: [...document.tags].sort(),
+    sourceClass: document.sourceClass,
+    scope: document.scope ?? null,
+    sensitivity: document.sensitivity,
+    provenanceRefs: [...document.provenanceRefs].sort(),
+    bodyFormat: document.bodyFormat,
+    body: document.body,
+  }, 'wiki admission content');
+}
+
+/**
+ * - `admitted`: these exact canonical bytes passed admission;
+ * - `held`: these exact canonical bytes were screened and withheld;
+ * - `unknown`: no admission decision exists for these bytes — the document was
+ *   never admitted in this process, or it changed since it was. Read paths
+ *   treat `unknown` exactly like `held`; the distinction exists so operator
+ *   telemetry can tell "refused" from "not yet decided".
+ */
+type WikiDocumentAdmissionState = 'admitted' | 'held' | 'unknown';
+
+export interface WikiDocumentAdmission {
+  state: WikiDocumentAdmissionState;
+  /** Operator-facing, content-free reason. Empty while `admitted`. */
+  detail: string;
+}
+
+export interface WikiAdmissionGate {
+  /**
+   * Screen or receipt-verify one document's canonical bytes and record the
+   * verdict. Idempotent for unchanged bytes: the second call is a
+   * content-addressed receipt lookup with no scan.
+   */
+  admit(document: WikiDocument): Promise<WikiDocumentAdmission>;
+  /**
+   * The recorded verdict for these EXACT canonical bytes, without I/O. Any
+   * document whose bytes differ from the recorded ones is `unknown`.
+   */
+  status(document: WikiDocument): WikiDocumentAdmission;
+  /** Forget a document that no longer exists. */
+  forget(documentId: string): void;
+}
+
+interface AdmissionRecord {
+  contentSha256: string;
+  state: Exclude<WikiDocumentAdmissionState, 'unknown'>;
+  detail: string;
+}
+
+const UNKNOWN: WikiDocumentAdmission = Object.freeze({
+  state: 'unknown',
+  detail: 'no CogSec admission decision exists for this document version',
+});
+
+export function createWikiAdmissionGate(
+  admission: CogSecArtifactAdmissionPort,
+): WikiAdmissionGate {
+  const records = new Map<string, AdmissionRecord>();
+  // Per-document sequence number. A slower admit for an older version must
+  // never overwrite the verdict of a newer one (the projection race): the
+  // result is discarded unless its ticket is still the latest issued.
+  const tickets = new Map<string, number>();
+
+  function statusFor(document: WikiDocument, contentSha256: string): WikiDocumentAdmission {
+    const record = records.get(document.id);
+    if (!record || record.contentSha256 !== contentSha256) return UNKNOWN;
+    return { state: record.state, detail: record.detail };
+  }
+
+  return {
+    async admit(document) {
+      const content = wikiAdmissionContent(document);
+      const contentSha256 = cogSecContentSha256(content);
+      const ticket = (tickets.get(document.id) ?? 0) + 1;
+      tickets.set(document.id, ticket);
+      const outcome = await admission.admit({
+        content,
+        artifactRef: document.id,
+        origin: { ref: `wiki:${document.id}`, detail: document.sourceClass },
+      });
+      const record: AdmissionRecord = outcome.admitted
+        ? { contentSha256, state: 'admitted', detail: '' }
+        : { contentSha256, state: 'held', detail: outcome.detail };
+      if (tickets.get(document.id) === ticket) records.set(document.id, record);
+      return { state: record.state, detail: record.detail };
+    },
+    status(document) {
+      return statusFor(document, cogSecContentSha256(wikiAdmissionContent(document)));
+    },
+    forget(documentId) {
+      records.delete(documentId);
+      tickets.delete(documentId);
+    },
+  };
+}

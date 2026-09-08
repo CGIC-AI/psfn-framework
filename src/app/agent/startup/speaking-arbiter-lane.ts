@@ -26,6 +26,9 @@ import type { OutboundReplyDeduper } from '../../../system/lifecycle/outbound-re
 import { classifyChannelDisclosure } from '../../../system/trust/policy.js';
 import type { createAgentPersistenceRuntime } from '../../../persistence/runtime-factory.js';
 import type { AgentCoreRuntime } from '../core-runtime.js';
+import { createComponentLogger } from '../../../shared/logger.js';
+
+const log = createComponentLogger('speaking-arbiter-lane');
 
 export interface SpeakingArbiterLaneDeps {
   config: SubstrateConfig;
@@ -122,6 +125,20 @@ export function wireSpeakingArbiterLane(deps: SpeakingArbiterLaneDeps): Speaking
         interests: roomSignalSettings.companionInterests,
       },
       settings: roomSignalSettings,
+      // Content-free staged diagnostics (acceptance #8): stage identity,
+      // bounded reason codes, connector label, and the model-call counter. No
+      // transcript, alias, interest tag, biography, or reasoning ever appears.
+      onNomination: (nomination) => {
+        log.debug('Room signal nominated a companion', {
+          companionId: nomination.companionId,
+          channelId: nomination.roomId,
+          messageId: nomination.messageId,
+          connector: nomination.connector,
+          trigger: nomination.trigger,
+          reasonCodes: nomination.reasonCodes,
+          classifierCalls: nomination.classifierConsulted ? 1 : 0,
+        });
+      },
     }
     : undefined;
 

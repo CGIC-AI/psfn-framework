@@ -13,7 +13,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createStaticCredentialVault } from '../../boundary/custody/credential-vault.js';
 import { resolveFleetAccessMode } from '../../boundary/fleet-auth/fleet-access-mode.js';
 import {
-  assertRetiredFleetWelfareVerifier,
+  withRetiredFleetWelfareVerifierRemoved,
   FLEET_AUTH_ENV_VAR,
   FLEET_AUTH_FILE_NAME,
   projectFleetAuthGardenMetadata,
@@ -135,6 +135,54 @@ describe('fleet-auth owner-file configuration', () => {
   function writeConfig(dataDir: string, config: unknown): void {
     writeFileSync(join(dataDir, FLEET_AUTH_FILE_NAME), `${JSON.stringify(config, null, 2)}\n`);
   }
+
+  // psfn-framework-znuav: an existing deployment's fleet-auth.json — written
+  // before the fleet welfare verifier was retired — still carries the
+  // `welfareVerifier` block alongside `accountRoster`. Loading it must not
+  // refuse: a refusal turns every fleet upgrade into a crash loop.
+  it('loads an inherited owner file that still declares the retired welfare verifier', () => {
+    const dataDir = makeRoot();
+    const inherited = {
+      ...validConfig(publicKeyPem, hubPublicKeyPem),
+      accountRoster: [{
+        providerSubjectId: '100000000000000001',
+        companionId: COMPANION_ID,
+        contactId: 'contact/operator',
+        role: 'owner',
+      }],
+      welfareVerifier: {
+        role: 'psfn_welfare_verifier',
+        connectionLimit: 8,
+        databaseUrlRef: {
+          kind: 'env',
+          envName: 'FLEET_AUTH_WELFARE_VERIFIER_DATABASE_URL',
+        },
+      },
+    };
+    writeConfig(dataDir, inherited);
+
+    const projection = resolveFleetAuthOwnerFile({ dataDir, env: {}, processMode: 'gateway' });
+    expect(projection?.kind).toBe('gateway');
+    if (projection?.kind !== 'gateway') throw new Error('expected a gateway projection');
+    // `databaseRoles` cannot carry the retired role: it takes exactly the three
+    // named authorities, so there is no retired entry to migrate there.
+    expect(Object.keys(projection.config.databaseRoles).sort())
+      .toEqual(['backupRestore', 'migration', 'runtime']);
+
+    // A fleet of one keeps its local Postgres welfare verifier exactly as before.
+    expect(withRetiredFleetWelfareVerifierRemoved(projection.config, { multiCompanion: false }))
+      .toBe(projection.config);
+
+    // A fleet of many drops the retired block with a warning instead of refusing.
+    const warnings: string[] = [];
+    const retired = withRetiredFleetWelfareVerifierRemoved(projection.config, {
+      multiCompanion: true,
+      warn: message => warnings.push(message),
+    });
+    expect(retired.welfareVerifier).toBeUndefined();
+    expect(retired.accountRoster).toEqual(projection.config.accountRoster);
+    expect(warnings).toHaveLength(1);
+  });
 
   it('stays in non-fleet mode when the file is absent and refuses a flag that requests fleet auth', () => {
     const dataDir = makeRoot();
@@ -423,21 +471,54 @@ describe('fleet-auth owner-file configuration', () => {
 
     // psfn-framework-znuav: the block is retired for fleets. It parses (the
     // single-companion local verifier still reads its own schema through it),
-    // but a multi-companion deployment refuses by name rather than provisioning
-    // a fleet-wide reader for a consumer that no longer exists.
-    expect(() => assertRetiredFleetWelfareVerifier({
+    // and a multi-companion deployment warns and drops it rather than refusing
+    // an upgrade whose owner file was written before the retirement.
+    const warnings: string[] = [];
+    const retired = withRetiredFleetWelfareVerifierRemoved(withVerifier, {
       multiCompanion: true,
-      fleetAuth: withVerifier,
-    })).toThrow(/"welfareVerifier" authority is retired for multi-companion fleets/);
-    expect(() => assertRetiredFleetWelfareVerifier({
-      multiCompanion: true,
-      fleetAuth: withVerifier,
-    })).toThrow(/FLEET_AUTH_WELFARE_VERIFIER_DATABASE_URL/);
-    expect(() => assertRetiredFleetWelfareVerifier({
+      warn: message => warnings.push(message),
+    });
+    expect(retired.welfareVerifier).toBeUndefined();
+    expect(Object.hasOwn(retired, 'welfareVerifier')).toBe(false);
+    expect(retired.databaseRoles).toEqual(withVerifier.databaseRoles);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/IGNORING the retired "welfareVerifier" authority/);
+    expect(warnings[0]).toMatch(/FLEET_AUTH_WELFARE_VERIFIER_DATABASE_URL/);
+
+    // A single-companion deployment keeps the authority untouched.
+    const singleWarnings: string[] = [];
+    expect(withRetiredFleetWelfareVerifierRemoved(withVerifier, {
       multiCompanion: false,
-      fleetAuth: withVerifier,
-    })).not.toThrow();
-    expect(() => assertRetiredFleetWelfareVerifier({ multiCompanion: true })).not.toThrow();
+      warn: message => singleWarnings.push(message),
+    })).toBe(withVerifier);
+    expect(singleWarnings).toHaveLength(0);
+
+    // No block: nothing to retire, nothing to warn about.
+    const absentWarnings: string[] = [];
+    const withoutVerifier = validateFleetAuthConfig(config, 'fleet-auth.json');
+    expect(withRetiredFleetWelfareVerifierRemoved(withoutVerifier, {
+      multiCompanion: true,
+      warn: message => absentWarnings.push(message),
+    })).toBe(withoutVerifier);
+    expect(absentWarnings).toHaveLength(0);
+
+    // A renamed verifier role is dropped too, with a second warning: startup
+    // only revokes the canonical retired role automatically.
+    const renamedWarnings: string[] = [];
+    const renamed = validateFleetAuthConfig({
+      ...config,
+      welfareVerifier: {
+        role: 'psfn_legacy_welfare_reader',
+        connectionLimit: 8,
+        databaseUrlRef: credential('FLEET_AUTH_WELFARE_VERIFIER_DATABASE_URL'),
+      },
+    }, 'fleet-auth.json');
+    expect(withRetiredFleetWelfareVerifierRemoved(renamed, {
+      multiCompanion: true,
+      warn: message => renamedWarnings.push(message),
+    }).welfareVerifier).toBeUndefined();
+    expect(renamedWarnings).toHaveLength(2);
+    expect(renamedWarnings[1]).toMatch(/psfn_legacy_welfare_reader/);
 
     // Unsafe role name rejected.
     expect(() => validateFleetAuthConfig({

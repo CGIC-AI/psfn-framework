@@ -113,12 +113,12 @@ export function resolveWikiRetrievalPlan(input: {
  * blind concatenation: a weaker shared match can displace a weaker personal
  * one and vice versa, exactly as if both lived in one table.
  */
-export function mergeWikiSemanticMatches(
-  personal: readonly WikiSemanticMatch[],
-  shared: readonly WikiSemanticMatch[],
+export function mergeWikiSemanticMatches<Match extends WikiSemanticMatch>(
+  personal: readonly Match[],
+  shared: readonly Match[],
   limit: number,
-): WikiSemanticMatch[] {
-  const bestByDoc = new Map<string, WikiSemanticMatch>();
+): Match[] {
+  const bestByDoc = new Map<string, Match>();
   for (const match of [...personal, ...shared]) {
     const key = `${match.scope} ${match.documentId}`;
     const existing = bestByDoc.get(key);
@@ -149,15 +149,26 @@ export interface WikiContextBuildResult {
  * lineage (`classified: true`); scope is a topology axis, not a disclosure
  * destination, so no outward destination is authorized here.
  */
-function wikiMatchDisclosureSource(match: WikiSemanticMatch): DisclosureWikiSource {
+function wikiMatchDisclosureSource(match: AdmissionBoundWikiMatch): DisclosureWikiSource {
   return {
     ref: `wiki:${match.documentId}`,
     sensitivity: match.sensitivity,
     classified: true,
+    // ccgdz.4: the hash of the EXACT canonical bytes admission cleared. The
+    // admission registry is keyed by that hash, so a document rewritten since
+    // it was admitted was already withheld above and can never reach a block
+    // claiming an admitted hash. A shared-world match carries none — it comes
+    // from a different store with no personal admission check, and an absent
+    // hash says so rather than implying one.
+    ...(match.admittedContentSha256
+      ? { contentSha256: match.admittedContentSha256 }
+      : {}),
   };
 }
 
-function collectWikiDisclosureSources(matches: readonly WikiSemanticMatch[]): DisclosureWikiSource[] {
+function collectWikiDisclosureSources(
+  matches: readonly AdmissionBoundWikiMatch[],
+): DisclosureWikiSource[] {
   const byRef = new Map<string, DisclosureWikiSource>();
   for (const match of matches) {
     const source = wikiMatchDisclosureSource(match);
@@ -183,6 +194,15 @@ interface WikiContextComputation {
   degradedError?: string;
 }
 
+/**
+ * A projected match plus the admission hash of the canonical bytes that
+ * cleared CogSec admission (psfn-framework-ccgdz.4). Absent for shared-world
+ * matches, which the personal admission check does not cover.
+ */
+export type AdmissionBoundWikiMatch = WikiSemanticMatch & {
+  admittedContentSha256?: string;
+};
+
 function renderMatchEntry(match: WikiSemanticMatch): string {
   const scorePct = Math.round(match.score * 100);
   return `- [${match.title}] (${match.sourceClass}, id=${match.documentId}, match=${scorePct}%)\n${match.chunkText.trim()}`;
@@ -196,7 +216,7 @@ function renderMatchEntry(match: WikiSemanticMatch): string {
  * an empty block with `selectedCount: 0` when nothing fits.
  */
 export function buildWikiContextBlock(
-  matches: readonly WikiSemanticMatch[],
+  matches: readonly AdmissionBoundWikiMatch[],
   tokenCap: number,
 ): WikiContextBuildResult {
   const cap = Math.max(0, Math.floor(tokenCap));
@@ -207,7 +227,7 @@ export function buildWikiContextBlock(
   const entries: string[] = [];
   // Track the matches ACTUALLY rendered (not the full candidate set) so the
   // disclosure sources project exactly the documents admitted to the context.
-  const selectedMatches: WikiSemanticMatch[] = [];
+  const selectedMatches: AdmissionBoundWikiMatch[] = [];
   for (const match of matches) {
     const entry = renderMatchEntry(match);
     const candidate = [WIKI_CONTEXT_BLOCK_HEADER, ...entries, entry].join('\n\n');
@@ -288,8 +308,15 @@ export interface WikiRetrievalServiceDeps {
    * of band, or held must not be served. Absent, retrieval behaves exactly as
    * before. Shared-world matches come from a different store and are not
    * covered by this personal check.
+   *
+   * Returns the admitted content hash rather than a boolean (ccgdz.4) so the
+   * block's source manifest can name the exact bytes that were cleared. One
+   * resolver, not a boolean gate plus a parallel hash lookup that could
+   * disagree about which version was admitted.
    */
-  isPersonalDocumentAdmitted?: (documentId: string) => boolean;
+  resolvePersonalDocumentAdmission?: (
+    documentId: string,
+  ) => { contentSha256: string } | null;
   searchLimit?: number;
 }
 
@@ -508,7 +535,7 @@ export class WikiRetrievalService {
       });
       return empty();
     }
-    let matches: WikiSemanticMatch[];
+    let matches: AdmissionBoundWikiMatch[];
     let queryEmbedding: Float32Array;
     try {
       if (request.retrievalQueryEmbedding) {
@@ -555,10 +582,14 @@ export class WikiRetrievalService {
     // bytes are not admitted. This runs BEFORE the shared-world merge so the
     // personal slice is filtered on its own terms, and it withholds rather than
     // degrading the turn — the rest of the wiki still serves.
-    const isPersonalDocumentAdmitted = this.deps.isPersonalDocumentAdmitted;
-    if (isPersonalDocumentAdmitted) {
+    const resolvePersonalDocumentAdmission = this.deps.resolvePersonalDocumentAdmission;
+    if (resolvePersonalDocumentAdmission) {
       const candidateCount = matches.length;
-      matches = matches.filter((match) => isPersonalDocumentAdmitted(match.documentId));
+      matches = matches.flatMap((match) => {
+        const admission = resolvePersonalDocumentAdmission(match.documentId);
+        if (!admission) return [];
+        return [{ ...match, admittedContentSha256: admission.contentSha256 }];
+      });
       if (matches.length !== candidateCount) {
         log.warn('Wiki retrieval withheld unadmitted personal documents from the prompt', {
           channelId: request.channelId,

@@ -9,9 +9,9 @@ import {
   beginDisclosureAccumulation,
 } from './decision.js';
 import { DISCLOSURE_CLASSIFIER_VERSION } from './generation-lineage.js';
+import { custodySha256 } from './custody-identity.js';
 import {
   buildCustodySnapshot,
-  custodySha256,
   custodySnapshotContentDigest,
   custodySnapshotRefForTurn,
   validateCustodySnapshot,

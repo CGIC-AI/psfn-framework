@@ -123,8 +123,6 @@ export async function schedulePostTurnWork(input: {
   assistantSessionEntryId: number | null;
   promptMode: MessagePromptOverrideMode;
   fullPrompt: string;
-  contextMessageCount: number;
-  memoryContextChars: number;
   memoryContextBlock: string;
   trustLevel: TrustLevel;
   speakerRole: 'user' | 'system';
@@ -141,6 +139,7 @@ export async function schedulePostTurnWork(input: {
   persistedUserMessageContent?: string;
   /** Resolvable ref to this turn's durable custody snapshot, when one was written. */
   custodySnapshotRef?: string;
+  contextManifestRef?: string;
   /** Per-tool-result custody edges, keyed by lineage ref (ccgdz.5). */
   toolResultCustody?: ReadonlyMap<string, TurnToolResultCustodyRecord>;
   onTurnRecordPersisted?: () => void;
@@ -173,8 +172,6 @@ export async function schedulePostTurnWork(input: {
     assistantSessionEntryId,
     promptMode,
     fullPrompt,
-    contextMessageCount,
-    memoryContextChars,
     memoryContextBlock,
     trustLevel,
     speakerRole,
@@ -235,8 +232,6 @@ export async function schedulePostTurnWork(input: {
     turnMessages,
     promptMode,
     promptText: fullPrompt,
-    contextMessageCount,
-    memoryContextChars,
     trustLevel,
     speakerRole,
     canonicalContactKey,
@@ -250,6 +245,7 @@ export async function schedulePostTurnWork(input: {
     },
     internalStateSnapshotRef,
     ...(input.custodySnapshotRef ? { custodySnapshotRef: input.custodySnapshotRef } : {}),
+    ...(input.contextManifestRef ? { contextManifestRef: input.contextManifestRef } : {}),
     ...(input.toolResultCustody ? { toolResultCustody: input.toolResultCustody } : {}),
   }, sessionReads);
 

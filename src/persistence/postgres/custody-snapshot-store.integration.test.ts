@@ -14,9 +14,10 @@ import {
   beginDisclosureAccumulation,
 } from '../../core/cogsec/disclosure/decision.js';
 import { DISCLOSURE_CLASSIFIER_VERSION } from '../../core/cogsec/disclosure/generation-lineage.js';
+import { buildContextSourceManifest } from '../../core/cogsec/disclosure/context-source-manifest.js';
+import { custodySha256 } from '../../core/cogsec/disclosure/custody-identity.js';
 import {
   buildCustodySnapshot,
-  custodySha256,
   custodySnapshotRefForTurn,
 } from '../../core/cogsec/disclosure/custody-snapshot.js';
 import type {
@@ -241,6 +242,151 @@ describe('PostgresCustodySnapshotStore', () => {
       expect(await store.getByGenerationContextRef(stale.generationContextRef)).toBeNull();
       expect(await store.getByGenerationContextRef(fresh.generationContextRef))
         .toEqual(fresh);
+    } finally {
+      await store.close();
+    }
+  }, TIMEOUT_MS);
+}, TIMEOUT_MS);
+
+// ── Context source manifest lane (psfn-framework-ccgdz.4) ──
+
+describe('PostgresCustodySnapshotStore context source manifest', () => {
+  function manifestFor(turnId: string, renderedText: string) {
+    return buildContextSourceManifest({
+      turnId,
+      blocks: [
+        {
+          id: 'static_prefix',
+          layer: 'prompt_stack',
+          volatility: 'static',
+          producer: 'identity.prompt-composer',
+          tokensEst: 12,
+          renderedText: 'You are a companion.',
+        },
+        {
+          id: 'memory.retrieval',
+          layer: 'session',
+          volatility: 'turn',
+          producer: 'session.context-builder',
+          scopeKey: 'dm:contact-1',
+          tokensEst: 34,
+          renderedText,
+          sources: [
+            { kind: 'memory', refId: 'mem-1' },
+            {
+              kind: 'intake_envelope',
+              refId: 'env_01JZ0000000000000000000001',
+              envelopeId: 'env_01JZ0000000000000000000001',
+              receiptId: 'rcpt_01JZ0000000000000000000001',
+            },
+          ],
+        },
+        {
+          id: 'wiki.retrieval',
+          layer: 'session',
+          volatility: 'turn',
+          producer: 'wiki.retrieval-service',
+          tokensEst: 21,
+          renderedText: 'wiki text',
+          sources: [{ kind: 'wiki', refId: 'doc-1', contentSha256: custodySha256('admitted bytes') }],
+        },
+      ],
+    });
+  }
+
+  it('records one manifest per generation context, idempotently, across a restart', async () => {
+    if (!harness) throw new Error('Postgres integration harness is unavailable');
+    const { databaseUrl } = await harness.createDatabase();
+    const manifest = manifestFor(TURN_ID, SECRET_BODY);
+
+    let store = await PostgresCustodySnapshotStore.connect(databaseUrl, RETENTION_DAYS, {
+      now: () => NOW_MS,
+    });
+    try {
+      expect(await store.recordContextManifest(manifest)).toBe('recorded');
+      expect(await store.recordContextManifest(manifest)).toBe('duplicate');
+      expect(await store.getContextManifestByGenerationContextRef(manifest.generationContextRef))
+        .toEqual(manifest);
+    } finally {
+      await store.close();
+    }
+
+    store = await PostgresCustodySnapshotStore.connect(databaseUrl, RETENTION_DAYS, {
+      now: () => NOW_MS,
+    });
+    try {
+      // The manifest ref on a TurnRecord resolves after a restart, which is
+      // the whole point of replacing the synthesized display string.
+      expect(await store.getContextManifestByGenerationContextRef(`turn:${TURN_ID}`))
+        .toEqual(manifest);
+    } finally {
+      await store.close();
+    }
+  }, TIMEOUT_MS);
+
+  it('keeps the first manifest and reports a different one as diverged', async () => {
+    if (!harness) throw new Error('Postgres integration harness is unavailable');
+    const { databaseUrl } = await harness.createDatabase();
+    const first = manifestFor(TURN_ID, 'first assembly');
+    const second = manifestFor(TURN_ID, 'a re-assembly with different text');
+
+    const store = await PostgresCustodySnapshotStore.connect(databaseUrl, RETENTION_DAYS, {
+      now: () => NOW_MS,
+    });
+    try {
+      expect(await store.recordContextManifest(first)).toBe('recorded');
+      expect(await store.recordContextManifest(second)).toBe('diverged');
+      expect(await store.getContextManifestByGenerationContextRef(first.generationContextRef))
+        .toEqual(first);
+    } finally {
+      await store.close();
+    }
+  }, TIMEOUT_MS);
+
+  it('lets no body byte into the stored row', async () => {
+    if (!harness) throw new Error('Postgres integration harness is unavailable');
+    const { databaseUrl } = await harness.createDatabase();
+    const store = await PostgresCustodySnapshotStore.connect(databaseUrl, RETENTION_DAYS, {
+      now: () => NOW_MS,
+    });
+    try {
+      await store.recordContextManifest(manifestFor(TURN_ID, SECRET_BODY));
+      const pool = createPostgresPool(databaseUrl, {
+        applicationName: 'custody-manifest-assert', allowExitOnIdle: true,
+      });
+      try {
+        const { rows } = await pool.query<{ row_text: string }>(
+          'SELECT custody_context_manifests::text AS row_text FROM custody_context_manifests',
+        );
+        const rowText = rows.map(row => row.row_text).join('\n');
+        expect(rowText).not.toContain('bank PIN');
+        expect(rowText).not.toContain('4417');
+        expect(rowText).not.toContain('/home/vega');
+        expect(rowText).toContain(custodySha256(SECRET_BODY));
+      } finally {
+        await pool.end();
+      }
+    } finally {
+      await store.close();
+    }
+  }, TIMEOUT_MS);
+
+  it('expires the manifest on the same horizon as the snapshot beside it', async () => {
+    if (!harness) throw new Error('Postgres integration harness is unavailable');
+    const { databaseUrl } = await harness.createDatabase();
+    const staleNowMs = NOW_MS - (RETENTION_DAYS + 1) * MILLISECONDS_PER_DAY;
+    let currentNowMs = staleNowMs;
+    const store = await PostgresCustodySnapshotStore.connect(databaseUrl, RETENTION_DAYS, {
+      now: () => currentNowMs,
+    });
+    try {
+      await store.recordContextManifest(manifestFor(TURN_ID, 'stale assembly'));
+      currentNowMs = NOW_MS;
+      await store.recordContextManifest(manifestFor(OTHER_TURN_ID, 'fresh assembly'));
+      await store.pruneExpired();
+      expect(await store.getContextManifestByGenerationContextRef(`turn:${TURN_ID}`)).toBeNull();
+      expect(await store.getContextManifestByGenerationContextRef(`turn:${OTHER_TURN_ID}`))
+        .not.toBeNull();
     } finally {
       await store.close();
     }

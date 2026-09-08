@@ -4593,4 +4593,34 @@ export const POSTGRES_CUSTODY_SNAPSHOT_MIGRATIONS: readonly string[] = [
   CREATE INDEX IF NOT EXISTS idx_custody_snapshots_classified_at
     ON custody_snapshots(classified_at_ms);
   `,
+  // ccgdz.4: the per-block context source manifest lives beside the snapshot
+  // under the same `turn:<turnId>` key and the same retention horizon, in its
+  // own row. Separate rows because the snapshot's content digest drives
+  // divergence detection and a replayed turn legitimately re-assembles a
+  // different prompt (new datetime anchor, drained completion notices).
+  `
+  CREATE TABLE IF NOT EXISTS custody_context_manifests (
+    generation_context_ref TEXT PRIMARY KEY,
+    turn_id TEXT NOT NULL,
+    block_count INTEGER NOT NULL,
+    sourced_block_count INTEGER NOT NULL,
+    source_count INTEGER NOT NULL,
+    recorded_at_ms BIGINT NOT NULL,
+    content_sha256 TEXT NOT NULL,
+    manifest_json JSONB NOT NULL,
+    CHECK (generation_context_ref = 'turn:' || turn_id),
+    CHECK (turn_id ~ '^[A-Za-z0-9_:.@+-]{1,128}$'),
+    CHECK (content_sha256 ~ '^[a-f0-9]{64}$'),
+    CHECK (block_count >= 0),
+    CHECK (sourced_block_count >= 0),
+    CHECK (sourced_block_count <= block_count),
+    CHECK (source_count >= 0),
+    CHECK (recorded_at_ms > 0),
+    CHECK (jsonb_typeof(manifest_json) = 'object')
+  );
+  `,
+  `
+  CREATE INDEX IF NOT EXISTS idx_custody_context_manifests_recorded_at
+    ON custody_context_manifests(recorded_at_ms);
+  `,
 ];

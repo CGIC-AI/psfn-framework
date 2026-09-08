@@ -5,6 +5,11 @@ import type { CapturedSessionReads } from '../../session/manager/captured-sessio
 import type { TrustLevel } from '../../../system/trust/types.js';
 import type { DisclosureLineage } from '../../cogsec/disclosure/contracts.js';
 import {
+  buildContextSourceManifest,
+  contextSourceManifestContentDigest,
+  type ContextSourceManifestBlockInput,
+} from '../../cogsec/disclosure/context-source-manifest.js';
+import {
   buildCustodySnapshot,
   custodySnapshotContentDigest,
   type CustodySnapshotStorePort,
@@ -178,6 +183,54 @@ export class TurnSupportRuntime {
       return snapshot.generationContextRef;
     } catch (error) {
       log.error('Custody snapshot write failed; this turn has no durable custody record', {
+        turnId: input.turnId,
+        requestId: input.requestId,
+        error: toErrorMessage(error),
+      });
+      return undefined;
+    }
+  }
+
+  /**
+   * Persist this turn's per-block context source manifest
+   * (psfn-framework-ccgdz.4) and return its resolvable reference — the same
+   * `turn:<turnId>` key the custody snapshot uses, so no identifier is minted.
+   *
+   * Failure is VISIBLE, not thrown, for the same reason the snapshot's is: this
+   * records what already happened, and turning a store outage into a turn
+   * failure would silence the companion. An absent ref means the manifest is
+   * missing — which is exactly what a reader must conclude, instead of the
+   * synthesized display string this replaced, which resolved to nothing while
+   * looking like a reference.
+   */
+  async recordTurnContextManifest(input: {
+    turnId: TurnID;
+    requestId: string;
+    blocks: readonly ContextSourceManifestBlockInput[];
+  }): Promise<string | undefined> {
+    const store = this.custodySnapshotStore;
+    if (!store) return undefined;
+    try {
+      const manifest = buildContextSourceManifest({
+        turnId: input.turnId,
+        blocks: input.blocks,
+      });
+      const outcome = await store.recordContextManifest(manifest);
+      if (outcome === 'diverged') {
+        // Two prompt assemblies disagreed on one generation context. The first
+        // stands because it describes the prompt that produced the delivered
+        // reply; a recovered turn legitimately re-assembles, so this is
+        // reported rather than treated as corruption — but never silently.
+        log.warn('Context source manifest diverged from the stored record for this turn', {
+          turnId: input.turnId,
+          requestId: input.requestId,
+          generationContextRef: manifest.generationContextRef,
+          rejectedContentSha256: contextSourceManifestContentDigest(manifest),
+        });
+      }
+      return manifest.generationContextRef;
+    } catch (error) {
+      log.error('Context source manifest write failed; this turn has no durable context manifest', {
         turnId: input.turnId,
         requestId: input.requestId,
         error: toErrorMessage(error),
@@ -539,8 +592,6 @@ export class TurnSupportRuntime {
     continuationStop?: ParentTurnContinuationStop;
     promptMode: MessagePromptOverrideMode;
     promptText: string;
-    contextMessageCount: number;
-    memoryContextChars: number;
     trustLevel: TrustLevel;
     speakerRole: 'user' | 'system';
     canonicalContactKey?: string;

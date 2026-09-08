@@ -564,6 +564,8 @@ describe('TurnSupportRuntime custody snapshots (psfn-framework-ccgdz.1)', () => 
     const runtime = makeRuntime({
       record: async (snapshot) => { recorded.push(snapshot); return 'recorded'; },
       getByGenerationContextRef: async () => null,
+      recordContextManifest: async () => 'recorded',
+      getContextManifestByGenerationContextRef: async () => null,
       close: async () => undefined,
     });
 
@@ -582,6 +584,8 @@ describe('TurnSupportRuntime custody snapshots (psfn-framework-ccgdz.1)', () => 
     const runtime = makeRuntime({
       record: async () => 'diverged',
       getByGenerationContextRef: async () => null,
+      recordContextManifest: async () => 'recorded',
+      getContextManifestByGenerationContextRef: async () => null,
       close: async () => undefined,
     });
     await expect(runtime.recordTurnCustodySnapshot({
@@ -595,6 +599,8 @@ describe('TurnSupportRuntime custody snapshots (psfn-framework-ccgdz.1)', () => 
     const runtime = makeRuntime({
       record: async () => { throw new Error('custody store unavailable'); },
       getByGenerationContextRef: async () => null,
+      recordContextManifest: async () => 'recorded',
+      getContextManifestByGenerationContextRef: async () => null,
       close: async () => undefined,
     });
     await expect(runtime.recordTurnCustodySnapshot({

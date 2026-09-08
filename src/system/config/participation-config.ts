@@ -518,3 +518,174 @@ export function parseEgressLeaseTunables(
     ),
   };
 }
+
+/**
+ * Tunables for the bounded durable room-participation lease (jp36.5.5, bible
+ * §8.1). The lease lets an already-engaged companion keep considering a running
+ * group conversation without the room repeating its name. Everything here is a
+ * deterministic pre-model bound: how long membership lasts, how much of it may
+ * be spent, how fast it may be spent, and which explicit dispositions may open
+ * it. Nothing here can make the companion speak — an admitted continuation
+ * still passes the reservation phase, the cheap appraiser's ternary, CogSec,
+ * fatigue, and the egress lease.
+ *
+ * The public default is OFF: continuation is a new autonomy surface, so it is
+ * opt-in per companion through the scheduler owner file.
+ */
+export interface RoomParticipationLeaseSettings {
+  /** Master switch. Off: ambient room chatter stays observation/context only. */
+  enabled: boolean;
+  /** Bounded membership lifetime, refreshed by each admitted disposition. */
+  leaseTtlMs: number;
+  /** Membership lapses when nothing is considered for this long. */
+  silenceTimeoutMs: number;
+  /** Minimum spacing between admitted continuation candidates in one room. */
+  continuationCooldownMs: number;
+  /** Continuation candidates one lease may admit before it closes. */
+  maxContinuationCandidates: number;
+  /**
+   * Consecutive machine-authored continuations admitted before the bot-loop
+   * fence closes the lease. Only a human turn re-opens the room afterwards.
+   */
+  maxConsecutiveMachineContinuations: number;
+  /** Consecutive `ignore` appraisals treated as withdrawal from the room. */
+  maxConsecutiveIgnores: number;
+  /** Bounded relevance hint: shorter lines are not treated as follow-ups. */
+  minContentChars: number;
+  /**
+   * Which explicit dispositions may OPEN membership. Any disposition refreshes
+   * a lease that is already live; only these may create one. The conservative
+   * default admits the companion's own engagement (a delivered reply, an
+   * appraised reaction, a granted endogenous room entry) but not a bare summons,
+   * so an ignored mention never opens a lease that would spend appraisals.
+   */
+  openOn: RoomParticipationLeaseOpenOnSettings;
+}
+
+interface RoomParticipationLeaseOpenOnSettings {
+  directSummons: boolean;
+  passiveSummons: boolean;
+  reaction: boolean;
+  reply: boolean;
+  endogenousRoomEntry: boolean;
+}
+
+/**
+ * Defaults factory (owner-file / settings pattern). All numeric tunables live
+ * inside the function body — never as module-level tuning constants — so the
+ * hardcoded-settings gate stays satisfied and Garden/config can own overrides.
+ */
+export function createDefaultRoomParticipationLeaseSettings(): RoomParticipationLeaseSettings {
+  return {
+    enabled: false,
+    leaseTtlMs: 15 * 60 * 1000,
+    silenceTimeoutMs: 5 * 60 * 1000,
+    continuationCooldownMs: 20 * 1000,
+    maxContinuationCandidates: 6,
+    maxConsecutiveMachineContinuations: 2,
+    maxConsecutiveIgnores: 3,
+    minContentChars: 8,
+    openOn: {
+      directSummons: false,
+      passiveSummons: false,
+      reaction: true,
+      reply: true,
+      endogenousRoomEntry: true,
+    },
+  };
+}
+
+function participationOpenOnSettings(
+  raw: unknown,
+  fieldPath: string,
+  defaults: RoomParticipationLeaseOpenOnSettings,
+): RoomParticipationLeaseOpenOnSettings {
+  if (raw === undefined) {
+    return { ...defaults };
+  }
+  const record = participationRecord(raw, fieldPath);
+  assertNoUnknownKeys(
+    record,
+    ['directSummons', 'passiveSummons', 'reaction', 'reply', 'endogenousRoomEntry'],
+    fieldPath,
+    { errorPrefix: PARTICIPATION_ERROR_PREFIX },
+  );
+  return {
+    directSummons: participationBoolean(
+      record.directSummons ?? defaults.directSummons,
+      `${fieldPath}.directSummons`,
+    ),
+    passiveSummons: participationBoolean(
+      record.passiveSummons ?? defaults.passiveSummons,
+      `${fieldPath}.passiveSummons`,
+    ),
+    reaction: participationBoolean(
+      record.reaction ?? defaults.reaction,
+      `${fieldPath}.reaction`,
+    ),
+    reply: participationBoolean(record.reply ?? defaults.reply, `${fieldPath}.reply`),
+    endogenousRoomEntry: participationBoolean(
+      record.endogenousRoomEntry ?? defaults.endogenousRoomEntry,
+      `${fieldPath}.endogenousRoomEntry`,
+    ),
+  };
+}
+
+export function parseRoomParticipationLeaseSettings(
+  raw: unknown,
+  fieldPath: string,
+): RoomParticipationLeaseSettings {
+  const defaults = createDefaultRoomParticipationLeaseSettings();
+  if (raw === undefined) {
+    return defaults;
+  }
+  const record = participationRecord(raw, fieldPath);
+  assertNoUnknownKeys(
+    record,
+    [
+      'enabled',
+      'leaseTtlMs',
+      'silenceTimeoutMs',
+      'continuationCooldownMs',
+      'maxContinuationCandidates',
+      'maxConsecutiveMachineContinuations',
+      'maxConsecutiveIgnores',
+      'minContentChars',
+      'openOn',
+    ],
+    fieldPath,
+    { errorPrefix: PARTICIPATION_ERROR_PREFIX },
+  );
+  return {
+    enabled: participationBoolean(record.enabled ?? defaults.enabled, `${fieldPath}.enabled`),
+    leaseTtlMs: participationPositiveInteger(
+      record.leaseTtlMs ?? defaults.leaseTtlMs,
+      `${fieldPath}.leaseTtlMs`,
+    ),
+    silenceTimeoutMs: participationPositiveInteger(
+      record.silenceTimeoutMs ?? defaults.silenceTimeoutMs,
+      `${fieldPath}.silenceTimeoutMs`,
+    ),
+    continuationCooldownMs: participationNonNegativeInteger(
+      record.continuationCooldownMs ?? defaults.continuationCooldownMs,
+      `${fieldPath}.continuationCooldownMs`,
+    ),
+    maxContinuationCandidates: participationPositiveInteger(
+      record.maxContinuationCandidates ?? defaults.maxContinuationCandidates,
+      `${fieldPath}.maxContinuationCandidates`,
+    ),
+    maxConsecutiveMachineContinuations: participationNonNegativeInteger(
+      record.maxConsecutiveMachineContinuations ?? defaults.maxConsecutiveMachineContinuations,
+      `${fieldPath}.maxConsecutiveMachineContinuations`,
+    ),
+    maxConsecutiveIgnores: participationPositiveInteger(
+      record.maxConsecutiveIgnores ?? defaults.maxConsecutiveIgnores,
+      `${fieldPath}.maxConsecutiveIgnores`,
+    ),
+    minContentChars: participationNonNegativeInteger(
+      record.minContentChars ?? defaults.minContentChars,
+      `${fieldPath}.minContentChars`,
+    ),
+    openOn: participationOpenOnSettings(record.openOn, `${fieldPath}.openOn`, defaults.openOn),
+  };
+}

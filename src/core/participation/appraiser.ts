@@ -157,9 +157,14 @@ export class ParticipationAppraiser {
         'Return exactly one JSON object matching the ternary contract in your instructions.',
       ].join('\n\n');
     }
-    const addressed = candidate.matchedDirectAddress
-      ? 'you were addressed directly'
-      : 'your name/alias was mentioned in passing';
+    // A continuation is explicit about the missing summons: the companion is
+    // already taking part, and this follow-up did not name it. Saying so keeps
+    // the ternary honest instead of implying an address that never happened.
+    const addressed = candidate.trigger === 'contextual_continuation'
+      ? 'nobody named you; you are already taking part in this conversation'
+      : candidate.matchedDirectAddress
+        ? 'you were addressed directly'
+        : 'your name/alias was mentioned in passing';
     const eligibility = [
       'Eligibility (content-free):',
       '- room: group chat',

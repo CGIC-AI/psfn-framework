@@ -185,6 +185,18 @@ export interface IntakePolicyQuarantineConfig {
 }
 
 /**
+ * Content-addressed CogSec admission receipts (psfn-framework-1fjvm.3). A
+ * receipt lets a byte-identical durable artifact skip re-screening while its
+ * bytes and screening contract are unchanged; the TTL is the operator's cap on
+ * how long that proof may stand before the artifact is screened again. There
+ * is deliberately no "never expire" value.
+ */
+export interface IntakeReceiptsPolicyConfig {
+  /** Hours an issued admission receipt remains reusable. */
+  ttlHours: number;
+}
+
+/**
  * Thresholds for the L1.5 ONNX prompt-injection classifier (htm9.5,
  * src/boundary/gateway/intake/injection-classifier.ts). The classifier emits
  * a calibrated 0-1 score into `envelope.scores`; these thresholds tell the
@@ -903,6 +915,7 @@ export interface IntakePolicyConfig {
   /** Policy-owned URI-scheme handling for the deterministic URL scanner. */
   urlScanner: IntakeUrlScannerPolicyConfig;
   quarantine: IntakePolicyQuarantineConfig;
+  receipts: IntakeReceiptsPolicyConfig;
   injectionClassifier: IntakeInjectionClassifierPolicyConfig;
   l2Screener: IntakeL2ScreenerPolicyConfig;
   l3Screener: IntakeL3ScreenerPolicyConfig;
@@ -970,6 +983,19 @@ function validateQuarantine(raw: unknown, sourcePath: string): IntakePolicyQuara
   return {
     itemTtlHours: validatePositiveInteger(raw.itemTtlHours, sourcePath, 'quarantine.itemTtlHours'),
     maxHeldItems: validatePositiveInteger(raw.maxHeldItems, sourcePath, 'quarantine.maxHeldItems'),
+  };
+}
+
+export function validateReceipts(raw: unknown, sourcePath: string): IntakeReceiptsPolicyConfig {
+  if (!isRecord(raw)) {
+    throw invalid(sourcePath, 'receipts must be an object');
+  }
+  const unknownKeys = Object.keys(raw).filter((key) => key !== 'ttlHours');
+  if (unknownKeys.length > 0) {
+    throw invalid(sourcePath, `receipts has unsupported keys: ${unknownKeys.join(', ')}`);
+  }
+  return {
+    ttlHours: validatePositiveInteger(raw.ttlHours, sourcePath, 'receipts.ttlHours'),
   };
 }
 
@@ -1777,7 +1803,7 @@ export function validateIntakePolicy(raw: unknown, sourcePath: string): IntakePo
   }
   const knownKeys = [
     'schemaVersion', 'mode', 'surfacePostures', 'sourceRiskTiers', 'sourceLists', 'quarantine',
-    'injectionClassifier', 'l2Screener', 'l3Screener', 'visionScreener',
+    'receipts', 'injectionClassifier', 'l2Screener', 'l3Screener', 'visionScreener',
     'chatBodyHandling', 'sinkGates',
     'screeningPool', 'driftDetection', 'urlScanner',
   ];
@@ -1846,6 +1872,7 @@ export function validateIntakePolicy(raw: unknown, sourcePath: string): IntakePo
     sourceLists: validateSourceLists(raw.sourceLists, sourcePath),
     urlScanner: validateIntakeUrlScannerPolicy(raw.urlScanner, sourcePath),
     quarantine: validateQuarantine(raw.quarantine, sourcePath),
+    receipts: validateReceipts(raw.receipts, sourcePath),
     injectionClassifier: validateInjectionClassifier(raw.injectionClassifier, sourcePath),
     l2Screener: validateL2Screener(raw.l2Screener, sourcePath),
     l3Screener: validateL3Screener(raw.l3Screener, sourcePath),

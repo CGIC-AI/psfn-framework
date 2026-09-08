@@ -2,13 +2,32 @@
   "name": "PSFN Satellite Mobile Chat App",
   "short_name": "PSFN Chat",
   "description": "Mobile satellite chat client for the PSFN Satellite Hub.",
+  "id": "/companion-ui/",
   "start_url": "/companion-ui/",
   "scope": "/companion-ui/",
   "display": "standalone",
   "background_color": "#fafafa",
   "theme_color": "#fafafa",
-  "orientation": "portrait-primary",
+  "orientation": "any",
   "icons": [
+    {
+      "src": "/companion-ui/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/companion-ui/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/companion-ui/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
     {
       "src": "/companion-ui/icon.svg",
       "sizes": "any",

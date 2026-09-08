@@ -6,11 +6,16 @@ import type { ShardExecutionPort } from '../../faculties/shards/port.js';
 import type { SatelliteRoutingPort } from '../../core/agent/satellite-adapter-port.js';
 import type { ObservedGroupMemoryScheduleDecision } from '../../faculties/memory/extraction/group-observed-scheduler.js';
 import type {
+  ParticipationAction,
   ParticipationAppraisalResult,
   ParticipationCandidate,
   PrecomputedNoReplyDisposition,
   PassiveNameCandidateDecision,
 } from '../../core/participation/types.js';
+import type {
+  RoomParticipationDispositionInput,
+  RoomParticipationDispositionOutcome,
+} from '../../core/participation/room-participation-lease-coordinator.js';
 import type {
   ReservationDecision,
   ReservationSignalContext,
@@ -332,6 +337,32 @@ export interface EgressLeasePhasePort {
   ): Promise<EgressLeaseDecision>;
 }
 
+/**
+ * Bounded durable room-participation lease seam (jp36.5.5). The observe path
+ * feeds it the explicit dispositions that open or refresh membership (an
+ * appraised reaction, a delivered room reply, a granted endogenous room entry, a
+ * summons), the appraiser's ternary, and the arbiter's deterministic gate
+ * outcome. It never speaks: membership only decides whether an ordinary
+ * name-free follow-up is worth considering at all, and every admitted
+ * continuation still traverses the reservation phase, the appraiser, CogSec,
+ * fatigue, and the egress lease.
+ */
+export interface RoomParticipationLeasePort {
+  recordDisposition(
+    input: RoomParticipationDispositionInput,
+  ): Promise<RoomParticipationDispositionOutcome>;
+  recordAppraisal(input: {
+    channelId: string;
+    action: ParticipationAction;
+    nowMs?: number;
+  }): Promise<{ outcome: 'closed'; reason: string } | { outcome: 'recorded' | 'absent' }>;
+  closeForReservationGate(input: {
+    channelId: string;
+    blockedBy: string;
+    nowMs?: number;
+  }): Promise<{ outcome: 'closed'; reason: string } | { outcome: 'retained' }>;
+}
+
 export interface GatewayMessageLogger {
   info(message: string, meta?: Record<string, unknown>): void;
   warn(message: string, meta?: Record<string, unknown>): void;
@@ -386,6 +417,15 @@ export interface GatewayMessageHandlersDeps {
    */
   egressLeasePhase?: EgressLeasePhasePort;
   /**
+   * Bounded durable room-participation lease (jp36.5.5). When present, an
+   * explicit disposition (delivered room reply, appraised reaction, summons)
+   * opens or refreshes one companion's membership in one verified group room,
+   * and the passive-name gate may then admit name-free follow-ups as contextual
+   * continuation candidates. Optional so runtimes without the durable lease
+   * store keep the summons-only behavior unchanged.
+   */
+  roomParticipationLease?: RoomParticipationLeasePort;
+  /**
    * Records primary replies delivered to Discord so replay-prone senders (the
    * internal continuation) can detect and suppress a duplicate of
    * an already-delivered reply. See `outbound-reply-dedupe.ts`.
@@ -423,6 +463,7 @@ export function registerGatewayMessageHandlers(
     participationAppraiser,
     reservationPhase,
     egressLeasePhase,
+    roomParticipationLease,
     outboundReplyGuard,
     companionAuthorName,
     eventBus,
@@ -446,6 +487,114 @@ export function registerGatewayMessageHandlers(
   const failedDiscordDeliveries = new DiscordFailedDeliveryCache();
   const inFlightCompanionMessages = new Set<string>();
   const recentCompanionMessages = new Map<string, number>();
+
+  /**
+   * Record one explicit room disposition against the bounded participation lease
+   * (jp36.5.5) and log the content-free outcome. Fail-closed and non-throwing:
+   * a lease failure can only cost the companion its continuation membership, it
+   * can never break message observation or delivery.
+   */
+  const recordRoomParticipationDisposition = async (
+    input: RoomParticipationDispositionInput,
+  ): Promise<void> => {
+    if (!roomParticipationLease) return;
+    try {
+      const outcome = await roomParticipationLease.recordDisposition(input);
+      if (outcome.outcome === 'skipped') {
+        return;
+      }
+      safeguardAuditTrail.append('participation.lease.disposition', {
+        channelId: input.channelId,
+        sourceMessageId: input.sourceMessageId,
+        disposition: input.disposition,
+        outcome: outcome.outcome,
+        expiresAtMs: outcome.expiresAtMs,
+      });
+    } catch (leaseError) {
+      const errorText = toErrorMessage(leaseError);
+      log.warn('Room participation lease disposition failed', {
+        channelId: input.channelId,
+        messageId: input.sourceMessageId,
+        error: errorText,
+      });
+      safeguardAuditTrail.append('participation.lease.error', {
+        channelId: input.channelId,
+        sourceMessageId: input.sourceMessageId,
+        stage: 'disposition',
+        error: errorText,
+      });
+    }
+  };
+
+  /**
+   * Roll the lease's ignore streak after the appraiser's ternary. Repeated
+   * silence is a normal terminal outcome; enough of it in a row withdraws the
+   * companion from the conversation instead of retrying into speech.
+   */
+  const recordRoomParticipationAppraisal = async (
+    channelId: string,
+    action: ParticipationAction,
+  ): Promise<void> => {
+    if (!roomParticipationLease) return;
+    try {
+      const outcome = await roomParticipationLease.recordAppraisal({ channelId, action });
+      if (outcome.outcome === 'closed') {
+        safeguardAuditTrail.append('participation.lease.closed', {
+          channelId,
+          stage: 'appraisal',
+          reason: outcome.reason,
+        });
+      }
+    } catch (leaseError) {
+      const errorText = toErrorMessage(leaseError);
+      log.warn('Room participation lease appraisal record failed', {
+        channelId,
+        error: errorText,
+      });
+      safeguardAuditTrail.append('participation.lease.error', {
+        channelId,
+        stage: 'appraisal',
+        error: errorText,
+      });
+    }
+  };
+
+  /**
+   * Retire membership when the arbiter's deterministic reservation gate reports
+   * an unfundable social pot or a flooded room. Transient gates (ICP precedence,
+   * availability, gate errors) leave membership alone.
+   */
+  const closeRoomParticipationForGate = async (
+    channelId: string,
+    blockedBy: string,
+  ): Promise<void> => {
+    if (!roomParticipationLease) return;
+    try {
+      const outcome = await roomParticipationLease.closeForReservationGate({
+        channelId,
+        blockedBy,
+      });
+      if (outcome.outcome === 'closed') {
+        safeguardAuditTrail.append('participation.lease.closed', {
+          channelId,
+          stage: 'reservation',
+          reason: outcome.reason,
+          blockedBy,
+        });
+      }
+    } catch (leaseError) {
+      const errorText = toErrorMessage(leaseError);
+      log.warn('Room participation lease gate close failed', {
+        channelId,
+        error: errorText,
+      });
+      safeguardAuditTrail.append('participation.lease.error', {
+        channelId,
+        stage: 'reservation',
+        error: errorText,
+      });
+    }
+  };
 
   /**
    * Appraise one created participation candidate into a ternary (bible §8.2) and
@@ -475,6 +624,18 @@ export function registerGatewayMessageHandlers(
         failClosed: result.failClosed,
         ...(result.failClosedReason ? { failClosedReason: result.failClosedReason } : {}),
       });
+      // The lease's own view of the ternary: silence accumulates toward
+      // withdrawal, a reaction/reply clears it. Membership never forces speech.
+      await recordRoomParticipationAppraisal(candidate.channelId, appraisal.action);
+      if (appraisal.action === 'react') {
+        await recordRoomParticipationDisposition({
+          channelId: candidate.channelId,
+          channelType: candidate.channelType,
+          disposition: 'reaction',
+          sourceMessageId: candidate.sourceMessageId,
+          sourceTimestampMs: candidate.triggerTimestampMs,
+        });
+      }
       await eventBus.emit('participation.appraisal', {
         channelId: candidate.channelId,
         sourceMessageId: candidate.sourceMessageId,
@@ -605,7 +766,10 @@ export function registerGatewayMessageHandlers(
         ...(decision.errorStage ? { errorStage: decision.errorStage } : {}),
         timestamp: nowMonotonicMs(),
       });
-      // Gated: the candidate never reaches the appraiser's model call.
+      // Gated: the candidate never reaches the appraiser's model call. Fatigue
+      // and room flooding also retire the continuation lease, so a suppressed
+      // room is not re-considered message after message.
+      await closeRoomParticipationForGate(candidate.channelId, decision.blockedBy);
       return;
     }
     safeguardAuditTrail.append('participation.reservation.reserved', {
@@ -707,6 +871,9 @@ export function registerGatewayMessageHandlers(
           authorName: candidate.triggerAuthorName,
           content: candidate.triggerContent,
           occurredAtMs: candidate.triggerTimestampMs,
+          // A lease continuation was never a summons; the generation prompt
+          // must not claim the room addressed the companion (jp36.5.5).
+          ...(candidate.trigger === 'contextual_continuation' ? { continuation: true } : {}),
         };
         egressDecision = await egressLeasePhase.grantReply(
           decision.reservation,
@@ -721,6 +888,17 @@ export function registerGatewayMessageHandlers(
         );
       } else {
         return;
+      }
+      if (egressDecision.outcome === 'delivered') {
+        // A real autonomous room reply is the strongest admitted disposition:
+        // the companion is now taking part in this conversation.
+        await recordRoomParticipationDisposition({
+          channelId: candidate.channelId,
+          channelType: candidate.channelType,
+          disposition: 'reply',
+          sourceMessageId: candidate.sourceMessageId,
+          sourceTimestampMs: candidate.triggerTimestampMs,
+        });
       }
       safeguardAuditTrail.append('participation.egress.settled', {
         channelId: candidate.channelId,
@@ -874,6 +1052,23 @@ export function registerGatewayMessageHandlers(
           precedingContextCount: candidate.precedingContext.length,
           timestamp: nowMonotonicMs(),
         });
+        if (candidate.trigger === 'direct_mention' || candidate.trigger === 'passive_name') {
+          // A summons refreshes membership the companion already holds; whether
+          // it may OPEN membership is owner policy (openOn.*Summons), so an
+          // ignored mention does not by itself start spending appraisals.
+          await recordRoomParticipationDisposition({
+            channelId: candidate.channelId,
+            channelType: candidate.channelType,
+            disposition: candidate.trigger === 'direct_mention'
+              ? 'direct_summons'
+              : 'passive_summons',
+            sourceMessageId: candidate.sourceMessageId,
+            sourceTimestampMs: candidate.triggerTimestampMs,
+            ...(message.isDirectMessage === undefined
+              ? {}
+              : { isDirectMessage: message.isDirectMessage }),
+          });
+        }
         if (reservationPhase) {
           await reserveAndAppraiseCandidate(candidate, reservationPhase);
         } else if (participationAppraiser) {
@@ -1084,6 +1279,21 @@ export function registerGatewayMessageHandlers(
             },
           });
           completed = true;
+          // A delivered reply in a verified group room opens (or refreshes) the
+          // bounded participation lease (jp36.5.5): the companion has just taken
+          // part, so the next few ordinary follow-ups may be considered without
+          // the room repeating its name. Direct messages and non-group channels
+          // are filtered by the lease's own group classifier.
+          await recordRoomParticipationDisposition({
+            channelId: message.channelId,
+            channelType: message.channelType,
+            disposition: 'reply',
+            sourceMessageId: message.id,
+            sourceTimestampMs: message.timestamp.getTime(),
+            ...(message.isDirectMessage === undefined
+              ? {}
+              : { isDirectMessage: message.isDirectMessage }),
+          });
         } catch (err) {
           try {
             await handleDiscordTurnFailure({

@@ -1042,6 +1042,7 @@ describe('Postgres schema tenancy plumbing', () => {
           { version: 16, name: 'icp-dyad-participant-lifecycle' },
           { version: 17, name: 'fleet-heavy-maintenance-baton' },
           { version: 18, name: 'fleet-maintenance-process-fencing' },
+          { version: 19, name: 'room-participation-lease' },
         ]);
 
         const sharedTables = await pool.query<{ table_name: string }>(
@@ -1060,6 +1061,7 @@ describe('Postgres schema tenancy plumbing', () => {
           'icp_dyads',
           'icp_fatigue_turn_reservations',
           'icp_initiation_permits',
+          'room_participation_leases',
           'shared_schema_migrations',
           'speaking_egress_leases',
           'speaking_episode_participation',
@@ -1072,7 +1074,7 @@ describe('Postgres schema tenancy plumbing', () => {
         const versionAgain = await pool.query<{ count: string }>(
           `SELECT COUNT(*)::text AS count FROM shared.shared_schema_migrations`,
         );
-        expect(versionAgain.rows[0]?.count).toBe('16');
+        expect(versionAgain.rows[0]?.count).toBe('17');
       } finally {
         await pool.end();
       }

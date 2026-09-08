@@ -1,5 +1,10 @@
+import type {
+  AutomataWorkerRunBinding,
+  AutomataWorkerRunPort,
+} from '../../automata/bus/worker-access.js';
 import type { AutomataRunRecord } from '../../automata/registry-contract.js';
 import type { AutomataRunRegistry } from '../../automata/run-registry.js';
+import type { AutomataWorkerLineage } from '../../automata/terminal-lifecycle.js';
 import type { ExtractionTriggerReason } from './types.js';
 
 const MEMORY_EXTRACTION_WORKER_ID = 'memory-extraction';
@@ -15,10 +20,16 @@ export interface BeginMemoryExtractionAutomataRunInput {
   createdAtMs?: number;
 }
 
-export interface BeginMemoryExtractionAutomataRunResult {
-  runId: string;
-  execute: boolean;
-  ownsLifecycle: boolean;
+function lineageFromRun(run: AutomataRunRecord): AutomataWorkerLineage {
+  return {
+    automatonClass: 'memory.extraction',
+    runId: run.runId,
+    taskId: run.taskId,
+    workerId: run.workerId,
+    ...(run.parentRunId ? { parentRunId: run.parentRunId } : {}),
+    ...(run.sourceRunId ? { sourceRunId: run.sourceRunId } : {}),
+    sessionIds: [...run.sessionIds],
+  };
 }
 
 function isBackgroundWorkOwnedRun(run: AutomataRunRecord): boolean {
@@ -39,10 +50,10 @@ function assertExactMemoryExtractionRun(
   }
 }
 
-export async function beginMemoryExtractionAutomataRun(
+async function beginMemoryExtractionAutomataRun(
   registry: AutomataRunRegistry,
   input: BeginMemoryExtractionAutomataRunInput,
-): Promise<BeginMemoryExtractionAutomataRunResult> {
+): Promise<AutomataWorkerRunBinding> {
   let run = registry.getRun(input.runId);
   if (!run) {
     run = await registry.register({
@@ -57,11 +68,14 @@ export async function beginMemoryExtractionAutomataRun(
     });
   }
   assertExactMemoryExtractionRun(run, input);
-  const ownsLifecycle = !isBackgroundWorkOwnedRun(run);
+  const binding = (record: AutomataRunRecord, execute: boolean): AutomataWorkerRunBinding => ({
+    companionId: record.companionId,
+    lineage: lineageFromRun(record),
+    attempt: record.workerGeneration,
+    execute,
+  });
 
-  if (run.status === 'completed') {
-    return { runId: run.runId, execute: false, ownsLifecycle };
-  }
+  if (run.status === 'completed') return binding(run, false);
   if (run.status === 'failed' || run.status === 'cancelled') {
     throw new Error(`Memory extraction Automata run is a terminal ${run.status} run`);
   }
@@ -72,10 +86,37 @@ export async function beginMemoryExtractionAutomataRun(
       ...(input.createdAtMs === undefined ? {} : { atMs: input.createdAtMs }),
     });
   }
-  return { runId: run.runId, execute: true, ownsLifecycle };
+  return binding(run, true);
 }
 
-export async function completeMemoryExtractionAutomataRun(
+/**
+ * Durable run adapter binding one memory-extraction run to the governed Bus
+ * lifecycle. A run created by the background-work supervisor is adopted here
+ * rather than duplicated, and terminalization stays idempotent so the
+ * supervisor's own completion callback cannot record a second terminal.
+ */
+export function createMemoryExtractionAutomataRunPort(
+  registry: AutomataRunRegistry,
+  input: BeginMemoryExtractionAutomataRunInput,
+): AutomataWorkerRunPort {
+  return {
+    begin: async () => await beginMemoryExtractionAutomataRun(registry, input),
+    terminalize: async request => {
+      if (request.lifecycleState === 'completed') {
+        await completeMemoryExtractionAutomataRun(registry, input.runId, request.atMs);
+        return;
+      }
+      await failMemoryExtractionAutomataRun(
+        registry,
+        input.runId,
+        request.failureReason ?? request.stateReason,
+        request.atMs,
+      );
+    },
+  };
+}
+
+async function completeMemoryExtractionAutomataRun(
   registry: AutomataRunRegistry,
   runId: string,
   atMs = Date.now(),

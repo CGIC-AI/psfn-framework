@@ -5,7 +5,8 @@
     "src/main.tsx",
     "vite.config.ts",
     "playwright.config.ts",
-    "e2e/fixtures/legacy-main.tsx"
+    "e2e/fixtures/legacy-main.tsx",
+    "e2e/fixtures/mobile-reading.tsx"
   ],
   "project": [
     "src/**/*.{ts,tsx}",

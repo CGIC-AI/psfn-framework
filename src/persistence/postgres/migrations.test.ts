@@ -14,6 +14,7 @@ import {
   POSTGRES_SHARED_WIKI_MIGRATIONS,
   POSTGRES_PARTNER_AFFECT_SHADOW_MIGRATIONS,
   POSTGRES_ANALYSIS_WORKBENCH_TRACE_MIGRATIONS,
+  POSTGRES_HEALTH_EVENT_MIGRATIONS,
   POSTGRES_AUTOMATA_MIGRATIONS,
   POSTGRES_AUTOMATA_ROLLBACK_MIGRATIONS,
 } from './migrations.js';
@@ -451,6 +452,23 @@ describe('Postgres live schema migrations', () => {
     expect(sharedSql).not.toMatch(/vector/i);
   });
 
+  it('adds the bounded room-participation lease as shared migration 19 (jp36.5.5)', () => {
+    const sharedSql = migrationSql(POSTGRES_SHARED_MIGRATIONS);
+
+    expect(sharedSql).toContain('CREATE TABLE IF NOT EXISTS room_participation_leases');
+    // One durable membership per (companion, room).
+    expect(sharedSql).toContain('PRIMARY KEY (companion_id, channel_id)');
+    // The context watermark: what makes a message considered at most once.
+    expect(sharedSql).toContain('watermark_message_id TEXT NOT NULL');
+    expect(sharedSql).toContain('watermark_timestamp_ms BIGINT NOT NULL');
+    // Content-free: no room text ever lands in the shared arbiter state.
+    expect(sharedSql).not.toContain('message_text');
+    // Ledger discipline: the table precedes its version registration.
+    expect(sharedSql.indexOf('CREATE TABLE IF NOT EXISTS room_participation_leases'))
+      .toBeLessThan(sharedSql.indexOf("VALUES (19, 'room-participation-lease')"));
+    expect(sharedSql).toContain("VALUES (19, 'room-participation-lease')");
+  });
+
   it('binds the funding charge to the egress lease as shared migration 11 (jp36.5.3)', () => {
     const sharedSql = migrationSql(POSTGRES_SHARED_MIGRATIONS);
 
@@ -683,6 +701,33 @@ describe('Partner affect shadow migrations (docs/partner-affect.md slice 1)', ()
     // Structural facts only: the table stores routing identity and reasons,
     // never a payload/value column that could retain rejected content.
     expect(sql).not.toContain('payload');
+  });
+
+  it('creates a bounded runtime health-event stream with structural checks only', () => {
+    const sql = migrationSql(POSTGRES_HEALTH_EVENT_MIGRATIONS);
+
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS runtime_health_events');
+    expect(sql).toContain('correlation_id UUID NOT NULL');
+    expect(sql).toContain('causation_id UUID');
+    expect(sql).toContain('observer_id UUID NOT NULL');
+    expect(sql).toContain('evidence_json JSONB NOT NULL');
+    // System-owned rows carry no companion; companion-owned rows always do.
+    expect(sql).toContain("CHECK ((owner_kind = 'companion') = (owner_companion_id IS NOT NULL))");
+    expect(sql).toContain('CHECK (occurrence_count >= 1)');
+    expect(sql).toContain('CHECK (last_observed_at_ms >= first_observed_at_ms)');
+    expect(sql).toContain("CHECK (jsonb_typeof(evidence_json) = 'object')");
+    // The ring prune and the newest-first read both rely on this index.
+    expect(sql).toContain('ON runtime_health_events(recorded_at_ms DESC, event_id DESC)');
+    expect(sql).toContain('ON runtime_health_events(correlation_id, recorded_at_ms DESC, event_id DESC)');
+    // The closed code/severity vocabularies stay in the TypeScript contract:
+    // pinning them into DDL would drift the moment a detector adds a code,
+    // because CREATE TABLE IF NOT EXISTS never updates an existing constraint.
+    expect(sql).not.toContain('scheduler_task_failed');
+    expect(sql).not.toContain("CHECK (severity IN");
+    // Content-free: the stream has no column that could hold narrative text.
+    expect(sql).not.toContain('message');
+    expect(sql).not.toContain('detail');
+    expect(sql).not.toContain('error');
   });
 
   it('creates a companion-scoped analysis-workbench trace ring (vb11)', () => {

@@ -313,6 +313,7 @@ const SETTINGS_INTEGER_FIELDS = new Set<string>([
   'observationMaskingWindow',
   'compactionEmotionalSalienceThresholdPct',
   'backgroundFailureEscalationThreshold',
+  'healthEventStreamMaxRows',
   'memoryExtractionMaxWrites',
   'memoryRefreshFailureAlertThreshold',
   'intakeScreeningFailureAlertThreshold',

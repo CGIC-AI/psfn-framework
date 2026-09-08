@@ -4,13 +4,16 @@ import {
   SENSITIVITY_LEVELS,
   type SensitivityLevel,
 } from '../../../system/trust/types.js';
-import type {
-  RecordSubagentTerminalHandoffInput,
-  SubagentAutomataLifecyclePort,
-  SubagentAutomataLineage,
-  SubagentAutomataRunInspection,
-  SubagentAutomataTerminalReceipt,
-} from '../../subagents/automata-lifecycle.js';
+import {
+  AUTOMATA_TERMINAL_HANDOFF_SOURCE,
+  AUTOMATA_TERMINAL_HANDOFF_SOURCES,
+  AUTOMATA_TERMINAL_NO_FINDING_SOURCE,
+  type AutomataTerminalHandoffReceipt,
+  type AutomataTerminalLifecyclePort,
+  type AutomataWorkerLineage,
+  type AutomataWorkerRunInspection,
+  type RecordAutomataTerminalHandoffInput,
+} from '../terminal-lifecycle.js';
 import type {
   AutomataArtifactRef,
   AutomataRunRecord,
@@ -369,13 +372,13 @@ export function createProductionAutomataBusWorkerAccess(options: {
 function assertLifecycleLineage(
   registry: AutomataRunRegistry,
   companionId: string,
-  lineage: SubagentAutomataLineage,
+  lineage: AutomataWorkerLineage,
 ): AutomataRunRecord {
   const run = exactRunForScope(registry, companionId, {
     companionId,
     runId: lineage.runId,
     taskId: lineage.taskId,
-    automatonClass: 'subagent.bounded',
+    automatonClass: lineage.automatonClass,
   });
   if (
     run.workerId !== lineage.workerId
@@ -383,12 +386,12 @@ function assertLifecycleLineage(
     || run.sourceRunId !== lineage.sourceRunId
     || JSON.stringify([...run.sessionIds].sort()) !== JSON.stringify([...lineage.sessionIds].sort())
   ) {
-    throw new Error('Subagent lifecycle lineage does not match the authoritative run registry');
+    throw new Error('Automata terminal lineage does not match the authoritative run registry');
   }
   return run;
 }
 
-function lifecycleArtifacts(input: RecordSubagentTerminalHandoffInput): AutomataArtifactRef[] {
+function lifecycleArtifacts(input: RecordAutomataTerminalHandoffInput): AutomataArtifactRef[] {
   return [
     ...input.outputRefs.map(reference => ({ ...reference })),
     ...(input.parentHandoffRef
@@ -397,42 +400,53 @@ function lifecycleArtifacts(input: RecordSubagentTerminalHandoffInput): Automata
   ];
 }
 
-export function createSubagentAutomataLifecycleAdapter(options: {
+function terminalClaim(input: RecordAutomataTerminalHandoffInput): string {
+  return [
+    `Automata terminal state: ${input.lifecycleState}`,
+    `Class: ${input.lineage.automatonClass}`,
+    `Outcome: ${input.outcome}`,
+    `Reason: ${requiredText(input.stateReason, 'terminal state reason')}`,
+    `Result: ${input.resultKind}`,
+    `Handoff: ${input.handoffKind}`,
+    ...(input.summary ? [`Summary: ${requiredText(input.summary, 'terminal summary')}`] : []),
+    ...(input.usage
+      ? [`Usage: model=${input.usage.model}; inputTokens=${input.usage.inputTokens}; outputTokens=${input.usage.outputTokens}; turns=${input.usage.turns}; durationMs=${input.usage.durationMs}`]
+      : []),
+    ...(input.failureReason ? [`Failure: ${input.failureReason}`] : []),
+  ].join('\n');
+}
+
+export function createAutomataTerminalLifecycleAdapter(options: {
   companionId: string;
   registry: AutomataRunRegistry;
   store: PostgresAutomataBusRuntimeStore;
   writer: CanonicalAutomataBusWriter;
-}): SubagentAutomataLifecyclePort {
+}): AutomataTerminalLifecyclePort {
   const companionId = requiredText(options.companionId, 'lifecycle companionId');
   return {
     recordTerminalHandoff: async (
-      input: RecordSubagentTerminalHandoffInput,
-    ): Promise<SubagentAutomataTerminalReceipt> => {
+      input: RecordAutomataTerminalHandoffInput,
+    ): Promise<AutomataTerminalHandoffReceipt> => {
       const run = assertLifecycleLineage(options.registry, companionId, input.lineage);
       const artifacts = lifecycleArtifacts(input);
       const evidenceRefs = [
         ...artifacts.map(reference => reference.ref),
         `automata-run:${run.runId}`,
       ];
-      const eventId = stableId('automata-bus-subagent-terminal', [input.idempotencyKey]);
+      const eventId = stableId('automata-bus-terminal', [input.idempotencyKey]);
       const appended = await options.writer.append({
         eventId,
         occurredAt: new Date(input.occurredAtMs).toISOString(),
         run,
         type: 'finding',
         body: {
-          claim: [
-            `Subagent terminal state: ${input.lifecycleState}`,
-            `Outcome: ${input.outcome}`,
-            `Reason: ${requiredText(input.stateReason, 'terminal state reason')}`,
-            `Result: ${input.resultKind}`,
-            `Usage: model=${input.usage.model}; inputTokens=${input.usage.inputTokens}; outputTokens=${input.usage.outputTokens}; turns=${input.usage.turns}; durationMs=${input.usage.durationMs}`,
-            ...(input.failureReason ? [`Failure: ${input.failureReason}`] : []),
-          ].join('\n'),
+          claim: terminalClaim(input),
           provenance: 'computed',
-          evidence: evidenceForRefs(evidenceRefs, 'Authoritative subagent terminal lineage'),
+          evidence: evidenceForRefs(evidenceRefs, 'Authoritative automata terminal lineage'),
           verification: { status: 'pending' },
-          source: 'subagent-terminal-handoff',
+          source: input.handoffKind === 'useful'
+            ? AUTOMATA_TERMINAL_HANDOFF_SOURCE
+            : AUTOMATA_TERMINAL_NO_FINDING_SOURCE,
         },
         audiences: ['eligible-automata', 'operator'],
         sensitivity: SENSITIVITY_LEVELS.at(-1)!,
@@ -445,7 +459,7 @@ export function createSubagentAutomataLifecycleAdapter(options: {
         artifactRefs: artifacts,
       };
     },
-    inspectRun: async (lineage: SubagentAutomataLineage): Promise<SubagentAutomataRunInspection> => {
+    inspectRun: async (lineage: AutomataWorkerLineage): Promise<AutomataWorkerRunInspection> => {
       const run = assertLifecycleLineage(options.registry, companionId, lineage);
       const events = (await options.store.readHistory({
         companionId,
@@ -466,7 +480,11 @@ export function createSubagentAutomataLifecycleAdapter(options: {
         evidenceRefs,
         artifactRefs: run.artifacts.map(reference => ({ ...reference })),
         handoffRefs: events
-          .filter(event => event.type === 'finding' && event.body.source === 'subagent-terminal-handoff')
+          .filter(event => (
+            event.type === 'finding'
+            && event.body.source !== undefined
+            && AUTOMATA_TERMINAL_HANDOFF_SOURCES.includes(event.body.source)
+          ))
           .map(event => event.eventId),
       };
     },

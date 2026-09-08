@@ -47,6 +47,7 @@ export const POSTGRES_STORE_READINESS_CATALOG = {
   companion_presence: { label: 'companion presence', requirement: 'required' },
   social_pot: { label: 'social pot', requirement: 'required' },
   speaking_arbiter: { label: 'speaking arbiter', requirement: 'required' },
+  room_participation_lease: { label: 'room participation lease', requirement: 'required' },
   fleet_maintenance: { label: 'fleet maintenance', requirement: 'required' },
   icp_shared_autonomy: { label: 'ICP shared autonomy', requirement: 'required' },
   icp_fatigue_reservations: { label: 'ICP fatigue reservations', requirement: 'required' },
@@ -59,6 +60,14 @@ export const POSTGRES_STORE_READINESS_CATALOG = {
     failureDiagnostic: {
       component: 'ModelUsageStore',
       message: 'Model usage schema migration failed',
+    },
+  },
+  runtime_health_stream: {
+    label: 'runtime health stream',
+    requirement: 'required',
+    failureDiagnostic: {
+      component: 'HealthEventStore',
+      message: 'Runtime health-event stream schema migration failed',
     },
   },
   shared_wiki: { label: 'shared world wiki', requirement: 'required' },
@@ -89,6 +98,14 @@ export const POSTGRES_STORE_READINESS_CATALOG = {
     requirement: 'optional',
   },
   welfare_grant_verifier: { label: 'welfare grant verifier', requirement: 'optional' },
+  cogsec_receipts: {
+    label: 'CogSec admission receipts',
+    requirement: 'required',
+    failureDiagnostic: {
+      component: 'CogSecReceiptStore',
+      message: 'CogSec admission receipt schema migration failed',
+    },
+  },
 } as const satisfies Record<string, PostgresStoreReadinessCatalogEntry>;
 
 export type PostgresStoreReadinessId = keyof typeof POSTGRES_STORE_READINESS_CATALOG;

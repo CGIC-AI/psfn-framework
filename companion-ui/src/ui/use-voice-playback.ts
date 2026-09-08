@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   createWebAudioClipSource,
   VoicePlaybackController,
@@ -33,6 +33,7 @@ function resolveAudioContextCtor(): AudioContextCtor | null {
 export interface VoicePlaybackPresentation {
   readonly mouthOpen: boolean;
   readonly active: boolean;
+  readonly stop: () => void;
 }
 
 export function useVoicePlayback(
@@ -44,6 +45,11 @@ export function useVoicePlayback(
   const controllerRef = useRef<VoicePlaybackController | null>(null);
   const contextRef = useRef<ManagedAudioContext | null>(null);
   const resetGenerationRef = useRef(voicePlayback.resetGeneration);
+  const stop = useCallback(() => {
+    controllerRef.current?.stop();
+    setMouthOpen(false);
+    setActive(false);
+  }, []);
 
   function teardown(): void {
     controllerRef.current?.dispose();
@@ -91,5 +97,5 @@ export function useVoicePlayback(
     }
   }, [store, voicePlayback]);
 
-  return { mouthOpen, active };
+  return { mouthOpen, active, stop };
 }

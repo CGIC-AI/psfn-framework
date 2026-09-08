@@ -7,10 +7,10 @@ import type {
 } from '../lib/stream/hub-stream.js';
 import type { OperationalTrace } from '../lib/traces.js';
 import { resolveSpriteEntryId } from '../lib/sprites/catalog.js';
-import { deriveSpriteInputs } from '../lib/sprites/emotion-mapping.js';
 import { frameRect, type SpriteEntry, type SpriteManifest } from '../lib/sprites/manifest.js';
 import type { TouchReaction } from '../lib/sprites/taxonomy.js';
 import type { SpriteState } from './types.js';
+import { useSpriteInputs } from './use-sprite-inputs.js';
 
 const MINI_DISPLAY_WIDTH = 74;
 
@@ -47,11 +47,13 @@ export function SpriteFrame({
   entryId,
   animated,
   displayWidth,
+  onUnavailable,
 }: {
   manifest: SpriteManifest;
   entryId: string;
   animated: boolean;
   displayWidth: number;
+  onUnavailable?: () => void;
 }) {
   const entry = manifest.entries[entryId] ?? null;
   const localFrame = useSpriteFrame(entry, animated);
@@ -74,8 +76,23 @@ export function SpriteFrame({
     } as const;
   }, [displayWidth, entry, localFrame, manifest.sheets]);
 
-  if (!style) return null;
-  return <span className="sprite-image" style={style} aria-hidden />;
+  if (!style || !entry) return null;
+  const sheet = manifest.sheets[entry.sheet]!;
+  return (
+    <span className="sprite-image" style={style} aria-hidden>
+      <img
+        src={sheet.src}
+        alt=""
+        hidden
+        onError={onUnavailable}
+        onLoad={event => {
+          const image = event.currentTarget;
+          if (image.naturalWidth !== sheet.cols * sheet.frameSize.w
+            || image.naturalHeight !== sheet.rows * sheet.frameSize.h) onUnavailable?.();
+        }}
+      />
+    </span>
+  );
 }
 
 export function CssFace() {
@@ -117,22 +134,15 @@ export function CompanionSprite({
   /** Most recent tool-activity entry; drives the tool-domain overlay when fresh. */
   toolActivity?: ToolActivityStreamEntry | null;
 }) {
-  // Local clock so a stale snapshot / finished tool decays without a new frame.
-  const [nowMs, setNowMs] = useState(() => Date.now());
-  const { base, toolDomain, toolPhase } = deriveSpriteInputs({ emotion, toolActivity, nowMs });
-  // Tick only while a time-gated layer is still live; stop once everything has
-  // decayed so we never hold a permanent timer (a new frame re-arms it).
-  const decaying = base !== null || toolDomain !== null;
-  useEffect(() => {
-    if (!decaying) return undefined;
-    const interval = window.setInterval(() => setNowMs(Date.now()), 1000);
-    return () => window.clearInterval(interval);
-  }, [decaying]);
+  const { base, toolDomain, toolPhase } = useSpriteInputs(emotion, toolActivity);
+  const [failedSheet, setFailedSheet] = useState<string | null>(null);
 
   const entryId = manifest
     ? resolveSpriteEntryId({ state, touch, base, toolDomain, toolPhase, crop: 'mini' })
     : null;
-  const hasSprite = Boolean(manifest && entryId && manifest.entries[entryId]);
+  const sheetSrc = manifest && entryId
+    ? manifest.sheets[manifest.entries[entryId]?.sheet ?? '']?.src : undefined;
+  const hasSprite = Boolean(sheetSrc && sheetSrc !== failedSheet);
 
   return (
     <button
@@ -150,7 +160,8 @@ export function CompanionSprite({
       </span>
       {hasSprite && manifest && entryId ? (
         <>
-          <SpriteFrame manifest={manifest} entryId={entryId} animated={animated} displayWidth={MINI_DISPLAY_WIDTH} />
+          <SpriteFrame manifest={manifest} entryId={entryId} animated={animated} displayWidth={MINI_DISPLAY_WIDTH}
+            onUnavailable={() => setFailedSheet(sheetSrc ?? null)} />
           <span
             className="sprite-art-mouth"
             data-mouth-state={mouthOpen ? 'open' : 'closed'}

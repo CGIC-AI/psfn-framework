@@ -27,6 +27,29 @@ describe('companion sprite headpats', () => {
 });
 
 describe('companion sprite rendering path', () => {
+  it('shows the built-in face when a sheet cannot load', () => {
+    const { container, getByRole } = render(
+      <CompanionSprite animated label="Companion" onHeadpat={vi.fn()} petted={false} state="attentive" manifest={manifest} />,
+    );
+    const image = container.querySelector('img');
+    if (!image) throw new Error('Sprite image probe is missing');
+    fireEvent.error(image);
+    expect(getByRole('button').className).toContain('sprite-css');
+    expect(container.querySelector('.sprite-face')).not.toBeNull();
+  });
+
+  it('rejects a sheet whose pixel dimensions disagree with its frame grid', () => {
+    const { container } = render(
+      <CompanionSprite animated label="Companion" onHeadpat={vi.fn()} petted={false} state="attentive" manifest={manifest} />,
+    );
+    const image = container.querySelector('img');
+    if (!image) throw new Error('Sprite image probe is missing');
+    Object.defineProperties(image, { naturalWidth: { value: 1 }, naturalHeight: { value: 1 } });
+    fireEvent.load(image);
+    expect(container.querySelector('.sprite-face')).not.toBeNull();
+    expect(container.querySelector('.sprite-image')).toBeNull();
+  });
+
   it('falls back to the CSS face when no manifest is loaded (fail-visible)', () => {
     const { getByRole } = render(
       <CompanionSprite animated label="P" onHeadpat={vi.fn()} petted={false} state="attentive" />,

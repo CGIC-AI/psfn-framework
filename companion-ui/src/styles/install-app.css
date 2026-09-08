@@ -1,0 +1,38 @@
+.install-app-section {
+  padding: 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: linear-gradient(135deg, var(--color-blue-soft), var(--color-surface));
+}
+
+.install-app-steps {
+  padding-left: 1.25rem;
+  line-height: 1.65;
+}
+
+.install-app-steps li + li {
+  margin-top: 0.35rem;
+}
+
+.install-app-steps svg {
+  display: inline;
+  width: 0.9em;
+  height: 0.9em;
+  vertical-align: baseline;
+}
+
+.install-app-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.install-app-status svg {
+  width: 1.1rem;
+  height: 1.1rem;
+}
+
+.install-app-note {
+  font-size: 0.8rem;
+  color: var(--color-muted);
+}

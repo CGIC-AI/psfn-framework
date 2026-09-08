@@ -3055,11 +3055,11 @@ export const SHARED_SCHEMA_NAME = 'shared';
 
 /** Ledger versions installed by POSTGRES_SHARED_MIGRATIONS (excluding wiki versions 3 and 8). */
 export const POSTGRES_SHARED_BASE_MIGRATION_VERSIONS = [
-  1, 2, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
+  1, 2, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
 ] as const;
 /** Complete ledger across the base and shared-wiki chains. */
 export const POSTGRES_SHARED_ALL_MIGRATION_VERSIONS = [
-  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
+  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
 ] as const;
 
 export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
@@ -3848,6 +3848,56 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
   `INSERT INTO shared_schema_migrations (version, name)
     VALUES (18, 'fleet-maintenance-process-fencing')
     ON CONFLICT (version) DO NOTHING;`,
+  // Version 19 (sprint 12, jp36.5.5): the bounded durable room-participation
+  // lease. One companion's membership in one verified group room: while it is
+  // active an ordinary room message that never repeats the companion's name may
+  // still become a contextual continuation candidate for the existing cheap
+  // appraiser. It grants consideration only — the reservation and egress leases
+  // above still own appraisal and the single send.
+  //
+  // `watermark_*` is the context watermark: the newest already-considered room
+  // message. Continuation admission advances it in ONE atomic conditional
+  // update, so a message is considered at most once even across a restart, a
+  // redelivery, or two racing observers (acceptance jp36.5.5 #4). Content-free
+  // by construction: ids, counters, timestamps, and bounded reason codes only —
+  // no room text ever lands in the shared schema.
+  `
+  CREATE TABLE IF NOT EXISTS room_participation_leases (
+    companion_id UUID NOT NULL,
+    channel_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('active', 'closed')),
+    opened_disposition TEXT NOT NULL CHECK (opened_disposition IN (
+      'direct_summons', 'passive_summons', 'reaction', 'reply',
+      'endogenous_room_entry'
+    )),
+    opened_at_ms BIGINT NOT NULL CHECK (opened_at_ms >= 0),
+    last_activity_at_ms BIGINT NOT NULL CHECK (last_activity_at_ms >= 0),
+    expires_at_ms BIGINT NOT NULL CHECK (expires_at_ms > opened_at_ms),
+    watermark_message_id TEXT NOT NULL,
+    watermark_timestamp_ms BIGINT NOT NULL CHECK (watermark_timestamp_ms >= 0),
+    considered_count INTEGER NOT NULL DEFAULT 0 CHECK (considered_count >= 0),
+    ignore_streak INTEGER NOT NULL DEFAULT 0 CHECK (ignore_streak >= 0),
+    machine_streak INTEGER NOT NULL DEFAULT 0 CHECK (machine_streak >= 0),
+    closed_at_ms BIGINT,
+    close_reason TEXT CHECK (close_reason IN (
+      'expiry', 'silence', 'message_cap', 'machine_streak', 'withdrawn',
+      'fatigue', 'room_pressure', 'policy_off'
+    )),
+    revision BIGINT NOT NULL CHECK (revision >= 1),
+    PRIMARY KEY (companion_id, channel_id),
+    CONSTRAINT room_participation_leases_lifecycle_check
+      CHECK ((status = 'closed') = (closed_at_ms IS NOT NULL)),
+    CONSTRAINT room_participation_leases_close_reason_presence_check
+      CHECK ((status = 'closed') = (close_reason IS NOT NULL))
+  );
+  `,
+  // Active leases per room: the contention read for "who else is considering
+  // this conversation", and the sweep index for lapsed membership.
+  `CREATE INDEX IF NOT EXISTS idx_room_participation_leases_active_channel
+    ON room_participation_leases (channel_id, expires_at_ms) WHERE status = 'active';`,
+  `INSERT INTO shared_schema_migrations (version, name)
+    VALUES (19, 'room-participation-lease')
+    ON CONFLICT (version) DO NOTHING;`,
 ];
 
 // Version 3 (sprint 10, s10f9): shared-world wiki chunk projection. A
@@ -4026,6 +4076,63 @@ export const POSTGRES_PARTNER_AFFECT_SHADOW_MIGRATIONS: readonly string[] = [
   `
   CREATE INDEX IF NOT EXISTS idx_partner_affect_shadow_suppressions_received
     ON partner_affect_shadow_suppressions(partner_contact_id, received_at_ms DESC, id DESC);
+  `,
+];
+
+/**
+ * Bounded runtime health-event stream (bead psfn-framework-7qeo1.24.1).
+ *
+ * One append-only ring of content-free `HealthEvent` envelopes, capped by the
+ * settings.json-owned `healthEventStreamMaxRows` so it survives a restart
+ * without growing without bound. The columns a detector filters and joins on
+ * (correlation, causation, code, severity, component, subject digest, time)
+ * are first-class; the bounded structured evidence rides as a small JSONB map.
+ *
+ * The CHECK constraints are deliberately STRUCTURAL only. The closed
+ * vocabularies for `code`, `severity`, `process`, and `component` live in
+ * `shared/contracts/health-event.ts` and are enforced by `validateHealthEvent`
+ * on both the write and the read path: pinning them into DDL would silently
+ * drift the day a detector child adds a code, because `CREATE TABLE IF NOT
+ * EXISTS` never updates an existing constraint.
+ */
+export const POSTGRES_HEALTH_EVENT_MIGRATIONS: readonly string[] = [
+  `
+  CREATE TABLE IF NOT EXISTS runtime_health_events (
+    event_id UUID PRIMARY KEY,
+    schema_version INTEGER NOT NULL,
+    correlation_id UUID NOT NULL,
+    causation_id UUID,
+    owner_kind TEXT NOT NULL,
+    owner_companion_id TEXT,
+    severity TEXT NOT NULL,
+    code TEXT NOT NULL,
+    process TEXT NOT NULL,
+    component TEXT NOT NULL,
+    observer_id UUID NOT NULL,
+    subject_hash TEXT,
+    occurrence_count INTEGER NOT NULL,
+    first_observed_at_ms BIGINT NOT NULL,
+    last_observed_at_ms BIGINT NOT NULL,
+    recorded_at_ms BIGINT NOT NULL,
+    evidence_json JSONB NOT NULL,
+    CHECK (owner_kind IN ('system', 'companion')),
+    CHECK ((owner_kind = 'companion') = (owner_companion_id IS NOT NULL)),
+    CHECK (occurrence_count >= 1),
+    CHECK (first_observed_at_ms >= 0),
+    CHECK (last_observed_at_ms >= first_observed_at_ms),
+    CHECK (recorded_at_ms >= 0),
+    CHECK (subject_hash IS NULL OR subject_hash ~ '^[0-9a-f]{64}$'),
+    CHECK (jsonb_typeof(evidence_json) = 'object'),
+    CHECK (octet_length(evidence_json::text) <= 4096)
+  );
+  `,
+  `
+  CREATE INDEX IF NOT EXISTS idx_runtime_health_events_recorded
+    ON runtime_health_events(recorded_at_ms DESC, event_id DESC);
+  `,
+  `
+  CREATE INDEX IF NOT EXISTS idx_runtime_health_events_correlation
+    ON runtime_health_events(correlation_id, recorded_at_ms DESC, event_id DESC);
   `,
 ];
 
@@ -4222,4 +4329,50 @@ export const POSTGRES_AUTOMATA_ROLLBACK_MIGRATIONS: readonly string[] = [
   ...AUTOMATA_EXACT_SESSION_PURGE_POSTGRES_ROLLBACK_STATEMENTS,
   ...AUTOMATA_RETENTION_POSTGRES_ROLLBACK_STATEMENTS,
   ...AUTOMATA_BUS_POSTGRES_ROLLBACK_STATEMENTS,
+];
+
+/**
+ * Content-addressed CogSec admission receipts (psfn-framework-1fjvm.3). The
+ * canonical receipt lives in `receipt_json` and is re-validated on every read;
+ * the extracted columns exist only so lookup by (exact bytes × exact screening
+ * contract) is an index hit. Rows accumulate per issuance — a later receipt
+ * never rewrites an earlier one — and lookup takes the newest.
+ */
+export const POSTGRES_COGSEC_RECEIPT_MIGRATIONS: readonly string[] = [
+  `
+  CREATE TABLE IF NOT EXISTS cogsec_receipts (
+    receipt_id TEXT PRIMARY KEY,
+    content_sha256 TEXT NOT NULL,
+    raw_content_sha256 TEXT NOT NULL,
+    screening_contract_digest TEXT NOT NULL,
+    receipt_sha256 TEXT NOT NULL,
+    issuer_id TEXT NOT NULL,
+    issuer_instance TEXT NOT NULL,
+    envelope_id TEXT NOT NULL,
+    verdict_action TEXT NOT NULL,
+    issued_at_ms BIGINT NOT NULL,
+    expires_at_ms BIGINT NOT NULL,
+    receipt_json JSONB NOT NULL,
+    CHECK (length(btrim(receipt_id)) > 0),
+    CHECK (content_sha256 ~ '^[a-f0-9]{64}$'),
+    CHECK (raw_content_sha256 ~ '^[a-f0-9]{64}$'),
+    CHECK (screening_contract_digest ~ '^[a-f0-9]{64}$'),
+    CHECK (receipt_sha256 ~ '^[a-f0-9]{64}$'),
+    CHECK (length(btrim(issuer_id)) > 0),
+    CHECK (length(btrim(issuer_instance)) > 0),
+    CHECK (length(btrim(envelope_id)) > 0),
+    CHECK (verdict_action IN ('pass', 'sanitize')),
+    CHECK (issued_at_ms > 0),
+    CHECK (expires_at_ms > issued_at_ms),
+    CHECK (jsonb_typeof(receipt_json) = 'object')
+  );
+  `,
+  `
+  CREATE INDEX IF NOT EXISTS idx_cogsec_receipts_content_contract
+    ON cogsec_receipts(content_sha256, screening_contract_digest, issued_at_ms DESC, receipt_id DESC);
+  `,
+  `
+  CREATE INDEX IF NOT EXISTS idx_cogsec_receipts_expiry
+    ON cogsec_receipts(expires_at_ms);
+  `,
 ];

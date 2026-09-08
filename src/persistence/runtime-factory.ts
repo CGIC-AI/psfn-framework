@@ -60,7 +60,9 @@ import type { CompanionPresenceStorePort } from '../core/agent/companion-presenc
 import { PostgresSocialPotStore } from './postgres/social-pot-store.js';
 import type { SocialPotPort } from '../core/agent/fatigue/social-pot.js';
 import { PostgresSpeakingArbiterStore } from './postgres/speaking-arbiter-store.js';
+import { PostgresRoomParticipationLeaseStore } from './postgres/room-participation-lease-store.js';
 import type { SpeakingArbiterStorePort } from '../core/agent/arbiter/speaking-arbiter-store-port.js';
+import type { RoomParticipationLeaseStorePort } from '../core/participation/room-participation-lease.js';
 import { createPostgresPool, ensurePostgresSchemaExists } from './postgres.js';
 import {
   assertPostgresTenantAccessProvisioned,
@@ -69,6 +71,7 @@ import {
 import { IntrospectionLandmarkPostgresStore } from '../faculties/introspection/postgres-store.js';
 import { assertSharedSchemaRuntimeAuthority } from './postgres/shared-schema.js';
 import { PostgresPartnerAffectShadowStore } from './postgres/partner-affect-shadow-store.js';
+import { PostgresHealthEventStore } from './postgres/health-event-store.js';
 import type { PartnerAffectShadowStorePort } from '../core/emotion/partner-affect/shadow-store-port.js';
 import { PostgresBackgroundWorkStore } from './postgres/background-work-store.js';
 import type { BackgroundWorkStorePort } from '../core/agent/background-work/store-port.js';
@@ -91,6 +94,8 @@ import {
 } from '../core/scheduler/fleet-maintenance-coordinator.js';
 import { PostgresFleetMaintenanceStore } from './postgres/fleet-maintenance-store.js';
 import { PostgresLetterStore } from './postgres/letter-store.js';
+import { PostgresCogSecReceiptStore } from './postgres/cogsec-receipt-store.js';
+import type { CogSecReceiptStorePort } from '../core/cogsec/receipts/contracts.js';
 import type { LetterStorePort } from '../core/letters/contracts.js';
 import { PostgresDoingMirrorStore } from './postgres/doing-mirror-store.js';
 import type { DoingMirrorStorePort } from '../core/doing-mirror/contracts.js';
@@ -144,6 +149,19 @@ export interface AgentPersistenceRuntime {
    */
   partnerAffectShadowStore: PartnerAffectShadowStorePort;
   /**
+   * Durable content-addressed CogSec admission receipts
+   * (psfn-framework-1fjvm.3). Written by intake screening when it admits fully
+   * screened bytes; read by admission consumers deciding whether byte-identical
+   * durable content may skip re-screening.
+   */
+  cogSecReceiptStore: CogSecReceiptStorePort;
+  /**
+   * Bounded runtime health-event stream (bead psfn-framework-7qeo1.24.1).
+   * Written by the bus sink that drains `runtime.health.event`; read by
+   * detectors and the Garden incident timeline. Content-free by contract.
+   */
+  healthEventStore: PostgresHealthEventStore;
+  /**
    * Shared-schema cross-companion presence store (sprint 10, W5a). Present
    * ONLY when multi-companion mode is enabled; flag-off never touches the
    * shared schema.
@@ -174,6 +192,14 @@ export interface AgentPersistenceRuntime {
    */
   speakingArbiterStore?: SpeakingArbiterStorePort;
   /**
+   * Gateway-owned bounded room-participation leases (shared schema, jp36.5.5):
+   * one companion's durable membership in one verified group room, carrying the
+   * context watermark that keeps a restart from replaying old room chatter into
+   * consideration. Present ONLY in multi-companion mode, exactly like the
+   * arbiter store it sits beside.
+   */
+  roomParticipationLeaseStore?: RoomParticipationLeaseStorePort;
+  /**
    * System-scoped heavy-maintenance scheduling authority. The coordinator is
    * content-free; episode/sleeptime runners commit private progress through its
    * fenced checkpoint seam.
@@ -197,12 +223,27 @@ export interface CreateAgentPersistenceRuntimeOptions {
     | 'companionId'
     | 'automataPolicy'
     | 'observerEvalSidecar'
+    | 'healthEventStreamMaxRows'
   >;
   pathSnapshot: RuntimePathSnapshot;
   embeddingDims: number;
   primaryUserId?: string;
   contactLifecycleGateway?: ContactLifecycleGatewayPort;
   onContactLifecycleRecoveryFailure?: (error: unknown) => void;
+}
+
+/**
+ * The health stream is bounded by an operator-owned value only. There is no
+ * built-in cap: booting a runtime that persists health events without a
+ * declared bound is the failure this refuses.
+ */
+function requireHealthEventStreamMaxRows(value: number | undefined): number {
+  if (value === undefined) {
+    throw new Error(
+      'Runtime health stream requires settings.json healthEventStreamMaxRows',
+    );
+  }
+  return value;
 }
 
 export async function createAgentPersistenceRuntime(
@@ -367,6 +408,14 @@ export async function createAgentPersistenceRuntime(
         () => PostgresSpeakingArbiterStore.connect(databaseUrl),
       )
     : undefined;
+  // Bounded room-participation leases share the arbiter's gateway ownership and
+  // reboot-survival contract, so they share its shared-schema placement too.
+  const roomParticipationLeaseStore = fleetTenancy
+    ? await awaitPostgresStoreReadiness(
+        'room_participation_lease',
+        () => PostgresRoomParticipationLeaseStore.connect(databaseUrl),
+      )
+    : undefined;
 
   const intentionRuntime = await awaitPostgresStoreReadiness(
     'intention',
@@ -495,9 +544,21 @@ export async function createAgentPersistenceRuntime(
     automataRetentionStore,
     automataSessionClassification,
     automataPurgeSagaStore,
+    cogSecReceiptStore: await awaitPostgresStoreReadiness(
+      'cogsec_receipts',
+      () => PostgresCogSecReceiptStore.connect(databaseUrl, { schema, role: tenantRole }),
+    ),
     partnerAffectShadowStore: await awaitPostgresStoreReadiness(
       'partner_affect_shadow',
       () => PostgresPartnerAffectShadowStore.connect(databaseUrl, { schema, role: tenantRole }),
+    ),
+    healthEventStore: await awaitPostgresStoreReadiness(
+      'runtime_health_stream',
+      () => PostgresHealthEventStore.connect(
+        databaseUrl,
+        requireHealthEventStreamMaxRows(options.config.healthEventStreamMaxRows),
+        { schema, role: tenantRole },
+      ),
     ),
     icpFeltImpulseFunnelStore,
     emosimProactivityStateStore,
@@ -506,6 +567,7 @@ export async function createAgentPersistenceRuntime(
     ...(icpInitiationCandidateStore ? { icpInitiationCandidateStore } : {}),
     ...(socialPotStore ? { socialPotStore } : {}),
     ...(speakingArbiterStore ? { speakingArbiterStore } : {}),
+    ...(roomParticipationLeaseStore ? { roomParticipationLeaseStore } : {}),
     ...(fleetMaintenanceCoordinator ? { fleetMaintenanceCoordinator } : {}),
   };
   if (!options.contactLifecycleGateway) return runtime;

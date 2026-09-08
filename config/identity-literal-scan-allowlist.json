@@ -1919,6 +1919,12 @@
       "contains": "psfn",
       "reason": "The Docker smoke runner names the generic compose project identifier, not a companion identity.",
       "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/postgres/health-event-store.ts",
+      "contains": "applicationName: 'psfn-runtime-health-stream'",
+      "reason": "Runtime health-event persistence uses a project-scoped PostgreSQL application_name for operational connection attribution.",
+      "pattern": "identity-legacy-slug"
     }
   ]
 }

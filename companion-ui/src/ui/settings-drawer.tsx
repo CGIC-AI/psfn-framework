@@ -8,13 +8,17 @@ import {
   Settings,
   UserRoundCog,
 } from 'lucide-react';
-import type { HubStreamState } from '../lib/stream/hub-stream.js';
+import type { HubStreamState, HubStreamStore } from '../lib/stream/hub-stream.js';
 import type { FleetRosterCompanion } from '../lib/fleet-roster.js';
 import { DrawerHeader } from './overlay-drawer.js';
 import type { MicMode } from './types.js';
 import type { DeviceLocationStatus } from './use-device-location.js';
 import type { Z02LinkState } from './use-z02-link.js';
 import { Z02LinkSection } from './z02-link-section.js';
+import { AvatarDisplaySettings } from './avatar-display-settings.js';
+import { InstallAppSection } from './install-app-section.js';
+import { EmbodimentSection } from './embodiment-section.js';
+import type { CompanionDisplayController } from './use-companion-display.js';
 
 export type CompanionUiAccessPresentation = Readonly<{
   state: 'loading' | 'offline' | 'signed_out' | 'signed_in' | 'guest';
@@ -25,12 +29,14 @@ export type CompanionUiAccessPresentation = Readonly<{
 
 export function SettingsDrawer({
   access,
+  activeStream,
   activeCompanionId,
   companions,
   connecting,
   micMode,
   spriteAnimations,
-  spriteEnabled,
+  display,
+  companionLabel,
   locationEnabled,
   locationStatus,
   streamState,
@@ -44,19 +50,20 @@ export function SettingsDrawer({
   onMicModeChange,
   onCompanionChange,
   onSpriteAnimationsChange,
-  onSpriteEnabledChange,
   onLocationEnabledChange,
   onSwitchUser,
   onZ02Disconnect,
   onZ02Link,
 }: {
   access: CompanionUiAccessPresentation;
+  activeStream: HubStreamStore | null;
   activeCompanionId: string | null;
   companions: readonly FleetRosterCompanion[];
   connecting: boolean;
   micMode: MicMode;
   spriteAnimations: boolean;
-  spriteEnabled: boolean;
+  display: CompanionDisplayController;
+  companionLabel: string;
   locationEnabled: boolean;
   locationStatus: DeviceLocationStatus;
   streamState: HubStreamState;
@@ -70,7 +77,6 @@ export function SettingsDrawer({
   onMicModeChange: (value: MicMode) => void;
   onCompanionChange: (companionId: string) => void;
   onSpriteAnimationsChange: (value: boolean) => void;
-  onSpriteEnabledChange: (value: boolean) => void;
   onLocationEnabledChange: (value: boolean) => void;
   onSwitchUser: () => void;
   onZ02Disconnect: () => void;
@@ -169,9 +175,13 @@ export function SettingsDrawer({
               </select>
             </label>
           )}
-          <ToggleRow label="Sprite enabled" checked={spriteEnabled} onChange={onSpriteEnabledChange} />
           <ToggleRow label="Animation enabled" checked={spriteAnimations} onChange={onSpriteAnimationsChange} />
         </section>
+
+        <AvatarDisplaySettings key={activeCompanionId} display={display} label={companionLabel} />
+        <EmbodimentSection stream={activeStream} companionId={activeCompanionId} companionName={companionLabel}
+          connected={streamState.connection === 'ready'} signedIn={access.state === 'signed_in'} />
+        <InstallAppSection />
 
         <section className="settings-section" aria-label="Location awareness">
           <h2>Location</h2>

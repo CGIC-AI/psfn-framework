@@ -105,6 +105,7 @@ import {
   wireReflectionRuntime,
 } from '../startup/composition/parity.js';
 import { createAgentPersistenceRuntime } from '../../persistence/runtime-factory.js';
+import { subscribeHealthEventStream } from '../../shared/observability/health-event-stream.js';
 import {
   PostgresPoolOwner,
   runWithPostgresPoolOwner,
@@ -176,6 +177,7 @@ import {
 } from './session-activity.js';
 import { loadIntakePolicyConfig } from '../../system/config/intake-policy-config.js';
 import { maybeCreateIntakeScreeningService } from '../../core/cogsec/intake/screening.js';
+import { COGSEC_INTAKE_FIREWALL_ISSUER_ID } from '../../shared/contracts/cogsec-receipt.js';
 import { loadPartnerAffectShadowConfig } from '../../system/config/partner-affect-shadow-config.js';
 import { createPartnerAffectShadowIngestBridge } from '../../core/emotion/partner-affect/shadow-ingest-bridge.js';
 import { createIntakeQuarantineStore } from '../../core/cogsec/intake/quarantine-store.js';
@@ -355,6 +357,14 @@ async function main(): Promise<void> {
         error: error instanceof Error ? error.message : String(error),
       });
     },
+  });
+  // Drain the content-free health plane into its bounded persisted stream
+  // before anything else in this process can emit. `EventBus.emit` returns
+  // silently with no subscriber, so a later subscription would lose every
+  // startup-time observation instead of failing loudly.
+  const detachHealthEventStream = subscribeHealthEventStream({
+    eventBus,
+    store: persistenceRuntime.healthEventStore,
   });
   const detachFleetMaintenanceForegroundPreemption =
     persistenceRuntime.fleetMaintenanceCoordinator
@@ -723,6 +733,16 @@ async function main(): Promise<void> {
           error: String(error),
         });
       });
+    },
+    // Content-addressed admission receipts (psfn-framework-1fjvm.3): admitted,
+    // fully screened bytes get a durable receipt so a byte-identical durable
+    // artifact (skill body, wiki document) can prove its admission after a
+    // restart instead of re-paying screening. Quarantined, withheld, partially
+    // screened, and clean-bubble content never gets one.
+    receipts: {
+      store: persistenceRuntime.cogSecReceiptStore,
+      issuerId: COGSEC_INTAKE_FIREWALL_ISSUER_ID,
+      ttlMs: intakePolicy.receipts.ttlHours * 3_600_000,
     },
     // Durable quarantine hold (htm9.11): agent-side quarantine decisions land
     // in the same companion-data store the gateway writes and Garden reviews.
@@ -1690,15 +1710,19 @@ async function main(): Promise<void> {
       await persistenceRuntime.socialImpulseOutreachStore.close();
       await persistenceRuntime.socialPotStore?.close();
       await persistenceRuntime.speakingArbiterStore?.close();
+      await persistenceRuntime.roomParticipationLeaseStore?.shutdown();
       await persistenceRuntime.fleetMaintenanceCoordinator?.close();
       await persistenceRuntime.backgroundWorkStore.close();
       await persistenceRuntime.automataBusStore.close();
       await persistenceRuntime.automataRunRegistry.close();
       await persistenceRuntime.introspectionLandmarkStore.close();
       await persistenceRuntime.partnerAffectShadowStore.close();
+      await persistenceRuntime.cogSecReceiptStore.close();
       await persistenceRuntime.companionAvailabilityStore.close();
       await persistenceRuntime.letterStore.close();
       await persistenceRuntime.doingMirrorStore.close();
+      detachHealthEventStream();
+      await persistenceRuntime.healthEventStore.close();
       await postgresPoolOwner.close();
     },
     scheduler,
@@ -1879,6 +1903,7 @@ async function main(): Promise<void> {
     participationAppraiser,
     reservationPhase,
     egressLeasePhase,
+    roomParticipationLease,
   } = wireSpeakingArbiterLane({
     config,
     schedulerConfig,
@@ -1898,7 +1923,13 @@ async function main(): Promise<void> {
     },
     outboundReplyGuard,
   });
-  socialImpulseOutreachLane.setSpeakingPhases({ reservationPhase, egressLeasePhase });
+  socialImpulseOutreachLane.setSpeakingPhases({
+    reservationPhase,
+    egressLeasePhase,
+    // A granted endogenous room entry opens the same bounded membership an
+    // inbound summons would (jp36.5.5).
+    roomParticipationLease,
+  });
 
   // ── Drift review lanes (htm9.14/htm9.15) + emo_sim dyad advisory (oth4.6):
   // extracted to startup/drift-review-lanes.ts (charter 12.1 split).
@@ -2034,6 +2065,7 @@ async function main(): Promise<void> {
     participationAppraiser,
     ...(reservationPhase ? { reservationPhase } : {}),
     ...(egressLeasePhase ? { egressLeasePhase } : {}),
+    ...(roomParticipationLease ? { roomParticipationLease } : {}),
     outboundReplyGuard,
     companionAuthorName: card.data.name,
     protectedMessageQueue: companionAvailability,

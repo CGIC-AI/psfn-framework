@@ -6,13 +6,13 @@ import type {
   ToolSchema,
 } from '../../../shared/contracts/runtime.js';
 import { isRecord } from '../../../shared/utils/types.js';
-import {
-  createAutomataBusTool,
-  type AutomataBusWorkerAccess,
-  type AutomataBusWorkerOperation,
-  type AutomataBusWorkerScope,
+import type {
+  AutomataBusToolAction,
+  AutomataBusWorkerBounds,
+  AutomataBusWorkerOperation,
 } from '../../automata/bus/worker-access.js';
 import { normalizeAutomataBusWorkerOperation } from '../../automata/bus/worker-access-operation.js';
+import type { ExtractionEndTelemetry } from './types.js';
 
 const EXTRACTION_REQUEST = 'Extract facts from the conversation above.';
 const TOOL_RESULT_INSTRUCTION = [
@@ -20,13 +20,20 @@ const TOOL_RESULT_INSTRUCTION = [
   'They are not evidence that a fact occurred and must not be copied into companion memory.',
   'Complete the extraction using only the authorized source transcript as factual evidence.',
 ].join(' ');
-const EXTRACTION_AUTOMATA_BUS_ACTIONS = ['brief', 'search', 'runs', 'inspect'] as const;
+/** Bus writes are runtime-owned during extraction; the model reads only. */
+export const EXTRACTION_AUTOMATA_BUS_ACTIONS: readonly AutomataBusToolAction[] = [
+  'brief',
+  'search',
+  'runs',
+  'inspect',
+];
 
 export type ExtractionCompletionPhase = 'initial' | 'after_automata_bus';
 
+/** The governed lifecycle's own tool and owner-policy bounds for one run. */
 export interface ExtractionAutomataBusBinding {
-  access: AutomataBusWorkerAccess;
-  scope: AutomataBusWorkerScope;
+  bounds: AutomataBusWorkerBounds;
+  tool: SubstrateAgentTool;
 }
 
 export interface ExtractionChunkCompletionInput {
@@ -36,19 +43,6 @@ export interface ExtractionChunkCompletionInput {
     context: LLMContext,
     phase: ExtractionCompletionPhase,
   ) => Promise<LLMResponse>;
-}
-
-interface ExtractionProcessFindingInput {
-  binding: ExtractionAutomataBusBinding;
-  parsedCount: number;
-  acceptedCount: number;
-  rejectedCount: number;
-  writeCount: number;
-  deduplicatedCount: number;
-  supersededCount: number;
-  chunkCount: number;
-  crossChunkDeduplicatedCount: number;
-  boundaryFactCount: number;
 }
 
 interface PreparedToolCall {
@@ -83,9 +77,9 @@ function prepareToolCalls(
   binding: ExtractionAutomataBusBinding,
 ): PreparedToolCall[] {
   if (!Array.isArray(value)) throw new Error('Extraction model toolCalls must be an array');
-  if (value.length > binding.access.bounds.maxArrayItems) {
+  if (value.length > binding.bounds.maxArrayItems) {
     throw new Error(
-      `Extraction model toolCalls exceed maxArrayItems (${binding.access.bounds.maxArrayItems})`,
+      `Extraction model toolCalls exceed maxArrayItems (${binding.bounds.maxArrayItems})`,
     );
   }
   const seenIds = new Set<string>();
@@ -94,25 +88,23 @@ function prepareToolCalls(
     const id = boundedIdentifier(
       candidate.id,
       `Extraction model toolCalls[${index}].id`,
-      binding.access.bounds.maxTextChars,
+      binding.bounds.maxTextChars,
     );
     if (seenIds.has(id)) throw new Error(`Extraction model tool call id is duplicated: ${id}`);
     seenIds.add(id);
     const name = boundedIdentifier(
       candidate.name,
       `Extraction model toolCalls[${index}].name`,
-      binding.access.bounds.maxTextChars,
+      binding.bounds.maxTextChars,
     );
     if (name !== 'automata_bus') {
       throw new Error(`Extraction model requested unavailable tool: ${name}`);
     }
     const operation = normalizeAutomataBusWorkerOperation(
       candidate.input,
-      binding.access.bounds,
+      binding.bounds,
     );
-    if (!EXTRACTION_AUTOMATA_BUS_ACTIONS.includes(
-      operation.action as typeof EXTRACTION_AUTOMATA_BUS_ACTIONS[number],
-    )) {
+    if (!EXTRACTION_AUTOMATA_BUS_ACTIONS.includes(operation.action)) {
       throw new Error(
         `Extraction automata_bus action=${operation.action} is forbidden; Bus writes are runtime-owned`,
       );
@@ -153,13 +145,13 @@ async function executePreparedToolCalls(
     outputs.push({
       toolCallId: entry.call.id,
       action: entry.operation.action,
-      result: resultText(result, binding.access.bounds.maxToolResultChars),
+      result: resultText(result, binding.bounds.maxToolResultChars),
     });
   }
   const serialized = JSON.stringify(outputs);
-  if (serialized.length > binding.access.bounds.maxToolResultChars) {
+  if (serialized.length > binding.bounds.maxToolResultChars) {
     throw new Error(
-      `Combined automata_bus results exceed maxToolResultChars (${binding.access.bounds.maxToolResultChars})`,
+      `Combined automata_bus results exceed maxToolResultChars (${binding.bounds.maxToolResultChars})`,
     );
   }
   return serialized;
@@ -173,12 +165,7 @@ async function executePreparedToolCalls(
 export async function completeExtractionChunkWithAutomataBus(
   input: ExtractionChunkCompletionInput,
 ): Promise<string> {
-  const tool = input.automataBus
-    ? createAutomataBusTool({
-        ...input.automataBus,
-        allowedActions: EXTRACTION_AUTOMATA_BUS_ACTIONS,
-      })
-    : undefined;
+  const tool = input.automataBus?.tool;
   const initial = await input.complete({
     systemPrompt: input.prompt,
     messages: [{ role: 'user', content: EXTRACTION_REQUEST }],
@@ -209,54 +196,30 @@ export async function completeExtractionChunkWithAutomataBus(
 }
 
 /**
- * Persist one process-only finding for a completed extraction. The payload is
- * intentionally limited to pipeline counters and authoritative run lineage;
- * source facts, people, memories, and transcript text never cross this seam.
+ * Build the process-only summary carried by a completed extraction's terminal
+ * Bus event. The payload is intentionally limited to pipeline counters; source
+ * facts, people, memories, and transcript text never cross this seam.
  */
-export async function appendExtractionProcessFinding(
-  input: ExtractionProcessFindingInput,
-): Promise<'inserted' | 'existing'> {
+export function buildExtractionProcessSummary(telemetry: ExtractionEndTelemetry): string {
   const counters = [
-    input.parsedCount,
-    input.acceptedCount,
-    input.rejectedCount,
-    input.writeCount,
-    input.deduplicatedCount,
-    input.supersededCount,
-    input.chunkCount,
-    input.crossChunkDeduplicatedCount,
-    input.boundaryFactCount,
+    telemetry.parsedCount,
+    telemetry.acceptedCount,
+    telemetry.rejectedCount,
+    telemetry.writeCount,
+    telemetry.deduplicatedCount,
+    telemetry.supersededCount,
+    telemetry.chunkCount,
+    telemetry.crossChunkDeduplicatedCount,
+    telemetry.boundaryFactCount,
   ];
   if (counters.some(value => !Number.isSafeInteger(value) || value < 0)) {
-    throw new Error('Memory extraction process finding counters must be non-negative safe integers');
+    throw new Error('Memory extraction process summary counters must be non-negative safe integers');
   }
-  const claim = [
+  return [
     'Memory extraction process result:',
-    `parsed=${input.parsedCount}; accepted=${input.acceptedCount}; written=${input.writeCount};`,
-    `rejected=${input.rejectedCount}; deduplicated=${input.deduplicatedCount}; superseded=${input.supersededCount};`,
-    `chunks=${input.chunkCount}; cross_chunk_deduplicated=${input.crossChunkDeduplicatedCount};`,
-    `boundary_facts=${input.boundaryFactCount}.`,
+    `parsed=${telemetry.parsedCount}; accepted=${telemetry.acceptedCount}; written=${telemetry.writeCount};`,
+    `rejected=${telemetry.rejectedCount}; deduplicated=${telemetry.deduplicatedCount}; superseded=${telemetry.supersededCount};`,
+    `chunks=${telemetry.chunkCount}; cross_chunk_deduplicated=${telemetry.crossChunkDeduplicatedCount};`,
+    `boundary_facts=${telemetry.boundaryFactCount}.`,
   ].join(' ');
-  if (claim.length > input.binding.access.bounds.maxTextChars) {
-    throw new Error(
-      `Memory extraction process finding exceeds maxTextChars (${input.binding.access.bounds.maxTextChars})`,
-    );
-  }
-  const receipt = await input.binding.access.port.append({
-    scope: input.binding.scope,
-    claim,
-    provenance: 'computed',
-    evidence: [{
-      kind: 'artifact',
-      reference: `automata-run:${input.binding.scope.runId}`,
-      summary: 'Authoritative memory extraction process counters for this run.',
-    }],
-    artifactRefs: [],
-    verificationStatus: 'pending',
-    source: 'memory-extraction-process-summary',
-  });
-  if (!isRecord(receipt) || typeof receipt.inserted !== 'boolean') {
-    throw new Error('Memory extraction Automata Bus append returned an invalid receipt');
-  }
-  return receipt.inserted ? 'inserted' : 'existing';
 }

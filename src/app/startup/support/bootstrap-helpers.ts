@@ -400,6 +400,10 @@ export function hydrateCanonicalStartupConfig(
       appraiser: { ...persistedScheduler.socialAutonomy.appraiser },
       reservationPhase: { ...persistedScheduler.socialAutonomy.reservationPhase },
       egressLease: { ...persistedScheduler.socialAutonomy.egressLease },
+      roomParticipationLease: {
+        ...persistedScheduler.socialAutonomy.roomParticipationLease,
+        openOn: { ...persistedScheduler.socialAutonomy.roomParticipationLease.openOn },
+      },
       freeTimeChooser: { ...persistedScheduler.socialAutonomy.freeTimeChooser },
     },
     ...(persistedScheduler.toolUsageEvaluator

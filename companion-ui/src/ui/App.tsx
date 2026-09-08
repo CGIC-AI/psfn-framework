@@ -36,10 +36,6 @@ import {
   type HubStreamState,
 } from '../lib/stream/hub-stream.js';
 import { deriveOperationalTraces } from '../lib/traces.js';
-import {
-  TouchInteractionCoalescer,
-  type TouchInteractionInput,
-} from '../lib/touch-interactions.js';
 import { useSpriteManifest } from '../lib/sprites/use-sprite-manifest.js';
 import type { DeviceLocationSample } from '../lib/geolocation.js';
 import { useDeviceLocation } from './use-device-location.js';
@@ -75,6 +71,10 @@ import {
 import { useVoicePlayback } from './use-voice-playback.js';
 import { useZ02Link } from './use-z02-link.js';
 import { WishlistDrawer } from './wishlist-drawer.js';
+import { useCompanionTouch } from './use-companion-touch.js';
+import { useCompanionDisplay } from './use-companion-display.js';
+import { VrmAvatarPlayer } from './vrm-avatar-player.js';
+import { useSpriteInputs } from './use-sprite-inputs.js';
 
 type AccessState = FleetSessionStatus
   | Readonly<{ state: 'loading' | 'offline' }>
@@ -88,14 +88,10 @@ export function App() {
   const [connecting, setConnecting] = useState(false);
   const [overlay, setOverlay] = useState<OverlayDrawer>(null);
   const [activityFilter, setActivityFilter] = useState<ActivityFilter>('all');
-  const [spriteEnabled, setSpriteEnabled] = useState(true);
   const [spriteAnimations, setSpriteAnimations] = useState(true);
-  const [spritePetted, setSpritePetted] = useState(false);
-  const [touchError, setTouchError] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<CompanionView>('thread');
   const [locationEnabled, setLocationEnabled] = useState(false);
   const [now, setNow] = useState(() => Date.now());
-  const spriteManifest = useSpriteManifest(spriteEnabled);
   const updateReady = useSyncExternalStore(
     subscribeToServiceWorkerUpdates,
     getServiceWorkerUpdateReady,
@@ -105,8 +101,6 @@ export function App() {
   const storeRef = useRef<HubStreamStore | null>(null);
   const browserMicStoreRef = useRef<HubStreamStore | null>(null);
   const z02AudioStoreRef = useRef<HubStreamStore | null>(null);
-  const touchCoalescerRef = useRef<TouchInteractionCoalescer | null>(null);
-  const headpatReactionTimerRef = useRef<number | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
   const reconnectAttemptRef = useRef(0);
   const authorityEpochRef = useRef(0);
@@ -136,15 +130,22 @@ export function App() {
     && streamState.connection === 'ready'
     && Boolean(streamState.session?.capabilities?.input?.includes('microphone_pcm'))
     && Boolean(streamState.session?.capabilities?.input?.includes('final_transcript'));
-  const composer = useComposerController({
-    captureReady: captureAuthorized,
-    playbackReady: streamState.voicePlayback.supported,
-  });
   const fleet = useFleetRouting({
     accessState: access.state,
     connect,
     reportError: setConfigError,
   });
+  const composer = useComposerController({
+    captureReady: captureAuthorized,
+    playbackReady: streamState.voicePlayback.supported,
+  }, `${fleet.activeCompanionId ?? 'guest'}:${streamState.session?.activeShardId ?? 'companion'}`);
+  const display = useCompanionDisplay(fleet.activeCompanionId ?? (access.state === 'guest' ? access.websocketPath : null));
+  const { base: avatarEmotion } = useSpriteInputs(streamState.emotion, null, activeView === 'avatar' && display.mode === 'model');
+  const spriteEnabled = display.mode === 'sprite';
+  const spriteManifest = useSpriteManifest(spriteEnabled);
+  const canSend = (access.state === 'signed_in' || access.state === 'guest')
+    && streamState.connection === 'ready' && !connecting;
+  const touch = useCompanionTouch(storeRef.current, canSend);
   const z02AudioRelay = useMemo(() => ({
     async start(): Promise<void> {
       const store = storeRef.current;
@@ -196,19 +197,6 @@ export function App() {
   const locationNotice = describeLocationNotice(locationStatus);
 
   useEffect(() => {
-    const coalescer = new TouchInteractionCoalescer({
-      emit: (interaction) => {
-        try {
-          const store = storeRef.current;
-          if (!store) throw new Error('Satellite Hub is not connected');
-          store.sendTouchInteraction(interaction);
-          setTouchError(null);
-        } catch (error) {
-          setTouchError(error instanceof Error ? error.message : 'Touch delivery failed');
-        }
-      },
-    });
-    touchCoalescerRef.current = coalescer;
     try {
       setRuntime(readCompanionUiRuntimeConfig());
       fleetSessionRef.current = new FleetSessionClient();
@@ -228,9 +216,6 @@ export function App() {
     return () => {
       window.removeEventListener('offline', onOffline);
       window.removeEventListener('online', onOnline);
-      coalescer.destroy();
-      touchCoalescerRef.current = null;
-      if (headpatReactionTimerRef.current !== null) window.clearTimeout(headpatReactionTimerRef.current);
       if (reconnectTimerRef.current !== null) window.clearTimeout(reconnectTimerRef.current);
       authorityEpochRef.current += 1;
       const store = storeRef.current;
@@ -269,8 +254,9 @@ export function App() {
   }, [access.state, streamState.connection]);
 
   const identityLabel = useMemo(
-    () => streamState.session?.identity?.companion?.name ?? PSFN_SATELLITE_MOBILE_CHAT_APP_NAME,
-    [streamState.session?.identity?.companion?.name],
+    () => fleet.roster.find(entry => entry.companionId === fleet.activeCompanionId)?.displayName
+      ?? streamState.session?.identity?.companion?.name ?? PSFN_SATELLITE_MOBILE_CHAT_APP_NAME,
+    [fleet.activeCompanionId, fleet.roster, streamState.session?.identity?.companion?.name],
   );
   const accessPresentation = useMemo(() => presentAccess(access), [access]);
   const hasPendingExpiry = useMemo(
@@ -302,8 +288,6 @@ export function App() {
     [access.state, fleet.approvalHistory, fleet.approvals, now, streamState],
   );
   const artifacts = useMemo(() => deriveArtifactShelfState(streamState), [streamState]);
-  const canSend = (access.state === 'signed_in' || access.state === 'guest')
-    && streamState.connection === 'ready';
   const connectionTone = getConnectionTone(streamState.connection, connecting);
   const spriteState = deriveSpriteState(streamState, traces, composer.micActive, connecting);
   const latestToolActivity = streamState.toolActivity.at(-1) ?? null;
@@ -372,7 +356,12 @@ export function App() {
     if (expectedAuthorityEpoch === undefined) authorityEpochRef.current = authorityEpoch;
     if (authorityEpoch !== authorityEpochRef.current) return false;
     manualDisconnectRef.current = false;
+    touch.reset();
+    void browserMic.stop();
+    z02Link.disconnect();
+    if (path !== websocketPathForSelectedCompanion()) composer.resetInteraction();
     setConnecting(true);
+    setStreamState(createInitialHubStreamState());
     const oldStore = storeRef.current;
     storeRef.current = null;
     oldStore?.destroy();
@@ -432,12 +421,17 @@ export function App() {
     setStreamState(createInitialHubStreamState());
     fleet.clear();
     composer.clearHumanScopedState();
-    setTouchError(null);
+    touch.reset();
+    display.clear();
+    z02Link.disconnect();
+    setActiveView('thread');
   }
 
   function disconnect() {
     manualDisconnectRef.current = true;
     void browserMic.stop();
+    touch.reset();
+    z02Link.disconnect();
     storeRef.current?.disconnect();
   }
 
@@ -502,18 +496,8 @@ export function App() {
     await browserMic.startFromUserGesture({ handsFree });
   }
 
-  function giveHeadpat() {
-    setSpritePetted(true);
-    if (headpatReactionTimerRef.current !== null) window.clearTimeout(headpatReactionTimerRef.current);
-    headpatReactionTimerRef.current = window.setTimeout(() => {
-      setSpritePetted(false);
-      headpatReactionTimerRef.current = null;
-    }, 900);
-    queueTouchInteraction({ kind: 'headpat', region: 'head', durationMs: 0 });
-  }
-
-  function queueTouchInteraction(interaction: TouchInteractionInput) {
-    if (canSend) touchCoalescerRef.current?.record(interaction);
+  function websocketPathForSelectedCompanion() {
+    return fleet.roster.find(entry => entry.companionId === fleet.activeCompanionIdRef.current)?.websocketPath;
   }
 
   async function decideApproval(id: string, decision: 'approve' | 'deny') {
@@ -587,6 +571,8 @@ export function App() {
         thread={(
           <>
             <ThreadView
+              active={activeView === 'thread'}
+              companionLabel={identityLabel}
               streamState={streamState}
               targetLabel={streamState.session?.activeShardId
                 ? streamState.session.shards?.find(
@@ -594,31 +580,20 @@ export function App() {
                   )?.label
                 : undefined}
             />
-            {spriteEnabled && (
+            {spriteEnabled && activeView === 'thread' && (
               <CompanionSprite
                 state={spriteState}
                 animated={spriteAnimations}
                 label={identityLabel}
                 mouthOpen={mouthOpen}
-                onHeadpat={giveHeadpat}
-                petted={spritePetted}
+                onHeadpat={touch.headpat}
+                petted={touch.petted}
                 manifest={spriteManifest.state === 'ready' ? spriteManifest.manifest : null}
-                touch={spritePetted ? 'headpat-happy' : null}
+                touch={touch.petted ? 'headpat-happy' : null}
                 emotion={streamState.emotion}
                 toolActivity={latestToolActivity}
               />
             )}
-            <ToastLayer
-              approvals={approvals}
-              artifacts={artifacts}
-              error={streamState.failure?.message ?? touchError ?? configError}
-              locationNotice={locationNotice}
-              onApprovalDecision={(id, decision) => { void decideApproval(id, decision); }}
-              onArtifactPreview={previewArtifact}
-              stacked={composer.pendingAttachments.length > 0}
-              updateReady={updateReady}
-              voiceNotice={composer.voiceNotice}
-            />
             {composer.pendingAttachments.length > 0 && (
               <AttachmentTray attachments={composer.pendingAttachments} onRemove={composer.removeAttachment} />
             )}
@@ -628,6 +603,10 @@ export function App() {
               generationStopActive={generationStopActive}
               onSendText={sendUserText}
               onStopGeneration={() => storeRef.current?.interrupt()}
+              onStopVoicePlayback={() => {
+                voicePlayback.stop();
+                storeRef.current?.interrupt();
+              }}
               onToggleMic={() => { void toggleBrowserMic(false); }}
               voiceStopActive={voiceStopActive}
               targetLabel={streamState.session?.activeShardId
@@ -640,8 +619,18 @@ export function App() {
         )}
         avatar={(
           <AvatarView
+            key={fleet.activeCompanionId ?? 'unattached'}
             state={spriteState}
             animated={spriteAnimations}
+            active={activeView === 'avatar'}
+            displayMode={display.mode}
+            model={display.mode === 'model' && display.file ? (
+              <VrmAvatarPlayer file={display.file} active={activeView === 'avatar'}
+                animated={spriteAnimations} mouthOpen={mouthOpen} emotionalBase={avatarEmotion} label={identityLabel} />
+            ) : undefined}
+            mouthOpen={mouthOpen}
+            toolActivity={latestToolActivity}
+            onChooseAppearance={() => setOverlay('settings')}
             label={identityLabel}
             manifest={spriteManifest.state === 'ready' ? spriteManifest.manifest : null}
             emotion={streamState.emotion}
@@ -650,22 +639,35 @@ export function App() {
             handsFreeDetail={browserMic.state.handsFree || browserMic.state.phase === 'error'
               ? browserMic.state.detail
               : undefined}
-            onInteraction={queueTouchInteraction}
+            onInteraction={touch.interact}
             onToggleHandsFree={() => { void toggleBrowserMic(true); }}
           />
         )}
+      />
+      <ToastLayer
+        approvals={approvals}
+        artifacts={artifacts}
+        error={streamState.failure?.message ?? touch.error ?? configError}
+        locationNotice={locationNotice}
+        onApprovalDecision={(id, decision) => { void decideApproval(id, decision); }}
+        onArtifactPreview={previewArtifact}
+        stacked={composer.pendingAttachments.length > 0}
+        updateReady={updateReady}
+        voiceNotice={composer.voiceNotice}
       />
       {overlay && (
         <OverlayFrame onClose={() => setOverlay(null)} side={overlay === 'activity' ? 'left' : 'right'}>
           {overlay === 'settings' ? (
             <SettingsDrawer
               access={accessPresentation}
+              activeStream={storeRef.current}
               activeCompanionId={fleet.activeCompanionId}
               companions={fleet.roster}
               connecting={connecting}
               micMode={composer.micMode}
               spriteAnimations={spriteAnimations}
-              spriteEnabled={spriteEnabled}
+              display={display}
+              companionLabel={identityLabel}
               locationEnabled={locationEnabled}
               locationStatus={locationStatus}
               streamState={streamState}
@@ -689,7 +691,6 @@ export function App() {
               }}
               onCompanionChange={(companionId) => { void fleet.select(companionId); }}
               onSpriteAnimationsChange={setSpriteAnimations}
-              onSpriteEnabledChange={setSpriteEnabled}
               onSwitchUser={() => {
                 setOverlay(null);
                 void switchUser();

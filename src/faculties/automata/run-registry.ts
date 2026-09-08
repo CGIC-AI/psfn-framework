@@ -172,6 +172,21 @@ export class AutomataRunRegistry {
     return cloneAutomataRun(record);
   }
 
+  /**
+   * Register the run, or prove that an already-registered run is the exact same
+   * durable binding. This is the restart-safe entry point for any worker that
+   * can re-enter its own run after a crash, retry, or redelivered job: a
+   * conflicting binding fails closed instead of silently adopting another
+   * companion's or another task's run.
+   */
+  async ensureRun(input: RegisterAutomataRunInput): Promise<AutomataRunRecord> {
+    const runId = requiredText(input.runId, 'runId');
+    const existing = this.runs.get(runId);
+    if (!existing) return await this.register(input);
+    assertExactRunBinding(existing, input);
+    return cloneAutomataRun(existing);
+  }
+
   async transition(runId: string, input: TransitionAutomataRunInput): Promise<AutomataRunRecord> {
     const normalizedRunId = requiredText(runId, 'runId');
     const current = this.runs.get(normalizedRunId);
@@ -283,6 +298,34 @@ export class AutomataRunRegistry {
 
 function isTerminalStatus(status: AutomataRunStatus): boolean {
   return status === 'completed' || status === 'failed' || status === 'cancelled';
+}
+
+function assertExactRunBinding(record: AutomataRunRecord, expected: RegisterAutomataRunInput): void {
+  const expectedSessionIds = expected.sessionIds ?? [];
+  const sameSessions = record.sessionIds.length === expectedSessionIds.length
+    && record.sessionIds.every((sessionId, index) => sessionId === expectedSessionIds[index]);
+  const conflicts = [
+    ...(record.automatonClass === expected.automatonClass ? [] : ['automatonClass']),
+    ...(record.workerId === expected.workerId ? [] : ['workerId']),
+    ...(record.taskId === expected.taskId ? [] : ['taskId']),
+    ...(record.taskLabel === expected.taskLabel ? [] : ['taskLabel']),
+    ...(record.taskSummary === expected.taskSummary ? [] : ['taskSummary']),
+    ...(record.parentRunId === expected.parentRunId ? [] : ['parentRunId']),
+    ...(record.sourceRunId === expected.sourceRunId ? [] : ['sourceRunId']),
+    ...(sameSessions ? [] : ['sessionIds']),
+    ...(expected.createdAtMs === undefined || record.createdAtMs === expected.createdAtMs
+      ? []
+      : ['createdAtMs']),
+    ...(expected.workerGeneration === undefined
+      || record.workerGeneration === expected.workerGeneration
+      ? []
+      : ['workerGeneration']),
+  ];
+  if (conflicts.length > 0) {
+    throw new Error(
+      `Automata run "${record.runId}" conflicts with its authoritative binding: ${conflicts.join(', ')}.`,
+    );
+  }
 }
 
 function normalizeArtifacts(artifacts: readonly AutomataArtifactRef[]): AutomataArtifactRef[] {

@@ -199,6 +199,23 @@
       "egressDrawUnits": 1,
       "minReplyConfidence": 0.5
     },
+    "roomParticipationLease": {
+      "enabled": false,
+      "leaseTtlMs": 900000,
+      "silenceTimeoutMs": 300000,
+      "continuationCooldownMs": 20000,
+      "maxContinuationCandidates": 6,
+      "maxConsecutiveMachineContinuations": 2,
+      "maxConsecutiveIgnores": 3,
+      "minContentChars": 8,
+      "openOn": {
+        "directSummons": false,
+        "passiveSummons": false,
+        "reaction": true,
+        "reply": true,
+        "endogenousRoomEntry": true
+      }
+    },
     "freeTimeChooser": {
       "enabled": true,
       "chooserDeadlineMs": 8000,

@@ -79,13 +79,19 @@ describe('agent core runtime builder', () => {
     const retrieverEnd = memoryRuntime.indexOf('const extractorFormationOptions');
 
     expect(coreRuntimeSource).toContain('createProductionAutomataBusWorkerAccess({');
-    expect(coreRuntimeSource).toContain('createSubagentAutomataLifecycleAdapter({');
+    expect(coreRuntimeSource).toContain('createAutomataTerminalLifecycleAdapter({');
     expect(coreRuntimeSource).toContain('createBackgroundWorkAutomataLifecycle(');
     expect(coreRuntimeSource).toContain('backgroundWorkAutomataLifecycle:');
     expect(coreRuntimeSource).toContain('automataBusWorkerAccess: automataBus?.workerAccess');
     expect(memoryRuntime.slice(0, retrieverEnd)).not.toContain('automataBusWorkerAccess');
     expect(memoryRuntime.slice(retrieverEnd)).toContain(
       'automataBusWorkerAccess: options.automataBusWorkerAccess',
+    );
+    // mgdks.1: both eligible classes reach the durable terminal adapter, so the
+    // governed lifecycle can terminalize each of them exactly once.
+    expect(coreRuntimeSource).toContain('automataTerminalLifecycle: automataBus?.lifecycle');
+    expect(memoryRuntime.slice(retrieverEnd)).toContain(
+      'automataTerminalLifecycle: options.automataTerminalLifecycle',
     );
     expect(agentMainSource).toContain('automataBusWorkerAccess: coreRuntime.automataBus!.workerAccess');
     expect(agentMainSource).toContain('automataLifecyclePort: coreRuntime.automataBus!.lifecycle');

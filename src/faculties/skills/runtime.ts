@@ -455,8 +455,18 @@ export class SkillsRuntime {
     return { name: record.name, description: record.description, category: record.category, version: record.version, content: record.content, createdAt: record.createdAt, updatedAt: record.updatedAt };
   }
 
-  /** Update an existing managed skill via the operator admin surface. */
-  updateSkill(input: { name: string; content: string; description?: string }): { name: string; description: string; category: string; version: number; content: string; createdAt: string; updatedAt: string } {
+  /**
+   * Update an existing managed skill via the operator admin surface.
+   *
+   * `expectedVersion` is REQUIRED here, unlike the optional compare-and-swap on
+   * {@link SkillUpdateInput}: an operator edits a document they read minutes
+   * earlier in a browser, so the Garden save is the write most likely to race a
+   * concurrent agent revision. The store raises
+   * {@link SkillVersionConflictError} when the base version moved; it
+   * propagates so the Garden route can answer a typed 409 instead of silently
+   * discarding the other writer (psfn-framework-2ug9l).
+   */
+  updateSkill(input: { name: string; content: string; description?: string; expectedVersion: number }): { name: string; description: string; category: string; version: number; content: string; createdAt: string; updatedAt: string } {
     const record = this.store.update(input, { updatedBy: 'operator:garden' });
     this.invalidate();
     return { name: record.name, description: record.description, category: record.category, version: record.version, content: record.content, createdAt: record.createdAt, updatedAt: record.updatedAt };

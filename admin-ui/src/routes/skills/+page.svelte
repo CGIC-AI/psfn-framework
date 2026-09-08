@@ -6,12 +6,14 @@
     updateSkill,
     toggleSkill,
     deleteSkill,
+    skillVersionConflict,
   } from '$lib/api/endpoints/skills';
   import type {
     SkillSnapshot,
     SkillEntry,
     SkillSkipRecord,
     ManagedSkill,
+    SkillVersionConflict,
   } from '$lib/types';
   import { pushToast } from '$lib/stores/toast.svelte';
   import { scopeGardenPath } from '$lib/fleet/companion-scope';
@@ -35,6 +37,11 @@
   let editingSkill = $state<string | null>(null);
   let editContent = $state('');
   let editDescription = $state('');
+  // The version this editor was opened against. The save sends it so a Garden
+  // write built from a stale read is refused rather than silently overwriting a
+  // revision the agent landed meanwhile (psfn-framework-2ug9l).
+  let editVersion = $state<number | null>(null);
+  let editConflict = $state<SkillVersionConflict | null>(null);
   let savingSkill = $state<string | null>(null);
   let togglingSkill = $state<string | null>(null);
   let deletingSkill = $state<string | null>(null);
@@ -86,6 +93,26 @@
     editingSkill = skill.id;
     editContent = record.content;
     editDescription = record.description;
+    editVersion = record.version;
+    editConflict = null;
+    actionError = '';
+  }
+
+  /**
+   * Replace the refused draft with the revision that actually landed. Only
+   * reachable from a conflict banner, so the operator discards their own text
+   * deliberately instead of the save doing it for them.
+   */
+  function adoptCurrentRevision(skill: UnifiedSkill) {
+    const record = getManagedRecord(skill.name);
+    if (!record) {
+      actionError = `"${skill.name}" is no longer a managed skill; close the editor and reload.`;
+      return;
+    }
+    editContent = record.content;
+    editDescription = record.description;
+    editVersion = record.version;
+    editConflict = null;
     actionError = '';
   }
 
@@ -93,22 +120,45 @@
     editingSkill = null;
     editContent = '';
     editDescription = '';
+    editVersion = null;
+    editConflict = null;
     actionError = '';
   }
 
   async function saveEdit(skill: UnifiedSkill) {
+    if (editVersion === null) {
+      actionError = `No base version was captured for "${skill.name}"; reopen the editor before saving.`;
+      pushToast(actionError, 'error');
+      return;
+    }
     savingSkill = skill.id;
     actionError = '';
+    editConflict = null;
     try {
       await updateSkill({
         name: skill.name,
         content: editContent,
         description: editDescription || undefined,
+        expectedVersion: editVersion,
       });
       editingSkill = null;
+      editVersion = null;
       pushToast(`Saved "${skill.name}"`, 'success');
       await loadData();
     } catch (e) {
+      const conflict = skillVersionConflict(e);
+      if (conflict) {
+        // Someone else's revision landed underneath this editor. Keep the
+        // operator's draft on screen and refresh the list so the banner can
+        // offer the version that actually won.
+        editConflict = conflict;
+        actionError = `"${skill.name}" changed while you were editing: you started from `
+          + `v${conflict.expectedVersion}, but v${conflict.currentVersion} is current. `
+          + 'Your draft was not saved.';
+        pushToast(actionError, 'error');
+        await loadData();
+        return;
+      }
       actionError = e instanceof Error ? e.message : 'Failed to save skill';
       pushToast(actionError, 'error');
     } finally {
@@ -717,6 +767,25 @@
                 {#if isEditing && skill.managed}
                   <!-- Edit Mode -->
                   <div class="space-y-3">
+                    {#if editConflict}
+                      <div
+                        data-testid="skill-version-conflict"
+                        class="rounded-lg border border-wilt-300 bg-wilt-50 px-3 py-2"
+                      >
+                        <p class="text-sm text-wilt-700">
+                          Saved revision v{editConflict.currentVersion} replaced the
+                          v{editConflict.expectedVersion} you opened. Your draft is still here and
+                          was not written.
+                        </p>
+                        <button
+                          onclick={() => adoptCurrentRevision(skill)}
+                          class="mt-2 px-3 py-1.5 text-sm rounded-lg border border-bark-300
+                                 text-shadow-600 hover:bg-bark-100 transition-colors"
+                        >
+                          Discard my draft and load v{editConflict.currentVersion}
+                        </button>
+                      </div>
+                    {/if}
                     <div>
                       <label for="edit-desc-{skill.id}" class="block text-sm font-medium text-shadow-700 mb-1">Description</label>
                       <input

@@ -932,6 +932,18 @@ export interface AdminSkillsData {
 }
 
 /**
+ * A managed-skill save that lost its compare-and-swap: another writer (usually
+ * the agent's own revision tool) landed a newer version while the operator's
+ * editor was open, so the save was refused rather than applied
+ * (psfn-framework-2ug9l).
+ */
+export interface SkillVersionConflict {
+  skillName: string;
+  expectedVersion: number;
+  currentVersion: number;
+}
+
+/**
  * A pending confirmation, additively carrying a content-free disclosure-
  * provenance view when the entry is a publication/share candidate (jp36.7.2).
  */

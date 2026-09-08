@@ -96,6 +96,7 @@ import {
   type AgentInvocationMutableState,
   type AgentInvocationResult,
 } from './turn-execution/agent-invocation.js';
+import type { TurnToolResultCustodyRecord } from './turn-records.js';
 import { createTurnExecutionObservability } from './turn-execution/observability.js';
 import {
   countToolCallOutcomes,
@@ -716,6 +717,9 @@ export async function handleMessageForTurn(
   // (psfn-framework-ccgdz.1). Absent until the generation context is folded and
   // recorded; absent thereafter only when the write failed visibly.
   let custodySnapshotRef: string | undefined;
+  // ccgdz.5: the observed tool results' custody edges, keyed by the lineage ref
+  // they fold into. Empty until tool observations are recorded.
+  let toolResultCustody: ReadonlyMap<string, TurnToolResultCustodyRecord> = new Map();
   let persistedUserMessageContent: string | undefined;
   let fatigueDecision: FatigueTurnDecision | null = null;
   let humanAttentionPressure: HumanAttentionPressureEvent | null = null;
@@ -1325,7 +1329,11 @@ export async function handleMessageForTurn(
       });
     });
 
-    const toolResultDisclosureSources = runtime.recordToolObservations(
+    // ccgdz.5: one pass over the observed tool results yields BOTH the
+    // disclosure fold's sources and the custody edges (envelope + result hash)
+    // that the turn record and the custody snapshot both stamp. Deriving them
+    // together is what makes the two provably the same edge.
+    const toolResultCustodyRecords = runtime.recordToolObservations(
       message,
       turnSessionIdentity,
       turnId,
@@ -1333,6 +1341,9 @@ export async function handleMessageForTurn(
       turnMessages,
       trustLevel,
     );
+    const toolResultDisclosureSources = toolResultCustodyRecords
+      .map(record => record.disclosureSource);
+    toolResultCustody = new Map(toolResultCustodyRecords.map(record => [record.ref, record]));
     const artifactSensitivitySources: ArtifactSensitivitySource[] = [
       ...preTurnState.artifactSensitivitySources,
       {
@@ -1396,6 +1407,9 @@ export async function handleMessageForTurn(
       lineage: generationDisclosureLineage,
       turnId,
       requestId,
+      toolResultEdges: new Map(
+        [...toolResultCustody].map(([ref, record]) => [ref, record.custody]),
+      ),
     });
     let responseAttachments = honorNoReply
       ? []
@@ -1855,6 +1869,7 @@ export async function handleMessageForTurn(
       observability,
       persistedUserMessageContent,
       ...(custodySnapshotRef ? { custodySnapshotRef } : {}),
+      toolResultCustody,
       onTurnRecordPersisted: () => {
         completedTurnRecordState.persisted = true;
       },
@@ -1989,6 +2004,7 @@ export async function handleMessageForTurn(
         },
         ...(internalStateSnapshotRef ? { internalStateSnapshotRef } : {}),
         ...(custodySnapshotRef ? { custodySnapshotRef } : {}),
+        toolResultCustody,
       }, sessionReads));
     }
     if (continuationStop) {

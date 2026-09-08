@@ -306,6 +306,91 @@ describe('turn-records', () => {
       .toEqual(record.toolCalls);
   });
 
+  it('round-trips the tool-call custody edge and its admitting envelope', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-tool-custody-'));
+    const turnRecordStore = createFilesystemTurnRecordStorePort(sessionsDir);
+    const record = createTurnRecord({
+      custodySnapshotRef: 'turn:019d2326-d9e1-701d-bcee-250d2cbb0e4e',
+      toolCalls: [{
+        toolName: 'wiki_read',
+        toolCallId: 'call-wiki-1',
+        outcome: 'success',
+        isError: false,
+        intakeEnvelope: {
+          envelopeId: '019d2326-0000-7000-8000-0000000000aa',
+          sourceClass: 'tool_output',
+          sourceRiskTier: 'untrusted',
+          state: 'released',
+          riskLabels: [],
+          subject: { kind: 'body' },
+        },
+        resultCustody: {
+          envelopeId: '019d2326-0000-7000-8000-0000000000aa',
+          contentSha256: createHash('sha256').update('admitted result', 'utf8').digest('hex'),
+        },
+      }],
+    });
+
+    turnRecordStore.appendTurnRecord(record);
+
+    const reloaded = turnRecordStore.readRecentTurnRecords(record.channelId, 5)[0];
+    expect(reloaded?.custodySnapshotRef).toBe('turn:019d2326-d9e1-701d-bcee-250d2cbb0e4e');
+    expect(reloaded?.toolCalls[0]?.intakeEnvelope).toEqual(record.toolCalls[0]?.intakeEnvelope);
+    expect(reloaded?.toolCalls[0]?.resultCustody).toEqual(record.toolCalls[0]?.resultCustody);
+  });
+
+  it('refuses a custody edge that claims neither a hash nor a reason', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-tool-custody-empty-'));
+    const turnRecordStore = createFilesystemTurnRecordStorePort(sessionsDir);
+    const malformed = createTurnRecord({
+      toolCalls: [{
+        toolName: 'wiki_read',
+        toolCallId: 'call-wiki-1',
+        resultCustody: { envelopeId: '019d2326-0000-7000-8000-0000000000aa' },
+      }] as unknown as TurnRecord['toolCalls'],
+    });
+
+    expect(() => turnRecordStore.appendTurnRecord(malformed))
+      .toThrow(/must carry exactly one of contentSha256 or absenceReason/);
+  });
+
+  it('refuses a custody edge bound to a different envelope than its snapshot', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-tool-custody-crossbind-'));
+    const turnRecordStore = createFilesystemTurnRecordStorePort(sessionsDir);
+    const crossBound = createTurnRecord({
+      toolCalls: [{
+        toolName: 'wiki_read',
+        toolCallId: 'call-wiki-1',
+        intakeEnvelope: {
+          envelopeId: '019d2326-0000-7000-8000-0000000000aa',
+          sourceClass: 'tool_output',
+          sourceRiskTier: 'untrusted',
+          state: 'released',
+          riskLabels: [],
+          subject: { kind: 'body' },
+        },
+        resultCustody: {
+          envelopeId: '019d2326-0000-7000-8000-0000000000bb',
+          contentSha256: createHash('sha256').update('admitted result', 'utf8').digest('hex'),
+        },
+      }] as unknown as TurnRecord['toolCalls'],
+    });
+
+    expect(() => turnRecordStore.appendTurnRecord(crossBound))
+      .toThrow(/names a different envelope than its snapshot/);
+  });
+
+  it('refuses a custody snapshot ref that names a different turn', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-custody-ref-'));
+    const turnRecordStore = createFilesystemTurnRecordStorePort(sessionsDir);
+    const crossBound = createTurnRecord({
+      custodySnapshotRef: 'turn:019d2326-d9e1-701d-bcee-ffffffffffff',
+    });
+
+    expect(() => turnRecordStore.appendTurnRecord(crossBound))
+      .toThrow(/must be turn:<turnId> for this turn/);
+  });
+
   it('rejects malformed tool-call fields instead of silently dropping them', () => {
     const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-tool-call-malformed-'));
     const turnRecordStore = createFilesystemTurnRecordStorePort(sessionsDir);

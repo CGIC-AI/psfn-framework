@@ -107,6 +107,10 @@ export class PostgresCustodySnapshotStore implements CustodySnapshotStorePort {
   async record(snapshot: CustodySnapshot): Promise<CustodySnapshotRecordOutcome> {
     const validated = validateCustodySnapshot(snapshot);
     const contentSha256 = custodySnapshotContentDigest(validated);
+    // Prune BEFORE the insert: a failing retention sweep must not surface as a
+    // failed write after the row is already committed, which would leave the
+    // turn claiming no custody record while one exists.
+    await this.pruneExpiredOncePerDay();
     const inserted = await queryOne<CustodySnapshotRow>(this.pool, `
       INSERT INTO custody_snapshots (
         generation_context_ref, turn_id, request_sha256, classification,
@@ -128,10 +132,7 @@ export class PostgresCustodySnapshotStore implements CustodySnapshotStorePort {
       contentSha256,
       JSON.stringify(validated),
     ]);
-    if (inserted) {
-      await this.pruneExpiredOncePerDay();
-      return 'recorded';
-    }
+    if (inserted) return 'recorded';
     const existing = await queryOne<CustodySnapshotRow>(
       this.pool,
       'SELECT snapshot_json, content_sha256 FROM custody_snapshots WHERE generation_context_ref = $1',

@@ -3,14 +3,13 @@ import { createComponentLogger } from '../../../shared/logger.js';
 import type { EventBus, EventMap } from '../../../shared/event-bus.js';
 import type { CapturedSessionReads } from '../../session/manager/captured-session-owner.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
-import type { DisclosureToolResultSource } from '../../cogsec/disclosure/generation-lineage.js';
 import type { DisclosureLineage } from '../../cogsec/disclosure/contracts.js';
 import {
   buildCustodySnapshot,
   custodySnapshotContentDigest,
   type CustodySnapshotStorePort,
-  type CustodyToolResultEdge,
 } from '../../cogsec/disclosure/custody-snapshot.js';
+import type { ToolResultCustodyEdge } from '../../../shared/contracts/tool-result-custody.js';
 import { normalizeChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import type { AgentResponse, CorrelationMetadata, InferredPostTurnAction, IntentionalNoReplyMetadata, MessagePromptOverrideMode, ObservabilityCallType, ParentTurnContinuationStop, RuntimeFallbackProvenance, SubstrateMessage, TurnID, TurnRecord, TurnUsage } from '../../../shared/contracts/runtime.js';
 import type { TurnObservabilityRecord } from '../../turns/observability.js';
@@ -34,6 +33,7 @@ import {
   buildTurnToolSummary as buildTurnToolSummaryForTurn,
   recordAssistantMessage as recordAssistantMessageForTurn,
   recordToolObservations as recordToolObservationsForTurn,
+  type TurnToolResultCustodyRecord,
   recordUserMessage as recordUserMessageForTurn,
   type TurnSessionWriteManager,
 } from './turn-records.js';
@@ -151,7 +151,7 @@ export class TurnSupportRuntime {
     lineage: DisclosureLineage;
     turnId: TurnID;
     requestId: string;
-    toolResultEdges?: ReadonlyMap<string, CustodyToolResultEdge>;
+    toolResultEdges?: ReadonlyMap<string, ToolResultCustodyEdge>;
   }): Promise<string | undefined> {
     const store = this.custodySnapshotStore;
     if (!store) return undefined;
@@ -510,7 +510,7 @@ export class TurnSupportRuntime {
     requestId: string,
     turnMessages: AgentMessage[],
     trustLevel: TrustLevel,
-  ): DisclosureToolResultSource[] {
+  ): TurnToolResultCustodyRecord[] {
     return recordToolObservationsForTurn({
       sessionManager: this.sessionManager,
       message,
@@ -550,6 +550,7 @@ export class TurnSupportRuntime {
     internalStateSnapshotRef?: string;
     persistedUserMessageContent?: string;
     custodySnapshotRef?: string;
+    toolResultCustody?: ReadonlyMap<string, TurnToolResultCustodyRecord>;
   }, sessionReads: CapturedSessionReads): TurnRecord {
     if (input.message.channelId !== input.turnSessionIdentity.sourceChannelId) {
       throw new Error('TurnRecord physical source does not match the captured turn identity');

@@ -11,13 +11,12 @@ import {
 import { DISCLOSURE_CLASSIFIER_VERSION } from './generation-lineage.js';
 import {
   buildCustodySnapshot,
-  custodySafeToken,
   custodySha256,
   custodySnapshotContentDigest,
   custodySnapshotRefForTurn,
   validateCustodySnapshot,
-  type CustodyToolResultEdge,
 } from './custody-snapshot.js';
+import type { ToolResultCustodyEdge } from '../../../shared/contracts/tool-result-custody.js';
 import type { DisclosureLineage, DisclosureSourceContribution } from './contracts.js';
 
 const TURN_ID = '01936f2c-4a1b-7c3d-8e5f-0a1b2c3d4e5f';
@@ -90,9 +89,7 @@ describe('buildCustodySnapshot', () => {
   });
 
   it('binds a tool-result edge to the exact lineage ref it was keyed by', () => {
-    const edge: CustodyToolResultEdge = {
-      toolName: 'wiki_read',
-      toolCallId: 'call_abc123',
+    const edge: ToolResultCustodyEdge = {
       envelopeId: '01936f2c-0000-7000-8000-00000000aaaa',
       contentSha256: custodySha256('tool result the model saw'),
     };
@@ -179,12 +176,6 @@ describe('custody snapshot content-free discipline', () => {
         ref: { digest: custodySha256(SECRET_BODY), id: SECRET_BODY },
       }],
     })).toThrow(/must be a bounded safe identifier/);
-  });
-
-  it('drops an unsafe token instead of throwing on the turn hot path', () => {
-    expect(custodySafeToken('call_abc123')).toBe('call_abc123');
-    expect(custodySafeToken(SECRET_BODY)).toBeUndefined();
-    expect(custodySafeToken(undefined)).toBeUndefined();
   });
 });
 

@@ -108,7 +108,10 @@ export class RealtimeHubServer {
       companion?: CompanionBridge | null;
       eidoverse?: (
         Pick<EidoverseEmbodiedSessionConfig, "worldName" | "agentName">
-        & Pick<EidoverseEmbodiedSessionDependencies, "look" | "onLookError" | "say" | "logger">
+        & Pick<
+          EidoverseEmbodiedSessionDependencies,
+          "look" | "onLookError" | "say" | "body" | "logger"
+        >
       ) | null;
       locationNow?: () => number;
     } = {},
@@ -131,6 +134,7 @@ export class RealtimeHubServer {
           look: options.eidoverse.look,
           ...(options.eidoverse.onLookError ? { onLookError: options.eidoverse.onLookError } : {}),
           say: options.eidoverse.say,
+          ...(options.eidoverse.body ? { body: options.eidoverse.body } : {}),
           ...(options.eidoverse.logger ? { logger: options.eidoverse.logger } : {}),
         })
       : null;
@@ -222,6 +226,18 @@ export class RealtimeHubServer {
       throw new Error("Eidoverse embodied session is not configured");
     }
     return this.eidoverse.handleAddressedUtterance(input);
+  }
+
+  /**
+   * Hub-owned allowlisted body-action port for the Eidoverse world avatar.
+   * Submission returns immediately; the door-side walk runs off the turn's
+   * critical path and its content-free outcome reaches the next turn.
+   */
+  submitEidoverseBodyAction(name: string, args: unknown = {}): void {
+    if (!this.eidoverse) {
+      throw new Error("Eidoverse embodied session is not configured");
+    }
+    this.eidoverse.submitBodyAction(name, args);
   }
 
   async close(): Promise<void> {

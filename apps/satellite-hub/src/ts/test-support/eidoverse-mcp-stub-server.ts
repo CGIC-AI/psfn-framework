@@ -64,6 +64,39 @@ input.on("line", (line) => {
     respond(request.id, { content: [{ type: "text", text: "said" }] });
     return;
   }
+  if (name === "walk_to") {
+    if (recordPath && mode.startsWith("body")) {
+      fs.appendFileSync(recordPath, `${JSON.stringify({ name, args })}\n`);
+    }
+    if (mode === "body-error") {
+      respondError(request.id);
+      return;
+    }
+    if (mode === "body-interrupt") {
+      respond(request.id, { content: [{ type: "text", text: "walk interrupted or timed out" }] });
+      return;
+    }
+    const id = request.id;
+    const delayMs = mode === "body-slow" ? 60_000 : 0;
+    setTimeout(() => {
+      respond(id, { content: [{ type: "text", text: "arrived at (12.0, -4.5)" }] });
+    }, delayMs).unref();
+    return;
+  }
+  if (name === "face") {
+    if (recordPath && mode.startsWith("body")) {
+      fs.appendFileSync(recordPath, `${JSON.stringify({ name, args })}\n`);
+    }
+    respond(request.id, { content: [{ type: "text", text: "facing" }] });
+    return;
+  }
+  if (name === "stop") {
+    if (recordPath && mode.startsWith("body")) {
+      fs.appendFileSync(recordPath, `${JSON.stringify({ name, args })}\n`);
+    }
+    respond(request.id, { content: [{ type: "text", text: "stopped" }] });
+    return;
+  }
   if (name === "pending_pings") {
     const text = mode === "wake-pings"
       ? [

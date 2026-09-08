@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 
+import { createComponentLogger } from '../../../shared/logger.js';
+
 import {
   SENSITIVITY_LEVELS,
   type SensitivityLevel,
@@ -12,11 +14,14 @@ import {
   type AutomataTerminalLifecyclePort,
   type AutomataWorkerLineage,
   type AutomataWorkerRunInspection,
+  type PersistedAutomataTerminalOutcome,
   type RecordAutomataTerminalHandoffInput,
 } from '../terminal-lifecycle.js';
-import type {
-  AutomataArtifactRef,
-  AutomataRunRecord,
+import {
+  AUTOMATA_RUN_OUTCOMES,
+  type AutomataArtifactRef,
+  type AutomataRunOutcome,
+  type AutomataRunRecord,
 } from '../registry-contract.js';
 import type { AutomataRunRegistry } from '../run-registry.js';
 import { createAutomataTextValidator } from '../validation.js';
@@ -58,6 +63,7 @@ interface CanonicalAppendResult {
 }
 
 const requiredText = createAutomataTextValidator('Automata Bus');
+const lifecycleLog = createComponentLogger('automata.bus.terminal-lifecycle');
 
 function stableId(namespace: string, values: readonly unknown[]): string {
   return `${namespace}:v1:${createHash('sha256').update(JSON.stringify(values)).digest('hex')}`;
@@ -416,6 +422,68 @@ function terminalClaim(input: RecordAutomataTerminalHandoffInput): string {
   ].join('\n');
 }
 
+const TERMINAL_CLAIM_STATE_PREFIX = 'Automata terminal state: ';
+const TERMINAL_CLAIM_CLASS_PREFIX = 'Class: ';
+const TERMINAL_CLAIM_OUTCOME_PREFIX = 'Outcome: ';
+const TERMINAL_CLAIM_REASON_PREFIX = 'Reason: ';
+const TERMINAL_CLAIM_RESULT_PREFIX = 'Result: ';
+const TERMINAL_CLAIM_HANDOFF_PREFIX = 'Handoff: ';
+const TERMINAL_CLAIM_FAILURE_PREFIX = 'Failure: ';
+const TERMINAL_LIFECYCLE_STATES = ['completed', 'failed', 'cancelled'] as const;
+
+function readClaimField(line: string | undefined, prefix: string, label: string): string {
+  if (line === undefined || !line.startsWith(prefix)) {
+    throw new Error(`Persisted automata terminal claim is missing its ${label} line`);
+  }
+  return requiredText(line.slice(prefix.length), `terminal claim ${label}`);
+}
+
+/**
+ * Read the structured terminal facts back out of a claim this module wrote.
+ *
+ * `terminalClaim` is the serializer; this is its exact inverse, and the pair is
+ * round-trip tested. It exists so a replaying settle path can converge the run
+ * registry onto the DURABLE terminal the Bus already holds instead of onto the
+ * outcome its post-crash re-run happened to produce (psfn-framework-8n40k).
+ * Anything that does not match the emitted shape throws — a claim we cannot
+ * read exactly is never guessed at.
+ */
+export function parseTerminalClaim(
+  claim: string,
+  expectedAutomatonClass: string,
+): PersistedAutomataTerminalOutcome {
+  const failureIndex = claim.indexOf(`\n${TERMINAL_CLAIM_FAILURE_PREFIX}`);
+  const head = failureIndex === -1 ? claim : claim.slice(0, failureIndex);
+  const failureReason = failureIndex === -1
+    ? undefined
+    : requiredText(
+      claim.slice(failureIndex + 1 + TERMINAL_CLAIM_FAILURE_PREFIX.length),
+      'terminal claim failure reason',
+    );
+  const lines = head.split('\n');
+  const lifecycleState = readClaimField(lines[0], TERMINAL_CLAIM_STATE_PREFIX, 'lifecycle state');
+  if (!TERMINAL_LIFECYCLE_STATES.includes(lifecycleState as typeof TERMINAL_LIFECYCLE_STATES[number])) {
+    throw new Error(`Persisted automata terminal claim has an unsupported lifecycle state "${lifecycleState}"`);
+  }
+  const automatonClass = readClaimField(lines[1], TERMINAL_CLAIM_CLASS_PREFIX, 'class');
+  if (automatonClass !== expectedAutomatonClass) {
+    throw new Error('Persisted automata terminal claim belongs to a different automaton class');
+  }
+  const outcome = readClaimField(lines[2], TERMINAL_CLAIM_OUTCOME_PREFIX, 'outcome');
+  if (!AUTOMATA_RUN_OUTCOMES.includes(outcome as AutomataRunOutcome)) {
+    throw new Error(`Persisted automata terminal claim has an unsupported outcome "${outcome}"`);
+  }
+  const stateReason = readClaimField(lines[3], TERMINAL_CLAIM_REASON_PREFIX, 'state reason');
+  readClaimField(lines[4], TERMINAL_CLAIM_RESULT_PREFIX, 'result kind');
+  readClaimField(lines[5], TERMINAL_CLAIM_HANDOFF_PREFIX, 'handoff kind');
+  return {
+    lifecycleState: lifecycleState as PersistedAutomataTerminalOutcome['lifecycleState'],
+    outcome: outcome as AutomataRunOutcome,
+    stateReason,
+    ...(failureReason ? { failureReason } : {}),
+  };
+}
+
 export function createAutomataTerminalLifecycleAdapter(options: {
   companionId: string;
   registry: AutomataRunRegistry;
@@ -434,6 +502,54 @@ export function createAutomataTerminalLifecycleAdapter(options: {
         `automata-run:${run.runId}`,
       ];
       const eventId = stableId('automata-bus-terminal', [input.idempotencyKey]);
+      // Replay path (psfn-framework-8n40k): a run that crashed between this
+      // handoff's commit and its registry terminalization re-runs its work and
+      // arrives here again with a freshly computed timestamp. Re-READ the
+      // committed terminal instead of recomputing one: recomputation differs
+      // byte-wise from the persisted event, so the append would be rejected as
+      // a reused id, degrade, and leave the registry disagreeing with the
+      // durable Bus finding. The durable finding wins.
+      const persisted = await options.store.readEventById({
+        companionId,
+        audience: 'eligible-automata',
+        maxSensitivity: SENSITIVITY_LEVELS.at(-1)!,
+        eventId,
+      });
+      if (persisted) {
+        if (persisted.type !== 'finding') {
+          throw new Error('Persisted automata terminal handoff is not a finding event');
+        }
+        // A replay whose recomputed terminal disagrees with the durable one is
+        // not silently swallowed: the durable finding still wins (that is the
+        // convergence contract), but the disagreement is reported.
+        if (persisted.body.claim !== terminalClaim(input)) {
+          lifecycleLog.warn(
+            'Automata terminal replay disagrees with the durable Bus finding; converging on the durable terminal',
+            {
+              automatonClass: input.lineage.automatonClass,
+              runId: input.lineage.runId,
+              idempotencyKey: input.idempotencyKey,
+              replayLifecycleState: input.lifecycleState,
+              replayOutcome: input.outcome,
+            },
+          );
+        }
+        return {
+          handoffRef: eventId,
+          inserted: false,
+          findingRefs: [eventId],
+          // Evidence comes from the durable finding; artifact refs are the
+          // caller's own handles for this settlement (event context carries
+          // none — custody evolves after the handoff is linked).
+          evidenceRefs: persisted.body.evidence.map(evidence => evidence.reference),
+          artifactRefs: artifacts,
+          occurredAtMs: Date.parse(persisted.occurredAt),
+          persistedOutcome: parseTerminalClaim(
+            persisted.body.claim,
+            input.lineage.automatonClass,
+          ),
+        };
+      }
       const appended = await options.writer.append({
         eventId,
         occurredAt: new Date(input.occurredAtMs).toISOString(),

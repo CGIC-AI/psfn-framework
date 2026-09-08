@@ -1570,6 +1570,14 @@ describe('DiscordAdapter DM routing', () => {
               evidence: ['mention', 'reply'],
             }],
           },
+          // jp36.5.6: connector-translated author standing travels with the
+          // envelope. This fixture has no cached guild member, so the room role
+          // stays `unknown` — the untrusted case.
+          authorClass: {
+            sourceClass: 'public_contact',
+            roomRole: 'unknown',
+            roomSize: 'unknown',
+          },
         },
       }),
     }));

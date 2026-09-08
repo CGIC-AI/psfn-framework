@@ -5,7 +5,13 @@ import type {
   MessageAddressingParticipant,
   SubstrateMessage,
 } from '../../shared/contracts/runtime.js';
-import { parseMessageAddressingMetadata } from '../../shared/contracts/message-addressing.js';
+import {
+  parseMessageAddressingMetadata,
+  toMessageAuthorSourceClass,
+  type MessageAddressingAuthorClass,
+  type MessageAuthorRoomRole,
+} from '../../shared/contracts/message-addressing.js';
+import type { IntakeSourceClass } from '../../shared/contracts/intake-envelope.js';
 
 interface MutableResolvedDiscordAddressee extends MessageAddressingParticipant {
   evidence: Set<MessageAddresseeEvidence>;
@@ -17,6 +23,41 @@ export interface DiscordMessageAddressingInput {
   runtimeBotId?: string;
   observer?: { displayName?: string; username?: string };
   fallbackObserverName?: string;
+  /**
+   * The intake trust class the adapter already resolved for body screening
+   * (jp36.5.6). Absent input keeps the envelope's `authorClass` absent, which
+   * every participation gate reads as untrusted.
+   */
+  sourceClass?: IntakeSourceClass;
+}
+
+/**
+ * Guild standing asserted by Discord itself. Ownership beats moderation; a
+ * member with no elevated permission is an ordinary member; anything the
+ * gateway could not resolve (an uncached member, a DM) stays `unknown` and is
+ * treated as untrusted downstream.
+ */
+function resolveDiscordRoomRole(message: Message): MessageAuthorRoomRole {
+  const member = message.member;
+  if (!member) return 'unknown';
+  if (message.guild?.ownerId === message.author.id) return 'owner';
+  // `ManageMessages` is the coarse "can moderate this room" bit; the exact
+  // permission set is Discord's own, not a tuning value.
+  return member.permissions.has('ManageMessages') ? 'moderator' : 'member';
+}
+
+function resolveDiscordAuthorClass(
+  input: DiscordMessageAddressingInput,
+): MessageAddressingAuthorClass | undefined {
+  if (input.sourceClass === undefined) return undefined;
+  return {
+    sourceClass: toMessageAuthorSourceClass(input.sourceClass),
+    roomRole: input.isDirectMessage ? 'unknown' : resolveDiscordRoomRole(input.message),
+    // Discord exposes a guild member count, but banding it needs an owner-owned
+    // threshold the adapter does not carry. Until that lands the band stays
+    // `unknown`, which every gate treats as the large/untrusted case.
+    roomSize: 'unknown',
+  };
 }
 
 function hasEquivalentDiscordAddressing(
@@ -143,6 +184,7 @@ export function buildDiscordMessageAddressing(
       ? { kind: 'unresolved_reply' as const, messageId: replyTarget.messageId }
       : { kind: 'room' as const, ...channel };
 
+  const authorClass = resolveDiscordAuthorClass(input);
   return parseMessageAddressingMetadata({
     schemaVersion: 2,
     source: 'discord',
@@ -152,5 +194,6 @@ export function buildDiscordMessageAddressing(
     ...(replyTarget ? { replyTarget } : {}),
     channel,
     resolvedAddressee,
+    ...(authorClass ? { authorClass } : {}),
   });
 }

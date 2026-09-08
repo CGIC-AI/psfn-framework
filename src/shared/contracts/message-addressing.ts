@@ -26,6 +26,17 @@ export const MESSAGE_AUTHOR_SOURCE_CLASSES = [
 export type MessageAuthorSourceClass = typeof MESSAGE_AUTHOR_SOURCE_CLASSES[number];
 
 /**
+ * Narrow a connector's intake source class onto the chat-author subset. Any
+ * class outside it (a document, a tool output) is not a room author at all, so
+ * it collapses to the least-privileged chat class rather than being trusted.
+ */
+export function toMessageAuthorSourceClass(value: IntakeSourceClass): MessageAuthorSourceClass {
+  return (MESSAGE_AUTHOR_SOURCE_CLASSES as readonly string[]).includes(value)
+    ? value as MessageAuthorSourceClass
+    : 'public_contact';
+}
+
+/**
  * Connector-translated standing of the author inside this room. `unknown` is
  * the fail-closed value every connector that cannot assert standing must use.
  */

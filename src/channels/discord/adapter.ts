@@ -1076,13 +1076,14 @@ export class DiscordAdapter implements ChannelAdapterPort {
       }
     }
     let content = this.sanitizeMessageContent(msg.content, runtimeBotId);
+    const sourceClass = this.resolveMessageSourceClass(msg, isDirectMessage, runtimeBotId);
     let addressing = buildDiscordMessageAddressing({
       message: msg, isDirectMessage, runtimeBotId,
       observer: this.client.user ?? undefined,
       fallbackObserverName: this.runtimeConfig.characterName,
+      sourceClass,
     });
     const channelPrivacy = classifyChannelEnvelope(msg.channelId, { isDirectMessage }).privacy;
-    const sourceClass = this.resolveMessageSourceClass(msg, isDirectMessage, runtimeBotId);
     const primaryUser = sourceClass === 'primary_user'
       ? this.primaryUsersById.get(msg.author.id)
       : undefined;

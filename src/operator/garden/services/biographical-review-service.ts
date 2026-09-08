@@ -1,4 +1,7 @@
 import { hasExactKeys, isRecord } from '../../../shared/utils/types.js';
+import { createComponentLogger } from '../../../shared/logger.js';
+import { toErrorMessage } from '../../../shared/utils/errors.js';
+import { BiographicalClaimValidationError } from '../../../faculties/memory/biographical/claim-kinds.js';
 import type { SensitivityLevel } from '../../../system/trust/types.js';
 import {
   applyLoweringGrant,
@@ -221,6 +224,8 @@ const HUMAN_STAGE_REJECT_REASONS: readonly BiographicalCandidateReceiptReason[] 
   'reviewer_flagged_sensitive',
   'reviewer_flagged_ambiguous',
 ];
+
+const reviewLog = createComponentLogger('AdminBiographicalReview');
 
 export class BiographicalReviewError extends Error {
   constructor(
@@ -733,13 +738,33 @@ export class AdminBiographicalReviewService {
               portabilityScope: input.portabilityScope,
               now: this.now(),
             });
-          } catch {
-            // The kernel refuses a scope the claim's subjects or live
-            // sensitivity do not support. That is a review outcome, not a
-            // server fault, so it is audited as a refusal.
+          } catch (error) {
+            // Split on the TYPE the kernel threw, never on message text.
+            // `BiographicalClaimValidationError` is the kernel saying no: the
+            // claim's subjects, status, or live sensitivity do not support the
+            // requested scope. That is a review outcome, audited as a refusal.
+            //
+            // Anything else — a dropped connection, a transaction abort — means
+            // the kernel never evaluated the claim at all. Reporting that as a
+            // refusal tells an operator their claim is not portable when
+            // nothing about it was decided, and discards the only signal that
+            // the runtime, not the claim, is the problem.
+            if (error instanceof BiographicalClaimValidationError) {
+              throw new BiographicalReviewError(
+                'portability-refused',
+                'this claim does not support the requested portability scope',
+              );
+            }
+            reviewLog.error('Biographical portability write failed', {
+              claimId: claim.id,
+              portabilityScope: input.portabilityScope,
+              error: toErrorMessage(error),
+            });
+            // Content-free at the surface: the cause is named by its typed
+            // reason and logged here, never rendered into an operator response.
             throw new BiographicalReviewError(
-              'portability-refused',
-              'this claim does not support the requested portability scope',
+              'portability-failed',
+              'biographical portability could not be recorded',
             );
           }
           reason = 'portability-set';

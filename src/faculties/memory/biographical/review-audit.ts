@@ -39,7 +39,14 @@ const BIOGRAPHICAL_REVIEW_REASONS = [
   'candidate-not-found',
   'stale-candidate-revision',
   'portability-set',
+  /** The kernel refused the requested scope: a review outcome, audited as one. */
   'portability-refused',
+  /**
+   * The kernel never got to decide (bead psfn-framework-bs9qz). A store fault
+   * is not a refusal, and recording it as one would tell an operator their
+   * claim is not portable when nothing about the claim was ever evaluated.
+   */
+  'portability-failed',
 ] as const;
 export type BiographicalReviewReason = (typeof BIOGRAPHICAL_REVIEW_REASONS)[number];
 

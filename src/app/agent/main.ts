@@ -856,9 +856,11 @@ async function main(): Promise<void> {
     companionAvailability,
     automataReviewer: {
       task: coreRuntime.automataBus!.reviewer,
-      registry: persistenceRuntime.automataRunRegistry,
       companionId: resolveCoreCompanionIdFromConfig(config),
     },
+    ...(coreRuntime.automataClassLifecycle
+      ? { automataLifecycle: coreRuntime.automataClassLifecycle }
+      : {}),
     automataRetention: coreRuntime.automataRetention,
     doingMirrorService: coreRuntime.doingMirrorService,
   });
@@ -1012,6 +1014,9 @@ async function main(): Promise<void> {
     automataSessionClassification: persistenceRuntime.automataSessionClassification,
     automataBusWorkerAccess: coreRuntime.automataBus!.workerAccess,
     automataLifecyclePort: coreRuntime.automataBus!.lifecycle,
+    ...(coreRuntime.automataClassLifecycle
+      ? { automataClassLifecycle: coreRuntime.automataClassLifecycle }
+      : {}),
   });
   if (!shardManager.listFoldReviews || !shardManager.getFoldReview) {
     throw new Error('Doing-mirror fold source requires the canonical shard fold-review port');
@@ -1874,6 +1879,9 @@ async function main(): Promise<void> {
     chargePolicy: config.chargePolicy,
     personalProjects,
     contactStore,
+    ...(coreRuntime.automataClassLifecycle
+      ? { automataLifecycle: coreRuntime.automataClassLifecycle }
+      : {}),
   });
   // ── Weighted-thought outreach lane (E?/1xb.2) + Law 27 contradiction
   // dampening: extracted to startup/weighted-thought-outreach-lane.ts.
@@ -1994,6 +2002,9 @@ async function main(): Promise<void> {
     {
       eventBus,
       llmProvider,
+      ...(coreRuntime.automataClassLifecycle
+        ? { automataClassLifecycle: coreRuntime.automataClassLifecycle }
+        : {}),
       capabilityTier: config.capabilityTier,
       compositionalPolicy: config.compositionalPolicy,
       characterPromptVariablesProvider: buildCharacterPromptVariablesProvider(cardVersionStore),

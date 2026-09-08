@@ -74,6 +74,7 @@ import type { AutomataRunRegistry } from '../../../faculties/automata/run-regist
 import type { AutomataSessionClassificationService } from '../../../faculties/automata/session-classification.js';
 import type { AutomataBusWorkerAccess } from '../../../faculties/automata/bus/worker-access.js';
 import type { AutomataTerminalLifecyclePort } from '../../../faculties/automata/terminal-lifecycle.js';
+import type { AutomataClassLifecycleRuntime } from '../../../faculties/automata/bus/class-lifecycle.js';
 import { ShardFoldReviewController } from '../../../faculties/shards/fold-review.js';
 import {
   createShardExecutionPort,
@@ -484,6 +485,7 @@ export interface SubstrateAgentCompositionOptions {
   backgroundWorkDisabled?: boolean;
   backgroundWorkWelfare?: SubstrateAgentOptions['backgroundWorkWelfare'];
   backgroundWorkAutomataLifecycle?: SubstrateAgentOptions['backgroundWorkAutomataLifecycle'];
+  intentionHooksAutomataRunner?: SubstrateAgentOptions['intentionHooksAutomataRunner'];
   classifySessionAtCreation?: SubstrateAgentOptions['classifySessionAtCreation'];
 }
 
@@ -524,6 +526,9 @@ export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions)
       ...(options.backgroundWorkWelfare ? { backgroundWorkWelfare: options.backgroundWorkWelfare } : {}),
       ...(options.backgroundWorkAutomataLifecycle
         ? { backgroundWorkAutomataLifecycle: options.backgroundWorkAutomataLifecycle }
+        : {}),
+      ...(options.intentionHooksAutomataRunner
+        ? { intentionHooksAutomataRunner: options.intentionHooksAutomataRunner }
         : {}),
       ...(options.classifySessionAtCreation
         ? { classifySessionAtCreation: options.classifySessionAtCreation }
@@ -786,6 +791,8 @@ export interface ToolRuntimeOptions {
   automataSessionClassification?: Pick<AutomataSessionClassificationService, 'classifyAtCreation'>;
   automataBusWorkerAccess?: AutomataBusWorkerAccess | null;
   automataLifecyclePort?: AutomataTerminalLifecyclePort | null;
+  /** Governed Bus lifecycle for the long-horizon shard class. */
+  automataClassLifecycle?: AutomataClassLifecycleRuntime | null;
 }
 
 function requireExplicitShardParentIcpDelivery(
@@ -849,6 +856,7 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
     snapshotParentCapabilityGrant: options.snapshotParentCapabilityGrant,
     workloadRegistry: options.shardWorkloadRegistry ?? new ShardWorkloadRegistry(),
     activeTurnIntakeEnvelopesProvider: () => options.agentLoop.getActiveTurnIntakeEnvelopes(),
+    automataClassLifecycle: options.automataClassLifecycle,
   });
   const subagentFaculty = new SubagentFaculty({
     eventBus: options.eventBus,

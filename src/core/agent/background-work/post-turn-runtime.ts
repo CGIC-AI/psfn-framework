@@ -18,6 +18,7 @@ import {
 } from './supervisor.js';
 import {
   fingerprintBackgroundWorkTurnRecord,
+  type BackgroundWorkGovernedClassRunner,
   type BackgroundWorkPayload,
   type BackgroundWorkSourceRef,
 } from './types.js';
@@ -61,6 +62,12 @@ export interface PostTurnBackgroundRuntimeDependencies {
    * disabled (lane registration fails closed on the mismatch).
    */
   socialDesireFeltSignals?: SocialDesireFeltSignalWriter;
+  /**
+   * Governed Automata Bus lifecycle for the intention post-turn hooks class.
+   * Absent only where no durable Automata runtime is composed; the hooks then
+   * run Bus-blind rather than failing.
+   */
+  intentionHooksAutomataRunner?: BackgroundWorkGovernedClassRunner;
 }
 
 type AdmittedPostTurnBackgroundRuntimeDependencies = Omit<
@@ -119,6 +126,11 @@ async function requireCanonicalTurnRecord(
   }
   return record;
 }
+
+const INTENTION_HOOKS_TASK_LABEL = 'Intention post-turn hooks';
+const INTENTION_HOOKS_TASK_SUMMARY =
+  'Record behavioral intention signals from one canonical completed turn.';
+const INTENTION_HOOKS_BRIEFING_QUERY = 'intention post-turn behavioral hooks';
 
 function isDirectTurn(record: TurnRecord): boolean | undefined {
   if (record.auditPrivacy?.reason === 'direct_message') return true;
@@ -478,13 +490,39 @@ async function runPostTurnBackgroundWork(
       // pattern from this canonical message/response pair; it does not read a
       // session window. Keep it on the one-source fence unless that hook
       // contract changes.
-      await dependencies.runIntentionPostTurnHooks(
-        rehydrateIntentionContext(record, payload),
+      const runHooks = async (): Promise<string | undefined> => {
+        await dependencies.runIntentionPostTurnHooks(
+          rehydrateIntentionContext(record, payload),
+          {
+            propagateFailures: true,
+            assertOwned: input.effects.assertOwned,
+            runEffect: input.effects.run,
+          },
+        );
+        // Process line only: no hook output, message content, or contact
+        // identity reaches the Bus.
+        return `Intention post-turn hooks completed for turn ${record.turnId}`;
+      };
+      const automataRunner = dependencies.intentionHooksAutomataRunner;
+      if (!automataRunner) {
+        await runHooks();
+        return;
+      }
+      // The run id is derived from the canonical source request and the job's
+      // durable attempt, so a redelivered job or a restart within the same
+      // attempt re-enters its own run instead of duplicating a terminal event,
+      // while a genuine retry (which increments the attempt) opens a fresh run
+      // rather than colliding with the failed one.
+      await automataRunner.run(
         {
-          propagateFailures: true,
-          assertOwned: input.effects.assertOwned,
-          runEffect: input.effects.run,
+          runId: `intention-post-turn-hooks:${payload.source.requestId}:${job.attemptCount}`,
+          taskId: payload.source.logicalSessionId,
+          taskLabel: INTENTION_HOOKS_TASK_LABEL,
+          taskSummary: INTENTION_HOOKS_TASK_SUMMARY,
+          sessionIds: [...new Set([payload.source.logicalSessionId, payload.source.channelId])],
+          briefingQuery: INTENTION_HOOKS_BRIEFING_QUERY,
         },
+        runHooks,
       );
     },
   );

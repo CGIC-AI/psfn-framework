@@ -2,11 +2,13 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it, vi } from 'vitest';
 
@@ -20,6 +22,10 @@ import {
 } from '../../persistence/sessions/exact-session-purge-surfaces.js';
 import { sanitizeChannelId } from '../../persistence/sessions/store-file-contracts.js';
 import { loadAutomataPolicySeedDefaults } from '../../system/config/automata-policy-config.js';
+import {
+  AUTOMATA_CLASS_GOVERNED_ADAPTERS,
+  AUTOMATA_GOVERNED_LIFECYCLE_ENTRYPOINTS,
+} from './bus/class-adapters.js';
 import type { AutomataBusEvent } from './bus/contract.js';
 import type { PostgresAutomataBusRuntimeStore } from './bus/runtime-store.js';
 import {
@@ -45,6 +51,7 @@ import { InMemoryAutomataRetentionStore } from './retention-store.js';
 import { AutomataRunRegistry, InMemoryAutomataRunStore } from './run-registry.js';
 import { AUTOMATA_TERMINAL_HANDOFF_SOURCE } from './terminal-lifecycle.js';
 
+const SRC_DIR = dirname(fileURLToPath(import.meta.url));
 const COMPANION_ID = 'companion-a';
 const RUN_ID = 'run-retention';
 const AUTOMATA_SESSION_ID = 'session-automata';
@@ -103,6 +110,33 @@ function indexEntry(channelId: string, filename: string): ChannelIndexEntry {
     lastJournalType: 'message',
   };
 }
+
+describe('Automata governed-class coverage certification', () => {
+  const policy = loadAutomataPolicySeedDefaults();
+
+  it('gives every Bus-eligible production class exactly one governed runtime adapter', () => {
+    const adapted = AUTOMATA_CLASS_GOVERNED_ADAPTERS.map(entry => entry.automatonClass);
+    // Registration and executable coverage are one fact, not two: an eligible
+    // class with no adapter, or an adapter for an excluded class, fails here.
+    expect([...adapted].sort()).toEqual([...policy.bus.eligibleClasses].sort());
+    expect(new Set(adapted).size).toBe(adapted.length);
+    for (const excluded of policy.bus.excludedClasses) {
+      expect(adapted).not.toContain(excluded);
+    }
+  });
+
+  it('proves each registered adapter module actually opens the governed lifecycle', () => {
+    const repoRoot = join(SRC_DIR, '..', '..', '..');
+    for (const adapter of AUTOMATA_CLASS_GOVERNED_ADAPTERS) {
+      const source = readFileSync(join(repoRoot, adapter.adapterModule), 'utf8');
+      const opensLifecycle = AUTOMATA_GOVERNED_LIFECYCLE_ENTRYPOINTS.some(
+        entrypoint => source.includes(entrypoint),
+      );
+      expect({ class: adapter.automatonClass, opensLifecycle })
+        .toEqual({ class: adapter.automatonClass, opensLifecycle: true });
+    }
+  });
+});
 
 describe('Automata assembled certification', () => {
   it('purges eligible worker L0 while preserving promoted evidence and companion-owned L0', async () => {

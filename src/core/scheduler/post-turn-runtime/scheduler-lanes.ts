@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { DeterministicGateEvent } from '../../../shared/event-bus.js';
 import { inferSessionChannelType } from '../../session/session-id.js';
@@ -42,8 +44,24 @@ import type { Scheduler } from '../scheduler.js';
 import type { DailyRecurringCadence, RecurringCadenceTimezone } from '../types.js';
 import { FleetMaintenanceFenceLostError } from '../fleet-maintenance-coordinator.js';
 import { runWithFleetMaintenanceBaton } from '../fleet-maintenance-runner.js';
+import {
+  runGovernedAutomataClass,
+  type AutomataClassWorkResult,
+} from '../../../faculties/automata/bus/class-lifecycle.js';
+import type { ProductionAutomataClassId } from '../../../faculties/automata/registry-contract.js';
+import type {
+  PostTurnActionHandler,
+  PostTurnActionHandlerResult,
+} from '../../agent/post-turn-action-runtime.js';
 
 const log = createComponentLogger('PostTurnRuntime');
+const SLEEPTIME_CLASS: ProductionAutomataClassId = 'memory.sleeptime';
+const SLEEPTIME_TASK_LABEL = 'Sleeptime memory maintenance';
+const SLEEPTIME_TASK_SUMMARY =
+  'Run one bounded sleeptime consolidation pass over changed sessions.';
+const SLEEPTIME_BRIEFING_QUERY = 'sleeptime memory consolidation pass';
+
+type PostTurnActionHandlerAction = Parameters<PostTurnActionHandler>[0];
 const DAY_MS = 24 * 60 * 60_000;
 
 function wallClockSlot(
@@ -387,6 +405,35 @@ export function registerSchedulerOwnedPostTurnLanes(
     postTurnActions.registerHandler(
       SLEEPTIME_MEMORY_ACTION_KIND,
       async (action) => {
+        // The sleeptime stack is unchanged; only its durable run identity,
+        // bounded briefing, governed tool, and settlement move into the shared
+        // Bus lifecycle. Each scheduled attempt is its own bounded run, because
+        // a yielded or baton-blocked attempt is legitimately re-attempted later.
+        const governed = await runGovernedAutomataClass({
+          runtime: runtimeOptions.automataClassLifecycle,
+          spec: {
+            automatonClass: SLEEPTIME_CLASS,
+            runId: `sleeptime:${action.id}:${randomUUID()}`,
+            workerId: SLEEPTIME_MEMORY_ACTION_KIND,
+            taskId: action.dedupeKey,
+            taskLabel: SLEEPTIME_TASK_LABEL,
+            taskSummary: SLEEPTIME_TASK_SUMMARY,
+          },
+          briefingQuery: SLEEPTIME_BRIEFING_QUERY,
+          work: async () => await runSleeptimeAttempt(action),
+        });
+        if (governed.status === 'replayed') return undefined;
+        return governed.value;
+      },
+      {
+        executionMode: 'background',
+        runtimeClass: MAINTENANCE_REFLECTION_RUNTIME_CLASS,
+        coalescing: 'dedupe_key_with_durable_watermark',
+      },
+    );
+    async function runSleeptimeAttempt(
+      action: PostTurnActionHandlerAction,
+    ): Promise<AutomataClassWorkResult<PostTurnActionHandlerResult | undefined>> {
         const fleetMaintenance = runtimeOptions.fleetMaintenance;
         const batonRun = fleetMaintenance
           ? await runWithFleetMaintenanceBaton({
@@ -405,8 +452,15 @@ export function registerSchedulerOwnedPostTurnLanes(
           : null;
         if (batonRun?.outcome === 'waiting') {
           return {
-            rescheduleAt: batonRun.retryAtMs,
-            detail: 'Sleeptime is waiting for the fleet maintenance baton',
+            value: {
+              rescheduleAt: batonRun.retryAtMs,
+              detail: 'Sleeptime is waiting for the fleet maintenance baton',
+            },
+            // No summary: an attempt that never won the baton did no work, so
+            // it settles as a typed no-finding rather than a useful handoff.
+            lifecycleState: 'cancelled',
+            outcome: 'cancelled',
+            resultKind: 'none',
           };
         }
         const outcome = batonRun?.result ?? await sleeptimeAgent.execute(action);
@@ -423,20 +477,24 @@ export function registerSchedulerOwnedPostTurnLanes(
             ? fleetMaintenance.retryDelayMs
             : runtimeOptions.episodicProcessingRestWindow!.inactivityThresholdMinutes * 60_000;
           return {
-            rescheduleAt: Date.now() + delayMs,
-            detail: `Sleeptime yielded with ${outcome.remainingSessions} session(s) remaining`,
+            value: {
+              rescheduleAt: Date.now() + delayMs,
+              detail: `Sleeptime yielded with ${outcome.remainingSessions} session(s) remaining`,
+            },
+            outcome: 'budget_limited',
+            resultKind: 'partial',
+            summary: `Sleeptime yielded with ${outcome.remainingSessions} session(s) remaining`,
           };
         }
+        // Session counts only: no episode, memory, or transcript content
+        // reaches the Bus.
         return {
-          detail: `Sleeptime completed ${outcome.completedSessions} changed session(s)`,
+          value: {
+            detail: `Sleeptime completed ${outcome.completedSessions} changed session(s)`,
+          },
+          summary: `Sleeptime completed ${outcome.completedSessions} changed session(s)`,
         };
-      },
-      {
-        executionMode: 'background',
-        runtimeClass: MAINTENANCE_REFLECTION_RUNTIME_CLASS,
-        coalescing: 'dedupe_key_with_durable_watermark',
-      },
-    );
+    }
   } else {
     log.info('Sleeptime memory agent wiring skipped: missing post-turn dependencies', {
       hasPostTurnActions: Boolean(runtimeOptions.postTurnActions),

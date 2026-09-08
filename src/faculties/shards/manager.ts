@@ -90,6 +90,11 @@ import type { CompressionGuidelineEvolutionPort } from '../../core/session/compr
 import { createComponentLogger } from '../../shared/logger.js';
 import type { CompanionId } from '../../shared/routing/companion-id.js';
 import { CompanionVisibleOperationalError } from '../../core/tools/results.js';
+import {
+  runGovernedAutomataClass,
+  type AutomataClassLifecycleRuntime,
+} from '../automata/bus/class-lifecycle.js';
+import type { ProductionAutomataClassId } from '../automata/registry-contract.js';
 import { LiveShardDirectory } from './directory.js';
 import { createShardAgentRuntime } from './agent-runtime.js';
 import type { PolicyGovernedShardParentIcpDeliveryPort } from '../../shared/contracts/shard-parent-icp.js';
@@ -260,7 +265,13 @@ export interface ShardManagerDeps {
   workloadRegistry?: ShardWorkloadLifecyclePort;
   /** Exact async-local parent turn envelopes captured at shard launch. */
   activeTurnIntakeEnvelopesProvider?: () => readonly IntakeEnvelopeSnapshot[];
+  /** Governed Automata Bus lifecycle. Absent where no durable Automata runtime is composed. */
+  automataClassLifecycle?: AutomataClassLifecycleRuntime | null;
 }
+
+const SHARD_AUTOMATON_CLASS: ProductionAutomataClassId = 'shard.long_horizon';
+const SHARD_TASK_LABEL = 'Long-horizon shard';
+const SHARD_TASK_SUMMARY = 'Execute one long-horizon shard workload to a terminal outcome.';
 
 export class ShardManager implements ShardExecutionPort {
   private deps: ShardManagerDeps;
@@ -441,16 +452,69 @@ export class ShardManager implements ShardExecutionPort {
         capabilityGrant,
         chargePolicy,
       );
-    if (chargePolicy) {
-      return runWithChargeContext({
+    const charged = (): Promise<ShardResult> => (chargePolicy
+      ? runWithChargeContext({
         chargePolicy,
         eventBus: this.deps.eventBus,
         lane: 'shard',
         runId: shardId,
         correlation: getRequestContext(),
-      }, execute);
+      }, execute)
+      : execute());
+    return await this.runGovernedShard({
+      shardId,
+      channelId,
+      name: shardConfig.name,
+      execute: charged,
+    });
+  }
+
+  /**
+   * Open, brief, and settle one long-horizon shard run inside the governed
+   * Automata Bus lifecycle.
+   *
+   * Shard execution itself is untouched: the shard agent keeps its own prompt
+   * stack, tools, and turn budget, and this class stays single-pass on the Bus —
+   * its deterministic terminal handoff carries the run's accounting and its
+   * governed artifact references, never shard output or transcript text.
+   */
+  private async runGovernedShard(input: {
+    shardId: string;
+    channelId: string;
+    name: string;
+    execute: () => Promise<ShardResult>;
+  }): Promise<ShardResult> {
+    const governed = await runGovernedAutomataClass({
+      runtime: this.deps.automataClassLifecycle,
+      spec: {
+        automatonClass: SHARD_AUTOMATON_CLASS,
+        runId: input.shardId,
+        workerId: input.shardId,
+        taskId: input.shardId,
+        taskLabel: SHARD_TASK_LABEL,
+        taskSummary: SHARD_TASK_SUMMARY,
+        sessionIds: [input.channelId],
+      },
+      briefingQuery: input.name,
+      work: async () => {
+        const result = await input.execute();
+        // Counts only. The shard's own artifact-return batch already owns
+        // returned-artifact custody, so this handoff reports how many artifacts
+        // came back rather than asserting a second durable custody claim over
+        // references the automata artifact store never took custody of.
+        return {
+          value: result,
+          resultKind: result.outcome === 'completed' ? 'final' : 'partial',
+          summary: `Shard ${result.outcome}: turns=${result.turns} `
+            + `lifecycleState=${result.lifecycleState} health=${result.health} `
+            + `returnedArtifacts=${result.artifactReturn?.artifacts.length ?? 0}`,
+        };
+      },
+    });
+    if (governed.status === 'replayed') {
+      throw new Error(`Shard "${input.shardId}" re-entered an already terminal Automata run`);
     }
-    return execute();
+    return governed.value;
   }
 
   async delegateSatelliteSession(request: SatelliteDelegationRequest): Promise<ShardResult> {
@@ -550,15 +614,20 @@ export class ShardManager implements ShardExecutionPort {
       );
 
     try {
-      const result = chargePolicy
-        ? await runWithChargeContext({
-          chargePolicy,
-          eventBus: this.deps.eventBus,
-          lane: 'shard',
-          runId: shardId,
-          correlation: getRequestContext(),
-        }, execute)
-        : await execute();
+      const result = await this.runGovernedShard({
+        shardId,
+        channelId: request.message.channelId,
+        name: shardConfig.name,
+        execute: () => (chargePolicy
+          ? runWithChargeContext({
+            chargePolicy,
+            eventBus: this.deps.eventBus,
+            lane: 'shard',
+            runId: shardId,
+            correlation: getRequestContext(),
+          }, execute)
+          : execute()),
+      });
       this.auditTrail?.append('satellite.shard.delegate.end', {
         shardId,
         status: 'completed',

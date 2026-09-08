@@ -25,6 +25,9 @@ type BaseCompositionInput = Parameters<typeof composeGatewayIntakeScreening>[0];
 type QuarantineExpiredEvent = Parameters<
   NonNullable<BaseCompositionInput['onQuarantineExpired']>
 >[0];
+type QuarantineHeldEntry = Parameters<
+  NonNullable<BaseCompositionInput['onQuarantineHeld']>
+>[0];
 type FailClosedScreeningEvent = Parameters<
   NonNullable<BaseCompositionInput['onFailClosedScreening']>
 >[0];
@@ -73,7 +76,10 @@ export type GatewayIntakeScreeningRuntimeInput = Omit<
   multiCompanion: boolean;
   /** Required, exact fleet topology when multiCompanion is true. */
   companions?: readonly GatewayFleetScreeningCompanion[];
-  onQuarantineHeld?: (companionId?: CompanionId) => void;
+  onQuarantineHeld?: (
+    companionId: CompanionId | undefined,
+    entry: QuarantineHeldEntry,
+  ) => void;
   onQuarantineExpired?: (
     companionId: CompanionId | undefined,
     event: QuarantineExpiredEvent,
@@ -216,7 +222,7 @@ export async function composeGatewayIntakeScreeningRuntime(
       companionDataDir: ownedCompanionDataDir,
       ...(receipts ? { receipts } : {}),
       ...(onQuarantineHeld
-        ? { onQuarantineHeld: () => onQuarantineHeld(companionId) }
+        ? { onQuarantineHeld: entry => onQuarantineHeld(companionId, entry) }
         : {}),
       ...(onQuarantineExpired
         ? { onQuarantineExpired: event => onQuarantineExpired(companionId, event) }

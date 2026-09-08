@@ -150,6 +150,10 @@ import {
 } from '../../core/identity/companion-runtime.js';
 import type { NotificationPort } from '../../core/tools/ntfy.js';
 import { createPostEscalationIncidentRecorder } from '../../core/cogsec/intake/post-escalation-incidents.js';
+import {
+  createQuarantineHoldEscalationObserver,
+} from '../../core/cogsec/intake/quarantine-escalation-producer.js';
+import type { IntakeQuarantineEntry } from '../../core/cogsec/intake/quarantine-store.js';
 import type { IntakeCogSecFindingEvent } from '../../core/cogsec/intake/screening.js';
 import {
   awaitOptionalPostgresStoreReadiness,
@@ -338,6 +342,10 @@ async function main(): Promise<void> {
     })
     : null;
 
+  // wtw7l: raises a CogSec quarantine hold onto the escalation plane. Late-bound
+  // because the plane is opened below, after this core exists; a hold made
+  // before then behaves exactly as it always has.
+  let quarantineHoldEscalation: ((entry: IntakeQuarantineEntry) => void) | null = null;
   const privilegedCore = await buildGatewayPrivilegedCore({
     config,
     env,
@@ -345,6 +353,7 @@ async function main(): Promise<void> {
     startupHydration,
     logger: log,
     onEligibilityDecision: emitEligibilityDecision,
+    resolveQuarantineHoldEscalation: () => quarantineHoldEscalation,
     ...(resolveFleetChargePolicy
       ? { icpConversationChargePolicyResolver: resolveFleetChargePolicy }
       : {}),
@@ -442,6 +451,25 @@ async function main(): Promise<void> {
     sinks: [createOperatorAlertEscalationSink({
       resolveDispatcher: () => gatewayIncidentAlertSink,
     })],
+  });
+  // The quarantine producer becomes live the moment the plane does. Routed
+  // `garden_only` by owner-file default, so adopting the plane pages nobody and
+  // the durable row IS the notice — which is exactly the current behaviour of a
+  // queue that waits to be looked at.
+  quarantineHoldEscalation = createQuarantineHoldEscalationObserver({
+    plane: humanEscalationControlPlane,
+    ...(config.companionId ? { companionId: config.companionId } : {}),
+    // Rendered here, never in the producer. Unused while this kind routes
+    // `garden_only`; an operator who reroutes it gets the envelope id and the
+    // page that owns its detail, never the withheld content.
+    renderNotice: entry => ({
+      sender: {
+        kind: 'system' as const,
+        provenance: 'system.cogsec.quarantine_escalation',
+      },
+      title: 'Quarantined item awaiting an operator',
+      message: `Garden: /cognitive-security, item ${entry.id}`,
+    }),
   });
   const detachIncidentAlerts = subscribeIncidentAlerts({
     eventBus,

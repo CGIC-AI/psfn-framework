@@ -154,8 +154,13 @@ export async function composeGatewayIntakeScreening(input: {
   screenerBackend?: ScreenerBackend | null;
   /** Test seam for the L2/L3/vision screener transports; production uses global fetch. */
   screenerTestCompletion?: ScreenerTestCompletion;
-  /** Called after a quarantine hold has been atomically persisted. */
-  onQuarantineHeld?: () => void;
+  /**
+   * Called after a quarantine hold has been atomically persisted, with the
+   * entry it persisted (bead psfn-framework-wtw7l — the entry is what lets a
+   * caller raise the hold onto the human escalation control plane; before this
+   * it was a bare "something changed" ping for the Garden queue).
+   */
+  onQuarantineHeld?: IntakeQuarantineStoreOptions['onHeld'];
   /** Called for lazy held-item TTL expiry; content is never included. */
   onQuarantineExpired?: IntakeQuarantineStoreOptions['onExpired'];
   /** Called for structural fail-closed screening telemetry. */
@@ -221,29 +226,14 @@ export async function composeGatewayIntakeScreening(input: {
       itemTtlHours: policy.quarantine.itemTtlHours,
       maxHeldItems: policy.quarantine.maxHeldItems,
       ...(input.onQuarantineExpired ? { onExpired: input.onQuarantineExpired } : {}),
+      // Taken on the store's own lifecycle hook rather than a wrapper around
+      // `hold` (bead psfn-framework-wtw7l): the store fires it after the write
+      // lock has persisted the entry, so an observer can never see a hold the
+      // disk does not have, and can never fail one either.
+      ...(input.onQuarantineHeld ? { onHeld: input.onQuarantineHeld } : {}),
     },
   );
-  const quarantine: IntakeQuarantineStore = input.onQuarantineHeld
-    ? {
-        hold: (holdInput) => {
-          const held = durableQuarantine.hold(holdInput);
-          input.onQuarantineHeld?.();
-          return held;
-        },
-        list: () => durableQuarantine.list(),
-        getById: (id) => durableQuarantine.getById(id),
-        applyDecision: (decision) => durableQuarantine.applyDecision(decision),
-        recordRedelivery: (redelivery) => durableQuarantine.recordRedelivery(redelivery),
-        findByArtifactPath: (path) => durableQuarantine.findByArtifactPath(path),
-        findByArtifactPaths: (paths) => durableQuarantine.findByArtifactPaths(paths),
-        recordAccessAttempt: (attempt) => durableQuarantine.recordAccessAttempt(attempt),
-        recordAccessAttempts: (attempts) => durableQuarantine.recordAccessAttempts(attempts),
-        checkArtifactAccesses: (batch) => durableQuarantine.checkArtifactAccesses(batch),
-        readRevisionToken: () => durableQuarantine.readRevisionToken(),
-        listActiveArtifactPaths: () => durableQuarantine.listActiveArtifactPaths(),
-        listActiveArtifactIdentities: () => durableQuarantine.listActiveArtifactIdentities(),
-      }
-    : durableQuarantine;
+  const quarantine: IntakeQuarantineStore = durableQuarantine;
 
   let classifier: InjectionClassifier | null = null;
   const injectionClassifierDegraded = false;

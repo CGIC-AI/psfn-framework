@@ -53,7 +53,7 @@ const HEALTH_EVENT_PROCESSES = [
   'operator',
 ] as const;
 
-type HealthEventProcess = typeof HEALTH_EVENT_PROCESSES[number];
+export type HealthEventProcess = typeof HEALTH_EVENT_PROCESSES[number];
 
 function isHealthEventProcess(value: unknown): value is HealthEventProcess {
   return typeof value === 'string'
@@ -261,7 +261,7 @@ export type HealthEventEvidence = Partial<Record<HealthEventEvidenceKey, number 
  * process failing once". `subjectHash` is the opaque per-subject grouping key
  * described in the module header.
  */
-interface HealthEventProvenance {
+export interface HealthEventProvenance {
   process: HealthEventProcess;
   component: HealthEventComponent;
   observerId: string;

@@ -324,6 +324,7 @@ export function hydrateCanonicalStartupConfig(
       postgresPressure: { ...persistedScheduler.healthDetectors.postgresPressure },
       backgroundFailures: { ...persistedScheduler.healthDetectors.backgroundFailures },
       stuckJobs: { ...persistedScheduler.healthDetectors.stuckJobs },
+      incidentAlerts: { ...persistedScheduler.healthDetectors.incidentAlerts },
     },
     backgroundWork: {
       supervisor: { ...persistedScheduler.backgroundWork.supervisor },

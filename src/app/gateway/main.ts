@@ -9,6 +9,14 @@ import { dirname } from 'node:path';
 import { loadConfig } from '../../system/config/load-config.js';
 import { createGatewayHealthEventStore } from '../../persistence/postgres/health-event-store.js';
 import { subscribeHealthEventStream } from '../../shared/observability/health-event-stream.js';
+import {
+  createIncidentInvestigator,
+} from '../../shared/observability/incident-alerts/investigator.js';
+import {
+  createIncidentAlertDelivery,
+  subscribeIncidentAlerts,
+  type OperatorIncidentAlertSink,
+} from '../../boundary/gateway/incident-alert-delivery.js';
 import { emitHealthEvent, processObserverId } from '../../shared/contracts/health-event.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import {
@@ -341,6 +349,26 @@ async function main(): Promise<void> {
   const detachHealthEventStream = subscribeHealthEventStream({
     eventBus,
     store: healthEventStore,
+  });
+  // One deduplicated operator alert per incident correlation id, delivered
+  // through this gateway's existing alert dispatcher. Subscribed here beside
+  // the stream sink, and for the same reason: the first incident this process
+  // can emit — `operator_alert_sinks_unconfigured` — is emitted during startup
+  // below, well before the RPC server that owns the dispatcher exists. The
+  // sink is therefore resolved per alert instead of captured now, and an
+  // incident raised before the server is up is reported through the paths that
+  // remain (an error log naming the incident id, and Garden).
+  let gatewayIncidentAlertSink: OperatorIncidentAlertSink | null = null;
+  const detachIncidentAlerts = subscribeIncidentAlerts({
+    eventBus,
+    delivery: createIncidentAlertDelivery({
+      investigator: createIncidentInvestigator({
+        readStream: query => healthEventStore.listRecent(query),
+        config: () => startupHydration.schedulerConfig.healthDetectors,
+      }),
+      resolveSink: () => gatewayIncidentAlertSink,
+      policy: () => startupHydration.schedulerConfig.healthDetectors.incidentAlerts,
+    }),
   });
   if (companionDatabaseTopology && companionDatabaseTopology.companions.length > 1) {
     const primary = companionDatabaseTopology.companions[0];
@@ -847,6 +875,8 @@ async function main(): Promise<void> {
   requestIcpPolicyAgent = async (companionId, method, params) => (
     await gateway.requestCompanionAgent(companionId, method, params)
   );
+  // The incident alert path becomes deliverable the moment the dispatcher does.
+  gatewayIncidentAlertSink = { dispatch: params => gateway.notifyOperator(params) };
   const gatewayOperatorNotifier: NotificationPort = {
     notify: async (params) => {
       const result = await gateway.notifyOperator(params);
@@ -1102,6 +1132,7 @@ async function main(): Promise<void> {
         { step: 'close fleet auth persistence', action: async () => { await fleetAuthPersistence?.close(); } },
         { step: 'stop channel adapters', action: () => stopGatewayChannelSurfaces(channelSurfaces) },
         { step: 'dispose intake screening', action: () => privilegedCore.intakeScreening.dispose() },
+        { step: 'stop runtime incident alerts', action: () => detachIncidentAlerts() },
         { step: 'stop runtime health stream', action: () => detachHealthEventStream() },
         { step: 'close runtime health stream', action: async () => { await healthEventStore.close(); } },
         { step: 'close PostgreSQL pool owner', action: () => postgresPoolOwner.close() },

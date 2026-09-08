@@ -36,6 +36,12 @@
     "stuckJobs": {
       "automataRunBudgetMs": 3600000,
       "schedulerTaskBudgetMs": 1800000
+    },
+    "incidentAlerts": {
+      "realertCooldownMs": 3600000,
+      "closeNotice": true,
+      "bundleEventLimit": 50,
+      "ledgerCapacity": 256
     }
   },
   "backgroundWork": {

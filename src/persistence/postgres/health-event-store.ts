@@ -8,9 +8,10 @@ import {
 import { POSTGRES_HEALTH_EVENT_MIGRATIONS } from './migrations.js';
 import { requireSafeInteger as safeInteger } from './row-guards.js';
 import { validateHealthEvent, type HealthEvent } from '../../shared/contracts/health-event.js';
-import type {
-  HealthEventQuery,
-  HealthEventStorePort,
+import {
+  MAX_HEALTH_EVENT_LIST_LIMIT,
+  type HealthEventQuery,
+  type HealthEventStorePort,
 } from '../../shared/observability/health-event-stream.js';
 
 /**
@@ -29,7 +30,6 @@ import type {
  * operator-facing timeline is the Garden incident-timeline bead.
  */
 
-const MAX_HEALTH_EVENT_LIST_LIMIT = 1_000;
 const DEFAULT_HEALTH_EVENT_LIST_LIMIT = 200;
 
 interface HealthEventRow extends QueryResultRow {

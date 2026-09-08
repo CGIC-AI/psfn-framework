@@ -202,6 +202,32 @@ export const PRODUCTION_AUTOMATA_CLASSES = [
     failureClass: 'isolated',
     retentionClass: 'standard',
   },
+  {
+    // Cross-silo biography candidate synthesis (o61vb.12/.16). Serialized: one
+    // companion at a time holds the fleet maintenance baton for it, and a
+    // preempted pass is legitimately retried rather than being terminal.
+    id: 'memory.biography_synthesis',
+    workerKind: 'scheduler',
+    trigger: 'scheduler:biography-synthesis',
+    promptPolicy: INHERITANCE_MODES.system,
+    chargeClass: 'maintenance',
+    concurrencyClass: EXECUTION_MODES.serialized,
+    failureClass: 'retry',
+    retentionClass: 'standard',
+  },
+  {
+    // The companion's own protected review of biography proposals about itself
+    // (o61vb.13/.16). It speaks under companion identity, so it inherits the
+    // identity task prompt rather than a system-owned one.
+    id: 'memory.biography_review',
+    workerKind: 'scheduler',
+    trigger: 'scheduler:biography-companion-review',
+    promptPolicy: INHERITANCE_MODES.task,
+    chargeClass: 'maintenance',
+    concurrencyClass: EXECUTION_MODES.serialized,
+    failureClass: 'retry',
+    retentionClass: 'standard',
+  },
 ] as const satisfies readonly AutomataClassDescriptor[];
 
 export type ProductionAutomataClassId = typeof PRODUCTION_AUTOMATA_CLASSES[number]['id'];

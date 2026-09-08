@@ -55,6 +55,11 @@ import {
   computeSourceSetDigest,
 } from './kernel.js';
 import type {
+  BiographyStage,
+  BiographyStageCursor,
+  BiographyStageCursorWriteInput,
+} from './stage-cursor.js';
+import type {
   BiographicalRebuildEnqueueInput,
   BiographicalRebuildEnqueueResult,
   BiographicalRebuildListOptions,
@@ -755,6 +760,12 @@ export interface BiographicalProfileStorePort {
     completion: NonNullable<BiographicalRebuildRequest['completion']>,
     now: Date,
   ): Promise<BiographicalRebuildRequest>;
+  /**
+   * Durable background-stage cursor (o61vb.16). `undefined` means this stage
+   * has never processed that key, so the next pass is the first one.
+   */
+  getStageCursor(stage: BiographyStage, cursorKey: string): Promise<BiographyStageCursor | undefined>;
+  writeStageCursor(input: BiographyStageCursorWriteInput): Promise<BiographyStageCursor>;
   recordReviewAudit(input: BiographicalReviewAuditInput): Promise<BiographicalReviewAuditRecord>;
   listReviewAudits(claimId: string, limit: number): Promise<BiographicalReviewAuditRecord[]>;
   /** Serializes one subject+kind admission and rolls every write back on error. */

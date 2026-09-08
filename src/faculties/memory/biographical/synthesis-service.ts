@@ -29,6 +29,7 @@ import type { PromptRegistryStatePort } from '../../../core/identity/prompt-stat
 import { injectPromptRuntimeTokens } from '../../../core/identity/prompt-runtime.js';
 import { buildLLMWorkSpec, completeWithWorkSpec } from '../../../primitives/llm/work-spec.js';
 import { createComponentLogger } from '../../../shared/logger.js';
+import { computeStageInputDigest } from './stage-cursor.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import type { BiographicalCandidatePolicy } from '../../../system/config/biographical-candidate-policy.js';
 import type { BiographicalDepthPolicy } from '../../../system/config/biographical-depth-policy.js';
@@ -81,8 +82,28 @@ export interface BiographySynthesisTargetPort {
 }
 
 /** Content-free run telemetry. No subject id, claim value, or source body. */
+/**
+ * How a resumable background stage finished (o61vb.16). `complete` means the
+ * stage drained its work and may release the fleet baton; `yield` means it
+ * stopped at a safe boundary with work left and must be resumed.
+ */
+export type BiographyStageOutcome = 'complete' | 'yield';
+
+/**
+ * Safe-boundary hook. A stage calls this between whole targets — never mid
+ * write — and stops when it is told to yield, so foreground work preempts
+ * without losing durable progress.
+ */
+export interface BiographyStageControl {
+  onSafeBoundary?: () => Promise<'continue' | 'yield'>;
+}
+
 export interface BiographySynthesisTelemetry {
   readonly automataRunId: string;
+  readonly outcome: BiographyStageOutcome;
+  /** Targets skipped because their admitted evidence has not changed. */
+  readonly targetsUnchanged: number;
+  readonly targetsRemaining: number;
   readonly targetsScanned: number;
   readonly targetsSynthesized: number;
   readonly sourcesScanned: number;
@@ -164,6 +185,17 @@ function unionSources(
   return byIdentity.size > limit ? undefined : [...byIdentity.values()];
 }
 
+/**
+ * Durable cursor key for one canonical biography subject. Canonical identity
+ * only: a cursor must survive restart and mean the same thing to whichever
+ * companion holds the fleet baton next.
+ */
+export function stageCursorKeyForSubject(subject: BiographicalSubjectRef): string {
+  return subject.kind === 'companion'
+    ? `companion:${subject.companionId}`
+    : `contact:${subject.contactId}`;
+}
+
 export class BiographySynthesisService {
   constructor(private readonly options: BiographySynthesisServiceOptions) {}
 
@@ -176,7 +208,7 @@ export class BiographySynthesisService {
    * counted and skipped so one unreadable silo cannot stop the pass, but the
    * failure is never swallowed silently.
    */
-  async run(): Promise<BiographySynthesisTelemetry> {
+  async run(control: BiographyStageControl = {}): Promise<BiographySynthesisTelemetry> {
     const policy = this.options.candidatePolicy();
     const automataRunId = this.options.newRunId?.() ?? `biography-synthesis:${crypto.randomUUID()}`;
     const targets = await this.options.targets.listTargets(
@@ -193,12 +225,24 @@ export class BiographySynthesisService {
     let candidatesWithheld = 0;
     let candidatesDuplicate = 0;
     let targetsFailed = 0;
+    let targetsUnchanged = 0;
     let runBudget = policy.budgets.maxCandidatesPerAutomataRun;
+    let outcomeState: BiographyStageOutcome = 'complete';
+    let processed = 0;
 
     for (const target of targets) {
       if (runBudget <= 0) break;
+      // Safe boundary: between whole targets, never mid write. A yield here
+      // leaves every durable cursor exactly where the last finished target put
+      // it, so the next pass resumes rather than repeats.
+      if (processed > 0 && await control.onSafeBoundary?.() === 'yield') {
+        outcomeState = 'yield';
+        break;
+      }
+      processed += 1;
       try {
         const outcome = await this.synthesizeTarget({ target, policy, automataRunId, runBudget });
+        if (outcome.unchanged) targetsUnchanged += 1;
         sourcesScanned += outcome.sourcesScanned;
         sourcesAdmitted += outcome.sourcesAdmitted;
         sourcesWithheld += outcome.sourcesWithheldByPolicy;
@@ -223,6 +267,9 @@ export class BiographySynthesisService {
 
     const telemetry: BiographySynthesisTelemetry = {
       automataRunId,
+      outcome: outcomeState,
+      targetsUnchanged,
+      targetsRemaining: Math.max(0, targets.length - processed),
       targetsScanned: targets.length,
       targetsSynthesized,
       sourcesScanned,
@@ -247,6 +294,8 @@ export class BiographySynthesisService {
     readonly runBudget: number;
   }): Promise<{
     synthesized: boolean;
+    /** The admitted evidence digest matched the durable cursor: no model call. */
+    unchanged: boolean;
     sourcesScanned: number;
     sourcesAdmitted: number;
     sourcesWithheldByPolicy: number;
@@ -274,6 +323,7 @@ export class BiographySynthesisService {
       .reduce((total, count) => total + count, 0);
     const empty = {
       synthesized: false,
+      unchanged: false,
       sourcesScanned: collection.scannedCount,
       sourcesAdmitted: collection.evidence.length,
       sourcesWithheldByPolicy: withheldByPolicy,
@@ -288,6 +338,24 @@ export class BiographySynthesisService {
 
     const candidateLimit = Math.min(depth.candidateLimitPerRefresh, input.runBudget);
     if (candidateLimit <= 0) return empty;
+
+    // Durable no-change gate (o61vb.16). The digest covers exactly the admitted
+    // source snapshots this target would have reasoned over, so an unchanged
+    // silo costs one cursor read and zero model calls. It is checked after the
+    // policy filter on purpose: a source becoming inadmissible changes the
+    // digest and correctly re-opens the target.
+    const cursorKey = stageCursorKeyForSubject(target.subject);
+    const evidenceDigest = computeStageInputDigest(collection.evidence.map(
+      entry => `${entry.source.ref}@${entry.source.revision}@${entry.source.evidenceDigest}`,
+    ));
+    const cursor = await this.options.profileStore.getStageCursor(
+      'biography_synthesis',
+      cursorKey,
+    );
+    if (cursor?.observedDigest === evidenceDigest) {
+      return { ...empty, unchanged: true };
+    }
+
     const admittedKinds = admittedKindsForSubject(target.subject);
     const now = this.now();
     const response = await this.synthesize({ target, collection, candidateLimit, admittedKinds });
@@ -322,8 +390,17 @@ export class BiographySynthesisService {
       }
       if (disposition === 'duplicate') duplicate += 1;
     }
+    // The cursor advances only after the whole target's candidates are durably
+    // staged, so a crash mid-target re-runs it rather than silently skipping it.
+    await this.options.profileStore.writeStageCursor({
+      stage: 'biography_synthesis',
+      cursorKey,
+      observedDigest: evidenceDigest,
+      now,
+    });
     return {
       synthesized: true,
+      unchanged: false,
       sourcesScanned: collection.scannedCount,
       sourcesAdmitted: collection.evidence.length,
       sourcesWithheldByPolicy: withheldByPolicy,

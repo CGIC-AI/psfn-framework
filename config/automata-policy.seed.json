@@ -12,6 +12,8 @@
       "scheduler.reflection",
       "scheduler.free_time",
       "scheduler.automata_bus_reviewer",
+      "memory.biography_synthesis",
+      "memory.biography_review",
       "post_turn.subagent_spawn"
     ],
     "excludedClasses": [

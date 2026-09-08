@@ -87,4 +87,14 @@ export const PRODUCTION_AUTOMATA_SPAWN_PATHS = [
     classId: 'scheduler.automata_bus_reviewer',
     sourcePath: 'src/app/agent/scheduler-runtime.ts',
   },
+  {
+    id: 'biography-candidate-synthesis',
+    classId: 'memory.biography_synthesis',
+    sourcePath: 'src/app/agent/scheduler-runtime.ts',
+  },
+  {
+    id: 'biography-companion-review',
+    classId: 'memory.biography_review',
+    sourcePath: 'src/app/agent/scheduler-runtime.ts',
+  },
 ] as const satisfies readonly ProductionAutomataSpawnPath[];

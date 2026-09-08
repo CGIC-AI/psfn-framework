@@ -12,5 +12,8 @@
     "minRelevanceScore": 0.25,
     "minToolCalls": 3,
     "nudgeEveryNthTurn": 3
+  },
+  "eligibility": {
+    "maxTotalBinaryChecks": 4096
   }
 }

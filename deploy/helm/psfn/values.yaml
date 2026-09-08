@@ -813,6 +813,9 @@ satelliteHub:
     # needs a live spectator renderer attached to that world; when none is
     # serving, the turn degrades to text look notes with no error. Disabled by
     # default and additionally gated on the claim profile granting vision.
+    # Requires transport: poll — the origin is derived from worldUrl, which the
+    # MCPL door does not supply, so the pair is refused rather than rendered
+    # into config that would silently do nothing.
     snapshot:
       enabled: false
       # Empty means "derive from worldUrl" (scheme swapped, /ws and query

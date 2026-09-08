@@ -52,6 +52,7 @@ export class AdminSkillsDataService implements AdminSkillsApi {
     name: string;
     content: string;
     description?: string;
+    expectedVersion: number;
   }): AdminManagedSkillRecord {
     return this.runtime.updateSkill(input);
   }

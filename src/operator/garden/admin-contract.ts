@@ -161,7 +161,13 @@ export interface AdminSkillsApi {
   getSnapshot(): SkillSnapshot | Promise<SkillSnapshot>;
   listManaged(): Promise<{ managed: AdminManagedSkillRecord[]; skipped: SkillSkipRecord[] }>;
   createSkill(input: { name: string; category: string; content: string; description?: string }): AdminManagedSkillRecord;
-  updateSkill(input: { name: string; content: string; description?: string }): AdminManagedSkillRecord;
+  /**
+   * Operator skill save. `expectedVersion` is the version the operator's editor
+   * was opened against; the store compare-and-swaps against it so a stale
+   * Garden save fails closed instead of overwriting a concurrent agent
+   * revision (psfn-framework-2ug9l).
+   */
+  updateSkill(input: { name: string; content: string; description?: string; expectedVersion: number }): AdminManagedSkillRecord;
   deleteSkill(name: string): void;
   toggleSkill(name: string): boolean;
   getDisabledSkills(): string[];

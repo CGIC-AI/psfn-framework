@@ -190,8 +190,59 @@ function fixture(options: { guest?: boolean; audio?: boolean; audioOutput?: bool
     screenAudioTranscript,
     cancelAudioInteraction,
     audioOutputRelay,
+    attachment,
   };
 }
+
+describe('Companion UI Hub assertion renewal', () => {
+  it('replaces only assertion freshness and preserves the attached human and channel', async () => {
+    const f = fixture();
+    const tcp = new FakeSocket();
+    f.adapter.handleUpgrade(request(), tcp as unknown as Duplex, Buffer.alloc(0));
+    await vi.waitFor(() => expect(f.handleUpgrade).toHaveBeenCalled());
+    f.webSocket.emit('message', CONFIGURE, false);
+    await vi.waitFor(() => expect(f.webSocket.sent.length).toBe(1));
+    const renewed = {
+      ...f.attachment,
+      attachmentId: '77777777-7777-4777-8777-777777777777',
+      deviceActor: { ...f.attachment.deviceActor, principal: {
+        ...f.attachment.deviceActor.principal,
+        jti: 'jti-2',
+        expiresAt: new Date(Date.parse(f.attachment.deviceActor.principal.expiresAt) + 30_000).toISOString(),
+      } },
+    };
+    f.admit.mockResolvedValue({ attachment: renewed });
+    f.webSocket.emit('message', Buffer.from(JSON.stringify({
+      schemaVersion: 1, type: 'hub.session.renew', requestId: 'renew-1', assertion: 'fresh-signed-assertion',
+    })), false);
+    await vi.waitFor(() => expect(f.webSocket.sent).toContain(JSON.stringify({
+      schemaVersion: 1, type: 'hub.session.renewed', requestId: 'renew-1',
+    })));
+    expect(f.admit).toHaveBeenLastCalledWith(expect.objectContaining({ assertion: 'fresh-signed-assertion' }));
+    expect(f.execute).not.toHaveBeenCalled();
+    await f.adapter.stop();
+  });
+
+  it.each(['device', 'human', 'session', 'expiry'] as const)('denies renewal changing %s authority', async changed => {
+    const f = fixture();
+    f.adapter.handleUpgrade(request(), new FakeSocket() as unknown as Duplex, Buffer.alloc(0));
+    await vi.waitFor(() => expect(f.handleUpgrade).toHaveBeenCalled());
+    f.webSocket.emit('message', CONFIGURE, false);
+    await vi.waitFor(() => expect(f.webSocket.sent.length).toBe(1));
+    const renewed = structuredClone(f.attachment);
+    if (changed !== 'expiry') renewed.deviceActor.principal.expiresAt = new Date(Date.now() + 120_000).toISOString();
+    if (changed === 'device') renewed.deviceActor.principal.deviceId = 'another-device';
+    if (changed === 'session') renewed.deviceActor.principal.sessionId = 'another-session';
+    if (changed === 'human' && renewed.actor.kind === 'human') renewed.actor.principalId = 'another-human';
+    f.admit.mockResolvedValue({ attachment: renewed });
+    f.webSocket.emit('message', Buffer.from(JSON.stringify({
+      schemaVersion: 1, type: 'hub.session.renew', requestId: 'renew-1', assertion: 'fresh-signed-assertion',
+    })), false);
+    await vi.waitFor(() => expect(f.webSocket.closeArgs[0]).toBe(4403));
+    expect(f.webSocket.sent.join('')).not.toContain('hub.session.renewed');
+    await f.adapter.stop();
+  });
+});
 
 function audioOutputBinding(): CompanionUiAudioOutputBinding {
   return {

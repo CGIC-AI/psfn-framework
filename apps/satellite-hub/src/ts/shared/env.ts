@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import dotenv from "dotenv";
+import { loadCompanionBrowserConfig, type CompanionBrowserConfig } from "../hub/companion-browser-config.js";
 import {
   loadHubDeviceRegistryAuthority,
   type HubDeviceRegistryAuthority,
@@ -97,6 +98,7 @@ export interface HubControlConfig {
 }
 
 export interface HubConfig {
+  companionBrowser?: CompanionBrowserConfig | null;
   textOnlyMode: boolean;
   bindHost: string;
   port: number;
@@ -330,6 +332,7 @@ export function loadHubConfig(projectRoot: string): HubConfig {
 
   return {
     textOnlyMode,
+    companionBrowser: loadCompanionBrowserConfig(projectRoot),
     bindHost: process.env.REALTIME_VOICE_BIND_HOST || "0.0.0.0",
     port: Number.parseInt(process.env.REALTIME_VOICE_PORT || "8787", 10),
     deepgramApiKey: textOnlyMode ? optional("DEEPGRAM_API_KEY") ?? null : required("DEEPGRAM_API_KEY"),

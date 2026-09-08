@@ -14,7 +14,10 @@ function browserProjection(
     generation: state.generation,
     version: state.version,
     primaryPresent: state.current !== null,
-    currentDeviceIsPrimary: state.current?.attachmentId === attachment.attachmentId,
+    currentDeviceIsPrimary: state.current !== null
+      && state.current.deviceId === attachment.deviceActor.principal.deviceId
+      && state.current.enrollmentVersion === attachment.deviceActor.principal.enrollmentVersion
+      && state.current.hubSessionId === attachment.deviceActor.principal.sessionId,
     lastDecision: state.lastDecision ? Object.freeze({
       decision: state.lastDecision.decision,
       reason: state.lastDecision.reason,

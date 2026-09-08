@@ -51,6 +51,7 @@ export type FrameworkSatelliteCapability =
   | "avatar"
   | "avatar_expression"
   | "avatar_action"
+  | "touch"
   | "location"
   | "timezone"
   | "presence"
@@ -352,6 +353,7 @@ export function frameworkCapabilitiesForSatelliteCapabilities(
   if (output.has("action")) {
     mapped.add("avatar_action");
   }
+  if (control.has("touch")) mapped.add("touch");
   if (profile === "world-avatar" && control.has("presence")) {
     mapped.add("presence");
   }

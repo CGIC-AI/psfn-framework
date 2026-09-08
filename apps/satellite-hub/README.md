@@ -1,5 +1,9 @@
 # PSFN Satellite Hub
 
+The same-origin Companion PWA browser bridge is described in
+[Companion browser transport](docs/companion-browser.md), including explicit
+gateway/Hub wiring, enrollment, renewed assertions, PCM input, and spoken replies.
+
 Voice and embodiment hub for PSFN.
 
 This application is the middleware layer between endpoint hardware, embodiment clients,

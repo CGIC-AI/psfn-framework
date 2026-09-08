@@ -9506,6 +9506,18 @@
       "note": "Code-owned protocol boundary mirroring the fleet_auth.contact_bindings database CHECK constraint; it is not an operator-tunable policy."
     },
     {
+      "file": "src/persistence/postgres/health-event-store.ts",
+      "name": "DEFAULT_HEALTH_EVENT_LIST_LIMIT",
+      "value": "200",
+      "note": "Code-owned default read-page size for the health-stream query surface, mirroring DEFAULT_PARTNER_AFFECT_SHADOW_LIST_LIMIT; callers that care pass an explicit limit, so this is API shape rather than operator tuning."
+    },
+    {
+      "file": "src/persistence/postgres/health-event-store.ts",
+      "name": "MAX_HEALTH_EVENT_LIST_LIMIT",
+      "value": "1_000",
+      "note": "Code-owned read-page ceiling on the health-stream query surface, mirroring MAX_PARTNER_AFFECT_SHADOW_LIST_LIMIT; it is a resource guard on an untrusted caller-supplied limit, not operator tuning. The operator-owned bound on this subsystem is settings.json healthEventStreamMaxRows."
+    },
+    {
       "file": "src/persistence/postgres/icp-admin-projection-store.ts",
       "name": "MAX_ADMIN_ROWS",
       "value": "100"
@@ -10754,6 +10766,12 @@
       "note": "Immutable parser/wire/schema contract FILESYSTEM_READ_PAGE_CONTRACT.minBytes; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
     },
     {
+      "file": "src/shared/contracts/health-event.ts",
+      "name": "MAX_EVIDENCE_ENTRIES",
+      "value": "16",
+      "note": "Immutable wire-schema bound on the content-free health-event envelope; it caps an untrusted evidence map at the persistence boundary, so changing it changes the contract and requires a reviewed release rather than operator tuning. The operator-owned bound for this subsystem is settings.json healthEventStreamMaxRows."
+    },
+    {
       "file": "src/shared/contracts/icp-autonomy.ts",
       "name": "MAX_ICP_AVAILABILITY_LEASE_TTL_MS",
       "value": "24 * 60 * 60_000"
@@ -10974,6 +10992,13 @@
       "value": "{ sectionId: 'analysis-workbench', surface: 'advanced' }",
       "form": "object-member",
       "note": "Canonical owner-file/schema metadata SETTINGS_GARDEN_FIELD_EXPOSURE.fsReadMaxBytes; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
+    },
+    {
+      "file": "src/shared/contracts/settings-garden-contract.ts",
+      "name": "SETTINGS_GARDEN_FIELD_EXPOSURE.healthEventStreamMaxRows",
+      "value": "{ sectionId: 'sessions', surface: 'advanced' }",
+      "form": "object-member",
+      "note": "Canonical Garden exposure metadata for the settings.json-owned health-event stream row cap; this literal locates the owned field and is not a runtime override."
     },
     {
       "file": "src/shared/contracts/settings-garden-contract.ts",
@@ -13268,6 +13293,13 @@
       "value": "{ min: 256, max: 1_000_000 }",
       "form": "object-member",
       "note": "Canonical owner-file/schema metadata SETTINGS_VALIDATION.extractionMaxTokens; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
+    },
+    {
+      "file": "src/system/settings/form.ts",
+      "name": "SETTINGS_VALIDATION.healthEventStreamMaxRows",
+      "value": "{ min: 100, max: 1000000 }",
+      "form": "object-member",
+      "note": "Canonical validation bounds for the settings.json-owned health-event stream row cap; this metadata constrains Garden edits and is not runtime policy."
     },
     {
       "file": "src/system/settings/form.ts",

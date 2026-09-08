@@ -295,6 +295,12 @@ export interface SubstrateConfig {
    * diagnostics records an operator-visible escalation. Owned by settings.json.
    */
   backgroundFailureEscalationThreshold?: number;
+  /**
+   * Row cap on the bounded persisted runtime health-event stream. Owned by
+   * settings.json; the store fails closed at boot when it is absent, so the
+   * stream can never grow without an operator-declared bound.
+   */
+  healthEventStreamMaxRows?: number;
   sessionMirrorEnabled?: boolean;
   sessionMirrorMaxChars?: number;
   sessionMirrorActiveWindowMs?: number;

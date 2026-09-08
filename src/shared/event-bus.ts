@@ -50,6 +50,7 @@ import type { IcpConversationCostBreakerEvent } from './telemetry/model-usage.js
 import type { TurnPerformanceEvent } from './telemetry/turn-performance.js';
 import type { ToolCallOutcome } from './contracts/tool-call-outcome.js';
 import type { ContextCoherenceEvent } from './contracts/context-coherence.js';
+import type { HealthEvent } from './contracts/health-event.js';
 import type {
   IntakeInlineShadowFindingEvent,
   IntakePostEscalationEvent,
@@ -1554,6 +1555,15 @@ export interface EventMap {
     returnSurfaced: boolean;
     timestamp: number;
   };
+  // First-party causal health plane (bead psfn-framework-7qeo1.24.1). Every
+  // gateway/agent/scheduler operational observation is projected into the one
+  // content-free `HealthEvent` envelope before it reaches the bus, so
+  // detectors and the persisted health stream see a single shape they can
+  // correlate. The envelope itself carries NO free text: see
+  // contracts/health-event.ts. Correlation metadata rides beside it exactly as
+  // it does for every other event — in-process routing context only, dropped
+  // by the persisting sink.
+  'runtime.health.event': { event: HealthEvent } & EventCorrelationFields;
 }
 
 export type EventName = keyof EventMap;

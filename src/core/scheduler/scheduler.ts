@@ -14,6 +14,13 @@ import type {
   WeeklyRecurringCadence,
 } from './types.js';
 import { staggerFleetOrdinalWithinWindow } from './fleet-maintenance-coordinator.js';
+import {
+  emitHealthEvent,
+  hashHealthEventSubject,
+  processObserverId,
+  type HealthEventOwner,
+  type HealthEventProcess,
+} from '../../shared/contracts/health-event.js';
 import { DEFAULT_SCHEDULER_CONFIG } from './types.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import {
@@ -231,6 +238,20 @@ function isWallClockTaskDue(
   return now >= currentSlotStart && lastRun < currentSlotStart;
 }
 
+/**
+ * Identity a scheduler stamps on its health events (bead
+ * psfn-framework-7qeo1.24.1). The Scheduler class runs in more than one
+ * process and knows neither which one nor whose companion it serves, so the
+ * entrypoint that constructs it declares that here. Absent, the scheduler
+ * still runs and still emits `schedule.task.failed` — it simply contributes
+ * nothing to the health plane, which is the honest state for a scheduler no
+ * entrypoint has claimed.
+ */
+export interface SchedulerHealthEventSource {
+  owner: HealthEventOwner;
+  process: HealthEventProcess;
+}
+
 export interface SchedulerRuntimeOptions {
   eligibilityGate?: EligibilityGate;
   onEligibilityDecision?: (decision: EligibilityDecision) => void;
@@ -238,6 +259,7 @@ export interface SchedulerRuntimeOptions {
     state: ScheduledTaskAvailability,
     handler: () => void | Promise<void>,
   ) => Promise<void>;
+  healthEventSource?: SchedulerHealthEventSource;
 }
 
 export class Scheduler {
@@ -246,6 +268,7 @@ export class Scheduler {
   private eligibilityGate?: EligibilityGate;
   private onEligibilityDecision?: (decision: EligibilityDecision) => void;
   private runProtectedTask?: SchedulerRuntimeOptions['runProtectedTask'];
+  private healthEventSource?: SchedulerHealthEventSource;
   private tasks = new Map<string, RuntimeScheduledTask>();
   private tickTimer: ReturnType<typeof setTimeout> | null = null;
   /** Absolute epoch (ms) the currently armed wake will fire at, or null when disarmed. */
@@ -266,6 +289,7 @@ export class Scheduler {
     this.eligibilityGate = runtimeOptions.eligibilityGate;
     this.onEligibilityDecision = runtimeOptions.onEligibilityDecision;
     this.runProtectedTask = runtimeOptions.runProtectedTask;
+    this.healthEventSource = runtimeOptions.healthEventSource;
   }
 
   updateConfig(config: Partial<SchedulerConfig>): void {
@@ -646,6 +670,12 @@ export class Scheduler {
           error: errorText,
           timestamp: entry.lastFinishedAt,
         });
+        // Scheduler health emitter. `schedule.task.failed` carries the rendered
+        // error for the operator log; the health plane deliberately does not —
+        // the task is identified only by a stable digest of its id, so a
+        // detector can count repeats of the SAME task without the stream
+        // learning a task name or an error string.
+        await this.emitTaskFailureHealthEvent(id, entry.lastFinishedAt);
       }
 
       if (entry.type === 'one-shot') {
@@ -653,6 +683,32 @@ export class Scheduler {
       } else {
         entry.state = 'idle';
       }
+    }
+  }
+
+  /**
+   * Never lets a telemetry fault mask the task fault being reported: the health
+   * emit is awaited so tests are deterministic, but a failure inside it is
+   * logged rather than rethrown out of the tick's catch block.
+   */
+  private async emitTaskFailureHealthEvent(taskId: string, observedAtMs: number): Promise<void> {
+    const source = this.healthEventSource;
+    if (!source) return;
+    try {
+      await emitHealthEvent(this.eventBus, {
+        owner: source.owner,
+        severity: 'degraded',
+        code: 'scheduler_task_failed',
+        provenance: {
+          process: source.process,
+          component: 'scheduler',
+          observerId: processObserverId(),
+          subjectHash: hashHealthEventSubject(taskId),
+        },
+        observedAtMs,
+      });
+    } catch (error) {
+      log.error('Scheduler health event emission failed', { taskId, error: String(error) });
     }
   }
 

@@ -19,6 +19,7 @@ import type { GatewayClient } from '../../boundary/gateway/client.js';
 import { SalienceDecay } from '../../faculties/memory/decay.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
+import { resolveHealthEventOwner } from '../../shared/contracts/health-event.js';
 import {
   registerAmbientPresenceOperation,
 } from '../../core/scheduler/ambient-presence.js';
@@ -416,6 +417,13 @@ export function buildAgentSchedulerRuntime(
     },
     {
       eligibilityGate: options.eligibilityGate,
+      // Agent-process scheduler: task failures enter the health plane owned by
+      // the companion this agent serves (system-owned for a shard identity,
+      // which has no core tenancy of its own).
+      healthEventSource: {
+        owner: resolveHealthEventOwner(options.config.companionId),
+        process: 'agent',
+      },
       ...(options.companionAvailability
         ? {
             runProtectedTask: (state, handler) =>

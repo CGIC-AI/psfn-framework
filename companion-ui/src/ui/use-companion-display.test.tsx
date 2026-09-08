@@ -1,5 +1,6 @@
 import { act, renderHook } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { buildSpriteManifest } from '../lib/sprites/manifest.js';
 import { useCompanionDisplay } from './use-companion-display.js';
 
 describe('companion appearance ownership', () => {
@@ -39,5 +40,47 @@ describe('companion appearance ownership', () => {
     act(() => result.current.removeFile());
     expect(result.current.file).toBeNull();
     expect(result.current.mode).toBe('none');
+  });
+
+  it('retains each companion’s sprite pack until replacement, logout or unmount', () => {
+    const first = { manifest: buildSpriteManifest(), dispose: vi.fn() };
+    const second = { manifest: buildSpriteManifest(), dispose: vi.fn() };
+    const replacement = { manifest: buildSpriteManifest(), dispose: vi.fn() };
+    const { result, rerender, unmount } = renderHook(({ id }) => useCompanionDisplay(id), {
+      initialProps: { id: 'one' },
+    });
+    act(() => result.current.selectSpritePack(first));
+    act(() => result.current.selectFile(new File(['model'], 'one.glb')));
+    act(() => result.current.choose('sprite'));
+    expect(result.current.spritePack).toBe(first);
+    rerender({ id: 'two' });
+    expect(result.current.spritePack).toBeNull();
+    act(() => result.current.selectSpritePack(second));
+    rerender({ id: 'one' });
+    expect(result.current.spritePack).toBe(first);
+    act(() => result.current.selectSpritePack(replacement));
+    expect(first.dispose).toHaveBeenCalledTimes(1);
+    expect(second.dispose).not.toHaveBeenCalled();
+    act(() => result.current.clear());
+    expect(second.dispose).toHaveBeenCalledTimes(1);
+    expect(replacement.dispose).toHaveBeenCalledTimes(1);
+    act(() => result.current.selectSpritePack(first));
+    unmount();
+    expect(first.dispose).toHaveBeenCalledTimes(2);
+  });
+
+  it('disposes removed and unowned packs without affecting another companion', () => {
+    const pack = { manifest: buildSpriteManifest(), dispose: vi.fn() };
+    const initialProps: { id: string | null } = { id: 'one' };
+    const { result, rerender } = renderHook(({ id }) => useCompanionDisplay(id), { initialProps });
+    act(() => result.current.selectSpritePack(pack));
+    act(() => result.current.removeSpritePack());
+    expect(pack.dispose).toHaveBeenCalledTimes(1);
+    expect(result.current.mode).toBe('sprite');
+    expect(result.current.spritePack).toBeNull();
+    rerender({ id: null });
+    act(() => result.current.selectSpritePack(pack));
+    expect(pack.dispose).toHaveBeenCalledTimes(2);
+    expect(result.current.spritePack).toBeNull();
   });
 });

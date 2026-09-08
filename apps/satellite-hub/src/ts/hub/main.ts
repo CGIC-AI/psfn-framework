@@ -21,6 +21,7 @@ import {
   EidoverseSnapshotSource,
   claimGrantsEidoverseVision,
   loadEidoverseSnapshotConfig,
+  type EidoverseSnapshotOrigin,
 } from "./eidoverse-snapshot.js";
 import { createEidoverseProductionWakeLifecycle } from "./eidoverse-wake-runtime.js";
 import { RealtimeHubServer } from "./server.js";
@@ -62,12 +63,32 @@ async function main(): Promise<void> {
         logger: { warn: (message) => console.warn(message) },
       })
     : null;
-  // Snapshot derives its HTTP origin from the stdio transport's world URL, so
-  // it stays on that transport until an MCPL deployment states its renderer
-  // origin explicitly (psfn-framework-mdbgp.13's own follow-up, not this lane).
-  const eidoverseSnapshotConfig = eidoverseConfig
+  // Snapshot works on either transport. Each one names the URL its origin may
+  // be derived from — the stdio world URL, or the MCPL door URL — and a
+  // deployment whose renderer is not on that host states
+  // EIDOVERSE_SNAPSHOT_BASE_URL instead. Neither derivation can carry the
+  // identity token: the poll world URL's query is dropped, and the door URL is
+  // credential-free by construction because the token is attached at dial time.
+  const eidoverseSnapshotOrigin: EidoverseSnapshotOrigin | null = eidoverseConfig
+    ? {
+        transport: "poll",
+        worldName: eidoverseConfig.worldName,
+        agentName: eidoverseConfig.agentName,
+        worldUrl: eidoverseConfig.worldUrl,
+      }
+    : eidoverseMcplConfig
+      ? {
+          transport: "mcpl",
+          worldName: eidoverseMcplConfig.worldName,
+          agentName: eidoverseMcplConfig.agentName,
+          doorUrl: eidoverseMcplConfig.doorUrl,
+        }
+      : null;
+  // An enabled snapshot with an unusable origin throws here and the process
+  // never reaches listen: vision that was asked for is never a silent no-op.
+  const eidoverseSnapshotConfig = eidoverseSnapshotOrigin
     && claimGrantsEidoverseVision(config.psfn.satelliteClaim)
-    ? loadEidoverseSnapshotConfig(eidoverseConfig)
+    ? loadEidoverseSnapshotConfig(eidoverseSnapshotOrigin)
     : null;
   const eidoverseSnapshot = eidoverseSnapshotConfig
     ? new EidoverseSnapshotSource(eidoverseSnapshotConfig, {
@@ -85,6 +106,7 @@ async function main(): Promise<void> {
           say: eidoverseMcpl,
           travel: eidoverseMcpl,
           ...(eidoverseBody ? { body: eidoverseBody } : {}),
+          ...(eidoverseSnapshot ? { snapshot: eidoverseSnapshot } : {}),
         }
       : eidoverseConfig && eidoverse
         ? {

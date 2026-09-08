@@ -1052,7 +1052,10 @@ spec:
             {{- if .Values.satelliteHub.eidoverse.snapshot.enabled }}
             {{- /* loadEidoverseSnapshotConfig returns null unless
                  EIDOVERSE_SNAPSHOT_ENABLED is exactly "true", so the disabled
-                 default renders none of these keys. */}}
+                 default renders none of these keys. These are not gated on the
+                 transport: the hub derives the origin from whichever URL this
+                 transport reaches the world through, and an empty baseUrl the
+                 hub cannot derive from has already failed validation. */}}
             - name: EIDOVERSE_SNAPSHOT_ENABLED
               value: "true"
             {{- with .Values.satelliteHub.eidoverse.snapshot.baseUrl }}

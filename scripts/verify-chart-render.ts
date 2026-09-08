@@ -323,8 +323,8 @@ function main(): number {
       const env = extractContainerEnv(mcpl.stdout, `${RELEASE_NAME}-satellite-hub`, 'satellite-hub');
       const rendered = [...env.keys()].filter(name => name.startsWith('EIDOVERSE')).sort();
       // The body runner works on either transport, so its bounds render here
-      // too; the snapshot source derives its origin from the stdio world URL
-      // and stays on that transport.
+      // too. Snapshot is disabled in this case, so none of its keys appear;
+      // the mcpl-snapshot cases below cover it enabled.
       const expected = [
         'EIDOVERSE_BODY_MAX_PENDING_NOTES',
         'EIDOVERSE_BODY_WALK_TIMEOUT_MS',
@@ -392,6 +392,9 @@ function main(): number {
       'render fails closed: a door URL carrying its own query string',
     );
 
+    // ── Snapshot on the MCPL door ──
+    // The hub derives the renderer origin from doorUrl across the conventional
+    // /mcpl door path, so that case renders with no explicit origin at all.
     const mcplSnapshot = helmTemplate([write('mcpl-snapshot', deepMergeEidoverse({
       transport: 'mcpl',
       command: '',
@@ -406,8 +409,74 @@ function main(): number {
       snapshot: { enabled: true, baseUrl: '', timeoutMs: 4000, maxBytes: 4000000 },
     }))]);
     check(
-      mcplSnapshot.status !== 0,
-      'render fails closed: snapshot enabled on the MCPL transport it cannot reach',
+      mcplSnapshot.status === 0,
+      'render succeeds: snapshot on an MCPL door whose origin the hub can derive',
+      mcplSnapshot.stderr.trim(),
+    );
+    if (mcplSnapshot.status === 0) {
+      const env = extractContainerEnv(mcplSnapshot.stdout, `${RELEASE_NAME}-satellite-hub`, 'satellite-hub');
+      checkEnv(env, 'EIDOVERSE_SNAPSHOT_ENABLED', 'true');
+      checkEnv(env, 'EIDOVERSE_SNAPSHOT_TIMEOUT_MS', '4000');
+      checkEnv(env, 'EIDOVERSE_SNAPSHOT_MAX_BYTES', '4000000');
+      check(
+        !env.has('EIDOVERSE_SNAPSHOT_BASE_URL'),
+        'an empty snapshot baseUrl leaves the hub to derive it from the door URL',
+      );
+      checkEnv(env, 'EIDOVERSE_MCPL_DOOR_URL', 'wss://world.example.net/mcpl');
+    }
+
+    // A door at any other path is not evidence about where /snap answers, so
+    // the deployment must name the renderer origin itself.
+    const mcplGatewaySnapshot = helmTemplate([write('mcpl-gateway-snapshot', deepMergeEidoverse({
+      transport: 'mcpl',
+      command: '',
+      args: [],
+      worldUrl: '',
+      mcpl: {
+        doorUrl: 'wss://gateway.example.net/tenants/acme/socket',
+        featureSets: ['eidoverse.world'],
+        catchupWake: false,
+        handshakeTimeoutMs: 10000,
+      },
+      snapshot: {
+        enabled: true,
+        baseUrl: 'https://renderer.example.net/commons',
+        timeoutMs: 4000,
+        maxBytes: 4000000,
+      },
+    }))]);
+    check(
+      mcplGatewaySnapshot.status === 0,
+      'render succeeds: an explicit origin satisfies snapshot behind a path-routed door',
+      mcplGatewaySnapshot.stderr.trim(),
+    );
+    if (mcplGatewaySnapshot.status === 0) {
+      const env = extractContainerEnv(
+        mcplGatewaySnapshot.stdout,
+        `${RELEASE_NAME}-satellite-hub`,
+        'satellite-hub',
+      );
+      checkEnv(env, 'EIDOVERSE_SNAPSHOT_BASE_URL', 'https://renderer.example.net/commons');
+    }
+
+    const mcplUnderivableSnapshot = helmTemplate([write('mcpl-underivable-snapshot', deepMergeEidoverse({
+      transport: 'mcpl',
+      command: '',
+      args: [],
+      worldUrl: '',
+      mcpl: {
+        doorUrl: 'wss://gateway.example.net/tenants/acme/socket',
+        featureSets: ['eidoverse.world'],
+        catchupWake: false,
+        handshakeTimeoutMs: 10000,
+      },
+      snapshot: { enabled: true, baseUrl: '', timeoutMs: 4000, maxBytes: 4000000 },
+    }))]);
+    check(
+      mcplUnderivableSnapshot.status !== 0
+        && mcplUnderivableSnapshot.stderr.includes('satelliteHub.eidoverse.snapshot.baseUrl is required'),
+      'render fails closed: snapshot on an MCPL door whose origin cannot be derived',
+      mcplUnderivableSnapshot.stderr.trim(),
     );
 
     // ── Enabled without the place map ──

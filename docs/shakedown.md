@@ -335,36 +335,46 @@ through the gateway's OpenAI-compatible `/v1` edge. k3d+Helm stays the reference
 deployment shape; this Compose lane is the simpler single-node Unix-socket
 variant and is not production-hardened.
 
-From a clean checkout (Docker + Docker Compose only; no Kubernetes):
+From a clean checkout (Docker + Docker Compose only; no Kubernetes, and no
+provider account):
 
 ```bash
-# Full provider-backed turn (persisted assistant reply):
-export OPENROUTER_API_KEY=sk-or-...
 npm run smoke:docker
 ```
 
 `npm run smoke:docker` (`scripts/smoke-docker.mjs`) brings up
 `docker/docker-compose.smoke.yml` with `docker compose up -d --wait`, then:
 
-1. asserts every container is healthy (Postgres, gateway, agent);
+1. asserts every container is healthy (Postgres, provider-stub, gateway, agent,
+   satellite-hub, companion-ui);
 2. confirms the gateway↔agent RPC is connected and the plumbing subsystems
-   (`memory`, `embeddings`, `scheduler`) are healthy via the gateway `/health`
-   endpoint, and that Postgres migrations applied;
-3. POSTs one turn to `/v1/chat/completions` and asserts a persisted assistant
+   (`memory`, `embeddings`, `scheduler`, `llm`) are healthy via the gateway
+   `/health` endpoint, and that the runtime migrations applied;
+3. verifies the Satellite Hub and companion-ui surfaces;
+4. POSTs one turn to `/v1/chat/completions` and asserts a persisted assistant
    reply.
 
-Exit codes: `0` full turn with a persisted reply; `2` provider boundary reached
-(stack healthy, gateway↔agent RPC connected, request accepted, turn failed only
-at the external provider — expected when `OPENROUTER_API_KEY` is unset); `1`
-plumbing failure. By default the harness tears the stack down with
-`docker compose down -v` on exit; pass `--keep-up` to inspect, `--no-up` to run
-against an already-running stack.
+The stack is keyless by contract: it ships a deterministic OpenAI-compatible
+double (`provider-stub`) on its internal-only network plus its own
+`docker/smoke-fixtures/{providers,models}.json` owner files that route every
+model purpose at it, so the gateway boots with a real, gateway-resolved screener
+credential and the turn completes without any provider account. The double
+rejects a request that does not present that exact bearer, so a green run proves
+the gateway resolved and presented the credential. See
+[`operations.md`](./operations.md) for the full contract. A real
+provider-backed turn is `npm run compose:verify` against `docker/compose.yml`.
+
+Exit codes: `0` full turn with a persisted reply; `3` hub/companion-ui
+source-contract divergence; `1` failure. By default the harness tears the stack
+down with `docker compose down -v` on exit; pass `--keep-up` to inspect,
+`--no-up` to run against an already-running stack.
 
 Split-topology and seeding notes:
 
 - The gateway is the only service with external egress and the only holder of
-  secrets (provider key, session HMAC key, backup key). The agent runs on an
-  internal-only Docker network with no dotenv and no provider/egress secrets;
+  secrets (the provider-double bearer, session HMAC key, backup key). Its own
+  model traffic does not use that egress — the double is internal. The agent
+  runs on an internal-only Docker network with no dotenv and no secrets;
   it reaches the gateway over a shared Unix-socket volume and fails closed if it
   can reach the internet (mirrors the k8s agent NetworkPolicy).
 - `system-data` and `companion-data` are distinct named volumes, so the two
@@ -375,9 +385,10 @@ Split-topology and seeding notes:
   key). A one-shot `model-prefetch` service (Compose analogue of the Helm
   model-prefetch Job) downloads the in-process ML models into a shared cache
   while it still has egress, so the isolated agent can warm them offline.
-- Override the single provider slot and the dev-only fixed secrets/identity via
-  `OPENROUTER_API_KEY`, `PSFN_SMOKE_API_KEY`, `PSFN_SMOKE_COMPANION_ID`,
-  `PSFN_SMOKE_SESSION_HMAC_KEY`, `PSFN_SMOKE_BACKUP_KEY`, and `PSFN_SMOKE_API_PORT`.
+- Override the dev-only fixed secrets/identity via `PSFN_SMOKE_API_KEY`,
+  `PSFN_SMOKE_COMPANION_ID`, `PSFN_SMOKE_SESSION_HMAC_KEY`,
+  `PSFN_SMOKE_BACKUP_KEY`, `PSFN_SMOKE_PROVIDER_STUB_API_KEY`, and
+  `PSFN_SMOKE_API_PORT`. There is deliberately no real-provider slot.
 
 ### Support companions
 

@@ -491,7 +491,7 @@ describe('production social impulse outreach routing', () => {
     const assembled = harness(channelType => channelType === 'discord');
     const send = vi.fn(async () => undefined);
     assembled.handleMessage.mockImplementation(async (message) => fromAny({
-      content: message.id.startsWith('egress-reply-')
+      content: message.id.startsWith('egress-reply:')
         ? 'A naturally authored room message.'
         : '',
     }));
@@ -523,7 +523,7 @@ describe('production social impulse outreach routing', () => {
       'A naturally authored room message.',
     );
     const generated = assembled.handleMessage.mock.calls.find(
-      ([message]) => message.id.startsWith('egress-reply-'),
+      ([message]) => message.id.startsWith('egress-reply:'),
     )?.[0];
     expect(generated?.content).toContain('No participant message triggered this candidate');
     expect(generated?.content).not.toContain('A message below mentioned or addressed you');

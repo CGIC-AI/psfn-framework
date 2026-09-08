@@ -17,13 +17,18 @@ import {
 } from '../../core/cogsec/disclosure/custody-snapshot.js';
 import {
   egressContentSha256,
+  type CompletedTurnEgressCustodyCapture,
   type EgressDeliveryRecord,
   type TurnEgressCustodyProof,
 } from '../../core/cogsec/disclosure/egress-delivery-record.js';
 import { OutboundReplyDeduper } from '../../system/lifecycle/outbound-reply-dedupe.js';
 import type { CogSecMode } from '../../shared/contracts/cogsec-mode.js';
 import type { ChannelDisclosureContext } from '../../system/trust/policy.js';
-import type { AgentResponse, TurnID } from '../../shared/contracts/runtime.js';
+import type {
+  AgentResponse,
+  SubstrateMessage,
+  TurnID,
+} from '../../shared/contracts/runtime.js';
 
 const TURN_ID = '01936f2c-4a1b-7c3d-8e5f-0a1b2c3d4e5f';
 const COMPANION_A = '3f2a1c88-5d4e-4a7b-9c3d-1e2f3a4b5c6d';
@@ -40,7 +45,7 @@ const PROVEN: TurnEgressCustodyProof = {
   effectiveSensitivity: 'public',
 };
 
-function response(content: string, custody?: TurnEgressCustodyProof): AgentResponse {
+function response(content: string): AgentResponse {
   return {
     content,
     channelId: `internal:egress-reply:${ROOM_CHANNEL}`,
@@ -48,7 +53,6 @@ function response(content: string, custody?: TurnEgressCustodyProof): AgentRespo
       model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1,
       turnId: TURN_ID as TurnID,
       requestId: `egress-reply:${SOURCE_EVENT_ID}`,
-      ...(custody ? { egressCustody: custody } : {}),
     },
   } as AgentResponse;
 }
@@ -100,8 +104,19 @@ function makeSender(input: {
   guard?: OutboundReplyDeduper;
   send?: ReturnType<typeof vi.fn>;
 }) {
+  // The generator hands its custody proof over through the one-shot capture
+  // hook, exactly as SubstrateAgent does before it clears the turn's state.
   const generator = {
-    handleMessage: vi.fn(async () => response(input.reply, input.custody)),
+    handleMessage: vi.fn(async (
+      _message: SubstrateMessage,
+      _lifecycle?: undefined,
+      _control?: undefined,
+      _lineage?: undefined,
+      capture?: CompletedTurnEgressCustodyCapture,
+    ) => {
+      capture?.(input.custody ? { turnId: TURN_ID, proof: input.custody } : null);
+      return response(input.reply);
+    }),
   };
   const delivery = { send: input.send ?? vi.fn(async () => undefined) };
   const sender = createAgentLoopEgressReplySender({

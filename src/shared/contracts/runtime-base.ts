@@ -935,16 +935,6 @@ export interface ResponseMetadata {
   notificationAck?: NotificationAckMetadata;
   internalState?: InternalState;
   internalStateSnapshotRef?: string;
-  /**
-   * Content-free custody proof for this turn (psfn-framework-ccgdz.6): the
-   * durable custody-snapshot ref plus the lineage facts an egress hold reads.
-   * Handed to whatever delivers the response — the speaking arbiter's
-   * autonomous reply sender is the in-process consumer — so a delivery can be
-   * bound to the sources that authorized it, or held when it cannot be.
-   * Absent means the turn published no proof; that is never read as "no
-   * sources", only as "no chain to cite".
-   */
-  egressCustody?: import('../../core/cogsec/disclosure/egress-delivery-record.js').TurnEgressCustodyProof;
   metacognitiveFlags?: MetacognitiveFlag[];
   retrievalProvenanceRefs?: string[];
   /**

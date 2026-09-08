@@ -14,8 +14,8 @@ import type { CapturedSessionReads } from '../../../session/manager/captured-ses
 import type { TurnToolResultCustodyRecord } from '../turn-records.js';
 import type { DisclosureLineage } from '../../../cogsec/disclosure/contracts.js';
 import type {
+  CompletedTurnEgressCustody,
   EgressDeliveryRecorder,
-  TurnEgressCustodyProof,
 } from '../../../cogsec/disclosure/index.js';
 import type { ToolResultCustodyEdge } from '../../../../shared/contracts/tool-result-custody.js';
 import type { MetacognitiveFlag } from '../../../self-model/metacognition.js';
@@ -324,9 +324,7 @@ export interface TurnExecutionRuntime {
    * incomplete and key the send's delivery record to this turn. `null` clears
    * it (fail closed: no proof published means no proof claimed).
    */
-  setCurrentTurnEgressCustody: (
-    custody: { turnId: string; proof: TurnEgressCustodyProof } | null,
-  ) => void;
+  setCurrentTurnEgressCustody: (custody: CompletedTurnEgressCustody | null) => void;
   /** Durable egress delivery-record sink; null when no custody store is wired. */
   getEgressDeliveryRecorder: () => EgressDeliveryRecorder | null;
   buildRuntimeContext: (

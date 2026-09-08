@@ -314,6 +314,36 @@ describe('executeShellCommandWithPolicy', () => {
       expect(readFileSync(artifact, 'utf8')).toBe('MARKER-a6932606e2a7');
     });
 
+    it('reads an arbitrary byte range of a >100 KB document, the sanctioned fs fallback (owffl.8)', async () => {
+      // F8: the read tool capped a large document and the bash fallback was
+      // "unreachable in practice" — never actually demonstrated. The fs tool
+      // now pages (see filesystem/tools.test.ts), and the shell tool is the
+      // documented escape hatch for an arbitrary range. This proves the
+      // sandbox policy really permits that range read instead of assuming it.
+      const { workspace } = workspaceFixture();
+      const marker = 'MARKER-7f31c0a4d2b6';
+      const document = 'x'.repeat(180_000) + marker + 'y'.repeat(80_000);
+      writeFileSync(join(workspace, 'large.txt'), document);
+
+      const result = await executeShellCommandWithPolicy(
+        {
+          command: 'bash',
+          args: [
+            '-lc',
+            // Byte-addressed window from the middle of the document, plus the
+            // total size, so both "seek anywhere" and "see the whole file" are
+            // demonstrated rather than inferred.
+            `printf 'bytes=%s window=%s' "$(wc -c < large.txt)" "$(tail -c +180001 large.txt | head -c ${String(marker.length)})"`,
+          ],
+          cwd: workspace,
+        },
+        { workspacePath: workspace, policy: enabledPolicy(workspace) },
+      );
+
+      expect(result).toMatchObject({ exitCode: 0, timedOut: false, truncated: false });
+      expect(result.stdout).toBe(`bytes=${String(document.length)} window=${marker}`);
+    });
+
     it('runs Bash in the Personal Workspace and persists its writes there', async () => {
       const { workspace } = workspaceFixture();
 

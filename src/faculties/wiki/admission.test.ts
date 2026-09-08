@@ -242,6 +242,21 @@ describe('wiki admission gate', () => {
     expect((await gate.admit(relabelled)).state).toBe('admitted');
   });
 
+  it('holds a document screening will only admit in sanitized form', async () => {
+    const { gate } = gateFor(memoryReceiptStore());
+    const document = store.upsert({
+      title: 'Grocery Notes',
+      body: `Totally ordinary${'\u200b'} note about groceries${'\u200b'} and errands.`,
+    });
+    // Screening admits TRANSFORMED bytes here. The wiki serves the stored
+    // document, so serving it unchanged would serve the form screening
+    // declined; it is held with an actionable reason instead.
+    const outcome = await gate.admit(document);
+    expect(outcome.state).toBe('held');
+    expect(outcome.detail).toContain('sanitized form');
+    expect(gate.status(document).state).toBe('held');
+  });
+
   it('releases a flagged document in shadow mode', async () => {
     const { gate } = gateFor(memoryReceiptStore(), 'shadow');
     const document = store.upsert({ title: 'Helper', body: HOSTILE_BODY });

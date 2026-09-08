@@ -34,6 +34,7 @@ import type {
 } from '../../faculties/memory/episodic/store-port.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import type { ContactTrackingGate } from '../../core/contacts/tracking-gate.js';
+import type { CogSecReceiptStorePort } from '../../core/cogsec/receipts/contracts.js';
 import type { HubIdentityEnrollmentStorePort } from '../../core/enrollment/enrollment-store-port.js';
 import type {
   IntentionRuntimeProviders,
@@ -91,6 +92,12 @@ export interface BootstrapAgentCoreRuntimeOptions {
   contactStore?: ContactStorePort;
   /** Hub identity ↔ contact enrollment store (S10 D2a). Enables face identity-claim resolution (bead .13). */
   hubIdentityEnrollmentStore?: HubIdentityEnrollmentStorePort;
+  /**
+   * Durable content-addressed CogSec admission receipts
+   * (psfn-framework-1fjvm.3), consumed by skill and wiki admission
+   * (psfn-framework-1fjvm.1/.2).
+   */
+  cogSecReceiptStore?: CogSecReceiptStorePort;
   intentionRuntime?: IntentionRuntimeWiring;
   intentionProviders?: IntentionRuntimeProviders;
   intentionFollowUpHorizonMs: number;
@@ -193,6 +200,9 @@ export async function bootstrapAgentCoreRuntime(
     contactStore,
     ...(options.hubIdentityEnrollmentStore
       ? { hubIdentityEnrollmentStore: options.hubIdentityEnrollmentStore }
+      : {}),
+    ...(options.cogSecReceiptStore
+      ? { cogSecReceiptStore: options.cogSecReceiptStore }
       : {}),
     card,
     systemPrompt,

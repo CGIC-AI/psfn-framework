@@ -1798,6 +1798,88 @@ describe('degraded-evidence continuation (psfn-framework-lpxg3.2)', () => {
     expect(first.isError).toBe(false);
   });
 
+  /** A tool that DECLARES a partial read, with caller-chosen delivered content. */
+  function declaredPartialTool(
+    name: string,
+    executed: string[],
+    content: Array<{ type: 'text'; text: string }>,
+  ) {
+    return makeTool(
+      name,
+      async (toolCallId: string) => {
+        executed.push(toolCallId);
+        return { content, details: { partialResult: true } };
+      },
+      {
+        concurrency: makeConcurrencyMeta('exclusive', {
+          exclusivityKeyPolicy: 'category_tool_name',
+          exclusivityKey: 'extended:memory',
+        }),
+      },
+    );
+  }
+
+  it('upgrades a pre-declared partial that the screen fully withholds to a hold', async () => {
+    const executed: string[] = [];
+    const result = await executeToolCallsWithScheduler(
+      [declaredPartialTool('memory', executed, [{ type: 'text', text: 'read:partial' }])],
+      makeAssistantMessage(['memory', 'memory']),
+      undefined,
+      { stream: { push: () => undefined } },
+      {
+        maxParallelToolCalls: 1,
+        toolResultScreener: () => ({
+          mode: 'enforce' as const,
+          withheld: true,
+          effectiveText: HELD_NOTICE,
+          snapshot: snapshot('quarantined'),
+        }),
+      },
+    );
+
+    // The tool's own partial claim must not survive a screen that took all of
+    // it: a required dependent would otherwise proceed on zero bytes.
+    expect((result.toolResults[0] as ObservedToolResult).outcome).toBe('content_withheld');
+    expect((result.toolResults[1] as ObservedToolResult).outcome).toBe('dependency_skip');
+    expect(executed).toEqual(['call-1']);
+    const skipText = JSON.stringify((result.toolResults[1] as ToolResultMessage).content);
+    expect(skipText).toContain('Nothing failed');
+  });
+
+  it('treats a zero-byte declared partial as a hold even with no screener', async () => {
+    const executed: string[] = [];
+    const result = await executeToolCallsWithScheduler(
+      [declaredPartialTool('memory', executed, [{ type: 'text', text: '   ' }])],
+      makeAssistantMessage(['memory', 'memory']),
+      undefined,
+      { stream: { push: () => undefined } },
+      { maxParallelToolCalls: 1 },
+    );
+
+    expect((result.toolResults[0] as ObservedToolResult).outcome).toBe('content_withheld');
+    expect((result.toolResults[1] as ObservedToolResult).outcome).toBe('dependency_skip');
+    expect(executed).toEqual(['call-1']);
+  });
+
+  it('lets a declared partial that delivered evidence run its required dependent', async () => {
+    const executed: string[] = [];
+    const result = await executeToolCallsWithScheduler(
+      [declaredPartialTool('memory', executed, [
+        { type: 'text', text: 'read:first 200 of 4000 lines' },
+      ])],
+      makeAssistantMessage(['memory', 'memory']),
+      undefined,
+      { stream: { push: () => undefined } },
+      { maxParallelToolCalls: 1 },
+    );
+
+    // The over-blocking guard: a bounded read IS evidence and never halts.
+    const first = result.toolResults[0] as ObservedToolResult;
+    expect(first.outcome).toBe('partial_result');
+    expect(first.isError).toBe(false);
+    expect(executed).toEqual(['call-1', 'call-2']);
+  });
+
   it('does not degrade a tool signature after repeated benign holds', async () => {
     const executed: string[] = [];
     const guard = createToolCallExecutionGuard();

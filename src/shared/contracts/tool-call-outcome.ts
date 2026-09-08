@@ -19,7 +19,9 @@ export type ToolCallOutcome = typeof TOOL_CALL_OUTCOMES[number];
  * returned is not the full requested evidence.
  *
  * - `content_withheld`: intake screening admitted nothing — the turn received a
- *   fixed, content-free notice instead of the read.
+ *   fixed, content-free notice instead of the read. A tool-declared partial
+ *   result that delivered nothing at all lands here too: no bytes arrived, so
+ *   the claim that "some" evidence did would let a dependent run on nothing.
  * - `screening_unavailable`: the screener itself failed, so no verdict exists
  *   and the content is withheld fail-closed.
  * - `partial_result`: some of the requested evidence was delivered and some was
@@ -179,7 +181,8 @@ export function isToolCallErrorOutcome(outcome: ToolCallOutcome): boolean {
  * the consumer has not declared the edge optional, so an optional withheld or
  * unavailable read lets independent and degraded-tolerant work continue while
  * an undeclared one keeps today's conservative halt. A partial result delivered
- * evidence and never halts.
+ * evidence and never halts — a "partial" that delivered nothing is classified
+ * `content_withheld` at the scheduler, so it never reaches this rule.
  */
 export function blocksSequentialDependents(
   outcome: ToolCallOutcome,

@@ -1,3 +1,4 @@
+import type { SatelliteDeviceHealthReader } from '../../shared/telemetry/satellite-device-health.js';
 import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import { join } from 'node:path';
 import { createComponentLogger } from '../../shared/logger.js';
@@ -287,6 +288,8 @@ export interface InProcessGardenAdminContractOptions {
   toolConformanceRunner?: ToolConformanceRunner | null;
   systemDataWriter?: GatewaySystemDataWriterPort;
   postTurnActions?: PostTurnActionRuntime | null;
+  /** Shared hub device-health tracker (s7wq3); absent ⇒ no live observation. */
+  satelliteDeviceHealth?: SatelliteDeviceHealthReader | null;
   outreachOutbox?: OutreachOutboxStore | null;
   observerEvalSidecar?: ObserverEvalSidecarRuntime | null;
   channelGroupMemory?: ChannelGroupMemoryConfig;
@@ -754,6 +757,7 @@ export function createInProcessGardenAdminContract(
       // pool must stay inside that companion's tenant boundary.
       tenant: resolveConfigTenantPoolScope(options.config),
     }),
+    satelliteDeviceHealth: options.satelliteDeviceHealth ?? null,
     actionPipe: options.postTurnActions
       ? new AdminActionPipeDataService(options.postTurnActions, options.outreachOutbox ?? null)
       : null,

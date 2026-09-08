@@ -126,6 +126,8 @@ const DEFAULT_SUBAGENT_MAX_CONCURRENT = 8;
 const DEFAULT_SHARD_MAX_CONCURRENT = 5;
 const DEFAULT_SHARD_HEARTBEAT_STALE_AFTER_MS = 60_000;
 const DEFAULT_SHARD_HEARTBEAT_DISCONNECT_AFTER_MS = 180_000;
+/** Physical satellites beat less often than in-process shards (bead psfn-framework-s7wq3). */
+const DEFAULT_SATELLITE_HEARTBEAT_STALE_AFTER_MS = 120_000;
 // Mirrors the caps in src/faculties/file-ingest/document-ingest.ts — keep in lockstep.
 const DEFAULT_DOCUMENT_INGEST_MAX_BYTES = 16 * 1024 * 1024;
 const DEFAULT_DOCUMENT_INGEST_TEXT_MAX_BYTES = 4 * 1024 * 1024;
@@ -515,6 +517,7 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     shardMaxConcurrent: DEFAULT_SHARD_MAX_CONCURRENT,
     shardHeartbeatStaleAfterMs: DEFAULT_SHARD_HEARTBEAT_STALE_AFTER_MS,
     shardHeartbeatDisconnectAfterMs: DEFAULT_SHARD_HEARTBEAT_DISCONNECT_AFTER_MS,
+    satelliteHeartbeatStaleAfterMs: DEFAULT_SATELLITE_HEARTBEAT_STALE_AFTER_MS,
     documentIngestMaxBytes: DEFAULT_DOCUMENT_INGEST_MAX_BYTES,
     documentIngestTextMaxBytes: DEFAULT_DOCUMENT_INGEST_TEXT_MAX_BYTES,
     documentIngestPromptChars: DEFAULT_DOCUMENT_INGEST_PROMPT_CHARS,

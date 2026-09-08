@@ -34,7 +34,12 @@ function readNonEmptyString(
   return undefined;
 }
 
-function resolveSatelliteId(event: ExternalTelemetryEvent): string | undefined {
+/**
+ * Best-effort satellite identity of one telemetry event: an explicit payload id,
+ * a nested origin/sensor id, else the declared source. Shared with the device
+ * health tracker so both surfaces key on exactly the same identity.
+ */
+export function resolveTelemetrySatelliteId(event: ExternalTelemetryEvent): string | undefined {
   const direct = readNonEmptyString(event.payload, ['satelliteId', 'satellite_id']);
   if (direct) return direct;
   for (const key of ['origin', 'satellite', 'site', 'sensor']) {
@@ -71,7 +76,7 @@ export function resolveSharedSatelliteObservationDeliveries(input: {
   registry: SatelliteRegistryConfig;
 }): SharedSatelliteObservationDelivery[] | null {
   if (!input.registry.enabled) return null;
-  const satelliteId = resolveSatelliteId(input.event);
+  const satelliteId = resolveTelemetrySatelliteId(input.event);
   const satellite = input.registry.satellites.find(
     candidate => candidate.satelliteId === satelliteId,
   );

@@ -12,7 +12,9 @@ import {
   EidoverseSnapshotSource,
   claimGrantsEidoverseVision,
   deriveEidoverseSnapshotBaseUrl,
+  deriveEidoverseSnapshotBaseUrlFromDoorUrl,
   loadEidoverseSnapshotConfig,
+  type EidoverseSnapshotOrigin,
 } from "./eidoverse-snapshot.js";
 import { EmbodiedSessionRegistry } from "./embodied-session.js";
 import type { FrameworkAgentAdapter } from "./framework-agent.js";
@@ -22,6 +24,7 @@ import { SessionStore } from "./session-store.js";
 type ReplyInput = Parameters<FrameworkAgentAdapter["streamReply"]>[0];
 
 const WORLD_URL = "ws://192.0.2.61:8787/world/ws?token=join-secret";
+const MCPL_DOOR_URL = "wss://world.invalid/mcpl";
 const SNAPSHOT_TIMEOUT_MS = 500;
 const SNAPSHOT_MAX_BYTES = 4_096;
 const PNG_BYTES = Buffer.from([
@@ -60,8 +63,78 @@ test("the snapshot base URL drops the door's scheme, ws suffix, and join credent
   assert.throws(() => deriveEidoverseSnapshotBaseUrl("wss://user:pass@world.invalid/ws"), /credential-free/u);
 });
 
+test("the MCPL door yields a same-host origin only across the conventional door path", () => {
+  assert.equal(deriveEidoverseSnapshotBaseUrlFromDoorUrl(MCPL_DOOR_URL), "https://world.invalid");
+  assert.equal(
+    deriveEidoverseSnapshotBaseUrlFromDoorUrl("ws://127.0.0.1:8787/mcpl/"),
+    "http://127.0.0.1:8787",
+  );
+  assert.equal(
+    deriveEidoverseSnapshotBaseUrlFromDoorUrl("wss://world.invalid/worlds/commons/mcpl"),
+    "https://world.invalid/worlds/commons",
+  );
+  assert.equal(deriveEidoverseSnapshotBaseUrlFromDoorUrl("wss://world.invalid"), "https://world.invalid");
+  // A gateway that routes the door somewhere else is not evidence about where
+  // the renderer answers, so it is refused instead of guessed at.
+  assert.throws(
+    () => deriveEidoverseSnapshotBaseUrlFromDoorUrl("wss://gateway.invalid/tenants/acme/socket"),
+    /EIDOVERSE_SNAPSHOT_BASE_URL is required/u,
+  );
+  assert.throws(
+    () => deriveEidoverseSnapshotBaseUrlFromDoorUrl("wss://user:pass@world.invalid/mcpl"),
+    /credential-free/u,
+  );
+});
+
+test("no derived MCPL origin can carry the dial-time identity token", () => {
+  const token = "door-identity-token";
+  // The loader rejects a door URL with a query outright, but the derivation is
+  // what the snapshot path actually calls: it must strip a token even when one
+  // reaches it, and never keep it in the origin it hands the fetch.
+  const derived = deriveEidoverseSnapshotBaseUrlFromDoorUrl(`wss://world.invalid/mcpl?token=${token}`);
+  assert.equal(derived, "https://world.invalid");
+  assert.equal(derived.includes(token), false);
+  const configured = loadEidoverseSnapshotConfig(
+    mcplOrigin(`wss://world.invalid/mcpl?token=${token}`),
+    { EIDOVERSE_SNAPSHOT_ENABLED: "true" },
+  );
+  assert.equal(configured?.baseUrl, "https://world.invalid");
+});
+
+test("an MCPL hub that asks for vision gets an origin or a boot failure, never a no-op", () => {
+  assert.equal(loadEidoverseSnapshotConfig(mcplOrigin(), {}), null, "vision is still off by default");
+  assert.deepEqual(loadEidoverseSnapshotConfig(mcplOrigin(), { EIDOVERSE_SNAPSHOT_ENABLED: "true" }), {
+    baseUrl: "https://world.invalid",
+    worldName: "demo-world",
+    agentName: "Aster Example",
+    timeoutMs: 4_000,
+    maxBytes: 4_000_000,
+  });
+  // An explicit origin satisfies the requirement whatever the door path is.
+  assert.deepEqual(
+    loadEidoverseSnapshotConfig(mcplOrigin("wss://gateway.invalid/tenants/acme/socket"), {
+      EIDOVERSE_SNAPSHOT_ENABLED: "true",
+      EIDOVERSE_SNAPSHOT_BASE_URL: "https://renderer.invalid/commons/",
+    }),
+    {
+      baseUrl: "https://renderer.invalid/commons",
+      worldName: "demo-world",
+      agentName: "Aster Example",
+      timeoutMs: 4_000,
+      maxBytes: 4_000_000,
+    },
+  );
+  // Neither configured nor derivable: fail closed at load, naming the fix.
+  assert.throws(
+    () => loadEidoverseSnapshotConfig(mcplOrigin("wss://gateway.invalid/tenants/acme/socket"), {
+      EIDOVERSE_SNAPSHOT_ENABLED: "true",
+    }),
+    /EIDOVERSE_SNAPSHOT_BASE_URL is required/u,
+  );
+});
+
 test("snapshots stay disabled by default and only load for explicitly enabled hubs", () => {
-  const mcp = mcpConfig();
+  const mcp = pollOrigin();
   assert.equal(loadEidoverseSnapshotConfig(mcp, {}), null, "vision is off unless it is asked for");
   assert.equal(loadEidoverseSnapshotConfig(mcp, { EIDOVERSE_SNAPSHOT_ENABLED: "false" }), null);
   assert.throws(() => loadEidoverseSnapshotConfig(mcp, { EIDOVERSE_SNAPSHOT_ENABLED: "yes" }));
@@ -349,6 +422,27 @@ function mcpConfig(): EidoverseMcpConfig {
     requestTimeoutMs: 1_000,
     pendingPingsPollIntervalMs: 1_000,
     ambientSayDebounceMs: 10_000,
+  };
+}
+
+/** The poll transport's derivation input, taken from the same loaded config. */
+function pollOrigin(): EidoverseSnapshotOrigin {
+  const mcp = mcpConfig();
+  return {
+    transport: "poll",
+    worldName: mcp.worldName,
+    agentName: mcp.agentName,
+    worldUrl: mcp.worldUrl,
+  };
+}
+
+/** The MCPL transport's derivation input: the credential-free door URL. */
+function mcplOrigin(doorUrl = MCPL_DOOR_URL): EidoverseSnapshotOrigin {
+  return {
+    transport: "mcpl",
+    worldName: "demo-world",
+    agentName: "Aster Example",
+    doorUrl,
   };
 }
 

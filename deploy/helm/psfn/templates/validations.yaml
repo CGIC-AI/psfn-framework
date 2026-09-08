@@ -446,11 +446,16 @@ never back a ClusterIssuer. */ -}}
 {{- if lt (int $eidoverse.mcpl.handshakeTimeoutMs) 1 -}}
 {{- fail "satelliteHub.eidoverse.mcpl.handshakeTimeoutMs must be a positive integer" -}}
 {{- end -}}
-{{- /* Snapshot derives its HTTP origin from the stdio transport's worldUrl, so
-     the hub builds no snapshot source under the MCPL door. Refuse the pair
-     rather than render vision config that would silently do nothing. */}}
-{{- if $eidoverse.snapshot.enabled -}}
-{{- fail "satelliteHub.eidoverse.snapshot.enabled=true is not supported with satelliteHub.eidoverse.transport=mcpl" -}}
+{{- /* Snapshot needs an HTTP origin. Under the MCPL door the hub derives one
+     from doorUrl only across the conventional door path — same host and port,
+     ws->http, a trailing /mcpl dropped. A door at any other path (a
+     path-routed gateway, a renderer on another host) is not evidence about
+     where /snap answers, so the hub refuses to guess and fails at boot.
+     Refuse it here instead, rather than shipping a crash-looping pod. */}}
+{{- if and $eidoverse.snapshot.enabled (not (trim ($eidoverse.snapshot.baseUrl | default ""))) -}}
+{{- if not (or (regexMatch "^wss?://[^/@]+/?$" $doorUrl) (regexMatch "^wss?://[^/@]+(/[^/@]+)*/mcpl/?$" $doorUrl)) -}}
+{{- fail "satelliteHub.eidoverse.snapshot.baseUrl is required when satelliteHub.eidoverse.transport=mcpl and satelliteHub.eidoverse.mcpl.doorUrl does not end in the conventional /mcpl door path" -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 {{- if not (regexMatch "^[A-Z][A-Z0-9_]*$" (trim ($eidoverse.tokenRef | default ""))) -}}

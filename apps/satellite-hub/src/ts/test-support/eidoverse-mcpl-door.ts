@@ -15,6 +15,8 @@
  * behaviors the Hub client must survive, not the whole world.
  */
 
+import http from "node:http";
+
 import { WebSocketServer, type WebSocket } from "ws";
 
 interface DoorFrame {
@@ -39,6 +41,14 @@ export interface EidoverseMcplDoorOptions {
   lookText?: string;
   /** Drop the socket immediately after the policy receipt, once. */
   dropAfterFirstPolicy?: boolean;
+  /**
+   * Optional spectator renderer on the door's own host and port, answering the
+   * world's `GET /snap`. Absent means no renderer is attached: the door answers
+   * 503 exactly as a world with no spectator does, which is what a snapshot
+   * degrading to text has to survive. Present, it is the same origin the Hub
+   * derives from the door URL, so a test can prove the derivation end to end.
+   */
+  snap?: (request: http.IncomingMessage, response: http.ServerResponse) => void;
 }
 
 interface DoorConnection {
@@ -63,14 +73,18 @@ export class EidoverseMcplDoor {
   readonly said: string[] = [];
   /** Dial URLs the door has admitted. */
   readonly admittedTokens: string[] = [];
+  /** Every `/snap` request line the renderer surface received, verbatim. */
+  readonly snapRequests: string[] = [];
   /** Dial attempts the door refused for a bad token. */
   refusedDials = 0;
   connections = 0;
 
   private connection: DoorConnection | null = null;
   private policyDropsRemaining: number;
+  private readonly sockets = new Set<import("node:net").Socket>();
 
   private constructor(
+    private readonly httpServer: http.Server,
     private readonly server: WebSocketServer,
     readonly url: string,
     private readonly options: EidoverseMcplDoorOptions,
@@ -80,16 +94,32 @@ export class EidoverseMcplDoor {
   }
 
   static async start(options: EidoverseMcplDoorOptions): Promise<EidoverseMcplDoor> {
-    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    // One listener carries both surfaces, the way a real world does: the MCPL
+    // door on the upgrade path and the renderer's `/snap` on plain HTTP.
+    const httpServer = http.createServer();
+    const server = new WebSocketServer({ server: httpServer });
     await new Promise<void>((resolve, reject) => {
-      server.once("listening", resolve);
-      server.once("error", reject);
+      httpServer.once("listening", resolve);
+      httpServer.once("error", reject);
+      httpServer.listen(0, "127.0.0.1");
     });
-    const address = server.address();
+    const address = httpServer.address();
     if (typeof address === "string" || address === null) {
       throw new Error("Eidoverse MCPL door did not bind a TCP port");
     }
-    return new EidoverseMcplDoor(server, `ws://127.0.0.1:${address.port}/mcpl`, options);
+    const door = new EidoverseMcplDoor(
+      httpServer,
+      server,
+      `ws://127.0.0.1:${address.port}/mcpl`,
+      options,
+    );
+    httpServer.on("request", (request, response) => { door.serveHttp(request, response); });
+    // A keep-alive snapshot connection would otherwise hold close() open.
+    httpServer.on("connection", (socket) => {
+      door.sockets.add(socket);
+      socket.on("close", () => door.sockets.delete(socket));
+    });
+    return door;
   }
 
   /** The world the current attachment is in. */
@@ -152,6 +182,24 @@ export class EidoverseMcplDoor {
     this.connection?.socket.terminate();
     this.connection = null;
     await new Promise<void>((resolve) => { this.server.close(() => { resolve(); }); });
+    for (const socket of this.sockets) socket.destroy();
+    this.sockets.clear();
+    await new Promise<void>((resolve) => { this.httpServer.close(() => { resolve(); }); });
+  }
+
+  /**
+   * The renderer surface. Every request line is recorded so a test can prove
+   * the Hub asked the derived origin for the right frame and that nothing it
+   * sent carried the identity token.
+   */
+  private serveHttp(request: http.IncomingMessage, response: http.ServerResponse): void {
+    this.snapRequests.push(request.url ?? "");
+    if (!this.options.snap) {
+      response.writeHead(503);
+      response.end();
+      return;
+    }
+    this.options.snap(request, response);
   }
 
   private admit(socket: WebSocket, requestUrl: string): void {

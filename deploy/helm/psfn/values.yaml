@@ -813,13 +813,19 @@ satelliteHub:
     # needs a live spectator renderer attached to that world; when none is
     # serving, the turn degrades to text look notes with no error. Disabled by
     # default and additionally gated on the claim profile granting vision.
-    # Requires transport: poll — the origin is derived from worldUrl, which the
-    # MCPL door does not supply, so the pair is refused rather than rendered
-    # into config that would silently do nothing.
+    # Works on either transport.
     snapshot:
       enabled: false
-      # Empty means "derive from worldUrl" (scheme swapped, /ws and query
-      # dropped). Set only for a separate credential-free http/https origin.
+      # Empty means "derive it from the URL this transport already reaches the
+      # world through":
+      #   poll  from worldUrl — scheme swapped, /ws suffix and query dropped.
+      #   mcpl  from mcpl.doorUrl — same host and port, ws->http scheme swap,
+      #         the conventional /mcpl door path dropped, query dropped.
+      # The mcpl derivation only holds when the renderer answers on the door's
+      # own host and port. A door behind a path-routed gateway, a renderer
+      # elsewhere, or any door path that is not /mcpl is refused rather than
+      # guessed at: set a credential-free http/https origin here instead, or
+      # rendering fails rather than shipping vision that reaches nothing.
       baseUrl: ""
       timeoutMs: 4000
       maxBytes: 4000000

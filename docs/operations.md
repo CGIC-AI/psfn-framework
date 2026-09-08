@@ -150,6 +150,56 @@ workspace, logs, tmp, backups, and models are created.
 - `compose:down` — `docker compose down`; persistent data and the Postgres
   volume are preserved.
 
+### Ephemeral onboarding smoke stack
+
+`docker/docker-compose.smoke.yml` is a separate, disposable stack for the
+"someone can run it" contributor path; it is not the persistent deployment above
+and is explicitly not production-hardened. Drive it with `npm run smoke:docker`
+(`scripts/smoke-docker.mjs`), which brings the stack up, proves the gateway API
+edge and the gateway/agent RPC, verifies the Satellite Hub and companion-ui
+surfaces, and then drives one chat turn. Its exit codes are `0` (full turn), `2`
+(stack healthy, turn stopped at the external provider boundary), `3`
+(hub/companion-ui source-contract divergence), and `1` (plumbing failure).
+`--keep-up` leaves the stack running; the default tears it down with
+`docker compose down -v`.
+
+**`OPENROUTER_API_KEY` is required, not optional.** Intake screening fails closed
+at gateway startup when its configured screener provider has no gateway-resolved
+credential, so a keyless stack exits before it binds the API edge and the exit-2
+path is unreachable. Export a real key before `up`.
+
+Every PSFN deployment is a fleet, so the smoke stack must satisfy the same
+multi-companion credential topology as the supported path: the shared
+schema-migration authority and the companion runtime each authenticate as their
+own PostgreSQL role. The `seed` service therefore waits for Postgres to become
+healthy and runs `scripts/ops/psfn-compose-smoke-provision-db.mjs`, which
+provisions `shared_schema_migration` and `companion_smoke_runtime` (schema
+`companion_smoke`) through the same `scripts/ops/lib/postgres-tenancy.mjs`
+module the production `scripts/ops/psfn-compose-bootstrap.mjs` uses, so the two
+topologies cannot drift. The superuser credential exists only inside the seed;
+the gateway authenticates as `companion_smoke_runtime` (its
+`POSTGRES_DATABASE_URL` must match the primary companion credential exactly),
+and the agent receives that same credential as a 0600 file on the auth volume.
+Override the generated role passwords with `PSFN_SMOKE_SHARED_MIGRATION_PASSWORD`
+and `PSFN_SMOKE_COMPANION_DB_PASSWORD`. A gateway that exits with
+`Shared schema migration database credential must authenticate as configured
+topology role shared_schema_migration` means the seed's provisioning step did not
+run or did not reach Postgres.
+
+Three further fleet contracts the stack must satisfy, each of which previously
+stopped startup after the credential topology passed:
+
+- `satellites.json` declares `sharedDevice` authority naming the deployment's
+  companion. A fleet refuses an ungoverned satellite, and every deployment is a
+  fleet, so `scripts/ops/psfn-compose-smoke-satellites.mjs` writes the smoke
+  companion as primary, sole emanation member, and sole observer.
+- `workspaces/shared` is its own named volume. The gateway creates
+  `workspaces/shared/artifacts` on startup and cannot write the root-owned
+  image-layer directory; the seed chowns the volume to the runtime UID.
+- The agent binds `ADMIN_TRANSPORT_SOCKET=/run/psfn/garden-admin-<companionId>.sock`.
+  N agent processes cannot share one admin socket, so a fleet agent rejects the
+  unsuffixed default.
+
 ## Repository-native lifecycle
 
 `scripts/local-lifecycle.ts` runs the built runtime directly on the host under

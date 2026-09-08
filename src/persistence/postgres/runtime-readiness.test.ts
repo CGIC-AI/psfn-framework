@@ -8,6 +8,7 @@ import {
   POSTGRES_STORE_READINESS_CATALOG,
   PostgresRuntimeReadiness,
   PostgresStoreReadinessError,
+  requirePostgresStoreReadinessRetry,
 } from './runtime-readiness.js';
 
 describe('PostgresRuntimeReadiness', () => {
@@ -41,6 +42,7 @@ describe('PostgresRuntimeReadiness', () => {
     expect(snapshot.degraded).toEqual([{
       store: 'analysis_workbench_trace',
       label: 'analysis workbench trace',
+      degradesOperatorReadiness: false,
       requirement: 'optional',
       mismatch: 'migration role cannot create relation',
     }]);
@@ -96,6 +98,146 @@ describe('PostgresRuntimeReadiness', () => {
       }
     },
   );
+
+  // psfn-framework-6c6cq. A first-boot credential race burned the single
+  // attempt, logged one ERROR, and left the process advertising Ready with
+  // model-usage telemetry silently broken and no recovery line ever written.
+  describe('bounded readiness retry', () => {
+    it('runs exactly once when no retry budget is declared', async () => {
+      const readiness = new PostgresRuntimeReadiness();
+      const task = vi.fn(async () => { throw new Error('password authentication failed'); });
+
+      readiness.start('model_usage_diagnostics', task);
+      await readiness.sealBeforeReady();
+
+      expect(task).toHaveBeenCalledTimes(1);
+    });
+
+    it('retries a transient failure and logs the recovery', async () => {
+      clearDiagnosticLogRingBufferForTests();
+      const readiness = new PostgresRuntimeReadiness();
+      let attempts = 0;
+      const task = vi.fn(async () => {
+        attempts += 1;
+        if (attempts < 3) throw new Error('password authentication failed');
+      });
+
+      const handle = readiness.start('model_usage_diagnostics', task, {
+        retry: { maxAttempts: 4, backoffMs: 0 },
+      });
+      await expect(handle.waitUntilReady()).resolves.toBeUndefined();
+      const snapshot = await readiness.sealBeforeReady();
+
+      expect(task).toHaveBeenCalledTimes(3);
+      expect(snapshot.degraded).toEqual([]);
+      expect(snapshot.readyStores).toContain('model_usage_diagnostics');
+
+      const records = getRecentDiagnosticLogRecords({ limit: 50 })
+        .filter(record => record.component === 'ModelUsageStore');
+      // One line per spent attempt, plus the terminal success line the
+      // incident never had, and no terminal error.
+      expect(records.filter(record => (
+        record.message === 'Model usage schema migration failed; retrying'
+      ))).toHaveLength(2);
+      const recovery = records.filter(record => (
+        record.message === 'PostgreSQL store readiness recovered after retry'
+      ));
+      expect(recovery).toHaveLength(1);
+      expect(recovery[0]?.context).toMatchObject({ attempt: 3 });
+      expect(records.some(record => record.level === 'error')).toBe(false);
+    });
+
+    it('spends the whole budget, then records one terminal failure', async () => {
+      clearDiagnosticLogRingBufferForTests();
+      const readiness = new PostgresRuntimeReadiness();
+      const task = vi.fn(async () => { throw new Error('password authentication failed'); });
+
+      readiness.start('model_usage_diagnostics', task, {
+        retry: { maxAttempts: 3, backoffMs: 0 },
+      });
+      const snapshot = await readiness.sealBeforeReady();
+
+      expect(task).toHaveBeenCalledTimes(3);
+      // Optional stays optional: a persistently failing diagnostic reader must
+      // not stop the process reaching Ready.
+      expect(snapshot.phase).toBe('ready');
+      expect(snapshot.degraded).toEqual([{
+        store: 'model_usage_diagnostics',
+        label: 'model usage diagnostics',
+        // ...but it is no longer an anonymous degraded count: the operator
+        // surface is required to reflect this one.
+        degradesOperatorReadiness: true,
+        requirement: 'optional',
+        mismatch: 'password authentication failed',
+      }]);
+
+      const records = getRecentDiagnosticLogRecords({ limit: 50 })
+        .filter(record => record.component === 'ModelUsageStore');
+      expect(records.filter(record => record.level === 'warn')).toHaveLength(2);
+      const terminal = records.filter(record => (
+        record.level === 'error'
+        && record.message === 'Model usage schema migration failed'
+      ));
+      expect(terminal).toHaveLength(1);
+      expect(terminal[0]?.context).toMatchObject({ attempt: 3 });
+    });
+
+    it('holds the Ready boundary open until the budget is spent', async () => {
+      const readiness = new PostgresRuntimeReadiness();
+      let release!: () => void;
+      const barrier = new Promise<void>((resolve) => { release = resolve; });
+      let attempts = 0;
+      readiness.start('model_usage_diagnostics', async () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error('password authentication failed');
+        await barrier;
+      }, { retry: { maxAttempts: 2, backoffMs: 0 } });
+
+      let sealed = false;
+      const sealing = readiness.sealBeforeReady().then((snapshot) => {
+        sealed = true;
+        return snapshot;
+      });
+      await new Promise<void>((resolve) => { setTimeout(resolve, 0); });
+      expect(sealed).toBe(false);
+
+      release();
+      await expect(sealing).resolves.toMatchObject({ phase: 'ready' });
+      expect(attempts).toBe(2);
+    });
+  });
+
+  describe('requirePostgresStoreReadinessRetry', () => {
+    it('refuses an undeclared budget rather than inventing one', () => {
+      expect(() => requirePostgresStoreReadinessRetry({})).toThrow(
+        'postgresStoreReadinessRetryAttempts and postgresStoreReadinessRetryBackoffMs',
+      );
+      expect(() => requirePostgresStoreReadinessRetry({
+        postgresStoreReadinessRetryAttempts: 3,
+      })).toThrow('postgresStoreReadinessRetryBackoffMs');
+    });
+
+    it('refuses a budget that could never run or could never wait', () => {
+      expect(() => requirePostgresStoreReadinessRetry({
+        postgresStoreReadinessRetryAttempts: 0,
+        postgresStoreReadinessRetryBackoffMs: 100,
+      })).toThrow('must be a positive integer');
+      expect(() => requirePostgresStoreReadinessRetry({
+        postgresStoreReadinessRetryAttempts: 3,
+        postgresStoreReadinessRetryBackoffMs: -1,
+      })).toThrow('must be a non-negative number');
+    });
+
+    it('accepts the canonical settings.seed.json budget', () => {
+      const seed = JSON.parse(
+        readFileSync('config/settings.seed.json', 'utf-8'),
+      ) as Record<string, number>;
+      expect(requirePostgresStoreReadinessRetry(seed)).toEqual({
+        maxAttempts: seed.postgresStoreReadinessRetryAttempts,
+        backoffMs: seed.postgresStoreReadinessRetryBackoffMs,
+      });
+    });
+  });
 
   it('does not invoke PostgreSQL startup work registered after Ready', async () => {
     const readiness = new PostgresRuntimeReadiness();

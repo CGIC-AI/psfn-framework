@@ -7,6 +7,14 @@ export type PostgresRuntimeDdlAuthority = 'isolated_workload_migration';
 interface PostgresStoreReadinessCatalogEntry {
   label: string;
   requirement: PostgresStoreReadinessRequirement;
+  /**
+   * An `optional` store whose terminal failure must still be visible on the
+   * operator health surface rather than folded into an anonymous degraded
+   * count (psfn-framework-6c6cq). The store stays optional — nothing refuses
+   * to boot — but a process that finished its retry budget without this store
+   * no longer advertises an unqualified healthy operator surface.
+   */
+  degradesOperatorReadiness?: true;
   failureDiagnostic?: {
     component: string;
     message: string;
@@ -84,6 +92,10 @@ export const POSTGRES_STORE_READINESS_CATALOG = {
   model_usage_diagnostics: {
     label: 'model usage diagnostics',
     requirement: 'optional',
+    // 6c6cq: a persistently unreadable model-usage ledger leaves Garden's cost
+    // and budget telemetry silently blank. The reader stays optional, but the
+    // operator surface must say so instead of reporting an unqualified ok.
+    degradesOperatorReadiness: true,
     failureDiagnostic: {
       component: 'ModelUsageStore',
       message: 'Model usage schema migration failed',
@@ -153,6 +165,8 @@ export interface PostgresStoreDegradation {
   store: PostgresStoreReadinessId;
   label: string;
   requirement: PostgresStoreReadinessRequirement;
+  /** Whether this degradation must be reflected on the operator health surface. */
+  degradesOperatorReadiness: boolean;
   mismatch: string;
 }
 
@@ -218,15 +232,138 @@ function rejectedHandle(
   };
 }
 
-function reportPostgresStoreReadinessFailure(error: PostgresStoreReadinessError): void {
+/**
+ * Bounded retry budget for one readiness task (psfn-framework-6c6cq). Owned by
+ * settings.json, never by a code literal: see `requirePostgresStoreReadinessRetry`.
+ */
+export interface PostgresStoreReadinessRetryPolicy {
+  /** Total attempts including the first, so 1 means "no retry". */
+  maxAttempts: number;
+  /** Fixed delay between attempts. */
+  backoffMs: number;
+}
+
+export interface PostgresStoreReadinessOptions {
+  /**
+   * Absent (the default for every existing call site) the task runs exactly
+   * once, which is the historical behavior.
+   */
+  retry?: PostgresStoreReadinessRetryPolicy;
+}
+
+/**
+ * Resolve the operator-declared readiness retry budget. There is no built-in
+ * budget: a runtime that wants bounded readiness retries must declare one, the
+ * same way the health stream must declare its own row cap.
+ */
+export function requirePostgresStoreReadinessRetry(config: {
+  postgresStoreReadinessRetryAttempts?: number;
+  postgresStoreReadinessRetryBackoffMs?: number;
+}): PostgresStoreReadinessRetryPolicy {
+  const maxAttempts = config.postgresStoreReadinessRetryAttempts;
+  const backoffMs = config.postgresStoreReadinessRetryBackoffMs;
+  if (maxAttempts === undefined || backoffMs === undefined) {
+    throw new Error(
+      'Bounded PostgreSQL store readiness retry requires settings.json '
+      + 'postgresStoreReadinessRetryAttempts and postgresStoreReadinessRetryBackoffMs',
+    );
+  }
+  if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
+    throw new Error(
+      'settings.json postgresStoreReadinessRetryAttempts must be a positive integer',
+    );
+  }
+  if (!Number.isFinite(backoffMs) || backoffMs < 0) {
+    throw new Error(
+      'settings.json postgresStoreReadinessRetryBackoffMs must be a non-negative number',
+    );
+  }
+  return { maxAttempts, backoffMs };
+}
+
+function readinessLogger(store: PostgresStoreReadinessId): ReturnType<typeof createComponentLogger> {
+  const classification: PostgresStoreReadinessCatalogEntry = (
+    POSTGRES_STORE_READINESS_CATALOG[store]
+  );
+  return createComponentLogger(
+    classification.failureDiagnostic?.component ?? 'PostgresRuntimeReadiness',
+  );
+}
+
+function readinessMessage(store: PostgresStoreReadinessId): string {
+  const classification: PostgresStoreReadinessCatalogEntry = (
+    POSTGRES_STORE_READINESS_CATALOG[store]
+  );
+  return classification.failureDiagnostic?.message
+    ?? `PostgreSQL store "${classification.label}" readiness failed`;
+}
+
+function reportPostgresStoreReadinessFailure(
+  error: PostgresStoreReadinessError,
+  attempts: number,
+): void {
   const classification: PostgresStoreReadinessCatalogEntry = (
     POSTGRES_STORE_READINESS_CATALOG[error.store]
   );
   const diagnostic = classification.failureDiagnostic;
   if (!diagnostic) return;
+  // The terminal line. It always says how many attempts were spent, so a
+  // single-attempt failure and an exhausted retry budget are distinguishable
+  // in the log rather than looking like the same one-off ERROR.
+  // `attempt` and `maxRetries` are already diagnostic-safe context keys, so the
+  // terminal line survives the redaction filter into the diagnostic ring.
   createComponentLogger(diagnostic.component).error(diagnostic.message, {
+    attempt: attempts,
     error: error.mismatch,
   });
+}
+
+async function delayReadinessRetry(backoffMs: number): Promise<void> {
+  await new Promise<void>((resolve) => { setTimeout(resolve, backoffMs); });
+}
+
+/**
+ * Run one readiness task under its declared retry budget, logging every
+ * outcome. A transient first-boot failure (the credential race in 6c6cq) now
+ * produces a warn per spent attempt and an explicit recovery line, instead of
+ * one buried ERROR and silence. The whole budget is spent before
+ * `sealBeforeReady` resolves, so the process cannot advertise Ready in the
+ * middle of it.
+ */
+async function runReadinessTask(
+  store: PostgresStoreReadinessId,
+  task: () => Promise<void>,
+  retry: PostgresStoreReadinessRetryPolicy | undefined,
+): Promise<void> {
+  const maxAttempts = retry?.maxAttempts ?? 1;
+  const log = readinessLogger(store);
+  const message = readinessMessage(store);
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await task();
+      if (attempt > 1) {
+        // Deliberately `warn`, not `info`: the diagnostic ring an operator
+        // actually reads retains warn and error only, and an info line here
+        // would be exactly as invisible as the silence this bead is about. A
+        // readiness proof that only passed after burning part of its budget is
+        // a notable boot condition, not routine progress.
+        log.warn('PostgreSQL store readiness recovered after retry', {
+          store,
+          attempt,
+        });
+      }
+      return;
+    } catch (cause) {
+      if (attempt >= maxAttempts) throw cause;
+      log.warn(`${message}; retrying`, {
+        store,
+        attempt,
+        maxRetries: maxAttempts,
+        error: toErrorMessage(cause),
+      });
+      if (retry) await delayReadinessRetry(retry.backoffMs);
+    }
+  }
 }
 
 /**
@@ -242,6 +379,7 @@ export class PostgresRuntimeReadiness {
   start(
     store: PostgresStoreReadinessId,
     task: () => Promise<void>,
+    options: PostgresStoreReadinessOptions = {},
   ): PostgresStoreReadinessHandle {
     if (this.phase !== 'collecting') {
       const mismatch = this.phase === 'ready'
@@ -257,12 +395,11 @@ export class PostgresRuntimeReadiness {
       state: 'pending',
       observed: Promise.resolve(),
     };
-    let execution: Promise<void>;
-    try {
-      execution = task();
-    } catch (cause) {
-      execution = Promise.reject(cause);
-    }
+    // Started in this same tick, exactly as before: `runReadinessTask` invokes
+    // the task synchronously inside the async function it returns from, so a
+    // constructor still cannot create an unobserved migration promise.
+    const attempts = options.retry?.maxAttempts ?? 1;
+    const execution = runReadinessTask(store, task, options.retry);
     entry.observed = execution.then(
       () => { entry.state = 'ready'; },
       (cause: unknown) => {
@@ -270,7 +407,7 @@ export class PostgresRuntimeReadiness {
         entry.error = cause instanceof PostgresStoreReadinessError && cause.store === store
           ? cause
           : new PostgresStoreReadinessError(store, toErrorMessage(cause), { cause });
-        reportPostgresStoreReadinessFailure(entry.error);
+        reportPostgresStoreReadinessFailure(entry.error, attempts);
       },
     );
     this.entries.push(entry);
@@ -332,11 +469,14 @@ export class PostgresRuntimeReadiness {
       } else if (entry.state === 'ready') {
         readyStores.push(entry.store);
       } else if (entry.error) {
-        const classification = POSTGRES_STORE_READINESS_CATALOG[entry.store];
+        const classification: PostgresStoreReadinessCatalogEntry = (
+          POSTGRES_STORE_READINESS_CATALOG[entry.store]
+        );
         degraded.push({
           store: entry.store,
           label: classification.label,
           requirement: classification.requirement,
+          degradesOperatorReadiness: classification.degradesOperatorReadiness === true,
           mismatch: entry.error.mismatch,
         });
       }
@@ -356,18 +496,20 @@ export const runtimePostgresReadiness = new PostgresRuntimeReadiness();
 export function startPostgresStoreReadiness(
   store: PostgresStoreReadinessId,
   task: () => Promise<void>,
+  options: PostgresStoreReadinessOptions = {},
 ): PostgresStoreReadinessHandle {
-  return runtimePostgresReadiness.start(store, task);
+  return runtimePostgresReadiness.start(store, task, options);
 }
 
 export async function awaitPostgresStoreReadiness<T>(
   store: PostgresStoreReadinessId,
   task: () => Promise<T>,
+  options: PostgresStoreReadinessOptions = {},
 ): Promise<T> {
   let value: T | undefined;
   const handle = startPostgresStoreReadiness(store, async () => {
     value = await task();
-  });
+  }, options);
   await handle.waitUntilReady();
   return value as T;
 }
@@ -380,11 +522,12 @@ export async function awaitPostgresStoreReadiness<T>(
 export async function awaitOptionalPostgresStoreReadiness<T>(
   store: OptionalPostgresStoreReadinessId,
   task: () => Promise<T>,
+  options: PostgresStoreReadinessOptions = {},
 ): Promise<T | undefined> {
   let value: T | undefined;
   const handle = startPostgresStoreReadiness(store, async () => {
     value = await task();
-  });
+  }, options);
   try {
     await handle.waitUntilReady();
     return value;

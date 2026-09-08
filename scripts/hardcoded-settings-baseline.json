@@ -9017,6 +9017,12 @@
       "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
+      "file": "src/operator/garden/services/custody-query-service.ts",
+      "name": "CUSTODY_SOURCE_PAGE_SIZE_MAX",
+      "value": "100",
+      "note": "Code-owned DoS guard on the read-only custody chain query (ccgdz.7), not a tuning knob: it bounds how many generations one audit request may scan, and it is coupled to the 400 error string the route returns. An operator-raisable page ceiling would let a single Garden request scan the whole retention horizon; the sibling Garden read services bound their pages the same way."
+    },
+    {
       "file": "src/operator/garden/services/dashboard-cost-windows.ts",
       "name": "DASHBOARD_MODEL_USAGE_REFRESH_INTERVAL_MS",
       "value": "15_000"
@@ -9041,12 +9047,6 @@
       "value": "1",
       "form": "object-member",
       "note": "Existing mutable policy candidate AdminDashboardDataService.getModelUsage.data.limit; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
-    },
-    {
-      "file": "src/operator/garden/services/custody-query-service.ts",
-      "name": "CUSTODY_SOURCE_PAGE_SIZE_MAX",
-      "value": "100",
-      "note": "Code-owned DoS guard on the read-only custody chain query (ccgdz.7), not a tuning knob: it bounds how many generations one audit request may scan, and it is coupled to the 400 error string the route returns. An operator-raisable page ceiling would let a single Garden request scan the whole retention horizon; the sibling Garden read services bound their pages the same way."
     },
     {
       "file": "src/operator/garden/services/episodic-memory-service.ts",
@@ -11166,6 +11166,20 @@
     },
     {
       "file": "src/shared/contracts/settings-garden-contract.ts",
+      "name": "SETTINGS_GARDEN_FIELD_EXPOSURE.postgresStoreReadinessRetryAttempts",
+      "value": "{ sectionId: 'sessions', surface: 'advanced' }",
+      "form": "object-member",
+      "note": "Canonical Garden exposure metadata for the settings.json-owned PostgreSQL store readiness retry attempt budget; this literal locates the owned field and is not a runtime override."
+    },
+    {
+      "file": "src/shared/contracts/settings-garden-contract.ts",
+      "name": "SETTINGS_GARDEN_FIELD_EXPOSURE.postgresStoreReadinessRetryBackoffMs",
+      "value": "{ sectionId: 'sessions', surface: 'advanced' }",
+      "form": "object-member",
+      "note": "Canonical Garden exposure metadata for the settings.json-owned PostgreSQL store readiness retry backoff; this literal locates the owned field and is not a runtime override."
+    },
+    {
+      "file": "src/shared/contracts/settings-garden-contract.ts",
       "name": "SETTINGS_GARDEN_FIELD_EXPOSURE.profileSynthesisCooldownMs",
       "value": "{ sectionId: 'profile', surface: 'advanced' }",
       "form": "object-member",
@@ -12491,13 +12505,6 @@
     },
     {
       "file": "src/system/config/participation-config.ts",
-      "name": "createDefaultPassiveNameCandidateSettings.aliasMinLength",
-      "value": "3",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata createDefaultPassiveNameCandidateSettings.aliasMinLength; the code literal is the seed default for the owned participation.passiveNameCandidates.aliasMinLength setting, which operators raise or lower in settings.json."
-    },
-    {
-      "file": "src/system/config/participation-config.ts",
       "name": "createDefaultEgressLeasePhaseSettings.minReplyConfidence",
       "value": "0.5",
       "form": "object-member",
@@ -12516,6 +12523,13 @@
       "value": "8",
       "form": "object-member",
       "note": "Canonical owner-file/schema metadata createDefaultParticipationAppraiserSettings.transcriptMessageCap; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
+    },
+    {
+      "file": "src/system/config/participation-config.ts",
+      "name": "createDefaultPassiveNameCandidateSettings.aliasMinLength",
+      "value": "3",
+      "form": "object-member",
+      "note": "Canonical owner-file/schema metadata createDefaultPassiveNameCandidateSettings.aliasMinLength; the code literal is the seed default for the owned participation.passiveNameCandidates.aliasMinLength setting, which operators raise or lower in settings.json."
     },
     {
       "file": "src/system/config/participation-config.ts",
@@ -13750,6 +13764,20 @@
       "value": "{ min: 1000, max: 30000 }",
       "form": "object-member",
       "note": "Canonical owner-file/schema metadata SETTINGS_VALIDATION.obsidianTimeoutMs; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
+    },
+    {
+      "file": "src/system/settings/form.ts",
+      "name": "SETTINGS_VALIDATION.postgresStoreReadinessRetryAttempts",
+      "value": "{ min: 1, max: 20 }",
+      "form": "object-member",
+      "note": "Canonical owner-file validation bounds for the settings.json-owned readiness retry attempt budget; the literal defines the accepted range for the owned JSON contract rather than a parallel runtime override."
+    },
+    {
+      "file": "src/system/settings/form.ts",
+      "name": "SETTINGS_VALIDATION.postgresStoreReadinessRetryBackoffMs",
+      "value": "{ min: 100, max: 60000 }",
+      "form": "object-member",
+      "note": "Canonical owner-file validation bounds for the settings.json-owned readiness retry backoff; the literal defines the accepted range for the owned JSON contract rather than a parallel runtime override."
     },
     {
       "file": "src/system/settings/form.ts",

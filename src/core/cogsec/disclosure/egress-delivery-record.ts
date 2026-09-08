@@ -63,7 +63,7 @@ const EGRESS_DELIVERY_RECORD_SCHEMA_VERSION = 1;
  *                      record-first by the egress tool guard before the tool runs.
  * - `artifact_share` — generated files/images leaving on a turn's reply.
  */
-export const EGRESS_DELIVERY_SURFACES = [
+const EGRESS_DELIVERY_SURFACES = [
   'social_reply',
   'tool_egress',
   'artifact_share',
@@ -85,7 +85,7 @@ function isEgressDeliverySurface(value: unknown): value is EgressDeliverySurface
  * platform delivery receipt; the existing outbound ambiguity rules
  * (`egress-reply-sender.ts`) still own "did the platform accept it".
  */
-export const EGRESS_DELIVERY_DISPOSITIONS = ['released', 'held'] as const;
+const EGRESS_DELIVERY_DISPOSITIONS = ['released', 'held'] as const;
 
 export type EgressDeliveryDisposition = typeof EGRESS_DELIVERY_DISPOSITIONS[number];
 
@@ -103,7 +103,7 @@ function isEgressDeliveryDisposition(value: unknown): value is EgressDeliveryDis
  * appear here so the record says WHICH fail-closed rule fired rather than
  * leaving an operator to re-derive it.
  */
-export const EGRESS_CUSTODY_HOLD_REASONS = [
+const EGRESS_CUSTODY_HOLD_REASONS = [
   /** The turn folded a lineage but no durable custody snapshot survives for it. */
   'custody_snapshot_missing',
   /** The delivery record itself could not be written; custody is not durable. */

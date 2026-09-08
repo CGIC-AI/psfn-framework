@@ -44,7 +44,7 @@ export interface ArtifactEgressDestination {
  * no delivery record is written and the hold stays inert — behaviour is exactly
  * what it was before this bead.
  */
-export interface ArtifactEgressCustodyDeps {
+interface ArtifactEgressCustodyDeps {
   recorder: EgressDeliveryRecorder;
   /** The turn that produced these artifacts; the delivery record's key. */
   turnId: string;

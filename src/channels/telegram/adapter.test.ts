@@ -1164,4 +1164,141 @@ describe('TelegramAdapter clarify delivery', () => {
     expect(result.selection).toEqual({ clarificationId: 'clar-1', selectedIndex: 2, selectedChoice: 'Water' });
     expect(handled).toHaveLength(1);
   });
+
+  it('observes unaddressed group chatter and responds only when addressed (jp36.5.6)', async () => {
+    let sentMessageId = 900;
+    const { fetchImpl, calls } = makeFetchMock({
+      getMe: () => ({ id: 9001, is_bot: true, username: 'lyra_bot' }),
+      sendChatAction: () => true,
+      sendMessage: () => ({ message_id: sentMessageId++ }),
+    });
+    const handled: SubstrateMessage[] = [];
+    const adapter = new TelegramAdapter(makeConfig(), new EventBus(), { fetchImpl });
+    adapter.onMessage(async (message) => {
+      handled.push(message);
+      return okResponse(message.channelId);
+    });
+    // Resolve the authenticated bot account the way start() does, without
+    // opening a poll loop.
+    await (fromAny(adapter)).resolveObserverIdentity();
+
+    // 1. Ambient group chatter: observed, never spoken into.
+    await (fromAny(adapter)).handleUpdate({
+      update_id: 1,
+      message: {
+        message_id: 20,
+        date: 1_700_000_000,
+        text: 'anyone know how watermark ties order?',
+        chat: { id: -900, type: 'supergroup' },
+        from: { id: 42, is_bot: false, username: 'group_user' },
+      },
+    });
+
+    // 2. The same room, addressing the companion by @mention.
+    const mentionText = 'hey @lyra_bot any idea?';
+    await (fromAny(adapter)).handleUpdate({
+      update_id: 2,
+      message: {
+        message_id: 21,
+        date: 1_700_000_100,
+        text: mentionText,
+        chat: { id: -900, type: 'supergroup' },
+        from: { id: 42, is_bot: false, username: 'group_user' },
+        entities: [{ type: 'mention', offset: mentionText.indexOf('@'), length: 9 }],
+      },
+    });
+
+    // 3. The same room, replying to the companion's own message.
+    await (fromAny(adapter)).handleUpdate({
+      update_id: 3,
+      message: {
+        message_id: 22,
+        date: 1_700_000_200,
+        text: 'thanks!',
+        chat: { id: -900, type: 'supergroup' },
+        from: { id: 42, is_bot: false, username: 'group_user' },
+        reply_to_message: { message_id: 21, from: { id: 9001, is_bot: true, username: 'lyra_bot' } },
+      },
+    });
+
+    // 4. A slash command in the same room: addressed to a bot by convention.
+    await (fromAny(adapter)).handleUpdate({
+      update_id: 4,
+      message: {
+        message_id: 23,
+        date: 1_700_000_300,
+        text: '/sync now please',
+        chat: { id: -900, type: 'supergroup' },
+        from: { id: 42, is_bot: false, username: 'group_user' },
+      },
+    });
+
+    // 5. A slash command explicitly targeting a DIFFERENT bot stays ambient.
+    await (fromAny(adapter)).handleUpdate({
+      update_id: 5,
+      message: {
+        message_id: 24,
+        date: 1_700_000_400,
+        text: '/sync@other_bot now please',
+        chat: { id: -900, type: 'supergroup' },
+        from: { id: 42, is_bot: false, username: 'group_user' },
+      },
+    });
+
+    // Ambient observations are dispatched without blocking the update loop, so
+    // let their microtasks settle before asserting.
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(handled).toHaveLength(5);
+    expect(handled[3].routing?.responseMode).toBe('respond');
+    expect(handled[4].routing?.responseMode).toBe('observe');
+    expect(handled[0].routing?.responseMode).toBe('observe');
+    expect(handled[1].routing?.responseMode).toBe('respond');
+    expect(handled[2].routing?.responseMode).toBe('respond');
+    expect(handled[2].replyToMessageId).toBe('telegram:-900:21');
+
+    // Every one of them now carries the channel-neutral addressing envelope.
+    for (const message of handled) {
+      expect(message.routing?.addressing).toMatchObject({
+        source: 'telegram',
+        observer: { authorId: '9001' },
+        authorClass: { sourceClass: 'public_contact', roomRole: 'unknown', roomSize: 'unknown' },
+      });
+    }
+
+    // The observed lines neither typed nor sent; only the addressed turns did.
+    expect(calls.filter(call => call.method === 'sendMessage')).toHaveLength(3);
+    expect(calls.filter(call => call.method === 'getMe')).toHaveLength(1);
+  });
+
+  it('keeps responding to every group message when the bot identity is unknown', async () => {
+    const { fetchImpl, calls } = makeFetchMock({
+      getMe: () => { throw new Error('unauthorized'); },
+      sendChatAction: () => true,
+      sendMessage: () => ({ message_id: 950 }),
+    });
+    const handled: SubstrateMessage[] = [];
+    const adapter = new TelegramAdapter(makeConfig(), new EventBus(), { fetchImpl });
+    adapter.onMessage(async (message) => {
+      handled.push(message);
+      return okResponse(message.channelId);
+    });
+    await (fromAny(adapter)).resolveObserverIdentity();
+
+    await (fromAny(adapter)).handleUpdate({
+      update_id: 1,
+      message: {
+        message_id: 30,
+        date: 1_700_000_000,
+        text: 'ambient line',
+        chat: { id: -901, type: 'supergroup' },
+        from: { id: 42, is_bot: false, username: 'group_user' },
+      },
+    });
+
+    expect(handled).toHaveLength(1);
+    expect(handled[0].routing?.responseMode).toBe('respond');
+    expect(handled[0].routing?.addressing).toBeUndefined();
+    expect(calls.filter(call => call.method === 'sendMessage')).toHaveLength(1);
+  });
 });

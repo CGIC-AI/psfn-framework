@@ -13,6 +13,8 @@ import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import { ParticipationAppraiser } from '../../../core/participation/appraiser.js';
 import { PassiveNameCandidateBuilder } from '../../../core/participation/passive-name-candidate.js';
 import { RoomParticipationLeaseCoordinator } from '../../../core/participation/room-participation-lease-coordinator.js';
+import { RoomMessageFeatureExtractor } from '../../../core/participation/room-signal.js';
+import type { RoomSignalRuntime } from '../../../core/participation/passive-name-candidate.js';
 import { SpeakingReservationPhase, type IcpSocialPrecedenceResolver } from '../../../core/agent/arbiter/reservation-phase.js';
 import { SpeakingEgressLeasePhase } from '../../../core/agent/arbiter/egress-lease-phase.js';
 import { createIcpSpeakingPrecedenceResolver } from '../../../core/icp/speaking-precedence-resolver.js';
@@ -24,6 +26,9 @@ import type { OutboundReplyDeduper } from '../../../system/lifecycle/outbound-re
 import { classifyChannelDisclosure } from '../../../system/trust/policy.js';
 import type { createAgentPersistenceRuntime } from '../../../persistence/runtime-factory.js';
 import type { AgentCoreRuntime } from '../core-runtime.js';
+import { createComponentLogger } from '../../../shared/logger.js';
+
+const log = createComponentLogger('speaking-arbiter-lane');
 
 export interface SpeakingArbiterLaneDeps {
   config: SubstrateConfig;
@@ -93,6 +98,50 @@ export function wireSpeakingArbiterLane(deps: SpeakingArbiterLaneDeps): Speaking
     })
     : undefined;
 
+  // Channel-neutral room signal (jp36.5.6). One deterministic admission policy
+  // for every connector: the connector translates identifiers, mentions,
+  // replies, roles, and trust at its own boundary, and this stage derives the
+  // connector-independent features ONCE per physical message before deciding
+  // whether this companion may be nominated at all. Constructed only when owner
+  // policy enables it, so the public default adds nothing to the observe path.
+  //
+  // The optional shared ambiguity classifier is deliberately NOT constructed
+  // here: there is no pinned cheap classifier model yet, and a fleet runtime
+  // additionally needs a durable cross-process claim before one message could be
+  // classified exactly once. Until both exist, ambiguity resolves to suppression
+  // (`room_signal_ambiguous`) rather than to participation.
+  const roomSignalSettings = schedulerConfig.socialAutonomy.roomSignal;
+  const roomSignal: RoomSignalRuntime | undefined = (
+    roomSignalSettings.enabled && config.companionId
+  )
+    ? {
+      extractor: new RoomMessageFeatureExtractor({ settings: roomSignalSettings }),
+      profile: {
+        companionId: config.companionId,
+        // Reviewed, room-safe self-description only: the canonical companion
+        // name plus owner-curated interest tags. No biography, no private
+        // memory, and no per-connector alias list.
+        aliases: [companionName],
+        interests: roomSignalSettings.companionInterests,
+      },
+      settings: roomSignalSettings,
+      // Content-free staged diagnostics (acceptance #8): stage identity,
+      // bounded reason codes, connector label, and the model-call counter. No
+      // transcript, alias, interest tag, biography, or reasoning ever appears.
+      onNomination: (nomination) => {
+        log.debug('Room signal nominated a companion', {
+          companionId: nomination.companionId,
+          channelId: nomination.roomId,
+          messageId: nomination.messageId,
+          connector: nomination.connector,
+          trigger: nomination.trigger,
+          reasonCodes: nomination.reasonCodes,
+          classifierCalls: nomination.classifierConsulted ? 1 : 0,
+        });
+      },
+    }
+    : undefined;
+
   // Deterministic passive-name participation candidate gate (bible §8.1). Reuses
   // the group-salience name detector and the scheduler's canonical
   // direct-vs-group classifier — no parallel detection paths. Runs on observed
@@ -108,6 +157,7 @@ export function wireSpeakingArbiterLane(deps: SpeakingArbiterLaneDeps): Speaking
     settings: schedulerConfig.socialAutonomy.passiveNameCandidate,
     // Name-free follow-ups are considered ONLY through the lease gate above.
     ...(roomParticipationLease ? { roomParticipationLease } : {}),
+    ...(roomSignal ? { roomSignal } : {}),
   });
 
   // Cheap, tool-less participation appraiser (bible §8.2, jp36.3.3). Consumes the
@@ -226,6 +276,22 @@ export function wireSpeakingArbiterLane(deps: SpeakingArbiterLaneDeps): Speaking
         companionName,
         outboundReplyGuard,
         resolveDestinationDisclosure: (channelId) => classifyChannelDisclosure(channelId),
+        // jp36.5.6: the companion's own delivered autonomous reply is recorded
+        // on the ROOM's transcript. Generation happens on a synthetic
+        // `internal:egress-reply:*` channel and both adapters drop self
+        // messages, so without this append the room's continuation transcript
+        // would show every participant except the companion.
+        roomTranscript: {
+          recordCompanionRoomReply: (entry) => {
+            sessionStore.append({
+              channelId: entry.channelId,
+              role: 'assistant',
+              content: entry.content,
+              timestamp: entry.timestampMs,
+              channelVisibility: entry.channelVisibility,
+            });
+          },
+        },
       }),
       config: {
         mode: egressLeaseSettings.mode,

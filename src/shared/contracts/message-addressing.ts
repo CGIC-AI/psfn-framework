@@ -1,10 +1,71 @@
 import { isRecord } from '../utils/types.js';
+import type { IntakeSourceClass } from './intake-envelope.js';
 
 export const MESSAGE_ADDRESSING_SCHEMA_VERSION = 2 as const;
 
 export interface MessageAddressingParticipant {
   authorId: string;
   authorName: string;
+}
+
+/**
+ * The chat-author subset of the canonical intake trust vocabulary. Connectors
+ * already compute exactly this for body screening (Discord
+ * `resolveMessageSourceClass`, Telegram's inline `sourceClass`), so room
+ * participation reuses it instead of inventing a second trust ladder.
+ */
+export const MESSAGE_AUTHOR_SOURCE_CLASSES = [
+  'operator',
+  'companion_self',
+  'primary_user',
+  'trusted_contact',
+  'regular_contact',
+  'public_contact',
+] as const satisfies readonly IntakeSourceClass[];
+
+export type MessageAuthorSourceClass = typeof MESSAGE_AUTHOR_SOURCE_CLASSES[number];
+
+/**
+ * Narrow a connector's intake source class onto the chat-author subset. Any
+ * class outside it (a document, a tool output) is not a room author at all, so
+ * it collapses to the least-privileged chat class rather than being trusted.
+ */
+export function toMessageAuthorSourceClass(value: IntakeSourceClass): MessageAuthorSourceClass {
+  return (MESSAGE_AUTHOR_SOURCE_CLASSES as readonly string[]).includes(value)
+    ? value as MessageAuthorSourceClass
+    : 'public_contact';
+}
+
+/**
+ * Connector-translated standing of the author inside this room. `unknown` is
+ * the fail-closed value every connector that cannot assert standing must use.
+ */
+export const MESSAGE_AUTHOR_ROOM_ROLES = [
+  'owner',
+  'moderator',
+  'member',
+  'guest',
+  'unknown',
+] as const;
+
+export type MessageAuthorRoomRole = typeof MESSAGE_AUTHOR_ROOM_ROLES[number];
+
+/** Coarse room-size band. `unknown` is treated as the large/untrusted case. */
+const MESSAGE_ROOM_SIZE_BANDS = ['small', 'large', 'unknown'] as const;
+
+export type MessageRoomSizeBand = typeof MESSAGE_ROOM_SIZE_BANDS[number];
+
+/**
+ * Content-free author standing captured at the connector boundary (jp36.5.6).
+ * It carries no message text and no biography: only the trust class the intake
+ * firewall already resolved, the room role the platform asserts, and a coarse
+ * room-size band. Participation policy reads these instead of forking per
+ * connector.
+ */
+export interface MessageAddressingAuthorClass {
+  sourceClass: MessageAuthorSourceClass;
+  roomRole: MessageAuthorRoomRole;
+  roomSize: MessageRoomSizeBand;
 }
 
 interface MessageAddressingReplyTarget {
@@ -47,14 +108,25 @@ type MessageResolvedAddressee =
  */
 export interface MessageAddressingMetadata {
   schemaVersion: typeof MESSAGE_ADDRESSING_SCHEMA_VERSION;
-  source: 'discord' | 'buzz';
+  source: MessageAddressingSource;
   author: MessageAddressingParticipant;
   observer: MessageAddressingParticipant;
   mentionedTargets: readonly MessageAddressingParticipant[];
   replyTarget?: MessageAddressingReplyTarget;
   channel: MessageAddressingChannel;
   resolvedAddressee: MessageResolvedAddressee;
+  /**
+   * Optional connector-translated author standing (jp36.5.6). Absent on
+   * envelopes written before it existed and on connectors that cannot assert
+   * it; every consumer must treat absence as the untrusted case.
+   */
+  authorClass?: MessageAddressingAuthorClass;
 }
+
+/** Connectors that can assert transport-authoritative addressing. */
+const MESSAGE_ADDRESSING_SOURCES = ['discord', 'buzz', 'telegram'] as const;
+
+export type MessageAddressingSource = typeof MESSAGE_ADDRESSING_SOURCES[number];
 
 function parseRequiredText(value: unknown, fieldName: string): string {
   if (typeof value !== 'string' || !value.trim()) {
@@ -229,13 +301,45 @@ function parseResolvedAddressee(
   throw new Error('Message addressing resolvedAddressee.kind is unsupported');
 }
 
+function parseEnumMember<T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+  fieldName: string,
+): T {
+  if (typeof value !== 'string' || !(allowed as readonly string[]).includes(value)) {
+    throw new Error(`Message addressing field "${fieldName}" must be one of ${allowed.join(', ')}`);
+  }
+  return value as T;
+}
+
+function parseAuthorClass(value: unknown): MessageAddressingAuthorClass | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    throw new Error('Message addressing field "authorClass" must be an object');
+  }
+  return {
+    sourceClass: parseEnumMember(
+      value.sourceClass,
+      MESSAGE_AUTHOR_SOURCE_CLASSES,
+      'authorClass.sourceClass',
+    ),
+    roomRole: parseEnumMember(value.roomRole, MESSAGE_AUTHOR_ROOM_ROLES, 'authorClass.roomRole'),
+    roomSize: parseEnumMember(value.roomSize, MESSAGE_ROOM_SIZE_BANDS, 'authorClass.roomSize'),
+  };
+}
+
 /** Validate and normalize the platform envelope. Unknown/legacy schemas reject. */
 export function parseMessageAddressingMetadata(value: unknown): MessageAddressingMetadata {
   if (!isRecord(value) || value.schemaVersion !== MESSAGE_ADDRESSING_SCHEMA_VERSION) {
     throw new Error(`Message addressing must be a schemaVersion ${MESSAGE_ADDRESSING_SCHEMA_VERSION} object`);
   }
-  if (value.source !== 'discord' && value.source !== 'buzz') {
-    throw new Error('Message addressing source must be "discord" or "buzz"');
+  if (
+    typeof value.source !== 'string'
+    || !(MESSAGE_ADDRESSING_SOURCES as readonly string[]).includes(value.source)
+  ) {
+    throw new Error(
+      `Message addressing source must be one of ${MESSAGE_ADDRESSING_SOURCES.join(', ')}`,
+    );
   }
   const author = parseParticipant(value.author, 'author');
   const observer = parseParticipant(value.observer, 'observer');
@@ -249,14 +353,16 @@ export function parseMessageAddressingMetadata(value: unknown): MessageAddressin
     mentionedTargets,
     replyTarget,
   );
+  const authorClass = parseAuthorClass(value.authorClass);
   return {
     schemaVersion: MESSAGE_ADDRESSING_SCHEMA_VERSION,
-    source: value.source,
+    source: value.source as MessageAddressingSource,
     author,
     observer,
     mentionedTargets,
     ...(replyTarget ? { replyTarget } : {}),
     channel,
     resolvedAddressee,
+    ...(authorClass ? { authorClass } : {}),
   };
 }

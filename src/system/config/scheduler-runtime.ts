@@ -134,6 +134,16 @@ export function resolveRuntimeSchedulerConfig(
         ...persisted.socialAutonomy.roomParticipationLease,
         openOn: { ...persisted.socialAutonomy.roomParticipationLease.openOn },
       },
+      roomSignal: {
+        ...persisted.socialAutonomy.roomSignal,
+        contextualEligibleSourceClasses:
+          [...persisted.socialAutonomy.roomSignal.contextualEligibleSourceClasses],
+        contextualEligibleRoomRoles:
+          [...persisted.socialAutonomy.roomSignal.contextualEligibleRoomRoles],
+        topicTags: structuredClone(persisted.socialAutonomy.roomSignal.topicTags),
+        companionInterests: [...persisted.socialAutonomy.roomSignal.companionInterests],
+        classifier: { ...persisted.socialAutonomy.roomSignal.classifier },
+      },
       freeTimeChooser: { ...persisted.socialAutonomy.freeTimeChooser },
     },
     ...(persisted.backgroundWorkWelfare

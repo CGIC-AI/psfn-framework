@@ -4,16 +4,19 @@ import {
   createDefaultPassiveNameCandidateSettings,
   createDefaultReservationPhaseSettings,
   createDefaultRoomParticipationLeaseSettings,
+  createDefaultRoomSignalSettings,
   parseEgressLeaseTunables,
   parseParticipationAppraiserSettings,
   parsePassiveNameCandidateSettings,
   parseReservationPhaseSettings,
   parseRoomParticipationLeaseSettings,
+  parseRoomSignalSettings,
   type EgressLeaseTunables,
   type ParticipationAppraiserSettings,
   type PassiveNameCandidateSettings,
   type ReservationPhaseSettings,
   type RoomParticipationLeaseSettings,
+  type RoomSignalSettings,
 } from '../participation-config.js';
 import {
   createDefaultFreeTimeChooserSettings,
@@ -51,6 +54,13 @@ export interface SocialAutonomyConfig {
    * room repeating its name. Public default off.
    */
   roomParticipationLease: RoomParticipationLeaseSettings;
+  /**
+   * Channel-neutral room signal (jp36.5.6): which room members may be
+   * participated with contextually, the room-velocity ceiling, the reviewed
+   * coarse topic vocabulary, and the optional shared ambiguity classifier.
+   * Public default off.
+   */
+  roomSignal: RoomSignalSettings;
   freeTimeChooser: FreeTimeChooserSettings;
 }
 
@@ -61,6 +71,7 @@ export function createDefaultSocialAutonomyConfig(): SocialAutonomyConfig {
     reservationPhase: createDefaultReservationPhaseSettings(),
     egressLease: createDefaultEgressLeaseTunables(),
     roomParticipationLease: createDefaultRoomParticipationLeaseSettings(),
+    roomSignal: createDefaultRoomSignalSettings(),
     freeTimeChooser: createDefaultFreeTimeChooserSettings(),
   };
 }
@@ -86,6 +97,7 @@ export function validateSocialAutonomyConfig(
       'reservationPhase',
       'egressLease',
       'roomParticipationLease',
+      'roomSignal',
       'freeTimeChooser',
     ],
     `${sourcePath}.socialAutonomy`,
@@ -111,6 +123,10 @@ export function validateSocialAutonomyConfig(
     roomParticipationLease: parseRoomParticipationLeaseSettings(
       raw.roomParticipationLease,
       `${sourcePath}.socialAutonomy.roomParticipationLease`,
+    ),
+    roomSignal: parseRoomSignalSettings(
+      raw.roomSignal,
+      `${sourcePath}.socialAutonomy.roomSignal`,
     ),
     freeTimeChooser: parseFreeTimeChooserSettings(
       raw.freeTimeChooser,

@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createAgentLoopEgressReplySender } from './egress-reply-sender.js';
+import {
+  createAgentLoopEgressReplySender,
+  type EgressReplyRoomTranscriptPort,
+} from './egress-reply-sender.js';
 import {
   SpeakingEgressLeasePhase,
   type EgressLeasePhaseConfig,
@@ -47,6 +50,7 @@ const PUBLIC_DISCLOSURE: ChannelDisclosureContext = { channelPrivacy: 'public', 
 
 interface SenderOverrides {
   guard?: OutboundReplyDeduper;
+  roomTranscript?: EgressReplyRoomTranscriptPort;
   resolveDisclosure?: (channelId: string) => ChannelDisclosureContext;
   eventFenceWindowMs?: number;
   now?: () => number;
@@ -70,6 +74,7 @@ function makeSender(
       : {}),
     ...(overrides.now ? { now: overrides.now } : {}),
     ...(overrides.silentToken ? { silentToken: overrides.silentToken } : {}),
+    ...(overrides.roomTranscript ? { roomTranscript: overrides.roomTranscript } : {}),
   });
 }
 
@@ -554,5 +559,75 @@ describe('post-TTL re-drive delivers exactly once (qgqw.3 regression)', () => {
     expect(delivery.send).toHaveBeenCalledTimes(1);
     expect(generator.handleMessage).toHaveBeenCalledTimes(1);
     expect(store.completeEgressLease).toHaveBeenCalledTimes(2);
+  });
+
+  it('records the companion\'s own delivered reply on the ROOM transcript exactly once', async () => {
+    const recorded: Parameters<EgressReplyRoomTranscriptPort['recordCompanionRoomReply']>[0][] = [];
+    const generator = { handleMessage: vi.fn(async () => makeResponse('Hi Sam!')) };
+    const delivery = { send: vi.fn(async () => undefined) };
+    const sender = makeSender(generator, delivery, {
+      now: () => 5_000,
+      roomTranscript: { recordCompanionRoomReply: entry => recorded.push(entry) },
+    });
+
+    expect((await sender.deliver(makeRequest())).outcome).toBe('delivered');
+    expect(recorded).toEqual([{
+      // The REAL room, not the synthetic internal generation channel.
+      channelId: 'discord:guild-1:general',
+      content: 'Hi Sam!',
+      timestampMs: 5_000,
+      channelVisibility: 'public',
+    }]);
+
+    // A re-drive of the same trigger event is fenced before regeneration, so the
+    // transcript is not appended a second time.
+    expect((await sender.deliver(makeRequest())).outcome).toBe('delivered');
+    expect(recorded).toHaveLength(1);
+    expect(delivery.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('records nothing when the reply was never delivered', async () => {
+    const recorded: unknown[] = [];
+    const roomTranscript = { recordCompanionRoomReply: (entry: unknown) => recorded.push(entry) };
+
+    const declined = makeSender(
+      { handleMessage: vi.fn(async () => makeResponse('__no_reply__')) },
+      { send: vi.fn(async () => undefined) },
+      { roomTranscript },
+    );
+    expect((await declined.deliver(makeRequest())).outcome).toBe('failed');
+
+    // A reply the shared guard already saw from another sender path is not sent
+    // by THIS path, so it must not be recorded either.
+    const guard = new OutboundReplyDeduper();
+    guard.noteDelivered({
+      channelId: 'discord:guild-1:general',
+      content: 'Hi Sam!',
+      sourceTurnId: 'other-turn',
+      senderKind: 'reply_pump',
+    });
+    const duplicate = makeSender(
+      { handleMessage: vi.fn(async () => makeResponse('Hi Sam!')) },
+      { send: vi.fn(async () => undefined) },
+      { guard, roomTranscript },
+    );
+    expect((await duplicate.deliver(makeRequest({ sourceEventId: 'evt-2' }))).outcome)
+      .toBe('failed');
+
+    expect(recorded).toEqual([]);
+  });
+
+  it('keeps a delivered reply delivered when the transcript append throws', async () => {
+    const generator = { handleMessage: vi.fn(async () => makeResponse('Hi Sam!')) };
+    const delivery = { send: vi.fn(async () => undefined) };
+    const sender = makeSender(generator, delivery, {
+      roomTranscript: {
+        recordCompanionRoomReply: () => { throw new Error('session store unavailable'); },
+      },
+    });
+    // The message is already in the room; a bookkeeping failure must never
+    // report a non-delivery and invite a re-send.
+    expect(await sender.deliver(makeRequest())).toEqual({ outcome: 'delivered' });
+    expect(delivery.send).toHaveBeenCalledTimes(1);
   });
 });

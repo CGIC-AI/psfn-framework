@@ -97,7 +97,7 @@ silent fallbacks between these layers.
 | Command (package.json) | Harness | What it proves |
 | --- | --- | --- |
 | `npm run smoke:chat` | `scripts/chat-cockpit-smoke.mjs` | Admin bootstrap fields, OpenAI-compatible chat completion, optional voice websocket handshake |
-| `npm run smoke:docker` | `scripts/smoke-docker.mjs` | Split Compose stack (postgres + gateway + agent) up, `/health` plumbing, one persisted chat turn, provider-boundary classification |
+| `npm run smoke:docker` | `scripts/smoke-docker.mjs` | Keyless split Compose stack (postgres + provider double + gateway + agent + hub + companion-ui) up, `/health` plumbing, hub/companion-ui surfaces, one persisted chat turn |
 | `npm run smoke:cogsec` | `scripts/cogsec-remediation-smoke.ts` | Tombstone → revocation → regeneration → persona conformance → safe notices, with zero dirty-payload leakage |
 | `npm run smoke:discord:dm-voice` | `scripts/discord-dm-voice-smoke.mjs` | DM/voice/TTS/STT/Opus readiness, optional read-only live Discord API checks, Phase V regression profile |
 | `npm run e2e` | `src/app/e2e/e2e-test.ts` | Full runtime stack: conversation, persistence, memory, embeddings, reload, REPL, fleet resolution |
@@ -169,13 +169,15 @@ exits 1 — the harness never exits 0 on a failed check.
 `scripts/smoke-docker.mjs` is the Compose analogue of the Kubernetes
 `smoke:chat` pod. It brings up the real split runtime from
 `docker/docker-compose.smoke.yml`, waits for the gateway `/health` endpoint
-against the `PLUMBING_SUBSYSTEMS` set (`memory`, `embeddings`, `scheduler`),
-drives one OpenAI-compatible turn through the gateway `/v1` edge, and then
-proves persistence by execing `node` inside the agent container and asserting
-the exact user/assistant pair appears in the channel's L0 journal files. Exit
-codes classify the result: **0** = full persisted turn, **2** = provider
-boundary reached (`llm` health degraded, `isProviderBoundary` matched, no
-`OPENROUTER_API_KEY`), **1** = plumbing failure.
+against the `PLUMBING_SUBSYSTEMS` set (`memory`, `embeddings`, `scheduler`,
+`llm`), drives one OpenAI-compatible turn through the gateway `/v1` edge, and
+then proves persistence by execing `node` inside the agent container and
+asserting the exact user/assistant pair appears in the channel's L0 journal
+files. The stack needs no provider account: an in-stack OpenAI-compatible double
+answers the model calls behind a bearer the gateway genuinely resolves, so there
+is no external boundary left to excuse a failed turn. Exit codes classify the
+result: **0** = full persisted turn, **3** = hub/companion-ui source-contract
+divergence, **1** = failure.
 
 `scripts/cogsec-remediation-smoke.ts` runs the cognitive-security remediation
 pipeline in-memory against real stores (session store with in-memory transcript

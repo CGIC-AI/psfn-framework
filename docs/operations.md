@@ -157,16 +157,53 @@ workspace, logs, tmp, backups, and models are created.
 and is explicitly not production-hardened. Drive it with `npm run smoke:docker`
 (`scripts/smoke-docker.mjs`), which brings the stack up, proves the gateway API
 edge and the gateway/agent RPC, verifies the Satellite Hub and companion-ui
-surfaces, and then drives one chat turn. Its exit codes are `0` (full turn), `2`
-(stack healthy, turn stopped at the external provider boundary), `3`
-(hub/companion-ui source-contract divergence), and `1` (plumbing failure).
+surfaces, and then drives one chat turn. Its exit codes are `0` (full turn),
+`3` (hub/companion-ui source-contract divergence), and `1` (failure).
 `--keep-up` leaves the stack running; the default tears it down with
 `docker compose down -v`.
 
-**`OPENROUTER_API_KEY` is required, not optional.** Intake screening fails closed
-at gateway startup when its configured screener provider has no gateway-resolved
-credential, so a keyless stack exits before it binds the API edge and the exit-2
-path is unreachable. Export a real key before `up`.
+#### The keyless contract
+
+**No provider account is needed, and none is accepted.** The stack ships a
+deterministic OpenAI-compatible double, `provider-stub`
+(`scripts/ops/psfn-compose-smoke-provider-stub.mjs`), on the internal-only
+network, and its own owner-file fixtures under `docker/smoke-fixtures/` that the
+seed lays into `SYSTEM_DATA_DIR` in place of the repository `providers.seed.json`
+and `models.seed.json`. Those fixtures declare one `generic_openai` provider,
+`smoke-stub`, at `http://provider-stub:3000/v1` with an `apiKeyRef` naming
+`PSFN_SMOKE_PROVIDER_STUB_API_KEY`, and route all ten canonical model purposes at
+its two models (`smoke-stub-chat` carries `supportsVision`; `smoke-stub-background`
+is the second distinct model the L3 screener requires). The gateway holds that
+bearer and nothing else — the compose file has no `OPENROUTER_API_KEY` slot.
+
+This is a substitution of configuration, not a weakening of policy. Every
+fail-closed path is intact and exercised:
+
+- `assertScreenerBackendReady` still refuses to start intake screening when the
+  screener provider has no gateway-resolved credential
+  (`src/boundary/gateway/intake/screener-transport.ts`). It passes here because
+  the gateway genuinely resolves the stub bearer through the credential vault.
+- The double **authenticates**: a request without that exact bearer gets `401`,
+  so a green smoke proves the gateway resolved and presented the credential.
+- The double answers the real wire protocol (pi-ai always sends `stream: true`
+  with `stream_options.include_usage`) and returns each intake screener's exact
+  verdict schema, which those screeners still validate and still reject when
+  malformed.
+- Production seeds, Helm values, and `docker/compose.yml` are untouched. Nothing
+  outside this disposable profile references the stub or the fixtures.
+
+What the smoke stack therefore proves: the split runtime boots, migrations
+apply, the gateway/agent RPC connects, the hub and companion-ui surfaces verify,
+and one chat turn completes and lands in the canonical session journal. What it
+does **not** prove: that a real provider account, model slug, or egress path
+works. That is `npm run compose:verify` against `docker/compose.yml`, which
+drives a real provider-backed turn. Do not point the smoke stack at a real
+provider.
+
+Because the double is part of the stack, the harness now requires the `llm`
+health subsystem to be healthy alongside `memory`, `embeddings`, and
+`scheduler`, and a non-2xx chat response is a plain failure — there is no
+"stopped at the provider boundary" outcome left to excuse one.
 
 Every PSFN deployment is a fleet, so the smoke stack must satisfy the same
 multi-companion credential topology as the supported path: the shared
@@ -176,7 +213,9 @@ healthy and runs `scripts/ops/psfn-compose-smoke-provision-db.mjs`, which
 provisions `shared_schema_migration` and `companion_smoke_runtime` (schema
 `companion_smoke`) through the same `scripts/ops/lib/postgres-tenancy.mjs`
 module the production `scripts/ops/psfn-compose-bootstrap.mjs` uses, so the two
-topologies cannot drift. The superuser credential exists only inside the seed;
+topologies cannot drift. That database step runs after every owner-file,
+manifest, registry, and card write: the seed's file-laying phase depends on
+nothing external, so it is the seed's single external-state boundary. The superuser credential exists only inside the seed;
 the gateway authenticates as `companion_smoke_runtime` (its
 `POSTGRES_DATABASE_URL` must match the primary companion credential exactly),
 and the agent receives that same credential as a 0600 file on the auth volume.

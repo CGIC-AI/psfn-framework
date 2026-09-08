@@ -16,6 +16,7 @@ import { describeStartupOwnerFileChecks } from '../../src/system/config/startup-
 const repoRoot = resolve(import.meta.dirname, '../..');
 const seedScript = join(repoRoot, 'scripts/ops/psfn-compose-smoke-seed.sh');
 const composeFile = join(repoRoot, 'docker/docker-compose.smoke.yml');
+const smokeFixtureDir = join(repoRoot, 'docker/smoke-fixtures');
 const supportedComposeFile = join(repoRoot, 'docker/compose.yml');
 const supportedComposeBootstrap = join(repoRoot, 'scripts/ops/psfn-compose-bootstrap.mjs');
 const temporaryRoots: string[] = [];
@@ -107,6 +108,7 @@ describe('Compose smoke bootstrap', () => {
         PSFN_SMOKE_AGENT_AUTH_DIR: join(root, 'agent-auth'),
         PSFN_SMOKE_MODEL_CACHE_ROOT: join(root, 'model-cache'),
         PSFN_SEED_CONFIG_DIR: configDir,
+        PSFN_SMOKE_FIXTURE_DIR: smokeFixtureDir,
         PSFN_RUNTIME_UID: String(process.getuid?.() ?? 999),
         PSFN_RUNTIME_GID: String(process.getgid?.() ?? 999),
         COMPANION_ID: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
@@ -296,6 +298,7 @@ describe('Compose smoke bootstrap', () => {
         PSFN_SMOKE_AGENT_AUTH_DIR: join(root, 'agent-auth'),
         PSFN_SMOKE_MODEL_CACHE_ROOT: join(root, 'model-cache'),
         PSFN_SEED_CONFIG_DIR: join(repoRoot, 'config'),
+        PSFN_SMOKE_FIXTURE_DIR: smokeFixtureDir,
         PSFN_RUNTIME_UID: String(process.getuid?.() ?? 999),
         PSFN_RUNTIME_GID: String(process.getgid?.() ?? 999),
         COMPANION_ID: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
@@ -304,7 +307,13 @@ describe('Compose smoke bootstrap', () => {
       },
     });
 
-    expect(result.status, result.stderr || result.stdout).toBe(0);
+    // The owner-file phase runs to completion before the seed reaches its
+    // database step, which needs a live Postgres this unit test does not have;
+    // that stop is itself fail-closed and is asserted here rather than mocked.
+    expect(result.status, result.stderr || result.stdout).toBe(2);
+    expect(result.stderr).toContain(
+      '[smoke-seed] POSTGRES_ADMIN_DATABASE_URL is required to provision tenancy roles',
+    );
     expect(existsSync(join(systemDataDir, 'automata-policy.json'))).toBe(true);
     expect(existsSync(join(systemDataDir, 'partner-affect-shadow.json'))).toBe(false);
     expect(JSON.parse(
@@ -317,6 +326,42 @@ describe('Compose smoke bootstrap', () => {
         : join(root, 'companion-data');
       expect(existsSync(join(ownerRoot, owner.ownerFileName)), owner.label).toBe(true);
     }
+    // providers/models come from the smoke fixtures, not the repository seeds:
+    // that substitution is what makes the stack keyless (psfn-framework-j3iol).
+    expect(readFileSync(join(systemDataDir, 'providers.json'), 'utf8'))
+      .toBe(readFileSync(join(smokeFixtureDir, 'providers.json'), 'utf8'));
+    expect(readFileSync(join(systemDataDir, 'models.json'), 'utf8'))
+      .toBe(readFileSync(join(smokeFixtureDir, 'models.json'), 'utf8'));
+  });
+
+  it('fails closed when the smoke owner fixtures are missing', () => {
+    const root = temporaryRoot();
+    const result = spawnSync('sh', [seedScript], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        SYSTEM_DATA_DIR: join(root, 'system-data'),
+        COMPANION_DATA_DIR: join(root, 'companion-data'),
+        WORKSPACE_PATH: join(root, 'workspace'),
+        GATEWAY_SOCKET: join(root, 'run/gateway.sock'),
+        PSFN_SMOKE_AGENT_AUTH_DIR: join(root, 'agent-auth'),
+        PSFN_SMOKE_MODEL_CACHE_ROOT: join(root, 'model-cache'),
+        PSFN_SEED_CONFIG_DIR: join(repoRoot, 'config'),
+        PSFN_SMOKE_FIXTURE_DIR: join(root, 'absent-fixtures'),
+        PSFN_RUNTIME_UID: String(process.getuid?.() ?? 999),
+        PSFN_RUNTIME_GID: String(process.getgid?.() ?? 999),
+        COMPANION_ID: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        GATEWAY_SESSION_HMAC_KEY: '',
+        POSTGRES_DATABASE_URL: 'postgresql://fixture.invalid/psfn',
+      },
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      `[smoke-seed] missing smoke owner fixture: ${join(root, 'absent-fixtures/providers.json')}`,
+    );
+    expect(existsSync(join(root, 'system-data/providers.json'))).toBe(false);
   });
 });
 

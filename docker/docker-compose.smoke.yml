@@ -21,6 +21,12 @@ name: psfn-smoke
 #   companion-ui
 #             the companion-ui PWA served as static files by nginx. No server
 #             logic and no outbound calls. Published on 127.0.0.1:18080.
+#   provider-stub
+#             a deterministic OpenAI-compatible double on the internal-only
+#             network (scripts/ops/psfn-compose-smoke-provider-stub.mjs). It is
+#             what makes this stack keyless: the gateway resolves a real bearer
+#             for it, presents that bearer on every screener and chat call, and
+#             gets a deterministic answer back. No host port, no egress.
 #
 # Split topology is real here: gateway and agent are separate containers that
 # share ONLY the gateway socket (an internal named volume). system-data and
@@ -29,12 +35,21 @@ name: psfn-smoke
 # shape (network-mode mTLS RPC + cert-manager); this compose uses the simpler
 # single-node Unix-socket RPC and is explicitly not production-hardened.
 #
-# One documented secret slot: export OPENROUTER_API_KEY before `up`. It is now
-# REQUIRED, not optional: intake screening fails closed at gateway startup when
-# its configured screener provider has no gateway-resolved credential, so a
-# keyless stack never reaches the API edge. With the key the whole stack comes up
-# healthy, the gateway<->agent RPC connects, migrations apply, the hub and
-# companion-ui surfaces verify, and /v1/chat/completions drives a real turn.
+# KEYLESS BY CONTRACT (psfn-framework-j3iol). This stack needs NO provider
+# account and makes no provider call off the host. Intake screening fails closed
+# at gateway startup when its screener provider has no gateway-resolved
+# credential, and that check is deliberately unchanged; instead this stack ships
+# its own providers.json/models.json fixtures (docker/smoke-fixtures/, laid down
+# by the seed) that route every model purpose at the in-stack `provider-stub`
+# double, with a real bearer the gateway resolves and presents. The whole stack
+# therefore comes up healthy, the gateway<->agent RPC connects, migrations
+# apply, the hub and companion-ui surfaces verify, and /v1/chat/completions
+# drives a complete turn that is persisted to the canonical session journal.
+#
+# What this stack does NOT prove: that a real provider account, model slug, or
+# egress path works. That is `npm run compose:verify` against docker/compose.yml,
+# which drives a real provider-backed turn. Do not point this stack at a real
+# provider — the fixtures are smoke-only and the double answers deterministically.
 #
 # Bring up the whole stack, verify the hub and companion-ui surfaces, and drive
 # one chat turn with:  npm run smoke:docker
@@ -98,6 +113,16 @@ x-satellite-id: &satellite-id smoke-hub
 x-satellite-endpoint-id: &satellite-endpoint-id smoke-hub-endpoint
 x-satellite-claim-type: &satellite-claim-type satellite.endpoint
 
+# ── Smoke provider double ──
+# The bearer the gateway resolves for the `smoke-stub` provider named in
+# docker/smoke-fixtures/providers.json, and the deterministic reply the double
+# returns for an ordinary completion. The stub REJECTS a request that does not
+# present this exact bearer, so a green smoke proves the gateway resolved and
+# sent the credential; it is not a credential bypass. It is a local test double
+# credential, not a provider secret: it buys nothing and reaches nothing.
+x-provider-stub-key: &provider-stub-key ${PSFN_SMOKE_PROVIDER_STUB_API_KEY:-psfn-smoke-provider-stub-key-please-rotate}
+x-provider-stub-reply: &provider-stub-reply ${PSFN_SMOKE_PROVIDER_STUB_REPLY:-Smoke stub acknowledges the compose smoke turn.}
+
 services:
   postgres:
     image: ${PSFN_SMOKE_POSTGRES_IMAGE:-pgvector/pgvector:pg17}
@@ -154,6 +179,9 @@ services:
       - psfn-smoke-internal
     volumes:
       - ../scripts/ops:/app/scripts/ops:ro
+      # Smoke-only providers.json/models.json. Read-only, and never copied into
+      # the image: only this disposable stack uses them.
+      - ../docker/smoke-fixtures:/app/docker/smoke-fixtures:ro
       - system-data:/app/runtime-root/system-data
       - companion-data:/app/runtime-root/companions/smoke
       - workspace:/app/runtime-root/workspaces/personal/${PSFN_SMOKE_COMPANION_ID:-11111111-1111-4111-8111-111111111111}
@@ -219,6 +247,40 @@ services:
       retries: 15
       start_period: 2s
 
+  # Deterministic OpenAI-compatible provider double (psfn-framework-j3iol). It
+  # is what makes this stack keyless without weakening a single fail-closed
+  # path: the gateway still demands a resolvable screener credential, still
+  # presents a bearer on every call, and still rejects a malformed verdict — the
+  # double simply answers on the internal network instead of the internet. It
+  # has no host port and no egress network, so it cannot be reached from outside
+  # this Compose profile and cannot itself call out.
+  provider-stub:
+    <<: *runtime-image
+    container_name: psfn-smoke-provider-stub
+    entrypoint: ["node", "/app/scripts/ops/psfn-compose-smoke-provider-stub.mjs"]
+    environment:
+      PSFN_SMOKE_PROVIDER_STUB_HOST: 0.0.0.0
+      PSFN_SMOKE_PROVIDER_STUB_PORT: "3000"
+      PSFN_SMOKE_PROVIDER_STUB_API_KEY: *provider-stub-key
+      PSFN_SMOKE_PROVIDER_STUB_REPLY: *provider-stub-reply
+    networks:
+      - psfn-smoke-internal
+    volumes:
+      - ../scripts/ops:/app/scripts/ops:ro
+    healthcheck:
+      # /health is the only unauthenticated route; every model route requires
+      # the bearer above.
+      test:
+        - "CMD"
+        - "node"
+        - "--input-type=module"
+        - "--eval"
+        - "const response = await fetch('http://127.0.0.1:3000/health'); if (!response.ok) process.exit(1)"
+      interval: 2s
+      timeout: 2s
+      retries: 15
+      start_period: 2s
+
   gateway:
     <<: *runtime-image
     container_name: psfn-smoke-gateway
@@ -230,6 +292,8 @@ services:
       model-prefetch:
         condition: service_completed_successfully
       operator-alert-sink:
+        condition: service_healthy
+      provider-stub:
         condition: service_healthy
     command: ["node", "dist/gateway-main.js"]
     environment:
@@ -246,28 +310,36 @@ services:
       ADMIN_PORT: "3001"
       # Secure local API: the port is published on 0.0.0.0, so a bearer is
       # required (the insecure bypass only permits loopback binds). The smoke
-      # harness sends this key; the ONLY remaining failure surface is provider
-      # egress.
+      # harness sends this key.
       API_KEY: ${PSFN_SMOKE_API_KEY:-psfn-smoke-api-key-please-rotate}
       # Per-satellite bearer credentials. Satellite principals are restricted to
       # the satellite surfaces (/v1/chat/completions, /v1/telemetry/ingest,
       # /v1/satellites/config, /v1/companion/*) and are further gated by
       # satellites.json.
       API_SATELLITE_KEYS: *satellite-key
-      # Secrets live here (host-side gateway). Dev-only fixed values; the
-      # provider key is the single real slot a runnable turn needs.
+      # Secrets live here (host-side gateway). Dev-only fixed values.
       GATEWAY_SESSION_HMAC_KEY: ${PSFN_SMOKE_SESSION_HMAC_KEY:-psfn-smoke-session-hmac-key}
       PSFN_BACKUP_ENCRYPTION_KEY: ${PSFN_SMOKE_BACKUP_KEY:-psfn-smoke-backup-encryption-key-please-rotate}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      # The one provider credential this stack has, and the reason it needs no
+      # provider account. providers.json (docker/smoke-fixtures) names this env
+      # var as the `smoke-stub` apiKeyRef; the gateway resolves it through the
+      # credential vault exactly as it resolves a real provider key, and the
+      # intake screener startup check passes on that resolution, not on a
+      # bypass. There is deliberately NO OPENROUTER_API_KEY slot here: this
+      # stack never talks to a real provider. Use docker/compose.yml and
+      # `npm run compose:verify` for a real provider-backed turn.
+      PSFN_SMOKE_PROVIDER_STUB_API_KEY: *provider-stub-key
       # CogSec refuses to start without a configured operator-alert route. The
       # disposable internal sink acknowledges and discards smoke alerts.
       NTFY_BASE_URL: http://operator-alert-sink:3000
       NTFY_TOPIC: smoke-operator-alerts
     ports:
       - "127.0.0.1:${PSFN_SMOKE_API_PORT:-13000}:3000"
-    # The gateway is the ONLY service with external egress (provider calls). The
-    # agent stays on the internal-only network and fails closed if it can reach
-    # the internet, mirroring the k8s NetworkPolicy that denies agent egress.
+    # The gateway is the ONLY service with external egress, mirroring the
+    # production posture where it owns provider calls. This stack's own model
+    # traffic does NOT use it: provider-stub sits on the internal network. The
+    # agent stays internal-only and fails closed if it can reach the internet,
+    # mirroring the k8s NetworkPolicy that denies agent egress.
     networks:
       - psfn-smoke-internal
       - psfn-smoke-egress
@@ -419,7 +491,9 @@ networks:
   psfn-smoke-internal:
     name: psfn-smoke-internal
     internal: true
-  # External bridge for the gateway's provider egress only.
+  # External bridge for the gateway only. The smoke turn does not use it (the
+  # provider double is internal); it exists so the gateway keeps the production
+  # egress-holder shape.
   psfn-smoke-egress:
     name: psfn-smoke-egress
   # Published loopback ports need a routable bridge: an internal network cannot

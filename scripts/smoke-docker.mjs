@@ -1,23 +1,29 @@
 #!/usr/bin/env node
 // ── Docker Compose smoke harness (psfn-framework-65rk.12) ──
 // The Compose analogue of the k8s smoke:chat. Brings up the split runtime
-// (postgres + gateway + agent + satellite-hub + companion-ui) from
-// docker/docker-compose.smoke.yml, proves the plumbing (gateway API edge up,
-// gateway<->agent RPC connected), verifies the Satellite Hub and companion-ui
-// surfaces, then drives one OpenAI-compatible chat turn through the gateway /v1
-// edge.
+// (postgres + gateway + agent + provider-stub + satellite-hub + companion-ui)
+// from docker/docker-compose.smoke.yml, proves the plumbing (gateway API edge
+// up, gateway<->agent RPC connected), verifies the Satellite Hub and
+// companion-ui surfaces, then drives one OpenAI-compatible chat turn through the
+// gateway /v1 edge.
+//
+// KEYLESS BY CONTRACT (psfn-framework-j3iol). The stack needs no provider
+// account: docker/smoke-fixtures/{providers,models}.json route every model
+// purpose at the in-stack `provider-stub` double, and the gateway resolves and
+// presents a real bearer for it. So a complete turn is always expected, and
+// there is no "stopped at the provider boundary" outcome to excuse. A turn that
+// does not complete is a failure of this stack, not of an absent key.
+//
+// This harness does NOT prove a real provider account, model slug, or egress
+// path works. That is `npm run compose:verify` against docker/compose.yml.
 //
 // Exit codes:
 //   0  full turn: /v1/chat/completions returned a persisted assistant reply.
-//   2  provider boundary reached: stack healthy and the request was accepted,
-//      but the turn failed at the external provider egress (expected when
-//      OPENROUTER_API_KEY is unset). This is the documented "validate up to the
-//      provider call" stop.
 //   3  hub contract boundary reached: the whole stack is healthy and the hub
 //      handshake works, but companion-ui's own protocol decoder rejects a live
 //      hub frame. That is a source-contract divergence, not a deployment fault.
-//   1  plumbing failure: the stack did not come up, the gateway API edge never
-//      became healthy, or the request failed before reaching the provider.
+//   1  failure: the stack did not come up, the gateway API edge never became
+//      healthy, or the chat turn did not complete and persist.
 //
 // Usage:
 //   npm run smoke:docker -- [--no-up] [--keep-up] [--message <text>]
@@ -44,7 +50,6 @@ const AUTH_HEADERS = { Authorization: `Bearer ${API_KEY}` };
 const SMOKE_SESSION_ID = 'compose-persistence';
 const API_PRINCIPAL_ID = `api-key-${createHash('sha256').update(API_KEY.trim()).digest('hex').slice(0, 24)}`;
 const SMOKE_CHANNEL_ID = `api:${API_PRINCIPAL_ID}:${SMOKE_SESSION_ID}`;
-const HAS_PROVIDER_KEY = (process.env.OPENROUTER_API_KEY || '').trim().length > 0;
 const HUB_PORT = process.env.PSFN_SMOKE_HUB_PORT || '18787';
 const COMPANION_UI_PORT = process.env.PSFN_SMOKE_COMPANION_UI_PORT || '18080';
 const SATELLITE_API_KEY = process.env.PSFN_SMOKE_SATELLITE_API_KEY
@@ -105,10 +110,11 @@ async function fetchWithTimeout(url, init, timeoutMs) {
 
 // Plumbing subsystems that MUST be healthy for the stack to be considered wired:
 // memory (agent RPC connected + Postgres persistence), embeddings (in-process
-// model warmed), scheduler (agent runtime lanes up). The `llm` subsystem is
-// EXPECTED to be degraded without a provider key (that's the provider boundary),
-// and `discord` is benign (transport runs outside the agent container).
-const PLUMBING_SUBSYSTEMS = ['memory', 'embeddings', 'scheduler'];
+// model warmed), scheduler (agent runtime lanes up), and llm — the provider
+// double is part of this stack, so a degraded `llm` subsystem is a real defect
+// here, not an expected keyless state. `discord` is benign (transport runs
+// outside the agent container).
+const PLUMBING_SUBSYSTEMS = ['memory', 'embeddings', 'scheduler', 'llm'];
 
 async function waitForHealth(timeoutMs) {
   const deadline = Date.now() + timeoutMs;
@@ -138,24 +144,6 @@ async function waitForHealth(timeoutMs) {
     await sleep(2000);
   }
   throw new Error(`gateway /health plumbing never became ready (${lastErr})`);
-}
-
-// A provider-boundary failure is one where the stack accepted the request and
-// the turn ran up to the external model call. Plumbing failures (agent not
-// connected, routing, 404, 5xx transport) are NOT provider-boundary.
-function isProviderBoundary(status, bodyText) {
-  const body = (bodyText || '').toLowerCase();
-  const providerSignals = [
-    'openrouter', 'provider', 'api key', 'api_key', 'unauthorized', '401',
-    'no auth credentials', 'model', 'upstream', 'llm', 'completion failed',
-    'no endpoints', 'quota', 'insufficient', 'credit', 'egress',
-  ];
-  const plumbingSignals = [
-    'companion_not_connected', 'not connected', 'no route', 'not_found',
-    'econnrefused', 'socket', 'gateway', 'timeout waiting', 'agent',
-  ];
-  if (plumbingSignals.some((s) => body.includes(s))) return false;
-  return providerSignals.some((s) => body.includes(s));
 }
 
 async function queryPublicTableCount() {
@@ -210,15 +198,16 @@ async function main() {
 
   try {
     if (opts.up) {
-      log('Bringing up postgres + gateway + agent + satellite-hub + companion-ui '
-        + '(docker compose up -d --wait)...');
+      log('Bringing up postgres + provider-stub + gateway + agent + satellite-hub '
+        + '+ companion-ui (docker compose up -d --wait)...');
       const up = compose(['up', '-d', '--wait', '--wait-timeout', '240']);
       if (up.status !== 0) {
         fail('docker compose up did not reach a healthy state');
         compose(['ps']);
         return 1;
       }
-      pass('all services reported healthy (postgres, gateway, agent, satellite-hub, companion-ui)');
+      pass('all services reported healthy (postgres, provider-stub, gateway, agent, '
+        + 'satellite-hub, companion-ui)');
     }
 
     log(`Waiting for gateway API edge at ${API_BASE}/health ...`);
@@ -227,11 +216,8 @@ async function main() {
       .map(([k, v]) => `${k}=${v.status}`)
       .join(', ');
     pass('gateway<->agent RPC connected and plumbing healthy '
-      + '(memory/embeddings/scheduler); Postgres migrations applied.');
+      + '(memory/embeddings/scheduler/llm); Postgres migrations applied.');
     log(`/health subsystems: ${subStatus}`);
-    if (health.subsystems.llm?.status !== 'healthy') {
-      log(`llm subsystem degraded (expected without a provider key): ${health.subsystems.llm?.detail ?? ''}`);
-    }
 
     // Agent RPC connectivity: the agent container is healthy only once its
     // gateway socket peer is connectable, and the health payload reflects the
@@ -309,20 +295,11 @@ async function main() {
       return 1;
     }
 
-    // Non-2xx: classify provider-boundary vs plumbing.
-    if (isProviderBoundary(res.status, bodyText)) {
-      log(`chat request accepted; turn stopped at the provider egress boundary (status ${res.status}).`);
-      log(`provider response: ${bodyText.slice(0, 240)}`);
-      if (HAS_PROVIDER_KEY) {
-        fail('OPENROUTER_API_KEY is set but the provider call still failed — investigate the key/model.');
-        return 1;
-      }
-      pass('PROVIDER BOUNDARY REACHED: stack healthy, gateway<->agent RPC connected, request accepted, '
-        + 'turn failed only at the external provider (set OPENROUTER_API_KEY for a full turn).');
-      return contractExit(2, hubContractBoundary);
-    }
-
-    fail(`chat failed before the provider boundary (status ${res.status}): ${bodyText.slice(0, 280)}`);
+    // The provider double is part of this stack, so there is no external
+    // boundary left to excuse a non-2xx: every one of them is a real failure.
+    fail(`chat turn failed (status ${res.status}): ${bodyText.slice(0, 280)}`);
+    log('The provider double runs inside this stack; inspect the gateway, agent, '
+      + 'and provider-stub logs (docker compose -f docker/docker-compose.smoke.yml logs).');
     return 1;
   } catch (err) {
     fail(err instanceof Error ? err.message : String(err));

@@ -81,6 +81,77 @@ describe('rankOwnedSkillsForCue (psfn-framework-lpxg3.3)', () => {
     expect(ranked).toHaveLength(2);
   });
 
+  it('orders equally relevant skills by recorded post-use outcomes (sap72)', () => {
+    const worked = entry({
+      name: 'release-alpha',
+      description: 'Cut, verify, and publish a release build.',
+    });
+    const ambiguous = entry({
+      name: 'release-beta',
+      description: 'Cut, verify, and publish a release build.',
+    });
+    const evidence = new Map([
+      ['release-alpha', {
+        name: 'release-alpha',
+        demonstratedCount: 4,
+        ambiguousCount: 0,
+        lastOutcomeAt: '2026-09-01T00:00:00.000Z',
+      }],
+      ['release-beta', {
+        name: 'release-beta',
+        demonstratedCount: 0,
+        ambiguousCount: 4,
+        lastOutcomeAt: '2026-09-01T00:00:00.000Z',
+      }],
+    ]);
+
+    const ranked = rankOwnedSkillsForCue({
+      cue: 'cut and verify and publish the release build',
+      entries: [ambiguous, worked],
+      config: DEFAULT_SKILL_REUSE_CONFIG,
+      outcomeEvidence: evidence,
+    });
+    // Identical relevance: the recorded outcomes break the tie, and the raw
+    // lexical score is reported unchanged.
+    expect(ranked.map(candidate => candidate.name)).toEqual(['release-alpha', 'release-beta']);
+    expect(ranked[0]?.outcomeSignal).toBe(1);
+    expect(ranked[1]?.outcomeSignal).toBe(-1);
+    expect(ranked[0]?.score).toBeCloseTo(ranked[1]!.score, 10);
+
+    // Alphabetical fallback without evidence proves the ordering came from it.
+    expect(rankOwnedSkillsForCue({
+      cue: 'cut and verify and publish the release build',
+      entries: [ambiguous, worked],
+      config: DEFAULT_SKILL_REUSE_CONFIG,
+    }).map(candidate => candidate.name)).toEqual(['release-alpha', 'release-beta']);
+    expect(rankOwnedSkillsForCue({
+      cue: 'cut and verify and publish the release build',
+      entries: [worked, ambiguous],
+      config: DEFAULT_SKILL_REUSE_CONFIG,
+      outcomeEvidence: new Map([['release-alpha', {
+        name: 'release-alpha',
+        demonstratedCount: 0,
+        ambiguousCount: 4,
+        lastOutcomeAt: null,
+      }]]),
+    }).map(candidate => candidate.name)).toEqual(['release-beta', 'release-alpha']);
+  });
+
+  it('never lets recorded outcomes admit a skill below the relevance floor', () => {
+    const ranked = rankOwnedSkillsForCue({
+      cue: 'reconcile the quarterly invoicing spreadsheet',
+      entries: [RELEASE, GARDENING],
+      config: DEFAULT_SKILL_REUSE_CONFIG,
+      outcomeEvidence: new Map([['release-checklist', {
+        name: 'release-checklist',
+        demonstratedCount: 99,
+        ambiguousCount: 0,
+        lastOutcomeAt: null,
+      }]]),
+    });
+    expect(ranked).toEqual([]);
+  });
+
   it('yields nothing for a cue with no distinctive tokens', () => {
     expect(rankOwnedSkillsForCue({
       cue: 'do it for me',
@@ -107,14 +178,14 @@ describe('turnDemonstratedReusableValue', () => {
 describe('buildSkillReuseOpportunity', () => {
   it('says nothing at all when the turn did not demonstrate value', () => {
     expect(buildSkillReuseOpportunity({
-      candidates: [{ name: 'release-checklist', description: '', score: 1, version: 2 }],
+      candidates: [{ name: 'release-checklist', description: '', score: 1, outcomeSignal: 0, version: 2 }],
       demonstratedValue: false,
     })).toBeNull();
   });
 
   it('omits the base-version binding when the entry declares no version', () => {
     const text = buildSkillReuseOpportunity({
-      candidates: [{ name: 'release-checklist', description: '', score: 1 }],
+      candidates: [{ name: 'release-checklist', description: '', score: 1, outcomeSignal: 0 }],
       demonstratedValue: true,
     });
     expect(text).toContain('skill action="update"');

@@ -9,6 +9,7 @@ import { MEMORY_POLICY_TYPES } from '../../../system/config/memory-retrieval-pol
 import { sensitivityAtMost } from '../../../system/trust/types.js';
 import { hasExactKeys, isCanonicalIsoTimestamp, isRecord } from '../../../shared/utils/types.js';
 import type {
+  BiographicalCandidateDerivation,
   BiographicalCandidateRationale,
   BiographicalCandidateReceipt,
   BiographicalCandidateReceiptAuthority,
@@ -110,6 +111,44 @@ function assertCandidateSource(
 ): void {
   const admission = biographicalCandidateSourceAdmission(source, policy);
   if (admission !== 'admitted') throw new Error(CANDIDATE_SOURCE_ADMISSION_ERRORS[admission]);
+}
+
+/**
+ * Human- vs companion-derived is a property of the canonical claim subject and
+ * dyad, not a stored flag: a claim about a contact, or about the contact side
+ * of a dyad, is human-derived. Review policy reads this rather than trusting a
+ * synthesizer-supplied or reviewer-supplied label.
+ */
+export function biographicalCandidateDerivation(
+  claim: Pick<BiographicalClaim, 'subject' | 'relatedSubject'>,
+): BiographicalCandidateDerivation {
+  return claim.subject.kind === 'contact' || claim.relatedSubject?.kind === 'contact'
+    ? 'human_derived'
+    : 'companion_derived';
+}
+
+/**
+ * Exact receipt lookup. A retried reviewer uses this to recognize its OWN
+ * already-recorded decision (same authority, decision, actor and candidate
+ * revision) and replay instead of appending a duplicate receipt.
+ */
+export function findCandidateReceipt(
+  candidate: BiographicalCandidateRecord,
+  match: {
+    readonly authority: BiographicalCandidateReceiptAuthority;
+    readonly decision?: BiographicalCandidateReceiptDecision;
+    readonly actorAuthorityRef?: string;
+    readonly candidateRevision?: number;
+  },
+): BiographicalCandidateReceipt | undefined {
+  return candidate.receipts.find(receipt => (
+    receipt.authority === match.authority
+    && (match.decision === undefined || receipt.decision === match.decision)
+    && (match.actorAuthorityRef === undefined
+      || receipt.actorAuthorityRef === match.actorAuthorityRef)
+    && (match.candidateRevision === undefined
+      || receipt.candidateRevision === match.candidateRevision)
+  ));
 }
 
 /**

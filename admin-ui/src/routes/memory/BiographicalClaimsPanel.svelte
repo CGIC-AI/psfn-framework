@@ -388,6 +388,42 @@
               </div>
             </div>
             <div>
+              <h4 class="text-sm font-semibold text-shadow-900">Review staging</h4>
+              {#if detail.candidate}
+                <div class="mt-2 rounded-xl border border-bark-200 p-3 text-xs text-shadow-700">
+                  <p>
+                    <strong>{detail.candidate.stage}</strong> · revision {detail.candidate.revision}
+                    {#if detail.candidate.rationale} · {detail.candidate.rationale}{/if}
+                  </p>
+                  {#if detail.candidate.socialContext}
+                    <p class="mt-1">
+                      context {detail.candidate.socialContext.kind}
+                      {#if detail.candidate.socialContext.kind === 'companion_contact_dyad'}
+                        · contact {detail.candidate.socialContext.contactId}
+                      {/if}
+                    </p>
+                  {/if}
+                  {#if detail.candidate.supersedesCandidateId}
+                    <p class="mt-1">supersedes an earlier proposal</p>
+                  {/if}
+                  <div class="mt-2 space-y-1">
+                    {#each detail.candidate.receipts as receipt}
+                      <p>
+                        <strong>{receipt.authority}</strong> · {receipt.decision}
+                        {#if receipt.reason} · {receipt.reason}{/if}
+                        · rev {receipt.candidateRevision} · {formatTimestamp(receipt.recordedAt)}
+                        · {receipt.actorAuthorityRef}
+                      </p>
+                    {/each}
+                  </div>
+                </div>
+              {:else}
+                <p class="garden-empty mt-2 rounded-lg bg-bark-50 p-3 text-sm text-shadow-600">
+                  No staged review candidate for this claim.
+                </p>
+              {/if}
+            </div>
+            <div>
               <h4 class="text-sm font-semibold text-shadow-900">Append-only review audit</h4>
               <div class="mt-2 space-y-2">
                 {#each detail.audits as audit}

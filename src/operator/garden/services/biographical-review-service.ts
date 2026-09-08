@@ -6,6 +6,7 @@ import {
 } from '../../../faculties/memory/biographical/kernel.js';
 import { renderBiographicalClaimForReview } from '../../../faculties/memory/biographical/projection-rendering.js';
 import type {
+  BiographicalCandidateRecord,
   BiographicalClaim,
   BiographicalClaimSource,
   BiographicalSensitivityGrant,
@@ -62,15 +63,68 @@ export interface AdminBiographicalClaimView {
   readonly pendingRebuildReasons: readonly string[];
 }
 
+/**
+ * Read-only staging view of a claim's review candidate (o61vb.13), so an
+ * operator can see where a proposal stands and what the companion decided
+ * before it reaches human review. Receipts are authority/decision/reason codes
+ * and digests only: no review reasoning and no source body is ever republished
+ * here, and nothing on this surface can change a candidate's stage.
+ */
+interface AdminBiographicalCandidateView {
+  readonly id: string;
+  readonly stage: BiographicalCandidateRecord['stage'];
+  readonly revision: number;
+  readonly rationale?: BiographicalCandidateRecord['rationale'];
+  readonly socialContext?: BiographicalCandidateRecord['socialContext'];
+  readonly supersedesCandidateId?: string;
+  readonly receipts: readonly {
+    readonly authority: string;
+    readonly decision: string;
+    readonly reason?: string;
+    readonly candidateRevision: number;
+    readonly actorAuthorityRef: string;
+    readonly recordedAt: string;
+  }[];
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
 export interface AdminBiographicalClaimDetail {
   readonly claim: AdminBiographicalClaimView;
   readonly grants: readonly BiographicalSensitivityGrant[];
   readonly rebuilds: readonly BiographicalRebuildRequest[];
   readonly audits: readonly BiographicalReviewAuditRecord[];
+  /** Absent when the claim has no staged candidate (legacy or direct writes). */
+  readonly candidate?: AdminBiographicalCandidateView;
 }
 
 export interface AdminBiographicalClaimList {
   readonly claims: readonly AdminBiographicalClaimView[];
+}
+
+function candidateView(candidate: BiographicalCandidateRecord): AdminBiographicalCandidateView {
+  return {
+    id: candidate.id,
+    stage: candidate.stage,
+    revision: candidate.revision,
+    ...(candidate.rationale !== undefined ? { rationale: candidate.rationale } : {}),
+    ...(candidate.socialContext !== undefined
+      ? { socialContext: candidate.socialContext }
+      : {}),
+    ...(candidate.supersedesCandidateId !== undefined
+      ? { supersedesCandidateId: candidate.supersedesCandidateId }
+      : {}),
+    receipts: candidate.receipts.map(receipt => ({
+      authority: receipt.authority,
+      decision: receipt.decision,
+      ...(receipt.reason !== undefined ? { reason: receipt.reason } : {}),
+      candidateRevision: receipt.candidateRevision,
+      actorAuthorityRef: receipt.actorAuthorityRef,
+      recordedAt: receipt.recordedAt,
+    })),
+    createdAt: candidate.createdAt,
+    updatedAt: candidate.updatedAt,
+  };
 }
 
 export interface AdminBiographicalReviewActor {
@@ -405,12 +459,25 @@ export class AdminBiographicalReviewService {
     if (access !== null && !claimVisibleToSubject(claim, pendingRebuilds, access)) {
       throw new BiographicalReviewError('claim-not-found', 'biographical claim not found');
     }
-    const [grants, rebuilds, audits] = await Promise.all([
+    const [grants, rebuilds, audits, candidates] = await Promise.all([
       this.deps.store.listGrantsForClaim(claim.id),
       this.deps.store.listRebuilds({ claimId: claim.id, limit: this.deps.queryLimit }),
       this.deps.store.listReviewAudits(claim.id, this.deps.queryLimit),
+      this.deps.store.listCandidates({
+        claimDigest: claim.claimDigest,
+        limit: this.deps.queryLimit,
+      }),
     ]);
-    return { claim: claimView(claim, rebuilds, grants, this.now()), grants, rebuilds, audits };
+    // A claim id is unique to one candidate row, so the exact match is the
+    // staging record for this claim; other rows share only the content digest.
+    const candidate = candidates.find(record => record.claimId === claim.id);
+    return {
+      claim: claimView(claim, rebuilds, grants, this.now()),
+      grants,
+      rebuilds,
+      audits,
+      ...(candidate !== undefined ? { candidate: candidateView(candidate) } : {}),
+    };
   }
 
   private async recordDenied(

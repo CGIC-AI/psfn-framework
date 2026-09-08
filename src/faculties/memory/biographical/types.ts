@@ -302,6 +302,13 @@ export const BIOGRAPHICAL_CANDIDATE_RATIONALES = [
 export type BiographicalCandidateRationale =
   (typeof BIOGRAPHICAL_CANDIDATE_RATIONALES)[number];
 
+/**
+ * Whether the facts a candidate asserts were derived from a human subject's
+ * sources or from the companion's own. Review policy never autoactivates
+ * human-derived facts.
+ */
+export type BiographicalCandidateDerivation = 'human_derived' | 'companion_derived';
+
 export interface BiographicalCandidateRecord {
   readonly id: string;
   readonly claimId: string;

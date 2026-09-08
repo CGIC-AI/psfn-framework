@@ -591,6 +591,23 @@ export interface EventMap {
     targetsFailed: number;
     timestamp: number;
   };
+  // Companion biography review pass (o61vb.13). Content-free by contract:
+  // decision counts only, never a candidate id, claim value, or review reason.
+  'memory.biography.companion_review': {
+    reviewRunId: string;
+    candidatesConsidered: number;
+    candidatesOutsideAuthority: number;
+    candidatesReplayed: number;
+    approved: number;
+    rejected: number;
+    flagged: number;
+    revised: number;
+    escalatedToHumanReview: number;
+    autoactivated: number;
+    malformedDecisions: number;
+    failures: number;
+    timestamp: number;
+  };
   /** Authenticated Garden refresh hint. Never carries queue entries, ids, or content. */
   'garden.queue.changed': {
     queue: GardenQueueName;

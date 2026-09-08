@@ -20,6 +20,8 @@ import {
   registerSalienceDecayOperation,
   BIOGRAPHY_SYNTHESIS_OPERATION_ID,
   registerBiographySynthesisOperation,
+  BIOGRAPHY_COMPANION_REVIEW_TASK_ID,
+  registerBiographyCompanionReviewTask,
 } from './scheduler-runtime.js';
 import { registerDurableBackgroundWorkSupervisorTask } from '../../core/agent/background-work/scheduler-task.js';
 
@@ -221,6 +223,57 @@ describe('agent scheduler runtime wiring', () => {
     expect(schedulerSource).toContain('registerBiographySynthesisOperation({');
     expect(mainSource).toContain('biographySynthesis: coreRuntime.biographySynthesis');
     expect(coreRuntimeSource).toContain('new BiographySynthesisService({');
+  });
+
+  it('runs companion biography review as its own protected task on the owner-file cadence', async () => {
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus);
+    const telemetry = {
+      reviewRunId: 'biography-review:invented',
+      candidatesConsidered: 3,
+      candidatesOutsideAuthority: 1,
+      candidatesReplayed: 0,
+      approved: 1,
+      rejected: 1,
+      flagged: 0,
+      revised: 0,
+      escalatedToHumanReview: 1,
+      autoactivated: 0,
+      malformedDecisions: 0,
+      failures: 0,
+    };
+    const emitted: unknown[] = [];
+    eventBus.on('memory.biography.companion_review', event => {
+      emitted.push(event);
+    });
+    registerBiographyCompanionReviewTask({
+      scheduler,
+      review: { run: async () => telemetry },
+      intervalMs: 21_600_000,
+      eventBus,
+    });
+
+    const task = scheduler.getTask(BIOGRAPHY_COMPANION_REVIEW_TASK_ID);
+    expect(task).toMatchObject({
+      intervalMs: 21_600_000,
+      // The companion's own review of itself never runs mid-conversation.
+      availability: 'do_not_disturb',
+      scheduleSource: 'settings.json > biographicalDepthPolicy.full.refreshIntervalMs',
+    });
+    await task?.handler();
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0]).toMatchObject(telemetry);
+    // Content-free by contract: decision counts only.
+    expect(Object.keys(emitted[0] as object).sort()).toEqual(
+      [...Object.keys(telemetry), 'timestamp'].sort(),
+    );
+
+    const schedulerSource = readFileSync(join(SRC_DIR, 'scheduler-runtime.ts'), 'utf-8');
+    const mainSource = readFileSync(join(SRC_DIR, 'main.ts'), 'utf-8');
+    const coreRuntimeSource = readFileSync(join(SRC_DIR, 'core-runtime.ts'), 'utf-8');
+    expect(schedulerSource).toContain('registerBiographyCompanionReviewTask({');
+    expect(mainSource).toContain('biographyCompanionReview: coreRuntime.biographyCompanionReview');
+    expect(coreRuntimeSource).toContain('new BiographyCompanionReviewService({');
   });
 
   it('runs bounded shared-world caretaker cleanup on the scheduler-owned maintenance lane', async () => {

@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Pool } from 'pg';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -12,6 +12,8 @@ import {
   startPostgresTestHarness,
   type PostgresTestHarness,
 } from '../../../test-support/postgres-test-harness.js';
+import type { LLMProviderPort } from '../../../core/agent/contracts.js';
+import { BiographyCompanionReviewService } from './companion-review-service.js';
 import { InMemoryBiographicalProfileStore } from './in-memory-store.js';
 import { admitBiographicalCandidate } from './conflict-policy.js';
 import {
@@ -295,6 +297,128 @@ describe('PostgresBiographicalProfileStore — schema and roundtrip', () => {
       expect(await store.listCandidates({ limit: 10 })).toHaveLength(0);
       expect(await store.listClaims({ subject: contact('contact-invented-privacy') }))
         .toHaveLength(0);
+    });
+  });
+
+  it('survives a restart mid companion review without duplicating a decision', async () => {
+    await withStore(async (store, pool) => {
+      const policy = createDefaultBiographicalCandidatePolicy();
+      const companionId = 'companion-invented-review';
+      const contactId = 'contact-invented-review';
+      const staged = await store.writeCandidate({
+        automataRunId: 'biography-synthesis:invented-review',
+        automataAuthorityRef: 'maintenance:biography-synthesis',
+        policy,
+        socialContext: {
+          kind: 'companion_contact_dyad',
+          companionId,
+          contactId,
+        },
+        rationale: 'new_subject_claim',
+        claim: {
+          subject: contact(contactId),
+          kind: 'stable-preference',
+          value: {
+            kind: 'stable-preference',
+            schemaVersion: 1,
+            domain: 'communication',
+            target: 'concise explanations',
+            polarity: 'prefers',
+          },
+          basis: 'explicit',
+          confidence: 0.9,
+          sources: [source({
+            ref: 'memory:invented-review-1',
+            sourceType: 'semantic',
+            lifecycleStateAtProjection: 'active',
+          })],
+          now: NOW,
+        },
+      });
+
+      const review = (restarted: PostgresBiographicalProfileStore) =>
+        new BiographyCompanionReviewService({
+          profileStore: restarted,
+          llmClient: {
+            complete: async () => ({
+              content: JSON.stringify({
+                action: 'approve',
+                reason: 'evidence_supports_claim',
+              }),
+              model: 'test-model',
+              usage: { inputTokens: 0, outputTokens: 0 },
+            }),
+          } as unknown as LLMProviderPort,
+          companionId,
+          candidatePolicy: () => policy,
+          now: () => NOW,
+          newRunId: () => 'biography-review:invented-run',
+        });
+
+      const first = await review(store).run();
+      expect(first).toMatchObject({ approved: 1, escalatedToHumanReview: 1, autoactivated: 0 });
+
+      // A fresh store instance is a restart: the decision is already durable,
+      // so the retried pass must neither re-decide nor append a second receipt.
+      const restarted = new PostgresBiographicalProfileStore(pool, () => NOW);
+      const durable = await restarted.getCandidate(staged.id);
+      expect(durable?.stage).toBe('human_review');
+      expect((await restarted.getClaim(staged.claimId))?.status).toBe('candidate');
+      const receiptCount = durable?.receipts.length ?? 0;
+
+      const retry = await review(restarted).run();
+      // The candidate has left the companion-review stages entirely, so the
+      // retried pass has nothing to consider and writes nothing.
+      expect(retry).toMatchObject({ candidatesConsidered: 0, approved: 0 });
+      const after = await restarted.getCandidate(staged.id);
+      expect(after?.stage).toBe('human_review');
+      expect(after?.revision).toBe(durable?.revision);
+      expect(after?.receipts).toHaveLength(receiptCount);
+      expect(after?.receipts.filter(receipt => receipt.authority === 'companion')).toHaveLength(2);
+      expect(after?.socialContext).toMatchObject({ kind: 'companion_contact_dyad', contactId });
+    });
+  });
+
+  it('rejects a wrong-companion review attempt against durable candidates', async () => {
+    await withStore(async (store) => {
+      const policy = createDefaultBiographicalCandidatePolicy();
+      const staged = await store.writeCandidate({
+        automataRunId: 'biography-synthesis:invented-wrong-companion',
+        automataAuthorityRef: 'maintenance:biography-synthesis',
+        policy,
+        socialContext: {
+          kind: 'companion_self',
+          companionId: 'companion-invented-owner',
+        },
+        claim: {
+          subject: companion('companion-invented-owner'),
+          kind: 'nickname',
+          value: { kind: 'nickname', nickname: 'Sparrow', scope: 'self' },
+          basis: 'explicit',
+          confidence: 0.9,
+          sources: [source({
+            ref: 'memory:invented-wrong-companion',
+            sourceType: 'reflection',
+            lifecycleStateAtProjection: 'active',
+          })],
+          now: NOW,
+        },
+      });
+
+      const complete = vi.fn();
+      const telemetry = await new BiographyCompanionReviewService({
+        profileStore: store,
+        llmClient: { complete } as unknown as LLMProviderPort,
+        companionId: 'companion-invented-intruder',
+        candidatePolicy: () => policy,
+        now: () => NOW,
+        newRunId: () => 'biography-review:invented-intruder',
+      }).run();
+
+      expect(telemetry).toMatchObject({ candidatesOutsideAuthority: 1, approved: 0 });
+      // The other companion's proposal never reaches a prompt at all.
+      expect(complete).not.toHaveBeenCalled();
+      expect((await store.getCandidate(staged.id))?.stage).toBe('automata_synthesis');
     });
   });
 

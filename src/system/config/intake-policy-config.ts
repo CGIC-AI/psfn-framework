@@ -722,6 +722,95 @@ export function isIntakeUnscreenedDenyRequiredSink(sink: IntakeSink): boolean {
 }
 
 /**
+ * Shipped `unscreened` posture for sinks that are fail-closed by DEFAULT but
+ * remain operator-tunable (psfn-framework-5a921, defending the qg13 design
+ * rather than reversing it).
+ *
+ * qg13 drew a deliberate line. Durable prompt-bearing self-authored sinks
+ * (above) may never fail open, full stop — an owner file that says otherwise is
+ * refused with no override, because content written through them becomes the
+ * model's own future instruction surface. `trust_mutation` is on the other side
+ * of that line on purpose: it is security-sensitive but NOT prompt-bearing, and
+ * an operator running a closed deployment has a legitimate reason to loosen it.
+ * So `validateIntakePolicy` still accepts `allow` there, exactly as qg13's test
+ * pins it.
+ *
+ * What 5a921 found is that "tunable" had silently become "driftable": nothing
+ * distinguished a deliberate operator loosening from a bad merge, a templated
+ * config, or a mis-edit. This table closes that gap WITHOUT taking the choice
+ * away. Any deployed value weaker than the pin must be named in
+ * `sinkGates.acknowledgedUnscreenedWeakening`, and the owner file refuses to
+ * LOAD until it is. Tunable, but never silently tunable.
+ *
+ * Audit (5a921's second ask): the seed ships `deny` for exactly four sinks —
+ * `wiki_write`, `skill_write`, `persona_mutation` (all three hard-required
+ * above) and `trust_mutation`. `prompt_assembly`, `memory_write` and
+ * `tool_egress` ship `allow` deliberately: they are not durable self-authored
+ * write sinks, and screening them at intake is the firewall's job elsewhere.
+ * So `trust_mutation` is the only sink with a defensible posture that no gate
+ * was holding, and this table is complete rather than merely started.
+ */
+export const INTAKE_UNSCREENED_PINNED_POSTURES: Readonly<
+  Partial<Record<IntakeSink, IntakeUnscreenedSinkAction>>
+> = Object.freeze({
+  trust_mutation: 'deny',
+});
+
+/** Sinks this table pins, in a stable order for error messages. */
+function intakeUnscreenedPinnedSinks(): IntakeSink[] {
+  return INTAKE_SINKS.filter(sink => INTAKE_UNSCREENED_PINNED_POSTURES[sink] !== undefined);
+}
+
+/**
+ * Refuse an owner file whose pinned `unscreened` posture drifted without the
+ * operator saying so.
+ *
+ * Deliberately NOT part of `validateIntakePolicy`. That function answers "is
+ * this a well-formed policy?", and a loosened `trust_mutation` IS one — qg13
+ * settled that and its test pins it. This answers a different question: "is the
+ * deployment that is about to run this file the one that asked for it?" So it
+ * runs at the LOAD and SAVE seams, which is exactly where the bead's defect
+ * lived ("an owner file flipping trust_mutation to unscreened:'allow' loads
+ * cleanly").
+ *
+ * A STALE acknowledgement is refused too. Without that, an operator could arm
+ * the acknowledgement once, and the very flip this defends against would land
+ * silently months later against a pre-approved file — which is drift with a
+ * signature on it, not consent.
+ */
+export function assertIntakeUnscreenedPostureAcknowledged(
+  config: IntakePolicyConfig,
+  sourcePath: string,
+): void {
+  const acknowledged = new Set(config.sinkGates.acknowledgedUnscreenedWeakening);
+  for (const sink of intakeUnscreenedPinnedSinks()) {
+    const pinned = INTAKE_UNSCREENED_PINNED_POSTURES[sink];
+    const deployed = config.sinkGates.sinks[sink].unscreened;
+    // Only a WEAKENING needs consent. Strengthening a posture back to the
+    // shipped value, or past it, is always allowed and never needs a signature.
+    const weakened = pinned === 'deny' && deployed === 'allow';
+    if (weakened && !acknowledged.has(sink)) {
+      throw invalid(
+        sourcePath,
+        `sinkGates.sinks.${sink}.unscreened is '${deployed}' but the shipped posture is `
+        + `'${pinned}'. Weakening it is permitted (it is operator-tunable, not prompt-bearing) `
+        + `but never silently: add '${sink}' to sinkGates.acknowledgedUnscreenedWeakening in the `
+        + 'same edit, or restore the shipped posture (psfn-framework-5a921)',
+      );
+    }
+    if (!weakened && acknowledged.has(sink)) {
+      throw invalid(
+        sourcePath,
+        `sinkGates.acknowledgedUnscreenedWeakening names '${sink}', but its unscreened posture `
+        + `is '${deployed}', which is not weaker than the shipped '${pinned}'. Remove the stale `
+        + 'acknowledgement; a standing one would let a later flip land unannounced '
+        + '(psfn-framework-5a921)',
+      );
+    }
+  }
+}
+
+/**
  * Provenance-bound internal result classes whose narrow false-positive
  * suppressions can be enabled in intake-policy.json. The runtime classifier
  * must prove one of these closed classes before policy can suppress anything.
@@ -797,6 +886,14 @@ export interface IntakeSinkGatesPolicyConfig {
   benignClasses: IntakeBenignClassesPolicyConfig;
   /** Every consequential sink must be mapped explicitly — no implicit defaults. */
   sinks: Record<IntakeSink, IntakeSinkRuleConfig>;
+  /**
+   * Sinks whose `unscreened` posture this owner file KNOWINGLY weakens below
+   * the shipped pin (5a921). Normally empty. An entry is the operator's
+   * signature on one specific loosening; it is refused if the named sink is not
+   * actually weakened, so it can never be armed ahead of the change it excuses.
+   * See {@link assertIntakeUnscreenedPostureAcknowledged}.
+   */
+  acknowledgedUnscreenedWeakening: IntakeSink[];
   trifecta: {
     /** Trifecta enforcement strength per source risk tier of the untrusted content. */
     enforcementByTier: Record<IntakeSourceRiskTier, IntakeTrifectaEnforcement>;
@@ -1416,12 +1513,58 @@ function validateBenignClasses(
   return result;
 }
 
+/**
+ * SHAPE only (5a921). Whether an acknowledgement is required, or has gone
+ * stale, is decided at the load/save seam by
+ * {@link assertIntakeUnscreenedPostureAcknowledged} — `validateIntakePolicy`
+ * deliberately stays the well-formedness answer qg13 pinned. What is rejected
+ * here is an acknowledgement that could never mean anything: an unknown sink, a
+ * duplicate, or a sink whose posture is hard-required and therefore not
+ * weakenable at all, which would read as consent to something the validator
+ * refuses outright.
+ */
+function validateAcknowledgedUnscreenedWeakening(raw: unknown, sourcePath: string): IntakeSink[] {
+  const field = 'sinkGates.acknowledgedUnscreenedWeakening';
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) {
+    throw invalid(sourcePath, `${field} must be an array of sink names`);
+  }
+  const seen = new Set<string>();
+  const acknowledged: IntakeSink[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== 'string' || !(INTAKE_SINKS as readonly string[]).includes(entry)) {
+      throw invalid(sourcePath, `${field} has an unsupported sink`);
+    }
+    const sink = entry as IntakeSink;
+    if (seen.has(sink)) {
+      throw invalid(sourcePath, `${field} lists '${sink}' more than once`);
+    }
+    seen.add(sink);
+    if (isIntakeUnscreenedDenyRequiredSink(sink)) {
+      throw invalid(
+        sourcePath,
+        `${field} names '${sink}', whose unscreened posture is hard-required to be 'deny' `
+        + 'and cannot be weakened by any acknowledgement (qg13)',
+      );
+    }
+    if (INTAKE_UNSCREENED_PINNED_POSTURES[sink] === undefined) {
+      throw invalid(
+        sourcePath,
+        `${field} names '${sink}', which has no pinned shipped posture to weaken`,
+      );
+    }
+    acknowledged.push(sink);
+  }
+  return acknowledged;
+}
+
 function validateSinkGates(raw: unknown, sourcePath: string): IntakeSinkGatesPolicyConfig {
   if (!isRecord(raw)) {
     throw invalid(sourcePath, 'sinkGates must be an object');
   }
   const unknownKeys = Object.keys(raw)
-    .filter((key) => !['benignClasses', 'sinks', 'trifecta'].includes(key));
+    .filter((key) => !['acknowledgedUnscreenedWeakening', 'benignClasses', 'sinks', 'trifecta']
+      .includes(key));
   if (unknownKeys.length > 0) {
     throw invalid(sourcePath, `sinkGates has unsupported keys: ${unknownKeys.join(', ')}`);
   }
@@ -1459,6 +1602,10 @@ function validateSinkGates(raw: unknown, sourcePath: string): IntakeSinkGatesPol
     throw invalid(sourcePath, `sinkGates.trifecta has unsupported keys: ${unknownTrifectaKeys.join(', ')}`);
   }
   return {
+    acknowledgedUnscreenedWeakening: validateAcknowledgedUnscreenedWeakening(
+      raw.acknowledgedUnscreenedWeakening,
+      sourcePath,
+    ),
     benignClasses: validateBenignClasses(raw.benignClasses, sourcePath),
     sinks,
     trifecta: {
@@ -1904,7 +2051,14 @@ export function loadIntakePolicyConfig(
   return loadRequiredJson({
     dataPath: join(dataDir, INTAKE_POLICY_FILE_NAME),
     examplePath: join(seedDir, INTAKE_POLICY_SEED_FILE_NAME),
-    validate: validateIntakePolicy,
+    // 5a921: the drift defense runs HERE, not inside `validateIntakePolicy`. A
+    // loosened `trust_mutation` is a well-formed policy (qg13); what it may not
+    // be is an unannounced one, and "loads cleanly" was the defect.
+    validate: (raw, path) => {
+      const config = validateIntakePolicy(raw, path);
+      assertIntakeUnscreenedPostureAcknowledged(config, path);
+      return config;
+    },
   });
 }
 
@@ -1913,6 +2067,8 @@ export function saveIntakePolicyConfig(
   nextConfig: unknown,
 ): IntakePolicyConfig {
   const validated = validateIntakePolicy(nextConfig, INTAKE_POLICY_FILE_NAME);
+  // Never write a file this runtime would refuse to load (5a921).
+  assertIntakeUnscreenedPostureAcknowledged(validated, INTAKE_POLICY_FILE_NAME);
   writeJsonAtomic(join(dataDir, INTAKE_POLICY_FILE_NAME), validated);
   return validated;
 }

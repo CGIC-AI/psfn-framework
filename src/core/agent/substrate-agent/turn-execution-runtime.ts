@@ -992,7 +992,12 @@ export async function handleMessageForTurn(
     // `invokeAgentForTurn`. The staged build is handed straight to the
     // invocation, so the vision model is called exactly once per turn, and the
     // one 120s vision budget is anchored here instead of at prompt start.
-    const stagesPerception = turnRequiresPerceptionStaging(message);
+    // An ICP-recovered turn replays a response that already exists: it skips
+    // `invokeAgentForTurn` entirely, so staging perception for it would pay for
+    // intake screening and a vision model call whose result is discarded. Before
+    // this bead the build lived inside the skipped invocation and cost nothing.
+    const stagesPerception = recoveredResponse === undefined
+      && turnRequiresPerceptionStaging(message);
     const visionTurnDeadlineAt = resolveVisionTurnDeadlineAt({
       hasVisionInputs: stagesPerception,
       anchorMs: Date.now(),

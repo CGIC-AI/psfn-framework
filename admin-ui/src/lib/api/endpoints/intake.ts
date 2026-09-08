@@ -22,6 +22,9 @@ import type {
 import type {
   IntakeQuarantineDecisionAction as CanonicalIntakeQuarantineDecisionAction,
 } from '../../../../../src/core/cogsec/intake/quarantine-store.js';
+import type {
+  AdminBlindReviewStateView,
+} from '../../../../../src/operator/garden/services/blind-review-service.js';
 
 export type IntakeQuarantineDecisionAction = CanonicalIntakeQuarantineDecisionAction;
 
@@ -76,6 +79,15 @@ const intakeQuarantineCache = createQueuePageCache({
 /** Read-only intake-policy view (mode, tiers, thresholds, quarantine limits). */
 export function getIntakePolicy(): Promise<IntakePolicyOverviewData> {
   return apiGet<IntakePolicyOverviewData>('/api/admin/intake/policy');
+}
+
+/**
+ * Blind Reviewer state (33xah). Content-free by construction on the server:
+ * counts, config bounds, timestamps and booleans about the passive reviewer
+ * itself. Its findings are already CogSec cases and are not repeated here.
+ */
+export function getBlindReviewState(): Promise<AdminBlindReviewStateView> {
+  return apiGet<AdminBlindReviewStateView>('/api/admin/cogsec/blind-review');
 }
 
 /** Trusted/denied sites and people (the flywheel's persisted state). */

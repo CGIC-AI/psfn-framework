@@ -53,6 +53,7 @@ import type {
   AdminLetterService,
   AdminDoingMirrorService,
 } from './services/types.js';
+import type { AdminBlindReviewService } from './services/blind-review-service.js';
 import type { AdminCustodyQueryService } from './services/custody-query-service.js';
 import type { AdminObserverEvalSidecarService } from './services/observer-eval-sidecar-service.js';
 import type { AdminIntakeQuarantineService } from './services/intake-quarantine-service.js';
@@ -224,6 +225,12 @@ export interface GardenAdminDomainServices {
    * answers and only one of them is a finding.
    */
   custodyQuery?: AdminCustodyQueryService | null;
+  /**
+   * Content-free projection of the Blind Reviewer's own state (33xah). Null
+   * when this process composed no reviewer window; the route then answers 503
+   * rather than an empty-looking healthy body.
+   */
+  blindReview?: AdminBlindReviewService | null;
   groupMemory?: AdminGroupMemoryService | null;
   memory: AdminMemoryService;
   biographicalReview?: AdminBiographicalReviewService | null;

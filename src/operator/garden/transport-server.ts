@@ -176,6 +176,7 @@ export class GardenAdminTransportServer implements Lifecycle {
       doingMirrorService: config.services.doingMirror,
       episodicMemoryService: config.services.episodicMemory,
       custodyQueryService: config.services.custodyQuery,
+      blindReviewService: config.services.blindReview,
       groupMemoryService: config.services.groupMemory,
       memoryService: config.services.memory,
       biographicalReviewService: config.services.biographicalReview ?? null,

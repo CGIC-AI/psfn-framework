@@ -1809,6 +1809,10 @@ async function main(): Promise<void> {
     outreachOutbox,
     episodicStore,
     custodyChainReader: persistenceRuntime.custodyChainReader,
+    // 33xah: the Garden reviewer section reads the SAME lazily-opened window
+    // the lane writes, through the lane's read-only accessor. Absent when the
+    // reviewer is disabled or unwired, which the projection reports as a status.
+    ...(blindReviewLane ? { blindReviewReader: blindReviewLane.reader } : {}),
     // Read-only seam onto this process's persisted health stream: the Garden
     // incident timeline renders the same incidents the alert path paged on,
     // and cannot write to the plane it renders.

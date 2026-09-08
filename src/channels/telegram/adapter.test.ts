@@ -1221,7 +1221,37 @@ describe('TelegramAdapter clarify delivery', () => {
       },
     });
 
-    expect(handled).toHaveLength(3);
+    // 4. A slash command in the same room: addressed to a bot by convention.
+    await (fromAny(adapter)).handleUpdate({
+      update_id: 4,
+      message: {
+        message_id: 23,
+        date: 1_700_000_300,
+        text: '/sync now please',
+        chat: { id: -900, type: 'supergroup' },
+        from: { id: 42, is_bot: false, username: 'group_user' },
+      },
+    });
+
+    // 5. A slash command explicitly targeting a DIFFERENT bot stays ambient.
+    await (fromAny(adapter)).handleUpdate({
+      update_id: 5,
+      message: {
+        message_id: 24,
+        date: 1_700_000_400,
+        text: '/sync@other_bot now please',
+        chat: { id: -900, type: 'supergroup' },
+        from: { id: 42, is_bot: false, username: 'group_user' },
+      },
+    });
+
+    // Ambient observations are dispatched without blocking the update loop, so
+    // let their microtasks settle before asserting.
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(handled).toHaveLength(5);
+    expect(handled[3].routing?.responseMode).toBe('respond');
+    expect(handled[4].routing?.responseMode).toBe('observe');
     expect(handled[0].routing?.responseMode).toBe('observe');
     expect(handled[1].routing?.responseMode).toBe('respond');
     expect(handled[2].routing?.responseMode).toBe('respond');
@@ -1236,8 +1266,8 @@ describe('TelegramAdapter clarify delivery', () => {
       });
     }
 
-    // The observed line neither typed nor sent; only the two addressed turns did.
-    expect(calls.filter(call => call.method === 'sendMessage')).toHaveLength(2);
+    // The observed lines neither typed nor sent; only the addressed turns did.
+    expect(calls.filter(call => call.method === 'sendMessage')).toHaveLength(3);
     expect(calls.filter(call => call.method === 'getMe')).toHaveLength(1);
   });
 

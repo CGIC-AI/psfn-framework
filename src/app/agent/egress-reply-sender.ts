@@ -52,10 +52,11 @@ import {
   deriveRoomDisclosureDestination,
   egressContentSha256,
   evaluateEgressCustodyHold,
+  type CompletedTurnEgressCustody,
+  type CompletedTurnEgressCustodyCapture,
   type DisclosureDestination,
   type EgressCustodyHoldReason,
   type EgressDeliveryRecorder,
-  type TurnEgressCustodyProof,
 } from '../../core/cogsec/disclosure/index.js';
 import { sanitizeDisplayName, sanitizeMessageBody } from '../../core/participation/appraiser.js';
 import { wrapUntrustedContext } from '../../core/session/manager-primitives.js';
@@ -67,9 +68,23 @@ import { toErrorMessage } from '../../shared/utils/errors.js';
 
 const log = createComponentLogger('egress-reply-sender');
 
-/** Generation primitive: run a turn and return the response (no auto-delivery). */
+/**
+ * Generation primitive: run a turn and return the response (no auto-delivery).
+ *
+ * The trailing capture hook mirrors `SubstrateAgent.handleMessage` (ccgdz.6).
+ * The turn's custody proof is deliberately NOT carried on the response — the
+ * response doubles as a durable ICP delivery-recovery row, a closed contract,
+ * and the proof's durable form is the custody snapshot itself. So it is handed
+ * over one-shot, just before the turn's live state is cleared.
+ */
 export interface EgressReplyGenerator {
-  handleMessage(message: SubstrateMessage): Promise<AgentResponse>;
+  handleMessage(
+    message: SubstrateMessage,
+    deliveryLifecycle?: undefined,
+    turnControl?: undefined,
+    captureCompletedDisclosureLineage?: undefined,
+    captureCompletedTurnEgressCustody?: CompletedTurnEgressCustodyCapture,
+  ): Promise<AgentResponse>;
 }
 
 /** Delivery primitive: send text to a channel (the gateway sender). */
@@ -227,8 +242,10 @@ type AutonomousReplyCustodyDecision =
 async function authorizeAutonomousReplyEgress(input: {
   recorder: EgressDeliveryRecorder;
   destination: DisclosureDestination | null;
-  turnId: string | undefined;
-  proof: TurnEgressCustodyProof | undefined;
+  /** The turn's captured custody proof; null when the turn published none. */
+  custody: CompletedTurnEgressCustody | null;
+  /** Correlation fallback when no proof was published but the turn is known. */
+  fallbackTurnId: string | undefined;
   sourceEventId: string;
   reply: string;
 }): Promise<AutonomousReplyCustodyDecision> {
@@ -236,7 +253,7 @@ async function authorizeAutonomousReplyEgress(input: {
   const enforces = posture === 'enforce';
   const reason = evaluateEgressCustodyHold({
     destination: input.destination,
-    proof: input.proof,
+    proof: input.custody?.proof,
     // A room reply is outward by construction; an unclassifiable destination
     // channel must not read as "no proof needed".
     requiresProof: true,
@@ -250,7 +267,8 @@ async function authorizeAutonomousReplyEgress(input: {
       destinationKind: input.destination?.kind,
     });
   }
-  if (input.turnId === undefined) {
+  const turnId = input.custody?.turnId ?? input.fallbackTurnId;
+  if (turnId === undefined) {
     // No turn identity means no correlation key, so no record can be written.
     // Never silent, and never a claim that the chain was fine.
     log.error('Autonomous room reply has no turn identity to bind its delivery record to', {
@@ -263,11 +281,11 @@ async function authorizeAutonomousReplyEgress(input: {
   const { written } = await input.recorder.record({
     surface: 'social_reply',
     disposition: withheldReason !== null ? 'held' : 'released',
-    turnId: input.turnId,
+    turnId,
     attemptRef: input.sourceEventId,
     contentSha256: egressContentSha256(input.reply),
     destination: input.destination,
-    proof: input.proof,
+    proof: input.custody?.proof,
     decisionAllowed: withheldReason === null,
     triggerEventRef: input.sourceEventId,
     ...(reason !== null ? { holdReason: reason } : {}),
@@ -381,7 +399,16 @@ export function createAgentLoopEgressReplySender(
         },
       };
 
-      const response = await deps.generator.handleMessage(generationMessage);
+      // ccgdz.6: capture this turn's custody proof before the turn's live state
+      // is cleared. Nothing durable carries it, so this is the only hand-off.
+      let turnEgressCustody: CompletedTurnEgressCustody | null = null;
+      const response = await deps.generator.handleMessage(
+        generationMessage,
+        undefined,
+        undefined,
+        undefined,
+        (custody) => { turnEgressCustody = custody; },
+      );
       const reply = response.content.trim();
       if (!reply || reply.toLowerCase() === silentToken.toLowerCase()) {
         // The model declined to speak after all: report a non-delivery so the
@@ -412,8 +439,8 @@ export function createAgentLoopEgressReplySender(
             request.trigger.channelId,
             () => destinationDisclosure,
           ),
-          turnId: response.metadata.turnId,
-          proof: response.metadata.egressCustody,
+          custody: turnEgressCustody,
+          fallbackTurnId: response.metadata.turnId,
           sourceEventId: request.trigger.sourceEventId,
           reply,
         });

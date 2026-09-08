@@ -45,8 +45,9 @@ import {
 import type { CustodySnapshotStorePort } from '../cogsec/disclosure/custody-snapshot.js';
 import {
   EgressDeliveryRecorder,
+  type CompletedTurnEgressCustody,
+  type CompletedTurnEgressCustodyCapture,
   type EgressDeliveryRecordStorePort,
-  type TurnEgressCustodyProof,
 } from '../cogsec/disclosure/index.js';
 import { applyAdmittedToolResultDisclosureFloor } from '../cogsec/disclosure/mcp-turn-context.js';
 import type { ChannelPromptRegistryPort } from '../../channels/backplane/registry-port.js';
@@ -477,7 +478,7 @@ export class SubstrateAgent {
    * tool guard reads it to hold an outward send whose chain of custody is
    * incomplete, and to key the send's delivery record. Cleared at turn end.
    */
-  private currentTurnEgressCustody: { turnId: string; proof: TurnEgressCustodyProof } | null = null;
+  private currentTurnEgressCustody: CompletedTurnEgressCustody | null = null;
   /** Durable egress delivery-record sink; null when no custody store is wired. */
   private readonly egressDeliveryRecorder: EgressDeliveryRecorder | null;
   /**
@@ -1652,6 +1653,13 @@ export class SubstrateAgent {
     turnControl?: MessageHandlerOptions,
     /** One-shot snapshot captured before live tool-egress lineage is cleared. */
     captureCompletedDisclosureLineage?: (lineage: DisclosureLineage | undefined) => void,
+    /**
+     * One-shot capture of this turn's egress custody proof (ccgdz.6), taken at
+     * the same point and for the same reason: an out-of-turn deliverer needs
+     * the proof after the turn's live state is cleared, and the proof is not
+     * durable state to be carried on the response.
+     */
+    captureCompletedTurnEgressCustody?: CompletedTurnEgressCustodyCapture,
   ): Promise<AgentResponse> {
     await this.classifySessionAtCreation?.(message);
     return this.turnRunReservation.runShared(
@@ -1663,6 +1671,7 @@ export class SubstrateAgent {
           deliveryLifecycle,
           turnControl,
           captureCompletedDisclosureLineage,
+          captureCompletedTurnEgressCustody,
         );
       },
     );
@@ -1673,6 +1682,7 @@ export class SubstrateAgent {
     deliveryLifecycle?: TurnDeliveryLifecycle,
     turnControl?: MessageHandlerOptions,
     captureCompletedDisclosureLineage?: (lineage: DisclosureLineage | undefined) => void,
+    captureCompletedTurnEgressCustody?: CompletedTurnEgressCustodyCapture,
   ): Promise<AgentResponse> {
     const cancellationId = turnControl?.cancellationId ?? message.routing?.cancellationId ?? null;
     // mmo9.6.1: register this turn's cancellation identity for the lifetime of
@@ -1717,6 +1727,7 @@ export class SubstrateAgent {
         turnControl?.conversationScope,
         turnControl?.precomputedNoReplyDisposition,
         captureCompletedDisclosureLineage,
+        captureCompletedTurnEgressCustody,
       );
     } finally {
       detachCancelSignal?.();
@@ -1734,6 +1745,7 @@ export class SubstrateAgent {
     conversationScope?: import('../session/conversation-scope.js').ConversationScope,
     precomputedNoReplyDisposition?: import('../participation/types.js').PrecomputedNoReplyDisposition,
     captureCompletedDisclosureLineage?: (lineage: DisclosureLineage | undefined) => void,
+    captureCompletedTurnEgressCustody?: CompletedTurnEgressCustodyCapture,
   ): Promise<AgentResponse> {
     const run = async (): Promise<AgentResponse> => handleMessageForTurn(createTurnExecutionRuntimeAdapter({
       eventBus: this.eventBus,
@@ -1989,6 +2001,7 @@ export class SubstrateAgent {
           }, run);
         }
         captureCompletedDisclosureLineage?.(this.currentTurnDisclosureLineage);
+        captureCompletedTurnEgressCustody?.(this.currentTurnEgressCustody);
         return response;
       } finally {
         this.currentTurnIntakeEnvelopes = [];

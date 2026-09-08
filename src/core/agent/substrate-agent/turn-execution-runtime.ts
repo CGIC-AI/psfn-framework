@@ -1829,13 +1829,6 @@ export async function handleMessageForTurn(
           },
         }
       : buildGeneratedResponse();
-    // ccgdz.6: hand this turn's custody proof to whoever delivers the response.
-    // Attached AFTER the recovered/generated split deliberately: a recovered
-    // turn re-folds its lineage and re-writes (or re-recognizes) its snapshot on
-    // this run, so its proof is THIS run's, not the interrupted run's spread
-    // metadata. Absent proof means the turn folded no lineage, and an outward
-    // delivery on it holds rather than claiming an unprovable chain.
-    agentResponse.metadata.egressCustody = turnEgressCustody;
     if (runtime.fatigueRegulationReservations
       && message.routing?.icpCorrelation
       && durableFatigueReservation

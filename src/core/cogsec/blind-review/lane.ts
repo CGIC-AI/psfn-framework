@@ -29,6 +29,7 @@ import {
   type BlindReviewerPort,
 } from './contracts.js';
 import type { BlindReviewerConfig } from '../../../system/config/scheduler-config/blind-review.js';
+import { COGSEC_EVENT_SAFE_TEXT_MAX_CHARS } from '../intake/screening-envelope-policy.js';
 import type { CogSecEventStore, CogSecSeverity } from '../events.js';
 import type { CogSecMode } from '../../../shared/contracts/cogsec-mode.js';
 
@@ -36,8 +37,11 @@ const log = createComponentLogger('CogSecBlindReview');
 
 /** CogSec case-id charset is `[A-Za-z0-9_-]`; the digest is already hex. */
 const CASE_ID_DIGEST_CHARS = 32;
-/** Alert summaries must fit the CogSec safe-text bound with room to spare. */
-const MAX_ALERT_SUMMARY_CHARS = 560;
+/**
+ * Alert summaries are bounded by the CogSec event store's own safe-text
+ * ceiling, derived rather than restated so the two can never drift apart.
+ */
+const MAX_ALERT_SUMMARY_CHARS = COGSEC_EVENT_SAFE_TEXT_MAX_CHARS;
 
 /** Concern levels are ordered; only these three can alert. `none` never does. */
 const ALERT_SEVERITY_BY_CONCERN: Readonly<Record<'low' | 'medium' | 'high', CogSecSeverity>> = {
@@ -50,6 +54,9 @@ export type BlindReviewBatchOutcome =
   | { kind: 'skipped'; reason: BlindReviewGateSkipReason }
   | { kind: 'clean' }
   | { kind: 'alerted'; caseId: string; pinned: number }
+  // The deterministic case id already exists: this exact batch was reported by
+  // an earlier run. Not clean, and not a second alert.
+  | { kind: 'duplicate'; caseId: string }
   | { kind: 'failed'; error: string };
 
 export interface BlindReviewRunResult {
@@ -319,7 +326,8 @@ export class BlindReviewLane {
       itemCount: items.length,
       provenanceRefs,
     });
-    if (!created) return { kind: 'clean' };
+    if (created === 'duplicate') return { kind: 'duplicate', caseId };
+    if (created === 'failed') return { kind: 'failed', error: `alert ${caseId} could not be recorded` };
     const pin = await this.options.store.pinEvidence({
       evidenceIds: items.map(item => item.evidenceId),
       caseId,
@@ -361,7 +369,7 @@ export class BlindReviewLane {
     finding: BlindReviewFinding;
     itemCount: number;
     provenanceRefs: string[];
-  }): boolean {
+  }): 'created' | 'duplicate' | 'failed' {
     const prefix = `Blind review: ${input.finding.concernLevel} concern over `
       + `${input.itemCount} bounded evidence rows in ${input.mode} mode `
       + `(confidence ${input.finding.confidence.toFixed(2)}).`;
@@ -381,14 +389,12 @@ export class BlindReviewLane {
     };
     try {
       create(withFinding);
-      return true;
+      return 'created';
     } catch (error) {
       const message = toErrorMessage(error);
       if (message.includes('already exists')) {
-        // Deterministic case id: the same batch was already reported. Not a
-        // failure, and not a second alert.
         log.info('Blind review case already recorded for this batch', { caseId: input.caseId });
-        return false;
+        return 'duplicate';
       }
       log.error('Blind review summary rejected by CogSec safe text; alerting without it', {
         caseId: input.caseId,
@@ -397,13 +403,13 @@ export class BlindReviewLane {
     }
     try {
       create(prefix.slice(0, MAX_ALERT_SUMMARY_CHARS));
-      return true;
+      return 'created';
     } catch (error) {
       log.error('Blind review alert could not be recorded', {
         caseId: input.caseId,
         error: toErrorMessage(error),
       });
-      return false;
+      return 'failed';
     }
   }
 

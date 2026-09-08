@@ -19,6 +19,7 @@ import {
   toBoolean,
   toInterval,
   toNumberAtLeast,
+  toNonNegativeInteger,
   toPositiveInteger,
   toUnitFactor,
 } from './primitives.js';
@@ -34,14 +35,23 @@ export interface BlindReviewBatchConfig {
   maxItemsPerBatch: number;
   /** Rows below this count are undersized: the batch is deferred, not reviewed. */
   minItemsPerBatch: number;
-  /** Blinded characters below this total are undersized for the same reason. */
+  /**
+   * Optional SECOND floor on total blinded characters. Most turns are private
+   * and yield structural-only rows carrying no text, and a batch of those is
+   * legitimate review material — anomalous tool-call shape is exactly what this
+   * lane looks for. So this defaults to 0 (disabled) and `minItemsPerBatch`
+   * carries the undersized gate; raise it only in a deployment whose evidence
+   * really is text-bearing, and never so high that structural batches starve.
+   */
   minBlindedCharsPerBatch: number;
   /** Per-item blinded excerpt ceiling; evidence is truncated to it at capture. */
   maxBlindedCharsPerItem: number;
+  /** Tool identifiers retained per evidence row. Names only, never arguments. */
+  maxToolNamesPerItem: number;
 }
 
 /** Rolling bounded review window and its retention. */
-export interface BlindReviewWindowConfig {
+interface BlindReviewWindowConfig {
   /** Hard row cap on the rolling window. Oldest unpinned rows are evicted first. */
   maxRows: number;
   /** Age past which an UNPINNED row expires. Pinned rows survive expiry. */
@@ -51,7 +61,7 @@ export interface BlindReviewWindowConfig {
 }
 
 /** Model-call cost ceilings for one lane run. */
-export interface BlindReviewCostConfig {
+interface BlindReviewCostConfig {
   /** Model calls one run may make. Bounds spend even when evidence floods in. */
   maxReviewsPerRun: number;
   /** Output-token ceiling for one review call. */
@@ -63,7 +73,7 @@ export interface BlindReviewCostConfig {
 }
 
 /** Bounded retry schedule for a failed review. */
-export interface BlindReviewRetryConfig {
+interface BlindReviewRetryConfig {
   /** Attempts for one batch before it is abandoned and its rows released. */
   maxAttempts: number;
   /** First backoff delay. */
@@ -107,8 +117,9 @@ export const DEFAULT_BLIND_REVIEWER_CONFIG: BlindReviewerConfig = {
   batch: {
     maxItemsPerBatch: 24,
     minItemsPerBatch: 4,
-    minBlindedCharsPerBatch: 512,
+    minBlindedCharsPerBatch: 0,
     maxBlindedCharsPerItem: 1_200,
+    maxToolNamesPerItem: 12,
   },
   window: {
     maxRows: 2_000,
@@ -134,7 +145,13 @@ function validateBatch(raw: unknown, sourcePath: string): BlindReviewBatchConfig
   }
   assertNoUnknownKeys(
     raw,
-    ['maxItemsPerBatch', 'minItemsPerBatch', 'minBlindedCharsPerBatch', 'maxBlindedCharsPerItem'],
+    [
+      'maxItemsPerBatch',
+      'minItemsPerBatch',
+      'minBlindedCharsPerBatch',
+      'maxBlindedCharsPerItem',
+      'maxToolNamesPerItem',
+    ],
     `${sourcePath}.blindReviewer.batch`,
     { errorPrefix: 'Invalid scheduler config' },
   );
@@ -149,15 +166,19 @@ function validateBatch(raw: unknown, sourcePath: string): BlindReviewBatchConfig
       'blindReviewer.batch.minItemsPerBatch',
       1,
     ),
-    minBlindedCharsPerBatch: toPositiveInteger(
+    minBlindedCharsPerBatch: toNonNegativeInteger(
       raw.minBlindedCharsPerBatch,
       'blindReviewer.batch.minBlindedCharsPerBatch',
-      1,
     ),
     maxBlindedCharsPerItem: toPositiveInteger(
       raw.maxBlindedCharsPerItem,
       'blindReviewer.batch.maxBlindedCharsPerItem',
       64,
+    ),
+    maxToolNamesPerItem: toPositiveInteger(
+      raw.maxToolNamesPerItem,
+      'blindReviewer.batch.maxToolNamesPerItem',
+      1,
     ),
   };
   if (batch.minItemsPerBatch > batch.maxItemsPerBatch) {

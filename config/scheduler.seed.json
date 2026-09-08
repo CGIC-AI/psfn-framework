@@ -362,8 +362,9 @@
     "batch": {
       "maxItemsPerBatch": 24,
       "minItemsPerBatch": 4,
-      "minBlindedCharsPerBatch": 512,
-      "maxBlindedCharsPerItem": 1200
+      "minBlindedCharsPerBatch": 0,
+      "maxBlindedCharsPerItem": 1200,
+      "maxToolNamesPerItem": 12
     },
     "window": {
       "maxRows": 2000,

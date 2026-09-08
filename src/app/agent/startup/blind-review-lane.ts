@@ -21,7 +21,7 @@ import { CogSecEventStore } from '../../../core/cogsec/events.js';
 import { PostgresCogSecBlindReviewStore } from '../../../persistence/postgres/cogsec-blind-review-store.js';
 import { resolveConfigTenantPoolScope } from '../../../persistence/postgres/tenant-pool-scope.js';
 import { resolveCogSecEventsPath } from '../../../persistence/layout.js';
-import { DEFAULT_BLIND_REVIEWER_CONFIG } from '../../../system/config/scheduler-config.js';
+import { DEFAULT_BLIND_REVIEWER_CONFIG } from '../../../system/config/scheduler-config/blind-review.js';
 import type { BlindReviewStorePort } from '../../../core/cogsec/blind-review/contracts.js';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import type { SessionManager } from '../../../core/session/manager.js';
@@ -76,6 +76,7 @@ export function wireBlindReviewLane(deps: BlindReviewLaneDeps): BlindReviewLaneR
   const cogSecEventsPath = resolveCogSecEventsPath(deps.companionDataDir);
   const source = createTurnRecordBlindReviewEvidenceSource({
     recentSessionLimit: config.recentSessionLimit,
+    maxToolNamesPerItem: config.batch.maxToolNamesPerItem,
     reader: {
       listRecentSessions: limit => deps.sessionManager.listRecentSessions(limit).map(session => ({
         sessionId: session.sessionId,

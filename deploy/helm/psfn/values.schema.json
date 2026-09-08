@@ -71,6 +71,8 @@
             "ambientSayDebounceMs",
             "egressCIDRs",
             "egressPort",
+            "body",
+            "snapshot",
             "placeMap"
           ],
           "properties": {
@@ -135,6 +137,51 @@
               "type": "integer",
               "minimum": 1,
               "maximum": 65535
+            },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "walkTimeoutMs",
+                "maxPendingNotes"
+              ],
+              "properties": {
+                "walkTimeoutMs": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "maxPendingNotes": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            },
+            "snapshot": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "enabled",
+                "baseUrl",
+                "timeoutMs",
+                "maxBytes"
+              ],
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "baseUrl": {
+                  "type": "string",
+                  "pattern": "^$|^https?://"
+                },
+                "timeoutMs": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "maxBytes": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
             },
             "placeMap": {
               "type": "object",

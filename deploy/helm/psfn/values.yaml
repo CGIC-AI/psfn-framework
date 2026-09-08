@@ -792,6 +792,25 @@ satelliteHub:
     # override these.
     pendingPingsPollIntervalMs: 2000
     ambientSayDebounceMs: 180000
+    # Allowlisted locomotion (walk_to/face/stop). Rendered only when the hub's
+    # claim profile grants avatar_action; the runner refuses every other verb,
+    # so spawn/place stay unreachable. A walk blocks door-side until arrival,
+    # runs off the PSFN turn, and reports a content-free outcome on a later
+    # turn. Keep walkTimeoutMs above the door's own ~90s walk timeout.
+    body:
+      walkTimeoutMs: 95000
+      maxPendingNotes: 4
+    # Optional first-person vision over the world's own GET /snap surface. It
+    # needs a live spectator renderer attached to that world; when none is
+    # serving, the turn degrades to text look notes with no error. Disabled by
+    # default and additionally gated on the claim profile granting vision.
+    snapshot:
+      enabled: false
+      # Empty means "derive from worldUrl" (scheme swapped, /ws and query
+      # dropped). Set only for a separate credential-free http/https origin.
+      baseUrl: ""
+      timeoutMs: 4000
+      maxBytes: 4000000
     # NetworkPolicy is deny-by-default for private LANs and
     # networkPolicy.satelliteHub.allowExternalEgress opens only public 443, so a
     # LAN or non-443 world must name its host/subnet and port explicitly.

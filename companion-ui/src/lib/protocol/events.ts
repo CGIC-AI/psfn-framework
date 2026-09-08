@@ -278,6 +278,8 @@ export interface ErrorEventMessage {
   type: 'error-event';
   data: {
     message: string;
+    /** A spoken-output failure leaves the chat session and text reply valid. */
+    scope?: 'speech';
   };
 }
 

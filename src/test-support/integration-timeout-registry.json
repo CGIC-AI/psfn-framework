@@ -28,6 +28,13 @@
       "note": "S12A letter lifecycle and restart persistence against the real containerized PostgreSQL harness. Focused local wall baseline was 8.194s on 2026-08-30; 120s preserves headroom for cold image startup and shared harness-slot contention."
     },
     {
+      "file": "src/operator/garden/services/icp-lifecycle-readmission.postgres.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 600,
+      "baselineSource": "measured",
+      "note": "psfn-framework-2vd7s: explicit operator readmission of a lifecycle-fenced companion driven through the real Garden admin route and service over the real containerized PostgreSQL shared control plane \u2014 manifest shrink sweep, refusal of a fresh permit, off-manifest and unconfirmed readmission refusals, the explicit clear, and permits issuing again. Focused local full-file wall baseline was 0.59s on 2026-09-08 with a warm harness slot; 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
+    },
+    {
       "file": "src/operator/garden/services/wishlist-disposition.postgres.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": 600,

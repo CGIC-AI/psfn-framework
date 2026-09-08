@@ -594,6 +594,10 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
       '/api/admin/icp-autonomy/do-not-disturb', '/api/admin/icp-autonomy/emergency-disable',
       '/api/admin/icp-autonomy/test-initiations',
       '/api/admin/icp-autonomy/candidates/:candidateId/cancel',
+      // psfn-framework-2vd7s: clearing a durable ICP lifecycle-admission fence
+      // is an owner-role mutation with explicit confirmation, exactly like the
+      // other autonomy controls; the body additionally echoes the target.
+      '/api/admin/icp-autonomy/lifecycle/readmit',
     ]), confirmation: 'explicit',
   },
   {

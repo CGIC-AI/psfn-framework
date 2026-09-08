@@ -2,6 +2,7 @@ import { sendJson } from '../../../channels/backplane/http/primitives.js';
 import { isRecord, isRfc4122Uuid } from '../../../shared/utils/types.js';
 import { parseAdminJsonBody } from '../request-body.js';
 import { exactPath, paramWithSuffix } from '../route-matchers.js';
+import { AdminIcpReadmissionRefusedError } from '../services/icp-autonomy-service.js';
 import type { AdminIcpAutonomyService } from '../services/types.js';
 import { ADMIN_DYNAMIC_JSON_HEADERS, sendInternalError, toSanitizedMessage } from './shared.js';
 import type { AdminApiRoute, AdminAuditTimelineAppender, AdminBodyReader } from './types.js';
@@ -11,6 +12,7 @@ const ICP_TEST_INITIATIONS_PATH = `${ICP_AUTONOMY_PATH}/test-initiations`;
 const ICP_CANDIDATE_PREFIX = `${ICP_AUTONOMY_PATH}/candidates/`;
 const ICP_DND_PATH = `${ICP_AUTONOMY_PATH}/do-not-disturb`;
 const ICP_EMERGENCY_DISABLE_PATH = `${ICP_AUTONOMY_PATH}/emergency-disable`;
+const ICP_LIFECYCLE_READMIT_PATH = `${ICP_AUTONOMY_PATH}/lifecycle/readmit`;
 
 function parseEmptyBody(value: unknown): string | null {
   if (!isRecord(value)) return 'Body must be a JSON object';
@@ -51,6 +53,33 @@ function parseTestInitiationBody(value: unknown):
     ok: true,
     peerCompanionId: value.peerCompanionId,
     requestId: value.requestId,
+  };
+}
+
+function parseReadmitBody(
+  value: unknown,
+): { ok: true; companionId: string; confirmCompanionId: string } | { ok: false; error: string } {
+  if (!isRecord(value)) return { ok: false, error: 'Body must be a JSON object' };
+  const unknown = Object.keys(value)
+    .filter(key => key !== 'companionId' && key !== 'confirmCompanionId');
+  if (unknown.length > 0) {
+    return { ok: false, error: `Unknown readmission fields: ${unknown.join(', ')}` };
+  }
+  if (!isRfc4122Uuid(value.companionId)) {
+    return { ok: false, error: 'companionId must be a lowercase RFC-4122 UUID' };
+  }
+  // The explicit operator confirmation: the body must echo the exact target, so
+  // a blind or replayed body can never clear a durable admission fence.
+  if (!isRfc4122Uuid(value.confirmCompanionId)) {
+    return {
+      ok: false,
+      error: 'confirmCompanionId must echo the companionId being readmitted',
+    };
+  }
+  return {
+    ok: true,
+    companionId: value.companionId,
+    confirmCompanionId: value.confirmCompanionId,
   };
 }
 
@@ -175,6 +204,48 @@ export function buildAdminIcpAutonomyRoutes(options: {
             sendJson(res, statusForMutationError(error), {
               error: toSanitizedMessage(error, 'Failed to cancel ICP candidate'),
             });
+          });
+        });
+      },
+    },
+    {
+      method: 'POST',
+      match: exactPath(ICP_LIFECYCLE_READMIT_PATH),
+      handle: (req, res) => {
+        withStrictBody(req, res, 'lifecycle readmission', value => {
+          const parsed = parseReadmitBody(value);
+          if (!parsed.ok) {
+            audit('denied', 'Operator ICP lifecycle readmission rejected invalid fields.');
+            sendJson(res, 400, { error: parsed.error });
+            return;
+          }
+          service.readmitCompanion({
+            companionId: parsed.companionId,
+            confirmCompanionId: parsed.confirmCompanionId,
+          }).then(result => {
+            audit('allowed', result.transitioned
+              ? 'Operator readmitted a lifecycle-fenced companion to ICP.'
+              : 'Operator readmission found the companion already admitted to ICP.', [
+              `companionId=${result.companionId}`,
+              `transitioned=${String(result.transitioned)}`,
+              `revokedPermits=${String(result.revokedPermitCount)}`,
+            ]);
+            sendJson(res, 200, result, ADMIN_DYNAMIC_JSON_HEADERS);
+          }, error => {
+            const refused = error instanceof AdminIcpReadmissionRefusedError;
+            audit('denied', 'Operator ICP lifecycle readmission was refused.', [
+              `companionId=${parsed.companionId}`,
+              ...(refused ? [`refusal=${error.refusal}`] : []),
+              `error=${toSanitizedMessage(error, 'readmission refused')}`,
+            ]);
+            if (refused) {
+              // A mismatched confirmation is a malformed request; an
+              // off-manifest or unwired target is a legible state conflict.
+              const status = error.refusal === 'confirmation_mismatch' ? 400 : 409;
+              sendJson(res, status, { error: error.message, refusal: error.refusal });
+              return;
+            }
+            sendInternalError(res, error, 'Failed to readmit ICP companion');
           });
         });
       },

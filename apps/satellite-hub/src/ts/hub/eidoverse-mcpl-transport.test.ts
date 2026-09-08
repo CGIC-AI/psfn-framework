@@ -89,6 +89,69 @@ test("the handshake dials with the identity token and states the Hub's own grant
   }
 });
 
+test("the grant states the feature sets the operator withheld, and travel is one of them", async () => {
+  const door = await EidoverseMcplDoor.start({
+    world: "commons",
+    tokens: [TOKEN],
+    travelWorlds: ["annex"],
+  });
+  const withheld = ["eidoverse.world", "eidoverse.embodiment"];
+  const client = new EidoverseMcplClient(
+    config(door, {
+      featureSets: withheld,
+      effectiveCapabilities: effectiveCapabilitiesForFeatureSets(withheld),
+    }),
+    credential,
+  );
+  try {
+    await client.start();
+    await door.waitForHandshake();
+    assert.deepEqual(door.enabledFeatureSets, [withheld]);
+    assert.deepEqual(
+      door.disabledFeatureSets,
+      [["eidoverse.travel", "eidoverse.typing"]],
+      "every declared set the operator did not select is named as disabled",
+    );
+    // The door's own receipt now says the set is off, which the capability
+    // grant alone could never express: travel's `uses` are a subset of the
+    // paths presence and embodiment already need.
+    assert.deepEqual(
+      (door.receipts[0]?.unavailableFeatures as Array<{ featureSet: string }> | undefined)
+        ?.map((entry) => entry.featureSet),
+      ["eidoverse.travel", "eidoverse.typing"],
+    );
+    assert.equal(client.grantsTravel(), false);
+    await assert.rejects(() => client.travel("annex"), /travel request failed/u);
+    assert.deepEqual(door.toolCalls, [], "a withheld feature set never reaches the door");
+    assert.deepEqual(door.prepared, []);
+  } finally {
+    await client.close();
+    await door.close();
+  }
+});
+
+test("the default selection keeps travel and disables only the cosmetic set", async () => {
+  const door = await EidoverseMcplDoor.start({
+    world: "commons",
+    tokens: [TOKEN],
+    travelWorlds: ["annex"],
+  });
+  const client = new EidoverseMcplClient(config(door), credential);
+  try {
+    await client.start();
+    await door.waitForHandshake();
+    assert.deepEqual(door.enabledFeatureSets, [FEATURE_SETS]);
+    assert.deepEqual(door.disabledFeatureSets, [["eidoverse.typing"]]);
+    assert.equal(client.grantsTravel(), true);
+    assert.match(await client.travel("annex"), /Arrived in "annex"/u);
+    assert.deepEqual(door.toolCalls, ["travel"]);
+    assert.deepEqual(door.prepared, ["annex"]);
+  } finally {
+    await client.close();
+    await door.close();
+  }
+});
+
 test("a door that refuses the identity token yields no session", async () => {
   const door = await EidoverseMcplDoor.start({ world: "commons", tokens: ["a-different-token"] });
   const client = new EidoverseMcplClient(config(door), credential);

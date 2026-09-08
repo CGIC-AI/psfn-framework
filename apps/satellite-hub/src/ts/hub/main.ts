@@ -12,6 +12,7 @@ import {
   loadEidoverseBodyRunnerConfig,
 } from "./eidoverse-body-runner.js";
 import { EidoverseMcplClient } from "./eidoverse-mcpl-client.js";
+import { EIDOVERSE_TRAVEL_FEATURE_SET } from "./eidoverse-mcpl-wire.js";
 import {
   loadEidoverseMcpTransport,
   loadEidoverseMcplConfig,
@@ -102,7 +103,12 @@ async function main(): Promise<void> {
           look: eidoverseMcpl,
           onLookError: () => console.warn("Eidoverse MCPL look failed"),
           say: eidoverseMcpl,
-          travel: eidoverseMcpl,
+          // The operator's feature-set selection decides whether this Hub
+          // carries a travel port at all: withholding `eidoverse.travel`
+          // removes the surface rather than relying on the door to refuse it.
+          ...(eidoverseMcplConfig.featureSets.includes(EIDOVERSE_TRAVEL_FEATURE_SET)
+            ? { travel: eidoverseMcpl }
+            : {}),
           ...(eidoverseBody ? { body: eidoverseBody } : {}),
           ...(eidoverseSnapshot ? { snapshot: eidoverseSnapshot } : {}),
         }

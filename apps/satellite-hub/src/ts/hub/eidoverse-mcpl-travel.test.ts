@@ -292,6 +292,7 @@ async function commandOverTheWire(input: {
   resultType: "world.travel.result" | "world.body.result";
   door?: RecordingDoor | null;
   withBody?: boolean;
+  withTravel?: boolean;
 }): Promise<{ result: HubToClientMessage | undefined; door: RecordingDoor | null }> {
   const door = input.door === undefined ? new RecordingDoor() : input.door;
   const body = door && input.withBody
@@ -307,7 +308,7 @@ async function commandOverTheWire(input: {
         agentName: "Companion",
         look: door,
         say: door,
-        travel: door,
+        ...(input.withTravel === false ? {} : { travel: door }),
         ...(body ? { body } : {}),
       }
       : null,
@@ -395,6 +396,25 @@ test("a Hub with no Eidoverse emanation refuses the command outright", async () 
     world: "annex",
     reason: "not_configured",
   });
+});
+
+test("a Hub whose feature sets withhold travel refuses the command outright", async () => {
+  // `eidoverse.travel` withheld in `satelliteHub.eidoverse.mcpl.featureSets`
+  // means main.ts wires no travel port at all, so the refusal happens on the
+  // same gate a Hub with no emanation hits — and the door is never asked.
+  const { result, door } = await commandOverTheWire({
+    control: ["world_travel"],
+    command: { type: "world.travel", world: "annex" },
+    resultType: "world.travel.result",
+    withTravel: false,
+  });
+  assert.deepEqual(result, {
+    type: "world.travel.result",
+    accepted: false,
+    world: "annex",
+    reason: "not_configured",
+  });
+  assert.deepEqual(door?.requested, [], "an ungranted feature set never reaches the door");
 });
 
 test("an unmapped destination is refused in the Hub's own vocabulary", async () => {

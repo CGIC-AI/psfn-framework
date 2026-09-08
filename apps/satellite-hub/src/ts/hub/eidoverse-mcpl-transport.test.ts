@@ -9,6 +9,7 @@ import { EidoverseEmbodiedSessionAdapter } from "./eidoverse-adapter.js";
 import { EidoverseMcplClient } from "./eidoverse-mcpl-client.js";
 import type { EidoverseMcplConfig } from "./eidoverse-mcpl-config.js";
 import { createEidoverseMcplWakeRuntime } from "./eidoverse-mcpl-runtime.js";
+import { parseEidoversePlaceMap } from "./eidoverse-place-map.js";
 import { effectiveCapabilitiesForFeatureSets } from "./eidoverse-mcpl-wire.js";
 import {
   EidoverseSnapshotSource,
@@ -84,6 +85,246 @@ test("the handshake dials with the identity token and states the Hub's own grant
     await client.say("hello");
     assert.deepEqual(door.said, ["hello"]);
   } finally {
+    await client.close();
+    await door.close();
+  }
+});
+
+test("the grant states the feature sets the operator withheld, and travel is one of them", async () => {
+  const door = await EidoverseMcplDoor.start({
+    world: "commons",
+    tokens: [TOKEN],
+    travelWorlds: ["annex"],
+  });
+  const withheld = ["eidoverse.world", "eidoverse.embodiment"];
+  const client = new EidoverseMcplClient(
+    config(door, {
+      featureSets: withheld,
+      effectiveCapabilities: effectiveCapabilitiesForFeatureSets(withheld),
+    }),
+    credential,
+  );
+  try {
+    await client.start();
+    await door.waitForHandshake();
+    assert.deepEqual(door.enabledFeatureSets, [withheld]);
+    assert.deepEqual(
+      door.disabledFeatureSets,
+      [["eidoverse.travel", "eidoverse.typing"]],
+      "every declared set the operator did not select is named as disabled",
+    );
+    // The door's own receipt now says the set is off, which the capability
+    // grant alone could never express: travel's `uses` are a subset of the
+    // paths presence and embodiment already need.
+    assert.deepEqual(
+      (door.receipts[0]?.unavailableFeatures as Array<{ featureSet: string }> | undefined)
+        ?.map((entry) => entry.featureSet),
+      ["eidoverse.travel", "eidoverse.typing"],
+    );
+    assert.equal(client.grantsTravel(), false);
+    await assert.rejects(() => client.travel("annex"), /travel request failed/u);
+    assert.deepEqual(door.toolCalls, [], "a withheld feature set never reaches the door");
+    assert.deepEqual(door.prepared, []);
+  } finally {
+    await client.close();
+    await door.close();
+  }
+});
+
+test("the default selection keeps travel and disables only the cosmetic set", async () => {
+  const door = await EidoverseMcplDoor.start({
+    world: "commons",
+    tokens: [TOKEN],
+    travelWorlds: ["annex"],
+  });
+  const warnings: string[] = [];
+  const client = new EidoverseMcplClient(config(door), credential, {
+    logger: { info: () => undefined, warn: (message) => warnings.push(message) },
+  });
+  try {
+    await client.start();
+    await door.waitForHandshake();
+    assert.deepEqual(door.enabledFeatureSets, [FEATURE_SETS]);
+    assert.deepEqual(door.disabledFeatureSets, [["eidoverse.typing"]]);
+    assert.equal(client.grantsTravel(), true);
+    assert.equal(
+      warnings.some((message) => message.includes("degraded")),
+      false,
+      "a set the operator withheld coming back unavailable is not drift",
+    );
+    assert.match(await client.travel("annex"), /Arrived in "annex"/u);
+    assert.deepEqual(door.toolCalls, ["travel"]);
+    assert.deepEqual(door.prepared, ["annex"]);
+  } finally {
+    await client.close();
+    await door.close();
+  }
+});
+
+test("a door that degrades a selected feature set is heard, named, and failed closed", async () => {
+  // Mirror drift, the routine kind: upstream gives `eidoverse.travel` one more
+  // capability than the Hub's hand-maintained table knows to grant. The door
+  // reports it in the §6.7 receipt and disables the set.
+  const door = await EidoverseMcplDoor.start({
+    world: "commons",
+    tokens: [TOKEN],
+    travelWorlds: ["annex"],
+    featureSetUses: {
+      "eidoverse.world": [
+        "channels.register",
+        "channels.lifecycle",
+        "channels.publish",
+        "channels.incoming",
+      ],
+      "eidoverse.embodiment": ["tools"],
+      "eidoverse.travel": [
+        "channels.lifecycle",
+        "tools",
+        "channels.streaming",
+        "a capability path this host has never heard of",
+      ],
+    },
+  });
+  const warnings: string[] = [];
+  const client = new EidoverseMcplClient(config(door), credential, {
+    logger: { info: () => undefined, warn: (message) => warnings.push(message) },
+  });
+  try {
+    await client.start();
+    await door.waitForHandshake();
+    assert.deepEqual(
+      warnings.filter((message) => message.includes("degraded")),
+      ["Eidoverse MCPL feature sets degraded: eidoverse.travel [channels.streaming]"],
+      "the drifted set is named, with no door prose",
+    );
+    assert.equal(
+      warnings.some((message) => message.includes("never heard of")),
+      false,
+      "only the closed capability vocabulary reaches a log line",
+    );
+    assert.equal(client.grantsTravel(), false, "a degraded set takes its surface with it");
+    await assert.rejects(() => client.travel("annex"), /travel request failed/u);
+    assert.deepEqual(door.toolCalls, []);
+    // Everything the door did NOT degrade keeps working.
+    assert.equal(await client.look(), "A sunlit atrium.");
+  } finally {
+    await client.close();
+    await door.close();
+  }
+});
+
+test("a refused or unreadable policy receipt degrades every selected feature set", async () => {
+  for (const testCase of [
+    {
+      label: "refused",
+      receipt: { accepted: false, fallback: "mcp-only", reason: "policy refused" },
+      warning: "Eidoverse MCPL door refused the feature-set policy; every selected set is degraded",
+    },
+    {
+      label: "unreadable",
+      receipt: { ok: "sure" },
+      warning: "Eidoverse MCPL feature-set receipt was unreadable; every selected set is degraded",
+    },
+  ]) {
+    const door = await EidoverseMcplDoor.start({
+      world: "commons",
+      tokens: [TOKEN],
+      travelWorlds: ["annex"],
+      policyReceipt: testCase.receipt,
+    });
+    const warnings: string[] = [];
+    const client = new EidoverseMcplClient(config(door), credential, {
+      logger: { info: () => undefined, warn: (message) => warnings.push(message) },
+    });
+    try {
+      await client.start();
+      await door.waitForHandshake();
+      assert.equal(
+        warnings.includes(testCase.warning),
+        true,
+        `${testCase.label} receipts are reported once, content-free`,
+      );
+      assert.equal(client.grantsTravel(), false);
+      await assert.rejects(() => client.travel("annex"), /travel request failed/u);
+      assert.deepEqual(door.toolCalls, []);
+    } finally {
+      await client.close();
+      await door.close();
+    }
+  }
+});
+
+test("a reconnect reseats the body and the Hub's world belief follows the door", async () => {
+  // The door mints an attachment from the join credential's own world claim,
+  // so a reconnect always lands back in the deployment's home world. If the
+  // Hub kept believing the world it travelled to, the next travel there would
+  // short-circuit and report a move that never happened.
+  const door = await EidoverseMcplDoor.start({
+    world: "commons",
+    tokens: [TOKEN],
+    travelWorlds: ["annex"],
+  });
+  const client = new EidoverseMcplClient(config(door), credential);
+  const agent = new VisionAgent();
+  const adapter = new EidoverseEmbodiedSessionAdapter({
+    worldName: "commons",
+    agentName: "companion",
+    satelliteClaim: normalizeSatelliteClaimConfig({
+      capabilityProfile: "world-avatar",
+      satelliteId: "eidoverse-world",
+      endpointId: "eidoverse-avatar",
+      displayName: "Eidoverse World Avatar",
+    }),
+    placeMap: parseEidoversePlaceMap({
+      schemaVersion: 1,
+      worlds: { commons: { placeId: "eidoverse:commons" }, annex: { placeId: "eidoverse:annex" } },
+    }),
+  }, {
+    embodiedSessions: new EmbodiedSessionRegistry("satellite.endpoint"),
+    sessions: new SessionStore(60),
+    agent,
+    look: client,
+    say: client,
+    travel: client,
+    logger: { warn: () => undefined },
+  });
+  client.setWorldHandler((world) => { adapter.resyncWorld(world); });
+  let probe = 0;
+  const placeIdOfNextTurn = async (): Promise<string | null | undefined> => {
+    probe += 1;
+    await adapter.handleAddressedUtterance({
+      utteranceId: `probe-${probe}`,
+      userText: "Quill: where are you?",
+    });
+    return agent.calls.at(-1)?.channel?.placeId;
+  };
+  try {
+    await client.start();
+    await door.waitForHandshake();
+    adapter.connect();
+    assert.deepEqual(await adapter.travelTo("annex"), {
+      accepted: true,
+      world: "annex",
+      placeId: "eidoverse:annex",
+    });
+    assert.equal(await placeIdOfNextTurn(), "eidoverse:annex");
+
+    door.dropConnection();
+    await waitFor(() => door.connections === 2 && door.connected, "the client to reconnect");
+    await waitFor(
+      async () => await placeIdOfNextTurn() === "eidoverse:commons",
+      "the world belief to follow the door back to the home world",
+    );
+
+    // And the belief is not merely relabelled: the next travel is really made.
+    assert.deepEqual(await adapter.travelTo("annex"), {
+      accepted: true,
+      world: "annex",
+      placeId: "eidoverse:annex",
+    });
+    assert.deepEqual(door.prepared, ["annex", "annex"]);
+  } finally {
+    adapter.disconnect();
     await client.close();
     await door.close();
   }
@@ -355,16 +596,17 @@ interface McplVisionTurn {
 async function mcplVisionTurn(
   t: { after(fn: () => void): void },
   snap?: (request: http.IncomingMessage, response: http.ServerResponse) => void,
+  travelTo?: string,
 ): Promise<McplVisionTurn> {
   const door = await EidoverseMcplDoor.start({
     world: "commons",
     tokens: [TOKEN],
+    travelWorlds: ["annex"],
     ...(snap ? { snap } : {}),
   });
   const doorConfig = config(door);
   const snapshotConfig = loadEidoverseSnapshotConfig({
     transport: "mcpl",
-    worldName: doorConfig.worldName,
     agentName: doorConfig.agentName,
     doorUrl: doorConfig.doorUrl,
   }, {
@@ -396,6 +638,7 @@ async function mcplVisionTurn(
     agent,
     look: client,
     say: client,
+    travel: client,
     snapshot: new EidoverseSnapshotSource(snapshotConfig!, {
       artifactsRoot,
       logger: { warn },
@@ -411,6 +654,10 @@ async function mcplVisionTurn(
     await door.waitForHandshake();
     await door.registerChannel();
     adapter.connect();
+    if (travelTo) {
+      const outcome = await adapter.travelTo(travelTo);
+      assert.equal(outcome.accepted, true, "the door must admit the travel this turn follows");
+    }
     await door.deliver([
       door.message({
         text: "Quill: what do you see?",
@@ -453,6 +700,24 @@ test("an MCPL turn carries a first-person frame from the origin derived from the
     true,
     "the text look tier is unchanged by vision",
   );
+});
+
+test("vision follows the body into the world it travelled to", async (t) => {
+  // The boot world is `commons`; the door serves `/snap` per world and the
+  // avatar is present in exactly one of them, so a capture still naming the
+  // boot world would 404 for the rest of the process's life.
+  const turn = await mcplVisionTurn(t, (_request, response) => {
+    response.writeHead(200, { "content-type": "image/png", "content-length": PNG_BYTES.length });
+    response.end(PNG_BYTES);
+  }, "annex");
+
+  assert.deepEqual(turn.door.prepared, ["annex"], "the door moved the body");
+  assert.deepEqual(
+    turn.door.snapRequests,
+    ["/snap?world=annex&follow=companion&view=first"],
+    "the capture follows the live world, not the boot world",
+  );
+  assert.equal(turn.channel?.visionCaptureImages?.length, 1);
 });
 
 test("an MCPL turn with no renderer attached degrades to its text look notes", async (t) => {

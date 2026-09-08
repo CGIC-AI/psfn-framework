@@ -57,7 +57,7 @@ export interface EidoverseSayPublisher {
  * `look()` notes.
  */
 export interface EidoverseSnapshotCaptureSource {
-  capture(sessionId: string): Promise<VisionCaptureImage | null>;
+  capture(sessionId: string, world: string): Promise<VisionCaptureImage | null>;
 }
 
 /**
@@ -282,6 +282,31 @@ export class EidoverseEmbodiedSessionAdapter {
     return { accepted: true, world: destination, ...this.placeIdFor(destination) };
   }
 
+  /**
+   * Adopt the door's own answer for where this body is.
+   *
+   * The door builds a fresh attachment from the join credential's world claim,
+   * so every reconnect reseats the avatar in the deployment's home world
+   * whatever it had travelled to. Left unresynced, `travelTo` would
+   * short-circuit on a destination the body is no longer in and report a move
+   * that never happened. The door is authoritative here; a name outside the
+   * door's own grammar is refused rather than adopted, and the place map is
+   * re-resolved from the new world on the next turn.
+   */
+  resyncWorld(world: string): void {
+    const authoritative = world.trim();
+    if (!EIDOVERSE_WORLD_NAME_PATTERN.test(authoritative)) {
+      (this.deps.logger ?? console).warn("Eidoverse world resync refused: invalid world name");
+      return;
+    }
+    if (authoritative === this.currentWorldName) return;
+    this.currentWorldName = authoritative;
+    // An arrival note for a world the body is no longer in is worse than no
+    // note: it would narrate a move the reconnect has already undone.
+    this.arrivalNote = null;
+    (this.deps.logger ?? console).warn("Eidoverse world belief resynced from the door");
+  }
+
   private refuseTravel(reason: EidoverseTravelRefusal): EidoverseTravelOutcome {
     (this.deps.logger ?? console).warn(`Eidoverse travel refused: ${reason}`);
     return { accepted: false, world: this.currentWorldName, reason };
@@ -347,7 +372,9 @@ export class EidoverseEmbodiedSessionAdapter {
     const snapshot = this.deps.snapshot;
     if (!snapshot) return null;
     try {
-      return await snapshot.capture(this.conversationId);
+      // The world the body is in right now, not the one the session was
+      // founded in: travel moves the avatar out of the boot world entirely.
+      return await snapshot.capture(this.conversationId, this.currentWorldName);
     } catch {
       // A snapshot never fails a turn; the text look notes remain the tier.
       (this.deps.logger ?? console).warn("Eidoverse snapshot failed");

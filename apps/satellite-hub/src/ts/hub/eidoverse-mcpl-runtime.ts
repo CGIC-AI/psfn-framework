@@ -49,11 +49,13 @@ export interface EidoverseMcplLifecycleClient {
   start(): Promise<void>;
   close(): Promise<void>;
   setIncomingHandler(handler: ((messages: readonly McplIncomingChannelMessage[]) => void) | null): void;
+  setWorldHandler(handler: ((world: string) => void) | null): void;
 }
 
 export interface EidoverseMcplLifecycleTarget extends EidoverseMcplWakeTarget {
   start(): Promise<void>;
   close(): Promise<void>;
+  handleEidoverseWorldResync(world: string): void;
 }
 
 class EidoverseMcplWakeRuntime {
@@ -138,11 +140,15 @@ export function createEidoverseMcplProductionLifecycle(
   return {
     async start(): Promise<void> {
       client.setIncomingHandler((messages) => wake.deliver(messages));
+      // Bound before the dial: the first connection carries a world answer too,
+      // and a handler bound afterwards would miss it.
+      client.setWorldHandler((world) => { target.handleEidoverseWorldResync(world); });
       await client.start();
       await target.start();
     },
     async close(): Promise<void> {
       client.setIncomingHandler(null);
+      client.setWorldHandler(null);
       const wakeResult = await Promise.allSettled([wake.close()]);
       const teardownResults = await Promise.allSettled([client.close(), target.close()]);
       const errors = [...wakeResult, ...teardownResults]

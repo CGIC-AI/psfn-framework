@@ -9,16 +9,21 @@ import { MEMORY_POLICY_TYPES } from '../../../system/config/memory-retrieval-pol
 import { sensitivityAtMost } from '../../../system/trust/types.js';
 import { hasExactKeys, isCanonicalIsoTimestamp, isRecord } from '../../../shared/utils/types.js';
 import type {
+  BiographicalCandidateRationale,
   BiographicalCandidateReceipt,
   BiographicalCandidateReceiptAuthority,
   BiographicalCandidateReceiptDecision,
+  BiographicalCandidateReceiptReason,
   BiographicalCandidateRecord,
+  BiographicalCandidateSocialContext,
   BiographicalCandidateStage,
   BiographicalClaim,
   BiographicalClaimSource,
 } from './types.js';
 import {
+  BIOGRAPHICAL_CANDIDATE_RATIONALES,
   BIOGRAPHICAL_CANDIDATE_RECEIPT_AUTHORITIES,
+  BIOGRAPHICAL_CANDIDATE_RECEIPT_REASONS,
   BIOGRAPHICAL_CANDIDATE_STAGES,
 } from './types.js';
 
@@ -26,6 +31,7 @@ export interface CandidateReceiptInput {
   readonly authority: BiographicalCandidateReceiptAuthority;
   readonly decision: BiographicalCandidateReceiptDecision;
   readonly actorAuthorityRef: string;
+  readonly reason?: BiographicalCandidateReceiptReason;
 }
 
 function stableStringify(value: unknown): string {
@@ -51,16 +57,29 @@ function nonEmpty(value: unknown, field: string): string {
   return value.trim();
 }
 
-function assertCandidateSource(
+/**
+ * Why owner policy refuses a source, or `admitted`. Synthesis applies this
+ * BEFORE any model call so an excluded source body never reaches a prompt;
+ * {@link assertCandidateSource} applies the same rule again at the persistence
+ * boundary so a caller that skipped the filter still fails closed.
+ */
+export type BiographicalCandidateSourceAdmission =
+  | 'admitted'
+  | 'source_type_excluded'
+  | 'lifecycle_excluded'
+  | 'sensitivity_exceeded';
+
+export function biographicalCandidateSourceAdmission(
   source: BiographicalClaimSource,
-  policy: BiographicalCandidatePolicy,
-): void {
+  policyInput: BiographicalCandidatePolicy,
+): BiographicalCandidateSourceAdmission {
+  const policy = normalizeBiographicalCandidatePolicy(policyInput);
   if (
     typeof source.sourceType !== 'string'
     || !(MEMORY_POLICY_TYPES as readonly string[]).includes(source.sourceType)
     || !policy.admittedSourceTypes.includes(source.sourceType)
   ) {
-    throw new Error('biography candidate source type is unknown or excluded by owner policy');
+    return 'source_type_excluded';
   }
   if (
     typeof source.lifecycleStateAtProjection !== 'string'
@@ -68,10 +87,69 @@ function assertCandidateSource(
       .includes(source.lifecycleStateAtProjection)
     || policy.excludedLifecycleStates.includes(source.lifecycleStateAtProjection)
   ) {
-    throw new Error('biography candidate source lifecycle is unknown or excluded by owner policy');
+    return 'lifecycle_excluded';
   }
   if (!sensitivityAtMost(source.sensitivityAtProjection, policy.maximumSourceSensitivity)) {
-    throw new Error('biography candidate source sensitivity exceeds owner policy');
+    return 'sensitivity_exceeded';
+  }
+  return 'admitted';
+}
+
+const CANDIDATE_SOURCE_ADMISSION_ERRORS: Record<
+  Exclude<BiographicalCandidateSourceAdmission, 'admitted'>,
+  string
+> = {
+  source_type_excluded: 'biography candidate source type is unknown or excluded by owner policy',
+  lifecycle_excluded: 'biography candidate source lifecycle is unknown or excluded by owner policy',
+  sensitivity_exceeded: 'biography candidate source sensitivity exceeds owner policy',
+};
+
+function assertCandidateSource(
+  source: BiographicalClaimSource,
+  policy: BiographicalCandidatePolicy,
+): void {
+  const admission = biographicalCandidateSourceAdmission(source, policy);
+  if (admission !== 'admitted') throw new Error(CANDIDATE_SOURCE_ADMISSION_ERRORS[admission]);
+}
+
+/**
+ * The social context must be the canonical subject or dyad the claim already
+ * carries. A synthesizer cannot widen review authority by declaring a context
+ * the claim does not support.
+ *
+ * A dyad context groups every candidate that belongs to one companion-contact
+ * relationship, including single-subject claims about that contact: grouping is
+ * by canonical identity, so the same dyad observed in two rooms is one context
+ * and two dyads sharing a room stay separate.
+ */
+function assertCandidateSocialContext(
+  claim: Pick<BiographicalClaim, 'subject' | 'relatedSubject'>,
+  context: BiographicalCandidateSocialContext,
+): void {
+  const subjects = [claim.subject, ...(claim.relatedSubject ? [claim.relatedSubject] : [])];
+  const companionId = nonEmpty(context.companionId, 'socialContext.companionId');
+  if (context.kind === 'companion_self') {
+    if (
+      subjects.some(subject => subject.kind === 'contact')
+      || !subjects.every(subject => (
+        subject.kind === 'companion' && subject.companionId === companionId
+      ))
+    ) {
+      throw new Error('biography candidate companion_self context must match the claim subject');
+    }
+    return;
+  }
+  const contactId = nonEmpty(context.contactId, 'socialContext.contactId');
+  const namesContact = subjects.some(
+    subject => subject.kind === 'contact' && subject.contactId === contactId,
+  );
+  const companionAgrees = subjects.every(
+    subject => subject.kind !== 'companion' || subject.companionId === companionId,
+  );
+  if (!namesContact || !companionAgrees) {
+    throw new Error(
+      'biography candidate dyad context must name the claim contact and its scanning companion',
+    );
   }
 }
 
@@ -100,6 +178,12 @@ function prepareCandidateReceipt(input: {
   if (!['approved', 'rejected', 'superseded'].includes(input.receipt.decision)) {
     throw new Error('unknown biography candidate receipt decision');
   }
+  if (
+    input.receipt.reason !== undefined
+    && !(BIOGRAPHICAL_CANDIDATE_RECEIPT_REASONS as readonly string[]).includes(input.receipt.reason)
+  ) {
+    throw new Error('unknown biography candidate receipt reason');
+  }
   return {
     id: randomUUID(),
     authority: input.receipt.authority,
@@ -109,6 +193,7 @@ function prepareCandidateReceipt(input: {
     claimDigest: input.claimDigest,
     sourceSetDigest: input.sourceSetDigest,
     recordedAt: input.now.toISOString(),
+    ...(input.receipt.reason !== undefined ? { reason: input.receipt.reason } : {}),
   };
 }
 
@@ -119,10 +204,21 @@ export function prepareBiographicalCandidate(input: {
   readonly policy: BiographicalCandidatePolicy;
   readonly now: Date;
   readonly supersedesCandidateId?: string;
+  readonly socialContext?: BiographicalCandidateSocialContext;
+  readonly rationale?: BiographicalCandidateRationale;
 }): BiographicalCandidateRecord {
   const policy = assertBiographicalCandidateAdmission(input.claim, input.policy);
   if (input.claim.status !== 'candidate') {
     throw new Error('biography candidate claim must begin in candidate status');
+  }
+  if (input.socialContext !== undefined) {
+    assertCandidateSocialContext(input.claim, input.socialContext);
+  }
+  if (
+    input.rationale !== undefined
+    && !(BIOGRAPHICAL_CANDIDATE_RATIONALES as readonly string[]).includes(input.rationale)
+  ) {
+    throw new Error('unknown biography candidate rationale');
   }
   const revision = 1;
   const now = input.now.toISOString();
@@ -141,6 +237,7 @@ export function prepareBiographicalCandidate(input: {
         authority: 'automata',
         decision: 'approved',
         actorAuthorityRef: input.automataAuthorityRef,
+        reason: 'synthesized',
       },
       candidateRevision: revision,
       claimDigest: input.claim.claimDigest,
@@ -152,6 +249,8 @@ export function prepareBiographicalCandidate(input: {
     ...(input.supersedesCandidateId !== undefined
       ? { supersedesCandidateId: nonEmpty(input.supersedesCandidateId, 'supersedesCandidateId') }
       : {}),
+    ...(input.socialContext !== undefined ? { socialContext: input.socialContext } : {}),
+    ...(input.rationale !== undefined ? { rationale: input.rationale } : {}),
   };
 }
 
@@ -226,7 +325,12 @@ export function transitionBiographicalCandidate(input: {
     throw new Error(`illegal biography candidate transition from terminal ${input.candidate.stage}`);
   }
   const allowed = (
-    input.candidate.stage === 'automata_synthesis' && input.to === 'companion_review'
+    input.candidate.stage === 'automata_synthesis'
+    // A synthesis-stage candidate may be closed by a later synthesis pass that
+    // proposes the same claim over drifted evidence. Supersession still needs
+    // its owner-policy receipt below, so this widens no review authority: it
+    // only stops stale unreviewed candidates from accumulating forever.
+    && ['companion_review', 'superseded'].includes(input.to)
   ) || (
     input.candidate.stage === 'companion_review'
     && ['human_review', 'active', 'rejected', 'superseded'].includes(input.to)
@@ -280,6 +384,27 @@ export function transitionBiographicalCandidate(input: {
   };
 }
 
+/** Every candidate listing is bounded; an unbounded page is refused. */
+export function assertCandidateListLimit(limit: number): number {
+  if (!Number.isSafeInteger(limit) || limit < 1) {
+    throw new Error('biography candidate list limit must be a positive safe integer');
+  }
+  return limit;
+}
+
+/** Stage filters are exact closed values; an unknown stage rejects. */
+export function assertCandidateStages(
+  stages: readonly BiographicalCandidateStage[],
+): BiographicalCandidateStage[] {
+  if (stages.length === 0) throw new Error('biography candidate stage filter must not be empty');
+  for (const stage of stages) {
+    if (!(BIOGRAPHICAL_CANDIDATE_STAGES as readonly unknown[]).includes(stage)) {
+      throw new Error('unknown biography candidate stage');
+    }
+  }
+  return [...stages];
+}
+
 export function serializeCandidate(candidate: BiographicalCandidateRecord): string {
   return JSON.stringify(candidate);
 }
@@ -306,7 +431,7 @@ export function deserializeCandidate(stored: unknown): BiographicalCandidateReco
     'receipts',
     'createdAt',
     'updatedAt',
-  ], ['supersedesCandidateId'])) {
+  ], ['supersedesCandidateId', 'socialContext', 'rationale'])) {
     throw new Error('stored biography candidate has unknown or missing fields');
   }
   if (!(BIOGRAPHICAL_CANDIDATE_STAGES as readonly unknown[]).includes(value.stage)) {
@@ -336,8 +461,14 @@ export function deserializeCandidate(stored: unknown): BiographicalCandidateReco
       'claimDigest',
       'sourceSetDigest',
       'recordedAt',
-    ])) {
+    ], ['reason'])) {
       throw new Error('stored biography candidate receipt has unknown or missing fields');
+    }
+    if (
+      receipt.reason !== undefined
+      && !(BIOGRAPHICAL_CANDIDATE_RECEIPT_REASONS as readonly unknown[]).includes(receipt.reason)
+    ) {
+      throw new Error('stored biography candidate receipt has unknown reason');
     }
     if (!(BIOGRAPHICAL_CANDIDATE_RECEIPT_AUTHORITIES as readonly unknown[]).includes(receipt.authority)) {
       throw new Error('stored biography candidate receipt has unknown authority');
@@ -365,6 +496,9 @@ export function deserializeCandidate(stored: unknown): BiographicalCandidateReco
       claimDigest: assertDigest(receipt.claimDigest, 'receipt claimDigest'),
       sourceSetDigest: assertDigest(receipt.sourceSetDigest, 'receipt sourceSetDigest'),
       recordedAt: receipt.recordedAt,
+      ...(receipt.reason !== undefined
+        ? { reason: receipt.reason as BiographicalCandidateReceiptReason }
+        : {}),
     };
   });
   for (const field of ['createdAt', 'updatedAt'] as const) {
@@ -400,5 +534,42 @@ export function deserializeCandidate(stored: unknown): BiographicalCandidateReco
     ...(value.supersedesCandidateId !== undefined
       ? { supersedesCandidateId: nonEmpty(value.supersedesCandidateId, 'stored supersedesCandidateId') }
       : {}),
+    ...(value.socialContext !== undefined
+      ? { socialContext: deserializeSocialContext(value.socialContext) }
+      : {}),
+    ...(value.rationale !== undefined
+      ? { rationale: deserializeRationale(value.rationale) }
+      : {}),
   };
+}
+
+function deserializeSocialContext(value: unknown): BiographicalCandidateSocialContext {
+  if (!isRecord(value)) throw new Error('stored biography candidate socialContext is invalid');
+  if (value.kind === 'companion_self' && hasExactKeys(value, ['kind', 'companionId'])) {
+    return {
+      kind: 'companion_self',
+      companionId: nonEmpty(value.companionId, 'stored socialContext companionId'),
+    };
+  }
+  if (
+    value.kind === 'companion_contact_dyad'
+    && hasExactKeys(value, ['kind', 'companionId', 'contactId'])
+  ) {
+    return {
+      kind: 'companion_contact_dyad',
+      companionId: nonEmpty(value.companionId, 'stored socialContext companionId'),
+      contactId: nonEmpty(value.contactId, 'stored socialContext contactId'),
+    };
+  }
+  throw new Error('stored biography candidate socialContext is unknown');
+}
+
+function deserializeRationale(value: unknown): BiographicalCandidateRationale {
+  if (
+    typeof value !== 'string'
+    || !(BIOGRAPHICAL_CANDIDATE_RATIONALES as readonly string[]).includes(value)
+  ) {
+    throw new Error('stored biography candidate rationale is unknown');
+  }
+  return value as BiographicalCandidateRationale;
 }

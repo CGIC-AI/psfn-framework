@@ -19,6 +19,7 @@ import {
   reevaluateClaimEffective,
   serializeClaim,
   type BiographicalClaimListOptions,
+  type BiographicalCandidateListOptions,
   type BiographicalCandidateTransitionInput,
   type BiographicalCandidateWriteInput,
   type BiographicalClaimWriteInput,
@@ -33,6 +34,8 @@ import {
 } from './store-port.js';
 import {
   assertCandidateClaimBinding,
+  assertCandidateListLimit,
+  assertCandidateStages,
   deserializeCandidate,
   prepareBiographicalCandidate,
   serializeCandidate,
@@ -281,6 +284,8 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
         ...(input.supersedesCandidateId !== undefined
           ? { supersedesCandidateId: input.supersedesCandidateId }
           : {}),
+        ...(input.socialContext !== undefined ? { socialContext: input.socialContext } : {}),
+        ...(input.rationale !== undefined ? { rationale: input.rationale } : {}),
       });
       await store.insertClaimRowClient(client, claim, now);
       await client.query(
@@ -317,6 +322,37 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
     const candidate = deserializeCandidateRow(row);
     assertCandidateClaimBinding(candidate, await this.readClaim(candidate.claimId));
     return candidate;
+  }
+
+  async listCandidates(
+    options: BiographicalCandidateListOptions,
+  ): Promise<BiographicalCandidateRecord[]> {
+    const limit = assertCandidateListLimit(options.limit);
+    const filters: string[] = [];
+    const values: unknown[] = [];
+    if (options.stages !== undefined) {
+      values.push(assertCandidateStages(options.stages));
+      filters.push(`stage = ANY($${values.length}::text[])`);
+    }
+    if (options.claimDigest !== undefined) {
+      values.push(options.claimDigest);
+      filters.push(`claim_digest = $${values.length}`);
+    }
+    if (options.automataRunId !== undefined) {
+      values.push(options.automataRunId);
+      filters.push(`automata_run_id = $${values.length}`);
+    }
+    values.push(limit, options.offset ?? 0);
+    const rows = await this.queryRows<CandidateRow>(
+      `SELECT id, claim_id, claim_digest, source_set_digest, stage, revision,
+              automata_run_id, policy_digest, candidate_json
+       FROM biographical_candidates
+       ${filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : ''}
+       ORDER BY created_at ASC, id ASC
+       LIMIT $${values.length - 1} OFFSET $${values.length}`,
+      values,
+    );
+    return rows.map(deserializeCandidateRow);
   }
 
   async transitionCandidate(

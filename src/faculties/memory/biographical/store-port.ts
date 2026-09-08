@@ -10,9 +10,12 @@ import type {
   BiographicalClaimSource,
   BiographicalClaimStatus,
   BiographicalClaimValue,
+  BiographicalCandidateRationale,
   BiographicalCandidateRecord,
   BiographicalCandidateReceiptAuthority,
   BiographicalCandidateReceiptDecision,
+  BiographicalCandidateReceiptReason,
+  BiographicalCandidateSocialContext,
   BiographicalCandidateStage,
   BiographicalCollectionDepth,
   BiographicalSensitivityGrant,
@@ -134,6 +137,7 @@ export interface BiographicalCandidateReceiptInput {
   readonly authority: BiographicalCandidateReceiptAuthority;
   readonly decision: BiographicalCandidateReceiptDecision;
   readonly actorAuthorityRef: string;
+  readonly reason?: BiographicalCandidateReceiptReason;
 }
 
 export interface BiographicalCandidateWriteInput {
@@ -142,6 +146,21 @@ export interface BiographicalCandidateWriteInput {
   readonly automataAuthorityRef: string;
   readonly policy: BiographicalCandidatePolicy;
   readonly supersedesCandidateId?: string;
+  readonly socialContext?: BiographicalCandidateSocialContext;
+  readonly rationale?: BiographicalCandidateRationale;
+}
+
+/**
+ * Bounded candidate listing. Every filter is an exact canonical value; there is
+ * no free-text search, so a listing can never widen beyond the staged rows the
+ * caller already has authority over.
+ */
+export interface BiographicalCandidateListOptions {
+  readonly stages?: readonly BiographicalCandidateStage[];
+  readonly claimDigest?: string;
+  readonly automataRunId?: string;
+  readonly limit: number;
+  readonly offset?: number;
 }
 
 export interface BiographicalCandidateTransitionInput {
@@ -585,6 +604,9 @@ export function assertCompatibleSupersession(
 export interface BiographicalProfileStorePort {
   writeCandidate(input: BiographicalCandidateWriteInput): Promise<BiographicalCandidateRecord>;
   getCandidate(id: string): Promise<BiographicalCandidateRecord | undefined>;
+  listCandidates(
+    options: BiographicalCandidateListOptions,
+  ): Promise<BiographicalCandidateRecord[]>;
   transitionCandidate(
     input: BiographicalCandidateTransitionInput,
   ): Promise<BiographicalCandidateRecord>;

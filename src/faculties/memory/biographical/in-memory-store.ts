@@ -23,6 +23,7 @@ import {
   reevaluateClaimEffective,
   serializeClaim,
   type BiographicalClaimListOptions,
+  type BiographicalCandidateListOptions,
   type BiographicalCandidateTransitionInput,
   type BiographicalCandidateWriteInput,
   type BiographicalClaimWriteInput,
@@ -36,6 +37,7 @@ import {
 } from './store-port.js';
 import {
   assertCandidateClaimBinding,
+  assertCandidateListLimit,
   deserializeCandidate,
   prepareBiographicalCandidate,
   serializeCandidate,
@@ -176,10 +178,33 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
       ...(input.supersedesCandidateId !== undefined
         ? { supersedesCandidateId: input.supersedesCandidateId }
         : {}),
+      ...(input.socialContext !== undefined ? { socialContext: input.socialContext } : {}),
+      ...(input.rationale !== undefined ? { rationale: input.rationale } : {}),
     });
     this.storeClaim(claim);
     this.storeCandidate(candidate);
     return candidate;
+  }
+
+  async listCandidates(
+    options: BiographicalCandidateListOptions,
+  ): Promise<BiographicalCandidateRecord[]> {
+    const limit = assertCandidateListLimit(options.limit);
+    const offset = options.offset ?? 0;
+    return [...this.candidates.values()]
+      .map(row => deserializeCandidate(row.candidateJson))
+      .filter(candidate => (
+        (options.stages === undefined || options.stages.includes(candidate.stage))
+        && (options.claimDigest === undefined || candidate.claimDigest === options.claimDigest)
+        && (options.automataRunId === undefined
+          || candidate.automataRunId === options.automataRunId)
+      ))
+      .sort((left, right) => (
+        left.createdAt === right.createdAt
+          ? left.id.localeCompare(right.id)
+          : left.createdAt.localeCompare(right.createdAt)
+      ))
+      .slice(offset, offset + limit);
   }
 
   async getCandidate(id: string): Promise<BiographicalCandidateRecord | undefined> {

@@ -241,6 +241,26 @@ export type BiographicalCandidateReceiptAuthority =
 
 export type BiographicalCandidateReceiptDecision = 'approved' | 'rejected' | 'superseded';
 
+/**
+ * Closed reviewer reason codes. A reviewer states why it decided with a code so
+ * a receipt can be audited without republishing review reasoning as prose.
+ */
+export const BIOGRAPHICAL_CANDIDATE_RECEIPT_REASONS = [
+  'synthesized',
+  'reviewer_approved',
+  'reviewer_rejected',
+  'reviewer_revised',
+  'reviewer_reassigned',
+  'reviewer_split',
+  'reviewer_merged',
+  'reviewer_flagged_sensitive',
+  'reviewer_flagged_ambiguous',
+  'owner_policy_supersession',
+  'owner_policy_autoactivation',
+] as const;
+export type BiographicalCandidateReceiptReason =
+  (typeof BIOGRAPHICAL_CANDIDATE_RECEIPT_REASONS)[number];
+
 export interface BiographicalCandidateReceipt {
   readonly id: string;
   readonly authority: BiographicalCandidateReceiptAuthority;
@@ -250,7 +270,37 @@ export interface BiographicalCandidateReceipt {
   readonly claimDigest: string;
   readonly sourceSetDigest: string;
   readonly recordedAt: string;
+  /** Closed reason code; absent on receipts written before o61vb.13. */
+  readonly reason?: BiographicalCandidateReceiptReason;
 }
+
+/**
+ * Canonical social context a candidate was grouped under. Grouping is by
+ * canonical subject identity and explicit dyad, never by channel or room: the
+ * same dyad observed in two rooms produces one context, and two dyads sharing a
+ * room stay separate.
+ */
+export type BiographicalCandidateSocialContext =
+  | { readonly kind: 'companion_self'; readonly companionId: string }
+  | {
+      readonly kind: 'companion_contact_dyad';
+      readonly companionId: string;
+      readonly contactId: string;
+    };
+
+/**
+ * Closed synthesis rationale codes. The synthesizer explains why a candidate
+ * exists with a code, never with prose: free-form profile narrative is a
+ * non-goal of the biography epic and would leak source content into review.
+ */
+export const BIOGRAPHICAL_CANDIDATE_RATIONALES = [
+  'new_subject_claim',
+  'recurring_evidence',
+  'coalesced_duplicate_evidence',
+  'contradicts_active_claim',
+] as const;
+export type BiographicalCandidateRationale =
+  (typeof BIOGRAPHICAL_CANDIDATE_RATIONALES)[number];
 
 export interface BiographicalCandidateRecord {
   readonly id: string;
@@ -267,6 +317,10 @@ export interface BiographicalCandidateRecord {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly supersedesCandidateId?: string;
+  /** Canonical grouping context; absent on rows written before o61vb.12. */
+  readonly socialContext?: BiographicalCandidateSocialContext;
+  /** Closed synthesis reason code; absent on rows written before o61vb.12. */
+  readonly rationale?: BiographicalCandidateRationale;
 }
 
 // ── Claim envelope ──

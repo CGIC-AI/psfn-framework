@@ -884,6 +884,8 @@ async function main(): Promise<void> {
       // Public runtime read API only: this lane never mutates a run.
       automataRuns: () => persistenceRuntime.automataRunRegistry.listRetainedRunsForRuntime(),
     },
+    biographySynthesis: coreRuntime.biographySynthesis,
+    biographyCompanionReview: coreRuntime.biographyCompanionReview,
   });
   // Letters land in their own L0 channel, which no completed turn ever points
   // the extractor at. Bind the bin to the same maybeExtract the post-turn path

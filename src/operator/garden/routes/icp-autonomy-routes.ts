@@ -4,6 +4,7 @@ import { parseAdminJsonBody } from '../request-body.js';
 import { exactPath, paramWithSuffix } from '../route-matchers.js';
 import { AdminIcpReadmissionRefusedError } from '../services/icp-autonomy-service.js';
 import type { AdminIcpAutonomyService } from '../services/types.js';
+import type { GardenRequestContext } from '../garden-request-context.js';
 import { ADMIN_DYNAMIC_JSON_HEADERS, sendInternalError, toSanitizedMessage } from './shared.js';
 import type { AdminApiRoute, AdminAuditTimelineAppender, AdminBodyReader } from './types.js';
 
@@ -98,22 +99,35 @@ export function buildAdminIcpAutonomyRoutes(options: {
   appendAuditTimelineEntry?: AdminAuditTimelineAppender;
 }): AdminApiRoute[] {
   const { service, withBody, appendAuditTimelineEntry } = options;
+  // 'operator' is the actor class; the caller's identity — principal, session,
+  // decision — travels in the request context, which the audit store turns into
+  // a durable requestAttribution. Without it an autonomy-control row records
+  // only that "an operator" acted, which is no attribution at all.
   const audit = (
     decision: 'allowed' | 'denied',
     narrative: string,
     details: Array<string | null | undefined> = [],
-  ) => appendAuditTimelineEntry?.('autonomy_control', decision, narrative, details, 'operator');
+    context?: GardenRequestContext,
+  ) => appendAuditTimelineEntry?.(
+    'autonomy_control',
+    decision,
+    narrative,
+    details,
+    'operator',
+    context,
+  );
 
   const withStrictBody = (
     req: Parameters<AdminBodyReader>[0],
     res: Parameters<AdminBodyReader>[1],
     action: string,
+    context: GardenRequestContext | undefined,
     handler: (value: unknown) => void,
   ): void => {
     withBody(req, res, body => {
       const parsed = parseAdminJsonBody(body);
       if (!parsed.ok) {
-        audit('denied', `Operator ICP ${action} rejected invalid JSON.`);
+        audit('denied', `Operator ICP ${action} rejected invalid JSON.`, [], context);
         sendJson(res, 400, { error: parsed.error });
         return;
       }
@@ -135,11 +149,11 @@ export function buildAdminIcpAutonomyRoutes(options: {
     {
       method: 'POST',
       match: exactPath(ICP_TEST_INITIATIONS_PATH),
-      handle: (req, res) => {
-        withStrictBody(req, res, 'test initiation', value => {
+      handle: (req, res, _params, context) => {
+        withStrictBody(req, res, 'test initiation', context, value => {
           const parsed = parseTestInitiationBody(value);
           if (!parsed.ok) {
-            audit('denied', 'Operator ICP test initiation rejected invalid fields.');
+            audit('denied', 'Operator ICP test initiation rejected invalid fields.', [], context);
             sendJson(res, 400, { error: parsed.error });
             return;
           }
@@ -156,14 +170,14 @@ export function buildAdminIcpAutonomyRoutes(options: {
               `outcome=${result.outcome}`,
               `status=${result.status}`,
               `deliveryDisposition=${result.deliveryDisposition}`,
-            ]);
+            ], context);
             sendJson(res, 200, result, ADMIN_DYNAMIC_JSON_HEADERS);
           }, error => {
             audit('denied', 'Operator ICP test initiation failed.', [
               `peerCompanionId=${parsed.peerCompanionId}`,
               `requestId=${parsed.requestId}`,
               `error=${toSanitizedMessage(error, 'initiation failed')}`,
-            ]);
+            ], context);
             sendInternalError(res, error, 'Failed to trigger ICP test initiation');
           });
         });
@@ -172,10 +186,10 @@ export function buildAdminIcpAutonomyRoutes(options: {
     {
       method: 'POST',
       match: paramWithSuffix(ICP_CANDIDATE_PREFIX, 'candidateId', '/cancel'),
-      handle: (req, res, { candidateId }) => {
-        withStrictBody(req, res, 'candidate cancellation', value => {
+      handle: (req, res, { candidateId }, context) => {
+        withStrictBody(req, res, 'candidate cancellation', context, value => {
           if (!isRfc4122Uuid(candidateId)) {
-            audit('denied', 'Operator ICP candidate cancellation rejected invalid identity.');
+            audit('denied', 'Operator ICP candidate cancellation rejected invalid identity.', [], context);
             sendJson(res, 400, { error: 'candidateId must be a lowercase RFC-4122 UUID' });
             return;
           }
@@ -183,7 +197,7 @@ export function buildAdminIcpAutonomyRoutes(options: {
           if (!parsed.ok) {
             audit('denied', 'Operator ICP candidate cancellation rejected invalid fields.', [
               `candidateId=${candidateId}`,
-            ]);
+            ], context);
             sendJson(res, 400, { error: parsed.error });
             return;
           }
@@ -194,13 +208,13 @@ export function buildAdminIcpAutonomyRoutes(options: {
             audit('allowed', 'Operator cancelled an ICP initiation candidate.', [
               `candidateId=${candidateId}`,
               `revokedPermits=${String(result.revokedPermitCount)}`,
-            ]);
+            ], context);
             sendJson(res, 200, result, ADMIN_DYNAMIC_JSON_HEADERS);
           }, error => {
             audit('denied', 'Operator ICP candidate cancellation failed.', [
               `candidateId=${candidateId}`,
               `error=${toSanitizedMessage(error, 'mutation failed')}`,
-            ]);
+            ], context);
             sendJson(res, statusForMutationError(error), {
               error: toSanitizedMessage(error, 'Failed to cancel ICP candidate'),
             });
@@ -211,11 +225,20 @@ export function buildAdminIcpAutonomyRoutes(options: {
     {
       method: 'POST',
       match: exactPath(ICP_LIFECYCLE_READMIT_PATH),
-      handle: (req, res) => {
-        withStrictBody(req, res, 'lifecycle readmission', value => {
+      handle: (req, res, _params, context) => {
+        if (!context) {
+          // Fail closed: clearing a durable admission fence is exactly the act
+          // that must name its principal. An unattributable call is refused
+          // rather than recorded against the generic 'operator' actor.
+          sendJson(res, 403, {
+            error: 'ICP lifecycle readmission requires an attributable operator request context',
+          });
+          return;
+        }
+        withStrictBody(req, res, 'lifecycle readmission', context, value => {
           const parsed = parseReadmitBody(value);
           if (!parsed.ok) {
-            audit('denied', 'Operator ICP lifecycle readmission rejected invalid fields.');
+            audit('denied', 'Operator ICP lifecycle readmission rejected invalid fields.', [], context);
             sendJson(res, 400, { error: parsed.error });
             return;
           }
@@ -229,7 +252,7 @@ export function buildAdminIcpAutonomyRoutes(options: {
               `companionId=${result.companionId}`,
               `transitioned=${String(result.transitioned)}`,
               `revokedPermits=${String(result.revokedPermitCount)}`,
-            ]);
+            ], context);
             sendJson(res, 200, result, ADMIN_DYNAMIC_JSON_HEADERS);
           }, error => {
             const refused = error instanceof AdminIcpReadmissionRefusedError;
@@ -237,7 +260,7 @@ export function buildAdminIcpAutonomyRoutes(options: {
               `companionId=${parsed.companionId}`,
               ...(refused ? [`refusal=${error.refusal}`] : []),
               `error=${toSanitizedMessage(error, 'readmission refused')}`,
-            ]);
+            ], context);
             if (refused) {
               // A mismatched confirmation is a malformed request; an
               // off-manifest or unwired target is a legible state conflict.
@@ -253,23 +276,23 @@ export function buildAdminIcpAutonomyRoutes(options: {
     {
       method: 'POST',
       match: exactPath(ICP_DND_PATH),
-      handle: (req, res) => {
-        withStrictBody(req, res, 'do-not-disturb', value => {
+      handle: (req, res, _params, context) => {
+        withStrictBody(req, res, 'do-not-disturb', context, value => {
           const bodyError = parseEmptyBody(value);
           if (bodyError) {
-            audit('denied', 'Operator ICP do-not-disturb rejected invalid fields.');
+            audit('denied', 'Operator ICP do-not-disturb rejected invalid fields.', [], context);
             sendJson(res, 400, { error: bodyError });
             return;
           }
           service.setDoNotDisturb().then(result => {
             audit('allowed', 'Operator published ICP do-not-disturb and invalidated permits.', [
               `revokedPermits=${String(result.revokedPermitCount)}`,
-            ]);
+            ], context);
             sendJson(res, 200, result, ADMIN_DYNAMIC_JSON_HEADERS);
           }, error => {
             audit('denied', 'Operator ICP do-not-disturb failed.', [
               `error=${toSanitizedMessage(error, 'mutation failed')}`,
-            ]);
+            ], context);
             sendInternalError(res, error, 'Failed to set ICP do-not-disturb');
           });
         });
@@ -278,23 +301,23 @@ export function buildAdminIcpAutonomyRoutes(options: {
     {
       method: 'POST',
       match: exactPath(ICP_EMERGENCY_DISABLE_PATH),
-      handle: (req, res) => {
-        withStrictBody(req, res, 'emergency disable', value => {
+      handle: (req, res, _params, context) => {
+        withStrictBody(req, res, 'emergency disable', context, value => {
           const bodyError = parseEmptyBody(value);
           if (bodyError) {
-            audit('denied', 'Operator ICP emergency disable rejected invalid fields.');
+            audit('denied', 'Operator ICP emergency disable rejected invalid fields.', [], context);
             sendJson(res, 400, { error: bodyError });
             return;
           }
           service.emergencyDisable().then(result => {
             audit('allowed', 'Operator emergency-disabled ICP autonomous initiation.', [
               `revokedPermits=${String(result.revokedPermitCount)}`,
-            ]);
+            ], context);
             sendJson(res, 200, result, ADMIN_DYNAMIC_JSON_HEADERS);
           }, error => {
             audit('denied', 'Operator ICP emergency disable failed.', [
               `error=${toSanitizedMessage(error, 'mutation failed')}`,
-            ]);
+            ], context);
             sendInternalError(res, error, 'Failed to emergency-disable ICP autonomy');
           });
         });

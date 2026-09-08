@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { describe, expect, it, vi } from 'vitest';
 
+import type { GardenRequestContext } from '../garden-request-context.js';
 import { AdminIcpReadmissionRefusedError } from '../services/icp-autonomy-service.js';
 import type { AdminIcpAutonomyService } from '../services/types.js';
 import { buildAdminIcpAutonomyRoutes } from './icp-autonomy-routes.js';
@@ -9,6 +10,28 @@ import type { AdminAuditTimelineAppender, AdminBodyReader } from './types.js';
 const CANDIDATE_ID = '33333333-3333-4333-8333-333333333333';
 const PEER_ID = '22222222-2222-4222-8222-222222222222';
 const REQUEST_ID = '44444444-4444-4444-8444-444444444444';
+
+/** The authenticated caller the dispatcher hands every admin route. */
+const OPERATOR_CONTEXT = {
+  kind: 'fleet_principal',
+  actor: {
+    kind: 'fleet_principal',
+    principalId: 'operator-mira',
+    role: 'admin',
+    sessionRecordId: 'session-7',
+  },
+  action: 'autonomy.manage',
+  requestId: 'request-9',
+  decisionId: 'decision-9',
+  resource: {
+    routeId: 'POST /api/admin/icp-autonomy/lifecycle/readmit',
+    scope: 'system',
+    area: 'autonomy',
+    companionId: null,
+    pathParams: {},
+    query: {},
+  },
+} as unknown as GardenRequestContext;
 
 class CapturingResponse {
   statusCode = 0;
@@ -39,6 +62,8 @@ async function invoke(input: {
   body?: unknown;
   service: Partial<AdminIcpAutonomyService>;
   audit?: ReturnType<typeof vi.fn<AdminAuditTimelineAppender>>;
+  /** Omit the authenticated context entirely, as an unrouted caller would. */
+  withoutContext?: boolean;
 }) {
   const withBody: AdminBodyReader = (_req, _res, callback) => {
     callback(typeof input.body === 'string' ? input.body : JSON.stringify(input.body ?? {}));
@@ -56,6 +81,7 @@ async function invoke(input: {
     { headers: {} } as IncomingMessage,
     response as unknown as ServerResponse,
     route.match(input.path) ?? {},
+    input.withoutContext ? undefined : OPERATOR_CONTEXT,
   );
   await response.done;
   return {
@@ -100,6 +126,7 @@ describe('admin ICP autonomy routes', () => {
         'deliveryDisposition=pending',
       ]),
       'operator',
+      OPERATOR_CONTEXT,
     );
 
     const invalid = await invoke({
@@ -137,6 +164,7 @@ describe('admin ICP autonomy routes', () => {
         `requestId=${REQUEST_ID}`,
       ]),
       'operator',
+      OPERATOR_CONTEXT,
     );
     expect(audit).not.toHaveBeenCalledWith(
       'autonomy_control',
@@ -144,6 +172,7 @@ describe('admin ICP autonomy routes', () => {
       expect.anything(),
       expect.anything(),
       'operator',
+      OPERATOR_CONTEXT,
     );
   });
 
@@ -178,6 +207,7 @@ describe('admin ICP autonomy routes', () => {
         'deliveryDisposition=delivered',
       ]),
       'operator',
+      OPERATOR_CONTEXT,
     );
     expect(audit).not.toHaveBeenCalledWith(
       'autonomy_control',
@@ -185,6 +215,7 @@ describe('admin ICP autonomy routes', () => {
       expect.stringContaining('accepted'),
       expect.anything(),
       'operator',
+      OPERATOR_CONTEXT,
     );
   });
 
@@ -242,6 +273,7 @@ describe('admin ICP autonomy routes', () => {
       expect.stringContaining('cancelled'),
       expect.any(Array),
       'operator',
+      OPERATOR_CONTEXT,
     );
 
     const invalid = await invoke({
@@ -316,6 +348,7 @@ describe('admin ICP autonomy routes', () => {
       expect.any(String),
       expect.any(Array),
       'operator',
+      OPERATOR_CONTEXT,
     );
   });
 
@@ -347,6 +380,7 @@ describe('admin ICP autonomy routes', () => {
       expect.stringContaining('readmission rejected invalid fields'),
       [],
       'operator',
+      OPERATOR_CONTEXT,
     );
 
     const unknownField = await invoke({
@@ -376,6 +410,7 @@ describe('admin ICP autonomy routes', () => {
       expect.stringContaining('readmitted a lifecycle-fenced companion'),
       [`companionId=${PEER_ID}`, 'transitioned=true', 'revokedPermits=0'],
       'operator',
+      OPERATOR_CONTEXT,
     );
   });
 
@@ -403,6 +438,59 @@ describe('admin ICP autonomy routes', () => {
       expect.stringContaining('readmission was refused'),
       expect.arrayContaining(['refusal=companion_not_on_manifest']),
       'operator',
+      OPERATOR_CONTEXT,
     );
+  });
+
+  it('stamps the readmission audit with the calling principal', async () => {
+    const readmitCompanion = vi.fn(async () => ({
+      ok: true as const,
+      companionId: PEER_ID,
+      transitioned: true,
+      revokedPermitCount: 0,
+      message: 'Companion readmitted to ICP; the invalidation generation advanced once',
+    }));
+    const audit = vi.fn<AdminAuditTimelineAppender>();
+
+    const accepted = await invoke({
+      method: 'POST',
+      path: '/api/admin/icp-autonomy/lifecycle/readmit',
+      body: { companionId: PEER_ID, confirmCompanionId: PEER_ID },
+      service: { readmitCompanion },
+      audit,
+    });
+
+    expect(accepted.statusCode).toBe(200);
+    // The generic 'operator' actor class is not attribution: the durable row
+    // must name which principal and which session cleared the fence.
+    const context = audit.mock.calls[0]?.[5];
+    expect(context).toMatchObject({
+      kind: 'fleet_principal',
+      actor: {
+        principalId: 'operator-mira',
+        role: 'admin',
+        sessionRecordId: 'session-7',
+      },
+    });
+  });
+
+  it('refuses an unattributable readmission instead of recording it as a generic operator', async () => {
+    const readmitCompanion = vi.fn(async () => {
+      throw new Error('readmission must not run without a principal');
+    });
+    const audit = vi.fn<AdminAuditTimelineAppender>();
+
+    const refused = await invoke({
+      method: 'POST',
+      path: '/api/admin/icp-autonomy/lifecycle/readmit',
+      body: { companionId: PEER_ID, confirmCompanionId: PEER_ID },
+      service: { readmitCompanion },
+      audit,
+      withoutContext: true,
+    });
+
+    expect(refused.statusCode).toBe(403);
+    expect(readmitCompanion).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
   });
 });

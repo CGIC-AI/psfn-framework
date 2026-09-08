@@ -259,7 +259,7 @@ function isReservedManagedWikiParams(params: WikiToolParams): boolean {
 function withheldWikiDocument(
   id: string,
   title: string,
-  admission: WikiDocumentAdmission,
+  admission: Pick<WikiDocumentAdmission, 'state' | 'detail'>,
 ): Record<string, unknown> {
   return {
     id,

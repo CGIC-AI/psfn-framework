@@ -906,6 +906,9 @@ function createRuntime(params: {
     recordTurnCustodySnapshot: vi.fn(async (
       input: Parameters<TurnExecutionRuntime['recordTurnCustodySnapshot']>[0],
     ) => ({ ref: `turn:${input.turnId}` })),
+    recordTurnContextManifest: vi.fn(async (
+      input: Parameters<TurnExecutionRuntime['recordTurnContextManifest']>[0],
+    ) => `turn:${input.turnId}`),
     recordAssistantMessage: params.recordAssistantMessage,
     buildTurnToolSummary: vi.fn(() => ({ toolCalls: [] })),
     inferPostTurnActions: vi.fn(async () => []),
@@ -1076,6 +1079,16 @@ describe('handleMessageForTurn MCP disclosure context', () => {
     // The written ref reaches the TurnRecord, so the chain resolves later.
     const recordInput = vi.mocked(runtime.buildTurnRecord).mock.calls.at(-1)?.[0];
     expect(recordInput?.custodySnapshotRef).toBe(`turn:${custodyInput?.turnId}`);
+
+    // ccgdz.4: the per-block source manifest is written beside it, on the same
+    // key, and `contextManifestRef` is that ref — a reference that resolves,
+    // not the synthesized `session:<channelId>|messages:<n>|...` display string
+    // it replaced.
+    expect(runtime.recordTurnContextManifest).toHaveBeenCalledOnce();
+    const manifestInput = vi.mocked(runtime.recordTurnContextManifest).mock.calls[0]?.[0];
+    expect(manifestInput?.turnId).toBe(custodyInput?.turnId);
+    expect(manifestInput?.blocks.length ?? 0).toBeGreaterThan(0);
+    expect(recordInput?.contextManifestRef).toBe(`turn:${custodyInput?.turnId}`);
   });
 
   it('stamps a named custody absence on the turn record when the write is lost', async () => {

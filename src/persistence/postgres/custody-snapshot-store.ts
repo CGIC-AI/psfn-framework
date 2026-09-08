@@ -20,6 +20,12 @@
 import type { Pool, QueryResultRow } from 'pg';
 
 import {
+  contextSourceManifestContentDigest,
+  validateContextSourceManifest,
+  type ContextSourceManifest,
+  type ContextSourceManifestRecordOutcome,
+} from '../../core/cogsec/disclosure/context-source-manifest.js';
+import {
   custodySnapshotContentDigest,
   validateCustodySnapshot,
   type CustodySnapshot,
@@ -31,6 +37,11 @@ import { POSTGRES_CUSTODY_SNAPSHOT_MIGRATIONS } from './migrations.js';
 
 interface CustodySnapshotRow extends QueryResultRow {
   snapshot_json: unknown;
+  content_sha256: string;
+}
+
+interface ContextManifestRow extends QueryResultRow {
+  manifest_json: unknown;
   content_sha256: string;
 }
 
@@ -161,16 +172,83 @@ export class PostgresCustodySnapshotStore implements CustodySnapshotStorePort {
   }
 
   /**
+   * Record this turn's context source manifest (psfn-framework-ccgdz.4).
+   *
+   * Same key, same retention horizon, same first-write-wins rule as the
+   * snapshot: the manifest that stands is the one describing the prompt that
+   * actually produced the reply. A second, different manifest for one
+   * generation context is reported as `diverged`, never written over the first.
+   */
+  async recordContextManifest(
+    manifest: ContextSourceManifest,
+  ): Promise<ContextSourceManifestRecordOutcome> {
+    const validated = validateContextSourceManifest(manifest);
+    const contentSha256 = contextSourceManifestContentDigest(validated);
+    await this.pruneExpiredOncePerDay();
+    const inserted = await queryOne<ContextManifestRow>(this.pool, `
+      INSERT INTO custody_context_manifests (
+        generation_context_ref, turn_id, block_count, sourced_block_count,
+        source_count, recorded_at_ms, content_sha256, manifest_json
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
+      ON CONFLICT (generation_context_ref) DO NOTHING
+      RETURNING manifest_json, content_sha256
+    `, [
+      validated.generationContextRef,
+      validated.turnId,
+      validated.blocks.length,
+      validated.sourcedBlockCount,
+      validated.sourceCount,
+      this.now(),
+      contentSha256,
+      JSON.stringify(validated),
+    ]);
+    if (inserted) return 'recorded';
+    const existing = await queryOne<ContextManifestRow>(
+      this.pool,
+      'SELECT manifest_json, content_sha256 FROM custody_context_manifests WHERE generation_context_ref = $1',
+      [validated.generationContextRef],
+    );
+    if (!existing) {
+      throw new Error(
+        `Context source manifest ${validated.generationContextRef} vanished during recording`,
+      );
+    }
+    return existing.content_sha256 === contentSha256 ? 'duplicate' : 'diverged';
+  }
+
+  async getContextManifestByGenerationContextRef(
+    ref: string,
+  ): Promise<ContextSourceManifest | null> {
+    if (ref.trim().length === 0) {
+      throw new Error('Context source manifest store requires a non-empty generation context ref');
+    }
+    const row = await queryOne<ContextManifestRow>(
+      this.pool,
+      'SELECT manifest_json, content_sha256 FROM custody_context_manifests WHERE generation_context_ref = $1',
+      [ref],
+    );
+    return row ? validateContextSourceManifest(row.manifest_json) : null;
+  }
+
+  /**
    * Apply the operator-owned retention bound. Time-based rather than a row cap
    * so a busy hour cannot silently truncate an older audit trail (design §5).
    */
   async pruneExpired(): Promise<number> {
     const nowMs = this.now();
     this.lastPrunedDayBucket = Math.floor(nowMs / MILLISECONDS_PER_DAY);
+    const horizonMs = nowMs - this.retentionMs;
     const result = await executeQuery(
       this.pool,
       'DELETE FROM custody_snapshots WHERE classified_at_ms < $1',
-      [nowMs - this.retentionMs],
+      [horizonMs],
+    );
+    // The manifest shares the snapshot's horizon: a turn's two custody records
+    // must expire together, or an audit would find one half of a chain.
+    await executeQuery(
+      this.pool,
+      'DELETE FROM custody_context_manifests WHERE recorded_at_ms < $1',
+      [horizonMs],
     );
     return result.rowCount ?? 0;
   }

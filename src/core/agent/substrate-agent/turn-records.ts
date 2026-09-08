@@ -429,8 +429,6 @@ export function buildTurnRecord(input: {
   continuationStop?: ParentTurnContinuationStop;
   promptMode: MessagePromptOverrideMode;
   promptText: string;
-  contextMessageCount: number;
-  memoryContextChars: number;
   trustLevel: TrustLevel;
   speakerRole: 'user' | 'system';
   canonicalContactKey?: string;
@@ -444,6 +442,14 @@ export function buildTurnRecord(input: {
   introspectionSensitivityDecision?: IntrospectionTurnSensitivityDecision;
   /** Resolvable ref to this turn's durable custody snapshot (ccgdz.1). */
   custodySnapshotRef?: string;
+  /**
+   * Resolvable ref to this turn's durable context source manifest (ccgdz.4).
+   * Absent when no manifest was recorded — which is the honest state, unlike
+   * the synthesized `session:<channelId>|messages:<n>|memory_chars:<n>` display
+   * string this replaced, which always looked like a reference and resolved to
+   * nothing.
+   */
+  contextManifestRef?: string;
   /** Per-tool-result custody edges, keyed by lineage ref (ccgdz.5). */
   toolResultCustody?: ReadonlyMap<string, TurnToolResultCustodyRecord>;
 }): TurnRecord {
@@ -522,7 +528,7 @@ export function buildTurnRecord(input: {
       }
       : {}),
     toolCalls,
-    contextManifestRef: `session:${input.message.channelId}|messages:${input.contextMessageCount}|memory_chars:${input.memoryContextChars}`,
+    ...(input.contextManifestRef ? { contextManifestRef: input.contextManifestRef } : {}),
     ...(input.custodySnapshotRef ? { custodySnapshotRef: input.custodySnapshotRef } : {}),
     internalStateSnapshotRef: buildTurnRecordInternalStateSnapshotRef({
       trust: input.trustLevel,

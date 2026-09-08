@@ -111,6 +111,13 @@ export function collectDisclosureMemorySources(input: {
       ...(memory.provenanceRefs && memory.provenanceRefs.length > 0
         ? { provenanceRefs: [...memory.provenanceRefs] }
         : {}),
+      // ccgdz.3 -> ccgdz.4: carry the memory's admission identity forward so the
+      // prompt block that renders its text can name the ingress proof of the
+      // bytes it ultimately derives from. Read only by the context source
+      // manifest; the custody snapshot's digest does not include it.
+      ...(memory.provenance?.sourceAdmissions?.length
+        ? { sourceAdmissions: memory.provenance.sourceAdmissions.map(ref => ({ ...ref })) }
+        : {}),
     });
   };
   for (const scored of input.selectedForPrompt) {

@@ -68,6 +68,14 @@ export interface WikiDocumentAdmission {
   state: WikiDocumentAdmissionState;
   /** Operator-facing, content-free reason. Empty while `admitted`. */
   detail: string;
+  /**
+   * sha256 of the document's canonical prompt representation AS IT IS RIGHT
+   * NOW (psfn-framework-ccgdz.4). Always present, and always the hash the state
+   * describes: `admitted` means these exact bytes hold a receipt. Callers that
+   * record an admission hash must therefore only record it alongside an
+   * `admitted` state, or they would name bytes that were never cleared.
+   */
+  contentSha256: string;
 }
 
 export interface WikiAdmissionGate {
@@ -90,10 +98,7 @@ interface AdmissionRecord {
   detail: string;
 }
 
-const UNKNOWN: WikiDocumentAdmission = Object.freeze({
-  state: 'unknown',
-  detail: 'no CogSec admission decision exists for this document version',
-});
+const UNKNOWN_DETAIL = 'no CogSec admission decision exists for this document version';
 
 export function createWikiAdmissionGate(
   admission: CogSecArtifactAdmissionPort,
@@ -106,8 +111,10 @@ export function createWikiAdmissionGate(
 
   function statusFor(document: WikiDocument, contentSha256: string): WikiDocumentAdmission {
     const record = records.get(document.id);
-    if (!record || record.contentSha256 !== contentSha256) return UNKNOWN;
-    return { state: record.state, detail: record.detail };
+    if (!record || record.contentSha256 !== contentSha256) {
+      return { state: 'unknown', detail: UNKNOWN_DETAIL, contentSha256 };
+    }
+    return { state: record.state, detail: record.detail, contentSha256 };
   }
 
   return {
@@ -141,7 +148,7 @@ export function createWikiAdmissionGate(
         return { contentSha256, state: 'admitted', detail: '' };
       })();
       if (tickets.get(document.id) === ticket) records.set(document.id, record);
-      return { state: record.state, detail: record.detail };
+      return { state: record.state, detail: record.detail, contentSha256 };
     },
     status(document) {
       return statusFor(document, cogSecContentSha256(wikiAdmissionContent(document)));

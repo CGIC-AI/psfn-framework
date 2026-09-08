@@ -128,7 +128,16 @@ import {
 } from '../../core/cogsec/intake/sink-gate-incidents.js';
 import { maybeCreateIntakeSinkGate } from '../../core/cogsec/intake/sink-gates.js';
 import { maybeCreateIntakeScreeningService } from '../../core/cogsec/intake/screening.js';
-import { loadIntakePolicyConfig } from '../../system/config/intake-policy-config.js';
+import {
+  createCogSecArtifactAdmission,
+  type CogSecArtifactAdmissionPort,
+} from '../../core/cogsec/intake/durable-admission.js';
+import type { CogSecReceiptStorePort } from '../../core/cogsec/receipts/contracts.js';
+import { COGSEC_INTAKE_FIREWALL_ISSUER_ID } from '../../shared/contracts/cogsec-receipt.js';
+import {
+  intakeReceiptTtlMs,
+  loadIntakePolicyConfig,
+} from '../../system/config/intake-policy-config.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { createSelfStatusTool } from '../../core/tools/self-status.js';
 import { createSelfStatusMemoryStatsProvider } from './self-status-memory-stats.js';
@@ -261,6 +270,13 @@ export interface AgentCoreRuntimeOptions {
    * events to contacts (bead .13); absent leaves the bridge sink a no-op.
    */
   hubIdentityEnrollmentStore?: HubIdentityEnrollmentStorePort;
+  /**
+   * Durable content-addressed CogSec admission receipts
+   * (psfn-framework-1fjvm.3). Present, executable skills and prompt-bearing
+   * wiki documents are gated on an admitted receipt for their exact bytes
+   * (psfn-framework-1fjvm.1/.2); absent, they load as they did before.
+   */
+  cogSecReceiptStore?: CogSecReceiptStorePort;
   automataRuntime?: {
     registry: AutomataRunRegistry;
     runs: Pick<import('../../faculties/automata/run-registry.js').AutomataRunStorePort, 'loadExact'>;
@@ -533,10 +549,45 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       ),
     }),
   });
-  const skillWriteIntakeScreening = maybeCreateIntakeScreeningService({
+  // One agent-local L1 screening instance serves both the skill-write preflight
+  // and durable-artifact admission. Wiring the receipt store onto it is what
+  // makes a screen REUSABLE: without it every admission check re-scans, which
+  // is correct but wasteful, and with it a byte-identical skill or wiki
+  // document proves its admission across a restart from the receipt alone.
+  const localArtifactIntakeScreening = maybeCreateIntakeScreeningService({
     policy: intakePolicy,
-    actor: 'agent:skill-write-intake',
+    actor: 'agent:local-artifact-intake',
+    ...(options.cogSecReceiptStore
+      ? {
+        receipts: {
+          store: options.cogSecReceiptStore,
+          issuerId: COGSEC_INTAKE_FIREWALL_ISSUER_ID,
+          ttlMs: intakeReceiptTtlMs(intakePolicy.receipts),
+        },
+      }
+      : {}),
   });
+  const receiptStore = options.cogSecReceiptStore;
+  function createArtifactAdmission(
+    kind: 'skill' | 'wiki_document',
+  ): CogSecArtifactAdmissionPort | undefined {
+    if (!receiptStore || !localArtifactIntakeScreening) return undefined;
+    return createCogSecArtifactAdmission({
+      kind,
+      screening: localArtifactIntakeScreening,
+      receipts: receiptStore,
+      trustedIssuerIds: [COGSEC_INTAKE_FIREWALL_ISSUER_ID],
+      onAdmission: (event) => {
+        // Content-free: an artifact reference, its content hash, and the
+        // admission outcome. Never the bytes, a preview, or a finding excerpt.
+        if (event.outcome === 'held') {
+          log.warn('CogSec admission held a prompt-bearing artifact', { ...event });
+          return;
+        }
+        log.debug('CogSec artifact admission', { ...event });
+      },
+    });
+  }
   sessionManager.intakeSinkGate = intakeSinkGate;
   const selfAuthoredMutationIntake = {
     getIntakeSinkGate: () => intakeSinkGate,
@@ -746,6 +797,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     ...(icpAutonomyRuntime ? { availability: icpAutonomyRuntime } : {}),
   }), 'core');
 
+  const skillAdmission = createArtifactAdmission('skill');
   const skillsRuntime = wireSkillsRuntime(
     agentLoop,
     {
@@ -756,6 +808,10 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       seedDir: process.env.CONFIG_DIR,
       repoRoot: process.cwd(),
       managedRootDir: resolvePersonalSkillsDir(pathSnapshot.workspaceRoot),
+      // psfn-framework-1fjvm.1: no skill's frontmatter, description, or body
+      // reaches model context or executes until its exact document bytes hold
+      // an admitted CogSec receipt or are admitted by a fresh screen.
+      ...(skillAdmission ? { admission: skillAdmission } : {}),
     },
     {
       // Charter 9.5 category-2 governance: skill writes ride the same
@@ -765,7 +821,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     },
     {
       getIntakeSinkGate: () => intakeSinkGate,
-      getIntakeScreening: () => skillWriteIntakeScreening,
+      getIntakeScreening: () => localArtifactIntakeScreening,
       getActiveTurnIntakeEnvelopes: () => agentLoop.getActiveTurnIntakeEnvelopes(),
       getActiveTurnSessionIdentity: () => agentLoop.getActiveTurnSessionIdentity(),
     },

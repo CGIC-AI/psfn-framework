@@ -77,7 +77,13 @@ export interface SkillEntry {
   size: number;
 }
 
-export type SkillSkipKind = 'parse_error' | 'oversized' | 'collection_limit' | 'shadowed' | 'ineligible' | 'budget';
+/**
+ * `admission_held` (psfn-framework-1fjvm.1): the skill exists and parses, but
+ * its exact document bytes hold no admitted CogSec receipt and re-screening did
+ * not admit them. The entry stays inert — no name, description, or body reaches
+ * model context — and the skip record carries the typed, content-free reason.
+ */
+export type SkillSkipKind = 'parse_error' | 'oversized' | 'collection_limit' | 'shadowed' | 'ineligible' | 'budget' | 'admission_held';
 
 export interface SkillSkipRecord {
   kind: SkillSkipKind;

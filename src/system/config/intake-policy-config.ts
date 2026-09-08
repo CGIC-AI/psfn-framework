@@ -197,6 +197,18 @@ export interface IntakeReceiptsPolicyConfig {
 }
 
 /**
+ * The owner-file receipt lifetime as milliseconds, for the screening service's
+ * `receipts.ttlMs`. Every composition that issues receipts reads it here so the
+ * conversion lives once, next to the policy that owns the value.
+ */
+export function intakeReceiptTtlMs(receipts: IntakeReceiptsPolicyConfig): number {
+  const minutesPerHour = 60;
+  const secondsPerMinute = 60;
+  const millisecondsPerSecond = 1000;
+  return receipts.ttlHours * minutesPerHour * secondsPerMinute * millisecondsPerSecond;
+}
+
+/**
  * Thresholds for the L1.5 ONNX prompt-injection classifier (htm9.5,
  * src/boundary/gateway/intake/injection-classifier.ts). The classifier emits
  * a calibrated 0-1 score into `envelope.scores`; these thresholds tell the

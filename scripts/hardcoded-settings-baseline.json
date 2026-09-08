@@ -8180,6 +8180,13 @@
     },
     {
       "file": "src/faculties/skills/loader.ts",
+      "name": "createSkillDocumentReadBudget.aggregateBudget",
+      "value": "{ chargedBytes: 0, maxBytes }",
+      "form": "object",
+      "note": "Renamed consolidation of the pre-existing readSkillContents.aggregateBudget debt (psfn-framework-7qeo1.18): one mutable read counter starting empty, whose only policy value maxBytes is the owner-file skills collection limit passed in by the caller. Reused by skill CogSec admission (psfn-framework-1fjvm.1); baseline size unchanged."
+    },
+    {
+      "file": "src/faculties/skills/loader.ts",
       "name": "DEFAULT_SKILL_COLLECTION_LIMITS.maxBinaryRequirements",
       "value": "64",
       "form": "object-member",
@@ -8226,13 +8233,6 @@
       "value": "{ chargedBytes: 0, maxBytes: Math.min( limits.maxMetadataBytes, Math.max(0, limits.maxRetainedBytes - initialRetainedBytes), ), }",
       "form": "object",
       "note": "Existing mutable policy candidate loadSkillEntries.aggregateBudget; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
-    },
-    {
-      "file": "src/faculties/skills/loader.ts",
-      "name": "readSkillContents.aggregateBudget",
-      "value": "{ chargedBytes: 0, maxBytes }",
-      "form": "object",
-      "note": "Existing mutable policy candidate readSkillContents.aggregateBudget; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/faculties/skills/loader.ts",

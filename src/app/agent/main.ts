@@ -174,7 +174,10 @@ import {
   createSessionActivityTracker,
   writeStartupSessionMetadata,
 } from './session-activity.js';
-import { loadIntakePolicyConfig } from '../../system/config/intake-policy-config.js';
+import {
+  intakeReceiptTtlMs,
+  loadIntakePolicyConfig,
+} from '../../system/config/intake-policy-config.js';
 import { maybeCreateIntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 import { COGSEC_INTAKE_FIREWALL_ISSUER_ID } from '../../shared/contracts/cogsec-receipt.js';
 import { loadPartnerAffectShadowConfig } from '../../system/config/partner-affect-shadow-config.js';
@@ -585,6 +588,9 @@ async function main(): Promise<void> {
     ...(persistedHubIdentityEnrollmentStore
       ? { hubIdentityEnrollmentStore: persistedHubIdentityEnrollmentStore }
       : {}),
+    // Durable admission receipts for executable skills and prompt-bearing wiki
+    // documents (psfn-framework-1fjvm.1/.2).
+    cogSecReceiptStore: persistenceRuntime.cogSecReceiptStore,
     automataRuntime: {
       registry: persistenceRuntime.automataRunRegistry,
       runs: persistenceRuntime.automataRunStore,
@@ -733,7 +739,7 @@ async function main(): Promise<void> {
     receipts: {
       store: persistenceRuntime.cogSecReceiptStore,
       issuerId: COGSEC_INTAKE_FIREWALL_ISSUER_ID,
-      ttlMs: intakePolicy.receipts.ttlHours * 3_600_000,
+      ttlMs: intakeReceiptTtlMs(intakePolicy.receipts),
     },
     // Durable quarantine hold (htm9.11): agent-side quarantine decisions land
     // in the same companion-data store the gateway writes and Garden reviews.

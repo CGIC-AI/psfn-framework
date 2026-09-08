@@ -95,6 +95,7 @@ import {
 import {
   buildScannerResult,
   createIntakeL1Scanner,
+  INTAKE_L1_SCANNER_IDS,
   INTAKE_RULE_ENGINE_SCANNER_ID,
   type IntakeL1Scanner,
   type IntakeL1ScannerConfig,
@@ -104,6 +105,7 @@ import {
 import type { IntakeQuarantineHoldPort } from './quarantine-store.js';
 import {
   cogSecPolicyDigest,
+  cogSecScreeningContractDigest,
   type CogSecReceipt,
 } from '../../../shared/contracts/cogsec-receipt.js';
 import type { CogSecReceiptWriterPort } from '../receipts/contracts.js';
@@ -494,6 +496,26 @@ export interface IntakeScreeningService {
    * carry no reusable admission proof.
    */
   screenSync(text: string, input: IntakeScreeningInput): IntakeScreeningResult;
+  /**
+   * The screening-contract digest THIS service would bind a receipt to for
+   * `input`, or null when that is not statically knowable
+   * (psfn-framework-1fjvm.1/.2).
+   *
+   * Durable-artifact admission needs the CURRENT contract digest to ask the
+   * receipt store whether these exact bytes are already admitted, WITHOUT
+   * screening them first — otherwise reuse could never avoid the scan it
+   * exists to avoid. Every field of the digest except the scanner set and the
+   * semantic-layer outcomes is a pure function of `input` and this instance's
+   * wiring, the L1 scanner set is content-independent
+   * (`INTAKE_L1_SCANNER_IDS`), and an L1-only instance never runs L2/L3 — so
+   * an L1-only service can answer exactly, and any other service answers null.
+   *
+   * A null answer, or a stale digest after a policy/rule/mode change, can only
+   * deny reuse and force a rescreen. It can never grant admission: the digest
+   * is an input to a store lookup whose result is still verified against the
+   * exact bytes, the issuer set, and the clock.
+   */
+  screeningContractDigest(input: IntakeScreeningInput): string | null;
 }
 
 /** Receipt issuance wiring for one screening instance. */
@@ -773,10 +795,13 @@ interface EscalationExtras {
   postEscalationPass?: boolean;
 }
 
+/** The `IntakeSemanticScreeningTrace` status an unrun semantic layer records. */
+const SEMANTIC_LAYER_NOT_RUN = 'not_run' satisfies IntakeSemanticScreeningTrace['l2']['status'];
+
 function semanticLayersNotRun(reason: string): IntakeSemanticScreeningTrace {
   return {
-    l2: { status: 'not_run', reason },
-    l3: { status: 'not_run', reason },
+    l2: { status: SEMANTIC_LAYER_NOT_RUN, reason },
+    l3: { status: SEMANTIC_LAYER_NOT_RUN, reason },
   };
 }
 
@@ -1770,6 +1795,39 @@ export function createIntakeScreeningService(
   }
 
   /**
+   * Predict this instance's screening-contract digest for `input`
+   * (psfn-framework-1fjvm.1/.2). Mirrors, field for field, the contract
+   * `buildCogSecReceipt` derives from a completed result; a focused test pins
+   * the two together by screening real text and comparing this prediction to
+   * the issued receipt's digest.
+   */
+  function screeningContractDigest(input: IntakeScreeningInput): string | null {
+    // An escalation port makes the L2/L3 outcome — and therefore the contract
+    // — a function of the content, which is exactly what cannot be predicted.
+    if (escalation) return null;
+    const item = resolveItemPosture(input);
+    // No screening runs, so no receipt is ever issued for this input.
+    if (!item.screens || item.deepScreening === 'post_pass') return null;
+    policyDigestMemo ??= cogSecPolicyDigest(policy);
+    return cogSecScreeningContractDigest({
+      policyDigest: policyDigestMemo,
+      ruleFingerprint: l1.rulesStatus().fingerprint,
+      globalMode,
+      posture: item.posture,
+      cogsecVector: item.vector,
+      sourceClass: input.sourceClass,
+      sourceRiskTier: resolveTier(input).tier,
+      scanScope: input.scope,
+      scannerIds: INTAKE_L1_SCANNER_IDS,
+      ...(injectionScorer ? { injectionScorerId: injectionScorer.scannerId } : {}),
+      ...(input.surface !== undefined ? { surface: input.surface } : {}),
+      // An L1-only instance never requests semantic escalation, so `finalize`
+      // always records both layers as not run.
+      semanticLayers: { l2: SEMANTIC_LAYER_NOT_RUN, l3: SEMANTIC_LAYER_NOT_RUN },
+    });
+  }
+
+  /**
    * Issue and durably record the content-addressed admission receipt for a
    * completed screening result (psfn-framework-1fjvm.3).
    *
@@ -1934,6 +1992,7 @@ export function createIntakeScreeningService(
   return {
     mode,
     globalMode,
+    screeningContractDigest,
     screen: receipts
       ? async (text, input) => issueAdmissionReceipt(text, input, await screen(text, input))
       : screen,

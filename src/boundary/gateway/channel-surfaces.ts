@@ -518,18 +518,27 @@ export function wireGatewayChannelMessages(input: WireGatewayChannelMessagesInpu
     }
     adapter.onMessage(async (message, options) => {
       // htm9.16 backstop: a blocked telegram DM is dropped before it reaches the
-      // agent. Group observe-downgrade is not modeled on the telegram
-      // request/response path; blocked group messages fall through unchanged.
+      // agent. jp36.5.6: the group observe-downgrade now applies here too, so a
+      // blocked group message is ignored (observe-only) rather than dropped and
+      // the request/response connectors share one policy with Discord.
+      let outbound = message;
       if (input.blockGate) {
         const decision = input.blockGate.evaluate(message);
         if (decision.action === 'drop') {
           input.blockGate.recordSoftBlockEnforcement(message, decision);
           return notificationAck(message.channelId, 'blocked_by_policy');
         }
+        if (decision.action === 'observe') {
+          input.blockGate.recordSoftBlockEnforcement(message, decision);
+          outbound = {
+            ...message,
+            routing: { ...(message.routing ?? {}), responseMode: 'observe' as const },
+          };
+        }
       }
       const result = options?.signal
-        ? await input.gateway.requestAgentVoiceStream(message, { signal: options.signal })
-        : await input.gateway.requestAgentVoiceStream(message);
+        ? await input.gateway.requestAgentVoiceStream(outbound, { signal: options.signal })
+        : await input.gateway.requestAgentVoiceStream(outbound);
       return {
         content: result.content,
         channelId: result.channelId,

@@ -47,6 +47,12 @@ import {
 } from '../../system/lifecycle/turn-contention.js';
 import { classifyChannelEnvelope } from '../../system/trust/policy.js';
 import { LongRunningToolStatusTracker } from '../shared/long-running-tool-status.js';
+import {
+  buildTelegramMessageAddressing,
+  type TelegramMessageAddressingResult,
+  type TelegramObserverIdentity,
+} from './message-addressing.js';
+import type { MessageAuthorSourceClass } from '../../shared/contracts/message-addressing.js';
 
 const log = createComponentLogger('Telegram');
 
@@ -142,6 +148,14 @@ interface TelegramUser {
   username?: string;
 }
 
+/** Bot API text entity; `mention`/`text_mention` carry the addressing evidence. */
+interface TelegramMessageEntity {
+  type: string;
+  offset: number;
+  length: number;
+  user?: TelegramUser;
+}
+
 interface TelegramChat {
   id: number | string;
   type: TelegramChatType;
@@ -198,8 +212,10 @@ interface TelegramIncomingMessage {
   caption?: string;
   from?: TelegramUser;
   chat: TelegramChat;
-  reply_to_message?: { message_id: number };
+  reply_to_message?: { message_id: number; from?: TelegramUser };
   message_thread_id?: number;
+  entities?: TelegramMessageEntity[];
+  caption_entities?: TelegramMessageEntity[];
   photo?: TelegramPhotoSize[];
   voice?: TelegramVoice;
   document?: TelegramDocument;
@@ -339,6 +355,12 @@ export class TelegramAdapter implements ChannelAdapterPort {
   private intakeScreening: IntakeScreeningService | null;
   private remoteFetch: DocumentResourceFetch;
   private documentIngestLimits: DocumentIngestLimits | null;
+  /**
+   * The authenticated bot account, resolved once at startup via `getMe`. Null
+   * until resolved (or when resolution failed), and every addressing/observe
+   * decision fails closed on null: no envelope, no group observe downgrade.
+   */
+  private observerIdentity: TelegramObserverIdentity | null = null;
   private consecutivePollFailures = 0;
   private attemptedPollingConflictRecovery = false;
   private statusUnsubscribers: Array<() => void> = [];
@@ -462,6 +484,7 @@ export class TelegramAdapter implements ChannelAdapterPort {
     this.running = true;
     this.consecutivePollFailures = 0;
     this.attemptedPollingConflictRecovery = false;
+    await this.resolveObserverIdentity();
     if (this.telegram.mode === 'webhook') {
       await this.startWebhookMode();
       return;
@@ -814,6 +837,30 @@ export class TelegramAdapter implements ChannelAdapterPort {
       threadId,
     });
 
+    const isDirectMessage = message.chat.type === 'private';
+    const addressed = this.buildInboundAddressing(message, {
+      content,
+      baseChannelId,
+      isDirectMessage,
+      ...(threadId ? { threadId } : {}),
+    });
+    // jp36.5.6: an ambient group line the companion was not addressed in is
+    // observation only — the same posture Discord and Buzz already take. It is
+    // deliberately handled BEFORE the per-channel turn lock: ambient chatter
+    // must never take the lock, start a typing indicator, open a stream, or
+    // displace an addressed message already queued behind it.
+    if (addressed && !addressed.addressesObserver && !isDirectMessage) {
+      await this.observeAmbientGroupMessage(message, {
+        content,
+        channelId,
+        messageId,
+        isDirectMessage,
+        addressing: addressed,
+        ...(replyToId ? { replyToId } : {}),
+      });
+      return;
+    }
+
     if (this.processingChannels.has(channelId)) {
       const lockStartMs = this.lockStartedAt.get(channelId) ?? Date.now();
       const queueDepth = (this.lockContention.get(channelId) ?? 0) + 1;
@@ -840,7 +887,6 @@ export class TelegramAdapter implements ChannelAdapterPort {
 
     const typingInterval = this.startTypingLoop(channelId);
     try {
-      const isDirectMessage = message.chat.type === 'private';
       const screenedBody = contentText
         ? await screenChatMessageBody({
           content,
@@ -877,9 +923,12 @@ export class TelegramAdapter implements ChannelAdapterPort {
         content: prepared.content,
         ...(prepared.attachments.length > 0 ? { attachments: prepared.attachments } : {}),
         timestamp: new Date(message.date * 1000),
+        ...(replyToId ? { replyToMessageId: replyToId } : {}),
         routing: {
           source: 'telegram',
+          responseMode: 'respond',
           channelPrivacy,
+          ...(addressed ? { addressing: addressed.addressing } : {}),
           ...(intakeEnvelopes.length > 0
             ? { intakeEnvelopes }
             : {}),
@@ -1215,6 +1264,153 @@ export class TelegramAdapter implements ChannelAdapterPort {
       chatId,
       ...(threadId ? { threadId } : {}),
     };
+  }
+
+  /**
+   * Resolve the authenticated bot account once at startup. Mentions and replies
+   * can only be attributed to this companion with a real account identity, so a
+   * failed lookup fails closed: no addressing envelope is emitted and group
+   * messages keep their historic responding behavior.
+   */
+  private async resolveObserverIdentity(): Promise<void> {
+    try {
+      const me = await this.callApi<TelegramUser>('getMe', {});
+      this.observerIdentity = {
+        id: me.id,
+        displayName: resolveAuthorName(me),
+        ...(me.username ? { username: me.username } : {}),
+      };
+    } catch (error) {
+      this.observerIdentity = null;
+      log.warn('Telegram could not resolve its authenticated bot identity; addressing metadata disabled', {
+        error: toErrorMessage(error),
+      });
+    }
+  }
+
+  /**
+   * The intake trust class this connector already assigns for body screening.
+   * Room-participation policy reads the same value through the addressing
+   * envelope, so there is exactly one trust ladder per message.
+   */
+  private resolveInboundSourceClass(isDirectMessage: boolean): MessageAuthorSourceClass {
+    return isDirectMessage ? 'regular_contact' : 'public_contact';
+  }
+
+  /**
+   * Build the transport-authoritative addressing envelope from Bot API entities.
+   * Returns null when the bot identity is unknown or the payload has no author.
+   */
+  private buildInboundAddressing(
+    message: TelegramIncomingMessage,
+    context: {
+      content: string;
+      baseChannelId: string;
+      threadId?: string;
+      isDirectMessage: boolean;
+    },
+  ): TelegramMessageAddressingResult | null {
+    const observer = this.observerIdentity;
+    const author = message.from;
+    if (!observer || !author) return null;
+    try {
+      return buildTelegramMessageAddressing({
+        messageText: message.text ?? message.caption ?? '',
+        entities: message.entities ?? message.caption_entities ?? [],
+        author,
+        authorName: resolveAuthorName(author),
+        observer,
+        channelId: context.baseChannelId,
+        ...(context.threadId ? { threadId: context.threadId } : {}),
+        isDirectMessage: context.isDirectMessage,
+        ...(message.reply_to_message
+          ? {
+            replyTo: {
+              messageId: message.reply_to_message.message_id,
+              ...(message.reply_to_message.from
+                ? { from: message.reply_to_message.from }
+                : {}),
+            },
+          }
+          : {}),
+        sourceClass: this.resolveInboundSourceClass(context.isDirectMessage),
+      });
+    } catch (error) {
+      log.warn('Telegram addressing envelope could not be built; falling back to responding intake', {
+        channelId: context.baseChannelId,
+        error: toErrorMessage(error),
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Hand one ambient group line to the agent as observation only. It screens the
+   * body exactly as a responding turn does, but takes no turn lock, prepares no
+   * attachments, opens no stream, and never sends: the agent's shared observe
+   * path owns memory scheduling and the participation decision from here.
+   */
+  private async observeAmbientGroupMessage(
+    message: TelegramIncomingMessage,
+    context: {
+      content: string;
+      channelId: string;
+      messageId: string;
+      isDirectMessage: boolean;
+      addressing: TelegramMessageAddressingResult;
+      replyToId?: string;
+    },
+  ): Promise<void> {
+    const handler = this.handler;
+    const author = message.from;
+    if (!handler || !author) return;
+    const { channelId, messageId } = context;
+    try {
+      const screened = await screenChatMessageBody({
+        content: context.content,
+        screening: this.intakeScreening,
+        sourceClass: this.resolveInboundSourceClass(context.isDirectMessage),
+        surface: 'telegram',
+        channelId,
+        messageId,
+        channelTopology: 'group',
+        channelPrivacy: classifyChannelEnvelope(channelId, {
+          isDirectMessage: context.isDirectMessage,
+        }).privacy,
+      });
+      const substrateMessage: SubstrateMessage = {
+        id: messageId,
+        channelId,
+        channelType: 'telegram',
+        isDirectMessage: false,
+        authorId: String(author.id),
+        authorName: resolveAuthorName(author),
+        content: screened.content,
+        timestamp: new Date(message.date * 1000),
+        ...(context.replyToId ? { replyToMessageId: context.replyToId } : {}),
+        routing: {
+          source: 'telegram',
+          responseMode: 'observe',
+          channelPrivacy: classifyChannelEnvelope(channelId, {
+            isDirectMessage: context.isDirectMessage,
+          }).privacy,
+          addressing: context.addressing.addressing,
+          ...(screened.snapshot ? { intakeEnvelopes: [screened.snapshot] } : {}),
+        },
+      };
+      await this.eventBus.emit('message.received', { message: substrateMessage });
+      await handler(substrateMessage);
+    } catch (error) {
+      const errorText = toErrorMessage(error);
+      log.warn('Telegram ambient group observation failed', { channelId, messageId, error: errorText });
+      await this.eventBus.emit('channel.message.error', {
+        channelId,
+        channelType: 'telegram',
+        messageId,
+        phase: 'handler',
+        error: errorText,
+      }).catch(() => undefined);
+    }
   }
 
   private parseSubstrateMessageId(messageId: string): MessagePointer | null {

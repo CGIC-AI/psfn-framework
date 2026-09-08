@@ -39,6 +39,7 @@ import type {
   HealthDetectorResult,
   HealthDetectorSample,
 } from './contracts.js';
+import { sameHealthEventOwner } from './owner.js';
 
 /**
  * Structural view of one pool authority's live telemetry. Declared here rather
@@ -65,13 +66,6 @@ const POSTGRES_PRESSURE_DETECTOR_ID = 'postgres-pool-pressure';
 /** Opaque grouping key for one pool authority inside one process. */
 function poolSubjectHash(owner: PostgresPoolOwnerPressure, authorityIndex: number): string {
   return hashHealthEventSubject(`postgres_pool:${owner.process}:${String(authorityIndex)}`);
-}
-
-function sameOwner(left: HealthEventOwner, right: HealthEventOwner): boolean {
-  if (left.kind !== right.kind) return false;
-  return left.kind !== 'companion'
-    || right.kind !== 'companion'
-    || left.companionId === right.companionId;
 }
 
 /**
@@ -109,7 +103,7 @@ export function createPostgresPressureDetector(input: {
       event.code === 'postgres_pool_pressure_sampled'
       && event.provenance.subjectHash === subjectHash
       && event.recordedAtMs >= floorMs
-      && sameOwner(event.owner, owner)
+      && sameHealthEventOwner(event.owner, owner)
     )).length;
   }
 

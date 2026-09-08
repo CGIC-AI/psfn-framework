@@ -107,6 +107,10 @@ import {
 import { createAgentPersistenceRuntime } from '../../persistence/runtime-factory.js';
 import { subscribeHealthEventStream } from '../../shared/observability/health-event-stream.js';
 import {
+  subscribeRefreshFailureHealthEvents,
+} from '../../shared/observability/refresh-failure-emitter.js';
+import { resolveHealthEventOwner } from '../../shared/contracts/health-event.js';
+import {
   PostgresPoolOwner,
   getPostgresPoolTelemetry,
   runWithPostgresPoolOwner,
@@ -374,6 +378,16 @@ async function main(): Promise<void> {
   const detachHealthEventStream = subscribeHealthEventStream({
     eventBus,
     store: persistenceRuntime.healthEventStore,
+  });
+  // Project the context-refresh lanes' own degradation events into content-free
+  // failure observations. Subscribed here, beside the sink, so the repeated-
+  // failure detector (7qeo1.24.3) has something to count from this boot onward.
+  const detachRefreshFailureHealthEvents = subscribeRefreshFailureHealthEvents({
+    eventBus,
+    source: {
+      owner: resolveHealthEventOwner(config.companionId),
+      process: 'agent',
+    },
   });
   const detachFleetMaintenanceForegroundPreemption =
     persistenceRuntime.fleetMaintenanceCoordinator
@@ -1768,6 +1782,7 @@ async function main(): Promise<void> {
       await persistenceRuntime.companionAvailabilityStore.close();
       await persistenceRuntime.letterStore.close();
       await persistenceRuntime.doingMirrorStore.close();
+      detachRefreshFailureHealthEvents();
       detachHealthEventStream();
       await persistenceRuntime.healthEventStore.close();
       await postgresPoolOwner.close();

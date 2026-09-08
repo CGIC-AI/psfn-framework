@@ -17,8 +17,15 @@ import {
   type PostgresTestHarness,
 } from '../../../test-support/postgres-test-harness.js';
 import { DEFAULT_HEALTH_DETECTORS_CONFIG } from '../../../system/config/scheduler-config/health-detectors.js';
-import type { HealthEvent, HealthEventSource } from '../../contracts/health-event.js';
+import {
+  createHealthEvent,
+  hashHealthEventSubject,
+  processObserverId,
+  type HealthEvent,
+  type HealthEventSource,
+} from '../../contracts/health-event.js';
 import { createHealthDetectorCycle } from './cycle.js';
+import { createBackgroundFailureDetector } from './background-failures.js';
 import {
   createPostgresPressureDetector,
   type PostgresPoolOwnerPressure,
@@ -139,6 +146,75 @@ describe('runtime health detectors over the persisted stream', () => {
         });
         expect(thread.length).toBe(opened.length + 1);
         expect(new Set(thread.map(event => event.provenance.subjectHash)).size).toBe(1);
+      });
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
+  it(
+    'turns repeated lane failures into one incident and closes it on recovery',
+    async () => {
+      await withStore(async (store) => {
+        let clock = NOW_MS;
+        const cycle = createHealthDetectorCycle({
+          detectors: [createBackgroundFailureDetector({
+            config: DEFAULT_HEALTH_DETECTORS_CONFIG.backgroundFailures,
+          })],
+          stream: store,
+          publisher: { emit: (_event, data) => store.record(data.event) },
+          source: SOURCE,
+          policy: {
+            incidentWindowMs: DEFAULT_HEALTH_DETECTORS_CONFIG.incidentWindowMs,
+            cooldownMs: DEFAULT_HEALTH_DETECTORS_CONFIG.cooldownMs,
+            incidentScanLimit: DEFAULT_HEALTH_DETECTORS_CONFIG.incidentScanLimit,
+          },
+          now: () => clock,
+        });
+
+        // One transient failure, exactly as the supervisor would write it.
+        const subjectHash = hashHealthEventSubject('memory_extraction');
+        const recordFailure = (atMs: number): Promise<void> => store.record(createHealthEvent({
+          owner: SOURCE.owner,
+          severity: 'degraded',
+          code: 'background_work_job_failed',
+          provenance: {
+            process: 'agent',
+            component: 'background_work',
+            observerId: processObserverId(),
+            subjectHash,
+          },
+          observedAtMs: atMs,
+        }));
+
+        await recordFailure(NOW_MS);
+        clock = NOW_MS + CYCLE_MS;
+        await cycle.run();
+        expect((await store.listRecent({ limit: 1_000 }))
+          .filter(event => event.code.startsWith('background_work_failures'))).toEqual([]);
+
+        // The lane keeps failing: one incident, however many cycles observe it.
+        await recordFailure(NOW_MS + CYCLE_MS);
+        await recordFailure(NOW_MS + 2 * CYCLE_MS);
+        for (let step = 3; step < 40; step += 1) {
+          clock = NOW_MS + step * CYCLE_MS;
+          await cycle.run();
+        }
+        const opened = (await store.listRecent({ limit: 1_000 }))
+          .filter(event => event.code === 'background_work_failures_opened');
+        expect(opened.length).toBeGreaterThan(1);
+        expect(new Set(opened.map(event => event.correlationId)).size).toBe(1);
+
+        // Recovery: the failures age past the owner-file window, exactly once.
+        clock = NOW_MS
+          + DEFAULT_HEALTH_DETECTORS_CONFIG.backgroundFailures.windowMs
+          + 10 * CYCLE_MS;
+        await cycle.run();
+        clock += CYCLE_MS;
+        await cycle.run();
+        const closed = (await store.listRecent({ limit: 1_000 }))
+          .filter(event => event.code === 'background_work_failures_closed');
+        expect(closed).toHaveLength(1);
+        expect(closed[0]!.correlationId).toBe(opened[0]!.correlationId);
       });
     },
     INTEGRATION_TIMEOUT_MS,

@@ -21,6 +21,7 @@ import {
   createPostgresPressureDetector,
   type PostgresPoolTelemetryReader,
 } from './postgres-pressure.js';
+import { createBackgroundFailureDetector } from './background-failures.js';
 
 export interface RuntimeHealthDetectorOptions {
   stream: HealthDetectorStreamReader;
@@ -44,6 +45,11 @@ export function createRuntimeHealthDetectorCycle(
       config: options.config.postgresPressure,
     }));
   }
+  // Always present: it needs no runtime handle at all, only the failure
+  // observations the runtime already writes into the stream.
+  detectors.push(createBackgroundFailureDetector({
+    config: options.config.backgroundFailures,
+  }));
   return createHealthDetectorCycle({
     detectors,
     stream: options.stream,

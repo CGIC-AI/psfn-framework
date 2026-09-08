@@ -46,6 +46,7 @@ import { sanitizePersistedReasoningText } from '../turn-records.js';
 import {
   buildPersistedVisionUnavailableUserContent,
   buildTurnUserContent,
+  countVisionTurnImageInputs,
   hasVisionTurnInputs,
 } from '../vision-attachments.js';
 import {
@@ -61,11 +62,14 @@ import type { TurnExecutionRuntime, TurnSessionIdentity } from './contracts.js';
 import { runCorrectivePromptLifecycle } from './corrective-prompt-lifecycle.js';
 import type { CapturedSessionReads } from '../../../session/manager/captured-session-owner.js';
 import { isIntakeEnforcingMode } from '../../../../system/config/intake-policy-config.js';
+import {
+  resolveVisionTurnDeadlineAt,
+  runWithVisionTurnTimeout,
+  VISION_TURN_TIMEOUT_MS,
+} from './vision-turn-deadline.js';
+import type { StagedTurnPerception } from './perception-staging.js';
 
 const log = createComponentLogger('SubstrateAgent');
-// Covers attachment fetch (with gateway DNS retries) plus the vision model call;
-// 30s proved too tight on slow deployments where the model finished at ~70s.
-const VISION_TURN_TIMEOUT_MS = 120_000;
 const VISION_RECOVERY_REPLAY_MAX_ATTEMPTS = 3;
 const RUNTIME_FALLBACK_MODEL = 'runtime-fallback';
 const observedProviderModels = new Set<string>();
@@ -92,74 +96,6 @@ export interface AgentInvocationResult {
   runtimeFallbackProvenance?: RuntimeFallbackProvenance;
   turnIntent: string | null;
   persistedUserMessageContent?: string;
-}
-
-async function runWithVisionTurnTimeout<T>({
-  channelId,
-  deadlineAt,
-  stage,
-  onTimeout,
-  run,
-}: {
-  channelId: string;
-  deadlineAt: number | null;
-  stage: string;
-  onTimeout?: (() => void) | undefined;
-  run: () => Promise<T>;
-}): Promise<T> {
-  if (deadlineAt == null) {
-    return run();
-  }
-
-  const remainingMs = deadlineAt - Date.now();
-  const timeoutError = new Error(`Vision turn timed out after ${VISION_TURN_TIMEOUT_MS}ms`);
-  if (remainingMs <= 0) {
-    log.warn('Vision turn exceeded its deadline before stage start', {
-      channelId,
-      stage,
-      timeoutMs: VISION_TURN_TIMEOUT_MS,
-    });
-    if (onTimeout) {
-      try {
-        onTimeout();
-      } catch (error) {
-        log.warn('Vision turn timeout cleanup failed', {
-          channelId,
-          stage,
-          error: toErrorMessage(error),
-        });
-      }
-    }
-    throw timeoutError;
-  }
-
-  let timeoutHandle!: ReturnType<typeof setTimeout>;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeoutHandle = setTimeout(() => {
-      log.warn('Vision turn timed out; aborting stage', {
-        channelId,
-        stage,
-        timeoutMs: VISION_TURN_TIMEOUT_MS,
-      });
-      if (onTimeout) {
-        try {
-          onTimeout();
-        } catch (error) {
-          log.warn('Vision turn timeout cleanup failed', {
-            channelId,
-            stage,
-            error: toErrorMessage(error),
-          });
-        }
-      }
-      reject(timeoutError);
-    }, remainingMs);
-  });
-  try {
-    return await Promise.race([run(), timeoutPromise]);
-  } finally {
-    clearTimeout(timeoutHandle);
-  }
 }
 
 function buildPromptMessage(
@@ -449,6 +385,18 @@ export async function invokeAgentForTurn(input: {
   templateVariables: Record<string, string>;
   speakerRole: 'user' | 'system';
   mutableState: AgentInvocationMutableState;
+  /**
+   * lpxg3.1: perception already staged before pre-turn retrieval. When present
+   * the vision review is NOT re-run here — the staged build (or its failure) is
+   * reused, so the vision model is called exactly once per turn.
+   */
+  stagedPerception?: StagedTurnPerception | null;
+  /**
+   * The turn's single vision budget, anchored at perception staging when the
+   * turn carries images. Absent (undefined) means "derive it here", preserving
+   * the pre-lpxg3.1 anchor for callers that do not stage perception.
+   */
+  visionTurnDeadlineAt?: number | null;
   observability: Pick<
     TurnExecutionObservability,
     'emitObservedTurnStage' | 'emitPerformanceStage' | 'emitTurnSnapshotInBackground' | 'emitTurnSnapshot'
@@ -476,6 +424,7 @@ export async function invokeAgentForTurn(input: {
     templateVariables,
     speakerRole,
     mutableState,
+    stagedPerception,
     observability,
   } = input;
 
@@ -489,7 +438,13 @@ export async function invokeAgentForTurn(input: {
   let runtimeContradictionDiagnostic: RuntimeContradictionDiagnostic | undefined;
   const turnIntent: string | null = toolTurnOutcome.intent;
   const isVisionTurn = hasVisionTurnInputs(message);
-  const visionTurnDeadlineAt = isVisionTurn ? promptStageStart + VISION_TURN_TIMEOUT_MS : null;
+  // One budget per turn, one anchor. When perception was staged before
+  // retrieval the deadline is already running from that earlier anchor and must
+  // NOT be restarted here — retrieval and prompt assembly sit inside the same
+  // 120s window they always shared with the vision call.
+  const visionTurnDeadlineAt = input.visionTurnDeadlineAt !== undefined
+    ? input.visionTurnDeadlineAt
+    : resolveVisionTurnDeadlineAt({ hasVisionInputs: isVisionTurn, anchorMs: promptStageStart });
   let providerRequestAt: number | null = null;
   let providerWarmState: 'warm' | 'cold' = 'cold';
   const markProviderRequest = (): void => {
@@ -687,21 +642,26 @@ export async function invokeAgentForTurn(input: {
   let runtimeFallbackModel: string | null = null;
   let turnUserContentBuildResult: Awaited<ReturnType<typeof buildTurnUserContent>>;
   try {
-    turnUserContentBuildResult = await runWithVisionTurnTimeout({
-      channelId: message.channelId,
-      deadlineAt: visionTurnDeadlineAt,
-      stage: 'build_turn_user_content',
-      run: () => buildTurnUserContent({
-        message,
-        llmClient: runtime.llmClient,
-        runtimeMode: runtime.runtimeMode,
-        logger: log,
-        visionReviewer: runtime.imageVisionReviewer,
-        visionIntakeScreener: runtime.visionIntakeScreener,
-        visionIntakeEnforcing: isIntakeEnforcingMode(runtime.cogSecMode),
-        imageRetentionScope: turnId,
-      }),
-    });
+    if (stagedPerception) {
+      if (!stagedPerception.outcome.ok) throw stagedPerception.outcome.error;
+      turnUserContentBuildResult = stagedPerception.outcome.build;
+    } else {
+      turnUserContentBuildResult = await runWithVisionTurnTimeout({
+        channelId: message.channelId,
+        deadlineAt: visionTurnDeadlineAt,
+        stage: 'build_turn_user_content',
+        run: () => buildTurnUserContent({
+          message,
+          llmClient: runtime.llmClient,
+          runtimeMode: runtime.runtimeMode,
+          logger: log,
+          visionReviewer: runtime.imageVisionReviewer,
+          visionIntakeScreener: runtime.visionIntakeScreener,
+          visionIntakeEnforcing: isIntakeEnforcingMode(runtime.cogSecMode),
+          imageRetentionScope: turnId,
+        }),
+      });
+    }
   } catch (error) {
     if (!isVisionTurn) {
       clearInitialPromptContext();
@@ -728,6 +688,21 @@ export async function invokeAgentForTurn(input: {
         message,
       }),
       persistedUserContent: buildPersistedVisionUnavailableUserContent(message),
+      // Honest uncertainty, never a fabricated description (AC5): the content
+      // build did not happen, so nothing was perceived on this turn.
+      perception: {
+        imageCount: countVisionTurnImageInputs(message),
+        withheldCount: 0,
+        reviewedImageCount: 0,
+        semanticText: '',
+        visionSummary: null,
+        status: stagedPerception?.outcome.ok === false && stagedPerception.outcome.timedOut
+          ? 'timed_out'
+          : 'failed',
+        embodiment: null,
+        // Nothing was delivered, so the firewall interposed on nothing.
+        enforcing: false,
+      },
     };
   }
   const currentPromptMessage = buildPromptMessage(

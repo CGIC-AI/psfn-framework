@@ -2979,7 +2979,7 @@
       "value": "3"
     },
     {
-      "file": "src/core/agent/substrate-agent/turn-execution/agent-invocation.ts",
+      "file": "src/core/agent/substrate-agent/turn-execution/vision-turn-deadline.ts",
       "name": "VISION_TURN_TIMEOUT_MS",
       "value": "120_000"
     },

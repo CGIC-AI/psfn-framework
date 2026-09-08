@@ -1,0 +1,30 @@
+.appearance-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.appearance-options button,
+.avatar-model-selection button {
+  min-height: 44px;
+  border: 1px solid var(--border-soft, #dccbbd);
+  border-radius: 12px;
+  padding: 0.65rem 0.8rem;
+  background: var(--surface, #fffaf4);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.appearance-options button[aria-pressed='true'] {
+  background: #65464e;
+  border-color: #65464e;
+  color: #fffaf4;
+}
+
+.appearance-options button:disabled { opacity: 0.55; cursor: default; }
+.avatar-model-picker { margin-top: 1rem; }
+.avatar-file-label { display: block; margin-bottom: 0.5rem; font-weight: 600; }
+.avatar-model-picker input { max-width: 100%; font: inherit; }
+.avatar-model-selection { display: flex; align-items: center; gap: 0.75rem; margin-top: 0.75rem; }
+.avatar-model-selection span { min-width: 0; overflow-wrap: anywhere; flex: 1; }

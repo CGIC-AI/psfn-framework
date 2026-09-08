@@ -25,6 +25,31 @@ function renderAvatar(now: () => number, onInteraction = vi.fn()) {
 }
 
 describe('avatar view interactions', () => {
+  it('keeps voice available for a companion with no avatar and offers appearance selection', () => {
+    const onChooseAppearance = vi.fn();
+    const { getByRole, queryByLabelText, container } = render(
+      <AvatarView animated label="Canopy" displayMode="none" manifest={null}
+        handsFreeAvailable onChooseAppearance={onChooseAppearance} onInteraction={vi.fn()} state="attentive" />,
+    );
+    expect(container.querySelector('.avatar-character')).toBeNull();
+    expect(queryByLabelText(/head: tap/)).toBeNull();
+    expect(getByRole('button', { name: 'Start hands-free voice' }).hasAttribute('disabled')).toBe(false);
+    fireEvent.click(getByRole('button', { name: 'Choose an appearance' }));
+    expect(onChooseAppearance).toHaveBeenCalledOnce();
+  });
+
+  it('preserves model orbit controls and offers explicit affection buttons', () => {
+    const onInteraction = vi.fn();
+    const { getByRole, container } = render(
+      <AvatarView animated label="Canopy" displayMode="model" model={<canvas aria-label="3D model" />}
+        manifest={null} onInteraction={onInteraction} state="attentive" />,
+    );
+    expect(container.querySelector('.avatar-hit-regions')).toBeNull();
+    expect(getByRole('button', { name: 'Headpat' })).toBeTruthy();
+    fireEvent.click(getByRole('button', { name: 'Hug' }));
+    expect(onInteraction).toHaveBeenCalledWith({ kind: 'hug', region: 'body', durationMs: 0 });
+  });
+
   it('starts hands-free voice only from its explicit avatar control', () => {
     const onToggleHandsFree = vi.fn();
     const view = render(

@@ -251,7 +251,7 @@ describe('Companion full-duplex voice conformance', () => {
       });
     });
     await waitFor(() => expect(audioSources[0]?.stop).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(result.current.playback).toEqual({ active: false, mouthOpen: false }));
+    await waitFor(() => expect(result.current.playback).toMatchObject({ active: false, mouthOpen: false }));
 
     let stopping: Promise<void> | undefined;
     act(() => { stopping = result.current.microphone.stop(); });

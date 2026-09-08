@@ -22,6 +22,11 @@ export function useFleetRouting(input: {
   connectRef.current = input.connect;
   const reportErrorRef = useRef(input.reportError);
   reportErrorRef.current = input.reportError;
+  const accessStateRef = useRef(input.accessState);
+  accessStateRef.current = input.accessState;
+  const routingEpochRef = useRef(0);
+  const selectionEpochRef = useRef(0);
+  const pollingEpochRef = useRef<number | null>(null);
   const activeCompanionIdRef = useRef<string | null>(null);
   const [roster, setRoster] = useState<readonly FleetRosterCompanion[]>([]);
   const [activeCompanionId, setActiveCompanionId] = useState<string | null>(null);
@@ -42,6 +47,8 @@ export function useFleetRouting(input: {
     isCurrent: () => boolean,
     connectWhenAllowed: boolean,
   ): Promise<void> {
+    const routingEpoch = routingEpochRef.current;
+    const current = () => routingEpoch === routingEpochRef.current && isCurrent();
     const client = clientRef.current;
     const sessionClient = sessionClientRef.current;
     if (!client || !sessionClient) throw new Error('Cluster roster client is unavailable');
@@ -51,12 +58,13 @@ export function useFleetRouting(input: {
       // Status already proved that the browser has a signed-in session. A
       // transient renewal failure must not discard that authority or strand
       // the cockpit offline; the active approvals cadence retries renewal.
-      reportErrorRef.current(error instanceof Error
+      if (current()) reportErrorRef.current(error instanceof Error
         ? error.message
         : 'Cluster session renewal failed');
     }
+    if (!current()) return;
     const { roster: nextRoster, approvals: nextApprovals } = await client.readRoutingSnapshot();
-    if (!isCurrent()) return;
+    if (!current()) return;
     const selected = nextRoster.companions.find(
       companion => companion.companionId === activeCompanionIdRef.current,
     ) ?? nextRoster.companions.find(
@@ -73,13 +81,19 @@ export function useFleetRouting(input: {
   async function refreshApprovals(): Promise<void> {
     const client = clientRef.current;
     const sessionClient = sessionClientRef.current;
-    if (!client || !sessionClient || input.accessState !== 'signed_in') return;
+    const epoch = routingEpochRef.current;
+    const current = () => epoch === routingEpochRef.current && accessStateRef.current === 'signed_in';
+    if (!client || !sessionClient || !current() || pollingEpochRef.current === epoch) return;
+    pollingEpochRef.current = epoch;
     try {
       await sessionClient.renewIfDue();
+      if (!current()) return;
       const next = await client.readApprovals();
-      rememberApprovals(next.approvals);
+      if (current()) rememberApprovals(next.approvals);
     } catch (error) {
-      reportErrorRef.current(error instanceof Error ? error.message : 'Cluster approvals refresh failed');
+      if (current()) reportErrorRef.current(error instanceof Error ? error.message : 'Cluster approvals refresh failed');
+    } finally {
+      if (pollingEpochRef.current === epoch) pollingEpochRef.current = null;
     }
   }
 
@@ -89,24 +103,31 @@ export function useFleetRouting(input: {
   }
 
   async function select(companionId: string): Promise<boolean> {
-    if (input.accessState !== 'signed_in') return false;
+    if (accessStateRef.current !== 'signed_in') return false;
+    const selectionEpoch = ++selectionEpochRef.current;
     const companion = roster.find(entry => entry.companionId === companionId);
     if (!companion) {
       reportErrorRef.current('Selected companion is no longer authorized');
       return false;
     }
     try {
-      if (!await connectRef.current(companion.websocketPath)) return false;
+      if (!await connectRef.current(companion.websocketPath)
+        || selectionEpoch !== selectionEpochRef.current || accessStateRef.current !== 'signed_in') return false;
       activeCompanionIdRef.current = companion.companionId;
       setActiveCompanionId(companion.companionId);
       return true;
     } catch (error) {
-      reportErrorRef.current(error instanceof Error ? error.message : 'Companion switch failed');
+      if (selectionEpoch === selectionEpochRef.current && accessStateRef.current === 'signed_in') {
+        reportErrorRef.current(error instanceof Error ? error.message : 'Companion switch failed');
+      }
       return false;
     }
   }
 
   function clear(): void {
+    routingEpochRef.current += 1;
+    selectionEpochRef.current += 1;
+    pollingEpochRef.current = null;
     setRoster([]);
     setApprovals([]);
     setApprovalHistory([]);

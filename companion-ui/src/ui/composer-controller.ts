@@ -1,5 +1,6 @@
 import {
   type ChangeEvent,
+  type SetStateAction,
   useCallback,
   useEffect,
   useRef,
@@ -31,8 +32,13 @@ export function buildVoiceNotice(mode: MicMode, capability: VoiceCapability): st
   return `${label} capture is unavailable for this browser or attached device, so text remains the source of truth.${playback}`;
 }
 
-export function useComposerController(voice: VoiceCapability = NO_VOICE_CAPABILITY) {
-  const [input, setInput] = useState('');
+export function useComposerController(voice: VoiceCapability = NO_VOICE_CAPABILITY, draftOwner = 'current-thread') {
+  const [drafts, setDrafts] = useState<ReadonlyMap<string, string>>(() => new Map());
+  const input = drafts.get(draftOwner) ?? '';
+  function setInput(value: SetStateAction<string>) {
+    setDrafts(current => new Map(current).set(draftOwner,
+      typeof value === 'function' ? value(current.get(draftOwner) ?? '') : value));
+  }
   const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
   const [micMode, setMicMode] = useState<MicMode>('dictation');
   const [micActive, setMicActive] = useState(false);
@@ -55,7 +61,11 @@ export function useComposerController(voice: VoiceCapability = NO_VOICE_CAPABILI
   }
 
   function clearHumanScopedState() {
-    setInput('');
+    setDrafts(new Map());
+    resetInteraction();
+  }
+
+  function resetInteraction() {
     setAttachmentMenuOpen(false);
     setMicActive(false);
     setPendingAttachments([]);
@@ -132,6 +142,7 @@ export function useComposerController(voice: VoiceCapability = NO_VOICE_CAPABILI
     openAttachmentPicker,
     pendingAttachments,
     removeAttachment,
+    resetInteraction,
     selectMicMode,
     setAttachmentMenuOpen,
     setInput,

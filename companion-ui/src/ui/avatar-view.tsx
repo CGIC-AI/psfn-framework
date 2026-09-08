@@ -1,7 +1,7 @@
 import {
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
   useEffect,
-  useMemo,
   useRef,
   useState,
 } from 'react';
@@ -13,10 +13,10 @@ import {
   mapAvatarInteraction,
 } from '../lib/avatar-interactions.js';
 import { resolveSpriteEntryId } from '../lib/sprites/catalog.js';
-import { deriveSpriteInputs } from '../lib/sprites/emotion-mapping.js';
 import type { SpriteManifest } from '../lib/sprites/manifest.js';
 import type {
   EmotionSnapshotStreamEntry,
+  ToolActivityStreamEntry,
 } from '../lib/stream/hub-stream.js';
 import type {
   TouchInteractionInput,
@@ -25,6 +25,9 @@ import type {
 } from '../lib/touch-interactions.js';
 import type { SpriteState } from './types.js';
 import { CssFace, SpriteFrame } from './companion-sprite.js';
+import { useSpriteInputs } from './use-sprite-inputs.js';
+import type { CompanionDisplayMode } from './use-companion-display.js';
+import '../styles/avatar-presentation.css';
 
 const AVATAR_DISPLAY_WIDTH = 280;
 const REACTION_HOLD_MS = 900;
@@ -51,6 +54,12 @@ interface LocalReaction {
 
 export function AvatarView({
   animated,
+  active = true,
+  displayMode = 'sprite',
+  model,
+  mouthOpen = false,
+  toolActivity = null,
+  onChooseAppearance,
   emotion = null,
   label,
   manifest,
@@ -63,6 +72,12 @@ export function AvatarView({
   state,
 }: {
   animated: boolean;
+  active?: boolean;
+  displayMode?: CompanionDisplayMode;
+  model?: ReactNode;
+  mouthOpen?: boolean;
+  toolActivity?: ToolActivityStreamEntry | null;
+  onChooseAppearance?: () => void;
   emotion?: EmotionSnapshotStreamEntry | null;
   label: string;
   manifest: SpriteManifest | null;
@@ -88,13 +103,16 @@ export function AvatarView({
     if (reactionTimerRef.current !== null) window.clearTimeout(reactionTimerRef.current);
   }, []);
 
-  const base = useMemo(() => emotion
-    ? deriveSpriteInputs({ emotion, toolActivity: null, nowMs: Date.now() }).base
-    : null, [emotion]);
+  const { base, toolDomain, toolPhase } = useSpriteInputs(emotion, toolActivity, active);
+  const [failedSheet, setFailedSheet] = useState<string | null>(null);
+  const touch = reaction ? { headpat: 'headpat-happy', petting: 'headpat-happy', hug: 'hug-squeeze', kiss: 'kiss-blush' }[reaction.kind] : null;
   const entryId = manifest
-    ? resolveSpriteEntryId({ state, base, crop: 'avatar' })
+    ? resolveSpriteEntryId({ state, base, toolDomain, toolPhase, crop: 'avatar',
+      touch: touch === 'headpat-happy' || touch === 'hug-squeeze' || touch === 'kiss-blush' ? touch : null })
     : null;
-  const hasSprite = Boolean(manifest && entryId && manifest.entries[entryId]);
+  const sheetSrc = manifest && entryId
+    ? manifest.sheets[manifest.entries[entryId]?.sheet ?? '']?.src : undefined;
+  const hasSprite = Boolean(sheetSrc && sheetSrc !== failedSheet);
 
   function beginGesture(region: TouchRegion, event: ReactPointerEvent<HTMLButtonElement>) {
     if (pointerStartRef.current) return;
@@ -166,18 +184,19 @@ export function AvatarView({
 
   return (
     <section className="avatar-view" aria-label={`${label} avatar`}>
-      <div className={`avatar-stage ${animated ? 'animated' : 'static'}`}>
-        <div
+      <div className={`avatar-stage ${animated && active ? 'animated' : 'static'} display-${displayMode} ${mouthOpen ? 'mouth-open' : ''}`}>
+        {displayMode === 'sprite' ? <div
           className={`avatar-character ${hasSprite ? 'sprite-art' : 'sprite-css'} ${reaction ? `reaction-${reaction.kind}` : ''}`}
           data-sprite-entry={entryId ?? undefined}
         >
           <span className="avatar-aura" aria-hidden />
           {hasSprite && manifest && entryId ? (
             <SpriteFrame
-              animated={animated}
+              animated={animated && active}
               displayWidth={AVATAR_DISPLAY_WIDTH}
               entryId={entryId}
               manifest={manifest}
+              onUnavailable={() => setFailedSheet(sheetSrc ?? null)}
             />
           ) : (
             <span className="avatar-css-character" aria-hidden>
@@ -208,7 +227,16 @@ export function AvatarView({
               {...regionProps('body')}
             />
           </span>
-        </div>
+        </div> : displayMode === 'model' && model ? (
+          <div className="avatar-model-stage">{model}</div>
+        ) : (
+          <div className="avatar-no-model">
+            <span className="avatar-initial" aria-hidden>{label.trim().charAt(0).toUpperCase()}</span>
+            <h1>{label}</h1>
+            <p>{displayMode === 'model' ? 'Choose a model to bring this view to life.' : 'A voice can be all you need. An avatar is optional.'}</p>
+            <button type="button" onClick={onChooseAppearance}>Choose an appearance</button>
+          </div>
+        )}
         {reaction && (
           <div
             key={reaction.key}
@@ -232,7 +260,13 @@ export function AvatarView({
           </button>
           {handsFreeDetail && <p role="status">{handsFreeDetail}</p>}
         </div>
-        <p className="avatar-gesture-hint">Tap or stroke her head · double-tap her cheek · hold her close</p>
+        {displayMode === 'sprite' && <p className="avatar-gesture-hint">Tap or stroke the head · double-tap the cheek · hold the body for a hug</p>}
+        {displayMode === 'model' && model && (
+          <div className="avatar-model-affection" aria-label="Companion gestures">
+            <button type="button" onClick={() => { showReaction('headpat'); onInteraction({ kind: 'headpat', region: 'head', durationMs: 0 }); }}>Headpat</button>
+            <button type="button" onClick={() => { showReaction('hug'); onInteraction({ kind: 'hug', region: 'body', durationMs: 0 }); }}>Hug</button>
+          </div>
+        )}
       </div>
     </section>
   );

@@ -316,6 +316,15 @@ export function hydrateCanonicalStartupConfig(
       ambientPresence: { ...persistedScheduler.backgroundMaintenance.ambientPresence },
       concernGrooming: { ...persistedScheduler.backgroundMaintenance.concernGrooming },
     },
+    healthDetectors: {
+      intervalMs: persistedScheduler.healthDetectors.intervalMs,
+      incidentWindowMs: persistedScheduler.healthDetectors.incidentWindowMs,
+      cooldownMs: persistedScheduler.healthDetectors.cooldownMs,
+      incidentScanLimit: persistedScheduler.healthDetectors.incidentScanLimit,
+      postgresPressure: { ...persistedScheduler.healthDetectors.postgresPressure },
+      backgroundFailures: { ...persistedScheduler.healthDetectors.backgroundFailures },
+      stuckJobs: { ...persistedScheduler.healthDetectors.stuckJobs },
+    },
     backgroundWork: {
       supervisor: { ...persistedScheduler.backgroundWork.supervisor },
       postTurn: { ...persistedScheduler.backgroundWork.postTurn },

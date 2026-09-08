@@ -107,7 +107,12 @@ import {
 import { createAgentPersistenceRuntime } from '../../persistence/runtime-factory.js';
 import { subscribeHealthEventStream } from '../../shared/observability/health-event-stream.js';
 import {
+  subscribeRefreshFailureHealthEvents,
+} from '../../shared/observability/refresh-failure-emitter.js';
+import { resolveHealthEventOwner } from '../../shared/contracts/health-event.js';
+import {
   PostgresPoolOwner,
+  getPostgresPoolTelemetry,
   runWithPostgresPoolOwner,
 } from '../../persistence/postgres.js';
 import { sealPostgresStoreReadinessBeforeReady } from '../../persistence/postgres/runtime-readiness.js';
@@ -373,6 +378,16 @@ async function main(): Promise<void> {
   const detachHealthEventStream = subscribeHealthEventStream({
     eventBus,
     store: persistenceRuntime.healthEventStore,
+  });
+  // Project the context-refresh lanes' own degradation events into content-free
+  // failure observations. Subscribed here, beside the sink, so the repeated-
+  // failure detector (7qeo1.24.3) has something to count from this boot onward.
+  const detachRefreshFailureHealthEvents = subscribeRefreshFailureHealthEvents({
+    eventBus,
+    source: {
+      owner: resolveHealthEventOwner(config.companionId),
+      process: 'agent',
+    },
   });
   const detachFleetMaintenanceForegroundPreemption =
     persistenceRuntime.fleetMaintenanceCoordinator
@@ -863,6 +878,12 @@ async function main(): Promise<void> {
       : {}),
     automataRetention: coreRuntime.automataRetention,
     doingMirrorService: coreRuntime.doingMirrorService,
+    healthDetectors: {
+      stream: persistenceRuntime.healthEventStore,
+      postgresPoolTelemetry: getPostgresPoolTelemetry,
+      // Public runtime read API only: this lane never mutates a run.
+      automataRuns: () => persistenceRuntime.automataRunRegistry.listRetainedRunsForRuntime(),
+    },
   });
   // Letters land in their own L0 channel, which no completed turn ever points
   // the extractor at. Bind the bin to the same maybeExtract the post-turn path
@@ -1763,6 +1784,7 @@ async function main(): Promise<void> {
       await persistenceRuntime.companionAvailabilityStore.close();
       await persistenceRuntime.letterStore.close();
       await persistenceRuntime.doingMirrorStore.close();
+      detachRefreshFailureHealthEvents();
       detachHealthEventStream();
       await persistenceRuntime.healthEventStore.close();
       await postgresPoolOwner.close();

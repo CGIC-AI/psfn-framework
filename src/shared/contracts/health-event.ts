@@ -53,7 +53,7 @@ const HEALTH_EVENT_PROCESSES = [
   'operator',
 ] as const;
 
-export type HealthEventProcess = typeof HEALTH_EVENT_PROCESSES[number];
+type HealthEventProcess = typeof HEALTH_EVENT_PROCESSES[number];
 
 function isHealthEventProcess(value: unknown): value is HealthEventProcess {
   return typeof value === 'string'
@@ -74,9 +74,12 @@ const HEALTH_EVENT_COMPONENTS = [
   'operator_alerting',
   'background_work',
   'scheduler',
+  'persistence',
+  'memory',
+  'automata',
 ] as const;
 
-type HealthEventComponent = typeof HEALTH_EVENT_COMPONENTS[number];
+export type HealthEventComponent = typeof HEALTH_EVENT_COMPONENTS[number];
 
 function isHealthEventComponent(value: unknown): value is HealthEventComponent {
   return typeof value === 'string'
@@ -95,13 +98,106 @@ const HEALTH_EVENT_CODES = [
   'background_work_job_failed',
   /** A registered scheduler task threw out of its handler. */
   'scheduler_task_failed',
+  /**
+   * One bounded observation of a PostgreSQL pool authority above its
+   * owner-file pressure thresholds. Emitted only while the sample is
+   * unhealthy: a healthy pool contributes nothing to the stream, so a
+   * detector counting these is counting real pressure, not traffic.
+   */
+  'postgres_pool_pressure_sampled',
+  /** Sustained PostgreSQL pool saturation/queueing became one open incident. */
+  'postgres_pool_pressure_opened',
+  /** That incident's pool authority returned to healthy samples. */
+  'postgres_pool_pressure_closed',
+  /**
+   * One memory/wiki context-refresh lane failed a refresh. Grouped by a digest
+   * of the LANE, so repeated failures of the same lane accumulate into one
+   * episode rather than one incident per channel.
+   */
+  'memory_refresh_failed',
+  /** One lane failed repeatedly inside its owner-file window. */
+  'background_work_failures_opened',
+  /** That lane stopped failing for a full window. */
+  'background_work_failures_closed',
+  /**
+   * One automata run or scheduler task started and reached no terminal state
+   * inside its owner-file budget. Grouped by a digest of the RUN or TASK, so a
+   * stuck job is one incident rather than one per detector cycle.
+   */
+  'stuck_runtime_job_opened',
+  /** That run or task finished, was cancelled, or left the retained view. */
+  'stuck_runtime_job_closed',
 ] as const;
 
-type HealthEventCode = typeof HEALTH_EVENT_CODES[number];
+export type HealthEventCode = typeof HEALTH_EVENT_CODES[number];
 
 function isHealthEventCode(value: unknown): value is HealthEventCode {
   return typeof value === 'string'
     && (HEALTH_EVENT_CODES as readonly string[]).includes(value);
+}
+
+/**
+ * Incident families (beads psfn-framework-7qeo1.24.2-.4).
+ *
+ * A detector never emits a lone "something is wrong" row. It opens an EPISODE:
+ * one `opened` event carrying a fresh `correlationId`, further `opened` events
+ * on the same `correlationId` with a rising `occurrenceCount` while the
+ * condition persists, and exactly one `closed` event when it recovers. This
+ * table is the only place that pairing is declared, so the ledger that rebuilds
+ * open episodes from the persisted stream, the detector that opens them, and
+ * the alert delivery that consumes them (child .5) cannot drift apart.
+ *
+ * The `opened` code is deliberately reused for the occurrence updates rather
+ * than a third "still open" code: an incident is identified by its
+ * `correlationId`, so a consumer deduplicates on that and never has to know
+ * whether a row was the first observation or the fortieth.
+ */
+const HEALTH_INCIDENT_FAMILY_CODES = {
+  postgres_pool_pressure: {
+    opened: 'postgres_pool_pressure_opened',
+    closed: 'postgres_pool_pressure_closed',
+  },
+  background_work_failures: {
+    opened: 'background_work_failures_opened',
+    closed: 'background_work_failures_closed',
+  },
+  stuck_runtime_job: {
+    opened: 'stuck_runtime_job_opened',
+    closed: 'stuck_runtime_job_closed',
+  },
+} as const satisfies Readonly<Record<string, { opened: HealthEventCode; closed: HealthEventCode }>>;
+
+/** The condition an episode is about. One detector owns one family. */
+export type HealthIncidentFamily = keyof typeof HEALTH_INCIDENT_FAMILY_CODES;
+
+/** Whether an episode row opened (or extended) an incident, or closed it. */
+export type HealthIncidentPhase = 'opened' | 'closed';
+
+/** The `opened`/`closed` code pair a detector emits for its family. */
+export function healthIncidentCodes(
+  family: HealthIncidentFamily,
+): { opened: HealthEventCode; closed: HealthEventCode } {
+  return HEALTH_INCIDENT_FAMILY_CODES[family];
+}
+
+/**
+ * Read seam for every consumer of the persisted stream: classify a stored code
+ * back into its family and phase. A code that is an ordinary observation rather
+ * than an episode boundary returns null, which is how the ledger tells a
+ * `postgres_pool_pressure_sampled` row from the incident it contributed to.
+ */
+export function resolveHealthIncidentPhase(
+  code: HealthEventCode,
+): { family: HealthIncidentFamily; phase: HealthIncidentPhase } | null {
+  for (const [family, codes] of Object.entries(HEALTH_INCIDENT_FAMILY_CODES)) {
+    if (codes.opened === code) {
+      return { family: family as HealthIncidentFamily, phase: 'opened' };
+    }
+    if (codes.closed === code) {
+      return { family: family as HealthIncidentFamily, phase: 'closed' };
+    }
+  }
+  return null;
 }
 
 /** Ordered least to most severe, so a detector can take a maximum. */
@@ -112,7 +208,7 @@ const HEALTH_EVENT_SEVERITIES = [
   'critical',
 ] as const;
 
-type HealthEventSeverity = typeof HEALTH_EVENT_SEVERITIES[number];
+export type HealthEventSeverity = typeof HEALTH_EVENT_SEVERITIES[number];
 
 function isHealthEventSeverity(value: unknown): value is HealthEventSeverity {
   return typeof value === 'string'
@@ -134,12 +230,20 @@ export type HealthEventOwner =
  * extend the value type.
  */
 const HEALTH_EVENT_EVIDENCE_KEYS = [
+  'activeConnections',
   'attemptCount',
   'configuredSinkCount',
   'durationMs',
+  'elapsedMs',
+  'failureCount',
   'jobAgeMs',
+  'poolCapacity',
   'queueDepth',
+  'sampleCount',
+  'saturationPercent',
   'terminal',
+  'waitingRequests',
+  'windowMs',
 ] as const;
 
 type HealthEventEvidenceKey = typeof HEALTH_EVENT_EVIDENCE_KEYS[number];
@@ -149,7 +253,7 @@ function isHealthEventEvidenceKey(value: unknown): value is HealthEventEvidenceK
     && (HEALTH_EVENT_EVIDENCE_KEYS as readonly string[]).includes(value);
 }
 
-type HealthEventEvidence = Partial<Record<HealthEventEvidenceKey, number | boolean>>;
+export type HealthEventEvidence = Partial<Record<HealthEventEvidenceKey, number | boolean>>;
 
 /**
  * Where the observation came from. `observerId` identifies the emitting process
@@ -482,6 +586,17 @@ export function validateHealthEvent(value: unknown): HealthEvent {
     recordedAtMs: normalizeTimestampMs(value.recordedAtMs, 'recordedAtMs'),
     evidence: normalizeEvidence(value.evidence),
   });
+}
+
+/**
+ * The identity an emitter stamps on every event it publishes: whose runtime the
+ * observation belongs to, and which process saw it. A component that runs in
+ * more than one process (the scheduler, the detector cycle) knows neither, so
+ * the entrypoint constructing it declares this once.
+ */
+export interface HealthEventSource {
+  owner: HealthEventOwner;
+  process: HealthEventProcess;
 }
 
 /**

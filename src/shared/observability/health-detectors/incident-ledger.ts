@@ -1,0 +1,110 @@
+// ── Incident ledger (beads psfn-framework-7qeo1.24.2-.4) ──
+//
+// Which incidents are currently open is NOT detector state. It is derived, on
+// every cycle, from the persisted health stream itself.
+//
+// That choice is what makes "exactly one incident per episode" true rather than
+// aspirational. An in-memory map would restate the episode as a brand new
+// incident after every process restart, deploy, or crash — precisely the moments
+// an operator most needs one continuous incident. Rebuilding from the stream
+// means the correlation id an incident was opened with survives anything that
+// does not also lose the database.
+//
+// The window is bounded (owner-file `incidentWindowMs` and `incidentScanLimit`),
+// so an episode stays visible only while it keeps writing. That is exactly what
+// the owner-file rule `cooldownMs < incidentWindowMs` guarantees: an open
+// episode re-states itself at the cooldown cadence, so it can never age out of
+// its own ledger while it is still true.
+
+import {
+  resolveHealthIncidentPhase,
+  type HealthEvent,
+  type HealthEventComponent,
+  type HealthEventOwner,
+  type HealthIncidentFamily,
+} from '../../contracts/health-event.js';
+import { healthEventOwnerKey } from './owner.js';
+
+/** One incident that is open as of the newest event in the scanned window. */
+export interface OpenIncidentEpisode {
+  family: HealthIncidentFamily;
+  correlationId: string;
+  subjectHash: string;
+  /** Subsystem the episode was opened against; the close event reuses it. */
+  component: HealthEventComponent;
+  /** Tenancy the episode belongs to, so a cycle only closes its own. */
+  owner: HealthEventOwner;
+  firstObservedAtMs: number;
+  lastObservedAtMs: number;
+  occurrenceCount: number;
+  /** Newest persisted event of this episode; the next one cites it as cause. */
+  lastEventId: string;
+  /** When that newest event was written, which is what the cooldown gates on. */
+  lastRecordedAtMs: number;
+}
+
+/**
+ * Stable identity of an episode: the condition, whose runtime it belongs to,
+ * and which subject inside that runtime. Two detectors never collide because
+ * the family is part of the key, and a fleet never merges two companions'
+ * incidents because the tenancy is.
+ */
+// NUL joins the three parts because none of them can contain it — the family is
+// a closed vocabulary member, the tenancy key a routing UUID or `system`, and
+// the subject a SHA-256 digest — so no pair of distinct episodes can collide by
+// spelling the same joined string.
+export function incidentEpisodeKey(
+  family: HealthIncidentFamily,
+  owner: HealthEventOwner,
+  subjectHash: string,
+): string {
+  return `${family}\u0000${healthEventOwnerKey(owner)}\u0000${subjectHash}`;
+}
+
+/**
+ * Replay a newest-first stream window into the set of episodes still open.
+ *
+ * Replayed oldest-first so an `opened` followed by a `closed` resolves, and a
+ * `closed` followed by a later `opened` (the same condition recurring) is a new
+ * episode rather than a resurrected one. A `closed` event whose `opened` fell
+ * out of the window simply removes nothing, which is the correct outcome: there
+ * is no open episode to carry.
+ */
+export function buildIncidentLedger(
+  events: readonly HealthEvent[],
+): Map<string, OpenIncidentEpisode> {
+  const open = new Map<string, OpenIncidentEpisode>();
+  const ordered = [...events].sort((left, right) => (
+    left.recordedAtMs - right.recordedAtMs || left.eventId.localeCompare(right.eventId)
+  ));
+  for (const event of ordered) {
+    const classified = resolveHealthIncidentPhase(event.code);
+    if (!classified) continue;
+    // An episode boundary without a subject cannot be grouped, and no detector
+    // emits one. Refusing it here keeps a malformed row from collapsing every
+    // subject of a family into a single incident.
+    const subjectHash = event.provenance.subjectHash;
+    if (subjectHash === undefined) continue;
+    const key = incidentEpisodeKey(classified.family, event.owner, subjectHash);
+    if (classified.phase === 'closed') {
+      open.delete(key);
+      continue;
+    }
+    const existing = open.get(key);
+    open.set(key, {
+      family: classified.family,
+      correlationId: event.correlationId,
+      subjectHash,
+      component: event.provenance.component,
+      owner: event.owner,
+      firstObservedAtMs: existing === undefined
+        ? event.firstObservedAtMs
+        : Math.min(existing.firstObservedAtMs, event.firstObservedAtMs),
+      lastObservedAtMs: event.lastObservedAtMs,
+      occurrenceCount: event.occurrenceCount,
+      lastEventId: event.eventId,
+      lastRecordedAtMs: event.recordedAtMs,
+    });
+  }
+  return open;
+}

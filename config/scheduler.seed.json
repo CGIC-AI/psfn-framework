@@ -18,6 +18,26 @@
       "maxActiveConcerns": 7
     }
   },
+  "healthDetectors": {
+    "intervalMs": 60000,
+    "incidentWindowMs": 21600000,
+    "cooldownMs": 900000,
+    "incidentScanLimit": 500,
+    "postgresPressure": {
+      "saturationPercent": 90,
+      "minWaitingRequests": 1,
+      "sustainedSamples": 3,
+      "windowMs": 600000
+    },
+    "backgroundFailures": {
+      "failureThreshold": 3,
+      "windowMs": 3600000
+    },
+    "stuckJobs": {
+      "automataRunBudgetMs": 3600000,
+      "schedulerTaskBudgetMs": 1800000
+    }
+  },
   "backgroundWork": {
     "supervisor": {
       "maxConcurrentSessions": 4,

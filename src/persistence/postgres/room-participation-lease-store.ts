@@ -199,12 +199,20 @@ export class PostgresRoomParticipationLeaseStore implements RoomParticipationLea
   }
 
   /**
-   * Open (or re-open) membership. The bounded budget and both streaks reset —
-   * an explicit disposition is a fresh engagement — and the watermark starts at
-   * the disposition's own message, so a message that preceded the opening act
-   * can never be replayed into a continuation candidate.
+   * Open (or re-open) membership. The bounded budget resets — an explicit
+   * disposition is a fresh engagement — and the watermark starts at the
+   * disposition's own message, so a message that preceded the opening act can
+   * never be replayed into a continuation candidate.
+   *
+   * The bot-loop fence survives the opening (§8.5): a machine-authored
+   * disposition carries the machine streak forward instead of clearing it, and
+   * it cannot re-open a lease the fence itself closed. Only a human turn does
+   * that, so a peer bot cut off by `machine_streak` cannot mention its way back
+   * into the room. Returns null when the fence refused the opening.
    */
-  async open(input: OpenRoomParticipationLeaseInput): Promise<RoomParticipationLeaseSnapshot> {
+  async open(
+    input: OpenRoomParticipationLeaseInput,
+  ): Promise<RoomParticipationLeaseSnapshot | null> {
     const companionId = requireCompanionId(input.companionId);
     const channelId = requireIdentifier(input.channelId, 'roomParticipationLease.channelId');
     const watermarkMessageId = requireIdentifier(
@@ -251,10 +259,17 @@ export class PostgresRoomParticipationLeaseStore implements RoomParticipationLea
          ),
          considered_count = 0,
          ignore_streak = 0,
-         machine_streak = 0,
+         machine_streak = CASE
+           WHEN $8::boolean THEN room_participation_leases.machine_streak ELSE 0
+         END,
          closed_at_ms = NULL,
          close_reason = NULL,
          revision = room_participation_leases.revision + 1
+       WHERE NOT (
+         $8::boolean
+         AND room_participation_leases.status = 'closed'
+         AND room_participation_leases.close_reason = 'machine_streak'
+       )
        RETURNING ${LEASE_COLUMNS}`,
       [
         companionId,
@@ -264,19 +279,20 @@ export class PostgresRoomParticipationLeaseStore implements RoomParticipationLea
         expiresAtMs,
         watermarkMessageId,
         watermarkTimestampMs,
+        input.authorIsMachine === true,
       ],
     );
     const row = result.rows.at(0);
-    if (!row) {
-      throw new Error('room participation lease open returned no row');
-    }
-    return toSnapshot(row);
+    return row ? toSnapshot(row) : null;
   }
 
   /**
-   * Extend a LIVE lease and clear the ignore streak (the room re-engaged). A
-   * lapsed or closed lease is never revived here: it returns null so the caller
-   * falls through to `open`, which resets the bounded budget honestly.
+   * Extend a LIVE lease and, for a human-authored act, clear the ignore streak
+   * (the room re-engaged). A machine-authored refresh keeps that streak: a
+   * sibling bot re-engaging is exactly what the withdrawal and bot-loop fences
+   * distrust, so only a human turn clears a streak. A lapsed or closed lease is
+   * never revived here: it returns null so the caller falls through to `open`,
+   * which resets the bounded budget honestly.
    */
   async refresh(
     input: RefreshRoomParticipationLeaseInput,
@@ -306,7 +322,7 @@ export class PostgresRoomParticipationLeaseStore implements RoomParticipationLea
              THEN $5 ELSE watermark_message_id
          END,
          watermark_timestamp_ms = GREATEST(watermark_timestamp_ms, $6::bigint),
-         ignore_streak = 0,
+         ignore_streak = CASE WHEN $7::boolean THEN ignore_streak ELSE 0 END,
          revision = revision + 1
        WHERE companion_id = $1 AND channel_id = $2
          AND status = 'active' AND expires_at_ms > $3
@@ -318,6 +334,7 @@ export class PostgresRoomParticipationLeaseStore implements RoomParticipationLea
         expiresAtMs,
         watermarkMessageId,
         watermarkTimestampMs,
+        input.authorIsMachine === true,
       ],
     );
     const row = result.rows.at(0);

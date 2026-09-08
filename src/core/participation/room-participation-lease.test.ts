@@ -217,6 +217,7 @@ describe('RoomParticipationLeaseCoordinator', () => {
       disposition: 'passive_summons',
       sourceMessageId: 'msg-0',
       sourceTimestampMs: NOW - 1_000,
+      authorIsMachine: false,
     });
     expect(summons).toEqual({ outcome: 'skipped', reason: 'disposition_not_admitted' });
     expect(await store.read({ companionId: COMPANION_ID, channelId: ROOM })).toBeNull();
@@ -227,6 +228,7 @@ describe('RoomParticipationLeaseCoordinator', () => {
       disposition: 'reply',
       sourceMessageId: 'msg-0',
       sourceTimestampMs: NOW - 1_000,
+      authorIsMachine: false,
     });
     expect(reply.outcome).toBe('opened');
     const lease = await store.read({ companionId: COMPANION_ID, channelId: ROOM });
@@ -245,6 +247,7 @@ describe('RoomParticipationLeaseCoordinator', () => {
       disposition: 'reply',
       sourceMessageId: 'msg-0',
       sourceTimestampMs: NOW - 1_000,
+      authorIsMachine: false,
     });
     const refreshed = await coordinator.recordDisposition({
       channelId: ROOM,
@@ -252,6 +255,7 @@ describe('RoomParticipationLeaseCoordinator', () => {
       disposition: 'passive_summons',
       sourceMessageId: 'msg-1',
       sourceTimestampMs: NOW,
+      authorIsMachine: false,
     });
     expect(refreshed.outcome).toBe('refreshed');
   });
@@ -264,6 +268,7 @@ describe('RoomParticipationLeaseCoordinator', () => {
       disposition: 'reply',
       sourceMessageId: 'msg-0',
       sourceTimestampMs: NOW,
+      authorIsMachine: false,
       isDirectMessage: true,
     });
     expect(direct).toEqual({ outcome: 'skipped', reason: 'direct_message' });
@@ -273,6 +278,7 @@ describe('RoomParticipationLeaseCoordinator', () => {
       disposition: 'reply',
       sourceMessageId: 'msg-0',
       sourceTimestampMs: NOW,
+      authorIsMachine: false,
     });
     expect(dmScope).toEqual({ outcome: 'skipped', reason: 'not_group' });
     expect(await store.read({ companionId: COMPANION_ID, channelId: ROOM })).toBeNull();
@@ -287,6 +293,7 @@ describe('RoomParticipationLeaseCoordinator', () => {
       disposition: 'reply',
       sourceMessageId: 'msg-0',
       sourceTimestampMs: NOW - 1_000,
+      authorIsMachine: false,
     });
     const [first, second] = await Promise.all([
       coordinator.admitContinuation({ channelId: ROOM, observation: observation() }),
@@ -316,6 +323,7 @@ describe('RoomParticipationLeaseCoordinator', () => {
       disposition: 'reply',
       sourceMessageId: 'msg-0',
       sourceTimestampMs: NOW - 1_000,
+      authorIsMachine: false,
     });
     expect(await coordinator.recordAppraisal({ channelId: ROOM, action: 'ignore' }))
       .toEqual({ outcome: 'recorded' });
@@ -341,6 +349,7 @@ describe('RoomParticipationLeaseCoordinator', () => {
         disposition: 'reply',
         sourceMessageId: 'msg-0',
         sourceTimestampMs: NOW - 1_000,
+        authorIsMachine: false,
       });
     };
     await open();
@@ -404,6 +413,7 @@ describe('PassiveNameCandidateBuilder contextual continuation', () => {
       disposition: 'reply',
       sourceMessageId: 'msg-0',
       sourceTimestampMs: NOW - 2_000,
+      authorIsMachine: false,
     });
     const decision = await makeBuilder(coordinator).build(makeMessage());
     expect(decision.status).toBe('created');
@@ -428,6 +438,7 @@ describe('PassiveNameCandidateBuilder contextual continuation', () => {
       disposition: 'reply',
       sourceMessageId: 'msg-0',
       sourceTimestampMs: NOW - 2_000,
+      authorIsMachine: false,
     });
     const decision = await makeBuilder(coordinator).build(makeMessage());
     expect(decision.status).toBe('suppressed');
@@ -452,6 +463,7 @@ describe('PassiveNameCandidateBuilder contextual continuation', () => {
       disposition: 'reply',
       sourceMessageId: 'msg-0',
       sourceTimestampMs: NOW - 2_000,
+      authorIsMachine: false,
     });
     // ... which silences a repeated summons ...
     const repeated = await builder.build(

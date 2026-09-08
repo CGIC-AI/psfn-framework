@@ -70,6 +70,13 @@ export interface ParticipationCandidate {
   sourceMessageId: string;
   trigger: ParticipationCandidateTrigger;
   triggerAuthorId: string;
+  /**
+   * Whether the triggering author is a machine (a sibling bot or a peer
+   * companion). Carried on the candidate so downstream dispositions — notably
+   * the room-participation lease's bot-loop fence — never have to re-derive it
+   * from connector-shaped routing fields.
+   */
+  triggerAuthorIsMachine: boolean;
   triggerAuthorName: string;
   triggerContent: string;
   triggerTimestampMs: number;

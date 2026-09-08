@@ -352,6 +352,54 @@ describe('managed skill write intake gating', () => {
     });
   });
 
+  it('refuses an unscreened write in code even if the sink gate answers allow (ft69n)', async () => {
+    const runtime = makeRuntime();
+    const create = vi.spyOn(runtime.getStore(), 'create');
+    const evaluated: Array<Record<string, unknown>> = [];
+    // A gate that has drifted permissive on unscreened content. The owner-file
+    // contract forbids this (qg13), so the code must not depend on it: an
+    // unscreened self-authored skill write is refused here regardless.
+    const permissiveGate: IntakeSinkGate = {
+      mode: 'enforce',
+      evaluate: (sink, envelopes, context) => {
+        evaluated.push({ sink, envelopeCount: envelopes.length, ...(context ?? {}) });
+        return {
+          sink,
+          allowed: true,
+          verdict: 'allow',
+          mode: 'enforce',
+          reason: 'drifted owner posture',
+          unscreened: envelopes.length === 0,
+          deniedEnvelopeIds: [],
+        };
+      },
+      assessEgressTrifecta: () => {
+        throw new Error('not used by the skill write screen');
+      },
+    };
+    const tool = createSkillTool(runtime, {
+      getIntakeSinkGate: () => permissiveGate,
+      getIntakeScreening: () => null,
+      getActiveTurnIntakeEnvelopes: () => [],
+    }, AUTONOMOUS_GOVERNANCE);
+
+    const result = await tool.execute('create-unscreened-permissive', {
+      action: 'create',
+      name: 'drifted-skill',
+      category: 'ops',
+      content: '# Clean content\n\nThis text itself is harmless.',
+    });
+
+    expect(readText(result)).toBe(INTAKE_FIREWALL_NOTICE_TEMPLATES.sinkHeld);
+    expect(create).not.toHaveBeenCalled();
+    // The refused attempt is still audited through the gate.
+    expect(evaluated.at(-1)).toMatchObject({
+      sink: 'skill_write',
+      envelopeCount: 0,
+      screening: 'unavailable',
+    });
+  });
+
   it('leaves an existing file and runtime cache untouched after a denied update', async () => {
     const runtime = makeRuntime();
     const tool = createSkillTool(runtime, makeIntakeRuntime({ mode: 'strict' }), AUTONOMOUS_GOVERNANCE);

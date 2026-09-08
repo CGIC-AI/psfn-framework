@@ -201,6 +201,54 @@ describe('blind review lane: zero model calls behind the deterministic gates', (
     expect(review).toHaveBeenCalledTimes(1);
   });
 
+  it('counts an undersized refusal into the durable cumulative savings', async () => {
+    const { lane, store } = buildLane({ items: blindReviewTestEvidenceRange(1) });
+    const result = await lane.runOnce();
+    expect(result.modelCallsAvoided).toBe(1);
+    expect(await store.readModelCallsAvoided()).toEqual({
+      modelCallsAvoided: 1,
+      lastAvoidedAtMs: NOW_MS,
+    });
+  });
+
+  it('does not grow the savings counter on an idle window', async () => {
+    // The empty-window pass never asks the gate anything, so nothing was
+    // avoided. A counter that ticked here would measure elapsed time, not cost.
+    const { lane, store } = buildLane({ items: [] });
+    const result = await lane.runOnce();
+    expect(result.modelCallsAvoided).toBe(0);
+    expect(await store.readModelCallsAvoided()).toEqual({
+      modelCallsAvoided: 0,
+      lastAvoidedAtMs: 0,
+    });
+  });
+
+  it('accumulates savings across passes and survives a whole-row state write', async () => {
+    const store = new InMemoryBlindReviewStore();
+    const { lane } = buildLane({ items: blindReviewTestEvidenceRange(1), store });
+    await lane.runOnce();
+    await lane.runOnce();
+    // `writeState` replaces the lane-state row wholesale every pass; the
+    // cumulative counter must not be one of the fields it can reset.
+    expect((await store.readModelCallsAvoided()).modelCallsAvoided).toBe(2);
+    expect((await store.readState()).updatedAtMs).toBe(NOW_MS);
+  });
+
+  it('counts an unchanged-digest refusal too', async () => {
+    const items = blindReviewTestEvidenceRange(4);
+    const store = new InMemoryBlindReviewStore();
+    const { lane } = buildLane({ items, store });
+    await lane.runOnce();
+    const fresh = new InMemoryBlindReviewStore();
+    await fresh.appendEvidence(items, NOW_MS);
+    await fresh.writeState(await store.readState());
+    const { lane: replayLane } = buildLane({ items: [], store: fresh });
+    const result = await replayLane.runOnce();
+    expect(result.batches).toEqual([{ kind: 'skipped', reason: 'unchanged_digest' }]);
+    expect(result.modelCallsAvoided).toBe(1);
+    expect((await fresh.readModelCallsAvoided()).modelCallsAvoided).toBe(1);
+  });
+
   it('holds the per-run model-call ceiling even when evidence floods in', async () => {
     const { lane, review } = buildLane({
       items: blindReviewTestEvidenceRange(40),

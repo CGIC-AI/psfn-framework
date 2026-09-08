@@ -375,6 +375,14 @@ tick buys nothing. Garden's Intake Firewall page renders the computed effective
 value alongside both inputs, so the reviewer's real cadence is readable without
 multiplying two owner files together by hand.
 
+That page also renders the lane's cumulative **model calls avoided by the gate**
+(`cogsec_blind_review_state.model_calls_avoided`, with the time of the last
+refusal). The number counts only refusals the deterministic change gate actually
+made over a candidate batch, so a window with nothing in it adds nothing to it: a
+counter that grew on idle passes would report elapsed time rather than saved
+cost. It is cumulative over the lane's whole life, never decreases, and is not
+reset by a restart, a retry, or a window that emptied.
+
 ## Outreach lanes
 
 Two scheduler lanes ride the same engine and share the delivery path: accepted output

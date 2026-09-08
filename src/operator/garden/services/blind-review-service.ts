@@ -9,21 +9,29 @@
 // dead for a week.
 //
 // CONTENT-FREE, by construction and not by convention. The projection reads
-// exactly two things — the durable lane state row and the window census — and
-// exposes counts, timestamps, config bounds and booleans. `lastBatchDigest` is
+// exactly three things — the durable lane state row, the window census, and the
+// gate's cumulative savings counter — and exposes counts, timestamps, config
+// bounds and booleans. `lastBatchDigest` is
 // reduced to a boolean at this boundary: it is a hash of evidence, and a hash
 // of a small population is a lookup key, not a safe number to publish.
 //
-// READ-ONLY, by construction: the dependency is typed as the two reader methods
-// of `BlindReviewStorePort`, so this service structurally cannot append, mark,
-// pin, prune or write state even if a later edit tried to.
+// READ-ONLY, by construction: the dependency is typed as the reader methods of
+// `BlindReviewStorePort`, so this service structurally cannot append, mark,
+// pin, prune, write state or move the savings counter even if a later edit
+// tried to.
 
 import { emptyBlindReviewLaneState } from '../../../core/cogsec/blind-review/contracts.js';
-import type { BlindReviewStorePort } from '../../../core/cogsec/blind-review/contracts.js';
+import type {
+  BlindReviewGateSavings,
+  BlindReviewStorePort,
+} from '../../../core/cogsec/blind-review/contracts.js';
 import type { BlindReviewerConfig } from '../../../system/config/scheduler-config/blind-review.js';
 
 /** Exactly the reads this projection is allowed to make. */
-export type AdminBlindReviewReadPort = Pick<BlindReviewStorePort, 'readState' | 'countRows'>;
+export type AdminBlindReviewReadPort = Pick<
+  BlindReviewStorePort,
+  'readState' | 'countRows' | 'readModelCallsAvoided'
+>;
 
 // The view sub-shapes below are deliberately NOT exported: every consumer
 // reaches them through `AdminBlindReviewStateView` (or an indexed access on
@@ -76,6 +84,16 @@ interface AdminBlindReviewGateView {
   /** Model calls one pass may make, whatever the backlog. */
   maxReviewsPerRun: number;
   nextPassGate: AdminBlindReviewNextPassGate;
+  /**
+   * Cumulative model calls the gate has refused over the lane's whole life
+   * (33xah). This is the durable half of the reviewer's cost story: the gate
+   * preview above says what the NEXT pass would face, and this says what every
+   * pass so far actually saved. It never decreases and it is never reset by a
+   * restart, a retry, or a window that emptied.
+   */
+  modelCallsAvoided: number;
+  /** When the gate last refused a call; 0 when it never has. */
+  modelCallsAvoidedAtMs: number;
 }
 
 interface AdminBlindReviewRetryView {
@@ -155,6 +173,12 @@ function nextPassGate(
 /** The census a window that was never opened has. Structural, not tuning. */
 const EMPTY_WINDOW_CENSUS = Object.freeze({ total: 0, pinned: 0, unreviewed: 0 });
 
+/** What a gate that has never refused a call has saved. Structural, not tuning. */
+const EMPTY_GATE_SAVINGS: Readonly<BlindReviewGateSavings> = Object.freeze({
+  modelCallsAvoided: 0,
+  lastAvoidedAtMs: 0,
+});
+
 export function createAdminBlindReviewService(
   options: AdminBlindReviewServiceOptions,
 ): AdminBlindReviewService {
@@ -200,6 +224,8 @@ export function createAdminBlindReviewService(
         minBlindedCharsPerBatch: config.batch.minBlindedCharsPerBatch,
         maxReviewsPerRun: config.cost.maxReviewsPerRun,
         nextPassGate: nextPassGate(0, config),
+        modelCallsAvoided: EMPTY_GATE_SAVINGS.modelCallsAvoided,
+        modelCallsAvoidedAtMs: EMPTY_GATE_SAVINGS.lastAvoidedAtMs,
       },
       retry: {
         attempt: empty.reviewAttempt,
@@ -216,7 +242,11 @@ export function createAdminBlindReviewService(
       if (!config.enabled) return inertView('disabled');
       if (!reader) return inertView('unwired');
 
-      const [state, rows] = await Promise.all([reader.readState(), reader.countRows()]);
+      const [state, rows, savings] = await Promise.all([
+        reader.readState(),
+        reader.countRows(),
+        reader.readModelCallsAvoided(),
+      ]);
       // `emptyBlindReviewLaneState` stamps 0 when no row exists, and a real
       // pass always stamps a clock reading, so 0 is the honest "never ran".
       const neverRan = state.updatedAtMs === 0;
@@ -243,6 +273,8 @@ export function createAdminBlindReviewService(
           minBlindedCharsPerBatch: config.batch.minBlindedCharsPerBatch,
           maxReviewsPerRun: config.cost.maxReviewsPerRun,
           nextPassGate: nextPassGate(rows.unreviewed, config),
+          modelCallsAvoided: savings.modelCallsAvoided,
+          modelCallsAvoidedAtMs: savings.lastAvoidedAtMs,
         },
         retry: {
           attempt: state.reviewAttempt,

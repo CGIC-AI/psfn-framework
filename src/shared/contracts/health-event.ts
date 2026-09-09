@@ -143,6 +143,16 @@ const HEALTH_EVENT_CODES = [
    * Evidence carries counts and the cap, never a kind name or a dedupe key.
    */
   'human_escalation_ledger_saturated',
+  /**
+   * A replaying automata terminal handoff recomputed a terminal that disagrees
+   * with the durable Bus finding (psfn-framework-8n40k's convergence path). The
+   * durable finding still wins, so nothing is lost — but a run whose re-run
+   * reaches a DIFFERENT conclusion is a settle-determinism fault, and until now
+   * it was visible only as a WARN log line. Grouped by a digest of the HANDOFF
+   * KIND, never of the run or class, so repeated divergences accumulate into one
+   * episode rather than one incident per crashed run.
+   */
+  'terminal_handoff_replay_diverged', // psfn-framework-zu8d2
 ] as const;
 
 export type HealthEventCode = typeof HEALTH_EVENT_CODES[number];

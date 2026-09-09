@@ -4,10 +4,12 @@
 // emits `background_work_job_failed` for a job that reached its terminal failed
 // state, the refresh emitter beside this module projects a failed memory/wiki
 // context refresh into `memory_refresh_failed`, and the turn support runtime
-// projects a lost custody snapshot into `custody_snapshot_write_failed`. All
-// three are grouped by `provenance.subjectHash` — a digest of the JOB KIND, of
-// the REFRESH LANE, and of the custody FAILURE MODE respectively, never of an
-// individual job, channel, or turn — precisely so that repeats of the same
+// projects a lost custody snapshot into `custody_snapshot_write_failed`, and the
+// automata terminal lifecycle projects a replay that disagreed with the durable
+// Bus finding into `terminal_handoff_replay_diverged`. All four are grouped by
+// `provenance.subjectHash` — a digest of the JOB KIND, of the REFRESH LANE, of
+// the custody FAILURE MODE, and of the HANDOFF KIND respectively, never of an
+// individual job, channel, turn, or run — precisely so that repeats of the same
 // thing land in the same group.
 //
 // What was missing is the judgment: a lane failing once is noise, and a lane
@@ -42,6 +44,9 @@ const COUNTED_FAILURE_CODES: readonly HealthEventCode[] = [
   'background_work_job_failed',
   'memory_refresh_failed',
   'custody_snapshot_write_failed',
+  // psfn-framework-zu8d2: grouped by a digest of the handoff KIND, so a settle
+  // path that keeps diverging on replay becomes one episode.
+  'terminal_handoff_replay_diverged',
 ];
 
 interface FailureGroup {

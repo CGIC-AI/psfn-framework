@@ -281,6 +281,99 @@ The MCP child and the external world remain outside Companion Core. Only the
 three allowlisted results cross the Hub adapter, and only a completed companion
 reply is published back through `say`.
 
+## Companion-initiated movement, perception and body verbs (S13 MOVE)
+
+The companion moves its own body. Nothing on this path needs a Hub device
+assertion, fleet auth, or SSO: the gateway reaches the Hub's private control
+port with the Hub control key, and that key is the whole credential.
+
+**One map, one vocabulary.** The Eidoverse world is a plane of the same place
+map the companion already uses for physical devices and virtual rooms. A
+`places.json` entry gains an additive `eidoverse` binding:
+
+```json
+{
+  "placeId": "eidoverse:commons:plaza",
+  "siteId": "eidoverse",
+  "displayName": "Commons Plaza",
+  "kind": "physical",
+  "eidoverse": { "world": "commons", "region": "plaza", "position": { "x": 8, "z": -2 } }
+}
+```
+
+`world` is the door's world name, `region` the label the Hub place map knows,
+`position` where to stand. A place carrying the binding is somewhere the body
+can go, even when its `kind` is `physical` (a world-avatar satellite must bind
+to a physical place); a physical place without the binding is still refused as
+emanation-only. The `world` tool then works unchanged:
+
+| Call | What happens |
+|---|---|
+| `move { placeId }` on a bound place | travel when the binding's world differs from the body's current world, then walk to `position` (or the region); the local situated overlay and shared presence are written only after the world accepted, so a refusal never leaves the situated view claiming a place the body is not in |
+| `move { participant: "visitor" }` | walk to that participant's current position, stopping about 1.5 m short; ids are the ones shown before in-world messages, a leading `@` is fine |
+| `move { position: { x, z } }` | walk to a ground-plane point in the current world |
+| `perceive { placeId }` on a bound place | the door's `look` lifted into numbers: your own `(x, z)` and facing, everyone present with id, `(x, z)`, distance, bearing and what they are doing, the placed things, and the lines said since you last looked; honest `present: false` when the body is in another world |
+| `list` | shows the `eidoverse` binding and marks bound places `movable` |
+| `act { verb, arguments }` | body verbs `face` (target or x,z), `stop`, `emote` (wave, cheer, dance, point, salute, clap, talk, flail), `posture` (sit, sitchair, lie, stand), `whisper` (to, text; private, unlogged); creation verbs `spawn` (query or lib, x, z, yaw, id), `remove` (id), `set_avatar` (avatar) |
+
+Tier gating is the existing per-action capability gate: `perceive`, `list`,
+`move` and the body verbs of `act` ride `world.read` (apprentice and up); the
+creation verbs of `act` ride `world.control` (autonomous). No requester-trust
+or provenance gate applies to movement: the in-world visitor is the requester
+and self-directed turns may move on their own initiative.
+
+**Honest results.** A move answers whether the world accepted it and, for a
+walk, `arrived` with the final coordinates, `already_there`, `walking` (the
+bounded wait ran out; the outcome arrives as an `eidoverse.body` note on a
+later turn), `interrupted` or `failed`. The Hub logs one info line per
+completed walk: `Eidoverse body walk_to arrived at (x, z) in world "commons"`.
+The door itself never logs positions.
+
+**Transport.** Gateway methods `world.avatar_perceive`, `world.avatar_move`
+and `world.avatar_act`
+([`src/boundary/gateway/methods/world.ts`](../src/boundary/gateway/methods/world.ts))
+call `POST /internal/v1/world/{perceive,move,act}` on the Hub control server
+([`control-server.ts`](../apps/satellite-hub/src/ts/hub/home-assistant/control-server.ts))
+through the shared transport
+([`satellite-hub-transport.ts`](../src/boundary/gateway/methods/satellite-hub-transport.ts)).
+The gateway needs `SATELLITE_HUB_CONTROL_BASE_URL` and
+`SATELLITE_HUB_CONTROL_TOKEN`; Home Assistant need not be enabled. The Hub
+needs `HUB_CONTROL_BIND_HOST`, `HUB_CONTROL_PORT` and `HUB_CONTROL_TOKEN`,
+which no longer require `HOME_ASSISTANT_ENABLED=true` or a device registry.
+The world routes accept the control token only; an enrolled device credential
+is refused there, because the device-driven `world.body` / `world.travel`
+commands on the satellite socket are a different power and stay device-gated.
+
+**The standing note.** Every in-world turn carries an
+`eidoverse.affordances` context note (after the twelve-line look budget, so it
+is never the note that is dropped) telling the model it has a body here, that
+in-world messages are prefixed by the speaker's id, which verbs this Hub
+actually wires, and to use them on its own initiative. The region the body
+last walked to is remembered, so a later region-less wake keeps the walked-to
+place instead of snapping back to the world default.
+
+**Who is talking.** The world classifies speakers: the door tags every line an
+agent wrote `chat:from-agent`, and an untagged chat line came from a human.
+The Hub forwards that per turn as `X-PSFN-Satellite-Speaker-ID`, `-Name` and
+`-Kind` (`human` | `ai`). The gateway gives the speaker its own contact identity
+(`<endpoint default authorId>:<speaker id>`, withholding the endpoint's
+canonical-contact hint) and, for an `ai` speaker, sets the same
+`authorIsMachineIntelligence` routing marker Discord bots carry, so the contact
+is auto-tagged machine intelligence and the ordinary companion fatigue budget
+counts the turn — two companions in one world fatigue out exactly as fleet
+peers do, with no new budget. Perception marks each participant `human` or
+`ai` with `kindSource: world`; anyone the world has not classified is assumed
+`ai` (operator rule), and the standing note says so and tells the model not to
+keep an AI conversation going on its own.
+
+**Mentions.** The door tags `chat:mention` from the participant id. The Hub
+additionally treats plain `chat:ambient` chat that names the companion's
+configured display name — case-insensitively, `@` optional, punctuation
+tolerated — as addressed, never for the Hub's own echoed lines or for
+world-authored events. Each wake logs one info line naming the message id,
+author, the world's human/ai kind, the wake kind and why (`tag:...` or
+`name-match`) with a bounded text prefix.
+
 ## Deferred Phase 2 resident work
 
 The external protocol describes MCPL feature families for world channels,

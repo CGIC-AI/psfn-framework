@@ -6,11 +6,31 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createHubDeviceAssertionIssuer } from '../../apps/satellite-hub/src/ts/hub/device-assertion.js';
 import { parseSatelliteRegistryConfig } from '../../src/channels/backplane/satellite-registry.js';
+import {
+  extractHubDeviceAssertionBlock,
+  parseHubDeviceAssertionVerifierConfig,
+} from '../../src/boundary/fleet-auth/hub-device-assertion-config.js';
+import type {
+  HubDeviceAssertionVerifierConfig,
+  HubDeviceAssertionVerifierKey,
+} from '../../src/boundary/fleet-auth/hub-device-assertion.js';
 import { isRecord } from '../../src/shared/utils/types.js';
 import { validateFleetAuthConfig } from '../../src/system/config/fleet-auth-config.js';
 
+// Mint a Hub device assertion from an operator-held Ed25519 private key.
+//
+// The verifier ring comes from whichever authority the deployment uses
+// (psfn-framework-n66dn.2): fleet-auth.json (`fleetAuthPath`), a standalone
+// verifier file (`hubDeviceAssertionsPath`, the same block shape), or the
+// `hubDeviceAssertions` block inside satellites.json itself. Fleet auth is
+// never required. The signing key is matched to the ring by public key, so a
+// rotation can carry several active/retiring keys and the operator picks the
+// one they hold (psfn-framework-wlls6); `kid` pins the choice when the same
+// key appears under several ids.
+
 const INPUT_KEYS = new Set([
   'fleetAuthPath',
+  'hubDeviceAssertionsPath',
   'satelliteRegistryPath',
   'privateKeyPath',
   'ttlSeconds',
@@ -20,10 +40,14 @@ const INPUT_KEYS = new Set([
   'sessionId',
   'issuedAtSeconds',
   'jti',
+  'kid',
 ]);
 
 export interface HubDeviceAssertionIssueInput {
-  fleetAuthPath: string;
+  /** fleet-auth.json carrying the ring. Optional: the ring may live elsewhere. */
+  fleetAuthPath?: string;
+  /** Standalone verifier file (bare block, `{ hubDeviceAssertions }`, or a satellites.json document). */
+  hubDeviceAssertionsPath?: string;
   satelliteRegistryPath: string;
   privateKeyPath: string;
   ttlSeconds: number;
@@ -33,6 +57,68 @@ export interface HubDeviceAssertionIssueInput {
   sessionId: string;
   issuedAtSeconds?: number;
   jti?: string;
+  /** Pin the verifier key id when the held key appears under several ids. */
+  kid?: string;
+}
+
+export type HubDeviceAssertionRingSource = 'fleet-auth.json' | 'hubDeviceAssertionsPath' | 'satellites.json';
+
+export function resolveHubDeviceAssertionRing(parsed: Pick<
+  HubDeviceAssertionIssueInput,
+  'fleetAuthPath' | 'hubDeviceAssertionsPath' | 'satelliteRegistryPath'
+>): { source: HubDeviceAssertionRingSource; ring: HubDeviceAssertionVerifierConfig } {
+  if (parsed.fleetAuthPath !== undefined) {
+    const fleetAuthPath = resolve(parsed.fleetAuthPath);
+    const fleetAuth = validateFleetAuthConfig(
+      JSON.parse(readFileSync(fleetAuthPath, 'utf8')) as unknown,
+      fleetAuthPath,
+    );
+    return { source: 'fleet-auth.json', ring: fleetAuth.hubDeviceAssertions };
+  }
+  if (parsed.hubDeviceAssertionsPath !== undefined) {
+    const path = resolve(parsed.hubDeviceAssertionsPath);
+    const block = extractHubDeviceAssertionBlock(JSON.parse(readFileSync(path, 'utf8')) as unknown);
+    if (block === undefined) {
+      throw new Error('hubDeviceAssertionsPath file must contain a hubDeviceAssertions verifier block');
+    }
+    return {
+      source: 'hubDeviceAssertionsPath',
+      ring: parseHubDeviceAssertionVerifierConfig(block, { field: 'hubDeviceAssertions' }),
+    };
+  }
+  const registryPath = resolve(parsed.satelliteRegistryPath);
+  const registry = parseSatelliteRegistryConfig(
+    JSON.parse(readFileSync(registryPath, 'utf8')) as unknown,
+    registryPath,
+  );
+  if (!registry.hubDeviceAssertions) {
+    throw new Error(
+      'Hub device assertion issuance needs a verifier ring: pass fleetAuthPath or '
+      + 'hubDeviceAssertionsPath, or add a hubDeviceAssertions block to satellites.json',
+    );
+  }
+  return { source: 'satellites.json', ring: registry.hubDeviceAssertions };
+}
+
+export function selectHubDeviceSigningKey(
+  ring: HubDeviceAssertionVerifierConfig,
+  privateKeyPem: string,
+  pinnedKid?: string,
+): HubDeviceAssertionVerifierKey {
+  const candidates = ring.keys.filter(key => (
+    key.status !== 'revoked'
+    && (pinnedKid === undefined || key.kid === pinnedKid)
+    && privateKeyMatchesPublicKey(privateKeyPem, key.publicKeyPem)
+  ));
+  if (candidates.length === 0) {
+    throw new Error(
+      pinnedKid === undefined
+        ? 'Hub device assertion private key does not match any active or retiring verifier key'
+        : `Hub device assertion private key does not match verifier key ${pinnedKid}`,
+    );
+  }
+  const active = candidates.find(key => key.status === 'active');
+  return active ?? candidates[0]!;
 }
 
 export function issueHubDeviceAssertionFromInput(input: unknown): string {
@@ -42,16 +128,9 @@ export function issueHubDeviceAssertionFromInput(input: unknown): string {
     throw new Error('Hub device assertion private key must not be group/world accessible');
   }
   const privateKeyPem = readFileSync(privateKeyPath, 'utf8');
-  const fleetAuthPath = resolve(parsed.fleetAuthPath);
-  const fleetAuth = validateFleetAuthConfig(
-    JSON.parse(readFileSync(fleetAuthPath, 'utf8')) as unknown,
-    fleetAuthPath,
-  );
-  const activeKey = fleetAuth.hubDeviceAssertions.keys.find(key => key.status === 'active');
-  if (!activeKey || !privateKeyMatchesPublicKey(privateKeyPem, activeKey.publicKeyPem)) {
-    throw new Error('Hub device assertion private key does not match the active verifier');
-  }
-  if (parsed.ttlSeconds > fleetAuth.hubDeviceAssertions.maxTtlSeconds) {
+  const { ring } = resolveHubDeviceAssertionRing(parsed);
+  const signingKey = selectHubDeviceSigningKey(ring, privateKeyPem, parsed.kid);
+  if (parsed.ttlSeconds > ring.maxTtlSeconds) {
     throw new Error('Hub device assertion TTL exceeds the active verifier maximum');
   }
 
@@ -68,9 +147,9 @@ export function issueHubDeviceAssertionFromInput(input: unknown): string {
   }
 
   return createHubDeviceAssertionIssuer({
-    issuer: fleetAuth.hubDeviceAssertions.issuer,
-    kid: activeKey.kid,
-    audience: fleetAuth.hubDeviceAssertions.audience,
+    issuer: ring.issuer,
+    kid: signingKey.kid,
+    audience: ring.audience,
     privateKeyPem,
     ttlSeconds: parsed.ttlSeconds,
   }).issue({
@@ -94,7 +173,12 @@ function parseInput(input: unknown): HubDeviceAssertionIssueInput {
   }
   assertNoUnknownKeys(input, INPUT_KEYS, 'Hub device assertion issue input');
   return {
-    fleetAuthPath: requireString(input.fleetAuthPath, 'fleetAuthPath'),
+    ...(input.fleetAuthPath === undefined
+      ? {}
+      : { fleetAuthPath: requireString(input.fleetAuthPath, 'fleetAuthPath') }),
+    ...(input.hubDeviceAssertionsPath === undefined
+      ? {}
+      : { hubDeviceAssertionsPath: requireString(input.hubDeviceAssertionsPath, 'hubDeviceAssertionsPath') }),
     satelliteRegistryPath: requireString(input.satelliteRegistryPath, 'satelliteRegistryPath'),
     privateKeyPath: requireString(input.privateKeyPath, 'privateKeyPath'),
     ttlSeconds: requirePositiveInteger(input.ttlSeconds, 'ttlSeconds'),
@@ -106,6 +190,7 @@ function parseInput(input: unknown): HubDeviceAssertionIssueInput {
       ? {}
       : { issuedAtSeconds: requirePositiveInteger(input.issuedAtSeconds, 'issuedAtSeconds') }),
     ...(input.jti === undefined ? {} : { jti: requireString(input.jti, 'jti') }),
+    ...(input.kid === undefined ? {} : { kid: requireString(input.kid, 'kid') }),
   };
 }
 

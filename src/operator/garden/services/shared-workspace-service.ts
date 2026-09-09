@@ -5,7 +5,10 @@ import {
   type SharedWorkspaceProposalInput,
   type SharedWorkspaceReviewInput,
 } from '../../../persistence/workspaces/shared-workspace-store.js';
-import type { SharedWorkspaceListBounds } from '../../../persistence/workspaces/shared-workspace-bounds.js';
+import {
+  assertSharedWorkspaceListingCursor,
+  type SharedWorkspaceListBounds,
+} from '../../../persistence/workspaces/shared-workspace-bounds.js';
 import type { GardenRequestContext } from '../garden-request-context.js';
 
 type SharedWorkspacePrincipalRole = SharedWorkspaceActor['role'];
@@ -64,19 +67,33 @@ export class AdminSharedWorkspaceService {
    * at a time and carry `nextArtifactCursor` when more remain, so a large
    * reviewed corpus can no longer hold the Garden request loop while every
    * artifact is re-hashed (psfn-framework-9jld5).
+   *
+   * The REVIEW list rides the first page only (psfn-framework-2xt9c). It is a
+   * full read of every review record, and repeating it on every artifact page
+   * meant paging multiplied the one unbounded cost in this response instead of
+   * dividing it: an operator walking ten pages paid for the whole review corpus
+   * ten times over for a list that had not changed. `reviews` is therefore
+   * present exactly when the caller is starting the listing, and a resumed page
+   * says so rather than serving a silently empty list.
    */
   getSnapshot(request: { artifactCursor?: string } = {}) {
+    // Shape-checked before it reaches the corpus, so a cursor nobody could have
+    // been handed is refused as malformed rather than resolved and reported as
+    // stale — the two answers mean different things to a caller.
+    const cursor = request.artifactCursor === undefined
+      ? undefined
+      : assertSharedWorkspaceListingCursor(request.artifactCursor);
     const artifacts = this.store.listArtifacts({
       bounds: this.listBounds,
-      ...(request.artifactCursor !== undefined
-        ? { cursor: request.artifactCursor }
-        : {}),
+      ...(cursor !== undefined ? { cursor } : {}),
     });
     return {
       policy: this.store.getPolicy(),
       artifacts: artifacts.artifacts,
       nextArtifactCursor: artifacts.nextCursor,
-      reviews: this.store.listReviews(),
+      ...(cursor === undefined
+        ? { reviews: this.store.listReviews(), reviewsIncluded: true as const }
+        : { reviewsIncluded: false as const }),
     };
   }
 

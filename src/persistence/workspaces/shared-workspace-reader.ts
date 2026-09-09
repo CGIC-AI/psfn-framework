@@ -4,6 +4,7 @@ import { basename, extname, join, normalize, resolve } from 'node:path';
 import { isRecord } from '../../shared/utils/types.js';
 import { isStrictSubpath } from '../layout.js';
 import {
+  compareSharedWorkspaceArtifactPaths,
   resumeSharedWorkspaceListing,
   selectSharedWorkspacePage,
   type SharedWorkspaceArtifactPage,
@@ -155,8 +156,11 @@ export class SharedCompanionWorkspaceReader {
     bounds: SharedWorkspaceListBounds;
     cursor?: string;
   }): SharedWorkspaceArtifactPage {
+    // The one declared listing order, shared with the Garden store: both
+    // surfaces mint cursors into the same namespace, so they cannot be allowed
+    // to disagree about what comes after one (psfn-framework-2xt9c).
     const ordered = [...loadLatestApprovedProofs(this.root).values()]
-      .sort((a, b) => a.artifactPath.localeCompare(b.artifactPath));
+      .sort((a, b) => compareSharedWorkspaceArtifactPaths(a.artifactPath, b.artifactPath));
     const remaining = resumeSharedWorkspaceListing(
       ordered,
       request.cursor,

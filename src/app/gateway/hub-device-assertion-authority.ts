@@ -48,7 +48,7 @@ export const HUB_DEVICE_ASSERTION_AUDIT_PEPPER_ENV = 'HUB_DEVICE_ASSERTION_AUDIT
 const AUDIT_PEPPER_DERIVATION_DOMAIN = 'psfn:hub-device-assertion-audit-pepper:v1';
 const MIN_PEPPER_LENGTH = 32;
 
-export type HubDeviceAssertionAuthoritySource =
+type HubDeviceAssertionAuthoritySource =
   | 'fleet-auth.json'
   | 'env-file'
   | 'satellites.json';

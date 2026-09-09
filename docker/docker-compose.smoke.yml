@@ -92,7 +92,7 @@ x-runtime-env: &runtime-env
 # POSTGRES_DATABASE_URL (runtime credential custody requires a file or fd), so
 # the seed writes it to the agent-auth volume and the agent reads it via
 # POSTGRES_DATABASE_URL_FILE — the same file-delivery shape k8s uses.
-x-postgres-admin-url: &postgres-admin-url postgresql://psfn:psfn@postgres:5432/psfn
+x-postgres-admin-url: &postgres-admin-url postgresql://psfn:psfn@postgres:5432/psfn_smoke
 
 # Tenancy-role credentials (psfn-framework-e5aoa). The gateway's multi-companion
 # topology check requires the shared migration authority and this companion's
@@ -100,8 +100,16 @@ x-postgres-admin-url: &postgres-admin-url postgresql://psfn:psfn@postgres:5432/p
 # provisions both against the superuser credential above before the gateway
 # starts. The companion role's credential IS the gateway's POSTGRES_DATABASE_URL,
 # because the topology check requires them to match exactly.
-x-shared-migration-url: &shared-migration-url postgresql://shared_schema_migration:${PSFN_SMOKE_SHARED_MIGRATION_PASSWORD:-psfn-smoke-shared-migration}@postgres:5432/psfn
-x-companion-url: &companion-url postgresql://companion_smoke_runtime:${PSFN_SMOKE_COMPANION_DB_PASSWORD:-psfn-smoke-companion-runtime}@postgres:5432/psfn
+#
+# Both roles and the database are SMOKE-ONLY names (psfn-framework-2xt9c). They
+# used to be `shared_schema_migration` on a database called `psfn` — the exact
+# names a supported deployment provisions, with a default password checked into
+# this file — so the seed's role provisioning was one wrong DATABASE_URL away
+# from rewriting a real deployment's migration authority. The names now differ,
+# and the seed refuses any target that is not a smoke database, so a
+# misdirected run fails instead of succeeding against production.
+x-shared-migration-url: &shared-migration-url postgresql://shared_schema_migration_smoke:${PSFN_SMOKE_SHARED_MIGRATION_PASSWORD:-psfn-smoke-shared-migration}@postgres:5432/psfn_smoke
+x-companion-url: &companion-url postgresql://companion_smoke_runtime:${PSFN_SMOKE_COMPANION_DB_PASSWORD:-psfn-smoke-companion-runtime}@postgres:5432/psfn_smoke
 
 # Dedicated satellite-scoped bearer for the Satellite Hub. It is DISTINCT from
 # API_KEY/ADMIN_TOKEN by contract (the gateway refuses a satellite key that
@@ -128,7 +136,7 @@ services:
     image: ${PSFN_SMOKE_POSTGRES_IMAGE:-pgvector/pgvector:pg17}
     container_name: psfn-smoke-postgres
     environment:
-      POSTGRES_DB: psfn
+      POSTGRES_DB: psfn_smoke
       POSTGRES_USER: psfn
       POSTGRES_PASSWORD: psfn
       PGDATA: /var/lib/postgresql/data/pgdata
@@ -137,7 +145,7 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U psfn -d psfn"]
+      test: ["CMD-SHELL", "pg_isready -U psfn -d psfn_smoke"]
       interval: 5s
       timeout: 5s
       retries: 20

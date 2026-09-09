@@ -2,6 +2,7 @@ import type { CoreSubstrateConfig } from '../../system/config/runtime-config-con
 import type { PlacesRegistryConfig } from '../../shared/contracts/places-registry.js';
 import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
 import type { EventBus } from '../../shared/event-bus.js';
+import { resolveHealthEventOwner } from '../../shared/contracts/health-event.js';
 import type { EpisodicStorePort } from '../../faculties/memory/episodic/index.js';
 import {
   createMemoryStorePort,
@@ -500,6 +501,17 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
             registry: options.automataRuntime.registry,
             store: options.automataRuntime.store,
             writer,
+            // psfn-framework-zu8d2: a settle path that recomputes a terminal
+            // disagreeing with the durable Bus finding is a real condition, not
+            // just a log line. It enters the health plane owned by the
+            // companion this agent serves.
+            health: {
+              publisher: eventBus,
+              source: {
+                owner: resolveHealthEventOwner(companionId),
+                process: 'agent',
+              },
+            },
           }),
         };
       })()

@@ -160,6 +160,16 @@ const HEALTH_EVENT_CODES = [
    * status; the provider's message never leaves the gateway log.
    */
   'intake_screener_provider_rejected_request', // psfn-framework-mlhn3
+  /**
+   * A replaying automata terminal handoff recomputed a terminal that disagrees
+   * with the durable Bus finding (psfn-framework-8n40k's convergence path). The
+   * durable finding still wins, so nothing is lost — but a run whose re-run
+   * reaches a DIFFERENT conclusion is a settle-determinism fault, and until now
+   * it was visible only as a WARN log line. Grouped by a digest of the HANDOFF
+   * KIND, never of the run or class, so repeated divergences accumulate into one
+   * episode rather than one incident per crashed run.
+   */
+  'terminal_handoff_replay_diverged', // psfn-framework-zu8d2
 ] as const;
 
 export type HealthEventCode = typeof HEALTH_EVENT_CODES[number];

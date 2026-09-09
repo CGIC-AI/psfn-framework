@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import {
+  hashHealthEventSubject,
+  type HealthEvent,
+} from '../../../shared/contracts/health-event.js';
+
 import { loadAutomataPolicySeedDefaults } from '../../../system/config/automata-policy-config.js';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import { AutomataRunRegistry, InMemoryAutomataRunStore } from '../run-registry.js';
@@ -336,6 +341,114 @@ describe('production Automata Bus lifecycle composition', () => {
     });
     expect(diverged.occurredAtMs).toBe(1_700_000_000_100);
     expect(harness.events.size).toBe(1);
+  });
+});
+
+// psfn-framework-zu8d2 — a replay whose recomputed terminal disagrees with the
+// durable Bus finding was previously visible only as a WARN line. It is now an
+// alertable, content-free health condition grouped by the handoff KIND.
+describe('terminal-handoff replay divergence health condition (zu8d2)', () => {
+  const baseInput = {
+    idempotencyKey: 'terminal-key',
+    lineage: {
+      automatonClass: 'subagent.bounded' as const,
+      runId: 'subagent-1',
+      taskId: 'task-1',
+      workerId: 'subagent-1',
+      sessionIds: ['subagent:subagent-1'],
+    },
+    lifecycleState: 'completed' as const,
+    outcome: 'completed' as const,
+    stateReason: 'completed',
+    resultKind: 'final' as const,
+    handoffKind: 'useful' as const,
+    usage: {
+      model: 'test-model',
+      inputTokens: 10,
+      outputTokens: 5,
+      durationMs: 100,
+      turns: 1,
+    },
+    outputRefs: [{ kind: 'session_output' as const, ref: 'session:output:1', custody: 'pending' as const }],
+    occurredAtMs: 1_700_000_000_100,
+  };
+
+  async function lifecycleWithHealth() {
+    const harness = createHarness();
+    const emitted: HealthEvent[] = [];
+    const lifecycle = createAutomataTerminalLifecycleAdapter({
+      companionId: 'companion-a',
+      registry: await createRegistry(),
+      store: harness.store,
+      writer: harness.writer,
+      health: {
+        publisher: {
+          emit: async (_event, data) => {
+            emitted.push(data.event);
+          },
+        },
+        source: { owner: { kind: 'system' }, process: 'agent' },
+      },
+    });
+    return { lifecycle, emitted };
+  }
+
+  it('emits nothing when the replay agrees with the durable finding', async () => {
+    const { lifecycle, emitted } = await lifecycleWithHealth();
+
+    await lifecycle.recordTerminalHandoff(baseInput);
+    const replay = await lifecycle.recordTerminalHandoff(baseInput);
+
+    expect(replay.inserted).toBe(false);
+    expect(emitted).toEqual([]);
+  });
+
+  it('emits one content-free event per divergence, grouped by the handoff kind', async () => {
+    const { lifecycle, emitted } = await lifecycleWithHealth();
+
+    await lifecycle.recordTerminalHandoff(baseInput);
+    const diverged = await lifecycle.recordTerminalHandoff({
+      ...baseInput,
+      lifecycleState: 'failed' as const,
+      outcome: 'blocked' as const,
+      stateReason: 'changed-under-replay',
+      failureReason: 'the re-run failed',
+      occurredAtMs: 1_700_000_999_999,
+    });
+    // The durable finding still wins: the condition reports a disagreement, it
+    // does not change the convergence contract.
+    expect(diverged.persistedOutcome).toEqual({
+      lifecycleState: 'completed',
+      outcome: 'completed',
+      stateReason: 'completed',
+    });
+    await vi.waitFor(() => {
+      expect(emitted).toHaveLength(1);
+    });
+    expect(emitted[0]).toMatchObject({
+      code: 'terminal_handoff_replay_diverged',
+      severity: 'warning',
+      owner: { kind: 'system' },
+      provenance: { process: 'agent', component: 'automata' },
+    });
+    // Content-free: the run id, class and reason text never leave the emitter.
+    expect(emitted[0]!.provenance.subjectHash)
+      .toBe(hashHealthEventSubject('terminal_handoff_replay:useful'));
+    expect(emitted[0]!.evidence).toEqual({});
+    expect(JSON.stringify(emitted[0])).not.toContain('subagent-1');
+    expect(JSON.stringify(emitted[0])).not.toContain('changed-under-replay');
+
+    // A second divergence of the same handoff kind lands in the same group, so
+    // the repeated-failure detector opens one episode rather than two.
+    await lifecycle.recordTerminalHandoff({
+      ...baseInput,
+      stateReason: 'changed-again',
+      occurredAtMs: 1_700_001_999_999,
+    });
+    await vi.waitFor(() => {
+      expect(emitted).toHaveLength(2);
+    });
+    expect(emitted[1]!.provenance.subjectHash).toBe(emitted[0]!.provenance.subjectHash);
   });
 });
 

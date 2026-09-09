@@ -1,6 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto';
 
 import { createComponentLogger } from '../../../shared/logger.js';
+import {
+  emitHealthEvent,
+  hashHealthEventSubject,
+  processObserverId,
+  type HealthEventPublisher,
+  type HealthEventSource,
+} from '../../../shared/contracts/health-event.js';
+import { toErrorMessage } from '../../../shared/utils/errors.js';
 
 import {
   SENSITIVITY_LEVELS,
@@ -10,6 +18,7 @@ import {
   AUTOMATA_TERMINAL_HANDOFF_SOURCE,
   AUTOMATA_TERMINAL_HANDOFF_SOURCES,
   AUTOMATA_TERMINAL_NO_FINDING_SOURCE,
+  type AutomataTerminalHandoffKind,
   type AutomataTerminalHandoffReceipt,
   type AutomataTerminalLifecyclePort,
   type AutomataWorkerLineage,
@@ -528,11 +537,69 @@ async function readCommittedTerminalHandoff(input: {
   };
 }
 
+/**
+ * The health plane's identity for one terminal-handoff replay divergence
+ * (psfn-framework-zu8d2).
+ *
+ * The subject is the HANDOFF KIND and nothing else. A run id would make every
+ * crashed run its own group and defeat repeat detection; a class name is an
+ * unbounded label the content-free envelope refuses to carry. Grouping on the
+ * kind is what turns "this settle path keeps diverging" into one episode the
+ * repeated-failure detector can open.
+ */
+function terminalReplayDivergenceSubject(handoffKind: AutomataTerminalHandoffKind): string {
+  return `terminal_handoff_replay:${handoffKind}`;
+}
+
+/**
+ * Project one replay divergence into the health plane.
+ *
+ * A WARN line is not an alertable condition: the durable finding wins and the
+ * process carries on, so without this a settle path that keeps reaching a
+ * different conclusion after every crash is visible only to whoever reads logs.
+ * Severity is `warning` rather than `degraded` — nothing was lost, the two
+ * views of one run simply disagreed — and the emit is fire-and-forget with a
+ * logged catch, exactly like every other health emitter in an error path: a
+ * telemetry fault must never mask the fault being reported.
+ */
+function emitTerminalReplayDivergenceHealthEvent(
+  health: AutomataTerminalLifecycleHealthOptions | undefined,
+  handoffKind: AutomataTerminalHandoffKind,
+): void {
+  if (!health) return;
+  void emitHealthEvent(health.publisher, {
+    owner: health.source.owner,
+    severity: 'warning',
+    code: 'terminal_handoff_replay_diverged',
+    provenance: {
+      process: health.source.process,
+      component: 'automata',
+      observerId: processObserverId(),
+      subjectHash: hashHealthEventSubject(terminalReplayDivergenceSubject(handoffKind)),
+    },
+    observedAtMs: Date.now(),
+  }).catch((error: unknown) => {
+    lifecycleLog.error('Automata terminal replay divergence health event emission failed', {
+      error: toErrorMessage(error),
+    });
+  });
+}
+
+/**
+ * Where this adapter's health observations go. Optional: a deployment without a
+ * health plane keeps the WARN line and nothing else, exactly as before.
+ */
+export interface AutomataTerminalLifecycleHealthOptions {
+  publisher: HealthEventPublisher;
+  source: HealthEventSource;
+}
+
 export function createAutomataTerminalLifecycleAdapter(options: {
   companionId: string;
   registry: AutomataRunRegistry;
   store: PostgresAutomataBusRuntimeStore;
   writer: CanonicalAutomataBusWriter;
+  health?: AutomataTerminalLifecycleHealthOptions;
 }): AutomataTerminalLifecyclePort {
   const companionId = requiredText(options.companionId, 'lifecycle companionId');
   return {
@@ -574,6 +641,9 @@ export function createAutomataTerminalLifecycleAdapter(options: {
               replayOutcome: input.outcome,
             },
           );
+          // psfn-framework-zu8d2: the log line stays for the operator; this is
+          // the alertable condition the detector can actually count.
+          emitTerminalReplayDivergenceHealthEvent(options.health, input.handoffKind);
         }
         return {
           handoffRef: committed.handoff.handoffRef,

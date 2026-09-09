@@ -20,6 +20,7 @@ tests=(
   "production-capability-probe.test.mjs" # 65rk.6: production gate and shard boundary
   "host-cleanup.test.mjs" # 65rk.6: host cleanup continues and reports failures
   "probe-provenance.test.mjs" # chat cases auto-attach testing-harness provenance headers
+  "case-chat-provenance.test.mjs" # every case-module chat dispatch carries run provenance
   "target-contract.test.mjs"   # A: tier flip uses the canonical capabilities editor
   "flip-abort.test.mjs"        # C: an unconfirmed forward flip aborts the phase
   "coverage-hole-continuation.test.mjs" # case-local config holes do not abort later tiers

@@ -353,6 +353,95 @@ export function buildChatHeaders({ apiKey, sessionId, privacy = 'private', ident
   return { ...headers, ...extra };
 }
 
+/**
+ * Bind a provenance-bearing chat-header builder for one harness run.
+ *
+ * Case modules must never reach for buildChatHeaders directly: the gateway
+ * rejects a testing-harness bearer whose request omits the run/manifest
+ * provenance (HTTP 400 testing_harness_provenance_required), and a case that
+ * assembled its own headers had no way to attach it. The entrypoint creates one
+ * of these and hands it to every case module on `services.chatHeaders`, so
+ * provenance rides on every dispatch by construction rather than by discipline.
+ *
+ * Fails closed at creation: an empty run or manifest id is a configuration
+ * error, never a silently unprovenanced run.
+ */
+export function createChatHeaderBuilder({ apiKey, runId, manifestId }) {
+  const provenance = testingHarnessProvenanceHeaders({ runId, manifestId });
+  if (
+    typeof provenance[TESTING_HARNESS_RUN_ID_HEADER] !== 'string'
+    || typeof provenance[TESTING_HARNESS_MANIFEST_ID_HEADER] !== 'string'
+  ) {
+    throw new Error(
+      'createChatHeaderBuilder requires a non-empty testing-harness runId and manifestId',
+    );
+  }
+  const boundApiKey = apiKey;
+  return function chatHeaders({
+    apiKey: dispatchApiKey,
+    sessionId,
+    privacy = 'private',
+    identityClaim = {},
+    extra = {},
+  } = {}) {
+    return withTestingHarnessProvenance(
+      buildChatHeaders({
+        apiKey: dispatchApiKey ?? boundApiKey,
+        sessionId,
+        privacy,
+        identityClaim,
+        extra,
+      }),
+      { runId, manifestId },
+    );
+  };
+}
+
+/**
+ * Fail-closed accessor for a case catalog's chat-header builder. Case builders
+ * call this at catalog-build time so a services object missing the provenance
+ * builder is a loud configuration error long before a turn is dispatched.
+ */
+export function requireCaseChatHeaders(services, label) {
+  if (typeof services?.chatHeaders !== 'function') {
+    throw new Error(
+      `${label} requires services.chatHeaders (createChatHeaderBuilder) so every chat `
+      + 'dispatch carries testing-harness run and manifest provenance',
+    );
+  }
+  return services.chatHeaders;
+}
+
+const CHAT_DISPATCH_FAILURE_BODY_LIMIT = 2000;
+
+/**
+ * One-line description of a failed chat dispatch: HTTP status (or the transport
+ * error), the response content type, and a bounded prefix of the response body.
+ *
+ * Only ever called for a non-2xx or transport-failed dispatch, where the body is
+ * a gateway error envelope rather than model output, so it stays content-free
+ * with respect to the companion's own words.
+ */
+export function describeChatDispatchFailure(
+  response,
+  { limit = CHAT_DISPATCH_FAILURE_BODY_LIMIT } = {},
+) {
+  if (!response || typeof response !== 'object') {
+    return 'no response envelope';
+  }
+  if (typeof response.status !== 'number') {
+    return `transport failure: ${response.fetchError ?? 'unknown error'}`;
+  }
+  const contentType = typeof response.contentType === 'string' && response.contentType.length > 0
+    ? ` (${response.contentType})`
+    : '';
+  const rawText = typeof response.rawText === 'string' ? response.rawText : '';
+  const body = rawText.length > limit
+    ? `${rawText.slice(0, limit)}…[truncated]`
+    : rawText;
+  return `HTTP ${response.status}${contentType} ${body.length > 0 ? body : '(empty body)'}`;
+}
+
 /** Collect identity-claim headers from the process env (PSFN_HEADER_* form). */
 export function identityClaimHeadersFromEnv(env = process.env) {
   const claim = {};
@@ -411,6 +500,7 @@ export async function postChatCompletion({
     return {
       status: response.status,
       ok: response.ok,
+      contentType: response.headers.get('content-type'),
       body: parsed,
       rawText,
       fetchError: null,

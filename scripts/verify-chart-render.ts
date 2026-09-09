@@ -12,6 +12,7 @@
 // Requires the `helm` binary. Run it with: npm run verify:chart-render
 
 import { spawnSync } from 'node:child_process';
+import { generateKeyPairSync } from 'node:crypto';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -186,10 +187,13 @@ function enabledValues(overrides: Record<string, unknown> = {}): Record<string, 
   };
 }
 
-// A well-formed Ed25519 SPKI public key (test fixture; carries no authority).
+// A throwaway Ed25519 public key generated per run: the render only needs a
+// well-formed SPKI PEM, and no committed key must ever name a live deployment.
 const VERIFIER_KEY = {
   kid: 'hub-device-verify',
-  publicKeyPem: '-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAJxXmIAElqUt+YdttBt+epGFUNCVrQ705YInsgxZ6FD4=\n-----END PUBLIC KEY-----\n',
+  publicKeyPem: generateKeyPairSync('ed25519').publicKey
+    .export({ type: 'spki', format: 'pem' })
+    .toString(),
   notBefore: '2026-01-01T00:00:00.000Z',
   notAfter: '2031-01-01T00:00:00.000Z',
   status: 'active',

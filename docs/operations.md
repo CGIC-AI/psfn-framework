@@ -210,10 +210,14 @@ multi-companion credential topology as the supported path: the shared
 schema-migration authority and the companion runtime each authenticate as their
 own PostgreSQL role. The `seed` service therefore waits for Postgres to become
 healthy and runs `scripts/ops/psfn-compose-smoke-provision-db.mjs`, which
-provisions `shared_schema_migration` and `companion_smoke_runtime` (schema
-`companion_smoke`) through the same `scripts/ops/lib/postgres-tenancy.mjs`
-module the production `scripts/ops/psfn-compose-bootstrap.mjs` uses, so the two
-topologies cannot drift. That database step runs after every owner-file,
+provisions `shared_schema_migration_smoke` and `companion_smoke_runtime` (schema
+`companion_smoke`, database `psfn_smoke`) through the same
+`scripts/ops/lib/postgres-tenancy.mjs` module the production
+`scripts/ops/psfn-compose-bootstrap.mjs` uses, so the two topologies cannot
+drift. The names are smoke-only on purpose: that provisioning step creates
+login roles and resets their passwords from a compose file that carries those
+passwords in plain text, so it refuses any target whose database, host, or role
+names are not the smoke stack's (psfn-framework-2xt9c). That database step runs after every owner-file,
 manifest, registry, and card write: the seed's file-laying phase depends on
 nothing external, so it is the seed's single external-state boundary. The superuser credential exists only inside the seed;
 the gateway authenticates as `companion_smoke_runtime` (its
@@ -222,7 +226,7 @@ and the agent receives that same credential as a 0600 file on the auth volume.
 Override the generated role passwords with `PSFN_SMOKE_SHARED_MIGRATION_PASSWORD`
 and `PSFN_SMOKE_COMPANION_DB_PASSWORD`. A gateway that exits with
 `Shared schema migration database credential must authenticate as configured
-topology role shared_schema_migration` means the seed's provisioning step did not
+topology role shared_schema_migration_smoke` means the seed's provisioning step did not
 run or did not reach Postgres.
 
 Three further fleet contracts the stack must satisfy, each of which previously

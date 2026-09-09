@@ -221,14 +221,16 @@ export function resolveConfiguredGatewayCompanion(
  * channels.json on top of that topology.
  */
 export function resolveGatewayMultiCompanionConfig(
-  config: Pick<SubstrateConfig, 'multiCompanion' | 'companionFleet' | 'fleetAuth'>,
+  config: Pick<SubstrateConfig, 'multiCompanion' | 'companionFleet'>,
   channelsConfig: RuntimeChannelsConfig,
   satelliteRegistryConfig: SatelliteRegistryConfig,
 ): GatewayMultiCompanionConfig {
   const fleetCompanionIds = config.companionFleet?.companions.map(entry => entry.companionId) ?? [];
+  // Fleet routing is a topology decision owned by companions.json (and the
+  // derived multiCompanion flag). Fleet auth (SSO) is an optional sign-in
+  // method and must never flip routing (psfn-framework-n66dn.2).
   const enabled = config.companionFleet !== undefined
-    || config.multiCompanion === true
-    || config.fleetAuth !== undefined;
+    || config.multiCompanion === true;
   if (enabled && fleetCompanionIds.length === 0) {
     throw new Error('Fleet gateway routing requires a non-empty resolved companions.json fleet');
   }
@@ -300,10 +302,15 @@ export function resolveGatewayMultiCompanionConfig(
   }
 
   if (enabled) {
+    // A one-companion fleet has nobody to arbitrate between: a satellite
+    // without sharedDevice routes to the sole companion (psfn-framework-bbprt).
+    // Fleets of two or more must declare the authority split on every satellite.
     const ungovernedSatelliteIds = satelliteRegistryConfig.satellites
       .filter(satellite => satellite.sharedDevice === undefined)
       .map(satellite => satellite.satelliteId);
-    if (satelliteRegistryConfig.enabled && ungovernedSatelliteIds.length > 0) {
+    if (satelliteRegistryConfig.enabled
+      && fleetCompanionIds.length > 1
+      && ungovernedSatelliteIds.length > 0) {
       throw new Error(
         `Multi-companion satellites.json requires sharedDevice authority for [${ungovernedSatelliteIds
           .join(', ')}]`,

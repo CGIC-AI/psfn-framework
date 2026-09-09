@@ -77,7 +77,12 @@ describe('gateway fleet authorization context wiring', () => {
     );
     expect(providerSecretEnv).toContain('- name: ADMIN_TOKEN');
     expect(providerSecretEnv).not.toContain('{{- if not .Values.fleetAuth.enabled }}');
-    expect(mainSource).toContain('hubDeviceAssertionVerifier: fleetAuthPersistence,');
+    // The Hub device verifier is wired independently of fleet auth: the fleet
+    // persistence verifier when present, else the standalone owner-file ring
+    // (psfn-framework-n66dn.2).
+    expect(mainSource).toContain('...(hubDeviceAssertionVerifier ? { hubDeviceAssertionVerifier } : {}),');
+    expect(mainSource).toContain('...(fleetAuthPersistence ? { fleetAuthVerifier: fleetAuthPersistence } : {}),');
+    expect(mainSource).toContain('...(standaloneHubDeviceAssertions ? { standalone: standaloneHubDeviceAssertions } : {}),');
     expect(mainSource).toContain('primaryEmbodiments: fleetAuthPersistence.primaryEmbodiments,');
     expect(mainSource).toContain(
       'fleetAuthEscalation: fleetAuthPersistence.escalation,',

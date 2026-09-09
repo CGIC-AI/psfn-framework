@@ -19,14 +19,14 @@ import type {
  * Error text keeps the `${field}...` addressing the fleet-auth loader always
  * used, prefixed with `errorPrefix` when the caller supplies one.
  */
-export const HUB_DEVICE_ASSERTION_BLOCK_KEYS = [
+const HUB_DEVICE_ASSERTION_BLOCK_KEYS = [
   'issuer',
   'audience',
   'maxTtlSeconds',
   'clockSkewSeconds',
   'keys',
 ] as const;
-export const HUB_DEVICE_ASSERTION_KEY_KEYS = [
+const HUB_DEVICE_ASSERTION_KEY_KEYS = [
   'kid',
   'publicKeyPem',
   'notBefore',

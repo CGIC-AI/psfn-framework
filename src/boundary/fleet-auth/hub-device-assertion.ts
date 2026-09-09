@@ -25,7 +25,6 @@ export type {
   HubDevicePrincipal,
 } from '../../shared/contracts/hub-device-ingress.js';
 export type {
-  HubDeviceAssertionKeyStatus,
   HubDeviceAssertionVerifierConfig,
   HubDeviceAssertionVerifierKey,
 } from '../../shared/contracts/hub-device-assertion-verifier.js';

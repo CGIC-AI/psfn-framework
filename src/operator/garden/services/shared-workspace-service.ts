@@ -72,9 +72,12 @@ export class AdminSharedWorkspaceService {
    * full read of every review record, and repeating it on every artifact page
    * meant paging multiplied the one unbounded cost in this response instead of
    * dividing it: an operator walking ten pages paid for the whole review corpus
-   * ten times over for a list that had not changed. `reviews` is therefore
-   * present exactly when the caller is starting the listing, and a resumed page
-   * says so rather than serving a silently empty list.
+   * ten times over for a list that had not changed.
+   *
+   * A resumed page therefore carries `reviews: null` — an explicit absence, not
+   * an empty list that reads like "no reviews" — beside the
+   * `reviewsIncluded` flag. The key is always present, so a caller reads one
+   * shape rather than narrowing a union.
    */
   getSnapshot(request: { artifactCursor?: string } = {}) {
     // Shape-checked before it reaches the corpus, so a cursor nobody could have
@@ -91,9 +94,8 @@ export class AdminSharedWorkspaceService {
       policy: this.store.getPolicy(),
       artifacts: artifacts.artifacts,
       nextArtifactCursor: artifacts.nextCursor,
-      ...(cursor === undefined
-        ? { reviews: this.store.listReviews(), reviewsIncluded: true as const }
-        : { reviewsIncluded: false as const }),
+      reviews: cursor === undefined ? this.store.listReviews() : null,
+      reviewsIncluded: cursor === undefined,
     };
   }
 

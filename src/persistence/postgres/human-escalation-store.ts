@@ -341,8 +341,7 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
   /** Test/embedding entry point: the caller owns the pool lifecycle. */
   static async fromPool(
     pool: Pool,
-    options: Omit<PostgresHumanEscalationStoreOptions, 'schema' | 'role'>
-      & { systemOwnedOnly?: boolean },
+    options: Omit<PostgresHumanEscalationStoreOptions, 'schema' | 'role'>,
   ): Promise<PostgresHumanEscalationStore> {
     const bounds = requireHumanEscalationLedgerBounds(options.bounds);
     await ensurePostgresSchema(pool, POSTGRES_HUMAN_ESCALATION_MIGRATIONS);
@@ -352,7 +351,9 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
       options.onSaturated ?? null,
       options.now ?? (() => Date.now()),
       false,
-      options.systemOwnedOnly === true,
+      // A pool the caller owns is a tenant or test scope, never the fleet's
+      // shared ledger — that one is only ever opened by `connectShared`.
+      false,
     );
   }
 

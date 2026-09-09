@@ -108,11 +108,6 @@ export function isWorldAvatarVerb(verb: string): verb is WorldAvatarVerb {
   return (WORLD_AVATAR_BODY_VERBS as readonly string[]).includes(verb) || isWorldAvatarEditVerb(verb);
 }
 
-interface WorldAvatarActRequest {
-  verb: WorldAvatarVerb;
-  arguments?: Record<string, unknown>;
-}
-
 export type WorldAvatarActOutcome =
   | { accepted: true; verb: string; outcome: string; reply: string | null }
   | { accepted: false; verb: string; reason: 'not_configured' | 'not_allowlisted' | 'unavailable' };

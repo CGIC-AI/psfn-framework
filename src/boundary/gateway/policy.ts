@@ -33,7 +33,7 @@ export interface HomeAssistantPolicyConfig {
  * The Satellite Hub control transport on its own (S13 MOVE): the companion's
  * world-avatar methods need only the Hub URL and token, never Home Assistant.
  */
-export interface SatelliteHubPolicyConfig {
+interface SatelliteHubPolicyConfig {
   controlBaseUrl?: string;
   tokenConfigured?: boolean;
 }

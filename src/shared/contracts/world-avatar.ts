@@ -6,12 +6,12 @@
 // device assertion. Mirrors `apps/satellite-hub/src/ts/shared/protocol.ts`
 // (the Hub project cannot import framework source). Additive only.
 
-export interface WorldAvatarPosition {
+interface WorldAvatarPosition {
   x: number;
   z: number;
 }
 
-export interface WorldAvatarSelf {
+interface WorldAvatarSelf {
   id: string;
   world: string;
   positionKnown: boolean;
@@ -21,7 +21,7 @@ export interface WorldAvatarSelf {
   facing?: string;
 }
 
-export interface WorldAvatarPerson {
+interface WorldAvatarPerson {
   id: string;
   /**
    * Who this is, as the world classifies it: `ai` when the world tagged its
@@ -38,7 +38,7 @@ export interface WorldAvatarPerson {
   doing?: string;
 }
 
-export interface WorldAvatarThing {
+interface WorldAvatarThing {
   id: string;
   label: string;
   positionKnown: boolean;
@@ -70,9 +70,9 @@ export interface WorldAvatarMoveRequest {
   waitMs?: number;
 }
 
-export type WorldAvatarWalkStatus = 'arrived' | 'walking' | 'interrupted' | 'failed' | 'already_there';
+type WorldAvatarWalkStatus = 'arrived' | 'walking' | 'interrupted' | 'failed' | 'already_there';
 
-export type WorldAvatarMoveRejectionReason =
+type WorldAvatarMoveRejectionReason =
   | 'not_configured'
   | 'unavailable'
   | 'invalid_world'
@@ -82,7 +82,7 @@ export type WorldAvatarMoveRejectionReason =
   | 'participant_position_unknown'
   | 'position_unknown';
 
-export interface WorldAvatarWalk {
+interface WorldAvatarWalk {
   status: WorldAvatarWalkStatus;
   x?: number;
   z?: number;
@@ -96,7 +96,7 @@ export type WorldAvatarMoveOutcome =
 /** Body and creation verbs the Hub allowlists; tiers decide which apply. */
 export const WORLD_AVATAR_BODY_VERBS = ['face', 'stop', 'emote', 'posture', 'whisper'] as const;
 export const WORLD_AVATAR_EDIT_VERBS = ['spawn', 'remove', 'set_avatar'] as const;
-export type WorldAvatarBodyVerb = (typeof WORLD_AVATAR_BODY_VERBS)[number];
+type WorldAvatarBodyVerb = (typeof WORLD_AVATAR_BODY_VERBS)[number];
 export type WorldAvatarEditVerb = (typeof WORLD_AVATAR_EDIT_VERBS)[number];
 export type WorldAvatarVerb = WorldAvatarBodyVerb | WorldAvatarEditVerb;
 
@@ -108,7 +108,7 @@ export function isWorldAvatarVerb(verb: string): verb is WorldAvatarVerb {
   return (WORLD_AVATAR_BODY_VERBS as readonly string[]).includes(verb) || isWorldAvatarEditVerb(verb);
 }
 
-export interface WorldAvatarActRequest {
+interface WorldAvatarActRequest {
   verb: WorldAvatarVerb;
   arguments?: Record<string, unknown>;
 }

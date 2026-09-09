@@ -12,7 +12,6 @@ import {
 } from '../../boundary/fleet-auth/hub-device-ingress.js';
 import { HubDeviceAssertionRejectedError } from '../../boundary/fleet-auth/hub-device-assertion.js';
 import type { ApiRuntimeChatRequest, ApiServerRuntime } from './types.js';
-import type { FleetAuthHttpRoutes } from './server/fleet-auth-routes.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { SessionManager } from '../../core/session/manager.js';
 
@@ -90,12 +89,6 @@ function registry(includeEnrollment = true) {
   });
 }
 
-const fleetRoutes = {
-  applyLifecycleCorsPolicy: () => 'not_applicable',
-  matches: () => false,
-  handle: async () => undefined,
-} as unknown as FleetAuthHttpRoutes;
-
 describe('ApiServer authenticated Hub device ingress', () => {
   const running: ApiServer[] = [];
   afterEach(async () => {
@@ -106,6 +99,7 @@ describe('ApiServer authenticated Hub device ingress', () => {
     verifyAndConsume: HubDeviceAssertionVerifierPort['verifyAndConsume'],
     satelliteRegistry = registry(),
     useProvider = false,
+    withIngress = true,
   ) {
     const requests: ApiRuntimeChatRequest[] = [];
     const connectionIds: string[] = [];
@@ -129,9 +123,8 @@ describe('ApiServer authenticated Hub device ingress', () => {
         : { satelliteRegistry }),
       satelliteApiKeys: [TOKEN],
       companionId: COMPANION_ID,
-      fleetAuthBootstrapOnly: true, fleetAuthHttpRoutes: fleetRoutes,
       hubDeviceCompanionId: COMPANION_ID,
-      hubDeviceIngress: new GatewayHubDeviceIngressService({
+      ...(withIngress ? { hubDeviceIngress: new GatewayHubDeviceIngressService({
         verifyAndConsume,
         enrollmentAuthority: {
           resolve: async input => input.authenticatedConnection,
@@ -157,7 +150,7 @@ describe('ApiServer authenticated Hub device ingress', () => {
           },
           fenceDevice: async input => { fences.push(input); },
         },
-      }),
+      }) } : {}),
     });
     await server.start();
     running.push(server);
@@ -264,9 +257,7 @@ describe('ApiServer authenticated Hub device ingress', () => {
   it('fails closed with sanitized errors for rejection, verifier outage, or body authority conflict', async () => {
     const malformedVerifier = vi.fn(async () => { throw new Error('must not verify'); });
     const malformed = await start(malformedVerifier);
-    const missing = await post(malformed.port, { model: 'companion', messages: [{ role: 'user', content: 'hello' }] }, null);
     const multiple = await post(malformed.port, { model: 'companion', messages: [{ role: 'user', content: 'hello' }] }, [ASSERTION, ASSERTION]);
-    expect(missing).toMatchObject({ status: 401, body: { error: { type: 'invalid_hub_device_assertion' } } });
     expect(multiple).toMatchObject({ status: 401, body: { error: { type: 'invalid_hub_device_assertion' } } });
     expect(malformedVerifier).not.toHaveBeenCalled();
 
@@ -287,5 +278,92 @@ describe('ApiServer authenticated Hub device ingress', () => {
     });
     expect(conflictResponse).toMatchObject({ status: 400, body: { error: { type: 'conflicting_hub_device_authority' } } });
     expect(conflictVerifier).not.toHaveBeenCalled();
+  });
+
+  // S13 / bead y7pc8: device admission is opt-in per request. A satellite-key
+  // turn that carries no assertion header is an ordinary key-authenticated turn
+  // even when the endpoint is enrolled and an ingress verifier is configured.
+  it('completes a satellite-key turn without an assertion header on the plain key path', async () => {
+    const verifier = vi.fn(async () => { throw new Error('must not verify'); });
+    const { port, requests, connectionIds } = await start(verifier);
+
+    const response = await post(port, {
+      model: 'companion', messages: [{ role: 'user', content: 'hello' }],
+    }, null);
+
+    expect(response).toMatchObject({ status: 200 });
+    expect(verifier).not.toHaveBeenCalled();
+    expect(connectionIds).toEqual([]);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.hubDevicePrincipal).toBeUndefined();
+    expect(requests[0]?.hubDeviceAttachment).toBeUndefined();
+    expect(requests[0]?.headers['x-psfn-hub-device-assertion']).toBeUndefined();
+  });
+
+  it('routes a turn through device admission only when the assertion header is present', async () => {
+    const verifier = vi.fn(async (_assertion: string, expected: {
+      deviceId: string; enrollmentVersion: number; companionId: string; sessionId: string; placeId?: string;
+    }) => ({
+      kind: 'hub_device' as const, issuer: 'psfn-satellite-hub', keyId: 'hub-key',
+      deviceId: expected.deviceId, enrollmentVersion: expected.enrollmentVersion,
+      enrollmentAssurance: 'device_credential' as const, placeId: expected.placeId,
+      audience: 'https://fleet.example.test', companionId: expected.companionId,
+      sessionId: expected.sessionId, issuedAt: new Date(), expiresAt: new Date(Date.now() + 30_000),
+      jti: '018f0f10-79b2-4cc7-8c99-0242ac120002',
+    }));
+    const { port, requests } = await start(verifier);
+    const body = { model: 'companion', messages: [{ role: 'user' as const, content: 'hello' }] };
+
+    await expect(post(port, body, null)).resolves.toMatchObject({ status: 200 });
+    await expect(post(port, body)).resolves.toMatchObject({ status: 200 });
+
+    expect(verifier).toHaveBeenCalledOnce();
+    expect(requests).toHaveLength(2);
+    expect(requests[0]?.hubDevicePrincipal).toBeUndefined();
+    expect(requests[1]?.hubDevicePrincipal).toMatchObject({ kind: 'hub_device', deviceId: 'office-device' });
+  });
+
+  it('answers a clear 400 when an assertion is presented but no device ingress is configured', async () => {
+    const verifier = vi.fn(async () => { throw new Error('must not verify'); });
+    const { port, requests } = await start(verifier, registry(), false, false);
+
+    await expect(post(port, {
+      model: 'companion', messages: [{ role: 'user', content: 'hello' }],
+    })).resolves.toMatchObject({ status: 400, body: { error: { type: 'hub_device_ingress_not_configured' } } });
+    expect(requests).toHaveLength(0);
+
+    // Without the header the same server completes the turn on the key path.
+    await expect(post(port, {
+      model: 'companion', messages: [{ role: 'user', content: 'hello' }],
+    }, null)).resolves.toMatchObject({ status: 200 });
+    expect(requests).toHaveLength(1);
+  });
+
+  it('still rejects alias-spelled assertions as smuggling even without the canonical header', async () => {
+    const verifier = vi.fn(async () => { throw new Error('must not verify'); });
+    const { port, requests } = await start(verifier);
+    const attempt = await new Promise<{ status: number; body: unknown }>((resolve, reject) => {
+      const request = http.request({
+        hostname: '127.0.0.1', port, method: 'POST', path: '/v1/chat/completions?hub_device_assertion=' + ASSERTION,
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${TOKEN}`,
+          'x-psfn-satellite-claim-type': 'hub-device',
+          'x-psfn-satellite-id': 'office',
+          'x-psfn-satellite-endpoint-id': 'office-device',
+          'x-psfn-satellite-session-id': 'realtime:office-device:session',
+        },
+      }, response => {
+        let text = '';
+        response.on('data', chunk => { text += String(chunk); });
+        response.on('end', () => resolve({ status: response.statusCode ?? 0, body: JSON.parse(text) }));
+      });
+      request.once('error', reject);
+      request.end(JSON.stringify({ model: 'companion', messages: [{ role: 'user', content: 'hello' }] }));
+    });
+
+    expect(attempt).toMatchObject({ status: 400, body: { error: { type: 'invalid_hub_device_assertion' } } });
+    expect(verifier).not.toHaveBeenCalled();
+    expect(requests).toHaveLength(0);
   });
 });

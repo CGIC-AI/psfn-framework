@@ -36,10 +36,35 @@ export class HubDeviceIngressRequestError extends Error {
   }
 }
 
+const HUB_DEVICE_ASSERTION_NAME_ALIASES = [
+  HUB_DEVICE_ASSERTION_HEADER,
+  'hub_device_assertion',
+  'hubdeviceassertion',
+];
+
+/**
+ * Whether the request is attempting Hub device admission at all: the canonical
+ * assertion header, or any alias spelling (header or query) that
+ * `extractCanonicalHubDeviceAssertion` rejects as a smuggling attempt. A
+ * request carrying none of these is a plain key-authenticated chat turn and
+ * never enters device admission (bead y7pc8).
+ */
+export function hasHubDeviceAssertion(req: IncomingMessage): boolean {
+  for (let index = 0; index < req.rawHeaders.length; index += 2) {
+    const name = req.rawHeaders[index]?.toLowerCase();
+    if (name && HUB_DEVICE_ASSERTION_NAME_ALIASES.includes(name)) return true;
+  }
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  for (const name of url.searchParams.keys()) {
+    if (HUB_DEVICE_ASSERTION_NAME_ALIASES.includes(name.toLowerCase())) return true;
+  }
+  return false;
+}
+
 export function extractCanonicalHubDeviceAssertion(req: IncomingMessage): string {
   const url = new URL(req.url ?? '/', 'http://localhost');
   for (const name of url.searchParams.keys()) {
-    if ([HUB_DEVICE_ASSERTION_HEADER, 'hub_device_assertion', 'hubdeviceassertion'].includes(name.toLowerCase())) {
+    if (HUB_DEVICE_ASSERTION_NAME_ALIASES.includes(name.toLowerCase())) {
       throw new HubDeviceIngressRequestError(400, 'invalid_hub_device_assertion', 'Hub device assertion must use the canonical request header');
     }
   }

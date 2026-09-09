@@ -47,7 +47,7 @@ import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.
 import { isCogSecMode, type CogSecMode } from '../../shared/contracts/cogsec-mode.js';
 import {
   assertFleetAuthStandaloneSurfacesUnavailable,
-  warnIfInsecureLocalApiIgnoredUnderFleetAuth,
+  warnIfInsecureLocalApiUnderFleetAuth,
 } from '../../system/config/fleet-auth-standalone-surface-guard.js';
 import type { GatewayFleetAuthBroker } from '../../boundary/gateway/fleet-auth-broker.js';
 import type { GatewayFleetAuthChildAssertionBroker } from '../../boundary/gateway/fleet-auth-child-assertions.js';
@@ -239,14 +239,21 @@ export function assertGatewayApiIntakeScreeningOwnership(
   }
 }
 
+/**
+ * The companion a Hub device binds to. Independent of fleet auth: the pinned
+ * API companion wins, then a one-entry fleet manifest, then the single
+ * configured companion. Multi-companion fleets without a pinned API companion
+ * have no unambiguous device binding and leave it undefined.
+ */
 function resolveGatewayHubDeviceCompanionId(
   options: StartOptionalGatewayApiServerOptions,
-  fleet: NonNullable<SubstrateConfig['companionFleet']>,
 ): string | undefined {
   const channelCompanionId = options.channelsConfig?.api.companionId;
   if (channelCompanionId) return channelCompanionId;
-  if (fleet.companions.length === 1) return fleet.companions[0]!.companionId;
-  return undefined;
+  const fleet = options.config.companionFleet;
+  if (fleet && fleet.companions.length === 1) return fleet.companions[0]!.companionId;
+  if (fleet && fleet.companions.length > 1) return undefined;
+  return options.config.companionId;
 }
 
 function resolveFleetSsoCompanionUi(
@@ -515,11 +522,20 @@ export async function startOptionalGatewayApiServer(
   }
 
   const env = options.env ?? process.env;
-  const fleetAuthBootstrapOnly = options.config.fleetAuth !== undefined;
-  const fleetAuthFleet = fleetAuthBootstrapOnly
+  // Fleet auth is an OPTIONAL sign-in method. Its presence ADDS the SSO router,
+  // lifecycle routes and SSO principals below; nothing else keys off it. Key
+  // authentication (API_KEY, ADMIN_TOKEN, API_SATELLITE_KEYS, testing harness),
+  // the voice WebSocket, companion relays and Hub device ingress are wired the
+  // same way with or without fleet-auth.json (operator rule, S13).
+  const fleetAuthEnabled = options.config.fleetAuth !== undefined;
+  const fleetAuthFleet = fleetAuthEnabled
     ? requireFleetSsoFleetManifest(options.config.companionFleet)
     : undefined;
-  const principalAuthenticationWired = options.fleetAuthBroker !== undefined
+  // SSO-only composition: when fleet auth is configured every SSO principal
+  // conjunct must be present so the SSO door itself is never half-wired. The
+  // Hub device assertion verifier is deliberately NOT part of this set — device
+  // ingress is a key-auth feature that exists without fleet auth.
+  const fleetSsoCompositionWired = options.fleetAuthBroker !== undefined
     && options.fleetAuthEscalation !== undefined
     && options.fleetAuthTrustedHostRecovery !== undefined
     && options.fleetAuthLifecycleCeremonies !== undefined
@@ -528,26 +544,24 @@ export async function startOptionalGatewayApiServer(
     && options.fleetAuthRequestCapabilityVerifier !== undefined
     && options.fleetAuthRequestCapabilityReplay !== undefined
     && options.fleetPortalAuthorization !== undefined
-    && options.primaryEmbodiments !== undefined
-    && options.hubDeviceAssertionVerifier !== undefined;
-  if (fleetAuthBootstrapOnly && !principalAuthenticationWired) {
+    && options.primaryEmbodiments !== undefined;
+  if (fleetAuthEnabled && !fleetSsoCompositionWired) {
     throw new Error(
       'Fleet-auth principal composition is incomplete; refusing to expose the gateway API',
     );
   }
   assertFleetAuthStandaloneSurfacesUnavailable({
-    fleetAuthEnabled: options.config.fleetAuth !== undefined,
+    fleetAuthEnabled,
     processMode: 'gateway',
     env: { ...env, API_PORT: String(options.apiPort) },
-    principalAuthenticationWired,
+    principalAuthenticationWired: fleetSsoCompositionWired,
     fleetAuthBootstrapRoutesWired: options.fleetAuthBroker !== undefined,
   });
   assertGatewayApiIntakeScreeningOwnership(options);
-  const allowInsecureWithoutAuth = !fleetAuthBootstrapOnly
-    && isExplicitTrue(env.ALLOW_INSECURE_LOCAL_API);
-  // Fleet auth overrode any ALLOW_INSECURE_LOCAL_API=true above; warn loudly so
-  // the ineffective, dangerous flag is removed rather than left to mislead.
-  warnIfInsecureLocalApiIgnoredUnderFleetAuth({ fleetAuthEnabled: fleetAuthBootstrapOnly, env });
+  const allowInsecureWithoutAuth = isExplicitTrue(env.ALLOW_INSECURE_LOCAL_API);
+  // The bypass stays in effect under fleet auth (fleet auth never removes a
+  // key/no-key path); warn loudly because it is almost never intended there.
+  warnIfInsecureLocalApiUnderFleetAuth({ fleetAuthEnabled, env });
   // Sprint-10 C1/H4: fail-closed parsing — a malformed trusted-proxy token,
   // weak/colliding satellite keys, or partial TLS config abort startup.
   const trustedProxyClientCertToken = parseTrustedProxyClientCertToken(
@@ -556,10 +570,8 @@ export async function startOptionalGatewayApiServer(
   const satelliteApiKeys = parseSatelliteApiKeys(env.API_SATELLITE_KEYS, {
     reservedTokens: [env.API_KEY, env.ADMIN_TOKEN],
   });
-  const hubDeviceCompanionId = fleetAuthBootstrapOnly && fleetAuthFleet
-    ? resolveGatewayHubDeviceCompanionId(options, fleetAuthFleet)
-    : undefined;
-  const hubDeviceIngress = fleetAuthBootstrapOnly && options.hubDeviceAssertionVerifier
+  const hubDeviceCompanionId = resolveGatewayHubDeviceCompanionId(options);
+  const hubDeviceIngress = options.hubDeviceAssertionVerifier
     ? new GatewayHubDeviceIngressService({
         verifyAndConsume: (assertion, expected) => options.hubDeviceAssertionVerifier!
           .verifyAndConsumeHubDeviceAssertion(assertion, expected),
@@ -582,7 +594,7 @@ export async function startOptionalGatewayApiServer(
     ? resolveFleetSsoCompanionUi(fleetAuthFleet, env)
     : undefined;
   const fleetPortalProjection = createGatewayFleetPortalProjection({
-    fleetAuthEnabled: fleetAuthBootstrapOnly,
+    fleetAuthEnabled,
     ...(options.fleetPortalAuthorization
       ? { authorization: options.fleetPortalAuthorization }
       : {}),
@@ -595,7 +607,7 @@ export async function startOptionalGatewayApiServer(
       : {}),
   });
   const fleetModelUsageProjection = createGatewayFleetModelUsageProjection({
-    fleetAuthEnabled: fleetAuthBootstrapOnly,
+    fleetAuthEnabled,
     ...(options.fleetPortalAuthorization
       ? { portalAuthorization: options.fleetPortalAuthorization }
       : {}),
@@ -654,7 +666,7 @@ export async function startOptionalGatewayApiServer(
         } : {}),
       })
     : undefined;
-  if (fleetAuthBootstrapOnly && !fleetSsoRouter) {
+  if (fleetAuthEnabled && !fleetSsoRouter) {
     throw new Error('Fleet authentication requires the complete unified-origin router wiring');
   }
   const corsAllowedOrigins = resolveApiCorsAllowedOrigins({
@@ -697,10 +709,23 @@ export async function startOptionalGatewayApiServer(
     });
   };
   const companionUiVoiceLimits = buildVoiceWebSocketServerOptions(options.config);
-  const companionUiAudioOutputRelay = fleetAuthBootstrapOnly && options.companionRelay
+  // The audio output relay feeds the key-authenticated companion relay routes
+  // (`/v1/companion/*` audio) as well as the SSO Companion UI socket, so it is
+  // wired whenever the relay exists — never keyed on fleet auth.
+  const companionUiAudioOutputRelay = options.companionRelay
     ? new CompanionUiAudioOutputRelay(companionUiVoiceLimits.maxFrameBytes!)
     : undefined;
-  const companionUiStt = fleetAuthBootstrapOnly
+  // The Companion UI WebSocket is a browser SSO surface (canonical origin,
+  // broker, child assertions, request capabilities): it exists only when fleet
+  // SSO is composed. Its STT ingress is built only when the socket can exist.
+  const companionUiWebSocketComposable = options.config.fleetAuth !== undefined
+    && options.fleetAuthBroker !== undefined
+    && options.fleetAuthChildAssertions !== undefined
+    && options.fleetAuthRequestCapabilities !== undefined
+    && hubDeviceIngress !== undefined
+    && options.satelliteRegistry !== undefined
+    && options.companionRelay !== undefined;
+  const companionUiStt = companionUiWebSocketComposable
     ? createRuntimeVoiceSttConnector(options.config, {
         eligibilityGate: options.eligibilityGate,
       })
@@ -720,8 +745,9 @@ export async function startOptionalGatewayApiServer(
         maxTranscriptBytes: resolveVoiceSecurityLimits().maxTranscriptChars,
       })
     : undefined;
-  const companionUiWebSocket = fleetAuthBootstrapOnly
-    && options.config.fleetAuth
+  // Same conjuncts as `companionUiWebSocketComposable`, spelled out so TS
+  // narrows each dependency for the adapter arguments below.
+  const companionUiWebSocket = options.config.fleetAuth
     && options.fleetAuthBroker
     && options.fleetAuthChildAssertions
     && options.fleetAuthRequestCapabilities
@@ -935,7 +961,7 @@ export async function startOptionalGatewayApiServer(
         } : {}),
       })
     : undefined;
-  const voiceWebSocketRuntime = fleetAuthBootstrapOnly ? undefined : createApiVoiceWebSocketRuntime({
+  const voiceWebSocketRuntime = createApiVoiceWebSocketRuntime({
     config: options.config,
     eligibilityGate: options.eligibilityGate,
     handleAssistantTurn: async ({ request, principal, transportSession, sessionId, transcript, signal, channelPrefix }) => {
@@ -1026,7 +1052,7 @@ export async function startOptionalGatewayApiServer(
     eventBus: inertEventBus,
     sessionManager: inertSessionManager,
     sensorIngest: inertSensorIngest,
-    apiKey: fleetAuthBootstrapOnly ? undefined : env.API_KEY || undefined,
+    apiKey: env.API_KEY || undefined,
     testingHarnessPrincipal: options.channelsConfig?.api.testingHarness,
     ...(options.channelsConfig?.api.externalMemory ? {
       externalMemoryMcp: new ExternalMemoryMcpRoute(
@@ -1047,7 +1073,9 @@ export async function startOptionalGatewayApiServer(
     ...(trustedProxyClientCertToken ? { trustedProxyClientCertToken } : {}),
     ...(apiTlsConfig ? { tls: apiTlsConfig } : {}),
     allowInsecureWithoutAuth,
-    fleetAuthBootstrapOnly,
+    // Owner-scoped confirmation resolution is a multi-companion concern, not a
+    // fleet-auth one.
+    confirmationOperatorRequiresCompanionId: options.multiCompanion === true,
     ...(fleetSsoRouter ? { fleetSsoRouter } : {}),
     ...(options.fleetAuthChildAssertions
       ? { fleetAuthChildAssertions: options.fleetAuthChildAssertions }
@@ -1081,16 +1109,13 @@ export async function startOptionalGatewayApiServer(
     confirmationOperator: {
       resolve: async (params, authority) => {
         if (authority.kind === 'fleet_companion') {
-          if (!fleetAuthBootstrapOnly) {
-            throw new Error('Fleet companion confirmation authority is unavailable outside Fleet mode');
-          }
           return await options.gateway.resolveOperatorApprovalForOwner(
             authority.companionId,
             params,
           );
         }
-        if (fleetAuthBootstrapOnly) {
-          throw new Error('Fleet operator confirmation resolution requires companion authority');
+        if (options.multiCompanion) {
+          throw new Error('Multi-companion operator confirmation resolution requires companion authority');
         }
         return await options.gateway.resolveOperatorApproval(params);
       },

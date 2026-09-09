@@ -130,6 +130,7 @@ import type { FleetAuthHttpRoutes } from './server/fleet-auth-routes.js';
 import type { GatewayHubDeviceIngressService } from '../../boundary/fleet-auth/hub-device-ingress.js';
 import {
   extractCanonicalHubDeviceAssertion,
+  hasHubDeviceAssertion,
   HubDeviceIngressRequestError,
   resolveAuthenticatedHubDeviceConnection,
   stripHubDeviceDownstreamAuthorityHeaders,
@@ -493,15 +494,25 @@ export interface ApiServerConfig {
   fleetAuthChildAssertions?: GatewayFleetAuthChildAssertionBroker;
   /** Unified browser origin; the only fleet-mode route to Garden processes. */
   fleetSsoRouter?: GatewayFleetSsoRouter;
-  /** Fleet mode: expose browser lifecycle routes plus authenticated Hub device chat only. */
-  fleetAuthBootstrapOnly?: boolean;
-  /** Fleet-only authenticated Hub/device ingress. Absent fails the device route closed. */
+  /**
+   * Multi-companion gateways: the ADMIN_TOKEN confirmation-operator route must
+   * name the owning companion so the approval is resolved owner-scoped. Single
+   * companion runtimes accept either form. Independent of fleet auth.
+   */
+  confirmationOperatorRequiresCompanionId?: boolean;
+  /**
+   * Authenticated Hub/device ingress. Only consulted when a chat request
+   * carries the `X-PSFN-Hub-Device-Assertion` header; absent, such a request
+   * fails closed with 400 `hub_device_ingress_not_configured`. Plain
+   * key-authenticated turns never enter device admission. Independent of
+   * fleet auth.
+   */
   hubDeviceIngress?: GatewayHubDeviceIngressService;
   /** Server-owned companion binding for the gateway API surface. */
   hubDeviceCompanionId?: string;
   /** Pinned target plus optional per-request Bearer selector entitlement. */
   bearerCompanionRouting?: BearerCompanionRoutingConfig;
-  /** Fleet-only exact same-origin Companion UI WebSocket broker. */
+  /** Fleet-SSO exact same-origin Companion UI WebSocket broker (an SSO-only surface). */
   companionUiWebSocket?: CompanionUiWebSocketAdapter;
 }
 
@@ -554,7 +565,7 @@ export class ApiServer implements ChannelAdapterPort {
   private fleetAuthHttpRoutes?: FleetAuthHttpRoutes;
   private fleetAuthChildAssertionRoute?: FleetAuthChildAssertionHttpRoute;
   private fleetSsoRouter?: GatewayFleetSsoRouter;
-  private fleetAuthBootstrapOnly: boolean;
+  private confirmationOperatorRequiresCompanionId: boolean;
   private hubDeviceIngress?: GatewayHubDeviceIngressService;
   private hubDeviceCompanionId?: string;
   private companionUiWebSocket?: CompanionUiWebSocketAdapter;
@@ -604,7 +615,7 @@ export class ApiServer implements ChannelAdapterPort {
       ? new FleetAuthChildAssertionHttpRoute(config.fleetAuthChildAssertions)
       : undefined;
     this.fleetSsoRouter = config.fleetSsoRouter;
-    this.fleetAuthBootstrapOnly = config.fleetAuthBootstrapOnly === true;
+    this.confirmationOperatorRequiresCompanionId = config.confirmationOperatorRequiresCompanionId === true;
     this.hubDeviceIngress = config.hubDeviceIngress;
     this.hubDeviceCompanionId = config.hubDeviceCompanionId;
     this.companionUiWebSocket = config.companionUiWebSocket;
@@ -672,25 +683,31 @@ export class ApiServer implements ChannelAdapterPort {
   async init(): Promise<void> {}
 
   async start(): Promise<void> {
-    if (this.fleetAuthBootstrapOnly) {
-      if (!this.fleetAuthHttpRoutes) {
-        throw new Error('Fleet auth bootstrap routes are required before the bootstrap-only API can listen');
-      }
-    } else {
-      validateApiServerAuthConfig({
-        host: this.host,
-        port: this.port,
-        apiKey: this.apiKey,
-        allowInsecureWithoutAuth: this.allowInsecureWithoutAuth,
-        logger: log,
-      });
-    }
+    // Fleet auth adds SSO principals; it never removes key authentication.
+    // The listener refuses to start unauthenticated unless the insecure local
+    // bypass is explicit, where "authenticated" means ANY wired principal
+    // source: API_KEY, ADMIN_TOKEN, API_SATELLITE_KEYS, the testing-harness
+    // key, or fleet SSO routes.
+    const alternatePrincipalSources = Boolean(this.adminToken)
+      || this.satelliteApiKeys.length > 0
+      || this.testingHarnessPrincipal !== undefined
+      || this.fleetAuthHttpRoutes !== undefined
+      || this.fleetSsoRouter !== undefined;
+    validateApiServerAuthConfig({
+      host: this.host,
+      port: this.port,
+      apiKey: this.apiKey,
+      allowInsecureWithoutAuth: this.allowInsecureWithoutAuth,
+      hasAlternatePrincipalSource: alternatePrincipalSources,
+      logger: log,
+    });
 
     return listenApiHttpServer({
       server: this.server,
       host: this.host,
       port: this.port,
-      apiKey: this.fleetAuthBootstrapOnly ? undefined : this.apiKey,
+      apiKey: this.apiKey,
+      hasAlternatePrincipalSource: alternatePrincipalSources,
       corsAllowedOrigins: this.corsAllowedOrigins,
       logger: log,
     });
@@ -709,10 +726,6 @@ export class ApiServer implements ChannelAdapterPort {
     stripBrowserRequestCapabilityHeaders(req.headers);
     if (this.fleetSsoRouter?.matches(req.url ?? '/')) {
       this.fleetSsoRouter.handleUpgrade(req, socket, head);
-      return;
-    }
-    if (this.fleetAuthBootstrapOnly) {
-      this.voiceWebSocket.rejectUnknownUpgrade(socket);
       return;
     }
     const handled = this.voiceWebSocket.handleUpgrade(req, socket, head);
@@ -790,32 +803,22 @@ export class ApiServer implements ChannelAdapterPort {
       delete req.headers['x-session-id'];
     }
 
-    // The testing-harness bearer deliberately remains available in fleet-auth
-    // mode so sanctioned external probes can reach the one persistent test
-    // room without acquiring a partner or device identity. Companion relay
-    // routes remain satellite-only and must resolve through API_SATELLITE_KEYS.
-    if (
-      this.fleetAuthBootstrapOnly
-      && !testingHarnessPrincipal
-      && !companionRoute
-      && !isConfirmationOperatorResolve
-      && !icpOperatorCancelMatch
-      && !isTelemetryIngest
-    ) {
-      if (req.method === 'POST' && path === '/v1/chat/completions') {
-        void this.handleFleetHubDeviceChat(req, res, clientCert);
+    // Hub device admission is opt-in per request: only a chat turn that
+    // presents a device assertion enters `handleHubDeviceChat`. Every other
+    // request — including a satellite-key turn from an enrolled Hub that
+    // sends no assertion — takes the ordinary key-authenticated path, with or
+    // without fleet auth configured (beads y7pc8, hc23v).
+    if (req.method === 'POST' && path === '/v1/chat/completions' && hasHubDeviceAssertion(req)) {
+      if (!this.hubDeviceIngress) {
+        sendApiError(
+          res,
+          400,
+          'hub_device_ingress_not_configured',
+          'This gateway has no Hub device assertion verifier; retry without X-PSFN-Hub-Device-Assertion or configure device ingress',
+        );
         return;
       }
-      log.warn('API request rejected: fleet_auth_principal_resolver_unavailable', {
-        method: req.method ?? 'UNKNOWN',
-        path,
-      });
-      sendApiError(
-        res,
-        503,
-        'fleet_auth_principal_resolver_unavailable',
-        'Fleet-auth principal routing is unavailable until the SSO resolver is installed',
-      );
+      void this.handleHubDeviceChat(req, res, clientCert);
       return;
     }
 
@@ -827,14 +830,15 @@ export class ApiServer implements ChannelAdapterPort {
       this.handleConfirmationOperatorResolve(req, res);
       return;
     }
-    const requiresSatellitePrincipal = this.fleetAuthBootstrapOnly && companionRoute !== null;
-    const principal = !requiresSatellitePrincipal && testingHarnessPrincipal
-      ? testingHarnessPrincipal
-      : resolveApiServerRequestPrincipal(req, res, {
-        ...(!requiresSatellitePrincipal && this.apiKey ? { apiKey: this.apiKey } : {}),
-        ...(!requiresSatellitePrincipal && this.adminToken ? { adminToken: this.adminToken } : {}),
+    // Companion relay routes are not scope-gated here: `resolveCompanionRelayAccess`
+    // binds whichever authenticated principal arrives to the registry endpoint's
+    // own `auth` (apiKeyPrincipalIds / mTLS), which is the real admission rule.
+    const principal = testingHarnessPrincipal
+      ?? resolveApiServerRequestPrincipal(req, res, {
+        ...(this.apiKey ? { apiKey: this.apiKey } : {}),
+        ...(this.adminToken ? { adminToken: this.adminToken } : {}),
         ...(this.satelliteApiKeys.length > 0 ? { satelliteApiKeys: this.satelliteApiKeys } : {}),
-        allowInsecureWithoutAuth: !requiresSatellitePrincipal && this.allowInsecureWithoutAuth,
+        allowInsecureWithoutAuth: this.allowInsecureWithoutAuth,
         isTelemetryIngest,
       });
     if (!principal) return;
@@ -956,7 +960,7 @@ export class ApiServer implements ChannelAdapterPort {
     }
   }
 
-  private async handleFleetHubDeviceChat(
+  private async handleHubDeviceChat(
     req: IncomingMessage,
     res: ServerResponse,
     clientCert: SatelliteClientCertIdentity | undefined,
@@ -1103,8 +1107,8 @@ export class ApiServer implements ChannelAdapterPort {
         || (body.decision !== 'approve' && body.decision !== 'deny' && body.decision !== 'modify')
         || (body.decision === 'modify' && !isRecord(body.modifiedParams))
         || (body.decision !== 'modify' && body.modifiedParams !== undefined)
-        || (this.fleetAuthBootstrapOnly && companionId === undefined)
-        || (!this.fleetAuthBootstrapOnly && body.companionId !== undefined)) {
+        || (this.confirmationOperatorRequiresCompanionId && companionId === undefined)
+        || (body.companionId !== undefined && companionId === undefined)) {
         sendApiError(res, 400, 'invalid_request', 'Confirmation resolution payload is invalid');
         return;
       }
@@ -1119,8 +1123,8 @@ export class ApiServer implements ChannelAdapterPort {
       try {
         const result = await this.confirmationOperator!.resolve(
           params,
-          this.fleetAuthBootstrapOnly
-            ? { kind: 'fleet_companion', companionId: companionId! }
+          companionId !== undefined
+            ? { kind: 'fleet_companion', companionId }
             : { kind: 'standalone_operator' },
         );
         sendJson(res, 200, result, API_DYNAMIC_JSON_HEADERS);

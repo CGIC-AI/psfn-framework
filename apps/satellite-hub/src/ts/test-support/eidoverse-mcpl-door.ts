@@ -165,6 +165,19 @@ export class EidoverseMcplDoor {
     return this.request("channels/register", { channels: [this.descriptor()] });
   }
 
+  /**
+   * Ask the host which channels it is tracking. The real door does this to
+   * reconcile after a transition, and it is the only view of the host's own
+   * channel bookkeeping that does not reach past the wire.
+   */
+  async hostChannelIds(): Promise<string[]> {
+    const answer = await this.request("channels/list", {});
+    const channels = (answer as { channels?: Array<{ id?: unknown }> } | undefined)?.channels ?? [];
+    return channels
+      .map((descriptor) => descriptor.id)
+      .filter((id): id is string => typeof id === "string");
+  }
+
   /** Push one `channels/incoming` batch and return the host's itemized answer. */
   async deliver(messages: ReadonlyArray<Record<string, unknown>>): Promise<unknown> {
     if (!this.connection?.grant.has("channels.incoming")) {

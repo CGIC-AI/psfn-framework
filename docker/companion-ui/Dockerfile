@@ -39,6 +39,7 @@ COPY src/shared/contracts/approval-envelope.ts \
      src/shared/contracts/companion-ui-audio.ts \
      src/shared/contracts/emotion-contracts.ts \
      src/shared/contracts/filesystem.ts \
+     src/shared/contracts/hub-device-assertion-verifier.ts \
      src/shared/contracts/hub-device-ingress.ts \
      src/shared/contracts/satellite-registry.ts \
      src/shared/contracts/shard-directory.ts \

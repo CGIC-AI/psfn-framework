@@ -1,6 +1,13 @@
-{{- if and .Values.satelliteHub.enabled .Values.satelliteHub.homeAssistant.enabled }}
-{{- if not .Values.satelliteHub.homeAssistant.devices }}
-{{- fail "satelliteHub.homeAssistant.devices is required when Home Assistant is enabled" }}
+{{- if and .Values.satelliteHub.enabled (include "psfn.satelliteHubDeviceRegistryEnabled" .) }}
+{{- /* Server-owned Hub device registry (HUB_DEVICE_REGISTRY_PATH). Reachable
+     through satelliteHub.deviceRegistry on its own; satelliteHub.homeAssistant
+     keeps implying it for compatibility, with homeAssistant.devices honoured
+     when deviceRegistry.devices is empty. Enrolled devices need the signing
+     authority in satelliteHub.deviceAssertion, which workloads.yaml enforces
+     at render time instead of letting the pod crash (psfn-framework-x4499). */}}
+{{- $devices := include "psfn.satelliteHubDeviceRegistryDevices" . | fromJsonArray }}
+{{- if not $devices }}
+{{- fail "satelliteHub.deviceRegistry.devices (or homeAssistant.devices) must list at least one device when the registry is enabled" }}
 {{- end }}
 apiVersion: v1
 kind: ConfigMap
@@ -10,5 +17,5 @@ metadata:
     {{- include "psfn.labels" . | nindent 4 }}
 data:
   hub-devices.json: |
-    {{ dict "schemaVersion" 1 "devices" .Values.satelliteHub.homeAssistant.devices | toJson | nindent 4 }}
+    {{ dict "schemaVersion" 1 "devices" $devices | toJson | nindent 4 }}
 {{- end }}

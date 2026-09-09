@@ -128,6 +128,39 @@ describe('settings owner-file contract adaptation', () => {
     expect(warning?.message).toContain('migrate-required-settings-blocks');
   });
 
+  it('skips the adaptation rather than failing a boot with no seed directory', () => {
+    // Before the adaptation existed, a running process never needed the seed on
+    // disk. A deployment that ships owner files without it must keep booting.
+    const settings = readSeed('settings.seed.json');
+    for (const field of REQUIRED_FIELDS_ADDED_THIS_SLICE) delete settings[field];
+
+    const adapted = applyMissingRuntimeSettingsDefaults(settings, {
+      seedDir: join(makeTempDir('psfn-empty-seed-'), 'absent'),
+      sourceLabel: SETTINGS_FILE_NAME,
+    });
+
+    expect(adapted).toBe(settings);
+    for (const field of REQUIRED_FIELDS_ADDED_THIS_SLICE) {
+      expect(adapted[field]).toBeUndefined();
+    }
+    const warnings = getRecentDiagnosticLogRecords({ limit: 50 })
+      .filter(record => record.component === 'SettingsOwnerBackfill');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.message).toContain('CONFIG_DIR');
+  });
+
+  it('fails closed on a malformed seed rather than skipping silently', () => {
+    // Only an absent seed is tolerated; a seed that exists and is wrong is a
+    // real contract defect and must still stop the process.
+    const seedDir = makeTempDir('psfn-broken-seed-');
+    writeFileSync(join(seedDir, 'settings.seed.json'), '{ not json', 'utf8');
+
+    expect(() => applyMissingRuntimeSettingsDefaults({}, {
+      seedDir,
+      sourceLabel: SETTINGS_FILE_NAME,
+    })).toThrow();
+  });
+
   it('leaves a complete owner file untouched and silent', () => {
     const settings = readSeed('settings.seed.json');
 

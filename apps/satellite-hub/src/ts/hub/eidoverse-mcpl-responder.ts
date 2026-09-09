@@ -16,6 +16,17 @@
  * responder does NOT do is invent authority: an unknown method is refused, a
  * malformed descriptor set is refused, and nothing it answers widens the
  * capability grant the Hub issued at handshake.
+ *
+ * PREPARE is a proposal, not an outcome. The door confirms a transition with
+ * the NOTIFICATION form of `channels/changed` (the COMMIT phase), which
+ * `commit()` applies: the outstanding proposal becomes real, `added` and
+ * `updated` descriptors are recorded, and `removed` ids are evicted — in that
+ * order, so a COMMIT that retires the very channel it proposed still ends up
+ * deleted. Without that phase the tracked set only ever grows: the world the
+ * body left stays listed forever and `channels/list` answers for a channel the
+ * door has already torn down. One transition is in flight at a time, so a
+ * PREPARE supersedes a proposal that never committed rather than accumulating
+ * beside it.
  */
 
 import {
@@ -43,12 +54,15 @@ export interface EidoverseMcplResponderLogger {
  * believes it is in is confirmed by the `travel` tool's own return value.
  */
 export class EidoverseMcplResponder {
+  /** Channels the door has committed to: registered, or confirmed by COMMIT. */
   private readonly channels = new Map<string, McplChannelDescriptor>();
+  /** The transition proposed by the latest PREPARE and not yet committed. */
+  private prepared = new Map<string, McplChannelDescriptor>();
   private latestChannelId: string | null = null;
 
   constructor(private readonly logger?: EidoverseMcplResponderLogger) {}
 
-  /** Channel ids the door has registered and this host accepted. */
+  /** Channel ids the door has registered or committed and this host accepted. */
   channelIds(): readonly string[] {
     return [...this.channels.keys()];
   }
@@ -62,7 +76,7 @@ export class EidoverseMcplResponder {
   currentWorldName(): string | null {
     const channelId = this.latestChannelId;
     if (!channelId) return null;
-    const descriptor = this.channels.get(channelId);
+    const descriptor = this.prepared.get(channelId) ?? this.channels.get(channelId);
     return descriptor ? descriptorWorldName(descriptor) : null;
   }
 
@@ -89,15 +103,55 @@ export class EidoverseMcplResponder {
     }
   }
 
+  /**
+   * Apply the COMMIT phase of one transition, delivered as a notification.
+   *
+   * A notification has no reply, so a malformed payload is dropped with a
+   * content-free warning and leaves the tracked set exactly as it was: the
+   * belief the Hub already held is closer to the truth than a half-applied one.
+   */
+  commit(params: unknown): void {
+    if (!isRecord(params)) {
+      this.malformedCommit();
+      return;
+    }
+    const added = params.added === undefined ? [] : parseDescriptors(params.added);
+    const updated = params.updated === undefined ? [] : parseDescriptors(params.updated);
+    const removed = params.removed === undefined ? [] : parseRemovedIds(params.removed);
+    if (!added || !updated || !removed) {
+      this.malformedCommit();
+      return;
+    }
+    // The proposal this COMMIT confirms. The door names only what it retires,
+    // so promoting the outstanding proposal — not just `added` — is what keeps
+    // the world just travelled to tracked.
+    for (const [id, descriptor] of this.prepared) this.channels.set(id, descriptor);
+    this.prepared = new Map();
+    for (const descriptor of added) {
+      this.channels.set(descriptor.id, descriptor);
+      this.latestChannelId = descriptor.id;
+    }
+    for (const descriptor of updated) {
+      if (this.channels.has(descriptor.id)) this.channels.set(descriptor.id, descriptor);
+    }
+    for (const id of removed) {
+      this.channels.delete(id);
+      if (this.latestChannelId === id) this.latestChannelId = null;
+    }
+    if (this.latestChannelId === null) {
+      this.latestChannelId = [...this.channels.keys()].at(-1) ?? null;
+    }
+  }
+
   private applyChanged(params: unknown): EidoverseMcplResponse {
     if (!isRecord(params)) return this.malformed("channels/changed");
     const removed = params.removed;
     if (removed !== undefined) {
-      if (!Array.isArray(removed) || removed.some((id) => typeof id !== "string")) {
-        return this.malformed("channels/changed");
-      }
-      for (const id of removed as string[]) {
+      const ids = parseRemovedIds(removed);
+      if (!ids) return this.malformed("channels/changed");
+      for (const id of ids) {
         this.channels.delete(id);
+        this.prepared.delete(id);
         if (this.latestChannelId === id) this.latestChannelId = null;
       }
     }
@@ -110,11 +164,11 @@ export class EidoverseMcplResponder {
       }
     }
     if (params.added === undefined) return { result: { results: [] } };
-    return this.acceptDescriptors(params, "added");
+    return this.proposeDescriptors(params.added);
   }
 
   /**
-   * Accept every proposed descriptor. The itemized result form is used even
+   * Accept every registered descriptor. The itemized result form is used even
    * though this host accepts unconditionally: the door reads per-descriptor
    * results, and an unitemized answer would make a later narrowing of this
    * policy unexpressible.
@@ -132,9 +186,33 @@ export class EidoverseMcplResponder {
     return { result: { results } };
   }
 
+  /**
+   * Accept a PREPARE's descriptors as a proposal, in the same itemized form.
+   * They become current — a publish issued between PREPARE and COMMIT must
+   * target the channel the door is moving to — but they are not committed
+   * state, and a proposal the door never commits is superseded by the next one
+   * rather than kept forever.
+   */
+  private proposeDescriptors(value: unknown): EidoverseMcplResponse {
+    const parsed = parseDescriptors(value);
+    if (!parsed) return this.malformed("added");
+    this.prepared = new Map();
+    const results: McplChannelDescriptorResult[] = [];
+    for (const descriptor of parsed) {
+      this.prepared.set(descriptor.id, descriptor);
+      this.latestChannelId = descriptor.id;
+      results.push({ id: descriptor.id, accepted: true });
+    }
+    return { result: { results } };
+  }
+
   private malformed(field: string): EidoverseMcplResponse {
     this.logger?.warn(`Eidoverse MCPL door sent a malformed ${field} request`);
     return { error: { code: MCPL_ERROR.invalidParams, message: `malformed ${field}` } };
+  }
+
+  private malformedCommit(): void {
+    this.logger?.warn("Eidoverse MCPL door sent a malformed channels/changed notification");
   }
 }
 
@@ -146,4 +224,10 @@ function parseDescriptors(value: unknown): McplChannelDescriptor[] | null {
     descriptors.push(entry as unknown as McplChannelDescriptor);
   }
   return descriptors;
+}
+
+function parseRemovedIds(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null;
+  if (value.some((id) => typeof id !== "string" || !id)) return null;
+  return value as string[];
 }

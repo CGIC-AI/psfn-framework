@@ -28,6 +28,15 @@ const DEFAULT_RECONNECT_MAX_ATTEMPTS = 3;
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const DEFAULT_HANDSHAKE_TIMEOUT_MS = 10_000;
 const DEFAULT_AMBIENT_SAY_DEBOUNCE_MS = 180_000;
+/**
+ * Batches of pushed `channels/incoming` traffic that may wait for the wake
+ * dispatcher at once. Phase 1's poll loop had natural backpressure — it asked
+ * for the next batch only after the previous turn finished — and the push
+ * transport has none, so the budget is stated here instead. Four is roughly a
+ * minute of door traffic at the busiest observed knock rate while an inference
+ * turn is in flight; past it the arriving batch is dropped and counted.
+ */
+const DEFAULT_WAKE_QUEUE_LIMIT = 4;
 
 /**
  * Feature sets the Hub grants unless the operator narrows them. Presence,
@@ -56,6 +65,13 @@ export interface EidoverseMcplConfig {
    * addressing and can start a turn. Default false — see the wake-filter table.
    */
   catchupWake: boolean;
+  /**
+   * How many delivered `channels/incoming` batches may wait for the wake
+   * dispatcher before further batches are dropped. Turns are serialized, so an
+   * unbounded queue would let a knock storm accumulate inference work the Hub
+   * can never catch up on.
+   */
+  wakeQueueLimit: number;
   reconnectBaseMs: number;
   reconnectMaxMs: number;
   reconnectMaxAttempts: number;
@@ -102,6 +118,11 @@ export function loadEidoverseMcplConfig(
   const agentName = requiredEnv(env, "EIDOVERSE_MCP_AGENT_NAME");
   const featureSets = parseFeatureSets(optionalEnv(env, "EIDOVERSE_MCPL_FEATURE_SETS_JSON"));
   const catchupWake = parseBoolean(env, "EIDOVERSE_MCPL_CATCHUP_WAKE", false);
+  const wakeQueueLimit = positiveIntegerEnv(
+    env,
+    "EIDOVERSE_MCPL_WAKE_QUEUE_LIMIT",
+    DEFAULT_WAKE_QUEUE_LIMIT,
+  );
   const reconnectBaseMs = positiveIntegerEnv(
     env,
     "EIDOVERSE_MCP_RECONNECT_BASE_MS",
@@ -124,6 +145,7 @@ export function loadEidoverseMcplConfig(
     featureSets,
     effectiveCapabilities: effectiveCapabilitiesForFeatureSets(featureSets),
     catchupWake,
+    wakeQueueLimit,
     reconnectBaseMs,
     reconnectMaxMs,
     reconnectMaxAttempts: positiveIntegerEnv(

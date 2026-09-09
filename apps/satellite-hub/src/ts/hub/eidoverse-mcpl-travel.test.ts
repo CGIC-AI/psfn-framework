@@ -127,6 +127,38 @@ test("a mapped world changes the placeId every later turn carries", async () => 
   }
 });
 
+test("the arrival note is delivered once, not narrated on every later turn", async () => {
+  const agent = new RecordingAgent();
+  const door = new RecordingDoor();
+  const warnings: string[] = [];
+  const session = adapter(door, agent, warnings);
+  session.connect();
+  try {
+    assert.deepEqual(await session.travelTo("annex"), {
+      accepted: true,
+      world: "annex",
+      placeId: "eidoverse:annex",
+    });
+    await placeIdOfNextTurn(session, agent, "first-after-arrival");
+    const arrivalTurn = agent.calls.at(-1)?.channel?.contextNotes ?? [];
+    assert.equal(
+      arrivalTurn.filter((note) => note.key === "eidoverse.travel").length,
+      1,
+      "the turn right after the move says where the body arrived",
+    );
+
+    await placeIdOfNextTurn(session, agent, "second-after-arrival");
+    const laterTurn = agent.calls.at(-1)?.channel?.contextNotes ?? [];
+    assert.deepEqual(
+      laterTurn.filter((note) => note.key === "eidoverse.travel"),
+      [],
+      "arrival is an event: a turn an hour later must not still announce it",
+    );
+  } finally {
+    session.disconnect();
+  }
+});
+
 test("an unmapped world stays put and never fabricates a place", async () => {
   const agent = new RecordingAgent();
   const door = new RecordingDoor();

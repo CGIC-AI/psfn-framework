@@ -9943,6 +9943,13 @@
       "value": "1"
     },
     {
+      "file": "src/persistence/workspaces/shared-workspace-bounds.ts",
+      "name": "MAX_LISTING_CURSOR_LENGTH",
+      "value": "4_096",
+      "form": "length-guard",
+      "note": "Code-owned structural guard on an untrusted listing cursor (psfn-framework-2xt9c); it mirrors the artifact-path length rule the store already enforces and bounds what a caller can make the listing parse, so it is not operator tuning."
+    },
+    {
       "file": "src/persistence/workspaces/shared-workspace-store.ts",
       "name": "MAX_ARTIFACT_BYTES",
       "value": "1_000_000"

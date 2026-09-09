@@ -135,10 +135,12 @@ describe('fleet system observability across two tenant pool scopes', () => {
   it('shows one gateway incident in both companions, under the id the alert carried', async () => {
     const fixture = await fleet();
     try {
-      // The gateway, writing where a fleet can read it.
+      // The gateway, writing where a fleet can read it — under the write
+      // contract, so the readiness proof covers the statements it runs.
       const gatewayStream = await PostgresHealthEventStore.connectShared(
         fixture.databaseUrl,
         MAX_ROWS,
+        { access: 'write' },
       );
       const correlationId = stableHealthConditionCorrelationId(
         'operator_alert_sinks_unconfigured',
@@ -222,7 +224,7 @@ describe('fleet system observability across two tenant pool scopes', () => {
     try {
       const gatewayLedger = await PostgresHumanEscalationStore.connectShared(
         fixture.databaseUrl,
-        { bounds: DEFAULT_HUMAN_ESCALATION_CONFIG.retention },
+        { access: 'raise', bounds: DEFAULT_HUMAN_ESCALATION_CONFIG.retention },
       );
       const raised = await gatewayLedger.openOrReopen(escalationFacts());
       await gatewayLedger.close();
@@ -297,4 +299,190 @@ describe('fleet system observability across two tenant pool scopes', () => {
       await closeAll(fixture);
     }
   });
+});
+
+// ── The shared readiness proof covers the writes each path makes
+// (bead psfn-framework-2xt9c) ──
+//
+// `connectShared` could only ever ask for SELECT and UPDATE, so a credential
+// with read-only DML on the shared schema opened both stores cleanly and then
+// lost every observation the gateway made — a fire-and-forget write, a logged
+// catch, and no operator surface any the wiser. It was masked because the sole
+// provisioning path grants all four privileges; that is what kept it invisible,
+// not what made it safe. Real roles and real GRANTs here: a mock cannot fail
+// the way a narrowed grant fails.
+async function grantSharedAccess(
+  databaseUrl: string,
+  role: string,
+  grants: ReadonlyArray<{ relation: string; privileges: string }>,
+): Promise<void> {
+  const admin = createPostgresPool(databaseUrl, {
+    applicationName: 'fleet-observability-grants',
+    allowExitOnIdle: true,
+    max: 1,
+  });
+  try {
+    await admin.query(`CREATE ROLE ${role} NOLOGIN`);
+    await admin.query(`GRANT USAGE ON SCHEMA shared TO ${role}`);
+    // Every shared store proves the migration chain before its own relations,
+    // so the ledger read is table stakes for any credential here.
+    await admin.query(`GRANT SELECT ON shared.shared_schema_migrations TO ${role}`);
+    for (const grant of grants) {
+      await admin.query(`GRANT ${grant.privileges} ON shared.${grant.relation} TO ${role}`);
+    }
+  } finally {
+    await admin.end();
+  }
+}
+
+describe('shared observability readiness proves the privileges each path uses', () => {
+  it('refuses the health-stream write path a credential that can only read', async () => {
+    const fixture = await fleet();
+    const role = 'fleet_health_reader';
+    try {
+      await grantSharedAccess(fixture.databaseUrl, role, [
+        { relation: 'runtime_health_events', privileges: 'SELECT' },
+      ]);
+
+      // The read path is genuinely satisfied by this grant...
+      const reader = await PostgresHealthEventStore.connectShared(
+        fixture.databaseUrl,
+        MAX_ROWS,
+        { role, access: 'read' },
+      );
+      await expect(reader.listRecent({ limit: 1 })).resolves.toEqual([]);
+      await reader.close();
+
+      // ...and the write path is not, because `record` inserts and its ring
+      // deletes. This used to open, and fail later, once, into a log line.
+      await expect(PostgresHealthEventStore.connectShared(
+        fixture.databaseUrl,
+        MAX_ROWS,
+        { role, access: 'write' },
+      )).rejects.toThrow(/missing required role privileges: INSERT, DELETE/u);
+    } finally {
+      await closeAll(fixture);
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('requires the answer path the DELETE its own retention ring runs', async () => {
+    const fixture = await fleet();
+    const role = 'fleet_escalation_answerer';
+    try {
+      // Exactly the privileges the shared ledger used to demand of a Garden.
+      await grantSharedAccess(fixture.databaseUrl, role, [
+        { relation: 'human_escalations', privileges: 'SELECT, UPDATE' },
+        { relation: 'human_escalation_attempts', privileges: 'SELECT' },
+      ]);
+
+      await expect(PostgresHumanEscalationStore.connectShared(fixture.databaseUrl, {
+        role,
+        access: 'answer',
+        bounds: DEFAULT_HUMAN_ESCALATION_CONFIG.retention,
+      })).rejects.toThrow(/missing required role privileges: DELETE/u);
+
+      const admin = createPostgresPool(fixture.databaseUrl, {
+        applicationName: 'fleet-observability-grants',
+        allowExitOnIdle: true,
+        max: 1,
+      });
+      try {
+        await admin.query(`GRANT DELETE ON shared.human_escalations TO ${role}`);
+      } finally {
+        await admin.end();
+      }
+
+      const answerer = await PostgresHumanEscalationStore.connectShared(fixture.databaseUrl, {
+        role,
+        access: 'answer',
+        bounds: DEFAULT_HUMAN_ESCALATION_CONFIG.retention,
+      });
+      await expect(answerer.list({ limit: 1 })).resolves.toEqual([]);
+      await answerer.close();
+
+      // The raise path still is not satisfied: a Garden answers, it does not
+      // file the fleet's questions.
+      await expect(PostgresHumanEscalationStore.connectShared(fixture.databaseUrl, {
+        role,
+        access: 'raise',
+        bounds: DEFAULT_HUMAN_ESCALATION_CONFIG.retention,
+      })).rejects.toThrow(/missing required role privileges: INSERT/u);
+    } finally {
+      await closeAll(fixture);
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('admits the fully granted fleet credential on every shared contract', async () => {
+    const fixture = await fleet();
+    const role = 'fleet_full_runtime';
+    try {
+      await grantSharedAccess(fixture.databaseUrl, role, [
+        { relation: 'runtime_health_events', privileges: 'SELECT, INSERT, UPDATE, DELETE' },
+        { relation: 'human_escalations', privileges: 'SELECT, INSERT, UPDATE, DELETE' },
+        { relation: 'human_escalation_attempts', privileges: 'SELECT, INSERT, UPDATE, DELETE' },
+      ]);
+
+      const stream = await PostgresHealthEventStore.connectShared(
+        fixture.databaseUrl,
+        MAX_ROWS,
+        { role, access: 'write' },
+      );
+      await stream.record(healthEvent({}));
+      expect(await stream.listRecent({ limit: 5 })).toHaveLength(1);
+      await stream.close();
+
+      const ledger = await PostgresHumanEscalationStore.connectShared(fixture.databaseUrl, {
+        role,
+        access: 'raise',
+        bounds: DEFAULT_HUMAN_ESCALATION_CONFIG.retention,
+      });
+      const raised = await ledger.openOrReopen(escalationFacts());
+      expect(raised.state).toBe('open');
+      await ledger.close();
+    } finally {
+      await closeAll(fixture);
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('refuses a companion-owned escalation on the fleet-wide ledger', async () => {
+    const fixture = await fleet();
+    try {
+      const gatewayLedger = await PostgresHumanEscalationStore.connectShared(
+        fixture.databaseUrl,
+        { access: 'raise', bounds: DEFAULT_HUMAN_ESCALATION_CONFIG.retention },
+      );
+      try {
+        // The shared ledger holds the fleet's SYSTEM-owned questions. A
+        // companion-owned row here would appear on every Garden in the fleet,
+        // attributed to a companion none of them are — enforced at the store so
+        // it does not depend on every caller remembering (psfn-framework-2xt9c).
+        await expect(gatewayLedger.openOrReopen(escalationFacts({
+          owner: { kind: 'companion', companionId: COMPANION_A as never },
+          dedupeKey: 'companion-owned',
+        }))).rejects.toThrow(/system-owned escalations only/u);
+
+        // The same facts, system-owned, are accepted — so this is a tenancy
+        // rule, not a broken write path.
+        await expect(gatewayLedger.openOrReopen(escalationFacts({
+          dedupeKey: 'system-owned',
+        }))).resolves.toMatchObject({ owner: { kind: 'system' } });
+      } finally {
+        await gatewayLedger.close();
+      }
+
+      // A companion's own tenant ledger is unaffected: it is exactly where a
+      // companion-owned escalation belongs.
+      const tenant = tenantPool(fixture.databaseUrl, SCHEMA_A);
+      fixture.pools.push(tenant);
+      const companionLedger = await PostgresHumanEscalationStore.fromPool(tenant, {
+        bounds: DEFAULT_HUMAN_ESCALATION_CONFIG.retention,
+      });
+      await expect(companionLedger.openOrReopen(escalationFacts({
+        owner: { kind: 'companion', companionId: COMPANION_A as never },
+        dedupeKey: 'companion-owned',
+      }))).resolves.toMatchObject({ owner: { kind: 'companion' } });
+    } finally {
+      await closeAll(fixture);
+    }
+  }, INTEGRATION_TIMEOUT_MS);
 });

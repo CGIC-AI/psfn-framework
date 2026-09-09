@@ -11,6 +11,10 @@ import {
   type AdminSharedWorkspaceService,
 } from './services/shared-workspace-service.js';
 import {
+  SharedWorkspaceListingCursorInvalidError,
+  SharedWorkspaceListingCursorStaleError,
+} from '../../persistence/workspaces/shared-workspace-bounds.js';
+import {
   AutomataLessonProposalService,
   type AutomataLessonProposalPolicy,
 } from '../../faculties/automata/bus/lesson-proposal.js';
@@ -74,18 +78,47 @@ export function buildAdminSharedWorkspaceRoutes(options: {
       match: exactPath('/api/admin/shared-workspace'),
       handle: (req, res) => {
         // `artifactCursor` resumes the previous response's nextArtifactCursor.
-        // Omitting it starts at the first page; a cursor the corpus no longer
-        // contains fails rather than silently restarting the listing.
+        // Omitting the parameter starts at the first page; a cursor the corpus
+        // no longer contains fails rather than silently restarting the listing.
+        //
+        // Three failures used to be one 500 (psfn-framework-2xt9c). They are
+        // three different things and the caller does three different things
+        // about them:
+        //   * `?artifactCursor=` — present but empty. It used to be coerced to
+        //     "no cursor", so a client that lost its cursor silently restarted
+        //     the listing and re-served page one as if it were a continuation.
+        //     Now it is a 400: the parameter was sent, so it must mean something.
+        //   * a cursor of a shape this listing never mints — refused as
+        //     malformed, without being resolved against the corpus.
+        //   * a well-formed cursor whose artifact has left the listing — 409
+        //     with `retryFromStart`, because the listing is intact and the
+        //     answer is to restart it, not to retry the same request.
+        // Anything else really is a fault of this store, and stays a 500.
         const artifactCursor = parseRequestUrl(req, '/api/admin/shared-workspace')
           .searchParams.get('artifactCursor');
+        if (artifactCursor !== null && artifactCursor.length === 0) {
+          sendJson(res, 400, {
+            error: 'artifactCursor must be omitted to start the listing, '
+              + 'or carry the previous response nextArtifactCursor',
+          });
+          return;
+        }
         try {
           sendJson(
             res,
             200,
-            options.service.getSnapshot(artifactCursor ? { artifactCursor } : {}),
+            options.service.getSnapshot(artifactCursor === null ? {} : { artifactCursor }),
             { 'Cache-Control': 'no-store' },
           );
         } catch (error) {
+          if (error instanceof SharedWorkspaceListingCursorInvalidError) {
+            sendJson(res, 400, { error: toErrorMessage(error) });
+            return;
+          }
+          if (error instanceof SharedWorkspaceListingCursorStaleError) {
+            sendJson(res, 409, { error: toErrorMessage(error), retryFromStart: true });
+            return;
+          }
           sendJson(res, 500, { error: toErrorMessage(error) });
         }
       },

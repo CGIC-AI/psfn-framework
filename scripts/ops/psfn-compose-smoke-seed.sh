@@ -154,7 +154,7 @@ else
     const displayName = process.env.PSFN_SMOKE_CARD_NAME || "Smoke";
     const manifest = {
       postgres: {
-        sharedMigrationRole: "shared_schema_migration",
+        sharedMigrationRole: "shared_schema_migration_smoke",
         sharedMigrationDatabaseUrlRef: { kind: "env", envName: "SHARED_SCHEMA_MIGRATION_DATABASE_URL" },
       },
       companions: [

@@ -35,7 +35,10 @@ import {
 } from '../postgres.js';
 import { POSTGRES_HUMAN_ESCALATION_MIGRATIONS, SHARED_SCHEMA_NAME } from './migrations.js';
 import { assertSharedSchemaReady } from './shared-schema.js';
-import { assertPostgresRelationColumns } from './relation-contract.js';
+import {
+  assertPostgresRelationColumns,
+  type PostgresRelationRuntimePrivilege,
+} from './relation-contract.js';
 import { requireSafeInteger as safeInteger } from './row-guards.js';
 import {
   HUMAN_ESCALATION_LIMITS,
@@ -158,6 +161,39 @@ function normalizeListLimit(limit: number): number {
 }
 
 /**
+ * What the opener of the shared fleet ledger actually does with it (bead
+ * psfn-framework-2xt9c). The gateway RAISES the fleet's system-owned
+ * escalations; a companion's Garden ANSWERS them and never raises there.
+ */
+export type SharedHumanEscalationStoreAccess = 'answer' | 'raise';
+
+/**
+ * The ACLs each access mode's own statements need, proved at readiness.
+ *
+ * Read off the SQL, not off intent. The answer path updates an escalation and
+ * then runs the retention ring over the rows a resolution just made evictable,
+ * so it needs DELETE on `human_escalations` — which the previous SELECT+UPDATE
+ * proof did not cover. The raise path additionally inserts escalations and
+ * inserts, settles, and rings attempt rows. Attempt rows cascade with their
+ * escalation, and PostgreSQL runs that referential action with the referencing
+ * table's owner privileges, so the answer path needs no DELETE there.
+ */
+const SHARED_HUMAN_ESCALATION_PRIVILEGES: Readonly<Record<
+  SharedHumanEscalationStoreAccess,
+  { escalations: readonly PostgresRelationRuntimePrivilege[];
+    attempts: readonly PostgresRelationRuntimePrivilege[]; }
+>> = Object.freeze({
+  answer: Object.freeze({
+    escalations: Object.freeze(['SELECT', 'UPDATE', 'DELETE'] as const),
+    attempts: Object.freeze(['SELECT'] as const),
+  }),
+  raise: Object.freeze({
+    escalations: Object.freeze(['SELECT', 'INSERT', 'UPDATE', 'DELETE'] as const),
+    attempts: Object.freeze(['SELECT', 'INSERT', 'UPDATE', 'DELETE'] as const),
+  }),
+});
+
+/**
  * How the ledger reports that it is holding as many unanswered questions of one
  * kind as the owner file admits. Deliberately a callback rather than a health
  * emitter dependency: the store owns storage, and the entrypoint that already
@@ -177,12 +213,38 @@ export interface PostgresHumanEscalationStoreOptions {
 }
 
 export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
+  /**
+   * Attempt keys this store has claimed FOR A CALLER THAT WILL SETTLE THEM, by
+   * escalation.
+   *
+   * The ring below evicts by rank, and a rank cannot see that a row is still
+   * being delivered on. Under a burst of concurrent raises against one
+   * escalation, the claim that filled the cap would evict a sibling attempt
+   * whose sink call is still in flight, and that caller's settle would then
+   * fail with "not in the ledger" — turning a delivered notice into an
+   * unrecorded one, which is exactly what pages a human twice.
+   *
+   * This is process-local by construction, and honestly so: it protects the
+   * claims THIS store owns. In single-companion mode the gateway and the agent
+   * both write this table, so a burst spanning both processes can still evict
+   * the other process's in-flight attempt; closing that would need a settled
+   * marker column, which is a schema change this bead does not carry.
+   */
+  private readonly inFlightAttempts = new Map<string, string>();
+
   private constructor(
     private readonly pool: Pool,
     private readonly bounds: HumanEscalationLedgerBounds,
     private readonly onSaturated: HumanEscalationLedgerSaturationReporter | null,
     private readonly now: () => number,
     private readonly ownsPool: boolean,
+    /**
+     * The shared fleet ledger holds the gateway's SYSTEM-owned escalations and
+     * nothing else (bead psfn-framework-e5r0s). Enforced here rather than only
+     * at the caller so a future writer of this table cannot quietly file a
+     * companion-owned question into the fleet's operator surface.
+     */
+    private readonly systemOwnedOnly: boolean,
   ) {}
 
   static async connect(
@@ -208,6 +270,7 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
       options.onSaturated ?? null,
       options.now ?? (() => Date.now()),
       true,
+      false,
     );
   }
 
@@ -225,12 +288,14 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
     databaseUrl: string,
     options: {
       role?: string;
+      access?: SharedHumanEscalationStoreAccess;
       bounds: HumanEscalationLedgerBounds;
       onSaturated?: HumanEscalationLedgerSaturationReporter;
       now?: () => number;
     },
   ): Promise<PostgresHumanEscalationStore> {
     const bounds = requireHumanEscalationLedgerBounds(options.bounds);
+    const privileges = SHARED_HUMAN_ESCALATION_PRIVILEGES[options.access ?? 'answer'];
     const pool = createPostgresPool(databaseUrl, {
       applicationName: 'psfn-fleet-human-escalations',
       allowExitOnIdle: true,
@@ -251,13 +316,13 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
         // A companion's Garden must be able to ANSWER a system-owned
         // escalation, not merely read it, or the one place a human resolves
         // things is read-only for exactly the faults nobody else can see.
-        privileges: ['SELECT', 'UPDATE'],
+        privileges: privileges.escalations,
       });
       await assertPostgresRelationColumns(pool, {
         schema: SHARED_SCHEMA_NAME,
         relation: 'human_escalation_attempts',
         columns: ['idempotency_key', 'escalation_id', 'sink', 'outcome', 'attempted_at_ms'],
-        privileges: ['SELECT'],
+        privileges: privileges.attempts,
       });
     } catch (error) {
       await pool.end().catch(() => undefined);
@@ -268,6 +333,7 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
       bounds,
       options.onSaturated ?? null,
       options.now ?? (() => Date.now()),
+      true,
       true,
     );
   }
@@ -285,6 +351,9 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
       options.onSaturated ?? null,
       options.now ?? (() => Date.now()),
       false,
+      // A pool the caller owns is a tenant or test scope, never the fleet's
+      // shared ledger — that one is only ever opened by `connectShared`.
+      false,
     );
   }
 
@@ -296,6 +365,11 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
    * seeing it return is the honest outcome.
    */
   async openOrReopen(facts: HumanEscalationFacts): Promise<HumanEscalationRecord> {
+    if (this.systemOwnedOnly && facts.owner.kind !== 'system') {
+      throw new Error(
+        'Shared fleet escalation ledger accepts system-owned escalations only',
+      );
+    }
     const row = await queryOne<EscalationRow>(this.pool, `
       INSERT INTO human_escalations (
         escalation_id, schema_version, kind, severity, owner_kind, owner_companion_id,
@@ -374,7 +448,10 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
    * cannot see a row the concurrent transaction committed after that snapshot
    * was taken — and would then report neither a claim nor an owner.
    */
-  async claimAttempt(attempt: HumanEscalationAttempt): Promise<HumanEscalationAttemptClaim> {
+  async claimAttempt(
+    attempt: HumanEscalationAttempt,
+    options: { awaitingSettlement?: boolean } = {},
+  ): Promise<HumanEscalationAttemptClaim> {
     const claimed = await queryOne<AttemptRow>(this.pool, `
       INSERT INTO human_escalation_attempts (
         idempotency_key, escalation_id, sink, outcome, attempted_at_ms
@@ -389,7 +466,14 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
       attempt.attemptedAtMs,
     ]);
     if (claimed) {
-      await this.pruneAttempts(attempt.escalationId, attempt.idempotencyKey);
+      // Registered BEFORE the prune, so this claim's own ring pass already sees
+      // it — and every sibling claim still awaiting its sink — as un-evictable.
+      // A caller that claims a terminal outcome settles nothing and registers
+      // nothing, so the ring keeps holding those to the cap exactly.
+      if (options.awaitingSettlement === true) {
+        this.inFlightAttempts.set(attempt.idempotencyKey, attempt.escalationId);
+      }
+      await this.pruneAttempts(attempt.escalationId);
       return { claimed: true };
     }
     const existing = await this.findAttempt(attempt.idempotencyKey);
@@ -416,6 +500,21 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
    * happened instead of guessing.
    */
   async settleAttempt(input: {
+    idempotencyKey: string;
+    expectedOutcome: HumanEscalationDeliveryOutcome;
+    outcome: HumanEscalationDeliveryOutcome;
+  }): Promise<void> {
+    try {
+      await this.settleClaimedAttempt(input);
+    } finally {
+      // Released even when the settle throws: the attempt is no longer in
+      // flight either way, and a key that stayed registered would exempt a dead
+      // row from the ring forever.
+      this.inFlightAttempts.delete(input.idempotencyKey);
+    }
+  }
+
+  private async settleClaimedAttempt(input: {
     idempotencyKey: string;
     expectedOutcome: HumanEscalationDeliveryOutcome;
     outcome: HumanEscalationDeliveryOutcome;
@@ -525,6 +624,7 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
   }
 
   async close(): Promise<void> {
+    this.inFlightAttempts.clear();
     if (this.ownsPool) await this.pool.end();
   }
 
@@ -570,23 +670,38 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
    * The attempt ring, taken where attempts are created rather than on the next
    * raise, so the bound holds exactly rather than one row late.
    *
-   * The key just claimed is excluded from the candidates by name, not by its
-   * rank: the caller settles that row once the sink answers, and an eviction
-   * racing that settle would turn a delivered notice into "not in the ledger".
-   * A claim whose escalation is already at the cap therefore evicts the OLDEST
-   * attempt instead of itself, whatever a caller-supplied timestamp claims.
+   * Every attempt this store has claimed and not yet settled is excluded from
+   * the candidates by NAME, not by its rank (bead psfn-framework-2xt9c). The
+   * key just claimed was the only exclusion before, which held for one raise at
+   * a time and broke under a burst: N concurrent claims against one escalation
+   * each pruned to the cap, and each one's prune could evict a sibling whose
+   * sink call had not answered yet — so that sibling's settle failed with "not
+   * in the ledger" and a notice that WAS delivered stopped being recorded.
+   *
+   * The cap is therefore held against the settled rows only: with `k` attempts
+   * in flight the ring keeps `cap - k` of the rest, so a burst wider than the
+   * cap leaves the ledger momentarily above it and returns to the cap as the
+   * settles land. Overshooting a bound is recoverable; deleting the record of a
+   * page that already reached a human is not.
    */
-  private async pruneAttempts(escalationId: string, claimedKey: string): Promise<void> {
+  private async pruneAttempts(escalationId: string): Promise<void> {
+    const inFlight = [...this.inFlightAttempts.entries()]
+      .filter(([, owner]) => owner === escalationId)
+      .map(([key]) => key);
     await executeQuery(this.pool, `
       DELETE FROM human_escalation_attempts
       WHERE idempotency_key IN (
         SELECT idempotency_key
         FROM human_escalation_attempts
-        WHERE escalation_id = $1 AND idempotency_key <> $3
+        WHERE escalation_id = $1 AND idempotency_key <> ALL($3::text[])
         ORDER BY attempted_at_ms DESC, idempotency_key DESC
         OFFSET $2
       )
-    `, [escalationId, Math.max(0, this.bounds.maxAttemptsPerEscalation - 1), claimedKey]);
+    `, [
+      escalationId,
+      Math.max(0, this.bounds.maxAttemptsPerEscalation - inFlight.length),
+      inFlight,
+    ]);
   }
 
   /**
@@ -662,6 +777,7 @@ export function createFleetSystemHumanEscalationStore(
     throw new Error('Fleet system escalation ledger requires config.postgresDatabaseUrl');
   }
   return PostgresHumanEscalationStore.connectShared(databaseUrl, {
+    access: 'raise',
     bounds: options.bounds,
     ...(options.onSaturated ? { onSaturated: options.onSaturated } : {}),
   });

@@ -152,7 +152,7 @@ async function waitForHealth(timeoutMs) {
 // against the agent's canonical L0 session journal after the successful turn.
 async function queryRuntimeTableCount() {
   const res = compose(
-    ['exec', '-T', 'postgres', 'psql', '-U', 'psfn', '-d', 'psfn', '-tAc',
+    ['exec', '-T', 'postgres', 'psql', '-U', 'psfn', '-d', 'psfn_smoke', '-tAc',
       "SELECT count(*) FROM information_schema.tables "
       + "WHERE table_schema IN ('companion_smoke', 'shared');"],
     { capture: true },

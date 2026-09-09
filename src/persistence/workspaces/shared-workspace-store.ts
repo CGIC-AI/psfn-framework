@@ -20,7 +20,7 @@ import {
 import { isRecord } from '../../shared/utils/types.js';
 import { SHARED_WORKSPACE_POLICY } from './provisioning.js';
 import {
-  resumeSharedWorkspaceListing,
+  SharedWorkspaceListingWindow,
   selectSharedWorkspacePage,
   type SharedWorkspaceArtifactPage,
   type SharedWorkspaceListBounds,
@@ -312,11 +312,18 @@ export class SharedCompanionWorkspaceStore {
   /**
    * List published artifacts one operator-bounded page at a time.
    *
-   * The walk collects paths and stat sizes only; content is read and hashed
-   * exclusively for the artifacts a page actually serves, so Garden's list cost
-   * follows the declared page rather than the corpus (psfn-framework-9jld5).
-   * Hashing stays per-call — an artifact edited out of band is still caught by
-   * the page that returns it.
+   * Content is read and hashed exclusively for the artifacts a page actually
+   * serves, so Garden's list cost follows the declared page rather than the
+   * corpus (psfn-framework-9jld5). Hashing stays per-call — an artifact edited
+   * out of band is still caught by the page that returns it.
+   *
+   * The WALK is bounded the same way (psfn-framework-2xt9c). It used to collect
+   * every path in the tree, with a `stat` per file, and sort the lot before the
+   * page bound applied: the page was small and the work behind it was the whole
+   * corpus, on every request, which paging multiplied instead of dividing. The
+   * window below retains at most one page of candidates in listing order and
+   * spends a `stat` only on those, so both the retained bytes and the syscalls
+   * follow the operator's declared page size.
    */
   listArtifacts(request: {
     bounds: SharedWorkspaceListBounds;
@@ -324,36 +331,38 @@ export class SharedCompanionWorkspaceStore {
   }): SharedWorkspaceArtifactPage {
     this.recoverTransactions();
     const artifactsRoot = join(this.root, 'artifacts');
-    const found: Array<{ artifactPath: string; absolutePath: string; size: number }> = [];
+    const window = new SharedWorkspaceListingWindow<{
+      artifactPath: string;
+      absolutePath: string;
+    }>(request.bounds.pageSize, request.cursor);
     const visit = (dir: string): void => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
         const path = join(dir, entry.name);
         if (entry.isDirectory()) visit(path);
         else if (entry.isFile()) {
-          found.push({
-            artifactPath: relative(artifactsRoot, path).replace(/\\/g, '/'),
-            absolutePath: path,
-            size: statSync(path).size,
-          });
+          const artifactPath = relative(artifactsRoot, path).replace(/\\/g, '/');
+          window.offer(artifactPath, () => ({ artifactPath, absolutePath: path }));
         }
       }
     };
     visit(artifactsRoot);
-    const ordered = found.sort((a, b) => a.artifactPath.localeCompare(b.artifactPath));
-    const remaining = resumeSharedWorkspaceListing(
-      ordered,
-      request.cursor,
-      entry => entry.artifactPath,
+    window.requireResolvedCursor();
+    const page = selectSharedWorkspacePage(
+      window.entries(),
+      request.bounds,
+      entry => statSync(entry.absolutePath).size,
     );
-    const page = selectSharedWorkspacePage(remaining, request.bounds, entry => entry.size);
     const artifacts = page.entries.map(entry => ({
       artifactPath: entry.artifactPath,
       revision: hashContent(readFileSync(entry.absolutePath, 'utf8')),
     }));
     const last = artifacts[artifacts.length - 1];
+    // Exhausted only when the page consumed the window AND the window saw
+    // nothing past it: a truncated window means more artifacts remain even
+    // though this page did not fill.
     return {
       artifacts,
-      nextCursor: page.exhausted || !last ? null : last.artifactPath,
+      nextCursor: (page.exhausted && !window.truncated) || !last ? null : last.artifactPath,
     };
   }
 

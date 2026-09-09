@@ -212,7 +212,9 @@ describe('shared workspace admin write authentication', () => {
 
     expect(response.status).toBe(201);
     expect(JSON.parse(response.body)).toMatchObject({ status: 'pending' });
-    const [review] = service.getSnapshot().reviews;
+    // The first page always carries the review list; a resumed page carries an
+    // explicit null instead (psfn-framework-2xt9c).
+    const [review] = service.getSnapshot().reviews ?? [];
     expect(review?.artifactPath).toMatch(/^automata\/lesson-proposals\/[0-9a-f]{64}\.json$/u);
     expect(JSON.parse(review!.content)).toMatchObject({
       state: 'review_required',
@@ -332,7 +334,18 @@ describe('shared workspace admin write authentication', () => {
       const payload = JSON.parse(response.body) as {
         artifacts: Array<{ artifactPath: string; revision: string }>;
         nextArtifactCursor: string | null;
+        reviews: unknown[] | null;
+        reviewsIncluded: boolean;
       };
+      // The review list is the one unbounded read in this response, so it rides
+      // the first page only rather than being repeated per artifact page
+      // (psfn-framework-2xt9c). A resumed page says so instead of serving an
+      // empty list that reads like "no reviews".
+      expect(payload.reviewsIncluded).toBe(pages === 0);
+      expect(Array.isArray(payload.reviews)).toBe(pages === 0);
+      // An explicit absence on a resumed page, never an empty list that would
+      // read as "this workspace has no reviews".
+      if (pages > 0) expect(payload.reviews).toBeNull();
       expect(payload.artifacts.length).toBeLessThanOrEqual(GARDEN_LIST_BOUNDS.pageSize);
       collected.push(...payload.artifacts.map(artifact => artifact.artifactPath));
       cursor = payload.nextArtifactCursor;
@@ -342,15 +355,49 @@ describe('shared workspace admin write authentication', () => {
     expect(pages).toBe(3);
     expect(collected).toEqual(['a.md', 'b.md', 'c.md', 'd.md', 'e.md']);
 
+    // A well-formed cursor whose artifact left the listing: the listing is
+    // intact, so the caller is told to restart it rather than handed an opaque
+    // server fault (psfn-framework-2xt9c).
     const stale = await invoke(
       snapshotRoute,
       '/api/admin/shared-workspace?artifactCursor=z.md',
       {},
     );
-    expect(stale.status).toBe(500);
+    expect(stale.status).toBe(409);
     expect(JSON.parse(stale.body)).toMatchObject({
       error: expect.stringContaining('restart the listing'),
+      retryFromStart: true,
     });
+
+    // Present but empty. It used to be coerced to "no cursor", so a caller that
+    // lost its cursor silently re-served page one as a continuation.
+    const empty = await invoke(snapshotRoute, '/api/admin/shared-workspace?artifactCursor=', {});
+    expect(empty.status).toBe(400);
+    expect(JSON.parse(empty.body)).toMatchObject({
+      error: expect.stringContaining('artifactCursor'),
+    });
+    expect(JSON.parse(empty.body)).not.toHaveProperty('retryFromStart');
+
+    // Shapes this listing never mints are refused as malformed, without being
+    // resolved against the corpus — and are answered differently from stale, so
+    // an operator can tell a lost cursor from a tampered one.
+    for (const tampered of [
+      '../outside.md',
+      '/etc/passwd',
+      '.hidden/plan.md',
+      'notes/plan.exe',
+      'notes/plan',
+    ]) {
+      const refused = await invoke(
+        snapshotRoute,
+        `/api/admin/shared-workspace?artifactCursor=${encodeURIComponent(tampered)}`,
+        {},
+      );
+      expect(refused.status, tampered).toBe(400);
+      expect(JSON.parse(refused.body), tampered).toMatchObject({
+        error: expect.stringContaining('not a listing cursor'),
+      });
+    }
   });
 });
 function context(

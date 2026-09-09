@@ -507,7 +507,7 @@ export interface SatelliteClaimCapabilityResolution {
  * companion fatigue budget counts the turn. Additive; absent means the
  * endpoint's default identity spoke, exactly as before.
  */
-export type SatelliteSpeakerKind = 'human' | 'ai';
+type SatelliteSpeakerKind = 'human' | 'ai';
 
 export interface SatelliteSpeakerIdentity {
   id: string;

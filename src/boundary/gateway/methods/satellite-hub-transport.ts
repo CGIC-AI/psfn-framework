@@ -13,7 +13,7 @@ import { toErrorMessage } from '../../../shared/utils/errors.js';
 // path. Nothing here involves a Hub device assertion or fleet auth: a key is
 // the whole credential.
 
-export const HUB_CONTROL_TOKEN_ENV = 'SATELLITE_HUB_CONTROL_TOKEN';
+const HUB_CONTROL_TOKEN_ENV = 'SATELLITE_HUB_CONTROL_TOKEN';
 const MAX_RESPONSE_BYTES = 1_000_000;
 const MAX_REQUEST_BYTES = 64 * 1024;
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -26,7 +26,7 @@ export function providerError(message: string): never {
   throw new JSONRPCErrorException(message, GatewayErrors.PROVIDER_ERROR);
 }
 
-export interface ResolveSatelliteHubOptions {
+interface ResolveSatelliteHubOptions {
   /** Home Assistant methods additionally require `homeAssistant.enabled`. */
   requireHomeAssistant?: boolean;
 }
@@ -37,7 +37,7 @@ export interface ResolveSatelliteHubOptions {
  * same URL for callers that predate the split. Either satisfies the world
  * methods; Home Assistant callers still need Home Assistant enabled.
  */
-export function resolveSatelliteHub(
+function resolveSatelliteHub(
   runtime: GatewayMethodRuntime,
   options: ResolveSatelliteHubOptions = {},
 ): { baseUrl: URL; token: string } {

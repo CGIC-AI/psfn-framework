@@ -34,9 +34,9 @@ const SMOKE_DATABASE_SUFFIX = '_smoke';
 // anywhere in the role name, which no supported deployment's roles carry.
 const SMOKE_ROLE_SEGMENT = /(?:^|_)smoke(?:_|$)/u;
 const SMOKE_HOSTS = new Set([
-  // The compose service and container names on the smoke network.
+  // The compose service name on the smoke network, which is where the seed
+  // container actually reaches it.
   'postgres',
-  'psfn-smoke-postgres',
   // A developer running the seed against a published smoke port.
   'localhost',
   '127.0.0.1',

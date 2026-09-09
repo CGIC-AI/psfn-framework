@@ -433,6 +433,9 @@ export function buildSubstrateMessage(params: {
       }
       : {}),
     ...(satellite ? { satellite } : {}),
+    // S13 MOVE: the world said this speaker is an AI — same marker Discord's
+    // `author.bot` sets, so the contact is auto-tagged and fatigue applies.
+    ...(satellite?.speaker?.kind === 'ai' ? { authorIsMachineIntelligence: true } : {}),
     ...(channelPrivacy ? { channelPrivacy } : {}),
     ...(overrides.modelOverride ? { modelOverride: overrides.modelOverride } : {}),
     ...(overrides.promptOverride ? { promptOverride: overrides.promptOverride } : {}),

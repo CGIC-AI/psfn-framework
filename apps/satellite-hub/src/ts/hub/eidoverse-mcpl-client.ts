@@ -217,6 +217,13 @@ export class EidoverseMcplClient {
     return this.callTool("posture", { kind });
   }
 
+  async whisper(to: string, text: string): Promise<string> {
+    if (text.length > EIDOVERSE_SAY_MAX_TEXT_LENGTH || this.containsSensitiveValue(text)) {
+      throw new EidoverseMcpRequestError("Eidoverse MCPL whisper request failed");
+    }
+    return this.callTool("whisper", { to, text });
+  }
+
   async spawn(args: { lib?: string; query?: string; x?: number; z?: number; yaw?: number; id?: string }): Promise<string> {
     return this.callTool("spawn", { ...args });
   }

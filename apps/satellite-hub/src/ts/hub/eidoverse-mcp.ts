@@ -43,6 +43,7 @@ type EidoverseToolRequest =
   | { name: "stop"; arguments: Record<string, never>; timeoutMs?: number }
   | { name: "emote"; arguments: { name: string }; timeoutMs?: number }
   | { name: "posture"; arguments: { kind: string }; timeoutMs?: number }
+  | { name: "whisper"; arguments: { to: string; text: string }; timeoutMs?: number }
   | {
     name: "spawn";
     arguments: { lib?: string; query?: string; x?: number; z?: number; yaw?: number; id?: string };
@@ -165,6 +166,13 @@ export class EidoverseMcpClient {
 
   async posture(kind: string): Promise<string> {
     return this.requestText({ name: "posture", arguments: { kind } });
+  }
+
+  async whisper(to: string, text: string): Promise<string> {
+    if (text.length > EIDOVERSE_SAY_MAX_TEXT_LENGTH || this.containsSensitiveValue(text)) {
+      throw new EidoverseMcpRequestError("Eidoverse MCP whisper request failed");
+    }
+    return this.requestText({ name: "whisper", arguments: { to, text } });
   }
 
   async spawn(args: { lib?: string; query?: string; x?: number; z?: number; yaw?: number; id?: string }): Promise<string> {

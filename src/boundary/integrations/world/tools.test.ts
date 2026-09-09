@@ -571,7 +571,7 @@ describe('world tool — move', () => {
     expect(result.details?.isError).toBe(true);
     expect(text).toContain('it is a physical place');
     expect(text).toContain('emanation-driven');
-    expect(text).toContain('move applies to virtual places only');
+    expect(text).toContain('move applies to virtual places and to Eidoverse places');
     expect(port.recordDeliberateMove).not.toHaveBeenCalled();
     expect(applyVirtualMove).not.toHaveBeenCalled();
   });
@@ -810,5 +810,207 @@ describe('world tool device-health annotation (psfn-framework-s7wq3)', () => {
 
     expect(unobserved).toBe(bare);
     expect(bare).not.toContain('deviceStatus');
+  });
+});
+
+// ── S13 MOVE: the Eidoverse plane of the same map ──
+
+const EIDO_REGISTRY: PlacesRegistryConfig = {
+  schemaVersion: 1,
+  sites: [
+    { siteId: 'site.home', displayName: 'Home', kind: 'physical' },
+    { siteId: 'eidoverse', displayName: 'Eidoverse', kind: 'virtual' },
+  ],
+  places: [
+    { placeId: 'office', siteId: 'site.home', displayName: 'Office', kind: 'physical', affordances: [] },
+    {
+      placeId: 'eidoverse:commons',
+      siteId: 'eidoverse',
+      displayName: 'Eidoverse Commons',
+      // Physical kind: a world-avatar satellite binds here (satellite place bindings must be physical).
+      kind: 'physical',
+      eidoverse: { world: 'commons' },
+      affordances: [],
+    },
+    {
+      placeId: 'eidoverse:commons:plaza',
+      siteId: 'eidoverse',
+      displayName: 'Commons Plaza',
+      kind: 'physical',
+      eidoverse: { world: 'commons', region: 'plaza', position: { x: 8, z: -2 } },
+      affordances: [],
+    },
+    {
+      placeId: 'eidoverse:garden',
+      siteId: 'eidoverse',
+      displayName: 'The Garden',
+      kind: 'virtual',
+      eidoverse: { world: 'garden' },
+      affordances: [],
+    },
+  ],
+};
+
+const PERCEPTION = {
+  world: 'commons',
+  placeId: 'eidoverse:commons',
+  capturedAt: '2026-09-09T18:00:00.000Z',
+  self: { id: 'artie', world: 'commons', positionKnown: true, x: 0, z: 0, facing: 'S' },
+  people: [{ id: 'visitor', positionKnown: true, x: 2, z: 2.5, distanceM: 3.2, bearing: 'NE', doing: 'standing' }],
+  things: [{ id: 'ab12', label: 'wooden bench', positionKnown: true, x: 4, y: 0, z: 1 }],
+  recent: ['visitor: @Artie come over here'],
+  raw: '',
+};
+
+function createAvatarOps(overrides: Partial<WorldOperations> = {}): WorldOperations {
+  return createMockOps({
+    avatarPerceive: vi.fn(async () => PERCEPTION),
+    avatarMove: vi.fn(async (params: { world?: string; position?: { x: number; z: number } }) => ({
+      accepted: true as const,
+      world: params.world ?? 'commons',
+      placeId: 'eidoverse:commons:plaza',
+      walk: { status: 'arrived' as const, x: params.position?.x ?? 3.5, z: params.position?.z ?? 0 },
+    })),
+    avatarAct: vi.fn(async (params: { verb: string }) => ({
+      accepted: true as const, verb: params.verb, outcome: 'expressed', reply: 'you wave',
+    })),
+    ...overrides,
+  });
+}
+
+describe('world tool — Eidoverse plane (S13 MOVE)', () => {
+  it('move to an Eidoverse place takes the body there first, then applies the local overlay', async () => {
+    const ops = createAvatarOps();
+    const { port, moves } = makeFakePresencePort();
+    const applyVirtualMove = vi.fn();
+    const tool = createWorldTool(ops, { placesRegistry: EIDO_REGISTRY, companionPresence: port, applyVirtualMove });
+
+    const result = await tool.execute('call-move', { action: 'move', placeId: 'eidoverse:commons:plaza' });
+    const payload = JSON.parse(resultText(result));
+
+    expect(result.details?.isError).toBeFalsy();
+    expect(ops.avatarMove).toHaveBeenCalledWith({
+      placeId: 'eidoverse:commons:plaza', world: 'commons', region: 'plaza', position: { x: 8, z: -2 },
+    });
+    expect(payload.body.accepted).toBe(true);
+    expect(payload.body.walk).toEqual({ status: 'arrived', x: 8, z: -2 });
+    expect(payload.summary).toContain('Your body arrived at (8, -2) in world "commons"');
+    // The physical-kind refusal does not apply: the binding is what makes it walkable.
+    expect(applyVirtualMove).toHaveBeenCalledWith('eidoverse:commons:plaza');
+    expect(moves).toHaveLength(1);
+  });
+
+  it('a refused body move aborts BEFORE any presence write and says why', async () => {
+    const ops = createAvatarOps({
+      avatarMove: vi.fn(async () => ({ accepted: false as const, world: 'commons', reason: 'unmapped_world' as const })),
+    });
+    const { port } = makeFakePresencePort();
+    const applyVirtualMove = vi.fn();
+    const tool = createWorldTool(ops, { placesRegistry: EIDO_REGISTRY, companionPresence: port, applyVirtualMove });
+
+    const result = await tool.execute('call-move', { action: 'move', placeId: 'eidoverse:garden' });
+
+    expect(result.details?.isError).toBe(true);
+    expect(resultText(result)).toContain('the world refused the move to "eidoverse:garden" (unmapped_world)');
+    expect(port.recordDeliberateMove).not.toHaveBeenCalled();
+    expect(applyVirtualMove).not.toHaveBeenCalled();
+  });
+
+  it('move by participant walks to that person without changing the registry place', async () => {
+    const ops = createAvatarOps();
+    const applyVirtualMove = vi.fn();
+    const tool = createWorldTool(ops, { placesRegistry: EIDO_REGISTRY, applyVirtualMove });
+
+    const result = await tool.execute('call-move', { action: 'move', participant: '@visitor' });
+    const payload = JSON.parse(resultText(result));
+
+    expect(ops.avatarMove).toHaveBeenCalledWith({ participant: '@visitor' });
+    expect(payload.target).toEqual({ participant: '@visitor' });
+    expect(payload.accepted).toBe(true);
+    expect(payload.summary).toContain('arrived at (3.5, 0)');
+    expect(applyVirtualMove).not.toHaveBeenCalled();
+  });
+
+  it('move by position validates the coordinates before any RPC', async () => {
+    const ops = createAvatarOps();
+    const tool = createWorldTool(ops, { placesRegistry: EIDO_REGISTRY, applyVirtualMove: vi.fn() });
+    const result = await tool.execute('call-move', { action: 'move', position: { x: Number.NaN, z: 1 } });
+    expect(result.details?.isError).toBe(true);
+    expect(ops.avatarMove).not.toHaveBeenCalled();
+    await tool.execute('call-move', { action: 'move', position: { x: 1, z: 2 } });
+    expect(ops.avatarMove).toHaveBeenCalledWith({ position: { x: 1, z: 2 } });
+  });
+
+  it('fails closed on an Eidoverse place when no Hub world transport is wired', async () => {
+    const applyVirtualMove = vi.fn();
+    const tool = createWorldTool(createMockOps(), { placesRegistry: EIDO_REGISTRY, applyVirtualMove });
+    const result = await tool.execute('call-move', { action: 'move', placeId: 'eidoverse:commons' });
+    expect(result.details?.isError).toBe(true);
+    expect(resultText(result)).toContain('SATELLITE_HUB_CONTROL_BASE_URL');
+    expect(applyVirtualMove).not.toHaveBeenCalled();
+  });
+
+  it('a physical place WITHOUT a binding is still refused as emanation-only', async () => {
+    const ops = createAvatarOps();
+    const tool = createWorldTool(ops, { placesRegistry: EIDO_REGISTRY, applyVirtualMove: vi.fn() });
+    const result = await tool.execute('call-move', { action: 'move', placeId: 'office' });
+    expect(result.details?.isError).toBe(true);
+    expect(resultText(result)).toContain('it is a physical place');
+    expect(ops.avatarMove).not.toHaveBeenCalled();
+  });
+
+  it('perceive on an Eidoverse place reports own position, people and things in 3D terms', async () => {
+    const ops = createAvatarOps();
+    const tool = createWorldTool(ops, { placesRegistry: EIDO_REGISTRY });
+    const result = await tool.execute('call-perceive', { action: 'perceive', placeId: 'eidoverse:commons' });
+    const payload = JSON.parse(resultText(result));
+
+    expect(ops.avatarPerceive).toHaveBeenCalledWith({ placeId: 'eidoverse:commons' });
+    expect(payload.eidoverse.present).toBe(true);
+    expect(payload.eidoverse.self).toMatchObject({ x: 0, z: 0, facing: 'S' });
+    expect(payload.eidoverse.people).toEqual(PERCEPTION.people);
+    expect(payload.eidoverse.things[0]).toMatchObject({ id: 'ab12', label: 'wooden bench' });
+    expect(payload.summary).toContain('You are at (0, 0) facing S in world "commons"');
+    expect(payload.summary).toContain('visitor at (2, 2.5), 3.2m NE, standing');
+    expect(payload.summary).toContain('[ab12] wooden bench at (4, 1)');
+    expect(ops.getStates).not.toHaveBeenCalled();
+  });
+
+  it('perceive says honestly when the body is in another world than the place asked about', async () => {
+    const ops = createAvatarOps();
+    const tool = createWorldTool(ops, { placesRegistry: EIDO_REGISTRY });
+    const payload = JSON.parse(resultText(await tool.execute('call-perceive', { action: 'perceive', placeId: 'eidoverse:garden' })));
+    expect(payload.eidoverse.present).toBe(false);
+    expect(payload.summary).toContain('your body is in world "commons", not "garden"');
+  });
+
+  it('list exposes the Eidoverse binding and marks bound physical places movable', async () => {
+    const tool = createWorldTool(createAvatarOps(), { placesRegistry: EIDO_REGISTRY });
+    const payload = JSON.parse(resultText(await tool.execute('call-list', { action: 'list', scope: 'site' })));
+    const plaza = payload.places.find((place: { placeId: string }) => place.placeId === 'eidoverse:commons:plaza');
+    expect(plaza).toMatchObject({ movable: true, eidoverse: { world: 'commons', region: 'plaza', position: { x: 8, z: -2 } } });
+    const office = payload.places.find((place: { placeId: string }) => place.placeId === 'office');
+    expect(office.movable).toBeUndefined();
+    expect(office.eidoverse).toBeUndefined();
+  });
+
+  it('act forwards allowlisted body and creation verbs and reports refusals', async () => {
+    const ops = createAvatarOps();
+    const tool = createWorldTool(ops, { placesRegistry: EIDO_REGISTRY });
+    const wave = JSON.parse(resultText(await tool.execute('call-act', { action: 'act', verb: 'emote', arguments: { name: 'wave' } })));
+    expect(ops.avatarAct).toHaveBeenCalledWith({ verb: 'emote', arguments: { name: 'wave' } });
+    expect(wave).toMatchObject({ action: 'act', verb: 'emote', accepted: true, outcome: 'expressed', editsWorld: false });
+    const spawn = JSON.parse(resultText(await tool.execute('call-act', { action: 'act', verb: 'spawn', arguments: { query: 'bench' } })));
+    expect(spawn.editsWorld).toBe(true);
+
+    const bad = await tool.execute('call-act', { action: 'act', verb: 'world_verb' as never });
+    expect(bad.details?.isError).toBe(true);
+    expect(resultText(bad)).toContain('verb as one of: face, stop, emote, posture, whisper, spawn, remove, set_avatar');
+
+    const refusing = createWorldTool(createAvatarOps({
+      avatarAct: vi.fn(async () => ({ accepted: false as const, verb: 'spawn', reason: 'not_configured' as const })),
+    }), { placesRegistry: EIDO_REGISTRY });
+    const refused = JSON.parse(resultText(await refusing.execute('call-act', { action: 'act', verb: 'spawn', arguments: { query: 'x' } })));
+    expect(refused).toMatchObject({ accepted: false, reason: 'not_configured' });
   });
 });

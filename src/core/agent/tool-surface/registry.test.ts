@@ -183,7 +183,7 @@ describe('first-party tool surface registry', () => {
 
   it('declares virtual navigation on the canonical world surface', () => {
     expect(getCanonicalToolSurface('world')?.actions).toEqual(
-      expect.arrayContaining(['perceive', 'list', 'control', 'move']),
+      expect.arrayContaining(['perceive', 'list', 'control', 'move', 'act']),
     );
   });
 

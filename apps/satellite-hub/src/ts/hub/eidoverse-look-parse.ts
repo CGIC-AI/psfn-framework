@@ -22,6 +22,9 @@ export interface EidoverseLookSelf {
 
 export interface EidoverseLookPerson {
   id: string;
+  /** Set by the adapter from the world's classification; never by the parser. */
+  kind?: "human" | "ai";
+  kindSource?: "world" | "assumed";
   positionKnown: boolean;
   x?: number;
   z?: number;

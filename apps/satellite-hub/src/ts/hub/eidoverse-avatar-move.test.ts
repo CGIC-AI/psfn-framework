@@ -202,3 +202,25 @@ test("body action parsing covers the new verbs and classifies world-editing ones
   assert.equal(isEidoverseWorldEditAction("spawn"), true);
   assert.equal(isEidoverseWorldEditAction("walk_to"), false);
 });
+
+test("perception and the turn carry the world's human/ai classification; unknown participants are assumed AI", async () => {
+  const door = new FakeDoor();
+  const agent = new FakeAgent();
+  const { adapter } = adapterWith(door, agent);
+  const assumed = await adapter.perceive();
+  assert.deepEqual(assumed.people.map((p) => [p.id, p.kind, p.kindSource]), [["visitor", "ai", "assumed"]]);
+
+  adapter.observeParticipant("Visitor", "human");
+  const known = await adapter.perceive();
+  assert.deepEqual(known.people.map((p) => [p.id, p.kind, p.kindSource]), [["visitor", "human", "world"]]);
+
+  await adapter.handleAddressedUtterance({
+    utteranceId: "s1",
+    userText: "artie-kube: @artie hello",
+    speaker: { id: "artie-kube", name: "artie-kube", kind: "ai" },
+  });
+  assert.deepEqual(agent.calls[0]?.channel?.speaker, { id: "artie-kube", name: "artie-kube", kind: "ai" });
+  const note = agent.calls[0]?.channel?.contextNotes?.find((n) => n.key === "eidoverse.affordances")?.text ?? "";
+  assert.match(note, /Everyone here is an AI unless the world marks them human; humans so far: "visitor"/u);
+  adapter.disconnect();
+});

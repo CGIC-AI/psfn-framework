@@ -22,6 +22,7 @@ import type { SubstrateConfig } from '../../system/config/runtime-config-contrac
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import { readLastActiveSession } from '../../system/lifecycle/notifications.js';
 import { createSessionActivityTracker } from '../../app/agent/session-activity.js';
+import { startIcpRuntimeAvailability } from '../../app/agent/icp-runtime-availability.js';
 import type { FleetGardenRequestContext } from './garden-request-context.js';
 
 /**
@@ -328,6 +329,74 @@ describe('createInProcessGardenAdminContract per-companion dataDir rooting (dnll
       throw new Error('expected a degraded capability-withdrawal result');
     }
     expect(result.status.detail).toContain('runtime availability clear rejected');
+  });
+
+  // psfn-framework-n97hp: the kube-test composition shape — a fleet release
+  // running ONE companion, so `config.multiCompanion === false` and the agent
+  // never built an ICP runtime-availability lane. The required withdrawal fence
+  // used to have no consumer at all in that shape; these two cases pin the
+  // regression and the fix side by side.
+  it('diverges the capability save when nothing consumes the required withdrawal fence', async () => {
+    writeFileSync(
+      join(companionDataDir, 'capability-tier.json'),
+      `${JSON.stringify({ tier: 'autonomous', customTokens: [] }, null, 2)}\n`,
+      'utf-8',
+    );
+    const services = buildContract();
+
+    const result = await services.settings.saveSubConfigJson('capabilities', JSON.stringify({
+      tier: 'apprentice',
+      customTokens: [],
+    }));
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: {
+        status: 'degraded',
+        divergences: [{ key: 'capabilities', state: 'diverged' }],
+      },
+    });
+    if (!result.ok || !result.status) {
+      throw new Error('expected a degraded capability-withdrawal result');
+    }
+    expect(result.status.detail).toContain(
+      'Required event "capability.tier.changed" has no registered consumers',
+    );
+  });
+
+  it('holds the required withdrawal fence with the single-companion ICP consumer registered', async () => {
+    writeFileSync(
+      join(companionDataDir, 'capability-tier.json'),
+      `${JSON.stringify({ tier: 'autonomous', customTokens: [] }, null, 2)}\n`,
+      'utf-8',
+    );
+    let capturedEventBus!: EventBus;
+    const services = buildContract((eventBus) => {
+      capturedEventBus = eventBus;
+    });
+    // Exactly what src/app/agent/main.ts composes when multiCompanion is false:
+    // the consumer is started with a null lane, so it registers and no-ops
+    // rather than reaching for a gateway that carries no ICP autonomy broker.
+    const icpRuntimeAvailability = await startIcpRuntimeAvailability({
+      eventBus: capturedEventBus,
+      lane: null,
+    });
+
+    try {
+      const result = await services.settings.saveSubConfigJson('capabilities', JSON.stringify({
+        tier: 'apprentice',
+        customTokens: [],
+      }));
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error('expected the capability save to succeed');
+      expect(result.status?.divergences ?? []).not.toContainEqual(
+        expect.objectContaining({ key: 'capabilities', state: 'diverged' }),
+      );
+      expect(result.status?.detail ?? '').not.toContain('no registered consumers');
+    } finally {
+      icpRuntimeAvailability.stop();
+    }
   });
 
   it('delivers a pre-conversation tier notice into the next conversation on any channel', async () => {

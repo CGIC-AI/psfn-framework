@@ -91,12 +91,19 @@ test("the wake dispatch queue drops past its budget and accounts for it content-
   target.open();
   await waitFor(() => target.started.length === 3, "the queued batches to run");
   assert.deepEqual(target.started.length, 3, "only the batches inside the budget started a turn");
+  assert.equal(warnings.length, 2, "the episode reports its totals once the backlog drains");
+  assert.equal(
+    warnings[1],
+    "Eidoverse MCPL wake dispatch queue drained; dropped batches 2, dropped messages 3",
+    "the closing line carries what the opening line could not yet know",
+  );
 
   // The episode is over, so the queue accepts again and the next overflow gets
   // its own line rather than staying silent forever.
   wake.deliver([knock("m7")]);
   await waitFor(() => target.started.length === 4, "the batch delivered after the drain");
   assert.deepEqual(wake.dropStats(), { droppedBatches: 2, droppedMessages: 3 });
+  assert.equal(warnings.length, 2, "a drained queue with nothing dropped since says nothing");
   await wake.close();
 });
 

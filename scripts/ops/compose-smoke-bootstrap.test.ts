@@ -417,3 +417,89 @@ describe('Supported persistent Compose topology', () => {
     expect(bootstrapSource).not.toContain('CONNECTION LIMIT 20');
   });
 });
+
+// ── Smoke tenancy is not production tenancy (bead psfn-framework-2xt9c) ──
+//
+// The smoke seed CREATEs login roles and resets their passwords from a
+// compose file that carries the passwords in plain text. It used to do that
+// under the same role and database names a supported deployment uses, so the
+// only thing separating a smoke run from rewriting a real deployment's
+// migration authority was the DATABASE_URL it happened to be handed. These
+// prove the two topologies cannot be confused: distinct names, and a
+// provisioner that refuses a target that does not look like the smoke stack.
+describe('Smoke tenancy target guard', () => {
+  const provisionScript = join(repoRoot, 'scripts/ops/psfn-compose-smoke-provision-db.mjs');
+
+  function runProvisioner(env: Record<string, string>): { status: number | null; stderr: string } {
+    const result = spawnSync(process.execPath, [provisionScript], {
+      encoding: 'utf8',
+      env: { ...process.env, ...env },
+    });
+    return { status: result.status, stderr: `${result.stdout}${result.stderr}` };
+  }
+
+  const smokeEnv = {
+    POSTGRES_ADMIN_DATABASE_URL: 'postgresql://psfn:psfn@postgres:5432/psfn_smoke',
+    SHARED_SCHEMA_MIGRATION_DATABASE_URL:
+      'postgresql://shared_schema_migration_smoke:pw@postgres:5432/psfn_smoke',
+    COMPANION_SMOKE_DATABASE_URL:
+      'postgresql://companion_smoke_runtime:pw2@postgres:5432/psfn_smoke',
+    COMPANION_PG_SCHEMA: 'companion_smoke',
+  };
+
+  it('names smoke-only roles and a smoke-only database, distinct from the supported stack', () => {
+    const smokeCompose = readFileSync(composeFile, 'utf8');
+    const supportedCompose = readFileSync(supportedComposeFile, 'utf8');
+    const smokeRole = /postgresql:\/\/([a-z0-9_]+):[^@]*@postgres:5432\/([a-z0-9_]+)/u
+      .exec(smokeCompose.split('x-shared-migration-url:')[1] ?? '');
+    const supportedRole = /postgresql:\/\/([a-z0-9_]+):/u
+      .exec(supportedCompose.split('x-shared-database-url:')[1] ?? '');
+
+    expect(smokeRole?.[1]).toBe('shared_schema_migration_smoke');
+    expect(smokeRole?.[2]).toBe('psfn_smoke');
+    expect(supportedRole?.[1]).toBe('shared_schema_migration');
+    expect(smokeRole?.[1]).not.toBe(supportedRole?.[1]);
+    // The fleet manifest the seed writes must name the role the credential
+    // actually authenticates as, or the gateway's topology check fails closed.
+    expect(readFileSync(seedScript, 'utf8'))
+      .toContain('sharedMigrationRole: "shared_schema_migration_smoke"');
+  });
+
+  it('refuses a production-shaped database URL before opening a connection', () => {
+    const refused = runProvisioner({
+      POSTGRES_ADMIN_DATABASE_URL: 'postgresql://psfn:psfn@postgres:5432/psfn',
+      SHARED_SCHEMA_MIGRATION_DATABASE_URL:
+        'postgresql://shared_schema_migration:pw@postgres:5432/psfn',
+      COMPANION_SMOKE_DATABASE_URL: 'postgresql://companion_main_runtime:pw2@postgres:5432/psfn',
+      COMPANION_PG_SCHEMA: 'companion_main',
+    });
+
+    expect(refused.status).not.toBe(0);
+    expect(refused.stderr).toContain('is not a smoke database');
+  });
+
+  it('refuses a smoke database reached on a host the smoke stack does not run on', () => {
+    const refused = runProvisioner({
+      ...smokeEnv,
+      POSTGRES_ADMIN_DATABASE_URL: 'postgresql://psfn:psfn@db.internal.example:5432/psfn_smoke',
+      SHARED_SCHEMA_MIGRATION_DATABASE_URL:
+        'postgresql://shared_schema_migration_smoke:pw@db.internal.example:5432/psfn_smoke',
+      COMPANION_SMOKE_DATABASE_URL:
+        'postgresql://companion_smoke_runtime:pw2@db.internal.example:5432/psfn_smoke',
+    });
+
+    expect(refused.status).not.toBe(0);
+    expect(refused.stderr).toContain('is not a smoke stack host');
+  });
+
+  it('refuses to provision a role name a supported deployment also uses', () => {
+    const refused = runProvisioner({
+      ...smokeEnv,
+      SHARED_SCHEMA_MIGRATION_DATABASE_URL:
+        'postgresql://shared_schema_migration:pw@postgres:5432/psfn_smoke',
+    });
+
+    expect(refused.status).not.toBe(0);
+    expect(refused.stderr).toContain('is not a smoke-only role name');
+  });
+});

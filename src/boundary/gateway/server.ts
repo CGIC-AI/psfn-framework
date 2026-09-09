@@ -3406,6 +3406,10 @@ export class GatewayServer {
       const availability = this.icpAutonomyBroker
         ? await this.icpAutonomyBroker.readOwnAvailability(companionId)
         : undefined;
+      // A deployment with no ICP autonomy broker (every one-companion fleet)
+      // has no availability fence to consult; it is not "unavailable"
+      // (psfn-framework-5ybt1).
+      const availabilityUnfenced = this.icpAutonomyBroker === null;
       const availabilityState = availability?.lease?.state;
       const connection = this.resolveReadyCompanionConnection(companionId);
       const client = connection ? this.rpcClients.get(connection) : undefined;
@@ -3446,7 +3450,8 @@ export class GatewayServer {
       return {
         companionId,
         availabilityAllows: connection !== null
-          && (availability?.eligible === true
+          && (availabilityUnfenced
+            || availability?.eligible === true
             || explicitHumanAvailabilityAllows),
         fatigueAllows,
         quietHoursAllows: isExplicitHumanInbound

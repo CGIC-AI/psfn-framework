@@ -238,13 +238,6 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
     private readonly onSaturated: HumanEscalationLedgerSaturationReporter | null,
     private readonly now: () => number,
     private readonly ownsPool: boolean,
-    /**
-     * The shared fleet ledger holds the gateway's SYSTEM-owned escalations and
-     * nothing else (bead psfn-framework-e5r0s). Enforced here rather than only
-     * at the caller so a future writer of this table cannot quietly file a
-     * companion-owned question into the fleet's operator surface.
-     */
-    private readonly systemOwnedOnly: boolean,
   ) {}
 
   static async connect(
@@ -270,7 +263,6 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
       options.onSaturated ?? null,
       options.now ?? (() => Date.now()),
       true,
-      false,
     );
   }
 
@@ -279,10 +271,12 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
    *
    * Runs no DDL, for the same reason its health-stream sibling does not: the
    * shared chain is the migration authority's, and an ordinary runtime
-   * credential has DML there but no CREATE. The gateway raises its system-owned
-   * escalations here; each companion's Garden reads and resolves them under its
-   * own tenant credential, which is what makes one operator surface able to
-   * answer a fault the gateway saw.
+   * credential has DML there but no CREATE. The gateway raises its escalations
+   * here — system-owned faults, and companion-owned ones such as a pending
+   * confirmation or a quarantine hold that name the companion they concern;
+   * each companion's Garden reads and resolves them under its own tenant
+   * credential, fenced to system-owned rows plus its own companion's, which is
+   * what makes one operator surface able to answer a fault the gateway saw.
    */
   static async connectShared(
     databaseUrl: string,
@@ -334,7 +328,6 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
       options.onSaturated ?? null,
       options.now ?? (() => Date.now()),
       true,
-      true,
     );
   }
 
@@ -351,9 +344,6 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
       options.onSaturated ?? null,
       options.now ?? (() => Date.now()),
       false,
-      // A pool the caller owns is a tenant or test scope, never the fleet's
-      // shared ledger — that one is only ever opened by `connectShared`.
-      false,
     );
   }
 
@@ -365,11 +355,6 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
    * seeing it return is the honest outcome.
    */
   async openOrReopen(facts: HumanEscalationFacts): Promise<HumanEscalationRecord> {
-    if (this.systemOwnedOnly && facts.owner.kind !== 'system') {
-      throw new Error(
-        'Shared fleet escalation ledger accepts system-owned escalations only',
-      );
-    }
     const row = await queryOne<EscalationRow>(this.pool, `
       INSERT INTO human_escalations (
         escalation_id, schema_version, kind, severity, owner_kind, owner_companion_id,

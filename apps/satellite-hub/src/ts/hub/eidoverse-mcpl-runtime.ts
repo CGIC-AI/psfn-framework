@@ -61,7 +61,7 @@ export interface EidoverseMcplWakeConfig extends EidoverseWakeFilterConfig {
    * Names this companion answers to in-world besides what the door tags: the
    * configured display name and any ids. The door tags `chat:mention` by
    * participant id only, so a visitor who writes the display name of a
-   * companion whose id differs (`artie-kube` shown as "Artie") would otherwise
+   * companion whose id differs (`nova-kube` shown as "Nova") would otherwise
    * be ambient. Matched case-insensitively, `@` optional, punctuation after.
    */
   agentNames?: readonly string[];
@@ -314,8 +314,8 @@ function isSelf(author: { id: string; name: string } | undefined, names: readonl
 
 /**
  * True when `text` addresses one of `names`: case-insensitive, an optional
- * leading `@`, and any punctuation after the name (`@Artie,`, `artie:`,
- * `hey Artie!`). A name embedded in a longer word (`artiest`) does not count.
+ * leading `@`, and any punctuation after the name (`@Nova,`, `nova:`,
+ * `hey Nova!`). A name embedded in a longer word (`novae`) does not count.
  */
 export function mentionsAnyName(text: string, names: readonly string[]): boolean {
   for (const name of names) {

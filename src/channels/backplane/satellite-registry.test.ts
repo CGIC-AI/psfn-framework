@@ -181,12 +181,12 @@ describe('satellite registry', () => {
       'x-psfn-satellite-session-id': 'eidoverse-session',
     };
     const ai = resolveSatelliteClaim({ registry, principal, headers: {
-      ...base, 'x-psfn-satellite-speaker-id': 'artie-kube', 'x-psfn-satellite-speaker-kind': 'ai',
+      ...base, 'x-psfn-satellite-speaker-id': 'nova-kube', 'x-psfn-satellite-speaker-kind': 'ai',
     } });
-    expect(ai.ok && ai.value.authorId).toBe('primary-user:artie-kube');
-    expect(ai.ok && ai.value.authorName).toBe('artie-kube');
+    expect(ai.ok && ai.value.authorId).toBe('primary-user:nova-kube');
+    expect(ai.ok && ai.value.authorName).toBe('nova-kube');
     expect(ai.ok && ai.value.canonicalContactId).toBe('');
-    expect(ai.ok && ai.value.satellite.speaker).toEqual({ id: 'artie-kube', name: 'artie-kube', kind: 'ai' });
+    expect(ai.ok && ai.value.satellite.speaker).toEqual({ id: 'nova-kube', name: 'nova-kube', kind: 'ai' });
 
     const human = resolveSatelliteClaim({ registry, principal, headers: {
       ...base, 'x-psfn-satellite-speaker-id': 'visitor', 'x-psfn-satellite-speaker-name': 'Visitor', 'x-psfn-satellite-speaker-kind': 'human',

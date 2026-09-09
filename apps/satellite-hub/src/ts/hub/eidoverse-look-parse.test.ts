@@ -4,28 +4,28 @@ import test from "node:test";
 import { approachPosition, findEidoversePerson, parseEidoverseLook } from "./eidoverse-look-parse.js";
 
 const LOOK = [
-  'You are "artie" in world "commons" at (0.0, 0.0), ground height 0.00m, facing S.',
+  'You are "nova" in world "commons" at (0.0, 0.0), ground height 0.00m, facing S.',
   'World: {"sky":{"currentHour":14.5}}',
   "",
   "People (3):",
   "  - visitor: 3.2m NE at (2.0, 2.5), standing",
-  "  - artie-kube: 0.0m N at (0.0, 0.0), sitting on a chair, holding a pose (3 bones)",
+  "  - nova-kube: 0.0m N at (0.0, 0.0), sitting on a chair, holding a pose (3 bones)",
   "  - newcomer (just arrived, position unknown)",
   "",
   "Things (2):",
   "  - [ab12] wooden bench: 4.1m E at (4.0, 0.0, 1.0) — sit/mount: seat · 🔒 locked (immovable until comp {id, type: \"lock\", data: null})",
   "  - [cd34] lantern: position rides ferry — the ferry is mid-hop",
-  "  (interact via world_verb: use {id, action} · sit/ride via mount {id: \"artie\", to, slot} — both open to everyone; dismount {id: \"artie\"} to get off)",
+  "  (interact via world_verb: use {id, action} · sit/ride via mount {id: \"nova\", to, slot} — both open to everyone; dismount {id: \"nova\"} to get off)",
   "",
   "Since you last looked:",
-  "  visitor: @Artie come over here",
+  "  visitor: @Nova come over here",
   "  * newcomer arrived",
 ].join("\n");
 
 test("look parser lifts self, people, things and recent lines out of the door's prose", () => {
   const perception = parseEidoverseLook(LOOK);
   assert.deepEqual(perception.self, {
-    id: "artie",
+    id: "nova",
     world: "commons",
     positionKnown: true,
     x: 0,
@@ -52,17 +52,17 @@ test("look parser lifts self, people, things and recent lines out of the door's 
   assert.equal(perception.things[0]?.distanceM, 4.1);
   assert.match(perception.things[0]?.detail ?? "", /^sit\/mount: seat/u);
   assert.equal(perception.things[1]?.positionKnown, false);
-  assert.deepEqual(perception.recent, ["visitor: @Artie come over here", "* newcomer arrived"]);
+  assert.deepEqual(perception.recent, ["visitor: @Nova come over here", "* newcomer arrived"]);
   assert.equal(perception.raw, LOOK);
 });
 
 test("look parser reports an unknown own position honestly and tolerates an empty world", () => {
   const perception = parseEidoverseLook([
-    'You are "artie" in world "commons", position unknown (seat unresolved), facing N.',
+    'You are "nova" in world "commons", position unknown (seat unresolved), facing N.',
     "Nobody else is here right now.",
     "No placed things yet.",
   ].join("\n"));
-  assert.deepEqual(perception.self, { id: "artie", world: "commons", positionKnown: false, facing: "N" });
+  assert.deepEqual(perception.self, { id: "nova", world: "commons", positionKnown: false, facing: "N" });
   assert.deepEqual(perception.people, []);
   assert.deepEqual(perception.things, []);
   assert.deepEqual(perception.recent, []);

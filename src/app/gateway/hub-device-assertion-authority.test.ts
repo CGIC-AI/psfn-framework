@@ -18,7 +18,7 @@ import {
   resolveHubDeviceAssertionAuditPepper,
 } from './hub-device-assertion-authority.js';
 
-const COMPANION_ID = '99ad826c-3575-4b63-9388-fee0d8498010';
+const COMPANION_ID = '11111111-1111-4111-8111-111111111111';
 const AUDIENCE = 'https://psfn-gateway.local';
 const ISSUER = 'psfn-satellite-hub';
 const NOW_MS = Date.parse('2026-09-09T22:00:00.000Z');

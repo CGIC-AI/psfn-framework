@@ -1159,16 +1159,6 @@
     },
     {
       "file": "src/boundary/gateway/methods/home-assistant.ts",
-      "name": "MAX_REQUEST_BYTES",
-      "value": "64 * 1024"
-    },
-    {
-      "file": "src/boundary/gateway/methods/home-assistant.ts",
-      "name": "MAX_RESPONSE_BYTES",
-      "value": "1_000_000"
-    },
-    {
-      "file": "src/boundary/gateway/methods/home-assistant.ts",
       "name": "parseToken.$call:length-guard:GreaterThanToken#1",
       "value": "64",
       "form": "length-guard",
@@ -1192,6 +1182,24 @@
       "value": "1",
       "form": "object-member",
       "note": "Structural non-emptiness guard for canonical RPC string params; not operator-tunable."
+    },
+    {
+      "file": "src/boundary/gateway/methods/satellite-hub-transport.ts",
+      "name": "DEFAULT_TIMEOUT_MS",
+      "value": "10_000",
+      "note": "Code-owned transport default for gateway->hub control-port calls; callers pass their own bound (world moves use MOVE_TIMEOUT_MS). Owned-setting exposure deferred with the hub control seam (r70pb)."
+    },
+    {
+      "file": "src/boundary/gateway/methods/satellite-hub-transport.ts",
+      "name": "MAX_REQUEST_BYTES",
+      "value": "64 * 1024",
+      "note": "Code-owned safety/resource guard: cap on a gateway->hub control-port request body (moved from home-assistant.ts, n66dn.3)."
+    },
+    {
+      "file": "src/boundary/gateway/methods/satellite-hub-transport.ts",
+      "name": "MAX_RESPONSE_BYTES",
+      "value": "1_000_000",
+      "note": "Code-owned safety/resource guard: cap on a Satellite Hub control-port response body read by the gateway (moved from home-assistant.ts when the transport was shared with the world methods, n66dn.3)."
     },
     {
       "file": "src/boundary/gateway/methods/shell.ts",
@@ -1257,6 +1265,18 @@
       "file": "src/boundary/gateway/methods/web.ts",
       "name": "WEB_FETCH_TEXT_MAX_BYTES",
       "value": "8 * 1024 * 1024"
+    },
+    {
+      "file": "src/boundary/gateway/methods/world.ts",
+      "name": "MAX_MOVE_WAIT_MS",
+      "value": "15_000",
+      "note": "Code-owned protocol bound: longest walk the hub body runner is asked to await before answering; deferred plumbing to an owned world setting (n66dn.3 follow-up)."
+    },
+    {
+      "file": "src/boundary/gateway/methods/world.ts",
+      "name": "MOVE_TIMEOUT_MS",
+      "value": "25_000",
+      "note": "Code-owned protocol bound: the gateway waits at most this long for the hub to report a body move; derived from MAX_MOVE_WAIT_MS plus transport slack. Deferred plumbing to an owned world setting (n66dn.3 follow-up)."
     },
     {
       "file": "src/boundary/gateway/postgres-audit.ts",

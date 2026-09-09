@@ -51,7 +51,11 @@ import type {
   ScreenerModel,
   ScreenerTestCompletion,
 } from './screener-transport.js';
-import { evaluateL2, l2ScreeningContribution } from './l2-screener.js';
+import {
+  evaluateL2,
+  l2ScreeningContribution,
+  type L2ScreenerProviderRejectedEvent,
+} from './l2-screener.js';
 import { applyL3ScreeningOutcome, evaluateL3 } from './l3-screener.js';
 
 /** Extracted-field key recording a fail-closed L2 screener error on the envelope. */
@@ -75,6 +79,13 @@ export interface GatewayIntakeEscalationDeps {
   testCompletion?: ScreenerTestCompletion;
   /** Structural operator-alert telemetry; never carries screened content. */
   onFailClosed?: IntakeScreeningServiceOptions['onFailClosed'];
+  /**
+   * Screener-misconfiguration signal (psfn-framework-mlhn3): the provider
+   * refused the screener's request parameters, which is an operator condition
+   * rather than a property of the screened item. Content-free; the per-envelope
+   * fail-closed handling above is unaffected.
+   */
+  onScreenerProviderRejected?: (event: L2ScreenerProviderRejectedEvent) => void;
 }
 
 function mergeContributions(
@@ -158,6 +169,9 @@ export function createGatewayIntakeEscalationPort(
         model: deps.l2Model,
         backend: deps.backend,
         ...(deps.testCompletion ? { testCompletion: deps.testCompletion } : {}),
+        ...(deps.onScreenerProviderRejected
+          ? { onProviderRejected: deps.onScreenerProviderRejected }
+          : {}),
       });
     } catch (error) {
       request.emitTiming?.('l2', 'observed', Math.max(0, performance.now() - l2StartedAt));

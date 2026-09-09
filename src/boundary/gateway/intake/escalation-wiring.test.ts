@@ -203,6 +203,9 @@ async function composeWith(
   fetch: ScreenerTestCompletion,
   onFailClosedScreening?: Parameters<typeof composeGatewayIntakeScreening>[0]['onFailClosedScreening'],
   onScreeningTiming?: Parameters<typeof composeGatewayIntakeScreening>[0]['onScreeningTiming'],
+  onScreenerProviderRejected?: Parameters<
+    typeof composeGatewayIntakeScreening
+  >[0]['onScreenerProviderRejected'],
 ): Promise<{
   composition: Awaited<ReturnType<typeof composeGatewayIntakeScreening>>;
   companionDataDir: string;
@@ -216,6 +219,7 @@ async function composeWith(
     injectionBackendFactory: fakeInjectionBackendFactory,
     ...(onFailClosedScreening ? { onFailClosedScreening } : {}),
     ...(onScreeningTiming ? { onScreeningTiming } : {}),
+    ...(onScreenerProviderRejected ? { onScreenerProviderRejected } : {}),
   });
   return {
     composition,
@@ -786,6 +790,69 @@ describe('L2/L3 escalation wired into the live gateway screening path', () => {
     const held = composition.quarantine!.list();
     expect(held).toHaveLength(1);
     expect(held[0].rawText).toBe(HOSTILE_CONTENT);
+
+    await composition.dispose();
+  });
+
+  it('reports a screener PARAMETER rejection as a condition while still quarantining', async () => {
+    // psfn-framework-mlhn3: this is the kube-test failure — the screener model
+    // rejects `temperature` outright, so every envelope fails closed. The hold
+    // is correct and stays; what was missing is any signal that the cause is a
+    // broken model card rather than hostile content.
+    const transport = routingFetch({
+      [L2_MODEL]: {
+        rejectWith: '400: {"message":"invalid temperature: only 1 is allowed for this model"}',
+      },
+    });
+    const rejections: unknown[] = [];
+    const { composition } = await composeWith(
+      seedPolicy({ mode: 'strict' }),
+      transport.fetch,
+      undefined,
+      undefined,
+      event => rejections.push(event),
+    );
+
+    const result = await composition.screening!.screen(HOSTILE_CONTENT, {
+      sourceClass: 'web_fetch',
+      origin: { ref: 'https://random-blog.example/post' },
+      scope: 'context',
+    });
+
+    expect(result.action).toBe('quarantine');
+    expect(result.withheld).toBe(true);
+    expect(rejections).toEqual([{
+      tier: 'l2',
+      modelLabel: expect.stringContaining(L2_MODEL),
+      httpStatus: 400,
+    }]);
+
+    await composition.dispose();
+  });
+
+  it('stays silent about a transient screener failure', async () => {
+    const transport = routingFetch({
+      [L2_MODEL]: { rejectWith: 'L2 screener timed out after 8000ms' },
+    });
+    const rejections: unknown[] = [];
+    const { composition } = await composeWith(
+      seedPolicy({ mode: 'strict' }),
+      transport.fetch,
+      undefined,
+      undefined,
+      event => rejections.push(event),
+    );
+
+    const result = await composition.screening!.screen(HOSTILE_CONTENT, {
+      sourceClass: 'web_fetch',
+      origin: { ref: 'https://random-blog.example/post' },
+      scope: 'context',
+    });
+
+    // Same fail-closed hold, no standing condition: weather is not a
+    // misconfiguration and must not open an operator incident.
+    expect(result.action).toBe('quarantine');
+    expect(rejections).toEqual([]);
 
     await composition.dispose();
   });

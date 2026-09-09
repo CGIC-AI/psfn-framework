@@ -583,7 +583,12 @@ function normalizeModelRegistryEntry(value: unknown, fieldPath: string): ModelRe
   if (capabilities?.contextWindow !== undefined && capabilityContextWindow === undefined) {
     throw new Error(`Invalid model registry at ${fieldPath}.capabilities.contextWindow: expected positive integer`);
   }
-  for (const capability of ['supportsVision', 'supportsReasoning', 'supportsPromptCaching'] as const) {
+  for (const capability of [
+    'supportsVision',
+    'supportsReasoning',
+    'supportsPromptCaching',
+    'rejectsTemperature', // psfn-framework-mlhn3
+  ] as const) {
     if (capabilities?.[capability] !== undefined && typeof capabilities[capability] !== 'boolean') {
       throw new Error(`Invalid model registry at ${fieldPath}.capabilities.${capability}: expected boolean`);
     }

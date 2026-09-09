@@ -57,6 +57,12 @@ import { COGSEC_INTAKE_FIREWALL_ISSUER_ID } from '../../shared/contracts/cogsec-
 import { intakeReceiptTtlMs, loadIntakePolicyConfig } from '../../system/config/intake-policy-config.js';
 import { composeMcpGatewayRuntime, type McpGatewayRuntime } from './mcp/runtime.js';
 import { emitTurnPerformance } from '../../shared/telemetry/turn-performance.js';
+import {
+  emitHealthEvent,
+  hashHealthEventSubject,
+  processObserverId,
+  resolveHealthEventOwner,
+} from '../../shared/contracts/health-event.js';
 import { createCompanionDisplayIdentityResolver } from '../../shared/companion-display-identity.js';
 import { PersonaMutationAttemptGuard } from './persona-mutation-attempt-guard.js';
 import { createPersonaOwnerPathRegistry } from './persona-owner-path-registry.js';
@@ -391,6 +397,39 @@ export async function buildGatewayPrivilegedCore(
         input.logger.error('Failed to emit fail-closed intake screening alert event', {
           stage: event.stage,
           error: String(error),
+        });
+      });
+    },
+    // psfn-framework-mlhn3: a screener provider that refuses the request
+    // PARAMETERS is a standing misconfiguration, not weather — it rejects every
+    // envelope for as long as the model card is wrong. The per-envelope
+    // fail-closed quarantine above still happens; this projects the same
+    // failure onto the health plane as ONE condition, grouped by a digest of
+    // the screener tier and model so a broken card is one episode rather than
+    // one incident per inbound item. Content-free: the digest is the only place
+    // the model label goes, and the provider's message never leaves the
+    // gateway log.
+    onScreenerProviderRejected: (companionId, event) => {
+      void emitHealthEvent(eventBus, {
+        owner: resolveHealthEventOwner(
+          companionId ?? resolveCoreCompanionIdFromConfig(input.config),
+        ),
+        severity: 'degraded',
+        code: 'intake_screener_provider_rejected_request',
+        provenance: {
+          process: 'gateway',
+          component: 'cogsec',
+          observerId: processObserverId(),
+          subjectHash: hashHealthEventSubject(
+            `intake_screener:${event.tier}:${event.modelLabel}`,
+          ),
+        },
+        observedAtMs: Date.now(),
+        evidence: { httpStatus: event.httpStatus },
+      }).catch((error: unknown) => {
+        input.logger.error('Failed to emit intake screener rejection health event', {
+          tier: event.tier,
+          error: error instanceof Error ? error.message : String(error),
         });
       });
     },

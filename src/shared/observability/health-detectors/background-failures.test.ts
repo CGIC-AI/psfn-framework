@@ -143,6 +143,31 @@ describe('repeated background-work failure detector', () => {
     expect(opened[0]!.evidence.failureCount).toBe(3);
   });
 
+  it('turns a misconfigured intake screener model into one standing incident', async () => {
+    const detector = harness();
+    // psfn-framework-mlhn3: a screener model whose provider refuses the request
+    // parameters refuses EVERY envelope. Each refusal is grouped by the
+    // screener tier and model, so the operator sees one broken model card, not
+    // one incident per inbound item.
+    const subjectHash = hashHealthEventSubject('intake_screener:l2:glm-code-plan/glm-5.3');
+    for (let index = 0; index < 3; index += 1) {
+      detector.record(failure({
+        code: 'intake_screener_provider_rejected_request',
+        component: 'cogsec',
+        subjectHash,
+        evidence: { httpStatus: 400 },
+        observedAtMs: NOW_MS + index * MINUTE_MS,
+      }));
+    }
+    await detector.runAt(NOW_MS + 4 * MINUTE_MS);
+
+    const opened = detector.events.filter(e => e.code === 'background_work_failures_opened');
+    expect(opened).toHaveLength(1);
+    expect(opened[0]!.provenance.component).toBe('cogsec');
+    expect(opened[0]!.provenance.subjectHash).toBe(subjectHash);
+    expect(opened[0]!.evidence.failureCount).toBe(3);
+  });
+
   it('closes the episode once the lane stops failing for a full window', async () => {
     const detector = harness();
     for (let index = 0; index < 3; index += 1) {

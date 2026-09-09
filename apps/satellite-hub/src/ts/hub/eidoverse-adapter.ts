@@ -8,6 +8,8 @@ import {
   type EidoversePlaceResolution,
 } from "./eidoverse-place-map.js";
 import {
+  type EidoverseSpeaker,
+  type EidoverseSpeakerKind,
   type EmbodiedSessionRegistry,
   type PsfnChannelContext,
   type SatelliteAttachmentOwnership,
@@ -54,6 +56,8 @@ export interface EidoverseAddressedUtterance {
   utteranceId: string;
   userText: string;
   region?: string;
+  /** Who spoke, with the world's human/ai classification. */
+  speaker?: EidoverseSpeaker;
 }
 
 export interface EidoverseLookSource {
@@ -189,6 +193,13 @@ export class EidoverseEmbodiedSessionAdapter {
    * Cleared by travel and by a door resync.
    */
   private currentRegion: string | undefined;
+  /**
+   * Who is human and who is an AI, as the WORLD says (the door tags
+   * agent-authored chat `chat:from-agent`; untagged chat is a human). The
+   * roster feeds perception and the standing note. Anyone the world has not
+   * classified is assumed an AI (operator rule).
+   */
+  private readonly participantKinds = new Map<string, EidoverseSpeakerKind>();
   private readonly consumedUtteranceIds = new Set<string>();
   private readonly activeReplies = new Set<AbortController>();
   private attachmentOwnership: SatelliteAttachmentOwnership | null = null;
@@ -268,6 +279,18 @@ export class EidoverseEmbodiedSessionAdapter {
     return this.currentWorldName;
   }
 
+  /** Record the world's classification of one participant (see `participantKinds`). */
+  observeParticipant(id: string, kind: EidoverseSpeakerKind): void {
+    const key = id.trim().toLowerCase();
+    if (key) this.participantKinds.set(key, kind);
+  }
+
+  /** The world's classification of a participant, or the assumed default. */
+  participantKind(id: string): { kind: EidoverseSpeakerKind; kindSource: "world" | "assumed" } {
+    const known = this.participantKinds.get(id.trim().toLowerCase());
+    return known ? { kind: known, kindSource: "world" } : { kind: "ai", kindSource: "assumed" };
+  }
+
   /**
    * The companion's own look: the door's prose lifted into positions the
    * model can reason about, plus the place the Hub maps the body to.
@@ -278,6 +301,7 @@ export class EidoverseEmbodiedSessionAdapter {
     const place = this.resolvePlace(this.currentRegion);
     return {
       ...parsed,
+      people: parsed.people.map((person) => ({ ...person, ...this.participantKind(person.id) })),
       world: this.currentWorldName,
       ...(place.placeId ? { placeId: place.placeId } : {}),
       ...(this.currentRegion ? { region: this.currentRegion } : {}),
@@ -417,7 +441,7 @@ export class EidoverseEmbodiedSessionAdapter {
       this.lookContextNotes(),
       this.captureSnapshot(),
     ]);
-    const channel = this.channelContext(input.region, ownership, lookNotes, capture);
+    const channel = this.channelContext(input.region, ownership, lookNotes, capture, input.speaker);
     const controller = new AbortController();
     this.activeReplies.add(controller);
     this.deps.sessions.append(this.conversationId, { role: "user", content: userText });
@@ -548,10 +572,18 @@ export class EidoverseEmbodiedSessionAdapter {
     const body = canWalk
       ? "You have a body in this 3D world and can explore it: walk to people and places, look around, and act."
       : "You have a presence in this 3D world and can look around.";
+    const ais = [...this.participantKinds.entries()].filter(([, kind]) => kind === "ai").map(([id]) => JSON.stringify(id));
+    const humans = [...this.participantKinds.entries()].filter(([, kind]) => kind === "human").map(([id]) => JSON.stringify(id));
+    const roster = " Everyone here is an AI unless the world marks them human"
+      + (humans.length > 0 ? `; humans so far: ${humans.join(", ")}` : "")
+      + (ais.length > 0 ? `; other AI companions: ${ais.join(", ")}` : "")
+      + ". Answer AIs briefly and do not keep a conversation going with them on your own.";
     return {
       key: "eidoverse.affordances",
       text: `${body} You are in the Eidoverse world ${JSON.stringify(this.currentWorldName)}${here}. `
-        + "In-world messages are prefixed by the speaker's id. Use the world tool: "
+        + "In-world messages are prefixed by the speaker's id."
+        + roster
+        + " Use the world tool: "
         + `${verbs.join("; ")}. A move answers whether you arrived; a longer walk reports on a later turn. Use these on your own initiative, not only when asked.`,
     };
   }
@@ -576,6 +608,7 @@ export class EidoverseEmbodiedSessionAdapter {
     ownership: SatelliteAttachmentOwnership,
     lookNotes: NonNullable<PsfnChannelContext["contextNotes"]>,
     capture: VisionCaptureImage | null,
+    speaker?: EidoverseSpeaker,
   ): PsfnChannelContext {
     const normalizedRegion = normalizeOptional(region) ?? this.currentRegion;
     const place = this.resolvePlace(normalizedRegion);
@@ -603,6 +636,7 @@ export class EidoverseEmbodiedSessionAdapter {
     return {
       ...base,
       ...(place.placeId ? { placeId: place.placeId } : {}),
+      ...(speaker ? { speaker } : {}),
       // One first-person frame per turn, carried on the same seam Voxta uses:
       // stripped metadata for the outbound channel record, the image itself
       // only for the model turn.

@@ -1,3 +1,9 @@
+import type {
+  WorldAvatarActOutcome,
+  WorldAvatarMoveOutcome,
+  WorldAvatarMoveRequest,
+  WorldAvatarPerception,
+} from '../../shared/contracts/world-avatar.js';
 import type { ExternalMemoryExecuteParams, ExternalMemoryExecuteResult } from '../../shared/contracts/external-memory.js';
 // ── JSON-RPC 2.0 method definitions ──
 // The contract between gateway (host) and agent (container).
@@ -337,6 +343,31 @@ export interface WebRequestBinaryParams extends WebFetchBinaryParams {
 export interface HomeAssistantGetStatesParams extends GatewayCorrelationParams {
   entityId?: string;
 }
+
+// ── World avatar (S13 MOVE): the companion's own body in the Eidoverse ──
+
+export interface WorldAvatarPerceiveParams extends GatewayCorrelationParams {
+  /** The registry place the companion is asking about (audit/summary only). */
+  placeId?: string;
+}
+
+export type WorldAvatarPerceiveResult = WorldAvatarPerception;
+
+export interface WorldAvatarMoveParams extends GatewayCorrelationParams, WorldAvatarMoveRequest {
+  /** The registry place being moved to, when the move targets one. */
+  placeId?: string;
+}
+
+export type WorldAvatarMoveResult = WorldAvatarMoveOutcome;
+
+export interface WorldAvatarActParams extends GatewayCorrelationParams {
+  verb: string;
+  arguments?: Record<string, unknown>;
+}
+
+export type WorldAvatarActResult = WorldAvatarActOutcome;
+
+export type WorldAvatarMethodName = 'world.avatar_perceive' | 'world.avatar_move' | 'world.avatar_act';
 
 export interface HomeAssistantCallServiceParams extends GatewayCorrelationParams {
   domain: string;
@@ -1302,6 +1333,9 @@ export interface GatewayMethods {
   'home_assistant.get_states': [HomeAssistantGetStatesParams, HomeAssistantGetStatesResult];
   'home_assistant.call_service': [HomeAssistantCallServiceParams, HomeAssistantCallServiceResult];
   'home_assistant.check_connection': [HomeAssistantCheckConnectionParams, HomeAssistantCheckConnectionResult];
+  'world.avatar_perceive': [WorldAvatarPerceiveParams, WorldAvatarPerceiveResult];
+  'world.avatar_move': [WorldAvatarMoveParams, WorldAvatarMoveResult];
+  'world.avatar_act': [WorldAvatarActParams, WorldAvatarActResult];
   'web.search': [WebSearchParams, WebSearchResult];
   'mcp.execute': [McpExecuteParams, McpExecuteResult];
   'mcp.cancel': [McpCancelParams, McpCancelResult];

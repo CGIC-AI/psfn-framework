@@ -114,7 +114,33 @@ export interface PlaceConfig {
    * Absent = `public` (zero behavior change). See {@link PlacePrivacy}.
    */
   privacy?: PlacePrivacy;
+  /**
+   * Eidoverse plane binding (S13 MOVE). The 3D world is another plane of the
+   * same map: a place that carries this binding is somewhere the companion's
+   * world-avatar BODY can go. `world` is the door's world name, `region` the
+   * door region label the Hub place map knows, `position` where to stand.
+   * The world tool's `move` travels when `world` differs from the body's
+   * current world and walks to `position` (or the region) otherwise;
+   * `perceive` reports the 3D scene. Physical-kind places may carry it: a
+   * world-avatar satellite binds to a physical place, and the binding is what
+   * lets `move` accept such a place instead of refusing it as emanation-only.
+   */
+  eidoverse?: EidoversePlaceBinding;
   affordances: AffordanceConfig[];
+}
+
+export interface EidoversePlaceBinding {
+  world: string;
+  region?: string;
+  position?: { x: number; z: number };
+}
+
+/** The door's own world-name grammar; mirrored from the Hub's travel guard. */
+export const EIDOVERSE_WORLD_NAME_PATTERN = /^[a-z0-9_-]{1,64}$/u;
+
+/** True when a place is somewhere the companion's Eidoverse body can go. */
+export function isEidoversePlace(place: Pick<PlaceConfig, 'eidoverse'> | undefined): place is PlaceConfig & { eidoverse: EidoversePlaceBinding } {
+  return Boolean(place?.eidoverse);
 }
 
 export interface PlacesRegistryConfig {

@@ -1061,6 +1061,14 @@ describe('world capability gating', () => {
     // default tiers).
     expect(resolveToolRequiredCapabilities(world.tool, { action: 'move' })).toEqual(['world.read']);
     expect(resolveToolRequiredCapabilities(world.tool, { action: 'control' })).toEqual(['world.control']);
+    // S13 MOVE: body verbs ride read-tier like move; creation verbs are world-editing.
+    for (const verb of ['face', 'stop', 'emote', 'posture', 'whisper']) {
+      expect(resolveToolRequiredCapabilities(world.tool, { action: 'act', verb })).toEqual(['world.read']);
+    }
+    for (const verb of ['spawn', 'remove', 'set_avatar']) {
+      expect(resolveToolRequiredCapabilities(world.tool, { action: 'act', verb })).toEqual(['world.control']);
+    }
+    expect(resolveToolRequiredCapabilities(world.tool, { action: 'move', participant: 'visitor' })).toEqual(['world.read']);
   });
 
   it('hides control when world.control is absent while keeping perceive/list live', async () => {

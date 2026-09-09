@@ -22,6 +22,7 @@ import type {
   RetiredSatelliteConfig,
   SatelliteTelemetryScope,
   SatelliteTransportMode,
+  SatelliteSpeakerIdentity,
 } from '../../shared/contracts/satellite-registry.js';
 import {
   SATELLITE_CAPABILITIES,
@@ -73,6 +74,10 @@ export const SATELLITE_CLAIM_HEADERS = {
   capabilities: 'x-psfn-satellite-capabilities',
   telemetryScopes: 'x-psfn-satellite-telemetry-scopes',
   addressedCompanionId: 'x-psfn-satellite-addressed-companion-id',
+  /** Per-turn in-world speaker (S13 MOVE); see `SatelliteSpeakerIdentity`. */
+  speakerId: 'x-psfn-satellite-speaker-id',
+  speakerName: 'x-psfn-satellite-speaker-name',
+  speakerKind: 'x-psfn-satellite-speaker-kind',
 } as const;
 
 type HeaderMap = IncomingHttpHeaders | Record<string, string | string[] | undefined>;
@@ -1269,6 +1274,49 @@ export function resolveSatelliteClaim(options: {
       certBound: match.endpoint.auth.mode === 'mtls',
     },
   };
+
+  // S13 MOVE: a relayed world participant spoke, not the endpoint's default
+  // human. The speaker gets its own contact identity under the endpoint's
+  // default author (so `visitor` in one world never collides with another
+  // endpoint's `visitor`), the default canonical-contact hint is withheld
+  // (it names the endpoint's human, who did not speak), and the world's own
+  // human/ai classification rides the routing metadata.
+  const speakerIdRaw = readHeader(headers, SATELLITE_CLAIM_HEADERS.speakerId, 128);
+  const speakerKindRaw = readHeader(headers, SATELLITE_CLAIM_HEADERS.speakerKind, 16);
+  const speakerNameRaw = readHeader(headers, SATELLITE_CLAIM_HEADERS.speakerName, 128);
+  if (speakerIdRaw || speakerKindRaw || speakerNameRaw) {
+    if (!speakerIdRaw || !speakerKindRaw) {
+      return satelliteClaimError(
+        400,
+        'invalid_satellite_claim',
+        'A satellite speaker claim requires X-PSFN-Satellite-Speaker-ID and X-PSFN-Satellite-Speaker-Kind',
+      );
+    }
+    try {
+      assertIdToken(speakerIdRaw, 'X-PSFN-Satellite-Speaker-ID');
+    } catch (error) {
+      return satelliteClaimError(400, 'invalid_satellite_claim', toErrorMessage(error));
+    }
+    if (speakerKindRaw !== 'human' && speakerKindRaw !== 'ai') {
+      return satelliteClaimError(400, 'invalid_satellite_claim', 'X-PSFN-Satellite-Speaker-Kind must be human or ai');
+    }
+    const speaker: SatelliteSpeakerIdentity = {
+      id: speakerIdRaw,
+      name: speakerNameRaw ?? speakerIdRaw,
+      kind: speakerKindRaw,
+    };
+    return {
+      ok: true,
+      value: {
+        channelId: `satellite:${claimType}:${sessionId}`,
+        authorId: `${match.endpoint.defaultIdentity.authorId}:${speaker.id}`,
+        authorName: speaker.name,
+        canonicalContactId: '',
+        channelPrivacy: match.endpoint.defaultIdentity.channelPrivacy,
+        satellite: { ...satelliteMetadata, speaker },
+      },
+    };
+  }
 
   return {
     ok: true,

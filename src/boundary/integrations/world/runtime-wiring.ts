@@ -16,6 +16,9 @@ export interface WorldRuntimeTarget {
 const WORLD_TOOL_GATEWAY_METHODS = [
   'home_assistant.get_states',
   'home_assistant.call_service',
+  'world.avatar_perceive',
+  'world.avatar_move',
+  'world.avatar_act',
 ] as const;
 
 function attachWiringMeta(tool: AgentTool<any>, meta: ToolWiringMeta): WirableTool {

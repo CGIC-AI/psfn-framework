@@ -221,6 +221,21 @@ export const gatewayOperationalParamDecoders = {
     entityId: optionalString, entityIds: Type.Optional(stringArray), data: Type.Optional(unknownRecord),
   })),
   'home_assistant.check_connection': gatewayDecoder('home_assistant.check_connection', correlatedParams()),
+  'world.avatar_perceive': gatewayDecoder('world.avatar_perceive', correlatedParams({
+    placeId: optionalString,
+  })),
+  'world.avatar_move': gatewayDecoder('world.avatar_move', correlatedParams({
+    placeId: optionalString,
+    world: optionalString,
+    region: optionalString,
+    participant: optionalString,
+    position: Type.Optional(strictObject({ x: Type.Number(), z: Type.Number() })),
+    waitMs: Type.Optional(Type.Number()),
+  })),
+  'world.avatar_act': gatewayDecoder('world.avatar_act', correlatedParams({
+    verb: Type.String(),
+    arguments: Type.Optional(unknownRecord),
+  })),
   'session.hmac.sign': gatewayDecoder('session.hmac.sign', strictObject({
     entry: journalEntry,
     previousHmac: Type.Union([Type.String(), Type.Null()]),

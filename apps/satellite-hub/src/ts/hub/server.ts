@@ -264,6 +264,11 @@ export class RealtimeHubServer {
     this.eidoverse.submitBodyAction(name, args);
   }
 
+  /** The world's human/ai classification of one participant (see the adapter roster). */
+  observeEidoverseParticipant(id: string, kind: "human" | "ai"): void {
+    this.eidoverse?.observeParticipant(id, kind);
+  }
+
   /** True when this Hub carries an Eidoverse emanation at all. */
   hasEidoverse(): boolean {
     return this.eidoverse !== null;

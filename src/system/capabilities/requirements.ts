@@ -1,3 +1,4 @@
+import { isWorldAvatarEditVerb } from '../../shared/contracts/world-avatar.js';
 import type { AgentTool } from '../../boundary/pi-agent/index.js';
 import { isRecord } from '../../shared/utils/types.js';
 import type { CapabilityToken } from './tokens.js';
@@ -274,15 +275,22 @@ function resolveBeadsRequirement(action: string | null): CapabilityRequirement {
   return ISSUE_REQUIREMENTS;
 }
 
-// `move` (vinz.26) is deliberate VIRTUAL navigation — it gates read-tier with
-// perceive/list, not with effector control (locations decision 12 / s10wm).
+// `move` (vinz.26) is deliberate navigation — virtual places and, since S13
+// MOVE, the companion's own Eidoverse body (walk/travel) — and gates read-tier
+// with perceive/list, not with effector control (locations decision 12 /
+// s10wm). `act` is read-tier for body verbs (face/stop/emote/posture) and
+// control-tier for the world-editing ones (spawn/remove/set_avatar).
 const WORLD_READ_ACTIONS = new Set(['perceive', 'list', 'move']);
 const WORLD_CONTROL_ACTIONS = new Set(['control']);
 const WORLD_REQUIREMENTS = ['world.read', 'world.control'] as const;
 
-function resolveWorldRequirement(action: string | null): CapabilityRequirement {
+function resolveWorldRequirement(action: string | null, params: Record<string, unknown>): CapabilityRequirement {
   if (action === null || actionIn(action, WORLD_READ_ACTIONS)) return 'world.read';
   if (actionIn(action, WORLD_CONTROL_ACTIONS)) return 'world.control';
+  if (action === 'act') {
+    const verb = typeof params.verb === 'string' ? params.verb.trim() : '';
+    return isWorldAvatarEditVerb(verb) ? 'world.control' : 'world.read';
+  }
   return WORLD_REQUIREMENTS;
 }
 
@@ -355,7 +363,7 @@ const UNIFIED_TOOL_REQUIREMENT_RESOLVERS: Readonly<Partial<Record<string, Unifie
   fs: (action) => resolveFsRequirement(action),
   repo: (action) => resolveRepoRequirement(action),
   beads: (action) => resolveBeadsRequirement(action),
-  world: (action) => resolveWorldRequirement(action),
+  world: resolveWorldRequirement,
   mcp: (action) => resolveMcpRequirement(action),
   notify: resolveNotifyRequirement,
   self_status: (action) => resolveSelfStatusRequirement(action),

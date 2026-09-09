@@ -35,6 +35,8 @@ import {
 
 interface EidoverseMcplWakeTarget {
   handleEidoverseAddressedUtterance(input: EidoverseAddressedUtterance): Promise<string | null>;
+  /** Optional: learn the world's human/ai classification of a participant. */
+  observeEidoverseParticipant?(id: string, kind: "human" | "ai"): void;
 }
 
 interface EidoverseMcplWakeLogger {
@@ -183,6 +185,8 @@ class EidoverseMcplWakeRuntime {
 
   private async consume(messages: readonly McplIncomingChannelMessage[]): Promise<void> {
     for (const message of messages) {
+      const speaker = speakerOf(message);
+      if (speaker) this.target.observeEidoverseParticipant?.(speaker.id, speaker.kind);
       let kind = classifyMcplIncomingMessage(message, {
         catchupKeepsAddressing: this.config.catchupWake,
       });
@@ -200,6 +204,7 @@ class EidoverseMcplWakeRuntime {
         messageId: message.messageId,
         author: message.author,
         reason,
+        ...(speaker ? { speaker } : {}),
       });
     }
   }
@@ -228,13 +233,14 @@ class EidoverseMcplWakeRuntime {
     this.nextWakeSequence += 1;
     this.logger.info?.(
       `Eidoverse wake: message ${event.messageId ?? "?"} from ${event.author?.id ?? "?"} `
-      + `kind=${event.kind} reason=${event.reason ?? "tag"} `
+      + `(${event.speaker?.kind ?? "unknown"}) kind=${event.kind} reason=${event.reason ?? "tag"} `
       + `text=${JSON.stringify(event.pingLine.slice(0, WAKE_LOG_TEXT_PREFIX))}`,
     );
     try {
       await this.target.handleEidoverseAddressedUtterance({
         utteranceId,
         userText: event.pingLine,
+        ...(event.speaker ? { speaker: event.speaker } : {}),
       });
     } catch {
       this.logger.warn("Eidoverse MCPL wake turn failed");
@@ -323,4 +329,24 @@ export function mentionsAnyName(text: string, names: readonly string[]): boolean
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+/**
+ * The world's own classification of a chat author. The door tags every line
+ * an agent wrote `chat:from-agent`; a chat line without it came from a human.
+ * World-authored events (acts, presence, weather) name no speaker.
+ */
+export function speakerOf(
+  message: McplIncomingChannelMessage,
+): { id: string; name: string; kind: "human" | "ai" } | null {
+  const author = message.author;
+  if (!author || typeof author.id !== "string" || !author.id || author.id === "world") return null;
+  const tags = (message.tags ?? []).filter((tag): tag is string => typeof tag === "string");
+  if (!tags.some((tag) => tag.startsWith("chat:"))) return null;
+  if (tags.some((tag) => tag.startsWith("eidoverse:") && tag !== "eidoverse:catchup" && tag !== "eidoverse:whisper")) return null;
+  return {
+    id: author.id,
+    name: typeof author.name === "string" && author.name ? author.name : author.id,
+    kind: tags.includes(FROM_AGENT_TAG) ? "ai" : "human",
+  };
 }

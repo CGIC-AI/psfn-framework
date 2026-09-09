@@ -23,6 +23,7 @@ export const EIDOVERSE_BODY_ACTION_NAMES = [
   "stop",
   "emote",
   "posture",
+  "whisper",
   "spawn",
   "remove",
   "set_avatar",
@@ -47,6 +48,7 @@ export type EidoverseBodyAction =
   | { name: "stop" }
   | { name: "emote"; emote: (typeof EIDOVERSE_EMOTE_NAMES)[number] }
   | { name: "posture"; kind: (typeof EIDOVERSE_POSTURE_KINDS)[number] }
+  | { name: "whisper"; to: string; text: string }
   | { name: "spawn"; lib?: string; query?: string; x?: number; z?: number; yaw?: number; id?: string }
   | { name: "remove"; id: string }
   | { name: "set_avatar"; avatar: string };
@@ -62,6 +64,7 @@ export type EidoverseBodyOutcome =
   | "facing"
   | "stopped"
   | "expressed"
+  | "whispered"
   | "created"
   | "removed"
   | "failed";
@@ -98,6 +101,7 @@ export interface EidoverseBodyTools {
   faceAt?(x: number, z: number): Promise<string>;
   emote?(name: string): Promise<string>;
   posture?(kind: string): Promise<string>;
+  whisper?(to: string, text: string): Promise<string>;
   spawn?(args: { lib?: string; query?: string; x?: number; z?: number; yaw?: number; id?: string }): Promise<string>;
   remove?(id: string): Promise<string>;
   setAvatar?(avatar: string): Promise<string>;
@@ -126,6 +130,7 @@ const OUTCOME_NOTES: Readonly<Record<EidoverseBodyOutcome, string>> = {
   facing: "A requested turn finished; your body is facing the target.",
   stopped: "A requested stop finished; your body is no longer walking.",
   expressed: "A requested gesture or posture finished.",
+  whispered: "A requested whisper was delivered privately.",
   created: "A requested prop was placed in the world.",
   removed: "A requested prop was removed from the world.",
   failed: "A requested body action could not be carried out.",
@@ -172,6 +177,12 @@ export function parseEidoverseBodyAction(name: string, args: unknown): Eidoverse
       );
     }
     return { name: "posture", kind: kind as (typeof EIDOVERSE_POSTURE_KINDS)[number] };
+  }
+  if (name === "whisper") {
+    const to = optionalToken(args.to, 64);
+    const text = typeof args.text === "string" ? args.text.trim().slice(0, 4000) : "";
+    if (!to || !text) throw new EidoverseBodyActionRejectedError("Eidoverse whisper requires to and text");
+    return { name: "whisper", to, text };
   }
   if (name === "spawn") {
     const lib = optionalToken(args.lib, 200);
@@ -336,6 +347,9 @@ export class EidoverseBodyRunner {
     if (action.name === "posture") {
       return settled(name, await this.requireTool("posture")(action.kind), "expressed");
     }
+    if (action.name === "whisper") {
+      return settled(name, await this.requireTool("whisper")(action.to, action.text), "whispered");
+    }
     if (action.name === "spawn") {
       const { name: _name, ...args } = action;
       return settled(name, await this.requireTool("spawn")(args), "created");
@@ -346,7 +360,7 @@ export class EidoverseBodyRunner {
     return settled(name, await this.requireTool("setAvatar")(action.avatar), "expressed");
   }
 
-  private requireTool<K extends "faceAt" | "emote" | "posture" | "spawn" | "remove" | "setAvatar">(
+  private requireTool<K extends "faceAt" | "emote" | "posture" | "whisper" | "spawn" | "remove" | "setAvatar">(
     key: K,
   ): NonNullable<EidoverseBodyTools[K]> {
     const tool = this.tools[key];

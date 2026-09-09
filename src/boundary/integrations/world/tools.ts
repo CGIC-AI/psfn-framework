@@ -2,11 +2,20 @@ import { Type } from '@sinclair/typebox';
 import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../../core/agent/tool-surface/descriptions.js';
 import type { AgentToolResult } from '../../pi-agent/index.js';
 import type { SubstrateAgentTool } from '../../pi-agent/index.js';
-import type {
-  AffordanceConfig,
-  PlaceConfig,
-  PlacesRegistryConfig,
+import {
+  isEidoversePlace,
+  type AffordanceConfig,
+  type PlaceConfig,
+  type PlacesRegistryConfig,
 } from '../../../shared/contracts/places-registry.js';
+import {
+  WORLD_AVATAR_BODY_VERBS,
+  WORLD_AVATAR_EDIT_VERBS,
+  isWorldAvatarEditVerb,
+  isWorldAvatarVerb,
+  type WorldAvatarMoveOutcome,
+  type WorldAvatarPerception,
+} from '../../../shared/contracts/world-avatar.js';
 import type { CompanionPresenceTurnPort } from '../../../core/agent/companion-presence-runtime.js';
 import type { SituatedPlaceRef } from '../../../core/agent/substrate-agent/runtime-context-sections/situated-presence.js';
 import {
@@ -28,7 +37,18 @@ import type { WorldOperations } from './ops.js';
 //   perceive  — read Home-Assistant states for a place's affordances + summary
 //   list      — enumerate affordances for a place (default) or the whole site
 //   control   — call an HA service on an effector affordance
-//   move      — deliberate self-invoked VIRTUAL navigation (vinz.26, s10wm)
+//   move      — deliberate self-invoked navigation (vinz.26, s10wm): a virtual
+//               place, or — S13 MOVE — the companion's own Eidoverse BODY:
+//               travel when the place is in another world, walk when it is a
+//               position in the current one, or walk to a participant
+//   act       — Eidoverse body verbs (face/stop/emote/posture) and, at the
+//               control tier, creation verbs (spawn/remove/set_avatar)
+//
+// The Eidoverse is a PLANE of the same map: a place whose registry entry
+// carries an `eidoverse` binding is somewhere the body can go. Moving there
+// goes gateway → Satellite Hub control port → door, authenticated by the
+// gateway's Hub control key alone; no Hub device assertion is ever involved
+// on the companion's own path (that door is for external devices).
 //
 // Affordance → entity resolution happens HERE, agent-side, against `places.json`
 // (defence in depth): the gateway only ever receives an `entity_id`/`service`
@@ -57,7 +77,7 @@ import type { WorldOperations } from './ops.js';
 //      Self-directed/system turns additionally need a recognized intent and
 //      audit reason and are restricted to registered light affordances.
 
-const WORLD_ACTION_HELP = 'perceive, list, control, move';
+const WORLD_ACTION_HELP = 'perceive, list, control, move, act';
 
 /**
  * Runtime master gate for effector actuation. Capability and gateway policy
@@ -65,7 +85,7 @@ const WORLD_ACTION_HELP = 'perceive, list, control, move';
  */
 export const WORLD_CONTROL_RUNTIME_ENABLED = true;
 
-type WorldAction = 'perceive' | 'list' | 'control' | 'move';
+type WorldAction = 'perceive' | 'list' | 'control' | 'move' | 'act';
 type WorldCommand = 'on' | 'off' | 'toggle';
 type WorldControlIntent = 'direct' | 'presence_enter' | 'presence_exit' | 'attention' | 'sleep' | 'wake';
 
@@ -84,6 +104,14 @@ export interface WorldToolParams {
   reason?: string;
   scope?: 'place' | 'site';
   data?: Record<string, unknown>;
+  /** move: walk to this in-world participant (id as shown before their messages). */
+  participant?: string;
+  /** move: walk to this ground-plane position in the current world. */
+  position?: { x: number; z: number };
+  /** act: the Eidoverse body or creation verb. */
+  verb?: string;
+  /** act: verb arguments (face: target|x,z; emote: name; posture: kind; spawn: query|lib,x,z; remove: id; set_avatar: avatar). */
+  arguments?: Record<string, unknown>;
 }
 
 export interface WorldToolDeps {
@@ -159,7 +187,7 @@ interface ResolvedAffordance {
 
 function normalizeWorldAction(params: WorldToolParams): WorldAction {
   const raw = typeof params.action === 'string' ? params.action.trim() : '';
-  if (raw === 'perceive' || raw === 'list' || raw === 'control' || raw === 'move') {
+  if (raw === 'perceive' || raw === 'list' || raw === 'control' || raw === 'move' || raw === 'act') {
     return raw;
   }
   if (!raw) {
@@ -238,6 +266,15 @@ async function runPerceive(
     (affordance) => affordance.backend === 'ha' && Boolean(affordance.entityId),
   );
 
+  // Eidoverse plane: the 3D scene as the body sees it, in the same shape the
+  // physical places report their affordances. Honest about presence: when
+  // the body is in another world than the place asks about, say so.
+  let avatar: Record<string, unknown> | undefined;
+  if (isEidoversePlace(place)) {
+    const perception = await requireAvatarOps(ops, 'avatarPerceive')({ placeId: place.placeId });
+    avatar = describeAvatarPerception(perception, place);
+  }
+
   const readings: Array<Record<string, unknown>> = [];
   for (const affordance of haAffordances) {
     const entityId = affordance.entityId as string;
@@ -254,17 +291,73 @@ async function runPerceive(
     });
   }
 
-  const summary = readings.length === 0
-    ? `${place.displayName}: no Home-Assistant-backed affordances configured.`
+  const haSummary = readings.length === 0
+    ? (avatar ? '' : `${place.displayName}: no Home-Assistant-backed affordances configured.`)
     : `${place.displayName}: ${readings.map((r) => `${r.displayName ?? r.affordanceId}=${r.state}`).join(', ')}.`;
+  const summary = [avatar?.summary as string | undefined, haSummary].filter(Boolean).join(' ');
 
   return JSON.stringify({
     action: 'perceive',
     placeId: place.placeId,
     place: place.displayName,
+    ...(avatar ? { eidoverse: avatar } : {}),
     readings,
     summary,
   }, null, 2);
+}
+
+type AvatarOpName = 'avatarPerceive' | 'avatarMove' | 'avatarAct';
+
+/** The avatar ops are optional on the port; an Eidoverse place with none wired fails closed. */
+function requireAvatarOps<K extends AvatarOpName>(ops: WorldOperations, key: K): NonNullable<WorldOperations[K]> {
+  const op = ops[key];
+  if (!op) {
+    throw new Error(
+      'the Eidoverse body is not reachable in this runtime (no Satellite Hub world transport is wired: '
+      + 'set SATELLITE_HUB_CONTROL_BASE_URL and SATELLITE_HUB_CONTROL_TOKEN on the gateway).',
+    );
+  }
+  return op.bind(ops) as NonNullable<WorldOperations[K]>;
+}
+
+function describeAvatarPerception(
+  perception: WorldAvatarPerception,
+  place: PlaceConfig & { eidoverse: NonNullable<PlaceConfig['eidoverse']> },
+): Record<string, unknown> {
+  const present = perception.world === place.eidoverse.world;
+  const self = perception.self;
+  const me = self?.positionKnown && self.x !== undefined && self.z !== undefined
+    ? `You are at (${self.x}, ${self.z})${self.facing ? ` facing ${self.facing}` : ''}`
+    : 'Your own position is unknown right now';
+  const people = perception.people.length === 0
+    ? 'Nobody else is here.'
+    : `Here with you: ${perception.people.map((person) => (
+      (person.positionKnown && person.x !== undefined
+        ? `${person.id} at (${person.x}, ${person.z})${person.distanceM !== undefined ? `, ${person.distanceM}m ${person.bearing ?? ''}`.trimEnd() : ''}${person.doing ? `, ${person.doing}` : ''}`
+        : `${person.id} (position unknown)`)
+        + (person.kind === 'human' ? ' [human]' : person.kind === 'ai' ? (person.kindSource === 'assumed' ? ' [AI, assumed]' : ' [AI]') : '')
+    )).join('; ')}.`;
+  const things = perception.things.length === 0
+    ? 'Nothing placed nearby.'
+    : `Things: ${perception.things.map((thing) => (
+      thing.positionKnown && thing.x !== undefined
+        ? `[${thing.id}] ${thing.label} at (${thing.x}, ${thing.z})`
+        : `[${thing.id}] ${thing.label}`
+    )).join('; ')}.`;
+  const where = present
+    ? `in world "${perception.world}"`
+    : `NOTE: your body is in world "${perception.world}", not "${place.eidoverse.world}" (move there first)`;
+  return {
+    world: perception.world,
+    present,
+    ...(perception.placeId ? { bodyPlaceId: perception.placeId } : {}),
+    self,
+    people: perception.people,
+    things: perception.things,
+    recent: perception.recent,
+    capturedAt: perception.capturedAt,
+    summary: `${me} ${where}. ${people} ${things}`,
+  };
 }
 
 function runList(deps: WorldToolDeps, params: WorldToolParams): string {
@@ -286,6 +379,7 @@ function runList(deps: WorldToolDeps, params: WorldToolParams): string {
       placeId: place.placeId,
       displayName: place.displayName,
       kind: place.kind,
+      ...(place.eidoverse ? { eidoverse: place.eidoverse, movable: true } : {}),
       ...describeDeviceStatus(deps, place),
       affordances: place.affordances.map((affordance) => describeAffordance(place, affordance)),
     })),
@@ -413,7 +507,8 @@ function listExits(
       placeId: place.placeId,
       displayName: place.displayName,
       kind: place.kind,
-      movable: place.kind === 'virtual',
+      movable: place.kind === 'virtual' || isEidoversePlace(place),
+      ...(place.eidoverse ? { eidoverse: place.eidoverse } : {}),
       ...describeDeviceStatus(deps, place),
     }));
 }
@@ -439,16 +534,98 @@ function resolveInvokingChannelId(): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-async function runMove(deps: WorldToolDeps, params: WorldToolParams): Promise<string> {
+/**
+ * A move inside the world the body is in (to a participant or a position):
+ * no registry place changes hands, so no presence write — the Hub reports
+ * where the body ended up and which mapped place that is.
+ */
+async function runBodyMove(
+  ops: WorldOperations,
+  params: WorldToolParams,
+): Promise<string> {
+  const participant = typeof params.participant === 'string' ? params.participant.trim() : '';
+  const position = params.position as unknown;
+  if (position !== undefined && (typeof position !== 'object' || position === null
+    || !Number.isFinite((position as { x?: unknown }).x) || !Number.isFinite((position as { z?: unknown }).z))) {
+    throw new Error('action=move position must be an object with finite x and z.');
+  }
+  const target = position as { x: number; z: number } | undefined;
+  const outcome = await requireAvatarOps(ops, 'avatarMove')({
+    ...(participant ? { participant } : {}),
+    ...(target ? { position: { x: target.x, z: target.z } } : {}),
+  });
+  return JSON.stringify({
+    action: 'move',
+    target: participant ? { participant } : { position: target },
+    ...describeMoveOutcome(outcome),
+  }, null, 2);
+}
+
+function describeMoveOutcome(outcome: WorldAvatarMoveOutcome): Record<string, unknown> {
+  if (!outcome.accepted) {
+    return {
+      accepted: false,
+      world: outcome.world,
+      reason: outcome.reason,
+      summary: `The world refused the move (${outcome.reason}); your body is still in "${outcome.world}".`,
+    };
+  }
+  const walk = outcome.walk;
+  const walkText = !walk
+    ? `Your body is in world "${outcome.world}".`
+    : walk.status === 'arrived'
+      ? `Your body arrived at (${walk.x}, ${walk.z}) in world "${outcome.world}".`
+      : walk.status === 'already_there'
+        ? `You are already there, at (${walk.x}, ${walk.z}).`
+        : walk.status === 'walking'
+          ? `Your body is walking to (${walk.target?.x}, ${walk.target?.z}) in world "${outcome.world}"; arrival is reported on a later turn.`
+          : walk.status === 'interrupted'
+            ? 'The walk was interrupted or timed out before arrival.'
+            : 'The walk could not be carried out.';
+  return {
+    accepted: true,
+    world: outcome.world,
+    ...(outcome.placeId ? { bodyPlaceId: outcome.placeId } : {}),
+    ...(walk ? { walk } : {}),
+    summary: walkText,
+  };
+}
+
+async function runMove(ops: WorldOperations, deps: WorldToolDeps, params: WorldToolParams): Promise<string> {
+  const hasPlace = typeof params.placeId === 'string' && params.placeId.trim().length > 0;
+  if (!hasPlace && (params.participant || params.position)) {
+    return runBodyMove(ops, params);
+  }
   const placeId = requirePlainString(params, 'placeId', 'move', 'place.mud-tavern');
   // Fail closed: unknown destination never moves anything.
   const place = resolvePlace(deps.placesRegistry, placeId);
-  if (place.kind === 'physical') {
+  if (place.kind === 'physical' && !isEidoversePlace(place)) {
     throw new Error(
       `cannot move to "${placeId}": it is a physical place. Physical presence is `
       + 'emanation-driven — you appear where a satellite senses activity, and satellites are '
-      + 'static — so it cannot be changed by tool call. move applies to virtual places only.',
+      + 'static — so it cannot be changed by tool call. move applies to virtual places and to '
+      + 'Eidoverse places (where your body walks or travels).',
     );
+  }
+  // Eidoverse plane: the body goes first. A refusal aborts the move BEFORE
+  // any presence write, so the situated view never claims a place the body
+  // is not in.
+  let body: Record<string, unknown> | undefined;
+  if (isEidoversePlace(place)) {
+    const binding = place.eidoverse;
+    const outcome = await requireAvatarOps(ops, 'avatarMove')({
+      placeId: place.placeId,
+      world: binding.world,
+      ...(binding.region ? { region: binding.region } : {}),
+      ...(binding.position ? { position: binding.position } : {}),
+      ...(params.participant ? { participant: params.participant.trim() } : {}),
+    });
+    if (!outcome.accepted) {
+      throw new Error(
+        `the world refused the move to "${placeId}" (${outcome.reason}); your body is still in "${outcome.world}".`,
+      );
+    }
+    body = describeMoveOutcome(outcome);
   }
   const applyVirtualMove = deps.applyVirtualMove;
   if (!applyVirtualMove) {
@@ -506,6 +683,7 @@ async function runMove(deps: WorldToolDeps, params: WorldToolParams): Promise<st
   // MUD-style summary: destination description + who's here + exits.
   const summary = [
     `You are now in ${place.displayName}.`,
+    ...(body ? [body.summary as string] : []),
     ...(description ? [description] : []),
     alsoHere.length > 0 ? `Also here: ${alsoHere.join(', ')}.` : 'No one else is here.',
     exits.length > 0
@@ -524,7 +702,48 @@ async function runMove(deps: WorldToolDeps, params: WorldToolParams): Promise<st
     exits,
     presenceWrite: deps.companionPresence ? 'shared' : 'local_only',
     roomEntryNote,
+    ...(body ? { body } : {}),
     summary,
+  }, null, 2);
+}
+
+/**
+ * One Eidoverse body or creation verb. Tier: body verbs ride `world.read`
+ * like move; creation verbs ride `world.control` (resolved by the capability
+ * gate outside this tool from `params.verb`). The Hub's allowlist and the
+ * door's own refusals are reported, never papered over.
+ */
+async function runAct(ops: WorldOperations, params: WorldToolParams): Promise<string> {
+  const verb = typeof params.verb === 'string' ? params.verb.trim() : '';
+  if (!isWorldAvatarVerb(verb)) {
+    throw new Error(
+      `action=act requires verb as one of: ${[...WORLD_AVATAR_BODY_VERBS, ...WORLD_AVATAR_EDIT_VERBS].join(', ')}.`,
+    );
+  }
+  const args = (params.arguments ?? {}) as unknown;
+  if (typeof args !== 'object' || args === null || Array.isArray(args)) {
+    throw new Error('action=act arguments must be an object.');
+  }
+  const outcome = await requireAvatarOps(ops, 'avatarAct')({ verb, arguments: args as Record<string, unknown> });
+  if (!outcome.accepted) {
+    return JSON.stringify({
+      action: 'act',
+      verb,
+      accepted: false,
+      reason: outcome.reason,
+      summary: `The world did not accept ${verb} (${outcome.reason}).`,
+    }, null, 2);
+  }
+  return JSON.stringify({
+    action: 'act',
+    verb,
+    accepted: true,
+    outcome: outcome.outcome,
+    ...(outcome.reply ? { reply: outcome.reply } : {}),
+    editsWorld: isWorldAvatarEditVerb(verb),
+    summary: outcome.outcome === 'pending'
+      ? `${verb} was accepted and is still running; its outcome reaches you on a later turn.`
+      : `${verb}: ${outcome.reply ?? outcome.outcome}.`,
   }, null, 2);
 }
 
@@ -539,14 +758,44 @@ export function createWorldTool(ops: WorldOperations, deps: WorldToolDeps): Subs
         Type.Literal('list'),
         Type.Literal('control'),
         Type.Literal('move'),
+        Type.Literal('act'),
       ], {
-        description: 'World action: perceive, list, control, or move.',
+        description: 'World action: perceive, list, control, move, or act.',
       })),
       placeId: Type.Optional(Type.String({
         description: 'Target place id, matched exactly against places.json as authored. Ids are arbitrary '
           + 'operator-defined strings with no guaranteed "place." prefix (e.g. "bedroom"); do not guess. '
-          + 'Use action=list to discover the exact ids. Defaults to the situated place for perceive/list; '
-          + 'required for move (virtual destination).',
+          + 'Use action=list to discover the exact ids. Defaults to the situated place for perceive/list. '
+          + 'For move: a virtual place, or an Eidoverse place (your body walks there, or travels when it is in '
+          + 'another world); omit it to move by participant or position instead.',
+      })),
+      participant: Type.Optional(Type.String({
+        description: 'Used with action=move. Walk your Eidoverse body to this participant, by the id shown before '
+          + 'their messages (e.g. "visitor"); a leading @ is fine. You stop beside them.',
+      })),
+      position: Type.Optional(Type.Object({
+        x: Type.Number(),
+        z: Type.Number(),
+      }, {
+        description: 'Used with action=move. Walk your Eidoverse body to this ground-plane (x, z) in the current world.',
+      })),
+      verb: Type.Optional(Type.Union([
+        Type.Literal('face'),
+        Type.Literal('stop'),
+        Type.Literal('emote'),
+        Type.Literal('posture'),
+        Type.Literal('whisper'),
+        Type.Literal('spawn'),
+        Type.Literal('remove'),
+        Type.Literal('set_avatar'),
+      ], {
+        description: 'Used with action=act. Eidoverse body verb (face, stop, emote, posture, whisper) or creation verb '
+          + '(spawn, remove, set_avatar; needs the world.control tier).',
+      })),
+      arguments: Type.Optional(Type.Record(Type.String(), Type.Unknown(), {
+        description: 'Used with action=act. face: {target} or {x, z}; emote: {name: wave|cheer|dance|point|salute|clap|talk|flail}; '
+          + 'posture: {kind: sit|sitchair|lie|stand}; whisper: {to: participant id, text} (private, unlogged); '
+          + 'spawn: {query or lib, x?, z?, yaw?, id?}; remove: {id}; set_avatar: {avatar}.',
       })),
       affordanceId: Type.Optional(Type.String({
         description: 'Used with action=control. Registry affordance id, matched exactly against places.json as '
@@ -601,7 +850,9 @@ export function createWorldTool(ops: WorldOperations, deps: WorldToolDeps): Subs
           case 'control':
             return textResult(await runControl(ops, deps, params));
           case 'move':
-            return textResult(await runMove(deps, params));
+            return textResult(await runMove(ops, deps, params));
+          case 'act':
+            return textResult(await runAct(ops, params));
         }
       } catch (error) {
         const suffix = actionForError ? ` for action=${actionForError}` : '';

@@ -392,6 +392,11 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
       config: this.runtime.satelliteClaim,
       satelliteClaim,
     }));
+    if (channel.speaker) {
+      headers["X-PSFN-Satellite-Speaker-ID"] = channel.speaker.id;
+      headers["X-PSFN-Satellite-Speaker-Name"] = channel.speaker.name;
+      headers["X-PSFN-Satellite-Speaker-Kind"] = channel.speaker.kind;
+    }
     if (channel.deviceAuthority) {
       this.assertCurrentDeviceAuthority(channel);
       if (!this.runtime.deviceAssertionIssuer) {

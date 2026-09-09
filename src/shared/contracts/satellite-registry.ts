@@ -490,6 +490,22 @@ export interface SatelliteClaimCapabilityResolution {
   policyDenied: SatelliteCapability[];
 }
 
+/**
+ * The party that actually spoke on a satellite turn when the satellite relays
+ * a many-participant surface (S13 MOVE: the Eidoverse world). `kind` is the
+ * WORLD's own classification (the door tags agent-authored chat); the gateway
+ * marks an `ai` speaker's contact as machine intelligence so the ordinary
+ * companion fatigue budget counts the turn. Additive; absent means the
+ * endpoint's default identity spoke, exactly as before.
+ */
+export type SatelliteSpeakerKind = 'human' | 'ai';
+
+export interface SatelliteSpeakerIdentity {
+  id: string;
+  name: string;
+  kind: SatelliteSpeakerKind;
+}
+
 export interface SatelliteRoutingMetadata {
   schemaVersion: 1;
   satelliteId: string;
@@ -516,6 +532,8 @@ export interface SatelliteRoutingMetadata {
   };
   /** Authenticated device principal; human identity is intentionally separate. */
   hubDevicePrincipal?: HubDevicePrincipalSnapshot;
+  /** Present when the satellite named the in-world speaker for this turn. */
+  speaker?: SatelliteSpeakerIdentity;
 }
 
 export interface SatelliteConfigPullHeaderContract {

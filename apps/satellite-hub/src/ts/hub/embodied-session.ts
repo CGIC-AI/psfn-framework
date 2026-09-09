@@ -72,6 +72,21 @@ export interface PsfnChannelContext {
     key: string;
     text: string;
   }>;
+  /**
+   * The in-world participant who spoke this turn, with the WORLD's own
+   * human/ai classification (S13 MOVE). Sent as X-PSFN-Satellite-Speaker-*
+   * so the gateway gives the speaker its own contact and, for an ai, routes
+   * the turn through the companion fatigue budget.
+   */
+  speaker?: EidoverseSpeaker;
+}
+
+export type EidoverseSpeakerKind = "human" | "ai";
+
+export interface EidoverseSpeaker {
+  id: string;
+  name: string;
+  kind: EidoverseSpeakerKind;
 }
 
 export interface SituatedSatelliteContext {

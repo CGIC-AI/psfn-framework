@@ -267,6 +267,7 @@ export const TOOL_CONFORMANCE_ACTION_REGISTRY:
     list: SCHEMA_ASSERT,
     control: SCHEMA_ASSERT,
     move: SCHEMA_ASSERT,
+    act: SCHEMA_ASSERT,
   },
   orient: {
     append: SCHEMA_ASSERT,

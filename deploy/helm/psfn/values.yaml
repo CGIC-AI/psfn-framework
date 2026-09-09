@@ -648,6 +648,39 @@ fleetAuth:
   #     name: psfn-fleet-auth
   #     key: session-pepper
 
+# Standalone Hub device assertion verifier ring for the GATEWAY
+# (PSFN_HUB_DEVICE_ASSERTIONS_PATH). This is the same block that may live in
+# satellites.json (`hubDeviceAssertions`) or fleet-auth.json, rendered into a
+# ConfigMap and mounted read-only; it carries PUBLIC keys only. It is what
+# lets a deployment WITHOUT fleet auth admit enrolled Hub devices (world.body,
+# world.travel, device-bound turns). Fleet auth (SSO) is optional; when
+# fleet-auth.json also carries a ring the gateway keeps that one and logs that
+# this file is shadowed (psfn-framework-n66dn.2).
+hubDeviceAssertions:
+  enabled: false
+  issuer: psfn-satellite-hub
+  # Exact normalized https origin the hub presents as the assertion audience.
+  audience: ""
+  maxTtlSeconds: 60
+  clockSkewSeconds: 2
+  # Entries as printed by scripts/ops/generate-hub-device-key.ts:
+  # - kid: hub-device-0123456789abcdef01234567
+  #   publicKeyPem: |
+  #     -----BEGIN PUBLIC KEY-----
+  #     ...
+  #     -----END PUBLIC KEY-----
+  #   notBefore: "2026-09-09T00:00:00.000Z"
+  #   notAfter: "2031-09-09T00:00:00.000Z"
+  #   status: active
+  keys: []
+  mountPath: /app/config/hub-device-assertions.json
+  # Optional explicit audit pepper (>= 32 chars) for the content-free replay
+  # audit digests, delivered as HUB_DEVICE_ASSERTION_AUDIT_PEPPER from an
+  # existing Secret. Leave name empty to derive it from GATEWAY_SESSION_HMAC_KEY.
+  auditPepperSecretRef:
+    name: ""
+    key: HUB_DEVICE_ASSERTION_AUDIT_PEPPER
+
 networkPolicy:
   enabled: true
   ingressController:
@@ -750,8 +783,49 @@ satelliteHub:
     # Server-owned device identities. credentialSha256 is a digest, never the
     # plaintext HUB_DEVICE_TOKEN used by the satellite. Each device may list
     # exact homeAssistantEntityIds; the Hub rejects reads and service calls
-    # outside that authenticated device's list.
+    # outside that authenticated device's list. Deprecated alias for
+    # satelliteHub.deviceRegistry.devices: honoured only when that list is
+    # empty.
     devices: []
+  # Hub device registry (HUB_DEVICE_REGISTRY_PATH) on its own, without Home
+  # Assistant. The registry is the hub-side enrollment authority: an enrolled
+  # device (deviceId, credentialSha256, satelliteId/endpointId/claimType,
+  # enrollmentVersion, enrollmentAssurance "device_credential",
+  # enrollmentStatus, companionId, optional placeId, maxCapabilities with the
+  # control powers such as world_body / world_travel) must match the
+  # hubDeviceEnrollment record on the same endpoint in satellites.json.
+  # Enabling it REQUIRES deviceAssertion below: the hub refuses to boot with a
+  # registry and no signing authority, and the chart now fails the render
+  # instead of shipping that crash (psfn-framework-x4499).
+  deviceRegistry:
+    enabled: false
+    devices: []
+  # Hub device assertion signing authority (HUB_DEVICE_ASSERTION_*). The hub
+  # signs a short-lived assertion per turn with the Ed25519 PRIVATE key held
+  # in the referenced Secret; the gateway verifies it against the matching
+  # PUBLIC key in its hubDeviceAssertions ring (top-level hubDeviceAssertions
+  # below, satellites.json, or fleet-auth.json). Generate the pair with
+  # `tsx scripts/ops/generate-hub-device-key.ts --out hub-device-private.pem`
+  # and create the Secret from the private half:
+  #   kubectl create secret generic psfn-hub-device-key \
+  #     --from-file=hub-device-private.pem=./hub-device-private.pem
+  # The key is staged by an init container into a memory-backed emptyDir at
+  # mode 0400 under mountPath, because the hub refuses group/world-readable
+  # keys and a Secret volume under fsGroup always carries group bits.
+  deviceAssertion:
+    enabled: false
+    issuer: psfn-satellite-hub
+    # kid of the matching entry in the gateway's verifier ring.
+    kid: ""
+    # Exact https origin of the gateway as the verifier ring names it.
+    audience: ""
+    # 5-60 seconds.
+    ttlSeconds: 30
+    # Existing Secret holding the Ed25519 private key PEM (never a chart value).
+    privateKeySecretRef:
+      name: ""
+      key: hub-device-private.pem
+    mountPath: /var/run/psfn/hub-device
   # Optional Hub-owned Eidoverse embodiment client (EIDOVERSE_MCP_* in
   # apps/satellite-hub/.env.example; loadEidoverseMcpConfig in
   # src/ts/hub/eidoverse-mcp.ts). Disabled by default: the hub then never spawns

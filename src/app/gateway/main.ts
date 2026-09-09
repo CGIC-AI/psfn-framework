@@ -79,6 +79,11 @@ import {
 import { resolveGatewayApiSurfaceBindings, startOptionalGatewayApiServer } from './api-surface.js';
 import { createGatewayFleetPortalChannelHealthSource } from './fleet-portal-composition.js';
 import { loadSatelliteRegistryConfig } from '../../channels/backplane/satellite-registry.js';
+import {
+  loadStandaloneHubDeviceAssertionConfig,
+  resolveGatewayHubDeviceAssertionVerifier,
+  resolveHubDeviceAssertionAuditPepper,
+} from './hub-device-assertion-authority.js';
 import { assertSatellitePlaceBindings, loadPlacesRegistryConfig } from '../../channels/backplane/places-registry.js';
 import { GatewayCompanionChannelLane } from '../../boundary/gateway/companion-channels.js';
 import { PostgresCompanionPresenceStore } from '../../persistence/postgres/companion-presence-store.js';
@@ -298,6 +303,12 @@ async function main(): Promise<void> {
     ))
     : undefined;
   const satelliteRegistryConfig = loadSatelliteRegistryConfig(startupHydration.pathSnapshot.systemDataDir);
+  const standaloneHubDeviceAssertions = loadStandaloneHubDeviceAssertionConfig({
+    systemDataDir: startupHydration.pathSnapshot.systemDataDir,
+    satelliteRegistry: satelliteRegistryConfig,
+    env,
+    warn: (message, details) => log.warn(message, details),
+  });
   const placesRegistryConfig = loadPlacesRegistryConfig(startupHydration.pathSnapshot.systemDataDir);
   assertSatellitePlaceBindings(satelliteRegistryConfig, placesRegistryConfig);
   log.info('Loaded places registry', {
@@ -1225,6 +1236,17 @@ async function main(): Promise<void> {
       : { previewRoots: [resolvePersonalImagesDir(bootstrap.workspaceRoot)] }),
   });
 
+  const hubDeviceAssertionVerifier = resolveGatewayHubDeviceAssertionVerifier({
+    ...(fleetAuthPersistence ? { fleetAuthVerifier: fleetAuthPersistence } : {}),
+    ...(standaloneHubDeviceAssertions ? { standalone: standaloneHubDeviceAssertions } : {}),
+    sessionPepper: () => resolveHubDeviceAssertionAuditPepper({
+      env,
+      ...(config.credentialVault ? { credentialVault: config.credentialVault } : {}),
+      sessionHmacKeyring: bootstrap.server.sessionHmacKeyring,
+    }),
+    warn: (message, details) => log.warn(message, details),
+    info: (message, details) => log.info(message, details),
+  });
   const apiServer = await startOptionalGatewayApiServer({
     apiHost,
     apiPort,
@@ -1277,9 +1299,14 @@ async function main(): Promise<void> {
             fleetAuthPersistence.testingHarnessGardenAuthorizationAudit,
           fleetPortalAuthorization: fleetAuthPersistence.portalAuthorization,
           primaryEmbodiments: fleetAuthPersistence.primaryEmbodiments,
-          hubDeviceAssertionVerifier: fleetAuthPersistence,
         }
       : {}),
+    // The Hub device assertion verifier is independent of fleet auth: with
+    // fleet-auth.json it is the Postgres-backed fleet verifier, otherwise the
+    // standalone ring from satellites.json / PSFN_HUB_DEVICE_ASSERTIONS_PATH
+    // (psfn-framework-n66dn.2). The API surface wires Hub device ingress
+    // whenever a verifier exists.
+    ...(hubDeviceAssertionVerifier ? { hubDeviceAssertionVerifier } : {}),
   });
   await voiceSurfaces.start();
   await startGatewayChannelSurfaces(channelSurfaces, bootstrap, log);

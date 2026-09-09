@@ -2557,6 +2557,13 @@ export class GatewayServer {
     companionId: CompanionId;
   } {
     const routeLabel = `satellite:${satellite.satelliteId}`;
+    if (!satellite.sharedDevice && this.fleetCompanionIds.size === 1) {
+      // One-companion fleet: there is nobody to arbitrate between, so an
+      // ungoverned satellite routes to the sole companion (psfn-framework-bbprt).
+      const [soleCompanionId] = this.fleetCompanionIds;
+      this.refreshConnectionHealth();
+      return this.requireReadyCompanionRoute(routeLabel, soleCompanionId!);
+    }
     if (!satellite.sharedDevice) {
       this.alarmCompanionViolation(
         'unbound_satellite',

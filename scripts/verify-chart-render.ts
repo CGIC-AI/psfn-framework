@@ -12,6 +12,7 @@
 // Requires the `helm` binary. Run it with: npm run verify:chart-render
 
 import { spawnSync } from 'node:child_process';
+import { generateKeyPairSync } from 'node:crypto';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -184,6 +185,87 @@ function enabledValues(overrides: Record<string, unknown> = {}): Record<string, 
       },
     },
   };
+}
+
+// A throwaway Ed25519 public key generated per run: the render only needs a
+// well-formed SPKI PEM, and no committed key must ever name a live deployment.
+const VERIFIER_KEY = {
+  kid: 'hub-device-verify',
+  publicKeyPem: generateKeyPairSync('ed25519').publicKey
+    .export({ type: 'spki', format: 'pem' })
+    .toString(),
+  notBefore: '2026-01-01T00:00:00.000Z',
+  notAfter: '2031-01-01T00:00:00.000Z',
+  status: 'active',
+};
+
+function hubDevices(): Record<string, unknown>[] {
+  return [{
+    deviceId: 'hub-device-verify',
+    deviceName: 'Verify hub device',
+    credentialSha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+    satelliteId: 'hub-example',
+    endpointId: 'endpoint-example',
+    claimType: 'satellite.endpoint',
+    enrollmentVersion: 1,
+    enrollmentAssurance: 'device_credential',
+    enrollmentStatus: 'active',
+    companionId: '11111111-1111-4111-8111-111111111111',
+    maxCapabilities: {
+      input: ['text'],
+      output: ['text'],
+      control: ['presence', 'session_attach', 'world_body', 'world_travel'],
+      safety: [],
+    },
+  }];
+}
+
+/** Both Hub device seams on: registry + signing authority on the hub, verifier ring on the gateway. */
+function hubDeviceValues(hubOverrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    satelliteHub: {
+      ...(baseValues().satelliteHub as Record<string, unknown>),
+      deviceRegistry: { enabled: true, devices: hubDevices() },
+      deviceAssertion: {
+        enabled: true,
+        issuer: 'psfn-satellite-hub',
+        kid: 'hub-device-verify',
+        audience: 'https://psfn-gateway.local',
+        ttlSeconds: 30,
+        privateKeySecretRef: { name: 'psfn-hub-device-key', key: 'hub-device-private.pem' },
+        mountPath: '/var/run/psfn/hub-device',
+      },
+      ...hubOverrides,
+    },
+    secrets: { values: { satelliteHubApiKey: '0123456789abcdef0123' } },
+    hubDeviceAssertions: {
+      enabled: true,
+      issuer: 'psfn-satellite-hub',
+      audience: 'https://psfn-gateway.local',
+      maxTtlSeconds: 60,
+      clockSkewSeconds: 2,
+      keys: [VERIFIER_KEY],
+      mountPath: '/app/config/hub-device-assertions.json',
+      auditPepperSecretRef: { name: 'psfn-app', key: 'HUB_DEVICE_ASSERTION_AUDIT_PEPPER' },
+    },
+  };
+}
+
+function podSpecOf(deployment: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  const spec = isRecord(deployment?.spec) ? deployment.spec : undefined;
+  const template = isRecord(spec?.template) ? spec.template : undefined;
+  return isRecord(template?.spec) ? template.spec : undefined;
+}
+
+function parseConfigMapJson(
+  configMap: Record<string, unknown> | undefined,
+  key: string,
+): Record<string, unknown> | undefined {
+  const data = isRecord(configMap?.data) ? configMap.data : undefined;
+  const raw = data?.[key];
+  if (typeof raw !== 'string') return undefined;
+  const parsed = JSON.parse(raw) as unknown;
+  return isRecord(parsed) ? parsed : undefined;
 }
 
 function deepMergeEidoverse(overrides: Record<string, unknown>): Record<string, unknown> {
@@ -627,6 +709,204 @@ function main(): number {
       unknownKey.status !== 0 && unknownKey.stderr.includes('values don\'t meet the specifications'),
       'render fails closed: unknown satelliteHub.eidoverse key',
       unknownKey.stderr.trim().split('\n').slice(0, 2).join(' '),
+    );
+
+    // ── Hub device authority without fleet auth (psfn-framework-n66dn.2, x4499) ──
+    check(
+      !disabled.stdout.includes('HUB_DEVICE') && !disabled.stdout.includes('hub-device'),
+      'disabled render carries no Hub device registry, signing, or verifier objects',
+    );
+    const deviceSeams = helmTemplate([write('device-seams', hubDeviceValues())]);
+    check(deviceSeams.status === 0, 'render succeeds with the Hub device seams enabled', deviceSeams.stderr.trim());
+    if (deviceSeams.status === 0) {
+      const hubEnv = extractContainerEnv(deviceSeams.stdout, `${RELEASE_NAME}-satellite-hub`, 'satellite-hub');
+      const rendered = [...hubEnv.keys()].filter(name => name.startsWith('HUB_DEVICE')).sort();
+      // Exactly the set apps/satellite-hub/src/ts/shared/env.ts reads as one all-or-nothing unit.
+      const expected = [
+        'HUB_DEVICE_ASSERTION_AUDIENCE',
+        'HUB_DEVICE_ASSERTION_ISSUER',
+        'HUB_DEVICE_ASSERTION_KID',
+        'HUB_DEVICE_ASSERTION_PRIVATE_KEY_PATH',
+        'HUB_DEVICE_ASSERTION_TTL_SECONDS',
+        'HUB_DEVICE_REGISTRY_PATH',
+      ];
+      check(
+        rendered.join(',') === expected.join(','),
+        'the hub render carries the complete device registry + signing authority environment',
+        `rendered: ${rendered.join(',')}`,
+      );
+      checkEnv(hubEnv, 'HUB_DEVICE_REGISTRY_PATH', '/app/config/hub-devices.json');
+      checkEnv(hubEnv, 'HUB_DEVICE_ASSERTION_ISSUER', 'psfn-satellite-hub');
+      checkEnv(hubEnv, 'HUB_DEVICE_ASSERTION_KID', 'hub-device-verify');
+      checkEnv(hubEnv, 'HUB_DEVICE_ASSERTION_AUDIENCE', 'https://psfn-gateway.local');
+      checkEnv(hubEnv, 'HUB_DEVICE_ASSERTION_TTL_SECONDS', '30');
+      checkEnv(hubEnv, 'HUB_DEVICE_ASSERTION_PRIVATE_KEY_PATH', '/var/run/psfn/hub-device/private.pem');
+      check(
+        !deviceSeams.stdout.includes('HOME_ASSISTANT'),
+        'the device registry renders without dragging Home Assistant in',
+      );
+      const hubDeployment = findObject(deviceSeams.stdout, 'Deployment', `${RELEASE_NAME}-satellite-hub`);
+      const hubPodSpec = podSpecOf(hubDeployment);
+      const initContainers = Array.isArray(hubPodSpec?.initContainers) ? hubPodSpec.initContainers : [];
+      const stager = initContainers.find(entry => isRecord(entry) && entry.name === 'stage-hub-device-key');
+      check(
+        isRecord(stager) && JSON.stringify(stager.command).includes('chmod 0400')
+          && isRecord(stager.securityContext) && stager.securityContext.runAsUser === 999,
+        'the signing key is staged at mode 0400 by an init container running as the hub uid',
+        JSON.stringify(stager),
+      );
+      const hubVolumes = Array.isArray(hubPodSpec?.volumes) ? hubPodSpec.volumes : [];
+      check(
+        hubVolumes.some(volume => isRecord(volume) && volume.name === 'hub-device-key-secret'
+          && isRecord(volume.secret) && volume.secret.secretName === 'psfn-hub-device-key')
+        && hubVolumes.some(volume => isRecord(volume) && volume.name === 'hub-device-key'
+          && isRecord(volume.emptyDir) && volume.emptyDir.medium === 'Memory'),
+        'the private key comes from the referenced Secret and is staged into a memory-backed emptyDir',
+      );
+      const hubContainer = findContainer(deviceSeams.stdout, `${RELEASE_NAME}-satellite-hub`, 'satellite-hub');
+      const hubMounts = Array.isArray(hubContainer?.volumeMounts) ? hubContainer.volumeMounts : [];
+      check(
+        hubMounts.some(mount => isRecord(mount) && mount.name === 'hub-device-key'
+          && mount.mountPath === '/var/run/psfn/hub-device' && mount.readOnly === true)
+        && hubMounts.some(mount => isRecord(mount) && mount.name === 'hub-device-registry'
+          && mount.mountPath === '/app/config/hub-devices.json' && mount.readOnly === true),
+        'the hub mounts the staged key and the device registry read-only',
+      );
+      const registry = findObject(deviceSeams.stdout, 'ConfigMap', `${RELEASE_NAME}-hub-devices`);
+      const registryJson = parseConfigMapJson(registry, 'hub-devices.json');
+      check(
+        registryJson?.schemaVersion === 1 && Array.isArray(registryJson.devices)
+          && isRecord(registryJson.devices[0]) && registryJson.devices[0].deviceId === 'hub-device-verify',
+        'the device registry ConfigMap renders a schemaVersion 1 device list',
+        JSON.stringify(registryJson),
+      );
+
+      const gatewayEnv = extractContainerEnv(deviceSeams.stdout, `${RELEASE_NAME}-gateway`, 'gateway');
+      checkEnv(gatewayEnv, 'PSFN_HUB_DEVICE_ASSERTIONS_PATH', '/app/config/hub-device-assertions.json');
+      const pepper = gatewayEnv.get('HUB_DEVICE_ASSERTION_AUDIT_PEPPER');
+      check(
+        pepper?.value === undefined && pepper?.secretKeyRef?.name === 'psfn-app'
+          && pepper.secretKeyRef.key === 'HUB_DEVICE_ASSERTION_AUDIT_PEPPER',
+        'the gateway audit pepper is delivered only by secretKeyRef',
+        JSON.stringify(pepper),
+      );
+      const ring = findObject(deviceSeams.stdout, 'ConfigMap', `${RELEASE_NAME}-hub-device-assertions`);
+      const ringJson = parseConfigMapJson(ring, 'hub-device-assertions.json');
+      const ringBlock = isRecord(ringJson?.hubDeviceAssertions) ? ringJson.hubDeviceAssertions : undefined;
+      check(
+        ringBlock?.issuer === 'psfn-satellite-hub' && ringBlock.audience === 'https://psfn-gateway.local'
+          && ringBlock.maxTtlSeconds === 60 && ringBlock.clockSkewSeconds === 2
+          && Array.isArray(ringBlock.keys) && isRecord(ringBlock.keys[0])
+          && ringBlock.keys[0].kid === 'hub-device-verify' && ringBlock.keys[0].status === 'active',
+        'the gateway verifier ConfigMap renders the hubDeviceAssertions owner-file block',
+        JSON.stringify(ringJson),
+      );
+      const gatewayContainer = findContainer(deviceSeams.stdout, `${RELEASE_NAME}-gateway`, 'gateway');
+      const gatewayMounts = Array.isArray(gatewayContainer?.volumeMounts) ? gatewayContainer.volumeMounts : [];
+      check(
+        gatewayMounts.some(mount => isRecord(mount) && mount.name === 'hub-device-assertions'
+          && mount.mountPath === '/app/config/hub-device-assertions.json'
+          && mount.subPath === 'hub-device-assertions.json' && mount.readOnly === true),
+        'the gateway mounts the verifier ring read-only at the configured path',
+      );
+      check(
+        !deviceSeams.stdout.includes('PRIVATE KEY'),
+        'no private key material appears anywhere in the render',
+      );
+    }
+
+    // Gateway ring alone (fleet-auth-free verifier with a hub deployed elsewhere).
+    const gatewayRingOnly = helmTemplate([write('gateway-ring-only', {
+      hubDeviceAssertions: {
+        ...(hubDeviceValues().hubDeviceAssertions as Record<string, unknown>),
+        auditPepperSecretRef: { name: '', key: 'HUB_DEVICE_ASSERTION_AUDIT_PEPPER' },
+      },
+    })]);
+    check(
+      gatewayRingOnly.status === 0 && gatewayRingOnly.stdout.includes('PSFN_HUB_DEVICE_ASSERTIONS_PATH')
+        && !gatewayRingOnly.stdout.includes('HUB_DEVICE_ASSERTION_AUDIT_PEPPER'),
+      'the gateway verifier ring renders on its own, and the pepper only when a Secret is named',
+      gatewayRingOnly.stderr.trim(),
+    );
+
+    const registryWithoutSigner = helmTemplate([write('registry-without-signer', hubDeviceValues({
+      deviceAssertion: { enabled: false },
+    }))]);
+    check(
+      registryWithoutSigner.status !== 0
+        && registryWithoutSigner.stderr.includes('requires satelliteHub.deviceAssertion.enabled=true'),
+      'render fails closed: a device registry without the signing authority (the old boot crash)',
+      registryWithoutSigner.stderr.trim().split('\n').slice(0, 2).join(' '),
+    );
+    const signerWithoutRegistry = helmTemplate([write('signer-without-registry', hubDeviceValues({
+      deviceRegistry: { enabled: false, devices: [] },
+    }))]);
+    check(
+      signerWithoutRegistry.status !== 0
+        && signerWithoutRegistry.stderr.includes('requires a device registry'),
+      'render fails closed: signing authority without a device registry',
+      signerWithoutRegistry.stderr.trim().split('\n').slice(0, 2).join(' '),
+    );
+    const homeAssistantWithoutSigner = helmTemplate([write('home-assistant-without-signer', {
+      ...hubDeviceValues({
+        deviceRegistry: { enabled: false, devices: [] },
+        deviceAssertion: { enabled: false },
+        homeAssistant: {
+          enabled: true,
+          baseUrl: 'http://ha.example.net:8123',
+          egressCIDRs: ['192.0.2.20/32'],
+          egressPort: 8123,
+          devices: hubDevices(),
+        },
+      }),
+      secrets: {
+        values: {
+          satelliteHubApiKey: '0123456789abcdef0123',
+          homeAssistantToken: 'home-assistant-token-0123',
+          satelliteHubControlToken: 'hub-control-token-01234',
+        },
+      },
+    })]);
+    check(
+      homeAssistantWithoutSigner.status !== 0
+        && homeAssistantWithoutSigner.stderr.includes('requires satelliteHub.deviceAssertion.enabled=true'),
+      'render fails closed: the Home Assistant registry path can no longer ship the boot crash',
+      homeAssistantWithoutSigner.stderr.trim().split('\n').slice(0, 2).join(' '),
+    );
+    const emptyRegistry = helmTemplate([write('empty-registry', hubDeviceValues({
+      deviceRegistry: { enabled: true, devices: [] },
+    }))]);
+    check(
+      emptyRegistry.status !== 0 && emptyRegistry.stderr.includes('must list at least one device'),
+      'render fails closed: an enabled registry with no devices',
+      emptyRegistry.stderr.trim().split('\n').slice(0, 2).join(' '),
+    );
+    const ringWithoutKeys = helmTemplate([write('ring-without-keys', {
+      hubDeviceAssertions: { ...(hubDeviceValues().hubDeviceAssertions as Record<string, unknown>), keys: [] },
+    })]);
+    check(
+      ringWithoutKeys.status !== 0 && ringWithoutKeys.stderr.includes('must list at least one verifier key'),
+      'render fails closed: a gateway verifier ring with no keys',
+      ringWithoutKeys.stderr.trim().split('\n').slice(0, 2).join(' '),
+    );
+    const ringWithPrivateKey = helmTemplate([write('ring-with-private-key', {
+      hubDeviceAssertions: {
+        ...(hubDeviceValues().hubDeviceAssertions as Record<string, unknown>),
+        keys: [{ ...VERIFIER_KEY, publicKeyPem: '-----BEGIN PRIVATE KEY-----\nMC4C\n-----END PRIVATE KEY-----\n' }],
+      },
+    })]);
+    check(
+      ringWithPrivateKey.status !== 0 && ringWithPrivateKey.stderr.includes('must be the PUBLIC half'),
+      'render fails closed: a private key pasted into the gateway verifier ring',
+      ringWithPrivateKey.stderr.trim().split('\n').slice(0, 2).join(' '),
+    );
+    const ringWithoutAudience = helmTemplate([write('ring-without-audience', {
+      hubDeviceAssertions: { ...(hubDeviceValues().hubDeviceAssertions as Record<string, unknown>), audience: '' },
+    })]);
+    check(
+      ringWithoutAudience.status !== 0 && ringWithoutAudience.stderr.includes('hubDeviceAssertions.audience is required'),
+      'render fails closed: a gateway verifier ring without an audience',
+      ringWithoutAudience.stderr.trim().split('\n').slice(0, 2).join(' '),
     );
   } finally {
     rmSync(scratch, { recursive: true, force: true });

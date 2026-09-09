@@ -169,9 +169,42 @@ set it only for a separate credential-free `http://`/`https://` origin.
 (`EIDOVERSE_PLACE_MAP_PATH`). The mapping is read-only and never creates or
 changes entries in `places.json`.
 
+### Hub device authority without fleet auth
+
+Fleet auth (SSO) is optional. Everything an enrolled Hub device unlocks
+(device-bound turns, `world.body`, `world.travel`, presence follow) needs only a
+key and two owner-file blocks, and the chart carries both seams
+(psfn-framework-n66dn.2, psfn-framework-x4499):
+
+- `satelliteHub.deviceRegistry` mounts the hub-side device registry
+  (`HUB_DEVICE_REGISTRY_PATH`) on its own; `satelliteHub.homeAssistant` still
+  implies it for compatibility. Each device names the `satelliteId`/`endpointId`
+  whose `hubDeviceEnrollment` in `satellites.json` it matches.
+- `satelliteHub.deviceAssertion` renders the complete signing authority
+  (`HUB_DEVICE_ASSERTION_ISSUER/KID/AUDIENCE/TTL_SECONDS/PRIVATE_KEY_PATH`). The
+  Ed25519 private key comes from a Secret you create
+  (`kubectl create secret generic psfn-hub-device-key --from-file=hub-device-private.pem=...`)
+  and is staged by an init container into a memory-backed `emptyDir` at mode
+  0400 under `mountPath`: the hub refuses group/world-readable keys and a Secret
+  volume under `podSecurityContext.fsGroup` always carries group bits.
+- `hubDeviceAssertions` (top level) renders the gateway's verifier ring — the
+  same `hubDeviceAssertions` block that may live in `satellites.json` — into a
+  ConfigMap mounted at `PSFN_HUB_DEVICE_ASSERTIONS_PATH`, public keys only.
+  When `fleet-auth.json` also carries a ring the gateway keeps that one and
+  logs that the mounted file is shadowed.
+
+The registry and the signing authority are all-or-nothing on the hub, so a
+registry without `deviceAssertion` (or the reverse) fails the render instead of
+shipping the boot crash it used to. Generate the keypair with
+`tsx scripts/ops/generate-hub-device-key.ts --out hub-device-private.pem`; the
+printed entry goes into `hubDeviceAssertions.keys` and its `kid` into
+`satelliteHub.deviceAssertion.kid`. The full recipe lives in
+`docs/operator/fleet-auth.md` ("Hub device authority without fleet auth").
+
 `npm run verify:chart-render` renders both states with `helm template` and asserts
 the exact environment, the secret-backed token, the place-map ConfigMap and
-mount, and every fail-closed rejection. It requires the `helm` binary.
+mount, the Hub device seams on and off, and every fail-closed rejection. It
+requires the `helm` binary.
 
 Live values files, kubeconfigs, cluster names, infrastructure addresses, and
 credentials do not belong in this repository.

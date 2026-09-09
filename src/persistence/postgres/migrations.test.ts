@@ -10,6 +10,7 @@ import {
   POSTGRES_MODEL_USAGE_MIGRATIONS,
   POSTGRES_TRANSCRIPT_MIGRATIONS,
   POSTGRES_SHARED_ALL_MIGRATION_VERSIONS,
+  POSTGRES_SHARED_BASE_MIGRATION_VERSIONS,
   POSTGRES_SHARED_MIGRATIONS,
   POSTGRES_SHARED_WIKI_MIGRATIONS,
   POSTGRES_PARTNER_AFFECT_SHADOW_MIGRATIONS,
@@ -875,4 +876,97 @@ describe('Partner affect shadow migrations (docs/partner-affect.md slice 1)', ()
     expect(sql).toContain('idx_l2_memory_delete_versions_proposal');
   });
 
+});
+
+// ── Shared-chain declaration invariant (bead psfn-framework-2xt9c) ──
+//
+// Three declarations describe one chain and can disagree in silence:
+// POSTGRES_SHARED_MIGRATIONS and POSTGRES_SHARED_WIKI_MIGRATIONS are the DDL a
+// deployment runs, while POSTGRES_SHARED_BASE_MIGRATION_VERSIONS and
+// POSTGRES_SHARED_ALL_MIGRATION_VERSIONS are what every shared store's
+// readiness proof demands. Only the UNION of the two version arrays was tested
+// against the statement lists, so the split between them was unchecked: BASE
+// carrying a wiki-chain version would fail readiness on every deployment that
+// runs the base chain alone, and BASE missing a base-chain version would admit
+// a runtime whose tables were never created. Both are quiet until a fleet boots.
+//
+// Contiguity is deliberately NOT asserted here either, for the reason the
+// combined-ledger test above states: a gap is what a version slot reserved by a
+// concurrent lane looks like from the branch that did not take it.
+function registeredSharedVersions(
+  statements: readonly string[],
+): Array<{ version: number; name: string }> {
+  return statements.flatMap((statement) => {
+    const match = /INSERT INTO shared_schema_migrations[\s\S]*?VALUES \((\d+),\s*'([^']+)'/
+      .exec(statement);
+    return match?.[1] === undefined || match[2] === undefined
+      ? []
+      : [{ version: Number(match[1]), name: match[2] }];
+  });
+}
+
+describe('shared-schema migration declarations', () => {
+  it('registers exactly the base ledger versions the readiness proof demands', () => {
+    const registered = registeredSharedVersions(POSTGRES_SHARED_MIGRATIONS);
+
+    expect(registered.map(entry => entry.version).sort((a, b) => a - b))
+      .toEqual([...POSTGRES_SHARED_BASE_MIGRATION_VERSIONS]);
+  });
+
+  it('registers the wiki chain as exactly the versions the base chain does not', () => {
+    const wikiVersions = registeredSharedVersions(POSTGRES_SHARED_WIKI_MIGRATIONS)
+      .map(entry => entry.version)
+      .sort((a, b) => a - b);
+    const baseVersions = new Set<number>(POSTGRES_SHARED_BASE_MIGRATION_VERSIONS);
+
+    // Disjoint, and together the whole ledger: a version claimed by both chains
+    // would let one chain's ledger row certify the other chain's DDL.
+    expect(wikiVersions.filter(version => baseVersions.has(version))).toEqual([]);
+    expect([...POSTGRES_SHARED_BASE_MIGRATION_VERSIONS, ...wikiVersions].sort((a, b) => a - b))
+      .toEqual([...POSTGRES_SHARED_ALL_MIGRATION_VERSIONS]);
+  });
+
+  it('keeps both version arrays strictly ascending, and BASE a subsequence of ALL', () => {
+    for (const versions of [
+      [...POSTGRES_SHARED_BASE_MIGRATION_VERSIONS],
+      [...POSTGRES_SHARED_ALL_MIGRATION_VERSIONS],
+    ]) {
+      expect(versions).toEqual([...versions].sort((a, b) => a - b));
+      expect(new Set(versions).size).toBe(versions.length);
+    }
+    const all = [...POSTGRES_SHARED_ALL_MIGRATION_VERSIONS];
+    expect([...POSTGRES_SHARED_BASE_MIGRATION_VERSIONS].filter(v => all.includes(v)))
+      .toEqual([...POSTGRES_SHARED_BASE_MIGRATION_VERSIONS]);
+  });
+
+  it('gives every registered version a distinct non-empty ledger name', () => {
+    const registered = [
+      ...registeredSharedVersions(POSTGRES_SHARED_MIGRATIONS),
+      ...registeredSharedVersions(POSTGRES_SHARED_WIKI_MIGRATIONS),
+    ];
+    const names = registered.map(entry => entry.name);
+
+    expect(names.every(name => name.trim().length > 0)).toBe(true);
+    expect(new Set(names).size).toBe(names.length);
+    // A version is registered once. Two INSERTs for one version would make the
+    // ledger's PRIMARY KEY the thing that fails a deployment, mid-chain.
+    expect(new Set(registered.map(entry => entry.version)).size).toBe(registered.length);
+  });
+
+  it('creates the DDL a registered version claims before registering it', () => {
+    for (const [label, statements] of [
+      ['base', POSTGRES_SHARED_MIGRATIONS],
+      ['wiki', POSTGRES_SHARED_WIKI_MIGRATIONS],
+    ] as const) {
+      const registrationIndexes = statements
+        .map((statement, index) => ({ statement, index }))
+        .filter(({ statement }) => statement.includes('INSERT INTO shared_schema_migrations'))
+        .map(({ index }) => index);
+
+      // Every chain opens by creating its ledger table and closes no later than
+      // its last registration, so a registration can never be statement zero.
+      expect(registrationIndexes.length, label).toBeGreaterThan(0);
+      expect(Math.min(...registrationIndexes), label).toBeGreaterThan(0);
+    }
+  });
 });

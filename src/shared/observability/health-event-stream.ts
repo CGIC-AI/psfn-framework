@@ -54,6 +54,27 @@ export interface HealthEventStorePort {
 }
 
 /**
+ * How the sink reports that the store behind it refused a write
+ * (bead psfn-framework-2xt9c).
+ *
+ * Deliberately a callback rather than a health emitter dependency, exactly like
+ * the escalation ledger's saturation reporter: the sink owns persistence, and
+ * the entrypoint that already knows this process's health-event source owns
+ * what a health event looks like. Content-free by construction — the report
+ * carries the relation that refused the write and nothing about the envelope
+ * that was lost.
+ *
+ * Called AT MOST ONCE per subscription. The store that just refused a write is
+ * usually the one a report about it would be written into, so a per-failure
+ * report would either storm or recurse; the first failure is the news, and the
+ * error log below still records every one of them.
+ */
+export type HealthEventStoreWriteFailureReporter = (failure: {
+  /** The relation the failing store writes. Never an envelope field. */
+  relation: string;
+}) => void;
+
+/**
  * Subscribe the persisting sink to a process bus. Returns the unsubscribe
  * handle for shutdown.
  *
@@ -61,12 +82,21 @@ export interface HealthEventStorePort {
  * contract isolates subscriber errors, and a health-plane write must never
  * abort the scheduler task or startup check that was reporting a fault. The
  * failure is still surfaced — it is logged at error with the code that was
- * lost, never silently discarded.
+ * lost, never silently discarded, and, when the caller declares a
+ * `writeTarget`, the FIRST failure is also raised onto the health plane instead
+ * of living only in a log line.
  */
 export function subscribeHealthEventStream(deps: {
   eventBus: EventBus;
   store: HealthEventStorePort;
+  /**
+   * The relation this store writes, plus the reporter for its first refused
+   * write. Omitted by callers that have not wired a reporter, which keeps the
+   * previous log-only behaviour.
+   */
+  writeTarget?: { relation: string; onWriteFailed: HealthEventStoreWriteFailureReporter };
 }): () => void {
+  let writeFailureReported = false;
   return deps.eventBus.on('runtime.health.event', async (data) => {
     // Persist the envelope alone. Correlation metadata spread alongside it on
     // the bus stays in-process by construction.
@@ -79,6 +109,9 @@ export function subscribeHealthEventStream(deps: {
         component: event.provenance.component,
         error: toErrorMessage(error),
       });
+      if (!deps.writeTarget || writeFailureReported) return;
+      writeFailureReported = true;
+      deps.writeTarget.onWriteFailed({ relation: deps.writeTarget.relation });
     }
   });
 }

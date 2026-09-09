@@ -9,7 +9,19 @@ interface PostgresRelationContractRow extends QueryResultRow {
   missing_privileges: string[] | null;
 }
 
-export type PostgresRelationRuntimePrivilege = 'SELECT' | 'UPDATE';
+/**
+ * The operational ACLs a runtime path can be asked to prove. INSERT and DELETE
+ * are here because a readiness check that cannot express them silently accepts
+ * a credential that can read a relation it is about to write
+ * (bead psfn-framework-2xt9c): every store below declares the privileges its
+ * own statements use, so a narrowed grant fails at connect rather than at the
+ * first write.
+ */
+export type PostgresRelationRuntimePrivilege =
+  | 'SELECT'
+  | 'INSERT'
+  | 'UPDATE'
+  | 'DELETE';
 
 export interface PostgresRelationColumnContract {
   /** Omit to resolve the pool's pinned current_schema(). */

@@ -100,6 +100,49 @@ describe('subscribeHealthEventStream', () => {
     expect(store.recorded).toEqual([]);
   });
 
+  it('reports the first refused write once, and never per lost observation', async () => {
+    // The failure used to end at a log line, and the store that refused the
+    // write is usually the one a report about it would be persisted into — so
+    // the report has to be self-limiting rather than trusting that write
+    // (psfn-framework-2xt9c).
+    const bus = new EventBus();
+    const store = recordingStore({ failWith: new Error('permission denied for table') });
+    const failures: Array<{ relation: string }> = [];
+    subscribeHealthEventStream({
+      eventBus: bus,
+      store,
+      writeTarget: {
+        relation: 'runtime_health_events',
+        onWriteFailed: failure => failures.push(failure),
+      },
+    });
+
+    for (let index = 0; index < 5; index += 1) {
+      await bus.emit('runtime.health.event', { event: healthEvent() });
+    }
+
+    expect(failures).toEqual([{ relation: 'runtime_health_events' }]);
+  });
+
+  it('reports nothing while the store is writing', async () => {
+    const bus = new EventBus();
+    const store = recordingStore();
+    const failures: Array<{ relation: string }> = [];
+    subscribeHealthEventStream({
+      eventBus: bus,
+      store,
+      writeTarget: {
+        relation: 'runtime_health_events',
+        onWriteFailed: failure => failures.push(failure),
+      },
+    });
+
+    await bus.emit('runtime.health.event', { event: healthEvent() });
+
+    expect(store.recorded).toHaveLength(1);
+    expect(failures).toEqual([]);
+  });
+
   it('fails closed on an envelope that never went through the contract', async () => {
     const bus = new EventBus();
     const store = recordingStore();

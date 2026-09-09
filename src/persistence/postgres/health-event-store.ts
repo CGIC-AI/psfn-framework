@@ -7,7 +7,10 @@ import {
 } from '../postgres.js';
 import { POSTGRES_HEALTH_EVENT_MIGRATIONS, SHARED_SCHEMA_NAME } from './migrations.js';
 import { assertSharedSchemaReady } from './shared-schema.js';
-import { assertPostgresRelationColumns } from './relation-contract.js';
+import {
+  assertPostgresRelationColumns,
+  type PostgresRelationRuntimePrivilege,
+} from './relation-contract.js';
 import { requireSafeInteger as safeInteger } from './row-guards.js';
 import { validateHealthEvent, type HealthEvent } from '../../shared/contracts/health-event.js';
 import {
@@ -99,6 +102,30 @@ function mapHealthEventRow(row: HealthEventRow): HealthEvent {
   });
 }
 
+/**
+ * What the opener of the shared stream actually does with it (bead
+ * psfn-framework-2xt9c). The gateway writes its system-owned observations here;
+ * every companion agent opens the same table to render them.
+ */
+export type SharedHealthEventStoreAccess = 'read' | 'write';
+
+/**
+ * The ACLs each access mode's own statements need, proved at readiness.
+ *
+ * `write` names INSERT and DELETE because that is exactly what {@link
+ * PostgresHealthEventStore.record} runs: the append and the ring's prune. Until
+ * this bead the shared readiness proof could only express SELECT, so a
+ * credential granted read-only on the shared schema opened cleanly and then
+ * lost every observation it made — the sole provisioning path grants all four,
+ * which is what kept the gap invisible rather than what makes it safe.
+ */
+const SHARED_HEALTH_EVENT_PRIVILEGES: Readonly<
+  Record<SharedHealthEventStoreAccess, readonly PostgresRelationRuntimePrivilege[]>
+> = Object.freeze({
+  read: Object.freeze(['SELECT'] as const),
+  write: Object.freeze(['SELECT', 'INSERT', 'DELETE'] as const),
+});
+
 function requirePositiveRowCap(maxRows: number): number {
   if (!Number.isSafeInteger(maxRows) || maxRows < 1) {
     throw new Error('health event stream requires a positive settings-owned row cap');
@@ -145,11 +172,16 @@ export class PostgresHealthEventStore implements HealthEventStorePort {
    * `role` is the caller's own runtime role: the gateway writes its
    * system-owned observations here, and each companion agent opens the same
    * table read-only under its own tenant credential.
+   *
+   * `access` names which of those two this caller is, and the readiness probe
+   * proves exactly that path's ACLs (bead psfn-framework-2xt9c). It defaults to
+   * the read path: a caller that means to write says so, rather than a writer
+   * silently inheriting a proof that only covers reads.
    */
   static async connectShared(
     databaseUrl: string,
     maxRows: number,
-    options: { role?: string } = {},
+    options: { role?: string; access?: SharedHealthEventStoreAccess } = {},
   ): Promise<PostgresHealthEventStore> {
     requirePositiveRowCap(maxRows);
     const pool = createPostgresPool(databaseUrl, {
@@ -168,7 +200,7 @@ export class PostgresHealthEventStore implements HealthEventStorePort {
           'event_id', 'schema_version', 'correlation_id', 'owner_kind', 'severity',
           'code', 'process', 'component', 'observer_id', 'recorded_at_ms', 'evidence_json',
         ],
-        privileges: ['SELECT'],
+        privileges: SHARED_HEALTH_EVENT_PRIVILEGES[options.access ?? 'read'],
       });
       return new PostgresHealthEventStore(pool, maxRows, true);
     } catch (error) {
@@ -325,5 +357,5 @@ export function createFleetSystemHealthEventStore(config: {
   if (maxRows === undefined) {
     throw new Error('Fleet system health stream requires settings.json healthEventStreamMaxRows');
   }
-  return PostgresHealthEventStore.connectShared(databaseUrl, maxRows);
+  return PostgresHealthEventStore.connectShared(databaseUrl, maxRows, { access: 'write' });
 }

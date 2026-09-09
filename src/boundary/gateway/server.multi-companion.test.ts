@@ -789,10 +789,13 @@ describe('resolveGatewayMultiCompanionConfig', () => {
     })).toThrow(/satellites\.json.*absent from companions\.json/);
   });
 
-  it('fails closed when an enabled fleet satellite omits shared-device authority', () => {
+  it('fails closed when a multi-companion fleet satellite omits shared-device authority', () => {
     expect(() => resolveGatewayMultiCompanionConfig({
       multiCompanion: true,
-      companionFleet: resolvedFleet(['11111111-1111-4111-8111-111111111111']),
+      companionFleet: resolvedFleet([
+        '11111111-1111-4111-8111-111111111111',
+        '22222222-2222-4222-8222-222222222222',
+      ]),
     }, baseChannels(), {
       schemaVersion: 1,
       enabled: true,
@@ -803,6 +806,58 @@ describe('resolveGatewayMultiCompanionConfig', () => {
         endpoints: [],
       }],
     })).toThrow(/requires sharedDevice authority/);
+  });
+
+  it('lets a one-companion fleet satellite omit shared-device authority (psfn-framework-bbprt)', () => {
+    expect(resolveGatewayMultiCompanionConfig({
+      multiCompanion: false,
+      companionFleet: resolvedFleet(['11111111-1111-4111-8111-111111111111']),
+    }, baseChannels(), {
+      schemaVersion: 1,
+      enabled: true,
+      satellites: [{
+        satelliteId: 'sat-solo',
+        displayName: 'Solo hub',
+        mobility: 'static',
+        endpoints: [],
+      }],
+    })).toMatchObject({
+      enabled: true,
+      fleetCompanionIds: ['11111111-1111-4111-8111-111111111111'],
+      channelRouting: { api: '11111111-1111-4111-8111-111111111111' },
+    });
+  });
+
+  it('still accepts shared-device authority on a one-companion fleet satellite', () => {
+    expect(resolveGatewayMultiCompanionConfig({
+      multiCompanion: false,
+      companionFleet: resolvedFleet(['11111111-1111-4111-8111-111111111111']),
+    }, baseChannels(), {
+      schemaVersion: 1,
+      enabled: true,
+      satellites: [{
+        satelliteId: 'sat-governed',
+        displayName: 'Governed hub',
+        mobility: 'static',
+        sharedDevice: {
+          primaryCompanionId: '11111111-1111-4111-8111-111111111111',
+          observationRecipients: [],
+          emanationMemberIds: ['11111111-1111-4111-8111-111111111111'],
+          responseLease: { durationMs: 5_000, activeConversationTtlMs: 60_000 },
+        },
+        endpoints: [],
+      }],
+    })).toMatchObject({ enabled: true });
+  });
+
+  it('never treats fleet-auth presence as fleet routing enablement (psfn-framework-n66dn.2)', () => {
+    // The Pick no longer admits fleetAuth; a caller passing the full config
+    // with fleetAuth set and no fleet manifest stays single-companion.
+    const config = { fleetAuth: { schemaVersion: 1 } } as unknown as Parameters<
+      typeof resolveGatewayMultiCompanionConfig
+    >[0];
+    expect(resolveGatewayMultiCompanionConfig(config, baseChannels(), EMPTY_SATELLITE_REGISTRY))
+      .toMatchObject({ enabled: false, fleetCompanionIds: [] });
   });
 
   it('does not silently ignore satellite ownership for a single-companion deployment', () => {
@@ -2986,6 +3041,28 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
     await expect(server.requestAgentVoiceStream(makeSatelliteVoiceMessage('sat-unbound')))
       .rejects.toThrow(/satellite "sat-unbound" has no shared-device policy/i);
     expect(methodFrames(connA, 'voice.transcript.begin')).toHaveLength(0);
+  });
+
+  it('routes an ungoverned satellite voice stream to the sole companion of a one-companion fleet', async () => {
+    const companionId = '11111111-1111-4111-8111-111111111111';
+    const routed = { messages: fromAny([]) };
+    const { server, connect } = await setupServer({
+      ...createMinimalOptions(),
+      multiCompanion: {
+        ...multiCompanion({ api: companionId }),
+        fleetCompanionIds: [companionId],
+      },
+    });
+    const connA = await connect(voiceStreamResponder(routed));
+    await identifyAgent(connA, companionId, 1);
+
+    await server.requestAgentVoiceStream(makeSatelliteVoiceMessage('sat-solo'));
+
+    expect(methodFrames(connA, 'voice.transcript.begin')).toHaveLength(1);
+    expect(routed.messages[0]?.routing?.gateway).toEqual({
+      schemaVersion: 1,
+      companionId,
+    });
   });
 
   it('fails closed when a satellite voice source is missing authenticated satellite metadata', async () => {

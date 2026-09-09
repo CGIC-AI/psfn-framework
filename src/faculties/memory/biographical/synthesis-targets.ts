@@ -57,7 +57,14 @@ const SCANNED_TRUST_LEVELS: readonly TrustLevel[] = HIGH_TIER_TRUST_LEVELS;
  * there.
  */
 export interface VerifiedBiographyGroupMembership {
-  /** Stable id of the governed context this membership comes from. */
+  /**
+   * Stable id of the governed context this membership comes from.
+   *
+   * This is also the group's EVIDENCE BOUNDARY (psfn-framework-zu8d2): a group
+   * fact may only be mined from what happened in this context, so the id must
+   * be the runtime's own id for that context (the channel id its memories carry
+   * as provenance), not a display label or an authority-local key.
+   */
   readonly contextId: string;
   /** `authority:id` reference for the source that vouches for the membership. */
   readonly governanceAuthorityRef: string;
@@ -85,7 +92,8 @@ export interface BiographyGroupMembershipAuthorityPort {
  * Canonicalize and validate one membership before it can become a target.
  * Anything unverified, under-sized, duplicated, unreferenced or blank is
  * dropped rather than repaired: a group fact built on an uncertain set is worse
- * than no group fact.
+ * than no group fact. The blank-`contextId` rejection is load-bearing twice
+ * over: it is the group's evidence boundary as well as its provenance (zu8d2).
  */
 function admissibleGroupContactIds(
   membership: VerifiedBiographyGroupMembership,
@@ -195,10 +203,16 @@ export function createBiographySynthesisTargetPort(input: {
               companionId: input.companionSubject.companionId,
               contactIds,
             },
-            // Group evidence is collected from the companion's own silo at the
-            // same depth her autobiography uses; per-source admission still
-            // runs through owner candidate policy unchanged.
+            // Depth is the companion's own, because the scan runs under her
+            // subject; per-source admission still runs through owner candidate
+            // policy unchanged.
             depth: 'full',
+            // psfn-framework-zu8d2: the scan runs under the COMPANION's subject,
+            // so subject authorization alone would admit her entire private
+            // silo — every DM and solitary reflection — as evidence for a claim
+            // that binds other people. Evidence is restricted to the governed
+            // context the authority vouched for, and nothing else.
+            evidenceScope: { governedContextIds: [membership.contextId.trim()] },
           });
         }
       }

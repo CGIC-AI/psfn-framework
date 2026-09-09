@@ -98,6 +98,24 @@ describe('biography synthesis group targets (uz787)', () => {
     expect(targets.some(target => target.socialContext.kind === 'companion_group')).toBe(false);
   });
 
+  // psfn-framework-zu8d2 — the membership's governed context is also the
+  // group's EVIDENCE boundary. Without it a group scan, which runs under the
+  // companion's own subject, would be handed her entire private silo.
+  it('scopes group evidence to the governed context the authority vouched for', async () => {
+    const targets = await targetPort(authority([membership({ contextId: ' room-invented ' })]))
+      .listTargets(10);
+
+    expect(targets[1]?.evidenceScope).toEqual({ governedContextIds: ['room-invented'] });
+  });
+
+  it('leaves every subject-scoped target without an evidence scope', async () => {
+    const targets = await targetPort(authority([membership()])).listTargets(10);
+
+    // The autobiography is bounded by its subject, exactly as before.
+    expect(targets[0]?.socialContext.kind).toBe('companion_self');
+    expect(targets[0]?.evidenceScope).toBeUndefined();
+  });
+
   it('keeps the caller target limit', async () => {
     const port = targetPort(authority([
       membership({ contextId: 'room-1', contactIds: ['contact-a', 'contact-b'] }),

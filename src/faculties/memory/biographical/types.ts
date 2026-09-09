@@ -300,6 +300,29 @@ export interface BiographicalCandidateReceipt {
 }
 
 /**
+ * The governed contexts a scan may draw evidence FROM (psfn-framework-zu8d2).
+ *
+ * Subject authorization decides WHOSE rows a scan may read; this decides which
+ * of those rows are evidence for THIS target. The two are not the same
+ * question, and for a group target they are very far apart: a
+ * `companion_group` scan runs under the companion's own subject, so subject
+ * authorization alone admits her entire private silo — every DM, every other
+ * room, every solitary reflection — as evidence for a claim that binds other
+ * people. A group fact must be built only from what happened in the group's own
+ * governed context.
+ *
+ * `governedContextIds` are the context ids an authority vouched for. They are
+ * matched against the memory's own source channel (the `sourceChannelId` of its
+ * live snapshot, threaded from `provenance.channelId`), so an authority must
+ * issue context ids in the runtime's channel-id namespace. A memory that
+ * carries no source channel matches nothing: unprovable provenance is not
+ * evidence, and this fails closed rather than falling back to the silo.
+ */
+export interface BiographyEvidenceScope {
+  readonly governedContextIds: readonly string[];
+}
+
+/**
  * Canonical social context a candidate was grouped under. Grouping is by
  * canonical subject identity and explicit dyad, never by channel or room: the
  * same dyad observed in two rooms produces one context, and two dyads sharing a

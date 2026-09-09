@@ -8,6 +8,13 @@
 //      memory proxy. A companion-self scan sees only `companion_private` rows;
 //      a contact scan sees only that contact's `single_contact` rows. Neither
 //      scan can observe another silo's rows at any sensitivity.
+//   1b. GOVERNED EVIDENCE SCOPE (psfn-framework-zu8d2), when the target carries
+//      one. Subject authorization answers "whose rows may this scan read"; it
+//      does not answer "which of those rows are evidence for THIS target". For a
+//      group target — anchored on the companion's own subject — those answers
+//      diverge completely, so a scope restricts collection to the governed
+//      contexts an authority vouched for. Absent scope keeps the pre-existing
+//      subject-only boundary exactly.
 //   2. OWNER CANDIDATE POLICY, applied to every resolved snapshot BEFORE the
 //      text is handed to a synthesizer. An excluded memory type, an excluded
 //      lifecycle state, or a sensitivity above the owner ceiling is dropped
@@ -29,7 +36,7 @@ import {
   discoverLiveBiographicalMemoryEvidence,
   type LiveBiographicalMemoryEvidence,
 } from './live-source-rebuild.js';
-import type { BiographicalSubjectRef } from './types.js';
+import type { BiographicalSubjectRef, BiographyEvidenceScope } from './types.js';
 
 type BiographicalSourceWithholdReason = Exclude<
   BiographicalCandidateSourceAdmission,
@@ -41,7 +48,11 @@ export interface BiographicalSourceCollection {
   readonly evidence: readonly LiveBiographicalMemoryEvidence[];
   /** Rows the subject-authorized query returned, before owner-policy admission. */
   readonly scannedCount: number;
-  /** Rows whose current subject no longer proves the exact canonical subject. */
+  /**
+   * Rows the scan could not bind to this target: the current subject no longer
+   * proves the exact canonical subject, or — when the target carries a governed
+   * evidence scope — the row came from outside that scope (zu8d2).
+   */
   readonly unresolvedCount: number;
   /** Content-free withhold tally, keyed by the owner-policy rule that refused. */
   readonly withheldByPolicy: Readonly<Record<BiographicalSourceWithholdReason, number>>;
@@ -64,13 +75,23 @@ function emptyWithheldTally(): Record<BiographicalSourceWithholdReason, number> 
 
 /**
  * Collect owner-policy-admitted biographical evidence for one canonical
- * subject, across every session and room the subject authorization covers.
+ * subject, across every session and room the subject authorization covers —
+ * or, when the target carries a governed evidence scope, only from inside that
+ * scope.
  */
 export async function collectAuthorizedBiographicalSources(input: {
   readonly memoryStore: MemoryStorePort;
   readonly subject: BiographicalSubjectRef;
   readonly policy: BiographicalCandidatePolicy;
   readonly scanLimit: number;
+  /**
+   * psfn-framework-zu8d2. Absent for a subject-scoped scan (autobiography, a
+   * dyad), which is the whole production path today, so this changes nothing
+   * there. Present for a group target, whose subject is the companion herself:
+   * without it, subject authorization alone would hand a group claim the
+   * companion's entire private silo as evidence.
+   */
+  readonly evidenceScope?: BiographyEvidenceScope;
 }): Promise<BiographicalSourceCollection> {
   if (!Number.isSafeInteger(input.scanLimit) || input.scanLimit < 1) {
     throw new Error('biography source scan limit must be a positive safe integer');
@@ -91,6 +112,7 @@ export async function collectAuthorizedBiographicalSources(input: {
     memoryStore: authorized,
     memoryIds: rows.map(memory => memory.id),
     subject: input.subject,
+    ...(input.evidenceScope ? { evidenceScope: input.evidenceScope } : {}),
   });
   const withheldByPolicy = emptyWithheldTally();
   const evidence: LiveBiographicalMemoryEvidence[] = [];

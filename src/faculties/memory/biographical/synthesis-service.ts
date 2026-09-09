@@ -51,6 +51,7 @@ import type {
   BiographicalClaimSource,
   BiographicalCollectionDepth,
   BiographicalSubjectRef,
+  BiographyEvidenceScope,
 } from './types.js';
 
 const log = createComponentLogger('Biography');
@@ -78,6 +79,18 @@ export interface BiographySynthesisTarget {
   readonly subject: BiographicalSubjectRef;
   readonly socialContext: BiographicalCandidateSocialContext;
   readonly depth: BiographicalCollectionDepth;
+  /**
+   * Which governed contexts this target's evidence may come from
+   * (psfn-framework-zu8d2). Absent for a subject-scoped target — the
+   * autobiography and every dyad — where the subject IS the boundary.
+   *
+   * REQUIRED for a `companion_group` target and enforced below: a group scan
+   * runs under the companion's own subject, so without a scope the subject gate
+   * would admit her whole private silo as evidence for a fact that binds other
+   * people. Kept off `socialContext` deliberately: that is persisted with every
+   * candidate and describes WHO the claim is about, not where it was mined.
+   */
+  readonly evidenceScope?: BiographyEvidenceScope;
 }
 
 /**
@@ -258,11 +271,22 @@ export function stageCursorKeyForSubject(subject: BiographicalSubjectRef): strin
  * overwrite the autobiography's cursor and each other's. The exact canonical
  * participant set — which the group authority, not the model, decides — is what
  * distinguishes them.
+ *
+ * The governed evidence scope joins the key for the same reason (zu8d2): once
+ * a group's evidence is scoped to its own context, the same people in two
+ * group chats are two targets over two different bodies of evidence. Sharing
+ * one cursor between them would make each pass invalidate the other's digest
+ * and re-synthesize both on every tick.
  */
 export function stageCursorKeyForTarget(target: BiographySynthesisTarget): string {
   const subjectKey = stageCursorKeyForSubject(target.subject);
   if (target.socialContext.kind !== 'companion_group') return subjectKey;
-  return `${subjectKey}|group:${target.socialContext.contactIds.join(',')}`;
+  const scopeKey = [...(target.evidenceScope?.governedContextIds ?? [])]
+    .map(contextId => contextId.trim())
+    .filter(contextId => contextId.length > 0)
+    .sort((left, right) => left.localeCompare(right))
+    .join(',');
+  return `${subjectKey}|group:${target.socialContext.contactIds.join(',')}|context:${scopeKey}`;
 }
 
 export class BiographySynthesisService {
@@ -403,6 +427,15 @@ export class BiographySynthesisService {
     candidatesDuplicate: number;
   }> {
     const { target, policy } = input;
+    // Fail closed (zu8d2). A group target without a governed evidence scope
+    // would silently widen to the companion's whole silo, which is exactly the
+    // defect this guard exists to make impossible — so it is refused here
+    // rather than being repaired with a default.
+    if (target.socialContext.kind === 'companion_group' && target.evidenceScope === undefined) {
+      throw new Error(
+        'biography group synthesis requires an authority-issued governed evidence scope',
+      );
+    }
     const depth = this.options.depthPolicy()[target.depth];
     // A run can never consume more sources than its own candidate and
     // per-candidate source budgets allow, so the scan bound is derived from
@@ -414,6 +447,7 @@ export class BiographySynthesisService {
       subject: target.subject,
       policy,
       scanLimit,
+      ...(target.evidenceScope ? { evidenceScope: target.evidenceScope } : {}),
     });
     const withheldByPolicy = Object.values(collection.withheldByPolicy)
       .reduce((total, count) => total + count, 0);
@@ -468,6 +502,9 @@ export class BiographySynthesisService {
       // Authority-issued, so a model that names its own participants cannot
       // change who a group claim binds.
       ...(groupParticipants ? { participants: groupParticipants } : {}),
+      // Re-applied on the drift re-read, so a source that left the group's
+      // governed context mid-run cannot be persisted (zu8d2).
+      ...(target.evidenceScope ? { evidenceScope: target.evidenceScope } : {}),
       now,
     });
 

@@ -32,6 +32,7 @@ import {
 } from '../../boundary/gateway/incident-alert-delivery.js';
 import {
   emitHealthEvent,
+  hashHealthEventSubject,
   processObserverId,
   stableHealthConditionCorrelationId,
 } from '../../shared/contracts/health-event.js';
@@ -415,6 +416,44 @@ async function main(): Promise<void> {
   const detachHealthEventStream = subscribeHealthEventStream({
     eventBus,
     store: healthEventStore,
+    // e5r0s + 2xt9c: in fleet mode this stream IS the shared schema's, and a
+    // refused write there is the fleet losing the only record of what the
+    // gateway saw. That was a log line and nothing else; it is now a condition
+    // on the health plane, content-free (a digest of the relation, no envelope
+    // field) and raised once per process, because the store that refused the
+    // write is the same one this report would be persisted into. Outside a
+    // fleet the stream is the single table every surface already reads, so
+    // there is no cross-scope loss to report and the log line remains the
+    // whole story.
+    ...(fleetSystemObservability
+      ? {
+          writeTarget: {
+            relation: 'runtime_health_events',
+            onWriteFailed: ({ relation }: { relation: string }) => {
+              void emitHealthEvent(eventBus, {
+                owner: { kind: 'system' },
+                severity: 'critical',
+                code: 'shared_store_write_failed',
+                correlationId: stableHealthConditionCorrelationId(
+                  'shared_store_write_failed',
+                  { kind: 'system' },
+                ),
+                provenance: {
+                  process: 'gateway',
+                  component: 'persistence',
+                  observerId: processObserverId(),
+                  subjectHash: hashHealthEventSubject(`shared_store:${relation}`),
+                },
+                observedAtMs: Date.now(),
+              }).catch((error: unknown) => {
+                log.error('Shared store write-failure health event failed', {
+                  error: error instanceof Error ? error.message : String(error),
+                });
+              });
+            },
+          },
+        }
+      : {}),
   });
   // One deduplicated operator alert per incident correlation id, delivered
   // through this gateway's existing alert dispatcher. Subscribed here beside

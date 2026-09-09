@@ -444,7 +444,7 @@ describe('shared observability readiness proves the privileges each path uses', 
     }
   }, INTEGRATION_TIMEOUT_MS);
 
-  it('refuses a companion-owned escalation on the fleet-wide ledger', async () => {
+  it('accepts companion-owned escalations on the fleet-wide ledger', async () => {
     const fixture = await fleet();
     try {
       const gatewayLedger = await PostgresHumanEscalationStore.connectShared(
@@ -452,17 +452,18 @@ describe('shared observability readiness proves the privileges each path uses', 
         { access: 'raise', bounds: DEFAULT_HUMAN_ESCALATION_CONFIG.retention },
       );
       try {
-        // The shared ledger holds the fleet's SYSTEM-owned questions. A
-        // companion-owned row here would appear on every Garden in the fleet,
-        // attributed to a companion none of them are — enforced at the store so
-        // it does not depend on every caller remembering (psfn-framework-2xt9c).
+        // The fleet gateway files companion-owned questions here too — a
+        // pending confirmation or a quarantine hold names the companion it
+        // concerns — and the Garden fence (system rows plus the reader's own
+        // companion) is what keeps them off the wrong operator surface. A
+        // store-level refusal broke that producer on kube-test
+        // (psfn-framework-2xt9c follow-up), so the ledger accepts both owners.
         await expect(gatewayLedger.openOrReopen(escalationFacts({
           owner: { kind: 'companion', companionId: COMPANION_A as never },
           dedupeKey: 'companion-owned',
-        }))).rejects.toThrow(/system-owned escalations only/u);
-
-        // The same facts, system-owned, are accepted — so this is a tenancy
-        // rule, not a broken write path.
+        }))).resolves.toMatchObject({
+          owner: { kind: 'companion', companionId: COMPANION_A },
+        });
         await expect(gatewayLedger.openOrReopen(escalationFacts({
           dedupeKey: 'system-owned',
         }))).resolves.toMatchObject({ owner: { kind: 'system' } });

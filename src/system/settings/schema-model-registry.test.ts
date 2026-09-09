@@ -42,6 +42,35 @@ describe('normalizeCanonicalModelRegistry endpoint metadata', () => {
     });
   });
 
+  it('carries a declared sampling constraint through normalization', () => {
+    // psfn-framework-mlhn3: the constraint is a MODEL-CARD fact. Callers that
+    // pin sampling parameters read it here rather than matching provider names.
+    const registry = makeRegistry();
+    const model = (registry.models as Array<Record<string, unknown>>)[0]!;
+    model.capabilities = {
+      ...(model.capabilities as Record<string, unknown>),
+      rejectsTemperature: true,
+    };
+    expect(normalizeCanonicalModelRegistry(registry).models[0]?.capabilities)
+      .toMatchObject({ rejectsTemperature: true });
+  });
+
+  it('leaves the sampling constraint absent for a card that does not declare it', () => {
+    expect(normalizeCanonicalModelRegistry(makeRegistry()).models[0]?.capabilities)
+      .not.toHaveProperty('rejectsTemperature');
+  });
+
+  it('rejects a non-boolean sampling constraint', () => {
+    const registry = makeRegistry();
+    const model = (registry.models as Array<Record<string, unknown>>)[0]!;
+    model.capabilities = {
+      ...(model.capabilities as Record<string, unknown>),
+      rejectsTemperature: 'only-1',
+    };
+    expect(() => normalizeCanonicalModelRegistry(registry))
+      .toThrow('capabilities.rejectsTemperature: expected boolean');
+  });
+
   it('rejects an unknown API kind', () => {
     expect(() => normalizeCanonicalModelRegistry(makeRegistry('chat-completions')))
       .toThrow('apiKind: expected one of openai-completions, openai-responses');

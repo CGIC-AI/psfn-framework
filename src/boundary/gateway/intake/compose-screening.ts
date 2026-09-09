@@ -57,7 +57,10 @@ import {
   type ScreenerBackend,
   type ScreenerTestCompletion,
 } from './screener-transport.js';
-import { createGatewayIntakeEscalationPort } from './escalation.js';
+import {
+  createGatewayIntakeEscalationPort,
+  type GatewayIntakeEscalationDeps,
+} from './escalation.js';
 import {
   evaluateVisionIntake,
   toVisionIntakeImageScreenResult,
@@ -165,6 +168,12 @@ export async function composeGatewayIntakeScreening(input: {
   onQuarantineExpired?: IntakeQuarantineStoreOptions['onExpired'];
   /** Called for structural fail-closed screening telemetry. */
   onFailClosedScreening?: IntakeScreeningServiceOptions['onFailClosed'];
+  /**
+   * Called when a screener provider REFUSED the request parameters
+   * (psfn-framework-mlhn3) — a standing operator misconfiguration rather than a
+   * transient failure. Content-free: screener tier, model label, HTTP status.
+   */
+  onScreenerProviderRejected?: GatewayIntakeEscalationDeps['onScreenerProviderRejected'];
   /** Content-free per-stage latency observer; never receives screened text. */
   onScreeningTiming?: IntakeScreeningServiceOptions['onTiming'];
   /** Content-free completion path for asynchronous post-pass deep screening. */
@@ -307,6 +316,9 @@ export async function composeGatewayIntakeScreening(input: {
     cogSecEvents,
     ...(input.screenerTestCompletion ? { testCompletion: input.screenerTestCompletion } : {}),
     ...(input.onFailClosedScreening ? { onFailClosed: input.onFailClosedScreening } : {}),
+    ...(input.onScreenerProviderRejected
+      ? { onScreenerProviderRejected: input.onScreenerProviderRejected }
+      : {}),
   });
 
   const screening = createIntakeScreeningService({

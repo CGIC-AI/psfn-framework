@@ -293,3 +293,55 @@ describe('stableHealthConditionCorrelationId', () => {
     expect(new Set([system, otherCode, companion]).size).toBe(3);
   });
 });
+
+
+// ── Intake screener misconfiguration vocabulary (psfn-framework-mlhn3) ──
+
+describe('intake screener provider rejection vocabulary', () => {
+  function screenerInput(overrides: Partial<HealthEventInput> = {}): HealthEventInput {
+    return input({
+      code: 'intake_screener_provider_rejected_request',
+      provenance: {
+        process: 'gateway',
+        component: 'cogsec',
+        observerId: processObserverId(),
+        subjectHash: hashHealthEventSubject('intake_screener:l2:glm-code-plan/glm-5.3'),
+      },
+      evidence: { httpStatus: 400 },
+      ...overrides,
+    });
+  }
+
+  it('accepts the code, the cogsec component, and the httpStatus evidence key', () => {
+    const event = createHealthEvent(screenerInput());
+    expect(event.code).toBe('intake_screener_provider_rejected_request');
+    expect(event.provenance.component).toBe('cogsec');
+    expect(event.evidence).toEqual({ httpStatus: 400 });
+    // Read-back from the persisted stream must accept it too, or the detector
+    // would never see the rows the gateway writes.
+    expect(validateHealthEvent(event as unknown as Record<string, unknown>)).toEqual(event);
+  });
+
+  it('carries the screener tier and model ONLY as an opaque subject digest', () => {
+    const event = createHealthEvent(screenerInput());
+    expect(event.provenance.subjectHash).toMatch(/^[0-9a-f]{64}$/u);
+    // No field of the envelope may contain the model label in the clear.
+    expect(JSON.stringify(event)).not.toContain('glm-5.3');
+  });
+
+  it('groups one misconfigured model together and separates different ones', () => {
+    const l2Glm = hashHealthEventSubject('intake_screener:l2:glm-code-plan/glm-5.3');
+    const l2GlmAgain = hashHealthEventSubject('intake_screener:l2:glm-code-plan/glm-5.3');
+    const l2Other = hashHealthEventSubject('intake_screener:l2:openai/gpt-x');
+    const l3Glm = hashHealthEventSubject('intake_screener:l3:glm-code-plan/glm-5.3');
+
+    expect(l2Glm).toBe(l2GlmAgain);
+    expect(new Set([l2Glm, l2Other, l3Glm]).size).toBe(3);
+  });
+
+  it('rejects a rendered provider message smuggled in as evidence', () => {
+    expect(() => createHealthEvent(screenerInput({
+      evidence: { httpStatus: 'invalid temperature: only 1 is allowed' } as never,
+    }))).toThrow();
+  });
+});

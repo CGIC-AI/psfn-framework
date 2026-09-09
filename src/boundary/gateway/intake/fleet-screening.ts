@@ -31,6 +31,9 @@ type QuarantineHeldEntry = Parameters<
 type FailClosedScreeningEvent = Parameters<
   NonNullable<BaseCompositionInput['onFailClosedScreening']>
 >[0];
+type ScreenerProviderRejectedEvent = Parameters<
+  NonNullable<BaseCompositionInput['onScreenerProviderRejected']>
+>[0];
 type ScreeningTimingEvent = Parameters<
   NonNullable<BaseCompositionInput['onScreeningTiming']>
 >[0];
@@ -52,6 +55,7 @@ export type GatewayIntakeScreeningRuntimeInput = Omit<
   | 'onQuarantineHeld'
   | 'onQuarantineExpired'
   | 'onFailClosedScreening'
+  | 'onScreenerProviderRejected'
   | 'onScreeningTiming'
   | 'onPostEscalation'
   | 'onInlineShadowFinding'
@@ -87,6 +91,16 @@ export type GatewayIntakeScreeningRuntimeInput = Omit<
   onFailClosedScreening?: (
     companionId: CompanionId | undefined,
     event: FailClosedScreeningEvent,
+  ) => void;
+  /**
+   * A screener provider refused the request parameters (psfn-framework-mlhn3).
+   * Content-free: screener tier, model label, HTTP status. Keyed by the owning
+   * companion like every other observer here, so a fleet incident never mixes
+   * tenancy.
+   */
+  onScreenerProviderRejected?: (
+    companionId: CompanionId | undefined,
+    event: ScreenerProviderRejectedEvent,
   ) => void;
   onScreeningTiming?: (
     companionId: CompanionId | undefined,
@@ -200,6 +214,7 @@ export async function composeGatewayIntakeScreeningRuntime(
     onQuarantineHeld,
     onQuarantineExpired,
     onFailClosedScreening,
+    onScreenerProviderRejected,
     onScreeningTiming,
     onPostEscalation,
     onInlineShadowFinding,
@@ -229,6 +244,11 @@ export async function composeGatewayIntakeScreeningRuntime(
         : {}),
       ...(onFailClosedScreening
         ? { onFailClosedScreening: event => onFailClosedScreening(companionId, event) }
+        : {}),
+      ...(onScreenerProviderRejected
+        ? {
+          onScreenerProviderRejected: event => onScreenerProviderRejected(companionId, event),
+        }
         : {}),
       ...(onScreeningTiming
         ? { onScreeningTiming: event => onScreeningTiming(companionId, event) }

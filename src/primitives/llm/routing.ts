@@ -71,6 +71,13 @@ export interface RoutingCandidate {
   contextWindow?: number;
   supportsVision?: boolean;
   supportsReasoning?: boolean;
+  /**
+   * Provider fixes sampling temperature for this model and rejects the
+   * parameter outright (models.json `capabilities.rejectsTemperature`). A
+   * caller that pins a temperature must OMIT it for this candidate rather than
+   * send the provider's fixed value. (psfn-framework-mlhn3)
+   */
+  rejectsTemperature?: boolean;
   thinkingEnabled?: boolean;
   thinkingEffort?: ModelThinkingEffort;
   temperature?: number;
@@ -461,6 +468,11 @@ export function resolveRoutingCandidateForRegistryEntry(
   const supportsReasoning = typeof entry.capabilities?.supportsReasoning === 'boolean'
     ? entry.capabilities.supportsReasoning
     : undefined;
+  // psfn-framework-mlhn3: sampling constraint travels with the card, never
+  // from provider-name string matching at the call site.
+  const rejectsTemperature = typeof entry.capabilities?.rejectsTemperature === 'boolean'
+    ? entry.capabilities.rejectsTemperature
+    : undefined;
   const tuning = resolveCandidateTuning(entry);
   const endpointRoute = resolveConfiguredGenericEndpointRoute(config, provider)
     ?? resolveOpenRouterEndpointRoute(config, entry, provider);
@@ -473,6 +485,7 @@ export function resolveRoutingCandidateForRegistryEntry(
     ...(contextWindow > 0 ? { contextWindow } : {}),
     ...(supportsVision !== undefined ? { supportsVision } : {}),
     ...(supportsReasoning !== undefined ? { supportsReasoning } : {}),
+    ...(rejectsTemperature !== undefined ? { rejectsTemperature } : {}),
     ...(endpointRoute.requestBaseUrl ? { requestBaseUrl: endpointRoute.requestBaseUrl } : {}),
     ...(endpointRoute.requestApiKeyEnv ? { requestApiKeyEnv: endpointRoute.requestApiKeyEnv } : {}),
     ...(entry.routing?.providerOrder ? { openRouterProviderOrder: [...entry.routing.providerOrder] } : {}),

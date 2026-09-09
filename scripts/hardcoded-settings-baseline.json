@@ -460,6 +460,12 @@
       "value": "240_000"
     },
     {
+      "file": "src/app/gateway/hub-device-assertion-authority.ts",
+      "name": "MIN_PEPPER_LENGTH",
+      "value": "32",
+      "note": "Code-owned safety floor: minimum byte length of HUB_DEVICE_ASSERTION_AUDIT_PEPPER (n66dn.2); a shorter audit pepper weakens assertion digest unlinkability and must never be operator-tunable downward."
+    },
+    {
       "file": "src/app/maintenance/owner-upgrade-readiness-probe.ts",
       "name": "companionProbe.$call:timer:setTimeout.arg1#1",
       "value": "100",
@@ -548,13 +554,6 @@
       "value": "4_096",
       "form": "length-guard",
       "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
-    },
-    {
-      "file": "src/shared/contracts/credential-contracts.ts",
-      "name": "ENV_CREDENTIAL_NAME_PATTERN",
-      "value": "/^[A-Z][A-Z0-9_]*$/",
-      "form": "regex",
-      "note": "Immutable parser/wire/schema contract ENV_CREDENTIAL_NAME_PATTERN; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning (moved from boundary/custody/credential-vault.ts by psfn-framework-f77ca)."
     },
     {
       "file": "src/boundary/custody/runtime-credential-source.ts",
@@ -646,11 +645,23 @@
       "note": "Code-owned safety/resource guard UPLOAD_BODY.maxBytes; this fixed bound protects untrusted input or resource use independently of operator tuning."
     },
     {
+      "file": "src/boundary/fleet-auth/hub-device-assertion-replay-memory.ts",
+      "name": "DEFAULT_MAX_ENTRIES",
+      "value": "4096",
+      "note": "Code-owned DoS guard: bound on the in-memory Hub device assertion replay fence (n66dn.2); entries also expire with the assertion (<=70 s), so the cap only limits memory under attacker-driven presentation floods."
+    },
+    {
       "file": "src/boundary/fleet-auth/hub-device-assertion.ts",
       "name": "parseCompactToken.$call:length-guard:GreaterThanToken#1",
       "value": "8192",
       "form": "length-guard",
       "note": "Code-owned fleet-auth envelope bound: rejects oversized device assertions before compact-token parsing and verification."
+    },
+    {
+      "file": "src/boundary/fleet-auth/hub-device-guest-attachments.ts",
+      "name": "DEFAULT_MAX_FENCES",
+      "value": "1024",
+      "note": "Code-owned DoS guard: bound on the guest-only Hub device attachment fence map (n66dn.2); fences lift after 70 s, the cap only limits memory under rejection floods."
     },
     {
       "file": "src/boundary/fleet-auth/lifecycle-ceremony.ts",
@@ -3344,7 +3355,7 @@
       "file": "src/core/cogsec/disclosure/capsule-custody.ts",
       "name": "DEFAULT_MAX_ACTIVE_CAPSULES",
       "value": "3",
-      "note": "Code-owned DEFAULT for the active-capsule queue bound (bible \u00a710.11 'initial cap of three'); already overridable via createShareCapsuleCustodyStore's maxActiveCapsules option. Owned-setting/Garden exposure is deferred to the publication approvals surface (jp36.7.2)."
+      "note": "Code-owned DEFAULT for the active-capsule queue bound (bible §10.11 'initial cap of three'); already overridable via createShareCapsuleCustodyStore's maxActiveCapsules option. Owned-setting/Garden exposure is deferred to the publication approvals surface (jp36.7.2)."
     },
     {
       "file": "src/core/cogsec/disclosure/publication-tool.ts",
@@ -3418,13 +3429,13 @@
       "file": "src/core/cogsec/intake/corpus/corpus.ts",
       "name": "MAX_FIXTURE_NOTE_CHARS",
       "value": "512",
-      "note": "Corpus fixture-schema size guard (hrmrq.141): bounds attacker-influenceable test data files, not runtime policy \u2014 same class as scanner MAX_SCAN_CHARS."
+      "note": "Corpus fixture-schema size guard (hrmrq.141): bounds attacker-influenceable test data files, not runtime policy — same class as scanner MAX_SCAN_CHARS."
     },
     {
       "file": "src/core/cogsec/intake/corpus/corpus.ts",
       "name": "MAX_FIXTURE_PAYLOAD_CHARS",
       "value": "8192",
-      "note": "Corpus fixture-schema size guard (hrmrq.141): bounds attacker-influenceable test data files, not runtime policy \u2014 same class as scanner MAX_SCAN_CHARS."
+      "note": "Corpus fixture-schema size guard (hrmrq.141): bounds attacker-influenceable test data files, not runtime policy — same class as scanner MAX_SCAN_CHARS."
     },
     {
       "file": "src/core/cogsec/intake/marking.ts",
@@ -8383,7 +8394,7 @@
     {
       "file": "src/faculties/subagents/tool-governance.ts",
       "name": "VAULT_POLICY",
-      "value": "{ readActionsHelp: 'read, search, daily (without content)', classify(params) { const explicit = resolveExplicitAction(params); if (!isRecord(params)) { return classifyByActionSets(explicit, VAULT_READ_ACTIONS, VAULT_MUTATION_ACTIONS); } if (explicit !== null) { if (VAULT_DAILY_ACTIONS.has(explicit)) { // daily appends when content is a string and reads otherwise // (executeVaultDaily in boundary/integrations/vault/tools.ts). return typeof params.content === 'string' ? { action: explicit, kind: 'mutation' } : { action: explicit, kind: 'read' }; } return classifyByActionSets(explicit, VAULT_READ_ACTIONS, VAULT_MUTATION_ACTIONS); } // Mirrors normalizeVaultAction's omitted-action inference, which can // resolve to a write or daily-append \u2014 classify those as mutations. const hasName = typeof params.name === 'string'; const hasContent = typeof params.content === 'string'; const hasQuery = typeof params.query === 'string'; const hasFolder = typeof params.folder === 'string'; const hasMode = typeof params.mode === 'string'; const hasLimit = typeof params.limit === 'number'; if (hasQuery && !hasName && !hasContent && !hasFolder && !hasMode) { return { action: 'search', kind: 'read' }; } if (hasName && hasContent) return { action: 'write', kind: 'mutation' }; if (hasName && !hasContent && !hasQuery && !hasFolder && !hasMode && !hasLimit) { return { action: 'read', kind: 'read' }; } if (!hasName && hasContent && !hasQuery && !hasFolder && !hasMode && !hasLimit) { return { action: 'daily', kind: 'mutation' }; } return { action: null, kind: 'unresolved' }; }, }",
+      "value": "{ readActionsHelp: 'read, search, daily (without content)', classify(params) { const explicit = resolveExplicitAction(params); if (!isRecord(params)) { return classifyByActionSets(explicit, VAULT_READ_ACTIONS, VAULT_MUTATION_ACTIONS); } if (explicit !== null) { if (VAULT_DAILY_ACTIONS.has(explicit)) { // daily appends when content is a string and reads otherwise // (executeVaultDaily in boundary/integrations/vault/tools.ts). return typeof params.content === 'string' ? { action: explicit, kind: 'mutation' } : { action: explicit, kind: 'read' }; } return classifyByActionSets(explicit, VAULT_READ_ACTIONS, VAULT_MUTATION_ACTIONS); } // Mirrors normalizeVaultAction's omitted-action inference, which can // resolve to a write or daily-append — classify those as mutations. const hasName = typeof params.name === 'string'; const hasContent = typeof params.content === 'string'; const hasQuery = typeof params.query === 'string'; const hasFolder = typeof params.folder === 'string'; const hasMode = typeof params.mode === 'string'; const hasLimit = typeof params.limit === 'number'; if (hasQuery && !hasName && !hasContent && !hasFolder && !hasMode) { return { action: 'search', kind: 'read' }; } if (hasName && hasContent) return { action: 'write', kind: 'mutation' }; if (hasName && !hasContent && !hasQuery && !hasFolder && !hasMode && !hasLimit) { return { action: 'read', kind: 'read' }; } if (!hasName && hasContent && !hasQuery && !hasFolder && !hasMode && !hasLimit) { return { action: 'daily', kind: 'mutation' }; } return { action: null, kind: 'unresolved' }; }, }",
       "form": "object",
       "note": "Existing mutable policy candidate VAULT_POLICY; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
@@ -8584,7 +8595,7 @@
     {
       "file": "src/faculties/wiki/sleeptime-wiki-pass.ts",
       "name": "PERSONAL_MARKER_PATTERN",
-      "value": "/\\bmy\\s+(partner|wife|husband|spouse|boyfriend|girlfriend|fianc[\u00e9e]+|mother|mom|father|dad|sister|brother|son|daughter|friend|parents?|family|ex|kid|child|children)\\b/i",
+      "value": "/\\bmy\\s+(partner|wife|husband|spouse|boyfriend|girlfriend|fianc[ée]+|mother|mom|father|dad|sister|brother|son|daughter|friend|parents?|family|ex|kid|child|children)\\b/i",
       "form": "regex",
       "note": "Sleeptime-wiki personal-context classifier currently encoded in code; explicitly baselined as named migration debt by psfn-framework-7qeo1.18, not immutable policy."
     },
@@ -9946,7 +9957,6 @@
       "file": "src/persistence/workspaces/shared-workspace-bounds.ts",
       "name": "MAX_LISTING_CURSOR_LENGTH",
       "value": "4_096",
-      "form": "length-guard",
       "note": "Code-owned structural guard on an untrusted listing cursor (psfn-framework-2xt9c); it mirrors the artifact-path length rule the store already enforces and bounds what a caller can make the listing parse, so it is not operator tuning."
     },
     {
@@ -10062,7 +10072,7 @@
     {
       "file": "src/primitives/images/vision-reviewer.ts",
       "name": "EMBODIMENT_MARKER",
-      "value": "/EMBODIMENT:\\s*(same_me|drifted|different_person)\\b\\s*[\u2014:-]?\\s*(.*)$/im",
+      "value": "/EMBODIMENT:\\s*(same_me|drifted|different_person)\\b\\s*[—:-]?\\s*(.*)$/im",
       "form": "regex",
       "note": "Parser for the fixed EMBODIMENT reviewer response marker; code-owned protocol grammar coupled to the reviewer prompt contract."
     },
@@ -10781,6 +10791,13 @@
       "value": "128",
       "form": "length-guard",
       "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/shared/contracts/credential-contracts.ts",
+      "name": "ENV_CREDENTIAL_NAME_PATTERN",
+      "value": "/^[A-Z][A-Z0-9_]*$/",
+      "form": "regex",
+      "note": "Immutable parser/wire/schema contract ENV_CREDENTIAL_NAME_PATTERN; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning (moved from boundary/custody/credential-vault.ts by psfn-framework-f77ca)."
     },
     {
       "file": "src/shared/contracts/external-memory.ts",

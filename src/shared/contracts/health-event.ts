@@ -143,6 +143,16 @@ const HEALTH_EVENT_CODES = [
    * Evidence carries counts and the cap, never a kind name or a dedupe key.
    */
   'human_escalation_ledger_saturated',
+  /**
+   * A durable store the runtime writes its own observability into refused a
+   * write (bead psfn-framework-2xt9c). Grouped by a digest of the RELATION, so
+   * a store that is unwritable is one condition rather than one event per lost
+   * observation, and reported at most once per relation per process: the
+   * failing store is often the one this event would be persisted into, so the
+   * report has to be self-limiting rather than trusting the write it just lost.
+   * Evidence-free — the digest is the whole subject.
+   */
+  'shared_store_write_failed', // psfn-framework-2xt9c
 ] as const;
 
 export type HealthEventCode = typeof HEALTH_EVENT_CODES[number];

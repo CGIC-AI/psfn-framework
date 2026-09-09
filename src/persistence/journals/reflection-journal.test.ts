@@ -383,3 +383,74 @@ describe('ReflectionJournalStore concernArc telemetry (vw3w.2)', () => {
     ]);
   });
 });
+
+// ── Crash diagnostics parity with the sibling ledgers (bead psfn-framework-2xt9c) ──
+//
+// The charge, fatigue, and human-attention ledgers each hand their bounded
+// reader a named parse-error diagnostic. This journal handed it nothing, so a
+// line a crash left half-written surfaced as a bare `SyntaxError: Unexpected
+// end of JSON input` — no path, no line number, no ledger name — from whichever
+// read happened to run first. It still fails closed, which is the right answer
+// for a record of something the companion wrote about itself; what changed is
+// that it now says where to look, and only where.
+describe('ReflectionJournalStore crash diagnostics', () => {
+  let tempDir: string;
+  let filePath: string;
+  let store: ReflectionJournalStore;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'reflection-journal-torn-'));
+    filePath = join(tempDir, 'journal.jsonl');
+    store = new ReflectionJournalStore(filePath);
+    store.append({
+      templateId: 'musing',
+      templateName: 'Musing',
+      prompt: 'Share a brief reflection.',
+      reflection: 'Steady.',
+      channelId: 'channel-1',
+      mode: 'agent',
+    });
+    // Exactly what a crash mid-append leaves behind: a truncated final row.
+    writeFileSync(filePath, `${readFileSync(filePath, 'utf8')}{"id":"reflection-torn"`, 'utf8');
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('names the ledger, the file, and the line a crash left unreadable', () => {
+    expect(() => store.listRecent({ limit: 5 }))
+      .toThrow(/Reflection journal holds unreadable JSON at line 2 of .*journal\.jsonl/u);
+  });
+
+  it('says the same thing on every read path, not only the first one tried', async () => {
+    await expect(store.hasEntry('reflection-anything'))
+      .rejects.toThrow(/Reflection journal holds unreadable JSON at line 2/u);
+    await expect(store.listConcernArcs({ limit: 5 }))
+      .rejects.toThrow(/Reflection journal holds unreadable JSON at line 2/u);
+  });
+
+  it('carries the location and never the row', () => {
+    // `JSON.parse` quotes the offending input back into its own message, so a
+    // diagnostic that forwarded it would put the companion's prose into a log.
+    for (const torn of [
+      'a private thing the companion wrote\n',
+      '{"reflection": a private thing the companion wrote}\n',
+      '{"id":"reflection-1","reflection":"a private thing the companion wrote"\n',
+    ]) {
+      writeFileSync(filePath, torn, 'utf8');
+
+      let message = '';
+      try {
+        store.listRecent({ limit: 5 });
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+
+      expect(message).toContain('unreadable JSON at line 1');
+      expect(message).toContain(filePath);
+      expect(message).not.toContain('private');
+      expect(message).not.toContain('companion wrote');
+    }
+  });
+});

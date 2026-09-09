@@ -213,6 +213,76 @@ describe('PostgresHumanEscalationStore bounds', () => {
     });
   });
 
+  it('never evicts an attempt whose sink call is still out, and converges once it settles',
+    async () => {
+      await withStore(async ({ pool, store }) => {
+        const record = await store.openOrReopen(facts({ dedupeKey: 'burst' }));
+        // A burst: three raises about one condition, each claiming before it
+        // dispatches and none settled yet. The ring used to exclude only the
+        // key being claimed, so the third claim evicted the first caller's row
+        // while that caller's sink call was still out — and its settle then
+        // failed with "not in the ledger", losing the record of a page that had
+        // already reached a human (psfn-framework-2xt9c).
+        for (let index = 0; index < 3; index += 1) {
+          const claim = await store.claimAttempt({
+            idempotencyKey: `burst.${String(index)}`,
+            escalationId: record.escalationId,
+            sink: 'operator_alert',
+            outcome: 'delivery_failed',
+            attemptedAtMs: NOW_MS + index,
+          }, { awaitingSettlement: true });
+          expect(claim.claimed).toBe(true);
+        }
+
+        // Above the cap on purpose: overshooting a bound is recoverable,
+        // deleting the record of a delivered page is not.
+        expect(await countRows(pool, 'human_escalation_attempts')).toBe(3);
+
+        // Every one of the three sinks answers, and not one settle throws.
+        for (let index = 0; index < 3; index += 1) {
+          await expect(store.settleAttempt({
+            idempotencyKey: `burst.${String(index)}`,
+            expectedOutcome: 'delivery_failed',
+            outcome: 'delivered',
+          })).resolves.toBeUndefined();
+        }
+
+        // Settled rows are ordinary ring candidates again, so the next claim
+        // brings the ledger back to the owner-file cap.
+        await store.claimAttempt({
+          idempotencyKey: 'burst.3',
+          escalationId: record.escalationId,
+          sink: 'operator_alert',
+          outcome: 'recorded',
+          attemptedAtMs: NOW_MS + 3,
+        });
+        expect(await countRows(pool, 'human_escalation_attempts'))
+          .toBe(BOUNDS.maxAttemptsPerEscalation);
+        expect(await store.findAttempt('burst.3')).not.toBeNull();
+      });
+    });
+
+  it('holds the ring exactly for a caller that settles nothing', async () => {
+    await withStore(async ({ pool, store }) => {
+      const record = await store.openOrReopen(facts({ dedupeKey: 'terminal' }));
+      // A `garden_only` route claims a TERMINAL outcome and never settles, so
+      // its rows stay ordinary eviction candidates — the in-flight exemption
+      // must not become a way to grow the ledger without bound.
+      for (let index = 0; index < 5; index += 1) {
+        await store.claimAttempt({
+          idempotencyKey: `terminal.${String(index)}`,
+          escalationId: record.escalationId,
+          sink: 'garden_only',
+          outcome: 'recorded',
+          attemptedAtMs: NOW_MS + index,
+        });
+      }
+
+      expect(await countRows(pool, 'human_escalation_attempts'))
+        .toBe(BOUNDS.maxAttemptsPerEscalation);
+    });
+  });
+
   it('reports content-free saturation once the open half reaches its cap', async () => {
     await withStore(async ({ store, saturations }) => {
       await store.openOrReopen(facts({ dedupeKey: 'saturating-1' }));

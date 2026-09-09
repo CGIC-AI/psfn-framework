@@ -115,7 +115,7 @@ class EidoverseMcplWakeRuntime {
         // The batch stops waiting the moment it starts being consumed: the
         // budget bounds the backlog, not the turn in flight.
         this.waitingBatches -= 1;
-        if (this.waitingBatches === 0) this.overflowReported = false;
+        if (this.waitingBatches === 0) this.reportDrain();
         return this.consume(messages);
       })
       .catch(() => {
@@ -136,10 +136,24 @@ class EidoverseMcplWakeRuntime {
   }
 
   /**
-   * One line per overflow episode, carrying counts only. A knock storm is
-   * exactly the situation where a line per dropped batch would bury the log,
-   * and the counts are cumulative so nothing is lost by staying quiet until the
-   * queue drains and the next episode begins.
+   * Close one overflow episode. The opening line froze its counts at the first
+   * drop — which is the least informative moment of a storm — so the episode
+   * also reports its cumulative totals once the backlog has drained. Two
+   * bounded lines per episode, counts only.
+   */
+  private reportDrain(): void {
+    if (!this.overflowReported) return;
+    this.overflowReported = false;
+    this.logger.warn(
+      "Eidoverse MCPL wake dispatch queue drained; "
+      + `dropped batches ${this.droppedBatches}, dropped messages ${this.droppedMessages}`,
+    );
+  }
+
+  /**
+   * One line when an overflow episode opens, carrying counts only. A knock
+   * storm is exactly the situation where a line per dropped batch would bury
+   * the log, so the rest of the episode stays quiet until it drains.
    */
   private recordDrop(messageCount: number): void {
     this.droppedBatches += 1;

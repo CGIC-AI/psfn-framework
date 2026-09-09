@@ -1,9 +1,9 @@
 import { join } from 'node:path';
 
 import {
-  buildChatHeaders,
   deriveApiKeyPrincipalId,
   postChatCompletion,
+  requireCaseChatHeaders,
 } from '../../lib/probe.mjs';
 import { InvalidEnvError, requireEnv } from '../../lib/env.mjs';
 import { CaseConfigurationError } from '../../lib/case-execution.mjs';
@@ -306,7 +306,7 @@ function buildCogSecCase(ctx, services, env, {
         : {};
       const response = await postChatCompletion({
         apiUrl: services.apiUrl,
-        headers: buildChatHeaders({
+        headers: services.chatHeaders({
           apiKey: dispatchApiKey,
           sessionId,
           privacy: 'private',
@@ -374,6 +374,7 @@ function buildCogSecCase(ctx, services, env, {
 }
 
 export function buildCogSecCases(ctx, services, env) {
+  requireCaseChatHeaders(services, 'Sprint 10 CogSec cases');
   const physicalPrefix = 'PSFN_SHAKEDOWN_PHYSICAL_SATELLITE';
   const satelliteApiKey = env?.[`${physicalPrefix}_API_KEY`]?.trim() ?? '';
   return [

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
 
-import { deriveApiKeyPrincipalId } from '../lib/probe.mjs';
+import { createChatHeaderBuilder, deriveApiKeyPrincipalId } from '../lib/probe.mjs';
 import { prepareCaseChatDispatch } from '../lib/case-dispatch-auth.mjs';
 import {
   SPRINT10_CASE_IDS,
@@ -25,6 +25,11 @@ const services = {
   apiUrl: 'http://127.0.0.1:10153/v1/chat/completions',
   adminBase: 'http://127.0.0.1:10154',
   apiKey: 'fixture-api-key',
+  chatHeaders: createChatHeaderBuilder({
+    apiKey: 'fixture-api-key',
+    runId: 'run-fixture',
+    manifestId: 'shakedown:fixture:run-fixture',
+  }),
   companionDataDir: '/round/companion-data',
   systemDataDir: '/round/system-data',
   fetchJson: async () => ({ ok: true, status: 200, body: {} }),

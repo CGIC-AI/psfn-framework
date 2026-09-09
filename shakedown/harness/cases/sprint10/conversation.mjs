@@ -1,6 +1,7 @@
 import {
-  buildChatHeaders,
+  describeChatDispatchFailure,
   postChatCompletion,
+  requireCaseChatHeaders,
 } from '../../lib/probe.mjs';
 import { CaseConfigurationError } from '../../lib/case-execution.mjs';
 import {
@@ -42,25 +43,33 @@ export function buildTemporalMessage(seedStamp, seedMessage) {
     + `and output nothing else:\n${seedStamp} ${seedMessage}`;
 }
 
+// Dispatch one turn and bind it to its persisted record.
+//
+// A refused dispatch (non-2xx, or a transport failure) is reported as itself:
+// the gateway's status and error envelope, not a downstream "turn did not
+// complete" with no request to look at. No turn record can ever exist for a
+// request the gateway never accepted, so waiting for one only hides the cause.
 async function postAndWait({
   services,
   sessionId,
   apiUserId,
   message,
   signal,
+  stage,
 }) {
   const startedAtMs = Date.now();
   const response = await postChatCompletion({
     apiUrl: services.apiUrl,
-    headers: buildChatHeaders({
-      apiKey: services.apiKey,
-      sessionId,
-      privacy: 'private',
-    }),
+    headers: services.chatHeaders({ sessionId, privacy: 'private' }),
     message,
     timeoutMs: 120_000,
     signal,
   });
+  if (!response.ok) {
+    throw new Error(
+      `${stage} chat dispatch was refused: ${describeChatDispatchFailure(response)}`,
+    );
+  }
   const turnRecord = await services.waitForTurnRecord({
     sessionId,
     apiUserId,
@@ -73,6 +82,7 @@ async function postAndWait({
 }
 
 export function buildConversationCases(ctx, services) {
+  requireCaseChatHeaders(services, 'Sprint 10 conversation cases');
   return [
     {
       id: 's10_temporal_stamp_strip',
@@ -93,9 +103,14 @@ export function buildConversationCases(ctx, services) {
           apiUserId,
           message: seedMessage,
           signal,
+          stage: 'temporal history seed',
         });
         if (seed.turnRecord?.status !== 'completed') {
-          throw new Error('temporal history seed turn did not complete');
+          throw new Error(
+            'temporal history seed turn did not complete '
+            + `(accepted as HTTP ${seed.response.status}; persisted status `
+            + `${seed.turnRecord?.status ?? 'no turn record'})`,
+          );
         }
         const previewMessage = 'Acknowledge the temporal rendering probe in one word.';
         const preview = await postAndWait({
@@ -104,9 +119,14 @@ export function buildConversationCases(ctx, services) {
           apiUserId,
           message: previewMessage,
           signal,
+          stage: 'temporal history preview',
         });
         if (preview.turnRecord?.status !== 'completed') {
-          throw new Error('temporal history preview turn did not complete');
+          throw new Error(
+            'temporal history preview turn did not complete '
+            + `(accepted as HTTP ${preview.response.status}; persisted status `
+            + `${preview.turnRecord?.status ?? 'no turn record'})`,
+          );
         }
         const seedStamp = extractRenderedHistoryStamp(preview.turnRecord, seedMessage);
         const temporalMessage = buildTemporalMessage(seedStamp, seedMessage);
@@ -116,6 +136,7 @@ export function buildConversationCases(ctx, services) {
           apiUserId,
           message: temporalMessage,
           signal,
+          stage: 'temporal stamp-strip turn',
         });
         const rawResponse = snapshotOf(main.turnRecord)?.promptContext?.response?.content;
         if (
@@ -158,11 +179,7 @@ export function buildConversationCases(ctx, services) {
       execute: async ({ sessionId, apiUserId, signal }) => {
         const result = await probeSseChatCompletion({
           apiUrl: services.apiUrl,
-          headers: buildChatHeaders({
-            apiKey: services.apiKey,
-            sessionId,
-            privacy: 'private',
-          }),
+          headers: services.chatHeaders({ sessionId, privacy: 'private' }),
           message: SSE_MESSAGE,
           signal,
           waitForTurnRecord: async ({ message, minStartedAtMs, timeoutMs }) => (

@@ -212,7 +212,9 @@ describe('shared workspace admin write authentication', () => {
 
     expect(response.status).toBe(201);
     expect(JSON.parse(response.body)).toMatchObject({ status: 'pending' });
-    const [review] = service.getSnapshot().reviews;
+    // The first page always carries the review list; a resumed page carries an
+    // explicit null instead (psfn-framework-2xt9c).
+    const [review] = service.getSnapshot().reviews ?? [];
     expect(review?.artifactPath).toMatch(/^automata\/lesson-proposals\/[0-9a-f]{64}\.json$/u);
     expect(JSON.parse(review!.content)).toMatchObject({
       state: 'review_required',
@@ -332,7 +334,7 @@ describe('shared workspace admin write authentication', () => {
       const payload = JSON.parse(response.body) as {
         artifacts: Array<{ artifactPath: string; revision: string }>;
         nextArtifactCursor: string | null;
-        reviews?: unknown[];
+        reviews: unknown[] | null;
         reviewsIncluded: boolean;
       };
       // The review list is the one unbounded read in this response, so it rides
@@ -341,6 +343,9 @@ describe('shared workspace admin write authentication', () => {
       // empty list that reads like "no reviews".
       expect(payload.reviewsIncluded).toBe(pages === 0);
       expect(Array.isArray(payload.reviews)).toBe(pages === 0);
+      // An explicit absence on a resumed page, never an empty list that would
+      // read as "this workspace has no reviews".
+      if (pages > 0) expect(payload.reviews).toBeNull();
       expect(payload.artifacts.length).toBeLessThanOrEqual(GARDEN_LIST_BOUNDS.pageSize);
       collected.push(...payload.artifacts.map(artifact => artifact.artifactPath));
       cursor = payload.nextArtifactCursor;

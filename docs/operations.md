@@ -602,6 +602,61 @@ the operator's external configuration authority.
 <!-- openwiki: broken internal link [maintenance-scripts-inventory.md] file "maintenance-scripts-inventory.md" does not exist. Fix the href or restore the target, then delete this comment. -->
   mutation (see the [maintenance scripts inventory](maintenance-scripts-inventory.md)).
 
+## Owner-file contract upgrades
+
+A release that adds a required owner-file field ships two things: the field's
+canonical default in `config/*.seed.json` (or, for a nested block, in the
+scheduler defaults module), and a migration that writes it into an owner file
+that predates it. The migrations are additive only — they seed a canonical
+default where the operator set nothing and never rewrite a value that is
+already there.
+
+Under Helm the seed init container runs both on every upgrade, so a
+chart-managed deployment needs no action:
+
+- `node /app/dist/migrate-required-settings-blocks.js --data-dir <system-data-dir> [--companion-data-dir <dir>] --apply`
+  — system owner files, `settings.json` included.
+- `node /app/dist/migrate-scheduler-owner.js --data-dir <companion-data-dir> --apply`
+  — the per-companion `scheduler.json`. Run it once per companion root.
+
+**A deployment that manages its owner files outside the chart — bare docker,
+compose, or a custom operator — must run the same two steps itself after
+upgrading the image**, from a checkout with the new `config/` seeds:
+
+```bash
+npx tsx src/app/maintenance/migrate-required-settings-blocks.ts \
+  --data-dir <system-data-dir> [--companion-data-dir <companion-data-dir>] --apply
+npx tsx src/app/maintenance/migrate-scheduler-owner.ts \
+  --data-dir <companion-data-dir> --apply
+```
+
+Both default to a dry run; drop `--apply` to see the exact paths a run would
+add before it writes anything. `npm run preflight:startup-owner-files` performs
+the settings half of this as part of its verification pass.
+
+If you skip the step, the runtime no longer refuses to start. Each process
+adapts the missing fields to their canonical defaults **in memory** and emits
+one warning per owner file naming exactly which paths it filled in — for
+example `Run migrate:scheduler-owner --apply; …/scheduler.json is using
+canonical defaults for missing blocks: humanEscalation.retention`. Treat that
+warning as a pending migration: the values are correct for this process, but
+the owner file on disk is still behind, nothing is written to it (the app
+containers run a read-only root filesystem and the fleet Garden mounts
+companion data read-only), and the warning returns on every restart until you
+run the migration. An owner file still carrying the retired pre-bundled
+scheduler cadence (`salienceDecayIntervalMs`, `socialGraphBuilder.intervalMs`)
+is *not* adapted — that rewrite is ambiguous and only
+`migrate-scheduler-owner` resolves it, so startup still fails closed there.
+
+The settings half of the adaptation reads its defaults from
+`$CONFIG_DIR/settings.seed.json` (`./config` when `CONFIG_DIR` is unset), which
+the shipped images bake in and both `docker/compose.yml` and the chart set. A
+deployment that ships owner files without a seed directory keeps booting exactly
+as it did before — the adaptation is skipped with its own warning naming
+`CONFIG_DIR`, and the required-field resolvers fail closed as they used to. A
+seed that is present but malformed still stops the process: that is a contract
+defect, not an upgrade gap.
+
 ## Recovery: session repair
 
 `npm run session:repair` (`src/app/maintenance/session-repair.ts`) is the

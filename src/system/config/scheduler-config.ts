@@ -7,6 +7,7 @@ import { isRecord } from '../../shared/utils/types.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { OWNER_FILE_MODE_COMPANION_POLICY } from './owner-file-modes.js';
+import { adaptSchedulerOwnerToCurrentContract } from './scheduler-owner-defaults.js';
 import type { BackgroundWorkRuntimeTuning } from '../../core/agent/background-work/config.js';
 import {
   parseIcpAutonomySchedulerConfig,
@@ -371,7 +372,18 @@ export function loadSchedulerConfig(
   return loadRequiredJson({
     dataPath: join(dataDir, SCHEDULER_FILE_NAME),
     examplePath: join(seedDir, SCHEDULER_SEED_FILE_NAME),
-    validate: validateSchedulerConfig,
+    // psfn-framework-bxnyu: adapt an owner file that predates a required block
+    // to the current contract in memory, warning by path, before validation
+    // sees it. The values are the ones `migrate-scheduler-owner` persists —
+    // both read `scheduler-owner-defaults.ts` — so a deployment managing its
+    // owner files outside the chart boots on the same configuration the chart's
+    // init container would have written, instead of failing closed on a key the
+    // file could not have known about. Saving still fails closed: only the read
+    // path adapts.
+    validate: (raw, sourcePath) => validateSchedulerConfig(
+      adaptSchedulerOwnerToCurrentContract(raw, sourcePath),
+      sourcePath,
+    ),
   });
 }
 

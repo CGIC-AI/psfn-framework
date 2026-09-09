@@ -29,6 +29,7 @@ import {
   createDefaultRoomSignalSettings,
 } from './participation-config.js';
 import { DEFAULT_HEALTH_DETECTORS_CONFIG } from './scheduler-config/health-detectors.js';
+import { DEFAULT_HUMAN_ESCALATION_CONFIG } from './scheduler-config/human-escalation.js';
 
 const fixturePath = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -534,6 +535,46 @@ describe('migrateLegacySchedulerOwner', () => {
     expect(migrated.postgresPressure).toEqual(DEFAULT_HEALTH_DETECTORS_CONFIG.postgresPressure);
     expect(JSON.parse(readFileSync(filePath, 'utf8'))).toMatchObject({
       healthDetectors: { intervalMs: 120_000 },
+    });
+    expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
+      status: 'not_needed',
+    });
+  });
+
+  it('seeds only the human-escalation sub-blocks an owner file is missing', () => {
+    // psfn-framework-yu03d added `retention` to a block operators already had,
+    // so the sub-key branch of the human-escalation seeding is the one an
+    // upgrading fleet actually takes. Its sibling (block entirely absent) is
+    // covered by the neighbouring cases; this pins the partial one.
+    const { dataDir, filePath } = prepareOwner((owner) => {
+      makePreCaretakerCanonical(owner);
+      (owner.backgroundMaintenance as Record<string, unknown>).sharedWorldWikiCaretaker =
+        structuredClone(DEFAULT_BACKGROUND_MAINTENANCE_CONFIG.sharedWorldWikiCaretaker);
+      owner.backgroundWork = structuredClone(DEFAULT_BACKGROUND_WORK_TUNING);
+      (owner.icpAutonomy as Record<string, unknown>).policyHolds = structuredClone(
+        DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG.policyHolds,
+      );
+      owner.intentionFollowUp = structuredClone(DEFAULT_INTENTION_FOLLOW_UP_SCHEDULER_CONFIG);
+      owner.healthDetectors = structuredClone(DEFAULT_HEALTH_DETECTORS_CONFIG);
+      // The pre-retention shape: routes an operator tuned, and a list limit,
+      // but no retention block because it did not exist when this was written.
+      owner.humanEscalation = {
+        routes: structuredClone(DEFAULT_HUMAN_ESCALATION_CONFIG.routes),
+        listLimit: 25,
+      };
+    });
+
+    expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
+      mode: 'apply',
+      status: 'applied',
+      addedPaths: ['humanEscalation.retention'],
+    });
+    const migrated = loadSchedulerConfig(dataDir).humanEscalation;
+    // The operator's own list limit survives; only the absent key is seeded.
+    expect(migrated.listLimit).toBe(25);
+    expect(migrated.retention).toEqual(DEFAULT_HUMAN_ESCALATION_CONFIG.retention);
+    expect(JSON.parse(readFileSync(filePath, 'utf8'))).toMatchObject({
+      humanEscalation: { listLimit: 25 },
     });
     expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
       status: 'not_needed',

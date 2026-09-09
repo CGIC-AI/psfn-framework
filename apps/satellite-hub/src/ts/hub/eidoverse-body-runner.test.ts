@@ -97,11 +97,11 @@ class RecordingTools implements EidoverseBodyTools {
 test("body action allowlist rejects world-editing verbs and malformed locomotion arguments", () => {
   assert.deepEqual(
     [...EIDOVERSE_BODY_ACTION_NAMES],
-    ["walk_to", "face", "stop", "emote", "posture", "spawn", "remove", "set_avatar"],
+    ["walk_to", "face", "stop", "emote", "posture", "whisper", "spawn", "remove", "set_avatar"],
   );
   // Raw world editing, placement of arbitrary entities, moderation, vision
   // and speech never go through the body runner.
-  for (const forbidden of ["place", "world_verb", "moderate", "kick", "ban", "terrain", "snapshot", "say", "whisper"]) {
+  for (const forbidden of ["place", "world_verb", "moderate", "kick", "ban", "terrain", "snapshot", "say"]) {
     assert.throws(
       () => parseEidoverseBodyAction(forbidden, { x: 1, z: 2 }),
       EidoverseBodyActionRejectedError,

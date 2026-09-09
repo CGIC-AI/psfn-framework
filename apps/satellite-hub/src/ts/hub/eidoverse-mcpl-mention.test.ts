@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createEidoverseMcplWakeRuntime, mentionsAnyName } from "./eidoverse-mcpl-runtime.js";
+import { createEidoverseMcplWakeRuntime, mentionsAnyName, speakerOf } from "./eidoverse-mcpl-runtime.js";
 import type { McplIncomingChannelMessage } from "./eidoverse-mcpl-wire.js";
 
 function message(input: {
@@ -22,10 +22,20 @@ function message(input: {
 
 class RecordingTarget {
   readonly turns: string[] = [];
+  readonly speakers: Array<{ id: string; kind: string } | undefined> = [];
+  readonly observed: Array<[string, string]> = [];
 
-  async handleEidoverseAddressedUtterance(input: { userText: string }): Promise<string | null> {
+  async handleEidoverseAddressedUtterance(input: {
+    userText: string;
+    speaker?: { id: string; name: string; kind: "human" | "ai" };
+  }): Promise<string | null> {
     this.turns.push(input.userText);
+    this.speakers.push(input.speaker ? { id: input.speaker.id, kind: input.speaker.kind } : undefined);
     return null;
+  }
+
+  observeEidoverseParticipant(id: string, kind: "human" | "ai"): void {
+    this.observed.push([id, kind]);
   }
 }
 
@@ -68,6 +78,29 @@ test("ambient chat naming the companion wakes it; its own echo and untagged acts
 
   assert.deepEqual(target.turns, ["visitor: Artie, come over here", "visitor: @artie by tag"]);
   assert.equal(info.length, 2, info.join("\n"));
-  assert.match(info[0]!, /^Eidoverse wake: message m1 from visitor kind=mention reason=name-match text="visitor: Artie, come over here"/u);
-  assert.match(info[1]!, /^Eidoverse wake: message m5 from visitor kind=mention reason=tag:chat:mention,chat:addressed/u);
+  assert.match(info[0]!, /^Eidoverse wake: message m1 from visitor \(human\) kind=mention reason=name-match text="visitor: Artie, come over here"/u);
+  assert.match(info[1]!, /^Eidoverse wake: message m5 from visitor \(human\) kind=mention reason=tag:chat:mention,chat:addressed/u);
+});
+
+test("the world's own human/ai classification rides every wake and is learned for every chat line", async () => {
+  const target = new RecordingTarget();
+  const wake = createEidoverseMcplWakeRuntime(target, {
+    ambientSayDebounceMs: 10,
+    catchupWake: false,
+    wakeQueueLimit: 8,
+    agentNames: ["Artie"],
+  }, { logger: { warn: () => undefined } });
+
+  wake.deliver([
+    message({ id: "h1", author: "visitor", text: "visitor: @artie hello", tags: ["chat:mention", "chat:addressed"] }),
+    message({ id: "a1", author: "artie-kube", text: "artie-kube: @artie hello from kube", tags: ["chat:mention", "chat:addressed", "chat:from-agent"] }),
+    message({ id: "w1", author: "world", text: "* visitor waves", tags: ["chat:ambient", "eidoverse:act"] }),
+    message({ id: "h2", author: "visitor", text: "visitor: just chatting", tags: ["chat:ambient"] }),
+  ]);
+  await settle();
+  await wake.close();
+
+  assert.deepEqual(target.speakers, [{ id: "visitor", kind: "human" }, { id: "artie-kube", kind: "ai" }]);
+  assert.deepEqual(target.observed, [["visitor", "human"], ["artie-kube", "ai"], ["visitor", "human"]]);
+  assert.equal(speakerOf(message({ id: "x", author: "world", text: "* rain", tags: ["chat:ambient", "eidoverse:weather"] })), null);
 });

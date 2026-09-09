@@ -1,10 +1,17 @@
 import type {
   GatewayOpsPort,
   HomeAssistantOperations,
+  WorldAvatarOperations,
 } from '../../gateway/gateway-ops-port.js';
 import type {
   HomeAssistantCallServiceResult,
   HomeAssistantGetStatesResult,
+  WorldAvatarActParams,
+  WorldAvatarActResult,
+  WorldAvatarMoveParams,
+  WorldAvatarMoveResult,
+  WorldAvatarPerceiveParams,
+  WorldAvatarPerceiveResult,
 } from '../../gateway/protocol.js';
 import type {
   WorldCallServiceParams,
@@ -21,9 +28,33 @@ import { getRequestContext } from '../../../primitives/llm/request-context.js';
  */
 export class GatewayWorldOps implements WorldOperations {
   private readonly homeAssistant: HomeAssistantOperations;
+  private readonly worldAvatar: WorldAvatarOperations | undefined;
 
-  constructor(gatewayOps: Pick<GatewayOpsPort, 'homeAssistant'> | HomeAssistantOperations) {
+  constructor(gatewayOps: Pick<GatewayOpsPort, 'homeAssistant' | 'worldAvatar'> | HomeAssistantOperations) {
     this.homeAssistant = 'homeAssistant' in gatewayOps ? gatewayOps.homeAssistant : gatewayOps;
+    this.worldAvatar = 'homeAssistant' in gatewayOps ? gatewayOps.worldAvatar : undefined;
+  }
+
+  async avatarPerceive(params: WorldAvatarPerceiveParams = {}): Promise<WorldAvatarPerceiveResult> {
+    return this.requireAvatar().perceive({ ...params, ...this.correlation() });
+  }
+
+  async avatarMove(params: WorldAvatarMoveParams): Promise<WorldAvatarMoveResult> {
+    return this.requireAvatar().move({ ...params, ...this.correlation() });
+  }
+
+  async avatarAct(params: WorldAvatarActParams): Promise<WorldAvatarActResult> {
+    return this.requireAvatar().act({ ...params, ...this.correlation() });
+  }
+
+  private requireAvatar(): WorldAvatarOperations {
+    if (!this.worldAvatar) throw new Error('world avatar operations are not wired in this runtime');
+    return this.worldAvatar;
+  }
+
+  private correlation(): { channelId?: string } {
+    const contextChannelId = getRequestContext()?.channelId?.trim();
+    return contextChannelId ? { channelId: contextChannelId } : {};
   }
 
   async getStates(params: WorldGetStatesParams = {}): Promise<HomeAssistantGetStatesResult> {

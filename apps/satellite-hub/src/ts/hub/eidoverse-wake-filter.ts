@@ -22,6 +22,8 @@ export interface EidoversePingInput {
   author?: { id: string; name: string };
   /** Why the Hub treats this as addressed (`tag:<tags>` or `name-match`). */
   reason?: string;
+  /** The speaker with the world's human/ai classification, when it is chat. */
+  speaker?: { id: string; name: string; kind: "human" | "ai" };
 }
 
 export interface EidoverseWakeEvent {
@@ -30,6 +32,7 @@ export interface EidoverseWakeEvent {
   messageId?: string;
   author?: { id: string; name: string };
   reason?: string;
+  speaker?: { id: string; name: string; kind: "human" | "ai" };
 }
 
 export interface EidoverseWakeFilterConfig {
@@ -94,6 +97,7 @@ export class EidoverseWakeFilter {
       ...(input.messageId ? { messageId: input.messageId } : {}),
       ...(input.author ? { author: input.author } : {}),
       ...(input.reason ? { reason: input.reason } : {}),
+      ...(input.speaker ? { speaker: input.speaker } : {}),
     };
     switch (this.treatmentFor(input.kind)) {
       case "wake":

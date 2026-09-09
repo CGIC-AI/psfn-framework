@@ -29,6 +29,15 @@ export interface HomeAssistantPolicyConfig {
   placesRegistry?: Pick<PlacesRegistryConfig, 'places'>;
 }
 
+/**
+ * The Satellite Hub control transport on its own (S13 MOVE): the companion's
+ * world-avatar methods need only the Hub URL and token, never Home Assistant.
+ */
+export interface SatelliteHubPolicyConfig {
+  controlBaseUrl?: string;
+  tokenConfigured?: boolean;
+}
+
 export type VaultPolicyAction = 'write' | 'read' | 'search' | 'daily';
 
 export interface VaultPolicyConfig {
@@ -73,6 +82,7 @@ export interface PolicyConfig {
   shellExec?: ShellExecPolicyConfig;
   beads?: BeadsPolicyConfig;
   homeAssistant?: HomeAssistantPolicyConfig;
+  satelliteHub?: SatelliteHubPolicyConfig;
   vault?: VaultPolicyConfig;
 }
 
@@ -376,6 +386,18 @@ export function evaluatePolicy(ctx: GatewayPolicyContext, policyConfig: PolicyCo
     case 'image.create':
     case 'image.edit':
       return 'ALLOW';
+
+    case 'world.avatar_perceive':
+    case 'world.avatar_move':
+    case 'world.avatar_act': {
+      // Transport-configured is the only question here; the capability tier
+      // (world.read / world.control) is enforced agent-side per action.
+      const hub = policyConfig.satelliteHub;
+      const ha = policyConfig.homeAssistant;
+      const baseUrl = hub?.controlBaseUrl?.trim() || ha?.hubBaseUrl?.trim();
+      const tokenConfigured = hub?.tokenConfigured === true || ha?.tokenConfigured === true;
+      return baseUrl && tokenConfigured ? 'ALLOW' : 'DENY';
+    }
 
     case 'home_assistant.get_states':
     case 'home_assistant.check_connection': {

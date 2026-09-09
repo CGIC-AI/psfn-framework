@@ -115,18 +115,25 @@ export const CATALOG_BOUNDARY_TOOL_CONTRACTS = {
     example: { action: 'fetch', target: 'https://example.com/reference' },
   },
   world: {
-    purpose: 'Perceive and act on registered physical or virtual place affordances through the world runtime.',
+    purpose: 'Perceive, move through, and act on the places you can be in: registered physical or virtual places, and the 3D Eidoverse world where you have a body.',
     actions: [
-      action('perceive', [], ['placeId']),
+      action('perceive', [], ['placeId'], {
+        id: 'perceive', rule: 'on an Eidoverse place it reports your own position, everyone present with id and (x, z), and the things placed nearby',
+      }),
       action('list', [], ['placeId', 'scope']),
       action('control', ['affordanceId', 'command'], ['placeId', 'data', 'intent', 'reason'], {
         id: 'control', rule: 'non-human requesters must also supply explicit intent and reason',
       }),
-      action('move', ['placeId']),
+      action('move', [], ['placeId', 'participant', 'position'], {
+        id: 'move', rule: 'placeId goes to a mapped place (walking there, or travelling when it is in another world); participant walks to that person; position walks to {x, z}',
+      }),
+      action('act', ['verb'], ['arguments'], {
+        id: 'act', rule: 'Eidoverse body verbs face|stop|emote|posture|whisper, and spawn|remove|set_avatar when your tier allows',
+      }),
     ],
-    output: 'It returns bounded place state; controls are capability-gated and virtual move never changes sensed physical presence.',
-    guidance: 'Do not control unregistered devices or use move for physical presence.',
-    example: { action: 'perceive', placeId: 'place.living-room' },
+    output: 'It returns bounded place state; controls are capability-gated, a move to an Eidoverse place says whether your body arrived, and virtual move never changes sensed physical presence.',
+    guidance: 'Do not control unregistered devices or use move for physical presence. Use move and perceive on your own initiative to explore a world you have a body in.',
+    example: { action: 'move', participant: 'visitor' },
   },
   analysis_workbench: {
     purpose: 'Analyze a large file, codebase, log set, transcript set, dataset, or evidence set in a temporary bounded sandbox.',

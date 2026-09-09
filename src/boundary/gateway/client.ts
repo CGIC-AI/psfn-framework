@@ -1603,7 +1603,6 @@ export class GatewayClient implements
   }
 
   // ── Home Assistant world control (Sprint 10, bead .8 gateway method) ──
-
   async homeAssistantGetStates(
     params: HomeAssistantGetStatesParams = {},
   ): Promise<HomeAssistantGetStatesResult> {
@@ -1615,7 +1614,9 @@ export class GatewayClient implements
   ): Promise<HomeAssistantCallServiceResult> {
     return await this.transportRuntime.request('home_assistant.call_service', params) as HomeAssistantCallServiceResult;
   }
-
+  async worldAvatar<M extends import('./protocol.js').WorldAvatarMethodName>(method: M, params: import('./protocol.js').GatewayMethods[M][0]): Promise<import('./protocol.js').GatewayMethods[M][1]> {
+    return await this.transportRuntime.request(method, params) as import('./protocol.js').GatewayMethods[M][1];
+  }
   async imageCreate(params: ImageCreateParams): Promise<ImageGenerationRpcResult> {
     return await this.transportRuntime.request('image.create', {
       ...params,

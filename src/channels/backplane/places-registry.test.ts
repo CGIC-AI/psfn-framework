@@ -72,6 +72,37 @@ describe('parsePlacesRegistryConfig', () => {
     expect(config.places).toEqual([]);
   });
 
+  it('parses an Eidoverse plane binding and fails closed on a malformed one (S13 MOVE)', () => {
+    const bound = parsePlacesRegistryConfig(exampleRegistry({
+      sites: [
+        { siteId: 'home', displayName: 'Home', kind: 'physical' },
+        { siteId: 'eidoverse', displayName: 'Eidoverse', kind: 'virtual' },
+      ],
+      places: [
+        ...exampleRegistry().places,
+        {
+          placeId: 'eidoverse:commons:plaza',
+          siteId: 'eidoverse',
+          displayName: 'Commons Plaza',
+          kind: 'physical',
+          eidoverse: { world: 'commons', region: 'plaza', position: { x: 8, z: -2 } },
+        },
+      ],
+    }));
+    expect(resolvePlaceById(bound, 'eidoverse:commons:plaza')?.eidoverse).toEqual({
+      world: 'commons', region: 'plaza', position: { x: 8, z: -2 },
+    });
+    expect(resolvePlaceById(bound, 'living_room')?.eidoverse).toBeUndefined();
+
+    const withBinding = (eidoverse: unknown) => exampleRegistry({
+      places: [{ ...exampleRegistry().places[0], eidoverse }],
+    });
+    expect(() => parsePlacesRegistryConfig(withBinding({ world: 'Not A World' }))).toThrow(/eidoverse\.world/u);
+    expect(() => parsePlacesRegistryConfig(withBinding({ world: 'commons', position: { x: 'a', z: 1 } }))).toThrow(/finite x and z/u);
+    expect(() => parsePlacesRegistryConfig(withBinding({ world: 'commons', anchor: {} }))).toThrow(/anchor/u);
+    expect(() => parsePlacesRegistryConfig(withBinding('commons'))).toThrow(/must be an object/u);
+  });
+
   it('rejects a wrong schemaVersion naming the field', () => {
     expect(() => parsePlacesRegistryConfig({ schemaVersion: 2 })).toThrow(/schemaVersion must be 1/u);
   });

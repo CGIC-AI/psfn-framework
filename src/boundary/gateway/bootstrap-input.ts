@@ -354,6 +354,16 @@ function buildGatewayPolicyConfig(
         env,
       )),
     },
+    satelliteHub: {
+      ...(env.SATELLITE_HUB_CONTROL_BASE_URL?.trim()
+        ? { controlBaseUrl: env.SATELLITE_HUB_CONTROL_BASE_URL.trim() }
+        : {}),
+      tokenConfigured: Boolean(resolveOptionalEnvCredential(
+        config.credentialVault,
+        'SATELLITE_HUB_CONTROL_TOKEN',
+        env,
+      )),
+    },
     vault: {
       enabled: vaultToolsEnabled,
       ...(vaultAllowActions ? { allowActions: vaultAllowActions } : {}),

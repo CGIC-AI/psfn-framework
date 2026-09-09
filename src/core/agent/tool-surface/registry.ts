@@ -172,7 +172,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     domain: 'boundary',
     exposure: 'extended',
     description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.world,
-    actions: ['perceive', 'list', 'control', 'move'],
+    actions: ['perceive', 'list', 'control', 'move', 'act'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [],
   },

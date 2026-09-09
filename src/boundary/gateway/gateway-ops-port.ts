@@ -26,6 +26,12 @@ import type {
   HomeAssistantGetStatesParams,
   HomeAssistantGetStatesResult,
   WebFetchLane,
+  WorldAvatarActParams,
+  WorldAvatarActResult,
+  WorldAvatarMoveParams,
+  WorldAvatarMoveResult,
+  WorldAvatarPerceiveParams,
+  WorldAvatarPerceiveResult,
 } from './protocol.js';
 
 /**
@@ -38,12 +44,24 @@ export interface HomeAssistantOperations {
   callService(params: HomeAssistantCallServiceParams): Promise<HomeAssistantCallServiceResult>;
 }
 
+/**
+ * The companion's own Eidoverse body (S13 MOVE), forwarded to the Satellite
+ * Hub control port. Optional on the port so embeddings without a Hub keep
+ * compiling; the world tool fails closed when it is absent.
+ */
+export interface WorldAvatarOperations {
+  perceive(params?: WorldAvatarPerceiveParams): Promise<WorldAvatarPerceiveResult>;
+  move(params: WorldAvatarMoveParams): Promise<WorldAvatarMoveResult>;
+  act(params: WorldAvatarActParams): Promise<WorldAvatarActResult>;
+}
+
 export interface GatewayOpsPort {
   git: GitOperations;
   web: WebFetchOperations;
   filesystem: FilesystemOperations;
   beads: BeadsOperations;
   homeAssistant: HomeAssistantOperations;
+  worldAvatar?: WorldAvatarOperations;
 }
 
 function createGatewayOpsPort(port: GatewayOpsPort): GatewayOpsPort {
@@ -92,6 +110,15 @@ function createGatewayOpsPort(port: GatewayOpsPort): GatewayOpsPort {
         port.homeAssistant.callService(params)
       ),
     },
+    ...(port.worldAvatar
+      ? {
+        worldAvatar: {
+          perceive: (params?: WorldAvatarPerceiveParams) => port.worldAvatar!.perceive(params),
+          move: (params: WorldAvatarMoveParams) => port.worldAvatar!.move(params),
+          act: (params: WorldAvatarActParams) => port.worldAvatar!.act(params),
+        },
+      }
+      : {}),
   };
 }
 
@@ -173,6 +200,11 @@ export function createGatewayOpsPortFromClient(gateway: GatewayClient): GatewayO
     homeAssistant: {
       getStates: (params: HomeAssistantGetStatesParams = {}) => gateway.homeAssistantGetStates(params),
       callService: (params: HomeAssistantCallServiceParams) => gateway.homeAssistantCallService(params),
+    },
+    worldAvatar: {
+      perceive: (params: WorldAvatarPerceiveParams = {}) => gateway.worldAvatar('world.avatar_perceive', params),
+      move: (params: WorldAvatarMoveParams) => gateway.worldAvatar('world.avatar_move', params),
+      act: (params: WorldAvatarActParams) => gateway.worldAvatar('world.avatar_act', params),
     },
   });
 }

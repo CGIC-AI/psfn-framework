@@ -527,6 +527,9 @@ export interface WorldAvatarPosition {
 
 export interface WorldAvatarPerson {
   id: string;
+  /** The world's own classification; unknown participants are assumed ai. */
+  kind?: "human" | "ai";
+  kindSource?: "world" | "assumed";
   positionKnown: boolean;
   x?: number;
   z?: number;

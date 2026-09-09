@@ -42,7 +42,7 @@ class RecordingWorld implements HubWorldControlPort {
       world: "commons",
       placeId: "eidoverse:commons",
       capturedAt: "2026-09-09T18:00:00.000Z",
-      self: { id: "artie", world: "commons", positionKnown: true, x: 0, z: 0, facing: "S" },
+      self: { id: "nova", world: "commons", positionKnown: true, x: 0, z: 0, facing: "S" },
       people: [{ id: "visitor", positionKnown: true, x: 2, z: 2.5, distanceM: 3.2, bearing: "NE", doing: "standing" }],
       things: [],
       recent: [],

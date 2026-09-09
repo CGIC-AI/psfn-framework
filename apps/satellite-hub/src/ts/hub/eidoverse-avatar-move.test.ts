@@ -40,7 +40,7 @@ class FakeDoor implements EidoverseBodyTools, EidoverseTravelPort {
 
   async look(): Promise<string> {
     return [
-      `You are "artie" in world "${this.world}" at (${this.x.toFixed(1)}, ${this.z.toFixed(1)}), ground height 0.00m, facing S.`,
+      `You are "nova" in world "${this.world}" at (${this.x.toFixed(1)}, ${this.z.toFixed(1)}), ground height 0.00m, facing S.`,
       "People (1):",
       "  - visitor: 5.0m E at (5.0, 0.0), standing",
       "No placed things yet.",
@@ -76,7 +76,7 @@ function adapterWith(door: FakeDoor, agent = new FakeAgent(), infoLines: string[
   const runner = new EidoverseBodyRunner({ walkTimeoutMs: 5_000, maxPendingNotes: 4 }, door, { logger: { warn: () => undefined } });
   const adapter = new EidoverseEmbodiedSessionAdapter({
     worldName: "commons",
-    agentName: "Artie",
+    agentName: "Nova",
     satelliteClaim: normalizeSatelliteClaimConfig({
       capabilityProfile: "world-avatar",
       satelliteId: "eidoverse-world",
@@ -216,10 +216,10 @@ test("perception and the turn carry the world's human/ai classification; unknown
 
   await adapter.handleAddressedUtterance({
     utteranceId: "s1",
-    userText: "artie-kube: @artie hello",
-    speaker: { id: "artie-kube", name: "artie-kube", kind: "ai" },
+    userText: "nova-kube: @nova hello",
+    speaker: { id: "nova-kube", name: "nova-kube", kind: "ai" },
   });
-  assert.deepEqual(agent.calls[0]?.channel?.speaker, { id: "artie-kube", name: "artie-kube", kind: "ai" });
+  assert.deepEqual(agent.calls[0]?.channel?.speaker, { id: "nova-kube", name: "nova-kube", kind: "ai" });
   const note = agent.calls[0]?.channel?.contextNotes?.find((n) => n.key === "eidoverse.affordances")?.text ?? "";
   assert.match(note, /Everyone here is an AI unless the world marks them human; humans so far: "visitor"/u);
   adapter.disconnect();

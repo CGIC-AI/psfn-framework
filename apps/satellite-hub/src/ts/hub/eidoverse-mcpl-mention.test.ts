@@ -44,13 +44,13 @@ async function settle(): Promise<void> {
 }
 
 test("name matching is case-insensitive, @-optional and punctuation-tolerant", () => {
-  const names = ["Artie", "artie-kube"];
-  assert.equal(mentionsAnyName("visitor: @Artie come over here", names), true);
-  assert.equal(mentionsAnyName("visitor: hey artie, over here!", names), true);
-  assert.equal(mentionsAnyName("visitor: ARTIE: are you there?", names), true);
-  assert.equal(mentionsAnyName("visitor: @artie-kube hello", names), true);
-  assert.equal(mentionsAnyName("visitor: the artiest of them all", names), false);
-  assert.equal(mentionsAnyName("visitor: partier", names), false);
+  const names = ["Nova", "nova-kube"];
+  assert.equal(mentionsAnyName("visitor: @Nova come over here", names), true);
+  assert.equal(mentionsAnyName("visitor: hey nova, over here!", names), true);
+  assert.equal(mentionsAnyName("visitor: NOVA: are you there?", names), true);
+  assert.equal(mentionsAnyName("visitor: @nova-kube hello", names), true);
+  assert.equal(mentionsAnyName("visitor: the novae of them all", names), false);
+  assert.equal(mentionsAnyName("visitor: pnovar", names), false);
   assert.equal(mentionsAnyName("visitor: nothing for anyone", names), false);
   assert.equal(mentionsAnyName("visitor: hello", []), false);
 });
@@ -62,23 +62,23 @@ test("ambient chat naming the companion wakes it; its own echo and untagged acts
     ambientSayDebounceMs: 10,
     catchupWake: false,
     wakeQueueLimit: 8,
-    agentNames: ["Artie"],
+    agentNames: ["Nova"],
   }, { logger: { warn: () => undefined, info: (line) => info.push(line) } });
 
   wake.deliver([
-    message({ id: "m1", author: "visitor", text: "visitor: Artie, come over here", tags: ["chat:ambient"] }),
-    message({ id: "m2", author: "artie", text: "artie: I am Artie and I am here", tags: ["chat:ambient", "chat:from-agent"] }),
-    message({ id: "m3", author: "artie", text: "artie: Artie talking to himself", tags: ["chat:ambient"] }),
-    message({ id: "m4", author: "world", text: "* visitor waves at Artie", tags: ["chat:ambient", "eidoverse:act"] }),
-    message({ id: "m5", author: "visitor", text: "visitor: @artie by tag", tags: ["chat:mention", "chat:addressed"] }),
+    message({ id: "m1", author: "visitor", text: "visitor: Nova, come over here", tags: ["chat:ambient"] }),
+    message({ id: "m2", author: "nova", text: "nova: I am Nova and I am here", tags: ["chat:ambient", "chat:from-agent"] }),
+    message({ id: "m3", author: "nova", text: "nova: Nova talking to himself", tags: ["chat:ambient"] }),
+    message({ id: "m4", author: "world", text: "* visitor waves at Nova", tags: ["chat:ambient", "eidoverse:act"] }),
+    message({ id: "m5", author: "visitor", text: "visitor: @nova by tag", tags: ["chat:mention", "chat:addressed"] }),
     message({ id: "m6", author: "visitor", text: "visitor: nobody in particular", tags: ["chat:ambient"] }),
   ]);
   await settle();
   await wake.close();
 
-  assert.deepEqual(target.turns, ["visitor: Artie, come over here", "visitor: @artie by tag"]);
+  assert.deepEqual(target.turns, ["visitor: Nova, come over here", "visitor: @nova by tag"]);
   assert.equal(info.length, 2, info.join("\n"));
-  assert.match(info[0]!, /^Eidoverse wake: message m1 from visitor \(human\) kind=mention reason=name-match text="visitor: Artie, come over here"/u);
+  assert.match(info[0]!, /^Eidoverse wake: message m1 from visitor \(human\) kind=mention reason=name-match text="visitor: Nova, come over here"/u);
   assert.match(info[1]!, /^Eidoverse wake: message m5 from visitor \(human\) kind=mention reason=tag:chat:mention,chat:addressed/u);
 });
 
@@ -88,19 +88,19 @@ test("the world's own human/ai classification rides every wake and is learned fo
     ambientSayDebounceMs: 10,
     catchupWake: false,
     wakeQueueLimit: 8,
-    agentNames: ["Artie"],
+    agentNames: ["Nova"],
   }, { logger: { warn: () => undefined } });
 
   wake.deliver([
-    message({ id: "h1", author: "visitor", text: "visitor: @artie hello", tags: ["chat:mention", "chat:addressed"] }),
-    message({ id: "a1", author: "artie-kube", text: "artie-kube: @artie hello from kube", tags: ["chat:mention", "chat:addressed", "chat:from-agent"] }),
+    message({ id: "h1", author: "visitor", text: "visitor: @nova hello", tags: ["chat:mention", "chat:addressed"] }),
+    message({ id: "a1", author: "nova-kube", text: "nova-kube: @nova hello from kube", tags: ["chat:mention", "chat:addressed", "chat:from-agent"] }),
     message({ id: "w1", author: "world", text: "* visitor waves", tags: ["chat:ambient", "eidoverse:act"] }),
     message({ id: "h2", author: "visitor", text: "visitor: just chatting", tags: ["chat:ambient"] }),
   ]);
   await settle();
   await wake.close();
 
-  assert.deepEqual(target.speakers, [{ id: "visitor", kind: "human" }, { id: "artie-kube", kind: "ai" }]);
-  assert.deepEqual(target.observed, [["visitor", "human"], ["artie-kube", "ai"], ["visitor", "human"]]);
+  assert.deepEqual(target.speakers, [{ id: "visitor", kind: "human" }, { id: "nova-kube", kind: "ai" }]);
+  assert.deepEqual(target.observed, [["visitor", "human"], ["nova-kube", "ai"], ["visitor", "human"]]);
   assert.equal(speakerOf(message({ id: "x", author: "world", text: "* rain", tags: ["chat:ambient", "eidoverse:weather"] })), null);
 });

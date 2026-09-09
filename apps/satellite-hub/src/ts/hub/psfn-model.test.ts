@@ -158,7 +158,7 @@ test("psfn model adapter sends embodied hub channel headers", async () => {
         },
       },
     ],
-    speaker: { id: "artie-kube", name: "artie-kube", kind: "ai" },
+    speaker: { id: "nova-kube", name: "nova-kube", kind: "ai" },
   };
 
   try {
@@ -184,7 +184,7 @@ test("psfn model adapter sends embodied hub channel headers", async () => {
     assert.equal(capturedHeaders["X-PSFN-Satellite-Thread-ID"], "thin-shell:demo");
     assert.equal(capturedHeaders["X-PSFN-Satellite-Capabilities"], "text");
     assert.equal(capturedHeaders["X-PSFN-Satellite-Name"], "Thin Shell");
-    assert.equal(capturedHeaders["X-PSFN-Satellite-Speaker-ID"], "artie-kube");
+    assert.equal(capturedHeaders["X-PSFN-Satellite-Speaker-ID"], "nova-kube");
     assert.equal(capturedHeaders["X-PSFN-Satellite-Speaker-Kind"], "ai");
     assert.equal(capturedBody.user, "thin-shell:demo");
     assert.equal(capturedBody.stream, false);

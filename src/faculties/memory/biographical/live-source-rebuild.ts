@@ -12,6 +12,7 @@ import type {
   BiographicalClaimSource,
   BiographicalCollectionDepth,
   BiographicalSubjectRef,
+  BiographyEvidenceScope,
 } from './types.js';
 
 export interface LiveBiographicalMemoryEvidence {
@@ -44,14 +45,36 @@ function exactSubjectMatch(
 }
 
 /**
+ * Whether one live source snapshot sits inside the target's governed evidence
+ * scope (psfn-framework-zu8d2).
+ *
+ * Absent scope means the target is scoped by its subject alone — the
+ * autobiography and dyad scans, unchanged. A present scope is exact and
+ * fail-closed: the snapshot's own source channel must be one the authority
+ * vouched for, and a snapshot with no source channel is never admitted.
+ */
+function withinEvidenceScope(
+  source: BiographicalClaimSource,
+  scope: BiographyEvidenceScope | undefined,
+): boolean {
+  if (scope === undefined) return true;
+  const channelId = source.sourceChannelId?.trim();
+  if (!channelId) return false;
+  return scope.governedContextIds.some(contextId => contextId.trim() === channelId);
+}
+
+/**
  * Discover claim-eligible evidence before synthesis. The LLM never sees a
  * legacy summary and never receives a memory whose current subject cannot be
- * proven to match the exact canonical claim subject.
+ * proven to match the exact canonical claim subject, nor — when the target
+ * carries a governed evidence scope — one that came from outside that scope.
  */
 export async function discoverLiveBiographicalMemoryEvidence(input: {
   readonly memoryStore: MemoryStorePort;
   readonly memoryIds: readonly string[];
   readonly subject: BiographicalSubjectRef;
+  /** Governed contexts this target may draw evidence from; absent = subject-scoped. */
+  readonly evidenceScope?: BiographyEvidenceScope;
 }): Promise<LiveBiographicalMemoryEvidence[]> {
   const result: LiveBiographicalMemoryEvidence[] = [];
   for (const memoryId of [...new Set(input.memoryIds.map(id => id.trim()).filter(Boolean))]) {
@@ -61,6 +84,7 @@ export async function discoverLiveBiographicalMemoryEvidence(input: {
       resolveLiveBiographicalMemorySource({ memoryStore: input.memoryStore, memoryId }),
     ]);
     if (!memory || !source || !exactSubjectMatch(input.subject, classification)) continue;
+    if (!withinEvidenceScope(source, input.evidenceScope)) continue;
     result.push({ memory, source });
   }
   return result;
@@ -159,6 +183,12 @@ export async function resolveLiveBiographicalCandidates(input: {
    * shape requires.
    */
   readonly participants?: readonly BiographicalSubjectRef[];
+  /**
+   * The same governed evidence scope collection ran under (zu8d2). Re-applied
+   * on the drift re-read so a source that moved out of the group's context
+   * between collection and resolution is rejected rather than persisted.
+   */
+  readonly evidenceScope?: BiographyEvidenceScope;
   readonly now?: Date;
 }): Promise<LiveBiographicalCandidateResolution> {
   const records = candidateRecords(input.responseContent);
@@ -196,6 +226,7 @@ export async function resolveLiveBiographicalCandidates(input: {
         memoryStore: input.memoryStore,
         memoryIds: [memoryId],
         subject: input.subject,
+        ...(input.evidenceScope ? { evidenceScope: input.evidenceScope } : {}),
       });
       const exact = current[0];
       const discovered = availableById.get(memoryId);

@@ -247,6 +247,7 @@ import { IcpLocalInitiationCapacityAuthority } from '../../core/agent/fatigue/in
 import {
   startIcpRuntimeAvailability,
   type AgentIcpRuntimeAvailability,
+  type IcpRuntimeAvailabilityLane,
 } from './icp-runtime-availability.js';
 import { PostgresAdminAutomataBusReadAdapter } from '../../operator/garden/services/automata-bus-read-adapter.js';
 import { createProductionAutomataBusReindexService } from '../../faculties/automata/bus/production-reindex.js';
@@ -1701,7 +1702,10 @@ async function main(): Promise<void> {
     },
   });
   let icpLocalPolicyAuthority: PostgresIcpLocalPolicyAuthority | null = null;
-  let icpRuntimeAvailability: AgentIcpRuntimeAvailability | null = null;
+  // psfn-framework-n97hp: only the fleet posture supplies an ICP
+  // runtime-availability lane; the consumer that carries the required
+  // `capability.tier.changed` contract is started for every posture below.
+  let icpRuntimeAvailabilityLane: IcpRuntimeAvailabilityLane | null = null;
   if (config.multiCompanion === true) {
     if (!config.chargePolicy) {
       throw new Error('Multi-companion fleet posture requires chargePolicy');
@@ -1754,14 +1758,24 @@ async function main(): Promise<void> {
       fatigueHistory: coreRuntime.fatigueLedger,
     });
     await gateway.startFleetPostureReporting(fleetPostureProvider);
-    icpRuntimeAvailability = await startIcpRuntimeAvailability({
-      eventBus,
+    icpRuntimeAvailabilityLane = {
       gateway,
       isEnabled: () => icpRuntimeEnablement.isEnabled()
         && capabilityRuntime.has('external.companion'),
       readFatigueState: () => fleetPostureProvider().fatigue.state,
-    });
+    };
   }
+  // psfn-framework-n97hp: started unconditionally. The Garden owner-file
+  // capability mutation delivers `capability.tier.changed` with `emitRequired`
+  // when `external.companion` is withdrawn, and a required event with no
+  // registered consumer throws — which is exactly what a single-companion
+  // release (fleet gateway, one companion: `config.multiCompanion === false`)
+  // used to hit. With a null lane the consumer registers and no-ops; with the
+  // fleet lane it still closes the ICP runtime fence.
+  const icpRuntimeAvailability: AgentIcpRuntimeAvailability = await startIcpRuntimeAvailability({
+    eventBus,
+    lane: icpRuntimeAvailabilityLane,
+  });
   agentLoop.setDurableChargeRecorder(
     event => chargeLedger.commitChargeEvent(event).outcome,
     event => chargeLedger.probeChargeEvent(event),
@@ -2027,7 +2041,7 @@ async function main(): Promise<void> {
     unregisterIcpCoLocationThoughtAdapter();
     unregisterIcpFeltImpulseAdapter();
     await stopIcpCandidateLifecycleSupervisor();
-    icpRuntimeAvailability?.stop();
+    icpRuntimeAvailability.stop();
     detachGatewayQueueChange();
     disposeApiBackend();
     // Graceful shutdown removes our own shared presence row (crash cleanup is

@@ -96,6 +96,35 @@ the Garden `ADMIN_TOKEN` from the ignored `.env`; Kubernetes keeps it in the
 retained application Secret and exposes it only through `npm run helm:token` on
 explicit request.
 
+## Authentication
+
+**Fleet auth (SSO) is optional. A key unlocks everything SSO unlocks.** No
+function of the runtime may require single sign-on: `fleet-auth.json` may ADD
+the Discord SSO router, lifecycle ceremonies, and SSO principals, but its
+presence never removes or replaces key authentication, never disables a
+surface, never changes routing, and is never a precondition for a feature. A
+one-person, one-companion deployment without `fleet-auth.json` reaches every
+function — Hub device enrollment, `world.body` / `world.travel`, presence
+follow, multi-companion routing when `companions.json` declares it — with keys
+alone (operator rule 2026-09-09, bead `psfn-framework-n66dn`).
+
+The key kinds, and what each opens:
+
+| key | where it lives | what it unlocks |
+|---|---|---|
+| `API_KEY` | `.env` / app Secret | the OpenAI-compatible `/v1` API as the operator principal |
+| `ADMIN_TOKEN` | `.env` / app Secret (`npm run helm:token`) | Garden login and the Garden admin API, alongside fleet SSO when that is also configured |
+| `API_SATELLITE_KEYS` | `.env` / app Secret | per-satellite `/v1` principals (`api-key-<sha256[:24]>`) that `satellites.json` `auth.apiKeyPrincipalIds` admits |
+| `TESTING_HARNESS_API_KEY` | `.env` / app Secret | the testing-harness door declared in `channels.json` `api.testingHarness` |
+| Hub device key (Ed25519) | operator-held private PEM on the hub; public half in the verifier ring | short-lived `X-PSFN-Hub-Device-Assertion` tokens that admit an enrolled Hub device — the authority behind `world.body`, `world.travel`, and device-bound turns |
+| `GATEWAY_SESSION_HMAC_KEY` | `.env` / app Secret | session integrity; also seeds the Hub device audit pepper when `HUB_DEVICE_ASSERTION_AUDIT_PEPPER` is unset |
+
+The Hub device verifier ring is an owner-file block of its own
+(`satellites.json` `hubDeviceAssertions`, or the file named by
+`PSFN_HUB_DEVICE_ASSERTIONS_PATH`); `fleet-auth.json` may carry the same block
+and wins when both exist, but is not needed. The key-only recipe is in
+[operator/fleet-auth.md](operator/fleet-auth.md#hub-device-authority-without-fleet-auth).
+
 ## Access and readiness
 
 `*:doctor` is the routine readiness check on every path. It verifies the

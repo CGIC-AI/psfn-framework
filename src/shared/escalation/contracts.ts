@@ -693,8 +693,17 @@ export interface HumanEscalationLedgerPort {
    * {@link HumanEscalationLedgerPort.settleAttempt} once the sink answers. The
    * provisional value is the fail-closed one — a process that dies mid-dispatch
    * leaves a row that does not claim a delivery it cannot prove.
+   *
+   * `awaitingSettlement` says this caller WILL settle the row it just claimed,
+   * so the ledger's attempt ring must not evict it in the meantime (bead
+   * psfn-framework-2xt9c). A caller that claims with a terminal outcome — a
+   * `garden_only` route, a suppressed raise — settles nothing and says nothing,
+   * and its row stays an ordinary eviction candidate.
    */
-  claimAttempt(attempt: HumanEscalationAttempt): Promise<HumanEscalationAttemptClaim>;
+  claimAttempt(
+    attempt: HumanEscalationAttempt,
+    options?: { awaitingSettlement?: boolean },
+  ): Promise<HumanEscalationAttemptClaim>;
   /**
    * Replace a claimed attempt's provisional outcome with what the sink said,
    * only if the row still holds the provisional value this caller wrote

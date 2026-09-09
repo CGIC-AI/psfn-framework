@@ -316,6 +316,7 @@ function main(): number {
         featureSets: ['eidoverse.world', 'eidoverse.embodiment', 'eidoverse.travel'],
         catchupWake: false,
         handshakeTimeoutMs: 10000,
+        wakeQueueLimit: 4,
       },
     }))]);
     check(mcpl.status === 0, 'render succeeds on the MCPL door transport', mcpl.stderr.trim());
@@ -333,6 +334,7 @@ function main(): number {
         'EIDOVERSE_MCPL_DOOR_URL',
         'EIDOVERSE_MCPL_FEATURE_SETS_JSON',
         'EIDOVERSE_MCPL_HANDSHAKE_TIMEOUT_MS',
+        'EIDOVERSE_MCPL_WAKE_QUEUE_LIMIT',
         'EIDOVERSE_MCP_AGENT_NAME',
         'EIDOVERSE_MCP_AMBIENT_SAY_DEBOUNCE_MS',
         'EIDOVERSE_MCP_ENABLED',
@@ -359,6 +361,7 @@ function main(): number {
       );
       checkEnv(env, 'EIDOVERSE_MCPL_CATCHUP_WAKE', 'false');
       checkEnv(env, 'EIDOVERSE_MCPL_HANDSHAKE_TIMEOUT_MS', '10000');
+      checkEnv(env, 'EIDOVERSE_MCPL_WAKE_QUEUE_LIMIT', '4');
     }
 
     const mcplNoDoor = helmTemplate([write('mcpl-no-door', deepMergeEidoverse({
@@ -371,6 +374,7 @@ function main(): number {
         featureSets: ['eidoverse.world'],
         catchupWake: false,
         handshakeTimeoutMs: 10000,
+        wakeQueueLimit: 4,
       },
     }))]);
     check(mcplNoDoor.status !== 0, 'render fails closed: MCPL transport without a door URL');
@@ -385,6 +389,7 @@ function main(): number {
         featureSets: ['eidoverse.world'],
         catchupWake: false,
         handshakeTimeoutMs: 10000,
+        wakeQueueLimit: 4,
       },
     }))]);
     check(
@@ -405,6 +410,7 @@ function main(): number {
         featureSets: ['eidoverse.world'],
         catchupWake: false,
         handshakeTimeoutMs: 10000,
+        wakeQueueLimit: 4,
       },
       snapshot: { enabled: true, baseUrl: '', timeoutMs: 4000, maxBytes: 4000000 },
     }))]);
@@ -437,6 +443,7 @@ function main(): number {
         featureSets: ['eidoverse.world'],
         catchupWake: false,
         handshakeTimeoutMs: 10000,
+        wakeQueueLimit: 4,
       },
       snapshot: {
         enabled: true,
@@ -469,6 +476,7 @@ function main(): number {
         featureSets: ['eidoverse.world'],
         catchupWake: false,
         handshakeTimeoutMs: 10000,
+        wakeQueueLimit: 4,
       },
       snapshot: { enabled: true, baseUrl: '', timeoutMs: 4000, maxBytes: 4000000 },
     }))]);
@@ -540,6 +548,21 @@ function main(): number {
       ['zero body walk timeout', deepMergeEidoverse({
         body: { walkTimeoutMs: 0, maxPendingNotes: 4 },
       }), "at '/satelliteHub/eidoverse/body/walkTimeoutMs': minimum"],
+      // A zero wake budget would drop every pushed batch, which is silence the
+      // operator did not ask for; the hub refuses it too.
+      ['zero MCPL wake queue budget', deepMergeEidoverse({
+        transport: 'mcpl',
+        command: '',
+        args: [],
+        worldUrl: '',
+        mcpl: {
+          doorUrl: 'wss://world.example.net/mcpl',
+          featureSets: ['eidoverse.world'],
+          catchupWake: false,
+          handshakeTimeoutMs: 10000,
+          wakeQueueLimit: 0,
+        },
+      }), "at '/satelliteHub/eidoverse/mcpl/wakeQueueLimit': minimum"],
       ['non-http snapshot origin', deepMergeEidoverse({
         snapshot: { enabled: true, baseUrl: 'ws://world.example.net', timeoutMs: 4000, maxBytes: 4000000 },
       }), "at '/satelliteHub/eidoverse/snapshot/baseUrl'"],

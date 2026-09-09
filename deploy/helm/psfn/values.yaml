@@ -843,6 +843,13 @@ satelliteHub:
       # inference. The transcript still holds them; only the wake is withheld.
       catchupWake: false
       handshakeTimeoutMs: 10000
+      # How many pushed channels/incoming batches may wait for the wake
+      # dispatcher at once. Turns are serialized and the push transport has no
+      # backpressure of its own (the poll transport's timer supplied it), so
+      # past this budget an arriving batch is dropped and counted rather than
+      # deepening a backlog of inference the hub can never work off. Drops are
+      # logged with counts only, never world or message content.
+      wakeQueueLimit: 4
     # NetworkPolicy is deny-by-default for private LANs and
     # networkPolicy.satelliteHub.allowExternalEgress opens only public 443, so a
     # LAN or non-443 world must name its host/subnet and port explicitly.

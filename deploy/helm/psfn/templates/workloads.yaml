@@ -1024,6 +1024,8 @@ spec:
               value: {{ .Values.satelliteHub.eidoverse.mcpl.catchupWake | quote }}
             - name: EIDOVERSE_MCPL_HANDSHAKE_TIMEOUT_MS
               value: {{ .Values.satelliteHub.eidoverse.mcpl.handshakeTimeoutMs | quote }}
+            - name: EIDOVERSE_MCPL_WAKE_QUEUE_LIMIT
+              value: {{ .Values.satelliteHub.eidoverse.mcpl.wakeQueueLimit | int64 | quote }}
             {{- end }}
             - name: EIDOVERSE_MCP_WORLD_NAME
               value: {{ .Values.satelliteHub.eidoverse.worldName | quote }}

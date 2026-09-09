@@ -134,7 +134,10 @@ only its own keys:
   the grant the Hub issues; advertisement is not authorization, so nothing the
   door declares about itself widens it. `mcpl.catchupWake` decides whether
   mentions the door replays after a reconnect may start turns, and defaults to
-  `false`.
+  `false`. `mcpl.wakeQueueLimit` bounds the wake-dispatch queue the pushed
+  traffic feeds: turns are serialized and the push transport has none of the
+  poll timer's natural backpressure, so past that many waiting batches an
+  arriving batch is dropped and counted, with a log line carrying counts only.
 
 Two operational consequences:
 

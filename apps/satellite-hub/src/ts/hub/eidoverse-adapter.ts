@@ -123,6 +123,10 @@ export class EidoverseEmbodiedSessionAdapter {
    * conversation, not one per island.
    */
   private currentWorldName: string;
+  /**
+   * One-shot: set when travel lands the body somewhere new and consumed by the
+   * first turn that carries it. See `channelContext`.
+   */
   private arrivalNote: { key: string; text: string } | null = null;
   private readonly consumedUtteranceIds = new Set<string>();
   private readonly activeReplies = new Set<AbortController>();
@@ -347,7 +351,12 @@ export class EidoverseEmbodiedSessionAdapter {
       ownership,
     );
     const contextNotes = [...(this.deps.body?.drainNotes() ?? []), ...lookNotes];
-    if (this.arrivalNote) contextNotes.push(this.arrivalNote);
+    // Drained, not read: arrival is an event, and a note that re-injected
+    // itself every turn would keep telling the companion it had just arrived
+    // somewhere it has been sitting in for an hour.
+    const arrivalNote = this.arrivalNote;
+    this.arrivalNote = null;
+    if (arrivalNote) contextNotes.push(arrivalNote);
     if (place.contextNote) {
       contextNotes.push({ key: "eidoverse.place", text: place.contextNote });
     }

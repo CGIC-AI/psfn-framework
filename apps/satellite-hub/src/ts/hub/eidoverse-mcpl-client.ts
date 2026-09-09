@@ -14,7 +14,10 @@
  * every world transition with the Request form of `channels/changed`, including
  * transitions this client itself started with the `travel` tool. Those answers
  * must be written while a `tools/call` is still pending on the same socket, so
- * the read loop dispatches inbound requests independently of outbound ones.
+ * the read loop dispatches inbound requests independently of outbound ones. The
+ * door then confirms the transition with the NOTIFICATION form of the same
+ * method, which is routed to the responder so the channel the body left is
+ * retired rather than tracked forever.
  *
  * Fail-closed throughout: a malformed frame is dropped and never becomes a
  * wake, a tool result carrying a configured secret is refused, reconnection is
@@ -432,7 +435,15 @@ export class EidoverseMcplClient {
       pending.resolve(frame.response.result);
       return;
     }
-    if (frame.kind === "notification") return;
+    if (frame.kind === "notification") {
+      // The COMMIT half of a world transition. Without it the responder keeps
+      // answering for channels the door has already retired, so the world the
+      // body left would stay tracked for the life of the connection.
+      if (frame.notification.method === MCPL_METHOD.channelsChanged) {
+        session.responder.commit(frame.notification.params);
+      }
+      return;
+    }
     if (frame.request.method === MCPL_METHOD.channelsIncoming) {
       this.handleIncoming(session, frame.request.id, frame.request.params);
       return;

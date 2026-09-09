@@ -15,13 +15,21 @@ import type {
   HubDeviceAssertionExpectedBinding,
   HubDevicePrincipal,
 } from '../../shared/contracts/hub-device-ingress.js';
+import type {
+  HubDeviceAssertionVerifierConfig,
+  HubDeviceAssertionVerifierKey,
+} from '../../shared/contracts/hub-device-assertion-verifier.js';
 
 export type {
   HubDeviceAssertionExpectedBinding,
   HubDevicePrincipal,
 } from '../../shared/contracts/hub-device-ingress.js';
+export type {
+  HubDeviceAssertionKeyStatus,
+  HubDeviceAssertionVerifierConfig,
+  HubDeviceAssertionVerifierKey,
+} from '../../shared/contracts/hub-device-assertion-verifier.js';
 
-export type HubDeviceAssertionKeyStatus = 'active' | 'retiring' | 'revoked';
 
 /** Protocol/configuration rejection safe to classify separately from store outages. */
 export class HubDeviceAssertionRejectedError extends Error {
@@ -31,21 +39,6 @@ export class HubDeviceAssertionRejectedError extends Error {
   }
 }
 
-export interface HubDeviceAssertionVerifierKey {
-  kid: string;
-  publicKeyPem: string;
-  notBefore: string;
-  notAfter: string;
-  status: HubDeviceAssertionKeyStatus;
-}
-
-export interface HubDeviceAssertionVerifierConfig {
-  issuer: string;
-  audience: string;
-  maxTtlSeconds: number;
-  clockSkewSeconds: number;
-  keys: HubDeviceAssertionVerifierKey[];
-}
 
 export interface HubDeviceAssertionReplayStore {
   consume(input: {

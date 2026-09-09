@@ -1,3 +1,4 @@
+import type { HubDeviceAssertionVerifierConfig } from './hub-device-assertion-verifier.js';
 import type { ChannelPrivacy } from '../../system/trust/context-envelope.js';
 import type { CompanionId } from '../routing/companion-id.js';
 import type { HubDevicePrincipalSnapshot } from './hub-device-ingress.js';
@@ -395,6 +396,14 @@ export interface SatelliteRegistryConfig {
   enabled: boolean;
   /** Fleet-wide singleton designated by the owner file, never inferred. */
   productivityCompanionId?: CompanionId;
+  /**
+   * Standalone Hub device assertion verifier ring (issuer, exact https
+   * audience, TTL/skew bounds, Ed25519 public keys). Lets the gateway admit
+   * enrolled Hub devices (`hubDeviceEnrollment` on an endpoint) without
+   * fleet-auth.json; when fleet-auth.json also carries a ring, that one wins
+   * and this block is ignored with a warning (psfn-framework-n66dn.2).
+   */
+  hubDeviceAssertions?: HubDeviceAssertionVerifierConfig;
   satellites: SatelliteConfig[];
   /** Non-routable audit records. Retired entries never participate in claim resolution. */
   retiredSatellites?: RetiredSatelliteConfig[];

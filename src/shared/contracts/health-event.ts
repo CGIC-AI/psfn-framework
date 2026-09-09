@@ -77,6 +77,7 @@ const HEALTH_EVENT_COMPONENTS = [
   'persistence',
   'memory',
   'automata',
+  'cogsec', // psfn-framework-mlhn3
 ] as const;
 
 export type HealthEventComponent = typeof HEALTH_EVENT_COMPONENTS[number];
@@ -143,6 +144,22 @@ const HEALTH_EVENT_CODES = [
    * Evidence carries counts and the cap, never a kind name or a dedupe key.
    */
   'human_escalation_ledger_saturated',
+  /**
+   * An intake screener provider REFUSED the screener's own request parameters
+   * (psfn-framework-mlhn3): a 4xx that names a request/configuration problem
+   * rather than weather, e.g. a model that fixes sampling temperature and
+   * rejects the parameter outright.
+   *
+   * The per-envelope posture is unchanged and still fails closed — an
+   * unscreenable item is held, never passed. This code exists because that
+   * posture is silent in the wrong way: a standing misconfiguration rejects
+   * EVERY envelope, and quarantining each one individually reports a stream of
+   * hostile content where the truth is one broken model card. Grouped by a
+   * digest of the screener TIER and MODEL, so one misconfigured model is one
+   * episode rather than one incident per envelope. Evidence carries the HTTP
+   * status; the provider's message never leaves the gateway log.
+   */
+  'intake_screener_provider_rejected_request', // psfn-framework-mlhn3
 ] as const;
 
 export type HealthEventCode = typeof HEALTH_EVENT_CODES[number];
@@ -262,6 +279,7 @@ const HEALTH_EVENT_EVIDENCE_KEYS = [
   'terminal',
   'waitingRequests',
   'windowMs',
+  'httpStatus', // psfn-framework-mlhn3
 ] as const;
 
 type HealthEventEvidenceKey = typeof HEALTH_EVENT_EVIDENCE_KEYS[number];

@@ -550,6 +550,73 @@ describe('evaluateL2 fail-closed per tier', () => {
   });
 });
 
+// ── evaluateL2: screener misconfiguration vs. weather (psfn-framework-mlhn3) ──
+
+describe('evaluateL2 provider-rejection health signal', () => {
+  function evalInput(overrides: Partial<EvaluateL2Input>): EvaluateL2Input {
+    return {
+      text: 'some untrusted content',
+      context: baseContext({ sourceClass: 'web_fetch', sourceRiskTier: 'untrusted' }),
+      priorScore: 1,
+      config: testPolicy(),
+      model: { provider: 'glm-code-plan', model: 'glm-5.3', maxTokens: 4096 },
+      backend: BACKEND,
+      ...overrides,
+    };
+  }
+
+  function throwingCompletion(message: string): EvaluateL2Input['testCompletion'] {
+    return async () => {
+      throw new Error(message);
+    };
+  }
+
+  it('reports a 4xx parameter rejection while STILL failing closed', async () => {
+    const rejections: unknown[] = [];
+    const outcome = await evaluateL2(evalInput({
+      testCompletion: throwingCompletion(
+        '400: {"message":"invalid temperature: only 1 is allowed for this model"}',
+      ),
+      onProviderRejected: event => rejections.push(event),
+    }));
+
+    // The safe posture is unchanged: an unscreenable item is still held.
+    expect(outcome.kind).toBe('failed_closed');
+    if (outcome.kind === 'failed_closed') expect(outcome.action).toBe('quarantine');
+    // ...and the misconfiguration is reported once, content-free, beside it.
+    expect(rejections).toEqual([
+      { tier: 'l2', modelLabel: 'glm-code-plan/glm-5.3', httpStatus: 400 },
+    ]);
+  });
+
+  it('stays silent for a transient provider fault', async () => {
+    const rejections: unknown[] = [];
+    const outcome = await evaluateL2(evalInput({
+      testCompletion: throwingCompletion('503: upstream unavailable'),
+      onProviderRejected: event => rejections.push(event),
+    }));
+    expect(outcome.kind).toBe('failed_closed');
+    expect(rejections).toEqual([]);
+  });
+
+  it('stays silent for a malformed screener response', async () => {
+    const rejections: unknown[] = [];
+    const outcome = await evaluateL2(evalInput({
+      testCompletion: async () => 'not json at all',
+      onProviderRejected: event => rejections.push(event),
+    }));
+    expect(outcome.kind).toBe('failed_closed');
+    expect(rejections).toEqual([]);
+  });
+
+  it('fails closed exactly as before when no observer is wired', async () => {
+    const outcome = await evaluateL2(evalInput({
+      testCompletion: throwingCompletion('400: {"message":"invalid temperature"}'),
+    }));
+    expect(outcome.kind).toBe('failed_closed');
+  });
+});
+
 // ── Envelope projection ──
 
 describe('l2ScreeningContribution', () => {

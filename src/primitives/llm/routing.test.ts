@@ -16,6 +16,7 @@ interface RegistryModelInput {
   supportsVision?: boolean;
   supportsReasoning?: boolean;
   supportsPromptCaching?: boolean;
+  rejectsTemperature?: boolean;
   promptCacheStrategy?: 'openai_responses';
   thinkingEnabled?: boolean;
   providerOrder?: string[];
@@ -45,6 +46,9 @@ function makeRegistry(models: RegistryModelInput[]): CanonicalModelRegistry {
         ...(model.supportsReasoning !== undefined ? { supportsReasoning: model.supportsReasoning } : {}),
         ...(model.supportsPromptCaching !== undefined
           ? { supportsPromptCaching: model.supportsPromptCaching }
+          : {}),
+        ...(model.rejectsTemperature !== undefined
+          ? { rejectsTemperature: model.rejectsTemperature }
           : {}),
         ...(model.promptCacheStrategy ? { promptCacheStrategy: model.promptCacheStrategy } : {}),
       },
@@ -918,5 +922,43 @@ describe('registry-wide promptCaching policy (E2.4)', () => {
     expect(candidate.promptCacheEnabled).toBe(true);
     expect(candidate.promptCacheRetention).toBe('short');
     expect(candidate.promptCacheScope).toBe('channel');
+  });
+});
+
+
+// ── Model-card sampling constraints (psfn-framework-mlhn3) ──
+
+describe('routing candidate sampling constraints', () => {
+  function candidateFor(rejectsTemperature?: boolean): Record<string, unknown> {
+    const config = makeConfig({
+      modelRegistry: makeRegistry([{
+        id: 'constrained-model',
+        rank: 1,
+        provider: 'glm-code-plan',
+        model: 'glm-5.3',
+        maxOutputTokens: 4096,
+        contextWindow: 128_000,
+        ...(rejectsTemperature !== undefined ? { rejectsTemperature } : {}),
+        purposes: [{ purpose: 'chat', primary: true }],
+      }]),
+    });
+    return resolveRoutingCandidates(config, 'chat')[0] as unknown as Record<string, unknown>;
+  }
+
+  it('carries a declared sampling constraint onto the routing candidate', () => {
+    expect(candidateFor(true)).toMatchObject({
+      provider: 'glm-code-plan',
+      model: 'glm-5.3',
+      rejectsTemperature: true,
+    });
+  });
+
+  it('leaves the constraint absent for a card that does not declare it', () => {
+    // Absent, not false: every existing card must behave exactly as before.
+    expect(candidateFor()).not.toHaveProperty('rejectsTemperature');
+  });
+
+  it('carries an explicit false through unchanged', () => {
+    expect(candidateFor(false)).toMatchObject({ rejectsTemperature: false });
   });
 });

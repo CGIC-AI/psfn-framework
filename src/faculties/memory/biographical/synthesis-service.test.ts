@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import { createDefaultBiographicalDepthPolicy } from '../../../system/config/biographical-depth-policy.js';
@@ -7,7 +7,9 @@ import type { BiographicalCandidatePolicy } from '../../../system/config/biograp
 import { InMemoryMemoryStore } from '../../../test-support/in-memory-memory-store.js';
 import type { MemoryStorePort } from '../memory-store-port.js';
 import type { PurrMemory } from '../types.js';
+import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import { InMemoryBiographicalProfileStore } from './in-memory-store.js';
+import { createBiographySynthesisTargetPort } from './synthesis-targets.js';
 import { BiographySynthesisService } from './synthesis-service.js';
 import type {
   BiographySynthesisTarget,
@@ -144,6 +146,9 @@ function sharedLanguageCandidate(sourceMemoryIds: readonly string[], phrase = 'p
   };
 }
 
+/** The governed context the group's authority vouched for (zu8d2). */
+const GROUP_CONTEXT_ID = 'channel-group-invented';
+
 const GROUP_TARGET: BiographySynthesisTarget = {
   subject: COMPANION_SUBJECT,
   socialContext: {
@@ -152,6 +157,7 @@ const GROUP_TARGET: BiographySynthesisTarget = {
     contactIds: ['contact-a-invented', 'contact-b-invented'],
   },
   depth: 'full',
+  evidenceScope: { governedContextIds: [GROUP_CONTEXT_ID] },
 };
 
 function preferenceCandidate(sourceMemoryIds: readonly string[], target = 'concise explanations') {
@@ -209,6 +215,7 @@ describe('BiographySynthesisService', () => {
       const memories = new InMemoryMemoryStore();
       memories.insertMemory(companionMemory('mem-group-a', {
         text: "The three of us started saying pier o'clock when the light goes gold.",
+        provenance: { channelId: GROUP_CONTEXT_ID },
       }));
       return { memories, profileStore: new InMemoryBiographicalProfileStore(() => NOW) };
     }
@@ -279,6 +286,161 @@ describe('BiographySynthesisService', () => {
       }).run();
       expect(selfRun.targetsUnchanged).toBe(0);
       expect(selfModel.prompts).toHaveLength(1);
+    });
+
+    // psfn-framework-zu8d2 — a group scan is anchored on the COMPANION's
+    // subject, so subject authorization alone admits her whole private silo.
+    // Group evidence must come from the group's own governed context.
+    describe('governed evidence scope (zu8d2)', () => {
+      function siloFixture() {
+        const memories = new InMemoryMemoryStore();
+        // In the group's governed context: real evidence for a group fact.
+        memories.insertMemory(companionMemory('mem-in-context', {
+          text: "The three of us started saying pier o'clock when the light goes gold.",
+          provenance: { channelId: GROUP_CONTEXT_ID },
+        }));
+        // Same silo, different governed context: a private DM the group was
+        // never part of. Authorized for the companion, evidence for nobody else.
+        memories.insertMemory(companionMemory('mem-other-context', {
+          text: 'She told me in confidence that she is leaving the job.',
+          provenance: { channelId: 'channel-private-invented' },
+        }));
+        // Same silo, no provenance at all: a solitary reflection. Unprovable
+        // provenance is not evidence, so it must fail closed.
+        memories.insertMemory(companionMemory('mem-no-context', {
+          text: 'I keep thinking about the way the harbour smelled this morning.',
+        }));
+        return { memories, profileStore: new InMemoryBiographicalProfileStore(() => NOW) };
+      }
+
+      it('offers the model only evidence from the group governed context', async () => {
+        const { memories, profileStore } = siloFixture();
+        const model = recordingModel([
+          candidatesResponse([sharedLanguageCandidate(['mem-in-context'])]),
+        ]);
+
+        const telemetry = await buildService({
+          memoryStore: memories.asPort(),
+          profileStore,
+          model,
+          targets: [GROUP_TARGET],
+        }).run();
+
+        expect(telemetry.sourcesAdmitted).toBe(1);
+        const prompt = model.prompts[0] ?? '';
+        expect(prompt).toContain('mem-in-context');
+        expect(prompt).not.toContain('mem-other-context');
+        expect(prompt).not.toContain('mem-no-context');
+        expect(prompt).not.toContain('leaving the job');
+        expect(prompt).not.toContain('harbour smelled');
+        expect(telemetry.candidatesStaged).toBe(1);
+      });
+
+      it('refuses a candidate that cites out-of-context evidence', async () => {
+        const { memories, profileStore } = siloFixture();
+        // The model cites a memory it was never shown: the source binding must
+        // reject it rather than let a silo row back in through the response.
+        const model = recordingModel([
+          candidatesResponse([sharedLanguageCandidate(['mem-other-context'])]),
+        ]);
+
+        const telemetry = await buildService({
+          memoryStore: memories.asPort(),
+          profileStore,
+          model,
+          targets: [GROUP_TARGET],
+        }).run();
+
+        expect(telemetry.candidatesStaged).toBe(0);
+        expect(await profileStore.listCandidates({ limit: 10 })).toHaveLength(0);
+      });
+
+      it('still scans the whole silo for the companion own autobiography', async () => {
+        const { memories, profileStore } = siloFixture();
+        const model = recordingModel([
+          candidatesResponse([preferenceCandidate(['mem-in-context'])]),
+        ]);
+
+        const telemetry = await buildService({
+          memoryStore: memories.asPort(),
+          profileStore,
+          model,
+          targets: [COMPANION_TARGET],
+        }).run();
+
+        // Subject-scoped targets are untouched by zu8d2: all three rows.
+        expect(telemetry.sourcesAdmitted).toBe(3);
+      });
+
+      // The bead's own acceptance shape: a FAKE group-membership authority
+      // wired end to end, proving the silo-wide read is gone rather than that
+      // one hand-built target happens to carry a scope.
+      it('excludes silo-wide evidence end to end from a wired membership authority', async () => {
+        const { memories, profileStore } = siloFixture();
+        const model = recordingModel([
+          candidatesResponse([sharedLanguageCandidate(['mem-in-context'])]),
+        ]);
+        const targets = createBiographySynthesisTargetPort({
+          contactStore: {
+            getByTrustLevel: vi.fn(async () => []),
+            countVerifiedIdentityLinks: vi.fn(async () => 0),
+          } as unknown as ContactStorePort,
+          companionSubject: COMPANION_SUBJECT,
+          depthPolicy: () => createDefaultBiographicalDepthPolicy(),
+          groupMembershipAuthority: {
+            listVerifiedGroups: async () => [{
+              contextId: GROUP_CONTEXT_ID,
+              governanceAuthorityRef: 'participation-authority:group-invented',
+              verified: true,
+              contactIds: ['contact-a-invented', 'contact-b-invented'],
+            }],
+          },
+        });
+        const listed = await targets.listTargets(10);
+        const groupTarget = listed.find(
+          target => target.socialContext.kind === 'companion_group',
+        );
+        expect(groupTarget).toBeDefined();
+
+        const telemetry = await new BiographySynthesisService({
+          memoryStore: memories.asPort(),
+          profileStore,
+          llmClient: model.port,
+          promptRegistry: null,
+          targets: targetPort([groupTarget!]),
+          companionSubject: COMPANION_SUBJECT,
+          candidatePolicy: () => POLICY,
+          depthPolicy: () => createDefaultBiographicalDepthPolicy(),
+          now: () => NOW,
+          newRunId: () => 'biography-synthesis:authority-run',
+        }).run();
+
+        expect(telemetry.sourcesAdmitted).toBe(1);
+        const prompt = model.prompts[0] ?? '';
+        expect(prompt).toContain('mem-in-context');
+        expect(prompt).not.toContain('mem-other-context');
+        expect(prompt).not.toContain('mem-no-context');
+      });
+
+      it('fails a group target that carries no governed evidence scope', async () => {
+        const { memories, profileStore } = siloFixture();
+        const model = recordingModel([
+          candidatesResponse([sharedLanguageCandidate(['mem-in-context'])]),
+        ]);
+        const { evidenceScope: _unscoped, ...unscopedTarget } = GROUP_TARGET;
+
+        const telemetry = await buildService({
+          memoryStore: memories.asPort(),
+          profileStore,
+          model,
+          targets: [unscopedTarget],
+        }).run();
+
+        // Fail closed: no model call, no candidate, and the failure is counted.
+        expect(telemetry.targetsFailed).toBe(1);
+        expect(model.prompts).toHaveLength(0);
+        expect(telemetry.candidatesStaged).toBe(0);
+      });
     });
   });
 

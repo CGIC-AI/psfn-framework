@@ -4,13 +4,15 @@
 // emits `background_work_job_failed` for a job that reached its terminal failed
 // state, the refresh emitter beside this module projects a failed memory/wiki
 // context refresh into `memory_refresh_failed`, and the turn support runtime
-// projects a lost custody snapshot into `custody_snapshot_write_failed`, and
-// the intake escalation port projects a screener provider that refused the
-// request parameters into `intake_screener_provider_rejected_request`. All
-// four are grouped by `provenance.subjectHash` — a digest of the JOB KIND, of
-// the REFRESH LANE, of the custody FAILURE MODE, and of the SCREENER TIER AND
-// MODEL respectively, never of an individual job, channel, turn, or envelope —
-// precisely so that repeats of the same thing land in the same group.
+// projects a lost custody snapshot into `custody_snapshot_write_failed`, the
+// intake escalation port projects a screener provider that refused the
+// request parameters into `intake_screener_provider_rejected_request`, and the
+// automata terminal lifecycle projects a replay that disagreed with the durable
+// Bus finding into `terminal_handoff_replay_diverged`. All five are grouped by
+// `provenance.subjectHash` — a digest of the JOB KIND, of the REFRESH LANE, of
+// the custody FAILURE MODE, of the SCREENER TIER AND MODEL, and of the HANDOFF
+// KIND respectively, never of an individual job, channel, turn, envelope, or
+// run — precisely so that repeats of the same thing land in the same group.
 //
 // What was missing is the judgment: a lane failing once is noise, and a lane
 // failing over and over is an incident. This detector is that judgment and
@@ -49,6 +51,9 @@ const COUNTED_FAILURE_CODES: readonly HealthEventCode[] = [
   // subject digest (screener tier + model) and cross this detector's threshold
   // as a single standing incident rather than a stream of per-envelope noise.
   'intake_screener_provider_rejected_request',
+  // psfn-framework-zu8d2: grouped by a digest of the handoff KIND, so a settle
+  // path that keeps diverging on replay becomes one episode.
+  'terminal_handoff_replay_diverged',
 ];
 
 interface FailureGroup {

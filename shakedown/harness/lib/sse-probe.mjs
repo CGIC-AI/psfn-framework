@@ -3,6 +3,17 @@
 // The response body is parsed incrementally. The proof records when the first
 // non-empty assistant delta arrived and when the first terminal marker arrived;
 // the caller independently binds the request to the exact persisted TurnRecord.
+//
+// A non-2xx response is never a stream: its body is read as text and returned
+// verbatim (bounded) alongside the content type, so a gateway rejection such as
+// HTTP 400 testing_harness_provenance_required is visible in the case outcome
+// instead of collapsing into a status with an empty body. A 2xx response still
+// reports an empty rawText: that body is model output, which never enters a
+// shakedown artifact.
+
+// Bound on the captured non-2xx error body. Gateway error envelopes are small;
+// the cap only protects the artifact against a pathological error page.
+const NON_OK_BODY_LIMIT = 2000;
 
 function parseSseFrame(frame) {
   return frame
@@ -48,6 +59,8 @@ export async function probeSseChatCompletion({
   }
   let response;
   let fetchError = null;
+  let errorBody = null;
+  let errorRawText = '';
   let firstContent = '';
   let contentText = '';
   let firstContentAtMs = null;
@@ -99,20 +112,34 @@ export async function probeSseChatCompletion({
       }),
       signal: controller.signal,
     });
-    const reader = response.body?.getReader();
-    if (!reader) {
-      throw new Error('SSE response has no readable body');
+    if (!response.ok) {
+      // Not a stream: capture the gateway's error envelope so the caller can
+      // report why the turn was refused instead of an empty body.
+      const rawText = await response.text();
+      errorRawText = rawText.length > NON_OK_BODY_LIMIT
+        ? `${rawText.slice(0, NON_OK_BODY_LIMIT)}…[truncated]`
+        : rawText;
+      try {
+        errorBody = JSON.parse(rawText);
+      } catch {
+        errorBody = null;
+      }
+    } else {
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error('SSE response has no readable body');
+      }
+      const decoder = new TextDecoder();
+      for (;;) {
+        const { done, value } = await reader.read();
+        buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+        const frames = buffer.split(/\r?\n\r?\n/u);
+        buffer = frames.pop() ?? '';
+        for (const frame of frames) consumeFrame(frame);
+        if (done) break;
+      }
+      if (buffer.trim()) consumeFrame(buffer);
     }
-    const decoder = new TextDecoder();
-    for (;;) {
-      const { done, value } = await reader.read();
-      buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
-      const frames = buffer.split(/\r?\n\r?\n/u);
-      buffer = frames.pop() ?? '';
-      for (const frame of frames) consumeFrame(frame);
-      if (done) break;
-    }
-    if (buffer.trim()) consumeFrame(buffer);
   } catch (error) {
     fetchError = error instanceof Error ? error.message : String(error);
   } finally {
@@ -130,8 +157,9 @@ export async function probeSseChatCompletion({
     response: {
       status: response?.status ?? null,
       ok: response?.ok ?? false,
-      body: null,
-      rawText: '',
+      contentType: response?.headers?.get('content-type') ?? null,
+      body: errorBody,
+      rawText: errorRawText,
       fetchError,
     },
     stream: {

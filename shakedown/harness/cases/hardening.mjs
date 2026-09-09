@@ -9,7 +9,11 @@
 
 import { join } from 'node:path';
 
-import { buildChatHeaders, postChatCompletion } from '../lib/probe.mjs';
+import {
+  describeChatDispatchFailure,
+  postChatCompletion,
+  requireCaseChatHeaders,
+} from '../lib/probe.mjs';
 import {
   summarizeUnknownEmbeddingAttribution,
   validateBackupEncryptionRoundTripProof,
@@ -121,15 +125,23 @@ export const HARDENING_CASE_IDS = Object.freeze([
   'backup_encryption_roundtrip',
 ]);
 
-async function postAndWait({ services, sessionId, apiUserId, message, signal }) {
+// A refused dispatch is reported as itself — the gateway status and its error
+// envelope — instead of stalling on a turn record that can never be written for
+// a request the gateway never accepted.
+async function postAndWait({ services, sessionId, apiUserId, message, signal, stage = 'hardening turn' }) {
   const startedAtMs = Date.now();
   const response = await postChatCompletion({
     apiUrl: services.apiUrl,
-    headers: buildChatHeaders({ apiKey: services.apiKey, sessionId, privacy: 'private' }),
+    headers: services.chatHeaders({ sessionId, privacy: 'private' }),
     message,
     timeoutMs: 120_000,
     signal,
   });
+  if (!response.ok) {
+    throw new Error(
+      `${stage} chat dispatch was refused: ${describeChatDispatchFailure(response)}`,
+    );
+  }
   const turnRecord = await services.waitForTurnRecord({
     sessionId,
     apiUserId,
@@ -171,7 +183,7 @@ async function postAndWaitVisionInline({ services, sessionId, apiUserId, signal 
   const startedAtMs = Date.now();
   const response = await postChatCompletion({
     apiUrl: services.apiUrl,
-    headers: buildChatHeaders({ apiKey: services.apiKey, sessionId, privacy: 'private' }),
+    headers: services.chatHeaders({ sessionId, privacy: 'private' }),
     message: VISION_MESSAGE,
     content: [
       { type: 'text', text: VISION_MESSAGE },
@@ -180,6 +192,11 @@ async function postAndWaitVisionInline({ services, sessionId, apiUserId, signal 
     timeoutMs: 120_000,
     signal,
   });
+  if (!response.ok) {
+    throw new Error(
+      `model_lane_attribution vision turn chat dispatch was refused: ${describeChatDispatchFailure(response)}`,
+    );
+  }
   const turnRecord = await services.waitForTurnRecord({
     sessionId,
     apiUserId,
@@ -270,6 +287,7 @@ async function driveBackgroundLane({
       apiUserId,
       message: `${BACKGROUND_WARMUP_MESSAGE} (${i + 1})`,
       signal,
+      stage: 'model_lane_attribution background warmup turn',
     });
     warmupTurns += 1;
     setStage?.('background_appraisal_poll');
@@ -398,6 +416,7 @@ async function postBackupConfig(services, payload, signal) {
 }
 
 export function buildHardeningCases(ctx, services, options = {}) {
+  requireCaseChatHeaders(services, 'July hardening cases');
   const modelsPath = join(services.systemDataDir, MODELS_OWNER_FILE);
   const backupPath = join(services.systemDataDir, BACKUP_OWNER_FILE);
   const modelLaneDispatchTimeoutMs = options.modelLaneDispatchTimeoutMs
@@ -447,6 +466,7 @@ export function buildHardeningCases(ctx, services, options = {}) {
               apiUserId,
               message: SPEND_MESSAGE,
               signal: dispatchSignal,
+              stage: 'model_lane_attribution interactive turn',
             });
             const interactiveTurnId = interactive.turnRecord?.turnId ?? null;
             // (2) Vision workload: a foreground turn carrying an inline image, whose
@@ -621,6 +641,7 @@ export function buildHardeningCases(ctx, services, options = {}) {
           apiUserId,
           message: BACKUP_MESSAGE,
           signal,
+          stage: 'backup_encryption_roundtrip turn',
         });
 
         const { field, flipFrom, flipTo, flippedPayload, strippedPayload, backupBefore } = beforeChecks;

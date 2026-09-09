@@ -24,6 +24,7 @@ import { pgAll, pgScalar, closePool } from './lib/postgres.mjs';
 import * as probe from './lib/probe.mjs';
 import {
   INSECURE_LOCAL_API_PRINCIPAL_ID,
+  createChatHeaderBuilder,
   withTestingHarnessProvenance,
 } from './lib/probe.mjs';
 import {
@@ -119,6 +120,16 @@ const SYSTEM_DATA_DIR = CONFIG.systemDataDir;
 const PHASE = optionalEnv('PSFN_SHAKEDOWN_PHASE') ?? optionalEnv('PSFN_MATRIX_PHASE') ?? 'baseline';
 const HARNESS_RUN_ID = randomUUID();
 const HARNESS_MANIFEST_ID = `shakedown:${PHASE}:${HARNESS_RUN_ID}`;
+// The one chat-header builder every case module dispatches through. Cases never
+// assemble their own headers: the gateway refuses a testing-harness bearer whose
+// request omits this run's provenance (HTTP 400
+// testing_harness_provenance_required), so binding it here makes an
+// unprovenanced case dispatch unrepresentable.
+const CASE_CHAT_HEADERS = createChatHeaderBuilder({
+  apiKey: CONFIG.apiKey,
+  runId: HARNESS_RUN_ID,
+  manifestId: HARNESS_MANIFEST_ID,
+});
 const EXPECTED_CAPABILITY_TIER = optionalEnv('PSFN_CAPABILITY_TIER_EXPECTED');
 const OUTPUT_PATH = CONFIG.outputPath;
 const PARTIAL_OUTPUT_PATH = optionalEnv('PSFN_SHAKEDOWN_PARTIAL_OUTPUT')
@@ -3328,6 +3339,7 @@ function buildCases(ctx) {
       apiBase: API_BASE,
       apiUrl: API_URL,
       apiKey: API_KEY,
+      chatHeaders: CASE_CHAT_HEADERS,
       adminBase: ADMIN_BASE,
       companionDataDir: COMPANION_DATA_DIR,
       systemDataDir: SYSTEM_DATA_DIR,
@@ -3343,6 +3355,7 @@ function buildCases(ctx) {
       apiBase: API_BASE,
       apiUrl: API_URL,
       apiKey: API_KEY,
+      chatHeaders: CASE_CHAT_HEADERS,
       adminBase: ADMIN_BASE,
       companionDataDir: COMPANION_DATA_DIR,
       systemDataDir: SYSTEM_DATA_DIR,

@@ -94,3 +94,70 @@ test('SSE probe keeps missing first content explicit instead of treating termina
     assert.equal(result.turnRecord, null);
   });
 });
+
+test('SSE probe captures the gateway error body and content type on a non-2xx refusal', async () => {
+  const refusal = JSON.stringify({
+    error: {
+      message: 'Testing-harness chat requests require exact run and manifest identifiers',
+      type: 'testing_harness_provenance_required',
+    },
+  });
+  await withServer((_request, response) => {
+    response.writeHead(400, { 'Content-Type': 'application/json' });
+    response.end(refusal);
+  }, async (apiUrl) => {
+    const result = await probeSseChatCompletion({
+      apiUrl,
+      headers: {},
+      message: 'refused fixture',
+      waitForTurnRecord: async () => null,
+    });
+    assert.equal(result.response.status, 400);
+    assert.equal(result.response.ok, false);
+    assert.equal(result.response.contentType, 'application/json');
+    assert.equal(result.response.rawText, refusal);
+    assert.equal(result.response.body.error.type, 'testing_harness_provenance_required');
+    assert.equal(result.response.fetchError, null);
+    // A refusal is not a stream: no deltas, no terminal marker.
+    assert.equal(result.stream.eventCount, 0);
+    assert.equal(result.stream.firstContentAtMs, null);
+    assert.equal(result.stream.terminalAtMs, null);
+  });
+});
+
+test('SSE probe bounds a pathological non-2xx error body', async () => {
+  const huge = 'x'.repeat(5000);
+  await withServer((_request, response) => {
+    response.writeHead(502, { 'Content-Type': 'text/html' });
+    response.end(huge);
+  }, async (apiUrl) => {
+    const result = await probeSseChatCompletion({
+      apiUrl,
+      headers: {},
+      message: 'bounded fixture',
+      waitForTurnRecord: async () => null,
+    });
+    assert.equal(result.response.status, 502);
+    assert.equal(result.response.body, null);
+    assert.ok(result.response.rawText.length < 2100);
+    assert.ok(result.response.rawText.endsWith('…[truncated]'));
+  });
+});
+
+test('SSE probe still reports a 2xx stream body-free', async () => {
+  await withServer((_request, response) => {
+    response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    response.end('data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: [DONE]\n\n');
+  }, async (apiUrl) => {
+    const result = await probeSseChatCompletion({
+      apiUrl,
+      headers: {},
+      message: 'content-free fixture',
+      waitForTurnRecord: async () => null,
+    });
+    // Model output never enters the response envelope persisted into artifacts.
+    assert.equal(result.response.rawText, '');
+    assert.equal(result.response.body, null);
+    assert.equal(result.stream.contentText, 'hi');
+  });
+});

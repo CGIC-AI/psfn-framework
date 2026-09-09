@@ -27,7 +27,7 @@ import {
 import { createEidoverseProductionWakeLifecycle } from "./eidoverse-wake-runtime.js";
 import { RealtimeHubServer } from "./server.js";
 import { HomeAssistantClient } from "./home-assistant/client.js";
-import { HomeAssistantControlServer } from "./home-assistant/control-server.js";
+import { HubControlServer, type HubWorldControlPort } from "./home-assistant/control-server.js";
 
 async function main(): Promise<void> {
   const projectRoot = resolveProjectRoot();
@@ -103,6 +103,7 @@ async function main(): Promise<void> {
           look: eidoverseMcpl,
           onLookError: () => console.warn("Eidoverse MCPL look failed"),
           say: eidoverseMcpl,
+          logger: hubLogger,
           // The operator's feature-set selection decides whether this Hub
           // carries a travel port at all: withholding `eidoverse.travel`
           // removes the surface rather than relying on the door to refuse it.
@@ -125,16 +126,28 @@ async function main(): Promise<void> {
         : null,
   });
   const eidoverseProduction = eidoverseMcplConfig && eidoverseMcpl
-    ? createEidoverseMcplProductionLifecycle(eidoverseMcpl, server, eidoverseMcplConfig, {
-        logger: { warn: (message) => console.warn(message) },
-      })
+    ? createEidoverseMcplProductionLifecycle(eidoverseMcpl, server, {
+        ...eidoverseMcplConfig,
+        agentNames: [eidoverseMcplConfig.agentName],
+      }, { logger: hubLogger })
     : eidoverseConfig && eidoverse
       ? createEidoverseProductionWakeLifecycle(eidoverse, server, eidoverseConfig, {
           logger: { warn: (message) => console.warn(message) },
         })
       : null;
-  const control = config.control && homeAssistant && config.deviceRegistry
-    ? new HomeAssistantControlServer(config.control, homeAssistant, config.deviceRegistry)
+  // The control port carries the companion's own world-avatar surface whenever
+  // an Eidoverse emanation exists, and Home Assistant only when it is enabled.
+  // Neither needs a device registry: the gateway's control token is the only
+  // credential these routes admit.
+  const worldControl: HubWorldControlPort | null = server.hasEidoverse()
+    ? {
+        perceive: () => server.perceiveEidoverse(),
+        move: (input) => server.moveEidoverseAvatar(input),
+        act: (verb, args) => server.actEidoverse(verb, args),
+      }
+    : null;
+  const control = config.control
+    ? new HubControlServer(config.control, homeAssistant, config.deviceRegistry, worldControl)
     : null;
   try {
     homeAssistant?.start();

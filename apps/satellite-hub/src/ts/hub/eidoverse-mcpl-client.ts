@@ -205,6 +205,30 @@ export class EidoverseMcplClient {
     return this.callTool("stop", {});
   }
 
+  async faceAt(x: number, z: number): Promise<string> {
+    return this.callTool("face", { x, z });
+  }
+
+  async emote(name: string): Promise<string> {
+    return this.callTool("emote", { name });
+  }
+
+  async posture(kind: string): Promise<string> {
+    return this.callTool("posture", { kind });
+  }
+
+  async spawn(args: { lib?: string; query?: string; x?: number; z?: number; yaw?: number; id?: string }): Promise<string> {
+    return this.callTool("spawn", { ...args });
+  }
+
+  async remove(id: string): Promise<string> {
+    return this.callTool("remove", { id });
+  }
+
+  async setAvatar(avatar: string): Promise<string> {
+    return this.callTool("set_avatar", { avatar });
+  }
+
   /**
    * Ask the door to move this body to another world. The tool's synchronous
    * return is the arrival signal: the door answers `Arrived in "<world>"` (or

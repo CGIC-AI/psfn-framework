@@ -47,6 +47,10 @@ import { PsfnModelAdapter } from "./psfn-model.js";
 import {
   EidoverseEmbodiedSessionAdapter,
   type EidoverseAddressedUtterance,
+  type EidoverseAvatarActOutcome,
+  type EidoverseAvatarMoveOutcome,
+  type EidoverseAvatarMoveRequest,
+  type EidoverseAvatarPerception,
   type EidoverseEmbodiedSessionConfig,
   type EidoverseEmbodiedSessionDependencies,
   type EidoverseTravelOutcome,
@@ -258,6 +262,42 @@ export class RealtimeHubServer {
       throw new Error("Eidoverse embodied session is not configured");
     }
     this.eidoverse.submitBodyAction(name, args);
+  }
+
+  /** True when this Hub carries an Eidoverse emanation at all. */
+  hasEidoverse(): boolean {
+    return this.eidoverse !== null;
+  }
+
+  /**
+   * The companion's own perception of its world. No device is involved: the
+   * gateway asks on the companion's behalf over the private control port.
+   */
+  perceiveEidoverse(): Promise<EidoverseAvatarPerception> {
+    if (!this.eidoverse) {
+      throw new Error("Eidoverse embodied session is not configured");
+    }
+    return this.eidoverse.perceive();
+  }
+
+  /**
+   * The companion's own move (travel and/or walk). Feature sets still apply:
+   * a Hub without a travel port cannot leave its world, and one without a body
+   * runner cannot walk; both answer in the fixed refusal vocabulary.
+   */
+  moveEidoverseAvatar(input: EidoverseAvatarMoveRequest): Promise<EidoverseAvatarMoveOutcome> {
+    if (!this.eidoverse) {
+      throw new Error("Eidoverse embodied session is not configured");
+    }
+    return this.eidoverse.moveTo(input);
+  }
+
+  /** The companion's own body or creation verb. */
+  actEidoverse(verb: string, args: unknown = {}): Promise<EidoverseAvatarActOutcome> {
+    if (!this.eidoverse) {
+      throw new Error("Eidoverse embodied session is not configured");
+    }
+    return this.eidoverse.act(verb, args);
   }
 
   /**

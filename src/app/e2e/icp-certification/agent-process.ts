@@ -519,15 +519,20 @@ async function main(): Promise<void> {
     fatigueHistory: fatigue.fatigueLedger,
   });
   await gateway.startFleetPostureReporting(fleetPostureProvider);
-  const icpRuntimeAvailability = startup.config.multiCompanion
-    ? await startIcpRuntimeAvailability({
-        eventBus: startup.eventBus,
-        gateway,
-        isEnabled: () => runtimeEnablement.isEnabled()
-          && startup.capabilityRuntime.has('external.companion'),
-        readFatigueState: () => fleetPostureProvider().fatigue.state,
-      })
-    : undefined;
+  // psfn-framework-n97hp: the consumer is started for both postures so the
+  // required `capability.tier.changed` contract always has one; only the fleet
+  // posture supplies the ICP lane it fences.
+  const icpRuntimeAvailability = await startIcpRuntimeAvailability({
+    eventBus: startup.eventBus,
+    lane: startup.config.multiCompanion
+      ? {
+          gateway,
+          isEnabled: () => runtimeEnablement.isEnabled()
+            && startup.capabilityRuntime.has('external.companion'),
+          readFatigueState: () => fleetPostureProvider().fatigue.state,
+        }
+      : null,
+  });
   await gateway.declareRuntimeReady();
   backgroundScheduler.start();
   reply({
@@ -1252,7 +1257,7 @@ async function main(): Promise<void> {
           return;
         }
         await agent.waitForIdle();
-        icpRuntimeAvailability?.stop();
+        icpRuntimeAvailability.stop();
         unregisterInitiationCandidates();
         sourceWiring.unregisterCoLocationThoughtAdapter();
         sourceWiring.unregisterFeltImpulseAdapter();

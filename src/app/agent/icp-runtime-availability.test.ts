@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { EventBus } from '../../shared/event-bus.js';
+import { logger } from '../../shared/logger.js';
 import { startIcpRuntimeAvailability } from './icp-runtime-availability.js';
 
 describe('agent ICP runtime availability wiring', () => {
@@ -13,12 +14,14 @@ describe('agent ICP runtime availability wiring', () => {
     }));
     const runtime = await startIcpRuntimeAvailability({
       eventBus,
-      gateway: {
-        refreshRuntimeAvailability,
-        clearRuntimeAvailability: vi.fn(),
+      lane: {
+        gateway: {
+          refreshRuntimeAvailability,
+          clearRuntimeAvailability: vi.fn(),
+        },
+        isEnabled: () => true,
+        readFatigueState: () => 'clear',
       },
-      isEnabled: () => true,
-      readFatigueState: () => 'clear',
       now: () => 1_000,
     });
 
@@ -47,9 +50,11 @@ describe('agent ICP runtime availability wiring', () => {
     }));
     const runtime = await startIcpRuntimeAvailability({
       eventBus,
-      gateway: { refreshRuntimeAvailability, clearRuntimeAvailability },
-      isEnabled: () => enabled,
-      readFatigueState: () => 'clear',
+      lane: {
+        gateway: { refreshRuntimeAvailability, clearRuntimeAvailability },
+        isEnabled: () => enabled,
+        readFatigueState: () => 'clear',
+      },
       now: () => 1_000,
     });
 
@@ -74,18 +79,20 @@ describe('agent ICP runtime availability wiring', () => {
     let enabled = true;
     const runtime = await startIcpRuntimeAvailability({
       eventBus,
-      gateway: {
-        refreshRuntimeAvailability: vi.fn(async () => ({
-          eligible: true,
-          control: 'runtime' as const,
-          mutableByCompanion: true,
-        })),
-        clearRuntimeAvailability: vi.fn(async () => {
-          throw new Error('gateway clear unavailable');
-        }),
+      lane: {
+        gateway: {
+          refreshRuntimeAvailability: vi.fn(async () => ({
+            eligible: true,
+            control: 'runtime' as const,
+            mutableByCompanion: true,
+          })),
+          clearRuntimeAvailability: vi.fn(async () => {
+            throw new Error('gateway clear unavailable');
+          }),
+        },
+        isEnabled: () => enabled,
+        readFatigueState: () => 'clear',
       },
-      isEnabled: () => enabled,
-      readFatigueState: () => 'clear',
       now: () => 1_000,
     });
 
@@ -102,5 +109,63 @@ describe('agent ICP runtime availability wiring', () => {
     })).rejects.toThrow('gateway clear unavailable');
 
     runtime.stop();
+  });
+
+  // psfn-framework-n97hp: the single-companion release shape (kube-test) —
+  // `config.multiCompanion === false`, so the agent composition has no ICP lane
+  // and the gateway carries no ICP autonomy broker. The consumer must still be
+  // registered, because the owner capability mutation delivers the withdrawal
+  // with `emitRequired`.
+  describe('single-companion composition (no ICP lane)', () => {
+    const withdrawal = {
+      companionId: '11111111-1111-4111-8111-111111111111',
+      previousTier: 'autonomous',
+      currentTier: 'apprentice',
+      currentGrantedTokens: [],
+      grantedTokens: [],
+      withdrawnTokens: ['external.companion'],
+      delivery: 'pending' as const,
+      timestamp: 2_000,
+    };
+
+    it('keeps a registered consumer so the required withdrawal fence resolves', async () => {
+      const eventBus = new EventBus();
+      const runtime = await startIcpRuntimeAvailability({ eventBus, lane: null });
+
+      await expect(eventBus.emitRequired('capability.tier.changed', withdrawal))
+        .resolves.toBeUndefined();
+
+      runtime.stop();
+    });
+
+    it('proves it ran by recording the withdrawal it had no lane to fence', async () => {
+      const eventBus = new EventBus();
+      const info = vi.spyOn(logger, 'info').mockReturnValue(logger);
+      const runtime = await startIcpRuntimeAvailability({ eventBus, lane: null });
+
+      try {
+        await eventBus.emitRequired('capability.tier.changed', withdrawal);
+        expect(info).toHaveBeenCalledWith(
+          'Capability tier changed with no ICP runtime-availability lane to fence',
+          {
+            previousTier: 'autonomous',
+            currentTier: 'apprentice',
+            externalCompanionWithdrawn: true,
+          },
+        );
+      } finally {
+        info.mockRestore();
+        runtime.stop();
+      }
+    });
+
+    it('is the registration that holds the required contract: stop() restores the failure', async () => {
+      const eventBus = new EventBus();
+      const runtime = await startIcpRuntimeAvailability({ eventBus, lane: null });
+      runtime.stop();
+
+      await expect(eventBus.emitRequired('capability.tier.changed', withdrawal))
+        .rejects.toThrow('Required event "capability.tier.changed" has no registered consumers');
+    });
   });
 });

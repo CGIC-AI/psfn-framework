@@ -66,8 +66,56 @@ export interface TurnPerceptionFacts {
   enforcing: boolean;
 }
 
+/**
+ * Every `TurnPerceptionStatus`, as a runtime array.
+ *
+ * The type alone cannot police the content-free summary: the validator below
+ * has to decide at RUNTIME whether a string is a vocabulary member or smuggled
+ * text, so the vocabulary needs a value. Kept module-local — nothing outside
+ * this file has any business enumerating it.
+ */
+const TURN_PERCEPTION_STATUSES: readonly TurnPerceptionStatus[] = [
+  'reviewed',
+  'partially_reviewed',
+  'embedded',
+  'failed',
+  'timed_out',
+  'withheld',
+  'not_reviewed',
+];
+
 /** Fixed trust label carried with every cue; image-derived text is never trusted. */
 const PERCEPTION_CUE_TRUST_LABEL = 'untrusted_image_derived';
+
+/** Four-valued active-reference read (AC4), as a closed vocabulary. */
+const TURN_PERCEPTION_EMBODIMENT_VERDICTS = [
+  'same',
+  'drifted',
+  'different',
+  'unknown',
+] as const;
+
+type TurnPerceptionEmbodimentVerdict = typeof TURN_PERCEPTION_EMBODIMENT_VERDICTS[number];
+
+/**
+ * Which SOURCE explained the active-reference read (psfn-framework-zu8d2).
+ *
+ * The reviewer's own words are free text, so they can never be the telemetry
+ * carrier for "why". This names the provenance of the explanation instead —
+ * enumerated, bounded, and identical on every turn that took the same path.
+ */
+const TURN_PERCEPTION_EMBODIMENT_REASON_CODES = [
+  /** No comparison was requested; the live turn path always reads this. */
+  'reference_comparison_not_requested',
+  /** The reviewer supplied a note, which is the rendered reason. */
+  'reviewer_note',
+  /** The reviewer said nothing, so the verdict's own framing is the reason. */
+  'verdict_framing',
+  /** A comparison ran but produced neither a note nor a framing. */
+  'reference_comparison_unexplained',
+] as const;
+
+type TurnPerceptionEmbodimentReasonCode = typeof TURN_PERCEPTION_EMBODIMENT_REASON_CODES[number];
 
 export interface TurnPerceptionCue {
   imageCount: number;
@@ -83,9 +131,23 @@ export interface TurnPerceptionCue {
    * appearance words.
    */
   embodiment: {
-    verdict: 'same' | 'drifted' | 'different' | 'unknown';
-    /** Why the verdict reads the way it does; populated even for `unknown`. */
+    verdict: TurnPerceptionEmbodimentVerdict;
+    /**
+     * Why the verdict reads the way it does; populated even for `unknown`.
+     *
+     * This is FREE TEXT when a reviewer answered: it is the reviewer's own
+     * note, and it is rendered into the companion's prompt by
+     * `buildPerceptionEvidencePriorityBlock`, which is a prompt surface and may
+     * carry it. It must NEVER reach telemetry or the persisted turn snapshot —
+     * `reasonCode` is what those surfaces carry instead.
+     */
     reason: string;
+    /**
+     * The same fact as `reason`, reduced to a closed vocabulary
+     * (psfn-framework-zu8d2). Structural by construction: it names WHICH source
+     * explained the verdict, never what the source said.
+     */
+    reasonCode: TurnPerceptionEmbodimentReasonCode;
     referenceId?: string;
   };
   enforcing: boolean;
@@ -116,13 +178,26 @@ function resolveTurnPerceptionEmbodiment(
   embodiment: ImageEmbodimentConsistency | null,
 ): TurnPerceptionCue['embodiment'] {
   if (!embodiment) {
-    return { verdict: 'unknown', reason: EMBODIMENT_REASON_NOT_REQUESTED };
+    return {
+      verdict: 'unknown',
+      reason: EMBODIMENT_REASON_NOT_REQUESTED,
+      reasonCode: 'reference_comparison_not_requested',
+    };
   }
   const verdict = EMBODIMENT_VERDICT_BY_REVIEW[embodiment.verdict];
-  const reason = embodiment.note.trim() || embodiment.framing;
+  const note = embodiment.note.trim();
+  const reason = note || embodiment.framing;
+  // The code records which source spoke, never what it said, so a reviewer's
+  // sentence can never become the telemetry carrier for "why".
+  const reasonCode: TurnPerceptionEmbodimentReasonCode = note
+    ? 'reviewer_note'
+    : embodiment.framing.trim()
+      ? 'verdict_framing'
+      : 'reference_comparison_unexplained';
   return {
     verdict,
     reason,
+    reasonCode,
     ...(embodiment.referenceId ? { referenceId: embodiment.referenceId } : {}),
   };
 }
@@ -143,13 +218,91 @@ export function buildTurnPerceptionCue(facts: TurnPerceptionFacts): TurnPercepti
 }
 
 /**
- * The cue as it may appear in telemetry and the persisted turn snapshot:
- * counts, status, verdict, reason and trust label. Deliberately CONTENT-FREE —
- * neither the Participant's words nor the image-derived summary leave the
- * retrieval query through this surface (AC2's structural provenance).
+ * Every string a content-free cue summary is allowed to carry. Union of the
+ * three closed vocabularies plus the fixed trust label — so the COMPILER
+ * already refuses a bare `string` field, before the runtime validator runs.
  */
-export function summarizeTurnPerceptionCue(cue: TurnPerceptionCue): Record<string, unknown> {
-  return {
+type ContentFreeCueLabel =
+  | TurnPerceptionStatus
+  | TurnPerceptionEmbodimentVerdict
+  | TurnPerceptionEmbodimentReasonCode
+  | typeof PERCEPTION_CUE_TRUST_LABEL;
+
+declare const CONTENT_FREE_CUE_SUMMARY: unique symbol;
+
+/**
+ * A cue summary that has been PROVEN content-free (psfn-framework-zu8d2).
+ *
+ * The brand is type-only — it costs nothing at runtime and appears in no
+ * serialization — and it exists so the guarantee is structural rather than a
+ * comment: `summarizeTurnPerceptionCue` is the only thing that can produce this
+ * type, and it only produces it after `assertContentFreeCueSummary` has walked
+ * every field. A caller cannot assemble one by hand and hand it to telemetry.
+ */
+export type ContentFreeTurnPerceptionCueSummary =
+  & Readonly<Record<string, number | boolean | ContentFreeCueLabel>>
+  & { readonly [CONTENT_FREE_CUE_SUMMARY]: true };
+
+/** Runtime membership test for the label union above. */
+const CONTENT_FREE_CUE_LABELS: ReadonlySet<string> = new Set<string>([
+  ...TURN_PERCEPTION_STATUSES,
+  ...TURN_PERCEPTION_EMBODIMENT_VERDICTS,
+  ...TURN_PERCEPTION_EMBODIMENT_REASON_CODES,
+  PERCEPTION_CUE_TRUST_LABEL,
+]);
+
+/**
+ * The structural gate the content-free contract is actually made of.
+ *
+ * Types are a boundary the compiler checks; this is the one a future edit
+ * cannot quietly walk around. Every field must be a finite number, a boolean,
+ * or a member of a declared vocabulary. Any other string — a reviewer's note, a
+ * participant's words, a rendered error, a reference id — throws here rather
+ * than reaching telemetry or the persisted turn snapshot.
+ */
+function assertContentFreeCueSummary(
+  summary: Record<string, number | boolean | string>,
+): ContentFreeTurnPerceptionCueSummary {
+  for (const [field, value] of Object.entries(summary)) {
+    if (typeof value === 'boolean') continue;
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) {
+        throw new Error(
+          `Turn perception cue summary field "${field}" must be a finite number`,
+        );
+      }
+      continue;
+    }
+    if (!CONTENT_FREE_CUE_LABELS.has(value)) {
+      // The rejected value is deliberately NOT echoed: this runs on a path
+      // whose whole purpose is keeping image- and participant-derived text out
+      // of telemetry, and an error message is telemetry.
+      throw new Error(
+        `Turn perception cue summary field "${field}" is not content-free: only counts, `
+        + 'booleans and closed-vocabulary labels may appear',
+      );
+    }
+  }
+  return summary as ContentFreeTurnPerceptionCueSummary;
+}
+
+/**
+ * The cue as it may appear in telemetry and the persisted turn snapshot:
+ * counts, status, verdict, reason CODE and trust label. Deliberately
+ * CONTENT-FREE — neither the Participant's words nor the image-derived summary
+ * leave the retrieval query through this surface (AC2's structural provenance).
+ *
+ * `embodimentReason` carries `cue.embodiment.reasonCode`, never
+ * `cue.embodiment.reason`: the latter is the reviewer's own sentence whenever a
+ * comparison actually ran. On the live turn path no comparison is ever
+ * requested, so this surface is byte-identical to what it emitted before
+ * psfn-framework-zu8d2 — the fix closes a dormant leak without moving the
+ * shape telemetry already depends on.
+ */
+export function summarizeTurnPerceptionCue(
+  cue: TurnPerceptionCue,
+): ContentFreeTurnPerceptionCueSummary {
+  return assertContentFreeCueSummary({
     imageCount: cue.imageCount,
     withheldCount: cue.withheldCount,
     reviewedImageCount: cue.reviewedImageCount,
@@ -158,10 +311,10 @@ export function summarizeTurnPerceptionCue(cue: TurnPerceptionCue): Record<strin
     visionSummaryChars: cue.visionSummary?.length ?? 0,
     participantTextChars: cue.participantText.length,
     embodimentVerdict: cue.embodiment.verdict,
-    embodimentReason: cue.embodiment.reason,
+    embodimentReason: cue.embodiment.reasonCode,
     intakeEnforcing: cue.enforcing,
     trustLabel: cue.trustLabel,
-  };
+  });
 }
 
 /**

@@ -188,4 +188,62 @@ describe('turn perception cue (lpxg3.1)', () => {
       expect(summarizeTurnPerceptionCue(cue({ enforcing: false })).intakeEnforcing).toBe(false);
     });
   });
+
+  // psfn-framework-zu8d2 — the content-free contract used to be a comment over
+  // a `Record<string, unknown>`: the reviewer's own note rode out on
+  // `embodimentReason`, unreachable only because the live turn path never asks
+  // for a reference comparison. It is now enforced by construction.
+  describe('content-free summary enforcement (zu8d2)', () => {
+    const reviewerNote = 'the jawline and hair length match the reference';
+    const embodiment: ImageEmbodimentConsistency = {
+      verdict: 'same_me',
+      framing: 'This still reads as me.',
+      note: reviewerNote,
+      referenceId: 'ref-1',
+    };
+
+    it('summarizes a reviewed comparison with a reason CODE, never the reviewer note', () => {
+      const reviewed = cue({ embodiment });
+      // The prompt surface still renders the reviewer's own words...
+      expect(reviewed.embodiment.reason).toBe(reviewerNote);
+      expect(buildPerceptionEvidencePriorityBlock(reviewed, true)).toContain(reviewerNote);
+
+      // ...and the telemetry surface carries the enumerated code instead.
+      const summary = summarizeTurnPerceptionCue(reviewed);
+      expect(summary.embodimentReason).toBe('reviewer_note');
+      expect(JSON.stringify(summary)).not.toContain('jawline');
+      expect(JSON.stringify(summary)).not.toContain('ref-1');
+    });
+
+    it('falls back to the verdict framing code when the reviewer said nothing', () => {
+      const summary = summarizeTurnPerceptionCue(cue({
+        embodiment: { ...embodiment, note: '   ' },
+      }));
+      expect(summary.embodimentReason).toBe('verdict_framing');
+    });
+
+    it('rejects a cue that carries raw text where a label belongs', () => {
+      const smuggled = cue();
+      // A future edit that routes free text into the summary — here modelled by
+      // a cue whose reason code has been replaced with the reviewer's sentence.
+      const tampered: TurnPerceptionCue = {
+        ...smuggled,
+        embodiment: {
+          ...smuggled.embodiment,
+          reasonCode: reviewerNote as TurnPerceptionCue['embodiment']['reasonCode'],
+        },
+      };
+      expect(() => summarizeTurnPerceptionCue(tampered)).toThrow(/is not content-free/u);
+      // The rejection must not echo what it refused.
+      expect(() => summarizeTurnPerceptionCue(tampered)).not.toThrow(/jawline/u);
+    });
+
+    it('rejects a status outside the closed vocabulary', () => {
+      const tampered: TurnPerceptionCue = {
+        ...cue(),
+        status: 'a wooden pier at sunset' as TurnPerceptionCue['status'],
+      };
+      expect(() => summarizeTurnPerceptionCue(tampered)).toThrow(/is not content-free/u);
+    });
+  });
 });

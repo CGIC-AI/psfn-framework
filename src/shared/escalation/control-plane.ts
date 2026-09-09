@@ -201,6 +201,10 @@ export function createHumanEscalationControlPlane<TNotice>(
        */
       const claim = async (
         provisionalOutcome: HumanEscalationDeliveryOutcome,
+        // True only where a settle follows: the ledger keeps the row
+        // un-evictable until then, so a burst of concurrent raises cannot
+        // delete an attempt whose sink call is still out (psfn-framework-2xt9c).
+        awaitingSettlement = false,
       ): Promise<HumanEscalationRaiseResult | null> => {
         const claimed = await options.ledger.claimAttempt({
           idempotencyKey,
@@ -208,7 +212,7 @@ export function createHumanEscalationControlPlane<TNotice>(
           sink: route.sink,
           outcome: provisionalOutcome,
           attemptedAtMs: nowMs,
-        });
+        }, { awaitingSettlement });
         if (claimed.claimed) return null;
         logger.info('Human escalation raise lost the attempt claim and dispatched nothing', {
           kind: facts.kind,
@@ -254,7 +258,7 @@ export function createHumanEscalationControlPlane<TNotice>(
         // delivery nobody can prove happened. It is also what the settle below
         // compares against, so this value names the row this caller owns.
         const provisionalOutcome = 'delivery_failed' as const;
-        const lost = await claim(provisionalOutcome);
+        const lost = await claim(provisionalOutcome, true);
         if (lost) return lost;
         try {
           outcome = await sink.deliver(request.notice, record);

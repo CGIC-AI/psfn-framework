@@ -99,7 +99,12 @@ export function createInMemoryHumanEscalationLedger(): HumanEscalationLedgerPort
      * NOTHING`: whoever gets here first owns the dispatch, and everyone else is
      * handed the owner's row rather than a second notice.
      */
-    async claimAttempt(attempt: HumanEscalationAttempt): Promise<HumanEscalationAttemptClaim> {
+    async claimAttempt(
+      attempt: HumanEscalationAttempt,
+      // The in-memory ledger evicts nothing, so a pending settlement needs no
+      // protection here (bead psfn-framework-2xt9c).
+      _options?: { awaitingSettlement?: boolean },
+    ): Promise<HumanEscalationAttemptClaim> {
       const existing = attempts.get(attempt.idempotencyKey);
       if (existing) return { claimed: false, existing: { ...existing } };
       attempts.set(attempt.idempotencyKey, { ...attempt });

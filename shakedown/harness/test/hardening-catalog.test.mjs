@@ -7,6 +7,13 @@ import {
   buildHardeningCases,
 } from '../cases/hardening.mjs';
 import { classifyCaseFailure } from '../lib/case-execution.mjs';
+import { createChatHeaderBuilder } from '../lib/probe.mjs';
+
+const fixtureChatHeaders = createChatHeaderBuilder({
+  apiKey: 'fixture-api-key',
+  runId: 'run-fixture',
+  manifestId: 'shakedown:fixture:run-fixture',
+});
 
 const context = {
   runToken: '2026-07-18T12-00-00',
@@ -18,6 +25,7 @@ const services = {
   apiUrl: 'http://127.0.0.1:10153/v1/chat/completions',
   adminBase: 'http://127.0.0.1:10154',
   apiKey: 'fixture-api-key',
+  chatHeaders: fixtureChatHeaders,
   companionDataDir: '/round/companion-data',
   systemDataDir: '/round/system-data',
   fetchJson: async () => ({ ok: true, status: 200, body: {} }),
@@ -55,6 +63,7 @@ function backupServices(diskBackup) {
     apiUrl: 'http://127.0.0.1:10153/v1/chat/completions',
     adminBase: 'http://127.0.0.1:10154',
     apiKey: 'fixture-api-key',
+    chatHeaders: fixtureChatHeaders,
     systemDataDir: '/round/system-data',
     companionDataDir: '/round/companion-data',
     readJsonIfExists: () => (state.disk ? { ...state.disk } : null),
@@ -324,12 +333,23 @@ test('the backup case execute drives the real save path, restores, and probes th
   const svc = backupServices(backupOwnerFile());
   const backup = backupCase(svc);
   const beforeChecks = await backup.before({ ctx: context });
-  const outcome = await backup.execute({
-    ctx: context,
-    sessionId: 'hardening-backup-fixture',
-    apiUserId: context.primaryApiUserId,
-    beforeChecks,
-  });
+  // The case dispatches a real chat turn; stub the transport so the fixture
+  // exercises an accepted dispatch instead of an unreachable local port.
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    choices: [{ message: { content: 'ok' } }],
+  }), { status: 200, headers: { 'content-type': 'application/json' } });
+  let outcome;
+  try {
+    outcome = await backup.execute({
+      ctx: context,
+      sessionId: 'hardening-backup-fixture',
+      apiUserId: context.primaryApiUserId,
+      beforeChecks,
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
   const sc = outcome.sideChecks.backup;
   // Positive round-trip landed the flip with the encryption block intact.
   assert.equal(sc.save.ok, true);

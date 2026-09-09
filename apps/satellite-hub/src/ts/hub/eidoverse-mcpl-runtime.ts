@@ -10,7 +10,12 @@
  *
  * Turns are serialized. A knock arriving mid-turn queues behind the one in
  * flight rather than opening a second concurrent conversation with the same
- * body.
+ * body, and that queue is bounded: Phase 1's poll loop asked for the next batch
+ * only once the previous turn had finished, so its backpressure was structural,
+ * while a pushed transport has none of its own. Past the configured budget the
+ * arriving batch is dropped and counted rather than deepening a backlog of
+ * inference the Hub can never work off. Drop accounting is content-free — batch
+ * and message counts only, never a ping line or a world name.
  */
 
 import { createHash } from "node:crypto";
@@ -38,6 +43,17 @@ interface EidoverseMcplWakeLogger {
 export interface EidoverseMcplWakeConfig extends EidoverseWakeFilterConfig {
   /** False suppresses replayed mentions after a reconnect. See the config loader. */
   catchupWake: boolean;
+  /**
+   * Delivered batches that may wait for the dispatcher at once. The batch being
+   * consumed does not occupy the budget; only batches still waiting do.
+   */
+  wakeQueueLimit: number;
+}
+
+/** Content-free wake-dispatch drop accounting: counts, never content. */
+export interface EidoverseMcplWakeDropStats {
+  droppedBatches: number;
+  droppedMessages: number;
 }
 
 export interface EidoverseMcplWakeRuntimeOptions {
@@ -61,6 +77,10 @@ export interface EidoverseMcplLifecycleTarget extends EidoverseMcplWakeTarget {
 class EidoverseMcplWakeRuntime {
   private readonly filter: EidoverseWakeFilter;
   private queue: Promise<void> = Promise.resolve();
+  private waitingBatches = 0;
+  private droppedBatches = 0;
+  private droppedMessages = 0;
+  private overflowReported = false;
   private nextWakeSequence = 1;
 
   constructor(
@@ -68,6 +88,9 @@ class EidoverseMcplWakeRuntime {
     private readonly config: EidoverseMcplWakeConfig,
     private readonly logger: EidoverseMcplWakeLogger,
   ) {
+    if (!Number.isInteger(config.wakeQueueLimit) || config.wakeQueueLimit <= 0) {
+      throw new Error("Eidoverse MCPL wake queue limit must be a positive integer");
+    }
     this.filter = new EidoverseWakeFilter(config, {
       onWake: async (event) => this.handleWake(event),
     });
@@ -76,13 +99,33 @@ class EidoverseMcplWakeRuntime {
   /**
    * Accept one delivered batch. Returns immediately: the door is waiting on the
    * `channels/incoming` response, which the client has already written.
+   *
+   * A batch arriving with the budget already full is tail-dropped: the oldest
+   * queued knocks are the ones with a conversation still attached to them, and
+   * dropping the newest keeps the queue's ordering honest.
    */
   deliver(messages: readonly McplIncomingChannelMessage[]): void {
+    if (this.waitingBatches >= this.config.wakeQueueLimit) {
+      this.recordDrop(messages.length);
+      return;
+    }
+    this.waitingBatches += 1;
     this.queue = this.queue
-      .then(() => this.consume(messages))
+      .then(() => {
+        // The batch stops waiting the moment it starts being consumed: the
+        // budget bounds the backlog, not the turn in flight.
+        this.waitingBatches -= 1;
+        if (this.waitingBatches === 0) this.overflowReported = false;
+        return this.consume(messages);
+      })
       .catch(() => {
         this.logger.warn("Eidoverse MCPL incoming batch failed");
       });
+  }
+
+  /** Content-free drop accounting for the bounded dispatch queue. */
+  dropStats(): EidoverseMcplWakeDropStats {
+    return { droppedBatches: this.droppedBatches, droppedMessages: this.droppedMessages };
   }
 
   /** Drain the in-flight queue and release the ambient debounce timer. */
@@ -90,6 +133,23 @@ class EidoverseMcplWakeRuntime {
     const queued = this.queue;
     this.filter.close();
     await queued;
+  }
+
+  /**
+   * One line per overflow episode, carrying counts only. A knock storm is
+   * exactly the situation where a line per dropped batch would bury the log,
+   * and the counts are cumulative so nothing is lost by staying quiet until the
+   * queue drains and the next episode begins.
+   */
+  private recordDrop(messageCount: number): void {
+    this.droppedBatches += 1;
+    this.droppedMessages += messageCount;
+    if (this.overflowReported) return;
+    this.overflowReported = true;
+    this.logger.warn(
+      `Eidoverse MCPL wake dispatch queue is full (limit ${this.config.wakeQueueLimit}); `
+      + `dropped batches ${this.droppedBatches}, dropped messages ${this.droppedMessages}`,
+    );
   }
 
   private async consume(messages: readonly McplIncomingChannelMessage[]): Promise<void> {

@@ -241,7 +241,8 @@
                 "doorUrl",
                 "featureSets",
                 "catchupWake",
-                "handshakeTimeoutMs"
+                "handshakeTimeoutMs",
+                "wakeQueueLimit"
               ],
               "properties": {
                 "doorUrl": {
@@ -264,6 +265,10 @@
                   "type": "boolean"
                 },
                 "handshakeTimeoutMs": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "wakeQueueLimit": {
                   "type": "integer",
                   "minimum": 1
                 }

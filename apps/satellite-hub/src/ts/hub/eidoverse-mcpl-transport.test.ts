@@ -36,6 +36,7 @@ function config(door: EidoverseMcplDoor, overrides: Partial<EidoverseMcplConfig>
     featureSets: FEATURE_SETS,
     effectiveCapabilities: effectiveCapabilitiesForFeatureSets(FEATURE_SETS),
     catchupWake: false,
+    wakeQueueLimit: 4,
     reconnectBaseMs: 10,
     reconnectMaxMs: 40,
     reconnectMaxAttempts: 3,
@@ -346,7 +347,7 @@ test("pushed channel traffic produces the Phase 1 wake decisions", async () => {
   const door = await EidoverseMcplDoor.start({ world: "commons", tokens: [TOKEN] });
   const client = new EidoverseMcplClient(config(door), credential);
   const target = new RecordingTarget();
-  const wake = createEidoverseMcplWakeRuntime(target, { ambientSayDebounceMs: 50, catchupWake: false }, {
+  const wake = createEidoverseMcplWakeRuntime(target, { ambientSayDebounceMs: 50, catchupWake: false, wakeQueueLimit: 4 }, {
     logger: { warn: () => undefined },
   });
   client.setIncomingHandler((messages) => wake.deliver(messages));
@@ -388,7 +389,7 @@ test("catchup replay wakes only when the operator opts in", async () => {
   const door = await EidoverseMcplDoor.start({ world: "commons", tokens: [TOKEN] });
   const client = new EidoverseMcplClient(config(door, { catchupWake: true }), credential);
   const target = new RecordingTarget();
-  const wake = createEidoverseMcplWakeRuntime(target, { ambientSayDebounceMs: 50, catchupWake: true }, {
+  const wake = createEidoverseMcplWakeRuntime(target, { ambientSayDebounceMs: 50, catchupWake: true, wakeQueueLimit: 4 }, {
     logger: { warn: () => undefined },
   });
   client.setIncomingHandler((messages) => wake.deliver(messages));
@@ -414,7 +415,7 @@ test("a malformed frame is dropped and never becomes a wake", async () => {
     logger: { info: () => undefined, warn: (message) => warnings.push(message) },
   });
   const target = new RecordingTarget();
-  const wake = createEidoverseMcplWakeRuntime(target, { ambientSayDebounceMs: 50, catchupWake: false }, {
+  const wake = createEidoverseMcplWakeRuntime(target, { ambientSayDebounceMs: 50, catchupWake: false, wakeQueueLimit: 4 }, {
     logger: { warn: () => undefined },
   });
   client.setIncomingHandler((messages) => wake.deliver(messages));
@@ -449,6 +450,13 @@ test("travel answers the door's PREPARE question while its own tool call is pend
     assert.deepEqual(door.preparedAccepted, [true], "self-initiated travel is always accepted");
     assert.equal(door.currentWorld(), "annex");
     assert.equal(client.currentWorldName(), "annex");
+    // The door's COMMIT notification retires the channel it left, so the world
+    // the body is no longer in stops being tracked on this connection.
+    assert.deepEqual(
+      await door.hostChannelIds(),
+      ["world:annex"],
+      "the host answers channels/list for the world it is actually in",
+    );
   } finally {
     await client.close();
     await door.close();
@@ -507,7 +515,7 @@ test("denying channels.lifecycle keeps the world and only costs the ability to l
     credential,
   );
   const target = new RecordingTarget();
-  const wake = createEidoverseMcplWakeRuntime(target, { ambientSayDebounceMs: 50, catchupWake: false }, {
+  const wake = createEidoverseMcplWakeRuntime(target, { ambientSayDebounceMs: 50, catchupWake: false, wakeQueueLimit: 4 }, {
     logger: { warn: () => undefined },
   });
   client.setIncomingHandler((messages) => wake.deliver(messages));
@@ -647,7 +655,7 @@ async function mcplVisionTurn(
   });
   const wake = createEidoverseMcplWakeRuntime({
     handleEidoverseAddressedUtterance: async (input) => adapter.handleAddressedUtterance(input),
-  }, { ambientSayDebounceMs: 50, catchupWake: false }, { logger: { warn } });
+  }, { ambientSayDebounceMs: 50, catchupWake: false, wakeQueueLimit: 4 }, { logger: { warn } });
   client.setIncomingHandler((messages) => wake.deliver(messages));
   try {
     await client.start();

@@ -106,6 +106,9 @@ describe('stageCurrentTurnPerception (lpxg3.1)', () => {
     expect(staged.cue.embodiment).toEqual({
       verdict: 'unknown',
       reason: 'reference_comparison_not_requested',
+      // psfn-framework-zu8d2: the enumerated twin of `reason`, and the only one
+      // of the pair the content-free summary is allowed to carry.
+      reasonCode: 'reference_comparison_not_requested',
     });
   });
 

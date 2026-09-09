@@ -74,7 +74,10 @@ import {
 } from './fleet-auth-config.js';
 import { PER_COMPANION_OWNER_FILES } from './settings-contract.js';
 import { canonicalOwnerFileMode } from './owner-file-modes.js';
-import { backfillMissingRuntimeSettingsDefaults } from './settings-owner-backfill.js';
+import {
+  applyMissingRuntimeSettingsDefaults,
+  backfillMissingRuntimeSettingsDefaults,
+} from './settings-owner-backfill.js';
 import {
   loadMcpServersConfig,
   MCP_SERVERS_FILE_NAME,
@@ -202,6 +205,17 @@ export function loadStartupRuntimeSettingsOwnerFile(
       assertRuntimeSettingsOwnerFileIsCanonical(settingsDomains);
     }
   }
+  // psfn-framework-bxnyu. The persisting backfill above runs only where an
+  // owner file may be rewritten (the chart's seed init container, the
+  // preflight). A deployment managing owner files outside the chart reaches
+  // here with a settings.json that predates the current contract, so the
+  // process adapts in memory and warns by field name instead of failing closed
+  // later, at the first call that resolves a required field.
+  runtimeSettings = applyMissingRuntimeSettingsDefaults(runtimeSettings, {
+    ...(options.seedDir ? { seedDir: options.seedDir } : {}),
+    sourceLabel: SETTINGS_FILE_NAME,
+  });
+  settingsDomains = splitSettingsByDomain(runtimeSettings);
   return {
     runtimeSettings,
     settingsDomains,

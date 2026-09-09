@@ -67,8 +67,12 @@ export const SETTINGS_VALIDATION = {
   postgresStoreReadinessRetryBackoffMs: { min: 100, max: 60000 },
   custodySnapshotRetentionDays: { min: 1, max: 3650 },
   sharedWorkspaceListPageSize: { min: 1, max: 10000 },
-  // One approved artifact is capped at 1 MiB, so the smallest legal page budget
-  // must still admit a single maximum-size artifact.
+  // One approved artifact is capped at 1 MB (MAX_ARTIFACT_BYTES = 1_000_000 in
+  // shared-workspace-store.ts, decimal, not 1 MiB), so the smallest legal page
+  // budget must still admit a single maximum-size artifact. The literal is
+  // repeated rather than imported because settings form validation must not
+  // depend on the persistence layer; the number is pinned by the round-trip
+  // test in runtime-bounds-settings.test.ts (psfn-framework-bxnyu).
   sharedWorkspaceListPageBytes: { min: 1000000, max: 1000000000 },
   memoryRefreshFailureAlertThreshold: { min: 1, max: 100 },
   intakeScreeningFailureAlertThreshold: { min: 1, max: 100 },

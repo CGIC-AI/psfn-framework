@@ -424,20 +424,26 @@ export function loadHomeAssistantConfig(): HomeAssistantConfig | null {
   };
 }
 
+/**
+ * The private control port the PSFN gateway reaches with `HUB_CONTROL_TOKEN`.
+ * It carries Home Assistant reads/calls when Home Assistant is enabled (then it
+ * is mandatory) and the companion's own world-avatar perception, movement and
+ * body verbs whenever an Eidoverse emanation is configured — so it may be
+ * configured on its own, with no Home Assistant and no device registry at all.
+ */
 export function loadHubControlConfig(requiredForHomeAssistant: boolean): HubControlConfig | null {
   const bindHost = optional("HUB_CONTROL_BIND_HOST");
   const portValue = optional("HUB_CONTROL_PORT");
   const token = optional("HUB_CONTROL_TOKEN");
   const configured = Boolean(bindHost || portValue || token);
-  if (configured && !requiredForHomeAssistant) {
-    throw new Error("HUB_CONTROL_* configuration requires HOME_ASSISTANT_ENABLED=true");
-  }
   if (!configured && !requiredForHomeAssistant) {
     return null;
   }
   if (!bindHost || !portValue || !token) {
     throw new Error(
-      "HUB_CONTROL_BIND_HOST, HUB_CONTROL_PORT, and HUB_CONTROL_TOKEN must all be set when Home Assistant is enabled",
+      requiredForHomeAssistant
+        ? "HUB_CONTROL_BIND_HOST, HUB_CONTROL_PORT, and HUB_CONTROL_TOKEN must all be set when Home Assistant is enabled"
+        : "HUB_CONTROL_BIND_HOST, HUB_CONTROL_PORT, and HUB_CONTROL_TOKEN must all be set together",
     );
   }
   if (token.length < 16) {

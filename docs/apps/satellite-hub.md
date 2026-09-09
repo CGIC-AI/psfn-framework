@@ -172,12 +172,18 @@ device assertion verification) is documented in
 [World and Presence](../channels/world-and-presence.md) and
 [Fleet Auth](../operator/fleet-auth.md).*
 
-Home Assistant is not part of the default runtime path. An opt-in integration
-(`HOME_ASSISTANT_ENABLED=true`) additionally requires `HUB_DEVICE_REGISTRY_PATH`
-and adds a Hub control server (`/internal/v1/`) that proxies device-scoped state
-reads and allowlisted `call_service` calls to a Home Assistant websocket
+The Hub control server (`/internal/v1/`, `HUB_CONTROL_BIND_HOST` / `_PORT` /
+`_TOKEN`) is the gateway's private door into the Hub. It carries two surfaces,
+either of which may be absent: the Home Assistant proxy (opt-in with
+`HOME_ASSISTANT_ENABLED=true`, device-scoped state reads and allowlisted
+`call_service` calls) and, whenever an Eidoverse emanation is configured, the
+companion's own world-avatar surface (`POST /internal/v1/world/perceive`,
+`/move`, `/act`; see [Eidoverse Hub integration](../eidoverse-hub-integration.md)).
+The control port needs neither Home Assistant nor a device registry; the world
+routes admit the control token only, never a device credential
 ([`src/ts/hub/main.ts`](/apps/satellite-hub/src/ts/hub/main.ts),
-[`env.ts`](/apps/satellite-hub/src/ts/shared/env.ts)).
+[`env.ts`](/apps/satellite-hub/src/ts/shared/env.ts),
+[`control-server.ts`](/apps/satellite-hub/src/ts/hub/home-assistant/control-server.ts)).
 
 ## Satellite model
 
@@ -637,7 +643,14 @@ Runtime config comes from the project-local `.env`. Key settings:
   `VOICE_MIN_SPEECH_CHUNKS_FOR_ENDPOINTING`, `SESSION_TTL_SECONDS`.
 - **Enrolled devices**: `HUB_DEVICE_REGISTRY_PATH` plus the complete assertion
   authority (`HUB_DEVICE_ASSERTION_ISSUER`, `_KID`, `_AUDIENCE`,
-  `_PRIVATE_KEY_PATH` mode-0600 Ed25519, `_TTL_SECONDS` 5–60).
+  `_PRIVATE_KEY_PATH` mode-0600 Ed25519, `_TTL_SECONDS` 5–60). Only external
+  devices driving the world avatar over the satellite socket need this; the
+  companion's own movement does not.
+- **Control port**: `HUB_CONTROL_BIND_HOST`, `HUB_CONTROL_PORT`,
+  `HUB_CONTROL_TOKEN` (16+ chars), all three together; required when Home
+  Assistant is enabled, optional otherwise, and the way the gateway reaches
+  the companion's Eidoverse body (`SATELLITE_HUB_CONTROL_BASE_URL` /
+  `SATELLITE_HUB_CONTROL_TOKEN` on the gateway side).
 - **Companion backplane**: `PSFN_COMPANION_BASE_URL` (typically the same
   `<gateway>/v1` value as `PSFN_API_BASE_URL`), `PSFN_COMPANION_API_KEY`,
   `PSFN_COMPANION_PREVIEW_MAX_BYTES`, `PSFN_COMPANION_RECONNECT_BASE_MS`,

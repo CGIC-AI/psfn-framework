@@ -117,7 +117,12 @@ test("world adapter attaches a stable embodied session and deduplicates addresse
   assert.equal(agent.calls[0]?.conversationId, adapter.conversationId);
   assert.equal(look.calls, 1);
   assert.deepEqual(agent.calls[0]?.history, [{ role: "user", content: "Are you here?" }]);
-  assert.deepEqual(agent.calls[0]?.channel, expectedChannel(adapter.conversationId));
+  assert.deepEqual(withoutAffordanceNote(agent.calls[0]?.channel), expectedChannel(adapter.conversationId));
+  assert.match(
+    affordanceNoteOf(agent.calls[0]?.channel) ?? "",
+    /You have a presence in this 3D world/u,
+    "every in-world turn carries the standing affordance note",
+  );
   assert.deepEqual(spoken, ["Welcome back."]);
   assert.equal(await adapter.handleAddressedUtterance({
     utteranceId: "event-17",
@@ -224,7 +229,7 @@ test("look context keeps the latest twelve notes and retains occupants", async (
     region: "market",
   });
 
-  assert.deepEqual(agent.calls[0]?.channel?.contextNotes, lookLines.slice(-12).map((text) => ({
+  assert.deepEqual(withoutAffordanceNote(agent.calls[0]?.channel)?.contextNotes, lookLines.slice(-12).map((text) => ({
     key: "eidoverse.look",
     text,
   })));
@@ -251,7 +256,7 @@ test("look failure omits notes while retaining the statically mapped default pla
 
   assert.equal(lookFailures, 1);
   assert.equal(agent.calls[0]?.channel?.placeId, "eidoverse:demo-world");
-  assert.equal(agent.calls[0]?.channel?.contextNotes, undefined);
+  assert.equal(withoutAffordanceNote(agent.calls[0]?.channel)?.contextNotes, undefined);
   assert.equal(JSON.stringify(agent.calls[0]?.channel).includes("untrusted provider detail"), false);
   adapter.disconnect();
 });
@@ -507,4 +512,16 @@ function silentTts(): StreamingTtsAdapter {
     async *streamText(): AsyncGenerator<Buffer, void, void> {},
     async close(): Promise<void> {},
   };
+}
+
+/** The standing affordance note rides every turn; strip it to compare the rest. */
+function withoutAffordanceNote(channel: PsfnChannelContext | undefined): PsfnChannelContext | undefined {
+  if (!channel) return channel;
+  const { contextNotes, ...rest } = channel;
+  const kept = (contextNotes ?? []).filter((note) => note.key !== "eidoverse.affordances");
+  return kept.length > 0 ? { ...rest, contextNotes: kept } : rest;
+}
+
+function affordanceNoteOf(channel: PsfnChannelContext | undefined): string | undefined {
+  return channel?.contextNotes?.find((note) => note.key === "eidoverse.affordances")?.text;
 }

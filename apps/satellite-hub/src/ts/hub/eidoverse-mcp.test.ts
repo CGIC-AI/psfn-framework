@@ -32,9 +32,13 @@ test("starts a real MCP stdio session and exposes only Phase-1 embodiment calls"
     await client.say("Hello from the Hub");
     assert.deepEqual(await client.pendingPings(), ["north gate", "south gate"]);
 
-    assert.equal("spawn" in client, false);
+    // Body and prop verbs are wrapped one by one; the raw tool call, entity
+    // placement, world verbs and moderation stay unreachable.
+    assert.equal(typeof client.spawn, "function");
+    assert.equal(typeof client.emote, "function");
     assert.equal("place" in client, false);
     assert.equal("worldVerb" in client, false);
+    assert.equal("kick" in client, false);
     assert.equal("callTool" in client, false);
   } finally {
     await client.close();

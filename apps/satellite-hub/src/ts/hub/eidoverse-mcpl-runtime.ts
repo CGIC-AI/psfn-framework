@@ -22,6 +22,7 @@ import { createHash } from "node:crypto";
 
 import type { EidoverseAddressedUtterance } from "./eidoverse-adapter.js";
 import {
+  MCPL_CHAT_TAG,
   classifyMcplIncomingMessage,
   incomingMessageText,
   type McplIncomingChannelMessage,
@@ -34,11 +35,19 @@ import {
 
 interface EidoverseMcplWakeTarget {
   handleEidoverseAddressedUtterance(input: EidoverseAddressedUtterance): Promise<string | null>;
+  /** Optional: learn the world's human/ai classification of a participant. */
+  observeEidoverseParticipant?(id: string, kind: "human" | "ai"): void;
 }
 
 interface EidoverseMcplWakeLogger {
   warn(message: string): void;
+  info?(message: string): void;
 }
+
+/** How many characters of a waking message the info log line carries. */
+const WAKE_LOG_TEXT_PREFIX = 120;
+/** Producer tag on the Hub's own echoed speech (eidoverse `chat:from-agent`). */
+const FROM_AGENT_TAG = "chat:from-agent";
 
 export interface EidoverseMcplWakeConfig extends EidoverseWakeFilterConfig {
   /** False suppresses replayed mentions after a reconnect. See the config loader. */
@@ -48,6 +57,14 @@ export interface EidoverseMcplWakeConfig extends EidoverseWakeFilterConfig {
    * consumed does not occupy the budget; only batches still waiting do.
    */
   wakeQueueLimit: number;
+  /**
+   * Names this companion answers to in-world besides what the door tags: the
+   * configured display name and any ids. The door tags `chat:mention` by
+   * participant id only, so a visitor who writes the display name of a
+   * companion whose id differs (`artie-kube` shown as "Artie") would otherwise
+   * be ambient. Matched case-insensitively, `@` optional, punctuation after.
+   */
+  agentNames?: readonly string[];
 }
 
 /** Content-free wake-dispatch drop accounting: counts, never content. */
@@ -168,23 +185,62 @@ class EidoverseMcplWakeRuntime {
 
   private async consume(messages: readonly McplIncomingChannelMessage[]): Promise<void> {
     for (const message of messages) {
-      const kind = classifyMcplIncomingMessage(message, {
+      const speaker = speakerOf(message);
+      if (speaker) this.target.observeEidoverseParticipant?.(speaker.id, speaker.kind);
+      let kind = classifyMcplIncomingMessage(message, {
         catchupKeepsAddressing: this.config.catchupWake,
       });
-      if (!kind) continue;
       const pingLine = incomingMessageText(message);
       if (!pingLine) continue;
-      await this.filter.accept({ kind, pingLine });
+      let reason = kind ? `tag:${(message.tags ?? []).filter((tag) => typeof tag === "string").join(",")}` : "";
+      if (kind === "say" && this.addressedByName(message, pingLine)) {
+        kind = "mention";
+        reason = "name-match";
+      }
+      if (!kind) continue;
+      await this.filter.accept({
+        kind,
+        pingLine,
+        messageId: message.messageId,
+        author: message.author,
+        reason,
+        ...(speaker ? { speaker } : {}),
+      });
     }
+  }
+
+  /**
+   * Hub-side addressing for ambient chat the door did not tag as a mention.
+   * Only plain `chat:ambient` chat qualifies (acts, weather and world changes
+   * are not speech), the Hub's own echoed lines never do, and a message whose
+   * author IS this companion is never a wake.
+   */
+  private addressedByName(message: McplIncomingChannelMessage, text: string): boolean {
+    const names = (this.config.agentNames ?? []).map((name) => name.trim()).filter(Boolean);
+    if (names.length === 0) return false;
+    const tags = (message.tags ?? []).filter((tag): tag is string => typeof tag === "string");
+    if (!tags.includes(MCPL_CHAT_TAG.ambient) || tags.includes(FROM_AGENT_TAG)) return false;
+    // Acts, weather, presence and digests ride `chat:ambient` too; only plain
+    // speech (no producer tag) can be an unrecognised address.
+    if (tags.some((tag) => tag.startsWith("eidoverse:"))) return false;
+    const author = message.author;
+    if (isSelf(author, names)) return false;
+    return mentionsAnyName(text, names);
   }
 
   private async handleWake(event: EidoverseWakeEvent): Promise<void> {
     const utteranceId = deterministicUtteranceId(this.nextWakeSequence, event);
     this.nextWakeSequence += 1;
+    this.logger.info?.(
+      `Eidoverse wake: message ${event.messageId ?? "?"} from ${event.author?.id ?? "?"} `
+      + `(${event.speaker?.kind ?? "unknown"}) kind=${event.kind} reason=${event.reason ?? "tag"} `
+      + `text=${JSON.stringify(event.pingLine.slice(0, WAKE_LOG_TEXT_PREFIX))}`,
+    );
     try {
       await this.target.handleEidoverseAddressedUtterance({
         utteranceId,
         userText: event.pingLine,
+        ...(event.speaker ? { speaker: event.speaker } : {}),
       });
     } catch {
       this.logger.warn("Eidoverse MCPL wake turn failed");
@@ -248,4 +304,49 @@ function deterministicUtteranceId(sequence: number, event: EidoverseWakeEvent): 
     .update(event.pingLine, "utf8")
     .digest("hex");
   return `eidoverse-mcpl:${sequence}:${digest}`;
+}
+
+function isSelf(author: { id: string; name: string } | undefined, names: readonly string[]): boolean {
+  if (!author) return false;
+  const candidates = [author.id, author.name].filter((v): v is string => typeof v === "string").map((v) => v.toLowerCase());
+  return names.some((name) => candidates.includes(name.toLowerCase()));
+}
+
+/**
+ * True when `text` addresses one of `names`: case-insensitive, an optional
+ * leading `@`, and any punctuation after the name (`@Artie,`, `artie:`,
+ * `hey Artie!`). A name embedded in a longer word (`artiest`) does not count.
+ */
+export function mentionsAnyName(text: string, names: readonly string[]): boolean {
+  for (const name of names) {
+    const trimmed = name.trim();
+    if (!trimmed) continue;
+    const pattern = new RegExp(`(^|[^\\p{L}\\p{N}@_-])@?${escapeRegExp(trimmed)}(?![\\p{L}\\p{N}_-])`, "iu");
+    if (pattern.test(text)) return true;
+  }
+  return false;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+/**
+ * The world's own classification of a chat author. The door tags every line
+ * an agent wrote `chat:from-agent`; a chat line without it came from a human.
+ * World-authored events (acts, presence, weather) name no speaker.
+ */
+export function speakerOf(
+  message: McplIncomingChannelMessage,
+): { id: string; name: string; kind: "human" | "ai" } | null {
+  const author = message.author;
+  if (!author || typeof author.id !== "string" || !author.id || author.id === "world") return null;
+  const tags = (message.tags ?? []).filter((tag): tag is string => typeof tag === "string");
+  if (!tags.some((tag) => tag.startsWith("chat:"))) return null;
+  if (tags.some((tag) => tag.startsWith("eidoverse:") && tag !== "eidoverse:catchup" && tag !== "eidoverse:whisper")) return null;
+  return {
+    id: author.id,
+    name: typeof author.name === "string" && author.name ? author.name : author.id,
+    kind: tags.includes(FROM_AGENT_TAG) ? "ai" : "human",
+  };
 }

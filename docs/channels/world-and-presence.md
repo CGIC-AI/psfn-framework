@@ -319,12 +319,20 @@ revalidates the affordance
 ([`src/boundary/integrations/world/ops.ts`](/src/boundary/integrations/world/ops.ts),
 [`src/boundary/integrations/world/gateway-ops.ts`](/src/boundary/integrations/world/gateway-ops.ts)).
 
+**Eidoverse plane (S13 MOVE)** — a place whose entry carries an `eidoverse`
+binding is somewhere the companion's world-avatar body can go: `move` there
+travels/walks the body through the Satellite Hub control port, `perceive`
+reports the 3D scene, and `act` carries body and creation verbs. See
+[Eidoverse Hub integration](../eidoverse-hub-integration.md).
+
 **Control gating** — three independent, fail-closed gates guard
-`action=control` (`perceive`/`list`/`move` gate read-tier and are unaffected):
+`action=control` (`perceive`/`list`/`move` and the body verbs of `act` gate
+read-tier and are unaffected):
 
 1. **Capability token** `world.control` — enforced outside the tool by the
-   capability gate (`resolveWorldRequirement`: `perceive`/`list`/`move` →
-   `world.read`, `control` → `world.control`
+   capability gate (`resolveWorldRequirement`: `perceive`/`list`/`move` and
+   `act` with a body verb → `world.read`, `control` and `act` with
+   `spawn`/`remove`/`set_avatar` → `world.control`
    ([`src/system/capabilities/requirements.ts`](/src/system/capabilities/requirements.ts))).
 2. **Runtime master gate** `WORLD_CONTROL_RUNTIME_ENABLED` — an embedding may
    override it to false as an emergency stop without disabling perception.

@@ -17,11 +17,22 @@ export interface EidoversePingInput {
   pingLine: string;
   /** Producer advice is retained as evidence only; the Hub table remains authoritative. */
   producerSuggestedTreatment?: unknown;
+  /** Wire identity of the message, when the transport has one (MCPL). */
+  messageId?: string;
+  author?: { id: string; name: string };
+  /** Why the Hub treats this as addressed (`tag:<tags>` or `name-match`). */
+  reason?: string;
+  /** The speaker with the world's human/ai classification, when it is chat. */
+  speaker?: { id: string; name: string; kind: "human" | "ai" };
 }
 
 export interface EidoverseWakeEvent {
   kind: EidoversePingKind;
   pingLine: string;
+  messageId?: string;
+  author?: { id: string; name: string };
+  reason?: string;
+  speaker?: { id: string; name: string; kind: "human" | "ai" };
 }
 
 export interface EidoverseWakeFilterConfig {
@@ -83,6 +94,10 @@ export class EidoverseWakeFilter {
     const event: EidoverseWakeEvent = {
       kind: input.kind,
       pingLine: input.pingLine,
+      ...(input.messageId ? { messageId: input.messageId } : {}),
+      ...(input.author ? { author: input.author } : {}),
+      ...(input.reason ? { reason: input.reason } : {}),
+      ...(input.speaker ? { speaker: input.speaker } : {}),
     };
     switch (this.treatmentFor(input.kind)) {
       case "wake":

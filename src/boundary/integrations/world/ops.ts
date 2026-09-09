@@ -1,6 +1,12 @@
 import type {
   HomeAssistantCallServiceResult,
   HomeAssistantGetStatesResult,
+  WorldAvatarActParams,
+  WorldAvatarActResult,
+  WorldAvatarMoveParams,
+  WorldAvatarMoveResult,
+  WorldAvatarPerceiveParams,
+  WorldAvatarPerceiveResult,
 } from '../../gateway/protocol.js';
 
 // ── Agent-side world operations port (Sprint 10, Workstream C2) ──
@@ -36,4 +42,12 @@ export interface WorldCallServiceParams {
 export interface WorldOperations {
   getStates(params?: WorldGetStatesParams): Promise<HomeAssistantGetStatesResult>;
   callService(params: WorldCallServiceParams): Promise<HomeAssistantCallServiceResult>;
+  /**
+   * The companion's own Eidoverse body (S13 MOVE). Optional: an embedding
+   * without a Satellite Hub leaves these unwired and the tool fails closed
+   * on an Eidoverse place instead of pretending the body moved.
+   */
+  avatarPerceive?(params?: WorldAvatarPerceiveParams): Promise<WorldAvatarPerceiveResult>;
+  avatarMove?(params: WorldAvatarMoveParams): Promise<WorldAvatarMoveResult>;
+  avatarAct?(params: WorldAvatarActParams): Promise<WorldAvatarActResult>;
 }

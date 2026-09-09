@@ -8,20 +8,35 @@ import {
   type EidoversePlaceResolution,
 } from "./eidoverse-place-map.js";
 import {
+  type EidoverseSpeaker,
+  type EidoverseSpeakerKind,
   type EmbodiedSessionRegistry,
   type PsfnChannelContext,
   type SatelliteAttachmentOwnership,
   type VisionCaptureImage,
 } from "./embodied-session.js";
 import {
+  EidoverseBodyActionRejectedError,
   parseEidoverseBodyAction,
+  type EidoverseBodyRunResult,
   type EidoverseBodyRunner,
 } from "./eidoverse-body-runner.js";
+import {
+  approachPosition,
+  findEidoversePerson,
+  parseEidoverseLook,
+  type EidoverseLookPerception,
+} from "./eidoverse-look-parse.js";
 import type { FrameworkAgentAdapter } from "./framework-agent.js";
 import { EIDOVERSE_SAY_MAX_TEXT_LENGTH } from "./eidoverse-mcp.js";
 import type { SessionStore } from "./session-store.js";
 
 const MAX_EIDOVERSE_CONTEXT_NOTES = 12;
+/** How long the companion's own `move` waits for the body to arrive before
+ *  answering "walking" and letting the outcome reach a later turn. Must fit
+ *  inside the gateway's per-request budget with room for a travel round trip. */
+const DEFAULT_MOVE_WAIT_MS = 6_000;
+const DEFAULT_ACT_WAIT_MS = 4_000;
 
 /**
  * The door's own world-name grammar. Checked here so a malformed destination is
@@ -41,6 +56,8 @@ export interface EidoverseAddressedUtterance {
   utteranceId: string;
   userText: string;
   region?: string;
+  /** Who spoke, with the world's human/ai classification. */
+  speaker?: EidoverseSpeaker;
 }
 
 export interface EidoverseLookSource {
@@ -82,7 +99,48 @@ export type EidoverseTravelOutcome =
 
 export interface EidoverseEmbodiedSessionLogger {
   warn(message: string): void;
+  info?(message: string): void;
 }
+
+/** The companion's own reading of the world it has a body in. */
+export interface EidoverseAvatarPerception extends EidoverseLookPerception {
+  world: string;
+  placeId?: string;
+  region?: string;
+  capturedAt: string;
+}
+
+export interface EidoverseAvatarMoveRequest {
+  /** Destination world; omitted or equal to the current world ⇒ no travel. */
+  world?: string;
+  /** Door region label the destination belongs to (place-map key). */
+  region?: string;
+  /** Where to stand, in the destination world's ground plane. */
+  position?: { x: number; z: number };
+  /** Walk to this participant's current position instead (id, `@` tolerated). */
+  participant?: string;
+  /** Bounded wait for arrival before answering. */
+  waitMs?: number;
+}
+
+export type EidoverseAvatarWalkStatus = "arrived" | "walking" | "interrupted" | "failed" | "already_there";
+
+export type EidoverseAvatarMoveOutcome =
+  | {
+    accepted: true;
+    world: string;
+    placeId?: string;
+    walk?: { status: EidoverseAvatarWalkStatus; x?: number; z?: number; target?: { x: number; z: number } };
+  }
+  | {
+    accepted: false;
+    world: string;
+    reason: EidoverseTravelRefusal | "not_configured" | "participant_unknown" | "participant_position_unknown" | "position_unknown";
+  };
+
+export type EidoverseAvatarActOutcome =
+  | { accepted: true; verb: string; outcome: EidoverseBodyRunResult["outcome"] | "pending"; reply: string | null }
+  | { accepted: false; verb: string; reason: "not_configured" | "not_allowlisted" | "unavailable" };
 
 export interface EidoverseEmbodiedSessionDependencies {
   embodiedSessions: EmbodiedSessionRegistry;
@@ -128,6 +186,20 @@ export class EidoverseEmbodiedSessionAdapter {
    * first turn that carries it. See `channelContext`.
    */
   private arrivalNote: { key: string; text: string } | null = null;
+  /**
+   * The region the body last walked to on purpose. The MCPL wake path never
+   * carries a region, so without this the turn after a deliberate walk to the
+   * plaza would resolve the world's default place and quietly undo the move.
+   * Cleared by travel and by a door resync.
+   */
+  private currentRegion: string | undefined;
+  /**
+   * Who is human and who is an AI, as the WORLD says (the door tags
+   * agent-authored chat `chat:from-agent`; untagged chat is a human). The
+   * roster feeds perception and the standing note. Anyone the world has not
+   * classified is assumed an AI (operator rule).
+   */
+  private readonly participantKinds = new Map<string, EidoverseSpeakerKind>();
   private readonly consumedUtteranceIds = new Set<string>();
   private readonly activeReplies = new Set<AbortController>();
   private attachmentOwnership: SatelliteAttachmentOwnership | null = null;
@@ -202,6 +274,159 @@ export class EidoverseEmbodiedSessionAdapter {
     body.submit(parseEidoverseBodyAction(name, args));
   }
 
+  /** The world the body is in right now, as the Hub believes it. */
+  currentWorld(): string {
+    return this.currentWorldName;
+  }
+
+  /** Record the world's classification of one participant (see `participantKinds`). */
+  observeParticipant(id: string, kind: EidoverseSpeakerKind): void {
+    const key = id.trim().toLowerCase();
+    if (key) this.participantKinds.set(key, kind);
+  }
+
+  /** The world's classification of a participant, or the assumed default. */
+  participantKind(id: string): { kind: EidoverseSpeakerKind; kindSource: "world" | "assumed" } {
+    const known = this.participantKinds.get(id.trim().toLowerCase());
+    return known ? { kind: known, kindSource: "world" } : { kind: "ai", kindSource: "assumed" };
+  }
+
+  /**
+   * The companion's own look: the door's prose lifted into positions the
+   * model can reason about, plus the place the Hub maps the body to.
+   */
+  async perceive(): Promise<EidoverseAvatarPerception> {
+    this.requireConnection();
+    const parsed = parseEidoverseLook(await this.deps.look.look());
+    const place = this.resolvePlace(this.currentRegion);
+    return {
+      ...parsed,
+      people: parsed.people.map((person) => ({ ...person, ...this.participantKind(person.id) })),
+      world: this.currentWorldName,
+      ...(place.placeId ? { placeId: place.placeId } : {}),
+      ...(this.currentRegion ? { region: this.currentRegion } : {}),
+      capturedAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * The companion-initiated move: travel when the destination is another
+   * world, then walk when there is somewhere to stand. Waits a bounded time
+   * for arrival so a short walk answers on the same turn; a longer one answers
+   * "walking" and its outcome becomes a later turn's note. Nothing here needs
+   * a Hub device: the companion is moving its own body.
+   */
+  async moveTo(input: EidoverseAvatarMoveRequest): Promise<EidoverseAvatarMoveOutcome> {
+    this.requireConnection();
+    const destinationWorld = input.world?.trim();
+    if (destinationWorld && destinationWorld !== this.currentWorldName) {
+      const travelled = await this.travelTo(destinationWorld);
+      if (!travelled.accepted) return travelled;
+    }
+    const region = normalizeOptional(input.region);
+    let target = input.position ? { x: input.position.x, z: input.position.z } : null;
+    if (!target && input.participant) {
+      const perception = parseEidoverseLook(await this.deps.look.look());
+      const person = findEidoversePerson(perception, input.participant);
+      if (!person) return this.refuseMove("participant_unknown");
+      if (!person.positionKnown || person.x === undefined || person.z === undefined) {
+        return this.refuseMove("participant_position_unknown");
+      }
+      const self = perception.self;
+      if (!self?.positionKnown || self.x === undefined || self.z === undefined) {
+        return this.refuseMove("position_unknown");
+      }
+      const approach = approachPosition({ x: self.x, z: self.z }, { x: person.x, z: person.z });
+      if (!approach) {
+        this.currentRegion = region;
+        return {
+          accepted: true,
+          world: this.currentWorldName,
+          ...this.placeIdFor(this.currentWorldName, region),
+          walk: { status: "already_there", x: self.x, z: self.z, target: { x: person.x, z: person.z } },
+        };
+      }
+      target = approach;
+    }
+    if (!target) {
+      // Travel-only (or a no-op move to the world the body is already in).
+      this.currentRegion = region;
+      return { accepted: true, world: this.currentWorldName, ...this.placeIdFor(this.currentWorldName, region) };
+    }
+    if (!Number.isFinite(target.x) || !Number.isFinite(target.z)) {
+      return this.refuseMove("position_unknown");
+    }
+    const body = this.deps.body;
+    if (!body) return this.refuseMove("not_configured");
+    const run = body.start({ name: "walk_to", x: target.x, z: target.z, run: false });
+    const result = await withBoundedWait(run, input.waitMs ?? DEFAULT_MOVE_WAIT_MS);
+    if (result === "pending") {
+      body.noteWhenDone(run);
+      this.currentRegion = region;
+      this.log(`Eidoverse body walk_to (${target.x}, ${target.z}) in world "${this.currentWorldName}" still walking after bounded wait`);
+      return {
+        accepted: true,
+        world: this.currentWorldName,
+        ...this.placeIdFor(this.currentWorldName, region),
+        walk: { status: "walking", target },
+      };
+    }
+    const status: EidoverseAvatarWalkStatus = result.outcome === "arrived"
+      ? "arrived"
+      : result.outcome === "interrupted-or-timed-out" ? "interrupted" : "failed";
+    if (status === "arrived") this.currentRegion = region;
+    const position = result.position;
+    this.log(
+      `Eidoverse body walk_to ${status}${position ? ` at (${position.x}, ${position.z})` : ""} in world "${this.currentWorldName}"`,
+    );
+    return {
+      accepted: true,
+      world: this.currentWorldName,
+      ...this.placeIdFor(this.currentWorldName, status === "arrived" ? region : this.currentRegion),
+      walk: { status, ...(position ?? {}), target },
+    };
+  }
+
+  /**
+   * One body or creation verb on the companion's own initiative, awaited for a
+   * bounded time. The allowlist and argument shapes are the body runner's; a
+   * verb the transport cannot reach answers `unavailable`, never a guess.
+   */
+  async act(verb: string, args: unknown = {}, waitMs = DEFAULT_ACT_WAIT_MS): Promise<EidoverseAvatarActOutcome> {
+    this.requireConnection();
+    const body = this.deps.body;
+    if (!body) return { accepted: false, verb, reason: "not_configured" };
+    let run: Promise<EidoverseBodyRunResult>;
+    try {
+      run = body.start(parseEidoverseBodyAction(verb, args));
+    } catch (error) {
+      if (error instanceof EidoverseBodyActionRejectedError) {
+        return { accepted: false, verb, reason: "not_allowlisted" };
+      }
+      return { accepted: false, verb, reason: "unavailable" };
+    }
+    const result = await withBoundedWait(run, waitMs);
+    if (result === "pending") {
+      body.noteWhenDone(run);
+      return { accepted: true, verb, outcome: "pending", reply: null };
+    }
+    this.log(`Eidoverse body ${verb} ${result.outcome} in world "${this.currentWorldName}"`);
+    return { accepted: true, verb, outcome: result.outcome, reply: result.reply };
+  }
+
+  private refuseMove(
+    reason: Extract<EidoverseAvatarMoveOutcome, { accepted: false }>["reason"],
+  ): EidoverseAvatarMoveOutcome {
+    (this.deps.logger ?? console).warn(`Eidoverse move refused: ${reason}`);
+    return { accepted: false, world: this.currentWorldName, reason };
+  }
+
+  private log(message: string): void {
+    const logger = this.deps.logger;
+    if (logger?.info) logger.info(message);
+    else if (!logger) console.info(message);
+  }
+
   async handleAddressedUtterance(input: EidoverseAddressedUtterance): Promise<string | null> {
     const ownership = this.requireConnection();
     const utteranceId = requireNonEmpty(input.utteranceId, "Eidoverse utterance ID");
@@ -216,7 +441,7 @@ export class EidoverseEmbodiedSessionAdapter {
       this.lookContextNotes(),
       this.captureSnapshot(),
     ]);
-    const channel = this.channelContext(input.region, ownership, lookNotes, capture);
+    const channel = this.channelContext(input.region, ownership, lookNotes, capture, input.speaker);
     const controller = new AbortController();
     this.activeReplies.add(controller);
     this.deps.sessions.append(this.conversationId, { role: "user", content: userText });
@@ -279,6 +504,7 @@ export class EidoverseEmbodiedSessionAdapter {
       return this.refuseTravel("refused");
     }
     this.currentWorldName = destination;
+    this.currentRegion = undefined;
     this.arrivalNote = {
       key: "eidoverse.travel",
       text: `You travelled to the Eidoverse world ${JSON.stringify(destination)}.`,
@@ -305,6 +531,7 @@ export class EidoverseEmbodiedSessionAdapter {
     }
     if (authoritative === this.currentWorldName) return;
     this.currentWorldName = authoritative;
+    this.currentRegion = undefined;
     // An arrival note for a world the body is no longer in is worse than no
     // note: it would narrate a move the reconnect has already undone.
     this.arrivalNote = null;
@@ -316,10 +543,49 @@ export class EidoverseEmbodiedSessionAdapter {
     return { accepted: false, world: this.currentWorldName, reason };
   }
 
-  private placeIdFor(world: string): { placeId?: string } {
+  private placeIdFor(world: string, region?: string): { placeId?: string } {
     if (!this.config.placeMap) return {};
-    const placeId = resolveEidoversePlace(this.config.placeMap, world).placeId;
+    const placeId = resolveEidoversePlace(this.config.placeMap, world, region).placeId;
     return placeId ? { placeId } : {};
+  }
+
+  /**
+   * The one line that tells the model it has a body here and how to use it.
+   * Injected every turn (the arrival note is one-shot by design; this is not
+   * an event but a standing fact), naming only the verbs this Hub actually
+   * wires so the model never reaches for a surface that is not there.
+   */
+  private affordanceNote(placeId: string | undefined): { key: string; text: string } {
+    const canWalk = Boolean(this.deps.body);
+    const canTravel = Boolean(this.deps.travel);
+    const here = placeId ? ` (placeId ${JSON.stringify(placeId)})` : "";
+    const verbs: string[] = [
+      `action=perceive${placeId ? ` with placeId ${JSON.stringify(placeId)}` : ""} to look around: your own position, everyone here with their id and (x, z), and the things placed nearby`,
+    ];
+    if (canWalk) {
+      verbs.push(
+        'action=move with participant:"<id>" to walk over to someone, position:{x,z} to walk to a spot, or placeId to go to a mapped place',
+        "action=act with verb face|stop|emote|posture (and spawn|remove|set_avatar when your tier allows) for body verbs",
+      );
+    }
+    if (canTravel) verbs.push("action=move with the placeId of a place in another world to travel there");
+    const body = canWalk
+      ? "You have a body in this 3D world and can explore it: walk to people and places, look around, and act."
+      : "You have a presence in this 3D world and can look around.";
+    const ais = [...this.participantKinds.entries()].filter(([, kind]) => kind === "ai").map(([id]) => JSON.stringify(id));
+    const humans = [...this.participantKinds.entries()].filter(([, kind]) => kind === "human").map(([id]) => JSON.stringify(id));
+    const roster = " Everyone here is an AI unless the world marks them human"
+      + (humans.length > 0 ? `; humans so far: ${humans.join(", ")}` : "")
+      + (ais.length > 0 ? `; other AI companions: ${ais.join(", ")}` : "")
+      + ". Answer AIs briefly and do not keep a conversation going with them on your own.";
+    return {
+      key: "eidoverse.affordances",
+      text: `${body} You are in the Eidoverse world ${JSON.stringify(this.currentWorldName)}${here}. `
+        + "In-world messages are prefixed by the speaker's id."
+        + roster
+        + " Use the world tool: "
+        + `${verbs.join("; ")}. A move answers whether you arrived; a longer walk reports on a later turn. Use these on your own initiative, not only when asked.`,
+    };
   }
 
   /**
@@ -342,8 +608,9 @@ export class EidoverseEmbodiedSessionAdapter {
     ownership: SatelliteAttachmentOwnership,
     lookNotes: NonNullable<PsfnChannelContext["contextNotes"]>,
     capture: VisionCaptureImage | null,
+    speaker?: EidoverseSpeaker,
   ): PsfnChannelContext {
-    const normalizedRegion = normalizeOptional(region);
+    const normalizedRegion = normalizeOptional(region) ?? this.currentRegion;
     const place = this.resolvePlace(normalizedRegion);
     const base = this.deps.embodiedSessions.getContext(
       this.conversationId,
@@ -360,10 +627,16 @@ export class EidoverseEmbodiedSessionAdapter {
     if (place.contextNote) {
       contextNotes.push({ key: "eidoverse.place", text: place.contextNote });
     }
-    const boundedContextNotes = contextNotes.slice(-MAX_EIDOVERSE_CONTEXT_NOTES);
+    // Appended after the bound: the look budget stays twelve lines and the
+    // standing "you have a body here" note is never the one dropped.
+    const boundedContextNotes = [
+      ...contextNotes.slice(-MAX_EIDOVERSE_CONTEXT_NOTES),
+      this.affordanceNote(place.placeId),
+    ];
     return {
       ...base,
       ...(place.placeId ? { placeId: place.placeId } : {}),
+      ...(speaker ? { speaker } : {}),
       // One first-person frame per turn, carried on the same seam Voxta uses:
       // stripped metadata for the outbound channel record, the image itself
       // only for the model turn.
@@ -446,4 +719,16 @@ function stripVisionCaptureImageData(
 function normalizeOptional(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized ? normalized : undefined;
+}
+
+async function withBoundedWait<T>(run: Promise<T>, waitMs: number): Promise<T | "pending"> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<"pending">((resolve) => {
+    timer = setTimeout(() => resolve("pending"), Math.max(0, waitMs));
+  });
+  try {
+    return await Promise.race([run, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }

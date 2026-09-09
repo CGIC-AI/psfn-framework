@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { JSONRPCErrorException } from 'json-rpc-2.0';
 import type {
   HomeAssistantCallServiceParams,
   HomeAssistantCallServiceResult,
@@ -9,19 +8,14 @@ import type {
   HomeAssistantGetStatesResult,
   HomeAssistantState,
 } from '../protocol.js';
-import { GatewayErrors } from '../protocol.js';
 import type { GatewayMethodRuntime } from './types.js';
 import { defineGatedMethod } from './types.js';
 import { registerGatedDescriptors } from './register.js';
 import { gatewayMethodParamDecoders } from './params.js';
-import { resolveOptionalEnvCredential } from '../../custody/credential-vault.js';
 import { isRecord } from '../../../shared/utils/types.js';
-import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { worldAutonomyLimiter } from '../world-autonomy-limiter.js';
+import { denyPolicy as deny, providerError, requestSatelliteHub } from './satellite-hub-transport.js';
 
-const HUB_CONTROL_TOKEN_ENV = 'SATELLITE_HUB_CONTROL_TOKEN';
-const MAX_RESPONSE_BYTES = 1_000_000;
-const MAX_REQUEST_BYTES = 64 * 1024;
 const MAX_ENTITY_IDS = 50;
 const ENTITY_ID_PATTERN = /^[a-z][a-z0-9_]*\.[A-Za-z0-9_]+$/u;
 const DOMAIN_SERVICE_PATTERN = /^[a-z][a-z0-9_]*$/u;
@@ -29,34 +23,14 @@ const ALLOWED_DOMAINS = new Set(['light', 'fan', 'switch', 'media_player']);
 const ALLOWED_SERVICES = new Set(['turn_on', 'turn_off', 'toggle']);
 const ALLOWED_INTENTS = new Set(['direct', 'presence_enter', 'presence_exit', 'attention', 'sleep', 'wake']);
 
-function deny(message: string): never {
-  throw new JSONRPCErrorException(message, GatewayErrors.POLICY_DENIED);
-}
-
-function providerError(message: string): never {
-  throw new JSONRPCErrorException(message, GatewayErrors.PROVIDER_ERROR);
-}
-
-function resolveHub(runtime: GatewayMethodRuntime): { baseUrl: URL; token: string } {
-  const config = runtime.policyConfig.homeAssistant;
-  if (config?.enabled !== true || !config.hubBaseUrl?.trim() || config.tokenConfigured !== true) {
-    deny('Satellite Hub world transport is not fully configured');
-  }
-  let baseUrl: URL;
-  try {
-    baseUrl = new URL(config.hubBaseUrl);
-  } catch {
-    deny('Satellite Hub control URL is invalid');
-  }
-  if (!['http:', 'https:'].includes(baseUrl.protocol) || baseUrl.username || baseUrl.password) {
-    deny('Satellite Hub control URL must be an http(s) URL without embedded credentials');
-  }
-  baseUrl.search = '';
-  baseUrl.hash = '';
-  baseUrl.pathname = baseUrl.pathname.replace(/\/+$/u, '');
-  const token = resolveOptionalEnvCredential(runtime.credentialVault, HUB_CONTROL_TOKEN_ENV);
-  if (!token) deny(`Satellite Hub control credential is missing (${HUB_CONTROL_TOKEN_ENV})`);
-  return { baseUrl, token };
+/** Home Assistant methods ride the shared Hub transport and require HA to be enabled. */
+async function requestHub(
+  runtime: GatewayMethodRuntime,
+  path: string,
+  method: 'GET' | 'POST',
+  body?: Record<string, unknown>,
+): Promise<unknown> {
+  return requestSatelliteHub(runtime, path, method, body, { requireHomeAssistant: true });
 }
 
 function parseEntityId(value: unknown, field: string): string {
@@ -111,71 +85,6 @@ function resolveRegisteredAffordance(runtime: GatewayMethodRuntime, params: Home
   if (affordance.control && !affordance.control.includes(command)) {
     deny('world control command is not allowed by the registered affordance');
   }
-}
-
-async function requestHub(
-  runtime: GatewayMethodRuntime,
-  path: string,
-  method: 'GET' | 'POST',
-  body?: Record<string, unknown>,
-): Promise<unknown> {
-  const { baseUrl, token } = resolveHub(runtime);
-  const url = new URL(baseUrl);
-  url.pathname = `${baseUrl.pathname.replace(/\/+$/u, '')}${path}`;
-  const encoded = body ? JSON.stringify(body) : undefined;
-  if (encoded && Buffer.byteLength(encoded) > MAX_REQUEST_BYTES) deny('Satellite Hub request is too large');
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      method,
-      redirect: 'error',
-      signal: AbortSignal.timeout(10_000),
-      headers: {
-        Accept: 'application/json',
-        Authorization: `Bearer ${token}`,
-        ...(encoded ? { 'Content-Type': 'application/json' } : {}),
-      },
-      ...(encoded ? { body: encoded } : {}),
-    });
-  } catch (error) {
-    providerError(`Satellite Hub request failed: ${toErrorMessage(error)}`);
-  }
-  const bytes = await readBoundedResponse(response);
-  let payload: unknown;
-  try {
-    payload = JSON.parse(bytes.toString('utf8')) as unknown;
-  } catch {
-    providerError('Satellite Hub returned malformed JSON');
-  }
-  if (!response.ok) {
-    const detail = isRecord(payload) && isRecord(payload.error) && typeof payload.error.message === 'string'
-      ? payload.error.message
-      : `${response.status} ${response.statusText}`;
-    providerError(`Satellite Hub rejected world request: ${detail}`);
-  }
-  return payload;
-}
-
-async function readBoundedResponse(response: Response): Promise<Buffer> {
-  const declaredLength = Number(response.headers.get('content-length'));
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_RESPONSE_BYTES) {
-    providerError('Satellite Hub response is too large');
-  }
-  if (!response.body) return Buffer.alloc(0);
-  const reader = response.body.getReader();
-  const chunks: Buffer[] = [];
-  let total = 0;
-  while (total <= MAX_RESPONSE_BYTES) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > MAX_RESPONSE_BYTES) {
-      await reader.cancel();
-      providerError('Satellite Hub response is too large');
-    }
-    chunks.push(Buffer.from(value));
-  }
-  return Buffer.concat(chunks, total);
 }
 
 function parseStates(payload: unknown): HomeAssistantState[] {

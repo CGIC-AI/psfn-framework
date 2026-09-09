@@ -40,7 +40,17 @@ type EidoverseToolRequest =
   | { name: "pending_pings"; arguments: Record<string, never>; timeoutMs?: number }
   | { name: "walk_to"; arguments: { x: number; z: number; run?: boolean }; timeoutMs?: number }
   | { name: "face"; arguments: { target: string } | { x: number; z: number }; timeoutMs?: number }
-  | { name: "stop"; arguments: Record<string, never>; timeoutMs?: number };
+  | { name: "stop"; arguments: Record<string, never>; timeoutMs?: number }
+  | { name: "emote"; arguments: { name: string }; timeoutMs?: number }
+  | { name: "posture"; arguments: { kind: string }; timeoutMs?: number }
+  | { name: "whisper"; arguments: { to: string; text: string }; timeoutMs?: number }
+  | {
+    name: "spawn";
+    arguments: { lib?: string; query?: string; x?: number; z?: number; yaw?: number; id?: string };
+    timeoutMs?: number;
+  }
+  | { name: "remove"; arguments: { id: string }; timeoutMs?: number }
+  | { name: "set_avatar"; arguments: { avatar: string }; timeoutMs?: number };
 
 interface EidoverseMcpSession {
   connect(): Promise<void>;
@@ -144,6 +154,37 @@ export class EidoverseMcpClient {
 
   async stop(): Promise<string> {
     return this.requestText({ name: "stop", arguments: {} });
+  }
+
+  async faceAt(x: number, z: number): Promise<string> {
+    return this.requestText({ name: "face", arguments: { x, z } });
+  }
+
+  async emote(name: string): Promise<string> {
+    return this.requestText({ name: "emote", arguments: { name } });
+  }
+
+  async posture(kind: string): Promise<string> {
+    return this.requestText({ name: "posture", arguments: { kind } });
+  }
+
+  async whisper(to: string, text: string): Promise<string> {
+    if (text.length > EIDOVERSE_SAY_MAX_TEXT_LENGTH || this.containsSensitiveValue(text)) {
+      throw new EidoverseMcpRequestError("Eidoverse MCP whisper request failed");
+    }
+    return this.requestText({ name: "whisper", arguments: { to, text } });
+  }
+
+  async spawn(args: { lib?: string; query?: string; x?: number; z?: number; yaw?: number; id?: string }): Promise<string> {
+    return this.requestText({ name: "spawn", arguments: { ...args } });
+  }
+
+  async remove(id: string): Promise<string> {
+    return this.requestText({ name: "remove", arguments: { id } });
+  }
+
+  async setAvatar(avatar: string): Promise<string> {
+    return this.requestText({ name: "set_avatar", arguments: { avatar } });
   }
 
   private async connectInitial(): Promise<void> {

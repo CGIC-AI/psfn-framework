@@ -510,3 +510,100 @@ export function encodeAudioChunk(chunk: Buffer): string {
 export function decodeAudioChunk(encoded: string): Buffer {
   return Buffer.from(encoded, "base64");
 }
+
+// ── Hub control port: the companion's own world-avatar surface ──
+//
+// Reached by the PSFN gateway with the Hub control credential over
+// `POST /internal/v1/world/{perceive,move,act}`. This is the companion moving
+// its OWN body; no Hub device assertion is involved (that is the external-
+// device `world.body` / `world.travel` path above, which stays device-gated).
+// Additive contract mirrored in the framework's
+// `src/shared/contracts/world-avatar.ts`.
+
+export interface WorldAvatarPosition {
+  x: number;
+  z: number;
+}
+
+export interface WorldAvatarPerson {
+  id: string;
+  /** The world's own classification; unknown participants are assumed ai. */
+  kind?: "human" | "ai";
+  kindSource?: "world" | "assumed";
+  positionKnown: boolean;
+  x?: number;
+  z?: number;
+  distanceM?: number;
+  bearing?: string;
+  doing?: string;
+}
+
+export interface WorldAvatarThing {
+  id: string;
+  label: string;
+  positionKnown: boolean;
+  x?: number;
+  y?: number;
+  z?: number;
+  distanceM?: number;
+  bearing?: string;
+  detail?: string;
+}
+
+export interface WorldAvatarPerceiveResult {
+  world: string;
+  placeId?: string;
+  region?: string;
+  capturedAt: string;
+  self: {
+    id: string;
+    world: string;
+    positionKnown: boolean;
+    x?: number;
+    z?: number;
+    groundHeightM?: number;
+    facing?: string;
+  } | null;
+  people: WorldAvatarPerson[];
+  things: WorldAvatarThing[];
+  recent: string[];
+  raw: string;
+}
+
+export interface WorldAvatarMoveRequest {
+  world?: string;
+  region?: string;
+  position?: WorldAvatarPosition;
+  participant?: string;
+  waitMs?: number;
+}
+
+export type WorldAvatarWalkStatus = "arrived" | "walking" | "interrupted" | "failed" | "already_there";
+
+export type WorldAvatarMoveRejectionReason =
+  | "not_configured"
+  | "unavailable"
+  | "invalid_world"
+  | "unmapped_world"
+  | "refused"
+  | "participant_unknown"
+  | "participant_position_unknown"
+  | "position_unknown";
+
+export type WorldAvatarMoveResult =
+  | {
+    accepted: true;
+    world: string;
+    placeId?: string;
+    walk?: { status: WorldAvatarWalkStatus; x?: number; z?: number; target?: WorldAvatarPosition };
+  }
+  | { accepted: false; world: string; reason: WorldAvatarMoveRejectionReason };
+
+export interface WorldAvatarActRequest {
+  verb: string;
+  arguments?: Record<string, unknown>;
+}
+
+export type WorldAvatarActResult =
+  | { accepted: true; verb: string; outcome: string; reply: string | null }
+  | { accepted: false; verb: string; reason: "not_configured" | "not_allowlisted" | "unavailable" };

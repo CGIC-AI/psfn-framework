@@ -3,6 +3,12 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 
 import type { HubControlConfig } from "../../shared/env.js";
+import type {
+  WorldAvatarActResult,
+  WorldAvatarMoveRequest,
+  WorldAvatarMoveResult,
+  WorldAvatarPerceiveResult,
+} from "../../shared/protocol.js";
 import {
   authenticateHubDevice,
   createHubDeviceRegistryAuthority,
@@ -45,20 +51,50 @@ interface HomeAssistantPrincipal {
   entityIds: readonly string[];
 }
 
-export class HomeAssistantControlServer {
+/**
+ * The companion's own world-avatar surface behind the control port. Present
+ * only when the Hub carries an Eidoverse emanation; every route answers
+ * `world_not_configured` otherwise. Reached with the gateway's control token
+ * ONLY — a Hub device credential is never accepted here, because this is the
+ * companion moving its own body, not an external device driving it.
+ */
+export interface HubWorldControlPort {
+  perceive(): Promise<WorldAvatarPerceiveResult>;
+  move(input: WorldAvatarMoveRequest): Promise<WorldAvatarMoveResult>;
+  act(verb: string, args: Record<string, unknown>): Promise<WorldAvatarActResult>;
+}
+
+const WORLD_NAME_PATTERN = /^[a-z0-9_-]{1,64}$/u;
+const WORLD_LABEL_PATTERN = /^[^\s][^\r\n]{0,127}$/u;
+const MAX_MOVE_WAIT_MS = 30_000;
+
+/**
+ * The Hub's private control server. Hosts the Home Assistant routes when a
+ * Home Assistant client is wired and the world-avatar routes when a world port
+ * is wired; either may be absent. A device registry is optional too and only
+ * widens Home Assistant access to enrolled devices.
+ */
+export class HubControlServer {
   private readonly server: http.Server;
   private readonly idempotency = new Map<string, IdempotencyEntry>();
-  private readonly deviceRegistry: HubDeviceRegistryAuthority;
+  private readonly deviceRegistry: HubDeviceRegistryAuthority | null;
+  private readonly client: HomeAssistantClient | null;
+  private readonly world: HubWorldControlPort | null;
 
   constructor(
     private readonly config: HubControlConfig,
-    private readonly client: HomeAssistantClient,
-    deviceRegistry: HubDeviceRegistryAuthority,
+    client: HomeAssistantClient | null,
+    deviceRegistry: HubDeviceRegistryAuthority | null,
+    world: HubWorldControlPort | null = null,
   ) {
-    this.deviceRegistry = createHubDeviceRegistryAuthority(
-      () => deviceRegistry.readCurrent(),
-      { reservedCredentials: [{ label: "HUB_CONTROL_TOKEN", credential: config.token }] },
-    );
+    this.client = client;
+    this.world = world;
+    this.deviceRegistry = deviceRegistry
+      ? createHubDeviceRegistryAuthority(
+        () => deviceRegistry.readCurrent(),
+        { reservedCredentials: [{ label: "HUB_CONTROL_TOKEN", credential: config.token }] },
+      )
+      : null;
     this.server = http.createServer((request, response) => {
       void this.handle(request, response).catch((error) => {
         this.writeError(response, error);
@@ -91,12 +127,26 @@ export class HomeAssistantControlServer {
     response.setHeader("Cache-Control", "no-store");
     response.setHeader("Content-Type", "application/json; charset=utf-8");
     const url = new URL(request.url ?? "/", "http://hub-control.invalid");
+    if (url.pathname.startsWith("/internal/v1/world/")) {
+      await this.handleWorld(request, response, url.pathname);
+      return;
+    }
     const isHealthRequest = request.method === "GET" && url.pathname === "/internal/v1/home-assistant/health";
     const principal = isHealthRequest ? null : this.authenticatePrincipal(request.headers.authorization);
     if (isHealthRequest ? !this.authorizedControlToken(request.headers.authorization) : !principal) {
       response.statusCode = 401;
       response.setHeader("WWW-Authenticate", "Bearer");
       response.end(JSON.stringify({ error: { type: "unauthorized", message: "Invalid Hub control credential" } }));
+      return;
+    }
+    if (!this.client) {
+      if (url.pathname.startsWith("/internal/v1/home-assistant/")) {
+        response.statusCode = 409;
+        response.end(JSON.stringify({ error: { type: "home_assistant_not_configured", message: "Home Assistant is not configured on this Hub" } }));
+        return;
+      }
+      response.statusCode = 404;
+      response.end(JSON.stringify({ error: { type: "not_found", message: "Unknown Hub control route" } }));
       return;
     }
 
@@ -144,6 +194,58 @@ export class HomeAssistantControlServer {
     response.end(JSON.stringify({ error: { type: "not_found", message: "Unknown Hub control route" } }));
   }
 
+  /**
+   * The companion's world routes. Control-token only: `authorizedControlToken`
+   * is checked directly rather than through `authenticatePrincipal`, so an
+   * enrolled device credential is refused here exactly like a bad token.
+   */
+  private async handleWorld(
+    request: http.IncomingMessage,
+    response: http.ServerResponse,
+    pathname: string,
+  ): Promise<void> {
+    if (!this.authorizedControlToken(request.headers.authorization)) {
+      response.statusCode = 401;
+      response.setHeader("WWW-Authenticate", "Bearer");
+      response.end(JSON.stringify({ error: { type: "unauthorized", message: "Invalid Hub control credential" } }));
+      return;
+    }
+    if (request.method !== "POST") {
+      response.statusCode = 405;
+      response.end(JSON.stringify({ error: { type: "method_not_allowed", message: "World routes accept POST only" } }));
+      return;
+    }
+    if (!this.world) {
+      response.statusCode = 409;
+      response.end(JSON.stringify({ error: { type: "world_not_configured", message: "This Hub carries no Eidoverse emanation" } }));
+      return;
+    }
+    if (pathname === "/internal/v1/world/perceive") {
+      await this.readJsonBody(request);
+      response.statusCode = 200;
+      response.end(JSON.stringify(await this.world.perceive()));
+      return;
+    }
+    if (pathname === "/internal/v1/world/move") {
+      const body = await this.readJsonBody(request);
+      response.statusCode = 200;
+      response.end(JSON.stringify(await this.world.move(parseWorldMove(body))));
+      return;
+    }
+    if (pathname === "/internal/v1/world/act") {
+      const body = await this.readJsonBody(request);
+      const verb = typeof body.verb === "string" && WORLD_LABEL_PATTERN.test(body.verb.trim()) ? body.verb.trim() : "";
+      if (!verb) throw new HttpInputError(400, "invalid_verb", "verb must be a non-empty string");
+      const args = body.arguments === undefined ? {} : body.arguments;
+      if (!isRecord(args)) throw new HttpInputError(400, "invalid_arguments", "arguments must be an object");
+      response.statusCode = 200;
+      response.end(JSON.stringify(await this.world.act(verb, args)));
+      return;
+    }
+    response.statusCode = 404;
+    response.end(JSON.stringify({ error: { type: "not_found", message: "Unknown Hub control route" } }));
+  }
+
   private authorizedControlToken(raw: string | undefined): boolean {
     if (!raw?.startsWith("Bearer ")) return false;
     const supplied = Buffer.from(raw.slice("Bearer ".length), "utf8");
@@ -152,7 +254,7 @@ export class HomeAssistantControlServer {
   }
 
   private authenticateDevice(raw: string | undefined): HubDeviceIdentity | null {
-    if (!raw?.startsWith("Bearer ")) return null;
+    if (!raw?.startsWith("Bearer ") || !this.deviceRegistry) return null;
     return authenticateHubDevice(this.deviceRegistry.readCurrent(), raw.slice("Bearer ".length));
   }
 
@@ -160,7 +262,7 @@ export class HomeAssistantControlServer {
     if (this.authorizedControlToken(raw)) {
       return {
         id: "PSFN gateway",
-        entityIds: [...new Set(this.deviceRegistry.readCurrent().devices.flatMap(
+        entityIds: [...new Set((this.deviceRegistry?.readCurrent().devices ?? []).flatMap(
           device => device.homeAssistantEntityIds,
         ))],
       };
@@ -235,10 +337,49 @@ export class HomeAssistantControlServer {
   }
 }
 
+/** Kept for callers that predate the world routes. */
+export { HubControlServer as HomeAssistantControlServer };
+
 class HttpInputError extends Error {
   constructor(readonly status: number, readonly type: string, message: string) {
     super(message);
   }
+}
+
+function parseWorldMove(body: Record<string, unknown>): WorldAvatarMoveRequest {
+  const request: WorldAvatarMoveRequest = {};
+  if (body.world !== undefined) {
+    if (typeof body.world !== "string" || !WORLD_NAME_PATTERN.test(body.world.trim())) {
+      throw new HttpInputError(400, "invalid_world", "world must match the door's world-name grammar");
+    }
+    request.world = body.world.trim();
+  }
+  if (body.region !== undefined) {
+    if (typeof body.region !== "string" || !WORLD_LABEL_PATTERN.test(body.region.trim())) {
+      throw new HttpInputError(400, "invalid_region", "region must be a short label");
+    }
+    request.region = body.region.trim();
+  }
+  if (body.participant !== undefined) {
+    if (typeof body.participant !== "string" || !WORLD_LABEL_PATTERN.test(body.participant.trim())) {
+      throw new HttpInputError(400, "invalid_participant", "participant must be a short id");
+    }
+    request.participant = body.participant.trim();
+  }
+  if (body.position !== undefined) {
+    const position = body.position;
+    if (!isRecord(position) || !Number.isFinite(position.x) || !Number.isFinite(position.z)) {
+      throw new HttpInputError(400, "invalid_position", "position must carry finite x and z");
+    }
+    request.position = { x: position.x as number, z: position.z as number };
+  }
+  if (body.waitMs !== undefined) {
+    if (typeof body.waitMs !== "number" || !Number.isFinite(body.waitMs) || body.waitMs < 0) {
+      throw new HttpInputError(400, "invalid_wait", "waitMs must be a non-negative number");
+    }
+    request.waitMs = Math.min(body.waitMs, MAX_MOVE_WAIT_MS);
+  }
+  return request;
 }
 
 function parseCallService(body: Record<string, unknown>): HomeAssistantCallServiceInput {

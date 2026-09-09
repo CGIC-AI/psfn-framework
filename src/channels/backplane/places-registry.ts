@@ -10,12 +10,14 @@ import type {
   PlacePrivacy,
   PlacesRegistryConfig,
   SiteConfig,
+  EidoversePlaceBinding,
 } from '../../shared/contracts/places-registry.js';
 import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
 import { SATELLITE_REGISTRY_FILE_NAME } from '../../shared/contracts/satellite-registry.js';
 import {
   AFFORDANCE_KINDS,
   PLACES_REGISTRY_FILE_NAME,
+  EIDOVERSE_WORLD_NAME_PATTERN,
 } from '../../shared/contracts/places-registry.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { isRecord } from '../../shared/utils/types.js';
@@ -190,7 +192,7 @@ function parsePlaceConfig(value: unknown, fieldName: string): PlaceConfig {
   // privacy demotion. Rejecting unknown keys means a typo throws here instead.
   assertNoUnknownKeys(
     value,
-    ['placeId', 'siteId', 'displayName', 'kind', 'haAreaId', 'description', 'mirrorsPlaceId', 'privacy', 'affordances'],
+    ['placeId', 'siteId', 'displayName', 'kind', 'haAreaId', 'description', 'mirrorsPlaceId', 'privacy', 'eidoverse', 'affordances'],
     fieldName,
   );
   const placeId = assertIdToken(parseConfiguredString(value.placeId, `${fieldName}.placeId`), `${fieldName}.placeId`);
@@ -208,6 +210,7 @@ function parsePlaceConfig(value: unknown, fieldName: string): PlaceConfig {
     throw new Error(`${fieldName}.mirrorsPlaceId is only allowed on virtual places (kind "${kind}")`);
   }
   const privacy = parsePlacePrivacy(value.privacy, `${fieldName}.privacy`);
+  const eidoverse = parseEidoverseBinding(value.eidoverse, `${fieldName}.eidoverse`);
   if (value.affordances !== undefined && !Array.isArray(value.affordances)) {
     throw new Error(`${fieldName}.affordances must be an array`);
   }
@@ -233,8 +236,37 @@ function parsePlaceConfig(value: unknown, fieldName: string): PlaceConfig {
     ...(description ? { description } : {}),
     ...(mirrorsPlaceId ? { mirrorsPlaceId } : {}),
     ...(privacy ? { privacy } : {}),
+    ...(eidoverse ? { eidoverse } : {}),
     affordances,
   };
+}
+
+/**
+ * Optional Eidoverse plane binding. Fail closed on shape: a binding with a
+ * malformed world name or a non-finite coordinate would send the body
+ * nowhere and the loader is the only place that can say so up front.
+ */
+function parseEidoverseBinding(value: unknown, fieldName: string): EidoversePlaceBinding | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    throw new Error(`${fieldName} must be an object`);
+  }
+  assertNoUnknownKeys(value, ['world', 'region', 'position'], fieldName);
+  const world = parseConfiguredString(value.world, `${fieldName}.world`);
+  if (!EIDOVERSE_WORLD_NAME_PATTERN.test(world)) {
+    throw new Error(`${fieldName}.world must match ${EIDOVERSE_WORLD_NAME_PATTERN}`);
+  }
+  const region = parseOptionalConfiguredString(value.region, `${fieldName}.region`);
+  let position: { x: number; z: number } | undefined;
+  if (value.position !== undefined) {
+    const raw = value.position;
+    if (!isRecord(raw) || !Number.isFinite(raw.x) || !Number.isFinite(raw.z)) {
+      throw new Error(`${fieldName}.position must be an object with finite x and z`);
+    }
+    assertNoUnknownKeys(raw, ['x', 'z'], `${fieldName}.position`);
+    position = { x: raw.x as number, z: raw.z as number };
+  }
+  return { world, ...(region ? { region } : {}), ...(position ? { position } : {}) };
 }
 
 function assertUniqueRegistryBindings(config: PlacesRegistryConfig): void {

@@ -148,6 +148,65 @@ function exampleRegistry(overrides: Record<string, unknown> = {}) {
 }
 
 describe('satellite registry', () => {
+  it('gives a relayed world speaker its own contact identity and carries the world\'s human/ai kind (S13 MOVE)', () => {
+    const registry = parseSatelliteRegistryConfig({
+      schemaVersion: 1,
+      enabled: true,
+      satellites: [{
+        satelliteId: 'eidoverse-world',
+        displayName: 'Eidoverse World',
+        mobility: 'static',
+        placeId: 'default',
+        endpoints: [{
+          endpointId: 'eidoverse-avatar',
+          displayName: 'Eidoverse World Avatar',
+          claimTypes: ['world-avatar'],
+          promptChannelType: 'world_satellite',
+          auth: { mode: 'api_key' },
+          defaultIdentity: {
+            authorId: 'primary-user',
+            authorName: 'Primary User',
+            canonicalContactId: 'contact-primary-user',
+            channelPrivacy: 'private',
+          },
+          maxCapabilities: ['text', 'avatar', 'avatar_action', 'presence'],
+          telemetryScopes: ['presence', 'status'],
+        }],
+      }],
+    });
+    const base = {
+      'x-psfn-satellite-claim-type': 'world-avatar',
+      'x-psfn-satellite-id': 'eidoverse-world',
+      'x-psfn-satellite-endpoint-id': 'eidoverse-avatar',
+      'x-psfn-satellite-session-id': 'eidoverse-session',
+    };
+    const ai = resolveSatelliteClaim({ registry, principal, headers: {
+      ...base, 'x-psfn-satellite-speaker-id': 'artie-kube', 'x-psfn-satellite-speaker-kind': 'ai',
+    } });
+    expect(ai.ok && ai.value.authorId).toBe('primary-user:artie-kube');
+    expect(ai.ok && ai.value.authorName).toBe('artie-kube');
+    expect(ai.ok && ai.value.canonicalContactId).toBe('');
+    expect(ai.ok && ai.value.satellite.speaker).toEqual({ id: 'artie-kube', name: 'artie-kube', kind: 'ai' });
+
+    const human = resolveSatelliteClaim({ registry, principal, headers: {
+      ...base, 'x-psfn-satellite-speaker-id': 'visitor', 'x-psfn-satellite-speaker-name': 'Visitor', 'x-psfn-satellite-speaker-kind': 'human',
+    } });
+    expect(human.ok && human.value.authorId).toBe('primary-user:visitor');
+    expect(human.ok && human.value.satellite.speaker).toEqual({ id: 'visitor', name: 'Visitor', kind: 'human' });
+
+    const none = resolveSatelliteClaim({ registry, principal, headers: base });
+    expect(none.ok && none.value.authorId).toBe('primary-user');
+    expect(none.ok && none.value.canonicalContactId).toBe('contact-primary-user');
+    expect(none.ok && none.value.satellite.speaker).toBeUndefined();
+
+    const badKind = resolveSatelliteClaim({ registry, principal, headers: {
+      ...base, 'x-psfn-satellite-speaker-id': 'visitor', 'x-psfn-satellite-speaker-kind': 'robot',
+    } });
+    expect(badKind.ok).toBe(false);
+    const missingKind = resolveSatelliteClaim({ registry, principal, headers: { ...base, 'x-psfn-satellite-speaker-id': 'visitor' } });
+    expect(missingKind.ok).toBe(false);
+  });
+
   it('admits registered world-avatar claims within their capability ceiling and rejects other profiles', () => {
     const registry = parseSatelliteRegistryConfig({
       schemaVersion: 1,

@@ -294,6 +294,38 @@ export interface ReflectionJournalStoreOptions {
 }
 
 /**
+ * Name the ledger, the file, and the physical row a crash left unreadable
+ * (bead psfn-framework-2xt9c).
+ *
+ * Every sibling bounded ledger — the charge ledger, the fatigue ledger, the
+ * human-attention ledger — hands `streamJsonLines` one of these. This journal
+ * handed it nothing, so a torn last line from a crash mid-append surfaced as a
+ * bare `SyntaxError: Unexpected end of JSON input` from whichever read happened
+ * to run first: no path, no line number, and no way to tell a truncated tail
+ * apart from a corrupted middle without opening the file by hand.
+ *
+ * It still fails closed rather than skipping the row. A reflection is something
+ * the companion wrote about itself; dropping one silently to keep a list
+ * rendering is a worse answer than saying which line to look at.
+ *
+ * It deliberately does NOT carry the parse error's own message, which is where
+ * this diverges from those siblings. `JSON.parse` quotes the offending input
+ * back — "Unexpected token 'a', \"a private \"... is not valid JSON" — and the
+ * rows here are the companion's prose. The location is the whole diagnostic: a
+ * line number and a path lead an operator to the row without this message ever
+ * carrying a word of it.
+ */
+function reflectionJournalParseError(path: string) {
+  return (context: { line: number; error: unknown }): never => {
+    const kind = context.error instanceof Error ? context.error.name : 'error';
+    throw new Error(
+      `${REFLECTION_JOURNAL_ERROR_PREFIX} holds unreadable JSON at line `
+      + `${String(context.line)} of ${path} (${kind}); the row was not read`,
+    );
+  };
+}
+
+/**
  * `left` sorts strictly ahead of `right` under the journal's canonical
  * newest-first order (createdAt descending, then id descending) — the exact
  * comparator the previous sort-then-slice path used.
@@ -367,7 +399,7 @@ export class ReflectionJournalStore {
       if (!entry || entry.id !== normalizedId) return;
       found = entry;
       return true;
-    });
+    }, { onParseError: reflectionJournalParseError(this.filePath) });
     return found;
   }
 
@@ -431,7 +463,7 @@ export class ReflectionJournalStore {
       const entry = normalizePersistedReflectionEntry(parsed);
       if (!entry) return;
       ReflectionJournalStore.retainTop(recent, entry, limitRaw, isNewerReflectionEntry);
-    });
+    }, { onParseError: reflectionJournalParseError(this.filePath) });
     return recent;
   }
 
@@ -466,7 +498,7 @@ export class ReflectionJournalStore {
         provenanceRefs: [...provenanceRefs],
         arc,
       }, limit, isNewerConcernArc);
-    });
+    }, { onParseError: reflectionJournalParseError(this.filePath) });
     return arcs;
   }
 }

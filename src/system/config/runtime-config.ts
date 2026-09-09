@@ -11,6 +11,8 @@ import { loadChargePolicyConfig } from './charge-policy-config.js';
 import { resolveEffectiveRuntimeSettings } from './settings-overlay.js';
 import { assertModelPurposeSelectionResolvable } from './model-selection-config.js';
 import { resolveConfiguredCompanionDataDir } from '../../persistence/layout.js';
+import { applyMissingRuntimeSettingsDefaults } from './settings-owner-backfill.js';
+import { SETTINGS_FILE_NAME } from '../settings/contracts.js';
 
 export function hydrateJsonBackedRuntimeConfig(
   config: SubstrateConfig,
@@ -21,7 +23,17 @@ export function hydrateJsonBackedRuntimeConfig(
   const seedDir = options.seedDir ?? process.env.CONFIG_DIR;
   const loadOptions = seedDir ? { seedDir } : undefined;
 
-  const savedSettings = loadSettings(dataDir, loadOptions);
+  // psfn-framework-bxnyu: the operator process hydrates its runtime config
+  // here rather than through the startup owner-file checks, so it needs the
+  // same in-memory adaptation for required contract fields an owner file
+  // written before them cannot carry.
+  const savedSettings = applyMissingRuntimeSettingsDefaults(
+    loadSettings(dataDir, loadOptions),
+    {
+      ...(seedDir ? { seedDir } : {}),
+      sourceLabel: SETTINGS_FILE_NAME,
+    },
+  );
   const settingsDomains = splitSettingsByDomain(savedSettings);
   // Per-companion overlay (dnll.1): merge companion-data/settings.overlay.json
   // over the global runtime settings. Absent overlay = byte-identical behavior.

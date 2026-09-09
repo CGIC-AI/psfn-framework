@@ -98,6 +98,16 @@ generated: { by: "openwiki/0.4.3", at: "2026-08-28T13:30:04.287Z" }
 > companion control plane is **Garden**. The charter is operator-owned law:
 > [docs/PSFN_PROJECT_CHARTER.md](../../docs/PSFN_PROJECT_CHARTER.md).
 
+> **Fleet auth is optional.** Everything on this page describes what
+> `fleet-auth.json` ADDS when it is present: the Discord SSO router, lifecycle
+> ceremonies, SSO principals, and durable Postgres-backed replay/attachment
+> authority. Nothing here is a precondition for a feature. A deployment without
+> `fleet-auth.json` reaches every function with keys (`API_KEY`,
+> `ADMIN_TOKEN`, `API_SATELLITE_KEYS`, the testing-harness key, Hub device
+> keys); see [operations.md → Authentication](../operations.md#authentication)
+> and [Hub device authority without fleet auth](#hub-device-authority-without-fleet-auth)
+> below (bead `psfn-framework-n66dn`).
+
 `fleet-auth` is a consistency model, not a single role lookup. A database-backed
 principal authorizes a companion request only when seven projections describe
 the same current authority, and the gateway hands the companion a short-lived,
@@ -357,12 +367,16 @@ silently leave a rostered subject live and must revoke sessions as well.
 
 ## Authentication and escalation doctrine
 
-Discord SSO is the **only** authentication (operator rulings D1/D2,
+Discord SSO is the only *human sign-in* provider (operator rulings D1/D2,
 2026-07-30). There are no passkeys, no WebAuthn, and no just-in-time step-up
 ceremonies; the former `webauthn_uv` assurance tier, JIT challenge/grant
 tables, and trusted-host passkey ceremonies were removed (migration
 `discord_sso_only_authority`). SSO exists to unify auth across surfaces — it
-never gates the operator from their own information.
+never gates the operator from their own information, and it is never
+required: every surface SSO reaches is also reachable with a key
+(`ADMIN_TOKEN` for Garden, `API_KEY` / `API_SATELLITE_KEYS` for the API, a Hub
+device key for enrolled devices), with or without `fleet-auth.json`
+(operator rule 2026-09-09, bead `psfn-framework-n66dn`).
 
 Deployment access mode is derived from the roster, per companion
 (`resolveFleetAccessMode`), and signed into every request capability:
@@ -479,18 +493,28 @@ revocation, escalation, lifecycle OAuth) enforce the exact canonical origin.
 
 Hub devices (satellite hub endpoints) authenticate to the gateway with
 `PSFN-HUB-DEVICE` version-1 Ed25519 compact JWTs
-(`hub-device-assertion.ts`). Verification requires an allowlisted, exactly
+(`hub-device-assertion.ts`). The verifier ring may come from `fleet-auth.json`
+(`hubDeviceAssertions`) **or**, without fleet auth, from `satellites.json`
+`hubDeviceAssertions` / the file named by `PSFN_HUB_DEVICE_ASSERTIONS_PATH`
+(see [Hub device authority without fleet auth](#hub-device-authority-without-fleet-auth)).
+Verification requires an allowlisted, exactly
 one-active key ring whose active key is inside its validity window; claims are
 parsed in protocol canonical order and must match the expected binding exactly:
 issuer, exact normalized HTTPS audience, companion UUID, device id, session id,
 optional place id, and an enrollment version that must equal the enrollment
 authority's current version with enrollment `active`. The token must be within
 its bounded lifetime (TTL 5–60 s, clock skew 0–10 s), and consumption runs
-through a durable single-use replay fence keyed on the full signed token digest
-(`fleet_auth.hub_device_assertion_replays`) that returns
-`consumed` / `replayed` / `mismatch`. Audit digests for issuer, key id,
+through a single-use replay fence keyed on the full signed token digest that
+returns `consumed` / `replayed` / `mismatch` — durable in Postgres under fleet
+auth (`fleet_auth.hub_device_assertion_replays`), process-local without it
+(`InMemoryHubDeviceAssertionReplayStore`, bounded by the ≤70 s assertion
+lifetime). An exact re-presentation is `replayed` and admitted as a transport
+retry of the same turn; a different token reusing a jti is `mismatch` and
+rejected. Audit digests for issuer, key id,
 audience, companion, device, session, enrollment version, and jti are keyed
-HMAC-SHA256 under the configured session pepper so a reader of
+HMAC-SHA256 under the configured session pepper (fleet auth's
+`sessionPepperRef`, or `HUB_DEVICE_ASSERTION_AUDIT_PEPPER` / a derivation of
+`GATEWAY_SESSION_HMAC_KEY` without fleet auth) so a reader of
 `authorization_audit_events` cannot confirm candidate identifiers without it.
 
 `GatewayHubDeviceIngressService` (`hub-device-ingress.ts`) composes the
@@ -503,7 +527,87 @@ detach), and admits the device session with disposition
 `created` / `continued` / `retry`. Any enrollment-resolution or verification
 failure fences the device attachment (`assertion_rejected` or
 `enrollment_authority_changed`) before the denial propagates, so a rejected
-assertion cannot be retried against the same connection.
+assertion cannot be retried against the same connection. Without fleet auth
+the attachment authority is `GuestOnlyHubDeviceAttachmentStore`: every
+admitted device session is a guest session bound to the enrolled companion, a
+`fleet_browser_session` attachment is refused (there is no SSO human to bind),
+and a fence lifts after the assertion lifetime so one clock-skew rejection does
+not strand a hub whose session id is stable until it re-hellos.
+
+## Hub device authority without fleet auth
+
+The authority that admits an enrolled Hub device — and with it `world.body`,
+`world.travel`, presence follow, and device-bound turns — is one Ed25519
+keypair plus two owner-file records. No `fleet-auth.json`, no SSO, no Postgres
+`fleet_auth` schema (bead `psfn-framework-n66dn.2`; supersedes `wlls6`,
+`x4499`, `hc23v`).
+
+1. **Generate the keypair** (the private half is written once, mode 0600, and
+   never printed; the public entry goes to stdout):
+
+   ```bash
+   npx tsx scripts/ops/generate-hub-device-key.ts --out /secure/hub-device-private.pem
+   # → { "kid": "hub-device-…", "publicKeyPem": "-----BEGIN PUBLIC KEY-----…", "notBefore": …, "notAfter": …, "status": "active" }
+   ```
+
+2. **Put the public key in the verifier ring** — a top-level
+   `hubDeviceAssertions` block in `satellites.json` (system-data), the same
+   shape `fleet-auth.json` uses. `audience` is the exact https origin the hub
+   will present (a string match, not a URL the gateway fetches):
+
+   ```json
+   "hubDeviceAssertions": {
+     "issuer": "psfn-satellite-hub",
+     "audience": "https://psfn-gateway.local",
+     "maxTtlSeconds": 60,
+     "clockSkewSeconds": 2,
+     "keys": [ { …the printed entry… } ]
+   }
+   ```
+
+   Alternatively point `PSFN_HUB_DEVICE_ASSERTIONS_PATH` at a JSON file holding
+   the block (bare, or wrapped in `{ "hubDeviceAssertions": … }`); the Helm
+   chart's top-level `hubDeviceAssertions` values render exactly that file.
+   Precedence when several exist: `fleet-auth.json` ring > env file >
+   `satellites.json`, and a shadowed ring is logged at startup.
+
+3. **Enroll the device** on the hub's endpoint in `satellites.json`
+   (`hubDeviceEnrollment: { deviceId, enrollmentVersion, enrollmentStatus:
+   "active" }`) and mirror it in the hub's own device registry
+   (`HUB_DEVICE_REGISTRY_PATH`, same `deviceId` / `enrollmentVersion` /
+   `companionId`, `maxCapabilities.control` including `world_body` /
+   `world_travel` as wanted, `credentialSha256` of the device token the hub
+   client presents in `hello`).
+
+4. **Give the hub the signing authority**: `HUB_DEVICE_ASSERTION_ISSUER`,
+   `_KID` (the printed `kid`), `_AUDIENCE` (the ring's audience),
+   `_PRIVATE_KEY_PATH` (the 0600 PEM), `_TTL_SECONDS` (5–60), as one complete
+   set alongside `HUB_DEVICE_REGISTRY_PATH`. On Helm:
+   `satelliteHub.deviceRegistry` + `satelliteHub.deviceAssertion` with the
+   private key in a Secret (`kubectl create secret generic psfn-hub-device-key
+   --from-file=hub-device-private.pem=…`).
+
+5. **Restart the gateway** and confirm the log line
+   `Hub device assertion verifier ready without fleet auth {source: "satellites.json", …}`.
+   The hub then mints a fresh `X-PSFN-Hub-Device-Assertion` per turn; the
+   gateway verifies it against the ring, consumes the jti, and binds the turn to
+   the enrolled device and companion.
+
+To mint one by hand (harness, curl, diagnosis) use the same key and ring — no
+fleet-auth.json required, and the key is matched to the ring by public key so
+a rotation may carry several `active` / `retiring` entries:
+
+```bash
+printf '%s' '{"satelliteRegistryPath":"<system-data>/satellites.json","privateKeyPath":"/secure/hub-device-private.pem","ttlSeconds":30,"companionId":"<companion uuid>","satelliteId":"hub","endpointId":"hub","sessionId":"realtime:<deviceId>"}' \
+  | npx tsx scripts/ops/issue-hub-device-assertion.ts
+# add "hubDeviceAssertionsPath": "<ring file>" when the ring is not inside satellites.json,
+# or "fleetAuthPath": "<system-data>/fleet-auth.json" to sign against a fleet-auth ring.
+```
+
+Rotation: append the new entry as `active`, flip the old one to `retiring`
+(still verified) and later `revoked`; the ring must always hold exactly one
+`active` key. With `fleet-auth.json` present its ring wins, so rotate there
+(the same shape) or remove that block's stale entry the same way.
 
 ## Persistence and operations
 
@@ -587,9 +691,13 @@ warning) once fleet auth is active.
 - **The gateway is the only session holder and operator-capability signer.**
   Garden and companions verify signed capabilities against the verifier key
   ring and strip every browser-authority header.
-- **Replay is durable and single-use.** Capability consumption, hub-device
+- **Replay is single-use.** Capability consumption, hub-device
   assertion consumption, and trusted-host recovery consumption are all fenced
-  in the database.
+  in the database under fleet auth; the fleet-auth-free Hub device verifier
+  fences in process for the assertion's own ≤70 s lifetime.
+- **SSO never gates a key.** Every surface a fleet principal reaches is also
+  reachable by the matching key; `fleet-auth.json` adds SSO, it never removes
+  key authentication or routing.
 
 ## Focused tests
 

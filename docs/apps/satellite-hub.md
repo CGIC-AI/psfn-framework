@@ -359,6 +359,14 @@ telemetry so discarded text cannot leak
   enrolled device
   ([`server.ts`](/apps/satellite-hub/src/ts/hub/server.ts#L301-L401)).
 
+The gateway-side verifier ring that admits these assertions does **not**
+require fleet auth: it is the `hubDeviceAssertions` block in `satellites.json`
+(or `PSFN_HUB_DEVICE_ASSERTIONS_PATH`), with `fleet-auth.json` as an optional
+alternative carrier. `world.body`, `world.travel`, and device-bound turns
+therefore need only the keypair, that block, and the endpoint's
+`hubDeviceEnrollment` — the full key-only recipe is in
+[Fleet Auth → Hub device authority without fleet auth](../operator/fleet-auth.md#hub-device-authority-without-fleet-auth).
+
 After an enrolled hello succeeds, each logical Hub-to-Framework turn carries a
 new compact `X-PSFN-Hub-Device-Assertion` token
 ([`device-assertion.ts`](/apps/satellite-hub/src/ts/hub/device-assertion.ts#L41-L98)):
@@ -536,15 +544,18 @@ on `REALTIME_VOICE_BIND_HOST` / `REALTIME_VOICE_PORT`, used when the Python
 process runs `DEVICE_TRANSPORT=realtime` or `hybrid`
 ([`realtime_server.py`](/apps/satellite-hub/hub/devices/realtime_server.py#L45-L150)).
 
-Physical Python fallback turns can use the same Fleet Hub-device authority as
+Physical Python fallback turns can use the same Hub-device authority as
 the TypeScript hub. Set `PSFN_COMPANION_ID`,
 `HUB_DEVICE_ASSERTION_FLEET_AUTH_PATH`, `HUB_DEVICE_ASSERTION_SATELLITE_REGISTRY_PATH`,
 `HUB_DEVICE_ASSERTION_PRIVATE_KEY_PATH`, and
 `HUB_DEVICE_ASSERTION_TTL_SECONDS` as one complete set; the bridge re-reads the
 exact endpoint's active `hubDeviceEnrollment` before every turn, requires the
-private key to match the single active Fleet verifier, requires an enabled
+private key to match the single active verifier, requires an enabled
 registry with exactly one matching satellite/endpoint, and sends a fresh
-assertion without persisting it
+assertion without persisting it. (The Python bridge still reads its ring only
+from a fleet-auth-shaped file; letting `HUB_DEVICE_ASSERTION_FLEET_AUTH_PATH`
+accept a file that carries the `satellites.json` `hubDeviceAssertions` block is
+the tracked follow-up.)
 ([`device_assertion.py`](/apps/satellite-hub/hub/security/device_assertion.py#L47-L157)).
 
 The Python CLI also ships `hub probe` (device metadata, entities/services, state

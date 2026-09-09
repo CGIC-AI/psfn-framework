@@ -224,8 +224,12 @@ one companion can never inherit another companion's policy owner file.
   canonical per-companion registry: existing destinations fail closed, and if a
   copy or validation fails only files created by that invocation are removed.
 - `fleet-auth.json` is the **only** optional-when-missing owner file
-  (`OPTIONAL_WHEN_MISSING_OWNER_FILES`): absent means fleet auth is disabled,
-  and its distributed seed carries a `replace-before-enable` placeholder that
+  (`OPTIONAL_WHEN_MISSING_OWNER_FILES`): absent means fleet auth (SSO) is
+  disabled and every function stays reachable with keys — including Hub device
+  enrollment, whose verifier ring then lives in `satellites.json`
+  `hubDeviceAssertions` (see
+  [fleet-auth.md](./fleet-auth.md#hub-device-authority-without-fleet-auth)).
+  Its distributed seed carries a `replace-before-enable` placeholder that
   fails validation until an operator provisions real keys. Every other checked
   owner fails closed on a missing file.
 
@@ -315,9 +319,16 @@ The gateway builds its routing config with `resolveGatewayMultiCompanionConfig`
 
 Routing config is fail-closed at resolution time: `channels.json` companionId
 fields, `discord.accounts`, or `satellites.json` sharedDevice declarations on a
-one-entry deployment throw instead of being silently ignored; any route that
-names a companion absent from `companions.json` throws; and an enabled fleet
-with satellites requires `sharedDevice` authority on every satellite.
+deployment with no resolved fleet throw instead of being silently ignored; any
+route that names a companion absent from `companions.json` throws; and a fleet
+of **two or more** companions requires `sharedDevice` authority on every
+satellite. A one-companion fleet has nobody to arbitrate between, so its
+satellites may omit `sharedDevice` and route straight to the sole companion
+(chat through the `api` channel route, voice through the sole companion);
+declaring `sharedDevice` on a one-companion fleet is still accepted and still
+goes through the shared-satellite arbiter (bead `psfn-framework-bbprt`).
+Fleet enablement is decided by `companions.json` / `multiCompanion` only:
+`fleet-auth.json` presence never flips routing (bead `psfn-framework-n66dn`).
 `resolveGatewaySurfaceForChannelType` maps channel types onto routable surfaces
 only for `discord`, `telegram`, `api`, and `multica`; anything else returns
 null and callers must fail closed.

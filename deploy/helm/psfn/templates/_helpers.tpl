@@ -1284,3 +1284,21 @@ Sprig merge mutation.
   readOnly: {{ .Values.repositoryCheckout.readOnly }}
 {{- end }}
 {{- end -}}
+
+{{- /* Whether the Satellite Hub mounts a device registry: the dedicated
+     satelliteHub.deviceRegistry seam, or (compatibility) Home Assistant.
+     Renders a non-empty string when enabled so it works under `if`. */}}
+{{- define "psfn.satelliteHubDeviceRegistryEnabled" -}}
+{{- if or .Values.satelliteHub.deviceRegistry.enabled .Values.satelliteHub.homeAssistant.enabled -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{- /* The device list backing the registry ConfigMap, as JSON. */}}
+{{- define "psfn.satelliteHubDeviceRegistryDevices" -}}
+{{- if .Values.satelliteHub.deviceRegistry.devices -}}
+{{ toJson .Values.satelliteHub.deviceRegistry.devices }}
+{{- else -}}
+{{ toJson (default (list) .Values.satelliteHub.homeAssistant.devices) }}
+{{- end -}}
+{{- end -}}

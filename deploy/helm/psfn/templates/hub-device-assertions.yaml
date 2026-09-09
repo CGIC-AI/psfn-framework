@@ -1,0 +1,30 @@
+{{- if .Values.hubDeviceAssertions.enabled }}
+{{- /* Standalone Hub device assertion verifier ring for the gateway
+     (PSFN_HUB_DEVICE_ASSERTIONS_PATH). Same block shape as the
+     hubDeviceAssertions owner-file block; only PUBLIC keys live here. */}}
+{{- if not .Values.hubDeviceAssertions.audience }}
+{{- fail "hubDeviceAssertions.audience is required (the gateway's exact https origin, e.g. https://psfn-gateway.local)" }}
+{{- end }}
+{{- if not .Values.hubDeviceAssertions.keys }}
+{{- fail "hubDeviceAssertions.keys must list at least one verifier key (kid, publicKeyPem, notBefore, notAfter, status)" }}
+{{- end }}
+{{- range .Values.hubDeviceAssertions.keys }}
+{{- if contains "PRIVATE KEY" (default "" .publicKeyPem) }}
+{{- fail (printf "hubDeviceAssertions.keys[%s].publicKeyPem must be the PUBLIC half; never put a private key in chart values" .kid) }}
+{{- end }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "psfn.fullname" . }}-hub-device-assertions
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+data:
+  hub-device-assertions.json: |
+    {{ dict "hubDeviceAssertions" (dict
+        "issuer" .Values.hubDeviceAssertions.issuer
+        "audience" .Values.hubDeviceAssertions.audience
+        "maxTtlSeconds" .Values.hubDeviceAssertions.maxTtlSeconds
+        "clockSkewSeconds" .Values.hubDeviceAssertions.clockSkewSeconds
+        "keys" .Values.hubDeviceAssertions.keys) | toJson | nindent 4 }}
+{{- end }}

@@ -177,6 +177,22 @@ spec:
                 secretKeyRef:
                   name: {{ include "psfn.appSecretName" . }}
                   key: {{ .Values.secrets.keys.gatewaySessionHmacKey }}
+            {{- if .Values.hubDeviceAssertions.enabled }}
+            {{- /* Standalone Hub device assertion verifier ring: lets the
+                 gateway admit enrolled Hub devices without fleet auth. When
+                 fleet-auth.json also carries a ring, the gateway keeps that
+                 one and logs that this file is shadowed
+                 (psfn-framework-n66dn.2). */}}
+            - name: PSFN_HUB_DEVICE_ASSERTIONS_PATH
+              value: {{ .Values.hubDeviceAssertions.mountPath | quote }}
+            {{- if .Values.hubDeviceAssertions.auditPepperSecretRef.name }}
+            - name: HUB_DEVICE_ASSERTION_AUDIT_PEPPER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.hubDeviceAssertions.auditPepperSecretRef.name }}
+                  key: {{ .Values.hubDeviceAssertions.auditPepperSecretRef.key }}
+            {{- end }}
+            {{- end }}
             {{- if .Values.kubeSelfManagement.enabled }}
             - name: PSFN_KUBE_SELF_MANAGEMENT_ENABLED
               value: "true"
@@ -263,6 +279,12 @@ spec:
             - name: gateway-rpc-tls
               mountPath: {{ printf "%s/gateway-rpc" .Values.certificates.mountBasePath }}
               readOnly: true
+            {{- if .Values.hubDeviceAssertions.enabled }}
+            - name: hub-device-assertions
+              mountPath: {{ .Values.hubDeviceAssertions.mountPath }}
+              subPath: hub-device-assertions.json
+              readOnly: true
+            {{- end }}
             {{- if .Values.fleetAuth.enabled }}
             - name: fleet-auth-authority-floor
               mountPath: {{ include "psfn.fleetAuthAuthorityFloorMountPath" . }}
@@ -279,6 +301,11 @@ spec:
         - name: gateway-rpc-tls
           secret:
             secretName: {{ include "psfn.gatewayRpcCertSecretName" . }}
+        {{- if .Values.hubDeviceAssertions.enabled }}
+        - name: hub-device-assertions
+          configMap:
+            name: {{ include "psfn.fullname" . }}-hub-device-assertions
+        {{- end }}
         {{- if .Values.fleetAuth.enabled }}
         - name: fleet-auth-authority-floor
           persistentVolumeClaim:
@@ -909,6 +936,32 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if .Values.satelliteHub.deviceAssertion.enabled }}
+      {{- /* The hub refuses a signing key that is group/world readable, but a
+           Secret volume under podSecurityContext.fsGroup is always root-owned
+           with group bits added by the kubelet (0400 -> 0460). Stage the key
+           into an emptyDir as the hub's own uid at 0400 instead
+           (psfn-framework-x4499). */}}
+      initContainers:
+        - name: stage-hub-device-key
+          image: {{ include "psfn.satelliteHubImage" . | quote }}
+          imagePullPolicy: {{ .Values.satelliteHub.image.pullPolicy }}
+          command:
+            - sh
+            - -ec
+            - |
+              umask 077
+              cp /var/run/psfn/hub-device-secret/private.pem {{ .Values.satelliteHub.deviceAssertion.mountPath }}/private.pem
+              chmod 0400 {{ .Values.satelliteHub.deviceAssertion.mountPath }}/private.pem
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: hub-device-key-secret
+              mountPath: /var/run/psfn/hub-device-secret
+              readOnly: true
+            - name: hub-device-key
+              mountPath: {{ .Values.satelliteHub.deviceAssertion.mountPath }}
+      {{- end }}
       containers:
         - name: satellite-hub
           image: {{ include "psfn.satelliteHubImage" . | quote }}
@@ -991,8 +1044,32 @@ spec:
                 secretKeyRef:
                   name: {{ include "psfn.appSecretName" . }}
                   key: {{ .Values.secrets.keys.satelliteHubControlToken }}
+            {{- end }}
+            {{- if include "psfn.satelliteHubDeviceRegistryEnabled" . }}
+            {{- if not .Values.satelliteHub.deviceAssertion.enabled }}
+            {{- fail "satelliteHub.deviceRegistry (or homeAssistant.enabled) requires satelliteHub.deviceAssertion.enabled=true: the hub refuses to boot with HUB_DEVICE_REGISTRY_PATH and no signing authority" }}
+            {{- end }}
             - name: HUB_DEVICE_REGISTRY_PATH
               value: /app/config/hub-devices.json
+            {{- end }}
+            {{- if .Values.satelliteHub.deviceAssertion.enabled }}
+            {{- if not (include "psfn.satelliteHubDeviceRegistryEnabled" .) }}
+            {{- fail "satelliteHub.deviceAssertion requires a device registry (satelliteHub.deviceRegistry.enabled=true): the hub refuses signing authority without HUB_DEVICE_REGISTRY_PATH" }}
+            {{- end }}
+            {{- /* Complete Hub device assertion signing authority
+                 (apps/satellite-hub/src/ts/shared/env.ts is all-or-nothing).
+                 The private key never appears as a value: it is staged from
+                 the referenced Secret by the init container above. */}}
+            - name: HUB_DEVICE_ASSERTION_ISSUER
+              value: {{ required "satelliteHub.deviceAssertion.issuer is required" .Values.satelliteHub.deviceAssertion.issuer | quote }}
+            - name: HUB_DEVICE_ASSERTION_KID
+              value: {{ required "satelliteHub.deviceAssertion.kid is required" .Values.satelliteHub.deviceAssertion.kid | quote }}
+            - name: HUB_DEVICE_ASSERTION_AUDIENCE
+              value: {{ required "satelliteHub.deviceAssertion.audience is required (the gateway's exact https origin)" .Values.satelliteHub.deviceAssertion.audience | quote }}
+            - name: HUB_DEVICE_ASSERTION_TTL_SECONDS
+              value: {{ .Values.satelliteHub.deviceAssertion.ttlSeconds | quote }}
+            - name: HUB_DEVICE_ASSERTION_PRIVATE_KEY_PATH
+              value: {{ printf "%s/private.pem" .Values.satelliteHub.deviceAssertion.mountPath | quote }}
             {{- end }}
             {{- if .Values.satelliteHub.eidoverse.enabled }}
             {{- /* Hub-owned Eidoverse embodiment client. loadEidoverseMcpConfig
@@ -1139,10 +1216,15 @@ spec:
             - name: psfn-client-tls
               mountPath: {{ printf "%s/psfn-client" .Values.certificates.mountBasePath }}
               readOnly: true
-            {{- if .Values.satelliteHub.homeAssistant.enabled }}
+            {{- if include "psfn.satelliteHubDeviceRegistryEnabled" . }}
             - name: hub-device-registry
               mountPath: /app/config/hub-devices.json
               subPath: hub-devices.json
+              readOnly: true
+            {{- end }}
+            {{- if .Values.satelliteHub.deviceAssertion.enabled }}
+            - name: hub-device-key
+              mountPath: {{ .Values.satelliteHub.deviceAssertion.mountPath }}
               readOnly: true
             {{- end }}
             {{- if and .Values.satelliteHub.eidoverse.enabled .Values.satelliteHub.eidoverse.placeMap.enabled }}
@@ -1158,10 +1240,21 @@ spec:
         - name: psfn-client-tls
           secret:
             secretName: {{ include "psfn.satelliteHubClientCertSecretName" . }}
-        {{- if .Values.satelliteHub.homeAssistant.enabled }}
+        {{- if include "psfn.satelliteHubDeviceRegistryEnabled" . }}
         - name: hub-device-registry
           configMap:
             name: {{ include "psfn.fullname" . }}-hub-devices
+        {{- end }}
+        {{- if .Values.satelliteHub.deviceAssertion.enabled }}
+        - name: hub-device-key-secret
+          secret:
+            secretName: {{ required "satelliteHub.deviceAssertion.privateKeySecretRef.name is required" .Values.satelliteHub.deviceAssertion.privateKeySecretRef.name }}
+            items:
+              - key: {{ required "satelliteHub.deviceAssertion.privateKeySecretRef.key is required" .Values.satelliteHub.deviceAssertion.privateKeySecretRef.key }}
+                path: private.pem
+        - name: hub-device-key
+          emptyDir:
+            medium: Memory
         {{- end }}
         {{- if and .Values.satelliteHub.eidoverse.enabled .Values.satelliteHub.eidoverse.placeMap.enabled }}
         - name: eidoverse-place-map

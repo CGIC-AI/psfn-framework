@@ -45,7 +45,7 @@ import type { SessionHmacKeyring } from '../../persistence/journals/journal/type
  */
 export const HUB_DEVICE_ASSERTIONS_PATH_ENV = 'PSFN_HUB_DEVICE_ASSERTIONS_PATH';
 export const HUB_DEVICE_ASSERTION_AUDIT_PEPPER_ENV = 'HUB_DEVICE_ASSERTION_AUDIT_PEPPER';
-const AUDIT_PEPPER_DERIVATION_DOMAIN = 'psfn:hub-device-assertion-audit-pepper:v1';
+const AUDIT_PEPPER_DERIVATION_DOMAIN = 'hub-device-assertion:audit-pepper:v1';
 const MIN_PEPPER_LENGTH = 32;
 
 type HubDeviceAssertionAuthoritySource =

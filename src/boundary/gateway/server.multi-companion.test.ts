@@ -2825,6 +2825,61 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
     }
   });
 
+  it('answers a satellite turn when no ICP autonomy broker is wired (psfn-framework-5ybt1)', async () => {
+    const companionId = '22222222-2222-4222-8222-222222222222';
+    // A one-companion fleet never wires the ICP autonomy store; its absence
+    // is not an "unavailable" verdict, so the turn must still be answered.
+    const { server, connect } = await setupServer({
+      ...withSharedSatelliteEligibility(createMinimalOptions()),
+      icpAutonomyStore: undefined,
+      icpInitiationPolicyAuthority: undefined,
+      sharedSatelliteQuietHoursAllows: () => true,
+      multiCompanion: multiCompanion({ api: companionId }),
+    });
+    const connection = await connect((message, emit) => {
+      if (!message.id || typeof message.method !== 'string') return;
+      if (message.method === 'satellite.response.eligibility') {
+        emit({ jsonrpc: '2.0', id: message.id, result: { fatigueAllows: true } });
+      }
+      if (message.method === 'api.chat.completion') {
+        emit({
+          jsonrpc: '2.0',
+          id: message.id,
+          result: {
+            ok: true,
+            response: {
+              content: 'unfenced response',
+              channelId: 'satellite:voice:session-sat-app',
+              inputTokens: 2,
+              outputTokens: 2,
+            },
+          },
+        });
+      }
+    });
+    await identifyAgent(connection, companionId, 1);
+    const satellite = makeSatelliteVoiceMessage('sat-app', companionId).routing.satellite;
+
+    await expect(server.requestSharedSatelliteChatCompletion({
+      satellite,
+      canonicalContactId: 'contact-partner',
+      channelId: 'satellite:voice:session-sat-app',
+      params: {
+        requestId: 'unfenced-turn',
+        request: {
+          model: 'test-model',
+          messages: [{ role: 'user' as const, content: 'hello' }],
+        },
+        principal: { id: 'principal-1', mode: 'api_key' as const },
+        headers: {},
+      },
+      timeoutMs: 250,
+    })).resolves.toMatchObject({
+      ok: true,
+      response: { content: 'unfenced response' },
+    });
+  });
+
   it('wakes only the server-addressed companion for authenticated inbound Hub chat', async () => {
     const companionId = '22222222-2222-4222-8222-222222222222';
     let availabilityLease: {

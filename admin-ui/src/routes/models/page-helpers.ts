@@ -18,6 +18,11 @@ export const TUNING_NUMBER_FIELDS = [
 export const CAPABILITY_BOOLEAN_FIELDS = [
   { key: 'supportsReasoning', label: 'Supports Thinking / Reasoning' },
   { key: 'supportsVision', label: 'Supports Vision' },
+  // psfn-framework-mlhn3: some providers FIX sampling temperature per model and
+  // answer 4xx when the parameter is sent at all. Ticking this tells callers
+  // that pin a temperature (the intake screeners) to omit it for this model.
+  // Default-off like every capability flag here, so existing cards are unchanged.
+  { key: 'rejectsTemperature', label: 'Rejects Temperature Parameter' },
 ] as const;
 
 export const MODEL_SLOT_KEY_PATTERN = /^[A-Za-z0-9._-]+$/;

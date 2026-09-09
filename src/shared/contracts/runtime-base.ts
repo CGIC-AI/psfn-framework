@@ -1441,6 +1441,20 @@ export interface ModelRegistryCapabilityMetadata {
   supportsVision?: boolean;
   supportsReasoning?: boolean;
   supportsPromptCaching?: boolean;
+  /**
+   * True when the provider FIXES sampling temperature for this model and
+   * returns a 4xx if the parameter is present at all (e.g. GLM code-plan
+   * models: `invalid temperature: only 1 is allowed for this model`).
+   *
+   * A caller that would otherwise pin a temperature must OMIT the parameter
+   * rather than substitute the provider's fixed value: omission is what every
+   * provider accepts, and guessing the fixed value is a second way to be
+   * wrong. The intake screener transports (L2/L3/vision) read exactly this.
+   *
+   * Default false, which preserves the pre-existing behaviour for every card
+   * that does not declare it. (psfn-framework-mlhn3)
+   */
+  rejectsTemperature?: boolean;
   promptCacheStrategy?: PromptCacheStrategy;
   [key: string]: unknown;
 }

@@ -111,6 +111,92 @@ const retryableResponseFailures = new WeakSet<object>();
 // Code-owned safety invariant: hostile content is never replayed by provider retries.
 const PROVIDER_RETRY_DISABLED = Number(false);
 
+// ── Provider config-rejection classification (psfn-framework-mlhn3) ──
+//
+// A screener call can fail for two structurally different reasons, and the
+// per-envelope fail-closed posture is identical for both — which is exactly why
+// they have to be told apart somewhere else. A timeout or a 5xx is weather: it
+// passes, and quarantining the envelope was the right call. A 4xx that names a
+// request PARAMETER is a standing misconfiguration: it will reject every
+// envelope forever, so it belongs on the health plane as a condition, not in a
+// per-envelope log line nobody reads.
+//
+// Statuses excluded from "configuration": 408 (request timeout) and 429 (rate
+// limit) are transient by definition, and 5xx is the provider's own fault.
+const PROVIDER_TRANSIENT_4XX_STATUSES: ReadonlySet<number> = new Set([408, 429]);
+
+/**
+ * Leading HTTP status of a pi-ai provider failure string.
+ *
+ * pi-ai composes provider errors two ways and both put the status FIRST:
+ * `formatProviderError` yields `"<status>: <body>"` when it could extract a
+ * status and a body, and otherwise passes the SDK's own `error.message`
+ * through, which for the OpenAI-shaped SDKs reads `"<status> <text>"`. The
+ * anchor is therefore deliberate: a bare status-looking number ANYWHERE in a
+ * provider body (a token count, a model id) must not be read as the status.
+ *
+ * Must be applied to the RAW provider detail, before any caller prefix is
+ * prepended. A detail with no leading status classifies as transient, i.e. the
+ * envelope still fails closed but no health condition is raised — silence is
+ * the correct answer when the shape is unrecognized.
+ */
+const PROVIDER_ERROR_STATUS_PATTERN = /^\s*([1-5]\d{2})\b/u;
+
+/** Content-free identity of a screener request the provider refused to accept. */
+export interface ScreenerProviderRejection {
+  /** HTTP status the provider answered with. */
+  httpStatus: number;
+}
+
+/**
+ * Classifies one raw provider failure detail. Returns the rejection when the
+ * status names a request/configuration problem the operator must fix, and
+ * undefined for a transient failure (timeout, rate limit, 5xx, unrecognized).
+ */
+export function classifyScreenerProviderFailure(
+  detail: string,
+): ScreenerProviderRejection | undefined {
+  const match = PROVIDER_ERROR_STATUS_PATTERN.exec(detail);
+  if (!match?.[1]) return undefined;
+  const httpStatus = Number(match[1]);
+  if (httpStatus < 400 || httpStatus >= 500) return undefined;
+  if (PROVIDER_TRANSIENT_4XX_STATUSES.has(httpStatus)) return undefined;
+  return { httpStatus };
+}
+
+const providerRejections = new WeakMap<object, ScreenerProviderRejection>();
+
+/**
+ * Reads the config-rejection marker off a screener error, for callers that
+ * raise a health condition beside their own fail-closed handling. Returns
+ * undefined for every other failure, so a caller cannot mistake weather for
+ * misconfiguration.
+ */
+export function screenerProviderRejection(
+  error: unknown,
+): ScreenerProviderRejection | undefined {
+  if (typeof error !== 'object' || error === null) return undefined;
+  return providerRejections.get(error);
+}
+
+/**
+ * Builds the caller's typed error for a provider failure, carrying the
+ * config-rejection marker when the RAW detail names one. The marker rides on
+ * the error object rather than in its message so no caller has to re-parse a
+ * rendered string, and nothing about the provider body reaches the health
+ * plane.
+ */
+function providerFailure(
+  input: ToolLessScreenerCallInput,
+  rawDetail: string,
+  message: string,
+): Error {
+  const error = input.makeError(message);
+  const rejection = classifyScreenerProviderFailure(rawDetail);
+  if (rejection) providerRejections.set(error, rejection);
+  return error;
+}
+
 const SCHEMA_REPAIR_INSTRUCTION = [
   'Your previous response failed validation. Retry once from the original input.',
   'Return one complete JSON object matching the requested schema exactly.',
@@ -182,12 +268,21 @@ function buildPiOptions(
   apiKey: string,
   signal: AbortSignal,
 ): SimpleStreamOptions {
-  const options = requestCapability.buildRequestOptions(candidate, apiKey, { signal });
+  const { temperature: _cardTemperature, ...options } = requestCapability
+    .buildRequestOptions(candidate, apiKey, { signal });
   return {
     ...options,
     timeoutMs: input.timeoutMs,
     maxRetries: PROVIDER_RETRY_DISABLED,
-    temperature: 0,
+    // psfn-framework-mlhn3: a screener wants deterministic output, so it pins
+    // temperature 0 — EXCEPT on a model whose card declares the provider fixes
+    // temperature and 4xx-rejects the parameter. There the only correct request
+    // is one that omits it: the provider's own default is the fixed value, and
+    // sending that value literally is not portable across providers. The card
+    // is the authority; nothing here inspects a provider name. The candidate's
+    // own `tuning.temperature` is destructured out above so it cannot leak back
+    // in through `buildRequestOptions` for a rejecting model.
+    ...(candidate.rejectsTemperature === true ? {} : { temperature: 0 }),
     ...(input.maxOutputTokens !== undefined
       ? { maxTokens: Math.min(candidate.maxTokens, input.maxOutputTokens) }
       : {}),
@@ -227,18 +322,26 @@ async function callToolLessJsonScreenerThroughPi(
     );
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    throw input.makeError(
-      controller.signal.aborted
-        ? `${input.screenerName} call timed out after ${String(input.timeoutMs)}ms`
-        : `${input.screenerName} call failed: ${detail}`,
+    if (controller.signal.aborted) {
+      throw input.makeError(
+        `${input.screenerName} call timed out after ${String(input.timeoutMs)}ms`,
+      );
+    }
+    throw providerFailure(
+      input,
+      detail,
+      `${input.screenerName} call failed: ${detail}`,
     );
   } finally {
     clearTimeout(timeout);
   }
   if (response.stopReason === 'error' || response.stopReason === 'aborted') {
-    throw input.makeError(
+    const detail = response.errorMessage ?? '';
+    throw providerFailure(
+      input,
+      detail,
       `${input.screenerName} provider failed: `
-      + (response.errorMessage?.slice(0, COGSEC_TRANSPORT_ERROR_MAX_CHARS) || response.stopReason),
+      + (detail.slice(0, COGSEC_TRANSPORT_ERROR_MAX_CHARS) || response.stopReason),
     );
   }
   const content = extractPiMessageText(response);
@@ -273,11 +376,19 @@ async function callToolLessJsonScreenerThroughTestCompletion(
     });
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    const aborted = controller.signal.aborted;
-    throw input.makeError(
-      aborted
-        ? `${input.screenerName} call timed out after ${String(input.timeoutMs)}ms`
-        : `${input.screenerName} call failed: ${detail}`,
+    if (controller.signal.aborted) {
+      throw input.makeError(
+        `${input.screenerName} call timed out after ${String(input.timeoutMs)}ms`,
+      );
+    }
+    // Classified identically to the pi path (psfn-framework-mlhn3): the seam's
+    // contract is "return assistant text or throw the way a provider does", so
+    // a caller must not learn a different failure taxonomy under test than the
+    // one it will see in production.
+    throw providerFailure(
+      input,
+      detail,
+      `${input.screenerName} call failed: ${detail}`,
     );
   } finally {
     clearTimeout(timeout);

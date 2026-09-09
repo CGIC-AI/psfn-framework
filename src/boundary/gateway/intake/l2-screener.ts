@@ -56,6 +56,7 @@ import {
   neutralizeUntrustedDelimiters,
   screenerModelId,
   screenerModelLabel,
+  screenerProviderRejection,
   stripJsonFences,
   type ScreenerBackend,
   type ScreenerModel,
@@ -314,6 +315,28 @@ export interface EvaluateL2Input {
   backend: L2ScreenerBackend;
   /** Test seam; production uses the global fetch. */
   testCompletion?: ScreenerTestCompletion;
+  /**
+   * Called when the screener provider REFUSED the request parameters rather
+   * than failing transiently (psfn-framework-mlhn3). The fail-closed outcome
+   * below is unchanged — this is raised IN ADDITION, because a rejected
+   * parameter rejects every envelope and is an operator misconfiguration, not
+   * a property of the content being screened.
+   *
+   * Content-free by construction: the callback receives the screener tier, the
+   * model label used for grouping, and the HTTP status. It never receives the
+   * provider message or any screened text.
+   */
+  onProviderRejected?: (event: L2ScreenerProviderRejectedEvent) => void;
+}
+
+/** Content-free description of a screener request the provider refused. */
+export interface L2ScreenerProviderRejectedEvent {
+  /** Screener tier that made the call; part of the health-event grouping key. */
+  tier: 'l2';
+  /** `provider/model` of the screener route; grouping key only, never logged as evidence. */
+  modelLabel: string;
+  /** HTTP status the provider answered with. */
+  httpStatus: number;
 }
 
 export type L2ScreeningOutcome =
@@ -375,6 +398,19 @@ export async function evaluateL2(input: EvaluateL2Input): Promise<L2ScreeningOut
   } catch (error) {
     const action = l2FailClosedActionForTier(config, tier);
     const message = error instanceof Error ? error.message : String(error);
+    // psfn-framework-mlhn3: a provider that refused the request PARAMETERS
+    // will refuse every envelope. Fail closed as before — an unscreenable item
+    // is still held — but say so once on the health plane as a standing
+    // condition, so a misconfigured screener model is visible as a
+    // misconfiguration instead of as an endless stream of quarantines.
+    const rejection = screenerProviderRejection(error);
+    if (rejection) {
+      input.onProviderRejected?.({
+        tier: 'l2',
+        modelLabel: screenerModelLabel(input.model),
+        httpStatus: rejection.httpStatus,
+      });
+    }
     log.warn(
       `L2 screen failed for ${context.sourceClass}/${tier}; failing closed to `
       + `${action}: ${message}`,

@@ -648,6 +648,15 @@ scheduler cadence (`salienceDecayIntervalMs`, `socialGraphBuilder.intervalMs`)
 is *not* adapted — that rewrite is ambiguous and only
 `migrate-scheduler-owner` resolves it, so startup still fails closed there.
 
+The settings half of the adaptation reads its defaults from
+`$CONFIG_DIR/settings.seed.json` (`./config` when `CONFIG_DIR` is unset), which
+the shipped images bake in and both `docker/compose.yml` and the chart set. A
+deployment that ships owner files without a seed directory keeps booting exactly
+as it did before — the adaptation is skipped with its own warning naming
+`CONFIG_DIR`, and the required-field resolvers fail closed as they used to. A
+seed that is present but malformed still stops the process: that is a contract
+defect, not an upgrade gap.
+
 ## Recovery: session repair
 
 `npm run session:repair` (`src/app/maintenance/session-repair.ts`) is the

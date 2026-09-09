@@ -422,6 +422,48 @@ describe('BiographySynthesisService', () => {
         expect(prompt).not.toContain('mem-no-context');
       });
 
+      it('gives two same-membership groups separate no-change cursors', async () => {
+        const { memories, profileStore } = siloFixture();
+        memories.insertMemory(companionMemory('mem-second-group', {
+          text: "In the other chat the three of us say 'harbour light' for the same hour.",
+          provenance: { channelId: 'channel-second-group-invented' },
+        }));
+        const secondGroupTarget: BiographySynthesisTarget = {
+          ...GROUP_TARGET,
+          evidenceScope: { governedContextIds: ['channel-second-group-invented'] },
+        };
+        const model = recordingModel([
+          candidatesResponse([sharedLanguageCandidate(['mem-in-context'])]),
+          candidatesResponse([
+            sharedLanguageCandidate(['mem-second-group'], 'harbour light'),
+          ]),
+        ]);
+
+        await new BiographySynthesisService({
+          memoryStore: memories.asPort(),
+          profileStore,
+          llmClient: model.port,
+          promptRegistry: null,
+          targets: targetPort([GROUP_TARGET, secondGroupTarget]),
+          companionSubject: COMPANION_SUBJECT,
+          candidatePolicy: () => POLICY,
+          depthPolicy: () => createDefaultBiographicalDepthPolicy(),
+          now: () => NOW,
+          newRunId: () => 'biography-synthesis:two-groups',
+        }).run();
+
+        // Same participant set, two governed contexts, two bodies of evidence:
+        // a shared cursor would make each pass reopen the other one forever.
+        const second = await buildService({
+          memoryStore: memories.asPort(),
+          profileStore,
+          model: recordingModel([candidatesResponse([])]),
+          targets: [GROUP_TARGET, secondGroupTarget],
+          runId: 'biography-synthesis:two-groups-again',
+        }).run();
+        expect(second.targetsUnchanged).toBe(2);
+      });
+
       it('fails a group target that carries no governed evidence scope', async () => {
         const { memories, profileStore } = siloFixture();
         const model = recordingModel([

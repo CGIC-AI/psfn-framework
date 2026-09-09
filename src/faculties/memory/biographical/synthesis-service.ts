@@ -271,11 +271,22 @@ export function stageCursorKeyForSubject(subject: BiographicalSubjectRef): strin
  * overwrite the autobiography's cursor and each other's. The exact canonical
  * participant set — which the group authority, not the model, decides — is what
  * distinguishes them.
+ *
+ * The governed evidence scope joins the key for the same reason (zu8d2): once
+ * a group's evidence is scoped to its own context, the same people in two
+ * group chats are two targets over two different bodies of evidence. Sharing
+ * one cursor between them would make each pass invalidate the other's digest
+ * and re-synthesize both on every tick.
  */
 export function stageCursorKeyForTarget(target: BiographySynthesisTarget): string {
   const subjectKey = stageCursorKeyForSubject(target.subject);
   if (target.socialContext.kind !== 'companion_group') return subjectKey;
-  return `${subjectKey}|group:${target.socialContext.contactIds.join(',')}`;
+  const scopeKey = [...(target.evidenceScope?.governedContextIds ?? [])]
+    .map(contextId => contextId.trim())
+    .filter(contextId => contextId.length > 0)
+    .sort((left, right) => left.localeCompare(right))
+    .join(',');
+  return `${subjectKey}|group:${target.socialContext.contactIds.join(',')}|context:${scopeKey}`;
 }
 
 export class BiographySynthesisService {

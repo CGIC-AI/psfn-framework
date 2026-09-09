@@ -39,6 +39,7 @@ import { toErrorMessage } from '../../shared/utils/errors.js';
 import { isRecord } from '../../shared/utils/types.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import { assertNoUnknownKeys } from './config-validation.js';
+import { parseHubDeviceAssertionVerifierConfig } from '../../boundary/fleet-auth/hub-device-assertion-config.js';
 import { withSessionJournalWriteLock } from '../../persistence/sessions/store/session-journal-write-lock.js';
 
 const ID_TOKEN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
@@ -758,7 +759,14 @@ export function parseSatelliteRegistryConfig(
   }
   assertNoUnknownKeys(
     rawConfig,
-    ['schemaVersion', 'enabled', 'productivityCompanionId', 'satellites', 'retiredSatellites'],
+    [
+      'schemaVersion',
+      'enabled',
+      'productivityCompanionId',
+      'hubDeviceAssertions',
+      'satellites',
+      'retiredSatellites',
+    ],
     sourceLabel,
   );
   if (rawConfig.schemaVersion !== 1) {
@@ -785,6 +793,11 @@ export function parseSatelliteRegistryConfig(
         rawConfig.productivityCompanionId,
         `${sourceLabel}.productivityCompanionId`,
       );
+  const hubDeviceAssertions = rawConfig.hubDeviceAssertions === undefined
+    ? undefined
+    : parseHubDeviceAssertionVerifierConfig(rawConfig.hubDeviceAssertions, {
+        field: `${sourceLabel}.hubDeviceAssertions`,
+      });
   if (enabled && satellites.length === 0) {
     throw new Error(`${sourceLabel}.satellites must contain at least one satellite when enabled`);
   }
@@ -793,6 +806,7 @@ export function parseSatelliteRegistryConfig(
     schemaVersion: 1,
     enabled,
     ...(productivityCompanionId ? { productivityCompanionId } : {}),
+    ...(hubDeviceAssertions ? { hubDeviceAssertions } : {}),
     satellites,
     retiredSatellites,
   };
@@ -826,6 +840,14 @@ function toSerializableSatelliteRegistry(config: SatelliteRegistryConfig): unkno
     enabled: config.enabled,
     ...(config.productivityCompanionId
       ? { productivityCompanionId: config.productivityCompanionId }
+      : {}),
+    ...(config.hubDeviceAssertions
+      ? {
+          hubDeviceAssertions: {
+            ...config.hubDeviceAssertions,
+            keys: config.hubDeviceAssertions.keys.map(key => ({ ...key })),
+          },
+        }
       : {}),
     satellites: config.satellites.map((satellite) => ({
       satelliteId: satellite.satelliteId,

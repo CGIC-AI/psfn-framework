@@ -24,8 +24,8 @@ import { loadRequiredJson } from './load-or-seed.js';
 import type { FleetAuthDatabaseRoles } from '../../persistence/postgres/fleet-auth/schema.js';
 import type {
   HubDeviceAssertionVerifierConfig,
-  HubDeviceAssertionVerifierKey,
 } from '../../boundary/fleet-auth/hub-device-assertion.js';
+import { parseHubDeviceAssertionVerifierConfig } from '../../boundary/fleet-auth/hub-device-assertion-config.js';
 import {
   assertBrokerSigningKeyNotTrustedByHub,
   assertFleetAuthPublicKeyBoundary,
@@ -432,71 +432,12 @@ function parseVerifierKeys(value: unknown): FleetAuthVerifierKey[] {
 }
 
 function parseHubDeviceAssertions(value: unknown): HubDeviceAssertionVerifierConfig {
-  const field = 'hubDeviceAssertions';
-  const record = requireRecord(value, field);
-  requireExactKeys(record, ['issuer', 'audience', 'maxTtlSeconds', 'clockSkewSeconds', 'keys'], field);
-  const issuer = requireString(record.issuer, `${field}.issuer`);
-  if (!KEY_ID_PATTERN.test(issuer)) fail(`${field}.issuer must use stable identifier characters`);
-  const audience = parseExactHttpsOrigin(record.audience, `${field}.audience`);
-  const maxTtlSeconds = requireInteger(record.maxTtlSeconds, `${field}.maxTtlSeconds`, 5, 60);
-  const clockSkewSeconds = requireInteger(record.clockSkewSeconds, `${field}.clockSkewSeconds`, 0, 10);
-  if (!Array.isArray(record.keys) || record.keys.length === 0) {
-    fail(`${field}.keys must be a non-empty array`);
-  }
-  const seen = new Set<string>();
-  let activeCount = 0;
-  const keys = record.keys.map((entry, index): HubDeviceAssertionVerifierKey => {
-    const keyField = `${field}.keys[${index}]`;
-    const key = requireRecord(entry, keyField);
-    requireExactKeys(key, ['kid', 'publicKeyPem', 'notBefore', 'notAfter', 'status'], keyField);
-    const kid = requireString(key.kid, `${keyField}.kid`);
-    if (!KEY_ID_PATTERN.test(kid)) fail(`${keyField}.kid must use stable identifier characters`);
-    if (seen.has(kid)) fail(`duplicate Hub device assertion key ${kid}`);
-    seen.add(kid);
-    const publicKeyPem = requireString(key.publicKeyPem, `${keyField}.publicKeyPem`);
-    if (publicKeyPem.includes('PRIVATE KEY')) fail(`${keyField}.publicKeyPem must be a public Ed25519 key`);
-    try {
-      const parsed = createPublicKey(publicKeyPem);
-      if (parsed.asymmetricKeyType !== 'ed25519') fail(`${keyField}.publicKeyPem must be a public Ed25519 key`);
-    } catch (error) {
-      if (error instanceof Error && error.message.startsWith(ERROR_PREFIX)) throw error;
-      fail(`${keyField}.publicKeyPem must be a public Ed25519 key`);
-    }
-    const notBefore = requireString(key.notBefore, `${keyField}.notBefore`);
-    const notAfter = requireString(key.notAfter, `${keyField}.notAfter`);
-    if (!isCanonicalIsoTimestamp(notBefore) || !isCanonicalIsoTimestamp(notAfter)
-      || Date.parse(notBefore) >= Date.parse(notAfter)) {
-      fail(`${keyField} must have an ordered ISO validity window`);
-    }
-    if (key.status !== 'active' && key.status !== 'retiring' && key.status !== 'revoked') {
-      fail(`${keyField}.status must be active, retiring, or revoked`);
-    }
-    if (key.status === 'active') activeCount += 1;
-    return { kid, publicKeyPem, notBefore, notAfter, status: key.status };
+  // One parser for every authority that may carry the ring (fleet-auth.json,
+  // satellites.json, the standalone env file): psfn-framework-n66dn.2.
+  return parseHubDeviceAssertionVerifierConfig(value, {
+    field: 'hubDeviceAssertions',
+    errorPrefix: ERROR_PREFIX,
   });
-  if (activeCount !== 1) fail('Hub device assertion keys must contain exactly one active key');
-  const active = keys.find(key => key.status === 'active')!;
-  const now = Date.now();
-  if (Date.parse(active.notBefore) > now || Date.parse(active.notAfter) <= now) {
-    fail('the active Hub device assertion key must be inside its configured validity window');
-  }
-  return { issuer, audience, maxTtlSeconds, clockSkewSeconds, keys };
-}
-
-function parseExactHttpsOrigin(value: unknown, field: string): string {
-  const raw = requireString(value, field);
-  let parsed: URL;
-  try {
-    parsed = new URL(raw);
-  } catch {
-    fail(`${field} must be a valid URL`);
-  }
-  if (parsed.protocol !== 'https:' || parsed.username || parsed.password
-    || parsed.pathname !== '/' || parsed.search || parsed.hash || raw.endsWith('/')
-    || raw !== parsed.origin) {
-    fail(`${field} must be an exact normalized https origin`);
-  }
-  return parsed.origin;
 }
 
 function parseDatabaseRoles(value: unknown): FleetAuthConfig['databaseRoles'] {

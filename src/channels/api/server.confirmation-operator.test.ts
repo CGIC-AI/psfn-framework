@@ -1,6 +1,5 @@
 import http from 'node:http';
 import net from 'node:net';
-import { fromAny } from '@total-typescript/shoehorn';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
@@ -137,8 +136,13 @@ describe('ApiServer operator confirmation route', () => {
     expect(resolve).not.toHaveBeenCalled();
   });
 
-  it('rejects companion authority that conflicts with standalone mode', async () => {
-    const resolve = vi.fn();
+  it('accepts companion authority on a single-companion runtime and resolves owner-scoped', async () => {
+    const resolve = vi.fn(async (params) => ({
+      id: params.id,
+      status: 'approved' as const,
+      message: 'Approved.',
+      executed: true,
+    }));
     server = new ApiServer({
       port,
       host: '127.0.0.1',
@@ -156,11 +160,23 @@ describe('ApiServer operator confirmation route', () => {
       id: 'kube-approval',
       decision: 'approve',
       companionId: TEST_COMPANION_ID,
+    })).resolves.toMatchObject({ status: 200 });
+    expect(resolve).toHaveBeenCalledWith(
+      { id: 'kube-approval', decision: 'approve' },
+      { kind: 'fleet_companion', companionId: TEST_COMPANION_ID },
+    );
+
+    // A malformed companion id is still rejected before the resolver runs.
+    resolve.mockClear();
+    await expect(request(port, ADMIN_TOKEN, {
+      id: 'kube-approval',
+      decision: 'approve',
+      companionId: 'not-a-uuid',
     })).resolves.toMatchObject({ status: 400 });
     expect(resolve).not.toHaveBeenCalled();
   });
 
-  it('carries the authenticated companion into Fleet operator resolution', async () => {
+  it('carries the authenticated companion into multi-companion operator resolution', async () => {
     const resolve = vi.fn(async (params) => ({
       id: params.id,
       status: 'approved' as const,
@@ -177,12 +193,7 @@ describe('ApiServer operator confirmation route', () => {
       apiKey: API_TOKEN,
       adminToken: ADMIN_TOKEN,
       confirmationOperator: { resolve },
-      fleetAuthBootstrapOnly: true,
-      fleetAuthHttpRoutes: fromAny({
-        applyLifecycleCorsPolicy: () => 'not_applicable',
-        matches: () => false,
-        handle: vi.fn(),
-      }),
+      confirmationOperatorRequiresCompanionId: true,
     });
     await server.start();
 
@@ -204,7 +215,7 @@ describe('ApiServer operator confirmation route', () => {
     });
   });
 
-  it('fails closed when Fleet operator resolution omits companion authority', async () => {
+  it('fails closed when multi-companion operator resolution omits companion authority', async () => {
     const resolve = vi.fn();
     server = new ApiServer({
       port,
@@ -216,12 +227,7 @@ describe('ApiServer operator confirmation route', () => {
       apiKey: API_TOKEN,
       adminToken: ADMIN_TOKEN,
       confirmationOperator: { resolve },
-      fleetAuthBootstrapOnly: true,
-      fleetAuthHttpRoutes: fromAny({
-        applyLifecycleCorsPolicy: () => 'not_applicable',
-        matches: () => false,
-        handle: vi.fn(),
-      }),
+      confirmationOperatorRequiresCompanionId: true,
     });
     await server.start();
 

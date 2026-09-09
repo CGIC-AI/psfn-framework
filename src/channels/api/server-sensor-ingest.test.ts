@@ -134,7 +134,6 @@ describe('ApiServer sensor ingest wiring', () => {
       sessionManager: fromAny<SessionManager>({}),
       sensorIngest,
       satelliteApiKeys: ['dedicated-satellite-key'],
-      fleetAuthBootstrapOnly: true,
       fleetAuthHttpRoutes: fromAny<FleetAuthHttpRoutes>({
         applyLifecycleCorsPolicy: () => 'not_applicable',
         matches: () => false,

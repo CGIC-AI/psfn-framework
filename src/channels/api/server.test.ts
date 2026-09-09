@@ -2414,30 +2414,42 @@ describe('ApiServer startup auth guard', () => {
     );
   });
 
-  it('rejects bootstrap-only mode unless gateway-owned fleet auth routes are installed', async () => {
+  it('starts without API_KEY when another principal source is wired', async () => {
     const eventBus = new EventBus();
-    const server = createApiServer({
-      port: await allocatePort(),
-      agentLoop: createMockAgentLoop(eventBus),
-      eventBus,
-      sessionManager: createMockSessionManager(),
-      fleetAuthBootstrapOnly: true,
-    });
-    await expect(server.start()).rejects.toThrow(/fleet auth bootstrap routes/i);
+    for (const source of [
+      { satelliteApiKeys: ['dedicated-satellite-key'] },
+      { adminToken: 'dedicated-admin-token' },
+      { testingHarnessPrincipal: { principalId: 'testing-harness', apiKey: 'dedicated-testing-harness-key' } },
+    ]) {
+      const server = createApiServer({
+        port: await allocatePort(),
+        agentLoop: createMockAgentLoop(eventBus),
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        ...source,
+      });
+      await expect(server.start()).resolves.toBeUndefined();
+      await stopServer(server);
+    }
   });
 });
 
-describe('ApiServer fleet-auth bootstrap-only boundary', () => {
+// S13 operator rule: fleet auth ADDS the SSO/lifecycle routes and never removes
+// key authentication, disables a surface, or changes routing (beads y7pc8, hc23v).
+describe('ApiServer with fleet auth configured alongside key auth', () => {
   let server: ApiServer;
   let port: number;
+  let eventBus: EventBus;
+  let voice: ReturnType<typeof createVoiceHooksProbe>;
   let broker: {
     beginLogin: ReturnType<typeof vi.fn>;
     beginLifecycleOAuth: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(async () => {
-    const eventBus = new EventBus();
+    eventBus = new EventBus();
     port = await allocatePort();
+    voice = createVoiceHooksProbe();
     broker = {
       beginLogin: vi.fn(async () => ({
         authorizationUrl: 'https://discord.com/oauth2/authorize?state=opaque',
@@ -2456,13 +2468,29 @@ describe('ApiServer fleet-auth bootstrap-only boundary', () => {
       eventBus,
       sessionManager: createMockSessionManager(),
       apiKey: 'legacy-api-key',
+      adminToken: 'dedicated-admin-token',
       testingHarnessPrincipal: {
         principalId: 'testing-harness',
         apiKey: 'dedicated-testing-harness-key',
       },
       satelliteApiKeys: ['dedicated-satellite-key'],
-      allowInsecureWithoutAuth: true,
-      fleetAuthBootstrapOnly: true,
+      // The registry endpoint admits the satellite key's derived principal, as
+      // a Hub deployment lists its SATELLITE_HUB_API_KEY principal in satellites.json.
+      satelliteRegistry: {
+        ...SATELLITE_TEST_REGISTRY,
+        satellites: SATELLITE_TEST_REGISTRY.satellites.map(satellite => ({
+          ...satellite,
+          endpoints: satellite.endpoints.map(endpoint => ({
+            ...endpoint,
+            auth: {
+              mode: 'api_key' as const,
+              apiKeyPrincipalIds: [deriveApiKeyPrincipalId('dedicated-satellite-key')],
+            },
+          })),
+        })),
+      },
+      healthChecks: createHealthyHealthChecks(),
+      voiceWebSocketHooks: voice.hooks,
       fleetAuthHttpRoutes: new FleetAuthHttpRoutes({
         broker: broker as unknown as GatewayFleetAuthBroker,
         canonicalOrigin: 'https://fleet.example.test',
@@ -2477,7 +2505,7 @@ describe('ApiServer fleet-auth bootstrap-only boundary', () => {
     clearDiagnosticLogRingBufferForTests();
   });
 
-  it('exposes login bootstrap but rejects ordinary HTTP through API-key and insecure-local paths', async () => {
+  it('exposes the SSO login bootstrap and keeps API_KEY and ADMIN_TOKEN authenticating', async () => {
     const login = await request(port, 'GET', '/v1/fleet-auth/login?return_to=%2Ffleet');
     expect(login.status).toBe(302);
     expect(login.headers.location).toContain('discord.com/oauth2/authorize');
@@ -2485,70 +2513,85 @@ describe('ApiServer fleet-auth bootstrap-only boundary', () => {
     const apiKeyAttempt = await request(port, 'GET', '/v1/models', undefined, {
       Authorization: 'Bearer legacy-api-key',
     });
-    expect(apiKeyAttempt.status).toBe(503);
-    expect(JSON.parse(apiKeyAttempt.body).error.type).toBe('fleet_auth_principal_resolver_unavailable');
+    expect(apiKeyAttempt.status).toBe(200);
+    expect(JSON.parse(apiKeyAttempt.body).data[0].id).toBe(DEFAULT_COMPANION_ID);
 
-    const insecureAttempt = await request(port, 'GET', '/v1/models');
-    expect(insecureAttempt.status).toBe(503);
-    expect(JSON.parse(insecureAttempt.body).error.type).toBe('fleet_auth_principal_resolver_unavailable');
+    const adminTokenAttempt = await request(port, 'GET', '/v1/models', undefined, {
+      Authorization: 'Bearer dedicated-admin-token',
+    });
+    expect(adminTokenAttempt.status).toBe(200);
+
+    const unauthenticated = await request(port, 'GET', '/v1/models');
+    expect(unauthenticated.status).toBe(401);
+    expect(JSON.parse(unauthenticated.body).error.type).toBe('invalid_api_key');
   });
 
-  it('routes matched companion relay requests through the satellite principal resolver', async () => {
-    const relayAttempt = await request(
-      port,
-      'GET',
-      '/v1/companion/events?satelliteId=hub-node&endpointId=hub-endpoint&claimType=satellite-hub',
-    );
-
-    expect(relayAttempt.status).toBe(401);
-    expect(JSON.parse(relayAttempt.body).error.type).toBe('invalid_api_key');
-
-    for (const bearer of ['dedicated-testing-harness-key', 'legacy-api-key']) {
-      const nonSatelliteAttempt = await request(
-        port,
-        'GET',
-        '/v1/companion/events?satelliteId=hub-node&endpointId=hub-endpoint&claimType=satellite-hub',
-        undefined,
-        { Authorization: `Bearer ${bearer}` },
-      );
-      expect(nonSatelliteAttempt.status).toBe(401);
-      expect(JSON.parse(nonSatelliteAttempt.body).error.type).toBe('invalid_api_key');
+  it('answers /health for key principals without any SSO resolver', async () => {
+    for (const bearer of ['legacy-api-key', 'dedicated-admin-token']) {
+      const health = await request(port, 'GET', '/health', undefined, {
+        Authorization: `Bearer ${bearer}`,
+      });
+      expect(health.status).toBe(200);
+      expect(JSON.parse(health.body).status).toBe('healthy');
     }
-
-    const satelliteAttempt = await request(
-      port,
-      'GET',
-      '/v1/companion/events?satelliteId=hub-node&endpointId=hub-endpoint&claimType=satellite-hub',
-      undefined,
-      { Authorization: 'Bearer dedicated-satellite-key' },
-    );
-    expect(satelliteAttempt.status).toBe(503);
-    expect(JSON.parse(satelliteAttempt.body).error.type).toBe('companion_relay_not_configured');
-
-    const ordinaryAttempt = await request(port, 'GET', '/v1/models');
-    expect(ordinaryAttempt.status).toBe(503);
-    expect(JSON.parse(ordinaryAttempt.body).error.type).toBe(
-      'fleet_auth_principal_resolver_unavailable',
-    );
+    const records = getRecentDiagnosticLogRecords();
+    expect(records.some(record => (
+      String(record.message).includes('fleet_auth_principal_resolver_unavailable')
+    ))).toBe(false);
   });
 
-  it('logs bootstrap-only principal resolver rejections', async () => {
-    clearDiagnosticLogRingBufferForTests();
+  it('completes a satellite-key chat turn without a Hub device assertion', async () => {
+    const response = await request(port, 'POST', '/v1/chat/completions', {
+      model: DEFAULT_COMPANION_ID,
+      messages: [{ role: 'user', content: 'hello from the hub' }],
+    }, {
+      Authorization: 'Bearer dedicated-satellite-key',
+      'X-PSFN-Satellite-Claim-Type': 'android-mobile',
+      'X-PSFN-Satellite-ID': 'android-phone',
+      'X-PSFN-Satellite-Endpoint-ID': 'companion-app',
+      'X-PSFN-Satellite-Session-ID': 'hub-turn-without-assertion',
+    });
 
-    const response = await request(port, 'GET', '/v1/models');
-
-    expect(response.status).toBe(503);
-    expect(getRecentDiagnosticLogRecords()).toContainEqual(expect.objectContaining({
-      level: 'warn',
-      component: 'ApiServer',
-      message: expect.stringContaining('fleet_auth_principal_resolver_unavailable'),
-    }));
+    expect(response.status).toBe(200);
+    expect(JSON.parse(response.body).choices[0].message.content).toBe('Hello world');
   });
 
-  it('rejects all voice WebSocket upgrades even when a legacy API key is presented', async () => {
-    await expect(openWebSocketExpectStatus(port, '/v1/voice/ws', {
+  it('rejects an assertion-bearing chat turn clearly when no device ingress is configured', async () => {
+    const response = await request(port, 'POST', '/v1/chat/completions', {
+      model: DEFAULT_COMPANION_ID,
+      messages: [{ role: 'user', content: 'hello' }],
+    }, {
+      Authorization: 'Bearer dedicated-satellite-key',
+      'X-PSFN-Hub-Device-Assertion': 'header.claims.signature',
+    });
+    expect(response.status).toBe(400);
+    expect(JSON.parse(response.body).error.type).toBe('hub_device_ingress_not_configured');
+  });
+
+  it('admits every authenticated principal to companion relay routes and lets the registry decide', async () => {
+    const relayPath = '/v1/companion/events?satelliteId=hub-node&endpointId=hub-endpoint&claimType=satellite-hub';
+    const unauthenticated = await request(port, 'GET', relayPath);
+    expect(unauthenticated.status).toBe(401);
+    expect(JSON.parse(unauthenticated.body).error.type).toBe('invalid_api_key');
+
+    for (const bearer of ['dedicated-satellite-key', 'legacy-api-key', 'dedicated-admin-token']) {
+      const attempt = await request(port, 'GET', relayPath, undefined, {
+        Authorization: `Bearer ${bearer}`,
+      });
+      expect(attempt.status).toBe(503);
+      expect(JSON.parse(attempt.body).error.type).toBe('companion_relay_not_configured');
+    }
+  });
+
+  it('accepts voice WebSocket upgrades with the API key', async () => {
+    const ws = await openWebSocket(port, '/v1/voice/ws', {
       Authorization: 'Bearer legacy-api-key',
-    })).resolves.toBe(404);
+    });
+    ws.send('voice-frame-under-fleet-auth');
+    await waitFor(() => voice.probe.messages.includes('voice-frame-under-fleet-auth'));
+    ws.close();
+
+    await expect(openWebSocketExpectStatus(port, '/v1/voice/ws')).resolves.toBe(401);
   });
 
   it('admits only canonical-origin lifecycle initiation and its bounded CSRF preflight', async () => {

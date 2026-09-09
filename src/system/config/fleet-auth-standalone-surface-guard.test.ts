@@ -1,26 +1,52 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   assertFleetAuthStandaloneSurfacesUnavailable,
-  warnIfInsecureLocalApiIgnoredUnderFleetAuth,
+  warnIfInsecureLocalApiUnderFleetAuth,
 } from './fleet-auth-standalone-surface-guard.js';
 
 describe('fleet auth standalone surface startup guard', () => {
+  // Operator rule (S13): fleet auth ADDS SSO and never removes key/token
+  // authentication. Every key/token surface below must start under fleet auth.
   it.each([
-    ['gateway HTTP/API/WebSocket', 'gateway' as const, { API_PORT: '8787' }],
-    ['gateway-admin Garden cookie/token', 'gateway' as const, {
+    ['gateway-admin Garden ADMIN_TOKEN', 'gateway' as const, {
       ADMIN_PORT: '8790',
       ADMIN_TOKEN: 'standalone-admin-token',
     }],
-    ['operator Garden cookie/token', 'operator' as const, {
+    ['operator Garden ADMIN_TOKEN', 'operator' as const, {
       ADMIN_PORT: '8790',
       ADMIN_TOKEN: 'standalone-admin-token',
     }],
-  ])('rejects %s before a listener can start', (_label, processMode, env) => {
+    ['operator Garden ADMIN_ALLOW_INSECURE', 'operator' as const, {
+      ADMIN_PORT: '8790',
+      ADMIN_ALLOW_INSECURE: 'true',
+    }],
+    ['gateway API_KEY with fleet SSO routes', 'gateway' as const, {
+      API_PORT: '8787',
+      API_KEY: 'machine-api-key',
+    }],
+  ])('keeps %s available under fleet auth', (_label, processMode, env) => {
     expect(() => assertFleetAuthStandaloneSurfacesUnavailable({
       fleetAuthEnabled: true,
       processMode,
       env,
-    })).toThrow(/fleet auth.*standalone.*before listen/i);
+      fleetAuthBootstrapRoutesWired: processMode === 'gateway',
+    })).not.toThrow();
+  });
+
+  it('never fails boot when key auth is the only wired principal source', () => {
+    expect(() => assertFleetAuthStandaloneSurfacesUnavailable({
+      fleetAuthEnabled: true,
+      processMode: 'gateway',
+      env: { API_PORT: '8787', API_KEY: 'machine-api-key', ADMIN_TOKEN: 'admin' },
+      fleetAuthBootstrapRoutesWired: true,
+      principalAuthenticationWired: false,
+    })).not.toThrow();
+    expect(() => assertFleetAuthStandaloneSurfacesUnavailable({
+      fleetAuthEnabled: true,
+      processMode: 'operator',
+      env: { ADMIN_PORT: '8790', ADMIN_TOKEN: 'admin' },
+      principalAuthenticationWired: false,
+    })).not.toThrow();
   });
 
   it('preserves feature-off startup and does not mutate standalone credentials', () => {
@@ -38,61 +64,47 @@ describe('fleet auth standalone surface startup guard', () => {
     expect(env).toEqual(before);
   });
 
-  it('distinguishes bootstrap-only OAuth routes from a future principal resolver', () => {
+  it('only rejects a gateway API port whose configured fleet auth has no SSO routes wired', () => {
     expect(() => assertFleetAuthStandaloneSurfacesUnavailable({
       fleetAuthEnabled: true,
       processMode: 'gateway',
       env: { API_PORT: '8787', API_KEY: 'machine-api-key' },
-      fleetAuthBootstrapRoutesWired: true,
-      principalAuthenticationWired: false,
-    })).not.toThrow();
+    })).toThrow(/SSO bootstrap routes are not wired/i);
 
     expect(() => assertFleetAuthStandaloneSurfacesUnavailable({
       fleetAuthEnabled: true,
       processMode: 'gateway',
       env: { API_PORT: '8787' },
-      principalAuthenticationWired: false,
-    })).toThrow(/before listen/i);
+      principalAuthenticationWired: true,
+    })).not.toThrow();
 
+    // No API port exposed: nothing to check.
     expect(() => assertFleetAuthStandaloneSurfacesUnavailable({
       fleetAuthEnabled: true,
       processMode: 'gateway',
-      env: { API_PORT: '8787', ADMIN_TOKEN: 'standalone-admin-token' },
-      fleetAuthBootstrapRoutesWired: true,
-      principalAuthenticationWired: false,
-    })).toThrow(/standalone/i);
-  });
-
-  it('allows configured standalone material only when principal admission is fully wired', () => {
-    expect(() => assertFleetAuthStandaloneSurfacesUnavailable({
-      fleetAuthEnabled: true,
-      processMode: 'operator',
-      env: {
-        ADMIN_PORT: '8790',
-        ADMIN_TOKEN: 'configured-but-never-evaluated',
-      },
-      principalAuthenticationWired: true,
+      env: { ADMIN_PORT: '8790', ADMIN_TOKEN: 'standalone-admin-token' },
     })).not.toThrow();
   });
 });
 
-describe('warnIfInsecureLocalApiIgnoredUnderFleetAuth', () => {
-  it('warns when fleet auth is active and ALLOW_INSECURE_LOCAL_API=true is set', () => {
+describe('warnIfInsecureLocalApiUnderFleetAuth', () => {
+  it('warns that the bypass stays in effect when fleet auth is active and ALLOW_INSECURE_LOCAL_API=true is set', () => {
     const logger = { warn: vi.fn() };
-    const fired = warnIfInsecureLocalApiIgnoredUnderFleetAuth({
+    const fired = warnIfInsecureLocalApiUnderFleetAuth({
       fleetAuthEnabled: true,
       env: { ALLOW_INSECURE_LOCAL_API: 'TRUE' },
       logger,
     });
     expect(fired).toBe(true);
     expect(logger.warn).toHaveBeenCalledTimes(1);
-    expect(logger.warn.mock.calls[0]?.[0]).toContain('ALLOW_INSECURE_LOCAL_API=true is set but IGNORED');
+    expect(logger.warn.mock.calls[0]?.[0]).toContain('ALLOW_INSECURE_LOCAL_API=true is set while fleet auth');
+    expect(logger.warn.mock.calls[0]?.[0]).toContain('REMAINS IN EFFECT');
     expect(logger.warn.mock.calls[0]?.[0]).toContain('fleet auth');
   });
 
   it('stays silent when fleet auth is active but the insecure flag is unset', () => {
     const logger = { warn: vi.fn() };
-    const fired = warnIfInsecureLocalApiIgnoredUnderFleetAuth({
+    const fired = warnIfInsecureLocalApiUnderFleetAuth({
       fleetAuthEnabled: true,
       env: {},
       logger,
@@ -103,7 +115,7 @@ describe('warnIfInsecureLocalApiIgnoredUnderFleetAuth', () => {
 
   it('stays silent when fleet auth is disabled even if the insecure flag is set', () => {
     const logger = { warn: vi.fn() };
-    const fired = warnIfInsecureLocalApiIgnoredUnderFleetAuth({
+    const fired = warnIfInsecureLocalApiUnderFleetAuth({
       fleetAuthEnabled: false,
       env: { ALLOW_INSECURE_LOCAL_API: 'true' },
       logger,

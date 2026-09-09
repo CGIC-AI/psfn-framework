@@ -116,7 +116,7 @@ describe('external memory MCP', () => {
     const sso = vi.fn();
     const agent = vi.fn();
     const api = new ApiServer({
-      port: 0, modelName: binding.companionId, fleetAuthBootstrapOnly: true,
+      port: 0, modelName: binding.companionId,
       agentLoop: fromPartial({ handleMessage: agent }), eventBus: new EventBus(),
       sessionManager: fromPartial({}), externalMemoryMcp: memoryRoute,
       fleetSsoRouter: fromPartial({ matches: () => true, handle: sso, registerGardenChatHandler: vi.fn() }),

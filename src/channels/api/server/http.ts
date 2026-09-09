@@ -49,6 +49,8 @@ export interface ListenApiHttpServerOptions {
   host: string;
   port: number;
   apiKey?: string;
+  /** See `ApiServerAuthConfig.hasAlternatePrincipalSource`. */
+  hasAlternatePrincipalSource?: boolean;
   corsAllowedOrigins: CorsAllowedOrigins;
   logger: ApiServerLogger;
 }
@@ -159,7 +161,7 @@ export function listenApiHttpServer(options: ListenApiHttpServerOptions): Promis
     options.server.listen(options.port, options.host, () => {
       options.server.off('error', onError);
       options.logger.info(`Listening on ${options.host}:${options.port}`);
-      if (!options.apiKey) {
+      if (!options.apiKey && !options.hasAlternatePrincipalSource) {
         options.logger.warn('API authentication disabled by explicit ALLOW_INSECURE_LOCAL_API=true');
       }
       if (corsAllowlistIsEmpty(options.corsAllowedOrigins)) {

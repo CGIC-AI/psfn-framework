@@ -59,8 +59,8 @@ describe('gateway fleet authorization context wiring', () => {
     expect(mainSource).toContain('.map(companion => companion.companionId) ?? [];');
     expect(mainSource).toContain('knownCompanionIds: fleetAuthKnownCompanionIds,');
     expect(mainSource).toContain('principalAuthenticationWired: true,');
-    expect(apiSurfaceSource).toContain('const principalAuthenticationWired =');
-    expect(apiSurfaceSource).toContain('if (fleetAuthBootstrapOnly && !principalAuthenticationWired)');
+    expect(apiSurfaceSource).toContain('const fleetSsoCompositionWired =');
+    expect(apiSurfaceSource).toContain('if (fleetAuthEnabled && !fleetSsoCompositionWired)');
     expect(apiSurfaceSource).toContain('adminToken: env.ADMIN_TOKEN || undefined,');
     expect(apiSurfaceSource).toContain(
       '...(env.ADMIN_TOKEN ? { adminToken: env.ADMIN_TOKEN } : {}),',
@@ -68,6 +68,16 @@ describe('gateway fleet authorization context wiring', () => {
     expect(apiSurfaceSource).not.toContain(
       'adminToken: fleetAuthBootstrapOnly ? undefined : env.ADMIN_TOKEN || undefined,',
     );
+    // S13 operator rule: fleet auth adds SSO, never removes key auth. Nothing
+    // in the API surface may key off a "bootstrap only" fleet switch any more.
+    expect(apiSurfaceSource).not.toContain('fleetAuthBootstrapOnly');
+    expect(apiSurfaceSource).toContain('apiKey: env.API_KEY || undefined,');
+    expect(apiSurfaceSource).toContain(
+      'const allowInsecureWithoutAuth = isExplicitTrue(env.ALLOW_INSECURE_LOCAL_API);',
+    );
+    expect(apiSurfaceSource).toContain('const voiceWebSocketRuntime = createApiVoiceWebSocketRuntime({');
+    expect(apiSurfaceSource).toContain('const hubDeviceIngress = options.hubDeviceAssertionVerifier');
+    expect(apiSurfaceSource).toContain('const hubDeviceCompanionId = resolveGatewayHubDeviceCompanionId(options);');
     const providerSecretEnvStart = helmHelpersSource.indexOf(
       '{{- define "psfn.providerSecretEnv" -}}',
     );
@@ -113,10 +123,12 @@ describe('gateway fleet authorization context wiring', () => {
       'options.fleetAuthRequestCapabilityReplay !== undefined',
       'options.fleetPortalAuthorization !== undefined',
       'options.primaryEmbodiments !== undefined',
-      'options.hubDeviceAssertionVerifier !== undefined',
     ]) {
       expect(apiSurfaceSource).toContain(conjunct);
     }
+    // Hub device ingress is a key-auth feature; it must never be a fleet-SSO
+    // composition precondition again.
+    expect(apiSurfaceSource).not.toContain('options.hubDeviceAssertionVerifier !== undefined');
   });
 
   it('constructs private gateway services only inside gateway composition', () => {

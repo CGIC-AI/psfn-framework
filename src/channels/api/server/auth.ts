@@ -11,6 +11,13 @@ export interface ApiServerAuthConfig {
   port: number;
   apiKey?: string;
   allowInsecureWithoutAuth: boolean;
+  /**
+   * True when the server authenticates through a principal source other than
+   * API_KEY (ADMIN_TOKEN, API_SATELLITE_KEYS, testing-harness key, fleet SSO
+   * routes). Such a server is authenticated and must not be refused for a
+   * missing API_KEY.
+   */
+  hasAlternatePrincipalSource?: boolean;
   logger: ApiServerLogger;
 }
 
@@ -24,7 +31,8 @@ export interface ResolveApiServerPrincipalOptions {
 }
 
 export function validateApiServerAuthConfig(config: ApiServerAuthConfig): void {
-  if (!config.apiKey && !config.allowInsecureWithoutAuth) {
+  const authenticated = Boolean(config.apiKey) || config.hasAlternatePrincipalSource === true;
+  if (!authenticated && !config.allowInsecureWithoutAuth) {
     const err = new Error('API_KEY is required unless ALLOW_INSECURE_LOCAL_API=true');
     config.logger.error('Refusing to start API server without authentication', {
       host: config.host,
@@ -34,7 +42,7 @@ export function validateApiServerAuthConfig(config: ApiServerAuthConfig): void {
     throw err;
   }
 
-  if (!config.apiKey && !isLoopbackHost(config.host)) {
+  if (config.allowInsecureWithoutAuth && !config.apiKey && !isLoopbackHost(config.host)) {
     const err = new Error(
       'ALLOW_INSECURE_LOCAL_API=true requires API_HOST to be loopback (127.0.0.1, ::1, or localhost)',
     );

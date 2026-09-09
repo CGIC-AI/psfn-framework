@@ -76,17 +76,18 @@ describe('full callable catalog schema token cost', () => {
       extendedTools: 7,
       totalTools: 32,
       includesLibrary: false,
+      // n66dn.3 (Eidoverse plane: world move/perceive/act) +1440 bytes / +383 tokens pre, +2096 / +545 post.
       // psfn-framework-lpxg3.3 added the optional skill `base_version` binding:
       // +219 bytes / +42 tokens on both the pre- and post-description payloads.
       // psfn-framework-owffl.8 named the shell byte-range route in the fs and
       // shell guidance: +313 bytes / +66 tokens on the post-description payload.
-      beforeTokens: 19_428,
-      afterTokens: 23_509,
-      deltaTokens: 4_081,
-      beforeBytes: 91_366,
-      afterBytes: 109_656,
-      providerSchemaHash: '54558a6b22ddc15b5e966673215b0dbe825cc7cb3b03cb6dfec05f849fe85b47',
-      parameterSchemaHash: '8babe5d024cd702142ca7137bc66262cf072507077c21e973c1b59cb4d053dd7',
+      beforeTokens: 19_811,
+      afterTokens: 24_054,
+      deltaTokens: 4_243,
+      beforeBytes: 92_806,
+      afterBytes: 111_752,
+      providerSchemaHash: 'a91256aa92c0de1aec9acc3587d0a1d230116abb694c9686e74a1ce0b52e56d2',
+      parameterSchemaHash: 'e9ca5b6c403474d9b3053c222d456bcb358104c4615946d93248f1e167fd2578',
     });
 
     // The additional description tokens affect an uncached request. A stable

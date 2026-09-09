@@ -855,10 +855,10 @@ const PERCEPTION = {
   world: 'commons',
   placeId: 'eidoverse:commons',
   capturedAt: '2026-09-09T18:00:00.000Z',
-  self: { id: 'artie', world: 'commons', positionKnown: true, x: 0, z: 0, facing: 'S' },
+  self: { id: 'nova', world: 'commons', positionKnown: true, x: 0, z: 0, facing: 'S' },
   people: [{ id: 'visitor', positionKnown: true, x: 2, z: 2.5, distanceM: 3.2, bearing: 'NE', doing: 'standing' }],
   things: [{ id: 'ab12', label: 'wooden bench', positionKnown: true, x: 4, y: 0, z: 1 }],
-  recent: ['visitor: @Artie come over here'],
+  recent: ['visitor: @Nova come over here'],
   raw: '',
 };
 

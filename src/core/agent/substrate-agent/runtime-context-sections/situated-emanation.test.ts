@@ -15,6 +15,7 @@ function satellitePresence(satelliteId: string, label: string): CompanionPresenc
 function makeTurn(input: {
   placeId?: string;
   presence?: CompanionPresenceMetadata;
+  claimType?: string;
 }): SubstrateMessage {
   return {
     id: 'msg-emanation',
@@ -26,7 +27,9 @@ function makeTurn(input: {
     timestamp: new Date('2026-07-01T16:00:00.000Z'),
     routing: {
       ...(input.presence ? { presence: input.presence } : {}),
-      ...(input.placeId ? { satellite: { placeId: input.placeId } } : {}),
+      ...(input.placeId
+        ? { satellite: { placeId: input.placeId, ...(input.claimType ? { claimType: input.claimType } : {}) } }
+        : {}),
     } as unknown as SubstrateMessage['routing'],
   } as SubstrateMessage;
 }
@@ -112,6 +115,28 @@ describe('SituatedEmanationTracker', () => {
     // foregrounded place; the deliberate virtual position is cleared.
     expect(tracker.resolvePlaceId()).toBe('place.kitchen');
     expect(tracker.resolveVirtualMovePlaceId()).toBeUndefined();
+  });
+
+  it('leaves the physical emanation and a virtual move untouched on a world-plane turn (u2dx3)', () => {
+    const tracker = new SituatedEmanationTracker();
+    tracker.observe(makeTurn({
+      placeId: 'place.living-room',
+      presence: satellitePresence('sat.living-room', 'Living Room satellite'),
+    }));
+    tracker.moveToVirtualPlace('place.mud-tavern');
+
+    // A world wake carries the avatar's world place as the satellite place;
+    // the world plane is its own map, so neither the physical marker nor the
+    // deliberate virtual position moves.
+    tracker.observe(makeTurn({
+      placeId: 'world:commons',
+      claimType: 'world-avatar',
+      presence: satellitePresence('sat.world', 'World avatar'),
+    }));
+
+    expect(tracker.resolvePlaceId()).toBe('place.mud-tavern');
+    expect(tracker.resolveVirtualMovePlaceId()).toBe('place.mud-tavern');
+    expect(tracker.resolvePresence()?.satelliteId).toBe('sat.living-room');
   });
 
   it('keeps a virtual move across placeless turns (they are not departures)', () => {

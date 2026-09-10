@@ -81,13 +81,16 @@ describe('full callable catalog schema token cost', () => {
       // +219 bytes / +42 tokens on both the pre- and post-description payloads.
       // psfn-framework-owffl.8 named the shell byte-range route in the fs and
       // shell guidance: +313 bytes / +66 tokens on the post-description payload.
-      beforeTokens: 19_811,
-      afterTokens: 24_054,
+      // psfn-framework-jbvwz added the world flight verbs (take_off, climb_to,
+      // glide_to, land_at, fold_wings, unfold_wings, flight_status) to the act
+      // verb enum and argument guidance: +641 bytes / +161 tokens on both payloads.
+      beforeTokens: 19_972,
+      afterTokens: 24_215,
       deltaTokens: 4_243,
-      beforeBytes: 92_806,
-      afterBytes: 111_752,
-      providerSchemaHash: 'a91256aa92c0de1aec9acc3587d0a1d230116abb694c9686e74a1ce0b52e56d2',
-      parameterSchemaHash: 'e9ca5b6c403474d9b3053c222d456bcb358104c4615946d93248f1e167fd2578',
+      beforeBytes: 93_447,
+      afterBytes: 112_393,
+      providerSchemaHash: 'b37d9e2d82f09413040624fed2e537bc2a0d113f0648fae25b1043c6a865647e',
+      parameterSchemaHash: '21bbc9fa4ee6599fc9e36a0bbe6c6a997dda372b2ea68f30d2387b56e064f121',
     });
 
     // The additional description tokens affect an uncached request. A stable

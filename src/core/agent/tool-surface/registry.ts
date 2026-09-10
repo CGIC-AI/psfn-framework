@@ -368,6 +368,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
       'project_list', 'project_read', 'project_create', 'project_update',
       'project_add_artifact', 'project_share',
       'wardrobe_list', 'wardrobe_read', 'wardrobe_save', 'wardrobe_revise',
+      'world_notes_read', 'world_note',
     ],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [],

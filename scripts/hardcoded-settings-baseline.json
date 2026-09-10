@@ -2639,6 +2639,12 @@
       "note": "Code-owned disabled-lane invariant: no job is persisted or retried, while the transient handoff shape still requires one valid attempt."
     },
     {
+      "file": "src/core/agent/background-work/post-turn-runtime.ts",
+      "name": "FENCE_TIMEOUT_RETRY_DELAY_MS",
+      "value": "5_000",
+      "note": "Code-owned retry backoff after a turn-record eligibility fence acquire timeout (52epa); a bounded retry cadence, not operator policy."
+    },
+    {
       "file": "src/core/agent/background-work/supervisor.ts",
       "name": "BackgroundWorkSupervisor.ensureHeartbeat.$call:math-clamp:Math.max.arg0#1",
       "value": "10",
@@ -2658,6 +2664,12 @@
       "value": "16",
       "form": "number",
       "note": "Existing mutable policy candidate recoverHistoricalBackgroundWorkHandoffs.retainedErrorsLimit; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+    },
+    {
+      "file": "src/core/agent/background-work/types.ts",
+      "name": "BACKGROUND_WORK_LEASE_EXPIRY_LIMIT",
+      "value": "3",
+      "note": "Code-owned poison-claim guard: a background job whose lease expired this many times is failed instead of re-leased forever (52epa); protects the foreground turn pipeline, deliberately not tunable."
     },
     {
       "file": "src/core/agent/completion-handoff.ts",
@@ -9515,31 +9527,27 @@
     },
     {
       "file": "src/persistence/postgres/background-work-store.ts",
-      "name": "normalizeWelfarePolicy.ageThresholdMs@L90",
+      "name": "normalizeWelfarePolicy.ageThresholdMs@L93",
       "value": "0",
-      "form": "object-member",
-      "note": "Existing mutable policy candidate normalizeWelfarePolicy.ageThresholdMs@L90; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "form": "object-member"
     },
     {
       "file": "src/persistence/postgres/background-work-store.ts",
-      "name": "normalizeWelfarePolicy.ageThresholdMs@L92",
+      "name": "normalizeWelfarePolicy.ageThresholdMs@L95",
       "value": "0",
-      "form": "object-member",
-      "note": "Existing mutable policy candidate normalizeWelfarePolicy.ageThresholdMs@L92; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "form": "object-member"
     },
     {
       "file": "src/persistence/postgres/background-work-store.ts",
-      "name": "normalizeWelfarePolicy.deferThreshold@L90",
+      "name": "normalizeWelfarePolicy.deferThreshold@L93",
       "value": "1",
-      "form": "object-member",
-      "note": "Existing mutable policy candidate normalizeWelfarePolicy.deferThreshold@L90; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "form": "object-member"
     },
     {
       "file": "src/persistence/postgres/background-work-store.ts",
-      "name": "normalizeWelfarePolicy.deferThreshold@L92",
+      "name": "normalizeWelfarePolicy.deferThreshold@L95",
       "value": "1",
-      "form": "object-member",
-      "note": "Existing mutable policy candidate normalizeWelfarePolicy.deferThreshold@L92; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "form": "object-member"
     },
     {
       "file": "src/persistence/postgres/background-work-store.ts",
@@ -9656,6 +9664,18 @@
       "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
+      "file": "src/persistence/postgres/pool-owner.ts",
+      "name": "MAX_RUNTIME_POSTGRES_LANE_CAPACITY",
+      "value": "16",
+      "note": "Code-owned resource guard: hard cap on a named pool lane's connection count so a lane cannot exhaust Postgres max_connections (52epa)."
+    },
+    {
+      "file": "src/persistence/postgres/pool-owner.ts",
+      "name": "RUNTIME_POSTGRES_POOL_CONNECT_TIMEOUT_MS",
+      "value": "30_000",
+      "note": "Code-owned safety bound: every owned runtime pool rejects a checkout that waits longer than this instead of hanging (52epa self-deadlock fix)."
+    },
+    {
       "file": "src/persistence/postgres/runtime-readiness.ts",
       "name": "POSTGRES_STORE_READINESS_CATALOG.icp_initiation_policy",
       "value": "{ label: 'ICP initiation policy', requirement: 'required' }",
@@ -9702,6 +9722,19 @@
       "name": "MAX_ADMIN_ROWS",
       "value": "200",
       "note": "Code-owned hard ceiling on rows returned by the read-only arbiter admin projection; an allocation/DoS guard at the admin read boundary (mirrors the ICP admin projection's MAX_ADMIN_ROWS)."
+    },
+    {
+      "file": "src/persistence/postgres/turn-record-eligibility-fence.ts",
+      "name": "DEFAULT_TURN_RECORD_ELIGIBILITY_FENCE_ACQUIRE_TIMEOUT_MS",
+      "value": "30_000",
+      "note": "Code-owned protocol bound: longest a fence waiter polls for the advisory lock before a typed timeout (52epa); bounded by the assertion/lease lifetimes, not operator tuning."
+    },
+    {
+      "file": "src/persistence/postgres/turn-record-eligibility-fence.ts",
+      "name": "PG_POOL_CONNECT_TIMEOUT_MESSAGE",
+      "value": "'timeout exceeded when trying to connect'",
+      "form": "string",
+      "note": "Error-string-coupled constant: the pg driver's connect-timeout message matched to classify a pool checkout timeout as a fence timeout."
     },
     {
       "file": "src/persistence/repair/memory-participant-name-repair.ts",

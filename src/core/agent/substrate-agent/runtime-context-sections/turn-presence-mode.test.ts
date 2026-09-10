@@ -11,6 +11,7 @@ import type { PlacesRegistryConfig } from '../../../../shared/contracts/places-r
 import type { SituatedLocation } from '../../../self-model/state.js';
 import {
   classifyTurnPresenceMode,
+  resolveTurnOwnPlaceId,
   resolveTurnSituatedFallbackPlaceId,
 } from './turn-presence-mode.js';
 
@@ -130,6 +131,14 @@ describe('classifyTurnPresenceMode', () => {
       source: 'discord',
       presence: { kind: 'emanation', emanationId: 'em.1', companionId: 'c1' },
     }))).toBe('mindspace');
+  });
+});
+
+describe('resolveTurnOwnPlaceId', () => {
+  it('reads the turn\'s own bound place and nothing else', () => {
+    expect(resolveTurnOwnPlaceId(makeMessage({ satellite: { placeId: ' eidoverse:commons ' } } as unknown as SubstrateMessage['routing']))).toBe('eidoverse:commons');
+    expect(resolveTurnOwnPlaceId(makeMessage({ satellite: {} } as unknown as SubstrateMessage['routing']))).toBeUndefined();
+    expect(resolveTurnOwnPlaceId(makeMessage())).toBeUndefined();
   });
 });
 

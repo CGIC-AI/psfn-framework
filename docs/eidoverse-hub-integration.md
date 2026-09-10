@@ -325,8 +325,11 @@ and self-directed turns may move on their own initiative.
 **Honest results.** A move answers whether the world accepted it and, for a
 walk, `arrived` with the final coordinates, `already_there`, `walking` (the
 bounded wait ran out; the outcome arrives as an `eidoverse.body` note on a
-later turn), `interrupted` or `failed`. The Hub logs one info line per
-completed walk: `Eidoverse body walk_to arrived at (x, z) in world "commons"`.
+later turn), `interrupted`, `failed`, or `no_position` (the move named a
+region the place map binds to a place but carried no coordinates and no
+participant, so nothing walked; the region is still remembered). The Hub
+logs one info line per completed walk — also when the walk outlasted the
+bounded wait and settles later: `Eidoverse body walk_to arrived at (x, z) in world "commons"`.
 The door itself never logs positions.
 
 **Transport.** Gateway methods `world.avatar_perceive`, `world.avatar_move`

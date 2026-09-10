@@ -178,6 +178,38 @@ test("a walk longer than the bounded wait answers walking and its outcome reache
   adapter.disconnect();
 });
 
+test("a region-only move answers no_position instead of a silent accept, and remembers the region (zsoo8)", async () => {
+  const door = new FakeDoor();
+  const lines: string[] = [];
+  const { adapter } = adapterWith(door, new FakeAgent(), lines);
+  const outcome = await adapter.moveTo({ region: "plaza" });
+  assert.equal(outcome.accepted, true);
+  assert.equal(outcome.accepted && outcome.placeId, "eidoverse:commons:plaza");
+  assert.equal(outcome.accepted && outcome.walk?.status, "no_position");
+  assert.deepEqual(door.walks, [], "nothing walked");
+  assert.ok(lines.some((line) => /walk_to skipped: region "plaza" .* has no position/u.test(line)));
+  const perception = await adapter.perceive();
+  assert.equal(perception.region, "plaza");
+  adapter.disconnect();
+});
+
+test("a walk that outlasts the bounded wait still logs its arrival when it settles (f5vd8)", async () => {
+  const door = new FakeDoor();
+  door.walkDelayMs = 60;
+  const lines: string[] = [];
+  const { adapter, runner } = adapterWith(door, new FakeAgent(), lines);
+  const outcome = await adapter.moveTo({ position: { x: 4, z: 4 }, waitMs: 5 });
+  assert.equal(outcome.accepted && outcome.walk?.status, "walking");
+  assert.ok(lines.some((line) => /still walking after bounded wait/u.test(line)));
+  await runner.close();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(
+    lines.some((line) => /Eidoverse body walk_to arrived at \(4, 4\) in world "commons"/u.test(line)),
+    `arrival was logged after the deferred walk settled: ${lines.join(" | ")}`,
+  );
+  adapter.disconnect();
+});
+
 test("act runs allowlisted body and creation verbs and refuses the rest", async () => {
   const door = new FakeDoor();
   const { adapter } = adapterWith(door);

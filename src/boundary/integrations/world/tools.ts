@@ -581,7 +581,9 @@ function describeMoveOutcome(outcome: WorldAvatarMoveOutcome): Record<string, un
           ? `Your body is walking to (${walk.target?.x}, ${walk.target?.z}) in world "${outcome.world}"; arrival is reported on a later turn.`
           : walk.status === 'interrupted'
             ? 'The walk was interrupted or timed out before arrival.'
-            : 'The walk could not be carried out.';
+            : walk.status === 'no_position'
+              ? `That region is mapped to a place but has no coordinates, so your body did not walk; give a position or a participant to walk to.`
+              : 'The walk could not be carried out.';
   return {
     accepted: true,
     world: outcome.world,

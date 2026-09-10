@@ -51,7 +51,7 @@ export function resolveTestingHarnessDevicesConfig(
 }
 
 /**
- * Whether the satellite a request claims (by its `X-PSFN-Satellite-ID`
+ * Whether the satellite a request claims (by its satellite-id claim
  * header) is a testing-harness fixture. This only decides whether the
  * provenance headers may be present; the claim itself is still authenticated
  * by the ordinary satellite admission, and a turn whose claim then fails is

@@ -190,6 +190,15 @@ key and two owner-file blocks, and the chart carries both seams
 - `hubDeviceAssertions` (top level) renders the gateway's verifier ring — the
   same `hubDeviceAssertions` block that may live in `satellites.json` — into a
   ConfigMap mounted at `PSFN_HUB_DEVICE_ASSERTIONS_PATH`, public keys only.
+- `satelliteHub.control` renders the hub's private control channel: the
+  listener on the hub (`HUB_CONTROL_BIND_HOST/PORT/TOKEN`), the gateway's
+  Satellite Hub transport (`SATELLITE_HUB_CONTROL_BASE_URL/TOKEN`, pointing at
+  the hub Service's `hub-control` port), and the gateway->hub NetworkPolicy
+  pair. The companion's own `world` tool moves, travels, perceives and acts in
+  an Eidoverse world over this channel, so `satelliteHub.eidoverse.enabled`
+  (and `homeAssistant.enabled`) imply it; the bearer is
+  `secrets.values.satelliteHubControlToken` and a missing bearer fails the
+  render (psfn-framework-r70pb).
   When `fleet-auth.json` also carries a ring the gateway keeps that one and
   logs that the mounted file is shadowed.
 

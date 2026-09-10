@@ -772,6 +772,17 @@ satelliteHub:
   # and tool_activity telemetry scopes.
   companionBridge:
     enabled: true
+  # Private hub control listener (HUB_CONTROL_BIND_HOST/PORT/TOKEN on the hub)
+  # plus the gateway's Satellite Hub transport (SATELLITE_HUB_CONTROL_BASE_URL
+  # / SATELLITE_HUB_CONTROL_TOKEN), the hub-control Service port and the
+  # gateway->hub NetworkPolicy pair for ports.satelliteHubControl. This is the
+  # channel the companion's own `world` tool uses to walk, travel, perceive and
+  # act in an Eidoverse world (S13 MOVE, psfn-framework-n66dn.3) and that Home
+  # Assistant control rides on. Rendered when enabled here, and implied by
+  # homeAssistant.enabled or eidoverse.enabled (psfn-framework-r70pb). The
+  # bearer comes from secrets.values.satelliteHubControlToken.
+  control:
+    enabled: false
   homeAssistant:
     enabled: false
     baseUrl: ""

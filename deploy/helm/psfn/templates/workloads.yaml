@@ -203,7 +203,7 @@ spec:
             {{- end }}
             {{- include "psfn.helmBackupImageEnv" . | nindent 12 }}
             {{- include "psfn.operatorAlertEnv" . | nindent 12 }}
-            {{- if and .Values.satelliteHub.enabled .Values.satelliteHub.homeAssistant.enabled }}
+            {{- if include "psfn.satelliteHubControlEnabled" . }}
             - name: SATELLITE_HUB_CONTROL_BASE_URL
               value: {{ printf "http://%s:%v" (include "psfn.satelliteHubServiceName" .) .Values.ports.satelliteHubControl | quote }}
             - name: SATELLITE_HUB_CONTROL_TOKEN
@@ -899,7 +899,7 @@ spec:
     - name: hub-ws
       port: {{ .Values.ports.satelliteHub }}
       targetPort: hub-ws
-    {{- if .Values.satelliteHub.homeAssistant.enabled }}
+    {{- if include "psfn.satelliteHubControlEnabled" . }}
     - name: hub-control
       port: {{ .Values.ports.satelliteHubControl }}
       targetPort: hub-control
@@ -1035,6 +1035,8 @@ spec:
                 secretKeyRef:
                   name: {{ include "psfn.appSecretName" . }}
                   key: {{ .Values.secrets.keys.homeAssistantToken }}
+            {{- end }}
+            {{- if include "psfn.satelliteHubControlEnabled" . }}
             - name: HUB_CONTROL_BIND_HOST
               value: "0.0.0.0"
             - name: HUB_CONTROL_PORT

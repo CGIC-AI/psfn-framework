@@ -117,7 +117,7 @@ spec:
         - port: {{ .Values.ports.companionUiTest }}
           protocol: TCP
     {{- end }}
-    {{- if and .Values.satelliteHub.enabled .Values.satelliteHub.homeAssistant.enabled }}
+    {{- if include "psfn.satelliteHubControlEnabled" . }}
     - to:
         - podSelector:
             matchLabels:
@@ -572,7 +572,7 @@ spec:
       ports:
         - port: {{ .Values.ports.satelliteHub }}
           protocol: TCP
-    {{- if .Values.satelliteHub.homeAssistant.enabled }}
+    {{- if include "psfn.satelliteHubControlEnabled" . }}
     - from:
         - podSelector:
             matchLabels:

@@ -612,6 +612,11 @@ never back a ClusterIssuer. */ -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
+{{- if include "psfn.satelliteHubControlEnabled" . -}}
+{{- if and (not .Values.secrets.existingSecret) (not .Values.secrets.values.satelliteHubControlToken) -}}
+{{- fail "the Satellite Hub control channel (satelliteHub.control.enabled, or implied by homeAssistant.enabled / eidoverse.enabled) requires secrets.values.satelliteHubControlToken (or secrets.existingSecret carrying secrets.keys.satelliteHubControlToken)" -}}
+{{- end -}}
+{{- end -}}
 {{- if .Values.companionUiTest.enabled -}}
 {{- if not .Values.fleetAuth.enabled -}}
 {{- fail "companionUiTest.enabled=true requires fleetAuth.enabled=true for the canonical login/session origin" -}}

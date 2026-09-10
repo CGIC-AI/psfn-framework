@@ -151,8 +151,9 @@ sequenceDiagram
 ## Operator process wiring
 
 The operator entrypoint (`src/app/operator/main.ts`) requires `ADMIN_PORT`,
-hydrates the runtime config, and — when fleet auth is enabled — requires the
-complete `companionFleet` roster and builds the `FleetGardenTargetRegistry`,
+hydrates the runtime config, and — when fleet auth is enabled (it only adds
+SSO; `ADMIN_TOKEN` remains valid on the Garden route either way) — requires
+the complete `companionFleet` roster and builds the `FleetGardenTargetRegistry`,
 `FleetGardenControlPlane` (with the `AtomicRequestCapabilityReplayPort`),
 `FleetGardenAdminTransportProxy`, `FleetGardenDirectDatabase`, and
 `FleetModelUsageService` before constructing the surface. In standalone mode

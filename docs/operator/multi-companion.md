@@ -451,8 +451,10 @@ there is no merge), and writes an integrity receipt under
 on later runs, and a digest change or a receipt/identity conflict aborts rather
 than best-effort migrating.
 
-Local supervisor startup requires `PSFN_FLEET_AUTH=1` and
-`ADMIN_TRANSPORT_MODE=socket`: the fleet Garden target registry derives one
+Local supervisor startup requires `ADMIN_TRANSPORT_MODE=socket` (fleet auth
+is optional: `PSFN_FLEET_AUTH=1` adds SSO to the one fleet Garden, and the
+Garden stays reachable with `ADMIN_TOKEN` either way): the fleet Garden
+target registry derives one
 `garden-admin-<companionId>.sock` endpoint per agent from the validated
 companion ID alone, and network admin-transport mode is rejected fail-closed.
 The `FleetGardenTargetRegistry` itself is immutable — companionId, exact

@@ -34,8 +34,11 @@ import type { CompanionEventRelay } from '../backplane/companion-relay/relay.js'
 import {
   getBearerToken,
   isExpectedApiToken,
+  principalFromApiKeyToken,
   principalFromSatelliteApiKeyToken,
+  type UnscopedApiAuthPrincipal,
 } from '../backplane/http/auth.js';
+import { isLoopbackHost } from '../../shared/net/hosts.js';
 import {
   deriveClientCertIdentity,
   stripClientCertHeaders,
@@ -65,6 +68,21 @@ const RUNTIME_LIMITS = Object.freeze({
   authorityPollMs: 5_000,
   maxPendingAudioFrames: 32,
 });
+/**
+ * Ceiling advertised to a key-authenticated (ADMIN_TOKEN / API_KEY) session.
+ * There is no Hub device behind it, so the ceiling is the operator's own: every
+ * relay scope, and the audio input capabilities only when STT is composed.
+ * `audio_output` is deliberately absent: Hub audio brackets are bound to a
+ * satellite endpoint and a key session has none.
+ */
+const OPERATOR_KEY_CEILING = Object.freeze({
+  capabilities: Object.freeze<SatelliteCapability[]>(['text', 'vision', 'image_upload', 'touch']),
+  audioCapabilities: Object.freeze<SatelliteCapability[]>(['audio_input', 'speech_to_text']),
+  telemetryScopes: Object.freeze<SatelliteTelemetryScope[]>([
+    'status', 'approvals', 'artifacts', 'tool_activity', 'emotion',
+  ]),
+});
+const OPERATOR_KEY_DEVICE = Object.freeze({ id: 'operator-key', label: 'Operator key' });
 const FORBIDDEN_BROWSER_AUTHORITY_HEADERS = new Set([
   'x-author-id', 'x-author-name', 'x-canonical-contact-id', 'x-channel-id', 'x-channel-type',
   'x-companion-id', 'x-device-id', 'x-place-id', 'x-psfn-action', 'x-psfn-author',
@@ -73,20 +91,58 @@ const FORBIDDEN_BROWSER_AUTHORITY_HEADERS = new Set([
   ...REQUEST_CAPABILITY_ASSERTION_HEADERS,
 ]);
 
+/**
+ * Key-path action broker (psfn-framework-7oh9y). A session admitted with an
+ * ADMIN_TOKEN / API_KEY bearer carries no Hub device attachment and no fleet
+ * authorization context; the gateway dispatches its frames with the key
+ * principal exactly as the REST API would.
+ */
+export interface CompanionUiOperatorActionBroker {
+  execute(input: Readonly<{
+    rawBody: Uint8Array;
+    companionId: CompanionId;
+    principal: UnscopedApiAuthPrincipal;
+    physicalCeiling: Readonly<{
+      capabilities: readonly SatelliteCapability[];
+      telemetryScopes: readonly SatelliteTelemetryScope[];
+    }>;
+    /** Server-owned cancellation only; never parsed from the browser frame. */
+    signal?: AbortSignal;
+  }>): Promise<unknown>;
+}
+
 export interface CompanionUiWebSocketConfig {
   readonly browserHubOrigin?: string;
   readonly browserHubTimeoutMs?: number;
+  /**
+   * Exact origin the socket is pinned to. HTTPS, or plain HTTP on a loopback
+   * host only (the same transport policy the key-authenticated REST API has).
+   */
   readonly canonicalOrigin: string;
-  readonly satelliteApiKeys: readonly string[];
-  readonly satelliteRegistry: SatelliteRegistryConfig;
+  /**
+   * Hub path: a Satellite Hub backchannel (satellite key + Hub device
+   * assertion) relaying a browser that carries a fleet SSO session cookie, or
+   * an explicit guest. Composed whenever a Hub device verifier exists.
+   */
+  readonly satelliteApiKeys?: readonly string[];
+  readonly satelliteRegistry?: SatelliteRegistryConfig;
   readonly trustedProxyClientCertToken?: string;
-  readonly hubDeviceIngress: GatewayHubDeviceIngressService;
-  readonly actionBroker: GatewayCompanionUiActionBroker;
+  readonly hubDeviceIngress?: GatewayHubDeviceIngressService;
+  /** SSO composition; without it cookie-bearing Hub upgrades are denied. */
+  readonly actionBroker?: GatewayCompanionUiActionBroker;
+  /**
+   * Key path (psfn-framework-7oh9y): ADMIN_TOKEN / API_KEY bearers admitted
+   * directly on the upgrade, with no Hub, device assertion, or SSO session.
+   * Fleet auth adds SSO; it is never a precondition for this surface.
+   */
+  readonly operatorKeys?: readonly string[];
+  readonly operatorActionBroker?: CompanionUiOperatorActionBroker;
   readonly audioIngress?: CompanionUiAudioIngressPort;
   readonly screenAudioTranscript?: (
     input: Readonly<{
       companionId: CompanionId;
-      attachment: HubDeviceAttachmentSnapshot;
+      /** Absent on the key path: there is no Hub device attachment. */
+      attachment?: HubDeviceAttachmentSnapshot;
       requestId: string;
       transcript: string;
     }>,
@@ -94,7 +150,7 @@ export interface CompanionUiWebSocketConfig {
   readonly cancelAudioInteraction?: (
     input: Readonly<{
       companionId: CompanionId;
-      attachment: HubDeviceAttachmentSnapshot;
+      attachment?: HubDeviceAttachmentSnapshot;
       interactionId: string;
     }>,
   ) => Promise<void>;
@@ -107,6 +163,16 @@ export interface CompanionUiWebSocketConfig {
   readonly authorityPollMs?: number;
   readonly maxPendingAudioFrames?: number;
   readonly createWebSocketServer?: () => WebSocketServer;
+}
+
+interface OperatorUpgradeAuthority {
+  readonly kind: 'operator_key';
+  readonly companionId: CompanionId;
+  readonly principal: UnscopedApiAuthPrincipal;
+  readonly physicalCeiling: Readonly<{
+    capabilities: readonly SatelliteCapability[];
+    telemetryScopes: readonly SatelliteTelemetryScope[];
+  }>;
 }
 
 interface UpgradeAuthority {
@@ -209,13 +275,29 @@ export class CompanionUiWebSocketAdapter {
   private readonly activeSockets = new Set<WebSocket>();
   private stopped = false;
 
+  private readonly hubPath: boolean;
+  private readonly keyPath: boolean;
+
   constructor(private readonly config: CompanionUiWebSocketConfig) {
     const origin = new URL(config.canonicalOrigin);
-    if (origin.protocol !== 'https:' || origin.origin !== config.canonicalOrigin) {
-      throw new Error('Companion UI canonical origin must be an exact HTTPS origin');
+    const loopbackHttp = origin.protocol === 'http:' && isLoopbackHost(origin.hostname);
+    if ((origin.protocol !== 'https:' && !loopbackHttp) || origin.origin !== config.canonicalOrigin) {
+      throw new Error('Companion UI canonical origin must be an exact HTTPS origin (or HTTP on loopback)');
     }
-    if (config.satelliteApiKeys.length === 0 || !config.satelliteRegistry.enabled) {
-      throw new Error('Companion UI requires authenticated Satellite Hub registry authority');
+    this.hubPath = (config.satelliteApiKeys?.length ?? 0) > 0
+      && config.satelliteRegistry?.enabled === true
+      && config.hubDeviceIngress !== undefined;
+    this.keyPath = (config.operatorKeys?.length ?? 0) > 0
+      && config.operatorActionBroker !== undefined;
+    if (!this.hubPath && !this.keyPath) {
+      throw new Error(
+        'Companion UI requires authenticated Satellite Hub registry authority or an operator key',
+      );
+    }
+    if (this.hubPath && (config.satelliteApiKeys ?? []).some(
+      key => (config.operatorKeys ?? []).some(operatorKey => isExpectedApiToken(key, operatorKey)),
+    )) {
+      throw new Error('Companion UI operator keys must be distinct from satellite keys');
     }
     if (Boolean(config.audioIngress) !== Boolean(config.screenAudioTranscript)
       || Boolean(config.audioIngress) !== Boolean(config.cancelAudioInteraction)) {
@@ -255,7 +337,7 @@ export class CompanionUiWebSocketAdapter {
       rejectUpgrade(socket, 404);
       return true;
     }
-    if (this.config.browserHubOrigin && rawHeaderCount(request, 'authorization') === 0) {
+    if (this.hubPath && this.config.browserHubOrigin && rawHeaderCount(request, 'authorization') === 0) {
       proxyCompanionUiBrowserUpgrade({ request, socket, head,
         hubOrigin: this.config.browserHubOrigin, canonicalOrigin: this.expectedOrigin,
         timeoutMs: this.config.browserHubTimeoutMs!, allowGuest: this.config.guestMode === 'explicit' });
@@ -290,8 +372,20 @@ export class CompanionUiWebSocketAdapter {
   ): Promise<void> {
     let authority: UpgradeAuthority;
     try {
+      this.assertUpgradeMetadata(request);
+      const operatorKey = this.keyPath
+        ? this.config.operatorKeys!.find(key => isExpectedApiToken(getBearerToken(request), key))
+        : undefined;
+      if (operatorKey !== undefined) {
+        const operator = this.resolveOperatorUpgradeAuthority(request, companionId, operatorKey);
+        this.webSocketServer.handleUpgrade(request, socket, head, webSocket => {
+          this.attachOperatorSocket(webSocket, operator);
+        });
+        return;
+      }
+      if (!this.hubPath) throw new Error('authenticated Hub backchannel required');
       authority = this.resolveUpgradeAuthority(request, companionId);
-      const admission = await this.config.hubDeviceIngress.admit({
+      const admission = await this.config.hubDeviceIngress!.admit({
         assertion: authority.assertion,
         connection: authority.connection,
         human: authority.sessionToken
@@ -312,7 +406,7 @@ export class CompanionUiWebSocketAdapter {
     }
   }
 
-  private resolveUpgradeAuthority(request: IncomingMessage, companionId: CompanionId): UpgradeAuthority {
+  private assertUpgradeMetadata(request: IncomingMessage): void {
     if (this.stopped
       || rawHeaderCount(request, 'host') !== 1
       || rawHeaderCount(request, 'origin') !== 1
@@ -321,12 +415,51 @@ export class CompanionUiWebSocketAdapter {
       || request.headers.host !== this.expectedHost
       || request.headers.origin !== this.expectedOrigin
       || hasForbiddenAuthorityHeader(request)) throw new Error('invalid upgrade metadata');
+  }
+
+  /**
+   * Key path: the bearer IS the human authority. No cookie, no Hub claim, no
+   * device assertion, no proxied client certificate may ride along — a key
+   * session never borrows Hub or SSO provenance.
+   */
+  private resolveOperatorUpgradeAuthority(
+    request: IncomingMessage,
+    companionId: CompanionId,
+    operatorKey: string,
+  ): OperatorUpgradeAuthority {
+    if (rawHeaderCount(request, 'cookie') !== 0) throw new Error('operator key sessions carry no cookie');
+    for (let index = 0; index < request.rawHeaders.length; index += 2) {
+      const name = request.rawHeaders[index]?.toLowerCase() ?? '';
+      if (name.startsWith('x-psfn-') || name.startsWith('x-identity-claim-')) {
+        throw new Error('operator key sessions carry no Hub or identity claims');
+      }
+    }
+    delete request.headers.authorization;
+    const audio = this.config.audioIngress !== undefined
+      && this.config.screenAudioTranscript !== undefined
+      && this.config.cancelAudioInteraction !== undefined;
+    return Object.freeze({
+      kind: 'operator_key' as const,
+      companionId,
+      principal: principalFromApiKeyToken(operatorKey),
+      physicalCeiling: Object.freeze({
+        capabilities: Object.freeze([
+          ...OPERATOR_KEY_CEILING.capabilities,
+          ...(audio ? OPERATOR_KEY_CEILING.audioCapabilities : []),
+        ]),
+        telemetryScopes: OPERATOR_KEY_CEILING.telemetryScopes,
+      }),
+    });
+  }
+
+  private resolveUpgradeAuthority(request: IncomingMessage, companionId: CompanionId): UpgradeAuthority {
     const sessionToken = readExclusiveFleetSessionCookie(request);
     const cookieCount = rawHeaderCount(request, 'cookie');
     if (sessionToken ? cookieCount !== 1 : cookieCount !== 0) throw new Error('invalid fleet session cookie');
     if (!sessionToken && this.config.guestMode !== 'explicit') throw new Error('fleet session required');
+    if (sessionToken && !this.config.actionBroker) throw new Error('fleet SSO is not composed');
     const bearer = getBearerToken(request);
-    const satelliteKey = this.config.satelliteApiKeys.find(key => isExpectedApiToken(bearer, key));
+    const satelliteKey = this.config.satelliteApiKeys!.find(key => isExpectedApiToken(bearer, key));
     if (!satelliteKey) throw new Error('authenticated Hub backchannel required');
     const principal = principalFromSatelliteApiKeyToken(satelliteKey);
     const clientCert = deriveClientCertIdentity(request, {
@@ -340,7 +473,7 @@ export class CompanionUiWebSocketAdapter {
     const satellite = resolveSatelliteClaim({
       headers: request.headers,
       principal,
-      registry: this.config.satelliteRegistry,
+      registry: this.config.satelliteRegistry!,
       ...(clientCert ? { clientCert } : {}),
     });
     if (!satellite.ok) throw new Error('Hub claim denied');
@@ -348,7 +481,7 @@ export class CompanionUiWebSocketAdapter {
     const connection = resolveAuthenticatedHubDeviceConnection({
       req: request,
       principal,
-      registry: this.config.satelliteRegistry,
+      registry: this.config.satelliteRegistry!,
       companionId,
       ...(clientCert ? { clientCert } : {}),
     });
@@ -453,7 +586,7 @@ export class CompanionUiWebSocketAdapter {
     };
     const sessionAuthority = new CompanionUiSessionAuthority(
       authority.assertion, initialAttachment,
-      async assertion => (await this.config.hubDeviceIngress.admit({
+      async assertion => (await this.config.hubDeviceIngress!.admit({
         assertion,
         connection: authority.connection,
         human: authority.sessionToken
@@ -481,7 +614,7 @@ export class CompanionUiWebSocketAdapter {
         ...(signal ? { signal } : {}),
       };
       const result = authority.sessionToken
-        ? await this.config.actionBroker.execute({ ...common, sessionToken: authority.sessionToken })
+        ? await this.config.actionBroker!.execute({ ...common, sessionToken: authority.sessionToken })
         : await this.config.guestActionBroker?.execute(common);
       if (!authority.sessionToken && !this.config.guestActionBroker) {
         throw new Error('guest actions disabled');
@@ -627,6 +760,139 @@ export class CompanionUiWebSocketAdapter {
     log.info('Companion UI socket admitted', {
       companionId: authority.companionId,
       deviceId: authority.connection.deviceId,
+    });
+  }
+
+  /**
+   * Key-path session. No Hub attachment to refresh, no assertion to renew:
+   * the bearer was verified on the upgrade and the socket lives until it
+   * closes or the adapter stops. Every relay event kind the operator ceiling
+   * grants is delivered, and frames dispatch through the operator broker.
+   */
+  private attachOperatorSocket(socket: WebSocket, authority: OperatorUpgradeAuthority): void {
+    this.activeSockets.add(socket);
+    let closed = false;
+    let configured = false;
+    let audioSocket: CompanionUiAudioSocketSession | null = null;
+    let unsubscribeEvents: (() => void) | null = null;
+    let eventDelivery = Promise.resolve();
+    const seenRequestIds = new Set<string>();
+    const close = (code: number, reason: string): void => {
+      if (closed) return;
+      closed = true;
+      unsubscribeEvents?.();
+      unsubscribeEvents = null;
+      audioSocket?.close(reason);
+      audioSocket = null;
+      this.activeSockets.delete(socket);
+      if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+        socket.close(code, reason);
+      }
+    };
+    const reserveRequestId = (requestId: string): void => {
+      if (seenRequestIds.has(requestId)
+        || seenRequestIds.size >= RUNTIME_LIMITS.maxRequestIdsPerSocket) {
+        throw new Error('duplicate or exhausted request identifier');
+      }
+      seenRequestIds.add(requestId);
+    };
+    const dispatchAction = async (body: Uint8Array, signal?: AbortSignal): Promise<unknown> => {
+      if (closed || this.stopped) throw new Error('operator session closed');
+      return await this.config.operatorActionBroker!.execute({
+        rawBody: body,
+        companionId: authority.companionId,
+        principal: authority.principal,
+        physicalCeiling: authority.physicalCeiling,
+        ...(signal ? { signal } : {}),
+      });
+    };
+    const audioCapable = authority.physicalCeiling.capabilities.includes('speech_to_text');
+    if (audioCapable) {
+      audioSocket = new CompanionUiAudioSocketSession({
+        enabled: true,
+        companionId: authority.companionId,
+        ingress: this.config.audioIngress!,
+        maxPendingFrames: this.maxPendingAudioFrames,
+        send: value => sendJson(socket, value),
+        refreshAuthority: async () => {
+          if (closed || this.stopped) throw new Error('operator session closed');
+        },
+        attachment: () => undefined,
+        reserveRequestId,
+        dispatchAction,
+        screenTranscript: this.config.screenAudioTranscript!,
+        cancelInteraction: this.config.cancelAudioInteraction!,
+        terminateSocket: reason => close(CLOSE.denied, reason),
+      });
+    }
+    const eventCapabilities = [COMPANION_APPROVALS_V2_CAPABILITY] as const;
+    socket.on('message', (raw, isBinary) => {
+      if (isBinary) {
+        if (!configured || !audioSocket) {
+          close(CLOSE.denied, 'audio stream not ready');
+          return;
+        }
+        try {
+          audioSocket.handleBinary(rawDataBytes(raw));
+        } catch {
+          close(CLOSE.denied, 'invalid audio frame');
+        }
+        return;
+      }
+      const body = rawDataBytes(raw);
+      void (async () => {
+        if (!configured) {
+          parseCompanionUiSessionConfigureFrame(body);
+          configured = true;
+          unsubscribeEvents = this.config.eventRelay.subscribe({
+            companionId: authority.companionId,
+            allowedKinds: companionEventKindsForScopes(authority.physicalCeiling.telemetryScopes),
+            onEvent: (envelope) => {
+              eventDelivery = eventDelivery.then(() => {
+                if (!closed) sendJson(socket, projectCompanionEventFrame(envelope, eventCapabilities));
+              }).catch(() => {
+                close(CLOSE.denied, 'event projection failed');
+              });
+            },
+          });
+          sendJson(socket, {
+            schemaVersion: 1,
+            type: 'session.ready',
+            device: OPERATOR_KEY_DEVICE,
+            capabilities: authority.physicalCeiling.capabilities,
+            telemetryScopes: authority.physicalCeiling.telemetryScopes,
+            eventCapabilities,
+          });
+          return;
+        }
+        if (parseCompanionUiSessionRenewal(body)) throw new Error('operator key sessions do not renew');
+        if (audioSocket && await audioSocket.tryHandleControl(body)) return;
+        const frame = parseCompanionUiActionFrame(body);
+        reserveRequestId(frame.requestId);
+        const result = await dispatchAction(body);
+        sendJson(socket, {
+          schemaVersion: 1,
+          type: 'result',
+          requestId: frame.requestId,
+          ok: true,
+          result,
+        });
+      })().catch(() => {
+        sendJson(socket, {
+          schemaVersion: 1,
+          type: 'result',
+          requestId: '',
+          ok: false,
+          error: { code: 'denied' },
+        });
+        close(CLOSE.denied, 'action denied');
+      });
+    });
+    socket.once('close', () => close(CLOSE.authorityChanged, 'closed'));
+    socket.once('error', () => close(CLOSE.authorityChanged, 'error'));
+    log.info('Companion UI operator key socket admitted', {
+      companionId: authority.companionId,
+      principalId: authority.principal.id,
     });
   }
 }

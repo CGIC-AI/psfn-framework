@@ -34,21 +34,28 @@ export interface CompanionUiAudioSocketOptions {
   readonly maxPendingFrames: number;
   readonly send: (value: unknown) => void;
   readonly refreshAuthority: () => Promise<void>;
-  readonly attachment: () => HubDeviceAttachmentSnapshot;
+  /** Hub device attachment behind the session; absent on the operator key path. */
+  readonly attachment: () => HubDeviceAttachmentSnapshot | undefined;
   readonly reserveRequestId: (requestId: string) => void;
   readonly dispatchAction: (body: Uint8Array, signal: AbortSignal) => Promise<unknown>;
   readonly screenTranscript: (input: Readonly<{
     companionId: CompanionId;
-    attachment: HubDeviceAttachmentSnapshot;
+    attachment?: HubDeviceAttachmentSnapshot;
     requestId: string;
     transcript: string;
   }>) => Promise<string>;
   readonly cancelInteraction: (input: Readonly<{
     companionId: CompanionId;
-    attachment: HubDeviceAttachmentSnapshot;
+    attachment?: HubDeviceAttachmentSnapshot;
     interactionId: string;
   }>) => Promise<void>;
   readonly terminateSocket: (reason: string) => void;
+}
+
+function attachmentField(
+  attachment: HubDeviceAttachmentSnapshot | undefined,
+): Readonly<{ attachment?: HubDeviceAttachmentSnapshot }> {
+  return attachment ? { attachment } : {};
 }
 
 function tryParseControl(body: Uint8Array): CompanionUiAudioControlFrame | undefined {
@@ -210,7 +217,7 @@ export class CompanionUiAudioSocketSession {
     await this.options.refreshAuthority();
     await this.options.cancelInteraction({
       companionId: this.options.companionId,
-      attachment: this.options.attachment(),
+      ...attachmentField(this.options.attachment()),
       interactionId,
     });
   }
@@ -222,7 +229,7 @@ export class CompanionUiAudioSocketSession {
     await this.options.refreshAuthority();
     const effectiveTranscript = await this.options.screenTranscript({
       companionId: this.options.companionId,
-      attachment: this.options.attachment(),
+      ...attachmentField(this.options.attachment()),
       requestId: actionRequestId,
       transcript,
     });
@@ -290,7 +297,7 @@ export class CompanionUiAudioSocketSession {
     if (audio.interactionId) {
       void this.options.cancelInteraction({
         companionId: this.options.companionId,
-        attachment: this.options.attachment(),
+        ...attachmentField(this.options.attachment()),
         interactionId: audio.interactionId,
       }).catch(reportCancellationFailure);
     }

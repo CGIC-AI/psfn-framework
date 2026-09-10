@@ -112,8 +112,8 @@ The key kinds, and what each opens:
 
 | key | where it lives | what it unlocks |
 |---|---|---|
-| `API_KEY` | `.env` / app Secret | the OpenAI-compatible `/v1` API as the operator principal |
-| `ADMIN_TOKEN` | `.env` / app Secret (`npm run helm:token`) | Garden login and the Garden admin API, alongside fleet SSO when that is also configured |
+| `API_KEY` | `.env` / app Secret | the OpenAI-compatible `/v1` API as the operator principal, and the Companion UI WebSocket (`/companion-ui/companions/<uuid>/ws`) as an operator key session when `COMPANION_UI_ORIGIN` (or fleet auth) pins its origin |
+| `ADMIN_TOKEN` | `.env` / app Secret (`npm run helm:token`) | Garden login and the Garden admin API, alongside fleet SSO when that is also configured; the Companion UI WebSocket as above |
 | `API_SATELLITE_KEYS` | `.env` / app Secret | per-satellite `/v1` principals (`api-key-<sha256[:24]>`) that `satellites.json` `auth.apiKeyPrincipalIds` admits |
 | `TESTING_HARNESS_API_KEY` | `.env` / app Secret | the testing-harness door declared in `channels.json` `api.testingHarness` |
 | Hub device key (Ed25519) | operator-held private PEM on the hub; public half in the verifier ring | short-lived `X-PSFN-Hub-Device-Assertion` tokens that admit an enrolled Hub device — the authority behind `world.body`, `world.travel`, and device-bound turns |

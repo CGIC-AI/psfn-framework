@@ -87,9 +87,12 @@ import {
 } from '../../boundary/fleet-auth/hub-device-ingress.js';
 import type {
   HubDeviceAssertionExpectedBinding,
+  HubDeviceAttachmentSnapshot,
   HubDevicePrincipal,
 } from '../../shared/contracts/hub-device-ingress.js';
-import { createCompanionId } from '../../shared/routing/companion-id.js';
+import { createCompanionId, type CompanionId } from '../../shared/routing/companion-id.js';
+import { isLoopbackHost } from '../../shared/net/hosts.js';
+import { createComponentLogger } from '../../shared/logger.js';
 import type { FleetPortalAuthorizationBatchPort } from '../../boundary/gateway/fleet-portal-authorization.js';
 import type { FleetPortalChannelHealthSource } from '../../boundary/gateway/fleet-portal-projection.js';
 import { createGatewayFleetPortalProjection } from './fleet-portal-composition.js';
@@ -97,6 +100,8 @@ import type { FleetModelUsageSummaryQueryPort } from '../../shared/telemetry/mod
 import { createGatewayFleetModelUsageProjection } from './fleet-model-usage-composition.js';
 import { createBearerCompanionRoutingConfig } from '../../channels/api/server/bearer-companion-selector.js';
 import { resolveVoiceSecurityLimits } from '../../primitives/voice/policy/security.js';
+
+const log = createComponentLogger('GatewayApiSurface');
 
 const DISABLED_VOICE_WEBSOCKET_PATH = '/v1/voice/ws-disabled';
 const GATEWAY_API_REQUEST_TIMEOUT_MS = 240_000;
@@ -288,6 +293,28 @@ function resolveFleetSsoCompanionUi(
     origin,
     guestMode: rawGuestMode,
   };
+}
+
+/**
+ * Pins the Companion UI WebSocket origin without fleet auth (psfn-framework-7oh9y).
+ * One exact origin: HTTPS, or HTTP on a loopback host, matching the transport
+ * policy of the key-authenticated REST API on the same listener.
+ */
+function resolveStandaloneCompanionUiOrigin(env: NodeJS.ProcessEnv): string | undefined {
+  const raw = env.COMPANION_UI_ORIGIN?.trim();
+  if (!raw) return undefined;
+  let origin: URL;
+  try {
+    origin = new URL(raw);
+  } catch {
+    throw new Error('COMPANION_UI_ORIGIN must be one exact origin');
+  }
+  if (origin.origin !== raw || origin.username || origin.password
+    || origin.pathname !== '/' || origin.search || origin.hash
+    || (origin.protocol !== 'https:' && !(origin.protocol === 'http:' && isLoopbackHost(origin.hostname)))) {
+    throw new Error('COMPANION_UI_ORIGIN must be one exact HTTPS origin (or HTTP on loopback)');
+  }
+  return raw;
 }
 
 /**
@@ -715,16 +742,33 @@ export async function startOptionalGatewayApiServer(
   const companionUiAudioOutputRelay = options.companionRelay
     ? new CompanionUiAudioOutputRelay(companionUiVoiceLimits.maxFrameBytes!)
     : undefined;
-  // The Companion UI WebSocket is a browser SSO surface (canonical origin,
-  // broker, child assertions, request capabilities): it exists only when fleet
-  // SSO is composed. Its STT ingress is built only when the socket can exist.
-  const companionUiWebSocketComposable = options.config.fleetAuth !== undefined
+  // The Companion UI WebSocket has two admission paths (psfn-framework-7oh9y):
+  // the Hub path (satellite key + Hub device assertion relaying a fleet SSO
+  // cookie or an explicit guest) and the key path (ADMIN_TOKEN / API_KEY bearer
+  // on the upgrade). Fleet SSO adds the cookie path; it is never a
+  // precondition. The socket is pinned to the fleet canonical origin when
+  // fleet auth exists, otherwise to COMPANION_UI_ORIGIN. Its STT ingress is
+  // built whenever the socket can exist.
+  const companionUiOrigin = options.config.fleetAuth?.canonicalOrigin
+    ?? resolveStandaloneCompanionUiOrigin(env);
+  const companionUiOperatorKeys = [env.ADMIN_TOKEN, env.API_KEY]
+    .filter((key): key is string => Boolean(key?.trim()));
+  const companionUiHubPathComposable = hubDeviceIngress !== undefined
+    && options.satelliteRegistry !== undefined
+    && satelliteApiKeys.length > 0;
+  const companionUiSsoComposable = options.config.fleetAuth !== undefined
     && options.fleetAuthBroker !== undefined
     && options.fleetAuthChildAssertions !== undefined
-    && options.fleetAuthRequestCapabilities !== undefined
-    && hubDeviceIngress !== undefined
-    && options.satelliteRegistry !== undefined
-    && options.companionRelay !== undefined;
+    && options.fleetAuthRequestCapabilities !== undefined;
+  const companionUiWebSocketComposable = companionUiOrigin !== undefined
+    && options.companionRelay !== undefined
+    && (companionUiHubPathComposable || companionUiOperatorKeys.length > 0);
+  if (!companionUiWebSocketComposable && companionUiOrigin === undefined && options.companionRelay) {
+    log.info(
+      'Companion UI WebSocket not composed: set COMPANION_UI_ORIGIN (or fleet auth) to pin its origin; '
+      + 'ADMIN_TOKEN / API_KEY then admit key sessions and a Hub device verifier admits Hub sessions',
+    );
+  }
   const companionUiStt = companionUiWebSocketComposable
     ? createRuntimeVoiceSttConnector(options.config, {
         eligibilityGate: options.eligibilityGate,
@@ -745,59 +789,132 @@ export async function startOptionalGatewayApiServer(
         maxTranscriptBytes: resolveVoiceSecurityLimits().maxTranscriptChars,
       })
     : undefined;
-  // Same conjuncts as `companionUiWebSocketComposable`, spelled out so TS
-  // narrows each dependency for the adapter arguments below.
-  const companionUiWebSocket = options.config.fleetAuth
-    && options.fleetAuthBroker
-    && options.fleetAuthChildAssertions
-    && options.fleetAuthRequestCapabilities
-    && hubDeviceIngress
-    && options.satelliteRegistry
-    && options.companionRelay
+  const companionUiScreenTranscript = async (input: Readonly<{
+    companionId: CompanionId;
+    attachment?: HubDeviceAttachmentSnapshot;
+    requestId: string;
+    transcript: string;
+  }>): Promise<string> => {
+    const screening = resolveOwnedIntakeScreening(options, input.companionId);
+    if (!screening || !input.transcript.trim()) return input.transcript;
+    // Key-path sessions have no Hub attachment; their channel is the operator's
+    // own companion-ui lane (the same channel the REST key turn would land in).
+    const channelId = input.attachment?.channel.id ?? `companion-ui:operator:${input.companionId}`;
+    const screened = await screening.screen(input.transcript, {
+      sourceClass: 'audio_transcript',
+      origin: {
+        ref: `companion-ui-audio:${channelId}:${input.requestId}`,
+      },
+      scope: 'context',
+      subject: { kind: 'body' },
+      sourceChannelId: channelId,
+      timing: {
+        traceId: input.requestId,
+        requestId: input.requestId,
+        channelId,
+        channelType: 'api',
+      },
+    });
+    return screened.effectiveText;
+  };
+  const companionUiCancelAudioInteraction = async ({ interactionId }: Readonly<{
+    interactionId: string;
+  }>): Promise<void> => {
+    activeCompanionUiInteractions.get(interactionId)?.abort();
+  };
+  const companionUiWebSocket = companionUiWebSocketComposable && companionUiOrigin && options.companionRelay
     ? new CompanionUiWebSocketAdapter({
-        ...(env.FLEET_SSO_COMPANION_UI_HUB_ORIGIN?.trim()
+        ...(companionUiHubPathComposable && env.FLEET_SSO_COMPANION_UI_HUB_ORIGIN?.trim()
           ? { browserHubOrigin: env.FLEET_SSO_COMPANION_UI_HUB_ORIGIN.trim(),
               browserHubTimeoutMs: GATEWAY_API_REQUEST_TIMEOUT_MS }
           : {}),
-        canonicalOrigin: options.config.fleetAuth.canonicalOrigin,
-        satelliteApiKeys,
-        satelliteRegistry: options.satelliteRegistry,
+        canonicalOrigin: companionUiOrigin,
+        ...(hubDeviceIngress && options.satelliteRegistry && satelliteApiKeys.length > 0 ? {
+          satelliteApiKeys,
+          satelliteRegistry: options.satelliteRegistry,
+          hubDeviceIngress,
+        } : {}),
         guestMode: fleetSsoCompanionUi?.guestMode ?? 'disabled',
         ...(trustedProxyClientCertToken ? { trustedProxyClientCertToken } : {}),
-        hubDeviceIngress,
         eventRelay: options.companionRelay.relay,
         ...(companionUiAudioOutputRelay ? { audioOutputRelay: companionUiAudioOutputRelay } : {}),
         ...(companionUiAudioIngress ? {
           audioIngress: companionUiAudioIngress,
           maxPendingAudioFrames: companionUiVoiceLimits.maxPendingFrames,
-          screenAudioTranscript: async (input) => {
-            const screening = resolveOwnedIntakeScreening(options, input.companionId);
-            if (!screening || !input.transcript.trim()) return input.transcript;
-            const screened = await screening.screen(input.transcript, {
-              sourceClass: 'audio_transcript',
-              origin: {
-                ref: `companion-ui-audio:${input.attachment.channel.id}:${input.requestId}`,
-              },
-              scope: 'context',
-              subject: { kind: 'body' },
-              sourceChannelId: input.attachment.channel.id,
-              timing: {
-                traceId: input.requestId,
-                requestId: input.requestId,
-                channelId: input.attachment.channel.id,
-                channelType: 'api',
-              },
-            });
-            return screened.effectiveText;
-          },
-          cancelAudioInteraction: async ({ interactionId }) => {
-            activeCompanionUiInteractions.get(interactionId)?.abort();
+          screenAudioTranscript: companionUiScreenTranscript,
+          cancelAudioInteraction: companionUiCancelAudioInteraction,
+        } : {}),
+        ...(companionUiOperatorKeys.length > 0 ? {
+          operatorKeys: companionUiOperatorKeys,
+          operatorActionBroker: {
+            // Key path (psfn-framework-7oh9y): the bearer is the human authority,
+            // so frames dispatch with the key principal exactly as the REST API
+            // does. No Hub attachment, no fleet child assertion: shard and
+            // embodiment frames are denied here (they exist only as fleet
+            // child-capability / Hub-attachment routes), everything else maps
+            // onto the key routes.
+            execute: async input => {
+              const compiled = compileCompanionUiAction(
+                input.rawBody,
+                input.companionId,
+                input.physicalCeiling,
+              );
+              const frame = compiled.frame;
+              const body = frame.body as Record<string, unknown>;
+              if (frame.resource === 'conversation.status') return await gatewayApiRuntime.handleHealth();
+              if (frame.resource === 'conversation.interrupt') {
+                const interactionId = String(body.interactionId);
+                const active = activeCompanionUiInteractions.get(interactionId);
+                active?.abort();
+                return { interrupted: active !== undefined, interactionId };
+              }
+              if (frame.resource === 'tool_activity.subscribe') return { subscribed: true };
+              if (frame.resource === 'artifact.preview') {
+                const preview = options.companionRelay?.relay.getPreviewSource(
+                  String(body.id),
+                  input.companionId,
+                );
+                if (!preview?.previewable || !preview.bytes) throw new Error('Artifact preview unavailable');
+                return {
+                  artifactId: preview.artifactId,
+                  mediaType: preview.mediaType,
+                  sizeBytes: preview.sizeBytes,
+                  dataBase64: preview.bytes.toString('base64'),
+                };
+              }
+              const approval = await dispatchCompanionUiApproval({
+                compiled,
+                gateway: options.gateway,
+              });
+              if (approval.handled) return approval.result;
+              const content = companionUiPromptContent(frame);
+              if (!content || frame.resource === 'shards.interact') {
+                throw new Error('Companion UI operator action has no key dispatcher');
+              }
+              const interaction = beginCompanionUiInteraction(frame.requestId, input.signal);
+              try {
+                const result = await gatewayApiRuntime.handleChatCompletion({
+                  request: {
+                    model: input.companionId,
+                    messages: [{ role: 'user', content }],
+                    system_prompt_mode: 'default',
+                  },
+                  principal: input.principal,
+                  headers: {},
+                  signal: interaction.signal,
+                });
+                if (!result.ok) throw new Error(result.error.type);
+                return result.response;
+              } finally {
+                interaction.release();
+              }
+            },
           },
         } : {}),
-        actionBroker: new GatewayCompanionUiActionBroker({
+        ...(companionUiSsoComposable ? { actionBroker: new GatewayCompanionUiActionBroker({
           resolveAuthorizationContext: input => options.fleetAuthBroker!.resolveAuthorizationContext(input),
-          signer: options.fleetAuthRequestCapabilities,
-          childAssertions: options.fleetAuthChildAssertions,
+          signer: options.fleetAuthRequestCapabilities!,
+          childAssertions: options.fleetAuthChildAssertions!,
           approvalOwner: {
             ownerOf: (id) => options.gateway.ownerOfConfirmation(id),
           },
@@ -910,7 +1027,7 @@ export async function startOptionalGatewayApiServer(
               }
             },
           },
-        }),
+        }) } : {}),
         ...(fleetSsoCompanionUi?.guestMode === 'explicit' ? {
           guestActionBroker: {
             execute: async input => {

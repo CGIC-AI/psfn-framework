@@ -28,6 +28,7 @@ import {
   MAX_WISH_TEXT_CHARS,
   PersonalWishlist,
 } from './personal-wishlist.js';
+import type { WorldNotesLibrary } from './world-notes.js';
 import {
   WIKI_SOURCE_CLASSES,
   type WikiDocumentUpsertInput,
@@ -56,7 +57,9 @@ type WikiAction =
   | 'wardrobe_list'
   | 'wardrobe_read'
   | 'wardrobe_save'
-  | 'wardrobe_revise';
+  | 'wardrobe_revise'
+  | 'world_notes_read'
+  | 'world_note';
 
 const WIKI_ACTIONS = [
   'list',
@@ -79,6 +82,8 @@ const WIKI_ACTIONS = [
   'wardrobe_read',
   'wardrobe_save',
   'wardrobe_revise',
+  'world_notes_read',
+  'world_note',
 ] satisfies readonly WikiAction[];
 
 export interface WikiToolDeps {
@@ -102,6 +107,8 @@ export interface WikiToolDeps {
   personalProjects?: PersonalProjectLibrary;
   /** Existing personal-wiki storage interpreted as companion-authored wishes. */
   personalWishlist?: PersonalWishlist;
+  /** Per-world notes (2nsfo): the companion's own map of each shared world. */
+  worldNotes?: WorldNotesLibrary;
   /**
    * Content-addressed CogSec admission for wiki documents
    * (psfn-framework-1fjvm.2). Wired, no document body, summary, or preview
@@ -141,6 +148,9 @@ interface WikiToolParams {
   look_name?: string;
   look_prompt?: string;
   supersedes_ref?: string;
+  world?: string;
+  note_text?: string;
+  note_about?: string;
 }
 
 function normalizeAction(params: WikiToolParams): WikiAction {
@@ -206,6 +216,7 @@ function resolveWikiCapabilityRequirement(params: Record<string, unknown>): Capa
     case 'project_read':
     case 'wardrobe_list':
     case 'wardrobe_read':
+    case 'world_notes_read':
       return 'identity.read';
     case 'write':
     case 'import':
@@ -217,10 +228,18 @@ function resolveWikiCapabilityRequirement(params: Record<string, unknown>): Capa
     case 'project_share':
     case 'wardrobe_save':
     case 'wardrobe_revise':
+    case 'world_note':
       return 'identity.write.runtime';
     default:
       return ['identity.read', 'identity.write.runtime'];
   }
+}
+
+function requireWorldNotes(deps: WikiToolDeps): WorldNotesLibrary {
+  if (!deps.worldNotes) {
+    throw new Error('per-world notes are unavailable in this runtime');
+  }
+  return deps.worldNotes;
 }
 
 function requirePersonalProjects(deps: WikiToolDeps): PersonalProjectLibrary {
@@ -368,6 +387,18 @@ export function createWikiTool(store: WikiStorePort, deps: WikiToolDeps): Substr
       look_name: Type.Optional(Type.String({ minLength: 1 })),
       look_prompt: Type.Optional(Type.String({ minLength: 1, description: 'Reusable outfit prompt fragment.' })),
       supersedes_ref: Type.Optional(Type.String({ minLength: 1, description: 'Prior wardrobe:<id> ref replaced by this look.' })),
+      world: Type.Optional(Type.String({
+        minLength: 1, maxLength: 64,
+        description: 'World name for world_notes_read / world_note (the world plane you are on, e.g. "commons").',
+      })),
+      note_text: Type.Optional(Type.String({
+        minLength: 1, maxLength: 280,
+        description: 'world_note: what you want to remember about this world, in your own words (landmarks, how to reach someone, what a place is for).',
+      })),
+      note_about: Type.Optional(Type.String({
+        minLength: 1, maxLength: 64,
+        description: 'world_note: optional landmark id (thing:<id>, room:<label>, place:<placeId>) or participant id the note is about.',
+      })),
     }),
     execute: async (
       toolCallId: string,
@@ -577,6 +608,28 @@ export function createWikiTool(store: WikiStorePort, deps: WikiToolDeps): Substr
           case 'project_read': {
             const project = requirePersonalProjects(deps).getProject(requireString(params.project_ref, 'project_ref'));
             return textResult(JSON.stringify({ action, project }, null, 2));
+          }
+          case 'world_notes_read': {
+            const library = requireWorldNotes(deps);
+            const world = typeof params.world === 'string' ? params.world.trim() : '';
+            if (!world) {
+              return textResult(JSON.stringify({ action, worlds: library.listWorlds() }, null, 2));
+            }
+            const notes = library.get(world);
+            return textResult(JSON.stringify({
+              action,
+              world,
+              notes: notes ?? null,
+              ...(notes ? {} : { note: 'nothing remembered about this world yet; perceive and move there to build the map' }),
+            }, null, 2));
+          }
+          case 'world_note': {
+            const note = requireWorldNotes(deps).addNote({
+              world: requireString(params.world, 'world'),
+              text: requireString(params.note_text, 'note_text'),
+              ...(params.note_about ? { about: params.note_about } : {}),
+            });
+            return textResult(JSON.stringify({ action, note }, null, 2));
           }
           case 'project_create': {
             const project = await requirePersonalProjects(deps).createProject({

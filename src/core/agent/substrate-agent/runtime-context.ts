@@ -102,6 +102,7 @@ import {
 } from './runtime-context-sections/situated-presence.js';
 import type { SituatedEmanationTracker } from './runtime-context-sections/situated-emanation.js';
 import type { WorldPlaneMapReader } from '../../../shared/contracts/world-plane-map.js';
+import type { WorldNotesReader } from '../../../shared/contracts/world-notes.js';
 import type { PlacesRegistryConfig } from '../../../shared/contracts/places-registry.js';
 
 // The section producers moved into ./runtime-context-sections/ (E2.6). This
@@ -465,6 +466,8 @@ export function buildRuntimeContext(input: {
   emanationTracker?: SituatedEmanationTracker;
   /** What the world published for its plane (gs899, g8xyn); world-plane turns only. */
   worldPlaneMap?: WorldPlaneMapReader;
+  /** The companion's own notes on each world (2nsfo); world-plane turns only. */
+  worldNotes?: WorldNotesReader;
   /**
    * Dual-presence situated fallback for this turn (vinz.29), resolved once by
    * the agent so the rendered block, the co-presence read, and the presence
@@ -543,6 +546,7 @@ export function buildRuntimeContext(input: {
     ...(input.coPresent && input.coPresent.length > 0 ? { coPresent: input.coPresent } : {}),
     ...(input.emanationTracker ? { emanationTracker: input.emanationTracker } : {}),
     ...(input.worldPlaneMap ? { worldPlaneMap: input.worldPlaneMap } : {}),
+    ...(input.worldNotes ? { worldNotes: input.worldNotes } : {}),
     ...(input.situatedFallbackPlaceId ? { situatedFallbackPlaceId: input.situatedFallbackPlaceId } : {}),
     ...(mindspaceLabel ? { mindspaceLabel } : {}),
   });

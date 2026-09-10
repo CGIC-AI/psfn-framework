@@ -31,6 +31,7 @@ import { isHighTierTrustLevel, type TrustLevel } from '../../../system/trust/typ
 import type { RequesterProvenance } from '../../../shared/contracts/runtime.js';
 import type { WorldOperations } from './ops.js';
 import type { WorldPlaneMapCache } from '../../../shared/contracts/world-plane-map.js';
+import type { WorldNotesWriter } from '../../../shared/contracts/world-notes.js';
 
 // ── Agent-side `world` tool (Sprint 10, Workstream C2 + C3/C4) ──
 //
@@ -133,6 +134,12 @@ export interface WorldToolDeps {
    * reports the registry alone and a hub-only place cannot be moved to.
    */
   worldPlaneMap?: WorldPlaneMapCache;
+  /**
+   * Per-world notes writer (psfn-framework-2nsfo). Every Eidoverse perceive
+   * folds the things, room and people it saw into the companion's own map of
+   * that world, and every move records the route; never fatal to the tool.
+   */
+  worldNotes?: WorldNotesWriter;
   /**
    * Cross-companion presence turn port (multi-companion, W5a). `move` writes
    * presence through THIS seam only — never a store/table directly (contract
@@ -283,6 +290,7 @@ async function runPerceive(
   if (isEidoversePlace(place)) {
     const perception = await requireAvatarOps(ops, 'avatarPerceive')({ placeId: place.placeId });
     deps.worldPlaneMap?.rememberRoom(perception.world, perception.room, perception.capturedAt);
+    noteWorldPerception(deps, perception);
     avatar = describeAvatarPerception(perception, place);
   }
 
@@ -329,6 +337,36 @@ function requireAvatarOps<K extends AvatarOpName>(ops: WorldOperations, key: K):
     );
   }
   return op.bind(ops) as NonNullable<WorldOperations[K]>;
+}
+
+/** Fold a perception into the companion's own map of the world; never throws. */
+function noteWorldPerception(deps: WorldToolDeps, perception: WorldAvatarPerception): void {
+  try {
+    deps.worldNotes?.observePerception({
+      world: perception.world,
+      capturedAt: perception.capturedAt,
+      self: perception.self,
+      room: perception.room,
+      things: perception.things,
+      people: perception.people,
+    });
+  } catch {
+    // The map is a convenience; a note that fails to persist never fails the look.
+  }
+}
+
+/** Record a route the companion walked; never throws. */
+function noteWorldMove(deps: WorldToolDeps, world: string, to: string): void {
+  try {
+    deps.worldNotes?.observeMove({
+      world,
+      ...(deps.resolveSituatedPlaceId?.() ? { from: deps.resolveSituatedPlaceId() as string } : {}),
+      to,
+      at: new Date().toISOString(),
+    });
+  } catch {
+    // See noteWorldPerception.
+  }
 }
 
 function describeAvatarPerception(
@@ -666,6 +704,7 @@ async function runMove(ops: WorldOperations, deps: WorldToolDeps, params: WorldT
         `the world refused the move to "${placeId}" (${outcome.reason}); your body is still in "${outcome.world}".`,
       );
     }
+    noteWorldMove(deps, hubPlace.world, hubPlace.placeId);
     return JSON.stringify({
       action: 'move',
       placeId: hubPlace.placeId,
@@ -702,6 +741,7 @@ async function runMove(ops: WorldOperations, deps: WorldToolDeps, params: WorldT
         `the world refused the move to "${placeId}" (${outcome.reason}); your body is still in "${outcome.world}".`,
       );
     }
+    noteWorldMove(deps, binding.world, place.placeId);
     body = describeMoveOutcome(outcome);
   }
   const applyVirtualMove = deps.applyVirtualMove;

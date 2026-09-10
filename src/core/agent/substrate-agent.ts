@@ -155,6 +155,7 @@ import {
 } from './substrate-agent/runtime-context.js';
 import { SituatedEmanationTracker } from './substrate-agent/runtime-context-sections/situated-emanation.js';
 import type { WorldPlaneMapReader } from '../../shared/contracts/world-plane-map.js';
+import type { WorldNotesReader } from '../../shared/contracts/world-notes.js';
 import { createVirtualRoomFollower, type VirtualRoomFollower } from './virtual-room-follow.js';
 import { installContextCoherenceMonitor } from './context-coherence-monitor.js';
 import { EmotionSelfModelRuntime } from './substrate-agent/emotion-self-model-runtime.js';
@@ -541,6 +542,8 @@ export class SubstrateAgent {
   private readonly situatedEmanationTracker = new SituatedEmanationTracker();
   /** What the world published for its plane (gs899, g8xyn); set by composition when a Hub is wired. */
   private worldPlaneMap: WorldPlaneMapReader | null = null;
+  /** The companion's own notes on each world (2nsfo); set by composition when the wiki is wired. */
+  private worldNotes: WorldNotesReader | null = null;
 
   // Virtual-activity presence follow (vinz.21): pulls the companion's virtual
   // presence to a place-bound companion-room when the trusted partner is
@@ -942,6 +945,7 @@ export class SubstrateAgent {
       getCompanionSubstrateHealthContext: () => this.companionSubstrateHealthContext,
       situatedEmanationTracker: this.situatedEmanationTracker,
       getWorldPlaneMap: () => this.worldPlaneMap,
+      getWorldNotes: () => this.worldNotes,
       resolveSituatedFallbackPlaceIdForTurn: (message) => this.resolveSituatedFallbackPlaceIdForTurn(message),
       getActiveConcernProvider: () => this.activeConcernProvider,
       getBehavioralPatternProvider: () => this.behavioralPatternProvider,
@@ -1244,6 +1248,11 @@ export class SubstrateAgent {
   /** The per-world map the world tool keeps fresh (gs899, g8xyn); the situated block reads it. */
   setWorldPlaneMap(reader: WorldPlaneMapReader | null): void {
     this.worldPlaneMap = reader;
+  }
+
+  /** The companion's own notes on each world (2nsfo); the situated block reads them. */
+  setWorldNotes(reader: WorldNotesReader | null): void {
+    this.worldNotes = reader;
   }
 
   setToolUsageRanking(ranking: ToolUsageRanking | null): void {

@@ -29,6 +29,7 @@ import { wrapPromptSectionXml } from '../../../identity/prompt-sections.js';
 import type { SituatedEmanationTracker } from './situated-emanation.js';
 import { classifyTurnPresenceMode, isPlacelessSatelliteTurn } from './turn-presence-mode.js';
 import type { WorldPlaneMapReader } from '../../../../shared/contracts/world-plane-map.js';
+import type { WorldNotesReader } from '../../../../shared/contracts/world-notes.js';
 
 /**
  * A co-present companion sharing this place. Multi-companion W5 will populate
@@ -73,6 +74,8 @@ export interface SituatedPresenceContextInput {
    * in, and the door's advertised tools. Read on world-plane turns only.
    */
   worldPlaneMap?: WorldPlaneMapReader;
+  /** The companion's own notes on each world (2nsfo); world-plane turns only. */
+  worldNotes?: WorldNotesReader;
   /**
    * Character-facing display label for the shared-mindspace layer (decision
    * 10) — operator-authored in companion-data (character card extension
@@ -273,6 +276,10 @@ export function buildSituatedPresenceContextBlock(input: SituatedPresenceContext
     if (worldMap && worldMap.tools.length > 0) {
       const names = worldMap.tools.map((tool) => safeText(tool.name)).filter((name) => name.length > 0).slice(0, 24);
       lines.push(`This world's own tools (advisory; reach them through the world tool's verbs): ${names.join(', ')}`);
+    }
+    const remembered = safeText(input.worldNotes?.summarize(place.eidoverse.world) ?? '').slice(0, 600);
+    if (remembered) {
+      lines.push(`What you remember of this world: ${remembered}`);
     }
     lines.push('Use the world tool here: perceive to look, act for body verbs, move to a participant, a position, or a place on this plane. Room control and physical places do not apply on this plane.');
     return wrapPromptSectionXml({

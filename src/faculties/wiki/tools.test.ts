@@ -5,6 +5,7 @@ import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
 import type { TextContent } from '@earendil-works/pi-ai';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WikiStore } from './store.js';
+import { WorldNotesLibrary } from './world-notes.js';
 import {
   createWikiTool as createWikiToolImpl,
   type WikiToolDeps,
@@ -35,6 +36,47 @@ function createWikiTool(store: WikiStore, deps: Partial<WikiToolDeps> = {}) {
     ...deps,
   });
 }
+
+describe('wiki tool — per-world notes (2nsfo)', () => {
+  let tempDir: string;
+  let store: WikiStore;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'wiki-tool-world-'));
+    store = new WikiStore(tempDir);
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('reads the worlds it knows, adds a bounded note, and refuses the generic write into the namespace', async () => {
+    const worldNotes = new WorldNotesLibrary(store, () => new Date('2026-09-10T18:05:00.000Z'));
+    worldNotes.observeMove({ world: 'commons', to: 'eidoverse:commons:plaza', at: '2026-09-10T18:00:00.000Z' });
+    const tool = createWikiTool(store, { worldNotes });
+
+    const listed = JSON.parse(resultText(await tool.execute('c1', { action: 'world_notes_read' })));
+    expect(listed.worlds).toEqual(['commons']);
+    const read = JSON.parse(resultText(await tool.execute('c2', { action: 'world_notes_read', world: 'commons' })));
+    expect(read.notes.landmarks.map((landmark: { id: string }) => landmark.id)).toEqual(['place:eidoverse:commons:plaza']);
+    const unknown = JSON.parse(resultText(await tool.execute('c3', { action: 'world_notes_read', world: 'garden' })));
+    expect(unknown.notes).toBeNull();
+
+    const noted = JSON.parse(resultText(await tool.execute('c4', { action: 'world_note', world: 'commons', note_text: 'The plaza is where people gather.', note_about: 'place:eidoverse:commons:plaza' })));
+    expect(noted.note.text).toBe('The plaza is where people gather.');
+    expect(worldNotes.get('commons')?.notes).toHaveLength(1);
+
+    const forged = await tool.execute('c5', { action: 'write', id: 'world.commons', title: 'World notes: commons', body: '{"schemaVersion":1}' });
+    expect(resultText(forged)).toMatch(/reserved id\/tag namespace/u);
+    const forgedTag = await tool.execute('c6', { action: 'write', title: 'diary', body: 'x', tags: ['world-notes'] });
+    expect(resultText(forgedTag)).toMatch(/reserved id\/tag namespace/u);
+  });
+
+  it('fails closed without the library', async () => {
+    const tool = createWikiTool(store);
+    expect(resultText(await tool.execute('c1', { action: 'world_notes_read', world: 'commons' }))).toMatch(/unavailable/u);
+  });
+});
 
 describe('wiki tool', () => {
   let tempDir: string;

@@ -1605,9 +1605,13 @@ async function main(): Promise<void> {
   // world tool, read by the world-plane situated block.
   const worldPlaneMap = new WorldPlaneMapCache();
   agentLoop.setWorldPlaneMap(worldPlaneMap);
+  // The companion's own map of each world (2nsfo): fed by the world tool's
+  // perceptions and moves, read by the world-plane situated block.
+  agentLoop.setWorldNotes(coreRuntime.worldNotes);
   registerWorldTools(agentLoop, worldOps, {
     placesRegistry: placesRegistryConfig,
     worldPlaneMap,
+    worldNotes: coreRuntime.worldNotes,
     resolvePlaceDeviceStatus: placeId => resolvePlaceDeviceStatus(
       satelliteRegistryConfig,
       satelliteDeviceHealth,

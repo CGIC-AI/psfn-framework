@@ -8,6 +8,7 @@ import type { RequesterProvenance } from '../../../shared/contracts/runtime.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import type { WorldOperations } from './ops.js';
 import type { WorldPlaneMapCache } from '../../../shared/contracts/world-plane-map.js';
+import type { WorldNotesWriter } from '../../../shared/contracts/world-notes.js';
 import { createWorldTool } from './tools.js';
 
 export interface WorldRuntimeTarget {
@@ -36,6 +37,8 @@ export interface RegisterWorldToolsOptions {
   resolveSituatedPlaceId?: () => string | undefined;
   /** Per-world map the world publishes at runtime (gs899, g8xyn). */
   worldPlaneMap?: WorldPlaneMapCache;
+  /** Per-world notes writer (2nsfo): perceptions and moves build the companion's own map. */
+  worldNotes?: WorldNotesWriter;
   /**
    * Presence turn port for `move` (contract s10wm; multi-companion only).
    * Null/absent = flag-off: moves are local-only (no shared-table write).
@@ -75,6 +78,7 @@ export function registerWorldTools(
     placesRegistry: options.placesRegistry,
     ...(options.resolveSituatedPlaceId ? { resolveSituatedPlaceId: options.resolveSituatedPlaceId } : {}),
     ...(options.worldPlaneMap ? { worldPlaneMap: options.worldPlaneMap } : {}),
+    ...(options.worldNotes ? { worldNotes: options.worldNotes } : {}),
     ...(options.companionPresence !== undefined ? { companionPresence: options.companionPresence } : {}),
     ...(options.applyVirtualMove ? { applyVirtualMove: options.applyVirtualMove } : {}),
     ...(options.resolvePlaceDeviceStatus

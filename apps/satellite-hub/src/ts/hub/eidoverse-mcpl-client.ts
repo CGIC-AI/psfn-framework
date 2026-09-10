@@ -236,6 +236,37 @@ export class EidoverseMcplClient {
     return this.callTool("set_avatar", { avatar });
   }
 
+  // Flight family (psfn-framework-jbvwz). The door decides whether this body
+  // may fly at all (wings, permission, stamina); the hub only carries the
+  // bounded request and the door's one-line answer.
+  async takeOff(): Promise<string> {
+    return this.callTool("take_off", {});
+  }
+
+  async climbTo(altitude: number): Promise<string> {
+    return this.callTool("climb_to", { altitude });
+  }
+
+  async glideTo(x: number, z: number): Promise<string> {
+    return this.callTool("glide_to", { x, z });
+  }
+
+  async landAt(x: number, z: number): Promise<string> {
+    return this.callTool("land_at", { x, z });
+  }
+
+  async foldWings(): Promise<string> {
+    return this.callTool("fold_wings", {});
+  }
+
+  async unfoldWings(): Promise<string> {
+    return this.callTool("unfold_wings", {});
+  }
+
+  async flightStatus(): Promise<string> {
+    return this.callTool("flight_status", {});
+  }
+
   /**
    * Ask the door to move this body to another world. The tool's synchronous
    * return is the arrival signal: the door answers `Arrived in "<world>"` (or

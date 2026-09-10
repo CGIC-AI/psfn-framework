@@ -95,7 +95,13 @@ export type WorldAvatarMoveOutcome =
   | { accepted: false; world: string; reason: WorldAvatarMoveRejectionReason };
 
 /** Body and creation verbs the Hub allowlists; tiers decide which apply. */
-export const WORLD_AVATAR_BODY_VERBS = ['face', 'stop', 'emote', 'posture', 'whisper'] as const;
+export const WORLD_AVATAR_BODY_VERBS = [
+  'face', 'stop', 'emote', 'posture', 'whisper',
+  // Flight family and wing posture (psfn-framework-jbvwz): body autonomy,
+  // same tier as the other body verbs; the door refuses when the body has no
+  // wings, no fly permission, or no stamina.
+  'take_off', 'climb_to', 'glide_to', 'land_at', 'fold_wings', 'unfold_wings', 'flight_status',
+] as const;
 export const WORLD_AVATAR_EDIT_VERBS = ['spawn', 'remove', 'set_avatar'] as const;
 type WorldAvatarBodyVerb = (typeof WORLD_AVATAR_BODY_VERBS)[number];
 export type WorldAvatarEditVerb = (typeof WORLD_AVATAR_EDIT_VERBS)[number];

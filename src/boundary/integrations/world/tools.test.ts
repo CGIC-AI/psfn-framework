@@ -1005,7 +1005,7 @@ describe('world tool — Eidoverse plane (S13 MOVE)', () => {
 
     const bad = await tool.execute('call-act', { action: 'act', verb: 'world_verb' as never });
     expect(bad.details?.isError).toBe(true);
-    expect(resultText(bad)).toContain('verb as one of: face, stop, emote, posture, whisper, spawn, remove, set_avatar');
+    expect(resultText(bad)).toContain('verb as one of: face, stop, emote, posture, whisper, take_off, climb_to, glide_to, land_at, fold_wings, unfold_wings, flight_status, spawn, remove, set_avatar');
 
     const refusing = createWorldTool(createAvatarOps({
       avatarAct: vi.fn(async () => ({ accepted: false as const, verb: 'spawn', reason: 'not_configured' as const })),

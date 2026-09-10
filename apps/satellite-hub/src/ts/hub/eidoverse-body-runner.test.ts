@@ -97,8 +97,25 @@ class RecordingTools implements EidoverseBodyTools {
 test("body action allowlist rejects world-editing verbs and malformed locomotion arguments", () => {
   assert.deepEqual(
     [...EIDOVERSE_BODY_ACTION_NAMES],
-    ["walk_to", "face", "stop", "emote", "posture", "whisper", "spawn", "remove", "set_avatar"],
+    [
+      "walk_to", "face", "stop", "emote", "posture", "whisper",
+      "take_off", "climb_to", "glide_to", "land_at", "fold_wings", "unfold_wings", "flight_status",
+      "spawn", "remove", "set_avatar",
+    ],
   );
+  // Flight family (jbvwz): bounded like every other verb; raw-bone pose and
+  // animate stay outside the allowlist.
+  assert.deepEqual(parseEidoverseBodyAction("take_off", {}), { name: "take_off" });
+  assert.deepEqual(parseEidoverseBodyAction("flight_status", undefined), { name: "flight_status" });
+  assert.deepEqual(parseEidoverseBodyAction("climb_to", { altitude: 12.5 }), { name: "climb_to", altitude: 12.5 });
+  assert.throws(() => parseEidoverseBodyAction("climb_to", { altitude: 0 }), EidoverseBodyActionRejectedError);
+  assert.throws(() => parseEidoverseBodyAction("climb_to", { altitude: 5000 }), EidoverseBodyActionRejectedError);
+  assert.deepEqual(parseEidoverseBodyAction("glide_to", { x: 3, z: -4 }), { name: "glide_to", x: 3, z: -4 });
+  assert.deepEqual(parseEidoverseBodyAction("land_at", { x: 1, z: 2 }), { name: "land_at", x: 1, z: 2 });
+  assert.throws(() => parseEidoverseBodyAction("land_at", { x: 1 }), EidoverseBodyActionRejectedError);
+  for (const raw of ["pose", "animate", "clear_pose", "reach", "ragdoll"]) {
+    assert.throws(() => parseEidoverseBodyAction(raw, { bones: {} }), EidoverseBodyActionRejectedError, `${raw} stays outside the allowlist`);
+  }
   // Raw world editing, placement of arbitrary entities, moderation, vision
   // and speech never go through the body runner.
   for (const forbidden of ["place", "world_verb", "moderate", "kick", "ban", "terrain", "snapshot", "say"]) {

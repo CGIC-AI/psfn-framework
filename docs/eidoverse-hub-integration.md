@@ -315,7 +315,7 @@ emanation-only. The `world` tool then works unchanged:
 | `move { position: { x, z } }` | walk to a ground-plane point in the current world |
 | `perceive { placeId }` on a bound place | the door's `look` lifted into numbers: your own `(x, z)` and facing, everyone present with id, `(x, z)`, distance, bearing and what they are doing, the placed things, and the lines said since you last looked; honest `present: false` when the body is in another world |
 | `list` | shows the `eidoverse` binding and marks bound places `movable` |
-| `act { verb, arguments }` | body verbs `face` (target or x,z), `stop`, `emote` (wave, cheer, dance, point, salute, clap, talk, flail), `posture` (sit, sitchair, lie, stand), `whisper` (to, text; private, unlogged); creation verbs `spawn` (query or lib, x, z, yaw, id), `remove` (id), `set_avatar` (avatar) |
+| `act { verb, arguments }` | body verbs `face` (target or x,z), `stop`, `emote` (wave, cheer, dance, point, salute, clap, talk, flail), `posture` (sit, sitchair, lie, stand), `whisper` (to, text; private, unlogged); flight verbs `take_off`, `climb_to` (altitude, metres, capped at 500), `glide_to` (x, z), `land_at` (x, z), `fold_wings`, `unfold_wings`, `flight_status` (the door refuses when the body has no wings, no fly permission or no stamina, and answers with altitude and stamina; psfn-framework-jbvwz); creation verbs `spawn` (query or lib, x, z, yaw, id), `remove` (id), `set_avatar` (avatar) |
 
 Tier gating is the existing per-action capability gate: `perceive`, `list`,
 `move` and the body verbs of `act` ride `world.read` (apprentice and up); the

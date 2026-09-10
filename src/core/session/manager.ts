@@ -1360,12 +1360,14 @@ export class SessionManager implements SessionManagerTypeSurface {
     logicalSessionId: string,
     turnId: string,
     operation: () => Promise<T>,
+    signal?: AbortSignal,
   ): Promise<T> {
     return this.store.withSourceTurnRecordEligibilityFence(
       sourceChannelId,
       logicalSessionId,
       turnId,
       operation,
+      signal,
     );
   }
 
@@ -1374,12 +1376,14 @@ export class SessionManager implements SessionManagerTypeSurface {
     requiredTurnIds: readonly string[],
     readSnapshot: () => SessionEntry[],
     operation: (entries: readonly SessionEntry[]) => Promise<T>,
+    signal?: AbortSignal,
   ): Promise<T> {
     return await this.store.withStableTurnRecordEligibilitySnapshot(
       logicalSessionId,
       requiredTurnIds,
       readSnapshot,
       operation,
+      signal,
     );
   }
 

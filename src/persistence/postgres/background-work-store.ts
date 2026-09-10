@@ -3,12 +3,14 @@ import type { Pool, PoolClient, QueryResultRow } from 'pg';
 import type {
   BackgroundWorkClaimFence,
   BackgroundWorkEnqueueResult,
+  BackgroundWorkExpiredLeaseRecovery,
   BackgroundWorkJobEnqueueResult,
   BackgroundWorkStorePort,
   BackgroundWorkWelfarePolicy,
   SubsystemOutputProjection,
 } from '../../core/agent/background-work/store-port.js';
 import {
+  BACKGROUND_WORK_LEASE_EXPIRY_LIMIT,
   BACKGROUND_WORK_REASON_CODES,
   BACKGROUND_WORK_STATES,
   createBackgroundWorkIdentity,
@@ -64,6 +66,7 @@ interface BackgroundWorkRow extends QueryResultRow {
   defer_count: number | string;
   first_deferred_at_ms: number | string | null;
   welfare_claimed: boolean;
+  lease_expiry_count: number | string;
 }
 
 interface BackgroundWorkClaimCandidateRow extends QueryResultRow {
@@ -124,6 +127,7 @@ const JOB_COLUMN_NAMES = [
   'defer_count',
   'first_deferred_at_ms',
   'welfare_claimed',
+  'lease_expiry_count',
 ] as const;
 const JOB_COLUMNS = JOB_COLUMN_NAMES.join(', ');
 
@@ -224,6 +228,7 @@ function mapRow(row: BackgroundWorkRow): StoredBackgroundWorkJob {
       ? {}
       : { firstDeferredAtMs: safeInteger(row.first_deferred_at_ms, 'firstDeferredAtMs') }),
     welfareClaimed: row.welfare_claimed === true,
+    leaseExpiryCount: safeInteger(row.lease_expiry_count, 'leaseExpiryCount'),
   };
 }
 
@@ -1625,7 +1630,9 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
     });
   }
 
-  async recoverExpired(input: { nowMs: number }): Promise<number> {
+  async recoverExpired(
+    input: { nowMs: number },
+  ): Promise<BackgroundWorkExpiredLeaseRecovery> {
     const nowMs = safeInteger(input.nowMs, 'nowMs');
     // A `pending` receipt marks a run that entered but never crossed its write
     // boundary. On lease expiry that work is safely re-runnable, so drop the
@@ -1634,85 +1641,106 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
     // pre-boundary crash did not attempt the durable effect, so lease recovery
     // must not consume a work attempt; otherwise maxAttempts=1 loses safe work
     // solely because a graceful-release database call or process failed.
-    await this.pool.query(`
-      DELETE FROM agent_background_work_effect_receipts receipt
-      USING agent_background_work_jobs job
-      WHERE receipt.job_id = job.job_id
-        AND receipt.state = 'pending'
-        AND job.state = 'running'
-        AND job.lease_expires_at_ms <= $1
-    `, [nowMs]);
-    const result = await this.pool.query(`
-      WITH unknown_projection AS (
-        SELECT
-          job.logical_session_id,
-          job.source_channel_id,
-          job.source_turn_id,
-          job.source_request_id,
-          job.job_id,
-          receipt.effect_key
-        FROM agent_background_work_jobs job
-        JOIN agent_background_work_effect_receipts receipt ON receipt.job_id = job.job_id
-        WHERE job.state = 'running' AND job.lease_expires_at_ms <= $1
-          AND receipt.state = 'started'
-          AND receipt.projects_subsystem_outputs = true
-      ), recorded_unknown_projection AS (
-        INSERT INTO agent_turn_subsystem_output_status (
-          logical_session_id, source_channel_id, source_turn_id, source_request_id,
-          status, source_job_id, source_effect_key, recorded_at_ms
+    //
+    // It does spend one unit of the separate lease-expiry budget: a claim whose
+    // lease has now expired BACKGROUND_WORK_LEASE_EXPIRY_LIMIT times has cost
+    // that many process lifetimes without ever reaching its effect boundary and
+    // is failed as a poison claim instead of being re-leased at every restart
+    // (bead psfn-framework-52epa).
+    return withPostgresClient(this.pool, async (client) => {
+      await client.query(`
+        DELETE FROM agent_background_work_effect_receipts receipt
+        USING agent_background_work_jobs job
+        WHERE receipt.job_id = job.job_id
+          AND receipt.state = 'pending'
+          AND job.state = 'running'
+          AND job.lease_expires_at_ms <= $1
+      `, [nowMs]);
+      const result = await client.query<BackgroundWorkRow>(`
+        WITH unknown_projection AS (
+          SELECT
+            job.logical_session_id,
+            job.source_channel_id,
+            job.source_turn_id,
+            job.source_request_id,
+            job.job_id,
+            receipt.effect_key
+          FROM agent_background_work_jobs job
+          JOIN agent_background_work_effect_receipts receipt ON receipt.job_id = job.job_id
+          WHERE job.state = 'running' AND job.lease_expires_at_ms <= $1
+            AND receipt.state = 'started'
+            AND receipt.projects_subsystem_outputs = true
+        ), recorded_unknown_projection AS (
+          INSERT INTO agent_turn_subsystem_output_status (
+            logical_session_id, source_channel_id, source_turn_id, source_request_id,
+            status, source_job_id, source_effect_key, recorded_at_ms
+          )
+          SELECT
+            logical_session_id, source_channel_id, source_turn_id, source_request_id,
+            'outcome_unknown', job_id, effect_key, $1
+          FROM unknown_projection
+          ON CONFLICT (
+            logical_session_id, source_channel_id, source_turn_id, source_request_id
+          ) DO NOTHING
+        ), expired AS (
+          SELECT
+            job.job_id,
+            EXISTS (
+              SELECT 1 FROM agent_background_work_effect_receipts receipt
+              WHERE receipt.job_id = job.job_id AND receipt.state = 'started'
+            ) AS boundary_crossed,
+            job.lease_expiry_count + 1 >= $2 AS expiry_budget_exhausted
+          FROM agent_background_work_jobs job
+          WHERE job.state = 'running' AND job.lease_expires_at_ms <= $1
         )
-        SELECT
-          logical_session_id, source_channel_id, source_turn_id, source_request_id,
-          'outcome_unknown', job_id, effect_key, $1
-        FROM unknown_projection
-        ON CONFLICT (
-          logical_session_id, source_channel_id, source_turn_id, source_request_id
-        ) DO NOTHING
-      )
-      UPDATE agent_background_work_jobs
-      SET attempt_count = CASE
-            WHEN EXISTS (
-              SELECT 1 FROM agent_background_work_effect_receipts receipt
-              WHERE receipt.job_id = agent_background_work_jobs.job_id
-                AND receipt.state = 'started'
-            ) THEN attempt_count + 1
-            ELSE attempt_count
-          END,
-          state = CASE
-            WHEN EXISTS (
-              SELECT 1 FROM agent_background_work_effect_receipts receipt
-              WHERE receipt.job_id = agent_background_work_jobs.job_id
-                AND receipt.state = 'started'
-            ) THEN 'failed'
-            ELSE 'retry_wait'
-          END,
-          reason_code = CASE
-            WHEN EXISTS (
-              SELECT 1 FROM agent_background_work_effect_receipts receipt
-              WHERE receipt.job_id = agent_background_work_jobs.job_id
-                AND receipt.state = 'started'
-            ) THEN 'effect_outcome_unknown'
-            ELSE 'lease_expired'
-          END,
-          available_at_ms = $1::bigint,
-          completed_at_ms = CASE
-            WHEN EXISTS (
-              SELECT 1 FROM agent_background_work_effect_receipts receipt
-              WHERE receipt.job_id = agent_background_work_jobs.job_id
-                AND receipt.state = 'started'
-            ) THEN $1::bigint
-            ELSE NULL::bigint
-          END,
-          updated_at_ms = $1,
-          lease_owner = NULL,
-          lease_expires_at_ms = NULL,
-          deferred_from_state = NULL,
-          deferred_from_available_at_ms = NULL,
-          welfare_claimed = false,
-          revision = revision + 1
-      WHERE state = 'running' AND lease_expires_at_ms <= $1
-    `, [nowMs]);
-    return result.rowCount ?? 0;
+        UPDATE agent_background_work_jobs job
+        SET attempt_count = CASE
+              WHEN expired.boundary_crossed THEN job.attempt_count + 1
+              ELSE job.attempt_count
+            END,
+            lease_expiry_count = job.lease_expiry_count + 1,
+            state = CASE
+              WHEN expired.boundary_crossed OR expired.expiry_budget_exhausted THEN 'failed'
+              ELSE 'retry_wait'
+            END,
+            reason_code = CASE
+              WHEN expired.boundary_crossed THEN 'effect_outcome_unknown'
+              ELSE 'lease_expired'
+            END,
+            available_at_ms = $1::bigint,
+            completed_at_ms = CASE
+              WHEN expired.boundary_crossed OR expired.expiry_budget_exhausted THEN $1::bigint
+              ELSE NULL::bigint
+            END,
+            updated_at_ms = $1,
+            lease_owner = NULL,
+            lease_expires_at_ms = NULL,
+            deferred_from_state = NULL,
+            deferred_from_available_at_ms = NULL,
+            welfare_claimed = false,
+            revision = job.revision + 1
+        FROM expired
+        WHERE job.job_id = expired.job_id
+        RETURNING ${qualifiedJobColumns('job')}
+      `, [nowMs, BACKGROUND_WORK_LEASE_EXPIRY_LIMIT]);
+      const terminalJobs: StoredBackgroundWorkJob[] = [];
+      for (const row of result.rows) {
+        if (row.state !== 'failed') continue;
+        if (row.reason_code === 'lease_expired' && row.kind === 'memory_extraction') {
+          // Mirror failOrRetry's terminal projection so a consumer of this
+          // turn's subsystem outputs sees a truthful `failed`, not `pending`.
+          await this.recordTerminalSubsystemProjection(
+            client,
+            row,
+            'failed',
+            'memory-extraction',
+            nowMs,
+          );
+        }
+        terminalJobs.push(mapRow(row));
+      }
+      return { recoveredCount: result.rowCount ?? 0, terminalJobs };
+    });
   }
 
   async purgeTerminal(input: { completedBeforeMs: number; limit: number }): Promise<number> {

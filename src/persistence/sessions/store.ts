@@ -1049,12 +1049,14 @@ export class SessionStore implements TranscriptSearchPort {
     requiredTurnIds: readonly string[],
     readSnapshot: () => SessionEntry[],
     operation: (entries: readonly SessionEntry[]) => Promise<T>,
+    signal?: AbortSignal,
   ): Promise<T> {
     return this.turnRecordOperations.withStableTurnRecordEligibilitySnapshot(
       logicalSessionId,
       requiredTurnIds,
       readSnapshot,
       operation,
+      signal,
     );
   }
   private async withTurnRecordEligibilityMutationFence<T>(

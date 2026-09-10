@@ -509,7 +509,8 @@ export class BackgroundWorkSupervisor {
   private async runTick(): Promise<void> {
     const nowMs = this.now();
     await this.heartbeat();
-    await this.store.recoverExpired({ nowMs });
+    const expired = await this.store.recoverExpired({ nowMs });
+    for (const job of expired.terminalJobs) this.settleExpiredTerminal(job);
     if (nowMs - this.lastCleanupAtMs >= this.cleanupIntervalMs) {
       await this.store.purgeTerminal({
         completedBeforeMs: Math.max(0, nowMs - this.terminalRetentionMs),
@@ -628,6 +629,21 @@ export class BackgroundWorkSupervisor {
         log.debug('Background claim interrupted before effect boundary by shutdown', {
           jobId: job.jobId,
           kind: job.kind,
+        });
+        return;
+      }
+      if (controller.signal.aborted && (fence.lost || this.stopping)) {
+        // The claim's own signal fired (lease lost or shutdown) and the handler
+        // unwound with something other than the typed requeue — an AbortError
+        // from a fence wait or a cancelled provider call. With the lease gone
+        // every durable transition below would conflict, and under shutdown the
+        // row belongs to the requeue sweep or expiry recovery, so neither case
+        // may count as a consumed attempt.
+        log.debug('Background claim unwound after its signal aborted', {
+          jobId: job.jobId,
+          kind: job.kind,
+          reason: fence.lost ? 'lease_lost' : 'shutdown',
+          errorName: error instanceof Error ? error.name : 'UnknownError',
         });
         return;
       }
@@ -1014,7 +1030,7 @@ export class BackgroundWorkSupervisor {
     // identified by a digest of its KIND, not its id, so the repeated-failure
     // detector can count repeats of the same lane (memory refresh, extraction)
     // rather than seeing every failure as its own singleton group.
-    this.emitTerminalFailureHealthEvent(claimed, payload, settled);
+    this.emitTerminalFailureHealthEvent(payload.kind, settled, this.executionDurationMs(claimed));
     try {
       await this.automataLifecycle?.onFailed({
         job: claimed,
@@ -1051,10 +1067,31 @@ export class BackgroundWorkSupervisor {
    * Fire-and-forget with a logged catch: the durable failure is already
    * committed, and a health-plane emission fault must never rewrite or mask it.
    */
+  /**
+   * A claim the expiry sweep failed terminally: its lease expired the budgeted
+   * number of times (a poison claim that died with its process at every
+   * restart) or it had crossed an effect boundary with an unknown outcome. No
+   * in-process owner ran it, so only telemetry and the health signal fire
+   * (bead psfn-framework-52epa); the automata lifecycle and owner cleanup
+   * belong to the process that held the claim.
+   */
+  private settleExpiredTerminal(job: StoredBackgroundWorkJob): void {
+    log.warn('Background claim failed by lease-expiry recovery', {
+      jobId: job.jobId,
+      kind: job.kind,
+      reasonCode: job.reasonCode,
+      leaseExpiryCount: job.leaseExpiryCount,
+      attemptCount: job.attemptCount,
+    });
+    this.emitJobTelemetry(job);
+    if (!isBackgroundWorkKind(job.kind)) return;
+    this.emitTerminalFailureHealthEvent(job.kind, job, 0);
+  }
+
   private emitTerminalFailureHealthEvent(
-    claimed: ClaimedBackgroundWorkJob,
-    payload: BackgroundWorkPayload,
+    kind: BackgroundWorkKind,
     settled: StoredBackgroundWorkJob,
+    durationMs: number,
   ): void {
     const owner = this.healthEventOwner;
     if (!owner) return;
@@ -1067,12 +1104,12 @@ export class BackgroundWorkSupervisor {
         process: 'agent',
         component: 'background_work',
         observerId: processObserverId(),
-        subjectHash: hashHealthEventSubject(payload.kind),
+        subjectHash: hashHealthEventSubject(kind),
       },
       observedAtMs: nowMs,
       evidence: {
         attemptCount: settled.attemptCount,
-        durationMs: this.executionDurationMs(claimed),
+        durationMs,
         jobAgeMs: Math.max(0, nowMs - settled.createdAtMs),
         terminal: true,
       },

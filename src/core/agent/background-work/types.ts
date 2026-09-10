@@ -120,6 +120,17 @@ export const BACKGROUND_WORK_REASON_CODES = [
 
 export type BackgroundWorkReasonCode = typeof BACKGROUND_WORK_REASON_CODES[number];
 
+/**
+ * How many times one job's lease may expire before the expiry sweep fails it
+ * terminally (`failed` / `lease_expired`). A pre-boundary lease expiry does
+ * not consume a work attempt (the effect was never tried), so without this
+ * separate budget a claim that keeps dying with its process is re-leased at
+ * every restart forever — the S13 local-verify self-poisoning (bead
+ * psfn-framework-52epa). Three expiries means three process lifetimes lost to
+ * the same claim; that is a poison claim, not bad luck.
+ */
+export const BACKGROUND_WORK_LEASE_EXPIRY_LIMIT = 3;
+
 export interface BackgroundWorkSourceRef {
   schemaVersion: 1;
   logicalSessionId: string;
@@ -254,6 +265,12 @@ export interface StoredBackgroundWorkJob {
   deferCount: number;
   /** Wall-clock of this job's FIRST foreground defer, if any (welfare age gate). */
   firstDeferredAtMs?: number;
+  /**
+   * Durable count of lease expiries this job has survived; the expiry sweep
+   * fails the job once it reaches {@link BACKGROUND_WORK_LEASE_EXPIRY_LIMIT}.
+   * Optional only for in-memory test doubles; the durable store always sets it.
+   */
+  leaseExpiryCount?: number;
   /**
    * True only while this job is running and was admitted through the bounded
    * welfare-reserve bypass. Grants a protected completion (foreground effect

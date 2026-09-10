@@ -131,6 +131,81 @@ function routing(input: {
   } as unknown as SubstrateMessage['routing'];
 }
 
+const WORLD_REGISTRY: PlacesRegistryConfig = {
+  schemaVersion: 1,
+  sites: [
+    { siteId: 'site.home', displayName: 'Home', kind: 'physical' },
+    { siteId: 'eidoverse', displayName: 'Eidoverse', kind: 'physical' },
+  ],
+  places: [
+    ...PLACES_REGISTRY.places,
+    {
+      placeId: 'eidoverse:commons',
+      siteId: 'eidoverse',
+      displayName: 'Commons',
+      kind: 'physical',
+      eidoverse: { world: 'commons' },
+      affordances: [{
+        affordanceId: 'aff.commons-lamp', role: 'effector', kind: 'light', backend: 'ha', displayName: 'A lamp that is not here', control: ['on'],
+      }],
+    },
+    {
+      placeId: 'eidoverse:commons:plaza',
+      siteId: 'eidoverse',
+      displayName: 'Commons Plaza',
+      kind: 'physical',
+      eidoverse: { world: 'commons', region: 'plaza', position: { x: 8, z: -2 } },
+      affordances: [],
+    },
+    {
+      placeId: 'eidoverse:garden',
+      siteId: 'eidoverse',
+      displayName: 'Garden',
+      kind: 'physical',
+      eidoverse: { world: 'garden' },
+      affordances: [],
+    },
+  ],
+};
+
+describe('situated-presence producer on a world plane (u2dx3)', () => {
+  it('renders the plane, its other places, and the world verbs instead of the house data', () => {
+    const block = buildSituatedPresenceContextBlock({
+      message: makeMessage({
+        routing: {
+          source: 'satellite',
+          satellite: { claimType: 'world-avatar', satelliteId: 'hub', endpointId: 'hub', placeId: 'eidoverse:commons' },
+        } as never,
+      }),
+      placesRegistry: WORLD_REGISTRY,
+    });
+    expect(block).toContain('<runtime_situated_presence>');
+    expect(block).toContain('Here: Commons — a place in the world "commons"');
+    expect(block).toContain('World plane: commons');
+    expect(block).toContain('Other places on this plane: Commons Plaza (eidoverse:commons:plaza)');
+    expect(block).not.toContain('Garden');
+    expect(block).not.toContain('Living Room');
+    expect(block).not.toContain('Effectors here');
+    expect(block).not.toContain('A lamp that is not here');
+    expect(block).toContain('Room control and physical places do not apply on this plane');
+  });
+
+  it('follows a deliberate walk on the plane and never the physical emanation', () => {
+    const block = buildSituatedPresenceContextBlock({
+      message: makeMessage({
+        routing: {
+          source: 'satellite',
+          satellite: { claimType: 'world-avatar', satelliteId: 'hub', endpointId: 'hub' },
+        } as never,
+      }),
+      placesRegistry: WORLD_REGISTRY,
+      situatedFallbackPlaceId: 'eidoverse:commons:plaza',
+    });
+    expect(block).toContain('Here: Commons Plaza (plaza) — a place in the world "commons"');
+    expect(block).toContain('Other places on this plane: Commons (eidoverse:commons)');
+  });
+});
+
 describe('situated-presence producer', () => {
   it('renders nothing when there is no presence and no place', () => {
     expect(buildSituatedPresenceContextBlock({ message: makeMessage() })).toBe('');

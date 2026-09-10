@@ -1232,6 +1232,11 @@ export class SubstrateAgent {
    * Refresh the durable-usage presentation-ordering signal (psfn-framework-b0yl.5).
    * Fed by the periodic tool-usage evaluator; presentation-only, never gates callability.
    */
+  /** World-plane tool policy (S13, psfn-framework-u2dx3): which places are on a world plane. */
+  setWorldPlanePlaceResolver(resolver: ((placeId: string) => boolean) | null): void {
+    this.toolRuntimeFacade.setWorldPlanePlaceResolver(resolver);
+  }
+
   setToolUsageRanking(ranking: ToolUsageRanking | null): void {
     this.toolRuntimeFacade.setToolUsageRanking(ranking);
   }

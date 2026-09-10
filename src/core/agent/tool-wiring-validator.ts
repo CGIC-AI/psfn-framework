@@ -276,6 +276,12 @@ const RPC_TO_CLIENT_METHOD: Record<string, string> = {
   'beads.sync': 'beadsSync',
   'home_assistant.get_states': 'homeAssistantGetStates',
   'home_assistant.call_service': 'homeAssistantCallService',
+  // The Eidoverse plane (n66dn.3) exposes one generic client entry point for
+  // its three gateway methods; without this mapping the validator looked for
+  // dotted client methods and disabled the world tool on every deployment.
+  'world.avatar_perceive': 'worldAvatar',
+  'world.avatar_move': 'worldAvatar',
+  'world.avatar_act': 'worldAvatar',
   'image.create': 'imageCreate',
   'image.edit': 'imageEdit',
   'llm.chat': 'stream',

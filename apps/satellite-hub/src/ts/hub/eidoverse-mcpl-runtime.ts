@@ -197,6 +197,16 @@ class EidoverseMcplWakeRuntime {
         kind = "mention";
         reason = "name-match";
       }
+      if (kind === "mention" && this.explicitlyAddressesSomeoneElse(pingLine)) {
+        // The door tags `chat:mention` by prefix, so `@nova-kube` also
+        // reaches `nova`. An explicit @-address that names none of our
+        // names is somebody else's mention (psfn-framework-q1kit).
+        this.logger.info?.(
+          `Eidoverse wake skipped: message ${message.messageId ?? "?"} @-addresses another participant `
+          + `text=${JSON.stringify(pingLine.slice(0, WAKE_LOG_TEXT_PREFIX))}`,
+        );
+        continue;
+      }
       if (!kind) continue;
       await this.filter.accept({
         kind,
@@ -226,6 +236,19 @@ class EidoverseMcplWakeRuntime {
     const author = message.author;
     if (isSelf(author, names)) return false;
     return mentionsAnyName(text, names);
+  }
+
+  /**
+   * True when the text carries an explicit `@name` address and none of the
+   * addressed names is one of ours. A line with no `@` at all (a bare-name
+   * address, or the door's own addressing heuristics) is left to the tags.
+   */
+  private explicitlyAddressesSomeoneElse(text: string): boolean {
+    const names = (this.config.agentNames ?? []).map((name) => name.trim()).filter(Boolean);
+    if (names.length === 0) return false;
+    const handles = [...text.matchAll(/(^|[^\p{L}\p{N}_-])@([\p{L}\p{N}_-]+)/gu)].map((m) => m[2]);
+    if (handles.length === 0) return false;
+    return !handles.some((handle) => mentionsAnyName(`@${handle}`, names));
   }
 
   private async handleWake(event: EidoverseWakeEvent): Promise<void> {

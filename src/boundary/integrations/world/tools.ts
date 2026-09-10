@@ -787,16 +787,27 @@ export function createWorldTool(ops: WorldOperations, deps: WorldToolDeps): Subs
         Type.Literal('emote'),
         Type.Literal('posture'),
         Type.Literal('whisper'),
+        Type.Literal('take_off'),
+        Type.Literal('climb_to'),
+        Type.Literal('glide_to'),
+        Type.Literal('land_at'),
+        Type.Literal('fold_wings'),
+        Type.Literal('unfold_wings'),
+        Type.Literal('flight_status'),
         Type.Literal('spawn'),
         Type.Literal('remove'),
         Type.Literal('set_avatar'),
       ], {
-        description: 'Used with action=act. Eidoverse body verb (face, stop, emote, posture, whisper) or creation verb '
+        description: 'Used with action=act. Eidoverse body verb (face, stop, emote, posture, whisper), flight verb '
+          + '(take_off, climb_to, glide_to, land_at, fold_wings, unfold_wings, flight_status; the world refuses when '
+          + 'your body has no wings, no fly permission, or no stamina), or creation verb '
           + '(spawn, remove, set_avatar; needs the world.control tier).',
       })),
       arguments: Type.Optional(Type.Record(Type.String(), Type.Unknown(), {
         description: 'Used with action=act. face: {target} or {x, z}; emote: {name: wave|cheer|dance|point|salute|clap|talk|flail}; '
           + 'posture: {kind: sit|sitchair|lie|stand}; whisper: {to: participant id, text} (private, unlogged); '
+          + 'climb_to: {altitude: metres}; glide_to and land_at: {x, z}; take_off, fold_wings, unfold_wings and '
+          + 'flight_status take no arguments (read the reply: altitude, stamina, why you are still standing); '
           + 'spawn: {query or lib, x?, z?, yaw?, id?}; remove: {id}; set_avatar: {avatar}.',
       })),
       affordanceId: Type.Optional(Type.String({

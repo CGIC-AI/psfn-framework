@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { InvalidEnvError, requireEnv } from './env.mjs';
@@ -9,6 +10,7 @@ export function createFrameworkHubDeviceAssertionIssuer({
   repoRoot,
   env = process.env,
   execFile = execFileSync,
+  fileExists = existsSync,
 }) {
   const systemDataDir = requireEnv(
     'SYSTEM_DATA_DIR',
@@ -41,13 +43,19 @@ export function createFrameworkHubDeviceAssertionIssuer({
 
   const executable = join(repoRoot, 'node_modules', '.bin', 'tsx');
   const script = join(repoRoot, 'scripts', 'ops', 'issue-hub-device-assertion.ts');
+  // The verifier ring lives wherever the deployment keeps it (psfn-framework-n66dn.2):
+  // fleet-auth.json when the stack runs fleet auth, otherwise the standalone
+  // `hubDeviceAssertions` block in satellites.json. Fleet auth is never required
+  // (psfn-framework-uxq8x), so fleet-auth.json is only named when it exists.
+  const fleetAuthPath = join(systemDataDir, 'fleet-auth.json');
+  const ringSource = fileExists(fleetAuthPath) ? { fleetAuthPath } : {};
   return ({ companionId, satelliteId, endpointId, sessionId }) => {
     let output;
     try {
       output = execFile(executable, [script], {
         encoding: 'utf8',
         input: JSON.stringify({
-          fleetAuthPath: join(systemDataDir, 'fleet-auth.json'),
+          ...ringSource,
           satelliteRegistryPath: join(systemDataDir, 'satellites.json'),
           privateKeyPath,
           ttlSeconds,

@@ -52,6 +52,7 @@ import {
   type EidoverseAvatarMoveRequest,
   type EidoverseAvatarPerception,
   type EidoverseWorldMap,
+  type EidoverseAvatarSnapshot,
   type EidoverseEmbodiedSessionConfig,
   type EidoverseEmbodiedSessionDependencies,
   type EidoverseTravelOutcome,
@@ -301,6 +302,14 @@ export class RealtimeHubServer {
       throw new Error("Eidoverse embodied session is not configured");
     }
     return this.eidoverse.moveTo(input);
+  }
+
+  /** The companion's own snapshot through the door's camera (mlhfw). */
+  snapshotEidoverse(view: "first" | "third" | "selfie" = "first"): Promise<EidoverseAvatarSnapshot> {
+    if (!this.eidoverse) {
+      throw new Error("Eidoverse embodied session is not configured");
+    }
+    return this.eidoverse.snapshot(view);
   }
 
   /** The world's map for the companion's world-plane turn (gs899, g8xyn). */

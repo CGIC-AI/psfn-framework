@@ -7,6 +7,8 @@ import type {
   WorldAvatarMoveResult,
   WorldAvatarMapParams,
   WorldAvatarMapResult,
+  WorldAvatarSnapshotParams,
+  WorldAvatarSnapshotResult,
   WorldAvatarPerceiveParams,
   WorldAvatarPerceiveResult,
 } from '../../gateway/protocol.js';
@@ -51,6 +53,7 @@ export interface WorldOperations {
    */
   avatarPerceive?(params?: WorldAvatarPerceiveParams): Promise<WorldAvatarPerceiveResult>;
   avatarMap?(params?: WorldAvatarMapParams): Promise<WorldAvatarMapResult>;
+  avatarSnapshot?(params?: WorldAvatarSnapshotParams): Promise<WorldAvatarSnapshotResult>;
   avatarMove?(params: WorldAvatarMoveParams): Promise<WorldAvatarMoveResult>;
   avatarAct?(params: WorldAvatarActParams): Promise<WorldAvatarActResult>;
 }

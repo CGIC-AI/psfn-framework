@@ -2,6 +2,8 @@ import type {
   WorldAvatarActOutcome,
   WorldAvatarMap,
   WorldAvatarMoveOutcome,
+  WorldAvatarSnapshotOutcome,
+  WorldAvatarSnapshotView,
   WorldAvatarMoveRequest,
   WorldAvatarPerception,
 } from '../../shared/contracts/world-avatar.js';
@@ -361,6 +363,13 @@ export interface WorldAvatarMapParams extends GatewayCorrelationParams {
 
 export type WorldAvatarMapResult = WorldAvatarMap;
 
+export interface WorldAvatarSnapshotParams extends GatewayCorrelationParams {
+  placeId?: string;
+  view?: WorldAvatarSnapshotView;
+}
+
+export type WorldAvatarSnapshotResult = WorldAvatarSnapshotOutcome;
+
 export interface WorldAvatarMoveParams extends GatewayCorrelationParams, WorldAvatarMoveRequest {
   /** The registry place being moved to, when the move targets one. */
   placeId?: string;
@@ -375,7 +384,12 @@ export interface WorldAvatarActParams extends GatewayCorrelationParams {
 
 export type WorldAvatarActResult = WorldAvatarActOutcome;
 
-export type WorldAvatarMethodName = 'world.avatar_perceive' | 'world.avatar_map' | 'world.avatar_move' | 'world.avatar_act';
+export type WorldAvatarMethodName =
+  | 'world.avatar_perceive'
+  | 'world.avatar_map'
+  | 'world.avatar_snapshot'
+  | 'world.avatar_move'
+  | 'world.avatar_act';
 
 export interface HomeAssistantCallServiceParams extends GatewayCorrelationParams {
   domain: string;
@@ -1343,6 +1357,7 @@ export interface GatewayMethods {
   'home_assistant.check_connection': [HomeAssistantCheckConnectionParams, HomeAssistantCheckConnectionResult];
   'world.avatar_perceive': [WorldAvatarPerceiveParams, WorldAvatarPerceiveResult];
   'world.avatar_map': [WorldAvatarMapParams, WorldAvatarMapResult];
+  'world.avatar_snapshot': [WorldAvatarSnapshotParams, WorldAvatarSnapshotResult];
   'world.avatar_move': [WorldAvatarMoveParams, WorldAvatarMoveResult];
   'world.avatar_act': [WorldAvatarActParams, WorldAvatarActResult];
   'web.search': [WebSearchParams, WebSearchResult];

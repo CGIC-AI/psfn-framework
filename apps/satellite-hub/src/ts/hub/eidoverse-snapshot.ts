@@ -17,9 +17,15 @@ const SNAPSHOT_PATH = "/snap";
 /** The conventional MCPL door path, the one suffix an origin may be derived across. */
 const MCPL_DOOR_PATH = "/mcpl";
 const SNAPSHOT_MIME_TYPE = "image/png";
-const SNAPSHOT_VIEW = "first";
 const SNAPSHOT_SOURCE = "eidoverse";
-const SNAPSHOT_LABEL = "first-person";
+/** The door's spectator views; `first` is the per-turn vision default. */
+export const EIDOVERSE_SNAPSHOT_VIEWS = ["first", "third", "selfie"] as const;
+export type EidoverseSnapshotView = (typeof EIDOVERSE_SNAPSHOT_VIEWS)[number];
+const SNAPSHOT_LABELS: Readonly<Record<EidoverseSnapshotView, string>> = {
+  first: "first-person",
+  third: "third-person",
+  selfie: "selfie",
+};
 
 /**
  * Where the snapshot origin is derived from when no explicit one is configured.
@@ -81,11 +87,11 @@ export class EidoverseSnapshotSource {
    * 404 forever after the first travel. The live world is therefore a
    * parameter, never configuration.
    */
-  async capture(sessionId: string, world: string): Promise<VisionCaptureImage | null> {
+  async capture(sessionId: string, world: string, view: EidoverseSnapshotView = "first"): Promise<VisionCaptureImage | null> {
     const requestId = randomUUID();
     let response: Response;
     try {
-      response = await this.fetchImpl(this.snapshotUrl(world), {
+      response = await this.fetchImpl(this.snapshotUrl(world, view), {
         signal: AbortSignal.timeout(this.config.timeoutMs),
       });
     } catch {
@@ -118,18 +124,18 @@ export class EidoverseSnapshotSource {
       return null;
     }
     try {
-      return this.persist(sessionId, requestId, image);
+      return this.persist(sessionId, requestId, image, view);
     } catch {
       this.logger.warn("Eidoverse snapshot could not be persisted");
       return null;
     }
   }
 
-  private snapshotUrl(world: string): string {
+  private snapshotUrl(world: string, view: EidoverseSnapshotView): string {
     const url = new URL(`${this.config.baseUrl}${SNAPSHOT_PATH}`);
     url.searchParams.set("world", world);
     url.searchParams.set("follow", this.config.agentName);
-    url.searchParams.set("view", SNAPSHOT_VIEW);
+    url.searchParams.set("view", view);
     return url.toString();
   }
 
@@ -163,7 +169,7 @@ export class EidoverseSnapshotSource {
     return Buffer.concat(chunks);
   }
 
-  private persist(sessionId: string, requestId: string, image: Buffer): VisionCaptureImage {
+  private persist(sessionId: string, requestId: string, image: Buffer, view: EidoverseSnapshotView): VisionCaptureImage {
     const capturedAt = new Date();
     const dateKey = capturedAt.toISOString().slice(0, 10).replaceAll("-", "");
     const directory = path.join(this.deps.artifactsRoot, "eidoverse-vision", dateKey);
@@ -177,7 +183,7 @@ export class EidoverseSnapshotSource {
       requestId,
       sessionId,
       source: SNAPSHOT_SOURCE,
-      label: SNAPSHOT_LABEL,
+      label: SNAPSHOT_LABELS[view],
       mimeType: SNAPSHOT_MIME_TYPE,
       filePath,
       bytes: image.length,

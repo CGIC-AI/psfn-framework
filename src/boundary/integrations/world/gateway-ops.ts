@@ -10,6 +10,8 @@ import type {
   WorldAvatarActResult,
   WorldAvatarMapParams,
   WorldAvatarMapResult,
+  WorldAvatarSnapshotParams,
+  WorldAvatarSnapshotResult,
   WorldAvatarMoveParams,
   WorldAvatarMoveResult,
   WorldAvatarPerceiveParams,
@@ -43,6 +45,10 @@ export class GatewayWorldOps implements WorldOperations {
 
   async avatarMap(params: WorldAvatarMapParams = {}): Promise<WorldAvatarMapResult> {
     return this.requireAvatar().map({ ...params, ...this.correlation() });
+  }
+
+  async avatarSnapshot(params: WorldAvatarSnapshotParams = {}): Promise<WorldAvatarSnapshotResult> {
+    return this.requireAvatar().snapshot({ ...params, ...this.correlation() });
   }
 
   async avatarMove(params: WorldAvatarMoveParams): Promise<WorldAvatarMoveResult> {

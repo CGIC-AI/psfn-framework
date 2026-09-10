@@ -9,6 +9,7 @@ import type { TrustLevel } from '../../../system/trust/types.js';
 import type { WorldOperations } from './ops.js';
 import type { WorldPlaneMapCache } from '../../../shared/contracts/world-plane-map.js';
 import type { WorldNotesWriter } from '../../../shared/contracts/world-notes.js';
+import type { VisionIntakeImageScreenerPort } from '../../../core/agent/substrate-agent/vision-attachments.js';
 import { createWorldTool } from './tools.js';
 
 export interface WorldRuntimeTarget {
@@ -20,6 +21,7 @@ const WORLD_TOOL_GATEWAY_METHODS = [
   'home_assistant.call_service',
   'world.avatar_perceive',
   'world.avatar_map',
+  'world.avatar_snapshot',
   'world.avatar_move',
   'world.avatar_act',
 ] as const;
@@ -39,6 +41,8 @@ export interface RegisterWorldToolsOptions {
   worldPlaneMap?: WorldPlaneMapCache;
   /** Per-world notes writer (2nsfo): perceptions and moves build the companion's own map. */
   worldNotes?: WorldNotesWriter;
+  /** Vision intake screener for detail=snapshot (mlhfw); unwired ⇒ no image is ever delivered. */
+  screenImage?: VisionIntakeImageScreenerPort;
   /**
    * Presence turn port for `move` (contract s10wm; multi-companion only).
    * Null/absent = flag-off: moves are local-only (no shared-table write).
@@ -79,6 +83,7 @@ export function registerWorldTools(
     ...(options.resolveSituatedPlaceId ? { resolveSituatedPlaceId: options.resolveSituatedPlaceId } : {}),
     ...(options.worldPlaneMap ? { worldPlaneMap: options.worldPlaneMap } : {}),
     ...(options.worldNotes ? { worldNotes: options.worldNotes } : {}),
+    ...(options.screenImage ? { screenImage: options.screenImage } : {}),
     ...(options.companionPresence !== undefined ? { companionPresence: options.companionPresence } : {}),
     ...(options.applyVirtualMove ? { applyVirtualMove: options.applyVirtualMove } : {}),
     ...(options.resolvePlaceDeviceStatus

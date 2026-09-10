@@ -569,3 +569,47 @@ test("map without a tool-listing transport still answers, with an empty tool lis
   assert.equal(map.room, undefined);
   adapter.disconnect();
 });
+
+test("snapshot answers the door's camera view as a bounded image, or an honest not-available (mlhfw)", async () => {
+  const captured: Array<{ world: string; view?: string }> = [];
+  const adapter = new EidoverseEmbodiedSessionAdapter(adapterConfig(), {
+    embodiedSessions: new EmbodiedSessionRegistry("satellite.endpoint"),
+    sessions: new SessionStore(60),
+    agent: new FakeAgent(),
+    look: new FakeLook("Nobody else is here right now."),
+    say: { say: async () => undefined },
+    snapshot: {
+      capture: async (_sessionId: string, world: string, view?: "first" | "third" | "selfie") => {
+        captured.push({ world, ...(view ? { view } : {}) });
+        if (view === "selfie") return null;
+        return {
+          requestId: "r1", sessionId: "s1", source: "eidoverse", label: "third-person", mimeType: "image/png",
+          filePath: "/tmp/x.png", bytes: 8, capturedAt: "2026-09-10T18:00:00.000Z", dataBase64: "iVBORw0KGgo=",
+        };
+      },
+    },
+  });
+  adapter.connect();
+  const third = await adapter.snapshot("third");
+  assert.equal(third.available, true);
+  if (third.available) {
+    assert.equal(third.mimeType, "image/png");
+    assert.equal(third.dataBase64, "iVBORw0KGgo=");
+    assert.equal(third.view, "third");
+  }
+  const selfie = await adapter.snapshot("selfie");
+  assert.deepEqual(selfie, { available: false, world: "demo-world", view: "selfie", reason: "unavailable" });
+  assert.deepEqual(captured.map((entry) => entry.view), ["third", "selfie"]);
+  adapter.disconnect();
+
+  const bare = new EidoverseEmbodiedSessionAdapter(adapterConfig(), {
+    embodiedSessions: new EmbodiedSessionRegistry("satellite.endpoint"),
+    sessions: new SessionStore(60),
+    agent: new FakeAgent(),
+    look: new FakeLook("Nobody else is here right now."),
+    say: { say: async () => undefined },
+  });
+  bare.connect();
+  assert.deepEqual(await bare.snapshot(), { available: false, world: "demo-world", view: "first", reason: "not_configured" });
+  bare.disconnect();
+});

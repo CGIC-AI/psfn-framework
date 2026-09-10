@@ -1,5 +1,5 @@
 import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
-import type { TextContent } from '@earendil-works/pi-ai';
+import type { ImageContent, TextContent } from '@earendil-works/pi-ai';
 import { isRecord } from '../../shared/utils/types.js';
 import {
   renderSystemLanguageTemplate,
@@ -155,6 +155,24 @@ const DEFAULT_RETRY_HINTS: Record<ToolErrorClass, ToolRetryHint> = {
 export function textResult(text: string): AgentToolResult<Record<string, never>> {
   return {
     content: [{ type: 'text', text }] satisfies TextContent[],
+    details: {},
+  };
+}
+
+/**
+ * A tool result that carries an image alongside its text (psfn-framework-mlhfw).
+ * The caller is responsible for the image having passed vision intake
+ * screening; this helper only shapes the content the provider receives.
+ */
+export function imageResult(
+  text: string,
+  image: { dataBase64: string; mimeType: string },
+): AgentToolResult<Record<string, never>> {
+  return {
+    content: [
+      { type: 'text', text } satisfies TextContent,
+      { type: 'image', data: image.dataBase64, mimeType: image.mimeType } satisfies ImageContent,
+    ],
     details: {},
   };
 }

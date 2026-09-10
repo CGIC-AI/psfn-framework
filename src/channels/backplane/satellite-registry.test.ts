@@ -185,7 +185,7 @@ describe('satellite registry', () => {
     } });
     expect(ai.ok && ai.value.authorId).toBe('primary-user:nova-kube');
     expect(ai.ok && ai.value.authorName).toBe('nova-kube');
-    expect(ai.ok && ai.value.canonicalContactId).toBe('');
+    expect(ai.ok && ai.value.canonicalContactId).toBe('contact-primary-user');
     expect(ai.ok && ai.value.satellite.speaker).toEqual({ id: 'nova-kube', name: 'nova-kube', kind: 'ai' });
 
     const human = resolveSatelliteClaim({ registry, principal, headers: {

@@ -123,7 +123,18 @@ export interface EidoverseAvatarMoveRequest {
   waitMs?: number;
 }
 
-export type EidoverseAvatarWalkStatus = "arrived" | "walking" | "interrupted" | "failed" | "already_there";
+/**
+ * `no_position`: the move named a region the place map binds to a place but
+ * carried no coordinates and no participant, so there was nowhere to walk;
+ * the region is remembered and the body did not move (psfn-framework-zsoo8).
+ */
+export type EidoverseAvatarWalkStatus =
+  | "arrived"
+  | "walking"
+  | "interrupted"
+  | "failed"
+  | "already_there"
+  | "no_position";
 
 export type EidoverseAvatarMoveOutcome =
   | {
@@ -351,6 +362,18 @@ export class EidoverseEmbodiedSessionAdapter {
     if (!target) {
       // Travel-only (or a no-op move to the world the body is already in).
       this.currentRegion = region;
+      if (region) {
+        // The place map binds regions to places, not coordinates: a bare
+        // region cannot be walked to. Say so instead of answering a silent
+        // accept (psfn-framework-zsoo8).
+        this.log(`Eidoverse body walk_to skipped: region "${region}" in world "${this.currentWorldName}" has no position`);
+        return {
+          accepted: true,
+          world: this.currentWorldName,
+          ...this.placeIdFor(this.currentWorldName, region),
+          walk: { status: "no_position" },
+        };
+      }
       return { accepted: true, world: this.currentWorldName, ...this.placeIdFor(this.currentWorldName, region) };
     }
     if (!Number.isFinite(target.x) || !Number.isFinite(target.z)) {
@@ -364,6 +387,13 @@ export class EidoverseEmbodiedSessionAdapter {
       body.noteWhenDone(run);
       this.currentRegion = region;
       this.log(`Eidoverse body walk_to (${target.x}, ${target.z}) in world "${this.currentWorldName}" still walking after bounded wait`);
+      // The deferred completion is also the only proof a long walk ended;
+      // log it the same way a walk that fit the wait is logged
+      // (psfn-framework-f5vd8).
+      const world = this.currentWorldName;
+      void run.then((settled) => {
+        this.log(this.describeWalkResult(settled, world));
+      }).catch(() => undefined);
       return {
         accepted: true,
         world: this.currentWorldName,
@@ -376,9 +406,7 @@ export class EidoverseEmbodiedSessionAdapter {
       : result.outcome === "interrupted-or-timed-out" ? "interrupted" : "failed";
     if (status === "arrived") this.currentRegion = region;
     const position = result.position;
-    this.log(
-      `Eidoverse body walk_to ${status}${position ? ` at (${position.x}, ${position.z})` : ""} in world "${this.currentWorldName}"`,
-    );
+    this.log(this.describeWalkResult(result, this.currentWorldName));
     return {
       accepted: true,
       world: this.currentWorldName,
@@ -412,6 +440,15 @@ export class EidoverseEmbodiedSessionAdapter {
     }
     this.log(`Eidoverse body ${verb} ${result.outcome} in world "${this.currentWorldName}"`);
     return { accepted: true, verb, outcome: result.outcome, reply: result.reply };
+  }
+
+  /** One info line per settled walk, whether it fit the bounded wait or not. */
+  private describeWalkResult(result: EidoverseBodyRunResult, world: string): string {
+    const status: EidoverseAvatarWalkStatus = result.outcome === "arrived"
+      ? "arrived"
+      : result.outcome === "interrupted-or-timed-out" ? "interrupted" : "failed";
+    const position = result.position;
+    return `Eidoverse body walk_to ${status}${position ? ` at (${position.x}, ${position.z})` : ""} in world "${world}"`;
   }
 
   private refuseMove(

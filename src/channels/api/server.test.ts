@@ -2609,6 +2609,124 @@ describe('ApiServer with fleet auth configured alongside key auth', () => {
     expect(call.routing?.authorIsMachineIntelligence).toBe(true);
   });
 
+  // Shared fixture for the two projection tests: one enrolled endpoint whose
+  // projection decides which admission path an assertion enters. Each test
+  // starts its own server (a stopped server's keep-alive socket cannot be
+  // reused by the next request in the same test).
+  const projectionFixture = async (projection: 'virtual_space' | 'human_surface') => {
+    await stopServer(server);
+    const mockAgent = createMockAgentLoop(eventBus);
+    const verifyVirtualSpaceAssertion = vi.fn(async (input: {
+      assertion: string;
+      expected: { deviceId: string; enrollmentVersion: number; companionId: string; sessionId: string; placeId?: string };
+      satelliteId: string;
+      endpointId: string;
+    }) => ({
+      kind: 'virtual_space' as const,
+      deviceId: input.expected.deviceId,
+      enrollmentVersion: input.expected.enrollmentVersion,
+      companionId: input.expected.companionId,
+      satelliteId: input.satelliteId,
+      endpointId: input.endpointId,
+      sessionId: input.expected.sessionId,
+      ...(input.expected.placeId ? { placeId: input.expected.placeId } : {}),
+      jti: '018f0f10-79b2-4cc7-8c99-0242ac120005',
+      expiresAt: new Date(Date.now() + 30_000).toISOString(),
+    }));
+    const admit = vi.fn(async () => {
+      throw new Error('Hub device assertion signature rejected in test');
+    });
+    const fenceRejectedAssertion = vi.fn(async () => undefined);
+    const enrolledRegistry = (projection: 'virtual_space' | 'human_surface') => ({
+      ...SATELLITE_TEST_REGISTRY,
+      satellites: SATELLITE_TEST_REGISTRY.satellites.map(satellite => ({
+        ...satellite,
+        placeId: 'eidoverse:commons',
+        endpoints: satellite.endpoints.map(endpoint => ({
+          ...endpoint,
+          auth: {
+            mode: 'api_key' as const,
+            apiKeyPrincipalIds: [deriveApiKeyPrincipalId('dedicated-satellite-key')],
+          },
+          hubDeviceEnrollment: {
+            deviceId: 'world-emanation', enrollmentVersion: 2, enrollmentStatus: 'active' as const, projection,
+          },
+        })),
+      })),
+    });
+    const startWith = async () => {
+      server = createApiServer({
+        port,
+        agentLoop: mockAgent,
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        apiKey: 'legacy-api-key',
+        satelliteApiKeys: ['dedicated-satellite-key'],
+        satelliteRegistry: enrolledRegistry(projection),
+        hubDeviceIngress: { verifyVirtualSpaceAssertion, admit, fenceRejectedAssertion } as never,
+        hubDeviceCompanionId: DEFAULT_COMPANION_ID,
+        healthChecks: createHealthyHealthChecks(),
+      });
+      await server.start();
+    };
+    const send = () => request(port, 'POST', '/v1/chat/completions', {
+      model: DEFAULT_COMPANION_ID,
+      user: 'eidoverse:world-session',
+      messages: [{ role: 'user', content: 'visitor: @nova are you a registered surface?' }],
+    }, {
+      Authorization: 'Bearer dedicated-satellite-key',
+      'X-PSFN-Satellite-Claim-Type': 'android-mobile',
+      'X-PSFN-Satellite-ID': 'android-phone',
+      'X-PSFN-Satellite-Endpoint-ID': 'companion-app',
+      'X-PSFN-Satellite-Session-ID': 'eidoverse:world-session',
+      'X-PSFN-Satellite-Speaker-ID': 'visitor',
+      'X-PSFN-Satellite-Speaker-Name': 'Visitor',
+      'X-PSFN-Satellite-Speaker-Kind': 'human',
+      'X-PSFN-Hub-Device-Assertion': 'header.claims.signature',
+    });
+
+    await startWith();
+    return { mockAgent, verifyVirtualSpaceAssertion, admit, send };
+  };
+
+  it('routes an assertion from a virtual_space projection through the ordinary satellite path (rqm6t)', async () => {
+    const { mockAgent, verifyVirtualSpaceAssertion, admit, send } = await projectionFixture('virtual_space');
+    const worldTurn = await send();
+    expect(worldTurn.status).toBe(200);
+    expect(verifyVirtualSpaceAssertion).toHaveBeenCalledWith(expect.objectContaining({
+      assertion: 'header.claims.signature',
+      satelliteId: 'android-phone',
+      endpointId: 'companion-app',
+      expected: expect.objectContaining({
+        deviceId: 'world-emanation',
+        enrollmentVersion: 2,
+        companionId: DEFAULT_COMPANION_ID,
+        sessionId: 'eidoverse:world-session',
+        placeId: 'eidoverse:commons',
+      }),
+    }));
+    expect(admit).not.toHaveBeenCalled();
+    const call = (fromAny(mockAgent.handleMessage)).mock.calls[0][0];
+    // The ordinary satellite identity survives: world channel, speaker, no
+    // companion-ui reclassification, no hub-device guest author.
+    expect(call.routing?.satellite?.speaker).toEqual({ id: 'visitor', name: 'Visitor', kind: 'human' });
+    expect(call.authorId.endsWith(':visitor')).toBe(true);
+    expect(String(call.channelId ?? call.routing?.channelId ?? '')).not.toMatch(/^hub-device:/);
+    // The body kept `user`: the device sanitizer never ran.
+    expect(call.routing?.satellite?.hubDevicePrincipal).toBeUndefined();
+  });
+
+  it('routes an assertion from a human_surface projection through device admission unchanged (rqm6t)', async () => {
+    const { verifyVirtualSpaceAssertion, send } = await projectionFixture('human_surface');
+    const deviceTurn = await send();
+    // The device path ran its body sanitizer: a caller-supplied `user` is
+    // refused there, which is exactly why a world connector must not be
+    // admitted as a human surface.
+    expect(deviceTurn.status).toBe(400);
+    expect(JSON.parse(deviceTurn.body).error.type).toBe('conflicting_hub_device_authority');
+    expect(verifyVirtualSpaceAssertion).not.toHaveBeenCalled();
+  });
+
   it('rejects an assertion-bearing chat turn clearly when no device ingress is configured', async () => {
     const response = await request(port, 'POST', '/v1/chat/completions', {
       model: DEFAULT_COMPANION_ID,

@@ -6,6 +6,7 @@ import type { SatelliteClientCertIdentity } from '../../shared/contracts/satelli
 import type {
   HubDeviceAttachmentSnapshot,
   HubDevicePrincipalSnapshot,
+  HubVirtualSpaceAdmission,
 } from '../../shared/contracts/hub-device-ingress.js';
 import type { ApiAuthPrincipal } from '../backplane/http/auth.js';
 import type {
@@ -326,6 +327,12 @@ export interface ApiRuntimeChatRequest {
   /** Device-only principal normalized by authenticated gateway ingress. */
   hubDevicePrincipal?: HubDevicePrincipalSnapshot;
   hubDeviceAttachment?: HubDeviceAttachmentSnapshot;
+  /**
+   * Verified `virtual_space` projection (the Hub's world connector signed
+   * this turn). Server-derived; makes the turn explicit inbound for the
+   * shared-device arbiter without changing its satellite identity.
+   */
+  virtualSpaceEmanation?: HubVirtualSpaceAdmission;
   companionUiCapability?: CompanionUiAgentCapability;
   onDelta?: (text: string, companionId?: string) => void;
   signal?: AbortSignal;

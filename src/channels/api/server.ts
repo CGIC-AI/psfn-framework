@@ -128,11 +128,14 @@ import type {
 } from '../../system/capabilities/confirmation-queue.js';
 import type { FleetAuthHttpRoutes } from './server/fleet-auth-routes.js';
 import type { GatewayHubDeviceIngressService } from '../../boundary/fleet-auth/hub-device-ingress.js';
+import { HubDeviceAssertionRejectedError } from '../../boundary/fleet-auth/hub-device-assertion.js';
 import {
   extractCanonicalHubDeviceAssertion,
   hasHubDeviceAssertion,
   HubDeviceIngressRequestError,
   resolveAuthenticatedHubDeviceConnection,
+  resolveHubDeviceProjection,
+  resolveVirtualSpaceEmanationBinding,
   stripHubDeviceDownstreamAuthorityHeaders,
 } from './server/hub-device-ingress.js';
 import type { CompanionUiWebSocketAdapter } from './companion-ui-websocket.js';
@@ -818,6 +821,13 @@ export class ApiServer implements ChannelAdapterPort {
         );
         return;
       }
+      // A `virtual_space` projection (the Hub's world connector) proves it is
+      // the registered surface and then continues on the ordinary satellite
+      // path; a `human_surface` device enters the attachment path.
+      if (resolveHubDeviceProjection(req, this.readSatelliteRegistry()) === 'virtual_space') {
+        void this.handleVirtualSpaceEmanationChat(req, res, clientCert);
+        return;
+      }
       void this.handleHubDeviceChat(req, res, clientCert);
       return;
     }
@@ -957,6 +967,67 @@ export class ApiServer implements ChannelAdapterPort {
       );
     } finally {
       admission.request.off('aborted', onAborted);
+    }
+  }
+
+  /**
+   * World-connector admission (psfn-framework-rqm6t): the ordinary satellite
+   * credential and claim authenticate the caller; the assertion proves it is
+   * the enrolled `virtual_space` device. The request then takes the normal
+   * satellite chat path (world channel, speaker identity), carrying only a
+   * verified snapshot for the shared-device arbiter.
+   */
+  private async handleVirtualSpaceEmanationChat(
+    req: IncomingMessage,
+    res: ServerResponse,
+    clientCert: SatelliteClientCertIdentity | undefined,
+  ): Promise<void> {
+    if (!this.hubDeviceIngress || !this.hubDeviceCompanionId) {
+      sendApiError(res, 503, 'hub_device_ingress_unavailable', 'Hub device authentication is unavailable');
+      return;
+    }
+    const principal = resolveApiServerRequestPrincipal(req, res, {
+      ...(this.apiKey ? { apiKey: this.apiKey } : {}),
+      ...(this.satelliteApiKeys.length > 0 ? { satelliteApiKeys: this.satelliteApiKeys } : {}),
+      allowInsecureWithoutAuth: false,
+      isTelemetryIngest: false,
+    });
+    if (!principal) return;
+    try {
+      const assertion = extractCanonicalHubDeviceAssertion(req);
+      const binding = resolveVirtualSpaceEmanationBinding({
+        req,
+        principal,
+        registry: this.readSatelliteRegistry(),
+        companionId: this.hubDeviceCompanionId,
+        ...(clientCert ? { clientCert } : {}),
+      });
+      const admission = await this.hubDeviceIngress.verifyVirtualSpaceAssertion({
+        assertion,
+        expected: binding.expected,
+        satelliteId: binding.satelliteId,
+        endpointId: binding.endpointId,
+      });
+      await this.chatCompletions.handle(
+        req,
+        res,
+        principal,
+        clientCert,
+        undefined,
+        { companionId: this.hubDeviceCompanionId },
+        admission,
+      );
+    } catch (error) {
+      if (error instanceof HubDeviceIngressRequestError) {
+        sendApiError(res, error.status, error.type, error.message);
+        return;
+      }
+      if (error instanceof HubDeviceAssertionRejectedError) {
+        sendApiError(res, 401, 'hub_device_assertion_rejected', 'Hub device assertion was rejected');
+        return;
+      }
+      log.error('Virtual-space emanation admission failed');
+      sendApiError(res, 503, 'hub_device_ingress_unavailable', 'Hub device authentication is unavailable');
     }
   }
 

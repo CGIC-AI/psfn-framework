@@ -373,6 +373,13 @@ therefore need only the keypair, that block, and the endpoint's
 `hubDeviceEnrollment` — the full key-only recipe is in
 [Fleet Auth → Hub device authority without fleet auth](../operator/fleet-auth.md#hub-device-authority-without-fleet-auth).
 
+The endpoint's `hubDeviceEnrollment` may also carry
+`"projection": "virtual_space"` for a software device that projects the
+companion into a shared world (the Hub's Eidoverse connector); the gateway then
+verifies the assertion but keeps the turn on the ordinary satellite path
+instead of the companion-ui attachment path. See
+[Eidoverse Hub integration → registered software device](../eidoverse-hub-integration.md#the-world-connector-is-a-registered-software-device-s13-rqm6t).
+
 After an enrolled hello succeeds, each logical Hub-to-Framework turn carries a
 new compact `X-PSFN-Hub-Device-Assertion` token
 ([`device-assertion.ts`](/apps/satellite-hub/src/ts/hub/device-assertion.ts#L41-L98)):

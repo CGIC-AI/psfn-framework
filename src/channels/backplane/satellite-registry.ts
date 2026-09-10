@@ -480,7 +480,7 @@ function parseHubDeviceEnrollment(
 ): SatelliteHubDeviceEnrollmentConfig | undefined {
   if (value === undefined) return undefined;
   if (!isRecord(value)) throw new Error(`${fieldName} must be an object`);
-  assertNoUnknownKeys(value, ['deviceId', 'enrollmentVersion', 'enrollmentStatus'], fieldName);
+  assertNoUnknownKeys(value, ['deviceId', 'enrollmentVersion', 'enrollmentStatus', 'projection'], fieldName);
   const deviceId = assertIdToken(
     parseConfiguredString(value.deviceId, `${fieldName}.deviceId`),
     `${fieldName}.deviceId`,
@@ -492,7 +492,17 @@ function parseHubDeviceEnrollment(
   if (value.enrollmentStatus !== 'active' && value.enrollmentStatus !== 'revoked') {
     throw new Error(`${fieldName}.enrollmentStatus must be one of: active, revoked`);
   }
-  return { deviceId, enrollmentVersion, enrollmentStatus: value.enrollmentStatus };
+  if (value.projection !== undefined
+    && value.projection !== 'human_surface'
+    && value.projection !== 'virtual_space') {
+    throw new Error(`${fieldName}.projection must be one of: human_surface, virtual_space`);
+  }
+  return {
+    deviceId,
+    enrollmentVersion,
+    enrollmentStatus: value.enrollmentStatus,
+    ...(value.projection !== undefined ? { projection: value.projection } : {}),
+  };
 }
 
 function parseTestingHarnessProvenance(

@@ -1455,7 +1455,7 @@ describe('PostgresBackgroundWorkStore', () => {
       expect(await store.get(crossedInput.jobId)).toMatchObject({ state: 'running' });
 
       // It stays fail-closed on lease expiry: outcome remains unknown.
-      expect(await store.recoverExpired({ nowMs: 10_200 })).toBe(1);
+      expect((await store.recoverExpired({ nowMs: 10_200 })).recoveredCount).toBe(1);
       expect(await store.get(crossedInput.jobId)).toMatchObject({
         state: 'failed',
         reasonCode: 'effect_outcome_unknown',
@@ -1520,7 +1520,7 @@ describe('PostgresBackgroundWorkStore', () => {
         nowMs: 140,
         leaseDurationMs: 50,
       })).toEqual([claim!.jobId]);
-      expect(await second.recoverExpired({ nowMs: 151 })).toBe(0);
+      expect((await second.recoverExpired({ nowMs: 151 })).recoveredCount).toBe(0);
       expect(await second.claimNext({
         leaseOwner: 'worker-b',
         nowMs: 151,
@@ -1568,7 +1568,7 @@ describe('PostgresBackgroundWorkStore', () => {
         nowMs: 200,
       })).toBe('crossed');
       sinkWrites += 1;
-      expect(await second.recoverExpired({ nowMs: 211 })).toBe(1);
+      expect((await second.recoverExpired({ nowMs: 211 })).recoveredCount).toBe(1);
       expect(await second.get(crashedInput.jobId)).toMatchObject({
         state: 'failed',
         reasonCode: 'effect_outcome_unknown',
@@ -3490,7 +3490,7 @@ describe('PostgresBackgroundWorkStore', () => {
         excludedLogicalSessionIds: [],
       });
       expect(firstClaim?.state).toBe('running');
-      expect(await store.recoverExpired({ nowMs: 111 })).toBe(1);
+      expect((await store.recoverExpired({ nowMs: 111 })).recoveredCount).toBe(1);
       expect(await store.get(input.jobId)).toMatchObject({
         state: 'retry_wait',
         reasonCode: 'lease_expired',
@@ -3888,6 +3888,72 @@ describe('PostgresBackgroundWorkStore', () => {
       expect(await store.endForeground({
         logicalSessionId: 'session-a', leaseOwner: 'fg', leaseId: 'fg-a', nowMs: 2_000,
       })).toBe(true);
+    } finally {
+      await store.close();
+    }
+  });
+
+  it('fails a claim whose lease keeps expiring instead of re-leasing it at every restart (52epa)', async () => {
+    const database = await harness.createDatabase();
+    const store = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    try {
+      const input = makeInput('session-poison', 'turn-poison');
+      await store.enqueue(input);
+      // Three process lifetimes, each claiming the row and dying before its
+      // effect boundary. No work attempt is spent by any of them.
+      let nowMs = 100;
+      for (let lifetime = 1; lifetime <= 2; lifetime += 1) {
+        const claim = await store.claimNext({
+          leaseOwner: `dead-process-${String(lifetime)}`,
+          nowMs,
+          leaseDurationMs: 10,
+          excludedLogicalSessionIds: [],
+        });
+        expect(claim?.jobId).toBe(input.jobId);
+        nowMs += 11;
+        const recovery = await store.recoverExpired({ nowMs });
+        expect(recovery).toEqual({ recoveredCount: 1, terminalJobs: [] });
+        expect(await store.get(input.jobId)).toMatchObject({
+          state: 'retry_wait',
+          reasonCode: 'lease_expired',
+          attemptCount: 0,
+          leaseExpiryCount: lifetime,
+        });
+      }
+      const lastClaim = await store.claimNext({
+        leaseOwner: 'dead-process-3',
+        nowMs,
+        leaseDurationMs: 10,
+        excludedLogicalSessionIds: [],
+      });
+      expect(lastClaim?.jobId).toBe(input.jobId);
+      nowMs += 11;
+      const recovery = await store.recoverExpired({ nowMs });
+      expect(recovery.recoveredCount).toBe(1);
+      expect(recovery.terminalJobs.map(job => job.jobId)).toEqual([input.jobId]);
+      expect(recovery.terminalJobs[0]).toMatchObject({
+        state: 'failed',
+        reasonCode: 'lease_expired',
+        attemptCount: 0,
+        leaseExpiryCount: 3,
+        completedAtMs: nowMs,
+      });
+      // Startup after the poison row is failed: nothing is re-leased, and the
+      // turn's subsystem projection reads a truthful terminal status.
+      expect(await store.claimNext({
+        leaseOwner: 'restart-worker',
+        nowMs: nowMs + 1,
+        leaseDurationMs: 10,
+        excludedLogicalSessionIds: [],
+      })).toBeNull();
+      await expect(store.getSubsystemOutputProjection({
+        logicalSessionId: input.logicalSessionId,
+        sourceChannelId: input.sourceChannelId,
+        sourceTurnId: input.sourceTurnId,
+        sourceRequestId: input.sourceRequestId,
+      })).resolves.toEqual({ status: 'failed', outputRefs: [] });
     } finally {
       await store.close();
     }

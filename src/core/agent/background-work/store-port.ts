@@ -46,6 +46,13 @@ export interface BackgroundWorkWelfarePolicy {
   reserveSlots: number;
 }
 
+export interface BackgroundWorkExpiredLeaseRecovery {
+  /** Rows moved out of `running` by this sweep. */
+  recoveredCount: number;
+  /** Rows this sweep failed terminally (poison claims and unknown outcomes). */
+  terminalJobs: StoredBackgroundWorkJob[];
+}
+
 export interface BackgroundWorkStorePort {
   enqueue(input: EnqueueBackgroundWorkInput): Promise<BackgroundWorkJobEnqueueResult>;
   /** Atomic all-or-nothing enqueue for one canonical TurnRecord handoff. */
@@ -221,7 +228,15 @@ export interface BackgroundWorkStorePort {
     nowMs: number;
     reasonCode: 'shutdown';
   }): Promise<StoredBackgroundWorkJob[]>;
-  recoverExpired(input: { nowMs: number }): Promise<number>;
+  /**
+   * Move every expired `running` claim out of its lease. A claim that crossed
+   * an effect boundary fails closed (`effect_outcome_unknown`); a pre-boundary
+   * claim returns to `retry_wait` without spending an attempt, unless its lease
+   * has now expired `BACKGROUND_WORK_LEASE_EXPIRY_LIMIT` times, in which case
+   * it fails terminally with `lease_expired`. `terminalJobs` carries every row
+   * this sweep failed so the supervisor can raise the health signal.
+   */
+  recoverExpired(input: { nowMs: number }): Promise<BackgroundWorkExpiredLeaseRecovery>
   purgeTerminal(input: { completedBeforeMs: number; limit: number }): Promise<number>;
   countRunnable(input: { nowMs: number }): Promise<number>;
   countPending(): Promise<number>;

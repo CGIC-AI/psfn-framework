@@ -429,6 +429,7 @@ describe('executePostTurnBackgroundWork', () => {
       [record.turnId],
       expect.any(Function),
       expect.any(Function),
+      execution.signal,
     );
     expect(fixture.maybeExtract).toHaveBeenCalledWith(
       record.sessionId,
@@ -1193,6 +1194,7 @@ describe('executePostTurnBackgroundWork', () => {
       [record.turnId],
       expect.any(Function),
       expect.any(Function),
+      execution.signal,
     );
     expect(fixture.triggerEmotionAppraisal.mock.calls[0]?.[0]).not.toHaveProperty('internalState');
 
@@ -1307,6 +1309,7 @@ describe('executePostTurnBackgroundWork', () => {
       [record.turnId],
       expect.any(Function),
       expect.any(Function),
+      execution.signal,
     );
     expect(fixture.scheduleAutoCompactionBetweenTurns).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1403,6 +1406,7 @@ describe('executePostTurnBackgroundWork', () => {
       record.sessionId,
       record.turnId,
       expect.any(Function),
+      expect.any(AbortSignal),
     );
     expect(fixture.withStableRecordedTurnEligibilitySnapshot).not.toHaveBeenCalled();
     expect(fixture.getRecentMessagesAtOrBefore).not.toHaveBeenCalled();
@@ -1910,5 +1914,55 @@ describe('executePostTurnBackgroundWork', () => {
 
     await expect(executePostTurnBackgroundWork(execution, dependencies)).resolves.toBeUndefined();
     expect(complete).toHaveBeenCalledTimes(2);
+  });
+
+  it('maps a fence timeout to a bounded handler_failed retry without crossing an effect boundary', async () => {
+    const record = makeTurnRecord();
+    const execution = makeExecution(record);
+    const fixture = makeDependencies({ record });
+    const timedOut = new Error('TurnRecord eligibility fence acquire timed out after 30000ms');
+    timedOut.name = 'TurnRecordEligibilityFenceTimeoutError';
+    fixture.withStableRecordedTurnEligibilitySnapshot.mockRejectedValueOnce(timedOut);
+
+    await expect(executePostTurnBackgroundWork(execution, fixture.dependencies))
+      .rejects.toEqual(expect.objectContaining<Partial<BackgroundWorkDeferredError>>({
+        name: 'BackgroundWorkDeferredError',
+        reasonCode: 'handler_failed',
+        terminalReasonCode: 'handler_failed',
+      }));
+
+    expect(execution.effects.run).not.toHaveBeenCalled();
+    expect(fixture.maybeExtract).not.toHaveBeenCalled();
+  });
+
+  it('hands the claim signal to the source fence so a lost lease unwinds the wait', async () => {
+    const record = makeTurnRecord();
+    const execution = makeExecution(record);
+    const payload = {
+      schemaVersion: 1,
+      kind: 'intention_post_turn_hooks',
+      source: execution.payload.source,
+    } as const;
+    const fixture = makeDependencies({ record });
+
+    await executePostTurnBackgroundWork({
+      payload,
+      effects: execution.effects,
+      signal: execution.signal,
+      job: {
+        ...execution.job,
+        kind: payload.kind,
+        payload,
+        payloadFingerprint: fingerprintBackgroundWorkPayload(payload),
+      },
+    }, fixture.dependencies);
+
+    expect(fixture.withSourceRecordedTurnEligibilityFence).toHaveBeenCalledWith(
+      record.channelId,
+      record.sessionId,
+      record.turnId,
+      expect.any(Function),
+      execution.signal,
+    );
   });
 });

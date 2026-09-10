@@ -533,7 +533,7 @@ describe('CompanionAvailabilityRuntime', () => {
       kind: 'memory_extraction',
     } as unknown as ClaimedBackgroundWorkJob;
     const store = {
-      recoverExpired: vi.fn(async () => []),
+      recoverExpired: vi.fn(async () => ({ recoveredCount: 0, terminalJobs: [] })),
       purgeTerminal: vi.fn(async () => []),
       claimNext: vi.fn(async () => {
         if (claimed) return null;

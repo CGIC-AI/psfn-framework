@@ -60,8 +60,8 @@ export interface EidoverseMcplConfig {
   /**
    * Extra names the body answers to in the world, beyond the display name:
    * at least its door participant id (the tokens.json `id`, the mention
-   * handle other bodies use, e.g. `artie-kube` for "Artie (kube)"). Without it
-   * an explicit `@artie-kube` looks like somebody else's mention and is
+   * handle other bodies use, e.g. `nova-kube` for "Nova (kube)"). Without it
+   * an explicit `@nova-kube` looks like somebody else's mention and is
    * skipped (psfn-framework-q1kit, mech8 proof 2026-09-10).
    */
   agentAliases?: readonly string[];

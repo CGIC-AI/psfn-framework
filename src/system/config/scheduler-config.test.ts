@@ -10,6 +10,7 @@ import {
   DEFAULT_SOCIAL_AUTONOMY_CONFIG,
   DEFAULT_SOCIAL_DESIRE_CONFIG,
   DEFAULT_TEMPORAL_WAKEUP_CONFIG,
+  DEFAULT_WORLD_EXPLORATION_CONFIG,
   DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG,
   loadSchedulerSeedDefaults,
   MAX_NEAR_TERM_FOLLOW_UP_HORIZON_MS,
@@ -451,6 +452,7 @@ describe('scheduler config seed defaults', () => {
       expect(loadSchedulerSeedDefaults({ seedDir })).toEqual({
         ...config,
         temporalWakeup: DEFAULT_TEMPORAL_WAKEUP_CONFIG,
+        worldExploration: DEFAULT_WORLD_EXPLORATION_CONFIG,
         freeTime: DEFAULT_FREE_TIME_CONFIG,
         socialAutonomy: DEFAULT_SOCIAL_AUTONOMY_CONFIG,
         weightedThoughtOutreach: DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG,

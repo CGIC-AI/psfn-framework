@@ -182,6 +182,7 @@ import { createLLMProviderPort } from '../../core/agent/contracts.js';
 import { wireIcpInitiationSources } from './icp-initiation-source-wiring.js';
 import { createIcpTestInitiationTrigger } from './icp-test-initiation.js';
 import { registerSocialImpulseOutreachLane } from './startup/social-impulse-outreach-lane.js';
+import { registerWorldExplorationLane } from './startup/world-exploration-lane.js';
 import { wireCompanionPresenceContext } from './companion-presence-wiring.js';
 import { createGatewayOpsPortFromClient } from '../../boundary/gateway/gateway-ops-port.js';
 import { installPromotedToolsPersistenceHook } from '../startup/support/bootstrap-helpers.js';
@@ -2103,6 +2104,19 @@ async function main(): Promise<void> {
   socialImpulseOutreachLane.setProactiveOutbound(proactiveOutbound);
   // ── Temporal wake-up lanes (E7.1): morning wake + idle refresher, extracted
   // to startup/temporal-wakeup-lane.ts (charter 12.1 split).
+  // World exploration (S13, 07mw2): the companion's own initiative on a world
+  // plane, off by default; gates on tier, a live body, quiet hours and caps.
+  registerWorldExplorationLane({
+    scheduler,
+    config: schedulerConfig.worldExploration,
+    quietHours: schedulerConfig.episodicProcessing,
+    agentLoop,
+    placesRegistry: placesRegistryConfig,
+    worldOps,
+    capabilityRuntime,
+    eventBus,
+    chargePolicy: config.chargePolicy,
+  });
   registerTemporalWakeupLane({
     scheduler,
     sessionManager,

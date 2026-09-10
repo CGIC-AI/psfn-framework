@@ -307,6 +307,7 @@ export function hydrateCanonicalStartupConfig(
     wikiPass: { ...persistedScheduler.wikiPass },
     arcFormation: { ...persistedScheduler.arcFormation },
     socialGraphBuilder: { ...persistedScheduler.socialGraphBuilder },
+    worldExploration: { ...persistedScheduler.worldExploration },
     temporalWakeup: {
       enabled: persistedScheduler.temporalWakeup.enabled,
       activeChannelLookbackHours: persistedScheduler.temporalWakeup.activeChannelLookbackHours,

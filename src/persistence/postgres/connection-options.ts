@@ -4,6 +4,18 @@ export interface PostgresConnectionOptions {
   connectionTimeoutMillis?: number;
   max?: number;
   /**
+   * Optional named physical lane. Inside a process pool owner every store of
+   * one authority tuple (URL/schema/role/read-only) shares a single bounded
+   * physical pool; a named lane gets its own physical pool for that same
+   * authority. Reserve it for callers that hold a checked-out client across
+   * long asynchronous work (the TurnRecord eligibility fence holds a
+   * session-level advisory lock for the whole fenced operation): keeping those
+   * clients out of the shared lane is what stops a few long holders from
+   * starving foreground reads and writes. A lane honours its own `max` and
+   * `connectionTimeoutMillis`; the shared lane pins both.
+   */
+  lane?: string;
+  /**
    * Pin every session opened by this pool to PostgreSQL's read-only
    * transaction posture. This is a session fence, not a substitute for exact
    * schema/table ACLs; callers that cross a tenant boundary must prove both.

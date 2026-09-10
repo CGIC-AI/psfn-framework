@@ -55,6 +55,20 @@ export function isWorldPlaneTurn(message: Pick<SubstrateMessage, 'routing'>): bo
  * situated block renders nothing unless the turn carries its own presence.
  * The durable self-model location still carries forward unchanged (B3).
  */
+/**
+ * The place a turn binds on its own (the authenticated satellite claim's
+ * placeId, e.g. the world region on a world-plane turn). The turn's own place
+ * always outranks any remembered fallback, for the situated block and for the
+ * world tool's deictic defaults alike (psfn-framework-gs899: a world turn's
+ * `perceive` without a placeId must look at the world, not the last room).
+ */
+export function resolveTurnOwnPlaceId(message: Pick<SubstrateMessage, 'routing'>): string | undefined {
+  const placeId = message.routing?.satellite?.placeId;
+  if (typeof placeId !== 'string') return undefined;
+  const trimmed = placeId.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 export function isPlacelessSatelliteTurn(message: Pick<SubstrateMessage, 'routing'>): boolean {
   const satellite = message.routing?.satellite;
   if (!satellite || isWorldPlaneTurn(message)) return false;

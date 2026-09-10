@@ -887,6 +887,7 @@ describe('world tool — the world\'s own map (gs899, g8xyn)', () => {
     room: { label: 'kitchen', labelled: true, waysOut: ['a door on its north to the hall'], sealed: false },
     terrain: { sizeM: 400 },
     tools: [{ name: 'look', description: 'Look around.' }, { name: 'walk_to' }, { name: 'world_verb' }],
+    clips: ['cheer', 'sitting_on_ground'],
     capturedAt: '2026-09-10T18:00:00.000Z',
   };
 
@@ -901,7 +902,13 @@ describe('world tool — the world\'s own map (gs899, g8xyn)', () => {
     expect(payload.worldPlane.hubPlaces).toEqual([{ placeId: 'eidoverse:commons:river', region: 'river', movable: true, source: 'world' }]);
     expect(payload.worldPlane.tools.map((tool: { name: string }) => tool.name)).toEqual(['look', 'walk_to', 'world_verb']);
     expect(payload.worldPlane.toolsNote).toMatch(/advisory/u);
+    expect(payload.worldPlane.clips).toEqual(['cheer', 'sitting_on_ground']);
     expect(worldPlaneMap.get('commons')?.tools).toHaveLength(3);
+    expect(worldPlaneMap.get('commons')?.clips).toEqual(['cheer', 'sitting_on_ground']);
+    // The clip verb rides the ordinary act path with the same bounded shape (ae7c9).
+    const held = JSON.parse(resultText(await tool.execute('call-act', { action: 'act', verb: 'play_clip', arguments: { name: 'cheer' } })));
+    expect(ops.avatarAct).toHaveBeenCalledWith({ verb: 'play_clip', arguments: { name: 'cheer' } });
+    expect(held.accepted).toBe(true);
   });
 
   it('list of a physical place never asks the world, and an unavailable map is reported, not fatal', async () => {
@@ -1133,7 +1140,7 @@ describe('world tool — Eidoverse plane (S13 MOVE)', () => {
 
     const bad = await tool.execute('call-act', { action: 'act', verb: 'world_verb' as never });
     expect(bad.details?.isError).toBe(true);
-    expect(resultText(bad)).toContain('verb as one of: face, stop, emote, posture, whisper, take_off, climb_to, glide_to, land_at, fold_wings, unfold_wings, flight_status, spawn, remove, set_avatar');
+    expect(resultText(bad)).toContain('verb as one of: face, stop, emote, posture, whisper, take_off, climb_to, glide_to, land_at, fold_wings, unfold_wings, flight_status, play_clip, spawn, remove, set_avatar');
 
     const refusing = createWorldTool(createAvatarOps({
       avatarAct: vi.fn(async () => ({ accepted: false as const, verb: 'spawn', reason: 'not_configured' as const })),

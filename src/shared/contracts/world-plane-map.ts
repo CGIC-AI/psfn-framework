@@ -19,6 +19,7 @@ export interface WorldPlaneMapSnapshot {
   room?: WorldAvatarRoom;
   terrain?: { sizeM?: number; flatRadiusM?: number };
   tools: ReadonlyArray<{ name: string; description?: string }>;
+  clips?: ReadonlyArray<string>;
   capturedAt: string;
 }
 
@@ -30,6 +31,7 @@ const DEFAULT_TTL_MS = 10 * 60 * 1000;
 const MAX_WORLDS = 32;
 const MAX_PLACES = 128;
 const MAX_TOOLS = 64;
+const MAX_CLIPS = 200;
 const WORLD_NAME_PATTERN = /^[a-z0-9_-]{1,64}$/u;
 
 export class WorldPlaneMapCache implements WorldPlaneMapReader {
@@ -55,6 +57,7 @@ export class WorldPlaneMapCache implements WorldPlaneMapReader {
         name: tool.name,
         ...(tool.description ? { description: tool.description } : {}),
       })),
+      ...(map.clips && map.clips.length > 0 ? { clips: map.clips.slice(0, MAX_CLIPS) } : {}),
       capturedAt: map.capturedAt,
     };
     this.store(snapshot);

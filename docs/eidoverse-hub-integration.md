@@ -315,7 +315,7 @@ emanation-only. The `world` tool then works unchanged:
 | `move { position: { x, z } }` | walk to a ground-plane point in the current world |
 | `perceive { placeId }` on a bound place | the door's `look` lifted into numbers: your own `(x, z)` and facing, everyone present with id, `(x, z)`, distance, bearing and what they are doing, the placed things, and the lines said since you last looked; honest `present: false` when the body is in another world |
 | `list` | shows the `eidoverse` binding and marks bound places `movable` |
-| `act { verb, arguments }` | body verbs `face` (target or x,z), `stop`, `emote` (wave, cheer, dance, point, salute, clap, talk, flail), `posture` (sit, sitchair, lie, stand), `whisper` (to, text; private, unlogged); flight verbs `take_off`, `climb_to` (altitude, metres, capped at 500), `glide_to` (x, z), `land_at` (x, z), `fold_wings`, `unfold_wings`, `flight_status` (the door refuses when the body has no wings, no fly permission or no stamina, and answers with altitude and stamina; psfn-framework-jbvwz); creation verbs `spawn` (query or lib, x, z, yaw, id), `remove` (id), `set_avatar` (avatar) |
+| `act { verb, arguments }` | body verbs `face` (target or x,z), `stop`, `emote` (wave, cheer, dance, point, salute, clap, talk, flail), `posture` (sit, sitchair, lie, stand), `whisper` (to, text; private, unlogged); flight verbs `take_off`, `climb_to` (altitude, metres, capped at 500), `glide_to` (x, z), `land_at` (x, z), `fold_wings`, `unfold_wings`, `flight_status` (the door refuses when the body has no wings, no fly permission or no stamina, and answers with altitude and stamina; psfn-framework-jbvwz); `play_clip` (name; holds a named clip from the world's library until you stand or walk, names ride the world map's `clips`; psfn-framework-ae7c9); creation verbs `spawn` (query or lib, x, z, yaw, id), `remove` (id), `set_avatar` (avatar) |
 
 Tier gating is the existing per-action capability gate: `perceive`, `list`,
 `move` and the body verbs of `act` ride `world.read` (apprentice and up); the
@@ -470,6 +470,20 @@ This is the MUD player's map built from text, and the federation groundwork
 the operator asked for: a companion that travels between linked worlds
 remembers each one by its own notes, per world and per companion. A shared,
 operator-curated world wiki stays the caretaker layer's job.
+
+## The world's clip library (S13, ae7c9)
+
+The door's `pose` and `animate` are raw bones and keyframes and stay outside
+the allowlist. What the body can hold by name is the world's own clip
+library: every `.vrma` the sequencer serves at `/animations`, defs overlay
+included. The door exposes it as two bounded verbs, `list_clips` (names only)
+and `play_clip {name}` (refused unless the name is in the roster; held like a
+posture until `posture stand` or a walk). The Hub folds the roster into the
+world map as `clips` when the door advertises `list_clips`, so `world list` on
+a world place shows the names, and `act play_clip {name}` rides the ordinary
+body-verb path with the same bounded shape. The eight emote names still fire
+as one-shots through `emote`; their enum on the door is still a hand copy of
+`defs/animations/_emotes.json`.
 
 ## Looking through the camera (S13, mlhfw)
 

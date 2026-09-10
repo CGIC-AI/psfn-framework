@@ -346,6 +346,31 @@ describe('resolveSituatedPlaceRef (W5a presence coordinates)', () => {
 });
 
 describe('situated-presence producer — active-emanation integration (B2)', () => {
+  it('renders nothing for a placeless satellite endpoint after a physical emanation (1n6s9)', () => {
+    const tracker = new SituatedEmanationTracker();
+    buildSituatedPresenceContextBlock({
+      message: makeMessage({
+        routing: routing({ placeId: 'place.living-room', presence: SATELLITE_PRESENCE }),
+      }),
+      placesRegistry: PLACES_REGISTRY,
+      emanationTracker: tracker,
+    });
+    // A registered endpoint with no bound place (a mobile device) is
+    // location-unknown: no inherited room, no inherited presence, no block.
+    const block = buildSituatedPresenceContextBlock({
+      message: makeMessage({ routing: routing({ satelliteOrigin: true }) }),
+      placesRegistry: PLACES_REGISTRY,
+      emanationTracker: tracker,
+      situatedFallbackPlaceId: 'place.living-room',
+    });
+    expect(block).toBe('');
+    expect(resolveSituatedPlaceRef(
+      makeMessage({ routing: routing({ satelliteOrigin: true }) }),
+      PLACES_REGISTRY,
+      'place.living-room',
+    )).toBeUndefined();
+  });
+
   it('does not foreground the physical emanation on a placeless mindspace turn', () => {
     const tracker = new SituatedEmanationTracker();
     // A satellite turn establishes the emanation into the living room.

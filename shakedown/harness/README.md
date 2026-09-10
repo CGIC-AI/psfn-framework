@@ -108,7 +108,7 @@ only; leave it unset for production or externally reachable deployments.
 `cases/sprint10.mjs` composes domain-focused modules into the existing catalog;
 it does not fork the harness. The ten cases cover physical and placeless situated presence, virtual
 mindspace and physical precedence, synthetic world telemetry with
-`world list/perceive`, hub enrollment and repeatable presence-follow, API and
+`world list/perceive`, hub enrollment (or, on a fleet-admitted Garden, the trusted-subject refusal) with the hub turn situating the companion, API and
 classified-satellite CogSec document quarantine, temporal history rendering
 plus outbound stamp stripping, and incremental SSE first-content
 timing. Each output row carries `tier`, `variants`, `feature`, and `proof`

@@ -558,7 +558,7 @@ Every finding — hers or the harness's — becomes a structured record: **Sever
 
 | Surface | Lane / tier | How exercised | Notes |
 | --- | --- | --- | --- |
-| Places/affordance registry + situated presence block | local, all tiers | places.json load, satellite-claim turn renders block, placeless turn renders none | fail-closed check both ways |
+| Places/affordance registry + situated presence block | local, all tiers | places.json load, satellite-claim turn renders block, placeless satellite endpoint renders none even after a physical emanation (1n6s9); the durable location carries forward and is not asserted | fail-closed check both ways |
 | Dual presence / "latent space" mindspace | local + kube | plain-channel turn situates in twinned room; classified satellite turn is physical | headline S10 behavior; partner walk |
 | World tool (perceive/list) + perception ingest | local (mock HA, synthetic telemetry to `/v1/telemetry/ingest`) | harness | `world.control` staged off by default |
 | HA world control (staged on) | kube only, autonomous | partner walk + gateway audit proof | trust-gated; real HA |

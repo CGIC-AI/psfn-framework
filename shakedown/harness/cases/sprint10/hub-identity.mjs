@@ -90,10 +90,11 @@ export function buildHubIdentityCases(ctx, services, env) {
     resolveAttemptHeaders: () => issueHubDeviceAssertionHeaders({
       services, env, prefix: hubPrefix, caseId: 's10_hub_identity_presence_follow',
     }),
-    message: 'Briefly acknowledge this hub identity enrollment and presence-follow probe.',
+    message: 'Briefly acknowledge this hub identity enrollment probe.',
     proof: proof(
       'telemetry audit plus Postgres enrollment/audit/internal state/shared presence',
-      'an enrolled opaque face claim resolves to the contact and moves presence to its satellite place',
+      'an enrolled opaque face claim resolves to the contact (or the fleet path refuses to bind another subject), '
+        + 'the hub turn situates the companion at the hub place, and presence telemetry never moves it',
     ),
     before: async ({ signal }) => {
       requireSatelliteEnv(env, hubPrefix, 's10_hub_identity_presence_follow');
@@ -121,13 +122,15 @@ export function buildHubIdentityCases(ctx, services, env) {
       if (resetTelemetry.status !== 202) {
         throw new Error(`hub precondition telemetry failed with HTTP ${String(resetTelemetry.status)}`);
       }
+      // Presence telemetry is neutral information (psfn-framework-u4v0): it
+      // never moves the companion, so the prior place is recorded, not forced.
       const priorInternalState = await waitForInternalPlace(
         services,
         restorePlaceId,
         signal,
       );
-      if (priorInternalState?.place_id !== restorePlaceId || restorePlaceId === hubPlaceId) {
-        throw new Error('hub presence-follow requires distinct physical restore and hub destination places');
+      if (restorePlaceId === hubPlaceId) {
+        throw new Error('hub identity probe requires distinct physical and hub places');
       }
 
       const hubIdentityId = envText(
@@ -149,12 +152,21 @@ export function buildHubIdentityCases(ctx, services, env) {
           signal,
         },
       );
-      if (enrollmentResponse.status !== 201) {
+      // On a fleet-admitted Garden (kube-test) an enrollment must bind the
+      // acting subject's own contact; the harness principal's synthetic
+      // contact can never be the canonical primary contact, so the refusal IS
+      // the proof there (psfn-framework-71b0b). Anything else is a failure.
+      const refusalText = typeof enrollmentResponse.body?.error === 'string'
+        ? enrollmentResponse.body.error
+        : '';
+      const fleetPathRefused = enrollmentResponse.status === 403
+        && /current trusted subject/u.test(refusalText);
+      if (enrollmentResponse.status !== 201 && !fleetPathRefused) {
         throw new Error(`hub enrollment failed with HTTP ${String(enrollmentResponse.status)}`);
       }
       // Record the durable enrollment so the top-level cleanup can revoke it even
       // if the dispatch throws before after() runs.
-      cleanupState.hubIdentityId = hubIdentityId;
+      if (!fleetPathRefused) cleanupState.hubIdentityId = hubIdentityId;
       const telemetry = await postPresenceTelemetry(
         services,
         envText(env, `${hubPrefix}_ID`),
@@ -165,14 +177,18 @@ export function buildHubIdentityCases(ctx, services, env) {
         signal,
       );
       if (telemetry.status !== 202) {
-        await services.fetchJson(
-          `${services.adminBase}/api/admin/enrollments/${encodeURIComponent(hubIdentityId)}`,
-          { method: 'DELETE' },
-        );
+        if (!fleetPathRefused) {
+          await services.fetchJson(
+            `${services.adminBase}/api/admin/enrollments/${encodeURIComponent(hubIdentityId)}`,
+            { method: 'DELETE' },
+          );
+        }
         throw new Error(`hub face telemetry failed with HTTP ${String(telemetry.status)}`);
       }
       return {
         hubIdentityId,
+        fleetPathRefused,
+        refusalStatus: enrollmentResponse.status,
         telemetry: {
           status: telemetry.status,
           eventId: telemetry.body?.id ?? null,
@@ -185,23 +201,26 @@ export function buildHubIdentityCases(ctx, services, env) {
       if (typeof hubIdentityId !== 'string') {
         throw new Error('hub identity setup did not return its opaque handle');
       }
+      const fleetPathRefused = beforeChecks?.fleetPathRefused === true;
       let enrollment = null;
       let enrollmentAudit = null;
       let internalState = null;
       let presence = null;
       let gardenAuditFound = false;
-      let cleanup = { revoked: false, restoredPlaceId: null };
+      let cleanup = { revoked: false, restoreAccepted: false };
       try {
-        [enrollment] = await services.pgAll(
-          `select hub_identity_id, contact_id, status
-           from hub_identity_enrollments where hub_identity_id = $1;`,
-          [hubIdentityId],
-        );
-        [enrollmentAudit] = await services.pgAll(
-          `select action, actor from hub_identity_enrollment_audit
-           where hub_identity_id = $1 order by id desc limit 1;`,
-          [hubIdentityId],
-        );
+        if (!fleetPathRefused) {
+          [enrollment] = await services.pgAll(
+            `select hub_identity_id, contact_id, status
+             from hub_identity_enrollments where hub_identity_id = $1;`,
+            [hubIdentityId],
+          );
+          [enrollmentAudit] = await services.pgAll(
+            `select action, actor from hub_identity_enrollment_audit
+             where hub_identity_id = $1 order by id desc limit 1;`,
+            [hubIdentityId],
+          );
+        }
         for (let attempt = 0; attempt < 50; attempt += 1) {
           [internalState] = await services.pgAll(
             `select state #>> '{situated,location,placeId}' as place_id
@@ -230,10 +249,14 @@ export function buildHubIdentityCases(ctx, services, env) {
           if (!gardenAuditFound) await sleep(100, signal);
         }
       } finally {
-        const revoke = await services.fetchJson(
-          `${services.adminBase}/api/admin/enrollments/${encodeURIComponent(hubIdentityId)}`,
-          { method: 'DELETE' },
-        );
+        const revoke = fleetPathRefused
+          ? { status: 404 }
+          : await services.fetchJson(
+            `${services.adminBase}/api/admin/enrollments/${encodeURIComponent(hubIdentityId)}`,
+            { method: 'DELETE' },
+          );
+        // The restore signal is neutral information: it is accepted at the
+        // door and never moves the companion (u4v0), so acceptance is the proof.
         const restore = await postPresenceTelemetry(
           services,
           envText(env, `${physicalPrefix}_ID`),
@@ -246,19 +269,16 @@ export function buildHubIdentityCases(ctx, services, env) {
           { present: true, confidence: 1, occupancyCount: 1 },
           `s10-hub-restore-${sha256(`${ctx.runToken}:${Date.now()}`).slice(0, 24)}`,
         );
-        const restored = restore.status === 202
-          ? await waitForInternalPlace(services, restorePlaceId)
-          : null;
         cleanup = {
           revoked: revoke.status === 200,
-          restoredPlaceId: restored?.place_id ?? null,
+          restoreAccepted: restore.status === 202,
         };
         // Mark the ledger so the top-level cleanup is a no-op once after() has run
         // (tolerate 404: an already-revoked enrollment still counts as revoked).
         if (revoke.status === 200 || revoke.status === 404) {
           cleanupState.revoked = true;
         }
-        if (restored?.place_id === restorePlaceId) {
+        if (restore.status === 202) {
           cleanupState.placeRestored = true;
         }
       }
@@ -273,13 +293,19 @@ export function buildHubIdentityCases(ctx, services, env) {
             requireSharedPresence,
             priorPlaceId: beforeChecks?.priorPlaceId ?? null,
           },
-          enrollment: enrollment
+          enrollment: fleetPathRefused
             ? {
-              hubIdentityId: enrollment.hub_identity_id,
-              contactId: enrollment.contact_id,
-              status: enrollment.status,
+              fleetPathRefused: true,
+              refusal: 'trusted_subject',
+              status: beforeChecks?.refusalStatus ?? null,
             }
-            : null,
+            : enrollment
+              ? {
+                hubIdentityId: enrollment.hub_identity_id,
+                contactId: enrollment.contact_id,
+                status: enrollment.status,
+              }
+              : null,
           enrollmentAudit: enrollmentAudit
             ? { action: enrollmentAudit.action, actor: enrollmentAudit.actor }
             : null,
@@ -305,7 +331,7 @@ export function buildHubIdentityCases(ctx, services, env) {
       const done = {
         hubIdentityId: cleanupState.hubIdentityId,
         revoked: cleanupState.revoked,
-        restoredPlaceId: null,
+        restoreAccepted: false,
         alreadyClean: false,
       };
       if (!cleanupState.hubIdentityId) {
@@ -346,11 +372,8 @@ export function buildHubIdentityCases(ctx, services, env) {
             `s10-hub-cleanup-${sha256(`${ctx.runToken}:${Date.now()}`).slice(0, 24)}`,
           );
           if (restore.status === 202) {
-            const restored = await waitForInternalPlace(services, restorePlaceId);
-            done.restoredPlaceId = restored?.place_id ?? null;
-            if (restored?.place_id === restorePlaceId) {
-              cleanupState.placeRestored = true;
-            }
+            done.restoreAccepted = true;
+            cleanupState.placeRestored = true;
           } else {
             cleanupErrors.push(`hub presence restore returned HTTP ${String(restore.status)}`);
           }
@@ -358,7 +381,7 @@ export function buildHubIdentityCases(ctx, services, env) {
           cleanupErrors.push(`hub presence restore threw: ${error instanceof Error ? error.message : String(error)}`);
         }
       } else {
-        done.restoredPlaceId = restorePlaceId;
+        done.restoreAccepted = true;
       }
       return { cleanup: { hubIdentity: done }, cleanupErrors };
     },

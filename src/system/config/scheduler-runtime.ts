@@ -65,6 +65,7 @@ export function resolveRuntimeSchedulerConfig(
     wikiPass: { ...persisted.wikiPass },
     arcFormation: { ...persisted.arcFormation },
     socialGraphBuilder: { ...persisted.socialGraphBuilder },
+    worldExploration: { ...persisted.worldExploration },
     temporalWakeup: {
       enabled: persisted.temporalWakeup.enabled,
       activeChannelLookbackHours: persisted.temporalWakeup.activeChannelLookbackHours,

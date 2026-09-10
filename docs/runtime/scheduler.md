@@ -348,6 +348,23 @@ Wake notes are runtime context, attributed as such, and wake/refresher notes nev
 ambient-presence or elapsed-time idle accounting (system-role entries are excluded from
 user/assistant activity).
 
+## World exploration lane
+
+`registerWorldExplorationLane` (`src/app/agent/startup/world-exploration-lane.ts`,
+S13 psfn-framework-07mw2) is the companion's own initiative on a world plane. A
+five-minute gate-check task (`world-exploration:invite`) invites an internal turn
+(`internal:reflection:world-exploration`, charged to the `background` lane) that
+suggests looking around, walking somewhere new, greeting someone, or keeping a
+`world_note`, and accepts `REFLECTION_SILENT_TOKEN` as a full answer. It invites only
+when every gate holds: `scheduler.json` `worldExploration.enabled` (off by default);
+the tier grants `world.read` (apprentice and up); the situated place carries an
+`eidoverse` binding and the Hub answers `world.avatar_perceive` for that world (a
+live body); not quiet hours (`episodicProcessing` rest window);
+`worldExploration.intervalMinutes` since the last invitation; and under
+`worldExploration.maxTurnsPerDay`. The lane never moves the body itself: the turn
+uses the ordinary `world` tool, so the gateway's world-autonomy limiter, the verb
+allowlist and cogsec still apply to every move and act.
+
 ## Background maintenance
 
 `BackgroundMaintenanceRegistry` (`background-maintenance.ts`) owns the single
@@ -425,7 +442,7 @@ scheduled prompts; template edits are validated by `ReflectionPolicyStore` and t
 scheduler-config.ts`) into `SchedulerRuntimeConfig` with per-section validators
 (`episodicProcessing` rest window, `nearTurnMemory`, `episodeSynthesis`,
 `sleepConsolidation`, `orientationRewrite`, `reflectionNovelty`, `arcFormation`,
-`temporalWakeup`, `freeTime`, `socialAutonomy`, `weightedThoughtOutreach`, `socialDesire`,
+`temporalWakeup`, `worldExploration`, `freeTime`, `socialAutonomy`, `weightedThoughtOutreach`, `socialDesire`,
 `intentionFollowUp`, `icpAutonomy`, `backgroundMaintenance`, `backgroundWork`, …).
 It rejects removed keys (`sleeptime`, `salienceDecayIntervalMs`) with migration hints and
 validates that `backgroundMaintenance.intervalMs + tickIntervalMs` is strictly shorter

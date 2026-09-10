@@ -471,6 +471,19 @@ the operator asked for: a companion that travels between linked worlds
 remembers each one by its own notes, per world and per companion. A shared,
 operator-curated world wiki stays the caretaker layer's job.
 
+## Exploring on its own time (S13, 07mw2)
+
+Idle exploration is how the map gets filled in when nobody is talking to the
+companion. The world exploration lane
+([`docs/runtime/scheduler.md`](runtime/scheduler.md#world-exploration-lane))
+invites an internal turn on its own schedule, only while the companion has a
+live body on a world plane, outside quiet hours, at most every
+`worldExploration.intervalMinutes` and `worldExploration.maxTurnsPerDay` times
+a day, and only at a tier that grants `world.read`. The turn suggests looking,
+walking somewhere new, greeting someone and keeping a `world_note`; silence is a
+full answer. It is off by default (`scheduler.json` `worldExploration.enabled`)
+because it spends model turns and moves a body other people can see.
+
 ## The world connector is a registered software device (S13, rqm6t)
 
 Operator rule (2026-09-10): the companion-ui app, Virt-a-Mate and Eidoverse

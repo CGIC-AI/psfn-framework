@@ -292,6 +292,7 @@ describe('startup owner-file loaders', () => {
         coPresenceWindowMinutes: 1440,
         scanMemoryLimit: 500,
       },
+      worldExploration: { enabled: false, intervalMinutes: 45, maxTurnsPerDay: 12 },
       temporalWakeup: {
         enabled: true,
         activeChannelLookbackHours: 72,

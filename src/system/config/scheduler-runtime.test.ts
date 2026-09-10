@@ -9,6 +9,7 @@ import {
   DEFAULT_FREE_TIME_CONFIG,
   DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
   DEFAULT_TEMPORAL_WAKEUP_CONFIG,
+  DEFAULT_WORLD_EXPLORATION_CONFIG,
   DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG,
   DEFAULT_SOCIAL_DESIRE_CONFIG,
 } from './scheduler-config.js';
@@ -170,6 +171,7 @@ describe('resolveRuntimeSchedulerConfig', () => {
           scanMemoryLimit: 500,
         },
         temporalWakeup: DEFAULT_TEMPORAL_WAKEUP_CONFIG,
+        worldExploration: DEFAULT_WORLD_EXPLORATION_CONFIG,
         freeTime: DEFAULT_FREE_TIME_CONFIG,
         weightedThoughtOutreach: DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG,
         socialDesire: DEFAULT_SOCIAL_DESIRE_CONFIG,
@@ -247,6 +249,7 @@ describe('resolveRuntimeSchedulerConfig', () => {
           scanMemoryLimit: 500,
         },
         temporalWakeup: DEFAULT_TEMPORAL_WAKEUP_CONFIG,
+        worldExploration: DEFAULT_WORLD_EXPLORATION_CONFIG,
         freeTime: DEFAULT_FREE_TIME_CONFIG,
         weightedThoughtOutreach: DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG,
         socialDesire: DEFAULT_SOCIAL_DESIRE_CONFIG,

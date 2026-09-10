@@ -1791,7 +1791,7 @@ async function main(): Promise<void> {
     healthChecks: apiHealthChecks,
     externalChannelProfiles: buildExternalChannelProfiles(channelsConfig),
     satelliteRegistry: satelliteRegistryConfig,
-    ...(resolveTestingHarnessDevicesConfig(channelsConfig.api?.testingHarness !== undefined, process.env)
+    ...(resolveTestingHarnessDevicesConfig(channelsConfig.api.testingHarness !== undefined, process.env)
       ? { testingHarnessDevices: { enabled: true as const } }
       : {}),
     companionId: resolveCoreCompanionIdFromConfig(config),

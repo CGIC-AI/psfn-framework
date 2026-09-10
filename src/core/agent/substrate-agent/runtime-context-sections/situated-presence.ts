@@ -28,6 +28,7 @@ import type { CompanionPresenceMetadata } from '../../presence-metadata.js';
 import { wrapPromptSectionXml } from '../../../identity/prompt-sections.js';
 import type { SituatedEmanationTracker } from './situated-emanation.js';
 import { classifyTurnPresenceMode, isPlacelessSatelliteTurn } from './turn-presence-mode.js';
+import type { WorldPlaneMapReader } from '../../../../shared/contracts/world-plane-map.js';
 
 /**
  * A co-present companion sharing this place. Multi-companion W5 will populate
@@ -66,6 +67,12 @@ export interface SituatedPresenceContextInput {
    * emanation. The turn's own bound place always outranks it.
    */
   situatedFallbackPlaceId?: string;
+  /**
+   * What the world itself published for its plane (psfn-framework-gs899,
+   * g8xyn): hub-mapped places beyond places.json, the room the body stands
+   * in, and the door's advertised tools. Read on world-plane turns only.
+   */
+  worldPlaneMap?: WorldPlaneMapReader;
   /**
    * Character-facing display label for the shared-mindspace layer (decision
    * 10) — operator-authored in companion-data (character card extension
@@ -233,15 +240,39 @@ export function buildSituatedPresenceContextBlock(input: SituatedPresenceContext
     const region = safeText(place.eidoverse.region);
     lines.push(`Here: ${placeName}${region ? ` (${region})` : ''} — a place in the world "${world}"`);
     lines.push(`World plane: ${world}, reached through the Satellite Hub; you have a body here.`);
+    const worldMap = input.worldPlaneMap?.get(place.eidoverse.world);
+    if (worldMap?.room) {
+      const room = worldMap.room;
+      const name = safeText(room.label) || 'an unnamed room';
+      const ways = room.waysOut.map((way) => safeText(way)).filter((way) => way.length > 0);
+      lines.push(`Room: ${room.labelled ? `the ${name}` : `an unnamed room (${name})`}${
+        room.sealed ? ', sealed' : ways.length > 0 ? `; ways out: ${ways.join('; ')}` : ''
+      }`);
+    }
+    const registryPlaneIds = new Set<string>();
     const planePlaces = (registry?.places ?? [])
       .filter((candidate) => isEidoversePlace(candidate) && candidate.eidoverse.world === place.eidoverse.world && candidate.placeId !== place.placeId)
       .map((candidate) => {
+        registryPlaneIds.add(candidate.placeId);
         const label = safeText(candidate.displayName) || safeText(candidate.placeId);
         return candidate.placeId === label ? label : `${label} (${candidate.placeId})`;
       })
       .filter((label) => label.length > 0);
+    // Places the world published that places.json does not know: reachable by
+    // move, named by their id (the world gave no label).
+    for (const hubPlace of worldMap?.places ?? []) {
+      if (hubPlace.placeId === place.placeId || registryPlaneIds.has(hubPlace.placeId)) continue;
+      const id = safeText(hubPlace.placeId);
+      if (!id) continue;
+      registryPlaneIds.add(hubPlace.placeId);
+      planePlaces.push(hubPlace.region ? `${safeText(hubPlace.region)} (${id})` : id);
+    }
     if (planePlaces.length > 0) {
       lines.push(`Other places on this plane: ${planePlaces.join(', ')}`);
+    }
+    if (worldMap && worldMap.tools.length > 0) {
+      const names = worldMap.tools.map((tool) => safeText(tool.name)).filter((name) => name.length > 0).slice(0, 24);
+      lines.push(`This world's own tools (advisory; reach them through the world tool's verbs): ${names.join(', ')}`);
     }
     lines.push('Use the world tool here: perceive to look, act for body verbs, move to a participant, a position, or a place on this plane. Room control and physical places do not apply on this plane.');
     return wrapPromptSectionXml({

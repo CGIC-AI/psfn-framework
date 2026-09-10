@@ -91,6 +91,7 @@ import { assertPolicyToolHydration } from '../../core/agent/tool-surface/hydrati
 import { GatewayBeadsOps } from '../../boundary/integrations/beads/gateway-ops.js';
 import { registerWorldTools } from '../../boundary/integrations/world/runtime-wiring.js';
 import { GatewayWorldOps } from '../../boundary/integrations/world/gateway-ops.js';
+import { WorldPlaneMapCache } from '../../shared/contracts/world-plane-map.js';
 import { createBehavioralPatternMemoryPromotionHook } from '../../core/intention/patterns.js';
 import {
   createLongHorizonFollowUpRouter,
@@ -1600,8 +1601,13 @@ async function main(): Promise<void> {
   satelliteDeviceHealth.subscribe(eventBus);
 
   const worldOps = new GatewayWorldOps(gatewayOps);
+  // What the world publishes for its plane (gs899, g8xyn): refreshed by the
+  // world tool, read by the world-plane situated block.
+  const worldPlaneMap = new WorldPlaneMapCache();
+  agentLoop.setWorldPlaneMap(worldPlaneMap);
   registerWorldTools(agentLoop, worldOps, {
     placesRegistry: placesRegistryConfig,
+    worldPlaneMap,
     resolvePlaceDeviceStatus: placeId => resolvePlaceDeviceStatus(
       satelliteRegistryConfig,
       satelliteDeviceHealth,

@@ -64,6 +64,8 @@ export interface EidoverseAddressedUtterance {
 
 export interface EidoverseLookSource {
   look(): Promise<string>;
+  /** Optional: the door's advertised tool list (`tools/list`). */
+  listTools?(): Promise<Array<{ name: string; description?: string }>>;
 }
 
 export interface EidoverseSayPublisher {
@@ -109,6 +111,25 @@ export interface EidoverseAvatarPerception extends EidoverseLookPerception {
   world: string;
   placeId?: string;
   region?: string;
+  capturedAt: string;
+}
+
+/**
+ * The world's map as the Hub can honestly publish it (psfn-framework-gs899):
+ * the places the Hub's place map binds to this world, the room the body
+ * stands in (the door's one named-place primitive), the terrain extent, and
+ * the door's advertised tools (psfn-framework-g8xyn). Nothing is invented:
+ * the door has no region model, so `places` is the operator's mapping and
+ * `room` only appears when the body is inside a structure.
+ */
+export interface EidoverseWorldMap {
+  world: string;
+  /** The world's default place in the Hub's place map, when mapped. */
+  placeId?: string;
+  places: Array<{ placeId: string; region?: string }>;
+  room?: EidoverseLookPerception["room"];
+  terrain?: { sizeM?: number; flatRadiusM?: number };
+  tools: Array<{ name: string; description?: string }>;
   capturedAt: string;
 }
 
@@ -355,6 +376,46 @@ export class EidoverseEmbodiedSessionAdapter {
       world: this.currentWorldName,
       ...(place.placeId ? { placeId: place.placeId } : {}),
       ...(this.currentRegion ? { region: this.currentRegion } : {}),
+      capturedAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * The world's map for the companion's world-plane turn: one look for the
+   * room and terrain, the Hub's place map for this world, and the door's tool
+   * list when the transport can ask for it. Bounded and best-effort: a door
+   * that cannot list tools yields an empty list, never a failure.
+   */
+  async map(): Promise<EidoverseWorldMap> {
+    this.requireConnection();
+    const parsed = parseEidoverseLook(await this.deps.look.look());
+    const world = this.currentWorldName;
+    const mapping = this.config.placeMap?.worlds[world];
+    const places: EidoverseWorldMap["places"] = [];
+    if (mapping) {
+      places.push({ placeId: mapping.placeId });
+      for (const [region, placeId] of Object.entries(mapping.regions)) {
+        if (placeId !== mapping.placeId || region) places.push({ placeId, region });
+      }
+    }
+    let tools: EidoverseWorldMap["tools"] = [];
+    if (this.deps.look.listTools) {
+      try {
+        tools = await this.deps.look.listTools();
+      } catch {
+        tools = [];
+      }
+    }
+    const terrain = parsed.worldInfo?.terrain;
+    return {
+      world,
+      ...(mapping ? { placeId: mapping.placeId } : {}),
+      places,
+      ...(parsed.room ? { room: parsed.room } : {}),
+      ...(terrain && (terrain.sizeM !== undefined || terrain.flatRadiusM !== undefined)
+        ? { terrain: { ...(terrain.sizeM !== undefined ? { sizeM: terrain.sizeM } : {}), ...(terrain.flatRadiusM !== undefined ? { flatRadiusM: terrain.flatRadiusM } : {}) } }
+        : {}),
+      tools,
       capturedAt: new Date().toISOString(),
     };
   }

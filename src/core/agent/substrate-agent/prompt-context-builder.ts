@@ -46,6 +46,7 @@ import type { ScratchpadProvider } from '../contracts.js';
 import type { ToolRuntimeFacade } from './tool-runtime-facade.js';
 import type { EmotionSelfModelRuntime } from './emotion-self-model-runtime.js';
 import type { SituatedEmanationTracker } from './runtime-context-sections/situated-emanation.js';
+import type { WorldPlaneMapReader } from '../../../shared/contracts/world-plane-map.js';
 import type { CompanionPresenceTurnPort } from '../companion-presence-runtime.js';
 import type { createComponentLogger } from '../../../shared/logger.js';
 
@@ -69,6 +70,8 @@ export interface PromptContextBuilderDeps {
   emotionSelfModelRuntime: EmotionSelfModelRuntime;
   getCompanionSubstrateHealthContext: () => CompanionSubstrateHealthContext | null;
   situatedEmanationTracker: SituatedEmanationTracker;
+  /** What the world published for its plane (gs899, g8xyn), when a Hub is wired. */
+  getWorldPlaneMap: () => WorldPlaneMapReader | null;
   resolveSituatedFallbackPlaceIdForTurn: (message: SubstrateMessage) => string | undefined;
   getActiveConcernProvider: () => ActiveConcernContextProvider | null;
   getBehavioralPatternProvider: () => BehavioralPatternContextProvider | null;
@@ -256,6 +259,7 @@ export class PromptContextBuilder {
     // here:" always agrees with "Here:" — including on mindspace (plain-chat)
     // turns that foreground the twin of the last-known physical room.
     const situatedFallbackPlaceId = this.deps.resolveSituatedFallbackPlaceIdForTurn(message);
+    const worldPlaneMap = this.deps.getWorldPlaneMap();
     // Co-presence (W5a): resolved against the SAME place resolution the
     // situated block performs — turn place first, then the dual-presence
     // fallback (deliberate virtual move, session/default twin, or a
@@ -309,6 +313,7 @@ export class PromptContextBuilder {
       ...(this.deps.placesRegistryConfig ? { placesRegistry: this.deps.placesRegistryConfig } : {}),
       ...(coPresent && coPresent.length > 0 ? { coPresent } : {}),
       emanationTracker: this.deps.situatedEmanationTracker,
+      ...(worldPlaneMap ? { worldPlaneMap } : {}),
       ...(situatedFallbackPlaceId ? { situatedFallbackPlaceId } : {}),
       ...(reactionSurface ? { reactionSurface } : {}),
     });

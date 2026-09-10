@@ -107,6 +107,15 @@ interface McplSession {
   degradedFeatureSets: Set<string>;
 }
 
+/** One door tool as advertised over `tools/list`, trimmed for the model. */
+export interface EidoverseDoorTool {
+  name: string;
+  description?: string;
+}
+const DOOR_TOOL_NAME_PATTERN = /^[a-z][a-z0-9_]{0,63}$/u;
+const DOOR_TOOL_DESCRIPTION_MAX = 160;
+const DOOR_TOOL_LIST_MAX = 64;
+
 export class EidoverseMcplClient {
   private session: McplSession | null = null;
   private startPromise: Promise<void> | null = null;
@@ -176,6 +185,36 @@ export class EidoverseMcplClient {
 
   async look(): Promise<string> {
     return this.callTool("look", {});
+  }
+
+  /**
+   * The door's own tool list (standard MCP `tools/list`), for the map the
+   * companion sees on a world-plane turn (psfn-framework-g8xyn). Advisory: the
+   * gateway's verb allowlist stays the authority on what the body may do.
+   */
+  async listTools(): Promise<EidoverseDoorTool[]> {
+    const session = this.session;
+    if (!session || session.closed) {
+      throw new EidoverseMcpUnavailableError("Eidoverse MCPL is not connected");
+    }
+    let result: unknown;
+    try {
+      result = await this.request(session, MCPL_METHOD.toolsList, {}, this.config.requestTimeoutMs);
+    } catch {
+      throw new EidoverseMcpRequestError("Eidoverse MCPL tools/list request failed");
+    }
+    if (!isRecord(result) || !Array.isArray(result.tools)) return [];
+    const tools: EidoverseDoorTool[] = [];
+    for (const entry of result.tools) {
+      if (!isRecord(entry) || typeof entry.name !== "string" || !DOOR_TOOL_NAME_PATTERN.test(entry.name)) continue;
+      const description = typeof entry.description === "string"
+        ? entry.description.replace(/\s+/gu, " ").trim().slice(0, DOOR_TOOL_DESCRIPTION_MAX)
+        : "";
+      if (this.containsSensitiveValue(description)) continue;
+      tools.push({ name: entry.name, ...(description ? { description } : {}) });
+      if (tools.length >= DOOR_TOOL_LIST_MAX) break;
+    }
+    return tools;
   }
 
   async say(text: string): Promise<void> {

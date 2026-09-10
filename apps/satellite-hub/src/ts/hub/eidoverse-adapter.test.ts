@@ -525,3 +525,47 @@ function withoutAffordanceNote(channel: PsfnChannelContext | undefined): PsfnCha
 function affordanceNoteOf(channel: PsfnChannelContext | undefined): string | undefined {
   return channel?.contextNotes?.find((note) => note.key === "eidoverse.affordances")?.text;
 }
+
+test("map publishes the Hub's mapped places, the room the body stands in, terrain, and the door's tools (gs899, g8xyn)", async () => {
+  const agent = new FakeAgent();
+  const look = new FakeLook([
+    'You are "nova" in world "demo-world" at (1.0, 2.0), ground height 0.00m, facing N.',
+    "You are in the study — 3×3m, 9m². Ways out: a door on its west to the hall. (inside [house-1]; sides are the building's own compass.)",
+    'World: {"terrain":{"size":200,"flatRadius":20}}',
+    "Nobody else is here right now.",
+  ].join("\n")) as FakeLook & { listTools?: () => Promise<Array<{ name: string; description?: string }>> };
+  look.listTools = async () => [{ name: "look", description: "Look around." }, { name: "walk_to" }];
+  const adapter = new EidoverseEmbodiedSessionAdapter(adapterConfig(), {
+    embodiedSessions: new EmbodiedSessionRegistry("satellite.endpoint"),
+    sessions: new SessionStore(60),
+    agent,
+    look,
+    say: { say: async () => undefined },
+  });
+  adapter.connect();
+
+  const map = await adapter.map();
+  assert.equal(map.world, "demo-world");
+  assert.equal(map.placeId, "eidoverse:demo-world");
+  assert.ok(map.places.some((place) => place.placeId === "eidoverse:demo-world"));
+  assert.equal(map.room?.label, "study");
+  assert.deepEqual(map.terrain, { sizeM: 200, flatRadiusM: 20 });
+  assert.deepEqual(map.tools, [{ name: "look", description: "Look around." }, { name: "walk_to" }]);
+  assert.equal(typeof map.capturedAt, "string");
+  adapter.disconnect();
+});
+
+test("map without a tool-listing transport still answers, with an empty tool list", async () => {
+  const adapter = new EidoverseEmbodiedSessionAdapter(adapterConfig(), {
+    embodiedSessions: new EmbodiedSessionRegistry("satellite.endpoint"),
+    sessions: new SessionStore(60),
+    agent: new FakeAgent(),
+    look: new FakeLook("Nobody else is here right now."),
+    say: { say: async () => undefined },
+  });
+  adapter.connect();
+  const map = await adapter.map();
+  assert.deepEqual(map.tools, []);
+  assert.equal(map.room, undefined);
+  adapter.disconnect();
+});

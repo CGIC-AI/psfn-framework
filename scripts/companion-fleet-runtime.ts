@@ -64,11 +64,9 @@ export function resolveConfiguredLocalCompanionFleetRuntime(
       `Invalid PSFN_FLEET_AUTH=${JSON.stringify(fleetAuthFlag.raw)}. Expected a boolean flag.`,
     );
   }
-  if (fleetAuthFlag.kind !== 'set' || !fleetAuthFlag.value) {
-    throw new Error(
-      'Local startup requires PSFN_FLEET_AUTH=1 for the one fleet Garden',
-    );
-  }
+  // Fleet auth adds SSO to the one fleet Garden; it is never a precondition
+  // for local startup (operator rule, S13). A malformed flag is still rejected
+  // above so a typo cannot silently disable SSO on a fleet that expects it.
   if (resolveAdminTransportMode(env) !== 'socket') {
     throw new Error(
       'Local startup requires ADMIN_TRANSPORT_MODE=socket: the fleet Garden '

@@ -81,10 +81,13 @@ describe('local companion fleet runtime', () => {
     }))).toThrow(/Local startup requires ADMIN_TRANSPORT_MODE=socket/u);
   });
 
-  it('rejects a fleet Garden without Fleet Auth before any launch plan is emitted', () => {
-    expect(() => resolveConfiguredLocalCompanionFleetRuntime(fleetEnv({
-      PSFN_FLEET_AUTH: '0',
-    }))).toThrow(/requires PSFN_FLEET_AUTH=1/u);
+  it('builds the fleet Garden registry without Fleet Auth (SSO is optional)', () => {
+    for (const flag of ['0', undefined]) {
+      const runtime = resolveConfiguredLocalCompanionFleetRuntime(fleetEnv({
+        PSFN_FLEET_AUTH: flag,
+      }));
+      expect(runtime.targetRegistry.companionIds()).toEqual([COMPANION_A, COMPANION_B]);
+    }
   });
 
   it('reports an invalid Fleet Auth flag distinctly from a disabled flag', () => {

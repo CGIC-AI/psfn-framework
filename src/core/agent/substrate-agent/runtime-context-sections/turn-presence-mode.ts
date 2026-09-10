@@ -47,6 +47,22 @@ export function isWorldPlaneTurn(message: Pick<SubstrateMessage, 'routing'>): bo
 }
 
 /**
+ * A satellite-origin turn whose authenticated claim carries no place: a
+ * registered endpoint that is not bound to a room (a mobile device, a
+ * placeless test endpoint). Such a turn is a physical-origin turn whose
+ * location is UNKNOWN (psfn-framework-1n6s9): it never inherits the last
+ * physical emanation, a mindspace twin, or a deliberate virtual move, so the
+ * situated block renders nothing unless the turn carries its own presence.
+ * The durable self-model location still carries forward unchanged (B3).
+ */
+export function isPlacelessSatelliteTurn(message: Pick<SubstrateMessage, 'routing'>): boolean {
+  const satellite = message.routing?.satellite;
+  if (!satellite || isWorldPlaneTurn(message)) return false;
+  const placeId = satellite.placeId;
+  return typeof placeId !== 'string' || placeId.trim().length === 0;
+}
+
+/**
  * Classify a turn's presence mode from its routing/channel origin.
  *
  * Physical-emanation origin = structured device routing: satellite metadata
@@ -112,6 +128,9 @@ export function resolveTurnSituatedFallbackPlaceId(
   // honours is a deliberate walk on that plane. It never inherits the
   // physical emanation or a mindspace twin.
   if (mode === 'world') return input.virtualMovePlaceId;
+  // A placeless satellite endpoint is location-unknown for this turn
+  // (psfn-framework-1n6s9): no emanation inheritance.
+  if (isPlacelessSatelliteTurn(input.message)) return undefined;
   if (mode === 'mindspace') {
     if (input.virtualMovePlaceId) return input.virtualMovePlaceId;
     const sessionOverridePlaceId = resolveMindspaceTwinPlaceId(

@@ -343,7 +343,7 @@ test('CogSec proof requires quarantine plus session envelope and rejects memory/
   );
 });
 
-test('hub proof binds the enrolled contact to accepted face telemetry and a moved place', () => {
+test('hub proof binds the enrolled contact to accepted face telemetry and the hub turn place', () => {
   const sideChecks = {
     hubIdentity: {
       expected: {
@@ -363,7 +363,7 @@ test('hub proof binds the enrolled contact to accepted face telemetry and a move
       telemetry: { status: 202, eventId: 'event-1', gardenAuditFound: true },
       internalState: { placeId: 'kitchen' },
       presence: { placeId: 'kitchen' },
-      cleanup: { revoked: true, restoredPlaceId: 'living_room' },
+      cleanup: { revoked: true, restoreAccepted: true },
     },
   };
   assert.deepEqual(validateHubIdentityProof({
@@ -375,6 +375,43 @@ test('hub proof binds the enrolled contact to accepted face telemetry and a move
   assert.match(
     validateHubIdentityProof({ turnRecord: turnRecord(), sideChecks }).join('\n'),
     /companion_presence/u,
+  );
+
+  // Presence telemetry never moves a companion: the restore signal only has
+  // to be accepted, and a missing acceptance is the failure.
+  sideChecks.hubIdentity.presence.placeId = 'kitchen';
+  sideChecks.hubIdentity.cleanup = { revoked: true, restoreAccepted: false };
+  assert.match(
+    validateHubIdentityProof({ turnRecord: turnRecord(), sideChecks }).join('\n'),
+    /presence signal was not accepted/u,
+  );
+});
+
+test('hub proof accepts the fleet-path trusted-subject refusal in place of enrollment rows', () => {
+  const sideChecks = {
+    hubIdentity: {
+      expected: {
+        hubIdentityId: 'opaque-hub-1',
+        contactId: 'contact-primary',
+        placeId: 'kitchen',
+        restorePlaceId: 'living_room',
+        priorPlaceId: 'living_room',
+        requireSharedPresence: false,
+      },
+      enrollment: { fleetPathRefused: true, refusal: 'trusted_subject', status: 403 },
+      enrollmentAudit: null,
+      telemetry: { status: 202, eventId: 'event-1', gardenAuditFound: true },
+      internalState: { placeId: 'kitchen' },
+      presence: { placeId: null },
+      cleanup: { revoked: false, restoreAccepted: true },
+    },
+  };
+  assert.deepEqual(validateHubIdentityProof({ turnRecord: turnRecord(), sideChecks }), []);
+
+  sideChecks.hubIdentity.enrollment = { fleetPathRefused: true, refusal: 'other', status: 403 };
+  assert.match(
+    validateHubIdentityProof({ turnRecord: turnRecord(), sideChecks }).join('\n'),
+    /unexpected reason/u,
   );
 });
 

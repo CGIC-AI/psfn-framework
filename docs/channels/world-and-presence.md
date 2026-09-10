@@ -438,9 +438,16 @@ borrowing the active physical emanation's room. The **`SituatedEmanationTracker`
 ([`situated-emanation.ts`](/src/core/agent/substrate-agent/runtime-context-sections/situated-emanation.ts))
 is the per-process, in-memory handoff-aware memory of the current emanation:
 a placed (satellite) turn establishes the situated place; a later placeless
-turn consumes it; a virtual move overlay is superseded by a later
+*channel* turn (Discord, Telegram, plain API) consumes it through its
+mindspace twin; a virtual move overlay is superseded by a later
 place-bearing turn (latest event wins), and physically moving into a virtual
-room never moves the satellite emanation.
+room never moves the satellite emanation. Two satellite shapes never touch
+it: a world-plane turn (its place is on the world's own map, u2dx3) and a
+**placeless satellite endpoint** — a registered device whose claim carries no
+place, such as a mobile device (psfn-framework-1n6s9). The latter is
+location-unknown for that turn: it inherits neither the last emanation nor a
+twin nor a virtual move, so the block renders only the turn's own presence, or
+nothing. The durable self-model location still carries forward unchanged.
 
 The **situated-presence section producer**
 ([`situated-presence.ts`](/src/core/agent/substrate-agent/runtime-context-sections/situated-presence.ts))

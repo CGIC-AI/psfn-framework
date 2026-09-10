@@ -71,11 +71,13 @@ export function validateSituatedPresenceProof({ turnRecord, expected = {} }) {
   const content = sectionText(section);
 
   if (expected.mode === 'placeless') {
+    // A registered endpoint with no bound place is location-unknown for the
+    // turn (psfn-framework-1n6s9): no inherited emanation, no block. The
+    // durable self-model location deliberately carries forward UNCHANGED on a
+    // turn with no signal (B3 carry-forward), so `location.placeId` on the
+    // record is not evidence either way and is not asserted here.
     if (section || content.includes('<runtime_situated_presence')) {
       failures.push('placeless turn must not persist runtime_situated_presence');
-    }
-    if (turnRecord?.location?.placeId) {
-      failures.push('placeless turn must not persist a location.placeId');
     }
     return failures;
   }
@@ -202,20 +204,40 @@ export function validateWorldReadProof({ turnRecord, sideChecks, archiveToolMess
   return failures;
 }
 
+// Contract (S10 vinz.14 as it stands after psfn-framework-u4v0 and 71b0b):
+//  * an opaque hub identity is enrolled to the canonical contact through the
+//    Garden admin surface, audited, and revoked in cleanup — OR, on a
+//    fleet-admitted Garden, the enrollment is REFUSED because the fleet path
+//    binds an enrollment to the acting subject's own contact (the trust
+//    invariant), which the proof records instead of the rows;
+//  * a face-scope identity claim is accepted at the telemetry door and shows
+//    up in the Garden audit history;
+//  * the hub turn itself (a satellite turn bound to the hub place) situates
+//    the companion at that place; presence telemetry never moves or restores
+//    a companion, so cleanup only proves the restore signal was accepted.
 export function validateHubIdentityProof({ turnRecord, sideChecks }) {
   const failures = completedTurnFailures(turnRecord);
   const hub = sideChecks?.hubIdentity;
-  if (hub?.enrollment?.status !== 'enrolled') {
-    failures.push('hub identity enrollment row was not persisted as enrolled');
-  }
-  if (hub?.enrollment?.hubIdentityId !== hub?.expected?.hubIdentityId) {
-    failures.push('hub identity enrollment row does not match the opaque identity claim');
-  }
-  if (hub?.enrollment?.contactId !== hub?.expected?.contactId) {
-    failures.push('hub identity enrollment row does not bind the canonical contact');
-  }
-  if (hub?.enrollmentAudit?.action !== 'enroll') {
-    failures.push('hub identity enrollment audit row is missing');
+  if (hub?.enrollment?.fleetPathRefused === true) {
+    if (hub?.enrollment?.refusal !== 'trusted_subject') {
+      failures.push('fleet-path hub identity enrollment was refused for an unexpected reason');
+    }
+  } else {
+    if (hub?.enrollment?.status !== 'enrolled') {
+      failures.push('hub identity enrollment row was not persisted as enrolled');
+    }
+    if (hub?.enrollment?.hubIdentityId !== hub?.expected?.hubIdentityId) {
+      failures.push('hub identity enrollment row does not match the opaque identity claim');
+    }
+    if (hub?.enrollment?.contactId !== hub?.expected?.contactId) {
+      failures.push('hub identity enrollment row does not bind the canonical contact');
+    }
+    if (hub?.enrollmentAudit?.action !== 'enroll') {
+      failures.push('hub identity enrollment audit row is missing');
+    }
+    if (hub?.cleanup?.revoked !== true) {
+      failures.push('temporary hub identity enrollment was not revoked during cleanup');
+    }
   }
   if (
     hub?.telemetry?.status !== 202
@@ -224,11 +246,11 @@ export function validateHubIdentityProof({ turnRecord, sideChecks }) {
   ) {
     failures.push('hub identity face telemetry is missing its accepted Garden-audit proof');
   }
-  if (hub?.expected?.priorPlaceId === hub?.expected?.placeId) {
-    failures.push('hub presence-follow precondition did not distinguish the destination place');
+  if (hub?.expected?.restorePlaceId === hub?.expected?.placeId) {
+    failures.push('hub identity precondition did not distinguish the hub place from the physical place');
   }
   if (hub?.internalState?.placeId !== hub?.expected?.placeId) {
-    failures.push('internal_state_snapshots did not follow the enrolled face claim place');
+    failures.push('internal_state_snapshots was not situated at the hub place by the hub turn');
   }
   if (
     hub?.expected?.requireSharedPresence === true
@@ -239,11 +261,8 @@ export function validateHubIdentityProof({ turnRecord, sideChecks }) {
   ) {
     failures.push('shared companion_presence does not follow the persisted internal-state place');
   }
-  if (hub?.cleanup?.revoked !== true) {
-    failures.push('temporary hub identity enrollment was not revoked during cleanup');
-  }
-  if (hub?.cleanup?.restoredPlaceId !== hub?.expected?.restorePlaceId) {
-    failures.push('hub identity cleanup did not restore the physical presence precondition');
+  if (hub?.cleanup?.restoreAccepted !== true) {
+    failures.push('hub identity cleanup presence signal was not accepted');
   }
   return failures;
 }

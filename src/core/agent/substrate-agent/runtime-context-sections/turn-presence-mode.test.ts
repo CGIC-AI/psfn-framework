@@ -134,6 +134,18 @@ describe('classifyTurnPresenceMode', () => {
 });
 
 describe('resolveTurnSituatedFallbackPlaceId', () => {
+  it('gives a placeless satellite endpoint no fallback at all (1n6s9)', () => {
+    // A registered endpoint with no bound place (a mobile device) is
+    // location-unknown: no emanation, no twin, no virtual move.
+    expect(resolveTurnSituatedFallbackPlaceId({
+      message: makeMessage({ satellite: {} } as unknown as SubstrateMessage['routing']),
+      placesRegistry: REGISTRY,
+      virtualMovePlaceId: 'place.office-twin-elsewhere',
+      emanationPlaceId: 'place.bedroom',
+      durableLocation: physicalDurableLocation(),
+    })).toBeUndefined();
+  });
+
   it('defaults a plain-chat turn to the twin of the durable last-known physical room', () => {
     expect(resolveTurnSituatedFallbackPlaceId({
       message: makeMessage({ source: 'discord' }),

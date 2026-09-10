@@ -27,7 +27,7 @@ import { isEidoversePlace } from '../../../../shared/contracts/places-registry.j
 import type { CompanionPresenceMetadata } from '../../presence-metadata.js';
 import { wrapPromptSectionXml } from '../../../identity/prompt-sections.js';
 import type { SituatedEmanationTracker } from './situated-emanation.js';
-import { classifyTurnPresenceMode } from './turn-presence-mode.js';
+import { classifyTurnPresenceMode, isPlacelessSatelliteTurn } from './turn-presence-mode.js';
 
 /**
  * A co-present companion sharing this place. Multi-companion W5 will populate
@@ -174,7 +174,9 @@ export function resolveSituatedPlaceRef(
   registry: PlacesRegistryConfig | undefined,
   fallbackPlaceId?: string,
 ): SituatedPlaceRef | undefined {
-  const placeId = readSatellitePlaceId(message.routing?.satellite) ?? fallbackPlaceId;
+  const placeId = readSatellitePlaceId(message.routing?.satellite)
+    // A placeless satellite endpoint never borrows a fallback place (1n6s9).
+    ?? (isPlacelessSatelliteTurn(message) ? undefined : fallbackPlaceId);
   const place = resolvePlace(registry, placeId);
   if (!place) return undefined;
   return { siteId: place.siteId, placeId: place.placeId, kind: place.kind };
@@ -199,12 +201,20 @@ export function buildSituatedPresenceContextBlock(input: SituatedPresenceContext
   const turnPresence: CompanionPresenceMetadata | undefined = presenceMode === 'physical'
     ? input.message.routing?.presence
     : undefined;
-  const trackerFallbackPlaceId = presenceMode === 'physical'
-    ? tracker?.resolvePlaceId()
-    : tracker?.resolveVirtualMovePlaceId();
-  const placeId = turnPlaceId ?? input.situatedFallbackPlaceId ?? trackerFallbackPlaceId;
+  // A registered endpoint with no bound place (psfn-framework-1n6s9) is
+  // location-unknown for this turn: only its own presence may render, never
+  // the last emanation remembered by the tracker or the agent's fallback.
+  const placelessEndpoint = isPlacelessSatelliteTurn(input.message);
+  const trackerFallbackPlaceId = placelessEndpoint
+    ? undefined
+    : presenceMode === 'physical'
+      ? tracker?.resolvePlaceId()
+      : tracker?.resolveVirtualMovePlaceId();
+  const placeId = turnPlaceId
+    ?? (placelessEndpoint ? undefined : input.situatedFallbackPlaceId)
+    ?? trackerFallbackPlaceId;
   const presence: CompanionPresenceMetadata | undefined = turnPresence
-    ?? (presenceMode === 'physical' ? tracker?.resolvePresence() : undefined);
+    ?? (presenceMode === 'physical' && !placelessEndpoint ? tracker?.resolvePresence() : undefined);
   const place = resolvePlace(registry, placeId);
   const coPresent = input.coPresent ?? [];
 

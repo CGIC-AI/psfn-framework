@@ -85,7 +85,7 @@ export interface WorldAvatarMap {
   capturedAt: string;
 }
 
-export const WORLD_AVATAR_SNAPSHOT_VIEWS = ['first', 'third', 'selfie'] as const;
+const WORLD_AVATAR_SNAPSHOT_VIEWS = ['first', 'third', 'selfie'] as const;
 export type WorldAvatarSnapshotView = (typeof WORLD_AVATAR_SNAPSHOT_VIEWS)[number];
 
 export function isWorldAvatarSnapshotView(value: unknown): value is WorldAvatarSnapshotView {

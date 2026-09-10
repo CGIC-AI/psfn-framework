@@ -57,6 +57,8 @@ export const OPERATIONS_TOOL_CONTRACTS = {
       action('wardrobe_read', ['look_ref']),
       action('wardrobe_save', ['look_name', 'look_prompt'], ['look_id', 'visibility', 'supersedes_ref']),
       action('wardrobe_revise', ['look_ref', 'look_prompt'], ['visibility']),
+      action('world_notes_read', [], ['world']),
+      action('world_note', ['world', 'note_text'], ['note_about']),
     ],
     output: 'It returns documents, matches, wish/project/wardrobe manifests, or queues a public shared-world proposal for operator review; semantic search fails closed when unwired.',
     guidance: 'Do not use wiki for lived memory or journal reflection; use memory or journal. When you notice something you genuinely want, wish_create is a zero-social-cost way to save it for asynchronous review: it never pushes or interrupts the operator. Use wish_list to see acknowledgement, response, planning, and completion state. Wishes, projects, and named looks remain in the personal wiki tier. Shared-world proposals and project share intent never publish directly.',

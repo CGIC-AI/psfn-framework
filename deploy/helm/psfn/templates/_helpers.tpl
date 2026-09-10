@@ -1288,6 +1288,18 @@ Sprig merge mutation.
 {{- /* Whether the Satellite Hub mounts a device registry: the dedicated
      satelliteHub.deviceRegistry seam, or (compatibility) Home Assistant.
      Renders a non-empty string when enabled so it works under `if`. */}}
+{{/*
+     Hub control channel: the hub's private control listener and the gateway's
+     Satellite Hub transport. Explicit via satelliteHub.control.enabled, and
+     implied by Home Assistant control or the Eidoverse world path, both of
+     which are driven over it (psfn-framework-r70pb).
+*/}}
+{{- define "psfn.satelliteHubControlEnabled" -}}
+{{- if and .Values.satelliteHub.enabled (or .Values.satelliteHub.control.enabled .Values.satelliteHub.homeAssistant.enabled .Values.satelliteHub.eidoverse.enabled) -}}
+true
+{{- end -}}
+{{- end -}}
+
 {{- define "psfn.satelliteHubDeviceRegistryEnabled" -}}
 {{- if or .Values.satelliteHub.deviceRegistry.enabled .Values.satelliteHub.homeAssistant.enabled -}}
 true

@@ -182,6 +182,9 @@ function enabledValues(overrides: Record<string, unknown> = {}): Record<string, 
       values: {
         satelliteHubApiKey: '0123456789abcdef0123',
         eidoverseJoinToken: 'example-join-token',
+        // The world path drives the hub over its control channel, which the
+        // chart now renders whenever eidoverse is enabled (psfn-framework-r70pb).
+        satelliteHubControlToken: 'hub-control-token-01234',
       },
     },
   };
@@ -291,6 +294,46 @@ function main(): number {
       !disabled.stdout.includes('EIDOVERSE') && !disabled.stdout.includes('eidoverse'),
       'disabled render contains no eidoverse key in any object',
     );
+    check(
+      !disabled.stdout.includes('HUB_CONTROL') && !disabled.stdout.includes('hub-control'),
+      'disabled render carries no hub control channel',
+    );
+
+    // ── Hub control channel (psfn-framework-r70pb) ──
+    // Explicit satelliteHub.control.enabled renders the hub listener, the
+    // gateway transport, the Service port and the NetworkPolicy pair without
+    // Home Assistant; a missing bearer fails closed.
+    const controlOnly = helmTemplate([write('control-only', {
+      satelliteHub: { ...(baseValues().satelliteHub as Record<string, unknown>), control: { enabled: true } },
+      secrets: { values: { satelliteHubApiKey: '0123456789abcdef0123', satelliteHubControlToken: 'hub-control-token-01234' } },
+    })]);
+    check(controlOnly.status === 0, 'render succeeds with the hub control channel enabled on its own', controlOnly.stderr.trim());
+    if (controlOnly.status === 0) {
+      const hubEnv = extractContainerEnv(controlOnly.stdout, `${RELEASE_NAME}-satellite-hub`, 'satellite-hub');
+      const gatewayEnv = extractContainerEnv(controlOnly.stdout, `${RELEASE_NAME}-gateway`, 'gateway');
+      checkEnv(hubEnv, 'HUB_CONTROL_BIND_HOST', '0.0.0.0');
+      checkEnv(hubEnv, 'HUB_CONTROL_PORT', '8788');
+      check(hubEnv.has('HUB_CONTROL_TOKEN') && !hubEnv.has('HOME_ASSISTANT_ENABLED'), 'control-only render carries the hub bearer and no Home Assistant wiring');
+      check(
+        gatewayEnv.get('SATELLITE_HUB_CONTROL_BASE_URL')?.value === `http://${RELEASE_NAME}-satellite-hub:8788`
+          && gatewayEnv.has('SATELLITE_HUB_CONTROL_TOKEN'),
+        'control-only render points the gateway at the hub control Service',
+        `rendered: ${String(gatewayEnv.get('SATELLITE_HUB_CONTROL_BASE_URL')?.value)}`,
+      );
+      check(
+        controlOnly.stdout.includes('name: hub-control') && (controlOnly.stdout.match(/port: 8788/gu) ?? []).length >= 3,
+        'control-only render exposes the hub-control Service port and both NetworkPolicy rules',
+      );
+    }
+    const controlWithoutToken = helmTemplate([write('control-without-token', {
+      satelliteHub: { ...(baseValues().satelliteHub as Record<string, unknown>), control: { enabled: true } },
+      secrets: { values: { satelliteHubApiKey: '0123456789abcdef0123' } },
+    })]);
+    check(
+      controlWithoutToken.status !== 0 && controlWithoutToken.stderr.includes('requires secrets.values.satelliteHubControlToken'),
+      'render fails closed: hub control channel without a bearer',
+      controlWithoutToken.stderr.trim().split('\n').slice(0, 2).join(' '),
+    );
 
     // ── Enabled with the place map ──
     const enabled = helmTemplate([write('enabled', enabledValues())]);
@@ -342,6 +385,15 @@ function main(): number {
       checkEnv(env, 'EIDOVERSE_BODY_WALK_TIMEOUT_MS', '95000');
       checkEnv(env, 'EIDOVERSE_BODY_MAX_PENDING_NOTES', '4');
       checkEnv(env, 'EIDOVERSE_PLACE_MAP_PATH', '/app/config/eidoverse-place-map.json');
+      // The world tool reaches the hub over the control channel, so the world
+      // path implies it on both sides (psfn-framework-r70pb).
+      checkEnv(env, 'HUB_CONTROL_PORT', '8788');
+      const gatewayEnv = extractContainerEnv(enabled.stdout, `${RELEASE_NAME}-gateway`, 'gateway');
+      check(
+        gatewayEnv.get('SATELLITE_HUB_CONTROL_BASE_URL')?.value === `http://${RELEASE_NAME}-satellite-hub:8788`,
+        'eidoverse render gives the gateway the Satellite Hub control transport',
+        `rendered: ${String(gatewayEnv.get('SATELLITE_HUB_CONTROL_BASE_URL')?.value)}`,
+      );
       check(
         !enabled.stdout.includes('EIDOVERSE_SNAPSHOT'),
         'first-person vision renders nothing until it is explicitly enabled',

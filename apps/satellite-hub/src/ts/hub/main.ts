@@ -128,7 +128,7 @@ async function main(): Promise<void> {
   const eidoverseProduction = eidoverseMcplConfig && eidoverseMcpl
     ? createEidoverseMcplProductionLifecycle(eidoverseMcpl, server, {
         ...eidoverseMcplConfig,
-        agentNames: [eidoverseMcplConfig.agentName],
+        agentNames: [eidoverseMcplConfig.agentName, ...(eidoverseMcplConfig.agentAliases ?? [])],
       }, { logger: hubLogger })
     : eidoverseConfig && eidoverse
       ? createEidoverseProductionWakeLifecycle(eidoverse, server, eidoverseConfig, {

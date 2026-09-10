@@ -57,6 +57,14 @@ export interface EidoverseMcplConfig {
   tokenRef: string;
   worldName: string;
   agentName: string;
+  /**
+   * Extra names the body answers to in the world, beyond the display name:
+   * at least its door participant id (the tokens.json `id`, the mention
+   * handle other bodies use, e.g. `artie-kube` for "Artie (kube)"). Without it
+   * an explicit `@artie-kube` looks like somebody else's mention and is
+   * skipped (psfn-framework-q1kit, mech8 proof 2026-09-10).
+   */
+  agentAliases?: readonly string[];
   /** Feature sets this host grants; the capability allowlist is derived. */
   featureSets: readonly string[];
   effectiveCapabilities: readonly McplCapabilityPath[];
@@ -116,6 +124,7 @@ export function loadEidoverseMcplConfig(
   }
   const worldName = requiredEnv(env, "EIDOVERSE_MCP_WORLD_NAME");
   const agentName = requiredEnv(env, "EIDOVERSE_MCP_AGENT_NAME");
+  const agentAliases = parseAliases(optionalEnv(env, "EIDOVERSE_MCP_AGENT_ALIASES"));
   const featureSets = parseFeatureSets(optionalEnv(env, "EIDOVERSE_MCPL_FEATURE_SETS_JSON"));
   const catchupWake = parseBoolean(env, "EIDOVERSE_MCPL_CATCHUP_WAKE", false);
   const wakeQueueLimit = positiveIntegerEnv(
@@ -142,6 +151,7 @@ export function loadEidoverseMcplConfig(
     tokenRef,
     worldName,
     agentName,
+    agentAliases,
     featureSets,
     effectiveCapabilities: effectiveCapabilitiesForFeatureSets(featureSets),
     catchupWake,
@@ -189,6 +199,22 @@ function parseDoorUrl(raw: string): string {
     throw new Error("EIDOVERSE_MCPL_DOOR_URL must not carry a query string or fragment");
   }
   return url.toString();
+}
+
+/** Comma-separated extra names/handles; empty entries dropped, duplicates collapsed. */
+function parseAliases(raw: string | undefined): readonly string[] {
+  if (!raw) return [];
+  const seen = new Set<string>();
+  const aliases: string[] = [];
+  for (const entry of raw.split(",")) {
+    const trimmed = entry.trim();
+    if (!trimmed || trimmed.length > 128) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    aliases.push(trimmed);
+  }
+  return aliases;
 }
 
 function parseFeatureSets(raw: string | undefined): readonly string[] {

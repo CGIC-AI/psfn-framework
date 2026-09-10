@@ -129,6 +129,26 @@ test("a door-tagged mention that explicitly @-addresses another participant is s
   );
 });
 
+test("an explicit @-address of this body's door handle (an alias) is its own mention, markdown or not (q1kit, mech8)", async () => {
+  const target = new RecordingTarget();
+  const info: string[] = [];
+  const wake = createEidoverseMcplWakeRuntime(target, {
+    ambientSayDebounceMs: 10,
+    catchupWake: false,
+    wakeQueueLimit: 8,
+    agentNames: ["Nova (kube)", "nova-kube"],
+  }, { logger: { warn: () => undefined, info: (line) => info.push(line) } });
+
+  wake.deliver([
+    message({ id: "m1", author: "nova", text: "*@nova-kube* — what can you see from where you stand?", tags: ["chat:mention", "chat:from-agent"] }),
+  ]);
+  await settle();
+  await wake.close();
+
+  assert.equal(target.turns.length, 1, info.join("\n"));
+  assert.ok(!info.some((line) => /wake skipped/u.test(line)), info.join("\n"));
+});
+
 test("a door-tagged mention explicitly addressing this companion's own name wakes it", async () => {
   const target = new RecordingTarget();
   const wake = createEidoverseMcplWakeRuntime(target, {

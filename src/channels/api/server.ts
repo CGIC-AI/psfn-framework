@@ -129,6 +129,7 @@ import type {
 import type { FleetAuthHttpRoutes } from './server/fleet-auth-routes.js';
 import type { GatewayHubDeviceIngressService } from '../../boundary/fleet-auth/hub-device-ingress.js';
 import { HubDeviceAssertionRejectedError } from '../../boundary/fleet-auth/hub-device-assertion.js';
+import type { TestingHarnessDevicesConfig } from '../backplane/testing-harness-devices.js';
 import {
   extractCanonicalHubDeviceAssertion,
   hasHubDeviceAssertion,
@@ -445,6 +446,8 @@ export interface ApiServerConfig {
   contactStore?: ContactStorePort;
   apiKey?: string;
   testingHarnessPrincipal?: TestingHarnessApiPrincipalCredential;
+  /** See `ApiChatCompletionsHandlerConfig.testingHarnessDevices` (psfn-framework-ajgo2). */
+  testingHarnessDevices?: TestingHarnessDevicesConfig;
   externalMemoryMcp?: ExternalMemoryMcpRoute;
   adminToken?: string;
   modelName?: string;
@@ -653,6 +656,7 @@ export class ApiServer implements ChannelAdapterPort {
       logger: log,
       documentIngest: config.documentIngest ?? null,
       bearerCompanionRouting: config.bearerCompanionRouting,
+      ...(config.testingHarnessDevices ? { testingHarnessDevices: config.testingHarnessDevices } : {}),
     });
     this.fleetSsoRouter?.registerGardenChatHandler(
       admission => this.handleFleetGardenChat(admission),
@@ -1007,6 +1011,12 @@ export class ApiServer implements ChannelAdapterPort {
         expected: binding.expected,
         satelliteId: binding.satelliteId,
         endpointId: binding.endpointId,
+      });
+      log.info('Virtual-space emanation admitted', {
+        satelliteId: admission.satelliteId,
+        endpointId: admission.endpointId,
+        deviceId: admission.deviceId,
+        enrollmentVersion: admission.enrollmentVersion,
       });
       await this.chatCompletions.handle(
         req,

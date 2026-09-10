@@ -359,11 +359,10 @@ function loadConfigForMode(
     loadTestingHarnessGardenAdminConfig(dataDir),
     env,
   );
-  if (testingHarnessGardenVerifier && !resolvedFleetAuthProjection) {
-    throw new Error(
-      'PSFN_TESTING_HARNESS_GARDEN_VERIFIER requires Fleet authentication',
-    );
-  }
+  // The testing-harness Garden verifier only has a consumer inside the fleet
+  // SSO Garden router; without fleet auth the harness reaches Garden with its
+  // key directly, so the verifier is inert rather than a boot failure. Fleet
+  // auth is never a precondition (operator rule, S13; psfn-framework-rxp2h).
   const fleetAuthProjection = resolvedFleetAuthProjection?.kind === 'verifier'
     && testingHarnessGardenVerifier
     ? Object.freeze({

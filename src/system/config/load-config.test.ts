@@ -303,6 +303,33 @@ describe('loadConfig path defaults', () => {
     expect(config.postgresDatabaseUrl).toBe('postgres://postgres:secret@localhost:5432/psfn_test');
   });
 
+  it('accepts the testing-harness Garden verifier without fleet auth (SSO is optional)', () => {
+    // psfn-framework-rxp2h: the verifier only guards the fleet SSO Garden
+    // router, so on a key-only deployment it is inert rather than a boot error.
+    const { root } = configureMultiCompanionEnv();
+    writeFileSync(join(root, 'system-data', 'channels.json'), `${JSON.stringify({
+      api: {
+        testingHarness: {
+          principalId: 'testing-harness',
+          tokenRef: { kind: 'env', envName: 'TESTING_HARNESS_API_KEY' },
+          gardenAdmin: {
+            enabled: true,
+            principalId: 'testing-harness',
+            operatorGrantId: 'testing-harness-garden-grant',
+            role: 'admin',
+            allowedActions: ['settings.read'],
+          },
+        },
+      },
+    })}\n`);
+    delete process.env.PSFN_FLEET_AUTH;
+    process.env.PSFN_TESTING_HARNESS_GARDEN_VERIFIER = 'true';
+
+    const config = loadAgentConfig();
+
+    expect(config.fleetAuth).toBeUndefined();
+  });
+
   it('loads postgres backend wiring when explicitly configured', () => {
     clearRuntimePathEnv();
     process.env.PERSISTENCE_BACKEND = 'postgres';

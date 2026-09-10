@@ -263,6 +263,15 @@ async function main(): Promise<void> {
     testingHarnessGardenAdmin,
     env,
   );
+  if (testingHarnessGardenVerifier && !config.fleetAuth) {
+    // Fleet auth is never a precondition (psfn-framework-rxp2h): the verifier
+    // only guards the fleet SSO Garden router, and without it the harness key
+    // reaches Garden directly, so the setting is accepted and inert.
+    log.info(
+      'PSFN_TESTING_HARNESS_GARDEN_VERIFIER is set without fleet auth; the testing-harness '
+      + 'Garden verifier only applies to the fleet SSO Garden router and is inert here',
+    );
+  }
   const initializeFleetAuthPersistence = () => initializeGatewayFleetAuthPersistence({
     config: config.fleetAuth,
     credentialVault: config.credentialVault,

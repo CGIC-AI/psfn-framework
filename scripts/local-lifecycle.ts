@@ -259,6 +259,9 @@ function runtimeEnvironment(context: LocalContext): NodeJS.ProcessEnv {
     'BACKUP_ROOT_DIR', 'CONFIG_DIR', 'PERSISTENCE_BACKEND', 'COMPANION_ID', 'COMPANION_PG_SCHEMA',
     'CHARACTER_CARD_PATH', 'GATEWAY_SOCKET', 'ADMIN_TRANSPORT_MODE', 'ADMIN_TRANSPORT_SOCKET',
     'NTFY_BASE_URL', 'NTFY_TOPIC', 'ALLOW_AGENT_OUTBOUND_NETWORK',
+    // Testing-harness devices (psfn-framework-ajgo2): the agent stamps the
+    // fixture turn, so it must see the same flag as the gateway.
+    'PSFN_TESTING_HARNESS_DEVICES',
   ];
   return Object.fromEntries(names.flatMap(name => (
     context.env[name] === undefined ? [] : [[name, context.env[name]!]]

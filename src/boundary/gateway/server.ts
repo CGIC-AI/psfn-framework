@@ -3427,8 +3427,14 @@ export class GatewayServer {
       const explicitHumanAvailabilityAllows = isExplicitHumanInbound
         && availability !== undefined
         && (availabilityLeaseIsAbsent || availabilityState === 'resting');
-      let fatigueAllows = false;
-      if (client) {
+      // A satellite turn that names its own in-world speaker carries no
+      // canonical contact for the operator (satellite-registry resolves it to
+      // ''); contact-level fatigue then has nothing to consult and the agent
+      // decoder would reject the empty id. Speaker fatigue (machine
+      // intelligence, strangers) is evaluated inside the turn pipeline instead.
+      const contactFatigueApplies = input.canonicalContactId.length > 0;
+      let fatigueAllows = !contactFatigueApplies;
+      if (client && contactFatigueApplies) {
         let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
         try {
           const timeout = new Promise<never>((_, reject) => {

@@ -65,6 +65,10 @@ import {
   type TemporalWakeupConfig,
 } from './scheduler-config/temporal.js';
 import {
+  validateWorldExplorationConfig,
+  type WorldExplorationConfig,
+} from './scheduler-config/world-exploration.js';
+import {
   validateFreeTimeConfig,
   type FreeTimeConfig,
 } from './scheduler-config/free-time.js';
@@ -143,6 +147,10 @@ export {
   type SleeptimeWikiPassConfig,
 } from './scheduler-config/sleep-memory.js';
 export {
+  DEFAULT_WORLD_EXPLORATION_CONFIG,
+  type WorldExplorationConfig,
+} from './scheduler-config/world-exploration.js';
+export {
   DEFAULT_TEMPORAL_WAKEUP_CONFIG,
   type TemporalWakeupConfig,
   type TemporalWakeupHabitConfig,
@@ -210,6 +218,8 @@ export interface SchedulerRuntimeConfig {
   arcFormation: ArcFormationConfig;
   socialGraphBuilder: SocialGraphBuilderCadenceConfig;
   temporalWakeup: TemporalWakeupConfig;
+  /** World exploration lane (S13, 07mw2); off by default. */
+  worldExploration: WorldExplorationConfig;
   freeTime: FreeTimeConfig;
   socialAutonomy: SocialAutonomyConfig;
   weightedThoughtOutreach: WeightedThoughtOutreachConfig;
@@ -330,6 +340,7 @@ export function validateSchedulerConfig(
     arcFormation: validateArcFormationConfig(raw.arcFormation, sourcePath),
     socialGraphBuilder: validateSocialGraphBuilderConfig(raw.socialGraphBuilder, sourcePath),
     temporalWakeup: validateTemporalWakeupConfig(raw.temporalWakeup, sourcePath),
+    worldExploration: validateWorldExplorationConfig(raw.worldExploration, sourcePath),
     freeTime: validateFreeTimeConfig(raw.freeTime, sourcePath),
     socialAutonomy: validateSocialAutonomyConfig(raw.socialAutonomy, sourcePath),
     weightedThoughtOutreach: validateWeightedThoughtOutreachConfig(raw.weightedThoughtOutreach, sourcePath),

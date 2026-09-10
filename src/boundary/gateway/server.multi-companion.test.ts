@@ -2935,6 +2935,122 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
     });
   });
 
+  it('skips the contact-fatigue RPC for a speaker-named satellite turn with no canonical contact (psfn-framework-n66dn)', async () => {
+    const companionId = '22222222-2222-4222-8222-222222222222';
+    // satellite-registry resolves canonicalContactId to '' when a satellite
+    // turn names its own in-world speaker; the agent decoder rejects an
+    // empty id, so the gateway must not call satellite.response.eligibility
+    // and must let the turn proceed to the agent for speaker fatigue.
+    const { server, connect } = await setupServer({
+      ...withSharedSatelliteEligibility(createMinimalOptions()),
+      icpAutonomyStore: undefined,
+      icpInitiationPolicyAuthority: undefined,
+      sharedSatelliteQuietHoursAllows: () => true,
+      multiCompanion: multiCompanion({ api: companionId }),
+    });
+    let eligibilityRequested = false;
+    const connection = await connect((message, emit) => {
+      if (!message.id || typeof message.method !== 'string') return;
+      if (message.method === 'satellite.response.eligibility') {
+        eligibilityRequested = true;
+        emit({ jsonrpc: '2.0', id: message.id, result: { fatigueAllows: true } });
+      }
+      if (message.method === 'api.chat.completion') {
+        emit({
+          jsonrpc: '2.0',
+          id: message.id,
+          result: {
+            ok: true,
+            response: {
+              content: 'speaker-named response',
+              channelId: 'satellite:voice:session-sat-app',
+              inputTokens: 2,
+              outputTokens: 2,
+            },
+          },
+        });
+      }
+    });
+    await identifyAgent(connection, companionId, 1);
+    const satellite = makeSatelliteVoiceMessage('sat-app', companionId).routing.satellite;
+
+    await expect(server.requestSharedSatelliteChatCompletion({
+      satellite,
+      canonicalContactId: '',
+      channelId: 'satellite:voice:session-sat-app',
+      params: {
+        requestId: 'speaker-named-turn',
+        request: {
+          model: 'test-model',
+          messages: [{ role: 'user' as const, content: 'hello' }],
+        },
+        principal: { id: 'principal-1', mode: 'api_key' as const },
+        headers: {},
+      },
+      timeoutMs: 250,
+    })).resolves.toMatchObject({
+      ok: true,
+      response: { content: 'speaker-named response' },
+    });
+    expect(eligibilityRequested).toBe(false);
+  });
+
+  it('still calls the contact-fatigue RPC for a satellite turn with a canonical contact (psfn-framework-n66dn)', async () => {
+    const companionId = '22222222-2222-4222-8222-222222222222';
+    const { server, connect } = await setupServer({
+      ...withSharedSatelliteEligibility(createMinimalOptions()),
+      icpAutonomyStore: undefined,
+      icpInitiationPolicyAuthority: undefined,
+      sharedSatelliteQuietHoursAllows: () => true,
+      multiCompanion: multiCompanion({ api: companionId }),
+    });
+    let eligibilityRequested = false;
+    const connection = await connect((message, emit) => {
+      if (!message.id || typeof message.method !== 'string') return;
+      if (message.method === 'satellite.response.eligibility') {
+        eligibilityRequested = true;
+        emit({ jsonrpc: '2.0', id: message.id, result: { fatigueAllows: true } });
+      }
+      if (message.method === 'api.chat.completion') {
+        emit({
+          jsonrpc: '2.0',
+          id: message.id,
+          result: {
+            ok: true,
+            response: {
+              content: 'contact-fenced response',
+              channelId: 'satellite:voice:session-sat-app',
+              inputTokens: 2,
+              outputTokens: 2,
+            },
+          },
+        });
+      }
+    });
+    await identifyAgent(connection, companionId, 1);
+    const satellite = makeSatelliteVoiceMessage('sat-app', companionId).routing.satellite;
+
+    await expect(server.requestSharedSatelliteChatCompletion({
+      satellite,
+      canonicalContactId: 'contact-partner',
+      channelId: 'satellite:voice:session-sat-app',
+      params: {
+        requestId: 'contact-fenced-turn',
+        request: {
+          model: 'test-model',
+          messages: [{ role: 'user' as const, content: 'hello' }],
+        },
+        principal: { id: 'principal-1', mode: 'api_key' as const },
+        headers: {},
+      },
+      timeoutMs: 250,
+    })).resolves.toMatchObject({
+      ok: true,
+      response: { content: 'contact-fenced response' },
+    });
+    expect(eligibilityRequested).toBe(true);
+  });
+
   it('wakes only the server-addressed companion for authenticated inbound Hub chat', async () => {
     const companionId = '22222222-2222-4222-8222-222222222222';
     let availabilityLease: {

@@ -1046,10 +1046,9 @@ export class ToolRuntimeFacade {
   ): ActiveToolResolution {
     if (!isWorldPlaneTurn(message)) return resolution;
     const satellite = message.routing?.satellite;
-    let wrapped = false;
+    if (!resolution.tools.some((tool) => tool.name === 'world')) return resolution;
     const tools = resolution.tools.map((tool) => {
       if (tool.name !== 'world') return tool;
-      wrapped = true;
       return {
         ...tool,
         execute: async (toolCallId, params, signal) => {
@@ -1089,7 +1088,7 @@ export class ToolRuntimeFacade {
         },
       } as AgentTool<any>;
     });
-    return wrapped ? { ...resolution, tools } : resolution;
+    return { ...resolution, tools };
   }
 
   private applyMaintenanceCoreToolPolicy(

@@ -2965,6 +2965,13 @@
       "value": "5"
     },
     {
+      "file": "src/core/agent/substrate-agent/runtime-context-sections/situated-presence.ts",
+      "name": "buildSituatedPresenceContextBlock.$call:truncation:slice.arg1#1",
+      "value": "600",
+      "form": "truncation",
+      "note": "Code-owned safety/resource guard buildSituatedPresenceContextBlock.$call:truncation:slice.arg1#1; caps the remembered-world line rendered into the world-plane situated block (psfn-framework-2nsfo) so a long notes summary cannot crowd the prompt."
+    },
+    {
       "file": "src/core/agent/substrate-agent/runtime-context.ts",
       "name": "buildMetacognitiveNotesContextBlock.formatMetacognitiveNotesContextBlock.arg1.maxFlags",
       "value": "2",
@@ -3387,7 +3394,7 @@
       "file": "src/core/cogsec/disclosure/capsule-custody.ts",
       "name": "DEFAULT_MAX_ACTIVE_CAPSULES",
       "value": "3",
-      "note": "Code-owned DEFAULT for the active-capsule queue bound (bible §10.11 'initial cap of three'); already overridable via createShareCapsuleCustodyStore's maxActiveCapsules option. Owned-setting/Garden exposure is deferred to the publication approvals surface (jp36.7.2)."
+      "note": "Code-owned DEFAULT for the active-capsule queue bound (bible \u00a710.11 'initial cap of three'); already overridable via createShareCapsuleCustodyStore's maxActiveCapsules option. Owned-setting/Garden exposure is deferred to the publication approvals surface (jp36.7.2)."
     },
     {
       "file": "src/core/cogsec/disclosure/publication-tool.ts",
@@ -3461,13 +3468,13 @@
       "file": "src/core/cogsec/intake/corpus/corpus.ts",
       "name": "MAX_FIXTURE_NOTE_CHARS",
       "value": "512",
-      "note": "Corpus fixture-schema size guard (hrmrq.141): bounds attacker-influenceable test data files, not runtime policy — same class as scanner MAX_SCAN_CHARS."
+      "note": "Corpus fixture-schema size guard (hrmrq.141): bounds attacker-influenceable test data files, not runtime policy \u2014 same class as scanner MAX_SCAN_CHARS."
     },
     {
       "file": "src/core/cogsec/intake/corpus/corpus.ts",
       "name": "MAX_FIXTURE_PAYLOAD_CHARS",
       "value": "8192",
-      "note": "Corpus fixture-schema size guard (hrmrq.141): bounds attacker-influenceable test data files, not runtime policy — same class as scanner MAX_SCAN_CHARS."
+      "note": "Corpus fixture-schema size guard (hrmrq.141): bounds attacker-influenceable test data files, not runtime policy \u2014 same class as scanner MAX_SCAN_CHARS."
     },
     {
       "file": "src/core/cogsec/intake/marking.ts",
@@ -8426,7 +8433,7 @@
     {
       "file": "src/faculties/subagents/tool-governance.ts",
       "name": "VAULT_POLICY",
-      "value": "{ readActionsHelp: 'read, search, daily (without content)', classify(params) { const explicit = resolveExplicitAction(params); if (!isRecord(params)) { return classifyByActionSets(explicit, VAULT_READ_ACTIONS, VAULT_MUTATION_ACTIONS); } if (explicit !== null) { if (VAULT_DAILY_ACTIONS.has(explicit)) { // daily appends when content is a string and reads otherwise // (executeVaultDaily in boundary/integrations/vault/tools.ts). return typeof params.content === 'string' ? { action: explicit, kind: 'mutation' } : { action: explicit, kind: 'read' }; } return classifyByActionSets(explicit, VAULT_READ_ACTIONS, VAULT_MUTATION_ACTIONS); } // Mirrors normalizeVaultAction's omitted-action inference, which can // resolve to a write or daily-append — classify those as mutations. const hasName = typeof params.name === 'string'; const hasContent = typeof params.content === 'string'; const hasQuery = typeof params.query === 'string'; const hasFolder = typeof params.folder === 'string'; const hasMode = typeof params.mode === 'string'; const hasLimit = typeof params.limit === 'number'; if (hasQuery && !hasName && !hasContent && !hasFolder && !hasMode) { return { action: 'search', kind: 'read' }; } if (hasName && hasContent) return { action: 'write', kind: 'mutation' }; if (hasName && !hasContent && !hasQuery && !hasFolder && !hasMode && !hasLimit) { return { action: 'read', kind: 'read' }; } if (!hasName && hasContent && !hasQuery && !hasFolder && !hasMode && !hasLimit) { return { action: 'daily', kind: 'mutation' }; } return { action: null, kind: 'unresolved' }; }, }",
+      "value": "{ readActionsHelp: 'read, search, daily (without content)', classify(params) { const explicit = resolveExplicitAction(params); if (!isRecord(params)) { return classifyByActionSets(explicit, VAULT_READ_ACTIONS, VAULT_MUTATION_ACTIONS); } if (explicit !== null) { if (VAULT_DAILY_ACTIONS.has(explicit)) { // daily appends when content is a string and reads otherwise // (executeVaultDaily in boundary/integrations/vault/tools.ts). return typeof params.content === 'string' ? { action: explicit, kind: 'mutation' } : { action: explicit, kind: 'read' }; } return classifyByActionSets(explicit, VAULT_READ_ACTIONS, VAULT_MUTATION_ACTIONS); } // Mirrors normalizeVaultAction's omitted-action inference, which can // resolve to a write or daily-append \u2014 classify those as mutations. const hasName = typeof params.name === 'string'; const hasContent = typeof params.content === 'string'; const hasQuery = typeof params.query === 'string'; const hasFolder = typeof params.folder === 'string'; const hasMode = typeof params.mode === 'string'; const hasLimit = typeof params.limit === 'number'; if (hasQuery && !hasName && !hasContent && !hasFolder && !hasMode) { return { action: 'search', kind: 'read' }; } if (hasName && hasContent) return { action: 'write', kind: 'mutation' }; if (hasName && !hasContent && !hasQuery && !hasFolder && !hasMode && !hasLimit) { return { action: 'read', kind: 'read' }; } if (!hasName && hasContent && !hasQuery && !hasFolder && !hasMode && !hasLimit) { return { action: 'daily', kind: 'mutation' }; } return { action: null, kind: 'unresolved' }; }, }",
       "form": "object",
       "note": "Existing mutable policy candidate VAULT_POLICY; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
@@ -8627,7 +8634,7 @@
     {
       "file": "src/faculties/wiki/sleeptime-wiki-pass.ts",
       "name": "PERSONAL_MARKER_PATTERN",
-      "value": "/\\bmy\\s+(partner|wife|husband|spouse|boyfriend|girlfriend|fianc[ée]+|mother|mom|father|dad|sister|brother|son|daughter|friend|parents?|family|ex|kid|child|children)\\b/i",
+      "value": "/\\bmy\\s+(partner|wife|husband|spouse|boyfriend|girlfriend|fianc[\u00e9e]+|mother|mom|father|dad|sister|brother|son|daughter|friend|parents?|family|ex|kid|child|children)\\b/i",
       "form": "regex",
       "note": "Sleeptime-wiki personal-context classifier currently encoded in code; explicitly baselined as named migration debt by psfn-framework-7qeo1.18, not immutable policy."
     },
@@ -8760,6 +8767,34 @@
     },
     {
       "file": "src/faculties/wiki/tools.ts",
+      "name": "createWikiTool.tool.parameters.note_about.maxLength",
+      "value": "64",
+      "form": "object-member",
+      "note": "Immutable parser/wire/schema contract createWikiTool.tool.parameters.note_about.maxLength; code-owned because it is a model-facing schema length guard on the wiki world_note / world_notes_read fields (psfn-framework-2nsfo), and changing it requires a reviewed code release rather than an operator setting."
+    },
+    {
+      "file": "src/faculties/wiki/tools.ts",
+      "name": "createWikiTool.tool.parameters.note_about.minLength",
+      "value": "1",
+      "form": "object-member",
+      "note": "Immutable parser/wire/schema contract createWikiTool.tool.parameters.note_about.minLength; code-owned because it is a model-facing schema length guard on the wiki world_note / world_notes_read fields (psfn-framework-2nsfo), and changing it requires a reviewed code release rather than an operator setting."
+    },
+    {
+      "file": "src/faculties/wiki/tools.ts",
+      "name": "createWikiTool.tool.parameters.note_text.maxLength",
+      "value": "280",
+      "form": "object-member",
+      "note": "Immutable parser/wire/schema contract createWikiTool.tool.parameters.note_text.maxLength; code-owned because it is a model-facing schema length guard on the wiki world_note / world_notes_read fields (psfn-framework-2nsfo), and changing it requires a reviewed code release rather than an operator setting."
+    },
+    {
+      "file": "src/faculties/wiki/tools.ts",
+      "name": "createWikiTool.tool.parameters.note_text.minLength",
+      "value": "1",
+      "form": "object-member",
+      "note": "Immutable parser/wire/schema contract createWikiTool.tool.parameters.note_text.minLength; code-owned because it is a model-facing schema length guard on the wiki world_note / world_notes_read fields (psfn-framework-2nsfo), and changing it requires a reviewed code release rather than an operator setting."
+    },
+    {
+      "file": "src/faculties/wiki/tools.ts",
       "name": "createWikiTool.tool.parameters.project_id.minLength",
       "value": "1",
       "form": "object-member",
@@ -8774,17 +8809,17 @@
     },
     {
       "file": "src/faculties/wiki/tools.ts",
-      "name": "createWikiTool.tool.parameters.provenance_refs.minLength@L317",
+      "name": "createWikiTool.tool.parameters.provenance_refs.minLength@L336",
       "value": "1",
       "form": "object-member",
-      "note": "Immutable parser/wire/schema contract createWikiTool.tool.parameters.provenance_refs.minLength@L317; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
+      "note": "Immutable parser/wire/schema contract createWikiTool.tool.parameters.provenance_refs.minLength@L336; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
     },
     {
       "file": "src/faculties/wiki/tools.ts",
-      "name": "createWikiTool.tool.parameters.provenance_refs.minLength@L318",
+      "name": "createWikiTool.tool.parameters.provenance_refs.minLength@L337",
       "value": "1",
       "form": "object-member",
-      "note": "Immutable parser/wire/schema contract createWikiTool.tool.parameters.provenance_refs.minLength@L318; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
+      "note": "Immutable parser/wire/schema contract createWikiTool.tool.parameters.provenance_refs.minLength@L337; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
     },
     {
       "file": "src/faculties/wiki/tools.ts",
@@ -8823,17 +8858,17 @@
     },
     {
       "file": "src/faculties/wiki/tools.ts",
-      "name": "createWikiTool.tool.parameters.tags.minLength@L307",
+      "name": "createWikiTool.tool.parameters.tags.minLength@L326",
       "value": "1",
       "form": "object-member",
-      "note": "Immutable parser/wire/schema contract createWikiTool.tool.parameters.tags.minLength@L307; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
+      "note": "Immutable parser/wire/schema contract createWikiTool.tool.parameters.tags.minLength@L326; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
     },
     {
       "file": "src/faculties/wiki/tools.ts",
-      "name": "createWikiTool.tool.parameters.tags.minLength@L308",
+      "name": "createWikiTool.tool.parameters.tags.minLength@L327",
       "value": "1",
       "form": "object-member",
-      "note": "Immutable parser/wire/schema contract createWikiTool.tool.parameters.tags.minLength@L308; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
+      "note": "Immutable parser/wire/schema contract createWikiTool.tool.parameters.tags.minLength@L327; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
     },
     {
       "file": "src/faculties/wiki/tools.ts",
@@ -8862,6 +8897,50 @@
       "value": "1",
       "form": "object-member",
       "note": "Immutable parser/wire/schema contract createWikiTool.tool.parameters.wish_text.minLength; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
+    },
+    {
+      "file": "src/faculties/wiki/tools.ts",
+      "name": "createWikiTool.tool.parameters.world.maxLength",
+      "value": "64",
+      "form": "object-member",
+      "note": "Immutable parser/wire/schema contract createWikiTool.tool.parameters.world.maxLength; code-owned because it is a model-facing schema length guard on the wiki world_note / world_notes_read fields (psfn-framework-2nsfo), and changing it requires a reviewed code release rather than an operator setting."
+    },
+    {
+      "file": "src/faculties/wiki/tools.ts",
+      "name": "createWikiTool.tool.parameters.world.minLength",
+      "value": "1",
+      "form": "object-member",
+      "note": "Immutable parser/wire/schema contract createWikiTool.tool.parameters.world.minLength; code-owned because it is a model-facing schema length guard on the wiki world_note / world_notes_read fields (psfn-framework-2nsfo), and changing it requires a reviewed code release rather than an operator setting."
+    },
+    {
+      "file": "src/faculties/wiki/world-notes.ts",
+      "name": "MAX_ENCOUNTERS",
+      "value": "100"
+    },
+    {
+      "file": "src/faculties/wiki/world-notes.ts",
+      "name": "MAX_LABEL_CHARS",
+      "value": "80"
+    },
+    {
+      "file": "src/faculties/wiki/world-notes.ts",
+      "name": "MAX_LANDMARKS",
+      "value": "200"
+    },
+    {
+      "file": "src/faculties/wiki/world-notes.ts",
+      "name": "MAX_NOTE_CHARS",
+      "value": "280"
+    },
+    {
+      "file": "src/faculties/wiki/world-notes.ts",
+      "name": "MAX_NOTES",
+      "value": "64"
+    },
+    {
+      "file": "src/faculties/wiki/world-notes.ts",
+      "name": "MAX_ROUTES",
+      "value": "200"
     },
     {
       "file": "src/operator/garden/api-routes.ts",
@@ -10129,7 +10208,7 @@
     {
       "file": "src/primitives/images/vision-reviewer.ts",
       "name": "EMBODIMENT_MARKER",
-      "value": "/EMBODIMENT:\\s*(same_me|drifted|different_person)\\b\\s*[—:-]?\\s*(.*)$/im",
+      "value": "/EMBODIMENT:\\s*(same_me|drifted|different_person)\\b\\s*[\u2014:-]?\\s*(.*)$/im",
       "form": "regex",
       "note": "Parser for the fixed EMBODIMENT reviewer response marker; code-owned protocol grammar coupled to the reviewer prompt contract."
     },
@@ -11468,6 +11547,26 @@
       "value": "0",
       "form": "object-member",
       "note": "Existing mutable policy candidate createEmptyToolCallOutcomeCounts.policy_denial; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+    },
+    {
+      "file": "src/shared/contracts/world-plane-map.ts",
+      "name": "MAX_CLIPS",
+      "value": "200"
+    },
+    {
+      "file": "src/shared/contracts/world-plane-map.ts",
+      "name": "MAX_PLACES",
+      "value": "128"
+    },
+    {
+      "file": "src/shared/contracts/world-plane-map.ts",
+      "name": "MAX_TOOLS",
+      "value": "64"
+    },
+    {
+      "file": "src/shared/contracts/world-plane-map.ts",
+      "name": "MAX_WORLDS",
+      "value": "32"
     },
     {
       "file": "src/shared/diagnostics/redaction.ts",
@@ -13497,6 +13596,20 @@
       "value": "1",
       "form": "object-member",
       "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 P3 domain split; seed/default literal preserved, not an operator-tunable policy constant."
+    },
+    {
+      "file": "src/system/config/scheduler-config/world-exploration.ts",
+      "name": "DEFAULT_WORLD_EXPLORATION_CONFIG.intervalMinutes",
+      "value": "45",
+      "form": "object-member",
+      "note": "Existing mutable policy candidate DEFAULT_WORLD_EXPLORATION_CONFIG.intervalMinutes; the shipped seed default for scheduler.json worldExploration (operator-owned there, psfn-framework-07mw2), baselined as the code-owned default value."
+    },
+    {
+      "file": "src/system/config/scheduler-config/world-exploration.ts",
+      "name": "DEFAULT_WORLD_EXPLORATION_CONFIG.maxTurnsPerDay",
+      "value": "12",
+      "form": "object-member",
+      "note": "Existing mutable policy candidate DEFAULT_WORLD_EXPLORATION_CONFIG.maxTurnsPerDay; the shipped seed default for scheduler.json worldExploration (operator-owned there, psfn-framework-07mw2), baselined as the code-owned default value."
     },
     {
       "file": "src/system/config/settings-contract.ts",

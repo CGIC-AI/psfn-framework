@@ -578,7 +578,8 @@ export interface WorldAvatarMoveRequest {
   waitMs?: number;
 }
 
-export type WorldAvatarWalkStatus = "arrived" | "walking" | "interrupted" | "failed" | "already_there";
+/** `no_position`: the region is mapped to a place but carries no coordinates, so nothing walked (psfn-framework-zsoo8). */
+export type WorldAvatarWalkStatus = "arrived" | "walking" | "interrupted" | "failed" | "already_there" | "no_position";
 
 export type WorldAvatarMoveRejectionReason =
   | "not_configured"

@@ -260,6 +260,11 @@ export async function waitForCaseTurnRecord(turnRecordsDir, {
   pollIntervalMs = 1500,
   requireCompletedAssistant = false,
   signal,
+  // Hub-device turns land in a server-minted hub-device:<digest> channel, not
+  // the case's session: the flag has to reach the matcher or every device
+  // case reports "exact persisted TurnRecord is missing" after a 200
+  // (psfn-framework-ajgo2, 2026-09-10).
+  searchAllChannels = false,
 }) {
   const deadline = Date.now() + timeoutMs;
   let latest = null;
@@ -270,6 +275,7 @@ export async function waitForCaseTurnRecord(turnRecordsDir, {
       message,
       messageIncludes,
       minStartedAtMs,
+      searchAllChannels,
     });
     if (
       latest

@@ -24,10 +24,23 @@ export const EIDOVERSE_BODY_ACTION_NAMES = [
   "emote",
   "posture",
   "whisper",
+  // Flight family and wing posture (psfn-framework-jbvwz): the door's own
+  // bounded verbs, exposed with the same shape. Raw-bone `pose`/`animate`
+  // stay out until a named library exists on the door side.
+  "take_off",
+  "climb_to",
+  "glide_to",
+  "land_at",
+  "fold_wings",
+  "unfold_wings",
+  "flight_status",
   "spawn",
   "remove",
   "set_avatar",
 ] as const;
+
+/** Bound on `climb_to`: the door clamps to its soft ceiling anyway; this keeps a model typo from asking for the stratosphere. */
+export const EIDOVERSE_MAX_CLIMB_ALTITUDE_M = 500;
 
 export type EidoverseBodyActionName = (typeof EIDOVERSE_BODY_ACTION_NAMES)[number];
 
@@ -49,6 +62,13 @@ export type EidoverseBodyAction =
   | { name: "emote"; emote: (typeof EIDOVERSE_EMOTE_NAMES)[number] }
   | { name: "posture"; kind: (typeof EIDOVERSE_POSTURE_KINDS)[number] }
   | { name: "whisper"; to: string; text: string }
+  | { name: "take_off" }
+  | { name: "climb_to"; altitude: number }
+  | { name: "glide_to"; x: number; z: number }
+  | { name: "land_at"; x: number; z: number }
+  | { name: "fold_wings" }
+  | { name: "unfold_wings" }
+  | { name: "flight_status" }
   | { name: "spawn"; lib?: string; query?: string; x?: number; z?: number; yaw?: number; id?: string }
   | { name: "remove"; id: string }
   | { name: "set_avatar"; avatar: string };
@@ -65,6 +85,9 @@ export type EidoverseBodyOutcome =
   | "stopped"
   | "expressed"
   | "whispered"
+  | "airborne"
+  | "landed"
+  | "reported"
   | "created"
   | "removed"
   | "failed";
@@ -105,6 +128,14 @@ export interface EidoverseBodyTools {
   spawn?(args: { lib?: string; query?: string; x?: number; z?: number; yaw?: number; id?: string }): Promise<string>;
   remove?(id: string): Promise<string>;
   setAvatar?(avatar: string): Promise<string>;
+  /** Flight family (psfn-framework-jbvwz); absent on a transport ⇒ refused as unavailable. */
+  takeOff?(): Promise<string>;
+  climbTo?(altitude: number): Promise<string>;
+  glideTo?(x: number, z: number): Promise<string>;
+  landAt?(x: number, z: number): Promise<string>;
+  foldWings?(): Promise<string>;
+  unfoldWings?(): Promise<string>;
+  flightStatus?(): Promise<string>;
 }
 
 export interface EidoverseBodyRunnerLogger {
@@ -131,6 +162,9 @@ const OUTCOME_NOTES: Readonly<Record<EidoverseBodyOutcome, string>> = {
   stopped: "A requested stop finished; your body is no longer walking.",
   expressed: "A requested gesture or posture finished.",
   whispered: "A requested whisper was delivered privately.",
+  airborne: "A requested flight verb finished; read your body's altitude and stamina before the next one.",
+  landed: "A requested landing finished; your body is walking again.",
+  reported: "A requested flight status was read.",
   created: "A requested prop was placed in the world.",
   removed: "A requested prop was removed from the world.",
   failed: "A requested body action could not be carried out.",
@@ -149,6 +183,9 @@ export function parseEidoverseBodyAction(name: string, args: unknown): Eidoverse
     throw new EidoverseBodyActionRejectedError("Eidoverse body action is not allowlisted");
   }
   if (name === "stop") return { name: "stop" };
+  if (name === "take_off" || name === "fold_wings" || name === "unfold_wings" || name === "flight_status") {
+    return { name };
+  }
   if (!isRecord(args)) {
     throw new EidoverseBodyActionRejectedError("Eidoverse body action arguments must be an object");
   }
@@ -177,6 +214,21 @@ export function parseEidoverseBodyAction(name: string, args: unknown): Eidoverse
       );
     }
     return { name: "posture", kind: kind as (typeof EIDOVERSE_POSTURE_KINDS)[number] };
+  }
+  if (name === "climb_to") {
+    const altitude = args.altitude;
+    if (!Number.isFinite(altitude) || (altitude as number) <= 0 || (altitude as number) > EIDOVERSE_MAX_CLIMB_ALTITUDE_M) {
+      throw new EidoverseBodyActionRejectedError(
+        `Eidoverse climb_to requires altitude between 0 and ${EIDOVERSE_MAX_CLIMB_ALTITUDE_M} metres`,
+      );
+    }
+    return { name: "climb_to", altitude: altitude as number };
+  }
+  if (name === "glide_to" || name === "land_at") {
+    if (!Number.isFinite(args.x) || !Number.isFinite(args.z)) {
+      throw new EidoverseBodyActionRejectedError(`Eidoverse ${name} requires x and z`);
+    }
+    return { name, x: args.x as number, z: args.z as number };
   }
   if (name === "whisper") {
     const to = optionalToken(args.to, 64);
@@ -350,6 +402,27 @@ export class EidoverseBodyRunner {
     if (action.name === "whisper") {
       return settled(name, await this.requireTool("whisper")(action.to, action.text), "whispered");
     }
+    if (action.name === "take_off") {
+      return settled(name, await this.requireTool("takeOff")(), "airborne");
+    }
+    if (action.name === "climb_to") {
+      return settled(name, await this.requireTool("climbTo")(action.altitude), "airborne");
+    }
+    if (action.name === "glide_to") {
+      return settled(name, await this.requireTool("glideTo")(action.x, action.z), "airborne");
+    }
+    if (action.name === "land_at") {
+      return settled(name, await this.requireTool("landAt")(action.x, action.z), "landed");
+    }
+    if (action.name === "fold_wings") {
+      return settled(name, await this.requireTool("foldWings")(), "expressed");
+    }
+    if (action.name === "unfold_wings") {
+      return settled(name, await this.requireTool("unfoldWings")(), "expressed");
+    }
+    if (action.name === "flight_status") {
+      return settled(name, await this.requireTool("flightStatus")(), "reported");
+    }
     if (action.name === "spawn") {
       const { name: _name, ...args } = action;
       return settled(name, await this.requireTool("spawn")(args), "created");
@@ -360,7 +433,8 @@ export class EidoverseBodyRunner {
     return settled(name, await this.requireTool("setAvatar")(action.avatar), "expressed");
   }
 
-  private requireTool<K extends "faceAt" | "emote" | "posture" | "whisper" | "spawn" | "remove" | "setAvatar">(
+  private requireTool<K extends "faceAt" | "emote" | "posture" | "whisper" | "spawn" | "remove" | "setAvatar"
+    | "takeOff" | "climbTo" | "glideTo" | "landAt" | "foldWings" | "unfoldWings" | "flightStatus">(
     key: K,
   ): NonNullable<EidoverseBodyTools[K]> {
     const tool = this.tools[key];

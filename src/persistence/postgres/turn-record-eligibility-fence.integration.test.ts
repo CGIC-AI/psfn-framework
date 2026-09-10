@@ -135,7 +135,7 @@ describe('PostgresTurnRecordEligibilityFence against PostgreSQL', () => {
           connectionTimeoutMillis: NESTED_CONNECT_TIMEOUT_MS,
         });
         fencePool = createPostgresPool(database.databaseUrl, {
-          applicationName: 'psfn-turn-record-fence',
+          applicationName: TURN_RECORD_ELIGIBILITY_FENCE_POOL_LANE,
           schema: SCHEMA,
           lane: TURN_RECORD_ELIGIBILITY_FENCE_POOL_LANE,
           max: TURN_RECORD_ELIGIBILITY_FENCE_POOL_CAPACITY,

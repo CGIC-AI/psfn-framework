@@ -928,7 +928,7 @@ export async function createDefaultPostgresSessionAdapters(
     // (bead psfn-framework-52epa). An injected pool (tests) keeps one pool.
     turnRecordEligibilityFence: new PostgresTurnRecordEligibilityFence(
       options.pool ?? createPostgresPool(databaseUrl, {
-        applicationName: 'psfn-turn-record-fence',
+        applicationName: TURN_RECORD_ELIGIBILITY_FENCE_POOL_LANE,
         allowExitOnIdle: true,
         lane: TURN_RECORD_ELIGIBILITY_FENCE_POOL_LANE,
         max: TURN_RECORD_ELIGIBILITY_FENCE_POOL_CAPACITY,

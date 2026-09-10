@@ -2556,6 +2556,59 @@ describe('ApiServer with fleet auth configured alongside key auth', () => {
     expect(JSON.parse(response.body).choices[0].message.content).toBe('Hello world');
   });
 
+  it('admits a speaker-named satellite turn without the endpoint contact and hands the agent the speaker identity (psfn-framework-ugstg)', async () => {
+    await stopServer(server);
+    const mockAgent = createMockAgentLoop(eventBus);
+    server = createApiServer({
+      port,
+      agentLoop: mockAgent,
+      eventBus,
+      sessionManager: createMockSessionManager(),
+      apiKey: 'legacy-api-key',
+      satelliteApiKeys: ['dedicated-satellite-key'],
+      satelliteRegistry: {
+        ...SATELLITE_TEST_REGISTRY,
+        satellites: SATELLITE_TEST_REGISTRY.satellites.map(satellite => ({
+          ...satellite,
+          endpoints: satellite.endpoints.map(endpoint => ({
+            ...endpoint,
+            auth: {
+              mode: 'api_key' as const,
+              apiKeyPrincipalIds: [deriveApiKeyPrincipalId('dedicated-satellite-key')],
+            },
+          })),
+        })),
+      },
+      healthChecks: createHealthyHealthChecks(),
+    });
+    await server.start();
+
+    const response = await request(port, 'POST', '/v1/chat/completions', {
+      model: DEFAULT_COMPANION_ID,
+      messages: [{ role: 'user', content: 'hello from another companion in the world' }],
+    }, {
+      Authorization: 'Bearer dedicated-satellite-key',
+      'X-PSFN-Satellite-Claim-Type': 'android-mobile',
+      'X-PSFN-Satellite-ID': 'android-phone',
+      'X-PSFN-Satellite-Endpoint-ID': 'companion-app',
+      'X-PSFN-Satellite-Session-ID': 'world-speaker-turn',
+      'X-PSFN-Satellite-Speaker-ID': 'nova-kube',
+      'X-PSFN-Satellite-Speaker-Name': 'Nova (kube)',
+      'X-PSFN-Satellite-Speaker-Kind': 'ai',
+    });
+    expect(response.status).toBe(200);
+
+    const call = (fromAny(mockAgent.handleMessage)).mock.calls[0][0];
+    // The endpoint's contact names its human, who did not speak: no hint, so
+    // the agent resolves-or-creates the speaker's own contact from the
+    // satellite channel identity and tags it machine intelligence.
+    expect(call.routing?.canonicalContactId).toBeUndefined();
+    expect(call.authorId.endsWith(':nova-kube')).toBe(true);
+    expect(call.authorName).toBe('Nova (kube)');
+    expect(call.routing?.satellite?.speaker).toEqual({ id: 'nova-kube', name: 'Nova (kube)', kind: 'ai' });
+    expect(call.routing?.authorIsMachineIntelligence).toBe(true);
+  });
+
   it('rejects an assertion-bearing chat turn clearly when no device ingress is configured', async () => {
     const response = await request(port, 'POST', '/v1/chat/completions', {
       model: DEFAULT_COMPANION_ID,

@@ -1785,7 +1785,10 @@ export class AgentApiBackend {
       : this.readHeader(headers, 'x-canonical-contact-id', 256) ?? claimedCanonicalContactId;
     const resolvedChannelPrivacy = channelPrivacy.value ?? claimedChannelPrivacy;
     if (source !== 'api' && !hubDevicePrincipal) {
-      if (!canonicalContactId) {
+      // A speaker-named satellite turn carries its contact mapping in the
+      // speaker's own channel identity (per-speaker contacts,
+      // psfn-framework-ugstg); every other external claim needs the hint.
+      if (!canonicalContactId && !satellite?.speaker) {
         return {
           ok: false,
           error: this.fail(503, 'external_channel_not_configured', 'External channel claims require a canonical contact mapping'),

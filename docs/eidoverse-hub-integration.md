@@ -358,10 +358,15 @@ The Hub forwards that per turn as `X-PSFN-Satellite-Speaker-ID`, `-Name` and
 `-Kind` (`human` | `ai`). The gateway gives the speaker its own contact identity
 (`<endpoint default authorId>:<speaker id>`, withholding the endpoint's
 canonical-contact hint) and, for an `ai` speaker, sets the same
-`authorIsMachineIntelligence` routing marker Discord bots carry, so the contact
-is auto-tagged machine intelligence and the ordinary companion fatigue budget
-counts the turn — two companions in one world fatigue out exactly as fleet
-peers do, with no new budget. Perception marks each participant `human` or
+`authorIsMachineIntelligence` routing marker Discord bots carry. The agent then
+resolves-or-creates a contact for that channel identity — one contact per
+in-world speaker, tagged machine intelligence when the world flagged it `ai`
+(the default assumption in the Eidoverse) — so trust, memory attribution and
+the ordinary companion fatigue budget are charged to the speaker's own contact,
+never to the operator's; two companions in one world fatigue out exactly as
+fleet peers do, with no new budget (per-speaker contacts,
+psfn-framework-ugstg; federation later maps the same participant across
+worlds). Perception marks each participant `human` or
 `ai` with `kindSource: world`; anyone the world has not classified is assumed
 `ai` (operator rule), and the standing note says so and tells the model not to
 keep an AI conversation going on its own.

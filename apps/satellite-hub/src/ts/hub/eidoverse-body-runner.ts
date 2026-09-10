@@ -34,6 +34,9 @@ export const EIDOVERSE_BODY_ACTION_NAMES = [
   "fold_wings",
   "unfold_wings",
   "flight_status",
+  // Named clip library (psfn-framework-ae7c9): hold any library clip by
+  // name; the roster itself rides the world map, not a verb.
+  "play_clip",
   "spawn",
   "remove",
   "set_avatar",
@@ -41,6 +44,8 @@ export const EIDOVERSE_BODY_ACTION_NAMES = [
 
 /** Bound on `climb_to`: the door clamps to its soft ceiling anyway; this keeps a model typo from asking for the stratosphere. */
 export const EIDOVERSE_MAX_CLIMB_ALTITUDE_M = 500;
+/** A clip name as the door's roster spells it (a .vrma file name without the suffix). */
+export const EIDOVERSE_CLIP_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9 _.()-]{0,63}$/u;
 
 export type EidoverseBodyActionName = (typeof EIDOVERSE_BODY_ACTION_NAMES)[number];
 
@@ -69,6 +74,7 @@ export type EidoverseBodyAction =
   | { name: "fold_wings" }
   | { name: "unfold_wings" }
   | { name: "flight_status" }
+  | { name: "play_clip"; clip: string }
   | { name: "spawn"; lib?: string; query?: string; x?: number; z?: number; yaw?: number; id?: string }
   | { name: "remove"; id: string }
   | { name: "set_avatar"; avatar: string };
@@ -136,6 +142,8 @@ export interface EidoverseBodyTools {
   foldWings?(): Promise<string>;
   unfoldWings?(): Promise<string>;
   flightStatus?(): Promise<string>;
+  /** Named clip library (psfn-framework-ae7c9). */
+  playClip?(name: string): Promise<string>;
 }
 
 export interface EidoverseBodyRunnerLogger {
@@ -214,6 +222,13 @@ export function parseEidoverseBodyAction(name: string, args: unknown): Eidoverse
       );
     }
     return { name: "posture", kind: kind as (typeof EIDOVERSE_POSTURE_KINDS)[number] };
+  }
+  if (name === "play_clip") {
+    const clip = typeof args.name === "string" ? args.name.trim() : "";
+    if (!EIDOVERSE_CLIP_NAME_PATTERN.test(clip)) {
+      throw new EidoverseBodyActionRejectedError("Eidoverse play_clip requires a clip name from the world's clip library");
+    }
+    return { name: "play_clip", clip };
   }
   if (name === "climb_to") {
     const altitude = args.altitude;
@@ -423,6 +438,9 @@ export class EidoverseBodyRunner {
     if (action.name === "flight_status") {
       return settled(name, await this.requireTool("flightStatus")(), "reported");
     }
+    if (action.name === "play_clip") {
+      return settled(name, await this.requireTool("playClip")(action.clip), "expressed");
+    }
     if (action.name === "spawn") {
       const { name: _name, ...args } = action;
       return settled(name, await this.requireTool("spawn")(args), "created");
@@ -434,7 +452,7 @@ export class EidoverseBodyRunner {
   }
 
   private requireTool<K extends "faceAt" | "emote" | "posture" | "whisper" | "spawn" | "remove" | "setAvatar"
-    | "takeOff" | "climbTo" | "glideTo" | "landAt" | "foldWings" | "unfoldWings" | "flightStatus">(
+    | "takeOff" | "climbTo" | "glideTo" | "landAt" | "foldWings" | "unfoldWings" | "flightStatus" | "playClip">(
     key: K,
   ): NonNullable<EidoverseBodyTools[K]> {
     const tool = this.tools[key];

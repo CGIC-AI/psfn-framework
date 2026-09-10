@@ -87,13 +87,14 @@ describe('full callable catalog schema token cost', () => {
       // psfn-framework-2nsfo added the wiki world_notes_read / world_note actions
       // and their world / note_text / note_about fields: +644 bytes / +157 tokens.
       // psfn-framework-mlhfw added world perceive detail=snapshot and view: +378 bytes / +86 tokens.
-      beforeTokens: 20_215,
-      afterTokens: 24_458,
+      // psfn-framework-ae7c9 added the play_clip verb and its guidance: +159 bytes / +38 tokens.
+      beforeTokens: 20_253,
+      afterTokens: 24_496,
       deltaTokens: 4_243,
-      beforeBytes: 94_469,
-      afterBytes: 113_415,
-      providerSchemaHash: '53bfc33a7bd58e125ac7568304df15c5e39a274cc03f3cff8821cac609462718',
-      parameterSchemaHash: 'fbfc366474d73b970db989d48fd3dca89d10632a834a6b3bb133488903efa01f',
+      beforeBytes: 94_628,
+      afterBytes: 113_574,
+      providerSchemaHash: '118a24a87e01c06cf4d2e3afa03e3f53282c27f1cedc9a1586c7a40996d553c4',
+      parameterSchemaHash: '63b7d1c94185e17927431ac274756603f1634754f1cd31336d123df10ab04dab',
     });
 
     // The additional description tokens affect an uncached request. A stable

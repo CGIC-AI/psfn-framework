@@ -80,6 +80,8 @@ export interface WorldAvatarMap {
   room?: WorldAvatarRoom;
   terrain?: { sizeM?: number; flatRadiusM?: number };
   tools: Array<{ name: string; description?: string }>;
+  /** The world's animation clip library by name, when the door lists one (ae7c9). */
+  clips?: string[];
   capturedAt: string;
 }
 
@@ -152,6 +154,9 @@ export const WORLD_AVATAR_BODY_VERBS = [
   // same tier as the other body verbs; the door refuses when the body has no
   // wings, no fly permission, or no stamina.
   'take_off', 'climb_to', 'glide_to', 'land_at', 'fold_wings', 'unfold_wings', 'flight_status',
+  // Named clip library (psfn-framework-ae7c9): hold any library clip by name;
+  // the names ride the world map (`clips`). Raw-bone pose/animate stay out.
+  'play_clip',
 ] as const;
 export const WORLD_AVATAR_EDIT_VERBS = ['spawn', 'remove', 'set_avatar'] as const;
 type WorldAvatarBodyVerb = (typeof WORLD_AVATAR_BODY_VERBS)[number];

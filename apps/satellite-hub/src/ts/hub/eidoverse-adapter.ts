@@ -66,6 +66,8 @@ export interface EidoverseLookSource {
   look(): Promise<string>;
   /** Optional: the door's advertised tool list (`tools/list`). */
   listTools?(): Promise<Array<{ name: string; description?: string }>>;
+  /** Optional: the world's animation clip library by name (ae7c9). */
+  listClips?(): Promise<string[]>;
 }
 
 export interface EidoverseSayPublisher {
@@ -138,6 +140,8 @@ export interface EidoverseWorldMap {
   room?: EidoverseLookPerception["room"];
   terrain?: { sizeM?: number; flatRadiusM?: number };
   tools: Array<{ name: string; description?: string }>;
+  /** The world's animation clip library by name, when the door lists one (ae7c9). */
+  clips?: string[];
   capturedAt: string;
 }
 
@@ -414,11 +418,20 @@ export class EidoverseEmbodiedSessionAdapter {
         tools = [];
       }
     }
+    let clips: string[] | undefined;
+    if (this.deps.look.listClips && tools.some((tool) => tool.name === "list_clips")) {
+      try {
+        clips = await this.deps.look.listClips();
+      } catch {
+        clips = undefined;
+      }
+    }
     const terrain = parsed.worldInfo?.terrain;
     return {
       world,
       ...(mapping ? { placeId: mapping.placeId } : {}),
       places,
+      ...(clips && clips.length > 0 ? { clips } : {}),
       ...(parsed.room ? { room: parsed.room } : {}),
       ...(terrain && (terrain.sizeM !== undefined || terrain.flatRadiusM !== undefined)
         ? { terrain: { ...(terrain.sizeM !== undefined ? { sizeM: terrain.sizeM } : {}), ...(terrain.flatRadiusM !== undefined ? { flatRadiusM: terrain.flatRadiusM } : {}) } }

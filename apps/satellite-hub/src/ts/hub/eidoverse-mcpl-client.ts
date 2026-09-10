@@ -306,6 +306,24 @@ export class EidoverseMcplClient {
     return this.callTool("flight_status", {});
   }
 
+  // Named clip library (psfn-framework-ae7c9).
+  async playClip(name: string): Promise<string> {
+    return this.callTool("play_clip", { name });
+  }
+
+  /** The door's clip roster as names; empty when the door has no such tool or cannot read it. */
+  async listClips(): Promise<string[]> {
+    let reply: string;
+    try {
+      reply = await this.callTool("list_clips", {});
+    } catch {
+      return [];
+    }
+    const match = /^clips \(\d+\): (.*)$/u.exec(reply.trim());
+    if (!match || !match[1] || match[1].startsWith("the library is empty")) return [];
+    return match[1].split(",").map((name) => name.trim()).filter((name) => name.length > 0).slice(0, 200);
+  }
+
   /**
    * Ask the door to move this body to another world. The tool's synchronous
    * return is the arrival signal: the door answers `Arrived in "<world>"` (or

@@ -574,6 +574,7 @@ export interface WorldAvatarMapResult {
   room?: WorldAvatarRoom;
   terrain?: { sizeM?: number; flatRadiusM?: number };
   tools: Array<{ name: string; description?: string }>;
+  clips?: string[];
   capturedAt: string;
 }
 

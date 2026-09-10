@@ -519,6 +519,7 @@ async function runList(ops: WorldOperations, deps: WorldToolDeps, params: WorldT
         ...(map.terrain ? { terrain: map.terrain } : {}),
         hubPlaces: hubOnly.map((place) => ({ placeId: place.placeId, ...(place.region ? { region: place.region } : {}), movable: true, source: 'world' })),
         tools: (snapshot?.tools ?? map.tools).map((tool) => ({ name: tool.name, ...(tool.description ? { description: tool.description } : {}) })),
+        ...(map.clips && map.clips.length > 0 ? { clips: map.clips, clipsNote: 'hold one with act play_clip {name}; it plays until you stand or walk' } : {}),
         toolsNote: 'advisory: the world advertises these; you reach them through this tool\'s perceive/move/act verbs, and the verb allowlist decides what your body may do',
         capturedAt: map.capturedAt,
       };
@@ -978,13 +979,15 @@ export function createWorldTool(ops: WorldOperations, deps: WorldToolDeps): Subs
         Type.Literal('fold_wings'),
         Type.Literal('unfold_wings'),
         Type.Literal('flight_status'),
+        Type.Literal('play_clip'),
         Type.Literal('spawn'),
         Type.Literal('remove'),
         Type.Literal('set_avatar'),
       ], {
         description: 'Used with action=act. Eidoverse body verb (face, stop, emote, posture, whisper), flight verb '
           + '(take_off, climb_to, glide_to, land_at, fold_wings, unfold_wings, flight_status; the world refuses when '
-          + 'your body has no wings, no fly permission, or no stamina), or creation verb '
+          + 'your body has no wings, no fly permission, or no stamina), play_clip (hold a named clip from the '
+          + 'world\'s library; names come from action=list on a world place), or creation verb '
           + '(spawn, remove, set_avatar; needs the world.control tier).',
       })),
       arguments: Type.Optional(Type.Record(Type.String(), Type.Unknown(), {
@@ -992,7 +995,7 @@ export function createWorldTool(ops: WorldOperations, deps: WorldToolDeps): Subs
           + 'posture: {kind: sit|sitchair|lie|stand}; whisper: {to: participant id, text} (private, unlogged); '
           + 'climb_to: {altitude: metres}; glide_to and land_at: {x, z}; take_off, fold_wings, unfold_wings and '
           + 'flight_status take no arguments (read the reply: altitude, stamina, why you are still standing); '
-          + 'spawn: {query or lib, x?, z?, yaw?, id?}; remove: {id}; set_avatar: {avatar}.',
+          + 'play_clip: {name}; spawn: {query or lib, x?, z?, yaw?, id?}; remove: {id}; set_avatar: {avatar}.',
       })),
       affordanceId: Type.Optional(Type.String({
         description: 'Used with action=control. Registry affordance id, matched exactly against places.json as '

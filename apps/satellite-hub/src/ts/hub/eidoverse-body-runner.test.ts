@@ -100,9 +100,14 @@ test("body action allowlist rejects world-editing verbs and malformed locomotion
     [
       "walk_to", "face", "stop", "emote", "posture", "whisper",
       "take_off", "climb_to", "glide_to", "land_at", "fold_wings", "unfold_wings", "flight_status",
+      "play_clip",
       "spawn", "remove", "set_avatar",
     ],
   );
+  // Named clip library (ae7c9): a bounded name, never bones or keyframes.
+  assert.deepEqual(parseEidoverseBodyAction("play_clip", { name: "cheer" }), { name: "play_clip", clip: "cheer" });
+  assert.throws(() => parseEidoverseBodyAction("play_clip", { name: "../etc" }), EidoverseBodyActionRejectedError);
+  assert.throws(() => parseEidoverseBodyAction("play_clip", {}), EidoverseBodyActionRejectedError);
   // Flight family (jbvwz): bounded like every other verb; raw-bone pose and
   // animate stay outside the allowlist.
   assert.deepEqual(parseEidoverseBodyAction("take_off", {}), { name: "take_off" });

@@ -534,7 +534,8 @@ test("map publishes the Hub's mapped places, the room the body stands in, terrai
     'World: {"terrain":{"size":200,"flatRadius":20}}',
     "Nobody else is here right now.",
   ].join("\n")) as FakeLook & { listTools?: () => Promise<Array<{ name: string; description?: string }>> };
-  look.listTools = async () => [{ name: "look", description: "Look around." }, { name: "walk_to" }];
+  look.listTools = async () => [{ name: "look", description: "Look around." }, { name: "walk_to" }, { name: "list_clips" }];
+  (look as FakeLook & { listClips?: () => Promise<string[]> }).listClips = async () => ["cheer", "dance", "sitting_on_ground"];
   const adapter = new EidoverseEmbodiedSessionAdapter(adapterConfig(), {
     embodiedSessions: new EmbodiedSessionRegistry("satellite.endpoint"),
     sessions: new SessionStore(60),
@@ -550,7 +551,8 @@ test("map publishes the Hub's mapped places, the room the body stands in, terrai
   assert.ok(map.places.some((place) => place.placeId === "eidoverse:demo-world"));
   assert.equal(map.room?.label, "study");
   assert.deepEqual(map.terrain, { sizeM: 200, flatRadiusM: 20 });
-  assert.deepEqual(map.tools, [{ name: "look", description: "Look around." }, { name: "walk_to" }]);
+  assert.deepEqual(map.tools, [{ name: "look", description: "Look around." }, { name: "walk_to" }, { name: "list_clips" }]);
+  assert.deepEqual(map.clips, ["cheer", "dance", "sitting_on_ground"]);
   assert.equal(typeof map.capturedAt, "string");
   adapter.disconnect();
 });

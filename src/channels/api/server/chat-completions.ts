@@ -853,7 +853,9 @@ export class ApiChatCompletionsHandler {
     ) ?? claimedCanonicalContactId;
     const resolvedChannelPrivacy = channelPrivacy.value ?? claimedChannelPrivacy;
     if (source !== 'api') {
-      if (!canonicalContactId) {
+      // Per-speaker contacts (psfn-framework-ugstg): a speaker-named satellite
+      // turn maps to the speaker's own channel identity instead of the hint.
+      if (!canonicalContactId && !satellite?.speaker) {
         sendApiError(
           res,
           503,

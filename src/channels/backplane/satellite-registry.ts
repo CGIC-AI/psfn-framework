@@ -1333,13 +1333,15 @@ export function resolveSatelliteClaim(options: {
         channelId: `satellite:${claimType}:${sessionId}`,
         authorId: `${match.endpoint.defaultIdentity.authorId}:${speaker.id}`,
         authorName: speaker.name,
-        // The chat path fails closed (503 external_channel_not_configured)
-        // on a claim without a canonical contact, so a speaker-named turn
-        // keeps the endpoint's contact mapping; the speaker identity rides in
-        // authorId/authorName and `satellite.speaker` (machine-intelligence
-        // routing for `ai`). Per-speaker contacts are a follow-up (contact
-        // list / federation).
-        canonicalContactId: match.endpoint.defaultIdentity.canonicalContactId,
+        // Per-speaker contact (psfn-framework-ugstg): the endpoint's canonical
+        // contact names its human, who did not speak, so the hint is withheld
+        // and the agent resolves-or-creates a contact from the speaker's own
+        // channel identity (`satellite:<claimType>` + the authorId above),
+        // tagging it machine intelligence when the world flagged the speaker
+        // `ai`. The chat path admits the missing hint because `satellite.speaker`
+        // is the contact mapping; contact-level fatigue is then charged to that
+        // speaker's contact inside the turn, never to the operator's.
+        canonicalContactId: '',
         channelPrivacy: match.endpoint.defaultIdentity.channelPrivacy,
         satellite: { ...satelliteMetadata, speaker },
       },

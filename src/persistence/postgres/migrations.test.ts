@@ -169,6 +169,7 @@ describe('Postgres live schema migrations', () => {
     expect(sql).toContain("'stale_discarded'");
     expect(sql).toContain("'effect_outcome_unknown'");
     expect(sql).toContain('deferred_from_available_at_ms BIGINT');
+    expect(sql).toContain('lease_expiry_count INTEGER NOT NULL DEFAULT 0');
     expect(sql).toContain('CREATE TABLE IF NOT EXISTS agent_background_work_foreground_leases');
     expect(sql).toContain('CREATE TABLE IF NOT EXISTS agent_background_work_handoffs');
     expect(sql).toContain('CREATE TABLE IF NOT EXISTS agent_background_work_effect_receipts');

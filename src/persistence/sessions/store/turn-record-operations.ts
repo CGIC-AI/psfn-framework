@@ -157,6 +157,7 @@ export class SessionTurnRecordOperations {
     requiredTurnIds: readonly string[],
     readSnapshot: () => SessionEntry[],
     operation: (entries: readonly SessionEntry[]) => Promise<T>,
+    signal?: AbortSignal,
   ): Promise<T> {
     const normalizedSessionId = logicalSessionId.trim();
     if (!normalizedSessionId) {
@@ -218,6 +219,7 @@ export class SessionTurnRecordOperations {
         });
         return operation(eligibleEntries);
       },
+      { signal },
     );
   }
 

@@ -207,6 +207,39 @@ fail-closed:
   the initial one, the socket closes with `4401 authority changed`. Server
   shutdown closes sockets with `1012`.
 
+### Key path (no Hub, no SSO)
+
+Fleet auth adds the cookie path above; it is never a precondition
+(operator rule, S13). The same `/companion-ui/companions/<uuid>/ws` upgrade
+also admits an **operator key session**: `Authorization: Bearer <ADMIN_TOKEN>`
+or `<API_KEY>` with the same strict `Host`/`Origin` metadata and nothing
+else — no cookie, no `x-psfn-*` Hub claim or device assertion, no
+`x-identity-claim-*` header. A key that borrows any of those is rejected, and
+operator keys must be distinct from satellite keys. The socket's origin is
+pinned to the fleet canonical origin when fleet auth is configured, otherwise
+to `COMPANION_UI_ORIGIN` (one exact HTTPS origin, or HTTP on a loopback host,
+the same transport policy as the key-authenticated REST API on that
+listener). Without either the socket is not composed and the gateway logs
+why.
+
+A key session has no Hub device attachment and no fleet authorization
+context, so it is served by the **operator action broker** instead of the
+signed child-assertion broker: `session.ready` reports device
+`operator-key`, the operator ceiling (`text`, `vision`, `image_upload`,
+`touch`, plus `audio_input`/`speech_to_text` when STT is composed; never
+`audio_output`, which is bound to a satellite endpoint) and every relay
+telemetry scope; `hub.session.renew` is refused (there is no assertion to
+renew). Frames dispatch with the key principal exactly as the REST API does:
+`conversation.interact`/`audio`/`touch` become an `api` channel turn for that
+principal (not a `companion-ui` channel turn — that classification comes from
+a Hub attachment), `confirmations.*` use the gateway confirmation queue,
+`artifact.preview`, `conversation.status`, `conversation.interrupt` and
+`tool_activity.subscribe` map onto the key routes, and `shards.*` /
+`embodiment.*` are denied (they exist only as fleet child-capability and Hub
+attachment routes). The PWA itself still signs in through the Hub; a browser
+that holds an operator key needs a Hub-side intake to use this path, tracked
+separately.
+
 ```mermaid
 flowchart TD
   M["socket message"] --> BIN{"binary?"}

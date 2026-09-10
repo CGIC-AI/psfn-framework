@@ -955,6 +955,45 @@ describe('world tool — the world\'s own map (gs899, g8xyn)', () => {
     expect(resultText(moved)).not.toMatch(/disk full/u);
   });
 
+  it('perceive detail=snapshot delivers the world camera image only after intake screening admits it (mlhfw)', async () => {
+    const shot = { available: true as const, world: 'commons', view: 'third' as const, mimeType: 'image/png', dataBase64: 'iVBORw0KGgo=', bytes: 8, capturedAt: 'now' };
+    const admitted = createAvatarOps({ avatarSnapshot: vi.fn(async () => shot) });
+    const screener = { screenImageIntake: vi.fn(async () => ({ kind: 'screened' as const, flagged: false, withheld: false })) };
+    const tool = createWorldTool(admitted, { placesRegistry: EIDO_REGISTRY, screenImage: screener });
+    const result = await tool.execute('call-perceive', { action: 'perceive', placeId: 'eidoverse:commons', detail: 'snapshot', view: 'third' });
+    expect(admitted.avatarSnapshot).toHaveBeenCalledWith({ placeId: 'eidoverse:commons', view: 'third' });
+    expect(screener.screenImageIntake).toHaveBeenCalledWith(expect.objectContaining({
+      imageBase64: 'iVBORw0KGgo=', mimeType: 'image/png', originRef: 'world-avatar-snapshot', originDetail: 'commons:third',
+    }));
+    expect(result.content).toHaveLength(2);
+    expect(result.content[1]).toEqual({ type: 'image', data: 'iVBORw0KGgo=', mimeType: 'image/png' });
+    expect(resultText(result)).toContain('third view captured');
+
+    // Withheld: the notice, never the image.
+    const withheld = createWorldTool(admitted, {
+      placesRegistry: EIDO_REGISTRY,
+      screenImage: { screenImageIntake: vi.fn(async () => ({ kind: 'screened' as const, flagged: true, withheld: true, noticeText: 'This image was held for review.' })) },
+    });
+    const held = await withheld.execute('call-perceive', { action: 'perceive', placeId: 'eidoverse:commons', detail: 'snapshot' });
+    expect(held.content).toHaveLength(1);
+    expect(resultText(held)).toContain('This image was held for review.');
+
+    // No screener wired: never delivered, said plainly.
+    const unscreened = createWorldTool(admitted, { placesRegistry: EIDO_REGISTRY });
+    const plain = await unscreened.execute('call-perceive', { action: 'perceive', placeId: 'eidoverse:commons', detail: 'snapshot' });
+    expect(plain.content).toHaveLength(1);
+    expect(resultText(plain)).toContain('no vision intake screener is wired');
+
+    // No renderer: an honest sentence, no error.
+    const absent = createAvatarOps({ avatarSnapshot: vi.fn(async () => ({ available: false as const, world: 'commons', view: 'first' as const, reason: 'unavailable' as const })) });
+    const none = await createWorldTool(absent, { placesRegistry: EIDO_REGISTRY, screenImage: screener }).execute('call-perceive', { action: 'perceive', placeId: 'eidoverse:commons', detail: 'snapshot' });
+    expect(resultText(none)).toContain('No first view right now');
+
+    // Not a world place: refused before any Hub call.
+    const house = await createWorldTool(admitted, { placesRegistry: EIDO_REGISTRY, screenImage: screener }).execute('call-perceive', { action: 'perceive', placeId: 'office', detail: 'snapshot' });
+    expect(resultText(house)).toMatch(/needs an Eidoverse place/u);
+  });
+
   it('perceive folds the room the body stands in into the remembered map and the summary', async () => {
     const ops = createAvatarOps({
       avatarPerceive: vi.fn(async () => ({ ...PERCEPTION, room: { label: 'study', labelled: true, waysOut: ['a door on its west to the hall'], sealed: false } })),

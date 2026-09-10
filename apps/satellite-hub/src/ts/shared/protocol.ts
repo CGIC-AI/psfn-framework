@@ -514,7 +514,7 @@ export function decodeAudioChunk(encoded: string): Buffer {
 // ── Hub control port: the companion's own world-avatar surface ──
 //
 // Reached by the PSFN gateway with the Hub control credential over
-// `POST /internal/v1/world/{perceive,map,move,act}`. This is the companion moving
+// `POST /internal/v1/world/{perceive,map,snapshot,move,act}`. This is the companion moving
 // its OWN body; no Hub device assertion is involved (that is the external-
 // device `world.body` / `world.travel` path above, which stays device-gated).
 // Additive contract mirrored in the framework's
@@ -576,6 +576,18 @@ export interface WorldAvatarMapResult {
   tools: Array<{ name: string; description?: string }>;
   capturedAt: string;
 }
+
+export type WorldAvatarSnapshotView = "first" | "third" | "selfie";
+
+/**
+ * `POST /internal/v1/world/snapshot {view}` (psfn-framework-mlhfw): a bounded
+ * PNG through the door's spectator camera, or an honest not-available. The
+ * gateway re-checks the size and the agent screens the image before the
+ * model ever sees it.
+ */
+export type WorldAvatarSnapshotResult =
+  | { available: true; world: string; view: WorldAvatarSnapshotView; mimeType: string; dataBase64: string; bytes: number; capturedAt: string }
+  | { available: false; world: string; view: WorldAvatarSnapshotView; reason: "not_configured" | "unavailable" };
 
 export interface WorldAvatarPerceiveResult {
   world: string;

@@ -51,6 +51,14 @@ class RecordingWorld implements HubWorldControlPort {
   }
 
   mapCalls = 0;
+  snapshotViews: string[] = [];
+
+  async snapshot(view: "first" | "third" | "selfie") {
+    this.snapshotViews.push(view);
+    return view === "selfie"
+      ? { available: false as const, world: "commons", view, reason: "unavailable" as const }
+      : { available: true as const, world: "commons", view, mimeType: "image/png", dataBase64: "iVBORw0KGgo=", bytes: 8, capturedAt: "2026-09-10T18:00:00.000Z" };
+  }
 
   async map() {
     this.mapCalls += 1;
@@ -129,6 +137,18 @@ test("world routes execute the companion's own perceive, move and act with the c
     const mapWithDevice = await post(baseUrl, "/internal/v1/world/map", {}, DEVICE_TOKEN);
     assert.equal(mapWithDevice.status, 401);
     assert.equal(world.mapCalls, 1);
+
+    // mlhfw: the snapshot route validates the view and relays availability honestly.
+    const snap = await post(baseUrl, "/internal/v1/world/snapshot", { view: "third" });
+    assert.equal(snap.status, 200);
+    assert.equal(((await snap.json()) as { available: boolean; view: string }).view, "third");
+    const noView = await post(baseUrl, "/internal/v1/world/snapshot", {});
+    assert.equal(((await noView.json()) as { view: string }).view, "first");
+    const selfie = await post(baseUrl, "/internal/v1/world/snapshot", { view: "selfie" });
+    assert.equal(((await selfie.json()) as { available: boolean }).available, false);
+    const badView = await post(baseUrl, "/internal/v1/world/snapshot", { view: "drone" });
+    assert.equal(badView.status, 400);
+    assert.deepEqual(world.snapshotViews, ["third", "first", "selfie"]);
   });
 });
 

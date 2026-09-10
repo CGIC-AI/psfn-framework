@@ -64,6 +64,8 @@ export interface VisionIntakeImageScreenerPort {
     imageBase64?: string;
     mimeType?: string;
     originRef: string;
+    /** Free-text origin detail for the audit trail (e.g. the world and camera view of a snapshot). */
+    originDetail?: string;
     subjectIndex?: number;
     canonicalContactId?: string;
     requestScope?: string;

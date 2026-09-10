@@ -1613,6 +1613,9 @@ async function main(): Promise<void> {
     placesRegistry: placesRegistryConfig,
     worldPlaneMap,
     worldNotes: coreRuntime.worldNotes,
+    // A snapshot from the world camera is an inbound image: it reaches the
+    // model only through the same vision intake screening as any attachment.
+    screenImage: { screenImageIntake: (input) => gateway.screenImageIntake(input) },
     resolvePlaceDeviceStatus: placeId => resolvePlaceDeviceStatus(
       satelliteRegistryConfig,
       satelliteDeviceHealth,

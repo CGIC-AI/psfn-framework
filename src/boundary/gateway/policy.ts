@@ -389,6 +389,7 @@ export function evaluatePolicy(ctx: GatewayPolicyContext, policyConfig: PolicyCo
 
     case 'world.avatar_perceive':
     case 'world.avatar_map':
+    case 'world.avatar_snapshot':
     case 'world.avatar_move':
     case 'world.avatar_act': {
       // Transport-configured is the only question here; the capability tier

@@ -281,6 +281,7 @@ const RPC_TO_CLIENT_METHOD: Record<string, string> = {
   // dotted client methods and disabled the world tool on every deployment.
   'world.avatar_perceive': 'worldAvatar',
   'world.avatar_map': 'worldAvatar',
+  'world.avatar_snapshot': 'worldAvatar',
   'world.avatar_move': 'worldAvatar',
   'world.avatar_act': 'worldAvatar',
   'image.create': 'imageCreate',

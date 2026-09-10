@@ -24,7 +24,9 @@ import {
   type RoomEntryNoteSink,
   type RoomEntryOccupant,
 } from '../../../core/session/room-entry-note.js';
-import { textResult, textResultWithError } from '../../../core/tools/results.js';
+import { imageResult, textResult, textResultWithError } from '../../../core/tools/results.js';
+import type { VisionIntakeImageScreenerPort } from '../../../core/agent/substrate-agent/vision-attachments.js';
+import { isWorldAvatarSnapshotView, type WorldAvatarSnapshotView } from '../../../shared/contracts/world-avatar.js';
 import { getRequestContext } from '../../../primitives/llm/request-context.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { isHighTierTrustLevel, type TrustLevel } from '../../../system/trust/types.js';
@@ -36,7 +38,9 @@ import type { WorldNotesWriter } from '../../../shared/contracts/world-notes.js'
 // ── Agent-side `world` tool (Sprint 10, Workstream C2 + C3/C4) ──
 //
 // One action-dispatched tool over the physical/virtual world. Actions:
-//   perceive  — read Home-Assistant states for a place's affordances + summary
+//   perceive  — read Home-Assistant states for a place's affordances + summary;
+//               on a world plane, detail=snapshot adds a screened image from
+//               the door's camera (first/third/selfie view)
 //   list      — enumerate affordances for a place (default) or the whole site;
 //               on a world plane, also the world's own map (hub-mapped
 //               places, the current room, terrain) and the door's tool list
@@ -107,6 +111,10 @@ export interface WorldToolParams {
   intent?: WorldControlIntent;
   reason?: string;
   scope?: 'place' | 'site';
+  /** perceive: `snapshot` asks for a screened image from the door's camera (Eidoverse places only). */
+  detail?: 'snapshot';
+  /** perceive with detail=snapshot: which camera. */
+  view?: WorldAvatarSnapshotView;
   data?: Record<string, unknown>;
   /** move: walk to this in-world participant (id as shown before their messages). */
   participant?: string;
@@ -140,6 +148,13 @@ export interface WorldToolDeps {
    * that world, and every move records the route; never fatal to the tool.
    */
   worldNotes?: WorldNotesWriter;
+  /**
+   * Vision intake screener (psfn-framework-mlhfw). A snapshot from the door's
+   * camera is an inbound image like any other: it reaches the model only after
+   * `screenImageIntake` admits it. Unwired ⇒ the image is never delivered and
+   * the tool says so; a withheld decision delivers the notice instead.
+   */
+  screenImage?: VisionIntakeImageScreenerPort;
   /**
    * Cross-companion presence turn port (multi-companion, W5a). `move` writes
    * presence through THIS seam only — never a store/table directly (contract
@@ -270,7 +285,7 @@ async function runPerceive(
   ops: WorldOperations,
   deps: WorldToolDeps,
   params: WorldToolParams,
-): Promise<string> {
+): Promise<PerceiveOutcome> {
   const placeId = (typeof params.placeId === 'string' && params.placeId.trim())
     || deps.resolveSituatedPlaceId?.();
   if (!placeId) {
@@ -287,11 +302,21 @@ async function runPerceive(
   // physical places report their affordances. Honest about presence: when
   // the body is in another world than the place asks about, say so.
   let avatar: Record<string, unknown> | undefined;
+  let image: PerceiveOutcome['image'];
   if (isEidoversePlace(place)) {
     const perception = await requireAvatarOps(ops, 'avatarPerceive')({ placeId: place.placeId });
     deps.worldPlaneMap?.rememberRoom(perception.world, perception.room, perception.capturedAt);
     noteWorldPerception(deps, perception);
     avatar = describeAvatarPerception(perception, place);
+    if (params.detail === 'snapshot') {
+      const view = params.view ?? 'first';
+      if (!isWorldAvatarSnapshotView(view)) throw new Error('view must be first, third or selfie');
+      const shot = await perceiveSnapshot(ops, deps, place, view);
+      avatar.snapshot = shot.note;
+      image = shot.image;
+    }
+  } else if (params.detail === 'snapshot') {
+    throw new Error(`detail=snapshot needs an Eidoverse place; "${place.placeId}" is not on a world plane.`);
   }
 
   const readings: Array<Record<string, unknown>> = [];
@@ -315,7 +340,7 @@ async function runPerceive(
     : `${place.displayName}: ${readings.map((r) => `${r.displayName ?? r.affordanceId}=${r.state}`).join(', ')}.`;
   const summary = [avatar?.summary as string | undefined, haSummary].filter(Boolean).join(' ');
 
-  return JSON.stringify({
+  const text = JSON.stringify({
     action: 'perceive',
     placeId: place.placeId,
     place: place.displayName,
@@ -323,9 +348,53 @@ async function runPerceive(
     readings,
     summary,
   }, null, 2);
+  return image ? { text, image } : { text };
 }
 
-type AvatarOpName = 'avatarPerceive' | 'avatarMap' | 'avatarMove' | 'avatarAct';
+type AvatarOpName = 'avatarPerceive' | 'avatarMap' | 'avatarSnapshot' | 'avatarMove' | 'avatarAct';
+
+interface PerceiveOutcome {
+  text: string;
+  image?: { dataBase64: string; mimeType: string };
+}
+
+/**
+ * detail=snapshot (mlhfw): ask the Hub for the door's camera view, then run it
+ * through the vision intake exactly like an attachment. Returns the image only
+ * when the screener admits it; every other outcome is a sentence for the model.
+ */
+async function perceiveSnapshot(
+  ops: WorldOperations,
+  deps: WorldToolDeps,
+  place: PlaceConfig & { eidoverse: NonNullable<PlaceConfig['eidoverse']> },
+  view: WorldAvatarSnapshotView,
+): Promise<{ note: string; image?: { dataBase64: string; mimeType: string } }> {
+  const snapshot = await requireAvatarOps(ops, 'avatarSnapshot')({ placeId: place.placeId, view });
+  if (!snapshot.available) {
+    return {
+      note: snapshot.reason === 'not_configured'
+        ? 'No camera: this Hub has no snapshot source configured for the world.'
+        : `No ${view} view right now: the world has no renderer attached to your body, or it produced no frame.`,
+    };
+  }
+  if (!deps.screenImage) {
+    return { note: `A ${view} view was captured but not delivered: no vision intake screener is wired in this runtime.` };
+  }
+  const decision = await deps.screenImage.screenImageIntake({
+    imageBase64: snapshot.dataBase64,
+    mimeType: snapshot.mimeType,
+    originRef: 'world-avatar-snapshot',
+    originDetail: `${snapshot.world}:${view}`,
+    ...(getRequestContext()?.channelId ? { requestScope: getRequestContext()?.channelId as string } : {}),
+  });
+  if (decision.withheld) {
+    return { note: decision.noticeText ?? `The ${view} view was withheld by intake screening.` };
+  }
+  return {
+    note: `${view} view captured at ${snapshot.capturedAt} (${snapshot.bytes} bytes)${decision.promptBlock ? `\n${decision.promptBlock}` : ''}.`,
+    image: { dataBase64: snapshot.dataBase64, mimeType: snapshot.mimeType },
+  };
+}
 
 /** The avatar ops are optional on the port; an Eidoverse place with none wired fails closed. */
 function requireAvatarOps<K extends AvatarOpName>(ops: WorldOperations, key: K): NonNullable<WorldOperations[K]> {
@@ -958,6 +1027,12 @@ export function createWorldTool(ops: WorldOperations, deps: WorldToolDeps): Subs
       ], {
         description: 'Used with action=list. "site" enumerates every place; default is the situated/explicit place.',
       })),
+      detail: Type.Optional(Type.Literal('snapshot', {
+        description: 'Used with action=perceive on an Eidoverse place: also capture a screened image from the world camera.',
+      })),
+      view: Type.Optional(Type.Union([
+        Type.Literal('first'), Type.Literal('third'), Type.Literal('selfie'),
+      ], { description: 'Used with detail=snapshot: first-person (default), third-person, or selfie.' })),
       data: Type.Optional(Type.Record(Type.String(), Type.Unknown(), {
         description: 'Used with action=control. Optional extra Home Assistant service data (e.g. brightness).',
       })),
@@ -971,8 +1046,10 @@ export function createWorldTool(ops: WorldOperations, deps: WorldToolDeps): Subs
         const action = normalizeWorldAction(params);
         actionForError = action;
         switch (action) {
-          case 'perceive':
-            return textResult(await runPerceive(ops, deps, params));
+          case 'perceive': {
+            const perceived = await runPerceive(ops, deps, params);
+            return perceived.image ? imageResult(perceived.text, perceived.image) : textResult(perceived.text);
+          }
           case 'list':
             return textResult(await runList(ops, deps, params));
           case 'control':

@@ -97,7 +97,7 @@ const FORBIDDEN_BROWSER_AUTHORITY_HEADERS = new Set([
  * authorization context; the gateway dispatches its frames with the key
  * principal exactly as the REST API would.
  */
-export interface CompanionUiOperatorActionBroker {
+interface CompanionUiOperatorActionBroker {
   execute(input: Readonly<{
     rawBody: Uint8Array;
     companionId: CompanionId;

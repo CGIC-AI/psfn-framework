@@ -104,3 +104,81 @@ test("the world's own human/ai classification rides every wake and is learned fo
   assert.deepEqual(target.observed, [["visitor", "human"], ["nova-kube", "ai"], ["visitor", "human"]]);
   assert.equal(speakerOf(message({ id: "x", author: "world", text: "* rain", tags: ["chat:ambient", "eidoverse:weather"] })), null);
 });
+
+test("a door-tagged mention that explicitly @-addresses another participant is skipped", async () => {
+  const target = new RecordingTarget();
+  const info: string[] = [];
+  const wake = createEidoverseMcplWakeRuntime(target, {
+    ambientSayDebounceMs: 10,
+    catchupWake: false,
+    wakeQueueLimit: 8,
+    agentNames: ["nova"],
+  }, { logger: { warn: () => undefined, info: (line) => info.push(line) } });
+
+  wake.deliver([
+    message({ id: "m1", author: "visitor", text: "@nova-kube come over here", tags: ["chat:mention"] }),
+  ]);
+  await settle();
+  await wake.close();
+
+  assert.deepEqual(target.turns, []);
+  assert.equal(info.length, 1, info.join("\n"));
+  assert.match(
+    info[0]!,
+    /^Eidoverse wake skipped: message m1 @-addresses another participant text="@nova-kube come over here"/u,
+  );
+});
+
+test("a door-tagged mention explicitly addressing this companion's own name wakes it", async () => {
+  const target = new RecordingTarget();
+  const wake = createEidoverseMcplWakeRuntime(target, {
+    ambientSayDebounceMs: 10,
+    catchupWake: false,
+    wakeQueueLimit: 8,
+    agentNames: ["nova"],
+  }, { logger: { warn: () => undefined } });
+
+  wake.deliver([
+    message({ id: "m1", author: "visitor", text: "@nova come here", tags: ["chat:mention"] }),
+  ]);
+  await settle();
+  await wake.close();
+
+  assert.deepEqual(target.turns, ["@nova come here"]);
+});
+
+test("a door-tagged mention with no @-address at all still wakes: tags decide, not text", async () => {
+  const target = new RecordingTarget();
+  const wake = createEidoverseMcplWakeRuntime(target, {
+    ambientSayDebounceMs: 10,
+    catchupWake: false,
+    wakeQueueLimit: 8,
+    agentNames: ["nova"],
+  }, { logger: { warn: () => undefined } });
+
+  wake.deliver([
+    message({ id: "m1", author: "visitor", text: "nova, come here", tags: ["chat:mention"] }),
+  ]);
+  await settle();
+  await wake.close();
+
+  assert.deepEqual(target.turns, ["nova, come here"]);
+});
+
+test("a door-tagged mention naming both this companion and another still wakes", async () => {
+  const target = new RecordingTarget();
+  const wake = createEidoverseMcplWakeRuntime(target, {
+    ambientSayDebounceMs: 10,
+    catchupWake: false,
+    wakeQueueLimit: 8,
+    agentNames: ["nova"],
+  }, { logger: { warn: () => undefined } });
+
+  wake.deliver([
+    message({ id: "m1", author: "visitor", text: "@nova-kube and @nova both", tags: ["chat:mention"] }),
+  ]);
+  await settle();
+  await wake.close();
+
+  assert.deepEqual(target.turns, ["@nova-kube and @nova both"]);
+});

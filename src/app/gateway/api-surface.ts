@@ -1,3 +1,4 @@
+import { resolveTestingHarnessDevicesConfig } from '../../channels/backplane/testing-harness-devices.js';
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import { ExternalMemoryMcpRoute } from '../../channels/api/server/external-memory-mcp.js';
@@ -598,6 +599,12 @@ export async function startOptionalGatewayApiServer(
     reservedTokens: [env.API_KEY, env.ADMIN_TOKEN],
   });
   const hubDeviceCompanionId = resolveGatewayHubDeviceCompanionId(options);
+  // Testing-harness devices (psfn-framework-ajgo2): env flag plus the harness
+  // principal, failing closed when either is missing.
+  const testingHarnessDevices = resolveTestingHarnessDevicesConfig(
+    options.channelsConfig?.api.testingHarness !== undefined,
+    env,
+  );
   const hubDeviceIngress = options.hubDeviceAssertionVerifier
     ? new GatewayHubDeviceIngressService({
         verifyAndConsume: (assertion, expected) => options.hubDeviceAssertionVerifier!
@@ -1171,6 +1178,7 @@ export async function startOptionalGatewayApiServer(
     sensorIngest: inertSensorIngest,
     apiKey: env.API_KEY || undefined,
     testingHarnessPrincipal: options.channelsConfig?.api.testingHarness,
+    ...(testingHarnessDevices ? { testingHarnessDevices } : {}),
     ...(options.channelsConfig?.api.externalMemory ? {
       externalMemoryMcp: new ExternalMemoryMcpRoute(
         options.channelsConfig.api.externalMemory,

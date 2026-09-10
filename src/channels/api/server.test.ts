@@ -2727,6 +2727,86 @@ describe('ApiServer with fleet auth configured alongside key auth', () => {
     expect(verifyVirtualSpaceAssertion).not.toHaveBeenCalled();
   });
 
+  // ajgo2 fixture: a synthetic satellite (testProvenance) and the devices flag.
+  // One server per test: a stopped server's keep-alive socket cannot serve the
+  // next request in the same test.
+  const harnessDeviceFixture = async (input: { withProvenance: boolean; devicesFlag: boolean }) => {
+    const fixtureRegistry = (withProvenance: boolean) => ({
+      ...SATELLITE_TEST_REGISTRY,
+      satellites: SATELLITE_TEST_REGISTRY.satellites.map(satellite => ({
+        ...satellite,
+        ...(withProvenance ? {
+          testProvenance: {
+            schemaVersion: 1 as const,
+            kind: 'testing_harness' as const,
+            runId: '47023c9c-2a7e-4dad-b950-a8fe74608eee',
+            manifestId: 'shakedown:fixture:server-test',
+          },
+        } : {}),
+        endpoints: satellite.endpoints.map(endpoint => ({
+          ...endpoint,
+          auth: {
+            mode: 'api_key' as const,
+            apiKeyPrincipalIds: [deriveApiKeyPrincipalId('dedicated-satellite-key')],
+          },
+        })),
+      })),
+    });
+    const startWith = async () => {
+      await stopServer(server);
+      const mockAgent = createMockAgentLoop(eventBus);
+      server = createApiServer({
+        port,
+        agentLoop: mockAgent,
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        apiKey: 'legacy-api-key',
+        satelliteApiKeys: ['dedicated-satellite-key'],
+        satelliteRegistry: fixtureRegistry(input.withProvenance),
+        ...(input.devicesFlag ? { testingHarnessDevices: { enabled: true as const } } : {}),
+        healthChecks: createHealthyHealthChecks(),
+      });
+      await server.start();
+      return mockAgent;
+    };
+    const send = () => request(port, 'POST', '/v1/chat/completions', {
+      model: DEFAULT_COMPANION_ID,
+      messages: [{ role: 'user', content: 'harness probe on a satellite bearer' }],
+    }, {
+      Authorization: 'Bearer dedicated-satellite-key',
+      'X-PSFN-Satellite-Claim-Type': 'android-mobile',
+      'X-PSFN-Satellite-ID': 'android-phone',
+      'X-PSFN-Satellite-Endpoint-ID': 'companion-app',
+      'X-PSFN-Satellite-Session-ID': 'harness-device-session',
+      'x-testing-harness-run-id': '47023c9c-2a7e-4dad-b950-a8fe74608eee',
+      'x-testing-harness-manifest-id': 'shakedown:coverage:47023c9c-2a7e-4dad-b950-a8fe74608eee',
+    });
+
+    const mockAgent = await startWith();
+    return { mockAgent, send };
+  };
+
+  it('refuses test-run provenance on a satellite bearer by default, even on a testProvenance fixture (ajgo2)', async () => {
+    const { send } = await harnessDeviceFixture({ withProvenance: true, devicesFlag: false });
+    const refused = await send();
+    expect(refused.status).toBe(403);
+    expect(JSON.parse(refused.body).error.type).toBe('testing_harness_provenance_not_allowed');
+  });
+
+  it('refuses test-run provenance on a real satellite even with the devices flag on (ajgo2)', async () => {
+    const { send } = await harnessDeviceFixture({ withProvenance: false, devicesFlag: true });
+    const refused = await send();
+    expect(refused.status).toBe(403);
+    expect(JSON.parse(refused.body).error.type).toBe('testing_harness_provenance_not_allowed');
+  });
+
+  it('admits test-run provenance on a satellite bearer for a testProvenance fixture with the devices flag on (ajgo2)', async () => {
+    const { mockAgent, send } = await harnessDeviceFixture({ withProvenance: true, devicesFlag: true });
+    const admitted = await send();
+    expect(admitted.status).toBe(200);
+    expect(fromAny(mockAgent.handleMessage)).toHaveBeenCalled();
+  });
+
   it('rejects an assertion-bearing chat turn clearly when no device ingress is configured', async () => {
     const response = await request(port, 'POST', '/v1/chat/completions', {
       model: DEFAULT_COMPANION_ID,

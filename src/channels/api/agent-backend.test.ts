@@ -123,6 +123,88 @@ describe('AgentApiBackend testing-harness provenance', () => {
     });
   });
 
+  it('stamps a testing-harness device turn (satellite bearer on a testProvenance fixture, flag on) and refuses it otherwise (ajgo2)', async () => {
+    const token = 'fixture-satellite-bearer-0123456789';
+    const registry = (withProvenance: boolean) => parseSatelliteRegistryConfig({
+      schemaVersion: 1, enabled: true,
+      satellites: [{
+        satelliteId: 'physical-satellite', displayName: 'Physical fixture', mobility: 'static', placeId: 'office',
+        ...(withProvenance ? {
+          testProvenance: {
+            schemaVersion: 1, kind: 'testing_harness',
+            runId: '47023c9c-2a7e-4dad-b950-a8fe74608eee', manifestId: 'shakedown:fixture:backend-test',
+          },
+        } : {}),
+        endpoints: [{
+          endpointId: 'physical-endpoint', displayName: 'Physical endpoint',
+          claimTypes: ['satellite-endpoint'], promptChannelType: 'satellite-endpoint',
+          auth: { mode: 'api_key', apiKeyPrincipalIds: [deriveApiKeyPrincipalId(token)] },
+          defaultIdentity: {
+            authorId: 'fixture-human', authorName: 'Fixture Human',
+            canonicalContactId: 'contact-fixture-human', channelPrivacy: 'private',
+          },
+          maxCapabilities: ['text'],
+        }],
+      }],
+    });
+    const contactStore = fromAny({
+      getById: vi.fn(async (id: string) => ({
+        id, displayName: 'Fixture Human', trustLevel: 'regular', relationshipType: 'friend',
+        firstSeen: '2026-08-12T00:00:00.000Z', lastSeen: '2026-08-12T00:00:00.000Z',
+      })),
+    });
+    const principal = { id: deriveApiKeyPrincipalId(token), mode: 'api_key' as const, scope: 'satellite' as const };
+    const headers = {
+      'x-psfn-satellite-claim-type': 'satellite-endpoint',
+      'x-psfn-satellite-id': 'physical-satellite',
+      'x-psfn-satellite-endpoint-id': 'physical-endpoint',
+      'x-psfn-satellite-session-id': 's12g-physical-session',
+      'x-testing-harness-run-id': '47023c9c-2a7e-4dad-b950-a8fe74608eee',
+      'x-testing-harness-manifest-id': 'shakedown:coverage:47023c9c-2a7e-4dad-b950-a8fe74608eee',
+    };
+    const turn = (backend: AgentApiBackend) => backend.handleChatCompletion({
+      requestId: 'harness-device-turn',
+      request: { model: 'test-model', messages: [{ role: 'user', content: 'presence probe' }] },
+      principal,
+      headers,
+    });
+
+    const strict = new AgentApiBackend({
+      agentLoop: fromAny({ handleMessage: vi.fn(), abort: vi.fn() }),
+      eventBus: new EventBus(), sessionManager: createSessionManagerStub(), contactStore,
+      satelliteRegistry: registry(true),
+    });
+    expect(await turn(strict)).toMatchObject({ ok: false, error: { type: 'testing_harness_provenance_not_allowed' } });
+
+    const flaggedRealSatellite = new AgentApiBackend({
+      agentLoop: fromAny({ handleMessage: vi.fn(), abort: vi.fn() }),
+      eventBus: new EventBus(), sessionManager: createSessionManagerStub(), contactStore,
+      satelliteRegistry: registry(false), testingHarnessDevices: { enabled: true },
+    });
+    expect(await turn(flaggedRealSatellite)).toMatchObject({ ok: false, error: { type: 'testing_harness_provenance_not_allowed' } });
+
+    const handleMessage = vi.fn(async (message) => ({
+      content: 'probe complete', channelId: message.channelId, metadata: { inputTokens: 1, outputTokens: 1 },
+    }));
+    const sessionManager = createSessionManagerStub();
+    const admitted = new AgentApiBackend({
+      agentLoop: fromAny({ handleMessage, abort: vi.fn() }),
+      eventBus: new EventBus(), sessionManager, contactStore,
+      satelliteRegistry: registry(true), testingHarnessDevices: { enabled: true },
+    });
+    expect(await turn(admitted)).toMatchObject({ ok: true });
+    expect(handleMessage).toHaveBeenCalledWith(expect.objectContaining({
+      routing: expect.objectContaining({
+        testingHarness: {
+          schemaVersion: 1,
+          kind: 'testing_harness',
+          runId: '47023c9c-2a7e-4dad-b950-a8fe74608eee',
+          manifestId: 'shakedown:coverage:47023c9c-2a7e-4dad-b950-a8fe74608eee',
+        },
+      }),
+    }), undefined, undefined);
+  });
+
   it('rejects an unattributed harness turn before the agent runs', async () => {
     const handleMessage = vi.fn();
     const backend = new AgentApiBackend({

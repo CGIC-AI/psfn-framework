@@ -1568,6 +1568,12 @@ export class AgentApiBackend {
         }
         : {}),
       ...(params.satellite ? { satellite: params.satellite } : {}),
+      // S13 MOVE: the world said this speaker is an AI — the same marker
+      // Discord's `author.bot` sets, so the contact is auto-tagged and the
+      // per-speaker fatigue budget applies. The direct HTTP path sets it in
+      // server/session.ts; the split (gateway -> agent) path must too, or a
+      // world of AIs is charged as strangers with no cap (mech8 proof).
+      ...(params.satellite?.speaker?.kind === 'ai' ? { authorIsMachineIntelligence: true } : {}),
       ...(params.hubDeviceAttachment ? { hubDeviceAttachment: params.hubDeviceAttachment } : {}),
       ...(params.channelPrivacy ? { channelPrivacy: params.channelPrivacy } : {}),
       ...(params.overrides.completionMaxTokens !== undefined
@@ -1583,6 +1589,7 @@ export class AgentApiBackend {
     };
     const hasRouting = params.source !== 'api'
       || routing.testingHarness
+      || routing.authorIsMachineIntelligence
       || routing.broadcast
       || routing.satellite
       || routing.hubDeviceAttachment

@@ -205,6 +205,57 @@ describe('AgentApiBackend testing-harness provenance', () => {
     }), undefined, undefined);
   });
 
+  it('marks a world speaker the door classified as AI as machine intelligence on the split path (ugstg, mech8)', async () => {
+    const token = 'world-satellite-bearer-0123456789';
+    const handleMessage = vi.fn(async (message) => ({
+      content: 'hi there', channelId: message.channelId, metadata: { inputTokens: 1, outputTokens: 1 },
+    }));
+    const backend = new AgentApiBackend({
+      agentLoop: fromAny({ handleMessage, abort: vi.fn() }),
+      eventBus: new EventBus(), sessionManager: createSessionManagerStub(),
+      contactStore: fromAny({
+        getById: vi.fn(async (id: string) => ({
+          id, displayName: 'Visitor', trustLevel: 'regular', relationshipType: 'friend',
+          firstSeen: '2026-08-12T00:00:00.000Z', lastSeen: '2026-08-12T00:00:00.000Z',
+        })),
+      }),
+      satelliteRegistry: parseSatelliteRegistryConfig({
+        schemaVersion: 1, enabled: true,
+        satellites: [{
+          satelliteId: 'hub', displayName: 'World avatar', mobility: 'static', placeId: 'eidoverse:commons',
+          endpoints: [{
+            endpointId: 'hub', displayName: 'Hub', claimTypes: ['world-avatar'], promptChannelType: 'satellite-endpoint',
+            auth: { mode: 'api_key', apiKeyPrincipalIds: [deriveApiKeyPrincipalId(token)] },
+            defaultIdentity: {
+              authorId: 'eidoverse-visitor', authorName: 'Eidoverse Visitor',
+              canonicalContactId: 'contact-visitor', channelPrivacy: 'private',
+            },
+            maxCapabilities: ['text'],
+          }],
+        }],
+      }),
+    });
+    const result = await backend.handleChatCompletion({
+      requestId: 'world-ai-speaker',
+      request: { model: 'test-model', messages: [{ role: 'user', content: 'nova-kube: @nova hello' }] },
+      principal: { id: deriveApiKeyPrincipalId(token), mode: 'api_key', scope: 'satellite' },
+      headers: {
+        'x-psfn-satellite-claim-type': 'world-avatar',
+        'x-psfn-satellite-id': 'hub',
+        'x-psfn-satellite-endpoint-id': 'hub',
+        'x-psfn-satellite-session-id': 'eidoverse:abc',
+        'x-psfn-satellite-speaker-id': 'nova-kube',
+        'x-psfn-satellite-speaker-name': 'Nova (kube)',
+        'x-psfn-satellite-speaker-kind': 'ai',
+      },
+    });
+    expect(result).toMatchObject({ ok: true });
+    const message = handleMessage.mock.calls[0]?.[0];
+    expect(message.authorId.endsWith(':nova-kube')).toBe(true);
+    expect(message.routing?.satellite?.speaker).toEqual({ id: 'nova-kube', name: 'Nova (kube)', kind: 'ai' });
+    expect(message.routing?.authorIsMachineIntelligence).toBe(true);
+  });
+
   it('rejects an unattributed harness turn before the agent runs', async () => {
     const handleMessage = vi.fn();
     const backend = new AgentApiBackend({

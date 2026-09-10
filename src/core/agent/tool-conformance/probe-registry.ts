@@ -417,6 +417,9 @@ export const TOOL_CONFORMANCE_ACTION_REGISTRY:
     wardrobe_read: SCHEMA_ASSERT,
     wardrobe_save: SCHEMA_ASSERT,
     wardrobe_revise: SCHEMA_ASSERT,
+    // Per-world notes (psfn-framework-2nsfo): the read lists worlds; the note is a bounded write.
+    world_notes_read: safeRead({ action: 'world_notes_read' }),
+    world_note: SCHEMA_ASSERT,
   },
   schedule: {
     list: safeRead({ action: 'list' }),

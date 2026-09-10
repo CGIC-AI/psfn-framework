@@ -1401,6 +1401,22 @@ describe('Hub device enrollment owner binding', () => {
     };
   }
 
+  it('caps the shared-device response lease at two minutes (world turns outgrew 60 s)', () => {
+    const withLease = (durationMs: number) => {
+      const raw = rawEnrollment() as unknown as Record<string, unknown>;
+      const satellite = (raw.satellites as Array<Record<string, unknown>>)[0]!;
+      satellite.sharedDevice = {
+        primaryCompanionId: '11111111-1111-4111-8111-111111111111',
+        observationRecipients: [],
+        emanationMemberIds: ['11111111-1111-4111-8111-111111111111'],
+        responseLease: { durationMs, activeConversationTtlMs: 60_000 },
+      };
+      return raw;
+    };
+    expect(parseSatelliteRegistryConfig(withLease(120_000)).satellites[0]?.sharedDevice?.responseLease.durationMs).toBe(120_000);
+    expect(() => parseSatelliteRegistryConfig(withLease(120_001))).toThrow(/durationMs must be <= 120000/);
+  });
+
   it('normalizes a strict server-owned enrollment', () => {
     expect(parseSatelliteRegistryConfig(rawEnrollment()).satellites[0]?.endpoints[0]?.hubDeviceEnrollment)
       .toEqual({ deviceId: 'office-device', enrollmentVersion: 7, enrollmentStatus: 'active' });

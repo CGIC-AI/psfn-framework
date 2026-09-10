@@ -11,7 +11,7 @@
 // map without any model-authored write. Federation groundwork: a companion
 // that travels between linked worlds remembers each one by these notes.
 
-export type WorldLandmarkKind = 'thing' | 'room' | 'place';
+type WorldLandmarkKind = 'thing' | 'room' | 'place';
 
 export interface WorldLandmark {
   /** Stable key: `thing:<id>`, `room:<label>`, `place:<placeId>`. */
@@ -29,7 +29,7 @@ export interface WorldLandmark {
 }
 
 /** "From here I reached there": adjacency learned from the companion's own moves. */
-export interface WorldRoute {
+interface WorldRoute {
   from: string;
   to: string;
   firstAt: string;

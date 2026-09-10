@@ -21,7 +21,7 @@ import type {
 } from '../../shared/contracts/world-notes.js';
 import type { WikiDocument, WikiStorePort } from './types.js';
 
-export const WORLD_NOTES_TAG = 'world-notes';
+const WORLD_NOTES_TAG = 'world-notes';
 const WORLD_NAME_PATTERN = /^[a-z0-9_-]{1,64}$/u;
 const MAX_LANDMARKS = 200;
 const MAX_ROUTES = 200;
@@ -181,7 +181,7 @@ export class WorldNotesLibrary implements WorldNotesReader, WorldNotesWriter {
   }
 }
 
-export function parseWorldNotesDocument(document: WikiDocument): WorldNotes | undefined {
+function parseWorldNotesDocument(document: WikiDocument): WorldNotes | undefined {
   let raw: unknown;
   try {
     raw = JSON.parse(document.body);

@@ -35,13 +35,13 @@ import type { Scheduler } from '../../../core/scheduler/scheduler.js';
 const log = createComponentLogger('WorldExplorationLane');
 
 export const WORLD_EXPLORATION_TASK_ID = 'world-exploration:invite';
-export const WORLD_EXPLORATION_TASK_NAME = 'world-exploration';
+const WORLD_EXPLORATION_TASK_NAME = 'world-exploration';
 export const WORLD_EXPLORATION_CHANNEL_ID = 'internal:reflection:world-exploration';
 const MINUTE_MS = 60_000;
 /** The scheduler tick that checks the gates; the real cadence is the interval. */
 const CHECK_INTERVAL_MS = 5 * MINUTE_MS;
 
-export type WorldExplorationSkipReason =
+type WorldExplorationSkipReason =
   | 'disabled'
   | 'tier'
   | 'not_on_world_plane'
@@ -68,7 +68,7 @@ export interface WorldExplorationLane {
   runOnce(): Promise<WorldExplorationSkipReason | 'invited' | 'silent'>;
 }
 
-export function buildWorldExplorationPrompt(input: { world: string; placeLabel: string; people: number; things: number }): string {
+function buildWorldExplorationPrompt(input: { world: string; placeLabel: string; people: number; things: number }): string {
   return [
     `You have a body in the world "${input.world}" right now, standing at ${input.placeLabel}, with nothing asked of you.`,
     `Around you: ${input.people === 0 ? 'nobody' : `${input.people} other${input.people === 1 ? '' : 's'}`}, ${input.things === 0 ? 'nothing placed' : `${input.things} placed thing${input.things === 1 ? '' : 's'}`}.`,

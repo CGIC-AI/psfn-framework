@@ -27,7 +27,12 @@ import type {
 import type { TurnRecordStorePort } from './turn-record-store-port.js';
 import { createFilesystemTurnRecordStorePort } from './turn-records.js';
 import type { TurnRecordEligibilityFencePort } from './turn-record-eligibility-fence-port.js';
-import { PostgresTurnRecordEligibilityFence } from '../postgres/turn-record-eligibility-fence.js';
+import {
+  DEFAULT_TURN_RECORD_ELIGIBILITY_FENCE_ACQUIRE_TIMEOUT_MS,
+  PostgresTurnRecordEligibilityFence,
+  TURN_RECORD_ELIGIBILITY_FENCE_POOL_CAPACITY,
+  TURN_RECORD_ELIGIBILITY_FENCE_POOL_LANE,
+} from '../postgres/turn-record-eligibility-fence.js';
 import {
   purgeTestingSessionPostgresData,
   type SessionDatabasePurgePort,
@@ -916,8 +921,21 @@ export async function createDefaultPostgresSessionAdapters(
           }
         : {}),
     }),
+    // The fence holds a checked-out client (session-level advisory lock) for
+    // the whole fenced operation, and that operation itself needs clients from
+    // the shared store pool. On its own lane a set of long holders can no
+    // longer exhaust the lane every store and the foreground turn draw from
+    // (bead psfn-framework-52epa). An injected pool (tests) keeps one pool.
     turnRecordEligibilityFence: new PostgresTurnRecordEligibilityFence(
-      pool,
+      options.pool ?? createPostgresPool(databaseUrl, {
+        applicationName: 'psfn-turn-record-fence',
+        allowExitOnIdle: true,
+        lane: TURN_RECORD_ELIGIBILITY_FENCE_POOL_LANE,
+        max: TURN_RECORD_ELIGIBILITY_FENCE_POOL_CAPACITY,
+        connectionTimeoutMillis: DEFAULT_TURN_RECORD_ELIGIBILITY_FENCE_ACQUIRE_TIMEOUT_MS,
+        ...(options.schema ? { schema: options.schema } : {}),
+        ...(options.role ? { role: options.role } : {}),
+      }),
       options.schema ?? 'default',
     ),
     conversationalActivityWorkset: new PostgresConversationalActivityWorkset(

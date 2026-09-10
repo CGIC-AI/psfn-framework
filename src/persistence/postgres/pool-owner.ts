@@ -57,9 +57,39 @@ const activePostgresPoolOwners = new Set<PostgresPoolOwner>();
  * an ICP reservation or concurrent ANN maintenance) without starving ordinary
  * foreground reads and writes. Three gives that work a dedicated connection
  * plus two promptly available lanes while keeping a ten-companion,
- * two-authority fleet at a deterministic 60-connection ceiling.
+ * two-authority fleet at a deterministic 60-connection ceiling for the shared
+ * lane. Named lanes (today only the TurnRecord eligibility fence, capacity 8
+ * per companion authority) sit on top of that ceiling and idle out when
+ * unused; a holder that must keep a client across long asynchronous work
+ * belongs on a named lane, never on the shared one.
  */
-const RUNTIME_POSTGRES_AUTHORITY_POOL_CAPACITY = 3;
+export const RUNTIME_POSTGRES_AUTHORITY_POOL_CAPACITY = 3;
+
+/**
+ * Upper bound on any wait for a client from an owned pool, queued waiters
+ * included (pg-pool applies `connectionTimeoutMillis` to both). Without it an
+ * exhausted lane parks every caller forever: the S13 local-verify stall (bead
+ * psfn-framework-52epa) was three background fence holders filling the whole
+ * shared lane while a foreground turn's `beginForeground` waited on
+ * `pool.connect()` with no deadline. A bounded wait turns that into a loud
+ * error the turn pipeline reports instead of a silent hang.
+ */
+export const RUNTIME_POSTGRES_POOL_CONNECT_TIMEOUT_MS = 30_000;
+
+/**
+ * Named lanes still need a ceiling so a misconfigured caller cannot multiply
+ * the fleet connection budget; this is generous for a bounded-concurrency
+ * fence and small against the per-companion default of three.
+ */
+const MAX_RUNTIME_POSTGRES_LANE_CAPACITY = 16;
+
+function resolveLaneCapacity(lane: string, requested: number | undefined): number {
+  if (requested === undefined) return RUNTIME_POSTGRES_AUTHORITY_POOL_CAPACITY;
+  if (!Number.isSafeInteger(requested) || requested < 1) {
+    throw new Error(`PostgreSQL lane "${lane}" requires a positive integer max`);
+  }
+  return Math.min(requested, MAX_RUNTIME_POSTGRES_LANE_CAPACITY);
+}
 
 /**
  * Process-lifecycle owner for physical PostgreSQL pools.
@@ -92,11 +122,18 @@ export class PostgresPoolOwner {
     const key = postgresPoolAuthorityKey(connectionString, options);
     let entry = this.entries.get(key);
     if (!entry) {
+      const lane = options.lane?.trim();
       const pool = createPhysicalPool(connectionString, {
         ...options,
-        applicationName: `${this.process}-persistence`,
+        applicationName: lane
+          ? `${this.process}-persistence-${lane}`
+          : `${this.process}-persistence`,
         allowExitOnIdle: true,
-        max: RUNTIME_POSTGRES_AUTHORITY_POOL_CAPACITY,
+        max: lane
+          ? resolveLaneCapacity(lane, options.max)
+          : RUNTIME_POSTGRES_AUTHORITY_POOL_CAPACITY,
+        connectionTimeoutMillis: options.connectionTimeoutMillis
+          ?? RUNTIME_POSTGRES_POOL_CONNECT_TIMEOUT_MS,
       });
       entry = {
         key,
@@ -245,5 +282,6 @@ function postgresPoolAuthorityKey(
     options.schema ?? null,
     options.role ?? null,
     options.readOnly === true,
+    options.lane?.trim() || null,
   ]);
 }

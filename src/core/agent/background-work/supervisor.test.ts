@@ -10,6 +10,7 @@ import {
 import type {
   BackgroundWorkClaimFence,
   BackgroundWorkEnqueueResult,
+  BackgroundWorkExpiredLeaseRecovery,
   BackgroundWorkJobEnqueueResult,
   BackgroundWorkStorePort,
 } from './store-port.js';
@@ -191,6 +192,7 @@ class MemoryBackgroundWorkStore implements BackgroundWorkStorePort {
   private subsystemOutputRefs = new Map<string, Set<string>>();
   private foregroundRenewalLoss = false;
   private requeueFailuresRemaining = 0;
+  private expiredTerminalJobs: StoredBackgroundWorkJob[] = [];
 
   failNextRequeuePreBoundaryClaims(count = 1): void {
     this.requeueFailuresRemaining = count;
@@ -597,7 +599,10 @@ class MemoryBackgroundWorkStore implements BackgroundWorkStorePort {
     return requeued;
   }
 
-  async recoverExpired(): Promise<number> { return 0; }
+  async recoverExpired(): Promise<BackgroundWorkExpiredLeaseRecovery> {
+    const terminalJobs = this.expiredTerminalJobs.splice(0);
+    return { recoveredCount: terminalJobs.length, terminalJobs };
+  }
   async purgeTerminal(): Promise<number> { return 0; }
   async countRunnable(input: { nowMs: number }): Promise<number> {
     return [...this.jobs.values()].filter(job => (
@@ -655,6 +660,26 @@ class MemoryBackgroundWorkStore implements BackgroundWorkStorePort {
 
   forceForegroundRenewalLoss(): void {
     this.foregroundRenewalLoss = true;
+  }
+
+  /** Stage a row the next expiry sweep reports as failed by lease recovery. */
+  failByLeaseExpiry(jobId: string, nowMs: number): StoredBackgroundWorkJob {
+    const current = this.jobs.get(jobId);
+    if (!current) throw new Error(`missing fake job ${jobId}`);
+    const next: StoredBackgroundWorkJob = {
+      ...current,
+      state: 'failed',
+      reasonCode: 'lease_expired',
+      completedAtMs: nowMs,
+      updatedAtMs: nowMs,
+      revision: current.revision + 1,
+      leaseExpiryCount: 3,
+    };
+    delete next.leaseOwner;
+    delete next.leaseExpiresAtMs;
+    this.jobs.set(jobId, next);
+    this.expiredTerminalJobs.push({ ...next });
+    return { ...next };
   }
 
   private requireClaim(input: {
@@ -1727,5 +1752,127 @@ describe('BackgroundWorkSupervisor', () => {
     expect(completed?.backgroundSessionIdHash).not.toBe('private-session-name');
     expect(JSON.stringify(events)).not.toContain('turnRecordFingerprint');
     expect(JSON.stringify(events)).not.toContain('payload');
+  });
+
+  it('raises a health event for a claim the expiry sweep failed while a foreground lease still resolves', async () => {
+    const store = new MemoryBackgroundWorkStore();
+    const eventBus = new EventBus();
+    const healthEvents: HealthEvent[] = [];
+    eventBus.on('runtime.health.event', (payload) => {
+      healthEvents.push(payload.event);
+    });
+    const supervisor = createBackgroundWorkSupervisor({
+      store,
+      eventBus,
+      now: () => 5_000,
+      healthEventOwner: { kind: 'companion', companionId: HEALTH_COMPANION_ID as never },
+      executor: vi.fn(async () => undefined),
+    });
+    // A stale running row from a dead process: claimed by another owner, then
+    // staged as failed by lease-expiry recovery (its third lost lifetime).
+    const input = makeInput('session-poison', 'turn-poison');
+    await store.enqueue(input);
+    await store.claimNext({
+      leaseOwner: 'dead-process',
+      nowMs: 1_000,
+      leaseDurationMs: 10,
+      excludedLogicalSessionIds: [],
+    });
+    store.failByLeaseExpiry(input.jobId, 5_000);
+
+    // Startup shape: a foreground turn arrives on another channel while the
+    // first claim pass runs its expiry sweep. Neither may block the other.
+    const lease = supervisor.beginForeground('session-other');
+    await supervisor.tick();
+    await lease.ready;
+    await supervisor.waitForIdle();
+    await supervisor.endForeground(lease);
+
+    await vi.waitFor(() => { expect(healthEvents).toHaveLength(1); });
+    const [event] = healthEvents;
+    expect(event.code).toBe('background_work_job_failed');
+    expect(event.provenance.subjectHash).toBe(hashHealthEventSubject('memory_extraction'));
+    expect(event.evidence).toMatchObject({ terminal: true });
+    expect(JSON.stringify(event)).not.toContain('session-poison');
+    // The poison row is terminal: it is never re-leased again.
+    expect(await store.get(input.jobId)).toMatchObject({ state: 'failed', reasonCode: 'lease_expired' });
+    expect(await store.claimNext({
+      leaseOwner: 'anyone',
+      nowMs: 6_000,
+      leaseDurationMs: 10,
+      excludedLogicalSessionIds: [],
+    })).toBeNull();
+  });
+
+  it('does not spend an attempt when a handler unwinds with an abort after its lease is lost', async () => {
+    const store = new MemoryBackgroundWorkStore();
+    let now = 1_000;
+    const gate = deferred();
+    const executor = vi.fn(async ({ signal }: { signal: AbortSignal }) => {
+      await gate.promise;
+      // A fence wait cancelled by the claim signal surfaces as an AbortError,
+      // not as the typed lease-lost error.
+      signal.throwIfAborted();
+      throw new Error('unreachable');
+    });
+    const supervisor = createBackgroundWorkSupervisor({
+      store,
+      eventBus: new EventBus(),
+      now: () => now,
+      leaseDurationMs: 100,
+      executor,
+    });
+    const input = makeInput('session-a', 'turn-a');
+    await supervisor.enqueue([input]);
+    await supervisor.tick();
+    expect(executor).toHaveBeenCalledTimes(1);
+
+    // Another owner takes the row over; the next heartbeat observes the loss
+    // and aborts the running claim's signal.
+    const claimed = await store.get(input.jobId);
+    store.corrupt(input.jobId, { leaseOwner: 'other-owner', revision: (claimed?.revision ?? 1) + 1 });
+    now += 100;
+    await supervisor.tick();
+    gate.resolve();
+    await supervisor.waitForIdle();
+
+    // The row belongs to the other owner untouched: no failOrRetry, no attempt.
+    expect(await store.get(input.jobId)).toMatchObject({
+      state: 'running',
+      leaseOwner: 'other-owner',
+      attemptCount: 0,
+    });
+  });
+
+  it('does not spend an attempt when a handler unwinds with an abort during shutdown', async () => {
+    const store = new MemoryBackgroundWorkStore();
+    const gate = deferred();
+    const executor = vi.fn(async ({ signal }: { signal: AbortSignal }) => {
+      await gate.promise;
+      signal.throwIfAborted();
+      throw new Error('unreachable');
+    });
+    const supervisor = createBackgroundWorkSupervisor({
+      store,
+      eventBus: new EventBus(),
+      now: () => 1_000,
+      shutdownTimeoutMs: 1_000,
+      executor,
+    });
+    const input = makeInput('session-a', 'turn-a');
+    await supervisor.enqueue([input]);
+    await supervisor.tick();
+    expect(executor).toHaveBeenCalledTimes(1);
+
+    const stopping = supervisor.stop();
+    gate.resolve();
+    await stopping;
+
+    // Pre-boundary work interrupted by shutdown is requeued, never counted.
+    expect(await store.get(input.jobId)).toMatchObject({
+      state: 'queued',
+      reasonCode: 'shutdown',
+      attemptCount: 0,
+    });
   });
 });

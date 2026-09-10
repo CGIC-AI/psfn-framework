@@ -266,6 +266,20 @@
       "note": "Background-work store suite; beforeAll 90s (harness+schema), per-test 30s. Inherited pending measurement."
     },
     {
+      "file": "src/persistence/postgres/turn-record-eligibility-fence.integration.test.ts",
+      "timeoutMs": 30000,
+      "measuredBaselineMs": 1000,
+      "baselineSource": "measured",
+      "note": "psfn-framework-52epa: TurnRecord eligibility fence against the real containerized Postgres - capacity-three lane deadlock repro (bounded by a 750 ms connect timeout), dedicated fence lane, and a 400 ms acquire timeout behind a held advisory key. Worst observed per-test wall was 0.79s on this host (2026-09-09); the repo-standard 30s per-test cap keeps headroom for harness variance."
+    },
+    {
+      "file": "src/persistence/postgres/turn-record-eligibility-fence.integration.test.ts",
+      "timeoutMs": 90000,
+      "measuredBaselineMs": 30000,
+      "baselineSource": "measured",
+      "note": "psfn-framework-52epa: beforeAll harness start (container reuse or cold initdb plus semaphore wait) and afterAll drop, matching the sibling background-work-store suite's 90s hook cap. Baseline is the harness's own worst-case cold start on this host."
+    },
+    {
       "file": "src/persistence/postgres/buzz-recovery-store.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": 1000,

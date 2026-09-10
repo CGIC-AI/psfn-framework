@@ -701,6 +701,60 @@ exists — it never writes. The sanctioned L0 re-sign path
 (`session:repair:attribution`, `session:repair:transcript-projection`), and
 exact-session purge are documented on the maintenance scripts inventory page.
 
+## Recovery: stuck background work
+
+The agent's durable post-turn lane (`companion_<id>.agent_background_work_jobs`:
+memory extraction, intention hooks, emotion appraisal, auto-compaction) claims
+work under a lease and re-claims stale rows at every startup. Two guards keep a
+bad row from taking the foreground turn pipeline down with it:
+
+- every TurnRecord eligibility fence wait is bounded (30 s to obtain a client
+  and 30 s to acquire the advisory key; `PostgresTurnRecordEligibilityFence`).
+  A job that cannot enter its fence lands in `retry_wait` with
+  `handler_failed`, then `failed` after its attempt budget, and each terminal
+  failure emits a `background_work_job_failed` health event;
+- a claim whose lease expires three times without ever crossing an effect
+  boundary (`lease_expiry_count`) is failed with `lease_expired` by the expiry
+  sweep instead of being re-leased at the next restart, again with a health
+  event. The fence also runs on its own bounded pool lane
+  (`<process>-persistence-turn-record-eligibility-fence` in
+  `pg_stat_activity.application_name`), so long-held fence clients can no
+  longer exhaust the shared per-companion pool that `beginForeground` and every
+  store draw from.
+
+Symptoms of a poisoned lane on an older build: every chat turn on every channel
+logs `[IntakeScreening] ... released` and then nothing (no `[ModelFallback]`
+line, no model call), `/health` still answers, a restart re-claims the same
+jobs and stalls again, and `pg_locks` shows idle `agent-persistence` sessions
+holding advisory locks whose key is
+`hashtextextended('["turn-record-source-eligibility-v2","<schema>","<turnId>"]', 0)`.
+
+Inspect before acting (read-only):
+
+```sql
+SELECT job_id, kind, state, reason_code, attempt_count, lease_expiry_count,
+       lease_owner, source_channel_id, source_turn_id
+FROM companion_main.agent_background_work_jobs
+WHERE state NOT IN ('succeeded', 'failed', 'stale_discarded')
+ORDER BY created_at_ms;
+```
+
+To retire the rows of one source (here everything a Hub-device channel
+enqueued) so the supervisor stops re-claiming them, stop the agent, run the
+update, then restart. `stale_discarded` is terminal and is purged by the
+ordinary retention sweep; the turn's memories are simply not extracted.
+
+```sql
+UPDATE companion_main.agent_background_work_jobs
+SET state = 'stale_discarded'
+WHERE source_channel_id LIKE 'hub-device:%'
+  AND state NOT IN ('succeeded', 'failed', 'stale_discarded');
+```
+
+Substitute the companion schema and a narrower `WHERE` (`job_id = ...`,
+`source_turn_id = ...`) when only specific rows are stuck. Never edit a row in
+`running` state while its `lease_owner` process is alive; stop the agent first.
+
 ## Diagnosis order
 
 When `*:doctor` fails, inspect in this order:

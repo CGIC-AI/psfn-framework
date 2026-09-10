@@ -2022,6 +2022,18 @@ export const POSTGRES_BACKGROUND_WORK_MIGRATIONS = [
     ON agent_background_work_jobs (welfare_claimed)
     WHERE state = 'running' AND welfare_claimed = true;
   `,
+  // Poison-claim budget (bead psfn-framework-52epa). A pre-boundary lease
+  // expiry deliberately spends no work attempt, so a claim that dies with its
+  // process at every restart was re-leased forever. This separate durable
+  // counter lets the expiry sweep fail such a claim after a bounded number of
+  // lost process lifetimes. Additive with a fail-closed default.
+  `ALTER TABLE agent_background_work_jobs
+    ADD COLUMN IF NOT EXISTS lease_expiry_count INTEGER NOT NULL DEFAULT 0;`,
+  `ALTER TABLE agent_background_work_jobs
+    DROP CONSTRAINT IF EXISTS agent_background_work_jobs_lease_expiry_count_check;`,
+  `ALTER TABLE agent_background_work_jobs
+    ADD CONSTRAINT agent_background_work_jobs_lease_expiry_count_check
+      CHECK (lease_expiry_count >= 0);`,
 ];
 
 export const POSTGRES_BACKGROUND_WORK_MIGRATION_ADVISORY_LOCK = [

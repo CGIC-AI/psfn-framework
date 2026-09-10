@@ -127,6 +127,13 @@ async function requireCanonicalTurnRecord(
   return record;
 }
 
+/**
+ * Retry spacing after a fence timeout. The holder that blocked us is either
+ * finishing a bounded effect or stuck; either way a prompt retry re-contends
+ * with it, while the ordinary attempt ceiling still bounds the total budget.
+ */
+const FENCE_TIMEOUT_RETRY_DELAY_MS = 5_000;
+
 const INTENTION_HOOKS_TASK_LABEL = 'Intention post-turn hooks';
 const INTENTION_HOOKS_TASK_SUMMARY =
   'Record behavioral intention signals from one canonical completed turn.';
@@ -213,6 +220,9 @@ async function withStableConsumedSnapshot<T>(
       [input.payload.source.turnId],
       readSnapshot,
       async entries => operation([...entries]),
+      // Lease loss and graceful shutdown abort this signal; without it a fence
+      // wait outlives the claim it was protecting (bead psfn-framework-52epa).
+      input.signal,
     );
   } catch (error) {
     if (error instanceof Error && error.name === 'TurnRecordEligibilitySnapshotChangedError') {
@@ -286,6 +296,17 @@ export async function executePostTurnBackgroundWork(
       throw new BackgroundWorkDeferredError(
         'foreground_active',
         dependencies.tuning.foregroundPreemptionDeferDelayMs,
+      );
+    }
+    // A fence that could not be entered inside its bound crossed no effect
+    // boundary. Route it through the ordinary attempt ceiling as a retryable
+    // handler failure so the job lands in retry_wait and, after maxAttempts,
+    // fails with a health event instead of stalling the lane (52epa).
+    if (errorCauseChainHasName(error, 'TurnRecordEligibilityFenceTimeoutError')) {
+      throw new BackgroundWorkDeferredError(
+        'handler_failed',
+        FENCE_TIMEOUT_RETRY_DELAY_MS,
+        'handler_failed',
       );
     }
     throw error;
@@ -525,5 +546,6 @@ async function runPostTurnBackgroundWork(
         runHooks,
       );
     },
+    input.signal,
   );
 }

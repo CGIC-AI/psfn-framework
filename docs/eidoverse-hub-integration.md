@@ -395,7 +395,11 @@ A `world-avatar` satellite turn therefore classifies as the third presence
 mode, `world` (`classifyTurnPresenceMode`): it carries its own place on the
 plane, honours only a deliberate walk on that plane as an overlay, and never
 borrows the physical emanation or a mindspace twin; virtual-room inference
-ignores it. The `runtime_situated_presence` block swaps the place data for the
+ignores it. The reverse holds too: a world-plane turn never moves the
+physical emanation marker or clears a standing mindspace move (the
+`SituatedEmanationTracker` skips it), so the next flat-channel turn does not
+place the companion "physically" inside the world. The
+`runtime_situated_presence` block swaps the place data for the
 plane's: `Here:` names the world place and its region, `World plane:` names
 the world, `Other places on this plane:` lists the other `places.json` entries
 bound to the same world, and the house's perceivers and effectors are not
@@ -412,8 +416,8 @@ the plane check from `places.json` (`isEidoversePlace`); with no resolver, no
 place counts as on-plane and only participant/position moves pass.
 
 Not in this pass, filed as follow-ups: a dynamic world map (the door exposes no
-map or places verb) and exposing the door's own MCPL tool list to the model
-(the Hub calls a fixed set of verbs).
+map or places verb; psfn-framework-gs899) and exposing the door's own MCPL tool
+list to the model (the Hub calls a fixed set of verbs; psfn-framework-g8xyn).
 
 ## The world connector is a registered software device (S13, rqm6t)
 

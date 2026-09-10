@@ -27,6 +27,7 @@ import {
   type CompanionPresenceMetadata,
 } from '../../presence-metadata.js';
 import type { SubstrateMessage } from '../../../../shared/contracts/runtime.js';
+import { isWorldPlaneTurn } from './turn-presence-mode.js';
 
 /** The companion's current active emanation, resolved to a situated place. */
 export interface SituatedEmanation {
@@ -66,6 +67,12 @@ export class SituatedEmanationTracker {
    * consumed by {@link resolvePlaceId}/{@link resolvePresence}.
    */
   observe(message: SubstrateMessage): void {
+    // A world-plane turn (psfn-framework-u2dx3) lives on its own map: the
+    // avatar's world place is neither a physical emanation nor a deliberate
+    // mindspace move, so it must not move the physical marker (the next
+    // Discord turn would otherwise place the companion "physically" in the
+    // world) and must not clear a standing virtual move.
+    if (isWorldPlaneTurn(message)) return;
     const presence = message.routing?.presence;
     if (presence) {
       const sourceKey = resolvePresenceSubjectId(presence);

@@ -88,12 +88,14 @@ describe('full callable catalog schema token cost', () => {
       // and their world / note_text / note_about fields: +644 bytes / +157 tokens.
       // psfn-framework-mlhfw added world perceive detail=snapshot and view: +378 bytes / +86 tokens.
       // psfn-framework-ae7c9 added the play_clip verb and its guidance: +159 bytes / +38 tokens.
+      // 2nsfo's wiki actions joined the structured contract (description text only):
+      // +129 bytes / +31 tokens on the post-description payload.
       beforeTokens: 20_253,
-      afterTokens: 24_496,
-      deltaTokens: 4_243,
+      afterTokens: 24_527,
+      deltaTokens: 4_274,
       beforeBytes: 94_628,
-      afterBytes: 113_574,
-      providerSchemaHash: '118a24a87e01c06cf4d2e3afa03e3f53282c27f1cedc9a1586c7a40996d553c4',
+      afterBytes: 113_703,
+      providerSchemaHash: '6fe36876a89b5feb76ae32809cd2b27421a64cbbe91e733d5d3c9dd206d9bf28',
       parameterSchemaHash: '63b7d1c94185e17927431ac274756603f1634754f1cd31336d123df10ab04dab',
     });
 

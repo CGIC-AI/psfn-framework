@@ -235,6 +235,74 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     expect(facade.getPromotedExtendedTools()).toEqual([]);
   });
 
+  it('gates the world tool on a world-plane turn: keeps the plane verbs, refuses control and off-plane moves (u2dx3)', async () => {
+    const execute = vi.fn(async (_id: string, params: Record<string, unknown>) => ({
+      content: [{ type: 'text', text: `world ${String(params.action)} ok` }],
+      details: {},
+    }));
+    const { facade, correlation, emitTelemetry } = createFacade();
+    facade.registerTool(makeTool('world', execute as never), 'extended');
+    facade.setWorldPlanePlaceResolver((placeId) => placeId.startsWith('eidoverse:'));
+    const message = {
+      id: 'world-turn',
+      channelId: 'satellite:world-avatar:eidoverse:abc',
+      channelType: 'satellite.endpoint',
+      authorId: 'eidoverse-visitor:visitor',
+      authorName: 'Visitor',
+      content: 'come over here',
+      timestamp: new Date('2026-09-10T16:00:00Z'),
+      routing: {
+        source: 'satellite',
+        satellite: {
+          claimType: 'world-avatar', satelliteId: 'hub', endpointId: 'hub', placeId: 'eidoverse:commons',
+          capabilities: { effective: ['text'] },
+        },
+      },
+    } as never;
+    const turnCorrelation = { ...correlation, requestId: 'world-turn', channelId: 'satellite:world-avatar:eidoverse:abc', callType: 'chat' as const };
+
+    await facade.runWithTurnToolContext(message, async () => {
+      facade.applyActiveToolsToAgentForTurn(message, undefined, 'chat', turnCorrelation, { intent: null });
+      const world = facade.getActiveTurnTools().find(candidate => candidate.name === 'world');
+      expect(world).toBeDefined();
+
+      const allowed = [
+        { action: 'perceive' },
+        { action: 'act', verb: 'emote', arguments: { emote: 'wave' } },
+        { action: 'move', participant: 'visitor' },
+        { action: 'move', position: { x: 3, z: 1 } },
+        { action: 'move', placeId: 'eidoverse:commons:plaza' },
+        { action: 'list' },
+      ];
+      for (const params of allowed) {
+        const result = await world!.execute(`call-${params.action}`, params);
+        expect(JSON.stringify(result)).not.toContain('permission_denied');
+      }
+      expect(execute).toHaveBeenCalledTimes(allowed.length);
+
+      const control = await world!.execute('call-control', { action: 'control', placeId: 'place.living-room', affordanceId: 'aff.lamp', command: 'on' });
+      expect(JSON.stringify(control)).toContain('permission_denied');
+      expect(JSON.stringify(control)).toContain('not on this plane');
+      const houseMove = await world!.execute('call-house-move', { action: 'move', placeId: 'place.living-room' });
+      expect(JSON.stringify(houseMove)).toContain('permission_denied');
+      expect(JSON.stringify(houseMove)).toContain('not a place on this world plane');
+      expect(execute).toHaveBeenCalledTimes(allowed.length);
+    });
+    expect(emitTelemetry).toHaveBeenCalledWith(
+      'agent.tools.core_guardrail.denied',
+      expect.objectContaining({ toolName: 'world', requestedAction: 'control', reason: 'world_plane_turn' }),
+    );
+
+    // Off the plane nothing changes: the same calls pass straight through.
+    const houseMessage = { ...(message as object), routing: { source: 'satellite', satellite: { claimType: 'satellite-endpoint', satelliteId: 'bedroom', endpointId: 'pi', capabilities: { effective: ['text'] } } } } as never;
+    await facade.runWithTurnToolContext(houseMessage, async () => {
+      facade.applyActiveToolsToAgentForTurn(houseMessage, undefined, 'chat', turnCorrelation, { intent: null });
+      const world = facade.getActiveTurnTools().find(candidate => candidate.name === 'world');
+      const control = await world!.execute('call-control-home', { action: 'control', placeId: 'place.living-room' });
+      expect(JSON.stringify(control)).not.toContain('permission_denied');
+    });
+  });
+
   it('isolates candidate notify from an overlapping ordinary turn without an agent-global grant', async () => {
     const { facade, agent } = createFacade();
     facade.registerTool(withCapabilityRequirement(

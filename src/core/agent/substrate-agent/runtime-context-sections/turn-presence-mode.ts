@@ -30,8 +30,21 @@ import type { PlacesRegistryConfig } from '../../../../shared/contracts/places-r
 import { resolveTwinPlaceOf } from '../../../../shared/contracts/places-registry.js';
 import type { SituatedLocation } from '../../../self-model/state.js';
 
-/** The two per-turn presence modes (decision 9). */
-export type TurnPresenceMode = 'physical' | 'mindspace';
+/**
+ * The per-turn presence modes (decision 9), plus `world` (S13,
+ * psfn-framework-u2dx3): a `world-avatar` satellite turn is the companion
+ * emanating into a shared 3D world through the Satellite Hub. It carries its
+ * own place on that plane, never borrows the physical emanation, and is not
+ * mindspace either: the world's own map and verbs apply there.
+ */
+export type TurnPresenceMode = 'physical' | 'mindspace' | 'world';
+
+/** The satellite claim type the Hub uses for a world emanation. */
+export const WORLD_AVATAR_CLAIM_TYPE = 'world-avatar';
+
+export function isWorldPlaneTurn(message: Pick<SubstrateMessage, 'routing'>): boolean {
+  return message.routing?.satellite?.claimType === WORLD_AVATAR_CLAIM_TYPE;
+}
 
 /**
  * Classify a turn's presence mode from its routing/channel origin.
@@ -45,6 +58,7 @@ export type TurnPresenceMode = 'physical' | 'mindspace';
 export function classifyTurnPresenceMode(message: SubstrateMessage): TurnPresenceMode {
   const routing = message.routing;
   if (!routing) return 'mindspace';
+  if (isWorldPlaneTurn(message)) return 'world';
   if (routing.satellite) return 'physical';
   if (routing.wyoming) return 'physical';
   return 'mindspace';
@@ -93,7 +107,12 @@ function resolveMindspaceTwinPlaceId(
 export function resolveTurnSituatedFallbackPlaceId(
   input: ResolveTurnSituatedFallbackPlaceIdInput,
 ): string | undefined {
-  if (classifyTurnPresenceMode(input.message) === 'mindspace') {
+  const mode = classifyTurnPresenceMode(input.message);
+  // A world turn carries its plane's place in its claim; the only overlay it
+  // honours is a deliberate walk on that plane. It never inherits the
+  // physical emanation or a mindspace twin.
+  if (mode === 'world') return input.virtualMovePlaceId;
+  if (mode === 'mindspace') {
     if (input.virtualMovePlaceId) return input.virtualMovePlaceId;
     const sessionOverridePlaceId = resolveMindspaceTwinPlaceId(
       input.placesRegistry,

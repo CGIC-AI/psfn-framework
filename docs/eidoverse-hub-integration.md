@@ -383,6 +383,38 @@ world-authored events. Each wake logs one info line naming the message id,
 author, the world's human/ai kind, the wake kind and why (`tag:...` or
 `name-match`) with a bounded text prefix.
 
+## A world turn is a world-plane turn (S13, u2dx3)
+
+Operator rule (2026-09-10): context is channel-dependent. A flat text
+channel gets the stock context; a channel projected into a shared 3D world
+gets that world's map and that world's control surface, and the house's are
+greyed out there, because the companion is emanating into an environment it
+does not control.
+
+A `world-avatar` satellite turn therefore classifies as the third presence
+mode, `world` (`classifyTurnPresenceMode`): it carries its own place on the
+plane, honours only a deliberate walk on that plane as an overlay, and never
+borrows the physical emanation or a mindspace twin; virtual-room inference
+ignores it. The `runtime_situated_presence` block swaps the place data for the
+plane's: `Here:` names the world place and its region, `World plane:` names
+the world, `Other places on this plane:` lists the other `places.json` entries
+bound to the same world, and the house's perceivers and effectors are not
+rendered; one line tells the model to use the world tool's `perceive`, `act`
+and `move` (participant, position, or a place on this plane).
+
+"Greying out our movement and places tools" is action gating on the one
+bridge tool, not removing it: on a world-plane turn the `world` tool keeps
+`perceive`, `act`, `list`, and `move` to a participant, a position, or a
+place on this plane (travel included), and refuses `control` (the house's
+effectors) and `move` to a place that is not on the plane, answering with a
+`permission_denied` result that says why. The agent composition root supplies
+the plane check from `places.json` (`isEidoversePlace`); with no resolver, no
+place counts as on-plane and only participant/position moves pass.
+
+Not in this pass, filed as follow-ups: a dynamic world map (the door exposes no
+map or places verb) and exposing the door's own MCPL tool list to the model
+(the Hub calls a fixed set of verbs).
+
 ## The world connector is a registered software device (S13, rqm6t)
 
 Operator rule (2026-09-10): the companion-ui app, Virt-a-Mate and Eidoverse

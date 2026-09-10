@@ -1,3 +1,4 @@
+import { isWorldPlaneTurn } from './runtime-context-sections/turn-presence-mode.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Agent, AgentTool } from '../../../boundary/pi-agent/index.js';
 import { tagToolWithReversibility } from '../../../system/capabilities/safeguards.js';
@@ -356,6 +357,10 @@ export class ToolRuntimeFacade {
   // periodic tool-usage evaluator. Presentation-only: it never gates callability
   // and only breaks ties inside a presentation band.
   private toolUsageRanking: ToolUsageRanking | null = null;
+  // Whether a placeId is bound to a world plane (an `eidoverse` binding in
+  // places.json). Set by the composition root that owns the places registry;
+  // absent, no place counts as on-plane (fail closed for `move { placeId }`).
+  private worldPlanePlaceResolver: ((placeId: string) => boolean) | null = null;
   private getToolsetMemoryWriter: (() => Pick<MemoryWriter, 'write'> | undefined) | undefined;
   private toolHealthStatusByName = new Map<string, RuntimeServiceHealthStatus>();
 
@@ -476,6 +481,10 @@ export class ToolRuntimeFacade {
    * static agent tool list is re-applied immediately so ordering updates without
    * waiting for the next turn. Presentation-only: callability is unchanged.
    */
+  setWorldPlanePlaceResolver(resolver: ((placeId: string) => boolean) | null): void {
+    this.worldPlanePlaceResolver = resolver;
+  }
+
   setToolUsageRanking(ranking: ToolUsageRanking | null): void {
     this.toolUsageRanking = ranking;
     if (!this.getCandidateTurnContext()) {
@@ -999,21 +1008,88 @@ export class ToolRuntimeFacade {
     intent: string | null | undefined,
     correlation: CorrelationMetadata | null,
   ): ActiveToolResolution {
-    return this.applySatelliteCapabilityToolPolicy(
-      this.applyRoutineIntentCoreToolPolicy(
-        this.applyMaintenanceCoreToolPolicy(
-          this.resolveActiveTools(),
+    return this.applyWorldPlaneToolPolicy(
+      this.applySatelliteCapabilityToolPolicy(
+        this.applyRoutineIntentCoreToolPolicy(
+          this.applyMaintenanceCoreToolPolicy(
+            this.resolveActiveTools(),
+            taskKind,
+            correlation,
+          ),
+          message,
           taskKind,
+          intent,
           correlation,
         ),
         message,
-        taskKind,
-        intent,
         correlation,
       ),
       message,
       correlation,
     );
+  }
+
+  /**
+   * World-plane turns (S13, psfn-framework-u2dx3): the companion is
+   * emanating into a shared 3D world, so the environment's own control
+   * surface applies and the house's does not. "Greying out our movement and
+   * places tools" is action gating on the one bridge tool: `world` keeps
+   * perceive, act, list and moves to a participant, a position, or a place
+   * on this plane; it loses `control` (the house's effectors) and `move` to a
+   * place that is not on the plane. A denied call answers with the reason so
+   * the model reaches for the plane's verbs instead.
+   */
+  private applyWorldPlaneToolPolicy(
+    resolution: ActiveToolResolution,
+    message: SubstrateMessage,
+    correlation: CorrelationMetadata | null,
+  ): ActiveToolResolution {
+    if (!isWorldPlaneTurn(message)) return resolution;
+    const satellite = message.routing?.satellite;
+    let wrapped = false;
+    const tools = resolution.tools.map((tool) => {
+      if (tool.name !== 'world') return tool;
+      wrapped = true;
+      return {
+        ...tool,
+        execute: async (toolCallId, params, signal) => {
+          const normalizedParams = isPlainRecord(params) ? params : {};
+          const action = typeof normalizedParams.action === 'string' ? normalizedParams.action : null;
+          const placeId = typeof normalizedParams.placeId === 'string' ? normalizedParams.placeId.trim() : '';
+          const offPlaneMove = action === 'move' && placeId.length > 0
+            && !(this.worldPlanePlaceResolver?.(placeId) ?? false);
+          if (action !== 'control' && !offPlaneMove) {
+            return tool.execute(toolCallId, params, signal);
+          }
+          const companionMessage = action === 'control'
+            ? 'You are emanating into a shared world right now; the house\'s effectors are not on this plane. Use perceive, act, or move (to a participant, a position, or a place on this plane).'
+            : `"${placeId}" is not a place on this world plane. Move to a participant, a position, or a place on this plane; the house\'s rooms are not reachable from here.`;
+          this.emitTelemetry('agent.tools.core_guardrail.denied', {
+            ...this.withAdaptiveCorrelation(correlation ?? undefined, 'agent.tools.core_guardrail.denied'),
+            toolName: tool.name,
+            requestedAction: action,
+            ...(placeId ? { placeId } : {}),
+            ...(satellite ? { satelliteId: satellite.satelliteId, endpointId: satellite.endpointId, claimType: satellite.claimType } : {}),
+            reason: 'world_plane_turn',
+          });
+          return textResultWithError(
+            companionMessage,
+            true,
+            {
+              errorClass: 'permission_denied',
+              companionMessage,
+              rawDiagnostic: {
+                toolName: tool.name,
+                requestedAction: action,
+                ...(placeId ? { placeId } : {}),
+                reason: 'world_plane_turn',
+              },
+            },
+          );
+        },
+      } as AgentTool<any>;
+    });
+    return wrapped ? { ...resolution, tools } : resolution;
   }
 
   private applyMaintenanceCoreToolPolicy(

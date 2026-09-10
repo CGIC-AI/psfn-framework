@@ -710,8 +710,12 @@ function parseSharedDevicePolicy(
     value.responseLease.activeConversationTtlMs,
     `${fieldName}.responseLease.activeConversationTtlMs`,
   );
-  if (durationMs > 60_000) {
-    throw new Error(`${fieldName}.responseLease.durationMs must be <= 60000`);
+  // The lease is a hard cap on the agent turn (effectiveTimeoutMs = min(turn
+  // timeout, lease remaining)). A world-avatar turn that perceives and acts in
+  // a 3D world runs its tool calls inside that window and outgrew 60 s on the
+  // s12g beds (S13, psfn-framework-mech8), so the ceiling is two minutes.
+  if (durationMs > 120_000) {
+    throw new Error(`${fieldName}.responseLease.durationMs must be <= 120000`);
   }
   if (activeConversationTtlMs > 30 * 60_000) {
     throw new Error(`${fieldName}.responseLease.activeConversationTtlMs must be <= 1800000`);

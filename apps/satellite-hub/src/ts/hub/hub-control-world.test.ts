@@ -50,6 +50,21 @@ class RecordingWorld implements HubWorldControlPort {
     };
   }
 
+  mapCalls = 0;
+
+  async map() {
+    this.mapCalls += 1;
+    return {
+      world: "commons",
+      placeId: "eidoverse:commons",
+      places: [{ placeId: "eidoverse:commons" }, { placeId: "eidoverse:commons:plaza", region: "plaza" }],
+      room: { label: "kitchen", labelled: true, widthM: 4, depthM: 3, areaM2: 12, insideEntityId: "ent-7", waysOut: ["a door on its north to the hall"], sealed: false },
+      terrain: { sizeM: 400 },
+      tools: [{ name: "look", description: "Look around." }, { name: "walk_to" }],
+      capturedAt: "2026-09-10T18:00:00.000Z",
+    };
+  }
+
   async move(input: WorldAvatarMoveRequest) {
     this.moves.push(input);
     return { accepted: true as const, world: "commons", placeId: "eidoverse:commons", walk: { status: "arrived" as const, x: 1.1, z: 1.4 } };
@@ -101,6 +116,19 @@ test("world routes execute the companion's own perceive, move and act with the c
     const act = await post(baseUrl, "/internal/v1/world/act", { verb: "emote", arguments: { name: "wave" } });
     assert.equal(act.status, 200);
     assert.deepEqual(world.acts, [{ verb: "emote", args: { name: "wave" } }]);
+
+    // gs899/g8xyn: the world's map rides the same control-token-only door.
+    const map = await post(baseUrl, "/internal/v1/world/map", {});
+    assert.equal(map.status, 200);
+    const mapBody = (await map.json()) as { world: string; places: unknown[]; tools: Array<{ name: string }>; room?: { label: string } };
+    assert.equal(mapBody.world, "commons");
+    assert.equal(mapBody.places.length, 2);
+    assert.deepEqual(mapBody.tools.map((tool) => tool.name), ["look", "walk_to"]);
+    assert.equal(mapBody.room?.label, "kitchen");
+    assert.equal(world.mapCalls, 1);
+    const mapWithDevice = await post(baseUrl, "/internal/v1/world/map", {}, DEVICE_TOKEN);
+    assert.equal(mapWithDevice.status, 401);
+    assert.equal(world.mapCalls, 1);
   });
 });
 

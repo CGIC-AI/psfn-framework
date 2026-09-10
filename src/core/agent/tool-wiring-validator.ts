@@ -280,6 +280,7 @@ const RPC_TO_CLIENT_METHOD: Record<string, string> = {
   // its three gateway methods; without this mapping the validator looked for
   // dotted client methods and disabled the world tool on every deployment.
   'world.avatar_perceive': 'worldAvatar',
+  'world.avatar_map': 'worldAvatar',
   'world.avatar_move': 'worldAvatar',
   'world.avatar_act': 'worldAvatar',
   'image.create': 'imageCreate',

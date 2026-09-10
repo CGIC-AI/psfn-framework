@@ -76,6 +76,23 @@ describe('world avatar gateway methods (S13 MOVE)', () => {
     expect(init.headers).not.toHaveProperty('X-PSFN-Hub-Device-Assertion');
   });
 
+  it('publishes the world map through the Hub control port on the read approval action (gs899, g8xyn)', async () => {
+    const fetchMock = vi.fn(async () => json({
+      world: 'commons', placeId: 'eidoverse:commons', places: [{ placeId: 'eidoverse:commons:plaza', region: 'plaza' }],
+      room: { label: 'kitchen', labelled: true, waysOut: [], sealed: false }, terrain: { sizeM: 400 },
+      tools: [{ name: 'look' }, { name: 'walk_to', description: 'Walk to x,z.' }], capturedAt: 'now',
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = fromAny(await harness().invoke('world.avatar_map', { placeId: 'eidoverse:commons' }));
+    expect(result.tools.map((tool: { name: string }) => tool.name)).toEqual(['look', 'walk_to']);
+    expect(result.room.label).toBe('kitchen');
+    const [url] = fetchMock.mock.calls[0] as unknown as [URL, RequestInit];
+    expect(url.toString()).toBe('http://127.0.0.1:8798/internal/v1/world/map');
+    const malformed = vi.fn(async () => json({ world: 'commons' }));
+    vi.stubGlobal('fetch', malformed);
+    await expect(harness().invoke('world.avatar_map', {})).rejects.toThrow(/Malformed Satellite Hub world map/u);
+  });
+
   it('moves with a longer budget and forwards only validated fields', async () => {
     const fetchMock = vi.fn(async () => json({ accepted: true, world: 'commons', walk: { status: 'arrived', x: 3.5, z: 0 } }));
     vi.stubGlobal('fetch', fetchMock);
@@ -117,13 +134,14 @@ describe('world avatar gateway methods (S13 MOVE)', () => {
     const { gateCalls } = harness();
     expect(gateCalls.map((call) => [call.method, call.approvalAction])).toEqual([
       ['world.avatar_perceive', 'world.avatar.read'],
+      ['world.avatar_map', 'world.avatar.read'],
       ['world.avatar_move', 'world.avatar.move'],
       ['world.avatar_act', 'world.avatar.act'],
     ]);
   });
 
   it('policy allows the world methods on transport alone and denies them without it', () => {
-    for (const method of ['world.avatar_perceive', 'world.avatar_move', 'world.avatar_act']) {
+    for (const method of ['world.avatar_perceive', 'world.avatar_map', 'world.avatar_move', 'world.avatar_act']) {
       expect(evaluatePolicy({ method, params: {} }, policy())).toBe('ALLOW');
       expect(evaluatePolicy({ method, params: {} }, policy({ satelliteHub: { tokenConfigured: true } }))).toBe('DENY');
       expect(evaluatePolicy({ method, params: {} }, policy({ satelliteHub: {} }))).toBe('DENY');

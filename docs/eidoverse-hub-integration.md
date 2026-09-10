@@ -333,10 +333,10 @@ logs one info line per completed walk — also when the walk outlasted the
 bounded wait and settles later: `Eidoverse body walk_to arrived at (x, z) in world "commons"`.
 The door itself never logs positions.
 
-**Transport.** Gateway methods `world.avatar_perceive`, `world.avatar_move`
-and `world.avatar_act`
+**Transport.** Gateway methods `world.avatar_perceive`, `world.avatar_map`,
+`world.avatar_move` and `world.avatar_act`
 ([`src/boundary/gateway/methods/world.ts`](../src/boundary/gateway/methods/world.ts))
-call `POST /internal/v1/world/{perceive,move,act}` on the Hub control server
+call `POST /internal/v1/world/{perceive,map,move,act}` on the Hub control server
 ([`control-server.ts`](../apps/satellite-hub/src/ts/hub/home-assistant/control-server.ts))
 through the shared transport
 ([`satellite-hub-transport.ts`](../src/boundary/gateway/methods/satellite-hub-transport.ts)).
@@ -415,9 +415,35 @@ effectors) and `move` to a place that is not on the plane, answering with a
 the plane check from `places.json` (`isEidoversePlace`); with no resolver, no
 place counts as on-plane and only participant/position moves pass.
 
-Not in this pass, filed as follow-ups: a dynamic world map (the door exposes no
-map or places verb; psfn-framework-gs899) and exposing the door's own MCPL tool
-list to the model (the Hub calls a fixed set of verbs; psfn-framework-g8xyn).
+## The world's own map and tools (S13, gs899 and g8xyn)
+
+The door has no region model: a world is an append-only log, and the only
+named place it knows is a room inside a griddled `structure` ("You are in the
+kitchen — 4×3m, 12m². Ways out: a door on its north to the hall."). So the
+map the Hub can honestly publish is: the places its own place map binds to
+the world (the operator's regions), the room the body stands in, the terrain
+extent from the door's `World:` line, and the door's advertised tools
+(standard MCP `tools/list`). `POST /internal/v1/world/map` answers exactly
+that (`EidoverseEmbodiedSessionAdapter.map`, `parseEidoverseLook` for the room
+and terrain, `EidoverseMcplClient.listTools`), and the gateway relays it as
+`world.avatar_map` on the read approval action.
+
+On the agent side the places registry stays boot-time immutable and owns
+place identity; what the world publishes lives in a per-world
+`WorldPlaneMapCache`
+([`src/shared/contracts/world-plane-map.ts`](../src/shared/contracts/world-plane-map.ts)),
+refreshed by `world list` on a world place (which returns the map as
+`worldPlane`: room, terrain, hub-only places, the tool list) and by `world
+perceive` (which folds in the room). The world-plane situated block reads it:
+`Room:` when the body is inside one, hub-published places the registry lacks
+appended to `Other places on this plane` by id, and `This world's own tools
+(advisory; …)`. Advisory is the word: the door's tool list is information for
+the model, the gateway's verb allowlist decides what the body may do. A
+hub-published place that places.json does not know is reachable with `move
+{placeId}` (the body walks to its region) but is never written into the
+registry or the local presence overlay; the next world turn carries its own
+place. The companion's own notes about a world (landmarks it found, who it
+met where) are the per-world wiki, below.
 
 ## The world connector is a registered software device (S13, rqm6t)
 

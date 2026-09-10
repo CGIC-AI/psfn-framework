@@ -60,6 +60,7 @@ const expectedGatewayMethods = [
   'home_assistant.call_service',
   'home_assistant.check_connection',
   'world.avatar_perceive',
+  'world.avatar_map',
   'world.avatar_move',
   'world.avatar_act',
   'session.hmac.sign',
@@ -95,10 +96,10 @@ function expectInvalid(decoder: UnknownDecoder, params: unknown): void {
 }
 
 describe('gateway RPC parameter decoder catalog', () => {
-  it('keeps the reviewed 56 gateway plus 18 reverse-agent decoder inventory exact', () => {
+  it('keeps the reviewed 57 gateway plus 18 reverse-agent decoder inventory exact', () => {
     expect(Object.keys(gatewayMethodParamDecoders)).toEqual(expectedGatewayMethods);
     expect(Object.keys(agentMethodParamDecoders)).toEqual(expectedAgentMethods);
-    expect(expectedGatewayMethods).toHaveLength(56);
+    expect(expectedGatewayMethods).toHaveLength(57);
     expect(expectedAgentMethods).toHaveLength(18);
   });
 

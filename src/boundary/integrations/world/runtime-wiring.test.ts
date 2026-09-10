@@ -45,6 +45,7 @@ describe('registerWorldTools', () => {
       'home_assistant.get_states',
       'home_assistant.call_service',
       'world.avatar_perceive',
+      'world.avatar_map',
       'world.avatar_move',
       'world.avatar_act',
     ]);

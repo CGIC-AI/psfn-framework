@@ -7,6 +7,7 @@ import type {
   WorldAvatarActResult,
   WorldAvatarMoveRequest,
   WorldAvatarMoveResult,
+  WorldAvatarMapResult,
   WorldAvatarPerceiveResult,
 } from "../../shared/protocol.js";
 import {
@@ -60,6 +61,8 @@ interface HomeAssistantPrincipal {
  */
 export interface HubWorldControlPort {
   perceive(): Promise<WorldAvatarPerceiveResult>;
+  /** The world's map: mapped places, the current room, terrain, the door's tools. */
+  map(): Promise<WorldAvatarMapResult>;
   move(input: WorldAvatarMoveRequest): Promise<WorldAvatarMoveResult>;
   act(verb: string, args: Record<string, unknown>): Promise<WorldAvatarActResult>;
 }
@@ -224,6 +227,12 @@ export class HubControlServer {
       await this.readJsonBody(request);
       response.statusCode = 200;
       response.end(JSON.stringify(await this.world.perceive()));
+      return;
+    }
+    if (pathname === "/internal/v1/world/map") {
+      await this.readJsonBody(request);
+      response.statusCode = 200;
+      response.end(JSON.stringify(await this.world.map()));
       return;
     }
     if (pathname === "/internal/v1/world/move") {

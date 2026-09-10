@@ -514,7 +514,7 @@ export function decodeAudioChunk(encoded: string): Buffer {
 // ── Hub control port: the companion's own world-avatar surface ──
 //
 // Reached by the PSFN gateway with the Hub control credential over
-// `POST /internal/v1/world/{perceive,move,act}`. This is the companion moving
+// `POST /internal/v1/world/{perceive,map,move,act}`. This is the companion moving
 // its OWN body; no Hub device assertion is involved (that is the external-
 // device `world.body` / `world.travel` path above, which stays device-gated).
 // Additive contract mirrored in the framework's
@@ -550,11 +550,39 @@ export interface WorldAvatarThing {
   detail?: string;
 }
 
+/** The room the body stands in, as the door names it (structure rooms only). */
+export interface WorldAvatarRoom {
+  label: string;
+  labelled: boolean;
+  widthM?: number;
+  depthM?: number;
+  areaM2?: number;
+  insideEntityId?: string;
+  waysOut: string[];
+  sealed: boolean;
+}
+
+/**
+ * `POST /internal/v1/world/map`: what the Hub can honestly publish about the
+ * world's map (psfn-framework-gs899, g8xyn). Additive; mirrored in the
+ * framework's `src/shared/contracts/world-avatar.ts`.
+ */
+export interface WorldAvatarMapResult {
+  world: string;
+  placeId?: string;
+  places: Array<{ placeId: string; region?: string }>;
+  room?: WorldAvatarRoom;
+  terrain?: { sizeM?: number; flatRadiusM?: number };
+  tools: Array<{ name: string; description?: string }>;
+  capturedAt: string;
+}
+
 export interface WorldAvatarPerceiveResult {
   world: string;
   placeId?: string;
   region?: string;
   capturedAt: string;
+  room?: WorldAvatarRoom;
   self: {
     id: string;
     world: string;

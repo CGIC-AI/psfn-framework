@@ -51,6 +51,7 @@ import {
   type EidoverseAvatarMoveOutcome,
   type EidoverseAvatarMoveRequest,
   type EidoverseAvatarPerception,
+  type EidoverseWorldMap,
   type EidoverseEmbodiedSessionConfig,
   type EidoverseEmbodiedSessionDependencies,
   type EidoverseTravelOutcome,
@@ -300,6 +301,14 @@ export class RealtimeHubServer {
       throw new Error("Eidoverse embodied session is not configured");
     }
     return this.eidoverse.moveTo(input);
+  }
+
+  /** The world's map for the companion's world-plane turn (gs899, g8xyn). */
+  mapEidoverse(): Promise<EidoverseWorldMap> {
+    if (!this.eidoverse) {
+      throw new Error("Eidoverse embodied session is not configured");
+    }
+    return this.eidoverse.map();
   }
 
   /** The companion's own body or creation verb. */

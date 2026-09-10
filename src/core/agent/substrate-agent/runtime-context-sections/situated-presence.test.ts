@@ -14,6 +14,7 @@ import {
   resolveSituatedSiteId,
 } from './situated-presence.js';
 import { SituatedEmanationTracker } from './situated-emanation.js';
+import { WorldPlaneMapCache } from '../../../../shared/contracts/world-plane-map.js';
 
 const PLACES_REGISTRY: PlacesRegistryConfig = {
   schemaVersion: 1,
@@ -188,6 +189,39 @@ describe('situated-presence producer on a world plane (u2dx3)', () => {
     expect(block).not.toContain('Effectors here');
     expect(block).not.toContain('A lamp that is not here');
     expect(block).toContain('Room control and physical places do not apply on this plane');
+  });
+
+  it('adds the room, the hub-published places, and the door tools from the world map (gs899, g8xyn)', () => {
+    const worldPlaneMap = new WorldPlaneMapCache();
+    worldPlaneMap.remember({
+      world: 'commons',
+      placeId: 'eidoverse:commons',
+      places: [{ placeId: 'eidoverse:commons:plaza', region: 'plaza' }, { placeId: 'eidoverse:commons:river', region: 'river' }],
+      room: { label: 'kitchen', labelled: true, waysOut: ['a door on its north to the hall'], sealed: false },
+      tools: [{ name: 'look' }, { name: 'walk_to' }, { name: 'take_off' }],
+      capturedAt: '2026-09-10T18:00:00.000Z',
+    });
+    const block = buildSituatedPresenceContextBlock({
+      message: makeMessage({
+        routing: {
+          source: 'satellite',
+          satellite: { claimType: 'world-avatar', satelliteId: 'hub', endpointId: 'hub', placeId: 'eidoverse:commons' },
+        } as never,
+      }),
+      placesRegistry: WORLD_REGISTRY,
+      worldPlaneMap,
+    });
+    expect(block).toContain('Room: the kitchen; ways out: a door on its north to the hall');
+    // The registry's plaza is not duplicated; the hub-only river is added by id.
+    expect(block).toContain('Other places on this plane: Commons Plaza (eidoverse:commons:plaza), river (eidoverse:commons:river)');
+    expect(block).toContain("This world's own tools (advisory; reach them through the world tool's verbs): look, walk_to, take_off");
+    // Never on the house side.
+    const house = buildSituatedPresenceContextBlock({
+      message: makeMessage({ routing: routing({ placeId: 'place.living-room', presence: SATELLITE_PRESENCE }) }),
+      placesRegistry: WORLD_REGISTRY,
+      worldPlaneMap,
+    });
+    expect(house).not.toContain("This world's own tools");
   });
 
   it('follows a deliberate walk on the plane and never the physical emanation', () => {

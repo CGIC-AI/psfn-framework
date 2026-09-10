@@ -63,7 +63,7 @@ const activePostgresPoolOwners = new Set<PostgresPoolOwner>();
  * unused; a holder that must keep a client across long asynchronous work
  * belongs on a named lane, never on the shared one.
  */
-export const RUNTIME_POSTGRES_AUTHORITY_POOL_CAPACITY = 3;
+const RUNTIME_POSTGRES_AUTHORITY_POOL_CAPACITY = 3;
 
 /**
  * Upper bound on any wait for a client from an owned pool, queued waiters
@@ -74,7 +74,7 @@ export const RUNTIME_POSTGRES_AUTHORITY_POOL_CAPACITY = 3;
  * `pool.connect()` with no deadline. A bounded wait turns that into a loud
  * error the turn pipeline reports instead of a silent hang.
  */
-export const RUNTIME_POSTGRES_POOL_CONNECT_TIMEOUT_MS = 30_000;
+const RUNTIME_POSTGRES_POOL_CONNECT_TIMEOUT_MS = 30_000;
 
 /**
  * Named lanes still need a ceiling so a misconfigured caller cannot multiply

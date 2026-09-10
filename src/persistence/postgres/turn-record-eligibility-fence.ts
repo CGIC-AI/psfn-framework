@@ -48,7 +48,7 @@ export class TurnRecordEligibilityFenceTimeoutError extends Error {
   }
 }
 
-export function isTurnRecordEligibilityFenceTimeoutError(error: unknown): boolean {
+function isTurnRecordEligibilityFenceTimeoutError(error: unknown): boolean {
   return error instanceof Error && error.name === 'TurnRecordEligibilityFenceTimeoutError';
 }
 

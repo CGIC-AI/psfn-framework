@@ -12,6 +12,7 @@ import type { TrustLevel } from '../../../system/trust/types.js';
 import type { RequesterProvenance } from '../../../shared/contracts/runtime.js';
 import type { WorldOperations } from './ops.js';
 import { createWorldTool } from './tools.js';
+import { WorldPlaneMapCache } from '../../../shared/contracts/world-plane-map.js';
 
 const REGISTRY: PlacesRegistryConfig = {
   schemaVersion: 1,
@@ -877,6 +878,69 @@ function createAvatarOps(overrides: Partial<WorldOperations> = {}): WorldOperati
     ...overrides,
   });
 }
+
+describe('world tool — the world\'s own map (gs899, g8xyn)', () => {
+  const MAP = {
+    world: 'commons',
+    placeId: 'eidoverse:commons',
+    places: [{ placeId: 'eidoverse:commons' }, { placeId: 'eidoverse:commons:plaza', region: 'plaza' }, { placeId: 'eidoverse:commons:river', region: 'river' }],
+    room: { label: 'kitchen', labelled: true, waysOut: ['a door on its north to the hall'], sealed: false },
+    terrain: { sizeM: 400 },
+    tools: [{ name: 'look', description: 'Look around.' }, { name: 'walk_to' }, { name: 'world_verb' }],
+    capturedAt: '2026-09-10T18:00:00.000Z',
+  };
+
+  it('list on a world place asks the world for its map, lists hub-only places as movable, and reports the door tools as advisory', async () => {
+    const ops = createAvatarOps({ avatarMap: vi.fn(async () => MAP) });
+    const worldPlaneMap = new WorldPlaneMapCache();
+    const tool = createWorldTool(ops, { placesRegistry: EIDO_REGISTRY, worldPlaneMap });
+    const payload = JSON.parse(resultText(await tool.execute('call-list', { action: 'list', placeId: 'eidoverse:commons' })));
+    expect(ops.avatarMap).toHaveBeenCalledWith({ placeId: 'eidoverse:commons' });
+    expect(payload.worldPlane.room.label).toBe('kitchen');
+    expect(payload.worldPlane.terrain).toEqual({ sizeM: 400 });
+    expect(payload.worldPlane.hubPlaces).toEqual([{ placeId: 'eidoverse:commons:river', region: 'river', movable: true, source: 'world' }]);
+    expect(payload.worldPlane.tools.map((tool: { name: string }) => tool.name)).toEqual(['look', 'walk_to', 'world_verb']);
+    expect(payload.worldPlane.toolsNote).toMatch(/advisory/u);
+    expect(worldPlaneMap.get('commons')?.tools).toHaveLength(3);
+  });
+
+  it('list of a physical place never asks the world, and an unavailable map is reported, not fatal', async () => {
+    const ops = createAvatarOps({ avatarMap: vi.fn(async () => { throw new Error('hub offline'); }) });
+    const tool = createWorldTool(ops, { placesRegistry: EIDO_REGISTRY, worldPlaneMap: new WorldPlaneMapCache() });
+    const physical = JSON.parse(resultText(await tool.execute('call-list', { action: 'list', placeId: 'office' })));
+    expect(physical.worldPlane).toBeUndefined();
+    expect(ops.avatarMap).not.toHaveBeenCalled();
+    const world = JSON.parse(resultText(await tool.execute('call-list', { action: 'list', placeId: 'eidoverse:commons' })));
+    expect(world.worldPlane).toEqual({ world: 'commons', unavailable: 'hub offline' });
+  });
+
+  it('move reaches a hub-published place the registry lacks by region, without a local overlay', async () => {
+    const ops = createAvatarOps({ avatarMap: vi.fn(async () => MAP) });
+    const worldPlaneMap = new WorldPlaneMapCache();
+    const applyVirtualMove = vi.fn();
+    const tool = createWorldTool(ops, { placesRegistry: EIDO_REGISTRY, worldPlaneMap, applyVirtualMove });
+    await tool.execute('call-list', { action: 'list', placeId: 'eidoverse:commons' });
+    const payload = JSON.parse(resultText(await tool.execute('call-move', { action: 'move', placeId: 'eidoverse:commons:river' })));
+    expect(ops.avatarMove).toHaveBeenCalledWith({ placeId: 'eidoverse:commons:river', world: 'commons', region: 'river' });
+    expect(payload.source).toBe('world');
+    expect(applyVirtualMove).not.toHaveBeenCalled();
+    // Unknown everywhere: still fails closed.
+    const result = await tool.execute('call-move', { action: 'move', placeId: 'eidoverse:commons:void' });
+    expect(resultText(result)).toMatch(/unknown place|not found|void/iu);
+    expect(ops.avatarMove).toHaveBeenCalledTimes(1);
+  });
+
+  it('perceive folds the room the body stands in into the remembered map and the summary', async () => {
+    const ops = createAvatarOps({
+      avatarPerceive: vi.fn(async () => ({ ...PERCEPTION, room: { label: 'study', labelled: true, waysOut: ['a door on its west to the hall'], sealed: false } })),
+    });
+    const worldPlaneMap = new WorldPlaneMapCache();
+    const tool = createWorldTool(ops, { placesRegistry: EIDO_REGISTRY, worldPlaneMap });
+    const payload = JSON.parse(resultText(await tool.execute('call-perceive', { action: 'perceive', placeId: 'eidoverse:commons' })));
+    expect(payload.summary).toContain('You are in the study; ways out: a door on its west to the hall.');
+    expect(worldPlaneMap.get('commons')?.room?.label).toBe('study');
+  });
+});
 
 describe('world tool — Eidoverse plane (S13 MOVE)', () => {
   it('move to an Eidoverse place takes the body there first, then applies the local overlay', async () => {

@@ -22,6 +22,7 @@ export const MCPL_METHOD = {
   initialized: "notifications/initialized",
   featureSetsUpdate: "featureSets/update",
   toolsCall: "tools/call",
+  toolsList: "tools/list",
   channelsRegister: "channels/register",
   channelsChanged: "channels/changed",
   channelsList: "channels/list",

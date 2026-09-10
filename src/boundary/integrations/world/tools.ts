@@ -30,12 +30,15 @@ import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { isHighTierTrustLevel, type TrustLevel } from '../../../system/trust/types.js';
 import type { RequesterProvenance } from '../../../shared/contracts/runtime.js';
 import type { WorldOperations } from './ops.js';
+import type { WorldPlaneMapCache } from '../../../shared/contracts/world-plane-map.js';
 
 // ── Agent-side `world` tool (Sprint 10, Workstream C2 + C3/C4) ──
 //
 // One action-dispatched tool over the physical/virtual world. Actions:
 //   perceive  — read Home-Assistant states for a place's affordances + summary
-//   list      — enumerate affordances for a place (default) or the whole site
+//   list      — enumerate affordances for a place (default) or the whole site;
+//               on a world plane, also the world's own map (hub-mapped
+//               places, the current room, terrain) and the door's tool list
 //   control   — call an HA service on an effector affordance
 //   move      — deliberate self-invoked navigation (vinz.26, s10wm): a virtual
 //               place, or — S13 MOVE — the companion's own Eidoverse BODY:
@@ -123,6 +126,13 @@ export interface WorldToolDeps {
    * without it, perceive/list default to explicit `placeId` or site-wide.
    */
   resolveSituatedPlaceId?: () => string | undefined;
+  /**
+   * Per-world map the world publishes at runtime (psfn-framework-gs899,
+   * g8xyn). `list` refreshes it on a world plane and `perceive` folds the
+   * room into it; the situated block reads it. Optional: unwired ⇒ `list`
+   * reports the registry alone and a hub-only place cannot be moved to.
+   */
+  worldPlaneMap?: WorldPlaneMapCache;
   /**
    * Cross-companion presence turn port (multi-companion, W5a). `move` writes
    * presence through THIS seam only — never a store/table directly (contract
@@ -272,6 +282,7 @@ async function runPerceive(
   let avatar: Record<string, unknown> | undefined;
   if (isEidoversePlace(place)) {
     const perception = await requireAvatarOps(ops, 'avatarPerceive')({ placeId: place.placeId });
+    deps.worldPlaneMap?.rememberRoom(perception.world, perception.room, perception.capturedAt);
     avatar = describeAvatarPerception(perception, place);
   }
 
@@ -306,7 +317,7 @@ async function runPerceive(
   }, null, 2);
 }
 
-type AvatarOpName = 'avatarPerceive' | 'avatarMove' | 'avatarAct';
+type AvatarOpName = 'avatarPerceive' | 'avatarMap' | 'avatarMove' | 'avatarAct';
 
 /** The avatar ops are optional on the port; an Eidoverse place with none wired fails closed. */
 function requireAvatarOps<K extends AvatarOpName>(ops: WorldOperations, key: K): NonNullable<WorldOperations[K]> {
@@ -347,20 +358,26 @@ function describeAvatarPerception(
   const where = present
     ? `in world "${perception.world}"`
     : `NOTE: your body is in world "${perception.world}", not "${place.eidoverse.world}" (move there first)`;
+  const room = perception.room
+    ? ` You are in ${perception.room.labelled ? `the ${perception.room.label}` : `an unnamed room (${perception.room.label})`}${
+      perception.room.sealed ? ' (sealed)' : perception.room.waysOut.length > 0 ? `; ways out: ${perception.room.waysOut.join('; ')}` : ''
+    }.`
+    : '';
   return {
     world: perception.world,
     present,
     ...(perception.placeId ? { bodyPlaceId: perception.placeId } : {}),
+    ...(perception.room ? { room: perception.room } : {}),
     self,
     people: perception.people,
     things: perception.things,
     recent: perception.recent,
     capturedAt: perception.capturedAt,
-    summary: `${me} ${where}. ${people} ${things}`,
+    summary: `${me} ${where}.${room} ${people} ${things}`,
   };
 }
 
-function runList(deps: WorldToolDeps, params: WorldToolParams): string {
+async function runList(ops: WorldOperations, deps: WorldToolDeps, params: WorldToolParams): Promise<string> {
   const explicitPlaceId = typeof params.placeId === 'string' && params.placeId.trim()
     ? params.placeId.trim()
     : undefined;
@@ -371,6 +388,37 @@ function runList(deps: WorldToolDeps, params: WorldToolParams): string {
   const places = targetPlaceId
     ? [resolvePlace(deps.placesRegistry, targetPlaceId)]
     : deps.placesRegistry.places;
+
+  // World plane (gs899, g8xyn): when the list is about a world place — the
+  // explicit one, or the situated one — ask the world for its own map and
+  // the door's tools. Hub-published places the registry lacks are listed as
+  // movable by id; the tool list is advisory (the verb allowlist decides).
+  const planeAnchorId = targetPlaceId ?? deps.resolveSituatedPlaceId?.();
+  const planeAnchor = planeAnchorId
+    ? deps.placesRegistry.places.find((candidate) => candidate.placeId === planeAnchorId)
+    : undefined;
+  let worldPlane: Record<string, unknown> | undefined;
+  if (planeAnchor && isEidoversePlace(planeAnchor) && ops.avatarMap) {
+    try {
+      const map = await ops.avatarMap({ placeId: planeAnchor.placeId });
+      const snapshot = deps.worldPlaneMap?.remember(map);
+      const known = new Set(places.map((place) => place.placeId));
+      const hubOnly = map.places.filter((place) => !known.has(place.placeId)
+        && !deps.placesRegistry.places.some((candidate) => candidate.placeId === place.placeId));
+      worldPlane = {
+        world: map.world,
+        ...(map.placeId ? { placeId: map.placeId } : {}),
+        ...(map.room ? { room: map.room } : {}),
+        ...(map.terrain ? { terrain: map.terrain } : {}),
+        hubPlaces: hubOnly.map((place) => ({ placeId: place.placeId, ...(place.region ? { region: place.region } : {}), movable: true, source: 'world' })),
+        tools: (snapshot?.tools ?? map.tools).map((tool) => ({ name: tool.name, ...(tool.description ? { description: tool.description } : {}) })),
+        toolsNote: 'advisory: the world advertises these; you reach them through this tool\'s perceive/move/act verbs, and the verb allowlist decides what your body may do',
+        capturedAt: map.capturedAt,
+      };
+    } catch (error) {
+      worldPlane = { world: planeAnchor.eidoverse.world, unavailable: toErrorMessage(error) };
+    }
+  }
 
   return JSON.stringify({
     action: 'list',
@@ -383,6 +431,7 @@ function runList(deps: WorldToolDeps, params: WorldToolParams): string {
       ...describeDeviceStatus(deps, place),
       affordances: place.affordances.map((affordance) => describeAffordance(place, affordance)),
     })),
+    ...(worldPlane ? { worldPlane } : {}),
   }, null, 2);
 }
 
@@ -599,6 +648,32 @@ async function runMove(ops: WorldOperations, deps: WorldToolDeps, params: WorldT
     return runBodyMove(ops, params);
   }
   const placeId = requirePlainString(params, 'placeId', 'move', 'place.mud-tavern');
+  // A place the world published but places.json does not know (gs899): the
+  // body walks there by region; nothing is written into the registry or the
+  // local situated overlay (the next world turn carries its own place).
+  const hubPlace = deps.placesRegistry.places.some((candidate) => candidate.placeId === placeId)
+    ? undefined
+    : deps.worldPlaneMap?.findPlace(placeId);
+  if (hubPlace) {
+    const outcome = await requireAvatarOps(ops, 'avatarMove')({
+      placeId: hubPlace.placeId,
+      world: hubPlace.world,
+      ...(hubPlace.region ? { region: hubPlace.region } : {}),
+      ...(params.participant ? { participant: params.participant.trim() } : {}),
+    });
+    if (!outcome.accepted) {
+      throw new Error(
+        `the world refused the move to "${placeId}" (${outcome.reason}); your body is still in "${outcome.world}".`,
+      );
+    }
+    return JSON.stringify({
+      action: 'move',
+      placeId: hubPlace.placeId,
+      source: 'world',
+      body: describeMoveOutcome(outcome),
+      note: 'this place comes from the world\'s own map, not places.json; no local presence overlay was written',
+    }, null, 2);
+  }
   // Fail closed: unknown destination never moves anything.
   const place = resolvePlace(deps.placesRegistry, placeId);
   if (place.kind === 'physical' && !isEidoversePlace(place)) {
@@ -859,7 +934,7 @@ export function createWorldTool(ops: WorldOperations, deps: WorldToolDeps): Subs
           case 'perceive':
             return textResult(await runPerceive(ops, deps, params));
           case 'list':
-            return textResult(runList(deps, params));
+            return textResult(await runList(ops, deps, params));
           case 'control':
             return textResult(await runControl(ops, deps, params));
           case 'move':

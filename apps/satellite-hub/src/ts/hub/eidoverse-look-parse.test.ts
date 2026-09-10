@@ -76,3 +76,45 @@ test("participants resolve case-insensitively with an optional @ and approach st
   assert.deepEqual(approachPosition({ x: 0, z: 0 }, { x: 3, z: 4 }), { x: 2.1, z: 2.8 });
   assert.equal(approachPosition({ x: 0, z: 0 }, { x: 1, z: 0.5 }), null, "already within the standoff");
 });
+
+test("look parser lifts the room sentence and the terrain extent out of the header (gs899)", () => {
+  const perception = parseEidoverseLook([
+    'You are "nova" in world "commons" at (12.4, -3.1), ground height 0.02m, facing NE.',
+    "You are in the kitchen — 4×3m, 12m². Ways out: a door on its north to the hall; a door on its east to outside. Also a window on its south to outside. (inside [ent-7]; sides are the building's own compass.)",
+    'World: {"terrain":{"seed":7,"size":400,"amplitude":3,"flatRadius":60},"sky":{"currentHour":14.5}}',
+    "Nobody else is here right now.",
+    "No placed things yet.",
+  ].join("\n"));
+  assert.deepEqual(perception.room, {
+    label: "kitchen",
+    labelled: true,
+    widthM: 4,
+    depthM: 3,
+    areaM2: 12,
+    insideEntityId: "ent-7",
+    waysOut: ["a door on its north to the hall", "a door on its east to outside"],
+    sealed: false,
+  });
+  assert.deepEqual(perception.worldInfo?.terrain, { sizeM: 400, flatRadiusM: 60, seed: 7 });
+  assert.equal(perception.self?.x, 12.4);
+});
+
+test("look parser names an unlabelled, sealed room by its id and tolerates a malformed World line", () => {
+  const perception = parseEidoverseLook([
+    'You are "nova" in world "commons" at (0.0, 0.0), ground height 0.00m, facing S.',
+    "You are in an unnamed room (r2) — 2×2m, 4m². No doors — this room is sealed. (inside [house-1]; sides are the building's own compass.)",
+    "World: {not json",
+    "Nobody else is here right now.",
+  ].join("\n"));
+  assert.equal(perception.room?.label, "r2");
+  assert.equal(perception.room?.labelled, false);
+  assert.equal(perception.room?.sealed, true);
+  assert.deepEqual(perception.room?.waysOut, []);
+  assert.equal(perception.worldInfo, undefined);
+});
+
+test("look parser reports no room on open ground", () => {
+  const perception = parseEidoverseLook(LOOK);
+  assert.equal(perception.room, undefined);
+  assert.deepEqual(perception.worldInfo?.raw, { sky: { currentHour: 14.5 } });
+});

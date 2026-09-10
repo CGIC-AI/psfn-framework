@@ -224,6 +224,9 @@ export const gatewayOperationalParamDecoders = {
   'world.avatar_perceive': gatewayDecoder('world.avatar_perceive', correlatedParams({
     placeId: optionalString,
   })),
+  'world.avatar_map': gatewayDecoder('world.avatar_map', correlatedParams({
+    placeId: optionalString,
+  })),
   'world.avatar_move': gatewayDecoder('world.avatar_move', correlatedParams({
     placeId: optionalString,
     world: optionalString,

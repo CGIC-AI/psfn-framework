@@ -8,6 +8,8 @@ import type {
   HomeAssistantGetStatesResult,
   WorldAvatarActParams,
   WorldAvatarActResult,
+  WorldAvatarMapParams,
+  WorldAvatarMapResult,
   WorldAvatarMoveParams,
   WorldAvatarMoveResult,
   WorldAvatarPerceiveParams,
@@ -37,6 +39,10 @@ export class GatewayWorldOps implements WorldOperations {
 
   async avatarPerceive(params: WorldAvatarPerceiveParams = {}): Promise<WorldAvatarPerceiveResult> {
     return this.requireAvatar().perceive({ ...params, ...this.correlation() });
+  }
+
+  async avatarMap(params: WorldAvatarMapParams = {}): Promise<WorldAvatarMapResult> {
+    return this.requireAvatar().map({ ...params, ...this.correlation() });
   }
 
   async avatarMove(params: WorldAvatarMoveParams): Promise<WorldAvatarMoveResult> {

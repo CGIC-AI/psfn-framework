@@ -45,8 +45,39 @@ export interface EidoverseLookThing {
   detail?: string;
 }
 
+/**
+ * The room the body stands in, when the door says so (a griddled `structure`
+ * entity knows its rooms; open ground has none). The door's sentence:
+ * `You are in the kitchen — 4×3m, 12m². Ways out: a door on its north to the
+ * hall. (inside [ent-7]; sides are the building's own compass.)`. This is the
+ * one named-place primitive the world itself provides (psfn-framework-gs899).
+ */
+export interface EidoverseLookRoom {
+  /** The room's label, or its id when unlabelled. */
+  label: string;
+  labelled: boolean;
+  widthM?: number;
+  depthM?: number;
+  areaM2?: number;
+  /** The structure entity the room belongs to. */
+  insideEntityId?: string;
+  /** Door/window phrases as the door wrote them ("a door on its north to the hall"). */
+  waysOut: string[];
+  sealed: boolean;
+}
+
+/** Whatever the door's `World:` line carried that a map cares about. */
+export interface EidoverseLookWorldInfo {
+  terrain?: { sizeM?: number; flatRadiusM?: number; seed?: number };
+  raw: Record<string, unknown>;
+}
+
 export interface EidoverseLookPerception {
   self: EidoverseLookSelf | null;
+  /** Present only when the body stands inside a room the door can name. */
+  room?: EidoverseLookRoom;
+  /** Present only when the door printed a parseable `World:` line. */
+  worldInfo?: EidoverseLookWorldInfo;
   people: EidoverseLookPerson[];
   things: EidoverseLookThing[];
   /** Lines the door reported under "Since you last looked:", speaker-prefixed. */
@@ -61,6 +92,10 @@ const PERSON_KNOWN = /^-\s+([^:\s]+):\s+(?:(-?\d+(?:\.\d+)?)m ([A-Z]{1,2}) )?at 
 const PERSON_UNKNOWN = /^-\s+([^\s(]+)\s*\((.*)\)$/u;
 const THING_KNOWN = /^-\s+\[([^\]]+)\]\s+([^:]*):\s+(?:(-?\d+(?:\.\d+)?)m ([A-Z]{1,2}) )?at \((-?\d+(?:\.\d+)?), (-?\d+(?:\.\d+)?), (-?\d+(?:\.\d+)?)\)(.*)$/u;
 const THING_UNKNOWN = /^-\s+\[([^\]]+)\]\s+([^:]*):\s+(.*)$/u;
+
+const ROOM_LINE = /^You are in (?:the (.+?)|an unnamed room \(([^)]+)\)) — (\d+)×(\d+)m, (\d+(?:\.\d+)?)m²\.(.*)$/u;
+const ROOM_INSIDE = /\(inside \[([^\]]+)\];/u;
+const ROOM_WAYS = /Ways out: (.+?)\./u;
 
 type Section = "header" | "people" | "things" | "recent";
 
@@ -78,7 +113,11 @@ export function parseEidoverseLook(text: string): EidoverseLookPerception {
 
     if (section === "header") {
       const self = parseSelf(line);
-      if (self) perception.self = self;
+      if (self) { perception.self = self; continue; }
+      const room = parseRoom(line);
+      if (room) { perception.room = room; continue; }
+      const worldInfo = parseWorldInfo(line);
+      if (worldInfo) perception.worldInfo = worldInfo;
       continue;
     }
     if (section === "people") {
@@ -115,6 +154,46 @@ function parseSelf(line: string): EidoverseLookSelf | null {
     return { id: unknown[1]!, world: unknown[2]!, positionKnown: false, ...(facing ? { facing } : {}) };
   }
   return null;
+}
+
+function parseRoom(line: string): EidoverseLookRoom | null {
+  const match = ROOM_LINE.exec(line);
+  if (!match) return null;
+  const tail = match[6] ?? "";
+  const ways = ROOM_WAYS.exec(tail)?.[1];
+  const inside = ROOM_INSIDE.exec(tail)?.[1];
+  const labelled = match[1] !== undefined;
+  return {
+    label: (labelled ? match[1] : match[2]) ?? "",
+    labelled,
+    widthM: Number(match[3]),
+    depthM: Number(match[4]),
+    areaM2: Number(match[5]),
+    ...(inside ? { insideEntityId: inside } : {}),
+    waysOut: ways ? ways.split(/;\s*/u).map((way) => way.trim()).filter(Boolean) : [],
+    sealed: /No doors — this room is sealed\./u.test(tail),
+  };
+}
+
+function parseWorldInfo(line: string): EidoverseLookWorldInfo | null {
+  if (!line.startsWith("World: ")) return null;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(line.slice("World: ".length));
+  } catch {
+    return null;
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const record = raw as Record<string, unknown>;
+  const terrainRaw = record.terrain;
+  const terrain: EidoverseLookWorldInfo["terrain"] = {};
+  if (terrainRaw && typeof terrainRaw === "object" && !Array.isArray(terrainRaw)) {
+    const t = terrainRaw as Record<string, unknown>;
+    if (typeof t.size === "number" && Number.isFinite(t.size)) terrain.sizeM = t.size;
+    if (typeof t.flatRadius === "number" && Number.isFinite(t.flatRadius)) terrain.flatRadiusM = t.flatRadius;
+    if (typeof t.seed === "number" && Number.isFinite(t.seed)) terrain.seed = t.seed;
+  }
+  return { ...(Object.keys(terrain).length > 0 ? { terrain } : {}), raw: record };
 }
 
 function parsePerson(line: string): EidoverseLookPerson | null {

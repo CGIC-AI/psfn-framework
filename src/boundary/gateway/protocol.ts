@@ -1,5 +1,6 @@
 import type {
   WorldAvatarActOutcome,
+  WorldAvatarMap,
   WorldAvatarMoveOutcome,
   WorldAvatarMoveRequest,
   WorldAvatarPerception,
@@ -353,6 +354,13 @@ export interface WorldAvatarPerceiveParams extends GatewayCorrelationParams {
 
 export type WorldAvatarPerceiveResult = WorldAvatarPerception;
 
+export interface WorldAvatarMapParams extends GatewayCorrelationParams {
+  /** The registry place the companion is asking about (audit/summary only). */
+  placeId?: string;
+}
+
+export type WorldAvatarMapResult = WorldAvatarMap;
+
 export interface WorldAvatarMoveParams extends GatewayCorrelationParams, WorldAvatarMoveRequest {
   /** The registry place being moved to, when the move targets one. */
   placeId?: string;
@@ -367,7 +375,7 @@ export interface WorldAvatarActParams extends GatewayCorrelationParams {
 
 export type WorldAvatarActResult = WorldAvatarActOutcome;
 
-export type WorldAvatarMethodName = 'world.avatar_perceive' | 'world.avatar_move' | 'world.avatar_act';
+export type WorldAvatarMethodName = 'world.avatar_perceive' | 'world.avatar_map' | 'world.avatar_move' | 'world.avatar_act';
 
 export interface HomeAssistantCallServiceParams extends GatewayCorrelationParams {
   domain: string;
@@ -1334,6 +1342,7 @@ export interface GatewayMethods {
   'home_assistant.call_service': [HomeAssistantCallServiceParams, HomeAssistantCallServiceResult];
   'home_assistant.check_connection': [HomeAssistantCheckConnectionParams, HomeAssistantCheckConnectionResult];
   'world.avatar_perceive': [WorldAvatarPerceiveParams, WorldAvatarPerceiveResult];
+  'world.avatar_map': [WorldAvatarMapParams, WorldAvatarMapResult];
   'world.avatar_move': [WorldAvatarMoveParams, WorldAvatarMoveResult];
   'world.avatar_act': [WorldAvatarActParams, WorldAvatarActResult];
   'web.search': [WebSearchParams, WebSearchResult];

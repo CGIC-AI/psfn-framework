@@ -178,7 +178,7 @@ either of which may be absent: the Home Assistant proxy (opt-in with
 `HOME_ASSISTANT_ENABLED=true`, device-scoped state reads and allowlisted
 `call_service` calls) and, whenever an Eidoverse emanation is configured, the
 companion's own world-avatar surface (`POST /internal/v1/world/perceive`,
-`/move`, `/act`; see [Eidoverse Hub integration](../eidoverse-hub-integration.md)).
+`/map`, `/move`, `/act`; see [Eidoverse Hub integration](../eidoverse-hub-integration.md)).
 The control port needs neither Home Assistant nor a device registry; the world
 routes admit the control token only, never a device credential
 ([`src/ts/hub/main.ts`](/apps/satellite-hub/src/ts/hub/main.ts),

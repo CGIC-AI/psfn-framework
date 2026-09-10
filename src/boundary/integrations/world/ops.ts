@@ -5,6 +5,8 @@ import type {
   WorldAvatarActResult,
   WorldAvatarMoveParams,
   WorldAvatarMoveResult,
+  WorldAvatarMapParams,
+  WorldAvatarMapResult,
   WorldAvatarPerceiveParams,
   WorldAvatarPerceiveResult,
 } from '../../gateway/protocol.js';
@@ -48,6 +50,7 @@ export interface WorldOperations {
    * on an Eidoverse place instead of pretending the body moved.
    */
   avatarPerceive?(params?: WorldAvatarPerceiveParams): Promise<WorldAvatarPerceiveResult>;
+  avatarMap?(params?: WorldAvatarMapParams): Promise<WorldAvatarMapResult>;
   avatarMove?(params: WorldAvatarMoveParams): Promise<WorldAvatarMoveResult>;
   avatarAct?(params: WorldAvatarActParams): Promise<WorldAvatarActResult>;
 }

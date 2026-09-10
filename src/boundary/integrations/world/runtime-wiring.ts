@@ -7,6 +7,7 @@ import type { PlacesRegistryConfig } from '../../../shared/contracts/places-regi
 import type { RequesterProvenance } from '../../../shared/contracts/runtime.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import type { WorldOperations } from './ops.js';
+import type { WorldPlaneMapCache } from '../../../shared/contracts/world-plane-map.js';
 import { createWorldTool } from './tools.js';
 
 export interface WorldRuntimeTarget {
@@ -17,6 +18,7 @@ const WORLD_TOOL_GATEWAY_METHODS = [
   'home_assistant.get_states',
   'home_assistant.call_service',
   'world.avatar_perceive',
+  'world.avatar_map',
   'world.avatar_move',
   'world.avatar_act',
 ] as const;
@@ -32,6 +34,8 @@ export interface RegisterWorldToolsOptions {
   placesRegistry: PlacesRegistryConfig;
   /** Resolves the companion's current situated placeId for deictic defaults. */
   resolveSituatedPlaceId?: () => string | undefined;
+  /** Per-world map the world publishes at runtime (gs899, g8xyn). */
+  worldPlaneMap?: WorldPlaneMapCache;
   /**
    * Presence turn port for `move` (contract s10wm; multi-companion only).
    * Null/absent = flag-off: moves are local-only (no shared-table write).
@@ -70,6 +74,7 @@ export function registerWorldTools(
   const tool: AgentTool<any> = createWorldTool(ops, {
     placesRegistry: options.placesRegistry,
     ...(options.resolveSituatedPlaceId ? { resolveSituatedPlaceId: options.resolveSituatedPlaceId } : {}),
+    ...(options.worldPlaneMap ? { worldPlaneMap: options.worldPlaneMap } : {}),
     ...(options.companionPresence !== undefined ? { companionPresence: options.companionPresence } : {}),
     ...(options.applyVirtualMove ? { applyVirtualMove: options.applyVirtualMove } : {}),
     ...(options.resolvePlaceDeviceStatus

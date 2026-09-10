@@ -1,6 +1,8 @@
 import type {
   WorldAvatarActParams,
   WorldAvatarActResult,
+  WorldAvatarMapParams,
+  WorldAvatarMapResult,
   WorldAvatarMoveParams,
   WorldAvatarMoveResult,
   WorldAvatarPerceiveParams,
@@ -57,6 +59,13 @@ function parsePerception(payload: unknown): WorldAvatarPerceiveResult {
   return payload as unknown as WorldAvatarPerceiveResult;
 }
 
+function parseMap(payload: unknown): WorldAvatarMapResult {
+  if (!isRecord(payload) || typeof payload.world !== 'string' || !Array.isArray(payload.places) || !Array.isArray(payload.tools)) {
+    providerError('Malformed Satellite Hub world map');
+  }
+  return payload as unknown as WorldAvatarMapResult;
+}
+
 function parseMoveOutcome(payload: unknown): WorldAvatarMoveResult {
   if (!isRecord(payload) || typeof payload.accepted !== 'boolean' || typeof payload.world !== 'string') {
     providerError('Malformed Satellite Hub move outcome');
@@ -80,6 +89,17 @@ const descriptors = [
       return parsePerception(payload);
     },
     summary: (params) => ({ action: 'avatar_perceive', placeId: params.placeId ?? null }),
+    approvalAction: 'world.avatar.read',
+    approvalScope: (params) => params.placeId ?? 'current',
+  }),
+  defineGatedMethod<WorldAvatarMapParams, WorldAvatarMapResult>({
+    name: 'world.avatar_map',
+    decode: gatewayMethodParamDecoders['world.avatar_map'],
+    handler: async (_params, runtime): Promise<WorldAvatarMapResult> => {
+      const payload = await requestSatelliteHub(runtime, '/internal/v1/world/map', 'POST', {});
+      return parseMap(payload);
+    },
+    summary: (params) => ({ action: 'avatar_map', placeId: params.placeId ?? null }),
     approvalAction: 'world.avatar.read',
     approvalScope: (params) => params.placeId ?? 'current',
   }),

@@ -154,6 +154,7 @@ import {
   type CompanionSubstrateHealthContext,
 } from './substrate-agent/runtime-context.js';
 import { SituatedEmanationTracker } from './substrate-agent/runtime-context-sections/situated-emanation.js';
+import type { WorldPlaneMapReader } from '../../shared/contracts/world-plane-map.js';
 import { createVirtualRoomFollower, type VirtualRoomFollower } from './virtual-room-follow.js';
 import { installContextCoherenceMonitor } from './context-coherence-monitor.js';
 import { EmotionSelfModelRuntime } from './substrate-agent/emotion-self-model-runtime.js';
@@ -538,6 +539,8 @@ export class SubstrateAgent {
   // current physical room and any deliberate virtual move. Plain-chat turns
   // consume its physical room only through the authored twin mapping.
   private readonly situatedEmanationTracker = new SituatedEmanationTracker();
+  /** What the world published for its plane (gs899, g8xyn); set by composition when a Hub is wired. */
+  private worldPlaneMap: WorldPlaneMapReader | null = null;
 
   // Virtual-activity presence follow (vinz.21): pulls the companion's virtual
   // presence to a place-bound companion-room when the trusted partner is
@@ -938,6 +941,7 @@ export class SubstrateAgent {
       emotionSelfModelRuntime: this.emotionSelfModelRuntime,
       getCompanionSubstrateHealthContext: () => this.companionSubstrateHealthContext,
       situatedEmanationTracker: this.situatedEmanationTracker,
+      getWorldPlaneMap: () => this.worldPlaneMap,
       resolveSituatedFallbackPlaceIdForTurn: (message) => this.resolveSituatedFallbackPlaceIdForTurn(message),
       getActiveConcernProvider: () => this.activeConcernProvider,
       getBehavioralPatternProvider: () => this.behavioralPatternProvider,
@@ -1235,6 +1239,11 @@ export class SubstrateAgent {
   /** World-plane tool policy (S13, psfn-framework-u2dx3): which places are on a world plane. */
   setWorldPlanePlaceResolver(resolver: ((placeId: string) => boolean) | null): void {
     this.toolRuntimeFacade.setWorldPlanePlaceResolver(resolver);
+  }
+
+  /** The per-world map the world tool keeps fresh (gs899, g8xyn); the situated block reads it. */
+  setWorldPlaneMap(reader: WorldPlaneMapReader | null): void {
+    this.worldPlaneMap = reader;
   }
 
   setToolUsageRanking(ranking: ToolUsageRanking | null): void {

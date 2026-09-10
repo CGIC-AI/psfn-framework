@@ -50,11 +50,45 @@ interface WorldAvatarThing {
   detail?: string;
 }
 
+/**
+ * The room the body stands in, when the world can name one: a griddled
+ * structure's room, the door's one named-place primitive. Open ground has
+ * none (psfn-framework-gs899).
+ */
+export interface WorldAvatarRoom {
+  label: string;
+  labelled: boolean;
+  widthM?: number;
+  depthM?: number;
+  areaM2?: number;
+  insideEntityId?: string;
+  waysOut: string[];
+  sealed: boolean;
+}
+
+/**
+ * The world's map as the Hub can honestly publish it (gs899, g8xyn): the
+ * places the Hub's place map binds to this world, the room the body stands
+ * in, the terrain extent, and the door's advertised tools. The door has no
+ * region model, so `places` is the operator's mapping; `tools` is advisory
+ * (the gateway's verb allowlist stays the authority on what the body does).
+ */
+export interface WorldAvatarMap {
+  world: string;
+  placeId?: string;
+  places: Array<{ placeId: string; region?: string }>;
+  room?: WorldAvatarRoom;
+  terrain?: { sizeM?: number; flatRadiusM?: number };
+  tools: Array<{ name: string; description?: string }>;
+  capturedAt: string;
+}
+
 export interface WorldAvatarPerception {
   world: string;
   placeId?: string;
   region?: string;
   capturedAt: string;
+  room?: WorldAvatarRoom;
   self: WorldAvatarSelf | null;
   people: WorldAvatarPerson[];
   things: WorldAvatarThing[];

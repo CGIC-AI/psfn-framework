@@ -30,6 +30,8 @@ import type {
   WorldAvatarActResult,
   WorldAvatarMoveParams,
   WorldAvatarMoveResult,
+  WorldAvatarMapParams,
+  WorldAvatarMapResult,
   WorldAvatarPerceiveParams,
   WorldAvatarPerceiveResult,
 } from './protocol.js';
@@ -51,6 +53,8 @@ export interface HomeAssistantOperations {
  */
 export interface WorldAvatarOperations {
   perceive(params?: WorldAvatarPerceiveParams): Promise<WorldAvatarPerceiveResult>;
+  /** The world's map: mapped places, current room, terrain, the door's tools (gs899, g8xyn). */
+  map(params?: WorldAvatarMapParams): Promise<WorldAvatarMapResult>;
   move(params: WorldAvatarMoveParams): Promise<WorldAvatarMoveResult>;
   act(params: WorldAvatarActParams): Promise<WorldAvatarActResult>;
 }
@@ -114,6 +118,7 @@ function createGatewayOpsPort(port: GatewayOpsPort): GatewayOpsPort {
       ? {
         worldAvatar: {
           perceive: (params?: WorldAvatarPerceiveParams) => port.worldAvatar!.perceive(params),
+          map: (params?: WorldAvatarMapParams) => port.worldAvatar!.map(params),
           move: (params: WorldAvatarMoveParams) => port.worldAvatar!.move(params),
           act: (params: WorldAvatarActParams) => port.worldAvatar!.act(params),
         },
@@ -203,6 +208,7 @@ export function createGatewayOpsPortFromClient(gateway: GatewayClient): GatewayO
     },
     worldAvatar: {
       perceive: (params: WorldAvatarPerceiveParams = {}) => gateway.worldAvatar('world.avatar_perceive', params),
+      map: (params: WorldAvatarMapParams = {}) => gateway.worldAvatar('world.avatar_map', params),
       move: (params: WorldAvatarMoveParams) => gateway.worldAvatar('world.avatar_move', params),
       act: (params: WorldAvatarActParams) => gateway.worldAvatar('world.avatar_act', params),
     },

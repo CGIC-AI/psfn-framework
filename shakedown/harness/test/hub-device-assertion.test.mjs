@@ -16,6 +16,7 @@ test('framework assertion bridge invokes the canonical issuer without exposing k
       calls.push(args);
       return 'header.claims.signature\n';
     },
+    fileExists: path => path === '/runtime/system-data/fleet-auth.json',
   });
 
   assert.equal(issue({
@@ -40,6 +41,36 @@ test('framework assertion bridge invokes the canonical issuer without exposing k
   });
   assert.deepEqual(options.stdio, ['pipe', 'pipe', 'pipe']);
   assert.equal(JSON.stringify(calls).includes('PRIVATE KEY'), false);
+});
+
+test('framework assertion bridge mints key-only from the satellites.json ring when fleet-auth.json is absent', () => {
+  const calls = [];
+  const issue = createFrameworkHubDeviceAssertionIssuer({
+    repoRoot: '/framework',
+    env: {
+      SYSTEM_DATA_DIR: '/runtime/system-data',
+      HUB_DEVICE_ASSERTION_PRIVATE_KEY_PATH: '/run/private/assertion.pem',
+      HUB_DEVICE_ASSERTION_TTL_SECONDS: '30',
+    },
+    execFile: (...args) => {
+      calls.push(args);
+      return 'header.claims.signature\n';
+    },
+    fileExists: () => false,
+  });
+
+  assert.equal(issue({
+    companionId: '11111111-1111-4111-8111-111111111111',
+    satelliteId: 'office-satellite',
+    endpointId: 'office-endpoint',
+    sessionId: 'realtime:office-device:session',
+  }), 'header.claims.signature');
+
+  const input = JSON.parse(calls[0][2].input);
+  assert.equal('fleetAuthPath' in input, false);
+  assert.equal('hubDeviceAssertionsPath' in input, false);
+  assert.equal(input.satelliteRegistryPath, '/runtime/system-data/satellites.json');
+  assert.equal(input.privateKeyPath, '/run/private/assertion.pem');
 });
 
 test('framework assertion bridge fails closed on partial authority or malformed output', () => {

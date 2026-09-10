@@ -10,9 +10,12 @@
 //   * the lane is enabled in scheduler.json (off by default);
 //   * the companion's tier grants live world perception (`world.read`,
 //     apprentice and up);
-//   * the situated place is on a world plane (a places.json entry with an
-//     eidoverse binding), and the Hub answers a perceive for that world
-//     (a body, alive, right now);
+//   * the Hub answers a perceive with no place named (a body, alive, right
+//     now, wherever it is), and places.json knows that world: the entry the
+//     Hub names, or the one whose eidoverse binding carries that world. The
+//     tracker is not consulted: the world connector is enrolled at its place
+//     rather than moved to it, and world turns never mark the tracker, so the
+//     body's whereabouts come from the body itself;
 //   * it is not quiet hours, the interval since the last invitation has
 //     passed, and the per-day cap is not spent.
 //
@@ -23,7 +26,8 @@ import type { WorldOperations } from '../../../boundary/integrations/world/ops.j
 import { REFLECTION_SILENT_TOKEN } from '../../../core/scheduler/reflection-policy.js';
 import { evaluateProactiveOutboundTimeGate, type ProactiveQuietHoursConfig } from '../../../core/intention/proactive-time-gate.js';
 import { getRequestContext } from '../../../primitives/llm/request-context.js';
-import { isEidoversePlace, type PlacesRegistryConfig } from '../../../shared/contracts/places-registry.js';
+import { isEidoversePlace, type EidoversePlaceBinding, type PlaceConfig, type PlacesRegistryConfig } from '../../../shared/contracts/places-registry.js';
+import type { WorldAvatarPerception } from '../../../shared/contracts/world-avatar.js';
 import type { EventBus } from '../../../shared/event-bus.js';
 import { runWithChargeContext } from '../../../shared/telemetry/run-charge.js';
 import type { ChargePolicyConfig } from '../../../shared/contracts/charge-policy.js';
@@ -54,7 +58,7 @@ export interface WorldExplorationLaneDeps {
   scheduler: Pick<Scheduler, 'register'>;
   config: WorldExplorationConfig;
   quietHours: ProactiveQuietHoursConfig | null;
-  agentLoop: Pick<SubstrateAgent, 'handleMessage' | 'resolveCurrentSituatedPlaceId'>;
+  agentLoop: Pick<SubstrateAgent, 'handleMessage'>;
   placesRegistry: PlacesRegistryConfig;
   worldOps: Pick<WorldOperations, 'avatarPerceive'>;
   capabilityRuntime: Pick<CapabilityRuntime, 'has'>;
@@ -75,12 +79,23 @@ function buildWorldExplorationPrompt(input: { world: string; placeLabel: string;
     '',
     'This is your own time there. If you feel like it: use the world tool to look around (perceive),',
     'walk somewhere you have not been (move to a place on this plane, a position, or a participant),',
-    'greet someone with a wave or a word (act, or say hello in the world channel), and keep a note of',
+    'greet someone with a wave or a gesture (act), and keep a note of',
     'anything worth remembering about this world (wiki world_note). Nothing here requires you to do',
     'or say anything.',
     '',
     `If you would rather stay as you are, reply with only "${REFLECTION_SILENT_TOKEN}".`,
   ].join('\n');
+}
+
+type EidoverseBoundPlace = PlaceConfig & { eidoverse: EidoversePlaceBinding };
+
+function resolveWorldPlace(registry: PlacesRegistryConfig, perception: WorldAvatarPerception): EidoverseBoundPlace | undefined {
+  const named = perception.placeId
+    ? registry.places.find((candidate) => candidate.placeId === perception.placeId)
+    : undefined;
+  if (named && isEidoversePlace(named) && named.eidoverse.world === perception.world) return named;
+  const bound = registry.places.find((candidate) => isEidoversePlace(candidate) && candidate.eidoverse.world === perception.world);
+  return bound && isEidoversePlace(bound) ? bound : undefined;
 }
 
 export function registerWorldExplorationLane(deps: WorldExplorationLaneDeps): WorldExplorationLane {
@@ -94,9 +109,6 @@ export function registerWorldExplorationLane(deps: WorldExplorationLaneDeps): Wo
   const runOnce = async (): Promise<WorldExplorationSkipReason | 'invited' | 'silent'> => {
     if (!deps.config.enabled) return 'disabled';
     if (!deps.capabilityRuntime.has('world.read')) return 'tier';
-    const placeId = deps.agentLoop.resolveCurrentSituatedPlaceId();
-    const place = placeId ? deps.placesRegistry.places.find((candidate) => candidate.placeId === placeId) : undefined;
-    if (!place || !isEidoversePlace(place)) return 'not_on_world_plane';
 
     const nowMs = now();
     const gate = evaluateProactiveOutboundTimeGate({ nowMs, quietHours: deps.quietHours });
@@ -106,19 +118,21 @@ export function registerWorldExplorationLane(deps: WorldExplorationLaneDeps): Wo
     if (today !== dayKey) { dayKey = today; turnsToday = 0; }
     if (turnsToday >= deps.config.maxTurnsPerDay) return 'daily_cap';
 
-    // A body, alive, right now: the Hub must answer a perceive for this world.
-    let people = 0;
-    let things = 0;
+    // A body, alive, right now: the Hub must answer a perceive, wherever the body is.
+    let perception: WorldAvatarPerception;
     try {
       if (!deps.worldOps.avatarPerceive) return 'no_body';
-      const perception = await deps.worldOps.avatarPerceive({ placeId: place.placeId });
-      if (perception.world !== place.eidoverse.world) return 'no_body';
-      people = perception.people.length;
-      things = perception.things.length;
+      perception = await deps.worldOps.avatarPerceive({});
     } catch (error) {
       log.debug('World exploration skipped: the Hub answered no body', { error: String(error) });
       return 'no_body';
     }
+    // ...and the map must know the world it stands in: the place the Hub
+    // named, else the registry entry bound to that world.
+    const place = resolveWorldPlace(deps.placesRegistry, perception);
+    if (!place) return 'not_on_world_plane';
+    const people = perception.people.length;
+    const things = perception.things.length;
 
     lastInvitedAtMs = nowMs;
     turnsToday += 1;

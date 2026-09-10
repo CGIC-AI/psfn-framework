@@ -26,12 +26,11 @@ function makeDeps(overrides: Partial<WorldExplorationLaneDeps> = {}) {
   const avatarPerceive = vi.fn(async () => ({
     world: 'commons', capturedAt: 'now', self: null, people: [{ id: 'visitor', positionKnown: false }], things: [], recent: [], raw: '',
   }));
-  let placeId: string | undefined = 'eidoverse:commons';
   const deps: WorldExplorationLaneDeps = {
     scheduler: { register: vi.fn((task: { id: string; intervalMs: number }) => { registered.push({ id: task.id, intervalMs: task.intervalMs }); }) } as never,
     config: { enabled: true, intervalMinutes: 30, maxTurnsPerDay: 2 },
     quietHours: null,
-    agentLoop: { handleMessage: handleMessage as never, resolveCurrentSituatedPlaceId: () => placeId },
+    agentLoop: { handleMessage: handleMessage as never },
     placesRegistry: REGISTRY,
     worldOps: { avatarPerceive: avatarPerceive as never },
     capabilityRuntime: { has: () => true },
@@ -40,7 +39,7 @@ function makeDeps(overrides: Partial<WorldExplorationLaneDeps> = {}) {
     now: () => 1_000_000,
     ...overrides,
   };
-  return { deps, registered, handleMessage, avatarPerceive, setPlace: (next: string | undefined) => { placeId = next; } };
+  return { deps, registered, handleMessage, avatarPerceive };
 }
 
 describe('world exploration lane (07mw2)', () => {
@@ -50,7 +49,8 @@ describe('world exploration lane (07mw2)', () => {
     expect(registered).toEqual([{ id: WORLD_EXPLORATION_TASK_ID, intervalMs: 5 * 60_000 }]);
 
     await expect(lane.runOnce()).resolves.toBe('invited');
-    expect(avatarPerceive).toHaveBeenCalledWith({ placeId: 'eidoverse:commons' });
+    // The body says where it is; the tracker (which world turns never mark) is not asked.
+    expect(avatarPerceive).toHaveBeenCalledWith({});
     const [message] = handleMessage.mock.calls[0] as unknown as [{ channelId: string; content: string; authorId: string }];
     expect(message.channelId).toBe(WORLD_EXPLORATION_CHANNEL_ID);
     expect(message.authorId).toBe('scheduler');
@@ -59,18 +59,38 @@ describe('world exploration lane (07mw2)', () => {
     expect(message.content).toContain(REFLECTION_SILENT_TOKEN);
   });
 
-  it('skips when disabled, below tier, off the world plane, or when the Hub has no live body', async () => {
+  it('resolves the place the Hub names, and refuses a named place bound to a different world', async () => {
+    const named = makeDeps({
+      placesRegistry: {
+        ...REGISTRY,
+        places: [
+          ...REGISTRY.places,
+          { placeId: 'eidoverse:atrium', siteId: 'eidoverse', displayName: 'Atrium', kind: 'virtual', eidoverse: { world: 'commons' }, affordances: [] },
+        ],
+      },
+      worldOps: { avatarPerceive: vi.fn(async () => ({ world: 'commons', placeId: 'eidoverse:atrium', capturedAt: 'now', self: null, people: [], things: [], recent: [], raw: '' })) as never },
+    });
+    await expect(registerWorldExplorationLane(named.deps).runOnce()).resolves.toBe('invited');
+    const [message] = named.handleMessage.mock.calls[0] as unknown as [{ content: string }];
+    expect(message.content).toContain('standing at Atrium');
+
+    const mismatched = makeDeps({
+      worldOps: { avatarPerceive: vi.fn(async () => ({ world: 'garden', placeId: 'eidoverse:commons', capturedAt: 'now', self: null, people: [], things: [], recent: [], raw: '' })) as never },
+    });
+    await expect(registerWorldExplorationLane(mismatched.deps).runOnce()).resolves.toBe('not_on_world_plane');
+  });
+
+  it('skips when disabled, below tier, when the map does not know the world, or when the Hub has no live body', async () => {
     const disabled = makeDeps({ config: { enabled: false, intervalMinutes: 30, maxTurnsPerDay: 2 } });
     await expect(registerWorldExplorationLane(disabled.deps).runOnce()).resolves.toBe('disabled');
 
     const nursery = makeDeps({ capabilityRuntime: { has: () => false } });
     await expect(registerWorldExplorationLane(nursery.deps).runOnce()).resolves.toBe('tier');
 
-    const house = makeDeps();
-    house.setPlace('office');
-    await expect(registerWorldExplorationLane(house.deps).runOnce()).resolves.toBe('not_on_world_plane');
-    house.setPlace(undefined);
-    await expect(registerWorldExplorationLane(house.deps).runOnce()).resolves.toBe('not_on_world_plane');
+    // The registry has no place for the world the body stands in.
+    const unmapped = makeDeps({ placesRegistry: { ...REGISTRY, places: REGISTRY.places.filter((place) => place.placeId === 'office') } });
+    await expect(registerWorldExplorationLane(unmapped.deps).runOnce()).resolves.toBe('not_on_world_plane');
+    expect(unmapped.handleMessage).not.toHaveBeenCalled();
 
     const offline = makeDeps({ worldOps: { avatarPerceive: vi.fn(async () => { throw new Error('hub offline'); }) as never } });
     await expect(registerWorldExplorationLane(offline.deps).runOnce()).resolves.toBe('no_body');
@@ -79,7 +99,7 @@ describe('world exploration lane (07mw2)', () => {
     const elsewhere = makeDeps({
       worldOps: { avatarPerceive: vi.fn(async () => ({ world: 'garden', capturedAt: 'now', self: null, people: [], things: [], recent: [], raw: '' })) as never },
     });
-    await expect(registerWorldExplorationLane(elsewhere.deps).runOnce()).resolves.toBe('no_body');
+    await expect(registerWorldExplorationLane(elsewhere.deps).runOnce()).resolves.toBe('not_on_world_plane');
 
     const unwired = makeDeps({ worldOps: {} });
     await expect(registerWorldExplorationLane(unwired.deps).runOnce()).resolves.toBe('no_body');
@@ -96,7 +116,6 @@ describe('world exploration lane (07mw2)', () => {
       now: () => nowMs,
       agentLoop: {
         handleMessage: vi.fn(async () => ({ content: `  ${REFLECTION_SILENT_TOKEN}  ` })) as never,
-        resolveCurrentSituatedPlaceId: () => 'eidoverse:commons',
       },
     });
     const lane = registerWorldExplorationLane(paced.deps);

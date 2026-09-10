@@ -57,7 +57,11 @@ const activePostgresPoolOwners = new Set<PostgresPoolOwner>();
  * an ICP reservation or concurrent ANN maintenance) without starving ordinary
  * foreground reads and writes. Three gives that work a dedicated connection
  * plus two promptly available lanes while keeping a ten-companion,
- * two-authority fleet at a deterministic 60-connection ceiling.
+ * two-authority fleet at a deterministic 60-connection ceiling for the shared
+ * lane. Named lanes (today only the TurnRecord eligibility fence, capacity 8
+ * per companion authority) sit on top of that ceiling and idle out when
+ * unused; a holder that must keep a client across long asynchronous work
+ * belongs on a named lane, never on the shared one.
  */
 export const RUNTIME_POSTGRES_AUTHORITY_POOL_CAPACITY = 3;
 

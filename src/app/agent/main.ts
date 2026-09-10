@@ -239,6 +239,7 @@ import { prepareAgentStartupContext } from './startup-context.js';
 import { AgentApiBackend } from '../../channels/api/agent-backend.js';
 import { resolveActiveHealthProbeConfig } from '../../channels/api/active-health-probe.js';
 import { buildExternalChannelProfiles, resolveDiscordCompanionView } from '../../channels/backplane/config.js';
+import { resolveTestingHarnessDevicesConfig } from '../../channels/backplane/testing-harness-devices.js';
 import { createAgentFleetPostureProvider } from './fleet-posture.js';
 import { resolveOperatorAlertSinkConfiguration } from '../../shared/contracts/operator-alerting.js';
 import { wireAgentVaultRuntime } from './vault-runtime.js';
@@ -1790,6 +1791,9 @@ async function main(): Promise<void> {
     healthChecks: apiHealthChecks,
     externalChannelProfiles: buildExternalChannelProfiles(channelsConfig),
     satelliteRegistry: satelliteRegistryConfig,
+    ...(resolveTestingHarnessDevicesConfig(channelsConfig.api?.testingHarness !== undefined, process.env)
+      ? { testingHarnessDevices: { enabled: true as const } }
+      : {}),
     companionId: resolveCoreCompanionIdFromConfig(config),
     shardDirectory: shardManager.shardDirectory,
     ...(config.fleetAuthVerifier

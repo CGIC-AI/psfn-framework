@@ -97,7 +97,11 @@ import {
   compileCompanionUiAction,
   type CompiledCompanionUiAction,
 } from '../../boundary/fleet-auth/companion-ui-action.js';
-import { resolveSatelliteClaim } from '../backplane/satellite-registry.js';
+import { resolveSatelliteClaim, SATELLITE_CLAIM_HEADERS } from '../backplane/satellite-registry.js';
+import {
+  claimedSatelliteIsTestingHarnessDevice,
+  type TestingHarnessDevicesConfig,
+} from '../backplane/testing-harness-devices.js';
 import type { ShardDirectoryPort } from '../../shared/contracts/shard-directory.js';
 import { classifyCompanionUiShardActionFailure } from './companion-ui-shard-action-error.js';
 import {
@@ -196,6 +200,8 @@ export interface AgentApiBackendConfig {
   schedulerHealthcheckStaleAfterMs?: number;
   externalChannelProfiles?: Partial<Record<ChannelType, ExternalChannelProfileConfig>>;
   satelliteRegistry?: SatelliteRegistryConfig;
+  /** Testing-harness devices (psfn-framework-ajgo2); undefined keeps the strict 403. */
+  testingHarnessDevices?: TestingHarnessDevicesConfig;
   /** This agent process's server-owned companion identity. */
   companionId?: string;
   sensorIngest?: SensorIngestPort;
@@ -220,6 +226,7 @@ export class AgentApiBackend {
   private readonly schedulerHealthcheckStaleAfterMs: number;
   private readonly externalChannelProfiles: Partial<Record<ChannelType, ExternalChannelProfileConfig>>;
   private readonly satelliteRegistry: SatelliteRegistryConfig | undefined;
+  private readonly testingHarnessDevices: TestingHarnessDevicesConfig | undefined;
   private readonly companionId: string | undefined;
   private readonly sensorIngest: SensorIngestPort;
   private readonly documentIngest: ApiDocumentIngestConfig | null;
@@ -244,6 +251,7 @@ export class AgentApiBackend {
     );
     this.externalChannelProfiles = config.externalChannelProfiles ?? {};
     this.satelliteRegistry = config.satelliteRegistry;
+    this.testingHarnessDevices = config.testingHarnessDevices;
     this.companionId = config.companionId;
     this.sensorIngest = config.sensorIngest ?? createEventBusSensorIngestPort(config.eventBus);
     this.documentIngest = config.documentIngest ?? null;
@@ -1653,14 +1661,52 @@ export class AgentApiBackend {
         };
       }
     } else if (runId !== undefined || manifestId !== undefined) {
-      return {
-        ok: false,
-        error: this.fail(
-          403,
-          'testing_harness_provenance_not_allowed',
-          'Only the authenticated testing-harness principal may attach test-run provenance',
-        ),
-      };
+      // A testing-harness device fixture (psfn-framework-ajgo2): a satellite
+      // bearer on a `testProvenance` satellite, with the deployment flag on,
+      // is stamped exactly like a harness-principal turn so derived memory
+      // and the exact purge see harness traffic. Anyone else is refused.
+      const harnessDevice = claimedSatelliteIsTestingHarnessDevice({
+        config: this.testingHarnessDevices,
+        registry: this.satelliteRegistry,
+        satelliteId: this.readHeader(headers, SATELLITE_CLAIM_HEADERS.satelliteId, 256),
+      });
+      if (!harnessDevice) {
+        return {
+          ok: false,
+          error: this.fail(
+            403,
+            'testing_harness_provenance_not_allowed',
+            'Only the authenticated testing-harness principal may attach test-run provenance',
+          ),
+        };
+      }
+      if (!runId || !manifestId) {
+        return {
+          ok: false,
+          error: this.fail(
+            400,
+            'testing_harness_provenance_required',
+            'Testing-harness device turns require exact run and manifest identifiers',
+          ),
+        };
+      }
+      try {
+        testingHarness = normalizeTestingHarnessRunProvenance({
+          schemaVersion: 1,
+          kind: 'testing_harness',
+          runId,
+          manifestId,
+        });
+      } catch {
+        return {
+          ok: false,
+          error: this.fail(
+            400,
+            'testing_harness_provenance_invalid',
+            'Testing-harness run and manifest identifiers are invalid',
+          ),
+        };
+      }
     }
     const routingOverrides = this.parseTurnRoutingOverrides(request);
     if (!routingOverrides.ok) {

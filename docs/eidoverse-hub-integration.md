@@ -61,6 +61,7 @@ profiles.
 | `EIDOVERSE_MCP_TOKEN_REF` | Required uppercase environment-variable name, not the credential value. |
 | `EIDOVERSE_MCP_WORLD_NAME` | Required world label supplied to the MCP child. |
 | `EIDOVERSE_MCP_AGENT_NAME` | Required embodied agent label supplied to the MCP child. |
+| `EIDOVERSE_MCP_AGENT_ALIASES` | Optional comma-separated extra names the body answers to. Set it to at least the door participant id (the tokens.json `id`, e.g. `artie-kube` when the name is `Artie (kube)`): an explicit `@artie-kube` in chat is then this body's mention, not somebody else's (psfn-framework-q1kit). |
 | `EIDOVERSE_MCP_RECONNECT_BASE_MS` | Positive integer; default `250`. |
 | `EIDOVERSE_MCP_RECONNECT_MAX_MS` | Positive integer not below the base; default `5000`. |
 | `EIDOVERSE_MCP_RECONNECT_MAX_ATTEMPTS` | Positive integer; default `3`. |

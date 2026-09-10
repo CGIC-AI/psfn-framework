@@ -68,6 +68,11 @@ import type {
   HubVirtualSpaceAdmission,
 } from '../../../shared/contracts/hub-device-ingress.js';
 import {
+  claimedSatelliteIsTestingHarnessDevice,
+  readClaimedSatelliteId,
+  type TestingHarnessDevicesConfig,
+} from '../../backplane/testing-harness-devices.js';
+import {
   HubDeviceIngressRequestError,
   sanitizeHubDeviceChatRequest,
 } from './hub-device-ingress.js';
@@ -147,6 +152,12 @@ export interface ApiChatCompletionsHandlerConfig {
   documentIngest: ApiDocumentIngestConfig | null;
   /** Gateway-owned routing and entitlement contract for the Bearer surface. */
   bearerCompanionRouting?: BearerCompanionRoutingConfig;
+  /**
+   * Testing-harness devices (psfn-framework-ajgo2): when set, a satellite
+   * fixture carrying `testProvenance` may attach test-run provenance without
+   * being the harness principal. Undefined keeps the strict 403.
+   */
+  testingHarnessDevices?: TestingHarnessDevicesConfig;
 }
 
 export interface PendingHubDeviceAdmission {
@@ -170,6 +181,7 @@ export class ApiChatCompletionsHandler {
   private readonly externalChannelProfiles: Partial<Record<ChannelType, ExternalChannelProfileConfig>>;
   private readonly satelliteRegistry: SatelliteRegistryConfig | undefined;
   private readonly satelliteRegistryProvider: SatelliteRegistryProvider | undefined;
+  private readonly testingHarnessDevices: TestingHarnessDevicesConfig | undefined;
   private readonly logger: ApiServerLogger;
   private readonly documentIngest: ApiDocumentIngestConfig | null;
   private readonly bearerCompanionRouting: BearerCompanionRoutingConfig | undefined;
@@ -187,6 +199,7 @@ export class ApiChatCompletionsHandler {
     this.externalChannelProfiles = config.externalChannelProfiles;
     this.satelliteRegistry = config.satelliteRegistry;
     this.satelliteRegistryProvider = config.satelliteRegistryProvider;
+    this.testingHarnessDevices = config.testingHarnessDevices;
     this.logger = config.logger;
     this.documentIngest = config.documentIngest;
     this.bearerCompanionRouting = config.bearerCompanionRouting;
@@ -237,13 +250,32 @@ export class ApiChatCompletionsHandler {
         return;
       }
     } else if (runId !== undefined || manifestId !== undefined) {
-      sendApiError(
-        res,
-        403,
-        'testing_harness_provenance_not_allowed',
-        'Only the authenticated testing-harness principal may attach test-run provenance',
-      );
-      return;
+      // A testing-harness device fixture (psfn-framework-ajgo2) may carry
+      // provenance on a satellite bearer; the agent stamps it. Anyone else
+      // keeps the strict refusal.
+      const harnessDevice = claimedSatelliteIsTestingHarnessDevice({
+        config: this.testingHarnessDevices,
+        registry: this.satelliteRegistryProvider ? this.satelliteRegistryProvider() : this.satelliteRegistry,
+        satelliteId: readClaimedSatelliteId(req.headers),
+      });
+      if (!harnessDevice) {
+        sendApiError(
+          res,
+          403,
+          'testing_harness_provenance_not_allowed',
+          'Only the authenticated testing-harness principal may attach test-run provenance',
+        );
+        return;
+      }
+      if (!runId || !manifestId) {
+        sendApiError(
+          res,
+          400,
+          'testing_harness_provenance_required',
+          'Testing-harness device turns require exact run and manifest identifiers',
+        );
+        return;
+      }
     }
 
     let effectiveFleetRouting = fleetRouting;

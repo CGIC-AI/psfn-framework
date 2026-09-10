@@ -137,6 +137,19 @@ an additional satellite; the chart feeds those values into the gateway's
 `API_SATELLITE_KEYS`. List its derived principal under that endpoint's canonical
 `satellites.json` `auth.apiKeyPrincipalIds`. It deliberately does not reuse or
 widen the persistent testing-harness bearer.
+
+Those satellite-bearer turns still carry the run's `x-testing-harness-*`
+provenance headers, which the gateway refuses from any principal that is not
+the testing-harness principal. Testing-harness devices
+(psfn-framework-ajgo2) are the sanctioned path: mark each synthetic fixture
+satellite with `testProvenance` in `satellites.json` and set
+`PSFN_TESTING_HARNESS_DEVICES=true` on the gateway and the agent (the flag
+is refused when `api.testingHarness` is not configured). With both keys the
+fixture's bearer may attach provenance and the turn is stamped exactly like
+a harness-principal turn (session metadata, derived-memory fence, exact
+purge); a satellite without `testProvenance`, or a deployment without the
+flag, keeps the 403. The Hub-device cases additionally need the bearer to be
+satellite-scoped (a key from `API_SATELLITE_KEYS`).
 Each chat attempt invokes the framework's canonical Satellite Hub assertion
 issuer from `PSFN_REPO_ROOT`. It re-reads `fleet-auth.json` and `satellites.json`
 to derive the active verifier and exact endpoint enrollment, then binds the

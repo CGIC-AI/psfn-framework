@@ -165,6 +165,61 @@ describe('PostgresPoolOwner lifecycle and authority isolation', () => {
     }
   });
 
+  it('gives a named lane its own bounded physical pool inside the same authority', async () => {
+    const owner = new PostgresPoolOwner('test');
+    let shared!: Pool;
+    let fence!: Pool;
+    let fenceAgain!: Pool;
+    try {
+      runWithPostgresPoolOwner(owner, () => {
+        shared = createPostgresPool(CONNECTION_STRING, {
+          applicationName: 'memory',
+          schema: 'companion_a',
+          role: 'companion_a_runtime',
+          max: 10,
+        });
+        fence = createPostgresPool(CONNECTION_STRING, {
+          applicationName: 'turn-record-fence',
+          schema: 'companion_a',
+          role: 'companion_a_runtime',
+          lane: 'turn-record-eligibility-fence',
+          max: 8,
+        });
+        fenceAgain = createPostgresPool(CONNECTION_STRING, {
+          applicationName: 'turn-record-fence-2',
+          schema: 'companion_a',
+          role: 'companion_a_runtime',
+          lane: 'turn-record-eligibility-fence',
+          max: 99,
+        });
+      });
+
+      // The shared lane stays pinned at the authority capacity with a bounded
+      // client wait; the named lane honours its own capacity (capped) so a set
+      // of long-held fence clients cannot exhaust the lane every store and the
+      // foreground turn draw from (psfn-framework-52epa).
+      expect(shared.options.max).toBe(3);
+      expect(shared.options.connectionTimeoutMillis).toBe(30_000);
+      expect(fence.options.max).toBe(8);
+      expect(fence.options.connectionTimeoutMillis).toBe(30_000);
+      expect(fenceAgain.options.max).toBe(8);
+      const snapshot = owner.telemetry();
+      expect(snapshot.physicalPoolCount).toBe(2);
+      expect(snapshot.totalCapacity).toBe(11);
+      expect(snapshot.authorities).toEqual(expect.arrayContaining([
+        expect.objectContaining({ capacity: 3, applicationNames: ['memory'] }),
+        expect.objectContaining({
+          capacity: 8,
+          logicalStoreCount: 2,
+          applicationNames: ['turn-record-fence', 'turn-record-fence-2'],
+        }),
+      ]));
+    } finally {
+      await Promise.allSettled([shared.end(), fence.end(), fenceAgain.end()]);
+      await owner.close();
+    }
+  });
+
   it('does not affect ordinary pools outside an owner scope', async () => {
     const pool = createPostgresPool(CONNECTION_STRING, { max: 7 });
     try {

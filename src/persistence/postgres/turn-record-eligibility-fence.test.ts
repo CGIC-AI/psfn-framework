@@ -1,7 +1,10 @@
 import type { Pool, PoolClient } from 'pg';
 import { describe, expect, it, vi } from 'vitest';
 
-import { PostgresTurnRecordEligibilityFence } from './turn-record-eligibility-fence.js';
+import {
+  PostgresTurnRecordEligibilityFence,
+  TurnRecordEligibilityFenceTimeoutError,
+} from './turn-record-eligibility-fence.js';
 
 const FENCE_KEY = {
   logicalSessionId: 'session:recovery',
@@ -17,7 +20,7 @@ describe('PostgresTurnRecordEligibilityFence', () => {
     const release = vi.fn();
     const query = vi.fn();
     const client = { query, release } as unknown as PoolClient;
-    const pool = { connect: vi.fn(() => connection) } as unknown as Pool;
+    const pool = { options: {}, connect: vi.fn(() => connection) } as unknown as Pool;
     const fence = new PostgresTurnRecordEligibilityFence(pool, 'companion:test');
     const controller = new AbortController();
     const operation = vi.fn(async () => 'should-not-run');
@@ -53,7 +56,7 @@ describe('PostgresTurnRecordEligibilityFence', () => {
       return { rows: [{ acquired: false }] };
     });
     const client = { query, release } as unknown as PoolClient;
-    const pool = { connect: vi.fn(async () => client) } as unknown as Pool;
+    const pool = { options: {}, connect: vi.fn(async () => client) } as unknown as Pool;
     const fence = new PostgresTurnRecordEligibilityFence(pool, 'companion:test');
     const controller = new AbortController();
     const operation = vi.fn(async () => 'should-not-run');
@@ -84,7 +87,7 @@ describe('PostgresTurnRecordEligibilityFence', () => {
       throw new Error(`Unexpected query: ${sql}`);
     });
     const client = { query, release } as unknown as PoolClient;
-    const pool = { connect: vi.fn(async () => client) } as unknown as Pool;
+    const pool = { options: {}, connect: vi.fn(async () => client) } as unknown as Pool;
     const fence = new PostgresTurnRecordEligibilityFence(pool, 'companion:test');
 
     await expect(fence.withTurnRecordEligibilityFence(
@@ -93,6 +96,90 @@ describe('PostgresTurnRecordEligibilityFence', () => {
     )).resolves.toBe('completed');
 
     expect(query).toHaveBeenCalledTimes(2);
+    expect(release).toHaveBeenCalledWith(undefined);
+  });
+
+  it('releases a waiter that cannot acquire the advisory key inside the bound', async () => {
+    let now = 1_000;
+    const release = vi.fn();
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('pg_try_advisory_lock')) {
+        now += 100;
+        return { rows: [{ acquired: false }] };
+      }
+      throw new Error(`Unexpected query: ${sql}`);
+    });
+    const client = { query, release } as unknown as PoolClient;
+    const pool = { options: {}, connect: vi.fn(async () => client) } as unknown as Pool;
+    const fence = new PostgresTurnRecordEligibilityFence(pool, 'companion:test', {
+      acquireTimeoutMs: 250,
+      now: () => now,
+    });
+    const operation = vi.fn(async () => 'should-not-run');
+
+    await expect(fence.withTurnRecordEligibilityFence(FENCE_KEY, operation))
+      .rejects.toBeInstanceOf(TurnRecordEligibilityFenceTimeoutError);
+    await expect(fence.withTurnRecordEligibilityFence(FENCE_KEY, operation))
+      .rejects.toMatchObject({ name: 'TurnRecordEligibilityFenceTimeoutError', phase: 'acquire' });
+
+    expect(operation).not.toHaveBeenCalled();
+    // No key was acquired, so nothing is unlocked and the client goes back
+    // to the pool healthy: the waiter is released, not the holder.
+    expect(query.mock.calls.every(([sql]) => String(sql).includes('pg_try_advisory_lock'))).toBe(true);
+    expect(release).toHaveBeenCalledWith(undefined);
+  });
+
+  it('surfaces an exhausted pool wait as the fence timeout instead of parking forever', async () => {
+    const pool = {
+      options: { connectionTimeoutMillis: 200 },
+      connect: vi.fn(async () => {
+        throw new Error('timeout exceeded when trying to connect');
+      }),
+    } as unknown as Pool;
+    const fence = new PostgresTurnRecordEligibilityFence(pool, 'companion:test');
+    const operation = vi.fn(async () => 'should-not-run');
+
+    await expect(fence.withTurnRecordEligibilityFence(FENCE_KEY, operation))
+      .rejects.toMatchObject({
+        name: 'TurnRecordEligibilityFenceTimeoutError',
+        phase: 'connect',
+        timeoutMs: 200,
+      });
+    expect(operation).not.toHaveBeenCalled();
+  });
+
+  it('releases a partially acquired key set when a later key times out', async () => {
+    let now = 0;
+    const release = vi.fn();
+    const query = vi.fn(async (sql: string, params: unknown[]) => {
+      if (sql.includes('pg_try_advisory_lock')) {
+        now += 100;
+        const key = String(params[0]);
+        return { rows: [{ acquired: key.includes('turn-a') }] };
+      }
+      if (sql.includes('pg_advisory_unlock')) {
+        return { rows: [{ unlocked: true }] };
+      }
+      throw new Error(`Unexpected query: ${sql}`);
+    });
+    const client = { query, release } as unknown as PoolClient;
+    const pool = { options: {}, connect: vi.fn(async () => client) } as unknown as Pool;
+    const fence = new PostgresTurnRecordEligibilityFence(pool, 'companion:test', {
+      acquireTimeoutMs: 250,
+      now: () => now,
+    });
+
+    await expect(fence.withTurnRecordEligibilityFences(
+      [
+        { logicalSessionId: 'session', turnId: 'turn-a' },
+        { logicalSessionId: 'session', turnId: 'turn-b' },
+      ],
+      async () => 'should-not-run',
+    )).rejects.toMatchObject({ name: 'TurnRecordEligibilityFenceTimeoutError' });
+
+    const unlocks = query.mock.calls.filter(([sql]) => String(sql).includes('pg_advisory_unlock'));
+    expect(unlocks).toHaveLength(1);
+    expect(String(unlocks[0]?.[1]?.[0])).toContain('turn-a');
     expect(release).toHaveBeenCalledWith(undefined);
   });
 });

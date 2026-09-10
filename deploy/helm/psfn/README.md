@@ -199,6 +199,30 @@ key and two owner-file blocks, and the chart carries both seams
   (and `homeAssistant.enabled`) imply it; the bearer is
   `secrets.values.satelliteHubControlToken` and a missing bearer fails the
   render (psfn-framework-r70pb).
+
+## Extra environment and imperative drift
+
+`workloads.gateway.extraEnv`, `workloads.agent.extraEnv`,
+`workloads.garden.extraEnv` and `satelliteHub.extraEnv` append plain
+Kubernetes `EnvVar` entries (`name` plus exactly one of `value` / `valueFrom`)
+after the chart-managed environment of that container. Chart-managed names
+are rejected at render time, so the seam can add deployment flags such as
+`PSFN_TESTING_HARNESS_GARDEN_VERIFIER=true` without ever shadowing wiring the
+chart owns, and the value survives every `helm upgrade` instead of living in a
+`kubectl set env` that the next upgrade drops (psfn-framework-v4mxw).
+
+The chart is applied server-side, so any field an imperative `kubectl set
+image`, `kubectl set env`, `kubectl patch` or `kubectl edit` touched becomes
+owned by that kubectl field manager and the next `helm upgrade` fails with an
+apply conflict. Before upgrading a release that was rolled by hand, release
+that ownership (values are untouched, only the ownership record is dropped):
+
+```bash
+scripts/ops/release-kubectl-field-ownership.sh --context <ctx> --namespace <ns> [--release psfn] [--dry-run]
+```
+
+It covers the Deployments, StatefulSets, Services, NetworkPolicies,
+ConfigMaps and Secrets carrying the release label (psfn-framework-c73nz).
   When `fleet-auth.json` also carries a ring the gateway keeps that one and
   logs that the mounted file is shadowed.
 

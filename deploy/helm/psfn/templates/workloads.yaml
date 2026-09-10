@@ -233,6 +233,7 @@ spec:
               value: {{ printf "%s/gateway-rpc/tls.key" .Values.certificates.mountBasePath | quote }}
             - name: GATEWAY_RPC_TLS_EXPECTED_PEER_SPIFFE_URI
               value: {{ include "psfn.spiffeAgent" . | quote }}
+            {{- include "psfn.extraEnv" (dict "entries" .Values.workloads.gateway.extraEnv "label" "workloads.gateway.extraEnv" "managed" "API_KEY ADMIN_TOKEN API_SATELLITE_KEYS PSFN_FLEET_AUTH POSTGRES_DATABASE_URL SYSTEM_DATA_DIR COMPANION_ID") | nindent 12 }}
           readinessProbe:
             tcpSocket:
               port: http-api
@@ -488,6 +489,7 @@ spec:
             - name: PSFN_APP_CACHE_MODE
               value: memory
             {{- end }}
+            {{- include "psfn.extraEnv" (dict "entries" $.Values.workloads.agent.extraEnv "label" "workloads.agent.extraEnv" "managed" "COMPANION_ID COMPANION_DATA_DIR SYSTEM_DATA_DIR POSTGRES_DATABASE_URL POSTGRES_DATABASE_URL_FILE COMPANION_PG_SCHEMA CHARACTER_CARD_PATH WORKSPACE_PATH") | nindent 12 }}
           readinessProbe:
             exec:
               command:
@@ -711,6 +713,7 @@ spec:
             - name: FLEET_GARDEN_ADMIN_DNS_SUFFIX
               value: {{ printf ".%s.svc" .Release.Namespace | quote }}
             {{- end }}
+            {{- include "psfn.extraEnv" (dict "entries" .Values.workloads.garden.extraEnv "label" "workloads.garden.extraEnv" "managed" "ADMIN_TOKEN ADMIN_PORT PSFN_FLEET_AUTH SYSTEM_DATA_DIR ADMIN_TRANSPORT_MODE") | nindent 12 }}
           readinessProbe:
             {{- if .Values.fleet.enabled }}
             {{- /*
@@ -1193,6 +1196,7 @@ spec:
             {{- end }}
             - name: ARTIFACT_ROOT
               value: {{ .Values.satelliteHub.artifactRoot | quote }}
+            {{- include "psfn.extraEnv" (dict "entries" .Values.satelliteHub.extraEnv "label" "satelliteHub.extraEnv" "managed" "PSFN_API_KEY PSFN_SATELLITE_ID PSFN_ENDPOINT_ID PSFN_CLAIM_TYPE HUB_CONTROL_TOKEN HUB_DEVICE_REGISTRY_PATH HUB_DEVICE_ASSERTION_PRIVATE_KEY_PATH EIDOVERSE_JOIN_TOKEN") | nindent 12 }}
           readinessProbe:
             httpGet:
               path: /

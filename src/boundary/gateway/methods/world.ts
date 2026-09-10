@@ -3,6 +3,8 @@ import type {
   WorldAvatarActResult,
   WorldAvatarMapParams,
   WorldAvatarMapResult,
+  WorldAvatarSnapshotParams,
+  WorldAvatarSnapshotResult,
   WorldAvatarMoveParams,
   WorldAvatarMoveResult,
   WorldAvatarPerceiveParams,
@@ -13,7 +15,8 @@ import { defineGatedMethod } from './types.js';
 import { registerGatedDescriptors } from './register.js';
 import { gatewayMethodParamDecoders } from './params.js';
 import { isRecord } from '../../../shared/utils/types.js';
-import { isWorldAvatarVerb } from '../../../shared/contracts/world-avatar.js';
+import { isWorldAvatarSnapshotView, isWorldAvatarVerb } from '../../../shared/contracts/world-avatar.js';
+import { VISION_IMAGE_MAX_BYTES } from '../../../primitives/images/vision-policy.js';
 import { denyPolicy as deny, providerError, requestSatelliteHub } from './satellite-hub-transport.js';
 
 // ── World avatar methods (S13 MOVE) ──
@@ -66,6 +69,28 @@ function parseMap(payload: unknown): WorldAvatarMapResult {
   return payload as unknown as WorldAvatarMapResult;
 }
 
+/**
+ * A snapshot rides the RPC as base64; the vision intake ceiling bounds the
+ * decoded bytes, and a Hub that ignores its own budget is refused here rather
+ * than trusted (there is no global gateway frame cap).
+ */
+const SNAPSHOT_MAX_BASE64_CHARS = Math.ceil((VISION_IMAGE_MAX_BYTES * 4) / 3) + 4;
+
+function parseSnapshot(payload: unknown): WorldAvatarSnapshotResult {
+  if (!isRecord(payload) || typeof payload.available !== 'boolean' || typeof payload.world !== 'string' || !isWorldAvatarSnapshotView(payload.view)) {
+    providerError('Malformed Satellite Hub snapshot');
+  }
+  if (payload.available) {
+    if (typeof payload.dataBase64 !== 'string' || typeof payload.mimeType !== 'string' || !payload.mimeType.startsWith('image/')) {
+      providerError('Malformed Satellite Hub snapshot');
+    }
+    if (payload.dataBase64.length > SNAPSHOT_MAX_BASE64_CHARS) {
+      providerError('Satellite Hub snapshot exceeds the vision size ceiling');
+    }
+  }
+  return payload as unknown as WorldAvatarSnapshotResult;
+}
+
 function parseMoveOutcome(payload: unknown): WorldAvatarMoveResult {
   if (!isRecord(payload) || typeof payload.accepted !== 'boolean' || typeof payload.world !== 'string') {
     providerError('Malformed Satellite Hub move outcome');
@@ -100,6 +125,19 @@ const descriptors = [
       return parseMap(payload);
     },
     summary: (params) => ({ action: 'avatar_map', placeId: params.placeId ?? null }),
+    approvalAction: 'world.avatar.read',
+    approvalScope: (params) => params.placeId ?? 'current',
+  }),
+  defineGatedMethod<WorldAvatarSnapshotParams, WorldAvatarSnapshotResult>({
+    name: 'world.avatar_snapshot',
+    decode: gatewayMethodParamDecoders['world.avatar_snapshot'],
+    handler: async (params, runtime): Promise<WorldAvatarSnapshotResult> => {
+      const view = params.view ?? 'first';
+      if (!isWorldAvatarSnapshotView(view)) deny('view must be first, third or selfie');
+      const payload = await requestSatelliteHub(runtime, '/internal/v1/world/snapshot', 'POST', { view });
+      return parseSnapshot(payload);
+    },
+    summary: (params) => ({ action: 'avatar_snapshot', placeId: params.placeId ?? null, view: params.view ?? 'first' }),
     approvalAction: 'world.avatar.read',
     approvalScope: (params) => params.placeId ?? 'current',
   }),

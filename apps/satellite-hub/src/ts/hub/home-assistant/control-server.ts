@@ -8,6 +8,8 @@ import type {
   WorldAvatarMoveRequest,
   WorldAvatarMoveResult,
   WorldAvatarMapResult,
+  WorldAvatarSnapshotResult,
+  WorldAvatarSnapshotView,
   WorldAvatarPerceiveResult,
 } from "../../shared/protocol.js";
 import {
@@ -63,6 +65,8 @@ export interface HubWorldControlPort {
   perceive(): Promise<WorldAvatarPerceiveResult>;
   /** The world's map: mapped places, the current room, terrain, the door's tools. */
   map(): Promise<WorldAvatarMapResult>;
+  /** A bounded PNG through the door's camera, or an honest not-available (mlhfw). */
+  snapshot(view: WorldAvatarSnapshotView): Promise<WorldAvatarSnapshotResult>;
   move(input: WorldAvatarMoveRequest): Promise<WorldAvatarMoveResult>;
   act(verb: string, args: Record<string, unknown>): Promise<WorldAvatarActResult>;
 }
@@ -227,6 +231,16 @@ export class HubControlServer {
       await this.readJsonBody(request);
       response.statusCode = 200;
       response.end(JSON.stringify(await this.world.perceive()));
+      return;
+    }
+    if (pathname === "/internal/v1/world/snapshot") {
+      const body = await this.readJsonBody(request);
+      const view = body.view === undefined ? "first" : body.view;
+      if (view !== "first" && view !== "third" && view !== "selfie") {
+        throw new HttpInputError(400, "invalid_view", "view must be first, third or selfie");
+      }
+      response.statusCode = 200;
+      response.end(JSON.stringify(await this.world.snapshot(view)));
       return;
     }
     if (pathname === "/internal/v1/world/map") {

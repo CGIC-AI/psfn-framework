@@ -334,9 +334,9 @@ bounded wait and settles later: `Eidoverse body walk_to arrived at (x, z) in wor
 The door itself never logs positions.
 
 **Transport.** Gateway methods `world.avatar_perceive`, `world.avatar_map`,
-`world.avatar_move` and `world.avatar_act`
+`world.avatar_snapshot`, `world.avatar_move` and `world.avatar_act`
 ([`src/boundary/gateway/methods/world.ts`](../src/boundary/gateway/methods/world.ts))
-call `POST /internal/v1/world/{perceive,map,move,act}` on the Hub control server
+call `POST /internal/v1/world/{perceive,map,snapshot,move,act}` on the Hub control server
 ([`control-server.ts`](../apps/satellite-hub/src/ts/hub/home-assistant/control-server.ts))
 through the shared transport
 ([`satellite-hub-transport.ts`](../src/boundary/gateway/methods/satellite-hub-transport.ts)).
@@ -470,6 +470,21 @@ This is the MUD player's map built from text, and the federation groundwork
 the operator asked for: a companion that travels between linked worlds
 remembers each one by its own notes, per world and per companion. A shared,
 operator-curated world wiki stays the caretaker layer's job.
+
+## Looking through the camera (S13, mlhfw)
+
+`world perceive {detail: "snapshot", view?: "first" | "third" | "selfie"}` on
+an Eidoverse place adds an image to the text perception: the Hub asks the
+door's spectator renderer for that view (`POST /internal/v1/world/snapshot`,
+the same `EidoverseSnapshotSource` and `EIDOVERSE_SNAPSHOT_*` budget as the
+per-turn vision path, now per view), the gateway relays it as
+`world.avatar_snapshot` and refuses anything over the vision size ceiling,
+and the agent runs the bytes through the vision intake screener exactly like
+an inbound attachment before the model sees them. Withheld means the notice
+is delivered instead of the image; no screener wired means no image, said
+plainly; no renderer attached to the body means an honest "no view right
+now". The tool result is text plus one image block (`imageResult`); nothing
+else in the runtime changes shape.
 
 ## Exploring on its own time (S13, 07mw2)
 

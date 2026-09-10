@@ -93,6 +93,30 @@ describe('world avatar gateway methods (S13 MOVE)', () => {
     await expect(harness().invoke('world.avatar_map', {})).rejects.toThrow(/Malformed Satellite Hub world map/u);
   });
 
+  it('relays a bounded snapshot and refuses an oversized or malformed one (mlhfw)', async () => {
+    const fetchMock = vi.fn(async () => json({
+      available: true, world: 'commons', view: 'third', mimeType: 'image/png', dataBase64: 'iVBORw0KGgo=', bytes: 8, capturedAt: 'now',
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = fromAny(await harness().invoke('world.avatar_snapshot', { view: 'third' }));
+    expect(result.available).toBe(true);
+    expect(result.dataBase64).toBe('iVBORw0KGgo=');
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [URL, RequestInit];
+    expect(url.toString()).toBe('http://127.0.0.1:8798/internal/v1/world/snapshot');
+    expect(JSON.parse(init.body as string)).toEqual({ view: 'third' });
+
+    vi.stubGlobal('fetch', vi.fn(async () => json({ available: false, world: 'commons', view: 'first', reason: 'unavailable' })));
+    const missing = fromAny(await harness().invoke('world.avatar_snapshot', {}));
+    expect(missing).toEqual({ available: false, world: 'commons', view: 'first', reason: 'unavailable' });
+
+    const huge = 'A'.repeat(12 * 1024 * 1024);
+    vi.stubGlobal('fetch', vi.fn(async () => json({ available: true, world: 'commons', view: 'first', mimeType: 'image/png', dataBase64: huge, bytes: 9_000_000, capturedAt: 'now' })));
+    // The shared Hub transport already refuses an oversized body; the method's own ceiling is the second fence.
+    await expect(harness().invoke('world.avatar_snapshot', {})).rejects.toThrow(/vision size ceiling|response is too large/u);
+    vi.stubGlobal('fetch', vi.fn(async () => json({ available: true, world: 'commons', view: 'first', mimeType: 'text/html', dataBase64: 'x', bytes: 1, capturedAt: 'now' })));
+    await expect(harness().invoke('world.avatar_snapshot', {})).rejects.toThrow(/Malformed Satellite Hub snapshot/u);
+  });
+
   it('moves with a longer budget and forwards only validated fields', async () => {
     const fetchMock = vi.fn(async () => json({ accepted: true, world: 'commons', walk: { status: 'arrived', x: 3.5, z: 0 } }));
     vi.stubGlobal('fetch', fetchMock);
@@ -135,13 +159,14 @@ describe('world avatar gateway methods (S13 MOVE)', () => {
     expect(gateCalls.map((call) => [call.method, call.approvalAction])).toEqual([
       ['world.avatar_perceive', 'world.avatar.read'],
       ['world.avatar_map', 'world.avatar.read'],
+      ['world.avatar_snapshot', 'world.avatar.read'],
       ['world.avatar_move', 'world.avatar.move'],
       ['world.avatar_act', 'world.avatar.act'],
     ]);
   });
 
   it('policy allows the world methods on transport alone and denies them without it', () => {
-    for (const method of ['world.avatar_perceive', 'world.avatar_map', 'world.avatar_move', 'world.avatar_act']) {
+    for (const method of ['world.avatar_perceive', 'world.avatar_map', 'world.avatar_snapshot', 'world.avatar_move', 'world.avatar_act']) {
       expect(evaluatePolicy({ method, params: {} }, policy())).toBe('ALLOW');
       expect(evaluatePolicy({ method, params: {} }, policy({ satelliteHub: { tokenConfigured: true } }))).toBe('DENY');
       expect(evaluatePolicy({ method, params: {} }, policy({ satelliteHub: {} }))).toBe('DENY');

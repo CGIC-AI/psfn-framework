@@ -78,8 +78,16 @@ export interface EidoverseSayPublisher {
  * `look()` notes.
  */
 export interface EidoverseSnapshotCaptureSource {
-  capture(sessionId: string, world: string): Promise<VisionCaptureImage | null>;
+  capture(sessionId: string, world: string, view?: "first" | "third" | "selfie"): Promise<VisionCaptureImage | null>;
 }
+
+/**
+ * The companion's own snapshot on request (psfn-framework-mlhfw): the door's
+ * first/third/selfie view as a bounded PNG, or an honest "not available".
+ */
+export type EidoverseAvatarSnapshot =
+  | { available: true; world: string; view: "first" | "third" | "selfie"; mimeType: string; dataBase64: string; bytes: number; capturedAt: string }
+  | { available: false; world: string; view: "first" | "third" | "selfie"; reason: "not_configured" | "unavailable" };
 
 /**
  * The world-to-world move. Resolves with the door's arrival text and rejects on
@@ -788,6 +796,34 @@ export class EidoverseEmbodiedSessionAdapter {
         : {}),
       ...(boundedContextNotes.length > 0 ? { contextNotes: boundedContextNotes } : {}),
     };
+  }
+
+  /**
+   * The companion asks for a look through the door's camera. Never throws:
+   * an absent renderer, a missing body or a frame that never comes are all
+   * `available: false`, exactly like the per-turn vision path degrades.
+   */
+  async snapshot(view: "first" | "third" | "selfie" = "first"): Promise<EidoverseAvatarSnapshot> {
+    this.requireConnection();
+    const world = this.currentWorldName;
+    const snapshot = this.deps.snapshot;
+    if (!snapshot) return { available: false, world, view, reason: "not_configured" };
+    try {
+      const image = await snapshot.capture(this.conversationId, world, view);
+      if (!image) return { available: false, world, view, reason: "unavailable" };
+      return {
+        available: true,
+        world,
+        view,
+        mimeType: image.mimeType,
+        dataBase64: image.dataBase64,
+        bytes: image.bytes,
+        capturedAt: image.capturedAt,
+      };
+    } catch {
+      (this.deps.logger ?? console).warn("Eidoverse snapshot failed");
+      return { available: false, world, view, reason: "unavailable" };
+    }
   }
 
   private async captureSnapshot(): Promise<VisionCaptureImage | null> {

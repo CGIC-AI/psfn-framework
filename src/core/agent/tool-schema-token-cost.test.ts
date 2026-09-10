@@ -86,13 +86,14 @@ describe('full callable catalog schema token cost', () => {
       // verb enum and argument guidance: +641 bytes / +161 tokens on both payloads.
       // psfn-framework-2nsfo added the wiki world_notes_read / world_note actions
       // and their world / note_text / note_about fields: +644 bytes / +157 tokens.
-      beforeTokens: 20_129,
-      afterTokens: 24_372,
+      // psfn-framework-mlhfw added world perceive detail=snapshot and view: +378 bytes / +86 tokens.
+      beforeTokens: 20_215,
+      afterTokens: 24_458,
       deltaTokens: 4_243,
-      beforeBytes: 94_091,
-      afterBytes: 113_037,
-      providerSchemaHash: '496df95a31b2f9bffa045613d110982c80fbc7d263c8c04c69d93b9a9226d72b',
-      parameterSchemaHash: '79b66b8cb608975587bd881f55838bdd6004f086d8d96914ff1444d74ba10b07',
+      beforeBytes: 94_469,
+      afterBytes: 113_415,
+      providerSchemaHash: '53bfc33a7bd58e125ac7568304df15c5e39a274cc03f3cff8821cac609462718',
+      parameterSchemaHash: 'fbfc366474d73b970db989d48fd3dca89d10632a834a6b3bb133488903efa01f',
     });
 
     // The additional description tokens affect an uncached request. A stable

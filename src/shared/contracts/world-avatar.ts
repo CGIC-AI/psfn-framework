@@ -83,6 +83,23 @@ export interface WorldAvatarMap {
   capturedAt: string;
 }
 
+export const WORLD_AVATAR_SNAPSHOT_VIEWS = ['first', 'third', 'selfie'] as const;
+export type WorldAvatarSnapshotView = (typeof WORLD_AVATAR_SNAPSHOT_VIEWS)[number];
+
+export function isWorldAvatarSnapshotView(value: unknown): value is WorldAvatarSnapshotView {
+  return typeof value === 'string' && (WORLD_AVATAR_SNAPSHOT_VIEWS as readonly string[]).includes(value);
+}
+
+/**
+ * The companion's own look through the door's camera (psfn-framework-mlhfw):
+ * a bounded PNG, or an honest not-available (no renderer attached, no body,
+ * no frame). The gateway re-checks the size; the agent screens the image
+ * through the vision intake before the model sees it.
+ */
+export type WorldAvatarSnapshotOutcome =
+  | { available: true; world: string; view: WorldAvatarSnapshotView; mimeType: string; dataBase64: string; bytes: number; capturedAt: string }
+  | { available: false; world: string; view: WorldAvatarSnapshotView; reason: 'not_configured' | 'unavailable' };
+
 export interface WorldAvatarPerception {
   world: string;
   placeId?: string;

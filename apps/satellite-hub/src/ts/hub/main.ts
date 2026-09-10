@@ -143,6 +143,7 @@ async function main(): Promise<void> {
     ? {
         perceive: () => server.perceiveEidoverse(),
         map: () => server.mapEidoverse(),
+        snapshot: (view) => server.snapshotEidoverse(view),
         move: (input) => server.moveEidoverseAvatar(input),
         act: (verb, args) => server.actEidoverse(verb, args),
       }

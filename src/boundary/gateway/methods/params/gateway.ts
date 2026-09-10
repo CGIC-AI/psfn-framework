@@ -227,6 +227,10 @@ export const gatewayOperationalParamDecoders = {
   'world.avatar_map': gatewayDecoder('world.avatar_map', correlatedParams({
     placeId: optionalString,
   })),
+  'world.avatar_snapshot': gatewayDecoder('world.avatar_snapshot', correlatedParams({
+    placeId: optionalString,
+    view: Type.Optional(enumSchema(['first', 'third', 'selfie'])),
+  })),
   'world.avatar_move': gatewayDecoder('world.avatar_move', correlatedParams({
     placeId: optionalString,
     world: optionalString,

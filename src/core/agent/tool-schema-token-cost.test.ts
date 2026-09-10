@@ -84,13 +84,15 @@ describe('full callable catalog schema token cost', () => {
       // psfn-framework-jbvwz added the world flight verbs (take_off, climb_to,
       // glide_to, land_at, fold_wings, unfold_wings, flight_status) to the act
       // verb enum and argument guidance: +641 bytes / +161 tokens on both payloads.
-      beforeTokens: 19_972,
-      afterTokens: 24_215,
+      // psfn-framework-2nsfo added the wiki world_notes_read / world_note actions
+      // and their world / note_text / note_about fields: +644 bytes / +157 tokens.
+      beforeTokens: 20_129,
+      afterTokens: 24_372,
       deltaTokens: 4_243,
-      beforeBytes: 93_447,
-      afterBytes: 112_393,
-      providerSchemaHash: 'b37d9e2d82f09413040624fed2e537bc2a0d113f0648fae25b1043c6a865647e',
-      parameterSchemaHash: '21bbc9fa4ee6599fc9e36a0bbe6c6a997dda372b2ea68f30d2387b56e064f121',
+      beforeBytes: 94_091,
+      afterBytes: 113_037,
+      providerSchemaHash: '496df95a31b2f9bffa045613d110982c80fbc7d263c8c04c69d93b9a9226d72b',
+      parameterSchemaHash: '79b66b8cb608975587bd881f55838bdd6004f086d8d96914ff1444d74ba10b07',
     });
 
     // The additional description tokens affect an uncached request. A stable

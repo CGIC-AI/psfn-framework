@@ -154,10 +154,13 @@ function wardrobeDocId(id: string): string {
 export const RESERVED_MANAGED_WIKI_DOC_ID_PREFIXES = [
   projectDocId(''),
   wardrobeDocId(''),
+  // Per-world notes (psfn-framework-2nsfo): runtime-folded landmarks, routes
+  // and encounters; only `world_note` adds model text, and only bounded.
+  'world.',
 ] as const;
 
 /** Tags reserved for runtime-managed companion-owned manifests. */
-export const RESERVED_MANAGED_WIKI_TAGS = [PROJECT_TAGS[0], WARDROBE_TAGS[0]] as const;
+export const RESERVED_MANAGED_WIKI_TAGS = [PROJECT_TAGS[0], WARDROBE_TAGS[0], 'world-notes'] as const;
 
 /**
  * True when a generic `wiki` write/import would land in the reserved

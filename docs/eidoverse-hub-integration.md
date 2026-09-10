@@ -445,6 +445,32 @@ registry or the local presence overlay; the next world turn carries its own
 place. The companion's own notes about a world (landmarks it found, who it
 met where) are the per-world wiki, below.
 
+## The companion's own map of a world (S13, 2nsfo)
+
+The server gives the map it has; what the companion learns by being there is
+its own. Every Eidoverse `perceive` folds the things it saw (with positions),
+the room it stood in (with its ways out) and the people it ran into (a
+participant id, the contact id when the runtime resolved one, and the nearest
+remembered landmark; nothing about the person, contacts own that) into ONE
+runtime-managed personal-wiki document per world, `world.<world>` (tag
+`world-notes`, `WorldNotesLibrary` in
+[`src/faculties/wiki/world-notes.ts`](../src/faculties/wiki/world-notes.ts)).
+Every `move` records the route ("from this place I reached that one"). The
+document lives in the reserved namespace the generic `wiki write` cannot
+touch, exactly like personal projects, so the model cannot forge it; a
+nursery-tier companion accumulates its map with no model-authored write at
+all. Two wiki actions are the model's window: `world_notes_read {world}` (or
+without a world, the worlds it knows) and `world_note {world, note_text,
+note_about?}`, the one bounded model-authored addition (280 characters, 64
+notes per world). On a world-plane turn the situated block renders a short
+`What you remember of this world:` line from these notes (rooms, things and
+where, places walked to, routes, who was met near what, the last notes).
+
+This is the MUD player's map built from text, and the federation groundwork
+the operator asked for: a companion that travels between linked worlds
+remembers each one by its own notes, per world and per companion. A shared,
+operator-curated world wiki stays the caretaker layer's job.
+
 ## The world connector is a registered software device (S13, rqm6t)
 
 Operator rule (2026-09-10): the companion-ui app, Virt-a-Mate and Eidoverse

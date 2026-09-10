@@ -930,6 +930,31 @@ describe('world tool — the world\'s own map (gs899, g8xyn)', () => {
     expect(ops.avatarMove).toHaveBeenCalledTimes(1);
   });
 
+  it('perceive and move feed the companion\'s own world notes, and a failing writer never fails the tool (2nsfo)', async () => {
+    const ops = createAvatarOps({
+      avatarPerceive: vi.fn(async () => ({ ...PERCEPTION, room: { label: 'study', labelled: true, waysOut: [], sealed: false } })),
+    });
+    const worldNotes = { observePerception: vi.fn(), observeMove: vi.fn() };
+    const tool = createWorldTool(ops, {
+      placesRegistry: EIDO_REGISTRY, worldNotes, applyVirtualMove: vi.fn(), resolveSituatedPlaceId: () => 'eidoverse:commons',
+    });
+    await tool.execute('call-perceive', { action: 'perceive', placeId: 'eidoverse:commons' });
+    expect(worldNotes.observePerception).toHaveBeenCalledWith(expect.objectContaining({
+      world: 'commons', room: expect.objectContaining({ label: 'study' }), things: PERCEPTION.things, people: PERCEPTION.people,
+    }));
+    await tool.execute('call-move', { action: 'move', placeId: 'eidoverse:commons:plaza' });
+    expect(worldNotes.observeMove).toHaveBeenCalledWith(expect.objectContaining({
+      world: 'commons', from: 'eidoverse:commons', to: 'eidoverse:commons:plaza',
+    }));
+
+    const broken = { observePerception: vi.fn(() => { throw new Error('disk full'); }), observeMove: vi.fn(() => { throw new Error('disk full'); }) };
+    const fragile = createWorldTool(ops, { placesRegistry: EIDO_REGISTRY, worldNotes: broken, applyVirtualMove: vi.fn() });
+    const perceived = await fragile.execute('call-perceive', { action: 'perceive', placeId: 'eidoverse:commons' });
+    expect(resultText(perceived)).toContain('"world": "commons"');
+    const moved = await fragile.execute('call-move', { action: 'move', placeId: 'eidoverse:commons:plaza' });
+    expect(resultText(moved)).not.toMatch(/disk full/u);
+  });
+
   it('perceive folds the room the body stands in into the remembered map and the summary', async () => {
     const ops = createAvatarOps({
       avatarPerceive: vi.fn(async () => ({ ...PERCEPTION, room: { label: 'study', labelled: true, waysOut: ['a door on its west to the hall'], sealed: false } })),

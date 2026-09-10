@@ -47,6 +47,7 @@ import type { ToolRuntimeFacade } from './tool-runtime-facade.js';
 import type { EmotionSelfModelRuntime } from './emotion-self-model-runtime.js';
 import type { SituatedEmanationTracker } from './runtime-context-sections/situated-emanation.js';
 import type { WorldPlaneMapReader } from '../../../shared/contracts/world-plane-map.js';
+import type { WorldNotesReader } from '../../../shared/contracts/world-notes.js';
 import type { CompanionPresenceTurnPort } from '../companion-presence-runtime.js';
 import type { createComponentLogger } from '../../../shared/logger.js';
 
@@ -72,6 +73,8 @@ export interface PromptContextBuilderDeps {
   situatedEmanationTracker: SituatedEmanationTracker;
   /** What the world published for its plane (gs899, g8xyn), when a Hub is wired. */
   getWorldPlaneMap: () => WorldPlaneMapReader | null;
+  /** The companion's own notes on each world (2nsfo), when the wiki is wired. */
+  getWorldNotes: () => WorldNotesReader | null;
   resolveSituatedFallbackPlaceIdForTurn: (message: SubstrateMessage) => string | undefined;
   getActiveConcernProvider: () => ActiveConcernContextProvider | null;
   getBehavioralPatternProvider: () => BehavioralPatternContextProvider | null;
@@ -260,6 +263,7 @@ export class PromptContextBuilder {
     // turns that foreground the twin of the last-known physical room.
     const situatedFallbackPlaceId = this.deps.resolveSituatedFallbackPlaceIdForTurn(message);
     const worldPlaneMap = this.deps.getWorldPlaneMap();
+    const worldNotes = this.deps.getWorldNotes();
     // Co-presence (W5a): resolved against the SAME place resolution the
     // situated block performs — turn place first, then the dual-presence
     // fallback (deliberate virtual move, session/default twin, or a
@@ -314,6 +318,7 @@ export class PromptContextBuilder {
       ...(coPresent && coPresent.length > 0 ? { coPresent } : {}),
       emanationTracker: this.deps.situatedEmanationTracker,
       ...(worldPlaneMap ? { worldPlaneMap } : {}),
+      ...(worldNotes ? { worldNotes } : {}),
       ...(situatedFallbackPlaceId ? { situatedFallbackPlaceId } : {}),
       ...(reactionSurface ? { reactionSurface } : {}),
     });

@@ -7,6 +7,7 @@ import {
   type WikiRetrievalConfigLike,
 } from '../../shared/context-budget.js';
 import { createWikiTool } from './tools.js';
+import { WorldNotesLibrary } from './world-notes.js';
 import type { SelfAuthoredMutationIntakeRuntime } from '../../core/session/intake-sink-gating.js';
 import { SharedWorldWikiStore, WikiStore } from './store.js';
 import {
@@ -104,6 +105,8 @@ export interface WikiRuntimeWiring {
   admissionGate: WikiAdmissionGate | null;
   personalProjects: PersonalProjectLibrary;
   personalWishlist: PersonalWishlist;
+  /** Per-world notes (2nsfo), fed by the world tool and read by the situated block. */
+  worldNotes: WorldNotesLibrary;
   projection: WikiPgvectorProjectionStore | null;
   /**
    * s10f9: read-side handle on `shared.shared_wiki_chunks` for the retrieval
@@ -418,6 +421,7 @@ export async function wireWikiRuntime(
 
   const personalProjects = new PersonalProjectLibrary(store);
   const personalWishlist = new PersonalWishlist(store);
+  const worldNotes = new WorldNotesLibrary(store);
   const resources = [
     ...(projection ? [projection] : []),
     ...(sharedProjection ? [sharedProjection] : []),
@@ -431,6 +435,7 @@ export async function wireWikiRuntime(
       ...(sharedWorldProposal ? { sharedWorldProposal } : {}),
       personalProjects,
       personalWishlist,
+      worldNotes,
     }), 'core');
   } catch (error) {
     await closeWikiRuntimeAfterFailure(error, resources);
@@ -497,6 +502,7 @@ export async function wireWikiRuntime(
     admissionGate,
     personalProjects,
     personalWishlist,
+    worldNotes,
     projection,
     sharedProjection,
     retrievalService,

@@ -49,6 +49,7 @@ import { wireSkillsRuntime } from '../../faculties/skills/runtime-wiring.js';
 import type { WikiAdmissionGate } from '../../faculties/wiki/admission.js';
 import { wireWikiRuntime } from '../../faculties/wiki/runtime-wiring.js';
 import type { PersonalProjectLibrary } from '../../faculties/wiki/personal-projects.js';
+import type { WorldNotesLibrary } from '../../faculties/wiki/world-notes.js';
 import type { SharedWorldWikiCaretakerService } from '../../faculties/wiki/shared-world-caretaker.js';
 import { registerFilesystemTools } from '../../boundary/integrations/filesystem/runtime-wiring.js';
 import { GatewayFilesystemOps } from '../../boundary/integrations/filesystem/gateway-ops.js';
@@ -337,6 +338,8 @@ export interface AgentCoreRuntime {
   personaPreamble: PersonaPreamblePort;
   imageVisionReviewer: DefaultImageVisionReviewer;
   personalProjects: PersonalProjectLibrary;
+  /** Per-world notes (2nsfo). */
+  worldNotes: WorldNotesLibrary;
   appCache: AppCache;
   /** Redis-backed hot session tail; null unless settings.json enables it (psfn-framework-hgw3.5). */
   sessionTailCache: SessionTailCachePort | null;
@@ -1301,6 +1304,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     personaPreamble,
     imageVisionReviewer,
     personalProjects: wikiRuntime.personalProjects,
+    worldNotes: wikiRuntime.worldNotes,
     appCache,
     sessionTailCache: sessionComposition.sessionTailCache,
     fatigueBudget: fatigueRuntime.fatigueBudget,

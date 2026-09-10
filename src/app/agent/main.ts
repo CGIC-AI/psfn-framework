@@ -1627,7 +1627,7 @@ async function main(): Promise<void> {
   // On a world-plane turn the world tool keeps the plane's verbs and loses
   // the house's (control, moves to off-plane places): S13, psfn-framework-u2dx3.
   agentLoop.setWorldPlanePlaceResolver((placeId) => {
-    const place = placesRegistryConfig?.places.find((candidate) => candidate.placeId === placeId);
+    const place = placesRegistryConfig.places.find((candidate) => candidate.placeId === placeId);
     return isEidoversePlace(place);
   });
   log.info('World tool enabled', {

@@ -1289,6 +1289,48 @@ Sprig merge mutation.
      satelliteHub.deviceRegistry seam, or (compatibility) Home Assistant.
      Renders a non-empty string when enabled so it works under `if`. */}}
 {{/*
+     Operator-supplied extra environment for one container (psfn-framework-v4mxw).
+     Renders a validated list of EnvVar entries: each needs an uppercase `name`
+     and exactly one of `value` / `valueFrom`; names the chart manages for that
+     container (passed as `managed`, a space-separated list) are rejected so an
+     override can never shadow chart-owned wiring.
+     Usage: include "psfn.extraEnv" (dict "entries" .Values.x.extraEnv "label" "x.extraEnv" "managed" "A B")
+*/}}
+{{- define "psfn.extraEnv" -}}
+{{- $label := .label -}}
+{{- $managed := splitList " " (default "" .managed) -}}
+{{- range $index, $entry := (default (list) .entries) -}}
+{{- if not (kindIs "map" $entry) -}}
+{{- fail (printf "%s[%d] must be an EnvVar object" $label $index) -}}
+{{- end -}}
+{{- $name := $entry.name | default "" -}}
+{{- if not (regexMatch "^[A-Z][A-Z0-9_]*$" $name) -}}
+{{- fail (printf "%s[%d] requires an uppercase environment name" $label $index) -}}
+{{- end -}}
+{{- if has $name $managed -}}
+{{- fail (printf "%s[%d] (%s) is managed by the chart and cannot be overridden" $label $index $name) -}}
+{{- end -}}
+{{- $hasValue := hasKey $entry "value" -}}
+{{- $hasFrom := hasKey $entry "valueFrom" -}}
+{{- if eq $hasValue $hasFrom -}}
+{{- fail (printf "%s[%d] (%s) requires exactly one of value or valueFrom" $label $index $name) -}}
+{{- end -}}
+{{- range $key, $_ := $entry -}}
+{{- if not (has $key (list "name" "value" "valueFrom")) -}}
+{{- fail (printf "%s[%d] (%s) has unsupported key %s" $label $index $name $key) -}}
+{{- end -}}
+{{- end -}}
+- name: {{ $name }}
+{{- if $hasValue }}
+  value: {{ $entry.value | toString | quote }}
+{{- else }}
+  valueFrom:
+    {{- toYaml $entry.valueFrom | nindent 4 }}
+{{- end }}
+{{ end -}}
+{{- end -}}
+
+{{/*
      Hub control channel: the hub's private control listener and the gateway's
      Satellite Hub transport. Explicit via satelliteHub.control.enabled, and
      implied by Home Assistant control or the Eidoverse world path, both of

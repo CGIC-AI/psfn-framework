@@ -234,6 +234,15 @@ workloads:
       tag: ""
       digest: ""
     command: ["node", "dist/gateway-main.js"]
+    # Additional plain environment for this container, appended after the
+    # chart-managed entries. Each item is a Kubernetes EnvVar: `name` plus
+    # exactly one of `value` or `valueFrom` (secretKeyRef / configMapKeyRef /
+    # fieldRef). Chart-managed names are rejected so an override can never
+    # shadow wiring the chart owns. This is the seam for deployment flags
+    # such as PSFN_TESTING_HARNESS_GARDEN_VERIFIER=true, which previously
+    # survived only as a `kubectl set env` that every upgrade dropped
+    # (psfn-framework-v4mxw).
+    extraEnv: []
     resources:
       requests:
         cpu: 100m
@@ -254,6 +263,15 @@ workloads:
       tag: ""
       digest: ""
     command: ["node", "dist/agent-main.js"]
+    # Additional plain environment for this container, appended after the
+    # chart-managed entries. Each item is a Kubernetes EnvVar: `name` plus
+    # exactly one of `value` or `valueFrom` (secretKeyRef / configMapKeyRef /
+    # fieldRef). Chart-managed names are rejected so an override can never
+    # shadow wiring the chart owns. This is the seam for deployment flags
+    # such as PSFN_TESTING_HARNESS_GARDEN_VERIFIER=true, which previously
+    # survived only as a `kubectl set env` that every upgrade dropped
+    # (psfn-framework-v4mxw).
+    extraEnv: []
     resources: {}
     writableMounts:
       - /app/system-data
@@ -270,6 +288,15 @@ workloads:
       tag: ""
       digest: ""
     command: ["node", "dist/operator-main.js"]
+    # Additional plain environment for this container, appended after the
+    # chart-managed entries. Each item is a Kubernetes EnvVar: `name` plus
+    # exactly one of `value` or `valueFrom` (secretKeyRef / configMapKeyRef /
+    # fieldRef). Chart-managed names are rejected so an override can never
+    # shadow wiring the chart owns. This is the seam for deployment flags
+    # such as PSFN_TESTING_HARNESS_GARDEN_VERIFIER=true, which previously
+    # survived only as a `kubectl set env` that every upgrade dropped
+    # (psfn-framework-v4mxw).
+    extraEnv: []
     resources: {}
     writableMounts:
       - /app/system-data
@@ -746,6 +773,9 @@ satelliteHub:
     digest: ""
     pullPolicy: IfNotPresent
   command: ["node", "dist/ts/hub/main.js"]
+  # Additional plain environment for the hub container; same contract as
+  # workloads.<name>.extraEnv (psfn-framework-v4mxw).
+  extraEnv: []
   agentRuntime: psfn
   psfnModel: psfn
   # Registry-aligned satellite identity injected as PSFN_SATELLITE_ID /

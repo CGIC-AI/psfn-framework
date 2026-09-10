@@ -325,6 +325,58 @@ function main(): number {
         'control-only render exposes the hub-control Service port and both NetworkPolicy rules',
       );
     }
+    // ── Extra environment seam (psfn-framework-v4mxw) ──
+    const extraEnvValues = (): Record<string, unknown> => ({
+      ...baseValues(),
+      workloads: {
+        gateway: { extraEnv: [{ name: 'PSFN_TESTING_HARNESS_GARDEN_VERIFIER', value: 'true' }] },
+        garden: { extraEnv: [{ name: 'PSFN_TESTING_HARNESS_GARDEN_VERIFIER', value: true }] },
+        agent: { extraEnv: [
+          { name: 'PSFN_TESTING_HARNESS_GARDEN_VERIFIER', value: 'true' },
+          { name: 'EXAMPLE_FROM_SECRET', valueFrom: { secretKeyRef: { name: 'example', key: 'token' } } },
+        ] },
+      },
+      satelliteHub: {
+        ...(baseValues().satelliteHub as Record<string, unknown>),
+        extraEnv: [{ name: 'HUB_EXAMPLE_FLAG', value: '1' }],
+      },
+    });
+    const extraEnv = helmTemplate([write('extra-env', extraEnvValues())]);
+    check(extraEnv.status === 0, 'render succeeds with extraEnv on every workload', extraEnv.stderr.trim());
+    if (extraEnv.status === 0) {
+      for (const [deployment, container] of [
+        [`${RELEASE_NAME}-gateway`, 'gateway'],
+        [`${RELEASE_NAME}-garden`, 'garden'],
+      ] as const) {
+        const env = extractContainerEnv(extraEnv.stdout, deployment, container);
+        check(
+          env.get('PSFN_TESTING_HARNESS_GARDEN_VERIFIER')?.value === 'true',
+          `${container} carries the harness Garden verifier flag from extraEnv`,
+          `rendered: ${String(env.get('PSFN_TESTING_HARNESS_GARDEN_VERIFIER')?.value)}`,
+        );
+      }
+      check(
+        extraEnv.stdout.includes('name: EXAMPLE_FROM_SECRET') && extraEnv.stdout.includes('name: HUB_EXAMPLE_FLAG'),
+        'agent valueFrom and hub extraEnv entries render',
+      );
+    }
+    for (const [label, entry, expected] of [
+      ['managed name', { name: 'API_KEY', value: 'x' }, 'is managed by the chart'],
+      ['both value and valueFrom', { name: 'A_FLAG', value: 'x', valueFrom: { fieldRef: { fieldPath: 'metadata.name' } } }, 'exactly one of value or valueFrom'],
+      ['lowercase name', { name: 'flag', value: 'x' }, 'uppercase environment name'],
+      ['unsupported key', { name: 'A_FLAG', value: 'x', env: 'y' }, 'unsupported key'],
+    ] as const) {
+      const bad = helmTemplate([write(`extra-env-${label.replace(/\s+/gu, '-')}`, {
+        ...baseValues(),
+        workloads: { gateway: { extraEnv: [entry] } },
+      })]);
+      check(
+        bad.status !== 0 && bad.stderr.includes(expected),
+        `render fails closed: extraEnv ${label}`,
+        bad.stderr.trim().split('\n').slice(0, 2).join(' '),
+      );
+    }
+
     const controlWithoutToken = helmTemplate([write('control-without-token', {
       satelliteHub: { ...(baseValues().satelliteHub as Record<string, unknown>), control: { enabled: true } },
       secrets: { values: { satelliteHubApiKey: '0123456789abcdef0123' } },

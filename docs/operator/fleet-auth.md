@@ -664,14 +664,18 @@ TTL and skew. Credentials are referenced by env-name (`CredentialReference`)
 and resolved through the credential vault. A key-boundary check forces the
 broker signing key and the Hub verifier ring to be distinct Ed25519 keys and
 rejects the distributed seed/test fixture fingerprints and `replace-before-enable`
-placeholder key ids before fleet auth can be enabled. Fleet-auth-enabled mode
-rejects direct standalone Garden/API token, cookie, HTTP, and WebSocket
-surfaces before listen (`assertFleetAuthStandaloneSurfacesUnavailable`). The
-browser-facing Gateway Garden route remains the single admission seam and
-accepts either fleet SSO or a configured ADMIN_TOKEN, replacing either
-credential with an internal signed capability before the mTLS hop to Garden.
-`ALLOW_INSECURE_LOCAL_API=true` is silently ineffective (with a loud startup
-warning) once fleet auth is active.
+placeholder key ids before fleet auth can be enabled. Fleet auth only *adds*
+SSO principals: every key and token surface (`API_KEY`, `ADMIN_TOKEN`,
+`API_SATELLITE_KEYS`, the testing-harness key, `ALLOW_INSECURE_LOCAL_API`)
+keeps working exactly as it does without `fleet-auth.json`, and the startup
+guard (`assertFleetAuthStandaloneSurfacesUnavailable`) only checks that a
+gateway which has fleet auth configured actually wires the SSO bootstrap
+routes. The browser-facing Gateway Garden route remains the single admission
+seam and accepts either fleet SSO or a configured ADMIN_TOKEN, replacing
+either credential with an internal signed capability before the mTLS hop to
+Garden. `ALLOW_INSECURE_LOCAL_API=true` therefore stays in effect under fleet
+auth; the gateway logs a loud startup warning so the bypass is removed from
+fleet deployments deliberately rather than lingering.
 
 ## Invariants and failure modes
 

@@ -23,6 +23,7 @@ import type {
   PlacesRegistryConfig,
   SiteConfig,
 } from '../../../../shared/contracts/places-registry.js';
+import { isEidoversePlace } from '../../../../shared/contracts/places-registry.js';
 import type { CompanionPresenceMetadata } from '../../presence-metadata.js';
 import { wrapPromptSectionXml } from '../../../identity/prompt-sections.js';
 import type { SituatedEmanationTracker } from './situated-emanation.js';
@@ -211,6 +212,33 @@ export function buildSituatedPresenceContextBlock(input: SituatedPresenceContext
   if (!presence && !place) return '';
 
   const lines: string[] = ['[Situated presence]'];
+
+  if (place && presenceMode === 'world' && isEidoversePlace(place)) {
+    // The companion is emanating into a shared 3D world (S13,
+    // psfn-framework-u2dx3): swap the place data for that plane's. The
+    // house's rooms, sensors and effectors are not here; the world's own
+    // verbs are. Kept terse: this rides every world turn.
+    const placeName = safeText(place.displayName) || safeText(place.placeId) || 'unnamed place';
+    const world = safeText(place.eidoverse.world) || 'unknown';
+    const region = safeText(place.eidoverse.region);
+    lines.push(`Here: ${placeName}${region ? ` (${region})` : ''} — a place in the world "${world}"`);
+    lines.push(`World plane: ${world}, reached through the Satellite Hub; you have a body here.`);
+    const planePlaces = (registry?.places ?? [])
+      .filter((candidate) => isEidoversePlace(candidate) && candidate.eidoverse.world === place.eidoverse.world && candidate.placeId !== place.placeId)
+      .map((candidate) => {
+        const label = safeText(candidate.displayName) || safeText(candidate.placeId);
+        return candidate.placeId === label ? label : `${label} (${candidate.placeId})`;
+      })
+      .filter((label) => label.length > 0);
+    if (planePlaces.length > 0) {
+      lines.push(`Other places on this plane: ${planePlaces.join(', ')}`);
+    }
+    lines.push('Use the world tool here: perceive to look, act for body verbs, move to a participant, a position, or a place on this plane. Room control and physical places do not apply on this plane.');
+    return wrapPromptSectionXml({
+      id: 'runtime_situated_presence',
+      content: lines.join('\n'),
+    });
+  }
 
   if (place) {
     const placeName = safeText(place.displayName) || safeText(place.placeId) || 'unnamed place';

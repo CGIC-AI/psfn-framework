@@ -111,7 +111,7 @@ export function createVirtualRoomFollower(options: VirtualRoomFollowerOptions): 
   async function follow(message: SubstrateMessage, author: VirtualFollowAuthorContext): Promise<void> {
     // Physical always outranks (vinz.29): a device-origin turn carries its own
     // place and must never be re-routed by virtual-room inference.
-    if (classifyTurnPresenceMode(message) === 'physical') return;
+    if (classifyTurnPresenceMode(message) !== 'mindspace') return;
 
     const parsed = parseCompanionChannelId(message.channelId);
     if (!parsed || parsed.kind !== 'room') return;

@@ -78,6 +78,26 @@ function physicalDurableLocation(placeId = 'place.bedroom'): SituatedLocation {
 }
 
 describe('classifyTurnPresenceMode', () => {
+  it('classifies a world-avatar satellite turn as a world-plane turn, never physical (u2dx3)', () => {
+    const world = makeMessage({
+      satellite: { claimType: 'world-avatar', placeId: 'eidoverse:commons' } as unknown as NonNullable<SubstrateMessage['routing']>['satellite'],
+    });
+    expect(classifyTurnPresenceMode(world)).toBe('world');
+    // Its fallback honours only a deliberate walk on the plane: no physical
+    // emanation, no mindspace twin.
+    expect(resolveTurnSituatedFallbackPlaceId({
+      message: world,
+      virtualMovePlaceId: 'eidoverse:commons:plaza',
+      emanationPlaceId: 'place.bedroom',
+      durableLocation: physicalDurableLocation(),
+    })).toBe('eidoverse:commons:plaza');
+    expect(resolveTurnSituatedFallbackPlaceId({
+      message: world,
+      emanationPlaceId: 'place.bedroom',
+      durableLocation: physicalDurableLocation(),
+    })).toBeUndefined();
+  });
+
   it('classifies satellite routing as physical emanation', () => {
     const message = makeMessage({
       satellite: { placeId: 'place.bedroom' } as unknown as NonNullable<SubstrateMessage['routing']>['satellite'],

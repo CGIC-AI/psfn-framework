@@ -240,6 +240,7 @@ import { AgentApiBackend } from '../../channels/api/agent-backend.js';
 import { resolveActiveHealthProbeConfig } from '../../channels/api/active-health-probe.js';
 import { buildExternalChannelProfiles, resolveDiscordCompanionView } from '../../channels/backplane/config.js';
 import { resolveTestingHarnessDevicesConfig } from '../../channels/backplane/testing-harness-devices.js';
+import { isEidoversePlace } from '../../shared/contracts/places-registry.js';
 import { createAgentFleetPostureProvider } from './fleet-posture.js';
 import { resolveOperatorAlertSinkConfiguration } from '../../shared/contracts/operator-alerting.js';
 import { wireAgentVaultRuntime } from './vault-runtime.js';
@@ -1622,6 +1623,12 @@ async function main(): Promise<void> {
     // trust or authorize the effect; the gateway requires a live generation.
     allowRequestScopedApprovalTransport: () =>
       getRequestContext()?.channelId?.startsWith('shard:') === true,
+  });
+  // On a world-plane turn the world tool keeps the plane's verbs and loses
+  // the house's (control, moves to off-plane places): S13, psfn-framework-u2dx3.
+  agentLoop.setWorldPlanePlaceResolver((placeId) => {
+    const place = placesRegistryConfig?.places.find((candidate) => candidate.placeId === placeId);
+    return isEidoversePlace(place);
   });
   log.info('World tool enabled', {
     autonomousLightControl: false,

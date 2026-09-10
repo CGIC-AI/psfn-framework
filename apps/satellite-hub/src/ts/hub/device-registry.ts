@@ -117,6 +117,38 @@ export function requireCurrentHubDeviceEnrollment(
   return current;
 }
 
+/**
+ * The Hub's own world emanation (psfn-framework-rqm6t): the registry entry
+ * whose satellite/endpoint/claim type name the embodied session the Hub
+ * itself attaches for an Eidoverse world. There is no credential to present
+ * because the "device" is this process; the only caller is the Eidoverse
+ * adapter's `connect()`, never a socket `hello` (which must keep going through
+ * `authenticateHubDevice`). Returns only the assertion binding, never the
+ * credential digest or the capability ceiling, and only while the enrollment
+ * is active; per-turn drift is still fenced by
+ * `requireCurrentHubDeviceEnrollment`.
+ */
+export function findEnrolledEmanation(
+  registry: HubDeviceRegistry,
+  claim: { satelliteId: string; endpointId: string; claimType: string },
+): HubDeviceEnrollmentBinding | null {
+  for (const device of registry.devices) {
+    if (device.enrollmentStatus !== "active") continue;
+    if (device.satelliteId !== claim.satelliteId
+      || device.endpointId !== claim.endpointId
+      || device.claimType !== claim.claimType) continue;
+    return {
+      deviceId: device.deviceId,
+      enrollmentVersion: device.enrollmentVersion,
+      enrollmentAssurance: device.enrollmentAssurance,
+      enrollmentStatus: device.enrollmentStatus,
+      companionId: device.companionId,
+      ...(device.placeId !== undefined ? { placeId: device.placeId } : {}),
+    };
+  }
+  return null;
+}
+
 export function authenticateHubDevice(
   registry: HubDeviceRegistry,
   credential: string | undefined,

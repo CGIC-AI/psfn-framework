@@ -65,6 +65,7 @@ import {
 import type {
   HubDeviceAttachmentSnapshot,
   HubDevicePrincipalSnapshot,
+  HubVirtualSpaceAdmission,
 } from '../../../shared/contracts/hub-device-ingress.js';
 import {
   HubDeviceIngressRequestError,
@@ -202,6 +203,7 @@ export class ApiChatCompletionsHandler {
     clientCert?: SatelliteClientCertIdentity,
     pendingHubDevice?: PendingHubDeviceAdmission,
     fleetRouting?: FleetGardenChatRouting,
+    virtualSpaceEmanation?: HubVirtualSpaceAdmission,
   ): Promise<void> {
     let parsed = await readChatCompletionRequest(req, res, this.logger);
     if (!parsed) return;
@@ -296,6 +298,7 @@ export class ApiChatCompletionsHandler {
         hubDevicePrincipal,
         hubDeviceAttachment,
         effectiveFleetRouting,
+        virtualSpaceEmanation,
       );
     } else {
       await this.handleNonStreaming(
@@ -307,6 +310,7 @@ export class ApiChatCompletionsHandler {
         hubDevicePrincipal,
         hubDeviceAttachment,
         effectiveFleetRouting,
+        virtualSpaceEmanation,
       );
     }
   }
@@ -1088,6 +1092,7 @@ export class ApiChatCompletionsHandler {
     hubDevicePrincipal: HubDevicePrincipalSnapshot | undefined,
     hubDeviceAttachment: HubDeviceAttachmentSnapshot | undefined,
     fleetRouting: FleetGardenChatRouting | undefined,
+    virtualSpaceEmanation: HubVirtualSpaceAdmission | undefined,
   ): Promise<void> {
     const runtime = this.runtime;
     if (runtime) {
@@ -1103,6 +1108,7 @@ export class ApiChatCompletionsHandler {
             ...(clientCert ? { clientCert } : {}),
             ...(hubDevicePrincipal ? { hubDevicePrincipal } : {}),
             ...(hubDeviceAttachment ? { hubDeviceAttachment } : {}),
+            ...(virtualSpaceEmanation ? { virtualSpaceEmanation } : {}),
             signal,
           }),
         );
@@ -1188,6 +1194,7 @@ export class ApiChatCompletionsHandler {
     hubDevicePrincipal: HubDevicePrincipalSnapshot | undefined,
     hubDeviceAttachment: HubDeviceAttachmentSnapshot | undefined,
     fleetRouting: FleetGardenChatRouting | undefined,
+    virtualSpaceEmanation: HubVirtualSpaceAdmission | undefined,
   ): Promise<void> {
     const completionId = `chatcmpl-${randomUUID()}`;
     const created = Math.floor(Date.now() / 1000);
@@ -1225,6 +1232,7 @@ export class ApiChatCompletionsHandler {
             ...(clientCert ? { clientCert } : {}),
             ...(hubDevicePrincipal ? { hubDevicePrincipal } : {}),
             ...(hubDeviceAttachment ? { hubDeviceAttachment } : {}),
+            ...(virtualSpaceEmanation ? { virtualSpaceEmanation } : {}),
             signal,
             onDelta: (text, companionId) => {
               ensureTransport(

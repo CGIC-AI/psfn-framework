@@ -382,6 +382,67 @@ world-authored events. Each wake logs one info line naming the message id,
 author, the world's human/ai kind, the wake kind and why (`tag:...` or
 `name-match`) with a bounded text prefix.
 
+## The world connector is a registered software device (S13, rqm6t)
+
+Operator rule (2026-09-10): the companion-ui app, Virt-a-Mate and Eidoverse
+are all **software devices** of the Hub, valid like physical ones but
+projecting the companion into a virtual space instead of a room. For
+Eidoverse the Hub's own adapter is the thin connector that plays that device.
+
+**Why it matters.** The gateway's shared-device response arbiter only answers a
+turn during quiet hours, rest, or a missing availability lease when the turn
+is *explicit inbound from a registered surface*. An anonymous caller on the
+hub port (a satellite key with no device identity) is refused there, silently
+until this change, with an empty `200`. That refusal is correct for an
+unregistered caller and wrong for the companion's own body in a world someone
+just spoke to it in.
+
+**Hub side.** When the Hub runs a device registry (`HUB_DEVICE_REGISTRY_PATH`)
+*and* can sign assertions (`HUB_DEVICE_ASSERTION_*`), the Eidoverse adapter
+looks up its own enrollment at attach time: the registry entry whose
+`satelliteId`, `endpointId` and `claimType: "world-avatar"` name the Hub's
+embodied session. No credential is presented, because the device is this
+process; the lookup is reachable only from the adapter's `connect()`, never
+from a socket `hello`. Every wake turn then carries
+`X-PSFN-Hub-Device-Assertion` exactly as a physical device turn does, with
+one difference: the assertion's `place_id` is the **enrollment place** (the
+world's default place, the satellite's static `placeId`), while the region the
+body stands in keeps riding as the situated `placeId` and the context notes.
+The live-enrollment fence (`requireCurrentHubDeviceEnrollment`) applies per
+turn. Without a registry, or with no active matching entry, the channel stays
+anonymous and the Hub logs one warning.
+
+**Gateway side.** `satellites.json` marks what an enrolled device projects
+into:
+
+```json
+"hubDeviceEnrollment": {
+  "deviceId": "s12g-hub-device",
+  "enrollmentVersion": 1,
+  "enrollmentStatus": "active",
+  "projection": "virtual_space"
+}
+```
+
+`projection` is `human_surface` (default: a physical room device or the
+companion-ui app, admitted through the Hub-device attachment path as the
+companion-ui channel with a guest or SSO human) or `virtual_space` (a shared
+world). For `virtual_space` the gateway verifies the assertion with the same
+verifier ring and replay store against the endpoint's enrollment, the
+gateway's companion, the claim's session id and the satellite's `placeId`,
+mints **no** attachment and **no** `hub-device:` channel, runs **no** body
+sanitizer, and then continues on the ordinary satellite path: the world
+channel, the per-speaker contacts and the `user` session key are untouched.
+The verified snapshot rides on the runtime request only, and the arbiter
+treats the turn as explicit inbound **regardless of the speaker's kind**:
+fatigue (the per-speaker contact budget), not quiet hours, is what bounds AI
+chatter in a shared world. The two arbiter refusals that used to be silent are
+now audited as `satellite.response.refused` with a reason.
+
+**Testing harness.** The harness's own Hub-device cases exercise the
+`human_surface` path on purpose; a testing-only registered device for them is
+psfn-framework-ajgo2.
+
 ## Deferred Phase 2 resident work
 
 The external protocol describes MCPL feature families for world channels,

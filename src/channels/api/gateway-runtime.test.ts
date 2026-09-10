@@ -535,6 +535,112 @@ describe('GatewayApiRuntime', () => {
     );
   });
 
+  it('treats a verified virtual-space emanation turn as explicit inbound for the shared-device arbiter (rqm6t)', async () => {
+    const companionId = createCompanionId('11111111-1111-4111-8111-111111111111');
+    const requestSharedSatelliteChatCompletion = vi.fn(async () => ({
+      ok: true as const,
+      response: { content: 'world reply', channelId: 'satellite:world-avatar:eidoverse:abc', inputTokens: 2, outputTokens: 2 },
+    }));
+    const registry = () => ({
+      schemaVersion: 1 as const,
+      enabled: true,
+      satellites: [{
+        satelliteId: 'hub',
+        displayName: 'World avatar',
+        mobility: 'static' as const,
+        placeId: 'eidoverse:commons',
+        sharedDevice: {
+          primaryCompanionId: companionId,
+          observationRecipients: [],
+          emanationMemberIds: [companionId],
+          responseLease: { durationMs: 5_000, activeConversationTtlMs: 60_000 },
+        },
+        endpoints: [{
+          endpointId: 'hub',
+          displayName: 'Hub',
+          claimTypes: ['world-avatar'],
+          promptChannelType: 'satellite.endpoint',
+          auth: { mode: 'api_key' as const, apiKeyPrincipalIds: ['hub-key'] },
+          defaultIdentity: {
+            authorId: 'eidoverse-visitor',
+            authorName: 'Eidoverse Visitor',
+            canonicalContactId: 'contact-visitor',
+            channelPrivacy: 'private' as const,
+          },
+          maxCapabilities: ['text' as const],
+          telemetryScopes: [],
+          hubDeviceEnrollment: {
+            deviceId: 'world-emanation', enrollmentVersion: 2, enrollmentStatus: 'active' as const, projection: 'virtual_space' as const,
+          },
+        }],
+      }],
+    });
+    const runtime = new GatewayApiRuntime({
+      requestAgent: vi.fn(),
+      requestCompanionAgent: vi.fn(),
+      requestSharedSatelliteChatCompletion,
+      subscribeApiStream: vi.fn(() => () => {}),
+    }, { satelliteRegistryProvider: registry });
+    const claimHeaders = {
+      'x-psfn-satellite-claim-type': 'world-avatar',
+      'x-psfn-satellite-id': 'hub',
+      'x-psfn-satellite-endpoint-id': 'hub',
+      'x-psfn-satellite-session-id': 'eidoverse:abc',
+      'x-psfn-satellite-speaker-id': 'nova-kube',
+      'x-psfn-satellite-speaker-name': 'Nova (kube)',
+      'x-psfn-satellite-speaker-kind': 'ai',
+    };
+    const emanation = {
+      kind: 'virtual_space' as const,
+      deviceId: 'world-emanation',
+      enrollmentVersion: 2,
+      companionId,
+      satelliteId: 'hub',
+      endpointId: 'hub',
+      sessionId: 'eidoverse:abc',
+      placeId: 'eidoverse:commons',
+      jti: '018f0f10-79b2-4cc7-8c99-0242ac120004',
+      expiresAt: new Date(Date.now() + 30_000).toISOString(),
+    };
+
+    // An AI speaker is still explicit inbound: fatigue, not quiet hours, bounds it.
+    const result = await runtime.handleChatCompletion({
+      ...createChatRequest(),
+      request: { ...createChatRequest().request, stream: false },
+      principal: { id: 'hub-key', mode: 'api_key', scope: 'satellite' },
+      companionId,
+      virtualSpaceEmanation: emanation,
+      headers: claimHeaders,
+    });
+    expect(result).toMatchObject({ ok: true, response: { content: 'world reply' } });
+    expect(requestSharedSatelliteChatCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ explicitHumanInboundCompanionId: companionId }),
+    );
+
+    // Without the snapshot the same turn is an anonymous shared-satellite turn.
+    requestSharedSatelliteChatCompletion.mockClear();
+    await runtime.handleChatCompletion({
+      ...createChatRequest(),
+      request: { ...createChatRequest().request, stream: false },
+      principal: { id: 'hub-key', mode: 'api_key', scope: 'satellite' },
+      companionId,
+      headers: claimHeaders,
+    });
+    expect(requestSharedSatelliteChatCompletion).toHaveBeenCalledWith(
+      expect.not.objectContaining({ explicitHumanInboundCompanionId: companionId }),
+    );
+
+    // A snapshot naming a different session is never trusted.
+    await expect(runtime.handleChatCompletion({
+      ...createChatRequest(),
+      request: { ...createChatRequest().request, stream: false },
+      principal: { id: 'hub-key', mode: 'api_key', scope: 'satellite' },
+      companionId,
+      virtualSpaceEmanation: { ...emanation, sessionId: 'eidoverse:other' },
+      headers: claimHeaders,
+    })).rejects.toThrow(/does not match the resolved satellite claim/);
+  });
+
   it('brokers chat completions and forwards stream deltas', async () => {
     const onDelta = vi.fn();
     let streamListener: ((text: string) => void) | undefined;

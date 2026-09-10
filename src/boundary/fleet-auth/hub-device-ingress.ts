@@ -4,6 +4,7 @@ import type {
   HubDeviceAttachmentSnapshot,
   HubDevicePrincipal,
   HubDevicePrincipalSnapshot,
+  HubVirtualSpaceAdmission,
 } from '../../shared/contracts/hub-device-ingress.js';
 import { HubDeviceAssertionRejectedError } from './hub-device-assertion.js';
 
@@ -123,6 +124,43 @@ export class GatewayHubDeviceIngressService {
     this.enrollmentAuthority = options.enrollmentAuthority;
     this.attachments = options.attachments;
     this.sessions = options.sessions ?? new InMemoryHubDeviceSessionAdmissionStore();
+  }
+
+  /**
+   * Verify a `virtual_space` projection's assertion against its static
+   * binding and consume its replay id. No enrollment-authority round trip, no
+   * human attachment, no session admission: the world channel keeps its
+   * ordinary satellite identity (psfn-framework-rqm6t).
+   */
+  async verifyVirtualSpaceAssertion(input: {
+    assertion: string;
+    expected: HubDeviceAssertionExpectedBinding;
+    satelliteId: string;
+    endpointId: string;
+  }): Promise<HubVirtualSpaceAdmission> {
+    let verified: HubDevicePrincipal;
+    try {
+      verified = await this.verifier.verifyAndConsume(input.assertion, input.expected);
+      assertPrincipalMatchesConnection(verified, input.expected);
+    } catch (error) {
+      if (error instanceof HubDeviceAssertionRejectedError) throw error;
+      if (error instanceof Error && error.message.startsWith('Hub device assertion')) {
+        throw new HubDeviceAssertionRejectedError(error.message);
+      }
+      throw error;
+    }
+    return Object.freeze({
+      kind: 'virtual_space' as const,
+      deviceId: verified.deviceId,
+      enrollmentVersion: verified.enrollmentVersion,
+      companionId: verified.companionId,
+      satelliteId: input.satelliteId,
+      endpointId: input.endpointId,
+      sessionId: verified.sessionId,
+      ...(verified.placeId ? { placeId: verified.placeId } : {}),
+      jti: verified.jti,
+      expiresAt: verified.expiresAt.toISOString(),
+    });
   }
 
   async fenceRejectedAssertion(assertion: string, connectionId: string): Promise<void> {

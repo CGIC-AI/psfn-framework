@@ -18,6 +18,7 @@ import { resolveSharedSatelliteObservationDeliveries } from '../../shared/teleme
 import {
   hasSatelliteClaimHeaders,
   resolveSatelliteClaim,
+  type ResolvedSatelliteClaim,
 } from '../backplane/satellite-registry.js';
 import { createCompanionId, type CompanionId } from '../../shared/routing/companion-id.js';
 
@@ -153,7 +154,8 @@ export class GatewayApiRuntime implements ApiServerRuntime {
         if (!this.gateway.requestSharedSatelliteChatCompletion) {
           throw new Error('Shared-satellite chat arbitration is not configured');
         }
-        const explicitHumanInboundCompanionId = resolveHubDeviceCompanionAuthority(input);
+        const explicitHumanInboundCompanionId = resolveHubDeviceCompanionAuthority(input)
+          ?? resolveVirtualSpaceEmanationAuthority(input, activeSatelliteClaim);
         return await this.gateway.requestSharedSatelliteChatCompletion({
           satellite: sharedSatellite,
           canonicalContactId: activeSatelliteClaim.canonicalContactId,
@@ -285,6 +287,36 @@ function resolveHubDeviceCompanionAuthority(
     || attachmentActorCompanionId !== companionId
     || attachment.channel.companionId !== companionId) {
     throw new Error('Authenticated Hub-device companion authority changed before arbitration');
+  }
+  return companionId;
+}
+
+/**
+ * A turn signed by the Hub's world connector (a `virtual_space` projection,
+ * psfn-framework-rqm6t) is inbound from a registered surface: the arbiter's
+ * quiet-hours, rest and availability gates yield to it exactly as they do
+ * for an attached human device. Speaker kind does not matter here — the
+ * companion's own fatigue budget, not quiet hours, is what bounds AI chatter
+ * in a shared world (operator rule 2026-09-10). The snapshot must name the
+ * very claim this request resolved to, or it is ignored.
+ */
+function resolveVirtualSpaceEmanationAuthority(
+  input: ApiRuntimeChatRequest,
+  claim: ResolvedSatelliteClaim | undefined,
+): CompanionId | undefined {
+  const emanation = input.virtualSpaceEmanation;
+  if (!emanation || !claim) return undefined;
+  const companionId = input.companionId
+    ? createCompanionId(input.companionId, 'Virtual-space emanation companionId')
+    : undefined;
+  if (!companionId) {
+    throw new Error('Virtual-space emanation chat requires the gateway companion identity');
+  }
+  if (emanation.companionId !== companionId
+    || emanation.satelliteId !== claim.satellite.satelliteId
+    || emanation.endpointId !== claim.satellite.endpointId
+    || emanation.sessionId !== claim.satellite.sessionId) {
+    throw new Error('Virtual-space emanation snapshot does not match the resolved satellite claim');
   }
   return companionId;
 }

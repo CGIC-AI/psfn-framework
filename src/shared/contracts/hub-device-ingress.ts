@@ -9,6 +9,27 @@ export interface HubDeviceAssertionExpectedBinding {
   placeId?: string;
 }
 
+/**
+ * A verified Hub device assertion from a `virtual_space` projection (the
+ * Hub's world connector for Eidoverse, Virt-a-Mate, ...). Unlike a
+ * `human_surface` admission it mints no attachment and no channel: the turn
+ * keeps its ordinary satellite identity, and this snapshot only tells the
+ * shared-device arbiter that the caller is a registered surface
+ * (psfn-framework-rqm6t).
+ */
+export interface HubVirtualSpaceAdmission {
+  kind: 'virtual_space';
+  deviceId: string;
+  enrollmentVersion: number;
+  companionId: string;
+  satelliteId: string;
+  endpointId: string;
+  sessionId: string;
+  placeId?: string;
+  jti: string;
+  expiresAt: string;
+}
+
 export interface HubDevicePrincipal {
   kind: 'hub_device';
   issuer: string;

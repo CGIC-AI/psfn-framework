@@ -1406,6 +1406,21 @@ describe('Hub device enrollment owner binding', () => {
       .toEqual({ deviceId: 'office-device', enrollmentVersion: 7, enrollmentStatus: 'active' });
   });
 
+  it('keeps the enrollment projection (virtual_space for a world connector) and refuses unknown values (rqm6t)', () => {
+    const virtualSpace = rawEnrollment() as unknown as Record<string, unknown>;
+    const endpoint = ((virtualSpace.satellites as Array<Record<string, unknown>>)[0]!.endpoints as Array<Record<string, unknown>>)[0]!;
+    endpoint.hubDeviceEnrollment = {
+      deviceId: 'office-device', enrollmentVersion: 7, enrollmentStatus: 'active', projection: 'virtual_space',
+    };
+    expect(parseSatelliteRegistryConfig(virtualSpace).satellites[0]?.endpoints[0]?.hubDeviceEnrollment)
+      .toEqual({ deviceId: 'office-device', enrollmentVersion: 7, enrollmentStatus: 'active', projection: 'virtual_space' });
+
+    endpoint.hubDeviceEnrollment = {
+      deviceId: 'office-device', enrollmentVersion: 7, enrollmentStatus: 'active', projection: 'elsewhere',
+    };
+    expect(() => parseSatelliteRegistryConfig(virtualSpace)).toThrow(/projection must be one of: human_surface, virtual_space/);
+  });
+
   it('rejects malformed, unknown, and duplicate device enrollment bindings', () => {
     const malformed = rawEnrollment() as unknown as Record<string, unknown>;
     const endpoint = ((malformed.satellites as Array<Record<string, unknown>>)[0]!.endpoints as Array<Record<string, unknown>>)[0]!;

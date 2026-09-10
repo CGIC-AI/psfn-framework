@@ -267,6 +267,20 @@ test("psfn model adapter mints a fresh Hub assertion only from authenticated dev
     await drainReply(adapter, {
       inputMode: "text", userText: "second", conversationId: channel.sessionId, channel,
     });
+    // A world emanation: the situated place is the region, the assertion
+    // binds the enrollment place (psfn-framework-rqm6t).
+    await drainReply(adapter, {
+      inputMode: "text", userText: "third", conversationId: channel.sessionId,
+      channel: { ...channel, placeId: "eidoverse:commons:plaza", assertionPlaceId: "office" },
+    });
+    const third = capturedHeaders[2]?.["X-PSFN-Hub-Device-Assertion"];
+    assert.ok(third);
+    const thirdClaims = JSON.parse(Buffer.from(third.split(".")[1]!, "base64url").toString("utf8"));
+    assert.equal(thirdClaims.place_id, "office");
+    assert.equal(
+      (capturedBodies[2] as { channel_metadata: { placeId?: string } }).channel_metadata.placeId,
+      "eidoverse:commons:plaza",
+    );
     const first = capturedHeaders[0]?.["X-PSFN-Hub-Device-Assertion"];
     const second = capturedHeaders[1]?.["X-PSFN-Hub-Device-Assertion"];
     assert.ok(first);

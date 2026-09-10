@@ -333,11 +333,30 @@ export interface SatelliteEndpointRuntimeConfig {
   refresh: SatelliteEndpointRefreshConfig;
 }
 
-/** Server-owned enrollment binding for Hub-authenticated physical devices. */
+/**
+ * What an enrolled Hub device projects the companion into (operator rule
+ * 2026-09-10: the companion-ui app, Virt-a-Mate and Eidoverse are all
+ * "software" devices of the Hub, valid like physical ones but projecting into
+ * virtual spaces).
+ *
+ * - `human_surface` (default): one human at the device: a physical room
+ *   device or the companion-ui app. An assertion admits the turn through the
+ *   Hub-device attachment path (companion-ui channel, guest or SSO human).
+ * - `virtual_space`: a shared world the companion emanates into (Eidoverse,
+ *   Virt-a-Mate). The Hub's world connector is the device. An assertion proves
+ *   the caller is this registered surface and the turn then continues on the
+ *   ordinary satellite path (world channel, per-speaker contacts), counted as
+ *   explicit inbound by the shared-device arbiter (psfn-framework-rqm6t).
+ */
+export type SatelliteHubDeviceProjection = 'human_surface' | 'virtual_space';
+
+/** Server-owned enrollment binding for Hub-authenticated devices. */
 export interface SatelliteHubDeviceEnrollmentConfig {
   deviceId: string;
   enrollmentVersion: number;
   enrollmentStatus: 'active' | 'revoked';
+  /** Absent means `human_surface`. */
+  projection?: SatelliteHubDeviceProjection;
 }
 
 export interface SatelliteEndpointConfig {

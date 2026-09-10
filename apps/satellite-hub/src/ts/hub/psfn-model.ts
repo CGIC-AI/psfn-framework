@@ -405,7 +405,9 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
       headers["X-PSFN-Hub-Device-Assertion"] = this.runtime.deviceAssertionIssuer.issue({
         device: channel.deviceAuthority,
         sessionId: channel.sessionId,
-        ...(Object.hasOwn(channel, "placeId") ? { placeId: channel.placeId } : {}),
+        ...(Object.hasOwn(channel, "assertionPlaceId")
+          ? { placeId: channel.assertionPlaceId }
+          : Object.hasOwn(channel, "placeId") ? { placeId: channel.placeId } : {}),
       });
     }
     headers["X-PSFN-Satellite-Claim"] = JSON.stringify(sanitizeHeaderJsonValue(satelliteClaim));

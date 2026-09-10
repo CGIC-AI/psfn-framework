@@ -9,6 +9,7 @@ import {
   type EidoverseBodyTools,
 } from "./eidoverse-body-runner.js";
 import { parseEidoversePlaceMap } from "./eidoverse-place-map.js";
+import type { HubDeviceRegistry, HubDeviceRegistryAuthority } from "./device-registry.js";
 import { EmbodiedSessionRegistry } from "./embodied-session.js";
 import type { FrameworkAgentAdapter } from "./framework-agent.js";
 import { normalizeSatelliteClaimConfig } from "./satellite-claim.js";
@@ -72,7 +73,33 @@ class FakeDoor implements EidoverseBodyTools, EidoverseTravelPort {
   }
 }
 
-function adapterWith(door: FakeDoor, agent = new FakeAgent(), infoLines: string[] = []) {
+function emanationRegistry(entries: HubDeviceRegistry["devices"]): HubDeviceRegistryAuthority {
+  return { readCurrent: () => ({ schemaVersion: 1, devices: entries }) };
+}
+
+const WORLD_EMANATION: HubDeviceRegistry["devices"][number] = {
+  deviceId: "world-emanation",
+  deviceName: "World emanation",
+  satelliteId: "eidoverse-world",
+  satelliteName: "Eidoverse World Avatar",
+  endpointId: "eidoverse-avatar",
+  claimType: "world-avatar",
+  credentialSha256: "00".repeat(32),
+  enrollmentVersion: 2,
+  enrollmentAssurance: "device_credential",
+  enrollmentStatus: "active",
+  companionId: "11111111-1111-4111-8111-111111111111",
+  placeId: "eidoverse:commons",
+  maxCapabilities: { input: ["text"], output: ["text"], control: ["presence"], safety: ["action_allowlist"] },
+  homeAssistantEntityIds: [],
+};
+
+function adapterWith(
+  door: FakeDoor,
+  agent = new FakeAgent(),
+  infoLines: string[] = [],
+  extra: { emanationRegistry?: HubDeviceRegistryAuthority; warnLines?: string[] } = {},
+) {
   const runner = new EidoverseBodyRunner({ walkTimeoutMs: 5_000, maxPendingNotes: 4 }, door, { logger: { warn: () => undefined } });
   const adapter = new EidoverseEmbodiedSessionAdapter({
     worldName: "commons",
@@ -98,11 +125,50 @@ function adapterWith(door: FakeDoor, agent = new FakeAgent(), infoLines: string[
     say: { say: async () => undefined },
     body: runner,
     travel: door,
-    logger: { warn: () => undefined, info: (line) => infoLines.push(line) },
+    ...(extra.emanationRegistry ? { emanationRegistry: extra.emanationRegistry } : {}),
+    logger: { warn: (line) => extra.warnLines?.push(line), info: (line) => infoLines.push(line) },
   });
   adapter.connect();
   return { adapter, runner };
 }
+
+test("an enrolled world emanation signs its wake turns: device authority attached, assertion bound to the enrollment place, region place still situated (rqm6t)", async () => {
+  const door = new FakeDoor();
+  const agent = new FakeAgent();
+  const info: string[] = [];
+  const { adapter } = adapterWith(door, agent, info, { emanationRegistry: emanationRegistry([WORLD_EMANATION]) });
+  assert.ok(info.some((line) => /world emanation enrolled as Hub device "world-emanation" \(v2, place eidoverse:commons\)/u.test(line)), info.join("\n"));
+  await adapter.moveTo({ world: "commons", region: "plaza", position: { x: 8, z: -2 } });
+  await adapter.handleAddressedUtterance({ utteranceId: "e1", userText: "visitor: are you registered?" });
+  const channel = agent.calls[0]?.channel;
+  assert.deepEqual(channel?.deviceAuthority, {
+    deviceId: "world-emanation",
+    enrollmentVersion: 2,
+    enrollmentAssurance: "device_credential",
+    enrollmentStatus: "active",
+    companionId: "11111111-1111-4111-8111-111111111111",
+    placeId: "eidoverse:commons",
+  });
+  assert.equal(channel?.placeId, "eidoverse:commons:plaza", "the region the body stands in is still the situated place");
+  assert.equal(channel?.assertionPlaceId, "eidoverse:commons", "the assertion binds the static enrollment place");
+  adapter.disconnect();
+});
+
+test("a registry without a matching active emanation leaves the world channel anonymous, with one warning (rqm6t)", async () => {
+  const door = new FakeDoor();
+  const agent = new FakeAgent();
+  const warnings: string[] = [];
+  const { adapter } = adapterWith(door, agent, [], {
+    emanationRegistry: emanationRegistry([{ ...WORLD_EMANATION, enrollmentStatus: "revoked" }]),
+    warnLines: warnings,
+  });
+  assert.ok(warnings.some((line) => /has no active Hub device enrollment; wake turns carry no device assertion/u.test(line)), warnings.join("\n"));
+  await adapter.handleAddressedUtterance({ utteranceId: "e2", userText: "visitor: anyone there?" });
+  const channel = agent.calls[0]?.channel;
+  assert.equal(channel?.deviceAuthority, undefined);
+  assert.equal("assertionPlaceId" in (channel ?? {}), false);
+  adapter.disconnect();
+});
 
 test("perceive reports the body's own position, people with coordinates, and the mapped place", async () => {
   const door = new FakeDoor();

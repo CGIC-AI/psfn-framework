@@ -60,6 +60,14 @@ export interface PsfnChannelContext {
   deviceAuthority?: HubDeviceAssertionAuthority;
   /** Hub-owned situated place; a dynamic null override deliberately means unbound. */
   placeId?: string | null;
+  /**
+   * The place bound into the device assertion when it must differ from the
+   * situated `placeId`: a world emanation is enrolled at its world's default
+   * place (the gateway verifies the assertion against that static binding)
+   * while the region its body stands in rides as `placeId` and context
+   * (psfn-framework-rqm6t). Absent means the assertion follows `placeId`.
+   */
+  assertionPlaceId?: string | null;
   activeSatellites: Array<{
     id: string;
     name: string;

@@ -4,8 +4,10 @@ import type { ChatCompletionRequest } from '../types.js';
 import type { ApiAuthPrincipal } from '../../backplane/http/auth.js';
 import type {
   SatelliteClientCertIdentity,
+  SatelliteHubDeviceProjection,
   SatelliteRegistryConfig,
 } from '../../../shared/contracts/satellite-registry.js';
+import type { HubDeviceAssertionExpectedBinding } from '../../../shared/contracts/hub-device-ingress.js';
 import {
   resolveSatelliteClaim,
   SATELLITE_CLAIM_HEADERS,
@@ -81,6 +83,92 @@ export function extractCanonicalHubDeviceAssertion(req: IncomingMessage): string
     throw new HubDeviceIngressRequestError(401, 'invalid_hub_device_assertion', 'Hub device assertion is malformed');
   }
   return raw.trim();
+}
+
+/**
+ * Which projection the assertion-bearing request names, read from the
+ * registry endpoint its satellite claim headers point at. Unknown or
+ * unresolvable claims answer `human_surface` so the existing device path keeps
+ * producing its own precise refusal; only an endpoint enrolled as a
+ * `virtual_space` projection is routed to the world-connector admission.
+ */
+export function resolveHubDeviceProjection(
+  req: IncomingMessage,
+  registry: SatelliteRegistryConfig | undefined,
+): SatelliteHubDeviceProjection {
+  const satelliteId = singleHeader(req, SATELLITE_CLAIM_HEADERS.satelliteId);
+  const endpointId = singleHeader(req, SATELLITE_CLAIM_HEADERS.endpointId);
+  if (!satelliteId || !endpointId || !registry) return 'human_surface';
+  const endpoint = registry.satellites
+    .find(candidate => candidate.satelliteId === satelliteId)
+    ?.endpoints.find(candidate => candidate.endpointId === endpointId);
+  return endpoint?.hubDeviceEnrollment?.projection ?? 'human_surface';
+}
+
+function singleHeader(req: IncomingMessage, name: string): string | undefined {
+  const raw = req.headers[name];
+  if (typeof raw !== 'string') return undefined;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+export interface VirtualSpaceEmanationBinding {
+  expected: HubDeviceAssertionExpectedBinding;
+  satelliteId: string;
+  endpointId: string;
+}
+
+/**
+ * The static binding a `virtual_space` assertion must prove: the endpoint's
+ * enrollment, the gateway's companion, the claim's session id and the
+ * satellite's place. The ordinary satellite claim admission (endpoint
+ * `auth`, capability clamps, speaker) is what authenticates the caller; the
+ * assertion adds "and it is the registered surface, not just a holder of
+ * the key". No attachment, no connection nonce: the world channel must stay
+ * one channel across requests (psfn-framework-rqm6t).
+ */
+export function resolveVirtualSpaceEmanationBinding(input: {
+  req: IncomingMessage;
+  principal: ApiAuthPrincipal;
+  registry?: SatelliteRegistryConfig;
+  companionId: string;
+  clientCert?: SatelliteClientCertIdentity;
+}): VirtualSpaceEmanationBinding {
+  const resolved = resolveSatelliteClaim({
+    headers: input.req.headers,
+    principal: input.principal,
+    registry: input.registry,
+    ...(input.clientCert ? { clientCert: input.clientCert } : {}),
+  });
+  if (!resolved.ok) {
+    throw new HubDeviceIngressRequestError(
+      resolved.status === 503 ? 503 : resolved.status === 400 ? 400 : 403,
+      'hub_device_connection_not_admitted',
+      'Authenticated Hub device connection was not admitted',
+    );
+  }
+  const satellite = input.registry?.satellites.find(candidate => (
+    candidate.satelliteId === resolved.value.satellite.satelliteId
+  ));
+  const endpoint = satellite?.endpoints.find(candidate => (
+    candidate.endpointId === resolved.value.satellite.endpointId
+  ));
+  const enrollment = endpoint?.hubDeviceEnrollment;
+  if (!satellite || !endpoint || !enrollment || enrollment.projection !== 'virtual_space') {
+    throw new HubDeviceIngressRequestError(403, 'hub_device_not_enrolled', 'Authenticated Hub device is not enrolled');
+  }
+  return {
+    satelliteId: satellite.satelliteId,
+    endpointId: endpoint.endpointId,
+    expected: {
+      deviceId: enrollment.deviceId,
+      enrollmentVersion: enrollment.enrollmentVersion,
+      enrollmentStatus: enrollment.enrollmentStatus,
+      companionId: input.companionId,
+      sessionId: resolved.value.satellite.sessionId,
+      ...(satellite.placeId ? { placeId: satellite.placeId } : {}),
+    },
+  };
 }
 
 export function resolveAuthenticatedHubDeviceConnection(input: {

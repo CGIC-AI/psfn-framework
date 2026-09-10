@@ -28,6 +28,8 @@ import {
   type EidoverseLookPerception,
 } from "./eidoverse-look-parse.js";
 import type { FrameworkAgentAdapter } from "./framework-agent.js";
+import { findEnrolledEmanation } from "./device-registry.js";
+import type { HubDeviceEnrollmentBinding, HubDeviceRegistryAuthority } from "./device-registry.js";
 import { EIDOVERSE_SAY_MAX_TEXT_LENGTH } from "./eidoverse-mcp.js";
 import type { SessionStore } from "./session-store.js";
 
@@ -172,6 +174,15 @@ export interface EidoverseEmbodiedSessionDependencies {
   snapshot?: EidoverseSnapshotCaptureSource;
   /** Present only on transports that can move between worlds (MCPL). */
   travel?: EidoverseTravelPort;
+  /**
+   * The Hub device registry, present only when the Hub can also sign device
+   * assertions. When the registry enrolls this world emanation (same
+   * satellite, endpoint and `world-avatar` claim type), every wake turn
+   * carries a Hub device assertion bound to the enrollment place, so the
+   * gateway treats the world channel as a registered surface instead of an
+   * anonymous caller on the hub port (psfn-framework-rqm6t).
+   */
+  emanationRegistry?: HubDeviceRegistryAuthority;
   logger?: EidoverseEmbodiedSessionLogger;
 }
 
@@ -237,6 +248,7 @@ export class EidoverseEmbodiedSessionAdapter {
   connect(): void {
     if (this.attachmentOwnership) return;
     const claim = this.config.satelliteClaim;
+    const deviceAuthority = this.resolveEmanationDeviceAuthority();
     const attachment = this.deps.embodiedSessions.attachSatellite({
       sessionId: this.conversationId,
       satelliteId: claim.satelliteId,
@@ -249,9 +261,36 @@ export class EidoverseEmbodiedSessionAdapter {
         claimType: claim.type,
         displayName: claim.displayName,
       },
+      ...(deviceAuthority ? { deviceAuthority } : {}),
     });
     this.attachmentOwnership = attachment.ownership;
     this.deps.sessions.touch(this.conversationId);
+  }
+
+  /**
+   * The emanation's own enrollment, read from the registry at attach time.
+   * Absent registry: today's anonymous world channel. Registry without a
+   * matching active entry: one warning, still anonymous, never a guess.
+   */
+  private resolveEmanationDeviceAuthority(): HubDeviceEnrollmentBinding | null {
+    const registry = this.deps.emanationRegistry;
+    if (!registry) return null;
+    const claim = this.config.satelliteClaim;
+    const binding = findEnrolledEmanation(registry.readCurrent(), {
+      satelliteId: claim.satelliteId,
+      endpointId: claim.endpointId,
+      claimType: claim.type,
+    });
+    if (!binding) {
+      (this.deps.logger ?? console).warn(
+        `Eidoverse world emanation "${claim.satelliteId}/${claim.endpointId}" has no active Hub device enrollment; wake turns carry no device assertion`,
+      );
+      return null;
+    }
+    this.log(
+      `Eidoverse world emanation enrolled as Hub device "${binding.deviceId}" (v${binding.enrollmentVersion}, place ${binding.placeId ?? "unbound"})`,
+    );
+    return binding;
   }
 
   disconnect(): void {
@@ -673,6 +712,9 @@ export class EidoverseEmbodiedSessionAdapter {
     return {
       ...base,
       ...(place.placeId ? { placeId: place.placeId } : {}),
+      // The assertion binds the enrollment place, not the region the body
+      // stands in: the gateway checks it against the static satellite place.
+      ...(base.deviceAuthority ? { assertionPlaceId: base.deviceAuthority.placeId ?? null } : {}),
       ...(speaker ? { speaker } : {}),
       // One first-person frame per turn, carried on the same seam Voxta uses:
       // stripped metadata for the outbound channel record, the image itself

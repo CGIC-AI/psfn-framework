@@ -2986,6 +2986,15 @@ export class GatewayServer {
         excludedCompanionIds,
       });
       if (!acquisition.acquired) {
+        // A refused shared-satellite turn used to vanish (empty 200, no line
+        // anywhere); the hub cannot tell that from a broken model. Name the
+        // disposition (psfn-framework-rqm6t).
+        await this.audit('satellite.response.refused', 'DENY', {
+          channelId: input.channelId,
+          satelliteId: input.satellite.satelliteId,
+          reason: acquisition.reason,
+          explicitAddressed: Boolean(explicitAddressedCompanionId),
+        });
         return this.sharedSatelliteChatNoOp(input.channelId);
       }
       const { lease } = acquisition;
@@ -3049,6 +3058,12 @@ export class GatewayServer {
         }
         if (result.response.content.trim()) {
           if (!this.sharedSatelliteResponseArbiter.complete(lease.leaseId, 'speech')) {
+            await this.audit('satellite.response.refused', 'DENY', {
+              channelId: input.channelId,
+              satelliteId: input.satellite.satelliteId,
+              reason: 'speech_lease_lost',
+              explicitAddressed: Boolean(explicitAddressedCompanionId),
+            });
             return this.sharedSatelliteChatNoOp(input.channelId);
           }
           return result;

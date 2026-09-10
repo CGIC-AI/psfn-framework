@@ -151,6 +151,11 @@ export class RealtimeHubServer {
           ...(options.eidoverse.body ? { body: options.eidoverse.body } : {}),
           ...(options.eidoverse.snapshot ? { snapshot: options.eidoverse.snapshot } : {}),
           ...(options.eidoverse.travel ? { travel: options.eidoverse.travel } : {}),
+          // The world emanation signs its own wake turns only when the Hub
+          // both enrolls devices and can sign assertions (psfn-framework-rqm6t).
+          ...(config.deviceRegistry && config.psfn.deviceAssertionIssuer
+            ? { emanationRegistry: config.deviceRegistry }
+            : {}),
           ...(options.eidoverse.logger ? { logger: options.eidoverse.logger } : {}),
         })
       : null;

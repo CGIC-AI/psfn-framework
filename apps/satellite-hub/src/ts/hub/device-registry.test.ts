@@ -8,6 +8,7 @@ import test from "node:test";
 import type { SatelliteCapabilities } from "../shared/protocol.js";
 import {
   authenticateHubDevice,
+  findEnrolledEmanation,
   intersectCapabilities,
   loadHubDeviceRegistry,
   loadHubDeviceRegistryAuthority,
@@ -56,6 +57,49 @@ test("device registry authenticates a credential without storing plaintext", () 
     devices: registry.devices.map(device => ({ ...device, enrollmentStatus: "revoked" as const })),
   }, credential), null);
   assert.equal(JSON.stringify(registry).includes(credential), false);
+});
+
+test("the world emanation lookup is credential-free, exact on the claim, active-only, and never leaks the digest (rqm6t)", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "hub-device-registry-"));
+  const filePath = path.join(directory, "devices.json");
+  const device = (overrides: Record<string, unknown>) => ({
+    deviceId: "world-emanation",
+    deviceName: "World emanation",
+    satelliteId: "hub",
+    satelliteName: "Hub",
+    endpointId: "hub",
+    claimType: "world-avatar",
+    credentialSha256: createHash("sha256").update("unused-world-credential").digest("hex"),
+    enrollmentVersion: 3,
+    enrollmentAssurance: "device_credential",
+    enrollmentStatus: "active",
+    companionId: "11111111-1111-4111-8111-111111111111",
+    placeId: "eidoverse:commons",
+    maxCapabilities: { input: ["text"], output: ["text"], control: ["presence"], safety: ["action_allowlist"] },
+    homeAssistantEntityIds: [],
+    ...overrides,
+  });
+  fs.writeFileSync(filePath, JSON.stringify({ schemaVersion: 1, devices: [device({})] }));
+  const registry = loadHubDeviceRegistry(filePath);
+  assert.ok(registry);
+  const claim = { satelliteId: "hub", endpointId: "hub", claimType: "world-avatar" };
+  assert.deepEqual(findEnrolledEmanation(registry, claim), {
+    deviceId: "world-emanation",
+    enrollmentVersion: 3,
+    enrollmentAssurance: "device_credential",
+    enrollmentStatus: "active",
+    companionId: "11111111-1111-4111-8111-111111111111",
+    placeId: "eidoverse:commons",
+  });
+  assert.equal("credentialSha256" in (findEnrolledEmanation(registry, claim) ?? {}), false);
+  assert.equal(findEnrolledEmanation(registry, { ...claim, claimType: "satellite-endpoint" }), null);
+  assert.equal(findEnrolledEmanation(registry, { ...claim, endpointId: "other" }), null);
+  assert.equal(findEnrolledEmanation({
+    ...registry,
+    devices: registry.devices.map(entry => ({ ...entry, enrollmentStatus: "revoked" as const })),
+  }, claim), null);
+  // A socket hello still needs the credential: the emanation lookup gives it nothing.
+  assert.equal(authenticateHubDevice(registry, undefined), null);
 });
 
 test("file-backed device authority reloads enrollment state and fences stale attachments", () => {

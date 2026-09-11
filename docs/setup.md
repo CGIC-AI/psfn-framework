@@ -191,6 +191,25 @@ The generated `companions.json` names one companion with the
 database URL references; `providers.json` records the provider's API key as an
 env-var reference (`apiKeyRef.kind: env`), never a value.
 
+### Coding-plan endpoints and self-directed turns
+
+A `generic_openai` provider can point at a vendor's *coding plan* endpoint
+(for example z.ai's `https://api.z.ai/api/coding/paas/v4`, the GLM Code Plan
+the shakedown beds use). Those endpoints are tuned for coding assistants and
+enforce a rule the companion runtime does not: **the conversation must end on
+a `user`-role (or `tool`-role) message**. Every self-directed turn (free-time, social
+outreach, world exploration, and any other `internal:*` channel whose trigger is
+the only message of the session) is sent as a system prompt followed by one
+assistant-side `[System note]` message, so the z.ai coding endpoint answers
+`400 {"code":"1214","message":"The messages parameter is illegal"}` and the
+turn fails; with one chat candidate configured nothing absorbs it. Ordinary
+chat turns are unaffected. The same request is accepted by OpenRouter
+(`z-ai/glm-5.2`, `z-ai/glm-5.3`) and by Kimi's coding endpoint, which is what
+production runs. Measured 2026-09-10 (psfn-framework-3pye5). Until that bead
+lands, do not route the `chat` purpose to a coding-plan endpoint on a
+deployment that runs free-time or exploration lanes, or give it a non-coding
+fallback candidate.
+
 Guarantees:
 
 - **Abort-safe**: aborting at any prompt writes zero files; a failure during

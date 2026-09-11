@@ -49,7 +49,12 @@ bounded passes plus the soak criteria already tracked by
 `psfn-framework-qjsj6`. Tracker bead: `qjsj6`. Use **GLM Code Plan + Kimi
 Code together** (`glm-code-plan` / `kimi-code`); never a single chat
 candidate (woowa: one-model Autonomous probes cannot fail over). Do not
-spend OpenRouter on this round.
+spend OpenRouter on this round. Known limit of the GLM Code Plan endpoint:
+self-directed turns (free-time, world exploration) fail there with GLM
+`400/1214` because the request ends on an assistant-side system note; see
+[setup.md](setup.md#coding-plan-endpoints-and-self-directed-turns)
+(psfn-framework-3pye5). Judge those lanes on a bed whose chat purpose has a
+non-coding fallback, or on OpenRouter.
 
 | Pass | Target | Companions | What it proves |
 | --- | --- | --- | --- |

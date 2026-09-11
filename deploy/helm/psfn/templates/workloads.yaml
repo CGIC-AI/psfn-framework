@@ -984,7 +984,14 @@ spec:
               hostIP: {{ . | quote }}
               {{- end }}
               {{- end }}
-            {{- if .Values.satelliteHub.homeAssistant.enabled }}
+            {{- /* The control listener's container port must exist whenever the
+                 Service names `hub-control` as its targetPort, i.e. whenever
+                 the control channel is on: explicit, Home Assistant, or the
+                 Eidoverse world path. Gating it on Home Assistant alone left an
+                 Eidoverse-only hub with a Service port that resolved to nothing
+                 and a gateway `world.avatar_*` that got ECONNREFUSED
+                 (psfn-framework-r70pb follow-up, S13 kube shakedown). */}}
+            {{- if include "psfn.satelliteHubControlEnabled" . }}
             - name: hub-control
               containerPort: {{ .Values.ports.satelliteHubControl }}
             {{- end }}

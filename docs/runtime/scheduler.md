@@ -353,7 +353,9 @@ user/assistant activity).
 `registerWorldExplorationLane` (`src/app/agent/startup/world-exploration-lane.ts`,
 S13 psfn-framework-07mw2) is the companion's own initiative on a world plane. A
 five-minute gate-check task (`world-exploration:invite`) invites an internal turn
-(`internal:reflection:world-exploration`, charged to the `background` lane) that
+(`internal:world-exploration`, charged to the `background` lane; deliberately not
+an `internal:reflection:*` channel, whose task kind restricts the turn to the
+maintenance tool set without `world` or `wiki`) that
 suggests looking around, walking somewhere new, greeting someone with a gesture
 (`act`), or keeping a `world_note`, and accepts `REFLECTION_SILENT_TOKEN` as a full answer. It invites only
 when every gate holds: `scheduler.json` `worldExploration.enabled` (off by default);

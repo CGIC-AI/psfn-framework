@@ -506,7 +506,9 @@ Idle exploration is how the map gets filled in when nobody is talking to the
 companion. The world exploration lane
 ([`docs/runtime/scheduler.md`](runtime/scheduler.md#world-exploration-lane))
 invites an internal turn on its own schedule, only while the companion has a
-live body on a world plane, outside quiet hours, at most every
+live body on a world plane (the Hub answers a perceive and `places.json` knows
+the world it names; the tracker, which world turns never mark, is not asked),
+outside quiet hours, at most every
 `worldExploration.intervalMinutes` and `worldExploration.maxTurnsPerDay` times
 a day, and only at a tier that grants `world.read`. The turn suggests looking,
 walking somewhere new, greeting someone and keeping a `world_note`; silence is a

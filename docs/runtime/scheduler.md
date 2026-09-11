@@ -354,12 +354,15 @@ user/assistant activity).
 S13 psfn-framework-07mw2) is the companion's own initiative on a world plane. A
 five-minute gate-check task (`world-exploration:invite`) invites an internal turn
 (`internal:reflection:world-exploration`, charged to the `background` lane) that
-suggests looking around, walking somewhere new, greeting someone, or keeping a
-`world_note`, and accepts `REFLECTION_SILENT_TOKEN` as a full answer. It invites only
+suggests looking around, walking somewhere new, greeting someone with a gesture
+(`act`), or keeping a `world_note`, and accepts `REFLECTION_SILENT_TOKEN` as a full answer. It invites only
 when every gate holds: `scheduler.json` `worldExploration.enabled` (off by default);
-the tier grants `world.read` (apprentice and up); the situated place carries an
-`eidoverse` binding and the Hub answers `world.avatar_perceive` for that world (a
-live body); not quiet hours (`episodicProcessing` rest window);
+the tier grants `world.read` (apprentice and up); the Hub answers a
+`world.avatar_perceive` with no place named (a live body, wherever it stands) and
+`places.json` knows that world (the place the Hub names, else the entry whose
+`eidoverse` binding carries the world; the tracker is never consulted, since the
+connector is enrolled at its place rather than moved to it and world turns do not
+mark the tracker); not quiet hours (`episodicProcessing` rest window);
 `worldExploration.intervalMinutes` since the last invitation; and under
 `worldExploration.maxTurnsPerDay`. The lane never moves the body itself: the turn
 uses the ordinary `world` tool, so the gateway's world-autonomy limiter, the verb

@@ -53,6 +53,10 @@ describe('world exploration lane (07mw2)', () => {
     expect(avatarPerceive).toHaveBeenCalledWith({});
     const [message] = handleMessage.mock.calls[0] as unknown as [{ channelId: string; content: string; authorId: string }];
     expect(message.channelId).toBe(WORLD_EXPLORATION_CHANNEL_ID);
+    // A reflection-kind channel would confine the turn to the maintenance tool
+    // set (no world, no wiki); the invitation must land where those tools exist.
+    expect(message.channelId.startsWith('internal:reflection:')).toBe(false);
+    expect(message.channelId.startsWith('internal:')).toBe(true);
     expect(message.authorId).toBe('scheduler');
     expect(message.content).toContain('You have a body in the world "commons" right now, standing at Commons');
     expect(message.content).toContain('1 other');

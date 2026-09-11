@@ -40,7 +40,15 @@ const log = createComponentLogger('WorldExplorationLane');
 
 export const WORLD_EXPLORATION_TASK_ID = 'world-exploration:invite';
 const WORLD_EXPLORATION_TASK_NAME = 'world-exploration';
-export const WORLD_EXPLORATION_CHANNEL_ID = 'internal:reflection:world-exploration';
+/**
+ * NOT an `internal:reflection:*` channel: that prefix resolves the task kind
+ * `reflection`, and reflection turns get the maintenance-restricted tool set
+ * (contact/identity/memory/session/self_status/system), which has no `world`
+ * or `wiki` tool. An exploration turn is self-directed cognition that must be
+ * able to perceive, move and act, like the social-outreach and free-time
+ * lanes, so it carries a plain `internal:` channel of its own.
+ */
+export const WORLD_EXPLORATION_CHANNEL_ID = 'internal:world-exploration';
 const MINUTE_MS = 60_000;
 /** The scheduler tick that checks the gates; the real cadence is the interval. */
 const CHECK_INTERVAL_MS = 5 * MINUTE_MS;

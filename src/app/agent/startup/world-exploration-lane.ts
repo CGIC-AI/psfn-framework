@@ -60,7 +60,9 @@ type WorldExplorationSkipReason =
   | 'no_body'
   | 'quiet_hours'
   | 'interval'
-  | 'daily_cap';
+  | 'daily_cap'
+  /** The invitation was issued but the turn itself failed (provider, runtime); logged, never rethrown. */
+  | 'turn_failed';
 
 export interface WorldExplorationLaneDeps {
   scheduler: Pick<Scheduler, 'register'>;
@@ -150,16 +152,24 @@ export function registerWorldExplorationLane(deps: WorldExplorationLaneDeps): Wo
       people,
       things,
     });
-    const invite = async (): Promise<'invited' | 'silent'> => {
-      const response = await deps.agentLoop.handleMessage({
-        id: `reflection-world-exploration-${nowMs}`,
-        channelId: WORLD_EXPLORATION_CHANNEL_ID,
-        channelType: 'terminal',
-        authorId: 'scheduler',
-        authorName: WORLD_EXPLORATION_TASK_NAME,
-        content: prompt,
-        timestamp: new Date(nowMs),
-      });
+    const invite = async (): Promise<'invited' | 'silent' | 'turn_failed'> => {
+      let response: { content: string };
+      try {
+        response = await deps.agentLoop.handleMessage({
+          id: `world-exploration-${nowMs}`,
+          channelId: WORLD_EXPLORATION_CHANNEL_ID,
+          channelType: 'terminal',
+          authorId: 'scheduler',
+          authorName: WORLD_EXPLORATION_TASK_NAME,
+          content: prompt,
+          timestamp: new Date(nowMs),
+        });
+      } catch (error) {
+        // The interval and the daily cap were already spent on this attempt:
+        // a failing provider must not turn the lane into a retry loop.
+        log.warn('World exploration turn failed', { error: String(error) });
+        return 'turn_failed';
+      }
       const trimmed = response.content.trim();
       const silent = !trimmed || trimmed.toLowerCase() === REFLECTION_SILENT_TOKEN.toLowerCase();
       return silent ? 'silent' : 'invited';

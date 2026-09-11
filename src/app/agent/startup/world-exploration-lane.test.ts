@@ -109,6 +109,15 @@ describe('world exploration lane (07mw2)', () => {
     await expect(registerWorldExplorationLane(unwired.deps).runOnce()).resolves.toBe('no_body');
   });
 
+  it('reports a failed turn without throwing and without retrying inside the interval', async () => {
+    const failing = makeDeps({
+      agentLoop: { handleMessage: vi.fn(async () => { throw new Error('400: messages parameter is illegal'); }) as never },
+    });
+    const lane = registerWorldExplorationLane(failing.deps);
+    await expect(lane.runOnce()).resolves.toBe('turn_failed');
+    await expect(lane.runOnce()).resolves.toBe('interval');
+  });
+
   it('honours quiet hours, the interval, the daily cap, and treats the silent token as a quiet answer', async () => {
     const quiet = makeDeps({
       quietHours: { enabled: true, startLocalTime: '00:00', endLocalTime: '23:59', timeZone: 'UTC' },

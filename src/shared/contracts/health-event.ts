@@ -170,6 +170,7 @@ const HEALTH_EVENT_CODES = [
    * episode rather than one incident per crashed run.
    */
   'terminal_handoff_replay_diverged', // psfn-framework-zu8d2
+  /**
    * A durable store the runtime writes its own observability into refused a
    * write (bead psfn-framework-2xt9c). Grouped by a digest of the RELATION, so
    * a store that is unwritable is one condition rather than one event per lost

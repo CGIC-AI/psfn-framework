@@ -13,7 +13,8 @@ export type ClientToHubMessage =
   | DeviceLocationMessage
   | ApprovalDecisionMessage
   | ArtifactPreviewRequestMessage
-  | WorldTravelRequestMessage;
+  | WorldTravelRequestMessage
+  | WorldBodyActionMessage;
 
 export type HubToClientMessage =
   | SessionReadyMessage
@@ -38,7 +39,8 @@ export type HubToClientMessage =
   | ToolActivityMessage
   | EmotionSnapshotMessage
   | DeviceLocationStatusMessage
-  | WorldTravelResultMessage;
+  | WorldTravelResultMessage
+  | WorldBodyActionResultMessage;
 
 export interface HelloMessage {
   type: "hello";
@@ -68,6 +70,19 @@ export interface AudioMessage {
 export interface WorldTravelRequestMessage {
   type: "world.travel";
   world: string;
+}
+
+/**
+ * Ask the Hub's world-avatar emanation to move its body inside the world it is
+ * already in. The Hub owns the allowlist (`walk_to`, `face`, `stop`); a name
+ * outside it is refused here rather than forwarded, so world-editing verbs stay
+ * unreachable through this surface. Submission is fire-and-forget: a walk can
+ * take a minute and reports its content-free outcome on a later turn.
+ */
+export interface WorldBodyActionMessage {
+  type: "world.body";
+  action: string;
+  arguments?: unknown;
 }
 
 export interface UserTextMessage {
@@ -245,6 +260,28 @@ export type WorldTravelResultMessage =
     accepted: false;
     world: string;
     reason: WorldTravelRejectionReason;
+  };
+
+/** Why a `world.body` request was not submitted. */
+export type WorldBodyRejectionReason =
+  | "not_configured"
+  | "capability_denied"
+  | "not_allowlisted";
+
+/** The single answer to one `world.body` request. Acceptance is submission,
+ *  never completion — the outcome reaches the companion as a later turn's
+ *  context note. */
+export type WorldBodyActionResultMessage =
+  | {
+    type: "world.body.result";
+    accepted: true;
+    action: string;
+  }
+  | {
+    type: "world.body.result";
+    accepted: false;
+    action: string;
+    reason: WorldBodyRejectionReason;
   };
 
 export interface RelaySttResultMessage {
@@ -431,7 +468,13 @@ export type SatelliteControlCapability =
    * per device in the server-owned registry: a satellite that merely asks for
    * it in its hello does not receive it.
    */
-  | "world_travel";
+  | "world_travel"
+  /**
+   * Authority to move the world avatar's body inside its current world. Granted
+   * per device in the server-owned registry, separately from `world_travel`:
+   * walking across a room and moving to another world are different powers.
+   */
+  | "world_body";
 
 export type SatelliteSafetyCapability =
   | "action_allowlist"

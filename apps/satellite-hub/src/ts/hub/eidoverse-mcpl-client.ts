@@ -186,6 +186,23 @@ export class EidoverseMcplClient {
   }
 
   /**
+   * Allowlisted locomotion, the same narrow surface the stdio transport
+   * exposes. A walk blocks door-side until it arrives or gives up, so it takes
+   * its own timeout rather than the ordinary request budget.
+   */
+  async walkTo(x: number, z: number, run: boolean, timeoutMs: number): Promise<string> {
+    return this.callTool("walk_to", { x, z, run }, timeoutMs);
+  }
+
+  async face(target: string): Promise<string> {
+    return this.callTool("face", { target });
+  }
+
+  async stop(): Promise<string> {
+    return this.callTool("stop", {});
+  }
+
+  /**
    * Ask the door to move this body to another world. The tool's synchronous
    * return is the arrival signal: the door answers `Arrived in "<world>"` (or
    * `Already in`) on success and an error result on refusal, so there is no
@@ -453,7 +470,11 @@ export class EidoverseMcplClient {
     }
   }
 
-  private async callTool(name: string, args: Record<string, unknown>): Promise<string> {
+  private async callTool(
+    name: string,
+    args: Record<string, unknown>,
+    timeoutMs?: number,
+  ): Promise<string> {
     const session = this.session;
     if (!session || session.closed) {
       throw new EidoverseMcpUnavailableError("Eidoverse MCPL is not connected");
@@ -463,7 +484,7 @@ export class EidoverseMcplClient {
         session,
         MCPL_METHOD.toolsCall,
         { name, arguments: args },
-        this.config.requestTimeoutMs,
+        timeoutMs ?? this.config.requestTimeoutMs,
       );
       const text = extractSingleToolText(result);
       if (this.containsSensitiveValue(text)) throw new Error("sensitive result");

@@ -10,7 +10,7 @@ const OUTPUT_CAPABILITIES = [
   "text", "subtitle", "streamed_audio", "local_file_audio", "animation", "action",
   "expression", "gaze", "servo", "artifact", "tool_activity", "emotion",
 ] as const;
-const CONTROL_CAPABILITIES = ["interrupt", "mute", "sleep_wake", "presence", "session_attach", "touch", "approvals", "world_travel"] as const;
+const CONTROL_CAPABILITIES = ["interrupt", "mute", "sleep_wake", "presence", "session_attach", "touch", "approvals", "world_travel", "world_body"] as const;
 const SAFETY_CAPABILITIES = ["action_allowlist", "confirmation_required", "local_only"] as const;
 
 export interface HubDeviceIdentity {

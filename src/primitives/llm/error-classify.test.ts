@@ -23,6 +23,44 @@ describe('classifyLLMError', () => {
     expect(result.statusCode).toBe(413);
   });
 
+  it('classifies the coding-plan message-role 400 as a retryable endpoint contract failure', () => {
+    const error = Object.assign(
+      new Error('400 {"error":{"code":"1214","message":"The messages parameter is illegal"}}'),
+      { status: 400 },
+    );
+
+    const result = classifyLLMError(error);
+    expect(result.category).toBe('endpoint_message_role');
+    expect(result.retryable).toBe(true);
+    expect(result.statusCode).toBe(400);
+  });
+
+  it('classifies the coding-plan message-role rejection by body code alone', () => {
+    const error = Object.assign(new Error('400 Bad Request: {"code": "1214"}'), { status: 400 });
+
+    const result = classifyLLMError(error);
+    expect(result.category).toBe('endpoint_message_role');
+    expect(result.retryable).toBe(true);
+  });
+
+  it('still classifies a genuine context-overflow 400 as non-retryable', () => {
+    const error = Object.assign(new Error('input is too long: maximum context length exceeded'), {
+      status: 400,
+    });
+
+    const result = classifyLLMError(error);
+    expect(result.category).toBe('context_overflow');
+    expect(result.retryable).toBe(false);
+  });
+
+  it('does not match the message-role rule without the vendor signature', () => {
+    const error = Object.assign(new Error('400 something else entirely'), { status: 400 });
+
+    const result = classifyLLMError(error);
+    expect(result.category).toBe('context_overflow');
+    expect(result.retryable).toBe(false);
+  });
+
   it('classifies rate limit errors as retryable', () => {
     const error = Object.assign(new Error('429 too many requests'), {
       statusCode: 429,

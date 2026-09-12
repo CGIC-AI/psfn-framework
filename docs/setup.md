@@ -205,10 +205,13 @@ assistant-side `[System note]` message, so the z.ai coding endpoint answers
 turn fails; with one chat candidate configured nothing absorbs it. Ordinary
 chat turns are unaffected. The same request is accepted by OpenRouter
 (`z-ai/glm-5.2`, `z-ai/glm-5.3`) and by Kimi's coding endpoint, which is what
-production runs. Measured 2026-09-10 (psfn-framework-3pye5). Until that bead
-lands, do not route the `chat` purpose to a coding-plan endpoint on a
-deployment that runs free-time or exploration lanes, or give it a non-coding
-fallback candidate.
+production runs. Measured 2026-09-10 (psfn-framework-3pye5). The runtime now
+classifies this specific 400/code-1214 rejection as a retryable
+`endpoint_message_role` failure (psfn-framework-ooy34), so with a fallback
+chat candidate configured the turn moves to the next candidate instead of
+failing on attempt one. Until 3pye5 itself lands, still do not route the
+`chat` purpose to a coding-plan endpoint as the *only* chat candidate on a
+deployment that runs free-time or exploration lanes.
 
 Guarantees:
 

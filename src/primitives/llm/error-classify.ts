@@ -3,6 +3,7 @@ import { isExplicitToolContractError } from './explicit-tool-request.js';
 
 export type LLMErrorCategory =
   | 'abort'
+  | 'endpoint_message_role'
   | 'context_overflow'
   | 'payment_required'
   | 'rate_limit'
@@ -33,6 +34,22 @@ const ABORT_PATTERNS = [
   'abort',
   'cancelled',
   'canceled',
+] as const;
+
+// Coding-plan endpoints (z.ai GLM Code Plan and siblings) reject
+// conversations that do not end on a user- or tool-role message with
+// 400 {"code":"1214","message":"The messages parameter is illegal"}
+// (psfn-framework-3pye5, docs/setup.md "Coding-plan endpoints and
+// self-directed turns"). That is an endpoint-specific request-shape rule,
+// not an oversized prompt: the same request is accepted by other providers,
+// so a fallback candidate must get it (psfn-framework-ooy34). Matched on the
+// verbatim vendor message and on the body's code forms before the bare-400
+// context-overflow branch can swallow it.
+const CODING_PLAN_MESSAGE_ROLE_PATTERNS = [
+  'the messages parameter is illegal',
+  '"code":"1214"',
+  '"code": "1214"',
+  'code=1214',
 ] as const;
 
 const CONTEXT_OVERFLOW_PATTERNS = [
@@ -155,7 +172,15 @@ export function classifyLLMError(error: unknown): LLMErrorClassification {
     return { category: 'abort', retryable: false, ...(statusCode !== undefined ? { statusCode } : {}) };
   }
 
+  // Must run before the bare-400 context-overflow branch: a coding-plan
+  // message-role rejection is a 400 whose text names the vendor rule, and it
+  // is only recoverable by moving to a different candidate (ooy34).
+  if (statusCode === 400 && includesAny(text, CODING_PLAN_MESSAGE_ROLE_PATTERNS)) {
+    return { category: 'endpoint_message_role', retryable: true, statusCode };
+  }
+
   const contextStatus = statusCode === 400 || statusCode === 413 || statusCode === 422;
+
   if (contextStatus || includesAny(text, CONTEXT_OVERFLOW_PATTERNS)) {
     return { category: 'context_overflow', retryable: false, ...(statusCode !== undefined ? { statusCode } : {}) };
   }

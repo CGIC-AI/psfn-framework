@@ -48,6 +48,7 @@ import type {
   HealthEventSeverity,
 } from '../contracts/health-event.js';
 import { isRecord } from '../utils/types.js';
+import { requireUuid } from '../utils/uuid.js';
 
 /** Envelope revision persisted with every ledger row. */
 export const HUMAN_ESCALATION_SCHEMA_VERSION = 1;
@@ -227,12 +228,8 @@ function requireBounded(value: unknown, field: string, max: number, pattern: Reg
   return value;
 }
 
-function requireUuid(value: unknown, field: string): string {
-  if (typeof value !== 'string' || !UUID_PATTERN.test(value)) {
-    throw new Error(`Human escalation ${field} must be a UUID`);
-  }
-  return value;
-}
+const requireEscalationUuid = (value: unknown, field: string): string =>
+  requireUuid(value, `Human escalation ${field}`);
 
 function requireEpochMs(value: unknown, field: string): number {
   if (!Number.isSafeInteger(value) || (value as number) < 0) {
@@ -477,7 +474,7 @@ export function validateHumanEscalationRecord(value: unknown): HumanEscalationRe
     }
     requireEpochMs(resolution.resolvedAtMs, 'resolution.resolvedAtMs');
   }
-  requireUuid(value.escalationId, 'escalationId');
+  requireEscalationUuid(value.escalationId, 'escalationId');
   requireLabels(value.labels);
   requireEvidence(value.evidence);
   requireOwner(value.owner);

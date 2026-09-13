@@ -3,6 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fromAny } from '@total-typescript/shoehorn';
+import { EventBus } from '../../../shared/event-bus.js';
+import { Scheduler } from '../../../core/scheduler/scheduler.js';
+import { wirePostTurnActionRuntime } from '../../startup/composition/post-turn-actions.js';
 import type { EmoSimProactivityImpulse } from '../../../core/emotion/emosim-proactivity-port.js';
 import type {
   SocialImpulseOutreachRecord,
@@ -28,6 +31,9 @@ describe('social impulse outreach startup lane', () => {
     const handleMessage = vi.fn(async () => fromAny({ content: 'A private hello.' }));
     const companionDataDir = mkdtempSync(join(tmpdir(), 'psfn-social-outreach-'));
     temporaryDirectories.push(companionDataDir);
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 });
+    const postTurnActions = wirePostTurnActionRuntime({ eventBus, scheduler, agentLoop: {} });
     const lane = registerSocialImpulseOutreachLane({
       companionId: COMPANION_ID,
       companionName: 'Test Companion',
@@ -35,6 +41,7 @@ describe('social impulse outreach startup lane', () => {
       store: memoryStore(records),
       getMode: () => 'on',
       agentLoop: { handleMessage },
+      postTurnActions,
       contactStore: fromAny({
         getByDiscordUserId: async () => {
           contactReads += 1;
@@ -60,6 +67,7 @@ describe('social impulse outreach startup lane', () => {
 
     const impulse = qualifiedImpulse();
     await lane.runtime.onImpulse(impulse);
+    await scheduler.getTask('post-turn-action-executor')!.handler();
     await expect(lane.runtime.inspect(impulse.correlationId)).resolves.toMatchObject({
       destinations: [expect.objectContaining({ destinationId: 'human:contact-human:discord:human-dm' })],
     });
@@ -70,9 +78,10 @@ describe('social impulse outreach startup lane', () => {
       destinationId: 'human:contact-human:discord:human-dm',
       intent: 'Send a gentle hello.',
     })).resolves.toMatchObject({
-      outcome: 'suppressed',
-      reasonCode: 'human_destination_unavailable',
+      outcome: 'queued',
     });
+    await scheduler.getTask('post-turn-action-executor')!.handler();
+    expect((await lane.runtime.inspect(impulse.correlationId)).record.state).toBe('suppressed');
     expect(handleMessage).toHaveBeenCalledOnce();
     expect(dispatch).not.toHaveBeenCalled();
   });
@@ -113,6 +122,16 @@ function memoryStore(
   records: Map<string, SocialImpulseOutreachRecord>,
 ): SocialImpulseOutreachStorePort {
   return {
+    async listRecoverable(companionId) {
+      return [...records.values()].filter(record => record.companionId === companionId
+        && (record.state === 'pending' || record.state === 'queued')).map(record => structuredClone(record));
+    },
+    async beginExecution(opportunityId, bindingHash, atMs) {
+      const record = records.get(opportunityId);
+      if (!record || record.state !== 'queued' || record.bindingHash !== bindingHash) return false;
+      records.set(opportunityId, { ...record, state: 'chosen', updatedAtMs: atMs });
+      return true;
+    },
     async createOpportunity(record) {
       const prior = records.get(record.opportunityId);
       if (prior) return { created: false, record: structuredClone(prior) };
@@ -128,10 +147,12 @@ function memoryStore(
       if (!record) return { outcome: 'unavailable' };
       const claimed = {
         ...record,
-        state: 'chosen' as const,
+        state: input.executionIntent ? 'queued' as const : 'chosen' as const,
         disposition: input.disposition,
         destination: input.destination,
         bindingHash: input.bindingHash,
+        executionIntent: input.executionIntent ?? null,
+        originIcpRootInitiationId: record.originIcpRootInitiationId ?? input.originIcpRootInitiationId ?? null,
         updatedAtMs: input.claimedAtMs,
       };
       records.set(input.opportunityId, claimed);
@@ -143,6 +164,7 @@ function memoryStore(
       const finalized = {
         ...record,
         state: input.state,
+        executionIntent: null,
         reasonCode: input.reasonCode ?? null,
         updatedAtMs: input.finalizedAtMs,
       };

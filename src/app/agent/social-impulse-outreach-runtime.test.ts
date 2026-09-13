@@ -1,3 +1,7 @@
+import { EventBus } from '../../shared/event-bus.js';
+import { Scheduler } from '../../core/scheduler/scheduler.js';
+import { wirePostTurnActionRuntime } from '../startup/composition/post-turn-actions.js';
+import { TurnRunReservation } from '../../core/agent/substrate-agent/turn-run-reservation.js';
 import { describe, expect, it, vi } from 'vitest';
 import { fromAny } from '@total-typescript/shoehorn';
 import type { EmoSimProactivityImpulse } from '../../core/emotion/emosim-proactivity-port.js';
@@ -51,6 +55,16 @@ function impulse(): EmoSimProactivityImpulse {
 function memoryStore(): SocialImpulseOutreachStorePort {
   const records = new Map<string, SocialImpulseOutreachRecord>();
   return {
+    async listRecoverable(companionId) {
+      return [...records.values()].filter(record => record.companionId === companionId
+        && (record.state === 'pending' || record.state === 'queued')).map(record => structuredClone(record));
+    },
+    async beginExecution(opportunityId, bindingHash, atMs) {
+      const record = records.get(opportunityId);
+      if (!record || record.state !== 'queued' || record.bindingHash !== bindingHash) return false;
+      records.set(opportunityId, { ...record, state: 'chosen', updatedAtMs: atMs });
+      return true;
+    },
     async createOpportunity(record) {
       const prior = records.get(record.opportunityId);
       if (prior) return { created: false, record: structuredClone(prior) };
@@ -71,10 +85,12 @@ function memoryStore(): SocialImpulseOutreachStorePort {
       }
       const claimed: SocialImpulseOutreachRecord = {
         ...record,
-        state: 'chosen',
+        state: input.executionIntent ? 'queued' : 'chosen',
         disposition: input.disposition,
         destination: input.destination ? structuredClone(input.destination) : null,
         bindingHash: input.bindingHash,
+        executionIntent: input.executionIntent ?? null,
+        originIcpRootInitiationId: record.originIcpRootInitiationId ?? input.originIcpRootInitiationId ?? null,
         updatedAtMs: input.claimedAtMs,
       };
       records.set(input.opportunityId, claimed);
@@ -86,6 +102,7 @@ function memoryStore(): SocialImpulseOutreachStorePort {
       const finalized: SocialImpulseOutreachRecord = {
         ...record,
         state: input.state,
+        executionIntent: null,
         reasonCode: input.reasonCode ?? null,
         updatedAtMs: input.finalizedAtMs,
       };
@@ -117,12 +134,22 @@ function harness(
     reservationPhase: { reserve, settleAfterAppraisal },
     egressLeasePhase: { grantReply },
   });
-  const runtime = createProductionSocialImpulseOutreachRuntime({
+  const reservation = new TurnRunReservation();
+  const eventBus = new EventBus();
+  const scheduler = new Scheduler(eventBus, { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 });
+  const postTurnActions = wirePostTurnActionRuntime({
+    eventBus, scheduler, agentLoop: { waitForIdle: () => reservation.waitForIdle() },
+  });
+  const drain = async () => { await scheduler.getTask('post-turn-action-executor')!.handler(); };
+  const rawRuntime = createProductionSocialImpulseOutreachRuntime({
     companionId: COMPANION_ID,
     companionName: 'Test Companion',
     store: memoryStore(),
     getMode: () => 'on',
-    agentLoop: { handleMessage },
+    agentLoop: { handleMessage: message => reservation.runShared(
+      { kind: 'ordinary-turn', sourceId: message.id }, () => handleMessage(message),
+    ) },
+    postTurnActions,
     contactStore: fromAny({
       getByDiscordUserId: async () => ({
         id: 'contact-human',
@@ -175,8 +202,27 @@ function harness(
     }),
     now: () => NOW_MS + 100,
   });
+  const runtime = {
+    ...rawRuntime,
+    async onImpulse(input: EmoSimProactivityImpulse) {
+      const result = await rawRuntime.onImpulse(input);
+      await drain();
+      return result;
+    },
+    async choose(input: Parameters<typeof rawRuntime.choose>[0]) {
+      const result = await rawRuntime.choose(input);
+      await drain();
+      if (result.outcome !== 'queued') return result;
+      const { record } = await rawRuntime.inspect(input.opportunityId);
+      return { outcome: record.state, record, reasonCode: record.reasonCode };
+    },
+  };
   return {
     runtime,
+    rawRuntime,
+    reservation,
+    postTurnActions,
+    drain,
     handleMessage,
     executeDyadContinuation,
     submit,
@@ -343,6 +389,41 @@ function roomEpisode() {
 }
 
 describe('production social impulse outreach routing', () => {
+  it('releases source and disposition turn ownership before authored proactive delivery', async () => {
+    const assembled = harness();
+    const { rawRuntime, reservation, handleMessage, dispatch, drain, postTurnActions } = assembled;
+    handleMessage.mockImplementation(async message => {
+      if (message.id.startsWith('social-disposition-')) {
+        const choice = await rawRuntime.choose({
+          opportunityId: impulse().correlationId,
+          disposition: 'contact-human',
+          destinationId: 'human:contact-human:discord:human-dm',
+          intent: 'Ask how the day is going.',
+        });
+        expect(choice.outcome).toBe('queued');
+        expect(dispatch).not.toHaveBeenCalled();
+        return fromAny({ content: '' });
+      }
+      return fromAny({ content: 'How is your day going?' });
+    });
+    await reservation.runShared({ kind: 'ordinary-turn', sourceId: 'source-turn' }, async () => {
+      await rawRuntime.onImpulse(impulse());
+      expect(handleMessage).not.toHaveBeenCalled();
+      expect(postTurnActions.listQueued()).toHaveLength(1);
+    });
+    await drain();
+    expect(handleMessage).toHaveBeenCalledTimes(2);
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ content: 'How is your day going?' }));
+    expect((await rawRuntime.inspect(impulse().correlationId)).record).toMatchObject({
+      state: 'delivered', executionIntent: null,
+    });
+    await rawRuntime.onImpulse({ ...impulse(), firedAtMs: NOW_MS + 1_000 });
+    await rawRuntime.recoverPending();
+    await drain();
+    expect(dispatch).toHaveBeenCalledOnce();
+  });
+
   it('lists only bounded authorization metadata and scopes dyad ids to open companion DMs', async () => {
     const { runtime } = harness();
     await runtime.onImpulse(impulse());

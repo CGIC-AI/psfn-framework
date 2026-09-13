@@ -1,3 +1,5 @@
+import { withCompanionSystemMonitorEvidence } from './services/companion-system-monitor.js';
+import type { SocialOutreachHealthSummary } from '../../shared/contracts/companion-system-monitor.js';
 import type { SatelliteDeviceHealthReader } from '../../shared/telemetry/satellite-device-health.js';
 import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import { join } from 'node:path';
@@ -259,6 +261,8 @@ export function buildEpisodicWatermarkLaneDefinitions(config: {
 }
 
 export interface InProcessGardenAdminContractOptions {
+  readProactiveHealth?: () => Promise<SocialOutreachHealthSummary>;
+  additionalSchedulerTasks?: () => ReturnType<Scheduler['listTasks']>;
   env?: NodeJS.ProcessEnv;
   apiBaseUrl?: string;
   apiHost?: string;
@@ -510,7 +514,9 @@ export function createInProcessGardenAdminContract(
   );
   const subsystemHealth = new AdminSubsystemHealthDataService({
     eventBus: options.eventBus,
-    scheduler: schedulerService,
+    scheduler: { getFullData: () => ({ tasks: [
+      ...schedulerService.getFullData().tasks, ...(options.additionalSchedulerTasks?.() ?? []),
+    ] }) },
     postTurnActionQueueProvider: options.postTurnActions ?? null,
     ...(options.operatorAlerting ? { operatorAlerting: options.operatorAlerting } : {}),
     watermarkProvider: options.episodicStore ?? null,
@@ -1067,7 +1073,16 @@ export function createInProcessGardenAdminContract(
       companionValuesLayerProvider: () => valuesJournal.buildCompanionDerivedLayer(),
     }),
     scheduler: schedulerService,
-    subsystemHealth,
+    subsystemHealth: options.config.companionId ? withCompanionSystemMonitorEvidence(subsystemHealth, {
+      configuration: () => {
+        const scheduler = configStore.loadScheduler();
+        return { companionId: options.config.companionId!, freeTimeEnabled: scheduler.freeTime.enabled,
+          socialDesireEnabled: scheduler.socialDesire.enabled,
+          weightedThoughtOutreachEnabled: scheduler.weightedThoughtOutreach.enabled,
+          emosimProactivityMode: options.config.emosimProactivity?.mode ?? 'off' };
+      },
+      ...(options.readProactiveHealth ? { readProactive: options.readProactiveHealth } : {}),
+    }) : subsystemHealth,
     incidents,
     humanEscalations,
     partnerAffectShadow,

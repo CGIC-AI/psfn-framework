@@ -4,6 +4,14 @@ import { buildAdminApiRoutes } from './api-routes.js';
 import { ADMIN_TELEMETRY_ROUTE_CAPABILITY } from './server-telemetry-transport.js';
 
 describe('constructed Garden route authorization', () => {
+  it.each([
+    ['subsystem-health', 'diagnostics.read'], ['incidents', 'diagnostics.read'], ['model-usage', 'models.read'],
+  ])('keeps monitor %s reads behind existing companion authority', (path, action) => {
+    const route = GARDEN_ROUTE_CAPABILITIES.find(route => route.id === `GET /api/admin/${path}`);
+    expect(route?.authorization).toMatchObject({ action, baseRole: 'admin', subjectRelation: 'current_companion',
+      publicAccess: 'never', recoveryAccess: 'forbidden', requirements: { assurance: 'oauth' } });
+  });
+
   it('compiles every active API declaration, including contact routes, from the canonical catalogue', () => {
     const service = {} as never;
     const routes = buildAdminApiRoutes({

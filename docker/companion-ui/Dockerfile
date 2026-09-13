@@ -36,6 +36,7 @@ COPY src/core/agent/tool-surface/descriptions/agency-contracts.ts \
      /build/src/core/agent/tool-surface/descriptions/
 COPY src/shared/contracts/approval-envelope.ts \
      src/shared/contracts/companion-relay.ts \
+     src/shared/contracts/companion-system-monitor.ts \
      src/shared/contracts/companion-ui-audio.ts \
      src/shared/contracts/emotion-contracts.ts \
      src/shared/contracts/filesystem.ts \

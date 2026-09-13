@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { CompanionViewLayout } from './companion-view-layout.js';
 
 function TestSurface() {
-  const [activeView, setActiveView] = useState<'thread' | 'avatar'>('thread');
+  const [activeView, setActiveView] = useState<'thread' | 'avatar' | 'system'>('thread');
   return (
     <CompanionViewLayout
       activeView={activeView}
@@ -16,6 +16,7 @@ function TestSurface() {
         </div>
       )}
       avatar={<p>Avatar surface</p>}
+      system={<p>System monitor surface</p>}
     />
   );
 }
@@ -30,6 +31,8 @@ describe('companion view layout', () => {
     expect((getByText('Avatar surface').closest('[data-companion-view]') as HTMLElement).hidden).toBe(false);
     expect((getByText('live assistant draft').closest('[data-companion-view]') as HTMLElement).hidden).toBe(true);
 
+    fireEvent.click(getByRole('button', { name: 'System' }));
+    expect((getByText('System monitor surface').closest('[data-companion-view]') as HTMLElement).hidden).toBe(false);
     fireEvent.click(getByRole('button', { name: 'Thread' }));
     expect(getByLabelText('Thread draft')).toBe(draft);
     expect(draft.value).toBe('still composing');

@@ -1,4 +1,7 @@
 import { EventBus } from '../../shared/event-bus.js';
+import type { LLMContext } from '../../shared/contracts/runtime.js';
+import { createNotifyTool } from '../../core/tools/ntfy.js';
+import { assertExplicitToolResponseSatisfied, resolveExplicitToolContract } from '../../primitives/llm/explicit-tool-request.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
 import { wirePostTurnActionRuntime } from '../startup/composition/post-turn-actions.js';
 import { TurnRunReservation } from '../../core/agent/substrate-agent/turn-run-reservation.js';
@@ -389,6 +392,64 @@ function roomEpisode() {
 }
 
 describe('production social impulse outreach routing', () => {
+  it.each(['ignore', 'defer'] as const)(
+    'allows listing and then recording %s through the real explicit tool contract',
+    async disposition => {
+      const assembled = harness();
+      const tool = createNotifyTool({ dispatch: assembled.dispatch }, {
+        socialImpulseOutreach: assembled.rawRuntime,
+      });
+      assembled.handleMessage.mockImplementation(async message => {
+        const context: LLMContext = {
+          systemPrompt: 'Choose freely; recording a disposition does not require a message.',
+          messages: [{ role: 'user', content: message.content }],
+          tools: [{ name: tool.name, description: tool.description, inputSchema: tool.parameters }],
+        };
+        const contract = () => resolveExplicitToolContract({
+          context, originStage: 'agent.turn.prompt', modelApi: 'openai-completions',
+        });
+        expect(contract()?.requiredToolName).toBe('notify');
+        const listed = await tool.execute('list-call', {
+          action: 'outreach_list', opportunity_id: impulse().correlationId,
+        });
+        expect(listed.isError).not.toBe(true);
+        context.messages.push(fromAny({
+          role: 'toolResult', toolCallId: 'list-call', toolName: 'notify',
+          content: listed.content, outcome: 'success', isError: false,
+        }));
+
+        // A successful list must leave the companion able to record their choice.
+        // The old prompt parsed as one call and returned tool_choice=none here.
+        expect(contract()?.requiredToolName).toBe('notify');
+        const choice = {
+          action: 'outreach_choose', opportunity_id: impulse().correlationId, disposition,
+        };
+        assertExplicitToolResponseSatisfied({
+          contract: contract(), corruptToolNames: [], tools: context.tools,
+          toolCalls: [{ id: 'choose-call', name: 'notify', input: choice }],
+        });
+        const chosen = await tool.execute('choose-call', choice);
+        expect(chosen.isError).not.toBe(true);
+        context.messages.push(fromAny({
+          role: 'toolResult', toolCallId: 'choose-call', toolName: 'notify',
+          content: chosen.content, outcome: 'success', isError: false,
+        }));
+        expect(contract()?.choice).toBe('none');
+        return fromAny({ content: 'Decision recorded.' });
+      });
+
+      await assembled.rawRuntime.onImpulse(impulse());
+      await assembled.rawRuntime.recoverPending();
+      await assembled.drain();
+      expect((await assembled.rawRuntime.inspect(impulse().correlationId)).record)
+        .toMatchObject({ state: disposition, disposition, executionIntent: null });
+      expect(assembled.handleMessage).toHaveBeenCalledTimes(1);
+      expect(assembled.dispatch).not.toHaveBeenCalled();
+      expect(assembled.submit).not.toHaveBeenCalled();
+      expect(assembled.executeDyadContinuation).not.toHaveBeenCalled();
+    },
+  );
+
   it('releases source and disposition turn ownership before authored proactive delivery', async () => {
     const assembled = harness();
     const { rawRuntime, reservation, handleMessage, dispatch, drain, postTurnActions } = assembled;

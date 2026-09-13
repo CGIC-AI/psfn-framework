@@ -35,6 +35,10 @@ import { markErrorAsNonRetryable } from './retry.js';
 import { logEmptyToolArgumentProvenance } from './empty-tool-argument-retry.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import {
+  extractProviderResponseMetadata,
+  mergeProviderResponseMetadata,
+} from '../../shared/telemetry/provider-response-metadata.js';
+import {
   ExplicitToolContractError,
   selectExplicitToolContractCall,
 } from './explicit-tool-request.js';
@@ -114,6 +118,8 @@ function hasSubstantiveToolCallIdentity(
 export async function runLLMStreamAttempt(
   input: RunLLMStreamAttemptInput,
 ): Promise<LLMResponse> {
+  // The candidate's wire observability is reused for retries; response evidence is not.
+  delete input.providerObservability.providerResponse;
   const attemptStartedAtMs = Date.now();
   await input.reserveCost();
   let attemptFirstTokenAtMs: number | undefined;
@@ -167,6 +173,13 @@ export async function runLLMStreamAttempt(
 
   try {
     for await (const event of eventStream) {
+      const message = 'message' in event ? event.message
+        : 'partial' in event ? event.partial
+          : 'error' in event ? event.error : undefined;
+      input.providerObservability.providerResponse = mergeProviderResponseMetadata(
+        input.providerObservability.providerResponse,
+        extractProviderResponseMetadata({ id: message?.responseId }),
+      );
       switch (event.type) {
         case 'text_delta':
           if (event.delta.length > 0) markFirstOutput('text');

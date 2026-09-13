@@ -7,8 +7,13 @@ import {
   type ReconciledProviderCostEvidence,
 } from '../../shared/telemetry/provider-cost-evidence.js';
 import { isRecord } from '../../shared/utils/types.js';
+import {
+  extractProviderResponseMetadata,
+  mergeProviderResponseMetadata,
+  type CapturedProviderEvidence,
+} from '../../shared/telemetry/provider-response-metadata.js';
 
-export type GatewayCapturedLLMCost = ReconciledProviderCostEvidence;
+export type GatewayCapturedLLMCost = CapturedProviderEvidence;
 
 interface GatewayLLMCostCaptureContext {
   captures: GatewayCapturedLLMCost[];
@@ -247,6 +252,10 @@ function inspectSseEvent(rawEvent: string, capture: GatewayCapturedLLMCost, even
   } catch {
     return;
   }
+  capture.providerResponse = mergeProviderResponseMetadata(
+    capture.providerResponse,
+    extractProviderResponseMetadata(parsed),
+  );
   recordProviderCostEvidence(
     capture,
     extractGatewayProviderCostEvidence(parsed, `sse[${eventIndex}]`),
@@ -303,6 +312,7 @@ async function inspectJsonBody(response: Response, capture: GatewayCapturedLLMCo
   } catch {
     return;
   }
+  capture.providerResponse = extractProviderResponseMetadata(parsed);
   recordProviderCostEvidence(
     capture,
     extractGatewayProviderCostEvidence(parsed, 'jsonBody'),
@@ -368,6 +378,7 @@ function latestGatewayCapturedProviderCostEvidence(
       Object.keys(capture.providerCostEvidence).length > 0
       || capture.providerCostEvidenceConflict !== undefined
       || capture.providerCostEvidenceSummary !== undefined
+      || capture.providerResponse !== undefined
     ) return capture;
   }
   return undefined;
@@ -422,6 +433,15 @@ export function applyGatewayCapturedProviderCost<T extends LLMResponse>(
   const { cost: _quarantinedCost, raw, ...usageWithoutCost } = usageDetails;
   return {
     ...response,
+    ...(response.providerObservability ? {
+      providerObservability: {
+        ...response.providerObservability,
+        providerResponse: mergeProviderResponseMetadata(
+          response.providerObservability.providerResponse,
+          capturedCost.providerResponse,
+        ),
+      },
+    } : {}),
     usageDetails: {
       ...usageWithoutCost,
       ...(reconciliation.providerCost ? { cost: reconciliation.providerCost } : {}),

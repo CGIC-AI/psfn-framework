@@ -70,6 +70,16 @@ describe('Postgres social outreach recovery', () => {
       expect(await store.getOpportunity(OPPORTUNITY_ID)).toMatchObject({
         state: 'delivered', executionIntent: null,
       });
+      await store.createOpportunity({ ...original!, opportunityId: `felt-impulse:would_message:${CROSSING_MS + 1}`,
+        impulseDedupeKey: `felt-impulse:would_message:${CROSSING_MS + 1}`, firstCrossingMs: CROSSING_MS + 1, firedAtMs: CROSSING_MS + 1,
+        companionId: '22222222-2222-4222-8222-222222222222' });
+      expect(await store.getHealthSummary(COMPANION_ID)).toEqual({
+        total: 1, states: [{ state: 'delivered', count: 1, lastUpdatedAtMs: CROSSING_MS + 300 }],
+        lastFiredAtMs: CROSSING_MS, lastDeliveredAtMs: CROSSING_MS + 300,
+      });
+      expect(await store.getHealthSummary('33333333-3333-4333-8333-333333333333')).toEqual({
+        total: 0, states: [], lastFiredAtMs: null, lastDeliveredAtMs: null,
+      });
     } finally {
       await store.close();
     }

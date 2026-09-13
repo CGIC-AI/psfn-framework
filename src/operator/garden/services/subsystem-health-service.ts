@@ -32,6 +32,7 @@ import {
   type PostgresPoolOwnerTelemetry,
 } from '../../../persistence/postgres.js';
 import type { PostTurnActionQueueStatus } from '../../../core/agent/post-turn-action-runtime.js';
+import type { CompanionSystemMonitorEvidence } from '../../../shared/contracts/companion-system-monitor.js';
 
 /** Outcome of a single lane observation. */
 export type SubsystemLaneOutcome = 'ran' | 'skipped' | 'degraded' | 'failed';
@@ -78,11 +79,13 @@ export interface SubsystemLaneHealth {
   // Durable scheduler/watermark fields (undefined for event-bus lanes):
   intervalMs?: number;
   lastRunAt?: number | null;
+  lastSuccessAt?: number | null;
   nextRunDueAt?: number | null;
   deniedReason?: string | null;
 }
 
 export interface SubsystemHealthSnapshot {
+  monitor?: CompanionSystemMonitorEvidence;
   /** When this process (and therefore the event ring buffers) started. */
   processStartedAt: number;
   generatedAt: number;
@@ -603,7 +606,9 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
       eventBus.on('scheduler.free_time.block', (payload) => {
         this.record('free_time', {
           at: trimNumber(payload.timestamp) ?? this.now(),
-          outcome: 'ran',
+          outcome: payload.endReason === 'rested' && payload.restReason !== 'companion_rested'
+            ? payload.restReason === 'chooser_disabled' ? 'skipped' : 'failed'
+            : payload.endReason === 'rest_suppressed' ? 'skipped' : 'ran',
           // restReason distinguishes rest-by-choice (companion_rested) from a
           // fail-closed chooser (chooser_error/timeout/…) in the Garden lane
           // (psfn-framework-hrmrq.69).
@@ -616,6 +621,8 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
             ['maxChargeUnits', trimNumber(payload.maxChargeUnits)],
             ['activity', payload.activity ? 1 : 0],
             ['returnSurfaced', payload.returnSurfaced ? 1 : 0],
+            ['startedAtMs', trimNumber(payload.startedAtMs)],
+            ['endedAtMs', trimNumber(payload.endedAtMs)],
           ]),
         });
       }),
@@ -736,6 +743,7 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
         recent: [],
         intervalMs: intervalMs ?? 0,
         lastRunAt,
+        lastSuccessAt: task.lastOutcome === 'succeeded' ? trimNumber(task.lastFinishedAt) ?? null : null,
         nextRunDueAt,
         deniedReason: denied ? task.lastDeniedReason ?? null : null,
       };

@@ -1,0 +1,24 @@
+.system-monitor { width: min(1060px, 100%); margin: 0 auto; padding: 80px 24px 100px; overflow-y: auto; height: 100%; }
+.system-monitor header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.system-monitor h1 { margin: 0; font: 2.2rem var(--font-serif); }
+.system-monitor h2 { margin: 0 0 16px; font: 1.4rem var(--font-serif); }
+.system-monitor button { border: 1px solid var(--color-border); border-radius: 12px; padding: 10px 16px; background: var(--color-surface); color: var(--color-ink); cursor: pointer; }
+.system-monitor button[aria-pressed=true] { background: var(--color-gold-soft); }
+.system-monitor button:disabled { opacity: .55; cursor: wait; }
+.system-monitor nav { display: flex; gap: 8px; margin: 12px 0; }
+.monitor-caption { font-size: .86rem; color: var(--color-muted); line-height: 1.55; }
+.monitor-section { margin: 20px 0; padding: 22px; border: 1px solid var(--color-border); border-radius: 18px; background: var(--color-surface); }
+.monitor-lane { padding: 13px 14px; margin: 8px 0; border-left: 3px solid var(--color-blue); background: var(--color-surface-soft); border-radius: 8px; }
+.monitor-lane summary { display: flex; justify-content: space-between; gap: 16px; cursor: pointer; }
+.monitor-lane summary strong { font-size: .82rem; white-space: nowrap; }
+.monitor-lane.status-failed, .monitor-lane.status-degraded { border-color: var(--color-error); }
+.monitor-lane.status-skipped, .monitor-lane.status-stale { border-color: var(--color-gold-deep); }
+.monitor-lane.status-never, .monitor-lane.status-paused { border-color: var(--color-muted); }
+.system-monitor [role=alert], .monitor-incident.incident-open { background: var(--color-error-soft); border-radius: 8px; padding: 12px; }
+.system-monitor dl { display: grid; grid-template-columns: minmax(100px, 1fr) 1fr; gap: 6px 14px; font-size: .88rem; }
+.system-monitor dl > div { display: contents; }
+.system-monitor dt { color: var(--color-muted); }
+.system-monitor dd { margin: 0; overflow-wrap: anywhere; }
+.system-monitor li { margin: 8px 0; font-size: .85rem; overflow-wrap: anywhere; }
+.system-monitor article + article { border-top: 1px solid var(--color-border); padding-top: 12px; margin-top: 12px; }
+@media(max-width: 600px) { .system-monitor { padding: 84px 12px 90px; } .monitor-section { padding: 16px 12px; } .monitor-lane summary { flex-direction: column; gap: 5px; } }

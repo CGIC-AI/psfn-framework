@@ -17,6 +17,7 @@ import {
 } from '../postgres.js';
 import { POSTGRES_INTENTION_MIGRATIONS } from './migrations.js';
 import { requireSafeInteger } from './row-guards.js';
+import type { SocialOutreachHealthSummary } from '../../shared/contracts/companion-system-monitor.js';
 
 interface OutreachRow extends QueryResultRow {
   opportunity_id: string;
@@ -128,6 +129,26 @@ export class PostgresSocialImpulseOutreachStore implements SocialImpulseOutreach
       ORDER BY fired_at_ms, opportunity_id
     `, [companionId]);
     return rows.map(mapRow);
+  }
+
+  async getHealthSummary(companionId: string): Promise<SocialOutreachHealthSummary> {
+    const rows = await queryRows<{
+      state: string; count: string; updated_at: string; fired_at: string;
+    }>(this.pool, `
+      SELECT state, COUNT(*)::text AS count, MAX(updated_at_ms)::text AS updated_at,
+        MAX(fired_at_ms)::text AS fired_at
+      FROM social_impulse_outreach_opportunities WHERE companion_id = $1
+      GROUP BY state ORDER BY state
+    `, [companionId]);
+    const states = rows.map(row => ({
+      state: parseState(row.state), count: requireSafeInteger(row.count, 'socialImpulse.health.count'),
+      lastUpdatedAtMs: requireSafeInteger(row.updated_at, 'socialImpulse.health.updatedAt'),
+    }));
+    return {
+      total: states.reduce((total, state) => total + state.count, 0), states,
+      lastFiredAtMs: rows.length ? Math.max(...rows.map(row => requireSafeInteger(row.fired_at, 'socialImpulse.health.firedAt'))) : null,
+      lastDeliveredAtMs: states.find(state => state.state === 'delivered')?.lastUpdatedAtMs ?? null,
+    };
   }
 
   async beginExecution(opportunityId: string, bindingHash: string, atMs: number): Promise<boolean> {

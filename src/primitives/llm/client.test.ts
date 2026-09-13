@@ -108,6 +108,10 @@ import type { IcpConversationCostAccountingPort } from '../../shared/telemetry/m
 import type { GatewayRpcConnection } from '../../boundary/gateway/transport.js';
 import type { GatewayMethodRuntime } from '../../boundary/gateway/methods/types.js';
 import { GatewayLLMRequestCancellation } from '../../boundary/gateway/llm-request-cancellation.js';
+import {
+  consumeActiveGatewayCapturedProviderCostEvidence,
+  withGatewayLLMCostCapture,
+} from '../../boundary/gateway/llm-cost-capture.js';
 import type { ChargePolicyConfig } from '../../shared/contracts/charge-policy.js';
 import { makeTestFatiguePolicyConfig } from '../../test-support/charge-policy.js';
 import {
@@ -4392,6 +4396,97 @@ describe('LLMClient model budget gates and usage metering', () => {
       effectiveCostUsd: 0.42,
       costSource: 'provider',
     }));
+  });
+
+  it.each(['completion', 'stream'] as const)('retains %s serving-provider evidence in response and usage metadata', async (kind) => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async (_event: ModelUsageEventInput) => undefined) };
+    const client = new LLMClient(makeConfig({ retryMaxAttempts: 0 }), {
+      usageRecorder,
+      providerCostResolver: consumeActiveGatewayCapturedProviderCostEvidence,
+    });
+    const providerResponse = { responseId: 'gen-attribution-test', servingProvider: 'Together' };
+    const message = {
+      responseId: providerResponse.responseId,
+      content: [{ type: 'text', text: 'private response' }],
+      model: 'deepseek/deepseek-v3.2',
+      usage: { input: 20, output: 4, totalTokens: 24 },
+      stopReason: 'stop',
+    };
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({
+      id: message.responseId,
+      provider: providerResponse.servingProvider,
+      choices: [{ message: { content: 'private response' } }],
+    })));
+    mocks.completeSimple.mockImplementation(async () => {
+      await fetch('https://provider.test/completion');
+      return message;
+    });
+    mocks.streamSimple.mockImplementation(async function* () {
+      await fetch('https://provider.test/stream');
+      yield { type: 'done', reason: 'stop', message };
+    });
+    try {
+      const { result } = await withGatewayLLMCostCapture(async () => {
+        const context = { systemPrompt: 'private prompt', messages: [] };
+        return kind === 'completion'
+          ? await client.complete(context, 'background', { disableRetry: true })
+          : await client.stream(context);
+      });
+      expect(result.providerObservability).toMatchObject({ backendProvider: 'openrouter', providerResponse });
+      expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+        provider: 'openrouter',
+        metadata: expect.objectContaining({ backendProvider: 'openrouter', providerResponse }),
+      }));
+      expect(JSON.stringify(usageRecorder.recordUsageEvent.mock.calls)).not.toContain('private response');
+      expect(JSON.stringify(usageRecorder.recordUsageEvent.mock.calls)).not.toContain('private prompt');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('retains a partial stream generation ID without guessing its serving provider', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async (_event: ModelUsageEventInput) => undefined) };
+    const client = new LLMClient(makeConfig({ retryMaxAttempts: 0 }), { usageRecorder });
+    mocks.streamSimple.mockImplementation(async function* () {
+      yield { type: 'text_delta', delta: 'partial', partial: { responseId: 'gen-partial' } };
+      throw new Error('stream disconnected');
+    });
+    await expect(client.stream({ systemPrompt: 'System', messages: [] })).rejects.toThrow('stream disconnected');
+    expect(usageRecorder.recordUsageEvent.mock.calls[0]?.[0].metadata?.providerResponse)
+      .toEqual({ responseId: 'gen-partial' });
+  });
+
+  it.each(['completion', 'stream'] as const)('does not reuse failed %s attribution on a retry with missing metadata', async (kind) => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async (_event: ModelUsageEventInput) => undefined) };
+    const providerResponse = { responseId: 'gen-failed', servingProvider: 'Together' };
+    const client = new LLMClient(makeConfig({ retryMaxAttempts: 2, retryBaseDelayMs: 0 }), {
+      usageRecorder,
+      providerCostResolver: vi.fn()
+        .mockReturnValueOnce({ providerCostEvidence: {}, providerResponse })
+        .mockReturnValue(undefined),
+    });
+    const message = {
+      content: [{ type: 'text', text: 'success' }],
+      model: 'deepseek/deepseek-v3.2',
+      usage: { input: 20, output: 4, totalTokens: 24 },
+      stopReason: 'stop',
+    };
+    mocks.completeSimple.mockRejectedValueOnce(new Error('503 provider unavailable')).mockResolvedValue(message);
+    mocks.streamSimple.mockImplementationOnce(async function* () {
+      yield { type: 'start', partial: { responseId: 'gen-failed' } };
+      throw new Error('503 provider unavailable');
+    }).mockImplementation(async function* () {
+      yield { type: 'done', reason: 'stop', message };
+    });
+    const context = { systemPrompt: 'System', messages: [] };
+    const result = kind === 'completion'
+      ? await client.complete(context, 'background')
+      : await client.stream(context);
+    const events = usageRecorder.recordUsageEvent.mock.calls.map(([event]) => event);
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({ status: 'failure', metadata: { providerResponse } });
+    expect(events[1]?.metadata?.providerResponse).toBeUndefined();
+    expect(result.providerObservability?.providerResponse).toBeUndefined();
   });
 
   it('quarantines contradictory response and gateway-captured cost from durable totals', async () => {

@@ -95,8 +95,13 @@ import {
   combineProviderCostEvidenceObservations,
   mergeProviderCostEvidenceConflicts,
   reconcileProviderCostEvidence,
-  type ReconciledProviderCostEvidence,
 } from '../../shared/telemetry/provider-cost-evidence.js';
+import {
+  extractProviderResponseMetadata,
+  mergeProviderResponseMetadata,
+  providerResponseLogMetadata,
+  type CapturedProviderEvidence,
+} from '../../shared/telemetry/provider-response-metadata.js';
 import {
   IcpConversationCostBreaker,
   IcpConversationCostBreakerError,
@@ -159,7 +164,7 @@ export interface LLMClientRuntimeOptions {
   icpConversationCostAccounting?: IcpConversationCostAccountingPort;
   onIcpConversationCostDecision?: (event: IcpConversationCostBreakerEvent) => void;
   icpConversationChargePolicyResolver?: IcpConversationChargePolicyResolver;
-  providerCostResolver?: () => ReconciledProviderCostEvidence | undefined;
+  providerCostResolver?: () => CapturedProviderEvidence | undefined;
   circuitBreaker?: SlidingWindowCircuitBreaker;
 }
 
@@ -190,7 +195,7 @@ export class LLMClient {
   private modelCallGate: ModelCallGate;
   private usageRecorder?: ModelUsageRecorder;
   private icpConversationCostBreaker: IcpConversationCostBreaker;
-  private providerCostResolver?: () => ReconciledProviderCostEvidence | undefined;
+  private providerCostResolver?: () => CapturedProviderEvidence | undefined;
   private circuitBreaker: SlidingWindowCircuitBreaker;
 
   constructor(
@@ -636,6 +641,13 @@ export class LLMClient {
       ...(correlation?.channelId ? { channelId: correlation.channelId } : {}),
     });
     const capturedProviderCost = this.providerCostResolver?.();
+    const providerResponse = mergeProviderResponseMetadata(
+      options.providerObservability?.providerResponse,
+      capturedProviderCost?.providerResponse,
+    );
+    if (options.providerObservability && providerResponse) {
+      options.providerObservability.providerResponse = providerResponse;
+    }
     const accountingRates = resolveModelUsageCostRates(this.config, candidate, purpose);
     const syntheticRoutedEndpointCost = candidate.requestBaseUrl !== undefined
       && usageDetails?.cost?.total === 0
@@ -691,6 +703,7 @@ export class LLMClient {
       ...(accountingRates ? { estimatedRates: accountingRates } : {}),
     });
     const metadata = {
+      ...(providerResponse ? { providerResponse } : {}),
       ...(options.metadata ?? {}),
       ...(options.providerObservability
         ? {
@@ -1053,6 +1066,7 @@ export class LLMClient {
         backendProvider: finalResponse.providerObservability?.backendProvider,
         backendModel: finalResponse.providerObservability?.backendModel,
         backendApi: finalResponse.providerObservability?.backendApi,
+        ...providerResponseLogMetadata(finalResponse.providerObservability?.providerResponse),
         attempts,
         ...correlation,
         purpose: streamPurpose,
@@ -1167,6 +1181,8 @@ export class LLMClient {
         );
 
         const request = async (emptyArgsRetries: number) => {
+          // A new physical attempt cannot inherit the previous response's evidence.
+          delete providerObservability.providerResponse;
           physicalAttempt += 1;
           const attempt = physicalAttempt;
           const attemptStartedAtMs = Date.now();
@@ -1221,6 +1237,9 @@ export class LLMClient {
           // the abort — otherwise the spend is lost to the budget SUM and the
           // pre-taken reservation strands pending forever (no sweeper).
           const cancelledAfterCompletion = transportSignal.aborted;
+          providerObservability.providerResponse = extractProviderResponseMetadata({
+            id: response.responseId,
+          });
           const completionToolCalls = extractCompletionToolCalls(response);
           const emptyToolArgumentUsageMetadata = resolveEmptyToolArgumentUsageMetadata(
             completionToolCalls,
@@ -1457,6 +1476,7 @@ export class LLMClient {
       backendProvider: providerObservability?.backendProvider,
       backendModel: providerObservability?.backendModel,
       backendApi: providerObservability?.backendApi,
+      ...providerResponseLogMetadata(providerObservability?.providerResponse),
       attempts,
       requestedModelHint: modelHint?.model,
       ...correlation,

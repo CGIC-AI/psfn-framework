@@ -116,7 +116,7 @@ function captureDiagnosticLogRecord(info: Record<string, unknown>): void {
   if (context) record.context = context;
 
   try {
-    operationalLogStore?.record(record);
+    operationalLogStore?.record(record, meta);
   } catch (error) {
     // Never recurse through the logger when its own durable sink has failed.
     process.stderr.write(`Operational metadata append failed: ${sanitizeDiagnosticText(error)}\n`);

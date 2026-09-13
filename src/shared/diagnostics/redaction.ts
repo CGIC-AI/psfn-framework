@@ -83,3 +83,27 @@ export function sanitizeDiagnosticValue(value: unknown, key = ''): string | numb
   if (typeof value === 'string') return sanitizeDiagnosticText(value);
   return '[REDACTED_OBJECT]';
 }
+
+/** Preserve structured operational facts while excluding credentials and raw bodies. */
+export function sanitizeOperationalMetadata(value: unknown): unknown {
+  const seen = new WeakSet<object>();
+  const visit = (entry: unknown, key = ''): unknown => {
+    if (key && (isDiagnosticSecretKey(key) || isDiagnosticContentKey(key))) {
+      return sanitizeDiagnosticValue(entry, key);
+    }
+    if (entry === null || typeof entry !== 'object') return sanitizeDiagnosticValue(entry, key);
+    if (seen.has(entry)) return '[CIRCULAR]';
+    seen.add(entry);
+    if (entry instanceof Error) {
+      return {
+        name: entry.name,
+        summary: sanitizeDiagnosticText(entry.message),
+        ...(entry.cause !== undefined ? { cause: visit(entry.cause) } : {}),
+        ...(entry instanceof AggregateError ? { errors: visit(entry.errors) } : {}),
+      };
+    }
+    if (Array.isArray(entry)) return entry.map(item => visit(item));
+    return Object.fromEntries(Object.entries(entry).map(([field, fieldValue]) => [field, visit(fieldValue, field)]));
+  };
+  return visit(value);
+}

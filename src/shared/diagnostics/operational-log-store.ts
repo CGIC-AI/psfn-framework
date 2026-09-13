@@ -5,7 +5,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { isRecord } from '../utils/types.js';
-import { sanitizeDiagnosticText, sanitizeDiagnosticValue } from './redaction.js';
+import { sanitizeDiagnosticText, sanitizeDiagnosticValue, sanitizeOperationalMetadata } from './redaction.js';
 import { operationalMetadataCutoff, requireOperationalMetadataRetentionDays } from './retention-policy.js';
 
 export interface DiagnosticLogRecord {
@@ -57,7 +57,7 @@ export class OperationalLogStore {
     this.rotate();
   }
 
-  record(record: DiagnosticLogRecord): void {
+  record(record: DiagnosticLogRecord, metadata?: Record<string, unknown>): void {
     this.rotate();
     // Only the logger's allowlisted scalar context reaches this seam, then it
     // is sanitized again so direct callers cannot smuggle prompt/body fields.
@@ -74,6 +74,7 @@ export class OperationalLogStore {
       component: sanitizeDiagnosticText(record.component),
       message: sanitizeDiagnosticText(record.message),
       ...(context ? { context } : {}),
+      ...(metadata ? { metadata: sanitizeOperationalMetadata(metadata) } : {}),
     }) + '\n';
     const buffer = Buffer.from(line);
     let offset = 0;

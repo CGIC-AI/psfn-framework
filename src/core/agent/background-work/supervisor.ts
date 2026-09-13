@@ -961,7 +961,9 @@ export class BackgroundWorkSupervisor {
         }
         let lost = false;
         for (const leaseId of foregroundLeaseIds) {
-          if (renewed.has(leaseId)) continue;
+          // A turn can end while renewal is awaiting the store. Its released
+          // lease is no longer ours to renew or declare lost.
+          if (renewed.has(leaseId) || !this.readyForegroundLeaseIds.has(leaseId)) continue;
           this.markForegroundLeaseLost(leaseId);
           lost = true;
         }

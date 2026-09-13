@@ -234,7 +234,8 @@ describe('permit-governed notify companion handoff', () => {
     }, 'extended')).toEqual([]);
   });
 
-  it('queues an owned open-dyad continuation without an initiation permit', async () => {
+  it.each(['discord:owner', 'internal:free-time:private'])(
+    'queues an owned open-dyad continuation from %s without an initiation permit', async channelId => {
     const owner = runtime();
     const params = {
       action: 'send' as const,
@@ -242,13 +243,15 @@ describe('permit-governed notify companion handoff', () => {
       dyad_id: '77777777-7777-4777-8777-777777777777',
       private_intent: 'Check in naturally.',
     };
-    const result = await ordinaryContext(async () => await tool(owner).execute('call-dyad', params));
+    const result = await runWithRequestContext({ channelId }, async () => (
+      await tool(owner).execute('call-dyad', params)
+    ));
     expect(text(result)).toBe(COMPANION_NOTIFY_QUEUED_TEXT);
     expect(owner.inspectOpenDyad).toHaveBeenCalledWith(params.dyad_id);
     expect(owner.prepareCompanionOutreach).not.toHaveBeenCalled();
 
     const actions = inferDeferredCompanionOutreachActions({
-      message: { id: 'source-1', channelId: 'discord:owner', routing: {} } as never,
+      message: { id: 'source-1', channelId, routing: {} } as never,
       turnMessages: [
         { role: 'assistant', content: [{ type: 'toolCall', id: 'call-dyad', name: 'notify', arguments: params }] } as never,
         { role: 'toolResult', toolCallId: 'call-dyad', toolName: 'notify', isError: false,

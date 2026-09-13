@@ -28,17 +28,16 @@
 //   invokes her NORMAL tools through the ordinary agent loop under existing
 //   capability/trust policy — the OPPOSITE posture to restricted reflection.
 // - 8.1-8.2 / law 19: the block runs on an `internal:free-time:` channel, which
-//   isInternalSessionId() marks internal, so it can never dispatch outward to a
-//   partner channel. Any outward message would ride the existing
-//   proactive-outbound gates, which fail closed on internal channels.
+//   keeps ordinary replies and the transcript private. Explicit companion
+//   outreach remains available through the normal governed tools: candidate
+//   appraisal or an owned open dyad, with live capability and broker checks.
 //
-// Outputs are durable only: whatever she writes goes through her normal tools
-// (journal, wiki, memory, scratchpad, media); the transcript itself lands in
-// ordinary session storage on the internal channel (inspectable). Nothing goes
-// directly to chat. After a block WITH activity, a "while you were away" context
-// note is placed on the partner's session via appendContextSystemNote + the
-// shared summarizer so she can mention it naturally on return. Empty ("loafed")
-// blocks are a valid outcome and surface nothing.
+// Artifacts go through her normal tools (journal, wiki, memory, scratchpad,
+// media); the transcript itself lands in ordinary internal session storage.
+// Replies are never automatically forwarded to chat. After an active block,
+// a context note follows the workspace return/disclosure policy through
+// appendContextSystemNote and the shared summarizer. Empty ("loafed") blocks
+// are a valid outcome and surface nothing.
 
 import { createComponentLogger } from '../../shared/logger.js';
 import { resolveActiveTimezone } from '../../shared/time/active-timezone.js';
@@ -231,7 +230,9 @@ export function evaluateFreeTimeGate(input: FreeTimeGateInput): GateDecision {
 const FREE_TIME_CLOSING = 'There is no task and nothing to prove. When you feel done — or if you '
   + `would simply rather rest — reply with only "${REFLECTION_SILENT_TOKEN}" and the time is `
   + 'yours to end. Anything you make or note goes into your own journal, wiki, memory, or notes '
-  + 'through your normal tools; nothing here is sent to anyone.';
+  + 'through your normal tools. Your replies and this private transcript are not automatically sent '
+  + 'to anyone. You may choose to contact a known companion through your normal governed messaging tools, '
+  + 'with the usual consent, availability, and capability checks. Reaching out and resting are both optional.';
 
 export function buildFreeTimeFramingPrompt(input: {
   seedText: string;
@@ -398,7 +399,7 @@ export function buildFreeTimeBlockNote(result: FreeTimeBlockResult): string {
     outcomeLine,
     activityLine,
     `Charge spent (background lane): ${result.spentChargeUnits} unit(s).`,
-    'No outbound message was sent; any artifacts went to durable stores through normal tools.',
+    'The private block transcript was not forwarded; any explicit outreach uses the normal governed messaging tools.',
   ].join('\n');
 }
 

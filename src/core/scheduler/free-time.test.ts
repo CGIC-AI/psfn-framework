@@ -198,7 +198,10 @@ describe('free-time framing', () => {
     expect(prompt).not.toContain('SCENARIO_SENTINEL');
     expect(prompt).toContain('some time to yourself');
     expect(prompt).toContain(REFLECTION_SILENT_TOKEN);
-    expect(prompt).toContain('nothing here is sent to anyone');
+    expect(prompt).toContain('Your replies and this private transcript are not automatically sent');
+    expect(prompt).toContain('You may choose to contact a known companion through your normal');
+    expect(prompt).toContain('governed messaging tools');
+    expect(prompt).not.toContain('nothing here is sent to anyone');
     expect(prompt.toLowerCase()).not.toContain('you must');
     expect(prompt.toLowerCase()).not.toContain('your task');
   });
@@ -1287,6 +1290,8 @@ describe('rest-by-choice vs rest-by-failure visibility (psfn-framework-hrmrq.69)
     const note = buildFreeTimeBlockNote({ ...baseResult, restReason: 'companion_rested' });
     expect(note).toContain('resting is a valid way to spend the time');
     expect(note).not.toContain('system failure');
+    expect(note).toContain('private block transcript was not forwarded');
+    expect(note).not.toContain('No outbound message was sent');
   });
 
   it('a fail-closed chooser rest names the failure and is not affirmed as a choice', () => {

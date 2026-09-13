@@ -96,7 +96,7 @@ describe('notify companion candidate action', () => {
   });
 
   it.each([
-    ['internal:free-time:idle', 'free_time'],
+    ['internal:free-time:private', 'free_time'],
     ['discord:owner', 'foreground'],
   ] as const)('infers %s only after the successful tool result', (channelId, source) => {
     const actions = inferIcpInitiationCandidateActions(context(channelId), 'extended');
@@ -193,14 +193,14 @@ describe('notify companion candidate action', () => {
       resolveOriginCatalogSource: () => null,
       isExecutionAuthorized: () => true,
     });
-    const inferredContext = context('internal:free-time:idle');
+    const inferredContext = context('internal:free-time:private');
     const candidates = inferIcpInitiationCandidateActions(
       inferredContext,
       'extended',
     );
     const message = {
       id: 'source-message',
-      channelId: 'internal:free-time:idle',
+      channelId: 'internal:free-time:private',
       channelType: 'terminal' as const,
       authorId: 'scheduler',
       authorName: 'Free Time',

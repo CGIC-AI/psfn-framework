@@ -3,8 +3,8 @@
 // split, emh3p.1). Two entry lanes (quiet-hours inside the rest window; idle
 // after a long partner gap) share one bounded, budget-capped, multi-turn
 // agent-loop block on an INTERNAL channel. The ordinary default prompt stack
-// supplies identity and policy; her normal tools apply and outputs are
-// durable only. Deterministic gates run before any spend; the block runs
+// supplies identity and policy; her normal tools apply, including governed
+// peer outreach, while the block transcript stays private. Deterministic gates run before any spend; the block runs
 // inside a 'background' charge context and ends gracefully when the per-block
 // turn/charge budget is exhausted. After a block WITH activity, a "while you
 // were away" note is placed on the partner session via the shared summarizer;
@@ -276,9 +276,9 @@ export function registerFreeTimeLane(deps: FreeTimeLaneDeps): void {
       return outcome.value;
     },
     // One free-time turn through the ordinary agent loop on the internal
-    // channel. Internal channelId => isInternalSessionId() true => the loop
-    // cannot dispatch outward to a partner channel. The default identity stack
-    // and her normal tools apply (no restricted reflection policy). A "silent"
+    // channel. Ordinary replies stay private; explicit peer messaging uses the
+    // normal governed tools and a separate destination turn. The default
+    // identity stack applies (no restricted reflection policy). A "silent"
     // reply ends the block; staying quiet / loafing is a valid outcome.
     invokeTurn: async ({ lane, channelId, turnIndex, content }) => {
       if (turnIndex === 0) entryDisclosureLineage.clear();

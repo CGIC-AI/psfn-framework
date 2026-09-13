@@ -83,6 +83,7 @@ function buildShutdownControlPlane(
   scheduler: Scheduler,
   agentLoop: SubstrateAgent,
   eventBus: EventBus,
+  shutdownTargets: BuildAgentControlPlaneOptions['shutdownTargets'] = {},
 ): ReturnType<typeof buildAgentControlPlane> {
   return buildAgentControlPlane({
     dataDir: tmpdir(),
@@ -129,7 +130,7 @@ function buildShutdownControlPlane(
         exitCode: 75,
       },
     },
-    shutdownTargets: {},
+    shutdownTargets,
     postTurnActions: {
       registerHandler: () => () => undefined,
     },
@@ -211,7 +212,11 @@ describe('agent control-plane recovery shutdown', () => {
 
       let stopCompleted = false;
       const shutdownStartedAt = Date.now();
-      stopPromise = buildShutdownControlPlane(scheduler, agentLoop, eventBus).stopFn();
+      stopPromise = buildShutdownControlPlane(scheduler, agentLoop, eventBus, {
+        healthDetectorScheduler: {
+          stop: async () => { order.push('health-watchdog-stop'); },
+        },
+      }).stopFn();
       void stopPromise.then(() => {
         stopCompleted = true;
       });
@@ -221,6 +226,7 @@ describe('agent control-plane recovery shutdown', () => {
       expect(stopCompleted).toBe(false);
       expect(abortEvents).toBe(1);
       expect(order.indexOf('abort-recovery')).toBeLessThan(order.indexOf('scheduler-stop:start'));
+      expect(order.indexOf('health-watchdog-stop')).toBeLessThan(order.indexOf('scheduler-stop:start'));
       expect(order.indexOf('scheduler-stop:start')).toBeLessThan(order.indexOf('scheduler-stop:end'));
       expect(order.indexOf('scheduler-stop:end')).toBeLessThan(
         order.indexOf('supervisor-drain:start'),

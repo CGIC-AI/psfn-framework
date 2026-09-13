@@ -1,27 +1,34 @@
 // ── Runtime health-detector scheduler lane (beads psfn-framework-7qeo1.24.2-.4) ──
 //
-// The detectors are driven by the process's EXISTING scheduler task registry,
-// not a lane of their own: one registered task, one owner-file cadence, and the
-// same eligibility, failure, and Garden-visibility semantics every other
-// scheduled task already has. A detector cycle that throws therefore surfaces as
+// The detectors use a dedicated instance of the existing scheduler, so a stuck
+// work task cannot prevent its own overrun from being observed. The owner-file
+// cadence, failure events, and task-state projection stay shared. A cycle that
+// throws surfaces as
 // `schedule.task.failed` and as a `scheduler_task_failed` health event, exactly
 // like any other broken task — the health plane does not get a private,
 // unobservable execution path.
 
-import type { Scheduler } from './scheduler.js';
+import { Scheduler } from './scheduler.js';
 import type { HealthDetectorCycle } from '../../shared/observability/health-detectors/cycle.js';
+import type { HealthEventSource } from '../../shared/contracts/health-event.js';
+import type { EventBus } from '../../shared/event-bus.js';
 
-export const RUNTIME_HEALTH_DETECTOR_TASK_ID = 'runtime-health-detectors';
+const RUNTIME_HEALTH_DETECTOR_TASK_ID = 'runtime-health-detectors';
 
 const RUNTIME_HEALTH_DETECTOR_SCHEDULE_SOURCE =
   'scheduler.json > healthDetectors.intervalMs';
 
-export function registerRuntimeHealthDetectorTask(input: {
-  scheduler: Scheduler;
+export function createRuntimeHealthDetectorScheduler(input: {
+  eventBus: EventBus;
+  source: HealthEventSource;
   cycle: HealthDetectorCycle;
   intervalMs: number;
-}): void {
-  input.scheduler.register({
+}): Scheduler {
+  const scheduler = new Scheduler(input.eventBus, {
+    tickIntervalMs: input.intervalMs,
+    heartbeatIntervalMs: input.intervalMs,
+  }, { healthEventSource: input.source });
+  scheduler.register({
     id: RUNTIME_HEALTH_DETECTOR_TASK_ID,
     name: 'Runtime Health Detectors',
     description:
@@ -37,4 +44,5 @@ export function registerRuntimeHealthDetectorTask(input: {
     // written by this boot, and a first cycle before the process finished
     // wiring its pools would sample an authority set that is still forming.
   }, { skipFirstRun: true });
+  return scheduler;
 }

@@ -20,8 +20,8 @@ export function withCompanionSystemMonitorEvidence(
       if (options.readProactive) {
         try {
           proactive = { status: 'available', summary: await options.readProactive() };
-        } catch {
-          log.warn('Companion proactive health summary unavailable');
+        } catch (error) {
+          log.warn('Companion proactive health summary unavailable', { error });
           proactive = { status: 'error' };
         }
       }

@@ -18,6 +18,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { writeJsonAtomic } from '../../src/shared/utils/fs.js';
+import { loadAutomataPolicySeedDefaults } from '../../src/system/config/automata-policy-config.js';
 import { verifyStartupOwnerFiles } from '../../src/system/config/startup-owner-files.js';
 import { PER_COMPANION_OWNER_FILES } from '../../src/system/config/settings-contract.js';
 import {
@@ -39,6 +40,7 @@ const BUILT_OWNER_FILES = new Set<string>([
   'models.json',
   'providers.json',
   'companions.json',
+  'automata-policy.json',
 ]);
 
 /**
@@ -52,7 +54,6 @@ const SEED_COPIED_OWNER_FILES: readonly string[] = [
   'backup.json',
   'mcp-servers.json',
   'partner-affect-shadow.json',
-  'automata-policy.json',
   'places.json',
   'runtime-prompt-layers.json',
   // per-companion (rooted under companionDataDir):
@@ -292,6 +293,15 @@ export function buildSettings(plan: OnboardingPlan): unknown {
   };
 }
 
+/** Bind background review to the slot generated from the operator's extraction selection. */
+function buildAutomataPolicy(plan: OnboardingPlan): unknown {
+  const seed = loadAutomataPolicySeedDefaults({ seedDir: plan.seedDir });
+  return {
+    ...seed,
+    bus: { ...seed.bus, reviewer: { ...seed.bus.reviewer, model: 'extraction' } },
+  };
+}
+
 /** All owner-file entries this plan will write, rooted at the FINAL target paths. */
 export function ownerFileEntries(plan: OnboardingPlan): OwnerFileEntry[] {
   const entries: OwnerFileEntry[] = [];
@@ -300,6 +310,7 @@ export function ownerFileEntries(plan: OnboardingPlan): OwnerFileEntry[] {
     'models.json': buildModelsRegistry(plan),
     'providers.json': buildProvidersRegistry(plan),
     'companions.json': buildCompanionsManifest(plan),
+    'automata-policy.json': buildAutomataPolicy(plan),
   };
   for (const name of BUILT_OWNER_FILES) {
     entries.push({ name, path: join(ownerFileRoot(plan, name), name), value: built[name] });

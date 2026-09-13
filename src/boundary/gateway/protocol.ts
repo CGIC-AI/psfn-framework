@@ -85,6 +85,7 @@ import type {
   ApiTelemetryIngestRpcResult,
 } from '../../channels/api/types.js';
 import type { RuntimeServiceHealthSnapshot } from '../../operator/tool-health/types.js';
+import type { OperatorAlertSinkConfiguration } from '../../shared/contracts/operator-alerting.js';
 import type { NotificationSenderMetadata } from './notification-sender.js';
 import type {
   IcpInitiationGateDecision,
@@ -784,7 +785,10 @@ export interface ConfirmationHistoryListResult {
   entries: ConfirmationQueueHistoryEntry[];
 }
 
-export type RuntimeHealthResult = RuntimeServiceHealthSnapshot;
+export interface RuntimeHealthResult extends RuntimeServiceHealthSnapshot {
+  /** Gateway-owned sink names and status; never credentials or destinations. */
+  operatorAlerting: OperatorAlertSinkConfiguration;
+}
 
 export type GatewayCredentialPresenceParams = Record<string, never>;
 

@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
+import { loadAutomataPolicySeedDefaults, saveAutomataPolicyConfig } from '../../system/config/automata-policy-config.js';
 import { saveModelsConfig } from '../../system/config/models-config.js';
 import { saveProvidersConfig } from '../../system/config/providers-config.js';
 import { PER_COMPANION_OWNER_FILES } from '../../system/config/settings-contract.js';
@@ -16,7 +17,6 @@ const REQUIRED_OWNER_EXAMPLES = [
   'capability-tier.json',
   'charge-policy.json',
   'backup.json',
-  'automata-policy.json',
 ] as const;
 
 function restoreEnv(): void {
@@ -167,6 +167,12 @@ describe('prepareAgentStartupContext', () => {
         },
       ],
     }, { defaultContextWindow: 128_000 });
+
+    const automataPolicy = loadAutomataPolicySeedDefaults();
+    saveAutomataPolicyConfig(systemDataDir, {
+      ...automataPolicy,
+      bus: { ...automataPolicy.bus, reviewer: { ...automataPolicy.bus.reviewer, model: 'extraction' } },
+    });
 
     saveProvidersConfig(systemDataDir, {
       schemaVersion: 1,

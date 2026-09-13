@@ -203,7 +203,7 @@ export function createProductionSocialImpulseOutreachRuntime(
           'A qualified social impulse created one optional outreach decision.',
           'Nothing has been shown to anyone else. Ignoring or deferring is fully valid.',
           `Use notify action=outreach_list with opportunity_id=${opportunity.opportunityId}`,
-          'to see currently authorized destinations, then use action=outreach_choose once.',
+          'to see currently authorized destinations, then use notify action=outreach_choose once.',
           'The available dispositions are ignore, defer, contact-human, contact-companion,',
           'join-room, and other. A destination choice still runs every destination gate.',
         ].join('\n'),

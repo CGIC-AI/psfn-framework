@@ -3669,7 +3669,10 @@ export class GatewayServer {
   }
 
   private getRuntimeHealth(companionId?: string): RuntimeHealthResult {
-    return this.runtimeHealthTracker.getSnapshot(this.getConnectionSummary(), companionId);
+    return {
+      ...this.runtimeHealthTracker.getSnapshot(this.getConnectionSummary(), companionId),
+      operatorAlerting: this.operatorAlertDispatcher.configuration(),
+    };
   }
 
   private async recordConnectionPosture(

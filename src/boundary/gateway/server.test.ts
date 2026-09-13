@@ -2668,6 +2668,11 @@ describe('GatewayServer', () => {
       });
 
       const initial = await invokeRpc(conn, 600, 'runtime.health', {});
+      expect(initial.result.operatorAlerting).toEqual({
+        configuredSinks: ['ntfy'],
+        status: 'configured',
+        warning: null,
+      });
       expect(initial.result.services).toEqual(expect.arrayContaining([
         expect.objectContaining({ serviceId: 'gateway', status: 'healthy' }),
         expect.objectContaining({ serviceId: 'approval_notifications', status: 'healthy' }),

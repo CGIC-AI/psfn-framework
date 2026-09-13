@@ -5,8 +5,9 @@
 // social-desire provenance through the EXISTING outbound provenance gate,
 // durable outbox, ICP candidate broker, and ProactiveOutboundDispatcher —
 // under a tight desire-outbound rate budget. Fail closed: with
-// socialDesire.enabled false (or a missing store) nothing is wired, so the
-// gate rejects any social-desire provenance outright.
+// socialDesire.enabled false disables that producer and its consent runtime.
+// The shared human delivery policy also serves independently enabled EmoSim
+// outreach and remains available when an approved heartbeat channel exists.
 
 import type { Logger } from 'winston';
 import { CanonicalCompanionPeerValidationError, type AgentFacingIcpAutonomyRuntime } from '../../../core/icp/agent-facing-autonomy.js';
@@ -89,7 +90,13 @@ export function registerSocialDesireLane(deps: SocialDesireLaneDeps): SocialDesi
   } = deps;
 
   let socialDesireOutbound: SocialDesireOutboundRuntime | undefined;
-  let socialDesireHumanDeliveryPolicy: SocialDesireHumanDeliveryPolicy | undefined;
+  const socialDesireHumanDeliveryPolicy = heartbeatChannel
+    ? createSocialDesireHumanDeliveryPolicy({
+        contacts: contactStore,
+        approvedHeartbeatChannel: heartbeatChannel,
+        quietHours: schedulerConfig.episodicProcessing,
+      })
+    : undefined;
   let socialDesireFeltSignals: SocialDesireFeltSignalWriter | undefined;
   if (schedulerConfig.socialDesire.enabled) {
     if (!socialDesireStore) {
@@ -128,13 +135,6 @@ export function registerSocialDesireLane(deps: SocialDesireLaneDeps): SocialDesi
         }),
       });
       const budgetGuard = socialDesireOutbound;
-      if (heartbeatChannel) {
-        socialDesireHumanDeliveryPolicy = createSocialDesireHumanDeliveryPolicy({
-          contacts: contactStore,
-          approvedHeartbeatChannel: heartbeatChannel,
-          quietHours: schedulerConfig.episodicProcessing,
-        });
-      }
       registerSocialDesireOutreachTask({
         scheduler,
         eventBus,

@@ -73,7 +73,7 @@ describe('registerSocialDesireLane composition wiring (psfn-framework-hrmrq.85)'
     expect(() => registerSocialDesireLane(deps)).toThrow(/socialDesire\.enabled is true but no social-desire store/);
   });
 
-  it('a disabled lane wires nothing and attaches no writer', () => {
+  it('a disabled producer keeps human delivery policy available to independent outreach', async () => {
     const attachFeltSignalWriter = vi.fn();
     const deps = makeDeps({
       schedulerConfig: {
@@ -81,12 +81,26 @@ describe('registerSocialDesireLane composition wiring (psfn-framework-hrmrq.85)'
         episodicProcessing: restWindow,
       },
       attachFeltSignalWriter,
+      contactStore: { getById: async () => ({
+        id: 'contact-primary', displayName: 'Primary contact', trustLevel: 'primary',
+        firstSeen: '2026-01-01T00:00:00Z', lastSeen: '2026-01-01T00:00:00Z', timezone: 'UTC',
+      }) },
     });
 
     const result = registerSocialDesireLane(deps);
     expect(attachFeltSignalWriter).not.toHaveBeenCalled();
     expect(result.socialDesireFeltSignals).toBeUndefined();
     expect(deps.scheduler.getTask(SOCIAL_DESIRE_OUTREACH_TASK_ID)).toBeUndefined();
+    expect(result.socialDesireOutbound).toBeUndefined();
+    expect(result.socialDesireHumanDeliveryPolicy).toBeDefined();
+    const attempt = {
+      contactId: 'contact-primary', channelId: 'dm-primary', channelType: 'discord' as const,
+      nowMs: Date.parse('2026-09-13T12:00:00Z'),
+    };
+    await expect(result.socialDesireHumanDeliveryPolicy!.evaluate(attempt)).resolves.toEqual({ allowed: true });
+    await expect(result.socialDesireHumanDeliveryPolicy!.evaluate({
+      ...attempt, channelId: 'unapproved-dm',
+    })).resolves.toMatchObject({ allowed: false, reason: 'social_desire_channel_not_approved' });
   });
 
   it('the composed writer actually accumulates into the lane store (end-to-end producer proof)', async () => {

@@ -705,6 +705,7 @@ export async function startOptionalGatewayApiServer(
   }
   const corsAllowedOrigins = resolveApiCorsAllowedOrigins({
     explicitAllowlist: parseCommaSeparatedEnv(env.API_CORS_ALLOWLIST),
+    canonicalOrigin: options.config.fleetAuth?.canonicalOrigin,
     adminHost: options.adminHost,
     adminPort: options.adminPort,
   });

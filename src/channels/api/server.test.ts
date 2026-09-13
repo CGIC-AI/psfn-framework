@@ -2526,6 +2526,57 @@ describe('ApiServer with fleet auth configured alongside key auth', () => {
     expect(JSON.parse(unauthenticated.body).error.type).toBe('invalid_api_key');
   });
 
+  it('admits journal escalation ceremonies from the configured fleet origin with a stale explicit allowlist', async () => {
+    await stopServer(server);
+    const issueCsrf = vi.fn(async () => 'b'.repeat(43));
+    const issueGrant = vi.fn(async () => ({
+      grantId: '00000000-0000-4000-8000-000000000901',
+      routeId: 'POST /api/admin/privacy-break-glass/journal/values-journal/confirm',
+      expiresAt: new Date(Date.now() + 60_000),
+    }));
+    server = createApiServer({
+      port,
+      agentLoop: createMockAgentLoop(eventBus),
+      eventBus,
+      sessionManager: createMockSessionManager(),
+      apiKey: 'legacy-api-key',
+      corsAllowedOrigins: resolveApiCorsAllowedOrigins({
+        explicitAllowlist: ['https://old-console.example.test'],
+        canonicalOrigin: 'https://fleet.example.test',
+      }),
+      fleetAuthHttpRoutes: new FleetAuthHttpRoutes({
+        broker: fromAny({ issueCsrf }),
+        escalation: fromAny({ issueGrant }),
+        canonicalOrigin: 'https://fleet.example.test',
+        callbackPath: '/auth/discord/callback',
+      }),
+    });
+    await server.start();
+    const headers = {
+      Origin: 'https://fleet.example.test',
+      Cookie: `__Host-psfn_session=${'a'.repeat(43)}`,
+      'X-PSFN-CSRF': 'b'.repeat(43),
+    };
+    const csrf = await request(port, 'GET', '/v1/fleet-auth/session/csrf', undefined, headers);
+    expect(csrf.status).toBe(200);
+    expect(issueCsrf).toHaveBeenCalledOnce();
+    const body = {
+      companionId: DEFAULT_COMPANION_ID,
+      method: 'POST',
+      target: '/api/admin/privacy-break-glass/journal/values-journal/confirm',
+      reason: 'Investigate journal access',
+    };
+    const granted = await request(port, 'POST', '/v1/fleet-auth/escalation/grant', body, headers);
+    expect(granted.status).toBe(200);
+    expect(issueGrant).toHaveBeenCalledOnce();
+    const denied = await request(port, 'POST', '/v1/fleet-auth/escalation/grant', body, {
+      ...headers, Origin: 'https://unrelated.example.test',
+    });
+    expect(denied.status).toBe(403);
+    expect(JSON.parse(denied.body).error.type).toBe('cors_origin_not_allowed');
+    expect(issueGrant).toHaveBeenCalledOnce();
+  });
+
   it('answers /health for key principals without any SSO resolver', async () => {
     for (const bearer of ['legacy-api-key', 'dedicated-admin-token']) {
       const health = await request(port, 'GET', '/health', undefined, {

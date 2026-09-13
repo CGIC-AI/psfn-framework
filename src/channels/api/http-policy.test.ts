@@ -42,6 +42,19 @@ describe('normalizeCorsAllowedOrigins', () => {
 });
 
 describe('resolveApiCorsAllowedOrigins', () => {
+  it('admits the exact configured fleet origin even when the explicit list is stale', () => {
+    const allowed = normalizeCorsAllowedOrigins(resolveApiCorsAllowedOrigins({
+      explicitAllowlist: ['https://old-console.example.test'],
+      canonicalOrigin: 'https://fleet.example.test',
+    }));
+    expect(evaluateCorsPolicy(requestWithHeaders({
+      origin: 'https://fleet.example.test',
+    }), allowed, undefined)).toMatchObject({ ok: true });
+    expect(evaluateCorsPolicy(requestWithHeaders({
+      origin: 'https://other.example.test',
+    }), allowed, undefined)).toMatchObject({ ok: false, error: { status: 403 } });
+  });
+
   it('derives admin host origin when explicit allowlist is empty', () => {
     const origins = resolveApiCorsAllowedOrigins({
       explicitAllowlist: [],

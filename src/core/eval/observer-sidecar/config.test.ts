@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createDefaultObserverEvalSidecarLeverSettings,
   createDefaultObserverEvalSidecarSettings,
+  createDefaultEmoSimProactivitySettings,
 } from '../../../system/config/runtime-config-contracts.js';
 import {
   createObserverEvalSidecarRuntimeFromConfig,
@@ -21,6 +22,31 @@ import type { ContextCoherenceEvent } from '../../../shared/contracts/context-co
 import { createTurnId } from '../../turns/id.js';
 
 describe('createObserverEvalSidecarRuntimeFromConfig', () => {
+  it.each(['off', 'observe_only', 'on'] as const)('composes live sampling only for enabled proactivity modes (%s)', mode => {
+    const runtime = createObserverEvalSidecarRuntimeFromConfig({
+      companionId: '11111111-1111-4111-8111-111111111111',
+      observerEvalSidecar: {
+        ...createDefaultObserverEvalSidecarSettings(), enabled: true,
+        adapter: {
+          kind: 'emosim_server', serverUrl: 'http://emosim.test:17342',
+          sessionLabel: 'observer-test', agentName: 'observer', includeWorldState: false,
+        },
+      },
+      emosimProactivity: { ...createDefaultEmoSimProactivitySettings(), mode },
+    }, {
+      emitProactivityImpulse: async () => {},
+      proactivityStateStore: {
+        load: async () => ({ firstCrossingMs: null, lastFiredAtMs: null, lastSampledAtMs: null, lastInputId: null }),
+        save: async () => {},
+      },
+    });
+    expect(Boolean(runtime.proactivitySampling)).toBe(mode !== 'off');
+    if (mode !== 'off') {
+      expect(runtime.proactivitySampling?.intervalMs)
+        .toBe(createDefaultEmoSimProactivitySettings().thresholdProfile.samplingIntervalMs);
+    }
+  });
+
   it('keeps the observer detached when the sidecar is disabled', () => {
     const runtime = createObserverEvalSidecarRuntimeFromConfig({
       observerEvalSidecar: createDefaultObserverEvalSidecarSettings(),

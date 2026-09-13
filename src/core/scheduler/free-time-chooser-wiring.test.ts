@@ -11,6 +11,7 @@ import {
   FREE_TIME_BLOCK_EVENT,
   FREE_TIME_IDLE_TASK_ID,
   registerFreeTimeTasks,
+  freeTimeWorkspaceChannelId,
   type FreeTimeRuntimeOptions,
   type FreeTimeSessionManagerPort,
 } from './free-time.js';
@@ -55,22 +56,15 @@ function buildRuntime(chooseWorkspace: FreeTimeRuntimeOptions['chooseWorkspace']
   appendSystemNote: ReturnType<typeof vi.fn>;
   eventBus: EventBus;
 } {
-  // An open-gate idle scenario: last activity is old and the latest row is a
-  // system index row (not partner activity), so the deterministic gate opens.
+  // Empty conversation history is an open-gate idle scenario: free time owns
+  // its private continuity session without requiring an external conversation.
   const nowMs = Date.parse('2026-06-11T15:00:00.000Z');
-  const partnerEntries: SessionEntry[] = [
-    { id: 1, channelId: 'api:main', role: 'assistant', content: 'hi', timestamp: nowMs - 4 * 60 * 60_000 },
-  ];
+  const entries: SessionEntry[] = [];
   const appendSystemNote = vi.fn();
   const sessionManager: FreeTimeSessionManagerPort = {
-    resolveStartupSessionMetadata: () => ({
-      sessionId: 'api:main',
-      channelType: 'api',
-      timestamp: nowMs - 30 * 60_000,
-      lastRole: 'system',
-    }),
-    getRecentMessages: () => partnerEntries,
-    getRecentSessionEntries: () => partnerEntries,
+    listRecentlyActiveChannels: () => [],
+    getRecentMessages: () => entries,
+    getRecentSessionEntries: () => entries,
     appendSystemNote,
     appendContextSystemNote: vi.fn(),
   };
@@ -79,6 +73,7 @@ function buildRuntime(chooseWorkspace: FreeTimeRuntimeOptions['chooseWorkspace']
   const scheduler = new Scheduler(eventBus, { tickIntervalMs: 100, heartbeatIntervalMs: 500 });
   const invokeTurn = vi.fn(async () => ({ content: REFLECTION_SILENT_TOKEN }));
 
+  let workspaceChannelId = freeTimeWorkspaceChannelId();
   const runtime: FreeTimeRuntimeOptions = {
     scheduler,
     sessionManager,
@@ -88,7 +83,14 @@ function buildRuntime(chooseWorkspace: FreeTimeRuntimeOptions['chooseWorkspace']
     runBlock: ({ run }) => run(() => 0),
     invokeTurn,
     now: () => nowMs,
-    ...(chooseWorkspace ? { chooseWorkspace } : {}),
+    resolveWorkspaceChannelId: () => workspaceChannelId,
+    ...(chooseWorkspace ? {
+      chooseWorkspace: async input => {
+        const outcome = await chooseWorkspace(input);
+        if (outcome.kind === 'workspace') workspaceChannelId = outcome.workspace.sessionId;
+        return outcome;
+      },
+    } : {}),
   };
   registerFreeTimeTasks(runtime);
   return { scheduler, invokeTurn, appendSystemNote, eventBus };
@@ -141,13 +143,20 @@ describe('free-time chooser wiring', () => {
     await runIdleHandler(scheduler);
 
     expect(chooseWorkspace).toHaveBeenCalledTimes(1);
-    // A workspace choice proceeds to a real free-time turn.
+    // A workspace choice proceeds on its own private continuity channel.
     expect(invokeTurn).toHaveBeenCalledTimes(1);
+    expect(invokeTurn).toHaveBeenCalledWith(expect.objectContaining({
+      channelId: PRIVATE_WORKSPACE_OUTCOME.workspace.sessionId,
+    }));
+    expect(PRIVATE_WORKSPACE_OUTCOME.workspace.sessionId).toBe('internal:free-time:private');
   });
 
-  it('without a chooser wired, the legacy block path still runs', async () => {
+  it('without a chooser wired, the block uses its default private session', async () => {
     const { scheduler, invokeTurn } = buildRuntime(undefined);
     await runIdleHandler(scheduler);
     expect(invokeTurn).toHaveBeenCalledTimes(1);
+    expect(invokeTurn).toHaveBeenCalledWith(expect.objectContaining({
+      channelId: freeTimeWorkspaceChannelId(),
+    }));
   });
 });

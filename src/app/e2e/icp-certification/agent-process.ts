@@ -387,22 +387,6 @@ async function main(): Promise<void> {
     sourceRuntime,
     weightedThoughtCandidateAdapter,
   } = sourceWiring;
-  socialImpulseOutreachRuntime = registerSocialImpulseOutreachLane({
-    companionId,
-    companionName: identity.card.data.name,
-    companionDataDir: startup.pathSnapshot.companionDataDir,
-    store: persistence.socialImpulseOutreachStore,
-    getMode: () => 'on',
-    agentLoop: agent,
-    contactStore,
-    sessionStore: sessionRuntime.sessionStore,
-    icpAutonomy: autonomy,
-    ...(sourceRuntime ? { icpInitiation: sourceRuntime } : {}),
-    capabilityRuntime: startup.capabilityRuntime,
-    availability: {
-      snapshot: () => ({ state: 'available', sinceMs: 0, revision: 0 }),
-    },
-  }).runtime;
   const scheduler = new Scheduler(startup.eventBus, { tickIntervalMs: 10 }, {
     eligibilityGate: startup.eligibilityGate,
   });
@@ -416,6 +400,23 @@ async function main(): Promise<void> {
     eligibilityGate: startup.eligibilityGate,
     intervalMs: 1,
   });
+  socialImpulseOutreachRuntime = registerSocialImpulseOutreachLane({
+    companionId,
+    companionName: identity.card.data.name,
+    companionDataDir: startup.pathSnapshot.companionDataDir,
+    store: persistence.socialImpulseOutreachStore,
+    getMode: () => 'on',
+    agentLoop: agent,
+    postTurnActions,
+    contactStore,
+    sessionStore: sessionRuntime.sessionStore,
+    icpAutonomy: autonomy,
+    ...(sourceRuntime ? { icpInitiation: sourceRuntime } : {}),
+    capabilityRuntime: startup.capabilityRuntime,
+    availability: {
+      snapshot: () => ({ state: 'available', sinceMs: 0, revision: 0 }),
+    },
+  }).runtime;
   const fixedNotifyCatalogSource = 'extended' as const;
   const unregisterInitiationCandidates = sourceRuntime
     ? registerIcpInitiationCandidatePostTurnRuntime({

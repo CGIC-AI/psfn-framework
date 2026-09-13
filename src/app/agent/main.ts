@@ -1975,6 +1975,7 @@ async function main(): Promise<void> {
     store: persistenceRuntime.socialImpulseOutreachStore,
     getMode: () => config.emosimProactivity?.mode ?? 'off',
     agentLoop,
+    postTurnActions,
     contactStore,
     sessionStore,
     ...(primaryUserId ? { primaryDiscordUserId: primaryUserId } : {}),
@@ -2424,6 +2425,7 @@ async function main(): Promise<void> {
       mismatches: postgresReadiness.degraded.map(entry => entry.mismatch).join('; '),
     });
   }
+  await socialImpulseOutreachLane.runtime.recoverPending();
   scheduler.start();
   await eventBus.emit('system.init', {});
   await eventBus.emit('system.ready', {});

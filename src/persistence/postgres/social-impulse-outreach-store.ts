@@ -13,6 +13,7 @@ import {
   ensurePostgresSchema,
   ensurePostgresSchemaExists,
   queryOne,
+  queryRows,
 } from '../postgres.js';
 import { POSTGRES_INTENTION_MIGRATIONS } from './migrations.js';
 import { requireSafeInteger } from './row-guards.js';
@@ -35,6 +36,8 @@ interface OutreachRow extends QueryResultRow {
   channel_type: string | null;
   dyad_id: string | null;
   binding_hash: string | null;
+  execution_intent: string | null;
+  origin_icp_root_initiation_id: string | null;
   reason_code: string | null;
   created_at_ms: string | number;
   updated_at_ms: string | number;
@@ -44,7 +47,8 @@ const COLUMNS = `
   opportunity_id, schema_version, companion_id, impulse_dedupe_key,
   first_crossing_ms, fired_at_ms, mode_at_creation, state, disposition,
   destination_kind, destination_id, contact_id, display_label, channel_id,
-  channel_type, dyad_id, binding_hash, reason_code, created_at_ms, updated_at_ms
+  channel_type, dyad_id, binding_hash, execution_intent, origin_icp_root_initiation_id,
+  reason_code, created_at_ms, updated_at_ms
 `;
 
 export class PostgresSocialImpulseOutreachStore implements SocialImpulseOutreachStorePort {
@@ -79,9 +83,10 @@ export class PostgresSocialImpulseOutreachStore implements SocialImpulseOutreach
         opportunity_id, schema_version, companion_id, impulse_dedupe_key,
         first_crossing_ms, fired_at_ms, mode_at_creation, state, disposition,
         destination_kind, destination_id, contact_id, display_label, channel_id,
-        channel_type, dyad_id, binding_hash, reason_code, created_at_ms, updated_at_ms
+        channel_type, dyad_id, binding_hash, reason_code, created_at_ms, updated_at_ms,
+        origin_icp_root_initiation_id
       ) VALUES ($1, 1, $2, $3, $4, $5, $6, $7, NULL, NULL, NULL, NULL, NULL,
-        NULL, NULL, NULL, NULL, $8, $9, $9)
+        NULL, NULL, NULL, NULL, $8, $9, $9, $10)
       ON CONFLICT (opportunity_id) DO NOTHING
       RETURNING ${COLUMNS}
     `, [
@@ -94,14 +99,14 @@ export class PostgresSocialImpulseOutreachStore implements SocialImpulseOutreach
       record.state,
       record.reasonCode,
       record.createdAtMs,
+      record.originIcpRootInitiationId,
     ]);
     if (row) return { created: true, record: mapRow(row) };
     const prior = await this.getOpportunity(record.opportunityId);
     if (!prior
       || prior.companionId !== record.companionId
       || prior.impulseDedupeKey !== record.impulseDedupeKey
-      || prior.firstCrossingMs !== record.firstCrossingMs
-      || prior.firedAtMs !== record.firedAtMs) {
+      || prior.firstCrossingMs !== record.firstCrossingMs) {
       throw new Error('social impulse opportunity correlation collided with different source facts');
     }
     return { created: false, record: prior };
@@ -116,11 +121,31 @@ export class PostgresSocialImpulseOutreachStore implements SocialImpulseOutreach
     return row ? mapRow(row) : null;
   }
 
+  async listRecoverable(companionId: string): Promise<SocialImpulseOutreachRecord[]> {
+    const rows = await queryRows<OutreachRow>(this.pool, `
+      SELECT ${COLUMNS} FROM social_impulse_outreach_opportunities
+      WHERE companion_id = $1 AND state IN ('pending', 'queued')
+      ORDER BY fired_at_ms, opportunity_id
+    `, [companionId]);
+    return rows.map(mapRow);
+  }
+
+  async beginExecution(opportunityId: string, bindingHash: string, atMs: number): Promise<boolean> {
+    const row = await queryOne<OutreachRow>(this.pool, `
+      UPDATE social_impulse_outreach_opportunities SET state = 'chosen', updated_at_ms = $3
+      WHERE opportunity_id = $1 AND binding_hash = $2 AND state = 'queued'
+      RETURNING ${COLUMNS}
+    `, [opportunityId, bindingHash, atMs]);
+    return row !== undefined;
+  }
+
   async claimDisposition(input: {
     opportunityId: string;
     disposition: SocialImpulseDisposition;
     destination: SocialImpulseOutreachDestination | null;
     bindingHash: string;
+    executionIntent?: string;
+    originIcpRootInitiationId?: string;
     claimedAtMs: number;
   }): Promise<
     | { outcome: 'claimed' | 'replayed' | 'conflict'; record: SocialImpulseOutreachRecord }
@@ -129,10 +154,12 @@ export class PostgresSocialImpulseOutreachStore implements SocialImpulseOutreach
     const destination = input.destination;
     const row = await queryOne<OutreachRow>(this.pool, `
       UPDATE social_impulse_outreach_opportunities SET
-        state = 'chosen', disposition = $2, destination_kind = $3,
+        state = CASE WHEN $12::TEXT IS NULL THEN 'chosen' ELSE 'queued' END,
+        disposition = $2, destination_kind = $3,
         destination_id = $4, contact_id = $5, display_label = $6,
         channel_id = $7, channel_type = $8, dyad_id = $9,
-        binding_hash = $10, updated_at_ms = $11
+        binding_hash = $10, updated_at_ms = $11, execution_intent = $12,
+        origin_icp_root_initiation_id = COALESCE(origin_icp_root_initiation_id, $13::UUID)
       WHERE opportunity_id = $1 AND state = 'pending' AND binding_hash IS NULL
       RETURNING ${COLUMNS}
     `, [
@@ -147,6 +174,8 @@ export class PostgresSocialImpulseOutreachStore implements SocialImpulseOutreach
       destination?.dyadId ?? null,
       input.bindingHash,
       input.claimedAtMs,
+      input.executionIntent ?? null,
+      input.originIcpRootInitiationId ?? null,
     ]);
     if (row) return { outcome: 'claimed', record: mapRow(row) };
     const prior = await this.getOpportunity(input.opportunityId);
@@ -159,15 +188,15 @@ export class PostgresSocialImpulseOutreachStore implements SocialImpulseOutreach
   async finalize(input: {
     opportunityId: string;
     bindingHash: string;
-    state: Exclude<SocialImpulseOutreachState, 'pending' | 'chosen'>;
+    state: Exclude<SocialImpulseOutreachState, 'pending' | 'queued' | 'chosen'>;
     reasonCode?: string;
     finalizedAtMs: number;
   }): Promise<SocialImpulseOutreachRecord> {
     const row = await queryOne<OutreachRow>(this.pool, `
       UPDATE social_impulse_outreach_opportunities SET
-        state = $3, reason_code = $4, updated_at_ms = $5
+        state = $3, reason_code = $4, updated_at_ms = $5, execution_intent = NULL
       WHERE opportunity_id = $1 AND binding_hash = $2
-        AND state IN ('chosen', $3)
+        AND state IN ('chosen', 'queued', $3)
       RETURNING ${COLUMNS}
     `, [
       input.opportunityId,
@@ -200,6 +229,8 @@ function mapRow(row: OutreachRow): SocialImpulseOutreachRecord {
     disposition,
     destination: mapDestination(row),
     bindingHash: row.binding_hash,
+    executionIntent: row.execution_intent ?? null,
+    originIcpRootInitiationId: row.origin_icp_root_initiation_id ?? null,
     reasonCode: row.reason_code,
     createdAtMs: requireSafeInteger(row.created_at_ms, 'socialImpulse.createdAtMs'),
     updatedAtMs: requireSafeInteger(row.updated_at_ms, 'socialImpulse.updatedAtMs'),
@@ -259,7 +290,7 @@ function mapDestination(row: OutreachRow): SocialImpulseOutreachDestination | nu
 
 function parseState(value: string): SocialImpulseOutreachState {
   const states: readonly SocialImpulseOutreachState[] = [
-    'pending', 'chosen', 'off', 'ignore', 'defer', 'other',
+    'pending', 'queued', 'chosen', 'off', 'ignore', 'defer', 'other',
     'would_send', 'delivered', 'suppressed',
   ];
   if (!states.includes(value as SocialImpulseOutreachState)) {

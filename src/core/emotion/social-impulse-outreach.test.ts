@@ -96,6 +96,16 @@ function memoryStore(): SocialImpulseOutreachStorePort & { records: Map<string, 
   const records = new Map<string, SocialImpulseOutreachRecord>();
   return {
     records,
+    async listRecoverable(companionId) {
+      return [...records.values()].filter(record => record.companionId === companionId
+        && (record.state === 'pending' || record.state === 'queued')).map(record => structuredClone(record));
+    },
+    async beginExecution(opportunityId, bindingHash, atMs) {
+      const record = records.get(opportunityId);
+      if (!record || record.state !== 'queued' || record.bindingHash !== bindingHash) return false;
+      records.set(opportunityId, { ...record, state: 'chosen', updatedAtMs: atMs });
+      return true;
+    },
     async createOpportunity(record) {
       const prior = records.get(record.opportunityId);
       if (prior) return { created: false, record: structuredClone(prior) };
@@ -116,10 +126,12 @@ function memoryStore(): SocialImpulseOutreachStorePort & { records: Map<string, 
       }
       const claimed: SocialImpulseOutreachRecord = {
         ...record,
-        state: 'chosen',
+        state: input.executionIntent ? 'queued' : 'chosen',
         disposition: input.disposition,
         destination: input.destination ? structuredClone(input.destination) : null,
         bindingHash: input.bindingHash,
+        executionIntent: input.executionIntent ?? null,
+        originIcpRootInitiationId: record.originIcpRootInitiationId ?? input.originIcpRootInitiationId ?? null,
         updatedAtMs: input.claimedAtMs,
       };
       records.set(record.opportunityId, claimed);
@@ -133,6 +145,7 @@ function memoryStore(): SocialImpulseOutreachStorePort & { records: Map<string, 
       const finalized = {
         ...record,
         state: input.state,
+        executionIntent: null,
         reasonCode: input.reasonCode ?? null,
         updatedAtMs: input.finalizedAtMs,
       } satisfies SocialImpulseOutreachRecord;
@@ -160,6 +173,56 @@ function harness(mode: 'off' | 'shadow' | 'on' = 'on') {
 }
 
 describe('social impulse outreach disposition', () => {
+  it('recovers a queued exact choice after queue admission fails without replaying an ambiguous execution', async () => {
+    const store = memoryStore();
+    const enqueueExecution = vi.fn<(_id: string) => Promise<void>>()
+      .mockRejectedValueOnce(new Error('queue persistence unavailable'))
+      .mockResolvedValue(undefined);
+    const execute = vi.fn(async () => ({ outcome: 'delivered' as const }));
+    const options = {
+      companionId: COMPANION_ID, store, getMode: () => 'on' as const,
+      listDestinations: async () => destinations(),
+      runDispositionOpportunity: async () => {}, enqueueExecution, execute,
+      now: () => FIRED_AT_MS + 100,
+    };
+    const runtime = createSocialImpulseOutreachRuntime(options);
+    await runtime.onImpulse(impulse());
+    await expect(runtime.choose({
+      opportunityId: impulse().correlationId, disposition: 'contact-human',
+      destinationId: 'human:contact-a:discord:dm-a', intent: 'A private exact intent.',
+    })).rejects.toThrow('queue persistence unavailable');
+    const queued = store.records.get(impulse().correlationId)!;
+    expect(queued).toMatchObject({ state: 'queued', executionIntent: 'A private exact intent.' });
+    const restarted = createSocialImpulseOutreachRuntime(options);
+    await restarted.recoverPending();
+    expect(enqueueExecution).toHaveBeenCalledTimes(2);
+    await expect(restarted.executeQueued(queued.opportunityId)).resolves.toMatchObject({ outcome: 'delivered' });
+    await restarted.executeQueued(queued.opportunityId);
+    expect(execute).toHaveBeenCalledOnce();
+
+    store.records.set(queued.opportunityId, { ...queued, state: 'chosen' });
+    await restarted.recoverPending();
+    expect(enqueueExecution).toHaveBeenCalledTimes(2);
+    await expect(restarted.executeQueued(queued.opportunityId)).resolves.toMatchObject({
+      outcome: 'suppressed', reasonCode: 'execution_outcome_unknown',
+    });
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it('retries an unfinished disposition after the source handoff failed', async () => {
+    const { runtime, runDispositionOpportunity, store } = harness();
+    runDispositionOpportunity.mockRejectedValueOnce(new Error('Agent turn ownership cannot be re-entered by the active run'));
+
+    await expect(runtime.onImpulse(impulse())).rejects.toThrow('cannot be re-entered');
+    expect(store.records.get(impulse().correlationId)?.state).toBe('pending');
+    await runtime.onImpulse({ ...impulse(), firedAtMs: FIRED_AT_MS + 1000 });
+
+    expect(runDispositionOpportunity).toHaveBeenCalledTimes(2);
+    expect(runDispositionOpportunity).toHaveBeenLastCalledWith(expect.objectContaining({
+      firedAtMs: FIRED_AT_MS,
+    }));
+  });
+
   it('creates exactly one content-free opportunity with the complete bounded choice set', async () => {
     const { runtime, runDispositionOpportunity } = harness();
     const first = await runtime.onImpulse(impulse());
@@ -167,7 +230,7 @@ describe('social impulse outreach disposition', () => {
 
     expect(first.outcome).toBe('created');
     expect(replay.outcome).toBe('replayed');
-    expect(runDispositionOpportunity).toHaveBeenCalledTimes(1);
+    expect(runDispositionOpportunity).toHaveBeenCalledTimes(2);
     expect(runDispositionOpportunity).toHaveBeenCalledWith(expect.objectContaining({
       opportunityId: impulse().correlationId,
       dispositions: SOCIAL_IMPULSE_DISPOSITIONS,

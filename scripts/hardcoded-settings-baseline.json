@@ -431,6 +431,20 @@
       "note": "Code-owned certification child shutdown deadline used only by the real-process test harness."
     },
     {
+      "file": "src/app/e2e/idle-purity-certification/emotion-model-fixture.ts",
+      "name": "configureIdlePurityEmotionFixture.json.arg1.model_max_length",
+      "value": "512",
+      "form": "object-member",
+      "note": "Deterministic local tokenizer fixture for native ONNX idle-purity certification. This bound is read only inside the isolated test runtime and does not provide production model or operator policy defaults."
+    },
+    {
+      "file": "src/app/e2e/idle-purity-certification/emotion-model-fixture.ts",
+      "name": "configureIdlePurityEmotionFixture.json.arg1.model.max_input_chars_per_word",
+      "value": "100",
+      "form": "object-member",
+      "note": "Deterministic local tokenizer fixture for native ONNX idle-purity certification. This bound is read only inside the isolated test runtime and does not provide production model or operator policy defaults."
+    },
+    {
       "file": "src/app/e2e/multi-companion-runtime-validation.ts",
       "name": "PROCESS_EXIT_TIMEOUT_MS",
       "value": "10_000",

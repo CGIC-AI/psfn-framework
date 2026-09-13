@@ -296,11 +296,13 @@ export interface SubstrateConfig {
    */
   backgroundFailureEscalationThreshold?: number;
   /**
-   * Row cap on the bounded persisted runtime health-event stream. Owned by
-   * settings.json; the store fails closed at boot when it is absent, so the
-   * stream can never grow without an operator-declared bound.
+   * Retained health-event row target, owned by settings.json and required at
+   * boot. The stream may exceed this target within the operational retention
+   * horizon; only expired overflow is pruned.
    */
   healthEventStreamMaxRows?: number;
+  /** Minimum retained operational history, in days; never below thirty. */
+  operationalMetadataRetentionDays?: number;
   /**
    * Bounded retry budget for a diagnostic PostgreSQL store's startup readiness
    * task (psfn-framework-6c6cq). Owned by settings.json. A first-boot

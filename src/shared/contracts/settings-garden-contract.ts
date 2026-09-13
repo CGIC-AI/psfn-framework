@@ -83,6 +83,7 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   observationMaskingWindow: { sectionId: 'sessions', surface: 'advanced' },
   backgroundFailureEscalationThreshold: { sectionId: 'sessions', surface: 'advanced' },
   healthEventStreamMaxRows: { sectionId: 'sessions', surface: 'advanced' },
+  operationalMetadataRetentionDays: { sectionId: 'sessions', surface: 'advanced' },
   postgresStoreReadinessRetryAttempts: { sectionId: 'sessions', surface: 'advanced' },
   postgresStoreReadinessRetryBackoffMs: { sectionId: 'sessions', surface: 'advanced' },
   custodySnapshotRetentionDays: { sectionId: 'sessions', surface: 'advanced' },

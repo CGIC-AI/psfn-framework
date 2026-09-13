@@ -1,3 +1,4 @@
+import { requireOperationalMetadataRetentionDays } from '../../shared/diagnostics/retention-policy.js';
 import {
   DEFAULT_UI_THEME_ID,
   createDefaultEmoSimProactivitySettings,
@@ -1508,6 +1509,9 @@ export function normalizeContextControlSettings(
   settings: EditableSettings,
 ): EditableSettings {
   const normalized: EditableSettings = { ...settings };
+  if ('operationalMetadataRetentionDays' in settings) {
+    normalized.operationalMetadataRetentionDays = requireOperationalMetadataRetentionDays(settings.operationalMetadataRetentionDays);
+  }
   normalizeBudgetAndThresholdSettings(normalized, settings);
   normalizeRouterAndProfileSettings(normalized, settings);
   normalizeImportProcessingSettings(normalized, settings);

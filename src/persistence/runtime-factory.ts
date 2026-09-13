@@ -1,3 +1,4 @@
+import { requireOperationalMetadataRetentionDays } from '../shared/diagnostics/retention-policy.js';
 import { MemoryJournal } from '../faculties/memory/journal.js';
 import type { MemoryStorePort } from '../faculties/memory/memory-store-port.js';
 import type { MemoryDeletionProposalStorePort } from '../faculties/memory/deletion-proposals.js';
@@ -274,6 +275,7 @@ export interface CreateAgentPersistenceRuntimeOptions {
     | 'automataPolicy'
     | 'observerEvalSidecar'
     | 'healthEventStreamMaxRows'
+    | 'operationalMetadataRetentionDays'
     | 'custodySnapshotRetentionDays'
   >;
   pathSnapshot: RuntimePathSnapshot;
@@ -402,7 +404,7 @@ export async function createAgentPersistenceRuntime(
         () => PostgresHealthEventStore.connectShared(
           databaseUrl,
           requireHealthEventStreamMaxRows(options.config.healthEventStreamMaxRows),
-          tenantRole ? { role: tenantRole } : {},
+          { ...(tenantRole ? { role: tenantRole } : {}), retentionDays: requireOperationalMetadataRetentionDays(options.config.operationalMetadataRetentionDays) },
         ),
       )
     : undefined;
@@ -674,7 +676,7 @@ export async function createAgentPersistenceRuntime(
       () => PostgresHealthEventStore.connect(
         databaseUrl,
         requireHealthEventStreamMaxRows(options.config.healthEventStreamMaxRows),
-        { schema, role: tenantRole },
+        { schema, role: tenantRole, retentionDays: requireOperationalMetadataRetentionDays(options.config.operationalMetadataRetentionDays) },
       ),
     ),
     icpFeltImpulseFunnelStore,

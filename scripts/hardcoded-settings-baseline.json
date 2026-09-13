@@ -11602,6 +11602,12 @@
       "note": "Immutable parser/wire/schema contract SECRET_KEY_PATTERN; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
     },
     {
+      "file": "src/shared/diagnostics/retention-policy.ts",
+      "name": "MIN_OPERATIONAL_METADATA_RETENTION_DAYS",
+      "value": "30",
+      "note": "Product retention floor required by psfn-framework-x96x1: operator-owned operationalMetadataRetentionDays may extend history, but cannot reduce the guaranteed thirty days of operational evidence. This constant is the minimum validation contract, not the configurable retention duration."
+    },
+    {
       "file": "src/shared/diagnostics/runtime-diagnostics.ts",
       "name": "BACKUP_RING_LIMIT",
       "value": "128"
@@ -11630,11 +11636,6 @@
       "file": "src/shared/diagnostics/runtime-diagnostics.ts",
       "name": "MAX_LIMIT",
       "value": "100"
-    },
-    {
-      "file": "src/shared/diagnostics/runtime-diagnostics.ts",
-      "name": "MAX_WINDOW_MS",
-      "value": "24 * 60 * 60 * 1000"
     },
     {
       "file": "src/shared/diagnostics/runtime-diagnostics.ts",

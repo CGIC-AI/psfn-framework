@@ -314,6 +314,7 @@ const SETTINGS_INTEGER_FIELDS = new Set<string>([
   'compactionEmotionalSalienceThresholdPct',
   'backgroundFailureEscalationThreshold',
   'healthEventStreamMaxRows',
+  'operationalMetadataRetentionDays',
   'postgresStoreReadinessRetryAttempts',
   'postgresStoreReadinessRetryBackoffMs',
   'custodySnapshotRetentionDays',

@@ -284,6 +284,7 @@
   "memoryRefreshFailureAlertThreshold": 3,
   "intakeScreeningFailureAlertThreshold": 3,
   "healthEventStreamMaxRows": 5000,
+  "operationalMetadataRetentionDays": 30,
   "postgresStoreReadinessRetryAttempts": 6,
   "postgresStoreReadinessRetryBackoffMs": 5000,
   "custodySnapshotRetentionDays": 90,

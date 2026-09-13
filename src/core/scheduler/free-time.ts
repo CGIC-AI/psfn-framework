@@ -64,6 +64,10 @@ import type { Scheduler } from './scheduler.js';
 import { conversationalEntryFromSessionMetadata } from './session-metadata-preflight.js';
 import type { FreeTimeChooserOutcome, FreeTimeRestReason } from './free-time-chooser.js';
 import type { FreeTimeLane } from './free-time-lane.js';
+import {
+  resolveFreeTimeSessionMetadata,
+  type FreeTimeSessionMetadataPort,
+} from './free-time-session-selection.js';
 import type { FreeTimeReturnPolicy, FreeTimeWorkspace } from './free-time-workspace-resolver.js';
 import type { DisclosureDestination, DisclosureLineage } from '../cogsec/disclosure/index.js';
 import { projectReturnNoteEvidence } from './return-note-projection.js';
@@ -426,8 +430,7 @@ export function buildFreeTimeBlockNote(result: FreeTimeBlockResult): string {
 
 // ── Runtime registration ──
 
-export interface FreeTimeSessionManagerPort {
-  resolveStartupSessionMetadata(behavior?: 'reuse_latest_session'): StartupSessionMetadata | null;
+export interface FreeTimeSessionManagerPort extends FreeTimeSessionMetadataPort {
   getRecentMessages(channelId: string, limit?: number): SessionEntry[];
   getRecentSessionEntries?(channelId: string, limit: number): SessionEntry[];
   appendSystemNote(channelId: string, note: string, source?: string): void;
@@ -810,7 +813,7 @@ function makeLaneHandler(
 
   return async () => {
     const nowMs = now();
-    const session = options.sessionManager.resolveStartupSessionMetadata('reuse_latest_session');
+    const session = resolveFreeTimeSessionMetadata(options.sessionManager);
     const sessionId = session?.sessionId;
 
     // Daily block counter resets on local-day rollover.

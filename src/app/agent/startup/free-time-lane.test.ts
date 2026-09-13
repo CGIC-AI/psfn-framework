@@ -112,13 +112,7 @@ describe('registerFreeTimeLane production composition', () => {
       append(channelId, 'system', note);
     });
     const sessionManager: FreeTimeSessionManagerPort = {
-      listRecentSessions: () => [{
-        sessionId: 'api:main',
-        channelId: 'api:main',
-        channelType: 'api',
-        lastActivityAt: partnerEntry.timestamp,
-        lastRole: 'assistant',
-      }],
+      listRecentlyActiveChannels: () => [],
       getRecentMessages: (channelId, limit = 32) => (
         channelId === partnerEntry.channelId ? [partnerEntry] : recent(channelId, limit)
       ),

@@ -103,84 +103,27 @@ function disclosureLineage(input: { ref: string; permittedContactId: string }): 
 // ── Lane eligibility ──
 
 describe('evaluateFreeTimeLaneEligibility', () => {
-  const lastAt = Date.parse('2026-06-10T22:00:00.000Z');
-  const insideWindowNow = Date.parse('2026-06-11T06:00:00.000Z');
-
-  it('quiet-hours lane is eligible inside the rest window after inactivity', () => {
-    const decision = evaluateFreeTimeLaneEligibility({
-      lane: 'quiet_hours',
-      session: { sessionId: 'api:main', channelType: 'api', timestamp: lastAt },
-      recentEntries: [
-        entry({ role: 'user', timestamp: lastAt - 60_000 }),
-        entry({ role: 'assistant', timestamp: lastAt }),
-      ],
-      restWindow,
-      idleMinIdleMinutes: 180,
-      nowMs: insideWindowNow,
-    });
-    expect(decision.allowed).toBe(true);
+  it('allows quiet-hours free time inside the configured rest window without a conversation', () => {
+    expect(evaluateFreeTimeLaneEligibility({
+      lane: 'quiet_hours', restWindow, nowMs: Date.parse('2026-06-11T06:00:00Z'),
+    }).allowed).toBe(true);
   });
 
-  it('quiet-hours lane is blocked outside the rest window', () => {
-    const decision = evaluateFreeTimeLaneEligibility({
-      lane: 'quiet_hours',
-      session: { sessionId: 'api:main', channelType: 'api', timestamp: lastAt },
-      recentEntries: [entry({ role: 'user', timestamp: lastAt })],
-      restWindow,
-      idleMinIdleMinutes: 180,
-      nowMs: Date.parse('2026-06-11T14:00:00.000Z'),
-    });
-    expect(decision).toMatchObject({ allowed: false, reason: 'outside_rest_window' });
+  it('blocks quiet-hours free time outside the rest window', () => {
+    expect(evaluateFreeTimeLaneEligibility({
+      lane: 'quiet_hours', restWindow, nowMs: Date.parse('2026-06-11T14:00:00Z'),
+    })).toMatchObject({ allowed: false, reasonCode: 'outside_rest_window' });
   });
 
-  it('idle lane is eligible after the idle gap regardless of time of day', () => {
-    const daytimeNow = Date.parse('2026-06-11T15:00:00.000Z');
-    const idleLastAt = Date.parse('2026-06-11T11:00:00.000Z'); // 4h earlier
-    const decision = evaluateFreeTimeLaneEligibility({
-      lane: 'idle',
-      session: { sessionId: 'api:main', channelType: 'api', timestamp: idleLastAt },
-      recentEntries: [
-        entry({ role: 'user', timestamp: idleLastAt - 60_000 }),
-        entry({ role: 'assistant', timestamp: idleLastAt }),
-      ],
-      restWindow,
-      idleMinIdleMinutes: 180,
-      nowMs: daytimeNow,
-    });
-    expect(decision.allowed).toBe(true);
-  });
-
-  it('idle lane is blocked below the idle threshold (active conversation)', () => {
-    const now = Date.parse('2026-06-11T15:00:00.000Z');
-    const decision = evaluateFreeTimeLaneEligibility({
-      lane: 'idle',
-      session: { sessionId: 'api:main', channelType: 'api', timestamp: now - 60_000 },
-      recentEntries: [entry({ role: 'user', timestamp: now - 60_000 })],
-      restWindow,
-      idleMinIdleMinutes: 180,
-      nowMs: now,
-    });
-    expect(decision).toMatchObject({ allowed: false, reason: 'below_idle_threshold' });
-  });
-
-  it('blocks public/broadcast surfaces at the privacy boundary', () => {
-    const decision = evaluateFreeTimeLaneEligibility({
-      lane: 'idle',
-      session: { sessionId: 'twitter:timeline', channelType: 'api', timestamp: 1 },
-      recentEntries: [entry({ channelId: 'twitter:timeline', role: 'user', timestamp: 1 })],
-      restWindow,
-      idleMinIdleMinutes: 180,
-      nowMs: 10 * 60 * 60_000,
-    });
-    expect(decision).toMatchObject({ allowed: false, reason: 'privacy_boundary' });
+  it('allows the idle lane independently of the time of day', () => {
+    expect(evaluateFreeTimeLaneEligibility({
+      lane: 'idle', restWindow, nowMs: Date.parse('2026-06-11T14:00:00Z'),
+    }).allowed).toBe(true);
   });
 });
 
-// ── Deterministic pre-spend gate ──
-
 describe('evaluateFreeTimeGate', () => {
   const base = {
-    activeConversationGuardMinutes: 180,
     minBlockIntervalMinutes: 240,
     maxBlocksPerDay: 3,
   };
@@ -189,7 +132,7 @@ describe('evaluateFreeTimeGate', () => {
     const decision = evaluateFreeTimeGate({
       ...base,
       laneEligible: true,
-      minutesSincePartnerActivity: 480,
+      partnerRecentlyActive: false,
       minutesSinceLastBlock: 10_000,
       blocksToday: 0,
     });
@@ -200,7 +143,7 @@ describe('evaluateFreeTimeGate', () => {
     const decision = evaluateFreeTimeGate({
       ...base,
       laneEligible: false,
-      minutesSincePartnerActivity: 480,
+      partnerRecentlyActive: false,
       minutesSinceLastBlock: 10_000,
       blocksToday: 0,
     });
@@ -211,7 +154,7 @@ describe('evaluateFreeTimeGate', () => {
     const decision = evaluateFreeTimeGate({
       ...base,
       laneEligible: true,
-      minutesSincePartnerActivity: 30,
+      partnerRecentlyActive: true,
       minutesSinceLastBlock: 10_000,
       blocksToday: 0,
     });
@@ -222,7 +165,7 @@ describe('evaluateFreeTimeGate', () => {
     const decision = evaluateFreeTimeGate({
       ...base,
       laneEligible: true,
-      minutesSincePartnerActivity: 480,
+      partnerRecentlyActive: false,
       minutesSinceLastBlock: 60,
       blocksToday: 1,
     });
@@ -233,7 +176,7 @@ describe('evaluateFreeTimeGate', () => {
     const decision = evaluateFreeTimeGate({
       ...base,
       laneEligible: true,
-      minutesSincePartnerActivity: 480,
+      partnerRecentlyActive: false,
       minutesSinceLastBlock: 10_000,
       blocksToday: 3,
     });
@@ -365,7 +308,7 @@ interface FakeSessionManager {
     timestamp: number;
     lastRole?: SessionEntry['role'];
   } | null;
-  listRecentSessions: FreeTimeRuntimeOptions['sessionManager']['listRecentSessions'];
+  listRecentlyActiveChannels: FreeTimeRuntimeOptions['sessionManager']['listRecentlyActiveChannels'];
   getRecentMessages: (channelId: string, limit?: number) => SessionEntry[];
   getRecentSessionEntries: (channelId: string, limit: number) => SessionEntry[];
   appendSystemNote: ReturnType<typeof vi.fn>;
@@ -407,15 +350,13 @@ function buildRuntime(options: {
 
   const sessionManager: FakeSessionManager = {
     resolveStartupSessionMetadata: () => ({ sessionId: 'api:main', channelType: 'api', timestamp: lastAt }),
-    listRecentSessions: () => {
+    listRecentlyActiveChannels: ({ lookbackMs, nowMs = Date.now() }) => {
       const session = sessionManager.resolveStartupSessionMetadata();
-      return session ? [{
-        sessionId: session.sessionId,
-        channelId: session.sessionId,
-        channelType: session.channelType,
-        lastActivityAt: session.timestamp,
-        lastRole: session.lastRole ?? 'assistant',
-      }] : [];
+      if (!session) return [];
+      const partnerAt = session.lastRole === 'user'
+        ? session.timestamp
+        : partnerEntries.find(entry => entry.role === 'user')?.timestamp;
+      return partnerAt !== undefined && partnerAt >= nowMs - lookbackMs ? [session] : [];
     },
     getRecentMessages: (channelId) => (channelId === 'api:main' ? partnerEntries : []),
     getRecentSessionEntries: (channelId) => (channelId.startsWith(FREE_TIME_CHANNEL_PREFIX) ? transcript : partnerEntries),
@@ -503,7 +444,7 @@ describe('registerFreeTimeTasks', () => {
     if (!handler) throw new Error('idle free-time task was not registered');
     await handler();
 
-    expect(getRecentMessages).toHaveBeenCalledTimes(1);
+    expect(getRecentMessages).not.toHaveBeenCalled();
     expect(invokeTurn).toHaveBeenCalledTimes(1);
   });
 
@@ -728,7 +669,7 @@ describe('registerFreeTimeTasks', () => {
       await scheduler.tick();
       const firstCallCount = invokeTurn.mock.calls.length;
       expect(firstCallCount).toBeGreaterThan(0);
-      expect(getRecentMessages).toHaveBeenCalled();
+      expect(getRecentMessages).not.toHaveBeenCalled();
       expect(getRecentSessionEntries).toHaveBeenCalled();
       getRecentMessages.mockClear();
       getRecentSessionEntries.mockClear();
@@ -888,10 +829,7 @@ describe('registerFreeTimeTasks', () => {
       registerFreeTimeTasks({
         scheduler,
         sessionManager: {
-          listRecentSessions: () => [{
-            sessionId: 'api:main', channelId: 'api:main', channelType: 'api',
-            lastActivityAt: nowMs - 8 * 60 * 60_000, lastRole: 'user',
-          }],
+          listRecentlyActiveChannels: () => [],
           getRecentMessages: () => [entry({ role: 'user', timestamp: nowMs - 8 * 60 * 60_000 })],
           getRecentSessionEntries: () => [],
           appendSystemNote: vi.fn(),

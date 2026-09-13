@@ -4,10 +4,19 @@ import {
   fstatSync, unlinkSync, writeSync,
 } from 'node:fs';
 import { join } from 'node:path';
-import type { DiagnosticLogRecord } from '../logger.js';
 import { isRecord } from '../utils/types.js';
 import { sanitizeDiagnosticText, sanitizeDiagnosticValue } from './redaction.js';
 import { operationalMetadataCutoff, requireOperationalMetadataRetentionDays } from './retention-policy.js';
+
+export interface DiagnosticLogRecord {
+  observedAt: number;
+  level: 'warn' | 'error' | 'info' | 'debug' | 'trace';
+  eventId?: string;
+  message: string;
+  component?: string;
+  context?: Record<string, string | number | boolean | null>;
+  source: string;
+}
 
 interface OperationalLogStoreOptions {
   logsDir: string;

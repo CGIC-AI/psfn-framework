@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import { createHash } from 'node:crypto';
+import { buildExtractionSourceRef } from '../../faculties/memory/extraction/signals.js';
+import type { SessionEntry } from '../session/types.js';
 import type { LLMProviderPort } from '../agent/contracts.js';
 import { EventBus, type DeterministicGateEvent } from '../../shared/event-bus.js';
 import { createTestPostgresIntentionPorts } from '../../test-support/postgres-intention-ports.js';
@@ -84,6 +87,56 @@ const distinctConcernTexts = [
 ];
 
 describe('automated concern candidates', () => {
+  it('persists and recovers concern candidates from hashed external sessions', async () => {
+    const concernStore = makeConcernStore();
+    const options = {
+      eventBus: new EventBus(),
+      llmProvider: { complete: vi.fn() } as unknown as LLMProviderPort,
+      concernStore,
+      now: () => new Date('2026-06-29T12:00:00.000Z'),
+    };
+    const runtime = await createAutomatedConcernRuntime(options);
+    const channelId = `api:hermes:${'a'.repeat(64)}`;
+    const recentEntries: SessionEntry[] = [{
+      id: 1,
+      channelId,
+      role: 'user',
+      content: 'Please check in tomorrow about the appointment.',
+      timestamp: 100,
+    }];
+    const sourceRef = buildExtractionSourceRef(
+      channelId, recentEntries, 'private', 'external_conversation',
+    );
+    const input = {
+      channelId,
+      triggerReason: 'external_conversation' as const,
+      canonicalContactId: 'contact-a',
+      sourceRef,
+      recentEntries,
+      acceptedFacts: [],
+      acceptedWrites: [],
+      relatedMemories: [],
+    };
+    try {
+      const ids = await runtime.extractionSink(input);
+      expect(ids).toEqual(['concern-1']);
+      expect(await runtime.extractionSink(input)).toEqual(ids);
+      await expect(concernStore.getById(ids[0]!)).resolves.toMatchObject({
+        candidateReviewSnapshot: { sourceRef, channelId, triggerReason: 'external_conversation' },
+      });
+    } finally {
+      runtime.dispose();
+    }
+    const recovered = await createAutomatedConcernRuntime(options);
+    try {
+      expect(recovered.queue.drainPending()).toMatchObject([{
+        sourceRef, channelId, triggerReason: 'external_conversation',
+      }]);
+    } finally {
+      recovered.dispose();
+    }
+  });
+
   it('distinguishes a missing review snapshot from an unsupported schema version', () => {
     expect(() => parseDurableCandidateReviewSnapshot(null)).toThrow(
       'Durable concern candidate review snapshot is missing',
@@ -507,7 +560,10 @@ describe('automated concern candidates', () => {
       evidenceRefs: [
         { kind: 'message', ref: '10' },
         { kind: 'turn', ref: 'turn-1' },
-        { kind: 'runtime', ref: 'source:extract-1' },
+        {
+          kind: 'runtime',
+          ref: `memory-extraction-source:${createHash('sha256').update('source:extract-1').digest('hex')}`,
+        },
       ],
     });
     expect(candidates[0]?.conversationContext[0]?.content).toContain('check in');

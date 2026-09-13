@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type {
   AutomataWorkerRunBinding,
   AutomataWorkerRunPort,
@@ -59,7 +60,7 @@ async function beginMemoryExtractionAutomataRun(
   input: BeginMemoryExtractionAutomataRunInput,
   terminal: AutomataTerminalLifecyclePort | null | undefined,
 ): Promise<AutomataWorkerRunBinding> {
-  let run = registry.getRun(input.runId);
+  let run = await registry.loadExactRun(input.runId);
   if (!run) {
     run = await registry.register({
       runId: input.runId,
@@ -73,6 +74,33 @@ async function beginMemoryExtractionAutomataRun(
     });
   }
   assertExactMemoryExtractionRun(run, input);
+  while (input.triggerReason === 'external_conversation'
+    && run.workerId === MEMORY_EXTRACTION_WORKER_ID
+    && run.status === 'failed'
+    && run.statusReason === MEMORY_EXTRACTION_FAILED_REASON
+    && run.failureReason === 'orchestration_failure') {
+    const sourceRunId: string = run.runId;
+    const retryRunId = `memory-extraction-retry:${createHash('sha256').update(sourceRunId).digest('hex')}`;
+    const existingRetry: AutomataRunRecord | null = await registry.loadExactRun(retryRunId);
+    if (existingRetry && (existingRetry.sourceRunId !== sourceRunId
+      || existingRetry.workerGeneration !== run.workerGeneration + 1
+      || existingRetry.workerId !== MEMORY_EXTRACTION_WORKER_ID)) {
+      throw new Error('Memory extraction retry lineage does not match the failed run');
+    }
+    run = existingRetry ?? await registry.register({
+      runId: retryRunId,
+      automatonClass: 'memory.extraction',
+      workerId: MEMORY_EXTRACTION_WORKER_ID,
+      workerGeneration: run.workerGeneration + 1,
+      taskId: input.taskId,
+      taskLabel: MEMORY_EXTRACTION_TASK_LABEL,
+      taskSummary: `Memory extraction triggered by ${input.triggerReason}`,
+      sourceRunId,
+      sessionIds: [input.sessionId],
+      ...(input.createdAtMs === undefined ? {} : { createdAtMs: input.createdAtMs }),
+    });
+    assertExactMemoryExtractionRun(run, input);
+  }
   const binding = (record: AutomataRunRecord, execute: boolean): AutomataWorkerRunBinding => ({
     companionId: record.companionId,
     lineage: lineageFromRun(record),
@@ -118,16 +146,22 @@ export function createMemoryExtractionAutomataRunPort(
   input: BeginMemoryExtractionAutomataRunInput,
   terminal?: AutomataTerminalLifecyclePort | null,
 ): AutomataWorkerRunPort {
+  let boundRunId: string | undefined;
   return {
-    begin: async () => await beginMemoryExtractionAutomataRun(registry, input, terminal),
+    begin: async () => {
+      const binding = await beginMemoryExtractionAutomataRun(registry, input, terminal);
+      boundRunId = binding.lineage.runId;
+      return binding;
+    },
     terminalize: async request => {
+      if (!boundRunId) throw new Error('Memory extraction Automata run must begin before terminalization');
       if (request.lifecycleState === 'completed') {
-        await completeMemoryExtractionAutomataRun(registry, input.runId, request.atMs);
+        await completeMemoryExtractionAutomataRun(registry, boundRunId, request.atMs);
         return;
       }
       await failMemoryExtractionAutomataRun(
         registry,
-        input.runId,
+        boundRunId,
         request.failureReason ?? request.stateReason,
         request.atMs,
       );

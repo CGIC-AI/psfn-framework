@@ -1127,6 +1127,45 @@ describe('BackgroundWorkSupervisor', () => {
     });
   });
 
+  it('continues claiming when a foreground lease ends during renewal', async () => {
+    const store = new MemoryBackgroundWorkStore();
+    const enteredRenewal = deferred();
+    const releaseRenewal = deferred();
+    const renewForeground = store.renewForeground.bind(store);
+    vi.spyOn(store, 'renewForeground').mockImplementationOnce(async input => {
+      enteredRenewal.resolve();
+      await releaseRenewal.promise;
+      return renewForeground(input);
+    });
+    const executor = vi.fn(async () => undefined);
+    const supervisor = createBackgroundWorkSupervisor({
+      store,
+      eventBus: new EventBus(),
+      now: () => 1_000,
+      executor,
+    });
+    const input = makeInput('session-a', 'turn-a');
+    await store.enqueueBatch([input]);
+    const foreground = supervisor.beginForeground('session-a');
+    try {
+      await foreground.ready;
+      const tick = supervisor.tick();
+      await enteredRenewal.promise;
+      await supervisor.endForeground(foreground);
+      releaseRenewal.resolve();
+
+      await expect(tick).resolves.toBeUndefined();
+      await supervisor.waitForIdle();
+      expect(foreground.signal.aborted).toBe(false);
+      expect(executor).toHaveBeenCalledOnce();
+      expect(await store.get(input.jobId)).toMatchObject({ state: 'succeeded' });
+    } finally {
+      releaseRenewal.resolve();
+      await supervisor.endForeground(foreground);
+      await supervisor.stop();
+    }
+  });
+
   it('stops renewing a locally lost foreground lease after one quarantine window', async () => {
     vi.useFakeTimers();
     let now = 1_000;

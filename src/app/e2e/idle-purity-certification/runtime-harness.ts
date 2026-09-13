@@ -1,3 +1,4 @@
+import { configureIdlePurityEmotionFixture } from './emotion-model-fixture.js';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { createConnection } from 'node:net';
@@ -169,6 +170,7 @@ export async function startIdlePurityRuntimeHarness(input: {
   if (input.fixture.topology !== 'single_companion') {
     throw new Error('Idle-purity certification requires a single-companion fixture');
   }
+  configureIdlePurityEmotionFixture(input.fixture);
   await provisionIcpCertificationDatabase(input.databaseUrl, input.fixture);
   const previousOpenRouterApiKey = process.env.OPENROUTER_API_KEY;
   const modelServer = await startIcpCertificationModelServer();

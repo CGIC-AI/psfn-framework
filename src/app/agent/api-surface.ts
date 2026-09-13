@@ -116,7 +116,12 @@ export function buildApiHealthChecks(
             systemPrompt: 'You are a health check. Respond with exactly: OK',
             messages: [{ role: 'user', content: 'health probe' }],
           },
-          buildLLMWorkSpec({ purpose: 'reasoning', durable: false }),
+          buildLLMWorkSpec({
+            purpose: 'reasoning',
+            durable: false,
+            // Diagnostic polling must yield to conversation and existing maintenance.
+            correlation: { callType: 'scheduled', originStage: 'health.probe' },
+          }),
           { signal },
         );
         return buildResolvedProbeRouteMeta(response.model, response.providerObservability);

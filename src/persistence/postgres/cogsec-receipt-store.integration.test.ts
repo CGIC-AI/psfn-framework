@@ -2,6 +2,7 @@
 // pipeline issues into the store, and admission consumers verify out of it
 // across a restart. Every failure class fails CLOSED with a typed reason.
 
+import { fromPartial } from '@total-typescript/shoehorn';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -23,6 +24,12 @@ import { createIntakeL1Scanner } from '../../core/cogsec/intake/scanners/index.j
 import { validateIntakePolicy } from '../../system/config/intake-policy-config.js';
 import { createPostgresPool } from '../postgres.js';
 import { PostgresCogSecReceiptStore } from './cogsec-receipt-store.js';
+import {
+  resolveGatewayReceiptStoreDatabaseUrl,
+  resolveGatewayReceiptStoreTargets,
+} from '../../boundary/gateway/intake/receipt-store-targets.js';
+import type { ResolvedCompanionDatabaseTopology } from '../../system/config/companion-database-config.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 
 const TIMEOUT_MS = 120_000;
 const SCHEMA = 'companion_cogsec_receipts';
@@ -193,4 +200,59 @@ describe('PostgresCogSecReceiptStore', () => {
       await store.close();
     }
   }, TIMEOUT_MS);
+
+  it('uses distinct tenant logins for gateway receipts without cross-role grants', async () => {
+    if (!harness) throw new Error('Postgres integration harness is unavailable');
+    const { databaseUrl } = await harness.createDatabase();
+    const companions = [
+      { companionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', postgresSchema: 'receipts_alpha', postgresRole: 'receipts_alpha_runtime' },
+      { companionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', postgresSchema: 'receipts_beta', postgresRole: 'receipts_beta_runtime' },
+    ];
+    const admin = createPostgresPool(databaseUrl, { max: 1 });
+    const stores: PostgresCogSecReceiptStore[] = [];
+    try {
+      for (const companion of companions) {
+        await admin.query(`CREATE ROLE "${companion.postgresRole}" LOGIN NOINHERIT NOSUPERUSER
+          NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD 'receipt-test-password'`);
+        await admin.query(`CREATE SCHEMA "${companion.postgresSchema}" AUTHORIZATION "${companion.postgresRole}"`);
+      }
+      const topology = fromPartial<ResolvedCompanionDatabaseTopology>({
+        companions: companions.map(companion => {
+          const url = new URL(databaseUrl);
+          url.username = companion.postgresRole;
+          url.password = 'receipt-test-password';
+          return { companion, role: companion.postgresRole, databaseUrl: url.toString() };
+        }),
+      });
+      const primaryUrl = topology.companions[0]!.databaseUrl;
+      const targets = resolveGatewayReceiptStoreTargets(fromPartial<SubstrateConfig>({
+        companionFleet: { companions },
+      }));
+      for (const target of targets) {
+        stores.push(await PostgresCogSecReceiptStore.connect(
+          resolveGatewayReceiptStoreDatabaseUrl(target, primaryUrl, topology),
+          target.connectOptions,
+        ));
+      }
+      const admitted = await screeningService(stores[1]!).screen(CLEAN_TEXT, documentInput);
+      expect(admitted.receiptIssuanceError).toBeUndefined();
+      if (!admitted.receipt) throw new Error('Secondary companion must persist its own receipt');
+      expect(await stores[1]!.getById(admitted.receipt.receiptId)).toEqual(admitted.receipt);
+      expect(await stores[0]!.getById(admitted.receipt.receiptId)).toBeNull();
+      const ownership = await admin.query(`SELECT schemaname, tableowner FROM pg_tables
+        WHERE tablename = 'cogsec_receipts' ORDER BY schemaname`);
+      expect(ownership.rows).toEqual(companions.map(companion => ({
+        schemaname: companion.postgresSchema, tableowner: companion.postgresRole,
+      })));
+      const membership = await admin.query(`SELECT
+        pg_has_role('receipts_alpha_runtime', 'receipts_beta_runtime', 'MEMBER') AS alpha_to_beta,
+        pg_has_role('receipts_beta_runtime', 'receipts_alpha_runtime', 'MEMBER') AS beta_to_alpha,
+        has_schema_privilege('receipts_beta_runtime', 'public', 'CREATE') AS public_create`);
+      expect(membership.rows).toEqual([{ alpha_to_beta: false, beta_to_alpha: false, public_create: false }]);
+    } finally {
+      await Promise.all(stores.map(store => store.close()));
+      await admin.end();
+    }
+  }, TIMEOUT_MS);
+
 }, TIMEOUT_MS);

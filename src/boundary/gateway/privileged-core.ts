@@ -9,7 +9,11 @@ import { GatewayCapabilityTierResolver } from './capability-tier-resolver.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { GitOps } from '../integrations/git/ops.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import { resolveGatewayReceiptStoreTargets } from './intake/receipt-store-targets.js';
+import {
+  resolveGatewayReceiptStoreDatabaseUrl,
+  resolveGatewayReceiptStoreTargets,
+} from './intake/receipt-store-targets.js';
+import type { ResolvedCompanionDatabaseTopology } from '../../system/config/companion-database-config.js';
 import { createPostgresGatewayAuditStore } from './postgres-audit.js';
 import type { GatewayBootstrapInput } from './bootstrap-input.js';
 import { createGatewayPrivilegedServiceRegistry } from './privileged-services.js';
@@ -70,6 +74,7 @@ import { resolveOperatorAlertSinkConfiguration } from '../../shared/contracts/op
 
 export interface GatewayPrivilegedCoreBuildInput {
   config: SubstrateConfig;
+  companionDatabaseTopology?: ResolvedCompanionDatabaseTopology;
   env: NodeJS.ProcessEnv;
   bootstrap: GatewayBootstrapInput;
   startupHydration: StartupConfigHydrationResult;
@@ -292,7 +297,10 @@ export async function buildGatewayPrivilegedCore(
   for (const entry of resolveGatewayReceiptStoreTargets(input.config)) {
     const store = await awaitOptionalPostgresStoreReadiness(
       'gateway_cogsec_receipts',
-      () => PostgresCogSecReceiptStore.connect(databaseUrl, entry.connectOptions),
+      () => PostgresCogSecReceiptStore.connect(
+        resolveGatewayReceiptStoreDatabaseUrl(entry, databaseUrl, input.companionDatabaseTopology),
+        entry.connectOptions,
+      ),
     );
     if (!store) {
       receiptLog.warn('Gateway ingress admission receipts unavailable for companion', {

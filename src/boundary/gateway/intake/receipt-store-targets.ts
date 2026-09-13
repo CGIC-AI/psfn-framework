@@ -17,6 +17,8 @@
 // test can name, rather than inline in the 500-line privileged-core composer.
 
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
+import type { ResolvedCompanionDatabaseTopology } from '../../../system/config/companion-database-config.js';
+import { parseExactPostgresCredential } from '../../../shared/utils/postgres-credential.js';
 import type { CompanionId } from '../../../shared/routing/companion-id.js';
 
 /**
@@ -61,4 +63,34 @@ export function resolveGatewayReceiptStoreTargets(
   }
   const schema = config.postgresSchema?.trim();
   return [{ connectOptions: schema ? { schema } : {} }];
+}
+
+/** Resolve inside optional readiness so a missing binding degrades only this writer. */
+export function resolveGatewayReceiptStoreDatabaseUrl(
+  target: GatewayReceiptStoreTarget,
+  gatewayDatabaseUrl: string,
+  topology?: ResolvedCompanionDatabaseTopology,
+): string {
+  if (target.companionId === undefined) {
+    if (topology) throw new Error('Fleet receipt stores require a companion-bound target');
+    return gatewayDatabaseUrl;
+  }
+  const matches = topology?.companions.filter(entry => (
+    entry.companion.companionId === target.companionId
+  )) ?? [];
+  const credential = matches[0];
+  if (matches.length !== 1 || !credential) {
+    throw new Error('Gateway receipt store requires one exact companion database credential');
+  }
+  if (!target.connectOptions.schema || !target.connectOptions.role
+    || credential.companion.postgresSchema !== target.connectOptions.schema
+    || credential.companion.postgresRole !== target.connectOptions.role
+    || credential.role !== target.connectOptions.role) {
+    throw new Error('Gateway receipt store credential does not match its companion schema and role');
+  }
+  const parsed = parseExactPostgresCredential(credential.databaseUrl, 'Gateway receipt store credential');
+  if (parsed.username !== target.connectOptions.role) {
+    throw new Error('Gateway receipt store credential does not authenticate as its companion role');
+  }
+  return credential.databaseUrl;
 }

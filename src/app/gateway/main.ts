@@ -369,6 +369,7 @@ async function main(): Promise<void> {
   let quarantineExpiryEscalation: ((entry: IntakeQuarantineEntry) => void) | null = null;
   const privilegedCore = await buildGatewayPrivilegedCore({
     config,
+    ...(companionDatabaseTopology ? { companionDatabaseTopology } : {}),
     env,
     bootstrap,
     startupHydration,

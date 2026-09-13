@@ -1,4 +1,5 @@
 import type { SubstrateAgent } from '../../../core/agent/substrate-agent.js';
+import type { PostTurnActionRuntime } from '../../../core/agent/post-turn-action-runtime.js';
 import type { SpeakingEgressLeasePhase } from '../../../core/agent/arbiter/egress-lease-phase.js';
 import type { SpeakingReservationPhase } from '../../../core/agent/arbiter/reservation-phase.js';
 import type { RoomParticipationLeaseCoordinator } from '../../../core/participation/room-participation-lease-coordinator.js';
@@ -26,6 +27,7 @@ export interface SocialImpulseOutreachLaneDeps {
   store: SocialImpulseOutreachStorePort;
   getMode(): SocialImpulseOutreachMode;
   agentLoop: Pick<SubstrateAgent, 'handleMessage'>;
+  postTurnActions: Pick<PostTurnActionRuntime, 'enqueue' | 'registerHandler'>;
   contactStore: Pick<ContactStorePort, 'getByDiscordUserId' | 'listKnownRooms'>;
   sessionStore: Pick<SessionStore, 'listChannels'>;
   primaryDiscordUserId?: string;
@@ -63,6 +65,7 @@ export function registerSocialImpulseOutreachLane(
     store: deps.store,
     getMode: deps.getMode,
     agentLoop: deps.agentLoop,
+    postTurnActions: deps.postTurnActions,
     contactStore: deps.contactStore,
     sessionStore: deps.sessionStore,
     ...(deps.primaryDiscordUserId

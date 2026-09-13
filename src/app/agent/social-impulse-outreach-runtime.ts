@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
+import type { PostTurnActionRuntime } from '../../core/agent/post-turn-action-runtime.js';
+import { createSocialImpulseOutreachQueue } from './social-impulse-outreach-queue.js';
 import type { SpeakingReservationPhase } from '../../core/agent/arbiter/reservation-phase.js';
 import type { SpeakingEgressLeasePhase } from '../../core/agent/arbiter/egress-lease-phase.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
@@ -43,6 +45,7 @@ export interface ProductionSocialImpulseOutreachOptions {
   store: SocialImpulseOutreachStorePort;
   getMode(): SocialImpulseOutreachMode;
   agentLoop: Pick<SubstrateAgent, 'handleMessage'>;
+  postTurnActions: Pick<PostTurnActionRuntime, 'enqueue' | 'registerHandler'>;
   contactStore: Pick<
     ContactStorePort,
     'getByDiscordUserId' | 'listKnownRooms'
@@ -180,13 +183,16 @@ export function createProductionSocialImpulseOutreachRuntime(
     return content;
   };
 
-  return createSocialImpulseOutreachRuntime({
-    companionId: options.companionId,
-    store: options.store,
-    getMode: options.getMode,
-    listDestinations,
+  const queue = createSocialImpulseOutreachQueue({
+    actions: options.postTurnActions,
     now,
-    runDispositionOpportunity: async opportunity => {
+    runExecution: async opportunityId => { await runtime.executeQueued(opportunityId); },
+    runDisposition: async opportunityId => {
+      const opportunity = await options.store.getOpportunity(opportunityId);
+      if (!opportunity || opportunity.companionId !== options.companionId) {
+        throw new Error('Social outreach disposition lost its companion-owned opportunity');
+      }
+      if (opportunity.state !== 'pending' || options.getMode() === 'off') return;
       const message: SubstrateMessage = {
         id: `social-disposition-${randomUUID()}`,
         channelId: `internal:social-outreach:${shortHash(opportunity.opportunityId)}`,
@@ -206,6 +212,16 @@ export function createProductionSocialImpulseOutreachRuntime(
       };
       await options.agentLoop.handleMessage(message);
     },
+  });
+  const runtime = createSocialImpulseOutreachRuntime({
+    companionId: options.companionId,
+    store: options.store,
+    getMode: options.getMode,
+    listDestinations,
+    now,
+    runDispositionOpportunity: opportunity => queue.enqueueDisposition(opportunity.opportunityId),
+    enqueueExecution: queue.enqueueExecution,
+    getOriginIcpRootInitiationId: () => getRequestContext()?.icpCorrelation?.rootInitiationId,
     execute: async execution => {
       if (options.availability.snapshot().state === 'do_not_disturb') {
         return { outcome: 'suppressed', reasonCode: 'companion_do_not_disturb' };
@@ -230,7 +246,7 @@ export function createProductionSocialImpulseOutreachRuntime(
         if (!options.icpInitiation || !options.capabilityRuntime.has('external.companion')) {
           return { outcome: 'suppressed', reasonCode: 'companion_initiation_unavailable' };
         }
-        const inheritedIcpRoot = getRequestContext()?.icpCorrelation?.rootInitiationId;
+        const inheritedIcpRoot = execution.originIcpRootInitiationId;
         const result = await options.icpInitiation.submit({
           source: 'felt_impulse',
           peerContactId: destination.contactId,
@@ -353,6 +369,7 @@ export function createProductionSocialImpulseOutreachRuntime(
       });
     },
   });
+  return runtime;
 }
 
 function shortHash(value: string): string {

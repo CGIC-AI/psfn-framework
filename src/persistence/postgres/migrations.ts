@@ -1483,6 +1483,19 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
   `,
   `CREATE INDEX IF NOT EXISTS idx_social_impulse_outreach_state
     ON social_impulse_outreach_opportunities (state, fired_at_ms DESC, opportunity_id);`,
+  // A queued choice has not crossed any delivery boundary. Its private intent
+  // survives a crash before queue admission; terminal settlement clears it.
+  `ALTER TABLE social_impulse_outreach_opportunities
+    ADD COLUMN IF NOT EXISTS execution_intent TEXT;`,
+  `ALTER TABLE social_impulse_outreach_opportunities
+    ADD COLUMN IF NOT EXISTS origin_icp_root_initiation_id UUID;`,
+  `ALTER TABLE social_impulse_outreach_opportunities
+    DROP CONSTRAINT IF EXISTS social_impulse_outreach_opportunities_state_check;`,
+  `ALTER TABLE social_impulse_outreach_opportunities
+    ADD CONSTRAINT social_impulse_outreach_opportunities_state_check CHECK (state IN (
+      'pending', 'queued', 'chosen', 'off', 'ignore', 'defer', 'other',
+      'would_send', 'delivered', 'suppressed'
+    ));`,
 ];
 
 export const POSTGRES_AUDIT_MIGRATIONS = [

@@ -167,6 +167,11 @@ export interface ObserverEvalSidecarRuntime {
   config?: ObserverEvalSidecarConfig;
   observer?: ObserverEvalSidecarPort | null;
   onLifecycleState?: ObserverEvalLifecycleHook;
+  /** Cheap live-source sampling, independent of turn projection and eval rows. */
+  proactivitySampling?: {
+    intervalMs: number;
+    sample(): Promise<void>;
+  };
 }
 
 export interface ObserverEvalSidecarHealthSnapshotPayload {

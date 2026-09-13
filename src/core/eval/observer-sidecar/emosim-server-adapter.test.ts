@@ -25,6 +25,38 @@ const AGENT_NAME = 'observer';
 const SESSION_ID = 'session-uuid-1';
 
 describe('EmoSim server adapter', () => {
+  it('reads an existing companion session without creating or stimulating it', async () => {
+    const server = new FakeEmoSimServer();
+    server.existingSessions = [{
+      session: SESSION_ID, label: SESSION_LABEL,
+      agents: [{ uid: 'uid-observer', name: AGENT_NAME }],
+    }];
+    const runner = makeRunner(server);
+    const first = await runner.readCurrentState();
+    const second = await runner.readCurrentState();
+    expect(first.sessionId).toBe(SESSION_ID);
+    expect(second.snapshot.t).toBeGreaterThan(first.snapshot.t);
+    expect(second.snapshot.drives.socialNeed).toBe(0.4);
+    expect(server.calls.every(call => call.method === 'GET')).toBe(true);
+    expect(server.createCount).toBe(0);
+    expect(server.eventBodies).toEqual([]);
+  });
+
+  it('refuses missing or ambiguous session ownership during read-only sampling', async () => {
+    const server = new FakeEmoSimServer();
+    const runner = makeRunner(server);
+    await expect(runner.readCurrentState()).rejects.toThrow('session is unavailable');
+    const session = {
+      session: SESSION_ID, label: SESSION_LABEL,
+      agents: [{ uid: 'uid-observer', name: AGENT_NAME }],
+    };
+    server.existingSessions = [session, session];
+    await expect(runner.readCurrentState()).rejects.toThrow('ambiguous ownership');
+    server.existingSessions = [{ ...session, agents: [{ uid: 'other', name: 'another-companion' }] }];
+    await expect(runner.readCurrentState()).rejects.toThrow('has no agent named');
+    expect(server.calls.every(call => call.method === 'GET')).toBe(true);
+  });
+
   it('verifies the model contract, bootstraps once, and produces schema-valid output', async () => {
     const server = new FakeEmoSimServer();
     const runner = makeRunner(server);

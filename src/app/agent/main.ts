@@ -981,6 +981,7 @@ async function main(): Promise<void> {
   });
   const {
     scheduler,
+    healthDetectorScheduler,
     postTurnActions,
     backgroundMaintenance,
     compressionGuidelineEvolution,
@@ -2068,6 +2069,7 @@ async function main(): Promise<void> {
     await controlPlane.stopFn();
   };
   shutdownTargets.adminTransport = adminTransport;
+  shutdownTargets.healthDetectorScheduler = healthDetectorScheduler;
   shutdownTargets.appCache = appCache;
   shutdownTargets.chargeLedger = chargeLedger;
   if (coreRuntime.fatigueRegulationReservations) {
@@ -2407,6 +2409,7 @@ async function main(): Promise<void> {
       mismatches: postgresReadiness.degraded.map(entry => entry.mismatch).join('; '),
     });
   }
+  healthDetectorScheduler.start();
   scheduler.start();
   await eventBus.emit('system.init', {});
   await eventBus.emit('system.ready', {});

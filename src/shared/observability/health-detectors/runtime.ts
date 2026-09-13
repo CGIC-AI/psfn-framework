@@ -2,7 +2,7 @@
 //
 // The one place a process turns its owner-file policy and its live runtime
 // handles into a driveable detector cycle. Both entrypoints call this and then
-// hand the result to `registerRuntimeHealthDetectorTask`, so neither has to
+// hand the result to `createRuntimeHealthDetectorScheduler`, so neither has to
 // know which detectors exist or how an incident is correlated.
 //
 // Every detector is optional in exactly the way the runtime is: a process that

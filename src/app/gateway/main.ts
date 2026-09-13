@@ -130,8 +130,7 @@ import {
 } from '../../persistence/backups/service.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
 import {
-  RUNTIME_HEALTH_DETECTOR_TASK_ID,
-  registerRuntimeHealthDetectorTask,
+  createRuntimeHealthDetectorScheduler,
 } from '../../core/scheduler/health-detector-task.js';
 import {
   createRuntimeHealthDetectorCycle,
@@ -660,29 +659,6 @@ async function main(): Promise<void> {
         });
       },
     });
-    // The gateway owns its own PostgreSQL pool authorities, so its pressure is
-    // a different incident from the agent's. It has exactly one unconditional
-    // scheduler task registry — this one — so the detector lane rides it rather
-    // than inventing a second cadence. A gateway without fleet auth therefore
-    // runs no detector cycle: that gap is recorded on bead
-    // psfn-framework-7qeo1.24.2 rather than papered over with a private timer.
-    const healthDetectorScheduler = fleetAuthBackupScheduler;
-    registerRuntimeHealthDetectorTask({
-      scheduler: healthDetectorScheduler,
-      intervalMs: startupHydration.schedulerConfig.healthDetectors.intervalMs,
-      cycle: createRuntimeHealthDetectorCycle({
-        stream: healthEventStore,
-        publisher: eventBus,
-        source: { owner: { kind: 'system' }, process: 'gateway' },
-        config: startupHydration.schedulerConfig.healthDetectors,
-        postgresPoolTelemetry: getPostgresPoolTelemetry,
-        // The gateway runs no automata; only its own scheduler task state.
-        stuckJobs: {
-          listTasks: () => healthDetectorScheduler.listTasks(),
-          ignoreTaskIds: [RUNTIME_HEALTH_DETECTOR_TASK_ID],
-        },
-      }),
-    });
     log.info('Gateway-owned fleet auth consistent backups enabled', {
       companionCount: config.companionFleet.companions.length,
       mode: 'consistent-family',
@@ -693,6 +669,23 @@ async function main(): Promise<void> {
       mirrorDir: backupConfig.mirrorDir || '(none)',
     });
   }
+  // A separate scheduler keeps health checks alive while a backup/work task
+  // awaits, and also covers gateways that have no fleet-auth backup scheduler.
+  const healthDetectorScheduler = createRuntimeHealthDetectorScheduler({
+    eventBus,
+    source: { owner: { kind: 'system' }, process: 'gateway' },
+    intervalMs: startupHydration.schedulerConfig.healthDetectors.intervalMs,
+    cycle: createRuntimeHealthDetectorCycle({
+      stream: healthEventStore,
+      publisher: eventBus,
+      source: { owner: { kind: 'system' }, process: 'gateway' },
+      config: startupHydration.schedulerConfig.healthDetectors,
+      postgresPoolTelemetry: getPostgresPoolTelemetry,
+      stuckJobs: {
+        listTasks: () => fleetAuthBackupScheduler?.listTasks() ?? [],
+      },
+    }),
+  });
   const stopDebugObserver = attachTerminalDebugObserver(eventBus, { scope: 'gateway' });
 
   log.info('Initializing...');
@@ -1226,6 +1219,7 @@ async function main(): Promise<void> {
     });
   }
   gateway.start();
+  healthDetectorScheduler.start();
   fleetAuthBackupScheduler?.start();
   // Companion event relay (w9hj.1): fan-out hub for redacted operational
   // events. Approval events arrive on the gateway bus from the confirmation
@@ -1335,6 +1329,7 @@ async function main(): Promise<void> {
     stopPromise = (async () => {
       await runShutdownSequence([
         { step: 'stop debug observer', action: () => stopDebugObserver() },
+        { step: 'stop runtime health watchdog', action: () => healthDetectorScheduler.stop() },
         ...(fleetAuthBackupScheduler
           ? [{
             step: 'stop fleet auth backup scheduler',

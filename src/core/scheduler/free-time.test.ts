@@ -365,6 +365,7 @@ interface FakeSessionManager {
     timestamp: number;
     lastRole?: SessionEntry['role'];
   } | null;
+  listRecentSessions: FreeTimeRuntimeOptions['sessionManager']['listRecentSessions'];
   getRecentMessages: (channelId: string, limit?: number) => SessionEntry[];
   getRecentSessionEntries: (channelId: string, limit: number) => SessionEntry[];
   appendSystemNote: ReturnType<typeof vi.fn>;
@@ -406,6 +407,16 @@ function buildRuntime(options: {
 
   const sessionManager: FakeSessionManager = {
     resolveStartupSessionMetadata: () => ({ sessionId: 'api:main', channelType: 'api', timestamp: lastAt }),
+    listRecentSessions: () => {
+      const session = sessionManager.resolveStartupSessionMetadata();
+      return session ? [{
+        sessionId: session.sessionId,
+        channelId: session.sessionId,
+        channelType: session.channelType,
+        lastActivityAt: session.timestamp,
+        lastRole: session.lastRole ?? 'assistant',
+      }] : [];
+    },
     getRecentMessages: (channelId) => (channelId === 'api:main' ? partnerEntries : []),
     getRecentSessionEntries: (channelId) => (channelId.startsWith(FREE_TIME_CHANNEL_PREFIX) ? transcript : partnerEntries),
     appendSystemNote: vi.fn(),
@@ -877,7 +888,10 @@ describe('registerFreeTimeTasks', () => {
       registerFreeTimeTasks({
         scheduler,
         sessionManager: {
-          resolveStartupSessionMetadata: () => ({ sessionId: 'api:main', channelType: 'api', timestamp: nowMs - 8 * 60 * 60_000 }),
+          listRecentSessions: () => [{
+            sessionId: 'api:main', channelId: 'api:main', channelType: 'api',
+            lastActivityAt: nowMs - 8 * 60 * 60_000, lastRole: 'user',
+          }],
           getRecentMessages: () => [entry({ role: 'user', timestamp: nowMs - 8 * 60 * 60_000 })],
           getRecentSessionEntries: () => [],
           appendSystemNote: vi.fn(),

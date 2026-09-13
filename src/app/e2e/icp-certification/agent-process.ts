@@ -11,7 +11,7 @@ import {
 } from '../../startup/composition/composition.js';
 import { createAgentPersistenceRuntime } from '../../../persistence/runtime-factory.js';
 import { DEFAULT_HUMAN_ESCALATION_CONFIG } from '../../../system/config/scheduler-config/human-escalation.js';
-import { resolveChargeLedgerPath } from '../../../persistence/layout.js';
+import { resolveChargeLedgerPath, resolvePostTurnActionQueuePath } from '../../../persistence/layout.js';
 import { PostgresIcpFatigueRegulationReservationStore } from '../../../persistence/postgres/icp-fatigue-regulation-reservation-store.js';
 import { PostgresIcpAdminProjectionStore } from '../../../persistence/postgres/icp-admin-projection-store.js';
 import { RunChargeLedger } from '../../../shared/telemetry/charge-ledger.js';
@@ -399,6 +399,7 @@ async function main(): Promise<void> {
     agentLoop: agent,
     eligibilityGate: startup.eligibilityGate,
     intervalMs: 1,
+    persistencePath: resolvePostTurnActionQueuePath(startup.pathSnapshot.companionDataDir),
   });
   socialImpulseOutreachRuntime = registerSocialImpulseOutreachLane({
     companionId,
@@ -793,14 +794,33 @@ async function main(): Promise<void> {
             destinationId: destination.destinationId,
             intent: 'Send one ordinary felt-impulse continuation to the existing peer dyad.',
           });
+          // Production releases source-turn ownership before the durable work
+          // scheduler drains disposition and execution on separate lane turns.
+          const deadline = Date.now() + 20_000;
+          let settled = chosen.record;
+          while (settled.state === 'queued' && Date.now() < deadline) {
+            await scheduler.tick();
+            const persisted = await persistence.socialImpulseOutreachStore.getOpportunity(correlationId);
+            if (!persisted) throw new Error('Queued social outreach lost its durable opportunity');
+            settled = persisted;
+            if (settled.state === 'queued') {
+              await new Promise(resolveWait => setTimeout(resolveWait, 25));
+            }
+          }
+          if (settled.state === 'queued' || settled.state === 'chosen') {
+            throw new Error(`Social outreach queue did not settle: ${settled.state}`);
+          }
           reply({
             id: raw.id,
             ok: true,
             result: {
               opportunityId: correlationId,
               destinationKind: destination.kind,
-              outcome: chosen.outcome,
-              ...(chosen.reasonCode ? { reasonCode: chosen.reasonCode } : {}),
+              admissionOutcome: chosen.outcome,
+              queuePersistenceEnabled: postTurnActions.getStatus().persistence.enabled,
+              executionIntentCleared: settled.executionIntent === null,
+              outcome: settled.state,
+              ...(settled.reasonCode ? { reasonCode: settled.reasonCode } : {}),
             },
           });
           return;

@@ -602,12 +602,18 @@ describe('ICP certification real process harness', () => {
     processes.queueChatDisposition('intentional_no_reply', CERTIFICATION_COMPANION_B);
     await expect(agentA.runFeltImpulseContinuation()).resolves.toMatchObject({
       destinationKind: 'open_companion_dyad',
+      admissionOutcome: 'queued',
+      queuePersistenceEnabled: true,
+      executionIntentCleared: true,
       outcome: 'delivered',
     });
     const after = await waitForPeerMessages(agentB, CERTIFICATION_COMPANION_A, 2);
     const turnsAfterFeltImpulse = await waitForTurnRecordCount(agentB, 2);
     expect(turnsAfterFeltImpulse.records.at(-1)?.hasAssistantMessage).toBe(false);
     expect(after.entries.length).toBeGreaterThan(before.entries.length);
+    expect(after.entries.filter(entry => (
+      entry.role === 'user' && entry.authorId === CERTIFICATION_COMPANION_A
+    ))).toHaveLength(2);
 
     const garden = await agentA.gardenProjection() as unknown as GardenIcpProjection;
     expect(garden.dyads).toEqual([

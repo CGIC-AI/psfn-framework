@@ -3630,6 +3630,11 @@ describe('GatewayClient runtime health RPC wrapper', () => {
   it('requests runtime.health with the typed response shape', async () => {
     const healthPromise = client.runtimeHealth();
     const healthReq = conn.sent[0] as { id: number; method: string; params: Record<string, unknown> };
+    const operatorAlerting = {
+      configuredSinks: ['ntfy'],
+      status: 'configured',
+      warning: null,
+    };
 
     expect(healthReq.method).toBe('runtime.health');
     expect(healthReq.params).toEqual({});
@@ -3638,6 +3643,7 @@ describe('GatewayClient runtime health RPC wrapper', () => {
       jsonrpc: '2.0',
       id: healthReq.id,
       result: {
+        operatorAlerting,
         checkedAt: 1_701_234_567_890,
         services: [
           {
@@ -3651,6 +3657,7 @@ describe('GatewayClient runtime health RPC wrapper', () => {
     });
 
     await expect(healthPromise).resolves.toEqual({
+      operatorAlerting,
       checkedAt: 1_701_234_567_890,
       services: [
         {

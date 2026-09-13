@@ -245,7 +245,7 @@ import { buildExternalChannelProfiles, resolveDiscordCompanionView } from '../..
 import { resolveTestingHarnessDevicesConfig } from '../../channels/backplane/testing-harness-devices.js';
 import { isEidoversePlace } from '../../shared/contracts/places-registry.js';
 import { createAgentFleetPostureProvider } from './fleet-posture.js';
-import { resolveOperatorAlertSinkConfiguration } from '../../shared/contracts/operator-alerting.js';
+import { loadGatewayOperatorAlerting } from './startup/operator-alerting.js';
 import { wireAgentVaultRuntime } from './vault-runtime.js';
 import { PostgresIcpLocalPolicyAuthority } from '../../persistence/postgres/icp-local-policy-authority.js';
 import { IcpLocalInitiationCapacityAuthority } from '../../core/agent/fatigue/initiation-capacity.js';
@@ -292,22 +292,6 @@ async function main(): Promise<void> {
     companionId: resolveCoreCompanionIdFromConfig(config),
     retentionDays: requireOperationalMetadataRetentionDays(config.operationalMetadataRetentionDays),
   });
-  const operatorAlerting = resolveOperatorAlertSinkConfiguration({
-    ntfyConfigured: Boolean(
-      process.env.NTFY_BASE_URL?.trim() && process.env.NTFY_TOPIC?.trim(),
-    ),
-    telegramEnabled: channelsConfig.telegram.enabled,
-    telegramChatId: channelsConfig.telegram.operatorChatId,
-    discordEnabled: true,
-    discordChannelId: channelsConfig.discord.operatorAlert?.channelId,
-  });
-  if (operatorAlerting.status === 'unconfigured') {
-    log.error('OPERATOR ALERTING IS UNCONFIGURED', {
-      warning: operatorAlerting.warning,
-      configuredSinks: operatorAlerting.configuredSinks,
-    });
-  }
-
   log.info('Initializing...');
   log.info('Lifecycle runtime contract resolved', runtimeStatusMeta);
   await enforceNetworkIsolationOnStartup();
@@ -391,6 +375,13 @@ async function main(): Promise<void> {
   // Self-report companion identity before any other traffic. Multi-companion
   // gateways reject unidentified agents fail-closed; a failure here is fatal.
   await gateway.identifyAsAgent();
+  const operatorAlerting = await loadGatewayOperatorAlerting(gateway);
+  if (operatorAlerting.status === 'unconfigured') {
+    log.error('OPERATOR ALERTING IS UNCONFIGURED', {
+      warning: operatorAlerting.warning,
+      configuredSinks: operatorAlerting.configuredSinks,
+    });
+  }
   installPromotedToolsPersistenceHook(config, { systemDataWriter: gateway });
   const llmProvider = createLLMProviderPort(gateway);
   const gatewayOps = createGatewayOpsPortFromClient(gateway);

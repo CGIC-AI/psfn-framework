@@ -49,23 +49,33 @@ async function runFencedHoldersWithNestedAccess(
   fence: PostgresTurnRecordEligibilityFence,
   nested: Pool,
   holderCount: number,
-): Promise<{ allHeld: Promise<void>; release: () => void; results: Promise<PromiseSettledResult<void>[]> }> {
+): Promise<{ allHeld: Promise<void>; nestedSettled: Promise<void>; release: () => void; results: Promise<PromiseSettledResult<void>[]> }> {
   const release = deferred();
   let heldCount = 0;
   const allHeld = deferred();
+  let nestedSettledCount = 0;
+  const nestedSettled = deferred();
   const results = Promise.allSettled(Array.from({ length: holderCount }, (_, index) => (
     fence.withTurnRecordEligibilityFence(
       { logicalSessionId: `session-${String(index)}`, turnId: `turn-${String(index)}` },
       async () => {
         heldCount += 1;
         if (heldCount === holderCount) allHeld.resolve();
+        await allHeld.promise;
         // What `effects.assertOwned()` does under the fence: one more client.
-        await nested.query('SELECT 1');
-        await release.promise;
+        try {
+          await nested.query('SELECT 1');
+        } finally {
+          nestedSettledCount += 1;
+          if (nestedSettledCount === holderCount) nestedSettled.resolve();
+          // Keep timed-out holders from freeing a client for another nested
+          // attempt before the deadlock observation is complete.
+          await release.promise;
+        }
       },
     )
   )));
-  return { allHeld: allHeld.promise, release: release.resolve, results };
+  return { allHeld: allHeld.promise, nestedSettled: nestedSettled.promise, release: release.resolve, results };
 }
 
 describe('PostgresTurnRecordEligibilityFence against PostgreSQL', () => {
@@ -90,14 +100,16 @@ describe('PostgresTurnRecordEligibilityFence against PostgreSQL', () => {
       max: SHARED_LANE_CAPACITY,
       connectionTimeoutMillis: NESTED_CONNECT_TIMEOUT_MS,
     });
+    let holders: Awaited<ReturnType<typeof runFencedHoldersWithNestedAccess>> | undefined;
     try {
       const fence = new PostgresTurnRecordEligibilityFence(shared, SCHEMA);
-      const holders = await runFencedHoldersWithNestedAccess(fence, shared, SHARED_LANE_CAPACITY);
+      holders = await runFencedHoldersWithNestedAccess(fence, shared, SHARED_LANE_CAPACITY);
       await holders.allHeld;
 
       // The foreground turn's first durable step waits on the same lane.
       await expect(shared.query('SELECT 1')).rejects.toThrow('timeout exceeded when trying to connect');
 
+      await holders.nestedSettled;
       holders.release();
       const settled = await holders.results;
       // Every holder's nested access timed out too: each was waiting on the
@@ -114,6 +126,8 @@ describe('PostgresTurnRecordEligibilityFence against PostgreSQL', () => {
       );
       expect(Number(locks.rows[0]?.count)).toBe(0);
     } finally {
+      holders?.release();
+      await holders?.results;
       await shared.end();
     }
   }, 30_000);
@@ -125,6 +139,7 @@ describe('PostgresTurnRecordEligibilityFence against PostgreSQL', () => {
     let shared!: Pool;
     let fencePool!: Pool;
     let store!: PostgresBackgroundWorkStore;
+    let holders: Awaited<ReturnType<typeof runFencedHoldersWithNestedAccess>> | undefined;
     try {
       await runWithPostgresPoolOwner(owner, async () => {
         // Production composition: every store of the authority shares one
@@ -148,7 +163,7 @@ describe('PostgresTurnRecordEligibilityFence against PostgreSQL', () => {
 
       const fence = new PostgresTurnRecordEligibilityFence(fencePool, SCHEMA);
       // One more holder than the shared lane could ever carry.
-      const holders = await runFencedHoldersWithNestedAccess(
+      holders = await runFencedHoldersWithNestedAccess(
         fence,
         shared,
         SHARED_LANE_CAPACITY + 1,
@@ -176,6 +191,8 @@ describe('PostgresTurnRecordEligibilityFence against PostgreSQL', () => {
         nowMs: Date.now(),
       })).resolves.toBe(true);
     } finally {
+      holders?.release();
+      await holders?.results;
       await store.close();
       await Promise.allSettled([shared.end(), fencePool.end()]);
       await owner.close();

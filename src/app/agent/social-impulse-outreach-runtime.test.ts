@@ -1,3 +1,6 @@
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { EventBus } from '../../shared/event-bus.js';
 import type { LLMContext } from '../../shared/contracts/runtime.js';
 import { createNotifyTool } from '../../core/tools/ntfy.js';
@@ -117,6 +120,7 @@ function memoryStore(): SocialImpulseOutreachStorePort {
 
 function harness(
   isRoomTransportAvailable: (channelType: 'discord' | 'buzz') => boolean = () => true,
+  queueFixture: { persistencePath?: string; store?: SocialImpulseOutreachStorePort } = {},
 ) {
   const handleMessage = vi.fn(async () => fromAny({ content: 'A naturally authored message.' }));
   const executeDyadContinuation = vi.fn(async () => ({ disposition: 'delivered' as const }));
@@ -142,12 +146,13 @@ function harness(
   const scheduler = new Scheduler(eventBus, { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 });
   const postTurnActions = wirePostTurnActionRuntime({
     eventBus, scheduler, agentLoop: { waitForIdle: () => reservation.waitForIdle() },
+    ...(queueFixture.persistencePath ? { persistencePath: queueFixture.persistencePath } : {}),
   });
   const drain = async () => { await scheduler.getTask('post-turn-action-executor')!.handler(); };
   const rawRuntime = createProductionSocialImpulseOutreachRuntime({
     companionId: COMPANION_ID,
     companionName: 'Test Companion',
-    store: memoryStore(),
+    store: queueFixture.store ?? memoryStore(),
     getMode: () => 'on',
     agentLoop: { handleMessage: message => reservation.runShared(
       { kind: 'ordinary-turn', sourceId: message.id }, () => handleMessage(message),
@@ -391,7 +396,111 @@ function roomEpisode() {
   };
 }
 
+function installDeferDecisionTurn(assembled: ReturnType<typeof harness>, invalidIntent: boolean) {
+  const tool = createNotifyTool({ dispatch: assembled.dispatch }, {
+    socialImpulseOutreach: assembled.rawRuntime,
+  });
+  assembled.handleMessage.mockImplementation(async message => {
+    const context: LLMContext = {
+      systemPrompt: 'The companion freely selects defer.',
+      messages: [{ role: 'user', content: message.content }],
+      tools: [{ name: tool.name, description: tool.description, inputSchema: tool.parameters }],
+    };
+    const listed = await tool.execute('list-call', {
+      action: 'outreach_list', opportunity_id: impulse().correlationId,
+    });
+    expect(listed.isError).not.toBe(true);
+    context.messages.push(fromAny({
+      role: 'toolResult', toolCallId: 'list-call', toolName: 'notify',
+      content: listed.content, outcome: 'success', isError: false,
+    }));
+    const choice = {
+      action: 'outreach_choose', opportunity_id: impulse().correlationId, disposition: 'defer',
+      ...(invalidIntent ? { intent: 'An explanation that this disposition does not accept.' } : {}),
+    };
+    const chosen = await tool.execute('choose-call', choice);
+    expect(Boolean(chosen.details?.isError)).toBe(invalidIntent);
+    context.messages.push(fromAny({
+      role: 'toolResult', toolCallId: 'choose-call', toolName: 'notify',
+      content: chosen.content, outcome: invalidIntent ? 'execution_failure' : 'success', isError: invalidIntent,
+    }));
+    // The explicit two-step request finishes even when validation rejected the choice.
+    expect(resolveExplicitToolContract({
+      context, originStage: 'agent.turn.prompt', modelApi: 'openai-completions',
+    })?.choice).toBe('none');
+    return fromAny({ content: 'I am deferring.' });
+  });
+}
+
 describe('production social impulse outreach routing', () => {
+  it('durably retries a rejected defer decision and recovers into a valid defer', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'social-choice-retry-'));
+    const persistencePath = join(directory, 'queue.json');
+    const store = memoryStore();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const initial = harness(undefined, { persistencePath, store });
+      installDeferDecisionTurn(initial, true);
+      await initial.rawRuntime.onImpulse(impulse());
+      await initial.drain();
+      expect((await initial.rawRuntime.inspect(impulse().correlationId)).record.state).toBe('pending');
+      expect(initial.postTurnActions.getStatus().completions.completedCount).toBe(0);
+      const retry = initial.postTurnActions.listQueued()[0];
+      expect(retry).toMatchObject({ actionKind: 'social-outreach.disposition', attempt: 1 });
+      expect(initial.postTurnActions.getActionStatus(retry!.actionId)?.state).toBe('retry_scheduled');
+      expect(JSON.parse(readFileSync(persistencePath, 'utf8')).entries)
+        .toMatchObject([{ attempt: 1, retryableFailureCount: 1 }]);
+      expect(initial.handleMessage.mock.calls[0]?.[0].content)
+        .toContain('For ignore, defer, or other, omit destination_id and intent.');
+
+      const recovered = harness(undefined, { persistencePath, store });
+      installDeferDecisionTurn(recovered, false);
+      expect(recovered.postTurnActions.listQueued()).toMatchObject([{ attempt: 1 }]);
+      vi.setSystemTime(retry!.nextRunAt + 1);
+      await recovered.drain();
+      expect((await recovered.rawRuntime.inspect(impulse().correlationId)).record)
+        .toMatchObject({ state: 'defer', disposition: 'defer', executionIntent: null });
+      expect(recovered.postTurnActions.listQueued()).toEqual([]);
+      expect(recovered.postTurnActions.getStatus().completions.completedCount).toBe(1);
+      expect(initial.dispatch).not.toHaveBeenCalled();
+      expect(recovered.dispatch).not.toHaveBeenCalled();
+      expect(recovered.submit).not.toHaveBeenCalled();
+      expect(recovered.executeDyadContinuation).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('exhausts the existing retry budget visibly while retaining an unrecorded opportunity', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const assembled = harness();
+      installDeferDecisionTurn(assembled, true);
+      await assembled.rawRuntime.onImpulse(impulse());
+      const admitted = assembled.postTurnActions.listQueued()[0]!;
+      for (let attempt = 0; attempt < admitted.maxAttempts; attempt += 1) {
+        const next = assembled.postTurnActions.listQueued()[0];
+        expect(next).toBeDefined();
+        vi.setSystemTime(Math.max(Date.now(), next!.nextRunAt) + 1);
+        await assembled.drain();
+      }
+      expect(assembled.handleMessage).toHaveBeenCalledTimes(admitted.maxAttempts);
+      expect(assembled.postTurnActions.getStatus().completions.completedCount).toBe(0);
+      expect(assembled.postTurnActions.getActionStatus(admitted.actionId))
+        .toMatchObject({ state: 'failed', attempt: admitted.maxAttempts });
+      expect(assembled.postTurnActions.getStatus().failures.recentFailures)
+        .toMatchObject([{ reason: 'retries_exhausted' }]);
+      expect((await assembled.rawRuntime.inspect(impulse().correlationId)).record)
+        .toMatchObject({ state: 'pending', disposition: null, executionIntent: null });
+      expect(assembled.postTurnActions.listQueued()).toEqual([]);
+      expect(assembled.dispatch).not.toHaveBeenCalled();
+      expect(assembled.submit).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each(['ignore', 'defer'] as const)(
     'allows listing and then recording %s through the real explicit tool contract',
     async disposition => {

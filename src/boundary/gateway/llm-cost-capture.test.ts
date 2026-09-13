@@ -13,6 +13,58 @@ afterEach(() => {
 });
 
 describe('extractGatewayProviderCost', () => {
+  it('retains only response attribution from JSON without requiring cost evidence', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({
+      id: 'gen-example-123',
+      provider: 'Together',
+      choices: [{ message: { content: 'private reply' } }],
+      authorization: 'Bearer private-credential',
+    })));
+    const captured = await withGatewayLLMCostCapture(async () => {
+      await fetch('https://provider.test/completion');
+      return consumeActiveGatewayCapturedProviderCostEvidence();
+    });
+    expect(captured.result).toEqual({
+      providerCostEvidence: {},
+      providerResponse: { responseId: 'gen-example-123', servingProvider: 'Together' },
+    });
+  });
+
+  it('isolates response attribution across streaming attempts and preserves conflicting evidence', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(new Response([
+        'data: {"id":"gen-first","provider":"Together","choices":[{"delta":{"content":"private reply"}}]}',
+        '',
+        'data: {"id":"gen-first","provider":"DeepInfra"}',
+        '',
+      ].join('\n'), { headers: { 'content-type': 'text/event-stream' } }))
+      .mockResolvedValueOnce(Response.json({ choices: [] })));
+    await withGatewayLLMCostCapture(async () => {
+      await (await fetch('https://provider.test/attempt-1')).text();
+      expect(consumeActiveGatewayCapturedProviderCostEvidence()).toEqual({
+        providerCostEvidence: {},
+        providerResponse: { responseId: 'gen-first', conflicts: ['servingProvider'] },
+      });
+      await fetch('https://provider.test/attempt-2');
+      expect(consumeActiveGatewayCapturedProviderCostEvidence()).toBeUndefined();
+    });
+  });
+
+  it('keeps concurrent request captures separate', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => Response.json({
+      id: url.endsWith('/a') ? 'gen-a' : 'gen-b',
+      provider: url.endsWith('/a') ? 'Together' : 'DeepInfra',
+    })));
+    const results = await Promise.all(['a', 'b'].map(async (request) => await withGatewayLLMCostCapture(async () => {
+      await fetch(`https://provider.test/${request}`);
+      return consumeActiveGatewayCapturedProviderCostEvidence()?.providerResponse;
+    })));
+    expect(results.map(({ result }) => result)).toEqual([
+      { responseId: 'gen-a', servingProvider: 'Together' },
+      { responseId: 'gen-b', servingProvider: 'DeepInfra' },
+    ]);
+  });
+
   it('normalizes provider component economics when LiteLLM exposes them', () => {
     expect(extractGatewayProviderCost({
       usage: {

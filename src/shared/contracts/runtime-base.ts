@@ -1320,6 +1320,15 @@ export interface LLMCapturedProviderWirePayload {
   bodyRef?: string;
 }
 
+/** Response evidence, separate from the configured adapter and requested model. */
+export interface LLMProviderResponseMetadata {
+  /** Provider response ID; for OpenRouter this is the generation ID. */
+  responseId?: string;
+  servingProvider?: string;
+  /** Conflicting or malformed observations remove the affected canonical value. */
+  conflicts?: Array<'responseId' | 'servingProvider'>;
+}
+
 export interface LLMProviderObservability {
   routeKind: 'registered_model' | 'configured_endpoint' | 'request_base_url';
   requestedProvider: string;
@@ -1328,6 +1337,7 @@ export interface LLMProviderObservability {
   backendModel: string;
   backendApi: string;
   backendBaseUrl?: string;
+  providerResponse?: LLMProviderResponseMetadata;
   systemRole: LLMSystemRoleCapabilityMetadata;
   promptCaching: LLMPromptCacheObservability;
   /**

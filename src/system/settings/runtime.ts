@@ -126,6 +126,7 @@ const DIRECT_DEFINED_CONFIG_SETTINGS = [
   'compactionEmotionalSalienceThresholdPct',
   'backgroundFailureEscalationThreshold',
   'healthEventStreamMaxRows',
+  'operationalMetadataRetentionDays',
   'postgresStoreReadinessRetryAttempts',
   'postgresStoreReadinessRetryBackoffMs',
   'custodySnapshotRetentionDays',
@@ -251,6 +252,7 @@ function getContextSettingsSnapshot(config: SubstrateConfig) {
     backgroundFailureEscalationThreshold:
       config.backgroundFailureEscalationThreshold ?? null,
     healthEventStreamMaxRows: config.healthEventStreamMaxRows ?? null,
+    operationalMetadataRetentionDays: config.operationalMetadataRetentionDays ?? null,
     postgresStoreReadinessRetryAttempts:
       config.postgresStoreReadinessRetryAttempts ?? null,
     postgresStoreReadinessRetryBackoffMs:
@@ -288,6 +290,7 @@ function getContextSettingsSnapshot(config: SubstrateConfig) {
     | 'compactionEmotionalSalienceThresholdPct'
     | 'backgroundFailureEscalationThreshold'
     | 'healthEventStreamMaxRows'
+    | 'operationalMetadataRetentionDays'
     | 'postgresStoreReadinessRetryAttempts'
     | 'postgresStoreReadinessRetryBackoffMs'
     | 'custodySnapshotRetentionDays'

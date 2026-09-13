@@ -1,3 +1,4 @@
+import { MIN_OPERATIONAL_METADATA_RETENTION_DAYS, operationalMetadataCutoff, requireOperationalMetadataRetentionDays } from '../../shared/diagnostics/retention-policy.js';
 import type { Pool, QueryResultRow } from 'pg';
 import {
   createPostgresPool,
@@ -23,9 +24,9 @@ import {
  * Postgres adapter for the bounded runtime health-event stream (bead
  * psfn-framework-7qeo1.24.1).
  *
- * The ring bound is the table: every write prunes everything past
- * `maxRows` in newest-first order, exactly like the analysis-workbench trace
- * ring, so the stream survives a restart without ever growing unbounded. The
+ * Writes prune rows past `maxRows` only after the operational retention
+ * horizon. A noisy incident can grow beyond the count target, preserving at
+ * least the declared number of days across restarts. The
  * cap is operator-owned (`settings.json` `healthEventStreamMaxRows`) and is
  * required at construction — there is no built-in fallback, so a runtime can
  * never persist health events without a declared bound.
@@ -138,12 +139,13 @@ export class PostgresHealthEventStore implements HealthEventStorePort {
     private readonly pool: Pool,
     private readonly maxRows: number,
     private readonly ownsPool: boolean,
+    private readonly retentionDays: number,
   ) {}
 
   static async connect(
     databaseUrl: string,
     maxRows: number,
-    options: { schema?: string; role?: string } = {},
+    options: { schema?: string; role?: string; retentionDays?: number } = {},
   ): Promise<PostgresHealthEventStore> {
     requirePositiveRowCap(maxRows);
     const pool = createPostgresPool(databaseUrl, {
@@ -154,7 +156,7 @@ export class PostgresHealthEventStore implements HealthEventStorePort {
     });
     try {
       await ensurePostgresSchema(pool, POSTGRES_HEALTH_EVENT_MIGRATIONS);
-      return new PostgresHealthEventStore(pool, maxRows, true);
+      return new PostgresHealthEventStore(pool, maxRows, true, requireOperationalMetadataRetentionDays(options.retentionDays ?? MIN_OPERATIONAL_METADATA_RETENTION_DAYS));
     } catch (error) {
       await pool.end().catch(() => undefined);
       throw error;
@@ -181,7 +183,7 @@ export class PostgresHealthEventStore implements HealthEventStorePort {
   static async connectShared(
     databaseUrl: string,
     maxRows: number,
-    options: { role?: string; access?: SharedHealthEventStoreAccess } = {},
+    options: { role?: string; access?: SharedHealthEventStoreAccess; retentionDays?: number } = {},
   ): Promise<PostgresHealthEventStore> {
     requirePositiveRowCap(maxRows);
     const pool = createPostgresPool(databaseUrl, {
@@ -202,7 +204,7 @@ export class PostgresHealthEventStore implements HealthEventStorePort {
         ],
         privileges: SHARED_HEALTH_EVENT_PRIVILEGES[options.access ?? 'read'],
       });
-      return new PostgresHealthEventStore(pool, maxRows, true);
+      return new PostgresHealthEventStore(pool, maxRows, true, requireOperationalMetadataRetentionDays(options.retentionDays ?? MIN_OPERATIONAL_METADATA_RETENTION_DAYS));
     } catch (error) {
       await pool.end().catch(() => undefined);
       throw error;
@@ -210,14 +212,14 @@ export class PostgresHealthEventStore implements HealthEventStorePort {
   }
 
   /** Test/embedding entry point: caller owns the pool lifecycle. */
-  static async fromPool(pool: Pool, maxRows: number): Promise<PostgresHealthEventStore> {
+  static async fromPool(pool: Pool, maxRows: number, retentionDays = MIN_OPERATIONAL_METADATA_RETENTION_DAYS): Promise<PostgresHealthEventStore> {
     requirePositiveRowCap(maxRows);
     await ensurePostgresSchema(pool, POSTGRES_HEALTH_EVENT_MIGRATIONS);
-    return new PostgresHealthEventStore(pool, maxRows, false);
+    return new PostgresHealthEventStore(pool, maxRows, false, requireOperationalMetadataRetentionDays(retentionDays));
   }
 
   /**
-   * Append one envelope, then prune to the operator-owned cap. Idempotent on
+   * Append one envelope, then prune expired overflow. Idempotent on
    * `eventId`: a redelivered bus event never duplicates a row, so occurrence
    * counts stay honest.
    */
@@ -291,20 +293,20 @@ export class PostgresHealthEventStore implements HealthEventStorePort {
   }
 
   /**
-   * The ring bound. Deletes everything past the cap in the same newest-first
-   * order the read uses, so the surviving window is exactly what an operator
-   * would see.
+   * The count target applies only to expired records. Never erase recent
+   * failure evidence merely because traffic exceeded the row target.
    */
   private async pruneToRowCap(): Promise<void> {
     await executeQuery(this.pool, `
       DELETE FROM runtime_health_events
-      WHERE event_id IN (
+      WHERE recorded_at_ms < $2
+        AND event_id IN (
         SELECT event_id
         FROM runtime_health_events
         ORDER BY recorded_at_ms DESC, event_id DESC
         OFFSET $1
       )
-    `, [this.maxRows]);
+    `, [this.maxRows, operationalMetadataCutoff(Date.now(), this.retentionDays)]);
   }
 }
 
@@ -324,6 +326,7 @@ export class PostgresHealthEventStore implements HealthEventStorePort {
 export function createGatewayHealthEventStore(config: {
   postgresDatabaseUrl?: string;
   healthEventStreamMaxRows?: number;
+  operationalMetadataRetentionDays?: number;
 }): Promise<PostgresHealthEventStore> {
   const databaseUrl = config.postgresDatabaseUrl?.trim();
   if (!databaseUrl) {
@@ -333,7 +336,9 @@ export function createGatewayHealthEventStore(config: {
   if (maxRows === undefined) {
     throw new Error('Runtime health stream requires settings.json healthEventStreamMaxRows');
   }
-  return PostgresHealthEventStore.connect(databaseUrl, maxRows);
+  return PostgresHealthEventStore.connect(databaseUrl, maxRows, {
+    retentionDays: requireOperationalMetadataRetentionDays(config.operationalMetadataRetentionDays),
+  });
 }
 
 /**
@@ -348,6 +353,7 @@ export function createGatewayHealthEventStore(config: {
 export function createFleetSystemHealthEventStore(config: {
   postgresDatabaseUrl?: string;
   healthEventStreamMaxRows?: number;
+  operationalMetadataRetentionDays?: number;
 }): Promise<PostgresHealthEventStore> {
   const databaseUrl = config.postgresDatabaseUrl?.trim();
   if (!databaseUrl) {
@@ -357,5 +363,8 @@ export function createFleetSystemHealthEventStore(config: {
   if (maxRows === undefined) {
     throw new Error('Fleet system health stream requires settings.json healthEventStreamMaxRows');
   }
-  return PostgresHealthEventStore.connectShared(databaseUrl, maxRows, { access: 'write' });
+  return PostgresHealthEventStore.connectShared(databaseUrl, maxRows, {
+    access: 'write',
+    retentionDays: requireOperationalMetadataRetentionDays(config.operationalMetadataRetentionDays),
+  });
 }

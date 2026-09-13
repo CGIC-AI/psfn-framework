@@ -4,6 +4,7 @@
 //        logger.info('message', { key: 'value' });
 
 import { createLogger, format, transports } from 'winston';
+import { OperationalLogStore } from './diagnostics/operational-log-store.js';
 import { sanitizeDiagnosticText, sanitizeDiagnosticValue } from './diagnostics/redaction.js';
 
 const LOG_LEVEL = process.env.LOG_LEVEL ?? 'info';
@@ -24,6 +25,26 @@ const DIAGNOSTIC_LOG_CONTEXT_KEYS = new Set([
   'principalId',
   'postgresDumpCaptured',
   'provider',
+  'backendProvider',
+  'providerResponseId',
+  'servingProvider',
+  'providerResponseConflict',
+  'requestId',
+  'correlationId',
+  'companionId',
+  'slotKey',
+  'modelSlot',
+  'purpose',
+  'durationMs',
+  'latencyMs',
+  'totalTokens',
+  'promptTokens',
+  'completionTokens',
+  'costUsd',
+  'finishReason',
+  'jobId',
+  'receiptId',
+  'exitCode',
   'proposalId',
   'reason',
   'reasonCode',
@@ -43,7 +64,8 @@ const DIAGNOSTIC_LOG_CONTEXT_KEYS = new Set([
 
 export interface DiagnosticLogRecord {
   observedAt: number;
-  level: 'warn' | 'error';
+  level: 'warn' | 'error' | 'info' | 'debug' | 'trace';
+  eventId?: string;
   message: string;
   component?: string;
   context?: Record<string, string | number | boolean | null>;
@@ -51,6 +73,26 @@ export interface DiagnosticLogRecord {
 }
 
 const diagnosticLogRing: DiagnosticLogRecord[] = [];
+let operationalLogStore: OperationalLogStore | undefined;
+
+export function configureOperationalLogPersistence(options: ConstructorParameters<typeof OperationalLogStore>[0]): void {
+  if (operationalLogStore) throw new Error('Operational log persistence is already configured');
+  operationalLogStore = new OperationalLogStore(options);
+  process.once('exit', closeOperationalLogPersistence);
+}
+
+export function getOperationalLogDirectory(): string | undefined {
+  return operationalLogStore?.directory;
+}
+
+export function closeOperationalLogPersistence(): void {
+  try {
+    operationalLogStore?.close();
+  } catch (error) {
+    process.stderr.write(`Operational metadata flush failed: ${sanitizeDiagnosticText(error)}\n`);
+    throw error;
+  }
+}
 
 function buildDiagnosticLogContext(
   meta: Record<string, unknown>,
@@ -65,7 +107,8 @@ function buildDiagnosticLogContext(
 
 function captureDiagnosticLogRecord(info: Record<string, unknown>): void {
   const level = typeof info.level === 'string' ? info.level.toLowerCase() : '';
-  if (level !== 'warn' && level !== 'error') return;
+  if (level !== 'warn' && level !== 'error' && level !== 'info' && level !== 'debug' && level !== 'trace') return;
+  if (!logger.isLevelEnabled(level)) return;
 
   const { level: _level, message, component, timestamp: _timestamp, ...meta } = info;
   const record: DiagnosticLogRecord = {
@@ -80,6 +123,14 @@ function captureDiagnosticLogRecord(info: Record<string, unknown>): void {
   const context = buildDiagnosticLogContext(meta);
   if (context) record.context = context;
 
+  try {
+    operationalLogStore?.record(record);
+  } catch (error) {
+    // Never recurse through the logger when its own durable sink has failed.
+    process.stderr.write(`Operational metadata append failed: ${sanitizeDiagnosticText(error)}\n`);
+    throw error;
+  }
+  if (level !== 'warn' && level !== 'error') return;
   diagnosticLogRing.push(record);
   if (diagnosticLogRing.length > DIAGNOSTIC_LOG_RING_LIMIT) {
     diagnosticLogRing.splice(0, diagnosticLogRing.length - DIAGNOSTIC_LOG_RING_LIMIT);

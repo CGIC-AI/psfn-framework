@@ -324,6 +324,7 @@ export function classifyLogScan(
   };
   const records: Array<{ observedAt: number; level: 'warn' | 'error'; component?: string; message: string }> = [];
   for (const record of snapshot.agentLog.records) {
+    if (record.level !== 'warn' && record.level !== 'error') continue;
     records.push({
       observedAt: record.observedAt,
       level: record.level,
@@ -333,6 +334,7 @@ export function classifyLogScan(
   }
   if (snapshot.fileLogs.status === 'available') {
     for (const record of snapshot.fileLogs.records) {
+      if (record.level !== 'warn' && record.level !== 'error') continue;
       records.push({
         observedAt: record.observedAt,
         level: record.level,
@@ -376,7 +378,8 @@ function buildLogContext(
   maxLogRecords: number,
 ): PostRolloutValidationLogContext {
   const records: Array<{ observedAt: number; level: 'warn' | 'error'; component?: string; message: string }> = [];
-  const push = (record: { observedAt: number; level: 'warn' | 'error'; component?: string; message: string }): void => {
+  const push = (record: RuntimeDiagnosticsSnapshot['agentLog']['records'][number]): void => {
+    if (record.level !== 'warn' && record.level !== 'error') return;
     records.push({
       observedAt: record.observedAt,
       level: record.level,

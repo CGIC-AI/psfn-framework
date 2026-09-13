@@ -1,15 +1,18 @@
 import { closeSync, existsSync, openSync, readSync, readdirSync, statSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import type { EventBus } from '../event-bus.js';
 import {
   getRecentDiagnosticLogRecords,
+  getOperationalLogDirectory,
   type DiagnosticLogRecord,
 } from '../logger.js';
 import { sanitizeDiagnosticText } from './redaction.js';
+import { readOperationalLogHistory } from './operational-log-store.js';
+import { MIN_OPERATIONAL_METADATA_RETENTION_DAYS } from './retention-policy.js';
 
 const DEFAULT_WINDOW_MS = 60 * 60 * 1000;
 const MIN_WINDOW_MS = 1000;
-const MAX_WINDOW_MS = 24 * 60 * 60 * 1000;
+const MAX_WINDOW_MS = MIN_OPERATIONAL_METADATA_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
 const MAX_FILE_LOG_BYTES = 64 * 1024;
@@ -182,9 +185,15 @@ export function normalizeRuntimeDiagnosticsQuery(input: RuntimeDiagnosticsQuery 
     : Math.max(MIN_WINDOW_MS, Math.min(MAX_WINDOW_MS, untilMs - Math.floor(rawSinceMs)));
   const sinceMs = Math.max(0, untilMs - requestedWindowMs);
   const limit = clampInteger(input.limit, DEFAULT_LIMIT, 1, MAX_LIMIT);
-  const logsDir = typeof input.logsDir === 'string' && input.logsDir.trim()
+  const activeDirectory = getOperationalLogDirectory();
+  const requestedDirectory = typeof input.logsDir === 'string' && input.logsDir.trim()
     ? input.logsDir.trim()
-    : DEFAULT_FILE_LOG_DIR;
+    : undefined;
+  // Existing callers supply the runtime root. Read only this process owner's
+  // child directory, never recursively aggregate sibling companions.
+  const logsDir = activeDirectory && (!requestedDirectory || resolve(requestedDirectory) === dirname(activeDirectory))
+    ? activeDirectory
+    : requestedDirectory ?? DEFAULT_FILE_LOG_DIR;
 
   return {
     sinceMs,
@@ -499,6 +508,17 @@ function readFileLogDiagnostics(query: NormalizedRuntimeDiagnosticsQuery): Runti
   }
 
   try {
+    if (query.logsDir === getOperationalLogDirectory()) {
+      const history = readOperationalLogHistory(query.logsDir, query);
+      return {
+        status: 'available', directory: query.logsDir, ...history,
+        counts: {
+          warn: history.records.filter(record => record.level === 'warn').length,
+          error: history.records.filter(record => record.level === 'error').length,
+          total: history.records.length,
+        },
+      };
+    }
     const files = readdirSync(query.logsDir, { withFileTypes: true })
       .filter(entry => entry.isFile())
       .map((entry) => {

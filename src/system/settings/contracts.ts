@@ -169,8 +169,10 @@ export interface EditableSettings {
   observationMaskingWindow?: number;
   compactionEmotionalSalienceThresholdPct?: number;
   backgroundFailureEscalationThreshold?: number;
-  /** Row cap on the bounded persisted runtime health-event stream. */
+  /** Retained health-event row target; pruning never shortens the metadata retention horizon. */
   healthEventStreamMaxRows?: number;
+  /** Minimum retained operational history, in days; never below thirty. */
+  operationalMetadataRetentionDays?: number;
   /**
    * Total attempts a diagnostic PostgreSQL store's startup readiness task gets
    * before it is recorded as a terminal failure (psfn-framework-6c6cq).
@@ -384,6 +386,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'compactionEmotionalSalienceThresholdPct',
   'backgroundFailureEscalationThreshold',
   'healthEventStreamMaxRows',
+  'operationalMetadataRetentionDays',
   'postgresStoreReadinessRetryAttempts',
   'postgresStoreReadinessRetryBackoffMs',
   'custodySnapshotRetentionDays',

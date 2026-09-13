@@ -1,5 +1,7 @@
+import { resolveRuntimePathSnapshotFromConfig } from '../../persistence/layout.js';
 import { ensureActiveTimezone } from '../../shared/time/active-timezone.js';
-import { createComponentLogger } from '../../shared/logger.js';
+import { createComponentLogger, configureOperationalLogPersistence, closeOperationalLogPersistence } from '../../shared/logger.js';
+import { requireOperationalMetadataRetentionDays } from '../../shared/diagnostics/retention-policy.js';
 import { loadOperatorConfig } from '../../system/config/load-config.js';
 import { hydrateJsonBackedRuntimeConfig } from '../../system/config/runtime-config.js';
 import { parseOptionalPositiveIntEnv } from '../../shared/utils/env.js';
@@ -44,6 +46,17 @@ ensureActiveTimezone();
 
 async function main(): Promise<void> {
   const config = hydrateJsonBackedRuntimeConfig(loadOperatorConfig());
+  configureOperationalLogPersistence({
+    logsDir: resolveRuntimePathSnapshotFromConfig(config, {
+      mode: process.env.PSFN_RUNTIME_LAYOUT_MODE,
+      nodeEnv: process.env.NODE_ENV,
+      runtimeRootDir: process.env.PSFN_RUNTIME_ROOT,
+      workspacePath: config.workspacePath ?? process.env.WORKSPACE_PATH,
+      logsDir: process.env.PSFN_LOGS_DIR,
+    }).runtimePathLayout.logsDir,
+    process: 'operator',
+    retentionDays: requireOperationalMetadataRetentionDays(config.operationalMetadataRetentionDays),
+  });
   const lifecycleKubernetes = requireLifecycleKubernetesSettings(config);
   assertFleetAuthStandaloneSurfacesUnavailable({
     fleetAuthEnabled: config.fleetAuthVerifier !== undefined,
@@ -143,6 +156,7 @@ async function main(): Promise<void> {
       { step: 'stop Garden operator surface', action: () => surface.stop() },
     ], log);
     log.info('Stopped');
+    closeOperationalLogPersistence();
   };
 
   const shutdown = createSignalShutdownHandler({

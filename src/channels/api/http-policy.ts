@@ -104,6 +104,8 @@ interface ParsedCorsOrigin {
 
 export interface ResolveApiCorsAllowedOriginsOptions {
   explicitAllowlist?: readonly string[];
+  /** Validated canonical browser origin of the fleet's session ceremonies. */
+  canonicalOrigin?: string;
   adminHost?: string;
   adminPort?: number;
 }
@@ -384,6 +386,14 @@ export function resolveApiCorsAllowedOrigins(
 
   for (const explicitOrigin of options.explicitAllowlist ?? []) {
     addOrigin(explicitOrigin);
+  }
+
+  if (options.canonicalOrigin !== undefined) {
+    const parsed = parseHttpOrigin(options.canonicalOrigin);
+    if (!parsed || parsed.origin !== options.canonicalOrigin) {
+      throw new Error('Fleet API CORS requires one exact canonical HTTP origin');
+    }
+    addOrigin(parsed.origin);
   }
 
   if (

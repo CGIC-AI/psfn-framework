@@ -68,6 +68,13 @@ export function redactSecretsInValue(value: unknown, key = ''): unknown {
 }
 
 export function sanitizeDiagnosticValue(value: unknown, key = ''): string | number | boolean | null {
+  // These exact telemetry fields describe a response without containing one.
+  if (key === 'providerResponseId' && typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/.test(value)) {
+    return sanitizeDiagnosticText(value);
+  }
+  if (key === 'providerResponseConflict' && typeof value === 'boolean') return value;
+  if (['promptTokens', 'completionTokens', 'totalTokens'].includes(key)
+    && typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) return value;
   if (key && isDiagnosticSecretKey(key)) return SECRET_VALUE;
   if (key && isDiagnosticContentKey(key)) return CONTENT_VALUE;
   if (value === null || value === undefined) return null;

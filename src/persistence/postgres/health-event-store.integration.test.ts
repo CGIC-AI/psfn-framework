@@ -1,5 +1,5 @@
 import type { Pool } from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createPostgresPool } from '../postgres.js';
 import {
   DEFAULT_POSTGRES_TEST_IMAGE,
@@ -99,7 +99,7 @@ describe('PostgresHealthEventStore', () => {
     });
   }, INTEGRATION_TIMEOUT_MS);
 
-  it('bounds the stream to the owner-file row cap, keeping the newest', async () => {
+  it('preserves recent rows beyond the count target and prunes only expired overflow', async () => {
     await withDatabase(async (pool) => {
       const maxRows = 5;
       const store = await PostgresHealthEventStore.fromPool(pool, maxRows);
@@ -111,10 +111,14 @@ describe('PostgresHealthEventStore', () => {
       }
 
       const rows = await store.listRecent({ limit: 1_000 });
-      expect(rows).toHaveLength(maxRows);
-      expect(rows.map(row => row.eventId)).toEqual(
-        written.slice(-maxRows).reverse().map(row => row.eventId),
-      );
+      expect(rows).toHaveLength(written.length);
+      const clock = vi.spyOn(Date, 'now').mockReturnValue(NOW_MS + 32 * 24 * 60 * 60 * 1000);
+      try {
+        await store.record(written[written.length - 1]!);
+        expect((await store.listRecent({ limit: 1_000 })).map(row => row.eventId)).toEqual(
+          written.slice(-maxRows).reverse().map(row => row.eventId),
+        );
+      } finally { clock.mockRestore(); }
     });
   }, INTEGRATION_TIMEOUT_MS);
 
@@ -129,11 +133,11 @@ describe('PostgresHealthEventStore', () => {
       const reopened = await PostgresHealthEventStore.connect(databaseUrl, 3);
       try {
         const rows = await reopened.listRecent();
-        expect(rows).toHaveLength(3);
+        expect(rows).toHaveLength(4);
         expect(rows[0].recordedAtMs).toBe(NOW_MS + 3_000);
-        // The cap still holds across the restart boundary.
+        // Young records remain protected even when restart-time traffic exceeds the count target.
         await reopened.record(event({ observedAtMs: NOW_MS + 9_000 }));
-        expect(await reopened.listRecent()).toHaveLength(3);
+        expect(await reopened.listRecent()).toHaveLength(5);
       } finally {
         await reopened.close();
       }

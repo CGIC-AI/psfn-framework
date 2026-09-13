@@ -9,7 +9,8 @@ import { resolveMemoryRetrievalPolicy } from '../../system/config/memory-retriev
 
 import { join, resolve } from 'node:path';
 import { ensureActiveTimezone } from '../../shared/time/active-timezone.js';
-import { createComponentLogger } from '../../shared/logger.js';
+import { createComponentLogger, configureOperationalLogPersistence, closeOperationalLogPersistence } from '../../shared/logger.js';
+import { requireOperationalMetadataRetentionDays } from '../../shared/diagnostics/retention-policy.js';
 import { GatewayClient } from '../../boundary/gateway/client.js';
 import { resolveCoreCompanionIdFromConfig } from '../../core/identity/companion-runtime.js';
 import { formatGatewayRpcEndpoint } from '../../boundary/gateway/transport.js';
@@ -284,6 +285,12 @@ async function main(): Promise<void> {
   } = prepareAgentStartupContext({
     env: process.env,
     log,
+  });
+  configureOperationalLogPersistence({
+    logsDir: pathSnapshot.runtimePathLayout.logsDir,
+    process: 'agent',
+    companionId: resolveCoreCompanionIdFromConfig(config),
+    retentionDays: requireOperationalMetadataRetentionDays(config.operationalMetadataRetentionDays),
   });
   const operatorAlerting = resolveOperatorAlertSinkConfiguration({
     ntfyConfigured: Boolean(
@@ -2075,6 +2082,7 @@ async function main(): Promise<void> {
       await companionPresenceRuntime.shutdown();
     }
     await controlPlane.stopFn();
+    closeOperationalLogPersistence();
   };
   shutdownTargets.adminTransport = adminTransport;
   shutdownTargets.appCache = appCache;

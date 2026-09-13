@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseSettingsForm } from './form.js';
+import { parseRuntimeSettingsOwnerPayload } from './schema.js';
 import { applySettings, getRuntimeSettingsSnapshot } from './runtime.js';
 import type { SubstrateConfig } from '../config/runtime-config-contracts.js';
 
@@ -26,6 +27,7 @@ function parse(entries: Record<string, string>) {
 /** Operator-chosen values, all distinct from the seed so nothing passes by luck. */
 const VALID = {
   healthEventStreamMaxRows: '7500',
+  operationalMetadataRetentionDays: '45',
   postgresStoreReadinessRetryAttempts: '9',
   postgresStoreReadinessRetryBackoffMs: '2500',
   custodySnapshotRetentionDays: '30',
@@ -37,6 +39,7 @@ const VALID = {
 
 const EXPECTED = {
   healthEventStreamMaxRows: 7_500,
+  operationalMetadataRetentionDays: 45,
   postgresStoreReadinessRetryAttempts: 9,
   postgresStoreReadinessRetryBackoffMs: 2_500,
   custodySnapshotRetentionDays: 30,
@@ -58,6 +61,12 @@ const SEED_BACKED_SETTING_KEYS = BOUNDED_SETTING_KEYS
   .filter(key => key !== 'satelliteHeartbeatStaleAfterMs');
 
 describe('S12 runtime bound settings — form validation (fail closed)', () => {
+  it('enforces the thirty-day floor when settings.json is written directly', () => {
+    for (const value of [29, 0, null, '30', 30.5]) {
+      expect(() => parseRuntimeSettingsOwnerPayload({ operationalMetadataRetentionDays: value })).toThrow(/at least 30/);
+    }
+    expect(parseRuntimeSettingsOwnerPayload({ operationalMetadataRetentionDays: 30 }).operationalMetadataRetentionDays).toBe(30);
+  });
   it('accepts in-range values and parses them as integers', () => {
     const [settings, errors] = parse({ ...VALID });
 
@@ -68,6 +77,8 @@ describe('S12 runtime bound settings — form validation (fail closed)', () => {
   });
 
   it.each([
+    ['operationalMetadataRetentionDays', '29'],
+    ['operationalMetadataRetentionDays', '3651'],
     ['healthEventStreamMaxRows', '99'],
     ['healthEventStreamMaxRows', '1000001'],
     // "No retry" is one attempt, so zero is not a legal budget.

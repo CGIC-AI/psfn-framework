@@ -36,7 +36,8 @@ import {
   processObserverId,
   stableHealthConditionCorrelationId,
 } from '../../shared/contracts/health-event.js';
-import { createComponentLogger } from '../../shared/logger.js';
+import { createComponentLogger, configureOperationalLogPersistence, closeOperationalLogPersistence } from '../../shared/logger.js';
+import { requireOperationalMetadataRetentionDays } from '../../shared/diagnostics/retention-policy.js';
 import {
   PostgresPoolOwner,
   getPostgresPoolTelemetry,
@@ -219,6 +220,11 @@ async function main(): Promise<void> {
     entrypoint: RUNTIME_MODE.GATEWAY_AGENT,
     env,
     logger: log,
+  });
+  configureOperationalLogPersistence({
+    logsDir: startupHydration.pathSnapshot.runtimePathLayout.logsDir,
+    process: 'gateway',
+    retentionDays: requireOperationalMetadataRetentionDays(config.operationalMetadataRetentionDays),
   });
   const fleetAuthProtectedRestoreRoots = [
     startupHydration.pathSnapshot.systemDataDir,
@@ -1364,6 +1370,7 @@ async function main(): Promise<void> {
         { step: 'close PostgreSQL pool owner', action: () => postgresPoolOwner.close() },
       ], log);
       log.info('Stopped');
+      closeOperationalLogPersistence();
     })();
 
     await stopPromise;

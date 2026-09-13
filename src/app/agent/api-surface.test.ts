@@ -7,6 +7,10 @@ import type { SubstrateConfig } from '../../system/config/runtime-config-contrac
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 import type { GatewayClient } from '../../boundary/gateway/client.js';
 import type { RuntimeStatusMetadata } from '../../system/lifecycle/runtime-mode.js';
+import { ModelCallGate } from '../../primitives/llm/model-call-gate.js';
+import { resolveCorrelationMetadata } from '../../primitives/llm/correlation.js';
+import { assertWorkSpecLaneParity } from '../../primitives/llm/work-spec.js';
+import { resolveRuntimeLaneClassForModelCall } from '../../core/agent/worker-lanes.js';
 
 describe('buildApiHealthChecks', () => {
   const runtimeStatusMeta = {
@@ -298,4 +302,98 @@ describe('buildApiHealthChecks', () => {
       },
     });
   });
+
+  function buildGatedProbe(gate: ModelCallGate, execute: (signal: AbortSignal) => Promise<void>) {
+    const gateway = fromPartial<GatewayClient>({
+      complete: async (context, purpose, options) => {
+        if (!options?.workSpec) throw new Error('Health probe requires a work spec');
+        assertWorkSpecLaneParity(options.workSpec);
+        const correlation = resolveCorrelationMetadata(context.correlation, options.correlation, purpose);
+        const runtimeClass = resolveRuntimeLaneClassForModelCall({
+          purpose,
+          callType: correlation.callType,
+          originStage: correlation.originStage,
+        });
+        return gate.run({
+          resourceKey: 'health-test-provider',
+          runtimeClass,
+          signal: options.signal,
+        }, async (signal) => {
+          await execute(signal);
+          return {
+            content: 'OK', toolCalls: [], model: 'reasoning-model',
+            inputTokens: 1, outputTokens: 1, stopReason: 'stop',
+          };
+        });
+      },
+    });
+    return buildApiHealthChecks({
+      config: fromPartial<SubstrateConfig>({
+        primaryModel: 'reasoning-model', primaryProvider: 'test-provider', modelRoster: {},
+      }),
+      gateway,
+      memoryStore: fromPartial<MemoryStorePort>({}),
+      scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 500 }),
+      runtimeStatusMeta,
+    }, { enabled: true, timeoutMs: 10_000, cacheTtlMs: 0 }).llm;
+  }
+
+  it.each(['maintenance_reflection', 'foreground_chat'] as const)(
+    'waits behind active %s work without interrupting it',
+    async (runtimeClass) => {
+      const preemptions = vi.fn();
+      const gate = new ModelCallGate({ onPreemption: preemptions });
+      const active = Promise.withResolvers<void>();
+      const started = Promise.withResolvers<AbortSignal>();
+      const ongoing = gate.run({ resourceKey: 'health-test-provider', runtimeClass }, async (signal) => {
+        started.resolve(signal);
+        await active.promise;
+      });
+      const activeSignal = await started.promise;
+      const executeProbe = vi.fn(async () => {});
+      const probe = buildGatedProbe(gate, executeProbe)();
+      try {
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(activeSignal.aborted).toBe(false);
+        expect(preemptions).not.toHaveBeenCalled();
+        expect(executeProbe).not.toHaveBeenCalled();
+      } finally {
+        active.resolve();
+        await ongoing;
+        await probe;
+      }
+      expect(executeProbe).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('lets foreground work preempt an active probe and reports the interruption as degraded', async () => {
+    const gate = new ModelCallGate();
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const probe = buildGatedProbe(gate, async (signal) => {
+      started.resolve();
+      await new Promise<void>((resolve, reject) => {
+        void release.promise.then(resolve);
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      });
+    })();
+    await started.promise;
+    const executeForeground = vi.fn(async () => 'foreground result');
+    const foreground = gate.run({
+      resourceKey: 'health-test-provider', runtimeClass: 'foreground_chat',
+    }, executeForeground);
+    try {
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(executeForeground).toHaveBeenCalledOnce();
+      await expect(foreground).resolves.toBe('foreground result');
+      await expect(probe).resolves.toMatchObject({
+        status: 'degraded',
+        detail: expect.stringContaining('preempted (maintenance_reflection)'),
+      });
+    } finally {
+      release.resolve();
+      await Promise.all([foreground, probe]);
+    }
+  });
+
 });

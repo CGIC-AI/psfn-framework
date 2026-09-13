@@ -5,10 +5,10 @@
 // Two entry lanes share one block runner:
 //
 //   1. Quiet-hours lane — polls inside the episodicProcessing rest window
-//      (reuses the ambient-presence eligibility WITH the rest window).
-//   2. Idle lane — polls after a long partner-inactivity gap (reuses the same
-//      ambient-presence eligibility WITHOUT the rest window). Detection is not
-//      duplicated: both lanes call evaluateAmbientPresenceEligibility.
+//      (uses the configured rest-window clock).
+//   2. Idle lane — polls when no partner conversation is recently active.
+//      Both lanes use the same partner-activity metadata guard; neither needs
+//      an external conversation to create its own private opportunity.
 //
 // Before ANY spend, a deterministic gate (deterministic-gate primitive) runs
 // with zero LLM cost: it blocks during recent partner activity, enforces a
@@ -53,21 +53,16 @@ import type {
   FreeTimeConfig,
 } from '../../system/config/scheduler-config.js';
 import { REFLECTION_SILENT_TOKEN } from './reflection-policy.js';
-import {
-  evaluateAmbientPresenceEligibility,
-  type AmbientPresenceDecision,
-} from './ambient-presence.js';
-import type { StartupSessionMetadata } from '../session/manager.js';
+import { evaluateRestWindowEligibility, type RestWindowEligibilityDecision } from './rest-window.js';
 import { FREE_TIME_CHANNEL_PREFIX } from '../session/session-id.js';
 import type { SessionEntry } from '../session/types.js';
 import type { Scheduler } from './scheduler.js';
-import { conversationalEntryFromSessionMetadata } from './session-metadata-preflight.js';
 import type { FreeTimeChooserOutcome, FreeTimeRestReason } from './free-time-chooser.js';
 import type { FreeTimeLane } from './free-time-lane.js';
 import {
-  resolveFreeTimeSessionMetadata,
-  type FreeTimeSessionMetadataPort,
-} from './free-time-session-selection.js';
+  hasRecentFreeTimePartnerActivity,
+  type FreeTimeActivityPort,
+} from './free-time-activity.js';
 import type { FreeTimeReturnPolicy, FreeTimeWorkspace } from './free-time-workspace-resolver.js';
 import type { DisclosureDestination, DisclosureLineage } from '../cogsec/disclosure/index.js';
 import { projectReturnNoteEvidence } from './return-note-projection.js';
@@ -149,40 +144,22 @@ function localDateKey(timestampMs: number, timeZone: string): string {
 }
 
 // ── Lane eligibility ──
-// Both lanes reuse the ambient-presence evaluator, which already owns the
-// session/internal/privacy-boundary checks, the idle-gap threshold, and the
-// optional rest-window sub-check. The quiet-hours lane passes the rest window;
-// the idle lane passes none.
+// Free time owns its private continuity session. Only the quiet-hours clock
+// limits this lane; partner activity is an independent pre-spend guard below.
 
 export interface FreeTimeLaneEligibilityInput {
   lane: FreeTimeLane;
-  session: StartupSessionMetadata | null;
-  recentEntries: readonly SessionEntry[];
   restWindow: EpisodicProcessingRestWindowConfig;
-  idleMinIdleMinutes: number;
   nowMs?: number;
 }
 
 export function evaluateFreeTimeLaneEligibility(
   input: FreeTimeLaneEligibilityInput,
-): AmbientPresenceDecision {
-  if (input.lane === 'quiet_hours') {
-    return evaluateAmbientPresenceEligibility({
-      session: input.session,
-      recentEntries: input.recentEntries,
-      restWindow: input.restWindow,
-      // The rest window's own inactivityThreshold (evaluated against last
-      // partner activity) enforces inactivity for this lane; keep the ambient
-      // gap check permissive so the rest window is the authority.
-      minIdleMs: 0,
-      ...(input.nowMs !== undefined ? { nowMs: input.nowMs } : {}),
-    });
-  }
-  return evaluateAmbientPresenceEligibility({
-    session: input.session,
-    recentEntries: input.recentEntries,
-    // No rest window: idle free time can happen at any time of day.
-    minIdleMs: Math.max(0, input.idleMinIdleMinutes) * MINUTE_MS,
+): RestWindowEligibilityDecision {
+  return evaluateRestWindowEligibility({
+    config: input.lane === 'quiet_hours'
+      ? input.restWindow
+      : { ...input.restWindow, enabled: false },
     ...(input.nowMs !== undefined ? { nowMs: input.nowMs } : {}),
   });
 }
@@ -194,16 +171,14 @@ export function evaluateFreeTimeLaneEligibility(
 
 export interface FreeTimeGateInput {
   laneEligible: boolean;
-  minutesSincePartnerActivity: number;
+  partnerRecentlyActive: boolean;
   minutesSinceLastBlock: number;
   blocksToday: number;
-  activeConversationGuardMinutes: number;
   minBlockIntervalMinutes: number;
   maxBlocksPerDay: number;
 }
 
 export function buildFreeTimeGateDefinition(input: {
-  activeConversationGuardMinutes: number;
   minBlockIntervalMinutes: number;
   maxBlocksPerDay: number;
 }): DeterministicGateDefinition {
@@ -211,9 +186,9 @@ export function buildFreeTimeGateDefinition(input: {
     lane: FREE_TIME_GATE_LANE,
     blockWhen: [
       {
-        input: 'minutesSincePartnerActivity',
-        comparator: 'lt',
-        threshold: Math.max(0, input.activeConversationGuardMinutes),
+        input: 'partnerRecentlyActive',
+        comparator: 'gte',
+        threshold: 1,
         reason: 'partner_recently_active',
       },
       {
@@ -237,13 +212,12 @@ export function buildFreeTimeGateDefinition(input: {
 
 export function evaluateFreeTimeGate(input: FreeTimeGateInput): GateDecision {
   const definition = buildFreeTimeGateDefinition({
-    activeConversationGuardMinutes: input.activeConversationGuardMinutes,
     minBlockIntervalMinutes: input.minBlockIntervalMinutes,
     maxBlocksPerDay: input.maxBlocksPerDay,
   });
   return evaluateDeterministicGate(definition, {
     laneEligible: input.laneEligible ? 1 : 0,
-    minutesSincePartnerActivity: input.minutesSincePartnerActivity,
+    partnerRecentlyActive: input.partnerRecentlyActive ? 1 : 0,
     minutesSinceLastBlock: input.minutesSinceLastBlock,
     blocksToday: input.blocksToday,
   });
@@ -430,7 +404,7 @@ export function buildFreeTimeBlockNote(result: FreeTimeBlockResult): string {
 
 // ── Runtime registration ──
 
-export interface FreeTimeSessionManagerPort extends FreeTimeSessionMetadataPort {
+export interface FreeTimeSessionManagerPort extends FreeTimeActivityPort {
   getRecentMessages(channelId: string, limit?: number): SessionEntry[];
   getRecentSessionEntries?(channelId: string, limit: number): SessionEntry[];
   appendSystemNote(channelId: string, note: string, source?: string): void;
@@ -438,7 +412,6 @@ export interface FreeTimeSessionManagerPort extends FreeTimeSessionMetadataPort 
 }
 
 export interface FreeTimeBlockRecord extends FreeTimeBlockResult {
-  partnerSessionId: string;
   returnSurfaced: boolean;
   recordedAtMs: number;
 }
@@ -554,90 +527,6 @@ interface FreeTimeLaneCadenceState {
    * matches).
    */
   silencedForDayKey?: string;
-}
-
-function partnerActivityMinutes(decision: AmbientPresenceDecision, nowMs: number): number {
-  const at = decision.lastUserActivityAtMs;
-  if (typeof at !== 'number' || !Number.isFinite(at)) {
-    return NO_PRIOR_SENTINEL_MINUTES;
-  }
-  return Math.max(0, nowMs - at) / MINUTE_MS;
-}
-
-function evaluateFreeTimeGatePreflight(input: {
-  lane: FreeTimeLane;
-  session: StartupSessionMetadata | null;
-  restWindow: EpisodicProcessingRestWindowConfig;
-  idleMinIdleMinutes: number;
-  nowMs: number;
-  minutesSinceLastBlock: number;
-  blocksToday: number;
-  activeConversationGuardMinutes: number;
-  minBlockIntervalMinutes: number;
-  maxBlocksPerDay: number;
-}): GateDecision | null {
-  const evaluateLane = (recentEntries: readonly SessionEntry[]): AmbientPresenceDecision =>
-    evaluateFreeTimeLaneEligibility({
-      lane: input.lane,
-      session: input.session,
-      recentEntries,
-      restWindow: input.restWindow,
-      idleMinIdleMinutes: input.idleMinIdleMinutes,
-      nowMs: input.nowMs,
-    });
-  const evaluateGate = (laneDecision: AmbientPresenceDecision): GateDecision =>
-    evaluateFreeTimeGate({
-      laneEligible: laneDecision.allowed,
-      minutesSincePartnerActivity: partnerActivityMinutes(laneDecision, input.nowMs),
-      minutesSinceLastBlock: input.minutesSinceLastBlock,
-      blocksToday: input.blocksToday,
-      activeConversationGuardMinutes: input.activeConversationGuardMinutes,
-      minBlockIntervalMinutes: input.minBlockIntervalMinutes,
-      maxBlocksPerDay: input.maxBlocksPerDay,
-    });
-
-  const structuralDecision = evaluateLane([]);
-  if (
-    !structuralDecision.allowed
-    && (
-      structuralDecision.reason === 'no_recent_session'
-      || structuralDecision.reason === 'internal_session'
-      || structuralDecision.reason === 'privacy_boundary'
-    )
-  ) {
-    return evaluateGate(structuralDecision);
-  }
-
-  const latestConversation = conversationalEntryFromSessionMetadata(input.session);
-  if (latestConversation?.role === 'user') {
-    const gate = evaluateGate(evaluateLane([latestConversation]));
-    if (!gate.open) return gate;
-  }
-
-  const latestActivityMinutes = input.session && Number.isFinite(input.session.timestamp)
-    ? Math.max(0, input.nowMs - input.session.timestamp) / MINUTE_MS
-    : null;
-  // An old latest-any-role timestamp proves every partner turn is older too.
-  // Only then may cadence gates run early; partner recency must retain first
-  // priority whenever the metadata cannot disprove it.
-  if (
-    latestActivityMinutes === null
-    || latestActivityMinutes < Math.max(0, input.activeConversationGuardMinutes)
-  ) {
-    return null;
-  }
-  const cadenceGate = evaluateFreeTimeGate({
-    laneEligible: false,
-    minutesSincePartnerActivity: latestActivityMinutes,
-    minutesSinceLastBlock: input.minutesSinceLastBlock,
-    blocksToday: input.blocksToday,
-    activeConversationGuardMinutes: input.activeConversationGuardMinutes,
-    minBlockIntervalMinutes: input.minBlockIntervalMinutes,
-    maxBlocksPerDay: input.maxBlocksPerDay,
-  });
-  return cadenceGate.reason === 'min_block_interval' || cadenceGate.reason === 'daily_block_cap'
-    ? cadenceGate
-    : null;
 }
 
 /**
@@ -813,8 +702,6 @@ function makeLaneHandler(
 
   return async () => {
     const nowMs = now();
-    const session = resolveFreeTimeSessionMetadata(options.sessionManager);
-    const sessionId = session?.sessionId;
 
     // Daily block counter resets on local-day rollover.
     const dayKey = localDateKey(nowMs, dayKeyTimeZone);
@@ -847,41 +734,23 @@ function makeLaneHandler(
     const minutesSinceLastBlock = state.lastBlockAtMs === undefined
       ? NO_PRIOR_SENTINEL_MINUTES
       : Math.max(0, nowMs - state.lastBlockAtMs) / MINUTE_MS;
-    let gate = evaluateFreeTimeGatePreflight({
+    const laneDecision = evaluateFreeTimeLaneEligibility({
       lane,
-      session,
       restWindow: options.restWindow,
-      idleMinIdleMinutes: options.config.idle.minIdleMinutes,
       nowMs,
+    });
+    const partnerRecentlyActive = hasRecentFreeTimePartnerActivity(options.sessionManager, {
+      lookbackMs: activeConversationGuardMinutes * MINUTE_MS,
+      nowMs,
+    });
+    const gate = evaluateFreeTimeGate({
+      laneEligible: laneDecision.allowed,
+      partnerRecentlyActive,
       minutesSinceLastBlock,
       blocksToday: state.blocksToday,
-      activeConversationGuardMinutes,
       minBlockIntervalMinutes: options.config.minBlockIntervalMinutes,
       maxBlocksPerDay: options.config.maxBlocksPerDay,
     });
-
-    if (!gate) {
-      const recentEntries = sessionId
-        ? options.sessionManager.getRecentMessages(sessionId, 16)
-        : [];
-      const laneDecision = evaluateFreeTimeLaneEligibility({
-        lane,
-        session,
-        recentEntries,
-        restWindow: options.restWindow,
-        idleMinIdleMinutes: options.config.idle.minIdleMinutes,
-        nowMs,
-      });
-      gate = evaluateFreeTimeGate({
-        laneEligible: laneDecision.allowed,
-        minutesSincePartnerActivity: partnerActivityMinutes(laneDecision, nowMs),
-        minutesSinceLastBlock,
-        blocksToday: state.blocksToday,
-        activeConversationGuardMinutes,
-        minBlockIntervalMinutes: options.config.minBlockIntervalMinutes,
-        maxBlocksPerDay: options.config.maxBlocksPerDay,
-      });
-    }
 
     if (options.eventBus) {
       void options.eventBus.emit(FREE_TIME_GATE_EVENT, {
@@ -890,9 +759,8 @@ function makeLaneHandler(
         reason: gate.open ? `${lane}:open` : `${lane}:${gate.reason}`,
         inputs: gate.inputs,
         timestamp: nowMs,
-        ...(sessionId
-          ? { sessionId, channelId: defaultChannelId }
-          : { channelId: defaultChannelId }),
+        sessionId: defaultChannelId,
+        channelId: defaultChannelId,
       });
     }
 
@@ -900,13 +768,6 @@ function makeLaneHandler(
       log.debug('Free-time block skipped', { lane, reason: gate.reason });
       return;
     }
-    if (!sessionId) {
-      // Defensive: lane eligibility requires a session, so this is unreachable,
-      // but the return-surfacing target must exist before we spend.
-      log.debug('Free-time block skipped: no partner session to surface to', { lane });
-      return;
-    }
-
     // ── Companion chooser (jp36.2.1.2) ──
     // When wired, the chooser supersedes the LRU auto-select: the companion
     // picks rest / private wander / resume / create through ONE cheap background
@@ -1052,7 +913,6 @@ function makeLaneHandler(
     if (options.recordBlock) {
       options.recordBlock({
         ...result,
-        partnerSessionId: sessionId,
         returnSurfaced,
         recordedAtMs: nowMs,
       });

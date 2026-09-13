@@ -9,12 +9,12 @@ export interface MonitorLane {
   reason: string | null; counts: Array<[string, number]>;
   recent: Array<{ at: number; outcome: string; reason: string | null }>;
 }
-export interface MonitorHealth {
+interface MonitorHealth {
   generatedAt: number; processStartedAt: number; lanes: MonitorLane[];
   configuration: CompanionSystemMonitorEvidence | null;
 }
-export interface MonitorIncident { id: string; code: string; status: string; at: number; count: number; scope: 'companion' | 'system' }
-export interface MonitorProvider { at: number; provider: string; model: string; status: string; servingProvider: string | null }
+interface MonitorIncident { id: string; code: string; status: string; at: number; count: number; scope: 'companion' | 'system' }
+interface MonitorProvider { at: number; provider: string; model: string; status: string; servingProvider: string | null }
 export type MonitorSource<T> = { status: 'available'; data: T } | { status: 'unavailable' | 'forbidden' | 'error' };
 export interface SystemMonitorSnapshot {
   companionId: string; fetchedAt: number;

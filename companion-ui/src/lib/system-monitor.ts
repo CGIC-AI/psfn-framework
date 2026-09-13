@@ -71,12 +71,18 @@ function parseIncidents(value: unknown, companionId: string): MonitorIncident[] 
     return { id: text(row.incidentId), code: text(row.code), status: text(row.status), at: Number(row.lastObservedAtMs), count: Number(row.occurrenceCount), scope: row.owner.kind as 'system' | 'companion' };
   });
 }
+function parseServingProvider(metadata: unknown): string | null {
+  if (!isRecord(metadata) || !isRecord(metadata.providerResponse)) return null;
+  const response = metadata.providerResponse;
+  if (Array.isArray(response.conflicts) && response.conflicts.includes('servingProvider')) return null;
+  return code(response.servingProvider);
+}
 function parseProviders(value: unknown, companionId: string): MonitorProvider[] {
   if (!isRecord(value)) throw new Error('Malformed provider evidence');
   return rows(value.recentEvents).filter(row => isRecord(row.attribution) && row.attribution.companionId === companionId
     && row.telemetryVisibility === 'operator_visible').map(row => ({
     at: Number(row.recordedAtMs), provider: text(row.provider), model: text(row.model), status: text(row.status),
-    servingProvider: isRecord(row.metadata) ? code(row.metadata.servingProvider) : null,
+    servingProvider: parseServingProvider(row.metadata),
   }));
 }
 

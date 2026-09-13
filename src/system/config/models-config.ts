@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { existsSync } from 'node:fs';
 import {
   normalizeEditableSettings,
   normalizeCanonicalModelRegistry,
@@ -7,6 +8,8 @@ import { MODELS_SEED_FILE_NAME } from './seed-defaults.js';
 import type { CanonicalModelRegistry, ModelCatalogEntry, ModelRoleAssignments, ModelPurpose, ModelSlot } from '../../shared/contracts/runtime.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { loadRequiredJson } from './load-or-seed.js';
+import { parseAutomataOwnerPolicy } from '../../faculties/automata/registry-contract.js';
+import { AUTOMATA_FILE_NAME, assertAutomataReviewerModelResolvable } from './automata-reviewer-model-contract.js';
 
 export const MODELS_FILE_NAME = 'models.json';
 export { MODELS_SEED_FILE_NAME };
@@ -110,6 +113,12 @@ export function saveModelsConfig(
   options: ModelsRuntimeLoadOptions = {},
 ): ModelsRuntimeConfig {
   const validated = validateModelsConfig(nextConfig, MODELS_FILE_NAME, options.defaultContextWindow);
+  const automataPath = join(dataDir, AUTOMATA_FILE_NAME);
+  // Bootstrap may write models before Automata exists; existing owners must stay resolvable.
+  if (existsSync(automataPath)) {
+    const policy = loadRequiredJson({ dataPath: automataPath, validate: parseAutomataOwnerPolicy });
+    assertAutomataReviewerModelResolvable(policy, validated.modelRegistry);
+  }
   writeJsonAtomic(join(dataDir, MODELS_FILE_NAME), validated.modelRegistry);
   return validated;
 }

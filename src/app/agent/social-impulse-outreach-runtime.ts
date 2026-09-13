@@ -206,11 +206,19 @@ export function createProductionSocialImpulseOutreachRuntime(
           'to see currently authorized destinations, then use notify action=outreach_choose once.',
           'The available dispositions are ignore, defer, contact-human, contact-companion,',
           'join-room, and other. A destination choice still runs every destination gate.',
+          'For ignore, defer, or other, omit destination_id and intent.',
+          'For contact-human, contact-companion, or join-room, include both destination_id and intent.',
         ].join('\n'),
         timestamp: new Date(now()),
         routing: { source: 'terminal', privateTurnTrigger: true },
       };
       await options.agentLoop.handleMessage(message);
+      const recorded = await options.store.getOpportunity(opportunityId);
+      if (!recorded || recorded.companionId !== options.companionId || recorded.state === 'pending') {
+        // A normal reply can follow a rejected choice tool. Preserve the opportunity
+        // and let the durable queue apply its bounded retry and failure reporting.
+        throw new Error('Social outreach disposition did not persist a decision');
+      }
     },
   });
   const runtime = createSocialImpulseOutreachRuntime({

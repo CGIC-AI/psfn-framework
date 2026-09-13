@@ -3,6 +3,8 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { loadAutomataPolicyConfig, loadAutomataPolicySeedDefaults } from '../../src/system/config/automata-policy-config.js';
+import { loadModelsConfig } from '../../src/system/config/models-config.js';
 import { resolveIntakeScreenerModels } from '../../src/boundary/gateway/intake/screener-model-selection.js';
 import type { SubstrateConfig } from '../../src/system/config/runtime-config-contracts.js';
 import {
@@ -67,6 +69,20 @@ afterEach(() => {
 });
 
 describe('config generation passes the real settings-contract guard', () => {
+  it.each([true, false])('binds the generated reviewer to the configured background slot (shared=%s)', (shared) => {
+    const plan = makePlan({ roots: freshRoot(shared), models: {
+      primaryModelSlug: 'example/chat', extractionModelSlug: 'example/background', visionModelSlug: 'example/vision',
+    } });
+    commitOwnerFiles(plan);
+    const policy = loadAutomataPolicyConfig(plan.roots.systemDataDir);
+    const seed = loadAutomataPolicySeedDefaults({ seedDir: SEED_DIR });
+    expect(policy).toEqual({ ...seed, bus: { ...seed.bus, reviewer: { ...seed.bus.reviewer, model: 'extraction' } } });
+    const registry = loadModelsConfig(plan.roots.systemDataDir).modelRegistry;
+    expect(registry.models.find(model => model.id === policy.bus.reviewer.model)).toMatchObject({
+      id: 'extraction', identity: { provider: plan.provider.id, model: 'example/background' },
+    });
+  });
+
   it('validates a shared-root openrouter config', () => {
     const plan = makePlan({ roots: freshRoot(true) });
     expect(() => stageAndValidate(plan)).not.toThrow();

@@ -4,8 +4,10 @@
 //        logger.info('message', { key: 'value' });
 
 import { createLogger, format, transports } from 'winston';
-import { OperationalLogStore } from './diagnostics/operational-log-store.js';
+import { OperationalLogStore, type DiagnosticLogRecord } from './diagnostics/operational-log-store.js';
 import { sanitizeDiagnosticText, sanitizeDiagnosticValue } from './diagnostics/redaction.js';
+
+export type { DiagnosticLogRecord } from './diagnostics/operational-log-store.js';
 
 const LOG_LEVEL = process.env.LOG_LEVEL ?? 'info';
 const DIAGNOSTIC_LOG_RING_LIMIT = 256;
@@ -61,16 +63,6 @@ const DIAGNOSTIC_LOG_CONTEXT_KEYS = new Set([
   'toolName',
   'action',
 ]);
-
-export interface DiagnosticLogRecord {
-  observedAt: number;
-  level: 'warn' | 'error' | 'info' | 'debug' | 'trace';
-  eventId?: string;
-  message: string;
-  component?: string;
-  context?: Record<string, string | number | boolean | null>;
-  source: string;
-}
 
 const diagnosticLogRing: DiagnosticLogRecord[] = [];
 let operationalLogStore: OperationalLogStore | undefined;

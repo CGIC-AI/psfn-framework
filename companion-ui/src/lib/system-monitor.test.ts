@@ -22,7 +22,7 @@ describe('system monitor evidence boundary', () => {
       if (String(input).includes('subsystem-health')) return new Response(JSON.stringify(health));
       if (String(input).includes('incidents')) return new Response('PRIVATE DENIAL', { status: 403 });
       return new Response(JSON.stringify({ recentEvents: [
-        { attribution: { companionId: A }, telemetryVisibility: 'operator_visible', recordedAtMs: 22, provider: 'openrouter', model: 'example/model', status: 'completed', metadata: { servingProvider: 'Example host', content: 'PRIVATE MODEL BODY' } },
+        { attribution: { companionId: A }, telemetryVisibility: 'operator_visible', recordedAtMs: 22, provider: 'openrouter', model: 'example/model', status: 'success', metadata: { providerResponse: { servingProvider: 'Example host', responseId: 'gen-example' }, servingProvider: 'PRIVATE WRONG FLAT PROVIDER', content: 'PRIVATE MODEL BODY' } },
         { attribution: { companionId: B }, telemetryVisibility: 'operator_visible', provider: 'PRIVATE SIBLING PROVIDER' },
         { attribution: { companionId: A }, telemetryVisibility: 'companion_private', provider: 'PRIVATE MODEL PROVIDER' },
       ] }));
@@ -32,6 +32,35 @@ describe('system monitor evidence boundary', () => {
     expect(result.incidents.status).toBe('forbidden');
     expect(result.providers).toMatchObject({ status: 'available', data: [{ provider: 'openrouter', servingProvider: 'Example host' }] });
     expect(JSON.stringify(result)).not.toContain('PRIVATE');
+    expect(JSON.stringify(result)).not.toContain('gen-example');
+  });
+  it.each([
+    undefined,
+    {},
+    { providerResponse: null },
+    { providerResponse: 'malformed' },
+    { providerResponse: { servingProvider: 42 } },
+    { providerResponse: { servingProvider: 'Conflicting host', conflicts: ['servingProvider'] } },
+    { providerResponse: { servingProvider: '<private body>' } },
+    { servingProvider: 'Unverified flat provider' },
+  ])('keeps absent or malformed serving-provider metadata unknown: %j', async metadata => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => new Response(JSON.stringify({
+      recentEvents: [{ attribution: { companionId: A }, telemetryVisibility: 'operator_visible',
+        recordedAtMs: 22, provider: 'openrouter', model: 'example/model', status: 'success', metadata }],
+    })));
+    const result = await loadSystemMonitor(A, new AbortController().signal, fetcher);
+    expect(result.providers).toEqual({ status: 'available', data: [{
+      at: 22, provider: 'openrouter', model: 'example/model', status: 'success', servingProvider: null,
+    }] });
+  });
+  it('retains a known serving provider when only its response ID conflicts', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => new Response(JSON.stringify({
+      recentEvents: [{ attribution: { companionId: A }, telemetryVisibility: 'operator_visible',
+        recordedAtMs: 22, provider: 'openrouter', model: 'example/model', status: 'success',
+        metadata: { providerResponse: { servingProvider: 'Known host', conflicts: ['responseId'] } } }],
+    })));
+    const result = await loadSystemMonitor(A, new AbortController().signal, fetcher);
+    expect(result.providers).toMatchObject({ status: 'available', data: [{ servingProvider: 'Known host' }] });
   });
   it('fails closed on a mismatched incident owner and never falls back to another companion', async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ scope: { owner: { kind: 'companion', companionId: B } }, incidents: [] })));

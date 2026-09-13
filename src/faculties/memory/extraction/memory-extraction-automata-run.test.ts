@@ -73,6 +73,70 @@ async function registry(): Promise<AutomataRunRegistry> {
 }
 
 describe('memory extraction Automata run lifecycle', () => {
+  it('recovers failed external attempts after retention hydration and terminalizes the bound retry', async () => {
+    const store = new InMemoryAutomataRunStore();
+    const hydrate = (nowMs: number) => AutomataRunRegistry.hydrate({
+      companionId: 'companion-a', policy: automataPolicy(), store, nowMs,
+    });
+    const input = {
+      runId: 'external-request-1', taskId: 'external-room', sessionId: 'external-session',
+      triggerReason: 'external_conversation' as const, createdAtMs: 100,
+    };
+    const failure = {
+      lifecycleState: 'failed' as const,
+      outcome: 'blocked' as const,
+      stateReason: 'memory_extraction_failed',
+      failureReason: 'orchestration_failure',
+    };
+    let runs = await hydrate(100);
+    const original = createMemoryExtractionAutomataRunPort(runs, input);
+    await original.begin();
+    await original.terminalize({ ...failure, atMs: 200 });
+
+    runs = await hydrate(100_000);
+    expect(runs.getRun(input.runId)).toBeNull();
+    const retry = createMemoryExtractionAutomataRunPort(runs, { ...input, createdAtMs: 100_000 });
+    const retried = await retry.begin();
+    expect(retried).toMatchObject({ execute: true, attempt: 2 });
+    expect(runs.getRun(retried.lineage.runId)).toMatchObject({
+      sourceRunId: input.runId, status: 'running', workerGeneration: 2,
+    });
+    await retry.terminalize({ ...failure, atMs: 100_001 });
+    const next = createMemoryExtractionAutomataRunPort(runs, { ...input, createdAtMs: 100_002 });
+    const nextAttempt = await next.begin();
+    expect(nextAttempt).toMatchObject({ execute: true, attempt: 3 });
+    expect(runs.getRun(nextAttempt.lineage.runId)).toMatchObject({
+      sourceRunId: retried.lineage.runId, status: 'running', workerGeneration: 3,
+    });
+    await next.terminalize({
+      lifecycleState: 'completed', outcome: 'completed',
+      stateReason: 'memory_extraction_completed', atMs: 100_003,
+    });
+    runs = await hydrate(200_000);
+    const completed = createMemoryExtractionAutomataRunPort(runs, input);
+    await expect(completed.begin()).resolves.toMatchObject({
+      lineage: { runId: nextAttempt.lineage.runId }, execute: false, attempt: 3,
+    });
+    expect(runs.getRun(input.runId)?.status).toBe('failed');
+    expect(runs.getRun(retried.lineage.runId)?.status).toBe('failed');
+    expect(runs.getRun(nextAttempt.lineage.runId)?.status).toBe('completed');
+  });
+
+  it('does not retry cancelled external work or mismatched source lineage', async () => {
+    const runs = await registry();
+    const input = {
+      runId: 'external-cancelled', taskId: 'room', sessionId: 'session',
+      triggerReason: 'external_conversation' as const, createdAtMs: 100,
+    };
+    await createMemoryExtractionAutomataRunPort(runs, input).begin();
+    await runs.transition(input.runId, { status: 'cancelled', reason: 'operator_cancelled', atMs: 101 });
+    await expect(createMemoryExtractionAutomataRunPort(runs, input).begin())
+      .rejects.toThrow('terminal cancelled run');
+    await expect(createMemoryExtractionAutomataRunPort(runs, { ...input, sessionId: 'other-session' }).begin())
+      .rejects.toThrow('lineage does not match');
+    expect(runs.findByTask(input.taskId)).toHaveLength(1);
+  });
+
   it('registers and starts the exact run before worker formation, then completes idempotently', async () => {
     const runs = await registry();
     const input = {

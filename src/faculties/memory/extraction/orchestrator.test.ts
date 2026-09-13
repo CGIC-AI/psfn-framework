@@ -263,6 +263,40 @@ function createTerminalLifecycle(options: {
 }
 
 describe('runExtractionOrchestration durable children', () => {
+  it('retries a failed external concern effect through a linked governed Bus run', async () => {
+    const registry = await createAutomataRunRegistry();
+    const automataBusWorkerAccess = createAutomataBusAccess(registry);
+    const automataTerminalLifecycle = createTerminalLifecycle({ recorded: [] });
+    const emitConcernCandidates = vi.fn()
+      .mockRejectedValueOnce(new Error('concern persistence unavailable'))
+      .mockResolvedValue(['concern-recovered']);
+    const options = buildOptions({
+      triggerReason: 'external_conversation',
+      automataBusWorkerAccess,
+      automataRunRegistry: registry,
+      automataTerminalLifecycle,
+      emitConcernCandidates,
+    });
+    await expect(runExtractionOrchestration(options)).rejects.toThrow('Extraction orchestration failed');
+    const failed = registry.findByTask(options.channelId)[0]!;
+    expect(failed.status).toBe('failed');
+
+    await expect(runExtractionOrchestration(options)).resolves.toMatchObject({
+      concernIds: ['concern-recovered'],
+    });
+    const recovered = registry.findByTask(options.channelId).find(run => run.status === 'completed')!;
+    expect(recovered.sourceRunId).toBe(failed.runId);
+    expect(recovered.workerGeneration).toBe(2);
+    expect(registry.getRun(failed.runId)?.status).toBe('failed');
+    expect(automataTerminalLifecycle.recordTerminalHandoff).toHaveBeenLastCalledWith(expect.objectContaining({
+      lineage: expect.objectContaining({ runId: recovered.runId, sourceRunId: failed.runId }),
+    }));
+    await runExtractionOrchestration(options);
+    expect(emitConcernCandidates).toHaveBeenCalledTimes(2);
+    expect(options.llmClient.complete).toHaveBeenCalledTimes(2);
+    expect(automataTerminalLifecycle.recordTerminalHandoff).toHaveBeenCalledTimes(2);
+  });
+
   it('registers the memory-extraction run before requesting its Bus briefing', async () => {
     const registry = await createAutomataRunRegistry();
     const automataBusWorkerAccess = createAutomataBusAccess(registry);

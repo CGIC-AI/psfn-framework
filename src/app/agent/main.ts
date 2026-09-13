@@ -230,6 +230,7 @@ import {
   DEFAULT_BACKGROUND_WORK_WELFARE_CONFIG,
 } from '../../system/config/scheduler-config.js';
 import { registerToolUsageEvaluatorTask } from '../../core/agent/tool-surface/usage-evaluator-scheduler-lane.js';
+import { registerEmoSimProactivitySampling } from '../../core/scheduler/emosim-proactivity-lane.js';
 import {
   hydrateStartupContinuity,
   requireWikiStartupHydrationTuning,
@@ -2200,6 +2201,7 @@ async function main(): Promise<void> {
     },
   });
   socialImpulseOutreachLane.setHumanPolicy(socialDesireHumanDeliveryPolicy);
+  registerEmoSimProactivitySampling(scheduler, observerEvalSidecar);
 
   // Journal auto-publisher (for reflections -> markdown journal).
   const journalAutoPublisher = createOptionalJournalAutoPublisher(pathSnapshot.workspaceRoot, config);

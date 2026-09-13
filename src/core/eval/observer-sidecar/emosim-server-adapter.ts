@@ -221,7 +221,24 @@ export class EmoSimServerRunner implements EmoSimRunner {
     return output;
   }
 
-  private ensureBootstrap(input: EmoSimAdapterInput): Promise<EmoSimServerBootstrap> {
+  /** Read the existing live session without creating it or injecting a stimulus. */
+  async readCurrentState(): Promise<{ sessionId: string; snapshot: EmoSimEngineSnapshot }> {
+    try {
+      const bootstrap = await this.ensureBootstrap();
+      const state = await this.readSessionState(bootstrap.sessionId);
+      if (state.session !== bootstrap.sessionId || state.label !== this.sessionLabel) {
+        throw incompatible('EmoSim live state does not match the configured session identity');
+      }
+      return { sessionId: bootstrap.sessionId, snapshot: this.toEngineSnapshot(state) };
+    } catch (error) {
+      // Re-discover after a server restart; never repair or create a session
+      // from a read-only sampling request.
+      this.bootstrapPromise = null;
+      throw error;
+    }
+  }
+
+  private ensureBootstrap(input?: EmoSimAdapterInput): Promise<EmoSimServerBootstrap> {
     if (!this.bootstrapPromise) {
       this.bootstrapPromise = this.bootstrap(input).catch((error: unknown) => {
         // Allow the next observation to retry bootstrap after transient
@@ -234,7 +251,7 @@ export class EmoSimServerRunner implements EmoSimRunner {
     return this.bootstrapPromise;
   }
 
-  private async bootstrap(input: EmoSimAdapterInput): Promise<EmoSimServerBootstrap> {
+  private async bootstrap(input?: EmoSimAdapterInput): Promise<EmoSimServerBootstrap> {
     const model = expectRecord(await this.request('GET', '/api/model'), '/api/model response');
     this.verifyModelContract(model);
     const emotionSpecs = extractEmotionSpecs(model);
@@ -244,10 +261,14 @@ export class EmoSimServerRunner implements EmoSimRunner {
       throw incompatible('/api/sessions did not return an array');
     }
 
-    const existing = sessions.find(
+    const matches = sessions.filter(
       (session): session is Record<string, unknown> =>
         isRecord(session) && session.label === this.sessionLabel,
     );
+    if (matches.length > 1) {
+      throw incompatible('EmoSim session label has ambiguous ownership');
+    }
+    const existing = matches[0];
 
     let sessionId: string;
     if (existing) {
@@ -261,6 +282,9 @@ export class EmoSimServerRunner implements EmoSimRunner {
         );
       }
     } else {
+      if (!input) {
+        throw incompatible('Configured EmoSim session is unavailable for live-state sampling');
+      }
       sessionId = await this.createSession(input);
     }
 

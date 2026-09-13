@@ -21,6 +21,7 @@ import {
   type EmoSimRunner,
 } from './emosim-adapter.js';
 import { createEmoSimServerRunner } from './emosim-server-adapter.js';
+import { createEmoSimLiveStateSampler } from './proactivity-sampling.js';
 import {
   createEmptyObserverLeverTrackerState,
   normalizeObserverLeverTrackerState,
@@ -80,7 +81,7 @@ export function createObserverEvalSidecarRuntimeFromConfig(
 
   return {
     config: settings,
-    observer: createObserverEvalSidecarPort(
+    ...createObserverEvalSidecarPort(
       settings,
       persistence,
       dependencies.eventBus,
@@ -100,9 +101,9 @@ function createObserverEvalSidecarPort(
   emitProactivityImpulse: ((impulse: EmoSimProactivityImpulse) => Promise<void>) | undefined,
   proactivitySettings: ReturnType<typeof createDefaultEmoSimProactivitySettings>,
   proactivityStateStore: EmoSimProactivityStateStorePort | undefined,
-): ObserverEvalSidecarPort | null {
+): Pick<ObserverEvalSidecarRuntime, 'observer' | 'proactivitySampling'> {
   if (settings.enabled !== true || settings.adapter?.kind !== 'emosim_server') {
-    return null;
+    return { observer: null };
   }
   const serverUrl = settings.adapter.serverUrl?.trim();
   const sessionLabel = settings.adapter.sessionLabel?.trim();
@@ -142,7 +143,15 @@ function createObserverEvalSidecarPort(
       })
     : null;
 
-  return new EmoSimObserverEvalSidecar({
+  // Shared across turn projection and scheduled reads: one exact session and
+  // one serialized production threshold cursor for both observation sources.
+  const runner = createEmoSimServerRunner({
+    serverUrl,
+    sessionLabel,
+    agentName,
+    ...(settings.adapter.timeoutMs !== undefined ? { timeoutMs: settings.adapter.timeoutMs } : {}),
+  });
+  const observer = new EmoSimObserverEvalSidecar({
     config: settings,
     persistence,
     ...(eventBus
@@ -151,13 +160,21 @@ function createObserverEvalSidecarPort(
     ...(proactivityPort ? { proactivityPort, companionId: companionId! } : {}),
     // One runner per sidecar: it caches the contract check and the persistent
     // session bootstrap across observations.
-    runner: createEmoSimServerRunner({
-      serverUrl,
-      sessionLabel,
-      agentName,
-      ...(settings.adapter.timeoutMs !== undefined ? { timeoutMs: settings.adapter.timeoutMs } : {}),
-    }),
+    runner,
   });
+  return {
+    observer,
+    ...(proactivityPort && companionId ? {
+      proactivitySampling: {
+        intervalMs: proactivitySettings.thresholdProfile.samplingIntervalMs,
+        sample: createEmoSimLiveStateSampler({
+          companionId,
+          readCurrentState: () => runner.readCurrentState(),
+          port: proactivityPort,
+        }),
+      },
+    } : {}),
+  };
 }
 
 function createObserverEvalSidecarPersistence(

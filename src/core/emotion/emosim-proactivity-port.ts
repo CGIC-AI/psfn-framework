@@ -150,6 +150,15 @@ export function createEmoSimProactivityPort(
     }
     const current = await loadState();
     requireApplicableSource(observation, profile);
+    if (observation.source.availability !== 'available') {
+      // Loss of fresh source evidence invalidates sustain immediately, even
+      // inside the sampling/dedupe window (including a process restart).
+      current.firstCrossingMs = null;
+      current.lastSampledAtMs = observation.observedAtMs;
+      current.lastInputId = observation.lineage.inputId;
+      await options.stateStore.save(current);
+      return suppression(observation, 'source_unavailable', 'unavailable', null);
+    }
     if (current.lastSampledAtMs !== null
       && current.lastInputId === observation.lineage.inputId
       && observation.observedAtMs - current.lastSampledAtMs <= profile.dedupeWindowMs) {
@@ -162,10 +171,6 @@ export function createEmoSimProactivityPort(
     current.lastSampledAtMs = observation.observedAtMs;
     current.lastInputId = observation.lineage.inputId;
     await options.stateStore.save(current);
-    if (observation.source.availability !== 'available') {
-      await resetCrossing(current);
-      return suppression(observation, 'source_unavailable', 'unavailable', null);
-    }
     if (observation.source.confidence < profile.minimumConfidence) {
       await resetCrossing(current);
       return suppression(observation, 'confidence_abstained', 'available', null);

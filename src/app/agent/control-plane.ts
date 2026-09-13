@@ -65,6 +65,7 @@ const log = createComponentLogger('AgentControlPlane');
 const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
 
 export interface AgentControlPlaneShutdownTargets {
+  healthDetectorScheduler?: Pick<Scheduler, 'stop'>;
   apiServer?: ApiServer;
   adminTransport?: Lifecycle;
   appCache?: { close?: () => Promise<void> };
@@ -237,6 +238,7 @@ export function buildAgentControlPlane(
         action: () => agentLoop.abortBackgroundWorkRecovery(),
         failClosed: true,
       },
+      { step: 'stop runtime health watchdog', action: () => shutdownTargets.healthDetectorScheduler?.stop() },
       { step: 'stop scheduler', action: () => scheduler.stop() },
       {
         step: 'stop durable background work supervisor',

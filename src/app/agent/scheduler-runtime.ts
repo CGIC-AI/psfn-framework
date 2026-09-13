@@ -68,8 +68,7 @@ import {
   registerDurableBackgroundWorkSupervisorTask,
 } from '../../core/agent/background-work/scheduler-task.js';
 import {
-  RUNTIME_HEALTH_DETECTOR_TASK_ID,
-  registerRuntimeHealthDetectorTask,
+  createRuntimeHealthDetectorScheduler,
 } from '../../core/scheduler/health-detector-task.js';
 import {
   createRuntimeHealthDetectorCycle,
@@ -134,6 +133,7 @@ export const AUTOMATA_RETENTION_OPERATION_ID = 'automata-raw-session-retention';
 
 export interface AgentSchedulerRuntime {
   scheduler: Scheduler;
+  healthDetectorScheduler: Scheduler;
   postTurnActions: PostTurnActionRuntime;
   backgroundMaintenance: BackgroundMaintenanceRegistrar;
   compressionGuidelineEvolution: CompressionGuidelineEvolutionPort;
@@ -735,8 +735,12 @@ export function buildAgentSchedulerRuntime(
     });
   }
 
-  registerRuntimeHealthDetectorTask({
-    scheduler,
+  const healthDetectorScheduler = createRuntimeHealthDetectorScheduler({
+    eventBus: options.eventBus,
+    source: {
+      owner: resolveHealthEventOwner(options.config.companionId),
+      process: 'agent',
+    },
     intervalMs: options.schedulerConfig.healthDetectors.intervalMs,
     cycle: createRuntimeHealthDetectorCycle({
       stream: options.healthDetectors.stream,
@@ -750,9 +754,6 @@ export function buildAgentSchedulerRuntime(
       stuckJobs: {
         listRuns: options.healthDetectors.automataRuns,
         listTasks: () => scheduler.listTasks(),
-        // The cycle runs AS this task, so its own entry is `active` for the
-        // whole evaluation and would otherwise report itself as stuck.
-        ignoreTaskIds: [RUNTIME_HEALTH_DETECTOR_TASK_ID],
       },
     }),
   });
@@ -1003,6 +1004,7 @@ export function buildAgentSchedulerRuntime(
   log.info(`Memory system enabled (${options.gateway.dims}d embeddings via gateway)`);
   return {
     scheduler,
+    healthDetectorScheduler,
     postTurnActions,
     backgroundMaintenance,
     compressionGuidelineEvolution,

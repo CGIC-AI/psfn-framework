@@ -989,6 +989,7 @@ async function main(): Promise<void> {
   });
   const {
     scheduler,
+    healthDetectorScheduler,
     postTurnActions,
     backgroundMaintenance,
     compressionGuidelineEvolution,
@@ -2078,6 +2079,7 @@ async function main(): Promise<void> {
     closeOperationalLogPersistence();
   };
   shutdownTargets.adminTransport = adminTransport;
+  shutdownTargets.healthDetectorScheduler = healthDetectorScheduler;
   shutdownTargets.appCache = appCache;
   shutdownTargets.chargeLedger = chargeLedger;
   if (coreRuntime.fatigueRegulationReservations) {
@@ -2418,6 +2420,7 @@ async function main(): Promise<void> {
       mismatches: postgresReadiness.degraded.map(entry => entry.mismatch).join('; '),
     });
   }
+  healthDetectorScheduler.start();
   await socialImpulseOutreachLane.runtime.recoverPending();
   scheduler.start();
   await eventBus.emit('system.init', {});

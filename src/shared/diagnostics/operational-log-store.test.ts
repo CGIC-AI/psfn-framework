@@ -51,6 +51,21 @@ describe('durable operational metadata', () => {
     second.close();
   });
 
+  it('retains structured scheduling metadata and underlying failures without raw payloads', () => {
+    const store = new OperationalLogStore({ logsDir: root(), process: 'agent', companionId: 'companion-a', retentionDays: 30, now: () => NOW });
+    store.record({ observedAt: NOW, level: 'error', message: 'Background action failed', source: 'in_process' }, {
+      eligibility: { thoughtCount: 3, blockedBy: ['foreground_active'], available: false },
+      error: new AggregateError([new Error('lease renewal rejected')], 'background finalization failed'),
+      raw: { prompt: 'private prompt', response: { content: 'private response' }, authorization: 'Bearer private-credential' },
+    });
+    store.close();
+    const body = readFileSync(join(store.directory, readdirSync(store.directory)[0]!), 'utf8');
+    const record = JSON.parse(body);
+    expect(record.metadata.eligibility).toEqual({ thoughtCount: 3, blockedBy: ['foreground_active'], available: false });
+    expect(record.metadata.error.errors[0].summary).toBe('lease renewal rejected');
+    expect(body).not.toMatch(/private prompt|private response|private-credential/);
+  });
+
   it('retains young overflow across rotation and deletes only fully expired days', () => {
     let now = NOW;
     const store = new OperationalLogStore({ logsDir: root(), process: 'gateway', retentionDays: 30, now: () => now });

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   closeSync, fsyncSync, mkdirSync, openSync, readdirSync, readSync,
-  fstatSync, unlinkSync, writeSync,
+  fstatSync, rmSync, writeSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import { isRecord } from '../utils/types.js';
@@ -103,7 +103,7 @@ export class OperationalLogStore {
       const match = LOG_FILE_NAME.exec(file.name);
       if (!file.isFile() || !match) continue;
       const dayEnd = Date.parse(`${match[1]}T00:00:00.000Z`) + 24 * 60 * 60 * 1000;
-      if (dayEnd < cutoff) unlinkSync(join(this.directory, file.name));
+      if (dayEnd < cutoff) rmSync(join(this.directory, file.name), { force: true });
     }
     this.fd = openSync(join(this.directory, `${day}.${this.options.process}.${this.bootId}.jsonl`), 'a', 0o600);
     this.day = day;

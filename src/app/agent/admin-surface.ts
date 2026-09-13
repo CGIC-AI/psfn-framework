@@ -1,3 +1,4 @@
+import type { SocialOutreachHealthSummary } from '../../shared/contracts/companion-system-monitor.js';
 import type { SatelliteDeviceHealthReader } from '../../shared/telemetry/satellite-device-health.js';
 import type { BlindReviewLaneRuntime } from './startup/blind-review-lane.js';
 import type { ShardExecutionPort } from '../../faculties/shards/port.js';
@@ -95,6 +96,8 @@ export interface StartOptionalAdminTransportServerOptions {
   icpRuntimeEnablement: IcpAutonomyRuntimeEnablement;
   icpTestInitiation?: AdminIcpTestInitiationPort;
   postTurnActions: PostTurnActionRuntime;
+  readProactiveHealth?: () => Promise<SocialOutreachHealthSummary>;
+  additionalSchedulerTasks?: () => ReturnType<Scheduler['listTasks']>;
   outreachOutbox?: OutreachOutboxStore | null;
   episodicStore?: EpisodicStorePort | null;
   /**
@@ -295,6 +298,8 @@ export async function startOptionalAdminTransportServer(
     icpRuntimeEnablement: options.icpRuntimeEnablement,
     ...(options.icpTestInitiation ? { icpTestInitiation: options.icpTestInitiation } : {}),
     postTurnActions: options.postTurnActions,
+    ...(options.readProactiveHealth ? { readProactiveHealth: options.readProactiveHealth } : {}),
+    ...(options.additionalSchedulerTasks ? { additionalSchedulerTasks: options.additionalSchedulerTasks } : {}),
     outreachOutbox: options.outreachOutbox ?? null,
     shardManager: options.shardManager,
     eventBus: options.eventBus,

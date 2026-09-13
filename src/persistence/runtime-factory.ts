@@ -225,7 +225,9 @@ export interface AgentPersistenceRuntime {
   /** Companion-local production cursor; never stored in eval telemetry rows. */
   emosimProactivityStateStore: EmoSimProactivityStateStorePort & { close(): Promise<void> };
   /** One companion's durable content-free social-impulse disposition ledger. */
-  socialImpulseOutreachStore: SocialImpulseOutreachStorePort & { close(): Promise<void> };
+  socialImpulseOutreachStore: SocialImpulseOutreachStorePort
+    & Pick<PostgresSocialImpulseOutreachStore, 'getHealthSummary'>
+    & { close(): Promise<void> };
   /**
    * Gateway-owned per-companion social pot (shared schema). The durable
    * authority for the fatigue-economy budget that funds group participation and

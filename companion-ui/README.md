@@ -19,7 +19,7 @@ not talk to PSFN core directly.
 
 - All realtime traffic goes through the PSFN Satellite Hub websocket protocol.
 - Do not call PSFN core endpoints from this app.
-- Do not call `/api/admin/*` from this app.
+- The System monitor may read only `subsystem-health`, `incidents`, and `model-usage` through `/companions/<id>/garden/api/admin/` using the current fleet session. Existing Garden diagnostics/model permissions and companion scope remain authoritative; no unscoped admin calls or mutations are permitted.
 - Do not add server logic to this package.
 - Coordinate protocol changes with the in-repo Hub source; do not drift the mirror.
 - Keep this package standalone. Do not wire root auto-installs for it.

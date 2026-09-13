@@ -1892,6 +1892,7 @@ async function main(): Promise<void> {
     icpInitiationCandidateStore: persistenceRuntime.icpInitiationCandidateStore,
     icpFeltImpulseFunnelStore: persistenceRuntime.icpFeltImpulseFunnelStore,
     partnerAffectShadowStore: persistenceRuntime.partnerAffectShadowStore,
+    readProactiveHealth: () => persistenceRuntime.socialImpulseOutreachStore.getHealthSummary(resolveCoreCompanionIdFromConfig(config)),
     icpRuntimeEnablement,
     ...(icpTestInitiation ? { icpTestInitiation } : {}),
     postTurnActions,

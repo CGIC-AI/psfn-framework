@@ -11,7 +11,6 @@ import type { MemoryStorePort } from './memory-store-port.js';
 import { PostgresEpisodicStore } from './episodic/postgres-store.js';
 import { createMemoryTool } from './tools.js';
 import type { MemoryWriter } from './writer.js';
-import { COMPANION_SELF_REFLECTION_RETRIEVAL_PURPOSE } from './retrieval/access-scope.js';
 
 const CHANNEL_ID = 'api:episode-search';
 
@@ -140,7 +139,7 @@ describe('memory action=episode_search', () => {
     expect(text).not.toContain('Private quarantined details');
   });
 
-  it('honors an explicitly authorized companion-self reflection access scope', async () => {
+  it.each(['scheduled', 'background'] as const)('honors %s companion-self reflection access scope', async callType => {
     const store = new PostgresEpisodicStore(
       new FakeEpisodicPool() as unknown as Pool,
       { now: () => new Date('2026-07-18T12:00:00.000Z') },
@@ -165,7 +164,7 @@ describe('memory action=episode_search', () => {
       {} as MemoryStorePort,
       {
         episodicStore: store,
-        episodicAccessScope: () => 'companion_self_reflection',
+        retrievalAccessScope: () => 'companion_self_reflection',
       },
     );
     const reflectionChannel = 'internal:reflection:daily';
@@ -175,10 +174,11 @@ describe('memory action=episode_search', () => {
       viewerTrustLevel: 'regular',
       viewerChannelPrivacy: 'private',
       requesterProvenance: 'self_directed',
-      callType: 'background',
-      originType: 'background',
-      purpose: COMPANION_SELF_REFLECTION_RETRIEVAL_PURPOSE,
-      originStage: COMPANION_SELF_REFLECTION_RETRIEVAL_PURPOSE,
+      requestAudience: 'self',
+      callType,
+      originType: callType,
+      purpose: 'agent.turn.prompt',
+      originStage: 'agent.turn.prompt',
     }, () => tool.execute('memory-episode-search-reflection', {
       action: 'episode_search',
       query: 'ceramic restoration',
@@ -187,7 +187,7 @@ describe('memory action=episode_search', () => {
     expect(resultText(result)).toContain('cross-channel-self-episode');
   });
 
-  it('applies companion-self reflection scope to timeline and exact source-turn drilldown', async () => {
+  it.each(['scheduled', 'background'] as const)('applies %s companion-self reflection scope to timeline and exact source-turn drilldown', async callType => {
     const store = new PostgresEpisodicStore(
       new FakeEpisodicPool() as unknown as Pool,
       { now: () => new Date('2026-07-18T12:00:00.000Z') },
@@ -250,7 +250,7 @@ describe('memory action=episode_search', () => {
         episodicStore: store,
         sessionReader: { getRecent: () => entries },
         sessionQuarantineFilter: { isSessionRetiredOrQuarantined: () => false },
-        episodicAccessScope: () => 'companion_self_reflection',
+        retrievalAccessScope: () => 'companion_self_reflection',
       },
     );
     const reflectionChannel = 'internal:reflection:daily';
@@ -259,10 +259,11 @@ describe('memory action=episode_search', () => {
       viewerTrustLevel: 'regular' as const,
       viewerChannelPrivacy: 'private' as const,
       requesterProvenance: 'self_directed' as const,
-      callType: 'background' as const,
-      originType: 'background' as const,
-      purpose: COMPANION_SELF_REFLECTION_RETRIEVAL_PURPOSE,
-      originStage: COMPANION_SELF_REFLECTION_RETRIEVAL_PURPOSE,
+      requestAudience: 'self' as const,
+      callType,
+      originType: callType,
+      purpose: 'agent.turn.prompt',
+      originStage: 'agent.turn.prompt',
     };
 
     const timeline = await runWithRequestContext(reflectionContext, () => tool.execute(
@@ -287,7 +288,7 @@ describe('memory action=episode_search', () => {
         sessionQuarantineFilter: {
           isSessionRetiredOrQuarantined: sessionId => sessionId === sourceSession,
         },
-        episodicAccessScope: () => 'companion_self_reflection',
+        retrievalAccessScope: () => 'companion_self_reflection',
       },
     );
     const quarantinedTimeline = await runWithRequestContext(reflectionContext, () => (

@@ -92,6 +92,37 @@ function createFacade(
 }
 
 describe('ToolRuntimeFacade canonical descriptions', () => {
+  it('gives private reflection the full configured toolset, including journal writes and extended tools', async () => {
+    const { facade, agent, correlation } = createFacade('reflection', ['external.companion', 'repl.execute']);
+    const journalExecute = vi.fn(async () => ({
+      content: [{ type: 'text' as const, text: 'journal written' }], details: {},
+    }));
+    for (const name of ['memory', 'session', 'identity', 'subagent', 'analysis_workbench', 'generate_image']) {
+      facade.registerTool(makeTool(name), 'core');
+    }
+    facade.registerTool(makeTool('journal', journalExecute), 'core');
+    for (const name of ['repo', 'shell', 'beads', 'notify', 'world']) {
+      facade.registerTool(withCapabilityRequirement(makeTool(name), NO_CAPABILITY_REQUIREMENT), 'extended');
+    }
+    const message = {
+      id: 'private-reflection-tools', channelId: 'internal:reflection:daily-review',
+      channelType: 'terminal' as const, authorId: 'scheduler', authorName: 'Daily Reflection',
+      content: 'Reflect privately and use your tools as needed.', timestamp: new Date(),
+      routing: {
+        workerExecution: createWorkerExecutionPolicy(WHISPER_WORKER_LANE),
+        reflectionTurn: { schemaVersion: 1 as const, stage: 'tool_grounding' as const, templateId: 'daily-review', mode: 'deliberation' as const },
+      },
+    };
+    facade.applyActiveToolsToAgentForTurn(message, null, 'scheduled', correlation, { intent: null });
+    const ordinaryTools = agent.state.tools.map(tool => tool.name);
+    facade.applyActiveToolsToAgentForTurn(message, 'reflection', 'scheduled', correlation, { intent: 'reflection' });
+    expect(agent.state.tools.map(tool => tool.name)).toEqual(ordinaryTools);
+    const journal = agent.state.tools.find(tool => tool.name === 'journal');
+    expect(journal).toBeDefined();
+    await journal!.execute('reflection-journal-write', { action: 'write', path: 'daily.md', content: 'A reflection.' });
+    expect(journalExecute).toHaveBeenCalledOnce();
+  });
+
   it('uses the live registry description for every registered first-party surface', () => {
     const { facade } = createFacade();
 
@@ -903,7 +934,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     );
   });
 
-  it('keeps the reflection allowlist of core tools active for maintenance turns', () => {
+  it('keeps all registered core tools active for reflection turns', () => {
     const { facade, agent, emitTelemetry, correlation } = createFacade('reflection');
     facade.registerTool(makeTool('identity'), 'core');
     facade.registerTool(makeTool('system'), 'core');
@@ -930,18 +961,18 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
       'memory',
       'session',
       'identity',
+      'analysis_workbench',
+      'subagent',
       'self_status',
       'system',
     ]);
 
     const skippedEvents = emitTelemetry.mock.calls
       .filter(([eventName]) => eventName === 'agent.tools.core_guardrail.skipped');
-    expect(skippedEvents).toEqual(expect.arrayContaining([
-      ['agent.tools.core_guardrail.skipped', expect.objectContaining({ toolName: 'subagent', taskKind: 'reflection' })],
-    ]));
+    expect(skippedEvents).toEqual([]);
   });
 
-  it('keeps daily-reflection evidence recall on direct memory and session tools without invoking analysis_workbench', async () => {
+  it('lets daily reflection recall, write memories, and use analysis_workbench', async () => {
     const memoryExecute = vi.fn(async () => ({
       content: [{ type: 'text' as const, text: 'cross-tier companion memory evidence' }],
       details: {},
@@ -979,7 +1010,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     }, 'reflection', 'background', correlation, { intent: 'reflection' });
 
     const tools = agent.state.tools;
-    expect(tools.map(tool => tool.name)).toEqual(['memory', 'session']);
+    expect(tools.map(tool => tool.name)).toEqual(['memory', 'session', 'analysis_workbench']);
     for (const [toolCallId, params] of [
       ['memory-recall-1', { action: 'search', query: 'today' }],
       ['episode-recall-1', { action: 'episode_search', query: 'recovery plan' }],
@@ -992,31 +1023,26 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
       action: 'search',
       query: 'today',
     });
-    const deniedMutation = await tools.find(tool => tool.name === 'memory')?.execute(
+    const mutation = await tools.find(tool => tool.name === 'memory')?.execute(
       'memory-write-1',
-      { action: 'write', text: 'do not write during reflection' },
+      { action: 'write', text: 'a reflection memory' },
     );
-    expect(memoryExecute).toHaveBeenCalledTimes(4);
+    expect(memoryExecute).toHaveBeenCalledTimes(5);
     expect(memoryExecute.mock.calls.map(([, params]) => params)).toEqual([
       { action: 'search', query: 'today' },
       { action: 'episode_search', query: 'recovery plan' },
       { action: 'timeline', from: '2026-04-22', to: '2026-04-23' },
       { action: 'get', episodeId: 'episode-1' },
+      { action: 'write', text: 'a reflection memory' },
     ]);
     expect(sessionExecute).toHaveBeenCalledOnce();
-    expect(workbenchExecute).not.toHaveBeenCalled();
-    expect(deniedMutation).toMatchObject({ details: { isError: true } });
-    expect(emitTelemetry).toHaveBeenCalledWith(
-      'agent.tools.core_guardrail.skipped',
-      expect.objectContaining({
-        toolName: 'analysis_workbench',
-        taskKind: 'reflection',
-        reason: 'maintenance_turn_allowlist',
-      }),
-    );
+    await tools.find(tool => tool.name === 'analysis_workbench')?.execute('reflection-analysis', {});
+    expect(workbenchExecute).toHaveBeenCalledOnce();
+    expect(mutation?.details).not.toMatchObject({ isError: true });
+    expect(emitTelemetry.mock.calls.filter(([name]) => name === 'agent.tools.core_guardrail.skipped')).toEqual([]);
   });
 
-  it.each(['heartbeat', 'reflection', 'maintenance'] as const)(
+  it.each(['heartbeat', 'maintenance'] as const)(
     'applies the explicit maintenance allowlist to authorized core and extended tools on %s turns',
     (taskKind) => {
       const grantedTokens = [
@@ -1104,7 +1130,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     expect(names).not.toContain('subagent');
   });
 
-  it('drops expressive image tools from silent reflection turns (psfn img2)', () => {
+  it('keeps expressive image tools available during private reflection', () => {
     const { facade, agent, correlation } = createFacade('reflection');
     facade.registerTool(makeTool('selfie_create'), 'core');
     facade.registerTool(makeTool('generate_image'), 'core');
@@ -1121,9 +1147,9 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     }, 'reflection', 'background', correlation, { intent: null });
 
     const names = (agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>).map(t => t.name);
-    // Reflection is silent introspection; no outward image expression.
-    expect(names).not.toContain('selfie_create');
-    expect(names).not.toContain('generate_image');
+    // Private reflection has the full configured creative tool surface.
+    expect(names).toContain('selfie_create');
+    expect(names).toContain('generate_image');
     expect(names).toContain('self_status');
   });
 

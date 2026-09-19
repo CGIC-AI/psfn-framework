@@ -10,6 +10,8 @@ import type { MemoryStorePort } from '../../../faculties/memory/memory-store-por
 import type { SessionStore } from '../../../persistence/sessions/store.js';
 import { createPostgresContactStore } from '../postgres-adapter.js';
 import type { ContactStorePort } from '../contact-store-port.js';
+import { createBiographySynthesisTargetPort } from '../../../faculties/memory/biographical/synthesis-targets.js';
+import { createDefaultBiographicalDepthPolicy } from '../../../system/config/biographical-depth-policy.js';
 
 // bead psfn-framework-qgqw.1 (adjudication R10.3): contacts are archived, never
 // deleted. These regressions run against a real Postgres (never a mock) so the
@@ -43,6 +45,28 @@ async function freshStore(): Promise<{ store: ContactStorePort; pool: ReturnType
 }
 
 describe('contact archive semantics (qgqw.1)', () => {
+  it('stops biography synthesis for archived canonical contacts without identity-link challenges', async () => {
+    const { store, pool } = await freshStore();
+    try {
+      const contact = await store.upsert({
+        displayName: 'Established Friend', trustLevel: 'trusted', relationshipType: 'friend',
+      }, { actor: 'operator:test' });
+      expect(await store.countVerifiedIdentityLinks(contact.id)).toBe(0);
+      const targets = createBiographySynthesisTargetPort({
+        contactStore: store,
+        companionSubject: { kind: 'companion', companionId: 'companion-test', subjectVersion: 1 },
+        depthPolicy: createDefaultBiographicalDepthPolicy,
+      });
+      expect((await targets.listTargets(10)).map(target => target.subject))
+        .toContainEqual({ kind: 'contact', contactId: contact.id, subjectVersion: 1 });
+      await store.archiveContact(contact.id, 'operator:test');
+      expect((await targets.listTargets(10)).map(target => target.subject))
+        .not.toContainEqual({ kind: 'contact', contactId: contact.id, subjectVersion: 1 });
+    } finally {
+      await pool.end();
+    }
+  });
+
   it('archives instead of deletes via the port, preserving the row and audit trail', async () => {
     const { store, pool } = await freshStore();
     try {

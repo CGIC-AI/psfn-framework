@@ -69,14 +69,16 @@ describe('renderExtractionChunkPrompt', () => {
       [entry(1), entry(2)],
       promptContext({ existingFacts: '- [semantic] Existing fact' }),
     );
-    expect(rendered).toBe([
+    expect(rendered.startsWith([
       'Known facts:',
       '- [semantic] Existing fact',
       '',
       'Transcript:',
       '[message_id:1] Alex: line 1',
       '[message_id:2] Lyra: line 2',
-    ].join('\n'));
+      '',
+      'Conversational subject attribution:',
+    ].join('\n'))).toBe(true);
   });
 
   it('prefers the resolved companion participant name over the character name', () => {
@@ -97,10 +99,10 @@ describe('renderExtractionChunkPrompt', () => {
     expect(rendered.endsWith(`\n\n${buildExtractionNamingGuidance(names)}`)).toBe(true);
   });
 
-  it('omits empty guidance sections entirely', () => {
+  it('retains attribution guidance when participant names are unavailable', () => {
     const rendered = renderExtractionChunkPrompt([entry(1)], promptContext());
     expect(rendered).not.toContain('\n\n\n');
-    expect(rendered.endsWith('[message_id:1] Alex: line 1')).toBe(true);
+    expect(rendered).toContain('[message_id:1] Alex: line 1\n\nConversational subject attribution:');
   });
 
   it('appends experiential self-directed guidance when a companion name is set', () => {
@@ -134,7 +136,7 @@ describe('renderExtractionChunkPrompt', () => {
         automataBusPrompt: 'BOUNDED BUS INSTRUCTIONS\n\nSPAWN BRIEFING',
       }),
     );
-    expect(rendered).toBe([
+    expect(rendered.startsWith([
       'INHERITED EXTRACTION IDENTITY',
       '',
       'BOUNDED BUS INSTRUCTIONS',
@@ -146,7 +148,9 @@ describe('renderExtractionChunkPrompt', () => {
       '',
       'Transcript:',
       '[message_id:1] Alex: line 1',
-    ].join('\n'));
+      '',
+      'Conversational subject attribution:',
+    ].join('\n'))).toBe(true);
     expect(build).toHaveBeenCalledWith('memory_extraction');
     expect(prepend).not.toHaveBeenCalled();
   });

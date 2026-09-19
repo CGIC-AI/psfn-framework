@@ -1,6 +1,7 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { PostTurnActionRuntime } from '../../core/agent/post-turn-action-runtime.js';
+import { buildSocialOutreachContext, isKnownDirectOutreachChannel, resolvePrimaryContactOutreachIdentity } from './social-outreach-context.js';
 import { createSocialImpulseOutreachQueue } from './social-impulse-outreach-queue.js';
 import type { SpeakingReservationPhase } from '../../core/agent/arbiter/reservation-phase.js';
 import type { SpeakingEgressLeasePhase } from '../../core/agent/arbiter/egress-lease-phase.js';
@@ -18,6 +19,7 @@ import {
 } from '../../core/emotion/social-impulse-outreach.js';
 import type { ProactiveOutboundDispatcher } from '../../core/intention/proactive-outbound.js';
 import type { SocialDesireHumanDeliveryPolicy } from '../../core/intention/social-desire-human-policy.js';
+import { evaluateProactiveOutboundTimeGate, type ProactiveQuietHoursConfig } from '../../core/intention/proactive-time-gate.js';
 import type { CompanionAvailabilityRuntime } from '../../core/agent/companion-availability.js';
 import { createEndogenousRoomParticipationCandidate } from '../../core/participation/endogenous-room-candidate.js';
 import type { CapabilityRuntime } from '../../system/capabilities/runtime.js';
@@ -27,6 +29,7 @@ import { createComponentLogger } from '../../shared/logger.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { classifyChannelDisclosure } from '../../system/trust/policy.js';
 import type { RoomParticipationLeaseCoordinator } from '../../core/participation/room-participation-lease-coordinator.js';
+import type { IntentionFollowUpDestinationResolver } from '../../core/intention/follow-up-destination.js';
 
 const log = createComponentLogger('SocialImpulseOutreach');
 
@@ -42,22 +45,22 @@ interface RuntimePhases {
 export interface ProductionSocialImpulseOutreachOptions {
   companionId: string;
   companionName: string;
+  quietHours: ProactiveQuietHoursConfig;
   store: SocialImpulseOutreachStorePort;
   getMode(): SocialImpulseOutreachMode;
   agentLoop: Pick<SubstrateAgent, 'handleMessage'>;
   postTurnActions: Pick<PostTurnActionRuntime, 'enqueue' | 'registerHandler'>;
   contactStore: Pick<
     ContactStorePort,
-    'getByDiscordUserId' | 'listKnownRooms'
+    'getByTrustLevel' | 'getById' | 'listKnownRooms'
   >;
-  sessionStore: Pick<SessionStore, 'listChannels'>;
-  primaryDiscordUserId?: string;
+  sessionStore: Pick<SessionStore, 'listChannels' | 'getSessionActivity' | 'findLatestEntries'>;
   heartbeatChannel?: { channelId: string; channelType: 'discord' };
   icpAutonomy?: AgentFacingIcpAutonomyRuntime;
   icpInitiation?: IcpInitiationSourceRuntime;
   capabilityRuntime: Pick<CapabilityRuntime, 'has'>;
   availability: Pick<CompanionAvailabilityRuntime, 'snapshot'>;
-  isHumanContactAllowed(input: { contactId: string; channelType: 'discord' }): Promise<boolean>;
+  isHumanContactAllowed(input: { contactId: string; channelType: 'discord'; channelId: string }): Promise<boolean>;
   isRoomTransportAvailable(channelType: 'discord' | 'buzz'): boolean;
   getPhases(): RuntimePhases;
   now?: () => number;
@@ -65,30 +68,35 @@ export interface ProductionSocialImpulseOutreachOptions {
 
 export function createProductionSocialImpulseOutreachRuntime(
   options: ProductionSocialImpulseOutreachOptions,
-): SocialImpulseOutreachRuntime {
+): SocialImpulseOutreachRuntime & { resolveFollowUpDestination: IntentionFollowUpDestinationResolver } {
   const now = options.now ?? Date.now;
+  const nextEligibleAt = (): number | undefined => {
+    const gate = evaluateProactiveOutboundTimeGate({ nowMs: now(), quietHours: options.quietHours });
+    return gate.allowed ? undefined : gate.nextEligibleAtMs;
+  };
 
-  const listDestinations = async (): Promise<SocialImpulseOutreachDestination[]> => {
+  const listAuthorizedDestinations = async (): Promise<SocialImpulseOutreachDestination[]> => {
     const destinations: SocialImpulseOutreachDestination[] = [];
-    if (options.availability.snapshot().state === 'do_not_disturb') return destinations;
     const phases = options.getPhases();
-    const primaryUserId = options.primaryDiscordUserId?.trim();
-    if (primaryUserId && options.heartbeatChannel
+    if (options.heartbeatChannel
       && phases.proactiveOutbound && phases.humanPolicy
       && options.capabilityRuntime.has('external.discord')) {
-      const contact = await options.contactStore.getByDiscordUserId(primaryUserId);
-      if (contact && !contact.archivedAt && !contact.isMachineIntelligence
-        && contact.trustLevel === 'primary'
-        && await options.isHumanContactAllowed({ contactId: contact.id, channelType: 'discord' })) {
-        destinations.push({
-          kind: 'human_dm',
-          destinationId: `human:${contact.id}:discord:${options.heartbeatChannel.channelId}`,
-          contactId: contact.id,
-          displayLabel: contact.nickname?.trim() || contact.displayName,
-          channelId: options.heartbeatChannel.channelId,
-          channelType: 'discord',
-          dyadId: null,
-        });
+      const contacts = await options.contactStore.getByTrustLevel('primary');
+      for (const contact of contacts) {
+        if (!contact.archivedAt && !contact.isMachineIntelligence
+          && contact.trustLevel === 'primary'
+          && resolvePrimaryContactOutreachIdentity(options.sessionStore, contact, options.heartbeatChannel.channelId)
+          && await options.isHumanContactAllowed({ contactId: contact.id, channelType: 'discord', channelId: options.heartbeatChannel.channelId })) {
+          destinations.push({
+            kind: 'human_dm',
+            destinationId: `human:${contact.id}:discord:${options.heartbeatChannel.channelId}`,
+            contactId: contact.id,
+            displayLabel: contact.nickname?.trim() || contact.displayName,
+            channelId: options.heartbeatChannel.channelId,
+            channelType: 'discord',
+            dyadId: null,
+          });
+        }
       }
     }
 
@@ -135,6 +143,8 @@ export function createProductionSocialImpulseOutreachRuntime(
       });
       for (const room of rooms) {
         if ((room.channel !== 'discord' && room.channel !== 'buzz')
+          || room.channelId === options.heartbeatChannel?.channelId
+          || isKnownDirectOutreachChannel(options.sessionStore, room.channelId)
           || !memberships.has(room.channelId)
           || !options.isRoomTransportAvailable(room.channel)) continue;
         destinations.push({
@@ -150,6 +160,21 @@ export function createProductionSocialImpulseOutreachRuntime(
     return destinations;
   };
 
+  const listDestinations = async (): Promise<SocialImpulseOutreachDestination[]> => (
+    options.availability.snapshot().state === 'do_not_disturb' ? [] : listAuthorizedDestinations()
+  );
+  const resolveFollowUpDestination: IntentionFollowUpDestinationResolver = async input => {
+    const destinations = (await listAuthorizedDestinations()).filter(destination => (
+      (destination.kind === 'human_dm' || destination.kind === 'open_companion_dyad')
+      && (destination.destinationId === input.channelId || destination.channelId === input.channelId)
+      && (input.channelType === undefined || destination.channelType === input.channelType)
+    ));
+    const [destination] = destinations;
+    if (destinations.length !== 1 || !destination
+      || (destination.kind !== 'human_dm' && destination.kind !== 'open_companion_dyad')) return null;
+    return { channelId: destination.channelId, channelType: destination.channelType, contactId: destination.contactId };
+  };
+
   const authorHumanTurn = async (
     destination: Extract<SocialImpulseOutreachDestination, { kind: 'human_dm' }>,
     intent: string,
@@ -159,6 +184,7 @@ export function createProductionSocialImpulseOutreachRuntime(
       id: `social-outreach-${randomUUID()}`,
       channelId: destination.channelId,
       channelType: destination.channelType,
+      isDirectMessage: true,
       authorId: 'system:social-outreach',
       authorName: options.companionName,
       content: [
@@ -186,32 +212,45 @@ export function createProductionSocialImpulseOutreachRuntime(
   const queue = createSocialImpulseOutreachQueue({
     actions: options.postTurnActions,
     now,
-    runExecution: async opportunityId => { await runtime.executeQueued(opportunityId); },
+    nextEligibleAt,
+    runExecution: async opportunityId => {
+      const result = await runtime.executeQueued(opportunityId);
+      if (result.rescheduleAt !== undefined) return { rescheduleAt: result.rescheduleAt, detail: result.reasonCode };
+    },
     runDisposition: async opportunityId => {
       const opportunity = await options.store.getOpportunity(opportunityId);
       if (!opportunity || opportunity.companionId !== options.companionId) {
         throw new Error('Social outreach disposition lost its companion-owned opportunity');
       }
       if (opportunity.state !== 'pending' || options.getMode() === 'off') return;
+      const destinations = await listDestinations();
+      const socialContext = await buildSocialOutreachContext({
+        companionId: options.companionId, outreach: options.store,
+        destinations, contacts: options.contactStore, sessions: options.sessionStore,
+      });
       const message: SubstrateMessage = {
         id: `social-disposition-${randomUUID()}`,
-        channelId: `internal:social-outreach:${shortHash(opportunity.opportunityId)}`,
+        channelId: 'internal:reflection:social-outreach',
         channelType: 'terminal',
         authorId: 'system:social-outreach',
         authorName: options.companionName,
         content: [
-          'A qualified social impulse created one optional outreach decision.',
-          'Nothing has been shown to anyone else. Ignoring or deferring is fully valid.',
-          `Use notify action=outreach_list with opportunity_id=${opportunity.opportunityId}`,
-          'to see currently authorized destinations, then use notify action=outreach_choose once.',
+          'You have a social impulse to consider in your ongoing private reflection.',
+          socialContext,
+          'This decision turn is private and sends no message. Ignoring or deferring is fully valid.',
+          `The opportunity_id for this decision is ${opportunity.opportunityId}.`,
+          'The notify tool supports outreach_list to refresh destinations and outreach_choose to record your decision.',
+          'Your other tools remain available for reflection and remembering before you choose.',
           'The available dispositions are ignore, defer, contact-human, contact-companion,',
           'join-room, and other. A destination choice still runs every destination gate.',
           'For ignore, defer, or other, omit destination_id and intent.',
           'For contact-human, contact-companion, or join-room, include both destination_id and intent.',
         ].join('\n'),
         timestamp: new Date(now()),
-        routing: { source: 'terminal', privateTurnTrigger: true },
+        routing: { source: 'terminal' },
       };
+      const rescheduleAt = nextEligibleAt();
+      if (rescheduleAt !== undefined) return { rescheduleAt, detail: 'quiet_hours' };
       await options.agentLoop.handleMessage(message);
       const recorded = await options.store.getOpportunity(opportunityId);
       if (!recorded || recorded.companionId !== options.companionId || recorded.state === 'pending') {
@@ -231,6 +270,8 @@ export function createProductionSocialImpulseOutreachRuntime(
     enqueueExecution: queue.enqueueExecution,
     getOriginIcpRootInitiationId: () => getRequestContext()?.icpCorrelation?.rootInitiationId,
     execute: async execution => {
+      const rescheduleAt = nextEligibleAt();
+      if (rescheduleAt !== undefined) return { outcome: 'rescheduled', reasonCode: 'quiet_hours', rescheduleAt };
       if (options.availability.snapshot().state === 'do_not_disturb') {
         return { outcome: 'suppressed', reasonCode: 'companion_do_not_disturb' };
       }
@@ -278,6 +319,7 @@ export function createProductionSocialImpulseOutreachRuntime(
           || !await options.isHumanContactAllowed({
             contactId: destination.contactId,
             channelType: 'discord',
+            channelId: destination.channelId,
           })) {
           return { outcome: 'suppressed', reasonCode: 'human_destination_unavailable' };
         }
@@ -287,7 +329,11 @@ export function createProductionSocialImpulseOutreachRuntime(
           channelType: destination.channelType,
           nowMs: now(),
         });
-        if (!policy.allowed) return { outcome: 'suppressed', reasonCode: policy.reason };
+        if (!policy.allowed) return policy.rescheduleAt !== undefined
+          ? { outcome: 'rescheduled', reasonCode: policy.reason, rescheduleAt: policy.rescheduleAt }
+          : { outcome: 'suppressed', reasonCode: policy.reason };
+        const authorRescheduleAt = nextEligibleAt();
+        if (authorRescheduleAt !== undefined) return { outcome: 'rescheduled', reasonCode: 'quiet_hours', rescheduleAt: authorRescheduleAt };
         const content = await authorHumanTurn(
           destination,
           execution.intent,
@@ -299,9 +345,19 @@ export function createProductionSocialImpulseOutreachRuntime(
           || !await options.isHumanContactAllowed({
             contactId: destination.contactId,
             channelType: 'discord',
+            channelId: destination.channelId,
           })) {
           return { outcome: 'suppressed', reasonCode: 'human_destination_invalidated' };
         }
+        const deliveryPolicy = await phases.humanPolicy.evaluate({
+          contactId: destination.contactId, channelId: destination.channelId,
+          channelType: destination.channelType, nowMs: now(),
+        });
+        if (!deliveryPolicy.allowed) return deliveryPolicy.rescheduleAt !== undefined
+          ? { outcome: 'rescheduled', reasonCode: deliveryPolicy.reason, rescheduleAt: deliveryPolicy.rescheduleAt }
+          : { outcome: 'suppressed', reasonCode: deliveryPolicy.reason };
+        const ownerRescheduleAt = nextEligibleAt();
+        if (ownerRescheduleAt !== undefined) return { outcome: 'rescheduled', reasonCode: 'quiet_hours', rescheduleAt: ownerRescheduleAt };
         const dispatched = await phases.proactiveOutbound.dispatch({
           actionId: execution.opportunityId,
           channelId: destination.channelId,
@@ -377,9 +433,5 @@ export function createProductionSocialImpulseOutreachRuntime(
       });
     },
   });
-  return runtime;
-}
-
-function shortHash(value: string): string {
-  return createHash('sha256').update(value).digest('hex').slice(0, 16);
+  return { ...runtime, resolveFollowUpDestination };
 }

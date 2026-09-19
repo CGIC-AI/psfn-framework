@@ -33,7 +33,8 @@ export type StrictGroupSubjectResolution<Speaker extends StrictGroupSubjectSpeak
   reason: 'conflicting_subject_contact';
 };
 
-export function resolveStrictGroupSubject<Speaker extends StrictGroupSubjectSpeaker>(
+/** Subject identity is canonical in DMs and groups; only addressing is group-specific. */
+export function resolveCanonicalFactSubject<Speaker extends StrictGroupSubjectSpeaker>(
   attribution: ExtractedFactAttribution,
   speakers: readonly Speaker[],
 ): StrictGroupSubjectResolution<Speaker> {

@@ -429,6 +429,42 @@ describe('EpisodeSynthesisLane', () => {
     expect(workset.checkpoint).toHaveBeenCalledTimes(1);
   });
 
+  it('retries failed topic segmentation without requiring new conversation activity', async () => {
+    const sessionId = 'discord:segmentation-retry';
+    const workset = makeStatefulWorkset([sessionId]);
+    const harness = makeHarness({ entries: mentionEntries(12), scope: 'direct' });
+    harness.synthesizer.run.mockResolvedValueOnce({
+      consideredEntries: 12,
+      candidateEpisodeCount: 0,
+      createdEpisodes: [],
+      skippedEpisodeIds: [],
+      linkedArcs: [],
+      heldBackEntryCount: 0,
+      segmentationFailedChunkCount: 1,
+    });
+    const options = {
+      sessionManager: harness.sessionManager,
+      synthesizer: harness.synthesizer,
+      watermarkStore: harness.watermarkStore,
+      workset,
+      config: gateConfig(),
+      scopeClassifier: harness.scopeClassifier,
+    };
+
+    await expect(new EpisodeSynthesisLane(options).execute(timerAction())).rejects.toThrow(
+      'Episode synthesis drain failed for 1 session(s)',
+    );
+    expect(workset.checkpoint).not.toHaveBeenCalled();
+    expect(await workset.enumerate('episodic_synthesis')).toEqual([
+      expect.objectContaining({ logicalSessionId: sessionId, checkpointRevision: 0 }),
+    ]);
+
+    await expect(new EpisodeSynthesisLane(options).execute(timerAction())).resolves.toEqual({ outcome: 'complete' });
+    expect(harness.synthesizer.run).toHaveBeenCalledTimes(2);
+    expect(workset.checkpoint).toHaveBeenCalledOnce();
+    expect(await workset.enumerate('episodic_synthesis')).toEqual([]);
+  });
+
   it('leaves only failed work retryable and a restarted lane resumes it', async () => {
     const sessionIds = ['discord:episode-a', 'discord:episode-b', 'discord:episode-c'];
     const workset = makeStatefulWorkset(sessionIds);

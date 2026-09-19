@@ -131,6 +131,28 @@ export class PostgresSocialImpulseOutreachStore implements SocialImpulseOutreach
     return rows.map(mapRow);
   }
 
+  async getDestinationStatus(companionId: string, destinationId: string) {
+    const rows = await queryRows<OutreachRow>(this.pool, `
+      (SELECT ${COLUMNS} FROM social_impulse_outreach_opportunities
+       WHERE companion_id = $1 AND destination_id = $2
+         AND state IN ('pending', 'queued', 'chosen')
+       ORDER BY updated_at_ms DESC, opportunity_id DESC LIMIT 1)
+      UNION ALL
+      (SELECT ${COLUMNS} FROM social_impulse_outreach_opportunities
+       WHERE companion_id = $1 AND destination_id = $2
+         AND state NOT IN ('pending', 'queued', 'chosen')
+       ORDER BY updated_at_ms DESC, opportunity_id DESC LIMIT 1)
+    `, [companionId, destinationId]);
+    const records = rows.map(mapRow);
+    const active = (record: SocialImpulseOutreachRecord) => (
+      record.state === 'pending' || record.state === 'queued' || record.state === 'chosen'
+    );
+    return {
+      pending: records.find(active) ?? null,
+      latestTerminal: records.find(record => !active(record)) ?? null,
+    };
+  }
+
   async getHealthSummary(companionId: string): Promise<SocialOutreachHealthSummary> {
     const rows = await queryRows<{
       state: string; count: string; updated_at: string; fired_at: string;
@@ -158,6 +180,23 @@ export class PostgresSocialImpulseOutreachStore implements SocialImpulseOutreach
       RETURNING ${COLUMNS}
     `, [opportunityId, bindingHash, atMs]);
     return row !== undefined;
+  }
+
+  async deferExecution(input: {
+    opportunityId: string;
+    bindingHash: string;
+    reasonCode: string;
+    deferredAtMs: number;
+  }): Promise<SocialImpulseOutreachRecord> {
+    const row = await queryOne<OutreachRow>(this.pool, `
+      UPDATE social_impulse_outreach_opportunities
+      SET state = 'queued', reason_code = $3, updated_at_ms = $4
+      WHERE opportunity_id = $1 AND binding_hash = $2 AND state = 'chosen'
+        AND execution_intent IS NOT NULL
+      RETURNING ${COLUMNS}
+    `, [input.opportunityId, input.bindingHash, input.reasonCode, input.deferredAtMs]);
+    if (!row) throw new Error('Social outreach deferral lost its exact unsent execution claim');
+    return mapRow(row);
   }
 
   async claimDisposition(input: {

@@ -220,6 +220,9 @@ tests. Run `npm run verify:settings-contract` for settings/config changes.
 
 ## Private deployment boundary
 
+Do not track local incidents or personal information in any repository.
+Keep tracked code, tests, and documentation suitable for public distribution.
+
 This public repository does not own a live deployment. Helm charts, overlays,
 service definitions, kubeconfigs, deployment CI, infrastructure names, private
 addresses, operator paths, and live runbooks belong in an external private

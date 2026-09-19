@@ -1,3 +1,4 @@
+import { isMemoryOwnedByCompanion, type CompanionRoomMembershipAuthority } from './companion-provenance.js';
 // ── Memory Write/Import Tools ──
 // Agent-accessible tools for intentional memory creation.
 
@@ -421,15 +422,17 @@ export interface MemoryWriteToolOptions {
 }
 
 export interface MemoryToolOptions extends MemoryWriteToolOptions {
+  companionId?: string;
+  roomMembershipAuthority?: CompanionRoomMembershipAuthority | null;
   episodicStore?: (EpisodicTimelineStore & EpisodeDrilldownStore) | null;
   episodeSearch?: HybridEpisodeSearchPort | null;
   sessionReader?: EpisodeDrilldownSessionReader | null;
   sessionQuarantineFilter?: MemorySessionQuarantineFilter | null;
   /**
-   * Internal-only episode retrieval scope. The authorization resolver still
+   * Internal-only memory retrieval scope. The authorization resolver still
    * verifies the exact trusted reflection request context on every call.
    */
-  episodicAccessScope?: RetrievalAccessScope | (() => RetrievalAccessScope | undefined);
+  retrievalAccessScope?: RetrievalAccessScope | (() => RetrievalAccessScope | undefined);
   /**
    * Shared-background provider (E4.5) backing `action=shared_background`. When
    * absent the action fails closed with an explicit not-configured error.
@@ -1118,8 +1121,16 @@ export function createMemoryTool(
             const eligible = filterQuarantinedMemories(
               options.sessionQuarantineFilter ?? null,
               current,
-            ).memories;
+            ).memories.filter(memory => isMemoryOwnedByCompanion(
+              memory, options.companionId, options.roomMembershipAuthority,
+            ));
             const results = partitionVisibleMemories(eligible, {
+              accessScope: resolveAuthorizedRetrievalAccessScope(
+                visibility.channelId,
+                typeof options.retrievalAccessScope === 'function'
+                  ? options.retrievalAccessScope()
+                  : options.retrievalAccessScope,
+              ),
               trustLevel: visibility.trustLevel,
               channelPrivacy: visibility.channelVisibility,
               broadcast: visibility.broadcast,
@@ -1163,9 +1174,9 @@ export function createMemoryTool(
                 ? options.memoryRetrievalPolicy()
                 : options.memoryRetrievalPolicy,
             );
-            const requestedAccessScope = typeof options.episodicAccessScope === 'function'
-              ? options.episodicAccessScope()
-              : options.episodicAccessScope;
+            const requestedAccessScope = typeof options.retrievalAccessScope === 'function'
+              ? options.retrievalAccessScope()
+              : options.retrievalAccessScope;
             const accessScope = resolveAuthorizedRetrievalAccessScope(
               visibility.channelId,
               requestedAccessScope,
@@ -1235,9 +1246,9 @@ export function createMemoryTool(
             const siblingLimit = normalizedParams.limit === undefined
               ? MEMORY_EPISODE_GET_LIMITS.defaultSiblings
               : clampInt(normalizedParams.limit, 1, MEMORY_EPISODE_GET_LIMITS.maxSiblings);
-            const requestedAccessScope = typeof options.episodicAccessScope === 'function'
-              ? options.episodicAccessScope()
-              : options.episodicAccessScope;
+            const requestedAccessScope = typeof options.retrievalAccessScope === 'function'
+              ? options.retrievalAccessScope()
+              : options.retrievalAccessScope;
             const accessScope = resolveAuthorizedRetrievalAccessScope(
               visibility.channelId,
               requestedAccessScope,
@@ -1305,6 +1316,12 @@ export function createMemoryTool(
               contactAId,
               contactBId,
               access: {
+                accessScope: resolveAuthorizedRetrievalAccessScope(
+                  visibility.channelId,
+                  typeof options.retrievalAccessScope === 'function'
+                    ? options.retrievalAccessScope()
+                    : options.retrievalAccessScope,
+                ),
                 trustLevel: visibility.trustLevel,
                 channelPrivacy: visibility.channelVisibility,
                 broadcast: visibility.broadcast,
@@ -1329,8 +1346,16 @@ export function createMemoryTool(
               ...(filterResult.scopeQuery ? { scopeQuery: filterResult.scopeQuery } : {}),
               includeArchived: false,
             };
-            const memories = await listFilteredMemories(memoryStore, filter);
+            const memories = (await listFilteredMemories(memoryStore, filter)).filter(memory => (
+              isMemoryOwnedByCompanion(memory, options.companionId, options.roomMembershipAuthority)
+            ));
             const partition = partitionVisibleMemories(memories, {
+              accessScope: resolveAuthorizedRetrievalAccessScope(
+                visibility.channelId,
+                typeof options.retrievalAccessScope === 'function'
+                  ? options.retrievalAccessScope()
+                  : options.retrievalAccessScope,
+              ),
               trustLevel: visibility.trustLevel,
               channelPrivacy: visibility.channelVisibility,
               broadcast: visibility.broadcast,
@@ -1357,9 +1382,17 @@ export function createMemoryTool(
               ...(filterResult.scopeQuery ? { scopeQuery: filterResult.scopeQuery } : {}),
               includeArchived: false,
             };
-            const memories = await listFilteredMemories(memoryStore, filter);
+            const memories = (await listFilteredMemories(memoryStore, filter)).filter(memory => (
+              isMemoryOwnedByCompanion(memory, options.companionId, options.roomMembershipAuthority)
+            ));
             const matchingMemories = filterTopicMatches(memories, query);
             const partition = partitionVisibleMemories(matchingMemories, {
+              accessScope: resolveAuthorizedRetrievalAccessScope(
+                visibility.channelId,
+                typeof options.retrievalAccessScope === 'function'
+                  ? options.retrievalAccessScope()
+                  : options.retrievalAccessScope,
+              ),
               trustLevel: visibility.trustLevel,
               channelPrivacy: visibility.channelVisibility,
               broadcast: visibility.broadcast,
@@ -1394,9 +1427,9 @@ export function createMemoryTool(
             const explicitLimit = normalizedParams.limit === undefined
               ? undefined
               : clampInt(normalizedParams.limit, 1, MEMORY_TIMELINE_MAX_LIMIT);
-            const requestedAccessScope = typeof options.episodicAccessScope === 'function'
-              ? options.episodicAccessScope()
-              : options.episodicAccessScope;
+            const requestedAccessScope = typeof options.retrievalAccessScope === 'function'
+              ? options.retrievalAccessScope()
+              : options.retrievalAccessScope;
             const accessScope = resolveAuthorizedRetrievalAccessScope(
               visibility.channelId,
               requestedAccessScope,

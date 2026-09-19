@@ -9,6 +9,7 @@ import type {
 import type { CorrelationMetadata } from '../../shared/contracts/runtime.js';
 import { MEMORY_SUBJECT_DETAILS_BATCH_MAX } from './postgres-store/subject-queries.js';
 import type {
+  ActiveMemoryListOptions,
   MemoryAdminListOptions,
   MemoryAdminPrivacySummary,
   MemoryStoreStats,
@@ -17,6 +18,7 @@ import type {
   MemorySubjectAdminResult,
 } from './memory-store-port.js';
 import type { PurrMemory } from './types.js';
+import { isCompanionSelfReflectionContext } from '../../primitives/llm/request-context.js';
 
 export interface MemorySubjectAccessContext {
   /** Must come from resolved ingress/contact context, never tool or request parameters. */
@@ -27,6 +29,8 @@ export interface MemorySubjectAccessContext {
   grantBindings?: readonly MemorySubjectGrantBinding[];
   /** Only process-local companion work may opt into companion-private rows. */
   companionInternal?: boolean;
+  /** Private reflection can use every memory owned by this companion's store. */
+  companionSelfReflection?: boolean;
   /**
    * Add companion-private rows to product recall candidate queries. This is
    * not a disclosure grant: the retriever's room, trust, sensitivity, consent,
@@ -60,6 +64,9 @@ const COMPANION_PRIVATE_RECALL_ACTIONS = new Set<MemorySubjectQueryAuthorization
 export function memorySubjectAccessContextFromCorrelation(
   context: Partial<CorrelationMetadata> | undefined,
 ): MemorySubjectAccessContext {
+  if (isCompanionSelfReflectionContext(context)) {
+    return { companionInternal: true, companionSelfReflection: true };
+  }
   const viewerContactId = context?.viewerMemorySubjectContactId?.trim();
   return {
     ...(viewerContactId ? { viewerContactId } : {}),
@@ -101,7 +108,8 @@ function authorization(
   const adminAccessMode = !companionInternal && context.viewerContactId?.trim()
     ? context.adminAccessMode
     : undefined;
-  if (adminAccessMode === 'sole_admin' || adminAccessMode === 'multi_admin') {
+  if ((companionInternal && context.companionSelfReflection)
+    || adminAccessMode === 'sole_admin' || adminAccessMode === 'multi_admin') {
     return {
       action,
       viewerContactIds,
@@ -521,12 +529,12 @@ export function createSubjectAuthorizedMemoryStore(
         return async (limit = 10_000) => (await listAllAuthorized(target, currentContext())).slice(0, limit);
       }
       if (property === 'listMemories' || property === 'listActiveMemories') {
-        return async (options: { limit?: number; offset?: number } = {}) => {
+        return async (options: ActiveMemoryListOptions = {}) => {
           const auth = authorization(currentContext(), 'list');
           if (!auth) return [];
           return (await target.queryAuthorizedMemorySubjects({
             authorization: auth,
-            selector: { kind: 'list', limit: options.limit, offset: options.offset },
+            selector: { kind: 'list', limit: options.limit, offset: options.offset, before: options.before },
           })).memories;
         };
       }

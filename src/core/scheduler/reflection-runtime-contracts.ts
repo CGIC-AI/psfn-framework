@@ -50,7 +50,9 @@ import type {
   LongHorizonFollowUpInput,
 } from '../intention/runtime-wiring.js';
 import type { PendingFollowUpStorePort } from '../intention/pending-follow-up-store-port.js';
+import type { IntentionFollowUpDestinationResolver } from '../intention/follow-up-destination.js';
 import type { CareReminderStorePort } from '../intention/care-reminders.js';
+import type { ConcernStorePort } from '../intention/concern-store-port.js';
 import type { ScheduledPromptStorePort } from './scheduled-prompt-store-port.js';
 import type { PostTurnActionRuntime } from '../agent/post-turn-action-runtime.js';
 import type { BackgroundMaintenanceRegistrar } from './background-maintenance.js';
@@ -119,7 +121,7 @@ export interface ReflectionRuntimeOptions {
   memoryWriter?: Pick<MemoryWriter, 'write'>;
   promptRegistry?: PromptRegistryStatePort | null;
   reflectionStore?: ReflectionMetacognitionJournalStore;
-  sessionManager?: Pick<SessionManager, 'resolveSessionChannelId' | 'getRecentMessages'> & Partial<Pick<
+  sessionManager?: Pick<SessionManager, 'resolveSessionChannelId' | 'getRecentMessages' | 'getRecentMessagesAtOrBefore'> & Partial<Pick<
     SessionManager,
     'getConversationEvidenceWindow' | 'recordSystemMessage' | 'recordAssistantMessage'
   >>;
@@ -155,6 +157,7 @@ export interface ReflectionRuntimeOptions {
     formationVAD?: { valence: number; arousal: number; dominance: number };
     originIcpRootInitiationId?: string;
   }) => Promise<IntentionFollowUpDisposition | undefined> | IntentionFollowUpDisposition | undefined;
+  resolveIntentionFollowUpDestination?: IntentionFollowUpDestinationResolver;
   getPendingFollowUpsForResurfacing?: (input: {
     channelId: string;
     canonicalContactKey?: string;
@@ -212,6 +215,7 @@ export interface ReflectionRuntimeOptions {
     observedAtMs?: number;
   }) => Promise<void> | void;
   coreMemoryStore?: Pick<CoreMemoryStore, 'getSnapshot' | 'rethink'>;
+  resolvedConcernStore?: Pick<ConcernStorePort, 'listRecentlyResolvedConcerns'>;
   /** JSON-owned near-turn lane cadence (scheduler.json `nearTurnMemory`). */
   nearTurnMemoryCadence?: NearTurnMemoryCadenceConfig;
   /**

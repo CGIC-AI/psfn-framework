@@ -42,10 +42,13 @@ export function createSocialDesireHumanDeliveryPolicy(options: {
         return { allowed: false, reason: 'social_desire_channel_not_approved' };
       }
       if (options.quietHours.enabled
+        && contact.timezone !== undefined
         && (typeof contact.timezone !== 'string'
           || !isValidProactiveTimeZone(contact.timezone.trim()))) {
         return { allowed: false, reason: 'social_desire_recipient_timezone_unavailable' };
       }
+      // An absent optional recipient zone uses the configured quiet-hours zone;
+      // an explicitly invalid zone must still reject before the shared gate.
       const timeGate = evaluateProactiveOutboundTimeGate({
         nowMs: input.nowMs,
         earliestSendAtMs: input.earliestSendAtMs,

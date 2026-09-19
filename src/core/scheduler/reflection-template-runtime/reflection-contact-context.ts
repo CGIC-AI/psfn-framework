@@ -120,6 +120,7 @@ export async function retrieveReflectionMemoryBlock(input: {
       purpose: COMPANION_SELF_REFLECTION_RETRIEVAL_PURPOSE,
       runtimeLaneClass: RUNTIME_LANE_CLASSES.maintenanceReflection,
       requesterProvenance: 'self_directed',
+      requestAudience: 'self',
     }, () => input.memoryProvider.retrieve(
       input.queryText,
       input.reflectionChannelId,

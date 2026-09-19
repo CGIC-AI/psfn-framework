@@ -83,6 +83,8 @@ import {
 import { runWithChargeContext } from '../../../shared/telemetry/run-charge.js';
 import { resolveTaskKind as resolveChannelTaskKind } from './channel-routing-runtime.js';
 import { createInteractiveTerminalMessage } from '../../../app/cli/interactive-terminal-message.js';
+import { createMemoryTool } from '../../../faculties/memory/tools.js';
+import { resolveAuthorizedRetrievalAccessScope } from '../../../faculties/memory/retrieval/access-scope.js';
 import { ParentTurnContinuationBudgetExceededError } from '../turn-limits.js';
 import { parseTurnRecordBackgroundWorkHandoff } from '../background-work/types.js';
 import { getRequestContext } from '../../../primitives/llm/request-context.js';
@@ -7093,6 +7095,58 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       purpose: 'free_time.creation.memory_retrieval',
       runtimeLaneClass: 'background_continuation',
     });
+  });
+
+  it.each(['daily-review', 'social-outreach'])('carries private reflection authority through the actual %s tool execution path', async (templateId) => {
+    const refreshedScopes: string[] = [];
+    const search = vi.fn(async () => ({
+      results: [], modes: { lexical: { status: 'completed', candidateCount: 0 }, semantic: { status: 'unavailable', candidateCount: 0 } },
+      degraded: true,
+    }));
+    const tool = createMemoryTool(fromAny({}), fromAny({}), {
+      episodicStore: fromAny({}), episodeSearch: fromAny({ search }),
+      retrievalAccessScope: () => 'companion_self_reflection',
+    });
+    const runtime = createRuntime({
+      eventBus: new EventBus(), sessionManager: createRuntimeSessionManager(),
+      memoryProvider: {
+        getActiveMemoryContext: vi.fn(() => null),
+        refreshActiveMemoryContext: vi.fn(async request => {
+          refreshedScopes.push(resolveAuthorizedRetrievalAccessScope(request.channelId, request.callerContext?.accessScope));
+          return null;
+        }),
+        retrieve: vi.fn(async () => ''),
+      },
+      buildContext: vi.fn(async () => ({ systemPrompt: 'Private reflection', messages: [], manifest: makeContextManifestFixture() })),
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      resolveAuthorContext: vi.fn(() => ({
+        trustLevel: 'primary', speakerRole: 'system', actorKind: 'unknown',
+        resolvedUserName: 'Daily Reflection', continuityFallbackKeys: [],
+      })),
+    });
+    runtime.resolveTaskKind = () => 'reflection';
+    runtime.resolveTurnCallType = () => 'scheduled';
+    const originalPrompt = runtime.agent.prompt.bind(runtime.agent);
+    runtime.agent.prompt = vi.fn(async (...args) => {
+      expect(getRequestContext()).toMatchObject({
+        requesterProvenance: 'self_directed', requestAudience: 'self',
+        callType: 'scheduled', purpose: 'agent.turn.prompt',
+      });
+      const result = await tool.execute('scheduled-reflection-episode', { action: 'episode_search', query: 'yesterday' });
+      expect(result.details?.isError).not.toBe(true);
+      await originalPrompt(...args);
+    });
+    await handleMessageForTurn(runtime, createMessage('reflection-grounding-daily-review', {
+      channelId: `internal:reflection:${templateId}`, channelType: 'terminal', authorId: 'scheduler',
+      routing: templateId === 'daily-review'
+        ? { reflectionTurn: { schemaVersion: 1, stage: 'tool_grounding', templateId, mode: 'deliberation' } }
+        : { privateTurnTrigger: true },
+    }));
+    expect(search).toHaveBeenCalledWith(expect.objectContaining({ accessScope: 'companion_self_reflection' }));
+    await vi.waitFor(() => expect(refreshedScopes).toEqual(['companion_self_reflection']));
   });
 
   it('does not grant self access to an ambiguous internal audience', async () => {

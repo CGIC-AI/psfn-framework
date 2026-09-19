@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { PostTurnActionRuntime } from '../../core/agent/post-turn-action-runtime.js';
+import type { PostTurnActionHandlerResult, PostTurnActionRuntime } from '../../core/agent/post-turn-action-runtime.js';
 import { MAINTENANCE_REFLECTION_RUNTIME_CLASS } from '../../core/agent/worker-lanes.js';
 import { isRecord } from '../../shared/utils/types.js';
 
@@ -9,8 +9,9 @@ const EXECUTION_KIND = 'social-outreach.execute';
 /** Content-free durable work, executed only after the source turn releases ownership. */
 export function createSocialImpulseOutreachQueue(options: {
   actions: Pick<PostTurnActionRuntime, 'enqueue' | 'registerHandler'>;
-  runDisposition(opportunityId: string): Promise<void>;
-  runExecution(opportunityId: string): Promise<void>;
+  runDisposition(opportunityId: string): Promise<PostTurnActionHandlerResult | void>;
+  runExecution(opportunityId: string): Promise<PostTurnActionHandlerResult | void>;
+  nextEligibleAt(): number | undefined;
   now(): number;
 }) {
   for (const [kind, run] of [
@@ -23,7 +24,9 @@ export function createSocialImpulseOutreachQueue(options: {
         || !action.payload.opportunityId.startsWith('felt-impulse:would_message:')) {
         throw new Error('Social outreach queue requires an exact opportunity identity');
       }
-      await run(action.payload.opportunityId);
+      const rescheduleAt = options.nextEligibleAt();
+      if (rescheduleAt !== undefined) return { rescheduleAt, detail: 'quiet_hours' };
+      return await run(action.payload.opportunityId);
     }, { executionMode: 'foreground', runtimeClass: MAINTENANCE_REFLECTION_RUNTIME_CLASS });
   }
 
@@ -37,6 +40,7 @@ export function createSocialImpulseOutreachQueue(options: {
       channelId: 'internal:social-outreach',
       sourceMessageId: opportunityId,
       inferredAt: options.now(),
+      runAt: options.nextEligibleAt(),
     });
     if (result === 'dropped_budget') throw new Error('Social outreach queue admission was unavailable');
   };

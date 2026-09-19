@@ -734,6 +734,7 @@ export class SessionTurnRecordOperations {
       try {
         snapshot = await readTurnTombstoneAuthoritySnapshot({
           channelId: before.channelId,
+          ownerSessionId: before.sessionId,
           filePaths: before.filePaths,
           maxActionBytes: limits.maxActionBytes,
           maxActions: limits.maxActions,

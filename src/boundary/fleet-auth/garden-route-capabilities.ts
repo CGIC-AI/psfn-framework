@@ -79,6 +79,8 @@ const queryPolicies: Readonly<Partial<Record<string, Readonly<Partial<Record<str
       'status', 'classId', 'taskId', 'limit', 'runOffset', 'busLimit', 'busOffset',
       'busClassId', 'busRunId', 'busTaskId', 'eventId', 'verificationStatus',
     ]),
+    '/api/admin/biographical-claims': singleton(['subjectContactId', 'subjectCompanionId']),
+    '/api/admin/channels/context-envelope/demotion-notice': singleton(['channelId']),
     '/api/admin/charge-costs': singleton([
       'sinceMs', 'untilMs', 'lane', 'surface', 'channelId', 'runId', 'rootRunId',
     ]),
@@ -97,6 +99,7 @@ const queryPolicies: Readonly<Partial<Record<string, Readonly<Partial<Record<str
     '/api/admin/episodic-memory/episodes': singleton(['limit', 'offset', 'threadId', 'from', 'to']),
     '/api/admin/episodic-memory/episodes/:id/arcs': singleton(['direction', 'arcKind', 'limit']),
     '/api/admin/episodic-memory/threads': singleton(['limit']),
+    '/api/admin/escalations': singleton(['state']),
     '/api/admin/evals/observer-sidecar/export': singleton([
       'limit', 'sinceMs', 'untilMs', 'minDivergenceScore', 'privacyClass', 'status',
       'runId', 'evalSessionId', 'scenarioId', 'testRunId', 'turnId', 'format',

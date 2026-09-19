@@ -206,7 +206,7 @@ describe('group-chat regression harness', () => {
       );
 
       expect(prompt).toContain(
-        'current_message_author name="Carol" id="user-carol" trust="trusted" relationship="friend" '
+        'current_message_author name="Carol" id="user-carol" trust="trusted" relationship_to_companion="friend" '
         + 'last_direct_interaction_at="2026-07-01T07:45:00.000-04:00" '
         + 'last_direct_interaction_ago="15 minutes ago" '
         + 'last_direct_interaction_context="another_chat"',

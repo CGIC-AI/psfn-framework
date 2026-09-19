@@ -4193,7 +4193,7 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(buildCall[1]).toContain('Base prompt');
     expect(buildCall[1]).toContain('<conversation_state>');
     expect(buildCall[1]).toContain('trust="primary"');
-    expect(buildCall[1]).toContain('relationship="friend"');
+    expect(buildCall[1]).toContain('relationship_to_companion="friend"');
     expect(buildCall[1]).not.toContain('<trust>');
     expect(buildCall[1]).not.toContain('honne');
   });
@@ -4464,8 +4464,8 @@ describe('SubstrateAgent.handleMessage', () => {
     const secondPrompt = (fromAny(sessionManager.buildContext)).mock.calls[1][1] as string;
     expect(firstPrompt).toContain('Address Morgan by name.');
     expect(secondPrompt).toContain('Address Morgan by name.');
-    expect(firstPrompt).toContain('<current_message_author name="discord-user" id="discord-user" trust="primary" relationship="friend" />');
-    expect(secondPrompt).toContain('<current_message_author name="5635268079" id="5635268079" trust="primary" relationship="friend" />');
+    expect(firstPrompt).toContain('<current_message_author name="discord-user" id="discord-user" trust="primary" relationship_to_companion="friend" />');
+    expect(secondPrompt).toContain('<current_message_author name="5635268079" id="5635268079" trust="primary" relationship_to_companion="friend" />');
     expect(firstPrompt).not.toContain('<speaking_with>');
     expect(secondPrompt).not.toContain('<speaking_with>');
     expect(firstPrompt).not.toContain('Address discord-user by name.');

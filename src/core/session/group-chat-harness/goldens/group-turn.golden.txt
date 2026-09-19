@@ -46,7 +46,7 @@ Never present retrieved memory as partner-authored direct speech.
 <channel_id>room:townsquare</channel_id>
 <channel_type>api</channel_type>
 <channel_visibility>invite_only</channel_visibility>
-<current_message_author name="Carol" id="user-carol" trust="trusted" relationship="friend" />
+<current_message_author name="Carol" id="user-carol" trust="trusted" relationship_to_companion="friend" />
 <recent_active_participants max="5">
   <participant name="Carol" id="user-carol" />
   <participant name="Nova" id="peer-nova" />

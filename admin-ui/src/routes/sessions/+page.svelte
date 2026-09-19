@@ -15,6 +15,7 @@
     loadSessionIndex,
   } from './session-data-loader';
   import { buildIcpTranscriptPresentation } from './icp-transcript';
+  import { resolveToolCallOutcome } from '../../../../src/shared/contracts/tool-call-outcome.js';
   import { getCompanionName } from '$lib/stores/companion.svelte';
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import type {
@@ -714,7 +715,55 @@
                       {:else if turnDetailError}
                         <p class="mt-1 text-sm text-wilt-600">{turnDetailError}</p>
                       {:else if turnDetail}
-                        <pre class="mt-1 max-h-96 text-sm bg-bark-100 p-2 rounded overflow-auto text-shadow-700 border border-bark-300">{JSON.stringify(turnDetail.turn, null, 2)}</pre>
+                        {@const turn = turnDetail.turn}
+                        {@const context = turn.snapshot?.sessionContext}
+                        {@const memory = turn.snapshot?.memory}
+                        <div class="mt-2 space-y-3 rounded-lg border border-bark-300 bg-bark-50 p-3 text-sm text-shadow-800">
+                          <dl class="grid gap-x-4 gap-y-1 sm:grid-cols-[auto_minmax(0,1fr)]">
+                            <dt class="font-medium">Status</dt>
+                            <dd>{turn.record.status === 'completed' ? 'Completed' : 'Failed'}</dd>
+                            <dt class="font-medium">Model</dt>
+                            <dd class="break-words">{turn.snapshot?.promptContext?.response?.model ?? turn.record.versionPointers.model}</dd>
+                            <dt class="font-medium">Context</dt>
+                            <dd>
+                              {#if context}
+                                {context.recentEntries.length} session entries · {context.continuityEntries.length} continuity entries · {context.compactionSummaryTexts.length} history summaries
+                              {:else}
+                                Context snapshot not recorded
+                              {/if}
+                            </dd>
+                            <dt class="font-medium">Memory candidates</dt>
+                            <dd>
+                              {#if memory}
+                                {memory.semanticCandidates.length} semantic · {memory.lexicalCandidates.length} lexical · {memory.contactEmotionalMemories.length} emotional · {memory.proactiveCandidates.length} proactive
+                                {#if memory.episodicChains !== undefined} · {memory.episodicChains.length} episodic chains{/if}
+                              {:else}
+                                Memory snapshot not recorded
+                              {/if}
+                            </dd>
+                            <dt class="font-medium">Memories extracted</dt>
+                            <dd>{turn.record.extractedMemoryIds.length}</dd>
+                          </dl>
+                          <div>
+                            <p class="font-medium">Tool calls ({turn.record.toolCalls.length})</p>
+                            {#if turn.record.toolCalls.length > 0}
+                              <ul class="mt-1 max-h-48 space-y-1 overflow-auto">
+                                {#each turn.record.toolCalls as call}
+                                  <li class="flex flex-wrap justify-between gap-x-3">
+                                    <span class="break-words">{call.toolName}</span>
+                                    <span class="text-shadow-600">{resolveToolCallOutcome(call)?.replaceAll('_', ' ') ?? 'outcome not recorded'}</span>
+                                  </li>
+                                {/each}
+                              </ul>
+                            {:else}
+                              <p class="text-shadow-600">No tool calls recorded</p>
+                            {/if}
+                          </div>
+                          <details>
+                            <summary class="cursor-pointer font-medium text-shadow-600">Raw turn data (JSON)</summary>
+                            <pre class="mt-2 max-h-96 overflow-auto rounded border border-bark-300 bg-bark-100 p-2 text-xs text-shadow-700">{JSON.stringify(turn, null, 2)}</pre>
+                          </details>
+                        </div>
                       {/if}
                     {/if}
                   </div>

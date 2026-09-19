@@ -827,12 +827,12 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
     expect(capturedPrompts).toHaveLength(3);
     expect(capturedPrompts[0]).toContain('Stage: evidence');
     expect(capturedPrompts[0]).toContain('[Reflection Introspection Policy]');
-    expect(capturedPrompts[0]).toContain('tool_use_mode: bounded_read_only_introspection');
+    expect(capturedPrompts[0]).toContain('tool_use_mode: full_companion_tools');
     expect(capturedPrompts[0]).toContain('memory_retrieval_modes: default, temporal');
     expect(capturedPrompts[0]).toContain('memory_access_scope: companion_self_reflection');
     expectCuratedReflectionStarter(capturedPrompts[0] ?? '', 'Day');
     expect(capturedPrompts[0]).toContain('trust-filtered contact memory');
-    expect(capturedPrompts[0]).toContain('[Read-only Tool Grounding]');
+    expect(capturedPrompts[0]).toContain('[Reflection Tool Results]');
     expect(capturedPrompts[0]).toContain('Read-only tool grounding found the unresolved recovery follow-up.');
     // Character-card persona fields stay out of the reflection input. Identity
     // belongs in the authoritative system stack, not this user message.
@@ -1306,10 +1306,10 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
       }));
       const prompt = capturedPrompts[0];
       const introspectionPolicySection = getPromptSection(prompt, '[Reflection Introspection Policy]');
-      expect(introspectionPolicySection).toContain('tool_use_mode: bounded_read_only_introspection');
+      expect(introspectionPolicySection).toContain('tool_use_mode: full_companion_tools');
       expect(introspectionPolicySection).toContain('memory_retrieval_modes: default, temporal');
       expect(introspectionPolicySection).toContain('memory_access_scope: companion_self_reflection');
-      expect(introspectionPolicySection).toContain('overlay_tool_activation: forbidden');
+      expect(introspectionPolicySection).toContain('Reflection imposes no additional tool or action restrictions.');
       expect(introspectionPolicySection).not.toContain('analysis_workbench');
       expect(introspectionPolicySection).toContain('memory action=episode_search');
       expect(introspectionPolicySection).toContain('memory action=timeline');

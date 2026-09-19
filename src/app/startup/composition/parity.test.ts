@@ -571,7 +571,7 @@ describe('wireReflectionRuntime', () => {
       });
       expect(reflectionCalls[0]?.[0]?.content).toContain('[Reflection Introspection Policy]');
       expect(reflectionCalls[0]?.[0]?.content).toContain('[Week Events Starter]');
-      expect(reflectionCalls[0]?.[0]?.content).toContain('[Read-only Tool Grounding Task]');
+      expect(reflectionCalls[0]?.[0]?.content).toContain('[Reflection Tool Use]');
       const valuesDeliberationCalls = (llmProvider.complete as ReturnType<typeof vi.fn>).mock.calls
         .filter(call => (
           call[2]?.correlation?.originStage === 'heartbeat.deliberation.evidence'
@@ -594,7 +594,7 @@ describe('wireReflectionRuntime', () => {
       );
       expect(firstDeliberationCall?.messages?.[0]?.content).toContain('[Reflection Introspection Policy]');
       expect(firstDeliberationCall?.messages?.[0]?.content).toContain('[Week Events Starter]');
-      expect(firstDeliberationCall?.messages?.[0]?.content).toContain('[Read-only Tool Grounding]');
+      expect(firstDeliberationCall?.messages?.[0]?.content).toContain('[Reflection Tool Results]');
       expect(firstDeliberationCall?.messages?.[0]?.content).not.toContain(`snapshot_ref: ${narrative.snapshotRef}`);
       expect(firstDeliberationCall?.systemPrompt).toContain('PARITY_POLICY_SENTINEL');
       expect(firstDeliberationCall?.systemPrompt).toContain('PARITY_IDENTITY_SENTINEL');
@@ -701,7 +701,7 @@ describe('wireReflectionRuntime', () => {
       expect(metacognitionEntry.reflectionJournalEntryId).toBeDefined();
       expect(metacognitionEntry.prompt).toContain('[Reflection Introspection Policy]');
       expect(metacognitionEntry.prompt).toContain('[Week Events Starter]');
-      expect(metacognitionEntry.prompt).toContain('[Read-only Tool Grounding]');
+      expect(metacognitionEntry.prompt).toContain('[Reflection Tool Results]');
       expect(metacognitionEntry.prompt).not.toContain('serialized_internal_state:');
     } finally {
       nowSpy.mockRestore();

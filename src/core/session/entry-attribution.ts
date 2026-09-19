@@ -1,4 +1,5 @@
 import type { SessionEntry, SessionEntryRole } from './types.js';
+import { SOCIAL_OUTREACH_REFLECTION_CHANNEL_ID } from './session-channel-persistence.js';
 import {
   CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_ID,
   CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_NAME,
@@ -280,7 +281,7 @@ function stripBracketedPrefix(content: string, label: string): string {
 
 export function isIntentionAppraisalArtifact(
   entry: Pick<SessionEntry, 'content' | 'authorId' | 'authorName' | 'metadata'>
-    & Partial<ParsedTurnMetadata>,
+    & Partial<ParsedTurnMetadata & Pick<SessionEntry, 'channelId'>>,
 ): boolean {
   const parsedTurn = parseTurnMetadata(entry.metadata);
   const turn: ParsedTurnMetadata = {
@@ -295,9 +296,15 @@ export function isIntentionAppraisalArtifact(
   const authorId = entry.authorId?.trim() ?? '';
   const authorName = entry.authorName?.trim() ?? '';
   const content = entry.content.trimStart();
+  // This stimulus opens a durable private dialogue. Keep it as system speech
+  // so later dispositions retain their inputs; explicit appraisal markers below
+  // remain excluded even on this channel.
+  const isSocialOutreachStimulus = entry.channelId === SOCIAL_OUTREACH_REFLECTION_CHANNEL_ID
+    && entry.role === 'system'
+    && authorId === 'system:social-outreach';
 
   return (
-    authorId.startsWith('system:')
+    (authorId.startsWith('system:') && !isSocialOutreachStimulus)
     || authorName === LEGACY_INTENTION_AUTHOR_NAME
     || startsWithIntentionFollowUp(turn.requestId)
     || startsWithIntentionFollowUp(turn.sourceMessageId)

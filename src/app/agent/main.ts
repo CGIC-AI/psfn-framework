@@ -1481,12 +1481,14 @@ async function main(): Promise<void> {
   toolMemoryWriter.intakeSinkGateProvider = () => sessionManager.intakeSinkGate;
   registerMemoryTools(agentLoop, {
     writer: toolMemoryWriter,
+    companionId: config.companionId,
+    roomMembershipAuthority,
     memoryStore: toolMemoryStore,
     episodicStore,
     episodeSearch,
     sessionReader: sessionStore,
     sessionQuarantineFilter: episodeSessionQuarantineFilter,
-    episodicAccessScope: () => {
+    retrievalAccessScope: () => {
       const context = getRequestContext();
       return context?.requesterProvenance === 'self_directed'
         && context.channelId?.startsWith('internal:reflection:') === true
@@ -1966,6 +1968,7 @@ async function main(): Promise<void> {
   const socialImpulseOutreachLane = registerSocialImpulseOutreachLane({
     companionId: resolveCoreCompanionIdFromConfig(config),
     companionName: card.data.name,
+    quietHours: schedulerConfig.episodicProcessing,
     companionDataDir: pathSnapshot.companionDataDir,
     store: persistenceRuntime.socialImpulseOutreachStore,
     getMode: () => config.emosimProactivity?.mode ?? 'off',
@@ -1973,7 +1976,6 @@ async function main(): Promise<void> {
     postTurnActions,
     contactStore,
     sessionStore,
-    ...(primaryUserId ? { primaryDiscordUserId: primaryUserId } : {}),
     ...(heartbeatChannelId
       ? { heartbeatChannel: { channelId: heartbeatChannelId, channelType: 'discord' } }
       : {}),
@@ -2317,6 +2319,7 @@ async function main(): Promise<void> {
       getRecentResolvedConcerns: intentionAppraisalHooks.getRecentResolvedConcerns,
       onIntentionConcernDecision: intentionAppraisalHooks.onIntentionConcernDecision,
       onIntentionFollowUpDecision: intentionAppraisalHooks.onIntentionFollowUpDecision,
+      resolveIntentionFollowUpDestination: socialImpulseOutreachLane.runtime.resolveFollowUpDestination,
       getPendingFollowUpsForResurfacing: intentionAppraisalHooks.getPendingFollowUpsForResurfacing,
       onIntentionFollowUpActivated: intentionAppraisalHooks.onIntentionFollowUpActivated,
       onIntentionFollowUpDampened: intentionAppraisalHooks.onIntentionFollowUpDampened,
@@ -2364,6 +2367,7 @@ async function main(): Promise<void> {
       driftVelocityReview,
       secondArrowReview,
       orientationRewriteGate: schedulerConfig.orientationRewrite,
+      resolvedConcernStore: intentionRuntime.concernStore,
       reflectionNoveltyGate: schedulerConfig.reflectionNovelty,
       nearTurnMemoryCadence: schedulerConfig.nearTurnMemory,
       episodeSynthesis: schedulerConfig.episodeSynthesis,

@@ -339,6 +339,33 @@ move opaque pre-cutover artifacts (for example a legacy shared-root
 classifies those fixtures and contract texts and fails closed if the boundary
 text disappears or an implementation returns.
 
+### Canonical addressing schema migration
+
+The offline `migrate:journal-message-addressing` command is the narrow live-alpha
+exception for historical Discord v1 addressing in canonical JSONL. It upgrades
+only closed v1 mention records whose canonical user author and non-private group
+scope are proven. The operator supplies the companion observer; existing v2
+observer IDs must agree. It refuses ambiguous, quarantined, malformed, or
+unverifiable signed evidence. There is no runtime parser fallback.
+
+Dry-run binds the exact logical session, ordered file SHA-256 digests, and observer
+into a plan digest. Apply requires stopped companion journal/cache processes,
+explicit read bounds, that exact digest, and an external backup directory. Every
+row is preflighted before mutation. Original journal bytes are exclusively written
+and fsynced with a manifest before the native locked, transactional, signed chain
+rewrite. The rewrite guard recomputes the sole permitted addressing-field change;
+all other canonical fields, IDs, order, and row count must remain identical.
+
+Native exact-session Redis epochs advance before and after rewriting, including
+partial failures; stopped processes alone do not invalidate persistent tails.
+A durable fail-closed projection fence precedes rewriting. Native index and
+transcript projection are rebuilt before success. A failed projection stays fenced
+and requires native transcript-projection repair before restart. The migration is
+retired after all retained canonical v1 records are migrated or individually
+reviewed and resolved; its exception must not grow to other metadata corrections.
+Keep original backups until the deployment's evidence-retention policy permits
+removal. See the command's `--help` for its explicit invocation contract.
+
 ### Identifiers, pools, and the fail-closed seam
 
 - **Identifier validation** (`src/persistence/postgres.ts`): schema and role

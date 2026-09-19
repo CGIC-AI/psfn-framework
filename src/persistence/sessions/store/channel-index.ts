@@ -55,7 +55,7 @@ export {
 const log = createComponentLogger('SessionStore');
 const DEFAULT_MESSAGE_PREVIEW_CHARS = 120;
 
-function toMessagePreview(content: string, maxChars = DEFAULT_MESSAGE_PREVIEW_CHARS): string {
+export function toMessagePreview(content: string, maxChars = DEFAULT_MESSAGE_PREVIEW_CHARS): string {
   const normalized = content.replace(/\s+/g, ' ').trim();
   if (normalized.length <= maxChars) {
     return normalized;

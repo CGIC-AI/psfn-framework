@@ -776,6 +776,56 @@ describe('BiographySynthesisService', () => {
     expect(await profileStore.listCandidates({ limit: 10 })).toHaveLength(1);
   });
 
+  it('resumes behind policy-empty pages after restart and new head arrivals', async () => {
+    const memories = new InMemoryMemoryStore();
+    memories.insertMemory(memory('old-identity', { extractedAt: 1 }));
+    memories.insertMemory(memory('recent-b', { extractedAt: 2, type: 'emotional' }));
+    memories.insertMemory(memory('recent-c', { extractedAt: 2, type: 'emotional' }));
+    memories.insertMemory(memory('foreign', {
+      extractedAt: 1, provenance: { subjectContactId: 'other-contact' },
+    }));
+    const profileStore = new InMemoryBiographicalProfileStore(() => NOW);
+    const model = recordingModel([candidatesResponse([preferenceCandidate(['old-identity'])])]);
+    const policy = normalizeBiographicalCandidatePolicy({
+      ...POLICY, budgets: { ...POLICY.budgets, maxSourcesPerCandidate: 1, maxCandidatesPerAutomataRun: 2 },
+    });
+    const run = () => buildService({
+      memoryStore: memories.asPort(), profileStore, model, policy, targets: [CONTACT_TARGET],
+    }).run();
+    expect(await run()).toMatchObject({ sourcesScanned: 2, sourcesAdmitted: 0 });
+    expect(model.prompts).toEqual([]);
+    memories.insertMemory(memory('new-head', { extractedAt: 3, type: 'emotional' }));
+    expect(await run()).toMatchObject({ sourcesScanned: 1, candidatesStaged: 1 });
+    expect(model.prompts).toHaveLength(1);
+    expect(model.prompts[0]).toContain('old-identity');
+    expect(model.prompts[0]).not.toContain('foreign');
+    // The next cycle reuses page attestations, including the old source after
+    // a changed boundary, without paying again for identical admitted inputs.
+    await run();
+    expect(await run()).toMatchObject({ targetsUnchanged: 1, candidatesStaged: 0 });
+    expect(model.prompts).toHaveLength(1);
+  });
+
+  it('retries the same source page when candidate staging fails', async () => {
+    const memories = new InMemoryMemoryStore();
+    memories.insertMemory(memory('old', { extractedAt: 1 }));
+    memories.insertMemory(memory('new', { extractedAt: 2 }));
+    const profileStore = new InMemoryBiographicalProfileStore(() => NOW);
+    const model = recordingModel([candidatesResponse([preferenceCandidate(['new'])])]);
+    const policy = normalizeBiographicalCandidatePolicy({
+      ...POLICY, budgets: { ...POLICY.budgets, maxSourcesPerCandidate: 1, maxCandidatesPerAutomataRun: 1 },
+    });
+    const options = { memoryStore: memories.asPort(), profileStore, model, policy, targets: [CONTACT_TARGET] };
+    vi.spyOn(profileStore, 'writeCandidate').mockRejectedValueOnce(new Error('staging unavailable'));
+    await buildService(options).run();
+    expect(await buildService(options).run()).toMatchObject({ candidatesStaged: 1 });
+    expect(model.prompts).toHaveLength(2);
+    expect(model.prompts.every(prompt => prompt.includes('Memory new') && !prompt.includes('Memory old'))).toBe(true);
+    await buildService(options).run();
+    expect(model.prompts[2]).toContain('Memory old');
+    expect(model.prompts[2]).not.toContain('Memory new');
+  });
+
   it('re-opens a target whose admitted evidence changed, and yields at a safe boundary', async () => {
     const memories = new InMemoryMemoryStore();
     memories.insertMemory(memory('mem-stable'));

@@ -2877,6 +2877,18 @@ export class GatewayServer {
     }
   }
 
+  /** Local readiness of the same owner used by API requests, without sending RPC. */
+  isApiReady(): boolean {
+    try {
+      if (this.multiCompanion.enabled) this.resolveCompanionAgent('api');
+      else this.resolveReadyAgentConnection();
+      return true;
+    } catch {
+      // Route resolution rejects absent, unready, stale, or unbound owners.
+      return false;
+    }
+  }
+
   /**
    * Send an RPC request to the agent and await its response. This is the
    * gateway API-surface request path (api.chat.completion, api.health, …):

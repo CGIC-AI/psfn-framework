@@ -21,6 +21,7 @@ metadata:
     {{- include "psfn.labels" . | nindent 4 }}
 spec:
   type: ClusterIP
+  publishNotReadyAddresses: true
   ports:
     - name: gateway-rpc
       port: {{ .Values.ports.gatewayRpc }}
@@ -235,10 +236,29 @@ spec:
               value: {{ include "psfn.spiffeAgent" . | quote }}
             {{- include "psfn.extraEnv" (dict "entries" .Values.workloads.gateway.extraEnv "label" "workloads.gateway.extraEnv" "managed" "API_KEY ADMIN_TOKEN API_SATELLITE_KEYS PSFN_FLEET_AUTH POSTGRES_DATABASE_URL SYSTEM_DATA_DIR COMPANION_ID") | nindent 12 }}
           readinessProbe:
-            tcpSocket:
-              port: http-api
+            exec:
+              command:
+                - node
+                - -e
+                - |
+                  const http = require('node:http');
+                  const credential = process.env.API_KEY?.trim();
+                  if (!credential) process.exit(1);
+                  const request = http.get({
+                    host: '127.0.0.1',
+                    port: Number(process.env.API_PORT),
+                    path: '/readyz',
+                    headers: { Authorization: `Bearer ${credential}` },
+                    timeout: 2000,
+                  }, response => {
+                    response.resume();
+                    process.exit(response.statusCode === 200 ? 0 : 1);
+                  });
+                  request.once('timeout', () => request.destroy(new Error('gateway readiness timed out')));
+                  request.once('error', () => process.exit(1));
             initialDelaySeconds: 10
             periodSeconds: 10
+            timeoutSeconds: 3
           livenessProbe:
             tcpSocket:
               port: http-api

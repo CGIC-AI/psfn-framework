@@ -894,6 +894,64 @@ describe('resolveGatewayMultiCompanionConfig', () => {
   });
 });
 
+describe('GatewayServer API readiness', () => {
+  it('requires the exact API owner to declare readiness and retain a fresh heartbeat', async () => {
+    const owner = '11111111-1111-4111-8111-111111111111';
+    const sibling = '22222222-2222-4222-8222-222222222222';
+    const { server, connect } = await setupServer({
+      ...createMinimalOptions(),
+      multiCompanion: multiCompanion({ api: owner }),
+    });
+    expect(server.isApiReady()).toBe(false);
+    const siblingConnection = await connect();
+    await identifyAgent(siblingConnection, sibling, 1);
+    expect(server.isApiReady()).toBe(false);
+    const ownerConnection = await connect();
+    await invokeRpc(ownerConnection, 2, 'gateway.client.identify', {
+      role: 'agent',
+      companionId: owner,
+      authToken: deriveCompanionAuthToken(owner, 'agent', TEST_SESSION_HMAC_KEYRING),
+    });
+    expect(server.isApiReady()).toBe(false);
+    await invokeRpc(ownerConnection, 3, 'gateway.client.ready', {});
+    const sentBefore = ownerConnection.sent.length;
+    expect(server.isApiReady()).toBe(true);
+    expect(ownerConnection.sent).toHaveLength(sentBefore);
+    const now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now + 24 * 60 * 60 * 1000);
+    try {
+      expect(server.isApiReady()).toBe(false);
+    } finally {
+      clock.mockRestore();
+    }
+    ownerConnection._emitHeartbeat();
+    expect(server.isApiReady()).toBe(true);
+    ownerConnection._emitClose();
+    expect(server.isApiReady()).toBe(false);
+    await server.stop();
+  });
+
+  it('fails closed without a configured API owner', async () => {
+    const { server, connect } = await setupServer({
+      ...createMinimalOptions(),
+      multiCompanion: multiCompanion({}),
+    });
+    await identifyAgent(await connect(), '11111111-1111-4111-8111-111111111111');
+    expect(server.isApiReady()).toBe(false);
+    await server.stop();
+  });
+
+  it('uses native connection readiness in single-companion mode', async () => {
+    const { server, connect } = await setupServer(createMinimalOptions());
+    expect(server.isApiReady()).toBe(false);
+    const connection = await connect();
+    expect(server.isApiReady()).toBe(true);
+    connection._emitClose();
+    expect(server.isApiReady()).toBe(false);
+    await server.stop();
+  });
+});
+
 describe('GatewayServer single-companion parity (flag off)', () => {
   it('accepts identify with a companionId and does not reject duplicates', async () => {
     const { connect } = await setupServer(createMinimalOptions());

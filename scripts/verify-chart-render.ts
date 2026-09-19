@@ -299,6 +299,31 @@ function main(): number {
       'disabled render carries no hub control channel',
     );
 
+    const gatewayContainer = findContainer(disabled.stdout, `${RELEASE_NAME}-gateway`, 'gateway');
+    const gatewayReadiness = isRecord(gatewayContainer?.readinessProbe)
+      ? gatewayContainer.readinessProbe : undefined;
+    const gatewayReadinessExec = isRecord(gatewayReadiness?.exec) ? gatewayReadiness.exec : undefined;
+    const gatewayReadinessCommand = Array.isArray(gatewayReadinessExec?.command)
+      ? gatewayReadinessExec.command.join(' ') : '';
+    check(
+      gatewayReadinessCommand.includes("path: '/readyz'")
+        && gatewayReadinessCommand.includes('process.env.API_KEY?.trim()')
+        && gatewayReadinessCommand.includes('if (!credential) process.exit(1)')
+        && gatewayReadinessCommand.includes('Authorization: `Bearer ${credential}`')
+        && !gatewayReadinessCommand.includes("'/health'"),
+      'gateway readiness uses authenticated local route readiness without model diagnostics',
+    );
+    const gatewayRpc = findObject(disabled.stdout, 'Service', `${RELEASE_NAME}-gateway-rpc`);
+    const gatewayApi = findObject(disabled.stdout, 'Service', `${RELEASE_NAME}-gateway`);
+    check(
+      isRecord(gatewayRpc?.spec) && gatewayRpc.spec.publishNotReadyAddresses === true,
+      'gateway RPC remains reachable while agents establish initial readiness',
+    );
+    check(
+      isRecord(gatewayApi?.spec) && gatewayApi.spec.publishNotReadyAddresses !== true,
+      'gateway HTTP service remains gated by readiness',
+    );
+
     // ── Hub control channel (psfn-framework-r70pb) ──
     // Explicit satelliteHub.control.enabled renders the hub listener, the
     // gateway transport, the Service port and the NetworkPolicy pair without

@@ -736,6 +736,17 @@ describe('GatewayApiRuntime', () => {
     );
   });
 
+  it('fails closed when the gateway readiness provider is absent', () => {
+    const requestAgent = vi.fn();
+    const runtime = new GatewayApiRuntime({
+      requestAgent,
+      requestCompanionAgent: vi.fn(),
+      subscribeApiStream: () => () => {},
+    });
+    expect(runtime.isReady()).toBe(false);
+    expect(requestAgent).not.toHaveBeenCalled();
+  });
+
   it('degrades health instead of throwing when no agent is connected yet', async () => {
     const runtime = new GatewayApiRuntime({
       requestAgent: vi.fn(async () => {

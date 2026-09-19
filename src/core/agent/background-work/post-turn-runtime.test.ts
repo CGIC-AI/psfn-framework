@@ -416,6 +416,8 @@ describe('executePostTurnBackgroundWork', () => {
           for (const name of readdirSync(join(root, 'sessions')).filter(name => name.endsWith('.jsonl'))) {
             rmSync(join(root, 'sessions', name));
           }
+          // Two cold starts must retain the same durable missing-owner evidence.
+          new SessionStore(join(root, 'sessions'));
           sessionManager = new SessionManager(new SessionStore(join(root, 'sessions'), {
             turnRecordEligibilityFence: {
               withTurnRecordEligibilityFence: async (_key, operation) => operation(),

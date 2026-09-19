@@ -372,6 +372,7 @@ export class SessionTurnRecordOperations {
     if (owner === null && (
       purpose !== 'scratch_reflection_intention'
       || shouldPersistSessionChannel(declaredOwnerSessionId)
+      || this.context.getChannelIndexEntry(declaredOwnerSessionId) !== undefined
       || declaredOwnerSessionId !== normalizedSourceChannelId
       || record.status !== 'completed'
       || record.userMessage.sessionEntryId !== undefined

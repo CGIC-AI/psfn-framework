@@ -389,7 +389,7 @@ describe('executePostTurnBackgroundWork', () => {
     }
   });
 
-  it.each(['persistent', 'social-history', 'foreign-owner', 'failed-turn', 'record-entry-ref', 'payload-entry-ref', 'duplicate', 'revoked', 'fingerprint'] as const)(
+  it.each(['persistent', 'social-history', 'foreign-owner', 'failed-turn', 'record-entry-ref', 'payload-entry-ref', 'duplicate', 'revoked', 'missing-journal', 'fingerprint'] as const)(
     'rejects invalid native source-only intention authority: %s', async scenario => {
       const root = mkdtempSync(join(tmpdir(), 'scratch-intention-negative-'));
       try {
@@ -401,7 +401,7 @@ describe('executePostTurnBackgroundWork', () => {
             withTurnRecordEligibilityFences: async (_keys, operation) => operation(),
           },
         });
-        const sessionManager = new SessionManager(store, fromPartial({ dataDir: root, companionDataDir: root }));
+        let sessionManager = new SessionManager(store, fromPartial({ dataDir: root, companionDataDir: root }));
         const record = makeTurnRecord({
           channelId, sessionId: scenario === 'foreign-owner' ? 'internal:reflection:weekly' : channelId,
           channelType: 'terminal', status: scenario === 'failed-turn' ? 'failed' : 'completed',
@@ -409,7 +409,20 @@ describe('executePostTurnBackgroundWork', () => {
         if (scenario === 'record-entry-ref') record.userMessage.sessionEntryId = 1;
         await sessionManager.recordTurn(record);
         if (scenario === 'duplicate') await sessionManager.recordTurn(record);
-        if (scenario === 'revoked') await store.redactTurn(channelId, record.turnId, { reason: 'Test revocation' });
+        if (scenario === 'revoked' || scenario === 'missing-journal') {
+          await store.redactTurn(channelId, record.turnId, { reason: 'Test revocation' });
+        }
+        if (scenario === 'missing-journal') {
+          for (const name of readdirSync(join(root, 'sessions')).filter(name => name.endsWith('.jsonl'))) {
+            rmSync(join(root, 'sessions', name));
+          }
+          sessionManager = new SessionManager(new SessionStore(join(root, 'sessions'), {
+            turnRecordEligibilityFence: {
+              withTurnRecordEligibilityFence: async (_key, operation) => operation(),
+              withTurnRecordEligibilityFences: async (_keys, operation) => operation(),
+            },
+          }), fromPartial({ dataDir: root, companionDataDir: root }));
+        }
         const base = makeExecution(record);
         const { userSessionEntryId: _user, assistantSessionEntryId: _assistant, ...source } = base.payload.source;
         const payload = {

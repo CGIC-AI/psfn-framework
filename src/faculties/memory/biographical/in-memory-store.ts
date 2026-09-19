@@ -39,7 +39,7 @@ import {
 } from './store-port.js';
 import {
   assertBiographyStage,
-  assertStageCursorDigest,
+  deserializeStageCursor,
   assertStageCursorKey,
   type BiographyStage,
   type BiographyStageCursor,
@@ -637,12 +637,10 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
   async writeStageCursor(
     input: BiographyStageCursorWriteInput,
   ): Promise<BiographyStageCursor> {
-    const cursor: BiographyStageCursor = {
-      stage: assertBiographyStage(input.stage),
-      cursorKey: assertStageCursorKey(input.cursorKey),
-      observedDigest: assertStageCursorDigest(input.observedDigest),
+    const cursor = deserializeStageCursor({
+      ...input,
       observedAt: (input.now ?? this.now()).toISOString(),
-    };
+    });
     this.stageCursors.set(`${cursor.stage}\u0000${cursor.cursorKey}`, cursor);
     return cursor;
   }

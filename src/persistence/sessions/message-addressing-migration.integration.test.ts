@@ -1,3 +1,11 @@
+import { mkdtempSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { SessionStore } from './store.js';
+import { buildSessionHmacKeyring } from '../journals/journal-utils.js';
+import { createKeyringIntegrityProvider } from './store-primitives.js';
+import { createPostgresTranscriptProjection } from './postgres-adapters.js';
+import { migrateJournalMessageAddressing } from './message-addressing-journal-migration.js';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parseMessageAddressingMetadata } from '../../shared/contracts/message-addressing.js';
@@ -225,4 +233,40 @@ describe('Postgres message addressing v1-to-v2 migration', () => {
       await admin.end();
     }
   }, INTEGRATION_TIMEOUT_MS);
+
+  it('migrates a signed canonical journal behind a durable tenant projection fence', async () => {
+    const { admin, pools: [pool] } = await createTenantPools(['companion_journal']);
+    if (!pool) throw new Error('Tenant pool missing');
+    const root = mkdtempSync(join(tmpdir(), 'canonical-addressing-pg-'));
+    const sessionsDir = join(root, 'sessions');
+    const backupDir = join(root, 'backup'); mkdirSync(backupDir);
+    const observer = { authorId: 'bot-fixture', authorName: 'Companion' };
+    const channelId = 'group-fixture';
+    let epoch = 0;
+    try {
+      const projection = await createPostgresTranscriptProjection('', { pool });
+      await expect(projection.assertRedactionDriftDurable!(channelId)).rejects.toThrow('durable redaction');
+      const keyring = buildSessionHmacKeyring({ serializedKeys: 'v1:invented-key', activeVersion: 'v1' })!;
+      const store = new SessionStore(sessionsDir, { integrityKeyring: keyring, transcriptProjection: projection });
+      store.append({ channelId, role: 'user', content: 'Companion, hello.', authorId: 'human-fixture', authorName: 'Morgan', timestamp: 1000,
+        channelVisibility: 'invite_only', metadata: JSON.stringify({ messageAddressing: { schemaVersion: 1, mentionedTargets: [observer] } }) });
+      await projection.flushPendingWrites();
+      const journalPath = join(sessionsDir, readdirSync(sessionsDir).find(name => name.endsWith('.jsonl'))!);
+      const options = { channelId, journalPath, observer, maxJournalBytes: 100_000, maxJournalFiles: 2,
+        integrityProvider: createKeyringIntegrityProvider(keyring), transcriptProjection: projection,
+        tailCache: { maxEntriesPerChannel: 1, getEpoch: async () => epoch, bumpEpoch: async () => ++epoch,
+          getTail: async () => [], appendRow: async () => {}, replaceTail: async () => {}, invalidateChannel: async () => {} },
+        writersStopped: true, backupDir };
+      const plan = await migrateJournalMessageAddressing({ ...options, mode: 'dry-run' });
+      await migrateJournalMessageAddressing({ ...options, mode: 'apply', expectedPlanDigest: plan.planDigest });
+      const addressed = await pool.query('SELECT metadata_json FROM session_messages_projection WHERE channel_id = $1', [channelId]);
+      expect(addressed.rows[0].metadata_json.messageAddressing.schemaVersion).toBe(2);
+      expect((await pool.query('SELECT count(*)::int AS count FROM session_projection_drift')).rows[0].count).toBe(0);
+      expect(epoch).toBe(2);
+    } finally {
+      await Promise.all([pool.end(), admin.end()]);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
 });

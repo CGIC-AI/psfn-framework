@@ -1,7 +1,8 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import { fromPartial } from '@total-typescript/shoehorn';
 
 import type { LLMProviderPort, MemoryExtractor } from '../contracts.js';
 import { SessionManager } from '../../session/manager.js';
@@ -354,6 +355,98 @@ function makeDependencies(input: {
 }
 
 describe('executePostTurnBackgroundWork', () => {
+  it('runs a native scratch source-only intention hook without creating a journal', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'scratch-intention-source-'));
+    try {
+      const channelId = 'internal:reflection:daily';
+      const store = new SessionStore(join(root, 'sessions'), {
+        turnRecordEligibilityFence: {
+          withTurnRecordEligibilityFence: async (_key, operation) => operation(),
+          withTurnRecordEligibilityFences: async (_keys, operation) => operation(),
+        },
+      });
+      const sessionManager = new SessionManager(store, fromPartial({ dataDir: root, companionDataDir: root }));
+      const record = makeTurnRecord({ channelId, sessionId: channelId, channelType: 'terminal' });
+      await sessionManager.recordTurn(record);
+      const base = makeExecution(record);
+      const { userSessionEntryId: _user, assistantSessionEntryId: _assistant, ...source } = base.payload.source;
+      const payload = { schemaVersion: 1, kind: 'intention_post_turn_hooks', source } as const;
+      const runIntentionPostTurnHooks = vi.fn(async () => {});
+      const dependencies = makeDependencies({ record, runIntentionPostTurnHooks }).dependencies;
+      await executePostTurnBackgroundWork({
+        ...base, payload,
+        job: { ...base.job, kind: payload.kind, payload, payloadFingerprint: fingerprintBackgroundWorkPayload(payload) },
+      }, { ...dependencies, sessionManager });
+      expect(runIntentionPostTurnHooks).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ turnId: record.turnId, response: expect.objectContaining({ content: record.assistantMessage?.content }) }),
+        expect.objectContaining({ propagateFailures: true }),
+      );
+      expect(readdirSync(join(root, 'sessions')).filter(name => name.endsWith('.jsonl'))).toEqual([]);
+      expect(await sessionManager.lookupSourceRecordedTurnEligibility(channelId, channelId, record.turnId))
+        .toEqual({ kind: 'ineligible' });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['persistent', 'social-history', 'foreign-owner', 'failed-turn', 'record-entry-ref', 'payload-entry-ref', 'duplicate', 'revoked', 'missing-journal', 'fingerprint'] as const)(
+    'rejects invalid native source-only intention authority: %s', async scenario => {
+      const root = mkdtempSync(join(tmpdir(), 'scratch-intention-negative-'));
+      try {
+        const channelId = scenario === 'persistent' ? 'api:example'
+          : scenario === 'social-history' ? 'internal:reflection:social-outreach' : 'internal:reflection:daily';
+        const store = new SessionStore(join(root, 'sessions'), {
+          turnRecordEligibilityFence: {
+            withTurnRecordEligibilityFence: async (_key, operation) => operation(),
+            withTurnRecordEligibilityFences: async (_keys, operation) => operation(),
+          },
+        });
+        let sessionManager = new SessionManager(store, fromPartial({ dataDir: root, companionDataDir: root }));
+        const record = makeTurnRecord({
+          channelId, sessionId: scenario === 'foreign-owner' ? 'internal:reflection:weekly' : channelId,
+          channelType: 'terminal', status: scenario === 'failed-turn' ? 'failed' : 'completed',
+        });
+        if (scenario === 'record-entry-ref') record.userMessage.sessionEntryId = 1;
+        await sessionManager.recordTurn(record);
+        if (scenario === 'duplicate') await sessionManager.recordTurn(record);
+        if (scenario === 'revoked' || scenario === 'missing-journal') {
+          await store.redactTurn(channelId, record.turnId, { reason: 'Test revocation' });
+        }
+        if (scenario === 'missing-journal') {
+          for (const name of readdirSync(join(root, 'sessions')).filter(name => name.endsWith('.jsonl'))) {
+            rmSync(join(root, 'sessions', name));
+          }
+          // Two cold starts must retain the same durable missing-owner evidence.
+          new SessionStore(join(root, 'sessions'));
+          sessionManager = new SessionManager(new SessionStore(join(root, 'sessions'), {
+            turnRecordEligibilityFence: {
+              withTurnRecordEligibilityFence: async (_key, operation) => operation(),
+              withTurnRecordEligibilityFences: async (_keys, operation) => operation(),
+            },
+          }), fromPartial({ dataDir: root, companionDataDir: root }));
+        }
+        const base = makeExecution(record);
+        const { userSessionEntryId: _user, assistantSessionEntryId: _assistant, ...source } = base.payload.source;
+        const payload = {
+          schemaVersion: 1, kind: 'intention_post_turn_hooks',
+          source: scenario === 'payload-entry-ref' ? base.payload.source
+            : scenario === 'fingerprint' ? { ...source, turnRecordFingerprint: '0'.repeat(64) } : source,
+        } as const;
+        const runIntentionPostTurnHooks = vi.fn(async () => {});
+        const dependencies = makeDependencies({ record, runIntentionPostTurnHooks }).dependencies;
+        await expect(executePostTurnBackgroundWork({
+          ...base, payload,
+          job: { ...base.job, kind: payload.kind, payload, payloadFingerprint: fingerprintBackgroundWorkPayload(payload) },
+        }, { ...dependencies, sessionManager })).rejects.toMatchObject({
+          reasonCode: scenario === 'fingerprint' ? 'source_mismatch' : 'source_missing',
+        });
+        expect(runIntentionPostTurnHooks).not.toHaveBeenCalled();
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it('projects actual durable extraction targets as canonical typed refs', async () => {
     const record = makeTurnRecord();
     const execution = makeExecution(record);
@@ -1021,6 +1114,7 @@ describe('executePostTurnBackgroundWork', () => {
       record.channelId,
       record.sessionId,
       record.turnId,
+      undefined,
     );
     expect(fixture.maybeExtract).toHaveBeenCalledWith(
       record.sessionId,

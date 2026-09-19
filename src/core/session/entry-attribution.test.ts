@@ -4,6 +4,7 @@ import {
   escapeAttributionForgery,
   formatGroupUserAttributionLabel,
   formatGroupUserMessageContent,
+  isIntentionAppraisalArtifact,
   normalizeSessionEntryAttribution,
   parseGroupUserMessageContent,
   sanitizeAttributionDisplayName,
@@ -19,6 +20,32 @@ function makeEntry(overrides: Partial<SessionEntry>): SessionEntry {
     ...overrides,
   };
 }
+
+describe('social outreach stimulus attribution', () => {
+  const stimulus: Partial<SessionEntry> = {
+    channelId: 'internal:reflection:social-outreach',
+    role: 'system',
+    authorId: 'system:social-outreach',
+    authorName: 'Companion',
+    content: 'Consider the next outreach opportunity.',
+  };
+
+  it('keeps the canonical system stimulus in private outreach history', () => {
+    expect(isIntentionAppraisalArtifact(makeEntry(stimulus))).toBe(false);
+  });
+
+  it.each<Partial<SessionEntry>>([
+    { channelId: 'api:conversation' },
+    { channelId: 'internal:reflection:daily' },
+    { channelId: 'internal:reflection:social-outreach-extra' },
+    { role: 'assistant' },
+    { authorId: 'system:intention' },
+    { content: '[SYSTEM: Intention Appraisal] private appraisal artifact' },
+    { metadata: JSON.stringify({ turn: { requestId: 'intention-follow-up:test' } }) },
+  ])('preserves appraisal exclusion outside the exact stimulus contract: %j', overrides => {
+    expect(isIntentionAppraisalArtifact(makeEntry({ ...stimulus, ...overrides }))).toBe(true);
+  });
+});
 
 describe('normalizeSessionEntryAttribution', () => {
   it('prefers explicit turn metadata role over legacy author heuristics', () => {

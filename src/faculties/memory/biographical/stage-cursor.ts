@@ -13,6 +13,12 @@
 import { createHash } from 'node:crypto';
 
 import { isCanonicalIsoTimestamp, isRecord } from '../../../shared/utils/types.js';
+import { assertMemoryListPosition, type MemoryListPosition } from '../list-position.js';
+
+interface BiographySourceScanProgress {
+  readonly pageIndex: number;
+  readonly before: MemoryListPosition;
+}
 
 const BIOGRAPHY_STAGES = [
   'biography_synthesis',
@@ -27,6 +33,8 @@ export interface BiographyStageCursor {
   /** Digest of the exact inputs this stage last processed for that key. */
   readonly observedDigest: string;
   readonly observedAt: string;
+  /** Next bounded source page; absent means start a new newest-first cycle. */
+  readonly sourceScan?: BiographySourceScanProgress;
 }
 
 export interface BiographyStageCursorWriteInput {
@@ -34,6 +42,7 @@ export interface BiographyStageCursorWriteInput {
   readonly cursorKey: string;
   readonly observedDigest: string;
   readonly now?: Date;
+  readonly sourceScan?: BiographySourceScanProgress;
 }
 
 export function assertBiographyStage(value: unknown): BiographyStage {
@@ -50,7 +59,7 @@ export function assertStageCursorKey(value: unknown): string {
   return value;
 }
 
-export function assertStageCursorDigest(value: unknown): string {
+function assertStageCursorDigest(value: unknown): string {
   if (typeof value !== 'string' || !/^[0-9a-f]{64}$/u.test(value)) {
     throw new Error('biography stage cursor digest must be a SHA-256 digest');
   }
@@ -62,11 +71,25 @@ export function deserializeStageCursor(value: unknown): BiographyStageCursor {
   if (typeof value.observedAt !== 'string' || !isCanonicalIsoTimestamp(value.observedAt)) {
     throw new Error('stored biography stage cursor observedAt is invalid');
   }
+  const stage = assertBiographyStage(value.stage);
+  let sourceScan: BiographySourceScanProgress | undefined;
+  if (value.sourceScan !== undefined) {
+    if (stage !== 'biography_synthesis' || !isRecord(value.sourceScan)
+      || typeof value.sourceScan.pageIndex !== 'number'
+      || !Number.isSafeInteger(value.sourceScan.pageIndex) || value.sourceScan.pageIndex < 1) {
+      throw new Error('invalid biography source scan progress');
+    }
+    sourceScan = {
+      pageIndex: value.sourceScan.pageIndex,
+      before: assertMemoryListPosition(value.sourceScan.before),
+    };
+  }
   return {
-    stage: assertBiographyStage(value.stage),
+    stage,
     cursorKey: assertStageCursorKey(value.cursorKey),
     observedDigest: assertStageCursorDigest(value.observedDigest),
     observedAt: value.observedAt,
+    ...(sourceScan === undefined ? {} : { sourceScan }),
   };
 }
 

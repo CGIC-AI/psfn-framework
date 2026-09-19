@@ -1,3 +1,6 @@
+import { ContactBlockListStore } from '../../../core/cogsec/contact-block-list.js';
+import { resolveContactBlockListPath } from '../../../persistence/layout.js';
+import { buildSessionMetadataWithMessageAddressing } from '../../../core/session/message-addressing.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -24,8 +27,8 @@ afterEach(() => {
 });
 
 describe('social impulse outreach startup lane', () => {
-  it('suppresses a human destination when primary trust is revoked after discovery', async () => {
-    let contactReads = 0;
+  it.each(['trust-revoked', 'linked-account-blocked'])('suppresses the proven DM recipient after %s', async reason => {
+    let primaryTrust = true;
     const records = new Map<string, SocialImpulseOutreachRecord>();
     const dispatch = vi.fn(async () => ({ outcome: 'sent' as const }));
     const handleMessage = vi.fn(async () => fromAny({ content: 'A private hello.' }));
@@ -35,6 +38,7 @@ describe('social impulse outreach startup lane', () => {
     const scheduler = new Scheduler(eventBus, { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 });
     const postTurnActions = wirePostTurnActionRuntime({ eventBus, scheduler, agentLoop: {} });
     const lane = registerSocialImpulseOutreachLane({
+      quietHours: { enabled: false, startLocalTime: '02:00', endLocalTime: '06:00', timeZone: 'UTC' },
       companionId: COMPANION_ID,
       companionName: 'Test Companion',
       companionDataDir,
@@ -43,21 +47,26 @@ describe('social impulse outreach startup lane', () => {
       agentLoop: { handleMessage },
       postTurnActions,
       contactStore: fromAny({
-        getByDiscordUserId: async () => {
-          contactReads += 1;
-          return {
-            id: 'contact-human',
-            displayName: 'Trusted Person',
-            trustLevel: contactReads <= 4 ? 'primary' : 'known',
-            relationshipType: 'friend',
-            firstSeen: '2026-01-01T00:00:00Z',
-            lastSeen: '2026-01-01T00:00:00Z',
-          };
-        },
+        getByTrustLevel: async () => [{
+          id: 'contact-human', discordUserId: 'old-discord-user', channels: [{ channel: 'discord', userId: 'discord-user' }], displayName: 'Trusted Person', trustLevel: primaryTrust ? 'primary' : 'known',
+          relationshipType: 'friend', firstSeen: '2026-01-01T00:00:00Z', lastSeen: '2026-01-01T00:00:00Z',
+        }],
+        getById: async () => ({
+          id: 'contact-human', discordUserId: 'old-discord-user', channels: [{ channel: 'discord', userId: 'discord-user' }], displayName: 'Trusted Person',
+          trustLevel: primaryTrust ? 'primary' : 'known', relationshipType: 'friend',
+        }),
         listKnownRooms: async () => [],
       }),
-      sessionStore: fromAny({ listChannels: () => [] }),
-      primaryDiscordUserId: 'discord-user',
+      sessionStore: fromAny({ listChannels: () => [], getSessionActivity: () => null, findLatestEntries: (channelId: string) => channelId === 'human-dm' ? [{
+        id: 1, channelId, role: 'user', authorId: 'discord-user', authorName: 'Trusted Person', timestamp: NOW_MS - 3600000,
+        content: 'I would welcome hearing from you.',
+        metadata: buildSessionMetadataWithMessageAddressing(undefined, {
+          schemaVersion: 2, source: 'discord', author: { authorId: 'discord-user', authorName: 'Trusted Person' },
+          observer: { authorId: 'companion-bot', authorName: 'Test Companion' },
+          mentionedTargets: [], channel: { scope: 'direct', channelId },
+          resolvedAddressee: { kind: 'participants', participants: [{ authorId: 'companion-bot', authorName: 'Test Companion', evidence: ['direct_message'] }] },
+        }),
+      }] : [] }),
       heartbeatChannel: { channelId: 'human-dm', channelType: 'discord' },
       capabilityRuntime: fromAny({ has: () => true }),
       availability: fromAny({ snapshot: () => ({ state: 'available' }) }),
@@ -80,6 +89,12 @@ describe('social impulse outreach startup lane', () => {
     })).resolves.toMatchObject({
       outcome: 'queued',
     });
+    if (reason === 'trust-revoked') primaryTrust = false;
+    else new ContactBlockListStore(resolveContactBlockListPath(companionDataDir)).block({
+      channelType: 'discord', contactId: 'discord-user', canonicalContactId: 'contact-human',
+      mode: 'hard', scope: 'dm', actor: { kind: 'operator', id: 'test' },
+    });
+    expect((await lane.runtime.inspect(impulse.correlationId)).destinations).toEqual([]);
     await scheduler.getTask('post-turn-action-executor')!.handler();
     expect((await lane.runtime.inspect(impulse.correlationId)).record.state).toBe('suppressed');
     expect(handleMessage).toHaveBeenCalledOnce();
@@ -122,9 +137,23 @@ function memoryStore(
   records: Map<string, SocialImpulseOutreachRecord>,
 ): SocialImpulseOutreachStorePort {
   return {
+    async getDestinationStatus(companionId, destinationId) {
+      const matching = [...records.values()].filter(record => record.companionId === companionId
+        && record.destination?.destinationId === destinationId)
+        .sort((left, right) => right.updatedAtMs - left.updatedAtMs || right.opportunityId.localeCompare(left.opportunityId));
+      const active = (record: SocialImpulseOutreachRecord) => record.state === 'pending' || record.state === 'queued' || record.state === 'chosen';
+      return structuredClone({ pending: matching.find(active) ?? null, latestTerminal: matching.find(record => !active(record)) ?? null });
+    },
     async listRecoverable(companionId) {
       return [...records.values()].filter(record => record.companionId === companionId
         && (record.state === 'pending' || record.state === 'queued')).map(record => structuredClone(record));
+    },
+    async deferExecution(input) {
+      const record = records.get(input.opportunityId);
+      if (!record || record.state !== 'chosen' || record.bindingHash !== input.bindingHash || !record.executionIntent) throw new Error('lost unsent claim');
+      const deferred = { ...record, state: 'queued' as const, reasonCode: input.reasonCode, updatedAtMs: input.deferredAtMs };
+      records.set(input.opportunityId, deferred);
+      return structuredClone(deferred);
     },
     async beginExecution(opportunityId, bindingHash, atMs) {
       const record = records.get(opportunityId);

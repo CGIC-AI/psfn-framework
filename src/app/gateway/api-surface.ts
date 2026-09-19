@@ -122,6 +122,7 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
   gateway: Pick<
     GatewayServer,
     | 'requestAgent'
+    | 'isApiReady'
     | 'subscribeApiStream'
     | 'requestAgentVoiceStream'
     | 'invalidateIcpAutonomyForCompanion'

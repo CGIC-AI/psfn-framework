@@ -355,6 +355,9 @@ export class MemoryRetriever implements MemoryProvider {
   private productMemoryStore(canonicalContactId?: string): MemoryStorePort {
     if (!this.enforceSubjectAuthorization) return this.memoryStore;
     const context = memorySubjectAccessContextFromCorrelation(getRequestContext());
+    if (context.companionSelfReflection) {
+      return createSubjectAuthorizedMemoryStore(this.memoryStore, context);
+    }
     return createSubjectAuthorizedMemoryStore(this.memoryStore, {
       ...context,
       ...(canonicalContactId ? { viewerContactId: canonicalContactId } : {}),
@@ -427,6 +430,8 @@ export class MemoryRetriever implements MemoryProvider {
     const productStore = this.productMemoryStore(input.access.canonicalContactId);
     const result = await computeSharedBackground(
       {
+        companionId: this.runtimeConfig?.companionId,
+        roomMembershipAuthority: this.roomMembershipAuthority,
         memoryStore: {
           getById: async (id) => {
             const memory = await productStore.getById(id);

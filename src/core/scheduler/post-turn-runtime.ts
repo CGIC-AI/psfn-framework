@@ -22,6 +22,7 @@ import {
   toInferredPostTurnActions,
 } from '../intention/appraisal.js';
 import { MotivationBridge } from '../intention/motivation.js';
+import { bindIntentionFollowUpDestinations } from '../intention/follow-up-destination.js';
 import {
   applyExternalAppraisalConcernRequirement,
   createAppraisalConcernScope,
@@ -318,6 +319,13 @@ export function wirePostTurnRuntime(
             : {}),
         });
 
+        const followUpContacts = await bindIntentionFollowUpDestinations({
+          decisions,
+          sourceChannelId: context.message.channelId,
+          sourceChannelType: context.message.channelType,
+          sourceContactId: context.canonicalContactKey,
+          resolveDestination: runtimeOptions.resolveIntentionFollowUpDestination,
+        });
         if (runtimeOptions.onIntentionConcernDecision) {
           for (const decision of decisions) {
             if (decision.type !== 'concern') continue;
@@ -338,7 +346,7 @@ export function wirePostTurnRuntime(
               decision,
               channelId: resolvedSessionId,
               channelType: context.message.channelType,
-              canonicalContactKey: context.canonicalContactKey,
+              canonicalContactKey: followUpContacts.get(decision),
               sourceMessageId: context.message.id,
               formationVAD: { ...internalState.emotional.vad },
               ...(originIcpRootInitiationId ? { originIcpRootInitiationId } : {}),

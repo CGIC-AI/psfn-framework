@@ -120,10 +120,12 @@ describe('reflection post-turn lane split (E5.2)', () => {
         llmProvider: fromAny(llmProvider),
         memoryWriter: { write: vi.fn() },
         coreMemoryStore: fromAny({ getSnapshot: vi.fn(), rethink: vi.fn() }),
+        resolvedConcernStore: { listRecentlyResolvedConcerns: vi.fn().mockResolvedValue([]) },
         episodicReviewStore: fromAny({ searchByTime: vi.fn().mockResolvedValue([]) }),
         sessionManager: fromAny({
           resolveSessionChannelId: (channelId: string) => channelId,
           getRecentMessages: vi.fn().mockReturnValue([]),
+          getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([]),
         }),
         episodicProcessingRestWindow: {
           enabled: true,

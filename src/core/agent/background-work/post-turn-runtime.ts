@@ -105,11 +105,13 @@ function runWithPostTurnUsageAttribution<T>(
 async function requireCanonicalTurnRecord(
   source: BackgroundWorkSourceRef,
   dependencies: AdmittedPostTurnBackgroundRuntimeDependencies,
+  purpose?: 'scratch_reflection_intention',
 ): Promise<TurnRecord> {
   const eligibility = await dependencies.sessionManager.lookupSourceRecordedTurnEligibility(
     source.channelId,
     source.logicalSessionId,
     source.turnId,
+    purpose,
   );
   if (eligibility.kind === 'missing') {
     throw new BackgroundWorkDeferredError('source_not_ready', 250, 'source_missing');
@@ -492,7 +494,11 @@ async function runPostTurnBackgroundWork(
       // TurnRecord writers. Queue ownership and canonical eligibility are both
       // proved only after it is held, and raw content never leaves its scope.
       await input.effects.assertOwned();
-      const record = await requireCanonicalTurnRecord(payload.source, dependencies);
+      const record = await requireCanonicalTurnRecord(
+        payload.source,
+        dependencies,
+        resolveMaxSessionEntryId(payload.source) === undefined ? 'scratch_reflection_intention' : undefined,
+      );
       // Social desire consumes the cheap, content-free felt-state projection
       // on every bounded turn. It stays on the always-enqueued intention job so
       // drift-only narrative scheduling cannot starve accumulation.

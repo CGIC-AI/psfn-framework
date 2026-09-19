@@ -96,9 +96,23 @@ function memoryStore(): SocialImpulseOutreachStorePort & { records: Map<string, 
   const records = new Map<string, SocialImpulseOutreachRecord>();
   return {
     records,
+    async getDestinationStatus(companionId, destinationId) {
+      const matching = [...records.values()].filter(record => record.companionId === companionId
+        && record.destination?.destinationId === destinationId)
+        .sort((left, right) => right.updatedAtMs - left.updatedAtMs || right.opportunityId.localeCompare(left.opportunityId));
+      const active = (record: SocialImpulseOutreachRecord) => record.state === 'pending' || record.state === 'queued' || record.state === 'chosen';
+      return structuredClone({ pending: matching.find(active) ?? null, latestTerminal: matching.find(record => !active(record)) ?? null });
+    },
     async listRecoverable(companionId) {
       return [...records.values()].filter(record => record.companionId === companionId
         && (record.state === 'pending' || record.state === 'queued')).map(record => structuredClone(record));
+    },
+    async deferExecution(input) {
+      const record = records.get(input.opportunityId);
+      if (!record || record.state !== 'chosen' || record.bindingHash !== input.bindingHash || !record.executionIntent) throw new Error('lost unsent claim');
+      const deferred = { ...record, state: 'queued' as const, reasonCode: input.reasonCode, updatedAtMs: input.deferredAtMs };
+      records.set(input.opportunityId, deferred);
+      return structuredClone(deferred);
     },
     async beginExecution(opportunityId, bindingHash, atMs) {
       const record = records.get(opportunityId);
@@ -173,6 +187,50 @@ function harness(mode: 'off' | 'shadow' | 'on' = 'on') {
 }
 
 describe('social impulse outreach disposition', () => {
+  it.each([FIRED_AT_MS, FIRED_AT_MS - 1])('rejects a non-future execution deferral (%s)', async rescheduleAt => {
+    const store = memoryStore();
+    const runtime = createSocialImpulseOutreachRuntime({
+      companionId: COMPANION_ID, store, getMode: () => 'on',
+      listDestinations: async () => destinations(), runDispositionOpportunity: async () => {},
+      enqueueExecution: async () => {}, now: () => FIRED_AT_MS,
+      execute: async () => ({ outcome: 'rescheduled', reasonCode: 'quiet_hours', rescheduleAt }),
+    });
+    await runtime.onImpulse(impulse());
+    await runtime.choose({ opportunityId: impulse().correlationId, disposition: 'contact-human',
+      destinationId: 'human:contact-a:discord:dm-a', intent: 'Say hello.' });
+    const defer = vi.spyOn(store, 'deferExecution');
+    const finalize = vi.spyOn(store, 'finalize');
+    await expect(runtime.executeQueued(impulse().correlationId)).rejects.toThrow('future execution time');
+    expect(defer).not.toHaveBeenCalled();
+    expect(finalize).not.toHaveBeenCalled();
+  });
+
+  it('releases only an unsent time-deferred execution and resumes its exact choice after restart', async () => {
+    const store = memoryStore();
+    const enqueueExecution = vi.fn(async () => {});
+    const execute = vi.fn<Parameters<typeof createSocialImpulseOutreachRuntime>[0]['execute']>()
+      .mockResolvedValueOnce({ outcome: 'rescheduled', reasonCode: 'quiet_hours', rescheduleAt: FIRED_AT_MS + 10_000 })
+      .mockResolvedValue({ outcome: 'delivered' });
+    const options = { companionId: COMPANION_ID, store, getMode: () => 'on' as const,
+      listDestinations: async () => destinations(), runDispositionOpportunity: async () => {},
+      enqueueExecution, execute, now: () => FIRED_AT_MS + 100 };
+    const runtime = createSocialImpulseOutreachRuntime(options);
+    await runtime.onImpulse(impulse());
+    const choice = await runtime.choose({ opportunityId: impulse().correlationId, disposition: 'contact-human',
+      destinationId: 'human:contact-a:discord:dm-a', intent: 'Keep this exact private choice.' });
+    const finalize = vi.spyOn(store, 'finalize');
+    const deferred = await runtime.executeQueued(impulse().correlationId);
+    expect(deferred).toMatchObject({ outcome: 'queued', rescheduleAt: FIRED_AT_MS + 10_000,
+      record: { state: 'queued', bindingHash: choice.record.bindingHash, executionIntent: 'Keep this exact private choice.' } });
+    expect(finalize).not.toHaveBeenCalled();
+    const restarted = createSocialImpulseOutreachRuntime(options);
+    await restarted.recoverPending();
+    await Promise.all([restarted.executeQueued(impulse().correlationId), restarted.executeQueued(impulse().correlationId)]);
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(finalize).toHaveBeenCalledOnce();
+    expect(store.records.get(impulse().correlationId)).toMatchObject({ state: 'delivered', bindingHash: choice.record.bindingHash, executionIntent: null });
+  });
+
   it('recovers a queued exact choice after queue admission fails without replaying an ambiguous execution', async () => {
     const store = memoryStore();
     const enqueueExecution = vi.fn<(_id: string) => Promise<void>>()

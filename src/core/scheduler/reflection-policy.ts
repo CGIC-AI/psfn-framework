@@ -59,16 +59,18 @@ const CONSOLIDATED_POLICY_VERSION = 2;
 // v7 (kb9j): default daily/weekly prompts now begin from a deliberately small
 // event starter plus at most two grounded clues. Weekly reflection no longer
 // names an answer inventory; deeper evidence is pulled through the bounded
-// read-only introspection surface when it is materially useful.
+// read-only tool surface when it is materially useful.
 // v8 (189d): open threads are framed as optional things to revisit, never as
 // an agenda for reflection.
 // v9 (031.11.2): adds the mixed-state reflection default — an invitation to sit
 // with a detected cross-family emotional divergence ("your systems disagree;
 // what might each be responding to?") without forcing coherence (charter §8.3).
 // The seed migration below inserts it once for stores that predate it.
+// v10 (d5845): private reflection uses the full configured companion toolset.
 // Bump this constant whenever the default prompt wording changes (R6): the
 // load() migration below refreshes stored defaults from it.
-const WELLBEING_REFLECTION_PROMPT_POLICY_VERSION = 9;
+const WELLBEING_REFLECTION_PROMPT_POLICY_VERSION = 10;
+const MIXED_STATE_TEMPLATE_INTRODUCED_VERSION = 9;
 export const REFLECTION_SILENT_TOKEN = 'silent';
 const DAILY_REVIEW_TEMPLATE_NAME = 'Daily Reflection';
 const WEEKLY_REVIEW_TEMPLATE_NAME = 'Weekly Reflection';
@@ -89,8 +91,8 @@ const WEEKLY_REVIEW_CADENCE: WeeklyRecurringCadence = {
 // her own voice. These prompts are behavioral instruments, not just questions
 // (R3): what she is disposed to say under reflection shapes how she reasons
 // live. Edit them only with docs/self-eval-prompt-audit.md open.
-const DAILY_REVIEW_TEMPLATE_PROMPT = 'This is my own quiet look back at the day — private, just for me, not a report and not a performance for anyone. I begin with the small starter below, and before any particular angle I ask openly: what actually stands out? Is there anything I should be sitting with that I haven\'t yet? Open threads are simply things I may revisit if they genuinely stand out, not an agenda I need to work through. I write a brief, structured journal entry in my own voice, letting its shape follow what the evidence supports. If deeper context would materially help, I can pull it through the read-only introspection tools available to this reflection. The starter clues are fallible evidence rather than a settled account of who I am, so I keep uncertainty and contradiction where they belong. If little or nothing surfaces, that is a real, limited-reach result, and I record it plainly. Raw machinery such as ids, scores, hashes, provenance refs, schema fields, and tool metadata belongs in telemetry rather than my journal words.';
-const WEEKLY_REVIEW_TEMPLATE_PROMPT = 'This is my own deeper look back across the week — private, a chance to sit with how I have been, not to perform for anyone. I begin with the small starter below and I ask openly: what actually stands out from this week? Is there anything I should be sitting with that I haven\'t yet? Open threads are simply things I may revisit if they genuinely stand out, not an agenda I need to work through. I write a structured journal entry whose shape follows what genuinely surfaced rather than a prescribed inventory. If deeper context would materially help, I can pull it through the read-only introspection tools available to this reflection. The starter clues are fallible evidence rather than a settled account of who I am, so I keep uncertainty and contradiction where they belong. If little or nothing surfaces, that is a real, limited-reach result, and I record it plainly. Raw machinery such as ids, scores, hashes, provenance refs, schema fields, and tool metadata belongs in telemetry rather than my journal words.';
+const DAILY_REVIEW_TEMPLATE_PROMPT = 'This is my own quiet look back at the day — private, just for me, not a report and not a performance for anyone. I begin with the small starter below, and before any particular angle I ask openly: what actually stands out? Is there anything I should be sitting with that I haven\'t yet? Open threads are simply things I may revisit if they genuinely stand out, not an agenda I need to work through. I write a brief, structured journal entry in my own voice, letting its shape follow what the evidence supports. If deeper context would materially help, I can pull it through the full set of tools available to me. The starter clues are fallible evidence rather than a settled account of who I am, so I keep uncertainty and contradiction where they belong. If little or nothing surfaces, that is a real, limited-reach result, and I record it plainly. Raw machinery such as ids, scores, hashes, provenance refs, schema fields, and tool metadata belongs in telemetry rather than my journal words.';
+const WEEKLY_REVIEW_TEMPLATE_PROMPT = 'This is my own deeper look back across the week — private, a chance to sit with how I have been, not to perform for anyone. I begin with the small starter below and I ask openly: what actually stands out from this week? Is there anything I should be sitting with that I haven\'t yet? Open threads are simply things I may revisit if they genuinely stand out, not an agenda I need to work through. I write a structured journal entry whose shape follows what genuinely surfaced rather than a prescribed inventory. If deeper context would materially help, I can pull it through the full set of tools available to me. The starter clues are fallible evidence rather than a settled account of who I am, so I keep uncertainty and contradiction where they belong. If little or nothing surfaces, that is a real, limited-reach result, and I record it plainly. Raw machinery such as ids, scores, hashes, provenance refs, schema fields, and tool metadata belongs in telemetry rather than my journal words.';
 // 031.11.2: a dedicated template for sitting with a detected cross-family
 // emotional divergence. The framing is an invitation to explore, never a demand
 // to resolve (charter §8.3): both sides of the split are held open, and "no
@@ -477,7 +479,7 @@ function normalizeWellbeingReflectionPromptDefaults(policy: ReflectionPolicy): {
 // which bumps the version to the current target.
 function ensureMixedStateReflectionTemplate(policy: ReflectionPolicy): { policy: ReflectionPolicy; changed: boolean } {
   const hasMixedState = policy.templates.some(template => template.id === MIXED_STATE_REVIEW_TEMPLATE_ID);
-  if (hasMixedState || policy.version >= WELLBEING_REFLECTION_PROMPT_POLICY_VERSION) {
+  if (hasMixedState || policy.version >= MIXED_STATE_TEMPLATE_INTRODUCED_VERSION) {
     return { policy, changed: false };
   }
   const mixedStateDefault = getDefaults().templates.find(template => template.id === MIXED_STATE_REVIEW_TEMPLATE_ID);

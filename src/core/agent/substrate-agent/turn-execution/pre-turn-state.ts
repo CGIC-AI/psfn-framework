@@ -1,3 +1,5 @@
+import { isCompanionSelfReflectionContext } from '../../../../primitives/llm/request-context.js';
+import { resolveObserverSocialInteraction } from './observer-social-interaction.js';
 import type {
   CorrelationMetadata,
   RequestAudience,
@@ -51,6 +53,7 @@ import { FREE_TIME_CHANNEL_PREFIX } from '../../../session/session-id.js';
 import { runWithRequestContext } from '../../../../primitives/llm/request-context.js';
 import {
   COMPANION_SELF_CREATION_RETRIEVAL_PURPOSE,
+  COMPANION_SELF_REFLECTION_RETRIEVAL_PURPOSE,
 } from '../../../../faculties/memory/retrieval/access-scope.js';
 import type { ArtifactSensitivitySource } from '../../../../shared/contracts/artifact-sensitivity.js';
 import { RUNTIME_LANE_CLASSES } from '../../../../shared/contracts/runtime-lanes.js';
@@ -571,8 +574,10 @@ export async function prepareTurnIdentityState(input: {
   let requestAudience: RequestAudience | undefined;
   if (
     requesterProvenance === 'self_directed'
-    && message.channelId.startsWith(FREE_TIME_CHANNEL_PREFIX)
-    && message.channelId.length > FREE_TIME_CHANNEL_PREFIX.length
+    && ((message.channelId.startsWith(FREE_TIME_CHANNEL_PREFIX)
+      && message.channelId.length > FREE_TIME_CHANNEL_PREFIX.length)
+      || (message.channelId.startsWith('internal:reflection:')
+        && message.channelId.length > 'internal:reflection:'.length))
   ) {
     requestAudience = 'self';
   } else if (
@@ -837,14 +842,16 @@ export async function computePreTurnState(input: {
       : {}),
     queryText: memoryRetrievalContextText,
   });
-  const selfCreationCallerContext: RetrievalCallerContext | undefined =
+  const companionSelfCallerContext: RetrievalCallerContext | undefined =
     input.viewerRequestContext.requestAudience === 'self'
       ? {
-          accessScope: 'companion_self_creation',
+          accessScope: isCompanionSelfReflectionContext({
+            ...input.viewerRequestContext, channelId: message.channelId,
+          }) ? 'companion_self_reflection' : 'companion_self_creation',
           ...(temporalRetrievalMode ? { retrievalMode: temporalRetrievalMode } : {}),
         }
       : undefined;
-  const effectiveRetrievalCallerContext = selfCreationCallerContext ?? temporalRetrievalCallerContext;
+  const effectiveRetrievalCallerContext = companionSelfCallerContext ?? temporalRetrievalCallerContext;
   const activeMemoryRequest = {
     contextText: memoryRetrievalContextText,
     channelId: message.channelId,
@@ -905,15 +912,21 @@ export async function computePreTurnState(input: {
     const refresh = (): Promise<ActiveMemoryContextSnapshot | null> => (
       refreshActiveMemoryContext(activeMemoryRequest)
     );
-    const refreshCorrelation: CorrelationMetadata = selfCreationCallerContext
+    const reflectionRefresh = companionSelfCallerContext?.accessScope === 'companion_self_reflection';
+    const selfRetrievalPurpose = reflectionRefresh
+      ? COMPANION_SELF_REFLECTION_RETRIEVAL_PURPOSE
+      : COMPANION_SELF_CREATION_RETRIEVAL_PURPOSE;
+    const refreshCorrelation: CorrelationMetadata = companionSelfCallerContext
       ? {
           ...turnCorrelationBase,
           channelId: message.channelId,
           callType: 'background',
           originType: 'background',
-          originStage: COMPANION_SELF_CREATION_RETRIEVAL_PURPOSE,
-          purpose: COMPANION_SELF_CREATION_RETRIEVAL_PURPOSE,
-          runtimeLaneClass: RUNTIME_LANE_CLASSES.backgroundContinuation,
+          originStage: selfRetrievalPurpose,
+          purpose: selfRetrievalPurpose,
+          runtimeLaneClass: reflectionRefresh
+            ? RUNTIME_LANE_CLASSES.maintenanceReflection
+            : RUNTIME_LANE_CLASSES.backgroundContinuation,
           requesterProvenance: 'self_directed',
           requestAudience: 'self',
         }
@@ -983,6 +996,7 @@ export async function computePreTurnState(input: {
     logger: log,
     input: {
       schemaVersion: 1,
+      incomingSocialInteraction: resolveObserverSocialInteraction(message, authorContext, taskKind),
       turn: {
         turnId,
         requestId,

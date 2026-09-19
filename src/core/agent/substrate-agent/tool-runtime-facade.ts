@@ -107,7 +107,7 @@ interface MaintenanceToolPolicy {
   readonly allowedActions?: readonly string[];
   readonly resolveAction?: (params: Record<string, unknown>) => string | null;
   // Turn classes on which this tool survives at all. Defaults to every
-  // maintenance-restricted class (heartbeat, reflection, maintenance). Narrow
+  // maintenance-restricted class (heartbeat, maintenance). Narrow
   // it to scope a tool to specific self-directed turn classes.
   readonly allowedTaskKinds?: readonly string[];
 }
@@ -127,21 +127,9 @@ interface ToolTurnContext {
 const CANDIDATE_TOOL_MUTATION_DENIAL =
   'Trusted ICP candidate turns cannot mutate or widen their exact notify tool surface.';
 
-// Image-tools img2 audit / img1 follow-up: maintenance-restricted turns (heartbeat,
-// reflection, maintenance) drop every core tool not listed here. The expressive
-// image tools live in core (img1), so without an explicit policy they would be
-// dropped from these turns entirely -- killing spontaneous inline self-portraits
-// during self-directed thinking. Decision, deliberate per turn class:
-//   - heartbeat  -> expressive tools available (unrestricted). Heartbeat is the
-//                   self-directed "free-time-flavoured" cognition turn where the
-//                   companion decides to reach out; inline generation belongs
-//                   here. (free-time/outreach lanes already allow them: their
-//                   channels carry no maintenance-restricted taskKind.)
-//   - reflection -> NOT available. Silent introspection over memory/self-model;
-//                   no outward image expression or heavyweight analysis loop.
-//   - maintenance-> NOT available. Pure ops/housekeeping.
+// Private reflection uses the companion's full configured toolset. Only
+// heartbeat and operational maintenance retain task-specific restrictions.
 const MAINTENANCE_EXPRESSIVE_TASK_KINDS = ['heartbeat'] as const;
-const PRIVATE_REFLECTION_TASK_KINDS = ['reflection'] as const;
 
 const MAINTENANCE_TOOL_POLICIES = new Map<string, MaintenanceToolPolicy>([
   ['contact', {
@@ -151,11 +139,6 @@ const MAINTENANCE_TOOL_POLICIES = new Map<string, MaintenanceToolPolicy>([
   ['identity', {
     allowedActions: ['list_layers', 'get_layer', 'diff_layer', 'history'],
     resolveAction: resolveMaintenanceIdentityAction,
-  }],
-  ['memory', {
-    allowedActions: ['search', 'episode_search', 'timeline', 'get'],
-    resolveAction: resolveMaintenanceMemoryAction,
-    allowedTaskKinds: PRIVATE_REFLECTION_TASK_KINDS,
   }],
   ['session', {
     allowedActions: ['list', 'search', 'grep'],
@@ -187,7 +170,7 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isMaintenanceToolRestrictedTaskKind(taskKind: string | null | undefined): boolean {
-  return taskKind === 'heartbeat' || taskKind === 'reflection' || taskKind === 'maintenance';
+  return taskKind === 'heartbeat' || taskKind === 'maintenance';
 }
 
 function isRoutineIntentForAnalysisWorkbench(intent: string | null | undefined): boolean {
@@ -275,16 +258,6 @@ function resolveMaintenanceSessionAction(params: Record<string, unknown>): strin
     default:
       return null;
   }
-}
-
-function resolveMaintenanceMemoryAction(params: Record<string, unknown>): string | null {
-  const rawAction = typeof params.action === 'string' ? params.action.trim() : '';
-  return rawAction === 'search'
-    || rawAction === 'episode_search'
-    || rawAction === 'timeline'
-    || rawAction === 'get'
-    ? rawAction
-    : null;
 }
 
 function resolveMaintenanceSelfStatusAction(params: Record<string, unknown>): string | null {
@@ -1154,7 +1127,8 @@ export class ToolRuntimeFacade {
     intent: string | null | undefined,
     correlation: CorrelationMetadata | null,
   ): ActiveToolResolution {
-    if (!isRoutineIntentForAnalysisWorkbench(intent) || hasAnalysisWorkbenchEligibleInput(message)) {
+    if (taskKind === 'reflection'
+      || !isRoutineIntentForAnalysisWorkbench(intent) || hasAnalysisWorkbenchEligibleInput(message)) {
       return resolution;
     }
 

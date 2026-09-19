@@ -121,6 +121,7 @@ async function primeOwner(
 
   const snapshot = await readTurnTombstoneAuthoritySnapshot({
     channelId: candidate.channelId,
+    ownerSessionId: candidate.sessionId,
     filePaths: candidate.filePaths,
     maxActionBytes: options.limits.maxActionBytes,
     maxActions: options.limits.maxActions,

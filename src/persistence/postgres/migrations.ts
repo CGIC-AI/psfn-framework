@@ -1496,6 +1496,12 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
       'pending', 'queued', 'chosen', 'off', 'ignore', 'defer', 'other',
       'would_send', 'delivered', 'suppressed'
     ));`,
+  `CREATE INDEX IF NOT EXISTS idx_social_outreach_destination_active
+    ON social_impulse_outreach_opportunities (companion_id, destination_id, updated_at_ms DESC, opportunity_id DESC)
+    WHERE state IN ('pending', 'queued', 'chosen');`,
+  `CREATE INDEX IF NOT EXISTS idx_social_outreach_destination_terminal
+    ON social_impulse_outreach_opportunities (companion_id, destination_id, updated_at_ms DESC, opportunity_id DESC)
+    WHERE state NOT IN ('pending', 'queued', 'chosen');`,
 ];
 
 export const POSTGRES_AUDIT_MIGRATIONS = [

@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { assertMemoryListPosition } from './list-position.js';
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
@@ -1225,11 +1226,14 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
     return memories.slice(offset, offset + limit);
   }
 
-  async listActiveMemories(options: MemoryListOptions = {}): Promise<PurrMemory[]> {
+  async listActiveMemories(options: import('./memory-store-port.js').ActiveMemoryListOptions = {}): Promise<PurrMemory[]> {
+    const before = options.before === undefined ? undefined : assertMemoryListPosition(options.before);
     const limit = clampLimit(options.limit, 50, 1, 500);
     const offset = clampLimit(options.offset, 0, 0, 100_000);
     return Array.from(this.memories.values())
       .filter(memory => !memory.supersededBy && !memory.deletedAt)
+      .filter(memory => before === undefined || memory.extractedAt < before.extractedAt
+        || (memory.extractedAt === before.extractedAt && memory.id.localeCompare(before.memoryId) < 0))
       .sort((left, right) => right.extractedAt - left.extractedAt || right.id.localeCompare(left.id))
       .slice(offset, offset + limit);
   }

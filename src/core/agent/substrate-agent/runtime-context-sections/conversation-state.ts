@@ -299,7 +299,7 @@ export function buildConversationStatePromptVariables(input: {
     name: currentAuthorName,
     id: currentAuthorId,
     trust: input.trustLevel,
-    relationship: input.relationshipType ?? '',
+    relationship_to_companion: input.relationshipType ?? '',
     timezone: currentProfile?.timezone ?? '',
     local_time: currentProfile?.local_time ?? '',
     ...(chatType === 'group' ? relationshipActivityAttributes(currentProfile, input.now) : {}),

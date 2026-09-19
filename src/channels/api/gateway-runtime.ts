@@ -50,7 +50,7 @@ export class GatewayApiRuntime implements ApiServerRuntime {
       'requestAgent' | 'requestCompanionAgent' | 'subscribeApiStream'
     > & Partial<Pick<
       GatewayServer,
-      'requestSharedSatelliteChatCompletion' | 'cancelSharedSatelliteChatCompletion'
+      'requestSharedSatelliteChatCompletion' | 'cancelSharedSatelliteChatCompletion' | 'isApiReady'
     >>,
     options: GatewayApiRuntimeOptions = {},
   ) {
@@ -59,6 +59,10 @@ export class GatewayApiRuntime implements ApiServerRuntime {
       options.chatRequestTimeoutMs,
       DEFAULT_GATEWAY_CHAT_REQUEST_TIMEOUT_MS,
     );
+  }
+
+  isReady(): boolean {
+    return this.gateway.isApiReady?.() === true;
   }
 
   async handleHealth(): Promise<ApiHealthRpcResult> {

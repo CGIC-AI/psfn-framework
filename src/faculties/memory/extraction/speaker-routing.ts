@@ -10,7 +10,7 @@ import { isExtractionTranscriptEntry } from './chunk-compose.js';
 import {
   hasSpeakerWord,
   normalizeSpeakerPhrase,
-  resolveStrictGroupSubject,
+  resolveCanonicalFactSubject,
   validateStrictGroupAddressing,
 } from './strict-group-routing.js';
 import {
@@ -311,20 +311,17 @@ function resolveStructuredFactRouting(
     };
   }
 
-  const strictSubject = options.requireStructuredAddressing
-    ? resolveStrictGroupSubject(attribution, context.speakers)
-    : null;
-  if (strictSubject?.status === 'skip') {
+  const canonicalSubject = resolveCanonicalFactSubject(attribution, context.speakers);
+  if (canonicalSubject.status === 'skip') {
     return {
       status: 'skip',
-      reason: strictSubject.reason,
+      reason: canonicalSubject.reason,
       sourceSpeakerName: sourceSpeaker.name,
     };
   }
-  const subject = strictSubject?.speaker
-    ?? resolveSubjectSpeaker(attribution, context.speakers);
+  const subject = canonicalSubject.speaker;
   const roomContextScope = resolveRoomContextScope(attribution, context.entries);
-  const subjectContactId = attribution.subjectContactId ?? subject?.contactId;
+  const subjectContactId = subject?.contactId;
   // A named subject whose contact could not be resolved — either no matching
   // speaker, or a name-matched speaker that still lacks a contactId — must not
   // fall back to the source speaker's contact, or the subject's fact would be
@@ -514,20 +511,6 @@ function resolveSourceSpeakers(
   return [...sourceKeys]
     .map(key => speakersByKey.get(key))
     .filter((speaker): speaker is TranscriptSpeaker => Boolean(speaker));
-}
-
-function resolveSubjectSpeaker(
-  attribution: ExtractedFactAttribution,
-  speakers: readonly TranscriptSpeaker[],
-): TranscriptSpeaker | undefined {
-  if (attribution.subjectContactId) {
-    return speakers.find(speaker => speaker.contactId === attribution.subjectContactId);
-  }
-  if (!attribution.subjectName) return undefined;
-  const normalizedSubject = normalizeSpeakerPhrase(attribution.subjectName);
-  if (!normalizedSubject) return undefined;
-  const matches = speakers.filter(speaker => speaker.normalizedName === normalizedSubject);
-  return matches.length === 1 ? matches[0] : undefined;
 }
 
 function collectTranscriptSpeakers(entries: readonly SessionEntry[]): TranscriptSpeaker[] {

@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, renameSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { createComponentLogger } from '../../../shared/logger.js';
+import { shouldPersistSessionChannel } from '../../../core/session/session-channel-persistence.js';
 import {
   journalToSessionEntry,
   journalToTurnTombstoneEntry,
@@ -55,7 +56,7 @@ export {
 const log = createComponentLogger('SessionStore');
 const DEFAULT_MESSAGE_PREVIEW_CHARS = 120;
 
-function toMessagePreview(content: string, maxChars = DEFAULT_MESSAGE_PREVIEW_CHARS): string {
+export function toMessagePreview(content: string, maxChars = DEFAULT_MESSAGE_PREVIEW_CHARS): string {
   const normalized = content.replace(/\s+/g, ' ').trim();
   if (normalized.length <= maxChars) {
     return normalized;
@@ -675,6 +676,9 @@ export function primeChannelIndexFromDisk(params: {
   );
   for (const [sessionId, entry] of [...params.channelIndex.entries()]) {
     const expected = expectedByFilename.get(entry.filename);
+    // A scratch owner index proves prior journal authority even if its file is missing.
+    // Preserve that evidence across restarts instead of admitting it as journal-free.
+    if (!expected && !shouldPersistSessionChannel(indexedChannelId(sessionId, entry))) continue;
     const filenamesMatch = expected
       && entry.filenames.length === expected.filenames.length
       && entry.filenames.every((filename, index) => filename === expected.filenames[index]);

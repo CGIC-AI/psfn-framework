@@ -1,3 +1,4 @@
+import type { JournalAddressingMigration } from '../message-addressing-journal-policy.js';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { backfillLegacyTurnId } from '../../../core/turns/id.js';
@@ -491,6 +492,7 @@ export function rewriteJournalArchiveChain(
   archives: readonly SessionArchiveHandle[],
   entriesByArchive: readonly (readonly JournalEntry[])[],
   renewLease?: () => void,
+  addressingMigration?: JournalAddressingMigration,
 ): JournalEntry[][] {
   if (archives.length !== entriesByArchive.length) {
     throw new Error('L0 session rewrite requires one journal entry set per archive');
@@ -512,7 +514,7 @@ export function rewriteJournalArchiveChain(
     }
     rewrittenByArchive.push(rewritten);
   }
-  archivePort.rewriteJournalChain(archives, rewrittenByArchive, renewLease);
+  archivePort.rewriteJournalChain(archives, rewrittenByArchive, renewLease, undefined, addressingMigration);
   return rewrittenByArchive;
 }
 

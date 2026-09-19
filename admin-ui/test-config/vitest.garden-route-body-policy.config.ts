@@ -10,6 +10,7 @@ export default defineConfig({
     environment: 'node',
     include: [
       'admin-ui/src/lib/api/endpoints/body-policy-conformance.test.ts',
+      'admin-ui/src/lib/api/endpoints/query-policy-conformance.test.ts',
     ],
     testTimeout: 10_000,
   },

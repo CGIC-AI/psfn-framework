@@ -1,6 +1,8 @@
 const INTERNAL_REFLECTION_CHANNEL_PREFIX = 'internal:reflection:';
+export const SOCIAL_OUTREACH_REFLECTION_CHANNEL_ID = 'internal:reflection:social-outreach';
 
-/** Internal reflection channels are ephemeral and never persist to session stores. */
+/** Social outreach retains deliberation history; other reflection channels are scratch sessions. */
 export function shouldPersistSessionChannel(channelId: string): boolean {
-  return !channelId.startsWith(INTERNAL_REFLECTION_CHANNEL_PREFIX);
+  return channelId === SOCIAL_OUTREACH_REFLECTION_CHANNEL_ID
+    || !channelId.startsWith(INTERNAL_REFLECTION_CHANNEL_PREFIX);
 }

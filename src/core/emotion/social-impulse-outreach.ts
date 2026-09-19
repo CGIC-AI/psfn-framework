@@ -99,8 +99,20 @@ export interface SocialImpulseOutreachStorePort {
     record: SocialImpulseOutreachRecord;
   }>;
   getOpportunity(opportunityId: string): Promise<SocialImpulseOutreachRecord | null>;
+  /** At most one active and one terminal record for this exact companion/destination. */
+  getDestinationStatus(companionId: string, destinationId: string): Promise<{
+    pending: SocialImpulseOutreachRecord | null;
+    latestTerminal: SocialImpulseOutreachRecord | null;
+  }>;
   listRecoverable(companionId: string): Promise<SocialImpulseOutreachRecord[]>;
   beginExecution(opportunityId: string, bindingHash: string, atMs: number): Promise<boolean>;
+  /** Release only a claimed execution proven not to have sent anything. */
+  deferExecution(input: {
+    opportunityId: string;
+    bindingHash: string;
+    reasonCode: string;
+    deferredAtMs: number;
+  }): Promise<SocialImpulseOutreachRecord>;
   claimDisposition(input: {
     opportunityId: string;
     disposition: SocialImpulseDisposition;
@@ -131,12 +143,14 @@ interface SocialImpulseDispositionOpportunity {
 
 type SocialImpulseOutreachExecutionResult =
   | { outcome: 'delivered' }
+  | { outcome: 'rescheduled'; reasonCode: string; rescheduleAt: number }
   | { outcome: 'suppressed'; reasonCode: string };
 
 type SocialImpulseChoiceResult = {
   outcome: Exclude<SocialImpulseOutreachState, 'pending' | 'chosen' | 'off'>;
   record: SocialImpulseOutreachRecord;
   reasonCode?: string;
+  rescheduleAt?: number;
 };
 
 export interface SocialImpulseOutreachRuntime {
@@ -248,6 +262,17 @@ export function createSocialImpulseOutreachRuntime(
         destinationKind: record.destination!.kind,
       });
       execution = { outcome: 'suppressed', reasonCode: 'destination_execution_failed' };
+    }
+    if (execution.outcome === 'rescheduled') {
+      const deferredAtMs = now();
+      if (!Number.isSafeInteger(execution.rescheduleAt) || execution.rescheduleAt <= deferredAtMs) {
+        throw new Error('Social outreach deferral requires an exact future execution time');
+      }
+      const deferred = await options.store.deferExecution({
+        opportunityId: record.opportunityId, bindingHash,
+        reasonCode: execution.reasonCode, deferredAtMs,
+      });
+      return { outcome: 'queued', record: deferred, reasonCode: execution.reasonCode, rescheduleAt: execution.rescheduleAt };
     }
     const reasonCode = execution.outcome === 'suppressed' ? execution.reasonCode : undefined;
     const finalized = await finalize(record.opportunityId, bindingHash, execution.outcome, reasonCode);

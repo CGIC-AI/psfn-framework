@@ -1,4 +1,5 @@
 import type { Pool } from 'pg';
+import { assertMemoryListPosition } from '../list-position.js';
 import {
   parseMemorySubjectClassification,
   type MemorySubjectClassification,
@@ -153,6 +154,11 @@ function buildSelector(
   }
   switch (selector.kind) {
     case 'list':
+      if (selector.before !== undefined) {
+        const before = assertMemoryListPosition(selector.before);
+        values.push(before.extractedAt, before.memoryId);
+        where.push(`(memory.extracted_at, memory.id) < ($${values.length - 1}, $${values.length})`);
+      }
       limit = clampLimit(selector.limit, 50, 1, 500);
       offset = clampLimit(selector.offset, 0, 0, 100_000);
       break;

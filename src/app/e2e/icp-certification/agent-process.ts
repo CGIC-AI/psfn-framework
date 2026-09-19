@@ -404,6 +404,7 @@ async function main(): Promise<void> {
   socialImpulseOutreachRuntime = registerSocialImpulseOutreachLane({
     companionId,
     companionName: identity.card.data.name,
+    quietHours: startup.schedulerConfig.episodicProcessing,
     companionDataDir: startup.pathSnapshot.companionDataDir,
     store: persistence.socialImpulseOutreachStore,
     getMode: () => 'on',

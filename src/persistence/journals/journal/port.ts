@@ -1,3 +1,4 @@
+import type { JournalAddressingMigration } from '../../sessions/message-addressing-journal-policy.js';
 import { mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { JournalEntry } from '../../../core/session/types.js';
@@ -104,6 +105,7 @@ export interface SessionArchivePort {
     entriesByHandle: readonly (readonly JournalEntry[])[],
     renewLease?: () => void,
     onMalformedRowQuarantine?: MalformedRowQuarantineHook,
+    addressingMigration?: JournalAddressingMigration,
   ): void;
   assertJournalChainReadable(handles: readonly SessionArchiveHandle[]): void;
   listPendingJournalChainRewriteRoots(sessionsDir: string): string[];
@@ -176,7 +178,7 @@ export function createFilesystemSessionArchivePort(
     writeJournalFile: (handle, entries) => (
       journalPort.writeJournalFile(requireFilesystemHandle(handle).filePath, entries)
     ),
-    rewriteJournalChain: (handles, entriesByHandle, renewLease, onMalformedRowQuarantine) => {
+    rewriteJournalChain: (handles, entriesByHandle, renewLease, onMalformedRowQuarantine, addressingMigration) => {
       const targetPaths = handles.map(handle => requireFilesystemHandle(handle).filePath);
       rewriteJournalChainTransaction({
         targetPaths,
@@ -184,6 +186,7 @@ export function createFilesystemSessionArchivePort(
         writeEntries: journalPort.writeJournalFile,
         renewLease,
         ...(onMalformedRowQuarantine ? { onMalformedRowQuarantine } : {}),
+        ...(addressingMigration ? { addressingMigration } : {}),
       });
     },
     assertJournalChainReadable: (handles) => {

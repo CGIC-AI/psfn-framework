@@ -160,7 +160,33 @@ describe('parent-turn continuation fuse', () => {
     });
   });
 
-  it('stops repeated prompt entry even when every tool returns promptly', async () => {
+  it.each([
+    { channelId: 'internal:reflection:daily-review', requesterProvenance: 'self_directed' as const, requestAudience: 'self' as const, allowed: true },
+    { channelId: 'internal:reflection:daily-review', requesterProvenance: 'human' as const, requestAudience: 'self' as const, allowed: false },
+    { channelId: 'api:external', requesterProvenance: 'self_directed' as const, requestAudience: 'self' as const, allowed: false },
+    { channelId: 'internal:reflection:daily-review', requesterProvenance: 'self_directed' as const, requestAudience: 'external' as const, allowed: false },
+  ])('lets private reflection finish past the foreground wall-clock fuse: %j', async ({ allowed, ...context }) => {
+    const finalMessage = assistantMessage([{ type: 'text', text: 'reflection completed' }], 'stop');
+    const agent = new Agent({
+      initialState: { model: createModel() },
+      streamFn: (async () => ({
+        async *[Symbol.asyncIterator]() {
+          await new Promise(resolve => setTimeout(resolve, 30));
+          yield { type: 'start', partial: structuredClone(finalMessage) };
+          yield { type: 'done' };
+        },
+        result: async () => structuredClone(finalMessage),
+      })) as never,
+    });
+    installAgentToolSchedulerPatch(agent, { maxParallelToolCalls: 1 }, undefined, {
+      maxWallTimeMs: 10, maxPromptEntries: 3,
+    });
+    const result = runWithRequestContext(context, () => agent.prompt(userMessage('private reflection')));
+    if (allowed) await expect(result).resolves.toBeUndefined();
+    else await expect(result).rejects.toMatchObject({ stop: { reason: 'wall_clock_limit' } });
+  });
+
+  it.each([false, true])('stops repeated prompt entry even when every tool returns promptly (private reflection: %s)', async privateReflection => {
     let providerCall = 0;
     const streamFn = vi.fn(async () => {
       providerCall += 1;
@@ -214,7 +240,10 @@ describe('parent-turn continuation fuse', () => {
       { maxWallTimeMs: 5_000, maxPromptEntries: 3 },
     );
 
-    await expect(agent.prompt(userMessage('keep going forever'))).rejects.toMatchObject({
+    const result = privateReflection
+      ? runWithRequestContext({ channelId: 'internal:reflection:daily-review', requesterProvenance: 'self_directed', requestAudience: 'self' }, () => agent.prompt(userMessage('keep going forever')))
+      : agent.prompt(userMessage('keep going forever'));
+    await expect(result).rejects.toMatchObject({
       stop: {
         reason: 'prompt_entry_limit',
         promptEntries: 3,

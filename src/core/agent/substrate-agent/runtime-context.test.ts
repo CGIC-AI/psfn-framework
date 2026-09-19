@@ -2000,7 +2000,7 @@ describe('runtime subject identity', () => {
     expect(variables.runtime_current_message_author_trust_level).toBe('trusted');
     expect(variables.runtime_current_message_author_relationship).toBe('friend');
     expect(variables.runtime_current_message_author_xml).toBe(
-      '<current_message_author name="Morgan &quot;Pilot&quot;" id="discord:u-current" trust="trusted" relationship="friend" timezone="America/Chicago" local_time="8:30 AM" />',
+      '<current_message_author name="Morgan &quot;Pilot&quot;" id="discord:u-current" trust="trusted" relationship_to_companion="friend" timezone="America/Chicago" local_time="8:30 AM" />',
     );
     expect(variables.runtime_recent_active_participants_count).toBe('5');
     expect(variables.runtime_recent_active_participants_xml.match(/<participant\b/gu)).toHaveLength(5);
@@ -2025,7 +2025,7 @@ describe('runtime subject identity', () => {
     expect(rendered).toContain('<conversation_state>');
     expect(rendered).toContain('<chat_type>group</chat_type>');
     expect(rendered).toContain('<channel_id>discord:group:ops</channel_id>');
-    expect(rendered).toContain('<current_message_author name="Morgan &quot;Pilot&quot;" id="discord:u-current" trust="trusted" relationship="friend" timezone="America/Chicago" local_time="8:30 AM" />');
+    expect(rendered).toContain('<current_message_author name="Morgan &quot;Pilot&quot;" id="discord:u-current" trust="trusted" relationship_to_companion="friend" timezone="America/Chicago" local_time="8:30 AM" />');
     expect(rendered).toContain('<recent_active_participants max="5">');
   });
 

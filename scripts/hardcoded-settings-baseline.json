@@ -177,21 +177,21 @@
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidate.limit@L1054",
+      "name": "main.candidate.limit@L1055",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidate.limit; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidate.limit@L1090",
+      "name": "main.candidate.limit@L1091",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidate.limit; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidate.limit@L1130",
+      "name": "main.candidate.limit@L1131",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidate.limit; code-owned only for harness behavior and not used as an unowned production setting."
@@ -205,28 +205,28 @@
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidateIdsBefore.limit@L1039",
+      "name": "main.candidateIdsBefore.limit@L1040",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidateIdsBefore.limit; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidateIdsBefore.limit@L1071",
+      "name": "main.candidateIdsBefore.limit@L1072",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidateIdsBefore.limit; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidateIdsBefore.limit@L1111",
+      "name": "main.candidateIdsBefore.limit@L1112",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidateIdsBefore.limit; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidateIdsBefore.limit@L637",
+      "name": "main.candidateIdsBefore.limit@L638",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidateIdsBefore.limit; code-owned only for harness behavior and not used as an unowned production setting."
@@ -478,6 +478,13 @@
       "name": "MIN_PEPPER_LENGTH",
       "value": "32",
       "note": "Code-owned safety floor: minimum byte length of HUB_DEVICE_ASSERTION_AUDIT_PEPPER (n66dn.2); a shorter audit pepper weakens assertion digest unlinkability and must never be operator-tunable downward."
+    },
+    {
+      "file": "src/app/maintenance/migrate-journal-message-addressing.ts",
+      "name": "runJournalAddressingMigrationCli.tailCache.maxEntriesPerChannel",
+      "value": "1",
+      "form": "object-member",
+      "note": "Code-owned constructor placeholder for the offline migration's invalidation-only Redis adapter (psfn-framework-tcoea). No tail reads or writes populate this cache; one satisfies the adapter's positive-capacity invariant without introducing a runtime tuning policy."
     },
     {
       "file": "src/app/maintenance/owner-upgrade-readiness-probe.ts",
@@ -5123,87 +5130,87 @@
     },
     {
       "file": "src/core/scheduler/reflection-policy.ts",
-      "name": "getDefaults.templates.deliberation.maxRounds@L511",
+      "name": "getDefaults.templates.deliberation.maxRounds@L513",
       "value": "3",
       "form": "object-member",
-      "note": "Existing mutable policy candidate getDefaults.templates.deliberation.maxRounds@L511; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate getDefaults.templates.deliberation.maxRounds@L513; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/scheduler/reflection-policy.ts",
-      "name": "getDefaults.templates.deliberation.maxRounds@L527",
+      "name": "getDefaults.templates.deliberation.maxRounds@L529",
       "value": "3",
       "form": "object-member",
-      "note": "Existing mutable policy candidate getDefaults.templates.deliberation.maxRounds@L527; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate getDefaults.templates.deliberation.maxRounds@L529; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/scheduler/reflection-policy.ts",
-      "name": "getDefaults.templates.deliberation.maxRounds@L550",
+      "name": "getDefaults.templates.deliberation.maxRounds@L552",
       "value": "3",
       "form": "object-member",
-      "note": "Existing mutable policy candidate getDefaults.templates.deliberation.maxRounds@L550; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate getDefaults.templates.deliberation.maxRounds@L552; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/scheduler/reflection-policy.ts",
-      "name": "getDefaults.templates.deliberation.maxTotalTokens@L512",
+      "name": "getDefaults.templates.deliberation.maxTotalTokens@L514",
       "value": "10_000",
       "form": "object-member",
-      "note": "Existing mutable policy candidate getDefaults.templates.deliberation.maxTotalTokens@L512; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate getDefaults.templates.deliberation.maxTotalTokens@L514; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/scheduler/reflection-policy.ts",
-      "name": "getDefaults.templates.deliberation.maxTotalTokens@L528",
+      "name": "getDefaults.templates.deliberation.maxTotalTokens@L530",
       "value": "14_000",
       "form": "object-member",
-      "note": "Existing mutable policy candidate getDefaults.templates.deliberation.maxTotalTokens@L528; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate getDefaults.templates.deliberation.maxTotalTokens@L530; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/scheduler/reflection-policy.ts",
-      "name": "getDefaults.templates.deliberation.maxTotalTokens@L551",
+      "name": "getDefaults.templates.deliberation.maxTotalTokens@L553",
       "value": "10_000",
       "form": "object-member",
-      "note": "Existing mutable policy candidate getDefaults.templates.deliberation.maxTotalTokens@L551; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate getDefaults.templates.deliberation.maxTotalTokens@L553; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/scheduler/reflection-policy.ts",
-      "name": "getDefaults.templates.deliberation.maxWallTimeMs@L513",
+      "name": "getDefaults.templates.deliberation.maxWallTimeMs@L515",
       "value": "60_000",
       "form": "object-member",
-      "note": "Existing mutable policy candidate getDefaults.templates.deliberation.maxWallTimeMs@L513; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate getDefaults.templates.deliberation.maxWallTimeMs@L515; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/scheduler/reflection-policy.ts",
-      "name": "getDefaults.templates.deliberation.maxWallTimeMs@L529",
+      "name": "getDefaults.templates.deliberation.maxWallTimeMs@L531",
       "value": "90_000",
       "form": "object-member",
-      "note": "Existing mutable policy candidate getDefaults.templates.deliberation.maxWallTimeMs@L529; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate getDefaults.templates.deliberation.maxWallTimeMs@L531; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/scheduler/reflection-policy.ts",
-      "name": "getDefaults.templates.deliberation.maxWallTimeMs@L552",
+      "name": "getDefaults.templates.deliberation.maxWallTimeMs@L554",
       "value": "60_000",
       "form": "object-member",
-      "note": "Existing mutable policy candidate getDefaults.templates.deliberation.maxWallTimeMs@L552; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate getDefaults.templates.deliberation.maxWallTimeMs@L554; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/scheduler/reflection-policy.ts",
-      "name": "getDefaults.templates.intervalMs@L505",
+      "name": "getDefaults.templates.intervalMs@L507",
       "value": "24 * 60 * 60_000",
       "form": "object-member",
-      "note": "Existing mutable policy candidate getDefaults.templates.intervalMs@L505; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate getDefaults.templates.intervalMs@L507; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/scheduler/reflection-policy.ts",
-      "name": "getDefaults.templates.intervalMs@L521",
+      "name": "getDefaults.templates.intervalMs@L523",
       "value": "7 * 24 * 60 * 60_000",
       "form": "object-member",
-      "note": "Existing mutable policy candidate getDefaults.templates.intervalMs@L521; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate getDefaults.templates.intervalMs@L523; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/scheduler/reflection-policy.ts",
-      "name": "getDefaults.templates.intervalMs@L537",
+      "name": "getDefaults.templates.intervalMs@L539",
       "value": "24 * 60 * 60_000",
       "form": "object-member",
-      "note": "Existing mutable policy candidate getDefaults.templates.intervalMs@L537; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate getDefaults.templates.intervalMs@L539; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/scheduler/reflection-policy.ts",
@@ -7097,6 +7104,13 @@
       "value": "20",
       "form": "object-member",
       "note": "Existing mutable policy candidate IntrospectionValuesConsistencyRuntime.runOnce.claimedValues.limit; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+    },
+    {
+      "file": "src/faculties/memory/biographical/authorized-sources.ts",
+      "name": "collectAuthorizedBiographicalSources.hasMore.limit",
+      "value": "1",
+      "form": "object-member",
+      "note": "Code-owned existence probe: one authorized row proves whether a bounded source scan has a following page; no evidence from this sentinel reaches synthesis."
     },
     {
       "file": "src/faculties/memory/boundary-log.ts",

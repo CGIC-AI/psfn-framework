@@ -562,7 +562,7 @@ emosim:
     # The tag carries the pin-verified emo_sim commit so the running engine
     # is auditable against EXPECTED_EMOSIM_SHA.
     repository: localhost/psfn-emosim
-    tag: 0.1.0-emosim-854ce6a7
+    tag: 0.1.0-emosim-85cbf120
     digest: ""
     pullPolicy: IfNotPresent
   # Extra server flags appended after the image entrypoint, e.g.

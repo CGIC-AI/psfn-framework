@@ -60,9 +60,15 @@ function makeAgent(input: {
   updatedAtMs: number;
   entries: ReturnType<typeof makeEntries>;
   events: DeterministicGateEvent[];
-}): { agent: SleeptimeMemoryAgent; reviewAgent: ReturnType<typeof makeReviewAgent>; rethink: ReturnType<typeof vi.fn> } {
+}): {
+  agent: SleeptimeMemoryAgent;
+  reviewAgent: ReturnType<typeof makeReviewAgent>;
+  rethink: ReturnType<typeof vi.fn>;
+  listRecentlyResolvedConcerns: ReturnType<typeof vi.fn>;
+} {
   const reviewAgent = makeReviewAgent();
   const rethink = vi.fn();
+  const listRecentlyResolvedConcerns = vi.fn().mockResolvedValue([]);
   const workItem = {
     purpose: 'sleeptime_consolidation' as const,
     logicalSessionId: 'terminal:test',
@@ -79,7 +85,7 @@ function makeAgent(input: {
     episodicStore: { searchByTime: vi.fn().mockResolvedValue([]) },
     sessionManager: {
       resolveSessionChannelId: vi.fn((channelId: string) => channelId),
-      getRecentMessages: vi.fn().mockReturnValue(input.entries),
+      getRecentMessagesAtOrBefore: vi.fn().mockReturnValue(input.entries),
     },
     conversationalActivityWorkset: fromAny({
       enumerate: vi.fn(async () => [workItem]),
@@ -93,6 +99,7 @@ function makeAgent(input: {
       getSnapshot: vi.fn().mockReturnValue(makeSnapshot(input.updatedAtMs)),
       rethink,
     },
+    resolvedConcernStore: { listRecentlyResolvedConcerns },
     memoryWriter: { write: vi.fn().mockResolvedValue({ action: 'created' }) },
     sleepConsolidator: { run: vi.fn() },
     arcWeaver: { run: vi.fn() },
@@ -103,7 +110,7 @@ function makeAgent(input: {
     onGateEvent: (event) => input.events.push(event),
     now: () => NOW_MS,
   };
-  return { agent: new SleeptimeMemoryAgent(options), reviewAgent, rethink };
+  return { agent: new SleeptimeMemoryAgent(options), reviewAgent, rethink, listRecentlyResolvedConcerns };
 }
 
 function makeAction() {
@@ -123,16 +130,19 @@ describe('SleeptimeMemoryAgent orientation-rewrite gate (jpvd.4)', () => {
     const events: DeterministicGateEvent[] = [];
     // Rewritten yesterday, only 2 new turns since => below the 4-turn minimum
     // and not stale (1 day < 7) => gate closed.
-    const { agent, reviewAgent, rethink } = makeAgent({
+    const { agent, reviewAgent, rethink, listRecentlyResolvedConcerns } = makeAgent({
       updatedAtMs: NOW_MS - DAY_MS,
       entries: makeEntries(2, NOW_MS - 60_000),
       events,
     });
 
-    await agent.execute(makeAction());
+    await expect(agent.execute(makeAction())).resolves.toMatchObject({
+      outcome: 'complete', completedSessions: 1,
+    });
 
     expect(reviewAgent.handleMessage).not.toHaveBeenCalled();
     expect(rethink).not.toHaveBeenCalled();
+    expect(listRecentlyResolvedConcerns).not.toHaveBeenCalled();
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       lane: 'orientation_rewrite',
@@ -145,16 +155,19 @@ describe('SleeptimeMemoryAgent orientation-rewrite gate (jpvd.4)', () => {
 
   it('runs the orient rewrite when enough new turns accumulated since the last rewrite', async () => {
     const events: DeterministicGateEvent[] = [];
-    const { agent, reviewAgent, rethink } = makeAgent({
+    const { agent, reviewAgent, rethink, listRecentlyResolvedConcerns } = makeAgent({
       updatedAtMs: NOW_MS - DAY_MS,
       entries: makeEntries(5, NOW_MS - 60_000),
       events,
     });
 
-    await agent.execute(makeAction());
+    await expect(agent.execute(makeAction())).resolves.toMatchObject({
+      outcome: 'complete', completedSessions: 1,
+    });
 
     expect(reviewAgent.handleMessage).toHaveBeenCalledOnce();
     expect(rethink).toHaveBeenCalledOnce();
+    expect(listRecentlyResolvedConcerns).toHaveBeenCalledOnce();
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       lane: 'orientation_rewrite',
@@ -166,15 +179,18 @@ describe('SleeptimeMemoryAgent orientation-rewrite gate (jpvd.4)', () => {
   it('re-opens on any activity once the last rewrite is stale beyond the quiet-day floor', async () => {
     const events: DeterministicGateEvent[] = [];
     // Only 1 new turn (below the 4 minimum) but the last rewrite is 30 days old.
-    const { agent, reviewAgent } = makeAgent({
+    const { agent, reviewAgent, listRecentlyResolvedConcerns } = makeAgent({
       updatedAtMs: NOW_MS - 30 * DAY_MS,
       entries: makeEntries(1, NOW_MS - 60_000),
       events,
     });
 
-    await agent.execute(makeAction());
+    await expect(agent.execute(makeAction())).resolves.toMatchObject({
+      outcome: 'complete', completedSessions: 1,
+    });
 
     expect(reviewAgent.handleMessage).toHaveBeenCalledOnce();
+    expect(listRecentlyResolvedConcerns).toHaveBeenCalledOnce();
     expect(events[0].outcome).toBe('ran');
   });
 });

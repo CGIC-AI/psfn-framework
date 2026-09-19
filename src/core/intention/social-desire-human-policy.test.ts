@@ -78,10 +78,7 @@ describe('social desire human delivery policy', () => {
     });
   });
 
-  it.each([
-    ['missing', undefined],
-    ['invalid', 'Not/A_Timezone'],
-  ])('blocks when the recipient timezone is %s during enabled quiet hours', async (_case, timezone) => {
+  it.each(['', 'Not/A_Timezone'])('blocks an explicitly invalid recipient timezone: %j', async timezone => {
     const policy = createSocialDesireHumanDeliveryPolicy({
       contacts: { getById: () => contact({ timezone }) },
       approvedHeartbeatChannel: { channelId: 'discord:primary', channelType: 'discord' },
@@ -103,5 +100,33 @@ describe('social desire human delivery policy', () => {
       allowed: false,
       reason: 'social_desire_recipient_timezone_unavailable',
     });
+  });
+
+  it.each([
+    ['2026-07-20T16:00:00.000Z', { allowed: true }],
+    ['2026-07-20T06:30:00.000Z', {
+      allowed: false,
+      reason: 'quiet_hours',
+      rescheduleAt: Date.parse('2026-07-20T11:00:00.000Z'),
+    }],
+  ])('uses configured quiet hours for a contact without a timezone at %s', async (now, expected) => {
+    const policy = createSocialDesireHumanDeliveryPolicy({
+      contacts: { getById: () => contact({ timezone: undefined }) },
+      approvedHeartbeatChannel: { channelId: 'discord:primary', channelType: 'discord' },
+      quietHours: {
+        enabled: true,
+        startLocalTime: '22:00',
+        endLocalTime: '07:00',
+        timeZone: 'America/New_York',
+        inactivityThresholdMinutes: 60,
+      },
+    });
+
+    await expect(policy.evaluate({
+      contactId: 'contact-primary',
+      channelId: 'discord:primary',
+      channelType: 'discord',
+      nowMs: Date.parse(now),
+    })).resolves.toEqual(expected);
   });
 });

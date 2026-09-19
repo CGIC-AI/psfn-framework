@@ -27,7 +27,7 @@ describe('ReflectionPolicyStore', () => {
   it('creates defaults when file does not exist', () => {
     const policy = store.load();
     expect(policy.templates).toHaveLength(3);
-    expect(policy.version).toBe(9);
+    expect(policy.version).toBe(10);
     expect(policy.updatedBy).toBe('system');
 
     const ids = policy.templates.map(t => t.id);
@@ -154,7 +154,7 @@ describe('ReflectionPolicyStore', () => {
     const loaded = store.load();
     const daily = loaded.templates.find(t => t.id === 'daily-review');
     const weekly = loaded.templates.find(t => t.id === 'weekly-review');
-    expect(loaded.version).toBe(9);
+    expect(loaded.version).toBe(10);
     expect(daily?.enabled).toBe(false);
     expect(daily?.cadence).toEqual({ kind: 'daily', hour: 7, minute: 0, timezone: 'local' });
     expect(daily?.prompt).toContain('quiet look back at the day');
@@ -183,7 +183,7 @@ describe('ReflectionPolicyStore', () => {
     });
 
     const loaded = store.load();
-    expect(loaded.version).toBe(9);
+    expect(loaded.version).toBe(10);
     const daily = loaded.templates.find(t => t.id === 'daily-review');
     expect(daily?.prompt).toContain('I ask openly');
     expect(daily?.prompt).toContain('a real, limited-reach result');
@@ -208,7 +208,7 @@ describe('ReflectionPolicyStore', () => {
     const loaded = store.load();
     const weekly = loaded.templates.find(t => t.id === 'weekly-review');
 
-    expect(loaded.version).toBe(9);
+    expect(loaded.version).toBe(10);
     expect(weekly?.name).toBe('Weekly Reflection');
     expect(weekly?.cadence).toEqual({
       kind: 'weekly',
@@ -486,7 +486,7 @@ describe('ReflectionPolicyStore', () => {
 
     const loaded = store.load();
     expect(loaded.templates.some(t => t.id === 'mixed-state-review')).toBe(true);
-    expect(loaded.version).toBe(9);
+    expect(loaded.version).toBe(10);
     // Persisted, not just in-memory.
     const persisted = JSON.parse(readFileSync(policyPath, 'utf-8')) as { templates: ReflectionTemplate[] };
     expect(persisted.templates.some(t => t.id === 'mixed-state-review')).toBe(true);
@@ -528,6 +528,8 @@ describe('ReflectionPolicyStore', () => {
 
     const loaded = store.load();
     expect(loaded.templates.some(t => t.id === 'mixed-state-review')).toBe(false);
+    expect(loaded.templates.find(t => t.id === 'daily-review')?.prompt).toContain('full set of tools');
+    expect(loaded.version).toBe(10);
   });
 
   it('removes legacy whisper defaults during consolidation', () => {

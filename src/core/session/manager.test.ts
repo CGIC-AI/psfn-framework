@@ -1632,17 +1632,73 @@ describe('SessionManager', () => {
     });
   });
 
-  it('does not persist internal reflection channels to session journals', () => {
+  it.each([
+    'internal:reflection:whisper',
+    'internal:reflection:daily',
+    'internal:reflection:weekly',
+    'internal:reflection:social-outreach-extra',
+    'internal:reflection:social-outreach:child',
+  ])('does not persist scratch reflection channel %s to session journals', reflectionChannel => {
     const config = makeConfig();
     const mgr = new SessionManager(store, config);
-    const reflectionChannel = 'internal:reflection:whisper';
 
     mgr.recordUserMessage(reflectionChannel, 'Reflect on today', 'scheduler', 'Scheduler');
+    mgr.recordSystemMessage(reflectionChannel, 'Scheduled reflection stimulus', 'system:reflection', 'Reflection');
     mgr.recordAssistantMessage(reflectionChannel, 'Reflection output');
     mgr.appendSystemNote(reflectionChannel, 'Deliberation metadata');
 
     expect(store.count(reflectionChannel)).toBe(0);
     expect(store.listChannels().some(channel => channel.channelId === reflectionChannel)).toBe(false);
+  });
+
+  it('retains social outreach stimuli and dispositions under their internal owner after reopening', async () => {
+    const channelId = 'internal:reflection:social-outreach';
+    const mgr = new SessionManager(store, makeConfig());
+    mgr.setActiveContextSession('api:unrelated-active-session');
+    const owner = { logicalSessionId: channelId, sourceChannelId: channelId };
+    const sessionReads = mgr.createCapturedSessionReads(owner);
+    const turns = [
+      { input: 'Review the next opportunity to reach out.', reply: 'Wait until the planned visit.' },
+      { input: 'Review outreach again after the visit.', reply: 'Send a short follow-up tomorrow.' },
+    ];
+
+    sessionReads.run(() => {
+      for (const turn of turns) {
+        const turnId = createTurnId();
+        const options = { turnId, requestId: `request-${turnId}`, sourceChannelId: channelId };
+        mgr.recordSystemMessage(
+          channelId, turn.input, 'system:social-outreach', 'Companion', undefined, undefined, options,
+        );
+        mgr.recordAssistantMessage(channelId, turn.reply, undefined, undefined, undefined, options);
+      }
+    });
+
+    const reopenedStore = new SessionStore(dir);
+    const reopened = new SessionManager(reopenedStore, makeConfig());
+    reopened.setActiveContextSession('api:another-active-session');
+    const reopenedReads = reopened.createCapturedSessionReads(owner);
+    await reopenedReads.run(async () => {
+      const entries = reopenedReads.getRecentMessages(10);
+      expect(entries.map(entry => ({ role: entry.role, content: entry.content, channelId: entry.channelId })))
+        .toEqual(turns.flatMap(turn => [
+          { role: 'system', content: turn.input, channelId },
+          { role: 'assistant', content: turn.reply, channelId },
+        ]));
+      expect(entries.every(entry => resolveSessionEntryTurnContext(entry).turnId)).toBe(true);
+
+      const snapshot = await reopenedReads.captureTurnSessionContext({});
+      expect(snapshot.channelId).toBe(channelId);
+      expect(snapshot.recentEntries).toHaveLength(4);
+      const context = await reopenedReads.buildContext('System', '');
+      expect(context.messages.map(message => message.role)).toEqual(['system', 'assistant', 'system', 'assistant']);
+      const history = context.messages.map(message => message.content).join('\n');
+      for (const turn of turns) {
+        expect(history).toContain(turn.input);
+        expect(history).toContain(turn.reply);
+      }
+    });
+    expect(reopenedStore.count('api:unrelated-active-session')).toBe(0);
+    expect(reopenedStore.count('api:another-active-session')).toBe(0);
   });
 
   it('records system messages with system turn metadata', () => {

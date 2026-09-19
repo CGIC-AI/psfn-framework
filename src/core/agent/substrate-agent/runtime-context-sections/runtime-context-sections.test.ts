@@ -255,7 +255,7 @@ describe('conversation-state producer', () => {
     expect(variables.runtime_chat_type).toBe('group');
     expect(variables.runtime_room_id).toBe('discord:group:ops');
     expect(variables.runtime_current_message_author_xml).toBe(
-      '<current_message_author name="Carol" id="user-carol" trust="trusted" relationship="friend" />',
+      '<current_message_author name="Carol" id="user-carol" trust="trusted" relationship_to_companion="friend" />',
     );
     expect(variables.runtime_recent_active_participants_count).toBe('2');
     expect(variables.runtime_recent_active_participants_xml.indexOf('user-alice'))
@@ -271,12 +271,15 @@ describe('conversation-state producer', () => {
       }),
       internalTurn: false,
       trustLevel: 'trusted',
+      relationshipType: 'friend',
       now: FIXED_NOW,
       recentChannelEntries: [
         makeSessionEntry({ id: 1, authorId: 'user-alice', authorName: 'Alice', timestamp: 100 }),
       ],
     });
     expect(variables.runtime_chat_type).toBe('direct_message');
+    expect(variables.runtime_current_message_author_xml)
+      .toContain('relationship_to_companion="friend"');
     expect(variables.runtime_recent_active_participants_xml).toBe('');
     expect(variables.runtime_recent_active_participants_count).toBe('0');
   });

@@ -25,6 +25,37 @@ const AGENT_NAME = 'observer';
 const SESSION_ID = 'session-uuid-1';
 
 describe('EmoSim server adapter', () => {
+  it('sends opaque scoped external authority only for a verified incoming social turn', async () => {
+    const server = new FakeEmoSimServer();
+    const runner = makeRunner(server);
+    const input = makeInput();
+    const result = await runEmoSimProjectedStimulus(input, {
+      runner, incomingSocialInteraction: { kind: 'canonical_contact', contactId: 'contact-hobby-partner' },
+    });
+    expect(result.ok).toBe(true);
+    expect(server.eventBodies[0]).toMatchObject({
+      target: AGENT_NAME, channel: 'remote',
+      external_actor: { schema_version: 1, kind: 'canonical_contact', key: expect.stringMatching(/^[a-f0-9]{64}$/) },
+    });
+    expect(JSON.stringify(server.eventBodies[0])).not.toContain('contact-hobby-partner');
+    expect(JSON.stringify(result)).not.toContain('contact-hobby-partner');
+    expect(JSON.stringify(result)).not.toContain('external_actor');
+    await runEmoSimProjectedStimulus(input, { runner });
+    expect(server.eventBodies[1]).toMatchObject({ channel: 'direct' });
+    expect(server.eventBodies[1]).not.toHaveProperty('actor');
+    expect(server.eventBodies[1]).not.toHaveProperty('external_actor');
+  });
+
+  it('fails closed before a social event when the server lacks the versioned contract', async () => {
+    const server = new FakeEmoSimServer();
+    server.externalSocialActorVersion = undefined;
+    const result = await runEmoSimProjectedStimulus(makeInput(), {
+      runner: makeRunner(server), incomingSocialInteraction: { kind: 'canonical_contact', contactId: 'contact-hobby-partner' },
+    });
+    expect(result).toMatchObject({ ok: false, error: { reason: 'incompatible-runtime' } });
+    expect(server.eventBodies).toEqual([]);
+  });
+
   it('reads an existing companion session without creating or stimulating it', async () => {
     const server = new FakeEmoSimServer();
     server.existingSessions = [{
@@ -451,6 +482,7 @@ class FakeEmoSimServer {
   createCount = 0;
   failNextRequests = 0;
   extraEmotion: string | null = null;
+  externalSocialActorVersion: number | undefined = 1;
   joySequence: number[] | null = null;
   sadnessSequence: number[] | null = null;
   relationships: unknown = {};
@@ -520,6 +552,7 @@ class FakeEmoSimServer {
       appraisal_dims: [...EMOSIM_APPRAISAL_DIMS],
       ocean: ['O', 'C', 'E', 'A', 'N'],
       metadata: {},
+      capabilities: { external_social_actor: this.externalSocialActorVersion },
     };
   }
 

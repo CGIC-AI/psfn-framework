@@ -1,4 +1,5 @@
 import { isCompanionSelfReflectionContext } from '../../../../primitives/llm/request-context.js';
+import { resolveObserverSocialInteraction } from './observer-social-interaction.js';
 import type {
   CorrelationMetadata,
   RequestAudience,
@@ -995,6 +996,7 @@ export async function computePreTurnState(input: {
     logger: log,
     input: {
       schemaVersion: 1,
+      incomingSocialInteraction: resolveObserverSocialInteraction(message, authorContext, taskKind),
       turn: {
         turnId,
         requestId,

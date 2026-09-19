@@ -73,8 +73,15 @@ export interface ObserverEvalProvenance {
   };
 }
 
+/** Runtime-only authority; deliberately excluded from sanitized eval telemetry. */
+export interface IncomingObserverSocialInteraction {
+  kind: 'canonical_contact';
+  contactId: string;
+}
+
 export interface ObserverEvalInputPayload {
   schemaVersion: 1;
+  incomingSocialInteraction?: IncomingObserverSocialInteraction;
   turn: ObserverEvalTurnIdentity;
   source: ObserverEvalSourceMetadata;
   emotion: ObserverEvalEmotionSnapshot;

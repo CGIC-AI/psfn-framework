@@ -1,3 +1,4 @@
+import type { IncomingObserverSocialInteraction } from './types.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import {
@@ -335,11 +336,12 @@ export type EmoSimAdapterRunResult =
     };
 
 export interface EmoSimRunner {
-  run(input: EmoSimAdapterInput): Promise<unknown>;
+  run(input: EmoSimAdapterInput, socialInteraction?: IncomingObserverSocialInteraction): Promise<unknown>;
 }
 
 export interface RunEmoSimAdapterOptions {
   runner: EmoSimRunner;
+  incomingSocialInteraction?: IncomingObserverSocialInteraction;
 }
 
 export class EmoSimSidecarUnavailableError extends Error {
@@ -399,7 +401,7 @@ export async function runEmoSimProjectedStimulus(
 
   let rawOutput: unknown;
   try {
-    rawOutput = await options.runner.run(input);
+    rawOutput = await options.runner.run(input, options.incomingSocialInteraction);
   } catch (error) {
     if (error instanceof EmoSimSidecarUnavailableError) {
       return buildFailure(input, 'sidecar-unavailable', error.reason, error.message, error.details);

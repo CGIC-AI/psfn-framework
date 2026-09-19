@@ -4045,6 +4045,7 @@ async function runObserverSidecarTurn(
     recordUserMessage: vi.fn(() => 1),
     recordAssistantMessage,
     observerEvalSidecar,
+    resolveAuthorContext: vi.fn(() => humanAuthorContext({ canonicalContactKey: 'contact-1' })),
     emotionSelfModelRuntimeOverrides: {
       observeEmotionState,
       computeInternalStateForTurn,
@@ -4100,6 +4101,14 @@ async function captureObserverSidecarInput(
 }
 
 describe('handleMessageForTurn observer eval sidecar seam', () => {
+  it('carries canonical incoming contact authority separately from sanitized eval telemetry', async () => {
+    const input = await captureObserverSidecarInput({ content: 'I finished the model sailboat.' });
+    expect(input).toMatchObject({
+      incomingSocialInteraction: { kind: 'canonical_contact', contactId: 'contact-1' },
+    });
+    expect(sanitizeObserverEvalInput(input)).not.toHaveProperty('incomingSocialInteraction');
+  });
+
   it('uses the admitted private scope for internal scheduler observations', async () => {
     const receivedInput = await captureObserverSidecarInput({
       channelId: 'internal:reflection:temporal-wakeup',

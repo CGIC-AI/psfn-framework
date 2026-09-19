@@ -250,7 +250,10 @@ class EmoSimObserverEvalSidecar implements ObserverEvalSidecarPort {
       includeWorldState: this.options.config.adapter?.includeWorldState ?? false,
     });
     const emosim = projection.ok
-      ? await runEmoSimProjectedStimulus(projection.adapterInput, { runner: this.options.runner })
+      ? await runEmoSimProjectedStimulus(projection.adapterInput, {
+          runner: this.options.runner,
+          incomingSocialInteraction: rawInput.incomingSocialInteraction,
+        })
       : undefined;
     const crosswalk = projection.ok && emosim?.ok
       ? createObserverEmotionCrosswalk({

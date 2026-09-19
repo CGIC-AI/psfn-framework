@@ -24,6 +24,8 @@
  *   two reads. The procedure is fixed and cheap; wall-clock decay between reads
  *   is expected signal in server mode, not noise.
  */
+import { createHash } from 'node:crypto';
+import type { IncomingObserverSocialInteraction } from './types.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { isRecord } from '../../../shared/utils/types.js';
@@ -100,6 +102,7 @@ interface EmoSimServerBootstrap {
   sessionId: string;
   timeScale: number;
   emotionSpecs: Record<EmoSimEmotionName, EmoSimEmotionSpecMetadata>;
+  externalSocialActorVersion: unknown;
 }
 
 export function createEmoSimServerRunner(options: EmoSimServerRunnerOptions): EmoSimServerRunner {
@@ -131,13 +134,17 @@ export class EmoSimServerRunner implements EmoSimRunner {
     this.sleep = options.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
   }
 
-  async run(input: EmoSimAdapterInput): Promise<unknown> {
+  async run(input: EmoSimAdapterInput, socialInteraction?: IncomingObserverSocialInteraction): Promise<unknown> {
+    const authority = socialInteraction === undefined ? undefined : parseIncomingSocialInteraction(socialInteraction);
     const bootstrap = await this.ensureBootstrap(input);
 
+    if (authority && bootstrap.externalSocialActorVersion !== 1) {
+      throw incompatible('EmoSim server lacks external social actor v1 support');
+    }
     const beforeState = await this.readSessionState(bootstrap.sessionId);
     const before = this.toEngineSnapshot(beforeState);
 
-    await this.postStimulusEvent(bootstrap.sessionId, input);
+    await this.postStimulusEvent(bootstrap.sessionId, input, authority);
     const afterStimulusState = await this.readSessionState(bootstrap.sessionId);
     const afterStimulus = this.toEngineSnapshot(afterStimulusState);
 
@@ -297,7 +304,10 @@ export class EmoSimServerRunner implements EmoSimRunner {
       throw incompatible(`session model time_scale must be > 0, got ${timeScale}`);
     }
 
-    return { sessionId, timeScale, emotionSpecs };
+    return {
+      sessionId, timeScale, emotionSpecs,
+      externalSocialActorVersion: isRecord(model.capabilities) ? model.capabilities.external_social_actor : undefined,
+    };
   }
 
   private async createSession(input: EmoSimAdapterInput): Promise<string> {
@@ -353,11 +363,24 @@ export class EmoSimServerRunner implements EmoSimRunner {
     assertOrderedEquality(Object.keys(emotions), EMOSIM_EMOTION_VECTOR, 'emotions');
   }
 
-  private async postStimulusEvent(sessionId: string, input: EmoSimAdapterInput): Promise<void> {
+  private async postStimulusEvent(
+    sessionId: string,
+    input: EmoSimAdapterInput,
+    socialInteraction?: IncomingObserverSocialInteraction,
+  ): Promise<void> {
     const { stimulus } = input;
+    // Opaque, companion-session-scoped identity; never send the canonical contact ID.
+    const externalActor = socialInteraction ? {
+      schema_version: 1,
+      kind: 'canonical_contact',
+      key: createHash('sha256').update(JSON.stringify([
+        this.sessionLabel, this.agentName, socialInteraction.kind, socialInteraction.contactId,
+      ])).digest('hex'),
+    } : undefined;
     await this.request('POST', `/api/session/${encodeURIComponent(sessionId)}/event`, {
       target: this.agentName,
-      channel: 'direct',
+      channel: externalActor ? 'remote' : 'direct',
+      ...(externalActor ? { external_actor: externalActor } : {}),
       stimulus: {
         label: stimulus.label,
         intensity: stimulus.intensity,
@@ -579,4 +602,13 @@ function roundTo(value: number, digits: number): number {
 function compactBody(text: string): string {
   const normalized = text.trim().replace(/\s+/g, ' ');
   return normalized.length > 300 ? `${normalized.slice(0, 300)}…` : normalized || '<empty>';
+}
+
+function parseIncomingSocialInteraction(value: unknown): IncomingObserverSocialInteraction {
+  if (!isRecord(value) || Object.keys(value).some(key => key !== 'kind' && key !== 'contactId')
+    || value.kind !== 'canonical_contact'
+    || typeof value.contactId !== 'string' || !value.contactId.trim()) {
+    throw incompatible('Invalid incoming social interaction authority');
+  }
+  return { kind: 'canonical_contact', contactId: value.contactId };
 }

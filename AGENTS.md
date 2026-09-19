@@ -357,9 +357,9 @@ Preserve work owned by other agents.
 - Unexpected changes block edits, rebases, branch switches, or destructive Git
   operations only when they overlap the planned mutation or make it unsafe.
   Read-only inspection continues.
-- Never delete branches, worktrees, stashes, or shared Git state without explicit
-  operator approval.
-- Forbidden without approval: branch deletion, worktree removal, stash drop or
+- Remove completed local and remote branches and clean worktrees after verifying
+  their work is preserved on `main` or a pushed integration branch.
+- Forbidden without approval: deletion of unintegrated work, stash drop or
   clear, `git reset --hard`, `git checkout -- .`, `git clean -f`, and recursive
   deletion of possible worktrees.
 - Put parallel worktrees outside the repository at an operator-provided path.

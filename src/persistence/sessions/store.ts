@@ -1111,12 +1111,14 @@ export class SessionStore implements TranscriptSearchPort {
     ownerSessionId: string,
     turnId: string,
     signal?: AbortSignal,
+    purpose?: 'scratch_reflection_intention',
   ): Promise<SourceTurnRecordEligibility> {
     return this.turnRecordOperations.lookupSourceTurnRecordEligibility(
       sourceChannelId,
       ownerSessionId,
       turnId,
       signal,
+      purpose,
     );
   }
   getRecentTurnRecords(channelId: string, limit: number): TurnRecord[] {

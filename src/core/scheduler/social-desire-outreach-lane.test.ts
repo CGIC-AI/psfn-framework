@@ -66,6 +66,7 @@ function makeDeps(
     consentEvaluator,
     consents: createSocialDesireConsentLedger({ ttlMs: 30 * 60 * 1000 }),
     maxConsentMomentsPerRun: 1,
+    contactPacing: { perContactCooldownMs: 18 * 60 * 60 * 1000, deferDelayMs: 3 * 60 * 60 * 1000 },
     resolveDeliveryChannel: async () => ({
       channelId: 'dm-primary',
       channelType: 'discord',

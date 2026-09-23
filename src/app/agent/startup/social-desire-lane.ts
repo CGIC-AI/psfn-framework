@@ -150,6 +150,7 @@ export function registerSocialDesireLane(deps: SocialDesireLaneDeps): SocialDesi
           }),
           consents: socialDesireConsents,
           maxConsentMomentsPerRun: schedulerConfig.socialDesire.outreach.maxConsentMomentsPerRun,
+          contactPacing: schedulerConfig.socialDesire.outreach.contactPacing,
           quietHours: schedulerConfig.episodicProcessing,
           resolveContactTimeZone: async contactId => (
             (await contactStore.getById(contactId))?.timezone ?? null

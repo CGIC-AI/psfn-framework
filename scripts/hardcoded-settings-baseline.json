@@ -13426,7 +13426,7 @@
     {
       "file": "src/system/config/scheduler-config/social-desire.ts",
       "name": "DEFAULT_SOCIAL_DESIRE_CONFIG.lifecycle.actionThreshold",
-      "value": "1",
+      "value": "0.6",
       "form": "object-member",
       "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 P3 domain split; seed/default literal preserved, not an operator-tunable policy constant."
     },
@@ -13447,7 +13447,7 @@
     {
       "file": "src/system/config/scheduler-config/social-desire.ts",
       "name": "DEFAULT_SOCIAL_DESIRE_CONFIG.outreach.budget.maxSendsPerWindow",
-      "value": "2",
+      "value": "4",
       "form": "object-member",
       "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 P3 domain split; seed/default literal preserved, not an operator-tunable policy constant."
     },
@@ -13460,10 +13460,38 @@
     },
     {
       "file": "src/system/config/scheduler-config/social-desire.ts",
+      "name": "DEFAULT_SOCIAL_DESIRE_CONFIG.outreach.contactPacing.deferDelayMs",
+      "value": "3 * 60 * 60 * 1000",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default (psfn-framework-vcq8v.4 per-contact outreach pacing/context bounds); the seed carries the same value and operators tune it in scheduler.json socialDesire.outreach."
+    },
+    {
+      "file": "src/system/config/scheduler-config/social-desire.ts",
+      "name": "DEFAULT_SOCIAL_DESIRE_CONFIG.outreach.contactPacing.perContactCooldownMs",
+      "value": "18 * 60 * 60 * 1000",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default (psfn-framework-vcq8v.4 per-contact outreach pacing/context bounds); the seed carries the same value and operators tune it in scheduler.json socialDesire.outreach."
+    },
+    {
+      "file": "src/system/config/scheduler-config/social-desire.ts",
       "name": "DEFAULT_SOCIAL_DESIRE_CONFIG.outreach.maxConsentMomentsPerRun",
       "value": "1",
       "form": "object-member",
       "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 P3 domain split; seed/default literal preserved, not an operator-tunable policy constant."
+    },
+    {
+      "file": "src/system/config/scheduler-config/social-desire.ts",
+      "name": "DEFAULT_SOCIAL_DESIRE_CONFIG.outreach.turnContext.activityMaxItems",
+      "value": "6",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default (psfn-framework-vcq8v.4 per-contact outreach pacing/context bounds); the seed carries the same value and operators tune it in scheduler.json socialDesire.outreach."
+    },
+    {
+      "file": "src/system/config/scheduler-config/social-desire.ts",
+      "name": "DEFAULT_SOCIAL_DESIRE_CONFIG.outreach.turnContext.excerptMaxChars",
+      "value": "900",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default (psfn-framework-vcq8v.4 per-contact outreach pacing/context bounds); the seed carries the same value and operators tune it in scheduler.json socialDesire.outreach."
     },
     {
       "file": "src/system/config/scheduler-config/social-graph.ts",
@@ -13608,7 +13636,7 @@
     {
       "file": "src/system/config/scheduler-config/weighted-thought.ts",
       "name": "DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG.nudgeThreshold",
-      "value": "1",
+      "value": "0.75",
       "form": "object-member",
       "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 P3 domain split; seed/default literal preserved, not an operator-tunable policy constant."
     },

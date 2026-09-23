@@ -1290,6 +1290,10 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
   ALTER TABLE social_desire_settlements
     DROP CONSTRAINT IF EXISTS social_desire_settlements_contact_id_fkey;
   `,
+  // Per-contact outreach pacing (psfn-framework-vcq8v.4): the cooldown anchor
+  // and the companion's "later" re-evaluation time for each contact's desire.
+  `ALTER TABLE social_desires ADD COLUMN IF NOT EXISTS last_consent_moment_at TEXT;`,
+  `ALTER TABLE social_desires ADD COLUMN IF NOT EXISTS deferred_until TEXT;`,
   // Companion-local ICP candidate state. The reason summary and peer contact
   // binding are private motivation, so this table belongs in each companion's
   // own schema and must never be copied into the shared control-plane tables.

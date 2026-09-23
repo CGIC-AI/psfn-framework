@@ -285,7 +285,7 @@
   "weightedThoughtOutreach": {
     "enabled": false,
     "checkIntervalMs": 1800000,
-    "nudgeThreshold": 1,
+    "nudgeThreshold": 0.75,
     "maxNudgesPerRun": 1,
     "lifecycle": {
       "classes": {
@@ -315,12 +315,12 @@
   "socialDesire": {
     "enabled": false,
     "lifecycle": {
-      "baseGain": 0.15,
+      "baseGain": 0.3,
       "pressureCap": 3,
-      "actionThreshold": 1,
+      "actionThreshold": 0.6,
       "pressureFloor": 0.05,
       "decay": {
-        "warmHalflifeMs": 259200000,
+        "warmHalflifeMs": 345600000,
         "repairHalflifeMs": 345600000
       },
       "coolingOff": {
@@ -359,9 +359,21 @@
       "maxConsentMomentsPerRun": 1,
       "consentTtlMs": 1800000,
       "budget": {
-        "maxSendsPerWindow": 2,
+        "maxSendsPerWindow": 4,
         "windowMs": 86400000
+      },
+      "contactPacing": {
+        "perContactCooldownMs": 64800000,
+        "deferDelayMs": 10800000
+      },
+      "turnContext": {
+        "excerptMessages": 6,
+        "excerptMaxChars": 900,
+        "activityMaxItems": 6
       }
+    },
+    "impulse": {
+      "gain": 0.4
     }
   },
   "intentionFollowUp": {

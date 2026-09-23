@@ -360,7 +360,10 @@ export function hydrateCanonicalStartupConfig(
       outreach: {
         ...persistedScheduler.socialDesire.outreach,
         budget: { ...persistedScheduler.socialDesire.outreach.budget },
+        contactPacing: { ...persistedScheduler.socialDesire.outreach.contactPacing },
+        turnContext: { ...persistedScheduler.socialDesire.outreach.turnContext },
       },
+      impulse: { ...persistedScheduler.socialDesire.impulse },
     },
     intentionFollowUp: { ...persistedScheduler.intentionFollowUp },
     icpAutonomy: {

@@ -54,11 +54,26 @@ import {
   registerSchedulerOwnedPostTurnLanes,
 } from './post-turn-runtime/scheduler-lanes.js';
 
+
+/**
+ * Outward (proactive outbound) quiet hours: the configured rest window with
+ * this companion's fleet release offset applied (psfn-framework-m7jf2). The
+ * rest window itself still governs internal work unchanged.
+ */
+function outwardQuietHours(
+  options: Pick<ReflectionRuntimeOptions, 'episodicProcessingRestWindow' | 'fleetScheduleStagger'>,
+): ReflectionRuntimeOptions['episodicProcessingRestWindow'] {
+  return options.episodicProcessingRestWindow
+    ? staggerQuietHoursRelease(options.episodicProcessingRestWindow, options.fleetScheduleStagger)
+    : undefined;
+}
+
 export {
   CONTACT_TRUST_DRIFT_REVIEW_OPERATION_ID,
   DRIFT_VELOCITY_REVIEW_OPERATION_ID,
   SLEEPTIME_REST_WINDOW_OPERATION_ID,
 } from './post-turn-runtime/scheduler-lanes.js';
+import { staggerQuietHoursRelease } from './quiet-hours-release-stagger.js';
 
 const SCHEDULER_REFLECTION_CLASS: ProductionAutomataClassId = 'scheduler.reflection';
 const SCHEDULER_REFLECTION_TASK_LABEL = 'Deferred reflection template';
@@ -421,7 +436,7 @@ export function wirePostTurnRuntime(
           {
             now: candidateNow,
             minimumOutboundRunAt: resolveMinimumOutboundRunAt(activeConcerns, candidateNow),
-            proactiveOutboundQuietHours: runtimeOptions.episodicProcessingRestWindow,
+            proactiveOutboundQuietHours: outwardQuietHours(runtimeOptions),
             appraisalConcernScope: createAppraisalConcernScope(
               resolvedSessionId,
               context.canonicalContactKey,
@@ -1035,7 +1050,7 @@ export function wirePostTurnRuntime(
               const timeGate = evaluateProactiveOutboundTimeGate({
                 nowMs: Date.now(),
                 earliestSendAtMs: action.runAt,
-                quietHours: runtimeOptions.episodicProcessingRestWindow,
+                quietHours: outwardQuietHours(runtimeOptions),
                 contactTimeZone,
               });
               if (!timeGate.allowed) {

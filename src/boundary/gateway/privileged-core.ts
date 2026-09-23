@@ -158,7 +158,7 @@ export interface GatewayPrivilegedCore {
      * attention surface; absence leaves the queue behaving exactly as before.
      */
     confirmationEscalation?: ConfirmationEscalationProducerOptions<NotifyNtfyParams>;
-    sharedSatelliteQuietHoursAllows?: (nowMs: number) => boolean;
+    sharedSatelliteQuietHoursAllows?: (nowMs: number, companionId: string) => boolean;
     credentialPresence?: GatewayCredentialPresenceResult;
   }): GatewayServer;
 }

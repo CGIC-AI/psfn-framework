@@ -423,7 +423,7 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
    */
   eventBus: EventBus;
   /** JSON-owner quiet-hours gate evaluated before any shared-device model call. */
-  sharedSatelliteQuietHoursAllows?: (nowMs: number) => boolean;
+  sharedSatelliteQuietHoursAllows?: (nowMs: number, companionId: string) => boolean;
 }
 
 type IcpQueuedInvalidationReason =
@@ -3495,7 +3495,7 @@ export class GatewayServer {
             || explicitHumanAvailabilityAllows),
         fatigueAllows,
         quietHoursAllows: isExplicitHumanInbound
-          || this.options.sharedSatelliteQuietHoursAllows?.(nowMs) === true,
+          || this.options.sharedSatelliteQuietHoursAllows?.(nowMs, companionId) === true,
         restAllows: availabilityLeaseIsAbsent
           || ((isExplicitHumanInbound || availabilityState !== 'resting')
             && availabilityState !== 'do_not_disturb'),

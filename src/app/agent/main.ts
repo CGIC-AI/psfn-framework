@@ -265,6 +265,7 @@ import { PostgresAdminAutomataBusReadAdapter } from '../../operator/garden/servi
 import { createProductionAutomataBusReindexService } from '../../faculties/automata/bus/production-reindex.js';
 import { FoldPackageDoingMirrorSource } from '../../core/doing-mirror/sources.js';
 import { wireLetterMemoryExtraction } from '../../core/letters/memory-extraction.js';
+import { staggerQuietHoursRelease } from '../../core/scheduler/quiet-hours-release-stagger.js';
 
 const log = createComponentLogger('Agent');
 const postgresPoolOwner = new PostgresPoolOwner('agent');
@@ -2114,17 +2115,6 @@ async function main(): Promise<void> {
   // to startup/temporal-wakeup-lane.ts (charter 12.1 split).
   // World exploration (S13, 07mw2): the companion's own initiative on a world
   // plane, off by default; gates on tier, a live body, quiet hours and caps.
-  registerWorldExplorationLane({
-    scheduler,
-    config: schedulerConfig.worldExploration,
-    quietHours: schedulerConfig.episodicProcessing,
-    agentLoop,
-    placesRegistry: placesRegistryConfig,
-    worldOps,
-    capabilityRuntime,
-    eventBus,
-    chargePolicy: config.chargePolicy,
-  });
   // One fleet position + owner-file window (scheduler.json fleetStagger) for
   // every fixed-time lane: each companion fires at a stable, evenly spaced
   // offset after shared slots. Absent outside a multi-companion fleet.
@@ -2135,11 +2125,29 @@ async function main(): Promise<void> {
         windowMs: schedulerConfig.fleetStagger.windowMs,
       }
     : undefined;
+  // Outward lanes release held outreach at this companion's fleet offset after
+  // the configured quiet-hours end (psfn-framework-m7jf2); internal rest-window
+  // work keeps the configured window.
+  const outwardQuietHours = staggerQuietHoursRelease(
+    schedulerConfig.episodicProcessing,
+    fleetScheduleStagger,
+  );
+  registerWorldExplorationLane({
+    scheduler,
+    config: schedulerConfig.worldExploration,
+    quietHours: outwardQuietHours,
+    agentLoop,
+    placesRegistry: placesRegistryConfig,
+    worldOps,
+    capabilityRuntime,
+    eventBus,
+    chargePolicy: config.chargePolicy,
+  });
   registerTemporalWakeupLane({
     scheduler,
     sessionManager,
     config: schedulerConfig.temporalWakeup,
-    quietHours: schedulerConfig.episodicProcessing,
+    quietHours: outwardQuietHours,
     eventBus,
     agentLoop,
     llmProvider,
@@ -2175,6 +2183,7 @@ async function main(): Promise<void> {
   // ── Weighted-thought outreach lane (E?/1xb.2) + Law 27 contradiction
   // dampening: extracted to startup/weighted-thought-outreach-lane.ts.
   registerWeightedThoughtOutreachLane({
+    ...(fleetScheduleStagger ? { fleetStagger: fleetScheduleStagger } : {}),
     scheduler,
     schedulerConfig,
     eventBus,
@@ -2190,6 +2199,7 @@ async function main(): Promise<void> {
   // ── Social-desire consent-moment lane (epic oth4, bead oth4.2): extracted
   // to startup/social-desire-lane.ts (charter 12.1 split).
   const { socialDesireOutbound, socialDesireHumanDeliveryPolicy, impulseTarget } = registerSocialDesireLane({
+    ...(fleetScheduleStagger ? { fleetStagger: fleetScheduleStagger } : {}),
     schedulerConfig,
     scheduler,
     postTurnActions,

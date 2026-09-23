@@ -46,10 +46,18 @@ import { createCompanionId } from '../../../shared/routing/companion-id.js';
 import type { SchedulerRuntimeConfig as SchedulerConfig } from '../../../system/config/scheduler-config.js';
 import type { AgentSchedulerRuntime } from '../scheduler-runtime.js';
 import type { createAgentPersistenceRuntime } from '../../../persistence/runtime-factory.js';
+import { staggerQuietHoursRelease } from '../../../core/scheduler/quiet-hours-release-stagger.js';
+import type { FleetSlotStagger } from '../../../core/scheduler/types.js';
 
 export interface SocialDesireLaneDeps {
   /** Narrowed to the fields the lane consumes (testable without a full config). */
   schedulerConfig: Pick<SchedulerConfig, 'socialDesire' | 'episodicProcessing'>;
+  /**
+   * Fleet position + stagger window (psfn-framework-m7jf2). When present, this
+   * companion's outward quiet-hours release is pushed back by its fleet offset
+   * so the fleet does not release held outreach at the same instant.
+   */
+  fleetStagger?: FleetSlotStagger;
   scheduler: AgentSchedulerRuntime['scheduler'];
   postTurnActions: Pick<AgentSchedulerRuntime['postTurnActions'], 'enqueue' | 'registerHandler'>;
   eventBus: EventBus;
@@ -104,13 +112,14 @@ export function registerSocialDesireLane(deps: SocialDesireLaneDeps): SocialDesi
     localCompanionId,
     companionName,
   } = deps;
+  const outwardQuietHours = staggerQuietHoursRelease(schedulerConfig.episodicProcessing, deps.fleetStagger);
 
   let socialDesireOutbound: SocialDesireOutboundRuntime | undefined;
   const socialDesireHumanDeliveryPolicy = heartbeatChannel
     ? createSocialDesireHumanDeliveryPolicy({
         contacts: contactStore,
         approvedHeartbeatChannel: heartbeatChannel,
-        quietHours: schedulerConfig.episodicProcessing,
+        quietHours: outwardQuietHours,
       })
     : undefined;
   let socialDesireFeltSignals: SocialDesireFeltSignalWriter | undefined;
@@ -210,7 +219,7 @@ export function registerSocialDesireLane(deps: SocialDesireLaneDeps): SocialDesi
           concerns: deps.concernStore,
           consentEvaluator,
           resolveDeliveryChannel,
-          quietHours: schedulerConfig.episodicProcessing,
+          quietHours: outwardQuietHours,
           resolveContactTimeZone,
           deferDelayMs: schedulerConfig.socialDesire.outreach.contactPacing.deferDelayMs,
           maxPerRun: schedulerConfig.socialDesire.outreach.maxConsentMomentsPerRun,
@@ -239,7 +248,7 @@ export function registerSocialDesireLane(deps: SocialDesireLaneDeps): SocialDesi
           consents: socialDesireConsents,
           maxConsentMomentsPerRun: schedulerConfig.socialDesire.outreach.maxConsentMomentsPerRun,
           contactPacing: schedulerConfig.socialDesire.outreach.contactPacing,
-          quietHours: schedulerConfig.episodicProcessing,
+          quietHours: outwardQuietHours,
           resolveContactTimeZone,
           resolveDeliveryChannel,
           isBudgetExhausted: (nowMs, reservedConsentCount) => (

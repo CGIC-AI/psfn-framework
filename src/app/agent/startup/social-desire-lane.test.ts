@@ -114,6 +114,27 @@ describe('registerSocialDesireLane composition wiring (psfn-framework-hrmrq.85)'
     })).resolves.toMatchObject({ allowed: false, reason: 'social_desire_channel_not_approved' });
   });
 
+  it('holds a fleet companion to its own staggered quiet-hours release (m7jf2)', async () => {
+    const primary = {
+      id: 'contact-primary', displayName: 'Primary contact', trustLevel: 'primary' as const,
+      firstSeen: '2026-01-01T00:00:00Z', lastSeen: '2026-01-01T00:00:00Z', timezone: 'UTC',
+    };
+    const policyFor = (manifestOrdinal: number) => registerSocialDesireLane(makeDeps({
+      fleetStagger: { manifestOrdinal, fleetSize: 3, windowMs: 60 * 60_000 },
+      contactStore: { getById: async () => primary },
+    })).socialDesireHumanDeliveryPolicy!;
+    // Configured quiet window ends 06:00 UTC; 06:10 is past it.
+    const attempt = {
+      contactId: 'contact-primary', channelId: 'dm-primary', channelType: 'discord' as const,
+      nowMs: Date.parse('2026-09-13T06:10:00Z'),
+    };
+    await expect(policyFor(0).evaluate(attempt)).resolves.toEqual({ allowed: true });
+    // Ordinal 1 of 3 releases 20 minutes later, at 06:20.
+    await expect(policyFor(1).evaluate(attempt)).resolves.toMatchObject({ allowed: false });
+    await expect(policyFor(1).evaluate({ ...attempt, nowMs: Date.parse('2026-09-13T06:20:00Z') }))
+      .resolves.toEqual({ allowed: true });
+  });
+
   it('the composed writer actually accumulates into the lane store (end-to-end producer proof)', async () => {
     const store = createSocialDesireStorePort(createInMemorySocialDesireBackend());
     const deps = makeDeps({

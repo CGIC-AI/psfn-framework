@@ -1689,6 +1689,7 @@ export async function handleMessageForTurn(
       requestHasImageInput: message.attachments?.some(
         attachment => attachment.contentType.trim().toLowerCase().startsWith('image/'),
       ) ?? false,
+      requestAuthoredByUser: speakerRole === 'user',
       turnMessages,
     })) {
       safeResponseText = UNFULFILLED_IMAGE_EDIT_REQUEST_CORRECTION;

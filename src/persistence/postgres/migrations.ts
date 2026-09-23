@@ -799,6 +799,28 @@ export const POSTGRES_MEMORY_MIGRATIONS = [
     ADD CONSTRAINT recent_contact_shapes_schema_version_check
     CHECK (schema_version IN (0, 1));
   `,
+  // psfn-framework-h4bq1: companion-internal tool-writer memories were stamped
+  // with the pseudo contact id 'companion:internal', which the subject
+  // classifier reads as a (non-existent) contact, so the companion could never
+  // see its own notes. Rewrite them to the companion-internal subject scope; the
+  // evidence trigger invalidates their classification and bumps the revision,
+  // and reopening the classifier checkpoint makes the startup backfill
+  // reclassify them before the corpus is exposed. Idempotent: no matching rows
+  // leaves both tables untouched.
+  `
+  WITH repaired AS (
+    UPDATE l2_memories
+    SET provenance_json = (provenance_json - 'subjectContactId')
+      || '{"subjectScope": "companion_internal"}'::jsonb
+    WHERE provenance_json ->> 'subjectContactId' = 'companion:internal'
+    RETURNING id
+  )
+  UPDATE l2_memory_subject_backfill_checkpoints
+  SET completed = FALSE,
+    cursor_memory_id = NULL,
+    updated_at = (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT
+  WHERE EXISTS (SELECT 1 FROM repaired);
+  `,
 ];
 
 // E8.3: pgvector projection of canonical workspace wiki documents. This is a

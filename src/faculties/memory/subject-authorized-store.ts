@@ -82,6 +82,25 @@ function normalizedSubject(context: MemorySubjectAccessContext): string | undefi
   return context.companionInternal ? 'companion:internal' : undefined;
 }
 
+/**
+ * Stamp the trusted write subject onto a memory. A contact viewer is recorded
+ * as the explicit subject contact; a companion-internal writer is recorded as
+ * companion-internal scope, never as a pseudo contact id (a contact id the
+ * classifier would read as a single contact the companion cannot see). Any
+ * caller-supplied value for the other form is dropped.
+ */
+function stampWriteSubject(memory: PurrMemory, context: MemorySubjectAccessContext): PurrMemory {
+  const contactId = context.viewerContactId?.trim();
+  const { subjectContactId: _subjectContactId, subjectScope: _subjectScope, ...provenance } = memory.provenance ?? {};
+  if (contactId) {
+    return { ...memory, provenance: { ...provenance, subjectContactId: contactId } };
+  }
+  if (context.companionInternal) {
+    return { ...memory, provenance: { ...provenance, subjectScope: 'companion_internal' } };
+  }
+  return deniedMutation();
+}
+
 function normalizedViewerContacts(context: MemorySubjectAccessContext): string[] {
   const contacts = [
     context.viewerContactId,
@@ -391,16 +410,12 @@ export function createSubjectAuthorizedMemoryStore(
       }
       if (property === 'persistAuthorizedMemoryWrite') {
         return async (input: Parameters<MemoryStorePort['persistAuthorizedMemoryWrite']>[0]) => {
-          const subject = normalizedSubject(currentContext());
-          if (!subject) deniedMutation();
+          if (!normalizedSubject(currentContext())) deniedMutation();
           const auth = authorization(currentContext(), 'bulk_mutation');
           if (!auth) deniedMutation();
           await target.persistAuthorizedMemoryWrite({
             authorization: auth,
-            memory: {
-              ...input.memory,
-              provenance: { ...(input.memory.provenance ?? {}), subjectContactId: subject },
-            },
+            memory: stampWriteSubject(input.memory, currentContext()),
             embedding: input.embedding,
             ...(input.supersededMemoryIds
               ? { supersededMemoryIds: input.supersededMemoryIds }
@@ -432,26 +447,18 @@ export function createSubjectAuthorizedMemoryStore(
       }
       if (property === 'insertMemory') {
         return async (memory: PurrMemory, embedding: Float32Array) => {
-          const subject = normalizedSubject(currentContext());
-          if (!subject) deniedMutation();
-          await target.insertMemory({
-            ...memory,
-            provenance: { ...(memory.provenance ?? {}), subjectContactId: subject },
-          }, embedding);
+          if (!normalizedSubject(currentContext())) deniedMutation();
+          await target.insertMemory(stampWriteSubject(memory, currentContext()), embedding);
         };
       }
       if (property === 'persistMemoryWrite') {
         return async (input: Parameters<MemoryStorePort['persistMemoryWrite']>[0]) => {
-          const subject = normalizedSubject(currentContext());
-          if (!subject) deniedMutation();
+          if (!normalizedSubject(currentContext())) deniedMutation();
           const auth = authorization(currentContext(), 'bulk_mutation');
           if (!auth) deniedMutation();
           await target.persistAuthorizedMemoryWrite({
             authorization: auth,
-            memory: {
-              ...input.memory,
-              provenance: { ...(input.memory.provenance ?? {}), subjectContactId: subject },
-            },
+            memory: stampWriteSubject(input.memory, currentContext()),
             embedding: input.embedding,
             ...(input.supersededMemoryIds
               ? { supersededMemoryIds: input.supersededMemoryIds }

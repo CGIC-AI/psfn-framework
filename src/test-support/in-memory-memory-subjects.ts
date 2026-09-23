@@ -72,6 +72,8 @@ function actionMatchesSelector(input: MemorySubjectAuthorizedQuery): boolean {
     case 'detail':
     case 'details_batch':
       return ['detail', 'snippet', 'export', 'prompt_preview'].includes(action);
+    case 'superseded_detail':
+      return action === 'detail';
     case 'text_search':
       return ['search', 'snippet', 'export', 'prompt_preview'].includes(action);
     case 'embedding_search':
@@ -171,9 +173,20 @@ export async function queryInMemoryAuthorizedSubjects(
       `Memory subject authorization action ${input.authorization.action} does not permit ${input.selector.kind}`,
     );
   }
+  const { selector } = input;
+  if (selector.kind === 'superseded_detail') {
+    const memory = await store.getById(selector.memoryId.trim());
+    const matches = memory !== undefined
+      && memory.supersededBy === selector.supersededBy.trim()
+      && memory.deletedAt === undefined
+      && isAuthorized(memory, input.authorization);
+    return {
+      memories: matches ? [{ ...memory, similarity: 1 }] : [],
+      total: matches ? 1 : 0,
+    };
+  }
   const authorized = (await store.getAllActiveMemories())
     .filter(memory => isAuthorized(memory, input.authorization));
-  const { selector } = input;
 
   if (selector.kind === 'count') {
     return {

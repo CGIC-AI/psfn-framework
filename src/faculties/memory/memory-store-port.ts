@@ -249,6 +249,13 @@ export type MemorySubjectQuerySelector =
   | { kind: 'list'; limit?: number; offset?: number; before?: MemoryListPosition; scopeQuery?: MemoryScopeQuery }
   | { kind: 'detail'; memoryId: string }
   | { kind: 'details_batch'; memoryIds: readonly string[] }
+  /**
+   * One memory that a known newer memory superseded (and that is not deleted),
+   * still under the same subject authorization. Lets a caller prove it may
+   * link a replacement to the memory it just replaced; it never widens the
+   * subject predicate and never returns an arbitrary archived row.
+   */
+  | { kind: 'superseded_detail'; memoryId: string; supersededBy: string }
   | { kind: 'text_search'; query: string; limit?: number; offset?: number; scopeQuery?: MemoryScopeQuery }
   | { kind: 'embedding_search'; embedding: Float32Array; threshold: number; limit?: number; offset?: number; scopeQuery?: MemoryScopeQuery }
   | { kind: 'count'; scopeQuery?: MemoryScopeQuery };

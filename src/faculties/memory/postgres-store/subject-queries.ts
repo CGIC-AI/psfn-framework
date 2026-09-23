@@ -89,6 +89,8 @@ function assertActionMatchesSelector(input: MemorySubjectAuthorizedQuery): void 
       case 'detail':
       case 'details_batch':
         return ['detail', 'snippet', 'export', 'prompt_preview'] as const;
+      case 'superseded_detail':
+        return ['detail'] as const;
       case 'text_search':
         return ['search', 'snippet', 'export', 'prompt_preview'] as const;
       case 'embedding_search':
@@ -119,8 +121,16 @@ function buildSelector(
   annOrderExpr?: string;
 } {
   const { selector } = input;
-  const where = ['memory.superseded_by IS NULL', 'memory.deleted_at IS NULL'];
   const values: unknown[] = [];
+  const where = ['memory.deleted_at IS NULL'];
+  if (selector.kind === 'superseded_detail') {
+    const supersededBy = selector.supersededBy.trim();
+    if (!supersededBy) throw new Error('Authorized superseded memory detail requires supersededBy');
+    values.push(supersededBy);
+    where.push(`memory.superseded_by = $${values.length}`);
+  } else {
+    where.push('memory.superseded_by IS NULL');
+  }
   let orderBy = 'memory.extracted_at DESC, memory.id DESC';
   let pageOrderBy = 'extracted_at DESC, id DESC';
   let similaritySql = '1::double precision';
@@ -165,6 +175,14 @@ function buildSelector(
     case 'detail': {
       const memoryId = selector.memoryId.trim();
       if (!memoryId) throw new Error('Authorized memory detail requires memoryId');
+      values.push(memoryId);
+      where.push(`memory.id = $${values.length}`);
+      limit = 1;
+      break;
+    }
+    case 'superseded_detail': {
+      const memoryId = selector.memoryId.trim();
+      if (!memoryId) throw new Error('Authorized superseded memory detail requires memoryId');
       values.push(memoryId);
       where.push(`memory.id = $${values.length}`);
       limit = 1;

@@ -12,6 +12,7 @@ import type {
   ActiveMemoryListOptions,
   MemoryAdminListOptions,
   MemoryAdminPrivacySummary,
+  MemoryMaintenanceReviewInput,
   MemoryStoreStats,
   MemoryStorePort,
   MemorySubjectAdminQuery,
@@ -142,6 +143,32 @@ function authorization(
 
 function deniedMutation(): never {
   throw new Error('Memory access requires a trusted memory subject');
+}
+
+/**
+ * Prove one memory is visible to this authorization. When `supersededBy` is
+ * given, a memory archived by exactly that newer memory also qualifies — the
+ * subject predicate still applies unchanged.
+ */
+async function requireVisible(
+  store: MemoryStorePort,
+  auth: MemorySubjectQueryAuthorization,
+  memoryId: string,
+  supersededBy?: string,
+): Promise<void> {
+  const active = await store.queryAuthorizedMemorySubjects({
+    authorization: auth,
+    selector: { kind: 'detail', memoryId },
+  });
+  if (active.total === 1) return;
+  if (supersededBy !== undefined) {
+    const superseded = await store.queryAuthorizedMemorySubjects({
+      authorization: auth,
+      selector: { kind: 'superseded_detail', memoryId, supersededBy },
+    });
+    if (superseded.total === 1) return;
+  }
+  deniedMutation();
 }
 
 async function listAllAuthorized(
@@ -790,17 +817,23 @@ export function createSubjectAuthorizedMemoryStore(
         return async (...args: unknown[]) => {
           const auth = authorization(currentContext(), 'detail');
           if (!auth) deniedMutation();
-          const memoryIds = property === 'recordEvolutionLink'
+          if (property === 'recordEvolutionLink') {
+            // A destructive supersede commits before its link: the replaced
+            // memory is then archived, so it is proven through the narrow
+            // superseded-by-this-source detail under the same authorization.
+            const link = args[0] as { sourceMemoryId: string; targetMemoryId: string };
+            await requireVisible(target, auth, link.sourceMemoryId);
+            await requireVisible(target, auth, link.targetMemoryId, link.sourceMemoryId);
+            return await target.recordEvolutionLink(
+              args[0] as Parameters<MemoryStorePort['recordEvolutionLink']>[0],
+            );
+          }
+          const memoryIds = property === 'recordAbstractionLink'
             ? [
               (args[0] as { sourceMemoryId: string }).sourceMemoryId,
-              (args[0] as { targetMemoryId: string }).targetMemoryId,
+              (args[0] as { abstractedMemoryId: string }).abstractedMemoryId,
             ]
-            : property === 'recordAbstractionLink'
-              ? [
-                (args[0] as { sourceMemoryId: string }).sourceMemoryId,
-                (args[0] as { abstractedMemoryId: string }).abstractedMemoryId,
-              ]
-              : [String(args[0] ?? ''), String(args[1] ?? '')];
+            : [String(args[0] ?? ''), String(args[1] ?? '')];
           for (const memoryId of memoryIds) {
             const selected = await target.queryAuthorizedMemorySubjects({
               authorization: auth,
@@ -822,7 +855,27 @@ export function createSubjectAuthorizedMemoryStore(
         return async () => undefined;
       }
       if (property === 'upsertMemoryMaintenanceReview') {
-        return async () => deniedMutation();
+        // Post-write maintenance review of a memory this caller just wrote.
+        // Allowed only under the caller's own trusted subject, and only when
+        // the reviewed memory and every candidate are visible to it (a
+        // candidate the same write superseded is proven as superseded by it).
+        return async (review: MemoryMaintenanceReviewInput) => {
+          const upsert = target.upsertMemoryMaintenanceReview;
+          if (typeof upsert !== 'function') {
+            throw new Error('Memory store does not support maintenance reviews');
+          }
+          const auth = authorization(currentContext(), 'detail');
+          if (!auth) deniedMutation();
+          await requireVisible(target, auth, review.subjectMemoryId);
+          const candidateIds = new Set([
+            ...(review.candidateMemoryIds ?? []),
+            ...review.state.candidateMemoryIds,
+          ]);
+          for (const candidateId of candidateIds) {
+            await requireVisible(target, auth, candidateId, review.subjectMemoryId);
+          }
+          return await upsert.call(target, review);
+        };
       }
       if (property === 'getMemoryMaintenanceDiagnostics') {
         return async () => ({

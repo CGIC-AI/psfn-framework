@@ -290,6 +290,7 @@ export function hydrateCanonicalStartupConfig(
       listLimit: persistedScheduler.humanEscalation.listLimit,
       retention: { ...persistedScheduler.humanEscalation.retention },
     },
+    fleetStagger: { ...persistedScheduler.fleetStagger },
     backgroundWork: {
       supervisor: { ...persistedScheduler.backgroundWork.supervisor },
       postTurn: { ...persistedScheduler.backgroundWork.postTurn },

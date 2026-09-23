@@ -39,10 +39,20 @@ export type RecurringCadence =
   | DailyRecurringCadence
   | WeeklyRecurringCadence;
 
-/** Stable fleet position used to spread a shared wall-clock slot within its minute. */
+/** Stable fleet position of one companion in the fleet manifest. */
 export interface FleetOrdinalStagger {
   manifestOrdinal: number;
   fleetSize: number;
+}
+
+/**
+ * A companion's fleet position plus the owner-file window
+ * (scheduler.json `fleetStagger.windowMs`) its shared wall-clock slots are
+ * spread across, so each companion fires at a stable, evenly spaced offset
+ * after the slot instead of the whole fleet firing together.
+ */
+export interface FleetSlotStagger extends FleetOrdinalStagger {
+  windowMs: number;
 }
 
 export interface ScheduledTaskOperation {
@@ -66,7 +76,7 @@ export interface ScheduledTask {
   /** Optional cadence for 'every' tasks. Omitted means relative interval cadence. */
   cadence?: RecurringCadence;
   /** Optional deterministic offset inside the cadence's configured wall-clock minute. */
-  fleetStagger?: FleetOrdinalStagger;
+  fleetStagger?: FleetSlotStagger;
   /** Unix timestamp for 'one-shot' tasks */
   runAt?: number;
   /** Handler called when the task fires */

@@ -26,6 +26,7 @@ import { DEFAULT_BACKGROUND_WORK_TUNING } from './scheduler-config/background-wo
 import { DEFAULT_BACKGROUND_MAINTENANCE_CONFIG } from './scheduler-config/maintenance.js';
 import { DEFAULT_HEALTH_DETECTORS_CONFIG } from './scheduler-config/health-detectors.js';
 import { DEFAULT_HUMAN_ESCALATION_CONFIG } from './scheduler-config/human-escalation.js';
+import { DEFAULT_FLEET_STAGGER_CONFIG } from './scheduler-config/fleet-stagger.js';
 import { DEFAULT_INTENTION_FOLLOW_UP_SCHEDULER_CONFIG } from './scheduler-config/intention-follow-up.js';
 import { DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG } from './icp-autonomy-scheduler-config.js';
 import {
@@ -199,6 +200,20 @@ function addMissingHumanEscalation(
 }
 
 /**
+ * psfn-framework-vcq8v.7: an owner file written before fleet staggering was
+ * configurable has no `fleetStagger` block. Seed the canonical window so the
+ * operator can see and edit it in the owner file it belongs to.
+ */
+function addMissingFleetStagger(
+  candidate: Record<string, unknown>,
+  addedPaths: string[],
+): void {
+  if (candidate.fleetStagger !== undefined) return;
+  candidate.fleetStagger = structuredClone(DEFAULT_FLEET_STAGGER_CONFIG);
+  addedPaths.push('fleetStagger');
+}
+
+/**
  * psfn-framework-jp36.5.6: an owner file written before the channel-neutral room
  * signal existed has a `socialAutonomy` block with no `roomSignal`. Seed the
  * canonical default (signal disabled, no contextual room roles admitted) so the
@@ -232,6 +247,7 @@ export function seedMissingSchedulerOwnerBlocks(
   addMissingHealthDetectors(candidate, addedPaths);
   addMissingHumanEscalation(candidate, addedPaths);
   addMissingRoomSignal(candidate, addedPaths);
+  addMissingFleetStagger(candidate, addedPaths);
   return addedPaths;
 }
 

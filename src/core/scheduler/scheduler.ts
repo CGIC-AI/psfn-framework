@@ -5,7 +5,7 @@
 import type { EventBus } from '../../shared/event-bus.js';
 import type {
   DailyRecurringCadence,
-  FleetOrdinalStagger,
+  FleetSlotStagger,
   HourlyRecurringCadence,
   RecurringCadence,
   ScheduledTask,
@@ -86,7 +86,7 @@ function validateRecurringCadence(taskId: string, cadence: RecurringCadence | un
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
-const WALL_CLOCK_MINUTE_MS = 60_000;
+const WEEK_MS = 7 * DAY_MS;
 
 // Floor for the adaptive next-wake delay. Guarantees the self-rescheduling timer
 // can never spin into a busy-loop even when a task is already overdue: an overdue
@@ -183,14 +183,34 @@ function validateFleetStagger(task: ScheduledTask): void {
   ) {
     throw new Error(`Task "${task.id}" fleetStagger.manifestOrdinal must identify a fleet member`);
   }
+  if (!Number.isSafeInteger(stagger.windowMs) || stagger.windowMs < 1) {
+    throw new Error(`Task "${task.id}" fleetStagger.windowMs must be a positive safe integer`);
+  }
+  // An offset reaching the next slot would make consecutive slots overlap and
+  // silently skip runs, so the window must fit inside one cadence period.
+  const periodMs = cadencePeriodMs(task.cadence);
+  if (stagger.windowMs >= periodMs) {
+    throw new Error(
+      `Task "${task.id}" fleetStagger.windowMs (${stagger.windowMs}) must be shorter than its `
+      + `${task.cadence.kind} cadence period (${periodMs})`,
+    );
+  }
 }
 
-function fleetStaggeredSlotStart(slotStart: number, stagger?: FleetOrdinalStagger): number {
+function cadencePeriodMs(
+  cadence: HourlyRecurringCadence | DailyRecurringCadence | WeeklyRecurringCadence,
+): number {
+  if (cadence.kind === 'hourly') return HOUR_MS;
+  return cadence.kind === 'daily' ? DAY_MS : WEEK_MS;
+}
+
+function fleetStaggeredSlotStart(slotStart: number, stagger?: FleetSlotStagger): number {
   if (!stagger) return slotStart;
   return staggerFleetOrdinalWithinWindow({
-    ...stagger,
+    manifestOrdinal: stagger.manifestOrdinal,
+    fleetSize: stagger.fleetSize,
     windowStartMs: slotStart,
-    windowEndMs: slotStart + WALL_CLOCK_MINUTE_MS,
+    windowEndMs: slotStart + stagger.windowMs,
   });
 }
 
@@ -210,7 +230,7 @@ function getNextSlotStart(
 function getCurrentStaggeredSlotStart(
   now: number,
   cadence: HourlyRecurringCadence | DailyRecurringCadence | WeeklyRecurringCadence,
-  stagger?: FleetOrdinalStagger,
+  stagger?: FleetSlotStagger,
 ): number {
   return fleetStaggeredSlotStart(getCurrentSlotStart(now, cadence), stagger);
 }
@@ -218,7 +238,7 @@ function getCurrentStaggeredSlotStart(
 function getNextStaggeredSlotStart(
   now: number,
   cadence: HourlyRecurringCadence | DailyRecurringCadence | WeeklyRecurringCadence,
-  stagger?: FleetOrdinalStagger,
+  stagger?: FleetSlotStagger,
 ): number {
   const currentBase = getCurrentSlotStart(now, cadence);
   const currentDue = fleetStaggeredSlotStart(currentBase, stagger);
@@ -231,7 +251,7 @@ function isWallClockTaskDue(
   now: number,
   lastRun: number,
   cadence: HourlyRecurringCadence | DailyRecurringCadence | WeeklyRecurringCadence,
-  stagger?: FleetOrdinalStagger,
+  stagger?: FleetSlotStagger,
 ): boolean {
   const currentSlotStart = getCurrentStaggeredSlotStart(now, cadence, stagger);
   return now >= currentSlotStart && lastRun < currentSlotStart;
@@ -317,10 +337,14 @@ export class Scheduler {
    * slot-start check treats any older last-run as "not yet run this slot").
    * Re-registration with an updated lastRunAt does not re-fire, so restart or
    * replay never duplicates a recovered slot.
+   *
+   * `phaseOffsetMs` (relative cadences with `skipFirstRun` only) delays the
+   * first run — and therefore the whole poll phase — by the given offset, so
+   * fleet members registered in the same instant do not poll in lockstep.
    */
   register(
     task: ScheduledTask | ProtectedScheduledTask,
-    opts?: { skipFirstRun?: boolean; lastRunAt?: number },
+    opts?: { skipFirstRun?: boolean; lastRunAt?: number; phaseOffsetMs?: number },
   ): void {
     if (this.tasks.has(task.id)) {
       throw new Error(`Task "${task.id}" is already registered`);
@@ -343,8 +367,20 @@ export class Scheduler {
       }
     }
 
+    if (opts?.phaseOffsetMs !== undefined) {
+      if (!Number.isSafeInteger(opts.phaseOffsetMs) || opts.phaseOffsetMs < 0) {
+        throw new Error(`Task "${task.id}" phaseOffsetMs must be a non-negative safe integer`);
+      }
+      if (task.type !== 'every' || isWallClockCadence(task.cadence) || opts.skipFirstRun !== true) {
+        throw new Error(
+          `Task "${task.id}" phaseOffsetMs requires a relative "every" cadence registered with skipFirstRun`,
+        );
+      }
+    }
+
     const now = Date.now();
-    const seededLastRun = opts?.lastRunAt ?? (opts?.skipFirstRun ? now : 0);
+    const seededLastRun = opts?.lastRunAt
+      ?? (opts?.skipFirstRun ? now + (opts.phaseOffsetMs ?? 0) : 0);
     // Wall-clock cadences anchor to fixed slots, not a relative interval. A
     // persisted lastRunAt (state that outlived this process) must seed the
     // anchor so a restart that lands AFTER the slot recovers the missed slot

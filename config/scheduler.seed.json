@@ -58,6 +58,9 @@
       "maxOpenRowsPerKind": 128
     }
   },
+  "fleetStagger": {
+    "windowMs": 3600000
+  },
   "backgroundWork": {
     "supervisor": {
       "maxConcurrentSessions": 4,

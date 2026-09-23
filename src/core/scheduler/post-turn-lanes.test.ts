@@ -150,7 +150,7 @@ describe('reflection post-turn lane split (E5.2)', () => {
         },
         episodicWatermarkStore: fromAny(episodicWatermarkStore),
         conversationalActivityWorkset: fromAny(conversationalActivityWorkset),
-        fleetScheduleStagger: { manifestOrdinal: 1, fleetSize: 3 },
+        fleetScheduleStagger: { manifestOrdinal: 1, fleetSize: 3, windowMs: 3_600_000 },
         ...(options.fleetMaintenance
           ? { fleetMaintenance: fromAny(options.fleetMaintenance) }
           : {}),
@@ -226,10 +226,10 @@ describe('reflection post-turn lane split (E5.2)', () => {
       { kind: 'daily', hour: 18, minute: 0, timezone: 'local' },
     ]);
     expect(timerTasks.map(task => task.fleetStagger)).toEqual([
-      { manifestOrdinal: 1, fleetSize: 3 },
-      { manifestOrdinal: 1, fleetSize: 3 },
-      { manifestOrdinal: 1, fleetSize: 3 },
-      { manifestOrdinal: 1, fleetSize: 3 },
+      { manifestOrdinal: 1, fleetSize: 3, windowMs: 3_600_000 },
+      { manifestOrdinal: 1, fleetSize: 3, windowMs: 3_600_000 },
+      { manifestOrdinal: 1, fleetSize: 3, windowMs: 3_600_000 },
+      { manifestOrdinal: 1, fleetSize: 3, windowMs: 3_600_000 },
     ]);
     // The heavy sleeptime handler is registered for the scheduler-owned action
     // kind; the near-turn and episode-synthesis handlers are separate lanes.
@@ -245,10 +245,12 @@ describe('reflection post-turn lane split (E5.2)', () => {
     expect(harness.scheduler.getTask('reflection:daily-review')?.fleetStagger).toEqual({
       manifestOrdinal: 1,
       fleetSize: 3,
+      windowMs: 3_600_000,
     });
     expect(harness.scheduler.getTask('reflection:weekly-review')?.fleetStagger).toEqual({
       manifestOrdinal: 1,
       fleetSize: 3,
+      windowMs: 3_600_000,
     });
   });
 

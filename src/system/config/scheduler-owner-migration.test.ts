@@ -30,6 +30,7 @@ import {
 } from './participation-config.js';
 import { DEFAULT_HEALTH_DETECTORS_CONFIG } from './scheduler-config/health-detectors.js';
 import { DEFAULT_HUMAN_ESCALATION_CONFIG } from './scheduler-config/human-escalation.js';
+import { DEFAULT_FLEET_STAGGER_CONFIG } from './scheduler-config/fleet-stagger.js';
 
 const fixturePath = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -359,6 +360,7 @@ describe('migrateLegacySchedulerOwner', () => {
         'intentionFollowUp',
         'healthDetectors',
         'humanEscalation',
+        'fleetStagger',
       ],
     });
     expect(readFileSync(filePath, 'utf8')).toBe(before);
@@ -372,6 +374,7 @@ describe('migrateLegacySchedulerOwner', () => {
         'intentionFollowUp',
         'healthDetectors',
         'humanEscalation',
+        'fleetStagger',
       ],
     });
     expect(loadSchedulerConfig(dataDir).icpAutonomy.policyHolds)
@@ -408,6 +411,7 @@ describe('migrateLegacySchedulerOwner', () => {
         'intentionFollowUp',
         'healthDetectors',
         'humanEscalation',
+        'fleetStagger',
       ],
     });
     // The operator's own batch size survives; only the unknown key is seeded.
@@ -438,6 +442,7 @@ describe('migrateLegacySchedulerOwner', () => {
         'intentionFollowUp',
         'healthDetectors',
         'humanEscalation',
+        'fleetStagger',
       ],
     });
     expect(loadSchedulerConfig(dataDir).backgroundMaintenance.doingMirrorLetters)
@@ -464,6 +469,7 @@ describe('migrateLegacySchedulerOwner', () => {
         'intentionFollowUp',
         'healthDetectors',
         'humanEscalation',
+        'fleetStagger',
       ],
     });
     expect(readFileSync(filePath, 'utf8')).toBe(before);
@@ -478,6 +484,7 @@ describe('migrateLegacySchedulerOwner', () => {
         'intentionFollowUp',
         'healthDetectors',
         'humanEscalation',
+        'fleetStagger',
       ],
     });
     const migratedRaw = JSON.parse(readFileSync(filePath, 'utf8')) as Record<string, unknown>;
@@ -527,6 +534,7 @@ describe('migrateLegacySchedulerOwner', () => {
         'healthDetectors.stuckJobs',
         'healthDetectors.incidentAlerts',
         'humanEscalation',
+        'fleetStagger',
       ],
     });
     const migrated = loadSchedulerConfig(dataDir).healthDetectors;
@@ -562,6 +570,7 @@ describe('migrateLegacySchedulerOwner', () => {
         routes: structuredClone(DEFAULT_HUMAN_ESCALATION_CONFIG.routes),
         listLimit: 25,
       };
+      owner.fleetStagger = structuredClone(DEFAULT_FLEET_STAGGER_CONFIG);
     });
 
     expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
@@ -601,6 +610,7 @@ describe('migrateLegacySchedulerOwner', () => {
         'intentionFollowUp',
         'healthDetectors',
         'humanEscalation',
+        'fleetStagger',
       ],
     });
     expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
@@ -612,6 +622,7 @@ describe('migrateLegacySchedulerOwner', () => {
         'intentionFollowUp',
         'healthDetectors',
         'humanEscalation',
+        'fleetStagger',
       ],
     });
     const migratedRaw = JSON.parse(readFileSync(filePath, 'utf8')) as Record<string, unknown>;
@@ -643,6 +654,7 @@ describe('migrateLegacySchedulerOwner', () => {
         'intentionFollowUp',
         'healthDetectors',
         'humanEscalation',
+        'fleetStagger',
       ],
     });
     expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
@@ -654,6 +666,7 @@ describe('migrateLegacySchedulerOwner', () => {
         'intentionFollowUp',
         'healthDetectors',
         'humanEscalation',
+        'fleetStagger',
       ],
     });
     expect(loadSchedulerConfig(dataDir).backgroundWork.postTurn.maxAttempts).toBe(5);

@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { DEFAULT_HEALTH_DETECTORS_CONFIG } from './scheduler-config/health-detectors.js';
+import { DEFAULT_FLEET_STAGGER_CONFIG } from './scheduler-config/fleet-stagger.js';
 import { DEFAULT_HUMAN_ESCALATION_CONFIG } from './scheduler-config/human-escalation.js';
 import {
   CAPABILITY_TIER_FILE_NAME,
@@ -345,6 +346,7 @@ describe('subsystem config round-trip', () => {
         },
       },
       healthDetectors: structuredClone(DEFAULT_HEALTH_DETECTORS_CONFIG),
+      fleetStagger: structuredClone(DEFAULT_FLEET_STAGGER_CONFIG),
       humanEscalation: structuredClone(DEFAULT_HUMAN_ESCALATION_CONFIG),
       backgroundWork: {
         supervisor: {

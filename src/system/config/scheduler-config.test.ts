@@ -6,6 +6,7 @@ import {
   DEFAULT_BACKGROUND_WORK_TUNING,
   DEFAULT_FREE_TIME_CONFIG,
   DEFAULT_HEALTH_DETECTORS_CONFIG,
+  DEFAULT_FLEET_STAGGER_CONFIG,
   DEFAULT_HUMAN_ESCALATION_CONFIG,
   DEFAULT_SOCIAL_AUTONOMY_CONFIG,
   DEFAULT_SOCIAL_DESIRE_CONFIG,
@@ -51,6 +52,7 @@ function buildValidSchedulerConfig(): Record<string, unknown> {
       },
     },
     healthDetectors: structuredClone(DEFAULT_HEALTH_DETECTORS_CONFIG),
+    fleetStagger: structuredClone(DEFAULT_FLEET_STAGGER_CONFIG),
     humanEscalation: structuredClone(DEFAULT_HUMAN_ESCALATION_CONFIG),
     backgroundWork: structuredClone(DEFAULT_BACKGROUND_WORK_TUNING),
     artifactLifecycle: {
@@ -912,6 +914,21 @@ describe('scheduler config seed defaults', () => {
         'sleepConsolidation.transcriptMessageLimit must be an integer >= 1',
       );
     });
+  });
+
+  it('requires the fleetStagger block and validates its window', () => {
+    const missing = buildValidSchedulerConfig();
+    delete missing.fleetStagger;
+    expect(() => validateSchedulerConfig(missing, 'scheduler.json'))
+      .toThrow('fleetStagger must be an object');
+    expect(() => validateSchedulerConfig(
+      { ...buildValidSchedulerConfig(), fleetStagger: { windowMs: 0 } },
+      'scheduler.json',
+    )).toThrow('fleetStagger.windowMs must be an integer >= 1000');
+    expect(validateSchedulerConfig(
+      { ...buildValidSchedulerConfig(), fleetStagger: { windowMs: 45 * 60_000 } },
+      'scheduler.json',
+    ).fleetStagger).toEqual({ windowMs: 45 * 60_000 });
   });
 
   it('fails closed when arcFormation.minConfidence is out of the unit interval', () => {

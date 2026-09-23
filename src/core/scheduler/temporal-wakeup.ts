@@ -46,7 +46,7 @@ import {
 } from '../session/session-lane-metadata.js';
 import type { SessionEntry } from '../session/types.js';
 import type { Scheduler } from './scheduler.js';
-import type { FleetOrdinalStagger } from './types.js';
+import type { FleetSlotStagger } from './types.js';
 import {
   evaluateMorningWakePreflight,
 } from './temporal-wakeup-preflight.js';
@@ -544,7 +544,7 @@ export interface TemporalWakeupRuntimeOptions {
   sessionManager: TemporalWakeupSessionManagerPort;
   config: TemporalWakeupConfig;
   /** Stable fleet position for spreading the configured morning wall-clock minute. */
-  fleetScheduleStagger?: FleetOrdinalStagger;
+  fleetScheduleStagger?: FleetSlotStagger;
   /** Quiet hours for outward delivery after the wake model turn. */
   quietHours?: ProactiveQuietHoursConfig | null;
   /**

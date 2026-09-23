@@ -383,6 +383,45 @@ function buildRuntime(options: {
 }
 
 describe('registerFreeTimeTasks', () => {
+  it('offsets each fleet member\'s poll phase so a fleet rolled out together does not poll in lockstep', async () => {
+    let nowMs = Date.parse('2026-06-11T01:00:00.000Z');
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
+    try {
+      const checkIntervalMs = 15 * 60_000;
+      const companions = [0, 1].map(manifestOrdinal => {
+        const built = buildRuntime({
+          turnScript: [REFLECTION_SILENT_TOKEN],
+          config: freeTimeConfig({
+            quietHours: { enabled: true, checkIntervalMs },
+            idle: { enabled: false, checkIntervalMs, minIdleMinutes: 180 },
+          }),
+          now: () => nowMs,
+        });
+        const polls: number[] = [];
+        built.eventBus.on('scheduler.free_time.gate', () => polls.push(nowMs));
+        registerFreeTimeTasks({
+          ...built.runtime,
+          fleetStagger: { manifestOrdinal, fleetSize: 2, windowMs: 60 * 60_000 },
+        });
+        return { scheduler: built.scheduler, polls };
+      });
+
+      // Ordinal 0 keeps the unstaggered phase; ordinal 1 is offset by half of
+      // the window clamped to one poll interval (7.5 minutes).
+      nowMs += checkIntervalMs;
+      for (const companion of companions) await companion.scheduler.tick();
+      expect(companions[0]!.polls).toHaveLength(1);
+      expect(companions[1]!.polls).toHaveLength(0);
+
+      nowMs += 7.5 * 60_000;
+      for (const companion of companions) await companion.scheduler.tick();
+      expect(companions[0]!.polls).toHaveLength(1);
+      expect(companions[1]!.polls).toHaveLength(1);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it.each([
     ['quiet_hours', FREE_TIME_QUIET_HOURS_TASK_ID],
     ['idle', FREE_TIME_IDLE_TASK_ID],

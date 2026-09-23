@@ -26,7 +26,7 @@ import type { AutomataClassLifecycleRuntime } from '../../faculties/automata/bus
 import type { NearTurnMemoryScopeClassifierPort } from '../../faculties/memory/near-turn-memory-lane.js';
 import type { ConversationalActivityWorksetPort } from '../session/conversational-activity-workset.js';
 import type { FleetMaintenanceCoordinator } from './fleet-maintenance-coordinator.js';
-import type { FleetOrdinalStagger } from './types.js';
+import type { FleetSlotStagger } from './types.js';
 import type { ProactiveOutboundDispatcher } from '../intention/proactive-outbound.js';
 import type { OutreachOutboxStore } from '../intention/outreach-outbox.js';
 import type { SocialDesireOutboundRuntime } from '../intention/social-desire-outreach.js';
@@ -247,7 +247,7 @@ export interface ReflectionRuntimeOptions {
     retryDelayMs: number;
   };
   /** Stable fleet position for lightweight wall-clock task spreading. */
-  fleetScheduleStagger?: FleetOrdinalStagger;
+  fleetScheduleStagger?: FleetSlotStagger;
   /** Companion aliases for deterministic relevance classification. */
   companionNames?: readonly string[];
   /** Companion author ids (e.g. Discord bot id) for mention detection. */

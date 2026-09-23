@@ -2125,6 +2125,16 @@ async function main(): Promise<void> {
     eventBus,
     chargePolicy: config.chargePolicy,
   });
+  // One fleet position + owner-file window (scheduler.json fleetStagger) for
+  // every fixed-time lane: each companion fires at a stable, evenly spaced
+  // offset after shared slots. Absent outside a multi-companion fleet.
+  const fleetScheduleStagger = persistenceRuntime.fleetMaintenanceCoordinator
+    ? {
+        manifestOrdinal: persistenceRuntime.fleetMaintenanceCoordinator.manifestOrdinal,
+        fleetSize: persistenceRuntime.fleetMaintenanceCoordinator.fleetSize,
+        windowMs: schedulerConfig.fleetStagger.windowMs,
+      }
+    : undefined;
   registerTemporalWakeupLane({
     scheduler,
     sessionManager,
@@ -2136,14 +2146,7 @@ async function main(): Promise<void> {
     promptRegistry: promptState.registry,
     proactiveOutbound,
     companionName: card.data.name,
-    ...(persistenceRuntime.fleetMaintenanceCoordinator
-      ? {
-          fleetScheduleStagger: {
-            manifestOrdinal: persistenceRuntime.fleetMaintenanceCoordinator.manifestOrdinal,
-            fleetSize: persistenceRuntime.fleetMaintenanceCoordinator.fleetSize,
-          },
-        }
-      : {}),
+    ...(fleetScheduleStagger ? { fleetScheduleStagger } : {}),
   });
 
   // ── Free-time lanes (E8.1): self-directed time, extracted to
@@ -2153,6 +2156,7 @@ async function main(): Promise<void> {
     sessionManager,
     config: schedulerConfig.freeTime,
     restWindow: schedulerConfig.episodicProcessing,
+    ...(fleetScheduleStagger ? { fleetStagger: fleetScheduleStagger } : {}),
     chooserSettings: schedulerConfig.socialAutonomy.freeTimeChooser,
     eventBus,
     agentLoop,
@@ -2305,12 +2309,9 @@ async function main(): Promise<void> {
               leaseDurationMs: schedulerConfig.backgroundWork.supervisor.leaseDurationMs,
               retryDelayMs: schedulerConfig.backgroundWork.supervisor.retryBaseDelayMs,
             },
-            fleetScheduleStagger: {
-              manifestOrdinal: persistenceRuntime.fleetMaintenanceCoordinator.manifestOrdinal,
-              fleetSize: persistenceRuntime.fleetMaintenanceCoordinator.fleetSize,
-            },
           }
         : {}),
+      ...(fleetScheduleStagger ? { fleetScheduleStagger } : {}),
       emotionState,
       contactStore,
       getActiveConcerns: intentionAppraisalHooks.getActiveConcerns,

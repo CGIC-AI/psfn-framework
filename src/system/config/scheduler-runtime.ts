@@ -52,6 +52,7 @@ export function resolveRuntimeSchedulerConfig(
       listLimit: persisted.humanEscalation.listLimit,
       retention: { ...persisted.humanEscalation.retention },
     },
+    fleetStagger: { ...persisted.fleetStagger },
     artifactLifecycle: { ...persisted.artifactLifecycle },
     episodicProcessing: { ...persisted.episodicProcessing },
     nearTurnMemory: {

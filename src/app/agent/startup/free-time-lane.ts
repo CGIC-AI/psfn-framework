@@ -58,6 +58,8 @@ export interface FreeTimeLaneDeps {
   sessionManager: FreeTimeRuntimeOptions['sessionManager'];
   config: FreeTimeRuntimeOptions['config'];
   restWindow: FreeTimeRuntimeOptions['restWindow'];
+  /** Fleet poll-phase stagger; absent for a single-companion deployment. */
+  fleetStagger?: FreeTimeRuntimeOptions['fleetStagger'];
   chooserSettings: SchedulerConfig['socialAutonomy']['freeTimeChooser'];
   eventBus: EventBus;
   agentLoop: SubstrateAgent;
@@ -116,6 +118,7 @@ export function registerFreeTimeLane(deps: FreeTimeLaneDeps): void {
     sessionManager,
     config,
     restWindow,
+    fleetStagger,
     chooserSettings,
     eventBus,
     agentLoop,
@@ -228,6 +231,7 @@ export function registerFreeTimeLane(deps: FreeTimeLaneDeps): void {
     sessionManager,
     config,
     restWindow,
+    ...(fleetStagger ? { fleetStagger } : {}),
     eventBus,
     // The whole block runs inside a 'background' charge context so per-turn LLM
     // spend accumulates against the background lane; getRunChargeSnapshot lets

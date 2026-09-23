@@ -785,12 +785,18 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
           dueAt: Date.parse('2026-04-01T12:00:00.000Z'),
           priority: 'high',
         }],
+        listPendingConcernCandidates: async () => [{
+          id: 'candidate-7', text: 'Ask Ari how the move went', priority: 'medium', createdAt: '2026-04-01T09:00:00.000Z',
+        }],
       },
     });
 
     const result = await runtime.runTemplateNow('daily-review', {
       deferIfBusy: false,
     });
+    // vcq8v.5: pending concern candidates are put to her in the review.
+    expect(capturedPrompts[0]).toContain('[Possible Concerns Waiting For You]');
+    expect(capturedPrompts[0]).toContain('- candidate-7 (medium): Ask Ari how the move went');
 
     expect(result.reflection).toContain('still needs an explicit follow-up');
     expect(handleMessage).toHaveBeenCalledTimes(1);

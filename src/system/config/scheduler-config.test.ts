@@ -350,14 +350,41 @@ describe('scheduler config seed defaults', () => {
     expect(loadSchedulerSeedDefaults().weightedThoughtOutreach.checkIntervalMs).toBe(1_800_000);
   });
 
-  it('defaults the social-desire outreach settings with a tight fail-closed budget', () => {
+  it('defaults the social-desire outreach settings with bounded per-contact pacing', () => {
     const loaded = loadSchedulerSeedDefaults();
     expect(loaded.socialDesire.enabled).toBe(false);
     expect(loaded.socialDesire.outreach).toEqual({
       checkIntervalMs: 1_800_000,
       maxConsentMomentsPerRun: 1,
       consentTtlMs: 1_800_000,
-      budget: { maxSendsPerWindow: 2, windowMs: 86_400_000 },
+      budget: { maxSendsPerWindow: 4, windowMs: 86_400_000 },
+      contactPacing: { perContactCooldownMs: 64_800_000, deferDelayMs: 10_800_000 },
+      turnContext: { excerptMessages: 6, excerptMaxChars: 900, activityMaxItems: 6 },
+    });
+    expect(loaded.socialDesire.impulse).toEqual({ gain: 0.4 });
+    expect(loaded.socialDesire).toEqual(DEFAULT_SOCIAL_DESIRE_CONFIG);
+  });
+
+  it('applies pacing, turn-context, and impulse defaults to owners written before vcq8v.4', () => {
+    withSeedDir((seedDir) => {
+      const config = buildValidSchedulerConfig();
+      const socialDesire = structuredClone(DEFAULT_SOCIAL_DESIRE_CONFIG) as unknown as Record<string, unknown>;
+      const outreach = socialDesire.outreach as Record<string, unknown>;
+      delete outreach.contactPacing;
+      delete outreach.turnContext;
+      delete socialDesire.impulse;
+      config.socialDesire = socialDesire;
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), config);
+      expect(loadSchedulerSeedDefaults({ seedDir }).socialDesire).toEqual(DEFAULT_SOCIAL_DESIRE_CONFIG);
+
+      outreach.contactPacing = { perContactCooldownMs: 0, deferDelayMs: 1 };
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), config);
+      expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
+        /socialDesire\.outreach\.contactPacing\.perContactCooldownMs/,
+      );
+      outreach.contactPacing = { perContactCooldownMs: 1, deferDelayMs: 1, burst: 3 };
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), config);
+      expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(/burst/);
     });
   });
 

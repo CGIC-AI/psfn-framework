@@ -66,6 +66,26 @@ describe('worker lanes', () => {
       channelId: 'internal:reflection:musing',
       taskKind: 'reflection',
     })).toBe(MAINTENANCE_REFLECTION_RUNTIME_CLASS);
+    // A per-contact outreach turn is chat priority by design (vcq8v.4), even
+    // though its internal channel infers a scheduled call type.
+    expect(resolveRuntimeLaneClassForTurn({
+      callType: 'scheduled',
+      channelId: 'internal:social-outreach:contact-1',
+    })).toBe(FOREGROUND_CHAT_RUNTIME_CLASS);
+    expect(resolveRuntimeLaneClassForModelCall({
+      purpose: 'background',
+      callType: 'scheduled',
+      channelId: 'internal:social-outreach:contact-1',
+    })).toBe(FOREGROUND_CHAT_RUNTIME_CLASS);
+    // Concern formation must not be preempted away (vcq8v.5).
+    for (const originStage of ['intention.appraisal.post_turn', 'intention.concern_candidate_review']) {
+      expect(resolveRuntimeLaneClassForModelCall({
+        purpose: 'background',
+        callType: 'background',
+        channelId: '123456789012345678',
+        originStage,
+      })).toBe(POST_TURN_APPRAISAL_RUNTIME_CLASS);
+    }
 
     expect(resolveRuntimeLaneClassForPostTurnActionKind('intention.follow_up')).toBe(
       POST_TURN_APPRAISAL_RUNTIME_CLASS,

@@ -4,6 +4,7 @@ import type {
   ContextBudgetModelSlotLike,
 } from './context-budget-contracts.js';
 import { clamp, toFlooredPositiveInteger } from './utils/numeric.js';
+import { isSocialOutreachChannelId } from './contracts/social-outreach-channel.js';
 
 export interface ContextBudgetConfigLike {
   defaultContextWindow: number;
@@ -271,7 +272,8 @@ function isCompanionContextBudgetTurn(
   const channelId = turn?.channelId?.trim().toLowerCase() ?? '';
   return channelId === 'internal:heartbeat'
     || channelId.startsWith('internal:heartbeat:')
-    || channelId.startsWith('internal:reflection:');
+    || channelId.startsWith('internal:reflection:')
+    || isSocialOutreachChannelId(channelId);
 }
 
 function resolvePct(value: number | undefined, fallback: number, range: PercentageRange): number {

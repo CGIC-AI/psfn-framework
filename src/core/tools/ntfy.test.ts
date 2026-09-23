@@ -21,6 +21,7 @@ import type { ClarifyDeliverParams, ClarifyDeliverResult } from '../../boundary/
 import type { NotificationPort } from '../../boundary/gateway/notification-port.js';
 import { ExternalCommunicationRateLimiter } from '../../system/capabilities/safeguards.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
+import { createSocialOutreachDraftRegistry } from '../intention/social-outreach-turn/drafts.js';
 
 const companionBriefSender = {
   kind: 'companion',
@@ -68,8 +69,8 @@ describe('notify tool', () => {
             expect.objectContaining({ const: 'consider' }),
             expect.objectContaining({ const: 'approval_request' }),
             expect.objectContaining({ const: 'clarify' }),
-            expect.objectContaining({ const: 'outreach_list' }),
-            expect.objectContaining({ const: 'outreach_choose' }),
+            expect.objectContaining({ const: 'outreach_send' }),
+            expect.objectContaining({ const: 'outreach_later' }),
           ]),
         },
       },
@@ -89,51 +90,49 @@ describe('notify tool', () => {
     })).toBe(true);
   });
 
-  it('exposes a qualified social opportunity without peer-visible content', async () => {
-    const inspect = vi.fn().mockResolvedValue({
-      record: { opportunityId: 'felt-impulse:would_message:1780000000000', state: 'pending' },
-      dispositions: [
-        'ignore', 'defer', 'contact-human', 'contact-companion', 'join-room', 'other',
-      ],
-      destinations: [{
-        kind: 'room', destinationId: 'room:buzz:example', displayLabel: 'A room',
-        channelId: 'example', channelType: 'buzz', dyadId: null,
-      }],
-    });
-    const tool = createNotifyTool({ dispatch: vi.fn() }, {
-      socialImpulseOutreach: fromAny({ inspect, choose: vi.fn(), onImpulse: vi.fn() }),
-    });
-    const result = await tool.execute('outreach-list-1', {
-      action: 'outreach_list',
-      opportunity_id: 'felt-impulse:would_message:1780000000000',
-    });
-    expect(inspect).toHaveBeenCalledWith('felt-impulse:would_message:1780000000000');
-    expect(resultText(fromAny(result))).toContain('contact-companion');
-    expect(resultText(fromAny(result))).not.toContain('message content');
+  it('records the written outreach message only inside that contact\'s live outreach turn', async () => {
+    const drafts = createSocialOutreachDraftRegistry();
+    const tool = createNotifyTool({ dispatch: vi.fn() }, { socialOutreachDrafts: drafts });
+    const slot = drafts.open('contact-1');
+    try {
+      const outside = await tool.execute('outreach-send-0', {
+        action: 'outreach_send',
+        message: 'hey you',
+      });
+      expect(resultText(fromAny(outside))).toContain('only accepted inside a live social outreach turn');
+      expect(slot.answer()).toBeNull();
+
+      const sent = await runWithRequestContext({ channelId: slot.channelId }, async () => (
+        await tool.execute('outreach-send-1', { action: 'outreach_send', message: '  hey you, how was the trip?  ' })
+      ));
+      expect(resultText(fromAny(sent))).toContain('will be delivered');
+      expect(slot.answer()).toEqual({ kind: 'message', text: 'hey you, how was the trip?' });
+
+      const again = await runWithRequestContext({ channelId: slot.channelId }, async () => (
+        await tool.execute('outreach-later-1', { action: 'outreach_later' })
+      ));
+      expect(resultText(fromAny(again))).toContain('already been answered');
+    } finally {
+      slot.close();
+    }
   });
 
-  it('records a bounded social disposition through its runtime', async () => {
-    const choose = vi.fn().mockResolvedValue({
-      outcome: 'would_send',
-      record: { opportunityId: 'felt-impulse:would_message:1780000000000', state: 'would_send' },
-    });
-    const tool = createNotifyTool({ dispatch: vi.fn() }, {
-      socialImpulseOutreach: fromAny({ inspect: vi.fn(), choose, onImpulse: vi.fn() }),
-    });
-    const result = await tool.execute('outreach-choose-1', {
-      action: 'outreach_choose',
-      opportunity_id: 'felt-impulse:would_message:1780000000000',
-      disposition: 'join-room',
-      destination_id: 'room:discord:example',
-      intent: 'Join in my own words.',
-    });
-    expect(choose).toHaveBeenCalledWith({
-      opportunityId: 'felt-impulse:would_message:1780000000000',
-      disposition: 'join-room',
-      destinationId: 'room:discord:example',
-      intent: 'Join in my own words.',
-    });
-    expect(resultText(fromAny(result))).toContain('would_send');
+  it('records a later answer and rejects removed destination fields', async () => {
+    const drafts = createSocialOutreachDraftRegistry();
+    const tool = createNotifyTool({ dispatch: vi.fn() }, { socialOutreachDrafts: drafts });
+    const slot = drafts.open('contact-2');
+    try {
+      await runWithRequestContext({ channelId: slot.channelId }, async () => (
+        await tool.execute('outreach-later-2', { action: 'outreach_later' })
+      ));
+      expect(slot.answer()).toEqual({ kind: 'later' });
+    } finally {
+      slot.close();
+    }
+    expect(Value.Check(tool.parameters, {
+      action: 'outreach_send', message: 'hi', destination_id: 'room:discord:example',
+    })).toBe(false);
+    expect(Value.Check(tool.modelParameters, { action: 'outreach_choose' })).toBe(false);
   });
 
   it('returns explicit success text when a brief is sent', async () => {

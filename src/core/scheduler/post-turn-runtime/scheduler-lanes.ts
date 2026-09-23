@@ -154,6 +154,9 @@ export function createSchedulerOwnedPostTurnLanes(
       coreMemoryStore: runtimeOptions.coreMemoryStore,
       memoryWriter: runtimeOptions.memoryWriter,
       promptRegistry: runtimeOptions.promptRegistry ?? null,
+      ...(runtimeOptions.concernCandidateReview
+        ? { concernCandidates: runtimeOptions.concernCandidateReview }
+        : {}),
       restWindow: runtimeOptions.episodicProcessingRestWindow,
       ...(runtimeOptions.orientationRewriteGate
         ? { orientationRewriteGate: runtimeOptions.orientationRewriteGate }

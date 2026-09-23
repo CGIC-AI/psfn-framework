@@ -19,6 +19,10 @@ import {
   type SocialDesireOutreachDeps,
 } from '../intention/social-desire-outreach.js';
 import type { SocialDesireConfig } from '../../system/config/scheduler-config.js';
+import {
+  runConcernFollowUpOutreachOnce,
+  type ConcernFollowUpOutreachDeps,
+} from '../intention/concern-follow-up-outreach.js';
 import type { Scheduler } from './scheduler.js';
 import type { PostTurnActionRuntime } from '../agent/post-turn-action-runtime.js';
 import { isRecord } from '../../shared/utils/types.js';
@@ -33,8 +37,19 @@ export interface SocialDesireOutreachTaskOptions {
   eventBus: EventBus;
   config: SocialDesireConfig;
   deps: SocialDesireOutreachDeps;
+  /** Due concerns about a contact follow up through the same per-contact turn (vcq8v.5). */
+  concernFollowUps?: ConcernFollowUpOutreachDeps;
   postTurnActions: Pick<PostTurnActionRuntime, 'enqueue'>;
   now?: () => number;
+}
+
+export interface SocialDesireOutreachTask {
+  /**
+   * Evaluate per-contact desires now (serialized with the scheduled tick), for
+   * example right after a felt impulse raised pressure. Never runs two consent
+   * moments for the same contact concurrently.
+   */
+  runNow(): Promise<void>;
 }
 
 /**
@@ -44,17 +59,23 @@ export interface SocialDesireOutreachTaskOptions {
  */
 export function registerSocialDesireOutreachTask(
   options: SocialDesireOutreachTaskOptions,
-): void {
+): SocialDesireOutreachTask | null {
   if (!options.config.enabled) {
     log.info('Social-desire outreach lane disabled by scheduler.json socialDesire.enabled');
-    return;
+    return null;
   }
   if (options.scheduler.getTask(SOCIAL_DESIRE_OUTREACH_TASK_ID)) {
-    return;
+    throw new Error('Social-desire outreach lane is already registered');
   }
 
   const resolveNow = options.now ?? (() => Date.now());
   const intervalMs = Math.max(1_000, options.config.outreach.checkIntervalMs);
+  let tail: Promise<void> = Promise.resolve();
+  const runSerialized = (): Promise<void> => {
+    const run = tail.then(() => runSocialDesireOutreachTick(options, resolveNow()));
+    tail = run.catch(() => undefined);
+    return run;
+  };
 
   options.scheduler.register(
     {
@@ -62,9 +83,7 @@ export function registerSocialDesireOutreachTask(
       name: SOCIAL_DESIRE_OUTREACH_TASK_NAME,
       type: 'every',
       intervalMs,
-      handler: async () => {
-        await runSocialDesireOutreachTick(options, resolveNow());
-      },
+      handler: runSerialized,
       eligibility: { requiredTokens: ['memory.write'] },
       state: 'idle',
     },
@@ -77,6 +96,7 @@ export function registerSocialDesireOutreachTask(
     budgetMaxSendsPerWindow: options.config.outreach.budget.maxSendsPerWindow,
     budgetWindowMs: options.config.outreach.budget.windowMs,
   });
+  return { runNow: runSerialized };
 }
 
 async function safeEmit(emit: () => Promise<void>): Promise<void> {
@@ -99,6 +119,9 @@ export async function runSocialDesireOutreachTick(
   nowMs: number,
 ): Promise<void> {
   const { eventBus } = options;
+  if (options.concernFollowUps) {
+    await runConcernFollowUpTick(options, options.concernFollowUps, nowMs);
+  }
   const result = await runSocialDesireOutreachOnce(options.deps, nowMs);
 
   // Per-tick gate/liveness telemetry (hrmrq.85): a real subscriber (Garden
@@ -228,5 +251,34 @@ export async function runSocialDesireOutreachTick(
         timestamp: nowMs,
       }));
     }
+  }
+}
+
+async function runConcernFollowUpTick(
+  options: SocialDesireOutreachTaskOptions,
+  deps: ConcernFollowUpOutreachDeps,
+  nowMs: number,
+): Promise<void> {
+  const result = await runConcernFollowUpOutreachOnce(deps, nowMs);
+  for (const produced of result.produced) {
+    const actions = toInferredPostTurnActions([produced.candidate], {
+      id: `concern-follow-up:${produced.concernId}:${nowMs}`,
+      channelId: produced.channelId,
+    });
+    if (actions.length !== 1) {
+      throw new Error('Concern follow-up did not normalize to exactly one outbound action');
+    }
+    if (options.postTurnActions.enqueue(actions[0]!) === 'dropped_budget') {
+      throw new Error('Concern follow-up outbound action was dropped by the durable queue budget');
+    }
+  }
+  if (result.asked > 0 || result.blocked.length > 0) {
+    log.info('Concern follow-up outreach evaluated', {
+      asked: result.asked,
+      produced: result.produced.length,
+      deferred: result.deferred.length,
+      declined: result.declined.length,
+      blocked: result.blocked.length,
+    });
   }
 }

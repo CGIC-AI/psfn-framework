@@ -66,6 +66,7 @@ function makeDeps(
     consentEvaluator,
     consents: createSocialDesireConsentLedger({ ttlMs: 30 * 60 * 1000 }),
     maxConsentMomentsPerRun: 1,
+    contactPacing: { perContactCooldownMs: 18 * 60 * 60 * 1000, deferDelayMs: 3 * 60 * 60 * 1000 },
     resolveDeliveryChannel: async () => ({
       channelId: 'dm-primary',
       channelType: 'discord',
@@ -99,9 +100,34 @@ describe('registerSocialDesireOutreachTask', () => {
       deps: makeDeps({ evaluate: vi.fn() }),
       postTurnActions: { enqueue: vi.fn(() => 'queued' as const) },
     };
-    registerSocialDesireOutreachTask(options);
-    registerSocialDesireOutreachTask(options);
+    expect(registerSocialDesireOutreachTask(options)).not.toBeNull();
+    expect(() => registerSocialDesireOutreachTask(options)).toThrow(/already registered/);
     expect(scheduler.getTask(SOCIAL_DESIRE_OUTREACH_TASK_ID)).toBeDefined();
+  });
+
+  it('serializes immediate evaluations so one contact is never asked twice at once', async () => {
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, { tickIntervalMs: 50, heartbeatIntervalMs: 1_000 });
+    let active = 0;
+    let maxActive = 0;
+    const evaluate = vi.fn(async () => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      active -= 1;
+      return { action: 'defer' as const };
+    });
+    const task = registerSocialDesireOutreachTask({
+      scheduler,
+      eventBus,
+      config: laneConfig(true),
+      deps: makeDeps({ evaluate }),
+      postTurnActions: { enqueue: vi.fn(() => 'queued' as const) },
+      now: () => T0,
+    });
+    await Promise.all([task!.runNow(), task!.runNow()]);
+    expect(evaluate).toHaveBeenCalledTimes(1);
+    expect(maxActive).toBe(1);
   });
 });
 

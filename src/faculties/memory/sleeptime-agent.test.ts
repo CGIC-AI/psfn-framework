@@ -1074,6 +1074,56 @@ describe('SleeptimeMemoryAgent', () => {
     expect(openingPrompt).toContain('flaky handshake');
   });
 
+  it('puts pending concern candidates to her and applies the decisions in her plan (vcq8v.5)', async () => {
+    const orient = {
+      persona: 'Focused on the gateway debugging marathon.',
+      human: 'We finally traced the flaky handshake.',
+      goals: 'Continue the gateway debugging work.',
+    };
+    const handleMessage = vi.fn()
+      .mockResolvedValueOnce({ content: JSON.stringify({
+        orient, memory_writes: [], concern_decisions: [{ id: 'concern-unknown', decision: 'keep' }],
+      }) })
+      .mockResolvedValueOnce({ content: JSON.stringify({
+        orient,
+        memory_writes: [],
+        concern_decisions: [
+          { id: 'concern-a', decision: 'keep' },
+          { id: 'concern-b', decision: 'let_go' },
+        ],
+      }) });
+    const decide = vi.fn(async () => 'kept');
+    const agent = new SleeptimeMemoryAgent(makeAgentOptions({
+      agent: { handleMessage },
+      sessionManager: {
+        resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+        getRecentMessages: vi.fn().mockReturnValue([
+          { id: 1, channelId: 'terminal:test', role: 'user', content: 'What a marathon.', timestamp: Date.now() },
+        ]),
+      },
+      concernCandidates: {
+        list: async () => [
+          { id: 'concern-a', text: 'Ask how the interview went', priority: 'medium', createdAt: '2026-09-23T10:00:00.000Z' },
+          { id: 'concern-b', text: 'The broken kettle', priority: 'low', createdAt: '2026-09-23T09:00:00.000Z' },
+        ],
+        decide,
+      },
+    }));
+
+    await agent.execute(makeSleeptimeAction());
+
+    const openingPrompt = (handleMessage.mock.calls[0]?.[0] as { content: string }).content;
+    expect(openingPrompt).toContain('[Possible Concerns Waiting For You]');
+    expect(openingPrompt).toContain('- concern-a (medium): Ask how the interview went');
+    expect(openingPrompt).toContain('"concern_decisions"');
+    // An id she was not offered is rejected and she is asked again.
+    expect(handleMessage).toHaveBeenCalledTimes(2);
+    expect(decide.mock.calls.map(([input]) => input)).toEqual([
+      { id: 'concern-a', decision: 'keep', actionId: expect.any(String) },
+      { id: 'concern-b', decision: 'let_go', actionId: expect.any(String) },
+    ]);
+  });
+
   it('marks meaning-less review episodes unreviewed so machine drafts never read as her settled past (h4fp.6)', async () => {
     const handleMessage = vi.fn().mockResolvedValue({
       content: JSON.stringify({

@@ -1290,6 +1290,10 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
   ALTER TABLE social_desire_settlements
     DROP CONSTRAINT IF EXISTS social_desire_settlements_contact_id_fkey;
   `,
+  // Per-contact outreach pacing (psfn-framework-vcq8v.4): the cooldown anchor
+  // and the companion's "later" re-evaluation time for each contact's desire.
+  `ALTER TABLE social_desires ADD COLUMN IF NOT EXISTS last_consent_moment_at TEXT;`,
+  `ALTER TABLE social_desires ADD COLUMN IF NOT EXISTS deferred_until TEXT;`,
   // Companion-local ICP candidate state. The reason summary and peer contact
   // binding are private motivation, so this table belongs in each companion's
   // own schema and must never be copied into the shared control-plane tables.
@@ -1496,6 +1500,30 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
       'pending', 'queued', 'chosen', 'off', 'ignore', 'defer', 'other',
       'would_send', 'delivered', 'suppressed'
     ));`,
+  // psfn-framework-vcq8v.4: an EmoSim impulse no longer opens its own
+  // destination disposition (the opportunities table above is retired and no
+  // longer written). It raises per-contact social pressure; this content-free
+  // ledger records each impulse exactly once so a replay never boosts twice.
+  `
+  CREATE TABLE IF NOT EXISTS social_impulse_outreach_ledger (
+    impulse_id TEXT PRIMARY KEY
+      CHECK (impulse_id ~ '^felt-impulse:would_message:[0-9]+$'),
+    companion_id UUID NOT NULL,
+    first_crossing_ms BIGINT NOT NULL CHECK (first_crossing_ms >= 0),
+    fired_at_ms BIGINT NOT NULL CHECK (fired_at_ms >= first_crossing_ms),
+    confidence DOUBLE PRECISION NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
+    mode_at_receipt TEXT NOT NULL CHECK (mode_at_receipt IN ('off', 'shadow', 'on')),
+    state TEXT NOT NULL CHECK (state IN (
+      'received', 'off', 'shadow', 'applied', 'no_live_desire', 'lane_disabled', 'interrupted'
+    )),
+    boosted_contact_count INTEGER NOT NULL DEFAULT 0 CHECK (boosted_contact_count >= 0),
+    reason_code TEXT,
+    created_at_ms BIGINT NOT NULL CHECK (created_at_ms >= 0),
+    updated_at_ms BIGINT NOT NULL CHECK (updated_at_ms >= created_at_ms)
+  );
+  `,
+  `CREATE INDEX IF NOT EXISTS idx_social_impulse_outreach_ledger_companion
+    ON social_impulse_outreach_ledger (companion_id, fired_at_ms DESC);`,
 ];
 
 export const POSTGRES_AUDIT_MIGRATIONS = [

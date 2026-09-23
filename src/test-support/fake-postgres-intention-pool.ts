@@ -272,15 +272,16 @@ export class FakeIntentionPool {
       }
       if (normalized.includes('SET status = $2')) {
         const terminalTransition = normalized.includes("resolved_at IS NULL AND status NOT IN ('resolved', 'dismissed', 'suppressed')");
-        const expectedStatus = values[11] as string | undefined;
-        const expectedResolvedAt = values[12] as string | null | undefined;
+        const promotedExpiresAt = values[11] as string | null;
+        const expectedStatus = values[12] as string | undefined;
+        const expectedResolvedAt = values[13] as string | null | undefined;
         if (terminalTransition && (row.resolved_at !== null || ['resolved', 'dismissed', 'suppressed'].includes(row.status ?? 'active'))) {
           return { rows: [] };
         }
         if (!terminalTransition && expectedStatus !== undefined && row.status !== expectedStatus) {
           return { rows: [] };
         }
-        if (!terminalTransition && normalized.includes('resolved_at = $13') && row.resolved_at !== expectedResolvedAt) {
+        if (!terminalTransition && normalized.includes('resolved_at = $14') && row.resolved_at !== expectedResolvedAt) {
           return { rows: [] };
         }
         const [
@@ -306,6 +307,7 @@ export class FakeIntentionPool {
         row.resolution_evidence_refs = resolutionEvidenceRefs;
         row.resolution_vad = resolutionVAD;
         row.resolution_generation_id = resolutionGenerationId;
+        if (promotedExpiresAt !== null) row.expires_at = promotedExpiresAt;
         if (status !== 'candidate') row.candidate_review_snapshot = null;
         return { rows: [row as Row] };
       }

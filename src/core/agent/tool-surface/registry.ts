@@ -433,7 +433,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.notify,
     actions: [
       'brief', 'send', 'consider', 'approval_request', 'clarify',
-      'outreach_list', 'outreach_choose',
+      'outreach_send', 'outreach_later',
     ],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [

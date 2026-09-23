@@ -63,6 +63,25 @@ interface SocialDesireOutreachSettings {
   consentTtlMs: number;
   /** Rolling desire-outbound budget across ALL contacts, enforced at the gate. */
   budget: { maxSendsPerWindow: number; windowMs: number };
+  /**
+   * Per-contact flood control (psfn-framework-vcq8v.4). A contact gets at most
+   * one outreach turn per `perContactCooldownMs`; a companion "later" answer
+   * re-queues that contact for re-evaluation after `deferDelayMs`.
+   */
+  contactPacing: { perContactCooldownMs: number; deferDelayMs: number };
+  /** Bounds for the context shown in the per-contact outreach turn. */
+  turnContext: { excerptMessages: number; excerptMaxChars: number; activityMaxItems: number };
+}
+
+/**
+ * EmoSim felt-impulse contribution (psfn-framework-vcq8v.4). A qualified
+ * would_message impulse is felt state without a contact; it adds warm pressure
+ * only to desires that already exist above the pressure floor, scaled by each
+ * desire's share of the strongest one. It never creates a desire.
+ */
+interface SocialDesireImpulseSettings {
+  /** Warm pressure added to the strongest live desire by a full-confidence impulse. */
+  gain: number;
 }
 
 /**
@@ -76,17 +95,29 @@ export interface SocialDesireConfig {
   enabled: boolean;
   lifecycle: SocialDesireLifecycleSettings;
   outreach: SocialDesireOutreachSettings;
+  impulse: SocialDesireImpulseSettings;
 }
 
+// Retune (psfn-framework-vcq8v.4): the felt-signal increment is
+// baseGain x |valence| x confidence x tierGain. With the live typical
+// intensity (~0.25) the old 0.15 gain gave a partner 0.075 per counted tick and
+// a friend 0.0375, so threshold 1 needed ~14 uninterrupted partner ticks or 27
+// friend ticks against a 72h half-life: unreachable at steady state. With
+// baseGain 0.3, threshold 0.6 and a 96h warm half-life, one evening of partner
+// conversation (2-3 counted ticks, ~0.15 each) plus a day of decay (x0.84)
+// reaches the threshold within about two days of ordinary contact, and a
+// friend's once-a-day tick (0.075) settles near 0.47 so it crosses only with a
+// felt EmoSim impulse (+0.4 x confidence) or a relevant concern. Release
+// (x0.25), the per-contact cooldown, and the 4/day global budget bound the rate.
 export const DEFAULT_SOCIAL_DESIRE_CONFIG: SocialDesireConfig = {
   enabled: false,
   lifecycle: {
-    baseGain: 0.15,
+    baseGain: 0.3,
     pressureCap: 3,
-    actionThreshold: 1,
+    actionThreshold: 0.6,
     pressureFloor: 0.05,
     decay: {
-      warmHalflifeMs: 72 * 60 * 60 * 1000,
+      warmHalflifeMs: 96 * 60 * 60 * 1000,
       repairHalflifeMs: 96 * 60 * 60 * 1000,
     },
     coolingOff: {
@@ -114,8 +145,14 @@ export const DEFAULT_SOCIAL_DESIRE_CONFIG: SocialDesireConfig = {
     consentTtlMs: 30 * 60 * 1000,
     // Operator baseline (2026-07-20 audit): ~1-2 spontaneous outreach
     // desires/day is plausible — the budget is TIGHT by design.
-    budget: { maxSendsPerWindow: 2, windowMs: 24 * 60 * 60 * 1000 },
+    budget: { maxSendsPerWindow: 4, windowMs: 24 * 60 * 60 * 1000 },
+    contactPacing: {
+      perContactCooldownMs: 18 * 60 * 60 * 1000,
+      deferDelayMs: 3 * 60 * 60 * 1000,
+    },
+    turnContext: { excerptMessages: 6, excerptMaxChars: 900, activityMaxItems: 6 },
   },
+  impulse: { gain: 0.4 },
 };
 
 function validateSocialDesireTierProfile(
@@ -140,7 +177,47 @@ function cloneDefaultSocialDesireOutreachSettings(): SocialDesireOutreachSetting
   return {
     ...defaults,
     budget: { ...defaults.budget },
+    contactPacing: { ...defaults.contactPacing },
+    turnContext: { ...defaults.turnContext },
   };
+}
+
+function validateContactPacing(raw: unknown, sourcePath: string): SocialDesireOutreachSettings['contactPacing'] {
+  // Owner files written before vcq8v.4 have no pacing section; the documented
+  // defaults apply exactly as for an absent outreach section.
+  if (raw === undefined) return { ...DEFAULT_SOCIAL_DESIRE_CONFIG.outreach.contactPacing };
+  if (!isRecord(raw)) {
+    throw new Error(`Invalid scheduler config at ${sourcePath}: socialDesire.outreach.contactPacing must be an object`);
+  }
+  assertNoUnknownKeys(raw, ['perContactCooldownMs', 'deferDelayMs'],
+    `${sourcePath}.socialDesire.outreach.contactPacing`, { errorPrefix: 'Invalid scheduler config' });
+  return {
+    perContactCooldownMs: toInterval(raw.perContactCooldownMs, 'socialDesire.outreach.contactPacing.perContactCooldownMs'),
+    deferDelayMs: toInterval(raw.deferDelayMs, 'socialDesire.outreach.contactPacing.deferDelayMs'),
+  };
+}
+
+function validateTurnContext(raw: unknown, sourcePath: string): SocialDesireOutreachSettings['turnContext'] {
+  if (raw === undefined) return { ...DEFAULT_SOCIAL_DESIRE_CONFIG.outreach.turnContext };
+  if (!isRecord(raw)) {
+    throw new Error(`Invalid scheduler config at ${sourcePath}: socialDesire.outreach.turnContext must be an object`);
+  }
+  assertNoUnknownKeys(raw, ['excerptMessages', 'excerptMaxChars', 'activityMaxItems'],
+    `${sourcePath}.socialDesire.outreach.turnContext`, { errorPrefix: 'Invalid scheduler config' });
+  return {
+    excerptMessages: toPositiveInteger(raw.excerptMessages, 'socialDesire.outreach.turnContext.excerptMessages', 1),
+    excerptMaxChars: toPositiveInteger(raw.excerptMaxChars, 'socialDesire.outreach.turnContext.excerptMaxChars', 1),
+    activityMaxItems: toPositiveInteger(raw.activityMaxItems, 'socialDesire.outreach.turnContext.activityMaxItems', 1),
+  };
+}
+
+function validateImpulseSettings(raw: unknown, sourcePath: string): SocialDesireImpulseSettings {
+  if (raw === undefined) return { ...DEFAULT_SOCIAL_DESIRE_CONFIG.impulse };
+  if (!isRecord(raw)) {
+    throw new Error(`Invalid scheduler config at ${sourcePath}: socialDesire.impulse must be an object`);
+  }
+  assertNoUnknownKeys(raw, ['gain'], `${sourcePath}.socialDesire.impulse`, { errorPrefix: 'Invalid scheduler config' });
+  return { gain: toNumberAtLeast(raw.gain, 'socialDesire.impulse.gain', 0) };
 }
 
 function validateSocialDesireOutreachSettings(
@@ -176,6 +253,8 @@ function validateSocialDesireOutreachSettings(
       ),
       windowMs: toInterval(budgetRaw.windowMs, 'socialDesire.outreach.budget.windowMs'),
     },
+    contactPacing: validateContactPacing(raw.contactPacing, sourcePath),
+    turnContext: validateTurnContext(raw.turnContext, sourcePath),
   };
 }
 
@@ -200,6 +279,7 @@ export function validateSocialDesireConfig(
         },
       },
       outreach: cloneDefaultSocialDesireOutreachSettings(),
+      impulse: { ...defaults.impulse },
     };
   }
   if (!isRecord(raw)) {
@@ -291,5 +371,6 @@ export function validateSocialDesireConfig(
       },
     },
     outreach: validateSocialDesireOutreachSettings(raw.outreach, sourcePath),
+    impulse: validateImpulseSettings(raw.impulse, sourcePath),
   };
 }

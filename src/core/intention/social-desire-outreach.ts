@@ -44,6 +44,7 @@ import {
   applySocialDesireDampening,
   decayedSocialDesirePressure,
   evaluateSocialDesireEligibility,
+  type SocialDesire,
   type SocialDesireIneligibilityReason,
   type SocialDesireLifecycleConfig,
   type SocialDesireOrientation,
@@ -78,6 +79,8 @@ export interface SocialDesireConsentEvaluationInput {
   channelType: ChannelType;
   /** True when the target contact is another companion (ICP candidate path). */
   companionTarget: boolean;
+  /** Optional concrete occasion shown to the companion (for example a due concern). */
+  reason?: string;
 }
 
 /**
@@ -386,6 +389,8 @@ export interface SocialDesireOutreachDeps {
   resolveDeliveryChannel(contactId: string): Promise<SocialDesireDeliveryChannel | null>;
   /** Deterministic budget pre-check including accepted messages reserved by this run. */
   isBudgetExhausted(nowMs: number, reservedConsentCount: number): boolean;
+  /** Per-contact flood control (owner file socialDesire.outreach.contactPacing). */
+  contactPacing: { perContactCooldownMs: number; deferDelayMs: number };
 }
 
 export interface SocialDesireOutreachRunResult {
@@ -407,7 +412,8 @@ export interface SocialDesireOutreachRunResult {
   blocked: Array<{ contactId: string; reason: string }>;
   skipped: Array<{
     contactId: string;
-    reason: SocialDesireIneligibilityReason | 'budget_exhausted' | 'consent_pending';
+    reason: SocialDesireIneligibilityReason | 'budget_exhausted' | 'consent_pending'
+      | 'contact_cooldown' | 'deferred';
     nextEligibleAtMs?: number;
   }>;
 }
@@ -479,22 +485,34 @@ export async function runSocialDesireOutreachOnce(
       continue;
     }
 
-    // 2. Deterministic rate budget (still zero LLM). The desire keeps its
+    // 2. Per-contact pacing: one outreach turn per contact per cooldown, and a
+    //    "later" answer holds the contact until its re-evaluation time.
+    const pacingBlock = resolveContactPacingBlock(desire, deps.contactPacing, nowMs);
+    if (pacingBlock) {
+      result.skipped.push({ contactId, ...pacingBlock });
+      continue;
+    }
+
+    // 3. Deterministic rate budget (still zero LLM). The desire keeps its
     //    pressure untouched and simply retries on a later run.
     if (deps.isBudgetExhausted(nowMs, result.produced.length)) {
       result.skipped.push({ contactId, reason: 'budget_exhausted' });
       continue;
     }
 
-    // 3. Deterministic, fail-closed delivery-channel resolution.
+    // 4. Deterministic, fail-closed delivery-channel resolution.
     const channel = await deps.resolveDeliveryChannel(contactId);
     if (!channel) {
       result.blocked.push({ contactId, reason: 'no_delivery_channel' });
       continue;
     }
 
-    // 4. The consent moment (LLM). Message, defer, or decline — never auto-send.
+    // 5. The consent moment. Message, defer, or decline — never auto-send. The
+    //    cooldown anchor is durable before the turn so a crash mid-turn cannot
+    //    re-ask the same contact immediately.
     result.consentMomentsEvaluated += 1;
+    const askedAt = new Date(nowMs).toISOString();
+    const asked = await deps.store.save({ ...desire, lastConsentMomentAt: askedAt });
     const decision = await deps.consentEvaluator.evaluate({
       contactId,
       ...(channel.contactName ? { contactName: channel.contactName } : {}),
@@ -512,7 +530,7 @@ export async function runSocialDesireOutreachOnce(
       if (!content) {
         // An accept with blank content cannot form an outbound message.
         // Dampen so the desire defers instead of re-burning consent moments.
-        const dampened = applySocialDesireDampening(desire, deps.lifecycle, nowMs);
+        const dampened = applySocialDesireDampening(asked, deps.lifecycle, nowMs);
         await deps.store.save(dampened);
         result.blocked.push({ contactId, reason: 'empty_consent_content' });
         continue;
@@ -540,20 +558,57 @@ export async function runSocialDesireOutreachOnce(
       continue;
     }
 
-    // Defer/decline: dampen (kept, not zeroed) and send nothing.
-    const dampened = applySocialDesireDampening(desire, deps.lifecycle, nowMs);
+    if (decision.action === 'defer') {
+      // "Later" re-queues: pressure is kept, the per-contact cooldown is not
+      // spent, and the contact is re-evaluated after the defer delay.
+      const { lastConsentMomentAt: _asked, ...withoutAsk } = asked;
+      const deferred = await deps.store.save({
+        ...withoutAsk,
+        ...(desire.lastConsentMomentAt ? { lastConsentMomentAt: desire.lastConsentMomentAt } : {}),
+        deferredUntil: new Date(nowMs + deps.contactPacing.deferDelayMs).toISOString(),
+      });
+      result.deferred.push({
+        contactId,
+        ...(decision.reason ? { reason: decision.reason } : {}),
+        dampenedPressure: decayedSocialDesirePressure(deferred, deps.lifecycle, nowMs).total,
+      });
+      continue;
+    }
+
+    // Decline: dampen (kept, not zeroed) and send nothing.
+    const dampened = applySocialDesireDampening(asked, deps.lifecycle, nowMs);
     await deps.store.save(dampened);
-    const entry = {
+    result.declined.push({
       contactId,
       ...(decision.reason ? { reason: decision.reason } : {}),
       dampenedPressure: decayedSocialDesirePressure(dampened, deps.lifecycle, nowMs).total,
-    };
-    if (decision.action === 'defer') {
-      result.deferred.push(entry);
-    } else {
-      result.declined.push(entry);
-    }
+    });
   }
 
   return result;
+}
+
+/** True when this contact is inside its per-contact cooldown or deferral. */
+export function isSocialDesireContactPaced(
+  desire: SocialDesire,
+  pacing: SocialDesireOutreachDeps['contactPacing'],
+  nowMs: number,
+): boolean {
+  return resolveContactPacingBlock(desire, pacing, nowMs) !== null;
+}
+
+function resolveContactPacingBlock(
+  desire: SocialDesire,
+  pacing: SocialDesireOutreachDeps['contactPacing'],
+  nowMs: number,
+): { reason: 'contact_cooldown' | 'deferred'; nextEligibleAtMs: number } | null {
+  const deferredUntilMs = desire.deferredUntil ? Date.parse(desire.deferredUntil) : Number.NaN;
+  if (Number.isFinite(deferredUntilMs) && nowMs < deferredUntilMs) {
+    return { reason: 'deferred', nextEligibleAtMs: deferredUntilMs };
+  }
+  const askedAtMs = desire.lastConsentMomentAt ? Date.parse(desire.lastConsentMomentAt) : Number.NaN;
+  if (Number.isFinite(askedAtMs) && nowMs < askedAtMs + pacing.perContactCooldownMs) {
+    return { reason: 'contact_cooldown', nextEligibleAtMs: askedAtMs + pacing.perContactCooldownMs };
+  }
+  return null;
 }

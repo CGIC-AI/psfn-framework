@@ -38,7 +38,7 @@ function parseConfiguration(value: unknown, companionId: string): CompanionSyste
   if (proactive.status === 'available') {
     if (!isRecord(proactive.summary) || number(proactive.summary.total) === null) throw new Error('Malformed proactive evidence');
     const states = rows(proactive.summary.states).map(row => {
-      if (!['pending', 'queued', 'chosen', 'off', 'ignore', 'defer', 'other', 'would_send', 'delivered', 'suppressed'].includes(String(row.state))
+      if (!['received', 'off', 'shadow', 'applied', 'no_live_desire', 'lane_disabled', 'interrupted'].includes(String(row.state))
         || number(row.count) === null || number(row.lastUpdatedAtMs) === null) throw new Error('Malformed proactive state');
       return { state: text(row.state), count: Number(row.count), lastUpdatedAtMs: Number(row.lastUpdatedAtMs) };
     });

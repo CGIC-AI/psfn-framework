@@ -1,3 +1,8 @@
+import {
+  renderPendingConcernCandidatesSection,
+  type ConcernCandidateDecision,
+  type ConcernCandidateReviewPort,
+} from '../../core/intention/concern-candidate-prompt.js';
 import { createHash } from 'node:crypto';
 import {
   WHISPER_WORKER_LANE,
@@ -176,6 +181,8 @@ interface NormalizedSleeptimePlan {
     goals: string;
   };
   memoryWrites: NormalizedMemoryWrite[];
+  /** Her decisions about the concern candidates she was shown (vcq8v.5). */
+  concernDecisions: Array<{ id: string; decision: ConcernCandidateDecision }>;
 }
 
 type SleeptimeOrientBlockName = keyof NormalizedSleeptimePlan['orient'];
@@ -197,6 +204,11 @@ export interface SleeptimeMemoryAgentOptions {
   coreMemoryStore: CoreMemoryRewriter;
   memoryWriter: SleeptimeMemoryWriter;
   promptRegistry?: PromptRegistryStatePort | null;
+  /**
+   * Concern candidates still waiting for her decision (vcq8v.5). Reviewing
+   * them is part of her nightly review; her plan may keep or let go of each.
+   */
+  concernCandidates?: ConcernCandidateReviewPort;
   transcriptMessageLimit?: number;
   maxMemoryWrites?: number;
   /**
@@ -300,7 +312,34 @@ function extractJsonPayload(raw: string): string {
   throw new Error('Sleeptime model did not return a JSON object');
 }
 
-function normalizeSleeptimePlan(raw: string, maxMemoryWrites: number): NormalizedSleeptimePlan {
+function normalizeConcernDecisions(
+  value: unknown,
+  offeredIds: ReadonlySet<string>,
+): NormalizedSleeptimePlan['concernDecisions'] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error('concern_decisions must be an array');
+  const decisions = new Map<string, ConcernCandidateDecision>();
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new Error('each concern_decisions entry must be an object');
+    }
+    const record = entry as Record<string, unknown>;
+    const id = typeof record['id'] === 'string' ? record['id'].trim() : '';
+    const decision = record['decision'];
+    if (!offeredIds.has(id)) throw new Error(`concern_decisions id "${id}" was not one of the offered concerns`);
+    if (decision !== 'keep' && decision !== 'let_go') {
+      throw new Error('concern_decisions decision must be "keep" or "let_go"');
+    }
+    decisions.set(id, decision);
+  }
+  return [...decisions.entries()].map(([id, decision]) => ({ id, decision }));
+}
+
+function normalizeSleeptimePlan(
+  raw: string,
+  maxMemoryWrites: number,
+  offeredConcernIds: ReadonlySet<string> = new Set(),
+): NormalizedSleeptimePlan {
   const parsed = JSON.parse(extractJsonPayload(raw)) as unknown;
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('Sleeptime plan must be a JSON object');
@@ -348,6 +387,7 @@ function normalizeSleeptimePlan(raw: string, maxMemoryWrites: number): Normalize
   return {
     orient,
     memoryWrites,
+    concernDecisions: normalizeConcernDecisions(record['concern_decisions'], offeredConcernIds),
   };
 }
 
@@ -572,6 +612,7 @@ export class SleeptimeMemoryAgent {
   private readonly coreMemoryStore: CoreMemoryRewriter;
   private readonly memoryWriter: SleeptimeMemoryWriter;
   private readonly promptRegistry: PromptRegistryStatePort | null;
+  private readonly concernCandidates: ConcernCandidateReviewPort | null;
   private readonly transcriptMessageLimit: number;
   private readonly maxMemoryWrites: number;
   private readonly restWindow: EpisodicProcessingRestWindowConfig;
@@ -616,6 +657,7 @@ export class SleeptimeMemoryAgent {
     this.coreMemoryStore = options.coreMemoryStore;
     this.memoryWriter = options.memoryWriter;
     this.promptRegistry = options.promptRegistry ?? null;
+    this.concernCandidates = options.concernCandidates ?? null;
     this.transcriptMessageLimit = positiveIntegerOr(
       options.transcriptMessageLimit,
       DEFAULT_TRANSCRIPT_MESSAGE_LIMIT,
@@ -834,6 +876,21 @@ export class SleeptimeMemoryAgent {
       throw new Error('Sleeptime review produced no usable plan');
     }
 
+    if (plan.concernDecisions.length > 0) {
+      if (!this.concernCandidates) {
+        throw new Error('Sleeptime plan decided concerns but no concern candidate port is composed');
+      }
+      for (const decision of plan.concernDecisions) {
+        await this.concernCandidates.decide({ ...decision, actionId: action.id });
+      }
+      log.info('Sleeptime review decided pending concern candidates', {
+        sessionId,
+        actionId: action.id,
+        kept: plan.concernDecisions.filter(entry => entry.decision === 'keep').length,
+        letGo: plan.concernDecisions.filter(entry => entry.decision === 'let_go').length,
+      });
+    }
+
     const groundingCorpus = buildGroundingCorpus(recentEntries, dayEpisodes);
     let orientBlocksRejected: SleeptimeOrientBlockName[] = [];
 
@@ -1034,9 +1091,13 @@ export class SleeptimeMemoryAgent {
     transcript: string;
     episodes: readonly Episode[];
   }): Promise<NormalizedSleeptimePlan | null> {
+    const pendingConcerns = this.concernCandidates ? await this.concernCandidates.list() : [];
+    const offeredConcernIds = new Set(pendingConcerns.map(candidate => candidate.id));
+    const pendingConcernSection = renderPendingConcernCandidatesSection(pendingConcerns, 'sleeptime_plan');
     let prompt = [
       this.resolveSleeptimePromptText(),
       '',
+      ...(pendingConcernSection ? [pendingConcernSection, ''] : []),
       'Current orientation blocks:',
       `persona:\n${input.orientBlocks.persona.content || '[empty]'}`,
       `human:\n${input.orientBlocks.human.content || '[empty]'}`,
@@ -1064,7 +1125,7 @@ export class SleeptimeMemoryAgent {
         },
       });
       try {
-        return normalizeSleeptimePlan(response.content, this.maxMemoryWrites);
+        return normalizeSleeptimePlan(response.content, this.maxMemoryWrites, offeredConcernIds);
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
         log.warn('Sleeptime review turn produced an unusable plan; asking again with feedback', {

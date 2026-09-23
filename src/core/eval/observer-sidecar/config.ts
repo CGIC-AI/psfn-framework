@@ -19,6 +19,7 @@ import {
   EMOSIM_INTEGRATION_SURFACE,
   type EmoSimAdapterOutput,
   type EmoSimRunner,
+  type EmoSimSubject,
 } from './emosim-adapter.js';
 import { createEmoSimServerRunner } from './emosim-server-adapter.js';
 import { createEmoSimLiveStateSampler } from './proactivity-sampling.js';
@@ -108,12 +109,13 @@ function createObserverEvalSidecarPort(
   const serverUrl = settings.adapter.serverUrl?.trim();
   const sessionLabel = settings.adapter.sessionLabel?.trim();
   const agentName = settings.adapter.agentName?.trim();
-  if (!serverUrl || !sessionLabel || !agentName) {
+  const personality = settings.adapter.personality;
+  if (!serverUrl || !sessionLabel || !agentName || !personality) {
     // Startup config validation (validateObserverEvalSidecarStartupConfig and
     // the settings normalizer) already fails closed on these; reaching this
     // point means the sidecar was constructed without validated settings.
     throw new Error(
-      'observerEvalSidecar.adapter requires serverUrl, sessionLabel, and agentName for kind=emosim_server',
+      'observerEvalSidecar.adapter requires serverUrl, sessionLabel, agentName, and personality for kind=emosim_server',
     );
   }
   if (settings.levers?.enabled === true && !eventBus) {
@@ -149,6 +151,7 @@ function createObserverEvalSidecarPort(
     serverUrl,
     sessionLabel,
     agentName,
+    personality,
     ...(settings.adapter.timeoutMs !== undefined ? { timeoutMs: settings.adapter.timeoutMs } : {}),
   });
   const observer = new EmoSimObserverEvalSidecar({
@@ -161,6 +164,11 @@ function createObserverEvalSidecarPort(
     // One runner per sidecar: it caches the contract check and the persistent
     // session bootstrap across observations.
     runner,
+    subject: {
+      name: agentName,
+      uid: settings.sidecarId ?? OBSERVER_EVAL_RUN_PREFIX,
+      personality: structuredClone(personality),
+    },
   });
   return {
     observer,
@@ -212,6 +220,8 @@ interface EmoSimObserverEvalSidecarOptions {
   config: ObserverEvalSidecarConfig;
   persistence: ObserverEvalSidecarPersistencePort | null;
   runner: EmoSimRunner;
+  /** The companion's own emo_sim subject; recorded on every projected input. */
+  subject: EmoSimSubject;
   emitContextCoherence?: (event: ContextCoherenceEvent) => Promise<void>;
   /** Production port is a sibling sink of the live EmoSim result, never an eval-row reader. */
   proactivityPort?: EmoSimProactivityPort;
@@ -248,9 +258,14 @@ class EmoSimObserverEvalSidecar implements ObserverEvalSidecarPort {
     const projection = projectObserverEvalToEmoSim(rawInput, {
       runId: this.runId,
       includeWorldState: this.options.config.adapter?.includeWorldState ?? false,
+      subject: this.options.subject,
     });
+    const socialContactKey = rawInput.metadata.socialContactKey;
     const emosim = projection.ok
-      ? await runEmoSimProjectedStimulus(projection.adapterInput, { runner: this.options.runner })
+      ? await runEmoSimProjectedStimulus(projection.adapterInput, {
+        runner: this.options.runner,
+        ...(socialContactKey !== undefined ? { context: { socialContactKey } } : {}),
+      })
       : undefined;
     const crosswalk = projection.ok && emosim?.ok
       ? createObserverEmotionCrosswalk({

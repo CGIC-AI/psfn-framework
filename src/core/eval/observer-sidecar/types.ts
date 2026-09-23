@@ -60,6 +60,13 @@ export interface ObserverEvalTurnMetadata {
    * must fail closed when this is absent or invalid; do not infer it from text.
    */
   sensitivity?: SensitivityLevel;
+  /**
+   * Opaque 64-hex digest of the resolved canonical contact, present only for a
+   * live inbound message from a verified human or peer machine intelligence
+   * (see social-contact.ts). It is contact evidence for emo_sim social-need
+   * regulation, never an identity; absent for every non-social turn.
+   */
+  socialContactKey?: string;
 }
 
 export interface ObserverEvalProvenance {

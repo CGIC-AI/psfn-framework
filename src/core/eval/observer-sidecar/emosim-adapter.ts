@@ -1,5 +1,6 @@
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { isRecord } from '../../../shared/utils/types.js';
+import type { EmoSimPersonalitySettings } from '../../../shared/contracts/runtime.js';
 import {
   normalizeEmoSimDirectedRelationshipReading,
   type EmoSimDirectedRelationshipReading,
@@ -105,13 +106,8 @@ export type EmoSimEmotionName = typeof EMOSIM_EMOTION_VECTOR[number];
 export type EmoSimAppraisalVector = Record<EmoSimAppraisalDimension, number>;
 export type EmoSimEmotionVector = Record<EmoSimEmotionName, number>;
 
-export interface EmoSimPersonality {
-  O: number;
-  C: number;
-  E: number;
-  A: number;
-  N: number;
-}
+/** The companion-owned OCEAN settings contract, as sent to emo_sim. */
+export type EmoSimPersonality = EmoSimPersonalitySettings;
 
 export interface EmoSimSubject {
   name: string;
@@ -334,12 +330,22 @@ export type EmoSimAdapterRunResult =
       input?: EmoSimAdapterInput;
     };
 
+/**
+ * Per-run routing context kept OUT of the adapter input: the input is echoed
+ * into persisted observation rows, while a contact key is live-only evidence.
+ */
+export interface EmoSimRunContext {
+  /** Opaque verified-contact digest; see social-contact.ts. */
+  socialContactKey?: string;
+}
+
 export interface EmoSimRunner {
-  run(input: EmoSimAdapterInput): Promise<unknown>;
+  run(input: EmoSimAdapterInput, context?: EmoSimRunContext): Promise<unknown>;
 }
 
 export interface RunEmoSimAdapterOptions {
   runner: EmoSimRunner;
+  context?: EmoSimRunContext;
 }
 
 export class EmoSimSidecarUnavailableError extends Error {
@@ -399,7 +405,7 @@ export async function runEmoSimProjectedStimulus(
 
   let rawOutput: unknown;
   try {
-    rawOutput = await options.runner.run(input);
+    rawOutput = await options.runner.run(input, options.context);
   } catch (error) {
     if (error instanceof EmoSimSidecarUnavailableError) {
       return buildFailure(input, 'sidecar-unavailable', error.reason, error.message, error.details);

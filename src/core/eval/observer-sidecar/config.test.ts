@@ -30,6 +30,7 @@ describe('createObserverEvalSidecarRuntimeFromConfig', () => {
         adapter: {
           kind: 'emosim_server', serverUrl: 'http://emosim.test:17342',
           sessionLabel: 'observer-test', agentName: 'observer', includeWorldState: false,
+          personality: { O: 0.6, C: 0.5, E: 0.7, A: 0.6, N: 0.3 },
         },
       },
       emosimProactivity: { ...createDefaultEmoSimProactivitySettings(), mode },
@@ -68,6 +69,7 @@ describe('createObserverEvalSidecarRuntimeFromConfig', () => {
           serverUrl: 'http://127.0.0.1:9',
           sessionLabel: 'psfn-observer-eval-test',
           agentName: 'observer',
+          personality: { O: 0.6, C: 0.5, E: 0.7, A: 0.6, N: 0.3 },
           timeoutMs: 250,
           includeWorldState: false,
         },
@@ -97,7 +99,7 @@ describe('createObserverEvalSidecarRuntimeFromConfig', () => {
         },
       },
     }, {})).toThrow(
-      'observerEvalSidecar.adapter requires serverUrl, sessionLabel, and agentName for kind=emosim_server',
+      'observerEvalSidecar.adapter requires serverUrl, sessionLabel, agentName, and personality for kind=emosim_server',
     );
   });
 
@@ -127,6 +129,7 @@ describe('createObserverEvalSidecarRuntimeFromConfig', () => {
           serverUrl: 'http://127.0.0.1:9',
           sessionLabel: 'observer-test',
           agentName: 'observer',
+          personality: { O: 0.6, C: 0.5, E: 0.7, A: 0.6, N: 0.3 },
           includeWorldState: false,
         },
         levers: {

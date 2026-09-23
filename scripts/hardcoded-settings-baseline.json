@@ -4542,6 +4542,13 @@
       "value": "3"
     },
     {
+      "file": "src/core/intention/concern-follow-up-outreach.ts",
+      "name": "buildConcernFollowUpOutboundCandidate.maxRetries",
+      "value": "1",
+      "form": "object-member",
+      "note": "Single durable retry for a companion-authored outbound follow-up, matching the social-desire outbound candidate; the outbox terminal dedupe makes it exactly-once (psfn-framework-vcq8v.5)."
+    },
+    {
       "file": "src/core/intention/concern-grooming.ts",
       "name": "CAP_RESOLUTION_OUTCOME",
       "value": "'Retired from concerns for durable tracking review because the active concern cap was reached.'",

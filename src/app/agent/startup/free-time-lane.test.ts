@@ -210,6 +210,7 @@ describe('registerFreeTimeLane production composition', () => {
         chargePolicy: undefined,
         personalProjects,
         contactStore,
+        listPendingConcernCandidates: async () => [],
       };
       registerFreeTimeLane(deps);
       const handler = scheduler.getTask(FREE_TIME_IDLE_TASK_ID)?.handler;

@@ -17,6 +17,7 @@ import type { SocialImpulseDesireTarget } from '../../../core/emotion/social-imp
 import { createSocialOutreachTurnEvaluator } from '../../../core/intention/social-outreach-turn/evaluator.js';
 import type { SocialOutreachContextPorts } from '../../../core/intention/social-outreach-turn/context.js';
 import type { SocialOutreachDraftRegistry } from '../../../core/intention/social-outreach-turn/drafts.js';
+import type { ConcernFollowUpOutreachDeps } from '../../../core/intention/concern-follow-up-outreach.js';
 import type { SubstrateMessage } from '../../../shared/contracts/runtime-base.js';
 import {
   createSocialDesireFeltSignalWriter,
@@ -65,6 +66,8 @@ export interface SocialDesireLaneDeps {
   readEmotion: SocialOutreachContextPorts['readEmotion'];
   /** Live answer slots shared with the notify tool (outreach_send / outreach_later). */
   drafts: SocialOutreachDraftRegistry;
+  /** Due concerns about a contact follow up through the same per-contact turn (vcq8v.5). */
+  concernStore: ConcernFollowUpOutreachDeps['concerns'];
   companionName: string;
   /**
    * Composes the accumulation writer into the emotion/appraisal felt-signal
@@ -147,66 +150,78 @@ export function registerSocialDesireLane(deps: SocialDesireLaneDeps): SocialDesi
         }),
       });
       const budgetGuard = socialDesireOutbound;
+      const consentEvaluator = createSocialOutreachTurnEvaluator({
+        turns: deps.turns,
+        drafts: deps.drafts,
+        companionName,
+        context: {
+          contacts: contactStore,
+          sessions: deps.sessions,
+          readEmotion: deps.readEmotion,
+          limits: schedulerConfig.socialDesire.outreach.turnContext,
+        },
+      });
+      // Fail-closed delivery-channel policy: companion peers route to
+      // their canonical companion DM (ICP candidate path); humans deliver
+      // only to the primary contact's approved heartbeat DM. Anything
+      // else has no channel — no consent moment, desire keeps pressure.
+      const resolveDeliveryChannel = async (contactId: string): Promise<SocialDesireDeliveryChannel | null> => {
+        const contact = await contactStore.getById(contactId);
+        if (!contact) return null;
+        if (contact.isMachineIntelligence) {
+          if (!icpPeers || !localCompanionId) return null;
+          try {
+            const peer = await icpPeers.resolveKnownPeer(contactId);
+            return {
+              channelId: composeCompanionDmChannelId(
+                createCompanionId(localCompanionId, 'social-desire local companion'),
+                createCompanionId(peer.peerCompanionId, 'social-desire peer companion'),
+              ),
+              channelType: 'companion',
+              contactName: contact.displayName,
+              companionTarget: true,
+            };
+          } catch (error) {
+            if (error instanceof CanonicalCompanionPeerValidationError) return null;
+            throw error;
+          }
+        }
+        if (contact.trustLevel !== 'primary' || !heartbeatChannel) return null;
+        return {
+          channelId: heartbeatChannel.channelId,
+          channelType: heartbeatChannel.channelType,
+          contactName: contact.displayName,
+          companionTarget: false,
+        };
+      };
+      const resolveContactTimeZone = async (contactId: string): Promise<string | null> => (
+        (await contactStore.getById(contactId))?.timezone ?? null
+      );
       const outreachTask = registerSocialDesireOutreachTask({
         scheduler,
         eventBus,
         postTurnActions,
         config: schedulerConfig.socialDesire,
+        concernFollowUps: {
+          concerns: deps.concernStore,
+          consentEvaluator,
+          resolveDeliveryChannel,
+          quietHours: schedulerConfig.episodicProcessing,
+          resolveContactTimeZone,
+          deferDelayMs: schedulerConfig.socialDesire.outreach.contactPacing.deferDelayMs,
+          maxPerRun: schedulerConfig.socialDesire.outreach.maxConsentMomentsPerRun,
+        },
         deps: {
           store: socialDesireStore,
           lifecycle: schedulerConfig.socialDesire.lifecycle,
           tierSource: createContactSocialDesireTierSource(contactStore),
-          consentEvaluator: createSocialOutreachTurnEvaluator({
-            turns: deps.turns,
-            drafts: deps.drafts,
-            companionName,
-            context: {
-              contacts: contactStore,
-              sessions: deps.sessions,
-              readEmotion: deps.readEmotion,
-              limits: schedulerConfig.socialDesire.outreach.turnContext,
-            },
-          }),
+          consentEvaluator,
           consents: socialDesireConsents,
           maxConsentMomentsPerRun: schedulerConfig.socialDesire.outreach.maxConsentMomentsPerRun,
           contactPacing: schedulerConfig.socialDesire.outreach.contactPacing,
           quietHours: schedulerConfig.episodicProcessing,
-          resolveContactTimeZone: async contactId => (
-            (await contactStore.getById(contactId))?.timezone ?? null
-          ),
-          // Fail-closed delivery-channel policy: companion peers route to
-          // their canonical companion DM (ICP candidate path); humans deliver
-          // only to the primary contact's approved heartbeat DM. Anything
-          // else has no channel — no consent moment, desire keeps pressure.
-          resolveDeliveryChannel: async (contactId): Promise<SocialDesireDeliveryChannel | null> => {
-            const contact = await contactStore.getById(contactId);
-            if (!contact) return null;
-            if (contact.isMachineIntelligence) {
-              if (!icpPeers || !localCompanionId) return null;
-              try {
-                const peer = await icpPeers.resolveKnownPeer(contactId);
-                return {
-                  channelId: composeCompanionDmChannelId(
-                    createCompanionId(localCompanionId, 'social-desire local companion'),
-                    createCompanionId(peer.peerCompanionId, 'social-desire peer companion'),
-                  ),
-                  channelType: 'companion',
-                  contactName: contact.displayName,
-                  companionTarget: true,
-                };
-              } catch (error) {
-                if (error instanceof CanonicalCompanionPeerValidationError) return null;
-                throw error;
-              }
-            }
-            if (contact.trustLevel !== 'primary' || !heartbeatChannel) return null;
-            return {
-              channelId: heartbeatChannel.channelId,
-              channelType: heartbeatChannel.channelType,
-              contactName: contact.displayName,
-              companionTarget: false,
-            };
-          },
+          resolveContactTimeZone,
+          resolveDeliveryChannel,
           isBudgetExhausted: (nowMs, reservedConsentCount) => (
             budgetGuard.isBudgetExhausted(nowMs, reservedConsentCount)
           ),

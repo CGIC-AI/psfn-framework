@@ -29,6 +29,8 @@ import type {
   SocialImpulseOutreachStorePort,
 } from '../../../core/emotion/social-impulse-outreach.js';
 import { INTENTION_OUTBOUND_MESSAGE_ACTION_KIND } from '../../../core/intention/appraisal.js';
+import type { ActiveConcernSnapshot } from '../../../core/intention/appraisal/types.js';
+import type { ActiveConcern } from '../../../core/intention/concerns.js';
 import { createFileOutreachOutboxStore } from '../../../core/intention/outreach-outbox.js';
 import {
   createApprovedPrimaryChannelPolicy,
@@ -126,11 +128,15 @@ function impulse(nowMs: number): EmoSimProactivityImpulse {
   };
 }
 
-describe('per-contact proactive outreach (acceptance)', () => {
-  it('turns a felt impulse into one fresh per-contact turn and delivers what she wrote to each contact', async () => {
+async function harness(options: {
+  nowMs: number;
+  desires?: SocialDesire[];
+  concernStore?: { list: (...args: never[]) => Promise<ActiveConcern[]>; transitionConcernStatus: (...args: never[]) => Promise<ActiveConcern | null> };
+  getActiveConcerns?: () => Promise<readonly ActiveConcernSnapshot[]>;
+}) {
+    const nowMs = options.nowMs;
     const dataDir = mkdtempSync(join(tmpdir(), 'psfn-social-outreach-'));
     TEMP_DIRS.push(dataDir);
-    const nowMs = Date.now();
     const { manager, store: sessionStore } = buildGroupChatSession(dataDir);
     manager.recordUserMessage(HUMAN_DM, 'I am heading to the coast this weekend', 'discord-mo', 'Mo', true);
     manager.recordAssistantMessage(HUMAN_DM, 'Oh lovely, send me a picture of the sea!', undefined, true);
@@ -170,10 +176,12 @@ describe('per-contact proactive outreach (acceptance)', () => {
     const outreachOutbox = createFileOutreachOutboxStore(join(dataDir, 'outreach-outbox.jsonl'));
     const contactMap = contacts(nowMs);
     const contactStore = { getById: async (id: string) => contactMap.get(id) };
-    const socialDesireStore = createSocialDesireStorePort(createInMemorySocialDesireBackend([
-      liveDesire('contact-human', nowMs, 'partner'),
-      liveDesire('contact-peer', nowMs, 'ai_companion'),
-    ]));
+    const socialDesireStore = createSocialDesireStorePort(createInMemorySocialDesireBackend(
+      options.desires ?? [
+        liveDesire('contact-human', nowMs, 'partner'),
+        liveDesire('contact-peer', nowMs, 'ai_companion'),
+      ],
+    ));
 
     // The companion's turn: she sees the prompt and answers with the tool.
     const drafts = createSocialOutreachDraftRegistry();
@@ -228,6 +236,7 @@ describe('per-contact proactive outreach (acceptance)', () => {
         confidence: 0.8,
       }),
       drafts,
+      concernStore: options.concernStore ?? { list: async () => [], transitionConcernStatus: async () => null },
       companionName: 'Companion',
       attachFeltSignalWriter: vi.fn(),
     });
@@ -252,9 +261,23 @@ describe('per-contact proactive outreach (acceptance)', () => {
         },
         ...(socialDesireOutbound ? { socialDesireOutbound } : {}),
         ...(socialDesireHumanDeliveryPolicy ? { socialDesireHumanDeliveryPolicy } : {}),
+        ...(options.getActiveConcerns ? { getActiveConcerns: options.getActiveConcerns } : {}),
       },
     );
 
+    return {
+      manager, sessionStore, channelsBefore, enqueued, handlers, sentToHumans, icpSubmit,
+      handleMessage, prompts, impulseTarget,
+    };
+}
+
+describe('per-contact proactive outreach (acceptance)', () => {
+  it('turns a felt impulse into one fresh per-contact turn and delivers what she wrote to each contact', async () => {
+    const nowMs = Date.now();
+    const {
+      manager, sessionStore, channelsBefore, enqueued, handlers, sentToHumans, icpSubmit,
+      handleMessage, prompts, impulseTarget,
+    } = await harness({ nowMs });
     // Felt impulse -> per-contact pressure -> durable immediate evaluation.
     const impulseLane = registerSocialImpulseOutreachLane({
       companionId: LOCAL_COMPANION_ID, store: memoryLedger(), getMode: () => 'on',
@@ -312,5 +335,56 @@ describe('per-contact proactive outreach (acceptance)', () => {
     const second = enqueued.splice(0).find(action => action.kind === 'social-desire.outreach.evaluate');
     await handlers.get('social-desire.outreach.evaluate')!(second!);
     expect(handleMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it('follows up a due concern about a contact through that contact\'s outreach turn and delivers it (vcq8v.5)', async () => {
+    const nowMs = Date.now();
+    const concern = {
+      id: 'concern-interview',
+      text: 'Mo had a job interview on Tuesday',
+      priority: 'medium',
+      source: 'appraisal',
+      status: 'active',
+      contactId: 'contact-human',
+      createdAt: new Date(nowMs - 48 * HOUR).toISOString(),
+      expiresAt: new Date(nowMs + 24 * HOUR).toISOString(),
+      nextReviewAt: new Date(nowMs - HOUR).toISOString(),
+    } as ActiveConcern;
+    let live: ActiveConcern = concern;
+    const transitionConcernStatus = vi.fn(async (_id: string, input: { nextReviewAt?: string; clearNextReview?: boolean }) => {
+      const { nextReviewAt: _previous, ...rest } = live;
+      live = input.clearNextReview ? rest as ActiveConcern : { ...rest, ...(input.nextReviewAt ? { nextReviewAt: input.nextReviewAt } : {}) } as ActiveConcern;
+      return live;
+    });
+    const { enqueued, handlers, sentToHumans, handleMessage, prompts } = await harness({
+      nowMs,
+      // No social desire at all: the follow-up comes from the concern alone.
+      desires: [],
+      concernStore: fromAny({ list: async () => [live], transitionConcernStatus }),
+      getActiveConcerns: async () => [{ id: concern.id, title: concern.text, status: 'active' }],
+    });
+
+    await handlers.get('social-desire.outreach.evaluate')!({
+      id: 'evaluate-1', kind: 'social-desire.outreach.evaluate', dedupeKey: 'evaluate-1',
+      payload: { sourceId: 'manual' }, channelId: 'internal:social-outreach',
+      sourceMessageId: 'manual', inferredAt: nowMs,
+    });
+
+    expect(handleMessage).toHaveBeenCalledTimes(1);
+    const prompt = prompts.get('internal:social-outreach:contact-human')!;
+    expect(prompt).toContain('On your mind: You meant to follow up with them about this: Mo had a job interview on Tuesday');
+    expect(prompt).toContain('Do you want to message Mo?');
+    // Answered: the concern stops asking (no next review) and stays a live concern.
+    expect(live.nextReviewAt).toBeUndefined();
+
+    const outbound = enqueued.filter(action => action.kind === INTENTION_OUTBOUND_MESSAGE_ACTION_KIND);
+    expect(outbound).toHaveLength(1);
+    expect(outbound[0]!.payload).toMatchObject({
+      channelId: HUMAN_DM,
+      concernIds: ['concern-interview'],
+      reason: 'concern_follow_up',
+    });
+    await handlers.get(INTENTION_OUTBOUND_MESSAGE_ACTION_KIND)!(outbound[0]!);
+    expect(sentToHumans).toEqual([{ channelId: HUMAN_DM, content: 'Did you get to see the sea?' }]);
   });
 });

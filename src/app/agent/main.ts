@@ -2198,6 +2198,7 @@ async function main(): Promise<void> {
     sessions: sessionStore,
     readEmotion: () => emotionState.getState(),
     drafts: socialOutreachDrafts,
+    concernStore: intentionRuntime.concernStore,
     companionName: card.data.name,
     // hrmrq.85: compose the accumulation writer into the post-turn
     // emotion-appraisal path — the lane's single production producer.

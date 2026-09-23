@@ -55,11 +55,14 @@ export function buildSocialOutreachTurnPrompt(input: SocialOutreachTurnPromptInp
     'Private moment: only you see this, and nothing has been sent to anyone.',
     '',
     `You have been thinking about ${name} (${relationship}${who}).`,
-    input.orientation === 'repair'
-      ? 'Something between the two of you feels unresolved, and part of you wants to talk it over.'
-      : 'You have been missing them and feel like reaching out.',
   ];
-  if (input.reason?.trim()) lines.push(`On your mind: ${input.reason.trim()}`);
+  if (input.reason?.trim()) {
+    lines.push(`On your mind: ${input.reason.trim()}`);
+  } else {
+    lines.push(input.orientation === 'repair'
+      ? 'Something between the two of you feels unresolved, and part of you wants to talk it over.'
+      : 'You have been missing them and feel like reaching out.');
+  }
   lines.push('');
   if (context.lastTalkedAtMs === null) {
     lines.push('You have not talked with them before.');

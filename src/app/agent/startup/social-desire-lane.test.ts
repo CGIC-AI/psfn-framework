@@ -49,6 +49,7 @@ function makeDeps(overrides: Partial<SocialDesireLaneDeps> = {}): SocialDesireLa
     sessions: { findLatestEntries: () => [], listSessionsByRecentActivity: () => [] },
     readEmotion: () => null,
     drafts: createSocialOutreachDraftRegistry(),
+    concernStore: { list: async () => [], transitionConcernStatus: async () => null },
     companionName: 'TestCompanion',
     attachFeltSignalWriter: vi.fn(),
     ...overrides,

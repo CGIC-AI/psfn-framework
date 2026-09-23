@@ -9,8 +9,18 @@
  * - Bootstrap is idempotent: the session is found by its stable label and
  *   created only when absent. An existing session is NEVER reset, recreated,
  *   or mutated structurally; if it exists but does not contain the configured
- *   companion agent, the runner fails with incompatible-runtime rather than
- *   touching it.
+ *   companion agent, or was created without the companion drive policy, the
+ *   runner fails with incompatible-runtime rather than touching it. The one
+ *   reconciled field is the companion agent's personality: the companion-owned
+ *   OCEAN is applied through the server's personality endpoint so a retuned
+ *   temperament reaches a running session without losing its history.
+ * - Drive policy: sessions are created with hunger, thirst, and sleep pressure
+ *   disabled (neutral). PSFN observes no eating, drinking, or sleeping, so
+ *   those stocks could only peg at 1.0 and bias every emotion. Social,
+ *   stimulation, and esteem needs stay live and are regulated by real
+ *   interactions: a verified inbound contact is sent as `external_actor`
+ *   (social-contact.ts), so the companion's own warmth response lowers social
+ *   need and absence lets it rise on the session drive clock.
  * - The emo_sim HTTP API is unauthenticated by upstream design (it binds
  *   loopback by default and warns on wider binds). Deployment must keep the
  *   server cluster-internal (ClusterIP service, NetworkPolicy); there is no
@@ -45,8 +55,11 @@ import {
   type EmoSimEmotionName,
   type EmoSimEmotionSpecMetadata,
   type EmoSimEngineSnapshot,
+  type EmoSimPersonality,
+  type EmoSimRunContext,
   type EmoSimRunner,
 } from './emosim-adapter.js';
+import { buildEmoSimExternalActor, type EmoSimExternalActor } from './social-contact.js';
 
 /** Neutral anchor NPC required because emo_sim sessions need >= 1 NPC. */
 export const EMOSIM_SERVER_ANCHOR_NPC_NAME = 'baseline-anchor' as const;
@@ -64,6 +77,20 @@ export const EMOSIM_MIN_READ_CADENCE_MS = 1000;
 /** Ceiling on the afterTick spacing so a misconfig cannot stall the pipeline. */
 export const EMOSIM_MAX_READ_CADENCE_MS = 60_000;
 export const DEFAULT_EMOSIM_AFTER_TICK_DELAY_MS = EMOSIM_MIN_READ_CADENCE_MS;
+
+/**
+ * Session-wide emo_sim `drive_config` for companion sessions. Physiological
+ * stocks PSFN never observes are disabled; the rest inherit the session drive
+ * clock (the server's --drivescale, owned by the deployment chart).
+ */
+const EMOSIM_COMPANION_DRIVE_CONFIG = Object.freeze({
+  hunger: Object.freeze({ enabled: false }),
+  thirst: Object.freeze({ enabled: false }),
+  sleep_pressure: Object.freeze({ enabled: false }),
+});
+
+/** `/api/model` capability the runner requires for verified social contact. */
+const EMOSIM_EXTERNAL_SOCIAL_ACTOR_CAPABILITY = 'external_social_actor' as const;
 
 const SERVER_DRIVE_KEYS = Object.freeze([
   'hunger',
@@ -83,6 +110,8 @@ export interface EmoSimServerRunnerOptions {
   sessionLabel: string;
   /** Stable name of the human agent representing the companion. */
   agentName: string;
+  /** Companion-owned OCEAN applied at creation and reconciled on bootstrap. */
+  personality: EmoSimPersonality;
   /** Per-HTTP-request timeout. */
   timeoutMs?: number;
   /**
@@ -110,6 +139,7 @@ export class EmoSimServerRunner implements EmoSimRunner {
   private readonly serverUrl: string;
   private readonly sessionLabel: string;
   private readonly agentName: string;
+  private readonly personality: EmoSimPersonality;
   private readonly timeoutMs: number;
   private readonly afterTickDelayMs: number;
   private readonly fetchImpl: typeof fetch;
@@ -120,6 +150,7 @@ export class EmoSimServerRunner implements EmoSimRunner {
     this.serverUrl = normalizeServerUrl(options.serverUrl);
     this.sessionLabel = requireNonEmpty(options.sessionLabel, 'sessionLabel');
     this.agentName = requireNonEmpty(options.agentName, 'agentName');
+    this.personality = requirePersonality(options.personality);
     this.timeoutMs = normalizeTimeout(options.timeoutMs ?? DEFAULT_EMOSIM_TIMEOUT_MS, 'timeoutMs', 120_000);
     this.afterTickDelayMs = normalizeTimeout(
       options.afterTickDelayMs ?? DEFAULT_EMOSIM_AFTER_TICK_DELAY_MS,
@@ -131,13 +162,16 @@ export class EmoSimServerRunner implements EmoSimRunner {
     this.sleep = options.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
   }
 
-  async run(input: EmoSimAdapterInput): Promise<unknown> {
+  async run(input: EmoSimAdapterInput, context: EmoSimRunContext = {}): Promise<unknown> {
+    const externalActor = context.socialContactKey === undefined
+      ? undefined
+      : buildEmoSimExternalActor(this.sessionLabel, context.socialContactKey);
     const bootstrap = await this.ensureBootstrap(input);
 
     const beforeState = await this.readSessionState(bootstrap.sessionId);
     const before = this.toEngineSnapshot(beforeState);
 
-    await this.postStimulusEvent(bootstrap.sessionId, input);
+    await this.postStimulusEvent(bootstrap.sessionId, input, externalActor);
     const afterStimulusState = await this.readSessionState(bootstrap.sessionId);
     const afterStimulus = this.toEngineSnapshot(afterStimulusState);
 
@@ -231,8 +265,8 @@ export class EmoSimServerRunner implements EmoSimRunner {
       }
       return { sessionId: bootstrap.sessionId, snapshot: this.toEngineSnapshot(state) };
     } catch (error) {
-      // Re-discover after a server restart; never repair or create a session
-      // from a read-only sampling request.
+      // Re-discover after a server restart; never create a session from a
+      // read-only sampling request (bootstrap only reconciles personality).
       this.bootstrapPromise = null;
       throw error;
     }
@@ -254,6 +288,7 @@ export class EmoSimServerRunner implements EmoSimRunner {
   private async bootstrap(input?: EmoSimAdapterInput): Promise<EmoSimServerBootstrap> {
     const model = expectRecord(await this.request('GET', '/api/model'), '/api/model response');
     this.verifyModelContract(model);
+    verifyExternalSocialActorCapability(model);
     const emotionSpecs = extractEmotionSpecs(model);
 
     const sessions = await this.request('GET', '/api/sessions');
@@ -281,11 +316,12 @@ export class EmoSimServerRunner implements EmoSimRunner {
           + `"${this.agentName}"; refusing to modify or recreate an existing session`,
         );
       }
+      await this.reconcileExistingSession(sessionId);
     } else {
       if (!input) {
         throw incompatible('Configured EmoSim session is unavailable for live-state sampling');
       }
-      sessionId = await this.createSession(input);
+      sessionId = await this.createSession();
     }
 
     const sessionModel = expectRecord(
@@ -300,13 +336,13 @@ export class EmoSimServerRunner implements EmoSimRunner {
     return { sessionId, timeScale, emotionSpecs };
   }
 
-  private async createSession(input: EmoSimAdapterInput): Promise<string> {
+  private async createSession(): Promise<string> {
     const created = expectRecord(
       await this.request('POST', '/api/sessions', {
         label: this.sessionLabel,
         human: {
           name: this.agentName,
-          personality: input.subject.personality,
+          personality: { ...this.personality },
         },
         // emo_sim requires at least one NPC per session. The anchor is a
         // calm archetype in a world with autonomy disabled, so it never
@@ -318,6 +354,7 @@ export class EmoSimServerRunner implements EmoSimRunner {
           },
         ],
         autonomy: false,
+        drive_config: EMOSIM_COMPANION_DRIVE_CONFIG,
       }),
       'session create response',
     );
@@ -339,6 +376,53 @@ export class EmoSimServerRunner implements EmoSimRunner {
     return sessionId;
   }
 
+  /**
+   * Existing sessions keep their history. The drive policy cannot be changed
+   * on a live session (emo_sim sets it at creation only), so a session created
+   * before it fails closed; the personality is companion-owned tuning and is
+   * applied in place when it drifted.
+   */
+  private async reconcileExistingSession(sessionId: string): Promise<void> {
+    const state = await this.readSessionState(sessionId);
+    const driveConfig = expectRecord(state.drive_config, 'session state drive_config');
+    for (const [drive, policy] of Object.entries(EMOSIM_COMPANION_DRIVE_CONFIG)) {
+      const current = driveConfig[drive];
+      if (!isRecord(current) || current.enabled !== policy.enabled) {
+        throw incompatible(
+          `emo_sim session "${this.sessionLabel}" (${sessionId}) was created without the companion `
+          + `drive policy (${drive}.enabled must be ${String(policy.enabled)}); point this companion at `
+          + 'a fresh per-companion emo_sim instance or end that session so it is recreated',
+        );
+      }
+    }
+    const agents = expectRecord(state.agents, 'session state agents');
+    const agent = expectRecord(agents[this.agentName], `session state agent ${this.agentName}`);
+    const current = expectRecord(agent.personality, `agent ${this.agentName} personality`);
+    const drifted = PERSONALITY_TRAITS.some(
+      (trait) => expectFiniteNumber(current[trait], `agent ${this.agentName} personality.${trait}`)
+        !== this.personality[trait],
+    );
+    if (!drifted) return;
+    const updated = expectRecord(
+      await this.request(
+        'POST',
+        `/api/session/${encodeURIComponent(sessionId)}/agent/${encodeURIComponent(this.agentName)}/personality`,
+        { personality: { ...this.personality } },
+      ),
+      'personality update response',
+    );
+    const applied = expectRecord(updated.personality, 'personality update response personality');
+    for (const trait of PERSONALITY_TRAITS) {
+      if (expectFiniteNumber(applied[trait], `personality update ${trait}`) !== this.personality[trait]) {
+        throw incompatible(`emo_sim did not apply the configured personality trait ${trait}`);
+      }
+    }
+    log.info('Applied companion personality to existing emo_sim session', {
+      sessionLabel: this.sessionLabel,
+      agentName: this.agentName,
+    });
+  }
+
   private verifyModelContract(model: Record<string, unknown>): void {
     const dims = model.appraisal_dims;
     if (!Array.isArray(dims)) {
@@ -353,11 +437,19 @@ export class EmoSimServerRunner implements EmoSimRunner {
     assertOrderedEquality(Object.keys(emotions), EMOSIM_EMOTION_VECTOR, 'emotions');
   }
 
-  private async postStimulusEvent(sessionId: string, input: EmoSimAdapterInput): Promise<void> {
+  private async postStimulusEvent(
+    sessionId: string,
+    input: EmoSimAdapterInput,
+    externalActor: EmoSimExternalActor | undefined,
+  ): Promise<void> {
     const { stimulus } = input;
     await this.request('POST', `/api/session/${encodeURIComponent(sessionId)}/event`, {
       target: this.agentName,
-      channel: 'direct',
+      // A verified contact is a remote social event from an unsimulated
+      // person; everything else stays a target-only direct stimulus.
+      ...(externalActor
+        ? { channel: 'remote', external_actor: externalActor }
+        : { channel: 'direct' }),
       stimulus: {
         label: stimulus.label,
         intensity: stimulus.intensity,
@@ -474,6 +566,33 @@ export class EmoSimServerRunner implements EmoSimRunner {
         `EmoSim server ${method} ${path} returned non-JSON body: ${toErrorMessage(error)}`,
       );
     }
+  }
+}
+
+const PERSONALITY_TRAITS = Object.freeze(['O', 'C', 'E', 'A', 'N'] as const);
+
+function requirePersonality(value: EmoSimPersonality | undefined): EmoSimPersonality {
+  if (!isRecord(value)) {
+    throw new Error('EmoSim server runner personality is required (companion-owned OCEAN)');
+  }
+  const personality = {} as EmoSimPersonality;
+  for (const trait of PERSONALITY_TRAITS) {
+    const raw: unknown = value[trait];
+    if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0 || raw > 1) {
+      throw new Error(`EmoSim server runner personality.${trait} must be a finite number within 0..1`);
+    }
+    personality[trait] = raw;
+  }
+  return personality;
+}
+
+function verifyExternalSocialActorCapability(model: Record<string, unknown>): void {
+  const capabilities = model.capabilities;
+  if (!isRecord(capabilities) || capabilities[EMOSIM_EXTERNAL_SOCIAL_ACTOR_CAPABILITY] !== 1) {
+    throw incompatible(
+      `/api/model does not advertise capabilities.${EMOSIM_EXTERNAL_SOCIAL_ACTOR_CAPABILITY}=1; `
+      + 'the emo_sim build predates verified social contact (rebuild at the pinned commit)',
+    );
   }
 }
 

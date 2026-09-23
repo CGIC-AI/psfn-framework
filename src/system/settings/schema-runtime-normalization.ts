@@ -9,6 +9,7 @@ import {
   type SessionTailCacheSettings,
 } from '../config/runtime-config-contracts.js';
 import { normalizeGroupMemorySettings } from '../config/group-memory-config.js';
+import { normalizeEmoSimPersonality } from '../config/emosim-personality-config.js';
 import { normalizeEmotionScopingSettings } from '../config/emotion-scoping-config.js';
 import { normalizeNarrativeEmotionAppraisalSettings } from '../config/narrative-emotion-appraisal-config.js';
 import { normalizeMemoryRetrievalPolicy } from '../config/memory-retrieval-policy.js';
@@ -450,6 +451,13 @@ function normalizeObserverEvalSidecarSettings(
     `${fieldPath}.adapter.sessionLabel`,
   );
   const agentName = optionalNonEmptyString(adapter.agentName, `${fieldPath}.adapter.agentName`);
+  const personality = adapter.personality === undefined
+    ? undefined
+    : normalizeEmoSimPersonality(
+      adapter.personality,
+      `${fieldPath}.adapter.personality`,
+      'Invalid settings',
+    );
   const adapterTimeoutMs = adapter.timeoutMs === undefined
     ? undefined
     : expectIntegerInRange(adapter.timeoutMs, `${fieldPath}.adapter.timeoutMs`, 1, 600_000);
@@ -542,6 +550,7 @@ function normalizeObserverEvalSidecarSettings(
       ...(serverUrl ? { serverUrl } : {}),
       ...(sessionLabel ? { sessionLabel } : {}),
       ...(agentName ? { agentName } : {}),
+      ...(personality ? { personality } : {}),
       ...(adapterTimeoutMs !== undefined ? { timeoutMs: adapterTimeoutMs } : {}),
       includeWorldState: adapter.includeWorldState === undefined
         ? defaults.adapter.includeWorldState
@@ -613,6 +622,7 @@ function normalizeEmoSimProactivitySettings(
     'sustainMs',
     'dedupeWindowMs',
     'cooldownMs',
+    'cooldownJitterMs',
   ], `${fieldPath}.thresholdProfile`, { errorPrefix: 'Invalid settings' });
   assertNoUnknownKeys(source, ['model', 'version'], `${fieldPath}.thresholdProfile.applicableSource`, {
     errorPrefix: 'Invalid settings',
@@ -678,6 +688,18 @@ function normalizeEmoSimProactivitySettings(
       `Invalid settings at ${fieldPath}.thresholdProfile.abstainBelowMinimumConfidence: production profiles must fail closed`,
     );
   }
+  const cooldownMs = expectIntegerInRange(
+    profile.cooldownMs,
+    `${fieldPath}.thresholdProfile.cooldownMs`,
+    60_000,
+    604_800_000,
+  );
+  const cooldownJitterMs = expectIntegerInRange(
+    profile.cooldownJitterMs,
+    `${fieldPath}.thresholdProfile.cooldownJitterMs`,
+    0,
+    cooldownMs,
+  );
   return {
     mode: expectEnumValue<EmoSimProactivityMode>(
       root.mode,
@@ -775,12 +797,8 @@ function normalizeEmoSimProactivitySettings(
         0,
         86_400_000,
       ),
-      cooldownMs: expectIntegerInRange(
-        profile.cooldownMs,
-        `${fieldPath}.thresholdProfile.cooldownMs`,
-        60_000,
-        604_800_000,
-      ),
+      cooldownMs,
+      cooldownJitterMs,
     },
   };
 }
@@ -925,6 +943,10 @@ function normalizeEndpointAndGardenSettings(
         attachmentIntensityThreshold: legacy.wouldMessage.attachmentIntensityThreshold,
         sustainMs: legacy.wouldMessage.sustainMs,
         cooldownMs: legacy.cooldownMs,
+        cooldownJitterMs: Math.min(
+          createDefaultEmoSimProactivitySettings().thresholdProfile.cooldownJitterMs,
+          legacy.cooldownMs,
+        ),
       },
     };
   }

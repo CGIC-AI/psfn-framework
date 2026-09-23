@@ -41,6 +41,7 @@ function thresholdProfile() {
     sustainMs: 30 * MINUTE_MS,
     dedupeWindowMs: 5 * MINUTE_MS,
     cooldownMs: 6 * 60 * MINUTE_MS,
+    cooldownJitterMs: 0,
   };
 }
 
@@ -238,6 +239,80 @@ describe('EmoSim Proactivity Port', () => {
       .resolves.toMatchObject({ reason: 'sustain_pending' });
     await expect(port.observe(observation(nextCrossingAt + 30 * MINUTE_MS)))
       .resolves.toMatchObject({ reason: 'cooldown_active' });
+    expect(emitImpulse).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a cooldown jitter larger than the cooldown itself', () => {
+    expect(() => createEmoSimProactivityPort({
+      enabled: true,
+      companionId: COMPANION_ID,
+      thresholdProfile: { ...thresholdProfile(), cooldownJitterMs: 6 * 60 * MINUTE_MS + 1 },
+      stateStore: stateStore().store,
+      emitImpulse: vi.fn(),
+    })).toThrow(/cooldownJitterMs must not exceed cooldownMs/);
+  });
+
+  it('jitters the cooldown per companion, deterministically across restarts', async () => {
+    const jitterMs = 4 * 60 * MINUTE_MS;
+    const cooldownMs = 6 * 60 * MINUTE_MS;
+    const lastFiredAtMs = NOW_MS;
+    const nextEligible = async (companionId: string): Promise<number> => {
+      const port = createEmoSimProactivityPort({
+        enabled: true,
+        companionId,
+        thresholdProfile: { ...thresholdProfile(), cooldownJitterMs: jitterMs },
+        stateStore: stateStore({ firstCrossingMs: null, lastFiredAtMs }).store,
+        emitImpulse: vi.fn(),
+      });
+      const probeAt = lastFiredAtMs + 60 * MINUTE_MS;
+      await port.observe({ ...observation(probeAt), companionId });
+      const result = await port.observe({
+        ...observation(probeAt + 30 * MINUTE_MS),
+        companionId,
+      });
+      expect(result).toMatchObject({ kind: 'suppressed', reason: 'cooldown_active' });
+      if (result.kind !== 'suppressed' || result.nextEligibleAtMs === undefined) {
+        throw new Error('expected a cooldown suppression with nextEligibleAtMs');
+      }
+      return result.nextEligibleAtMs;
+    };
+
+    const companions = [
+      COMPANION_ID,
+      '22222222-2222-4222-8222-222222222222',
+      '33333333-3333-4333-8333-333333333333',
+    ];
+    const eligible = await Promise.all(companions.map(nextEligible));
+    for (const at of eligible) {
+      expect(at).toBeGreaterThanOrEqual(lastFiredAtMs + cooldownMs);
+      expect(at).toBeLessThanOrEqual(lastFiredAtMs + cooldownMs + jitterMs);
+    }
+    // Companions that fired together do not re-arm together.
+    expect(new Set(eligible).size).toBe(companions.length);
+    // A restarted port (fresh instance, same persisted state) derives the same wait.
+    await expect(nextEligible(COMPANION_ID)).resolves.toBe(eligible[0]);
+  });
+
+  it('does not emit before the jittered cooldown elapses and emits after it', async () => {
+    const jitterMs = 4 * 60 * MINUTE_MS;
+    const { store } = stateStore({ firstCrossingMs: null, lastFiredAtMs: NOW_MS });
+    const emitImpulse = vi.fn(async () => undefined);
+    const port = createEmoSimProactivityPort({
+      enabled: true,
+      companionId: COMPANION_ID,
+      thresholdProfile: { ...thresholdProfile(), cooldownJitterMs: jitterMs },
+      stateStore: store,
+      emitImpulse,
+    });
+    await port.observe(observation(NOW_MS + MINUTE_MS));
+    const blocked = await port.observe(observation(NOW_MS + 31 * MINUTE_MS));
+    if (blocked.kind !== 'suppressed' || blocked.nextEligibleAtMs === undefined) {
+      throw new Error('expected a cooldown suppression');
+    }
+    await expect(port.observe(observation(blocked.nextEligibleAtMs - MINUTE_MS)))
+      .resolves.toMatchObject({ reason: 'cooldown_active' });
+    await expect(port.observe(observation(blocked.nextEligibleAtMs)))
+      .resolves.toMatchObject({ kind: 'emitted' });
     expect(emitImpulse).toHaveBeenCalledTimes(1);
   });
 });

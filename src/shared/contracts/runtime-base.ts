@@ -1800,8 +1800,24 @@ export interface ObserverEvalSidecarAdapterSettings {
   sessionLabel?: string;
   /** Stable emo_sim human-agent name representing the companion. */
   agentName?: string;
+  /**
+   * Companion-owned Big Five (OCEAN, each 0..1) for the emo_sim human agent.
+   * Required whenever an enabled sidecar uses kind=emosim_server; in a fleet it
+   * is bound from the companion's companions.json observer binding so no
+   * companion inherits another's (or a shared default) temperament.
+   */
+  personality?: EmoSimPersonalitySettings;
   timeoutMs?: number;
   includeWorldState: boolean;
+}
+
+/** Big Five traits for one companion's emo_sim agent; every trait is 0..1. */
+export interface EmoSimPersonalitySettings {
+  O: number;
+  C: number;
+  E: number;
+  A: number;
+  N: number;
 }
 
 export interface ObserverEvalSidecarPersistenceSettings {
@@ -1857,6 +1873,12 @@ export interface EmoSimProactivityThresholdProfile {
   sustainMs: number;
   dedupeWindowMs: number;
   cooldownMs: number;
+  /**
+   * Extra cooldown in 0..cooldownJitterMs, derived deterministically from the
+   * companion and the previous fire so companions never re-arm in lockstep and
+   * a restart does not re-roll the wait. Must not exceed cooldownMs.
+   */
+  cooldownJitterMs: number;
 }
 
 /** Companion-local production authority for qualifying EmoSim source fires. */

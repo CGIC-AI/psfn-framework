@@ -12804,10 +12804,38 @@
     },
     {
       "file": "src/system/config/runtime-config-contracts.ts",
+      "name": "createDefaultEmoSimProactivitySettings.thresholdProfile.attachmentIntensityThreshold",
+      "value": "0.65",
+      "form": "object-member",
+      "note": "Canonical settings.json bootstrap metadata for the validated per-companion EmoSim profile (revision public-bootstrap.v2, tuned for contact-regulated social need); runtime authority is each companion's owner file and Garden overlay, not this fallback literal."
+    },
+    {
+      "file": "src/system/config/runtime-config-contracts.ts",
+      "name": "createDefaultEmoSimProactivitySettings.thresholdProfile.cooldownJitterMs",
+      "value": "14_400_000",
+      "form": "object-member",
+      "note": "Canonical settings.json bootstrap metadata for the validated per-companion EmoSim profile (revision public-bootstrap.v2, tuned for contact-regulated social need); runtime authority is each companion's owner file and Garden overlay, not this fallback literal."
+    },
+    {
+      "file": "src/system/config/runtime-config-contracts.ts",
+      "name": "createDefaultEmoSimProactivitySettings.thresholdProfile.cooldownMs",
+      "value": "28_800_000",
+      "form": "object-member",
+      "note": "Canonical settings.json bootstrap metadata for the validated per-companion EmoSim profile (revision public-bootstrap.v2, tuned for contact-regulated social need); runtime authority is each companion's owner file and Garden overlay, not this fallback literal."
+    },
+    {
+      "file": "src/system/config/runtime-config-contracts.ts",
       "name": "createDefaultEmoSimProactivitySettings.thresholdProfile.samplingIntervalMs",
       "value": "60_000",
       "form": "object-member",
       "note": "Canonical settings.json bootstrap metadata for the validated per-companion EmoSim profile; runtime authority is the owner file and Garden overlay, not this fallback literal."
+    },
+    {
+      "file": "src/system/config/runtime-config-contracts.ts",
+      "name": "createDefaultEmoSimProactivitySettings.thresholdProfile.socialNeedThreshold",
+      "value": "0.8",
+      "form": "object-member",
+      "note": "Canonical settings.json bootstrap metadata for the validated per-companion EmoSim profile (revision public-bootstrap.v2, tuned for contact-regulated social need); runtime authority is each companion's owner file and Garden overlay, not this fallback literal."
     },
     {
       "file": "src/system/config/runtime-config-contracts.ts",
@@ -14228,7 +14256,7 @@
     {
       "file": "src/system/settings/schema-runtime-normalization.ts",
       "name": "normalizeEndpointAndGardenSettings.normalized.emosimProactivity.thresholdProfile",
-      "value": "{ ...createDefaultEmoSimProactivitySettings().thresholdProfile, profileId: EMOSIM_WOULD_MESSAGE_V1, revision: 'legacy-owner-migration.v1', reviewNote: 'One-way migration of the previously enabled production would_message owner block.', socialNeedThreshold: legacy.wouldMessage.socialNeedThreshold, attachmentIntensityThreshold: legacy.wouldMessage.attachmentIntensityThreshold, sustainMs: legacy.wouldMessage.sustainMs, cooldownMs: legacy.cooldownMs, }",
+      "value": "{ ...createDefaultEmoSimProactivitySettings().thresholdProfile, profileId: EMOSIM_WOULD_MESSAGE_V1, revision: 'legacy-owner-migration.v1', reviewNote: 'One-way migration of the previously enabled production would_message owner block.', socialNeedThreshold: legacy.wouldMessage.socialNeedThreshold, attachmentIntensityThreshold: legacy.wouldMessage.attachmentIntensityThreshold, sustainMs: legacy.wouldMessage.sustainMs, cooldownMs: legacy.cooldownMs, cooldownJitterMs: Math.min( createDefaultEmoSimProactivitySettings().thresholdProfile.cooldownJitterMs, legacy.cooldownMs, ), }",
       "form": "object-member",
       "note": "One-way backward owner-data read preserves an already-enabled production source while filling the new validated profile metadata; new writes use the canonical settings.json profile."
     },

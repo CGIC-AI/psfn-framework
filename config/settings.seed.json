@@ -456,12 +456,12 @@
     "thresholdProfile": {
       "schemaVersion": 1,
       "profileId": "emosim-would-message-v1",
-      "revision": "public-bootstrap.v1",
+      "revision": "public-bootstrap.v2",
       "applicableSource": {
         "model": "emo_sim",
         "version": "emo_sim/server.py#http-api.v1"
       },
-      "reviewNote": "Conservative public bootstrap; production remains off until explicitly promoted.",
+      "reviewNote": "Conservative public bootstrap for contact-regulated social need; production remains off until each companion promotes its own profile.",
       "calibration": {
         "corpusVersion": "public-bootstrap-sanitized.v1",
         "metricsVersion": "emosim-proactivity.metrics.v1",
@@ -476,14 +476,15 @@
         "maximumFatigueRate": 0.25
       },
       "rollbackProfileId": null,
-      "socialNeedThreshold": 0.7,
-      "attachmentIntensityThreshold": 0.5,
+      "socialNeedThreshold": 0.8,
+      "attachmentIntensityThreshold": 0.65,
       "samplingIntervalMs": 60000,
       "minimumConfidence": 0.6,
       "abstainBelowMinimumConfidence": true,
-      "sustainMs": 1800000,
+      "sustainMs": 2700000,
       "dedupeWindowMs": 300000,
-      "cooldownMs": 21600000
+      "cooldownMs": 28800000,
+      "cooldownJitterMs": 14400000
     }
   },
   "importProcessingRouteMode": "background",

@@ -1,9 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   PRODUCTION_AUTOMATA_CLASSES,
   parseAutomataOwnerPolicy,
 } from './registry-contract.js';
-import { AutomataRunRegistry, InMemoryAutomataRunStore } from './run-registry.js';
+import {
+  AUTOMATA_RUN_PROCESS_RESTART_REASON,
+  AutomataRunRegistry,
+  InMemoryAutomataRunStore,
+} from './run-registry.js';
 
 function policy() {
   return parseAutomataOwnerPolicy({
@@ -105,8 +109,9 @@ describe('AutomataRunRegistry', () => {
     const first = await AutomataRunRegistry.hydrate({ companionId: 'companion-a', policy: policy(), store, nowMs: 100 });
     await first.register({
       runId: 'run-active',
-      automatonClass: 'subagent.bounded',
-      workerId: 'subagent-1',
+      // A lease_retry class: its durable redelivery owner re-enters it.
+      automatonClass: 'background.intention_post_turn_hooks',
+      workerId: 'background-work:intention_post_turn_hooks',
       taskId: 'task-active',
       taskLabel: 'active task',
       taskSummary: 'inspect active state',
@@ -141,6 +146,48 @@ describe('AutomataRunRegistry', () => {
     });
     expect(restartedAfterDiscoveryRetention.getRun('run-active')?.status).toBe('running');
     expect(restartedAfterDiscoveryRetention.getRun('run-recent')).toBeNull();
+  });
+
+  it('fails orphaned runs without a redelivery path at restart and leaves lease-retry runs to their owner', async () => {
+    const store = new InMemoryAutomataRunStore();
+    const first = await AutomataRunRegistry.hydrate({ companionId: 'companion-a', policy: policy(), store, nowMs: 100 });
+    const register = (runId: string, automatonClass: string, workerId: string) => first.register({
+      runId,
+      automatonClass,
+      workerId,
+      taskId: `task-${runId}`,
+      taskLabel: runId,
+      taskSummary: `inspect ${runId}`,
+      sessionIds: [`session-${runId}`],
+      createdAtMs: 100,
+    });
+    await register('subagent-running', 'subagent.bounded', 'subagent-1');
+    await first.transition('subagent-running', { status: 'running', reason: 'agent_initialized', atMs: 110 });
+    await register('reflection-queued', 'scheduler.reflection', 'reflection');
+    await register('hooks-running', 'background.intention_post_turn_hooks', 'background-work:intention_post_turn_hooks');
+    await first.transition('hooks-running', { status: 'running', reason: 'background_work_claimed', atMs: 110 });
+    await register('subagent-done', 'subagent.bounded', 'subagent-2');
+    await first.transition('subagent-done', { status: 'running', reason: 'agent_initialized', atMs: 110 });
+    await first.transition('subagent-done', { status: 'completed', reason: 'completed', outcome: 'completed', atMs: 120 });
+    const update = vi.spyOn(store, 'update');
+
+    const restarted = await AutomataRunRegistry.hydrate({ companionId: 'companion-a', policy: policy(), store, nowMs: 500 });
+
+    for (const [runId, previousStatus] of [['subagent-running', 'running'], ['reflection-queued', 'queued']] as const) {
+      expect(restarted.getRun(runId)).toMatchObject({
+        status: 'failed',
+        statusReason: AUTOMATA_RUN_PROCESS_RESTART_REASON,
+        outcome: 'blocked',
+        finishedAtMs: 500,
+        failureReason: expect.stringContaining(`Run was ${previousStatus} when its owning process exited`),
+      });
+      expect(update).toHaveBeenCalledWith(expect.objectContaining({ runId, status: 'failed' }), previousStatus);
+      // Durable, not just in memory.
+      expect((await store.loadExact('companion-a', runId))?.status).toBe('failed');
+    }
+    expect(restarted.getRun('hooks-running')?.status).toBe('running');
+    expect(restarted.getRun('subagent-done')).toMatchObject({ status: 'completed', finishedAtMs: 120 });
+    expect(update).toHaveBeenCalledTimes(2);
   });
 
   it('fails closed on unknown class, status, and transition', async () => {

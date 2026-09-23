@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import { loadAutomataPolicySeedDefaults } from '../../../system/config/automata-policy-config.js';
 import type { ProductionAutomataClassId } from '../registry-contract.js';
-import { AutomataRunRegistry, InMemoryAutomataRunStore } from '../run-registry.js';
+import {
+  AUTOMATA_RUN_PROCESS_RESTART_REASON,
+  AutomataRunRegistry,
+  InMemoryAutomataRunStore,
+} from '../run-registry.js';
 import {
   buildAutomataTerminalHandoffKey,
   type AutomataTerminalLifecyclePort,
@@ -39,6 +43,19 @@ function spec(overrides: Partial<AutomataClassRunSpec> = {}): AutomataClassRunSp
     sessionIds: ['session-governed-1'],
     ...overrides,
   };
+}
+
+/**
+ * A class with a durable redelivery owner (`lease_retry`): the only kind of
+ * run a restarted process re-enters under the same run id. Other classes'
+ * orphaned runs are failed at hydration.
+ */
+function restartableSpec(overrides: Partial<AutomataClassRunSpec> = {}): AutomataClassRunSpec {
+  return spec({
+    automatonClass: 'background.intention_post_turn_hooks',
+    workerId: 'background-work:intention_post_turn_hooks',
+    ...overrides,
+  });
 }
 
 /**
@@ -110,7 +127,7 @@ describe('governed automata class run port', () => {
 
   it('re-enters its own run instead of forking one, and replays a completed run', async () => {
     const { registry, store } = await createRegistry();
-    const port = createAutomataClassRunPort(registry, spec());
+    const port = createAutomataClassRunPort(registry, restartableSpec());
     await port.begin();
 
     // A restart rehydrates the same durable run from the same store.
@@ -119,7 +136,7 @@ describe('governed automata class run port', () => {
       policy: loadAutomataPolicySeedDefaults(),
       store,
     });
-    const restartedPort = createAutomataClassRunPort(restarted, spec());
+    const restartedPort = createAutomataClassRunPort(restarted, restartableSpec());
     expect(await restartedPort.begin()).toMatchObject({ attempt: 1, execute: true });
 
     await restartedPort.terminalize({
@@ -137,6 +154,27 @@ describe('governed automata class run port', () => {
       atMs: 30,
     });
     expect(restarted.getRun('run-governed-1')?.finishedAtMs).toBe(20);
+  });
+
+  it('fails an orphaned run of a class with no redelivery path at restart', async () => {
+    const { registry, store } = await createRegistry();
+    await createAutomataClassRunPort(registry, spec()).begin();
+
+    const restarted = await AutomataRunRegistry.hydrate({
+      companionId: COMPANION_ID,
+      policy: loadAutomataPolicySeedDefaults(),
+      store,
+      nowMs: 5_000,
+    });
+    expect(restarted.getRun('run-governed-1')).toMatchObject({
+      status: 'failed',
+      statusReason: AUTOMATA_RUN_PROCESS_RESTART_REASON,
+      outcome: 'blocked',
+      finishedAtMs: 5_000,
+    });
+    // Nothing re-enters it; a caller that tried would fail closed, not re-run.
+    await expect(createAutomataClassRunPort(restarted, spec()).begin())
+      .rejects.toThrow('already a terminal failed run');
   });
 
   it('fails closed on a terminal failed run rather than reporting a false replay', async () => {
@@ -256,7 +294,7 @@ describe('crash-window execution guard (psfn-framework-8n40k)', () => {
     const { registry, store } = await createRegistry();
     // Crash: the run started, its work finished, its Bus terminal committed —
     // and the process died before the registry transition.
-    await createAutomataClassRunPort(registry, spec()).begin();
+    await createAutomataClassRunPort(registry, restartableSpec()).begin();
     expect(registry.getRun('run-governed-1')?.status).toBe('running');
 
     const restarted = await AutomataRunRegistry.hydrate({
@@ -265,7 +303,7 @@ describe('crash-window execution guard (psfn-framework-8n40k)', () => {
       store,
     });
     const terminal = terminalPortWithCommitted(new Map([committedTerminal(
-      spec(),
+      restartableSpec(),
       { lifecycleState: 'completed', outcome: 'completed', stateReason: 'automata_run_completed' },
       4_242,
     )]));
@@ -273,7 +311,7 @@ describe('crash-window execution guard (psfn-framework-8n40k)', () => {
     let executions = 0;
     const outcome = await runGovernedAutomataClass({
       runtime: { registry: restarted, terminal },
-      spec: spec(),
+      spec: restartableSpec(),
       briefingQuery: 'deferred reflection template run',
       work: async () => {
         executions += 1;
@@ -292,14 +330,14 @@ describe('crash-window execution guard (psfn-framework-8n40k)', () => {
 
   it('converges a crash-window FAILED terminal without re-running the work', async () => {
     const { registry, store } = await createRegistry();
-    await createAutomataClassRunPort(registry, spec()).begin();
+    await createAutomataClassRunPort(registry, restartableSpec()).begin();
     const restarted = await AutomataRunRegistry.hydrate({
       companionId: COMPANION_ID,
       policy: loadAutomataPolicySeedDefaults(),
       store,
     });
     const terminal = terminalPortWithCommitted(new Map([committedTerminal(
-      spec(),
+      restartableSpec(),
       {
         lifecycleState: 'failed',
         outcome: 'blocked',
@@ -312,7 +350,7 @@ describe('crash-window execution guard (psfn-framework-8n40k)', () => {
     let executions = 0;
     const outcome = await runGovernedAutomataClass({
       runtime: { registry: restarted, terminal },
-      spec: spec(),
+      spec: restartableSpec(),
       briefingQuery: 'deferred reflection template run',
       work: async () => {
         executions += 1;
@@ -332,7 +370,7 @@ describe('crash-window execution guard (psfn-framework-8n40k)', () => {
 
   it('executes when the ledger holds no terminal for the interrupted run', async () => {
     const { registry, store } = await createRegistry();
-    await createAutomataClassRunPort(registry, spec()).begin();
+    await createAutomataClassRunPort(registry, restartableSpec()).begin();
     const restarted = await AutomataRunRegistry.hydrate({
       companionId: COMPANION_ID,
       policy: loadAutomataPolicySeedDefaults(),
@@ -345,7 +383,7 @@ describe('crash-window execution guard (psfn-framework-8n40k)', () => {
         registry: restarted,
         terminal: terminalPortWithCommitted(new Map()),
       },
-      spec: spec(),
+      spec: restartableSpec(),
       briefingQuery: 'deferred reflection template run',
       work: async () => {
         executions += 1;
@@ -392,7 +430,7 @@ describe('crash-window execution guard (psfn-framework-8n40k)', () => {
 
   it('fails closed when the durable ledger cannot be read', async () => {
     const { registry, store } = await createRegistry();
-    await createAutomataClassRunPort(registry, spec()).begin();
+    await createAutomataClassRunPort(registry, restartableSpec()).begin();
     const restarted = await AutomataRunRegistry.hydrate({
       companionId: COMPANION_ID,
       policy: loadAutomataPolicySeedDefaults(),
@@ -406,7 +444,7 @@ describe('crash-window execution guard (psfn-framework-8n40k)', () => {
     let executions = 0;
     await expect(runGovernedAutomataClass({
       runtime: { registry: restarted, terminal },
-      spec: spec(),
+      spec: restartableSpec(),
       briefingQuery: 'deferred reflection template run',
       work: async () => {
         executions += 1;

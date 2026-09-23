@@ -4,7 +4,11 @@ import {
   PRODUCTION_AUTOMATA_CLASSES,
   parseAutomataOwnerPolicy,
 } from '../automata/registry-contract.js';
-import { AutomataRunRegistry, InMemoryAutomataRunStore } from '../automata/run-registry.js';
+import {
+  AUTOMATA_RUN_PROCESS_RESTART_REASON,
+  AutomataRunRegistry,
+  InMemoryAutomataRunStore,
+} from '../automata/run-registry.js';
 
 function automataPolicy() {
   return parseAutomataOwnerPolicy({
@@ -188,5 +192,44 @@ describe('SubagentTaskRegistry', () => {
       ref: 'evidence:one',
       custody: 'durable',
     }]);
+  });
+
+  it('re-adopts an orphaned durable subagent run from a previous process as failed, not active', async () => {
+    const store = new InMemoryAutomataRunStore();
+    const previous = new SubagentTaskRegistry({
+      runRegistry: await AutomataRunRegistry.hydrate({
+        companionId: 'companion-a',
+        policy: automataPolicy(),
+        store,
+        nowMs: 100,
+      }),
+    });
+    await previous.register({
+      subagentId: 'subagent-orphan',
+      name: 'Orphan',
+      task: 'Interrupted by a restart',
+      channelId: 'subagent:orphan',
+      capabilities: ['general'],
+      requiredCapabilities: [],
+      createdAt: 100,
+    });
+    await previous.markRunning('subagent-orphan', 'agent_initialized', 110);
+
+    const restarted = new SubagentTaskRegistry({
+      runRegistry: await AutomataRunRegistry.hydrate({
+        companionId: 'companion-a',
+        policy: automataPolicy(),
+        store,
+        nowMs: 500,
+      }),
+    });
+
+    expect(restarted.getActiveCount()).toBe(0);
+    expect(restarted.getRecentTasks()).toEqual([expect.objectContaining({
+      subagentId: 'subagent-orphan',
+      lifecycleState: 'failed',
+      stateReason: AUTOMATA_RUN_PROCESS_RESTART_REASON,
+      finishedAt: 500,
+    })]);
   });
 });

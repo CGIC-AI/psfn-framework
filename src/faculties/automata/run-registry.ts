@@ -21,6 +21,12 @@ const ALLOWED_TRANSITIONS: Readonly<Record<AutomataRunStatus, readonly AutomataR
   cancelled: [],
 };
 
+/**
+ * Status reason for a non-terminal run failed at hydration because the process
+ * that owned it exited and its class has no redelivery path.
+ */
+export const AUTOMATA_RUN_PROCESS_RESTART_REASON = 'process_restart_interrupted';
+
 export interface AutomataRunStorePort {
   loadRetained(companionId: string, nowMs: number): Promise<AutomataRunRecord[]>;
   loadExact(companionId: string, runId: string): Promise<AutomataRunRecord | null>;
@@ -113,7 +119,8 @@ export class AutomataRunRegistry {
   }): Promise<AutomataRunRegistry> {
     const companionId = requiredText(input.companionId, 'companionId');
     const registry = new AutomataRunRegistry(companionId, input.policy, input.store);
-    const loaded = await input.store.loadRetained(companionId, input.nowMs ?? Date.now());
+    const nowMs = input.nowMs ?? Date.now();
+    const loaded = await input.store.loadRetained(companionId, nowMs);
     for (const record of loaded) {
       if (record.companionId !== companionId) {
         throw new Error(`Automata store returned cross-companion run "${record.runId}".`);
@@ -123,7 +130,38 @@ export class AutomataRunRegistry {
       if (registry.runs.has(record.runId)) throw new Error(`Automata store returned duplicate run "${record.runId}".`);
       registry.runs.set(record.runId, cloneAutomataRun(record));
     }
+    await registry.terminalizeOrphanedRuns(nowMs);
     return registry;
+  }
+
+  /**
+   * A freshly hydrated registry belongs to a new process, so every retained
+   * non-terminal run was queued or running in a process that has since exited.
+   * Only `lease_retry` classes have an owner that re-enters the same run id
+   * after a restart: the durable background-work supervisor redelivers the
+   * job, and its begin path resumes the running run or converges on a
+   * committed Bus terminal. Every other class mints a fresh run id per attempt
+   * or held its execution state in memory (subagent tasks, live shards), so
+   * nothing will ever finish its orphaned run. Those are failed here, with the
+   * restart annotated, instead of staying non-terminal forever and holding a
+   * permanent stuck-job incident open. A concurrent store change aborts
+   * hydration: two processes reconciling one companion is a real fault.
+   */
+  private async terminalizeOrphanedRuns(nowMs: number): Promise<void> {
+    for (const record of this.sortedRuns()) {
+      if (isTerminalStatus(record.status)) continue;
+      const descriptor = this.classes.find(entry => entry.id === record.automatonClass);
+      if (!descriptor) throw new Error(`Unknown automata class "${record.automatonClass}".`);
+      if (descriptor.failureClass === 'lease_retry') continue;
+      await this.transition(record.runId, {
+        status: 'failed',
+        reason: AUTOMATA_RUN_PROCESS_RESTART_REASON,
+        outcome: 'blocked',
+        failureReason: `Run was ${record.status} when its owning process exited; `
+          + `class ${record.automatonClass} has no redelivery path, so it was failed at restart.`,
+        atMs: nowMs,
+      });
+    }
   }
 
   listClasses(): EffectiveAutomataClassDescriptor[] {

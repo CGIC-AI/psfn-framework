@@ -14,7 +14,7 @@ import {
 } from '../../../test-support/postgres-test-harness.js';
 import { createMemoryExtractionAutomataRunPort } from '../../memory/extraction/memory-extraction-automata-run.js';
 import { parseAutomataOwnerPolicy } from '../registry-contract.js';
-import { AutomataRunRegistry } from '../run-registry.js';
+import { AUTOMATA_RUN_PROCESS_RESTART_REASON, AutomataRunRegistry } from '../run-registry.js';
 import {
   AUTOMATA_TERMINAL_HANDOFF_SOURCE,
   AUTOMATA_TERMINAL_NO_FINDING_SOURCE,
@@ -164,9 +164,11 @@ async function openRun(process: Process, createdAtMs: number) {
 }
 
 /**
- * The two newly governed classes whose production run ids are stable for one
- * durable attempt, which is the only case where a restart must re-enter the
- * same run rather than open a new one.
+ * The governed classes whose production run ids are stable for one durable
+ * attempt AND that have a durable redelivery owner (`lease_retry`): the only
+ * case where a restart must re-enter the same run rather than open a new one.
+ * Orphaned runs of every other class are failed at hydration (see the shard
+ * case below).
  */
 const RESTART_CERTIFIED_CLASSES: readonly AutomataClassRunSpec[] = [
   {
@@ -178,15 +180,6 @@ const RESTART_CERTIFIED_CLASSES: readonly AutomataClassRunSpec[] = [
     taskLabel: 'Intention post-turn hooks',
     taskSummary: 'Record behavioral intention signals from one canonical completed turn.',
     sessionIds: ['logical-session-public-example'],
-  },
-  {
-    automatonClass: 'shard.long_horizon',
-    runId: 'shard-public-example-1',
-    workerId: 'shard-public-example-1',
-    taskId: 'shard-public-example-1',
-    taskLabel: 'Long-horizon shard',
-    taskSummary: 'Execute one long-horizon shard workload to a terminal outcome.',
-    sessionIds: ['shard:shard-public-example-1'],
   },
 ];
 
@@ -420,16 +413,49 @@ describe('governed Automata lifecycle restart certification', () => {
     INTEGRATION_TIMEOUT_MS,
   );
 
+  it('fails an orphaned shard run at restart instead of leaving it running forever', async () => {
+    await withDatabase(async databaseUrl => {
+      // A shard's execution lives only in the process that spawned it, so a
+      // restart can never re-enter its run.
+      const spec: AutomataClassRunSpec = {
+        automatonClass: 'shard.long_horizon',
+        runId: 'shard-public-example-orphan',
+        workerId: 'shard-public-example-orphan',
+        taskId: 'shard-public-example-orphan',
+        taskLabel: 'Long-horizon shard',
+        taskSummary: 'Execute one long-horizon shard workload to a terminal outcome.',
+        sessionIds: ['shard:shard-public-example-orphan'],
+      };
+      const crashed = await startProcess(databaseUrl, COMPANION_A);
+      await createAutomataClassRunPort(crashed.registry, spec, crashed.terminal).begin();
+      expect(crashed.registry.getRun(spec.runId)).toMatchObject({ status: 'running' });
+      await crashed.close();
+
+      const restarted = await startProcess(databaseUrl, COMPANION_A);
+      expect(restarted.registry.getRun(spec.runId)).toMatchObject({
+        status: 'failed',
+        statusReason: AUTOMATA_RUN_PROCESS_RESTART_REASON,
+        outcome: 'blocked',
+      });
+      await restarted.close();
+
+      // Durable: a later process hydrates the terminal run, not a stuck one.
+      const later = await startProcess(databaseUrl, COMPANION_A);
+      expect(later.registry.getRun(spec.runId)?.status).toBe('failed');
+      await later.close();
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+
   it('does not re-run work after a crash between the handoff commit and terminalization', async () => {
     await withDatabase(async databaseUrl => {
       const spec: AutomataClassRunSpec = {
-        automatonClass: 'shard.long_horizon',
-        runId: 'shard-public-example-crash-window',
-        workerId: 'shard-public-example-crash-window',
-        taskId: 'shard-public-example-crash-window',
-        taskLabel: 'Long-horizon shard',
-        taskSummary: 'Execute one long-horizon shard workload to a terminal outcome.',
-        sessionIds: ['shard:shard-public-example-crash-window'],
+        automatonClass: 'background.intention_post_turn_hooks',
+        runId: 'intention-post-turn-hooks:request-public-example-crash-window:0',
+        workerId: 'background-work:intention_post_turn_hooks',
+        taskId: 'logical-session-public-example-crash-window',
+        taskLabel: 'Intention post-turn hooks',
+        taskSummary: 'Record behavioral intention signals from one canonical completed turn.',
+        sessionIds: ['logical-session-public-example-crash-window'],
       };
       let executions = 0;
 

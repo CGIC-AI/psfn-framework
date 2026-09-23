@@ -27,6 +27,7 @@ function profile(profileId: string, socialNeedThreshold: number) {
     sustainMs: MINUTE_MS,
     dedupeWindowMs: 5 * MINUTE_MS,
     cooldownMs: 10 * MINUTE_MS,
+    cooldownJitterMs: 0,
   };
 }
 

@@ -27,6 +27,7 @@ import type { EmotionAppraisalEntry } from '../../../emotion/appraisal.js';
 import type { InternalState } from '../../../self-model/state.js';
 import type { TurnSessionContextSnapshot, TurnSnapshot } from '../../../turns/snapshot.js';
 import { dispatchObserverEvalTurn } from '../../../eval/observer-sidecar/runtime.js';
+import { deriveObserverSocialContactKey } from '../../../eval/observer-sidecar/social-contact.js';
 import type {
   ObserverEvalLifecycleState,
   ObserverEvalRoutingSource,
@@ -978,6 +979,13 @@ export async function computePreTurnState(input: {
     runtime.emotionSelfModelRuntime.getActiveConcernCount(authorContext.canonicalContactKey),
   );
   const observerEvalPrivacyContext = resolveObserverEvalPrivacyContext(conversationScope);
+  const observerSocialContactKey = deriveObserverSocialContactKey({
+    speakerRole: authorContext.speakerRole,
+    actorKind: authorContext.actorKind,
+    ...(authorContext.canonicalContactKey
+      ? { canonicalContactKey: authorContext.canonicalContactKey }
+      : {}),
+  });
   const observerEvalLifecycleState = await dispatchObserverEvalTurn({
     sidecarRuntime: runtime.observerEvalSidecar,
     logger: log,
@@ -1010,6 +1018,7 @@ export async function computePreTurnState(input: {
         attachmentCount: message.attachments?.length ?? 0,
         hasVisionInput: hasVisionInputs,
         sensitivity: observerEvalPrivacyContext.sensitivity,
+        ...(observerSocialContactKey ? { socialContactKey: observerSocialContactKey } : {}),
       },
       provenance: {
         seam: 'substrate-agent.pre-turn.emotion-observed',

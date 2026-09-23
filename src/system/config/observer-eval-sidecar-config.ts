@@ -1,6 +1,8 @@
 import { isAbsolute, relative, resolve } from 'node:path';
 import type { RuntimePathSnapshot } from '../../persistence/layout.js';
 import type { SubstrateConfig } from './runtime-config-contracts.js';
+import { isRecord } from '../../shared/utils/types.js';
+import type { EditableSettings } from '../settings.js';
 
 /**
  * Bind identity-bearing observer runtime fields to the selected companion's
@@ -42,12 +44,41 @@ export function bindCompanionObserverEvalSidecar(
       serverUrl: binding.serverUrl,
       sessionLabel: binding.sessionLabel,
       agentName: binding.agentName,
+      personality: structuredClone(binding.personality),
     },
     persistence: {
       ...sidecar.persistence,
       rootDir: binding.persistenceRootDir,
     },
   };
+}
+
+/**
+ * In a multi-companion fleet an active EmoSim proactivity profile must be the
+ * companion's own: its settings.overlay.json has to carry the threshold
+ * profile. Inheriting the fleet-global settings.json profile would make every
+ * companion fire on the same thresholds and clock, so it fails closed.
+ */
+export function assertCompanionOwnedEmoSimProactivityProfile(
+  config: Pick<SubstrateConfig, 'multiCompanion' | 'companionId' | 'emosimProactivity'>,
+  companionOverlay: Pick<EditableSettings, 'emosimProactivity'> | undefined,
+): void {
+  if (config.multiCompanion !== true) return;
+  const mode = config.emosimProactivity?.mode ?? 'off';
+  if (mode === 'off') return;
+  // Overlays are deliberately partial before the merge, so inspect the raw
+  // object rather than trusting the merged type.
+  const overlayProactivity: unknown = companionOverlay?.emosimProactivity;
+  const overlayProfile = isRecord(overlayProactivity)
+    ? overlayProactivity.thresholdProfile
+    : undefined;
+  if (!isRecord(overlayProfile)) {
+    throw new Error(
+      `emosimProactivity.mode=${mode} for companion ${JSON.stringify(config.companionId ?? 'unknown')} `
+      + 'requires a companion-owned emosimProactivity.thresholdProfile in that companion\'s '
+      + 'settings.overlay.json; refusing to run the fleet-global profile for every companion',
+    );
+  }
 }
 
 function isSameOrNestedPath(candidate: string, root: string): boolean {
@@ -133,6 +164,12 @@ export function validateObserverEvalSidecarStartupConfig(
     if (!sidecar.adapter.agentName?.trim()) {
       throw new Error(
         'observerEvalSidecar.adapter.agentName is required when enabled sidecar uses adapter.kind=emosim_server',
+      );
+    }
+    if (!sidecar.adapter.personality) {
+      throw new Error(
+        'observerEvalSidecar.adapter.personality is required when enabled sidecar uses adapter.kind=emosim_server; '
+        + 'each companion owns its emo_sim temperament (fleet: companions.json observerEvalSidecar.personality)',
       );
     }
   }

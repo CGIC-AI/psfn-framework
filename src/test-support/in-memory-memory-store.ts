@@ -1,3 +1,4 @@
+import { assertMemoryListPosition } from '../faculties/memory/list-position.js';
 import {
   type RecentContactShapeArtifact,
   type MemoryAdminListOptions,
@@ -293,10 +294,15 @@ export class InMemoryMemoryStore {
     return page.map(memory => cloneMemory(memory));
   }
 
-  listActiveMemories(options: { limit?: number; offset?: number } = {}): PurrMemory[] {
+  listActiveMemories(options: import('../faculties/memory/memory-store-port.js').ActiveMemoryListOptions = {}): PurrMemory[] {
     const offset = options.offset ?? 0;
     const limit = options.limit ?? 50;
-    return this.getAllActiveMemories().slice(offset, offset + limit);
+    const before = options.before === undefined ? undefined : assertMemoryListPosition(options.before);
+    return this.getAllActiveMemories()
+      .filter(memory => before === undefined || memory.extractedAt < before.extractedAt
+        || (memory.extractedAt === before.extractedAt && memory.id.localeCompare(before.memoryId) < 0))
+      .sort((left, right) => right.extractedAt - left.extractedAt || right.id.localeCompare(left.id))
+      .slice(offset, offset + limit);
   }
 
   listActiveMemoriesInWindow(options: import('../faculties/memory/memory-store-port.js').ActiveMemoryWindowOptions): {

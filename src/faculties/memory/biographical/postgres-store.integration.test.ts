@@ -346,10 +346,12 @@ describe('PostgresBiographicalProfileStore — schema and roundtrip', () => {
       expect(await store.getStageCursor('biography_synthesis', 'contact:absent'))
         .toBeUndefined();
       const digest = 'c'.repeat(64);
+      const sourceScan = { pageIndex: 1, before: { extractedAt: 1_000, memoryId: 'memory-cursor' } };
       await store.writeStageCursor({
         stage: 'biography_synthesis',
         cursorKey: 'contact:cursor-subject',
         observedDigest: digest,
+        sourceScan,
         now: NOW,
       });
       // A durable cursor is what makes a no-change window free after restart.
@@ -360,6 +362,7 @@ describe('PostgresBiographicalProfileStore — schema and roundtrip', () => {
           cursorKey: 'contact:cursor-subject',
           observedDigest: digest,
           observedAt: NOW.toISOString(),
+          sourceScan,
         });
       // Same key under a different stage is a different cursor.
       expect(await restarted.getStageCursor(
@@ -375,6 +378,15 @@ describe('PostgresBiographicalProfileStore — schema and roundtrip', () => {
       });
       expect((await restarted.getStageCursor('biography_synthesis', 'contact:cursor-subject'))
         ?.observedDigest).toBe(next);
+      expect((await restarted.getStageCursor('biography_synthesis', 'contact:cursor-subject'))
+        ?.sourceScan).toBeUndefined();
+      await expect(restarted.writeStageCursor({
+        stage: 'biography_synthesis', cursorKey: 'invalid', observedDigest: digest,
+        sourceScan: { pageIndex: -1, before: sourceScan.before },
+      })).rejects.toThrow('invalid biography source scan progress');
+      await expect(restarted.writeStageCursor({
+        stage: 'biography_companion_review', cursorKey: 'invalid', observedDigest: digest, sourceScan,
+      })).rejects.toThrow('invalid biography source scan progress');
       // @ts-expect-error an unknown stage must reject rather than widen
       await expect(restarted.getStageCursor('invented_stage', 'k')).rejects
         .toThrow('unknown biography background stage');

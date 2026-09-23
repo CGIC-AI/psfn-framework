@@ -113,7 +113,7 @@ function buildEventStarterLines(
   if (eventLines.length > 0) {
     return eventLines.map(line => `- ${line}`);
   }
-  return ['No event summary is present in the starter context; read-only introspection remains available if it would help.'];
+  return ['No event summary is present in the starter context; my full toolset remains available if it would help.'];
 }
 
 function selectEventLines(input: ReflectionStarterPromptInput): string[] {

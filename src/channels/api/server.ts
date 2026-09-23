@@ -896,6 +896,12 @@ export class ApiServer implements ChannelAdapterPort {
       this.handleIdentity(res);
     } else if (req.method === 'GET' && path === '/v1/satellites/config') {
       this.handleSatelliteConfigPull(res, url, principal, clientCert);
+    } else if (req.method === 'GET' && path === '/readyz') {
+      if (principal.mode !== 'api_key') {
+        sendApiError(res, 401, 'unauthorized', 'Readiness requires API key authentication');
+        return;
+      }
+      this.handleReadiness(res);
     } else if (req.method === 'GET' && path === '/health') {
       void this.handleHealth(res);
     } else if (req.method === 'POST' && path === '/v1/chat/completions') {
@@ -1358,6 +1364,16 @@ export class ApiServer implements ChannelAdapterPort {
     return this.satelliteRegistryProvider
       ? this.satelliteRegistryProvider()
       : this.satelliteRegistry;
+  }
+
+  private handleReadiness(res: ServerResponse): void {
+    let ready = false;
+    try {
+      ready = this.runtime?.isReady?.() === true;
+    } catch (error) {
+      log.error('API readiness check failed', { error: toErrorMessage(error) });
+    }
+    sendJson(res, ready ? 200 : 503, { status: ready ? 'ready' : 'unavailable' });
   }
 
   private async handleHealth(res: ServerResponse): Promise<void> {

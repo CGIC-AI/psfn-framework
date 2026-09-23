@@ -24,4 +24,9 @@ describe('serializeModelUsageQuery', () => {
       'timezone=America%2FNew_York&timezone=Not%2FA_Timezone',
     );
   });
+
+  it('uses transport-stable encoding for free-text filters', () => {
+    expect(serializeModelUsageQuery(new URLSearchParams({ purpose: "reader's notes + draft!" })))
+      .toBe('purpose=reader%27s%20notes%20%2B%20draft!');
+  });
 });

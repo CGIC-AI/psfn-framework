@@ -432,7 +432,7 @@
             </div>
           {/if}
 
-          <details class="rounded-xl border border-bark-200 bg-surface" open>
+          <details class="rounded-xl border border-bark-200 bg-surface">
             <summary class="cursor-pointer px-4 py-3 text-sm font-semibold text-shadow-900">Structured value and exact digests</summary>
             <div class="space-y-3 border-t border-bark-200 p-4">
               <pre class="overflow-x-auto rounded-lg bg-bark-50 p-3 text-xs text-shadow-800">{JSON.stringify(detail.claim.structuredValue, null, 2)}</pre>

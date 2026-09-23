@@ -96,6 +96,12 @@ export class InMemoryTranscriptProjection implements KeywordSearchableTranscript
     });
   }
 
+  async assertRedactionDriftDurable(channelId: string): Promise<void> {
+    if (this.driftByChannel.get(channelId)?.kind !== 'redaction') {
+      throw new Error('Canonical rewrite requires a durable redaction projection fence');
+    }
+  }
+
   clearProjectionDrift(channelId: string): void {
     this.driftByChannel.delete(channelId);
   }

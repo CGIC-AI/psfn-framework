@@ -49,7 +49,7 @@ describe('Automata Garden endpoint', () => {
       busOffset: 10,
       verificationStatus: 'pending',
     })).toBe(
-      '/api/admin/automata?classId=subagent.bounded&taskId=task+%2F+one&status=running&limit=20&runOffset=40&busOffset=10&verificationStatus=pending',
+      '/api/admin/automata?classId=subagent.bounded&taskId=task%20%2F%20one&status=running&limit=20&runOffset=40&busOffset=10&verificationStatus=pending',
     );
   });
 

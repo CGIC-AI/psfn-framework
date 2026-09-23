@@ -92,6 +92,7 @@ function collectExcerpt(
   const entries = ports.sessions.findLatestEntries(
     channelId,
     entry => (entry.role === 'user' || entry.role === 'assistant')
+      && !entry.authorId?.startsWith('system:')
       && !isNonConversationalSessionEntry(entry)
       && entry.content.trim().length > 0,
     ports.limits.excerptMessages,

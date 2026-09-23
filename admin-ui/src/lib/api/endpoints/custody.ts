@@ -10,6 +10,7 @@ import type {
   CustodyChainSourceToEgressesView,
 } from '../../../../../src/core/cogsec/disclosure/custody-chain-query.js';
 import { apiGet } from '../client';
+import { withQuery } from '../query';
 
 export type {
   CustodyChainEgressToSourcesView,
@@ -47,6 +48,6 @@ export function getCustodySourceEgresses(input: {
   if (input.limit !== undefined) params.set('limit', String(input.limit));
   if (input.cursor !== undefined) params.set('cursor', input.cursor);
   return apiGet<CustodyChainSourceToEgressesView>(
-    `/api/admin/custody/sources?${params.toString()}`,
+    withQuery('/api/admin/custody/sources', params),
   );
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  createDmConversationScope,
   createGroupConversationScope,
   type ConversationScopeSpeaker,
 } from '../../../core/session/conversation-scope.js';
@@ -122,6 +123,36 @@ async function makePublic(store: InMemoryBiographicalProfileStore, claim: Biogra
     now: NOW,
   });
 }
+
+describe('biographical continuity in the canonical direct conversation', () => {
+  it('projects a verified relationship in its own DM and rejects a mismatched author', async () => {
+    const store = new InMemoryBiographicalProfileStore(() => NOW);
+    const revalidator = new MemoryRevalidator();
+    const claim = await seedIdentity({
+      store, revalidator, value: { kind: 'relationship', relationshipType: 'friend' },
+      ref: 'memory:established-relationship',
+    });
+    const conversationScope = createDmConversationScope({
+      channelId: 'discord:dm:v', contact: { contactId: 'v', displayName: 'Morgan' },
+    });
+    const result = await projectBiographicalContext(
+      { store, revalidator, rebuildQueueMaxPending: 8 },
+      { companionSubject: COMPANION, conversationScope,
+        currentAuthor: { status: 'verified', subject: Morgan, trustLevel: 'primary' }, now: NOW },
+    );
+    expect(result.admittedClaimIds).toEqual([claim.id]);
+    expect(result.promptSection).toContain('friend');
+    expect(result.disclosureSources[0]?.permittedDestinations)
+      .toEqual([{ kind: 'contact_dm', contactIds: ['v'] }]);
+
+    const mismatched = await projectBiographicalContext(
+      { store, revalidator, rebuildQueueMaxPending: 8 },
+      { companionSubject: COMPANION, conversationScope,
+        currentAuthor: { status: 'verified', subject: EVE, trustLevel: 'primary' }, now: NOW },
+    );
+    expect(mismatched.admittedClaimIds).toEqual([]);
+  });
+});
 
 describe('portability scope — o61vb.15', () => {
   it('never projects an origin_only claim, whatever its sensitivity or audience', async () => {

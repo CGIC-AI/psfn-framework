@@ -3,7 +3,7 @@ import type { SessionEntry } from '../../../core/session/types.js';
 import { buildSessionMetadataWithMessageAddressing } from '../../../core/session/message-addressing.js';
 import type { ExtractedFact, ExtractedFactAttribution } from '../types.js';
 import {
-  resolveStrictGroupSubject,
+  resolveCanonicalFactSubject,
   validateStrictGroupAddressing,
 } from './strict-group-routing.js';
 
@@ -71,11 +71,11 @@ describe('strict group routing', () => {
       { normalizedName: 'example partner', contactId: 'contact-dragon' },
       { normalizedName: 'morgan', contactId: 'contact-morgan' },
     ];
-    expect(resolveStrictGroupSubject({
+    expect(resolveCanonicalFactSubject({
       subjectName: 'Example Partner',
       subjectContactId: 'contact-morgan',
     }, speakers)).toEqual({ status: 'skip', reason: 'conflicting_subject_contact' });
-    expect(resolveStrictGroupSubject({
+    expect(resolveCanonicalFactSubject({
       subjectName: 'Example Partner',
       subjectContactId: 'contact-dragon',
     }, speakers)).toEqual({ status: 'ok', speaker: speakers[0] });

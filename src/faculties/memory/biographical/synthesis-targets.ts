@@ -111,7 +111,7 @@ function admissibleGroupContactIds(
 }
 
 export function createBiographySynthesisTargetPort(input: {
-  readonly contactStore: ContactStorePort;
+  readonly contactStore: Pick<ContactStorePort, 'getByTrustLevel'>;
   readonly companionSubject: Extract<BiographicalSubjectRef, { kind: 'companion' }>;
   readonly depthPolicy: () => BiographicalDepthPolicy;
   /**
@@ -120,19 +120,21 @@ export function createBiographySynthesisTargetPort(input: {
    */
   readonly groupMembershipAuthority?: BiographyGroupMembershipAuthorityPort;
 }): BiographySynthesisTargetPort {
-  const contactEvidence = async (
+  const contactEvidence = (
     contact: Contact,
-  ): Promise<VerifiedContactDepthEvidence> => {
+  ): VerifiedContactDepthEvidence => {
     const subject: Extract<BiographicalSubjectRef, { kind: 'contact' }> = {
       kind: 'contact',
       contactId: contact.id,
       subjectVersion: 1,
     };
-    const verifiedLinks = await input.contactStore.countVerifiedIdentityLinks(contact.id);
     const authorityRef = `contact-store:${contact.id}`;
     return {
       subject,
-      canonicalContactVerified: contact.archivedAt === undefined && verifiedLinks > 0,
+      // The canonical store owns this contact and its trust/relationship facts.
+      // Linking a second transport identity is a separate proof, not a
+      // prerequisite for collecting this contact's already-attributed memories.
+      canonicalContactVerified: contact.archivedAt === undefined,
       trust: { verified: true, level: contact.trustLevel, authorityRef },
       relationship: {
         verified: true,
@@ -167,7 +169,7 @@ export function createBiographySynthesisTargetPort(input: {
           if (targets.length >= limit) break;
           if (contact.archivedAt !== undefined || seen.has(contact.id)) continue;
           seen.add(contact.id);
-          const evidence = await contactEvidence(contact);
+          const evidence = contactEvidence(contact);
           const depth = deriveBiographicalCollectionDepth({
             subject: evidence.subject,
             contactEvidence: evidence,

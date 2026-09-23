@@ -187,6 +187,7 @@ import { createLLMProviderPort } from '../../core/agent/contracts.js';
 import { wireIcpInitiationSources } from './icp-initiation-source-wiring.js';
 import { createIcpTestInitiationTrigger } from './icp-test-initiation.js';
 import { registerSocialImpulseOutreachLane } from './startup/social-impulse-outreach-lane.js';
+import { createIntentionFollowUpDestinationResolver } from './intention-follow-up-destination.js';
 import { createSocialOutreachDraftRegistry } from '../../core/intention/social-outreach-turn/drafts.js';
 import { registerWorldExplorationLane } from './startup/world-exploration-lane.js';
 import { wireCompanionPresenceContext } from './companion-presence-wiring.js';
@@ -1486,12 +1487,14 @@ async function main(): Promise<void> {
   toolMemoryWriter.intakeSinkGateProvider = () => sessionManager.intakeSinkGate;
   registerMemoryTools(agentLoop, {
     writer: toolMemoryWriter,
+    companionId: config.companionId,
+    roomMembershipAuthority,
     memoryStore: toolMemoryStore,
     episodicStore,
     episodeSearch,
     sessionReader: sessionStore,
     sessionQuarantineFilter: episodeSessionQuarantineFilter,
-    episodicAccessScope: () => {
+    retrievalAccessScope: () => {
       const context = getRequestContext();
       return context?.requesterProvenance === 'self_directed'
         && context.channelId?.startsWith('internal:reflection:') === true
@@ -2313,6 +2316,15 @@ async function main(): Promise<void> {
       getRecentResolvedConcerns: intentionAppraisalHooks.getRecentResolvedConcerns,
       onIntentionConcernDecision: intentionAppraisalHooks.onIntentionConcernDecision,
       onIntentionFollowUpDecision: intentionAppraisalHooks.onIntentionFollowUpDecision,
+      resolveIntentionFollowUpDestination: createIntentionFollowUpDestinationResolver({
+        ...(heartbeatChannelId
+          ? { heartbeatChannel: { channelId: heartbeatChannelId, channelType: 'discord' as const } }
+          : {}),
+        contactStore,
+        sessionStore,
+        ...(coreRuntime.icpAutonomyRuntime ? { icpAutonomy: coreRuntime.icpAutonomyRuntime } : {}),
+        capabilityRuntime,
+      }),
       getPendingFollowUpsForResurfacing: intentionAppraisalHooks.getPendingFollowUpsForResurfacing,
       onIntentionFollowUpActivated: intentionAppraisalHooks.onIntentionFollowUpActivated,
       onIntentionFollowUpDampened: intentionAppraisalHooks.onIntentionFollowUpDampened,
@@ -2369,6 +2381,7 @@ async function main(): Promise<void> {
       driftVelocityReview,
       secondArrowReview,
       orientationRewriteGate: schedulerConfig.orientationRewrite,
+      resolvedConcernStore: intentionRuntime.concernStore,
       reflectionNoveltyGate: schedulerConfig.reflectionNovelty,
       nearTurnMemoryCadence: schedulerConfig.nearTurnMemory,
       episodeSynthesis: schedulerConfig.episodeSynthesis,

@@ -26,6 +26,8 @@ export interface TurnTombstoneAuthoritySnapshot {
 
 export interface TurnTombstoneAuthorityScanOptions {
   channelId: string;
+  /** Exact logical owner resolved from this physical archive's current index lineage. */
+  ownerSessionId: string;
   filePaths: readonly string[];
   maxActionBytes: number;
   maxActions: number;
@@ -111,6 +113,7 @@ export async function readTurnTombstoneAuthoritySnapshot(
         type: 'start',
         input: {
           channelId: options.channelId,
+          ownerSessionId: options.ownerSessionId,
           filePaths: options.filePaths,
           maxActionBytes: options.maxActionBytes,
           maxActions: options.maxActions,

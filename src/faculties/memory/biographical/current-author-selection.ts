@@ -35,9 +35,12 @@ export function resolveVerifiedCurrentAuthor(input: {
   readonly conversationScope: ConversationScope;
   readonly currentAuthor?: CurrentAuthorResolution;
 }): VerifiedCurrentAuthor | undefined {
-  if (input.conversationScope.kind !== 'group') return undefined;
   if (input.currentAuthor?.status !== 'verified') return undefined;
   if (input.currentAuthor.subject.kind !== 'contact') return undefined;
+  if (input.conversationScope.kind === 'dm'
+    && input.currentAuthor.subject.contactId !== input.conversationScope.contact.contactId) {
+    return undefined;
+  }
   return {
     subject: input.currentAuthor.subject,
     trustLevel: input.currentAuthor.trustLevel,

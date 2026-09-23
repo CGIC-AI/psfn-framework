@@ -7,6 +7,7 @@ import WebSocket from 'ws';
 import { EventBus } from '../../shared/event-bus.js';
 import { createTestPostgresContactStore } from '../../test-support/postgres-contact-store.js';
 import { ApiServer } from './server.js';
+import { GatewayApiRuntime } from './gateway-runtime.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { SessionManager } from '../../core/session/manager.js';
 import type { AgentResponse, IntentionalNoReplyMetadata, SubstrateMessage } from '../../shared/contracts/runtime.js';
@@ -646,6 +647,60 @@ describe('ApiServer', () => {
           },
         },
       });
+    });
+  });
+
+  describe('GET /readyz', () => {
+    it.each([true, false])('reports route readiness %s without running diagnostics', async (ready) => {
+      await server.stop();
+      const requestAgent = vi.fn(async () => fromAny({ status: 'degraded' }));
+      const isApiReady = vi.fn(() => ready);
+      server = createApiServer({
+        port,
+        agentLoop: createMockAgentLoop(eventBus),
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        apiKey: 'readiness-test-key',
+        runtime: new GatewayApiRuntime({
+          isApiReady,
+          requestAgent,
+          requestCompanionAgent: vi.fn(),
+          subscribeApiStream: () => () => {},
+        }),
+      });
+      await server.init();
+      await server.start();
+      const headers = { Authorization: 'Bearer readiness-test-key' };
+      expect((await request(port, 'GET', '/readyz')).status).toBe(401);
+      expect(isApiReady).not.toHaveBeenCalled();
+      const result = await request(port, 'GET', '/readyz', undefined, headers);
+      expect(result.status).toBe(ready ? 200 : 503);
+      expect(JSON.parse(result.body)).toEqual({ status: ready ? 'ready' : 'unavailable' });
+      expect(requestAgent).not.toHaveBeenCalled();
+      expect((await request(port, 'GET', '/health', undefined, headers)).status).toBe(503);
+      expect(requestAgent).toHaveBeenCalledOnce();
+    });
+
+    it('rejects insecure-local admission', async () => {
+      expect((await request(port, 'GET', '/readyz')).status).toBe(401);
+    });
+
+    it('fails closed without a readiness provider', async () => {
+      await server.stop();
+      server = createApiServer({
+        port,
+        agentLoop: createMockAgentLoop(eventBus),
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        apiKey: 'readiness-test-key',
+        healthChecks: createHealthyHealthChecks(),
+      });
+      await server.init();
+      await server.start();
+      const result = await request(port, 'GET', '/readyz', undefined, {
+        Authorization: 'Bearer readiness-test-key',
+      });
+      expect(result.status).toBe(503);
     });
   });
 

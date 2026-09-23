@@ -70,6 +70,7 @@ function contacts(nowMs: number): Map<string, Contact> {
   return new Map<string, Contact>([
     ['contact-human', {
       id: 'contact-human', displayName: 'Morgan Example', nickname: 'Mo', trustLevel: 'primary',
+      discordUserId: 'discord-mo',
       relationshipType: 'partner', timezone: 'UTC', firstSeen: seen, lastSeen: seen,
       conversationChannels: [
         { channel: 'discord', channelId: HUMAN_DM, firstSeen: seen, lastSeen: seen },
@@ -138,7 +139,22 @@ async function harness(options: {
     const dataDir = mkdtempSync(join(tmpdir(), 'psfn-social-outreach-'));
     TEMP_DIRS.push(dataDir);
     const { manager, store: sessionStore } = buildGroupChatSession(dataDir);
-    manager.recordUserMessage(HUMAN_DM, 'I am heading to the coast this weekend', 'discord-mo', 'Mo', true);
+    // Transport-addressed direct message from Mo's own Discord identity: the
+    // heartbeat channel is verifiably Mo's DM (PR #609 primary-identity gate).
+    manager.recordUserMessage(HUMAN_DM, 'I am heading to the coast this weekend', 'discord-mo', 'Mo', true, undefined, {
+      addressing: {
+        schemaVersion: 2,
+        source: 'discord',
+        author: { authorId: 'discord-mo', authorName: 'Mo' },
+        observer: { authorId: 'companion-bot', authorName: 'Companion' },
+        mentionedTargets: [],
+        channel: { scope: 'direct', channelId: HUMAN_DM },
+        resolvedAddressee: {
+          kind: 'participants',
+          participants: [{ authorId: 'companion-bot', authorName: 'Companion', evidence: ['direct_message'] }],
+        },
+      },
+    });
     manager.recordAssistantMessage(HUMAN_DM, 'Oh lovely, send me a picture of the sea!', undefined, true);
     manager.recordAssistantMessage(COMPANION_DM, 'Your garden notes were great.', undefined, true);
     const channelsBefore = new Set(sessionStore.listChannels().map(entry => entry.channelId));

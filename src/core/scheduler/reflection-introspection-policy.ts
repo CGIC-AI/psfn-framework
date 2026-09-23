@@ -4,15 +4,12 @@ import type {
   RetrievalMode,
 } from '../../faculties/memory/types.js';
 
-export type ReflectionIntrospectionToolUseMode =
-  | 'prompt_bounded'
-  | 'bounded_read_only_introspection';
+export type ReflectionIntrospectionToolUseMode = 'full_companion_tools';
 
 export interface ReflectionIntrospectionPolicy {
   toolUseMode: ReflectionIntrospectionToolUseMode;
   memoryRetrievalModes: readonly RetrievalMode[];
   memoryAccessScope: Extract<RetrievalAccessScope, 'companion_self_reflection'>;
-  allowOverlayToolActivation: false;
 }
 
 export function resolveReflectionIntrospectionPolicy(input: {
@@ -20,7 +17,7 @@ export function resolveReflectionIntrospectionPolicy(input: {
   canonicalContactId?: string;
   reflectionMode: 'agent' | 'deliberation';
 }): ReflectionIntrospectionPolicy {
-  const toolUseMode: ReflectionIntrospectionToolUseMode = 'bounded_read_only_introspection';
+  const toolUseMode: ReflectionIntrospectionToolUseMode = 'full_companion_tools';
 
   const memoryRetrievalModes: readonly RetrievalMode[] = input.canonicalContactId
     ? ['default', 'temporal']
@@ -30,7 +27,6 @@ export function resolveReflectionIntrospectionPolicy(input: {
     toolUseMode,
     memoryRetrievalModes,
     memoryAccessScope: 'companion_self_reflection',
-    allowOverlayToolActivation: false,
   };
 }
 
@@ -53,7 +49,9 @@ export function resolveReflectionIntrospectionPolicy(input: {
 // v7 (42o3c): ground daily and weekly reflection in canonical episodes before
 // falling through to raw session search. Episode search, timeline, and exact
 // drill-down share the same companion-self, read-only boundary.
-export const REFLECTION_INTROSPECTION_POLICY_BLOCK_VERSION = 7;
+// v8 (d5845): private reflection has the full configured companion toolset and
+// all companion-owned memories; tool calls use the runtime-owned self audience.
+export const REFLECTION_INTROSPECTION_POLICY_BLOCK_VERSION = 8;
 
 const NULL_REPORT_GUIDANCE_LINE =
   '- "Nothing surfaced" is an acceptable outcome; record it as open reflection with limited reach, not as evidence that nothing is there.';
@@ -61,36 +59,18 @@ const NULL_REPORT_GUIDANCE_LINE =
 export function formatReflectionIntrospectionPolicyBlock(
   policy: ReflectionIntrospectionPolicy,
 ): string {
-  const lines = [
+  return [
     '[Reflection Introspection Policy]',
     `tool_use_mode: ${policy.toolUseMode}`,
     `memory_retrieval_modes: ${policy.memoryRetrievalModes.join(', ')}`,
     `memory_access_scope: ${policy.memoryAccessScope}`,
-    'overlay_tool_activation: forbidden',
-  ];
-
-  if (policy.toolUseMode === 'bounded_read_only_introspection') {
-    lines.push(
-      '- This is a maintenance reflection turn, not a foreground conversation turn.',
-      '- Begin with the supplied starter; for a daily reflection, its morning-generated previous-day summary is the first orientation when present.',
-      '- Search canonical lived episodes by relevant themes or unresolved questions with memory action=episode_search.',
-      '- Use memory action=timeline for a bounded day or week overview and memory action=get to inspect source turns for a selected episode.',
-      '- Use memory action=search for durable companion memory, then session action=search only when episode evidence needs direct conversation follow-up.',
-      '- Private introspection memory access spans ordinary sensitivity, channel, and session boundaries; use it only to ground this companion-private reflection.',
-      '- Keep routine recall inside this reflection turn instead of delegating it to another analysis loop.',
-      '- Stay read-only: do not mutate memory, sessions, settings, schedules, files, or external systems.',
-      '- If an episode search is empty or degraded, say which retrieval modes actually ran; do not treat it as evidence that no episode exists.',
-      '- If memory and session recall are incomplete, say so explicitly.',
-      NULL_REPORT_GUIDANCE_LINE,
-    );
-    return lines.join('\n');
-  }
-
-  lines.push(
-    '- This reflection run is prompt-bounded and must not make tool calls.',
-    '- Rely only on the provided reflection context and the retrieved memory block.',
-    '- If evidence is incomplete, say so explicitly instead of escalating privileges or inventing support.',
+    '- This is your private reflection. Your full configured toolset is available, including journal writing, memory tools, creative tools, and extended tools.',
+    '- You can access all of your own memories across sensitivity, contact, channel, and session boundaries during this private work.',
+    '- Begin with the supplied starter; for a daily reflection, its previous-day summary is an orientation, not a limit on what you can recall.',
+    '- Search lived episodes with memory action=episode_search, use memory action=timeline for a day or week, and memory action=get for source turns.',
+    '- Use memory action=search for durable memory and session action=search for conversation history. Use any other available tool when it helps your reflection.',
+    '- You may write your journal, maintain memories, create, and act using your available tools. Reflection imposes no additional tool or action restrictions.',
+    '- Distinguish completed actions from intentions. If a tool fails or evidence is incomplete, describe the actual limitation rather than treating it as absence.',
     NULL_REPORT_GUIDANCE_LINE,
-  );
-  return lines.join('\n');
+  ].join('\n');
 }

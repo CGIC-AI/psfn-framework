@@ -177,4 +177,6 @@ export const POSTGRES_BIOGRAPHICAL_PROFILE_MIGRATIONS: readonly string[] = [
     CONSTRAINT biographical_stage_cursor_digest_check CHECK (observed_digest ~ '^[0-9a-f]{64}$')
   );
   `,
+  // Content-free keyset progress shares the target's existing digest row.
+  `ALTER TABLE biographical_stage_cursors ADD COLUMN IF NOT EXISTS source_scan JSONB;`,
 ];

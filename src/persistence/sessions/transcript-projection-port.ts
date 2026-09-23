@@ -68,6 +68,8 @@ export interface TranscriptProjectionPort {
    */
   purgeChannel?(channelId: string): Promise<void>;
   flushPendingWrites?(): Promise<void>;
+  /** Maintenance fence: verify the fail-closed drift exists in durable storage. */
+  assertRedactionDriftDurable?(channelId: string): Promise<void>;
 }
 
 export interface KeywordSearchableTranscriptProjection extends TranscriptProjectionPort {

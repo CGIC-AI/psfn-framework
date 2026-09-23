@@ -1,3 +1,4 @@
+import { isCompanionSelfReflectionContext } from '../../primitives/llm/request-context.js';
 // ── pi-agent-core Agent-Loop Graft ──
 // Part of the pi-agent version-coupling boundary (see ./index.ts). This file
 // monkey-patches PRIVATE pi-agent-core Agent internals, which no semver
@@ -172,7 +173,10 @@ export function installAgentToolSchedulerPatch(
       throw new Error('Agent is already processing.');
     }
 
-    const continuationFuse = new ParentTurnContinuationFuse(continuationFuseLimits);
+    const continuationFuse = new ParentTurnContinuationFuse({
+      ...continuationFuseLimits,
+      ...(isCompanionSelfReflectionContext(getRequestContext()) ? { maxWallTimeMs: null } : {}),
+    });
     const abortController = new AbortController();
     const requestId = getRequestContext()?.requestId;
     const promptCacheBoundaries = promptCacheHooks?.resolvePromptCacheBoundaries?.(
@@ -220,11 +224,11 @@ export function installAgentToolSchedulerPatch(
     // continuation). Reset per run; set once when the loop drains queued
     // internal follow-ups (psfn-framework-ay73).
     this._state.userFacingBoundaryIndex = null;
-    const wallClockTimer = setTimeout(() => {
+    const wallClockTimer = continuationFuse.limits.maxWallTimeMs === null ? null : setTimeout(() => {
       const budgetError = continuationFuse.tripWallClock();
       abortController.abort(budgetError);
     }, continuationFuse.limits.maxWallTimeMs);
-    wallClockTimer.unref();
+    wallClockTimer?.unref();
 
     let partial: AgentMessage | null = null;
     let terminalStreamError: Error | null = null;
@@ -324,7 +328,7 @@ export function installAgentToolSchedulerPatch(
       }
       throw finalError;
     } finally {
-      clearTimeout(wallClockTimer);
+      if (wallClockTimer) clearTimeout(wallClockTimer);
       this._state.isStreaming = false;
       this._state.streamingMessage = undefined;
       this._state.pendingToolCalls = new Set();

@@ -169,7 +169,7 @@ export interface ParentTurnContinuationStopSnapshot {
   promptEntries: number;
   maxPromptEntries: number;
   elapsedMs: number;
-  maxWallTimeMs: number;
+  maxWallTimeMs: number | null;
 }
 
 /** Durable terminal disposition added after outward partial-text detection. */

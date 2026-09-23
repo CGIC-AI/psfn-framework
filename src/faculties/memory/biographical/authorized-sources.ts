@@ -26,6 +26,7 @@
 
 import type { BiographicalCandidatePolicy } from '../../../system/config/biographical-candidate-policy.js';
 import type { MemoryStorePort } from '../memory-store-port.js';
+import type { MemoryListPosition } from '../list-position.js';
 import { createSubjectAuthorizedMemoryStore } from '../subject-authorized-store.js';
 import type { MemorySubjectAccessContext } from '../subject-authorized-store.js';
 import {
@@ -48,6 +49,8 @@ export interface BiographicalSourceCollection {
   readonly evidence: readonly LiveBiographicalMemoryEvidence[];
   /** Rows the subject-authorized query returned, before owner-policy admission. */
   readonly scannedCount: number;
+  /** Exclusive next page position; absent means this scan reached its end. */
+  readonly nextBefore?: MemoryListPosition;
   /**
    * Rows the scan could not bind to this target: the current subject no longer
    * proves the exact canonical subject, or — when the target carries a governed
@@ -84,6 +87,7 @@ export async function collectAuthorizedBiographicalSources(input: {
   readonly subject: BiographicalSubjectRef;
   readonly policy: BiographicalCandidatePolicy;
   readonly scanLimit: number;
+  readonly before?: MemoryListPosition;
   /**
    * psfn-framework-zu8d2. Absent for a subject-scoped scan (autobiography, a
    * dyad), which is the whole production path today, so this changes nothing
@@ -104,7 +108,13 @@ export async function collectAuthorizedBiographicalSources(input: {
   // `queryAuthorizedMemorySubjects` list whose authorization predicate runs in
   // the same SQL statement, so the companion silo and a contact silo are
   // separated by the query itself rather than by a post-fetch filter.
-  const rows = await authorized.listActiveMemories({ limit: input.scanLimit });
+  const rows = await authorized.listActiveMemories({ limit: input.scanLimit, before: input.before });
+  const last = rows.at(-1);
+  const afterPage = last === undefined ? undefined : { extractedAt: last.extractedAt, memoryId: last.id };
+  // One authorized sentinel proves continuation even when the store clamps
+  // this page below the requested budget. It is never passed to synthesis.
+  const hasMore = afterPage !== undefined
+    && (await authorized.listActiveMemories({ limit: 1, before: afterPage })).length > 0;
   // Exact canonical subject proof plus a live source snapshot. A row whose
   // current classification no longer resolves to this subject is dropped before
   // owner policy even runs.
@@ -127,6 +137,7 @@ export async function collectAuthorizedBiographicalSources(input: {
   return {
     evidence,
     scannedCount: rows.length,
+    ...(hasMore ? { nextBefore: afterPage } : {}),
     unresolvedCount: rows.length - discovered.length,
     withheldByPolicy,
   };

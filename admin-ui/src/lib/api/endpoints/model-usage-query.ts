@@ -1,3 +1,5 @@
+import { serializeQuery } from '../query';
+
 export function serializeModelUsageQuery(params: URLSearchParams): string {
-  return params.toString();
+  return serializeQuery(params);
 }

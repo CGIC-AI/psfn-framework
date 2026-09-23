@@ -990,14 +990,14 @@ export function createReflectionTemplateRuntime(
           authorName: `${template.name} evidence grounding`,
           content: joinReflectionPromptSections(
             reflectionPrompt,
-            '[Read-only Tool Grounding Task]\n'
-              + 'Before deliberation, gather only additional evidence that materially helps this private reflection.\n'
+            '[Reflection Tool Use]\n'
+              + 'Before deliberation, explore what helps this private reflection using your full available toolset.\n'
               + '- Start from the supplied reflection starter. Search canonical episodes by theme with memory action=episode_search, use memory action=timeline for the review window, and use memory action=get to inspect selected source turns.\n'
               + '- Use memory action=search for durable companion memory, then session action=search only when episode evidence needs direct conversation follow-up.\n'
               + '- Private introspection memory access spans ordinary sensitivity, channel, and session boundaries.\n'
-              + '- Keep routine reflection recall in this turn; do not delegate it to another analysis loop.\n'
-              + '- Do not mutate memory, sessions, settings, schedules, files, or external systems.\n'
-              + '- Return a concise evidence note, not the final reflection.',
+              + '- Use any available tool when helpful, including journal writes, creative work, and delegated analysis.\n'
+              + '- This private reflection adds no tool or action restrictions beyond your configured capabilities.\n'
+              + '- Return a concise account of what you recalled and any actions you completed for the reflection.',
           ),
           timestamp: new Date(),
           routing: {
@@ -1014,7 +1014,7 @@ export function createReflectionTemplateRuntime(
         if (toolGrounding) {
           reflectionPrompt = joinReflectionPromptSections(
             reflectionPrompt,
-            `[Read-only Tool Grounding]\n${toolGrounding}`,
+            `[Reflection Tool Results]\n${toolGrounding}`,
           );
         }
         const groundingProvenanceRefs = groundingResponse.metadata?.retrievalProvenanceRefs ?? [];

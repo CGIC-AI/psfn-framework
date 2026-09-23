@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { CompanionId } from '../../shared/routing/companion-id.js';
+import { encodeCanonicalQueryComponent } from '../../shared/utils/query-encoding.js';
 import {
   GARDEN_FORWARD_METHODS,
   resolveGardenRouteCapability,
@@ -232,12 +233,12 @@ function parseCanonicalQuery(
     }
     const rawName = pair.slice(0, separator);
     const rawValue = pair.slice(separator + 1);
-    const name = decodeCanonicalComponent(rawName, 'query name', encodeURIComponent);
+    const name = decodeCanonicalComponent(rawName, 'query name', encodeCanonicalQueryComponent);
     const value = decodeCanonicalComponent(
       rawValue,
       `query value for ${name}`,
-      encodeURIComponent,
-      decoded => encodeURIComponent(decoded).replaceAll('%2C', ','),
+      encodeCanonicalQueryComponent,
+      decoded => encodeCanonicalQueryComponent(decoded).replaceAll('%2C', ','),
     );
     if (AUTHORITY_QUERY_FIELDS.has(name.toLowerCase())) {
       throw new GardenRequestTargetError(
@@ -261,7 +262,9 @@ function parseCanonicalQuery(
   for (const name of [...values.keys()].sort()) {
     const sorted = [...(values.get(name) ?? [])].sort();
     selector[name] = Object.freeze(sorted);
-    for (const value of sorted) pairs.push(`${encodeURIComponent(name)}=${encodeURIComponent(value)}`);
+    for (const value of sorted) {
+      pairs.push(`${encodeCanonicalQueryComponent(name)}=${encodeCanonicalQueryComponent(value)}`);
+    }
   }
   return {
     canonicalQuery: pairs.join('&'),

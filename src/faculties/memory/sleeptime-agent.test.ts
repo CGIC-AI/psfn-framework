@@ -27,6 +27,7 @@ import {
 } from '../../system/trust/runtime-classification-epochs.js';
 import { DEMOTION_EPOCH_NOTICE_VERSION } from '../../system/trust/context-envelope.js';
 import { destinationEpochEligible } from '../../core/cogsec/disclosure/decision.js';
+import { createTestPostgresIntentionPorts } from '../../test-support/postgres-intention-ports.js';
 import type { DisclosureDestinationConstraint } from '../../core/cogsec/disclosure/contracts.js';
 import type {
   ClaimedConversationalActivityWorkItem,
@@ -212,10 +213,11 @@ describe('SleeptimeMemoryAgent', () => {
       episodicStore: makeEpisodeReader(),
       sessionManager: {
         resolveSessionChannelId: vi.fn((channelId: string) => channelId),
-        getRecentMessages: vi.fn().mockReturnValue([]),
+        getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([]),
       },
       conversationalActivityWorkset: makeConversationalWorkset(),
       coreMemoryStore: makeCoreMemoryStore(),
+      resolvedConcernStore: { listRecentlyResolvedConcerns: vi.fn().mockResolvedValue([]) },
       memoryWriter: { write: vi.fn() },
       sleepConsolidator: { run: vi.fn().mockResolvedValue({ reviewedEpisodes: 0 }) },
       arcWeaver: { run: vi.fn().mockResolvedValue({ ran: false }) },
@@ -284,7 +286,7 @@ describe('SleeptimeMemoryAgent', () => {
   it('infers one companion sleeptime action for quiet changed sessions', async () => {
     const sessionManager = {
       resolveSessionChannelId: vi.fn((channelId: string) => channelId),
-      getRecentMessages: vi.fn().mockReturnValue([]),
+      getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([]),
       listRecentSessions: vi.fn().mockReturnValue([
         {
           channelId: 'terminal:alpha',
@@ -322,7 +324,7 @@ describe('SleeptimeMemoryAgent', () => {
   it('does not infer sleeptime actions for testing sessions', async () => {
     const sessionManager = {
       resolveSessionChannelId: vi.fn((channelId: string) => channelId),
-      getRecentMessages: vi.fn().mockReturnValue([]),
+      getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([]),
       listRecentSessions: vi.fn().mockReturnValue([
         {
           channelId: 'terminal:testing:rest-window-probe',
@@ -351,7 +353,7 @@ describe('SleeptimeMemoryAgent', () => {
     const reviewAgent = makeReviewAgent('{}');
     const sessionManager = {
       resolveSessionChannelId: vi.fn((channelId: string) => channelId),
-      getRecentMessages: vi.fn().mockReturnValue([{
+      getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([{
         id: 1,
         channelId: 'terminal:testing:queued-rest-window-probe',
         role: 'user' as const,
@@ -384,7 +386,7 @@ describe('SleeptimeMemoryAgent', () => {
       payload: { sessionId: 'terminal:testing:queued-rest-window-probe' },
     }));
 
-    expect(sessionManager.getRecentMessages).not.toHaveBeenCalled();
+    expect(sessionManager.getRecentMessagesAtOrBefore).not.toHaveBeenCalled();
     expect(sleepConsolidator.run).not.toHaveBeenCalled();
     expect(arcWeaver.run).not.toHaveBeenCalled();
     expect(dreamMeaningPass.run).not.toHaveBeenCalled();
@@ -449,7 +451,7 @@ describe('SleeptimeMemoryAgent', () => {
       restWindow: nightRestWindow(),
       conversationalActivityWorkset: workset,
       sessionManager: {
-        getRecentMessages: vi.fn().mockReturnValue([{
+        getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([{
           id: 1,
           channelId: validId,
           role: 'user',
@@ -477,7 +479,7 @@ describe('SleeptimeMemoryAgent', () => {
   it('does not infer idle actions for sessions active inside the window', async () => {
     const sessionManager = {
       resolveSessionChannelId: vi.fn((channelId: string) => channelId),
-      getRecentMessages: vi.fn().mockReturnValue([]),
+      getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([]),
       listRecentSessions: vi.fn().mockReturnValue([
         {
           channelId: 'terminal:alpha',
@@ -535,7 +537,7 @@ describe('SleeptimeMemoryAgent', () => {
       }));
       const sessionManager = {
         resolveSessionChannelId: vi.fn((channelId: string) => channelId),
-        getRecentMessages: vi.fn().mockReturnValue([
+        getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
           {
             id: 1,
             channelId: 'terminal:test',
@@ -635,7 +637,7 @@ describe('SleeptimeMemoryAgent', () => {
       }));
       const sessionManager = {
         resolveSessionChannelId: vi.fn((channelId: string) => channelId),
-        getRecentMessages: vi.fn().mockReturnValue([
+        getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
           { id: 1, channelId: CHANNEL, role: 'user', content: 'Please keep answers concise while we debug.', timestamp: CONVERSATION_AT - 120_000 },
           { id: 2, channelId: CHANNEL, role: 'assistant', content: 'Understood, I will prioritize concise replies.', timestamp: CONVERSATION_AT - 60_000 },
           { id: 3, channelId: CHANNEL, role: 'user', content: 'Great — concise replies during coding sessions please.', timestamp: CONVERSATION_AT },
@@ -743,7 +745,7 @@ describe('SleeptimeMemoryAgent', () => {
       agent: reviewAgent,
       sessionManager: {
         resolveSessionChannelId: vi.fn((channelId: string) => channelId),
-        getRecentMessages: vi.fn().mockReturnValue([
+        getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
           {
             id: 1,
             channelId: 'terminal:test',
@@ -800,7 +802,7 @@ describe('SleeptimeMemoryAgent', () => {
       agent: reviewAgent,
       sessionManager: {
         resolveSessionChannelId: vi.fn((channelId: string) => channelId),
-        getRecentMessages: vi.fn().mockReturnValue([
+        getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
           {
             id: 1,
             channelId: 'terminal:test',
@@ -854,7 +856,7 @@ describe('SleeptimeMemoryAgent', () => {
       agent: reviewAgent,
       sessionManager: {
         resolveSessionChannelId: vi.fn((channelId: string) => channelId),
-        getRecentMessages: vi.fn().mockReturnValue([
+        getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
           { id: 1, channelId: 'terminal:test', role: 'user', content: 'We debugged the gateway all evening.', timestamp: Date.now() },
         ]),
       },
@@ -891,7 +893,7 @@ describe('SleeptimeMemoryAgent', () => {
       conversationalActivityWorkset: workset,
       memoryWriter,
       sessionManager: {
-        getRecentMessages: vi.fn().mockReturnValue([{
+        getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([{
           id: 1,
           channelId: 'terminal:test',
           role: 'user',
@@ -939,7 +941,7 @@ describe('SleeptimeMemoryAgent', () => {
       coreMemoryStore,
       sessionManager: {
         resolveSessionChannelId: vi.fn((channelId: string) => channelId),
-        getRecentMessages: vi.fn().mockReturnValue([
+        getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
           { id: 1, channelId: 'terminal:test', role: 'user', content: 'Still working through the gateway debugging together.', timestamp: Date.now() },
         ]),
       },
@@ -982,7 +984,7 @@ describe('SleeptimeMemoryAgent', () => {
       },
       sessionManager: {
         resolveSessionChannelId: vi.fn((channelId: string) => channelId),
-        getRecentMessages: vi.fn().mockReturnValue([
+        getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
           { id: 1, channelId: 'terminal:test', role: 'user', content: 'That gateway outage tonight made me anxious, honestly.', timestamp: Date.now() },
         ]),
       },
@@ -1024,7 +1026,7 @@ describe('SleeptimeMemoryAgent', () => {
       },
       sessionManager: {
         resolveSessionChannelId: vi.fn((channelId: string) => channelId),
-        getRecentMessages: vi.fn().mockReturnValue([
+        getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
           { id: 1, channelId: 'terminal:test', role: 'user', content: 'We debugged the gateway all evening.', timestamp: Date.now() },
         ]),
       },
@@ -1060,7 +1062,7 @@ describe('SleeptimeMemoryAgent', () => {
       }]),
       sessionManager: {
         resolveSessionChannelId: vi.fn((channelId: string) => channelId),
-        getRecentMessages: vi.fn().mockReturnValue([
+        getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
           { id: 1, channelId: 'terminal:test', role: 'user', content: 'What a marathon.', timestamp: Date.now() },
         ]),
       },
@@ -1097,7 +1099,7 @@ describe('SleeptimeMemoryAgent', () => {
       agent: { handleMessage },
       sessionManager: {
         resolveSessionChannelId: vi.fn((channelId: string) => channelId),
-        getRecentMessages: vi.fn().mockReturnValue([
+        getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
           { id: 1, channelId: 'terminal:test', role: 'user', content: 'What a marathon.', timestamp: Date.now() },
         ]),
       },
@@ -1162,7 +1164,7 @@ describe('SleeptimeMemoryAgent', () => {
       ]),
       sessionManager: {
         resolveSessionChannelId: vi.fn((channelId: string) => channelId),
-        getRecentMessages: vi.fn().mockReturnValue([
+        getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
           { id: 1, channelId: 'terminal:test', role: 'user', content: 'A long evening and a slow morning.', timestamp: Date.now() },
         ]),
       },
@@ -1238,7 +1240,7 @@ describe('SleeptimeMemoryAgent', () => {
       conversationalActivityWorkset: makeConversationalWorkset('discord:dm-logical'),
       sessionManager: {
         resolveSessionChannelId: vi.fn(() => 'discord:dm-logical'),
-        getRecentMessages: vi.fn().mockReturnValue([
+        getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
           { id: 1, channelId: 'api:private-app', role: 'user', content: 'What a gateway debugging marathon.', timestamp: Date.now() },
         ]),
       },
@@ -1270,7 +1272,7 @@ describe('SleeptimeMemoryAgent', () => {
     }));
     const sessionManager = {
       resolveSessionChannelId: vi.fn((channelId: string) => channelId),
-      getRecentMessages: vi.fn().mockReturnValue([
+      getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
         {
           id: 1,
           channelId: 'terminal:test',
@@ -1319,7 +1321,7 @@ describe('SleeptimeMemoryAgent', () => {
   it('records an episodic pass failure and leaves downstream stages for retry', async () => {
     const sessionManager = {
       resolveSessionChannelId: vi.fn((channelId: string) => channelId),
-      getRecentMessages: vi.fn().mockReturnValue([
+      getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
         {
           id: 1,
           channelId: 'terminal:test',
@@ -1353,6 +1355,191 @@ describe('SleeptimeMemoryAgent', () => {
     expect(arcWeaver.run).not.toHaveBeenCalled();
     expect(dreamMeaningPass.run).not.toHaveBeenCalled();
     expect(sleeptimeWikiPass.run).not.toHaveBeenCalled();
+  });
+
+  it('resumes orientation from the claimed revision after newer entries push it out of the recent window', async () => {
+    const sessionId = 'terminal:resumed-orientation';
+    const claimedRevision = 4;
+    const occurredAtMs = Date.parse('2026-03-16T01:00:00.000Z');
+    const workset = makeConversationalWorkset(sessionId, occurredAtMs, claimedRevision);
+    const claim = {
+      purpose: 'sleeptime_consolidation' as const,
+      logicalSessionId: sessionId,
+      revision: claimedRevision,
+      claimantId: 'companion:sleeptime',
+    };
+    await workset.claim(claim);
+    for (const stage of ['sleep_consolidation', 'arc_formation', 'dream_meaning', 'wiki_pass']) {
+      await workset.checkpointStage({ ...claim, stage });
+    }
+    const entries = Array.from({ length: 20 }, (_, index) => ({
+      id: index + 1,
+      channelId: sessionId,
+      role: 'user' as const,
+      content: index < claimedRevision ? 'The earlier plan remains grounded.' : 'Later unrelated conversation.',
+      timestamp: occurredAtMs + index,
+    }));
+    const sessionManager = {
+      getRecentMessages: vi.fn((_sessionId: string, limit: number) => entries.slice(-limit)),
+      getRecentMessagesAtOrBefore: vi.fn((_sessionId: string, revision: number, limit: number) => (
+        entries.filter(entry => entry.id <= revision).slice(-limit)
+      )),
+    };
+    const reviewAgent = makeReviewAgent(JSON.stringify({
+      orient: {
+        persona: 'The earlier plan remains grounded.',
+        human: 'The earlier plan remains grounded.',
+        goals: 'The earlier plan remains grounded.',
+      },
+      memory_writes: [],
+    }));
+    const options = makeAgentOptions({
+      sessionManager,
+      conversationalActivityWorkset: workset,
+      transcriptMessageLimit: 3,
+      agent: reviewAgent,
+      now: () => occurredAtMs + 2 * 60 * 60 * 1000,
+    });
+    const agent = new SleeptimeMemoryAgent(options);
+
+    await expect(agent.execute(makeSleeptimeAction())).resolves.toMatchObject({
+      outcome: 'complete', completedSessions: 1,
+    });
+
+    expect(sessionManager.getRecentMessagesAtOrBefore).toHaveBeenCalledWith(sessionId, claimedRevision, 3);
+    expect(sessionManager.getRecentMessages).not.toHaveBeenCalled();
+    expect(reviewAgent.handleMessage).toHaveBeenCalledOnce();
+    const reviewMessage = reviewAgent.handleMessage.mock.calls[0]?.[0] as SubstrateMessage;
+    expect(reviewMessage.content).toContain('The earlier plan remains grounded.');
+    expect(reviewMessage.content).not.toContain('Later unrelated conversation.');
+    expect(options.sleepConsolidator.run).not.toHaveBeenCalled();
+    expect(options.arcWeaver.run).not.toHaveBeenCalled();
+    expect(options.dreamMeaningPass.run).not.toHaveBeenCalled();
+    expect(options.sleeptimeWikiPass.run).not.toHaveBeenCalled();
+    expect(workset.recordFailure).not.toHaveBeenCalled();
+    expect(workset.checkpoint).toHaveBeenCalledWith(claim);
+  });
+
+  it('grounds a resumed historical review in newer resolutions while preserving current goals', async () => {
+    const sessionId = 'terminal:historical-review';
+    const startedAt = Date.parse('2026-03-10T01:00:00.000Z');
+    const endedAt = startedAt + 60_000;
+    const reviewedAt = Date.parse('2026-03-20T03:00:00.000Z');
+    const resolvedAt = '2026-03-18T12:00:00.000Z';
+    const { ports } = createTestPostgresIntentionPorts({ now: () => new Date(reviewedAt) });
+    const listResolutions = vi.spyOn(ports.concernStore, 'listRecentlyResolvedConcerns');
+    const concern = await ports.concernStore.create({
+      text: 'The observatory booking still needs confirmation.',
+      createdAt: new Date(startedAt).toISOString(),
+    });
+    await ports.concernStore.resolveConcern(concern.id, {
+      resolvedAt,
+      outcome: 'The reservation is finalized; no follow-up remains.',
+    });
+    const unrelated = await ports.concernStore.create({ text: 'Replace the cracked terracotta planter.' });
+    await ports.concernStore.resolveConcern(unrelated.id, {
+      resolvedAt: '2026-03-19T12:00:00.000Z',
+      outcome: 'New ceramic container installed.',
+    });
+    const workset = makeConversationalWorkset(sessionId, endedAt, 2);
+    const claim = {
+      purpose: 'sleeptime_consolidation' as const,
+      logicalSessionId: sessionId,
+      revision: 2,
+      claimantId: 'companion:sleeptime',
+    };
+    await workset.claim(claim);
+    for (const stage of ['sleep_consolidation', 'arc_formation', 'dream_meaning', 'wiki_pass']) {
+      await workset.checkpointStage({ ...claim, stage });
+    }
+    const coreMemoryStore = makeCoreMemoryStore();
+    const currentGoals = 'Continue the operator-requested constellation sketch.';
+    coreMemoryStore.getSnapshot.mockReturnValue({
+      ...coreMemoryStore.getSnapshot(),
+      blocks: {
+        persona: { label: 'persona', content: 'Curious and attentive.', maxChars: 2400 },
+        human: { label: 'human', content: 'Enjoys astronomy.', maxChars: 2400, trustLevel: 'trusted' },
+        goals: { label: 'goals', content: currentGoals, maxChars: 1600 },
+      },
+    });
+    const reviewAgent = makeReviewAgent(JSON.stringify({
+      orient: { persona: 'Curious and attentive.', human: 'The reservation is finalized.', goals: currentGoals },
+      memory_writes: [],
+    }));
+    const options = makeAgentOptions({
+      agent: reviewAgent,
+      now: () => reviewedAt,
+      resolvedConcernStore: ports.concernStore,
+      coreMemoryStore,
+      conversationalActivityWorkset: workset,
+      sessionManager: {
+        getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
+          { id: 1, channelId: sessionId, role: 'user', content: concern.text, timestamp: startedAt },
+          { id: 2, channelId: sessionId, role: 'assistant', content: 'I will remember the pending booking.', timestamp: endedAt },
+        ]),
+      },
+      orientationRewriteGate: { minNewEntriesSinceRewrite: 1, refreshAfterQuietDays: 1 },
+    });
+    await expect(new SleeptimeMemoryAgent(options).execute(makeSleeptimeAction())).resolves.toMatchObject({
+      outcome: 'complete', completedSessions: 1,
+    });
+
+    const reviewMessage = reviewAgent.handleMessage.mock.calls[0]?.[0] as SubstrateMessage;
+    expect(reviewMessage.content).toContain('Source transcript window: 2026-03-10T01:00:00.000Z through 2026-03-10T01:01:00.000Z');
+    expect(reviewMessage.content).toContain('Review time: 2026-03-20T03:00:00.000Z');
+    expect(reviewMessage.content).toContain(concern.text);
+    expect(reviewMessage.content).toContain(resolvedAt);
+    expect(reviewMessage.content).toContain('The reservation is finalized; no follow-up remains.');
+    expect(reviewMessage.content).not.toContain(unrelated.text);
+    expect(reviewMessage.content).not.toContain('New ceramic container installed.');
+    expect(reviewMessage.content).toContain('Resolved concern evidence');
+    expect(reviewMessage.content).toContain(currentGoals);
+    expect(reviewMessage.content).toContain('Historical evidence alone does not reopen a resolved concern');
+    expect(listResolutions).toHaveBeenCalledWith(undefined, {
+      asOf: new Date(reviewedAt).toISOString(),
+      withinMs: reviewedAt - startedAt,
+      limit: 8,
+    });
+    expect(reviewMessage.content).not.toContain('Recent transcript:');
+    expect(reviewMessage.content).not.toContain("Today's consolidated episodes");
+    expect(coreMemoryStore.rethink).toHaveBeenCalledWith(
+      expect.objectContaining({ goals: currentGoals, human: 'The reservation is finalized.' }),
+      { scope: coreMemoryChannelScope({ channelId: sessionId }) },
+    );
+    expect((await ports.concernStore.getById(concern.id))?.status).toBe('resolved');
+    expect(options.sleepConsolidator.run).not.toHaveBeenCalled();
+    expect(options.arcWeaver.run).not.toHaveBeenCalled();
+    expect(options.dreamMeaningPass.run).not.toHaveBeenCalled();
+    expect(options.sleeptimeWikiPass.run).not.toHaveBeenCalled();
+    expect(workset.checkpoint).toHaveBeenCalledWith(claim);
+  });
+
+  it('does not review or checkpoint historical work when current resolutions cannot be read', async () => {
+    const now = Date.parse('2026-03-20T03:00:00.000Z');
+    const sourceAt = now - 2 * 60 * 60_000;
+    const workset = makeConversationalWorkset('terminal:test', sourceAt, 1);
+    const options = makeAgentOptions({
+      now: () => now,
+      conversationalActivityWorkset: workset,
+      sessionManager: {
+        getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
+          { id: 1, channelId: 'terminal:test', role: 'user', content: 'The booking needs confirmation.', timestamp: sourceAt },
+        ]),
+      },
+      resolvedConcernStore: {
+        listRecentlyResolvedConcerns: vi.fn().mockRejectedValue(new Error('resolution read unavailable')),
+      },
+    });
+
+    await expect(new SleeptimeMemoryAgent(options).execute(makeSleeptimeAction())).resolves.toMatchObject({
+      outcome: 'retry',
+      failures: [expect.objectContaining({ stage: 'orientation_review', message: 'resolution read unavailable' })],
+    });
+    expect(options.agent.handleMessage).not.toHaveBeenCalled();
+    expect(options.coreMemoryStore.rethink).not.toHaveBeenCalled();
+    expect(options.memoryWriter.write).not.toHaveBeenCalled();
+    expect(workset.recordFailure).toHaveBeenCalledWith(expect.objectContaining({ stage: 'orientation_review' }));
+    expect(workset.checkpoint).not.toHaveBeenCalled();
   });
 
   it('yields on a new revision, then resumes the old bounded claim before processing the new revision', async () => {
@@ -1449,7 +1636,7 @@ describe('SleeptimeMemoryAgent', () => {
     const agent = new SleeptimeMemoryAgent(makeAgentOptions({
       now: () => nowMs,
       conversationalActivityWorkset: workset,
-      sessionManager: { getRecentMessages: vi.fn().mockReturnValue(transcripts) },
+      sessionManager: { getRecentMessagesAtOrBefore: vi.fn().mockReturnValue(transcripts) },
       agent: reviewAgent,
       episodicStore: { searchByTime },
       sleepConsolidator,
@@ -1510,7 +1697,7 @@ describe('SleeptimeMemoryAgent', () => {
     }));
     const sessionManager = {
       resolveSessionChannelId: vi.fn((channelId: string) => channelId),
-      getRecentMessages: vi.fn().mockReturnValue([
+      getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
         {
           id: 1,
           channelId: 'terminal:test',
@@ -1565,7 +1752,7 @@ describe('SleeptimeMemoryAgent', () => {
     }));
     const sessionManager = {
       resolveSessionChannelId: vi.fn((channelId: string) => channelId),
-      getRecentMessages: vi.fn().mockReturnValue([
+      getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
         {
           id: 1,
           channelId: 'terminal:test',
@@ -1663,7 +1850,7 @@ describe('SleeptimeMemoryAgent', () => {
     }));
     const sessionManager = {
       resolveSessionChannelId: vi.fn((channelId: string) => channelId),
-      getRecentMessages: vi.fn().mockReturnValue([
+      getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
         {
           id: 1,
           channelId: 'terminal:test',
@@ -1765,7 +1952,7 @@ describe('SleeptimeMemoryAgent', () => {
       }));
       const sessionManager = {
         resolveSessionChannelId: vi.fn((channelId: string) => channelId),
-        getRecentMessages: vi.fn().mockReturnValue([
+        getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
           {
             id: 1,
             channelId: 'terminal:test',
@@ -1844,7 +2031,7 @@ describe('SleeptimeMemoryAgent', () => {
     }));
     const sessionManager = {
       resolveSessionChannelId: vi.fn((channelId: string) => channelId),
-      getRecentMessages: vi.fn().mockReturnValue([
+      getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
         {
           id: 1,
           channelId: 'terminal:test',

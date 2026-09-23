@@ -9,7 +9,7 @@ export const AGENT_LOOP_ASSISTANT_STEP_CHECK_IN_AT = 18;
 export const PARENT_TURN_MAX_WALL_TIME_MS = 5 * 60_000;
 
 export interface ParentTurnContinuationFuseLimits {
-  maxWallTimeMs: number;
+  maxWallTimeMs: number | null;
   maxPromptEntries: number;
 }
 
@@ -55,8 +55,8 @@ export class ParentTurnContinuationFuse {
     startedAtMs = Date.now(),
   ) {
     this.limits = Object.freeze({
-      maxWallTimeMs: requirePositiveSafeInteger(
-        limits.maxWallTimeMs ?? DEFAULT_PARENT_TURN_CONTINUATION_FUSE_LIMITS.maxWallTimeMs,
+      maxWallTimeMs: limits.maxWallTimeMs === null ? null : requirePositiveSafeInteger(
+        limits.maxWallTimeMs ?? PARENT_TURN_MAX_WALL_TIME_MS,
         'Parent-turn maxWallTimeMs',
       ),
       maxPromptEntries: requirePositiveSafeInteger(
@@ -72,7 +72,8 @@ export class ParentTurnContinuationFuse {
 
   enterPrompt(nowMs = Date.now()): number {
     if (this.stop) throw new ParentTurnContinuationBudgetExceededError(this.stop);
-    if (nowMs - this.startedAtMs >= this.limits.maxWallTimeMs) {
+    if (this.limits.maxWallTimeMs !== null
+      && nowMs - this.startedAtMs >= this.limits.maxWallTimeMs) {
       throw this.tripWallClock(nowMs);
     }
     if (this.promptEntries >= this.limits.maxPromptEntries) {

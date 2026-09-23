@@ -22,6 +22,7 @@ import {
   toInferredPostTurnActions,
 } from '../intention/appraisal.js';
 import { MotivationBridge } from '../intention/motivation.js';
+import { bindIntentionFollowUpDestinations } from '../intention/follow-up-destination.js';
 import {
   applyExternalAppraisalConcernRequirement,
   createAppraisalConcernScope,
@@ -318,6 +319,27 @@ export function wirePostTurnRuntime(
             : {}),
         });
 
+        const { contacts: followUpContacts, unauthorized } = await bindIntentionFollowUpDestinations({
+          decisions,
+          sourceChannelId: context.message.channelId,
+          sourceChannelType: context.message.channelType,
+          sourceContactId: context.canonicalContactKey,
+          resolveDestination: runtimeOptions.resolveIntentionFollowUpDestination,
+        });
+        // An unauthorized model-chosen target rejects only that follow-up; the
+        // rest of the appraisal (concerns, reminders, other follow-ups) stands.
+        for (const rejected of unauthorized) {
+          decisions.splice(decisions.indexOf(rejected), 1);
+          log.warn('Intention follow-up dropped: destination is not authorized', {
+            channelId: context.message.channelId,
+            requestedChannelId: rejected.followUp?.channelId ?? null,
+            delivery: rejected.followUp?.delivery ?? null,
+          });
+          emitIntentionFollowUpGateTelemetry('blocked', {
+            reason: 'destination_not_authorized',
+            channelId: context.message.channelId,
+          });
+        }
         if (runtimeOptions.onIntentionConcernDecision) {
           for (const decision of decisions) {
             if (decision.type !== 'concern') continue;
@@ -338,7 +360,7 @@ export function wirePostTurnRuntime(
               decision,
               channelId: resolvedSessionId,
               channelType: context.message.channelType,
-              canonicalContactKey: context.canonicalContactKey,
+              canonicalContactKey: followUpContacts.get(decision),
               sourceMessageId: context.message.id,
               formationVAD: { ...internalState.emotional.vad },
               ...(originIcpRootInitiationId ? { originIcpRootInitiationId } : {}),

@@ -734,6 +734,17 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
     await this.writeChain;
   }
 
+  async assertRedactionDriftDurable(channelId: string): Promise<void> {
+    await this.flushPendingWrites();
+    const result = await this.pool.query<{ kind: string }>(
+      'SELECT kind FROM session_projection_drift WHERE channel_id = $1', [channelId],
+    );
+    if (result.rows[0]?.kind !== 'redaction') {
+      throw new Error('Canonical rewrite requires a durable redaction projection fence');
+    }
+  }
+
+
   evictChannel(channelId: string): void {
     this.messageMetadataByChannel.delete(channelId);
     this.driftByChannel.delete(channelId);

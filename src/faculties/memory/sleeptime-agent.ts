@@ -78,6 +78,8 @@ import {
   type SleeptimeWorksetStageInput,
 } from './sleeptime-workset.js';
 import { classifyPostTurnActionContention } from '../../core/agent/post-turn-action-contention.js';
+import type { ConcernStorePort } from '../../core/intention/concern-store-port.js';
+import { loadSleeptimeReviewGrounding } from './sleeptime-review-grounding.js';
 
 const log = createComponentLogger('SleeptimeMemoryAgent');
 
@@ -149,7 +151,7 @@ export interface SleeptimeReviewAgent {
 }
 
 type SleeptimeEpisodeReader = Pick<EpisodicStorePort, 'searchByTime'>;
-type SessionMemoryReader = Pick<SessionManager, 'getRecentMessages'>
+type SessionMemoryReader = Pick<SessionManager, 'getRecentMessagesAtOrBefore'>
   & Partial<Pick<SessionManager, 'isSessionRetiredOrQuarantined'>>;
 type SleeptimeMemoryWriter = Pick<MemoryWriter, 'write'>;
 type SleeptimeEpisodeConsolidator = Pick<SleepCycleEpisodeConsolidator, 'run'>;
@@ -202,6 +204,7 @@ export interface SleeptimeMemoryAgentOptions {
   sessionManager: SessionMemoryReader;
   conversationalActivityWorkset: ConversationalActivityWorksetPort;
   coreMemoryStore: CoreMemoryRewriter;
+  resolvedConcernStore: Pick<ConcernStorePort, 'listRecentlyResolvedConcerns'>;
   memoryWriter: SleeptimeMemoryWriter;
   promptRegistry?: PromptRegistryStatePort | null;
   /**
@@ -501,7 +504,7 @@ function acceptGroundedOrientBlocks(
 
 function formatEpisodeReviewBlock(episodes: readonly Episode[]): string {
   if (episodes.length === 0) {
-    return "Today's consolidated episodes: none were recorded for this window.";
+    return 'Consolidated episodes: none were recorded for this source window.';
   }
   const lines = episodes.map(episode => {
     const themes = episode.themes.length > 0 ? ` [themes: ${episode.themes.join(', ')}]` : '';
@@ -516,7 +519,7 @@ function formatEpisodeReviewBlock(episodes: readonly Episode[]): string {
       : '\n  (unreviewed: machine-drafted summary — you have not yet given this episode its meaning)';
     return `- (${episode.startedAt} - ${episode.endedAt}) ${episode.title}: ${episode.landmark}${themes}${meaning}`;
   });
-  return ["Today's consolidated episodes - the day being reviewed:", ...lines].join('\n');
+  return ['Consolidated episodes from the source window:', ...lines].join('\n');
 }
 
 function reviewSubjectForMemoryWrite(input: {
@@ -625,6 +628,7 @@ export class SleeptimeMemoryAgent {
   private readonly sleeptimeWikiPass: SleeptimeWikiPassRunner;
   private readonly memoryMaintenanceStore: SleeptimeMaintenanceStore | null;
   private readonly episodicDiagnosticsStore: SleeptimeEpisodicDiagnosticsStore | null;
+  private readonly resolvedConcernStore: SleeptimeMemoryAgentOptions['resolvedConcernStore'];
 
   constructor(options: SleeptimeMemoryAgentOptions) {
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime guard for JS callers
@@ -655,6 +659,7 @@ export class SleeptimeMemoryAgent {
     this.sessionManager = options.sessionManager;
     this.conversationalActivityWorkset = options.conversationalActivityWorkset;
     this.coreMemoryStore = options.coreMemoryStore;
+    this.resolvedConcernStore = options.resolvedConcernStore;
     this.memoryWriter = options.memoryWriter;
     this.promptRegistry = options.promptRegistry ?? null;
     this.concernCandidates = options.concernCandidates ?? null;
@@ -778,7 +783,7 @@ export class SleeptimeMemoryAgent {
     let recentEntries = entriesBySession.get(sessionId);
     if (!recentEntries) {
       recentEntries = this.sessionManager
-        .getRecentMessages(sessionId, this.transcriptMessageLimit)
+        .getRecentMessagesAtOrBefore(sessionId, input.revision, this.transcriptMessageLimit)
         .filter(entry => (
           entry.id <= input.revision
           && (entry.role === 'user' || entry.role === 'assistant')
@@ -861,12 +866,25 @@ export class SleeptimeMemoryAgent {
     // Fail closed: episode loading errors abort the pass — she must not review
     // her day against a silently degraded context.
     const dayEpisodes = await this.loadDayEpisodes(sessionId, throughOccurredAtMs);
+    const groundingCorpus = buildGroundingCorpus(recentEntries, dayEpisodes);
+    const orientationCorpus = [
+      ...groundingCorpus,
+      ...Object.values(currentSnapshot.blocks).map(block => ({ content: block.content })),
+    ];
+    const temporalGrounding = await loadSleeptimeReviewGrounding({
+      entries: recentEntries,
+      reviewedAtMs: this.now(),
+      concernStore: this.resolvedConcernStore,
+      supportsConcernText: text => countSupportingTranscriptEntries(text, orientationCorpus) > 0,
+    });
     const plan = await this.runReviewConversation({
       sessionId,
       actionId: action.id,
       orientBlocks: currentSnapshot.blocks,
       transcript,
       episodes: dayEpisodes,
+      temporalGrounding: temporalGrounding.prompt,
+      throughOccurredAtMs,
     });
     if (!plan) {
       log.warn('Sleeptime review produced no usable plan; orientation and memories left untouched', {
@@ -890,8 +908,6 @@ export class SleeptimeMemoryAgent {
         letGo: plan.concernDecisions.filter(entry => entry.decision === 'let_go').length,
       });
     }
-
-    const groundingCorpus = buildGroundingCorpus(recentEntries, dayEpisodes);
     let orientBlocksRejected: SleeptimeOrientBlockName[] = [];
 
     const orientRejection = evaluateSleeptimeOrientCandidacy(plan.orient);
@@ -908,7 +924,10 @@ export class SleeptimeMemoryAgent {
       // Grounding gate (1gpol): a rewritten block whose novel content has no
       // support in the day's transcript or episodes keeps its previous
       // grounded content instead of being overwritten wholesale.
-      const acceptance = acceptGroundedOrientBlocks(plan.orient, currentSnapshot.blocks, groundingCorpus);
+      const acceptance = acceptGroundedOrientBlocks(plan.orient, currentSnapshot.blocks, [
+        ...groundingCorpus,
+        ...temporalGrounding.orientationEvidence,
+      ]);
       orientBlocksRejected = acceptance.rejectedBlocks;
       if (acceptance.rejectedBlocks.length > 0) {
         log.warn('Sleeptime orient rewrite rejected ungrounded blocks; previous content kept', {
@@ -1090,6 +1109,8 @@ export class SleeptimeMemoryAgent {
     orientBlocks: Record<SleeptimeOrientBlockName, { content: string }>;
     transcript: string;
     episodes: readonly Episode[];
+    temporalGrounding: string;
+    throughOccurredAtMs: number;
   }): Promise<NormalizedSleeptimePlan | null> {
     const pendingConcerns = this.concernCandidates ? await this.concernCandidates.list() : [];
     const offeredConcernIds = new Set(pendingConcerns.map(candidate => candidate.id));
@@ -1097,15 +1118,18 @@ export class SleeptimeMemoryAgent {
     let prompt = [
       this.resolveSleeptimePromptText(),
       '',
+      input.temporalGrounding,
+      '',
       ...(pendingConcernSection ? [pendingConcernSection, ''] : []),
       'Current orientation blocks:',
       `persona:\n${input.orientBlocks.persona.content || '[empty]'}`,
       `human:\n${input.orientBlocks.human.content || '[empty]'}`,
       `goals:\n${input.orientBlocks.goals.content || '[empty]'}`,
       '',
+      `Episode evidence window: ${toIsoInstant(input.throughOccurredAtMs - DAY_MS)} through ${toIsoInstant(input.throughOccurredAtMs)}`,
       formatEpisodeReviewBlock(input.episodes),
       '',
-      'Recent transcript:',
+      'Source transcript (historical evidence):',
       input.transcript,
       '',
       `Return strict JSON with keys "orient" and "memory_writes" (max ${this.maxMemoryWrites}).`,

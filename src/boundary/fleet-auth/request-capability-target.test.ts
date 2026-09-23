@@ -35,6 +35,20 @@ describe('Garden fleet request capability target', () => {
     });
   });
 
+  it('binds browser-stable apostrophes and spaces identically across forwarding hops', () => {
+    const rawTarget = '/api/admin/wiki/search?query=reader%27s%20notes%20%2B%20draft';
+    const input = { rawTarget, method: 'GET', companionId, body: emptyBody };
+    const gateway = compileGatewayGardenRequestTarget(input);
+    const forwardedUrl = new URL(new Request(`https://garden.example${gateway.canonicalRequestTarget}`).url);
+    const forwarded = { ...input, rawTarget: `${forwardedUrl.pathname}${forwardedUrl.search}` };
+
+    expect(gateway.resource.query).toEqual({ query: ["reader's notes + draft"] });
+    expect(gateway.canonicalRequestTarget).toBe(rawTarget);
+    expect(compileOperatorGardenRequestTarget(forwarded)).toEqual(gateway);
+    expect(compileAgentGardenRequestTarget(forwarded)).toEqual(gateway);
+    expect(compile(rawTarget.replace('draft', 'published')).targetDigest).not.toBe(gateway.targetDigest);
+  });
+
   it('hashes exact bounded bytes once and returns the same body object for forwarding', () => {
     const body = Buffer.from('{"favorite":true}', 'utf8');
     const compiled = compile('/api/admin/images/generated/image-a', 'PATCH', body);
@@ -88,6 +102,9 @@ describe('Garden fleet request capability target', () => {
     ['unknown query', '/api/admin/images/generated?unknown=true', 'GET'],
     ['duplicate singleton', '/api/admin/images/generated?q=a&q=b', 'GET'],
     ['form-space alias', '/api/admin/images/generated?q=big+cat', 'GET'],
+    ['raw apostrophe alias', "/api/admin/images/generated?q=reader's", 'GET'],
+    ['overencoded punctuation', '/api/admin/images/generated?q=note%21', 'GET'],
+    ['lowercase escape alias', '/api/admin/images/generated?q=%c3%a9', 'GET'],
     ['empty query field', '/api/admin/images/generated?q=cat&', 'GET'],
   ])('rejects %s', (_label, rawTarget, method) => {
     expect(() => compile(rawTarget, method)).toThrow(GardenRequestTargetError);
@@ -100,6 +117,28 @@ describe('Garden fleet request capability target', () => {
       .toThrow(GardenRequestTargetError);
     expect(() => compile('/api/admin/shared-workspace?limit=5')).toThrow(GardenRequestTargetError);
   });
+
+  it.each(['subjectContactId', 'subjectCompanionId'])(
+    'preserves the biography %s filter across every request boundary',
+    (field) => {
+      const rawTarget = `/api/admin/biographical-claims?${field}=subject-a`;
+      const input = { rawTarget, method: 'GET', companionId, body: emptyBody };
+      const gateway = compileGatewayGardenRequestTarget(input);
+
+      expect(gateway.canonicalRequestTarget).toBe(rawTarget);
+      expect(gateway.resource.query).toEqual({ [field]: ['subject-a'] });
+      expect(gateway.action).toBe('memory.read');
+      expect(gateway.companionId).toBe(companionId);
+      expect(compileOperatorGardenRequestTarget(input)).toEqual(gateway);
+      expect(compileAgentGardenRequestTarget(input)).toEqual(gateway);
+      expect(compile(rawTarget.replace('subject-a', 'subject-b')).targetDigest)
+        .not.toBe(gateway.targetDigest);
+      expect(() => compile(`${rawTarget}&${field}=subject-b`))
+        .toThrow(GardenRequestTargetError);
+      expect(() => compile(`${rawTarget}&unreviewedFilter=true`))
+        .toThrow(GardenRequestTargetError);
+    },
+  );
 
   it('rejects browser-controlled companion/workspace authority in every selector surface', () => {
     expect(() => compile('/api/admin/images/generated?companionId=other')).toThrow(/authority selector/u);

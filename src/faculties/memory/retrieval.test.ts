@@ -908,6 +908,7 @@ describe('MemoryRetriever trust-gated filtering', () => {
       originType: 'background',
       originStage: 'heartbeat.reflection.memory_retrieval',
       purpose: 'heartbeat.reflection.memory_retrieval',
+      requestAudience: 'self',
       requesterProvenance: 'self_directed',
     }, () => retriever.retrieve(
       'what private concern still matters?',
@@ -945,6 +946,7 @@ describe('MemoryRetriever trust-gated filtering', () => {
       originType: 'background',
       originStage: 'heartbeat.reflection.memory_retrieval',
       purpose: 'heartbeat.reflection.memory_retrieval',
+      requestAudience: 'self',
       requesterProvenance: 'self_directed',
     }, () => retriever.captureTurnMemorySnapshot(
       'spoofed private reflection',
@@ -955,7 +957,7 @@ describe('MemoryRetriever trust-gated filtering', () => {
       undefined,
       undefined,
       { accessScope: 'companion_self_reflection' },
-    ))).rejects.toThrow('trusted heartbeat reflection context');
+    ))).rejects.toThrow('trusted private reflection context');
   });
 
   it('rejects companion self-reflection retrieval without request provenance', async () => {
@@ -972,7 +974,7 @@ describe('MemoryRetriever trust-gated filtering', () => {
       undefined,
       undefined,
       { accessScope: 'companion_self_reflection' },
-    )).rejects.toThrow('trusted heartbeat reflection context');
+    )).rejects.toThrow('trusted private reflection context');
   });
 
   it('rejects companion self-reflection when the request channel does not match exactly', async () => {
@@ -984,6 +986,7 @@ describe('MemoryRetriever trust-gated filtering', () => {
       originType: 'background',
       originStage: 'heartbeat.reflection.memory_retrieval',
       purpose: 'heartbeat.reflection.memory_retrieval',
+      requestAudience: 'self',
       requesterProvenance: 'self_directed',
     }, () => retriever.retrieve(
       'mismatched reflection channel',
@@ -996,7 +999,7 @@ describe('MemoryRetriever trust-gated filtering', () => {
       undefined,
       undefined,
       { accessScope: 'companion_self_reflection' },
-    ))).rejects.toThrow('trusted heartbeat reflection context');
+    ))).rejects.toThrow('trusted private reflection context');
   });
 
   it('rejects companion self-reflection retrieval with human requester provenance', async () => {
@@ -1008,6 +1011,7 @@ describe('MemoryRetriever trust-gated filtering', () => {
       originType: 'background',
       originStage: 'heartbeat.reflection.memory_retrieval',
       purpose: 'heartbeat.reflection.memory_retrieval',
+      requestAudience: 'self',
       requesterProvenance: 'human',
     }, () => retriever.retrieve(
       'wrong provenance',
@@ -1020,10 +1024,10 @@ describe('MemoryRetriever trust-gated filtering', () => {
       undefined,
       undefined,
       { accessScope: 'companion_self_reflection' },
-    ))).rejects.toThrow('trusted heartbeat reflection context');
+    ))).rejects.toThrow('trusted private reflection context');
   });
 
-  it('rejects companion self-reflection unless background purpose and origin are canonical', async () => {
+  it('rejects companion self-reflection without a runtime-owned self audience', async () => {
     const retriever = new MemoryRetriever(makeMockStore([]), makeMockEmbedding(), { retrievalLimit: 20 });
     const invalidContexts: Array<{
       label: string;
@@ -1087,7 +1091,7 @@ describe('MemoryRetriever trust-gated filtering', () => {
         undefined,
         undefined,
         { accessScope: 'companion_self_reflection' },
-      )), label).rejects.toThrow('trusted heartbeat reflection context');
+      )), label).rejects.toThrow('trusted private reflection context');
     }
   });
 
@@ -3055,10 +3059,9 @@ describe('MemoryRetriever basic behavior', () => {
       trustLevel: 'primary',
       reflectionCanonicalContactId: 'contact-1',
       reflectionPolicy: {
-        toolUseMode: 'bounded_read_only_introspection',
+        toolUseMode: 'full_companion_tools',
         memoryRetrievalModes: ['default', 'temporal'],
         memoryAccessScope: 'companion_self_reflection',
-        allowOverlayToolActivation: false,
       },
       runtimeOptions: {},
     });

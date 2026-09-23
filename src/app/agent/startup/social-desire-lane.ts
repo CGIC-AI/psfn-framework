@@ -38,6 +38,7 @@ import {
 import type { OutreachOutboxStore } from '../../../core/intention/outreach-outbox.js';
 import { registerSocialDesireOutreachTask } from '../../../core/scheduler/social-desire-outreach-lane.js';
 import { createSocialDesireEvaluationQueue } from '../social-impulse-outreach-queue.js';
+import { resolvePrimaryContactOutreachIdentity } from '../social-outreach-context.js';
 import { composeCompanionDmChannelId } from '../../../shared/contracts/companion-channels.js';
 import type { ChannelType } from '../../../shared/contracts/runtime.js';
 import type { EventBus } from '../../../shared/event-bus.js';
@@ -188,6 +189,8 @@ export function registerSocialDesireLane(deps: SocialDesireLaneDeps): SocialDesi
           }
         }
         if (contact.trustLevel !== 'primary' || !heartbeatChannel) return null;
+        // The heartbeat channel must be this person's own direct messages (PR #609).
+        if (!resolvePrimaryContactOutreachIdentity(deps.sessions, contact, heartbeatChannel.channelId)) return null;
         return {
           channelId: heartbeatChannel.channelId,
           channelType: heartbeatChannel.channelType,

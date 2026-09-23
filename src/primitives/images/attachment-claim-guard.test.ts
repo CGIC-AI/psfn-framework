@@ -137,6 +137,7 @@ describe('rejectsUnfulfilledImageEditRequest', () => {
     expect(rejectsUnfulfilledImageEditRequest({
       requestText: 'Please edit this photo to make the lighting warmer.',
       requestHasImageInput: false,
+      requestAuthoredByUser: true,
       turnMessages: [],
     })).toBe(true);
   });
@@ -145,6 +146,7 @@ describe('rejectsUnfulfilledImageEditRequest', () => {
     expect(rejectsUnfulfilledImageEditRequest({
       requestText: 'Please edit this photo to make the lighting warmer.',
       requestHasImageInput: false,
+      requestAuthoredByUser: true,
       turnMessages: [{
         role: 'toolResult',
         toolCallId: 'edit-call-1',
@@ -166,6 +168,7 @@ describe('rejectsUnfulfilledImageEditRequest', () => {
     expect(rejectsUnfulfilledImageEditRequest({
       requestText: 'Please edit this photo to make the lighting warmer.',
       requestHasImageInput: false,
+      requestAuthoredByUser: true,
       turnMessages: [{
         role: 'toolResult',
         toolCallId: 'analyze-call-1',
@@ -191,6 +194,7 @@ describe('rejectsUnfulfilledImageEditRequest', () => {
     expect(rejectsUnfulfilledImageEditRequest({
       requestText,
       requestHasImageInput: false,
+      requestAuthoredByUser: true,
       turnMessages: [],
     })).toBe(false);
   });
@@ -199,6 +203,30 @@ describe('rejectsUnfulfilledImageEditRequest', () => {
     expect(rejectsUnfulfilledImageEditRequest({
       requestText: 'Could you crop this tighter?',
       requestHasImageInput: true,
+      requestAuthoredByUser: true,
+      turnMessages: [],
+    })).toBe(true);
+  });
+
+  it('never rewrites a system-authored sleeptime-review turn that quotes an edit request', () => {
+    const sleeptimeReviewPrompt = [
+      'Review the day and propose durable memory writes.',
+      'Source transcript (historical evidence):',
+      '[partner] Can you edit this photo to remove the background and make it brighter?',
+      '[companion] Sure, give me a second.',
+      'Return strict JSON with keys "orient" and "memory_writes" (max 5).',
+    ].join('\n');
+    expect(rejectsUnfulfilledImageEditRequest({
+      requestText: sleeptimeReviewPrompt,
+      requestHasImageInput: false,
+      requestAuthoredByUser: false,
+      turnMessages: [],
+    })).toBe(false);
+    // The same text from a live user is still enforced.
+    expect(rejectsUnfulfilledImageEditRequest({
+      requestText: 'Can you edit this photo to remove the background and make it brighter?',
+      requestHasImageInput: false,
+      requestAuthoredByUser: true,
       turnMessages: [],
     })).toBe(true);
   });

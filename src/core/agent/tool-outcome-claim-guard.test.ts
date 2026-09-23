@@ -32,6 +32,14 @@ describe('tool outcome final-response conformance', () => {
     expect(detectsUnfinishedToolExecutionNarration('Now updating to in_progress.')).toBe(true);
     expect(detectsUnfinishedToolExecutionNarration('Next I will call the update tool.')).toBe(true);
     expect(detectsUnfinishedToolExecutionNarration('The issue remains open.')).toBe(false);
+    // A structured sleeptime-review plan is data, not narration.
+    expect(detectsUnfinishedToolExecutionNarration(JSON.stringify({
+      orient: { goals: 'Keep notes tidy. Next I will update the reading list.' },
+      memory_writes: [{ text: 'Partner asked. Then we will update the plan tomorrow.' }],
+    }))).toBe(false);
+    expect(detectsUnfinishedToolExecutionNarration(
+      '```json\n{"memory_writes":[{"text":"Now updating the list."}]}\n```',
+    )).toBe(false);
   });
 
   it.each(['policy_denial', 'validation_rejection', 'duplicate_skip', 'dependency_skip'])(

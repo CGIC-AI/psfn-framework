@@ -88,8 +88,16 @@ function isSuccessfulImageEditResult(result: ToolResultOutcomeProjection): boole
 export function rejectsUnfulfilledImageEditRequest(input: {
   requestText: string;
   requestHasImageInput: boolean;
+  /**
+   * True only when a live user authored this turn's request. System-authored
+   * turns (sleeptime review, reflection, scheduler prompts) quote historical
+   * transcripts and task instructions; an edit phrase inside them is evidence
+   * text, not a request to edit an image now.
+   */
+  requestAuthoredByUser: boolean;
   turnMessages: readonly AgentMessage[];
 }): boolean {
+  if (!input.requestAuthoredByUser) return false;
   const requestText = input.requestText.trim();
   const isWellFormedEditRequest = (
     IMAGE_EDIT_REQUEST_MARKER.test(requestText)

@@ -1530,6 +1530,63 @@ describe('handleMessageForTurn outbound reply hygiene', () => {
     );
   });
 
+  it('keeps a sleeptime-review plan whose prompt quotes a historical image-edit request', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: makeContextManifestFixture(),
+    }));
+    const recordAssistantMessage = vi.fn(() => 2);
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {
+        buildContext,
+      } as unknown as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage,
+      // Sleeptime review is authored by the scheduler on an internal
+      // reflection channel, which author resolution treats as a system turn.
+      resolveAuthorContext: vi.fn(() => ({
+        trustLevel: 'primary',
+        speakerRole: 'system',
+        actorKind: 'system',
+        resolvedUserName: 'Sleeptime Review',
+        continuityFallbackKeys: [],
+      })),
+    });
+    const plan = JSON.stringify({
+      orient: { goals: 'Next I will update the photo notes with the partner.' },
+      memory_writes: [{ type: 'episodic', text: 'The partner asked to brighten a photo.' }],
+    });
+    runtime.extractResponseText = vi.fn(() => plan);
+
+    const response = await handleMessageForTurn(runtime, createMessage('sleeptime-review-action-1', {
+      channelId: 'internal:reflection:sleeptime-review',
+      authorId: 'scheduler',
+      authorName: 'Sleeptime Review',
+      content: [
+        'Review the day and propose durable memory writes.',
+        'Source transcript (historical evidence):',
+        '[partner] Can you edit this photo to remove the background and make it brighter?',
+        'Return strict JSON with keys "orient" and "memory_writes" (max 5).',
+      ].join('\n'),
+    }));
+
+    expect(response.content).toBe(plan);
+    expect(runtime.emitTelemetry).not.toHaveBeenCalledWith(
+      'agent.image_edit_request.unfulfilled',
+      expect.anything(),
+    );
+    expect(runtime.emitTelemetry).not.toHaveBeenCalledWith(
+      'agent.tool_execution_narration.unfinished',
+      expect.anything(),
+    );
+  });
+
   it('emits telemetry when a final response only narrates a pending tool action', async () => {
     const eventBus = new EventBus();
     const buildContext = vi.fn(async () => ({

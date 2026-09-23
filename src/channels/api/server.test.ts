@@ -684,7 +684,7 @@ describe('ApiServer', () => {
       expect(typeof body.subsystems.embeddings.meta.checkLatencyMs).toBe('number');
     });
 
-    it('returns degraded health when any subsystem check fails', async () => {
+    it('keeps the gateway link healthy when provider discovery fails behind a reachable gateway', async () => {
       await server.stop();
       server = createApiServer({
         port,
@@ -693,9 +693,11 @@ describe('ApiServer', () => {
         sessionManager: createMockSessionManager(),
       allowInsecureWithoutAuth: true,
         healthChecks: createHealthyHealthChecks({
-          llm: () => {
-            throw new Error('LLM provider timeout');
-          },
+          llm: () => ({
+            status: 'degraded',
+            detail: 'LLM provider timeout',
+            meta: { gatewayReachable: true },
+          }),
         }),
       });
       await server.init();
@@ -716,7 +718,38 @@ describe('ApiServer', () => {
       expect(body.subsystems.scheduler.status).toBe('healthy');
       expect(body.continuity.checks.database.status).toBe('healthy');
       expect(body.continuity.checks.gatewayLink.status).toBe('healthy');
+      expect(body.continuity.checks.gatewayLink.meta.gatewayReachable).toBe(true);
       expect(body.continuity.checks.schedulerHealthcheck.status).toBe('healthy');
+    });
+
+    it('degrades the gateway link when the llm check has no gateway reachability evidence', async () => {
+      await server.stop();
+      server = createApiServer({
+        port,
+        agentLoop: createMockAgentLoop(eventBus),
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        allowInsecureWithoutAuth: true,
+        healthChecks: createHealthyHealthChecks({
+          llm: () => {
+            throw new Error('Gateway connection closed');
+          },
+        }),
+      });
+      await server.init();
+      await server.start();
+
+      const res = await request(port, 'GET', '/health');
+      expect(res.status).toBe(503);
+
+      const body = JSON.parse(res.body);
+      expect(body.subsystems.llm.status).toBe('degraded');
+      // Embeddings is configuration-only and cannot prove the link.
+      expect(body.subsystems.embeddings.status).toBe('healthy');
+      expect(body.continuity.status).toBe('degraded');
+      expect(body.continuity.checks.gatewayLink.status).toBe('degraded');
+      expect(body.continuity.checks.gatewayLink.detail).toContain('Gateway connection closed');
+      expect(body.continuity.checks.gatewayLink.meta.gatewayReachable).toBe(false);
     });
 
     it('degrades health when scheduler healthcheck is stale beyond threshold', async () => {

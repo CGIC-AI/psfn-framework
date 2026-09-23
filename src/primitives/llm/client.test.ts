@@ -6265,7 +6265,7 @@ describe('LLMClient autonomous spend accounting (mmo9.7.3)', () => {
     }));
   });
 
-  it('leaves the session-less active health-probe shape unresolved for anomaly accounting', async () => {
+  it('leaves a session-less uncorrelated call unresolved for anomaly accounting', async () => {
     const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
     const client = new LLMClient(makeConfig({ companionId: 'companion-x' }), { usageRecorder });
     mocks.completeSimple.mockResolvedValue({
@@ -6275,12 +6275,12 @@ describe('LLMClient autonomous spend accounting (mmo9.7.3)', () => {
       stopReason: 'stop',
     });
 
-    // Mirrors api-surface's active LLM health probe: reasoning purpose, no
-    // request correlation, and therefore no companion conversation to charge.
+    // A reasoning call with no request correlation has no companion
+    // conversation to charge, so it must surface as an attribution anomaly.
     await client.complete(
       {
-        systemPrompt: 'You are a health check. Respond with exactly: OK',
-        messages: [{ role: 'user', content: 'health probe' }],
+        systemPrompt: 'Respond with exactly: OK',
+        messages: [{ role: 'user', content: 'uncorrelated call' }],
       },
       'reasoning',
       { disableRetry: true },

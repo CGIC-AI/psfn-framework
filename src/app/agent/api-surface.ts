@@ -1,14 +1,18 @@
+import { JSONRPCErrorException } from 'json-rpc-2.0';
 import {
+  ActiveHealthProbeFailure,
   CachedActiveHealthProbe,
   resolveActiveHealthProbeConfig,
   toActiveProbeMeta,
 } from '../../channels/api/active-health-probe.js';
 import type { GatewayClient } from '../../boundary/gateway/client.js';
+import { GatewayErrors } from '../../boundary/gateway/protocol.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
-import type { LLMProviderObservability, ModelSlot } from '../../shared/contracts/runtime.js';
+import type { ModelSlot } from '../../shared/contracts/runtime.js';
+import type { DiscoveredModel } from '../../primitives/llm/discovery.js';
 import { parseOptionalPositiveIntEnv } from '../../shared/utils/env.js';
-import { buildLLMWorkSpec, completeWithWorkSpec } from '../../primitives/llm/work-spec.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { RUNTIME_MODE, type RuntimeMode, type RuntimeStatusMetadata } from '../../system/lifecycle/runtime-mode.js';
 import type { ApiServerConfig } from '../../channels/api/server.js';
@@ -43,7 +47,6 @@ export function buildApiHealthChecks(
   activeProbeConfig: ReturnType<typeof resolveActiveHealthProbeConfig>,
 ): NonNullable<ApiServerConfig['healthChecks']> {
   const llmActiveProbe = new CachedActiveHealthProbe(activeProbeConfig);
-  const embeddingsActiveProbe = new CachedActiveHealthProbe(activeProbeConfig);
 
   return {
     memory: async () => {
@@ -88,7 +91,7 @@ export function buildApiHealthChecks(
       const baseMeta = {
         provider: probeRoute.provider,
         model: probeRoute.model,
-        probePurpose: 'reasoning',
+        probeKind: 'model_discovery',
         probeSlot: probeRoute.slot,
         ...toActiveProbeMeta(activeProbeConfig),
         ...options.runtimeStatusMeta,
@@ -109,22 +112,33 @@ export function buildApiHealthChecks(
         };
       }
 
-      const probeResult = await llmActiveProbe.run(async (signal) => {
-        const response = await completeWithWorkSpec(
-          options.gateway,
-          {
-            systemPrompt: 'You are a health check. Respond with exactly: OK',
-            messages: [{ role: 'user', content: 'health probe' }],
-          },
-          buildLLMWorkSpec({
-            purpose: 'reasoning',
-            durable: false,
-            // Diagnostic polling must yield to conversation and existing maintenance.
-            correlation: { callType: 'scheduled', originStage: 'health.probe' },
-          }),
-          { signal },
-        );
-        return buildResolvedProbeRouteMeta(response.model, response.providerObservability);
+      // Deterministic, token-free probe: list the gateway's model catalog
+      // (llm.discover_models -> provider models endpoint, cached by discovery).
+      // A completion or embedding here would bill every health poll and
+      // compete with real work for the model-call gate.
+      const probeResult = await llmActiveProbe.run(async () => {
+        let models: DiscoveredModel[];
+        try {
+          models = await options.gateway.getAvailableModels();
+        } catch (error) {
+          if (isModelDiscoveryUnconfigured(error)) {
+            // The gateway answered; there is simply no catalog to list.
+            return { gatewayReachable: true, discovery: 'unconfigured' };
+          }
+          // A JSON-RPC error response proves the gateway link is alive even
+          // though the provider models endpoint failed; anything else (closed
+          // connection, rejected pending request) means the link is down.
+          throw new ActiveHealthProbeFailure(
+            toErrorMessage(error),
+            { gatewayReachable: error instanceof JSONRPCErrorException },
+            { cause: error },
+          );
+        }
+        return {
+          gatewayReachable: true,
+          discovery: 'listed',
+          ...buildModelCatalogProbeMeta(models, probeRoute),
+        };
       });
       const meta = {
         ...baseMeta,
@@ -134,7 +148,7 @@ export function buildApiHealthChecks(
       if (!probeResult.ok) {
         return {
           status: 'degraded',
-          detail: probeResult.reason ?? 'LLM connectivity probe failed',
+          detail: probeResult.reason ?? 'LLM model discovery probe failed',
           meta,
         };
       }
@@ -165,10 +179,10 @@ export function buildApiHealthChecks(
         meta: options.runtimeStatusMeta,
       };
     },
-    embeddings: async () => {
+    embeddings: () => {
       const baseMeta = {
         dims: options.gateway.dims,
-        ...toActiveProbeMeta(activeProbeConfig),
+        probeMode: 'configuration',
         ...options.runtimeStatusMeta,
       };
       if (!Number.isFinite(options.gateway.dims) || options.gateway.dims <= 0) {
@@ -179,35 +193,11 @@ export function buildApiHealthChecks(
         };
       }
 
-      if (!activeProbeConfig.enabled) {
-        return {
-          status: 'healthy',
-          meta: baseMeta,
-        };
-      }
-
-      const probeResult = await embeddingsActiveProbe.run(async (signal) => {
-        const vector = await options.gateway.embed('health probe', { signal });
-        if (vector.length !== options.gateway.dims) {
-          throw new Error(`Embedding probe dimension mismatch: expected ${options.gateway.dims}, got ${vector.length}`);
-        }
-      });
-      const meta = {
-        ...baseMeta,
-        ...toActiveProbeMeta(activeProbeConfig, probeResult),
-      };
-
-      if (!probeResult.ok) {
-        return {
-          status: 'degraded',
-          detail: probeResult.reason ?? 'Embeddings connectivity probe failed',
-          meta,
-        };
-      }
-
+      // Configuration-only check: an embedding request here would bill every
+      // health poll. Connectivity to the gateway is proven by the llm check.
       return {
         status: 'healthy',
-        meta,
+        meta: baseMeta,
       };
     },
     scheduler: () => {
@@ -262,23 +252,36 @@ function isConfiguredModelSlot(slot: ModelSlot | undefined): slot is ModelSlot {
   return Boolean(slot?.provider && slot.model);
 }
 
-function buildResolvedProbeRouteMeta(
-  responseModel: string,
-  providerObservability?: LLMProviderObservability,
+/**
+ * Report whether the probed route's model appears in the discovered catalog.
+ * This is metadata only: catalog ids and roster ids use different namespaces
+ * across providers (e.g. `openrouter/<vendor>/<model>` vs `<vendor>/<model>`),
+ * so an unlisted model does not by itself mean the route is unusable.
+ */
+function buildModelCatalogProbeMeta(
+  models: readonly DiscoveredModel[],
+  route: { provider?: string; model?: string },
 ): Record<string, unknown> {
-  if (!providerObservability) {
-    return { responseModel };
-  }
-
+  const catalogIds = new Set(models.map(model => model.id));
+  const candidates = modelIdCandidates(route);
   return {
-    responseModel,
-    requestedProvider: providerObservability.requestedProvider,
-    requestedModel: providerObservability.requestedModel,
-    resolvedProvider: providerObservability.backendProvider,
-    resolvedModel: providerObservability.backendModel,
-    resolvedBackendApi: providerObservability.backendApi,
-    resolvedRouteKind: providerObservability.routeKind,
+    discoveredModelCount: models.length,
+    modelListed: candidates.some(candidate => catalogIds.has(candidate)),
   };
+}
+
+function isModelDiscoveryUnconfigured(error: unknown): boolean {
+  return error instanceof JSONRPCErrorException
+    && error.code === GatewayErrors.MODEL_DISCOVERY_UNCONFIGURED;
+}
+
+function modelIdCandidates(route: { provider?: string; model?: string }): string[] {
+  const model = route.model;
+  if (!model) return [];
+  const providerPrefix = route.provider ? `${route.provider}/` : undefined;
+  return providerPrefix && model.startsWith(providerPrefix)
+    ? [model, model.slice(providerPrefix.length)]
+    : [model];
 }
 
 export function resolveAgentApiSurfaceBindings(

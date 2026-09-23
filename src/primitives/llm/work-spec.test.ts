@@ -263,7 +263,7 @@ const CALL_SITES: CallSiteFixture[] = [
     expectedLane: RUNTIME_LANE_CLASSES.foregroundChat,
   },
   {
-    name: 'api.health_probe (no correlation)',
+    name: 'uncorrelated reasoning call',
     purpose: 'reasoning',
     expectedLane: RUNTIME_LANE_CLASSES.foregroundChat,
   },

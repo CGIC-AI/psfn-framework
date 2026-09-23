@@ -99,7 +99,7 @@ function normalized(value: string | undefined): string | undefined {
  * Preserve the agent-side workload that initiated an embedding before the call
  * crosses the gateway RPC boundary. An absent request context—or one whose
  * originating runtime did not forward its already-resolved lane—is left absent
- * deliberately. This keeps the sessionless health probe loud and prevents
+ * deliberately. This keeps sessionless embeddings loud and prevents
  * capture from becoming a second, potentially drifting lane resolver.
  */
 export function embeddingUsageProvenanceFromRequestContext(

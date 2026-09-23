@@ -4,7 +4,7 @@ import { buildSessionMetadataWithMessageAddressing } from '../../core/session/me
 import { createIntentionFollowUpDestinationResolver } from './intention-follow-up-destination.js';
 
 const DM = '123456789012345678';
-const COMPANION_DM = 'companion-dm:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222';
+const COMPANION_DM = 'companion-dm:aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa:bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb';
 const primary: Contact = {
   id: 'contact-primary', displayName: 'Primary', trustLevel: 'primary', discordUserId: 'discord-primary',
   firstSeen: '2026-01-01T00:00:00Z', lastSeen: '2026-01-01T00:00:00Z',

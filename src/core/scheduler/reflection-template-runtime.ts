@@ -1,3 +1,4 @@
+import { renderPendingConcernCandidatesSection } from '../intention/concern-candidate-prompt.js';
 import { compactMemoryTextForPrompt } from '../../faculties/memory/retrieval/formatting.js';
 import type { Scheduler } from './scheduler.js';
 import type { ReflectionEvidenceDegradationCause } from '../../shared/contracts/reflection-degradation.js';
@@ -942,10 +943,24 @@ export function createReflectionTemplateRuntime(
         ],
       })
       : collectedEvidenceBundle;
-    let reflectionGroundingProvenanceRefs = reflectionPromptBundle?.provenanceRefs ?? [];
+    const pendingConcernCandidates = runtimeOptions.listPendingConcernCandidates
+      ? renderPendingConcernCandidatesSection(
+        await runtimeOptions.listPendingConcernCandidates(),
+        'awareness_only',
+      )
+      : null;
+    const reviewedPromptBundle = pendingConcernCandidates
+      ? mergeReflectionPromptBundles(reflectionPromptBundle, {
+        self: pendingConcernCandidates,
+        relational: '',
+        affect: '',
+        provenanceRefs: [],
+      })
+      : reflectionPromptBundle;
+    let reflectionGroundingProvenanceRefs = reviewedPromptBundle?.provenanceRefs ?? [];
     let reflectionPrompt = formatNarrativePromptInput(
       template.prompt,
-      reflectionPromptBundle,
+      reviewedPromptBundle,
       formatReflectionIntrospectionPolicyBlock(reflectionPolicy),
     );
     let reflectionText = '';

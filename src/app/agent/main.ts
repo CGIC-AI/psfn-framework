@@ -1,3 +1,7 @@
+import {
+  applyConcernCandidateDecision,
+  listPendingConcernCandidates as listPendingConcernCandidatesFrom,
+} from '../../core/intention/concern-candidate-prompt.js';
 import { ExternalMemoryService } from '../../faculties/memory/external/service.js';
 import { ExternalMemoryIntakeStore } from '../../faculties/memory/external/intake-store.js';
 import { NorthStarStore } from '../../faculties/north-star/store.js';
@@ -1976,6 +1980,9 @@ async function main(): Promise<void> {
   // Live answer slots shared by the notify tool (outreach_send/outreach_later)
   // and the per-contact outreach turns the social-desire lane runs (vcq8v.4).
   const socialOutreachDrafts = createSocialOutreachDraftRegistry();
+  // Concern candidates still waiting for her decision, surfaced inside
+  // reflection, heartbeat check-ins, free time, and sleeptime (vcq8v.5).
+  const listPendingConcernCandidates = () => listPendingConcernCandidatesFrom(intentionRuntime.concernStore);
   const shutdownTargets: AgentControlPlaneShutdownTargets = {};
   const controlPlane = buildAgentControlPlane({
     heartbeatChannelId,
@@ -2156,6 +2163,7 @@ async function main(): Promise<void> {
     ...(coreRuntime.automataClassLifecycle
       ? { automataLifecycle: coreRuntime.automataClassLifecycle }
       : {}),
+    listPendingConcernCandidates,
   });
   // ── Weighted-thought outreach lane (E?/1xb.2) + Law 27 contradiction
   // dampening: extracted to startup/weighted-thought-outreach-lane.ts.
@@ -2324,6 +2332,15 @@ async function main(): Promise<void> {
       outreachOutbox,
       ...(socialDesireOutbound ? { socialDesireOutbound } : {}),
       ...(socialDesireHumanDeliveryPolicy ? { socialDesireHumanDeliveryPolicy } : {}),
+      listPendingConcernCandidates,
+      concernCandidateReview: {
+        list: listPendingConcernCandidates,
+        decide: ({ id, decision, actionId }) => applyConcernCandidateDecision(intentionRuntime.concernStore, {
+          id,
+          decision,
+          evidenceRef: { kind: 'runtime', ref: `sleeptime-review:${actionId}` },
+        }),
+      },
       // hrmrq.85: live personal-project provenance verification for
       // weighted-thought outreach — the project must still exist and be
       // resumable (active/paused) at dispatch time.

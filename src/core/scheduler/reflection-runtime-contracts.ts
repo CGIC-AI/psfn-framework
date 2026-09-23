@@ -2,6 +2,7 @@ import type {
   PostTurnActionCandidate,
   SubstrateMessage,
 } from '../../shared/contracts/runtime.js';
+import type { ConcernCandidateReviewPort, PendingConcernCandidate } from '../intention/concern-candidate-prompt.js';
 import type { CapabilityTier } from '../../system/capabilities/tier-types.js';
 import type { CompositionalPolicyConfig } from '../../system/config/runtime-config-contracts.js';
 import type {
@@ -134,6 +135,14 @@ export interface ReflectionRuntimeOptions {
     channelId: string;
     canonicalContactKey?: string;
   }) => Promise<readonly ActiveConcernSnapshot[]> | readonly ActiveConcernSnapshot[];
+  /**
+   * Durable concern candidates still waiting for a decision (vcq8v.5). Scheduled
+   * reflection, heartbeat check-ins, free time, and sleeptime show them to the
+   * companion so reviewing them is part of work that already happens.
+   */
+  listPendingConcernCandidates?: () => Promise<readonly PendingConcernCandidate[]>;
+  /** Lets the nightly sleeptime review keep or let go of pending candidates (vcq8v.5). */
+  concernCandidateReview?: ConcernCandidateReviewPort;
   getRecentResolvedConcerns?: (input: {
     channelId: string;
     canonicalContactKey?: string;

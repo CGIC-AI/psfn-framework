@@ -237,12 +237,15 @@ const FREE_TIME_CLOSING = 'There is no task and nothing to prove. When you feel 
 export function buildFreeTimeFramingPrompt(input: {
   seedText: string;
   projectContext?: string | null;
+  /** Concern candidates still waiting for her decision (vcq8v.5), if any. */
+  pendingConcerns?: string | null;
 }): string {
   const seed = input.seedText.trim();
   return [
     '[Free time]',
     seed,
     ...(input.projectContext?.trim() ? [input.projectContext.trim()] : []),
+    ...(input.pendingConcerns?.trim() ? [input.pendingConcerns.trim()] : []),
     FREE_TIME_CLOSING,
   ].join('\n\n');
 }
@@ -466,6 +469,8 @@ export interface FreeTimeRuntimeOptions {
    * This seam can only NARROW what the summarizer sees, never widen it.
    */
   resolveReturnDestination?: () => DisclosureDestination;
+  /** Renders pending concern candidates for her to keep or let go (vcq8v.5). */
+  renderPendingConcernCandidates?: () => Promise<string | null>;
   /**
    * Resolve the captured per-turn disclosure lineage for one free-time
    * transcript entry, so the projection can assess each entry against the
@@ -835,9 +840,13 @@ function makeLaneHandler(
       const projectContext = chosen?.kind === 'workspace'
         ? buildChosenWorkspaceFraming(chosen.workspace, chosen.label)
         : (options.loadProjectContext ? await options.loadProjectContext() : null);
+      const pendingConcerns = options.renderPendingConcernCandidates
+        ? await options.renderPendingConcernCandidates()
+        : null;
       const framingPrompt = buildFreeTimeFramingPrompt({
         seedText: options.config.seedText,
         projectContext,
+        pendingConcerns,
       });
 
       result = await options.runBlock({

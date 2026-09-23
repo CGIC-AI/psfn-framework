@@ -10,6 +10,7 @@
 // were away" note is placed on the partner session via the shared summarizer;
 // empty "loafed" blocks surface nothing.
 
+import { renderPendingConcernCandidatesSection, type PendingConcernCandidate } from '../../../core/intention/concern-candidate-prompt.js';
 import { randomUUID } from 'node:crypto';
 
 import type { SubstrateAgent } from '../../../core/agent/substrate-agent.js';
@@ -70,6 +71,8 @@ export interface FreeTimeLaneDeps {
   contactStore: Pick<ContactStorePort, 'getById'>;
   /** Governed Automata Bus lifecycle. Absent where no durable Automata runtime is composed. */
   automataLifecycle?: AutomataClassLifecycleRuntime;
+  /** Concern candidates still waiting for her decision, shown in free time (vcq8v.5). */
+  listPendingConcernCandidates: () => Promise<readonly PendingConcernCandidate[]>;
 }
 
 const FREE_TIME_CLASS: ProductionAutomataClassId = 'scheduler.free_time';
@@ -229,6 +232,10 @@ export function registerFreeTimeLane(deps: FreeTimeLaneDeps): void {
     config,
     restWindow,
     eventBus,
+    renderPendingConcernCandidates: async () => renderPendingConcernCandidatesSection(
+      await deps.listPendingConcernCandidates(),
+      'orient_tool',
+    ),
     // The whole block runs inside a 'background' charge context so per-turn LLM
     // spend accumulates against the background lane; getRunChargeSnapshot lets
     // the runner read cumulative spend before each turn for the hard cap.

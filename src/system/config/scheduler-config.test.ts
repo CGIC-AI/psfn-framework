@@ -352,7 +352,9 @@ describe('scheduler config seed defaults', () => {
 
   it('defaults the social-desire outreach settings with bounded per-contact pacing', () => {
     const loaded = loadSchedulerSeedDefaults();
-    expect(loaded.socialDesire.enabled).toBe(false);
+    expect(loaded.socialDesire.enabled).toBe(true);
+    expect(loaded.socialDesire.outreach.contactPacing.perContactCooldownMs).toBe(18 * 60 * 60 * 1000);
+    expect(loaded.socialDesire.outreach.budget).toEqual({ maxSendsPerWindow: 4, windowMs: 86_400_000 });
     expect(loaded.socialDesire.outreach).toEqual({
       checkIntervalMs: 1_800_000,
       maxConsentMomentsPerRun: 1,

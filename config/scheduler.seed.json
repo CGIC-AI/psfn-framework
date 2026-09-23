@@ -316,7 +316,7 @@
     }
   },
   "socialDesire": {
-    "enabled": false,
+    "enabled": true,
     "lifecycle": {
       "baseGain": 0.3,
       "pressureCap": 3,

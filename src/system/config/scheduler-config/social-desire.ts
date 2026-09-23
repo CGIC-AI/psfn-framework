@@ -88,8 +88,8 @@ interface SocialDesireImpulseSettings {
  * Per-contact durable social desire (epic oth4, bead oth4.1): tick-based
  * accumulation from felt state only, relationship-tier gated, capped, decaying.
  * `enabled` gates the runtime feed/consumer wiring including the consent
- * moment and outbound acceptance (sibling oth4.2). Disabled by default — fail
- * closed until an operator enables desire-driven outreach for a deployment.
+ * moment and outbound acceptance (sibling oth4.2). Enabled by default
+ * (psfn-framework-vcq8v operator decision); an owner file may set it false.
  */
 export interface SocialDesireConfig {
   enabled: boolean;
@@ -110,7 +110,9 @@ export interface SocialDesireConfig {
 // felt EmoSim impulse (+0.4 x confidence) or a relevant concern. Release
 // (x0.25), the per-contact cooldown, and the 4/day global budget bound the rate.
 export const DEFAULT_SOCIAL_DESIRE_CONFIG: SocialDesireConfig = {
-  enabled: false,
+  // Operator decision (psfn-framework-vcq8v): per-contact outreach is on by
+  // default; the 18h per-contact cooldown and 4/day budget bound it.
+  enabled: true,
   lifecycle: {
     baseGain: 0.3,
     pressureCap: 3,

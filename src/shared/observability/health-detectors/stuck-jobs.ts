@@ -53,6 +53,9 @@ export interface StuckJobTaskView {
   id: string;
   state: string;
   lastRunAt?: number;
+  /** Outcome the scheduler already recorded for the current attempt, if any. */
+  lastOutcome?: string;
+  lastErrorAt?: number;
 }
 
 /**
@@ -106,6 +109,14 @@ export function createStuckJobDetector(options: StuckJobDetectorOptions): Health
         // `lastRunAt` is stamped as the handler is entered. Without one the task
         // has no measurable attempt, and guessing an age would invent a fault.
         if (task.lastRunAt === undefined) continue;
+        // The scheduler already failed and aborted this attempt at the same
+        // budget (outcome recorded, task_failed emitted); it stays `active`
+        // only until the aborted handler settles, so it is not stuck work.
+        if (
+          task.lastOutcome === 'failed'
+          && task.lastErrorAt !== undefined
+          && task.lastErrorAt >= task.lastRunAt
+        ) continue;
         const elapsedMs = input.nowMs - task.lastRunAt;
         if (elapsedMs <= options.config.schedulerTaskBudgetMs) continue;
         conditions.push({

@@ -214,7 +214,7 @@ describe('registerFreeTimeLane production composition', () => {
       registerFreeTimeLane(deps);
       const handler = scheduler.getTask(FREE_TIME_IDLE_TASK_ID)?.handler;
       if (!handler) throw new Error('free-time idle handler was not registered');
-      await handler();
+      await handler({ signal: new AbortController().signal });
     };
 
     await runOneBoot('first durable checkpoint');

@@ -4,7 +4,7 @@ import type {
   EligibilityRequirements,
 } from '../../system/capabilities/eligibility.js';
 import type { Scheduler } from './scheduler.js';
-import type { ScheduledTaskOperation } from './types.js';
+import type { ScheduledTaskHandler, ScheduledTaskOperation, ScheduledTaskRun } from './types.js';
 
 const log = createComponentLogger('BackgroundMaintenance');
 
@@ -15,7 +15,7 @@ export const BACKGROUND_MAINTENANCE_SCHEDULE_SOURCE =
 
 interface BackgroundMaintenanceOperation extends ScheduledTaskOperation {
   eligibility?: EligibilityRequirements;
-  handler: () => void | Promise<void>;
+  handler: ScheduledTaskHandler;
 }
 
 export interface BackgroundMaintenanceOperationInput {
@@ -23,7 +23,7 @@ export interface BackgroundMaintenanceOperationInput {
   name: string;
   description: string;
   eligibility?: EligibilityRequirements;
-  handler: () => void | Promise<void>;
+  handler: ScheduledTaskHandler;
 }
 
 export interface BackgroundMaintenanceRegistrar {
@@ -56,7 +56,7 @@ export class BackgroundMaintenanceRegistry implements BackgroundMaintenanceRegis
       operations: this.operationManifest,
       type: 'every',
       intervalMs: options.intervalMs,
-      handler: () => this.run(),
+      handler: run => this.run(run),
       state: 'idle',
     }, { skipFirstRun: true });
   }
@@ -79,11 +79,14 @@ export class BackgroundMaintenanceRegistry implements BackgroundMaintenanceRegis
     });
   }
 
-  private async run(): Promise<void> {
+  private async run(run: ScheduledTaskRun): Promise<void> {
     const snapshot = [...this.operations];
     const failures: Error[] = [];
 
     for (const operation of snapshot) {
+      // An aborted attempt (scheduler task budget) starts no further operation;
+      // the remaining ones run on the next cadence.
+      run.signal.throwIfAborted();
       const eligibility = this.options.eligibilityGate.evaluate({
         kind: 'scheduler.task',
         taskId: operation.id,
@@ -100,7 +103,7 @@ export class BackgroundMaintenanceRegistry implements BackgroundMaintenanceRegis
       }
 
       try {
-        await operation.handler();
+        await operation.handler(run);
       } catch (error) {
         const normalized = error instanceof Error ? error : new Error(String(error));
         failures.push(normalized);

@@ -56,7 +56,7 @@ import { evaluateRestWindowEligibility, type RestWindowEligibilityDecision } fro
 import { FREE_TIME_CHANNEL_PREFIX } from '../session/session-id.js';
 import type { SessionEntry } from '../session/types.js';
 import type { Scheduler } from './scheduler.js';
-import type { FleetSlotStagger } from './types.js';
+import type { FleetSlotStagger, ScheduledTaskRun } from './types.js';
 import { staggerFleetOrdinalWithinWindow } from './fleet-maintenance-coordinator.js';
 import type { FreeTimeChooserOutcome, FreeTimeRestReason } from './free-time-chooser.js';
 import type { FreeTimeLane } from './free-time-lane.js';
@@ -331,6 +331,8 @@ export interface FreeTimeBlockRunInput {
   /** Invoke one free-time turn on the internal channel; returns her response. */
   invokeTurn: (input: { turnIndex: number; content: string }) => Promise<{ content: string }>;
   now?: () => number;
+  /** Scheduler attempt signal; checked before every turn so an aborted block stops spending. */
+  signal: AbortSignal;
 }
 
 /**
@@ -351,6 +353,7 @@ export async function runFreeTimeBlock(input: FreeTimeBlockRunInput): Promise<Fr
   let endReason: FreeTimeBlockEndReason = 'turns_exhausted';
 
   for (let turnIndex = 0; turnIndex < maxTurns; turnIndex += 1) {
+    input.signal.throwIfAborted();
     const spentBefore = input.readSpentChargeUnits();
     if (spentBefore >= maxChargeUnits) {
       endReason = 'charge_budget_exhausted';
@@ -697,7 +700,7 @@ function makeLaneHandler(
   options: FreeTimeRuntimeOptions,
   lane: FreeTimeLane,
   state: FreeTimeLaneCadenceState,
-): () => Promise<void> {
+): (run: ScheduledTaskRun) => Promise<void> {
   const now = options.now ?? (() => Date.now());
   // Lane-independent continuity: identity comes from the chosen workspace, never
   // from `lane`. The default segment resolves to one shared continuity session
@@ -710,7 +713,7 @@ function makeLaneHandler(
     ? resolveActiveTimezone()
     : options.restWindow.timeZone;
 
-  return async () => {
+  return async ({ signal }) => {
     const nowMs = now();
 
     // Daily block counter resets on local-day rollover.
@@ -866,6 +869,7 @@ function makeLaneHandler(
             content,
           }),
           now,
+          signal,
         }),
       });
     }

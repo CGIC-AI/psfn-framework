@@ -158,6 +158,32 @@ describe('stuck automata run and scheduler task detector', () => {
       .toBe(hashHealthEventSubject('scheduler_task:background-work-supervisor'));
   });
 
+  it('does not report an attempt the scheduler already budget-failed while it settles', async () => {
+    const detector = harness({
+      tasks: [
+        {
+          id: 'budget-failed',
+          state: 'active',
+          lastRunAt: NOW_MS,
+          lastOutcome: 'failed',
+          lastErrorAt: NOW_MS + BUDGET.schedulerTaskBudgetMs,
+        },
+        // A failure recorded for an EARLIER attempt does not excuse this one.
+        {
+          id: 'stale-failure',
+          state: 'active',
+          lastRunAt: NOW_MS,
+          lastOutcome: 'failed',
+          lastErrorAt: NOW_MS - MINUTE_MS,
+        },
+      ],
+    });
+    await detector.runAt(NOW_MS + BUDGET.schedulerTaskBudgetMs + MINUTE_MS);
+    const opened = detector.events.filter(event => event.code === 'stuck_runtime_job_opened');
+    expect(opened.map(event => event.provenance.subjectHash))
+      .toEqual([hashHealthEventSubject('scheduler_task:stale-failure')]);
+  });
+
   it('keeps two stuck jobs as two independent incidents', async () => {
     const detector = harness({
       runs: [

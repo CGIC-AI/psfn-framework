@@ -243,6 +243,7 @@ describe('runFreeTimeBlock', () => {
   it('records a first-turn stop as a valid zero-output loaf', async () => {
     const invokeTurn = vi.fn().mockResolvedValue({ content: REFLECTION_SILENT_TOKEN });
     const result = await runFreeTimeBlock({
+      signal: new AbortController().signal,
       ...baseInput,
       maxTurns: 6,
       maxChargeUnits: 8,
@@ -253,12 +254,30 @@ describe('runFreeTimeBlock', () => {
     expect(result).toMatchObject({ turnsUsed: 1, activity: false, endReason: 'loafed' });
   });
 
+  it('stops spending turns once the scheduler aborts the attempt', async () => {
+    const controller = new AbortController();
+    const invokeTurn = vi.fn(async () => {
+      controller.abort(new Error('handler_budget_exceeded'));
+      return { content: 'Still going.' };
+    });
+    await expect(runFreeTimeBlock({
+      ...baseInput,
+      signal: controller.signal,
+      maxTurns: 6,
+      maxChargeUnits: 8,
+      readSpentChargeUnits: () => 0,
+      invokeTurn,
+    })).rejects.toThrow('handler_budget_exceeded');
+    expect(invokeTurn).toHaveBeenCalledTimes(1);
+  });
+
   it('continues while she engages and stops on a later stop signal', async () => {
     const invokeTurn = vi.fn()
       .mockResolvedValueOnce({ content: 'I wrote a little poem.' })
       .mockResolvedValueOnce({ content: 'I sketched an idea for the wiki.' })
       .mockResolvedValueOnce({ content: REFLECTION_SILENT_TOKEN });
     const result = await runFreeTimeBlock({
+      signal: new AbortController().signal,
       ...baseInput,
       maxTurns: 6,
       maxChargeUnits: 8,
@@ -272,6 +291,7 @@ describe('runFreeTimeBlock', () => {
   it('enforces the hard turn cap', async () => {
     const invokeTurn = vi.fn().mockResolvedValue({ content: 'still going' });
     const result = await runFreeTimeBlock({
+      signal: new AbortController().signal,
       ...baseInput,
       maxTurns: 2,
       maxChargeUnits: 100,
@@ -289,6 +309,7 @@ describe('runFreeTimeBlock', () => {
       return { content: 'exploring' };
     });
     const result = await runFreeTimeBlock({
+      signal: new AbortController().signal,
       ...baseInput,
       maxTurns: 10,
       maxChargeUnits: 8,
@@ -453,7 +474,7 @@ describe('registerFreeTimeTasks', () => {
 
     const handler = scheduler.getTask(taskId)?.handler;
     if (!handler) throw new Error(`${lane} free-time task was not registered`);
-    await handler();
+    await handler({ signal: new AbortController().signal });
 
     expect(getRecentMessages).not.toHaveBeenCalled();
     expect(getRecentSessionEntries).not.toHaveBeenCalled();
@@ -484,7 +505,7 @@ describe('registerFreeTimeTasks', () => {
 
     const handler = scheduler.getTask(FREE_TIME_IDLE_TASK_ID)?.handler;
     if (!handler) throw new Error('idle free-time task was not registered');
-    await handler();
+    await handler({ signal: new AbortController().signal });
 
     expect(getRecentMessages).not.toHaveBeenCalled();
     expect(invokeTurn).toHaveBeenCalledTimes(1);
@@ -541,7 +562,7 @@ describe('registerFreeTimeTasks', () => {
 
     const handler = scheduler.getTask(FREE_TIME_QUIET_HOURS_TASK_ID)?.handler;
     if (!handler) throw new Error('quiet-hours free-time task was not registered');
-    await handler();
+    await handler({ signal: new AbortController().signal });
 
     expect(loadProjectContext).toHaveBeenCalledTimes(1);
     expect(invokeTurn.mock.calls[0]?.[0].content).toContain('project:story-panels');
@@ -755,14 +776,14 @@ describe('registerFreeTimeTasks', () => {
 
     const handler = scheduler.getTask(FREE_TIME_QUIET_HOURS_TASK_ID)?.handler;
     if (!handler) throw new Error('quiet-hours free-time task was not registered');
-    await handler();
+    await handler({ signal: new AbortController().signal });
     expect(invokeTurn).toHaveBeenCalledTimes(1);
     getRecentMessages.mockClear();
     getRecentSessionEntries.mockClear();
     gateReasons.length = 0;
 
     nowMs += 5 * 60 * 60_000;
-    await handler();
+    await handler({ signal: new AbortController().signal });
 
     expect(getRecentMessages).not.toHaveBeenCalled();
     expect(getRecentSessionEntries).not.toHaveBeenCalled();
@@ -787,14 +808,14 @@ describe('registerFreeTimeTasks', () => {
 
     const handler = scheduler.getTask(FREE_TIME_QUIET_HOURS_TASK_ID)?.handler;
     if (!handler) throw new Error('quiet-hours free-time task was not registered');
-    await handler();
+    await handler({ signal: new AbortController().signal });
     expect(invokeTurn).toHaveBeenCalledTimes(1);
     gateReasons.length = 0;
 
     // Well past the 240-minute min-block interval, still the same local day: the
     // silent exit — not the interval or daily cap — must keep the gate closed.
     nowMs += 5 * 60 * 60_000;
-    await handler();
+    await handler({ signal: new AbortController().signal });
     expect(invokeTurn).toHaveBeenCalledTimes(1);
     expect(gateReasons).toEqual(['quiet_hours:silenced_after_stop']);
   });
@@ -818,12 +839,12 @@ describe('registerFreeTimeTasks', () => {
 
     const handler = scheduler.getTask(FREE_TIME_QUIET_HOURS_TASK_ID)?.handler;
     if (!handler) throw new Error('quiet-hours free-time task was not registered');
-    await handler();
+    await handler({ signal: new AbortController().signal });
     expect(invokeTurn).toHaveBeenCalledTimes(1);
     gateReasons.length = 0;
 
     nowMs += 5 * 60 * 60_000;
-    await handler();
+    await handler({ signal: new AbortController().signal });
     expect(invokeTurn).toHaveBeenCalledTimes(2);
     expect(gateReasons).not.toContain('quiet_hours:silenced_after_stop');
   });
@@ -1033,7 +1054,7 @@ describe('free-time continuity identity is lane-independent', () => {
       : FREE_TIME_IDLE_TASK_ID;
     const handler = scheduler.getTask(taskId)?.handler;
     if (!handler) throw new Error(`${input.lane} free-time task was not registered`);
-    await handler();
+    await handler({ signal: new AbortController().signal });
 
     expect(invokeTurn).toHaveBeenCalled();
     expect(sessionManager.appendSystemNote).toHaveBeenCalled();
@@ -1099,7 +1120,7 @@ describe('free-time continuity identity is lane-independent', () => {
 
     const handler = scheduler.getTask(FREE_TIME_QUIET_HOURS_TASK_ID)?.handler;
     if (!handler) throw new Error('quiet-hours free-time task was not registered');
-    await handler();
+    await handler({ signal: new AbortController().signal });
 
     expect(invokeTurn).not.toHaveBeenCalled();
     expect(resolveWorkspaceChannelId).not.toHaveBeenCalled();

@@ -706,6 +706,9 @@ export function buildAgentSchedulerRuntime(
         owner: resolveHealthEventOwner(options.config.companionId),
         process: 'agent',
       },
+      // The owner-file budget that defines a stuck scheduler task also bounds
+      // each attempt: past it the handler is aborted and recorded failed.
+      taskBudgetMs: options.schedulerConfig.healthDetectors.stuckJobs.schedulerTaskBudgetMs,
       ...(options.companionAvailability
         ? {
             runProtectedTask: (state, handler) =>

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { PostTurnActionRuntime } from '../../core/agent/post-turn-action-runtime.js';
-import { FOREGROUND_CHAT_RUNTIME_CLASS } from '../../core/agent/worker-lanes.js';
+import { MAINTENANCE_REFLECTION_RUNTIME_CLASS } from '../../core/agent/worker-lanes.js';
 import { isRecord } from '../../shared/utils/types.js';
 
 const EVALUATE_KIND = 'social-desire.outreach.evaluate';
@@ -8,8 +8,10 @@ const EVALUATE_KIND = 'social-desire.outreach.evaluate';
 /**
  * Durable request for an immediate per-contact social-desire evaluation, for
  * example after a felt EmoSim impulse raised pressure (psfn-framework-vcq8v.4).
- * It runs only after the source turn releases ownership, at chat priority,
- * because the evaluation may open the companion's own outreach turn.
+ * It runs only after the source turn releases ownership. The queued action
+ * uses the maintenance lane (the foreground chat lane admits no queued work);
+ * the outreach turn it may open is classified as foreground chat by its
+ * internal:social-outreach:<contact> channel.
  */
 export function createSocialDesireEvaluationQueue(options: {
   actions: Pick<PostTurnActionRuntime, 'enqueue' | 'registerHandler'>;
@@ -23,7 +25,7 @@ export function createSocialDesireEvaluationQueue(options: {
       throw new Error('Social desire evaluation requires an exact source identity');
     }
     await options.evaluate();
-  }, { executionMode: 'foreground', runtimeClass: FOREGROUND_CHAT_RUNTIME_CLASS });
+  }, { executionMode: 'foreground', runtimeClass: MAINTENANCE_REFLECTION_RUNTIME_CLASS });
 
   return {
     async request(sourceId: string): Promise<void> {

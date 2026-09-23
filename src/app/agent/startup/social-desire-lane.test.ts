@@ -73,7 +73,7 @@ describe('registerSocialDesireLane composition wiring (psfn-framework-hrmrq.85)'
     expect(result.impulseTarget).toMatchObject({ gain: DEFAULT_SOCIAL_DESIRE_CONFIG.impulse.gain });
     expect(deps.postTurnActions.registerHandler).toHaveBeenCalledWith(
       'social-desire.outreach.evaluate', expect.any(Function), expect.objectContaining({
-        runtimeClass: 'foreground_chat',
+        runtimeClass: 'maintenance_reflection',
       }),
     );
   });

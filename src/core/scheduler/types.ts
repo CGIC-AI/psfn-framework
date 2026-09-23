@@ -61,6 +61,17 @@ export interface ScheduledTaskOperation {
   description: string;
 }
 
+/**
+ * Per-attempt context handed to a scheduled task handler. `signal` aborts when
+ * the attempt exceeds the scheduler's task budget (or the scheduler asks it to
+ * stop); handlers that make model calls or loop over work items must honor it.
+ */
+export interface ScheduledTaskRun {
+  signal: AbortSignal;
+}
+
+export type ScheduledTaskHandler = (run: ScheduledTaskRun) => void | Promise<void>;
+
 export interface ScheduledTask {
   id: string;
   name: string;
@@ -79,8 +90,8 @@ export interface ScheduledTask {
   fleetStagger?: FleetSlotStagger;
   /** Unix timestamp for 'one-shot' tasks */
   runAt?: number;
-  /** Handler called when the task fires */
-  handler: () => void | Promise<void>;
+  /** Handler called when the task fires; it receives the attempt's abort signal. */
+  handler: ScheduledTaskHandler;
   /** Optional runtime eligibility requirements evaluated before handler execution. */
   eligibility?: EligibilityRequirements;
   state: TaskState;

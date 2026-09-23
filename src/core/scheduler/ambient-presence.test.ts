@@ -154,7 +154,7 @@ describe('registerAmbientPresenceOperation', () => {
 
       const handler = scheduler.getTask('background-maintenance')?.handler;
       if (!handler) throw new Error('ambient presence task was not registered');
-      await handler();
+      await handler({ signal: new AbortController().signal });
 
       expect(getRecentMessages).not.toHaveBeenCalled();
       expect(getRecentSessionEntries).not.toHaveBeenCalled();
@@ -193,7 +193,7 @@ describe('registerAmbientPresenceOperation', () => {
 
       const handler = scheduler.getTask('background-maintenance')?.handler;
       if (!handler) throw new Error('ambient presence task was not registered');
-      await handler();
+      await handler({ signal: new AbortController().signal });
 
       expect(getRecentMessages).toHaveBeenCalledTimes(1);
       expect(getRecentSessionEntries).toHaveBeenCalledTimes(1);

@@ -1050,7 +1050,7 @@ async function main(): Promise<void> {
           }, startup.schedulerConfig.weightedThoughtOutreach.lifecycle, Date.now()));
           const task = scheduler.getTask(WEIGHTED_THOUGHT_OUTREACH_TASK_ID);
           if (!task) throw new Error('Weighted-thought production scheduler task is not registered');
-          await task.handler();
+          await task.handler({ signal: new AbortController().signal });
           const candidate = (await candidateStore.listCandidates({ limit: 50 })).find(entry => (
             !candidateIdsBefore.has(entry.candidateId) && entry.source === 'weighted_thought'
           ));
@@ -1086,7 +1086,7 @@ async function main(): Promise<void> {
           }, startup.schedulerConfig.weightedThoughtOutreach.lifecycle, Date.now()));
           const task = scheduler.getTask(WEIGHTED_THOUGHT_OUTREACH_TASK_ID);
           if (!task) throw new Error('Weighted-thought production scheduler task is not registered');
-          await task.handler();
+          await task.handler({ signal: new AbortController().signal });
           const candidate = (await candidateStore.listCandidates({ limit: 50 })).find(entry => (
             !candidateIdsBefore.has(entry.candidateId) && entry.source === 'weighted_thought'
           ));
@@ -1126,7 +1126,7 @@ async function main(): Promise<void> {
           }, startup.schedulerConfig.weightedThoughtOutreach.lifecycle, Date.now()));
           const task = scheduler.getTask(WEIGHTED_THOUGHT_OUTREACH_TASK_ID);
           if (!task) throw new Error('Weighted-thought production scheduler task is not registered');
-          await task.handler();
+          await task.handler({ signal: new AbortController().signal });
           const candidate = (await candidateStore.listCandidates({ limit: 50 })).find(entry => (
             !candidateIdsBefore.has(entry.candidateId) && entry.source === 'weighted_thought'
           ));

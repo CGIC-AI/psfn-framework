@@ -99,7 +99,7 @@ function buildRuntime(chooseWorkspace: FreeTimeRuntimeOptions['chooseWorkspace']
 async function runIdleHandler(scheduler: Scheduler): Promise<void> {
   const handler = scheduler.getTask(FREE_TIME_IDLE_TASK_ID)?.handler;
   if (!handler) throw new Error('idle free-time task was not registered');
-  await handler();
+  await handler({ signal: new AbortController().signal });
 }
 
 describe('free-time chooser wiring', () => {

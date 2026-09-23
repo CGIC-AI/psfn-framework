@@ -5473,6 +5473,13 @@
     },
     {
       "file": "src/core/scheduler/scheduler.ts",
+      "name": "HANDLER_BUDGET_EXCEEDED",
+      "value": "'handler_budget_exceeded'",
+      "form": "string",
+      "note": "Error-string-coupled protocol code recorded on a budget-failed scheduler attempt (lastError prefix, schedule.task.failed error text); not tuning. The budget itself is scheduler.json healthDetectors.stuckJobs.schedulerTaskBudgetMs."
+    },
+    {
+      "file": "src/core/scheduler/scheduler.ts",
       "name": "MIN_WAKE_MS",
       "value": "50",
       "note": "Code-owned anti-busy-loop safety floor that prevents overdue scheduler tasks from rearming at zero delay."

@@ -1437,7 +1437,11 @@ export function createReflectionTemplateRuntime(
     };
   };
 
-  const executeScheduledTemplate = async (template: ReflectionTemplate): Promise<void> => {
+  const executeScheduledTemplate = async (
+    template: ReflectionTemplate,
+    signal: AbortSignal,
+  ): Promise<void> => {
+    signal.throwIfAborted();
     const now = Date.now();
     const lastRunAt = lastScheduledRunAt.get(template.id);
     if (lastRunAt !== undefined && now - lastRunAt < MIN_SCHEDULED_TEMPLATE_GAP_MS) {
@@ -1503,9 +1507,12 @@ export function createReflectionTemplateRuntime(
         intervalMs: 0,
         runAt: Date.now() + 250,
         availability: 'do_not_disturb',
-        handler: async () => {
+        handler: async ({ signal }) => {
           try {
             await agentLoop.waitForIdle?.();
+            // Waiting for idle can outlast the task budget; an aborted
+            // attempt must not start the reflection turn afterwards.
+            signal.throwIfAborted();
             const latestPolicy = store.load();
             const latestTemplate = latestPolicy.templates.find(candidate => candidate.id === template.id);
             if (!latestTemplate) {
@@ -1672,7 +1679,7 @@ export function createReflectionTemplateRuntime(
               : {}
             : {}),
           availability: 'do_not_disturb',
-          handler: () => executeScheduledTemplate(template),
+          handler: ({ signal }) => executeScheduledTemplate(template, signal),
           state: 'idle',
         },
         // lastRunAt and skipFirstRun are mutually exclusive: a persisted anchor

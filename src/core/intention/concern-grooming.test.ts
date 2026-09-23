@@ -137,7 +137,7 @@ describe('concern grooming', () => {
       operations: [{ id: 'concern-grooming', name: 'Concern Grooming' }],
     });
     expect(task?.handler).toBeDefined();
-    await task?.handler();
+    await task?.handler({ signal: new AbortController().signal });
 
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
@@ -183,7 +183,7 @@ describe('concern grooming', () => {
       resolutionVadProvider: () => ({ valence: 0.2, arousal: 0.1, dominance: 0.0 }),
     });
 
-    await scheduler.getTask('background-maintenance')?.handler();
+    await scheduler.getTask('background-maintenance')?.handler({ signal: new AbortController().signal });
 
     // Persistence: the resolved row carries the captured resolution snapshot.
     const reloaded = await concernStore.getById(stale.id);

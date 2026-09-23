@@ -108,11 +108,18 @@ describe('BackgroundMaintenanceRegistry', () => {
     });
 
     const task = scheduler.getTask(BACKGROUND_MAINTENANCE_TASK_ID);
-    await expect(task?.handler()).rejects.toThrow('1 of 4 background-maintenance operations failed');
+    await expect(task?.handler({ signal: new AbortController().signal })).rejects.toThrow('1 of 4 background-maintenance operations failed');
     expect(allowed).toHaveBeenCalledOnce();
     expect(denied).not.toHaveBeenCalled();
     expect(failing).toHaveBeenCalledOnce();
     expect(trailing).toHaveBeenCalledOnce();
+
+    // An aborted attempt starts no further operation.
+    allowed.mockClear();
+    const aborted = new AbortController();
+    aborted.abort(new Error('handler_budget_exceeded'));
+    await expect(task?.handler({ signal: aborted.signal })).rejects.toThrow('handler_budget_exceeded');
+    expect(allowed).not.toHaveBeenCalled();
   });
 
   it('rejects duplicate operation ids', () => {

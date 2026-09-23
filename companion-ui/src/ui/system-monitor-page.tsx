@@ -5,7 +5,7 @@ import '../styles/system-monitor.css';
 const REFRESH_MS = 30_000;
 const STALE_MS = REFRESH_MS * 3;
 const STATUS: Record<string, string> = { ok: 'Run recorded', skipped: 'Blocked / skipped', degraded: 'Degraded', failed: 'Failed', stale: 'Overdue', paused: 'Disabled / paused', never: 'No evidence' };
-const OUTREACH: Record<string, string> = { pending: 'Awaiting choice', queued: 'Queued to execute', chosen: 'Execution started; outcome unconfirmed', delivered: 'Delivered', suppressed: 'Suppressed / failed', ignore: 'Ignored by choice', defer: 'Deferred by choice', other: 'Other choice', off: 'Disabled at source', would_send: 'Shadow; no delivery' };
+const OUTREACH: Record<string, string> = { received: 'Impulse being applied', off: 'Disabled at source', shadow: 'Shadow; pressure unchanged', applied: 'Raised per-contact pressure', no_live_desire: 'No one to raise pressure for', lane_disabled: 'Social desire disabled', interrupted: 'Interrupted; not re-applied' };
 function clock(value: number | null): string { return value === null || !Number.isFinite(value) ? 'No recorded evidence' : new Date(value).toLocaleString(); }
 function title(value: string): string { return value.replaceAll('_', ' '); }
 function sourceFailure(source: MonitorSource<unknown>): string | null {
@@ -88,10 +88,10 @@ export function SystemMonitorPage({ companionId, companionLabel, authorized, act
           </section>
           <section className="monitor-section"><h2>Proactive communication</h2>
             <p>EmoSim: {configuration ? title(configuration.emosimProactivityMode) : 'Configuration unavailable'} · Social desire: {configuration ? configuration.socialDesireEnabled ? 'Enabled' : 'Disabled' : 'Unknown'} · Concerns: {configuration ? configuration.weightedThoughtOutreachEnabled ? 'Enabled' : 'Disabled' : 'Unknown'}</p>
-            {configuration?.proactive.status === 'available' ? <><p>Durable opportunities: {configuration.proactive.summary.total}. Last source fire: {clock(configuration.proactive.summary.lastFiredAtMs)}.</p>
+            {configuration?.proactive.status === 'available' ? <><p>Felt impulses: {configuration.proactive.summary.total}. Last source fire: {clock(configuration.proactive.summary.lastFiredAtMs)}.</p>
               <p>Last confirmed delivery: {clock(configuration.proactive.summary.lastDeliveredAtMs)}</p>
               <dl className="monitor-counts">{configuration.proactive.summary.states.map(s => <div key={s.state}><dt>{OUTREACH[s.state]}</dt><dd>{s.count}</dd></div>)}</dl>
-              <p className="monitor-caption">A source fire or a choice is not a delivered message. An unconfirmed execution is not automatically resent.</p></> : <p>Durable proactive delivery evidence {configuration?.proactive.status === 'error' ? 'could not be read' : 'is unavailable'}.</p>}
+              <p className="monitor-caption">An impulse only raises pressure for people she already feels drawn to; each person then gets their own outreach moment. A source fire is not a delivered message.</p></> : <p>Durable proactive delivery evidence {configuration?.proactive.status === 'error' ? 'could not be read' : 'is unavailable'}.</p>}
             {lanes.filter(l => ['weighted_thought_outreach', 'social_desire_outreach'].includes(l.id)).map(l => <Lane key={l.id} lane={l} />)}
           </section>
           <Lanes label="Memory and background work" lanes={lanes.filter(l => l.source !== 'scheduler' && !['free_time', 'weighted_thought_outreach', 'social_desire_outreach'].includes(l.id))} />

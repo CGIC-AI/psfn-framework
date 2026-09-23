@@ -31,6 +31,14 @@ export interface ConcernFollowUpOutreachDeps {
   /** "Later" re-asks after this delay; it is also the crash-safe hold while she is asked. */
   deferDelayMs: number;
   maxPerRun: number;
+  /**
+   * The same per-contact pacing social outreach uses, so a contact is never
+   * asked about twice inside one cooldown whichever path raised the moment.
+   */
+  pacing: {
+    isPaced(contactId: string, nowMs: number): Promise<boolean>;
+    markAsked(contactId: string, nowMs: number): Promise<void>;
+  };
 }
 
 export interface ConcernFollowUpOutreachResult {
@@ -123,6 +131,7 @@ export async function runConcernFollowUpOutreachOnce(
       contactTimeZone: deps.resolveContactTimeZone ? await deps.resolveContactTimeZone(contactId) : null,
     });
     if (!timeGate.allowed) continue;
+    if (await deps.pacing.isPaced(contactId, nowMs)) continue;
     const channel = await deps.resolveDeliveryChannel(contactId);
     if (!channel) {
       // No private route to this person: nothing to follow up through, so the
@@ -134,6 +143,7 @@ export async function runConcernFollowUpOutreachOnce(
     result.asked += 1;
     // Durable hold before the turn so a crash cannot re-ask immediately.
     await reschedule(deps, concern, nowMs + deps.deferDelayMs);
+    await deps.pacing.markAsked(contactId, nowMs);
     const decision = await deps.consentEvaluator.evaluate({
       contactId,
       ...(channel.contactName ? { contactName: channel.contactName } : {}),

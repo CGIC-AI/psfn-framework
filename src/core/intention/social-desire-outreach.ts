@@ -588,6 +588,15 @@ export async function runSocialDesireOutreachOnce(
   return result;
 }
 
+/** True when this contact is inside its per-contact cooldown or deferral. */
+export function isSocialDesireContactPaced(
+  desire: SocialDesire,
+  pacing: SocialDesireOutreachDeps['contactPacing'],
+  nowMs: number,
+): boolean {
+  return resolveContactPacingBlock(desire, pacing, nowMs) !== null;
+}
+
 function resolveContactPacingBlock(
   desire: SocialDesire,
   pacing: SocialDesireOutreachDeps['contactPacing'],

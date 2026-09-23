@@ -27,6 +27,7 @@ import { createContactSocialDesireTierSource } from '../../../core/intention/soc
 import {
   createSocialDesireConsentLedger,
   createSocialDesireOutboundRuntime,
+  isSocialDesireContactPaced,
   type SocialDesireDeliveryChannel,
   type SocialDesireOutboundRuntime,
 } from '../../../core/intention/social-desire-outreach.js';
@@ -210,6 +211,22 @@ export function registerSocialDesireLane(deps: SocialDesireLaneDeps): SocialDesi
           resolveContactTimeZone,
           deferDelayMs: schedulerConfig.socialDesire.outreach.contactPacing.deferDelayMs,
           maxPerRun: schedulerConfig.socialDesire.outreach.maxConsentMomentsPerRun,
+          // Shares the desire row's cooldown anchor when one exists; a concern
+          // never creates a desire (carved invariant), so no row = no anchor.
+          pacing: {
+            isPaced: async (contactId, nowMs) => {
+              const desire = await socialDesireStore.getByContactId(contactId);
+              return desire !== null && isSocialDesireContactPaced(
+                desire,
+                schedulerConfig.socialDesire.outreach.contactPacing,
+                nowMs,
+              );
+            },
+            markAsked: async (contactId, nowMs) => {
+              const desire = await socialDesireStore.getByContactId(contactId);
+              if (desire) await socialDesireStore.save({ ...desire, lastConsentMomentAt: new Date(nowMs).toISOString() });
+            },
+          },
         },
         deps: {
           store: socialDesireStore,

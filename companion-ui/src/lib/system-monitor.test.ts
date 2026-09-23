@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadSystemMonitor, parseMonitorHealth } from './system-monitor.js';
 const A = '11111111-1111-4111-8111-111111111111';
 const B = '22222222-2222-4222-8222-222222222222';
-const config = { companionId: A, freeTimeEnabled: false, socialDesireEnabled: false, weightedThoughtOutreachEnabled: true, emosimProactivityMode: 'on', proactive: { status: 'available', summary: { total: 1, states: [{ state: 'queued', count: 1, lastUpdatedAtMs: 10 }], lastFiredAtMs: 5, lastDeliveredAtMs: null } } };
+const config = { companionId: A, freeTimeEnabled: false, socialDesireEnabled: false, weightedThoughtOutreachEnabled: true, emosimProactivityMode: 'on', proactive: { status: 'available', summary: { total: 1, states: [{ state: 'applied', count: 1, lastUpdatedAtMs: 10 }], lastFiredAtMs: 5, lastDeliveredAtMs: null } } };
 const health = { generatedAt: 30, processStartedAt: 1, monitor: config, lanes: [{ id: 'free_time', label: 'Free time', status: 'failed', source: 'event_bus', sinceProcessStart: true, lastEventAt: 20, lastReason: 'idle:rested:chooser_timeout', lastError: 'PRIVATE ERROR BODY', counts: { turnsUsed: 0 }, recent: [{ at: 20, outcome: 'failed', reason: 'chooser_timeout' }] }] };
 beforeEach(() => { vi.stubGlobal('navigator', { locks: { request: async (_name: string, _opts: unknown, callback: () => Promise<unknown>) => callback() } }); });
 afterEach(() => vi.unstubAllGlobals());

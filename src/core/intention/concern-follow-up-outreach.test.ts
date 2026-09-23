@@ -38,6 +38,7 @@ function deps(
       }),
       deferDelayMs: 3 * HOUR,
       maxPerRun: 1,
+      pacing: { isPaced: async () => false, markAsked: vi.fn(async () => undefined) },
       ...overrides,
     } satisfies ConcernFollowUpOutreachDeps,
   };
@@ -87,5 +88,18 @@ describe('due concern follow-up outreach', () => {
     });
     await expect(runConcernFollowUpOutreachOnce(quiet.deps, NOW)).resolves.toMatchObject({ asked: 0 });
     expect(quiet.transitionConcernStatus).not.toHaveBeenCalled();
+  });
+
+  it('never asks a contact inside the shared per-contact cooldown', async () => {
+    const paced = deps([concern()], { action: 'message', content: 'hi' }, {
+      pacing: { isPaced: async () => true, markAsked: vi.fn(async () => undefined) },
+    });
+    await expect(runConcernFollowUpOutreachOnce(paced.deps, NOW)).resolves.toMatchObject({ asked: 0 });
+    expect(paced.evaluate).not.toHaveBeenCalled();
+
+    const markAsked = vi.fn(async () => undefined);
+    const fresh = deps([concern()], { action: 'decline' }, { pacing: { isPaced: async () => false, markAsked } });
+    await runConcernFollowUpOutreachOnce(fresh.deps, NOW);
+    expect(markAsked).toHaveBeenCalledWith('contact-human', NOW);
   });
 });

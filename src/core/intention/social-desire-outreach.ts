@@ -79,6 +79,8 @@ export interface SocialDesireConsentEvaluationInput {
   channelType: ChannelType;
   /** True when the target contact is another companion (ICP candidate path). */
   companionTarget: boolean;
+  /** Optional concrete occasion shown to the companion (for example a due concern). */
+  reason?: string;
 }
 
 /**

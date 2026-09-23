@@ -177,21 +177,21 @@
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidate.limit@L1054",
+      "name": "main.candidate.limit@L1049",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidate.limit; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidate.limit@L1090",
+      "name": "main.candidate.limit@L1085",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidate.limit; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidate.limit@L1130",
+      "name": "main.candidate.limit@L1125",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidate.limit; code-owned only for harness behavior and not used as an unowned production setting."
@@ -205,28 +205,28 @@
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidateIdsBefore.limit@L1039",
+      "name": "main.candidateIdsBefore.limit@L1034",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidateIdsBefore.limit; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidateIdsBefore.limit@L1071",
+      "name": "main.candidateIdsBefore.limit@L1066",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidateIdsBefore.limit; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidateIdsBefore.limit@L1111",
+      "name": "main.candidateIdsBefore.limit@L1106",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidateIdsBefore.limit; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidateIdsBefore.limit@L637",
+      "name": "main.candidateIdsBefore.limit@L639",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidateIdsBefore.limit; code-owned only for harness behavior and not used as an unowned production setting."
@@ -3251,115 +3251,115 @@
     },
     {
       "file": "src/core/agent/worker-lanes.ts",
-      "name": "object@L114.maxDeliveriesPerForegroundTurn",
+      "name": "object@L115.maxDeliveriesPerForegroundTurn",
       "value": "0",
       "form": "object-member",
-      "note": "Existing mutable policy candidate object@L114.maxDeliveriesPerForegroundTurn; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate object@L115.maxDeliveriesPerForegroundTurn; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/agent/worker-lanes.ts",
-      "name": "object@L114.maxPendingSessionDeliveries",
+      "name": "object@L115.maxPendingSessionDeliveries",
       "value": "0",
       "form": "object-member",
-      "note": "Existing mutable policy candidate object@L114.maxPendingSessionDeliveries; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate object@L115.maxPendingSessionDeliveries; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/agent/worker-lanes.ts",
-      "name": "object@L114.maxQueuedActions",
+      "name": "object@L115.maxQueuedActions",
       "value": "0",
       "form": "object-member",
-      "note": "Existing mutable policy candidate object@L114.maxQueuedActions; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate object@L115.maxQueuedActions; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/agent/worker-lanes.ts",
-      "name": "object@L114.maxRunsPerSchedulerTick",
+      "name": "object@L115.maxRunsPerSchedulerTick",
       "value": "0",
       "form": "object-member",
-      "note": "Existing mutable policy candidate object@L114.maxRunsPerSchedulerTick; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate object@L115.maxRunsPerSchedulerTick; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/agent/worker-lanes.ts",
-      "name": "object@L128.maxDeliveriesPerForegroundTurn",
+      "name": "object@L129.maxDeliveriesPerForegroundTurn",
       "value": "0",
       "form": "object-member",
-      "note": "Existing mutable policy candidate object@L128.maxDeliveriesPerForegroundTurn; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate object@L129.maxDeliveriesPerForegroundTurn; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/agent/worker-lanes.ts",
-      "name": "object@L128.maxPendingSessionDeliveries",
+      "name": "object@L129.maxPendingSessionDeliveries",
       "value": "0",
       "form": "object-member",
-      "note": "Existing mutable policy candidate object@L128.maxPendingSessionDeliveries; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate object@L129.maxPendingSessionDeliveries; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/agent/worker-lanes.ts",
-      "name": "object@L128.maxQueuedActions",
+      "name": "object@L129.maxQueuedActions",
       "value": "12",
       "form": "object-member",
-      "note": "Existing mutable policy candidate object@L128.maxQueuedActions; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate object@L129.maxQueuedActions; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/agent/worker-lanes.ts",
-      "name": "object@L128.maxRunsPerSchedulerTick",
+      "name": "object@L129.maxRunsPerSchedulerTick",
       "value": "2",
       "form": "object-member",
-      "note": "Existing mutable policy candidate object@L128.maxRunsPerSchedulerTick; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate object@L129.maxRunsPerSchedulerTick; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/agent/worker-lanes.ts",
-      "name": "object@L142.maxDeliveriesPerForegroundTurn",
+      "name": "object@L143.maxDeliveriesPerForegroundTurn",
       "value": "1",
       "form": "object-member",
-      "note": "Existing mutable policy candidate object@L142.maxDeliveriesPerForegroundTurn; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate object@L143.maxDeliveriesPerForegroundTurn; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/agent/worker-lanes.ts",
-      "name": "object@L142.maxPendingSessionDeliveries",
+      "name": "object@L143.maxPendingSessionDeliveries",
       "value": "2",
       "form": "object-member",
-      "note": "Existing mutable policy candidate object@L142.maxPendingSessionDeliveries; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate object@L143.maxPendingSessionDeliveries; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/agent/worker-lanes.ts",
-      "name": "object@L142.maxQueuedActions",
+      "name": "object@L143.maxQueuedActions",
       "value": "4",
       "form": "object-member",
-      "note": "Existing mutable policy candidate object@L142.maxQueuedActions; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate object@L143.maxQueuedActions; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/agent/worker-lanes.ts",
-      "name": "object@L142.maxRunsPerSchedulerTick",
+      "name": "object@L143.maxRunsPerSchedulerTick",
       "value": "1",
       "form": "object-member",
-      "note": "Existing mutable policy candidate object@L142.maxRunsPerSchedulerTick; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate object@L143.maxRunsPerSchedulerTick; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/agent/worker-lanes.ts",
-      "name": "object@L156.maxDeliveriesPerForegroundTurn",
+      "name": "object@L157.maxDeliveriesPerForegroundTurn",
       "value": "0",
       "form": "object-member",
-      "note": "Existing mutable policy candidate object@L156.maxDeliveriesPerForegroundTurn; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate object@L157.maxDeliveriesPerForegroundTurn; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/agent/worker-lanes.ts",
-      "name": "object@L156.maxPendingSessionDeliveries",
+      "name": "object@L157.maxPendingSessionDeliveries",
       "value": "0",
       "form": "object-member",
-      "note": "Existing mutable policy candidate object@L156.maxPendingSessionDeliveries; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate object@L157.maxPendingSessionDeliveries; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/agent/worker-lanes.ts",
-      "name": "object@L156.maxQueuedActions",
+      "name": "object@L157.maxQueuedActions",
       "value": "3",
       "form": "object-member",
-      "note": "Existing mutable policy candidate object@L156.maxQueuedActions; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate object@L157.maxQueuedActions; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/agent/worker-lanes.ts",
-      "name": "object@L156.maxRunsPerSchedulerTick",
+      "name": "object@L157.maxRunsPerSchedulerTick",
       "value": "1",
       "form": "object-member",
-      "note": "Existing mutable policy candidate object@L156.maxRunsPerSchedulerTick; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate object@L157.maxRunsPerSchedulerTick; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/cogsec/blind-review/contracts.ts",
@@ -6521,14 +6521,14 @@
     },
     {
       "file": "src/core/tools/ntfy.ts",
-      "name": "notifyToolParameters.contact_id.minLength@L1001",
+      "name": "notifyToolParameters.contact_id.minLength@L1010",
       "value": "1",
       "form": "object-member",
       "note": "Existing mutable policy candidate notifyToolParameters.contact_id.minLength@L998; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/tools/ntfy.ts",
-      "name": "notifyToolParameters.contact_id.minLength@L989",
+      "name": "notifyToolParameters.contact_id.minLength@L998",
       "value": "1",
       "form": "object-member",
       "note": "Existing mutable policy candidate notifyToolParameters.contact_id.minLength@L986; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."

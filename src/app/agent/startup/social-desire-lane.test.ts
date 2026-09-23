@@ -13,7 +13,7 @@ import {
   createInMemorySocialDesireBackend,
   createSocialDesireStorePort,
 } from '../../../core/intention/social-desire-store-port.js';
-import type { LLMProviderPort } from '../../../core/agent/contracts.js';
+import { createSocialOutreachDraftRegistry } from '../../../core/intention/social-outreach-turn/drafts.js';
 import {
   DEFAULT_SOCIAL_DESIRE_CONFIG,
   type EpisodicProcessingRestWindowConfig,
@@ -36,7 +36,7 @@ function makeDeps(overrides: Partial<SocialDesireLaneDeps> = {}): SocialDesireLa
       episodicProcessing: restWindow,
     },
     scheduler: new Scheduler(eventBus, { tickIntervalMs: 1_000, heartbeatIntervalMs: 5_000 }),
-    postTurnActions: { enqueue: vi.fn(() => 'queued' as const) },
+    postTurnActions: { enqueue: vi.fn(() => 'queued' as const), registerHandler: vi.fn(() => () => undefined) },
     eventBus,
     log: createComponentLogger('SocialDesireLaneTest'),
     socialDesireStore: createSocialDesireStorePort(createInMemorySocialDesireBackend()),
@@ -45,7 +45,10 @@ function makeDeps(overrides: Partial<SocialDesireLaneDeps> = {}): SocialDesireLa
     contactStore: { getById: async () => undefined },
     icpPeers: undefined,
     localCompanionId: undefined,
-    llmProvider: { complete: vi.fn(), stream: vi.fn() } as unknown as LLMProviderPort,
+    turns: { handleMessage: vi.fn(async () => ({ content: '__no_reply__' })) },
+    sessions: { findLatestEntries: () => [], listSessionsByRecentActivity: () => [] },
+    readEmotion: () => null,
+    drafts: createSocialOutreachDraftRegistry(),
     companionName: 'TestCompanion',
     attachFeltSignalWriter: vi.fn(),
     ...overrides,
@@ -64,8 +67,15 @@ describe('registerSocialDesireLane composition wiring (psfn-framework-hrmrq.85)'
     expect(attachFeltSignalWriter).toHaveBeenCalledTimes(1);
     expect(result.socialDesireFeltSignals).toBeDefined();
     expect(attachFeltSignalWriter).toHaveBeenCalledWith(result.socialDesireFeltSignals);
-    // And the consent-moment task is live in the scheduler.
+    // And the consent-moment task is live in the scheduler, with the felt
+    // impulse target and its immediate-evaluation queue composed (vcq8v.4).
     expect(deps.scheduler.getTask(SOCIAL_DESIRE_OUTREACH_TASK_ID)).toBeDefined();
+    expect(result.impulseTarget).toMatchObject({ gain: DEFAULT_SOCIAL_DESIRE_CONFIG.impulse.gain });
+    expect(deps.postTurnActions.registerHandler).toHaveBeenCalledWith(
+      'social-desire.outreach.evaluate', expect.any(Function), expect.objectContaining({
+        runtimeClass: 'foreground_chat',
+      }),
+    );
   });
 
   it('fails closed at boot when the lane is enabled but the store is missing', () => {

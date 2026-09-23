@@ -453,8 +453,8 @@ export const TOOL_CONFORMANCE_ACTION_REGISTRY:
     consider: SCHEMA_ASSERT,
     approval_request: SCHEMA_ASSERT,
     clarify: SCHEMA_ASSERT,
-    outreach_list: SCHEMA_ASSERT,
-    outreach_choose: SCHEMA_ASSERT,
+    outreach_send: SCHEMA_ASSERT,
+    outreach_later: SCHEMA_ASSERT,
   },
   generate_image: {
     generate: SCHEMA_ASSERT,

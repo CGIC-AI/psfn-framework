@@ -183,6 +183,7 @@ import { createLLMProviderPort } from '../../core/agent/contracts.js';
 import { wireIcpInitiationSources } from './icp-initiation-source-wiring.js';
 import { createIcpTestInitiationTrigger } from './icp-test-initiation.js';
 import { registerSocialImpulseOutreachLane } from './startup/social-impulse-outreach-lane.js';
+import { createSocialOutreachDraftRegistry } from '../../core/intention/social-outreach-turn/drafts.js';
 import { registerWorldExplorationLane } from './startup/world-exploration-lane.js';
 import { wireCompanionPresenceContext } from './companion-presence-wiring.js';
 import { createGatewayOpsPortFromClient } from '../../boundary/gateway/gateway-ops-port.js';
@@ -1892,7 +1893,10 @@ async function main(): Promise<void> {
     icpInitiationCandidateStore: persistenceRuntime.icpInitiationCandidateStore,
     icpFeltImpulseFunnelStore: persistenceRuntime.icpFeltImpulseFunnelStore,
     partnerAffectShadowStore: persistenceRuntime.partnerAffectShadowStore,
-    readProactiveHealth: () => persistenceRuntime.socialImpulseOutreachStore.getHealthSummary(resolveCoreCompanionIdFromConfig(config)),
+    readProactiveHealth: async () => ({
+      ...await persistenceRuntime.socialImpulseOutreachStore.getHealthSummary(resolveCoreCompanionIdFromConfig(config)),
+      lastDeliveredAtMs: outreachOutbox.lastSentAt({ reasonPrefix: 'social_desire' }),
+    }),
     additionalSchedulerTasks: () => healthDetectorScheduler.listTasks(),
     icpRuntimeEnablement,
     ...(icpTestInitiation ? { icpTestInitiation } : {}),
@@ -1965,26 +1969,13 @@ async function main(): Promise<void> {
   const heartbeatChannelId = heartbeatChannel?.channelId;
   const socialImpulseOutreachLane = registerSocialImpulseOutreachLane({
     companionId: resolveCoreCompanionIdFromConfig(config),
-    companionName: card.data.name,
-    companionDataDir: pathSnapshot.companionDataDir,
     store: persistenceRuntime.socialImpulseOutreachStore,
     getMode: () => config.emosimProactivity?.mode ?? 'off',
-    agentLoop,
-    postTurnActions,
-    contactStore,
-    sessionStore,
-    ...(primaryUserId ? { primaryDiscordUserId: primaryUserId } : {}),
-    ...(heartbeatChannelId
-      ? { heartbeatChannel: { channelId: heartbeatChannelId, channelType: 'discord' } }
-      : {}),
-    ...(coreRuntime.icpAutonomyRuntime
-      ? { icpAutonomy: coreRuntime.icpAutonomyRuntime }
-      : {}),
-    ...(icpInitiationSourceRuntime ? { icpInitiation: icpInitiationSourceRuntime } : {}),
-    capabilityRuntime,
-    availability: companionAvailability,
   });
   socialImpulseOutreachRuntime = socialImpulseOutreachLane.runtime;
+  // Live answer slots shared by the notify tool (outreach_send/outreach_later)
+  // and the per-contact outreach turns the social-desire lane runs (vcq8v.4).
+  const socialOutreachDrafts = createSocialOutreachDraftRegistry();
   const shutdownTargets: AgentControlPlaneShutdownTargets = {};
   const controlPlane = buildAgentControlPlane({
     heartbeatChannelId,
@@ -2051,7 +2042,7 @@ async function main(): Promise<void> {
       ? { icpAutonomyRuntime: coreRuntime.icpAutonomyRuntime }
       : {}),
     ...(icpInitiationSourceRuntime ? { icpInitiationSourceRuntime } : {}),
-    socialImpulseOutreach: socialImpulseOutreachRuntime,
+    socialOutreachDrafts,
   });
   // Control-plane tools are registered after module loading. Validate them
   // before restored durable actions can execute so a wiring-disabled notify
@@ -2109,7 +2100,6 @@ async function main(): Promise<void> {
       eventBus,
     })
       : null;
-  socialImpulseOutreachLane.setProactiveOutbound(proactiveOutbound);
   // ── Temporal wake-up lanes (E7.1): morning wake + idle refresher, extracted
   // to startup/temporal-wakeup-lane.ts (charter 12.1 split).
   // World exploration (S13, 07mw2): the companion's own initiative on a world
@@ -2184,7 +2174,7 @@ async function main(): Promise<void> {
 
   // ── Social-desire consent-moment lane (epic oth4, bead oth4.2): extracted
   // to startup/social-desire-lane.ts (charter 12.1 split).
-  const { socialDesireOutbound, socialDesireHumanDeliveryPolicy } = registerSocialDesireLane({
+  const { socialDesireOutbound, socialDesireHumanDeliveryPolicy, impulseTarget } = registerSocialDesireLane({
     schedulerConfig,
     scheduler,
     postTurnActions,
@@ -2196,7 +2186,10 @@ async function main(): Promise<void> {
     contactStore,
     icpPeers: coreRuntime.icpAutonomyRuntime,
     localCompanionId: config.companionId,
-    llmProvider,
+    turns: agentLoop,
+    sessions: sessionStore,
+    readEmotion: () => emotionState.getState(),
+    drafts: socialOutreachDrafts,
     companionName: card.data.name,
     // hrmrq.85: compose the accumulation writer into the post-turn
     // emotion-appraisal path — the lane's single production producer.
@@ -2204,7 +2197,7 @@ async function main(): Promise<void> {
       agentLoop.socialDesireFeltSignals = writer;
     },
   });
-  socialImpulseOutreachLane.setHumanPolicy(socialDesireHumanDeliveryPolicy);
+  socialImpulseOutreachLane.setDesireTarget(impulseTarget);
   registerEmoSimProactivitySampling(scheduler, observerEvalSidecar);
 
   // Journal auto-publisher (for reflections -> markdown journal).
@@ -2252,13 +2245,6 @@ async function main(): Promise<void> {
       ),
     },
     outboundReplyGuard,
-  });
-  socialImpulseOutreachLane.setSpeakingPhases({
-    reservationPhase,
-    egressLeasePhase,
-    // A granted endogenous room entry opens the same bounded membership an
-    // inbound summons would (jp36.5.5).
-    roomParticipationLease,
   });
 
   // ── Drift review lanes (htm9.14/htm9.15) + emo_sim dyad advisory (oth4.6):
@@ -2423,7 +2409,6 @@ async function main(): Promise<void> {
     });
   }
   healthDetectorScheduler.start();
-  await socialImpulseOutreachLane.runtime.recoverPending();
   scheduler.start();
   await eventBus.emit('system.init', {});
   await eventBus.emit('system.ready', {});

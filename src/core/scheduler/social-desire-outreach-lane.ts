@@ -37,6 +37,15 @@ export interface SocialDesireOutreachTaskOptions {
   now?: () => number;
 }
 
+export interface SocialDesireOutreachTask {
+  /**
+   * Evaluate per-contact desires now (serialized with the scheduled tick), for
+   * example right after a felt impulse raised pressure. Never runs two consent
+   * moments for the same contact concurrently.
+   */
+  runNow(): Promise<void>;
+}
+
 /**
  * Register the standalone social-desire consent-moment trigger. Disabled unless
  * scheduler.json socialDesire.enabled is true (fail-closed): with the flag off
@@ -44,17 +53,23 @@ export interface SocialDesireOutreachTaskOptions {
  */
 export function registerSocialDesireOutreachTask(
   options: SocialDesireOutreachTaskOptions,
-): void {
+): SocialDesireOutreachTask | null {
   if (!options.config.enabled) {
     log.info('Social-desire outreach lane disabled by scheduler.json socialDesire.enabled');
-    return;
+    return null;
   }
   if (options.scheduler.getTask(SOCIAL_DESIRE_OUTREACH_TASK_ID)) {
-    return;
+    throw new Error('Social-desire outreach lane is already registered');
   }
 
   const resolveNow = options.now ?? (() => Date.now());
   const intervalMs = Math.max(1_000, options.config.outreach.checkIntervalMs);
+  let tail: Promise<void> = Promise.resolve();
+  const runSerialized = (): Promise<void> => {
+    const run = tail.then(() => runSocialDesireOutreachTick(options, resolveNow()));
+    tail = run.catch(() => undefined);
+    return run;
+  };
 
   options.scheduler.register(
     {
@@ -62,9 +77,7 @@ export function registerSocialDesireOutreachTask(
       name: SOCIAL_DESIRE_OUTREACH_TASK_NAME,
       type: 'every',
       intervalMs,
-      handler: async () => {
-        await runSocialDesireOutreachTick(options, resolveNow());
-      },
+      handler: runSerialized,
       eligibility: { requiredTokens: ['memory.write'] },
       state: 'idle',
     },
@@ -77,6 +90,7 @@ export function registerSocialDesireOutreachTask(
     budgetMaxSendsPerWindow: options.config.outreach.budget.maxSendsPerWindow,
     budgetWindowMs: options.config.outreach.budget.windowMs,
   });
+  return { runNow: runSerialized };
 }
 
 async function safeEmit(emit: () => Promise<void>): Promise<void> {

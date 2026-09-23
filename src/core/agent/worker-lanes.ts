@@ -1,3 +1,4 @@
+import { isSocialOutreachChannelId } from '../../shared/contracts/social-outreach-channel.js';
 import type { ChargePolicyRuntimeLane } from '../../system/config/charge-policy-config.js';
 import type {
   CompletionPurpose,
@@ -203,6 +204,12 @@ export function resolveRuntimeLaneClassForTurn(input: {
   if (input.callType === 'background' || input.deferredContinuationId) {
     return BACKGROUND_CONTINUATION_RUNTIME_CLASS;
   }
+  // A per-contact social-outreach turn is the companion deciding whether to
+  // speak to someone, with her persona loaded: chat priority by design, even
+  // though its internal channel infers a scheduled call type.
+  if (isSocialOutreachChannelId(input.channelId)) {
+    return FOREGROUND_CHAT_RUNTIME_CLASS;
+  }
   if (
     input.callType === 'scheduled'
     || input.taskKind === 'heartbeat'
@@ -223,7 +230,8 @@ export function resolveRuntimeLaneClassForModelCall(input: {
   originStage?: string;
 }): RuntimeLaneClass {
   const originStage = input.originStage?.trim() ?? '';
-  if (input.purpose === 'chat' || input.callType === 'chat' || input.callType === 'tool') {
+  if (input.purpose === 'chat' || input.callType === 'chat' || input.callType === 'tool'
+    || isSocialOutreachChannelId(input.channelId)) {
     return FOREGROUND_CHAT_RUNTIME_CLASS;
   }
   if (

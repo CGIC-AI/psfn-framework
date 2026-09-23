@@ -54,7 +54,7 @@ import {
 } from './icp-autonomy-candidate-dispatcher.js';
 import { registerIcpInitiationCandidatePostTurnRuntime } from '../../core/tools/notify-companion-candidate.js';
 import type { IcpInitiationSourceRuntime } from '../../core/icp/initiation-source-runtime.js';
-import type { SocialImpulseOutreachRuntime } from '../../core/emotion/social-impulse-outreach.js';
+import type { SocialOutreachDraftRegistry } from '../../core/intention/social-outreach-turn/drafts.js';
 import { createCompanionDisplayIdentityResolver } from '../../shared/companion-display-identity.js';
 import {
   resolveCompanionIdFromConfig,
@@ -98,7 +98,7 @@ export interface BuildAgentControlPlaneOptions {
   postTurnActions: PostTurnActionRuntime;
   icpAutonomyRuntime?: AgentFacingIcpAutonomyRuntime;
   icpInitiationSourceRuntime?: IcpInitiationSourceRuntime;
-  socialImpulseOutreach?: SocialImpulseOutreachRuntime;
+  socialOutreachDrafts?: SocialOutreachDraftRegistry;
 }
 
 export interface AgentControlPlaneRuntime {
@@ -133,7 +133,7 @@ export function buildAgentControlPlane(
     postTurnActions,
     icpAutonomyRuntime,
     icpInitiationSourceRuntime,
-    socialImpulseOutreach,
+    socialOutreachDrafts,
   } = options;
   const lifecycleKubernetes = requireLifecycleKubernetesSettings(config);
   const deferredCompanionOutreachAuthorizationRuntime: DeferredCompanionOutreachAuthorizationRuntime = {
@@ -324,7 +324,7 @@ export function buildAgentControlPlane(
     gatewayMode: true,
     ...(icpAutonomyRuntime ? { companionOutreach: icpAutonomyRuntime } : {}),
     getDisclosureLineage: () => agentLoop.getCurrentTurnDisclosureLineage(),
-    ...(socialImpulseOutreach ? { socialImpulseOutreach } : {}),
+    ...(socialOutreachDrafts ? { socialOutreachDrafts } : {}),
     companionCandidateEnabled: Boolean(icpInitiationSourceRuntime),
     isCompanionCandidateAuthorized: () => (
       resolveCompanionOutreachOriginCatalogSource(

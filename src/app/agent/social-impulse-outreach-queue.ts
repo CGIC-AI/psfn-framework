@@ -1,47 +1,45 @@
 import { createHash } from 'node:crypto';
 import type { PostTurnActionRuntime } from '../../core/agent/post-turn-action-runtime.js';
-import { MAINTENANCE_REFLECTION_RUNTIME_CLASS } from '../../core/agent/worker-lanes.js';
+import { FOREGROUND_CHAT_RUNTIME_CLASS } from '../../core/agent/worker-lanes.js';
 import { isRecord } from '../../shared/utils/types.js';
 
-const DISPOSITION_KIND = 'social-outreach.disposition';
-const EXECUTION_KIND = 'social-outreach.execute';
+const EVALUATE_KIND = 'social-desire.outreach.evaluate';
 
-/** Content-free durable work, executed only after the source turn releases ownership. */
-export function createSocialImpulseOutreachQueue(options: {
+/**
+ * Durable request for an immediate per-contact social-desire evaluation, for
+ * example after a felt EmoSim impulse raised pressure (psfn-framework-vcq8v.4).
+ * It runs only after the source turn releases ownership, at chat priority,
+ * because the evaluation may open the companion's own outreach turn.
+ */
+export function createSocialDesireEvaluationQueue(options: {
   actions: Pick<PostTurnActionRuntime, 'enqueue' | 'registerHandler'>;
-  runDisposition(opportunityId: string): Promise<void>;
-  runExecution(opportunityId: string): Promise<void>;
-  now(): number;
+  evaluate(): Promise<void>;
+  now?: () => number;
 }) {
-  for (const [kind, run] of [
-    [DISPOSITION_KIND, options.runDisposition],
-    [EXECUTION_KIND, options.runExecution],
-  ] as const) {
-    options.actions.registerHandler(kind, async action => {
-      if (!isRecord(action.payload) || Object.keys(action.payload).length !== 1
-        || typeof action.payload.opportunityId !== 'string'
-        || !action.payload.opportunityId.startsWith('felt-impulse:would_message:')) {
-        throw new Error('Social outreach queue requires an exact opportunity identity');
-      }
-      await run(action.payload.opportunityId);
-    }, { executionMode: 'foreground', runtimeClass: MAINTENANCE_REFLECTION_RUNTIME_CLASS });
-  }
+  const now = options.now ?? Date.now;
+  options.actions.registerHandler(EVALUATE_KIND, async action => {
+    if (!isRecord(action.payload) || Object.keys(action.payload).length !== 1
+      || typeof action.payload.sourceId !== 'string' || !action.payload.sourceId.trim()) {
+      throw new Error('Social desire evaluation requires an exact source identity');
+    }
+    await options.evaluate();
+  }, { executionMode: 'foreground', runtimeClass: FOREGROUND_CHAT_RUNTIME_CLASS });
 
-  const enqueue = async (kind: string, opportunityId: string): Promise<void> => {
-    const id = `${kind}:${createHash('sha256').update(opportunityId).digest('hex')}`;
-    const result = options.actions.enqueue({
-      id,
-      kind,
-      dedupeKey: id,
-      payload: { opportunityId },
-      channelId: 'internal:social-outreach',
-      sourceMessageId: opportunityId,
-      inferredAt: options.now(),
-    });
-    if (result === 'dropped_budget') throw new Error('Social outreach queue admission was unavailable');
-  };
   return {
-    enqueueDisposition: (opportunityId: string) => enqueue(DISPOSITION_KIND, opportunityId),
-    enqueueExecution: (opportunityId: string) => enqueue(EXECUTION_KIND, opportunityId),
+    async request(sourceId: string): Promise<void> {
+      const normalized = sourceId.trim();
+      if (!normalized) throw new Error('Social desire evaluation requires an exact source identity');
+      const id = `${EVALUATE_KIND}:${createHash('sha256').update(normalized).digest('hex')}`;
+      const result = options.actions.enqueue({
+        id,
+        kind: EVALUATE_KIND,
+        dedupeKey: id,
+        payload: { sourceId: normalized },
+        channelId: 'internal:social-outreach',
+        sourceMessageId: normalized,
+        inferredAt: now(),
+      });
+      if (result === 'dropped_budget') throw new Error('Social desire evaluation queue admission was unavailable');
+    },
   };
 }

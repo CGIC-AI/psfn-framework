@@ -401,23 +401,25 @@ async function main(): Promise<void> {
     intervalMs: 1,
     persistencePath: resolvePostTurnActionQueuePath(startup.pathSnapshot.companionDataDir),
   });
-  socialImpulseOutreachRuntime = registerSocialImpulseOutreachLane({
+  const socialImpulseLane = registerSocialImpulseOutreachLane({
     companionId,
-    companionName: identity.card.data.name,
-    companionDataDir: startup.pathSnapshot.companionDataDir,
     store: persistence.socialImpulseOutreachStore,
     getMode: () => 'on',
-    agentLoop: agent,
-    postTurnActions,
-    contactStore,
-    sessionStore: sessionRuntime.sessionStore,
-    icpAutonomy: autonomy,
-    ...(sourceRuntime ? { icpInitiation: sourceRuntime } : {}),
-    capabilityRuntime: startup.capabilityRuntime,
-    availability: {
-      snapshot: () => ({ state: 'available', sinceMs: 0, revision: 0 }),
-    },
-  }).runtime;
+  });
+  socialImpulseOutreachRuntime = socialImpulseLane.runtime;
+  // The certification agent does not run the social-desire consent lane; it
+  // certifies that a felt impulse raises per-contact pressure exactly once and
+  // requests that contact's evaluation (vcq8v.4).
+  const certificationEvaluationRequests: string[] = [];
+  if (persistence.socialDesireStore) {
+    const socialDesireStore = persistence.socialDesireStore;
+    socialImpulseLane.setDesireTarget({
+      store: socialDesireStore,
+      lifecycle: startup.schedulerConfig.socialDesire.lifecycle,
+      gain: startup.schedulerConfig.socialDesire.impulse.gain,
+      requestEvaluation: async sourceId => { certificationEvaluationRequests.push(sourceId); },
+    });
+  }
   const fixedNotifyCatalogSource = 'extended' as const;
   const unregisterInitiationCandidates = sourceRuntime
     ? registerIcpInitiationCandidatePostTurnRuntime({
@@ -758,18 +760,37 @@ async function main(): Promise<void> {
           const firedAtMs = Date.now();
           const correlationId = `felt-impulse:would_message:${firedAtMs}`;
           const impulseThresholdProfile = createDefaultEmoSimProactivitySettings().thresholdProfile;
-          await startup.eventBus.emitRequired('emotion.emosim.proactivity.impulse', {
-            schemaVersion: 1,
-            impulseVersion: 'emosim-proactivity.impulse.v1',
-            kind: 'would_message',
+          if (!persistence.socialDesireStore) {
+            throw new Error('Felt-impulse certification requires the durable social-desire store');
+          }
+          // A live relationship basis for the peer: an impulse only raises
+          // pressure where desire already exists; it never creates one.
+          const seededAt = new Date(firedAtMs).toISOString();
+          await persistence.socialDesireStore.save({
+            contactId: peerContact.id,
+            warmPressure: 0.3,
+            repairPressure: 0,
+            pressureAnchorAt: seededAt,
+            lastWarmFeltAt: seededAt,
+            lastWarmTickAt: seededAt,
+            tickCount: 1,
+            absorbedSignalCount: 0,
+            tierAtLastTick: 'ai_companion',
+            reinforcedConcernIds: [],
+            createdAt: seededAt,
+          });
+          const impulse = {
+            schemaVersion: 1 as const,
+            impulseVersion: 'emosim-proactivity.impulse.v1' as const,
+            kind: 'would_message' as const,
             companionId,
             source: { model: 'certification-derived-model', version: '1.0.0' },
             lineage: {
-              schemaVersion: 1,
+              schemaVersion: 1 as const,
               inputId: `certification-input-${firedAtMs}`,
               projectionVersion: 'certification-projection-v1',
               privacyClass: 'content_redacted',
-              rawContentRedacted: true,
+              rawContentRedacted: true as const,
             },
             firstCrossingMs: firedAtMs,
             firedAtMs,
@@ -777,50 +798,24 @@ async function main(): Promise<void> {
             dedupeKey: correlationId,
             correlationId,
             confidence: 0.82,
-            availability: 'available',
-            authority: 'qualified_source_fire',
-          });
-          const inspected = await socialImpulseOutreachRuntime.inspect(correlationId);
-          const destination = inspected.destinations.find(candidate => (
-            candidate.kind === 'open_companion_dyad'
-            && candidate.contactId === peerContact.id
-          ));
-          if (!destination) {
-            throw new Error('Felt-impulse certification could not resolve the existing peer dyad');
-          }
-          const chosen = await socialImpulseOutreachRuntime.choose({
-            opportunityId: correlationId,
-            disposition: 'contact-companion',
-            destinationId: destination.destinationId,
-            intent: 'Send one ordinary felt-impulse continuation to the existing peer dyad.',
-          });
-          // Production releases source-turn ownership before the durable work
-          // scheduler drains disposition and execution on separate lane turns.
-          const deadline = Date.now() + 20_000;
-          let settled = chosen.record;
-          while (settled.state === 'queued' && Date.now() < deadline) {
-            await scheduler.tick();
-            const persisted = await persistence.socialImpulseOutreachStore.getOpportunity(correlationId);
-            if (!persisted) throw new Error('Queued social outreach lost its durable opportunity');
-            settled = persisted;
-            if (settled.state === 'queued') {
-              await new Promise(resolveWait => setTimeout(resolveWait, 25));
-            }
-          }
-          if (settled.state === 'queued' || settled.state === 'chosen') {
-            throw new Error(`Social outreach queue did not settle: ${settled.state}`);
-          }
+            availability: 'available' as const,
+            authority: 'qualified_source_fire' as const,
+          };
+          await startup.eventBus.emitRequired('emotion.emosim.proactivity.impulse', impulse);
+          // A redelivered impulse must settle from the ledger and never boost twice.
+          const settled = await socialImpulseOutreachRuntime.onImpulse(impulse);
+          const boosted = await persistence.socialDesireStore.getByContactId(peerContact.id);
           reply({
             id: raw.id,
             ok: true,
             result: {
-              opportunityId: correlationId,
-              destinationKind: destination.kind,
-              admissionOutcome: chosen.outcome,
-              queuePersistenceEnabled: postTurnActions.getStatus().persistence.enabled,
-              executionIntentCleared: settled.executionIntent === null,
-              outcome: settled.state,
-              ...(settled.reasonCode ? { reasonCode: settled.reasonCode } : {}),
+              impulseId: correlationId,
+              peerContactId: peerContact.id,
+              replayed: settled.replayed,
+              outcome: settled.outcome,
+              boostedContactCount: settled.record.boostedContactCount,
+              evaluationRequests: certificationEvaluationRequests.filter(id => id === correlationId).length,
+              peerWarmPressure: boosted?.warmPressure ?? null,
             },
           });
           return;

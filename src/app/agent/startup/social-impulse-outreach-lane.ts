@@ -1,118 +1,42 @@
-import type { SubstrateAgent } from '../../../core/agent/substrate-agent.js';
-import type { PostTurnActionRuntime } from '../../../core/agent/post-turn-action-runtime.js';
-import type { SpeakingEgressLeasePhase } from '../../../core/agent/arbiter/egress-lease-phase.js';
-import type { SpeakingReservationPhase } from '../../../core/agent/arbiter/reservation-phase.js';
-import type { RoomParticipationLeaseCoordinator } from '../../../core/participation/room-participation-lease-coordinator.js';
-import type { CompanionAvailabilityRuntime } from '../../../core/agent/companion-availability.js';
-import { ContactBlockListStore } from '../../../core/cogsec/contact-block-list.js';
-import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import type {
+  SocialImpulseDesireTarget,
   SocialImpulseOutreachMode,
   SocialImpulseOutreachRuntime,
   SocialImpulseOutreachStorePort,
 } from '../../../core/emotion/social-impulse-outreach.js';
-import type { AgentFacingIcpAutonomyRuntime } from '../../../core/icp/agent-facing-autonomy.js';
-import type { IcpInitiationSourceRuntime } from '../../../core/icp/initiation-source-runtime.js';
-import type { ProactiveOutboundDispatcher } from '../../../core/intention/proactive-outbound.js';
-import type { SocialDesireHumanDeliveryPolicy } from '../../../core/intention/social-desire-human-policy.js';
-import type { SessionStore } from '../../../persistence/sessions/store.js';
-import { resolveContactBlockListPath } from '../../../persistence/layout.js';
-import type { CapabilityRuntime } from '../../../system/capabilities/runtime.js';
 import { createProductionSocialImpulseOutreachRuntime } from '../social-impulse-outreach-runtime.js';
 
 export interface SocialImpulseOutreachLaneDeps {
   companionId: string;
-  companionName: string;
-  companionDataDir: string;
   store: SocialImpulseOutreachStorePort;
   getMode(): SocialImpulseOutreachMode;
-  agentLoop: Pick<SubstrateAgent, 'handleMessage'>;
-  postTurnActions: Pick<PostTurnActionRuntime, 'enqueue' | 'registerHandler'>;
-  contactStore: Pick<ContactStorePort, 'getByDiscordUserId' | 'listKnownRooms'>;
-  sessionStore: Pick<SessionStore, 'listChannels'>;
-  primaryDiscordUserId?: string;
-  heartbeatChannel?: { channelId: string; channelType: 'discord' };
-  icpAutonomy?: AgentFacingIcpAutonomyRuntime;
-  icpInitiation?: IcpInitiationSourceRuntime;
-  capabilityRuntime: Pick<CapabilityRuntime, 'has'>;
-  availability: Pick<CompanionAvailabilityRuntime, 'snapshot'>;
 }
 
 export interface SocialImpulseOutreachLane {
   runtime: SocialImpulseOutreachRuntime;
-  setProactiveOutbound(value: ProactiveOutboundDispatcher | null): void;
-  setHumanPolicy(value: SocialDesireHumanDeliveryPolicy | undefined): void;
-  setSpeakingPhases(input: {
-    reservationPhase: SpeakingReservationPhase | undefined;
-    egressLeasePhase: SpeakingEgressLeasePhase | undefined;
-    roomParticipationLease: RoomParticipationLeaseCoordinator | undefined;
-  }): void;
+  /** Bound once the social-desire lane is composed; undefined keeps impulses fail-closed. */
+  setDesireTarget(value: SocialImpulseDesireTarget | undefined): void;
 }
 
+/**
+ * EmoSim felt impulses raise per-contact social pressure (vcq8v.4). The desire
+ * target is composed later in boot; an impulse that arrives before it (or with
+ * socialDesire.enabled false) settles as `lane_disabled` and raises nothing.
+ */
 export function registerSocialImpulseOutreachLane(
   deps: SocialImpulseOutreachLaneDeps,
 ): SocialImpulseOutreachLane {
-  let proactiveOutbound: ProactiveOutboundDispatcher | null = null;
-  let humanPolicy: SocialDesireHumanDeliveryPolicy | undefined;
-  let reservationPhase: SpeakingReservationPhase | undefined;
-  let egressLeasePhase: SpeakingEgressLeasePhase | undefined;
-  let roomParticipationLease: RoomParticipationLeaseCoordinator | undefined;
-  const blockList = new ContactBlockListStore(resolveContactBlockListPath(deps.companionDataDir));
-
+  let desireTarget: SocialImpulseDesireTarget | undefined;
   const runtime = createProductionSocialImpulseOutreachRuntime({
     companionId: deps.companionId,
-    companionName: deps.companionName,
     store: deps.store,
     getMode: deps.getMode,
-    agentLoop: deps.agentLoop,
-    postTurnActions: deps.postTurnActions,
-    contactStore: deps.contactStore,
-    sessionStore: deps.sessionStore,
-    ...(deps.primaryDiscordUserId
-      ? { primaryDiscordUserId: deps.primaryDiscordUserId }
-      : {}),
-    ...(deps.heartbeatChannel ? { heartbeatChannel: deps.heartbeatChannel } : {}),
-    ...(deps.icpAutonomy ? { icpAutonomy: deps.icpAutonomy } : {}),
-    ...(deps.icpInitiation ? { icpInitiation: deps.icpInitiation } : {}),
-    capabilityRuntime: deps.capabilityRuntime,
-    availability: deps.availability,
-    // The canonical speaking egress sender currently supports Discord only.
-    // Buzz stays in the typed room contract until a matching sender is composed.
-    isRoomTransportAvailable: channelType => channelType === 'discord',
-    isHumanContactAllowed: async ({ contactId }) => {
-      if (!deps.primaryDiscordUserId) return false;
-      const contact = await deps.contactStore.getByDiscordUserId(deps.primaryDiscordUserId);
-      return contact?.id === contactId
-        && !contact.archivedAt
-        && !contact.isMachineIntelligence
-        && contact.trustLevel === 'primary'
-        && blockList.evaluate({
-          channelType: 'discord',
-          contactId: deps.primaryDiscordUserId,
-          isDirectMessage: true,
-        }).action === 'allow';
-    },
-    getPhases: () => ({
-      proactiveOutbound,
-      humanPolicy,
-      reservationPhase,
-      egressLeasePhase,
-      roomParticipationLease,
-    }),
+    getDesireTarget: () => desireTarget ?? null,
   });
-
   return {
     runtime,
-    setProactiveOutbound(value) {
-      proactiveOutbound = value;
-    },
-    setHumanPolicy(value) {
-      humanPolicy = value;
-    },
-    setSpeakingPhases(input) {
-      reservationPhase = input.reservationPhase;
-      egressLeasePhase = input.egressLeasePhase;
-      roomParticipationLease = input.roomParticipationLease;
+    setDesireTarget(value) {
+      desireTarget = value;
     },
   };
 }

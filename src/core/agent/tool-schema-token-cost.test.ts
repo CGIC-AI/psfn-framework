@@ -90,13 +90,16 @@ describe('full callable catalog schema token cost', () => {
       // psfn-framework-ae7c9 added the play_clip verb and its guidance: +159 bytes / +38 tokens.
       // 2nsfo's wiki actions joined the structured contract (description text only):
       // +129 bytes / +31 tokens on the post-description payload.
-      beforeTokens: 20_253,
-      afterTokens: 24_527,
-      deltaTokens: 4_274,
-      beforeBytes: 94_628,
-      afterBytes: 113_703,
-      providerSchemaHash: '6fe36876a89b5feb76ae32809cd2b27421a64cbbe91e733d5d3c9dd206d9bf28',
-      parameterSchemaHash: '63b7d1c94185e17927431ac274756603f1634754f1cd31336d123df10ab04dab',
+      // psfn-framework-vcq8v.4 replaced notify outreach_list/outreach_choose
+      // (opportunity_id, disposition, destination_id) with outreach_send and
+      // outreach_later: -659 bytes / -115 tokens after descriptions.
+      beforeTokens: 20_129,
+      afterTokens: 24_412,
+      deltaTokens: 4_283,
+      beforeBytes: 93_988,
+      afterBytes: 113_044,
+      providerSchemaHash: '5ad2f6af6549adf0955e0d0d164b53d744c4dde7673ef74d5cd5421ec7d06045',
+      parameterSchemaHash: '5dc3b3e541eafaefd29a7c512ae8995388f257e355250eee18c8c3dae34416a5',
     });
 
     // The additional description tokens affect an uncached request. A stable

@@ -70,6 +70,8 @@ export interface OutreachOutboxStore {
    * at the dispatch layer and restart-proof.
    */
   countSentSince(input: { sinceMs: number; reasonPrefix?: string }): number;
+  /** Most recent 'sent' record time, optionally filtered by reason prefix. */
+  lastSentAt(input: { reasonPrefix?: string }): number | null;
 }
 
 const TERMINAL_PHASES = new Set<OutreachOutboxPhase>(['sent', 'blocked', 'failed', 'skipped']);
@@ -295,6 +297,15 @@ function createOutreachOutboxStoreFromHydration(
         count += 1;
       }
       return count;
+    },
+    lastSentAt({ reasonPrefix }) {
+      for (let index = records.length - 1; index >= 0; index -= 1) {
+        const record = records[index]!;
+        if (record.phase !== 'sent') continue;
+        if (reasonPrefix !== undefined && !(record.reason ?? '').startsWith(reasonPrefix)) continue;
+        return record.recordedAt;
+      }
+      return null;
     },
   };
 }

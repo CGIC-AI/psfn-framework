@@ -37,6 +37,14 @@ import {
   executeCompanionNotify,
 } from './notify-companion-handoff.js';
 import { executeCompanionCandidateConsider } from './notify-companion-candidate.js';
+import {
+  executeSocialOutreachNotify,
+  isSocialOutreachNotifyAction,
+  socialOutreachLaterParameters,
+  socialOutreachSendParameters,
+  type SocialOutreachNotifyAction,
+} from './notify-social-outreach.js';
+import type { SocialOutreachDraftRegistry } from '../intention/social-outreach-turn/drafts.js';
 import type { DisclosureLineage } from '../cogsec/disclosure/contracts.js';
 
 const DEFAULT_NTFY_TIMEOUT_MS = 8_000;
@@ -65,7 +73,7 @@ const SYSTEM_APPROVAL_REQUEST_SENDER = Object.freeze({
 export type { NotificationPort } from '../../boundary/gateway/notification-port.js';
 
 export type NotifyAction = 'brief' | 'send' | 'approval_request' | 'clarify' | 'list_dyads'
-  | 'dyad_lifecycle' | 'relay' | 'outreach_list' | 'outreach_choose';
+  | 'dyad_lifecycle' | 'relay' | SocialOutreachNotifyAction;
 export type NotifyDeliveryChannel = 'discord' | 'email';
 export type NotifyDelivery = 'ntfy' | NotifyDeliveryChannel;
 export type NtfyNotifier = NotificationPort;
@@ -691,7 +699,7 @@ function normalizeAction(value: string): NotifyAction {
     case 'send':
     case 'approval_request':
     case 'clarify': case 'list_dyads': case 'dyad_lifecycle': case 'relay':
-    case 'outreach_list': case 'outreach_choose':
+    case 'outreach_send': case 'outreach_later':
       return value.trim() as NotifyAction;
     default:
       throw new Error(`unsupported notify action: ${value}`);
@@ -942,7 +950,8 @@ export interface NotifyToolOptions {
   companionOutreach?: AgentFacingIcpAutonomyRuntime;
   companionCandidateEnabled?: boolean;
   isCompanionCandidateAuthorized?: () => boolean;
-  socialImpulseOutreach?: import('../emotion/social-impulse-outreach.js').SocialImpulseOutreachRuntime;
+  /** Live answer slots for per-contact outreach turns (vcq8v.4). */
+  socialOutreachDrafts?: SocialOutreachDraftRegistry;
   getDisclosureLineage?: () => DisclosureLineage | undefined;
 }
 const notifyToolParameters = Type.Union([
@@ -1032,29 +1041,8 @@ const notifyToolParameters = Type.Union([
       Type.Literal('block'), Type.Literal('unblock'),
     ]),
   }, { additionalProperties: false }),
-  Type.Object({
-    action: Type.Literal('outreach_list'),
-    opportunity_id: Type.String({
-      description: 'Exact qualified social-opportunity identity supplied by the runtime.',
-    }),
-  }, { additionalProperties: false }),
-  Type.Object({
-    action: Type.Literal('outreach_choose'),
-    opportunity_id: Type.String({
-      description: 'Exact qualified social-opportunity identity supplied by the runtime.',
-    }),
-    disposition: Type.Union([
-      Type.Literal('ignore'), Type.Literal('defer'), Type.Literal('contact-human'),
-      Type.Literal('contact-companion'), Type.Literal('join-room'), Type.Literal('other'),
-    ]),
-    destination_id: Type.Optional(Type.String({
-      description: 'Exact authorized destination identity returned by action=outreach_list.',
-    })),
-    intent: Type.Optional(Type.String({
-      maxLength: COMPANION_PRIVATE_INTENT_MAX_LENGTH,
-      description: 'Local instruction for the ordinary destination turn.',
-    })),
-  }, { additionalProperties: false }),
+  socialOutreachSendParameters,
+  socialOutreachLaterParameters,
   Type.Object({
     action: Type.Literal('approval_request'),
     approval_id: Type.String({ minLength: 1 }),
@@ -1104,13 +1092,13 @@ const notifyModelParameters = Type.Object({
     Type.Literal('list_dyads'),
     Type.Literal('dyad_lifecycle'),
     Type.Literal('relay'),
-    Type.Literal('outreach_list'),
-    Type.Literal('outreach_choose'),
+    Type.Literal('outreach_send'),
+    Type.Literal('outreach_later'),
   ], {
     description: 'Required notify action. Supply every field required for the selected action.',
   }),
   message: Type.Optional(Type.String({
-    description: 'Required for action=brief or action=send. Notification body text.',
+    description: 'Required for action=brief, action=send, or action=outreach_send (the words you want to send them).',
   })),
   title: Type.Optional(Type.String({ description: 'Optional title for action=brief.' })),
   priority: Type.Optional(Type.Integer({
@@ -1161,19 +1149,9 @@ const notifyModelParameters = Type.Object({
   reason_summary: Type.Optional(Type.String({
     description: 'Required private reason for action=consider.',
   })),
-  opportunity_id: Type.Optional(Type.String({
-    description: 'Required for social outreach actions.',
-  })),
-  disposition: Type.Optional(Type.Union([
-    Type.Literal('ignore'), Type.Literal('defer'), Type.Literal('contact-human'),
-    Type.Literal('contact-companion'), Type.Literal('join-room'), Type.Literal('other'),
-  ])),
-  destination_id: Type.Optional(Type.String({
-    description: 'Required for a destination-bearing outreach choice.',
-  })),
   intent: Type.Optional(Type.String({
     maxLength: COMPANION_PRIVATE_INTENT_MAX_LENGTH,
-    description: 'Required exact human-stated bytes for relay, or local intent for an outreach choice.',
+    description: 'Required exact human-stated bytes for relay.',
   })),
   approval_id: Type.Optional(Type.String({
     description: 'Required for action=approval_request.',
@@ -1242,36 +1220,11 @@ export function createNotifyTool(
         return textResultWithError(`notify: failure (${toErrorMessage(error)}).`, true);
       }
 
-      if (action === 'outreach_list' || action === 'outreach_choose') {
-        if (!options.socialImpulseOutreach) {
-          return textResultWithError('notify: social outreach is not wired in this runtime.', true);
-        }
-        try {
-          if (action === 'outreach_list') {
-            const result = await options.socialImpulseOutreach.inspect(
-              String((rawParams as { opportunity_id?: unknown }).opportunity_id ?? ''),
-            );
-            return textResult(JSON.stringify(result));
-          }
-          const params = rawParams as {
-            opportunity_id: string;
-            disposition: import('../emotion/social-impulse-outreach.js').SocialImpulseDisposition;
-            destination_id?: string;
-            intent?: string;
-          };
-          const result = await options.socialImpulseOutreach.choose({
-            opportunityId: params.opportunity_id,
-            disposition: params.disposition,
-            ...(params.destination_id ? { destinationId: params.destination_id } : {}),
-            ...(params.intent ? { intent: params.intent } : {}),
-          });
-          return textResult(JSON.stringify(result));
-        } catch (error) {
-          return textResultWithError(
-            `notify: social outreach blocked (${toErrorMessage(error)}).`,
-            true,
-          );
-        }
+      if (isSocialOutreachNotifyAction(action)) {
+        return executeSocialOutreachNotify(options.socialOutreachDrafts, {
+          action,
+          message: (rawParams as { message?: unknown }).message,
+        });
       }
 
       if (action === 'brief' || action === 'clarify') {
@@ -1363,10 +1316,10 @@ export function createNotifyTool(
       case 'dyad_lifecycle':
       case 'relay':
         return 'external.companion';
-      case 'outreach_list':
-      case 'outreach_choose':
-        // The disposition runtime performs destination-specific capability
-        // checks at commit, after re-resolving the exact authorized target.
+      case 'outreach_send':
+      case 'outreach_later':
+        // Only records the companion's answer inside her live outreach turn;
+        // delivery re-runs the canonical outbound capability and policy gates.
         return [] as const;
       case 'approval_request':
         return 'external.web';

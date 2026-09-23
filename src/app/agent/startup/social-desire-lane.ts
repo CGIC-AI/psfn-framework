@@ -1,7 +1,8 @@
 // ── Social-desire consent-moment lane (epic oth4, bead oth4.2) ──
 // Extracted from agent/main.ts (charter 12.1 god-file split, emh3p.1).
-// Per-contact durable desire crossing threshold -> companion consent moment
-// (message / defer / decline — never auto-send). Accepted consents carry
+// Per-contact durable desire crossing threshold -> the companion's own fresh
+// outreach turn in that contact's dedicated channel (vcq8v.4): she writes the
+// message, says later, or says nothing. Accepted consents carry
 // social-desire provenance through the EXISTING outbound provenance gate,
 // durable outbox, ICP candidate broker, and ProactiveOutboundDispatcher —
 // under a tight desire-outbound rate budget. Fail closed: with
@@ -11,9 +12,12 @@
 
 import type { Logger } from 'winston';
 import { CanonicalCompanionPeerValidationError, type AgentFacingIcpAutonomyRuntime } from '../../../core/icp/agent-facing-autonomy.js';
-import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
-import { createLlmSocialDesireConsentEvaluator } from '../../../core/intention/social-desire-consent-evaluator.js';
+import type { SocialImpulseDesireTarget } from '../../../core/emotion/social-impulse-outreach.js';
+import { createSocialOutreachTurnEvaluator } from '../../../core/intention/social-outreach-turn/evaluator.js';
+import type { SocialOutreachContextPorts } from '../../../core/intention/social-outreach-turn/context.js';
+import type { SocialOutreachDraftRegistry } from '../../../core/intention/social-outreach-turn/drafts.js';
+import type { SubstrateMessage } from '../../../shared/contracts/runtime-base.js';
 import {
   createSocialDesireFeltSignalWriter,
   type SocialDesireFeltSignalWriter,
@@ -31,6 +35,7 @@ import {
 } from '../../../core/intention/social-desire-human-policy.js';
 import type { OutreachOutboxStore } from '../../../core/intention/outreach-outbox.js';
 import { registerSocialDesireOutreachTask } from '../../../core/scheduler/social-desire-outreach-lane.js';
+import { createSocialDesireEvaluationQueue } from '../social-impulse-outreach-queue.js';
 import { composeCompanionDmChannelId } from '../../../shared/contracts/companion-channels.js';
 import type { ChannelType } from '../../../shared/contracts/runtime.js';
 import type { EventBus } from '../../../shared/event-bus.js';
@@ -43,7 +48,7 @@ export interface SocialDesireLaneDeps {
   /** Narrowed to the fields the lane consumes (testable without a full config). */
   schedulerConfig: Pick<SchedulerConfig, 'socialDesire' | 'episodicProcessing'>;
   scheduler: AgentSchedulerRuntime['scheduler'];
-  postTurnActions: Pick<AgentSchedulerRuntime['postTurnActions'], 'enqueue'>;
+  postTurnActions: Pick<AgentSchedulerRuntime['postTurnActions'], 'enqueue' | 'registerHandler'>;
   eventBus: EventBus;
   log: Logger;
   socialDesireStore: Awaited<ReturnType<typeof createAgentPersistenceRuntime>>['socialDesireStore'];
@@ -54,7 +59,12 @@ export interface SocialDesireLaneDeps {
   contactStore: Pick<ContactStorePort, 'getById'>;
   icpPeers: AgentFacingIcpAutonomyRuntime | undefined;
   localCompanionId: string | undefined;
-  llmProvider: LLMProviderPort;
+  /** Runs the companion's persona-loaded outreach turn (the agent loop). */
+  turns: { handleMessage(message: SubstrateMessage): Promise<unknown> };
+  sessions: SocialOutreachContextPorts['sessions'];
+  readEmotion: SocialOutreachContextPorts['readEmotion'];
+  /** Live answer slots shared with the notify tool (outreach_send / outreach_later). */
+  drafts: SocialOutreachDraftRegistry;
   companionName: string;
   /**
    * Composes the accumulation writer into the emotion/appraisal felt-signal
@@ -70,6 +80,8 @@ export interface SocialDesireLaneResult {
   socialDesireHumanDeliveryPolicy: SocialDesireHumanDeliveryPolicy | undefined;
   /** The composed accumulation writer; undefined only when the lane is disabled. */
   socialDesireFeltSignals: SocialDesireFeltSignalWriter | undefined;
+  /** Where a felt EmoSim impulse adds per-contact pressure; undefined when disabled. */
+  impulseTarget: SocialImpulseDesireTarget | undefined;
 }
 
 export function registerSocialDesireLane(deps: SocialDesireLaneDeps): SocialDesireLaneResult {
@@ -85,7 +97,6 @@ export function registerSocialDesireLane(deps: SocialDesireLaneDeps): SocialDesi
     contactStore,
     icpPeers,
     localCompanionId,
-    llmProvider,
     companionName,
   } = deps;
 
@@ -98,6 +109,7 @@ export function registerSocialDesireLane(deps: SocialDesireLaneDeps): SocialDesi
       })
     : undefined;
   let socialDesireFeltSignals: SocialDesireFeltSignalWriter | undefined;
+  let impulseTarget: SocialImpulseDesireTarget | undefined;
   if (schedulerConfig.socialDesire.enabled) {
     if (!socialDesireStore) {
       // Fail closed (psfn-framework-hrmrq.85): an enabled lane without its
@@ -135,7 +147,7 @@ export function registerSocialDesireLane(deps: SocialDesireLaneDeps): SocialDesi
         }),
       });
       const budgetGuard = socialDesireOutbound;
-      registerSocialDesireOutreachTask({
+      const outreachTask = registerSocialDesireOutreachTask({
         scheduler,
         eventBus,
         postTurnActions,
@@ -144,9 +156,16 @@ export function registerSocialDesireLane(deps: SocialDesireLaneDeps): SocialDesi
           store: socialDesireStore,
           lifecycle: schedulerConfig.socialDesire.lifecycle,
           tierSource: createContactSocialDesireTierSource(contactStore),
-          consentEvaluator: createLlmSocialDesireConsentEvaluator({
-            llmProvider,
-            characterName: companionName,
+          consentEvaluator: createSocialOutreachTurnEvaluator({
+            turns: deps.turns,
+            drafts: deps.drafts,
+            companionName,
+            context: {
+              contacts: contactStore,
+              sessions: deps.sessions,
+              readEmotion: deps.readEmotion,
+              limits: schedulerConfig.socialDesire.outreach.turnContext,
+            },
           }),
           consents: socialDesireConsents,
           maxConsentMomentsPerRun: schedulerConfig.socialDesire.outreach.maxConsentMomentsPerRun,
@@ -193,7 +212,20 @@ export function registerSocialDesireLane(deps: SocialDesireLaneDeps): SocialDesi
           ),
         },
       });
+      if (!outreachTask) {
+        throw new Error('scheduler.json socialDesire.enabled is true but the outreach task did not register');
+      }
+      const evaluationQueue = createSocialDesireEvaluationQueue({
+        actions: postTurnActions,
+        evaluate: () => outreachTask.runNow(),
+      });
+      impulseTarget = {
+        store: socialDesireStore,
+        lifecycle: schedulerConfig.socialDesire.lifecycle,
+        gain: schedulerConfig.socialDesire.impulse.gain,
+        requestEvaluation: evaluationQueue.request,
+      };
     }
   }
-  return { socialDesireOutbound, socialDesireHumanDeliveryPolicy, socialDesireFeltSignals };
+  return { socialDesireOutbound, socialDesireHumanDeliveryPolicy, socialDesireFeltSignals, impulseTarget };
 }

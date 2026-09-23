@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { FakeIntentionPool } from '../../test-support/fake-postgres-intention-pool.js';
 import { createPostgresIntentionPortsFromPool } from './postgres-adapters.js';
+import { MAX_CONTEXT_SUMMARY_CHARS } from './context-summary.js';
 
 describe('postgres intention adapters', () => {
   it('keeps connection acquisition failures before the behavioral write boundary', async () => {
@@ -202,6 +203,32 @@ describe('postgres intention adapters', () => {
     expect(await ports.concernStore.getById(lapsed.id)).toMatchObject({ status: 'resolved' });
     expect(await ports.concernStore.getById(reobserved.id)).toMatchObject({ status: 'watching' });
     expect(await ports.concernStore.getById(future.id)).toMatchObject({ status: 'watching' });
+  });
+
+  it('persists an over-long follow-up contextSummary truncated instead of rejecting it', async () => {
+    const pool = new FakeIntentionPool();
+    const ports = createPostgresIntentionPortsFromPool(pool as never, {
+      now: () => new Date('2026-03-28T02:00:00.000Z'),
+    });
+    const longSummary = 'They asked for a gentle re-check after the move. '.repeat(40);
+
+    const followUp = await ports.pendingFollowUpStore.enqueue({
+      content: 'Check in about the move.',
+      priority: 'medium',
+      timing: 'soon',
+      channelId: 'api:test',
+      channelType: 'api',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contextSummary: longSummary,
+    });
+
+    expect(longSummary.length).toBeGreaterThan(MAX_CONTEXT_SUMMARY_CHARS);
+    expect(followUp.contextSummary?.length).toBeLessThanOrEqual(MAX_CONTEXT_SUMMARY_CHARS);
+    expect(followUp.contextSummary?.endsWith('…')).toBe(true);
+    await expect(ports.pendingFollowUpStore.peek(followUp.id)).resolves.toMatchObject({
+      contextSummary: followUp.contextSummary,
+    });
   });
 
   it('persists pending follow-ups and activation state', async () => {

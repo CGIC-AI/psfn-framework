@@ -10,6 +10,7 @@ import {
   type ActiveConcernSensitivity,
 } from '../concerns.js';
 import { normalizeOptionalIcpRootInitiationId } from '../pending-follow-up-normalization.js';
+import { MAX_CONTEXT_SUMMARY_CHARS } from '../context-summary.js';
 import { CHANNEL_TYPES as RUNTIME_CHANNEL_TYPES, type ChannelType } from '../../../shared/contracts/runtime.js';
 export { clampListLimit, MAX_LIST_LIMIT } from '../list-limit.js';
 
@@ -116,7 +117,6 @@ export const MAX_CONCERN_RESOLUTION_CHARS = 400;
 export const MAX_PENDING_TEXT_CHARS = 500;
 export const MAX_PENDING_ID_CHARS = 128;
 export const MAX_PENDING_REASON_CHARS = 240;
-export const MAX_PENDING_SUMMARY_CHARS = 320;
 export const MAX_CONTACT_ID_CHARS = 160;
 export const MAX_MESSAGE_ID_CHARS = 200;
 export const MAX_RESPONSE_EXCERPT_CHARS = 240;
@@ -551,7 +551,7 @@ export function mapPendingFollowUpRow(row: PendingFollowUpRow) {
   const sourceMessageId = row.source_message_id === null ? undefined : normalizeContactId(row.source_message_id);
   const contextSummary = row.context_summary === null
     ? undefined
-    : normalizeOptionalText(row.context_summary, 'context_summary', MAX_PENDING_SUMMARY_CHARS);
+    : normalizeOptionalText(row.context_summary, 'context_summary', MAX_CONTEXT_SUMMARY_CHARS);
   const wakeConditions = decodeWakeConditions(row.wake_conditions, 'wake_conditions');
   const activatedAt = row.activated_at === null ? undefined : normalizeIsoTimestamp(row.activated_at, 'activated_at');
   const activationReason = row.activation_reason === null

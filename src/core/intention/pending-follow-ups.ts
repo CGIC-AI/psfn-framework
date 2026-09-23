@@ -3,6 +3,7 @@ import { createComponentLogger } from '../../shared/logger.js';
 import { channelsShareActiveSessionThread } from '../session/cross-channel-continuity-port.js';
 import { normalizeOptionalIcpRootInitiationId } from './pending-follow-up-normalization.js';
 import { clampListLimit as clampIntentionListLimit } from './list-limit.js';
+import { MAX_CONTEXT_SUMMARY_CHARS } from './context-summary.js';
 import type { PendingFollowUpQuarantineRecord } from './pending-follow-up-store-port.js';
 import type {
   PendingFollowUp,
@@ -118,7 +119,6 @@ export interface PendingFollowUpQuarantineRow {
 
 export const MAX_TEXT_CHARS = 500;
 export const MAX_ID_CHARS = 128;
-export const MAX_SUMMARY_CHARS = 320;
 export const MAX_REASON_CHARS = 240;
 const MAX_QUARANTINE_REASON_CHARS = 1000;
 export const MAX_QUARANTINE_SOURCE_CHARS = 128;
@@ -462,7 +462,7 @@ export function mapRow(row: PendingFollowUpRow): PendingFollowUp {
     : normalizeOptionalId(row.source_message_id);
   const contextSummary = row.context_summary === null
     ? undefined
-    : normalizeOptionalText(row.context_summary, 'context_summary', MAX_SUMMARY_CHARS);
+    : normalizeOptionalText(row.context_summary, 'context_summary', MAX_CONTEXT_SUMMARY_CHARS);
   const wakeConditions = decodeWakeConditions(row.wake_conditions, 'wake_conditions');
   const activatedAt = row.activated_at === null
     ? undefined

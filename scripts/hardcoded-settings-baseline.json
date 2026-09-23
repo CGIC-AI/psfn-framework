@@ -4633,6 +4633,12 @@
       "value": "500"
     },
     {
+      "file": "src/core/intention/context-summary.ts",
+      "name": "MAX_CONTEXT_SUMMARY_CHARS",
+      "value": "1000",
+      "note": "Code-owned storage/prompt bound for follow-up contextSummary set by operator directive (psfn-framework-vcq8v.3): one constant shared by the appraisal prompt, parser, schedule tool, and stores; over-long text is truncated, never rejected. Replaces the two 320-char limits."
+    },
+    {
       "file": "src/core/intention/list-limit.ts",
       "name": "MAX_LIST_LIMIT",
       "value": "200"
@@ -4805,11 +4811,6 @@
     },
     {
       "file": "src/core/intention/pending-follow-ups.ts",
-      "name": "MAX_SUMMARY_CHARS",
-      "value": "320"
-    },
-    {
-      "file": "src/core/intention/pending-follow-ups.ts",
       "name": "MAX_TEXT_CHARS",
       "value": "500"
     },
@@ -4902,11 +4903,6 @@
       "file": "src/core/intention/postgres-adapters/shared.ts",
       "name": "MAX_PENDING_REASON_CHARS",
       "value": "240"
-    },
-    {
-      "file": "src/core/intention/postgres-adapters/shared.ts",
-      "name": "MAX_PENDING_SUMMARY_CHARS",
-      "value": "320"
     },
     {
       "file": "src/core/intention/postgres-adapters/shared.ts",

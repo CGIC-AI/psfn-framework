@@ -4,7 +4,7 @@ import type { ChannelType } from '../../shared/contracts/runtime.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import type { Awaitable } from '../../shared/utils/types.js';
 import type { PendingFollowUpStorePort } from './pending-follow-up-store-port.js';
-import { MAX_SUMMARY_CHARS } from './pending-follow-ups.js';
+import { boundContextSummary } from './context-summary.js';
 import {
   CONCERN_ROUTE_SYSTEM_CHANNEL_ID,
   concernRouteProvenanceRefs,
@@ -141,7 +141,7 @@ export function createPendingFollowUpConcernRouteHandler(
           dueAt: new Date(dueAtMs).toISOString(),
           ...(request.contactId ? { contactId: request.contactId } : {}),
           ...(sourceMessageId ? { sourceMessageId } : {}),
-          contextSummary: buildPendingFollowUpContextSummary(request),
+          ...optionalContextSummary(buildPendingFollowUpContextSummary(request)),
         });
         if (!followUp) {
           return blockedPendingFollowUpRoute('pending follow-up backlog is full');
@@ -187,14 +187,18 @@ function buildPendingFollowUpReviewText(request: ConcernRouteRequest): string {
   return compact(`Time-bound concern ready for review: ${subject}`, MAX_ROUTE_TEXT_CHARS);
 }
 
-function buildPendingFollowUpContextSummary(request: ConcernRouteRequest): string {
+function buildPendingFollowUpContextSummary(request: ConcernRouteRequest): string | undefined {
   const provenance = concernRouteProvenanceRefs(request).join(', ');
   const parts = [
     request.summary,
     request.reason ? `Review rationale: ${request.reason}.` : '',
     provenance ? `Provenance: ${provenance}.` : '',
   ].filter(part => part.trim().length > 0);
-  return compact(parts.join(' '), MAX_SUMMARY_CHARS);
+  return boundContextSummary(parts.join(' '));
+}
+
+function optionalContextSummary(contextSummary: string | undefined): { contextSummary?: string } {
+  return contextSummary ? { contextSummary } : {};
 }
 
 function blockedPendingFollowUpRoute(reason: string): ConcernRouteHandlerResult {

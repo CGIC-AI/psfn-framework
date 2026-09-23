@@ -83,6 +83,10 @@ describe('idle-purity certification', () => {
     const durableDir = join(runtimeRoot, 'durable-state');
     const transientPath = join(durableDir, 'transient.json');
     await mkdir(durableDir);
+    // Directory timestamps advance at the kernel's coarse clock tick, so a
+    // create+delete in the same tick as the baseline snapshot is otherwise
+    // invisible. Backdating mtime makes any in-window modification observable.
+    await utimes(durableDir, new Date(1_000_000), new Date(1_000_000));
 
     await expect(certifyIdlePurity({
       runtimeRoot,

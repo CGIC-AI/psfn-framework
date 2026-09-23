@@ -866,7 +866,11 @@ export function createSubjectAuthorizedMemoryStore(
           }
           const auth = authorization(currentContext(), 'detail');
           if (!auth) deniedMutation();
-          await requireVisible(target, auth, review.subjectMemoryId);
+          // The review is queued after the write, so the next write may have
+          // superseded its subject by the time it lands; prove it through its
+          // actual superseder rather than failing a legitimate review.
+          const subjectRow = await target.getById(review.subjectMemoryId);
+          await requireVisible(target, auth, review.subjectMemoryId, subjectRow?.supersededBy);
           const candidateIds = new Set([
             ...(review.candidateMemoryIds ?? []),
             ...review.state.candidateMemoryIds,

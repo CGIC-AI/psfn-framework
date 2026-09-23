@@ -14,6 +14,9 @@ type SubjectMutationStore = Pick<
   | 'getMemorySubjectClassification'
   | 'insertMemory'
   | 'mutateAuthorizedMemorySubjects'
+  | 'persistAuthorizedMemoryWrite'
+  | 'queryAuthorizedMemorySubjects'
+  | 'updateMemory'
 >;
 
 export type WithSubjectMutationStore = <T>(
@@ -62,6 +65,70 @@ export function describeMemorySubjectMutationContract(
   timeoutMs?: number,
 ): void {
   describe(`${implementation} subject-authorized mutation contract`, () => {
+    it('proves a superseded row only through its exact superseding memory', async () => {
+      await withStore(async (store) => {
+        const currentState = { tags: ['current_state', 'workspace'] };
+        await store.insertMemory(memory('ws-old', 'contact-a', {
+          ...currentState,
+          text: 'Current workspace is /home/a/old.',
+          confidence: 0.65,
+        }), CONTRACT_EMBEDDING);
+        await store.insertMemory(memory('ws-foreign-old', 'contact-b', {
+          ...currentState,
+          text: 'Current workspace is /home/b/old.',
+          confidence: 0.65,
+        }), CONTRACT_EMBEDDING);
+        // The MemoryWriter current_state_replacement commit: the new memory
+        // lands and archives the one it replaces in one authorized write.
+        await store.persistAuthorizedMemoryWrite({
+          authorization: authorization(),
+          memory: memory('ws-new', 'contact-a', { ...currentState, text: 'Current workspace is /home/a/new.' }),
+          embedding: CONTRACT_EMBEDDING,
+          supersededMemoryIds: ['ws-old'],
+        });
+        await store.persistAuthorizedMemoryWrite({
+          authorization: authorization('bulk_mutation', { viewerContactIds: ['contact-b'] }),
+          memory: memory('ws-foreign-new', 'contact-b', { ...currentState, text: 'Current workspace is /home/b/new.' }),
+          embedding: CONTRACT_EMBEDDING,
+          supersededMemoryIds: ['ws-foreign-old'],
+        });
+        expect((await store.getById('ws-old'))?.supersededBy).toBe('ws-new');
+        const detail = authorization('detail');
+        const ids = async (selector: Parameters<SubjectMutationStore['queryAuthorizedMemorySubjects']>[0]['selector']) => {
+          const result = await store.queryAuthorizedMemorySubjects({ authorization: detail, selector });
+          return { total: result.total, ids: result.memories.map(row => row.id) };
+        };
+
+        // The ordinary detail selector never sees an archived row.
+        await expect(ids({ kind: 'detail', memoryId: 'ws-old' })).resolves.toEqual({ total: 0, ids: [] });
+        // (a) the trusted subject proves it through the correct superseding memory
+        await expect(ids({ kind: 'superseded_detail', memoryId: 'ws-old', supersededBy: 'ws-new' }))
+          .resolves.toEqual({ total: 1, ids: ['ws-old'] });
+        // (b) any other supersededBy returns nothing
+        await expect(ids({ kind: 'superseded_detail', memoryId: 'ws-old', supersededBy: 'ws-foreign-new' }))
+          .resolves.toEqual({ total: 0, ids: [] });
+        // (d) a foreign contact's archived row returns nothing, even with its true superseder
+        await expect(ids({ kind: 'superseded_detail', memoryId: 'ws-foreign-old', supersededBy: 'ws-foreign-new' }))
+          .resolves.toEqual({ total: 0, ids: [] });
+        // An active row is not a superseded row.
+        await expect(ids({ kind: 'superseded_detail', memoryId: 'ws-new', supersededBy: 'ws-new' }))
+          .resolves.toEqual({ total: 0, ids: [] });
+        // Only the detail action may use the selector.
+        await expect(store.queryAuthorizedMemorySubjects({
+          authorization: authorization('list'),
+          selector: { kind: 'superseded_detail', memoryId: 'ws-old', supersededBy: 'ws-new' },
+        })).rejects.toThrow('does not permit superseded_detail');
+        // (c) a deleted archived row returns nothing
+        await store.updateMemory('ws-old', {
+          deletedAt: 1_700_000_100_000,
+          deletedBy: 'test:contract',
+          deleteReason: 'contract deletion',
+        });
+        await expect(ids({ kind: 'superseded_detail', memoryId: 'ws-old', supersededBy: 'ws-new' }))
+          .resolves.toEqual({ total: 0, ids: [] });
+      });
+    }, timeoutMs);
+
     it.each([
       {
         name: 'an unauthorized target',

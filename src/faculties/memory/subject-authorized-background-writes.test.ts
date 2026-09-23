@@ -121,6 +121,21 @@ describe('subject-authorized background memory mutations', () => {
     ]));
   });
 
+  it('stores a review whose subject the next write superseded before the review landed', async () => {
+    const { raw, store } = setup();
+    await raw.insertMemory(memory('old', {
+      provenance: { subjectContactId: 'contact-a' },
+      supersededBy: 'new',
+    }), new Float32Array([1, 0]));
+    await raw.insertMemory(memory('new', { provenance: { subjectContactId: 'contact-a' } }), new Float32Array([1, 0]));
+    expect(raw.getById('old')?.supersededBy).toBe('new');
+    const review = buildProvenanceConfidenceReviewInput(memory('old', { confidence: 0.3 }), 1)!;
+    await runWithRequestContext(DM_CONTEXT, async () => {
+      await store.upsertMemoryMaintenanceReview!(review);
+    });
+    expect(raw.listMemoryMaintenanceReviews().map(entry => entry.subjectMemoryId)).toEqual(['old']);
+  });
+
   it('still rejects both mutations for a caller without a trusted subject', async () => {
     const { raw, store } = setup();
     await raw.insertMemory(memory('source', { provenance: { subjectContactId: 'contact-a' } }), new Float32Array([1, 0]));

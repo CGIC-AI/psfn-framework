@@ -26,7 +26,12 @@ import { persistMemorySubjectProjection } from './postgres-store/subject-project
 import {
   createSubjectAuthorizedMemoryStore,
   getSubjectAuthorizedAdminMemoryStats,
+  memorySubjectAccessContextFromCorrelation,
 } from './subject-authorized-store.js';
+import {
+  getRequestContext,
+  runWithRequestContext,
+} from '../../primitives/llm/request-context.js';
 import { isInternalMemoryArtifact } from './internal-artifacts.js';
 import {
   subjectAdminFilter,
@@ -184,6 +189,81 @@ describeMemorySubjectMutationContract(
   )),
   INTEGRATION_TIMEOUT_MS,
 );
+
+describe('postgres subject-authorized tool writer background mutations', () => {
+  it('records the supersedes link and the post-write maintenance review end to end', async () => {
+    await withMemoryDatabase(async (pool) => {
+      const store = await createPostgresMemoryStoreFromPool(pool, 4);
+      const embeddings: EmbeddingProviderPort = {
+        dims: 4,
+        embed: async () => DEFAULT_EMBEDDING,
+        embedBatch: async texts => texts.map(() => DEFAULT_EMBEDDING),
+      };
+      // The production tool writer: the subject-authorized proxy resolved from
+      // the live request context (src/app/agent/main.ts toolMemoryStore).
+      const toolStore = createSubjectAuthorizedMemoryStore(
+        store,
+        () => memorySubjectAccessContextFromCorrelation(getRequestContext()),
+      );
+      const maintenanceErrors: unknown[] = [];
+      const writer = new MemoryWriter(toolStore, embeddings, {
+        onMaintenanceError: error => maintenanceErrors.push(error),
+      });
+      const context = {
+        channelId: 'discord:dm:contact-a',
+        requesterProvenance: 'human' as const,
+        viewerMemorySubjectContactId: 'contact-a',
+      };
+
+      const { oldWrite, newWrite } = await runWithRequestContext(context, async () => {
+        const oldWrite = await writer.write({
+          text: 'Current workspace is /home/user/old.',
+          type: 'semantic',
+          confidence: 0.3,
+          tags: ['current_state', 'workspace'],
+        });
+        const newWrite = await writer.write({
+          text: 'Current workspace is /home/user/new.',
+          type: 'semantic',
+          confidence: 0.45,
+          tags: ['current_state', 'workspace'],
+        });
+        return { oldWrite, newWrite };
+      });
+      // Maintenance reviews are queued on a timer that keeps the request context.
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      expect(newWrite.action).toBe('superseded');
+      expect((await store.getById(oldWrite.memory.id))?.supersededBy).toBe(newWrite.memory.id);
+      expect(await store.getEvolutionLinksForSourceMemory(newWrite.memory.id)).toEqual([
+        expect.objectContaining({
+          targetMemoryId: oldWrite.memory.id,
+          relation: 'supersedes',
+          reason: 'memory_writer:current_state_replacement',
+        }),
+      ]);
+      expect(maintenanceErrors).toEqual([]);
+      const reviews = await store.listMemoryMaintenanceReviews();
+      // Low-confidence writes queue provenance reviews for both memories — the
+      // old one's may land after the new write superseded it.
+      expect(reviews.map(review => review.subjectMemoryId)).toEqual(
+        expect.arrayContaining([oldWrite.memory.id, newWrite.memory.id]),
+      );
+
+      // The guard still refuses the same mutations without a trusted subject.
+      await expect(toolStore.recordEvolutionLink({
+        sourceMemoryId: newWrite.memory.id,
+        targetMemoryId: oldWrite.memory.id,
+        relation: 'supersedes',
+        confidence: 0.9,
+        reason: 'untrusted',
+        sourceRef: 'test',
+        sourceType: 'conversation',
+        provenanceRefs: [],
+      })).rejects.toThrow('Memory access requires a trusted memory subject');
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+});
 
 describe('postgres memory store integration', () => {
   it('makes patched text immediately retrievable through new semantic and lexical projections', async () => {

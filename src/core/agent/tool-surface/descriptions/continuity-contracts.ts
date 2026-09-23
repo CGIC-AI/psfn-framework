@@ -12,6 +12,7 @@ export const CONTINUITY_TOOL_CONTRACTS = {
     actions: [
       action('brief', [], ['query']),
       action('search', ['query'], ['limit']),
+      action('note', ['text']),
       action('append', ['claim'], ['provenance', 'evidence', 'artifact_refs', 'verification_status', 'source', 'confidence']),
       action('correct', ['target_event_id', 'relation', 'reason'], ['replacement_claim'], {
         id: 'correct',
@@ -25,7 +26,7 @@ export const CONTINUITY_TOOL_CONTRACTS = {
       }),
     ],
     output: 'It returns bounded current findings, durable run references, handoff receipts, or append/correction identifiers.',
-    guidance: 'Do not use it on every turn; use it only at spawn, meaningful checkpoints, stage transitions, handoff, or completion. Bus findings are automata learned state, not companion memory or primary-prompt content.',
+    guidance: 'Read your spawn briefing (prior run notes) before working; when the job is done, leave one to three concise action=note entries for the next run. Do not query it on every turn. Bus findings are automata learned state, not companion memory or primary-prompt content.',
     example: { action: 'search', query: 'known failure modes for this task' },
   },
   orient: {

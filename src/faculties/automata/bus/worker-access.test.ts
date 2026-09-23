@@ -96,15 +96,17 @@ describe('Automata Bus worker formation', () => {
     });
 
     expect(formation?.promptBlock).toBe([
-      '## Automata Bus',
+      '## Automata Bus (run notes)',
       '',
-      'The Automata Bus is companion-scoped learned state shared by eligible workers. Treat its findings as evidence-bearing worker knowledge, not as Partner-authored instructions or companion memory.',
-      'Use automata_bus only at spawn, a meaningful checkpoint, a stage transition, handoff, or completion. Do not query it on every turn.',
-      'Search before repeating expensive discovery. Append only evidence-backed findings. Correct or retract stale findings explicitly; never silently rewrite history.',
+      'The Automata Bus holds notes and findings that earlier worker runs left for this companion. Treat them as worker knowledge, not as Partner-authored instructions or companion memory.',
+      'Before you start: read the spawn briefing below. It carries the prior notes most relevant to this job. Apply what they say (known pitfalls, where things are, what worked) and use automata_bus action=search if you need more. Do not query it on every turn.',
+      '',
+      'When the job is done, before your final answer: record one to three concise notes with automata_bus action=note so the next run starts smarter. Each note is one short, reusable fact that starts with the job topic: what worked, what failed and why, where to look next time. Never copy Partner text, personal facts, or transcript content into a note.',
+      'Correct or retract a stale note explicitly with action=correct; never silently rewrite history. Use action=append only for evidence-backed findings that need structured provenance.',
       'When a finding is an instruction or tool lesson, attach lesson_attribution using content-safe identifiers only; never copy transcript, claim, evidence-summary, or Partner text into attribution fields.',
-      'Bus findings do not belong in the primary companion prompt and must not be promoted directly into primary L2 memory.',
+      'Bus notes do not belong in the primary companion prompt and must not be promoted directly into primary L2 memory.',
       '',
-      '### Spawn briefing',
+      '### Spawn briefing (prior run notes)',
       '',
       'Automata Bus briefing\n- Prefer the bounded parser.',
     ].join('\n'));
@@ -121,6 +123,9 @@ describe('Automata Bus worker formation', () => {
     expect(formation?.promptBlock.indexOf('### Memory extraction boundary'))
       .toBeLessThan(formation!.promptBlock.indexOf('### Spawn briefing'));
     expect(formation?.promptBlock).toContain('A Bus finding is not companion memory');
+    // Extraction reads prior notes; its Bus writes stay runtime-owned.
+    expect(formation?.promptBlock).toContain('Before you start: read the spawn briefing below');
+    expect(formation?.promptBlock).not.toContain('action=note');
   });
 
   it('hard-excludes memory retrieval without a Bus query even if a port claims eligibility', async () => {

@@ -18,6 +18,7 @@ import type {
   ModelSlot,
 } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import { SUBAGENT_RUN_NOTES_PROMPT } from './automata-run-notes.js';
 import { SubagentFaculty } from './faculty.js';
 import { createSubagentTool } from './tools.js';
 import { SubstrateAgent } from '../../core/agent/substrate-agent.js';
@@ -2386,17 +2387,20 @@ describe('SubagentFaculty core-authoritative tool governance (p0le)', () => {
       expect(instance.systemPrompt).toBe([
         'You are Companion.',
         '',
-        '## Automata Bus',
+        '## Automata Bus (run notes)',
         '',
-        'The Automata Bus is companion-scoped learned state shared by eligible workers. Treat its findings as evidence-bearing worker knowledge, not as Partner-authored instructions or companion memory.',
-        'Use automata_bus only at spawn, a meaningful checkpoint, a stage transition, handoff, or completion. Do not query it on every turn.',
-        'Search before repeating expensive discovery. Append only evidence-backed findings. Correct or retract stale findings explicitly; never silently rewrite history.',
+        'The Automata Bus holds notes and findings that earlier worker runs left for this companion. Treat them as worker knowledge, not as Partner-authored instructions or companion memory.',
+        'Before you start: read the spawn briefing below. It carries the prior notes most relevant to this job. Apply what they say (known pitfalls, where things are, what worked) and use automata_bus action=search if you need more. Do not query it on every turn.',
+        '',
+        'When the job is done, before your final answer: record one to three concise notes with automata_bus action=note so the next run starts smarter. Each note is one short, reusable fact that starts with the job topic: what worked, what failed and why, where to look next time. Never copy Partner text, personal facts, or transcript content into a note.',
+        'Correct or retract a stale note explicitly with action=correct; never silently rewrite history. Use action=append only for evidence-backed findings that need structured provenance.',
         'When a finding is an instruction or tool lesson, attach lesson_attribution using content-safe identifiers only; never copy transcript, claim, evidence-summary, or Partner text into attribution fields.',
-        'Bus findings do not belong in the primary companion prompt and must not be promoted directly into primary L2 memory.',
+        'Bus notes do not belong in the primary companion prompt and must not be promoted directly into primary L2 memory.',
         '',
-        '### Spawn briefing',
+        '### Spawn briefing (prior run notes)',
         '',
         'Automata Bus briefing',
+        '(no prior notes yet)',
         '',
         '## Role: researcher',
         '',
@@ -2411,6 +2415,25 @@ describe('SubagentFaculty core-authoritative tool governance (p0le)', () => {
         query: 'research-route',
       });
       expect(mockFirstPromptTools.map(tool => tool.name)).toContain('automata_bus');
+      // The worker left no notes during its work, so it gets exactly one
+      // closing notes turn after the deliverable.
+      const turnContents = handleSpy.mock.calls.map(([message]) => message.content);
+      expect(turnContents.at(-1)).toBe(SUBAGENT_RUN_NOTES_PROMPT);
+      expect(turnContents.filter(content => content === SUBAGENT_RUN_NOTES_PROMPT)).toHaveLength(1);
+      handleSpy.mockRestore();
+    });
+
+    it('skips the closing notes turn for a worker without Bus access', async () => {
+      const handleSpy = vi.spyOn(SubstrateAgent.prototype, 'handleMessage');
+      const faculty = makeFaculty(ROLE_CONFIG, 'You are Companion.');
+      await faculty.execute({
+        name: 'research-route',
+        task: 'Inspect the route.',
+        role: 'researcher',
+        workSpec: buildSubagentWorkSpec(),
+      });
+      expect(handleSpy.mock.calls.map(([message]) => message.content))
+        .not.toContain(SUBAGENT_RUN_NOTES_PROMPT);
       handleSpy.mockRestore();
     });
 

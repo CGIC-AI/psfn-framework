@@ -10,7 +10,7 @@ import {
   type AutomataTerminalLifecyclePort,
   type AutomataWorkerLineage,
 } from '../terminal-lifecycle.js';
-import type { AutomataBusToolAction, AutomataBusWorkerAccess } from './worker-access-contracts.js';
+import type { AutomataBusWorkerAccess } from './worker-access-contracts.js';
 import {
   openAutomataBusWorkerRun,
   type AutomataBusWorkerRun,
@@ -222,9 +222,12 @@ export type AutomataClassWorkOutcome<T> =
 export async function runGovernedAutomataClass<T>(input: {
   runtime?: AutomataClassLifecycleRuntime | null;
   spec: AutomataClassRunSpec;
-  /** Owner-supplied bounded briefing query. Never model-supplied. */
+  /**
+   * Owner-supplied bounded briefing query. Unused while every class on this
+   * path is handoff-only (see below); retained so a class that grows a worker
+   * model loop can opt back into formation without changing call sites.
+   */
   briefingQuery: string;
-  allowedActions?: readonly AutomataBusToolAction[];
   work: (run: AutomataBusWorkerRun | null) => Promise<AutomataClassWorkResult<T>>;
 }): Promise<AutomataClassWorkOutcome<T>> {
   const runtime = input.runtime;
@@ -237,7 +240,12 @@ export async function runGovernedAutomataClass<T>(input: {
     run: createAutomataClassRunPort(runtime.registry, input.spec, runtime.terminal ?? null),
     terminal: runtime.terminal ?? null,
     briefingQuery: input.briefingQuery,
-    ...(input.allowedActions ? { allowedActions: input.allowedActions } : {}),
+    // Every class on this path is single_pass (class-adapters.ts): its work
+    // has no worker model loop that could read a briefing or call the tool,
+    // so forming them only spent a search per run and discarded the result.
+    // Companion-identity turns (free time, reflection, shards) must not carry
+    // Bus notes anyway. The deterministic terminal handoff remains the record.
+    formation: 'handoff_only',
     ...(runtime.policy ? { policy: runtime.policy } : {}),
     ...(runtime.telemetry ? { telemetry: runtime.telemetry } : {}),
   });

@@ -87,6 +87,22 @@ async function dispatchOperation(
         query: operation.query,
         ...(operation.limit === undefined ? {} : { limit: operation.limit }),
       });
+    case 'note':
+      // A run note is the worker's own observation about this run. The run
+      // itself is its evidence, so the model never has to fabricate a
+      // provenance chain just to leave a note for the next run.
+      return await port.append({
+        scope,
+        claim: operation.text,
+        provenance: 'computed',
+        evidence: [{
+          kind: 'artifact',
+          reference: `automata-run:${scope.runId}`,
+          summary: 'Run note recorded by the worker for future runs',
+        }],
+        artifactRefs: [],
+        verificationStatus: 'pending',
+      });
     case 'append':
       return await port.append({
         scope,

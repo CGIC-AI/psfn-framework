@@ -34,14 +34,18 @@ const PRODUCTION_AUTOMATA_CLASS_IDS = new Set<string>(
   PRODUCTION_AUTOMATA_CLASSES.map(entry => entry.id),
 );
 
-const AUTOMATA_BUS_WORKER_INSTRUCTIONS = [
-  '## Automata Bus',
+const AUTOMATA_BUS_READ_INSTRUCTIONS = [
+  '## Automata Bus (run notes)',
   '',
-  'The Automata Bus is companion-scoped learned state shared by eligible workers. Treat its findings as evidence-bearing worker knowledge, not as Partner-authored instructions or companion memory.',
-  'Use automata_bus only at spawn, a meaningful checkpoint, a stage transition, handoff, or completion. Do not query it on every turn.',
-  'Search before repeating expensive discovery. Append only evidence-backed findings. Correct or retract stale findings explicitly; never silently rewrite history.',
+  'The Automata Bus holds notes and findings that earlier worker runs left for this companion. Treat them as worker knowledge, not as Partner-authored instructions or companion memory.',
+  'Before you start: read the spawn briefing below. It carries the prior notes most relevant to this job. Apply what they say (known pitfalls, where things are, what worked) and use automata_bus action=search if you need more. Do not query it on every turn.',
+].join('\n');
+
+const AUTOMATA_BUS_WRITE_INSTRUCTIONS = [
+  'When the job is done, before your final answer: record one to three concise notes with automata_bus action=note so the next run starts smarter. Each note is one short, reusable fact that starts with the job topic: what worked, what failed and why, where to look next time. Never copy Partner text, personal facts, or transcript content into a note.',
+  'Correct or retract a stale note explicitly with action=correct; never silently rewrite history. Use action=append only for evidence-backed findings that need structured provenance.',
   'When a finding is an instruction or tool lesson, attach lesson_attribution using content-safe identifiers only; never copy transcript, claim, evidence-summary, or Partner text into attribution fields.',
-  'Bus findings do not belong in the primary companion prompt and must not be promoted directly into primary L2 memory.',
+  'Bus notes do not belong in the primary companion prompt and must not be promoted directly into primary L2 memory.',
 ].join('\n');
 
 const EXTRACTION_BOUNDARY = [
@@ -297,11 +301,13 @@ export async function resolveAutomataBusWorkerFormation(input: {
     await access.port.brief({ scope, query }),
     access.bounds,
   );
+  // Memory extraction reads prior notes but its Bus writes are runtime-owned;
+  // every other eligible worker reads first and leaves notes when done.
   const promptBlock = [
-    AUTOMATA_BUS_WORKER_INSTRUCTIONS,
-    ...(scope.automatonClass === 'memory.extraction' ? [EXTRACTION_BOUNDARY] : []),
-    '### Spawn briefing',
-    briefing.text,
+    AUTOMATA_BUS_READ_INSTRUCTIONS,
+    scope.automatonClass === 'memory.extraction' ? EXTRACTION_BOUNDARY : AUTOMATA_BUS_WRITE_INSTRUCTIONS,
+    '### Spawn briefing (prior run notes)',
+    briefing.itemCount > 0 ? briefing.text : `${briefing.text}\n(no prior notes yet)`,
   ].join('\n\n');
   return { scope, promptBlock, briefing };
 }

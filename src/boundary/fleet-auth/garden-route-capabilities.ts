@@ -276,6 +276,7 @@ const fixedRoutes: readonly RouteTuple[] = [
   ['GET', '/api/admin/shared-workspace/artifact'], ['POST', '/api/admin/shared-workspace/proposals'],
   [['GET', 'POST', 'PATCH'], '/api/admin/skills'], ['POST', '/api/admin/skills/toggle'],
   ['GET', '/api/admin/incidents'],
+  ['GET', '/api/admin/attention-digest'],
   ['GET', '/api/admin/escalations'], ['POST', '/api/admin/escalations/:id/resolve'],
   ['GET', '/api/admin/subsystem-health'],
   ['GET', '/api/admin/partner-affect/shadow'], ['GET', '/api/admin/partner-affect/observations'],

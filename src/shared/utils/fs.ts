@@ -1,7 +1,9 @@
 import {
   closeSync,
+  chmodSync,
   constants,
   existsSync,
+  fchmodSync,
   fsyncSync,
   linkSync,
   lstatSync,
@@ -19,7 +21,10 @@ export type DurableWriteStage = 'after_file_sync' | 'after_publish' | 'after_dir
 export interface DurableWriteOptions {
   /** Publish without replacing any existing final path. */
   exclusive?: boolean;
-  /** POSIX mode for the newly published file; defaults to owner-only. */
+  /**
+   * Exact POSIX mode for the newly published file; defaults to owner-only.
+   * Applied with fchmod after create so the process umask cannot narrow it.
+   */
   mode?: number;
   faultInjection?: (stage: DurableWriteStage, path: string) => void;
 }
@@ -72,11 +77,15 @@ export function writeFileDurableAtomicSync(
   const temporary = `${path}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
   let descriptor: number | null = null;
   try {
+    const mode = options.mode ?? 0o600;
     descriptor = openSync(
       temporary,
       constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
-      options.mode ?? 0o600,
+      mode,
     );
+    // open(2) masks the requested mode with the process umask; a canonical
+    // owner-file mode must be published exactly, whatever the umask.
+    fchmodSync(descriptor, mode);
     writeFileSync(descriptor, content);
     fsyncSync(descriptor);
     options.faultInjection?.('after_file_sync', path);
@@ -125,6 +134,8 @@ export function writeJsonAtomic(path: string, value: unknown, options: WriteJson
       encoding: 'utf-8',
       ...(options.mode === undefined ? {} : { mode: options.mode }),
     });
+    // The create mode is umask-masked; an explicit mode must be exact.
+    if (options.mode !== undefined) chmodSync(tmpPath, options.mode);
     renameSync(tmpPath, path);
   } catch (error) {
     try {

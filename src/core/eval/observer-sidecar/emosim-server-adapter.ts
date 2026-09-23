@@ -15,7 +15,7 @@
  *   OCEAN is applied through the server's personality endpoint so a retuned
  *   temperament reaches a running session without losing its history.
  * - Drive policy: sessions are created with hunger, thirst, and sleep pressure
- *   disabled (neutral). PSFN observes no eating, drinking, or sleeping, so
+ *   disabled (neutral). The runtime observes no eating, drinking, or sleeping, so
  *   those stocks could only peg at 1.0 and bias every emotion. Social,
  *   stimulation, and esteem needs stay live and are regulated by real
  *   interactions: a verified inbound contact is sent as `external_actor`
@@ -80,7 +80,7 @@ export const DEFAULT_EMOSIM_AFTER_TICK_DELAY_MS = EMOSIM_MIN_READ_CADENCE_MS;
 
 /**
  * Session-wide emo_sim `drive_config` for companion sessions. Physiological
- * stocks PSFN never observes are disabled; the rest inherit the session drive
+ * stocks the runtime never observes are disabled; the rest inherit the session drive
  * clock (the server's --drivescale, owned by the deployment chart).
  */
 const EMOSIM_COMPANION_DRIVE_CONFIG = Object.freeze({

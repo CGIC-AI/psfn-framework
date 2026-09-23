@@ -21,8 +21,8 @@
  */
 import { createHash } from 'node:crypto';
 
-const OBSERVER_SOCIAL_CONTACT_DOMAIN = 'psfn.observer.social-contact.v1';
-const EMOSIM_EXTERNAL_ACTOR_DOMAIN = 'psfn.emosim.external-actor.v1';
+const OBSERVER_SOCIAL_CONTACT_DOMAIN = 'companion-runtime.observer.social-contact.v1';
+const EMOSIM_EXTERNAL_ACTOR_DOMAIN = 'companion-runtime.emosim.external-actor.v1';
 const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/u;
 
 export interface EmoSimExternalActor {

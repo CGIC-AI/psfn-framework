@@ -90,13 +90,19 @@ describe('full callable catalog schema token cost', () => {
       // psfn-framework-ae7c9 added the play_clip verb and its guidance: +159 bytes / +38 tokens.
       // 2nsfo's wiki actions joined the structured contract (description text only):
       // +129 bytes / +31 tokens on the post-description payload.
-      beforeTokens: 20_253,
-      afterTokens: 24_527,
-      deltaTokens: 4_274,
-      beforeBytes: 94_628,
-      afterBytes: 113_703,
-      providerSchemaHash: '6fe36876a89b5feb76ae32809cd2b27421a64cbbe91e733d5d3c9dd206d9bf28',
-      parameterSchemaHash: '63b7d1c94185e17927431ac274756603f1634754f1cd31336d123df10ab04dab',
+      // psfn-framework-vcq8v.9 added the automata_bus note action, its text
+      // field, and the read-notes-first / write-notes-last guidance:
+      // +108 bytes / +27 tokens before, +213 bytes / +53 tokens after.
+      // psfn-framework-vcq8v.4 replaced notify outreach_list/outreach_choose
+      // (opportunity_id, disposition, destination_id) with outreach_send and
+      // outreach_later: -659 bytes / -115 tokens after descriptions.
+      beforeTokens: 20_156,
+      afterTokens: 24_465,
+      deltaTokens: 4_309,
+      beforeBytes: 94_096,
+      afterBytes: 113_257,
+      providerSchemaHash: 'a7c9245efcb9b9f6d07af4c0fc0ecf6842b0718c2503891e7c3c4eb7257da43a',
+      parameterSchemaHash: 'be2a1c6b02af0f255ba6c8e821b3eeae0ba7f72ef1f0ec7682d07e9c35699fcd',
     });
 
     // The additional description tokens affect an uncached request. A stable

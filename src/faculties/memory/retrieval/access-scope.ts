@@ -1,4 +1,4 @@
-import { getRequestContext } from '../../../primitives/llm/request-context.js';
+import { getRequestContext, isCompanionSelfReflectionContext } from '../../../primitives/llm/request-context.js';
 import { FREE_TIME_CHANNEL_PREFIX } from '../../../core/session/session-id.js';
 import type { RetrievalAccessScope } from '../types.js';
 
@@ -8,7 +8,6 @@ export const COMPANION_SELF_REFLECTION_RETRIEVAL_PURPOSE =
 export const COMPANION_SELF_CREATION_RETRIEVAL_PURPOSE =
   'free_time.creation.memory_retrieval';
 
-const INTERNAL_REFLECTION_CHANNEL_PREFIX = 'internal:reflection:';
 // Any workspace-resolved free-time continuity session (lane-independent) shares
 // this canonical partition prefix; the specific segment is not part of the
 // self-creation trust check.
@@ -41,18 +40,9 @@ export function resolveAuthorizedRetrievalAccessScope(
   }
 
   const context = getRequestContext();
-  const trustedHeartbeatReflection = channelId.startsWith(INTERNAL_REFLECTION_CHANNEL_PREFIX)
-    && channelId.length > INTERNAL_REFLECTION_CHANNEL_PREFIX.length
-    && context?.channelId === channelId
-    && context.requesterProvenance === 'self_directed'
-    && context.callType === 'background'
-    && context.originType === 'background'
-    && context.purpose === COMPANION_SELF_REFLECTION_RETRIEVAL_PURPOSE
-    && context.originStage === COMPANION_SELF_REFLECTION_RETRIEVAL_PURPOSE;
-
-  if (!trustedHeartbeatReflection) {
+  if (context?.channelId !== channelId || !isCompanionSelfReflectionContext(context)) {
     throw new Error(
-      'companion_self_reflection memory access requires a trusted heartbeat reflection context',
+      'companion_self_reflection memory access requires a trusted private reflection context',
     );
   }
 

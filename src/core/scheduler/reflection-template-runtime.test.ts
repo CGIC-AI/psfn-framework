@@ -785,12 +785,18 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
           dueAt: Date.parse('2026-04-01T12:00:00.000Z'),
           priority: 'high',
         }],
+        listPendingConcernCandidates: async () => [{
+          id: 'candidate-7', text: 'Ask Ari how the move went', priority: 'medium', createdAt: '2026-04-01T09:00:00.000Z',
+        }],
       },
     });
 
     const result = await runtime.runTemplateNow('daily-review', {
       deferIfBusy: false,
     });
+    // vcq8v.5: pending concern candidates are put to her in the review.
+    expect(capturedPrompts[0]).toContain('[Possible Concerns Waiting For You]');
+    expect(capturedPrompts[0]).toContain('- candidate-7 (medium): Ask Ari how the move went');
 
     expect(result.reflection).toContain('still needs an explicit follow-up');
     expect(handleMessage).toHaveBeenCalledTimes(1);
@@ -827,12 +833,12 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
     expect(capturedPrompts).toHaveLength(3);
     expect(capturedPrompts[0]).toContain('Stage: evidence');
     expect(capturedPrompts[0]).toContain('[Reflection Introspection Policy]');
-    expect(capturedPrompts[0]).toContain('tool_use_mode: bounded_read_only_introspection');
+    expect(capturedPrompts[0]).toContain('tool_use_mode: full_companion_tools');
     expect(capturedPrompts[0]).toContain('memory_retrieval_modes: default, temporal');
     expect(capturedPrompts[0]).toContain('memory_access_scope: companion_self_reflection');
     expectCuratedReflectionStarter(capturedPrompts[0] ?? '', 'Day');
     expect(capturedPrompts[0]).toContain('trust-filtered contact memory');
-    expect(capturedPrompts[0]).toContain('[Read-only Tool Grounding]');
+    expect(capturedPrompts[0]).toContain('[Reflection Tool Results]');
     expect(capturedPrompts[0]).toContain('Read-only tool grounding found the unresolved recovery follow-up.');
     // Character-card persona fields stay out of the reflection input. Identity
     // belongs in the authoritative system stack, not this user message.
@@ -1306,10 +1312,10 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
       }));
       const prompt = capturedPrompts[0];
       const introspectionPolicySection = getPromptSection(prompt, '[Reflection Introspection Policy]');
-      expect(introspectionPolicySection).toContain('tool_use_mode: bounded_read_only_introspection');
+      expect(introspectionPolicySection).toContain('tool_use_mode: full_companion_tools');
       expect(introspectionPolicySection).toContain('memory_retrieval_modes: default, temporal');
       expect(introspectionPolicySection).toContain('memory_access_scope: companion_self_reflection');
-      expect(introspectionPolicySection).toContain('overlay_tool_activation: forbidden');
+      expect(introspectionPolicySection).toContain('Reflection imposes no additional tool or action restrictions.');
       expect(introspectionPolicySection).not.toContain('analysis_workbench');
       expect(introspectionPolicySection).toContain('memory action=episode_search');
       expect(introspectionPolicySection).toContain('memory action=timeline');

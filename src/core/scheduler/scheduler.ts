@@ -5,10 +5,11 @@
 import type { EventBus } from '../../shared/event-bus.js';
 import type {
   DailyRecurringCadence,
-  FleetOrdinalStagger,
+  FleetSlotStagger,
   HourlyRecurringCadence,
   RecurringCadence,
   ScheduledTask,
+  ScheduledTaskHandler,
   SchedulerConfig,
   TaskState,
   WeeklyRecurringCadence,
@@ -86,7 +87,7 @@ function validateRecurringCadence(taskId: string, cadence: RecurringCadence | un
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
-const WALL_CLOCK_MINUTE_MS = 60_000;
+const WEEK_MS = 7 * DAY_MS;
 
 // Floor for the adaptive next-wake delay. Guarantees the self-rescheduling timer
 // can never spin into a busy-loop even when a task is already overdue: an overdue
@@ -183,14 +184,34 @@ function validateFleetStagger(task: ScheduledTask): void {
   ) {
     throw new Error(`Task "${task.id}" fleetStagger.manifestOrdinal must identify a fleet member`);
   }
+  if (!Number.isSafeInteger(stagger.windowMs) || stagger.windowMs < 1) {
+    throw new Error(`Task "${task.id}" fleetStagger.windowMs must be a positive safe integer`);
+  }
+  // An offset reaching the next slot would make consecutive slots overlap and
+  // silently skip runs, so the window must fit inside one cadence period.
+  const periodMs = cadencePeriodMs(task.cadence);
+  if (stagger.windowMs >= periodMs) {
+    throw new Error(
+      `Task "${task.id}" fleetStagger.windowMs (${stagger.windowMs}) must be shorter than its `
+      + `${task.cadence.kind} cadence period (${periodMs})`,
+    );
+  }
 }
 
-function fleetStaggeredSlotStart(slotStart: number, stagger?: FleetOrdinalStagger): number {
+function cadencePeriodMs(
+  cadence: HourlyRecurringCadence | DailyRecurringCadence | WeeklyRecurringCadence,
+): number {
+  if (cadence.kind === 'hourly') return HOUR_MS;
+  return cadence.kind === 'daily' ? DAY_MS : WEEK_MS;
+}
+
+function fleetStaggeredSlotStart(slotStart: number, stagger?: FleetSlotStagger): number {
   if (!stagger) return slotStart;
   return staggerFleetOrdinalWithinWindow({
-    ...stagger,
+    manifestOrdinal: stagger.manifestOrdinal,
+    fleetSize: stagger.fleetSize,
     windowStartMs: slotStart,
-    windowEndMs: slotStart + WALL_CLOCK_MINUTE_MS,
+    windowEndMs: slotStart + stagger.windowMs,
   });
 }
 
@@ -210,7 +231,7 @@ function getNextSlotStart(
 function getCurrentStaggeredSlotStart(
   now: number,
   cadence: HourlyRecurringCadence | DailyRecurringCadence | WeeklyRecurringCadence,
-  stagger?: FleetOrdinalStagger,
+  stagger?: FleetSlotStagger,
 ): number {
   return fleetStaggeredSlotStart(getCurrentSlotStart(now, cadence), stagger);
 }
@@ -218,7 +239,7 @@ function getCurrentStaggeredSlotStart(
 function getNextStaggeredSlotStart(
   now: number,
   cadence: HourlyRecurringCadence | DailyRecurringCadence | WeeklyRecurringCadence,
-  stagger?: FleetOrdinalStagger,
+  stagger?: FleetSlotStagger,
 ): number {
   const currentBase = getCurrentSlotStart(now, cadence);
   const currentDue = fleetStaggeredSlotStart(currentBase, stagger);
@@ -231,7 +252,7 @@ function isWallClockTaskDue(
   now: number,
   lastRun: number,
   cadence: HourlyRecurringCadence | DailyRecurringCadence | WeeklyRecurringCadence,
-  stagger?: FleetOrdinalStagger,
+  stagger?: FleetSlotStagger,
 ): boolean {
   const currentSlotStart = getCurrentStaggeredSlotStart(now, cadence, stagger);
   return now >= currentSlotStart && lastRun < currentSlotStart;
@@ -254,6 +275,25 @@ export interface SchedulerRuntimeOptions {
    * entrypoint has claimed.
    */
   healthEventSource?: HealthEventSource;
+  /**
+   * Per-attempt handler budget (scheduler.json
+   * `healthDetectors.stuckJobs.schedulerTaskBudgetMs` in the agent runtime).
+   * When an attempt outlives it the scheduler aborts the handler's signal,
+   * records the attempt failed with a `handler_budget_exceeded` annotation, and
+   * moves on to the next due task. The task stays `active` — and therefore out
+   * of rotation — until the aborted handler actually settles, so it can never
+   * run concurrently with itself. Absent, handlers run unbounded.
+   */
+  taskBudgetMs?: number;
+}
+
+/** Error text recorded on an attempt that outlived the scheduler task budget. */
+export const HANDLER_BUDGET_EXCEEDED = 'handler_budget_exceeded';
+
+/** A budget-failed attempt whose handler has not settled yet. */
+interface OverdueAttempt {
+  entry: RuntimeScheduledTask;
+  controller: AbortController;
 }
 
 export class Scheduler {
@@ -263,7 +303,10 @@ export class Scheduler {
   private onEligibilityDecision?: (decision: EligibilityDecision) => void;
   private runProtectedTask?: SchedulerRuntimeOptions['runProtectedTask'];
   private healthEventSource?: HealthEventSource;
+  private taskBudgetMs?: number;
   private tasks = new Map<string, RuntimeScheduledTask>();
+  /** Budget-failed attempts still settling, keyed by task id (never on the entry). */
+  private overdueAttempts = new Map<string, OverdueAttempt>();
   private tickTimer: ReturnType<typeof setTimeout> | null = null;
   /** Absolute epoch (ms) the currently armed wake will fire at, or null when disarmed. */
   private wakeAt: number | null = null;
@@ -284,6 +327,17 @@ export class Scheduler {
     this.onEligibilityDecision = runtimeOptions.onEligibilityDecision;
     this.runProtectedTask = runtimeOptions.runProtectedTask;
     this.healthEventSource = runtimeOptions.healthEventSource;
+    if (runtimeOptions.taskBudgetMs !== undefined) {
+      if (!Number.isSafeInteger(runtimeOptions.taskBudgetMs) || runtimeOptions.taskBudgetMs <= 0) {
+        throw new Error('Scheduler taskBudgetMs must be a positive safe integer');
+      }
+      this.taskBudgetMs = runtimeOptions.taskBudgetMs;
+    }
+  }
+
+  /** Task ids whose budget-failed handler is still settling. */
+  listOverdueTaskIds(): string[] {
+    return [...this.overdueAttempts.keys()];
   }
 
   updateConfig(config: Partial<SchedulerConfig>): void {
@@ -317,10 +371,14 @@ export class Scheduler {
    * slot-start check treats any older last-run as "not yet run this slot").
    * Re-registration with an updated lastRunAt does not re-fire, so restart or
    * replay never duplicates a recovered slot.
+   *
+   * `phaseOffsetMs` (relative cadences with `skipFirstRun` only) delays the
+   * first run — and therefore the whole poll phase — by the given offset, so
+   * fleet members registered in the same instant do not poll in lockstep.
    */
   register(
     task: ScheduledTask | ProtectedScheduledTask,
-    opts?: { skipFirstRun?: boolean; lastRunAt?: number },
+    opts?: { skipFirstRun?: boolean; lastRunAt?: number; phaseOffsetMs?: number },
   ): void {
     if (this.tasks.has(task.id)) {
       throw new Error(`Task "${task.id}" is already registered`);
@@ -343,8 +401,20 @@ export class Scheduler {
       }
     }
 
+    if (opts?.phaseOffsetMs !== undefined) {
+      if (!Number.isSafeInteger(opts.phaseOffsetMs) || opts.phaseOffsetMs < 0) {
+        throw new Error(`Task "${task.id}" phaseOffsetMs must be a non-negative safe integer`);
+      }
+      if (task.type !== 'every' || isWallClockCadence(task.cadence) || opts.skipFirstRun !== true) {
+        throw new Error(
+          `Task "${task.id}" phaseOffsetMs requires a relative "every" cadence registered with skipFirstRun`,
+        );
+      }
+    }
+
     const now = Date.now();
-    const seededLastRun = opts?.lastRunAt ?? (opts?.skipFirstRun ? now : 0);
+    const seededLastRun = opts?.lastRunAt
+      ?? (opts?.skipFirstRun ? now + (opts.phaseOffsetMs ?? 0) : 0);
     // Wall-clock cadences anchor to fixed slots, not a relative interval. A
     // persisted lastRunAt (state that outlived this process) must seed the
     // anchor so a restart that lands AFTER the slot recovers the missed slot
@@ -636,48 +706,143 @@ export class Scheduler {
       delete entry.lastError;
       delete entry.lastErrorAt;
       delete entry.lastDeniedReason;
-      try {
-        if (entry.availability && this.runProtectedTask) {
-          await this.runProtectedTask(entry.availability, entry.handler);
-        } else {
-          await entry.handler();
-        }
-        entry.lastFinishedAt = Date.now();
-        entry.lastOutcome = 'succeeded';
-        await this.eventBus.emit('schedule.task.run', {
-          taskId: id,
-          taskName: entry.name,
-          type: entry.type,
-        });
-      } catch (err) {
-        const errorText = String(err);
-        entry.lastFinishedAt = Date.now();
-        entry.lastOutcome = 'failed';
-        entry.lastError = errorText;
-        entry.lastErrorAt = entry.lastFinishedAt;
-        delete entry.lastDeniedReason;
-        log.error(`Task "${entry.name}" error`, { error: errorText });
-        await this.eventBus.emit('schedule.task.failed', {
-          taskId: id,
-          taskName: entry.name,
-          type: entry.type,
-          error: errorText,
-          timestamp: entry.lastFinishedAt,
-        });
-        // Scheduler health emitter. `schedule.task.failed` carries the rendered
-        // error for the operator log; the health plane deliberately does not —
-        // the task is identified only by a stable digest of its id, so a
-        // detector can count repeats of the SAME task without the stream
-        // learning a task name or an error string.
-        await this.emitTaskFailureHealthEvent(id, entry.lastFinishedAt);
-      }
-
-      if (entry.type === 'one-shot') {
-        entry.state = 'complete';
-      } else {
-        entry.state = 'idle';
-      }
+      await this.runAttempt(id, entry);
     }
+  }
+
+  /**
+   * Run one attempt. Ticks stay serial — lanes such as free time rely on one
+   * handler finishing before the next due task starts — but a handler that
+   * outlives the task budget is aborted, recorded failed, and detached so the
+   * tick continues. The detached attempt keeps its task `active` until it
+   * settles, which is what guarantees single-flight per task id.
+   */
+  private async runAttempt(id: string, entry: RuntimeScheduledTask): Promise<void> {
+    const controller = new AbortController();
+    const handler: ScheduledTaskHandler = entry.handler;
+    // Start the handler synchronously (as before) while still turning a sync
+    // throw into a rejected attempt.
+    const startNow = (start: () => void | Promise<void>): Promise<void> => {
+      try {
+        return Promise.resolve(start());
+      } catch (error) {
+        return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    };
+    const invoke = (): Promise<void> => startNow(() => handler({ signal: controller.signal }));
+    const protectedRun = entry.availability ? this.runProtectedTask : undefined;
+    const availability = entry.availability;
+    const attempt = protectedRun && availability
+      ? startNow(() => protectedRun(availability, invoke))
+      : invoke();
+    const settled = attempt.then(
+      () => ({ ok: true as const }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
+
+    const budgetMs = this.taskBudgetMs;
+    let budgetTimer: ReturnType<typeof setTimeout> | undefined;
+    const expired = budgetMs === undefined
+      ? null
+      : new Promise<'expired'>(resolve => {
+          budgetTimer = setTimeout(() => resolve('expired'), budgetMs);
+        });
+    const first = expired ? await Promise.race([settled, expired]) : await settled;
+    if (budgetTimer !== undefined) clearTimeout(budgetTimer);
+
+    if (first === 'expired') {
+      await this.failOverdueAttempt(id, entry, controller, budgetMs!);
+      void settled
+        .then(outcome => this.settleOverdueAttempt(id, entry, outcome))
+        .catch((error: unknown) => {
+          log.error('Budget-failed scheduler task settlement bookkeeping failed', {
+            taskId: id,
+            error: String(error),
+          });
+        });
+      return;
+    }
+
+    if (first.ok) {
+      entry.lastFinishedAt = Date.now();
+      entry.lastOutcome = 'succeeded';
+      await this.eventBus.emit('schedule.task.run', {
+        taskId: id,
+        taskName: entry.name,
+        type: entry.type,
+      });
+    } else {
+      await this.recordAttemptFailure(id, entry, String(first.error), Date.now());
+    }
+    entry.state = entry.type === 'one-shot' ? 'complete' : 'idle';
+  }
+
+  private async recordAttemptFailure(
+    id: string,
+    entry: RuntimeScheduledTask,
+    errorText: string,
+    failedAt: number,
+    options: { finished?: boolean } = {},
+  ): Promise<void> {
+    if (options.finished !== false) entry.lastFinishedAt = failedAt;
+    entry.lastOutcome = 'failed';
+    entry.lastError = errorText;
+    entry.lastErrorAt = failedAt;
+    delete entry.lastDeniedReason;
+    log.error(`Task "${entry.name}" error`, { error: errorText });
+    await this.eventBus.emit('schedule.task.failed', {
+      taskId: id,
+      taskName: entry.name,
+      type: entry.type,
+      error: errorText,
+      timestamp: failedAt,
+    });
+    // Scheduler health emitter. `schedule.task.failed` carries the rendered
+    // error for the operator log; the health plane deliberately does not —
+    // the task is identified only by a stable digest of its id, so a
+    // detector can count repeats of the SAME task without the stream
+    // learning a task name or an error string.
+    await this.emitTaskFailureHealthEvent(id, failedAt);
+  }
+
+  /**
+   * Budget expiry: ask the handler to stop and account for the attempt now.
+   * `lastFinishedAt` stays unset — the handler has not finished — and the task
+   * stays `active`, so `active` + `lastOutcome=failed` (with `lastErrorAt` at
+   * or after `lastRunAt`) means "budget-failed, still settling".
+   */
+  private async failOverdueAttempt(
+    id: string,
+    entry: RuntimeScheduledTask,
+    controller: AbortController,
+    budgetMs: number,
+  ): Promise<void> {
+    const reason = `${HANDLER_BUDGET_EXCEEDED}: exceeded ${budgetMs}ms; handler aborted`;
+    this.overdueAttempts.set(id, { entry, controller });
+    controller.abort(new Error(reason));
+    await this.recordAttemptFailure(id, entry, reason, Date.now(), { finished: false });
+  }
+
+  private settleOverdueAttempt(
+    id: string,
+    entry: RuntimeScheduledTask,
+    outcome: { ok: true } | { ok: false; error: unknown },
+  ): void {
+    const overdue = this.overdueAttempts.get(id);
+    if (overdue?.entry === entry) this.overdueAttempts.delete(id);
+    const settledAt = Date.now();
+    // The attempt was already accounted as failed at budget expiry; a late
+    // settlement only records when the handler actually let go.
+    log.warn('Budget-failed scheduler task settled', {
+      taskId: id,
+      taskName: entry.name,
+      settledOk: outcome.ok,
+      ...(outcome.ok ? {} : { error: String(outcome.error) }),
+    });
+    entry.lastFinishedAt = settledAt;
+    if (this.tasks.get(id) !== entry) return;
+    entry.state = entry.type === 'one-shot' ? 'complete' : 'idle';
+    this.requestWake(this.taskNextDueAt(settledAt, entry));
   }
 
   /**
@@ -726,7 +891,7 @@ export class Scheduler {
 
   /** Register the heartbeat as a special 'every' task */
   registerHeartbeat(
-    handler: () => void | Promise<void>,
+    handler: ScheduledTaskHandler,
     eligibility?: EligibilityRequirements,
   ): void {
     this.register({

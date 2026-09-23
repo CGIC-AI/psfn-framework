@@ -7,7 +7,7 @@
  * /fleet surface and none of them imply that a companion is selected.
  */
 
-export type FleetView = 'info' | 'usage' | 'costs' | 'firewall';
+export type FleetView = 'info' | 'attention' | 'usage' | 'costs' | 'firewall';
 
 export interface FleetViewDestination {
   readonly id: FleetView;
@@ -20,6 +20,11 @@ export const FLEET_VIEW_DESTINATIONS: readonly FleetViewDestination[] = [
     id: 'info',
     label: 'Cluster health',
     description: 'Live companion health and posture',
+  },
+  {
+    id: 'attention',
+    label: "What's broken",
+    description: 'Open incidents, failures, and degraded lanes per companion',
   },
   {
     id: 'usage',

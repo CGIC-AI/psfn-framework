@@ -484,12 +484,13 @@ describe('morning wake lane (simulated clock, real session manager)', () => {
       scheduler,
       sessionManager: mgr,
       config: makeWakeConfig({ refresher: { enabled: false } }),
-      fleetScheduleStagger: { manifestOrdinal: 2, fleetSize: 5 },
+      fleetScheduleStagger: { manifestOrdinal: 2, fleetSize: 5, windowMs: 3_600_000 },
     });
 
     expect(scheduler.getTask(TEMPORAL_WAKEUP_MORNING_TASK_ID)?.fleetStagger).toEqual({
       manifestOrdinal: 2,
       fleetSize: 5,
+      windowMs: 3_600_000,
     });
   });
 

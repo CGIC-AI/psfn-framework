@@ -567,6 +567,9 @@ export class EpisodeSynthesisLane {
       sourceMessageId: action.sourceMessageId,
       synthesis,
     });
+    if (synthesis.segmentationFailedChunkCount > 0) {
+      throw new Error('Episode topic segmentation failed; unprocessed source remains retryable');
+    }
     this.emitGateEvent({
       sessionId,
       channelId,

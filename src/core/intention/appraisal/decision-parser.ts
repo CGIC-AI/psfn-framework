@@ -13,6 +13,7 @@ import type {
 } from './types.js';
 import { normalizeConcernPriority } from './input-normalization.js';
 import { isRecord, parseOptionalDueAt } from './shared.js';
+import { boundContextSummary } from '../context-summary.js';
 
 function normalizePriority(value: unknown): IntentionDecisionPriority {
   if (value === 'low' || value === 'medium' || value === 'high') return value;
@@ -90,9 +91,11 @@ function parseFollowUpPayload(value: unknown): IntentionFollowUpDecision | undef
     : undefined;
   const authorId = typeof value.authorId === 'string' ? value.authorId.trim() : '';
   const authorName = typeof value.authorName === 'string' ? value.authorName.trim() : '';
+  // Truncated, never rejected: an over-long summary must not discard the
+  // whole (already paid-for) appraisal decision batch.
   const contextSummary = typeof value.contextSummary === 'string'
-    ? value.contextSummary.trim()
-    : '';
+    ? boundContextSummary(value.contextSummary)
+    : undefined;
   const pendingFollowUpId = typeof value.pendingFollowUpId === 'string'
     ? value.pendingFollowUpId.trim()
     : '';

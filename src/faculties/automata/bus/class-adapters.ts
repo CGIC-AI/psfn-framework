@@ -4,10 +4,13 @@ import type { ProductionAutomataClassId } from '../registry-contract.js';
  * How a governed class uses the Bus once its run is open.
  *
  * `single_pass` classes leave the deterministic terminal handoff the wrapper
- * records for them and nothing else; their work is one bounded pass with no
- * model turn that could usefully search or append mid-run. `bounded_loop`
- * classes additionally carry the governed `automata_bus` tool into their own
- * already-bounded agent turns. Neither mode owns a turn budget: the class's
+ * records for them and nothing else: no spawn briefing is queried and no tool
+ * is formed (`formation: 'handoff_only'`), because their work has no worker
+ * model loop that could read prior notes or write new ones, and several of
+ * them are companion-identity turns the Bus must never enter. `bounded_loop`
+ * classes read their prior run notes from the spawn briefing and carry the
+ * governed `automata_bus` tool into their own already-bounded agent turns to
+ * leave notes for the next run. Neither mode owns a turn budget: the class's
  * existing worker logic still bounds its own model calls.
  */
 type AutomataClassBusMode = 'single_pass' | 'bounded_loop';

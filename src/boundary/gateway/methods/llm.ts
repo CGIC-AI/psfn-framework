@@ -704,7 +704,10 @@ function requireModelDiscovery(
   runtime: GatewayMethodRuntime,
 ): NonNullable<GatewayMethodRuntime['modelDiscovery']> {
   if (!runtime.modelDiscovery) {
-    throw new Error('Gateway model discovery is unavailable.');
+    throw new JSONRPCErrorException(
+      'Gateway model discovery is unavailable.',
+      GatewayErrors.MODEL_DISCOVERY_UNCONFIGURED,
+    );
   }
   return runtime.modelDiscovery;
 }

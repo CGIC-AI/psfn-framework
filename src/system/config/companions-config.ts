@@ -20,6 +20,8 @@ import {
   type CredentialReference,
 } from '../../shared/contracts/credential-contracts.js';
 import { assertValidPostgresRoleName } from '../../persistence/postgres.js';
+import type { EmoSimPersonalitySettings } from '../../shared/contracts/runtime.js';
+import { normalizeEmoSimPersonality } from './emosim-personality-config.js';
 
 export const COMPANIONS_FILE_NAME = 'companions.json';
 export const COMPANIONS_SEED_FILE_NAME = 'companions.seed.json';
@@ -68,6 +70,7 @@ const OBSERVER_EVAL_SIDECAR_BINDING_KEYS = [
   'sessionLabel',
   'agentName',
   'persistenceRootDir',
+  'personality',
 ] as const;
 
 const COMPANIONS_ROOT_KEYS = ['postgres', 'companions'] as const;
@@ -123,6 +126,8 @@ interface CompanionObserverEvalSidecarBinding {
   sessionLabel: string;
   agentName: string;
   persistenceRootDir: string;
+  /** Companion-owned emo_sim Big Five; required so no companion shares a default subject. */
+  personality: EmoSimPersonalitySettings;
 }
 
 export interface CompanionsFleetConfig {
@@ -371,6 +376,11 @@ function validateObserverEvalSidecarBinding(
     persistenceRootDir: resolveObserverPersistenceRoot(
       normalize(persistenceRootDir),
       `${field}.persistenceRootDir`,
+    ),
+    personality: normalizeEmoSimPersonality(
+      raw.personality,
+      `${field}.personality`,
+      COMPANIONS_ERROR_PREFIX,
     ),
   };
 }

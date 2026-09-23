@@ -52,6 +52,7 @@ export function resolveRuntimeSchedulerConfig(
       listLimit: persisted.humanEscalation.listLimit,
       retention: { ...persisted.humanEscalation.retention },
     },
+    fleetStagger: { ...persisted.fleetStagger },
     artifactLifecycle: { ...persisted.artifactLifecycle },
     episodicProcessing: { ...persisted.episodicProcessing },
     nearTurnMemory: {
@@ -118,7 +119,10 @@ export function resolveRuntimeSchedulerConfig(
       outreach: {
         ...persisted.socialDesire.outreach,
         budget: { ...persisted.socialDesire.outreach.budget },
+        contactPacing: { ...persisted.socialDesire.outreach.contactPacing },
+        turnContext: { ...persisted.socialDesire.outreach.turnContext },
       },
+      impulse: { ...persisted.socialDesire.impulse },
     },
     intentionFollowUp: { ...persisted.intentionFollowUp },
     icpAutonomy: {

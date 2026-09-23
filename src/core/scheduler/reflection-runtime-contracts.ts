@@ -2,6 +2,7 @@ import type {
   PostTurnActionCandidate,
   SubstrateMessage,
 } from '../../shared/contracts/runtime.js';
+import type { ConcernCandidateReviewPort, PendingConcernCandidate } from '../intention/concern-candidate-prompt.js';
 import type { CapabilityTier } from '../../system/capabilities/tier-types.js';
 import type { CompositionalPolicyConfig } from '../../system/config/runtime-config-contracts.js';
 import type {
@@ -26,7 +27,7 @@ import type { AutomataClassLifecycleRuntime } from '../../faculties/automata/bus
 import type { NearTurnMemoryScopeClassifierPort } from '../../faculties/memory/near-turn-memory-lane.js';
 import type { ConversationalActivityWorksetPort } from '../session/conversational-activity-workset.js';
 import type { FleetMaintenanceCoordinator } from './fleet-maintenance-coordinator.js';
-import type { FleetOrdinalStagger } from './types.js';
+import type { FleetSlotStagger } from './types.js';
 import type { ProactiveOutboundDispatcher } from '../intention/proactive-outbound.js';
 import type { OutreachOutboxStore } from '../intention/outreach-outbox.js';
 import type { SocialDesireOutboundRuntime } from '../intention/social-desire-outreach.js';
@@ -50,7 +51,9 @@ import type {
   LongHorizonFollowUpInput,
 } from '../intention/runtime-wiring.js';
 import type { PendingFollowUpStorePort } from '../intention/pending-follow-up-store-port.js';
+import type { IntentionFollowUpDestinationResolver } from '../intention/follow-up-destination.js';
 import type { CareReminderStorePort } from '../intention/care-reminders.js';
+import type { ConcernStorePort } from '../intention/concern-store-port.js';
 import type { ScheduledPromptStorePort } from './scheduled-prompt-store-port.js';
 import type { PostTurnActionRuntime } from '../agent/post-turn-action-runtime.js';
 import type { BackgroundMaintenanceRegistrar } from './background-maintenance.js';
@@ -119,7 +122,7 @@ export interface ReflectionRuntimeOptions {
   memoryWriter?: Pick<MemoryWriter, 'write'>;
   promptRegistry?: PromptRegistryStatePort | null;
   reflectionStore?: ReflectionMetacognitionJournalStore;
-  sessionManager?: Pick<SessionManager, 'resolveSessionChannelId' | 'getRecentMessages'> & Partial<Pick<
+  sessionManager?: Pick<SessionManager, 'resolveSessionChannelId' | 'getRecentMessages' | 'getRecentMessagesAtOrBefore'> & Partial<Pick<
     SessionManager,
     'getConversationEvidenceWindow' | 'recordSystemMessage' | 'recordAssistantMessage'
   >>;
@@ -134,6 +137,14 @@ export interface ReflectionRuntimeOptions {
     channelId: string;
     canonicalContactKey?: string;
   }) => Promise<readonly ActiveConcernSnapshot[]> | readonly ActiveConcernSnapshot[];
+  /**
+   * Durable concern candidates still waiting for a decision (vcq8v.5). Scheduled
+   * reflection, heartbeat check-ins, free time, and sleeptime show them to the
+   * companion so reviewing them is part of work that already happens.
+   */
+  listPendingConcernCandidates?: () => Promise<readonly PendingConcernCandidate[]>;
+  /** Lets the nightly sleeptime review keep or let go of pending candidates (vcq8v.5). */
+  concernCandidateReview?: ConcernCandidateReviewPort;
   getRecentResolvedConcerns?: (input: {
     channelId: string;
     canonicalContactKey?: string;
@@ -155,6 +166,7 @@ export interface ReflectionRuntimeOptions {
     formationVAD?: { valence: number; arousal: number; dominance: number };
     originIcpRootInitiationId?: string;
   }) => Promise<IntentionFollowUpDisposition | undefined> | IntentionFollowUpDisposition | undefined;
+  resolveIntentionFollowUpDestination?: IntentionFollowUpDestinationResolver;
   getPendingFollowUpsForResurfacing?: (input: {
     channelId: string;
     canonicalContactKey?: string;
@@ -212,6 +224,7 @@ export interface ReflectionRuntimeOptions {
     observedAtMs?: number;
   }) => Promise<void> | void;
   coreMemoryStore?: Pick<CoreMemoryStore, 'getSnapshot' | 'rethink'>;
+  resolvedConcernStore?: Pick<ConcernStorePort, 'listRecentlyResolvedConcerns'>;
   /** JSON-owned near-turn lane cadence (scheduler.json `nearTurnMemory`). */
   nearTurnMemoryCadence?: NearTurnMemoryCadenceConfig;
   /**
@@ -247,7 +260,7 @@ export interface ReflectionRuntimeOptions {
     retryDelayMs: number;
   };
   /** Stable fleet position for lightweight wall-clock task spreading. */
-  fleetScheduleStagger?: FleetOrdinalStagger;
+  fleetScheduleStagger?: FleetSlotStagger;
   /** Companion aliases for deterministic relevance classification. */
   companionNames?: readonly string[];
   /** Companion author ids (e.g. Discord bot id) for mention detection. */

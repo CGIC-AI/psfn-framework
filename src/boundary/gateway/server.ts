@@ -423,7 +423,7 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
    */
   eventBus: EventBus;
   /** JSON-owner quiet-hours gate evaluated before any shared-device model call. */
-  sharedSatelliteQuietHoursAllows?: (nowMs: number) => boolean;
+  sharedSatelliteQuietHoursAllows?: (nowMs: number, companionId: string) => boolean;
 }
 
 type IcpQueuedInvalidationReason =
@@ -2877,6 +2877,18 @@ export class GatewayServer {
     }
   }
 
+  /** Local readiness of the same owner used by API requests, without sending RPC. */
+  isApiReady(): boolean {
+    try {
+      if (this.multiCompanion.enabled) this.resolveCompanionAgent('api');
+      else this.resolveReadyAgentConnection();
+      return true;
+    } catch {
+      // Route resolution rejects absent, unready, stale, or unbound owners.
+      return false;
+    }
+  }
+
   /**
    * Send an RPC request to the agent and await its response. This is the
    * gateway API-surface request path (api.chat.completion, api.health, …):
@@ -3483,7 +3495,7 @@ export class GatewayServer {
             || explicitHumanAvailabilityAllows),
         fatigueAllows,
         quietHoursAllows: isExplicitHumanInbound
-          || this.options.sharedSatelliteQuietHoursAllows?.(nowMs) === true,
+          || this.options.sharedSatelliteQuietHoursAllows?.(nowMs, companionId) === true,
         restAllows: availabilityLeaseIsAbsent
           || ((isExplicitHumanInbound || availabilityState !== 'resting')
             && availabilityState !== 'do_not_disturb'),

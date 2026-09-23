@@ -1,409 +1,162 @@
 import { describe, expect, it, vi } from 'vitest';
+import { DEFAULT_SOCIAL_DESIRE_CONFIG } from '../../system/config/scheduler-config/social-desire.js';
+import {
+  createInMemorySocialDesireBackend,
+  createSocialDesireStorePort,
+} from '../intention/social-desire-store-port.js';
+import type { SocialDesire } from '../intention/social-desire.js';
 import type { EmoSimProactivityImpulse } from './emosim-proactivity-port.js';
 import {
-  SOCIAL_IMPULSE_DISPOSITIONS,
   createSocialImpulseOutreachRuntime,
-  type SocialImpulseOutreachDestination,
-  type SocialImpulseOutreachRecord,
+  type SocialImpulseLedgerRecord,
+  type SocialImpulseOutreachMode,
   type SocialImpulseOutreachStorePort,
 } from './social-impulse-outreach.js';
 
 const COMPANION_ID = '11111111-1111-4111-8111-111111111111';
-const DYAD_ID = '22222222-2222-4222-8222-222222222222';
-const PEER_COMPANION_ID = '33333333-3333-4333-8333-333333333333';
-const FIRED_AT_MS = 1_780_000_000_000;
+const T0 = Date.parse('2026-09-23T15:00:00.000Z');
+const IMPULSE_ID = `felt-impulse:would_message:${T0}`;
 
-function impulse(): EmoSimProactivityImpulse {
+function impulse(overrides: Partial<EmoSimProactivityImpulse> = {}): EmoSimProactivityImpulse {
   return {
     schemaVersion: 1,
     impulseVersion: 'emosim-proactivity.impulse.v1',
     kind: 'would_message',
     companionId: COMPANION_ID,
-    source: { model: 'derived-model', version: '1.0.0' },
+    source: { model: 'test', version: '1' },
     lineage: {
       schemaVersion: 1,
-      inputId: 'sanitized-input-1',
-      projectionVersion: 'projection-v1',
-      privacyClass: 'restricted',
+      inputId: 'input-1',
+      projectionVersion: 'v1',
+      privacyClass: 'content_redacted',
       rawContentRedacted: true,
     },
-    firstCrossingMs: FIRED_AT_MS,
-    firedAtMs: FIRED_AT_MS,
-    thresholdProfile: {
-      profileId: 'profile-a',
-      socialNeedThreshold: 0.7,
-      attachmentIntensityThreshold: 0.8,
-      sustainMs: 10,
-      cooldownMs: 20,
-    },
-    dedupeKey: `felt-impulse:would_message:${FIRED_AT_MS}`,
-    correlationId: `felt-impulse:would_message:${FIRED_AT_MS}`,
-    confidence: 0.9,
+    firstCrossingMs: T0,
+    firedAtMs: T0,
+    thresholdProfile: {} as EmoSimProactivityImpulse['thresholdProfile'],
+    dedupeKey: IMPULSE_ID,
+    correlationId: IMPULSE_ID,
+    confidence: 0.5,
     availability: 'available',
     authority: 'qualified_source_fire',
+    ...overrides,
   };
 }
 
-function destinations(): SocialImpulseOutreachDestination[] {
-  return [
-    {
-      kind: 'human_dm',
-      destinationId: 'human:contact-a:discord:dm-a',
-      contactId: 'contact-a',
-      displayLabel: 'A trusted person',
-      channelId: 'dm-a',
-      channelType: 'discord',
-      dyadId: null,
-    },
-    {
-      kind: 'open_companion_dyad',
-      destinationId: `companion-dyad:${DYAD_ID}`,
-      contactId: 'contact-b',
-      displayLabel: 'A companion peer',
-      channelId: `companion-dm:${COMPANION_ID}:${PEER_COMPANION_ID}`,
-      channelType: 'companion',
-      dyadId: DYAD_ID,
-    },
-    {
-      kind: 'companion_first_contact',
-      destinationId: 'companion-first:contact-c',
-      contactId: 'contact-c',
-      displayLabel: 'A new companion peer',
-      channelId: null,
-      channelType: 'companion',
-      dyadId: null,
-    },
-    {
-      kind: 'room',
-      destinationId: 'room:discord:room-a',
-      displayLabel: 'A Discord room',
-      channelId: 'room-a',
-      channelType: 'discord',
-      dyadId: null,
-    },
-    {
-      kind: 'room',
-      destinationId: 'room:buzz:room-b',
-      displayLabel: 'A Buzz room',
-      channelId: 'room-b',
-      channelType: 'buzz',
-      dyadId: null,
-    },
-  ];
-}
-
-function memoryStore(): SocialImpulseOutreachStorePort & { records: Map<string, SocialImpulseOutreachRecord> } {
-  const records = new Map<string, SocialImpulseOutreachRecord>();
+function memoryLedger(): SocialImpulseOutreachStorePort & { rows: Map<string, SocialImpulseLedgerRecord> } {
+  const rows = new Map<string, SocialImpulseLedgerRecord>();
   return {
-    records,
-    async listRecoverable(companionId) {
-      return [...records.values()].filter(record => record.companionId === companionId
-        && (record.state === 'pending' || record.state === 'queued')).map(record => structuredClone(record));
+    rows,
+    async recordImpulse(record) {
+      const prior = rows.get(record.impulseId);
+      if (prior) return { created: false, record: { ...prior } };
+      rows.set(record.impulseId, { ...record });
+      return { created: true, record: { ...record } };
     },
-    async beginExecution(opportunityId, bindingHash, atMs) {
-      const record = records.get(opportunityId);
-      if (!record || record.state !== 'queued' || record.bindingHash !== bindingHash) return false;
-      records.set(opportunityId, { ...record, state: 'chosen', updatedAtMs: atMs });
-      return true;
-    },
-    async createOpportunity(record) {
-      const prior = records.get(record.opportunityId);
-      if (prior) return { created: false, record: structuredClone(prior) };
-      records.set(record.opportunityId, structuredClone(record));
-      return { created: true, record: structuredClone(record) };
-    },
-    async getOpportunity(opportunityId) {
-      const record = records.get(opportunityId);
-      return record ? structuredClone(record) : null;
-    },
-    async claimDisposition(input) {
-      const record = records.get(input.opportunityId);
-      if (!record) return { outcome: 'unavailable' };
-      if (record.bindingHash) {
-        return record.bindingHash === input.bindingHash
-          ? { outcome: 'replayed', record: structuredClone(record) }
-          : { outcome: 'conflict', record: structuredClone(record) };
-      }
-      const claimed: SocialImpulseOutreachRecord = {
-        ...record,
-        state: input.executionIntent ? 'queued' : 'chosen',
-        disposition: input.disposition,
-        destination: input.destination ? structuredClone(input.destination) : null,
-        bindingHash: input.bindingHash,
-        executionIntent: input.executionIntent ?? null,
-        originIcpRootInitiationId: record.originIcpRootInitiationId ?? input.originIcpRootInitiationId ?? null,
-        updatedAtMs: input.claimedAtMs,
-      };
-      records.set(record.opportunityId, claimed);
-      return { outcome: 'claimed', record: structuredClone(claimed) };
-    },
-    async finalize(input) {
-      const record = records.get(input.opportunityId);
-      if (!record || record.bindingHash !== input.bindingHash) {
-        throw new Error('finalize lost its disposition binding');
-      }
-      const finalized = {
-        ...record,
+    async settleImpulse(input) {
+      const prior = rows.get(input.impulseId);
+      if (!prior || prior.state !== 'received') throw new Error('lost received row');
+      const settled = {
+        ...prior,
         state: input.state,
-        executionIntent: null,
+        boostedContactCount: input.boostedContactCount,
         reasonCode: input.reasonCode ?? null,
-        updatedAtMs: input.finalizedAtMs,
-      } satisfies SocialImpulseOutreachRecord;
-      records.set(record.opportunityId, finalized);
-      return structuredClone(finalized);
+        updatedAtMs: input.settledAtMs,
+      };
+      rows.set(input.impulseId, settled);
+      return { ...settled };
     },
   };
 }
 
-function harness(mode: 'off' | 'shadow' | 'on' = 'on') {
-  const store = memoryStore();
-  const runDispositionOpportunity = vi.fn(async () => {});
-  const execute = vi.fn(async () => ({ outcome: 'delivered' as const }));
-  const listDestinations = vi.fn(async () => destinations());
+function desire(contactId: string, warmPressure: number): SocialDesire {
+  const at = new Date(T0).toISOString();
+  return {
+    contactId, warmPressure, repairPressure: 0, pressureAnchorAt: at,
+    lastWarmFeltAt: at, lastWarmTickAt: at, tickCount: 1, absorbedSignalCount: 0,
+    tierAtLastTick: 'friend', reinforcedConcernIds: [], createdAt: at,
+  };
+}
+
+function setup(mode: SocialImpulseOutreachMode, desires: SocialDesire[] = [desire('contact-1', 0.4)]) {
+  const ledger = memoryLedger();
+  const store = createSocialDesireStorePort(createInMemorySocialDesireBackend(desires));
+  const requestEvaluation = vi.fn(async () => undefined);
   const runtime = createSocialImpulseOutreachRuntime({
     companionId: COMPANION_ID,
-    store,
+    store: ledger,
     getMode: () => mode,
-    listDestinations,
-    runDispositionOpportunity,
-    execute,
-    now: () => FIRED_AT_MS + 100,
+    getDesireTarget: () => ({
+      store,
+      lifecycle: DEFAULT_SOCIAL_DESIRE_CONFIG.lifecycle,
+      gain: 0.4,
+      requestEvaluation,
+    }),
+    now: () => T0,
   });
-  return { runtime, store, runDispositionOpportunity, execute, listDestinations };
+  return { ledger, store, requestEvaluation, runtime };
 }
 
-describe('social impulse outreach disposition', () => {
-  it('recovers a queued exact choice after queue admission fails without replaying an ambiguous execution', async () => {
-    const store = memoryStore();
-    const enqueueExecution = vi.fn<(_id: string) => Promise<void>>()
-      .mockRejectedValueOnce(new Error('queue persistence unavailable'))
-      .mockResolvedValue(undefined);
-    const execute = vi.fn(async () => ({ outcome: 'delivered' as const }));
-    const options = {
-      companionId: COMPANION_ID, store, getMode: () => 'on' as const,
-      listDestinations: async () => destinations(),
-      runDispositionOpportunity: async () => {}, enqueueExecution, execute,
-      now: () => FIRED_AT_MS + 100,
-    };
-    const runtime = createSocialImpulseOutreachRuntime(options);
-    await runtime.onImpulse(impulse());
-    await expect(runtime.choose({
-      opportunityId: impulse().correlationId, disposition: 'contact-human',
-      destinationId: 'human:contact-a:discord:dm-a', intent: 'A private exact intent.',
-    })).rejects.toThrow('queue persistence unavailable');
-    const queued = store.records.get(impulse().correlationId)!;
-    expect(queued).toMatchObject({ state: 'queued', executionIntent: 'A private exact intent.' });
-    const restarted = createSocialImpulseOutreachRuntime(options);
-    await restarted.recoverPending();
-    expect(enqueueExecution).toHaveBeenCalledTimes(2);
-    await expect(restarted.executeQueued(queued.opportunityId)).resolves.toMatchObject({ outcome: 'delivered' });
-    await restarted.executeQueued(queued.opportunityId);
-    expect(execute).toHaveBeenCalledOnce();
-
-    store.records.set(queued.opportunityId, { ...queued, state: 'chosen' });
-    await restarted.recoverPending();
-    expect(enqueueExecution).toHaveBeenCalledTimes(2);
-    await expect(restarted.executeQueued(queued.opportunityId)).resolves.toMatchObject({
-      outcome: 'suppressed', reasonCode: 'execution_outcome_unknown',
-    });
-    expect(execute).toHaveBeenCalledOnce();
-  });
-
-  it('retries an unfinished disposition after the source handoff failed', async () => {
-    const { runtime, runDispositionOpportunity, store } = harness();
-    runDispositionOpportunity.mockRejectedValueOnce(new Error('Agent turn ownership cannot be re-entered by the active run'));
-
-    await expect(runtime.onImpulse(impulse())).rejects.toThrow('cannot be re-entered');
-    expect(store.records.get(impulse().correlationId)?.state).toBe('pending');
-    await runtime.onImpulse({ ...impulse(), firedAtMs: FIRED_AT_MS + 1000 });
-
-    expect(runDispositionOpportunity).toHaveBeenCalledTimes(2);
-    expect(runDispositionOpportunity).toHaveBeenLastCalledWith(expect.objectContaining({
-      firedAtMs: FIRED_AT_MS,
-    }));
-  });
-
-  it('creates exactly one content-free opportunity with the complete bounded choice set', async () => {
-    const { runtime, runDispositionOpportunity } = harness();
-    const first = await runtime.onImpulse(impulse());
-    const replay = await runtime.onImpulse(impulse());
-
-    expect(first.outcome).toBe('created');
-    expect(replay.outcome).toBe('replayed');
-    expect(runDispositionOpportunity).toHaveBeenCalledTimes(2);
-    expect(runDispositionOpportunity).toHaveBeenCalledWith(expect.objectContaining({
-      opportunityId: impulse().correlationId,
-      dispositions: SOCIAL_IMPULSE_DISPOSITIONS,
-    }));
-    expect(JSON.stringify(runDispositionOpportunity.mock.calls)).not.toContain('raw private');
-  });
-
-  it('off records no actuator and does not open a disposition turn', async () => {
-    const { runtime, runDispositionOpportunity, execute } = harness('off');
+describe('social impulse -> per-contact pressure', () => {
+  it('raises live per-contact pressure once and requests that contact\'s evaluation', async () => {
+    const { runtime, store, requestEvaluation, ledger } = setup('on');
     const result = await runtime.onImpulse(impulse());
-    expect(result).toMatchObject({ outcome: 'off', record: { state: 'off' } });
-    expect(runDispositionOpportunity).not.toHaveBeenCalled();
-    expect(execute).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ outcome: 'applied', replayed: false });
+    expect(result.record.boostedContactCount).toBe(1);
+    expect((await store.getByContactId('contact-1'))!.warmPressure).toBeCloseTo(0.4 + 0.4 * 0.5, 10);
+    expect(requestEvaluation).toHaveBeenCalledWith(IMPULSE_ID);
+
+    const replay = await runtime.onImpulse(impulse());
+    expect(replay).toMatchObject({ outcome: 'applied', replayed: true });
+    expect((await store.getByContactId('contact-1'))!.warmPressure).toBeCloseTo(0.6, 10);
+    expect(requestEvaluation).toHaveBeenCalledTimes(1);
+    expect(ledger.rows.size).toBe(1);
   });
 
-  it('shadow records would-send without invoking a destination executor', async () => {
-    const { runtime, execute } = harness('shadow');
-    await runtime.onImpulse(impulse());
-    const result = await runtime.choose({
-      opportunityId: impulse().correlationId,
-      disposition: 'contact-human',
-      destinationId: 'human:contact-a:discord:dm-a',
-      intent: 'Say hello in my own words.',
+  it('never re-applies an impulse that was interrupted before settlement', async () => {
+    const { runtime, ledger, store } = setup('on');
+    ledger.rows.set(IMPULSE_ID, {
+      impulseId: IMPULSE_ID, companionId: COMPANION_ID, firstCrossingMs: T0, firedAtMs: T0,
+      confidence: 0.5, modeAtReceipt: 'on', state: 'received', boostedContactCount: 0,
+      reasonCode: null, createdAtMs: T0, updatedAtMs: T0,
     });
-    expect(result).toMatchObject({ outcome: 'would_send', record: { state: 'would_send' } });
-    expect(execute).not.toHaveBeenCalled();
+    await expect(runtime.onImpulse(impulse())).resolves.toMatchObject({ outcome: 'interrupted', replayed: true });
+    expect((await store.getByContactId('contact-1'))!.warmPressure).toBe(0.4);
   });
 
-  it.each([
-    ['contact-human', 'human:contact-a:discord:dm-a', 'human_dm', null],
-    ['contact-companion', `companion-dyad:${DYAD_ID}`, 'open_companion_dyad', DYAD_ID],
-    ['contact-companion', 'companion-first:contact-c', 'companion_first_contact', null],
-    ['join-room', 'room:discord:room-a', 'room', null],
-    ['join-room', 'room:buzz:room-b', 'room', null],
-  ] as const)(
-    'routes %s through the selected canonical %s destination',
-    async (disposition, destinationId, kind, dyadId) => {
-      const { runtime, execute } = harness('on');
-      await runtime.onImpulse(impulse());
-      const result = await runtime.choose({
-        opportunityId: impulse().correlationId,
-        disposition,
-        destinationId,
-        intent: 'Author an ordinary destination turn from this intent.',
-      });
-      expect(result).toMatchObject({ outcome: 'delivered', record: { state: 'delivered' } });
-      expect(execute).toHaveBeenCalledWith(expect.objectContaining({
-        destination: expect.objectContaining({ kind, dyadId }),
-      }));
-    },
-  );
+  it('observes without changing pressure in shadow mode and does nothing when off', async () => {
+    const shadow = setup('shadow');
+    await expect(shadow.runtime.onImpulse(impulse())).resolves.toMatchObject({ outcome: 'shadow' });
+    expect((await shadow.store.getByContactId('contact-1'))!.warmPressure).toBe(0.4);
+    expect(shadow.requestEvaluation).not.toHaveBeenCalled();
 
-  it.each(['ignore', 'defer', 'other'] as const)('settles %s without any destination action', async disposition => {
-    const { runtime, execute } = harness('on');
-    await runtime.onImpulse(impulse());
-    const result = await runtime.choose({ opportunityId: impulse().correlationId, disposition });
-    expect(result).toMatchObject({ outcome: disposition, record: { state: disposition } });
-    expect(execute).not.toHaveBeenCalled();
+    const off = setup('off');
+    await expect(off.runtime.onImpulse(impulse())).resolves.toMatchObject({ outcome: 'off' });
+    expect(off.requestEvaluation).not.toHaveBeenCalled();
   });
 
-  it('fails closed when the chosen destination becomes invalid before commit', async () => {
-    const { runtime, listDestinations, execute } = harness('on');
-    await runtime.onImpulse(impulse());
-    listDestinations.mockResolvedValueOnce([]);
-    const result = await runtime.choose({
-      opportunityId: impulse().correlationId,
-      disposition: 'join-room',
-      destinationId: 'room:discord:room-a',
-      intent: 'Join naturally.',
-    });
-    expect(result).toMatchObject({
-      outcome: 'suppressed',
-      reasonCode: 'destination_unavailable',
-      record: { state: 'suppressed', destination: null },
-    });
-    expect(execute).not.toHaveBeenCalled();
+  it('never manufactures a desire from a contact-less impulse', async () => {
+    const { runtime, store, requestEvaluation } = setup('on', []);
+    await expect(runtime.onImpulse(impulse())).resolves.toMatchObject({ outcome: 'no_live_desire' });
+    expect(store.snapshotDesires()).toEqual([]);
+    expect(requestEvaluation).not.toHaveBeenCalled();
   });
 
-  it('dedupes the exact choice and rejects a conflicting second disposition', async () => {
-    const { runtime, execute } = harness('on');
-    await runtime.onImpulse(impulse());
-    const input = {
-      opportunityId: impulse().correlationId,
-      disposition: 'contact-companion' as const,
-      destinationId: `companion-dyad:${DYAD_ID}`,
-      intent: 'Continue this established conversation.',
-    };
-    await runtime.choose(input);
-    await runtime.choose(input);
-    await expect(runtime.choose({
-      opportunityId: input.opportunityId,
-      disposition: 'ignore',
-    })).rejects.toThrow(/already has a different disposition/u);
-    expect(execute).toHaveBeenCalledTimes(1);
-  });
-
-  it('joins concurrent retries to one in-flight destination execution', async () => {
-    const { runtime, execute } = harness('on');
-    let finishExecution: (() => void) | undefined;
-    execute.mockImplementationOnce(async () => {
-      await new Promise<void>(resolve => { finishExecution = resolve; });
-      return { outcome: 'delivered' };
-    });
-    await runtime.onImpulse(impulse());
-    const input = {
-      opportunityId: impulse().correlationId,
-      disposition: 'contact-human' as const,
-      destinationId: 'human:contact-a:discord:dm-a',
-      intent: 'Say hello in my own words.',
-    };
-
-    const first = runtime.choose(input);
-    await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
-    const replay = runtime.choose(input);
-    finishExecution?.();
-
-    await expect(Promise.all([first, replay])).resolves.toEqual([
-      expect.objectContaining({ outcome: 'delivered' }),
-      expect.objectContaining({ outcome: 'delivered' }),
-    ]);
-    expect(execute).toHaveBeenCalledOnce();
-  });
-
-  it('records typed suppression from the destination gate stack', async () => {
-    const store = memoryStore();
+  it('settles fail-closed when the social-desire lane is not composed', async () => {
+    const ledger = memoryLedger();
     const runtime = createSocialImpulseOutreachRuntime({
-      companionId: COMPANION_ID,
-      store,
-      getMode: () => 'on',
-      listDestinations: async () => destinations(),
-      runDispositionOpportunity: async () => {},
-      execute: async () => ({ outcome: 'suppressed', reasonCode: 'room_arbiter_denied' }),
-      now: () => FIRED_AT_MS + 100,
+      companionId: COMPANION_ID, store: ledger, getMode: () => 'on',
+      getDesireTarget: () => null, now: () => T0,
     });
-    await runtime.onImpulse(impulse());
-    const result = await runtime.choose({
-      opportunityId: impulse().correlationId,
-      disposition: 'join-room',
-      destinationId: 'room:discord:room-a',
-      intent: 'Join naturally.',
+    await expect(runtime.onImpulse(impulse())).resolves.toMatchObject({
+      outcome: 'lane_disabled',
+      record: { reasonCode: 'social_desire_disabled' },
     });
-    expect(result).toMatchObject({ outcome: 'suppressed', reasonCode: 'room_arbiter_denied' });
   });
 
-  it('reports destination failures before recording fail-closed suppression', async () => {
-    const store = memoryStore();
-    const onExecutionError = vi.fn();
-    const runtime = createSocialImpulseOutreachRuntime({
-      companionId: COMPANION_ID,
-      store,
-      getMode: () => 'on',
-      listDestinations: async () => destinations(),
-      runDispositionOpportunity: async () => {},
-      execute: async () => { throw new Error('transport unavailable'); },
-      onExecutionError,
-      now: () => FIRED_AT_MS + 100,
-    });
-    await runtime.onImpulse(impulse());
-
-    const result = await runtime.choose({
-      opportunityId: impulse().correlationId,
-      disposition: 'contact-human',
-      destinationId: 'human:contact-a:discord:dm-a',
-      intent: 'Say hello in my own words.',
-    });
-
-    expect(onExecutionError).toHaveBeenCalledWith(expect.any(Error), {
-      opportunityId: impulse().correlationId,
-      destinationKind: 'human_dm',
-    });
-    expect(result).toMatchObject({
-      outcome: 'suppressed',
-      reasonCode: 'destination_execution_failed',
-    });
+  it('rejects impulses it does not own', async () => {
+    const { runtime } = setup('on');
+    await expect(runtime.onImpulse(impulse({ companionId: '22222222-2222-4222-8222-222222222222' })))
+      .rejects.toThrow(/owned qualified would_message impulse/);
   });
 });

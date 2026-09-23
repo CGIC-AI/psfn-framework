@@ -100,6 +100,7 @@
     "provision:injection-model": "tsx scripts/provision-injection-model.ts",
     "migrate:persistence-layout": "tsx src/app/maintenance/migrate-persistence-layout.ts",
     "migrate:session-filenames": "tsx src/app/maintenance/migrate-session-filenames.ts",
+    "migrate:journal-message-addressing": "tsx src/app/maintenance/migrate-journal-message-addressing.ts",
     "migrate:message-addressing": "tsx src/app/maintenance/migrate-message-addressing.ts",
     "migrate:turn-record-background-work": "tsx src/app/maintenance/migrate-turn-record-background-work.ts",
     "migrate:system-owner-fleet": "tsx src/app/maintenance/migrate-system-owner-fleet.ts",
@@ -216,7 +217,7 @@
       "undici": "6.28.0"
     },
     "@protobufjs/utf8": "1.1.1",
-    "adm-zip": "0.6.0",
+    "adm-zip": "0.6.1",
     "basic-ftp": "5.3.1",
     "brace-expansion": "5.0.9",
     "esbuild": "0.28.1",

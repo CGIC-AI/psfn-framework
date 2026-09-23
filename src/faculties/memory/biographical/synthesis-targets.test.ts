@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
+import type { Contact } from '../../../core/contacts/types.js';
 import { createDefaultBiographicalDepthPolicy } from '../../../system/config/biographical-depth-policy.js';
 import {
   createBiographySynthesisTargetPort,
@@ -49,6 +50,36 @@ function targetPort(groupMembershipAuthority?: BiographyGroupMembershipAuthority
     ...(groupMembershipAuthority ? { groupMembershipAuthority } : {}),
   });
 }
+
+describe('biography synthesis canonical contacts', () => {
+  it('includes a canonical contact without a cross-channel link challenge', async () => {
+    const contact: Contact = {
+      id: 'contact-established', displayName: 'Morgan', trustLevel: 'primary',
+      relationshipType: 'friend', firstSeen: '2025-01-01T00:00:00.000Z',
+      lastSeen: '2026-09-01T00:00:00.000Z',
+    };
+    const contactStore = emptyContactStore();
+    contactStore.getByTrustLevel = vi.fn(async level => level === 'primary' ? [contact] : []);
+    const port = createBiographySynthesisTargetPort({
+      contactStore, companionSubject: COMPANION_SUBJECT,
+      depthPolicy: () => createDefaultBiographicalDepthPolicy(),
+    });
+
+    expect(await port.listTargets(10)).toContainEqual({
+      subject: { kind: 'contact', contactId: contact.id, subjectVersion: 1 },
+      socialContext: {
+        kind: 'companion_contact_dyad', companionId: COMPANION_SUBJECT.companionId,
+        contactId: contact.id,
+      },
+      depth: 'full',
+    });
+    contact.archivedAt = '2026-09-02T00:00:00.000Z';
+    expect(await port.listTargets(10)).toHaveLength(1);
+    delete contact.archivedAt;
+    contact.trustLevel = 'stranger';
+    expect(await port.listTargets(10)).toHaveLength(1);
+  });
+});
 
 // psfn-framework-uz787 — group synthesis exists only where an authority vouches
 // for the exact canonical membership. No authority means no group targets: the

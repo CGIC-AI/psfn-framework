@@ -89,6 +89,13 @@ export interface SocialDesire {
   tierAtLastTick: SocialDesireAccumulatingTier;
   /** Concern ids that already reinforced this desire (each reinforces once). */
   reinforcedConcernIds: string[];
+  /**
+   * Last per-contact outreach turn (ISO) — the per-contact cooldown anchor
+   * (psfn-framework-vcq8v.4). Set when the companion is asked, whatever she answers.
+   */
+  lastConsentMomentAt?: string;
+  /** She answered "later": this contact is re-evaluated no earlier than this (ISO). */
+  deferredUntil?: string;
   createdAt: string;
 }
 

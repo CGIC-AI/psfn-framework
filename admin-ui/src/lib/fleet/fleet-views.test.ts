@@ -10,6 +10,7 @@ describe('fleet view destinations', () => {
   it('exposes the real /fleet surfaces as cluster-scoped destinations', () => {
     expect(FLEET_VIEW_DESTINATIONS.map(destination => destination.id)).toEqual([
       'info',
+      'attention',
       'usage',
       'costs',
       'firewall',
@@ -34,6 +35,7 @@ describe('fleetViewHref', () => {
   });
 
   it('encodes secondary views as query state', () => {
+    expect(fleetViewHref('attention')).toBe('/fleet?view=attention');
     expect(fleetViewHref('usage')).toBe('/fleet?view=usage');
     expect(fleetViewHref('costs')).toBe('/fleet?view=costs');
     expect(fleetViewHref('firewall')).toBe('/fleet?view=firewall');

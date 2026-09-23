@@ -23,6 +23,9 @@ import {
 const SESSION_LABEL = 'psfn-observer-eval-test';
 const AGENT_NAME = 'observer';
 const SESSION_ID = 'session-uuid-1';
+/** Deliberately not the projection DEFAULT_SUBJECT: the companion owns its temperament. */
+const COMPANION_PERSONALITY = Object.freeze({ O: 0.81, C: 0.37, E: 0.72, A: 0.55, N: 0.46 });
+const CONTACT_KEY = 'a'.repeat(64);
 
 describe('EmoSim server adapter', () => {
   it('reads an existing companion session without creating or stimulating it', async () => {
@@ -136,8 +139,8 @@ describe('EmoSim server adapter', () => {
 
   it('derives non-negative kicks from the before/afterStimulus delta', async () => {
     const server = new FakeEmoSimServer();
-    // Use an existing session so state reads map 1:1 onto the observation
-    // (bootstrap performs no state read in the reuse path).
+    // Use an existing session: bootstrap reconciles it with one state read,
+    // then the observation's before/afterStimulus/afterTick reads follow.
     server.existingSessions = [
       {
         session: SESSION_ID,
@@ -148,8 +151,8 @@ describe('EmoSim server adapter', () => {
         ],
       },
     ];
-    server.joySequence = [0.1, 0.4, 0.35];
-    server.sadnessSequence = [0.3, 0.1, 0.1];
+    server.joySequence = [0.1, 0.1, 0.4, 0.35];
+    server.sadnessSequence = [0.3, 0.3, 0.1, 0.1];
     const runner = makeRunner(server);
 
     const result = await runEmoSimProjectedStimulus(makeInput(), { runner });
@@ -232,6 +235,7 @@ describe('EmoSim server adapter', () => {
       serverUrl: 'http://emosim.test:17342',
       sessionLabel: SESSION_LABEL,
       agentName: AGENT_NAME,
+      personality: COMPANION_PERSONALITY,
       sleep: async () => {},
       fetchImpl: (async () => {
         throw new TypeError('fetch failed');
@@ -247,6 +251,7 @@ describe('EmoSim server adapter', () => {
       serverUrl: 'http://emosim.test:17342',
       sessionLabel: SESSION_LABEL,
       agentName: AGENT_NAME,
+      personality: COMPANION_PERSONALITY,
       sleep: async () => {},
       fetchImpl: (async () => new Response('{"error":"boom"}', { status: 500 })) as typeof fetch,
     });
@@ -264,6 +269,7 @@ describe('EmoSim server adapter', () => {
       serverUrl: 'http://emosim.test:17342',
       sessionLabel: SESSION_LABEL,
       agentName: AGENT_NAME,
+      personality: COMPANION_PERSONALITY,
       timeoutMs: 20,
       sleep: async () => {},
       fetchImpl: ((_url: unknown, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
@@ -297,7 +303,7 @@ describe('EmoSim server adapter', () => {
     expect(server.createCount).toBe(1);
   });
 
-  it('creates the session with the fixed companion personality and a parked anchor NPC', async () => {
+  it('creates the session with the companion-owned personality, drive policy, and a parked anchor NPC', async () => {
     const server = new FakeEmoSimServer();
     const runner = makeRunner(server);
 
@@ -310,10 +316,18 @@ describe('EmoSim server adapter', () => {
       autonomy: false,
       human: {
         name: AGENT_NAME,
-        personality: { A: 0.68, C: 0.62, E: 0.48, N: 0.34, O: 0.6 },
+        personality: { ...COMPANION_PERSONALITY },
       },
       npcs: [{ name: EMOSIM_SERVER_ANCHOR_NPC_NAME }],
+      drive_config: {
+        hunger: { enabled: false },
+        thirst: { enabled: false },
+        sleep_pressure: { enabled: false },
+      },
     });
+    // Social, stimulation, and esteem needs stay live (not in the policy).
+    const driveConfig = (server.createBodies[0] as { drive_config: Record<string, unknown> }).drive_config;
+    expect(Object.keys(driveConfig).sort()).toEqual(['hunger', 'sleep_pressure', 'thirst']);
     // Creation-time-only room separation for the anchor.
     expect(server.calls.filter((call) => call.path.includes('/move'))).toHaveLength(1);
   });
@@ -338,27 +352,136 @@ describe('EmoSim server adapter', () => {
     }
   });
 
+  it('sends a verified contact as a session-scoped external actor so warmth can regulate social need', async () => {
+    const server = new FakeEmoSimServer();
+    const runner = makeRunner(server);
+
+    const social = await runEmoSimProjectedStimulus(makeInput(), {
+      runner,
+      context: { socialContactKey: CONTACT_KEY },
+    });
+    const ambient = await runEmoSimProjectedStimulus(makeInput(), { runner });
+
+    expect(social.ok).toBe(true);
+    expect(ambient.ok).toBe(true);
+    const [socialEvent, ambientEvent] = server.eventBodies as Record<string, unknown>[];
+    expect(socialEvent).toMatchObject({ target: AGENT_NAME, channel: 'remote' });
+    expect(socialEvent).not.toHaveProperty('actor');
+    expect(socialEvent).not.toHaveProperty('room');
+    const externalActor = socialEvent?.external_actor as Record<string, unknown>;
+    expect(externalActor).toMatchObject({ schema_version: 1, kind: 'canonical_contact' });
+    expect(externalActor.key).toMatch(/^[0-9a-f]{64}$/);
+    // Never the raw observer digest: the key is re-derived per session.
+    expect(externalActor.key).not.toBe(CONTACT_KEY);
+    expect(ambientEvent).toMatchObject({ target: AGENT_NAME, channel: 'direct' });
+    expect(ambientEvent).not.toHaveProperty('external_actor');
+    // The live-only contact key is not echoed into the persisted adapter input.
+    if (!social.ok) return;
+    expect(JSON.stringify(social.output)).not.toContain(CONTACT_KEY);
+    expect(JSON.stringify(social.output)).not.toContain(String(externalActor.key));
+  });
+
+  it('rejects a malformed contact key before touching the server', async () => {
+    const server = new FakeEmoSimServer();
+    const result = await runEmoSimProjectedStimulus(makeInput(), {
+      runner: makeRunner(server),
+      context: { socialContactKey: 'contact:alice' },
+    });
+    expect(result.ok).toBe(false);
+    expect(server.calls).toEqual([]);
+  });
+
+  it('refuses an emo_sim build without the external social actor capability', async () => {
+    const server = new FakeEmoSimServer();
+    server.advertiseExternalSocialActor = false;
+    const result = await runEmoSimProjectedStimulus(makeInput(), { runner: makeRunner(server) });
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: 'sidecar-unavailable', reason: 'incompatible-runtime' },
+    });
+    if (result.ok) return;
+    expect(result.error.message).toContain('external_social_actor');
+    expect(server.createCount).toBe(0);
+  });
+
+  it('applies a drifted companion personality to an existing session without recreating it', async () => {
+    const server = new FakeEmoSimServer();
+    server.existingSessions = [{
+      session: SESSION_ID, label: SESSION_LABEL,
+      agents: [{ uid: 'uid-observer', name: AGENT_NAME }],
+    }];
+    server.agentPersonality = { O: 0.6, C: 0.62, E: 0.48, A: 0.68, N: 0.34 };
+    const runner = makeRunner(server);
+
+    await expect(runEmoSimProjectedStimulus(makeInput(), { runner })).resolves.toMatchObject({ ok: true });
+    await expect(runEmoSimProjectedStimulus(makeInput(), { runner })).resolves.toMatchObject({ ok: true });
+
+    expect(server.personalityBodies).toEqual([{ personality: { ...COMPANION_PERSONALITY } }]);
+    expect(server.createCount).toBe(0);
+    expect(server.calls.some((call) => call.method === 'DELETE')).toBe(false);
+  });
+
+  it('leaves a matching personality untouched on an existing session', async () => {
+    const server = new FakeEmoSimServer();
+    server.existingSessions = [{
+      session: SESSION_ID, label: SESSION_LABEL,
+      agents: [{ uid: 'uid-observer', name: AGENT_NAME }],
+    }];
+    const result = await runEmoSimProjectedStimulus(makeInput(), { runner: makeRunner(server) });
+    expect(result.ok).toBe(true);
+    expect(server.personalityBodies).toEqual([]);
+  });
+
+  it('fails closed on an existing session created without the companion drive policy', async () => {
+    const server = new FakeEmoSimServer();
+    server.existingSessions = [{
+      session: SESSION_ID, label: SESSION_LABEL,
+      agents: [{ uid: 'uid-observer', name: AGENT_NAME }],
+    }];
+    server.driveConfig = {};
+    const result = await runEmoSimProjectedStimulus(makeInput(), { runner: makeRunner(server) });
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: 'sidecar-unavailable', reason: 'incompatible-runtime' },
+    });
+    if (result.ok) return;
+    expect(result.error.message).toContain('drive policy');
+    expect(server.eventBodies).toEqual([]);
+    expect(server.personalityBodies).toEqual([]);
+    expect(server.calls.filter((call) => call.method === 'POST')).toEqual([]);
+  });
+
   it('fails closed on malformed runner options', () => {
     expect(() => createEmoSimServerRunner({
       serverUrl: 'not-a-url',
       sessionLabel: SESSION_LABEL,
       agentName: AGENT_NAME,
+      personality: COMPANION_PERSONALITY,
     })).toThrow('must be an absolute http(s) URL');
     expect(() => createEmoSimServerRunner({
       serverUrl: 'ftp://emosim.test',
       sessionLabel: SESSION_LABEL,
       agentName: AGENT_NAME,
+      personality: COMPANION_PERSONALITY,
     })).toThrow('must use http or https');
     expect(() => createEmoSimServerRunner({
       serverUrl: 'http://emosim.test:17342',
       sessionLabel: '  ',
       agentName: AGENT_NAME,
+      personality: COMPANION_PERSONALITY,
     })).toThrow('sessionLabel must be a non-empty string');
+    expect(() => createEmoSimServerRunner({
+      serverUrl: 'http://emosim.test:17342',
+      sessionLabel: SESSION_LABEL,
+      agentName: AGENT_NAME,
+      personality: { ...COMPANION_PERSONALITY, N: 1.5 },
+    })).toThrow('personality.N must be a finite number within 0..1');
     // 1 Hz floor: sub-second read cadence is rejected (no sub-second polling).
     expect(() => createEmoSimServerRunner({
       serverUrl: 'http://emosim.test:17342',
       sessionLabel: SESSION_LABEL,
       agentName: AGENT_NAME,
+      personality: COMPANION_PERSONALITY,
       afterTickDelayMs: 750,
     })).toThrow('afterTickDelayMs must be an integer between 1000 and 60000');
     // A supra-1s cadence is accepted (e.g. 1500ms).
@@ -366,6 +489,7 @@ describe('EmoSim server adapter', () => {
       serverUrl: 'http://emosim.test:17342',
       sessionLabel: SESSION_LABEL,
       agentName: AGENT_NAME,
+      personality: COMPANION_PERSONALITY,
       afterTickDelayMs: 1_500,
     })).not.toThrow();
   });
@@ -377,6 +501,7 @@ describe('EmoSim server adapter', () => {
       serverUrl: 'http://emosim.test:17342',
       sessionLabel: SESSION_LABEL,
       agentName: AGENT_NAME,
+      personality: COMPANION_PERSONALITY,
       fetchImpl: server.fetch,
       sleep: async (ms: number) => {
         delays.push(ms);
@@ -432,6 +557,7 @@ function makeRunner(server: FakeEmoSimServer): EmoSimServerRunner {
     serverUrl: 'http://emosim.test:17342',
     sessionLabel: SESSION_LABEL,
     agentName: AGENT_NAME,
+    personality: COMPANION_PERSONALITY,
     sleep: async () => {},
     fetchImpl: server.fetch,
   });
@@ -454,6 +580,14 @@ class FakeEmoSimServer {
   joySequence: number[] | null = null;
   sadnessSequence: number[] | null = null;
   relationships: unknown = {};
+  advertiseExternalSocialActor = true;
+  driveConfig: Record<string, unknown> = {
+    hunger: { enabled: false },
+    thirst: { enabled: false },
+    sleep_pressure: { enabled: false },
+  };
+  agentPersonality: Record<string, number> = { ...COMPANION_PERSONALITY };
+  personalityBodies: unknown[] = [];
   private stateReads = 0;
   private created: FakeSessionListing | null = null;
   private anchorRoom = 'chapel';
@@ -500,6 +634,11 @@ class FakeEmoSimServer {
       this.anchorRoom = (body as { room: string }).room;
       return json({ room: this.anchorRoom });
     }
+    if (method === 'POST' && parsed.pathname === `/api/session/${SESSION_ID}/agent/${AGENT_NAME}/personality`) {
+      this.personalityBodies.push(body);
+      this.agentPersonality = { ...(body as { personality: Record<string, number> }).personality };
+      return json({ session: SESSION_ID, uid: 'uid-observer', name: AGENT_NAME, personality: this.agentPersonality });
+    }
     if (method === 'GET' && parsed.pathname === `/api/session/${SESSION_ID}`) {
       return json(this.statePayload());
     }
@@ -520,11 +659,14 @@ class FakeEmoSimServer {
       appraisal_dims: [...EMOSIM_APPRAISAL_DIMS],
       ocean: ['O', 'C', 'E', 'A', 'N'],
       metadata: {},
+      ...(this.advertiseExternalSocialActor
+        ? { capabilities: { external_social_actor: 1 } }
+        : {}),
     };
   }
 
   private statePayload(): Record<string, unknown> {
-    const readIndex = Math.min(this.stateReads, 2);
+    const readIndex = Math.min(this.stateReads, (this.joySequence?.length ?? 3) - 1);
     this.stateReads += 1;
     const intensities: Record<string, number> = {};
     for (const emotion of EMOSIM_EMOTION_VECTOR) {
@@ -536,7 +678,9 @@ class FakeEmoSimServer {
     const agent = (name: string) => ({
       uid: `uid-${name}`,
       name,
-      personality: { O: 0.6, C: 0.62, E: 0.48, A: 0.68, N: 0.34 },
+      personality: name === AGENT_NAME
+        ? { ...this.agentPersonality }
+        : { O: 0.6, C: 0.62, E: 0.48, A: 0.68, N: 0.34 },
       drives: {
         hunger: 0.2,
         thirst: 0.15,
@@ -563,6 +707,8 @@ class FakeEmoSimServer {
       clock: '08:00',
       speed: 1,
       timescale: 120,
+      drive_scale: 1,
+      drive_config: this.driveConfig,
       session: SESSION_ID,
       label: SESSION_LABEL,
       rooms: [],

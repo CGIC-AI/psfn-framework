@@ -478,7 +478,8 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       this.pool,
       `
         SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence,
-               emotional_baseline, first_seen, last_seen, notes, timezone, gender, pronouns, age
+               emotional_baseline, first_seen, last_seen, notes, timezone, gender, pronouns, age,
+               archived_at, channel_identities
         FROM contacts
         WHERE trust_level = $1
         ORDER BY last_seen DESC

@@ -140,6 +140,7 @@ export function createSchedulerOwnedPostTurnLanes(
     && runtimeOptions.sessionManager
     && runtimeOptions.conversationalActivityWorkset
     && runtimeOptions.coreMemoryStore
+    && runtimeOptions.resolvedConcernStore
     && runtimeOptions.episodicProcessingRestWindow
     && runtimeOptions.sleepConsolidator
     && runtimeOptions.arcWeaver
@@ -152,8 +153,12 @@ export function createSchedulerOwnedPostTurnLanes(
       sessionManager: runtimeOptions.sessionManager,
       conversationalActivityWorkset: runtimeOptions.conversationalActivityWorkset,
       coreMemoryStore: runtimeOptions.coreMemoryStore,
+      resolvedConcernStore: runtimeOptions.resolvedConcernStore,
       memoryWriter: runtimeOptions.memoryWriter,
       promptRegistry: runtimeOptions.promptRegistry ?? null,
+      ...(runtimeOptions.concernCandidateReview
+        ? { concernCandidates: runtimeOptions.concernCandidateReview }
+        : {}),
       restWindow: runtimeOptions.episodicProcessingRestWindow,
       ...(runtimeOptions.orientationRewriteGate
         ? { orientationRewriteGate: runtimeOptions.orientationRewriteGate }

@@ -16,6 +16,7 @@ const AUTOMATA_BUS_TOOL_PARAMETER_PROPERTIES = {
   query: Type.Optional(Type.String()),
   limit: Type.Optional(Type.Integer({ minimum: 1 })),
   claim: Type.Optional(Type.String()),
+  text: Type.Optional(Type.String()),
   provenance: Type.Optional(Type.Union([
     Type.Literal('computed'), Type.Literal('fetched'), Type.Literal('recalled'), Type.Literal('testimony'),
   ])),
@@ -77,6 +78,7 @@ type AutomataBusToolParams = Static<typeof AUTOMATA_BUS_TOOL_PARAMETERS>;
 const ACTION_KEYS: Readonly<Record<AutomataBusToolAction, ReadonlySet<string>>> = {
   brief: new Set(['action', 'query']),
   search: new Set(['action', 'query', 'limit']),
+  note: new Set(['action', 'text']),
   append: new Set([
     'action', 'claim', 'provenance', 'evidence', 'artifact_refs', 'verification_status', 'source', 'confidence',
     'lesson_attribution',
@@ -200,6 +202,8 @@ export function normalizeAutomataBusWorkerOperation(
         ...(limit === undefined ? {} : { limit }),
       };
     }
+    case 'note':
+      return { action, text: requiredBoundedText(typed.text, 'text', bounds) };
     case 'append': {
       const claim = requiredBoundedText(typed.claim, 'claim', bounds);
       const provenance = typed.provenance ?? 'computed';

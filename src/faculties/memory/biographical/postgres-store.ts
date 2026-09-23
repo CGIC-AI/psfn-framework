@@ -56,7 +56,6 @@ import type {
 } from './types.js';
 import {
   assertBiographyStage,
-  assertStageCursorDigest,
   assertStageCursorKey,
   deserializeStageCursor,
   type BiographyStage,
@@ -113,6 +112,7 @@ interface StageCursorRow {
   cursor_key: string;
   observed_digest: string;
   observed_at: string | Date;
+  source_scan: unknown;
 }
 
 function deserializeCandidateRow(row: CandidateRow): BiographicalCandidateRecord {
@@ -962,7 +962,7 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
     cursorKey: string,
   ): Promise<BiographyStageCursor | undefined> {
     const row = await this.queryOne<StageCursorRow>(
-      `SELECT stage, cursor_key, observed_digest, observed_at
+      `SELECT stage, cursor_key, observed_digest, observed_at, source_scan
        FROM biographical_stage_cursors WHERE stage = $1 AND cursor_key = $2`,
       [assertBiographyStage(stage), assertStageCursorKey(cursorKey)],
     );
@@ -972,24 +972,25 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
       cursorKey: row.cursor_key,
       observedDigest: row.observed_digest,
       observedAt: new Date(row.observed_at).toISOString(),
+      ...(row.source_scan === null ? {} : { sourceScan: row.source_scan }),
     });
   }
 
   async writeStageCursor(
     input: BiographyStageCursorWriteInput,
   ): Promise<BiographyStageCursor> {
-    const cursor: BiographyStageCursor = {
-      stage: assertBiographyStage(input.stage),
-      cursorKey: assertStageCursorKey(input.cursorKey),
-      observedDigest: assertStageCursorDigest(input.observedDigest),
+    const cursor = deserializeStageCursor({
+      ...input,
       observedAt: (input.now ?? this.now()).toISOString(),
-    };
+    });
     await (this.client ?? this.pool).query(
-      `INSERT INTO biographical_stage_cursors (stage, cursor_key, observed_digest, observed_at)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO biographical_stage_cursors (stage, cursor_key, observed_digest, observed_at, source_scan)
+       VALUES ($1, $2, $3, $4, $5::jsonb)
        ON CONFLICT (stage, cursor_key)
-       DO UPDATE SET observed_digest = EXCLUDED.observed_digest, observed_at = EXCLUDED.observed_at`,
-      [cursor.stage, cursor.cursorKey, cursor.observedDigest, cursor.observedAt],
+       DO UPDATE SET observed_digest = EXCLUDED.observed_digest, observed_at = EXCLUDED.observed_at,
+         source_scan = EXCLUDED.source_scan`,
+      [cursor.stage, cursor.cursorKey, cursor.observedDigest, cursor.observedAt,
+        cursor.sourceScan === undefined ? null : JSON.stringify(cursor.sourceScan)],
     );
     return cursor;
   }

@@ -139,6 +139,7 @@ import {
 import { createGatewayFleetChargePolicyResolver } from './fleet-charge-policy-resolver.js';
 import { parseVerifiedDiscordContactAuthoritySnapshot } from '../../shared/contracts/contact-authority-snapshot.js';
 import { evaluateProactiveOutboundTimeGate } from '../../core/intention/proactive-time-gate.js';
+import { createFleetOutwardQuietHoursResolver } from '../../core/scheduler/quiet-hours-release-stagger.js';
 import {
   loadTestingHarnessGardenAdminConfig,
   resolveTestingHarnessGardenVerifierConfig,
@@ -231,6 +232,20 @@ async function main(): Promise<void> {
     startupHydration.pathSnapshot.workspacePath,
     startupHydration.pathSnapshot.runtimePathLayout.backupsDir,
   ];
+  // Per-companion outward quiet window (psfn-framework-m7jf2): in a
+  // multi-companion fleet each companion's release is offset by its manifest
+  // ordinal across scheduler.json fleetStagger.windowMs, mirroring the agent.
+  // Resolved per call so it tracks the live scheduler config like before.
+  const fleetCompanionIds = config.multiCompanion === true && config.companionFleet
+    ? config.companionFleet.companions.map(companion => companion.companionId)
+    : null;
+  const resolveCompanionOutwardQuietHours = (companionId: string) => (fleetCompanionIds
+    ? createFleetOutwardQuietHoursResolver({
+        quietHours: startupHydration.schedulerConfig.episodicProcessing,
+        fleetCompanionIds,
+        windowMs: startupHydration.schedulerConfig.fleetStagger.windowMs,
+      })(companionId)
+    : startupHydration.schedulerConfig.episodicProcessing);
   const companionDatabaseTopology = config.companionFleet
     ? (() => {
         if (!config.credentialVault || !config.postgresDatabaseUrl) {
@@ -1048,9 +1063,11 @@ async function main(): Promise<void> {
     ...(companionChannelLane ? { companionChannels: companionChannelLane } : {}),
     ...(icpAutonomyStore ? { icpAutonomyStore } : {}),
     ...(icpInitiationPolicyAuthority ? { icpInitiationPolicyAuthority } : {}),
-    sharedSatelliteQuietHoursAllows: nowMs => evaluateProactiveOutboundTimeGate({
+    // Each companion is held to its own fleet release offset (m7jf2), the same
+    // one its agent lanes apply, so the gateway never releases it earlier.
+    sharedSatelliteQuietHoursAllows: (nowMs, companionId) => evaluateProactiveOutboundTimeGate({
       nowMs,
-      quietHours: startupHydration.schedulerConfig.episodicProcessing,
+      quietHours: resolveCompanionOutwardQuietHours(companionId),
     }).allowed,
     ...(welfareGrantVerifier ? { welfareGrantVerifier } : {}),
     shardApprovalWorkloads: shardWorkloadRegistry,

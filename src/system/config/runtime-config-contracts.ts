@@ -137,19 +137,29 @@ export function createDefaultObserverEvalSidecarSettings(): ObserverEvalSidecarS
   };
 }
 
+/**
+ * Public bootstrap proactivity profile (revision v2). Tuned for companion
+ * sessions whose social need is regulated by real inbound contact (emo_sim
+ * `external_actor`): with contact the drive falls, and with none it rises from
+ * zero to one over roughly half a day of wall time. A 0.8 threshold therefore
+ * reflects most of a day without warm contact rather than the unregulated
+ * pegged drive that used to cross on every cooldown expiry, and the jittered
+ * cooldown keeps a fleet from re-arming in lockstep. Each companion owns its
+ * copy through its settings.overlay.json; this default stays unmeasured.
+ */
 export function createDefaultEmoSimProactivitySettings(): EmoSimProactivitySettings {
-  const legacyThresholds = createDefaultObserverEvalSidecarLeverSettings();
   return {
     mode: 'off',
     thresholdProfile: {
       schemaVersion: 1,
       profileId: EMOSIM_WOULD_MESSAGE_V1,
-      revision: 'public-bootstrap.v1',
+      revision: 'public-bootstrap.v2',
       applicableSource: {
         model: EMOSIM_PROACTIVITY_SOURCE_MODEL,
         version: EMOSIM_PROACTIVITY_SOURCE_VERSION,
       },
-      reviewNote: 'Conservative public bootstrap; production remains off until explicitly promoted.',
+      reviewNote: 'Conservative public bootstrap for contact-regulated social need; '
+        + 'production remains off until each companion promotes its own profile.',
       calibration: {
         corpusVersion: 'public-bootstrap-sanitized.v1',
         metricsVersion: 'emosim-proactivity.metrics.v1',
@@ -164,14 +174,15 @@ export function createDefaultEmoSimProactivitySettings(): EmoSimProactivitySetti
         maximumFatigueRate: 0.25,
       },
       rollbackProfileId: null,
-      socialNeedThreshold: legacyThresholds.wouldMessage.socialNeedThreshold,
-      attachmentIntensityThreshold: legacyThresholds.wouldMessage.attachmentIntensityThreshold,
+      socialNeedThreshold: 0.8,
+      attachmentIntensityThreshold: 0.65,
       samplingIntervalMs: 60_000,
       minimumConfidence: 0.6,
       abstainBelowMinimumConfidence: true,
-      sustainMs: legacyThresholds.wouldMessage.sustainMs,
+      sustainMs: 2_700_000,
       dedupeWindowMs: 300_000,
-      cooldownMs: legacyThresholds.cooldownMs,
+      cooldownMs: 28_800_000,
+      cooldownJitterMs: 14_400_000,
     },
   };
 }

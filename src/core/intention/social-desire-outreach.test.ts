@@ -111,6 +111,7 @@ function baseDeps(
     maxConsentMomentsPerRun: 1,
     resolveDeliveryChannel: async () => primaryChannel(),
     isBudgetExhausted: () => false,
+    contactPacing: { perContactCooldownMs: 18 * HOUR, deferDelayMs: 3 * HOUR },
     ...overrides,
   };
 }
@@ -223,7 +224,7 @@ describe('runSocialDesireOutreachOnce', () => {
       .toBeCloseTo(decayedSocialDesirePressure(eligibleDesire(), CONFIG, T0).total, 10);
   });
 
-  it('defer dampens the desire and sends nothing', async () => {
+  it('defer keeps the pressure, sends nothing, and re-queues the contact after the defer delay', async () => {
     const desire = eligibleDesire();
     const before = decayedSocialDesirePressure(desire, CONFIG, T0).total;
     const store = makeStore(desire);
@@ -238,8 +239,36 @@ describe('runSocialDesireOutreachOnce', () => {
     ]);
     const stored = await store.getByContactId('contact-1');
     const after = decayedSocialDesirePressure(stored!, CONFIG, T0).total;
-    expect(after).toBeCloseTo(before * CONFIG.dampeningFactor, 10);
-    expect(after).toBeGreaterThan(0);
+    expect(after).toBeCloseTo(before, 10);
+    expect(stored!.deferredUntil).toBe(new Date(T0 + 3 * HOUR).toISOString());
+    // A defer does not spend the per-contact cooldown.
+    expect(stored!.lastConsentMomentAt).toBeUndefined();
+
+    const held = await runSocialDesireOutreachOnce(
+      baseDeps(store, messageEvaluator()),
+      T0 + 2 * HOUR,
+    );
+    expect(held.skipped).toEqual([
+      { contactId: 'contact-1', reason: 'deferred', nextEligibleAtMs: T0 + 3 * HOUR },
+    ]);
+    const evaluator = messageEvaluator();
+    const revisited = await runSocialDesireOutreachOnce(baseDeps(store, evaluator), T0 + 3 * HOUR);
+    expect(evaluator.evaluate).toHaveBeenCalledTimes(1);
+    expect(revisited.produced).toHaveLength(1);
+  });
+
+  it('asks each contact at most once per per-contact cooldown', async () => {
+    const store = makeStore(eligibleDesire());
+    await runSocialDesireOutreachOnce(baseDeps(store, messageEvaluator()), T0);
+    expect((await store.getByContactId('contact-1'))!.lastConsentMomentAt)
+      .toBe(new Date(T0).toISOString());
+
+    const evaluator = messageEvaluator();
+    const paced = await runSocialDesireOutreachOnce(baseDeps(store, evaluator), T0 + 17 * HOUR);
+    expect(evaluator.evaluate).not.toHaveBeenCalled();
+    expect(paced.skipped).toEqual([
+      { contactId: 'contact-1', reason: 'contact_cooldown', nextEligibleAtMs: T0 + 18 * HOUR },
+    ]);
   });
 
   it('decline dampens the desire and sends nothing', async () => {

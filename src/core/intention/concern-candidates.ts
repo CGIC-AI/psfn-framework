@@ -1100,8 +1100,8 @@ function restoreDurableConcernCandidate(concern: ActiveConcern): ConcernCandidat
   };
 }
 
-async function listAllDurableConcernCandidates(
-  concernStore: ConcernStorePort,
+export async function listAllDurableConcernCandidates(
+  concernStore: Pick<ConcernStorePort, 'list'>,
   options: { includeExpired: boolean },
 ): Promise<ActiveConcern[]> {
   const candidates: ActiveConcern[] = [];

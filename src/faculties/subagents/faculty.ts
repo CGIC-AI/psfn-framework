@@ -38,6 +38,7 @@ import { SessionManager } from '../../core/session/manager.js';
 import { inferSessionChannelType } from '../../core/session/session-id.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import { requestSubagentRunNotes } from './automata-run-notes.js';
 import { AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN } from '../../core/agent/turn-limits.js';
 import {
   buildCompletionHandoffDedupeKey,
@@ -836,6 +837,31 @@ export class SubagentFaculty implements SubagentControlPort {
         }
 
         if (turn === 0 && handle.maxTurns === 1) break;
+      }
+
+      const notes = await requestSubagentRunNotes({
+        run: handle.automataRun,
+        baseMessage: handle.baseMessage,
+        subagentId: handle.subagentId,
+        handleMessage: async message => await agentLoop.handleMessage(message),
+        onFailure: error => {
+          log.warn('Subagent run-notes turn failed; settling with the completed result', {
+            subagentId: handle.subagentId,
+            error,
+          });
+          this.auditTrail?.append('subagent.automata_notes.failed', {
+            subagentId: handle.subagentId,
+            error,
+          });
+        },
+      });
+      if (notes.requested) {
+        totalInput += notes.inputTokens;
+        totalOutput += notes.outputTokens;
+        this.auditTrail?.append('subagent.automata_notes.requested', {
+          subagentId: handle.subagentId,
+          notesWritten: notes.notesWritten,
+        });
       }
 
       await this.finishHandle(handle, this.finalizeCompleted(

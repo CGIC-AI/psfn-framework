@@ -48,6 +48,7 @@ import {
   registerScheduledPromptTask,
 } from './scheduled-prompts.js';
 import type { ScheduledPromptStorePort } from './scheduled-prompt-store-port.js';
+import { boundContextSummary, MAX_CONTEXT_SUMMARY_CHARS } from '../intention/context-summary.js';
 
 const DEFAULT_LIST_LIMIT = 32;
 const MAX_LIST_LIMIT = 200;
@@ -524,7 +525,10 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
       })),
       due_at: Type.Optional(Type.String({ minLength: 1, description: 'ISO timestamp for reminder/follow-up activation.' })),
       source_message_id: Type.Optional(Type.String({ minLength: 1, description: 'Optional source message id for provenance-safe continuity.' })),
-      context_summary: Type.Optional(Type.String({ minLength: 1, description: 'Optional preserved situation summary for follow-ups.' })),
+      context_summary: Type.Optional(Type.String({
+        minLength: 1,
+        description: `Optional preserved situation summary for follow-ups (up to ${MAX_CONTEXT_SUMMARY_CHARS} characters; longer text is truncated).`,
+      })),
       wake_conditions: Type.Optional(Type.Array(
         Type.Union(PENDING_FOLLOW_UP_WAKE_CONDITIONS.map(condition => Type.Literal(condition))),
         { description: 'Optional follow-up wake conditions.' },
@@ -654,7 +658,7 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
             const content = normalizeNonEmptyString(params.content, 'content');
             const contactId = normalizeOptionalString(params.contact_id);
             const sourceMessageId = normalizeOptionalString(params.source_message_id);
-            const contextSummary = normalizeOptionalString(params.context_summary);
+            const contextSummary = boundContextSummary(params.context_summary);
             if (
               dueAt
               && options.intentionFollowUpHorizonMs !== undefined

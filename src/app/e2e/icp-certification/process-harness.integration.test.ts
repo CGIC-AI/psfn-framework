@@ -578,7 +578,7 @@ describe('ICP certification real process harness', () => {
     ]);
   }, TIMEOUT_MS);
 
-  it('routes a durable intention into first contact and a felt impulse into the same open dyad', async () => {
+  it('routes a durable intention into first contact and a felt impulse into per-contact pressure', async () => {
     if (!postgres) throw new Error('Postgres certification harness is unavailable');
     const { databaseUrl } = await postgres.createDatabase();
     fixture = createIcpCertificationFixture({ databaseUrl, fatigueProfile: 'room_continuity' });
@@ -595,34 +595,23 @@ describe('ICP certification real process harness', () => {
       },
     });
     const dyad = await readOnlyDyad(agentA);
-    const before = await waitForPeerMessages(agentB, CERTIFICATION_COMPANION_A, 1);
-    const turnsBeforeFeltImpulse = await waitForTurnRecordCount(agentB, 1);
-    expect(turnsBeforeFeltImpulse.records.at(-1)?.hasAssistantMessage).toBe(false);
 
-    processes.queueChatDisposition('intentional_no_reply', CERTIFICATION_COMPANION_B);
+    // vcq8v.4: a felt impulse no longer chooses a destination. It raises the
+    // live per-contact social pressure exactly once and requests that
+    // contact's own outreach evaluation; delivery then follows the
+    // per-contact outreach path (certified in social-outreach-turn tests).
     await expect(agentA.runFeltImpulseContinuation()).resolves.toMatchObject({
-      destinationKind: 'open_companion_dyad',
-      admissionOutcome: 'queued',
-      queuePersistenceEnabled: true,
-      executionIntentCleared: true,
-      outcome: 'delivered',
+      outcome: 'applied',
+      replayed: true,
+      boostedContactCount: 1,
+      evaluationRequests: 1,
+      peerWarmPressure: expect.any(Number),
     });
-    const after = await waitForPeerMessages(agentB, CERTIFICATION_COMPANION_A, 2);
-    const turnsAfterFeltImpulse = await waitForTurnRecordCount(agentB, 2);
-    expect(turnsAfterFeltImpulse.records.at(-1)?.hasAssistantMessage).toBe(false);
-    expect(after.entries.length).toBeGreaterThan(before.entries.length);
-    expect(after.entries.filter(entry => (
-      entry.role === 'user' && entry.authorId === CERTIFICATION_COMPANION_A
-    ))).toHaveLength(2);
-
     const garden = await agentA.gardenProjection() as unknown as GardenIcpProjection;
     expect(garden.dyads).toEqual([
       expect.objectContaining({ dyadId: dyad.dyadId, status: 'open' }),
     ]);
-    expect(garden.episodes.some(episode => episode.initiationSource === 'felt_impulse')).toBe(true);
-    expect(JSON.stringify(garden)).not.toContain(
-      'Send one ordinary felt-impulse continuation to the existing peer dyad.',
-    );
+    expect(garden.episodes.some(episode => episode.initiationSource === 'felt_impulse')).toBe(false);
   }, TIMEOUT_MS);
 
   it('records an intentional no-response without closing the dyad or starting a reply loop', async () => {

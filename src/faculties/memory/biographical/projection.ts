@@ -397,7 +397,6 @@ export async function projectBiographicalContext(
 
   const selfClaims = await deps.store.listClaims({
     subject: turn.companionSubject,
-    kind: 'nickname',
     status: 'active',
   });
   const currentAuthor = resolveVerifiedCurrentAuthor(turn);
@@ -471,7 +470,7 @@ export async function projectBiographicalContext(
         }];
     }),
     ...selfClaims.flatMap(claim => {
-      const presentation = presentBiographicalClaim(claim, 'companion-self');
+      const presentation = presentBiographicalClaim(claim, 'companion-self', now);
       return presentation === undefined
         ? []
         : [{

@@ -33,11 +33,9 @@ export function enrollHubIdentity(
 
 /** DELETE /api/admin/enrollments/:hubIdentityId — revoke an active binding. */
 export function revokeEnrollment(
-  hubIdentityId: string,
-  actor?: string
+  hubIdentityId: string
 ): Promise<{ ok: true; revoked: boolean; hubIdentityId: string }> {
-  const query = actor ? `?actor=${encodeURIComponent(actor)}` : '';
   return apiDelete<{ ok: true; revoked: boolean; hubIdentityId: string }>(
-    `/api/admin/enrollments/${encodeURIComponent(hubIdentityId)}${query}`
+    `/api/admin/enrollments/${encodeURIComponent(hubIdentityId)}`
   );
 }

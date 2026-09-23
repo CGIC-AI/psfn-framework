@@ -15,6 +15,7 @@ import {
 
 interface WorkerInput {
   channelId: string;
+  ownerSessionId: string;
   filePaths: readonly string[];
   maxActionBytes: number;
   maxActions: number;
@@ -247,7 +248,7 @@ async function run(): Promise<void> {
           );
         }
         stats.rowsScanned += 1;
-        if (entry.channelId !== input.channelId) {
+        if (entry.channelId !== input.channelId && entry.channelId !== input.ownerSessionId) {
           throw evidenceError(
             `L0 authority row channel mismatch in ${snapshot.path}: `
             + `expected ${input.channelId}, found ${entry.channelId}`,

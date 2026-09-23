@@ -17,6 +17,8 @@ import {
 } from '../../../persistence/repair/background-work-handoff-recovery-disposition.js';
 import type { TurnRecordEligibilityFencePort } from '../../../persistence/sessions/turn-record-eligibility-fence-port.js';
 import { SessionStore } from '../../../persistence/sessions/store.js';
+import { BackgroundWorkHandoffRecoveryDispositionStore } from '../../../persistence/repair/background-work-handoff-recovery-disposition-store.js';
+import { readCorruptTurnRecordRecoveryEvidence } from '../../../persistence/sessions/background-work-handoff-recovery-owner-evidence.js';
 import {
   createKeyringIntegrityProvider,
   sanitizeChannelId,
@@ -186,7 +188,150 @@ function ebadmsgWarnings(channelId: string): ReturnType<typeof getRecentDiagnost
   ));
 }
 
+function createExactLineageFixture(rowOwner: 'logical' | 'sibling' | 'foreign' = 'logical') {
+  const root = mkdtempSync(join(tmpdir(), 'handoff-exact-lineage-'));
+  rootsToDelete.push(root);
+  const sessionsDir = join(root, 'sessions');
+  mkdirSync(sessionsDir);
+  const channelId = 'api:lineage';
+  const oldFilename = '20260301_api-lineage_partner_000001.jsonl';
+  const filename = '20260302_api-lineage_partner_000002.jsonl';
+  const sessionId = `${channelId}#${filename.slice(0, -'.jsonl'.length)}`;
+  const siblingId = `${channelId}#${oldFilename.slice(0, -'.jsonl'.length)}`;
+  const rowChannelId = rowOwner === 'logical' ? sessionId
+    : rowOwner === 'sibling' ? siblingId : 'api:foreign-owner';
+  const keyring = buildSessionHmacKeyring({
+    serializedKeys: 'v1:exact-lineage-test-key', activeVersion: 'v1',
+  })!;
+  const integrityProvider = createKeyringIntegrityProvider(keyring)!;
+  const retained = makeBackgroundHandoffTurnRecord(channelId, 1_775_060_000_000, sessionId);
+  const redacted = makeBackgroundHandoffTurnRecord(channelId, 1_775_060_000_100, sessionId);
+  const older = integrityProvider.sign({
+    type: 'message', id: 1, channelId, role: 'user', content: 'Older session.', timestamp: 1,
+  }, null);
+  writeFileSync(join(sessionsDir, oldFilename), `${JSON.stringify(older)}\n`);
+  const entries: JournalEntry[] = [];
+  const append = (entry: JournalEntry): void => {
+    entries.push(integrityProvider.sign(entry, entries.at(-1)?._hmac ?? null));
+  };
+  for (const record of [retained, redacted]) {
+    append({
+      type: 'message', id: entries.length + 1, channelId, role: 'user',
+      content: 'Retained conversation source.', timestamp: record.completedAt,
+      metadata: JSON.stringify({ turn: {
+        schemaVersion: 1, turnId: record.turnId, requestId: record.requestId, role: 'user',
+      } }),
+    });
+  }
+  for (let index = 0; index < 6; index += 1) {
+    append({
+      type: 'message', id: entries.length + 1, channelId: rowChannelId,
+      role: 'system', content: 'Native session-scoped continuity input.',
+      timestamp: retained.completedAt + 200 + index,
+    });
+  }
+  append({
+    type: 'marker', id: entries.length + 1, channelId: rowChannelId,
+    marker: 'graceful_shutdown', timestamp: retained.completedAt + 300,
+  });
+  append({
+    type: 'tombstone', id: entries.length + 1, channelId: rowChannelId,
+    tombstoneTargetType: 'turn', tombstoneTargetId: redacted.turnId,
+    tombstoneAction: 'redact', timestamp: retained.completedAt + 400,
+  });
+  append({
+    type: 'tombstone', id: entries.length + 1, channelId: rowChannelId,
+    tombstoneTargetType: 'turn', tombstoneTargetId: redacted.turnId,
+    tombstoneAction: 'restore', timestamp: retained.completedAt + 500,
+  });
+  // A forged exact-owner restore must never cancel the preceding signed redact.
+  entries.at(-1)!._hmac = '0'.repeat(64);
+  const journalPath = join(sessionsDir, filename);
+  writeFileSync(journalPath, `${entries.map(entry => JSON.stringify(entry)).join('\n')}\n`);
+  const store = new SessionStore(sessionsDir, {
+    integrityKeyring: keyring,
+    turnRecordEligibilityFence: createSerialTurnRecordEligibilityFence(),
+  });
+  return { root, store, channelId, sessionId, retained, redacted, journalPath, keyring, integrityProvider };
+}
+
 describe('background-work handoff integrity recovery', () => {
+  it('recovers exact logical-owner system history without weakening signed tombstone authority', async () => {
+    const fixture = createExactLineageFixture();
+    await fixture.store.appendTurnRecord(fixture.retained);
+    await fixture.store.appendTurnRecord(fixture.redacted);
+    const before = readFileSync(fixture.journalPath, 'utf8');
+
+    const primed = await fixture.store.primeTurnTombstoneAuthority();
+    expect(primed.deferred).toEqual([]);
+    expect(primed.primed).toBe(2);
+    const enqueue = vi.fn(async () => undefined);
+    const manager = new SessionManager(fixture.store, makeConfig(fixture.root));
+    await new BackgroundWorkHandoffRecoveryRuntime(manager).recover(enqueue);
+
+    expect(enqueue.mock.calls.flatMap(call => call[0].jobs).map(job => job.sourceTurnId))
+      .toEqual([fixture.retained.turnId]);
+    expect(ebadmsgWarnings(fixture.channelId)).toEqual([]);
+    expect(readFileSync(fixture.journalPath, 'utf8')).toBe(before);
+  });
+
+  it.each(['sibling', 'foreign'] as const)('rejects a signed %s owner even in the same physical journal', async (rowOwner) => {
+    const fixture = createExactLineageFixture(rowOwner);
+    await fixture.store.appendTurnRecord(fixture.retained);
+    const skipped: unknown[] = [];
+    const recovered: TurnRecord[] = [];
+
+    for await (const record of fixture.store.streamRecoverableBackgroundWorkTurnRecords(
+      [fixture.channelId], { onEvidenceOwnerSkipped: skip => skipped.push(skip) },
+    )) recovered.push(record);
+
+    expect(recovered).toEqual([]);
+    expect(skipped).toEqual([expect.objectContaining({
+      errno: 'EBADMSG', ownerSessionId: fixture.sessionId,
+    })]);
+    const primed = await fixture.store.primeTurnTombstoneAuthority();
+    expect(primed.deferred).toEqual([expect.objectContaining({
+      sessionId: fixture.sessionId, reason: 'EBADMSG',
+    })]);
+  });
+
+  it('keeps a prior generation retirement intact while a native shutdown makes corrected lineage recoverable', async () => {
+    const fixture = createExactLineageFixture();
+    await fixture.store.appendTurnRecord(fixture.retained);
+    const backupRootDir = join(fixture.root, 'backups');
+    const skip = readCorruptTurnRecordRecoveryEvidence(
+      fixture.sessionId, fixture.channelId, [fixture.journalPath],
+    );
+    if (!skip) throw new Error('Expected exact source generation');
+    const ledger = new BackgroundWorkHandoffRecoveryDispositionStore(backupRootDir);
+    ledger.retire(skip);
+    const ledgerPath = join(backupRootDir, 'background-work-handoff-recovery-dispositions.jsonl');
+    const beforeLedger = readFileSync(ledgerPath, 'utf8');
+    const store = new SessionStore(join(fixture.root, 'sessions'), {
+      integrityKeyring: fixture.keyring,
+      turnRecordEligibilityFence: createSerialTurnRecordEligibilityFence(),
+      backgroundWorkHandoffRecoveryDisposition: createBackgroundWorkHandoffRecoveryDisposition({
+        sessionsDir: join(fixture.root, 'sessions'),
+        backupRootDir,
+        integrityProvider: fixture.integrityProvider,
+      }),
+    });
+    const collect = async (): Promise<TurnRecord[]> => {
+      const records: TurnRecord[] = [];
+      for await (const record of store.streamRecoverableBackgroundWorkTurnRecords([fixture.channelId])) {
+        records.push(record);
+      }
+      return records;
+    };
+
+    expect(await collect()).toEqual([]);
+    store.getRecent(fixture.sessionId, 1);
+    expect(store.markGracefulShutdownForActiveChannels()).toContain(fixture.sessionId);
+    expect((await collect()).map(record => record.turnId)).toEqual([fixture.retained.turnId]);
+    expect(readFileSync(ledgerPath, 'utf8')).toBe(beforeLedger);
+    expect(ledger.has(skip)).toBe(true);
+  });
+
   it('durably retires only the unchanged zero-repair EBADMSG owner and continues recovery', async () => {
     const root = mkdtempSync(join(tmpdir(), 'handoff-noop-ebadmsg-'));
     rootsToDelete.push(root);

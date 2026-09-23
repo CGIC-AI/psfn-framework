@@ -16,6 +16,7 @@ const entries = {
     'owner-upgrade-readiness-probe': 'src/app/maintenance/owner-upgrade-readiness-probe.ts',
     'resolve-model-usage-ledger-schema':
       'src/app/maintenance/resolve-model-usage-ledger-schema.ts',
+    'migrate-journal-message-addressing': 'src/app/maintenance/migrate-journal-message-addressing.ts',
     'session-integrity-repair': 'src/app/maintenance/session-integrity-repair.ts',
     'turn-record-recovery-worker':
       'src/persistence/sessions/turn-record-recovery-worker.ts',

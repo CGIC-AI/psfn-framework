@@ -56,6 +56,8 @@ import { evaluateRestWindowEligibility, type RestWindowEligibilityDecision } fro
 import { FREE_TIME_CHANNEL_PREFIX } from '../session/session-id.js';
 import type { SessionEntry } from '../session/types.js';
 import type { Scheduler } from './scheduler.js';
+import type { FleetSlotStagger, ScheduledTaskRun } from './types.js';
+import { staggerFleetOrdinalWithinWindow } from './fleet-maintenance-coordinator.js';
 import type { FreeTimeChooserOutcome, FreeTimeRestReason } from './free-time-chooser.js';
 import type { FreeTimeLane } from './free-time-lane.js';
 import {
@@ -237,12 +239,15 @@ const FREE_TIME_CLOSING = 'There is no task and nothing to prove. When you feel 
 export function buildFreeTimeFramingPrompt(input: {
   seedText: string;
   projectContext?: string | null;
+  /** Concern candidates still waiting for her decision (vcq8v.5), if any. */
+  pendingConcerns?: string | null;
 }): string {
   const seed = input.seedText.trim();
   return [
     '[Free time]',
     seed,
     ...(input.projectContext?.trim() ? [input.projectContext.trim()] : []),
+    ...(input.pendingConcerns?.trim() ? [input.pendingConcerns.trim()] : []),
     FREE_TIME_CLOSING,
   ].join('\n\n');
 }
@@ -329,6 +334,8 @@ export interface FreeTimeBlockRunInput {
   /** Invoke one free-time turn on the internal channel; returns her response. */
   invokeTurn: (input: { turnIndex: number; content: string }) => Promise<{ content: string }>;
   now?: () => number;
+  /** Scheduler attempt signal; checked before every turn so an aborted block stops spending. */
+  signal: AbortSignal;
 }
 
 /**
@@ -349,6 +356,7 @@ export async function runFreeTimeBlock(input: FreeTimeBlockRunInput): Promise<Fr
   let endReason: FreeTimeBlockEndReason = 'turns_exhausted';
 
   for (let turnIndex = 0; turnIndex < maxTurns; turnIndex += 1) {
+    input.signal.throwIfAborted();
     const spentBefore = input.readSpentChargeUnits();
     if (spentBefore >= maxChargeUnits) {
       endReason = 'charge_budget_exhausted';
@@ -423,6 +431,13 @@ export interface FreeTimeRuntimeOptions {
   config: FreeTimeConfig;
   /** Rest window used by the quiet-hours lane; shared with episodicProcessing. */
   restWindow: EpisodicProcessingRestWindowConfig;
+  /**
+   * Fleet position and stagger window (scheduler.json `fleetStagger`). When
+   * present, each lane's poll phase is offset by the companion's fleet ordinal
+   * so a fleet rolled out together does not start free-time blocks in the
+   * same instant. Absent for a single-companion deployment.
+   */
+  fleetStagger?: FleetSlotStagger;
   eventBus?: EventBus;
   /**
    * Runs the whole block inside a charge context (charge-policy 'background'
@@ -466,6 +481,8 @@ export interface FreeTimeRuntimeOptions {
    * This seam can only NARROW what the summarizer sees, never widen it.
    */
   resolveReturnDestination?: () => DisclosureDestination;
+  /** Renders pending concern candidates for her to keep or let go (vcq8v.5). */
+  renderPendingConcernCandidates?: () => Promise<string | null>;
   /**
    * Resolve the captured per-turn disclosure lineage for one free-time
    * transcript entry, so the projection can assess each entry against the
@@ -688,7 +705,7 @@ function makeLaneHandler(
   options: FreeTimeRuntimeOptions,
   lane: FreeTimeLane,
   state: FreeTimeLaneCadenceState,
-): () => Promise<void> {
+): (run: ScheduledTaskRun) => Promise<void> {
   const now = options.now ?? (() => Date.now());
   // Lane-independent continuity: identity comes from the chosen workspace, never
   // from `lane`. The default segment resolves to one shared continuity session
@@ -701,7 +718,7 @@ function makeLaneHandler(
     ? resolveActiveTimezone()
     : options.restWindow.timeZone;
 
-  return async () => {
+  return async ({ signal }) => {
     const nowMs = now();
 
     // Daily block counter resets on local-day rollover.
@@ -835,9 +852,13 @@ function makeLaneHandler(
       const projectContext = chosen?.kind === 'workspace'
         ? buildChosenWorkspaceFraming(chosen.workspace, chosen.label)
         : (options.loadProjectContext ? await options.loadProjectContext() : null);
+      const pendingConcerns = options.renderPendingConcernCandidates
+        ? await options.renderPendingConcernCandidates()
+        : null;
       const framingPrompt = buildFreeTimeFramingPrompt({
         seedText: options.config.seedText,
         projectContext,
+        pendingConcerns,
       });
 
       result = await options.runBlock({
@@ -857,6 +878,7 @@ function makeLaneHandler(
             content,
           }),
           now,
+          signal,
         }),
       });
     }
@@ -939,6 +961,25 @@ function makeLaneHandler(
   };
 }
 
+/**
+ * Poll registration for a free-time lane. A fleet member's poll phase is
+ * offset by its manifest ordinal, spread evenly across the stagger window
+ * clamped to one poll interval (a longer offset would only wrap around).
+ */
+function freeTimePollRegistration(
+  intervalMs: number,
+  stagger: FleetSlotStagger | undefined,
+): { skipFirstRun: true; phaseOffsetMs?: number } {
+  if (!stagger) return { skipFirstRun: true };
+  const phaseOffsetMs = staggerFleetOrdinalWithinWindow({
+    manifestOrdinal: stagger.manifestOrdinal,
+    fleetSize: stagger.fleetSize,
+    windowStartMs: 0,
+    windowEndMs: Math.min(stagger.windowMs, intervalMs),
+  });
+  return { skipFirstRun: true, phaseOffsetMs };
+}
+
 export function registerFreeTimeTasks(options: FreeTimeRuntimeOptions): void {
   if (!options.config.enabled) {
     log.info('Free-time lanes disabled by scheduler.json freeTime.enabled');
@@ -952,29 +993,31 @@ export function registerFreeTimeTasks(options: FreeTimeRuntimeOptions): void {
   const sharedState: FreeTimeLaneCadenceState = { blocksToday: 0 };
 
   if (options.config.quietHours.enabled) {
+    const intervalMs = Math.max(1_000, options.config.quietHours.checkIntervalMs);
     options.scheduler.register({
       id: FREE_TIME_QUIET_HOURS_TASK_ID,
       name: FREE_TIME_QUIET_HOURS_TASK_NAME,
       type: 'every',
-      intervalMs: Math.max(1_000, options.config.quietHours.checkIntervalMs),
+      intervalMs,
       availability: 'do_not_disturb',
       handler: makeLaneHandler(options, 'quiet_hours', sharedState),
       eligibility: { requiredTokens: ['memory.write'] },
       state: 'idle',
-    }, { skipFirstRun: true });
+    }, freeTimePollRegistration(intervalMs, options.fleetStagger));
   }
 
   if (options.config.idle.enabled) {
+    const intervalMs = Math.max(1_000, options.config.idle.checkIntervalMs);
     options.scheduler.register({
       id: FREE_TIME_IDLE_TASK_ID,
       name: FREE_TIME_IDLE_TASK_NAME,
       type: 'every',
-      intervalMs: Math.max(1_000, options.config.idle.checkIntervalMs),
+      intervalMs,
       availability: 'do_not_disturb',
       handler: makeLaneHandler(options, 'idle', sharedState),
       eligibility: { requiredTokens: ['memory.write'] },
       state: 'idle',
-    }, { skipFirstRun: true });
+    }, freeTimePollRegistration(intervalMs, options.fleetStagger));
   }
 
   log.info('Free-time lanes registered', {

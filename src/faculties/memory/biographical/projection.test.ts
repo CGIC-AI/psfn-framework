@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { InMemoryBiographicalProfileStore } from './in-memory-store.js';
+import type { BiographicalClaimWriteInput } from './store-port.js';
 import {
   projectBiographicalContext,
   destinationFromScope,
@@ -99,6 +100,55 @@ interface Harness {
 function harness(): Harness {
   return { store: new InMemoryBiographicalProfileStore(() => NOW), revalidator: new MemoryRevalidator() };
 }
+
+describe('reviewed companion self roles and preferences', () => {
+  async function selfClaim(h: Harness, overrides: Partial<BiographicalClaimWriteInput> = {}) {
+    const claim = await h.store.writeClaim({
+      subject: COMPANION,
+      kind: 'stable-preference',
+      value: { kind: 'stable-preference', schemaVersion: 1, domain: 'food', target: 'tea', polarity: 'likes' },
+      basis: 'explicit', status: 'active', confidence: 1,
+      sources: [source('memory:self-preference')], portabilityScope: 'universal',
+      now: NOW, ...overrides,
+    });
+    h.revalidator.seed(claim.sources);
+    return claim;
+  }
+
+  it('projects supported self kinds with atomic disclosure lineage at the turn time', async () => {
+    const h = harness();
+    const preference = await selfClaim(h);
+    const role = await selfClaim(h, {
+      kind: 'role',
+      value: { kind: 'role', schemaVersion: 1, roleType: 'community', title: 'story keeper' },
+      validFrom: '2026-08-01T00:00:00.000Z', validTo: '2026-09-01T00:00:00.000Z',
+    });
+    const result = await project(h, dmWithV());
+    expect(result.promptSection).toContain('likes tea (food)');
+    expect(result.promptSection).toContain('story keeper');
+    expect(result.admittedClaimIds.sort()).toEqual([preference.id, role.id].sort());
+    expect(result.disclosureSources.map(item => item.ref).sort())
+      .toEqual([`biographical:${preference.id}`, `biographical:${role.id}`].sort());
+  });
+
+  it.each(['origin', 'future', 'expired', 'drift', 'intimate', 'foreign'] as const)(
+    'keeps %s self evidence closed', async reason => {
+      const h = harness();
+      const claim = await selfClaim(h, {
+        ...(reason === 'origin' || reason === 'intimate' ? { portabilityScope: 'origin_only' } : {}),
+        ...(reason === 'future' ? { validFrom: '2027-01-01T00:00:00.000Z' } : {}),
+        ...(reason === 'expired' ? { validTo: '2026-08-01T00:00:00.000Z' } : {}),
+        ...(reason === 'intimate' ? { sources: [source('memory:intimate', { sensitivityAtProjection: 'intimate' })] } : {}),
+        ...(reason === 'foreign' ? { subject: { kind: 'contact', contactId: 'other', subjectVersion: 1 }, portabilityScope: 'subject_present' } : {}),
+      });
+      if (reason === 'drift') h.revalidator.drift(claim.sources[0]!.ref, { evidenceDigest: 'b'.repeat(64) });
+      const result = await project(h, dmWithV());
+      expect(result.promptSection).toBe('');
+      expect(result.admittedClaimIds).toEqual([]);
+      expect(result.disclosureSources).toEqual([]);
+    },
+  );
+});
 
 async function seed(h: Harness, nickname: string, ref: string) {
   const sources = [source(ref)];

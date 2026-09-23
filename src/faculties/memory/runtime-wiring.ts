@@ -1,3 +1,4 @@
+import type { CompanionRoomMembershipAuthority } from './companion-provenance.js';
 import type { ToolRegistrar } from '../../core/agent/tool-registrar.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import type { MemoryRetrievalPolicy } from '../../system/config/memory-retrieval-policy.js';
@@ -30,6 +31,8 @@ export function registerMemoryTools(
   target: MemoryRuntimeTarget,
   options: {
     writer: MemoryWriter;
+    companionId?: string;
+    roomMembershipAuthority?: CompanionRoomMembershipAuthority | null;
     memoryStore: MemoryStorePort;
     memoryDeletionProposalStore: MemoryDeletionProposalStorePort;
     memoryDeletionApprovalPort: MemoryDeletionApprovalPort;
@@ -38,7 +41,7 @@ export function registerMemoryTools(
     episodeSearch?: HybridEpisodeSearchPort | null;
     sessionReader?: EpisodeDrilldownSessionReader | null;
     sessionQuarantineFilter?: MemorySessionQuarantineFilter | null;
-    episodicAccessScope?: RetrievalAccessScope | (() => RetrievalAccessScope | undefined);
+    retrievalAccessScope?: RetrievalAccessScope | (() => RetrievalAccessScope | undefined);
     contactStore?: ContactStorePort | null;
     /**
      * Live retrieval policy authority (zet.2) so the `action=timeline` tool
@@ -52,15 +55,19 @@ export function registerMemoryTools(
     ? createSharedBackgroundProvider({
       memoryStore: options.memoryStore,
       contactStore: options.contactStore,
+      companionId: options.companionId,
+      roomMembershipAuthority: options.roomMembershipAuthority,
     })
     : null;
   target.registerTool(createMemoryTool(options.writer, options.memoryStore, {
+    companionId: options.companionId,
+    roomMembershipAuthority: options.roomMembershipAuthority,
     episodicStore: options.episodicStore ?? null,
     episodeSearch: options.episodeSearch ?? null,
     sessionReader: options.sessionReader ?? null,
     sessionQuarantineFilter: options.sessionQuarantineFilter ?? null,
-    ...(options.episodicAccessScope !== undefined
-      ? { episodicAccessScope: options.episodicAccessScope }
+    ...(options.retrievalAccessScope !== undefined
+      ? { retrievalAccessScope: options.retrievalAccessScope }
       : {}),
     sharedBackgroundProvider,
     ...(options.memoryRetrievalPolicy !== undefined

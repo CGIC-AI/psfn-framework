@@ -157,6 +157,14 @@ export interface AutomataBusWorkerRunOptions {
   /** Bounded current-state briefing query. Owner-supplied, never model-supplied. */
   briefingQuery: string;
   allowedActions?: readonly AutomataBusToolAction[];
+  /**
+   * `worker` (default) forms the spawn briefing and the governed tool for a
+   * class whose model loop reads prior notes and writes new ones.
+   * `handoff_only` is for classes with no worker model loop to carry them:
+   * no briefing query runs and no tool is formed; the run still records its
+   * deterministic terminal handoff.
+   */
+  formation?: 'worker' | 'handoff_only';
   policy?: AutomataWorkerFailurePolicy;
   telemetry?: AutomataWorkerTelemetryPort;
 }
@@ -173,7 +181,7 @@ function normalizeReceiptRefs(values: readonly string[], field: string): string[
 }
 
 /** Bus actions that leave durable learned state, as opposed to reading it. */
-const WRITE_ACTIONS = new Set<AutomataBusToolAction>(['append', 'correct', 'handoff']);
+const WRITE_ACTIONS = new Set<AutomataBusToolAction>(['note', 'append', 'correct', 'handoff']);
 
 interface BusWriteObserver {
   writes: number;
@@ -478,6 +486,11 @@ async function formAccess(input: {
   ) => void;
 }): Promise<FormedAccess> {
   const { options, binding, observer, emit } = input;
+  if (binding.execute && options.formation === 'handoff_only') {
+    emit('brief', 'skipped', { detail: 'handoff_only_class' });
+    emit('tool', 'skipped', { detail: 'handoff_only_class' });
+    return { scope: null, briefing: null, promptBlock: null, tool: null };
+  }
   const eligible = binding.execute
     && isAutomataBusWorkerEligible(options.access, binding.lineage.automatonClass);
   if (!eligible) {

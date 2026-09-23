@@ -26,7 +26,12 @@ import { persistMemorySubjectProjection } from './postgres-store/subject-project
 import {
   createSubjectAuthorizedMemoryStore,
   getSubjectAuthorizedAdminMemoryStats,
+  memorySubjectAccessContextFromCorrelation,
 } from './subject-authorized-store.js';
+import {
+  getRequestContext,
+  runWithRequestContext,
+} from '../../primitives/llm/request-context.js';
 import { isInternalMemoryArtifact } from './internal-artifacts.js';
 import {
   subjectAdminFilter,
@@ -184,6 +189,176 @@ describeMemorySubjectMutationContract(
   )),
   INTEGRATION_TIMEOUT_MS,
 );
+
+describe('postgres subject-authorized tool writer background mutations', () => {
+  it('records the supersedes link and the post-write maintenance review end to end', async () => {
+    await withMemoryDatabase(async (pool) => {
+      const store = await createPostgresMemoryStoreFromPool(pool, 4);
+      const embeddings: EmbeddingProviderPort = {
+        dims: 4,
+        embed: async () => DEFAULT_EMBEDDING,
+        embedBatch: async texts => texts.map(() => DEFAULT_EMBEDDING),
+      };
+      // The production tool writer: the subject-authorized proxy resolved from
+      // the live request context (src/app/agent/main.ts toolMemoryStore).
+      const toolStore = createSubjectAuthorizedMemoryStore(
+        store,
+        () => memorySubjectAccessContextFromCorrelation(getRequestContext()),
+      );
+      const maintenanceErrors: unknown[] = [];
+      const writer = new MemoryWriter(toolStore, embeddings, {
+        onMaintenanceError: error => maintenanceErrors.push(error),
+      });
+      const context = {
+        channelId: 'discord:dm:contact-a',
+        requesterProvenance: 'human' as const,
+        viewerMemorySubjectContactId: 'contact-a',
+      };
+
+      const { oldWrite, newWrite } = await runWithRequestContext(context, async () => {
+        const oldWrite = await writer.write({
+          text: 'Current workspace is /home/user/old.',
+          type: 'semantic',
+          confidence: 0.3,
+          tags: ['current_state', 'workspace'],
+        });
+        const newWrite = await writer.write({
+          text: 'Current workspace is /home/user/new.',
+          type: 'semantic',
+          confidence: 0.45,
+          tags: ['current_state', 'workspace'],
+        });
+        return { oldWrite, newWrite };
+      });
+      // Maintenance reviews are queued on a timer that keeps the request context.
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      expect(newWrite.action).toBe('superseded');
+      expect((await store.getById(oldWrite.memory.id))?.supersededBy).toBe(newWrite.memory.id);
+      expect(await store.getEvolutionLinksForSourceMemory(newWrite.memory.id)).toEqual([
+        expect.objectContaining({
+          targetMemoryId: oldWrite.memory.id,
+          relation: 'supersedes',
+          reason: 'memory_writer:current_state_replacement',
+        }),
+      ]);
+      expect(maintenanceErrors).toEqual([]);
+      const reviews = await store.listMemoryMaintenanceReviews();
+      // Low-confidence writes queue provenance reviews for both memories — the
+      // old one's may land after the new write superseded it.
+      expect(reviews.map(review => review.subjectMemoryId)).toEqual(
+        expect.arrayContaining([oldWrite.memory.id, newWrite.memory.id]),
+      );
+
+      // The guard still refuses the same mutations without a trusted subject.
+      await expect(toolStore.recordEvolutionLink({
+        sourceMemoryId: newWrite.memory.id,
+        targetMemoryId: oldWrite.memory.id,
+        relation: 'supersedes',
+        confidence: 0.9,
+        reason: 'untrusted',
+        sourceRef: 'test',
+        sourceType: 'conversation',
+        provenanceRefs: [],
+      })).rejects.toThrow('Memory access requires a trusted memory subject');
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+});
+
+describe('postgres companion-internal memory writes (h4bq1)', () => {
+  it('lets a companion-internal system turn write through the tool writer as companion_private', async () => {
+    await withMemoryDatabase(async (pool) => {
+      const store = await createPostgresMemoryStoreFromPool(pool, 4);
+      const embeddings: EmbeddingProviderPort = {
+        dims: 4,
+        embed: async () => DEFAULT_EMBEDDING,
+        embedBatch: async texts => texts.map(() => DEFAULT_EMBEDDING),
+      };
+      const toolStore = createSubjectAuthorizedMemoryStore(
+        store,
+        () => memorySubjectAccessContextFromCorrelation(getRequestContext()),
+      );
+      const writer = new MemoryWriter(toolStore, embeddings);
+
+      const result = await runWithRequestContext({
+        channelId: 'internal:free-time:workspace',
+        requesterProvenance: 'system',
+      }, async () => await writer.write({
+        text: 'Free-time workspace note: the sketch folder is tidy now.',
+        type: 'semantic',
+        confidence: 0.8,
+      }));
+
+      const stored = await store.getById(result.memory.id);
+      expect(stored?.provenance?.subjectContactId).toBeUndefined();
+      expect(stored?.provenance?.subjectScope).toBe('companion_internal');
+      expect(await store.getMemorySubjectClassification(result.memory.id)).toMatchObject({
+        subjectClass: 'companion_private',
+        status: 'current',
+        subjectContactIds: [],
+      });
+      const internalView = await runWithRequestContext({
+        channelId: 'internal:free-time:workspace',
+        requesterProvenance: 'system',
+      }, async () => await toolStore.getById(result.memory.id));
+      expect(internalView?.id).toBe(result.memory.id);
+      const contactView = await runWithRequestContext({
+        channelId: 'discord:dm:contact-a',
+        requesterProvenance: 'human',
+        viewerMemorySubjectContactId: 'contact-a',
+      }, async () => await toolStore.getById(result.memory.id));
+      expect(contactView).toBeUndefined();
+      await expect(writer.write({
+        text: 'An untrusted caller tries to write.',
+        type: 'semantic',
+        confidence: 0.8,
+      })).rejects.toThrow('Memory access requires a trusted memory subject');
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('repairs memories already stamped with the companion:internal pseudo contact', async () => {
+    await withMemoryDatabase(async (pool) => {
+      const first = await createPostgresMemoryStoreFromPool(pool, 4);
+      await first.insertMemory(makeMemory({
+        id: 'legacy-internal-note',
+        text: 'Legacy free-time note written before h4bq1.',
+        provenance: { subjectContactId: 'companion:internal', channelId: 'internal:free-time:workspace' },
+      }), DEFAULT_EMBEDDING);
+      await first.insertMemory(makeMemory({
+        id: 'contact-note',
+        text: 'A real contact memory stays untouched.',
+        provenance: { subjectContactId: 'contact-a' },
+      }), DEFAULT_EMBEDDING);
+      const before = await first.getMemorySubjectClassification('legacy-internal-note');
+      expect(before?.subjectClass).not.toBe('companion_private');
+      const contactBefore = await first.getMemorySubjectClassification('contact-note');
+
+      // Next startup: migrations repair the row, the reopened classifier
+      // checkpoint reclassifies it before the store is returned.
+      const restarted = await createPostgresMemoryStoreFromPool(pool, 4);
+      const repaired = await restarted.getById('legacy-internal-note');
+      expect(repaired?.provenance?.subjectContactId).toBeUndefined();
+      expect(repaired?.provenance?.subjectScope).toBe('companion_internal');
+      expect(repaired?.provenance?.channelId).toBe('internal:free-time:workspace');
+      expect(await restarted.getMemorySubjectClassification('legacy-internal-note')).toMatchObject({
+        subjectClass: 'companion_private',
+        status: 'current',
+        subjectContactIds: [],
+      });
+      const contactAfter = await restarted.getMemorySubjectClassification('contact-note');
+      expect(contactAfter).toMatchObject({
+        subjectClass: contactBefore?.subjectClass,
+        memoryRevision: contactBefore?.memoryRevision,
+        status: 'current',
+      });
+
+      // Idempotent: a further startup changes nothing.
+      const third = await createPostgresMemoryStoreFromPool(pool, 4);
+      expect((await third.getMemorySubjectClassification('legacy-internal-note'))?.memoryRevision)
+        .toBe((await restarted.getMemorySubjectClassification('legacy-internal-note'))?.memoryRevision);
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+});
 
 describe('postgres memory store integration', () => {
   it('makes patched text immediately retrievable through new semantic and lexical projections', async () => {

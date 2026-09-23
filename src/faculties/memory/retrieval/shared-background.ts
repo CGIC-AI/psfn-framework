@@ -1,3 +1,5 @@
+import { isMemoryOwnedByCompanion, type CompanionRoomMembershipAuthority } from '../companion-provenance.js';
+import type { RetrievalAccessScope } from '../types.js';
 // ── Shared-background retrieval (E4.5) ──
 // "What links contact A and contact B" — a union of the memories that connect
 // two people:
@@ -78,6 +80,8 @@ export interface SharedBackgroundCandidate {
 
 /** Narrow port surface consumed by shared-background collection (read-only). */
 export interface SharedBackgroundDeps {
+  companionId?: string;
+  roomMembershipAuthority?: CompanionRoomMembershipAuthority | null;
   memoryStore: Pick<MemoryStorePort, 'getById' | 'listMemories'>
     & Partial<Pick<MemoryStorePort, 'getByIds'>>;
   contactStore: {
@@ -103,6 +107,7 @@ export interface SharedBackgroundDeps {
 
 /** The asking context's gates — mirrors evaluateRetrievalAccessDecision options. */
 export interface SharedBackgroundAccessOptions {
+  accessScope?: RetrievalAccessScope;
   trustLevel: TrustLevel;
   /** Context Envelope disclosure pair (E3.3). */
   channelPrivacy: ChannelPrivacy;
@@ -276,7 +281,8 @@ export async function collectSharedBackgroundUnion(
 
   const union = new Map<string, { memory: PurrMemory; sources: Set<SharedBackgroundSource> }>();
   const addSource = (memory: PurrMemory, source: SharedBackgroundSource): void => {
-    if (!isCurrentMemory(memory) || isInternalMemoryArtifact(memory)) return;
+    if (!isCurrentMemory(memory) || isInternalMemoryArtifact(memory)
+      || !isMemoryOwnedByCompanion(memory, deps.companionId, deps.roomMembershipAuthority)) return;
     const existing = union.get(memory.id);
     if (existing) {
       existing.sources.add(source);
@@ -375,6 +381,7 @@ export async function computeSharedBackground(
   });
 
   const access = {
+    accessScope: query.access.accessScope,
     trustLevel: query.access.trustLevel,
     channelPrivacy: query.access.channelPrivacy,
     broadcast: query.access.broadcast,

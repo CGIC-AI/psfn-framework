@@ -198,7 +198,7 @@ export class FakePostgresPool {
       return result(row ? [row] : []);
     }
 
-    if (normalized.startsWith('select id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence, emotional_baseline, first_seen, last_seen, notes, timezone, gender, pronouns, age from contacts where trust_level = $1 order by last_seen desc')) {
+    if (normalized.startsWith('select id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence, emotional_baseline, first_seen, last_seen, notes, timezone, gender, pronouns, age, archived_at, channel_identities from contacts where trust_level = $1 order by last_seen desc')) {
       const trustLevel = String(values[0] ?? '');
       return result([...this.contacts.values()]
         .filter(row => row.trust_level === trustLevel)

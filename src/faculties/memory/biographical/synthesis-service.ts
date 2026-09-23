@@ -442,11 +442,15 @@ export class BiographySynthesisService {
     // owner policy rather than being an independent tuning value.
     const scanLimit = policy.budgets.maxSourcesPerCandidate
       * policy.budgets.maxCandidatesPerAutomataRun;
+    const cursorKey = stageCursorKeyForTarget(target);
+    const cursor = await this.options.profileStore.getStageCursor('biography_synthesis', cursorKey);
+    const pageIndex = cursor?.sourceScan?.pageIndex ?? 0;
     const collection = await collectAuthorizedBiographicalSources({
       memoryStore: this.options.memoryStore,
       subject: target.subject,
       policy,
       scanLimit,
+      before: cursor?.sourceScan?.before,
       ...(target.evidenceScope ? { evidenceScope: target.evidenceScope } : {}),
     });
     const withheldByPolicy = Object.values(collection.withheldByPolicy)
@@ -464,8 +468,6 @@ export class BiographySynthesisService {
       candidatesWithheld: 0,
       candidatesDuplicate: 0,
     };
-    if (collection.evidence.length === 0) return empty;
-
     const candidateLimit = Math.min(depth.candidateLimitPerRefresh, input.runBudget);
     if (candidateLimit <= 0) return empty;
 
@@ -474,15 +476,40 @@ export class BiographySynthesisService {
     // silo costs one cursor read and zero model calls. It is checked after the
     // policy filter on purpose: a source becoming inadmissible changes the
     // digest and correctly re-opens the target.
-    const cursorKey = stageCursorKeyForTarget(target);
     const evidenceDigest = computeStageInputDigest(collection.evidence.map(
       entry => `${entry.source.ref}@${entry.source.revision}@${entry.source.evidenceDigest}`,
     ));
-    const cursor = await this.options.profileStore.getStageCursor(
-      'biography_synthesis',
-      cursorKey,
-    );
-    if (cursor?.observedDigest === evidenceDigest) {
+    // Reuse page-ordinal attestations on every traversal. New head arrivals
+    // cannot create a new cursor row per pass or displace an in-flight keyset.
+    const pageKey = pageIndex === 0 ? cursorKey : JSON.stringify([cursorKey, pageIndex]);
+    const pageCursor = pageIndex === 0 ? cursor
+      : await this.options.profileStore.getStageCursor('biography_synthesis', pageKey);
+    const advance = async () => {
+      const sourceScan = collection.nextBefore === undefined ? undefined : {
+        pageIndex: pageIndex + 1, before: collection.nextBefore,
+      };
+      if (pageIndex !== 0) {
+        // Commit the page attestation first: a crash before progress repeats
+        // this page cheaply rather than skipping unstaged work.
+        await this.options.profileStore.writeStageCursor({
+          stage: 'biography_synthesis', cursorKey: pageKey,
+          observedDigest: evidenceDigest, now: this.now(),
+        });
+      }
+      await this.options.profileStore.writeStageCursor({
+        stage: 'biography_synthesis', cursorKey,
+        observedDigest: pageIndex === 0 ? evidenceDigest : cursor!.observedDigest,
+        sourceScan, now: this.now(),
+      });
+    };
+    // A policy-empty page still consumed its bounded source window. Moving
+    // past it is required to ever discover older eligible identity evidence.
+    if (collection.evidence.length === 0) {
+      await advance();
+      return empty;
+    }
+    if (pageCursor?.observedDigest === evidenceDigest) {
+      await advance();
       return { ...empty, unchanged: true };
     }
 
@@ -529,12 +556,7 @@ export class BiographySynthesisService {
     }
     // The cursor advances only after the whole target's candidates are durably
     // staged, so a crash mid-target re-runs it rather than silently skipping it.
-    await this.options.profileStore.writeStageCursor({
-      stage: 'biography_synthesis',
-      cursorKey,
-      observedDigest: evidenceDigest,
-      now,
-    });
+    await advance();
     return {
       synthesized: true,
       unchanged: false,

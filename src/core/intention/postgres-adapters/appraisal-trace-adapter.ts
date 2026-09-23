@@ -24,7 +24,6 @@ import {
   DEFAULT_PENDING_LIST_LIMIT,
   MAX_PENDING_ID_CHARS,
   MAX_PENDING_REASON_CHARS,
-  MAX_PENDING_SUMMARY_CHARS,
   MAX_PENDING_TEXT_CHARS,
   type PendingFollowUpRow,
   clampListLimit,
@@ -39,6 +38,7 @@ import {
   normalizeTiming,
   serializeFollowUpVAD,
 } from './shared.js';
+import { boundContextSummary } from '../context-summary.js';
 
 interface PendingFollowUpQuarantineRow {
   id: string;
@@ -165,7 +165,7 @@ export class PostgresPendingFollowUpStore implements PendingFollowUpStorePort {
     const dueAt = resolvePendingFollowUpDueAtForWrite({ timing, createdAt, dueAt: input.dueAt }, this.now());
     const contactId = normalizeContactId(input.contactId);
     const sourceMessageId = normalizeContactId(input.sourceMessageId);
-    const contextSummary = normalizeOptionalText(input.contextSummary, 'contextSummary', MAX_PENDING_SUMMARY_CHARS);
+    const contextSummary = boundContextSummary(input.contextSummary);
     const wakeConditions = encodeWakeConditions(input.wakeConditions);
     const originIcpRootInitiationId = normalizeOptionalIcpRootInitiationId(
       input.originIcpRootInitiationId,
@@ -487,7 +487,7 @@ export class PostgresPendingFollowUpStore implements PendingFollowUpStorePort {
     const dueAt = resolvePendingFollowUpDueAtForWrite({ timing, dueAt: input.dueAt }, this.now());
     const contactId = normalizeContactId(input.contactId);
     const sourceMessageId = normalizeContactId(input.sourceMessageId);
-    const contextSummary = normalizeOptionalText(input.contextSummary, 'contextSummary', MAX_PENDING_SUMMARY_CHARS);
+    const contextSummary = boundContextSummary(input.contextSummary);
     const wakeConditions = encodeWakeConditions(input.wakeConditions);
     const originIcpRootInitiationId = normalizeOptionalIcpRootInitiationId(
       input.originIcpRootInitiationId,

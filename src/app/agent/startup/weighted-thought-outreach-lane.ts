@@ -24,10 +24,14 @@ import { registerWeightedThoughtOutreachTask } from '../../../core/scheduler/wei
 import type { EventBus } from '../../../shared/event-bus.js';
 import type { SchedulerRuntimeConfig as SchedulerConfig } from '../../../system/config/scheduler-config.js';
 import type { wireIcpInitiationSources } from '../icp-initiation-source-wiring.js';
+import { staggerQuietHoursRelease } from '../../../core/scheduler/quiet-hours-release-stagger.js';
+import type { FleetSlotStagger } from '../../../core/scheduler/types.js';
 
 export interface WeightedThoughtOutreachLaneDeps {
   scheduler: Scheduler;
   schedulerConfig: Pick<SchedulerConfig, 'weightedThoughtOutreach' | 'episodicProcessing'>;
+  /** Fleet position + stagger window for the outward quiet-hours release (m7jf2). */
+  fleetStagger?: FleetSlotStagger;
   eventBus: EventBus;
   weightedThoughtStore: WeightedThoughtStorePort | null | undefined;
   llmProvider: LLMProviderPort;
@@ -57,7 +61,7 @@ export function registerWeightedThoughtOutreachLane(deps: WeightedThoughtOutreac
       scheduler,
       eventBus,
       config: schedulerConfig.weightedThoughtOutreach,
-      quietHours: schedulerConfig.episodicProcessing,
+      quietHours: staggerQuietHoursRelease(schedulerConfig.episodicProcessing, deps.fleetStagger),
       store: weightedThoughtStore,
       nudgeEvaluator: createLlmNudgeEvaluator({
         llmProvider,

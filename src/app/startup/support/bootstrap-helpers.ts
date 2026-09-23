@@ -29,10 +29,14 @@ import {
   buildPersistenceCutoverOptionsFromConfig,
 } from '../../../persistence/cutover.js';
 import {
+  assertCompanionOwnedEmoSimProactivityProfile,
   bindCompanionObserverEvalSidecar,
   validateObserverEvalSidecarStartupConfig,
 } from '../../../system/config/observer-eval-sidecar-config.js';
-import { resolveEffectiveRuntimeSettings } from '../../../system/config/settings-overlay.js';
+import {
+  loadCompanionSettingsOverlay,
+  resolveEffectiveRuntimeSettings,
+} from '../../../system/config/settings-overlay.js';
 import { assertModelPurposeSelectionResolvable } from '../../../system/config/model-selection-config.js';
 import type { GatewaySystemDataWriterPort } from '../../../boundary/gateway/system-data-writer.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
@@ -237,6 +241,10 @@ export function hydrateCanonicalStartupConfig(
   applySettings(config, effectiveRuntimeSettings);
   bindCompanionObserverEvalSidecar(config);
   validateObserverEvalSidecarStartupConfig(config, pathSnapshot);
+  assertCompanionOwnedEmoSimProactivityProfile(
+    config,
+    loadCompanionSettingsOverlay(companionDataDir),
+  );
   if (secretAuthority === 'gateway') {
     assertSecuritySensitiveStartupConfig(config);
   }
@@ -290,6 +298,7 @@ export function hydrateCanonicalStartupConfig(
       listLimit: persistedScheduler.humanEscalation.listLimit,
       retention: { ...persistedScheduler.humanEscalation.retention },
     },
+    fleetStagger: { ...persistedScheduler.fleetStagger },
     backgroundWork: {
       supervisor: { ...persistedScheduler.backgroundWork.supervisor },
       postTurn: { ...persistedScheduler.backgroundWork.postTurn },
@@ -360,7 +369,10 @@ export function hydrateCanonicalStartupConfig(
       outreach: {
         ...persistedScheduler.socialDesire.outreach,
         budget: { ...persistedScheduler.socialDesire.outreach.budget },
+        contactPacing: { ...persistedScheduler.socialDesire.outreach.contactPacing },
+        turnContext: { ...persistedScheduler.socialDesire.outreach.turnContext },
       },
+      impulse: { ...persistedScheduler.socialDesire.impulse },
     },
     intentionFollowUp: { ...persistedScheduler.intentionFollowUp },
     icpAutonomy: {

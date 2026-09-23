@@ -62,6 +62,7 @@ function createFleetWithObserverRoots(
     sessionLabel: 'observer-session-one',
     agentName: 'observer-agent-one',
     persistenceRootDir: firstRoot,
+    personality: { O: 0.7, C: 0.4, E: 0.8, A: 0.6, N: 0.3 },
   };
   fleet.companions[1].observerEvalSidecar = {
     sidecarId: 'observer-two',
@@ -69,6 +70,7 @@ function createFleetWithObserverRoots(
     sessionLabel: 'observer-session-two',
     agentName: 'observer-agent-two',
     persistenceRootDir: secondRoot,
+    personality: { O: 0.5, C: 0.7, E: 0.3, A: 0.7, N: 0.5 },
   };
   return fleet;
 }
@@ -193,6 +195,7 @@ describe('companions owner-file config', () => {
             sessionLabel: `observer-session-${ordinal}`,
             agentName: `observer-agent-${ordinal}`,
             persistenceRootDir: `/var/lib/observer-${ordinal}`,
+            personality: { O: 0.6, C: 0.5, E: 0.5, A: 0.6, N: 0.4 },
           };
         });
         return fleet;
@@ -226,10 +229,36 @@ describe('companions owner-file config', () => {
         sessionLabel: 'observer-session-one',
         agentName: 'observer-agent-one',
         persistenceRootDir: '/var/lib/observer-one',
+        personality: { O: 0.6, C: 0.5, E: 0.5, A: 0.6, N: 0.4 },
       };
 
       expect(() => validateCompanionsConfig(fleet, 'companions.json'))
         .toThrow(/missing companions: 22222222-2222-4222-8222-222222222222/);
+    });
+
+    it('requires a complete, bounded companion-owned personality on every observer binding', () => {
+      const valid = createFleetWithObserverRoots('/var/lib/observer-one', '/var/lib/observer-two');
+      const parsed = validateCompanionsConfig(valid, 'companions.json');
+      expect(parsed.companions[0]?.observerEvalSidecar?.personality)
+        .toEqual({ O: 0.7, C: 0.4, E: 0.8, A: 0.6, N: 0.3 });
+      expect(parsed.companions[1]?.observerEvalSidecar?.personality)
+        .toEqual({ O: 0.5, C: 0.7, E: 0.3, A: 0.7, N: 0.5 });
+
+      const invalidPersonalities: unknown[] = [
+        undefined,
+        { O: 0.5, C: 0.5, E: 0.5, A: 0.5 },
+        { O: 0.5, C: 0.5, E: 0.5, A: 0.5, N: 1.2 },
+        { O: 0.5, C: 0.5, E: 0.5, A: 0.5, N: Number.NaN },
+        { O: 0.5, C: 0.5, E: 0.5, A: 0.5, N: 0.5, X: 0.1 },
+      ];
+      for (const personality of invalidPersonalities) {
+        const fleet = createFleetWithObserverRoots('/var/lib/observer-one', '/var/lib/observer-two');
+        const binding = fleet.companions[1].observerEvalSidecar as Record<string, unknown>;
+        if (personality === undefined) delete binding.personality;
+        else binding.personality = personality;
+        expect(() => validateCompanionsConfig(fleet, 'companions.json'))
+          .toThrow(/companions\[1\]\.observerEvalSidecar\.personality/);
+      }
     });
 
     it('rejects nested observer persistence roots in either fleet order', () => {

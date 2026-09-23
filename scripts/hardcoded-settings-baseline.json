@@ -177,21 +177,21 @@
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidate.limit@L1054",
+      "name": "main.candidate.limit@L1049",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidate.limit; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidate.limit@L1090",
+      "name": "main.candidate.limit@L1085",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidate.limit; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidate.limit@L1130",
+      "name": "main.candidate.limit@L1125",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidate.limit; code-owned only for harness behavior and not used as an unowned production setting."
@@ -205,28 +205,28 @@
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidateIdsBefore.limit@L1039",
+      "name": "main.candidateIdsBefore.limit@L1034",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidateIdsBefore.limit; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidateIdsBefore.limit@L1071",
+      "name": "main.candidateIdsBefore.limit@L1066",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidateIdsBefore.limit; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidateIdsBefore.limit@L1111",
+      "name": "main.candidateIdsBefore.limit@L1106",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidateIdsBefore.limit; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidateIdsBefore.limit@L637",
+      "name": "main.candidateIdsBefore.limit@L639",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidateIdsBefore.limit; code-owned only for harness behavior and not used as an unowned production setting."
@@ -478,6 +478,13 @@
       "name": "MIN_PEPPER_LENGTH",
       "value": "32",
       "note": "Code-owned safety floor: minimum byte length of HUB_DEVICE_ASSERTION_AUDIT_PEPPER (n66dn.2); a shorter audit pepper weakens assertion digest unlinkability and must never be operator-tunable downward."
+    },
+    {
+      "file": "src/app/maintenance/migrate-journal-message-addressing.ts",
+      "name": "runJournalAddressingMigrationCli.tailCache.maxEntriesPerChannel",
+      "value": "1",
+      "form": "object-member",
+      "note": "Code-owned constructor placeholder for the offline migration's invalidation-only Redis adapter (psfn-framework-tcoea). No tail reads or writes populate this cache; one satisfies the adapter's positive-capacity invariant without introducing a runtime tuning policy."
     },
     {
       "file": "src/app/maintenance/owner-upgrade-readiness-probe.ts",
@@ -3251,115 +3258,115 @@
     },
     {
       "file": "src/core/agent/worker-lanes.ts",
-      "name": "object@L114.maxDeliveriesPerForegroundTurn",
+      "name": "object@L115.maxDeliveriesPerForegroundTurn",
       "value": "0",
       "form": "object-member",
-      "note": "Existing mutable policy candidate object@L114.maxDeliveriesPerForegroundTurn; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate object@L115.maxDeliveriesPerForegroundTurn; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/agent/worker-lanes.ts",
-      "name": "object@L114.maxPendingSessionDeliveries",
+      "name": "object@L115.maxPendingSessionDeliveries",
       "value": "0",
       "form": "object-member",
-      "note": "Existing mutable policy candidate object@L114.maxPendingSessionDeliveries; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate object@L115.maxPendingSessionDeliveries; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/agent/worker-lanes.ts",
-      "name": "object@L114.maxQueuedActions",
+      "name": "object@L115.maxQueuedActions",
       "value": "0",
       "form": "object-member",
-      "note": "Existing mutable policy candidate object@L114.maxQueuedActions; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate object@L115.maxQueuedActions; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/agent/worker-lanes.ts",
-      "name": "object@L114.maxRunsPerSchedulerTick",
+      "name": "object@L115.maxRunsPerSchedulerTick",
       "value": "0",
       "form": "object-member",
-      "note": "Existing mutable policy candidate object@L114.maxRunsPerSchedulerTick; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate object@L115.maxRunsPerSchedulerTick; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/agent/worker-lanes.ts",
-      "name": "object@L128.maxDeliveriesPerForegroundTurn",
+      "name": "object@L129.maxDeliveriesPerForegroundTurn",
       "value": "0",
       "form": "object-member",
-      "note": "Existing mutable policy candidate object@L128.maxDeliveriesPerForegroundTurn; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate object@L129.maxDeliveriesPerForegroundTurn; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/agent/worker-lanes.ts",
-      "name": "object@L128.maxPendingSessionDeliveries",
+      "name": "object@L129.maxPendingSessionDeliveries",
       "value": "0",
       "form": "object-member",
-      "note": "Existing mutable policy candidate object@L128.maxPendingSessionDeliveries; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate object@L129.maxPendingSessionDeliveries; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/agent/worker-lanes.ts",
-      "name": "object@L128.maxQueuedActions",
+      "name": "object@L129.maxQueuedActions",
       "value": "12",
       "form": "object-member",
-      "note": "Existing mutable policy candidate object@L128.maxQueuedActions; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate object@L129.maxQueuedActions; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/agent/worker-lanes.ts",
-      "name": "object@L128.maxRunsPerSchedulerTick",
+      "name": "object@L129.maxRunsPerSchedulerTick",
       "value": "2",
       "form": "object-member",
-      "note": "Existing mutable policy candidate object@L128.maxRunsPerSchedulerTick; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate object@L129.maxRunsPerSchedulerTick; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/agent/worker-lanes.ts",
-      "name": "object@L142.maxDeliveriesPerForegroundTurn",
+      "name": "object@L143.maxDeliveriesPerForegroundTurn",
       "value": "1",
       "form": "object-member",
-      "note": "Existing mutable policy candidate object@L142.maxDeliveriesPerForegroundTurn; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate object@L143.maxDeliveriesPerForegroundTurn; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/agent/worker-lanes.ts",
-      "name": "object@L142.maxPendingSessionDeliveries",
+      "name": "object@L143.maxPendingSessionDeliveries",
       "value": "2",
       "form": "object-member",
-      "note": "Existing mutable policy candidate object@L142.maxPendingSessionDeliveries; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate object@L143.maxPendingSessionDeliveries; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/agent/worker-lanes.ts",
-      "name": "object@L142.maxQueuedActions",
+      "name": "object@L143.maxQueuedActions",
       "value": "4",
       "form": "object-member",
-      "note": "Existing mutable policy candidate object@L142.maxQueuedActions; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate object@L143.maxQueuedActions; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/agent/worker-lanes.ts",
-      "name": "object@L142.maxRunsPerSchedulerTick",
+      "name": "object@L143.maxRunsPerSchedulerTick",
       "value": "1",
       "form": "object-member",
-      "note": "Existing mutable policy candidate object@L142.maxRunsPerSchedulerTick; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate object@L143.maxRunsPerSchedulerTick; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/agent/worker-lanes.ts",
-      "name": "object@L156.maxDeliveriesPerForegroundTurn",
+      "name": "object@L157.maxDeliveriesPerForegroundTurn",
       "value": "0",
       "form": "object-member",
-      "note": "Existing mutable policy candidate object@L156.maxDeliveriesPerForegroundTurn; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate object@L157.maxDeliveriesPerForegroundTurn; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/agent/worker-lanes.ts",
-      "name": "object@L156.maxPendingSessionDeliveries",
+      "name": "object@L157.maxPendingSessionDeliveries",
       "value": "0",
       "form": "object-member",
-      "note": "Existing mutable policy candidate object@L156.maxPendingSessionDeliveries; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate object@L157.maxPendingSessionDeliveries; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/agent/worker-lanes.ts",
-      "name": "object@L156.maxQueuedActions",
+      "name": "object@L157.maxQueuedActions",
       "value": "3",
       "form": "object-member",
-      "note": "Existing mutable policy candidate object@L156.maxQueuedActions; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate object@L157.maxQueuedActions; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/agent/worker-lanes.ts",
-      "name": "object@L156.maxRunsPerSchedulerTick",
+      "name": "object@L157.maxRunsPerSchedulerTick",
       "value": "1",
       "form": "object-member",
-      "note": "Existing mutable policy candidate object@L156.maxRunsPerSchedulerTick; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate object@L157.maxRunsPerSchedulerTick; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/cogsec/blind-review/contracts.ts",
@@ -4542,6 +4549,13 @@
       "value": "3"
     },
     {
+      "file": "src/core/intention/concern-follow-up-outreach.ts",
+      "name": "buildConcernFollowUpOutboundCandidate.maxRetries",
+      "value": "1",
+      "form": "object-member",
+      "note": "Single durable retry for a companion-authored outbound follow-up, matching the social-desire outbound candidate; the outbox terminal dedupe makes it exactly-once (psfn-framework-vcq8v.5)."
+    },
+    {
       "file": "src/core/intention/concern-grooming.ts",
       "name": "CAP_RESOLUTION_OUTCOME",
       "value": "'Retired from concerns for durable tracking review because the active concern cap was reached.'",
@@ -4631,6 +4645,12 @@
       "file": "src/core/intention/concerns.ts",
       "name": "MAX_CONCERN_TEXT_CHARS",
       "value": "500"
+    },
+    {
+      "file": "src/core/intention/context-summary.ts",
+      "name": "MAX_CONTEXT_SUMMARY_CHARS",
+      "value": "1000",
+      "note": "Code-owned storage/prompt bound for follow-up contextSummary set by operator directive (psfn-framework-vcq8v.3): one constant shared by the appraisal prompt, parser, schedule tool, and stores; over-long text is truncated, never rejected. Replaces the two 320-char limits."
     },
     {
       "file": "src/core/intention/list-limit.ts",
@@ -4805,11 +4825,6 @@
     },
     {
       "file": "src/core/intention/pending-follow-ups.ts",
-      "name": "MAX_SUMMARY_CHARS",
-      "value": "320"
-    },
-    {
-      "file": "src/core/intention/pending-follow-ups.ts",
       "name": "MAX_TEXT_CHARS",
       "value": "500"
     },
@@ -4902,11 +4917,6 @@
       "file": "src/core/intention/postgres-adapters/shared.ts",
       "name": "MAX_PENDING_REASON_CHARS",
       "value": "240"
-    },
-    {
-      "file": "src/core/intention/postgres-adapters/shared.ts",
-      "name": "MAX_PENDING_SUMMARY_CHARS",
-      "value": "320"
     },
     {
       "file": "src/core/intention/postgres-adapters/shared.ts",
@@ -5086,7 +5096,7 @@
     {
       "file": "src/core/scheduler/reflection-introspection-policy.ts",
       "name": "REFLECTION_INTROSPECTION_POLICY_BLOCK_VERSION",
-      "value": "7"
+      "value": "8"
     },
     {
       "file": "src/core/scheduler/reflection-policy.ts",
@@ -5123,87 +5133,87 @@
     },
     {
       "file": "src/core/scheduler/reflection-policy.ts",
-      "name": "getDefaults.templates.deliberation.maxRounds@L511",
+      "name": "getDefaults.templates.deliberation.maxRounds@L513",
       "value": "3",
       "form": "object-member",
-      "note": "Existing mutable policy candidate getDefaults.templates.deliberation.maxRounds@L511; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate getDefaults.templates.deliberation.maxRounds@L513; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/scheduler/reflection-policy.ts",
-      "name": "getDefaults.templates.deliberation.maxRounds@L527",
+      "name": "getDefaults.templates.deliberation.maxRounds@L529",
       "value": "3",
       "form": "object-member",
-      "note": "Existing mutable policy candidate getDefaults.templates.deliberation.maxRounds@L527; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate getDefaults.templates.deliberation.maxRounds@L529; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/scheduler/reflection-policy.ts",
-      "name": "getDefaults.templates.deliberation.maxRounds@L550",
+      "name": "getDefaults.templates.deliberation.maxRounds@L552",
       "value": "3",
       "form": "object-member",
-      "note": "Existing mutable policy candidate getDefaults.templates.deliberation.maxRounds@L550; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate getDefaults.templates.deliberation.maxRounds@L552; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/scheduler/reflection-policy.ts",
-      "name": "getDefaults.templates.deliberation.maxTotalTokens@L512",
+      "name": "getDefaults.templates.deliberation.maxTotalTokens@L514",
       "value": "10_000",
       "form": "object-member",
-      "note": "Existing mutable policy candidate getDefaults.templates.deliberation.maxTotalTokens@L512; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate getDefaults.templates.deliberation.maxTotalTokens@L514; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/scheduler/reflection-policy.ts",
-      "name": "getDefaults.templates.deliberation.maxTotalTokens@L528",
+      "name": "getDefaults.templates.deliberation.maxTotalTokens@L530",
       "value": "14_000",
       "form": "object-member",
-      "note": "Existing mutable policy candidate getDefaults.templates.deliberation.maxTotalTokens@L528; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate getDefaults.templates.deliberation.maxTotalTokens@L530; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/scheduler/reflection-policy.ts",
-      "name": "getDefaults.templates.deliberation.maxTotalTokens@L551",
+      "name": "getDefaults.templates.deliberation.maxTotalTokens@L553",
       "value": "10_000",
       "form": "object-member",
-      "note": "Existing mutable policy candidate getDefaults.templates.deliberation.maxTotalTokens@L551; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate getDefaults.templates.deliberation.maxTotalTokens@L553; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/scheduler/reflection-policy.ts",
-      "name": "getDefaults.templates.deliberation.maxWallTimeMs@L513",
+      "name": "getDefaults.templates.deliberation.maxWallTimeMs@L515",
       "value": "60_000",
       "form": "object-member",
-      "note": "Existing mutable policy candidate getDefaults.templates.deliberation.maxWallTimeMs@L513; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate getDefaults.templates.deliberation.maxWallTimeMs@L515; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/scheduler/reflection-policy.ts",
-      "name": "getDefaults.templates.deliberation.maxWallTimeMs@L529",
+      "name": "getDefaults.templates.deliberation.maxWallTimeMs@L531",
       "value": "90_000",
       "form": "object-member",
-      "note": "Existing mutable policy candidate getDefaults.templates.deliberation.maxWallTimeMs@L529; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate getDefaults.templates.deliberation.maxWallTimeMs@L531; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/scheduler/reflection-policy.ts",
-      "name": "getDefaults.templates.deliberation.maxWallTimeMs@L552",
+      "name": "getDefaults.templates.deliberation.maxWallTimeMs@L554",
       "value": "60_000",
       "form": "object-member",
-      "note": "Existing mutable policy candidate getDefaults.templates.deliberation.maxWallTimeMs@L552; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate getDefaults.templates.deliberation.maxWallTimeMs@L554; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/scheduler/reflection-policy.ts",
-      "name": "getDefaults.templates.intervalMs@L505",
+      "name": "getDefaults.templates.intervalMs@L507",
       "value": "24 * 60 * 60_000",
       "form": "object-member",
-      "note": "Existing mutable policy candidate getDefaults.templates.intervalMs@L505; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate getDefaults.templates.intervalMs@L507; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/scheduler/reflection-policy.ts",
-      "name": "getDefaults.templates.intervalMs@L521",
+      "name": "getDefaults.templates.intervalMs@L523",
       "value": "7 * 24 * 60 * 60_000",
       "form": "object-member",
-      "note": "Existing mutable policy candidate getDefaults.templates.intervalMs@L521; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate getDefaults.templates.intervalMs@L523; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/scheduler/reflection-policy.ts",
-      "name": "getDefaults.templates.intervalMs@L537",
+      "name": "getDefaults.templates.intervalMs@L539",
       "value": "24 * 60 * 60_000",
       "form": "object-member",
-      "note": "Existing mutable policy candidate getDefaults.templates.intervalMs@L537; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "Existing mutable policy candidate getDefaults.templates.intervalMs@L539; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/scheduler/reflection-policy.ts",
@@ -5240,7 +5250,7 @@
     {
       "file": "src/core/scheduler/reflection-policy.ts",
       "name": "WELLBEING_REFLECTION_PROMPT_POLICY_VERSION",
-      "value": "9"
+      "value": "10"
     },
     {
       "file": "src/core/scheduler/reflection-template-runtime.ts",
@@ -5474,6 +5484,13 @@
       "value": "0",
       "form": "object-member",
       "note": "Existing mutable policy candidate registerScheduledPromptTask.options.scheduler.register.arg0.intervalMs; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+    },
+    {
+      "file": "src/core/scheduler/scheduler.ts",
+      "name": "HANDLER_BUDGET_EXCEEDED",
+      "value": "'handler_budget_exceeded'",
+      "form": "string",
+      "note": "Error-string-coupled protocol code recorded on a budget-failed scheduler attempt (lastError prefix, schedule.task.failed error text); not tuning. The budget itself is scheduler.json healthDetectors.stuckJobs.schedulerTaskBudgetMs."
     },
     {
       "file": "src/core/scheduler/scheduler.ts",
@@ -6521,14 +6538,14 @@
     },
     {
       "file": "src/core/tools/ntfy.ts",
-      "name": "notifyToolParameters.contact_id.minLength@L1001",
+      "name": "notifyToolParameters.contact_id.minLength@L1010",
       "value": "1",
       "form": "object-member",
       "note": "Existing mutable policy candidate notifyToolParameters.contact_id.minLength@L998; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/tools/ntfy.ts",
-      "name": "notifyToolParameters.contact_id.minLength@L989",
+      "name": "notifyToolParameters.contact_id.minLength@L998",
       "value": "1",
       "form": "object-member",
       "note": "Existing mutable policy candidate notifyToolParameters.contact_id.minLength@L986; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
@@ -7097,6 +7114,13 @@
       "value": "20",
       "form": "object-member",
       "note": "Existing mutable policy candidate IntrospectionValuesConsistencyRuntime.runOnce.claimedValues.limit; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+    },
+    {
+      "file": "src/faculties/memory/biographical/authorized-sources.ts",
+      "name": "collectAuthorizedBiographicalSources.hasMore.limit",
+      "value": "1",
+      "form": "object-member",
+      "note": "Code-owned existence probe: one authorized row proves whether a bounded source scan has a following page; no evidence from this sentinel reaches synthesis."
     },
     {
       "file": "src/faculties/memory/boundary-log.ts",
@@ -12804,10 +12828,38 @@
     },
     {
       "file": "src/system/config/runtime-config-contracts.ts",
+      "name": "createDefaultEmoSimProactivitySettings.thresholdProfile.attachmentIntensityThreshold",
+      "value": "0.65",
+      "form": "object-member",
+      "note": "Canonical settings.json bootstrap metadata for the validated per-companion EmoSim profile (revision public-bootstrap.v2, tuned for contact-regulated social need); runtime authority is each companion's owner file and Garden overlay, not this fallback literal."
+    },
+    {
+      "file": "src/system/config/runtime-config-contracts.ts",
+      "name": "createDefaultEmoSimProactivitySettings.thresholdProfile.cooldownJitterMs",
+      "value": "14_400_000",
+      "form": "object-member",
+      "note": "Canonical settings.json bootstrap metadata for the validated per-companion EmoSim profile (revision public-bootstrap.v2, tuned for contact-regulated social need); runtime authority is each companion's owner file and Garden overlay, not this fallback literal."
+    },
+    {
+      "file": "src/system/config/runtime-config-contracts.ts",
+      "name": "createDefaultEmoSimProactivitySettings.thresholdProfile.cooldownMs",
+      "value": "28_800_000",
+      "form": "object-member",
+      "note": "Canonical settings.json bootstrap metadata for the validated per-companion EmoSim profile (revision public-bootstrap.v2, tuned for contact-regulated social need); runtime authority is each companion's owner file and Garden overlay, not this fallback literal."
+    },
+    {
+      "file": "src/system/config/runtime-config-contracts.ts",
       "name": "createDefaultEmoSimProactivitySettings.thresholdProfile.samplingIntervalMs",
       "value": "60_000",
       "form": "object-member",
       "note": "Canonical settings.json bootstrap metadata for the validated per-companion EmoSim profile; runtime authority is the owner file and Garden overlay, not this fallback literal."
+    },
+    {
+      "file": "src/system/config/runtime-config-contracts.ts",
+      "name": "createDefaultEmoSimProactivitySettings.thresholdProfile.socialNeedThreshold",
+      "value": "0.8",
+      "form": "object-member",
+      "note": "Canonical settings.json bootstrap metadata for the validated per-companion EmoSim profile (revision public-bootstrap.v2, tuned for contact-regulated social need); runtime authority is each companion's owner file and Garden overlay, not this fallback literal."
     },
     {
       "file": "src/system/config/runtime-config-contracts.ts",
@@ -13426,7 +13478,7 @@
     {
       "file": "src/system/config/scheduler-config/social-desire.ts",
       "name": "DEFAULT_SOCIAL_DESIRE_CONFIG.lifecycle.actionThreshold",
-      "value": "1",
+      "value": "0.6",
       "form": "object-member",
       "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 P3 domain split; seed/default literal preserved, not an operator-tunable policy constant."
     },
@@ -13447,7 +13499,7 @@
     {
       "file": "src/system/config/scheduler-config/social-desire.ts",
       "name": "DEFAULT_SOCIAL_DESIRE_CONFIG.outreach.budget.maxSendsPerWindow",
-      "value": "2",
+      "value": "4",
       "form": "object-member",
       "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 P3 domain split; seed/default literal preserved, not an operator-tunable policy constant."
     },
@@ -13460,10 +13512,38 @@
     },
     {
       "file": "src/system/config/scheduler-config/social-desire.ts",
+      "name": "DEFAULT_SOCIAL_DESIRE_CONFIG.outreach.contactPacing.deferDelayMs",
+      "value": "3 * 60 * 60 * 1000",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default (psfn-framework-vcq8v.4 per-contact outreach pacing/context bounds); the seed carries the same value and operators tune it in scheduler.json socialDesire.outreach."
+    },
+    {
+      "file": "src/system/config/scheduler-config/social-desire.ts",
+      "name": "DEFAULT_SOCIAL_DESIRE_CONFIG.outreach.contactPacing.perContactCooldownMs",
+      "value": "18 * 60 * 60 * 1000",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default (psfn-framework-vcq8v.4 per-contact outreach pacing/context bounds); the seed carries the same value and operators tune it in scheduler.json socialDesire.outreach."
+    },
+    {
+      "file": "src/system/config/scheduler-config/social-desire.ts",
       "name": "DEFAULT_SOCIAL_DESIRE_CONFIG.outreach.maxConsentMomentsPerRun",
       "value": "1",
       "form": "object-member",
       "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 P3 domain split; seed/default literal preserved, not an operator-tunable policy constant."
+    },
+    {
+      "file": "src/system/config/scheduler-config/social-desire.ts",
+      "name": "DEFAULT_SOCIAL_DESIRE_CONFIG.outreach.turnContext.activityMaxItems",
+      "value": "6",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default (psfn-framework-vcq8v.4 per-contact outreach pacing/context bounds); the seed carries the same value and operators tune it in scheduler.json socialDesire.outreach."
+    },
+    {
+      "file": "src/system/config/scheduler-config/social-desire.ts",
+      "name": "DEFAULT_SOCIAL_DESIRE_CONFIG.outreach.turnContext.excerptMaxChars",
+      "value": "900",
+      "form": "object-member",
+      "note": "Canonical scheduler.json owner-file default (psfn-framework-vcq8v.4 per-contact outreach pacing/context bounds); the seed carries the same value and operators tune it in scheduler.json socialDesire.outreach."
     },
     {
       "file": "src/system/config/scheduler-config/social-graph.ts",
@@ -13608,7 +13688,7 @@
     {
       "file": "src/system/config/scheduler-config/weighted-thought.ts",
       "name": "DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG.nudgeThreshold",
-      "value": "1",
+      "value": "0.75",
       "form": "object-member",
       "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 P3 domain split; seed/default literal preserved, not an operator-tunable policy constant."
     },
@@ -14228,7 +14308,7 @@
     {
       "file": "src/system/settings/schema-runtime-normalization.ts",
       "name": "normalizeEndpointAndGardenSettings.normalized.emosimProactivity.thresholdProfile",
-      "value": "{ ...createDefaultEmoSimProactivitySettings().thresholdProfile, profileId: EMOSIM_WOULD_MESSAGE_V1, revision: 'legacy-owner-migration.v1', reviewNote: 'One-way migration of the previously enabled production would_message owner block.', socialNeedThreshold: legacy.wouldMessage.socialNeedThreshold, attachmentIntensityThreshold: legacy.wouldMessage.attachmentIntensityThreshold, sustainMs: legacy.wouldMessage.sustainMs, cooldownMs: legacy.cooldownMs, }",
+      "value": "{ ...createDefaultEmoSimProactivitySettings().thresholdProfile, profileId: EMOSIM_WOULD_MESSAGE_V1, revision: 'legacy-owner-migration.v1', reviewNote: 'One-way migration of the previously enabled production would_message owner block.', socialNeedThreshold: legacy.wouldMessage.socialNeedThreshold, attachmentIntensityThreshold: legacy.wouldMessage.attachmentIntensityThreshold, sustainMs: legacy.wouldMessage.sustainMs, cooldownMs: legacy.cooldownMs, cooldownJitterMs: Math.min( createDefaultEmoSimProactivitySettings().thresholdProfile.cooldownJitterMs, legacy.cooldownMs, ), }",
       "form": "object-member",
       "note": "One-way backward owner-data read preserves an already-enabled production source while filling the new validated profile metadata; new writes use the canonical settings.json profile."
     },

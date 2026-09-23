@@ -34,6 +34,8 @@ import { buildAdminOverviewRoutes } from './routes/overview-routes.js';
 import { buildAdminPromptRoutes } from './routes/prompt-routes.js';
 import { buildAdminSchedulerRoutes } from './routes/scheduler-routes.js';
 import { buildAdminSubsystemHealthRoutes } from './routes/subsystem-health-routes.js';
+import { buildAdminAttentionDigestRoutes } from './routes/attention-digest-routes.js';
+import { AdminAttentionDigestDataService } from './services/attention-digest-service.js';
 import { buildAdminIncidentRoutes } from './routes/incident-routes.js';
 import {
   buildAdminHumanEscalationRoutes,
@@ -1134,6 +1136,17 @@ export function buildAdminApiRoutes(options: {
     ...buildAdminSchedulerRoutes({ scheduler, withBody }),
     ...buildAdminSubsystemHealthRoutes({ subsystemHealth: subsystemHealthService }),
     ...buildAdminIncidentRoutes({ incidents: incidentTimelineService }),
+    ...buildAdminAttentionDigestRoutes({
+      attentionDigest: new AdminAttentionDigestDataService({
+        ...(config.companionId ? { companionId: config.companionId } : {}),
+        incidents: incidentTimelineService ?? null,
+        humanEscalations: humanEscalationService ?? null,
+        subsystemHealth: subsystemHealthService ?? null,
+        modelUsage: modelUsageService ?? null,
+        actionPipe: actionPipeService ?? null,
+        icpAutonomy: icpAutonomyService ?? null,
+      }),
+    }),
     ...buildAdminHumanEscalationRoutes({
       escalations: humanEscalationService,
       withBody,

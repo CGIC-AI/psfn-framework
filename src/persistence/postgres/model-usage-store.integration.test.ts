@@ -481,7 +481,7 @@ describe('PostgresModelUsageStore fleet token summary', () => {
 });
 
 describe('PostgresModelUsageStore attribution anomalies', () => {
-  it('persists the session-less active health probe as unknown and exposes its anomaly rate', async () => {
+  it('persists a session-less system call as unknown and exposes its anomaly rate', async () => {
     await withStore(async (store) => {
       await store.recordUsageEvent({
         logicalCallId: 'sessionless-system-work',

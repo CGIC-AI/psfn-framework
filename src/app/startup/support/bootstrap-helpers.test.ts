@@ -8,6 +8,7 @@ import { createEnvCredentialVault } from '../../../boundary/custody/credential-v
 import type { CanonicalModelRegistry } from '../../../shared/contracts/runtime.js';
 import type { ConfigStorePort } from '../../../system/config/config-store.js';
 import {
+  createDefaultEmoSimProactivitySettings,
   createDefaultObserverEvalSidecarLeverSettings,
   createDefaultObserverEvalSidecarSettings,
   type SubstrateConfig,
@@ -1392,6 +1393,7 @@ describe('hydrateCanonicalStartupConfig', () => {
         serverUrl: 'http://emosim.test:17342',
         sessionLabel: 'psfn-observer-eval-test',
         agentName: 'observer',
+        personality: { O: 0.6, C: 0.5, E: 0.7, A: 0.6, N: 0.3 },
         timeoutMs: 4000,
         includeWorldState: true,
       },
@@ -1506,6 +1508,7 @@ describe('hydrateCanonicalStartupConfig', () => {
         sessionLabel: 'observer-other-session',
         agentName: 'observer-other-agent',
         persistenceRootDir: join(rootDir, 'observer-other-storage'),
+        personality: { O: 0.4, C: 0.6, E: 0.3, A: 0.7, N: 0.5 },
       },
     };
 
@@ -1581,6 +1584,7 @@ describe('hydrateCanonicalStartupConfig', () => {
           sessionLabel: `observer-session-${String(index + 1)}`,
           agentName: `observer-agent-${String(index + 1)}`,
           persistenceRootDir: join(rootDir, `observer-storage-${String(index + 1)}`),
+          personality: { O: 0.5, C: 0.5, E: [0.2, 0.5, 0.8][index]!, A: 0.6, N: 0.4 },
         },
       };
       hydrateCanonicalStartupConfig(config, {
@@ -1603,6 +1607,94 @@ describe('hydrateCanonicalStartupConfig', () => {
     expect(new Set(effective.map(settings => settings.adapter.sessionLabel)).size).toBe(3);
     expect(new Set(effective.map(settings => settings.adapter.agentName)).size).toBe(3);
     expect(new Set(effective.map(settings => settings.persistence.rootDir)).size).toBe(3);
+    // Each companion's own temperament, never the shared settings or a default.
+    expect(effective.map(settings => settings.adapter.personality?.E)).toEqual([0.2, 0.5, 0.8]);
+  });
+
+  it('requires each fleet companion to own its active EmoSim proactivity profile', () => {
+    const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-hydration-proactivity-fleet-'));
+    const systemDataDir = join(rootDir, 'system-data');
+    const legacyDataDir = join(rootDir, 'legacy-data-empty');
+    const companionIds = [
+      createCompanionId('11111111-1111-4111-8111-111111111111'),
+      createCompanionId('22222222-2222-4222-8222-222222222222'),
+    ] as const;
+    mkdirSync(systemDataDir, { recursive: true });
+    mkdirSync(legacyDataDir, { recursive: true });
+    tempDirs.push(rootDir);
+    const companionDataDirs = companionIds.map((companionId) => {
+      const companionDataDir = join(rootDir, 'companions', companionId);
+      mkdirSync(companionDataDir, { recursive: true });
+      writeHydrationOwnerExamples(systemDataDir, companionDataDir);
+      return companionDataDir;
+    });
+    saveSettings(systemDataDir, {
+      observerEvalSidecar: {
+        ...createDefaultObserverEvalSidecarSettings(),
+        enabled: true,
+        adapter: {
+          kind: 'emosim_server',
+          serverUrl: 'http://shared-primary.test:17342',
+          sessionLabel: 'shared-primary-session',
+          agentName: 'shared-primary-agent',
+          includeWorldState: false,
+        },
+      },
+      emosimProactivity: { ...createDefaultEmoSimProactivitySettings(), mode: 'shadow' },
+    });
+    const hydrate = (index: number) => {
+      const companionId = companionIds[index]!;
+      const companionDataDir = companionDataDirs[index]!;
+      const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
+      config.multiCompanion = true;
+      config.companionId = companionId;
+      config.companionRuntimeIdentity = {
+        companionId,
+        companionDataDir,
+        characterCardPath: join(companionDataDir, 'character.json'),
+        personalWorkspacePath: join(rootDir, 'workspaces', 'personal', companionId),
+        postgresSchema: `companion_${String(index + 1)}`,
+        postgresRole: `companion_${String(index + 1)}_runtime`,
+        postgresDatabaseUrlRef: { kind: 'env', envName: `COMPANION_${String(index + 1)}_DATABASE_URL` },
+        observerEvalSidecar: {
+          sidecarId: `observer-${String(index + 1)}`,
+          serverUrl: `http://observer-${String(index + 1)}.test:17342`,
+          sessionLabel: `observer-session-${String(index + 1)}`,
+          agentName: `observer-agent-${String(index + 1)}`,
+          persistenceRootDir: join(rootDir, `observer-storage-${String(index + 1)}`),
+          personality: { O: 0.5, C: 0.5, E: 0.5, A: 0.6, N: 0.4 },
+        },
+      };
+      hydrateCanonicalStartupConfig(config, {
+        env: {
+          ...process.env,
+          CONFIG_DIR: './config',
+          PSFN_RUNTIME_LAYOUT_MODE: 'continuous',
+          DATA_DIR: legacyDataDir,
+        },
+      });
+      return config;
+    };
+
+    // Without a companion overlay the fleet-global profile would drive every
+    // companion identically: fail closed.
+    expect(() => hydrate(0)).toThrow(/companion-owned emosimProactivity\.thresholdProfile/);
+
+    companionDataDirs.forEach((companionDataDir, index) => {
+      writeFileSync(join(companionDataDir, COMPANION_SETTINGS_OVERLAY_FILE_NAME), JSON.stringify({
+        emosimProactivity: {
+          thresholdProfile: {
+            revision: `companion-${String(index + 1)}.v1`,
+            socialNeedThreshold: [0.78, 0.86][index],
+            cooldownJitterMs: [3_600_000, 7_200_000][index],
+          },
+        },
+      }));
+    });
+    const profiles = [hydrate(0), hydrate(1)].map(config => config.emosimProactivity!.thresholdProfile);
+    expect(profiles.map(profile => profile.revision)).toEqual(['companion-1.v1', 'companion-2.v1']);
+    expect(profiles.map(profile => profile.socialNeedThreshold)).toEqual([0.78, 0.86]);
+    expect(profiles.map(profile => profile.cooldownJitterMs)).toEqual([3_600_000, 7_200_000]);
   });
 
   it('accepts production observer levers at the canonical per-companion Kubernetes mount', () => {
@@ -1634,6 +1726,7 @@ describe('hydrateCanonicalStartupConfig', () => {
         serverUrl: 'http://psfn-emosim:17342',
         sessionLabel: 'psfn-companion',
         agentName: 'companion',
+        personality: { O: 0.6, C: 0.5, E: 0.7, A: 0.6, N: 0.3 },
         includeWorldState: false,
       },
       persistence: {
@@ -1691,6 +1784,7 @@ describe('hydrateCanonicalStartupConfig', () => {
         serverUrl: 'http://emosim.test:17342',
         sessionLabel: 'psfn-fleet-shared',
         agentName: 'fleet',
+        personality: { O: 0.6, C: 0.5, E: 0.7, A: 0.6, N: 0.3 },
         includeWorldState: false,
       },
     };
@@ -1855,6 +1949,7 @@ describe('hydrateCanonicalStartupConfig', () => {
           serverUrl: 'http://emosim.test:17342',
           sessionLabel: 'psfn-observer-eval-test',
           agentName: 'observer',
+          personality: { O: 0.6, C: 0.5, E: 0.7, A: 0.6, N: 0.3 },
           includeWorldState: false,
         },
         persistence: {

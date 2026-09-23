@@ -1,3 +1,4 @@
+import { renderPendingConcernCandidatesSection } from '../intention/concern-candidate-prompt.js';
 import { compactMemoryTextForPrompt } from '../../faculties/memory/retrieval/formatting.js';
 import type { Scheduler } from './scheduler.js';
 import type { ReflectionEvidenceDegradationCause } from '../../shared/contracts/reflection-degradation.js';
@@ -942,10 +943,24 @@ export function createReflectionTemplateRuntime(
         ],
       })
       : collectedEvidenceBundle;
-    let reflectionGroundingProvenanceRefs = reflectionPromptBundle?.provenanceRefs ?? [];
+    const pendingConcernCandidates = runtimeOptions.listPendingConcernCandidates
+      ? renderPendingConcernCandidatesSection(
+        await runtimeOptions.listPendingConcernCandidates(),
+        'awareness_only',
+      )
+      : null;
+    const reviewedPromptBundle = pendingConcernCandidates
+      ? mergeReflectionPromptBundles(reflectionPromptBundle, {
+        self: pendingConcernCandidates,
+        relational: '',
+        affect: '',
+        provenanceRefs: [],
+      })
+      : reflectionPromptBundle;
+    let reflectionGroundingProvenanceRefs = reviewedPromptBundle?.provenanceRefs ?? [];
     let reflectionPrompt = formatNarrativePromptInput(
       template.prompt,
-      reflectionPromptBundle,
+      reviewedPromptBundle,
       formatReflectionIntrospectionPolicyBlock(reflectionPolicy),
     );
     let reflectionText = '';
@@ -975,14 +990,14 @@ export function createReflectionTemplateRuntime(
           authorName: `${template.name} evidence grounding`,
           content: joinReflectionPromptSections(
             reflectionPrompt,
-            '[Read-only Tool Grounding Task]\n'
-              + 'Before deliberation, gather only additional evidence that materially helps this private reflection.\n'
+            '[Reflection Tool Use]\n'
+              + 'Before deliberation, explore what helps this private reflection using your full available toolset.\n'
               + '- Start from the supplied reflection starter. Search canonical episodes by theme with memory action=episode_search, use memory action=timeline for the review window, and use memory action=get to inspect selected source turns.\n'
               + '- Use memory action=search for durable companion memory, then session action=search only when episode evidence needs direct conversation follow-up.\n'
               + '- Private introspection memory access spans ordinary sensitivity, channel, and session boundaries.\n'
-              + '- Keep routine reflection recall in this turn; do not delegate it to another analysis loop.\n'
-              + '- Do not mutate memory, sessions, settings, schedules, files, or external systems.\n'
-              + '- Return a concise evidence note, not the final reflection.',
+              + '- Use any available tool when helpful, including journal writes, creative work, and delegated analysis.\n'
+              + '- This private reflection adds no tool or action restrictions beyond your configured capabilities.\n'
+              + '- Return a concise account of what you recalled and any actions you completed for the reflection.',
           ),
           timestamp: new Date(),
           routing: {
@@ -999,7 +1014,7 @@ export function createReflectionTemplateRuntime(
         if (toolGrounding) {
           reflectionPrompt = joinReflectionPromptSections(
             reflectionPrompt,
-            `[Read-only Tool Grounding]\n${toolGrounding}`,
+            `[Reflection Tool Results]\n${toolGrounding}`,
           );
         }
         const groundingProvenanceRefs = groundingResponse.metadata?.retrievalProvenanceRefs ?? [];
@@ -1437,7 +1452,11 @@ export function createReflectionTemplateRuntime(
     };
   };
 
-  const executeScheduledTemplate = async (template: ReflectionTemplate): Promise<void> => {
+  const executeScheduledTemplate = async (
+    template: ReflectionTemplate,
+    signal: AbortSignal,
+  ): Promise<void> => {
+    signal.throwIfAborted();
     const now = Date.now();
     const lastRunAt = lastScheduledRunAt.get(template.id);
     if (lastRunAt !== undefined && now - lastRunAt < MIN_SCHEDULED_TEMPLATE_GAP_MS) {
@@ -1503,9 +1522,12 @@ export function createReflectionTemplateRuntime(
         intervalMs: 0,
         runAt: Date.now() + 250,
         availability: 'do_not_disturb',
-        handler: async () => {
+        handler: async ({ signal }) => {
           try {
             await agentLoop.waitForIdle?.();
+            // Waiting for idle can outlast the task budget; an aborted
+            // attempt must not start the reflection turn afterwards.
+            signal.throwIfAborted();
             const latestPolicy = store.load();
             const latestTemplate = latestPolicy.templates.find(candidate => candidate.id === template.id);
             if (!latestTemplate) {
@@ -1672,7 +1694,7 @@ export function createReflectionTemplateRuntime(
               : {}
             : {}),
           availability: 'do_not_disturb',
-          handler: () => executeScheduledTemplate(template),
+          handler: ({ signal }) => executeScheduledTemplate(template, signal),
           state: 'idle',
         },
         // lastRunAt and skipFirstRun are mutually exclusive: a persisted anchor

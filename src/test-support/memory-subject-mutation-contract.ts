@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MemoryStorePort } from '../faculties/memory/memory-store-port.js';
+import { createSubjectAuthorizedMemoryStore } from '../faculties/memory/subject-authorized-store.js';
 import type { PurrMemory } from '../faculties/memory/types.js';
 import {
   MEMORY_SUBJECT_CLASSIFIER_VERSION,
@@ -14,6 +15,9 @@ type SubjectMutationStore = Pick<
   | 'getMemorySubjectClassification'
   | 'insertMemory'
   | 'mutateAuthorizedMemorySubjects'
+  | 'persistAuthorizedMemoryWrite'
+  | 'queryAuthorizedMemorySubjects'
+  | 'updateMemory'
 >;
 
 export type WithSubjectMutationStore = <T>(
@@ -62,6 +66,127 @@ export function describeMemorySubjectMutationContract(
   timeoutMs?: number,
 ): void {
   describe(`${implementation} subject-authorized mutation contract`, () => {
+    it('writes companion-internal memories as companion_private, invisible to contact viewers', async () => {
+      await withStore(async (store) => {
+        const port = store as unknown as MemoryStorePort;
+        const internal = createSubjectAuthorizedMemoryStore(port, { companionInternal: true });
+        const contactViewer = createSubjectAuthorizedMemoryStore(port, { viewerContactId: 'contact-a' });
+        const untrusted = createSubjectAuthorizedMemoryStore(port, {});
+        const note = memory('internal-note', 'contact-a', {
+          text: 'Free-time workspace note: the sketch folder is tidy now.',
+          // A caller-supplied contact subject must not survive the internal stamp.
+          provenance: { subjectContactId: 'contact-a', channelId: 'internal:free-time:workspace' },
+        });
+
+        await internal.persistMemoryWrite({ memory: note, embedding: CONTRACT_EMBEDDING });
+
+        const stored = await store.getById('internal-note');
+        expect(stored?.provenance?.subjectContactId).toBeUndefined();
+        expect(stored?.provenance?.subjectScope).toBe('companion_internal');
+        const classification = await store.getMemorySubjectClassification('internal-note');
+        expect(classification).toMatchObject({
+          subjectClass: 'companion_private',
+          status: 'current',
+          subjectContactIds: [],
+          reasonClass: 'companion_internal_source',
+        });
+        const internalDetail = await internal.queryAuthorizedMemorySubjects({
+          authorization: authorization('detail'),
+          selector: { kind: 'detail', memoryId: 'internal-note' },
+        });
+        expect(internalDetail.total).toBe(1);
+        const viewerDetail = await contactViewer.queryAuthorizedMemorySubjects({
+          authorization: authorization('detail'),
+          selector: { kind: 'detail', memoryId: 'internal-note' },
+        });
+        expect(viewerDetail.total).toBe(0);
+
+        // A contact viewer cannot claim the companion-internal scope either.
+        await contactViewer.persistMemoryWrite({
+          memory: memory('viewer-note', 'contact-a', {
+            provenance: { subjectScope: 'companion_internal' },
+          }),
+          embedding: CONTRACT_EMBEDDING,
+        });
+        const viewerNote = await store.getById('viewer-note');
+        expect(viewerNote?.provenance?.subjectScope).toBeUndefined();
+        expect(viewerNote?.provenance?.subjectContactId).toBe('contact-a');
+        expect((await store.getMemorySubjectClassification('viewer-note'))?.subjectClass)
+          .toBe('single_contact');
+
+        // No trusted subject: still rejected, nothing written.
+        await expect(untrusted.persistMemoryWrite({
+          memory: memory('untrusted-note', 'contact-a'),
+          embedding: CONTRACT_EMBEDDING,
+        })).rejects.toThrow('Memory access requires a trusted memory subject');
+        expect(await store.getById('untrusted-note')).toBeUndefined();
+      });
+    }, timeoutMs);
+
+    it('proves a superseded row only through its exact superseding memory', async () => {
+      await withStore(async (store) => {
+        const currentState = { tags: ['current_state', 'workspace'] };
+        await store.insertMemory(memory('ws-old', 'contact-a', {
+          ...currentState,
+          text: 'Current workspace is /home/a/old.',
+          confidence: 0.65,
+        }), CONTRACT_EMBEDDING);
+        await store.insertMemory(memory('ws-foreign-old', 'contact-b', {
+          ...currentState,
+          text: 'Current workspace is /home/b/old.',
+          confidence: 0.65,
+        }), CONTRACT_EMBEDDING);
+        // The MemoryWriter current_state_replacement commit: the new memory
+        // lands and archives the one it replaces in one authorized write.
+        await store.persistAuthorizedMemoryWrite({
+          authorization: authorization(),
+          memory: memory('ws-new', 'contact-a', { ...currentState, text: 'Current workspace is /home/a/new.' }),
+          embedding: CONTRACT_EMBEDDING,
+          supersededMemoryIds: ['ws-old'],
+        });
+        await store.persistAuthorizedMemoryWrite({
+          authorization: authorization('bulk_mutation', { viewerContactIds: ['contact-b'] }),
+          memory: memory('ws-foreign-new', 'contact-b', { ...currentState, text: 'Current workspace is /home/b/new.' }),
+          embedding: CONTRACT_EMBEDDING,
+          supersededMemoryIds: ['ws-foreign-old'],
+        });
+        expect((await store.getById('ws-old'))?.supersededBy).toBe('ws-new');
+        const detail = authorization('detail');
+        const ids = async (selector: Parameters<SubjectMutationStore['queryAuthorizedMemorySubjects']>[0]['selector']) => {
+          const result = await store.queryAuthorizedMemorySubjects({ authorization: detail, selector });
+          return { total: result.total, ids: result.memories.map(row => row.id) };
+        };
+
+        // The ordinary detail selector never sees an archived row.
+        await expect(ids({ kind: 'detail', memoryId: 'ws-old' })).resolves.toEqual({ total: 0, ids: [] });
+        // (a) the trusted subject proves it through the correct superseding memory
+        await expect(ids({ kind: 'superseded_detail', memoryId: 'ws-old', supersededBy: 'ws-new' }))
+          .resolves.toEqual({ total: 1, ids: ['ws-old'] });
+        // (b) any other supersededBy returns nothing
+        await expect(ids({ kind: 'superseded_detail', memoryId: 'ws-old', supersededBy: 'ws-foreign-new' }))
+          .resolves.toEqual({ total: 0, ids: [] });
+        // (d) a foreign contact's archived row returns nothing, even with its true superseder
+        await expect(ids({ kind: 'superseded_detail', memoryId: 'ws-foreign-old', supersededBy: 'ws-foreign-new' }))
+          .resolves.toEqual({ total: 0, ids: [] });
+        // An active row is not a superseded row.
+        await expect(ids({ kind: 'superseded_detail', memoryId: 'ws-new', supersededBy: 'ws-new' }))
+          .resolves.toEqual({ total: 0, ids: [] });
+        // Only the detail action may use the selector.
+        await expect(store.queryAuthorizedMemorySubjects({
+          authorization: authorization('list'),
+          selector: { kind: 'superseded_detail', memoryId: 'ws-old', supersededBy: 'ws-new' },
+        })).rejects.toThrow('does not permit superseded_detail');
+        // (c) a deleted archived row returns nothing
+        await store.updateMemory('ws-old', {
+          deletedAt: 1_700_000_100_000,
+          deletedBy: 'test:contract',
+          deleteReason: 'contract deletion',
+        });
+        await expect(ids({ kind: 'superseded_detail', memoryId: 'ws-old', supersededBy: 'ws-new' }))
+          .resolves.toEqual({ total: 0, ids: [] });
+      });
+    }, timeoutMs);
+
     it.each([
       {
         name: 'an unauthorized target',

@@ -16,7 +16,7 @@ describe('createContentFreeEmbeddingWorkloadId', () => {
 });
 
 describe('embeddingUsageProvenanceFromRequestContext', () => {
-  it('leaves a context-free health probe deliberately unattributed', () => {
+  it('leaves a context-free embedding deliberately unattributed', () => {
     expect(embeddingUsageProvenanceFromRequestContext(undefined)).toBeUndefined();
   });
 

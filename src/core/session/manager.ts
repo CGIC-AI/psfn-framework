@@ -1335,11 +1335,14 @@ export class SessionManager implements SessionManagerTypeSurface {
     sourceChannelId: string,
     logicalSessionId: string,
     turnId: string,
+    purpose?: 'scratch_reflection_intention',
   ) {
     return await this.store.lookupSourceTurnRecordEligibility(
       sourceChannelId,
       logicalSessionId,
       turnId,
+      undefined,
+      purpose,
     );
   }
 

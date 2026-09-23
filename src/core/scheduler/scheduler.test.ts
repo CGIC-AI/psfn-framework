@@ -228,19 +228,20 @@ describe('Scheduler', () => {
       }
     });
 
-    it('stagger wall-clock tasks deterministically inside the configured minute', async () => {
+    it('staggers wall-clock tasks deterministically across the configured fleet window', async () => {
       const first = vi.fn();
       const third = vi.fn();
       const nowSpy = vi.spyOn(Date, 'now');
       try {
         nowSpy.mockReturnValue(Date.parse('2026-03-07T06:29:00.000Z'));
+        const windowMs = 60 * 60_000;
         scheduler.register({
           id: 'fleet-first',
           name: 'Fleet first',
           type: 'every',
           intervalMs: 24 * 60 * 60_000,
           cadence: { kind: 'daily', hour: 6, minute: 30, timezone: 'utc' },
-          fleetStagger: { manifestOrdinal: 0, fleetSize: 3 },
+          fleetStagger: { manifestOrdinal: 0, fleetSize: 3, windowMs },
           handler: first,
           state: 'idle',
         });
@@ -250,7 +251,7 @@ describe('Scheduler', () => {
           type: 'every',
           intervalMs: 24 * 60 * 60_000,
           cadence: { kind: 'daily', hour: 6, minute: 30, timezone: 'utc' },
-          fleetStagger: { manifestOrdinal: 2, fleetSize: 3 },
+          fleetStagger: { manifestOrdinal: 2, fleetSize: 3, windowMs },
           handler: third,
           state: 'idle',
         });
@@ -260,13 +261,26 @@ describe('Scheduler', () => {
         expect(first).toHaveBeenCalledOnce();
         expect(third).not.toHaveBeenCalled();
 
-        nowSpy.mockReturnValue(Date.parse('2026-03-07T06:30:39.999Z'));
+        // Ordinal 2 of 3 lands two thirds into the 60-minute window: 07:10.
+        nowSpy.mockReturnValue(Date.parse('2026-03-07T07:09:59.999Z'));
         await scheduler.tick();
         expect(third).not.toHaveBeenCalled();
 
-        nowSpy.mockReturnValue(Date.parse('2026-03-07T06:30:40.000Z'));
+        nowSpy.mockReturnValue(Date.parse('2026-03-07T07:10:00.000Z'));
         await scheduler.tick();
         expect(third).toHaveBeenCalledOnce();
+
+        // Next day: each keeps its own offset and fires exactly once per slot.
+        nowSpy.mockReturnValue(Date.parse('2026-03-08T06:30:00.000Z'));
+        await scheduler.tick();
+        expect(first).toHaveBeenCalledTimes(2);
+        expect(third).toHaveBeenCalledOnce();
+        nowSpy.mockReturnValue(Date.parse('2026-03-08T07:10:00.000Z'));
+        await scheduler.tick();
+        expect(third).toHaveBeenCalledTimes(2);
+        await scheduler.tick();
+        expect(first).toHaveBeenCalledTimes(2);
+        expect(third).toHaveBeenCalledTimes(2);
       } finally {
         nowSpy.mockRestore();
       }
@@ -279,10 +293,56 @@ describe('Scheduler', () => {
         type: 'every',
         intervalMs: 24 * 60 * 60_000,
         cadence: { kind: 'daily', hour: 6, minute: 30, timezone: 'utc' },
-        fleetStagger: { manifestOrdinal: 3, fleetSize: 3 },
+        fleetStagger: { manifestOrdinal: 3, fleetSize: 3, windowMs: 60_000 },
         handler: () => {},
         state: 'idle',
       })).toThrow('fleetStagger.manifestOrdinal');
+    });
+
+    it('rejects a fleet stagger window that reaches the next cadence slot', () => {
+      expect(() => scheduler.register({
+        id: 'fleet-hourly-too-wide',
+        name: 'Fleet hourly too wide',
+        type: 'every',
+        intervalMs: 60 * 60_000,
+        cadence: { kind: 'hourly', minute: 0, timezone: 'utc' },
+        fleetStagger: { manifestOrdinal: 0, fleetSize: 2, windowMs: 60 * 60_000 },
+        handler: () => {},
+        state: 'idle',
+      })).toThrow('must be shorter than its hourly cadence period');
+    });
+
+    it('offsets a relative task\'s poll phase with phaseOffsetMs and rejects misuse', async () => {
+      const fn = vi.fn();
+      const nowSpy = vi.spyOn(Date, 'now');
+      try {
+        nowSpy.mockReturnValue(Date.parse('2026-03-07T00:00:00.000Z'));
+        scheduler.register({
+          id: 'phased',
+          name: 'Phased',
+          type: 'every',
+          intervalMs: 15 * 60_000,
+          handler: fn,
+          state: 'idle',
+        }, { skipFirstRun: true, phaseOffsetMs: 5 * 60_000 });
+
+        nowSpy.mockReturnValue(Date.parse('2026-03-07T00:19:59.999Z'));
+        await scheduler.tick();
+        expect(fn).not.toHaveBeenCalled();
+        nowSpy.mockReturnValue(Date.parse('2026-03-07T00:20:00.000Z'));
+        await scheduler.tick();
+        expect(fn).toHaveBeenCalledOnce();
+      } finally {
+        nowSpy.mockRestore();
+      }
+      expect(() => scheduler.register({
+        id: 'phased-without-skip',
+        name: 'Phased without skip',
+        type: 'every',
+        intervalMs: 15 * 60_000,
+        handler: () => {},
+        state: 'idle',
+      }, { phaseOffsetMs: 1_000 })).toThrow('phaseOffsetMs requires a relative "every" cadence');
     });
 
     it('does not fire wall-clock tasks immediately on startup', async () => {

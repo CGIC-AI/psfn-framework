@@ -1632,12 +1632,18 @@ describe('SessionManager', () => {
     });
   });
 
-  it('does not persist internal reflection channels to session journals', () => {
+  it.each([
+    'internal:reflection:whisper',
+    'internal:reflection:daily',
+    'internal:reflection:weekly',
+    'internal:reflection:social-outreach-extra',
+    'internal:reflection:social-outreach:child',
+  ])('does not persist scratch reflection channel %s to session journals', reflectionChannel => {
     const config = makeConfig();
     const mgr = new SessionManager(store, config);
-    const reflectionChannel = 'internal:reflection:whisper';
 
     mgr.recordUserMessage(reflectionChannel, 'Reflect on today', 'scheduler', 'Scheduler');
+    mgr.recordSystemMessage(reflectionChannel, 'Scheduled reflection stimulus', 'system:reflection', 'Reflection');
     mgr.recordAssistantMessage(reflectionChannel, 'Reflection output');
     mgr.appendSystemNote(reflectionChannel, 'Deliberation metadata');
 

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { SessionEntry } from '../../../core/session/types.js';
+import { shouldPersistSessionChannel } from '../../../core/session/session-channel-persistence.js';
 import { resolveSessionEntryTurnContext } from '../../../core/session/turn-provenance.js';
 import {
   isTurnRecordRecoveryEvidenceError,
@@ -356,6 +357,7 @@ export class SessionTurnRecordOperations {
     ownerSessionId: string | null,
     turnId: string,
     record: TurnRecord,
+    purpose?: 'scratch_reflection_intention',
   ): TurnRecord | null {
     const normalizedSourceChannelId = sourceChannelId.trim();
     const normalizedTurnId = turnId.trim();
@@ -365,7 +367,17 @@ export class SessionTurnRecordOperations {
       return null;
     }
     const owner = this.context.ensureChannelFullyLoaded(declaredOwnerSessionId);
-    if (owner === null || owner.turnTombstones.has(normalizedTurnId)) return null;
+    if (owner?.turnTombstones.has(normalizedTurnId)) return null;
+    // Scratch intention hooks consume their durable TurnRecord without an L0 window.
+    if (owner === null && (
+      purpose !== 'scratch_reflection_intention'
+      || shouldPersistSessionChannel(declaredOwnerSessionId)
+      || this.context.getChannelIndexEntry(declaredOwnerSessionId) !== undefined
+      || declaredOwnerSessionId !== normalizedSourceChannelId
+      || record.status !== 'completed'
+      || record.userMessage.sessionEntryId !== undefined
+      || record.assistantMessage?.sessionEntryId !== undefined
+    )) return null;
     return this.resolveTurnRecordSessionRefs(record, {
       readOperation: 'resolveEligibleSourceTurnRecord',
       channelId: normalizedSourceChannelId,
@@ -413,6 +425,7 @@ export class SessionTurnRecordOperations {
     ownerSessionId: string,
     turnId: string,
     signal?: AbortSignal,
+    purpose?: 'scratch_reflection_intention',
   ): Promise<SourceTurnRecordEligibility> {
     if (!ownerSessionId.trim()) {
       throw new Error('Source TurnRecord eligibility requires an owner session id');
@@ -426,6 +439,7 @@ export class SessionTurnRecordOperations {
       ownerSessionId,
       turnId,
       lookup.record,
+      purpose,
     );
     return record
       ? { kind: 'eligible', record }
@@ -734,6 +748,7 @@ export class SessionTurnRecordOperations {
       try {
         snapshot = await readTurnTombstoneAuthoritySnapshot({
           channelId: before.channelId,
+          ownerSessionId: before.sessionId,
           filePaths: before.filePaths,
           maxActionBytes: limits.maxActionBytes,
           maxActions: limits.maxActions,

@@ -1,6 +1,7 @@
 import type { MemoryStorePort } from '../memory-store-port.js';
 import type {
   MemoryScopeKind,
+  RetrievalAccessScope,
   MemoryScopeQuery,
   PurrMemory,
 } from '../types.js';
@@ -111,6 +112,7 @@ export interface MemoryVisibilityFilter {
 }
 
 export interface MemoryAccessOptions {
+  accessScope?: RetrievalAccessScope;
   trustLevel: TrustLevel;
   channelPrivacy: ChannelPrivacy;
   broadcast: boolean;

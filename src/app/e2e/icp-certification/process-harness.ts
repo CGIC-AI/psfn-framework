@@ -222,7 +222,7 @@ export class IcpCertificationAgentProcess {
       kind: 'initiation',
       companionId: this.fixture.companionId,
       source: 'felt_impulse',
-      candidateId: String(result.opportunityId ?? 'unknown'),
+      candidateId: String(result.impulseId ?? 'unknown'),
       status: String(result.outcome ?? 'unknown'),
     });
     return result;

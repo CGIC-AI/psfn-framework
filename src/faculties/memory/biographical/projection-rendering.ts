@@ -34,7 +34,7 @@ interface BiographicalClaimRenderer {
   readonly present: (claim: BiographicalClaim) => BiographicalClaimPresentation;
 }
 
-const SELF_HEADER = '## Companion self-shape\nSelf-nicknames the companion has approved for this audience; she may recognize them when addressed by them:';
+const SELF_HEADER = '## Companion self-shape\nSelf-nicknames, current roles, and stable preferences approved for this audience:';
 const CURRENT_AUTHOR_IDENTITY_HEADER = '## Current author identity';
 const CURRENT_AUTHOR_RELATIONAL_HEADER = '## Current author relational attribution';
 const GROUP_CONTEXT_HEADER =

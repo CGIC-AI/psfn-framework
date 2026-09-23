@@ -51,7 +51,18 @@ export function renderExtractionChunkPrompt(
   const selfDirectedGuidance = context.experientialCompanionName
     ? buildExperientialSelfDirectedExtractionGuidance(context.experientialCompanionName)
     : undefined;
-  const taskPrompt = [renderedPrompt, namingGuidance, selfDirectedGuidance]
+  // Configured extraction prompts may predate the subject-evidence contract.
+  // Keep its source-bound attribution requirement on the runtime path too.
+  const subjectAttributionGuidance = context.experientialCompanionName
+    ? undefined
+    : 'Conversational subject attribution: For each fact, include source_message_ids, '
+      + 'source_speaker_name, and subject_name, including when the subject is the source speaker. '
+      + 'Use the supporting transcript message IDs and the actual participant names. '
+      + 'The person speaking or owning a DM is not automatically the subject of every fact. '
+      + 'Never invent a subject_contact_id; omit it unless explicitly supplied with the transcript '
+      + 'and bound to the named subject. Skip facts about unresolved third parties rather than '
+      + 'assigning them to the speaker. These attribution requirements also apply to direct messages.';
+  const taskPrompt = [renderedPrompt, subjectAttributionGuidance, namingGuidance, selfDirectedGuidance]
     .filter((section): section is string => Boolean(section))
     .join('\n\n');
   if (context.automataBusPrompt) {

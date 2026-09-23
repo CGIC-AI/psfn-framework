@@ -83,6 +83,8 @@ import {
 import { runWithChargeContext } from '../../../shared/telemetry/run-charge.js';
 import { resolveTaskKind as resolveChannelTaskKind } from './channel-routing-runtime.js';
 import { createInteractiveTerminalMessage } from '../../../app/cli/interactive-terminal-message.js';
+import { createMemoryTool } from '../../../faculties/memory/tools.js';
+import { resolveAuthorizedRetrievalAccessScope } from '../../../faculties/memory/retrieval/access-scope.js';
 import { ParentTurnContinuationBudgetExceededError } from '../turn-limits.js';
 import { parseTurnRecordBackgroundWorkHandoff } from '../background-work/types.js';
 import { getRequestContext } from '../../../primitives/llm/request-context.js';
@@ -1525,6 +1527,63 @@ describe('handleMessageForTurn outbound reply hygiene', () => {
         channelId: 'ch1',
         requestId: 'msg-zero-call-edit',
       }),
+    );
+  });
+
+  it('keeps a sleeptime-review plan whose prompt quotes a historical image-edit request', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: makeContextManifestFixture(),
+    }));
+    const recordAssistantMessage = vi.fn(() => 2);
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {
+        buildContext,
+      } as unknown as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage,
+      // Sleeptime review is authored by the scheduler on an internal
+      // reflection channel, which author resolution treats as a system turn.
+      resolveAuthorContext: vi.fn(() => ({
+        trustLevel: 'primary',
+        speakerRole: 'system',
+        actorKind: 'system',
+        resolvedUserName: 'Sleeptime Review',
+        continuityFallbackKeys: [],
+      })),
+    });
+    const plan = JSON.stringify({
+      orient: { goals: 'Next I will update the photo notes with the partner.' },
+      memory_writes: [{ type: 'episodic', text: 'The partner asked to brighten a photo.' }],
+    });
+    runtime.extractResponseText = vi.fn(() => plan);
+
+    const response = await handleMessageForTurn(runtime, createMessage('sleeptime-review-action-1', {
+      channelId: 'internal:reflection:sleeptime-review',
+      authorId: 'scheduler',
+      authorName: 'Sleeptime Review',
+      content: [
+        'Review the day and propose durable memory writes.',
+        'Source transcript (historical evidence):',
+        '[partner] Can you edit this photo to remove the background and make it brighter?',
+        'Return strict JSON with keys "orient" and "memory_writes" (max 5).',
+      ].join('\n'),
+    }));
+
+    expect(response.content).toBe(plan);
+    expect(runtime.emitTelemetry).not.toHaveBeenCalledWith(
+      'agent.image_edit_request.unfulfilled',
+      expect.anything(),
+    );
+    expect(runtime.emitTelemetry).not.toHaveBeenCalledWith(
+      'agent.tool_execution_narration.unfinished',
+      expect.anything(),
     );
   });
 
@@ -4043,6 +4102,7 @@ async function runObserverSidecarTurn(
     recordUserMessage: vi.fn(() => 1),
     recordAssistantMessage,
     observerEvalSidecar,
+    resolveAuthorContext: vi.fn(() => humanAuthorContext({ canonicalContactKey: 'contact-1' })),
     emotionSelfModelRuntimeOverrides: {
       observeEmotionState,
       computeInternalStateForTurn,
@@ -4098,6 +4158,21 @@ async function captureObserverSidecarInput(
 }
 
 describe('handleMessageForTurn observer eval sidecar seam', () => {
+  it('carries an opaque incoming contact key, never the contact id, and keeps it out of sanitized telemetry', async () => {
+    const input = await captureObserverSidecarInput({ content: 'I finished the model sailboat.' });
+    expect(input.metadata.socialContactKey).toMatch(/^[0-9a-f]{64}$/u);
+    expect(JSON.stringify(input)).not.toContain('contact-1');
+    expect(sanitizeObserverEvalInput(input).metadata).not.toHaveProperty('socialContactKey');
+  });
+
+  it('derives no contact key for internal scheduler turns', async () => {
+    const input = await captureObserverSidecarInput({
+      channelId: 'internal:reflection:temporal-wakeup',
+      channelType: 'terminal',
+    });
+    expect(input.metadata.socialContactKey).toBeUndefined();
+  });
+
   it('uses the admitted private scope for internal scheduler observations', async () => {
     const receivedInput = await captureObserverSidecarInput({
       channelId: 'internal:reflection:temporal-wakeup',
@@ -7093,6 +7168,58 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       purpose: 'free_time.creation.memory_retrieval',
       runtimeLaneClass: 'background_continuation',
     });
+  });
+
+  it.each(['daily-review', 'social-outreach'])('carries private reflection authority through the actual %s tool execution path', async (templateId) => {
+    const refreshedScopes: string[] = [];
+    const search = vi.fn(async () => ({
+      results: [], modes: { lexical: { status: 'completed', candidateCount: 0 }, semantic: { status: 'unavailable', candidateCount: 0 } },
+      degraded: true,
+    }));
+    const tool = createMemoryTool(fromAny({}), fromAny({}), {
+      episodicStore: fromAny({}), episodeSearch: fromAny({ search }),
+      retrievalAccessScope: () => 'companion_self_reflection',
+    });
+    const runtime = createRuntime({
+      eventBus: new EventBus(), sessionManager: createRuntimeSessionManager(),
+      memoryProvider: {
+        getActiveMemoryContext: vi.fn(() => null),
+        refreshActiveMemoryContext: vi.fn(async request => {
+          refreshedScopes.push(resolveAuthorizedRetrievalAccessScope(request.channelId, request.callerContext?.accessScope));
+          return null;
+        }),
+        retrieve: vi.fn(async () => ''),
+      },
+      buildContext: vi.fn(async () => ({ systemPrompt: 'Private reflection', messages: [], manifest: makeContextManifestFixture() })),
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      resolveAuthorContext: vi.fn(() => ({
+        trustLevel: 'primary', speakerRole: 'system', actorKind: 'unknown',
+        resolvedUserName: 'Daily Reflection', continuityFallbackKeys: [],
+      })),
+    });
+    runtime.resolveTaskKind = () => 'reflection';
+    runtime.resolveTurnCallType = () => 'scheduled';
+    const originalPrompt = runtime.agent.prompt.bind(runtime.agent);
+    runtime.agent.prompt = vi.fn(async (...args) => {
+      expect(getRequestContext()).toMatchObject({
+        requesterProvenance: 'self_directed', requestAudience: 'self',
+        callType: 'scheduled', purpose: 'agent.turn.prompt',
+      });
+      const result = await tool.execute('scheduled-reflection-episode', { action: 'episode_search', query: 'yesterday' });
+      expect(result.details?.isError).not.toBe(true);
+      await originalPrompt(...args);
+    });
+    await handleMessageForTurn(runtime, createMessage('reflection-grounding-daily-review', {
+      channelId: `internal:reflection:${templateId}`, channelType: 'terminal', authorId: 'scheduler',
+      routing: templateId === 'daily-review'
+        ? { reflectionTurn: { schemaVersion: 1, stage: 'tool_grounding', templateId, mode: 'deliberation' } }
+        : { privateTurnTrigger: true },
+    }));
+    expect(search).toHaveBeenCalledWith(expect.objectContaining({ accessScope: 'companion_self_reflection' }));
+    await vi.waitFor(() => expect(refreshedScopes).toEqual(['companion_self_reflection']));
   });
 
   it('does not grant self access to an ambiguous internal audience', async () => {

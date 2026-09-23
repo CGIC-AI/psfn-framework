@@ -192,8 +192,15 @@ export {
   DEFAULT_HEALTH_DETECTORS_CONFIG,
 } from './scheduler-config/health-detectors.js';
 export {
+  DEFAULT_FLEET_STAGGER_CONFIG,
+} from './scheduler-config/fleet-stagger.js';
+export {
   DEFAULT_HUMAN_ESCALATION_CONFIG,
 } from './scheduler-config/human-escalation.js';
+import {
+  validateFleetStaggerConfig,
+  type FleetStaggerConfig,
+} from './scheduler-config/fleet-stagger.js';
 
 export const SCHEDULER_FILE_NAME = 'scheduler.json';
 export const SCHEDULER_SEED_FILE_NAME = 'scheduler.seed.json';
@@ -206,6 +213,8 @@ export interface SchedulerRuntimeConfig {
   healthDetectors: HealthDetectorsConfig;
   /** Where each kind of human escalation is routed, and how often (bznbn). */
   humanEscalation: HumanEscalationConfig;
+  /** Per-companion offset window for fixed wall-clock fleet work (vcq8v.7). */
+  fleetStagger: FleetStaggerConfig;
   backgroundWork: BackgroundWorkRuntimeTuning;
   artifactLifecycle: ArtifactLifecyclePolicyConfig;
   episodicProcessing: EpisodicProcessingRestWindowConfig;
@@ -328,6 +337,7 @@ export function validateSchedulerConfig(
     humanEscalation: validateHumanEscalationConfig(raw.humanEscalation, sourcePath, {
       incidentRealertCooldownMs: healthDetectors.incidentAlerts.realertCooldownMs,
     }),
+    fleetStagger: validateFleetStaggerConfig(raw.fleetStagger, sourcePath),
     backgroundWork: validateBackgroundWorkConfig(raw.backgroundWork, sourcePath),
     artifactLifecycle: validateArtifactLifecycleConfig(raw.artifactLifecycle, sourcePath),
     episodicProcessing,

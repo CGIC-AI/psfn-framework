@@ -39,10 +39,20 @@ export type RecurringCadence =
   | DailyRecurringCadence
   | WeeklyRecurringCadence;
 
-/** Stable fleet position used to spread a shared wall-clock slot within its minute. */
+/** Stable fleet position of one companion in the fleet manifest. */
 export interface FleetOrdinalStagger {
   manifestOrdinal: number;
   fleetSize: number;
+}
+
+/**
+ * A companion's fleet position plus the owner-file window
+ * (scheduler.json `fleetStagger.windowMs`) its shared wall-clock slots are
+ * spread across, so each companion fires at a stable, evenly spaced offset
+ * after the slot instead of the whole fleet firing together.
+ */
+export interface FleetSlotStagger extends FleetOrdinalStagger {
+  windowMs: number;
 }
 
 export interface ScheduledTaskOperation {
@@ -50,6 +60,17 @@ export interface ScheduledTaskOperation {
   name: string;
   description: string;
 }
+
+/**
+ * Per-attempt context handed to a scheduled task handler. `signal` aborts when
+ * the attempt exceeds the scheduler's task budget (or the scheduler asks it to
+ * stop); handlers that make model calls or loop over work items must honor it.
+ */
+export interface ScheduledTaskRun {
+  signal: AbortSignal;
+}
+
+export type ScheduledTaskHandler = (run: ScheduledTaskRun) => void | Promise<void>;
 
 export interface ScheduledTask {
   id: string;
@@ -66,11 +87,11 @@ export interface ScheduledTask {
   /** Optional cadence for 'every' tasks. Omitted means relative interval cadence. */
   cadence?: RecurringCadence;
   /** Optional deterministic offset inside the cadence's configured wall-clock minute. */
-  fleetStagger?: FleetOrdinalStagger;
+  fleetStagger?: FleetSlotStagger;
   /** Unix timestamp for 'one-shot' tasks */
   runAt?: number;
-  /** Handler called when the task fires */
-  handler: () => void | Promise<void>;
+  /** Handler called when the task fires; it receives the attempt's abort signal. */
+  handler: ScheduledTaskHandler;
   /** Optional runtime eligibility requirements evaluated before handler execution. */
   eligibility?: EligibilityRequirements;
   state: TaskState;

@@ -71,11 +71,11 @@ For each fact, provide:
 - retention_class: standard|durable (default standard). Use durable for explicit favorites, stable likes/dislikes, favorite colors/outfits/moments, long-term identity facts, and enduring relationship anchors.
 
 Only extract durable participant-centric or relationship-centric facts likely to matter in future conversations. Preserve the named speaker/contact when known; do not collapse group-room facts into a singular generic person.
-When the transcript contains message IDs or line IDs, include structured attribution for each group-room fact:
+When the transcript contains message IDs or line IDs, include structured attribution for every conversational fact, including direct messages:
 - source_message_ids: comma-separated source message IDs supporting the fact
 - source_span_start_message_id/source_span_end_message_id: inclusive supporting message span when a span is clearer than individual IDs
 - source_speaker_name: speaker who provided the evidence
-- subject_name: participant the fact is about when different from the source speaker
+- subject_name: participant the fact is about, including when the subject is the source speaker. A speaker or DM owner is not automatically the subject of every fact.
 - Use subject_name "room", "channel", "group", or "conversation" when the fact is about the group context rather than a single participant.
 - subject_contact_id: known canonical subject contact ID only when explicitly available
 - address_mode: direct_to_companion|mention_of_companion|reply_to_user|overheard_room_context|system_api

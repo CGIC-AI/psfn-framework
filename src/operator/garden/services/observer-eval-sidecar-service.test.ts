@@ -140,7 +140,7 @@ describe('AdminObserverEvalSidecarDataService', () => {
       lastTransition: { stage: 'final_disposition', outcome: 'delivered' },
       proactivityProfile: {
         profileId: 'emosim-would-message-v1',
-        revision: 'public-bootstrap.v1',
+        revision: 'public-bootstrap.v2',
         rawContentRedacted: true,
         deliveryAuthority: false,
         applyBehavior: 'restart_required',

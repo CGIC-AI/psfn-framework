@@ -5,6 +5,7 @@ import {
   type MemorySubjectClassification,
   type MemorySubjectQueryAuthorization,
 } from '../shared/contracts/memory-subject.js';
+import { assertMemoryListPosition } from '../faculties/memory/list-position.js';
 import type {
   MemoryAdminListOptions,
   MemoryAdminPrivacySummary,
@@ -71,6 +72,8 @@ function actionMatchesSelector(input: MemorySubjectAuthorizedQuery): boolean {
     case 'detail':
     case 'details_batch':
       return ['detail', 'snippet', 'export', 'prompt_preview'].includes(action);
+    case 'superseded_detail':
+      return action === 'detail';
     case 'text_search':
       return ['search', 'snippet', 'export', 'prompt_preview'].includes(action);
     case 'embedding_search':
@@ -111,7 +114,6 @@ function isAuthorized(
   if (
     classification.status !== 'current'
     || classification.classifierVersion !== authorization.classifierVersion
-    || ['ambiguous', 'unattributed', 'unbound_person'].includes(classification.subjectClass)
     || !authorization.allowedSubjectClasses.includes(classification.subjectClass)
   ) {
     return false;
@@ -171,9 +173,20 @@ export async function queryInMemoryAuthorizedSubjects(
       `Memory subject authorization action ${input.authorization.action} does not permit ${input.selector.kind}`,
     );
   }
+  const { selector } = input;
+  if (selector.kind === 'superseded_detail') {
+    const memory = await store.getById(selector.memoryId.trim());
+    const matches = memory !== undefined
+      && memory.supersededBy === selector.supersededBy.trim()
+      && memory.deletedAt === undefined
+      && isAuthorized(memory, input.authorization);
+    return {
+      memories: matches ? [{ ...memory, similarity: 1 }] : [],
+      total: matches ? 1 : 0,
+    };
+  }
   const authorized = (await store.getAllActiveMemories())
     .filter(memory => isAuthorized(memory, input.authorization));
-  const { selector } = input;
 
   if (selector.kind === 'count') {
     return {
@@ -228,7 +241,11 @@ export async function queryInMemoryAuthorizedSubjects(
     };
   }
 
-  const matches = authorized.filter(memory => matchesScope(memory, selector.scopeQuery));
+  const before = selector.before === undefined ? undefined : assertMemoryListPosition(selector.before);
+  const matches = authorized.filter(memory => matchesScope(memory, selector.scopeQuery))
+    .filter(memory => before === undefined || memory.extractedAt < before.extractedAt
+      || (memory.extractedAt === before.extractedAt && memory.id.localeCompare(before.memoryId) < 0))
+    .sort((left, right) => right.extractedAt - left.extractedAt || right.id.localeCompare(left.id));
   return {
     memories: page(matches, selector.limit, selector.offset).map(memory => ({
       ...memory,

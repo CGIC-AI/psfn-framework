@@ -33,6 +33,8 @@ interface SocialDesireRow {
   absorbed_signal_count: number | string;
   tier_at_last_tick: string;
   reinforced_concern_ids: unknown;
+  last_consent_moment_at: string | null;
+  deferred_until: string | null;
   created_at: string;
 }
 
@@ -40,7 +42,8 @@ const SELECT_COLUMNS = `
   contact_id, warm_pressure, repair_pressure, pressure_anchor_at,
   last_warm_felt_at, last_repair_felt_at, last_warm_tick_at,
   last_repair_tick_at, tick_count, absorbed_signal_count,
-  tier_at_last_tick, reinforced_concern_ids, created_at
+  tier_at_last_tick, reinforced_concern_ids, last_consent_moment_at,
+  deferred_until, created_at
 `;
 
 function parseTier(value: string): SocialDesireAccumulatingTier {
@@ -78,6 +81,8 @@ function mapRow(row: SocialDesireRow): SocialDesire {
     absorbedSignalCount: Math.max(0, Math.floor(toNumber(row.absorbed_signal_count))),
     tierAtLastTick: parseTier(row.tier_at_last_tick),
     reinforcedConcernIds: parseConcernIds(row.reinforced_concern_ids),
+    ...(row.last_consent_moment_at ? { lastConsentMomentAt: row.last_consent_moment_at } : {}),
+    ...(row.deferred_until ? { deferredUntil: row.deferred_until } : {}),
     createdAt: row.created_at,
   };
 }
@@ -113,9 +118,10 @@ export class PostgresSocialDesireStore implements SocialDesireStorePortBackend {
           contact_id, warm_pressure, repair_pressure, pressure_anchor_at,
           last_warm_felt_at, last_repair_felt_at, last_warm_tick_at,
           last_repair_tick_at, tick_count, absorbed_signal_count,
-          tier_at_last_tick, reinforced_concern_ids, created_at
+          tier_at_last_tick, reinforced_concern_ids, created_at,
+          last_consent_moment_at, deferred_until
         ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14, $15
         )
         ON CONFLICT (contact_id) DO UPDATE SET
           warm_pressure = excluded.warm_pressure,
@@ -128,7 +134,9 @@ export class PostgresSocialDesireStore implements SocialDesireStorePortBackend {
           tick_count = excluded.tick_count,
           absorbed_signal_count = excluded.absorbed_signal_count,
           tier_at_last_tick = excluded.tier_at_last_tick,
-          reinforced_concern_ids = excluded.reinforced_concern_ids
+          reinforced_concern_ids = excluded.reinforced_concern_ids,
+          last_consent_moment_at = excluded.last_consent_moment_at,
+          deferred_until = excluded.deferred_until
         RETURNING ${SELECT_COLUMNS}
       `,
       [
@@ -145,6 +153,8 @@ export class PostgresSocialDesireStore implements SocialDesireStorePortBackend {
         desire.tierAtLastTick,
         JSON.stringify(desire.reinforcedConcernIds),
         desire.createdAt,
+        desire.lastConsentMomentAt ?? null,
+        desire.deferredUntil ?? null,
       ],
     );
     if (!row) {

@@ -896,6 +896,12 @@ export class ApiServer implements ChannelAdapterPort {
       this.handleIdentity(res);
     } else if (req.method === 'GET' && path === '/v1/satellites/config') {
       this.handleSatelliteConfigPull(res, url, principal, clientCert);
+    } else if (req.method === 'GET' && path === '/readyz') {
+      if (principal.mode !== 'api_key') {
+        sendApiError(res, 401, 'unauthorized', 'Readiness requires API key authentication');
+        return;
+      }
+      this.handleReadiness(res);
     } else if (req.method === 'GET' && path === '/health') {
       void this.handleHealth(res);
     } else if (req.method === 'POST' && path === '/v1/chat/completions') {
@@ -1360,6 +1366,16 @@ export class ApiServer implements ChannelAdapterPort {
       : this.satelliteRegistry;
   }
 
+  private handleReadiness(res: ServerResponse): void {
+    let ready = false;
+    try {
+      ready = this.runtime?.isReady?.() === true;
+    } catch (error) {
+      log.error('API readiness check failed', { error: toErrorMessage(error) });
+    }
+    sendJson(res, ready ? 200 : 503, { status: ready ? 'ready' : 'unavailable' });
+  }
+
   private async handleHealth(res: ServerResponse): Promise<void> {
     if (this.runtime) {
       const body = await this.runtime.handleHealth();
@@ -1447,32 +1463,26 @@ export class ApiServer implements ChannelAdapterPort {
   private evaluateGatewayLinkHealth(
     subsystems: ApiHealthResponse['subsystems'],
   ): ApiHealthSubsystemStatus {
-    const llmHealthy = subsystems.llm.status === 'healthy';
-    const embeddingsHealthy = subsystems.embeddings.status === 'healthy';
-    if (llmHealthy || embeddingsHealthy) {
-      return {
-        status: 'healthy',
-        meta: {
-          agentConnected: true,
-          sourceSubsystems: ['llm', 'embeddings'],
-          llmStatus: subsystems.llm.status,
-          embeddingsStatus: subsystems.embeddings.status,
-        },
-      };
+    // Only the llm check round-trips the gateway (model discovery RPC); the
+    // embeddings check is configuration-only, so it cannot prove the link. A
+    // provider-side discovery failure the gateway answered for (reported as
+    // `gatewayReachable: true`) keeps the link healthy so provider outages do
+    // not masquerade as a broken agent-gateway connection.
+    const gatewayReachable = subsystems.llm.meta?.gatewayReachable === true;
+    const meta = {
+      agentConnected: true,
+      sourceSubsystem: 'llm',
+      gatewayReachable,
+      llmStatus: subsystems.llm.status,
+      embeddingsStatus: subsystems.embeddings.status,
+    };
+    if (subsystems.llm.status === 'healthy' || gatewayReachable) {
+      return { status: 'healthy', meta };
     }
-
-    const llmDetail = subsystems.llm.detail?.trim();
-    const embeddingsDetail = subsystems.embeddings.detail?.trim();
-    const detailParts = [llmDetail, embeddingsDetail].filter((value): value is string => Boolean(value));
     return {
       status: 'degraded',
-      detail: detailParts.join(' | ') || 'Gateway-linked LLM and embeddings checks are degraded',
-      meta: {
-        agentConnected: true,
-        sourceSubsystems: ['llm', 'embeddings'],
-        llmStatus: subsystems.llm.status,
-        embeddingsStatus: subsystems.embeddings.status,
-      },
+      detail: subsystems.llm.detail?.trim() || 'Gateway-linked LLM model discovery check is degraded',
+      meta,
     };
   }
 

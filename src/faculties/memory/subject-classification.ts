@@ -71,7 +71,8 @@ export function createMemorySubjectEvidenceDigest(
 }
 
 function isCompanionPrivate(memory: PurrMemory): boolean {
-  return memory.sourceType === 'reflection'
+  return memory.provenance?.subjectScope === 'companion_internal'
+    || memory.sourceType === 'reflection'
     || memory.sourceType === 'heartbeat'
     || memory.sourceType === 'shard'
     || memory.sourceType === 'subagent'

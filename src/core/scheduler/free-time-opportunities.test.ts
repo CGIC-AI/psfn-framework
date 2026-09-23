@@ -75,7 +75,7 @@ async function runLane(taskId: string, options: { activity?: boolean; nowMs?: nu
   });
   const handler = scheduler.getTask(taskId)?.handler;
   if (!handler) throw new Error('Free-time task was not registered');
-  await handler();
+  await handler({ signal: new AbortController().signal });
   return { chooseWorkspace, invokeTurn, getRecentMessages, gateEvents, sessionManager, workspace };
 }
 

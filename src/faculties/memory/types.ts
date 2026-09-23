@@ -144,6 +144,12 @@ export interface MemoryProvenance {
   sourceAuthorId?: string;
   sourceSpeakerName?: string;
   subjectContactId?: string;
+  /**
+   * Set only by the subject-authorized write path for a trusted
+   * companion-internal writer (process-local companion work with no contact
+   * subject). It makes the memory companion-private; it is never a contact id.
+   */
+  subjectScope?: 'companion_internal';
   /** Explicitly attributed co-subjects. Room participation alone never populates this field. */
   subjectContactIds?: string[];
   subjectName?: string;
@@ -673,6 +679,9 @@ export function normalizeMemoryProvenance(value: unknown): MemoryProvenance | un
   const derivationRunId = normalizeOptionalString(record.derivationRunId);
   if (derivationRunId) {
     provenance.derivationRunId = derivationRunId;
+  }
+  if (record.subjectScope === 'companion_internal') {
+    provenance.subjectScope = 'companion_internal';
   }
   const actor = normalizeOptionalString(record.actor);
   if (actor && ['companion', 'operator', 'system', 'shard', 'subagent', 'repl'].includes(actor)) {

@@ -518,6 +518,15 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
       return current.status === status ? current : null;
     }
     const resolutionGenerationId = terminal ? randomUUID() : null;
+    // A reviewed candidate becomes a live concern now (vcq8v.5): its lifetime
+    // restarts from promotion instead of expiring on the candidate's clock,
+    // still bounded by the concern's absolute lifetime ceiling.
+    const promotedExpiresAt = current.status === 'candidate' && status === 'active'
+      ? clampConcernExpiresAt(new Date(Math.max(
+        Date.parse(current.expiresAt),
+        Date.parse(transitionedAt) + DEFAULT_CONCERN_TTL_MS_BY_PRIORITY[current.priority],
+      )).toISOString(), current.createdAt)
+      : null;
     const updatedResolutionEvidenceRefs = terminal
       ? mergeConcernEvidenceRefs(
         current.resolutionEvidenceRefs,
@@ -537,6 +546,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
       serializeConcernEvidenceRefs(updatedResolutionEvidenceRefs),
       terminal ? serializeResolutionVAD(options.resolutionVAD) : null,
       resolutionGenerationId,
+      promotedExpiresAt,
     ];
     if (!terminal) {
       transitionValues.push(current.status);
@@ -558,6 +568,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
           resolution_evidence_refs = $9::jsonb,
           resolution_vad = $10::jsonb,
           resolution_generation_id = $11,
+          expires_at = COALESCE($12, expires_at),
           candidate_review_snapshot = CASE
             WHEN $2 = 'candidate' THEN candidate_review_snapshot
             ELSE NULL
@@ -565,7 +576,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
         WHERE id = $1
           ${terminal
             ? "AND resolved_at IS NULL AND status NOT IN ('resolved', 'dismissed', 'suppressed')"
-            : `AND status = $12 AND ${current.resolvedAt ? 'resolved_at = $13' : 'resolved_at IS NULL'}`}
+            : `AND status = $13 AND ${current.resolvedAt ? 'resolved_at = $14' : 'resolved_at IS NULL'}`}
         RETURNING ${ACTIVE_CONCERN_SELECT_COLUMNS}
       `,
       transitionValues,

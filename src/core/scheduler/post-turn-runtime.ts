@@ -22,6 +22,7 @@ import {
   toInferredPostTurnActions,
 } from '../intention/appraisal.js';
 import { MotivationBridge } from '../intention/motivation.js';
+import { bindIntentionFollowUpDestinations } from '../intention/follow-up-destination.js';
 import {
   applyExternalAppraisalConcernRequirement,
   createAppraisalConcernScope,
@@ -53,11 +54,26 @@ import {
   registerSchedulerOwnedPostTurnLanes,
 } from './post-turn-runtime/scheduler-lanes.js';
 
+
+/**
+ * Outward (proactive outbound) quiet hours: the configured rest window with
+ * this companion's fleet release offset applied (psfn-framework-m7jf2). The
+ * rest window itself still governs internal work unchanged.
+ */
+function outwardQuietHours(
+  options: Pick<ReflectionRuntimeOptions, 'episodicProcessingRestWindow' | 'fleetScheduleStagger'>,
+): ReflectionRuntimeOptions['episodicProcessingRestWindow'] {
+  return options.episodicProcessingRestWindow
+    ? staggerQuietHoursRelease(options.episodicProcessingRestWindow, options.fleetScheduleStagger)
+    : undefined;
+}
+
 export {
   CONTACT_TRUST_DRIFT_REVIEW_OPERATION_ID,
   DRIFT_VELOCITY_REVIEW_OPERATION_ID,
   SLEEPTIME_REST_WINDOW_OPERATION_ID,
 } from './post-turn-runtime/scheduler-lanes.js';
+import { staggerQuietHoursRelease } from './quiet-hours-release-stagger.js';
 
 const SCHEDULER_REFLECTION_CLASS: ProductionAutomataClassId = 'scheduler.reflection';
 const SCHEDULER_REFLECTION_TASK_LABEL = 'Deferred reflection template';
@@ -318,6 +334,27 @@ export function wirePostTurnRuntime(
             : {}),
         });
 
+        const { contacts: followUpContacts, unauthorized } = await bindIntentionFollowUpDestinations({
+          decisions,
+          sourceChannelId: context.message.channelId,
+          sourceChannelType: context.message.channelType,
+          sourceContactId: context.canonicalContactKey,
+          resolveDestination: runtimeOptions.resolveIntentionFollowUpDestination,
+        });
+        // An unauthorized model-chosen target rejects only that follow-up; the
+        // rest of the appraisal (concerns, reminders, other follow-ups) stands.
+        for (const rejected of unauthorized) {
+          decisions.splice(decisions.indexOf(rejected), 1);
+          log.warn('Intention follow-up dropped: destination is not authorized', {
+            channelId: context.message.channelId,
+            requestedChannelId: rejected.followUp?.channelId ?? null,
+            delivery: rejected.followUp?.delivery ?? null,
+          });
+          emitIntentionFollowUpGateTelemetry('blocked', {
+            reason: 'destination_not_authorized',
+            channelId: context.message.channelId,
+          });
+        }
         if (runtimeOptions.onIntentionConcernDecision) {
           for (const decision of decisions) {
             if (decision.type !== 'concern') continue;
@@ -338,7 +375,7 @@ export function wirePostTurnRuntime(
               decision,
               channelId: resolvedSessionId,
               channelType: context.message.channelType,
-              canonicalContactKey: context.canonicalContactKey,
+              canonicalContactKey: followUpContacts.get(decision),
               sourceMessageId: context.message.id,
               formationVAD: { ...internalState.emotional.vad },
               ...(originIcpRootInitiationId ? { originIcpRootInitiationId } : {}),
@@ -399,7 +436,7 @@ export function wirePostTurnRuntime(
           {
             now: candidateNow,
             minimumOutboundRunAt: resolveMinimumOutboundRunAt(activeConcerns, candidateNow),
-            proactiveOutboundQuietHours: runtimeOptions.episodicProcessingRestWindow,
+            proactiveOutboundQuietHours: outwardQuietHours(runtimeOptions),
             appraisalConcernScope: createAppraisalConcernScope(
               resolvedSessionId,
               context.canonicalContactKey,
@@ -1013,7 +1050,7 @@ export function wirePostTurnRuntime(
               const timeGate = evaluateProactiveOutboundTimeGate({
                 nowMs: Date.now(),
                 earliestSendAtMs: action.runAt,
-                quietHours: runtimeOptions.episodicProcessingRestWindow,
+                quietHours: outwardQuietHours(runtimeOptions),
                 contactTimeZone,
               });
               if (!timeGate.allowed) {

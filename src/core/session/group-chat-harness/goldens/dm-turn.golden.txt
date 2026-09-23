@@ -46,7 +46,7 @@ Never present retrieved memory as partner-authored direct speech.
 <channel_id>dm:alice</channel_id>
 <channel_type>api</channel_type>
 <channel_visibility>private</channel_visibility>
-<current_message_author name="Alice" id="user-alice" trust="trusted" relationship="friend" />
+<current_message_author name="Alice" id="user-alice" trust="trusted" relationship_to_companion="friend" />
 
 </conversation_state>
 </runtime_state>

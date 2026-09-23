@@ -118,11 +118,11 @@ describe('withEmbeddingUsageAccounting', () => {
     }]);
   });
 
-  it('does not relabel a gateway-default sessionless health probe as maintenance', async () => {
+  it('does not relabel a gateway-default sessionless embedding as maintenance', async () => {
     const events: ModelUsageEventInput[] = [];
     const provider = {
       kind: 'transformers' as const,
-      model: 'local-health-embedding',
+      model: 'local-sessionless-embedding',
       dims: 2,
       embed: vi.fn(),
       embedBatch: vi.fn(async () => [new Float32Array([1, 2])]),
@@ -138,7 +138,7 @@ describe('withEmbeddingUsageAccounting', () => {
       purpose: 'embedding',
       originType: 'memory',
       originStage: 'embedding',
-    }, async () => await accounted.embed('health probe'));
+    }, async () => await accounted.embed('sessionless text'));
 
     expect(events).toHaveLength(1);
     expect(events[0]?.attribution).toMatchObject({

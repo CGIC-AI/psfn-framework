@@ -339,6 +339,8 @@ export interface ApiRuntimeChatRequest {
 }
 
 export interface ApiServerRuntime {
+  /** Local routing readiness only; absence is unavailable. */
+  isReady?(): boolean;
   handleHealth(): Promise<ApiHealthRpcResult>;
   handleTelemetryIngest(event: ExternalTelemetryEvent): Promise<ApiTelemetryIngestRpcResult>;
   handleChatCompletion(input: ApiRuntimeChatRequest): Promise<ApiChatCompletionRpcResult>;

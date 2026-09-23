@@ -25,7 +25,7 @@
   },
   "overrides": {
     "cookie": "0.7.0",
-    "devalue": "5.8.1",
+    "devalue": "5.9.4",
     "picomatch": "4.0.4",
     "postcss": "8.5.24"
   }

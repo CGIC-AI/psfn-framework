@@ -1,3 +1,4 @@
+import { assertJournalAddressingMigration, type JournalAddressingMigration } from '../../sessions/message-addressing-journal-policy.js';
 import {
   closeSync,
   copyFileSync,
@@ -29,7 +30,9 @@ const CHAIN_REWRITE_MANIFEST_SUFFIX = '.chain-rewrite-manifest.json';
 // append-only, 7.4 supersede over destructive rewrite, 7.5 repair must not
 // rewrite canonical). Growth of the chain is append-only and never travels
 // through this primitive; corrections that are not redactions belong in a
-// derived mirror or an in-stream supersede entry.
+// derived mirror or an in-stream supersede entry. The explicit addressing
+// schema migration is the sole metadata-only exception: its closed transform
+// is recomputed from disk here and preserves every other canonical field.
 const REDACTION_IMMUTABLE_FIELDS: readonly (keyof JournalEntry)[] = [
   'type',
   'id',
@@ -54,6 +57,7 @@ function assertRedactionOnlyRewrite(
   original: readonly JournalEntry[],
   replacement: readonly JournalEntry[],
   targetPath: string,
+  addressingMigration?: JournalAddressingMigration,
 ): void {
   if (original.length !== replacement.length) {
     throw new Error(
@@ -64,6 +68,10 @@ function assertRedactionOnlyRewrite(
   for (let index = 0; index < original.length; index += 1) {
     const originalEntry = original[index]!;
     const replacementEntry = replacement[index]!;
+    if (addressingMigration) {
+      assertJournalAddressingMigration(originalEntry, replacementEntry, addressingMigration);
+      continue;
+    }
     for (const field of REDACTION_IMMUTABLE_FIELDS) {
       if (originalEntry[field] !== replacementEntry[field]) {
         throw new Error(
@@ -103,6 +111,7 @@ function assertRedactionOnlyChainRewrite(
   replacementByTarget: readonly (readonly JournalEntry[])[],
   renewLease?: () => void,
   onMalformedRowQuarantine?: MalformedRowQuarantineHook,
+  addressingMigration?: JournalAddressingMigration,
 ): void {
   targetPaths.forEach((targetPath, index) => {
     // Derive the originals from disk, never from the caller: trusting a
@@ -110,7 +119,7 @@ function assertRedactionOnlyChainRewrite(
     // redaction by claiming the replacement is already the original.
     const parsed = parseJournalText(readFileSync(targetPath, 'utf8'));
     if (parsed.quarantined.length > 0) {
-      if (!onMalformedRowQuarantine) {
+      if (!onMalformedRowQuarantine || addressingMigration) {
         throw new Error(
           `Refusing L0 chain rewrite over a malformed journal file: ${basename(targetPath)}`,
         );
@@ -120,7 +129,7 @@ function assertRedactionOnlyChainRewrite(
       // that alters any canonical entry keeps failing closed.
       onMalformedRowQuarantine(targetPath, parsed.quarantined);
     }
-    assertRedactionOnlyRewrite(parsed.entries, replacementByTarget[index]!, targetPath);
+    assertRedactionOnlyRewrite(parsed.entries, replacementByTarget[index]!, targetPath, addressingMigration);
     renewLease?.();
   });
 }
@@ -351,6 +360,7 @@ export function rewriteJournalChainTransaction(params: {
   renewLease?: () => void;
   onDurablePhase?: (phase: ChainRewriteManifest['phase']) => void;
   onMalformedRowQuarantine?: MalformedRowQuarantineHook;
+  addressingMigration?: JournalAddressingMigration;
 }): void {
   if (params.targetPaths.length === 0 || params.targetPaths.length !== params.entriesByTarget.length) {
     throw new Error('L0 chain rewrite requires one non-empty entry set list aligned to target files');
@@ -388,6 +398,7 @@ export function rewriteJournalChainTransaction(params: {
     params.entriesByTarget,
     params.renewLease,
     params.onMalformedRowQuarantine,
+    params.addressingMigration,
   );
   const originalFingerprints = params.targetPaths.map(fingerprintTarget);
   const transactionId = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;

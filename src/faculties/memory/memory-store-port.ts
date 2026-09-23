@@ -1,5 +1,6 @@
 import type { ScratchpadProvider } from '../../core/agent/scratchpad-port.js';
 import type { Awaitable } from '../../shared/utils/types.js';
+import type { MemoryListPosition } from './list-position.js';
 import type { ScratchpadEntry } from './scratchpad-types.js';
 import type {
   CoreMemoryAppendOptions,
@@ -245,9 +246,16 @@ export interface EmbeddingSearchAuthorization {
 }
 
 export type MemorySubjectQuerySelector =
-  | { kind: 'list'; limit?: number; offset?: number; scopeQuery?: MemoryScopeQuery }
+  | { kind: 'list'; limit?: number; offset?: number; before?: MemoryListPosition; scopeQuery?: MemoryScopeQuery }
   | { kind: 'detail'; memoryId: string }
   | { kind: 'details_batch'; memoryIds: readonly string[] }
+  /**
+   * One memory that a known newer memory superseded (and that is not deleted),
+   * still under the same subject authorization. Lets a caller prove it may
+   * link a replacement to the memory it just replaced; it never widens the
+   * subject predicate and never returns an arbitrary archived row.
+   */
+  | { kind: 'superseded_detail'; memoryId: string; supersededBy: string }
   | { kind: 'text_search'; query: string; limit?: number; offset?: number; scopeQuery?: MemoryScopeQuery }
   | { kind: 'embedding_search'; embedding: Float32Array; threshold: number; limit?: number; offset?: number; scopeQuery?: MemoryScopeQuery }
   | { kind: 'count'; scopeQuery?: MemoryScopeQuery };
@@ -386,6 +394,10 @@ export class InactiveMemoryUpdateError extends Error {
 export interface MemoryListOptions {
   limit?: number;
   offset?: number;
+}
+
+export interface ActiveMemoryListOptions extends MemoryListOptions {
+  before?: MemoryListPosition;
 }
 
 type ActiveMemoryWindowScope =
@@ -548,7 +560,7 @@ interface MemoryStorePortBackend extends ScratchpadProvider {
   recordPatchEvent(event: MemoryPatchEvent): Awaitable<void>;
   getAllActiveMemories(limit?: number): Awaitable<PurrMemory[]>;
   listMemories(options?: MemoryListOptions): Awaitable<PurrMemory[]>;
-  listActiveMemories(options?: MemoryListOptions): Awaitable<PurrMemory[]>;
+  listActiveMemories(options?: ActiveMemoryListOptions): Awaitable<PurrMemory[]>;
   listActiveMemoriesInWindow?(options: ActiveMemoryWindowOptions): Awaitable<ActiveMemoryWindowResult>;
   listAdminMemories(options?: MemoryAdminListOptions): Awaitable<MemoryAdminListResult>;
   getAdminMemoryPrivacySummary(): Awaitable<MemoryAdminPrivacySummary>;
@@ -668,7 +680,7 @@ export interface MemoryStorePort extends ScratchpadProvider {
   recordPatchEvent(event: MemoryPatchEvent): Promise<void>;
   getAllActiveMemories(limit?: number): Promise<PurrMemory[]>;
   listMemories(options?: MemoryListOptions): Promise<PurrMemory[]>;
-  listActiveMemories(options?: MemoryListOptions): Promise<PurrMemory[]>;
+  listActiveMemories(options?: ActiveMemoryListOptions): Promise<PurrMemory[]>;
   listActiveMemoriesInWindow?(options: ActiveMemoryWindowOptions): Promise<ActiveMemoryWindowResult>;
   listAdminMemories(options?: MemoryAdminListOptions): Promise<MemoryAdminListResult>;
   getAdminMemoryPrivacySummary(): Promise<MemoryAdminPrivacySummary>;

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { assertNoUnknownKeys, isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
 import {
   EMOSIM_PROACTIVITY_SOURCE_MODEL,
@@ -192,12 +193,16 @@ export function createEmoSimProactivityPort(
     if (observation.observedAtMs - firstCrossingMs < profile.sustainMs) {
       return suppression(observation, 'sustain_pending', 'available', firstCrossingMs);
     }
-    if (current.lastFiredAtMs !== null
-      && observation.observedAtMs - current.lastFiredAtMs < profile.cooldownMs) {
-      return {
-        ...suppression(observation, 'cooldown_active', 'available', firstCrossingMs),
-        nextEligibleAtMs: current.lastFiredAtMs + profile.cooldownMs,
-      };
+    if (current.lastFiredAtMs !== null) {
+      const nextEligibleAtMs = current.lastFiredAtMs
+        + profile.cooldownMs
+        + cooldownJitterFor(companionId, current.lastFiredAtMs, profile.cooldownJitterMs);
+      if (observation.observedAtMs < nextEligibleAtMs) {
+        return {
+          ...suppression(observation, 'cooldown_active', 'available', firstCrossingMs),
+          nextEligibleAtMs,
+        };
+      }
     }
 
     const impulse: EmoSimProactivityImpulse = {
@@ -253,6 +258,23 @@ export function createEmoSimProactivityPort(
       return await result;
     },
   };
+}
+
+/**
+ * Deterministic per-companion, per-fire jitter in 0..jitterMs. Derived rather
+ * than drawn so it survives restarts without extra persisted state, and keyed
+ * by companion so a fleet that fired together does not re-arm together.
+ */
+function cooldownJitterFor(
+  companionId: string,
+  lastFiredAtMs: number,
+  jitterMs: number,
+): number {
+  if (jitterMs === 0) return 0;
+  const digest = createHash('sha256')
+    .update(`emosim-proactivity.cooldown-jitter.v1\u0000${companionId}\u0000${lastFiredAtMs}`)
+    .digest();
+  return digest.readUInt32BE(0) % (jitterMs + 1);
 }
 
 function evaluateWouldMessage(
@@ -353,6 +375,7 @@ export function normalizeEmoSimProactivityThresholdProfile(
     'sustainMs',
     'dedupeWindowMs',
     'cooldownMs',
+    'cooldownJitterMs',
   ], 'EmoSim proactivity threshold profile');
   const profileId = requireNonEmptyString(root.profileId, 'profileId');
   if (root.schemaVersion !== 1) {
@@ -421,6 +444,10 @@ export function normalizeEmoSimProactivityThresholdProfile(
   const sustainMs = requireTimestamp(root.sustainMs, 'sustainMs');
   const dedupeWindowMs = requireTimestamp(root.dedupeWindowMs, 'dedupeWindowMs');
   const cooldownMs = requireTimestamp(root.cooldownMs, 'cooldownMs');
+  const cooldownJitterMs = requireTimestamp(root.cooldownJitterMs, 'cooldownJitterMs');
+  if (cooldownJitterMs > cooldownMs) {
+    throw new Error('EmoSim proactivity cooldownJitterMs must not exceed cooldownMs');
+  }
   return {
     schemaVersion: 1,
     profileId,
@@ -441,6 +468,7 @@ export function normalizeEmoSimProactivityThresholdProfile(
     sustainMs,
     dedupeWindowMs,
     cooldownMs,
+    cooldownJitterMs,
   };
 }
 

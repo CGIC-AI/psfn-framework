@@ -20,6 +20,21 @@ export interface ActiveHealthProbeResult {
   details?: Record<string, unknown>;
 }
 
+/**
+ * A probe failure that still carries diagnostic details (for example, whether
+ * the gateway answered even though the upstream check failed).
+ */
+export class ActiveHealthProbeFailure extends Error {
+  constructor(
+    message: string,
+    readonly details: Record<string, unknown>,
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = 'ActiveHealthProbeFailure';
+  }
+}
+
 export type ActiveHealthProbeTask = (
   signal: AbortSignal,
 ) => Promise<Record<string, unknown> | void>;
@@ -121,6 +136,7 @@ export class CachedActiveHealthProbe {
         reason: formatProbeFailureReason(error, timedOut, this.timeoutMs),
         checkedAt: new Date().toISOString(),
         latencyMs: Math.max(0, Date.now() - startedAt),
+        ...(error instanceof ActiveHealthProbeFailure ? { details: error.details } : {}),
       };
     }
   }

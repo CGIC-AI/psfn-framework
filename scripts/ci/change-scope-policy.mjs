@@ -41,6 +41,7 @@ export const ROOT_DTS_ENTRYPOINTS = Object.freeze([
   'src/app/maintenance/migrate-scheduler-owner.ts',
   'src/app/maintenance/migrate-required-settings-blocks.ts',
   'src/app/maintenance/migrate-intake-policy-owner.ts',
+  'src/app/maintenance/migrate-journal-message-addressing.ts',
   'src/app/maintenance/migrate-system-owner-fleet.ts',
   'src/app/maintenance/system-owner-fleet-snapshot.ts',
   'src/app/maintenance/owner-upgrade-readiness-probe.ts',

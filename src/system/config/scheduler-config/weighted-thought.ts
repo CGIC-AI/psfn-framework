@@ -60,10 +60,16 @@ export interface WeightedThoughtOutreachConfig {
   lifecycle: WeightedThoughtLifecycleSettings;
 }
 
+// nudgeThreshold retune (psfn-framework-vcq8v.4): a new thought weighs
+// baseWeight x (1 + 0.75 x charge), so a single standard thought peaks at
+// 0.35 x 1.75 = 0.6125 and could never reach the old threshold of 1. At 0.75 a
+// standard thought nudges after one strongly felt repeat (0.6125 + 0.306) or
+// two moderate ones, and a time-sensitive thought nudges on its own only when
+// its charge is at least ~0.67 (0.5 x 1.5 = 0.75): accumulated need, not noise.
 export const DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG: WeightedThoughtOutreachConfig = {
   enabled: false,
   checkIntervalMs: 1_800_000,
-  nudgeThreshold: 1,
+  nudgeThreshold: 0.75,
   maxNudgesPerRun: 1,
   lifecycle: {
     classes: {

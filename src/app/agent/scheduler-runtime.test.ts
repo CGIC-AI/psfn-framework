@@ -113,7 +113,7 @@ describe('agent scheduler runtime wiring', () => {
       type: 'every',
       state: 'idle',
     });
-    await task?.handler();
+    await task?.handler({ signal: new AbortController().signal });
     expect(tickBackgroundWork).toHaveBeenCalledOnce();
   });
 
@@ -159,7 +159,7 @@ describe('agent scheduler runtime wiring', () => {
       availability: 'do_not_disturb',
       scheduleSource: 'automata-policy.json > bus.reviewer.cadenceMs',
     });
-    await task?.handler();
+    await task?.handler({ signal: new AbortController().signal });
 
     expect(run).toHaveBeenCalledWith(expect.objectContaining({
       companionId: 'companion-a',
@@ -261,7 +261,7 @@ describe('agent scheduler runtime wiring', () => {
       scheduleSource: 'settings.json > biographicalDepthPolicy.full.refreshIntervalMs',
     });
     expect(scheduler.getTask('background-maintenance')).toBeUndefined();
-    await task?.handler();
+    await task?.handler({ signal: new AbortController().signal });
     // The stage received a real checkpoint hook from the baton.
     expect(boundaries).toEqual(['continue']);
     expect(emitted).toHaveLength(1);
@@ -303,7 +303,7 @@ describe('agent scheduler runtime wiring', () => {
       fleetMaintenance: stubFleetMaintenance({ acquire: 'waiting' }),
       eventBus,
     });
-    await scheduler.getTask(BIOGRAPHY_SYNTHESIS_TASK_ID)?.handler();
+    await scheduler.getTask(BIOGRAPHY_SYNTHESIS_TASK_ID)?.handler({ signal: new AbortController().signal });
     expect(ran).toBe(0);
     // A pass that did no work publishes no telemetry either.
     expect(emitted).toEqual([]);
@@ -347,7 +347,7 @@ describe('agent scheduler runtime wiring', () => {
       availability: 'do_not_disturb',
       scheduleSource: 'settings.json > biographicalDepthPolicy.full.refreshIntervalMs',
     });
-    await task?.handler();
+    await task?.handler({ signal: new AbortController().signal });
     expect(emitted).toHaveLength(1);
     expect(emitted[0]).toMatchObject(telemetry);
     // Content-free by contract: decision counts only.
@@ -393,7 +393,7 @@ describe('agent scheduler runtime wiring', () => {
         name: 'Shared-World Wiki Caretaker',
       }],
     });
-    await scheduler.getTask('background-maintenance')?.handler();
+    await scheduler.getTask('background-maintenance')?.handler({ signal: new AbortController().signal });
     expect(cleanupChangedContent).toHaveBeenCalledOnce();
     expect(cleanupChangedContent).toHaveBeenCalledWith(25);
   });
@@ -419,7 +419,7 @@ describe('agent scheduler runtime wiring', () => {
       batchSize: 25,
     });
 
-    await expect(scheduler.getTask('background-maintenance')?.handler())
+    await expect(scheduler.getTask('background-maintenance')?.handler({ signal: new AbortController().signal }))
       .rejects.toThrow('background-maintenance operations failed');
   });
 
@@ -450,7 +450,7 @@ describe('agent scheduler runtime wiring', () => {
         name: 'Doing-Mirror Letter Redelivery',
       }],
     });
-    await scheduler.getTask('background-maintenance')?.handler();
+    await scheduler.getTask('background-maintenance')?.handler({ signal: new AbortController().signal });
     expect(drainPendingLetters).toHaveBeenCalledExactlyOnceWith(25, 5);
   });
 
@@ -476,7 +476,7 @@ describe('agent scheduler runtime wiring', () => {
       batchSize: 25,
       maxDeliveryFailures: 5,
     });
-    await scheduler.getTask('background-maintenance')?.handler();
+    await scheduler.getTask('background-maintenance')?.handler({ signal: new AbortController().signal });
 
     expect(drainPendingLetters).toHaveBeenCalledExactlyOnceWith(25, 5);
   });

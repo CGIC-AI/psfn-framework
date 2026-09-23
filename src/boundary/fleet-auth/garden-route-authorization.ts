@@ -173,6 +173,10 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
         // diagnostics reading, so they share its action rather than minting a
         // second one for the same operator capability.
         '/api/admin/incidents',
+        // The fleet "what's broken" digest composes the same diagnostics
+        // (incidents, lanes, failure counts); escalation records stay behind
+        // confirmations.read, so the digest carries counts only.
+        '/api/admin/attention-digest',
       ]),
       ...pageIds(['/subsystem-health']),
     ],

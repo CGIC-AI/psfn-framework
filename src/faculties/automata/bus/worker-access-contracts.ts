@@ -15,6 +15,7 @@ import type {
 export const AUTOMATA_BUS_TOOL_ACTIONS = [
   'brief',
   'search',
+  'note',
   'append',
   'correct',
   'handoff',
@@ -61,6 +62,8 @@ export interface AutomataBusWorkerBriefing {
 export type AutomataBusWorkerOperation =
   | { action: 'brief'; query?: string }
   | { action: 'search'; query: string; limit?: number }
+  /** A worker's own concise run note; the runtime supplies its provenance. */
+  | { action: 'note'; text: string }
   | {
     action: 'append';
     claim: string;

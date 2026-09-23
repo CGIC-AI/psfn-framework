@@ -1637,4 +1637,10 @@ export const GatewayErrors = {
    * into an ungrounded text-only completion.
    */
   VISION_PURPOSE_RESOLVED_NON_VISION_MODEL: -32022,
+  /**
+   * No provider in providers.json exposes a model discovery endpoint, so the
+   * gateway has no model catalog to list. Typed so health checks can tell an
+   * unconfigured catalog apart from a failing provider endpoint.
+   */
+  MODEL_DISCOVERY_UNCONFIGURED: -32023,
 } as const;

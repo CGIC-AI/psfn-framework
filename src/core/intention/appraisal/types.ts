@@ -12,6 +12,7 @@ import type {
 import type { ActiveConcernStatus, ActiveConcernVAD } from '../concerns.js';
 import type { SocialDesireOrientation } from '../social-desire.js';
 import type { IcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
+import { MAX_CONTEXT_SUMMARY_CHARS } from '../context-summary.js';
 
 export const DEFAULT_APPRAISAL_FREQUENCY = 3;
 export const DEFAULT_EMOTIONAL_SHIFT_THRESHOLD = 0.35;
@@ -32,7 +33,7 @@ export const DEFAULT_SYSTEM_PROMPT = [
   'Set followUp.delivery to "external" ONLY when you genuinely decide to reach out to the Partner now: followUp.content then becomes the actual message you send, written in your own voice. External delivery is policy-gated (primary private channel only, rate-limited) and may be blocked. Default is "internal".',
   'If the Participant asked for a future reminder/check-in ("tomorrow", a weekday, a calendar date, or any later time), set dueAt to the earliest intended send time as epoch milliseconds in the supplied timezone. Do not use external delivery before that dueAt.',
   'When a followUp is based on supplied activeConcerns, include the exact activeConcerns ids in followUp.concernIds.',
-  'Use followUp.contextSummary for the key situation to preserve if the follow-up may need to wait and be resurfaced later.',
+  `Use followUp.contextSummary for the key situation to preserve if the follow-up may need to wait and be resurfaced later. Keep it to at most ${MAX_CONTEXT_SUMMARY_CHARS} characters; anything longer is truncated.`,
   'Use followUp.wakeConditions only when the follow-up should stay pending until a later state cue. next_user_turn waits for the next external Participant turn, background_recheck waits for an internal/background appraisal turn, and sustained_negative_mood waits for continued notably negative mood or motivation signals.',
   'When resurfacing or refining an already pending follow-up, reuse followUp.pendingFollowUpId instead of inventing a duplicate.',
   'Use reminder decisions for durable care reminders or important dates that must survive quiet periods and restart, not for one-shot follow-ups.',

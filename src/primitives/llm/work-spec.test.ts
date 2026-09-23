@@ -76,17 +76,18 @@ const CALL_SITES: CallSiteFixture[] = [
     expectedLane: RUNTIME_LANE_CLASSES.backgroundContinuation,
   },
   {
+    // vcq8v.5: concern and follow-up formation is non-preemptable.
     name: 'intention.appraisal.evaluator',
     purpose: 'background',
     correlation: {
       requestId: 'appraisal:1',
       callType: 'background',
-      purpose: 'agent.intention.appraisal',
+      purpose: 'intention.appraisal',
       originType: 'background',
-      originStage: 'agent.intention.appraisal',
+      originStage: 'intention.appraisal.post_turn',
       channelId: 'session-1',
     },
-    expectedLane: RUNTIME_LANE_CLASSES.backgroundContinuation,
+    expectedLane: RUNTIME_LANE_CLASSES.postTurnAppraisal,
   },
   {
     name: 'intention.concern_candidate_review',
@@ -99,7 +100,7 @@ const CALL_SITES: CallSiteFixture[] = [
       originStage: 'intention.concern_candidate_review',
       channelId: 'ch-1',
     },
-    expectedLane: RUNTIME_LANE_CLASSES.backgroundContinuation,
+    expectedLane: RUNTIME_LANE_CLASSES.postTurnAppraisal,
   },
   {
     name: 'intention.nudge_evaluation (no correlation)',

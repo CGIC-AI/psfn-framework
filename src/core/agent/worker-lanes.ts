@@ -247,10 +247,16 @@ export function resolveRuntimeLaneClassForModelCall(input: {
   ) {
     return MAINTENANCE_REFLECTION_RUNTIME_CLASS;
   }
+  // Intention appraisal and concern-candidate review decide whether concerns
+  // and follow-ups exist at all (psfn-framework-vcq8v.5). On the preemptable
+  // background lane a foreground turn discarded them as a failed-closed no-op
+  // with no retry, so they run on the non-preemptable appraisal lane.
   if (
     input.callType === 'summary'
     || input.purpose === 'summary'
     || originStage === 'intention.follow_up'
+    || originStage.startsWith('intention.appraisal.')
+    || originStage === 'intention.concern_candidate_review'
   ) {
     return POST_TURN_APPRAISAL_RUNTIME_CLASS;
   }

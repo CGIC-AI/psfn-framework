@@ -22,6 +22,10 @@
     <circle cx="19" cy="5" r="2" />
     <circle cx="12" cy="20" r="2" />
     <path d="m7 6 3 4m7-4-3 4m-1 5-.5 3" />
+  {:else if viewId === 'attention'}
+    <path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0" />
+    <path d="M12 9v4" />
+    <path d="M12 17h.01" />
   {:else if viewId === 'usage'}
     <path d="M3 3v16a2 2 0 0 0 2 2h16" />
     <path d="M8 17v-3" />

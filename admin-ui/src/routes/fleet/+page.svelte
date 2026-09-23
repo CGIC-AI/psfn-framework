@@ -8,16 +8,26 @@
     type FleetCardDetails,
     type FleetPortalProjection,
   } from '$lib/fleet/portal';
-  import { resolveFleetView } from '$lib/fleet/fleet-views';
+  import { fleetViewHref, resolveFleetView } from '$lib/fleet/fleet-views';
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import FleetCostUsage from '$lib/components/fleet/FleetCostUsage.svelte';
   import FleetUsageSummary from '$lib/components/fleet/FleetUsageSummary.svelte';
   import FleetGlobalFirewall from '$lib/components/fleet/FleetGlobalFirewall.svelte';
+  import FleetAttention from '$lib/components/fleet/FleetAttention.svelte';
+  import {
+    fetchCompanionAttention,
+    fleetAttentionBannerVisible,
+    summarizeFleetAttention,
+    type CompanionAttentionResult,
+  } from '$lib/fleet/attention-digest';
 
   const activeView = $derived(resolveFleetView($page.url.search, $page.url.hash));
 
   let projection = $state<FleetPortalProjection | null>(null);
   let cardDetails = $state<Record<string, FleetCardDetails>>({});
+  let attentionResults = $state<CompanionAttentionResult[]>([]);
+  let attentionLoading = $state(true);
+  const attentionSummary = $derived(summarizeFleetAttention(attentionResults));
   let loading = $state(true);
   let errorMessage = $state('');
   let controller: AbortController | null = null;
@@ -68,10 +78,26 @@
     errorMessage = '';
     projection = null;
     cardDetails = {};
+    attentionResults = [];
+    attentionLoading = true;
     try {
       const result = await fetchFleetPortalProjection(request.signal);
       if (controller !== request) return;
       projection = result;
+      // The attention fan-out runs beside the card probes so a slow Garden
+      // delays only its own row, and the login banner appears as soon as the
+      // digests are in.
+      void Promise.all(result.companions.map(companion => (
+        fetchCompanionAttention(companion, request.signal)
+      ))).then(results => {
+        if (controller !== request) return;
+        attentionResults = results;
+        attentionLoading = false;
+      }).catch((error: unknown) => {
+        if (request.signal.aborted || controller !== request) return;
+        attentionLoading = false;
+        errorMessage = error instanceof Error ? error.message : 'Cluster attention digest is unavailable';
+      });
       const details = await Promise.all(result.companions.map(async companion => (
         [companion.companionId, await fetchFleetCardDetails(companion, request.signal)] as const
       )));
@@ -162,7 +188,28 @@
   />
 
   <main class="space-y-6 pt-6">
-    {#if activeView === 'usage'}
+    {#if !attentionLoading && fleetAttentionBannerVisible(attentionSummary)}
+      <section class="card-garden border-wilt-200 bg-wilt-50 p-4" role="alert" aria-label="Open cluster incidents">
+        <p class="text-sm font-semibold text-wilt-700">
+          {attentionSummary.openIncidents} open incident{attentionSummary.openIncidents === 1 ? '' : 's'}
+          and {attentionSummary.openEscalations} open escalation{attentionSummary.openEscalations === 1 ? '' : 's'}
+          across {attentionSummary.companionsNeedingAttention} companion{attentionSummary.companionsNeedingAttention === 1 ? '' : 's'}.
+        </p>
+        {#if attentionSummary.unreachable > 0}
+          <p class="mt-1 text-xs text-wilt-700">{attentionSummary.unreachable} companion Garden{attentionSummary.unreachable === 1 ? '' : 's'} could not be checked.</p>
+        {/if}
+        {#if activeView !== 'attention'}
+          <a class="mt-2 inline-block text-sm font-medium text-wilt-700 underline" href={fleetViewHref('attention')}>See what's broken</a>
+        {/if}
+      </section>
+    {:else if !attentionLoading && attentionSummary.unreachable > 0}
+      <section class="card-garden border-gold-200 bg-gold-50 p-4" role="status">
+        <p class="text-sm text-gold-700">{attentionSummary.unreachable} companion Garden{attentionSummary.unreachable === 1 ? '' : 's'} could not be checked for open incidents.</p>
+      </section>
+    {/if}
+    {#if activeView === 'attention'}
+      <FleetAttention results={attentionResults} loading={attentionLoading} />
+    {:else if activeView === 'usage'}
       <FleetUsageSummary {companionNames} />
     {:else}
     {#if activeView === 'info' && projection}

@@ -13,6 +13,11 @@ import { createSubstrateStreamFn, resolveModel } from './stream-adapter.js';
 import * as models from '../../primitives/llm/models.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 import { PiProviderRuntime, type ProviderRuntime } from '../../primitives/llm/provider-runtime.js';
+import {
+  isExplicitToolContractError,
+  isExplicitToolRequestError,
+} from '../../primitives/llm/explicit-tool-request.js';
+import { classifyLLMError } from '../../primitives/llm/error-classify.js';
 
 const streamAdapterMocks = vi.hoisted(() => ({
   transportStream: vi.fn(),
@@ -1277,6 +1282,77 @@ describe('createSubstrateStreamFn', () => {
     expect(JSON.stringify(events.at(-1))).toContain('repo-drifted');
     expect(JSON.stringify(events.at(-1))).toContain('"action":"branch"');
     expect(JSON.stringify(events.at(-1))).not.toContain('"action":"inspect"');
+  });
+
+  it('refuses participant exact arguments outside the execution schema before any provider call', async () => {
+    const config = makeChatFallbackConfig({
+      retryMaxAttempts: 2,
+      retryBaseDelayMs: 0,
+    });
+    streamAdapterMocks.transportStream.mockResolvedValue({
+      content: '',
+      toolCalls: [{ id: 'repo-branch', name: 'repo', input: { action: 'branch', name: 'x' } }],
+      model: 'openrouter/z-ai/glm-5.2',
+      inputTokens: 1,
+      outputTokens: 1,
+      stopReason: 'toolUse',
+    });
+
+    const streamFn = makeStreamFn(config);
+    const stream = await streamFn(resolveModel(config, makeRuntime(), 'chat'), fromAny({
+      systemPrompt: 'System',
+      messages: [{
+        role: 'user',
+        content: 'Call repo exactly once with arguments {"action":"branch","name":"x"}.',
+      }],
+      tools: [{
+        name: 'repo',
+        description: 'Repository operations (read-only surface).',
+        parameters: Type.Object({
+          action: Type.Optional(Type.Union([Type.Literal('inspect'), Type.Literal('status')])),
+          name: Type.Optional(Type.String()),
+        }),
+      }],
+    }), {});
+
+    const failure = await collectStreamEvents(stream as AsyncIterable<unknown>)
+      .then(() => undefined, (error: unknown) => error);
+    expect(isExplicitToolRequestError(failure)).toBe(true);
+    expect(isExplicitToolContractError(failure)).toBe(false);
+    expect(String((failure as Error).message)).toContain('schema-invalid for required tool call: repo');
+    expect(classifyLLMError(failure)).toMatchObject({
+      category: 'explicit_tool_request_invalid',
+      retryable: false,
+    });
+    expect(streamAdapterMocks.transportStream).not.toHaveBeenCalled();
+  });
+
+  it('does not treat a runtime-authored trailing system note as an explicit tool request (3pye5)', async () => {
+    const config = makeChatFallbackConfig({ retryMaxAttempts: 0, retryBaseDelayMs: 0 });
+    streamAdapterMocks.transportStream.mockResolvedValue({
+      content: 'Resting quietly.',
+      toolCalls: [],
+      model: 'openrouter/z-ai/glm-5.2',
+      inputTokens: 1,
+      outputTokens: 1,
+      stopReason: 'stop',
+    });
+    const streamFn = makeStreamFn(config);
+    const stream = await streamFn(resolveModel(config, makeRuntime(), 'chat'), fromAny({
+      systemPrompt: 'System',
+      messages: [{
+        role: 'user',
+        content: '[System note] [SYSTEM: free-time] Call repo exactly once with arguments {"action":"branch"}.',
+        messageClass: 'systemNote',
+      }],
+      tools: [{
+        name: 'repo',
+        description: 'Repository operations (read-only surface).',
+        parameters: Type.Object({ action: Type.Optional(Type.Literal('inspect')) }),
+      }],
+    }), {});
+    await collectStreamEvents(stream as AsyncIterable<unknown>);
+    expect(streamAdapterMocks.transportStream).toHaveBeenCalledTimes(1);
   });
 
   it('leads chat with the companion-selected slot and transports that slot to the gateway', async () => {

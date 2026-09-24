@@ -11,6 +11,8 @@ import {
   type MemoryParticipantNameRepairReport,
 } from '../../persistence/repair/memory-participant-name-repair.js';
 import { resolveCompanionNameFromConfig } from '../../core/identity/companion-runtime.js';
+import { createProviderRuntimeServices } from '../../system/config/provider-runtime-factory.js';
+import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import {
   bootstrapMaintenanceRuntime,
   isMaintenanceCliEntrypoint,
@@ -36,7 +38,8 @@ function printUsage(): void {
   console.log('Usage: npm run memory:repair:participant-names [-- OPTIONS]');
   console.log('');
   console.log('Backfills generic L2 memory participant labels to resolved names.');
-  console.log('Dry-run is the default. Pass --apply to update l2_memories and record patch events.');
+  console.log('Dry-run is the default. Pass --apply to update l2_memories (text and re-embedded vector)');
+  console.log('and record patch events. --apply uses the configured embedding provider.');
   console.log('');
   console.log('Options:');
   console.log('  --apply                  Update matching memories. Without this, only report planned changes.');
@@ -152,6 +155,7 @@ async function runPostgresRepair(options: CliOptions, reportOptions: {
   postgresUrl: string;
   userName?: string;
   companionName?: string;
+  embeddingProvider?: EmbeddingProviderPort;
 }): Promise<MemoryParticipantNameRepairReport> {
   const postgresUrl = reportOptions.postgresUrl.trim();
   if (!postgresUrl) {
@@ -166,6 +170,7 @@ async function runPostgresRepair(options: CliOptions, reportOptions: {
       dryRun: !options.apply,
       includeArchived: options.includeArchived,
       limit: options.limit,
+      embeddingProvider: reportOptions.embeddingProvider,
     });
   } finally {
     await pool.end();
@@ -182,6 +187,9 @@ async function run(options: CliOptions): Promise<void> {
     postgresUrl: options.postgresUrl ?? config.postgresDatabaseUrl ?? '',
     userName,
     companionName,
+    embeddingProvider: options.apply
+      ? createProviderRuntimeServices({ config }).embeddingProvider
+      : undefined,
   });
 
   if (options.json) {

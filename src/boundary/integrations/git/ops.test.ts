@@ -5,7 +5,7 @@ import { REPO_ALLOWED_PATHS } from '../../../system/security/policy-constants.js
 
 // Mock child_process and fs
 vi.mock('node:child_process', () => ({
-  execSync: vi.fn(),
+  execFileSync: vi.fn(),
 }));
 
 vi.mock('node:fs', () => ({
@@ -15,10 +15,10 @@ vi.mock('node:fs', () => ({
   readFileSync: vi.fn(),
 }));
 
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { writeFileSync, appendFileSync, readFileSync } from 'node:fs';
 
-const mockedExecSync = vi.mocked(execSync);
+const mockedExecFileSync = vi.mocked(execFileSync);
 const mockedWriteFileSync = vi.mocked(writeFileSync);
 const mockedAppendFileSync = vi.mocked(appendFileSync);
 const mockedReadFileSync = vi.mocked(readFileSync);
@@ -54,7 +54,7 @@ describe('GitOps', () => {
 
   describe('status', () => {
     it('parses branch name from porcelain v2 output', () => {
-      mockedExecSync.mockReturnValue(
+      mockedExecFileSync.mockReturnValue(
         '# branch.oid abc123\n# branch.head feature/test\n# branch.ab +2 -1\n',
       );
       const ops = createGitOps();
@@ -66,7 +66,7 @@ describe('GitOps', () => {
     });
 
     it('parses staged files', () => {
-      mockedExecSync.mockReturnValue(
+      mockedExecFileSync.mockReturnValue(
         '# branch.head main\n1 M. N... 100644 100644 100644 abc def\tsrc/foo.ts\n',
       );
       const ops = createGitOps();
@@ -77,7 +77,7 @@ describe('GitOps', () => {
     });
 
     it('parses modified (unstaged) files', () => {
-      mockedExecSync.mockReturnValue(
+      mockedExecFileSync.mockReturnValue(
         '# branch.head main\n1 .M N... 100644 100644 100644 abc def\tsrc/bar.ts\n',
       );
       const ops = createGitOps();
@@ -88,7 +88,7 @@ describe('GitOps', () => {
     });
 
     it('parses untracked files', () => {
-      mockedExecSync.mockReturnValue(
+      mockedExecFileSync.mockReturnValue(
         '# branch.head main\n? src/new-file.ts\n',
       );
       const ops = createGitOps();
@@ -98,7 +98,7 @@ describe('GitOps', () => {
     });
 
     it('handles empty output', () => {
-      mockedExecSync.mockReturnValue('# branch.head main\n');
+      mockedExecFileSync.mockReturnValue('# branch.head main\n');
       const ops = createGitOps();
       const result = ops.status();
 
@@ -115,7 +115,7 @@ describe('GitOps', () => {
 
   describe('diff', () => {
     it('returns staged and unstaged diffs', () => {
-      mockedExecSync
+      mockedExecFileSync
         .mockReturnValueOnce('staged diff content')
         .mockReturnValueOnce('unstaged diff content');
       const ops = createGitOps();
@@ -126,13 +126,13 @@ describe('GitOps', () => {
     });
 
     it('skips staged diff when staged is false', () => {
-      mockedExecSync.mockReturnValueOnce('unstaged only');
+      mockedExecFileSync.mockReturnValueOnce('unstaged only');
       const ops = createGitOps();
       const result = ops.diff({ staged: false });
 
       expect(result.staged).toBe('');
       expect(result.unstaged).toBe('unstaged only');
-      expect(mockedExecSync).toHaveBeenCalledTimes(1);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -140,7 +140,7 @@ describe('GitOps', () => {
 
   describe('currentBranch', () => {
     it('returns trimmed branch name', () => {
-      mockedExecSync.mockReturnValue('feature/xyz\n');
+      mockedExecFileSync.mockReturnValue('feature/xyz\n');
       const ops = createGitOps();
       expect(ops.currentBranch()).toBe('feature/xyz');
     });
@@ -150,7 +150,7 @@ describe('GitOps', () => {
 
   describe('isProtectedBranch', () => {
     it('returns true for main', () => {
-      mockedExecSync.mockReturnValue('main\n');
+      mockedExecFileSync.mockReturnValue('main\n');
       const ops = createGitOps();
       expect(ops.isProtectedBranch('main')).toBe(true);
     });
@@ -166,7 +166,7 @@ describe('GitOps', () => {
     });
 
     it('uses currentBranch when no arg provided', () => {
-      mockedExecSync.mockReturnValue('main\n');
+      mockedExecFileSync.mockReturnValue('main\n');
       const ops = createGitOps();
       expect(ops.isProtectedBranch()).toBe(true);
     });
@@ -210,13 +210,13 @@ describe('GitOps', () => {
 
   describe('assertNotProtected', () => {
     it('throws on protected branch main', () => {
-      mockedExecSync.mockReturnValue('main\n');
+      mockedExecFileSync.mockReturnValue('main\n');
       const ops = createGitOps();
       expect(() => ops.assertNotProtected()).toThrow('protected branch');
     });
 
     it('does not throw on feature branch', () => {
-      mockedExecSync.mockReturnValue('feature/test\n');
+      mockedExecFileSync.mockReturnValue('feature/test\n');
       const ops = createGitOps();
       expect(() => ops.assertNotProtected()).not.toThrow();
     });
@@ -226,12 +226,13 @@ describe('GitOps', () => {
 
   describe('createBranch', () => {
     it('creates branch with valid name', () => {
-      mockedExecSync.mockReturnValue('');
+      mockedExecFileSync.mockReturnValue('');
       const ops = createGitOps();
       const name = ops.createBranch('feature/new-thing');
       expect(name).toBe('feature/new-thing');
-      expect(mockedExecSync).toHaveBeenCalledWith(
-        expect.stringContaining('git checkout -b'),
+      expect(mockedExecFileSync).toHaveBeenCalledWith(
+        'git',
+        ['checkout', '-b', 'feature/new-thing'],
         expect.any(Object),
       );
     });
@@ -247,17 +248,18 @@ describe('GitOps', () => {
     });
 
     it('creates branch from start point', () => {
-      mockedExecSync.mockReturnValue('');
+      mockedExecFileSync.mockReturnValue('');
       const ops = createGitOps();
       ops.createBranch('feature/x', 'develop');
-      expect(mockedExecSync).toHaveBeenCalledWith(
-        expect.stringContaining('develop'),
+      expect(mockedExecFileSync).toHaveBeenCalledWith(
+        'git',
+        ['checkout', '-b', 'feature/x', 'develop', '--'],
         expect.any(Object),
       );
     });
 
     it('writes audit log', () => {
-      mockedExecSync.mockReturnValue('');
+      mockedExecFileSync.mockReturnValue('');
       const ops = createGitOps();
       ops.createBranch('feature/audit-test');
       expect(mockedAppendFileSync).toHaveBeenCalled();
@@ -272,7 +274,7 @@ describe('GitOps', () => {
     it('writes file and stages it', () => {
       // First call: currentBranch (for assertNotProtected)
       // Second call: git add
-      mockedExecSync
+      mockedExecFileSync
         .mockReturnValueOnce('feature/x\n')
         .mockReturnValueOnce('');
       const ops = createGitOps();
@@ -283,8 +285,9 @@ describe('GitOps', () => {
         'console.log("hello");',
         'utf-8',
       );
-      expect(mockedExecSync).toHaveBeenCalledWith(
-        expect.stringContaining('git add'),
+      expect(mockedExecFileSync).toHaveBeenCalledWith(
+        'git',
+        ['add', '--', 'src/new.ts'],
         expect.any(Object),
       );
     });
@@ -296,7 +299,7 @@ describe('GitOps', () => {
     });
 
     it('blocks on protected branch', () => {
-      mockedExecSync.mockReturnValue('main\n');
+      mockedExecFileSync.mockReturnValue('main\n');
       const ops = createGitOps();
       expect(() => ops.applyPatch('src/foo.ts', 'content')).toThrow('protected branch');
     });
@@ -306,7 +309,7 @@ describe('GitOps', () => {
 
   describe('commit', () => {
     it('formats message with intent and agent metadata', () => {
-      mockedExecSync
+      mockedExecFileSync
         .mockReturnValueOnce('feature/x\n')  // currentBranch for assertNotProtected
         .mockReturnValueOnce('')              // git commit
         .mockReturnValueOnce('abc1234\n')     // git rev-parse
@@ -319,14 +322,17 @@ describe('GitOps', () => {
       expect(result.filesChanged).toBe(3);
       expect(result.message).toBe('Add feature');
 
-      const commitCall = mockedExecSync.mock.calls[1][0] as string;
+      const [commitFile, commitArgs] = mockedExecFileSync.mock.calls[1] as [string, string[]];
+      expect(commitFile).toBe('git');
+      expect(commitArgs.slice(0, 2)).toEqual(['commit', '-m']);
+      const commitCall = commitArgs[2] ?? '';
       expect(commitCall).toContain('[Intent] add feature');
       expect(commitCall).toContain('[Scope] module');
       expect(commitCall).toContain('[Agent] Companion');
     });
 
     it('blocks on protected branch', () => {
-      mockedExecSync.mockReturnValue('main\n');
+      mockedExecFileSync.mockReturnValue('main\n');
       const ops = createGitOps();
       expect(() => ops.commit('msg', 'intent')).toThrow('protected branch');
     });
@@ -336,46 +342,48 @@ describe('GitOps', () => {
 
   describe('openPR', () => {
     it('calls gh pr create and returns URL', () => {
-      mockedExecSync
+      mockedExecFileSync
         .mockReturnValueOnce('feature/pr-work\n')
         .mockReturnValueOnce('https://github.com/owner/repo/pull/42\n');
       const ops = createGitOps();
       const url = ops.openPR('Fix bug', 'Bug fix description');
 
       expect(url).toBe('https://github.com/owner/repo/pull/42');
-      expect(mockedExecSync).toHaveBeenCalledWith(
-        expect.stringContaining('gh pr create'),
+      expect(mockedExecFileSync).toHaveBeenCalledWith(
+        'gh',
+        ['pr', 'create', '--title=Fix bug', '--body=Bug fix description'],
         expect.any(Object),
       );
     });
 
     it('includes base branch when specified', () => {
-      mockedExecSync
+      mockedExecFileSync
         .mockReturnValueOnce('feature/pr-work\n')
         .mockReturnValueOnce('https://github.com/owner/repo/pull/43\n');
       const ops = createGitOps();
       ops.openPR('Title', 'Body', 'develop');
 
-      expect(mockedExecSync).toHaveBeenCalledWith(
-        expect.stringContaining('--base'),
+      expect(mockedExecFileSync).toHaveBeenCalledWith(
+        'gh',
+        ['pr', 'create', '--title=Title', '--body=Body', '--base=develop'],
         expect.any(Object),
       );
     });
 
     it('blocks on protected branch', () => {
-      mockedExecSync.mockReturnValueOnce('main\n');
+      mockedExecFileSync.mockReturnValueOnce('main\n');
       const ops = createGitOps();
 
       expect(() => ops.openPR('Title', 'Body')).toThrow('protected branch');
-      expect(mockedExecSync).toHaveBeenCalledTimes(2);
-      expect(mockedExecSync.mock.calls.every(([cmd]) =>
-        String(cmd).includes('git rev-parse --abbrev-ref HEAD'),
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(2);
+      expect(mockedExecFileSync.mock.calls.every(([file, args]) =>
+        file === 'git' && JSON.stringify(args) === JSON.stringify(['rev-parse', '--abbrev-ref', 'HEAD']),
       )).toBe(true);
       expect(mockedAppendFileSync).toHaveBeenCalled();
     });
 
     it('throws and audits on failure', () => {
-      mockedExecSync.mockImplementation(() => {
+      mockedExecFileSync.mockImplementation(() => {
         throw new Error('gh: not authenticated');
       });
       const ops = createGitOps();
@@ -386,11 +394,77 @@ describe('GitOps', () => {
     });
   });
 
+  // ── Argv execution (no shell) ──
+
+  describe('argv execution', () => {
+    const metachar = `x'; touch pwned #$(id)\`id\` && echo "q" | cat > out; \n--amend`;
+
+    it('never builds a shell command string', () => {
+      mockedExecFileSync.mockReturnValue('feature/x\n');
+      const ops = createGitOps();
+      ops.status();
+      ops.diff();
+      ops.currentBranch();
+      for (const call of mockedExecFileSync.mock.calls) {
+        expect(['git', 'gh']).toContain(call[0]);
+        expect(Array.isArray(call[1])).toBe(true);
+        expect(call[2]).not.toHaveProperty('shell');
+      }
+    });
+
+    it('passes metacharacter commit messages, intents and scopes literally', () => {
+      mockedExecFileSync
+        .mockReturnValueOnce('feature/x\n')
+        .mockReturnValueOnce('')
+        .mockReturnValueOnce('abc1234\n')
+        .mockReturnValueOnce(' 1 file changed\n');
+      const ops = createGitOps();
+      ops.commit(metachar, metachar, metachar);
+      const [, args] = mockedExecFileSync.mock.calls[1] as [string, string[]];
+      expect(args).toHaveLength(3);
+      expect(args[2]?.startsWith(metachar)).toBe(true);
+      expect(args[2]).toContain(`[Intent] ${metachar}`);
+      expect(args[2]).toContain(`[Scope] ${metachar}`);
+    });
+
+    it('passes metacharacter paths literally after an option terminator', () => {
+      mockedExecFileSync.mockReturnValueOnce('feature/x\n').mockReturnValueOnce('');
+      const ops = createGitOps();
+      const path = "src/a b'$(id);`x`.ts";
+      ops.applyPatch(path, 'content');
+      expect(mockedExecFileSync).toHaveBeenLastCalledWith('git', ['add', '--', path], expect.any(Object));
+    });
+
+    it('passes metacharacter start points and PR fields literally', () => {
+      mockedExecFileSync.mockReturnValue('feature/x\n');
+      const ops = createGitOps();
+      ops.createBranch('feature/y', "v1'; $(id)");
+      expect(mockedExecFileSync).toHaveBeenLastCalledWith(
+        'git',
+        ['checkout', '-b', 'feature/y', "v1'; $(id)", '--'],
+        expect.any(Object),
+      );
+      expect(() => ops.createBranch('feature/z', '--orphan')).toThrow('Invalid start point');
+      ops.openPR('-t $(id)', metachar, "dev'elop");
+      expect(mockedExecFileSync).toHaveBeenLastCalledWith(
+        'gh',
+        ['pr', 'create', '--title=-t $(id)', `--body=${metachar}`, "--base=dev'elop"],
+        expect.any(Object),
+      );
+    });
+
+    it('rejects option-shaped branch names', () => {
+      const ops = createGitOps();
+      expect(() => ops.createBranch('-f')).toThrow('Invalid branch name');
+      expect(mockedExecFileSync).not.toHaveBeenCalled();
+    });
+  });
+
   // ── Audit logging ──
 
   describe('audit logging', () => {
     it('appends JSONL entries for write operations', () => {
-      mockedExecSync.mockReturnValue('');
+      mockedExecFileSync.mockReturnValue('');
       const ops = createGitOps();
       ops.createBranch('feature/audit');
 
@@ -403,7 +477,7 @@ describe('GitOps', () => {
     });
 
     it('prunes oldest entries when maxCount is exceeded', () => {
-      mockedExecSync.mockReturnValue('');
+      mockedExecFileSync.mockReturnValue('');
       mockedReadFileSync.mockReturnValue([
         auditLine('2026-01-01T00:00:00.000Z', 'one'),
         auditLine('2026-01-01T00:01:00.000Z', 'two'),
@@ -430,7 +504,7 @@ describe('GitOps', () => {
     });
 
     it('prunes entries older than maxAgeMs', () => {
-      mockedExecSync.mockReturnValue('');
+      mockedExecFileSync.mockReturnValue('');
       mockedReadFileSync.mockReturnValue([
         auditLine('2026-01-01T00:00:00.000Z', 'old'),
         auditLine('2026-01-01T00:10:00.000Z', 'fresh'),
@@ -458,7 +532,7 @@ describe('GitOps', () => {
     });
 
     it('prunes oldest entries when maxSizeBytes is exceeded', () => {
-      mockedExecSync.mockReturnValue('');
+      mockedExecFileSync.mockReturnValue('');
       mockedReadFileSync.mockReturnValue([
         JSON.stringify({
           timestamp: '2026-01-01T00:00:00.000Z',
@@ -504,7 +578,7 @@ describe('GitOps', () => {
 
   describe('exec error handling', () => {
     it('wraps exec errors with context', () => {
-      mockedExecSync.mockImplementation(() => {
+      mockedExecFileSync.mockImplementation(() => {
         const err = fromAny(new Error('command failed'));
         err.stderr = 'fatal: not a git repository';
         throw err;

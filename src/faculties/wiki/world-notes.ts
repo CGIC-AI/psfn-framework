@@ -39,6 +39,12 @@ export class WorldNotesLibrary implements WorldNotesReader, WorldNotesWriter {
   constructor(
     private readonly store: WikiStorePort,
     private readonly now: () => Date = () => new Date(),
+    /**
+     * Serving-path admission check (the CogSec wiki admission gate when one is
+     * configured). A document it refuses -- held, or not yet decided for its
+     * current bytes -- is never rendered into the prompt.
+     */
+    private readonly isServable?: (document: WikiDocument) => boolean,
   ) {}
 
   get(world: string): WorldNotes | undefined {
@@ -136,7 +142,11 @@ export class WorldNotesLibrary implements WorldNotesReader, WorldNotesWriter {
   }
 
   summarize(world: string): string {
-    const notes = this.get(world);
+    if (!WORLD_NAME_PATTERN.test(world)) return '';
+    const document = this.store.get(worldNotesDocId(world));
+    if (!document) return '';
+    if (this.isServable && !this.isServable(document)) return '';
+    const notes = parseWorldNotesDocument(document);
     if (!notes) return '';
     const parts: string[] = [];
     const rooms = notes.landmarks.filter((landmark) => landmark.kind === 'room').slice(-6);

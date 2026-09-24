@@ -276,6 +276,8 @@ export async function runBootstrap(config, services) {
     config,
     message: `PSFN fresh-bootstrap proof ${proofToken}`,
     sessionId: `bootstrap-${proofToken}`,
+    runId: proofToken,
+    manifestId: `bootstrap:first-conversation:${proofToken}`,
     turnRecordsDir: join(
       config.companionDataDir,
       'state',

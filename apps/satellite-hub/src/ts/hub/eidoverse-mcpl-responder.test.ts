@@ -127,6 +127,17 @@ test("a COMMIT can update a tracked descriptor and add one the door invented", (
   assert.equal(responder.currentWorldName(), "annex");
 });
 
+test("a COMMIT that retires the current world never promotes an unrelated channel (g66lc)", () => {
+  const responder = new EidoverseMcplResponder();
+  const attic = { ...COMMONS, id: "world:attic", address: { world: "attic" } };
+  responder.handle(request("channels/register", { channels: [COMMONS, ANNEX, attic] }));
+  assert.equal(responder.currentChannelId(), "world:attic");
+  responder.commit({ removed: ["world:attic"] });
+  assert.deepEqual(responder.channelIds(), ["world:commons", "world:annex"]);
+  assert.equal(responder.currentChannelId(), null, "no door-named current world remains");
+  assert.equal(responder.currentWorldName(), null);
+});
+
 test("a malformed COMMIT is dropped content-free and changes nothing", () => {
   const warnings: string[] = [];
   const responder = new EidoverseMcplResponder({ warn: (message) => warnings.push(message) });

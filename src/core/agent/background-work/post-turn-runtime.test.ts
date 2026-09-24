@@ -532,7 +532,7 @@ describe('executePostTurnBackgroundWork', () => {
       expect.any(Function),
       recentEntries,
       expect.any(Function),
-      { preemptionProtected: false },
+      { preemptionProtected: false, automataOwnerRunId: record.requestId },
     );
   });
 
@@ -1124,7 +1124,7 @@ describe('executePostTurnBackgroundWork', () => {
       expect.any(Function),
       recentEntries,
       expect.any(Function),
-      { preemptionProtected: false },
+      { preemptionProtected: false, automataOwnerRunId: record.requestId },
     );
     expect(JSON.stringify(execution.payload)).not.toContain(record.userMessage.content);
     expect(JSON.stringify(execution.payload)).not.toContain(record.assistantMessage?.content);

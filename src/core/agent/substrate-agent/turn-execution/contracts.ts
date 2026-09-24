@@ -242,6 +242,7 @@ export interface TurnExecutionRuntime {
     continuityUserId?: string,
     contentOverride?: string,
     actorKind?: SessionActorKind,
+    speakerContactId?: string,
   ) => number | null;
   recordSystemMessage: (
     message: SubstrateMessage,

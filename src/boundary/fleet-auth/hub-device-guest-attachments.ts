@@ -5,6 +5,7 @@ import {
   type HubDeviceHumanAttachment,
   type HubDeviceHumanAttachmentPort,
 } from './hub-device-ingress.js';
+import { DEFAULT_FENCE_TTL_MS, DEFAULT_MAX_FENCES } from './hub-device-endpoint-fence.js';
 
 /**
  * Hub device attachment authority for a gateway running without fleet auth.
@@ -31,8 +32,6 @@ export interface GuestOnlyHubDeviceAttachmentStoreOptions {
 }
 
 const CHANNEL_DIGEST_DOMAIN = 'hub-device-channel:guest:v1\0';
-const DEFAULT_FENCE_TTL_MS = 70_000;
-const DEFAULT_MAX_FENCES = 1024;
 
 export class GuestOnlyHubDeviceAttachmentStore implements HubDeviceHumanAttachmentPort {
   private readonly now: () => number;
@@ -40,7 +39,14 @@ export class GuestOnlyHubDeviceAttachmentStore implements HubDeviceHumanAttachme
   private readonly fenceTtlMs: number;
   private readonly maxFences: number;
   private readonly fences = new Map<string, { until: number; reason: string }>();
-  private readonly attachments = new Map<string, { attachmentId: string; assertionDigest: string }>();
+  // Keyed by connection; each entry expires with the fence window (the longest
+  // an assertion lives) after its last attach, and the map is capped, so the
+  // key-auth admission path cannot grow it without bound.
+  private readonly attachments = new Map<string, {
+    attachmentId: string;
+    assertionDigest: string;
+    expiresAtMs: number;
+  }>();
 
   constructor(options: GuestOnlyHubDeviceAttachmentStoreOptions = {}) {
     this.now = options.now ?? (() => Date.now());
@@ -78,6 +84,8 @@ export class GuestOnlyHubDeviceAttachmentStore implements HubDeviceHumanAttachme
       throw new HubDeviceAttachmentRejectedError('device_binding_mismatch');
     }
     const companionId = input.connection.companionId;
+    const nowMs = this.now();
+    this.sweepAttachments(nowMs);
     const existing = this.attachments.get(connectionId);
     let disposition: HubDeviceAttachmentSnapshot['disposition'];
     let attachmentId: string;
@@ -91,7 +99,16 @@ export class GuestOnlyHubDeviceAttachmentStore implements HubDeviceHumanAttachme
       disposition = existing ? 'guest_created' : 'created';
       attachmentId = this.randomId();
     }
-    this.attachments.set(connectionId, { attachmentId, assertionDigest: input.assertionDigest });
+    this.attachments.delete(connectionId);
+    if (this.attachments.size >= this.maxFences) {
+      const oldest = this.attachments.keys().next().value;
+      if (oldest !== undefined) this.attachments.delete(oldest);
+    }
+    this.attachments.set(connectionId, {
+      attachmentId,
+      assertionDigest: input.assertionDigest,
+      expiresAtMs: nowMs + this.fenceTtlMs,
+    });
     const channelDigest = createHash('sha256')
       .update(CHANNEL_DIGEST_DOMAIN)
       .update(companionId).update('\0')
@@ -114,6 +131,16 @@ export class GuestOnlyHubDeviceAttachmentStore implements HubDeviceHumanAttachme
         companionId,
       }),
     });
+  }
+
+  get attachmentCount(): number {
+    return this.attachments.size;
+  }
+
+  private sweepAttachments(nowMs: number): void {
+    for (const [connectionId, attachment] of this.attachments) {
+      if (attachment.expiresAtMs <= nowMs) this.attachments.delete(connectionId);
+    }
   }
 
   async fenceDevice(

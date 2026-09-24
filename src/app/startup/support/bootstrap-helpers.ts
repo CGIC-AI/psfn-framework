@@ -322,7 +322,6 @@ export function hydrateCanonicalStartupConfig(
       activeChannelLookbackHours: persistedScheduler.temporalWakeup.activeChannelLookbackHours,
       morningWake: { ...persistedScheduler.temporalWakeup.morningWake },
       idleRefresher: { ...persistedScheduler.temporalWakeup.idleRefresher },
-      wakeSummary: { ...persistedScheduler.temporalWakeup.wakeSummary },
     },
     freeTime: {
       enabled: persistedScheduler.freeTime.enabled,

@@ -7,6 +7,7 @@ import {
 import { createPostgresPool } from '../postgres.js';
 import { RETIRED_FLEET_WELFARE_VERIFIER_ROLE } from '../postgres/retired-fleet-grantees.js';
 import { prepareFleetSharedSchemaRuntime } from './fleet-shared-schema-startup.js';
+import { grantBackupReadAccessToTenantSchema } from '../postgres/backup-schema-access.js';
 
 // Timeout-margin policy (see src/test-support/integration-timeout-registry.json):
 // see the registered "measured" entry for this file.
@@ -16,6 +17,7 @@ const SHARED_OWNER_ROLE = 'retired_grantee_shared_migration';
 const COMPANION_ONE_ROLE = 'retired_grantee_companion_one';
 const COMPANION_TWO_ROLE = 'retired_grantee_companion_two';
 const STRAY_ROLE = 'retired_grantee_stray_reader';
+const FORMER_BACKUP_ROLE = 'retired_grantee_former_backup';
 const PASSWORDS = {
   retired_grantee_shared_migration: 'shared-migration-password',
   retired_grantee_companion_one: 'companion-one-password',
@@ -50,7 +52,7 @@ beforeAll(async () => {
     }
     // The retired fleet welfare verifier exactly as the deleted provisioning
     // path created it, plus a stray reader that must never be tolerated.
-    for (const role of [RETIRED_FLEET_WELFARE_VERIFIER_ROLE, STRAY_ROLE]) {
+    for (const role of [RETIRED_FLEET_WELFARE_VERIFIER_ROLE, STRAY_ROLE, FORMER_BACKUP_ROLE]) {
       await admin.query(
         `CREATE ROLE ${quoteIdentifier(role)} LOGIN NOINHERIT NOSUPERUSER NOCREATEDB `
         + 'NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 8 '
@@ -203,5 +205,33 @@ describe('retired fleet grantee cleanup against real Postgres', () => {
     await expect(prepareFleetSharedSchemaRuntime(fleet.startupOptions))
       .rejects.toThrow(new RegExp(`unexpected PostgreSQL grantees: ${STRAY_ROLE}`));
     expect(await countSchemaGrants(fleet.databaseUrl, STRAY_ROLE)).toBeGreaterThan(0);
+  }, TIMEOUT_MS);
+
+  it('names every residue kind of a removed fleet-auth backup role, including owner default privileges', async () => {
+    const fleet = await provisionLegacyFleet();
+    // Fleet auth granted its backup role read access as each schema owner,
+    // including default privileges; then fleet-auth.json was removed.
+    const owner = createPostgresPool(fleet.companionUrls.companion_one, { max: 1 });
+    try {
+      await grantBackupReadAccessToTenantSchema(owner, {
+        schema: 'companion_one',
+        ownerRole: COMPANION_ONE_ROLE,
+        backupRole: FORMER_BACKUP_ROLE,
+      });
+    } finally {
+      await owner.end();
+    }
+
+    const failure = await prepareFleetSharedSchemaRuntime(fleet.startupOptions)
+      .then(() => undefined, (error: unknown) => error);
+    const message = failure instanceof Error ? failure.message : String(failure);
+    expect(message).toContain(`unexpected PostgreSQL grantees: ${FORMER_BACKUP_ROLE}`);
+    expect(message).toContain('schema ACL');
+    expect(message).toContain('1 object grant(s)');
+    expect(message).toContain(`default privileges from ${COMPANION_ONE_ROLE} on SEQUENCES/TABLES`);
+    expect(message).toContain(
+      `as ${COMPANION_ONE_ROLE}: ALTER DEFAULT PRIVILEGES IN SCHEMA "companion_one" `
+      + `REVOKE ALL ON TABLES FROM "${FORMER_BACKUP_ROLE}"`,
+    );
   }, TIMEOUT_MS);
 });

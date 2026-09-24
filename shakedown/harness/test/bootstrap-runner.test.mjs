@@ -148,6 +148,8 @@ try {
   assert.equal(proofs.length, 1);
   assert.match(proofs[0].message, /^PSFN fresh-bootstrap proof /u);
   assert.match(proofs[0].sessionId, /^bootstrap-/u);
+  assert.equal(typeof proofs[0].runId, 'string');
+  assert.equal(proofs[0].manifestId, `bootstrap:first-conversation:${proofs[0].runId}`);
   assert.equal(
     proofs[0].turnRecordsDir,
     join(roundRoot, 'companion-data', 'state', 'sessions', '_turn_records'),

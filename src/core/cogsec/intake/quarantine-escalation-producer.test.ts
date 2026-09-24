@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createIntakeQuarantineStore } from './quarantine-store.js';
 import {
   createQuarantineDecisionEscalationObserver,
@@ -120,6 +120,48 @@ function stores(options: {
 }
 
 describe('quarantine escalation producer', () => {
+  it('advances raise_count for overlapping holds of one envelope (wdird)', async () => {
+    const inner = createInMemoryHumanEscalationLedger();
+    // Reproduce the interleaving: the second raise has read raise_count before
+    // the first one's attempt is recorded, and checks for a replay after it is.
+    let releaseFirstClaim = () => {};
+    const firstClaimRecorded = new Promise<void>((resolve) => { releaseFirstClaim = resolve; });
+    let findAttemptCalls = 0;
+    const ledger: HumanEscalationLedgerPort = {
+      ...inner,
+      findAttempt: async (key) => {
+        findAttemptCalls += 1;
+        if (findAttemptCalls > 1) await firstClaimRecorded;
+        return inner.findAttempt(key);
+      },
+      claimAttempt: async (attempt, options) => {
+        const claimed = await inner.claimAttempt(attempt, options);
+        releaseFirstClaim();
+        return claimed;
+      },
+    };
+    const raise = createQuarantineHoldEscalationObserver({
+      plane: plane(ledger),
+      companionId: COMPANION_ID,
+      renderNotice: () => null,
+      now: () => NOW_MS,
+    });
+    const holder = createIntakeQuarantineStore(join(dir, 'intake-quarantine.json'), {
+      itemTtlHours: 24,
+      maxHeldItems: 10,
+      now: () => NOW_MS,
+    });
+    const entry = holder.hold({ envelope: envelope(), mode: 'enforce', rawText: 'held' });
+
+    // Two notifications for the same envelope before either raise settles.
+    raise(entry);
+    raise(entry);
+
+    await vi.waitFor(async () => {
+      expect((await ledger.findByCondition('cogsec_quarantine', ENVELOPE_ID))?.raiseCount).toBe(2);
+    });
+  });
+
   it('raises one content-free escalation for a held item', async () => {
     const ledger = createInMemoryHumanEscalationLedger();
     const { holder } = stores({ holdLedger: ledger, decisionLedgers: [ledger] });

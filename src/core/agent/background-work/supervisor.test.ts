@@ -1843,6 +1843,46 @@ describe('BackgroundWorkSupervisor', () => {
     })).toBeNull();
   });
 
+  it('terminalizes the linked Automata runs of a job the expiry sweep dead-letters (vxllk)', async () => {
+    const store = new MemoryBackgroundWorkStore();
+    const onExpiredTerminal = vi.fn(async () => {
+      throw new Error('registry unavailable');
+    });
+    const automataLifecycle = {
+      onClaimed: vi.fn(async () => undefined),
+      onCompleted: vi.fn(async () => undefined),
+      onFailed: vi.fn(async () => undefined),
+      onExpiredTerminal,
+    };
+    const supervisor = createBackgroundWorkSupervisor({
+      store,
+      eventBus: new EventBus(),
+      now: () => 5_000,
+      executor: vi.fn(async () => undefined),
+      automataLifecycle,
+    });
+    const input = makeInput('session-poison', 'turn-poison');
+    await store.enqueue(input);
+    await store.claimNext({
+      leaseOwner: 'dead-process',
+      nowMs: 1_000,
+      leaseDurationMs: 10,
+      excludedLogicalSessionIds: [],
+    });
+    store.failByLeaseExpiry(input.jobId, 5_000);
+
+    // A lifecycle fault is logged; the tick still completes.
+    await supervisor.tick();
+    await supervisor.waitForIdle();
+
+    expect(onExpiredTerminal).toHaveBeenCalledTimes(1);
+    expect(onExpiredTerminal).toHaveBeenCalledWith({
+      job: expect.objectContaining({ jobId: input.jobId, state: 'failed', reasonCode: 'lease_expired' }),
+      reasonCode: 'lease_expired',
+    });
+    expect(automataLifecycle.onFailed).not.toHaveBeenCalled();
+  });
+
   it('does not spend an attempt when a handler unwinds with an abort after its lease is lost', async () => {
     const store = new MemoryBackgroundWorkStore();
     let now = 1_000;

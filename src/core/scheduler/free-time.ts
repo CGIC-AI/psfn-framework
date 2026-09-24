@@ -416,6 +416,8 @@ export function buildFreeTimeBlockNote(result: FreeTimeBlockResult): string {
 export interface FreeTimeSessionManagerPort extends FreeTimeActivityPort {
   getRecentMessages(channelId: string, limit?: number): SessionEntry[];
   getRecentSessionEntries?(channelId: string, limit: number): SessionEntry[];
+  /** The assistant entry recorded for the turn a given message triggered. */
+  findAssistantEntryForSourceMessage(channelId: string, sourceMessageId: string): SessionEntry | null;
   appendSystemNote(channelId: string, note: string, source?: string): void;
   appendContextSystemNote(channelId: string, note: string, source?: string): void;
 }

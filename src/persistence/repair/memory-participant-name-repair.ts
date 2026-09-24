@@ -15,6 +15,9 @@ import {
   type MemoryProvenance,
   type MemorySourceType,
 } from '../../faculties/memory/types.js';
+import { encodeEmbeddingLiteral } from '../../faculties/memory/postgres-store/rows.js';
+import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
+import { createMaintenanceEmbeddingUsageProvenance } from '../../core/agent/embedding-usage-provenance.js';
 import { queryRows } from '../postgres.js';
 
 const DEFAULT_REPAIR_LIMIT = 500;
@@ -62,6 +65,11 @@ export interface MemoryParticipantNameRepairOptions extends ResolveMemoryPartici
   sourceType?: MemorySourceType;
   provenance?: MemoryProvenance;
   createPatchEventId?: () => string;
+  /**
+   * Required when applying: the repaired text is re-embedded before any row is
+   * written so the semantic embedding never describes the pre-repair text.
+   */
+  embeddingProvider?: EmbeddingProviderPort;
 }
 
 export interface MemoryParticipantNameRepairUpdate {
@@ -98,6 +106,11 @@ export interface MemoryParticipantNameRepairReport extends MemoryParticipantName
   sourceType: MemorySourceType;
 }
 
+/** A planned update paired with the embedding of its repaired text. */
+interface MemoryParticipantNameRepairEmbeddedUpdate extends MemoryParticipantNameRepairUpdate {
+  afterEmbedding: Float32Array;
+}
+
 export interface MemoryParticipantNameRepairApplyContext {
   includeArchived: boolean;
   now: number;
@@ -113,7 +126,7 @@ export interface MemoryParticipantNameRepairStore {
     limit: number;
   }): Promise<MemoryParticipantNameRepairRecord[]>;
   applyParticipantNameRepair(
-    updates: readonly MemoryParticipantNameRepairUpdate[],
+    updates: readonly MemoryParticipantNameRepairEmbeddedUpdate[],
     context: MemoryParticipantNameRepairApplyContext,
   ): Promise<number>;
 }
@@ -206,7 +219,7 @@ function createPatchEventParams(
     sourceType: context.sourceType,
     provenanceJson: JSON.stringify(normalizeRepairProvenance(context.provenance)),
     reason: DEFAULT_REASON,
-    patchJson: JSON.stringify({ text: update.afterText }),
+    patchJson: JSON.stringify({ text: update.afterText, embeddingRefreshed: true }),
     previousJson: JSON.stringify({ text: update.beforeText }),
     nextJson: JSON.stringify({ text: update.afterText }),
     createdAt: context.now,
@@ -296,18 +309,26 @@ export async function runMemoryParticipantNameRepair(
   const now = options.now ?? Date.now();
   const createPatchEventId = options.createPatchEventId ?? randomUUID;
 
+  const embeddingProvider = options.embeddingProvider;
+  if (!dryRun && !embeddingProvider) {
+    throw new Error('memory participant name repair --apply requires an embedding provider to re-embed repaired text');
+  }
+
   const records = await store.listCandidateMemories({ includeArchived, limit });
   const plan = planMemoryParticipantNameRepair(records, options);
-  const updated = dryRun || plan.updates.length === 0
+  const updated = dryRun || plan.updates.length === 0 || !embeddingProvider
     ? 0
-    : await store.applyParticipantNameRepair(plan.updates, {
+    : await store.applyParticipantNameRepair(
+      await embedRepairedTexts(plan.updates, embeddingProvider),
+      {
       includeArchived,
       now,
       sourceRef,
       sourceType,
-      provenance,
-      createPatchEventId,
-    });
+        provenance,
+        createPatchEventId,
+      },
+    );
 
   return {
     ...plan,
@@ -319,6 +340,39 @@ export async function runMemoryParticipantNameRepair(
     sourceRef,
     sourceType,
   };
+}
+
+/**
+ * Embeds every repaired text before any write. A provider failure or a
+ * malformed/mismatched result throws here, so no row or patch event changes.
+ */
+async function embedRepairedTexts(
+  updates: readonly MemoryParticipantNameRepairUpdate[],
+  embeddingProvider: EmbeddingProviderPort,
+): Promise<MemoryParticipantNameRepairEmbeddedUpdate[]> {
+  const embeddings = await embeddingProvider.embedBatch(updates.map(update => update.afterText), {
+    usageProvenance: createMaintenanceEmbeddingUsageProvenance({
+      purpose: 'memory.participant_name_repair',
+      service: 'memory',
+      process: 'participant-name-repair',
+      workloadType: 'memory_participant_name_repair',
+      workloadId: 'participant-name-repair',
+    }),
+  });
+  if (embeddings.length !== updates.length) {
+    throw new Error(
+      `Embedding provider returned ${embeddings.length} embeddings for ${updates.length} repaired memories`,
+    );
+  }
+  return updates.map((update, index) => {
+    const embedding = embeddings[index];
+    if (embedding === undefined || embedding.length !== embeddingProvider.dims) {
+      throw new Error(
+        `Embedding for repaired memory ${update.memoryId} has ${embedding?.length ?? 0} dims; expected ${embeddingProvider.dims}`,
+      );
+    }
+    return { ...update, afterEmbedding: embedding };
+  });
 }
 
 export function createPostgresMemoryParticipantNameRepairStore(
@@ -365,7 +419,7 @@ export function createPostgresMemoryParticipantNameRepairStore(
 
 async function applyPostgresParticipantNameRepairs(
   client: PoolClient,
-  updates: readonly MemoryParticipantNameRepairUpdate[],
+  updates: readonly MemoryParticipantNameRepairEmbeddedUpdate[],
   context: MemoryParticipantNameRepairApplyContext,
 ): Promise<number> {
   const archivedClause = context.includeArchived
@@ -376,12 +430,12 @@ async function applyPostgresParticipantNameRepairs(
   for (const update of updates) {
     const result = await client.query(`
       UPDATE l2_memories
-      SET text = $1
+      SET text = $1, embedding = $4::vector
       WHERE id = $2
         AND text = $3
         ${archivedClause}
       RETURNING id
-    `, [update.afterText, update.memoryId, update.beforeText]);
+    `, [update.afterText, update.memoryId, update.beforeText, encodeEmbeddingLiteral(update.afterEmbedding)]);
     if (result.rowCount !== 1) continue;
 
     const event = createPatchEventParams(update, context);

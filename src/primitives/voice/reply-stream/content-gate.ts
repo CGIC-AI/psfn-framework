@@ -25,7 +25,10 @@
 // preserving exact reconciliation.
 
 import { detectRuntimeDatetimeContradiction } from '../../../core/agent/substrate-agent/runtime-datetime-contradiction-guard.js';
-import { rejectsMissingImageAttachmentClaim } from '../../images/attachment-claim-guard.js';
+import {
+  healMissingImageAttachmentClaim,
+  rejectsMissingImageAttachmentClaim,
+} from '../../images/attachment-claim-guard.js';
 import type { ContentGateConfig, ContentGateOutcome } from './types.js';
 
 export function evaluateSegmentGates(input: {
@@ -33,24 +36,41 @@ export function evaluateSegmentGates(input: {
   readonly candidate: string;
   readonly config: ContentGateConfig;
 }): ContentGateOutcome {
-  const combined = input.cumulativeCommitted + input.candidate;
   const { config } = input;
+  let candidate = input.candidate;
+  let healed = false;
 
-  // #15 image-claim.
+  // #15 image-claim. Heal with the canonical batch healer (psfn-framework-d1f1x)
+  // so an unsupported claim is never spoken but the safe text around it is.
+  // A claim that is not contained in the candidate alone (it straddles text
+  // already committed) cannot be healed without having been partly spoken, so
+  // it still forward-aborts.
   if (rejectsMissingImageAttachmentClaim({
-    responseText: combined,
+    responseText: input.cumulativeCommitted + candidate,
     attachmentCount: config.attachmentCount,
   })) {
-    return { action: 'abort', reason: 'missing_image_attachment_claim' };
+    candidate = healMissingImageAttachmentClaim(candidate);
+    healed = true;
+    if (rejectsMissingImageAttachmentClaim({
+      responseText: input.cumulativeCommitted + candidate,
+      attachmentCount: config.attachmentCount,
+    })) {
+      return { action: 'abort', reason: 'missing_image_attachment_claim' };
+    }
   }
 
-  // #7/#8 datetime — detector only.
+  // #7/#8 datetime — detector only, on exactly the text that would be spoken.
   if (config.datetimePromptContext !== null) {
-    const detection = detectRuntimeDatetimeContradiction(config.datetimePromptContext, combined);
+    const detection = detectRuntimeDatetimeContradiction(
+      config.datetimePromptContext,
+      input.cumulativeCommitted + candidate,
+    );
     if (detection.contradictionDetected) {
       return { action: 'abort', reason: 'runtime_datetime_contradiction' };
     }
   }
 
-  return { action: 'commit' };
+  return healed
+    ? { action: 'heal', text: candidate, reason: 'missing_image_attachment_claim' }
+    : { action: 'commit' };
 }

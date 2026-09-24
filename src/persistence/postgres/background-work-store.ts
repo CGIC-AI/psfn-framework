@@ -1705,6 +1705,16 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort, Bac
               ELSE job.attempt_count
             END,
             lease_expiry_count = job.lease_expiry_count + 1,
+            -- psfn-framework-z0o2w rationale: pre-boundary expiries DO spend
+            -- the lease-expiry budget, on purpose. A crossed boundary fails at
+            -- once (effect_outcome_unknown), so this budget exists only for
+            -- pre-boundary expiries: an expiry means the owning process died
+            -- mid-claim (graceful shutdown drains or releases its claims), and
+            -- a claim that dies with its process BACKGROUND_WORK_LEASE_EXPIRY_LIMIT
+            -- times in a row is a poison claim (52epa). No separate or unlimited
+            -- pre-boundary budget: that reopens the crash loop. The terminal
+            -- failure is recorded (lease_expired), its linked Automata runs are
+            -- terminalized (vxllk), and the source can be re-enqueued explicitly.
             state = CASE
               WHEN expired.boundary_crossed OR expired.expiry_budget_exhausted THEN 'failed'
               ELSE 'retry_wait'

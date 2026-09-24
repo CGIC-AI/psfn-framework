@@ -400,6 +400,9 @@ services:
       ADMIN_TRANSPORT_SOCKET: /run/psfn/garden-admin-${PSFN_SMOKE_COMPANION_ID:-11111111-1111-4111-8111-111111111111}.sock
       NTFY_BASE_URL: http://operator-alert-sink:3000
       NTFY_TOPIC: smoke-operator-alerts
+      # Launcher evidence for the egress-isolation proof: this agent joins only
+      # the internal (no external route) network below.
+      PSFN_AGENT_EGRESS_ISOLATION: container-internal-network
     networks:
       - psfn-smoke-internal
     volumes:

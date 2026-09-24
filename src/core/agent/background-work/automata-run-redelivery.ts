@@ -67,8 +67,12 @@ export interface BackgroundWorkRunLinkagePort {
  * Memory extraction names its run from the source turn context: the source
  * request id, the welfare-granting job id, or the turn-derived attempt ref
  * (see the extraction orchestrator), so each of those is owned by the job.
+ * The same derivation names the runs a dead-lettered job leaves behind
+ * (psfn-framework-vxllk).
  */
-function reenteredRunIds(job: BackgroundWorkRunLinkageJob): string[] {
+export function backgroundWorkLinkedRunIds(
+  job: Pick<BackgroundWorkRunLinkageJob, 'jobId' | 'kind' | 'sourceRequestId' | 'sourceTurnId' | 'attemptCount'>,
+): string[] {
   const kind = job.kind as BackgroundWorkKind;
   switch (kind) {
     case 'memory_extraction':
@@ -83,7 +87,7 @@ function reenteredRunIds(job: BackgroundWorkRunLinkageJob): string[] {
   }
 }
 
-const RUN_CLASS_JOB_KIND: Readonly<Record<string, BackgroundWorkKind>> = {
+export const RUN_CLASS_JOB_KIND: Readonly<Record<string, BackgroundWorkKind>> = {
   'memory.extraction': 'memory_extraction',
   'background.intention_post_turn_hooks': 'intention_post_turn_hooks',
   'background.emotion_appraisal': 'emotion_appraisal',
@@ -165,7 +169,7 @@ export function createBackgroundWorkRunRedeliveryOracle(
       }
       for (const job of await store.listNonTerminalJobsForRunLinkage(keys)) {
         if (!willRunAgain(job, nowMs)) continue;
-        for (const runId of reenteredRunIds(job)) {
+        for (const runId of backgroundWorkLinkedRunIds(job)) {
           if (requested.get(runId) === job.kind) redelivered.add(runId);
         }
       }

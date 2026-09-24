@@ -89,7 +89,6 @@ function makeWakeConfig(overrides?: {
       ...DEFAULT_TEMPORAL_WAKEUP_CONFIG.idleRefresher,
       ...overrides?.refresher,
     },
-    wakeSummary: { ...DEFAULT_TEMPORAL_WAKEUP_CONFIG.wakeSummary },
   };
 }
 

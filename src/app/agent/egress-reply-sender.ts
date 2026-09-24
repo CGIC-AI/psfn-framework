@@ -324,6 +324,39 @@ export function createAgentLoopEgressReplySender(
     status: 'attempted' | 'delivered';
   }>();
 
+  /**
+   * Delivered room replies whose transcript append failed, per room, in
+   * delivery order (psfn-framework-2oruf). Each later record on the room
+   * first re-appends these, so the transcript the next appraisal reads
+   * regains the companion's own replies in the order the room saw them.
+   */
+  const unrecordedRoomReplies = new Map<string, Parameters<EgressReplyRoomTranscriptPort['recordCompanionRoomReply']>[0][]>();
+
+  const recordRoomReply = (
+    transcript: EgressReplyRoomTranscriptPort,
+    entry: Parameters<EgressReplyRoomTranscriptPort['recordCompanionRoomReply']>[0],
+    sourceEventId: string,
+  ): void => {
+    const queue = [...(unrecordedRoomReplies.get(entry.channelId) ?? []), entry];
+    while (queue.length > 0) {
+      const next = queue[0]!;
+      try {
+        transcript.recordCompanionRoomReply(next);
+      } catch (error) {
+        unrecordedRoomReplies.set(entry.channelId, queue);
+        log.warn('Autonomous room reply delivered but not recorded on the room transcript; will retry on the next room reply', {
+          channelId: entry.channelId,
+          sourceEventId,
+          pendingReplies: queue.length,
+          error: toErrorMessage(error),
+        });
+        return;
+      }
+      queue.shift();
+    }
+    unrecordedRoomReplies.delete(entry.channelId);
+  };
+
   const eventKey = (channelId: string, sourceEventId: string): string =>
     `${channelId}\u0000${sourceEventId}`;
 
@@ -482,20 +515,15 @@ export function createAgentLoopEgressReplySender(
       // Record the companion's own delivered turn on the ROOM transcript, after
       // the guard so ordering matches what the room actually saw. A failure here
       // must never turn a delivered reply into a failed one: the message is
-      // already in the room, and the fence would suppress any retry anyway.
-      try {
-        deps.roomTranscript?.recordCompanionRoomReply({
+      // already in the room. The unrecorded reply is kept and re-appended before
+      // the next reply on this room is recorded.
+      if (deps.roomTranscript) {
+        recordRoomReply(deps.roomTranscript, {
           channelId: request.trigger.channelId,
           content: reply,
           timestampMs: now(),
           channelVisibility: destinationDisclosure.channelPrivacy,
-        });
-      } catch (error) {
-        log.warn('Autonomous room reply delivered but not recorded on the room transcript', {
-          channelId: request.trigger.channelId,
-          sourceEventId: request.trigger.sourceEventId,
-          error: toErrorMessage(error),
-        });
+        }, request.trigger.sourceEventId);
       }
       return { outcome: 'delivered' };
     },

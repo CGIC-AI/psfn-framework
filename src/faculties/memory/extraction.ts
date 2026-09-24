@@ -347,7 +347,7 @@ export class MemoryExtractor {
     // preemption-protected so the aged job runs to completion instead of being
     // gate-preempted back into the defer loop. fxt1: the granting job id rides
     // alongside so the gateway can re-verify the welfare escalation.
-    extractOptions?: { preemptionProtected?: boolean; welfareGrantJobId?: string },
+    extractOptions?: { preemptionProtected?: boolean; welfareGrantJobId?: string; automataOwnerRunId?: string },
   ): Promise<MemoryExtractionOutputs | void> {
     if (!this.acceptingExtractions) {
       log.debug('Skipping extraction trigger while extractor is draining', { channelId });
@@ -400,6 +400,7 @@ export class MemoryExtractor {
       assertPreWriteFence,
       extractOptions?.preemptionProtected,
       extractOptions?.welfareGrantJobId,
+      extractOptions?.automataOwnerRunId,
     );
     if (boundedEntries !== undefined) {
       this.advanceIntervalWatermarkAfterCoverage(
@@ -652,6 +653,7 @@ export class MemoryExtractor {
     assertPreWriteFence?: () => Promise<void>,
     preemptionProtected?: boolean,
     welfareGrantJobId?: string,
+    automataOwnerRunId?: string,
   ): Promise<MemoryExtractionOutputs> {
     const logicalSessionId = groupOptions?.externalConversation
       ? channelId
@@ -676,6 +678,7 @@ export class MemoryExtractor {
       assertPreWriteFence,
       preemptionProtected,
       welfareGrantJobId,
+      automataOwnerRunId,
     );
     const promise = existing
       ? existing.then(start, start)
@@ -732,6 +735,7 @@ export class MemoryExtractor {
     assertPreWriteFence?: () => Promise<void>,
     preemptionProtected?: boolean,
     welfareGrantJobId?: string,
+    automataOwnerRunId?: string,
   ): Promise<MemoryExtractionOutputs> {
     if (isTestingSessionId(logicalSessionId)) {
       log.debug('Skipping durable extraction for testing session', {
@@ -803,6 +807,7 @@ export class MemoryExtractor {
       icpCorrelation,
       ...(preemptionProtected ? { preemptionProtected: true } : {}),
       ...(welfareGrantJobId ? { welfareGrantJobId } : {}),
+      ...(automataOwnerRunId ? { automataOwnerRunId } : {}),
       resolveParticipantNames: (recentEntries, extractionCanonicalContactId) => resolveExtractionParticipantNames({
         entries: recentEntries,
         canonicalContactName: extractionCanonicalContactId ? canonicalContactName : undefined,

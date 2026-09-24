@@ -62,6 +62,7 @@ import type {
   EpisodicMaintenanceDiagnostics,
   EpisodicMaintenanceDiagnosticsOptions,
   EpisodeListOptions,
+  EpisodeSubjectFilterOptions,
   EpisodeTimeSearchOptions,
   EpisodeUpdateInput,
   FirstPersonPreservingEpisodeCreateInput,
@@ -113,6 +114,10 @@ import {
 } from './postgres-store/rows.js';
 import { PostgresEpisodeFirstPersonWriter } from './postgres-store/first-person-writer.js';
 import { PostgresEpisodeEmbeddingIndex } from './postgres-store/embedding-index.js';
+import {
+  arcEndpointsSubjectPredicate,
+  episodeSubjectPredicate,
+} from './postgres-store/subject-filter.js';
 
 const log = createComponentLogger('PostgresEpisodicStore');
 
@@ -318,16 +323,20 @@ export class PostgresEpisodicStore implements
   }
 
   async listEpisodes(options: EpisodeListOptions = {}): Promise<Episode[]> {
+    const params: unknown[] = [];
+    const where = [ACTIVE_CANONICAL_EPISODE_FILTER];
+    if (options.subjectFilter) where.push(episodeSubjectPredicate(options.subjectFilter, params));
+    params.push(normalizeLimit(options.limit));
+    const limitIndex = params.length;
+    params.push(normalizeOffset(options.offset));
+    const offsetIndex = params.length;
     const rows = await queryRows<PostgresEpisodeRow>(this.pool, `
       SELECT id, episode_json
       FROM l01_episodes
-      WHERE ${ACTIVE_CANONICAL_EPISODE_FILTER}
+      WHERE ${where.join(' AND ')}
       ORDER BY started_at ASC, id ASC
-      LIMIT $1 OFFSET $2
-    `, [
-      normalizeLimit(options.limit),
-      normalizeOffset(options.offset),
-    ]);
+      LIMIT $${limitIndex} OFFSET $${offsetIndex}
+    `, params);
     return rows.map(mapEpisodeRow);
   }
 
@@ -357,14 +366,18 @@ export class PostgresEpisodicStore implements
     return await this.embeddingIndex.getEpisodeEmbeddingIndexHealth(inputProfile);
   }
 
-  async getEpisode(id: string): Promise<Episode | undefined> {
+  async getEpisode(id: string, options: EpisodeSubjectFilterOptions = {}): Promise<Episode | undefined> {
     const normalizedId = parseRequiredText(id, 'episode id');
+    const params: unknown[] = [normalizedId];
+    const subject = options.subjectFilter
+      ? ` AND ${episodeSubjectPredicate(options.subjectFilter, params)}`
+      : '';
     const row = await queryOne<PostgresEpisodeRow>(this.pool, `
       SELECT id, episode_json
       FROM l01_episodes
-      WHERE id = $1
+      WHERE id = $1${subject}
       LIMIT 1
-    `, [normalizedId]);
+    `, params);
     return row ? mapEpisodeRow(row) : undefined;
   }
 
@@ -374,15 +387,22 @@ export class PostgresEpisodicStore implements
     return await this.firstPersonWriter.getAuthorship(id);
   }
 
-  async getEpisodesByIds(ids: readonly string[]): Promise<Episode[]> {
+  async getEpisodesByIds(
+    ids: readonly string[],
+    options: EpisodeSubjectFilterOptions = {},
+  ): Promise<Episode[]> {
     const normalizedIds = normalizeRequiredTextList(ids, 'episode id');
     if (normalizedIds.length === 0) return [];
 
+    const params: unknown[] = [normalizedIds];
+    const subject = options.subjectFilter
+      ? ` AND ${episodeSubjectPredicate(options.subjectFilter, params)}`
+      : '';
     const rows = await queryRows<PostgresEpisodeRow>(this.pool, `
       SELECT id, episode_json
       FROM l01_episodes
-      WHERE id = ANY($1::text[])
-    `, [normalizedIds]);
+      WHERE id = ANY($1::text[])${subject}
+    `, params);
     const byId = new Map(rows.map(row => [row.id, mapEpisodeRow(row)]));
     return normalizedIds.flatMap((id) => {
       const episode = byId.get(id);
@@ -398,7 +418,8 @@ export class PostgresEpisodicStore implements
     }
 
     const where = [ACTIVE_CANONICAL_EPISODE_FILTER];
-    const params: Array<string | number> = [];
+    const params: unknown[] = [];
+    if (options.subjectFilter) where.push(episodeSubjectPredicate(options.subjectFilter, params));
     if (options.lifecycleStatus !== undefined) {
       const lifecycleStatus = normalizeEpisodeLifecycleStatus(options.lifecycleStatus);
       where.push(lifecycleStatus === 'candidate'
@@ -443,18 +464,22 @@ export class PostgresEpisodicStore implements
 
   async searchByThread(threadId: string, options: EpisodeListOptions = {}): Promise<Episode[]> {
     const normalizedThreadId = parseRequiredText(threadId, 'threadId');
+    const params: unknown[] = [normalizedThreadId];
+    const subject = options.subjectFilter
+      ? `\n        AND ${episodeSubjectPredicate(options.subjectFilter, params)}`
+      : '';
+    params.push(normalizeLimit(options.limit));
+    const limitIndex = params.length;
+    params.push(normalizeOffset(options.offset));
+    const offsetIndex = params.length;
     const rows = await queryRows<PostgresEpisodeRow>(this.pool, `
       SELECT id, episode_json
       FROM l01_episodes
       WHERE ${ACTIVE_CANONICAL_EPISODE_FILTER}
-        AND thread_id = $1
+        AND thread_id = $1${subject}
       ORDER BY started_at ASC, id ASC
-      LIMIT $2 OFFSET $3
-    `, [
-      normalizedThreadId,
-      normalizeLimit(options.limit),
-      normalizeOffset(options.offset),
-    ]);
+      LIMIT $${limitIndex} OFFSET $${offsetIndex}
+    `, params);
     return rows.map(mapEpisodeRow);
   }
 
@@ -803,7 +828,7 @@ export class PostgresEpisodicStore implements
     const direction = options.direction ?? 'both';
 
     const where = [ACTIVE_CANONICAL_ARC_FILTER];
-    const params: Array<string | number> = [];
+    const params: unknown[] = [];
     if (direction === 'incoming') {
       params.push(normalizedEpisodeId);
       where.push(`target_episode_id = $${params.length}`);
@@ -818,6 +843,9 @@ export class PostgresEpisodicStore implements
     if (options.arcKind !== undefined) {
       params.push(options.arcKind);
       where.push(`arc_kind = $${params.length}`);
+    }
+    if (options.subjectFilter) {
+      where.push(arcEndpointsSubjectPredicate(options.subjectFilter, params, 'l01_episode_arcs'));
     }
     params.push(normalizeLimit(options.limit));
     const limitIndex = params.length;
@@ -852,6 +880,7 @@ export class PostgresEpisodicStore implements
       params.push(options.arcKind);
       where.push(`arc_kind = $${params.length}`);
     }
+    if (options.subjectFilter) where.push(arcEndpointsSubjectPredicate(options.subjectFilter, params, 'arcs'));
     params.push(normalizeLimit(options.limit));
     const limitIndex = params.length;
 

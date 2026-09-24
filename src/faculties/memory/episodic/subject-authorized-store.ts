@@ -1,5 +1,5 @@
 import type { Episode, EpisodeArc } from '../../../shared/contracts/episodic-memory.js';
-import type { EpisodicStorePort } from './store-port.js';
+import type { EpisodeSubjectFilter, EpisodicStorePort } from './store-port.js';
 
 /**
  * The read surface the Garden episodic admin service consumes. Kept as a
@@ -52,6 +52,23 @@ export function isEpisodeVisibleToSubject(
 }
 
 /**
+ * The store-side predicate equivalent to `isEpisodeVisibleToSubject`
+ * (psfn-framework-klvoz), or null when the context sees every episode.
+ */
+function episodeSubjectFilterForContext(
+  context: EpisodicSubjectAccessContext,
+): EpisodeSubjectFilter | null {
+  if (context.adminAccessMode === 'sole_admin'
+    || (context.adminAccessMode === 'multi_admin' && context.escalated === true)) {
+    return null;
+  }
+  return {
+    viewerContactId: context.viewerContactId.trim(),
+    includeUnattributed: context.adminAccessMode === 'multi_admin',
+  };
+}
+
+/**
  * Project the broad episodic store into a subject-scoped read store
  * (88u3 + D1). Member/guest access requires the viewer contact to be an
  * explicitly attributed participant (`participantContactIds`; room
@@ -61,6 +78,12 @@ export function isEpisodeVisibleToSubject(
  * other humans as sensitive until escalation. An arc is visible only when
  * BOTH endpoints are visible, and named reads never fall back to the raw
  * store.
+ *
+ * klvoz: the predicate is pushed to the store as `subjectFilter` so it applies
+ * BEFORE pagination (pages count only authorized rows and unauthorized rows
+ * are never materialized by a filtering store). The in-process predicate is
+ * still applied to every result so a store that ignores the filter can never
+ * widen visibility.
  */
 export function createSubjectAuthorizedEpisodicStore(
   store: SubjectScopedEpisodicReadStore,
@@ -78,6 +101,8 @@ export function createSubjectAuthorizedEpisodicStore(
     })
   );
   const filterEpisodes = (episodes: readonly Episode[]): Episode[] => episodes.filter(isVisible);
+  const subjectFilter = episodeSubjectFilterForContext({ ...context, viewerContactId });
+  const scoped = subjectFilter ? { subjectFilter } : {};
   const filterArcsToVisibleEndpoints = async (
     arcs: readonly EpisodeArc[],
   ): Promise<EpisodeArc[]> => {
@@ -85,7 +110,7 @@ export function createSubjectAuthorizedEpisodicStore(
     const endpointIds = [...new Set(
       arcs.flatMap(arc => [arc.sourceEpisodeId, arc.targetEpisodeId]),
     )];
-    const endpointEpisodes = await store.getEpisodesByIds(endpointIds);
+    const endpointEpisodes = await store.getEpisodesByIds(endpointIds, scoped);
     const visibleIds = new Set(filterEpisodes(endpointEpisodes).map(episode => episode.id));
     return arcs.filter(arc => (
       visibleIds.has(arc.sourceEpisodeId) && visibleIds.has(arc.targetEpisodeId)
@@ -94,27 +119,27 @@ export function createSubjectAuthorizedEpisodicStore(
 
   return {
     getEpisode: async (id) => {
-      const episode = await store.getEpisode(id);
+      const episode = await store.getEpisode(id, scoped);
       return episode && isVisible(episode) ? episode : undefined;
     },
-    getEpisodesByIds: async ids => filterEpisodes(await store.getEpisodesByIds(ids)),
-    listEpisodes: async options => filterEpisodes(await store.listEpisodes(options)),
-    searchByTime: async options => filterEpisodes(await store.searchByTime(options)),
+    getEpisodesByIds: async ids => filterEpisodes(await store.getEpisodesByIds(ids, scoped)),
+    listEpisodes: async options => filterEpisodes(await store.listEpisodes({ ...options, ...scoped })),
+    searchByTime: async options => filterEpisodes(await store.searchByTime({ ...options, ...scoped })),
     searchByThread: async (threadId, options) => (
-      filterEpisodes(await store.searchByThread(threadId, options))
+      filterEpisodes(await store.searchByThread(threadId, { ...options, ...scoped }))
     ),
     listEpisodeArcsForEpisode: async (episodeId, options) => {
-      const anchor = await store.getEpisode(episodeId);
+      const anchor = await store.getEpisode(episodeId, scoped);
       if (!anchor || !isVisible(anchor)) return [];
       return await filterArcsToVisibleEndpoints(
-        await store.listEpisodeArcsForEpisode(episodeId, options),
+        await store.listEpisodeArcsForEpisode(episodeId, { ...options, ...scoped }),
       );
     },
     listEpisodeArcsForEpisodes: async (episodeIds, options) => {
-      const anchors = filterEpisodes(await store.getEpisodesByIds(episodeIds));
+      const anchors = filterEpisodes(await store.getEpisodesByIds(episodeIds, scoped));
       if (anchors.length === 0) return [];
       return await filterArcsToVisibleEndpoints(
-        await store.listEpisodeArcsForEpisodes(anchors.map(episode => episode.id), options),
+        await store.listEpisodeArcsForEpisodes(anchors.map(episode => episode.id), { ...options, ...scoped }),
       );
     },
   };

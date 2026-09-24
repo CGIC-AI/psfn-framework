@@ -34,6 +34,8 @@ const runtimeFactoryMocks = vi.hoisted(() => ({
   connectPostgresParticipantTrendStore: vi.fn(async () => runtimeFactoryMocks.postgresParticipantTrendStore),
   postgresScheduledPromptStore: { kind: 'postgres-scheduled-prompt-store' },
   connectPostgresScheduledPromptStore: vi.fn(async () => runtimeFactoryMocks.postgresScheduledPromptStore),
+  postgresSchedulerLaneStateStore: { kind: 'postgres-scheduler-lane-state-store' },
+  connectPostgresSchedulerLaneStateStore: vi.fn(async () => runtimeFactoryMocks.postgresSchedulerLaneStateStore),
   postgresCompanionAvailabilityStore: { kind: 'postgres-companion-availability-store' },
   connectPostgresCompanionAvailabilityStore: vi.fn(
     async () => runtimeFactoryMocks.postgresCompanionAvailabilityStore,
@@ -141,6 +143,12 @@ vi.mock('./postgres/participant-trend-store.js', () => ({
 vi.mock('./postgres/scheduled-prompt-store.js', () => ({
   PostgresScheduledPromptStore: {
     connect: runtimeFactoryMocks.connectPostgresScheduledPromptStore,
+  },
+}));
+
+vi.mock('./postgres/scheduler-lane-state-store.js', () => ({
+  PostgresSchedulerLaneStateStore: {
+    connect: runtimeFactoryMocks.connectPostgresSchedulerLaneStateStore,
   },
 }));
 
@@ -447,6 +455,7 @@ describe('createAgentPersistenceRuntime', () => {
       internalStateStore: runtimeFactoryMocks.postgresInternalStateStore,
       participantTrendStore: runtimeFactoryMocks.postgresParticipantTrendStore,
       scheduledPromptStore: runtimeFactoryMocks.postgresScheduledPromptStore,
+      schedulerLaneStateStore: runtimeFactoryMocks.postgresSchedulerLaneStateStore,
       companionAvailabilityStore: runtimeFactoryMocks.postgresCompanionAvailabilityStore,
       backgroundWorkStore: runtimeFactoryMocks.postgresBackgroundWorkStore,
       partnerAffectShadowStore: runtimeFactoryMocks.postgresPartnerAffectShadowStore,

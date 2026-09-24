@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createVoiceReplyStream, ReplyStreamReconciliationError } from './reply-stream.js';
 import type { ContentGateConfig, VoiceReplyStreamOptions } from './types.js';
+import { MISSING_IMAGE_ATTACHMENT_CORRECTION } from '../../images/attachment-claim-guard.js';
 
 const NO_ANCHOR: ContentGateConfig = { attachmentCount: 0, datetimePromptContext: null };
 const ANCHORED: ContentGateConfig = {
@@ -116,12 +117,33 @@ describe('VoiceReplyStream — content-gate forward-abort', () => {
     expect(() => stream.pushDelta('more')).toThrow();
   });
 
-  it('forward-aborts on a missing-image-attachment claim', () => {
-    const stream = createVoiceReplyStream(opts());
+  it('never speaks a claim-only reply and ends with the canonical correction', () => {
+    const stream = createVoiceReplyStream(opts({ reconcileFinalContent: false }));
     stream.begin('t1', 'c1');
     const result = stream.pushDelta('Here is the attached image. ');
-    expect(result.aborted).toEqual({ reason: 'missing_image_attachment_claim' });
-    expect(stream.state).toBe('aborted');
+    expect(result.aborted).toBeUndefined();
+    expect(result.committed).toEqual([]);
+    const final = stream.finalize('Here is the attached image. ');
+    expect(final.kind).toBe('final');
+    expect(final.segments.map((s) => s.text)).toEqual([MISSING_IMAGE_ATTACHMENT_CORRECTION]);
+  });
+
+  it('keeps safe segments committed before and after a healed claim, including the final tail', () => {
+    const stream = createVoiceReplyStream(opts({ reconcileFinalContent: false }));
+    stream.begin('t1', 'c1');
+    expect(stream.pushDelta('Sure, happy to help. ').committed.map((s) => s.text))
+      .toEqual(['Sure, happy to help. ']);
+    // The claim arrives split across two deltas; the segmenter reassembles it.
+    stream.pushDelta('Here is the attac');
+    expect(stream.pushDelta('hed image. ').committed).toEqual([]);
+    stream.pushDelta('It shows the harbor at dusk. ');
+    stream.pushDelta('Here is the photo');
+    const final = stream.finalize('ignored on the live voice path');
+    expect(final.kind).toBe('final');
+    const spoken = final.segments.map((s) => s.text).join('');
+    expect(spoken).toBe('Sure, happy to help. It shows the harbor at dusk. ');
+    expect(spoken).not.toMatch(/attached|here is the photo/iu);
+    expect(final.segments.map((s) => s.seq)).toEqual([0, 1]);
   });
 
   it('forward-aborts at finalize if the tail trips a gate', () => {

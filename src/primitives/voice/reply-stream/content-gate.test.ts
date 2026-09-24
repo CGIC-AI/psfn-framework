@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { healMissingImageAttachmentClaim } from '../../images/attachment-claim-guard.js';
 import { evaluateSegmentGates } from './content-gate.js';
 import type { ContentGateConfig } from './types.js';
 
@@ -17,10 +18,40 @@ describe('evaluateSegmentGates', () => {
     })).toEqual({ action: 'commit' });
   });
 
-  it('forward-aborts on a missing-image-attachment claim', () => {
+  it('heals a claim-only candidate to nothing instead of aborting', () => {
     expect(evaluateSegmentGates({
       cumulativeCommitted: '',
       candidate: 'Here is the attached image.',
+      config: NO_ANCHOR,
+    })).toEqual({ action: 'heal', text: '', reason: 'missing_image_attachment_claim' });
+  });
+
+  it('heals the claim out of one delta while preserving the safe text around it', () => {
+    expect(evaluateSegmentGates({
+      cumulativeCommitted: 'Hi. ',
+      candidate: 'Sure thing. Here is the attached image. Anything else?',
+      config: NO_ANCHOR,
+    })).toEqual({
+      action: 'heal',
+      text: 'Sure thing. Anything else?',
+      reason: 'missing_image_attachment_claim',
+    });
+  });
+
+  it('matches the canonical batch healer for a marker claim', () => {
+    const candidate = 'A sunny beach.\n*image attached*\nEnjoy!';
+    expect(evaluateSegmentGates({ cumulativeCommitted: '', candidate, config: NO_ANCHOR }))
+      .toEqual({
+        action: 'heal',
+        text: healMissingImageAttachmentClaim(candidate),
+        reason: 'missing_image_attachment_claim',
+      });
+  });
+
+  it('still forward-aborts a claim that straddles already-committed text', () => {
+    expect(evaluateSegmentGates({
+      cumulativeCommitted: 'Here is the ',
+      candidate: 'attached image.',
       config: NO_ANCHOR,
     })).toEqual({ action: 'abort', reason: 'missing_image_attachment_claim' });
   });
@@ -67,11 +98,16 @@ describe('evaluateSegmentGates', () => {
     })).toEqual({ action: 'commit' });
   });
 
-  it('prioritizes the image-claim reason deterministically', () => {
+  it('runs the datetime detector on the healed text that would actually be spoken', () => {
     expect(evaluateSegmentGates({
       cumulativeCommitted: '',
       candidate: 'Here is the attached image, but are you sure the clock is right?',
       config: ANCHORED,
-    })).toEqual({ action: 'abort', reason: 'missing_image_attachment_claim' });
+    })).toEqual({ action: 'heal', text: '', reason: 'missing_image_attachment_claim' });
+    expect(evaluateSegmentGates({
+      cumulativeCommitted: '',
+      candidate: 'Here is the attached image. That clock must be off, honestly.',
+      config: ANCHORED,
+    })).toEqual({ action: 'abort', reason: 'runtime_datetime_contradiction' });
   });
 });

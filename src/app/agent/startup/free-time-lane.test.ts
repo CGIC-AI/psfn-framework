@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { InMemoryRestSilenceStore } from '../../../test-support/in-memory-rest-silence-store.js';
 import type { SubstrateAgent } from '../../../core/agent/substrate-agent.js';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import {
@@ -89,7 +90,12 @@ describe('registerFreeTimeLane production composition', () => {
     const recent = (channelId: string, limit: number): SessionEntry[] => (
       [...(entries.get(channelId) ?? [])].slice(-limit)
     );
-    const append = (channelId: string, role: SessionEntry['role'], content: string): void => {
+    const append = (
+      channelId: string,
+      role: SessionEntry['role'],
+      content: string,
+      sourceMessageId?: string,
+    ): void => {
       const channelEntries = entries.get(channelId) ?? [];
       channelEntries.push({
         id: nextEntryId,
@@ -97,6 +103,8 @@ describe('registerFreeTimeLane production composition', () => {
         role,
         content,
         timestamp: Date.now(),
+        // The fake keys its turn lookup on the source message id.
+        ...(sourceMessageId ? { metadata: sourceMessageId } : {}),
       });
       nextEntryId += 1;
       entries.set(channelId, channelEntries);
@@ -117,6 +125,11 @@ describe('registerFreeTimeLane production composition', () => {
         channelId === partnerEntry.channelId ? [partnerEntry] : recent(channelId, limit)
       ),
       getRecentSessionEntries: recent,
+      findAssistantEntryForSourceMessage: (channelId, sourceMessageId) => (
+        [...(entries.get(channelId) ?? [])].reverse().find(entry => (
+          entry.role === 'assistant' && entry.metadata === sourceMessageId
+        )) ?? null
+      ),
       appendSystemNote: (channelId, note) => append(channelId, 'system', note),
       appendContextSystemNote,
     };
@@ -177,7 +190,7 @@ describe('registerFreeTimeLane production composition', () => {
             .filter(entry => entry.role === 'assistant')
             .map(entry => entry.content),
         );
-        append(message.channelId, 'assistant', responseContent);
+        append(message.channelId, 'assistant', responseContent, message.id);
         captureCompletedDisclosureLineage?.(contactDisclosureLineage());
         return {
           content: responseContent,
@@ -211,6 +224,7 @@ describe('registerFreeTimeLane production composition', () => {
         personalProjects,
         contactStore,
         listPendingConcernCandidates: async () => [],
+        restSilenceStore: new InMemoryRestSilenceStore(),
       };
       registerFreeTimeLane(deps);
       const handler = scheduler.getTask(FREE_TIME_IDLE_TASK_ID)?.handler;

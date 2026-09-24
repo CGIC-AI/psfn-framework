@@ -76,6 +76,7 @@ import {
 import {
   createMemoryExtractionAutomataRunPort,
   memoryExtractionTurnRunId,
+  MEMORY_EXTRACTION_PREEMPTED_FAILURE,
   resolveMemoryExtractionDerivationRunId,
 } from './memory-extraction-automata-run.js';
 
@@ -142,6 +143,13 @@ export interface ExtractionRunOptions {
    * before honoring `preemptionProtected`. Set only alongside it.
    */
   welfareGrantJobId?: string;
+  /**
+   * 8fbwe: the Automata run a background-work job's lifecycle already opened
+   * and terminalizes for this extraction. When present, extraction adopts it
+   * as its run; absent, extraction owns the run it opens and must terminalize
+   * it itself on every exit.
+   */
+  automataOwnerRunId?: string;
   resolveParticipantNames?: (
     recentEntries: readonly SessionEntry[],
     canonicalContactId?: string,
@@ -353,7 +361,7 @@ export async function runExtractionOrchestration(
     if (automataBusEligible && !options.automataRunRegistry) {
       throw new Error('Memory extraction Automata Bus formation requires the authoritative run registry');
     }
-    const automataRunId = latestTurnContext?.requestId ?? attemptRef;
+    const automataRunId = options.automataOwnerRunId ?? latestTurnContext?.requestId ?? attemptRef;
     if (automataBusEligible) {
       // One governed lifecycle owns the durable run, the bounded briefing, the
       // read-only Bus tool, the terminal handoff, and terminalization.
@@ -606,8 +614,25 @@ export async function runExtractionOrchestration(
     // retryable control signals, not integrity failures. Surface them unwrapped
     // so the post-turn seam can defer the job and its receipt for a later run
     // (u5bv.11, hrmrq.90).
-    if (error instanceof ExtractionDrainRequeueError) throw error;
-    if (error instanceof Error && error.name === 'ModelCallPreemptedError') throw error;
+    const controlSignal = error instanceof ExtractionDrainRequeueError
+      || (error instanceof Error && error.name === 'ModelCallPreemptedError');
+    if (controlSignal) {
+      // 8fbwe: a job-owned run is re-entered by the job's redelivery and
+      // terminalized by its lifecycle, and a receipt-bound run is re-entered by
+      // its receipt's retry. A run this extraction opened with neither owner
+      // must not be left running behind the signal; a later extraction of the
+      // same source opens a retry run from it.
+      if (automataRun && !options.automataOwnerRunId && !options.assertEffectAllowed) {
+        await automataRun.settle({
+          lifecycleState: 'failed',
+          outcome: 'blocked',
+          stateReason: 'memory_extraction_failed',
+          failureReason: MEMORY_EXTRACTION_PREEMPTED_FAILURE,
+          resultKind: 'none',
+        });
+      }
+      throw error;
+    }
     let failure: unknown = error;
     if (automataRun) {
       try {

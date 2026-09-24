@@ -19,7 +19,9 @@ function printUsage(): void {
   console.log('Usage: npm run migrate:scheduler-owner -- --data-dir <companion-data-dir> [OPTIONS]');
   console.log('');
   console.log('Migrates the retired salience/social-graph scheduler cadences into');
-  console.log('scheduler.json > backgroundMaintenance. Dry-run is the default.');
+  console.log('scheduler.json > backgroundMaintenance, removes the retired');
+  console.log('temporalWakeup.wakeSummary block, and seeds missing default blocks.');
+  console.log('Dry-run is the default.');
   console.log('');
   console.log('Options:');
   console.log('  --apply             Validate and atomically replace scheduler.json');

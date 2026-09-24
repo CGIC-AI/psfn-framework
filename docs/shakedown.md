@@ -117,6 +117,39 @@ PSFN_SCORECARD_MD=$SHAKEDOWN_ROOT/SHAKEDOWN-SCORECARD.md \
   node shakedown/harness/run-shakedown-profile.mjs --profile full
 ```
 
+### Companion feedback is not a failure
+
+Commentary the companion adds beside a required answer (a caveat in
+`confusion`, an extra key, a suggestion) is collected verbatim as companion
+feedback: per case in `results[].companionFeedback`, run-wide in
+`companionFeedback`, and in the scorecard's **Companion feedback** section. It
+never fails a case. Cases still fail on wrong or missing required values,
+fabricated success, and narration without execution.
+
+### CogSec quarantine case prerequisites
+
+`s10_cogsec_document_quarantine` and `s10_cogsec_satellite_document_quarantine`
+require `intake-policy.json` `mode` to enforce external ingress: `boundary` or
+`strict` (the runtime vocabulary is `shadow | boundary | strict`). A `shadow`
+stack reports `coverage_hole` with `invalid_owner:intake-policy.json.mode`. An
+older owner file still carrying the retired `enforce` (or `off`) value does not
+boot; rewrite it with
+`npm run migrate:intake-policy-owner -- --data-dir <system-data-dir> --apply`
+(`enforce` becomes
+`strict`, `off` becomes `shadow`).
+
+### Case minimum tiers
+
+A few diagnostics call tool actions a lower tier does not grant (for example
+`prompt_stack` uses `system.read`, which needs `internal.read`, absent at
+nursery). `shakedown/harness/lib/case-tier-floors.mjs` declares each such
+case's minimum tier. The lite profile schedules a floored smoke case at the
+lowest required tier that admits it, the full matrix lists it in that tier's
+case set, and the harness refuses (`case_selection_failed`,
+`belowTierFloorCaseIds`) an explicit `PSFN_CASE_IDS` selection below the floor
+or with no `PSFN_CAPABILITY_TIER_EXPECTED`. This is scheduling only: every
+companion still composes its normal system prompt at every tier.
+
 ### What lite does (and why it is safe to skip the cross-check)
 
 The lite profile is a **thin wrapper** — it never forks the matrix logic. It:

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   assertFleetAuthStandaloneSurfacesUnavailable,
-  warnIfInsecureLocalApiUnderFleetAuth,
+  assertInsecureLocalApiAcknowledgedUnderFleetAuth,
 } from './fleet-auth-standalone-surface-guard.js';
 
 describe('fleet auth standalone surface startup guard', () => {
@@ -87,40 +87,51 @@ describe('fleet auth standalone surface startup guard', () => {
   });
 });
 
-describe('warnIfInsecureLocalApiUnderFleetAuth', () => {
-  it('warns that the bypass stays in effect when fleet auth is active and ALLOW_INSECURE_LOCAL_API=true is set', () => {
+describe('assertInsecureLocalApiAcknowledgedUnderFleetAuth', () => {
+  it('refuses a stale ALLOW_INSECURE_LOCAL_API=true under fleet auth without the second acknowledgement', () => {
     const logger = { warn: vi.fn() };
-    const fired = warnIfInsecureLocalApiUnderFleetAuth({
+    expect(() => assertInsecureLocalApiAcknowledgedUnderFleetAuth({
       fleetAuthEnabled: true,
-      env: { ALLOW_INSECURE_LOCAL_API: 'TRUE' },
+      env: { ALLOW_INSECURE_LOCAL_API: 'TRUE', API_KEY: 'configured-key' },
       logger,
-    });
-    expect(fired).toBe(true);
-    expect(logger.warn).toHaveBeenCalledTimes(1);
-    expect(logger.warn.mock.calls[0]?.[0]).toContain('ALLOW_INSECURE_LOCAL_API=true is set while fleet auth');
-    expect(logger.warn.mock.calls[0]?.[0]).toContain('REMAINS IN EFFECT');
-    expect(logger.warn.mock.calls[0]?.[0]).toContain('fleet auth');
-  });
-
-  it('stays silent when fleet auth is active but the insecure flag is unset', () => {
-    const logger = { warn: vi.fn() };
-    const fired = warnIfInsecureLocalApiUnderFleetAuth({
+    })).toThrow(/refusing to start with an unauthenticated API bypass beside SSO/u);
+    expect(() => assertInsecureLocalApiAcknowledgedUnderFleetAuth({
       fleetAuthEnabled: true,
-      env: {},
+      env: { ALLOW_INSECURE_LOCAL_API: 'true', ALLOW_INSECURE_LOCAL_API_UNDER_FLEET_AUTH: 'yes' },
       logger,
-    });
-    expect(fired).toBe(false);
+    })).toThrow(/ALLOW_INSECURE_LOCAL_API_UNDER_FLEET_AUTH=true/u);
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
-  it('stays silent when fleet auth is disabled even if the insecure flag is set', () => {
+  it('keeps an explicitly acknowledged bypass and warns loudly', () => {
     const logger = { warn: vi.fn() };
-    const fired = warnIfInsecureLocalApiUnderFleetAuth({
+    const inEffect = assertInsecureLocalApiAcknowledgedUnderFleetAuth({
+      fleetAuthEnabled: true,
+      env: { ALLOW_INSECURE_LOCAL_API: 'true', ALLOW_INSECURE_LOCAL_API_UNDER_FLEET_AUTH: 'true' },
+      logger,
+    });
+    expect(inEffect).toBe(true);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn.mock.calls[0]?.[0]).toContain('REMAINS IN EFFECT');
+  });
+
+  it('is inert when fleet auth is active but the insecure flag is unset', () => {
+    const logger = { warn: vi.fn() };
+    expect(assertInsecureLocalApiAcknowledgedUnderFleetAuth({
+      fleetAuthEnabled: true,
+      env: { API_KEY: 'configured-key' },
+      logger,
+    })).toBe(false);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('is inert when fleet auth is disabled even if the insecure flag is set', () => {
+    const logger = { warn: vi.fn() };
+    expect(assertInsecureLocalApiAcknowledgedUnderFleetAuth({
       fleetAuthEnabled: false,
       env: { ALLOW_INSECURE_LOCAL_API: 'true' },
       logger,
-    });
-    expect(fired).toBe(false);
+    })).toBe(false);
     expect(logger.warn).not.toHaveBeenCalled();
   });
 });

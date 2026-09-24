@@ -14,6 +14,8 @@ tests=(
   "bootstrap-runner.test.mjs"  # bootstrap sequences seed/readiness/proof and explicit resume
   "bootstrap-services.test.mjs" # readiness plus exact persisted-turn proof
   "capability-matrix.test.mjs" # 65rk.6: exact 22-token tier/refusal contract
+  "case-tier-floors.test.mjs" # mfr7t: floored cases never run below their minimum tier
+  "companion-feedback.test.mjs" # 7wa3d: companion commentary is feedback, not failure
   "case-execution.test.mjs" # per-step recovery fits the case budget; timeout stays case-local
   "memory-tier-catalog.test.mjs" # memory write/patch and delete/restore stay in their capability tiers
   "operator-approval-target.test.mjs" # SSO chat and independent Operator authority stay distinct

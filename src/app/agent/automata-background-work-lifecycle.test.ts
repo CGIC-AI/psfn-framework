@@ -10,6 +10,8 @@ import {
 import { loadAutomataPolicySeedDefaults } from '../../system/config/automata-policy-config.js';
 import { createBackgroundWorkAutomataLifecycle } from './automata-background-work-lifecycle.js';
 import { NO_AUTOMATA_REDELIVERY } from '../../test-support/automata-run-redelivery.js';
+import { intentionPostTurnHooksRunId } from '../../core/agent/background-work/automata-run-redelivery.js';
+import { memoryExtractionTurnRunId } from '../../faculties/memory/extraction/memory-extraction-automata-run.js';
 
 function memoryExtractionJob(): ClaimedBackgroundWorkJob {
   return {
@@ -125,5 +127,55 @@ describe('background-work Automata lifecycle', () => {
       },
     });
     expect(runRegistry.listRuns()).toHaveLength(1);
+  });
+
+  it('fails every linked run of a job the expiry sweep dead-lettered (vxllk)', async () => {
+    const runRegistry = await registry();
+    const lifecycle = createBackgroundWorkAutomataLifecycle(runRegistry);
+    const job = memoryExtractionJob();
+    await lifecycle.onClaimed({ job, payload: memoryExtractionPayload() });
+    const register = (runId: string, automatonClass: 'memory.extraction' | 'background.intention_post_turn_hooks') => (
+      runRegistry.register({
+        runId,
+        automatonClass,
+        workerId: 'memory-extraction',
+        taskId: 'session-1',
+        taskLabel: 'test',
+        taskSummary: 'test run',
+        sessionIds: ['session-1'],
+        createdAtMs: 100,
+      })
+    );
+    await register(memoryExtractionTurnRunId('turn-1'), 'memory.extraction');
+    await register('request-unrelated', 'memory.extraction');
+    await register(intentionPostTurnHooksRunId('request-hooks', 2), 'background.intention_post_turn_hooks');
+
+    const deadLettered = { ...job, state: 'failed' as const, reasonCode: 'lease_expired' as const };
+    await lifecycle.onExpiredTerminal({ job: deadLettered, reasonCode: 'lease_expired' });
+    await lifecycle.onExpiredTerminal({ job: deadLettered, reasonCode: 'lease_expired' });
+
+    for (const runId of ['request-1', memoryExtractionTurnRunId('turn-1')]) {
+      expect(runRegistry.getRun(runId)).toMatchObject({
+        status: 'failed',
+        statusReason: 'background_work_failed',
+        failureReason: 'lease_expired',
+      });
+    }
+    expect(runRegistry.getRun('request-unrelated')?.status).toBe('queued');
+
+    await lifecycle.onExpiredTerminal({
+      job: {
+        ...deadLettered,
+        jobId: 'job-hooks',
+        kind: 'intention_post_turn_hooks',
+        sourceRequestId: 'request-hooks',
+        attemptCount: 2,
+      },
+      reasonCode: 'effect_outcome_unknown',
+    });
+    expect(runRegistry.getRun(intentionPostTurnHooksRunId('request-hooks', 2))).toMatchObject({
+      status: 'failed',
+      failureReason: 'effect_outcome_unknown',
+    });
   });
 });

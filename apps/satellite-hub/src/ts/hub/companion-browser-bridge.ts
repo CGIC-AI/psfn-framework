@@ -7,7 +7,7 @@ import type { PsfnRuntimeConfig } from "../shared/env.js";
 import type { HubDeviceRegistryAuthority } from "./device-registry.js";
 import { exactHttpsOrigin, type CompanionBrowserConfig } from "./companion-browser-config.js";
 import {
-  admitBrowserRequest, assertionRenewalDelay, browserGatewayHeaders,
+  admitBrowserRequest, assertionRenewalDelay, browserGatewayHeaders, resolveBrowserSessionCookie,
   issueBrowserRenewal, resolveBrowserDevices,
 } from "./companion-browser-authority.js";
 import type { StreamingTtsAdapter } from "./elevenlabs-stream.js";
@@ -45,8 +45,9 @@ export class CompanionBrowserBridge {
       }
       const sessionId = `companion-ui:${randomUUID()}`;
       const issuer = this.runtime.deviceAssertionIssuer!;
+      const session = resolveBrowserSessionCookie(request);
       const headers = browserGatewayHeaders({ config: this.config, device, sessionId,
-        cookie: request.headers.cookie!, apiKey: this.runtime.apiKey!, issuer, spokenAudio: this.tts !== null });
+        ...(session.state === "valid" ? { cookie: session.cookie } : {}), apiKey: this.runtime.apiKey!, issuer, spokenAudio: this.tts !== null });
       const tls = this.runtime.satelliteClaim.tls;
       const upstream = this.connectGateway(
         `${this.config.gatewayOrigin.replace(/^https:/u, "wss:")}${request.url}`,

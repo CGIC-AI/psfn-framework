@@ -160,10 +160,13 @@ describe('standalone Hub device assertion authority (no fleet auth)', () => {
     await expect(consume('j1', 'digest-1', 10_000)).resolves.toEqual({ outcome: 'replayed' });
     await expect(consume('j1', 'digest-other', 10_000)).resolves.toEqual({ outcome: 'mismatch' });
     await expect(consume('j2', 'digest-2', 20_000)).resolves.toEqual({ outcome: 'consumed' });
-    // At the bound the soonest-expiring entry (j1) is evicted for j3.
-    await expect(consume('j3', 'digest-3', 30_000)).resolves.toEqual({ outcome: 'consumed' });
+    // At the bound a new assertion is refused; the live j1 is never evicted.
+    await expect(consume('j3', 'digest-3', 30_000)).rejects.toThrow(/at capacity/u);
+    await expect(consume('j1', 'digest-1', 10_000)).resolves.toEqual({ outcome: 'replayed' });
     expect(store.size).toBe(2);
-    now += 25_000;
+    now += 10_000;
+    await expect(consume('j3', 'digest-3', 30_000)).resolves.toEqual({ outcome: 'consumed' });
+    now += 15_000;
     await expect(consume('j2', 'digest-2', 1_000)).resolves.toEqual({ outcome: 'consumed' });
   });
 

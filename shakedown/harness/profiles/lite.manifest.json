@@ -14,7 +14,7 @@
     { "id": "backup-restore", "command": ["npm", "run", "verify:backup-restore"] }
   ],
   "smoke": {
-    "note": "~10 persisted-state smoke surfaces, selected by STABLE case id (never catalog position). They run once, at the baseline tier subset; each proves persisted state (turn records / Postgres rows / owner files), never reply text. capabilityMatrixCaseId is appended to every tier's set by the runner and is not listed here.",
+    "note": "~10 persisted-state smoke surfaces, selected by STABLE case id (never catalog position). They run once, at the baseline tier subset (a case with a declared minimum tier above it, e.g. prompt_stack, runs at the lowest required tier that admits it; lib/case-tier-floors.mjs); each proves persisted state (turn records / Postgres rows / owner files), never reply text. capabilityMatrixCaseId is appended to every tier's set by the runner and is not listed here.",
     "tier": "nursery",
     "caseIds": [
       "l0_baseline",

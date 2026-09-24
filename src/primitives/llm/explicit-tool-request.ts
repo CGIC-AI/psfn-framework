@@ -44,6 +44,37 @@ export class ExplicitToolContractError extends Error {
   }
 }
 
+/**
+ * The participant's own exact arguments violate the active execution schema
+ * (for example an action this caller's tool surface does not register). No
+ * model or candidate can satisfy such a request, so this is deliberately NOT a
+ * model tool-contract incompatibility: it must neither trigger candidate
+ * fallback nor be reported as a model failure.
+ */
+export class ExplicitToolRequestError extends Error {
+  readonly code = 'EXPLICIT_TOOL_REQUEST_INVALID';
+  readonly violation = 'request_arguments_invalid';
+
+  constructor(message: string, readonly toolName: string) {
+    super(message);
+    this.name = 'ExplicitToolRequestError';
+  }
+}
+
+export function isExplicitToolRequestError(error: unknown): error is ExplicitToolRequestError {
+  return error instanceof ExplicitToolRequestError
+    || (
+      isRecord(error)
+      && error.name === 'ExplicitToolRequestError'
+      && error.code === 'EXPLICIT_TOOL_REQUEST_INVALID'
+    );
+}
+
+/** A user-role message that carries a runtime system note, not Participant speech. */
+export function isRuntimeAuthoredTurnTrigger(message: unknown): boolean {
+  return isRecord(message) && message.messageClass === 'systemNote';
+}
+
 export function isMissingRequiredToolCallError(error: unknown): boolean {
   return isExplicitToolContractError(error)
     && (error as { violation?: unknown }).violation === 'missing_required_call';
@@ -181,11 +212,40 @@ function validateExplicitToolArguments(input: {
     if (!(error instanceof Error) || !error.message.startsWith('Validation failed for tool ')) {
       throw error;
     }
+    if (input.failureSubject === 'Requested exact arguments are') {
+      throw new ExplicitToolRequestError(
+        `Requested exact arguments are schema-invalid for required tool call: ${input.requiredToolName}. ${error.message}`,
+        input.requiredToolName,
+      );
+    }
     throw new ExplicitToolContractError(
       `${input.failureSubject} schema-invalid for required tool call: ${input.requiredToolName}`,
       'invalid_arguments',
     );
   }
+}
+
+/**
+ * Reject a participant-supplied exact argument object that the canonical
+ * execution schema refuses, before any provider call is spent on it.
+ */
+export function assertExactExplicitToolArgumentsAdmissible(input: {
+  contract: ExplicitToolContract | undefined;
+  tools: readonly ToolSchema[] | undefined;
+}): void {
+  const requiredToolName = input.contract?.requiredToolName;
+  const expectedArguments = input.contract?.expectedArguments;
+  if (!requiredToolName || !expectedArguments) return;
+  const tool = input.tools?.find(candidate => candidate.name === requiredToolName);
+  if (!tool) {
+    throw new Error(`Explicit tool schema unavailable for ${requiredToolName}`);
+  }
+  validateExplicitToolArguments({
+    requiredToolName,
+    tool,
+    toolCall: { id: 'explicit-request-preflight', name: requiredToolName, input: expectedArguments },
+    failureSubject: 'Requested exact arguments are',
+  });
 }
 
 /**
@@ -314,6 +374,10 @@ export function resolveExplicitToolContract(input: {
     }
   }
   if (currentUserIndex < 0) return undefined;
+  // A runtime-authored turn trigger (a trailing system note rendered user-role,
+  // psfn-framework-3pye5) is not Participant speech and never opts into forced
+  // tool execution.
+  if (isRuntimeAuthoredTurnTrigger(messages[currentUserIndex])) return undefined;
   const requestText = textContent(messages[currentUserIndex]?.content);
   const requestedToolSequence = resolveExplicitToolRequestSequence(
     requestText,

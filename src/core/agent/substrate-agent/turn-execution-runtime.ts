@@ -1,3 +1,4 @@
+import { resolveProvenSpeakerContactId } from '../../session/speaker-attribution.js';
 import type { AgentMessage } from '../../../boundary/pi-agent/index.js';
 import { abortActiveAgentRun } from '../../../boundary/pi-agent/agent-loop-patch.js';
 import { classifyBroadcastDraft } from '../../../system/trust/broadcast-safety.js';
@@ -767,6 +768,7 @@ export async function handleMessageForTurn(
       continuitySubjectKey,
       contentOverride,
       resolveSessionActorKind(authorContext),
+      resolveProvenSpeakerContactId(authorContext),
     );
   };
   if (inboundIcpCorrelation

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fromAny } from '@total-typescript/shoehorn';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { PostTurnActionHandler } from '../../../core/agent/post-turn-action-runtime.js';
@@ -25,7 +25,8 @@ function fixture() {
   const directory = mkdtempSync(join(tmpdir(), 'psfn-external-memory-'));
   directories.push(directory);
   const sessions = new SessionStore(join(directory, 'sessions'));
-  const store = new ExternalMemoryIntakeStore(join(directory, 'intake'));
+  const storeDirectory = join(directory, 'intake');
+  const store = new ExternalMemoryIntakeStore(storeDirectory);
   const queued: InferredPostTurnAction[] = [];
   let handler: PostTurnActionHandler;
   let persisted = true;
@@ -50,7 +51,7 @@ function fixture() {
   const options = { companionId: binding.companionId, companionName: 'Lyra', intakeStore: store,
     sessions, contacts: { getById }, memoryStore: { queryAuthorizedMemorySubjects: query },
     memoryProvider: { retrieve }, writer: { write }, screening: { screen }, quarantine,
-    actions, retryDelayMs: 100, searchLimit: 5, goals: () => 'Finish the garden project', extract };
+    actions, retryDelayMs: 100, completedReceiptRetentionMs: 60_000, searchLimit: 5, goals: () => 'Finish the garden project', extract };
   const makeService = () => new ExternalMemoryService(fromAny(options));
   const service = makeService();
   const input = (eventId = 'event-one', sessionId = 'session-one'): ExternalMemoryExecuteParams => ({
@@ -59,7 +60,7 @@ function fixture() {
       occurredAt: Date.now() - 1000 },
   });
   const run = (index = 0) => handler!(queued[index]!);
-  return { service, makeService, input, run, sessions, store, queued, screen, extract,
+  return { service, makeService, input, run, sessions, store, storeDirectory, queued, screen, extract,
     write, getById, query, retrieve, quarantine, actions, setPersistence: (value: boolean) => { persisted = value; } };
 }
 
@@ -153,20 +154,19 @@ describe('external companion memory service', () => {
     expect(h.sessions.getRecent(externalMemorySessionId(binding, 'session-one'), 10)).toHaveLength(2);
   });
 
-  it('archives screened text and rejects a quarantined explicit note before acknowledgment', async () => {
+  it('refuses a withheld ingest or explicit note before archival or acknowledgment (fyzor)', async () => {
     const h = fixture();
     const withheld = () => fromAny({ effectiveText: '[withheld]', mode: 'enforce', withheld: true,
       snapshot: { envelopeId: 'envelope-quarantine', sourceClass: 'primary_user', sourceRiskTier: 'untrusted',
         state: 'quarantined', riskLabels: ['injection/override_attempt'],
         enforcementPosture: 'enforce', subject: { kind: 'body' } } });
     h.screen.mockResolvedValueOnce(withheld());
-    await h.service.execute(h.input());
-    const entries = h.sessions.getRecent(externalMemorySessionId(binding, 'session-one'), 10);
-    expect(entries[0]?.content).toBe('[withheld]');
-    expect(JSON.parse(entries[0]!.metadata!).intakeScreening.withheld).toBe(true);
+    await expect(h.service.execute(h.input())).rejects.toThrow('External conversation was withheld by intake policy');
+    // Neither the withheld message nor its safe sibling reaches the durable session.
+    expect(h.sessions.getRecent(externalMemorySessionId(binding, 'session-one'), 10)).toEqual([]);
     h.screen.mockResolvedValueOnce(withheld());
     await expect(h.service.execute({ binding, request: { operation: 'remember', sessionId: 'session', eventId: 'bad-note', text: 'Rejected source' } })).rejects.toThrow('withheld by intake policy');
-    expect(h.queued).toHaveLength(1);
+    expect(h.queued).toHaveLength(0);
     expect(h.write).not.toHaveBeenCalled();
   });
 
@@ -204,7 +204,16 @@ describe('external companion memory service', () => {
     }));
     await expect(h.service.execute({ binding, request: { operation: 'get', sessionId: 'session', id: 'unknown' } })).resolves.toEqual({ memory: null });
     await expect(h.service.execute({ binding, request: { operation: 'context', sessionId: 'session', query: 'garden' } })).resolves.toEqual({ context: 'Finish the garden project\n\nRecalled context' });
-    expect(h.retrieve).toHaveBeenCalledWith('garden', externalMemorySessionId(binding, 'session'), 'primary', { isDirectMessage: true }, binding.contactId);
+    expect(h.retrieve).toHaveBeenCalledWith(
+      'garden', externalMemorySessionId(binding, 'session'), 'primary', { isDirectMessage: true }, binding.contactId,
+      undefined, undefined, undefined, undefined, undefined, undefined,
+      // bd9tx: the authenticated binding supplies its DM ConversationScope.
+      expect.objectContaining({
+        kind: 'dm',
+        channelId: externalMemorySessionId(binding, 'session'),
+        contact: { contactId: binding.contactId },
+      }),
+    );
   });
 
   it('screens explicit memories and supplies external provenance to the existing writer', async () => {
@@ -218,5 +227,49 @@ describe('external companion memory service', () => {
       provenance: expect.objectContaining({ actor: 'companion', companionId: binding.companionId,
         sessionId: externalMemorySessionId(binding, 'session'), toolName: 'psfn_memory_remember' }) }));
     expect(h.sessions.listChannels()).toEqual([]);
+  });
+
+  it('ages out completed receipts at recovery and keeps pending ones (cin6q)', async () => {
+    const h = fixture();
+    const done = await h.service.execute(h.input('event-done'));
+    await h.run(0);
+    const pending = await h.service.execute(h.input('event-pending'));
+    if (!('receipt' in done) || !('receipt' in pending)) throw new Error('expected receipts');
+    const doneFile = join(h.storeDirectory, `${done.receipt.receiptId}.json`);
+    const aged = new Date(Date.now() - 120_000);
+    utimesSync(doneFile, aged, aged);
+
+    await h.makeService().recover();
+
+    expect(existsSync(doneFile)).toBe(false);
+    expect([...h.store.pending()].map(record => record.receiptId)).toEqual([pending.receipt.receiptId]);
+  });
+
+  it('keeps a recently completed receipt as the event-id idempotency record (cin6q)', async () => {
+    const h = fixture();
+    const request = h.input('event-recent');
+    const done = await h.service.execute(request);
+    await h.run(0);
+    await h.makeService().recover();
+    if (!('receipt' in done)) throw new Error('expected receipt');
+    expect(h.store.read(done.receipt.receiptId)?.completed).toBe(true);
+    // A replay of the same event is recognized, not re-ingested.
+    await expect(h.service.execute(request)).resolves.toMatchObject({ receipt: { status: 'accepted' } });
+    expect(h.extract).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips a corrupt receipt during recovery while the others still recover (cin6q)', async () => {
+    const h = fixture();
+    const good = await h.service.execute(h.input('event-good'));
+    if (!('receipt' in good)) throw new Error('expected receipt');
+    const corruptId = 'f'.repeat(64);
+    writeFileSync(join(h.storeDirectory, `${corruptId}.json`), '{"schemaVersion":1,"truncat');
+    writeFileSync(join(h.storeDirectory, `${'e'.repeat(64)}.json`), JSON.stringify({ schemaVersion: 1 }));
+
+    expect([...h.store.pending()].map(record => record.receiptId)).toEqual([good.receipt.receiptId]);
+    await expect(h.makeService().recover()).resolves.toBeUndefined();
+    // The corrupt file is left for inspection, never deleted by pruning.
+    expect(h.store.pruneCompleted(Date.now() + 1)).toBe(0);
+    expect(existsSync(join(h.storeDirectory, `${corruptId}.json`))).toBe(true);
   });
 });

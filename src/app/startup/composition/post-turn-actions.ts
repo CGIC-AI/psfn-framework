@@ -72,6 +72,11 @@ import {
   type DeferredPostTurnQueueEntry as DeferredQueueEntry,
 } from './post-turn-action-queue-state.js';
 
+/** A cross-kind dedupe-key collision (ritxj); the rejection is already recorded. */
+class PostTurnActionDedupeCollisionError extends Error {
+  override readonly name = 'PostTurnActionDedupeCollisionError';
+}
+
 const log = createComponentLogger('PostTurnActions');
 
 export type {
@@ -982,13 +987,43 @@ export function wirePostTurnActionRuntime(
     return true;
   };
 
+  /**
+   * ritxj: a cross-kind dedupe-key collision is a programming invariant
+   * violation. The incoming action is rejected (never merged into the other
+   * kind's entry) and the rejection lands in the queue's failure record, so the
+   * Garden post-turn health lane shows it instead of the event bus swallowing it.
+   */
+  const recordDedupeKeyCollision = (action: InferredPostTurnAction, existingKind: string): string => {
+    const failedAt = Date.now();
+    const error = `Post-turn action dedupe key collision between "${existingKind}" and "${action.kind}"`;
+    failedCount += 1;
+    lastProgressAt = failedAt;
+    rememberRecent(recentFailures, {
+      actionId: action.id,
+      actionKind: action.kind,
+      dedupeKey: action.dedupeKey,
+      capability: resolveActionCapability(action.kind),
+      runtimeClass: resolveRuntimeClassForKind(action.kind),
+      reason: 'dedupe_key_collision',
+      failedAt,
+      attempt: 0,
+      maxAttempts: normalizeMaxRetries(action.maxRetries) + 1,
+      error,
+    });
+    log.error('Rejected post-turn action on a cross-kind dedupe key collision', {
+      actionId: action.id,
+      actionKind: action.kind,
+      existingKind,
+      dedupeKey: action.dedupeKey,
+    });
+    return error;
+  };
+
   const queueAction = (action: InferredPostTurnAction): PostTurnActionEnqueueResult => {
     const existing = queue.get(action.dedupeKey);
     if (existing) {
       if (existing.action.kind !== action.kind) {
-        throw new Error(
-          `Post-turn action dedupe key collision between "${existing.action.kind}" and "${action.kind}"`,
-        );
+        throw new PostTurnActionDedupeCollisionError(recordDedupeKeyCollision(action, existing.action.kind));
       }
       if (resolveCoalescingMode(action.kind) === 'dedupe_key_with_durable_watermark') {
         return coalesceQueueAction(existing, action);
@@ -1488,7 +1523,14 @@ export function wirePostTurnActionRuntime(
         recordMalformedAction(rawAction, 'Invalid inferred post-turn action payload');
         continue;
       }
-      queueAction(action);
+      try {
+        queueAction(action);
+      } catch (error) {
+        // Already recorded as a queue failure; keep enqueueing this event's
+        // remaining actions. Every other enqueue fault still propagates.
+        if (error instanceof PostTurnActionDedupeCollisionError) continue;
+        throw error;
+      }
     }
   });
 

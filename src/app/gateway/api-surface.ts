@@ -48,7 +48,7 @@ import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.
 import { isCogSecMode, type CogSecMode } from '../../shared/contracts/cogsec-mode.js';
 import {
   assertFleetAuthStandaloneSurfacesUnavailable,
-  warnIfInsecureLocalApiUnderFleetAuth,
+  assertInsecureLocalApiAcknowledgedUnderFleetAuth,
 } from '../../system/config/fleet-auth-standalone-surface-guard.js';
 import type { GatewayFleetAuthBroker } from '../../boundary/gateway/fleet-auth-broker.js';
 import type { GatewayFleetAuthChildAssertionBroker } from '../../boundary/gateway/fleet-auth-child-assertions.js';
@@ -588,9 +588,9 @@ export async function startOptionalGatewayApiServer(
   });
   assertGatewayApiIntakeScreeningOwnership(options);
   const allowInsecureWithoutAuth = isExplicitTrue(env.ALLOW_INSECURE_LOCAL_API);
-  // The bypass stays in effect under fleet auth (fleet auth never removes a
-  // key/no-key path); warn loudly because it is almost never intended there.
-  warnIfInsecureLocalApiUnderFleetAuth({ fleetAuthEnabled, env });
+  // Fleet auth never removes key auth, but a stale no-key bypass under fleet
+  // auth fails closed unless separately acknowledged.
+  assertInsecureLocalApiAcknowledgedUnderFleetAuth({ fleetAuthEnabled, env });
   // Sprint-10 C1/H4: fail-closed parsing — a malformed trusted-proxy token,
   // weak/colliding satellite keys, or partial TLS config abort startup.
   const trustedProxyClientCertToken = parseTrustedProxyClientCertToken(

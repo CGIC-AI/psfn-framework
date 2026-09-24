@@ -70,6 +70,18 @@ export interface ModelSelection {
   visionModelSlug: string;
 }
 
+/**
+ * Declared chat fallback candidate. A companion must never run on one chat
+ * model alone: provider-specific failures (for example required-tool empty
+ * arguments) only recover when a compatible fallback is declared. The fallback
+ * may share the primary provider (different model) or name a second provider.
+ */
+export interface FallbackChatSelection {
+  /** Provider serving the fallback; the primary provider when not a second one. */
+  provider: ProviderSelection;
+  modelSlug: string;
+}
+
 /** Optional voice selection. When disabled the runtime keeps stt/tts off. */
 export interface VoiceSelection {
   enabled: boolean;
@@ -94,6 +106,7 @@ export interface OnboardingPlan {
   seedDir: string;
   provider: ProviderSelection;
   models: ModelSelection;
+  fallbackChat: FallbackChatSelection;
   voice: VoiceSelection;
   companionId: string;
   kubernetesTarget?: KubernetesTargetPlan;

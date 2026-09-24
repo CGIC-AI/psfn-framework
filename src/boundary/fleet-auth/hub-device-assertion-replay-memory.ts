@@ -19,11 +19,16 @@ import type {
  * losing the fence on restart re-opens a window no longer than that, and a
  * restart also drops every admitted Hub session. Entries expire with the
  * assertion and the map is bounded so an abusive issuer cannot grow it
- * without limit.
+ * without limit; at the bound new assertions are refused, never admitted by
+ * evicting a live entry.
  */
 export interface InMemoryHubDeviceAssertionReplayStoreOptions {
   now?: () => number;
-  /** Upper bound on live entries; oldest-expiring entries are evicted first. */
+  /**
+   * Upper bound on live entries. At the bound a NEW assertion is refused
+   * (fail closed) until live entries expire; a live entry is never evicted,
+   * because evicting it would let that consumed assertion replay once more.
+   */
   maxEntries?: number;
 }
 
@@ -85,7 +90,11 @@ export class InMemoryHubDeviceAssertionReplayStore implements HubDeviceAssertion
       // lifetime grounds before reaching the store anyway.
       return { outcome: 'consumed' };
     }
-    if (this.entries.size >= this.maxEntries) this.evictSoonestExpiring();
+    if (this.entries.size >= this.maxEntries) {
+      throw new Error(
+        'Hub device assertion replay fence is at capacity; refusing new assertions until live entries expire',
+      );
+    }
     this.entries.set(key, {
       assertionDigest: input.assertionDigest,
       deviceId: input.deviceId,
@@ -102,15 +111,4 @@ export class InMemoryHubDeviceAssertionReplayStore implements HubDeviceAssertion
     }
   }
 
-  private evictSoonestExpiring(): void {
-    let victim: string | undefined;
-    let soonest = Number.POSITIVE_INFINITY;
-    for (const [key, entry] of this.entries) {
-      if (entry.expiresAtMs < soonest) {
-        soonest = entry.expiresAtMs;
-        victim = key;
-      }
-    }
-    if (victim !== undefined) this.entries.delete(victim);
-  }
 }

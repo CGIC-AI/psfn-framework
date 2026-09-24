@@ -1,3 +1,4 @@
+import { resolveProvenSpeakerContactId } from '../../../session/speaker-attribution.js';
 import { isCompanionSelfReflectionContext } from '../../../../primitives/llm/request-context.js';
 import { isObserverSocialContactTurn } from './observer-social-interaction.js';
 import type {
@@ -497,6 +498,7 @@ export async function prepareTurnIdentityState(input: {
         continuitySubjectKey,
         undefined,
         resolveSessionActorKind(authorContext),
+        resolveProvenSpeakerContactId(authorContext),
       );
 
   // Single per-turn ConversationScope authority (session-manager ingress).
@@ -542,7 +544,7 @@ export async function prepareTurnIdentityState(input: {
     conversationScope = input.conversationScope;
   } else if (reflectionScopeHint?.kind === 'group') {
     conversationScope = sessionReads.resolveForeignSessionForTurn(
-      'reflection group conversation scope',
+      'reflection_group_conversation_scope',
       reflectionScopeHint.roomId,
       (reads) => {
         const recentSpeakers = reads.getRecentConversationSpeakers();

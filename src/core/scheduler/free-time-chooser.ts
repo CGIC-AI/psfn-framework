@@ -47,6 +47,10 @@ import {
 } from './free-time-workspace-resolver.js';
 import type { FreeTimeLane } from './free-time-lane.js';
 import type { RestWindowPolicyPort } from './rest-window-policy.js';
+import { createComponentLogger } from '../../shared/logger.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
+
+const log = createComponentLogger('FreeTimeChooser');
 
 // ── Menu vocabulary ──
 
@@ -90,7 +94,7 @@ export type FreeTimeRestReason =
   | 'resolve_failed';
 
 export type FreeTimeChooserOutcome =
-  | { readonly kind: 'suppressed'; readonly reason: 'rest_silenced' }
+  | { readonly kind: 'suppressed'; readonly reason: 'rest_silenced' | 'rest_state_unavailable' }
   | { readonly kind: 'rest'; readonly reason: FreeTimeRestReason }
   | {
       readonly kind: 'workspace';
@@ -215,7 +219,18 @@ export class FreeTimeChooser {
       return { kind: 'rest', reason: 'chooser_disabled' };
     }
 
-    if (this.ports.restWindowPolicy.isSilenced({ lane: context.lane, nowMs: context.nowMs })) {
+    let silenced: boolean;
+    try {
+      silenced = await this.ports.restWindowPolicy.isSilenced({ lane: context.lane, nowMs: context.nowMs });
+    } catch (error) {
+      // 89muv: unreadable rest state is never permission to prompt.
+      log.error('Free-time rest state unavailable; suppressing this block', {
+        lane: context.lane,
+        error: toErrorMessage(error),
+      });
+      return { kind: 'suppressed', reason: 'rest_state_unavailable' };
+    }
+    if (silenced) {
       return { kind: 'suppressed', reason: 'rest_silenced' };
     }
 
@@ -266,15 +281,24 @@ export class FreeTimeChooser {
     };
   }
 
-  private restAndPersist(
+  private async restAndPersist(
     reason: FreeTimeRestReason,
     context: FreeTimeChoiceContext,
-  ): FreeTimeChooserOutcome {
-    this.ports.restWindowPolicy.recordSilence({
-      lane: context.lane,
-      nowMs: context.nowMs,
-      durationMs: Math.max(0, this.settings.silencePersistenceMinutes) * 60_000,
-    });
+  ): Promise<FreeTimeChooserOutcome> {
+    try {
+      await this.ports.restWindowPolicy.recordSilence({
+        lane: context.lane,
+        nowMs: context.nowMs,
+        durationMs: Math.max(0, this.settings.silencePersistenceMinutes) * 60_000,
+      });
+    } catch (error) {
+      // The silence already holds in-process; only its restart durability is lost.
+      log.error('Free-time rest silence could not be persisted; it holds until restart only', {
+        lane: context.lane,
+        reason,
+        error: toErrorMessage(error),
+      });
+    }
     return { kind: 'rest', reason };
   }
 

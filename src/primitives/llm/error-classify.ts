@@ -1,5 +1,5 @@
 import { toError } from '../../shared/utils/errors.js';
-import { isExplicitToolContractError } from './explicit-tool-request.js';
+import { isExplicitToolContractError, isExplicitToolRequestError } from './explicit-tool-request.js';
 
 export type LLMErrorCategory =
   | 'abort'
@@ -12,6 +12,7 @@ export type LLMErrorCategory =
   | 'auth'
   | 'empty_response'
   | 'tool_contract_incompatible'
+  | 'explicit_tool_request_invalid'
   | 'unknown';
 
 export interface LLMErrorClassification {
@@ -157,6 +158,16 @@ export function classifyLLMError(error: unknown): LLMErrorClassification {
   const statusCode = getStatusCode(errorLike);
   const text = `${err.name} ${err.message}`.toLowerCase();
   const code = readErrorCode(errorLike);
+
+  // The participant's own exact arguments are invalid for this tool surface;
+  // another attempt or candidate cannot change that.
+  if (isExplicitToolRequestError(error)) {
+    return {
+      category: 'explicit_tool_request_invalid',
+      retryable: false,
+      ...(statusCode !== undefined ? { statusCode } : {}),
+    };
+  }
 
   if (isExplicitToolContractError(error)) {
     return {

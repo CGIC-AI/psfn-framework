@@ -454,6 +454,7 @@ spec:
             {{- end }}
             {{- include "psfn.helmBackupImageEnv" . | nindent 12 }}
             {{- include "psfn.operatorAlertEnv" . | nindent 12 }}
+            {{- include "psfn.agentEgressIsolationEnv" . | nindent 12 }}
             - name: GATEWAY_RPC_ENDPOINT
               value: {{ include "psfn.gatewayRpcUrlForClient" . | quote }}
             - name: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN

@@ -171,7 +171,7 @@ describe('maintenance CLI entrypoints', () => {
 
     expect(result).toMatchObject({
       mode: 'dry-run',
-      removedPaths: ['salienceDecayIntervalMs', 'socialGraphBuilder.intervalMs'],
+      removedPaths: ['salienceDecayIntervalMs', 'socialGraphBuilder.intervalMs', 'temporalWakeup.wakeSummary'],
       selectedFrom: 'salienceDecayIntervalMs',
       selectedIntervalMs: 3_600_000,
       status: 'planned',

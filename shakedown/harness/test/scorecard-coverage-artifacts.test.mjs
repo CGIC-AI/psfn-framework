@@ -223,3 +223,28 @@ test('the full coverage map is green with the authored and external proof IDs', 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('companion feedback is surfaced in the scorecard without failing a green run (7wa3d)', () => {
+  const root = createFixtureRoot();
+  try {
+    const conformance = join(root, 'conformance.json');
+    writeJson(conformance, {
+      phase: 'coverage',
+      harnessStatus: 'completed',
+      coverageCaseIds: ['tier_tool_conformance', 'multi_companion_crossover_isolation', 'garden_behavioral_sweep'],
+      results: [{ caseId: 'prompt_stack', caseStatus: 'ok', response: { status: 200 } }],
+      companionFeedback: [{ caseId: 'prompt_stack', kind: 'commentary', key: 'confusion', value: 'count may be capped' }],
+    });
+    const result = runScorecard(root, [conformance]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.scorecard.verdict, 'green');
+    assert.deepEqual(result.scorecard.companionFeedback, [{
+      phase: 'coverage', caseId: 'prompt_stack', kind: 'commentary', key: 'confusion', value: 'count may be capped',
+    }]);
+    const markdown = readFileSync(join(root, 'scorecard.md'), 'utf8');
+    assert.match(markdown, /## Companion feedback/u);
+    assert.match(markdown, /prompt_stack \(coverage\) — commentary:confusion: "count may be capped"/u);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

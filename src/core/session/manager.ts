@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { createEventBusForeignSessionReadAuditSink } from './manager/foreign-session-read-audit-sink.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import type { AgentResponse, LLMContext, TurnRecord } from '../../shared/contracts/runtime.js';
 import type { SessionRestartBehavior, SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
@@ -517,6 +518,7 @@ export class SessionManager implements SessionManagerTypeSurface {
           operations: this.createCapturedSessionReadOperations(foreignOwner),
         };
       },
+      createEventBusForeignSessionReadAuditSink(this.eventBus),
     );
   }
 
@@ -1794,6 +1796,16 @@ export class SessionManager implements SessionManagerTypeSurface {
   getRecentSessionEntries(channelId: string, limit: number): SessionEntry[] {
     const resolvedChannelId = this.resolveSessionChannelId(channelId);
     return this.store.getRecent(resolvedChannelId, limit);
+  }
+
+  /** The latest assistant entry recorded for the turn triggered by `sourceMessageId`. */
+  findAssistantEntryForSourceMessage(channelId: string, sourceMessageId: string): SessionEntry | null {
+    return this.store.findLatestEntries(
+      this.resolveSessionChannelId(channelId),
+      (entry) => entry.role === 'assistant'
+        && resolveSessionEntryTurnContext(entry).sourceMessageId === sourceMessageId,
+      1,
+    )[0] ?? null;
   }
 
   findRecordedIcpInitiation(

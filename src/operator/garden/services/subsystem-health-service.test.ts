@@ -587,7 +587,7 @@ describe('AdminSubsystemHealthDataService', () => {
 
     expect(laneById((await service.getSnapshot()).lanes, 'post_turn_action_queue')).toMatchObject({
       source: 'post_turn_queue',
-      sinceProcessStart: false,
+      sinceProcessStart: true,
       status: 'degraded',
       lastEventAt: 5_000,
       lastOutcome: 'degraded',

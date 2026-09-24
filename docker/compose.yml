@@ -189,6 +189,9 @@ services:
       POSTGRES_DATABASE_URL_FILE: /run/psfn-auth/postgres-database-url
       NTFY_BASE_URL: ${NTFY_BASE_URL:-http://operator-alert-sink:3000}
       NTFY_TOPIC: ${NTFY_TOPIC:-local-operator-alerts}
+      # Launcher evidence for the egress-isolation proof: the agent joins only
+      # the `internal: true` network.
+      PSFN_AGENT_EGRESS_ISOLATION: container-internal-network
     networks:
       - internal
     volumes:

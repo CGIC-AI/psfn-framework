@@ -163,6 +163,39 @@ describe('turn-records tool persistence', () => {
     expect(assistantMetadata.testingHarness).toEqual(message.routing.testingHarness);
   });
 
+  it('stamps proven speaker attribution on the user row only when supplied (bs4m0)', () => {
+    const sessionManager = {
+      recordUserMessage: vi.fn(() => 1),
+    } as unknown as TurnSessionWriteManager;
+    const common = {
+      sessionManager,
+      message: fromAny({
+        id: 'discord-message',
+        channelId: 'discord:room',
+        channelType: 'discord',
+        authorId: 'discord-user-111',
+        authorName: 'Alex',
+        content: 'hello',
+        timestamp: new Date(),
+      }),
+      turnSessionIdentity: { logicalSessionId: 'discord:room', sourceChannelId: 'discord:room' },
+      turnId: fromAny('turn-a'),
+      requestId: 'request-a',
+      trustLevel: 'regular' as const,
+      actorKind: 'human' as const,
+    };
+
+    recordUserMessage({ ...common, speakerContactId: 'contact-uuid-alex' });
+    recordUserMessage(common);
+
+    const calls = fromAny(sessionManager.recordUserMessage).mock.calls;
+    expect(JSON.parse(calls[0][6].metadata).speakerAttribution).toEqual({
+      schemaVersion: 1,
+      canonicalContactId: 'contact-uuid-alex',
+    });
+    expect(calls[1][6].metadata).toBeUndefined();
+  });
+
   it('captures verbatim audit eligibility only for explicitly public non-DM turns', () => {
     expect(resolveTurnRecordAuditPrivacy({
       id: 'message-public',

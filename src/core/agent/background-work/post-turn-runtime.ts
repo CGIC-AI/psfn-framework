@@ -372,9 +372,15 @@ async function runPostTurnBackgroundWork(
                 // of re-entering the preempt→defer loop. fxt1: pair the flag with
                 // the granting job id so the gateway can re-verify the escalation
                 // against the store; the id rides only when the claim is welfare.
+                // 8fbwe: adopt the run the background-work lifecycle opened for
+                // this job (named by the source request) — never mint a second.
                 job.welfareClaimed
-                  ? { preemptionProtected: true, welfareGrantJobId: job.jobId }
-                  : { preemptionProtected: false },
+                  ? {
+                    preemptionProtected: true,
+                    welfareGrantJobId: job.jobId,
+                    automataOwnerRunId: payload.source.requestId,
+                  }
+                  : { preemptionProtected: false, automataOwnerRunId: payload.source.requestId },
               );
               if (!outputs) return [];
               return [

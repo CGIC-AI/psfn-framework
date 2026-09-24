@@ -1,5 +1,11 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
+import {
+  buildForeignSessionReadAuditEvent,
+  parseForeignSessionReadReason,
+  type ForeignSessionReadAuditSink,
+  type ForeignSessionReadReason,
+} from './foreign-session-read-audit.js';
 import type { MemoryScopeQuery } from '../../../faculties/memory/types.js';
 import type { SessionEntry } from '../types.js';
 import type { ConversationScope, ConversationScopeSpeaker } from '../conversation-scope.js';
@@ -225,12 +231,8 @@ function runWithCapturedSessionOwner<T>(
 function runWithForeignCapturedSessionOwner<T>(
   manager: object,
   identity: CapturedSessionOwnerIdentity,
-  reason: string,
   operation: () => T,
 ): T {
-  if (!reason.trim()) {
-    throw new Error('Foreign captured-session scope requires a non-empty audit reason');
-  }
   return runCapturedSessionOwnerScope(manager, identity, operation, true);
 }
 
@@ -246,17 +248,24 @@ export class CapturedSessionReads {
   private readonly manager: object;
   private readonly operations: CapturedSessionReadOperations;
   private readonly createForChannel: CapturedSessionReadsFactory;
+  private readonly auditForeignRead: ForeignSessionReadAuditSink | null;
+  private readonly now: () => number;
 
   constructor(
     manager: object,
     owner: CapturedSessionOwnerIdentity,
     operations: CapturedSessionReadOperations,
     createForChannel: CapturedSessionReadsFactory,
+    /** Foreign-read audit sink (ls15s); null refuses every foreign read. */
+    auditForeignRead: ForeignSessionReadAuditSink | null,
+    now: () => number = Date.now,
   ) {
     this.manager = manager;
     this.owner = normalizeCapturedSessionOwner(owner);
     this.operations = operations;
     this.createForChannel = createForChannel;
+    this.auditForeignRead = auditForeignRead;
+    this.now = now;
   }
 
   run<T>(operation: () => T): T {
@@ -341,22 +350,27 @@ export class CapturedSessionReads {
     return this.operations.reconcileSessionChannelFromDisk();
   }
 
+  /**
+   * The audited foreign-read escape (ls15s). The reason must be a registered
+   * code; exactly one content-free audit event is recorded before the foreign
+   * session is touched, and an absent or failing audit sink refuses the read.
+   */
   resolveForeignSessionForTurn<T>(
-    reason: string,
+    reason: ForeignSessionReadReason,
     channelId: string,
     operation: (reads: CapturedSessionReads) => T,
   ): T {
     this.assertScope('CapturedSessionReads.resolveForeignSessionForTurn');
-    const normalizedReason = reason.trim();
-    if (!normalizedReason) {
-      throw new Error(
-        'CapturedSessionReads.resolveForeignSessionForTurn requires a non-empty audit reason',
-      );
-    }
+    const reasonCode = parseForeignSessionReadReason(reason);
     const normalizedChannelId = channelId.trim();
     if (!normalizedChannelId) {
       throw new Error(
         'CapturedSessionReads.resolveForeignSessionForTurn requires a non-empty channelId',
+      );
+    }
+    if (!this.auditForeignRead) {
+      throw new Error(
+        'CapturedSessionReads.resolveForeignSessionForTurn refused: no foreign-read audit sink is configured',
       );
     }
     const foreign = this.createForChannel(normalizedChannelId);
@@ -365,11 +379,18 @@ export class CapturedSessionReads {
       foreign.owner,
       foreign.operations,
       this.createForChannel,
+      this.auditForeignRead,
+      this.now,
     );
+    this.auditForeignRead(buildForeignSessionReadAuditEvent({
+      reason: reasonCode,
+      sourceLogicalSessionId: this.owner.logicalSessionId,
+      targetLogicalSessionId: foreignReads.owner.logicalSessionId,
+      timestamp: this.now(),
+    }));
     return runWithForeignCapturedSessionOwner(
       this.manager,
       foreignReads.owner,
-      normalizedReason,
       () => operation(foreignReads),
     );
   }

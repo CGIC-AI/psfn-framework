@@ -225,8 +225,12 @@ export interface MemoryExtractor {
     recoveredEntries?: readonly SessionEntry[],
     /** NON-crossing durable fence for the pre-write phase; write sites use assertEffectAllowed. */
     assertPreWriteFence?: () => Promise<void>,
-    /** mmo9.7.4/fxt1: welfare-escalated claims protect their model call from gate preemption. */
-    extractOptions?: { preemptionProtected?: boolean; welfareGrantJobId?: string },
+    /**
+     * mmo9.7.4/fxt1: welfare-escalated claims protect their model call from gate
+     * preemption. 8fbwe: a background-work job names the Automata run its
+     * lifecycle owns, so extraction adopts that run instead of minting its own.
+     */
+    extractOptions?: { preemptionProtected?: boolean; welfareGrantJobId?: string; automataOwnerRunId?: string },
   ): Promise<MemoryExtractionOutputs | void>;
   /**
    * How many most-recent bounded session entries a durable post-turn handler

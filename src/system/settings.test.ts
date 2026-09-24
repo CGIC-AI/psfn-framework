@@ -1420,19 +1420,11 @@ describe('settings', () => {
       applySettings(config, {
         webFetchAllowHttp: true,
         webFetchDomainAllowlist: ['example.com', 'docs.example.com'],
-        webFetchLocalCrawlerEnabled: true,
-        webFetchLocalCrawlerAllowHttp: true,
-        webFetchLocalCrawlerHostAllowlist: ['localhost', '127.0.0.1'],
-        webFetchLocalCrawlerDomainAllowlist: ['crawler.local'],
         webFetchTlsCaCertPaths: ['/etc/ssl/local-root.pem'],
       });
 
       expect(config.webFetchAllowHttp).toBe(true);
       expect(config.webFetchDomainAllowlist).toEqual(['example.com', 'docs.example.com']);
-      expect(config.webFetchLocalCrawlerEnabled).toBe(true);
-      expect(config.webFetchLocalCrawlerAllowHttp).toBe(true);
-      expect(config.webFetchLocalCrawlerHostAllowlist).toEqual(['localhost', '127.0.0.1']);
-      expect(config.webFetchLocalCrawlerDomainAllowlist).toEqual(['crawler.local']);
       expect(config.webFetchTlsCaCertPaths).toEqual(['/etc/ssl/local-root.pem']);
     });
 
@@ -1881,10 +1873,6 @@ describe('settings', () => {
       const params = new URLSearchParams({
         webFetchAllowHttp: 'false',
         webFetchDomainAllowlist: 'example.com, docs.example.com, example.com',
-        webFetchLocalCrawlerEnabled: 'true',
-        webFetchLocalCrawlerAllowHttp: 'true',
-        webFetchLocalCrawlerHostAllowlist: 'localhost,127.0.0.1',
-        webFetchLocalCrawlerDomainAllowlist: 'crawler.local',
         webFetchTlsCaCertPaths: '/etc/ssl/root.pem,/etc/ssl/intermediate.pem',
       });
 
@@ -1892,19 +1880,7 @@ describe('settings', () => {
       expect(errors).toEqual([]);
       expect(settings.webFetchAllowHttp).toBe(false);
       expect(settings.webFetchDomainAllowlist).toEqual(['example.com', 'docs.example.com']);
-      expect(settings.webFetchLocalCrawlerEnabled).toBe(true);
-      expect(settings.webFetchLocalCrawlerAllowHttp).toBe(true);
-      expect(settings.webFetchLocalCrawlerHostAllowlist).toEqual(['localhost', '127.0.0.1']);
-      expect(settings.webFetchLocalCrawlerDomainAllowlist).toEqual(['crawler.local']);
       expect(settings.webFetchTlsCaCertPaths).toEqual(['/etc/ssl/root.pem', '/etc/ssl/intermediate.pem']);
-    });
-
-    it('requires allowlist when local crawler lane is enabled', () => {
-      const params = new URLSearchParams({
-        webFetchLocalCrawlerEnabled: 'true',
-      });
-      const [, errors] = parseSettingsForm(params);
-      expect(errors).toContain('webFetchLocalCrawlerEnabled requires host/domain allowlist');
     });
 
     it('requires local endpoint fields when local import route mode is selected', () => {
@@ -2160,10 +2136,6 @@ describe('settings', () => {
       expect(snapshot.compositionalPolicy).toEqual(createDefaultCompositionalPolicyConfig());
       expect(snapshot.webFetchAllowHttp).toBe(false);
       expect(snapshot.webFetchDomainAllowlist).toEqual([]);
-      expect(snapshot.webFetchLocalCrawlerEnabled).toBe(false);
-      expect(snapshot.webFetchLocalCrawlerAllowHttp).toBe(false);
-      expect(snapshot.webFetchLocalCrawlerHostAllowlist).toEqual([]);
-      expect(snapshot.webFetchLocalCrawlerDomainAllowlist).toEqual([]);
       expect(snapshot.imageProvider).toBeNull();
       expect(snapshot.imageFalCreateModel).toBeNull();
       expect(snapshot.imageFalEditModel).toBeNull();

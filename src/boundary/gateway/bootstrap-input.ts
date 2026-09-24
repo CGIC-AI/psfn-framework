@@ -321,16 +321,6 @@ function buildGatewayPolicyConfig(
         : {}),
       allowInternalNetwork: config.webFetchAllowInternalNetwork === true,
       ...(discoveryLaneConfig ? { discoveryLane: discoveryLaneConfig } : {}),
-      localCrawlerLane: {
-        enabled: config.webFetchLocalCrawlerEnabled === true,
-        allowHttp: config.webFetchLocalCrawlerAllowHttp === true,
-        ...(config.webFetchLocalCrawlerHostAllowlist && config.webFetchLocalCrawlerHostAllowlist.length > 0
-          ? { hostAllowlist: config.webFetchLocalCrawlerHostAllowlist }
-          : {}),
-        ...(config.webFetchLocalCrawlerDomainAllowlist && config.webFetchLocalCrawlerDomainAllowlist.length > 0
-          ? { domainAllowlist: config.webFetchLocalCrawlerDomainAllowlist }
-          : {}),
-      },
     },
     ...(config.webFetchTlsCaCertPaths && config.webFetchTlsCaCertPaths.length > 0
       ? { webFetchTlsCaCertPaths: config.webFetchTlsCaCertPaths }

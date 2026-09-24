@@ -226,6 +226,7 @@ describe('migrateRequiredOwnerAdditions', () => {
       automataPolicy: {
         status: 'planned',
         addedPaths: [
+          'bus.health',
           'bus.eligibleClasses[memory.biography_synthesis]',
           'bus.eligibleClasses[memory.biography_review]',
         ],

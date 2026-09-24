@@ -1333,41 +1333,41 @@
       "value": "50_000"
     },
     {
-      "file": "src/boundary/gateway/server.ts",
+      "file": "src/boundary/gateway/server/connection-lifecycle.ts",
       "name": "$call:math-clamp:Math.max.arg0#1",
       "value": "1_000",
       "form": "math-clamp",
       "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
-      "file": "src/boundary/gateway/server.ts",
+      "file": "src/boundary/gateway/server/connection-lifecycle.ts",
       "name": "$call:math-clamp:Math.min.arg0#1",
       "value": "30_000",
       "form": "math-clamp",
       "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
-      "file": "src/boundary/gateway/server.ts",
+      "file": "src/boundary/gateway/server/companion-message-send-params.ts",
       "name": "COMPANION_MESSAGE_MAX_AUTHOR_NAME_CHARS",
       "value": "200"
     },
     {
-      "file": "src/boundary/gateway/server.ts",
+      "file": "src/boundary/gateway/server/companion-message-send-params.ts",
       "name": "COMPANION_MESSAGE_MAX_CONTENT_CHARS",
       "value": "65_536"
     },
     {
-      "file": "src/boundary/gateway/server.ts",
+      "file": "src/boundary/gateway/server/companion-message-send-params.ts",
       "name": "COMPANION_MESSAGE_MAX_REPLY_TO_ID_CHARS",
       "value": "256"
     },
     {
-      "file": "src/boundary/gateway/server.ts",
+      "file": "src/boundary/gateway/server/companion-violations.ts",
       "name": "COMPANION_VIOLATION_LOG_LIMIT",
       "value": "1_000"
     },
     {
-      "file": "src/boundary/gateway/server.ts",
+      "file": "src/boundary/gateway/server/rpc-frame-validation.ts",
       "name": "FRAME_PREVIEW_LIMIT",
       "value": "200"
     },
@@ -7636,7 +7636,7 @@
       "note": "Existing mutable policy candidate NearTurnMemoryLane.inferPostTurnAction.maxRetries; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
-      "file": "src/faculties/memory/postgres-store.ts",
+      "file": "src/faculties/memory/postgres-store/scratchpad.ts",
       "name": "SCRATCHPAD_MAX_ENTRIES",
       "value": "64"
     },
@@ -7676,11 +7676,6 @@
       "name": "MEMORY_SUBJECT_DETAILS_BATCH_MAX",
       "value": "256",
       "note": "Code-owned fail-closed SQL and parameter ceiling that bounds subject-authorized detail batches; callers chunk larger sets."
-    },
-    {
-      "file": "src/faculties/memory/research-library/store.ts",
-      "name": "PREVIEW_MAX_CHARS",
-      "value": "12_000"
     },
     {
       "file": "src/faculties/memory/retrieval-compose.ts",
@@ -9459,11 +9454,6 @@
       "value": "'TLSv1.3'",
       "form": "object-member",
       "note": "Existing mutable policy candidate GardenAdminTransportServer.loadNetworkTlsOptions.minVersion; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
-    },
-    {
-      "file": "src/persistence/artifact-lifecycle/manager.ts",
-      "name": "MAX_RECENT_RUNS",
-      "value": "20"
     },
     {
       "file": "src/persistence/backups/config.ts",

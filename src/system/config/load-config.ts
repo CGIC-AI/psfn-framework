@@ -626,8 +626,6 @@ function loadConfigForMode(
     webFetchAllowHttp: false,
     webFetchAllowInternalNetwork: false,
     homeAssistantEnabled: false,
-    webFetchLocalCrawlerEnabled: false,
-    webFetchLocalCrawlerAllowHttp: false,
     ...(gatewayTlsCaPath ? { gatewayTlsCaPath } : {}),
     ...(gatewayTlsRejectUnauthorized !== undefined ? { gatewayTlsRejectUnauthorized } : {}),
     wyomingShardRouting: { enabled: false },

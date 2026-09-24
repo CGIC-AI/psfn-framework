@@ -34,7 +34,7 @@ export class AdminChargeLedgerDataService implements AdminChargeLedgerService {
     humanAttention?: HumanAttentionPressureLedgerData;
     humanAttentionPolicy?: FatiguePolicyConfig['humanAttention'];
   }> {
-    const data = this.ledger.getData(query);
+    const data = await this.ledger.getData(query);
     if (!this.fatigueLedger) {
       return data;
     }

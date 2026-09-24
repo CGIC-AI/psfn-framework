@@ -31,6 +31,11 @@ import {
 import { PostgresAutomataLessonSource } from '../../../faculties/automata/bus/postgres-lesson-source.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
+import { readAutomataClassActivity } from './automata-class-activity-sql.js';
+import type {
+  AdminAutomataClassActivityInput,
+  AdminAutomataClassActivityRead,
+} from './automata-coverage.js';
 import type {
   AdminAutomataBusDegradationReason,
   AdminAutomataBusHealthSource,
@@ -232,6 +237,12 @@ export class PostgresAdminAutomataBusReadAdapter implements
         maxSourcesPerGroup: this.maxPageLimit,
       },
     });
+  }
+
+  async readClassActivity(
+    input: AdminAutomataClassActivityInput,
+  ): Promise<AdminAutomataClassActivityRead> {
+    return await readAutomataClassActivity(this.options.pool, this.companionId, input);
   }
 
   async query(scope: AutomataLessonReadScope): Promise<AutomataLessonProjection> {

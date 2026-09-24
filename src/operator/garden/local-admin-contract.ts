@@ -816,6 +816,7 @@ export function createInProcessGardenAdminContract(
         defaultPageLimit: options.config.automataPolicy.recentRunLimit,
         maxPageLimit: options.config.automataPolicy.operatorMutationLimit,
       },
+      coveragePolicy: options.config.automataPolicy.bus.health,
       bus: options.automataBusReadPort ?? null,
       lessons: options.automataLessonReadPort ?? null,
       reindex: options.automataReindexPort ?? null,

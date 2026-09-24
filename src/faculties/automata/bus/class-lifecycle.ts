@@ -10,6 +10,7 @@ import {
   type AutomataTerminalLifecyclePort,
   type AutomataWorkerLineage,
 } from '../terminal-lifecycle.js';
+import { requireSinglePassGovernedClass } from './class-adapters.js';
 import type { AutomataBusWorkerAccess } from './worker-access-contracts.js';
 import {
   openAutomataBusWorkerRun,
@@ -230,6 +231,9 @@ export async function runGovernedAutomataClass<T>(input: {
   briefingQuery: string;
   work: (run: AutomataBusWorkerRun | null) => Promise<AutomataClassWorkResult<T>>;
 }): Promise<AutomataClassWorkOutcome<T>> {
+  // Fail closed before any work runs, composed runtime or not: the class must
+  // be one whose owner policy declares it handoff-only.
+  requireSinglePassGovernedClass(input.spec.automatonClass);
   const runtime = input.runtime;
   if (!runtime) {
     const result = await input.work(null);
@@ -240,11 +244,11 @@ export async function runGovernedAutomataClass<T>(input: {
     run: createAutomataClassRunPort(runtime.registry, input.spec, runtime.terminal ?? null),
     terminal: runtime.terminal ?? null,
     briefingQuery: input.briefingQuery,
-    // Every class on this path is single_pass (class-adapters.ts): its work
-    // has no worker model loop that could read a briefing or call the tool,
-    // so forming them only spent a search per run and discarded the result.
-    // Companion-identity turns (free time, reflection, shards) must not carry
-    // Bus notes anyway. The deterministic terminal handoff remains the record.
+    // Every class on this path is single_pass (enforced above against
+    // class-adapters.ts), each with a declared owner exclusion: a
+    // companion-identity turn, person-data work, or no worker model loop.
+    // Forming a briefing or tool would either be discarded or cross that
+    // boundary. The deterministic terminal handoff remains the record.
     formation: 'handoff_only',
     ...(runtime.policy ? { policy: runtime.policy } : {}),
     ...(runtime.telemetry ? { telemetry: runtime.telemetry } : {}),

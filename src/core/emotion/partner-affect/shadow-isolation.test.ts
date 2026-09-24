@@ -48,6 +48,8 @@ const ALLOWED_IMPORTERS: ReadonlySet<string> = new Set([
   // Postgres persistence + factory wiring.
   'src/persistence/postgres/partner-affect-shadow-store.ts',
   'src/persistence/postgres/partner-affect-shadow-store.integration.test.ts',
+  // Migration registry facade re-exports the shadow DDL chain (no reads).
+  'src/persistence/postgres/migrations.ts',
   'src/persistence/runtime-factory.ts',
   'src/persistence/runtime-factory.test.ts',
   // Canonical JSON-owned settings registration.
@@ -178,7 +180,7 @@ describe('partner-affect shadow isolation', () => {
     const allowed = new Set([
       'src/persistence/postgres/partner-affect-shadow-store.ts',
       'src/persistence/postgres/partner-affect-shadow-store.integration.test.ts',
-      'src/persistence/postgres/migrations.ts',
+      'src/persistence/postgres/partner-affect-shadow-migrations.ts',
       'src/persistence/postgres/migrations.test.ts',
       'src/core/emotion/partner-affect/shadow-isolation.test.ts',
     ]);

@@ -125,7 +125,7 @@ interface GatewayVoiceHttpClient {
     url: string,
     options?: {
       method?: string;
-      lane?: 'default' | 'local_crawler' | 'discovery';
+      lane?: 'default' | 'discovery';
       maxBytes?: number;
       headers?: Record<string, string>;
       bodyBase64?: string;

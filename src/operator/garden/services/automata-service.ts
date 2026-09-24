@@ -18,6 +18,7 @@ import type {
   AutomataLessonReadScope,
 } from '../../../faculties/automata/bus/lesson-projection.js';
 import type {
+  AutomataBusHealthOwnerPolicy,
   AutomataRunRecord,
   AutomataRunStatus,
   EffectiveAutomataClassDescriptor,
@@ -27,6 +28,14 @@ import type { AutomataRunRegistry } from '../../../faculties/automata/run-regist
 import { createComponentLogger } from '../../../shared/logger.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { SENSITIVITY_LEVELS } from '../../../system/trust/types.js';
+import {
+  buildAutomataCoverage,
+  selectAutomataCoverageRuns,
+  selectAutomataHandoffProbeRunIds,
+  type AdminAutomataClassActivityPort,
+  type AdminAutomataClassActivityRead,
+  type AdminAutomataCoverage,
+} from './automata-coverage.js';
 
 interface AdminAutomataReadLogger {
   error(message: string, metadata?: Record<string, unknown>): void;
@@ -42,7 +51,10 @@ export type AdminAutomataBusDegradationReason =
   | 'index_unavailable'
   | 'read_failed'
   | 'reindex_required'
-  | 'source_unavailable';
+  | 'source_unavailable'
+  | 'unwired'
+  | 'empty_useful_streak'
+  | 'terminalization_gap';
 
 export interface AdminAutomataBusHealthSource {
   condition: AdminAutomataBusCondition;
@@ -72,7 +84,7 @@ export interface AdminAutomataBusReadInput {
  * Narrow companion-scoped read seam. The persistence/query implementation owns
  * filtering and page construction; Garden owns disclosure projection.
  */
-export interface AdminAutomataBusReadPort {
+export interface AdminAutomataBusReadPort extends Partial<AdminAutomataClassActivityPort> {
   readPage(input: AdminAutomataBusReadInput): Promise<{
     companionId: string;
     events: readonly AutomataBusEvent[];
@@ -182,6 +194,7 @@ export interface AdminAutomataPanelExtension {
 
 export interface AdminAutomataSnapshot {
   classes: EffectiveAutomataClassDescriptor[];
+  coverage: AdminAutomataCoverage;
   runs: AdminAutomataRunView[];
   runPage: { offset: number; limit: number; hasMore: boolean };
   bus: {
@@ -398,10 +411,46 @@ function assertCompanionPage(
 }
 
 export class AdminAutomataDataService implements AdminAutomataService {
+  /**
+   * Eligible-versus-wired coverage and learning health over the owner window.
+   * An unreadable aggregate is logged and reported as unavailable coverage;
+   * it never reads as healthy.
+   */
+  private async readCoverage(
+    classes: readonly EffectiveAutomataClassDescriptor[],
+    busAvailable: boolean,
+    nowMs: number,
+  ): Promise<AdminAutomataCoverage> {
+    const { registry, companionId, coveragePolicy } = this.options;
+    const windowStartMs = Math.max(0, nowMs - coveragePolicy.activityWindowMs);
+    const runs = selectAutomataCoverageRuns(registry.listRetainedRunsForRuntime(), windowStartMs);
+    let activity: AdminAutomataClassActivityRead | null = null;
+    const bus = this.options.bus;
+    if (busAvailable && bus?.readClassActivity) {
+      try {
+        activity = await bus.readClassActivity({
+          companionId,
+          windowStartMs,
+          terminalRunIds: selectAutomataHandoffProbeRunIds(runs),
+        });
+        if (activity.companionId !== companionId) {
+          throw new Error('Automata class activity returned a cross-companion aggregate');
+        }
+      } catch (error) {
+        (this.options.logger ?? log).error('Automata class coverage read failed', {
+          error: toErrorMessage(error),
+        });
+        activity = null;
+      }
+    }
+    return buildAutomataCoverage({ classes, runs, activity, policy: coveragePolicy, windowStartMs });
+  }
+
   constructor(private readonly options: {
     registry: AutomataRunRegistry;
     companionId: string;
     readPolicy: AdminAutomataReadPolicy;
+    coveragePolicy: AutomataBusHealthOwnerPolicy;
     bus?: AdminAutomataBusReadPort | null;
     lessons?: AdminAutomataLessonReadPort | null;
     reindex?: AdminAutomataReindexPort | null;
@@ -578,8 +627,21 @@ export class AdminAutomataDataService implements AdminAutomataService {
     const classes = registry.listClasses();
     const classesById = new Map(classes.map(descriptor => [descriptor.id, descriptor]));
     const nowMs = Date.now();
+    const coverage = await this.readCoverage(classes, bus.available, nowMs);
+    if (bus.health.condition === 'healthy' || bus.health.condition === 'degraded') {
+      const reasons = [...new Set([...bus.health.degradationReasons, ...coverage.degradationReasons])];
+      bus = {
+        ...bus,
+        health: {
+          ...bus.health,
+          condition: reasons.length === 0 ? bus.health.condition : 'degraded',
+          degradationReasons: reasons,
+        },
+      };
+    }
     return {
       classes,
+      coverage,
       runs: runItems.map((record) => {
         const descriptor = classesById.get(record.automatonClass);
         if (!descriptor) {

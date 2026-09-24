@@ -73,7 +73,7 @@ describe('companion display-name surface inventory', () => {
     },
     {
       surface: 'user-facing connection logs',
-      files: ['src/boundary/gateway/server.ts'],
+      files: ['src/boundary/gateway/server/connection-admission.ts'],
       markers: ['companionDisplayLabel(authenticatedCompanionId)', 'companionId: authenticatedCompanionId'],
     },
     {

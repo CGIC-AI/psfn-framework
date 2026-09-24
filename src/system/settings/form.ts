@@ -385,48 +385,6 @@ export function parseSettingsForm(
       }
     }
 
-    const webFetchLocalCrawlerEnabledRaw = params.get(
-      'webFetchLocalCrawlerEnabled',
-    );
-    if (webFetchLocalCrawlerEnabledRaw !== null) {
-      const enabled = toBoolean(webFetchLocalCrawlerEnabledRaw);
-      if (enabled === undefined) {
-        errors.push('webFetchLocalCrawlerEnabled must be true or false');
-      } else {
-        settings.webFetchLocalCrawlerEnabled = enabled;
-      }
-    }
-
-    const webFetchLocalCrawlerAllowHttpRaw = params.get(
-      'webFetchLocalCrawlerAllowHttp',
-    );
-    if (webFetchLocalCrawlerAllowHttpRaw !== null) {
-      const allowHttp = toBoolean(webFetchLocalCrawlerAllowHttpRaw);
-      if (allowHttp === undefined) {
-        errors.push('webFetchLocalCrawlerAllowHttp must be true or false');
-      } else {
-        settings.webFetchLocalCrawlerAllowHttp = allowHttp;
-      }
-    }
-
-    const webFetchLocalCrawlerHostAllowlistRaw = params.get(
-      'webFetchLocalCrawlerHostAllowlist',
-    );
-    if (webFetchLocalCrawlerHostAllowlistRaw !== null) {
-      settings.webFetchLocalCrawlerHostAllowlist = parseCsvList(
-        webFetchLocalCrawlerHostAllowlistRaw,
-      );
-    }
-
-    const webFetchLocalCrawlerDomainAllowlistRaw = params.get(
-      'webFetchLocalCrawlerDomainAllowlist',
-    );
-    if (webFetchLocalCrawlerDomainAllowlistRaw !== null) {
-      settings.webFetchLocalCrawlerDomainAllowlist = parseCsvList(
-        webFetchLocalCrawlerDomainAllowlistRaw,
-      );
-    }
-
     const webFetchTlsCaCertPathsRaw = params.get('webFetchTlsCaCertPaths');
     if (webFetchTlsCaCertPathsRaw !== null) {
       settings.webFetchTlsCaCertPaths = parseCsvList(webFetchTlsCaCertPathsRaw);
@@ -791,18 +749,6 @@ export function parseSettingsForm(
       if (!settings.transformersModel && !settings.embeddingModel) {
         errors.push(
           'transformersModel or embeddingModel is required when embeddingProvider=transformers',
-        );
-      }
-    }
-
-    if (settings.webFetchLocalCrawlerEnabled) {
-      const hasHostAllowlist =
-        (settings.webFetchLocalCrawlerHostAllowlist?.length ?? 0) > 0;
-      const hasDomainAllowlist =
-        (settings.webFetchLocalCrawlerDomainAllowlist?.length ?? 0) > 0;
-      if (!hasHostAllowlist && !hasDomainAllowlist) {
-        errors.push(
-          'webFetchLocalCrawlerEnabled requires host/domain allowlist',
         );
       }
     }

@@ -153,7 +153,7 @@ describe('migrateLegacySchedulerOwner', () => {
         salienceDecayIntervalMs: 3_600_000,
         socialGraphBuilderIntervalMs: 1_800_000,
       },
-      removedPaths: ['salienceDecayIntervalMs', 'socialGraphBuilder.intervalMs'],
+      removedPaths: ['salienceDecayIntervalMs', 'socialGraphBuilder.intervalMs', 'temporalWakeup.wakeSummary'],
     });
     expect(readFileSync(filePath, 'utf8')).toBe(before);
   });
@@ -253,7 +253,10 @@ describe('migrateLegacySchedulerOwner', () => {
         maxActiveConcerns: 7,
       },
     });
-    expect(migratedRaw.temporalWakeup).toEqual(original.temporalWakeup);
+    // c4twp: only the retired wakeSummary block leaves temporalWakeup.
+    const { wakeSummary: retiredWakeSummary, ...keptTemporalWakeup } = original.temporalWakeup as Record<string, unknown>;
+    expect(retiredWakeSummary).toBeDefined();
+    expect(migratedRaw.temporalWakeup).toEqual(keptTemporalWakeup);
     expect(migratedRaw.operatorExtension).toEqual(original.operatorExtension);
     expect(loadSchedulerConfig(dataDir).backgroundMaintenance.intervalMs).toBe(3_600_000);
     expect(loadSchedulerConfig(dataDir).intentionFollowUp)
@@ -388,6 +391,36 @@ describe('migrateLegacySchedulerOwner', () => {
     });
     expect(readFileSync(filePath, 'utf8')).toBe(bytesAfterApply);
     expect(statSync(filePath).ino).toBe(inodeAfterApply);
+  });
+
+  it('plans then removes only the retired temporalWakeup.wakeSummary block, idempotently (c4twp)', () => {
+    const { dataDir, filePath } = prepareOwner();
+    migrateLegacySchedulerOwner({ dataDir, apply: true });
+    const canonical = JSON.parse(readFileSync(filePath, 'utf8')) as Record<string, unknown>;
+    expect(canonical.temporalWakeup).not.toHaveProperty('wakeSummary');
+    // An owner that is otherwise current still carries the retired block.
+    const stale = structuredClone(canonical);
+    (stale.temporalWakeup as Record<string, unknown>).wakeSummary = { sessionSummaryMaxTokens: 160 };
+    writeFileSync(filePath, `${JSON.stringify(stale, null, 2)}\n`, 'utf8');
+    expect(() => loadSchedulerConfig(dataDir)).toThrow(/wakeSummary was retired/u);
+    const before = readFileSync(filePath, 'utf8');
+
+    const planned = migrateLegacySchedulerOwner({ dataDir });
+    expect(planned).toEqual({
+      mode: 'dry-run',
+      status: 'planned',
+      filePath,
+      removedPaths: ['temporalWakeup.wakeSummary'],
+    });
+    expect(readFileSync(filePath, 'utf8')).toBe(before);
+
+    expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
+      status: 'applied',
+      removedPaths: ['temporalWakeup.wakeSummary'],
+    });
+    expect(JSON.parse(readFileSync(filePath, 'utf8'))).toEqual(canonical);
+    expect(() => loadSchedulerConfig(dataDir)).not.toThrow();
+    expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({ status: 'not_needed' });
   });
 
   it('backfills the doing-mirror Letter quarantine threshold on an existing drain block', () => {

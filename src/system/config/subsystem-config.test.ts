@@ -466,11 +466,6 @@ describe('subsystem config round-trip', () => {
           minIdleMinutes: 240,
           minNoteIntervalMinutes: 240,
         },
-        wakeSummary: {
-          sessionSummaryMaxTokens: 160,
-          continuitySummaryMaxTokens: 160,
-          continuityMinEntries: 2,
-        },
       },
       freeTime: {
         enabled: true,

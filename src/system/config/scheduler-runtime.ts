@@ -72,7 +72,6 @@ export function resolveRuntimeSchedulerConfig(
       activeChannelLookbackHours: persisted.temporalWakeup.activeChannelLookbackHours,
       morningWake: { ...persisted.temporalWakeup.morningWake },
       idleRefresher: { ...persisted.temporalWakeup.idleRefresher },
-      wakeSummary: { ...persisted.temporalWakeup.wakeSummary },
     },
     freeTime: {
       enabled: persisted.freeTime.enabled,

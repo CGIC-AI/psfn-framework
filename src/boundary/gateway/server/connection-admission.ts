@@ -14,6 +14,7 @@ import type { GatewayRpcConnection } from '../transport.js';
 import type { GatewayServerCollaboratorPorts } from './collaborator-ports.js';
 import type {
   GatewayConnectionRole,
+  GatewayConnectionStatus,
   MalformedFrameKind,
 } from './connection-status.js';
 import {
@@ -21,6 +22,8 @@ import {
   decideIdentifyReentry,
   decideIdentifyRoleProof,
   parseIdentifyRequest,
+  type IdentifyReentryDecision,
+  type IdentifyRequest,
 } from './connection-authorization.js';
 import type { GatewayServerPorts } from './ports.js';
 import { hasOwn } from './rpc-frame-validation.js';
@@ -29,6 +32,8 @@ const log = createComponentLogger('Gateway');
 const INVALID_FRAME_AUDIT_METHOD = 'gateway.ipc.frame.invalid';
 
 export class GatewayConnectionAdmission {
+  private readonly pendingIdentifies = new WeakMap<GatewayRpcConnection, PendingIdentify>();
+
   constructor(
     private readonly ports: Pick<
       GatewayServerPorts,
@@ -188,9 +193,38 @@ export class GatewayConnectionAdmission {
     return { success: true };
   }
 
+  /**
+   * Identify is single-flight per connection: multi-companion agent identify
+   * awaits pending ICP invalidations, so a second identify arriving meanwhile
+   * could otherwise pass the same re-entry/rebind checks and overwrite the
+   * binding. It is rejected (fail closed) while one is pending.
+   */
   async identifyConnection(
     conn: GatewayRpcConnection,
     params: unknown,
+  ): Promise<{ success: true; role: GatewayConnectionRole; companionId?: CompanionId }> {
+    const pending = this.pendingIdentifies.get(conn);
+    if (pending) {
+      this.ports.alarmCompanionViolation(
+        'identify_concurrent_rejected',
+        'Connection sent gateway.client.identify while another identify was pending; rejecting',
+        pending.companionId ? { companionId: pending.companionId } : {},
+      );
+      throw new Error('Gateway connection already has an identify request in flight; concurrent identify rejected');
+    }
+    const inFlight: PendingIdentify = {};
+    this.pendingIdentifies.set(conn, inFlight);
+    try {
+      return await this.identifyConnectionOnce(conn, params, inFlight);
+    } finally {
+      this.pendingIdentifies.delete(conn);
+    }
+  }
+
+  private async identifyConnectionOnce(
+    conn: GatewayRpcConnection,
+    params: unknown,
+    inFlight: PendingIdentify,
   ): Promise<{ success: true; role: GatewayConnectionRole; companionId?: CompanionId }> {
     const status = this.ports.connectionStatuses.get(conn);
     const request = parseIdentifyRequest(params, () => {
@@ -202,15 +236,11 @@ export class GatewayConnectionAdmission {
       throw new Error('Cannot identify an inactive gateway connection');
     }
     const companionId = request.companionId;
-
-    const reentry = decideIdentifyReentry({
-      status,
-      request,
-      multiCompanionEnabled: this.ports.multiCompanion.enabled,
-    });
-    if (reentry.kind === 'reject') {
-      throw new Error(reentry.message);
+    if (companionId) {
+      inFlight.companionId = companionId;
     }
+
+    const reentry = this.decideReentry(status, request);
     if (reentry.kind === 'already_identified') {
       return {
         success: true,
@@ -239,18 +269,11 @@ export class GatewayConnectionAdmission {
         throw new Error('Multi-companion identification invariant violated: companionId is missing');
       }
       const authenticatedCompanionId = companionId;
-      if (status.companionId && status.companionId !== companionId) {
-        this.ports.alarmCompanionViolation(
-          'identify_rebind_rejected',
-          'Connection attempted to re-identify as a different companion; rejecting',
-          { boundCompanionId: status.companionId, claimedCompanionId: companionId },
-        );
-        throw new Error(
-          `Connection is already identified as companion "${status.companionId}" and cannot rebind to "${companionId}"`,
-        );
-      }
       if (request.role === 'agent') {
         await this.ports.icpInvalidations.awaitIcpInvalidationBeforeReconnect(authenticatedCompanionId);
+        // Re-verify everything decided before the await (fail closed): the
+        // connection may have closed, or its identity changed, meanwhile.
+        this.assertStillIdentifiable(conn, status, request);
         const existing = this.ports.companionConnections.get(authenticatedCompanionId);
         if (existing && existing !== conn) {
           if (this.ports.connections.has(existing)) {
@@ -296,4 +319,42 @@ export class GatewayConnectionAdmission {
       ...(companionId ? { companionId } : {}),
     };
   }
+
+  private decideReentry(
+    status: GatewayConnectionStatus,
+    request: IdentifyRequest,
+  ): Exclude<IdentifyReentryDecision, { kind: 'reject' }> {
+    const reentry = decideIdentifyReentry({
+      status,
+      request,
+      multiCompanionEnabled: this.ports.multiCompanion.enabled,
+    });
+    if (reentry.kind === 'reject') {
+      this.ports.alarmCompanionViolation(reentry.violation.event, reentry.violation.message, reentry.violation.details);
+      throw new Error(reentry.message);
+    }
+    return reentry;
+  }
+
+  private assertStillIdentifiable(
+    conn: GatewayRpcConnection,
+    status: GatewayConnectionStatus,
+    request: IdentifyRequest,
+  ): void {
+    if (
+      this.ports.connectionStatuses.get(conn) !== status
+      || status.state === 'offline'
+      || !this.ports.connections.has(conn)
+    ) {
+      throw new Error('Gateway connection closed while identify was pending; identify rejected');
+    }
+    if (this.decideReentry(status, request).kind !== 'identify') {
+      throw new Error('Gateway connection identified while identify was pending; identify rejected');
+    }
+  }
+}
+
+/** Claimed identity of the identify currently pending on a connection. */
+interface PendingIdentify {
+  companionId?: CompanionId;
 }

@@ -207,7 +207,7 @@ export function parseIdentifyRequest(params: unknown, assertActive: () => void):
 export type IdentifyReentryDecision =
   | Readonly<{ kind: 'identify' }>
   | Readonly<{ kind: 'already_identified'; role: GatewayConnectionRole; companionId?: CompanionId }>
-  | Readonly<{ kind: 'reject'; message: string }>;
+  | Readonly<{ kind: 'reject'; violation: ConnectionAuthorizationViolation; message: string }>;
 
 /**
  * An identified connection may repeat its exact identity (idempotent) but never
@@ -229,6 +229,16 @@ export function decideIdentifyReentry(input: Readonly<{
   if (status.role !== request.role || status.companionId !== request.companionId) {
     return {
       kind: 'reject',
+      violation: {
+        event: 'identify_rebind_rejected',
+        message: 'Identified connection attempted to change its role or companion; rejecting',
+        details: {
+          ...(status.companionId ? { boundCompanionId: status.companionId } : {}),
+          boundRole: status.role,
+          claimedRole: request.role,
+          ...(request.companionId ? { claimedCompanionId: request.companionId } : {}),
+        },
+      },
       message: 'Gateway connection is already identified and cannot change role or companion identity',
     };
   }

@@ -97,7 +97,7 @@ silent fallbacks between these layers.
 | Command (package.json) | Harness | What it proves |
 | --- | --- | --- |
 | `npm run smoke:chat` | `scripts/chat-cockpit-smoke.mjs` | Admin bootstrap fields, OpenAI-compatible chat completion, optional voice websocket handshake |
-| `npm run smoke:docker` | `scripts/smoke-docker.mjs` | Keyless split Compose stack (postgres + provider double + gateway + agent + hub + companion-ui) up, `/health` plumbing, hub/companion-ui surfaces, one persisted chat turn |
+| `npm run smoke:docker` | `scripts/smoke-docker.mjs` | Keyless split Compose stack (postgres + provider double + gateway + agent + Garden + hub + companion-ui) up, `/health` plumbing, Garden health, hub/companion-ui surfaces, one persisted chat turn whose `emotion.snapshot` is relayed through the hub |
 | `npm run smoke:cogsec` | `scripts/cogsec-remediation-smoke.ts` | Tombstone → revocation → regeneration → persona conformance → safe notices, with zero dirty-payload leakage |
 | `npm run smoke:discord:dm-voice` | `scripts/discord-dm-voice-smoke.mjs` | DM/voice/TTS/STT/Opus readiness, optional read-only live Discord API checks, Phase V regression profile |
 | `npm run e2e` | `src/app/e2e/e2e-test.ts` | Full runtime stack: conversation, persistence, memory, embeddings, reload, REPL, fleet resolution |

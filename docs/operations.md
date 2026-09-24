@@ -184,10 +184,18 @@ workspace, logs, tmp, backups, and models are created.
 `docker/docker-compose.smoke.yml` is a separate, disposable stack for the
 "someone can run it" contributor path; it is not the persistent deployment above
 and is explicitly not production-hardened. Drive it with `npm run smoke:docker`
-(`scripts/smoke-docker.mjs`), which brings the stack up, proves the gateway API
-edge and the gateway/agent RPC, verifies the Satellite Hub and companion-ui
-surfaces, and then drives one chat turn. Its exit codes are `0` (full turn),
-`3` (hub/companion-ui source-contract divergence), and `1` (failure).
+(`scripts/smoke-docker.mjs`). It is the one local command that runs gateway,
+agent, Garden, Satellite Hub, and companion-ui together: it brings the stack up,
+proves the gateway API edge and the gateway/agent RPC, checks Garden `/health`,
+verifies the Satellite Hub and companion-ui surfaces (including the hub
+`session.ready` handshake decoded by companion-ui's own codec), and then drives
+one chat turn while a hub websocket session is open. That turn's `post_turn`
+`emotion.snapshot` must arrive on the session through the gateway companion
+relay and the hub, which proves a relay payload end to end. Its exit codes are
+`0` (full turn and relay), `3` (hub/companion-ui source-contract divergence),
+and `1` (failure). Host ports are loopback-only and overridable with
+`PSFN_SMOKE_API_PORT`, `PSFN_SMOKE_HUB_PORT`, `PSFN_SMOKE_COMPANION_UI_PORT`,
+and `PSFN_SMOKE_GARDEN_PORT`.
 `--keep-up` leaves the stack running; the default tears it down with
 `docker compose down -v`.
 

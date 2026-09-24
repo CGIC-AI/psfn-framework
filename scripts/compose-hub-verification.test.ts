@@ -3,6 +3,7 @@ import { parseSatelliteRegistryConfig } from '../src/channels/backplane/satellit
 import {
   assertHubSessionReady,
   companionUiSessionReadyDivergence,
+  judgeRelayedEmotionSnapshot,
   relayEventsUrl,
 } from './compose-hub-verification.js';
 import {
@@ -63,7 +64,7 @@ describe('Compose smoke satellite registry', () => {
     expect(sharedDevice?.primaryCompanionId).toBe(SMOKE_COMPANION_ID);
     expect(sharedDevice?.emanationMemberIds).toEqual([SMOKE_COMPANION_ID]);
     expect(sharedDevice?.observationRecipients).toEqual([
-      { companionId: SMOKE_COMPANION_ID, scopes: ['approvals', 'artifacts', 'tool_activity'] },
+      { companionId: SMOKE_COMPANION_ID, scopes: ['approvals', 'artifacts', 'tool_activity', 'emotion'] },
     ]);
   });
 
@@ -126,5 +127,26 @@ describe('Compose hub verification helpers', () => {
       satelliteId: 'sat',
       audioFormat: 'text_only',
     })).toEqual([]);
+  });
+
+  it('accepts only a post_turn emotion.snapshot that companion-ui decodes', () => {
+    const frame = {
+      type: 'emotion.snapshot',
+      data: {
+        trigger: 'post_turn',
+        vad: { valence: 0.1, arousal: -0.2, dominance: 0 },
+        mood: { valence: 0, arousal: 0, dominance: 0 },
+        discrete: [{ label: 'joy', score: 0.4 }],
+        confidence: 0.5,
+        timestamp: '2026-09-24T05:00:00.000Z',
+      },
+    };
+    expect(judgeRelayedEmotionSnapshot(frame)).toMatchObject({ ok: true });
+    expect(judgeRelayedEmotionSnapshot({ ...frame, data: { ...frame.data, trigger: 'vad_shift' } }))
+      .toMatchObject({ ok: false, detail: expect.stringContaining('trigger=vad_shift') });
+    expect(judgeRelayedEmotionSnapshot({ ...frame, data: { ...frame.data, confidence: 2 } }))
+      .toMatchObject({ ok: false });
+    expect(judgeRelayedEmotionSnapshot({ type: 'pong', sentAt: 1 }))
+      .toMatchObject({ ok: false, detail: 'decoded pong, expected emotion.snapshot' });
   });
 });

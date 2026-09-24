@@ -384,13 +384,18 @@ npm run smoke:docker
 `docker/docker-compose.smoke.yml` with `docker compose up -d --wait`, then:
 
 1. asserts every container is healthy (Postgres, provider-stub, gateway, agent,
-   satellite-hub, companion-ui);
+   Garden, satellite-hub, companion-ui);
 2. confirms the gateway↔agent RPC is connected and the plumbing subsystems
    (`memory`, `embeddings`, `scheduler`, `llm`) are healthy via the gateway
-   `/health` endpoint, and that the runtime migrations applied;
-3. verifies the Satellite Hub and companion-ui surfaces;
-4. POSTs one turn to `/v1/chat/completions` and asserts a persisted assistant
-   reply.
+   `/health` endpoint, that the runtime migrations applied, and that Garden
+   answers `/health`;
+3. verifies the Satellite Hub and companion-ui surfaces, including the hub
+   `session.ready` handshake decoded by companion-ui's own protocol codec;
+4. opens a hub websocket session advertising the `emotion` output, POSTs one
+   turn to `/v1/chat/completions`, asserts a persisted assistant reply, and
+   requires that turn's `post_turn` `emotion.snapshot` to reach the session
+   through the gateway companion relay and the hub (a relay payload, not just
+   an accepted subscription).
 
 The stack is keyless by contract: it ships a deterministic OpenAI-compatible
 double (`provider-stub`) on its internal-only network plus its own

@@ -13,6 +13,8 @@ name: psfn-smoke
 #             socket.
 #   agent     isolated companion process. No dotenv, no provider/egress secrets;
 #             reaches the gateway over the shared Unix socket and drives turns.
+#   garden    the Garden/operator entrypoint, reaching the agent over its fleet
+#             admin socket. Published on 127.0.0.1:18053.
 #   satellite-hub
 #             the PSFN Satellite Hub in text-only mode. Authenticates to the
 #             gateway as a DEDICATED satellite-scoped principal (never the
@@ -418,6 +420,52 @@ services:
     # gateway). If the agent process exits, its container exits and surfaces as
     # not-running. Agent readiness is asserted via the gateway /health endpoint
     # (which only reports healthy once the agent's RPC has registered).
+
+  # ── Garden (operator surface) ──
+  # The Garden/operator entrypoint, as docker/compose.yml runs it. It reaches
+  # this companion's agent over the fleet admin socket the agent binds on the
+  # shared gateway-sock volume, and is published on loopback only so
+  # smoke:docker can prove it is healthy alongside the rest of the stack.
+  garden:
+    <<: *runtime-image
+    container_name: psfn-smoke-garden
+    depends_on:
+      agent:
+        condition: service_started
+    command: ["node", "dist/operator-main.js"]
+    environment:
+      <<: *runtime-env
+      POSTGRES_DATABASE_URL: *companion-url
+      ADMIN_HOST: 0.0.0.0
+      ADMIN_PORT: "3001"
+      ADMIN_TOKEN: ${PSFN_SMOKE_ADMIN_TOKEN:-psfn-smoke-admin-token-please-rotate}
+      ADMIN_TRANSPORT_MODE: socket
+      ADMIN_TRANSPORT_SOCKET: /run/psfn/garden-admin-${PSFN_SMOKE_COMPANION_ID:-11111111-1111-4111-8111-111111111111}.sock
+      NTFY_BASE_URL: http://operator-alert-sink:3000
+      NTFY_TOPIC: smoke-operator-alerts
+    ports:
+      - "127.0.0.1:${PSFN_SMOKE_GARDEN_PORT:-18053}:3001"
+    networks:
+      - psfn-smoke-internal
+      - psfn-smoke-edge
+    volumes:
+      - system-data:/app/runtime-root/system-data
+      - companion-data:/app/runtime-root/companions/smoke
+      - workspace:/app/runtime-root/workspaces/personal/${PSFN_SMOKE_COMPANION_ID:-11111111-1111-4111-8111-111111111111}
+      - shared-workspace:/app/runtime-root/workspaces/shared
+      - gateway-sock:/run/psfn
+      - model-cache:/app/models
+    healthcheck:
+      test:
+        - "CMD"
+        - "node"
+        - "--input-type=module"
+        - "--eval"
+        - "const r = await fetch('http://127.0.0.1:3001/health'); if (!r.ok) process.exit(1)"
+      interval: 5s
+      timeout: 5s
+      retries: 36
+      start_period: 30s
 
   # ── Satellite Hub ──
   # The PSFN Satellite Hub in text-only mode: no Deepgram/ElevenLabs, no device

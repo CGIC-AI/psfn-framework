@@ -315,6 +315,10 @@ describe('Compose smoke bootstrap', () => {
       '[smoke-seed] POSTGRES_ADMIN_DATABASE_URL is required to provision tenancy roles',
     );
     expect(existsSync(join(systemDataDir, 'automata-policy.json'))).toBe(true);
+    // The repository seed's reviewer slot is not in the smoke models fixture,
+    // and startup rejects a reviewer that names an unknown slot.
+    expect(JSON.parse(readFileSync(join(systemDataDir, 'automata-policy.json'), 'utf8')))
+      .toMatchObject({ bus: { reviewer: { model: 'smoke-stub-background' } } });
     expect(existsSync(join(systemDataDir, 'partner-affect-shadow.json'))).toBe(false);
     expect(JSON.parse(
       readFileSync(join(root, 'companion-data/capability-tier.json'), 'utf8'),

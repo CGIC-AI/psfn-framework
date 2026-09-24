@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { isProcessAlive, loadLocalContext, parseAgentAuthFile } from './local-lifecycle.js';
+import { gardenBuildSteps, isProcessAlive, loadLocalContext, parseAgentAuthFile } from './local-lifecycle.js';
 
 const COMPANION_ID = '11111111-1111-4111-8111-111111111111';
 
@@ -68,5 +68,15 @@ describe('repository-native lifecycle contracts', () => {
   it('reports the current process as live and impossible PIDs as stopped', () => {
     expect(isProcessAlive(process.pid)).toBe(true);
     expect(isProcessAlive(-1)).toBe(false);
+  });
+});
+
+describe('gardenBuildSteps', () => {
+  it('installs admin-ui dependencies through the worktree bootstrap before the vite build', () => {
+    const steps = gardenBuildSteps('/repo', '/node');
+    expect(steps).toEqual([
+      ['/node', ['/repo/scripts/ci/bootstrap-worktree.mjs', '/repo', '--project', 'admin-ui']],
+      ['npm', ['run', 'garden:build']],
+    ]);
   });
 });

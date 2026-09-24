@@ -84,6 +84,7 @@ import {
   dispatchCompanionUiPrimaryEmbodiment,
 } from '../../boundary/gateway/companion-ui-primary-embodiment.js';
 import { dispatchCompanionUiApproval } from '../../boundary/gateway/companion-ui-approvals.js';
+import { dispatchCompanionUiKeyShard } from '../../boundary/gateway/companion-ui-key-shards.js';
 import { FleetAuthHttpRoutes } from '../../channels/api/server/fleet-auth-routes.js';
 import type { FleetEscalationCoordinator } from '../../boundary/fleet-auth/escalation.js';
 import type { GatewayTrustedHostGardenRecoveryService } from '../../boundary/gateway/trusted-host-garden-recovery.js';
@@ -864,10 +865,10 @@ export async function startOptionalGatewayApiServer(
           operatorActionBroker: {
             // Key path (psfn-framework-7oh9y): the bearer is the human authority,
             // so frames dispatch with the key principal exactly as the REST API
-            // does. No Hub attachment, no fleet child assertion: shard frames
-            // and embodiment handoff are denied here (fleet child-capability /
-            // Hub-attachment routes only), embodiment status is read without an
-            // attachment (m1is8), everything else maps onto the key routes.
+            // does. No Hub attachment, no fleet child assertion: shard frames go
+            // to the agent's key-authenticated shard route and embodiment status
+            // is read without an attachment (m1is8); embodiment handoff stays
+            // device-bound; everything else maps onto the key routes.
             execute: async input => {
               const compiled = compileCompanionUiAction(
                 input.rawBody,
@@ -884,6 +885,13 @@ export async function startOptionalGatewayApiServer(
                 return { interrupted: active !== undefined, interactionId };
               }
               if (frame.resource === 'tool_activity.subscribe') return { subscribed: true };
+              const shard = await dispatchCompanionUiKeyShard({
+                compiled,
+                rawBody: input.rawBody,
+                principal: input.principal,
+                runtime: gatewayApiRuntime,
+              });
+              if (shard.handled) return shard.result;
               if (frame.resource === 'artifact.preview') {
                 const preview = options.companionRelay?.relay.getPreviewSource(
                   String(body.id),
@@ -908,7 +916,7 @@ export async function startOptionalGatewayApiServer(
               });
               if (approval.handled) return approval.result;
               const content = companionUiPromptContent(frame);
-              if (!content || frame.resource === 'shards.interact') {
+              if (!content) {
                 throw new CompanionUiActionDeniedError();
               }
               const interaction = beginCompanionUiInteraction(frame.requestId, input.signal);

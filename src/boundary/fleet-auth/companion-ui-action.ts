@@ -133,6 +133,19 @@ export interface CompanionUiPhysicalCapabilityCeiling {
   readonly telemetryScopes: readonly SatelliteTelemetryScope[];
 }
 
+/**
+ * Physical ceiling of an operator-key Companion UI session: the bearer is the
+ * human authority but has no device, so audio output and device telemetry are
+ * never granted. Audio input joins only when the gateway composes audio ingress.
+ */
+export const COMPANION_UI_OPERATOR_KEY_CEILING = Object.freeze({
+  capabilities: Object.freeze<SatelliteCapability[]>(['text', 'vision', 'image_upload', 'touch']),
+  audioCapabilities: Object.freeze<SatelliteCapability[]>(['audio_input', 'speech_to_text']),
+  telemetryScopes: Object.freeze<SatelliteTelemetryScope[]>([
+    'status', 'approvals', 'artifacts', 'tool_activity', 'emotion',
+  ]),
+});
+
 export interface CompiledCompanionUiAction {
   readonly frame: CompanionUiActionFrame;
   readonly target: CompiledGardenRequestTarget;

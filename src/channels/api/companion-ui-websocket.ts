@@ -20,6 +20,7 @@ import type {
 } from '../../boundary/gateway/companion-ui-action-broker.js';
 import type { CompanionUiAudioIngressPort } from '../../boundary/gateway/companion-ui-audio-ingress.js';
 import {
+  COMPANION_UI_OPERATOR_KEY_CEILING,
   parseCompanionUiActionFrame,
   parseCompanionUiSessionConfigureFrame,
 } from '../../boundary/fleet-auth/companion-ui-action.js';
@@ -81,13 +82,6 @@ const RUNTIME_LIMITS = Object.freeze({
  * `audio_output` is deliberately absent: Hub audio brackets are bound to a
  * satellite endpoint and a key session has none.
  */
-const OPERATOR_KEY_CEILING = Object.freeze({
-  capabilities: Object.freeze<SatelliteCapability[]>(['text', 'vision', 'image_upload', 'touch']),
-  audioCapabilities: Object.freeze<SatelliteCapability[]>(['audio_input', 'speech_to_text']),
-  telemetryScopes: Object.freeze<SatelliteTelemetryScope[]>([
-    'status', 'approvals', 'artifacts', 'tool_activity', 'emotion',
-  ]),
-});
 const OPERATOR_KEY_DEVICE = Object.freeze({ id: 'operator-key', label: 'Operator key' });
 const FORBIDDEN_BROWSER_AUTHORITY_HEADERS = new Set([
   'x-author-id', 'x-author-name', 'x-canonical-contact-id', 'x-channel-id', 'x-channel-type',
@@ -450,10 +444,10 @@ export class CompanionUiWebSocketAdapter {
       principal: principalFromApiKeyToken(operatorKey),
       physicalCeiling: Object.freeze({
         capabilities: Object.freeze([
-          ...OPERATOR_KEY_CEILING.capabilities,
-          ...(audio ? OPERATOR_KEY_CEILING.audioCapabilities : []),
+          ...COMPANION_UI_OPERATOR_KEY_CEILING.capabilities,
+          ...(audio ? COMPANION_UI_OPERATOR_KEY_CEILING.audioCapabilities : []),
         ]),
-        telemetryScopes: OPERATOR_KEY_CEILING.telemetryScopes,
+        telemetryScopes: COMPANION_UI_OPERATOR_KEY_CEILING.telemetryScopes,
       }),
     });
   }

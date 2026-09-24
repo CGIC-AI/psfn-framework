@@ -47,6 +47,7 @@ import {
 import { GatewayClientSessionIntegrityRuntime } from './client/session-integrity-runtime.js';
 import {
   GatewayClientReverseRpcRuntime,
+  type CompanionUiShardActionHandlers,
   type IcpLocalPolicyAuthorityPort,
   type WelfareGrantAuthorityPort,
 } from './client/reverse-rpc-runtime.js';
@@ -63,8 +64,6 @@ import type {
   ApiChatCompletionCancelRpcResult,
   ApiChatCompletionRpcParams,
   ApiChatCompletionRpcResult,
-  ApiCompanionUiShardActionRpcParams,
-  ApiCompanionUiShardActionRpcResult,
   ApiHealthRpcResult,
   ApiTelemetryIngestRpcParams,
   ApiTelemetryIngestRpcResult,
@@ -1832,8 +1831,8 @@ export class GatewayClient implements
     this.reverseRpcRuntime.onApiChatCancel(handler);
   }
 
-  onCompanionUiShardAction(handler: (params: ApiCompanionUiShardActionRpcParams) => Promise<ApiCompanionUiShardActionRpcResult>): void {
-    this.reverseRpcRuntime.onCompanionUiShardAction(handler);
+  onCompanionUiShardActions(handlers: CompanionUiShardActionHandlers): void {
+    this.reverseRpcRuntime.onCompanionUiShardActions(handlers);
   }
 
   onShardOwner(handler: (params: ApiShardOwnerRpcParams) => Promise<ApiShardOwnerRpcResult>): void {

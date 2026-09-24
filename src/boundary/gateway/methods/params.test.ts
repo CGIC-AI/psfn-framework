@@ -83,6 +83,7 @@ const expectedAgentMethods = [
   'api.chat.completion',
   'api.chat.cancel',
   'api.companion-ui.shard.action',
+  'api.companion-ui.key-shard.action',
   'shard.directory.owner',
   'api.telemetry.ingest',
   'api.health',
@@ -97,11 +98,11 @@ function expectInvalid(decoder: UnknownDecoder, params: unknown): void {
 }
 
 describe('gateway RPC parameter decoder catalog', () => {
-  it('keeps the reviewed 58 gateway plus 18 reverse-agent decoder inventory exact', () => {
+  it('keeps the reviewed 58 gateway plus 19 reverse-agent decoder inventory exact', () => {
     expect(Object.keys(gatewayMethodParamDecoders)).toEqual(expectedGatewayMethods);
     expect(Object.keys(agentMethodParamDecoders)).toEqual(expectedAgentMethods);
     expect(expectedGatewayMethods).toHaveLength(58);
-    expect(expectedAgentMethods).toHaveLength(18);
+    expect(expectedAgentMethods).toHaveLength(19);
   });
 
   it('rejects non-object params across the complete catalog', () => {

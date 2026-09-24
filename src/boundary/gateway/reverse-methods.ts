@@ -5,6 +5,7 @@ import type {
   ApiChatCompletionCancelRpcResult,
   ApiChatCompletionRpcParams,
   ApiChatCompletionRpcResult,
+  ApiCompanionUiKeyShardActionRpcParams,
   ApiCompanionUiShardActionRpcParams,
   ApiCompanionUiShardActionRpcResult,
   ApiHealthRpcResult,
@@ -74,6 +75,9 @@ export interface ReverseGatewayMethodRuntime {
   handleApiChatCancel(params: ApiChatCompletionCancelRpcParams): Promise<ApiChatCompletionCancelRpcResult>;
   handleCompanionUiShardAction(
     params: ApiCompanionUiShardActionRpcParams,
+  ): Promise<ApiCompanionUiShardActionRpcResult>;
+  handleCompanionUiKeyShardAction(
+    params: ApiCompanionUiKeyShardActionRpcParams,
   ): Promise<ApiCompanionUiShardActionRpcResult>;
   handleShardOwner(params: ApiShardOwnerRpcParams): Promise<ApiShardOwnerRpcResult>;
   handleApiTelemetryIngest(params: ApiTelemetryIngestRpcParams): Promise<ApiTelemetryIngestRpcResult>;
@@ -237,6 +241,13 @@ const reverseDescriptors = [
     decode: agentMethodParamDecoders['api.companion-ui.shard.action'],
     handler: (params: ApiCompanionUiShardActionRpcParams, runtime) => (
       runtime.handleCompanionUiShardAction(params)
+    ),
+  }),
+  defineReverseMethod({
+    names: ['api.companion-ui.key-shard.action'],
+    decode: agentMethodParamDecoders['api.companion-ui.key-shard.action'],
+    handler: (params: ApiCompanionUiKeyShardActionRpcParams, runtime) => (
+      runtime.handleCompanionUiKeyShardAction(params)
     ),
   }),
   defineReverseMethod({

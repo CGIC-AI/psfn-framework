@@ -7,6 +7,7 @@ import type {
   ApiChatCompletionCancelRpcResult,
   ApiChatCompletionRpcParams,
   ApiChatCompletionRpcResult,
+  ApiCompanionUiKeyShardActionRpcParams,
   ApiCompanionUiShardActionRpcParams,
   ApiCompanionUiShardActionRpcResult,
   ApiHealthRpcResult,
@@ -137,6 +138,12 @@ interface ReverseRpcRuntimeOptions {
 }
 
 /** Owns reverse-RPC registration, handler readiness, ICP holds, and voice streams. */
+/** Agent-side Companion UI shard routes: Hub-attached device and operator key (m1is8). */
+export interface CompanionUiShardActionHandlers {
+  hubAttachment(params: ApiCompanionUiShardActionRpcParams): Promise<ApiCompanionUiShardActionRpcResult>;
+  operatorKey(params: ApiCompanionUiKeyShardActionRpcParams): Promise<ApiCompanionUiShardActionRpcResult>;
+}
+
 export class GatewayClientReverseRpcRuntime {
   private externalMemoryHandler: ((params: ExternalMemoryExecuteParams) => Promise<ExternalMemoryExecuteResult>) | null = null;
   private registered = false;
@@ -144,6 +151,7 @@ export class GatewayClientReverseRpcRuntime {
   private apiChatCompletionHandler: ((params: ApiChatCompletionRpcParams) => Promise<ApiChatCompletionRpcResult>) | null = null;
   private apiChatCancelHandler: ((params: ApiChatCompletionCancelRpcParams) => Promise<ApiChatCompletionCancelRpcResult>) | null = null;
   private companionUiShardActionHandler: ((params: ApiCompanionUiShardActionRpcParams) => Promise<ApiCompanionUiShardActionRpcResult>) | null = null;
+  private companionUiKeyShardActionHandler: ((params: ApiCompanionUiKeyShardActionRpcParams) => Promise<ApiCompanionUiShardActionRpcResult>) | null = null;
   private shardOwnerHandler: ((params: ApiShardOwnerRpcParams) => Promise<ApiShardOwnerRpcResult>) | null = null;
   private apiTelemetryIngestHandler: ((params: ApiTelemetryIngestRpcParams) => Promise<ApiTelemetryIngestRpcResult>) | null = null;
   private apiHealthHandler: (() => Promise<ApiHealthRpcResult>) | null = null;
@@ -169,7 +177,11 @@ export class GatewayClientReverseRpcRuntime {
   onHandleMessage(handler: MessageHandler): void { this.handleMessageHandler = handler; this.register(); }
   onApiChatCompletion(handler: (params: ApiChatCompletionRpcParams) => Promise<ApiChatCompletionRpcResult>): void { this.apiChatCompletionHandler = handler; this.register(); }
   onApiChatCancel(handler: (params: ApiChatCompletionCancelRpcParams) => Promise<ApiChatCompletionCancelRpcResult>): void { this.apiChatCancelHandler = handler; this.register(); }
-  onCompanionUiShardAction(handler: (params: ApiCompanionUiShardActionRpcParams) => Promise<ApiCompanionUiShardActionRpcResult>): void { this.companionUiShardActionHandler = handler; this.register(); }
+  onCompanionUiShardActions(handlers: CompanionUiShardActionHandlers): void {
+    this.companionUiShardActionHandler = handlers.hubAttachment;
+    this.companionUiKeyShardActionHandler = handlers.operatorKey;
+    this.register();
+  }
   onShardOwner(handler: (params: ApiShardOwnerRpcParams) => Promise<ApiShardOwnerRpcResult>): void { this.shardOwnerHandler = handler; this.register(); }
   onApiTelemetryIngest(handler: (params: ApiTelemetryIngestRpcParams) => Promise<ApiTelemetryIngestRpcResult>): void { this.apiTelemetryIngestHandler = handler; this.register(); }
   onApiHealth(handler: () => Promise<ApiHealthRpcResult>): void { this.apiHealthHandler = handler; this.register(); }
@@ -247,6 +259,7 @@ export class GatewayClientReverseRpcRuntime {
       handleApiChatCompletion: (params) => this.handleApiChatCompletion(params),
       handleApiChatCancel: (params) => this.requireHandler(this.apiChatCancelHandler, 'api.chat.cancel')(params),
       handleCompanionUiShardAction: (params) => this.handleCompanionUiShardAction(params),
+      handleCompanionUiKeyShardAction: (params) => this.handleCompanionUiKeyShardAction(params),
       handleShardOwner: (params) => this.requireHandler(this.shardOwnerHandler, 'shard.directory.owner')(params),
       handleApiTelemetryIngest: (params) => this.requireHandler(this.apiTelemetryIngestHandler, 'api.telemetry.ingest')(params),
       handleApiHealth: () => this.requireHandler(this.apiHealthHandler, 'api.health')(),
@@ -353,6 +366,11 @@ export class GatewayClientReverseRpcRuntime {
 
   private handleCompanionUiShardAction(params: ApiCompanionUiShardActionRpcParams): Promise<ApiCompanionUiShardActionRpcResult> {
     const handler = this.requireHandler(this.companionUiShardActionHandler, 'api.companion-ui.shard.action');
+    return captureReplyCanary(() => handler(params));
+  }
+
+  private handleCompanionUiKeyShardAction(params: ApiCompanionUiKeyShardActionRpcParams): Promise<ApiCompanionUiShardActionRpcResult> {
+    const handler = this.requireHandler(this.companionUiKeyShardActionHandler, 'api.companion-ui.key-shard.action');
     return captureReplyCanary(() => handler(params));
   }
 

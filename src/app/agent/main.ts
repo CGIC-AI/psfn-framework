@@ -1851,7 +1851,10 @@ async function main(): Promise<void> {
   });
   gateway.onApiChatCompletion((params) => apiBackend.handleChatCompletion(params));
   gateway.onApiChatCancel((params) => apiBackend.cancelChatCompletion(params));
-  gateway.onCompanionUiShardAction((params) => apiBackend.handleCompanionUiShardAction(params));
+  gateway.onCompanionUiShardActions({
+    hubAttachment: (params) => apiBackend.handleCompanionUiShardAction(params),
+    operatorKey: (params) => apiBackend.handleCompanionUiKeyShardAction(params),
+  });
   gateway.onShardOwner((params) => Promise.resolve(apiBackend.handleShardOwner(params)));
   gateway.onApiTelemetryIngest((params) => apiBackend.handleTelemetryIngest(params));
   gateway.onApiHealth(() => apiBackend.handleHealth());

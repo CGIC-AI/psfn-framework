@@ -58,6 +58,16 @@ export interface ShardChatResponse {
 }
 
 /**
+ * Who is speaking to a selected shard. A Hub-attached human carries the
+ * verified device attachment; an operator-key session is the human authority
+ * itself (the bearer, exactly as on the REST API) and carries only the
+ * gateway-authenticated key principal id (psfn-framework-m1is8).
+ */
+export type ShardChatAuthor =
+  | Readonly<{ kind: 'hub_attachment'; attachment: HubDeviceAttachmentSnapshot }>
+  | Readonly<{ kind: 'operator_key'; principalId: string }>;
+
+/**
  * Server-owned live-shard surface. Callers must provide both the authenticated
  * parent and the shard selector; implementations re-check that exact tuple for
  * every operation.
@@ -74,7 +84,7 @@ export interface ShardDirectoryPort {
     shardId: string;
     requestId: string;
     content: string;
-    attachment: HubDeviceAttachmentSnapshot;
+    author: ShardChatAuthor;
   }>): Promise<ShardChatResponse>;
   interruptShardChat(input: Readonly<{
     parentCompanionId: CompanionId;

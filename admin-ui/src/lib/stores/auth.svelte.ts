@@ -21,6 +21,13 @@ let authResolved = $state(typeof window === 'undefined');
 let sessionProbePromise: Promise<boolean> | null = null;
 let sessionProbeController: AbortController | null = null;
 let sessionProbeScope: string | null = null;
+// Transient probe failures (5xx, network) retry with bounded backoff; after
+// the budget is spent only an online/visibility signal starts a fresh probe.
+const SESSION_PROBE_RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000] as const;
+let sessionProbeRetryTimer: ReturnType<typeof setTimeout> | null = null;
+let sessionProbeRetryScope: string | null = null;
+let sessionProbeRetryAttempt = 0;
+let sessionProbeRetryListenersAttached = false;
 let sessionRefreshRunning = false;
 let sessionRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 let sessionRefreshPromise: Promise<void> | null = null;
@@ -192,6 +199,69 @@ export function stopServerSessionRefresh(): void {
   clearSessionRefreshSchedule();
 }
 
+function clearSessionProbeRetryTimer(): void {
+  if (sessionProbeRetryTimer === null) return;
+  clearTimeout(sessionProbeRetryTimer);
+  sessionProbeRetryTimer = null;
+}
+
+function handleSessionProbeRetrySignal(): void {
+  if (authResolved || sessionProbeRetryScope === null) return;
+  if (typeof document !== 'undefined' && document.hidden) return;
+  if (sessionProbeRetryScope !== getCompanionCacheScope()) {
+    cancelSessionProbeRetry();
+    return;
+  }
+  clearSessionProbeRetryTimer();
+  void ensureAuthResolved();
+}
+
+function attachSessionProbeRetryListeners(): void {
+  if (sessionProbeRetryListenersAttached) return;
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    window.addEventListener('online', handleSessionProbeRetrySignal);
+  }
+  if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+    document.addEventListener('visibilitychange', handleSessionProbeRetrySignal);
+  }
+  sessionProbeRetryListenersAttached = true;
+}
+
+function detachSessionProbeRetryListeners(): void {
+  if (!sessionProbeRetryListenersAttached) return;
+  if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
+    window.removeEventListener('online', handleSessionProbeRetrySignal);
+  }
+  if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
+    document.removeEventListener('visibilitychange', handleSessionProbeRetrySignal);
+  }
+  sessionProbeRetryListenersAttached = false;
+}
+
+function cancelSessionProbeRetry(): void {
+  clearSessionProbeRetryTimer();
+  detachSessionProbeRetryListeners();
+  sessionProbeRetryScope = null;
+  sessionProbeRetryAttempt = 0;
+}
+
+/** Schedule one coalesced re-probe for the scope whose probe failed transiently. */
+function scheduleSessionProbeRetry(scope: string): void {
+  if (sessionProbeRetryScope !== scope) {
+    cancelSessionProbeRetry();
+    sessionProbeRetryScope = scope;
+  }
+  attachSessionProbeRetryListeners();
+  clearSessionProbeRetryTimer();
+  const delayMs = SESSION_PROBE_RETRY_DELAYS_MS[sessionProbeRetryAttempt];
+  if (delayMs === undefined) return;
+  sessionProbeRetryAttempt += 1;
+  sessionProbeRetryTimer = setTimeout(() => {
+    sessionProbeRetryTimer = null;
+    handleSessionProbeRetrySignal();
+  }, delayMs);
+}
+
 function clearSessionProbe(abort: boolean): void {
   if (abort) sessionProbeController?.abort();
   sessionProbeController = null;
@@ -204,6 +274,7 @@ onCompanionScopeChange((_previousCompanionId, nextCompanionId) => {
   if (sessionProbeScope !== nextScope) {
     clearSessionProbe(true);
   }
+  cancelSessionProbeRetry();
   authResolved = token.length > 0;
   serverSessionAuthenticated = token.length > 0;
   cancelSessionRefreshRequest();
@@ -227,6 +298,7 @@ async function probeServerSession(): Promise<boolean> {
   const controller = new AbortController();
   sessionProbeController = controller;
   sessionProbeScope = companionScope;
+  let transientFailure = false;
   try {
     if (typeof window !== 'undefined' && isFleetOverviewPath(window.location.pathname)) {
       const { readFleetSessionState } = await import('$lib/api/fleet-session');
@@ -235,6 +307,7 @@ async function probeServerSession(): Promise<boolean> {
       if (companionScope !== getCompanionCacheScope()) return false;
       serverSessionAuthenticated = state === 'signed_in';
       authResolved = true;
+      cancelSessionProbeRetry();
       if (serverSessionAuthenticated) void requestServerSessionRefresh();
       return authenticated;
     }
@@ -251,13 +324,18 @@ async function probeServerSession(): Promise<boolean> {
     if (res.ok) {
       serverSessionAuthenticated = true;
       authResolved = true;
+      cancelSessionProbeRetry();
       void requestServerSessionRefresh();
     } else if (res.status === 401 || res.status === 403) {
       serverSessionAuthenticated = false;
       authResolved = true;
+      cancelSessionProbeRetry();
+    } else {
+      transientFailure = true;
     }
   } catch (error) {
     if (!isAbortError(error, controller.signal)) {
+      transientFailure = true;
       console.warn(
         'Garden admin session probe failed; authentication remains unresolved.',
         error,
@@ -267,6 +345,11 @@ async function probeServerSession(): Promise<boolean> {
     if (sessionProbeController === controller) {
       clearSessionProbe(false);
     }
+  }
+  // A canceled or scope-switched probe never schedules a retry: only a
+  // transient failure for the still-current scope does.
+  if (transientFailure && !authResolved && companionScope === getCompanionCacheScope()) {
+    scheduleSessionProbeRetry(companionScope);
   }
   return authenticated;
 }
@@ -297,6 +380,7 @@ export function setToken(t: string) {
   token = t;
   serverSessionAuthenticated = token.length > 0;
   authResolved = true;
+  cancelSessionProbeRetry();
   cancelSessionRefreshRequest();
   clearSessionRefreshSchedule();
   clearLegacyPersistentAdminToken();
@@ -308,6 +392,7 @@ export function clearToken() {
   authResolved = true;
   stopServerSessionRefresh();
   clearSessionProbe(true);
+  cancelSessionProbeRetry();
   clearLegacyPersistentAdminToken();
   clearLegacyScriptReadableAdminTokenCookie();
 }

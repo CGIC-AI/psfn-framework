@@ -815,6 +815,7 @@ describe('Garden admin session auth guard', () => {
   });
 
   it('does not turn a transient server failure into an auth denial', async () => {
+    vi.useFakeTimers();
     const auth = await loadAuthStore(async () => new Response('{}', { status: 503 }));
 
     await expect(auth.ensureAuthResolved()).resolves.toBe(false);
@@ -825,6 +826,7 @@ describe('Garden admin session auth guard', () => {
   });
 
   it('reports a failed probe without turning it into an auth denial', async () => {
+    vi.useFakeTimers();
     const networkError = new TypeError('network unavailable');
     const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const auth = await loadAuthStore(async () => {
@@ -840,5 +842,97 @@ describe('Garden admin session auth guard', () => {
       'Garden admin session probe failed; authentication remains unresolved.',
       networkError,
     );
+  });
+  it('resolves after a transient 503 probe without a reload', async () => {
+    vi.useFakeTimers();
+    let dashboardCalls = 0;
+    const auth = await loadAuthStore(async () => {
+      dashboardCalls += 1;
+      return new Response('{}', { status: dashboardCalls === 1 ? 503 : 200 });
+    });
+
+    await expect(auth.ensureAuthResolved()).resolves.toBe(false);
+    expect(auth.isAuthResolved()).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.waitFor(() => expect(auth.isAuthResolved()).toBe(true));
+    expect(auth.isAuthenticated()).toBe(true);
+    expect(dashboardCalls).toBe(2);
+  });
+
+  it('retries a network failure with bounded, non-spinning backoff', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fetchImpl = vi.fn(async () => {
+      throw new TypeError('network unavailable');
+    });
+    const auth = await loadAuthStore(fetchImpl as unknown as typeof fetch);
+
+    await expect(auth.ensureAuthResolved()).resolves.toBe(false);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(2));
+
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    // One initial probe plus exactly five scheduled retries, then no timer spin.
+    expect(fetchImpl).toHaveBeenCalledTimes(6);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(auth.isAuthResolved()).toBe(false);
+  });
+
+  it('keeps 401 definitive and schedules no retry', async () => {
+    vi.useFakeTimers();
+    const fetchImpl = vi.fn(async () => new Response('{}', { status: 401 }));
+    const auth = await loadAuthStore(fetchImpl as unknown as typeof fetch);
+
+    await expect(auth.ensureAuthResolved()).resolves.toBe(false);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(shouldRedirectToLogin(auth)).toBe(true);
+  });
+
+  it('re-probes on the online signal after the retry budget is spent', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const windowListeners = new Map<string, () => void>();
+    let online = false;
+    const fetchImpl = vi.fn(async () => {
+      if (!online) throw new TypeError('offline');
+      return new Response('{}', { status: 200 });
+    });
+    const auth = await loadAuthStore(fetchImpl as unknown as typeof fetch);
+    Object.assign(window, {
+      addEventListener: (type: string, listener: () => void) => windowListeners.set(type, listener),
+      removeEventListener: (type: string) => windowListeners.delete(type),
+    });
+
+    await expect(auth.ensureAuthResolved()).resolves.toBe(false);
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(auth.isAuthResolved()).toBe(false);
+
+    online = true;
+    windowListeners.get('online')?.();
+    await vi.waitFor(() => expect(auth.isAuthResolved()).toBe(true));
+    expect(auth.isAuthenticated()).toBe(true);
+    expect(windowListeners.has('online')).toBe(false);
+  });
+
+  it('never lets a retry authenticate a different companion scope', async () => {
+    vi.useFakeTimers();
+    let dashboardCalls = 0;
+    const auth = await loadAuthStore(async () => {
+      dashboardCalls += 1;
+      return new Response('{}', { status: dashboardCalls === 1 ? 503 : 200 });
+    });
+    const { activateCompanionScope } = await import('$lib/fleet/companion-scope');
+
+    await expect(auth.ensureAuthResolved()).resolves.toBe(false);
+    await activateCompanionScope(COMPANION_ID);
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+
+    expect(dashboardCalls).toBe(1);
+    expect(auth.isAuthResolved()).toBe(false);
   });
 });

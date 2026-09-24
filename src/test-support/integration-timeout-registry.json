@@ -670,6 +670,13 @@
       "measuredBaselineMs": 1000,
       "baselineSource": "measured",
       "note": "psfn-framework-rqpyv: participant-name repair re-embeds repaired text atomically with the text/patch-event write against the real containerized PostgreSQL. Focused local full-file wall baseline was 0.99s on 2026-09-23 with a warm harness slot; 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
+    },
+    {
+      "file": "src/faculties/memory/episodic/subject-authorized-store.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 1100,
+      "baselineSource": "measured",
+      "note": "psfn-framework-klvoz: subject-authorized episodic reads push the viewer participant predicate into SQL before pagination (pages, arcs with both endpoints, multi/sole admin) against the real containerized PostgreSQL. Focused local full-file wall baseline was 1.08s on 2026-09-24 with a warm harness slot; 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
     }
   ]
 }

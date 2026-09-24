@@ -388,7 +388,22 @@ export interface EpisodeClaimTransferResult {
   removedArcIds: string[];
 }
 
-export interface EpisodeListOptions {
+/**
+ * Subject-authorization predicate a store applies before pagination
+ * (psfn-framework-klvoz). Absent means an unpartitioned read.
+ */
+export interface EpisodeSubjectFilter {
+  /** Trusted viewer contact; admits episodes explicitly attributed to it. */
+  viewerContactId: string;
+  /** Also admit episodes with no attributed participants (multi-admin D1). */
+  includeUnattributed: boolean;
+}
+
+export interface EpisodeSubjectFilterOptions {
+  subjectFilter?: EpisodeSubjectFilter;
+}
+
+export interface EpisodeListOptions extends EpisodeSubjectFilterOptions {
   limit?: number;
   offset?: number;
 }
@@ -528,7 +543,7 @@ export interface EpisodeTimeSearchOptions extends EpisodeListOptions {
   order?: 'asc' | 'desc';
 }
 
-export interface EpisodeArcListOptions {
+export interface EpisodeArcListOptions extends EpisodeSubjectFilterOptions {
   direction?: 'incoming' | 'outgoing' | 'both';
   arcKind?: EpisodeArcKind;
   limit?: number;
@@ -555,11 +570,14 @@ export interface EpisodicStorePort {
    * episode does not exist or is no longer live (merged/superseded).
    */
   confirmEpisodeCanonical(episodeId: string): EpisodicStoreResult<void>;
-  getEpisode(id: string): EpisodicStoreResult<Episode | undefined>;
+  getEpisode(id: string, options?: EpisodeSubjectFilterOptions): EpisodicStoreResult<Episode | undefined>;
   getEpisodeFirstPersonAuthorship(
     id: string,
   ): EpisodicStoreResult<EpisodeFirstPersonAuthorship | undefined>;
-  getEpisodesByIds(ids: readonly string[]): EpisodicStoreResult<Episode[]>;
+  getEpisodesByIds(
+    ids: readonly string[],
+    options?: EpisodeSubjectFilterOptions,
+  ): EpisodicStoreResult<Episode[]>;
   listEpisodes(options?: EpisodeListOptions): EpisodicStoreResult<Episode[]>;
   searchByTime(options?: EpisodeTimeSearchOptions): EpisodicStoreResult<Episode[]>;
   searchByThread(threadId: string, options?: EpisodeListOptions): EpisodicStoreResult<Episode[]>;

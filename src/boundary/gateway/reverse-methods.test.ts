@@ -30,6 +30,7 @@ const expectedRegisteredNames = [
   'api.chat.completion',
   'api.chat.cancel',
   'api.companion-ui.shard.action',
+  'api.companion-ui.key-shard.action',
   'shard.directory.owner',
   'api.telemetry.ingest',
   'api.health',

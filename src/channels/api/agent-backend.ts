@@ -31,6 +31,7 @@ import type {
   ApiChatCompletionCancelRpcResult,
   ApiChatCompletionRpcParams,
   ApiChatCompletionRpcResult,
+  ApiCompanionUiKeyShardActionRpcParams,
   ApiCompanionUiShardActionRpcParams,
   ApiCompanionUiShardActionRpcResult,
   ApiHealthRpcResult,
@@ -96,6 +97,7 @@ import { createComponentLogger } from '../../shared/logger.js';
 import type { CompanionId } from '../../shared/routing/companion-id.js';
 import type { RequestCapabilityVerifier } from '../../boundary/fleet-auth/request-capability.js';
 import {
+  COMPANION_UI_OPERATOR_KEY_CEILING,
   companionUiPromptContent,
   compileCompanionUiAction,
   type CompiledCompanionUiAction,
@@ -107,6 +109,7 @@ import {
 } from '../backplane/testing-harness-devices.js';
 import type { ShardDirectoryPort } from '../../shared/contracts/shard-directory.js';
 import { classifyCompanionUiShardActionFailure } from './companion-ui-shard-action-error.js';
+import { dispatchCompanionUiShardFrame } from './companion-ui-shard-dispatch.js';
 import {
   type ActiveApiTurnRequest,
   type ApiTurnCancellationReason,
@@ -408,47 +411,63 @@ export class AgentApiBackend {
         throw new Error('shard action attachment denied');
       }
       compiled = this.compileVerifiedCompanionUiCapability(params);
-      const parentCompanionId = this.companionId as CompanionId;
-      const body = compiled.frame.body as Record<string, unknown>;
-      switch (compiled.frame.resource) {
-        case 'shards.list':
-          return { ok: true, response: this.shardDirectory.listShards(parentCompanionId) };
-        case 'shards.history':
-          return {
-            ok: true,
-            response: this.shardDirectory.readShardChatHistory(
-              parentCompanionId,
-              String(body.shardId),
-            ),
-          };
-        case 'shards.interact':
-          return {
-            ok: true,
-            response: await this.shardDirectory.sendShardChat({
-              parentCompanionId,
-              shardId: String(body.shardId),
-              requestId: compiled.frame.requestId,
-              content: String(body.content),
-              attachment: params.hubDeviceAttachment,
-            }),
-          };
-        case 'shards.interrupt':
-          return {
-            ok: true,
-            response: this.shardDirectory.interruptShardChat({
-              parentCompanionId,
-              shardId: String(body.shardId),
-              interactionId: String(body.interactionId),
-            }),
-          };
-        default:
-          throw new Error('non-shard Companion UI action');
-      }
+      return await dispatchCompanionUiShardFrame({
+        directory: this.shardDirectory,
+        parentCompanionId: this.companionId as CompanionId,
+        frame: compiled.frame,
+        author: { kind: 'hub_attachment', attachment: params.hubDeviceAttachment },
+      });
     } catch (error) {
       const failure = classifyCompanionUiShardActionFailure(error);
       log.warn(failure.logMessage, {
         requestId: params.requestId,
         resource: compiled?.frame.resource ?? 'unknown',
+        error: toErrorMessage(failure.logError),
+      });
+      return this.fail(failure.status, failure.type, failure.message);
+    }
+  }
+
+  /**
+   * Operator-key path (psfn-framework-m1is8): the gateway authenticated the
+   * key session and applied its physical ceiling; the key principal is the
+   * human authority exactly as on the REST API. No Hub attachment and no
+   * fleet child assertion exist here, so this route accepts only an api_key
+   * principal and re-parses the raw frame for this companion.
+   */
+  async handleCompanionUiKeyShardAction(
+    params: ApiCompanionUiKeyShardActionRpcParams,
+  ): Promise<ApiCompanionUiShardActionRpcResult> {
+    let resource = 'unknown';
+    try {
+      if (!this.shardDirectory || !this.companionId
+        || params.principal.mode !== 'api_key'
+        || params.principal.scope !== undefined) {
+        throw new Error('operator key shard action denied');
+      }
+      const rawBody = Buffer.from(params.rawBodyBase64Url, 'base64url');
+      if (rawBody.toString('base64url') !== params.rawBodyBase64Url) {
+        throw new Error('non-canonical body');
+      }
+      // Re-apply the key session's device-free ceiling (shards.interrupt needs
+      // audio_output, which a key session never holds).
+      const { frame } = compileCompanionUiAction(
+        rawBody,
+        this.companionId as CompanionId,
+        COMPANION_UI_OPERATOR_KEY_CEILING,
+      );
+      resource = frame.resource;
+      return await dispatchCompanionUiShardFrame({
+        directory: this.shardDirectory,
+        parentCompanionId: this.companionId as CompanionId,
+        frame,
+        author: { kind: 'operator_key', principalId: params.principal.id },
+      });
+    } catch (error) {
+      const failure = classifyCompanionUiShardActionFailure(error);
+      log.warn(failure.logMessage, {
+        requestId: params.requestId,
+        resource,
         error: toErrorMessage(failure.logError),
       });
       return this.fail(failure.status, failure.type, failure.message);

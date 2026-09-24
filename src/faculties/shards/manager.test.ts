@@ -1385,7 +1385,7 @@ describe('ShardManager', () => {
       shardId,
       requestId: 'direct-1',
       content: 'Report your bounded finding',
-      attachment,
+      author: { kind: 'hub_attachment', attachment },
     });
     expect(response).toMatchObject({
       content: 'bounded shard reply',

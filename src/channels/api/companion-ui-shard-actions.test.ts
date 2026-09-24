@@ -191,3 +191,104 @@ describe('AgentApiBackend Companion UI shard action failures', () => {
       });
   });
 });
+
+function keyFrame(
+  resource: 'shards.list' | 'shards.history' | 'shards.interact' | 'shards.interrupt',
+  body: Record<string, unknown>,
+): string {
+  return Buffer.from(JSON.stringify({
+    schemaVersion: 1,
+    requestId: 'key-shard-request',
+    action: resource === 'shards.list' || resource === 'shards.history'
+      ? 'companion.read'
+      : 'companion.interact',
+    resource,
+    body,
+  })).toString('base64url');
+}
+
+function keyBackend(directory: LiveShardDirectory): AgentApiBackend {
+  return new AgentApiBackend({
+    agentLoop: fromAny({ handleMessage: vi.fn(), abort: vi.fn() }),
+    eventBus: new EventBus(),
+    sessionManager: fromAny({
+      getMessageCount: vi.fn(() => 0),
+      recordUserMessage: vi.fn(),
+      recordAssistantMessage: vi.fn(),
+    }),
+    companionId: PARENT,
+    shardDirectory: directory,
+  });
+}
+
+const KEY_PRINCIPAL = { id: 'operator-key-principal', mode: 'api_key' as const };
+const DENIED = {
+  ok: false,
+  error: {
+    status: 403,
+    type: 'companion_ui_shard_action_denied',
+    message: 'Companion UI shard action was denied',
+  },
+};
+
+describe('AgentApiBackend operator-key Companion UI shard actions (m1is8)', () => {
+  it('lists, reads history, and chats with a shard as the key principal', async () => {
+    const handleMessage = vi.fn(async () => ({
+      content: 'shard reply',
+      channelId: `shard:${SHARD_ID}:human`,
+      metadata: { turnId: 'turn-1', inputTokens: 3, outputTokens: 4 },
+    }));
+    const instance = keyBackend(shardDirectory(fromAny(handleMessage)));
+
+    await expect(instance.handleCompanionUiKeyShardAction({
+      requestId: 'r1', principal: KEY_PRINCIPAL, rawBodyBase64Url: keyFrame('shards.list', {}),
+    })).resolves.toMatchObject({ ok: true, response: [{ shardId: SHARD_ID, availability: 'available' }] });
+
+    await expect(instance.handleCompanionUiKeyShardAction({
+      requestId: 'r2',
+      principal: KEY_PRINCIPAL,
+      rawBodyBase64Url: keyFrame('shards.interact', { shardId: SHARD_ID, content: 'bounded question' }),
+    })).resolves.toMatchObject({ ok: true, response: { content: 'shard reply' } });
+    expect(handleMessage).toHaveBeenCalledWith(expect.objectContaining({
+      authorId: KEY_PRINCIPAL.id,
+      authorName: 'API Principal',
+      routing: expect.not.objectContaining({ hubDeviceAttachment: expect.anything() }),
+    }));
+
+    await expect(instance.handleCompanionUiKeyShardAction({
+      requestId: 'r3',
+      principal: KEY_PRINCIPAL,
+      rawBodyBase64Url: keyFrame('shards.history', { shardId: SHARD_ID }),
+    })).resolves.toMatchObject({
+      ok: true,
+      response: [{ role: 'user', content: 'bounded question' }, { role: 'assistant', content: 'shard reply' }],
+    });
+  });
+
+  it('denies non-key principals, scoped keys, non-canonical bodies, and interrupts beyond the key ceiling', async () => {
+    const handleMessage = vi.fn();
+    const instance = keyBackend(shardDirectory(fromAny(handleMessage)));
+    const list = keyFrame('shards.list', {});
+
+    await expect(instance.handleCompanionUiKeyShardAction({
+      requestId: 'r1', principal: { id: 'local', mode: 'insecure_local' }, rawBodyBase64Url: list,
+    })).resolves.toEqual(DENIED);
+    await expect(instance.handleCompanionUiKeyShardAction({
+      requestId: 'r2', principal: { ...KEY_PRINCIPAL, scope: 'satellite' }, rawBodyBase64Url: list,
+    })).resolves.toEqual(DENIED);
+    await expect(instance.handleCompanionUiKeyShardAction({
+      requestId: 'r3', principal: KEY_PRINCIPAL, rawBodyBase64Url: `${list}=`,
+    })).resolves.toEqual(DENIED);
+    await expect(instance.handleCompanionUiKeyShardAction({
+      requestId: 'r4',
+      principal: KEY_PRINCIPAL,
+      rawBodyBase64Url: keyFrame('shards.interrupt', { shardId: SHARD_ID, interactionId: 'interaction-1' }),
+    })).resolves.toEqual(DENIED);
+    await expect(instance.handleCompanionUiKeyShardAction({
+      requestId: 'r5',
+      principal: KEY_PRINCIPAL,
+      rawBodyBase64Url: keyFrame('shards.history', { shardId: 'unknown-shard' }),
+    })).resolves.toEqual(DENIED);
+    expect(handleMessage).not.toHaveBeenCalled();
+  });
+});

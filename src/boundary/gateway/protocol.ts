@@ -75,6 +75,7 @@ import type {
   ApiChatCompletionCancelRpcResult,
   ApiChatCompletionRpcParams,
   ApiChatCompletionRpcResult,
+  ApiCompanionUiKeyShardActionRpcParams,
   ApiCompanionUiShardActionRpcParams,
   ApiCompanionUiShardActionRpcResult,
   ApiHealthRpcResult,
@@ -1570,6 +1571,10 @@ export interface AgentMethods {
   'api.chat.cancel': [ApiChatCompletionCancelRpcParams, ApiChatCompletionCancelRpcResult];
   'api.companion-ui.shard.action': [
     ApiCompanionUiShardActionRpcParams,
+    ApiCompanionUiShardActionRpcResult,
+  ];
+  'api.companion-ui.key-shard.action': [
+    ApiCompanionUiKeyShardActionRpcParams,
     ApiCompanionUiShardActionRpcResult,
   ];
   'shard.directory.owner': [ApiShardOwnerRpcParams, ApiShardOwnerRpcResult];

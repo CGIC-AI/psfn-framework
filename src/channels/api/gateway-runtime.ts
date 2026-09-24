@@ -8,6 +8,7 @@ import type {
   ApiHealthRpcResult,
   ApiHealthSubsystemStatus,
   ApiRuntimeChatRequest,
+  ApiCompanionUiKeyShardActionRpcParams,
   ApiCompanionUiShardActionRpcParams,
   ApiServerRuntime,
   ApiTelemetryIngestRpcResult,
@@ -267,6 +268,19 @@ export class GatewayApiRuntime implements ApiServerRuntime {
     return await this.gateway.requestCompanionAgent<ApiCompanionUiShardActionRpcResult>(
       companionId,
       'api.companion-ui.shard.action',
+      { ...input, requestId },
+      this.chatRequestTimeoutMs,
+    );
+  }
+
+  async handleCompanionUiKeyShardAction(
+    companionId: string,
+    input: Omit<ApiCompanionUiKeyShardActionRpcParams, 'requestId'>,
+  ): Promise<ApiCompanionUiShardActionRpcResult> {
+    const requestId = `companion-ui-key-shard-${Date.now()}-${++this.requestCounter}`;
+    return await this.gateway.requestCompanionAgent<ApiCompanionUiShardActionRpcResult>(
+      companionId,
+      'api.companion-ui.key-shard.action',
       { ...input, requestId },
       this.chatRequestTimeoutMs,
     );

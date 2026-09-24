@@ -80,6 +80,9 @@ export const agentMethodParamDecoders = {
     clientCert: Type.Optional(unknownRecord), hubDevicePrincipal: unknownRecord,
     hubDeviceAttachment: unknownRecord, companionUiCapability: unknownRecord,
   })),
+  'api.companion-ui.key-shard.action': agentDecoder('api.companion-ui.key-shard.action', strictObject({
+    requestId: nonEmptyCanonicalString, principal: apiPrincipal, rawBodyBase64Url: nonEmptyCanonicalString,
+  })),
   'shard.directory.owner': agentDecoder('shard.directory.owner', strictObject({ shardId: nonEmptyCanonicalString })),
   'api.telemetry.ingest': agentDecoder('api.telemetry.ingest', strictObject({ event: unknownRecord })),
   'api.health': agentDecoder('api.health', emptyParams),

@@ -1,14 +1,15 @@
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
-import type { HubDeviceAttachmentSnapshot } from '../../shared/contracts/hub-device-ingress.js';
 import {
   SHARD_DIRECTORY_LIMITS,
   ShardDirectoryDeniedError,
   ShardDirectoryOperationalError,
+  type ShardChatAuthor,
   type ShardChatMessage,
   type ShardChatResponse,
   type ShardDirectoryEntry,
   type ShardDirectoryPort,
 } from '../../shared/contracts/shard-directory.js';
+import type { HubDeviceAttachmentSnapshot } from '../../shared/contracts/hub-device-ingress.js';
 import type { CompanionId } from '../../shared/routing/companion-id.js';
 import { deriveShardRoutingEnvelope } from '../../shared/routing/envelope.js';
 import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
@@ -134,7 +135,7 @@ export class LiveShardDirectory implements ShardDirectoryPort {
     shardId: string;
     requestId: string;
     content: string;
-    attachment: HubDeviceAttachmentSnapshot;
+    author: ShardChatAuthor;
   }>): Promise<ShardChatResponse> {
     return await this.asyncOperation(async () => {
       const runtime = this.requireLiveRuntime(input.parentCompanionId, input.shardId);
@@ -142,14 +143,7 @@ export class LiveShardDirectory implements ShardDirectoryPort {
       if (!shard || shard.state !== 'ready' || shard.health !== 'healthy') {
         throw new ShardDirectoryDeniedError('Selected shard is unavailable');
       }
-      const actor = input.attachment.actor;
-      if (actor.kind !== 'human' || actor.companionId !== input.parentCompanionId
-        || input.attachment.channel.companionId !== input.parentCompanionId
-        || input.attachment.deviceActor.principal.companionId !== input.parentCompanionId) {
-        throw new ShardDirectoryDeniedError(
-          'Selected shard chat requires a current human parent attachment',
-        );
-      }
+      const author = resolveShardChatAuthor(input.author, input.parentCompanionId);
       const content = input.content.trim();
       if (!content || content.length > SHARD_DIRECTORY_LIMITS.maxMessageCharacters) {
         throw new ShardDirectoryDeniedError('Selected shard chat content is invalid');
@@ -165,16 +159,15 @@ export class LiveShardDirectory implements ShardDirectoryPort {
           id: input.requestId,
           channelId: runtime.channelId,
           channelType: 'companion-ui',
-          authorId: actor.principalId,
-          authorName: 'Authenticated cluster human',
+          authorId: author.authorId,
+          authorName: author.authorName,
           content,
           timestamp: new Date(timestamp),
           isDirectMessage: true,
           routing: {
             source: 'companion-ui',
             channelPrivacy: 'private',
-            canonicalContactId: actor.contact.contactId,
-            hubDeviceAttachment: input.attachment,
+            ...author.routing,
             cancellationId: input.requestId,
             gateway: deriveShardRoutingEnvelope({
               companionId: input.parentCompanionId,
@@ -355,4 +348,39 @@ function normalizeDirectoryText(
   return normalized.length <= maxCharacters
     ? normalized
     : `${normalized.slice(0, Math.max(1, maxCharacters - 1)).trimEnd()}…`;
+}
+
+/**
+ * Resolve the speaking identity for a shard chat. A Hub attachment must name a
+ * current human of this parent; an operator key speaks as its key principal
+ * with no contact binding, exactly like a REST API turn. Anything else denies.
+ */
+function resolveShardChatAuthor(
+  author: ShardChatAuthor,
+  parentCompanionId: CompanionId,
+): Readonly<{
+  authorId: string;
+  authorName: string;
+  routing: Readonly<{ canonicalContactId?: string; hubDeviceAttachment?: HubDeviceAttachmentSnapshot }>;
+}> {
+  if (author.kind === 'operator_key') {
+    if (author.principalId.trim().length === 0) {
+      throw new ShardDirectoryDeniedError('Selected shard chat requires an operator key principal');
+    }
+    return { authorId: author.principalId, authorName: 'API Principal', routing: {} };
+  }
+  const attachment = author.attachment;
+  const actor = attachment.actor;
+  if (actor.kind !== 'human' || actor.companionId !== parentCompanionId
+    || attachment.channel.companionId !== parentCompanionId
+    || attachment.deviceActor.principal.companionId !== parentCompanionId) {
+    throw new ShardDirectoryDeniedError(
+      'Selected shard chat requires a current human parent attachment',
+    );
+  }
+  return {
+    authorId: actor.principalId,
+    authorName: 'Authenticated cluster human',
+    routing: { canonicalContactId: actor.contact.contactId, hubDeviceAttachment: attachment },
+  };
 }

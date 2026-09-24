@@ -273,6 +273,17 @@ export interface ApiCompanionUiShardActionRpcParams {
   companionUiCapability: CompanionUiAgentCapability;
 }
 
+/**
+ * Operator-key Companion UI shard frame (psfn-framework-m1is8). The gateway
+ * authenticated the key session and compiled the frame under its ceiling; the
+ * agent re-parses the exact raw body for its own companion.
+ */
+export interface ApiCompanionUiKeyShardActionRpcParams {
+  requestId: string;
+  principal: ApiAuthPrincipal;
+  rawBodyBase64Url: string;
+}
+
 export interface ApiCompanionUiShardActionRpcSuccess {
   ok: true;
   response:

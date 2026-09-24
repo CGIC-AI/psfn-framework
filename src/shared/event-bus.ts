@@ -14,6 +14,7 @@ import type {
   RunChargeEvent,
   FatigueBudgetEvent,
 } from './contracts/runtime-base.js';
+import type { ForeignSessionReadAuditEvent } from '../core/session/manager/foreign-session-read-audit.js';
 import type { TurnSnapshot } from '../core/turns/snapshot.js';
 import type { SessionRouteResetMode } from '../core/session/session-routes.js';
 import type {
@@ -371,6 +372,8 @@ export interface EventMap {
     reason: string;
     timestamp: number;
   };
+  /** ls15s: one content-free event per admitted foreign captured-session read. */
+  'session.foreign_read.audited': ForeignSessionReadAuditEvent;
   'agent.post_turn.actions.inferred': {
     message: SubstrateMessage;
     response: AgentResponse;

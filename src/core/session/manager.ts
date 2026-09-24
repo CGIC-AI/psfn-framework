@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { createEventBusForeignSessionReadAuditSink } from './manager/foreign-session-read-audit-sink.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import type { AgentResponse, LLMContext, TurnRecord } from '../../shared/contracts/runtime.js';
 import type { SessionRestartBehavior, SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
@@ -517,6 +518,7 @@ export class SessionManager implements SessionManagerTypeSurface {
           operations: this.createCapturedSessionReadOperations(foreignOwner),
         };
       },
+      createEventBusForeignSessionReadAuditSink(this.eventBus),
     );
   }
 

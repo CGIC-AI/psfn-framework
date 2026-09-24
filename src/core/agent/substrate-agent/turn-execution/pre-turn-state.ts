@@ -544,7 +544,7 @@ export async function prepareTurnIdentityState(input: {
     conversationScope = input.conversationScope;
   } else if (reflectionScopeHint?.kind === 'group') {
     conversationScope = sessionReads.resolveForeignSessionForTurn(
-      'reflection group conversation scope',
+      'reflection_group_conversation_scope',
       reflectionScopeHint.roomId,
       (reads) => {
         const recentSpeakers = reads.getRecentConversationSpeakers();

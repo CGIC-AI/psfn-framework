@@ -13,14 +13,23 @@ import type {
 } from '../multi-companion.js';
 import type { GatewayOperatorAlertDispatcher } from '../operator-alert-dispatcher.js';
 import type { GatewayRpcConnection } from '../transport.js';
-import type { GatewayPolicyDecision } from '../protocol.js';
+import type { GatewayPolicyDecision, RuntimeHealthResult } from '../protocol.js';
 import type { GatewayNtfyNotifier } from '../ntfy-notifier.js';
 import type { GatewayFleetPostureCache } from '../fleet-posture-cache.js';
 import type { GatewayIcpAutonomyBroker } from '../icp-autonomy-broker.js';
 import type { CanaryEgressGuard } from '../canary-egress-guard.js';
 import type { GatewayRuntimeHealthTracker } from '../runtime-health.js';
+import type { ApprovalBoundaryService } from '../approval-boundary.js';
+import type { GatewayInlineImageRetention } from '../inline-image-retention.js';
+import type { GatewayLLMRequestCancellation } from '../llm-request-cancellation.js';
+import type { GatewayMcpRequestCancellation } from '../methods/mcp.js';
+import type { GatewayMcpInvocationAuthority } from '../mcp/invocation-authority.js';
+import type { GatewayShardWorkloadRegistrar } from '../shard-workload-registrar.js';
+import type { SessionHmacKeyring } from '../../../persistence/journals/journal-utils.js';
+import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
+import type { ShardApprovalGrantAuthority } from '../../../system/capabilities/shard-approval-grants.js';
 import type { GatewayServerOptions } from './options.js';
-import type { GatewayConnectionStatus } from './connection-status.js';
+import type { GatewayConnectionRole, GatewayConnectionStatus } from './connection-status.js';
 
 export interface GatewayServerPorts {
   readonly connections: Set<GatewayRpcConnection>;
@@ -36,6 +45,25 @@ export interface GatewayServerPorts {
   readonly operatorAlertDispatcher: GatewayOperatorAlertDispatcher;
   readonly canaryEgressGuard: CanaryEgressGuard | undefined;
   readonly runtimeHealthTracker: GatewayRuntimeHealthTracker;
+  readonly inlineImageRetentionByConnection: Map<GatewayRpcConnection, GatewayInlineImageRetention>;
+  readonly llmRequestCancellationByConnection: Map<GatewayRpcConnection, GatewayLLMRequestCancellation>;
+  readonly mcpRequestCancellationByConnection: Map<GatewayRpcConnection, GatewayMcpRequestCancellation>;
+  readonly mcpInvocationAuthorityByConnection: Map<GatewayRpcConnection, GatewayMcpInvocationAuthority>;
+  readonly sessionHmacKeyring: SessionHmacKeyring;
+  readonly capabilityTierProvider: (companionId?: string) => CapabilityTier;
+  readonly approvalBoundary: ApprovalBoundaryService;
+  readonly shardApprovalGrants: ShardApprovalGrantAuthority | undefined;
+  readonly shardWorkloadRegistrar: GatewayShardWorkloadRegistrar | undefined;
+  readonly getRuntimeHealth: (companionId?: string) => RuntimeHealthResult;
+  readonly identifyConnection: (
+    conn: GatewayRpcConnection,
+    params: unknown,
+  ) => Promise<{ success: true; role: GatewayConnectionRole; companionId?: CompanionId }>;
+  readonly markConnectionReady: (conn: GatewayRpcConnection, params: unknown) => { success: true };
+  readonly recordConnectionPosture: (
+    conn: GatewayRpcConnection,
+    params: unknown,
+  ) => Promise<{ success: true }>;
   readonly icpAutonomyBroker: GatewayIcpAutonomyBroker | null;
   readonly wyomingShardRouting: WyomingShardRoutingConfig;
   readonly nextStreamRequestCounter: () => number;

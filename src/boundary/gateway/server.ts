@@ -18,7 +18,6 @@ import { GatewayInlineImageRetention } from './inline-image-retention.js';
 import { createSocketServer, createWebSocketRpcServer } from './transport.js';
 import {
   GatewayErrors,
-  type GatewayCredentialPresenceResult,
   type RuntimeHealthResult,
   type OperatorAlertResult,
   type NotifyNtfyParams,
@@ -35,8 +34,6 @@ import type { SessionHmacKeyring } from '../../persistence/journals/journal-util
 import { createComponentLogger } from '../../shared/logger.js';
 import { createCompanionDisplayIdentityResolver } from '../../shared/companion-display-identity.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
-import { registerGatewayMethods } from './methods/index.js';
-import type { GatewayMethodRuntime } from './methods/types.js';
 import { GatewayLLMRequestCancellation } from './llm-request-cancellation.js';
 import { GatewayMcpRequestCancellation } from './methods/mcp.js';
 import { GatewayMcpInvocationAuthority } from './mcp/invocation-authority.js';
@@ -54,15 +51,9 @@ import {
 } from './approval-boundary.js';
 import { GatewayRuntimeHealthTracker } from './runtime-health.js';
 import { evaluatePolicy } from './policy.js';
-import type {
-  ApiChatCompletionRpcResult,
-  ApiStreamDeltaNotification,
-} from '../../channels/api/types.js';
+import type { ApiChatCompletionRpcResult } from '../../channels/api/types.js';
 import { verifyCompanionAuthToken } from './companion-auth.js';
-import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 import { createCanaryEgressGuard, type CanaryEgressGuard } from './canary-egress-guard.js';
-import { readCanaryCarrier } from '../../core/cogsec/canary/egress-scan.js';
-import type { GatewayVisionIntakeScreener } from './intake/compose-screening.js';
 import type { GardenQueueName } from '../../shared/event-bus.js';
 import type {
   ConfirmationQueueEntry,
@@ -71,12 +62,8 @@ import type {
   ConfirmationResolveResult,
 } from '../../system/capabilities/confirmation-queue.js';
 import type { AuditSummaryEntry } from './audit-port.js';
-import { parseCompanionRelayPublishParams } from '../../channels/backplane/companion-relay/relay.js';
 import type { GatewayIcpAutonomyBroker } from './icp-autonomy-broker.js';
-import {
-  createGatewayIcpAutonomyBroker,
-  registerGatewayIcpAutonomyRpc,
-} from './icp-autonomy-rpc.js';
+import { createGatewayIcpAutonomyBroker } from './icp-autonomy-rpc.js';
 import {
   createCompanionId,
   type CompanionId,
@@ -85,10 +72,7 @@ import { SharedCompanionWorkspaceReader } from '../../persistence/workspaces/sha
 import { materializeGatewayAttachments } from './attachment-materialization.js';
 import type { TurnPerformanceEvent } from '../../shared/telemetry/turn-performance.js';
 import { resolveTierCapabilityTokens } from '../../system/capabilities/tiers.js';
-import {
-  ShardApprovalGrantAuthority,
-  type AuthenticatedShardWorkloadHandle,
-} from '../../system/capabilities/shard-approval-grants.js';
+import { ShardApprovalGrantAuthority } from '../../system/capabilities/shard-approval-grants.js';
 import { GatewayShardWorkloadRegistrar } from './shard-workload-registrar.js';
 import { GatewayFleetPostureCache } from './fleet-posture-cache.js';
 import type { GatewayServerOptions } from './server/options.js';
@@ -99,6 +83,7 @@ import { GatewayCompanionMessageLane } from './server/companion-message-lane.js'
 import { GatewaySharedSatelliteOrchestrator } from './server/shared-satellite-orchestration.js';
 import { GatewayConnectionScope } from './server/connection-scope.js';
 import { GatewayAuditTrail } from './server/audit-trail.js';
+import { GatewayConnectionRpcMethods } from './server/rpc-method-registration.js';
 import {
   GatewayCompanionViolations,
   type GatewayFleetConnectionSnapshot,
@@ -130,15 +115,6 @@ const INTERNAL_SESSION_INTEGRITY_METHODS = new Set([
   'session.hmac.sign',
   'session.hmac.verify',
 ]);
-const EMPTY_CREDENTIAL_PRESENCE: GatewayCredentialPresenceResult = {
-  discordToken: false,
-  apiKey: false,
-  adminToken: false,
-  openrouterApiKey: false,
-  importProcessingLocalApiKey: false,
-  falApiKey: false,
-  telegramBotToken: false,
-};
 
 export { requireGatewaySessionHmacKeyring, resolveGatewaySessionHmacKeyring } from './session-hmac-env.js';
 export type { GatewayServerOptions } from './server/options.js';
@@ -198,11 +174,6 @@ export class GatewayServer {
   private readonly approvalBoundary: ApprovalBoundaryService;
   private readonly canaryEgressGuard: CanaryEgressGuard | undefined;
   private readonly runtimeHealthTracker: GatewayRuntimeHealthTracker;
-  private readonly apiStreamListeners = new Map<
-    string,
-    Set<(text: string, companionId?: string) => void>
-  >();
-  private readonly apiStreamCompanionTargets = new Map<string, CompanionId>();
   private readonly multiCompanion: GatewayMultiCompanionConfig;
   private readonly fleetCompanionIds: ReadonlySet<CompanionId>;
   private readonly companionConnections = new Map<CompanionId, GatewayRpcConnection>();
@@ -221,6 +192,7 @@ export class GatewayServer {
   private readonly sharedSatellite: GatewaySharedSatelliteOrchestrator;
   private readonly connectionScope: GatewayConnectionScope;
   private readonly auditTrail: GatewayAuditTrail;
+  private readonly rpcMethods: GatewayConnectionRpcMethods;
 
   private companionDisplayLabel(companionId: string): string {
     return this.options.approvalParentLabelProvider?.(companionId)?.trim()
@@ -258,6 +230,19 @@ export class GatewayServer {
       ),
       operatorAlertDispatcher: this.operatorAlertDispatcher,
       canaryEgressGuard: this.canaryEgressGuard,
+      inlineImageRetentionByConnection: this.inlineImageRetentionByConnection,
+      llmRequestCancellationByConnection: this.llmRequestCancellationByConnection,
+      mcpRequestCancellationByConnection: this.mcpRequestCancellationByConnection,
+      mcpInvocationAuthorityByConnection: this.mcpInvocationAuthorityByConnection,
+      sessionHmacKeyring: this.sessionHmacKeyring,
+      capabilityTierProvider: this.capabilityTierProvider,
+      approvalBoundary: this.approvalBoundary,
+      shardApprovalGrants: this.shardApprovalGrants,
+      shardWorkloadRegistrar: this.shardWorkloadRegistrar,
+      getRuntimeHealth: companionId => this.getRuntimeHealth(companionId),
+      identifyConnection: (conn, params) => this.identifyConnection(conn, params),
+      markConnectionReady: (conn, params) => this.markConnectionReady(conn, params),
+      recordConnectionPosture: (conn, params) => this.recordConnectionPosture(conn, params),
       runtimeHealthTracker: this.runtimeHealthTracker,
       icpAutonomyBroker: this.icpAutonomyBroker,
       wyomingShardRouting: this.wyomingShardRouting,
@@ -499,6 +484,14 @@ export class GatewayServer {
     this.companionMessageLane = new GatewayCompanionMessageLane(ports);
     this.sharedSatellite = new GatewaySharedSatelliteOrchestrator(ports);
     this.connectionScope = new GatewayConnectionScope(ports);
+    this.rpcMethods = new GatewayConnectionRpcMethods({
+      ...ports,
+      auditTrail: this.auditTrail,
+      companionMessageLane: this.companionMessageLane,
+      connectionRouter: this.connectionRouter,
+      connectionScope: this.connectionScope,
+      sharedSatellite: this.sharedSatellite,
+    });
   }
 
   async notifyOperator(params: NotifyNtfyParams): Promise<OperatorAlertResult> {
@@ -510,348 +503,7 @@ export class GatewayServer {
     listener: (text: string, companionId?: string) => void,
     companionId?: string,
   ): () => void {
-    if (companionId) {
-      const exactCompanionId = createCompanionId(
-        companionId,
-        'API stream target companionId',
-      );
-      const existingTarget = this.apiStreamCompanionTargets.get(requestId);
-      if (existingTarget && existingTarget !== exactCompanionId) {
-        throw new Error(`API stream request ${requestId} is already bound to another companion`);
-      }
-      this.apiStreamCompanionTargets.set(requestId, exactCompanionId);
-    }
-    const listeners = this.apiStreamListeners.get(requestId) ?? new Set();
-    listeners.add(listener);
-    this.apiStreamListeners.set(requestId, listeners);
-    return () => {
-      listeners.delete(listener);
-      if (listeners.size === 0) {
-        this.apiStreamListeners.delete(requestId);
-        this.apiStreamCompanionTargets.delete(requestId);
-      }
-    };
-  }
-
-  private dispatchApiStreamDelta(
-    notification: ApiStreamDeltaNotification,
-    companionId?: string,
-  ): void {
-    const listeners = this.apiStreamListeners.get(notification.requestId);
-    if (!listeners) return;
-    for (const listener of listeners) {
-      listener(notification.text, companionId);
-    }
-  }
-
-  private registerMethods(target: JSONRPCServerAndClient, conn: GatewayRpcConnection): void {
-    const inlineImageRetention = new GatewayInlineImageRetention();
-    this.inlineImageRetentionByConnection.set(conn, inlineImageRetention);
-    const llmRequestCancellation = new GatewayLLMRequestCancellation();
-    this.llmRequestCancellationByConnection.set(conn, llmRequestCancellation);
-    const mcpRequestCancellation = new GatewayMcpRequestCancellation();
-    this.mcpRequestCancellationByConnection.set(conn, mcpRequestCancellation);
-    const mcpInvocationAuthority = new GatewayMcpInvocationAuthority();
-    this.mcpInvocationAuthorityByConnection.set(conn, mcpInvocationAuthority);
-    const resolveWorkspacePath = (): string => this.connectionScope.resolveConnectionWorkspacePath(conn);
-    const resolvePolicyConfig = (): PolicyConfig => this.connectionScope.resolveConnectionPolicyConfig(conn);
-    const resolveIntakeScreening = (): IntakeScreeningService | undefined =>
-      this.options.intakeScreeningProvider
-        ? this.options.intakeScreeningProvider(this.connectionRouter.authenticatedCompanionId(conn)) ?? undefined
-        : this.options.intakeScreening;
-    const resolveVisionIntake = (): GatewayVisionIntakeScreener | undefined =>
-      this.options.visionIntakeProvider
-        ? this.options.visionIntakeProvider(this.connectionRouter.authenticatedCompanionId(conn)) ?? undefined
-        : this.options.visionIntake;
-    const runtime: GatewayMethodRuntime = {
-      target,
-      llmProvider: this.options.llmProvider,
-      llmRequestCancellation,
-      mcpRequestCancellation,
-      mcpInvocationAuthority,
-      embeddingService: this.options.embeddingService,
-      ...(this.options.modelDiscovery ? { modelDiscovery: this.options.modelDiscovery } : {}),
-      discordAdapter: this.connectionScope.resolveConnectionDiscordDock(conn),
-      resolveChannelOutboundDock: channelType => (
-        this.connectionScope.resolveConnectionPluginOutboundDock(conn, channelType)
-      ),
-      ...(this.options.telegramDock ? { telegramDock: this.options.telegramDock } : {}),
-      gitOps: this.options.gitOps,
-      imageConfig: this.options.imageConfig,
-      ...(this.options.modelUsageRecorder ? { modelUsageRecorder: this.options.modelUsageRecorder } : {}),
-      ...(this.options.credentialVault ? { credentialVault: this.options.credentialVault } : {}),
-      get intakeScreening() { return resolveIntakeScreening(); },
-      ...(this.options.quarantinedArtifactGuard
-        ? { quarantinedArtifactGuard: this.options.quarantinedArtifactGuard }
-        : {}),
-      ...(this.options.personaMutationAttemptGuard
-        ? { personaMutationAttemptGuard: this.options.personaMutationAttemptGuard }
-        : {}),
-      get visionIntake() { return resolveVisionIntake(); },
-      inlineImageRetention,
-      get policyConfig() { return resolvePolicyConfig(); },
-      get workspacePath() { return resolveWorkspacePath(); },
-      personalWorkspaceIsolation: this.multiCompanion.enabled,
-      sessionHmacKeyring: this.sessionHmacKeyring,
-      // an52.3: bind the tier to THIS connection's authenticated companion so
-      // shard.backend.request (and any gated method) resolves the caller's own
-      // capability tier, not the gateway's single hydrated root.
-      capabilityTierProvider: () => this.capabilityTierProvider(this.connectionRouter.authenticatedCompanionId(conn)),
-      ...(this.options.capabilityGrantSnapshotProvider
-        ? {
-            capabilityGrantSnapshotProvider: () =>
-              this.options.capabilityGrantSnapshotProvider!(this.connectionRouter.authenticatedCompanionId(conn)),
-          }
-        : {}),
-      ...(this.options.shardBackendExecutor
-        ? { shardBackendExecutor: this.options.shardBackendExecutor }
-        : {}),
-      // 2h6q.3: per-dispatch authenticated shard lineage for gated methods.
-      resolveShardWorkloadForChannel: (channelId) =>
-        this.resolveShardWorkloadForGatedDispatch(conn, channelId),
-      approvalBoundary: this.approvalBoundary,
-      ...(this.options.kubeSelfManagement
-        ? { kubeSelfManagement: this.options.kubeSelfManagement }
-        : {}),
-      ...(this.options.contactLifecycleAuthority
-        ? { contactLifecycleAuthority: this.options.contactLifecycleAuthority }
-        : {}),
-      ...(this.options.systemDataWriter
-        ? { systemDataWriter: this.options.systemDataWriter }
-        : {}),
-      ...(this.options.mcpBroker ? { mcpBroker: this.options.mcpBroker } : {}),
-      authenticatedCompanionId: () => this.connectionRouter.authenticatedCompanionId(conn),
-      ...(this.options.welfareGrantVerifier
-        ? {
-            verifyWelfareGrant: (jobId: string, companionId: string) =>
-              this.options.welfareGrantVerifier!.verify(jobId, companionId),
-          }
-        : {}),
-      notifyRequester: (method, params) => this.connectionRouter.notifyRequestingConnection(conn, method, params),
-      listPendingConfirmations: () => this.approvalBoundary.listPendingConfirmations(),
-      listConfirmationHistory: () => this.approvalBoundary.listConfirmationHistory(),
-      resolveConfirmation: (params) => {
-        const companionId = this.connectionRouter.authenticatedCompanionId(conn);
-        if (!companionId) {
-          return Promise.resolve({
-            id: params.id,
-            status: 'not_found' as const,
-            message: 'Confirmation request not found.',
-            executed: false,
-          });
-        }
-        return this.approvalBoundary.resolveConfirmationForOwner(
-          companionId,
-          params,
-          { kind: 'companion', id: companionId },
-        );
-      },
-      sendNtfy: (params) => this.ntfyNotifier.send(params),
-      sendOperatorAlert: (params) => this.operatorAlertDispatcher.dispatch(params),
-      getRuntimeHealth: () => this.getRuntimeHealth(this.connectionRouter.authenticatedCompanionId(conn)),
-      getCredentialPresence: () => this.options.credentialPresence ?? EMPTY_CREDENTIAL_PRESENCE,
-      nextStreamRequestId: () => `gw-${++this.streamRequestCounter}`,
-      authorizeIcpConversationCorrelation: async (correlation) => {
-        if (!this.icpAutonomyBroker) {
-          throw new JSONRPCErrorException(
-            'ICP autonomy broker is not configured',
-            GatewayErrors.COMPANION_ROUTING_UNAVAILABLE,
-          );
-        }
-        const companionId = this.connectionRouter.requireAuthenticatedAgentCompanionId(conn);
-        return await this.icpAutonomyBroker.bindConversationCostCorrelation(
-          companionId,
-          correlation,
-        );
-      },
-      recordAuditEvent: async (entry) => {
-        if (this.options.auditStore) {
-          await this.options.auditStore.recordSummary(entry);
-        }
-      },
-      audited: (method, handler, paramsSummary) => this.auditTrail.audited(method, handler, paramsSummary),
-    };
-
-    registerGatewayMethods(runtime);
-    registerGatewayIcpAutonomyRpc({
-      target,
-      broker: this.icpAutonomyBroker,
-      requireAuthenticatedCompanionId: () => this.connectionRouter.requireAuthenticatedAgentCompanionId(conn),
-      audited: (method, handler, paramsSummary) => this.auditTrail.audited(method, handler, paramsSummary),
-    });
-    target.addMethod('gateway.client.identify', (params: unknown) => this.identifyConnection(conn, params));
-    target.addMethod('gateway.client.ready', (params: unknown) => this.markConnectionReady(conn, params));
-    target.addMethod(
-      'gateway.client.health',
-      (params: unknown) => this.recordConnectionPosture(conn, params),
-    );
-    target.addMethod('shard.workload.register', this.auditTrail.audited(
-      'shard.workload.register',
-      async (params: unknown) => {
-        const companionId = this.connectionRouter.requireAuthenticatedAgentCompanionId(conn);
-        if (!this.shardWorkloadRegistrar) {
-          throw new JSONRPCErrorException(
-            'Shard workload registration is unavailable',
-            GatewayErrors.POLICY_DENIED,
-          );
-        }
-        return this.shardWorkloadRegistrar.register(conn, companionId, params);
-      },
-      () => ({
-        companionId: this.connectionStatuses.get(conn)?.companionId ?? '(unidentified)',
-      }),
-    ));
-    target.addMethod('shard.workload.end', this.auditTrail.audited(
-      'shard.workload.end',
-      async (params: unknown) => {
-        this.connectionRouter.requireAuthenticatedAgentCompanionId(conn);
-        if (!this.shardWorkloadRegistrar) {
-          throw new JSONRPCErrorException(
-            'Shard workload registration is unavailable',
-            GatewayErrors.POLICY_DENIED,
-          );
-        }
-        return this.shardWorkloadRegistrar.end(conn, params);
-      },
-      () => ({
-        companionId: this.connectionStatuses.get(conn)?.companionId ?? '(unidentified)',
-      }),
-    ));
-    target.addMethod('companion.message.send', this.auditTrail.audited(
-      'companion.message.send',
-      (params: unknown) => this.companionMessageLane.handleCompanionMessageSend(conn, params),
-      (params: unknown) => ({
-        senderCompanionId: this.connectionStatuses.get(conn)?.companionId ?? '(unidentified)',
-        ...(isRecord(params) && typeof params.channelId === 'string' ? { channelId: params.channelId } : {}),
-        ...(isRecord(params) && typeof params.content === 'string' ? { contentLength: params.content.length } : {}),
-      }),
-    ));
-    target.addMethod('companion.message.report_failure', this.auditTrail.audited(
-      'companion.message.report_failure',
-      (params: unknown) => this.companionMessageLane.handleCompanionMessageFailureReport(conn, params),
-      (params: unknown) => ({
-        reportingCompanionId: this.connectionStatuses.get(conn)?.companionId ?? '(unidentified)',
-        ...(isRecord(params) && typeof params.channelId === 'string' ? { channelId: params.channelId } : {}),
-        ...(isRecord(params) && typeof params.messageId === 'string' ? { messageId: params.messageId } : {}),
-        ...(isRecord(params) && typeof params.reason === 'string' ? { reason: params.reason } : {}),
-      }),
-    ));
-    target.addMethod('api.stream.delta', (params: unknown) => {
-      if (!isRecord(params)
-        || typeof params.requestId !== 'string'
-        || typeof params.text !== 'string') {
-        this.companionViolations.alarmCompanionViolation(
-          'api_stream_delta_rejected',
-          'api.stream.delta rejected: notification shape is invalid',
-          {
-            senderCompanionId: this.connectionStatuses.get(conn)?.companionId ?? '(unidentified)',
-          },
-        );
-        return null;
-      }
-      const notification: ApiStreamDeltaNotification = {
-        requestId: params.requestId,
-        text: params.text,
-      };
-      if (this.multiCompanion.enabled
-        && !this.isConnectionAuthorizedForApiStream(conn, notification.requestId)) {
-        const expectedCompanionId = this.apiStreamCompanionTargets.get(notification.requestId)
-          ?? this.sharedSatellite.sharedSatelliteChatRequests.get(notification.requestId)
-          ?? this.multiCompanion.channelRouting.api;
-        this.companionViolations.alarmCompanionViolation(
-          'api_stream_delta_rejected',
-          'api.stream.delta rejected: sending connection is not the request-bound api companion',
-          {
-            senderCompanionId: this.connectionStatuses.get(conn)?.companionId ?? '(unidentified)',
-            routedApiCompanionId: expectedCompanionId ?? '(unrouted)',
-          },
-        );
-        return null;
-      }
-      // d269: streamed reply frames are main-reply egress. The agent attaches
-      // the session canary under the reserved carrier key (never forwarded);
-      // the guard scans the frame over a rolling per-request window and, in
-      // enforce mode, a hit closes the stream tap for the request.
-      const carrierToken = readCanaryCarrier(params);
-      if (this.canaryEgressGuard) {
-        const verdict = this.canaryEgressGuard.inspectApiStreamDelta({
-          requestId: notification.requestId,
-          text: notification.text,
-          token: carrierToken,
-        });
-        if (!verdict.forward) return null;
-      }
-      this.dispatchApiStreamDelta(
-        notification,
-        this.connectionStatuses.get(conn)?.companionId,
-      );
-      return null;
-    });
-    target.addMethod('companion.event.publish', async (params: unknown) => {
-      await this.dispatchCompanionEventPublish(conn, params);
-      return null;
-    });
-    target.addMethod('shared.workspace.list', this.auditTrail.audited(
-      'shared.workspace.list',
-      (params: unknown) => this.connectionScope.listSharedWorkspaceArtifacts(conn, params),
-      (params: unknown) => ({
-        ...(isRecord(params) && typeof params.cursor === 'string'
-          ? { cursor: params.cursor }
-          : {}),
-      }),
-    ));
-    target.addMethod('shared.workspace.read', this.auditTrail.audited(
-      'shared.workspace.read',
-      (params: unknown) => this.connectionScope.readSharedWorkspaceArtifact(conn, params),
-      (params: unknown) => ({
-        ...(isRecord(params) && typeof params.artifactPath === 'string'
-          ? { artifactPath: params.artifactPath }
-          : {}),
-      }),
-    ));
-  }
-
-  /**
-   * Agent-forwarded redacted companion events (tool activity, artifacts,
-   * emotion snapshots). The params are re-validated and payloads reconstructed
-   * field-by-field at this process boundary; malformed frames are rejected,
-   * never partially published. Approval events cannot arrive here — they
-   * originate inside the gateway approval boundary.
-   */
-  private async dispatchCompanionEventPublish(
-    conn: GatewayRpcConnection,
-    params: unknown,
-  ): Promise<void> {
-    const parsed = parseCompanionRelayPublishParams(params);
-    const companionId = this.connectionStatuses.get(conn)?.companionId;
-    if (this.multiCompanion.enabled && !companionId) {
-      throw new Error('companion.event.publish requires an authenticated companion identity');
-    }
-    if (parsed.kind === 'tool.activity') {
-      await this.options.eventBus.emit('companion.tool.activity', {
-        payload: parsed.payload,
-        ...(parsed.channelId ? { channelId: parsed.channelId } : {}),
-        ...(companionId ? { companionId } : {}),
-        timestamp: Date.now(),
-      });
-      return;
-    }
-    if (parsed.kind === 'emotion.snapshot') {
-      await this.options.eventBus.emit('companion.emotion.snapshot', {
-        payload: parsed.payload,
-        ...(parsed.channelId ? { channelId: parsed.channelId } : {}),
-        ...(companionId ? { companionId } : {}),
-        timestamp: Date.now(),
-      });
-      return;
-    }
-    await this.options.eventBus.emit('companion.artifact.created', {
-      payload: parsed.payload,
-      ...(parsed.preview ? { preview: parsed.preview } : {}),
-      ...(parsed.channelId ? { channelId: parsed.channelId } : {}),
-      ...(companionId ? { companionId } : {}),
-      timestamp: Date.now(),
-    });
+    return this.rpcMethods.subscribeApiStream(requestId, listener, companionId);
   }
 
   /**
@@ -970,75 +622,6 @@ export class GatewayServer {
       && Object.keys(this.multiCompanion.discordAccounts).length > 0;
   }
 
-  private isConnectionAuthorizedForApiStream(
-    conn: GatewayRpcConnection,
-    requestId: string,
-  ): boolean {
-    const routedCompanionId = this.apiStreamCompanionTargets.get(requestId)
-      ?? this.sharedSatellite.sharedSatelliteChatRequests.get(requestId)
-      ?? this.multiCompanion.channelRouting.api;
-    if (!routedCompanionId) {
-      return false;
-    }
-    return this.connectionStatuses.get(conn)?.companionId === routedCompanionId;
-  }
-
-  /**
-   * 2h6q.3: bind a gated dispatch to its authenticated shard workload. The
-   * runtime-stamped correlation channel id is only a lookup key into the
-   * server-owned workload registry; every authority value (parent binding,
-   * generation, frozen derived access) comes from registration state. Fail
-   * closed: a recognizably shard-originated channel that cannot be bound to
-   * a live workload of THIS connection's authenticated companion is denied —
-   * it must never fall through to the parent's own (possibly autonomous)
-   * authority. Recognition is registry-backed, not just prefix-based:
-   * satellite/Wyoming shard workloads register arbitrary channel schemes, so
-   * the registry's ever-hosted tombstones (live, ended, or superseded
-   * generations) deny alongside the `shard:` scheme rule, which alone covers
-   * the no-registry configuration.
-   */
-  private resolveShardWorkloadForGatedDispatch(
-    conn: GatewayRpcConnection,
-    channelId: string | undefined,
-  ): {
-    workload: AuthenticatedShardWorkloadHandle;
-    identity: import('../../system/capabilities/shard-approval-grant-contracts.js').AuthenticatedShardWorkloadIdentity;
-  } | undefined {
-    const normalized = channelId?.trim();
-    if (!normalized) {
-      return undefined;
-    }
-    const registry = this.options.shardApprovalWorkloads;
-    const companionId = this.connectionRouter.authenticatedCompanionId(conn);
-    if (registry && companionId) {
-      // May throw on ambiguous channel lineage — ambiguity is a denial.
-      const workload = registry.resolveWorkloadForChannel(companionId, normalized);
-      if (workload) {
-        if (!this.shardApprovalGrants) {
-          throw new JSONRPCErrorException(
-            'Shard-originated request denied: authenticated shard authority is unavailable',
-            GatewayErrors.POLICY_DENIED,
-          );
-        }
-        return {
-          workload,
-          identity: this.shardApprovalGrants.resolveAuthenticatedWorkload(workload),
-        };
-      }
-    }
-    const shardRecognizable = normalized.startsWith('shard:')
-      || (registry !== undefined
-        && companionId !== undefined
-        && registry.hasHostedWorkloadForChannel(companionId, normalized));
-    if (shardRecognizable) {
-      throw new JSONRPCErrorException(
-        'Shard-originated request denied: no live authenticated shard workload matches this dispatch',
-        GatewayErrors.POLICY_DENIED,
-      );
-    }
-    return undefined;
-  }
-
   private notifyCompanionGardenQueueChanged(
     companionId: string,
     queue: GardenQueueName,
@@ -1111,7 +694,7 @@ export class GatewayServer {
       new JSONRPCServer(),
       new JSONRPCClient((request) => { conn.send(request); }),
     );
-    this.registerMethods(serverAndClient, conn);
+    this.rpcMethods.registerMethods(serverAndClient, conn);
     this.rpcClients.set(conn, serverAndClient);
     if (!this.multiCompanion.enabled) {
       this.connectionLifecycle.transitionConnectionState(conn, 'ready', 'rpc_registered');

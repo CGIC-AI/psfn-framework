@@ -234,6 +234,7 @@ export const POSTGRES_PARITY_MATRIX = [
     ],
     codeReferences: [
       'src/faculties/memory/postgres-store.ts',
+      'src/faculties/memory/postgres-store/l2-read-model.ts',
       'src/faculties/memory/postgres-store/memory-deletion.ts',
       'src/faculties/memory/postgres-store/memory-links.ts',
       'src/faculties/memory/postgres-store/reviews.ts',

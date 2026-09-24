@@ -96,11 +96,27 @@ function assistantText(message: AgentMessage): string {
 describe('golden: system notes never render as unprefixed companion thoughts', () => {
   describe('model-facing turn path (convertToLlm)', () => {
     it('pins the exact assistant-side rendering of a system note', () => {
-      const [rendered] = convertToLlm([systemNoteMessage(ORIGINAL_INCIDENT_NOTE)]);
+      const [rendered] = convertToLlm([
+        systemNoteMessage(ORIGINAL_INCIDENT_NOTE),
+        { role: 'assistant', content: [{ type: 'text', text: 'ok' }], timestamp: NOW } as AssistantMessage,
+      ]);
+      expect(rendered?.role).toBe('assistant');
       expect((rendered as AssistantMessage).content).toEqual([
         { type: 'text', text: `${GOLDEN_SYSTEM_NOTE_PREFIX}${ORIGINAL_INCIDENT_NOTE}` },
       ]);
       // messageClass stays systemNote so downstream never treats it as speech.
+      expect((rendered as { messageClass?: string }).messageClass).toBe(
+        MESSAGE_CLASSES.systemNote,
+      );
+    });
+
+    it('pins the exact prefixed user-role trigger rendering of a trailing system note (3pye5)', () => {
+      // A self-directed turn ends on its trigger note; strict endpoints reject a
+      // trailing assistant message, so the trigger is the user-role turn. The
+      // prefix -- the safety property -- is byte-identical.
+      const [rendered] = convertToLlm([systemNoteMessage(ORIGINAL_INCIDENT_NOTE)]);
+      expect(rendered?.role).toBe('user');
+      expect((rendered as UserMessage).content).toBe(`${GOLDEN_SYSTEM_NOTE_PREFIX}${ORIGINAL_INCIDENT_NOTE}`);
       expect((rendered as { messageClass?: string }).messageClass).toBe(
         MESSAGE_CLASSES.systemNote,
       );
@@ -185,9 +201,9 @@ describe('golden: system notes never render as unprefixed companion thoughts', (
       expect(message.role).not.toBe('assistant');
 
       const [rendered] = convertToLlm([message]);
-      expect((rendered as AssistantMessage).content).toEqual([
-        { type: 'text', text: `${GOLDEN_SYSTEM_NOTE_PREFIX}${ORIGINAL_INCIDENT_NOTE}` },
-      ]);
+      // Trailing trigger note: user-role, never an assistant thought, prefixed.
+      expect(rendered?.role).toBe('user');
+      expect((rendered as UserMessage).content).toBe(`${GOLDEN_SYSTEM_NOTE_PREFIX}${ORIGINAL_INCIDENT_NOTE}`);
     });
   });
 

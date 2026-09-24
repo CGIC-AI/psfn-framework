@@ -5608,9 +5608,10 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const providerWireMessages = (promptContext?.providerObservability as {
       providerWireMessages?: Array<{ role: string; source: string; content: string }>;
     } | undefined)?.providerWireMessages;
+    // The trailing runtime-authored trigger is the prefixed user-role turn (3pye5).
     expect(providerWireMessages?.filter(providerMessage => providerMessage.source === 'message')).toEqual([
       expect.objectContaining({
-        role: 'assistant',
+        role: 'user',
         content: expect.stringContaining(
           '[System note] [SYSTEM: Runtime] tool notify is unavailable; choose another route',
         ),

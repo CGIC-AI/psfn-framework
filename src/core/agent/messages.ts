@@ -245,6 +245,34 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
     }
   }
 
+  return renderTrailingSystemNoteAsTurnTrigger(result);
+}
+
+/**
+ * A self-directed internal turn (free time, exploration, reflection) is
+ * triggered by a system note, so its conversation would END on the
+ * assistant-side note with no user turn. Strict OpenAI-compatible endpoints
+ * (z.ai coding plan: 400 code 1214) reject a request whose last message is an
+ * assistant message, so the trailing note -- and only a trailing one -- is sent
+ * as the user-role turn trigger. Its attribution prefix and content are
+ * unchanged, so it still reads as a runtime note rather than Participant speech
+ * (psfn-framework-3pye5).
+ */
+function renderTrailingSystemNoteAsTurnTrigger(result: Message[]): Message[] {
+  const last = result.at(-1) as (Message & { messageClass?: string }) | undefined;
+  if (!last || last.role !== 'assistant' || last.messageClass !== MESSAGE_CLASSES.systemNote) {
+    return result;
+  }
+  const text = (last as PiAssistantMessage).content
+    .filter((block): block is { type: 'text'; text: string } => block.type === 'text')
+    .map(block => block.text)
+    .join('');
+  result[result.length - 1] = {
+    role: 'user',
+    content: text,
+    timestamp: last.timestamp,
+    messageClass: MESSAGE_CLASSES.systemNote,
+  } as ClassifiedUserMessage;
   return result;
 }
 

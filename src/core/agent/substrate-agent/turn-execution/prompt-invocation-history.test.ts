@@ -46,7 +46,7 @@ describe('rebuildProviderWireMessagesForPrompt', () => {
     expect(JSON.stringify(messages)).not.toContain(rawImageBytes);
   });
 
-  it('shows the canonical assistant-side conversion of a current system note', () => {
+  it('shows a current (trailing) system note as the prefixed user-role turn trigger', () => {
     const currentSystemNote: SystemNoteMessage = {
       role: 'custom',
       type: 'systemNote',
@@ -57,7 +57,7 @@ describe('rebuildProviderWireMessagesForPrompt', () => {
 
     expect(rebuildProviderWireMessagesForPrompt([], [], currentSystemNote)).toEqual([
       {
-        role: 'assistant',
+        role: 'user',
         source: 'message',
         content: expect.stringContaining('[System note] [SYSTEM: Scheduler] heartbeat run'),
       },

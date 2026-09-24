@@ -92,6 +92,7 @@ spec:
               value: {{ include "psfn.image" (dict "root" $root "image" $root.Values.workloads.gateway.image) | quote }}
             {{- end }}
             {{- include "psfn.helmBackupImageEnv" $ctx | nindent 12 }}
+            {{- include "psfn.agentEgressIsolationEnv" $root | nindent 12 }}
             - name: GATEWAY_RPC_ENDPOINT
               value: {{ include "psfn.gatewayRpcUrlForClient" $root | quote }}
             - name: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN

@@ -1356,3 +1356,15 @@ true
 {{ toJson (default (list) .Values.satelliteHub.homeAssistant.devices) }}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Launcher evidence for the agent egress-isolation proof (psfn-framework-hrcx5).
+Declared only when the chart renders the agent NetworkPolicy; without it the
+agent's startup guard cannot prove isolation and fails closed.
+*/}}
+{{- define "psfn.agentEgressIsolationEnv" -}}
+{{- if .Values.networkPolicy.enabled }}
+- name: PSFN_AGENT_EGRESS_ISOLATION
+  value: kubernetes-network-policy
+{{- end }}
+{{- end -}}

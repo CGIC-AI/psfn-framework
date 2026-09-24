@@ -107,10 +107,9 @@ export const CATALOG_BOUNDARY_TOOL_CONTRACTS = {
     purpose: 'Retrieve external web material or perform small-scope discovery through the configured backend.',
     actions: [
       action('fetch', ['target'], ['prompt']),
-      action('browse', ['target'], ['prompt']),
       action('search', ['target'], ['max_urls']),
     ],
-    output: 'It returns external untrusted content, with target interpreted as a URL for fetch/browse and a query for search.',
+    output: 'It returns external untrusted content, with target interpreted as a URL for fetch and a query for search.',
     guidance: 'Do not use it for local files, transcripts, or remembered facts; use fs, session, or memory.',
     example: { action: 'fetch', target: 'https://example.com/reference' },
   },

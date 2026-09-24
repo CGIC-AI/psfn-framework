@@ -137,8 +137,7 @@ const TOOL_HINTS: Readonly<Partial<Record<string, {
     ],
     actions: {
       search: ['web search', 'search web', 'internet search', 'current information', 'latest'],
-      fetch: ['fetch url', 'read url', 'open url', 'read page'],
-      browse: ['browse', 'crawler', 'crawl page'],
+      fetch: ['fetch url', 'read url', 'open url', 'read page', 'browse', 'crawl page'],
     },
   },
   fs: {
@@ -215,8 +214,7 @@ const ACTION_HINTS: Readonly<Partial<Record<string, readonly string[]>>> = {
   search: ['search', 'find', 'look up', 'lookup', 'discover'],
   read: ['read', 'open', 'show', 'inspect'],
   list: ['list', 'recent', 'show all'],
-  fetch: ['fetch', 'open', 'read'],
-  browse: ['browse', 'crawl'],
+  fetch: ['fetch', 'open', 'read', 'browse', 'crawl'],
   write: ['write', 'save', 'create'],
   edit: ['edit', 'modify', 'patch'],
   generate: ['generate', 'create', 'make'],

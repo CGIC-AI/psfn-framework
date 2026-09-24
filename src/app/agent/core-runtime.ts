@@ -922,7 +922,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     searchQueryJson: createWebSearchQueryJson(llmProvider),
     // Explicit backend selection (bead htm9.10): when OpenRouter
     // web tools are configured, the search action uses the gateway web.search
-    // server-tool path instead of the local-crawler LLM planner.
+    // server-tool path instead of the self-hosted LLM planner + fetch loop.
     backend: config.openRouterWebTools?.enabled ? 'openrouter' : 'self_hosted',
   });
   registerFilesystemTools(agentLoop, new GatewayFilesystemOps(gatewayOps), {

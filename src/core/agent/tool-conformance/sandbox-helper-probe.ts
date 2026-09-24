@@ -70,7 +70,6 @@ export const SANDBOX_HELPER_CATALOG: readonly SandboxHelperCatalogEntry[] = [
   { name: 'list_files', gate: 'always' },
   { name: 'web', gate: 'always' },
   { name: 'web_fetch', gate: 'always' },
-  { name: 'crawler_fetch', gate: 'always' },
   { name: 'web_research', gate: 'always' },
   { name: 'repo_apply_patch', gate: 'repo_mutation' },
   { name: 'repo_commit', gate: 'repo_mutation' },

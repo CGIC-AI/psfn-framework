@@ -8,7 +8,7 @@ import { textResult, textResultFromError } from '../../../core/tools/results.js'
 import { planWebSearchUrls, type WebSearchQueryJson } from './search.js';
 
 const WEB_FETCH_LANES = ['default', 'discovery'] as const;
-const WEB_ACTIONS = ['fetch', 'browse', 'search'] as const;
+const WEB_ACTIONS = ['fetch', 'search'] as const;
 
 type WebAction = (typeof WEB_ACTIONS)[number];
 
@@ -19,6 +19,11 @@ function normalizeAction(value: unknown): WebAction {
   }
   if ((WEB_ACTIONS as readonly string[]).includes(action)) {
     return action as WebAction;
+  }
+  if (action === 'browse') {
+    // psfn-framework-9zgfd: browse was the local_crawler lane; with that lane
+    // gone it duplicated fetch, so it is retired rather than kept as an alias.
+    throw new Error('action=browse was retired; use action=fetch (the same guarded fetch under the gateway URL policy).');
   }
   throw new Error(`action is required. Supported actions: ${WEB_ACTIONS.join(', ')}.`);
 }
@@ -81,10 +86,10 @@ export function createWebTool(
         },
       )),
       target: Type.Optional(Type.String({
-        description: 'Absolute URL for fetch/browse, or a research query for search.',
+        description: 'Absolute URL for fetch, or a research query for search.',
       })),
       prompt: Type.Optional(Type.String({
-        description: 'Optional extraction hint for fetch/browse. Usually leave unset unless you need a focused read.',
+        description: 'Optional extraction hint for fetch. Usually leave unset unless you need a focused read.',
       })),
       max_urls: Type.Optional(Type.Integer({
         minimum: 1,
@@ -103,10 +108,6 @@ export function createWebTool(
 
         switch (action) {
           case 'fetch':
-            return textResult(await ops.fetch(target, {
-              ...(prompt ? { prompt } : {}),
-            }));
-          case 'browse':
             return textResult(await ops.fetch(target, {
               ...(prompt ? { prompt } : {}),
             }));

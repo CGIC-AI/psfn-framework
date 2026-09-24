@@ -155,7 +155,6 @@ export class REPLSandbox {
       list_files: toolchain.list_files,
       web: web.web,
       web_fetch: web.web_fetch,
-      crawler_fetch: web.crawler_fetch,
       web_research: web.web_research,
       ...(allowRepoMutation
         ? {

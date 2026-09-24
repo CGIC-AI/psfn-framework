@@ -150,11 +150,11 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     domain: 'boundary',
     exposure: 'core',
     description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.web,
-    actions: ['fetch', 'browse', 'search'],
+    actions: ['fetch', 'search'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [
       retiredAlias('web_fetch', 'web', 'hidden', 'fetch', 'Web fetching belongs on web.'),
-      retiredAlias('crawler_fetch', 'web', 'hidden', 'browse', 'Crawler-lane browsing belongs on web.'),
+      retiredAlias('crawler_fetch', 'web', 'hidden', 'fetch', 'The crawler lane is gone; page fetching belongs on web.'),
       retiredAlias('web_research', 'web', 'hidden', 'search', 'Small-scope web research belongs on web.'),
     ],
   },

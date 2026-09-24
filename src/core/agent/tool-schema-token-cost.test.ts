@@ -96,13 +96,15 @@ describe('full callable catalog schema token cost', () => {
       // psfn-framework-vcq8v.4 replaced notify outreach_list/outreach_choose
       // (opportunity_id, disposition, destination_id) with outreach_send and
       // outreach_later: -659 bytes / -115 tokens after descriptions.
-      beforeTokens: 20_156,
-      afterTokens: 24_465,
-      deltaTokens: 4_309,
-      beforeBytes: 94_096,
-      afterBytes: 113_257,
-      providerSchemaHash: 'a7c9245efcb9b9f6d07af4c0fc0ecf6842b0718c2503891e7c3c4eb7257da43a',
-      parameterSchemaHash: 'be2a1c6b02af0f255ba6c8e821b3eeae0ba7f72ef1f0ec7682d07e9c35699fcd',
+      // psfn-framework-9zgfd retired the web browse action (duplicate of fetch):
+      // -49 bytes / -10 tokens before, -108 bytes / -23 tokens after.
+      beforeTokens: 20_146,
+      afterTokens: 24_442,
+      deltaTokens: 4_296,
+      beforeBytes: 94_047,
+      afterBytes: 113_149,
+      providerSchemaHash: '2e40dff496375e9ec558e3b560054a57558c3a521538238144e09dd8bb0dc2f5',
+      parameterSchemaHash: '731e2a57d151e336ff23b4e801c5acd905c738ab8fa15b3b7c302db541969624',
     });
 
     // The additional description tokens affect an uncached request. A stable

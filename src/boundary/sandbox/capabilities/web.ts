@@ -10,7 +10,7 @@ import { planWebSearchUrls } from '../../integrations/web/search.js';
 
 export interface WebCapabilities {
   web(
-    action: 'fetch' | 'browse',
+    action: 'fetch',
     target: string,
     options?: { prompt?: string },
   ): Promise<string>;
@@ -20,7 +20,6 @@ export interface WebCapabilities {
     options?: { maxUrls?: number },
   ): Promise<Array<{ url: string; content: string }>>;
   web_fetch: (url: string, prompt?: string) => Promise<string>;
-  crawler_fetch: (url: string, prompt?: string) => Promise<string>;
   web_research: (query: string, maxUrls?: number) => Promise<Array<{ url: string; content: string }>>;
 }
 
@@ -90,7 +89,7 @@ export function createWebCapabilities(options: CreateWebCapabilitiesOptions): We
   };
 
   async function web(
-    action: 'fetch' | 'browse',
+    action: 'fetch',
     target: string,
     options?: { prompt?: string },
   ): Promise<string>;
@@ -100,7 +99,7 @@ export function createWebCapabilities(options: CreateWebCapabilitiesOptions): We
     options?: { maxUrls?: number },
   ): Promise<Array<{ url: string; content: string }>>;
   async function web(
-    action: 'fetch' | 'browse' | 'search',
+    action: 'fetch' | 'search',
     target: string,
     options?: { prompt?: string; maxUrls?: number },
   ): Promise<string | Array<{ url: string; content: string }>> {
@@ -115,20 +114,14 @@ export function createWebCapabilities(options: CreateWebCapabilitiesOptions): We
           },
           options?.prompt,
         );
-      case 'browse':
-        return await fetchViaGateway(
-          target,
-          {
-            unavailable: 'Web browse unavailable: requires gateway web.fetch policy and audit path',
-            missingTarget: 'Web browse error: URL is required',
-            failurePrefix: 'Web browse error',
-          },
-          options?.prompt,
-        );
       case 'search':
         return await searchWeb(target, options?.maxUrls);
       default:
-        return [`[Web error: unsupported action "${String(action)}"]`].join('');
+        // psfn-framework-9zgfd: "browse" duplicated "fetch" once the crawler
+        // lane was removed; it is retired, not aliased.
+        return String(action) === 'browse'
+          ? '[Web error: action "browse" was retired; use web("fetch", url)]'
+          : `[Web error: unsupported action "${String(action)}"]`;
     }
   }
 
@@ -140,15 +133,6 @@ export function createWebCapabilities(options: CreateWebCapabilitiesOptions): We
         unavailable: 'Web fetch unavailable: requires gateway web.fetch policy and audit path',
         missingTarget: 'Web fetch error: URL is required',
         failurePrefix: 'Web fetch error',
-      },
-      prompt,
-    ),
-    crawler_fetch: async (url: string, prompt?: string): Promise<string> => fetchViaGateway(
-      url,
-      {
-        unavailable: 'Web browse unavailable: requires gateway web.fetch policy and audit path',
-        missingTarget: 'Web browse error: URL is required',
-        failurePrefix: 'Web browse error',
       },
       prompt,
     ),

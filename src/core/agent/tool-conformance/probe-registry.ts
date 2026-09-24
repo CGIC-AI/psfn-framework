@@ -252,7 +252,6 @@ export const TOOL_CONFORMANCE_ACTION_REGISTRY:
   },
   web: {
     fetch: SCHEMA_ASSERT,
-    browse: SCHEMA_ASSERT,
     search: SCHEMA_ASSERT,
   },
   mcp: {

@@ -12,6 +12,10 @@ import { parseExactPostgresCredential } from '../../shared/utils/postgres-creden
 import { assertPostgresRolesAreLeastPrivilege } from '../postgres/role-posture.js';
 import { grantBackupReadAccessToTenantSchema } from '../postgres/backup-schema-access.js';
 import {
+  describeSchemaGranteeResidue,
+  readSchemaGranteeResidue,
+} from '../postgres/schema-grantee-residue.js';
+import {
   partitionRetiredGrantees,
   revokeRetiredFleetGranteesFromSchema,
   type PostgresRetiredGranteeClient,
@@ -557,9 +561,14 @@ export async function assertExactSchemaGrantees(
     }
   }
   if (partition.unexpected.length > 0) {
+    const residue = describeSchemaGranteeResidue(
+      input.schema,
+      await readSchemaGranteeResidue(client, input.schema, partition.unexpected),
+    );
     throw new Error(
       `Fleet auth family restore schema ${input.schema} has unexpected PostgreSQL grantees: `
-      + partition.unexpected.join(', '),
+      + partition.unexpected.join(', ')
+      + (residue ? `. ${residue}` : ''),
     );
   }
 }

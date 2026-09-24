@@ -1347,17 +1347,17 @@
       "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
-      "file": "src/boundary/gateway/server.ts",
+      "file": "src/boundary/gateway/server/companion-message-send-params.ts",
       "name": "COMPANION_MESSAGE_MAX_AUTHOR_NAME_CHARS",
       "value": "200"
     },
     {
-      "file": "src/boundary/gateway/server.ts",
+      "file": "src/boundary/gateway/server/companion-message-send-params.ts",
       "name": "COMPANION_MESSAGE_MAX_CONTENT_CHARS",
       "value": "65_536"
     },
     {
-      "file": "src/boundary/gateway/server.ts",
+      "file": "src/boundary/gateway/server/companion-message-send-params.ts",
       "name": "COMPANION_MESSAGE_MAX_REPLY_TO_ID_CHARS",
       "value": "256"
     },
@@ -1367,7 +1367,7 @@
       "value": "1_000"
     },
     {
-      "file": "src/boundary/gateway/server.ts",
+      "file": "src/boundary/gateway/server/rpc-frame-validation.ts",
       "name": "FRAME_PREVIEW_LIMIT",
       "value": "200"
     },

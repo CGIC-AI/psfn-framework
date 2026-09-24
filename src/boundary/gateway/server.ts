@@ -1,4 +1,4 @@
-import { assertNoUnknownKeys, isRecord } from '../../shared/utils/types.js';
+import { isRecord } from '../../shared/utils/types.js';
 // ── Gateway Server ──
 // Host-side process that holds secrets and proxies all external interactions.
 
@@ -11,21 +11,18 @@ import {
   JSONRPCServerAndClient,
   JSONRPCErrorException,
 } from 'json-rpc-2.0';
-import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import { IcpDyadLifecycleConflictError } from '../../core/icp/autonomy-store-ports.js';
-import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import { DEFAULT_COMPANION_ID } from '../../core/identity/companion-naming.js';
 import type { ChannelOutboundDock } from '../../channels/backplane/types.js';
 import type { CapabilityTier, WyomingShardRoutingConfig } from '../../system/config/runtime-config-contracts.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { SatelliteRoutingMetadata } from '../../shared/contracts/satellite-registry.js';
-import type { GatewayRpcConnection, GatewayRpcEndpoint } from './transport.js';
+import type { GatewayRpcConnection } from './transport.js';
 import { GatewayInlineImageRetention } from './inline-image-retention.js';
 import { createSocketServer, createWebSocketRpcServer } from './transport.js';
 import {
   GatewayErrors,
   type CompanionMessageDeliveryFailureNotification,
-  type CompanionMessageSendParams,
   type CompanionMessageFailureReportResult,
   type CompanionMessageSendResult,
   type GatewayCredentialPresenceResult,
@@ -44,23 +41,17 @@ import {
   type GatewayMultiCompanionConfig,
 } from './multi-companion.js';
 import type { ChannelPluginAccountRoute } from '../../channels/plugins/types.js';
-import type { GatewayCompanionChannelLane } from './companion-channels.js';
 import { COMPANION_CHANNEL_TYPE } from '../../shared/contracts/companion-channels.js';
-import type { GitOperations } from '../integrations/git/ops.js';
-import type { ImageRuntimeConfig } from '../../primitives/images/types.js';
-import type { ModelDiscoveryBackend } from '../../primitives/llm/discovery.js';
-import type { GatewayAuditStorePort } from './audit-port.js';
 import type { SessionHmacKeyring } from '../../persistence/journals/journal-utils.js';
 import { resolvePersonalSkillsDir } from '../../persistence/layout.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { createCompanionDisplayIdentityResolver } from '../../shared/companion-display-identity.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { registerGatewayMethods } from './methods/index.js';
-import type { GatewayMethodRuntime, ShardBackendExecutor } from './methods/types.js';
+import type { GatewayMethodRuntime } from './methods/types.js';
 import { GatewayLLMRequestCancellation } from './llm-request-cancellation.js';
 import { GatewayMcpRequestCancellation } from './methods/mcp.js';
 import { GatewayMcpInvocationAuthority } from './mcp/invocation-authority.js';
-import type { WelfareGrantVerifier } from './welfare-grant-verifier.js';
 import type { PolicyConfig } from './policy.js';
 import {
   DEFAULT_AGENT_TIMEOUT_MS,
@@ -69,13 +60,9 @@ import {
 } from './voice-stream-request.js';
 import { GatewayNtfyNotifier, type GatewayNtfyConfig } from './ntfy-notifier.js';
 import { GatewayOperatorAlertDispatcher } from './operator-alert-dispatcher.js';
-import type {
-  ConfirmationEscalationProducerOptions,
-} from '../../system/capabilities/confirmation-escalation-producer.js';
 import {
   createGatewayApprovalBoundaryService,
   type ApprovalBoundaryService,
-  type GatewayConfirmationConfig,
 } from './approval-boundary.js';
 import { GatewayRuntimeHealthTracker } from './runtime-health.js';
 import { evaluatePolicy } from './policy.js';
@@ -84,24 +71,19 @@ import type {
   ApiChatCompletionRpcResult,
   ApiStreamDeltaNotification,
 } from '../../channels/api/types.js';
-import type { ModelUsageRecorder } from '../../shared/telemetry/model-usage.js';
-import type { CredentialVaultPort } from '../custody/credential-vault.js';
 import { verifyCompanionAuthToken } from './companion-auth.js';
 import {
   CompanionDeliveryFailureReceipts,
   parseCompanionMessageFailureReport,
 } from './companion-delivery-failures.js';
 import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
-import type { CogSecMode } from '../../shared/contracts/cogsec-mode.js';
-import type { QuarantinedArtifactAccessGuard } from '../../core/cogsec/intake/quarantined-artifact-guard.js';
-import type { CogSecEventStore } from '../../core/cogsec/events.js';
 import { createCanaryEgressGuard, type CanaryEgressGuard } from './canary-egress-guard.js';
 import {
   readCanaryCarrier,
   stripCanaryCarrier,
 } from '../../core/cogsec/canary/egress-scan.js';
 import type { GatewayVisionIntakeScreener } from './intake/compose-screening.js';
-import type { EventBus, GardenQueueName } from '../../shared/event-bus.js';
+import type { GardenQueueName } from '../../shared/event-bus.js';
 import type {
   ConfirmationQueueEntry,
   ConfirmationQueueHistoryEntry,
@@ -110,35 +92,23 @@ import type {
 } from '../../system/capabilities/confirmation-queue.js';
 import type { AuditSummaryEntry } from './audit-port.js';
 import { parseCompanionRelayPublishParams } from '../../channels/backplane/companion-relay/relay.js';
-import type { IcpSharedAutonomyStorePort } from '../../core/icp/autonomy-store-ports.js';
-import type { GatewayIcpInitiationPolicyAuthority } from './icp-initiation-policy-authority.js';
 import type { GatewayIcpAutonomyBroker } from './icp-autonomy-broker.js';
 import {
   createGatewayIcpAutonomyBroker,
   registerGatewayIcpAutonomyRpc,
 } from './icp-autonomy-rpc.js';
-import {
-  deriveIcpTransportMessageId,
-  parseIcpConversationCorrelation,
-  type IcpConversationCorrelation,
-} from '../../shared/contracts/icp-autonomy.js';
+import { deriveIcpTransportMessageId } from '../../shared/contracts/icp-autonomy.js';
 import {
   createCompanionId,
   type CompanionId,
-  type OptionalCompanionRoutingBinding,
 } from '../../shared/routing/companion-id.js';
 import { SharedCompanionWorkspaceReader } from '../../persistence/workspaces/shared-workspace-reader.js';
-import type { SharedWorkspaceListBounds } from '../../persistence/workspaces/shared-workspace-bounds.js';
 import { materializeGatewayAttachments } from './attachment-materialization.js';
 import type { TurnPerformanceEvent } from '../../shared/telemetry/turn-performance.js';
-import type { KubeSelfManagementController } from '../../system/lifecycle/kube-self-management.js';
-import type { CapabilityGrantSnapshot } from '../../system/capabilities/access.js';
 import { resolveTierCapabilityTokens } from '../../system/capabilities/tiers.js';
 import {
   ShardApprovalGrantAuthority,
   type AuthenticatedShardWorkloadHandle,
-  type ShardApprovalGrantAuditEvent,
-  type ShardWorkloadLifecycleRegistryPort,
 } from '../../system/capabilities/shard-approval-grants.js';
 import { GatewayShardWorkloadRegistrar } from './shard-workload-registrar.js';
 import {
@@ -153,8 +123,14 @@ import {
   inboundChannelMessageId,
   type InboundChannelReplayDrop,
 } from './inbound-channel-replay.js';
-import type { GatewaySystemDataWriterPort } from './system-data-writer.js';
-import type { McpGatewayBroker } from './mcp/broker.js';
+import type { GatewayServerOptions } from './server/options.js';
+import { parseCompanionMessageSendParams } from './server/companion-message-send-params.js';
+import {
+  hasOwn,
+  normalizeNdjsonFrameError,
+  summarizeFramePreview,
+  validateJsonRpcFrame,
+} from './server/rpc-frame-validation.js';
 
 const log = createComponentLogger('Gateway');
 const unknownCompanionDisplayIdentity = createCompanionDisplayIdentityResolver([]);
@@ -164,7 +140,6 @@ const CONNECTION_IN_FLIGHT_HEALTH_TOUCH_INTERVAL_MS = Math.min(
   Math.max(1_000, Math.floor(DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS / 3)),
 );
 const INVALID_FRAME_AUDIT_METHOD = 'gateway.ipc.frame.invalid';
-const FRAME_PREVIEW_LIMIT = 200;
 const ICP_DELIVERY_REPLAY_CACHE_TTL_MS = 15 * 60_000;
 export { evaluatePolicy };
 export type { GatewayNtfyConfig, PolicyConfig, VoiceStreamRequestOptions };
@@ -252,179 +227,9 @@ export interface GatewayFleetConnectionSnapshot {
 }
 
 export { requireGatewaySessionHmacKeyring, resolveGatewaySessionHmacKeyring } from './session-hmac-env.js';
+export type { GatewayServerOptions } from './server/options.js';
 
 // ── Gateway Server Class ──
-
-export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
-  socketPath: string;
-  gatewayRpcEndpoint?: GatewayRpcEndpoint;
-  llmProvider: LLMProviderPort;
-  embeddingService: EmbeddingProviderPort;
-  modelDiscovery?: ModelDiscoveryBackend;
-  discordAdapter: ChannelOutboundDock;
-  /**
-   * Multi-account Discord: outbound dock per companionId.
-   * Required to cover every companion routed via multiCompanion.discordAccounts;
-   * outbound sends from a companion connection resolve through its own dock
-   * only, so one companion can never egress through another companion's bot.
-   */
-  discordAccountDocks?: ReadonlyMap<CompanionId, ChannelOutboundDock>;
-  /** Native channel-plugin outbound accounts, resolved only by authenticated caller identity. */
-  pluginOutboundRoutes?: readonly {
-    pluginId: 'buzz';
-    accountId?: string;
-    companionId?: string;
-    dock: ChannelOutboundDock;
-  }[];
-  /**
-   * vvf.5.2: single-account Telegram outbound dock for interactive clarify
-   * delivery. Present only when Telegram is configured; clarify.deliver fails
-   * closed on the telegram channel without it.
-   */
-  telegramDock?: ChannelOutboundDock;
-  /** Numeric Telegram destination for secondary system/operator alerts. */
-  operatorTelegramChatId?: string;
-  /** Explicit Discord system-alert outbound identity and destination. */
-  operatorDiscordDock?: ChannelOutboundDock;
-  operatorDiscordChannelId?: string;
-  gitOps?: GitOperations;
-  imageConfig?: ImageRuntimeConfig;
-  modelUsageRecorder?: ModelUsageRecorder;
-  credentialVault?: CredentialVaultPort;
-  /** Value-free provider/channel credential inventory for the Garden status UI. */
-  credentialPresence?: GatewayCredentialPresenceResult;
-  /** Cognition intake firewall screening (htm9.2); absent when mode is 'off'. */
-  intakeScreening?: IntakeScreeningService;
-  /**
-   * Fleet-only exact resolver for the authenticated companion's screening
-   * composition. It must throw on a missing/unknown identity.
-   */
-  intakeScreeningProvider?: (
-    companionId?: string,
-  ) => IntakeScreeningService | null;
-  /**
-   * Canonical global CogSec mode (shadow/boundary/strict). Required so omitting
-   * intake composition cannot silently disable gateway-global egress guards.
-   */
-  intakeScreeningMode: CogSecMode;
-  /**
-   * Quarantined-artifact access guard (hrmrq.54): blocks fs reads, searches,
-   * writes, and edits of quarantined on-disk artifacts and records attempts.
-   * Absent when the intake firewall is off.
-   */
-  quarantinedArtifactGuard?: QuarantinedArtifactAccessGuard;
-  /** Gateway-global registry of protected persona owners for raw mutation tools. */
-  personaMutationAttemptGuard?: import('./persona-mutation-attempt-guard.js').PersonaMutationAttemptGuard;
-  /**
-   * CogSec event store (htm9.18). When present, a canary token leaking into an
-   * outbound method is recorded as a durable CogSecEvent (token sha256 only)
-   * before the action is held. Absent ⇒ the tripwire still holds the action,
-   * but writes no durable event.
-   */
-  cogSecEvents?: Pick<CogSecEventStore, 'createEvent'>;
-  /** Vision intake screener (htm9.8); absent when off/disabled/backend-less. */
-  visionIntake?: GatewayVisionIntakeScreener;
-  /** Fleet-only exact resolver for companion-owned vision screening. */
-  visionIntakeProvider?: (
-    companionId?: string,
-  ) => GatewayVisionIntakeScreener | null;
-  policyConfig: PolicyConfig;
-  ntfy?: GatewayNtfyConfig;
-  auditStore?: GatewayAuditStorePort;
-  kubeSelfManagement?: KubeSelfManagementController;
-  /** Gateway-owned exact contact authority lifecycle service. */
-  contactLifecycleAuthority?: import('./contact-lifecycle-authority.js').GatewayContactLifecycleAuthorityPort;
-  /** Gateway-owned single writer for system owner files and system state. */
-  systemDataWriter?: GatewaySystemDataWriterPort;
-  /** Lazy external MCP client broker. It never connects until a catalog tool is selected. */
-  mcpBroker?: McpGatewayBroker;
-  sessionHmacKeyring: SessionHmacKeyring;
-  confirmation?: Partial<GatewayConfirmationConfig>;
-  // an52.3: keyed on the authenticated companion so a fleet resolves each
-  // companion's own capability tier. Single-companion providers ignore the arg.
-  capabilityTierProvider?: (companionId?: string) => CapabilityTier;
-  // mus2.5: atomic owner snapshot keyed on the authenticated companion.
-  capabilityGrantSnapshotProvider?: (
-    companionId?: string,
-  ) => CapabilityGrantSnapshot;
-  /** Optional privileged executor; receives only gateway-authorized launch context. */
-  shardBackendExecutor?: ShardBackendExecutor;
-  /**
-   * 2h6q.3: server-owned authenticated shard-workload registry (fed from
-   * ShardManager launch registration state). Presence constructs the
-   * exact-once ShardApprovalGrantAuthority and enables the shard
-   * exceptional-action approval path. Absence keeps every shard
-   * temporary-grant path disabled AND still denies recognizably
-   * shard-originated gated dispatches (they can never inherit the parent's
-   * autonomous auto-clear).
-   */
-  shardApprovalWorkloads?: ShardWorkloadLifecycleRegistryPort;
-  /**
-   * Human escalation control plane and its durable ledger (bead
-   * psfn-framework-wtw7l). Presence makes every confirmation-queue enqueue and
-   * resolution visible on the Garden attention surface. Absence keeps the queue
-   * behaving exactly as before — the escalation is a projection of the queue,
-   * never an authority over it.
-   */
-  confirmationEscalation?: ConfirmationEscalationProducerOptions<NotifyNtfyParams>;
-  /**
-   * Structured audit sink for shard approval-grant lifecycle events. A
-   * throwing sink fails the transition it audits (terminal resolutions are
-   * audit-then-remove). Defaults to the gateway structured logger.
-   */
-  shardApprovalGrantAudit?: (event: ShardApprovalGrantAuditEvent) => void;
-  /** Canonical companion display label used across human-facing gateway surfaces. */
-  approvalParentLabelProvider?: (companionId: string) => string | undefined;
-  wyomingShardRouting: WyomingShardRoutingConfig;
-  companionId?: CompanionId;
-  /**
-   * Multi-companion topology. When absent or disabled, the gateway keeps
-   * the single-agent semantics (first-ready routing + broadcast notifications)
-   * byte-identical. When enabled, every routed exchange is companion-addressed
-   * and any ambiguity fails closed.
-   */
-  multiCompanion?: GatewayMultiCompanionConfig;
-  /**
-   * settings.json-owned bounds on a governed shared-workspace listing. Required
-   * whenever `multiCompanion.sharedWorkspacePath` is configured: the reviewed
-   * corpus is re-read and re-hashed on every list, so it may only be exposed
-   * with an operator-declared page bound (psfn-framework-9jld5).
-   */
-  sharedWorkspaceListBounds?: SharedWorkspaceListBounds;
-  /**
-   * Inter-companion channel lane: resolves companion-room /
-   * companion-dm addressing for `companion.message.send`. Requires the
-   * multi-companion flag; providing it flag-off is a configuration error
-   * (fail closed). Absent while multi-companion is on, the lane RPC alarms
-   * and rejects every send.
-   */
-  companionChannels?: GatewayCompanionChannelLane;
-  /**
-   * fxt1: verifies a caller-asserted `preemptionProtected` work
-   * spec against the background-work store before the gateway-side gate honors
-   * it. Absent ⇒ the LLM handlers strip every asserted flag (fail closed).
-   */
-  welfareGrantVerifier?: WelfareGrantVerifier;
-  /** Durable shared-schema authority for the content-free ICP autonomy broker. */
-  icpAutonomyStore?: IcpSharedAutonomyStorePort;
-  /** Canonical gateway-owned deterministic policy authority for ICP initiation. */
-  icpInitiationPolicyAuthority?: Pick<
-    GatewayIcpInitiationPolicyAuthority,
-    'resolve' | 'authorizeHandoff' | 'runAuthorizedHandoff'
-      | 'authorizeDyadContinuation' | 'runAuthorizedDyadContinuation'
-  >;
-  /** Shared clock for companion room delivery/reply boundary tests. */
-  companionChannelNow?: () => number;
-  /**
-   * Gateway-process event bus. Carries the redacted `companion.*` relay
-   * events: approval lifecycle emitted at the confirmation-queue choke
-   * points, plus agent-forwarded tool/artifact events re-published from
-   * `companion.event.publish` (w9hj.1).
-   */
-  eventBus: EventBus;
-  /** JSON-owner quiet-hours gate evaluated before any shared-device model call. */
-  sharedSatelliteQuietHoursAllows?: (nowMs: number, companionId: string) => boolean;
-}
 
 type IcpQueuedInvalidationReason =
   | 'peer_offline'
@@ -3967,207 +3772,6 @@ function extractViolationCompanionId(details: Record<string, unknown>): string |
   return undefined;
 }
 
-const COMPANION_MESSAGE_MAX_CONTENT_CHARS = 65_536;
-const COMPANION_MESSAGE_MAX_AUTHOR_NAME_CHARS = 200;
-const COMPANION_MESSAGE_MAX_REPLY_TO_ID_CHARS = 256;
-
-/**
- * Fail-closed validation for companion.message.send params. Note the sender
- * identity is NOT read from params — it always comes from the connection's
- * bound companionId (a params.companionId that disagrees with the binding is
- * already treated as spoofing by enforceCompanionFrameIdentity).
- */
-function parseCompanionMessageSendParams(params: unknown): {
-  channelId: string;
-  content: string;
-  authorName?: string;
-  messageId?: string;
-  initiation?: {
-    permitId: string;
-    conversationId: string;
-    recipientCompanionId: string;
-    correlation: IcpConversationCorrelation;
-  };
-  continuation?: {
-    dyadId: string;
-    deliveryId: string;
-    recipientCompanionId: string;
-    peerContactId: string;
-    correlation: IcpConversationCorrelation;
-  };
-  correlation?: IcpConversationCorrelation;
-  replyToMessageId?: string;
-  humanRelay?: NonNullable<CompanionMessageSendParams['humanRelay']>;
-} {
-  if (!isRecord(params)) {
-    throw new Error('companion.message.send requires an object params payload');
-  }
-  const channelId = typeof params.channelId === 'string' ? params.channelId.trim() : '';
-  if (!channelId) {
-    throw new Error('companion.message.send requires a non-empty channelId');
-  }
-  const content = typeof params.content === 'string' ? params.content : '';
-  if (!content.trim()) {
-    throw new Error('companion.message.send requires non-empty content');
-  }
-  if (content.length > COMPANION_MESSAGE_MAX_CONTENT_CHARS) {
-    throw new Error(
-      `companion.message.send content exceeds ${COMPANION_MESSAGE_MAX_CONTENT_CHARS} characters`,
-    );
-  }
-  let authorName: string | undefined;
-  if (params.authorName !== undefined) {
-    if (typeof params.authorName !== 'string') {
-      throw new Error('companion.message.send authorName must be a string when provided');
-    }
-    authorName = params.authorName.trim();
-    if (!authorName || authorName.length > COMPANION_MESSAGE_MAX_AUTHOR_NAME_CHARS) {
-      throw new Error(
-        `companion.message.send authorName must be 1-${COMPANION_MESSAGE_MAX_AUTHOR_NAME_CHARS} characters`,
-      );
-    }
-  }
-  let messageId: string | undefined;
-  if (params.messageId !== undefined) {
-    if (typeof params.messageId !== 'string' || !params.messageId.trim()) {
-      throw new Error('companion.message.send messageId must be a non-empty string when provided');
-    }
-    messageId = params.messageId.trim();
-  }
-  let initiation: {
-    permitId: string;
-    conversationId: string;
-    recipientCompanionId: string;
-    correlation: IcpConversationCorrelation;
-  } | undefined;
-  if (params.initiation !== undefined) {
-    if (!isRecord(params.initiation)) {
-      throw new Error('companion.message.send initiation must be an object');
-    }
-    assertNoUnknownKeys(
-      params.initiation,
-      ['permitId', 'conversationId', 'recipientCompanionId', 'correlation'] as const,
-      'companion.message.send initiation',
-    );
-    const permitId = typeof params.initiation.permitId === 'string'
-      ? params.initiation.permitId.trim()
-      : '';
-    const conversationId = typeof params.initiation.conversationId === 'string'
-      ? params.initiation.conversationId.trim()
-      : '';
-    const recipientCompanionId = typeof params.initiation.recipientCompanionId === 'string'
-      ? params.initiation.recipientCompanionId.trim()
-      : '';
-    if (!permitId || !conversationId || !recipientCompanionId) {
-      throw new Error(
-        'companion.message.send initiation requires permitId, conversationId, and recipientCompanionId',
-      );
-    }
-    initiation = {
-      permitId,
-      conversationId,
-      recipientCompanionId,
-      correlation: parseIcpConversationCorrelation(params.initiation.correlation),
-    };
-  }
-  let continuation: {
-    dyadId: string;
-    deliveryId: string;
-    recipientCompanionId: string;
-    peerContactId: string;
-    correlation: IcpConversationCorrelation;
-  } | undefined;
-  if (params.continuation !== undefined) {
-    if (!isRecord(params.continuation)) {
-      throw new Error('companion.message.send continuation must be an object');
-    }
-    assertNoUnknownKeys(params.continuation, [
-      'dyadId', 'deliveryId', 'recipientCompanionId', 'peerContactId', 'correlation',
-    ] as const, 'companion.message.send continuation');
-    const dyadId = typeof params.continuation.dyadId === 'string'
-      ? params.continuation.dyadId.trim()
-      : '';
-    const deliveryId = typeof params.continuation.deliveryId === 'string'
-      ? params.continuation.deliveryId.trim()
-      : '';
-    const recipientCompanionId = typeof params.continuation.recipientCompanionId === 'string'
-      ? params.continuation.recipientCompanionId.trim()
-      : '';
-    const peerContactId = typeof params.continuation.peerContactId === 'string'
-      ? params.continuation.peerContactId.trim()
-      : '';
-    if (!dyadId || !deliveryId || !recipientCompanionId || !peerContactId) {
-      throw new Error('companion.message.send continuation binding is incomplete');
-    }
-    continuation = {
-      dyadId,
-      deliveryId,
-      recipientCompanionId,
-      peerContactId,
-      correlation: parseIcpConversationCorrelation(params.continuation.correlation),
-    };
-  }
-  if ([initiation, continuation, params.correlation].filter(value => value !== undefined).length > 1) {
-    throw new Error('companion.message.send cannot combine initiation, continuation, and reply correlation');
-  }
-  const correlation = params.correlation === undefined
-    ? undefined
-    : parseIcpConversationCorrelation(params.correlation);
-  let humanRelay: NonNullable<CompanionMessageSendParams['humanRelay']> | undefined;
-  if (params.humanRelay !== undefined) {
-    if (!isRecord(params.humanRelay)) {
-      throw new Error('companion.message.send humanRelay must be an object');
-    }
-    assertNoUnknownKeys(
-      params.humanRelay,
-      ['requestCapsule', 'responseCapsule'] as const,
-      'companion.message.send humanRelay',
-    );
-    const requestCapsule = params.humanRelay.requestCapsule;
-    const responseCapsule = params.humanRelay.responseCapsule;
-    if (!isRecord(requestCapsule)
-      || requestCapsule.capsuleKind !== 'human_relay_intent'
-      || !isRecord(requestCapsule.source)
-      || !isRecord(requestCapsule.target)
-      || (responseCapsule !== undefined
-        && (!isRecord(responseCapsule)
-          || responseCapsule.capsuleKind !== 'human_relay_response'
-          || !isRecord(responseCapsule.response)
-          || !isRecord(responseCapsule.destination)))) {
-      throw new Error('companion.message.send humanRelay capsule shape is malformed');
-    }
-    humanRelay = params.humanRelay as unknown as NonNullable<CompanionMessageSendParams['humanRelay']>;
-  }
-  if ((initiation !== undefined || continuation !== undefined || correlation !== undefined)
-    !== (messageId !== undefined)) {
-    throw new Error('companion.message.send correlated transports require a deterministic messageId');
-  }
-  let replyToMessageId: string | undefined;
-  if (params.replyToMessageId !== undefined) {
-    if (typeof params.replyToMessageId !== 'string') {
-      throw new Error('companion.message.send replyToMessageId must be a string when provided');
-    }
-    replyToMessageId = params.replyToMessageId.trim();
-    if (!replyToMessageId || replyToMessageId.length > COMPANION_MESSAGE_MAX_REPLY_TO_ID_CHARS) {
-      throw new Error(
-        'companion.message.send replyToMessageId must be '
-        + `1-${COMPANION_MESSAGE_MAX_REPLY_TO_ID_CHARS} characters`,
-      );
-    }
-  }
-  return {
-    channelId,
-    content,
-    ...(authorName ? { authorName } : {}),
-    ...(messageId ? { messageId } : {}),
-    ...(initiation ? { initiation } : {}),
-    ...(continuation ? { continuation } : {}),
-    ...(correlation ? { correlation } : {}),
-    ...(replyToMessageId ? { replyToMessageId } : {}),
-    ...(humanRelay ? { humanRelay } : {}),
-  };
-}
-
 function extractGatewayCorrelation(
   params: Record<string, unknown> | undefined,
 ): Record<string, string> {
@@ -4194,97 +3798,8 @@ function extractGatewayCorrelation(
   return correlation;
 }
 
-function normalizeNdjsonFrameError(error: unknown): { reason: string; preview?: string } {
-  const reason = error instanceof Error ? error.message : 'Malformed NDJSON frame received';
-  if (isRecord(error)) {
-    const previewValue = error.preview;
-    if (typeof previewValue === 'string' && previewValue.trim()) {
-      return { reason, preview: summarizeFramePreview(previewValue) };
-    }
-  }
-  return { reason };
-}
-
-function validateJsonRpcFrame(message: unknown): string | null {
-  if (!isRecord(message)) {
-    return 'JSON-RPC frame must be an object';
-  }
-  if (message.jsonrpc !== '2.0') {
-    return 'JSON-RPC frame must include jsonrpc="2.0"';
-  }
-
-  const hasMethod = hasOwn(message, 'method');
-  const hasId = hasOwn(message, 'id');
-  const hasResult = hasOwn(message, 'result');
-  const hasError = hasOwn(message, 'error');
-
-  if (hasMethod) {
-    if (typeof message.method !== 'string' || !message.method.trim()) {
-      return 'JSON-RPC request method must be a non-empty string';
-    }
-    if (hasResult || hasError) {
-      return 'JSON-RPC request/notification must not contain result or error';
-    }
-    if (hasId && !isValidJsonRpcId(message.id)) {
-      return 'JSON-RPC request id must be string, number, or null';
-    }
-    return null;
-  }
-
-  if (!hasId) {
-    return 'JSON-RPC response must include id';
-  }
-  if (!isValidJsonRpcId(message.id)) {
-    return 'JSON-RPC response id must be string, number, or null';
-  }
-  if (hasResult === hasError) {
-    return 'JSON-RPC response must contain exactly one of result or error';
-  }
-  if (hasError && !isValidJsonRpcError(message.error)) {
-    return 'JSON-RPC response error must include numeric code and string message';
-  }
-  return null;
-}
-
-function hasOwn(record: Record<string, unknown>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(record, key);
-}
-
-function isValidJsonRpcId(id: unknown): boolean {
-  return id === null || typeof id === 'string' || (typeof id === 'number' && Number.isFinite(id));
-}
-
-function isValidJsonRpcError(value: unknown): boolean {
-  if (!isRecord(value)) {
-    return false;
-  }
-  return typeof value.code === 'number'
-    && Number.isFinite(value.code)
-    && typeof value.message === 'string'
-    && value.message.trim().length > 0;
-}
-
 function isIdentifiableGatewayConnectionRole(
   value: unknown,
 ): value is Exclude<GatewayConnectionRole, 'unidentified'> {
   return value === 'agent' || value === 'internal_session_integrity';
-}
-
-function summarizeFramePreview(message: unknown): string {
-  if (typeof message === 'string') {
-    return truncateFramePreview(message.trim());
-  }
-  try {
-    const serialized = JSON.stringify(message);
-    return truncateFramePreview(typeof serialized === 'string' ? serialized : String(message));
-  } catch {
-    return truncateFramePreview(String(message));
-  }
-}
-
-function truncateFramePreview(value: string): string {
-  if (value.length <= FRAME_PREVIEW_LIMIT) {
-    return value;
-  }
-  return `${value.slice(0, FRAME_PREVIEW_LIMIT)}... (${value.length} chars)`;
 }

@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { isReservedManagedWikiWrite } from './personal-projects.js';
 import { WikiStore } from './store.js';
 import { WorldNotesLibrary, worldNotesDocId } from './world-notes.js';
@@ -65,6 +65,47 @@ describe('WorldNotesLibrary (2nsfo)', () => {
     expect(summary).toContain('met here before: visitor near ab12');
     expect(library.summarize('nowhere')).toBe('');
     expect(library.listWorlds()).toEqual(['commons']);
+  });
+
+  it('does not rewrite (re-screen and re-embed) the document for an unchanged perception (60oah)', () => {
+    const library = new WorldNotesLibrary(store);
+    const upsert = vi.spyOn(store, 'upsert');
+    const perception = {
+      world: 'commons',
+      capturedAt: '2026-09-10T18:00:00.000Z',
+      self: { x: 1, z: 2 },
+      room: { label: 'kitchen', labelled: true, waysOut: ['a door on its north to the hall'] },
+      things: [{ id: 'ab12', label: 'wooden bench', x: 4, z: 1 }],
+      people: [{ id: 'visitor', x: 3.5, z: 1.5 }],
+    };
+    library.observePerception(perception);
+    expect(upsert).toHaveBeenCalledTimes(1);
+
+    // The same scene again, and a move along a route already known: only the
+    // bookkeeping changes, so nothing is written.
+    library.observePerception({ ...perception, capturedAt: '2026-09-10T18:01:00.000Z' });
+    library.observeMove({ world: 'commons', from: 'a', to: 'b', at: '2026-09-10T18:02:00.000Z' });
+    expect(upsert).toHaveBeenCalledTimes(2);
+    library.observeMove({ world: 'commons', from: 'a', to: 'b', at: '2026-09-10T18:03:00.000Z' });
+    expect(upsert).toHaveBeenCalledTimes(2);
+    // Readers still see current counts.
+    expect(library.get('commons')).toMatchObject({ perceptions: 2 });
+    expect(library.get('commons')?.routes[0]?.count).toBe(2);
+
+    // A material change writes once, carrying the accumulated bookkeeping.
+    library.observePerception({
+      ...perception,
+      capturedAt: '2026-09-10T18:04:00.000Z',
+      things: [...perception.things, { id: 'cd34', label: 'lantern' }],
+    });
+    expect(upsert).toHaveBeenCalledTimes(3);
+    const stored = JSON.parse(store.get(worldNotesDocId('commons'))!.body) as {
+      perceptions: number; routes: Array<{ count: number }>;
+      landmarks: Array<{ id: string; seenCount: number }>;
+    };
+    expect(stored.perceptions).toBe(3);
+    expect(stored.routes[0]?.count).toBe(2);
+    expect(stored.landmarks.find((landmark) => landmark.id === 'thing:ab12')?.seenCount).toBe(3);
   });
 
   it('keeps model notes bounded and in the reserved namespace the generic wiki write cannot touch', () => {

@@ -35,7 +35,33 @@ export function worldNotesDocId(world: string): string {
   return `world.${world}`;
 }
 
+/**
+ * What the notes actually say, without the bookkeeping every observation
+ * touches (seen counts, last-seen stamps, the perception counter). Persisting
+ * is what re-runs the wiki admission screen and re-embeds the whole document,
+ * so it happens only when this changes (psfn-framework-60oah).
+ */
+function materialContent(notes: WorldNotes): string {
+  return JSON.stringify({
+    landmarks: notes.landmarks.map(({ id, kind, label, x, z, waysOut, detail }) => (
+      { id, kind, label, x, z, waysOut, detail }
+    )),
+    routes: notes.routes.map(({ from, to }) => ({ from, to })),
+    encounters: notes.encounters.map(({ participantId, contactId, near, x, z }) => (
+      { participantId, contactId, near, x, z }
+    )),
+    notes: notes.notes,
+  });
+}
+
 export class WorldNotesLibrary implements WorldNotesReader, WorldNotesWriter {
+  /**
+   * Bookkeeping-only updates not yet written, per world. They ride along with
+   * the next material write, and `get` serves them so readers see current
+   * counts; a restart loses at most the counts since the last material change.
+   */
+  private readonly pendingBookkeeping = new Map<string, WorldNotes>();
+
   constructor(
     private readonly store: WikiStorePort,
     private readonly now: () => Date = () => new Date(),
@@ -49,6 +75,12 @@ export class WorldNotesLibrary implements WorldNotesReader, WorldNotesWriter {
 
   get(world: string): WorldNotes | undefined {
     if (!WORLD_NAME_PATTERN.test(world)) return undefined;
+    const pending = this.pendingBookkeeping.get(world);
+    if (pending) return structuredClone(pending);
+    return this.stored(world);
+  }
+
+  private stored(world: string): WorldNotes | undefined {
     const document = this.store.get(worldNotesDocId(world));
     return document ? parseWorldNotesDocument(document) : undefined;
   }
@@ -63,6 +95,7 @@ export class WorldNotesLibrary implements WorldNotesReader, WorldNotesWriter {
     if (!WORLD_NAME_PATTERN.test(input.world)) return;
     const at = input.capturedAt;
     const notes = this.get(input.world) ?? emptyNotes(input.world, at);
+    const before = materialContent(notes);
     for (const thing of input.things) {
       upsertLandmark(notes, {
         id: `thing:${cleanId(thing.id)}`,
@@ -100,7 +133,7 @@ export class WorldNotesLibrary implements WorldNotesReader, WorldNotesWriter {
       }, at);
     }
     notes.perceptions += 1;
-    this.persist(notes, at);
+    this.persistIfMaterial(notes, before, at);
   }
 
   observeMove(input: { world: string; from?: string; to: string; at: string }): void {
@@ -108,6 +141,7 @@ export class WorldNotesLibrary implements WorldNotesReader, WorldNotesWriter {
     const to = cleanId(input.to);
     if (!to) return;
     const notes = this.get(input.world) ?? emptyNotes(input.world, input.at);
+    const before = materialContent(notes);
     upsertLandmark(notes, { id: `place:${to}`, kind: 'place', label: to }, input.at);
     const from = input.from ? cleanId(input.from) : '';
     if (from && from !== to) {
@@ -120,7 +154,7 @@ export class WorldNotesLibrary implements WorldNotesReader, WorldNotesWriter {
         if (notes.routes.length > MAX_ROUTES) notes.routes.splice(0, notes.routes.length - MAX_ROUTES);
       }
     }
-    this.persist(notes, input.at);
+    this.persistIfMaterial(notes, before, input.at);
   }
 
   addNote(input: { world: string; text: string; about?: string }): WorldNote {
@@ -173,6 +207,15 @@ export class WorldNotesLibrary implements WorldNotesReader, WorldNotesWriter {
     return parts.join('; ');
   }
 
+  private persistIfMaterial(notes: WorldNotes, before: string, at: string): void {
+    if (this.store.get(worldNotesDocId(notes.world)) && materialContent(notes) === before) {
+      notes.updatedAt = at;
+      this.pendingBookkeeping.set(notes.world, notes);
+      return;
+    }
+    this.persist(notes, at);
+  }
+
   private persist(notes: WorldNotes, at: string): void {
     notes.updatedAt = at;
     this.store.upsert({
@@ -188,6 +231,7 @@ export class WorldNotesLibrary implements WorldNotesReader, WorldNotesWriter {
       summary: `${notes.landmarks.length} landmarks, ${notes.routes.length} routes, ${notes.encounters.length} encounters, ${notes.notes.length} notes`,
       updatedBy: 'agent:world-notes',
     });
+    this.pendingBookkeeping.delete(notes.world);
   }
 }
 

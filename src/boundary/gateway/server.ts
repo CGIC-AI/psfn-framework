@@ -117,7 +117,6 @@ import {
   type SharedSatelliteLeaseAuditEvent,
 } from './shared-satellite-response-arbiter.js';
 import { GatewayFleetPostureCache } from './fleet-posture-cache.js';
-import type { FleetCompanionPostureSummary } from '../../shared/telemetry/fleet-posture.js';
 import {
   GatewayInboundChannelReplay,
   inboundChannelMessageId,
@@ -126,14 +125,16 @@ import {
 import type { GatewayServerOptions } from './server/options.js';
 import type { GatewayServerPorts } from './server/ports.js';
 import {
+  GatewayCompanionViolations,
+  type GatewayFleetConnectionSnapshot,
+} from './server/companion-violations.js';
+import {
   DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS,
   GatewayConnectionLifecycle,
 } from './server/connection-lifecycle.js';
 import {
   isIdentifiableGatewayConnectionRole,
-  type GatewayConnectionHealth,
   type GatewayConnectionRole,
-  type GatewayConnectionState,
   type GatewayConnectionStatus,
   type MalformedFrameKind,
 } from './server/connection-status.js';
@@ -152,13 +153,6 @@ const ICP_DELIVERY_REPLAY_CACHE_TTL_MS = 15 * 60_000;
 export { evaluatePolicy };
 export type { GatewayNtfyConfig, PolicyConfig, VoiceStreamRequestOptions };
 
-// ── Fleet health snapshot (bounded multi-companion fleet view) ──
-// Cheap, read-only view over state the gateway already tracks: the companion
-// connection registry, latest bounded agent posture, and an in-memory ring of
-// multi-companion violation alarms. The gateway never reads companion stores.
-
-const COMPANION_VIOLATION_LOG_LIMIT = 1_000;
-export const FLEET_RECENT_VIOLATION_WINDOW_MS = 60 * 60 * 1_000;
 const INTERNAL_SESSION_INTEGRITY_METHODS = new Set([
   'session.hmac.sign',
   'session.hmac.verify',
@@ -173,41 +167,12 @@ const EMPTY_CREDENTIAL_PRESENCE: GatewayCredentialPresenceResult = {
   telegramBotToken: false,
 };
 
-interface CompanionViolationEvent {
-  event: string;
-  companionId?: string;
-  /** Value-free provider/channel credential inventory for the Garden status UI. */
-  credentialPresence?: GatewayCredentialPresenceResult;
-  at: number;
-}
-
-export interface GatewayFleetCompanionConnection {
-  companionId: CompanionId;
-  /** Live connection state; offline connections are removed, never reported. */
-  state: Exclude<GatewayConnectionState, 'offline'>;
-  health: GatewayConnectionHealth;
-  stateReason: string;
-  connectedAt: number;
-  lastSeenAt: number;
-  /** Latest validated content-free posture, attributed by this bound connection. */
-  posture?: FleetCompanionPostureSummary;
-}
-
-export interface GatewayFleetConnectionSnapshot {
-  generatedAt: number;
-  /** Currently-identified companion connections (one per bound companionId). */
-  connections: GatewayFleetCompanionConnection[];
-  /** Last activity per companionId, retained across disconnects. */
-  lastSeenByCompanionId: Record<string, number>;
-  /** Violation alarms in the recent window, keyed by attributed companionId. */
-  recentViolationsByCompanionId: Record<string, number>;
-  /** Recent violation alarms with no companion attribution. */
-  unattributedRecentViolationCount: number;
-  recentViolationWindowMs: number;
-}
-
 export { requireGatewaySessionHmacKeyring, resolveGatewaySessionHmacKeyring } from './session-hmac-env.js';
 export type { GatewayServerOptions } from './server/options.js';
+export type {
+  GatewayFleetCompanionConnection,
+  GatewayFleetConnectionSnapshot,
+} from './server/companion-violations.js';
 
 // ── Gateway Server Class ──
 
@@ -269,7 +234,6 @@ export class GatewayServer {
   private readonly fleetCompanionIds: ReadonlySet<CompanionId>;
   private readonly companionConnections = new Map<CompanionId, GatewayRpcConnection>();
   private readonly companionLastSeen = new Map<CompanionId, number>();
-  private readonly companionViolationLog: CompanionViolationEvent[] = [];
   private readonly companionPostures = new GatewayFleetPostureCache<GatewayRpcConnection>();
   private readonly companionDeliveryFailureReceipts = new CompanionDeliveryFailureReceipts();
   private readonly inboundChannelReplay: GatewayInboundChannelReplay;
@@ -296,6 +260,7 @@ export class GatewayServer {
   private readonly sharedSatelliteResponseArbiter: SharedSatelliteResponseArbiter;
   private readonly sharedSatelliteChatRequests = new Map<string, CompanionId>();
   private readonly connectionLifecycle: GatewayConnectionLifecycle;
+  private readonly companionViolations: GatewayCompanionViolations;
 
   private companionDisplayLabel(companionId: string): string {
     return this.options.approvalParentLabelProvider?.(companionId)?.trim()
@@ -311,7 +276,12 @@ export class GatewayServer {
       companionConnections: this.companionConnections,
       companionLastSeen: this.companionLastSeen,
       multiCompanion: this.multiCompanion,
+      companionPostures: this.companionPostures,
+      ntfyNotifier: this.ntfyNotifier,
       flushInboundChannelReplay: companionId => this.flushInboundChannelReplay(companionId),
+      refreshConnectionHealth: now => this.refreshConnectionHealth(now),
+      audit: (method, decision, params) => this.audit(method, decision, params),
+      auditComplete: (id, startTime, error) => this.auditComplete(id, startTime, error),
     };
   }
 
@@ -332,8 +302,6 @@ export class GatewayServer {
     this.sessionHmacKeyring = options.sessionHmacKeyring;
     this.multiCompanion = options.multiCompanion ?? disabledGatewayMultiCompanionConfig();
     this.fleetCompanionIds = new Set(this.multiCompanion.fleetCompanionIds);
-    const ports = this.createServerPorts();
-    this.connectionLifecycle = new GatewayConnectionLifecycle(ports);
     this.sharedWorkspaceReader = this.multiCompanion.enabled && this.multiCompanion.sharedWorkspacePath
       ? new SharedCompanionWorkspaceReader(this.multiCompanion.sharedWorkspacePath)
       : null;
@@ -390,7 +358,7 @@ export class GatewayServer {
           },
           policyAuthority: options.icpInitiationPolicyAuthority!,
           eventBus: options.eventBus,
-          alarm: (event, message, details) => this.alarmCompanionViolation(event, message, details),
+          alarm: (event, message, details) => this.companionViolations.alarmCompanionViolation(event, message, details),
         })
       : null;
     if (this.multiCompanion.enabled) {
@@ -545,6 +513,9 @@ export class GatewayServer {
       activeVersion: this.sessionHmacKeyring.activeVersion,
       versionCount: Object.keys(this.sessionHmacKeyring.keys).length,
     });
+    const ports = this.createServerPorts();
+    this.connectionLifecycle = new GatewayConnectionLifecycle(ports);
+    this.companionViolations = new GatewayCompanionViolations(ports);
   }
 
   async notifyOperator(params: NotifyNtfyParams): Promise<OperatorAlertResult> {
@@ -845,7 +816,7 @@ export class GatewayServer {
       if (!isRecord(params)
         || typeof params.requestId !== 'string'
         || typeof params.text !== 'string') {
-        this.alarmCompanionViolation(
+        this.companionViolations.alarmCompanionViolation(
           'api_stream_delta_rejected',
           'api.stream.delta rejected: notification shape is invalid',
           {
@@ -863,7 +834,7 @@ export class GatewayServer {
         const expectedCompanionId = this.apiStreamCompanionTargets.get(notification.requestId)
           ?? this.sharedSatelliteChatRequests.get(notification.requestId)
           ?? this.multiCompanion.channelRouting.api;
-        this.alarmCompanionViolation(
+        this.companionViolations.alarmCompanionViolation(
           'api_stream_delta_rejected',
           'api.stream.delta rejected: sending connection is not the request-bound api companion',
           {
@@ -1204,7 +1175,7 @@ export class GatewayServer {
   private requireCompanionDiscordDock(conn: GatewayRpcConnection): ChannelOutboundDock {
     const companionId = this.connectionStatuses.get(conn)?.companionId;
     if (!companionId) {
-      this.alarmCompanionViolation(
+      this.companionViolations.alarmCompanionViolation(
         'discord_send_unidentified',
         'Discord outbound rejected: connection has no bound companionId',
         {},
@@ -1213,7 +1184,7 @@ export class GatewayServer {
     }
     const dock = this.options.discordAccountDocks?.get(companionId);
     if (!dock) {
-      this.alarmCompanionViolation(
+      this.companionViolations.alarmCompanionViolation(
         'discord_send_no_account',
         `Discord outbound rejected: companion "${companionId}" owns no discord bot account`,
         { companionId },
@@ -1236,7 +1207,7 @@ export class GatewayServer {
       ? routes.filter(route => route.companionId === companionId)
       : routes;
     if (this.multiCompanion.enabled && !companionId) {
-      this.alarmCompanionViolation(
+      this.companionViolations.alarmCompanionViolation(
         'channel_send_unidentified',
         `${pluginId} outbound rejected: connection has no bound companionId`,
         { pluginId },
@@ -1244,7 +1215,7 @@ export class GatewayServer {
       throw new Error(`${pluginId} outbound requires an identified companion connection`);
     }
     if (ownedRoutes.length !== 1) {
-      this.alarmCompanionViolation(
+      this.companionViolations.alarmCompanionViolation(
         'channel_send_no_account',
         `${pluginId} outbound rejected: caller does not own exactly one account`,
         { pluginId, ...(companionId ? { companionId } : {}), accountCount: ownedRoutes.length },
@@ -1322,7 +1293,7 @@ export class GatewayServer {
     }
     const lane = this.options.companionChannels;
     if (!lane) {
-      this.alarmCompanionViolation(
+      this.companionViolations.alarmCompanionViolation(
         'companion_lane_unconfigured',
         'companion.message.send rejected: multi-companion is enabled but no companion channel lane is wired',
         {},
@@ -1336,7 +1307,7 @@ export class GatewayServer {
     const status = this.connectionStatuses.get(conn);
     const senderCompanionId = status?.role === 'agent' ? status.companionId : undefined;
     if (!senderCompanionId) {
-      this.alarmCompanionViolation(
+      this.companionViolations.alarmCompanionViolation(
         'companion_send_unidentified',
         'companion.message.send rejected: connection has no bound agent companionId',
         {},
@@ -1371,7 +1342,7 @@ export class GatewayServer {
         || correlation.initiatedByCompanionId !== senderCompanionId
         || correlation.channelId !== channelId
         || correlation.conversationId !== initiation.conversationId) {
-        this.alarmCompanionViolation(
+        this.companionViolations.alarmCompanionViolation(
           'icp_initiation_delivery_mismatch',
           'ICP initiation delivery correlation does not match the authenticated sender binding',
           { senderCompanionId, channelId, recipientCompanionId: initiation.recipientCompanionId },
@@ -1395,7 +1366,7 @@ export class GatewayServer {
       }
       if (correlation.messageId !== `icp-initiation:${consumption.permit.candidateId}`
         || correlation.requestId !== correlation.messageId) {
-        this.alarmCompanionViolation(
+        this.companionViolations.alarmCompanionViolation(
           'icp_initiation_delivery_mismatch',
           'ICP initiation delivery correlation does not match the consumed permit',
           { senderCompanionId, channelId, conversationId: initiation.conversationId },
@@ -1488,7 +1459,7 @@ export class GatewayServer {
       ? deriveIcpTransportMessageId(messageCorrelation)
       : undefined;
     if (stableIcpMessageId !== requestedMessageId) {
-      this.alarmCompanionViolation(
+      this.companionViolations.alarmCompanionViolation(
         'icp_delivery_message_id_mismatch',
         'Correlated ICP send did not use its deterministic gateway-bound message id',
         { senderCompanionId, channelId, requestedMessageId, stableIcpMessageId },
@@ -1509,7 +1480,7 @@ export class GatewayServer {
         if (delivered.content !== content
           || delivered.correlation !== JSON.stringify(messageCorrelation)
           || delivered.humanRelay !== (humanRelay ? JSON.stringify(humanRelay) : undefined)) {
-          this.alarmCompanionViolation(
+          this.companionViolations.alarmCompanionViolation(
             'icp_delivery_replay_mismatch',
             'Replayed ICP message changed its already-delivered content or correlation',
             { senderCompanionId, channelId, messageId: stableIcpMessageId },
@@ -1547,7 +1518,7 @@ export class GatewayServer {
       )
       : null;
     if (replyToMessageId !== undefined && !senderReplyReceipt) {
-      this.alarmCompanionViolation(
+      this.companionViolations.alarmCompanionViolation(
         'companion_reply_unverified',
         'Companion reply does not match an unclaimed gateway delivery receipt',
         { senderCompanionId, channelId, replyToMessageId },
@@ -1564,7 +1535,7 @@ export class GatewayServer {
         : {}),
     });
     if (!resolution.ok) {
-      this.alarmCompanionViolation(
+      this.companionViolations.alarmCompanionViolation(
         resolution.violation.event,
         resolution.violation.message,
         resolution.violation.details,
@@ -1626,7 +1597,7 @@ export class GatewayServer {
       if (!recipientConn) {
         if (resolution.kind === 'dm') {
           // DM to a disconnected peer fails closed back to the sender.
-          this.alarmCompanionViolation(
+          this.companionViolations.alarmCompanionViolation(
             'companion_dm_peer_unavailable',
             `Companion DM peer "${recipientId}" has no ready agent connection`,
             { senderCompanionId, channelId, peerCompanionId: recipientId },
@@ -1738,7 +1709,7 @@ export class GatewayServer {
       { channelId, messageId, reason },
     );
     if (!receipt) {
-      this.alarmCompanionViolation(
+      this.companionViolations.alarmCompanionViolation(
         'companion_failure_report_unverified',
         'Companion failure report does not match a gateway delivery receipt',
         { reportingCompanionId, channelId, messageId },
@@ -2126,7 +2097,7 @@ export class GatewayServer {
       ...(messageId ? { messageId } : {}),
     };
     log.error('Inbound channel replay queue dropped a message', details);
-    this.recordCompanionViolation('inbound_channel_message_dropped', details);
+    this.companionViolations.recordCompanionViolation('inbound_channel_message_dropped', details);
     const startedAt = Date.now();
     const auditDrop = async (): Promise<void> => {
       try {
@@ -2224,7 +2195,7 @@ export class GatewayServer {
     const claimedRaw = params?.companionId;
 
     if (status.role === 'unidentified') {
-      this.alarmCompanionViolation(
+      this.companionViolations.alarmCompanionViolation(
         'identify_required',
         `RPC "${method}" rejected: connection has not authenticated a role`,
         { method },
@@ -2247,7 +2218,7 @@ export class GatewayServer {
       (status.role === 'internal_session_integrity' && !isInternalMethod)
       || (status.role === 'agent' && isInternalMethod)
     ) {
-      this.alarmCompanionViolation(
+      this.companionViolations.alarmCompanionViolation(
         'connection_role_denied',
         `RPC "${method}" is not permitted for gateway role "${status.role}"`,
         { method, role: status.role, ...(boundCompanionId ? { companionId: boundCompanionId } : {}) },
@@ -2270,7 +2241,7 @@ export class GatewayServer {
       try {
         claimedCompanionId = createCompanionId(claimedRaw, 'RPC frame companionId');
       } catch (error) {
-        this.alarmCompanionViolation(
+        this.companionViolations.alarmCompanionViolation(
           'identity_claim_invalid',
           'RPC frame carried an invalid companionId claim; disconnecting connection',
           { method, boundCompanionId, reason: toErrorMessage(error) },
@@ -2293,7 +2264,7 @@ export class GatewayServer {
     }
 
     if (claimedCompanionId && boundCompanionId && claimedCompanionId !== boundCompanionId) {
-      this.alarmCompanionViolation(
+      this.companionViolations.alarmCompanionViolation(
         'identity_mismatch',
         'Companion identity mismatch on RPC frame; disconnecting connection',
         { method, boundCompanionId, claimedCompanionId },
@@ -2308,7 +2279,7 @@ export class GatewayServer {
     }
 
     if (this.multiCompanion.enabled && !boundCompanionId) {
-      this.alarmCompanionViolation(
+      this.companionViolations.alarmCompanionViolation(
         'identify_required',
         `RPC "${method}" rejected: agent connection has not identified a companionId`,
         { method },
@@ -2366,7 +2337,7 @@ export class GatewayServer {
       return this.requireReadyCompanionRoute(routeLabel, soleCompanionId!);
     }
     if (!satellite.sharedDevice) {
-      this.alarmCompanionViolation(
+      this.companionViolations.alarmCompanionViolation(
         'unbound_satellite',
         `Satellite "${satellite.satelliteId}" has no shared-device policy in satellites.json`,
         { satelliteId: satellite.satelliteId, endpointId: satellite.endpointId },
@@ -2377,7 +2348,7 @@ export class GatewayServer {
     }
     const companionId = satellite.sharedDevice.primaryCompanionId;
     if (!this.fleetCompanionIds.has(companionId)) {
-      this.alarmCompanionViolation(
+      this.companionViolations.alarmCompanionViolation(
         'satellite_unknown_companion',
         `Satellite "${satellite.satelliteId}" names a companion absent from companions.json`,
         {
@@ -2400,7 +2371,7 @@ export class GatewayServer {
     route?: AuthenticatedGatewayAccountRoute,
   ): CompanionId {
     return resolveConfiguredGatewayCompanion(this.multiCompanion, surface, route, violation => {
-      this.alarmCompanionViolation(
+      this.companionViolations.alarmCompanionViolation(
         violation.code,
         violation.message,
         violation.details,
@@ -2416,7 +2387,7 @@ export class GatewayServer {
   } {
     const conn = this.companionConnections.get(companionId);
     if (!conn) {
-      this.alarmCompanionViolation(
+      this.companionViolations.alarmCompanionViolation(
         'companion_not_connected',
         `Companion "${companionId}" (surface "${surface}") has no connected agent`,
         { surface, companionId },
@@ -2425,7 +2396,7 @@ export class GatewayServer {
     }
     const status = this.connectionStatuses.get(conn);
     if (!status || status.role !== 'agent' || status.state !== 'ready' || status.health !== 'healthy') {
-      this.alarmCompanionViolation(
+      this.companionViolations.alarmCompanionViolation(
         'companion_not_ready',
         `Companion "${companionId}" (surface "${surface}") connection is not ready`,
         {
@@ -2439,7 +2410,7 @@ export class GatewayServer {
     }
     const client = this.rpcClients.get(conn);
     if (!client) {
-      this.alarmCompanionViolation(
+      this.companionViolations.alarmCompanionViolation(
         'companion_rpc_client_missing',
         `Companion "${companionId}" (surface "${surface}") has no RPC client bound`,
         { surface, companionId },
@@ -2450,105 +2421,13 @@ export class GatewayServer {
   }
 
   /**
-   * Loud fail-closed alarm for multi-companion routing/identity violations:
-   * synchronous error log, gateway audit entry (DENY), and an operator ntfy
-   * alert when configured. Never throws.
-   */
-  private alarmCompanionViolation(
-    event: string,
-    message: string,
-    details: Record<string, unknown>,
-  ): void {
-    log.error(`Multi-companion violation [${event}]: ${message}`, details);
-    this.recordCompanionViolation(event, details);
-    const startedAt = Date.now();
-    void (async () => {
-      const auditId = await this.audit(`gateway.companion.${event}`, 'DENY', details);
-      await this.auditComplete(auditId, startedAt, message);
-      if (this.ntfyNotifier.isConfigured()) {
-        await this.ntfyNotifier.send({
-          message: `${message} (${JSON.stringify(details)})`,
-          title: 'Multi-companion routing violation',
-          priority: 5,
-          sender: {
-            kind: 'system',
-            provenance: 'system.operator_alert.multi_companion_routing',
-          },
-        });
-      }
-    })().catch((error: unknown) => {
-      log.error('Failed to record multi-companion violation alarm', {
-        event,
-        error: toErrorMessage(error),
-      });
-    });
-  }
-
-  private recordCompanionViolation(event: string, details: Record<string, unknown>): void {
-    const companionId = extractViolationCompanionId(details);
-    this.companionViolationLog.push({
-      event,
-      ...(companionId !== undefined ? { companionId } : {}),
-      at: Date.now(),
-    });
-    if (this.companionViolationLog.length > COMPANION_VIOLATION_LOG_LIMIT) {
-      this.companionViolationLog.splice(
-        0,
-        this.companionViolationLog.length - COMPANION_VIOLATION_LOG_LIMIT,
-      );
-    }
-  }
-
-  /**
    * Read-only fleet health view: identified companion
    * connections, last-seen activity (retained across disconnects), and recent
    * multi-companion violation counts. Available for bounded, server-side fleet
    * projections and internal operations; never mutates connection state.
    */
   getFleetConnectionSnapshot(now = Date.now()): GatewayFleetConnectionSnapshot {
-    this.connectionLifecycle.refreshConnectionHealth(now);
-
-    const connections: GatewayFleetCompanionConnection[] = [];
-    for (const [companionId, conn] of this.companionConnections.entries()) {
-      const status = this.connectionStatuses.get(conn);
-      if (!status || status.state === 'offline') {
-        continue;
-      }
-      const posture = this.companionPostures.read(conn, companionId, now);
-      connections.push({
-        companionId,
-        state: status.state,
-        health: status.health,
-        stateReason: status.stateReason,
-        connectedAt: status.connectedAt,
-        lastSeenAt: status.lastHealthcheckAt,
-        ...(posture ? { posture } : {}),
-      });
-    }
-
-    const windowStart = now - FLEET_RECENT_VIOLATION_WINDOW_MS;
-    const recentViolationsByCompanionId: Record<string, number> = {};
-    let unattributedRecentViolationCount = 0;
-    for (const violation of this.companionViolationLog) {
-      if (violation.at < windowStart) {
-        continue;
-      }
-      if (violation.companionId) {
-        recentViolationsByCompanionId[violation.companionId] =
-          (recentViolationsByCompanionId[violation.companionId] ?? 0) + 1;
-      } else {
-        unattributedRecentViolationCount += 1;
-      }
-    }
-
-    return {
-      generatedAt: now,
-      connections,
-      lastSeenByCompanionId: Object.fromEntries(this.companionLastSeen),
-      recentViolationsByCompanionId,
-      unattributedRecentViolationCount,
-      recentViolationWindowMs: FLEET_RECENT_VIOLATION_WINDOW_MS,
-    };
+    return this.companionViolations.getFleetConnectionSnapshot(now);
   }
 
   private removeConnection(conn: GatewayRpcConnection): void {
@@ -3007,7 +2886,7 @@ export class GatewayServer {
       ? message.routing.satellite
       : undefined;
     if (channelAccountRoute && message.routing?.source === 'satellite') {
-      this.alarmCompanionViolation(
+      this.companionViolations.alarmCompanionViolation(
         'invalid_satellite_route',
         `Channel plugin "${channelAccountRoute.pluginId}" cannot supply satellite routing metadata`,
         { channelType: message.channelType, pluginId: channelAccountRoute.pluginId },
@@ -3030,7 +2909,7 @@ export class GatewayServer {
       let route: ReturnType<GatewayServer['resolveCompanionAgent']>;
       if (satellite) {
         if (!satelliteSource) {
-          this.alarmCompanionViolation(
+          this.companionViolations.alarmCompanionViolation(
             'invalid_satellite_route',
             'Inbound voice message carries satellite metadata without a satellite routing source',
             { channelType: message.channelType, channelId: message.channelId },
@@ -3040,7 +2919,7 @@ export class GatewayServer {
         route = this.resolveSatelliteCompanionAgent(satellite);
       } else {
         if (satelliteSource) {
-          this.alarmCompanionViolation(
+          this.companionViolations.alarmCompanionViolation(
             'invalid_satellite_route',
             'Inbound satellite voice message is missing authenticated satellite routing metadata',
             { channelType: message.channelType, channelId: message.channelId },
@@ -3049,7 +2928,7 @@ export class GatewayServer {
         }
         const surface = resolveGatewaySurfaceForChannelType(message.channelType);
         if (!surface) {
-          this.alarmCompanionViolation(
+          this.companionViolations.alarmCompanionViolation(
             'unrouted_channel',
             `Inbound message channelType "${message.channelType}" has no multi-companion routing surface`,
             { channelType: message.channelType, channelId: message.channelId },
@@ -3433,7 +3312,7 @@ export class GatewayServer {
         const missingCompanionMessage = this.multiCompanion.enabled
           ? 'Multi-companion mode requires a companionId in gateway.client.identify'
           : 'The internal session-integrity role requires a companionId in gateway.client.identify';
-        this.alarmCompanionViolation(
+        this.companionViolations.alarmCompanionViolation(
           'identify_missing_companion',
           'Authenticated gateway role identified without a companionId; rejecting',
           {},
@@ -3441,7 +3320,7 @@ export class GatewayServer {
         throw new Error(missingCompanionMessage);
       }
       if (this.multiCompanion.enabled && !this.fleetCompanionIds.has(companionId)) {
-        this.alarmCompanionViolation(
+        this.companionViolations.alarmCompanionViolation(
           'identify_unknown_companion',
           'Connection claimed a companionId absent from companions.json; rejecting',
           { claimedCompanionId: companionId },
@@ -3452,7 +3331,7 @@ export class GatewayServer {
         );
       }
       if (!verifyCompanionAuthToken(companionId, params.role, authToken, this.sessionHmacKeyring)) {
-        this.alarmCompanionViolation(
+        this.companionViolations.alarmCompanionViolation(
           'identify_auth_failed',
           'Connection presented invalid companion authentication; rejecting',
           { claimedCompanionId: companionId },
@@ -3470,7 +3349,7 @@ export class GatewayServer {
       }
       const authenticatedCompanionId = companionId;
       if (status.companionId && status.companionId !== companionId) {
-        this.alarmCompanionViolation(
+        this.companionViolations.alarmCompanionViolation(
           'identify_rebind_rejected',
           'Connection attempted to re-identify as a different companion; rejecting',
           { boundCompanionId: status.companionId, claimedCompanionId: companionId },
@@ -3484,7 +3363,7 @@ export class GatewayServer {
         const existing = this.companionConnections.get(authenticatedCompanionId);
         if (existing && existing !== conn) {
           if (this.connections.has(existing)) {
-            this.alarmCompanionViolation(
+            this.companionViolations.alarmCompanionViolation(
               'duplicate_identify',
               `Duplicate identify for companion "${companionId}"; keeping the existing connection and rejecting the new one`,
               { companionId },
@@ -3607,22 +3486,6 @@ export class GatewayServer {
       await this.options.auditStore.complete(id, Date.now() - startTime, error);
     }
   }
-}
-
-/**
- * Best-effort companion attribution for a violation alarm. Violation `details`
- * carry the companion under different keys depending on the event; placeholder
- * markers like "(unidentified)" are not real ids and stay unattributed.
- */
-function extractViolationCompanionId(details: Record<string, unknown>): string | undefined {
-  for (const key of ['companionId', 'boundCompanionId', 'senderCompanionId']) {
-    const value = details[key];
-    if (typeof value !== 'string') continue;
-    const trimmed = value.trim();
-    if (!trimmed || trimmed.startsWith('(')) continue;
-    return trimmed;
-  }
-  return undefined;
 }
 
 function extractGatewayCorrelation(

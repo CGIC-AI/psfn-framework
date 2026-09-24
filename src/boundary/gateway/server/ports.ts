@@ -6,6 +6,9 @@ import type { JSONRPCServerAndClient } from 'json-rpc-2.0';
 import type { CompanionId } from '../../../shared/routing/companion-id.js';
 import type { GatewayMultiCompanionConfig } from '../multi-companion.js';
 import type { GatewayRpcConnection } from '../transport.js';
+import type { GatewayPolicyDecision } from '../protocol.js';
+import type { GatewayNtfyNotifier } from '../ntfy-notifier.js';
+import type { GatewayFleetPostureCache } from '../fleet-posture-cache.js';
 import type { GatewayConnectionStatus } from './connection-status.js';
 
 export interface GatewayServerPorts {
@@ -15,5 +18,14 @@ export interface GatewayServerPorts {
   readonly companionConnections: Map<CompanionId, GatewayRpcConnection>;
   readonly companionLastSeen: Map<CompanionId, number>;
   readonly multiCompanion: GatewayMultiCompanionConfig;
+  readonly companionPostures: GatewayFleetPostureCache<GatewayRpcConnection>;
+  readonly ntfyNotifier: GatewayNtfyNotifier;
   readonly flushInboundChannelReplay: (companionId: CompanionId) => void;
+  readonly refreshConnectionHealth: (now?: number) => void;
+  readonly audit: (
+    method: string,
+    decision: GatewayPolicyDecision,
+    params?: Record<string, unknown>,
+  ) => Promise<number>;
+  readonly auditComplete: (id: number, startTime: number, error?: string) => Promise<void>;
 }

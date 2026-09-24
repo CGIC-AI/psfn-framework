@@ -1362,7 +1362,7 @@
       "value": "256"
     },
     {
-      "file": "src/boundary/gateway/server.ts",
+      "file": "src/boundary/gateway/server/companion-violations.ts",
       "name": "COMPANION_VIOLATION_LOG_LIMIT",
       "value": "1_000"
     },

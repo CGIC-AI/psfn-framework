@@ -307,7 +307,10 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
     this.boundedReads = new PostgresL2BoundedReads(ctx, this.annIterativeScanAvailable);
     this.bulkUpdates = new PostgresMemoryBulkUpdates(ctx, this.readModel);
     this.links = new PostgresMemoryLinkStore(ctx);
-    this.maintenanceReviews = new PostgresMemoryMaintenanceReviewStore(ctx, () => this.links.evolutionLinks());
+    this.maintenanceReviews = new PostgresMemoryMaintenanceReviewStore(
+      ctx,
+      () => this.links.summarizeEvolutionDecisions(),
+    );
     this.recentContactShapes = new PostgresRecentContactShapeStore(ctx);
     this.scratchpad = new PostgresScratchpadStore(ctx, scratchpadMirrorPath);
     this.deletionProposalPersistence = new PostgresMemoryDeletionProposalStore({
@@ -334,7 +337,6 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
         return resolveMemoryDeletionJustification(policy, categoryId, explanation);
       },
       onApproved: (version) => {
-        this.memoryDeletion.recordVersion(version);
         this.markSalienceMaintenanceChanged();
         this.markRetrievalCorpusChanged();
         this.journal?.onSoftDelete(version);
@@ -409,10 +411,8 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
     // query time. Embedding-column reachability is still asserted fail-closed
     // before this method runs, by assertExistingMemorySchemaHasEmbeddingColumn +
     // validatePostgresMemorySchema in createPostgresMemoryStoreFromPool.
-    await this.memoryDeletion.hydrate();
-    await this.links.hydrate();
-    await this.maintenanceReviews.hydrate();
-    await this.recentContactShapes.hydrate();
+    // t4mia: delete versions, links, maintenance reviews, and contact shapes
+    // are read at query time as well; only the self-pruning scratchpad hydrates.
     await this.scratchpad.hydrate();
   }
 
@@ -526,7 +526,6 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
     return this.persist(async () => {
       const client = await this.pool.connect();
       const state: MemoryStoreTransactionState = { client, operations: [] };
-      const deleteVersionsSnapshot = this.memoryDeletion.snapshotVersions();
       const salienceMaintenanceRevisionSnapshot = this.salienceMaintenanceRevision;
       try {
         await client.query('BEGIN');
@@ -545,9 +544,8 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
             error: String(rollbackError),
           });
         }
-        // Embeddings are not held in memory (a27w.1); the database ROLLBACK
-        // above is the sole authority for their transactional state.
-        this.memoryDeletion.restoreVersions(deleteVersionsSnapshot);
+        // Embeddings (a27w.1) and delete versions (t4mia) are not held in
+        // memory; the database ROLLBACK above is the sole authority for them.
         this.salienceMaintenanceRevision = salienceMaintenanceRevisionSnapshot;
         // Generations are monotonic. A rollback is itself a corpus transition:
         // any refresh that observed staged in-memory data must become stale.

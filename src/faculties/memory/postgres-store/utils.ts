@@ -1,20 +1,7 @@
-import type { MemoryEvolutionRelation } from '../memory-store-port.js';
 import type { PurrMemory } from '../types.js';
 
-export function memoryKey(id1: string, id2: string): string {
-  return [id1, id2].sort().join('::');
-}
-
-export function memoryEvolutionKey(
-  sourceMemoryId: string,
-  targetMemoryId: string,
-  relation: MemoryEvolutionRelation,
-): string {
-  return `${sourceMemoryId}::${targetMemoryId}::${relation}`;
-}
-
-export function increment(counts: Record<string, number>, key: string): void {
-  counts[key] = (counts[key] ?? 0) + 1;
+export function increment(counts: Record<string, number>, key: string, amount = 1): void {
+  counts[key] = (counts[key] ?? 0) + amount;
 }
 
 export function clampLimit(limit: number | undefined, fallback: number, min: number, max: number): number {

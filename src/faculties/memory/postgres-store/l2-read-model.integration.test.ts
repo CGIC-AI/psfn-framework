@@ -10,6 +10,7 @@ import type { MemoryScopeQuery, PurrMemory } from '../types.js';
 import { normalizeMemoryScopeQuery } from '../types.js';
 import type { MemoryStorePort } from '../memory-store-port.js';
 import { lexicalScore } from './utils.js';
+import { buildHighImpactLowConfidenceReviewInput } from '../maintenance-review.js';
 import {
   MEMORY_SUBJECT_CLASSIFIER_VERSION,
   type MemorySubjectQueryAuthorization,
@@ -401,6 +402,112 @@ describe('PostgresL2ReadModel query-time reads (ufgwv)', () => {
         })).rejects.toThrow();
         expect((await current.getById('other'))?.salience).toBe(0.4);
       }
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+});
+
+const SIDE_TABLES = /\bFROM (l2_memory_delete_versions|l2_memory_abstraction_links|memory_evolution_links|memory_links|l2_memory_maintenance_reviews|recent_contact_shapes)\b/i;
+
+async function seedSideTables(store: MemoryStorePort): Promise<void> {
+  await store.softDeleteMemory('m05f', { deleteId: 'delete-m05f', deletedBy: 'tester', reason: 'side' });
+  await store.recordAbstractionLink({
+    linkId: 'abstraction-1', sourceMemoryId: 'm00a', abstractedMemoryId: 'm01b',
+    externalRef: 'ext:abstraction-1', createdAt: 10, createdBy: 'tester', reason: 'summary',
+  });
+  await store.recordAbstractionLink({
+    linkId: 'abstraction-2', sourceMemoryId: 'm00a', abstractedMemoryId: 'm02c',
+    externalRef: 'ext:abstraction-2', createdAt: 20,
+  });
+  await store.recordEvolutionLink({
+    linkId: 'evolution-1', sourceMemoryId: 'm01b', targetMemoryId: 'm00a', relation: 'supersedes', createdAt: 30,
+  });
+  await store.recordEvolutionLink({
+    linkId: 'evolution-2', sourceMemoryId: 'm01b', targetMemoryId: 'm02c', relation: 'conflicts_with', createdAt: 40,
+  });
+  expect(await store.linkMemories('m02c', 'm00a')).toMatchObject({ id1: 'm00a', id2: 'm02c' });
+  expect(await store.linkMemories('m00a', 'm02c')).toBeNull();
+  expect(await store.linkMemories('m00a', 'm03d', 'contrast')).toMatchObject({ linkType: 'contrast' });
+  const review = buildHighImpactLowConfidenceReviewInput({
+    memoryId: 'm00a', text: 'Potential high-impact boundary with weak evidence.',
+    sourceRef: 'channel-a:m00a', confidence: 0.2, type: 'boundary',
+  }, 1_000);
+  if (!review) throw new Error('fixture must queue a review');
+  await store.upsertMemoryMaintenanceReview(review);
+  for (const [contactId, updatedAt] of [['contact-a', 5], ['contact-b', 9]] as const) {
+    await store.upsertRecentContactShape({
+      schemaVersion: 1, contactId, summary: `shape ${contactId}`, sourceMemoryIds: ['m00a'],
+      confidenceScore: 0.5, noveltyScore: 0.25, updatedAt, freshUntil: updatedAt + 100,
+    });
+  }
+}
+
+async function sideTableView(store: MemoryStorePort): Promise<unknown> {
+  return {
+    deleteVersion: await store.getDeleteVersion('delete-m05f'),
+    missingVersion: await store.getDeleteVersion('missing'),
+    abstractionsBySource: await store.getAbstractionLinksForSourceMemory('m00a'),
+    abstractionsByTarget: await store.getAbstractionLinksForAbstractedMemory('m01b'),
+    evolutionBySource: await store.getEvolutionLinksForSourceMemory('m01b'),
+    evolutionSupersedes: await store.getEvolutionLinksForSourceMemory('m01b', 'supersedes'),
+    evolutionByTarget: await store.getEvolutionLinksForTargetMemory('m02c'),
+    linked: await store.getLinkedMemories('m00a'),
+    reviews: await store.listMemoryMaintenanceReviews(),
+    pendingReviews: await store.listMemoryMaintenanceReviews({ status: 'pending', limit: 5 }),
+    diagnostics: await store.getMemoryMaintenanceDiagnostics({ now: 4_000 }),
+    shape: await store.getRecentContactShape('contact-a'),
+    shapes: await store.listRecentContactShapes(),
+  };
+}
+
+describe('PostgresMemoryStore side tables read at query time (t4mia)', () => {
+  it('boots without reading any side table and answers identical getters across restart', async () => {
+    await withRecordingPool(async ({ pool, statements }) => {
+      const first = await createPostgresMemoryStoreFromPool(pool, 4);
+      await seed(first, fixture());
+      await seedSideTables(first);
+      const before = await sideTableView(first);
+
+      statements.length = 0;
+      const restarted = await createPostgresMemoryStoreFromPool(pool, 4);
+      const bootSideReads = statements
+        .filter(sql => SIDE_TABLES.test(sql))
+        .filter(sql => !/^(INSERT|UPDATE|DELETE|CREATE|ALTER|DROP)\b/i.test(sql));
+      expect(bootSideReads).toEqual([]);
+
+      expect(await sideTableView(restarted)).toEqual(before);
+      expect(before).toMatchObject({
+        deleteVersion: { deleteId: 'delete-m05f', memoryId: 'm05f', deletedBy: 'tester', deleteReason: 'side' },
+        abstractionsBySource: [{ id: 'abstraction-1', createdAt: 10 }, { id: 'abstraction-2', createdAt: 20 }],
+        evolutionBySource: [{ id: 'evolution-2' }, { id: 'evolution-1' }],
+        evolutionSupersedes: [{ id: 'evolution-1' }],
+        diagnostics: {
+          reviewCount: 1, pendingReviewCount: 1, oldestPendingReviewAgeMs: 3_000,
+          evolutionDecisionCount: 2, supersessionDecisionCount: 1, conflictDecisionCount: 1,
+          latestEvolutionDecisionAt: 40,
+        },
+        shapes: [{ contactId: 'contact-b' }, { contactId: 'contact-a' }],
+      });
+      expect((before as { linked: Array<{ id2: string }> }).linked.map(link => link.id2).sort())
+        .toEqual(['m02c', 'm03d']);
+      expect(await restarted.unlinkMemories('m02c', 'm00a')).toBe(true);
+      expect(await restarted.unlinkMemories('m02c', 'm00a')).toBe(false);
+      expect((await first.getLinkedMemories('m00a')).map(link => link.id2)).toEqual(['m03d']);
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('reads delete versions by id across restart and restores through the SQL version', async () => {
+    await withRecordingPool(async ({ pool }) => {
+      const store = await createPostgresMemoryStoreFromPool(pool, 4);
+      await seed(store, fixture().slice(0, 2));
+      expect(await store.getDeleteVersion('delete-kept')).toBeUndefined();
+      expect(await store.undoSoftDelete('delete-kept')).toBeNull();
+
+      await store.softDeleteMemory('m00a', { deleteId: 'delete-kept' });
+      const restarted = await createPostgresMemoryStoreFromPool(pool, 4);
+      expect(await restarted.undoSoftDelete('delete-kept', { restoredBy: 'tester' }))
+        .toMatchObject({ deleteId: 'delete-kept', restoredBy: 'tester' });
+      expect(await store.getDeleteVersion('delete-kept')).toMatchObject({ restoredBy: 'tester' });
+      expect((await store.getById('m00a'))?.deletedAt).toBeUndefined();
     });
   }, INTEGRATION_TIMEOUT_MS);
 });

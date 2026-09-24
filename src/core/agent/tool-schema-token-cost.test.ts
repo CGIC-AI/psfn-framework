@@ -98,13 +98,13 @@ describe('full callable catalog schema token cost', () => {
       // outreach_later: -659 bytes / -115 tokens after descriptions.
       // psfn-framework-9zgfd retired the web browse action (duplicate of fetch):
       // -49 bytes / -10 tokens before, -108 bytes / -23 tokens after.
-      beforeTokens: 20_146,
-      afterTokens: 24_442,
+      beforeTokens: 20_198,
+      afterTokens: 24_494,
       deltaTokens: 4_296,
-      beforeBytes: 94_047,
-      afterBytes: 113_149,
-      providerSchemaHash: '2e40dff496375e9ec558e3b560054a57558c3a521538238144e09dd8bb0dc2f5',
-      parameterSchemaHash: '731e2a57d151e336ff23b4e801c5acd905c738ab8fa15b3b7c302db541969624',
+      beforeBytes: 94_291,
+      afterBytes: 113_393,
+      providerSchemaHash: 'e65536f483ed31a8333bd5dd05e0fbca5433e9d713f9c0ef0cf877120eb117b9',
+      parameterSchemaHash: '6730fddb4ac130db7ecf1a0c074e3044a2d725d3854b50258ded7ea5ac046611',
     });
 
     // The additional description tokens affect an uncached request. A stable

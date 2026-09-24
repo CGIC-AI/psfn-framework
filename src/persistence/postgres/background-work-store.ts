@@ -9,6 +9,11 @@ import type {
   BackgroundWorkWelfarePolicy,
   SubsystemOutputProjection,
 } from '../../core/agent/background-work/store-port.js';
+import type {
+  BackgroundWorkRunLinkageJob,
+  BackgroundWorkRunLinkageKeys,
+  BackgroundWorkRunLinkagePort,
+} from '../../core/agent/background-work/automata-run-redelivery.js';
 import {
   BACKGROUND_WORK_LEASE_EXPIRY_LIMIT,
   BACKGROUND_WORK_REASON_CODES,
@@ -35,6 +40,7 @@ import {
   POSTGRES_BACKGROUND_WORK_MIGRATIONS,
 } from './migrations.js';
 import { requireBackgroundWorkSafeInteger as safeInteger } from './row-guards.js';
+import { listNonTerminalBackgroundWorkJobsForRunLinkage } from './background-work-run-linkage.js';
 import { parseSubsystemOutputRef } from '../../shared/contracts/subsystem-output-refs.js';
 import { createComponentLogger } from '../../shared/logger.js';
 const log = createComponentLogger('PostgresBackgroundWorkStore');
@@ -308,7 +314,7 @@ function requireTransitionRow(
   return mapRow(row);
 }
 
-export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
+export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort, BackgroundWorkRunLinkagePort {
   private closePromise: Promise<void> | null = null;
 
   private constructor(private readonly pool: Pool) {}
@@ -1778,6 +1784,12 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
       WHERE state IN ('queued', 'deferred', 'retry_wait', 'running')
     `);
     return row ? safeInteger(row.count, 'pending count') : 0;
+  }
+
+  async listNonTerminalJobsForRunLinkage(
+    keys: BackgroundWorkRunLinkageKeys,
+  ): Promise<BackgroundWorkRunLinkageJob[]> {
+    return await listNonTerminalBackgroundWorkJobsForRunLinkage(this.pool, keys);
   }
 
   async get(jobId: string): Promise<StoredBackgroundWorkJob | null> {

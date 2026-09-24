@@ -18,7 +18,7 @@
       "timeoutMs": 120000,
       "measuredBaselineMs": 700,
       "baselineSource": "measured",
-      "note": "psfn-framework-7qeo1.24.5-.6: end-to-end incident path over the real containerized PostgreSQL health-event ring — detector cycle through the live event bus into the persisting sink and the deduplicated operator alert, then the Garden incident timeline reading the same store back under the identical incident id. Focused local full-file wall baseline was 0.65s on 2026-09-07 with a warm harness slot; 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
+      "note": "psfn-framework-7qeo1.24.5-.6: end-to-end incident path over the real containerized PostgreSQL health-event ring \u2014 detector cycle through the live event bus into the persisting sink and the deduplicated operator alert, then the Garden incident timeline reading the same store back under the identical incident id. Focused local full-file wall baseline was 0.65s on 2026-09-07 with a warm harness slot; 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
     },
     {
       "file": "src/persistence/postgres/letter-store.integration.test.ts",
@@ -663,6 +663,13 @@
       "measuredBaselineMs": 750,
       "baselineSource": "measured",
       "note": "psfn-framework-znuav: upgrade path for the retired fleet welfare verifier against the real containerized PostgreSQL harness - a fleet carrying the legacy cross-schema USAGE/SELECT grants boots, the shared-schema startup authority revokes them, a second boot is idempotent, and a stray grantee still fails closed. Focused local full-file wall baseline was 0.72s on 2026-09-08 with a warm harness slot; 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
+    },
+    {
+      "file": "src/persistence/postgres/background-work-run-linkage.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 12000,
+      "baselineSource": "measured",
+      "note": "psfn-framework-y5tu1: restart linkage between lease_retry Automata runs and the durable background-work queue (linkage query plus hydrate reconciliation and redelivery) against the real containerized pgvector PostgreSQL harness. Focused local full-file wall was 2.0s warm on 2026-09-23; the 12s baseline is the sibling automata restart suite's cold-harness measurement on the same image, and the 120s cap matches the repo integration cap for cold image startup and shared harness-slot contention."
     }
   ]
 }

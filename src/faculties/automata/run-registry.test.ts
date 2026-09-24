@@ -8,6 +8,7 @@ import {
   AutomataRunRegistry,
   InMemoryAutomataRunStore,
 } from './run-registry.js';
+import { NO_AUTOMATA_REDELIVERY, automataRedeliveryOf } from '../../test-support/automata-run-redelivery.js';
 
 function policy() {
   return parseAutomataOwnerPolicy({
@@ -65,6 +66,7 @@ describe('AutomataRunRegistry', () => {
     const stores = companionIds.map(() => new InMemoryAutomataRunStore());
     for (const [index, companionId] of companionIds.entries()) {
       const registry = await AutomataRunRegistry.hydrate({
+        redelivery: NO_AUTOMATA_REDELIVERY,
         companionId,
         policy: policy(),
         store: stores[index]!,
@@ -88,6 +90,7 @@ describe('AutomataRunRegistry', () => {
 
     for (const [index, companionId] of companionIds.entries()) {
       const restarted = await AutomataRunRegistry.hydrate({
+        redelivery: NO_AUTOMATA_REDELIVERY,
         companionId,
         policy: policy(),
         store: stores[index]!,
@@ -106,7 +109,7 @@ describe('AutomataRunRegistry', () => {
 
   it('hydrates retained active and recent runs and preserves task-to-session discovery', async () => {
     const store = new InMemoryAutomataRunStore();
-    const first = await AutomataRunRegistry.hydrate({ companionId: 'companion-a', policy: policy(), store, nowMs: 100 });
+    const first = await AutomataRunRegistry.hydrate({ redelivery: NO_AUTOMATA_REDELIVERY, companionId: 'companion-a', policy: policy(), store, nowMs: 100 });
     await first.register({
       runId: 'run-active',
       // A lease_retry class: its durable redelivery owner re-enters it.
@@ -132,13 +135,14 @@ describe('AutomataRunRegistry', () => {
     await first.transition('run-recent', { status: 'running', reason: 'agent_initialized', atMs: 160 });
     await first.transition('run-recent', { status: 'completed', reason: 'completed', outcome: 'completed', atMs: 175 });
 
-    const restarted = await AutomataRunRegistry.hydrate({ companionId: 'companion-a', policy: policy(), store, nowMs: 200 });
+    const restarted = await AutomataRunRegistry.hydrate({ redelivery: automataRedeliveryOf(['run-active']), companionId: 'companion-a', policy: policy(), store, nowMs: 200 });
 
     expect(restarted.getRun('run-active')?.status).toBe('running');
     expect(restarted.getRun('run-recent')?.status).toBe('completed');
     expect(restarted.findByTask('task-recent')[0]?.sessionIds).toEqual(['subagent:subagent-2']);
 
     const restartedAfterDiscoveryRetention = await AutomataRunRegistry.hydrate({
+      redelivery: automataRedeliveryOf(['run-active']),
       companionId: 'companion-a',
       policy: policy(),
       store,
@@ -148,9 +152,9 @@ describe('AutomataRunRegistry', () => {
     expect(restartedAfterDiscoveryRetention.getRun('run-recent')).toBeNull();
   });
 
-  it('fails orphaned runs without a redelivery path at restart and leaves lease-retry runs to their owner', async () => {
+  it('fails orphaned runs without a redelivery path at restart and leaves redelivered lease-retry runs to their owner', async () => {
     const store = new InMemoryAutomataRunStore();
-    const first = await AutomataRunRegistry.hydrate({ companionId: 'companion-a', policy: policy(), store, nowMs: 100 });
+    const first = await AutomataRunRegistry.hydrate({ redelivery: NO_AUTOMATA_REDELIVERY, companionId: 'companion-a', policy: policy(), store, nowMs: 100 });
     const register = (runId: string, automatonClass: string, workerId: string) => first.register({
       runId,
       automatonClass,
@@ -171,7 +175,7 @@ describe('AutomataRunRegistry', () => {
     await first.transition('subagent-done', { status: 'completed', reason: 'completed', outcome: 'completed', atMs: 120 });
     const update = vi.spyOn(store, 'update');
 
-    const restarted = await AutomataRunRegistry.hydrate({ companionId: 'companion-a', policy: policy(), store, nowMs: 500 });
+    const restarted = await AutomataRunRegistry.hydrate({ redelivery: automataRedeliveryOf(['hooks-running']), companionId: 'companion-a', policy: policy(), store, nowMs: 500 });
 
     for (const [runId, previousStatus] of [['subagent-running', 'running'], ['reflection-queued', 'queued']] as const) {
       expect(restarted.getRun(runId)).toMatchObject({
@@ -190,8 +194,118 @@ describe('AutomataRunRegistry', () => {
     expect(update).toHaveBeenCalledTimes(2);
   });
 
+  it('fails a lease-retry run that no live background-work job owns', async () => {
+    const store = new InMemoryAutomataRunStore();
+    const first = await AutomataRunRegistry.hydrate({ redelivery: NO_AUTOMATA_REDELIVERY, companionId: 'companion-a', policy: policy(), store, nowMs: 100 });
+    for (const runId of ['turn-1:memory-extraction', 'extraction-queued']) {
+      await first.register({
+        runId,
+        automatonClass: 'memory.extraction',
+        workerId: 'memory-extraction',
+        taskId: 'session-1',
+        taskLabel: 'Memory extraction',
+        taskSummary: 'Memory extraction triggered by response_turn',
+        sessionIds: ['session-1'],
+        createdAtMs: 100,
+      });
+    }
+    await first.transition('turn-1:memory-extraction', { status: 'running', reason: 'memory_extraction_started', atMs: 110 });
+    const asked: unknown[] = [];
+    const update = vi.spyOn(store, 'update');
+
+    const restarted = await AutomataRunRegistry.hydrate({
+      redelivery: {
+        async findRedeliveredRunIds(candidates, nowMs) {
+          asked.push({ candidates, nowMs });
+          return new Set<string>();
+        },
+      },
+      companionId: 'companion-a',
+      policy: policy(),
+      store,
+      nowMs: 900,
+    });
+
+    // One consultation, before anything is exposed, naming every orphan.
+    expect(asked).toEqual([{
+      candidates: expect.arrayContaining([
+        { automatonClass: 'memory.extraction', lineageRunIds: ['turn-1:memory-extraction'] },
+        { automatonClass: 'memory.extraction', lineageRunIds: ['extraction-queued'] },
+      ]),
+      nowMs: 900,
+    }]);
+    for (const [runId, previousStatus] of [['turn-1:memory-extraction', 'running'], ['extraction-queued', 'queued']] as const) {
+      expect(restarted.getRun(runId)).toMatchObject({
+        status: 'failed',
+        statusReason: AUTOMATA_RUN_PROCESS_RESTART_REASON,
+        outcome: 'blocked',
+        finishedAtMs: 900,
+        failureReason: expect.stringContaining('no live background-work job owns this run'),
+      });
+      expect(update).toHaveBeenCalledWith(expect.objectContaining({ runId, status: 'failed' }), previousStatus);
+      expect((await store.loadExact('companion-a', runId))?.status).toBe('failed');
+    }
+  });
+
+  it('keeps a lease-retry retry run whose lineage root a live job will re-enter', async () => {
+    const store = new InMemoryAutomataRunStore();
+    const first = await AutomataRunRegistry.hydrate({ redelivery: NO_AUTOMATA_REDELIVERY, companionId: 'companion-a', policy: policy(), store, nowMs: 100 });
+    const base = {
+      automatonClass: 'memory.extraction',
+      workerId: 'memory-extraction',
+      taskId: 'session-1',
+      taskLabel: 'Memory extraction',
+      taskSummary: 'Memory extraction triggered by response_turn',
+      sessionIds: ['session-1'],
+      createdAtMs: 100,
+    };
+    await first.register({ ...base, runId: 'request-root' });
+    await first.transition('request-root', { status: 'running', reason: 'memory_extraction_started', atMs: 105 });
+    await first.transition('request-root', {
+      status: 'failed',
+      reason: 'memory_extraction_failed',
+      outcome: 'blocked',
+      failureReason: 'orchestration_failure',
+      atMs: 106,
+    });
+    await first.register({ ...base, runId: 'retry-of-root', sourceRunId: 'request-root', workerGeneration: 2 });
+    await first.transition('retry-of-root', { status: 'running', reason: 'memory_extraction_started', atMs: 110 });
+
+    const restarted = await AutomataRunRegistry.hydrate({
+      redelivery: automataRedeliveryOf(['request-root']),
+      companionId: 'companion-a',
+      policy: policy(),
+      store,
+      nowMs: 900,
+    });
+
+    expect(restarted.getRun('retry-of-root')?.status).toBe('running');
+  });
+
+  it('fails hydration closed when the oracle vouches for an unrequested run', async () => {
+    const store = new InMemoryAutomataRunStore();
+    const first = await AutomataRunRegistry.hydrate({ redelivery: NO_AUTOMATA_REDELIVERY, companionId: 'companion-a', policy: policy(), store, nowMs: 100 });
+    await first.register({
+      runId: 'hooks-queued',
+      automatonClass: 'background.intention_post_turn_hooks',
+      workerId: 'background-work:intention_post_turn_hooks',
+      taskId: 'session-1',
+      taskLabel: 'hooks',
+      taskSummary: 'hooks',
+      createdAtMs: 100,
+    });
+    await expect(AutomataRunRegistry.hydrate({
+      redelivery: { findRedeliveredRunIds: async () => new Set(['someone-else']) },
+      companionId: 'companion-a',
+      policy: policy(),
+      store,
+    })).rejects.toThrow('unrequested run "someone-else"');
+    expect((await store.loadExact('companion-a', 'hooks-queued'))?.status).toBe('queued');
+  });
+
   it('fails closed on unknown class, status, and transition', async () => {
     const registry = await AutomataRunRegistry.hydrate({
+      redelivery: NO_AUTOMATA_REDELIVERY,
       companionId: 'companion-a',
       policy: policy(),
       store: new InMemoryAutomataRunStore(),
@@ -221,6 +335,7 @@ describe('AutomataRunRegistry', () => {
   it('keeps terminal retries and linked work-product references idempotent across hydration', async () => {
     const store = new InMemoryAutomataRunStore();
     const registry = await AutomataRunRegistry.hydrate({
+      redelivery: NO_AUTOMATA_REDELIVERY,
       companionId: 'companion-a',
       policy: policy(),
       store,
@@ -255,6 +370,7 @@ describe('AutomataRunRegistry', () => {
     await registry.linkArtifacts('run-terminal', refs);
 
     const restarted = await AutomataRunRegistry.hydrate({
+      redelivery: NO_AUTOMATA_REDELIVERY,
       companionId: 'companion-a',
       policy: policy(),
       store,

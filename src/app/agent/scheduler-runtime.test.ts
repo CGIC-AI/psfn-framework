@@ -25,6 +25,7 @@ import {
   registerBiographyCompanionReviewTask,
 } from './scheduler-runtime.js';
 import { registerDurableBackgroundWorkSupervisorTask } from '../../core/agent/background-work/scheduler-task.js';
+import { NO_AUTOMATA_REDELIVERY } from '../../test-support/automata-run-redelivery.js';
 
 const SRC_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -120,6 +121,7 @@ describe('agent scheduler runtime wiring', () => {
   it('runs the owner-cadenced reviewer as a registered terminal Automata run', async () => {
     const scheduler = new Scheduler(new EventBus());
     const registry = await AutomataRunRegistry.hydrate({
+      redelivery: NO_AUTOMATA_REDELIVERY,
       companionId: 'companion-a',
       policy: loadAutomataPolicySeedDefaults(),
       store: new InMemoryAutomataRunStore(),

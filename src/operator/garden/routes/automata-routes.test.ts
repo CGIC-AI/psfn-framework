@@ -7,6 +7,7 @@ import {
   type AdminAutomataService,
 } from '../services/automata-service.js';
 import { buildAdminAutomataRoutes } from './automata-routes.js';
+import { NO_AUTOMATA_REDELIVERY } from '../../../test-support/automata-run-redelivery.js';
 
 interface CapturedResponse {
   status: number;
@@ -55,6 +56,7 @@ function service(registry: AutomataRunRegistry): AdminAutomataDataService {
 describe('GET /api/admin/automata', () => {
   it('exposes the complete class manifest and task-to-session run discovery', async () => {
     const registry = await AutomataRunRegistry.hydrate({
+      redelivery: NO_AUTOMATA_REDELIVERY,
       companionId: 'companion-test',
       policy: loadAutomataPolicySeedDefaults(),
       store: new InMemoryAutomataRunStore(),
@@ -85,6 +87,7 @@ describe('GET /api/admin/automata', () => {
   it('fails closed for unavailable registries and unknown class queries', async () => {
     expect((await invoke(null)).status).toBe(503);
     const registry = await AutomataRunRegistry.hydrate({
+      redelivery: NO_AUTOMATA_REDELIVERY,
       companionId: 'companion-test',
       policy: loadAutomataPolicySeedDefaults(),
       store: new InMemoryAutomataRunStore(),
@@ -96,6 +99,7 @@ describe('GET /api/admin/automata', () => {
 
   it('rejects unknown Bus statuses and malformed pagination', async () => {
     const registry = await AutomataRunRegistry.hydrate({
+      redelivery: NO_AUTOMATA_REDELIVERY,
       companionId: 'companion-test',
       policy: loadAutomataPolicySeedDefaults(),
       store: new InMemoryAutomataRunStore(),

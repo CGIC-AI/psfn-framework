@@ -82,6 +82,11 @@ import { GatewayConnectionScope } from './server/connection-scope.js';
 import { GatewayAuditTrail } from './server/audit-trail.js';
 import { GatewayConnectionRpcMethods } from './server/rpc-method-registration.js';
 import { GatewayAgentRequests } from './server/agent-request-routing.js';
+import { GatewayIcpInvalidationQueue } from './server/icp-invalidation-queue.js';
+import {
+  assertGatewayFleetScreeningAndDocks,
+  assertGatewayTopologyOptions,
+} from './server/topology-validation.js';
 import {
   GatewayCompanionViolations,
   type GatewayFleetConnectionSnapshot,
@@ -123,22 +128,6 @@ export type {
 
 // ── Gateway Server Class ──
 
-type IcpQueuedInvalidationReason =
-  | 'peer_offline'
-  | 'fatigue_exhausted'
-  | 'operator_cancelled'
-  | 'unknown_participant';
-
-type IcpInvalidationAttemptOutcome =
-  | { readonly ok: true; readonly revokedCount: number }
-  | { readonly ok: false; readonly error: unknown };
-
-interface PendingIcpInvalidation {
-  readonly reasonCode: IcpQueuedInvalidationReason;
-  /** Never rejects so failed invalidations remain observable and chainable. */
-  readonly completion: Promise<IcpInvalidationAttemptOutcome>;
-}
-
 export class GatewayServer {
   private rpcServer: net.Server | https.Server | null = null;
   private readonly connections = new Set<GatewayRpcConnection>();
@@ -178,7 +167,6 @@ export class GatewayServer {
   private readonly companionLastSeen = new Map<CompanionId, number>();
   private readonly companionPostures = new GatewayFleetPostureCache<GatewayRpcConnection>();
   private readonly icpAutonomyBroker: GatewayIcpAutonomyBroker | null;
-  private readonly pendingIcpInvalidations = new Map<string, PendingIcpInvalidation>();
   private readonly fatigueFencedCompanionIds = new Set<string>();
   private readonly gardenQueueChangeUnsubscribers: Array<() => void> = [];
   private readonly sharedWorkspaceReader: SharedCompanionWorkspaceReader | null;
@@ -192,6 +180,7 @@ export class GatewayServer {
   private readonly auditTrail: GatewayAuditTrail;
   private readonly rpcMethods: GatewayConnectionRpcMethods;
   private readonly agentRequests: GatewayAgentRequests;
+  private readonly icpInvalidations: GatewayIcpInvalidationQueue;
 
   private companionDisplayLabel(companionId: string): string {
     return this.options.approvalParentLabelProvider?.(companionId)?.trim()
@@ -269,33 +258,7 @@ export class GatewayServer {
     this.sharedWorkspaceReader = this.multiCompanion.enabled && this.multiCompanion.sharedWorkspacePath
       ? new SharedCompanionWorkspaceReader(this.multiCompanion.sharedWorkspacePath)
       : null;
-    // Fail at boot rather than on the first operator request: a gateway that
-    // starts and then cannot list the shared workspace hides the missing
-    // setting behind an RPC error nobody is watching.
-    if (this.sharedWorkspaceReader && !options.sharedWorkspaceListBounds) {
-      throw new Error(
-        'GatewayServer exposes a governed shared workspace without listing bounds; '
-        + 'settings.json must declare sharedWorkspaceListPageSize and '
-        + 'sharedWorkspaceListPageBytes',
-      );
-    }
-    if (options.companionChannels && !this.multiCompanion.enabled) {
-      throw new Error(
-        'GatewayServer received a companionChannels lane while multi-companion is disabled; '
-        + 'the inter-companion lane must not exist in single-companion topology',
-      );
-    }
-    if (options.icpAutonomyStore && !this.multiCompanion.enabled) {
-      throw new Error(
-        'GatewayServer received an icpAutonomyStore while multi-companion is disabled; '
-        + 'the autonomy broker must not exist in single-companion topology',
-      );
-    }
-    if (Boolean(options.icpAutonomyStore) !== Boolean(options.icpInitiationPolicyAuthority)) {
-      throw new Error(
-        'GatewayServer requires icpAutonomyStore and icpInitiationPolicyAuthority together',
-      );
-    }
+    assertGatewayTopologyOptions(options, this.multiCompanion, this.sharedWorkspaceReader);
     this.icpAutonomyBroker = options.icpAutonomyStore
       ? createGatewayIcpAutonomyBroker({
           store: options.icpAutonomyStore,
@@ -325,65 +288,11 @@ export class GatewayServer {
           alarm: (event, message, details) => this.companionViolations.alarmCompanionViolation(event, message, details),
         })
       : null;
-    if (this.multiCompanion.enabled) {
-      const missingWorkspaceRoots = this.multiCompanion.fleetCompanionIds.filter(
-        (companionId) => {
-          const workspacePath = this.multiCompanion.personalWorkspaceByCompanionId[companionId];
-          return typeof workspacePath !== 'string' || !workspacePath.trim();
-        },
-      );
-      if (missingWorkspaceRoots.length > 0) {
-        throw new Error(
-          'Multi-companion gateway requires one resolved Personal Workspace per fleet companion; '
-          + `missing: ${missingWorkspaceRoots.join(', ')}`,
-        );
-      }
-      log.info('Multi-companion gateway routing enabled', {
-        channelRouting: this.multiCompanion.channelRouting,
-        discordAccounts: this.multiCompanion.discordAccounts,
-        pluginAccounts: this.multiCompanion.pluginAccounts,
-      });
-      if (options.intakeScreening || options.visionIntake) {
-        throw new Error(
-          'Multi-companion gateway intake screening must use companion-owned providers, not singleton services',
-        );
-      }
-      if (!options.intakeScreeningProvider || !options.visionIntakeProvider) {
-        throw new Error(
-          'Multi-companion gateway requires companion-owned text and vision intake screening providers',
-        );
-      }
-      for (const companionId of this.multiCompanion.fleetCompanionIds) {
-        const screening = options.intakeScreeningProvider(companionId);
-        if (!screening || screening.globalMode !== options.intakeScreeningMode) {
-          throw new Error(
-            `Fleet intake screening mode=${options.intakeScreeningMode} has no matching service for companion ${companionId}`,
-          );
-        }
-        // Resolve every vision owner at construction too. Null is an explicit,
-        // valid disabled posture; a missing/unknown owner must throw here.
-        options.visionIntakeProvider(companionId);
-      }
-    } else {
-      if (
-        !options.intakeScreening
-        || options.intakeScreening.globalMode !== options.intakeScreeningMode
-      ) {
-        throw new Error(
-          `Single-companion intake screening mode=${options.intakeScreeningMode} has no matching service`,
-        );
-      }
-    }
-    if (this.discordAccountRoutingActive()) {
-      const missingDocks = [...new Set(Object.values(this.multiCompanion.discordAccounts))]
-        .filter(companionId => !options.discordAccountDocks?.has(companionId));
-      if (missingDocks.length > 0) {
-        throw new Error(
-          'Multi-account discord routing requires an outbound dock per routed companion; '
-          + `missing docks for: ${missingDocks.join(', ')}`,
-        );
-      }
-    }
+    assertGatewayFleetScreeningAndDocks(
+      options,
+      this.multiCompanion,
+      () => this.discordAccountRoutingActive(),
+    );
     this.capabilityTierProvider = options.capabilityTierProvider ?? (() => 'nursery');
     this.wyomingShardRouting = options.wyomingShardRouting;
     this.ntfyNotifier = new GatewayNtfyNotifier(options.ntfy);
@@ -476,6 +385,7 @@ export class GatewayServer {
     });
     const ports = this.createServerPorts();
     this.auditTrail = new GatewayAuditTrail(ports);
+    this.icpInvalidations = new GatewayIcpInvalidationQueue(ports);
     this.connectionLifecycle = new GatewayConnectionLifecycle(ports);
     this.companionViolations = new GatewayCompanionViolations(ports);
     this.connectionRouter = new GatewayConnectionRouter(ports);
@@ -611,7 +521,7 @@ export class GatewayServer {
     if (!this.icpAutonomyBroker) {
       throw new Error('ICP autonomy lifecycle control is not configured');
     }
-    return await this.queueIcpInvalidation(companionId, reasonCode);
+    return await this.icpInvalidations.queueIcpInvalidation(companionId, reasonCode);
   }
 
   /** Fail-closed audit hook for companion relay decisions. */
@@ -987,7 +897,7 @@ export class GatewayServer {
       log.info(`${this.companionDisplayLabel(status.companionId)} connection unbound`, {
         companionId: status.companionId,
       });
-      void this.queueIcpInvalidation(status.companionId, 'peer_offline')
+      void this.icpInvalidations.queueIcpInvalidation(status.companionId, 'peer_offline')
         .catch((error: unknown) => {
           log.error('Failed to invalidate ICP permits after companion disconnect', {
             companionId: status.companionId,
@@ -1016,51 +926,6 @@ export class GatewayServer {
     }
     this.rpcClients.delete(conn);
     this.connectionStatuses.delete(conn);
-  }
-
-  private queueIcpInvalidation(
-    companionId: string,
-    reasonCode: IcpQueuedInvalidationReason,
-  ): Promise<number> {
-    if (!this.icpAutonomyBroker) return Promise.resolve(0);
-    const previous = this.pendingIcpInvalidations.get(companionId);
-    const attempt = (async (): Promise<number> => {
-      if (previous) await previous.completion;
-      const revoked = await this.icpAutonomyBroker!.invalidateForCompanion(companionId, reasonCode);
-      return revoked.length;
-    })();
-    const pending: PendingIcpInvalidation = {
-      reasonCode,
-      completion: attempt.then(
-        (revokedCount): IcpInvalidationAttemptOutcome => ({ ok: true, revokedCount }),
-        (error: unknown): IcpInvalidationAttemptOutcome => ({ ok: false, error }),
-      ),
-    };
-    this.pendingIcpInvalidations.set(companionId, pending);
-    void pending.completion.then((outcome) => {
-      if (outcome.ok && this.pendingIcpInvalidations.get(companionId) === pending) {
-        this.pendingIcpInvalidations.delete(companionId);
-      }
-    });
-    return attempt;
-  }
-
-  private async awaitIcpInvalidationBeforeReconnect(companionId: string): Promise<void> {
-    let pending = this.pendingIcpInvalidations.get(companionId);
-    while (pending) {
-      const outcome = await pending.completion;
-      const current = this.pendingIcpInvalidations.get(companionId);
-      if (current !== pending) {
-        pending = current;
-        continue;
-      }
-      if (outcome.ok) {
-        this.pendingIcpInvalidations.delete(companionId);
-        return;
-      }
-      await this.queueIcpInvalidation(companionId, pending.reasonCode);
-      pending = this.pendingIcpInvalidations.get(companionId);
-    }
   }
 
   private handleMalformedFrame(
@@ -1201,7 +1066,7 @@ export class GatewayServer {
     );
     if (posture.fatigue.state === 'exhausted'
       && !this.fatigueFencedCompanionIds.has(status.companionId)) {
-      await this.queueIcpInvalidation(status.companionId, 'fatigue_exhausted');
+      await this.icpInvalidations.queueIcpInvalidation(status.companionId, 'fatigue_exhausted');
       this.fatigueFencedCompanionIds.add(status.companionId);
     } else if (posture.fatigue.state !== 'exhausted') {
       this.fatigueFencedCompanionIds.delete(status.companionId);
@@ -1321,7 +1186,7 @@ export class GatewayServer {
         );
       }
       if (params.role === 'agent') {
-        await this.awaitIcpInvalidationBeforeReconnect(authenticatedCompanionId);
+        await this.icpInvalidations.awaitIcpInvalidationBeforeReconnect(authenticatedCompanionId);
         const existing = this.companionConnections.get(authenticatedCompanionId);
         if (existing && existing !== conn) {
           if (this.connections.has(existing)) {
@@ -1393,10 +1258,10 @@ export class GatewayServer {
     if (this.icpAutonomyBroker) {
       const companionIds = new Set([
         ...this.companionConnections.keys(),
-        ...this.pendingIcpInvalidations.keys(),
+        ...this.icpInvalidations.pendingIcpInvalidations.keys(),
       ]);
       await Promise.all([...companionIds].map(async companionId => {
-        await this.queueIcpInvalidation(companionId, 'peer_offline');
+        await this.icpInvalidations.queueIcpInvalidation(companionId, 'peer_offline');
       }));
     }
     for (const unsubscribe of this.gardenQueueChangeUnsubscribers.splice(0)) {

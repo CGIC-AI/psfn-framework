@@ -7,7 +7,7 @@
  * /fleet surface and none of them imply that a companion is selected.
  */
 
-export type FleetView = 'info' | 'attention' | 'usage' | 'costs' | 'firewall';
+export type FleetView = 'info' | 'attention' | 'usage' | 'costs' | 'firewall' | 'lifecycle';
 
 export interface FleetViewDestination {
   readonly id: FleetView;
@@ -40,6 +40,11 @@ export const FLEET_VIEW_DESTINATIONS: readonly FleetViewDestination[] = [
     id: 'firewall',
     label: 'Global firewall',
     description: 'Cluster-owned shared gateway posture',
+  },
+  {
+    id: 'lifecycle',
+    label: 'Membership',
+    description: 'Plan and apply companion adds and removals',
   },
 ];
 

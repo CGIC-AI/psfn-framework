@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { GatewayRpcConnection } from '../../boundary/gateway/transport.js';
 import { GatewayServer, type GatewayServerOptions } from '../../boundary/gateway/server.js';
 import { deriveCompanionAuthToken } from '../../boundary/gateway/companion-auth.js';
+import { GatewayFleetIcpPostureSource } from '../../boundary/gateway/fleet-icp-posture.js';
 import {
   GatewayFleetPortalProjection,
   serializeFleetPortalProjection,
@@ -234,6 +235,12 @@ describe('local two-agent fleet posture runtime validation', () => {
         { companionId: COMPANION_B, displayName: 'Companion Two' },
       ],
       source: server,
+      icpPosture: new GatewayFleetIcpPostureSource({
+        fleetCompanionIds: [COMPANION_A, COMPANION_B],
+        icpActive: false,
+        policyOutcomes: { isFailing: () => false },
+        reportReadFailure: () => undefined,
+      }),
       now: () => new Date(projectionNow),
     });
 

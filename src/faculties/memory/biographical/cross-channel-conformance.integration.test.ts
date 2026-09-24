@@ -45,6 +45,16 @@ import {
   type SourceRevalidationOutcome,
 } from './projection.js';
 import { recordCompanionPublicationChoice } from './publication.js';
+import {
+  recordCompanionPortabilityChoice,
+  revokeCompanionPortabilityChoice,
+} from './portability-choice.js';
+import { createBiographySynthesisTargetPort } from './synthesis-targets.js';
+import { BiographySynthesisService } from './synthesis-service.js';
+import { InMemoryMemoryStore } from '../../../test-support/in-memory-memory-store.js';
+import { createDefaultBiographicalDepthPolicy } from '../../../system/config/biographical-depth-policy.js';
+import type { LLMProviderPort } from '../../../core/agent/contracts.js';
+import type { PurrMemory } from '../types.js';
 import { createDefaultBiographicalCandidatePolicy } from '../../../system/config/biographical-candidate-policy.js';
 import type {
   BiographicalClaim,
@@ -759,6 +769,185 @@ describe('cross-channel biographical conformance — recognition and non-disclos
         source: 'discord',
         transportParticipantId: 'discord-eve',
       })).toEqual([]);
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+});
+
+// ── uz787: group-context claims and the companion portability choice ──
+//
+// Two rows the bead owns. (1) A verified group authority yields a
+// `companion_group` candidate whose participants are the authority's exact set
+// and whose sources come only from the group's governed context — never from a
+// DM or a solitary reflection in the companion's own silo. (2) A policy-gated
+// companion choice moves her own personal-sensitivity claim to `universal`
+// WITHOUT lowering its sensitivity; claims naming a person, above-ceiling
+// claims, and a disabled policy are refused, and the claim then renders in a
+// public room.
+describe('uz787 group-context claims and companion portability choice', () => {
+  const GROUP_CONTEXT = 'discord:group:crew';
+  const CREW: readonly string[] = ['crew-a', 'crew-b'];
+
+  function groupModel(sourceIds: readonly string[]): LLMProviderPort {
+    return {
+      complete: async () => ({
+        content: `<biographical_candidates>${JSON.stringify([{
+          kind: 'shared-language',
+          value: {
+            kind: 'shared-language',
+            schemaVersion: 1,
+            languageType: 'phrase',
+            phrase: "pier o'clock",
+            meaning: 'time to go watch the sunset together',
+          },
+          basis: 'explicit',
+          confidence: 0.9,
+          sourceMemoryIds: [...sourceIds],
+        }])}</biographical_candidates>`,
+        model: 'test-model',
+        usage: { inputTokens: 0, outputTokens: 0 },
+      }),
+    } as unknown as LLMProviderPort;
+  }
+
+  function memory(id: string, text: string, channelId?: string): PurrMemory {
+    return {
+      id,
+      text,
+      type: 'semantic',
+      sourceType: 'reflection',
+      importance: 0.6,
+      confidence: 0.9,
+      emotionalValence: 0.1,
+      salience: 0.4,
+      sourceRef: 'test:uz787-conformance',
+      extractedAt: 1_700_000_000_000,
+      lastAccessed: 1_700_000_000_000,
+      accessCount: 0,
+      tags: [],
+      sensitivity: 'personal',
+      consentFlags: {},
+      provenance: channelId ? { channelId } : {},
+    };
+  }
+
+  it('synthesizes a group claim from an authorized context without loading private silos', async () => {
+    await withDatabase(async (pool) => {
+      const store = await createPostgresBiographicalProfileStore(pool);
+      const memories = new InMemoryMemoryStore();
+      memories.insertMemory(memory('mem-crew', "We all say pier o'clock when the light goes gold.", GROUP_CONTEXT));
+      memories.insertMemory(memory('mem-dm', 'PRIVATE-DM-BODY about leaving the job.', 'discord:dm:v'));
+      memories.insertMemory(memory('mem-alone', 'PRIVATE-REFLECTION-BODY about the harbour.'));
+      const prompts: string[] = [];
+      const model = groupModel(['mem-crew']);
+      const recording = {
+        complete: async (request: { systemPrompt?: string }) => {
+          prompts.push(request.systemPrompt ?? '');
+          return await (model.complete as (r: unknown) => Promise<unknown>)(request);
+        },
+      } as unknown as LLMProviderPort;
+      const targets = createBiographySynthesisTargetPort({
+        contactStore: { getByTrustLevel: async () => [] } as unknown as ContactStorePort,
+        companionSubject: PURRS,
+        depthPolicy: () => createDefaultBiographicalDepthPolicy(),
+        groupMembershipAuthority: {
+          listVerifiedGroups: async () => [{
+            contextId: GROUP_CONTEXT,
+            governanceAuthorityRef: 'participation-authority:crew',
+            verified: true,
+            contactIds: [...CREW],
+          }],
+        },
+      });
+      const groupTargets = (await targets.listTargets(10))
+        .filter(target => target.socialContext.kind === 'companion_group');
+      expect(groupTargets).toHaveLength(1);
+
+      const telemetry = await new BiographySynthesisService({
+        memoryStore: memories.asPort(),
+        profileStore: store,
+        llmClient: recording,
+        promptRegistry: null,
+        targets: { listTargets: async () => groupTargets },
+        companionSubject: PURRS,
+        candidatePolicy: () => createDefaultBiographicalCandidatePolicy(),
+        depthPolicy: () => createDefaultBiographicalDepthPolicy(),
+        now: () => NOW,
+        newRunId: () => 'biography-synthesis:uz787-conformance',
+      }).run();
+
+      expect(telemetry.candidatesStaged).toBe(1);
+      const prompt = prompts.join('\n');
+      expect(prompt).toContain('mem-crew');
+      expect(prompt).not.toContain('PRIVATE-DM-BODY');
+      expect(prompt).not.toContain('PRIVATE-REFLECTION-BODY');
+      const [candidate] = await store.listCandidates({ limit: 10 });
+      expect(candidate?.socialContext).toEqual({
+        kind: 'companion_group', companionId: PURRS.companionId, contactIds: [...CREW],
+      });
+      const claim = await store.getClaim(candidate!.claimId);
+      expect(claim?.kind).toBe('shared-language');
+      expect(claim?.participants?.map(p => (p.kind === 'contact' ? p.contactId : p.companionId)))
+        .toEqual([...CREW]);
+      expect(claim?.sources.map(item => item.ref)).toEqual(['memory:mem-crew']);
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('lets a policy-gated companion choice make a personal self claim universal', async () => {
+    await withDatabase(async (pool) => {
+      const store = await createPostgresBiographicalProfileStore(pool);
+      const live = new LiveSources();
+      const selfSource = source('memory:self-role', { sensitivityAtProjection: 'personal' });
+      live.seed([selfSource]);
+      const selfClaim = await store.writeClaim({
+        subject: PURRS,
+        kind: 'nickname',
+        value: { kind: 'nickname', nickname: 'Harbour keeper', scope: 'self' },
+        basis: 'explicit',
+        status: 'active',
+        confidence: 1,
+        sources: [selfSource],
+        now: NOW,
+      });
+      expect(selfClaim.effectiveSensitivity).toBe('personal');
+      const relSource = source('memory:rel', { sensitivityAtProjection: 'personal' });
+      live.seed([relSource]);
+      const relational = await store.writeClaim({
+        subject: PURRS,
+        relatedSubject: PARTNER,
+        kind: 'nickname',
+        value: { kind: 'nickname', nickname: 'Anchor', scope: 'relational' },
+        basis: 'explicit',
+        status: 'active',
+        confidence: 1,
+        sources: [relSource],
+        now: NOW,
+      });
+
+      const seedPolicy = createDefaultBiographicalCandidatePolicy();
+      expect(seedPolicy.companionPortabilityChoice).toEqual({ enabled: false, maximumSensitivity: 'personal' });
+      await expect(recordCompanionPortabilityChoice({ store, policy: seedPolicy, claimId: selfClaim.id, now: NOW }))
+        .rejects.toMatchObject({ reason: 'policy_disabled' });
+      const enabled = { ...seedPolicy, companionPortabilityChoice: { enabled: true, maximumSensitivity: 'personal' as const } };
+      await expect(recordCompanionPortabilityChoice({ store, policy: enabled, claimId: relational.id, now: NOW }))
+        .rejects.toMatchObject({ reason: 'claim_names_a_person' });
+      const publicOnly = { ...seedPolicy, companionPortabilityChoice: { enabled: true, maximumSensitivity: 'public' as const } };
+      await expect(recordCompanionPortabilityChoice({ store, policy: publicOnly, claimId: selfClaim.id, now: NOW }))
+        .rejects.toMatchObject({ reason: 'sensitivity_above_ceiling' });
+
+      const before = await project({ store, live, companionSubject: PURRS, scope: inviteOnlyGroup() });
+      expect(JSON.stringify(before)).not.toContain('Harbour keeper');
+      const universal = await recordCompanionPortabilityChoice({ store, policy: enabled, claimId: selfClaim.id, now: NOW });
+      expect(universal.portabilityScope).toBe('universal');
+      // Sensitivity is kept, not lowered: no grant was recorded.
+      expect(universal.effectiveSensitivity).toBe('personal');
+      const inviteOnly = await project({ store, live, companionSubject: PURRS, scope: inviteOnlyGroup() });
+      expect(JSON.stringify(inviteOnly)).toContain('Harbour keeper');
+      // The other companion never sees it.
+      const foreign = await project({ store, live, companionSubject: SAGE, scope: inviteOnlyGroup() });
+      expect(JSON.stringify(foreign)).not.toContain('Harbour keeper');
+
+      await revokeCompanionPortabilityChoice({ store, claimId: selfClaim.id, now: NOW });
+      expect((await store.getClaim(selfClaim.id))?.portabilityScope).toBe('origin_only');
     });
   }, INTEGRATION_TIMEOUT_MS);
 });

@@ -638,6 +638,51 @@ describe('image tools', () => {
     expect(emitted.map(([, payload]) => payload.surface)).toEqual(['localImageGeneration']);
   });
 
+  it('keeps an OpenRouter selfie on one reference edit and charges it as paid', async () => {
+    const edit = vi.fn<ImageOperations['edit']>(async () => ({
+      provider: 'openrouter',
+      mode: 'edit',
+      model: 'vendor/image-edit-model-1',
+      fallbackUsed: false,
+      images: [],
+    }));
+    const ops: ImageOperations = {
+      resolveSettingsDefaults: () => ({ provider: 'openrouter' }),
+      create: vi.fn(),
+      edit,
+    };
+    const selfieTool = createSelfieTool(ops, undefined, {
+      referenceResolver: {
+        resolveForTool: vi.fn(async () => ({
+          id: 'ref-default',
+          dataUrl: 'data:image/png;base64,cmVm',
+          description: 'default portrait',
+          tags: ['default'],
+        })),
+      },
+    });
+    const emitted: Array<[string, Record<string, unknown>]> = [];
+    const eventBus = fromAny({
+      emit: vi.fn(async (eventName: string, payload: Record<string, unknown>) => {
+        emitted.push([eventName, payload]);
+      }),
+    });
+    await runWithChargeContext({
+      chargePolicy: makeInteractiveQuotaPolicy(10),
+      eventBus,
+      lane: 'interactive',
+      runId: 'configured-openrouter-selfie',
+    }, async () => await selfieTool.execute('tool-call-openrouter-selfie', {
+      prompt: 'a reference portrait',
+    }));
+    expect(edit).toHaveBeenCalledOnce();
+    expect(edit).toHaveBeenCalledWith(expect.objectContaining({
+      model: undefined,
+      settingsDefaults: { provider: 'openrouter' },
+    }));
+    expect(emitted.map(([, payload]) => payload.surface)).toContain('paidImageGeneration');
+  });
+
   it('returns generated image results plus an in-turn vision review', async () => {
     const ops = {
       create: vi.fn(async () => ({

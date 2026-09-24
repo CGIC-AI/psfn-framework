@@ -816,6 +816,13 @@
       "note": "Code-owned OAuth callback input bound paired with control-character rejection at the authentication trust boundary."
     },
     {
+      "file": "src/boundary/gateway/fleet-lifecycle-http-routes.ts",
+      "name": "FLEET_LIFECYCLE_HTTP_PROTOCOL.maxBodyBytes",
+      "value": "16_384",
+      "form": "object-member",
+      "note": "Code-owned DoS bound on operator lifecycle command bodies; a request carries one companions.json entry of metadata and references."
+    },
+    {
       "file": "src/boundary/gateway/fleet-portal-projection.ts",
       "name": "FLEET_PORTAL_PROJECTION_PROTOCOL.maxCompanions",
       "value": "256",
@@ -825,7 +832,7 @@
     {
       "file": "src/boundary/gateway/fleet-portal-projection.ts",
       "name": "FLEET_PORTAL_PROJECTION_PROTOCOL.maxSerializedBytes",
-      "value": "65_536",
+      "value": "327_680",
       "form": "object-member",
       "note": "Code-owned safety/resource guard FLEET_PORTAL_PROJECTION_PROTOCOL.maxSerializedBytes; this fixed bound protects untrusted input or resource use independently of operator tuning."
     },
@@ -9693,6 +9700,27 @@
       "value": "8"
     },
     {
+      "file": "src/persistence/postgres/icp-fleet-health-reader.ts",
+      "name": "ICP_FLEET_HEALTH_READ_PROTOCOL.maxCompanions",
+      "value": "256",
+      "form": "object-member",
+      "note": "Code-owned read bound mirroring the fleet portal manifest cap; rejects oversized roster reads before any shared-schema query."
+    },
+    {
+      "file": "src/persistence/postgres/icp-fleet-health-reader.ts",
+      "name": "ICP_FLEET_HEALTH_READ_PROTOCOL.maxOpenEpisodes",
+      "value": "1_024",
+      "form": "object-member",
+      "note": "Code-owned DoS bound on the Fleet ICP open-episode scan; overflow is reported as activeChannelsTruncated on the wire instead of an unbounded read."
+    },
+    {
+      "file": "src/persistence/postgres/icp-fleet-health-reader.ts",
+      "name": "ICP_FLEET_HEALTH_READ_PROTOCOL.maxPairRows",
+      "value": "32_640",
+      "form": "object-member",
+      "note": "Code-owned bound on grouped delivered-turn pair rows equal to every unordered pair of a 256-companion roster, so the grouped read is bounded yet can never truncate."
+    },
+    {
       "file": "src/persistence/postgres/model-usage-store/queries.ts",
       "name": "DEFAULT_BREAKDOWN_LIMIT",
       "value": "20"
@@ -13851,6 +13879,26 @@
       "value": "'trust-policy.seed.json'",
       "form": "string",
       "note": "Canonical owner-file/schema metadata TRUST_POLICY_SEED_FILE_NAME; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
+    },
+    {
+      "file": "src/system/fleet-lifecycle/kubernetes-adapter.ts",
+      "name": "CHART_AGENT_PREFIX_MAX_LENGTH",
+      "value": "26",
+      "note": "Code-owned mirror of the Helm chart fleetAgentDeploymentName trunc 26; must change together with deploy/helm templates, never by settings."
+    },
+    {
+      "file": "src/system/fleet-lifecycle/kubernetes-adapter.ts",
+      "name": "SECRET_KEY_PATTERN",
+      "value": "/^[-._a-zA-Z0-9]+$/u",
+      "form": "regex",
+      "note": "Code-owned Kubernetes Secret data-key grammar (API validation rule) guarding the read-only kubectl argument boundary; not tunable."
+    },
+    {
+      "file": "src/system/fleet-lifecycle/service.ts",
+      "name": "FLEET_LIFECYCLE_SERVICE_PROTOCOL.maxListedPlans",
+      "value": "50",
+      "form": "object-member",
+      "note": "Code-owned wire bound on the Fleet lifecycle listing, mirrored by the strict client parser; older plans stay readable by id and via the CLI."
     },
     {
       "file": "src/system/lifecycle/command-runner.ts",

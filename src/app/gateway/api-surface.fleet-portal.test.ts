@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import {
   createGatewayFleetPortalChannelHealthSource,
+  createGatewayFleetIcpPosture,
   createGatewayFleetPortalProjection,
 } from './fleet-portal-composition.js';
 
@@ -60,6 +61,10 @@ describe('gateway API fleet portal composition', () => {
       authorization: { resolve: authorize },
       fleet: [{ companionId: COMPANION_ID }],
       source: snapshot,
+      icpPosture: createGatewayFleetIcpPosture({
+        fleetCompanionIds: [COMPANION_ID],
+        reportReadFailure: () => undefined,
+      }).source,
       channelHealth: createGatewayFleetPortalChannelHealthSource([{
         companionId: COMPANION_ID,
         isConnected,

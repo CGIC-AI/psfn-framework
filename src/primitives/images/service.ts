@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { ComfyUiImageClient } from './comfyui.js';
 import { FalImageClient, isFalContentPolicyError, isTransientFalError } from './fal.js';
 import {
@@ -30,6 +31,7 @@ import type {
   ImageRuntimeConfig,
 } from './types.js';
 import { buildImageFileName } from './file-naming.js';
+import { resolveOpenRouterImageTarget, runOpenRouterImage } from './openrouter-image.js';
 import {
   buildComfyUiMcpArguments,
   ComfyUiMcpAdapterError,
@@ -222,6 +224,7 @@ function buildGeneratedImageMetadata(
   asset: ImageResultAsset,
   index: number,
   contentType: string,
+  sourceUrl: string,
 ): Record<string, unknown> {
   const sourceImageCount = params && 'imageUrls' in params ? params.imageUrls.length : 0;
   return {
@@ -234,7 +237,7 @@ function buildGeneratedImageMetadata(
     ...(result.fallbackReason ? { fallbackReason: result.fallbackReason } : {}),
     ...(result.requestId ? { requestId: result.requestId } : {}),
     imageIndex: index,
-    originalUrl: asset.url,
+    originalUrl: sourceUrl,
     contentType,
     ...(asset.fileName ? { providerFileName: asset.fileName } : {}),
     ...(params?.prompt ? { prompt: params.prompt } : {}),
@@ -244,10 +247,12 @@ function buildGeneratedImageMetadata(
     artifactRefs: [{
       kind: 'shared_image',
       refId: result.requestId ?? asset.fileName ?? asset.url,
-      url: asset.url,
+      url: sourceUrl,
     }],
   };
 }
+
+const INLINE_IMAGE_PATTERN = /^data:(image\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/]+={0,2})$/u;
 
 export class ImageService implements ImageOperations {
   constructor(
@@ -294,6 +299,17 @@ export class ImageService implements ImageOperations {
       const result = mode === 'create'
         ? await this.runComfy('create', params as ImageCreateParams, context)
         : await this.runComfy('edit', params as ImageEditParams, context);
+      return await this.persistGeneratedImages(result, params);
+    }
+    if (provider === 'openrouter') {
+      // Explicit only: never the auto default, never a fallback target.
+      const target = resolveOpenRouterImageTarget(this.config, mode);
+      const result = await this.runProviderAttempt(
+        context,
+        'openrouter',
+        target.model,
+        async () => await runOpenRouterImage({ mode, target, params, fetchImpl: this.fetchImpl }),
+      );
       return await this.persistGeneratedImages(result, params);
     }
     if (provider === 'comfyui_mcp') {
@@ -644,20 +660,29 @@ export class ImageService implements ImageOperations {
       const fileName = buildImageFileName(asset, result.requestId, index);
       const localPath = join(storageDir, fileName);
 
+      const inline = INLINE_IMAGE_PATTERN.exec(asset.url);
+      // Inline (base64) provider output is stored once; the durable file URL,
+      // not megabytes of base64, is what travels onward and into metadata.
+      const sourceUrl = inline ? `inline:${result.requestId ?? 'image'}#${index}` : asset.url;
       try {
-        const response = await this.fetchImpl(asset.url);
-        if (!response.ok) {
-          throw new Error(`download failed with ${response.status}`);
+        let contentType: string;
+        let bytes: Buffer;
+        if (inline) {
+          contentType = inline[1]!;
+          bytes = Buffer.from(inline[2]!, 'base64');
+        } else {
+          const response = await this.fetchImpl(asset.url);
+          if (!response.ok) {
+            throw new Error(`download failed with ${response.status}`);
+          }
+          contentType = (response.headers.get('content-type')?.split(';')[0] ?? '').trim().toLowerCase()
+            || asset.contentType
+            || 'image/png';
+          if (!contentType.startsWith('image/')) {
+            throw new Error(`provider returned non-image content type ${contentType}`);
+          }
+          bytes = Buffer.from(await response.arrayBuffer());
         }
-
-        const contentType = (response.headers.get('content-type')?.split(';')[0] ?? '').trim().toLowerCase()
-          || asset.contentType
-          || 'image/png';
-        if (!contentType.startsWith('image/')) {
-          throw new Error(`provider returned non-image content type ${contentType}`);
-        }
-
-        const bytes = Buffer.from(await response.arrayBuffer());
         if (bytes.length === 0) {
           throw new Error('provider returned an empty image body');
         }
@@ -666,7 +691,7 @@ export class ImageService implements ImageOperations {
         try {
           writeJsonAtomic(
             `${localPath}${GENERATED_IMAGE_META_SUFFIX}`,
-            buildGeneratedImageMetadata(result, params, asset, index, contentType),
+            buildGeneratedImageMetadata(result, params, asset, index, contentType, sourceUrl),
           );
         } catch (error) {
           log.warn('Failed to write generated image metadata sidecar', {
@@ -677,6 +702,7 @@ export class ImageService implements ImageOperations {
         }
         return {
           ...asset,
+          ...(inline ? { url: pathToFileURL(localPath).href } : {}),
           contentType,
           localPath,
         };

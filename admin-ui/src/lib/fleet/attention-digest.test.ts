@@ -32,6 +32,7 @@ function companion(companionId: string, gardenPath?: string): FleetPortalCompani
     displayName: companionId.slice(-1),
     health: { agentRpc: 'up', adminTransport: 'unknown', channels: 'up' },
     posture: { status: 'unavailable' },
+        icp: { state: 'not_applicable', reason: 'singleton_fleet', lifecycle: 'member' },
     ...(gardenPath ? { gardenPath } : {}),
   };
 }

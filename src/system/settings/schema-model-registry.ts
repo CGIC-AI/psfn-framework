@@ -1,3 +1,4 @@
+import { normalizeImageModelRegistry } from './schema-image-model-registry.js';
 import {
   CANONICAL_MODEL_PURPOSES,
   type CanonicalModelRegistry,
@@ -668,6 +669,9 @@ export function normalizeCanonicalModelRegistry(
   const budgetPolicy = value.budgetPolicy !== undefined
     ? normalizeModelRegistryBudgetPolicy(value.budgetPolicy, `${sourcePath}.budgetPolicy`)
     : undefined;
+  const imageModels = value.imageModels !== undefined
+    ? normalizeImageModelRegistry(value.imageModels, `${sourcePath}.imageModels`)
+    : undefined;
   const promptCaching = value.promptCaching !== undefined
     ? normalizeModelRegistryPromptCachingPolicy(value.promptCaching, `${sourcePath}.promptCaching`)
     : defaultModelRegistryPromptCachingPolicy();
@@ -723,6 +727,7 @@ export function normalizeCanonicalModelRegistry(
     // Always present: absent input is defaulted above, so the normalized
     // registry states the effective caching policy rather than implying it.
     promptCaching,
+    ...(imageModels ? { imageModels } : {}),
   };
 }
 

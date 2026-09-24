@@ -117,35 +117,49 @@ export function createQuarantineHoldEscalationObserver<TNotice>(
 ): (entry: IntakeQuarantineEntry, companionId?: string) => void {
   const now = options.now ?? (() => Date.now());
   const logger = options.logger ?? log;
+  // Per-envelope serialization (psfn-framework-wdird): the attempt key is read
+  // then minted, so two overlapping holds of one envelope would otherwise both
+  // read the same raise_count, mint the same key, and the ledger would dedupe
+  // the second -- understating repeated holds. Each raise for an envelope runs
+  // only after the previous one for that envelope has settled.
+  const raiseChains = new Map<string, Promise<void>>();
   return (entry: IntakeQuarantineEntry, companionId?: string): void => {
-    void (async () => {
-      // From the DURABLE ledger: a gateway that restarts while items are held
-      // would otherwise re-mint an attempt key the ledger already holds.
-      const raiseCount = await options.plane.raiseCount(
-        QUARANTINE_ESCALATION_KIND,
-        entry.id,
-      );
-      await options.plane.raise({
-        kind: QUARANTINE_ESCALATION_KIND,
-        // A withheld item is a decision waiting, not a fault in progress.
-        severity: 'warning',
-        owner: resolveHealthEventOwner(companionId ?? options.companionId),
-        dedupeKey: entry.id,
-        idempotencyKey: `${entry.id}.${String(raiseCount + 1)}`,
-        sourceRef: entry.id,
-        labels: [QUARANTINE_ESCALATION_KIND, entry.mode],
-        evidence: { windowMs: windowMs(entry) },
-        detailPath: QUARANTINE_GARDEN_DETAIL_PATH,
-        raisedAtMs: now(),
-        notice: options.renderNotice(entry),
-      });
-    })().catch((error: unknown) => {
+    const previous = raiseChains.get(entry.id) ?? Promise.resolve();
+    const raise = previous.then(() => raiseHold(entry, companionId));
+    const settled = raise.catch((error: unknown) => {
       logger.warn('Quarantine hold escalation raise failed', {
         envelopeId: entry.id,
         error: toErrorMessage(error),
       });
     });
+    raiseChains.set(entry.id, settled);
+    void settled.then(() => {
+      if (raiseChains.get(entry.id) === settled) raiseChains.delete(entry.id);
+    });
   };
+
+  async function raiseHold(entry: IntakeQuarantineEntry, companionId?: string): Promise<void> {
+    // From the DURABLE ledger: a gateway that restarts while items are held
+    // would otherwise re-mint an attempt key the ledger already holds.
+    const raiseCount = await options.plane.raiseCount(
+      QUARANTINE_ESCALATION_KIND,
+      entry.id,
+    );
+    await options.plane.raise({
+      kind: QUARANTINE_ESCALATION_KIND,
+      // A withheld item is a decision waiting, not a fault in progress.
+      severity: 'warning',
+      owner: resolveHealthEventOwner(companionId ?? options.companionId),
+      dedupeKey: entry.id,
+      idempotencyKey: `${entry.id}.${String(raiseCount + 1)}`,
+      sourceRef: entry.id,
+      labels: [QUARANTINE_ESCALATION_KIND, entry.mode],
+      evidence: { windowMs: windowMs(entry) },
+      detailPath: QUARANTINE_GARDEN_DETAIL_PATH,
+      raisedAtMs: now(),
+      notice: options.renderNotice(entry),
+    });
+  }
 }
 
 /** Observer for the process that DECIDES: mirrors the decision onto the plane. */

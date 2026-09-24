@@ -53,6 +53,8 @@ export interface ChannelPluginHostContext {
   shutdownTimeoutMs: number;
   intakeScreening: IntakeScreeningService | null;
   postgresDatabaseUrl?: string;
+  postgresSchema?: string;
+  postgresRole?: string;
 }
 
 export interface ChannelPluginCreateInput<TConfig = unknown> {

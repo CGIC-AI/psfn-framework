@@ -118,4 +118,32 @@ describe('Postgres Buzz recovery store', () => {
       await pool.end();
     }
   }, TIMEOUT_MS);
+
+  it('keeps gateway-owned recovery tables inside the configured tenant schema', async () => {
+    if (!harness) throw new Error('Postgres integration harness is unavailable');
+    const databaseUrl = (await harness.createDatabase()).databaseUrl;
+    const admin = createPostgresPool(databaseUrl, { max: 1 });
+    try {
+      await admin.query('CREATE SCHEMA tenant_buzz');
+      const store = PostgresBuzzRecoveryStore.connect(databaseUrl, {
+        community: COMMUNITY,
+        companionId: COMPANION_ID,
+      }, { schema: 'tenant_buzz' });
+      try {
+        await expect(store.claimInbound({
+          eventId: EVENT_ID,
+          channelId: CHANNEL_ID,
+          eventCreatedAt: 100,
+        })).resolves.toMatchObject({ claimed: true });
+      } finally {
+        await store.close();
+      }
+      const tables = await admin.query<{ table_schema: string }>(
+        "SELECT table_schema FROM information_schema.tables WHERE table_name = 'buzz_inbound_recovery'",
+      );
+      expect(tables.rows.map(row => row.table_schema)).toEqual(['tenant_buzz']);
+    } finally {
+      await admin.end();
+    }
+  }, TIMEOUT_MS);
 });

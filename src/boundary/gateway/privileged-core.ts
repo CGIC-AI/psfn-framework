@@ -268,7 +268,14 @@ export async function buildGatewayPrivilegedCore(
   }
   const auditStore = await awaitPostgresStoreReadiness(
     'gateway_audit',
-    () => createPostgresGatewayAuditStore(databaseUrl),
+    () => createPostgresGatewayAuditStore(databaseUrl, undefined, {
+      ...(input.config.postgresSchema?.trim()
+        ? { schema: input.config.postgresSchema.trim() }
+        : {}),
+      ...(input.config.postgresRole?.trim()
+        ? { role: input.config.postgresRole.trim() }
+        : {}),
+    }),
   );
   // ── Gateway ingress admission receipts (psfn-framework-ccgdz.2) ──
   // Receipt issuance was wired in the agent process but NOT here, so the

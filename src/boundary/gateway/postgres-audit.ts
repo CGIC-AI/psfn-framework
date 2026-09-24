@@ -23,6 +23,8 @@ const SIZE_PRUNE_BATCH = 100;
 export interface PostgresGatewayAuditStoreOptions {
   pool?: Pool;
   applicationName?: string;
+  schema?: string;
+  role?: string;
   now?: () => number;
 }
 
@@ -346,6 +348,8 @@ export async function createPostgresGatewayAuditStore(
   const pool = options.pool ?? createPostgresPool(databaseUrl, {
     applicationName: options.applicationName ?? 'psfn-gateway-audit',
     allowExitOnIdle: true,
+    ...(options.schema ? { schema: options.schema } : {}),
+    ...(options.role ? { role: options.role } : {}),
   });
   await ensurePostgresSchema(pool, POSTGRES_AUDIT_MIGRATIONS);
   return createPostgresGatewayAuditStoreFromPool(pool, rotationConfig, options.now);

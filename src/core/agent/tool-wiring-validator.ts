@@ -289,6 +289,7 @@ const RPC_TO_CLIENT_METHOD: Record<string, string> = {
   'llm.chat': 'stream',
   'llm.complete': 'complete',
   'llm.embed': 'embed',
+  'llm.decide': 'decide',
   'discord.send': 'discordSend',
   'discord.typing': 'discordTyping',
   'web.fetch': 'webFetch',

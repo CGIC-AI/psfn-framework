@@ -18,6 +18,7 @@ import { normalizeBiographicalCandidatePolicy } from '../config/biographical-can
 import { normalizeMemoryPresentationProfile } from '../config/memory-presentation-profile.js';
 import { normalizeMemoryDeletionPolicy } from '../config/memory-deletion-policy.js';
 import { normalizeShellExecSettings } from '../config/shell-exec-config.js';
+import { normalizeDecisionBackendSettings } from '../config/decision-backend-config.js';
 import { normalizeCogSecPersonaConformanceSettings } from '../config/cogsec-persona-conformance-config.js';
 import {
   normalizeFalCreateModelSetting,
@@ -1317,6 +1318,12 @@ function normalizeCapabilityAndSessionSettings(
     normalized.shellExec = normalizeShellExecSettings(
       settings.shellExec,
       'shellExec',
+    );
+  }
+  if ('decisionBackend' in settings) {
+    normalized.decisionBackend = normalizeDecisionBackendSettings(
+      settings.decisionBackend,
+      'decisionBackend',
     );
   }
 

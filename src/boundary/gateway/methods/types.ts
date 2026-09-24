@@ -1,4 +1,5 @@
 import type { JSONRPCServerAndClient } from 'json-rpc-2.0';
+import type { GatewayJevDecisionService } from '../jev-decision-service.js';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import type { EmbeddingProviderPort } from '../../../shared/contracts/embedding-provider.js';
 import type { ChannelOutboundDock } from '../../../channels/backplane/types.js';
@@ -96,6 +97,8 @@ export interface GatewayMethodRuntime {
   gitOps?: GitOperations;
   imageConfig?: ImageRuntimeConfig;
   modelUsageRecorder?: ModelUsageRecorder;
+  /** Gateway-owned remote (Jev) decision backend; absent when not wired. */
+  jevDecisions?: GatewayJevDecisionService;
   credentialVault?: CredentialVaultPort;
   /**
    * Cognition intake firewall screening (htm9.2). Absent when intake-policy

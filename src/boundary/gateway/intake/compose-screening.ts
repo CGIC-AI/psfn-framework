@@ -20,6 +20,10 @@
 // In every mode a present-but-broken model directory fails startup (fail
 // closed), and the classifier never downloads at runtime.
 
+import { createL2DecisionSignal } from './l2-decision-signal.js';
+import type { GatewayJevDecisionService } from '../jev-decision-service.js';
+import { createJsonlDecisionShadowSink } from '../../../primitives/llm/decision/shadow-record.js';
+import { resolveDecisionShadowLedgerPath } from '../../../persistence/layout.js';
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createComponentLogger } from '../../../shared/logger.js';
@@ -183,6 +187,8 @@ export async function composeGatewayIntakeScreening(input: {
    * transient failure. Content-free: screener tier, model label, HTTP status.
    */
   onScreenerProviderRejected?: GatewayIntakeEscalationDeps['onScreenerProviderRejected'];
+  /** Gateway-owned remote decision service for the additive intake.l2 signal (epic 4lf3r). */
+  jevDecisions?: GatewayJevDecisionService;
   /** Content-free per-stage latency observer; never receives screened text. */
   onScreeningTiming?: IntakeScreeningServiceOptions['onTiming'];
   /** Content-free completion path for asynchronous post-pass deep screening. */
@@ -331,6 +337,15 @@ export async function composeGatewayIntakeScreening(input: {
     ...(input.onFailClosedScreening ? { onFailClosed: input.onFailClosedScreening } : {}),
     ...(input.onScreenerProviderRejected
       ? { onScreenerProviderRejected: input.onScreenerProviderRejected }
+      : {}),
+    ...(input.jevDecisions
+      ? {
+        decisionSignal: createL2DecisionSignal({
+          config: input.config,
+          jev: input.jevDecisions,
+          shadowSink: createJsonlDecisionShadowSink(resolveDecisionShadowLedgerPath(input.companionDataDir)),
+        }),
+      }
       : {}),
   });
 

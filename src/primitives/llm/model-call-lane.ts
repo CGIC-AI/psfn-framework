@@ -47,6 +47,7 @@ export function toModelCallRoutingPurpose(purpose: CompletionPurpose): ModelCall
       return 'vision';
     case 'chat':
     case 'background':
+    case 'decision':
     default:
       return 'background';
   }

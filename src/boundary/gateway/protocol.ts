@@ -45,6 +45,8 @@ import type {
 } from '../../primitives/images/types.js';
 import type { DiscoveredModel } from '../../primitives/llm/discovery.js';
 import type { LLMWorkSpecWireParams } from '../../primitives/llm/work-spec-wire.js';
+import type { DecisionOutcome, DecisionQuestionSet } from '../../primitives/llm/decision/types.js';
+import type { DecisionSiteId } from '../../system/config/decision-backend-config.js';
 import type {
   ConfirmationDecision,
   ConfirmationQueueEntry,
@@ -291,6 +293,21 @@ export interface LLMEmbedParams extends GatewayCorrelationParams {
   texts: string[];
   usageProvenance?: EmbeddingUsageProvenance;
 }
+
+/**
+ * Typed decision request for the optional remote (Jev) decision backend
+ * (epic 4lf3r). No work spec or message history crosses: only the site id,
+ * the JSON state and the typed questions.
+ */
+export interface LLMDecideParams {
+  siteId: DecisionSiteId;
+  state: Record<string, unknown>;
+  questions: DecisionQuestionSet;
+  companionId?: string;
+  telemetryVisibility?: TelemetryVisibility;
+}
+
+export type LLMDecideResult = DecisionOutcome;
 
 export type LLMDiscoverModelsParams = Record<string, never>;
 export type LLMInvalidateModelDiscoveryParams = Record<string, never>;
@@ -1321,6 +1338,7 @@ export interface GatewayMethods {
   'llm.complete': [LLMCompleteParams, LLMCompleteResult];
   'llm.cancel': [LLMCancelParams, LLMCancelResult];
   'llm.embed': [LLMEmbedParams, LLMEmbedResult];
+  'llm.decide': [LLMDecideParams, LLMDecideResult];
   'llm.discover_models': [LLMDiscoverModelsParams, LLMDiscoverModelsResult];
   'llm.invalidate_model_discovery': [LLMInvalidateModelDiscoveryParams, LLMInvalidateModelDiscoveryResult];
   'discord.send': [DiscordSendParams, DiscordSendResult];

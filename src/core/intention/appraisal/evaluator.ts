@@ -3,6 +3,7 @@ import type {
   ContextMessage,
   CorrelationMetadata,
 } from '../../../shared/contracts/runtime.js';
+import { postTurnPreGateSkips } from './decision-pregate.js';
 import { getRequestContext } from '../../../primitives/llm/request-context.js';
 import { buildLLMWorkSpec, completeWithWorkSpec } from '../../../primitives/llm/work-spec.js';
 import { deriveChildIcpConversationCostCorrelation } from '../../../shared/contracts/icp-autonomy.js';
@@ -51,6 +52,7 @@ export class IntentionAppraisal {
   private readonly fallbackCharacterName?: string;
   private readonly resolveCharacterPromptVariables: () => Record<string, string>;
   private readonly onEvaluationError?: IntentionAppraisalConfig['onEvaluationError'];
+  private readonly decisions: IntentionAppraisalConfig['decisions'];
   private readonly sessionState = new Map<string, SessionAppraisalState>();
 
   constructor(config: IntentionAppraisalConfig) {
@@ -95,6 +97,7 @@ export class IntentionAppraisal {
     this.resolveCharacterPromptVariables = config.characterPromptVariablesProvider
       ?? (() => ({}));
     this.onEvaluationError = config.onEvaluationError;
+    this.decisions = config.decisions;
   }
 
   async evaluate(input: IntentionAppraisalInput): Promise<IntentionActionDecision[]> {
@@ -186,6 +189,22 @@ export class IntentionAppraisal {
           }
         : {}),
     };
+
+    // Epic 4lf3r: an opt-in pre-gate may answer "noop" before the heavy call.
+    // ICP-correlated sessions are never gated (their cost correlation is owned
+    // by the appraisal call itself).
+    if (
+      this.decisions?.siteSettings('intention.post_turn_pregate')?.enabled === true
+      && !normalized.icpCorrelation
+      && await postTurnPreGateSkips({
+        decisions: this.decisions,
+        state: promptPayload,
+        channelId: correlation.channelId ?? normalized.sessionId,
+        ...(correlation.turnId ? { turnId: correlation.turnId } : {}),
+      })
+    ) {
+      return [buildNoopDecision('decision pre-gate found nothing to act on')];
+    }
 
     try {
       const completion = await completeWithWorkSpec(

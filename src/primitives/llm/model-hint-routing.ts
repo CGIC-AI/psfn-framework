@@ -87,6 +87,9 @@ export function resolveModelSelectionSlotForPurpose(
   if (purpose === 'context') {
     return selection.longContext ?? selection.background;
   }
+  if (purpose === 'decision') {
+    return selection.background;
+  }
   return selection[purpose];
 }
 

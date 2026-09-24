@@ -2306,6 +2306,7 @@ async function main(): Promise<void> {
     {
       eventBus,
       llmProvider,
+      decisionRuntime: coreRuntime.decisionRuntime,
       ...(coreRuntime.automataClassLifecycle
         ? { automataClassLifecycle: coreRuntime.automataClassLifecycle }
         : {}),

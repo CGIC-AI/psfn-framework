@@ -294,6 +294,7 @@ export function evaluatePolicy(ctx: GatewayPolicyContext, policyConfig: PolicyCo
     case 'llm.chat':
     case 'llm.complete':
     case 'llm.embed':
+    case 'llm.decide':
     case 'discord.send':
     case 'discord.sendMedia':
     case 'discord.typing':

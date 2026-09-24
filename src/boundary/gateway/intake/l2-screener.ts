@@ -37,6 +37,7 @@
 // `classified`. The decision layer then runs the L3 heavy screener
 // (l3-screener.ts); this module only routes, it never decides the L3 verdict.
 
+import type { L2DecisionSignal } from './l2-decision-signal.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import {
   INTAKE_RISK_LABELS,
@@ -327,6 +328,12 @@ export interface EvaluateL2Input {
    * provider message or any screened text.
    */
   onProviderRejected?: (event: L2ScreenerProviderRejectedEvent) => void;
+  /**
+   * Optional remote second opinion (epic 4lf3r, site intake.l2). Additive
+   * only: it may raise a `classified` verdict to `escalate_l3`, never lower an
+   * escalation, skip L3, or replace a fail-closed outcome.
+   */
+  decisionSignal?: L2DecisionSignal;
 }
 
 /** Content-free description of a screener request the provider refused. */
@@ -373,6 +380,11 @@ export async function evaluateL2(input: EvaluateL2Input): Promise<L2ScreeningOut
     };
   }
 
+  const remoteOpinion = input.decisionSignal?.({
+    text: input.text,
+    context,
+    maxContentChars: config.l2Screener.maxContentChars,
+  }) ?? null;
   try {
     const classification = await screenL2(input.text, context, {
       backend: input.backend,
@@ -388,11 +400,18 @@ export async function evaluateL2(input: EvaluateL2Input): Promise<L2ScreeningOut
       labels: classification.labels,
       injectionConfidence: classification.injectionConfidence,
     });
+    remoteOpinion?.settle(trigger.escalate);
     if (trigger.escalate) {
       log.warn(
         `L2 verdict escalates to L3 for ${context.sourceClass}/${tier}: ${trigger.reason}`,
       );
       return { kind: 'escalate_l3', classification, reason: trigger.reason };
+    }
+    // Epic 4lf3r: the remote signal can only RAISE a clean L2 verdict to L3.
+    const raised = remoteOpinion?.acts ? await remoteOpinion.opinion : null;
+    if (raised?.escalate) {
+      log.warn(`Remote decision signal escalates to L3 for ${context.sourceClass}/${tier}: ${raised.reason}`);
+      return { kind: 'escalate_l3', classification, reason: `decision-signal:${raised.reason}` };
     }
     return { kind: 'classified', classification };
   } catch (error) {

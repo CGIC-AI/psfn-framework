@@ -137,6 +137,7 @@ export function wirePostTurnRuntime(
   )
     ? new IntentionAppraisal({
       llmProvider: runtimeOptions.llmProvider,
+      ...(runtimeOptions.decisionRuntime ? { decisions: runtimeOptions.decisionRuntime } : {}),
       ...(runtimeOptions.characterPromptVariablesProvider
         ? { characterPromptVariablesProvider: runtimeOptions.characterPromptVariablesProvider }
         : {}),

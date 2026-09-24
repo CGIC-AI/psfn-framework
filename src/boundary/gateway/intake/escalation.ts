@@ -27,6 +27,7 @@
 //   quarantine hold THROWS out of this port; the screening service catches
 //   that and quarantines (an unauditable L3 result is never delivered).
 
+import type { L2DecisionSignal } from './l2-decision-signal.js';
 import { performance } from 'node:perf_hooks';
 
 import type {
@@ -88,6 +89,8 @@ export interface GatewayIntakeEscalationDeps {
    * fail-closed handling above is unaffected.
    */
   onScreenerProviderRejected?: (event: L2ScreenerProviderRejectedEvent) => void;
+  /** Additive remote L2 signal (epic 4lf3r); may only raise escalation. */
+  decisionSignal?: L2DecisionSignal;
 }
 
 function mergeContributions(
@@ -174,6 +177,7 @@ export function createGatewayIntakeEscalationPort(
         ...(deps.onScreenerProviderRejected
           ? { onProviderRejected: deps.onScreenerProviderRejected }
           : {}),
+        ...(deps.decisionSignal ? { decisionSignal: deps.decisionSignal } : {}),
       });
     } catch (error) {
       request.emitTiming?.('l2', 'observed', Math.max(0, performance.now() - l2StartedAt));

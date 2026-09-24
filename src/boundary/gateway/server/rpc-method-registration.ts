@@ -143,6 +143,7 @@ export class GatewayConnectionRpcMethods {
       gitOps: this.ports.options.gitOps,
       imageConfig: this.ports.options.imageConfig,
       ...(this.ports.options.modelUsageRecorder ? { modelUsageRecorder: this.ports.options.modelUsageRecorder } : {}),
+      ...(this.ports.options.jevDecisions ? { jevDecisions: this.ports.options.jevDecisions } : {}),
       ...(this.ports.options.credentialVault ? { credentialVault: this.ports.options.credentialVault } : {}),
       get intakeScreening() { return resolveIntakeScreening(); },
       ...(this.ports.options.quarantinedArtifactGuard

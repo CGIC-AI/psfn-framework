@@ -14,7 +14,7 @@
  * drift the day a detector child adds a code, because `CREATE TABLE IF NOT
  * EXISTS` never updates an existing constraint.
  */
-export const RUNTIME_HEALTH_EVENT_TABLE_STATEMENTS: readonly string[] = [
+const RUNTIME_HEALTH_EVENT_TABLE_STATEMENTS: readonly string[] = [
   `
   CREATE TABLE IF NOT EXISTS runtime_health_events (
     event_id UUID PRIMARY KEY,
@@ -82,7 +82,7 @@ export const RUNTIME_HEALTH_EVENT_TABLE_STATEMENTS: readonly string[] = [
  * surface adopts the plane, because `CREATE TABLE IF NOT EXISTS` never updates
  * an existing constraint.
  */
-export const HUMAN_ESCALATION_TABLE_STATEMENTS: readonly string[] = [
+const HUMAN_ESCALATION_TABLE_STATEMENTS: readonly string[] = [
   `
   CREATE TABLE IF NOT EXISTS human_escalations (
     escalation_id UUID PRIMARY KEY,

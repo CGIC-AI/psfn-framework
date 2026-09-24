@@ -1,6 +1,8 @@
+// The shared chain (version 21) installs the same health-event and escalation
+// DDL a per-companion runtime opens, from one definition.
 import {
-  HUMAN_ESCALATION_TABLE_STATEMENTS,
-  RUNTIME_HEALTH_EVENT_TABLE_STATEMENTS,
+  POSTGRES_HEALTH_EVENT_MIGRATIONS as RUNTIME_HEALTH_EVENT_TABLE_STATEMENTS,
+  POSTGRES_HUMAN_ESCALATION_MIGRATIONS as HUMAN_ESCALATION_TABLE_STATEMENTS,
 } from './health-escalation-migrations.js';
 import { POSTGRES_VECTOR_EXTENSION_MIGRATION } from './vector-extension-migration.js';
 

@@ -435,7 +435,7 @@ describe('REPLSandbox', () => {
     expect((fromAny(llm)).gitApplyPatch).not.toHaveBeenCalled();
   });
 
-  it('web browse/search use the gateway webFetch path', async () => {
+  it('web fetch/search use the gateway webFetch path and browse is retired', async () => {
     const llm = fromAny({
       ...mockSequentialLLM([
         '["https://example.com/a","https://example.com/b"]',
@@ -445,7 +445,9 @@ describe('REPLSandbox', () => {
     const sandbox = new REPLSandbox(nullDeps(llm));
     const result = await sandbox.execute(
       [
-        'const c = await web("browse", "https://example.com/a"); print(c);',
+        'const c = await web("fetch", "https://example.com/a"); print(c);',
+        'const b = await web("browse", "https://example.com/a"); print(b);',
+        'print(typeof crawler_fetch);',
         'const r = await web("search", "test query", { maxUrls: 2 });',
         'print(r.length);',
         'print(r[0].url);',
@@ -455,6 +457,8 @@ describe('REPLSandbox', () => {
     );
 
     expect(result.output).toContain('content for https://example.com/a');
+    expect(result.output).toContain('[Web error: action "browse" was retired; use web("fetch", url)]');
+    expect(result.output).toContain('undefined');
     expect(result.output).toContain('2');
     expect(result.output).toContain('https://example.com/a');
     expect((fromAny(llm)).webFetch).toHaveBeenCalledTimes(3);
@@ -774,7 +778,7 @@ describe('REPLSandbox', () => {
     expect(budgetRef.toolCalls).toBe(2);
   });
 
-  it('web browse surfaces TLS diagnostics from gateway errors', async () => {
+  it('web fetch surfaces TLS diagnostics from gateway errors', async () => {
     const fetchError = Object.assign(new Error('Fetch TLS failure: fetch failed'), {
       code: -32003,
       cause: {
@@ -790,7 +794,7 @@ describe('REPLSandbox', () => {
     });
     const sandbox = new REPLSandbox(nullDeps(llm));
     const result = await sandbox.execute(
-      'const c = await web("browse", "https://1.1.1.1/"); print(c);',
+      'const c = await web("fetch", "https://1.1.1.1/"); print(c);',
       5000,
       8192,
     );

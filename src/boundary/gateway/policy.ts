@@ -63,7 +63,7 @@ export interface OpenRouterWebBackendPolicy {
 
 /**
  * Explicit web backend selection. `self_hosted` preserves the direct-fetch /
- * local-crawler lane path; `openrouter` routes search/fetch through OpenRouter's
+ * default-lane path; `openrouter` routes search/fetch through OpenRouter's
  * built-in server tools. Selection is explicit config (providers.json) — there
  * is no silent fallback between them.
  */

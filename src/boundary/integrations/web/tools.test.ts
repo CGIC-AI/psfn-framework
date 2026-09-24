@@ -21,7 +21,7 @@ describe('web tools', () => {
     expect(result.content).toEqual([{ type: 'text', text: '# page' }]);
   });
 
-  it('uses the crawler lane for the browse action', async () => {
+  it('rejects the retired browse action with a pointer to fetch (9zgfd)', async () => {
     const ops = {
       fetch: vi.fn(async () => '# page'),
     };
@@ -30,14 +30,11 @@ describe('web tools', () => {
     const result = await tool.execute('call-1', {
       action: 'browse',
       target: 'https://example.com',
-      prompt: 'Focus on main content',
     });
 
-    expect(ops.fetch).toHaveBeenCalledWith('https://example.com', {
-      prompt: 'Focus on main content',
-    });
-    expect(result.details).toEqual({});
-    expect(result.content).toEqual([{ type: 'text', text: '# page' }]);
+    expect(ops.fetch).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({ isError: true });
+    expect(JSON.stringify(result.content)).toContain('action=browse was retired; use action=fetch');
   });
 
   it('runs search discovery and fetches the planned URLs', async () => {

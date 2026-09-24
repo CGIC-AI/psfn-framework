@@ -149,7 +149,7 @@ Key mechanics inside the loop (`loop.ts`):
 
 | Gate | Helpers |
 | --- | --- |
-| always | `llm_query`, `llm_query_strict`, `llm_query_json`, `memory_search`, `episode_search`, `memory_count`, `memory_get_by_id`, `session_messages`, `session_search`, `schedule_list`, `module_list`, `module_health`, `repo_status`, `repo_diff`, `read_file`, `list_files`, `web`, `web_fetch`, `crawler_fetch`, `web_research` |
+| always | `llm_query`, `llm_query_strict`, `llm_query_json`, `memory_search`, `episode_search`, `memory_count`, `memory_get_by_id`, `session_messages`, `session_search`, `schedule_list`, `module_list`, `module_health`, `repo_status`, `repo_diff`, `read_file`, `list_files`, `web`, `web_fetch`, `web_research` |
 | nested_analysis | `nested_analysis` (only when a runner is provided) |
 | repo_mutation | `repo_apply_patch`, `repo_commit` (only with `allowRepoMutation`) |
 | workspace_write | `write_file` (only with `allowWorkspaceWrite`) |

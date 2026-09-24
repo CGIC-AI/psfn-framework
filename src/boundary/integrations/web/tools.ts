@@ -7,7 +7,7 @@ import type { WebFetchOperations } from './ops.js';
 import { textResult, textResultFromError } from '../../../core/tools/results.js';
 import { planWebSearchUrls, type WebSearchQueryJson } from './search.js';
 
-const WEB_FETCH_LANES = ['default', 'local_crawler', 'discovery'] as const;
+const WEB_FETCH_LANES = ['default', 'discovery'] as const;
 const WEB_ACTIONS = ['fetch', 'browse', 'search'] as const;
 
 type WebAction = (typeof WEB_ACTIONS)[number];
@@ -108,7 +108,6 @@ export function createWebTool(
             }));
           case 'browse':
             return textResult(await ops.fetch(target, {
-              lane: 'local_crawler',
               ...(prompt ? { prompt } : {}),
             }));
           case 'search': {
@@ -133,7 +132,6 @@ export function createWebTool(
               results.push({
                 url,
                 content: await ops.fetch(url, {
-                  lane: 'local_crawler',
                   prompt: `Research query: ${target}`,
                 }),
               });
@@ -162,7 +160,7 @@ export function createWebFetchTool(ops: WebFetchOperations): SubstrateAgentTool 
         WEB_FETCH_LANES.map((value) => Type.Literal(value)),
         {
           description:
-            'Optional fetch lane. Leave unset for normal web pages. Use local_crawler only when the local crawler lane is explicitly needed.',
+            'Optional fetch lane. Leave unset for normal web pages; discovery is only for operator-allowlisted discovery URLs.',
         },
       )),
       prompt: Type.Optional(Type.String({

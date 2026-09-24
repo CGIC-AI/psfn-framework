@@ -166,10 +166,10 @@ describe('bounded ledger hydration surfaces (psfn-framework-z3e2x)', () => {
     // Byte-for-byte identical to the synchronous hydration the constructor
     // still performs: streaming changes when rows are read, never which rows.
     const synchronous = new RunChargeLedger(path, null, { now: () => NOW_MS });
-    expect(value.listEntries({ limit: 10_000 }))
-      .toEqual(synchronous.listEntries({ limit: 10_000 }));
-    expect(value.getData({ limit: 1 }).aggregates)
-      .toEqual(synchronous.getData({ limit: 1 }).aggregates);
+    expect(await value.listEntries({ limit: 10_000 }))
+      .toEqual(await synchronous.listEntries({ limit: 10_000 }));
+    expect((await value.getData({ limit: 1 })).aggregates)
+      .toEqual((await synchronous.getData({ limit: 1 })).aggregates);
     synchronous.close();
     value.close();
   });

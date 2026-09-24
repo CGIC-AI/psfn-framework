@@ -156,37 +156,31 @@ describe('evaluatePolicy', () => {
     )).toBe('ALLOW');
   });
 
-  it('keeps strict default lane unchanged even when local crawler lane is enabled', () => {
-    const configWithUrlPolicy: PolicyConfig = {
-      ...policyConfig,
-      urlPolicy: {
-        localCrawlerLane: {
-          enabled: true,
-          hostAllowlist: ['localhost'],
-        },
-      },
-    };
+  it('denies web.fetch to a private host unless internal network access is allowed', () => {
     expect(evaluatePolicy(
       { method: 'web.fetch', params: { url: 'https://localhost/admin', lane: 'default' } },
-      configWithUrlPolicy,
+      { ...policyConfig, urlPolicy: { domainAllowlist: ['localhost'] } },
     )).toBe('DENY');
+    expect(evaluatePolicy(
+      {
+        method: 'web.fetch',
+        params: { url: 'http://localhost:8080/fetch', lane: 'default' },
+      },
+      {
+        ...policyConfig,
+        urlPolicy: { allowHttp: true, allowInternalNetwork: true, domainAllowlist: ['localhost'] },
+      },
+    )).toBe('ALLOW');
   });
 
-  it('allows web.fetch local_crawler lane for explicitly allowlisted host', () => {
-    const configWithUrlPolicy: PolicyConfig = {
-      ...policyConfig,
-      urlPolicy: {
-        localCrawlerLane: {
-          enabled: true,
-          hostAllowlist: ['localhost'],
-          allowHttp: true,
-        },
-      },
-    };
+  it('rejects the retired local_crawler web.fetch lane', () => {
     expect(evaluatePolicy(
       { method: 'web.fetch', params: { url: 'http://localhost:8080/fetch', lane: 'local_crawler' } },
-      configWithUrlPolicy,
-    )).toBe('ALLOW');
+      {
+        ...policyConfig,
+        urlPolicy: { allowHttp: true, allowInternalNetwork: true, domainAllowlist: ['localhost'] },
+      },
+    )).toBe('DENY');
   });
 
   it('denies shell.exec when shell policy is disabled', () => {

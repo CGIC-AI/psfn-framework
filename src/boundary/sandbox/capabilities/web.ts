@@ -32,9 +32,8 @@ interface CreateWebCapabilitiesOptions {
 }
 
 export function createWebCapabilities(options: CreateWebCapabilitiesOptions): WebCapabilities {
-  const fetchViaLane = async (
+  const fetchViaGateway = async (
     url: string,
-    lane: 'default' | 'local_crawler',
     labels: {
       unavailable: string;
       missingTarget: string;
@@ -56,7 +55,7 @@ export function createWebCapabilities(options: CreateWebCapabilitiesOptions): We
     }
 
     try {
-      const content = await options.gatewayCaps.webFetch(trimmed, prompt, lane);
+      const content = await options.gatewayCaps.webFetch(trimmed, prompt);
       addEvidence(options.pushEvidence, {
         source: 'web_fetch',
         query: trimmed,
@@ -76,9 +75,8 @@ export function createWebCapabilities(options: CreateWebCapabilitiesOptions): We
 
     const results: Array<{ url: string; content: string }> = [];
     for (const url of uniqueUrls) {
-      const content = await fetchViaLane(
+      const content = await fetchViaGateway(
         url,
-        'local_crawler',
         {
           unavailable: 'Web browse unavailable: requires gateway web.fetch policy and audit path',
           missingTarget: 'Web browse error: URL is required',
@@ -108,9 +106,8 @@ export function createWebCapabilities(options: CreateWebCapabilitiesOptions): We
   ): Promise<string | Array<{ url: string; content: string }>> {
     switch (action) {
       case 'fetch':
-        return await fetchViaLane(
+        return await fetchViaGateway(
           target,
-          'default',
           {
             unavailable: 'Web fetch unavailable: requires gateway web.fetch policy and audit path',
             missingTarget: 'Web fetch error: URL is required',
@@ -119,9 +116,8 @@ export function createWebCapabilities(options: CreateWebCapabilitiesOptions): We
           options?.prompt,
         );
       case 'browse':
-        return await fetchViaLane(
+        return await fetchViaGateway(
           target,
-          'local_crawler',
           {
             unavailable: 'Web browse unavailable: requires gateway web.fetch policy and audit path',
             missingTarget: 'Web browse error: URL is required',
@@ -138,9 +134,8 @@ export function createWebCapabilities(options: CreateWebCapabilitiesOptions): We
 
   return {
     web,
-    web_fetch: async (url: string, prompt?: string): Promise<string> => fetchViaLane(
+    web_fetch: async (url: string, prompt?: string): Promise<string> => fetchViaGateway(
       url,
-      'default',
       {
         unavailable: 'Web fetch unavailable: requires gateway web.fetch policy and audit path',
         missingTarget: 'Web fetch error: URL is required',
@@ -148,9 +143,8 @@ export function createWebCapabilities(options: CreateWebCapabilitiesOptions): We
       },
       prompt,
     ),
-    crawler_fetch: async (url: string, prompt?: string): Promise<string> => fetchViaLane(
+    crawler_fetch: async (url: string, prompt?: string): Promise<string> => fetchViaGateway(
       url,
-      'local_crawler',
       {
         unavailable: 'Web browse unavailable: requires gateway web.fetch policy and audit path',
         missingTarget: 'Web browse error: URL is required',

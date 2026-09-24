@@ -324,7 +324,7 @@ export interface DiscordAvailabilityParams {
   state: 'available' | 'idle' | 'do_not_disturb';
 }
 
-export type WebFetchLane = 'default' | 'local_crawler' | 'discovery';
+export type WebFetchLane = 'default' | 'discovery';
 
 export interface WebFetchParams {
   url: string;

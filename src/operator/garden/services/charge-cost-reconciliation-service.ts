@@ -49,7 +49,7 @@ export class AdminChargeCostReconciliationDataService implements AdminChargeCost
       ...(query.runId ? { chargeRunId: query.runId } : {}),
       ...(query.rootRunId ? { chargeRootRunId: query.rootRunId } : {}),
     };
-    const chargeEntries = this.chargeLedger.listReconciliationEntries(chargeQuery);
+    const chargeEntries = await this.chargeLedger.listReconciliationEntries(chargeQuery);
     const usageEvents = await this.modelUsage.getUsageEventsForReconciliation(usageQuery);
     return reconcileChargeCosts({
       tenantCompanionId: this.tenantCompanionId,

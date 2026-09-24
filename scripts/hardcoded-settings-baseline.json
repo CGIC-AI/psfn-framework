@@ -7678,11 +7678,6 @@
       "note": "Code-owned fail-closed SQL and parameter ceiling that bounds subject-authorized detail batches; callers chunk larger sets."
     },
     {
-      "file": "src/faculties/memory/research-library/store.ts",
-      "name": "PREVIEW_MAX_CHARS",
-      "value": "12_000"
-    },
-    {
       "file": "src/faculties/memory/retrieval-compose.ts",
       "name": "RETRIEVAL_COMPOSITION_FINALIST_LIMIT",
       "value": "6"
@@ -9459,11 +9454,6 @@
       "value": "'TLSv1.3'",
       "form": "object-member",
       "note": "Existing mutable policy candidate GardenAdminTransportServer.loadNetworkTlsOptions.minVersion; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
-    },
-    {
-      "file": "src/persistence/artifact-lifecycle/manager.ts",
-      "name": "MAX_RECENT_RUNS",
-      "value": "20"
     },
     {
       "file": "src/persistence/backups/config.ts",

@@ -112,7 +112,6 @@ export {
 } from './scheduler-config/background-work.js';
 export {
   DEFAULT_BACKGROUND_MAINTENANCE_CONFIG,
-  type ArtifactLifecyclePolicyConfig,
   type BackgroundMaintenanceConfig,
 } from './scheduler-config/maintenance.js';
 export {

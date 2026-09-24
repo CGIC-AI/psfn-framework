@@ -14,6 +14,7 @@ import {
   chargeSurfaceDurably,
   chargeSurface,
   getRunChargeRollingWindowSnapshot,
+  hydrateRunChargeRollingWindowFromEvents,
   resetRunChargeRollingWindowForTests,
   runWithChargeContext,
 } from './run-charge.js';
@@ -100,7 +101,7 @@ describe('RunChargeLedger', () => {
     vi.useRealTimers();
   });
 
-  it('persists charge events to append-only JSONL and reloads history after restart', () => {
+  it('persists charge events to append-only JSONL and reloads history after restart', async () => {
     const ledgerPath = join(makeTempDir(), 'state', 'charge-ledger.jsonl');
     const firstLedger = new RunChargeLedger(ledgerPath);
     firstLedger.recordChargeEvent(makeEvent());
@@ -127,7 +128,7 @@ describe('RunChargeLedger', () => {
     expect(lines).toHaveLength(2);
 
     const rebootedLedger = new RunChargeLedger(ledgerPath);
-    const data = rebootedLedger.getData();
+    const data = await rebootedLedger.getData();
     expect(data.activeRun?.runId).toBe('run-child');
     expect(data.aggregates.amount).toBe(7);
     expect(data.aggregates.byLane).toEqual([
@@ -158,7 +159,7 @@ describe('RunChargeLedger', () => {
       remainingAfter: 0,
     }));
 
-    const data = ledger.getData();
+    const data = await ledger.getData();
     expect(data.aggregates.amount).toBe(12);
     expect(data.events[0].event.spentAfter).toBe(12);
     expect(data.events[0].event.quota).toBe(10);
@@ -309,7 +310,7 @@ describe('RunChargeLedger', () => {
     rebootedLedger.close();
   });
 
-  it('reuses the ledger entry id as identity for rows persisted without an event eventId', () => {
+  it('reuses the ledger entry id as identity for rows persisted without an event eventId', async () => {
     const nowMs = 1_800_000_000_000;
     const dir = join(makeTempDir(), 'state');
     mkdirSync(dir, { recursive: true });
@@ -335,7 +336,7 @@ describe('RunChargeLedger', () => {
     // Same ledger entry id on both lines: exact identity, so it counts once.
     expect(window.entryCount).toBe(1);
     expect(window.spentByLane.interactive).toBe(2);
-    expect(ledger.listEntries()[0]?.event.eventId).toBe('ledger-entry-legacy-1');
+    expect((await ledger.listEntries())[0]?.event.eventId).toBe('ledger-entry-legacy-1');
     ledger.close();
   });
 
@@ -368,7 +369,7 @@ describe('RunChargeLedger calendar accrual', () => {
   // 1_800_000_000_000 = 2027-01-15T08:53:20Z
   const NOW_MS = 1_800_000_000_000;
 
-  it('buckets spend per UTC calendar day and rolls up month-to-date', () => {
+  it('buckets spend per UTC calendar day and rolls up month-to-date', async () => {
     const ledgerPath = join(makeTempDir(), 'charge-ledger.jsonl');
     const ledger = new RunChargeLedger(ledgerPath, null, { now: () => NOW_MS });
 
@@ -379,7 +380,7 @@ describe('RunChargeLedger calendar accrual', () => {
     ledger.recordChargeEvent(makeEvent({ timestampMs: NOW_MS - 10 * 24 * 60 * 60_000, amount: 7 }));
     ledger.recordChargeEvent(makeEvent({ timestampMs: NOW_MS - 40 * 24 * 60 * 60_000, amount: 11 }));
 
-    const { calendar } = ledger.getData();
+    const { calendar } = await ledger.getData();
 
     expect(calendar.monthKey).toBe('2027-01');
     expect(calendar.monthToDateAmount).toBe(3 + 2 + 5 + 7);
@@ -394,7 +395,7 @@ describe('RunChargeLedger calendar accrual', () => {
     expect(calendar.daily[2].amount).toBe(7);
   });
 
-  it('keeps calendar accrual stable regardless of the query filter', () => {
+  it('keeps calendar accrual stable regardless of the query filter', async () => {
     const ledgerPath = join(makeTempDir(), 'charge-ledger.jsonl');
     const ledger = new RunChargeLedger(ledgerPath, null, { now: () => NOW_MS });
     ledger.recordChargeEvent(makeEvent({ timestampMs: NOW_MS - 60_000, amount: 3 }));
@@ -404,8 +405,101 @@ describe('RunChargeLedger calendar accrual', () => {
       lineage: { runId: 'run-other', rootRunId: 'run-other' },
     }));
 
-    const filtered = ledger.getData({ runId: 'run-other' });
+    const filtered = await ledger.getData({ runId: 'run-other' });
     expect(filtered.aggregates.amount).toBe(2);
     expect(filtered.calendar.monthToDateAmount).toBe(5);
+  });
+});
+
+describe('RunChargeLedger bounded residency (psfn-framework-jjeng)', () => {
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    resetRunChargeRollingWindowForTests();
+  });
+
+  const NOW_MS = 1_800_000_000_000;
+  const HOUR_MS = 60 * 60_000;
+  const DAY_MS = 24 * HOUR_MS;
+  // The resident horizon is the longer of the 24h quota window and the
+  // 31-day calendar accrual view.
+  const RESIDENT_HORIZON_MS = 31 * DAY_MS;
+  const TOTAL_ROWS = 4_000;
+  // ~120 days of history, one row every 43 minutes, newest row at NOW - 1 min.
+  const SPACING_MS = 43 * 60_000;
+
+  function writeSyntheticLedger(path: string): RunChargeEvent[] {
+    const events: RunChargeEvent[] = [];
+    const lines: string[] = [];
+    for (let index = 0; index < TOTAL_ROWS; index += 1) {
+      const timestampMs = NOW_MS - 60_000 - (TOTAL_ROWS - 1 - index) * SPACING_MS;
+      const event = makeEvent({
+        eventId: `synthetic-${index}`,
+        timestampMs,
+        lane: index % 3 === 0 ? 'background' : 'interactive',
+        amount: 1 + (index % 4),
+        lineage: { runId: `run-${index % 17}`, rootRunId: `run-${index % 17}` },
+      });
+      events.push(event);
+      lines.push(JSON.stringify({
+        schemaVersion: 1,
+        recordType: 'charge_event',
+        eventId: event.eventId,
+        recordedAtMs: timestampMs,
+        event,
+      }));
+    }
+    writeFileSync(path, `${lines.join('\n')}\n`, 'utf-8');
+    return events;
+  }
+
+  it('keeps only horizon rows resident while charge decisions and history reads are unchanged', async () => {
+    const path = join(makeTempDir(), 'charge-ledger.jsonl');
+    const events = writeSyntheticLedger(path);
+    const inHorizon = events.filter(event => event.timestampMs >= NOW_MS - RESIDENT_HORIZON_MS);
+    expect(inHorizon.length).toBeLessThan(TOTAL_ROWS / 3);
+
+    // Reference: the pre-bounding behavior hydrated the rolling window from every row.
+    resetRunChargeRollingWindowForTests();
+    hydrateRunChargeRollingWindowFromEvents(events, NOW_MS);
+    const unboundedDecision = getRunChargeRollingWindowSnapshot(NOW_MS);
+    resetRunChargeRollingWindowForTests();
+
+    let nowMs = NOW_MS;
+    const ledger = await RunChargeLedger.open(path, null, { now: () => nowMs });
+    expect(ledger.residentEntryCount).toBe(inHorizon.length);
+    expect(getRunChargeRollingWindowSnapshot(NOW_MS)).toEqual(unboundedDecision);
+    expect(await readRunChargeRollingWindowFromLedger(path, NOW_MS)).toEqual(unboundedDecision);
+    expect(unboundedDecision.entryCount).toBeGreaterThan(0);
+
+    // Identity stays durable for rows that are no longer resident.
+    const agedOut = events[0]!;
+    expect(NOW_MS - agedOut.timestampMs).toBeGreaterThan(90 * DAY_MS);
+    expect(ledger.probeChargeEvent(agedOut)).toBe('replayed');
+    const replay = ledger.commitChargeEvent({ ...agedOut, timestampMs: NOW_MS, spentAfter: 0, remainingAfter: 0 });
+    expect(replay.outcome).toBe('replayed');
+    expect(replay.entry.event).toEqual(agedOut);
+    expect(() => ledger.probeChargeEvent({ ...agedOut, amount: agedOut.amount + 1 }))
+      .toThrow('Charge ledger event identity collision for synthetic-0');
+    expect(readFileSync(path, 'utf8').trim().split('\n')).toHaveLength(TOTAL_ROWS);
+
+    // Out-of-horizon reads stream the canonical file: totals are all-time.
+    const data = await ledger.getData();
+    expect(data.aggregates.eventCount).toBe(TOTAL_ROWS);
+    expect(data.aggregates.amount).toBe(events.reduce((sum, event) => sum + event.amount, 0));
+    expect(await ledger.listReconciliationEntries()).toHaveLength(TOTAL_ROWS);
+    const recentSince = NOW_MS - DAY_MS;
+    expect((await ledger.listReconciliationEntries({ sinceMs: recentSince })).map(entry => entry.eventId))
+      .toEqual(events.filter(event => event.timestampMs >= recentSince).map(event => event.eventId));
+
+    // Appends prune rows that age past the horizon.
+    nowMs = NOW_MS + 10 * DAY_MS;
+    ledger.recordChargeEvent(makeEvent({ eventId: 'after-advance', timestampMs: nowMs }));
+    expect(ledger.residentEntryCount).toBe(
+      events.filter(event => event.timestampMs >= nowMs - RESIDENT_HORIZON_MS).length + 1,
+    );
+    expect(ledger.probeChargeEvent(inHorizon[0]!)).toBe('replayed');
+    ledger.close();
   });
 });

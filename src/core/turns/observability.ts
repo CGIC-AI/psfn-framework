@@ -214,154 +214,162 @@ function filterObservedMemories<T extends PurrMemory>(
   return memories.filter(memory => !withheldIds.has(memory.id));
 }
 
-export function sanitizeTurnSnapshot(snapshot: TurnSnapshot): TurnSnapshotRecord {
-  const withheldIds = new Set(snapshot.memory?.withheldCandidateIds ?? []);
+// Nested cloners shared by sanitizeTurnSnapshot (live snapshot -> record) and
+// cloneTurnSnapshotRecord (record -> record). Each explicitly projects the
+// record shape, so a live snapshot's extra fields are dropped identically on
+// both paths. Only memory candidate lists differ (filter+sanitize vs clone).
+
+function clonePromptSnapshotRecord(prompt: TurnPromptSnapshot): TurnPromptSnapshot {
   return {
-    turnId: snapshot.turnId,
-    requestId: snapshot.requestId,
-    channelId: snapshot.channelId,
-    capturedAt: snapshot.capturedAt,
-    trustLevel: snapshot.trustLevel,
-    ...(snapshot.canonicalContactKey ? { canonicalContactKey: snapshot.canonicalContactKey } : {}),
-    ...(snapshot.prompt
-      ? {
-        prompt: {
-          ...snapshot.prompt,
-          ...(snapshot.prompt.sectionCacheability
-            ? { sectionCacheability: snapshot.prompt.sectionCacheability.map(clonePromptSectionCacheability) }
-            : {}),
-        },
-      }
+    ...prompt,
+    ...(prompt.sectionCacheability
+      ? { sectionCacheability: prompt.sectionCacheability.map(clonePromptSectionCacheability) }
       : {}),
+  };
+}
+
+function clonePromptContextSnapshotRecord(promptContext: TurnPromptContextSnapshot): TurnPromptContextSnapshot {
+  return {
+    ...promptContext,
+    ...(promptContext.currentTurnInput !== undefined
+      ? { currentTurnInput: promptContext.currentTurnInput }
+      : {}),
+    ...(promptContext.providerObservability
+      ? { providerObservability: cloneProviderObservability(promptContext.providerObservability) }
+      : {}),
+    ...(promptContext.response
+      ? { response: cloneTurnPromptResponseSnapshot(promptContext.response) }
+      : {}),
+    ...(promptContext.sectionCacheability
+      ? { sectionCacheability: promptContext.sectionCacheability.map(clonePromptSectionCacheability) }
+      : {}),
+    ...(promptContext.inputSections
+      ? { inputSections: promptContext.inputSections.map(clonePromptSectionTelemetry) }
+      : {}),
+    ...(promptContext.runtimeContextSections
+      ? { runtimeContextSections: promptContext.runtimeContextSections.map(clonePromptSectionTelemetry) }
+      : {}),
+    ...(promptContext.memoryContextSections
+      ? { memoryContextSections: promptContext.memoryContextSections.map(clonePromptSectionTelemetry) }
+      : {}),
+    ...(promptContext.finalSystemSections
+      ? { finalSystemSections: promptContext.finalSystemSections.map(clonePromptSectionTelemetry) }
+      : {}),
+  };
+}
+
+function cloneToolContextSnapshotRecord(toolContext: TurnToolContextSnapshot): TurnToolContextSnapshot {
+  return {
+    // Preserve absence: slim persisted snapshots omit activeTools when
+    // byte-identical to plan.toolDefinitions (readers fall back to the plan).
+    ...(toolContext.activeTools
+      ? { activeTools: toolContext.activeTools.map(cloneToolSchema) }
+      : {}),
+    ...(toolContext.adaptiveSnapshot
+      ? { adaptiveSnapshot: cloneAdaptiveToolSnapshotTelemetry(toolContext.adaptiveSnapshot)! }
+      : {}),
+  };
+}
+
+function cloneSessionContextSnapshotRecord(
+  sessionContext: TurnSessionContextSnapshotRecord,
+): TurnSessionContextSnapshotRecord {
+  return {
+    channelId: sessionContext.channelId,
+    recentEntries: sessionContext.recentEntries.map(cloneSessionEntry),
+    ...(sessionContext.autoCompactionEligible !== undefined
+      ? { autoCompactionEligible: sessionContext.autoCompactionEligible }
+      : {}),
+    ...(sessionContext.sourceEntryCount !== undefined
+      ? { sourceEntryCount: sessionContext.sourceEntryCount }
+      : {}),
+    ...(sessionContext.rolledOutSessionBoundary
+      ? { rolledOutSessionBoundary: cloneRolledOutSessionBoundary(sessionContext.rolledOutSessionBoundary) }
+      : {}),
+    ...(sessionContext.historySummaryText
+      ? { historySummaryText: sessionContext.historySummaryText }
+      : {}),
+    ...(sessionContext.historySummaryEntryCount !== undefined
+      ? { historySummaryEntryCount: sessionContext.historySummaryEntryCount }
+      : {}),
+    compactionSummaryTexts: [...sessionContext.compactionSummaryTexts],
+    focusKnowledgeTexts: [...sessionContext.focusKnowledgeTexts],
+    continuityEntries: sessionContext.continuityEntries.map(cloneSessionEntry),
+    ...(sessionContext.wakeReturnArtifacts
+      ? { wakeReturnArtifacts: sessionContext.wakeReturnArtifacts.map(cloneSessionContinuityArtifact) }
+      : {}),
+    ...(sessionContext.orientation
+      ? { orientation: cloneOrientationSnapshot(sessionContext.orientation) }
+      : {}),
+    ...(sessionContext.intentionAppraisalArtifactCount !== undefined
+      ? { intentionAppraisalArtifactCount: sessionContext.intentionAppraisalArtifactCount }
+      : {}),
+    ...(sessionContext.compactionPromptText
+      ? { compactionPromptText: sessionContext.compactionPromptText }
+      : {}),
+    versionPointer: sessionContext.versionPointer,
+  };
+}
+
+type TurnMemoryCandidateLists = Pick<
+  TurnMemorySnapshotRecord,
+  'contactEmotionalMemories' | 'semanticCandidates' | 'lexicalCandidates' | 'proactiveCandidates'
+>;
+
+type TurnMemorySharedFields = Pick<
+  TurnMemorySnapshotRecord,
+  'channelId' | 'recentContactShape' | 'emotionalSnapshot' | 'episodicChains' | 'withheldSummary' | 'versionPointer'
+>;
+
+function buildMemorySnapshotRecord(
+  memory: TurnMemorySharedFields,
+  candidates: TurnMemoryCandidateLists,
+): TurnMemorySnapshotRecord {
+  return {
+    channelId: memory.channelId,
+    ...(memory.recentContactShape
+      ? { recentContactShape: cloneRecentContactShapeArtifact(memory.recentContactShape) }
+      : {}),
+    ...(memory.emotionalSnapshot ? { emotionalSnapshot: { ...memory.emotionalSnapshot } } : {}),
+    contactEmotionalMemories: candidates.contactEmotionalMemories,
+    semanticCandidates: candidates.semanticCandidates,
+    lexicalCandidates: candidates.lexicalCandidates,
+    ...(memory.episodicChains
+      ? { episodicChains: memory.episodicChains.map(cloneEpisodicRetrievalChain) }
+      : {}),
+    proactiveCandidates: candidates.proactiveCandidates,
+    ...(memory.withheldSummary
+      ? { withheldSummary: cloneMemoryWithheldSummary(memory.withheldSummary) }
+      : {}),
+    versionPointer: memory.versionPointer,
+  };
+}
+
+type TurnSnapshotNestedFields = Pick<
+  TurnSnapshotRecord,
+  'prompt' | 'plan' | 'promptContext' | 'toolContext' | 'sessionContext' | 'biographicalProjection' | 'fatigue'
+>;
+
+function cloneSharedSnapshotSections(snapshot: TurnSnapshotNestedFields): TurnSnapshotNestedFields {
+  return {
+    ...(snapshot.prompt ? { prompt: clonePromptSnapshotRecord(snapshot.prompt) } : {}),
     ...(snapshot.plan
       ? { plan: clonePromptPlan(snapshot.plan, cloneContextMessage, cloneToolSchema) }
       : {}),
     ...(snapshot.promptContext
-      ? {
-        promptContext: {
-          ...snapshot.promptContext,
-          ...(snapshot.promptContext.currentTurnInput !== undefined
-            ? { currentTurnInput: snapshot.promptContext.currentTurnInput }
-            : {}),
-          ...(snapshot.promptContext.providerObservability
-            ? { providerObservability: cloneProviderObservability(snapshot.promptContext.providerObservability) }
-            : {}),
-          ...(snapshot.promptContext.response
-            ? { response: cloneTurnPromptResponseSnapshot(snapshot.promptContext.response) }
-            : {}),
-          ...(snapshot.promptContext.sectionCacheability
-            ? { sectionCacheability: snapshot.promptContext.sectionCacheability.map(clonePromptSectionCacheability) }
-            : {}),
-          ...(snapshot.promptContext.inputSections
-            ? { inputSections: snapshot.promptContext.inputSections.map(clonePromptSectionTelemetry) }
-            : {}),
-          ...(snapshot.promptContext.runtimeContextSections
-            ? { runtimeContextSections: snapshot.promptContext.runtimeContextSections.map(clonePromptSectionTelemetry) }
-            : {}),
-          ...(snapshot.promptContext.memoryContextSections
-            ? { memoryContextSections: snapshot.promptContext.memoryContextSections.map(clonePromptSectionTelemetry) }
-            : {}),
-          ...(snapshot.promptContext.finalSystemSections
-            ? { finalSystemSections: snapshot.promptContext.finalSystemSections.map(clonePromptSectionTelemetry) }
-            : {}),
-        },
-      }
+      ? { promptContext: clonePromptContextSnapshotRecord(snapshot.promptContext) }
       : {}),
     ...(snapshot.toolContext
-      ? {
-        toolContext: {
-          // Preserve absence: slim persisted snapshots omit activeTools when
-          // byte-identical to plan.toolDefinitions (readers fall back to the plan).
-          ...(snapshot.toolContext.activeTools
-            ? { activeTools: snapshot.toolContext.activeTools.map(cloneToolSchema) }
-            : {}),
-          ...(snapshot.toolContext.adaptiveSnapshot
-            ? { adaptiveSnapshot: cloneAdaptiveToolSnapshotTelemetry(snapshot.toolContext.adaptiveSnapshot)! }
-            : {}),
-        },
-      }
+      ? { toolContext: cloneToolContextSnapshotRecord(snapshot.toolContext) }
       : {}),
     ...(snapshot.sessionContext
-      ? {
-        sessionContext: {
-          channelId: snapshot.sessionContext.channelId,
-          recentEntries: snapshot.sessionContext.recentEntries.map(cloneSessionEntry),
-          ...(snapshot.sessionContext.autoCompactionEligible !== undefined
-            ? { autoCompactionEligible: snapshot.sessionContext.autoCompactionEligible }
-            : {}),
-          ...(snapshot.sessionContext.sourceEntryCount !== undefined
-            ? { sourceEntryCount: snapshot.sessionContext.sourceEntryCount }
-            : {}),
-          ...(snapshot.sessionContext.rolledOutSessionBoundary
-            ? {
-                rolledOutSessionBoundary: cloneRolledOutSessionBoundary(
-                  snapshot.sessionContext.rolledOutSessionBoundary,
-                ),
-              }
-            : {}),
-          ...(snapshot.sessionContext.historySummaryText
-            ? { historySummaryText: snapshot.sessionContext.historySummaryText }
-            : {}),
-          ...(snapshot.sessionContext.historySummaryEntryCount !== undefined
-            ? { historySummaryEntryCount: snapshot.sessionContext.historySummaryEntryCount }
-            : {}),
-          compactionSummaryTexts: [...snapshot.sessionContext.compactionSummaryTexts],
-          focusKnowledgeTexts: [...snapshot.sessionContext.focusKnowledgeTexts],
-          continuityEntries: snapshot.sessionContext.continuityEntries.map(cloneSessionEntry),
-          ...(snapshot.sessionContext.wakeReturnArtifacts
-            ? { wakeReturnArtifacts: snapshot.sessionContext.wakeReturnArtifacts.map(cloneSessionContinuityArtifact) }
-            : {}),
-          ...(snapshot.sessionContext.orientation
-            ? { orientation: cloneOrientationSnapshot(snapshot.sessionContext.orientation) }
-            : {}),
-          ...(snapshot.sessionContext.intentionAppraisalArtifactCount !== undefined
-            ? { intentionAppraisalArtifactCount: snapshot.sessionContext.intentionAppraisalArtifactCount }
-            : {}),
-          ...(snapshot.sessionContext.compactionPromptText
-            ? { compactionPromptText: snapshot.sessionContext.compactionPromptText }
-            : {}),
-          versionPointer: snapshot.sessionContext.versionPointer,
-        },
-      }
+      ? { sessionContext: cloneSessionContextSnapshotRecord(snapshot.sessionContext) }
       : {}),
-    ...(snapshot.memory
-      ? {
-        memory: {
-          channelId: snapshot.memory.channelId,
-          ...(snapshot.memory.recentContactShape
-            ? {
-              recentContactShape: cloneRecentContactShapeArtifact(
-                snapshot.memory.recentContactShape,
-              ),
-            }
-            : {}),
-          ...(snapshot.memory.emotionalSnapshot ? { emotionalSnapshot: { ...snapshot.memory.emotionalSnapshot } } : {}),
-          contactEmotionalMemories: filterObservedMemories(
-            snapshot.memory.contactEmotionalMemories,
-            withheldIds,
-          ).map(sanitizeObservedMemory),
-          semanticCandidates: filterObservedMemories(
-            snapshot.memory.semanticCandidates,
-            withheldIds,
-          ).map(sanitizeObservedScoredMemory),
-          lexicalCandidates: filterObservedMemories(
-            snapshot.memory.lexicalCandidates,
-            withheldIds,
-          ).map(sanitizeObservedScoredMemory),
-          ...(snapshot.memory.episodicChains
-            ? { episodicChains: snapshot.memory.episodicChains.map(cloneEpisodicRetrievalChain) }
-            : {}),
-          proactiveCandidates: filterObservedMemories(
-            snapshot.memory.proactiveCandidates,
-            withheldIds,
-          ).map(sanitizeObservedMemory),
-          ...(snapshot.memory.withheldSummary
-            ? { withheldSummary: cloneMemoryWithheldSummary(snapshot.memory.withheldSummary) }
-            : {}),
-          versionPointer: snapshot.memory.versionPointer,
-        },
-      }
-      : {}),
+  };
+}
+
+function cloneTrailingSnapshotSections(snapshot: TurnSnapshotNestedFields): TurnSnapshotNestedFields {
+  return {
     ...(snapshot.biographicalProjection
       ? {
         biographicalProjection: {
@@ -374,144 +382,51 @@ export function sanitizeTurnSnapshot(snapshot: TurnSnapshot): TurnSnapshotRecord
   };
 }
 
+export function sanitizeTurnSnapshot(snapshot: TurnSnapshot): TurnSnapshotRecord {
+  const withheldIds = new Set(snapshot.memory?.withheldCandidateIds ?? []);
+  const memory = snapshot.memory;
+  return {
+    turnId: snapshot.turnId,
+    requestId: snapshot.requestId,
+    channelId: snapshot.channelId,
+    capturedAt: snapshot.capturedAt,
+    trustLevel: snapshot.trustLevel,
+    ...(snapshot.canonicalContactKey ? { canonicalContactKey: snapshot.canonicalContactKey } : {}),
+    ...cloneSharedSnapshotSections(snapshot),
+    ...(memory
+      ? {
+        memory: buildMemorySnapshotRecord(memory, {
+          contactEmotionalMemories: filterObservedMemories(memory.contactEmotionalMemories, withheldIds)
+            .map(sanitizeObservedMemory),
+          semanticCandidates: filterObservedMemories(memory.semanticCandidates, withheldIds)
+            .map(sanitizeObservedScoredMemory),
+          lexicalCandidates: filterObservedMemories(memory.lexicalCandidates, withheldIds)
+            .map(sanitizeObservedScoredMemory),
+          proactiveCandidates: filterObservedMemories(memory.proactiveCandidates, withheldIds)
+            .map(sanitizeObservedMemory),
+        }),
+      }
+      : {}),
+    ...cloneTrailingSnapshotSections(snapshot),
+  };
+}
+
 export function cloneTurnSnapshotRecord(snapshot: TurnSnapshotRecord): TurnSnapshotRecord {
+  const memory = snapshot.memory;
   return {
     ...snapshot,
-    ...(snapshot.prompt
+    ...cloneSharedSnapshotSections(snapshot),
+    ...(memory
       ? {
-        prompt: {
-          ...snapshot.prompt,
-          ...(snapshot.prompt.sectionCacheability
-            ? { sectionCacheability: snapshot.prompt.sectionCacheability.map(clonePromptSectionCacheability) }
-            : {}),
-        },
+        memory: buildMemorySnapshotRecord(memory, {
+          contactEmotionalMemories: memory.contactEmotionalMemories.map(cloneObservedMemory),
+          semanticCandidates: memory.semanticCandidates.map(cloneObservedScoredMemory),
+          lexicalCandidates: memory.lexicalCandidates.map(cloneObservedScoredMemory),
+          proactiveCandidates: memory.proactiveCandidates.map(cloneObservedMemory),
+        }),
       }
       : {}),
-    ...(snapshot.plan
-      ? { plan: clonePromptPlan(snapshot.plan, cloneContextMessage, cloneToolSchema) }
-      : {}),
-    ...(snapshot.promptContext
-      ? {
-        promptContext: {
-          ...snapshot.promptContext,
-          ...(snapshot.promptContext.currentTurnInput !== undefined
-            ? { currentTurnInput: snapshot.promptContext.currentTurnInput }
-            : {}),
-          ...(snapshot.promptContext.providerObservability
-            ? { providerObservability: cloneProviderObservability(snapshot.promptContext.providerObservability) }
-            : {}),
-          ...(snapshot.promptContext.response
-            ? { response: cloneTurnPromptResponseSnapshot(snapshot.promptContext.response) }
-            : {}),
-          ...(snapshot.promptContext.sectionCacheability
-            ? { sectionCacheability: snapshot.promptContext.sectionCacheability.map(clonePromptSectionCacheability) }
-            : {}),
-          ...(snapshot.promptContext.inputSections
-            ? { inputSections: snapshot.promptContext.inputSections.map(clonePromptSectionTelemetry) }
-            : {}),
-          ...(snapshot.promptContext.runtimeContextSections
-            ? { runtimeContextSections: snapshot.promptContext.runtimeContextSections.map(clonePromptSectionTelemetry) }
-            : {}),
-          ...(snapshot.promptContext.memoryContextSections
-            ? { memoryContextSections: snapshot.promptContext.memoryContextSections.map(clonePromptSectionTelemetry) }
-            : {}),
-          ...(snapshot.promptContext.finalSystemSections
-            ? { finalSystemSections: snapshot.promptContext.finalSystemSections.map(clonePromptSectionTelemetry) }
-            : {}),
-        },
-      }
-      : {}),
-    ...(snapshot.toolContext
-      ? {
-        toolContext: {
-          // Preserve absence (see sanitizeTurnSnapshot above).
-          ...(snapshot.toolContext.activeTools
-            ? { activeTools: snapshot.toolContext.activeTools.map(cloneToolSchema) }
-            : {}),
-          ...(snapshot.toolContext.adaptiveSnapshot
-            ? { adaptiveSnapshot: cloneAdaptiveToolSnapshotTelemetry(snapshot.toolContext.adaptiveSnapshot)! }
-            : {}),
-        },
-      }
-      : {}),
-    ...(snapshot.sessionContext
-      ? {
-        sessionContext: {
-          channelId: snapshot.sessionContext.channelId,
-          recentEntries: snapshot.sessionContext.recentEntries.map(cloneSessionEntry),
-          ...(snapshot.sessionContext.autoCompactionEligible !== undefined
-            ? { autoCompactionEligible: snapshot.sessionContext.autoCompactionEligible }
-            : {}),
-          ...(snapshot.sessionContext.sourceEntryCount !== undefined
-            ? { sourceEntryCount: snapshot.sessionContext.sourceEntryCount }
-            : {}),
-          ...(snapshot.sessionContext.rolledOutSessionBoundary
-            ? {
-                rolledOutSessionBoundary: cloneRolledOutSessionBoundary(
-                  snapshot.sessionContext.rolledOutSessionBoundary,
-                ),
-              }
-            : {}),
-          ...(snapshot.sessionContext.historySummaryText
-            ? { historySummaryText: snapshot.sessionContext.historySummaryText }
-            : {}),
-          ...(snapshot.sessionContext.historySummaryEntryCount !== undefined
-            ? { historySummaryEntryCount: snapshot.sessionContext.historySummaryEntryCount }
-            : {}),
-          compactionSummaryTexts: [...snapshot.sessionContext.compactionSummaryTexts],
-          focusKnowledgeTexts: [...snapshot.sessionContext.focusKnowledgeTexts],
-          continuityEntries: snapshot.sessionContext.continuityEntries.map(cloneSessionEntry),
-          ...(snapshot.sessionContext.wakeReturnArtifacts
-            ? { wakeReturnArtifacts: snapshot.sessionContext.wakeReturnArtifacts.map(cloneSessionContinuityArtifact) }
-            : {}),
-          ...(snapshot.sessionContext.orientation
-            ? { orientation: cloneOrientationSnapshot(snapshot.sessionContext.orientation) }
-            : {}),
-          ...(snapshot.sessionContext.intentionAppraisalArtifactCount !== undefined
-            ? { intentionAppraisalArtifactCount: snapshot.sessionContext.intentionAppraisalArtifactCount }
-            : {}),
-          ...(snapshot.sessionContext.compactionPromptText
-            ? { compactionPromptText: snapshot.sessionContext.compactionPromptText }
-            : {}),
-          versionPointer: snapshot.sessionContext.versionPointer,
-        },
-      }
-      : {}),
-    ...(snapshot.memory
-      ? {
-        memory: {
-          channelId: snapshot.memory.channelId,
-          ...(snapshot.memory.recentContactShape
-            ? {
-              recentContactShape: cloneRecentContactShapeArtifact(
-                snapshot.memory.recentContactShape,
-              ),
-            }
-            : {}),
-          ...(snapshot.memory.emotionalSnapshot ? { emotionalSnapshot: { ...snapshot.memory.emotionalSnapshot } } : {}),
-          contactEmotionalMemories: snapshot.memory.contactEmotionalMemories.map(cloneObservedMemory),
-          semanticCandidates: snapshot.memory.semanticCandidates.map(cloneObservedScoredMemory),
-          lexicalCandidates: snapshot.memory.lexicalCandidates.map(cloneObservedScoredMemory),
-          ...(snapshot.memory.episodicChains
-            ? { episodicChains: snapshot.memory.episodicChains.map(cloneEpisodicRetrievalChain) }
-            : {}),
-          proactiveCandidates: snapshot.memory.proactiveCandidates.map(cloneObservedMemory),
-          ...(snapshot.memory.withheldSummary
-            ? { withheldSummary: cloneMemoryWithheldSummary(snapshot.memory.withheldSummary) }
-            : {}),
-          versionPointer: snapshot.memory.versionPointer,
-        },
-      }
-      : {}),
-    ...(snapshot.biographicalProjection
-      ? {
-        biographicalProjection: {
-          ...snapshot.biographicalProjection,
-          admittedClaimIds: [...snapshot.biographicalProjection.admittedClaimIds],
-        },
-      }
-      : {}),
-    ...(snapshot.fatigue ? { fatigue: cloneUnknownValue(snapshot.fatigue) } : {}),
+    ...cloneTrailingSnapshotSections(snapshot),
   };
 }
 

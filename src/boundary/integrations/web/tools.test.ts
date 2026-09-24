@@ -34,7 +34,6 @@ describe('web tools', () => {
     });
 
     expect(ops.fetch).toHaveBeenCalledWith('https://example.com', {
-      lane: 'local_crawler',
       prompt: 'Focus on main content',
     });
     expect(result.details).toEqual({});
@@ -62,11 +61,9 @@ describe('web tools', () => {
     expect(queryJson).toHaveBeenCalledTimes(1);
     expect(ops.fetch).toHaveBeenCalledTimes(2);
     expect(ops.fetch).toHaveBeenNthCalledWith(1, 'https://example.com/a', {
-      lane: 'local_crawler',
       prompt: 'Research query: test query',
     });
     expect(ops.fetch).toHaveBeenNthCalledWith(2, 'https://example.com/b', {
-      lane: 'local_crawler',
       prompt: 'Research query: test query',
     });
     expect(result.content).toEqual([{

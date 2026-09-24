@@ -68,7 +68,6 @@ export type GatewayREPLCapabilities = {
   webFetch?: (
     url: string,
     prompt?: string,
-    lane?: 'default' | 'local_crawler',
   ) => Promise<string>;
   gitStatus?: () => Promise<GitStatusView>;
   gitDiff?: (opts?: { staged?: boolean }) => Promise<GitDiffView>;

@@ -86,7 +86,7 @@ const log = createComponentLogger('ImageVisionReviewer');
 type BinaryFetcher = (
   url: string,
   options?: {
-    lane?: 'default' | 'local_crawler';
+    lane?: 'default';
     maxBytes?: number;
     headers?: Record<string, string>;
   },
@@ -179,16 +179,6 @@ function inferMimeTypeFromLocalPath(localPath: string): string {
       return 'image/tiff';
     default:
       return 'image/png';
-  }
-}
-
-function resolveConfiguredComfyOrigin(config: SubstrateConfig): string | null {
-  const baseUrl = config.comfyUiBaseUrl?.trim();
-  if (!baseUrl) return null;
-  try {
-    return new URL(baseUrl).origin;
-  } catch {
-    return null;
   }
 }
 
@@ -393,11 +383,8 @@ export class DefaultImageVisionReviewer implements ImageVisionReviewer {
     }
 
     try {
-      const lane = parsedUrl.origin === resolveConfiguredComfyOrigin(this.config)
-        ? 'local_crawler'
-        : 'default';
       return validateFetchedImage(await binaryFetcher(url, {
-        lane,
+        lane: 'default',
         maxBytes: VISION_IMAGE_MAX_BYTES,
       }));
     } catch (error) {

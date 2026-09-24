@@ -55,7 +55,7 @@ function buildFileAndWebSection(mutationPolicy?: REPLMutationPolicy): string[] {
     '- Process each page incrementally instead of concatenating an unbounded whole file; cite the source path and relevant line or byte ranges in the bounded result.',
     '- `await list_files(glob?, maxEntries?)` — List workspace-relative files via gateway glob policy; returns `{ paths, truncated, scanLimitReached }`',
     '- `await web("fetch", url, { prompt? })` — Guarded remote page fetch via gateway SSRF defenses and the default web lane',
-    '- `await web("browse", url, { prompt? })` — Uses the `local_crawler` web lane; policy must explicitly allow it',
+    '- `await web("browse", url, { prompt? })` — Same guarded default-lane fetch as `fetch`, under the same gateway URL policy',
     '- `await web("search", query, { maxUrls? })` — Discover and fetch a small URL set for a research question',
   ];
 

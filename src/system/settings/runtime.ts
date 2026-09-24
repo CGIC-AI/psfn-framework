@@ -471,18 +471,8 @@ function getWebAndGardenSettingsSnapshot(config: SubstrateConfig) {
     ),
     webFetchAllowHttp: config.webFetchAllowHttp ?? false,
     webFetchDomainAllowlist: config.webFetchDomainAllowlist ?? [],
-    webFetchAllowInternalNetwork:
-      config.webFetchAllowInternalNetwork ??
-      config.webFetchLocalCrawlerEnabled ??
-      false,
+    webFetchAllowInternalNetwork: config.webFetchAllowInternalNetwork ?? false,
     homeAssistantEnabled: config.homeAssistantEnabled ?? false,
-    webFetchLocalCrawlerEnabled: config.webFetchLocalCrawlerEnabled ?? false,
-    webFetchLocalCrawlerAllowHttp:
-      config.webFetchLocalCrawlerAllowHttp ?? false,
-    webFetchLocalCrawlerHostAllowlist:
-      config.webFetchLocalCrawlerHostAllowlist ?? [],
-    webFetchLocalCrawlerDomainAllowlist:
-      config.webFetchLocalCrawlerDomainAllowlist ?? [],
     webFetchTlsCaCertPaths: config.webFetchTlsCaCertPaths ?? [],
     capabilityTier: config.capabilityTier ?? 'nursery',
     promotedExtendedTools: config.promotedExtendedTools ?? [],
@@ -509,10 +499,6 @@ function getWebAndGardenSettingsSnapshot(config: SubstrateConfig) {
     | 'webFetchDomainAllowlist'
     | 'webFetchAllowInternalNetwork'
     | 'homeAssistantEnabled'
-    | 'webFetchLocalCrawlerEnabled'
-    | 'webFetchLocalCrawlerAllowHttp'
-    | 'webFetchLocalCrawlerHostAllowlist'
-    | 'webFetchLocalCrawlerDomainAllowlist'
     | 'webFetchTlsCaCertPaths'
     | 'capabilityTier'
     | 'promotedExtendedTools'
@@ -939,24 +925,6 @@ function applyWebAndGardenSettings(
   }
   if ('homeAssistantEnabled' in settings) {
     config.homeAssistantEnabled = settings.homeAssistantEnabled ?? false;
-  }
-  if ('webFetchLocalCrawlerEnabled' in settings) {
-    config.webFetchLocalCrawlerEnabled =
-      settings.webFetchLocalCrawlerEnabled ?? false;
-  }
-  if ('webFetchLocalCrawlerAllowHttp' in settings) {
-    config.webFetchLocalCrawlerAllowHttp =
-      settings.webFetchLocalCrawlerAllowHttp ?? false;
-  }
-  if ('webFetchLocalCrawlerHostAllowlist' in settings) {
-    config.webFetchLocalCrawlerHostAllowlist = copyListOrClear(
-      settings.webFetchLocalCrawlerHostAllowlist,
-    );
-  }
-  if ('webFetchLocalCrawlerDomainAllowlist' in settings) {
-    config.webFetchLocalCrawlerDomainAllowlist = copyListOrClear(
-      settings.webFetchLocalCrawlerDomainAllowlist,
-    );
   }
   if ('webFetchTlsCaCertPaths' in settings) {
     config.webFetchTlsCaCertPaths = copyListOrClear(

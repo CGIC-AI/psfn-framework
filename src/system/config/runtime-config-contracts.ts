@@ -550,14 +550,6 @@ export interface SubstrateConfig {
   webFetchDomainAllowlist?: string[];
   webFetchAllowInternalNetwork?: boolean;
   homeAssistantEnabled?: boolean;
-  /** @deprecated Use webFetchAllowInternalNetwork + webFetchDomainAllowlist instead */
-  webFetchLocalCrawlerEnabled?: boolean;
-  /** @deprecated Use webFetchAllowHttp instead */
-  webFetchLocalCrawlerAllowHttp?: boolean;
-  /** @deprecated Use webFetchDomainAllowlist instead */
-  webFetchLocalCrawlerHostAllowlist?: string[];
-  /** @deprecated Use webFetchDomainAllowlist instead */
-  webFetchLocalCrawlerDomainAllowlist?: string[];
   webFetchTlsCaCertPaths?: string[];
   /** Path to a CA certificate file (PEM) to trust for all outbound TLS connections (LLM, embeddings, etc.). Sets NODE_EXTRA_CA_CERTS at startup. */
   gatewayTlsCaPath?: string;

@@ -1359,11 +1359,12 @@ true
 
 {{/*
 Launcher evidence for the agent egress-isolation proof (psfn-framework-hrcx5).
-Declared only when the chart renders the agent NetworkPolicy; without it the
+Declared only when the chart renders the agent NetworkPolicy without external
+egress; without it the
 agent's startup guard cannot prove isolation and fails closed.
 */}}
 {{- define "psfn.agentEgressIsolationEnv" -}}
-{{- if .Values.networkPolicy.enabled }}
+{{- if and .Values.networkPolicy.enabled (not .Values.networkPolicy.agent.allowExternalEgress) }}
 - name: PSFN_AGENT_EGRESS_ISOLATION
   value: kubernetes-network-policy
 {{- end }}

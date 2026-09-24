@@ -55,7 +55,8 @@
       "resolvedRetentionMs": 604800000,
       "maxResolvedRowsPerKind": 256,
       "maxAttemptsPerEscalation": 64,
-      "maxOpenRowsPerKind": 128
+      "maxOpenRowsPerKind": 128,
+      "settlementLeaseMs": 300000
     }
   },
   "fleetStagger": {

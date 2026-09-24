@@ -26,6 +26,7 @@ const BOUNDS: HumanEscalationLedgerBounds = {
   maxResolvedRowsPerKind: 3,
   maxAttemptsPerEscalation: 2,
   maxOpenRowsPerKind: 2,
+  settlementLeaseMs: 60_000,
 };
 
 const GARDEN_ONLY_ROUTING: HumanEscalationRoutingPolicy = {
@@ -259,6 +260,79 @@ describe('PostgresHumanEscalationStore bounds', () => {
         expect(await countRows(pool, 'human_escalation_attempts'))
           .toBe(BOUNDS.maxAttemptsPerEscalation);
         expect(await store.findAttempt('burst.3')).not.toBeNull();
+      });
+    });
+
+  it('keeps another process\'s in-flight attempt through the ring, and lets a crashed lease expire',
+    async () => {
+      await withStore(async ({ pool, store: gatewayStore, setNow }) => {
+        // Single-companion mode: the gateway and the agent each hold their own
+        // store over one table (psfn-framework-ycr3z). The in-flight mark must
+        // live in the row, or the agent's ring cannot see the gateway's claim.
+        const agentStore = await PostgresHumanEscalationStore.fromPool(pool, {
+          bounds: BOUNDS,
+          now: () => NOW_MS,
+        });
+        const record = await gatewayStore.openOrReopen(facts({ dedupeKey: 'cross-process' }));
+        expect((await gatewayStore.claimAttempt({
+          idempotencyKey: 'cross.gateway',
+          escalationId: record.escalationId,
+          sink: 'operator_alert',
+          outcome: 'delivery_failed',
+          attemptedAtMs: NOW_MS,
+        }, { awaitingSettlement: true })).claimed).toBe(true);
+
+        for (let index = 0; index < 4; index += 1) {
+          await agentStore.claimAttempt({
+            idempotencyKey: `cross.agent.${String(index)}`,
+            escalationId: record.escalationId,
+            sink: 'garden_only',
+            outcome: 'recorded',
+            attemptedAtMs: NOW_MS + 1 + index,
+          });
+        }
+        // The leased row is held beside cap - 1 settled rows.
+        expect(await countRows(pool, 'human_escalation_attempts'))
+          .toBe(BOUNDS.maxAttemptsPerEscalation);
+        await expect(gatewayStore.settleAttempt({
+          idempotencyKey: 'cross.gateway',
+          expectedOutcome: 'delivery_failed',
+          outcome: 'delivered',
+        })).resolves.toBeUndefined();
+        const settled = await pool.query<{ lease: string | null }>(
+          `SELECT settlement_lease_until_ms AS lease FROM human_escalation_attempts
+           WHERE idempotency_key = 'cross.gateway'`,
+        );
+        expect(settled.rows[0]?.lease).toBeNull();
+
+        // A claimer that dies before settling does not pin its row forever:
+        // once the lease lapses the row is an ordinary ring candidate again.
+        await gatewayStore.claimAttempt({
+          idempotencyKey: 'cross.crashed',
+          escalationId: record.escalationId,
+          sink: 'operator_alert',
+          outcome: 'delivery_failed',
+          attemptedAtMs: NOW_MS + 10,
+        }, { awaitingSettlement: true });
+        setNow(NOW_MS + BOUNDS.settlementLeaseMs + 1);
+        await gatewayStore.claimAttempt({
+          idempotencyKey: 'cross.after-expiry.0',
+          escalationId: record.escalationId,
+          sink: 'garden_only',
+          outcome: 'recorded',
+          attemptedAtMs: NOW_MS + 11,
+        });
+        await gatewayStore.claimAttempt({
+          idempotencyKey: 'cross.after-expiry.1',
+          escalationId: record.escalationId,
+          sink: 'garden_only',
+          outcome: 'recorded',
+          attemptedAtMs: NOW_MS + 12,
+        });
+        expect(await gatewayStore.findAttempt('cross.crashed')).toBeNull();
+        expect(await countRows(pool, 'human_escalation_attempts'))
+          .toBe(BOUNDS.maxAttemptsPerEscalation);
+        await agentStore.close();
       });
     });
 

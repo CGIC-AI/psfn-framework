@@ -3161,15 +3161,16 @@ export const POSTGRES_OBSERVER_EVAL_SIDECAR_MIGRATIONS = [
 //  19 — bounded durable room-participation lease (jp36.5.5)
 //  20 — non-expiring ICP lifecycle admission fence (h248l.9)
 //  21 — fleet-wide system-owned health events and human escalations (e5r0s)
+//  22 — human-escalation attempt settlement lease (ycr3z)
 export const SHARED_SCHEMA_NAME = 'shared';
 
 /** Ledger versions installed by POSTGRES_SHARED_MIGRATIONS (excluding wiki versions 3 and 8). */
 export const POSTGRES_SHARED_BASE_MIGRATION_VERSIONS = [
-  1, 2, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
+  1, 2, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
 ] as const;
 /** Complete ledger across the base and shared-wiki chains. */
 export const POSTGRES_SHARED_ALL_MIGRATION_VERSIONS = [
-  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
+  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
 ] as const;
 
 /**
@@ -3322,6 +3323,21 @@ const HUMAN_ESCALATION_TABLE_STATEMENTS: readonly string[] = [
   `
   CREATE INDEX IF NOT EXISTS idx_human_escalation_attempts_escalation
     ON human_escalation_attempts(escalation_id, attempted_at_ms DESC);
+  `,
+];
+
+/**
+ * Settlement lease on a delivery attempt (bead psfn-framework-ycr3z): set while
+ * the claimer's sink call is out, cleared by its settle. The attempt ring skips
+ * a live lease, so an attempt in flight in ANOTHER process (gateway and agent
+ * share this table in single-companion mode) survives a burst of claims; a
+ * claimer that dies releases the row when the lease lapses.
+ */
+const HUMAN_ESCALATION_SETTLEMENT_LEASE_STATEMENTS: readonly string[] = [
+  `
+  ALTER TABLE human_escalation_attempts
+    ADD COLUMN IF NOT EXISTS settlement_lease_until_ms BIGINT
+      CHECK (settlement_lease_until_ms IS NULL OR settlement_lease_until_ms >= 0);
   `,
 ];
 
@@ -4220,6 +4236,10 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
   `INSERT INTO shared_schema_migrations (version, name)
     VALUES (21, 'fleet-system-health-and-escalations')
     ON CONFLICT (version) DO NOTHING;`,
+  ...HUMAN_ESCALATION_SETTLEMENT_LEASE_STATEMENTS,
+  `INSERT INTO shared_schema_migrations (version, name)
+    VALUES (22, 'human-escalation-settlement-lease')
+    ON CONFLICT (version) DO NOTHING;`,
 ];
 
 // Version 3 (sprint 10, s10f9): shared-world wiki chunk projection. A
@@ -4412,11 +4432,13 @@ export const POSTGRES_HEALTH_EVENT_MIGRATIONS: readonly string[] =
 /**
  * The durable human escalation ledger a per-companion runtime opens in its own
  * schema. Identical DDL to the shared-schema copy the fleet's system-owned
- * escalations live in (shared migration version 21) — one definition, so the
+ * escalations live in (shared migration versions 21 and 22) — one definition, so the
  * two can never drift into a projection that cannot be read back.
  */
-export const POSTGRES_HUMAN_ESCALATION_MIGRATIONS: readonly string[] =
-  HUMAN_ESCALATION_TABLE_STATEMENTS;
+export const POSTGRES_HUMAN_ESCALATION_MIGRATIONS: readonly string[] = [
+  ...HUMAN_ESCALATION_TABLE_STATEMENTS,
+  ...HUMAN_ESCALATION_SETTLEMENT_LEASE_STATEMENTS,
+];
 
 // Analysis-workbench trace ring (bead vb11). Persists the redacted
 // AnalysisWorkbenchTraceView projection so the Garden /analysis-workbench page

@@ -213,25 +213,6 @@ export interface PostgresHumanEscalationStoreOptions {
 }
 
 export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
-  /**
-   * Attempt keys this store has claimed FOR A CALLER THAT WILL SETTLE THEM, by
-   * escalation.
-   *
-   * The ring below evicts by rank, and a rank cannot see that a row is still
-   * being delivered on. Under a burst of concurrent raises against one
-   * escalation, the claim that filled the cap would evict a sibling attempt
-   * whose sink call is still in flight, and that caller's settle would then
-   * fail with "not in the ledger" — turning a delivered notice into an
-   * unrecorded one, which is exactly what pages a human twice.
-   *
-   * This is process-local by construction, and honestly so: it protects the
-   * claims THIS store owns. In single-companion mode the gateway and the agent
-   * both write this table, so a burst spanning both processes can still evict
-   * the other process's in-flight attempt; closing that would need a settled
-   * marker column, which is a schema change this bead does not carry.
-   */
-  private readonly inFlightAttempts = new Map<string, string>();
-
   private constructor(
     private readonly pool: Pool,
     private readonly bounds: HumanEscalationLedgerBounds,
@@ -315,7 +296,10 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
       await assertPostgresRelationColumns(pool, {
         schema: SHARED_SCHEMA_NAME,
         relation: 'human_escalation_attempts',
-        columns: ['idempotency_key', 'escalation_id', 'sink', 'outcome', 'attempted_at_ms'],
+        columns: [
+          'idempotency_key', 'escalation_id', 'sink', 'outcome', 'attempted_at_ms',
+          'settlement_lease_until_ms',
+        ],
         privileges: privileges.attempts,
       });
     } catch (error) {
@@ -437,10 +421,18 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
     attempt: HumanEscalationAttempt,
     options: { awaitingSettlement?: boolean } = {},
   ): Promise<HumanEscalationAttemptClaim> {
+    // The lease is written WITH the claim, so this claim's own ring pass — and
+    // every other process's — already sees it as un-evictable. A caller that
+    // claims a terminal outcome settles nothing and leases nothing, so the ring
+    // keeps holding those rows to the cap exactly.
+    const leaseUntilMs = options.awaitingSettlement === true
+      ? this.now() + this.bounds.settlementLeaseMs
+      : null;
     const claimed = await queryOne<AttemptRow>(this.pool, `
       INSERT INTO human_escalation_attempts (
-        idempotency_key, escalation_id, sink, outcome, attempted_at_ms
-      ) VALUES ($1, $2, $3, $4, $5)
+        idempotency_key, escalation_id, sink, outcome, attempted_at_ms,
+        settlement_lease_until_ms
+      ) VALUES ($1, $2, $3, $4, $5, $6)
       ON CONFLICT (idempotency_key) DO NOTHING
       RETURNING idempotency_key, escalation_id, sink, outcome, attempted_at_ms
     `, [
@@ -449,15 +441,9 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
       attempt.sink,
       attempt.outcome,
       attempt.attemptedAtMs,
+      leaseUntilMs,
     ]);
     if (claimed) {
-      // Registered BEFORE the prune, so this claim's own ring pass already sees
-      // it — and every sibling claim still awaiting its sink — as un-evictable.
-      // A caller that claims a terminal outcome settles nothing and registers
-      // nothing, so the ring keeps holding those to the cap exactly.
-      if (options.awaitingSettlement === true) {
-        this.inFlightAttempts.set(attempt.idempotencyKey, attempt.escalationId);
-      }
       await this.pruneAttempts(attempt.escalationId);
       return { claimed: true };
     }
@@ -489,24 +475,11 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
     expectedOutcome: HumanEscalationDeliveryOutcome;
     outcome: HumanEscalationDeliveryOutcome;
   }): Promise<void> {
-    try {
-      await this.settleClaimedAttempt(input);
-    } finally {
-      // Released even when the settle throws: the attempt is no longer in
-      // flight either way, and a key that stayed registered would exempt a dead
-      // row from the ring forever.
-      this.inFlightAttempts.delete(input.idempotencyKey);
-    }
-  }
-
-  private async settleClaimedAttempt(input: {
-    idempotencyKey: string;
-    expectedOutcome: HumanEscalationDeliveryOutcome;
-    outcome: HumanEscalationDeliveryOutcome;
-  }): Promise<void> {
+    // The same compare-and-set releases the settlement lease, so a settled
+    // row is an ordinary ring candidate again in every process.
     const row = await queryOne<AttemptRow>(this.pool, `
       UPDATE human_escalation_attempts
-      SET outcome = $2
+      SET outcome = $2, settlement_lease_until_ms = NULL
       WHERE idempotency_key = $1 AND outcome = $3
       RETURNING idempotency_key, escalation_id, sink, outcome, attempted_at_ms
     `, [input.idempotencyKey, input.outcome, input.expectedOutcome]);
@@ -609,7 +582,6 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
   }
 
   async close(): Promise<void> {
-    this.inFlightAttempts.clear();
     if (this.ownsPool) await this.pool.end();
   }
 
@@ -655,38 +627,38 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
    * The attempt ring, taken where attempts are created rather than on the next
    * raise, so the bound holds exactly rather than one row late.
    *
-   * Every attempt this store has claimed and not yet settled is excluded from
-   * the candidates by NAME, not by its rank (bead psfn-framework-2xt9c). The
-   * key just claimed was the only exclusion before, which held for one raise at
-   * a time and broke under a burst: N concurrent claims against one escalation
-   * each pruned to the cap, and each one's prune could evict a sibling whose
-   * sink call had not answered yet — so that sibling's settle failed with "not
-   * in the ledger" and a notice that WAS delivered stopped being recorded.
+   * An attempt whose sink call is still out carries a live settlement lease in
+   * its row and is never a candidate (beads psfn-framework-2xt9c,
+   * psfn-framework-ycr3z). Under a burst, N concurrent claims against one
+   * escalation — from this process or another store over the same table — each
+   * prune to the cap; ranking alone would evict a sibling whose sink had not
+   * answered, its settle would fail with "not in the ledger", and a notice that
+   * WAS delivered would stop being recorded. Keeping the mark in the row is what
+   * lets the gateway's ring see the agent's claim and vice versa.
    *
-   * The cap is therefore held against the settled rows only: with `k` attempts
-   * in flight the ring keeps `cap - k` of the rest, so a burst wider than the
-   * cap leaves the ledger momentarily above it and returns to the cap as the
-   * settles land. Overshooting a bound is recoverable; deleting the record of a
-   * page that already reached a human is not.
+   * The cap is therefore held against the unleased rows only: with `k` live
+   * leases the ring keeps `cap - k` of the rest, so a burst wider than the cap
+   * leaves the ledger momentarily above it and returns to the cap as the
+   * settles land or the leases of a crashed claimer lapse. Overshooting a bound
+   * is recoverable; deleting the record of a page that already reached a human
+   * is not.
    */
   private async pruneAttempts(escalationId: string): Promise<void> {
-    const inFlight = [...this.inFlightAttempts.entries()]
-      .filter(([, owner]) => owner === escalationId)
-      .map(([key]) => key);
     await executeQuery(this.pool, `
       DELETE FROM human_escalation_attempts
       WHERE idempotency_key IN (
         SELECT idempotency_key
         FROM human_escalation_attempts
-        WHERE escalation_id = $1 AND idempotency_key <> ALL($3::text[])
+        WHERE escalation_id = $1
+          AND (settlement_lease_until_ms IS NULL OR settlement_lease_until_ms <= $3)
         ORDER BY attempted_at_ms DESC, idempotency_key DESC
-        OFFSET $2
+        OFFSET GREATEST(0, $2 - (
+          SELECT COUNT(*)
+          FROM human_escalation_attempts
+          WHERE escalation_id = $1 AND settlement_lease_until_ms > $3
+        ))
       )
-    `, [
-      escalationId,
-      Math.max(0, this.bounds.maxAttemptsPerEscalation - inFlight.length),
-      inFlight,
-    ]);
+    `, [escalationId, this.bounds.maxAttemptsPerEscalation, this.now()]);
   }
 
   /**

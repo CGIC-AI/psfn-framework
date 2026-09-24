@@ -58,6 +58,7 @@ describe('requireHumanEscalationLedgerBounds', () => {
     maxResolvedRowsPerKind: 256,
     maxAttemptsPerEscalation: 64,
     maxOpenRowsPerKind: 128,
+    settlementLeaseMs: 300_000,
   };
 
   it('returns the declared bounds', () => {

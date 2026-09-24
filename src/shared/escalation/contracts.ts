@@ -599,6 +599,11 @@ export interface HumanEscalationListQuery {
  *     count at which the ledger reports content-free saturation onto the health
  *     stream. There is no eviction behind it, because the only way to shrink
  *     the open half is for a human to answer.
+ *   * `settlementLeaseMs` is how long a claimed attempt whose sink call is
+ *     still out stays exempt from the attempt ring (psfn-framework-ycr3z). The
+ *     exemption lives in the row, so a store in another process sees it; a
+ *     claimer that dies before settling releases it when the lease lapses. Size
+ *     it above the slowest sink call.
  *
  * The values are owner-file owned (`scheduler.json` `humanEscalation.retention`)
  * and required: a ledger that persists what a runtime asked a human must never
@@ -613,6 +618,8 @@ export interface HumanEscalationLedgerBounds {
   maxAttemptsPerEscalation: number;
   /** Open rows per kind at which the ledger reports saturation; never evicts. */
   maxOpenRowsPerKind: number;
+  /** How long an unsettled attempt stays exempt from the attempt ring. */
+  settlementLeaseMs: number;
 }
 
 /**
@@ -641,6 +648,7 @@ export function requireHumanEscalationLedgerBounds(
     'maxResolvedRowsPerKind',
     'maxAttemptsPerEscalation',
     'maxOpenRowsPerKind',
+    'settlementLeaseMs',
   ] as const) {
     const value = bounds[field];
     if (!Number.isSafeInteger(value) || value < 1) {
@@ -654,6 +662,7 @@ export function requireHumanEscalationLedgerBounds(
     maxResolvedRowsPerKind: bounds.maxResolvedRowsPerKind,
     maxAttemptsPerEscalation: bounds.maxAttemptsPerEscalation,
     maxOpenRowsPerKind: bounds.maxOpenRowsPerKind,
+    settlementLeaseMs: bounds.settlementLeaseMs,
   };
 }
 

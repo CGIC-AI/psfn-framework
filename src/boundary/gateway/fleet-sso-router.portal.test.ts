@@ -95,9 +95,13 @@ describe('unified-origin fleet portal routing', () => {
       }],
     });
     const resolveProjection = vi.fn(async () => ({
-      schemaVersion: 2 as const,
+      schemaVersion: 3 as const,
       generatedAt: '2026-07-16T20:00:00.000Z',
       session: { state: 'authenticated' as const },
+      icp: {
+        state: 'inactive_singleton' as const,
+        activity: { status: 'not_applicable' as const },
+      },
       companions: [],
     }));
     const resolveModelUsageProjection = vi.fn(async () => ({

@@ -104,6 +104,7 @@ import { createComponentLogger } from '../../shared/logger.js';
 import type { FleetPortalAuthorizationBatchPort } from '../../boundary/gateway/fleet-portal-authorization.js';
 import type { FleetPortalChannelHealthSource } from '../../boundary/gateway/fleet-portal-projection.js';
 import { createGatewayFleetPortalProjection } from './fleet-portal-composition.js';
+import type { FleetIcpPostureSource } from '../../boundary/gateway/fleet-icp-posture.js';
 import type { FleetModelUsageSummaryQueryPort } from '../../shared/telemetry/model-usage.js';
 import { createGatewayFleetModelUsageProjection } from './fleet-model-usage-composition.js';
 import { createBearerCompanionRoutingConfig } from '../../channels/api/server/bearer-companion-selector.js';
@@ -175,6 +176,8 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
   fleetAuthTestingHarnessGardenAuthorizationAudit?: TestingHarnessGardenAuthorizationAuditPort;
   fleetPortalAuthorization?: FleetPortalAuthorizationBatchPort;
   fleetPortalChannelHealth?: FleetPortalChannelHealthSource;
+  /** Required with fleet auth: bounded passive ICP readiness for the Fleet page. */
+  fleetPortalIcpPosture?: FleetIcpPostureSource;
   /** Canonical fleet-scoped model-attempt ledger used by the authenticated budget projection. */
   fleetModelUsage?: FleetModelUsageSummaryQueryPort;
   primaryEmbodiments?: PrimaryEmbodimentAuthorityPort;
@@ -646,6 +649,9 @@ export async function startOptionalGatewayApiServer(
     source: options.gateway,
     ...(options.fleetPortalChannelHealth
       ? { channelHealth: options.fleetPortalChannelHealth }
+      : {}),
+    ...(options.fleetPortalIcpPosture
+      ? { icpPosture: options.fleetPortalIcpPosture }
       : {}),
   });
   const fleetModelUsageProjection = createGatewayFleetModelUsageProjection({

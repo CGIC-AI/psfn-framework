@@ -16,11 +16,21 @@ import {
   type FleetChargePosture,
   type FleetFatiguePosture,
 } from '../../shared/telemetry/fleet-posture.js';
+import {
+  projectFleetIcpCluster,
+  type FleetIcpClusterProjection,
+  type FleetIcpCompanionPosture,
+  type FleetIcpPostureSource,
+} from './fleet-icp-posture.js';
 
 const FLEET_PORTAL_PROJECTION_PROTOCOL = Object.freeze({
-  schemaVersion: 2 as const,
+  schemaVersion: 3 as const,
   maxCompanions: 256,
-  maxSerializedBytes: 65_536,
+  /**
+   * Covers maxCompanions worst-case entries (120-char display label, 512-char
+   * avatar ref, timestamped posture, ICP posture) with envelope headroom.
+   */
+  maxSerializedBytes: 327_680,
 });
 const FLEET_PORTAL_ROSTER_SCHEMA_VERSION = 1 as const;
 
@@ -59,14 +69,17 @@ export interface FleetPortalCompanionProjection {
     readonly channels: FleetPortalHealthStatus;
   }>;
   readonly posture: FleetPortalPosture;
+  /** Coarse ICP readiness; closed enums only, never pair policy or reasons. */
+  readonly icp: FleetIcpCompanionPosture;
   readonly gardenPath?: string;
   readonly avatarRef?: string;
 }
 
 export interface FleetPortalProjection {
-  readonly schemaVersion: 2;
+  readonly schemaVersion: 3;
   readonly generatedAt: string;
   readonly session: Readonly<{ state: 'authenticated' }>;
+  readonly icp: FleetIcpClusterProjection;
   readonly companions: readonly FleetPortalCompanionProjection[];
 }
 
@@ -105,6 +118,7 @@ export interface GatewayFleetPortalProjectionOptions {
   >[];
   readonly source: FleetPortalConnectionSnapshotSource;
   readonly channelHealth?: FleetPortalChannelHealthSource;
+  readonly icpPosture: FleetIcpPostureSource;
   readonly now?: () => Date;
 }
 
@@ -164,6 +178,13 @@ function indexConnections(
   return indexed;
 }
 
+function requireIcpPosture(
+  posture: FleetIcpCompanionPosture | undefined,
+): FleetIcpCompanionPosture {
+  if (!posture) throw new Error('Fleet ICP posture omitted a manifest companion');
+  return posture;
+}
+
 type ProjectionManifestEntry = Pick<
   CompanionFleetEntry,
   'companionId' | 'displayName' | 'avatarRef'
@@ -213,7 +234,7 @@ export class GatewayFleetPortalProjection {
       if (!authority.gardenLinkEligible) continue;
       visibleManifest.push(manifest);
     }
-    return this.buildProjection(visibleManifest);
+    return await this.buildProjection(visibleManifest);
   }
 
   /**
@@ -223,17 +244,22 @@ export class GatewayFleetPortalProjection {
    * per-principal SSO filtering.
    */
   async resolveAdminToken(): Promise<FleetPortalProjection> {
-    return this.buildProjection([...this.fleetByCompanionId.values()]);
+    return await this.buildProjection([...this.fleetByCompanionId.values()]);
   }
 
-  private buildProjection(
+  private async buildProjection(
     visibleManifest: readonly ProjectionManifestEntry[],
-  ): FleetPortalProjection {
-    const connections = indexConnections(this.options.source.getFleetConnectionSnapshot());
+  ): Promise<FleetPortalProjection> {
+    const snapshot = this.options.source.getFleetConnectionSnapshot();
+    const connections = indexConnections(snapshot);
     const now = this.now();
     if (!Number.isFinite(now.getTime())) {
       throw new Error('Fleet portal projection clock is invalid');
     }
+    const icp = await this.options.icpPosture.snapshot({
+      nowMs: now.getTime(),
+      connections: snapshot,
+    });
     const displayIdentity = createCompanionDisplayIdentityResolver(visibleManifest);
     const companions: FleetPortalCompanionProjection[] = [];
     for (const manifest of visibleManifest) {
@@ -250,6 +276,7 @@ export class GatewayFleetPortalProjection {
           channels: this.options.channelHealth?.healthOf(manifest.companionId) ?? 'unknown',
         }),
         posture: posture(connection, now.getTime()),
+        icp: requireIcpPosture(icp.companions.get(manifest.companionId)),
         gardenPath,
         ...(manifest.avatarRef !== undefined ? { avatarRef: manifest.avatarRef } : {}),
       }));
@@ -259,6 +286,7 @@ export class GatewayFleetPortalProjection {
       schemaVersion: FLEET_PORTAL_PROJECTION_PROTOCOL.schemaVersion,
       generatedAt: now.toISOString(),
       session: Object.freeze({ state: 'authenticated' as const }),
+      icp: projectFleetIcpCluster(icp, visibleManifest.map(manifest => manifest.companionId)),
       companions: Object.freeze(companions),
     });
   }

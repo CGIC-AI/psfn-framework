@@ -18,14 +18,16 @@ afterEach(async () => {
 });
 function projection(): FleetPortalProjection {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     generatedAt: '2026-07-18T12:00:00.000Z',
     session: { state: 'authenticated' },
+    icp: { state: 'inactive_singleton', activity: { status: 'not_applicable' } },
     companions: [{
       companionId: COMPANION_A,
       displayName: 'Canopy',
       health: { agentRpc: 'up', adminTransport: 'unknown', channels: 'up' },
       posture: { status: 'unavailable' },
+      icp: { state: 'not_applicable', reason: 'singleton_fleet', lifecycle: 'member' },
       gardenPath: `/companions/${COMPANION_A}/garden`,
     }],
   };

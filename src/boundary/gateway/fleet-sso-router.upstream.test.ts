@@ -149,14 +149,16 @@ function portalRequest(path: string, headers: IncomingHttpHeaders = {}): Incomin
 
 function adminPortalProjection(): FleetPortalProjection {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     generatedAt: new Date(1_783_000_000 * 1_000).toISOString(),
     session: { state: 'authenticated' },
+    icp: { state: 'inactive_singleton', activity: { status: 'not_applicable' } },
     companions: [{
       companionId: COMPANION_ID,
       displayName: 'Test Companion',
       health: { agentRpc: 'up', adminTransport: 'unknown', channels: 'unknown' },
       posture: { status: 'unavailable' },
+      icp: { state: 'not_applicable', reason: 'singleton_fleet', lifecycle: 'member' },
       gardenPath: `/companions/${COMPANION_ID}/garden`,
     }],
   };

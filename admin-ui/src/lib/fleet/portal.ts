@@ -6,6 +6,12 @@ import {
   isRecord,
   isRfc4122Uuid,
 } from '../../../../src/shared/utils/types.js';
+import {
+  parseFleetIcpCluster,
+  parseFleetIcpCompanion,
+  type FleetIcpCluster,
+  type FleetIcpCompanionPosture,
+} from './icp-posture';
 const MAX_FLEET_COMPANIONS = 256;
 
 export type FleetPortalHealthStatus = 'up' | 'down' | 'unknown';
@@ -24,14 +30,16 @@ export interface FleetPortalCompanion {
   displayName: string;
   health: FleetPortalHealthDimensions;
   posture: FleetPortalPosture;
+  icp: FleetIcpCompanionPosture;
   gardenPath?: string;
   avatarRef?: string;
 }
 
 export interface FleetPortalProjection {
-  schemaVersion: 2;
+  schemaVersion: 3;
   generatedAt: string;
   session: { state: 'authenticated' };
+  icp: FleetIcpCluster;
   companions: FleetPortalCompanion[];
 }
 
@@ -134,6 +142,7 @@ function parseCompanion(value: unknown, seen: Set<string>): FleetPortalCompanion
     || value.displayName.length > 256
     || value.health === undefined
     || value.posture === undefined
+    || value.icp === undefined
     || (value.avatarRef !== undefined
       && (typeof value.avatarRef !== 'string' || value.avatarRef.length > 2_048))
     || (value.gardenPath !== undefined
@@ -145,6 +154,7 @@ function parseCompanion(value: unknown, seen: Set<string>): FleetPortalCompanion
     'displayName',
     'health',
     'posture',
+    'icp',
     ...(value.gardenPath === undefined ? [] : ['gardenPath']),
     ...(value.avatarRef === undefined ? [] : ['avatarRef']),
   ];
@@ -157,6 +167,7 @@ function parseCompanion(value: unknown, seen: Set<string>): FleetPortalCompanion
     displayName: value.displayName,
     health: parseHealth(value.health),
     posture: parsePosture(value.posture),
+    icp: parseFleetIcpCompanion(value.icp),
     ...(typeof value.gardenPath === 'string' ? { gardenPath: value.gardenPath } : {}),
     ...(typeof value.avatarRef === 'string' ? { avatarRef: value.avatarRef } : {}),
   };
@@ -164,8 +175,8 @@ function parseCompanion(value: unknown, seen: Set<string>): FleetPortalCompanion
 
 export function parseFleetPortalProjection(value: unknown): FleetPortalProjection {
   if (!isRecord(value)
-    || !hasExactKeys(value, ['schemaVersion', 'generatedAt', 'session', 'companions'])
-    || value.schemaVersion !== 2
+    || !hasExactKeys(value, ['schemaVersion', 'generatedAt', 'session', 'icp', 'companions'])
+    || value.schemaVersion !== 3
     || typeof value.generatedAt !== 'string'
     || !Number.isFinite(Date.parse(value.generatedAt))
     || !isRecord(value.session)
@@ -177,9 +188,10 @@ export function parseFleetPortalProjection(value: unknown): FleetPortalProjectio
   }
   const seen = new Set<string>();
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     generatedAt: value.generatedAt,
     session: { state: 'authenticated' },
+    icp: parseFleetIcpCluster(value.icp),
     companions: value.companions.map(companion => parseCompanion(companion, seen)),
   };
 }

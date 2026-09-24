@@ -825,7 +825,7 @@
     {
       "file": "src/boundary/gateway/fleet-portal-projection.ts",
       "name": "FLEET_PORTAL_PROJECTION_PROTOCOL.maxSerializedBytes",
-      "value": "65_536",
+      "value": "327_680",
       "form": "object-member",
       "note": "Code-owned safety/resource guard FLEET_PORTAL_PROJECTION_PROTOCOL.maxSerializedBytes; this fixed bound protects untrusted input or resource use independently of operator tuning."
     },
@@ -9670,6 +9670,27 @@
       "file": "src/persistence/postgres/icp-fatigue-regulation-reservation-store.ts",
       "name": "FATIGUE_LEASE_POOL_MAX",
       "value": "8"
+    },
+    {
+      "file": "src/persistence/postgres/icp-fleet-health-reader.ts",
+      "name": "ICP_FLEET_HEALTH_READ_PROTOCOL.maxCompanions",
+      "value": "256",
+      "form": "object-member",
+      "note": "Code-owned read bound mirroring the fleet portal manifest cap; rejects oversized roster reads before any shared-schema query."
+    },
+    {
+      "file": "src/persistence/postgres/icp-fleet-health-reader.ts",
+      "name": "ICP_FLEET_HEALTH_READ_PROTOCOL.maxOpenEpisodes",
+      "value": "1_024",
+      "form": "object-member",
+      "note": "Code-owned DoS bound on the Fleet ICP open-episode scan; overflow is reported as activeChannelsTruncated on the wire instead of an unbounded read."
+    },
+    {
+      "file": "src/persistence/postgres/icp-fleet-health-reader.ts",
+      "name": "ICP_FLEET_HEALTH_READ_PROTOCOL.maxPairRows",
+      "value": "32_640",
+      "form": "object-member",
+      "note": "Code-owned bound on grouped delivered-turn pair rows equal to every unordered pair of a 256-companion roster, so the grouped read is bounded yet can never truncate."
     },
     {
       "file": "src/persistence/postgres/model-usage-store/queries.ts",

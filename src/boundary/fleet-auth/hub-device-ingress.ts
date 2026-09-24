@@ -7,6 +7,7 @@ import type {
   HubVirtualSpaceAdmission,
 } from '../../shared/contracts/hub-device-ingress.js';
 import { HubDeviceAssertionRejectedError } from './hub-device-assertion.js';
+import { HubDeviceEndpointFence, virtualSpaceFenceKey } from './hub-device-endpoint-fence.js';
 
 export interface AuthenticatedHubDeviceConnection extends HubDeviceAssertionExpectedBinding {
   /** Opaque digest over the authenticated Hub principal and registry/session binding. */
@@ -113,17 +114,20 @@ export class GatewayHubDeviceIngressService {
   private readonly enrollmentAuthority: HubDeviceEnrollmentAuthorityPort;
   private readonly attachments: HubDeviceHumanAttachmentPort;
   private readonly sessions: HubDeviceSessionAdmissionPort;
+  private readonly virtualSpaceFence: HubDeviceEndpointFence;
 
   constructor(options: {
     verifyAndConsume: HubDeviceAssertionVerifierPort['verifyAndConsume'];
     enrollmentAuthority: HubDeviceEnrollmentAuthorityPort;
     attachments: HubDeviceHumanAttachmentPort;
     sessions?: HubDeviceSessionAdmissionPort;
+    virtualSpaceFence?: HubDeviceEndpointFence;
   }) {
     this.verifier = { verifyAndConsume: options.verifyAndConsume };
     this.enrollmentAuthority = options.enrollmentAuthority;
     this.attachments = options.attachments;
     this.sessions = options.sessions ?? new InMemoryHubDeviceSessionAdmissionStore();
+    this.virtualSpaceFence = options.virtualSpaceFence ?? new HubDeviceEndpointFence();
   }
 
   /**
@@ -138,11 +142,19 @@ export class GatewayHubDeviceIngressService {
     satelliteId: string;
     endpointId: string;
   }): Promise<HubVirtualSpaceAdmission> {
+    // psfn-framework-9p9rk: a rejected assertion fences the endpoint exactly
+    // like a rejected human_surface connection; a fenced endpoint is refused
+    // before its assertion is verified or consumed.
+    const fenceKey = virtualSpaceFenceKey(input.satelliteId, input.endpointId);
+    if (this.virtualSpaceFence.isFenced(fenceKey)) {
+      throw new HubDeviceAttachmentRejectedError('device_fenced');
+    }
     let verified: HubDevicePrincipal;
     try {
       verified = await this.verifier.verifyAndConsume(input.assertion, input.expected);
       assertPrincipalMatchesConnection(verified, input.expected);
     } catch (error) {
+      this.virtualSpaceFence.fence(fenceKey);
       if (error instanceof HubDeviceAssertionRejectedError) throw error;
       if (error instanceof Error && error.message.startsWith('Hub device assertion')) {
         throw new HubDeviceAssertionRejectedError(error.message);

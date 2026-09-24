@@ -5,6 +5,7 @@ import {
   type HubDeviceHumanAttachment,
   type HubDeviceHumanAttachmentPort,
 } from './hub-device-ingress.js';
+import { DEFAULT_FENCE_TTL_MS, DEFAULT_MAX_FENCES } from './hub-device-endpoint-fence.js';
 
 /**
  * Hub device attachment authority for a gateway running without fleet auth.
@@ -31,8 +32,6 @@ export interface GuestOnlyHubDeviceAttachmentStoreOptions {
 }
 
 const CHANNEL_DIGEST_DOMAIN = 'hub-device-channel:guest:v1\0';
-const DEFAULT_FENCE_TTL_MS = 70_000;
-const DEFAULT_MAX_FENCES = 1024;
 
 export class GuestOnlyHubDeviceAttachmentStore implements HubDeviceHumanAttachmentPort {
   private readonly now: () => number;

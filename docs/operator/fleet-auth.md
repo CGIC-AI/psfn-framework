@@ -658,6 +658,30 @@ quarantines the stale database. Account and companion reapproval stay
 subordinate to that floor: tombstoned resources and non-current lineage are
 rejected before the reapproval procedure runs.
 
+### Disabling fleet auth
+
+Removing `fleet-auth.json` does not remove what fleet auth granted: its roles
+keep schema ACLs, per-object grants, and owner default privileges on every
+companion schema and on `shared`, and the shared-runtime readiness proof then
+refuses to boot on the unexpected grantees. That proof stays fail-closed (with
+the owner file gone the former role names are unknowable). Tear the grants down
+with one command after removing the owner file:
+
+```bash
+npm run fleet-auth:teardown -- --role <runtime-role> --role <migration-role> \
+  --role <backup-role>            # dry run: prints every planned statement
+npm run fleet-auth:teardown -- --role <runtime-role> --role <migration-role> \
+  --role <backup-role> --apply
+```
+
+It resolves every companion schema and the shared schema from the gateway fleet
+topology, connects as each schema owner (the only role that can revoke its own
+default privileges), revokes exactly the named roles' residue in one
+transaction per schema, and re-reads it. It refuses while fleet auth is still
+configured and refuses any role that is a companion or shared-migration
+authority. It then prints the superuser-only remainder (`DROP SCHEMA fleet_auth
+CASCADE`, the restore-verification database, `DROP OWNED BY`, `DROP ROLE`).
+
 ## Configuration
 
 `fleet-auth.json` (seed `config/fleet-auth.seed.json`) is validated strictly on

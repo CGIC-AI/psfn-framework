@@ -8,6 +8,7 @@ import { createPostgresPool } from '../postgres.js';
 import { RETIRED_FLEET_WELFARE_VERIFIER_ROLE } from '../postgres/retired-fleet-grantees.js';
 import { prepareFleetSharedSchemaRuntime } from './fleet-shared-schema-startup.js';
 import { grantBackupReadAccessToTenantSchema } from '../postgres/backup-schema-access.js';
+import { teardownFormerFleetAuthGrants } from '../postgres/fleet-auth/former-grant-teardown.js';
 
 // Timeout-margin policy (see src/test-support/integration-timeout-registry.json):
 // see the registered "measured" entry for this file.
@@ -233,5 +234,59 @@ describe('retired fleet grantee cleanup against real Postgres', () => {
       `as ${COMPANION_ONE_ROLE}: ALTER DEFAULT PRIVILEGES IN SCHEMA "companion_one" `
       + `REVOKE ALL ON TABLES FROM "${FORMER_BACKUP_ROLE}"`,
     );
+  }, TIMEOUT_MS);
+
+  it('tears a removed fleet-auth backup role\'s residue down as the schema owner so startup converges', async () => {
+    const fleet = await provisionLegacyFleet();
+    const owner = createPostgresPool(fleet.companionUrls.companion_one, { max: 1 });
+    try {
+      await grantBackupReadAccessToTenantSchema(owner, {
+        schema: 'companion_one',
+        ownerRole: COMPANION_ONE_ROLE,
+        backupRole: FORMER_BACKUP_ROLE,
+      });
+      await expect(prepareFleetSharedSchemaRuntime(fleet.startupOptions))
+        .rejects.toThrow(new RegExp(`unexpected PostgreSQL grantees: ${FORMER_BACKUP_ROLE}`));
+
+      // A dry run reports and plans without touching anything.
+      const dryRun = await teardownFormerFleetAuthGrants(owner, {
+        schema: 'companion_one',
+        roles: [FORMER_BACKUP_ROLE, 'retired_grantee_never_created'],
+        apply: false,
+      });
+      expect(dryRun).toMatchObject({
+        owner: COMPANION_ONE_ROLE,
+        absentRoles: ['retired_grantee_never_created'],
+        applied: false,
+      });
+      expect(dryRun.after).toEqual(dryRun.before);
+      expect(dryRun.statements).toContain(
+        `ALTER DEFAULT PRIVILEGES FOR ROLE "${COMPANION_ONE_ROLE}" IN SCHEMA "companion_one" `
+        + `REVOKE ALL ON TABLES FROM "${FORMER_BACKUP_ROLE}"`,
+      );
+
+      const applied = await teardownFormerFleetAuthGrants(owner, {
+        schema: 'companion_one',
+        roles: [FORMER_BACKUP_ROLE],
+        apply: true,
+      });
+      expect(applied.before).toHaveLength(1);
+      expect(applied.after).toEqual([]);
+    } finally {
+      await owner.end();
+    }
+    await expect(prepareFleetSharedSchemaRuntime(fleet.startupOptions)).resolves.toBeDefined();
+
+    // Only the schema owner may run it.
+    const notOwner = createPostgresPool(fleet.companionUrls.companion_two, { max: 1 });
+    try {
+      await expect(teardownFormerFleetAuthGrants(notOwner, {
+        schema: 'companion_one',
+        roles: [FORMER_BACKUP_ROLE],
+        apply: true,
+      })).rejects.toThrow(/must run as its owner/);
+    } finally {
+      await notOwner.end();
+    }
   }, TIMEOUT_MS);
 });

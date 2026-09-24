@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  POSTGRES_AUDIT_MIGRATIONS,
   POSTGRES_CONTACT_MIGRATIONS,
   POSTGRES_BACKGROUND_WORK_MIGRATIONS,
   POSTGRES_ENROLLMENT_MIGRATIONS,
@@ -21,7 +22,6 @@ import {
   POSTGRES_AUTOMATA_ROLLBACK_MIGRATIONS,
   POSTGRES_COGSEC_BLIND_REVIEW_MIGRATIONS,
 } from './migrations.js';
-import { POSTGRES_BUZZ_RECOVERY_MIGRATIONS } from './buzz-recovery-migrations.js';
 import { MODEL_USAGE_RUNTIME_LANE_CLASSES } from '../../shared/telemetry/model-usage-attribution.js';
 import { RUNTIME_LANE_CLASSES } from '../../shared/contracts/runtime-lanes.js';
 
@@ -44,15 +44,16 @@ describe('Postgres live schema migrations', () => {
     expectAddColumn(sql, 'session_conversational_workset', 'failed_at_ms');
   });
 
-  it('creates scoped Buzz recovery, cursor, and membership authorities', () => {
-    const sql = migrationSql(POSTGRES_BUZZ_RECOVERY_MIGRATIONS);
-
-    expect(sql).toContain('CREATE TABLE IF NOT EXISTS buzz_inbound_recovery');
-    expect(sql).toContain('PRIMARY KEY (community, companion_id, event_id)');
-    expect(sql).toContain("state IN ('processing', 'ready', 'completed', 'suppressed')");
-    expect(sql).not.toContain('CREATE TABLE IF NOT EXISTS buzz_causal_events');
-    expect(sql).toContain('CREATE TABLE IF NOT EXISTS buzz_replay_checkpoints');
-    expect(sql).toContain('CREATE TABLE IF NOT EXISTS buzz_room_memberships');
+  it('drops the retired Buzz recovery tables from the gateway schema idempotently', () => {
+    const retiredTables = [
+      'buzz_inbound_recovery',
+      'buzz_replay_checkpoints',
+      'buzz_room_memberships',
+      'buzz_causal_events',
+    ];
+    const tail = POSTGRES_AUDIT_MIGRATIONS.slice(-retiredTables.length).map(statement => statement.trim());
+    expect(tail).toEqual(retiredTables.map(table => `DROP TABLE IF EXISTS ${table};`));
+    expect(migrationSql(POSTGRES_AUDIT_MIGRATIONS)).not.toContain('CASCADE');
   });
 
   it('keeps the combined shared-schema ledger unique and sequential across both chains', () => {

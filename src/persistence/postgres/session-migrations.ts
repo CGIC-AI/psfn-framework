@@ -13,6 +13,13 @@ export const POSTGRES_AUDIT_MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_gateway_audit_ts ON gateway_audit(timestamp);`,
   `CREATE INDEX IF NOT EXISTS idx_gateway_audit_method ON gateway_audit(method);`,
   `CREATE INDEX IF NOT EXISTS idx_gateway_audit_decision ON gateway_audit(decision);`,
+  // psfn-framework-lef2o: the Buzz channel was removed. Its store-owned recovery
+  // tables lived in this same gateway connection scope (gateway postgresSchema
+  // and role), so the gateway audit chain retires them idempotently.
+  `DROP TABLE IF EXISTS buzz_inbound_recovery;`,
+  `DROP TABLE IF EXISTS buzz_replay_checkpoints;`,
+  `DROP TABLE IF EXISTS buzz_room_memberships;`,
+  `DROP TABLE IF EXISTS buzz_causal_events;`,
 ];
 
 export const POSTGRES_TRANSCRIPT_MIGRATIONS = [

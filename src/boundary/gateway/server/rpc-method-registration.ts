@@ -139,9 +139,6 @@ export class GatewayConnectionRpcMethods {
       embeddingService: this.ports.options.embeddingService,
       ...(this.ports.options.modelDiscovery ? { modelDiscovery: this.ports.options.modelDiscovery } : {}),
       discordAdapter: this.ports.connectionScope.resolveConnectionDiscordDock(conn),
-      resolveChannelOutboundDock: channelType => (
-        this.ports.connectionScope.resolveConnectionPluginOutboundDock(conn, channelType)
-      ),
       ...(this.ports.options.telegramDock ? { telegramDock: this.ports.options.telegramDock } : {}),
       gitOps: this.ports.options.gitOps,
       imageConfig: this.ports.options.imageConfig,

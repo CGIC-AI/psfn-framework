@@ -865,7 +865,7 @@ export class TelegramAdapter implements ChannelAdapterPort {
       );
 
     // jp36.5.6: an ambient group line the companion was not addressed in is
-    // observation only — the same posture Discord and Buzz already take. It is
+    // observation only — the same posture Discord already takes. It is
     // deliberately handled BEFORE the per-channel turn lock and is NOT awaited:
     // ambient chatter must never take the lock, start a typing indicator, open a
     // stream, displace an addressed message queued behind it, or stall the

@@ -6,7 +6,7 @@ describe('isShellExecutableNetworkAllowed', () => {
 
   it('matches only the resolved top-level executable', () => {
     expect(isShellExecutableNetworkAllowed('/usr/bin/bash', ['bash'], sandboxPath)).toBe(true);
-    expect(isShellExecutableNetworkAllowed('/usr/bin/bash', ['multica'], sandboxPath)).toBe(false);
+    expect(isShellExecutableNetworkAllowed('/usr/bin/bash', ['example-cli'], sandboxPath)).toBe(false);
   });
 
   it('accepts an exact canonical path and rejects a same-name executable outside the image path', () => {

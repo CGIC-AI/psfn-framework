@@ -8,6 +8,9 @@
 // and the companion-ui WebSocket, authenticated server-side by their hub-device
 // attachment (never a client-supplied channel-type header). Discord-SSO'd humans
 // land bound to their canonical contact via the attachment's contact binding.
+// 'multica' and 'buzz' are retired channel types (psfn-framework-lef2o): no
+// live adapter exists, but persisted session/turn/intention rows and pinned
+// migration CHECK constraints still carry them, so they stay readable here.
 export const CHANNEL_TYPES = ['discord', 'terminal', 'api', 'telegram', 'multica', 'buzz', 'psfn-amica', 'companion', 'companion-ui'] as const;
 export type ChannelType = typeof CHANNEL_TYPES[number];
 
@@ -23,7 +26,7 @@ const CHANNEL_BEHAVIOR: Readonly<Record<ChannelType, ChannelPolicy>> = Object.fr
   api: { scheduledContinuity: true, liveWakeup: true },
   telegram: { scheduledContinuity: true, liveWakeup: true },
   multica: { scheduledContinuity: false, liveWakeup: false },
-  buzz: { scheduledContinuity: false, liveWakeup: true },
+  buzz: { scheduledContinuity: false, liveWakeup: false },
   'psfn-amica': { scheduledContinuity: true, liveWakeup: true },
   companion: { scheduledContinuity: false, liveWakeup: false },
   'companion-ui': { scheduledContinuity: false, liveWakeup: true },

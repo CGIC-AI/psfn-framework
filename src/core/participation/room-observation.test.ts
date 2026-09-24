@@ -11,7 +11,7 @@ const OBSERVER = { authorId: 'companion-account', authorName: 'Vega' };
 const AUTHOR = { authorId: 'human-account', authorName: 'Rae' };
 
 interface ConnectorFixtureOptions {
-  source: 'discord' | 'buzz' | 'telegram';
+  source: 'discord' | 'telegram';
   channelType: ChannelType;
   mention?: boolean;
   reply?: boolean;
@@ -85,7 +85,7 @@ function expectObserved(message: SubstrateMessage): RoomObservation {
 }
 
 describe('normalizeRoomObservation', () => {
-  it('normalizes equivalent Discord, Telegram, Buzz, and future-connector lines identically', () => {
+  it('normalizes equivalent Discord, Telegram, and future-connector lines identically', () => {
     const authorClass = {
       sourceClass: 'primary_user' as const,
       roomRole: 'member' as const,
@@ -103,36 +103,29 @@ describe('normalizeRoomObservation', () => {
       mention: true,
       authorClass,
     }));
-    const buzz = expectObserved(connectorMessage({
-      source: 'buzz',
-      channelType: 'buzz',
-      mention: true,
-      authorClass,
-    }));
     // A connector that does not exist yet: same addressing contract, a channel
     // type participation policy has never heard of.
     const future = expectObserved(connectorMessage({
-      source: 'buzz',
-      channelType: 'multica',
+      source: 'telegram',
+      channelType: 'psfn-amica',
       mention: true,
       authorClass,
     }));
 
     expect(transportNeutralShape(telegram)).toEqual(transportNeutralShape(discord));
-    expect(transportNeutralShape(buzz)).toEqual(transportNeutralShape(discord));
     expect(transportNeutralShape(future)).toEqual(transportNeutralShape(discord));
     // The connector identity itself stays at the boundary, where it belongs.
-    expect([discord.connector, telegram.connector, buzz.connector])
-      .toEqual(['discord', 'telegram', 'buzz']);
+    expect([discord.connector, telegram.connector])
+      .toEqual(['discord', 'telegram']);
     expect(discord.addressedByMention).toBe(true);
     expect(discord.addressedByReply).toBe(false);
   });
 
   it('resolves a reply to the companion from connector addressing on every connector', () => {
-    for (const source of ['discord', 'telegram', 'buzz'] as const) {
+    for (const source of ['discord', 'telegram'] as const) {
       const observation = expectObserved(connectorMessage({
         source,
-        channelType: source === 'buzz' ? 'buzz' : source,
+        channelType: source,
         reply: true,
       }));
       expect(observation.addressedByReply).toBe(true);
@@ -202,7 +195,7 @@ describe('normalizeRoomObservation', () => {
   });
 
   it('rejects unusable identity and time rather than inventing them', () => {
-    const message = connectorMessage({ source: 'buzz', channelType: 'buzz' });
+    const message = connectorMessage({ source: 'telegram', channelType: 'telegram' });
     expect(normalizeRoomObservation({ ...message, id: '   ' }))
       .toEqual({ status: 'rejected', reason: 'invalid_identity' });
     expect(normalizeRoomObservation({ ...message, timestamp: new Date(Number.NaN) }))

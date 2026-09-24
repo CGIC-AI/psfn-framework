@@ -330,7 +330,7 @@ goes through the shared-satellite arbiter (bead `psfn-framework-bbprt`).
 Fleet enablement is decided by `companions.json` / `multiCompanion` only:
 `fleet-auth.json` presence never flips routing (bead `psfn-framework-n66dn`).
 `resolveGatewaySurfaceForChannelType` maps channel types onto routable surfaces
-only for `discord`, `telegram`, `api`, and `multica`; anything else returns
+only for `discord`, `telegram`, and `api`; anything else returns
 null and callers must fail closed.
 
 ```mermaid
@@ -545,7 +545,7 @@ spec: it covers `resolveGatewayMultiCompanionConfig` fail-closed resolution
 (single-companion routing declarations, absent-from-fleet routes, satellite
 sharedDevice authority), identify semantics (missing/unknown/invalid tokens,
 role-bound tokens, duplicate and rebind rejection, posture attribution and
-spoof rejection), exact surface routing (discord/telegram/api/multica, shared
+spoof rejection), exact surface routing (discord/telegram/api, shared
 satellite voice lease fallback), the bounded replay queue and its
 healthcheck-stale recovery, per-connection cancellation and `api.stream.delta`
 scoping, Personal-Workspace confinement and managed-skills protection,

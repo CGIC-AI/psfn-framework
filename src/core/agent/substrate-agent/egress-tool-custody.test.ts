@@ -185,7 +185,7 @@ function accessFor(): CapabilityAccess {
 }
 
 /**
- * The reviewer's reproduction shape: `channel.send` addressed to a contact, so
+ * The reviewer's reproduction shape: a social send addressed to a contact, so
  * `deriveDisclosureDestination` resolves a `contact_dm` — a destination that
  * requires custody proof and therefore exercises the record-first commit.
  */
@@ -195,7 +195,7 @@ function contactSendTool() {
     details: {},
   }));
   const tool = withCapabilityRequirement({
-    name: 'channel.send',
+    name: 'discord.send',
     description: 'Contact DM surface.',
     parameters: Type.Object({
       contactId: Type.String(),

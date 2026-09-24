@@ -61,13 +61,6 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
    * only, so one companion can never egress through another companion's bot.
    */
   discordAccountDocks?: ReadonlyMap<CompanionId, ChannelOutboundDock>;
-  /** Native channel-plugin outbound accounts, resolved only by authenticated caller identity. */
-  pluginOutboundRoutes?: readonly {
-    pluginId: 'buzz';
-    accountId?: string;
-    companionId?: string;
-    dock: ChannelOutboundDock;
-  }[];
   /**
    * vvf.5.2: single-account Telegram outbound dock for interactive clarify
    * delivery. Present only when Telegram is configured; clarify.deliver fails

@@ -124,12 +124,6 @@ export interface GatewayPrivilegedCore {
     operatorDiscordChannelId?: string;
     /** Multi-account discord (W1-P2): outbound dock per companionId. */
     discordAccountDocks?: ReadonlyMap<CompanionId, ChannelOutboundDock>;
-    pluginOutboundRoutes?: readonly {
-      pluginId: 'buzz';
-      accountId?: string;
-      companionId?: string;
-      dock: ChannelOutboundDock;
-    }[];
     /** Inter-companion channel lane (W6); multi-companion only. */
     companionChannels?: GatewayCompanionChannelLane;
     /** Shared durable authority for the ICP autonomy broker. */
@@ -279,7 +273,7 @@ export async function buildGatewayPrivilegedCore(
   );
   // ── Gateway ingress admission receipts (psfn-framework-ccgdz.2) ──
   // Receipt issuance was wired in the agent process but NOT here, so the
-  // highest-volume channel ingress (Discord/Telegram/buzz/multica/api) admitted
+  // highest-volume channel ingress (Discord/Telegram/api) admitted
   // bytes with no content-addressed proof. One receipt store per companion,
   // scoped to that companion's schema exactly like the fleet-wide read stores,
   // because a receipt is owned by exactly one companion.
@@ -558,7 +552,6 @@ export async function buildGatewayPrivilegedCore(
       operatorDiscordDock,
       operatorDiscordChannelId,
       discordAccountDocks,
-      pluginOutboundRoutes,
       companionChannels,
       icpAutonomyStore,
       icpInitiationPolicyAuthority,
@@ -570,7 +563,6 @@ export async function buildGatewayPrivilegedCore(
       credentialPresence,
     }) => new GatewayServer({
       ...(discordAccountDocks ? { discordAccountDocks } : {}),
-      ...(pluginOutboundRoutes ? { pluginOutboundRoutes } : {}),
       ...(companionChannels ? { companionChannels } : {}),
       ...(icpAutonomyStore ? { icpAutonomyStore } : {}),
       ...(icpInitiationPolicyAuthority ? { icpInitiationPolicyAuthority } : {}),

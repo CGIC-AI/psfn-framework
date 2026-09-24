@@ -174,9 +174,9 @@ describe('repeated background-work failure detector', () => {
     // one observation grouped by the SURFACE, so a retrying channel is one
     // episode and a second failing channel is a second one.
     const discord = hashHealthEventSubject('channel:discord');
-    const buzz = hashHealthEventSubject('channel:buzz');
+    const telegram = hashHealthEventSubject('channel:telegram');
     for (let index = 0; index < 3; index += 1) {
-      for (const subjectHash of [discord, buzz]) {
+      for (const subjectHash of [discord, telegram]) {
         detector.record(failure({
           code: 'channel_surface_failed',
           component: 'channels',
@@ -189,7 +189,7 @@ describe('repeated background-work failure detector', () => {
     await detector.runAt(NOW_MS + 4 * MINUTE_MS);
 
     const opened = detector.events.filter(e => e.code === 'background_work_failures_opened');
-    expect(opened.map(e => e.provenance.subjectHash).sort()).toEqual([discord, buzz].sort());
+    expect(opened.map(e => e.provenance.subjectHash).sort()).toEqual([discord, telegram].sort());
     expect(opened.every(e => e.provenance.component === 'channels')).toBe(true);
   });
 

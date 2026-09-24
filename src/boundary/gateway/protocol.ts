@@ -306,12 +306,6 @@ export interface DiscordSendParams {
   content: string;
 }
 
-export interface ChannelSendParams {
-  channelType: 'buzz';
-  channelId: string;
-  content: string;
-}
-
 export interface DiscordSendMediaParams {
   channelId: string;
   media: Attachment;
@@ -1330,7 +1324,6 @@ export interface GatewayMethods {
   'llm.discover_models': [LLMDiscoverModelsParams, LLMDiscoverModelsResult];
   'llm.invalidate_model_discovery': [LLMInvalidateModelDiscoveryParams, LLMInvalidateModelDiscoveryResult];
   'discord.send': [DiscordSendParams, DiscordSendResult];
-  'channel.send': [ChannelSendParams, { success: boolean }];
   'discord.sendMedia': [DiscordSendMediaParams, DiscordSendMediaResult];
   'discord.typing': [DiscordTypingParams, DiscordTypingResult];
   'discord.availability': [DiscordAvailabilityParams, DiscordAvailabilityResult];

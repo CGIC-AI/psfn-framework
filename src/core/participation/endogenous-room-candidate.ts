@@ -28,7 +28,7 @@ export function createEndogenousRoomParticipationCandidate(
   if (!isRfc4122Uuid(companionId)) {
     throw new Error('endogenous room candidate requires an RFC-4122 companionId');
   }
-  if (input.channelType !== 'discord' && input.channelType !== 'buzz') {
+  if (input.channelType !== 'discord') {
     throw new Error('endogenous room candidate requires a supported room channelType');
   }
   if (!Number.isFinite(input.occurredAtMs) || input.occurredAtMs < 0) {

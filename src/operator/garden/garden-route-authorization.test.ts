@@ -74,7 +74,6 @@ describe('constructed Garden route authorization', () => {
     expect(activeIds).toContain('GET /api/admin/contacts');
     expect(activeIds).toContain('PATCH /api/admin/contacts/:id');
     expect(activeIds).toContain('POST /api/admin/contacts/:id/merge');
-    expect(activeIds).toContain('POST /api/admin/contacts/:id/channel-identity/transfer');
     expect(routes.every((route) => route.capability.authorization.action.length > 0)).toBe(true);
   });
 

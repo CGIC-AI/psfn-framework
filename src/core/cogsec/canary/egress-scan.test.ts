@@ -11,7 +11,6 @@ import {
 describe('egress method set', () => {
   it('covers the outbound free-text methods and excludes provider calls', () => {
     expect(isEgressCanaryMethod('discord.send')).toBe(true);
-    expect(isEgressCanaryMethod('channel.send')).toBe(true);
     expect(isEgressCanaryMethod('notify.ntfy')).toBe(true);
     expect(isEgressCanaryMethod('web.fetch')).toBe(true);
     expect(isEgressCanaryMethod('web.search')).toBe(true);

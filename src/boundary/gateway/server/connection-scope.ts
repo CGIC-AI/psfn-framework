@@ -173,36 +173,4 @@ export class GatewayConnectionScope {
     }
     return dock;
   }
-
-  resolveConnectionPluginOutboundDock(
-    conn: GatewayRpcConnection,
-    pluginId: 'buzz',
-  ): ChannelOutboundDock {
-    const routes = this.ports.options.pluginOutboundRoutes ?? [];
-    const companionId = this.ports.connectionStatuses.get(conn)?.companionId;
-    const ownedRoutes = this.ports.multiCompanion.enabled
-      ? routes.filter(route => route.companionId === companionId)
-      : routes;
-    if (this.ports.multiCompanion.enabled && !companionId) {
-      this.ports.alarmCompanionViolation(
-        'channel_send_unidentified',
-        `${pluginId} outbound rejected: connection has no bound companionId`,
-        { pluginId },
-      );
-      throw new Error(`${pluginId} outbound requires an identified companion connection`);
-    }
-    if (ownedRoutes.length !== 1) {
-      this.ports.alarmCompanionViolation(
-        'channel_send_no_account',
-        `${pluginId} outbound rejected: caller does not own exactly one account`,
-        { pluginId, ...(companionId ? { companionId } : {}), accountCount: ownedRoutes.length },
-      );
-      throw new Error(
-        companionId
-          ? `Companion "${companionId}" does not own exactly one ${pluginId} account`
-          : `${pluginId} outbound requires exactly one configured account`,
-      );
-    }
-    return ownedRoutes[0]!.dock;
-  }
 }

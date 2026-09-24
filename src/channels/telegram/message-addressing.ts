@@ -12,8 +12,8 @@ import {
  * Telegram previously handed the agent a bare `SubstrateMessage` with no
  * addressing envelope at all, so mentions, replies, and author standing had to
  * be re-derived from prose downstream — the Discord-shaped assumption this bead
- * removes. This builds the SAME validated envelope Discord and Buzz already
- * produce, from Bot API entities only: `mention` entities are matched against
+ * removes. This builds the SAME validated envelope the Discord connector
+ * produces, from Bot API entities only: `mention` entities are matched against
  * the authenticated bot username, `text_mention` entities against its numeric
  * id, and replies against `reply_to_message.from.id`. Prose is never consulted.
  */

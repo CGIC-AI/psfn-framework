@@ -1037,23 +1037,23 @@ describe('runtime subject identity', () => {
     });
   });
 
-  it('gives a linked Multica member session the canonical human contact context', async () => {
-    const memberUserId = 'multica:member:99999999-9999-4999-8999-999999999999';
+  it('gives a linked non-Discord channel identity the canonical human contact context', async () => {
+    const memberUserId = '424242424';
     const authorContext = await resolveAuthorContext({
       message: makeMessage({
-        channelId: 'multica:11111111-1111-4111-8111-111111111111:chat:session-a',
-        channelType: 'multica',
+        channelId: 'telegram:-1001234567890',
+        channelType: 'telegram',
         authorId: memberUserId,
         authorName: 'Operator',
         routing: {
-          source: 'multica',
+          source: 'telegram',
           channelPrivacy: 'invite_only',
           authorIsMachineIntelligence: false,
         },
       }),
       contactStore: {
         resolveChannelIdentity: (channel: string, channelUserId: string) => {
-          expect(channel).toBe('multica');
+          expect(channel).toBe('telegram');
           expect(channelUserId).toBe(memberUserId);
           return {
             id: 'contact-canonical-owner',
@@ -1064,7 +1064,7 @@ describe('runtime subject identity', () => {
             relationshipType: 'partner',
             channelIdentities: [
               { channel: 'discord', userId: 'discord-owner' },
-              { channel: 'multica', userId: memberUserId },
+              { channel: 'telegram', userId: memberUserId },
             ],
             firstSeen: '2026-03-17T12:00:00Z',
             lastSeen: '2026-03-17T12:00:00Z',
@@ -1083,7 +1083,7 @@ describe('runtime subject identity', () => {
     expect(authorContext).toMatchObject({
       canonicalContactKey: 'contact-canonical-owner',
       continuitySubjectKey: 'contact-canonical-owner',
-      continuityFallbackKeys: ['discord-owner', memberUserId],
+      continuityFallbackKeys: [memberUserId, 'discord-owner'],
       trustLevel: 'primary',
       relationshipType: 'partner',
       resolvedUserName: 'Owner',

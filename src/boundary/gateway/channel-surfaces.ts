@@ -416,15 +416,6 @@ export async function loadGatewayChannelSurfaces(
           pluginId,
         )
         : null,
-      ...(input.config.postgresDatabaseUrl
-        ? { postgresDatabaseUrl: input.config.postgresDatabaseUrl }
-        : {}),
-      ...(input.config.postgresSchema?.trim()
-        ? { postgresSchema: input.config.postgresSchema.trim() }
-        : {}),
-      ...(input.config.postgresRole?.trim()
-        ? { postgresRole: input.config.postgresRole.trim() }
-        : {}),
     }),
   });
 

@@ -166,23 +166,6 @@ describe('createAgentLoopEgressReplySender', () => {
     expect(delivery.send).not.toHaveBeenCalled();
   });
 
-  it('routes a Buzz room reply through the same autonomous egress sender', async () => {
-    const generator = { handleMessage: vi.fn(async () => makeResponse('Buzz reply')) };
-    const delivery = { send: vi.fn(async () => undefined) };
-    const sender = makeSender(generator, delivery);
-    const result = await sender.deliver(makeRequest({
-      channelType: 'buzz',
-      channelId: 'buzz:wss%3A%2F%2Frelay.example:room-1',
-    }));
-
-    expect(result.outcome).toBe('delivered');
-    expect(delivery.send).toHaveBeenCalledWith(
-      'buzz',
-      'buzz:wss%3A%2F%2Frelay.example:room-1',
-      'Buzz reply',
-    );
-  });
-
   it('fails closed for an unsupported channel (no generation, no send)', async () => {
     const generator = { handleMessage: vi.fn(async () => makeResponse('hi')) };
     const delivery = { send: vi.fn(async () => undefined) };

@@ -15,6 +15,7 @@ import {
 import { migrateRequiredSettingsBlocks } from '../settings/required-blocks-owner-migration.js';
 import { migrateIntakePolicyOwner } from './intake-policy-owner-migration.js';
 import { migrateAutomataPolicyOwner } from './automata-policy-owner-migration.js';
+import { migrateRetiredChannelPluginSections } from './channels-owner-migration.js';
 import {
   INTAKE_POLICY_FILE_NAME,
   INTAKE_POLICY_SEED_FILE_NAME,
@@ -54,6 +55,7 @@ export interface RequiredOwnerAdditionsMigrationResult {
   settings: ReturnType<typeof migrateRequiredSettingsBlocks>;
   intakePolicy: ReturnType<typeof migrateIntakePolicyOwner> | RequiredSystemOwnerAdditionResult;
   automataPolicy: ReturnType<typeof migrateAutomataPolicyOwner> | RequiredSystemOwnerAdditionResult;
+  channels: ReturnType<typeof migrateRetiredChannelPluginSections>;
   companionOwnerAdditions?: RequiredCompanionOwnerAdditionsMigrationResult;
   ownerModes: RequiredOwnerModesMigrationResult;
 }
@@ -339,6 +341,11 @@ function runRequiredOwnerAdditions(
         apply,
         faultInjection: options.faultInjection,
       }),
+    channels: migrateRetiredChannelPluginSections({
+      dataDir: options.dataDir,
+      apply,
+      faultInjection: options.faultInjection,
+    }),
     ...(options.companionDataDir
       ? {
         companionOwnerAdditions: migrateRequiredCompanionOwnerAdditions({

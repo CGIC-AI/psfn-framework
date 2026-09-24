@@ -728,6 +728,12 @@ The same holds for the retired blocks that no runtime code read,
 `temporalWakeup.wakeSummary` and `artifactLifecycle`: loading fails with a
 message naming `migrate-scheduler-owner`, whose run removes exactly those
 paths (reported under `removedPaths`) and leaves every other setting as is.
+Likewise the removed Buzz and Multica channel plugins: a system `channels.json`
+still carrying a `buzz` or `multica` section (at the root or under `channels`)
+fails startup with a message naming `migrate-required-settings-blocks`, whose
+run strips exactly those sections (reported under `channels.removedPaths`).
+Any other unknown channel plugin key still fails closed, in the migration and
+at startup.
 
 The settings half of the adaptation reads its defaults from
 `$CONFIG_DIR/settings.seed.json` (`./config` when `CONFIG_DIR` is unset), which

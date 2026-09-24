@@ -36,6 +36,11 @@ class GatedTarget {
   open(): void {
     this.release?.();
   }
+
+  /** Block the next turns again, for a second overflow episode. */
+  close(): void {
+    this.gate = new Promise<void>((resolve) => { this.release = resolve; });
+  }
 }
 
 async function settle(): Promise<void> {
@@ -79,7 +84,10 @@ test("the wake dispatch queue drops past its budget and accounts for it content-
   );
   assert.deepEqual(
     warnings,
-    ["Eidoverse MCPL wake dispatch queue is full (limit 2); dropped batches 1, dropped messages 2"],
+    [
+      "Eidoverse MCPL wake dispatch queue is full (limit 2); "
+      + "episode dropped batches 1, dropped messages 2; cumulative dropped batches 1, dropped messages 2",
+    ],
     "one bounded line per overflow episode, carrying counts only",
   );
   assert.equal(
@@ -94,7 +102,8 @@ test("the wake dispatch queue drops past its budget and accounts for it content-
   assert.equal(warnings.length, 2, "the episode reports its totals once the backlog drains");
   assert.equal(
     warnings[1],
-    "Eidoverse MCPL wake dispatch queue drained; dropped batches 2, dropped messages 3",
+    "Eidoverse MCPL wake dispatch queue drained; "
+      + "episode dropped batches 2, dropped messages 3; cumulative dropped batches 2, dropped messages 3",
     "the closing line carries what the opening line could not yet know",
   );
 
@@ -104,6 +113,27 @@ test("the wake dispatch queue drops past its budget and accounts for it content-
   await waitFor(() => target.started.length === 4, "the batch delivered after the drain");
   assert.deepEqual(wake.dropStats(), { droppedBatches: 2, droppedMessages: 3 });
   assert.equal(warnings.length, 2, "a drained queue with nothing dropped since says nothing");
+
+  // A second storm reports its own episode apart from the lifetime totals
+  // (psfn-framework-emz0r): the counters are cumulative, the episode is not.
+  target.close();
+  wake.deliver([knock("m8")]);
+  await waitFor(() => target.started.length === 5, "the second storm's first turn");
+  wake.deliver([knock("m9")]);
+  wake.deliver([knock("m10")]);
+  wake.deliver([knock("m11")]);
+  assert.equal(
+    warnings[2],
+    "Eidoverse MCPL wake dispatch queue is full (limit 2); "
+      + "episode dropped batches 1, dropped messages 1; cumulative dropped batches 3, dropped messages 4",
+  );
+  target.open();
+  await waitFor(() => warnings.length === 4, "the second episode to drain");
+  assert.equal(
+    warnings[3],
+    "Eidoverse MCPL wake dispatch queue drained; "
+      + "episode dropped batches 1, dropped messages 1; cumulative dropped batches 3, dropped messages 4",
+  );
   await wake.close();
 });
 

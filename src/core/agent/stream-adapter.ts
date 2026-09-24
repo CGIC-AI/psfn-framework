@@ -74,6 +74,7 @@ import {
   assertExactExplicitToolArgumentsAdmissible,
   assertExplicitToolResponseSatisfied,
   isMissingRequiredToolCallError,
+  isRuntimeAuthoredTurnTrigger,
   resolveExplicitToolContract,
 } from '../../primitives/llm/explicit-tool-request.js';
 import {
@@ -497,7 +498,7 @@ function hasExplicitToolExecutionRequest(context: unknown): boolean {
   const latestUserMessage = [...context.messages]
     .reverse()
     .find(message => isRecord(message) && message.role === 'user');
-  if (!isRecord(latestUserMessage)) return false;
+  if (!isRecord(latestUserMessage) || isRuntimeAuthoredTurnTrigger(latestUserMessage)) return false;
   const content = latestUserMessage.content;
   const requestText = typeof content === 'string'
     ? content

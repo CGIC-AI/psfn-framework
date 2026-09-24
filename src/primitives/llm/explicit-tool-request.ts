@@ -70,6 +70,11 @@ export function isExplicitToolRequestError(error: unknown): error is ExplicitToo
     );
 }
 
+/** A user-role message that carries a runtime system note, not Participant speech. */
+export function isRuntimeAuthoredTurnTrigger(message: unknown): boolean {
+  return isRecord(message) && message.messageClass === 'systemNote';
+}
+
 export function isMissingRequiredToolCallError(error: unknown): boolean {
   return isExplicitToolContractError(error)
     && (error as { violation?: unknown }).violation === 'missing_required_call';
@@ -369,6 +374,10 @@ export function resolveExplicitToolContract(input: {
     }
   }
   if (currentUserIndex < 0) return undefined;
+  // A runtime-authored turn trigger (a trailing system note rendered user-role,
+  // psfn-framework-3pye5) is not Participant speech and never opts into forced
+  // tool execution.
+  if (isRuntimeAuthoredTurnTrigger(messages[currentUserIndex])) return undefined;
   const requestText = textContent(messages[currentUserIndex]?.content);
   const requestedToolSequence = resolveExplicitToolRequestSequence(
     requestText,

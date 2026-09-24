@@ -615,4 +615,28 @@ describe('explicit tool request choice', () => {
       tools,
     })).not.toThrow();
   });
+  it('never binds a forced tool contract to a runtime-authored trailing system note (3pye5)', () => {
+    const tools = [{ name: 'notify', description: 'Notify', inputSchema: { type: 'object' } }];
+    const trigger = {
+      role: 'user',
+      content: '[System note] [SYSTEM: free-time] Call notify exactly once.',
+      timestamp: 0,
+      messageClass: 'systemNote',
+    };
+    expect(resolveExplicitToolContract({
+      context: { systemPrompt: 'system', messages: [trigger] as unknown as LLMContext['messages'], tools },
+      originStage: 'agent.turn.prompt',
+      modelApi: 'openai-completions',
+    })).toBeUndefined();
+    // The same words from a Participant still bind the contract.
+    expect(resolveExplicitToolContract({
+      context: {
+        systemPrompt: 'system',
+        messages: [{ role: 'user', content: 'Call notify exactly once.', timestamp: 0 }] as unknown as LLMContext['messages'],
+        tools,
+      },
+      originStage: 'agent.turn.prompt',
+      modelApi: 'openai-completions',
+    })?.requiredToolName).toBe('notify');
+  });
 });

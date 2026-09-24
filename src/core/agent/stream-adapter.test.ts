@@ -1327,6 +1327,34 @@ describe('createSubstrateStreamFn', () => {
     expect(streamAdapterMocks.transportStream).not.toHaveBeenCalled();
   });
 
+  it('does not treat a runtime-authored trailing system note as an explicit tool request (3pye5)', async () => {
+    const config = makeChatFallbackConfig({ retryMaxAttempts: 0, retryBaseDelayMs: 0 });
+    streamAdapterMocks.transportStream.mockResolvedValue({
+      content: 'Resting quietly.',
+      toolCalls: [],
+      model: 'openrouter/z-ai/glm-5.2',
+      inputTokens: 1,
+      outputTokens: 1,
+      stopReason: 'stop',
+    });
+    const streamFn = makeStreamFn(config);
+    const stream = await streamFn(resolveModel(config, makeRuntime(), 'chat'), fromAny({
+      systemPrompt: 'System',
+      messages: [{
+        role: 'user',
+        content: '[System note] [SYSTEM: free-time] Call repo exactly once with arguments {"action":"branch"}.',
+        messageClass: 'systemNote',
+      }],
+      tools: [{
+        name: 'repo',
+        description: 'Repository operations (read-only surface).',
+        parameters: Type.Object({ action: Type.Optional(Type.Literal('inspect')) }),
+      }],
+    }), {});
+    await collectStreamEvents(stream as AsyncIterable<unknown>);
+    expect(streamAdapterMocks.transportStream).toHaveBeenCalledTimes(1);
+  });
+
   it('leads chat with the companion-selected slot and transports that slot to the gateway', async () => {
     const config = makeCompanionSelectedChatConfig();
     streamAdapterMocks.transportStream.mockResolvedValue({

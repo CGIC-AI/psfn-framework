@@ -67,7 +67,7 @@ describe('createGatewayJevDecisionService', () => {
     ['a per-site override is local', makeConfig({
       decisionBackend: settings('jev', { 'room.ambiguity': { mode: 'local' } }),
     }), INPUT, 'site_mode_local'],
-    ['the site is companion-private', makeConfig(), { ...INPUT, siteId: 'scheduler.free_time' as const },
+    ['the site is companion-private', makeConfig(), { ...INPUT, siteId: 'intention.post_turn_pregate' as const },
       'companion_private_site'],
     ['the call is companion-private', makeConfig(), { ...INPUT, telemetryVisibility: 'companion_private' as const },
       'companion_private_call'],

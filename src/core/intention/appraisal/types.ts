@@ -1,4 +1,5 @@
 import type { LLMProviderPort } from '../../agent/contracts.js';
+import type { DecisionRuntime } from '../../../primitives/llm/decision/decide.js';
 import type { EmotionalSnapshot } from '../../contacts/store/emotional-baseline.js';
 import type { EmotionStateSnapshot } from '../../emotion/state.js';
 import type { EmotionTelemetryValidation } from '../../emotion/telemetry-validation.js';
@@ -167,6 +168,8 @@ export interface IntentionAppraisalInput {
 
 export interface IntentionAppraisalConfig {
   llmProvider: LLMProviderPort;
+  /** Typed decisions for the opt-in post-turn noop pre-gate (epic 4lf3r). */
+  decisions?: Pick<DecisionRuntime, 'decide' | 'siteSettings'>;
   appraisalFrequency?: number;
   emotionalShiftThreshold?: number;
   dueSoonWindowMs?: number;

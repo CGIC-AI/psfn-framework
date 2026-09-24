@@ -104,8 +104,6 @@ describe('createDecisionRuntime', () => {
   });
 
   it.each<[DecisionSiteId, DecisionBackendSettings['mode']]>([
-    ['scheduler.free_time', 'jev'],
-    ['scheduler.free_time', 'shadow'],
     ['intention.post_turn_pregate', 'jev'],
     ['intention.post_turn_pregate', 'shadow'],
   ])('keeps companion-private site %s local under %s', async (siteId, mode) => {

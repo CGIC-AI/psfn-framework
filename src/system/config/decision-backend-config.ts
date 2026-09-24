@@ -25,9 +25,6 @@ export const DECISION_SITE_IDS = [
   'memory.rerank',
   'memory.query_intent',
   'intake.l2',
-  'automata.review',
-  'scheduler.free_time',
-  'icp.initiation_consent',
   'memory.extraction_pregate',
   'intention.post_turn_pregate',
 ] as const;

@@ -5,6 +5,10 @@
 // operator preference. A `companion_private` site always answers locally, even
 // when settings select `jev` or `shadow`. Cogsec blind review, introspection
 // and values audits are not decision sites at all and never reach decide().
+// Deliberately NOT decision sites (epic 4lf3r .8): the free-time chooser (the
+// companion's private personal projects), ICP initiation consent (carries the
+// companion's private reason) and the automata reviewer (its envelope writes a
+// reason and replacement text).
 
 import type { DecisionSiteId } from '../../../system/config/decision-backend-config.js';
 import type { DecisionSitePrivacy } from './types.js';
@@ -15,10 +19,8 @@ const SITE_PRIVACY: Readonly<Record<DecisionSiteId, DecisionSitePrivacy>> = {
   'memory.rerank': 'shareable',
   'memory.query_intent': 'shareable',
   'intake.l2': 'shareable',
-  'automata.review': 'shareable',
-  'scheduler.free_time': 'companion_private',
-  'icp.initiation_consent': 'shareable',
   'memory.extraction_pregate': 'shareable',
+  // The post-turn appraisal payload is the companion's own inner state.
   'intention.post_turn_pregate': 'companion_private',
 };
 

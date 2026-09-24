@@ -742,6 +742,7 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
   options.agentLoop.memoryProvider = memoryRetriever;
 
   const extractorFormationOptions = {
+    ...(options.decisionRuntime ? { decisions: options.decisionRuntime } : {}),
     ...(options.concernCandidateSink
       ? { emitConcernCandidates: options.concernCandidateSink }
       : {}),

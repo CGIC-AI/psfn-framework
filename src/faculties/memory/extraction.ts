@@ -3,6 +3,7 @@ import type {
   LLMProviderPort,
   MemoryExtractionOutputs,
 } from '../../core/agent/contracts.js';
+import { extractionPreGateSkips, type ExtractionPreGateDecisions } from './extraction/decision-pregate.js';
 import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import type { PromptRegistryStatePort } from '../../core/identity/prompt-state-port.js';
 import type { PersonaPreamblePort } from '../../core/identity/persona-preamble.js';
@@ -137,6 +138,8 @@ function resolveContactBiographicalDepth(
 
 export interface MemoryExtractorFormationOptions {
   getFormationVAD?: () => MemoryFormationVAD | undefined;
+  /** Typed decisions for the opt-in interval extraction pre-gate (epic 4lf3r). */
+  decisions?: ExtractionPreGateDecisions;
   emitConcernCandidates?: ConcernCandidateExtractionSink;
   /**
    * Contact-tracking policy gate predicate (E3.4). When it returns false for a
@@ -221,6 +224,7 @@ export class MemoryExtractor {
   private automataRunRegistry: AutomataRunRegistry | null = null;
   private automataTerminalLifecycle: AutomataTerminalLifecyclePort | null = null;
   private biographicalRebuild: MemoryExtractorFormationOptions['biographicalRebuild'] = undefined;
+  private decisions: MemoryExtractorFormationOptions['decisions'] = undefined;
 
   constructor(
     llmClient: LLMProviderPort,
@@ -291,6 +295,7 @@ export class MemoryExtractor {
     this.automataRunRegistry = formationOptions?.automataRunRegistry ?? null;
     this.automataTerminalLifecycle = formationOptions?.automataTerminalLifecycle ?? null;
     this.biographicalRebuild = formationOptions?.biographicalRebuild;
+    this.decisions = formationOptions?.decisions;
   }
 
   async queueRetroactiveExtraction(
@@ -369,6 +374,21 @@ export class MemoryExtractor {
         this.extractionInterval,
       );
     if (!trigger) return;
+    // Epic 4lf3r: only the foreground "every N messages" trigger may be
+    // pre-gated; threshold, pre-compaction, recovery and snapshot runs never are.
+    if (
+      boundedEntries === undefined
+      && trigger.triggerReason === 'interval'
+      && this.decisions?.siteSettings('memory.extraction_pregate')?.enabled === true
+      && await extractionPreGateSkips({
+        decisions: this.decisions,
+        channelId,
+        entries: this.sessionManager.getRecentMessages(channelId, trigger.currentCount - trigger.lastCount),
+      })
+    ) {
+      log.debug('Extraction pre-gate found nothing to remember; skipping this interval', { channelId });
+      return;
+    }
 
     if (this.isTelemetryEnabled()) {
       log.debug('Extraction trigger matched', {

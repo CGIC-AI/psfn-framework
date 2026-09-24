@@ -23,13 +23,14 @@ import { buildMemorySubjectAuthorizationPredicate } from './subject-policy.js';
 import { MEMORY_SUBJECT_SELECT_COLUMNS } from './subject-queries.js';
 import type { PostgresMemoryDeletionProposalStore } from './deletion-proposals.js';
 import type { PostgresMemoryStoreCollaboratorContext } from './collaborator-context.js';
+import type { PostgresL2ReadModel } from './l2-read-model.js';
 
 /**
  * Soft delete, restore, and delete-version history for PostgresMemoryStore
  * (`l2_memory_delete_versions`). Every delete/restore re-upserts the classified
  * memory row inside one memory-store transaction, preserving the stored vector.
  * The delete-version mirror is snapshotted and restored by the facade's
- * transaction rollback alongside the resident memory mirror.
+ * transaction rollback.
  */
 export class PostgresMemoryDeletionStore {
   private deleteVersions = new Map<string, MemoryDeleteVersion>();
@@ -41,12 +42,11 @@ export class PostgresMemoryDeletionStore {
       | 'embeddingDims'
       | 'queryWrite'
       | 'runInTransaction'
-      | 'getResidentMemory'
-      | 'setResidentMemory'
       | 'persistClassifiedMemoryRow'
       | 'markSalienceMaintenanceChanged'
       | 'markRetrievalCorpusChanged'
     >,
+    private readonly reads: Pick<PostgresL2ReadModel, 'getById'>,
     private readonly journal: MemoryJournal | null,
     private readonly markProposalRestored: PostgresMemoryDeletionProposalStore['markRestored'],
   ) {}
@@ -186,7 +186,6 @@ export class PostgresMemoryDeletionStore {
       await this.upsertDeleteVersion(nextVersion);
       const deletedMemory = { ...memory, deletedAt, deletedBy, deleteReason };
       await this.ctx.persistClassifiedMemoryRow(deletedMemory, embedding);
-      this.ctx.setResidentMemory(memoryId, deletedMemory);
       return nextVersion;
     });
     if (!version) return null;
@@ -246,7 +245,6 @@ export class PostgresMemoryDeletionStore {
           actorRole: input.options?.actorRole,
         });
       }
-      this.ctx.setResidentMemory(version.memoryId, restored);
       return restoredVersion;
     });
     if (!nextVersion) return null;
@@ -258,7 +256,7 @@ export class PostgresMemoryDeletionStore {
   }
 
   async softDeleteMemory(id: string, options: MemorySoftDeleteOptions = {}): Promise<MemoryDeleteVersion | null> {
-    const memory = this.ctx.getResidentMemory(id);
+    const memory = await this.reads.getById(id);
     if (!memory || memory.deletedAt) return null;
     const deleteId = options.deleteId ?? randomUUID();
     const deletedAt = options.deletedAt ?? Date.now();
@@ -283,7 +281,6 @@ export class PostgresMemoryDeletionStore {
         embedding,
       );
     });
-    this.ctx.setResidentMemory(id, { ...memory, deletedAt, deletedBy, deleteReason });
     this.ctx.markSalienceMaintenanceChanged();
     this.ctx.markRetrievalCorpusChanged();
     this.deleteVersions.set(deleteId, version);
@@ -294,7 +291,7 @@ export class PostgresMemoryDeletionStore {
   async undoSoftDelete(deleteId: string, options: MemoryUndoSoftDeleteOptions = {}): Promise<MemoryDeleteVersion | null> {
     const version = this.deleteVersions.get(deleteId);
     if (!version) return null;
-    const current = this.ctx.getResidentMemory(version.memoryId);
+    const current = await this.reads.getById(version.memoryId);
     if (!current) return null;
     const restoredAt = options.restoredAt ?? Date.now();
     const restoredBy = options.restoredBy?.trim() || 'agent';
@@ -316,7 +313,6 @@ export class PostgresMemoryDeletionStore {
         });
       }
     });
-    this.ctx.setResidentMemory(version.memoryId, restored);
     this.ctx.markSalienceMaintenanceChanged();
     this.ctx.markRetrievalCorpusChanged();
     this.deleteVersions.set(deleteId, nextVersion);

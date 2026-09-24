@@ -6,12 +6,13 @@ import type {
 import { normalizeMemorySalienceUpdates } from '../memory-store-port.js';
 import { applyRetentionClassTags, type PurrMemory } from '../types.js';
 import type { PostgresMemoryStoreCollaboratorContext } from './collaborator-context.js';
+import type { PostgresL2ReadModel } from './l2-read-model.js';
 
 /**
  * Operator bulk field updates and batched salience maintenance for
  * PostgresMemoryStore. Each batch is a single `UPDATE ... FROM (VALUES ...)`
- * on the facade persist chain; the resident mirror is updated only for the
- * ids Postgres reports as updated.
+ * on the facade persist chain; the current rows are read through the L2 read
+ * model, and change counters advance only when Postgres reports an update.
  */
 export class PostgresMemoryBulkUpdates {
   constructor(
@@ -19,11 +20,10 @@ export class PostgresMemoryBulkUpdates {
       PostgresMemoryStoreCollaboratorContext,
       | 'pool'
       | 'persist'
-      | 'getResidentMemory'
-      | 'setResidentMemory'
       | 'markSalienceMaintenanceChanged'
       | 'markRetrievalCorpusChanged'
     >,
+    private readonly reads: Pick<PostgresL2ReadModel, 'getByIds'>,
   ) {}
 
   async bulkUpdate(ids: string[], fields: MemoryBulkUpdatePatch): Promise<number> {
@@ -35,11 +35,13 @@ export class PostgresMemoryBulkUpdates {
       return 0;
     }
 
+    const normalizedIds = ids.map(id => id.trim()).filter(id => id.length > 0);
+    const existingById = new Map(
+      (await this.reads.getByIds(normalizedIds)).map(memory => [memory.id, memory]),
+    );
     const updatesById = new Map<string, PurrMemory>();
-    for (const id of ids) {
-      const normalizedId = id.trim();
-      if (!normalizedId) continue;
-      const existing = this.ctx.getResidentMemory(normalizedId);
+    for (const normalizedId of normalizedIds) {
+      const existing = existingById.get(normalizedId);
       if (!existing || existing.deletedAt) continue;
       const next = { ...existing };
       if (fields.type !== undefined) next.type = fields.type;
@@ -102,11 +104,6 @@ export class PostgresMemoryBulkUpdates {
     const updatedIds = new Set(result.rows.flatMap(row => (
       typeof row.id === 'string' ? [row.id] : []
     )));
-    for (const update of updates) {
-      if (updatedIds.has(update.id)) {
-        this.ctx.setResidentMemory(update.id, update);
-      }
-    }
     if (updatedIds.size > 0) {
       this.ctx.markSalienceMaintenanceChanged();
       this.ctx.markRetrievalCorpusChanged();
@@ -141,17 +138,6 @@ export class PostgresMemoryBulkUpdates {
     const updatedIds = new Set(result.rows.flatMap(row => (
       typeof row.id === 'string' ? [row.id] : []
     )));
-    for (const update of normalizedUpdates) {
-      if (!updatedIds.has(update.id)) continue;
-      const existing = this.ctx.getResidentMemory(update.id);
-      if (!existing || existing.deletedAt) continue;
-      this.ctx.setResidentMemory(update.id, {
-        ...existing,
-        salience: update.salience,
-        salienceDecayAnchorAt: update.salienceDecayAnchorAt,
-      });
-    }
-
     if (updatedIds.size > 0) {
       this.ctx.markSalienceMaintenanceChanged();
       this.ctx.markRetrievalCorpusChanged();

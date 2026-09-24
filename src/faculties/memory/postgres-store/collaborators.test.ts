@@ -37,7 +37,6 @@ class ScriptedPool {
 }
 
 function makeContext(pool: ScriptedPool, options: { inTransaction?: boolean } = {}) {
-  const memories = new Map<string, PurrMemory>();
   const ctx = {
     pool: fromAny(pool),
     embeddingDims: 4,
@@ -46,15 +45,11 @@ function makeContext(pool: ScriptedPool, options: { inTransaction?: boolean } = 
     hasActiveTransaction: () => options.inTransaction === true,
     runInTransaction: async <T>(handler: () => T) => await handler(),
     queryWrite: async (text: string, values: readonly unknown[]) => (await pool.query(text, values)).rows,
-    getResidentMemory: (id: string) => memories.get(id),
-    setResidentMemory: (id: string, memory: PurrMemory) => {
-      memories.set(id, memory);
-    },
     persistClassifiedMemoryRow: vi.fn(async () => undefined),
     markSalienceMaintenanceChanged: vi.fn(),
     markRetrievalCorpusChanged: vi.fn(),
   } satisfies PostgresMemoryStoreCollaboratorContext;
-  return { ctx, memories };
+  return { ctx };
 }
 
 function makeMemory(id: string, overrides: Partial<PurrMemory> = {}): PurrMemory {
@@ -221,19 +216,22 @@ describe('PostgresMemoryMaintenanceReviewStore', () => {
 });
 
 describe('PostgresMemoryBulkUpdates', () => {
-  it('updates the resident mirror only for rows Postgres reports as updated', async () => {
+  it('reads current rows once and advances counters only when Postgres reports an update', async () => {
     const pool = new ScriptedPool((sql) => sql.startsWith('update l2_memories') ? [{ id: 'kept' }] : []);
-    const { ctx, memories } = makeContext(pool);
-    memories.set('kept', makeMemory('kept'));
-    memories.set('raced', makeMemory('raced'));
-    const updates = new PostgresMemoryBulkUpdates(ctx);
+    const { ctx } = makeContext(pool);
+    const reads = { getByIds: vi.fn(async (ids: readonly string[]) => ids
+      .filter(id => id !== 'missing')
+      .map(id => makeMemory(id))) };
+    const updates = new PostgresMemoryBulkUpdates(ctx, reads);
 
     expect(await updates.bulkUpdate(['kept'], {})).toBe(0);
+    expect(reads.getByIds).not.toHaveBeenCalled();
     expect(pool.statements).toHaveLength(0);
-    expect(await updates.bulkUpdate(['kept', 'raced', 'missing'], { sensitivity: 'confidential' })).toBe(1);
+    expect(await updates.bulkUpdate([' kept ', 'raced', 'missing', ''], { sensitivity: 'confidential' })).toBe(1);
 
-    expect(memories.get('kept')?.sensitivity).toBe('confidential');
-    expect(memories.get('raced')?.sensitivity).toBe('personal');
+    expect(reads.getByIds).toHaveBeenCalledWith(['kept', 'raced', 'missing']);
+    const update = pool.statements.find(statement => statement.sql.startsWith('update l2_memories'));
+    expect(update?.values).toEqual(['kept', 'confidential', 'raced', 'confidential']);
     expect(ctx.markRetrievalCorpusChanged).toHaveBeenCalledTimes(1);
   });
 });
@@ -288,7 +286,13 @@ describe('PostgresMemorySubjectAuthorizedWrites', () => {
 describe('PostgresMemoryDeletionStore', () => {
   it('rejects non-update authorization and restores snapshotted delete versions', async () => {
     const pool = new ScriptedPool();
-    const deletion = new PostgresMemoryDeletionStore(makeContext(pool).ctx, null, vi.fn(async () => undefined));
+    const reads = { getById: vi.fn(async () => undefined) };
+    const deletion = new PostgresMemoryDeletionStore(
+      makeContext(pool).ctx,
+      reads,
+      null,
+      vi.fn(async () => undefined),
+    );
 
     await expect(deletion.softDeleteAuthorizedMemorySubject({
       authorization: authorization('bulk_mutation'),
@@ -308,6 +312,7 @@ describe('PostgresMemoryDeletionStore', () => {
     expect(await deletion.getDeleteVersion('delete-1')).toBeUndefined();
     expect(await deletion.undoSoftDelete('delete-1')).toBeNull();
     expect(await deletion.softDeleteMemory('absent')).toBeNull();
+    expect(reads.getById).toHaveBeenCalledWith('absent');
     expect(pool.statements).toHaveLength(0);
   });
 });

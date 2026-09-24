@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { assertMemoryListPosition } from './list-position.js';
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 import {
   createPostgresPool,
@@ -30,6 +29,7 @@ import type {
   MemoryMaintenanceDiagnostics,
   MemoryMaintenanceDiagnosticsOptions,
   MemoryListOptions,
+  ActiveMemoryListOptions,
   MemoryLink,
   MemoryMaintenanceReview,
   MemoryMaintenanceReviewInput,
@@ -68,7 +68,6 @@ import { InactiveMemoryUpdateError } from './memory-store-port.js';
 import {
   applyRetentionClassTags,
   normalizeMemoryProvenance,
-  normalizeMemoryScopeQuery,
   normalizeMemoryScopeRef,
   normalizeMemoryScopeTags,
   normalizeMemorySourceType,
@@ -82,10 +81,6 @@ import {
   serializeJsonValue,
   validateEmbeddingDimensions,
 } from './postgres-store/rows.js';
-import {
-  clampLimit,
-  lexicalScore,
-} from './postgres-store/utils.js';
 import {
   inspectMemorySubjectClassificationCoverage,
 } from './postgres-store/subject-coverage.js';
@@ -125,6 +120,7 @@ import { PostgresMemoryMaintenanceReviewStore } from './postgres-store/reviews.j
 import { PostgresRecentContactShapeStore } from './postgres-store/contact-shapes.js';
 import { PostgresScratchpadStore } from './postgres-store/scratchpad.js';
 import { upsertL2MemoryRow } from './postgres-store/memory-row-upsert.js';
+import { PostgresL2ReadModel } from './postgres-store/l2-read-model.js';
 import {
   listPostgresAdminMemories,
   queryPostgresAdminMemoryPrivacySummary,
@@ -263,13 +259,11 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
   private readonly maintenanceReviews: PostgresMemoryMaintenanceReviewStore;
   private readonly recentContactShapes: PostgresRecentContactShapeStore;
   private readonly scratchpad: PostgresScratchpadStore;
-
-  private memories = new Map<string, PurrMemory>();
-  // Embeddings are NOT hydrated into memory (a27w.1). Similarity search runs in
-  // Postgres/pgvector (searchByEmbedding) and the remaining stored-embedding
-  // consumers read their vectors on demand via fetchStoredEmbedding /
-  // listActiveMemoryEmbeddingsSince, so resident memory no longer scales with
-  // lifetime corpus size × embedding dimensions.
+  // L2 memory rows are NOT hydrated into process memory (ufgwv; embeddings
+  // since a27w.1). Detail/list/count/search reads are bounded SQL through
+  // PostgresL2ReadModel, so resident memory and boot cost no longer scale with
+  // lifetime corpus size.
+  private readonly readModel: PostgresL2ReadModel;
 
   constructor(
     pool: Pool,
@@ -294,17 +288,15 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
       queryWrite: <T extends QueryResultRow>(text: string, values: readonly unknown[]) => (
         this.queryWrite<T>(text, values)
       ),
-      getResidentMemory: id => this.memories.get(id),
-      setResidentMemory: (id, memory) => {
-        this.memories.set(id, memory);
-      },
       persistClassifiedMemoryRow: (memory, embedding) => this.persistClassifiedMemoryRow(memory, embedding),
       markSalienceMaintenanceChanged: () => this.markSalienceMaintenanceChanged(),
       markRetrievalCorpusChanged: () => this.markRetrievalCorpusChanged(),
     };
     this.collaboratorContext = ctx;
+    this.readModel = new PostgresL2ReadModel(ctx);
     this.memoryDeletion = new PostgresMemoryDeletionStore(
       ctx,
+      this.readModel,
       this.journal,
       input => this.deletionProposalPersistence.markRestored(input),
     );
@@ -313,7 +305,7 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
       insertMemory: (memory, embedding) => this.insertMemory(memory, embedding),
     });
     this.boundedReads = new PostgresL2BoundedReads(ctx, this.annIterativeScanAvailable);
-    this.bulkUpdates = new PostgresMemoryBulkUpdates(ctx);
+    this.bulkUpdates = new PostgresMemoryBulkUpdates(ctx, this.readModel);
     this.links = new PostgresMemoryLinkStore(ctx);
     this.maintenanceReviews = new PostgresMemoryMaintenanceReviewStore(ctx, () => this.links.evolutionLinks());
     this.recentContactShapes = new PostgresRecentContactShapeStore(ctx);
@@ -341,8 +333,7 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
           : options.memoryDeletionPolicy;
         return resolveMemoryDeletionJustification(policy, categoryId, explanation);
       },
-      onApproved: (version, deletedMemory) => {
-        this.memories.set(deletedMemory.id, deletedMemory);
+      onApproved: (version) => {
         this.memoryDeletion.recordVersion(version);
         this.markSalienceMaintenanceChanged();
         this.markRetrievalCorpusChanged();
@@ -352,7 +343,6 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
     this.memoryDeletionProposalStore = this.deletionProposalPersistence;
     this.initialization = this.initialize();
   }
-
 
   async waitUntilReady(): Promise<void> {
     await this.initialization;
@@ -415,28 +405,10 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
   }
 
   private async initialize(): Promise<void> {
-    // a27w.1: startup no longer selects or decodes embedding vectors. The
-    // embedding column is deliberately excluded here so boot cost stays
-    // O(rows) metadata rather than O(rows × dimensions). Embedding-table
-    // reachability is still asserted fail-closed before this method runs, by
-    // assertExistingMemorySchemaHasEmbeddingColumn + validatePostgresMemorySchema
-    // in createPostgresMemoryStoreFromPool.
-    const memoryRows = await queryRows<MemoryRow>(this.pool, `
-      SELECT
-        id, text, type, importance, confidence, emotional_valence, formation_vad, emotional_texture,
-        salience, salience_decay_anchor_at, source_ref, source_type, provenance_json, extracted_at, last_accessed,
-        access_count, superseded_by,
-        tags, scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,
-        retention_class, sensitivity, consent_flags, contact_id, deleted_at, deleted_by,
-        delete_reason
-      FROM l2_memories
-      ORDER BY extracted_at DESC, id DESC
-    `);
-    for (const row of memoryRows) {
-      const memory = tryFromMemoryRow(row);
-      if (memory) this.memories.set(row.id, memory);
-    }
-
+    // ufgwv: boot no longer selects l2_memories at all; L2 rows are read at
+    // query time. Embedding-column reachability is still asserted fail-closed
+    // before this method runs, by assertExistingMemorySchemaHasEmbeddingColumn +
+    // validatePostgresMemorySchema in createPostgresMemoryStoreFromPool.
     await this.memoryDeletion.hydrate();
     await this.links.hydrate();
     await this.maintenanceReviews.hydrate();
@@ -469,7 +441,6 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
     await this.queryWrite(text, values);
   }
 
-
   private async queryWrite<T extends QueryResultRow>(
     text: string,
     values: readonly unknown[],
@@ -484,7 +455,6 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
   private async upsertMemoryRow(memory: PurrMemory, embedding?: Float32Array): Promise<number> {
     return await upsertL2MemoryRow(this.collaboratorContext, memory, embedding);
   }
-
 
   private async upsertMemorySubjectProjection(
     memory: PurrMemory,
@@ -513,7 +483,6 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
     await this.runInTransaction(write);
   }
 
-
   async insertMemory(memory: PurrMemory, embedding: Float32Array): Promise<void> {
     validateEmbeddingDimensions(embedding, this.embeddingDims, 'insert');
     const anchoredMemory = {
@@ -521,7 +490,6 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
       salienceDecayAnchorAt: memory.salienceDecayAnchorAt ?? memory.lastAccessed,
     };
     await this.persistClassifiedMemoryRow(anchoredMemory, embedding);
-    this.memories.set(memory.id, anchoredMemory);
     this.markSalienceMaintenanceChanged();
     this.markRetrievalCorpusChanged();
     this.journal?.onInsert(anchoredMemory);
@@ -558,7 +526,6 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
     return this.persist(async () => {
       const client = await this.pool.connect();
       const state: MemoryStoreTransactionState = { client, operations: [] };
-      const memoriesSnapshot = new Map(this.memories);
       const deleteVersionsSnapshot = this.memoryDeletion.snapshotVersions();
       const salienceMaintenanceRevisionSnapshot = this.salienceMaintenanceRevision;
       try {
@@ -580,7 +547,6 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
         }
         // Embeddings are not held in memory (a27w.1); the database ROLLBACK
         // above is the sole authority for their transactional state.
-        this.memories = memoriesSnapshot;
         this.memoryDeletion.restoreVersions(deleteVersionsSnapshot);
         this.salienceMaintenanceRevision = salienceMaintenanceRevisionSnapshot;
         // Generations are monotonic. A rollback is itself a corpus transition:
@@ -623,31 +589,12 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
     return await this.boundedReads.searchByEmbedding(embedding, threshold, limit, scopeQuery, authorization);
   }
 
-
   async searchByText(
     query: string,
     limit: number,
     scopeQuery?: MemoryScopeQuery,
   ): Promise<Array<PurrMemory & { similarity: number }>> {
-    const normalizedScopeQuery = normalizeMemoryScopeQuery(scopeQuery);
-    return Array.from(this.memories.values())
-      .filter((memory) => {
-        if (memory.supersededBy || memory.deletedAt) return false;
-        if (!normalizedScopeQuery) return true;
-        const refs = normalizedScopeQuery.refs ?? [];
-        const tags = normalizedScopeQuery.tags ?? [];
-        if (refs.length === 0 && tags.length === 0) return true;
-        const scopeMatch = refs.length === 0 || refs.some(ref => {
-          const scope = memory.scopeRef;
-          return scope?.kind === ref.kind && scope.id === ref.id;
-        });
-        const tagMatch = tags.length === 0 || tags.some(tag => memory.scopeTags?.includes(tag));
-        return normalizedScopeQuery.mode === 'only' ? scopeMatch && tagMatch : scopeMatch || tagMatch;
-      })
-      .map(memory => ({ ...memory, similarity: lexicalScore(memory, query) }))
-      .filter(memory => memory.similarity > 0)
-      .sort((left, right) => right.similarity - left.similarity || right.salience - left.salience || right.extractedAt - left.extractedAt)
-      .slice(0, limit);
+    return await this.readModel.searchByText(query, limit, scopeQuery);
   }
 
   async updateMemory(
@@ -706,7 +653,6 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
       if (storedEmbedding) validateEmbeddingDimensions(storedEmbedding, this.embeddingDims, 'update');
       const embedding = updates.embedding ?? storedEmbedding;
       await this.persistClassifiedMemoryRow(next, embedding);
-      this.memories.set(id, next);
       this.markSalienceMaintenanceChanged();
       if (Object.keys(updates).some(key => key !== 'lastAccessed' && key !== 'accessCount')) {
         this.markRetrievalCorpusChanged();
@@ -720,10 +666,7 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
   }
 
   async getAllActiveMemories(limit: number = 10_000): Promise<PurrMemory[]> {
-    return Array.from(this.memories.values())
-      .filter(memory => !memory.supersededBy && !memory.deletedAt)
-      .sort((left, right) => right.extractedAt - left.extractedAt || left.id.localeCompare(right.id))
-      .slice(0, limit);
+    return await this.readModel.getAllActiveMemories(limit);
   }
 
   async listActiveMemoryEmbeddingsSince(
@@ -733,34 +676,12 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
     return await this.boundedReads.listActiveMemoryEmbeddingsSince(sinceMs, limit);
   }
 
-
   async listMemories(options: MemoryListOptions = {}): Promise<PurrMemory[]> {
-    const offset = clampLimit(options.offset, 0, 0, 100_000);
-    const memories = Array.from(this.memories.values())
-      .sort((left, right) => {
-        const leftArchived = left.supersededBy || left.deletedAt ? 1 : 0;
-        const rightArchived = right.supersededBy || right.deletedAt ? 1 : 0;
-        return leftArchived - rightArchived
-          || right.extractedAt - left.extractedAt
-          || right.id.localeCompare(left.id);
-      });
-    if (options.limit === undefined) {
-      return memories.slice(offset);
-    }
-    const limit = clampLimit(options.limit, 50, 1, 500);
-    return memories.slice(offset, offset + limit);
+    return await this.readModel.listMemories(options);
   }
 
-  async listActiveMemories(options: import('./memory-store-port.js').ActiveMemoryListOptions = {}): Promise<PurrMemory[]> {
-    const before = options.before === undefined ? undefined : assertMemoryListPosition(options.before);
-    const limit = clampLimit(options.limit, 50, 1, 500);
-    const offset = clampLimit(options.offset, 0, 0, 100_000);
-    return Array.from(this.memories.values())
-      .filter(memory => !memory.supersededBy && !memory.deletedAt)
-      .filter(memory => before === undefined || memory.extractedAt < before.extractedAt
-        || (memory.extractedAt === before.extractedAt && memory.id.localeCompare(before.memoryId) < 0))
-      .sort((left, right) => right.extractedAt - left.extractedAt || right.id.localeCompare(left.id))
-      .slice(offset, offset + limit);
+  async listActiveMemories(options: ActiveMemoryListOptions = {}): Promise<PurrMemory[]> {
+    return await this.readModel.listActiveMemories(options);
   }
 
   async listActiveMemoriesInWindow(
@@ -777,28 +698,16 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
     return await queryPostgresAdminMemoryPrivacySummary(this.pool);
   }
 
-
   async countActiveMemories(): Promise<number> {
-    return Array.from(this.memories.values()).filter(memory => !memory.supersededBy && !memory.deletedAt).length;
+    return await this.readModel.countActiveMemories();
   }
 
   async getById(id: string): Promise<PurrMemory | undefined> {
-    return this.memories.get(id);
+    return await this.readModel.getById(id);
   }
 
   async getByIds(ids: readonly string[]): Promise<PurrMemory[]> {
-    // Batch counterpart to getById over the hydrated snapshot: deduplicated,
-    // first-seen input order, misses dropped. Identical result set to calling
-    // getById per id, only without the per-id iteration overhead.
-    const seen = new Set<string>();
-    const result: PurrMemory[] = [];
-    for (const id of ids) {
-      if (seen.has(id)) continue;
-      seen.add(id);
-      const memory = this.memories.get(id);
-      if (memory) result.push(memory);
-    }
-    return result;
+    return await this.readModel.getByIds(ids);
   }
 
   async queryAuthorizedMemorySubjects(
@@ -853,7 +762,6 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
     return await this.memoryDeletion.undoAuthorizedMemorySubjectDelete(input);
   }
 
-
   async backfillMemorySubjectClassifications(
     options: MemorySubjectBackfillOptions = {},
   ): Promise<MemorySubjectBackfillResult> {
@@ -906,20 +814,8 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
     return await this.links.getEvolutionLinksForTargetMemory(targetMemoryId, relation);
   }
 
-
   async getStats(): Promise<MemoryStoreStats> {
-    const active = Array.from(this.memories.values()).filter(memory => !memory.supersededBy && !memory.deletedAt);
-    const byType: Record<string, number> = {};
-    let salience = 0;
-    for (const memory of active) {
-      byType[memory.type] = (byType[memory.type] ?? 0) + 1;
-      salience += memory.salience;
-    }
-    return {
-      total: active.length,
-      byType,
-      avgSalience: active.length > 0 ? salience / active.length : 0,
-    };
+    return await this.readModel.getStats();
   }
 
   async upsertMemoryMaintenanceReview(input: MemoryMaintenanceReviewInput): Promise<MemoryMaintenanceReview> {
@@ -942,19 +838,12 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
     return await this.maintenanceReviews.getMemoryMaintenanceDiagnostics(options);
   }
 
-
   async getMemoriesByChannel(channelId: string, limit: number): Promise<PurrMemory[]> {
-    return Array.from(this.memories.values())
-      .filter(memory => !memory.supersededBy && !memory.deletedAt && memory.sourceRef.startsWith(`${channelId}:`))
-      .sort((left, right) => right.extractedAt - left.extractedAt)
-      .slice(0, limit);
+    return await this.readModel.getMemoriesByChannel(channelId, limit);
   }
 
   async getMemoriesByContact(contactId: string, limit: number): Promise<PurrMemory[]> {
-    return Array.from(this.memories.values())
-      .filter(memory => !memory.supersededBy && !memory.deletedAt && memory.contactId === contactId)
-      .sort((left, right) => right.salience - left.salience || right.extractedAt - left.extractedAt)
-      .slice(0, limit);
+    return await this.readModel.getMemoriesByContact(contactId, limit);
   }
 
   async linkMemories(id1: string, id2: string, linkType: string = 'related'): Promise<MemoryLink | null> {

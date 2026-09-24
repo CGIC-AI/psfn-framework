@@ -8,9 +8,8 @@ import type { PurrMemory } from '../types.js';
  * write still flows through the facade's single serialized persist chain and
  * AsyncLocalStorage transaction scope.
  *
- * The resident L2 memory mirror is reached only through per-call accessors:
- * `runInTransaction` replaces that Map wholesale on rollback, so a collaborator
- * must never retain a reference to it.
+ * L2 memory rows are not mirrored in process memory; collaborators that need
+ * a row read it through PostgresL2ReadModel.
  */
 export interface PostgresMemoryStoreCollaboratorContext {
   readonly pool: Pool;
@@ -23,8 +22,6 @@ export interface PostgresMemoryStoreCollaboratorContext {
   runInTransaction<T>(handler: () => T): Promise<T>;
   /** Query on the active transaction client when inside one, else the pool. */
   queryWrite<T extends QueryResultRow>(text: string, values: readonly unknown[]): Promise<T[]>;
-  getResidentMemory(id: string): PurrMemory | undefined;
-  setResidentMemory(id: string, memory: PurrMemory): void;
   /** Upsert the memory row and its subject projection in one transaction. */
   persistClassifiedMemoryRow(memory: PurrMemory, embedding?: Float32Array): Promise<void>;
   markSalienceMaintenanceChanged(): void;

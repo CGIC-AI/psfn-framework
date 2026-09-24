@@ -28,7 +28,6 @@ export class PostgresMemorySubjectAuthorizedWrites {
       | 'queryWrite'
       | 'hasActiveTransaction'
       | 'runInTransaction'
-      | 'setResidentMemory'
     >,
     private readonly writes: Pick<MemoryStorePort, 'updateMemory' | 'insertMemory'>,
   ) {}
@@ -59,16 +58,14 @@ export class PostgresMemorySubjectAuthorizedWrites {
   }
 
   /**
-   * Refreshes the in-memory `memories` snapshot from freshly locked rows so a
-   * concurrent committed write cannot be overwritten by stale data. a27w.1:
-   * embeddings are no longer cached, so the locked vector is only validated
-   * fail-closed (bounded to the locked set) and never retained.
+   * Validates the stored vectors of freshly locked rows fail-closed (bounded
+   * to the locked set). Nothing is retained: the per-row updates that follow
+   * re-read each locked row from Postgres, so no stale state can be written.
    */
-  private hydrateLockedMemoryRows(rows: readonly MemoryRow[], operation: string): void {
+  private validateLockedMemoryRows(rows: readonly MemoryRow[], operation: string): void {
     for (const row of rows) {
       const memory = tryFromMemoryRow(row);
       if (!memory) continue;
-      this.ctx.setResidentMemory(row.id, memory);
       const embedding = decodeEmbedding(row.embedding);
       if (embedding) {
         validateEmbeddingDimensions(embedding, this.ctx.embeddingDims, operation);
@@ -88,10 +85,9 @@ export class PostgresMemorySubjectAuthorizedWrites {
     if (memoryIds.length === 0) return 0;
     const mutate = async (): Promise<number> => {
       const authorizedRows = await this.lockAuthorizedActiveMemoryRows(authorization, memoryIds);
-      // The SQL lock is authoritative. Refresh the local snapshot before
-      // applying the patch so a sibling maintenance/contact process cannot
-      // have its committed fields overwritten by stale hydrated state.
-      this.hydrateLockedMemoryRows(authorizedRows, 'authorized mutation');
+      // The SQL lock is authoritative; each update re-reads its locked row,
+      // so a sibling process's committed fields are never overwritten.
+      this.validateLockedMemoryRows(authorizedRows, 'authorized mutation');
       for (const memoryId of memoryIds) {
         await this.writes.updateMemory(memoryId, input.updates);
       }
@@ -116,7 +112,7 @@ export class PostgresMemorySubjectAuthorizedWrites {
         authorization,
         supersededMemoryIds,
       );
-      this.hydrateLockedMemoryRows(authorizedRows, 'authorized write');
+      this.validateLockedMemoryRows(authorizedRows, 'authorized write');
       for (const memoryId of supersededMemoryIds) {
         await this.writes.updateMemory(memoryId, { supersededBy: input.memory.id });
       }

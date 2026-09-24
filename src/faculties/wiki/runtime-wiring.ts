@@ -421,7 +421,13 @@ export async function wireWikiRuntime(
 
   const personalProjects = new PersonalProjectLibrary(store);
   const personalWishlist = new PersonalWishlist(store);
-  const worldNotes = new WorldNotesLibrary(store);
+  // World notes are folded from door-authored labels; the situated block only
+  // renders a version the admission gate has admitted (psfn-framework-k6m7b).
+  const worldNotes = new WorldNotesLibrary(
+    store,
+    undefined,
+    admissionGate ? document => admissionGate.status(document).state === 'admitted' : undefined,
+  );
   const resources = [
     ...(projection ? [projection] : []),
     ...(sharedProjection ? [sharedProjection] : []),

@@ -1,7 +1,3 @@
-import { backoffMs, sleep as defaultSleep } from '../../shared/utils/timing.js';
-import { toError } from '../../shared/utils/errors.js';
-import { positiveIntegerOr } from '../../shared/utils/numeric.js';
-
 export const DEFAULT_DISCORD_START_RETRY_BASE_DELAY_MS = 2_000;
 export const DEFAULT_DISCORD_START_RETRY_MAX_DELAY_MS = 30_000;
 export const DEFAULT_DISCORD_START_RETRY_MAX_ATTEMPTS = 0;
@@ -29,22 +25,6 @@ const RETRYABLE_DISCORD_START_PATTERNS = [
   'connection reset',
 ] as const;
 
-export interface DiscordStartRetryAttempt {
-  attempt: number;
-  maxAttempts: number;
-  delayMs: number;
-  error: Error;
-}
-
-export interface DiscordStartRetryOptions {
-  maxAttempts?: number;
-  baseDelayMs?: number;
-  maxDelayMs?: number;
-  isRetryable?: (error: Error) => boolean;
-  onRetry?: (attempt: DiscordStartRetryAttempt) => void | Promise<void>;
-  sleep?: (delayMs: number) => Promise<void>;
-}
-
 function parseStatusCode(error: Error): number | null {
   const record = error as unknown as Record<string, unknown>;
   const response = record.response as Record<string, unknown> | undefined;
@@ -67,13 +47,6 @@ function parseErrorCode(error: Error): string | null {
   return code.trim().toUpperCase();
 }
 
-function normalizeNonNegativeInt(value: number | undefined, fallback: number): number {
-  if (!Number.isFinite(value)) return fallback;
-  const parsed = Math.floor(value!);
-  return parsed >= 0 ? parsed : fallback;
-}
-
-
 export function isRetryableDiscordStartError(error: Error): boolean {
   const statusCode = parseStatusCode(error);
   if (statusCode === 408 || statusCode === 429) return true;
@@ -85,45 +58,4 @@ export function isRetryableDiscordStartError(error: Error): boolean {
 
   const combined = `${error.name} ${error.message}`.toLowerCase();
   return RETRYABLE_DISCORD_START_PATTERNS.some((pattern) => combined.includes(pattern));
-}
-
-export async function startDiscordWithRetry(
-  start: () => Promise<void>,
-  options: DiscordStartRetryOptions = {},
-): Promise<void> {
-  const maxAttempts = normalizeNonNegativeInt(
-    options.maxAttempts,
-    DEFAULT_DISCORD_START_RETRY_MAX_ATTEMPTS,
-  );
-  const baseDelayMs = positiveIntegerOr(
-    options.baseDelayMs,
-    DEFAULT_DISCORD_START_RETRY_BASE_DELAY_MS,
-  );
-  const maxDelayMs = positiveIntegerOr(
-    options.maxDelayMs,
-    DEFAULT_DISCORD_START_RETRY_MAX_DELAY_MS,
-  );
-  const sleep = options.sleep ?? defaultSleep;
-  const isRetryable = options.isRetryable ?? isRetryableDiscordStartError;
-
-  for (let attempt = 1; ; attempt += 1) {
-    try {
-      await start();
-      return;
-    } catch (error) {
-      const err = toError(error);
-      const retryable = isRetryable(err);
-      const canRetry = maxAttempts <= 0 || attempt < maxAttempts;
-      if (!retryable || !canRetry) throw err;
-
-      const delayMs = backoffMs(baseDelayMs, attempt - 1, maxDelayMs);
-      await options.onRetry?.({
-        attempt,
-        maxAttempts,
-        delayMs,
-        error: err,
-      });
-      await sleep(delayMs);
-    }
-  }
 }

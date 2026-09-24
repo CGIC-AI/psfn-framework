@@ -236,6 +236,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
   private sessionStore: SessionStore | null;
   private handler: MessageHandler | null = null;
   private voiceHandler: MessageHandler | null = null;
+  private clientErrorHandler: ((error: Error) => void) | null = null;
   private processing = new Set<string>();
   private pendingByChannel = new Map<string, PendingDiscordTurn[]>();
   private lockStartedAt = new Map<string, number>();
@@ -373,6 +374,15 @@ export class DiscordAdapter implements ChannelAdapterPort {
     this.voiceHandler = handler;
   }
 
+  /**
+   * Observe runtime client errors (bead psfn-framework-6cs5j). The adapter
+   * always keeps its own `error` listener so an unobserved client error can
+   * never escape as an uncaught exception and take the gateway down.
+   */
+  onClientError(handler: (error: Error) => void): void {
+    this.clientErrorHandler = handler;
+  }
+
   /** Bind the direct in-process agent handler. */
   setAgent(agent: SubstrateAgent): void {
     this.handler = async (msg) => {
@@ -398,6 +408,11 @@ export class DiscordAdapter implements ChannelAdapterPort {
       this.onReactionAdd(reaction, user).catch(err => {
         log.error('Reaction handling error', { error: String(err) });
       });
+    });
+
+    this.client.on(Events.Error, (error) => {
+      log.error('Discord client error', { error: String(error) });
+      this.clientErrorHandler?.(error);
     });
 
     this.client.on(Events.ClientReady, (c) => {

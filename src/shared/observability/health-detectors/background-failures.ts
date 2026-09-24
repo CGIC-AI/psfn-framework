@@ -8,11 +8,13 @@
 // intake escalation port projects a screener provider that refused the
 // request parameters into `intake_screener_provider_rejected_request`, and the
 // automata terminal lifecycle projects a replay that disagreed with the durable
-// Bus finding into `terminal_handoff_replay_diverged`. All five are grouped by
-// `provenance.subjectHash` — a digest of the JOB KIND, of the REFRESH LANE, of
-// the custody FAILURE MODE, of the SCREENER TIER AND MODEL, and of the HANDOFF
-// KIND respectively, never of an individual job, channel, turn, envelope, or
-// run — precisely so that repeats of the same thing land in the same group.
+// Bus finding into `terminal_handoff_replay_diverged`, and the gateway's
+// channel supervisor projects a contained channel failure into
+// `channel_surface_failed`. All six are grouped by `provenance.subjectHash` — a
+// digest of the JOB KIND, of the REFRESH LANE, of the custody FAILURE MODE, of
+// the SCREENER TIER AND MODEL, of the HANDOFF KIND, and of the channel SURFACE
+// respectively, never of an individual job, message, turn, envelope, or run —
+// precisely so that repeats of the same thing land in the same group.
 //
 // What was missing is the judgment: a lane failing once is noise, and a lane
 // failing over and over is an incident. This detector is that judgment and
@@ -54,6 +56,10 @@ const COUNTED_FAILURE_CODES: readonly HealthEventCode[] = [
   // psfn-framework-zu8d2: grouped by a digest of the handoff KIND, so a settle
   // path that keeps diverging on replay becomes one episode.
   'terminal_handoff_replay_diverged',
+  // psfn-framework-6cs5j: grouped by a digest of the channel SURFACE, so a
+  // channel failing its bounded retries becomes one episode that closes once
+  // the channel recovers and its observations age out of the window.
+  'channel_surface_failed',
 ];
 
 interface FailureGroup {

@@ -292,6 +292,33 @@ describe('stableHealthConditionCorrelationId', () => {
 
     expect(new Set([system, otherCode, companion]).size).toBe(3);
   });
+
+  it('keys a per-subject condition on the subject digest without moving subject-free ids', () => {
+    const owner = { kind: 'system' as const };
+    const subjectFree = stableHealthConditionCorrelationId('channel_surface_disabled', owner);
+    const discord = stableHealthConditionCorrelationId(
+      'channel_surface_disabled',
+      owner,
+      hashHealthEventSubject('channel:discord'),
+    );
+    const telegram = stableHealthConditionCorrelationId(
+      'channel_surface_disabled',
+      owner,
+      hashHealthEventSubject('channel:telegram'),
+    );
+
+    expect(new Set([subjectFree, discord, telegram]).size).toBe(3);
+    expect(stableHealthConditionCorrelationId(
+      'channel_surface_disabled',
+      owner,
+      hashHealthEventSubject('channel:discord'),
+    )).toBe(discord);
+    // Pinned: adding the optional subject must not re-key existing conditions.
+    expect(stableHealthConditionCorrelationId('operator_alert_sinks_unconfigured', owner))
+      .toBe(stableHealthConditionCorrelationId('operator_alert_sinks_unconfigured', owner, undefined));
+    expect(() => stableHealthConditionCorrelationId('channel_surface_disabled', owner, 'discord'))
+      .toThrow(/subjectHash/u);
+  });
 });
 
 

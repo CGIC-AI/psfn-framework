@@ -760,13 +760,6 @@
       "note": "Code-owned denial-of-service guard bounding per-request split-frame canary scan state; operator expansion would weaken the egress boundary's memory ceiling."
     },
     {
-      "file": "src/boundary/gateway/channel-surfaces.ts",
-      "name": "startGatewayChannelSurfaces.maxAttempts",
-      "value": "'unbounded'",
-      "form": "object-member",
-      "note": "Existing mutable policy candidate startGatewayChannelSurfaces.maxAttempts; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
-    },
-    {
       "file": "src/boundary/gateway/client.ts",
       "name": "DEFAULT_GATEWAY_KEEPALIVE_INTERVAL_MS",
       "value": "30_000"

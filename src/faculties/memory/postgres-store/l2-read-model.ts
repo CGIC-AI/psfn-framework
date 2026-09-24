@@ -39,11 +39,16 @@ function lexicalTokens(query: string): string[] {
     .filter(token => token.length > 0);
 }
 
+/**
+ * SQL LIMIT for a former `.slice(0, limit)` read: finite non-negative values
+ * truncate toward zero exactly as slice did; NaN, negative, and infinite
+ * limits are rejected rather than turned into an unbounded or reversed read.
+ */
 function sqlRowLimit(limit: number, operation: string): number {
-  if (!Number.isSafeInteger(limit) || limit < 0) {
-    throw new Error(`${operation} requires a non-negative integer limit, got ${String(limit)}`);
+  if (!Number.isFinite(limit) || limit < 0) {
+    throw new Error(`${operation} requires a finite non-negative limit, got ${String(limit)}`);
   }
-  return limit;
+  return Math.floor(limit);
 }
 
 function decodeRows(rows: readonly MemoryRow[]): PurrMemory[] {

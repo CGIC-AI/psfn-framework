@@ -310,17 +310,21 @@ export function registerFreeTimeLane(deps: FreeTimeLaneDeps): void {
         lineage => { completedDisclosureLineage = lineage; },
       );
       if (completedDisclosureLineage) {
-        const recentEntries = sessionManager.getRecentSessionEntries
-          ? sessionManager.getRecentSessionEntries(channelId, 8)
-          : sessionManager.getRecentMessages(channelId, 8);
-        const assistantEntry = [...recentEntries]
-          .reverse()
-          .find(entry => entry.role === 'assistant');
+        // Located by the turn's own source message, not a recent-entry window
+        // that interleaved system/tool entries can push the reply out of
+        // (psfn-framework-993cv).
+        const assistantEntry = sessionManager.findAssistantEntryForSourceMessage(channelId, messageId);
         if (assistantEntry) {
           entryDisclosureLineage.set(
             sessionEntryLineageKey(assistantEntry),
             completedDisclosureLineage,
           );
+        } else if (response.content.trim().length > 0) {
+          log.warn('Free-time reply disclosure lineage could not be attached: no assistant entry for the turn', {
+            channelId,
+            messageId,
+            lane,
+          });
         }
       }
       return { content: response.content };

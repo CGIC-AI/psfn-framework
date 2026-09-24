@@ -1796,6 +1796,16 @@ export class SessionManager implements SessionManagerTypeSurface {
     return this.store.getRecent(resolvedChannelId, limit);
   }
 
+  /** The latest assistant entry recorded for the turn triggered by `sourceMessageId`. */
+  findAssistantEntryForSourceMessage(channelId: string, sourceMessageId: string): SessionEntry | null {
+    return this.store.findLatestEntries(
+      this.resolveSessionChannelId(channelId),
+      (entry) => entry.role === 'assistant'
+        && resolveSessionEntryTurnContext(entry).sourceMessageId === sourceMessageId,
+      1,
+    )[0] ?? null;
+  }
+
   findRecordedIcpInitiation(
     channelId: string,
     sourceMessageId: string,

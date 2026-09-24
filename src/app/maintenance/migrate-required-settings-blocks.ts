@@ -3,10 +3,15 @@
 import '../../shared/utils/load-dotenv.js';
 import { resolve } from 'node:path';
 import { toErrorMessage } from '../../shared/utils/errors.js';
-import { migrateRequiredOwnerAdditions } from '../../system/config/required-owner-additions-migration.js';
+import {
+  migrateRequiredOwnerAdditions,
+  type RequiredOwnerAdditionsMigrationResult,
+} from '../../system/config/required-owner-additions-migration.js';
+import { isMaintenanceCliEntrypoint } from './cli-harness.js';
 
-function main(): void {
-  const args = process.argv.slice(2);
+export function runRequiredOwnerAdditionsMigrationCli(
+  args: readonly string[] = process.argv.slice(2),
+): RequiredOwnerAdditionsMigrationResult {
   const apply = args.includes('--apply');
   const dataDirIndex = args.indexOf('--data-dir');
   if (dataDirIndex < 0 || !args[dataDirIndex + 1]) {
@@ -33,16 +38,20 @@ function main(): void {
   ]);
   const unknown = args.find(arg => !known.has(arg));
   if (unknown) throw new Error(`Unknown argument: ${unknown}`);
-  console.log(JSON.stringify(migrateRequiredOwnerAdditions({
+  const result = migrateRequiredOwnerAdditions({
     dataDir: resolve(dataDir),
     ...(companionDataDir ? { companionDataDir: resolve(companionDataDir) } : {}),
     apply,
-  }), null, 2));
+  });
+  console.log(JSON.stringify(result, null, 2));
+  return result;
 }
 
-try {
-  main();
-} catch (error) {
-  console.error(`Required owner additions migration failed: ${toErrorMessage(error)}`);
-  process.exit(1);
+if (isMaintenanceCliEntrypoint(import.meta.url)) {
+  try {
+    runRequiredOwnerAdditionsMigrationCli();
+  } catch (error) {
+    console.error(`Required owner additions migration failed: ${toErrorMessage(error)}`);
+    process.exit(1);
+  }
 }

@@ -343,8 +343,15 @@ export async function buildGatewayPrivilegedCore(
   // durable quarantine store per companion, then routes every ingress by its
   // authenticated/routed owner. Mode 'off' yields null services; a
   // provisioned-but-broken L1.5 model fails startup.
+  // Epic 4lf3r: one gateway-owned remote decision service, shared by the
+  // agent-facing llm.decide RPC and the additive intake.l2 signal.
+  const jevDecisions = createGatewayJevDecisionService({
+    config: input.config,
+    ...(privilegedServices.modelUsageStore ? { usageRecorder: privilegedServices.modelUsageStore } : {}),
+  });
   const intakeScreening = await composeGatewayIntakeScreeningRuntime({
     config: input.config,
+    jevDecisions,
     resolveReceipts: resolveIntakeReceipts,
     disposeReceipts: async () => {
       for (const store of receiptStoresByCompanionId.values()) {
@@ -597,10 +604,7 @@ export async function buildGatewayPrivilegedCore(
       gitOps,
       imageConfig: input.config,
       ...(privilegedServices.modelUsageStore ? { modelUsageRecorder: privilegedServices.modelUsageStore } : {}),
-      jevDecisions: createGatewayJevDecisionService({
-        config: input.config,
-        ...(privilegedServices.modelUsageStore ? { usageRecorder: privilegedServices.modelUsageStore } : {}),
-      }),
+      jevDecisions,
       ...(input.config.credentialVault ? { credentialVault: input.config.credentialVault } : {}),
       intakeScreeningMode: intakeScreening.globalMode,
       ...(!input.bootstrap.server.multiCompanion.enabled

@@ -1884,7 +1884,8 @@ export const POSTGRES_BACKGROUND_WORK_MIGRATIONS = [
       'enqueued', 'deduplicated', 'foreground_active', 'started', 'completed',
       'handler_failed', 'retry_scheduled', 'retry_exhausted', 'lease_expired',
       'shutdown', 'source_not_ready', 'source_missing', 'source_mismatch',
-      'superseded', 'malformed_payload', 'unknown_kind', 'effect_outcome_unknown'
+      'superseded', 'malformed_payload', 'unknown_kind', 'effect_outcome_unknown',
+      'operator_retired'
     )),
     CHECK (attempt_count >= 0),
     CHECK (max_attempts > 0),
@@ -1917,7 +1918,8 @@ export const POSTGRES_BACKGROUND_WORK_MIGRATIONS = [
       'enqueued', 'deduplicated', 'foreground_active', 'started', 'completed',
       'handler_failed', 'retry_scheduled', 'retry_exhausted', 'lease_expired',
       'shutdown', 'source_not_ready', 'source_missing', 'source_mismatch',
-      'superseded', 'malformed_payload', 'unknown_kind', 'effect_outcome_unknown'
+      'superseded', 'malformed_payload', 'unknown_kind', 'effect_outcome_unknown',
+      'operator_retired'
     ));`,
   `ALTER TABLE agent_background_work_jobs
     DROP CONSTRAINT IF EXISTS agent_background_work_jobs_deferred_from_state_check;`,

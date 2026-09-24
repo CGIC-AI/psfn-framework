@@ -116,6 +116,9 @@ export const BACKGROUND_WORK_REASON_CODES = [
   'malformed_payload',
   'unknown_kind',
   'effect_outcome_unknown',
+  // An operator retired a stuck job through the maintenance CLI
+  // (psfn-framework-gbwpq); terminal, recorded with an audit file.
+  'operator_retired',
 ] as const;
 
 export type BackgroundWorkReasonCode = typeof BACKGROUND_WORK_REASON_CODES[number];

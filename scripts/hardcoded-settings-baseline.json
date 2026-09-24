@@ -480,6 +480,12 @@
       "note": "Code-owned safety floor: minimum byte length of HUB_DEVICE_ASSERTION_AUDIT_PEPPER (n66dn.2); a shorter audit pepper weakens assertion digest unlinkability and must never be operator-tunable downward."
     },
     {
+      "file": "src/app/maintenance/background-work-jobs.ts",
+      "name": "BACKGROUND_WORK_JOBS_CLI_DEFAULT_LIMIT",
+      "value": "200",
+      "note": "Code-owned maintenance-CLI default page (psfn-framework-gbwpq): bounds one operator invocation's read/retire set and is overridden per run with --limit; not runtime tuning."
+    },
+    {
       "file": "src/app/maintenance/migrate-journal-message-addressing.ts",
       "name": "runJournalAddressingMigrationCli.tailCache.maxEntriesPerChannel",
       "value": "1",

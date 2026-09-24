@@ -149,7 +149,8 @@ export interface TurnPerformanceEvent {
     | 'superseded'
     | 'malformed_payload'
     | 'unknown_kind'
-    | 'effect_outcome_unknown';
+    | 'effect_outcome_unknown'
+    | 'operator_retired';
   deferReason?: TurnPerformanceDeferReason;
   cancellationOutcome?: 'acknowledged' | 'timed_out' | 'failed';
 }
@@ -332,6 +333,7 @@ const TURN_PERFORMANCE_BACKGROUND_JOB_REASON_SET = new Set<string>([
   'malformed_payload',
   'unknown_kind',
   'effect_outcome_unknown',
+  'operator_retired',
 ]);
 
 /**

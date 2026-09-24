@@ -750,6 +750,22 @@ jobs and stalls again, and `pg_locks` shows idle `agent-persistence` sessions
 holding advisory locks whose key is
 `hashtextextended('["turn-record-source-eligibility-v2","<schema>","<turnId>"]', 0)`.
 
+Inspect and retire with the maintenance CLI (it connects with the companion's
+own `POSTGRES_DATABASE_URL` and tenant schema/role, prints content-free rows
+including `lease_expiry_count`, and is a dry run unless `--apply`):
+
+```bash
+npm run background-work:jobs -- list --state retry_wait --channel-prefix hub-device:
+npm run background-work:jobs -- retire --channel-prefix hub-device:          # dry run
+npm run background-work:jobs -- retire --channel-prefix hub-device: --apply  # or --job <id> ...
+```
+
+`retire` marks the selected non-terminal jobs `stale_discarded` with reason
+`operator_retired`, skips any `running` job whose lease is still live (stop the
+agent first), and writes the retired rows to an audit file under
+`<data-dir>/repair-backups/background-work-retirement-<timestamp>/`. The SQL
+below remains the fallback.
+
 Inspect before acting (read-only):
 
 ```sql

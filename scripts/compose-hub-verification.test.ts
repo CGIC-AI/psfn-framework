@@ -1,9 +1,13 @@
+import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
+import { WebSocketServer } from 'ws';
+import { buildSatelliteHello } from '../companion-ui/src/lib/api/auth.js';
 import { parseSatelliteRegistryConfig } from '../src/channels/backplane/satellite-registry.js';
 import {
   assertHubSessionReady,
   companionUiSessionReadyDivergence,
   judgeRelayedEmotionSnapshot,
+  openEmotionRelaySession,
   relayEventsUrl,
 } from './compose-hub-verification.js';
 import {
@@ -148,5 +152,30 @@ describe('Compose hub verification helpers', () => {
       .toMatchObject({ ok: false });
     expect(judgeRelayedEmotionSnapshot({ type: 'pong', sentAt: 1 }))
       .toMatchObject({ ok: false, detail: 'decoded pong, expected emotion.snapshot' });
+  });
+});
+
+describe('Compose smoke emotion relay probe', () => {
+  it('attaches with companion-ui\'s own hello, which advertises the emotion output', async () => {
+    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    const received: unknown[] = [];
+    server.on('connection', (socket) => {
+      socket.send(JSON.stringify({ type: 'session.ready' }));
+      socket.on('message', (raw) => {
+        const frame: unknown = JSON.parse(String(raw));
+        received.push(frame);
+        socket.send(JSON.stringify({ type: 'hello.ack' }));
+      });
+    });
+    await new Promise<void>(resolve => server.once('listening', () => resolve()));
+    try {
+      const { port } = server.address() as AddressInfo;
+      const session = await openEmotionRelaySession(`ws://127.0.0.1:${port}/`, 2_000);
+      session.close();
+      expect(received).toEqual([buildSatelliteHello()]);
+      expect(buildSatelliteHello().capabilities.output).toContain('emotion');
+    } finally {
+      await new Promise<void>(resolve => server.close(() => resolve()));
+    }
   });
 });

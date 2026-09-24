@@ -34,7 +34,7 @@ describe('hub websocket framing', () => {
       satelliteName: 'PSFN Satellite Mobile Chat App',
       capabilities: {
         input: ['text'],
-        output: ['text', 'subtitle'],
+        output: ['text', 'subtitle', 'emotion'],
         control: ['interrupt', 'presence', 'session_attach'],
         safety: ['confirmation_required', 'local_only'],
       },
@@ -167,7 +167,7 @@ describe('hub websocket framing', () => {
       type: 'hello',
       capabilities: {
         input: ['text'],
-        output: ['text', 'subtitle'],
+        output: ['text', 'subtitle', 'emotion'],
         control: ['interrupt', 'presence', 'session_attach'],
         safety: ['confirmation_required'],
       },

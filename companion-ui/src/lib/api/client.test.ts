@@ -57,7 +57,7 @@ describe('satellite hub auth', () => {
       type: 'hello',
       capabilities: {
         input: ['text', 'device_location'],
-        output: ['text', 'subtitle', 'artifact', 'tool_activity'],
+        output: ['text', 'subtitle', 'artifact', 'tool_activity', 'emotion'],
         control: ['interrupt', 'presence', 'session_attach', 'approvals', 'touch'],
         safety: ['confirmation_required', 'local_only'],
       },

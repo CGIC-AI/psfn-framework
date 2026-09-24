@@ -164,7 +164,7 @@ const CAPABILITIES = Object.freeze({
   input: ['text', 'microphone_pcm', 'final_transcript', 'vision_upload', 'wake_event', 'device_location'],
   output: [
     'text', 'subtitle', 'streamed_audio', 'local_file_audio', 'animation', 'action',
-    'expression', 'gaze', 'servo', 'artifact', 'tool_activity',
+    'expression', 'gaze', 'servo', 'artifact', 'tool_activity', 'emotion',
   ],
   control: ['interrupt', 'mute', 'sleep_wake', 'presence', 'session_attach', 'approvals', 'touch'],
   safety: ['action_allowlist', 'confirmation_required', 'local_only'],

@@ -1037,6 +1037,27 @@ function main(): number {
       'render fails closed: a gateway verifier ring without an audience',
       ringWithoutAudience.stderr.trim().split('\n').slice(0, 2).join(' '),
     );
+    // hrcx5: the agent's egress-isolation proof needs launcher evidence, which
+    // the chart declares only while it renders the agent NetworkPolicy.
+    const isolationDefault = helmTemplate([write('egress-isolation-default', {})]);
+    const defaultAgentEnv = isolationDefault.status === 0
+      ? extractContainerEnv(isolationDefault.stdout, `${RELEASE_NAME}-agent`, 'agent')
+      : new Map<string, RenderedEnvEntry>();
+    check(
+      defaultAgentEnv.get('PSFN_AGENT_EGRESS_ISOLATION')?.value === 'kubernetes-network-policy',
+      'agent declares PSFN_AGENT_EGRESS_ISOLATION=kubernetes-network-policy with the NetworkPolicy',
+      isolationDefault.stderr.trim().split('\n').slice(0, 2).join(' '),
+    );
+    const isolationWithoutPolicy = helmTemplate([write('egress-isolation-no-policy', {
+      networkPolicy: { enabled: false },
+    })]);
+    check(
+      isolationWithoutPolicy.status === 0
+        && !extractContainerEnv(isolationWithoutPolicy.stdout, `${RELEASE_NAME}-agent`, 'agent')
+          .has('PSFN_AGENT_EGRESS_ISOLATION'),
+      'agent declares no egress isolation when the NetworkPolicy is disabled',
+      isolationWithoutPolicy.stderr.trim().split('\n').slice(0, 2).join(' '),
+    );
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }

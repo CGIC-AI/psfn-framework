@@ -22,6 +22,7 @@ import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 
 import { optionalEnv, InvalidEnvError } from './env.mjs';
+import { caseAdmissibleAtTier, caseMinimumTier, lowestAdmissibleTier } from './case-tier-floors.mjs';
 
 const HARNESS_DIR = fileURLToPath(new URL('..', import.meta.url));
 export const LITE_MANIFEST_DEFAULT = join(HARNESS_DIR, 'profiles', 'lite.manifest.json');
@@ -176,17 +177,28 @@ function validatePreflightGates(gates) {
 
 /**
  * Compose the per-tier case-id sets from the manifest. The smoke subset runs at
- * exactly one tier (manifest.smoke.tier); the capability-gate matrix case runs at
+ * the baseline tier (manifest.smoke.tier), except a case with a declared
+ * minimum tier above it, which runs at the lowest required tier admitting it; the capability-gate matrix case runs at
  * EVERY required tier so its refusal grid + tier tool-conformance evidence are
  * collected at all three. Selection is by stable id only.
  */
 export function composeTierCaseSets(manifest) {
   const sets = {};
-  for (const tier of manifest.requiredTiers) {
-    const ids = tier === manifest.smoke.tier ? [...manifest.smoke.caseIds] : [];
-    ids.push(manifest.capabilityMatrixCaseId);
-    sets[tier] = ids;
+  for (const tier of manifest.requiredTiers) sets[tier] = [];
+  // A smoke case whose declared minimum tier is above the baseline smoke tier
+  // (mfr7t) runs at the lowest required tier that admits it instead.
+  for (const caseId of manifest.smoke.caseIds) {
+    const tier = caseAdmissibleAtTier(caseId, manifest.smoke.tier)
+      ? manifest.smoke.tier
+      : lowestAdmissibleTier(caseId, manifest.requiredTiers);
+    if (!tier) {
+      throw new ProfileManifestError(
+        `smoke case ${JSON.stringify(caseId)} requires tier ${caseMinimumTier(caseId)}, which no required tier admits`,
+      );
+    }
+    sets[tier].push(caseId);
   }
+  for (const tier of manifest.requiredTiers) sets[tier].push(manifest.capabilityMatrixCaseId);
   return sets;
 }
 

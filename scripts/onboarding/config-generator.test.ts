@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
@@ -13,6 +13,7 @@ import {
 } from '../../src/system/settings/schema-model-registry.js';
 import type { OnboardingPlan } from './types.js';
 import {
+  buildChannelsOwnerFile,
   buildModelsRegistry,
   buildProvidersRegistry,
   commitOwnerFiles,
@@ -23,6 +24,14 @@ import {
 const SEED_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../../config');
 
 function makePlan(overrides: Partial<OnboardingPlan> = {}): OnboardingPlan {
+  const plan = makeBasePlan(overrides);
+  return {
+    ...plan,
+    fallbackChat: overrides.fallbackChat ?? { provider: plan.provider, modelSlug: 'moonshotai/kimi-k2.5' },
+  };
+}
+
+function makeBasePlan(overrides: Partial<OnboardingPlan>): Omit<OnboardingPlan, 'fallbackChat'> {
   const root = overrides.roots?.systemDataDir ?? mkdtempSync(join(tmpdir(), 'onboard-cfg-'));
   return {
     mode: 'local',
@@ -150,12 +159,13 @@ describe('config generation passes the real settings-contract guard', () => {
         capabilities?: { supportsVision?: boolean };
       }>;
     };
-    expect(registry.models).toHaveLength(3);
+    expect(registry.models).toHaveLength(4);
     expect(registry.models.every((m) => m.identity.provider === 'anthropic')).toBe(true);
     expect(registry.models.map((m) => m.identity.model).sort()).toEqual([
       'claude-vision',
       'claude-x',
       'claude-y',
+      'moonshotai/kimi-k2.5',
     ]);
     const vision = registry.models.find((m) => m.identity.model === 'claude-vision');
     expect(vision?.purposes).toContainEqual({
@@ -192,6 +202,98 @@ describe('config generation passes the real settings-contract guard', () => {
     const providers = JSON.stringify(buildProvidersRegistry(plan));
     expect(providers).toContain('"envName":"OPENROUTER_API_KEY"');
     expect(providers).not.toContain('sk-or-secret-value');
+  });
+});
+
+describe('declared chat fallback (asd4w)', () => {
+  const kimi = {
+    id: 'kimi-code',
+    type: 'generic_openai',
+    label: 'Kimi Code',
+    apiBaseUrl: 'https://kimi.example.test/coding/v1',
+    apiKeyEnvName: 'KIMI_CODE_API_KEY',
+    apiKeyValue: 'kimi-secret',
+  };
+
+  function chatCandidates(registry: unknown): string[] {
+    const { models } = registry as {
+      models: Array<{ identity: { provider: string; model: string }; purposes: Array<{ purpose: string }> }>;
+    };
+    return models
+      .filter((m) => m.purposes.some((p) => p.purpose === 'chat'))
+      .map((m) => `${m.identity.provider}:${m.identity.model}`);
+  }
+
+  it('writes a second chat provider and a chat-fallback entry that pass the real contract guard', () => {
+    const plan = makePlan({
+      roots: freshRoot(false),
+      provider: {
+        id: 'glm-code',
+        type: 'generic_openai',
+        label: 'GLM Code Plan',
+        apiBaseUrl: 'https://glm.example.test/coding/paas/v4',
+        apiKeyEnvName: 'GLM_CODE_API_KEY',
+        apiKeyValue: 'glm-secret',
+      },
+      models: { primaryModelSlug: 'glm-5.3', extractionModelSlug: 'glm-5.3', visionModelSlug: 'glm-v' },
+      fallbackChat: { provider: kimi, modelSlug: 'kimi-for-coding' },
+    });
+    expect(() => stageAndValidate(plan)).not.toThrow();
+    const providers = buildProvidersRegistry(plan) as { providers: Array<{ id: string }> };
+    expect(providers.providers.map((p) => p.id)).toEqual(['glm-code', 'kimi-code']);
+    expect(JSON.stringify(providers)).not.toContain('kimi-secret');
+    const registry = buildModelsRegistry(plan) as {
+      models: Array<{ id: string; apiKind?: string; purposes: Array<{ purpose: string; primary: boolean }> }>;
+    };
+    const fallback = registry.models.find((m) => m.id === 'chat-fallback');
+    expect(fallback?.purposes).toEqual([{ purpose: 'chat', primary: false }]);
+    expect(fallback?.apiKind).toBe('openai-completions');
+    expect(chatCandidates(registry)).toContain('kimi-code:kimi-for-coding');
+    expect(new Set(chatCandidates(registry).map((c) => c.split(':')[0]))).toEqual(
+      new Set(['glm-code', 'kimi-code']),
+    );
+  });
+
+  it('always declares at least two distinct chat candidates on a single provider', () => {
+    const registry = buildModelsRegistry(makePlan());
+    const candidates = chatCandidates(registry);
+    expect(new Set(candidates).size).toBeGreaterThanOrEqual(2);
+    expect(candidates).toContain('openrouter:moonshotai/kimi-k2.5');
+  });
+
+  it('refuses a fallback identical to the primary chat model', () => {
+    const plan = makePlan();
+    expect(() => buildModelsRegistry({
+      ...plan,
+      fallbackChat: { provider: plan.provider, modelSlug: plan.models.primaryModelSlug },
+    })).toThrow(/single chat candidate/);
+  });
+});
+
+describe('channels.json testing-harness principal (7agdz)', () => {
+  it('preserves an existing channels.json and only adds the missing harness principal', () => {
+    const roots = freshRoot(true);
+    commitOwnerFiles(makePlan({ roots }));
+    const channelsPath = join(roots.systemDataDir, 'channels.json');
+    writeFileSync(channelsPath, JSON.stringify({ api: { companionId: '11111111-1111-4111-8111-111111111111' } }));
+    expect(buildChannelsOwnerFile(makePlan({ roots }))).toEqual({
+      api: {
+        companionId: '11111111-1111-4111-8111-111111111111',
+        testingHarness: {
+          principalId: 'testing-harness',
+          tokenRef: { kind: 'env', envName: 'TESTING_HARNESS_API_KEY' },
+        },
+      },
+    });
+    const custom = { api: { testingHarness: { principalId: 'custom', tokenRef: { kind: 'env', envName: 'X' } } } };
+    writeFileSync(channelsPath, JSON.stringify(custom));
+    expect(buildChannelsOwnerFile(makePlan({ roots }))).toEqual(custom);
+  });
+
+  it('is written only for repository-native installs', () => {
+    const roots = freshRoot(true);
+    commitOwnerFiles(makePlan({ roots, mode: 'compose' }));
+    expect(existsSync(join(roots.systemDataDir, 'channels.json'))).toBe(false);
   });
 });
 

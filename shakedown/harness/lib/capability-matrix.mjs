@@ -7,6 +7,8 @@
 // operator-reviewed contract so source-level drift tests can compare them with
 // tiers.ts while actual decisions remain production-derived.
 
+import { InvalidEnvError, MissingEnvError } from './env.mjs';
+
 export const CAPABILITY_MATRIX_TIER_TOKENS = Object.freeze({
   nursery: Object.freeze([
     'identity.read',
@@ -320,27 +322,32 @@ function normalizeTier(tier) {
 // plan carries an external send probe — which is all of them — must supply the
 // dedicated test sinks (65rk rf2 safety gap).
 function requireDedicatedExternalSinks(options) {
+  // Typed env errors: an unconfirmed sink is a case-local configuration hole
+  // (coverage_hole), never an abort of the whole run (af43r/tr821).
   if (options.dedicatedSinkConfirmation !== 'dedicated-test-sinks') {
-    throw new Error(
-      'Capability matrix external sends require '
-      + 'PSFN_MATRIX_EXTERNAL_SINKS_CONFIRMED=dedicated-test-sinks',
-    );
+    const hint = 'Capability matrix external sends require '
+      + 'PSFN_MATRIX_EXTERNAL_SINKS_CONFIRMED=dedicated-test-sinks';
+    throw options.dedicatedSinkConfirmation === undefined || options.dedicatedSinkConfirmation === ''
+      ? new MissingEnvError('PSFN_MATRIX_EXTERNAL_SINKS_CONFIRMED', hint)
+      : new InvalidEnvError('PSFN_MATRIX_EXTERNAL_SINKS_CONFIRMED', hint);
   }
   if (
     typeof options.discordTarget !== 'string'
     || !/^\d{17,20}$/u.test(options.discordTarget)
   ) {
-    throw new Error(
-      'Capability matrix requires PSFN_MATRIX_DISCORD_TARGET to be a dedicated Discord snowflake',
-    );
+    const hint = 'Capability matrix requires PSFN_MATRIX_DISCORD_TARGET to be a dedicated Discord snowflake';
+    throw typeof options.discordTarget === 'string' && options.discordTarget !== ''
+      ? new InvalidEnvError('PSFN_MATRIX_DISCORD_TARGET', hint)
+      : new MissingEnvError('PSFN_MATRIX_DISCORD_TARGET', hint);
   }
   if (
     typeof options.emailTarget !== 'string'
     || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(options.emailTarget)
   ) {
-    throw new Error(
-      'Capability matrix requires PSFN_MATRIX_EMAIL_TARGET to be a dedicated email address',
-    );
+    const hint = 'Capability matrix requires PSFN_MATRIX_EMAIL_TARGET to be a dedicated email address';
+    throw typeof options.emailTarget === 'string' && options.emailTarget !== ''
+      ? new InvalidEnvError('PSFN_MATRIX_EMAIL_TARGET', hint)
+      : new MissingEnvError('PSFN_MATRIX_EMAIL_TARGET', hint);
   }
 }
 

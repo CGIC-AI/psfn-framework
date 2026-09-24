@@ -162,23 +162,32 @@ function readSeed(seedDir: string, name: string): unknown {
   }
 }
 
+function providerRegistryEntry(provider: OnboardingPlan['provider']): Record<string, unknown> {
+  return {
+    id: provider.id,
+    type: provider.type,
+    enabled: true,
+    label: provider.label,
+    apiBaseUrl: provider.apiBaseUrl,
+    ...(provider.modelsApiUrl ? { modelsApiUrl: provider.modelsApiUrl } : {}),
+    apiKeyRef: { kind: 'env', envName: provider.apiKeyEnvName },
+    ...(provider.type === 'openrouter'
+      ? { metadata: { webTools: { enabled: false, model: 'openai/gpt-4o-mini' } } }
+      : {}),
+  };
+}
+
+/** True when the declared chat fallback is served by a second provider. */
+function hasSecondChatProvider(plan: Pick<OnboardingPlan, 'provider' | 'fallbackChat'>): boolean {
+  return plan.fallbackChat.provider.id !== plan.provider.id;
+}
+
 export function buildProvidersRegistry(plan: OnboardingPlan): unknown {
-  const provider = plan.provider;
   return {
     schemaVersion: 1,
     providers: [
-      {
-        id: provider.id,
-        type: provider.type,
-        enabled: true,
-        label: provider.label,
-        apiBaseUrl: provider.apiBaseUrl,
-        ...(provider.modelsApiUrl ? { modelsApiUrl: provider.modelsApiUrl } : {}),
-        apiKeyRef: { kind: 'env', envName: provider.apiKeyEnvName },
-        ...(provider.type === 'openrouter'
-          ? { metadata: { webTools: { enabled: false, model: 'openai/gpt-4o-mini' } } }
-          : {}),
-      },
+      providerRegistryEntry(plan.provider),
+      ...(hasSecondChatProvider(plan) ? [providerRegistryEntry(plan.fallbackChat.provider)] : []),
     ],
   };
 }
@@ -187,8 +196,10 @@ export function buildProvidersRegistry(plan: OnboardingPlan): unknown {
  * Re-point the seed's selected primary, extraction, and vision entries at the
  * chosen provider and operator-confirmed slugs. The dedicated vision entry
  * preserves the seed's explicit `supportsVision` capability instead of
- * pretending an arbitrary chat model can accept images. Keeping exactly these
- * entries avoids leaving catalog entries that reference a provider id the
+ * pretending an arbitrary chat model can accept images. A declared
+ * `chat-fallback` entry (possibly on a second provider) guarantees the chat
+ * routing chain never holds a single candidate. Keeping exactly these entries
+ * avoids leaving catalog entries that reference a provider id the
  * generated providers.json does not define.
  */
 export function buildModelsRegistry(plan: OnboardingPlan): unknown {
@@ -196,8 +207,6 @@ export function buildModelsRegistry(plan: OnboardingPlan): unknown {
   if (!isRecord(seed) || !Array.isArray(seed.models)) {
     throw new Error('Invalid models seed: expected { models: [...] }');
   }
-  const providerId = plan.provider.id;
-  const sourceType = plan.provider.type;
   const primary = seed.models.find(entry => isRecord(entry) && entry.id === 'primary');
   const extraction = seed.models.find(entry => isRecord(entry) && entry.id === 'extraction');
   const vision = seed.models.find(entry => isRecord(entry)
@@ -207,25 +216,48 @@ export function buildModelsRegistry(plan: OnboardingPlan): unknown {
       && purpose.primary === true)
     && isRecord(entry.capabilities)
     && entry.capabilities.supportsVision === true);
-  if (!isRecord(primary) || !isRecord(extraction) || !isRecord(vision)) {
+  // Template for the declared chat fallback: the first seed entry that is a
+  // chat-only, non-primary candidate.
+  const fallbackTemplate = seed.models.find(entry => isRecord(entry)
+    && Array.isArray(entry.purposes)
+    && entry.purposes.length > 0
+    && entry.purposes.every(purpose => isRecord(purpose)
+      && purpose.purpose === 'chat'
+      && purpose.primary === false));
+  if (!isRecord(primary) || !isRecord(extraction) || !isRecord(vision) || !isRecord(fallbackTemplate)) {
     throw new Error(
-      'Invalid models seed: expected primary, extraction, and explicitly vision-capable entries',
+      'Invalid models seed: expected primary, extraction, explicitly vision-capable, '
+      + 'and non-primary chat fallback entries',
     );
   }
+  const fallback = plan.fallbackChat;
+  if (fallback.provider.id === plan.provider.id
+    && fallback.modelSlug === plan.models.primaryModelSlug) {
+    throw new Error(
+      `The chat fallback must differ from the primary chat model; ${plan.provider.id}/`
+      + `${fallback.modelSlug} would leave a single chat candidate.`,
+    );
+  }
+  const primaryProvider = plan.provider;
   const models = [
-    { entry: primary, slug: plan.models.primaryModelSlug },
-    { entry: extraction, slug: plan.models.extractionModelSlug },
-    { entry: vision, slug: plan.models.visionModelSlug },
-  ].map(({ entry, slug }) => {
+    { entry: primary, slug: plan.models.primaryModelSlug, provider: primaryProvider },
+    {
+      entry: { ...fallbackTemplate, id: 'chat-fallback' },
+      slug: fallback.modelSlug,
+      provider: fallback.provider,
+    },
+    { entry: extraction, slug: plan.models.extractionModelSlug, provider: primaryProvider },
+    { entry: vision, slug: plan.models.visionModelSlug, provider: primaryProvider },
+  ].map(({ entry, slug, provider }) => {
       const identity = isRecord(entry.identity) ? entry.identity : {};
       return {
         ...entry,
-        ...(sourceType === 'generic_openai' ? { apiKind: 'openai-completions' } : {}),
+        ...(provider.type === 'generic_openai' ? { apiKind: 'openai-completions' } : {}),
         identity: {
           ...identity,
-          provider: providerId,
+          provider: provider.id,
           model: slug,
-          source: { type: sourceType },
+          source: { type: provider.type },
         },
       };
     });
@@ -302,6 +334,46 @@ function buildAutomataPolicy(plan: OnboardingPlan): unknown {
   };
 }
 
+/** Env var holding the Layer A testing-harness bearer (value lives only in .env). */
+export const TESTING_HARNESS_TOKEN_ENV_NAME = 'TESTING_HARNESS_API_KEY';
+
+function readExistingJsonObject(path: string): Record<string, unknown> | undefined {
+  if (!existsSync(path)) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, 'utf-8'));
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`Existing owner file ${path} is not valid JSON; repair it before re-running onboard: ${reason}`);
+  }
+  if (!isRecord(parsed)) throw new Error(`Existing owner file ${path} must contain a JSON object`);
+  return parsed;
+}
+
+/**
+ * channels.json for a repository-native install: declares the Layer A
+ * testing-harness principal (bearer resolved from TESTING_HARNESS_API_KEY in
+ * .env) so the shakedown harness authenticates as `testing-harness` rather
+ * than as the operator API key. An existing channels.json is preserved; only a
+ * missing `api.testingHarness` declaration is added.
+ */
+export function buildChannelsOwnerFile(plan: OnboardingPlan): Record<string, unknown> {
+  const existing = readExistingJsonObject(join(plan.roots.systemDataDir, 'channels.json')) ?? {};
+  const api = existing.api === undefined ? {} : existing.api;
+  if (!isRecord(api)) throw new Error('Existing channels.json.api must be an object');
+  if (api.testingHarness !== undefined) return existing;
+  return {
+    ...existing,
+    api: {
+      ...api,
+      testingHarness: {
+        principalId: 'testing-harness',
+        tokenRef: { kind: 'env', envName: TESTING_HARNESS_TOKEN_ENV_NAME },
+      },
+    },
+  };
+}
+
 /** All owner-file entries this plan will write, rooted at the FINAL target paths. */
 export function ownerFileEntries(plan: OnboardingPlan): OwnerFileEntry[] {
   const entries: OwnerFileEntry[] = [];
@@ -317,6 +389,12 @@ export function ownerFileEntries(plan: OnboardingPlan): OwnerFileEntry[] {
   }
   for (const name of SEED_COPIED_OWNER_FILES) {
     entries.push({ name, path: join(ownerFileRoot(plan, name), name), value: readSeed(plan.seedDir, name) });
+  }
+  // Only repository-native mode writes the harness bearer to the process
+  // environment; Compose and Helm own their own secret wiring.
+  if (plan.mode === 'local') {
+    const name = 'channels.json';
+    entries.push({ name, path: join(ownerFileRoot(plan, name), name), value: buildChannelsOwnerFile(plan) });
   }
   return entries;
 }

@@ -10,7 +10,9 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { parseEnv } from 'node:util';
 import { loadCharacterCard } from '../../src/core/identity/loader.js';
+import { loadRuntimeChannelsConfig } from '../../src/channels/backplane/config.js';
 import { resolveConfiguredCompanionFleet } from '../companion-fleet-runtime.js';
 import type { Prompter, PrompterChoiceOption } from './types.js';
 import {
@@ -117,6 +119,25 @@ describe('runOnboarding — local dev happy path', () => {
     expect(envText).toContain('API_PORT=10054');
     expect(prompter.log.join('\n')).toContain('npm run local:up');
 
+    // 7agdz: Layer A harness principal + its own bearer, never the operator API_KEY.
+    expect(envText).toMatch(/^TESTING_HARNESS_API_KEY=[0-9a-f]{64}$/mu);
+    const harnessKey = /^TESTING_HARNESS_API_KEY=(.+)$/mu.exec(envText)?.[1];
+    expect(harnessKey).not.toBe(/^API_KEY=(.+)$/mu.exec(envText)?.[1]);
+    const channels = JSON.parse(readFileSync(join(dataDir, 'channels.json'), 'utf-8')) as unknown;
+    expect(channels).toEqual({
+      api: {
+        testingHarness: {
+          principalId: 'testing-harness',
+          tokenRef: { kind: 'env', envName: 'TESTING_HARNESS_API_KEY' },
+        },
+      },
+    });
+    const runtimeChannels = loadRuntimeChannelsConfig(dataDir, parseEnv(envText));
+    expect(runtimeChannels.api.testingHarness).toMatchObject({
+      principalId: 'testing-harness',
+      apiKey: harnessKey,
+    });
+
     const fleet = resolveConfiguredCompanionFleet({
       PSFN_RUNTIME_ROOT: root,
       DATA_DIR: dataDir,
@@ -135,6 +156,70 @@ describe('runOnboarding — local dev happy path', () => {
     for (const file of readdirSync(dataDir).filter((f) => f.endsWith('.json'))) {
       expect(readFileSync(join(dataDir, file), 'utf-8')).not.toContain('sk-or-flow-secret');
     }
+  });
+});
+
+describe('runOnboarding — declared chat fallback (asd4w)', () => {
+  it('writes a second chat provider, its model, and its key only to .env', async () => {
+    const { root, envPath } = workspace();
+    const dataDir = join(root, 'data');
+    const prompter = new ScriptedPrompter({
+      choices: ['local', 'openrouter', 'fresh', 'generic_openai'],
+      // primary: id, apiBaseUrl, modelsApiUrl, apiKeyEnvName, primary, extraction, vision;
+      // fresh companion name; fallback: id, apiBaseUrl, apiKeyEnvName, fallback slug
+      texts: ['', '', '', '', '', '', '', '', 'kimi-code', 'https://kimi.example.test/coding/v1',
+        'KIMI_CODE_API_KEY', 'kimi-for-coding'],
+      secrets: ['sk-or-flow-secret', LOCAL_POSTGRES_ADMIN_URL, 'kimi-flow-secret'],
+      confirms: [false, false, true], // voice off, connectivity off, second provider on
+    });
+
+    await runOnboarding({
+      prompter,
+      seedDir: SEED_DIR,
+      envPath,
+      rootsOverride: { local: { systemDataDir: dataDir, companionDataDir: dataDir, shared: true } },
+    });
+
+    const providers = JSON.parse(readFileSync(join(dataDir, 'providers.json'), 'utf-8')) as {
+      providers: Array<{ id: string; apiKeyRef: { envName: string } }>;
+    };
+    expect(providers.providers.map((p) => [p.id, p.apiKeyRef.envName])).toEqual([
+      ['openrouter', 'OPENROUTER_API_KEY'],
+      ['kimi-code', 'KIMI_CODE_API_KEY'],
+    ]);
+    const models = JSON.parse(readFileSync(join(dataDir, 'models.json'), 'utf-8')) as {
+      models: Array<{ id: string; identity: { provider: string; model: string } }>;
+    };
+    expect(models.models.find((m) => m.id === 'chat-fallback')?.identity).toMatchObject({
+      provider: 'kimi-code',
+      model: 'kimi-for-coding',
+    });
+    const envText = readFileSync(envPath, 'utf-8');
+    expect(envText).toContain('KIMI_CODE_API_KEY=kimi-flow-secret');
+    for (const file of readdirSync(dataDir).filter((f) => f.endsWith('.json'))) {
+      expect(readFileSync(join(dataDir, file), 'utf-8')).not.toContain('kimi-flow-secret');
+    }
+    expect(prompter.log.join('\n')).not.toContain('WARNING: the chat fallback');
+  });
+
+  it('warns when the declared fallback shares the primary provider', async () => {
+    const { root, envPath } = workspace();
+    const dataDir = join(root, 'data');
+    const prompter = new ScriptedPrompter({
+      choices: ['local', 'openrouter', 'fresh'],
+      texts: ['', '', '', '', '', '', ''],
+      secrets: ['sk-or-flow-secret', LOCAL_POSTGRES_ADMIN_URL],
+      confirms: [false, false],
+    });
+    const outcome = await runOnboarding({
+      prompter,
+      seedDir: SEED_DIR,
+      envPath,
+      rootsOverride: { local: { systemDataDir: dataDir, companionDataDir: dataDir, shared: true } },
+    });
+    expect(outcome.plan.fallbackChat.provider.id).toBe('openrouter');
+    expect(outcome.plan.fallbackChat.modelSlug).not.toBe(outcome.plan.models.primaryModelSlug);
+    expect(prompter.log.join('\n')).toContain('WARNING: the chat fallback');
   });
 });
 

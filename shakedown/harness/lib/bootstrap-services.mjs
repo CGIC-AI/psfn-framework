@@ -1,6 +1,6 @@
 import {
-  buildChatHeaders,
   chatCompletionsUrl,
+  createChatHeaderBuilder,
   postChatCompletion,
   sleep,
   turnRecordPath,
@@ -125,18 +125,19 @@ export async function proveFirstConversation({
   message,
   sessionId,
   turnRecordsDir,
+  runId,
+  manifestId,
   turnRecordTimeoutMs = 30_000,
   pollMs = 1_500,
 }) {
   const startedAt = Date.now();
   const apiUserId = 'testing-harness';
+  // The gateway refuses testing_harness-scope chat without run provenance
+  // (testing_harness_provenance_required); the builder fails closed without it.
+  const chatHeaders = createChatHeaderBuilder({ apiKey: config.apiKey, runId, manifestId });
   const response = await postChatCompletion({
     apiUrl: chatCompletionsUrl(config.apiBase),
-    headers: buildChatHeaders({
-      apiKey: config.apiKey,
-      sessionId,
-      privacy: 'private',
-    }),
+    headers: chatHeaders({ sessionId, privacy: 'private' }),
     message,
   });
   if (!response.ok) {

@@ -380,6 +380,32 @@ export async function runCaseWithTimeout({
   }
 }
 
+/** True for the typed, case-local configuration failures (coverage holes). */
+export function isCaseConfigurationFailure(error) {
+  return error instanceof MissingEnvError
+    || error instanceof InvalidEnvError
+    || error instanceof CaseConfigurationError;
+}
+
+/**
+ * A case whose fixture cannot be built because of a typed configuration
+ * failure. It still lands in the run as its own coverage_hole row (its setup
+ * rethrows the failure) instead of aborting case construction for the whole
+ * suite (af43r/tr821).
+ */
+export function buildConfigurationHoleCase(base, error) {
+  if (!isCaseConfigurationFailure(error)) throw error;
+  return {
+    ...base,
+    before: async () => {
+      throw error;
+    },
+    execute: async () => {
+      throw new Error(`${base.id} has no executable fixture; setup must have failed first`);
+    },
+  };
+}
+
 /**
  * Run the case-owned pre-dispatch configuration seam.
  *

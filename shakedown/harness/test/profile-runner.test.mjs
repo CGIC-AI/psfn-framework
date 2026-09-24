@@ -89,9 +89,21 @@ console.log('\n[composeTierCaseSets]');
   const manifest = loadProfileManifest(REAL_MANIFEST);
   const sets = composeTierCaseSets(manifest);
   check(sets.nursery.includes('capability_refusal_matrix'), 'nursery includes capability matrix');
-  check(sets.apprentice.length === 1 && sets.apprentice[0] === 'capability_refusal_matrix', 'apprentice = capability matrix only');
+  // mfr7t: prompt_stack needs system.read (internal.read), absent at nursery.
+  check(JSON.stringify(sets.apprentice) === JSON.stringify(['prompt_stack', 'capability_refusal_matrix']),
+    'apprentice = prompt_stack (its minimum tier) + capability matrix');
   check(sets.autonomous.length === 1 && sets.autonomous[0] === 'capability_refusal_matrix', 'autonomous = capability matrix only');
-  check(manifest.smoke.caseIds.every((id) => sets.nursery.includes(id)), 'all smoke cases run at the baseline tier');
+  check(!sets.nursery.includes('prompt_stack'), 'prompt_stack is never scheduled at nursery');
+  check(JSON.stringify(sets.nursery) === JSON.stringify([
+    ...manifest.smoke.caseIds.filter((id) => id !== 'prompt_stack'),
+    'capability_refusal_matrix',
+  ]), 'every other smoke case runs at the baseline tier, in manifest order');
+  const unsatisfiable = { ...manifest, requiredTiers: ['nursery'], smoke: { ...manifest.smoke } };
+  check((() => {
+    try { composeTierCaseSets(unsatisfiable); return false; } catch (error) {
+      return /requires tier apprentice/.test(String(error?.message));
+    }
+  })(), 'a floored smoke case with no admissible tier fails closed');
   check(['nursery', 'apprentice', 'autonomous'].every((t) => sets[t].filter((id) => id === 'capability_refusal_matrix').length === 1),
     'capability matrix runs at all three tiers, exactly once each');
 }
@@ -198,10 +210,11 @@ console.log('\n[lite clean run]');
     check(existsSync(join(stubs.record, 'gates')), 'preflight gate ran');
     check(existsSync(join(stubs.record, 'matrix-ran')), 'matrix sweep ran');
     const nursery = readFileSync(join(stubs.record, 'nursery-cases'), 'utf8');
-    check(nursery.includes('capability_refusal_matrix') && nursery.includes('l0_baseline'),
-      'nursery case set = smoke subset + capability matrix');
-    check(readFileSync(join(stubs.record, 'apprentice-cases'), 'utf8') === 'capability_refusal_matrix',
-      'apprentice case set = capability matrix only');
+    check(nursery.includes('capability_refusal_matrix') && nursery.includes('l0_baseline')
+      && !nursery.split(',').includes('prompt_stack'),
+      'nursery case set = smoke subset (minus floored prompt_stack) + capability matrix');
+    check(readFileSync(join(stubs.record, 'apprentice-cases'), 'utf8') === 'prompt_stack,capability_refusal_matrix',
+      'apprentice case set = prompt_stack + capability matrix');
     check(readFileSync(join(stubs.record, 'autonomous-cases'), 'utf8') === 'capability_refusal_matrix',
       'autonomous case set = capability matrix only');
     const scEnv = JSON.parse(readFileSync(join(stubs.record, 'scorecard-env.json'), 'utf8'));

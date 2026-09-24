@@ -316,10 +316,25 @@ function ensureBuild(context: LocalContext): void {
   runChecked('npm', ['run', 'build:runtime'], context.env);
 }
 
+/**
+ * First-start Garden build steps. Worktree bootstrap installs only the root
+ * project, so the admin-ui dependencies are installed lazily (lockfile-exact,
+ * from the attested offline cache) before vite runs.
+ */
+export function gardenBuildSteps(
+  repoRoot: string,
+  nodePath: string = process.execPath,
+): readonly (readonly [string, readonly string[]])[] {
+  return [
+    [nodePath, [join(repoRoot, 'scripts/ci/bootstrap-worktree.mjs'), repoRoot, '--project', 'admin-ui']],
+    ['npm', ['run', 'garden:build']],
+  ];
+}
+
 function ensureGardenBuild(context: LocalContext): void {
   if (existsSync(join(REPO_ROOT, 'admin-ui', 'build', 'index.html'))) return;
   console.log('Building the Garden web UI (first start only)...');
-  runChecked('npm', ['run', 'garden:build'], context.env);
+  for (const [command, args] of gardenBuildSteps(REPO_ROOT)) runChecked(command, [...args], context.env);
 }
 
 function modelAssetsReady(): boolean {

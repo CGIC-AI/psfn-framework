@@ -53,6 +53,7 @@ import {
   resolveCaseCoverageHoleReason,
   runCaseWithTimeout,
   runCaseSetup,
+  buildConfigurationHoleCase,
   throwIfAborted,
   waitForAgentQuiescence,
   withTimeout,
@@ -72,6 +73,13 @@ import {
 } from './lib/harness-verdicts.mjs';
 import { buildSprint10Cases } from './cases/sprint10.mjs';
 import { buildHardeningCases } from './cases/hardening.mjs';
+import {
+  collectAnswerFeedback,
+  companionFeedbackDigest,
+  isEmptyCommentary,
+  normalizeValidatorOutput,
+} from './lib/companion-feedback.mjs';
+import { casesBelowTierFloor } from './lib/case-tier-floors.mjs';
 import { buildMemoryTierCases } from './cases/memory-tiers.mjs';
 import { isBeadsIssueId } from './lib/beads.mjs';
 import { prepareCaseChatDispatch } from './lib/case-dispatch-auth.mjs';
@@ -453,7 +461,9 @@ function selectRequestedCasesOrThrow(cases, outputBase) {
   const requestedCaseIds = [...CASE_IDS];
   const duplicateCaseIds = findDuplicateCaseIds(cases);
   const unknownRequestedCaseIds = requestedCaseIds.filter((caseId) => !knownCaseIds.includes(caseId));
-  if (duplicateCaseIds.length > 0 || unknownRequestedCaseIds.length > 0) {
+  // mfr7t: an explicitly requested case below its minimum tier fails closed.
+  const belowTierFloorCaseIds = casesBelowTierFloor(requestedCaseIds, EXPECTED_CAPABILITY_TIER);
+  if (duplicateCaseIds.length > 0 || unknownRequestedCaseIds.length > 0 || belowTierFloorCaseIds.length > 0) {
     const failure = {
       ...outputBase,
       generatedAt: new Date().toISOString(),
@@ -463,18 +473,26 @@ function selectRequestedCasesOrThrow(cases, outputBase) {
       requestedCaseIds,
       unknownRequestedCaseIds,
       duplicateCaseIds,
+      belowTierFloorCaseIds,
       knownCaseIds,
       results: [],
     };
     writeJsonArtifact(OUTPUT_PATH, failure);
     writeJsonArtifact(PARTIAL_OUTPUT_PATH, failure);
     throw new Error(
-      `case selection failed: unknown=${unknownRequestedCaseIds.join(',') || 'none'} duplicate=${duplicateCaseIds.join(',') || 'none'}`,
+      `case selection failed: unknown=${unknownRequestedCaseIds.join(',') || 'none'} duplicate=${duplicateCaseIds.join(',') || 'none'} `
+      + `below_tier_floor(${EXPECTED_CAPABILITY_TIER ?? 'unset'})=${belowTierFloorCaseIds.join(',') || 'none'}`,
     );
   }
-  return CASE_IDS.size > 0
-    ? cases.filter((testCase) => CASE_IDS.has(testCase.id))
-    : cases;
+  if (CASE_IDS.size > 0) return cases.filter((testCase) => CASE_IDS.has(testCase.id));
+  const excluded = casesBelowTierFloor(knownCaseIds, EXPECTED_CAPABILITY_TIER);
+  if (excluded.length > 0) {
+    console.warn(
+      `[shakedown] not scheduling ${excluded.join(',')} below their minimum tier `
+      + `(tier=${EXPECTED_CAPABILITY_TIER ?? 'unset'})`,
+    );
+  }
+  return cases.filter((testCase) => !excluded.includes(testCase.id));
 }
 
 function isMatrixAbortResult(caseResult) {
@@ -1744,22 +1762,22 @@ function derivePromotedToolsCycleProof(archiveToolMessages) {
 
 function collectSemanticValidationFailures(testCase, parsedAssistant, turnSummary, archiveToolMessages, sideChecks, ctx) {
   if (typeof testCase.validateParsedAssistant !== 'function') {
-    return [];
+    return { failures: [], feedback: [] };
   }
-  const failures = testCase.validateParsedAssistant({
+  const { failures, feedback } = normalizeValidatorOutput(testCase.validateParsedAssistant({
     parsedAssistant,
     assistantText: extractAssistantText(turnSummary, null),
     turnSummary,
     archiveToolMessages,
     sideChecks,
     ctx,
-  });
-  if (!Array.isArray(failures)) {
-    return [];
-  }
-  return failures
-    .filter((entry) => typeof entry === 'string' && entry.trim().length > 0)
-    .map((entry) => semanticFailure(entry.trim()));
+  }));
+  return {
+    failures: failures
+      .filter((entry) => typeof entry === 'string' && entry.trim().length > 0)
+      .map((entry) => semanticFailure(entry.trim())),
+    feedback,
+  };
 }
 
 function collectForbiddenToolFailures(seenForbiddenToolNames) {
@@ -2071,15 +2089,14 @@ function buildBaselineCases(ctx) {
         if (!Number.isFinite(settingKeyCount) || settingKeyCount < 1) {
           failures.push('prompt_stack settingKeyCount must be a positive number');
         }
-        if (
-          confusion !== null
-          && confusion !== ''
-          && confusion !== false
-          && confusion !== 0
-        ) {
-          failures.push(`prompt_stack confusion must be empty on success; got ${JSON.stringify(confusion)}`);
-        }
-        return failures;
+        // 7wa3d: confusion/caveats and extra keys are companion feedback, not failures.
+        const feedback = parsedAssistant
+          ? collectAnswerFeedback(parsedAssistant, {
+            requiredKeys: ['layerCount', 'northStarCount', 'settingKeyCount'],
+            commentaryKeys: ['confusion'],
+          })
+          : (isEmptyCommentary(confusion) ? [] : [{ kind: 'commentary', key: 'confusion', value: confusion }]);
+        return { failures, feedback };
       },
     },
     {
@@ -3081,15 +3098,27 @@ function buildCapabilityMatrixCase(ctx) {
   ) {
     return null;
   }
-  const executionPlan = buildCapabilityMatrixExecutionPlan({
-    tier: EXPECTED_CAPABILITY_TIER,
-    runToken: ctx.runToken,
-    discordTarget: optionalEnv('PSFN_MATRIX_DISCORD_TARGET'),
-    emailTarget: optionalEnv('PSFN_MATRIX_EMAIL_TARGET'),
-    dedicatedSinkConfirmation: optionalEnv('PSFN_MATRIX_EXTERNAL_SINKS_CONFIRMED'),
-    baseLayerId: ctx.promptBaseLayer?.id,
-    operatorLayerId: ctx.promptOperatorLayer?.id,
-  });
+  const sessionId = `capability-matrix-${EXPECTED_CAPABILITY_TIER}-${ctx.runToken}`;
+  let executionPlan;
+  try {
+    executionPlan = buildCapabilityMatrixExecutionPlan({
+      tier: EXPECTED_CAPABILITY_TIER,
+      runToken: ctx.runToken,
+      discordTarget: optionalEnv('PSFN_MATRIX_DISCORD_TARGET'),
+      emailTarget: optionalEnv('PSFN_MATRIX_EMAIL_TARGET'),
+      dedicatedSinkConfirmation: optionalEnv('PSFN_MATRIX_EXTERNAL_SINKS_CONFIRMED'),
+      baseLayerId: ctx.promptBaseLayer?.id,
+      operatorLayerId: ctx.promptOperatorLayer?.id,
+    });
+  } catch (error) {
+    // An unconfirmed dedicated-sink precondition degrades only this case.
+    return buildConfigurationHoleCase({
+      id: 'capability_refusal_matrix',
+      sessionId,
+      tier: EXPECTED_CAPABILITY_TIER,
+      feature: 'psfn-framework-65rk.6',
+    }, error);
+  }
   const suggestedTools = [...new Set(
     executionPlan.executions
       .map((execution) => execution.toolName)
@@ -3149,7 +3178,7 @@ function buildCapabilityMatrixCase(ctx) {
 
   return {
     id: 'capability_refusal_matrix',
-    sessionId: `capability-matrix-${EXPECTED_CAPABILITY_TIER}-${ctx.runToken}`,
+    sessionId,
     suggestTools: suggestedTools,
     actionSensitive: true,
     actionSuccessKeys: [],
@@ -3645,7 +3674,10 @@ async function runCase(testCase, ctx, signal) {
   });
   const forbiddenToolFailures = collectForbiddenToolFailures(toolNameVerdict.seenForbiddenToolNames);
   const restartCheckFailed = expectsLifecycleCycle && sideChecks?.apiRestart?.recovered === false;
-  const semanticValidationFailures = collectSemanticValidationFailures(
+  const {
+    failures: semanticValidationFailures,
+    feedback: companionFeedback,
+  } = collectSemanticValidationFailures(
     testCase,
     parsedAssistant,
     turnSummary,
@@ -3731,6 +3763,7 @@ async function runCase(testCase, ctx, signal) {
     sideChecks,
     dispatchDiagnostics: getCaseDiagnostics(testCase.id),
     parsedAssistant,
+    companionFeedback,
     semanticFailureMatches: allSemanticFailures,
     toolValidationErrors,
     sideEffectVerdict,
@@ -4097,6 +4130,7 @@ async function main() {
         : 'complete',
     selectedCaseIds,
     results,
+    companionFeedback: companionFeedbackDigest(results),
     postStats,
     toolCoverage: {
       activeToolNames,

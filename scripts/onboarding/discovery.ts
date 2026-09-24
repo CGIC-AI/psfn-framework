@@ -134,12 +134,14 @@ export function discoverModelSuggestions(seedDir: string): ModelSuggestion[] {
 /** Default role slugs from the seed, falling back to known-good values. */
 export function defaultModelSlugs(
   seedDir: string,
-): { primary: string; extraction: string; vision: string } {
+): { primary: string; extraction: string; vision: string; fallbackChat: string } {
   const suggestions = discoverModelSuggestions(seedDir);
   const primary = suggestions.find((s) => s.role === 'primary')?.slug ?? 'z-ai/glm-5';
   const extraction = suggestions.find((s) => s.role === 'extraction')?.slug ?? 'deepseek/deepseek-v3.2';
   const vision = suggestions.find((s) => s.role === 'vision')?.slug ?? 'google/gemini-3.1-flash';
-  return { primary, extraction, vision };
+  const fallbackChat = suggestions.find((s) => s.role === 'catalog' && s.slug !== primary)?.slug
+    ?? 'moonshotai/kimi-k2.5';
+  return { primary, extraction, vision, fallbackChat };
 }
 
 export interface VoiceProviderSurface {

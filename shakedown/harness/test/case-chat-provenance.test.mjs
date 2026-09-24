@@ -118,6 +118,15 @@ test('no case module reaches the bare, provenance-free chat header builder', () 
   );
 });
 
+test('the bootstrap first-conversation probe dispatches through the provenance builder (ttaxa)', () => {
+  const source = readFileSync(
+    fileURLToPath(new URL('../lib/bootstrap-services.mjs', import.meta.url)),
+    'utf8',
+  );
+  assert.ok(!source.includes('buildChatHeaders'), 'bootstrap-services must not build bare chat headers');
+  assert.ok(source.includes('createChatHeaderBuilder('), 'bootstrap-services must bind run provenance');
+});
+
 test('every case module that dispatches chat demands the provenance-bearing builder', () => {
   for (const path of caseSourceFiles()) {
     const source = readFileSync(path, 'utf8');

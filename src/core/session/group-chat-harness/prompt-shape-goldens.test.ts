@@ -44,6 +44,7 @@
  * Run `npm run test:prompt-goldens` twice before committing: the second run
  * must be green against the freshly written files (determinism proof).
  */
+import { createDmConversationScope } from '../conversation-scope.js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -417,6 +418,9 @@ describe('prompt-shape goldens (E2.7)', () => {
       'trusted',
       { isDirectMessage: true },
       ALICE.id,
+      undefined, undefined, undefined, undefined, undefined, undefined,
+      // bd9tx: room visibility derives only from the turn ConversationScope.
+      createDmConversationScope({ channelId: dmChannelId(ALICE), contact: { contactId: ALICE.id } }),
     );
     // The retrieved block must carry the in-scope sentinels before we freeze it.
     expect(memoriesBlock).toContain(MEMORY_SENTINELS.dmAlice);
@@ -489,6 +493,9 @@ describe('prompt-shape goldens (E2.7)', () => {
       'trusted',
       { isDirectMessage: true },
       ALICE.id,
+      undefined, undefined, undefined, undefined, undefined, undefined,
+      // bd9tx: room visibility derives only from the turn ConversationScope.
+      createDmConversationScope({ channelId: dmChannelId(ALICE), contact: { contactId: ALICE.id } }),
     );
     // Configurable presentation is visible; the structural id is preserved.
     expect(memoriesBlock).toContain('What I hold from our history with them:');

@@ -158,7 +158,14 @@ function retrieveMatrix(retriever: MemoryRetriever, options: MatrixRetrieveOptio
     undefined,
     undefined,
     undefined,
-    options.conversationScope,
+    // bd9tx: production turns always carry the ingress-resolved scope; rows
+    // that do not pin one get the same resolution rule turn ingress uses.
+    options.conversationScope ?? resolveConversationScopeFromMetadata({
+      channelId: options.channelId,
+      isDirectMessage: options.channelMeta?.isDirectMessage,
+      ...(options.canonicalContactId ? { contact: { contactId: options.canonicalContactId } } : {}),
+      ...(options.channelMeta ? { channelMeta: options.channelMeta } : {}),
+    }),
   );
 }
 

@@ -686,7 +686,6 @@ export class MemoryRetriever implements MemoryProvider {
       }
       roomVisibility = await this.resolveRoomVisibilityContext(
         request.channelId,
-        request.channelMeta,
         request.canonicalContactId,
         request.conversationScope,
       );
@@ -709,7 +708,7 @@ export class MemoryRetriever implements MemoryProvider {
         operatorApproval: visibilityScope === 'approved_private_context',
         roomVisibility: {
           currentChannelId: roomVisibility.currentChannelId.trim(),
-          currentIsDirectMessage: roomVisibility.currentIsDirectMessage ?? null,
+          roomKind: roomVisibility.conversationScope?.kind ?? null,
           canonicalContactRoomIds: [...(roomVisibility.canonicalContactRoomIds ?? [])]
             .map(roomId => roomId.trim())
             .filter(Boolean)
@@ -832,14 +831,12 @@ export class MemoryRetriever implements MemoryProvider {
 
   private async resolveRoomVisibilityContext(
     channelId: string,
-    channelMeta: ChannelMeta | undefined,
     canonicalContactId: string | undefined,
     conversationScope: ConversationScope | undefined,
   ): Promise<RetrievalRoomVisibilityContext> {
     return resolveRoomVisibilityContextWithDeps({
       contactStore: this.contactStore,
       channelId,
-      channelMeta,
       canonicalContactId,
       conversationScope,
     });
@@ -917,8 +914,8 @@ export class MemoryRetriever implements MemoryProvider {
         embeddingSearchAuthorization: this.embeddingSearchAuthorization(),
         resolveMemoryRetrievalPolicy: () => this.resolveMemoryRetrievalPolicy(),
         resolveRetrievalBudget: turn => this.resolveRetrievalBudget(turn),
-        resolveRoomVisibilityContext: (roomChannelId, roomChannelMeta, roomCanonicalContactId) => (
-          this.resolveRoomVisibilityContext(roomChannelId, roomChannelMeta, roomCanonicalContactId, undefined)
+        resolveRoomVisibilityContext: (roomChannelId, roomCanonicalContactId) => (
+          this.resolveRoomVisibilityContext(roomChannelId, roomCanonicalContactId, undefined)
         ),
         resolveRecentContactShapeAccess: (shape, options) => (
           this.resolveRecentContactShapeAccess(shape, options, productMemoryStore)
@@ -1013,7 +1010,6 @@ export class MemoryRetriever implements MemoryProvider {
     const roomVisibility = activeContextTarget?.roomVisibility
       ?? await this.resolveRoomVisibilityContext(
         channelId,
-        channelMeta,
         canonicalContactId,
         conversationScope,
       );

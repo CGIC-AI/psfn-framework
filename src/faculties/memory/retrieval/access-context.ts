@@ -31,46 +31,51 @@ export interface RecentContactShapeAccessResult {
   withheldSourceMemoryIds: string[];
 }
 
-function buildRoomVisibilityContext(
-  channelId: string,
-  channelMeta: ChannelMeta | undefined,
-  canonicalContact: Contact | undefined,
-  conversationScope: ConversationScope | undefined,
-): RetrievalRoomVisibilityContext {
-  const canonicalContactRoomIds = new Set<string>();
-  for (const conversation of canonicalContact?.conversationChannels ?? []) {
+function canonicalContactRooms(contact: Contact | undefined): Set<string> {
+  const roomIds = new Set<string>();
+  for (const conversation of contact?.conversationChannels ?? []) {
     const roomId = conversation.channelId.trim();
-    if (roomId.length > 0) canonicalContactRoomIds.add(roomId);
+    if (roomId.length > 0) roomIds.add(roomId);
   }
-
-  // The turn ConversationScope remains available as context (E1 epic), while
-  // room-visibility gating derives from channelMeta and the canonical contact.
-  return {
-    currentChannelId: channelId,
-    ...(channelMeta?.isDirectMessage !== undefined
-      ? { currentIsDirectMessage: channelMeta.isDirectMessage }
-      : {}),
-    ...(canonicalContactRoomIds.size > 0 ? { canonicalContactRoomIds } : {}),
-    ...(conversationScope ? { conversationScope } : {}),
-  };
+  return roomIds;
 }
 
+/**
+ * Room visibility for recall (psfn-framework-bd9tx). The turn ConversationScope
+ * is the sole room authority: the room id and kind come only from it, and loose
+ * channel metadata is never consulted. A DM scope's canonical contact must agree
+ * with the recall's canonical contact; an inconsistent scope throws. Without a
+ * scope the room kind is unknown, so DM-only allowances fail closed.
+ */
 export async function resolveRoomVisibilityContext(input: {
   contactStore: ContactStorePort | null;
   channelId: string;
-  channelMeta: ChannelMeta | undefined;
   canonicalContactId: string | undefined;
   conversationScope: ConversationScope | undefined;
 }): Promise<RetrievalRoomVisibilityContext> {
-  const canonicalContact = input.canonicalContactId && input.contactStore
-    ? await input.contactStore.getById(input.canonicalContactId)
-    : undefined;
-  return buildRoomVisibilityContext(
-    input.channelId,
-    input.channelMeta,
-    canonicalContact,
-    input.conversationScope,
-  );
+  const scope = input.conversationScope;
+  if (!scope) {
+    return { currentChannelId: input.channelId };
+  }
+  const scopeRoomId = scope.channelId.trim();
+  if (!scopeRoomId) {
+    throw new Error('Recall ConversationScope has no room id; refusing room-visibility gating');
+  }
+  if (scope.kind !== 'dm') {
+    return { currentChannelId: scopeRoomId, conversationScope: scope };
+  }
+  const scopeContactId = scope.contact.contactId.trim();
+  const recallContactId = input.canonicalContactId?.trim();
+  if (!scopeContactId || (recallContactId && recallContactId !== scopeContactId)) {
+    throw new Error('Recall canonical contact conflicts with the DM ConversationScope contact');
+  }
+  const contact = input.contactStore ? await input.contactStore.getById(scopeContactId) : undefined;
+  const roomIds = canonicalContactRooms(contact);
+  return {
+    currentChannelId: scopeRoomId,
+    ...(roomIds.size > 0 ? { canonicalContactRoomIds: roomIds } : {}),
+    conversationScope: scope,
+  };
 }
 
 export async function resolveRecentContactShapeAccess(input: {

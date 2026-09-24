@@ -45,15 +45,20 @@ const ROOM_CONTEXT_SCOPE_TAGS = new Set([
 ]);
 
 export interface RetrievalRoomVisibilityContext {
+  /** The current room id; equals `conversationScope.channelId` when a scope is present. */
   currentChannelId: string;
-  currentIsDirectMessage?: boolean;
   canonicalContactRoomIds?: ReadonlySet<string>;
   /**
-   * Turn ConversationScope, plumbed as an available input (E1 epic).
-   * It does not currently drive room-visibility gating; the explicit channel
-   * and canonical-contact fields above remain authoritative for that decision.
+   * The turn ConversationScope: the SOLE authority for the room kind
+   * (psfn-framework-bd9tx). Loose channel metadata never decides whether the
+   * current room is a DM. Absent, the room kind is unknown and every
+   * DM-only allowance fails closed.
    */
   conversationScope?: ConversationScope;
+}
+
+function isScopeDirectMessage(roomVisibility: RetrievalRoomVisibilityContext | undefined): boolean {
+  return roomVisibility?.conversationScope?.kind === 'dm';
 }
 
 interface RetrievalParticipantAccessContext {
@@ -143,7 +148,7 @@ function isPrimaryPrivateDmSubject(
   if (!(options.trustLevel === 'primary'
     && options.channelPrivacy === 'private'
     && options.broadcast === false
-    && options.roomVisibility?.currentIsDirectMessage === true
+    && isScopeDirectMessage(options.roomVisibility)
     && canonicalContactId !== undefined
     && (subjectContactId === undefined || subjectContactId === canonicalContactId)
     && hasOnlyCanonicalParticipantAttribution(memory, canonicalContactId))) {
@@ -153,7 +158,7 @@ function isPrimaryPrivateDmSubject(
   const source = resolveMemorySourceRoom(memory);
   if (source.inconsistent) return false;
   if (subjectContactId === canonicalContactId) return true;
-  if (source.roomId && options.roomVisibility.canonicalContactRoomIds?.has(source.roomId)) {
+  if (source.roomId && options.roomVisibility?.canonicalContactRoomIds?.has(source.roomId)) {
     return true;
   }
 
@@ -176,9 +181,7 @@ function violatesHighIntimacyContactScope(
 
 function requiresRoomProofWhenSourceMissing(
   memory: Pick<PurrMemory, 'scopeRef' | 'scopeTags'>,
-  roomVisibility: RetrievalRoomVisibilityContext,
 ): boolean {
-  if (roomVisibility.currentIsDirectMessage === undefined) return false;
   return memory.scopeRef?.kind === 'conversation'
     || hasRoomContextScopeTag(memory);
 }
@@ -201,7 +204,7 @@ function evaluateRoomVisibilityDecision(
   }
   if (isPrimaryPrivateDmSubject(memory, options)) return undefined;
   if (!source.roomId) {
-    if (requiresRoomProofWhenSourceMissing(memory, roomVisibility)) {
+    if (requiresRoomProofWhenSourceMissing(memory)) {
       return {
         allowed: false,
         rejectionKind: 'room_visibility',
@@ -212,7 +215,7 @@ function evaluateRoomVisibilityDecision(
   }
   if (source.roomId === currentRoomId) return undefined;
 
-  if (roomVisibility.currentIsDirectMessage === true) {
+  if (isScopeDirectMessage(roomVisibility)) {
     if (roomVisibility.canonicalContactRoomIds?.has(source.roomId)) {
       return undefined;
     }

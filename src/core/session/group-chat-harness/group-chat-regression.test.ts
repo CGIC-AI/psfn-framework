@@ -23,6 +23,7 @@ import { injectPromptRuntimeTokens, renderPromptRuntimeTokens } from '../../iden
 import { hydrateStartupActiveCoreMemoryBlocks } from '../../../faculties/core-memory/startup-hydration.js';
 import type { ContactStorePort } from '../../contacts/contact-store-port.js';
 import {
+  createDmConversationScope,
   peerCompanionMayBindAsCanonicalContact,
   resolveConversationScopeFromMetadata,
 } from '../conversation-scope.js';
@@ -501,6 +502,9 @@ describe('group-chat regression harness', () => {
         'trusted',
         { isDirectMessage: true },
         DANA.id,
+        undefined, undefined, undefined, undefined, undefined, undefined,
+        // bd9tx: room visibility derives only from the turn ConversationScope.
+        createDmConversationScope({ channelId: dmChannelId(DANA), contact: { contactId: DANA.id } }),
       );
       expectNoMemoryFrom(output, GROUP_ROOM_ID, [MEMORY_SENTINELS.roomTownsquare]);
       expectNoMemoryFrom(output, OTHER_ROOM_ID, [MEMORY_SENTINELS.roomBackchannel]);
@@ -514,6 +518,9 @@ describe('group-chat regression harness', () => {
         'trusted',
         { isDirectMessage: true },
         ALICE.id,
+        undefined, undefined, undefined, undefined, undefined, undefined,
+        // bd9tx: room visibility derives only from the turn ConversationScope.
+        createDmConversationScope({ channelId: dmChannelId(ALICE), contact: { contactId: ALICE.id } }),
       );
       expectMemoryPresent(output, [MEMORY_SENTINELS.roomTownsquare]);
       expectNoMemoryFrom(output, OTHER_ROOM_ID, [MEMORY_SENTINELS.roomBackchannel]);

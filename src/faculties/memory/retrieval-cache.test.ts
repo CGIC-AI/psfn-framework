@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { createDmConversationScope } from '../../core/session/conversation-scope.js';
 import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import type { MemoryStorePort } from './memory-store-port.js';
 import { MemoryRetriever } from './retrieval.js';
@@ -252,6 +253,7 @@ describe('active-memory refresh cache', () => {
       trustLevel: 'regular' as const,
       channelMeta: { isDirectMessage: true },
       canonicalContactId: 'contact-a',
+      conversationScope: createDmConversationScope({ channelId: 'api:dm-a', contact: { contactId: 'contact-a' } }),
     };
 
     const visible = await retriever.refreshActiveMemoryContext(request);

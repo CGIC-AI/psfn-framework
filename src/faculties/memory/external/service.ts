@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { createDmConversationScope } from '../../../core/session/conversation-scope.js';
 import { v7 as uuidv7 } from 'uuid';
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import type { Contact } from '../../../core/contacts/types.js';
@@ -128,9 +129,13 @@ export class ExternalMemoryService {
       }
       if (request.operation === 'context') {
         if (!this.options.memoryProvider) throw new Error('Memory retrieval is unavailable');
+        // bd9tx: the authenticated one-to-one binding is the DM scope; room
+        // visibility derives only from this ConversationScope.
         const recalled = await this.options.memoryProvider.retrieve(
           request.query, channelId, contact.trustLevel,
           { isDirectMessage: true }, contact.id,
+          undefined, undefined, undefined, undefined, undefined, undefined,
+          createDmConversationScope({ channelId, contact: { contactId: contact.id } }),
         );
         const goals = contact.trustLevel === 'primary' ? this.options.goals() : '';
         return { context: [goals, recalled].filter(Boolean).join('\n\n') };

@@ -204,7 +204,16 @@ describe('external companion memory service', () => {
     }));
     await expect(h.service.execute({ binding, request: { operation: 'get', sessionId: 'session', id: 'unknown' } })).resolves.toEqual({ memory: null });
     await expect(h.service.execute({ binding, request: { operation: 'context', sessionId: 'session', query: 'garden' } })).resolves.toEqual({ context: 'Finish the garden project\n\nRecalled context' });
-    expect(h.retrieve).toHaveBeenCalledWith('garden', externalMemorySessionId(binding, 'session'), 'primary', { isDirectMessage: true }, binding.contactId);
+    expect(h.retrieve).toHaveBeenCalledWith(
+      'garden', externalMemorySessionId(binding, 'session'), 'primary', { isDirectMessage: true }, binding.contactId,
+      undefined, undefined, undefined, undefined, undefined, undefined,
+      // bd9tx: the authenticated binding supplies its DM ConversationScope.
+      expect.objectContaining({
+        kind: 'dm',
+        channelId: externalMemorySessionId(binding, 'session'),
+        contact: { contactId: binding.contactId },
+      }),
+    );
   });
 
   it('screens explicit memories and supplies external provenance to the existing writer', async () => {

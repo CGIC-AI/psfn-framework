@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createDmConversationScope, createGroupConversationScope } from '../../../core/session/conversation-scope.js';
 import type { PurrMemory, RetrievalAccessScope } from '../types.js';
 import { memoryMatchesScopeQuery } from '../types.js';
 import { InMemoryMemoryStore } from '../../../test-support/in-memory-memory-store.js';
@@ -168,7 +169,7 @@ describe('channel-deletion memory reachability (adjudication S11/R10.2)', () => 
             // Current surface is not (and can never again be) the deleted room.
             roomVisibility: {
               currentChannelId: 'internal:free-time:studio',
-              currentIsDirectMessage: false,
+              conversationScope: createGroupConversationScope({ channelId: 'internal:free-time:studio' }),
             },
           },
         );
@@ -190,7 +191,7 @@ describe('channel-deletion memory reachability (adjudication S11/R10.2)', () => 
           canonicalContactId: PRIMARY_CONTACT_ID,
           roomVisibility: {
             currentChannelId: PRIMARY_DM_ID,
-            currentIsDirectMessage: true,
+            conversationScope: createDmConversationScope({ channelId: PRIMARY_DM_ID, contact: { contactId: PRIMARY_CONTACT_ID } }),
             canonicalContactRoomIds: new Set([PRIMARY_DM_ID]),
           },
         },
@@ -220,7 +221,7 @@ describe('channel-deletion memory reachability (adjudication S11/R10.2)', () => 
           canonicalContactId: PRIMARY_CONTACT_ID,
           roomVisibility: {
             currentChannelId: 'discord:guild:current-room',
-            currentIsDirectMessage: false,
+            conversationScope: createGroupConversationScope({ channelId: 'discord:guild:current-room' }),
           },
         },
       );

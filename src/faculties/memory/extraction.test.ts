@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createDmConversationScope } from '../../core/session/conversation-scope.js';
 import { fromAny, fromPartial } from '@total-typescript/shoehorn';
 import { MemoryExtractor, parseFactsXml, __test as extractionTestUtils } from './extraction.js';
 import { __test as tokenTestUtils } from '../../primitives/llm/tokens.js';
@@ -1610,6 +1611,8 @@ describe('MemoryExtractor experiential self-memory extraction', () => {
       'primary',
       { isDirectMessage: true, privacyLevel: 'private' },
       'contact-primary',
+      undefined, undefined, undefined, undefined, undefined, undefined,
+      createDmConversationScope({ channelId: 'api:primary-reflection-recall', contact: { contactId: 'contact-primary' } }),
     );
 
     expect(recalled).toContain(finalReflectionText);

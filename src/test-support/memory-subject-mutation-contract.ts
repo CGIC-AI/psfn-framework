@@ -123,6 +123,61 @@ export function describeMemorySubjectMutationContract(
       });
     }, timeoutMs);
 
+    it('rejects a write whose new row the writer cannot read back, and keeps legitimate writes', async () => {
+      await withStore(async (store) => {
+        const port = store as unknown as MemoryStorePort;
+        const currentState = { tags: ['current_state', 'workspace'] };
+        await store.insertMemory(memory('a-old', 'contact-a', {
+          ...currentState,
+          text: 'Current workspace is /home/a/old.',
+        }), CONTRACT_EMBEDDING);
+
+        // contact-a's authorization cannot read a contact-b row: the whole
+        // write fails closed, including the supersede of contact-a's own row.
+        await expect(store.persistAuthorizedMemoryWrite({
+          authorization: authorization(),
+          memory: memory('foreign-new', 'contact-b', { ...currentState, text: 'Current workspace is /home/b/new.' }),
+          embedding: CONTRACT_EMBEDDING,
+          supersededMemoryIds: ['a-old'],
+        })).rejects.toThrow('Memory subject authorization denied');
+        expect(await store.getById('foreign-new')).toBeUndefined();
+        expect((await store.getById('a-old'))?.supersededBy).toBeUndefined();
+        // A companion-internal writer cannot persist a contact row either.
+        await expect(store.persistAuthorizedMemoryWrite({
+          authorization: authorization('bulk_mutation', {
+            viewerContactIds: ['companion:internal'],
+            allowedSubjectClasses: ['companion_private'],
+            allowedViewerRelations: ['none'],
+          }),
+          memory: memory('internal-contact-row', 'contact-a'),
+          embedding: CONTRACT_EMBEDDING,
+        })).rejects.toThrow('Memory subject authorization denied');
+        expect(await store.getById('internal-contact-row')).toBeUndefined();
+
+        // Legitimate contact and companion-internal writes still land and
+        // stay readable by their writer.
+        const contactWriter = createSubjectAuthorizedMemoryStore(port, { viewerContactId: 'contact-a' });
+        const internalWriter = createSubjectAuthorizedMemoryStore(port, { companionInternal: true });
+        await contactWriter.persistMemoryWrite({
+          memory: memory('a-new', 'contact-a', { ...currentState, text: 'Current workspace is /home/a/new.' }),
+          embedding: CONTRACT_EMBEDDING,
+          supersededMemoryIds: ['a-old'],
+        });
+        await internalWriter.persistMemoryWrite({
+          memory: memory('internal-new', 'contact-a', { text: 'Free-time note: the sketch folder is tidy.' }),
+          embedding: CONTRACT_EMBEDDING,
+        });
+        expect((await store.getById('a-old'))?.supersededBy).toBe('a-new');
+        for (const [writer, memoryId] of [[contactWriter, 'a-new'], [internalWriter, 'internal-new']] as const) {
+          const detail = await writer.queryAuthorizedMemorySubjects({
+            authorization: authorization('detail'),
+            selector: { kind: 'detail', memoryId },
+          });
+          expect(detail.total).toBe(1);
+        }
+      });
+    }, timeoutMs);
+
     it('proves a superseded row only through its exact superseding memory', async () => {
       await withStore(async (store) => {
         const currentState = { tags: ['current_state', 'workspace'] };

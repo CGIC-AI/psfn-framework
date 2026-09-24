@@ -1512,6 +1512,11 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
         await this.updateMemory(memoryId, { supersededBy: input.memory.id });
       }
       await this.insertMemory(input.memory, input.embedding);
+      // The writer must be able to read back the row it persists. The SQL
+      // predicate runs against the new row's persisted subject projection in
+      // this transaction; a denial throws and rolls back the whole write,
+      // including the superseded-row updates above.
+      await this.lockAuthorizedActiveMemoryRows(authorization, [input.memory.id]);
     };
     if (this.transactionContext.getStore()) {
       await commit();

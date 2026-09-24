@@ -10,9 +10,9 @@
 // and the fleet-auth credential env vars it references exported):
 //
 //   SYSTEM_DATA_DIR=<system-data> \
-//   POSTGRES_ADMIN_DATABASE_URL=postgresql://postgres:<pw>@127.0.0.1:<port>/psfn \
+//   POSTGRES_ADMIN_DATABASE_URL=postgresql://postgres:<pw>@127.0.0.1:<port>/<database> \
 //   PSFN_FLEET_AUTH_DATABASE_CONNECTION_LIMIT=20 \
-//   node scripts/ops/psfn-fleet-auth-bootstrap.mjs [--check]
+//   node scripts/ops/fleet-auth-bootstrap.mjs [--check]
 //
 // --check validates the owner files and environment and prints the plan
 // without touching PostgreSQL or the filesystem.

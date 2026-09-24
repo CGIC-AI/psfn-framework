@@ -91,7 +91,7 @@ function openCompanionPool(config: SubstrateConfig): Pool {
   const tenant = resolveConfigTenantPoolScope(config);
   const schema = tenant?.schema ?? (config.postgresSchema?.trim() || undefined);
   return createPostgresPool(databaseUrl, {
-    applicationName: 'psfn-background-work-maintenance',
+    applicationName: 'background-work-maintenance',
     allowExitOnIdle: true,
     max: 1,
     ...(schema ? { schema } : {}),

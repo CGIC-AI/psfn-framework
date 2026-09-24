@@ -254,7 +254,7 @@ async function withClient(connectionString, applicationName, run) {
 
 /** Apply the database half of a validated plan. Idempotent. */
 export async function provisionFleetAuthDatabase(plan) {
-  const applicationName = 'psfn-fleet-auth-bootstrap';
+  const applicationName = 'fleet-auth-bootstrap';
   await withClient(plan.adminUrl, applicationName, async (client) => {
     await client.query('BEGIN');
     try {

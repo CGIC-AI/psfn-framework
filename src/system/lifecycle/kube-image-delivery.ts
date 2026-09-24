@@ -26,7 +26,7 @@ export type KubeImageDelivery =
     registryHost: string;
     /** Loopback base URL for the registry HTTP API (IPv4, never `localhost`). */
     registryApiBaseUrl: string;
-    /** Repository path inside the registry, e.g. `psfn-framework`. */
+    /** Repository path inside the registry, e.g. `<image-name>`. */
     repository: string;
     tag: string;
   }

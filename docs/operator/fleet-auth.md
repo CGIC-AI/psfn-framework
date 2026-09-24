@@ -689,7 +689,7 @@ Helm provisions the fleet-auth database contract for you. On the
 repository-native (`npm run local:*`) and Compose paths, onboarding provisions
 only the companion runtime and shared migration roles, and dropping a valid
 `fleet-auth.json` into `SYSTEM_DATA_DIR` then fails gateway startup one
-missing piece at a time. `scripts/ops/psfn-fleet-auth-bootstrap.mjs` provisions
+missing piece at a time. `scripts/ops/fleet-auth-bootstrap.mjs` provisions
 the whole contract in one idempotent run, deriving every role name from
 `fleet-auth.json` (`databaseRoles`, `welfareVerifier`) and `companions.json`
 (each `postgresRole`, `postgres.sharedMigrationRole`), and every password from
@@ -700,7 +700,7 @@ the `FLEET_AUTH_*_DATABASE_URL` environment variables those files reference:
 SYSTEM_DATA_DIR=<system-data> \
 POSTGRES_ADMIN_DATABASE_URL=postgresql://postgres:<superuser-pw>@127.0.0.1:<port>/psfn \
 PSFN_FLEET_AUTH_DATABASE_CONNECTION_LIMIT=20 \
-  node scripts/ops/psfn-fleet-auth-bootstrap.mjs --check   # validate and print the SQL only
+  node scripts/ops/fleet-auth-bootstrap.mjs --check   # validate and print the SQL only
 # then the same command without --check, then restart the gateway
 ```
 

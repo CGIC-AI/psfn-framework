@@ -110,7 +110,7 @@ export async function runFleetAuthGrantTeardown(input: {
   const reports: FormerFleetAuthGrantTeardownReport[] = [];
   for (const target of input.targets) {
     const pool = createPostgresPool(target.ownerDatabaseUrl, {
-      applicationName: 'psfn-fleet-auth-grant-teardown',
+      applicationName: 'fleet-auth-grant-teardown',
       max: 1,
     });
     try {

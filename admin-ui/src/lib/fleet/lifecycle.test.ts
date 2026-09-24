@@ -4,10 +4,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   FleetLifecycleRequestError,
   applyFleetLifecyclePlan,
+  fetchFleetLifecycleListing,
   parseFleetLifecycleListing,
   parseFleetLifecycleProgress,
   requestFleetLifecyclePlan,
 } from './lifecycle';
+import { createCompanionId } from '../../../../src/shared/routing/companion-id.js';
+import { compileGatewayGardenRequestTarget } from '../../../../src/boundary/fleet-auth/request-capability-target.js';
 
 const NOVA = '33333333-3333-4333-8333-333333333333';
 const PLAN_ID = '44444444-4444-4444-8444-444444444444';
@@ -81,5 +84,34 @@ describe('Fleet lifecycle client contract', () => {
     expect(component).toContain("confirmation.trim() !== reviewed.companionId");
     const page = readFileSync(new URL('../../routes/fleet/+page.svelte', import.meta.url), 'utf8');
     expect(page).toContain('<FleetLifecycle {projection} />');
+  });
+
+  it('stays outside the Garden capability catalogue so no capability can be minted for it', () => {
+    const companionId = createCompanionId('11111111-1111-4111-8111-111111111111');
+    for (const [method, rawTarget, body] of [
+      ['GET', '/v1/fleet/lifecycle/plans', ''],
+      ['POST', '/v1/fleet/lifecycle/plans', '{}'],
+      ['POST', `/v1/fleet/lifecycle/plans/${PLAN_ID}/apply`, '{}'],
+    ] as const) {
+      expect(() => compileGatewayGardenRequestTarget({
+        rawTarget,
+        method,
+        companionId,
+        body: new TextEncoder().encode(body),
+        ...(body ? { headers: { 'content-type': 'application/json' } } : {}),
+      }), `${method} ${rawTarget}`).toThrow();
+    }
+  });
+
+  it('sends literal same-origin requests and redirects an expired operator session', async () => {
+    const location = { assign: vi.fn() };
+    vi.stubGlobal('window', { location });
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 401 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(fetchFleetLifecycleListing()).rejects.toMatchObject({ code: 'unauthorized' });
+    expect(location.assign).toHaveBeenCalledWith('/fleet/login');
+    expect(fetchMock).toHaveBeenCalledWith('/v1/fleet/lifecycle/plans', expect.objectContaining({
+      method: 'GET', cache: 'no-store', credentials: 'include',
+    }));
   });
 });

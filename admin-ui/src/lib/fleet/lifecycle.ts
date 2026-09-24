@@ -156,13 +156,21 @@ export function parseFleetLifecycleListing(value: unknown): FleetLifecycleListin
   return { applyMode: value.applyMode, plans: value.plans.map(parseFleetLifecycleProgress) };
 }
 
-async function send(path: string, init: RequestInit): Promise<unknown> {
-  const response = await fetch(path, {
-    ...init,
-    cache: 'no-store',
-    credentials: 'include',
-    headers: { Accept: 'application/json', ...(init.body ? { 'Content-Type': 'application/json' } : {}) },
-  });
+/**
+ * Read a gateway lifecycle response. These are gateway-owned, operator-only
+ * routes served at the unified origin before any companion Garden route: they
+ * are not companion-scoped Garden data paths, so they cannot ride `apiFetch`
+ * (which scopes every path to a companion Garden and refuses on /fleet), and
+ * they are deliberately absent from the Garden route-capability catalogue so
+ * no request capability can ever be minted for them. Each call site below
+ * therefore uses a literal path and a literal init, like the other
+ * `/v1/fleet*` gateway ceremonies.
+ */
+async function readLifecycleResponse(response: Response): Promise<unknown> {
+  if (response.status === 401) {
+    if (typeof window !== 'undefined') window.location.assign('/fleet/login');
+    throw new FleetLifecycleRequestError('unauthorized');
+  }
   const body: unknown = await response.json().catch(() => undefined);
   if (!response.ok) {
     const error = isRecord(body) && isRecord(body.error) ? body.error : undefined;
@@ -176,13 +184,27 @@ async function send(path: string, init: RequestInit): Promise<unknown> {
 }
 
 export async function fetchFleetLifecycleListing(signal?: AbortSignal): Promise<FleetLifecycleListing> {
-  return parseFleetLifecycleListing(await send(LIFECYCLE_PATH, { method: 'GET', ...(signal ? { signal } : {}) }));
+  const response = await fetch(LIFECYCLE_PATH, {
+    method: 'GET',
+    cache: 'no-store',
+    credentials: 'include',
+    headers: { Accept: 'application/json' },
+    ...(signal ? { signal } : {}),
+  });
+  return parseFleetLifecycleListing(await readLifecycleResponse(response));
 }
 
 export async function requestFleetLifecyclePlan(request: unknown): Promise<FleetLifecyclePlan> {
   // Validate locally with the shared parser before anything leaves the page.
   const parsed = parseFleetLifecycleRequest(request);
-  return parseFleetLifecyclePlan(await send(LIFECYCLE_PATH, { method: 'POST', body: JSON.stringify(parsed) }));
+  const response = await fetch(LIFECYCLE_PATH, {
+    method: 'POST',
+    cache: 'no-store',
+    credentials: 'include',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify(parsed),
+  });
+  return parseFleetLifecyclePlan(await readLifecycleResponse(response));
 }
 
 export async function applyFleetLifecyclePlan(input: {
@@ -190,14 +212,18 @@ export async function applyFleetLifecyclePlan(input: {
   confirmCompanionId: string;
   resume: boolean;
 }): Promise<FleetLifecycleProgress> {
-  return parseFleetLifecycleProgress(await send(`${LIFECYCLE_PATH}/${input.plan.planId}/apply`, {
+  const response = await fetch(`${LIFECYCLE_PATH}/${encodeURIComponent(input.plan.planId)}/apply`, {
     method: 'POST',
+    cache: 'no-store',
+    credentials: 'include',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
     body: JSON.stringify({
       planDigest: input.plan.digest,
       resume: input.resume,
       confirmCompanionId: input.confirmCompanionId,
     }),
-  }));
+  });
+  return parseFleetLifecycleProgress(await readLifecycleResponse(response));
 }
 
 export const FLEET_LIFECYCLE_STAGE_LABELS: Readonly<Record<FleetLifecycleStageId, string>> = {

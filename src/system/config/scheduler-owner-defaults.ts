@@ -27,6 +27,7 @@ import { DEFAULT_BACKGROUND_MAINTENANCE_CONFIG } from './scheduler-config/mainte
 import { DEFAULT_HEALTH_DETECTORS_CONFIG } from './scheduler-config/health-detectors.js';
 import { DEFAULT_HUMAN_ESCALATION_CONFIG } from './scheduler-config/human-escalation.js';
 import { DEFAULT_FLEET_STAGGER_CONFIG } from './scheduler-config/fleet-stagger.js';
+import { DEFAULT_EPISODE_SYNTHESIS_CADENCE } from './scheduler-config/memory-cadence.js';
 import { DEFAULT_INTENTION_FOLLOW_UP_SCHEDULER_CONFIG } from './scheduler-config/intention-follow-up.js';
 import { DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG } from './icp-autonomy-scheduler-config.js';
 import {
@@ -233,6 +234,35 @@ function addMissingRoomSignal(
 }
 
 /**
+ * An owner file written before the low-cadence daytime episode drain has an
+ * `episodeSynthesis` block with no `daytimeSlots`/`timezone`. Seed the canonical
+ * cadence for whichever is absent and leave every value the operator set.
+ */
+function addMissingEpisodeSynthesisCadence(
+  candidate: Record<string, unknown>,
+  addedPaths: string[],
+): void {
+  const episodeSynthesis = candidate.episodeSynthesis;
+  // A non-object is operator corruption; validation rejects it with the reason.
+  if (!isRecord(episodeSynthesis)) return;
+  const seeded: Record<string, unknown> = { ...episodeSynthesis };
+  let changed = false;
+  if (seeded.daytimeSlots === undefined) {
+    seeded.daytimeSlots = [...DEFAULT_EPISODE_SYNTHESIS_CADENCE.daytimeSlots];
+    addedPaths.push('episodeSynthesis.daytimeSlots');
+    changed = true;
+  }
+  if (seeded.timezone === undefined) {
+    seeded.timezone = DEFAULT_EPISODE_SYNTHESIS_CADENCE.timezone;
+    addedPaths.push('episodeSynthesis.timezone');
+    changed = true;
+  }
+  if (changed) {
+    candidate.episodeSynthesis = seeded;
+  }
+}
+
+/**
  * The blocks seeded on EVERY scheduler owner shape, legacy cadence included.
  * Mutates `candidate` in place and returns the paths it added.
  */
@@ -248,6 +278,7 @@ export function seedMissingSchedulerOwnerBlocks(
   addMissingHumanEscalation(candidate, addedPaths);
   addMissingRoomSignal(candidate, addedPaths);
   addMissingFleetStagger(candidate, addedPaths);
+  addMissingEpisodeSynthesisCadence(candidate, addedPaths);
   return addedPaths;
 }
 

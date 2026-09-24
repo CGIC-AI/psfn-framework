@@ -13427,6 +13427,13 @@
       "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 domain split; seed/default literal preserved, not an operator-tunable policy constant."
     },
     {
+      "file": "src/system/config/scheduler-config/memory-cadence.ts",
+      "name": "DEFAULT_EPISODE_SYNTHESIS_CADENCE",
+      "value": "{ daytimeSlots: ['09:00', '12:00', '15:00', '18:00'], timezone: 'local', }",
+      "form": "object",
+      "note": "Canonical scheduler.json owner-file default for episodeSynthesis.daytimeSlots/timezone (mirrors config/scheduler.seed.json); operators tune the cadence in scheduler.json, the owner migration and load-time adaptation seed this exact value only into files written before the keys existed, and the synthesis lane reads the loaded owner value rather than this literal."
+    },
+    {
       "file": "src/system/config/scheduler-config/sleep-memory.ts",
       "name": "DEFAULT_ORIENTATION_REWRITE_GATE.minNewEntriesSinceRewrite",
       "value": "4",
@@ -14290,6 +14297,13 @@
       "value": "4",
       "form": "object-member",
       "note": "Canonical owner-file/schema metadata DEFAULT_WIKI_STARTUP_HYDRATION_SETTINGS.recentSessionLimit; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
+    },
+    {
+      "file": "src/system/settings/required-blocks-owner-migration.ts",
+      "name": "migrateLegacyEmosimProactivityBlock.candidate.emosimProactivity.thresholdProfile",
+      "value": "{ ...structuredClone(defaultBlock.thresholdProfile), ...structuredClone(legacy.thresholdProfile), revision: 'legacy-owner-upgrade.v1', reviewNote: 'One-way upgrade of the legacy EmoSim proactivity owner block.', }",
+      "form": "object-member",
+      "note": "One-way owner-file upgrade provenance: the revision/reviewNote strings label a settings.json emosimProactivity block rewritten from the retired {enabled, thresholdProfile} shape; every threshold value comes from the operator's legacy block or the canonical seed defaults, so no tuning literal lives here."
     },
     {
       "file": "src/system/settings/schema-model-registry.ts",

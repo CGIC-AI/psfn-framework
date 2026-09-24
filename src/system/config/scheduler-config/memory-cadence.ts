@@ -144,6 +144,17 @@ export function validateNearTurnMemoryConfig(
   };
 }
 
+/**
+ * Canonical daytime cadence seeded into an episodeSynthesis owner block written
+ * before `daytimeSlots`/`timezone` existed. Mirrors config/scheduler.seed.json.
+ */
+export const DEFAULT_EPISODE_SYNTHESIS_CADENCE: Readonly<
+  Pick<EpisodeSynthesisLaneConfig, 'daytimeSlots' | 'timezone'>
+> = {
+  daytimeSlots: ['09:00', '12:00', '15:00', '18:00'],
+  timezone: 'local',
+};
+
 export function validateEpisodeSynthesisConfig(
   raw: unknown,
   sourcePath: string,

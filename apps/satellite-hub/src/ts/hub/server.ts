@@ -66,6 +66,7 @@ import {
   canSendTouchInteractions,
   canUseApprovals,
   DEFAULT_REALTIME_CAPABILITIES,
+  ceilUnregisteredCapabilities,
   EmbodiedSessionRegistry,
   normalizeCapabilities,
   type SatelliteAttachmentOwnership,
@@ -488,6 +489,9 @@ class RealtimeConnection {
     });
 
     console.log("Realtime client connected");
+    // Without a device registry the pre-hello session.ready is provisional:
+    // it advertises the presentation-only defaults under connection-minted
+    // ids. hello.ack carries the authoritative accepted attachment.
     if (!this.deviceRegistry) await this.sendSessionReady();
   }
 
@@ -590,7 +594,7 @@ class RealtimeConnection {
           this.sessionId = message.sessionId?.trim() || `realtime:${this.deviceId}`;
           this.satelliteId = message.satelliteId?.trim() || this.deviceId;
           this.satelliteName = message.satelliteName?.trim() || this.deviceName;
-          this.attachSatellite(message.channelId, message.capabilities);
+          this.attachSatellite(message.channelId, ceilUnregisteredCapabilities(message.capabilities));
         }
         this.sessions.touch(this.sessionId);
         console.log(`hello device=${this.deviceId} session=${this.sessionId}`);

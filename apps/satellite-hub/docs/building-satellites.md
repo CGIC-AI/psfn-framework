@@ -422,7 +422,7 @@ Handle these hub messages:
 
 | Message | Meaning |
 | --- | --- |
-| `session.ready` | Initial server-side default session before `hello` |
+| `session.ready` | Provisional default session before `hello` (registry-less Hub only); `hello.ack` is authoritative |
 | `hello.ack` | Satellite attachment accepted and normalized |
 | `message` with `role: "user"` | Final or live user transcript echoed by the hub |
 | `message` with `role: "assistant"` and `live: true` | Assistant text delta |

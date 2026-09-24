@@ -543,6 +543,41 @@ describe('wirePostTurnActionRuntime', () => {
     ]);
   });
 
+  it('records a cross-kind collision on the emit path as a Garden-visible failure and keeps sibling actions (ritxj)', async () => {
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+    const runtime = wirePostTurnActionRuntime({
+      eventBus,
+      scheduler,
+      agentLoop: { waitForIdle: vi.fn().mockResolvedValue(undefined) },
+    });
+    runtime.enqueue(makeAction({
+      id: 'reflection-action',
+      kind: 'heartbeat.run_template',
+      dedupeKey: 'colliding-key',
+    }));
+
+    await eventBus.emit('agent.post_turn.actions.inferred', {
+      message: makeMessage(),
+      response: makeResponse(),
+      actions: [
+        makeAction({ id: 'synthesis-action', kind: 'memory.episode-synthesis.run', dedupeKey: 'colliding-key' }),
+        makeAction({ id: 'sibling-action', kind: 'heartbeat.run_template', dedupeKey: 'sibling-key' }),
+      ],
+    });
+
+    const status = runtime.getStatus();
+    expect(status.failures.recentFailures).toContainEqual(expect.objectContaining({
+      actionId: 'synthesis-action',
+      reason: 'dedupe_key_collision',
+      error: expect.stringMatching(/dedupe key collision/i),
+    }));
+    expect(runtime.listQueued().map(entry => entry.actionId).sort()).toEqual(['reflection-action', 'sibling-action']);
+  });
+
   it('waits for foreground handlers to reach agent idle before executing', async () => {
     const eventBus = new EventBus();
     const scheduler = new Scheduler(eventBus, {

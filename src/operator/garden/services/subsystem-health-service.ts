@@ -893,7 +893,10 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
       label: 'Deferred action queue',
       description: 'Durable defer-until-idle demand, coalescing, retries, rejects, and progress.',
       source: 'post_turn_queue',
-      sinceProcessStart: false,
+      // ritxj: dropped/failed/completed/permanent-reject counters are
+      // process-lifetime and coalescedCount is rebuilt only from still-queued
+      // entries, so these counts describe this process, not durable history.
+      sinceProcessStart: true,
       status,
       lastEventAt: queueStatus.progress.lastProgressAt
         ?? queueStatus.progress.noProgressSince

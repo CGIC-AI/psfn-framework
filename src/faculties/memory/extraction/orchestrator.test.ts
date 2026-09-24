@@ -383,16 +383,30 @@ describe('runExtractionOrchestration durable children', () => {
     );
   });
 
-  it('leaves a preempted run resumable instead of terminalizing it', async () => {
+  it('adopts the job-owned run and leaves it resumable when preempted (8fbwe)', async () => {
     const registry = await createAutomataRunRegistry();
     const automataBusWorkerAccess = createAutomataBusAccess(registry);
     const recorded: RecordedTerminal[] = [];
     const automataTerminalLifecycle = createTerminalLifecycle({ recorded });
     const preempted = new Error('model call preempted');
     preempted.name = 'ModelCallPreemptedError';
+    // The background-work lifecycle opened (and owns) the job's run.
+    await registry.register({
+      runId: 'request-job-owned',
+      automatonClass: 'memory.extraction',
+      workerId: 'background-work:job-1',
+      taskId: 'api:test',
+      taskLabel: 'Memory extraction',
+      taskSummary: 'Extract durable memory from a canonical source turn',
+      sessionIds: ['api:test'],
+      createdAtMs: 100,
+    });
+    await registry.transition('request-job-owned', { status: 'running', reason: 'background_work_claimed' });
 
+    // The snapshot carries no turn request id: extraction must not mint its own run.
     await expect(runExtractionOrchestration(buildOptions({
       turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7005',
+      automataOwnerRunId: 'request-job-owned',
       llmClient: {
         complete: vi.fn().mockRejectedValue(preempted),
       } as ExtractionRunOptions['llmClient'],
@@ -401,13 +415,73 @@ describe('runExtractionOrchestration durable children', () => {
       automataTerminalLifecycle,
     }))).rejects.toThrow('model call preempted');
 
-    // A retryable control signal defers the run; it never terminalizes it, so
-    // the same run can be executed again without a duplicate terminal event.
-    expect(registry.getRun(
-      '018f22a2-52b8-7a3a-8c16-25b7b14f7005:memory-extraction',
-    )).toMatchObject({ status: 'running' });
+    // A retryable control signal defers the job's run; the job's redelivery
+    // re-enters it and its lifecycle terminalizes it.
+    expect(registry.getRun('request-job-owned')).toMatchObject({ status: 'running' });
+    expect(registry.findByTask('api:test')).toHaveLength(1);
     expect(recorded).toEqual([]);
     expect(automataTerminalLifecycle.recordTerminalHandoff).not.toHaveBeenCalled();
+  });
+
+  it('opens exactly one run for a job-owned extraction and completes it (8fbwe)', async () => {
+    const registry = await createAutomataRunRegistry();
+    await registry.register({
+      runId: 'request-job-owned',
+      automatonClass: 'memory.extraction',
+      workerId: 'background-work:job-1',
+      taskId: 'api:test',
+      taskLabel: 'Memory extraction',
+      taskSummary: 'Extract durable memory from a canonical source turn',
+      sessionIds: ['api:test'],
+      createdAtMs: 100,
+    });
+    await registry.transition('request-job-owned', { status: 'running', reason: 'background_work_claimed' });
+
+    await runExtractionOrchestration(buildOptions({
+      turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7006',
+      automataOwnerRunId: 'request-job-owned',
+      automataBusWorkerAccess: createAutomataBusAccess(registry),
+      automataRunRegistry: registry,
+    }));
+
+    expect(registry.findByTask('api:test')).toEqual([
+      expect.objectContaining({ runId: 'request-job-owned', status: 'completed' }),
+    ]);
+  });
+
+  it('terminalizes an owner-less run interrupted by preemption, then retries it (8fbwe)', async () => {
+    const registry = await createAutomataRunRegistry();
+    const automataBusWorkerAccess = createAutomataBusAccess(registry);
+    const preempted = new Error('model call preempted');
+    preempted.name = 'ModelCallPreemptedError';
+    const turnId = '018f22a2-52b8-7a3a-8c16-25b7b14f7007';
+
+    await expect(runExtractionOrchestration(buildOptions({
+      turnId,
+      llmClient: {
+        complete: vi.fn().mockRejectedValue(preempted),
+      } as ExtractionRunOptions['llmClient'],
+      automataBusWorkerAccess,
+      automataRunRegistry: registry,
+    }))).rejects.toThrow('model call preempted');
+
+    // No job owns it, so it is never left running.
+    expect(registry.getRun(`${turnId}:memory-extraction`)).toMatchObject({
+      status: 'failed',
+      failureReason: 'interrupted_without_owner',
+    });
+
+    await runExtractionOrchestration(buildOptions({
+      turnId,
+      automataBusWorkerAccess,
+      automataRunRegistry: registry,
+    }));
+    const runs = registry.findByTask('api:test');
+    expect(runs.filter(run => run.status === 'running' || run.status === 'queued')).toEqual([]);
+    expect(runs).toContainEqual(expect.objectContaining({
+      sourceRunId: `${turnId}:memory-extraction`,
+      status: 'completed',
+    }));
   });
 
   it('terminalizes the eligible run and records an observable error when the handoff fails', async () => {

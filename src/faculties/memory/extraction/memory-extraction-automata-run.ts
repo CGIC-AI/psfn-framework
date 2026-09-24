@@ -17,6 +17,8 @@ const MEMORY_EXTRACTION_TASK_LABEL = 'Memory extraction';
 const MEMORY_EXTRACTION_COMPLETED_REASON = 'memory_extraction_completed';
 const MEMORY_EXTRACTION_FAILED_REASON = 'memory_extraction_failed';
 const MEMORY_EXTRACTION_TURN_RUN_SUFFIX = ':memory-extraction';
+/** Failure reason for an owner-less run interrupted by a retryable control signal (8fbwe). */
+export const MEMORY_EXTRACTION_PREEMPTED_FAILURE = 'interrupted_without_owner';
 
 /**
  * The run id an extraction opens for a turn whose context carries no request
@@ -91,11 +93,11 @@ async function beginMemoryExtractionAutomataRun(
     });
   }
   assertExactMemoryExtractionRun(run, input);
-  while (input.triggerReason === 'external_conversation'
-    && run.workerId === MEMORY_EXTRACTION_WORKER_ID
+  while (run.workerId === MEMORY_EXTRACTION_WORKER_ID
     && run.status === 'failed'
     && run.statusReason === MEMORY_EXTRACTION_FAILED_REASON
-    && run.failureReason === 'orchestration_failure') {
+    && ((input.triggerReason === 'external_conversation' && run.failureReason === 'orchestration_failure')
+      || run.failureReason === MEMORY_EXTRACTION_PREEMPTED_FAILURE)) {
     const sourceRunId: string = run.runId;
     const retryRunId = `memory-extraction-retry:${createHash('sha256').update(sourceRunId).digest('hex')}`;
     const existingRetry: AutomataRunRecord | null = await registry.loadExactRun(retryRunId);

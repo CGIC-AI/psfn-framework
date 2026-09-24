@@ -53,6 +53,7 @@ import {
   resolveCaseCoverageHoleReason,
   runCaseWithTimeout,
   runCaseSetup,
+  buildConfigurationHoleCase,
   throwIfAborted,
   waitForAgentQuiescence,
   withTimeout,
@@ -3092,15 +3093,27 @@ function buildCapabilityMatrixCase(ctx) {
   ) {
     return null;
   }
-  const executionPlan = buildCapabilityMatrixExecutionPlan({
-    tier: EXPECTED_CAPABILITY_TIER,
-    runToken: ctx.runToken,
-    discordTarget: optionalEnv('PSFN_MATRIX_DISCORD_TARGET'),
-    emailTarget: optionalEnv('PSFN_MATRIX_EMAIL_TARGET'),
-    dedicatedSinkConfirmation: optionalEnv('PSFN_MATRIX_EXTERNAL_SINKS_CONFIRMED'),
-    baseLayerId: ctx.promptBaseLayer?.id,
-    operatorLayerId: ctx.promptOperatorLayer?.id,
-  });
+  const sessionId = `capability-matrix-${EXPECTED_CAPABILITY_TIER}-${ctx.runToken}`;
+  let executionPlan;
+  try {
+    executionPlan = buildCapabilityMatrixExecutionPlan({
+      tier: EXPECTED_CAPABILITY_TIER,
+      runToken: ctx.runToken,
+      discordTarget: optionalEnv('PSFN_MATRIX_DISCORD_TARGET'),
+      emailTarget: optionalEnv('PSFN_MATRIX_EMAIL_TARGET'),
+      dedicatedSinkConfirmation: optionalEnv('PSFN_MATRIX_EXTERNAL_SINKS_CONFIRMED'),
+      baseLayerId: ctx.promptBaseLayer?.id,
+      operatorLayerId: ctx.promptOperatorLayer?.id,
+    });
+  } catch (error) {
+    // An unconfirmed dedicated-sink precondition degrades only this case.
+    return buildConfigurationHoleCase({
+      id: 'capability_refusal_matrix',
+      sessionId,
+      tier: EXPECTED_CAPABILITY_TIER,
+      feature: 'psfn-framework-65rk.6',
+    }, error);
+  }
   const suggestedTools = [...new Set(
     executionPlan.executions
       .map((execution) => execution.toolName)
@@ -3160,7 +3173,7 @@ function buildCapabilityMatrixCase(ctx) {
 
   return {
     id: 'capability_refusal_matrix',
-    sessionId: `capability-matrix-${EXPECTED_CAPABILITY_TIER}-${ctx.runToken}`,
+    sessionId,
     suggestTools: suggestedTools,
     actionSensitive: true,
     actionSuccessKeys: [],

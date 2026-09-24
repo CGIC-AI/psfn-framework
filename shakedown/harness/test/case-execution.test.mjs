@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  buildConfigurationHoleCase,
   OBSERVED_SUBAGENT_CHILD_TURN_P95_MS,
   SUBAGENT_STEP_TIMEOUT_MS,
   CaseConfigurationError,
@@ -18,6 +19,7 @@ import {
   withTimeout,
 } from '../lib/case-execution.mjs';
 import { MissingEnvError } from '../lib/env.mjs';
+import { buildCapabilityMatrixExecutionPlan } from '../lib/capability-matrix.mjs';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -384,4 +386,31 @@ test('a case-declared exclusion for an absent tool is excluded by design, not a 
     target: 'local',
     catalogToolNames: ['memory', 'skill'],
   }), 'catalog_tool_missing:selfie_create');
+});
+
+test('an unconfirmed capability-matrix sink degrades only that case to a coverage hole (af43r/tr821)', async () => {
+  let planError;
+  try {
+    buildCapabilityMatrixExecutionPlan({ tier: 'autonomous', runToken: 'unit' });
+  } catch (error) {
+    planError = error;
+  }
+  assert.ok(planError instanceof MissingEnvError);
+  assert.equal(planError.variable, 'PSFN_MATRIX_EXTERNAL_SINKS_CONFIRMED');
+
+  const holeCase = buildConfigurationHoleCase(
+    { id: 'capability_refusal_matrix', sessionId: 'capability-matrix-unit' },
+    planError,
+  );
+  assert.equal(holeCase.id, 'capability_refusal_matrix');
+  await assert.rejects(runCaseSetup(holeCase, {}), (error) => error === planError);
+  assert.deepEqual(classifyCaseFailure(planError), {
+    status: 'coverage_hole',
+    reason: 'missing_env:PSFN_MATRIX_EXTERNAL_SINKS_CONFIRMED',
+  });
+});
+
+test('buildConfigurationHoleCase rethrows unexpected failures instead of hiding them', () => {
+  const unexpected = new TypeError('bug');
+  assert.throws(() => buildConfigurationHoleCase({ id: 'x' }, unexpected), (error) => error === unexpected);
 });

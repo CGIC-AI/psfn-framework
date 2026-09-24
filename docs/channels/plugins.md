@@ -387,9 +387,12 @@ from tool arguments.
 | `channel_health` | `status: ok\|degraded, detail?` | adapter status (`connected`, `stale`, queue depths, counters) |
 
 The companion's reply to an inbound message is returned in the same
-`channel_inbound` result. Messages that the companion starts go to a bounded
-per-adapter queue, and the bridge drains that queue with
-`channel_pull_outbound`. Rejection reasons are `busy`, `duplicate`, `invalid`,
+`channel_inbound` result. Each adapter's `outbound.sendText` puts messages in a
+bounded per-adapter queue, and the bridge drains that queue with
+`channel_pull_outbound`. The queue and the pull tool are covered by the
+conformance tests. However, no agent-initiated delivery path (scheduled
+continuity, wake notes, outreach) targets external adapters yet. That is why
+the `external` channel type has neither scheduled continuity nor live wakeup. Rejection reasons are `busy`, `duplicate`, `invalid`,
 `turn_timeout`, `turn_failed` and `not_running`. The bridge should back off and
 retry `busy` and `turn_timeout`. It should drop `invalid`.
 

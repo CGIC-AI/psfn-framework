@@ -243,8 +243,9 @@ export class ExternalChannelAdapter implements ChannelAdapterPort {
     return { messages: this.#queue.drain(max) };
   }
 
-  /** A request the route could not parse still proves liveness, and is counted. */
+  /** An authenticated request the route could not parse still proves liveness, and is counted. */
   recordMalformedRequest(detail: string): void {
+    this.#touch();
     this.#rejectedInbound += 1;
     this.#reportDegraded('malformed', new Error(`External bridge sent a malformed request: ${detail}`));
   }

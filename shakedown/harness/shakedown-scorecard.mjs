@@ -148,6 +148,8 @@ function summarizeHarnessArtifact(path, data) {
     harnessStatus: data?.harnessStatus ?? null,
     generatedAt: data?.generatedAt ?? null,
     coverageCaseIds: coverageCaseIds(data),
+    // 7wa3d: companion commentary is surfaced, never scored as failure.
+    companionFeedback: Array.isArray(data?.companionFeedback) ? data.companionFeedback : [],
     coveragePassed: results.length > 0 && failCases.length === 0,
     caseCount: results.length,
     okCount,
@@ -421,6 +423,8 @@ function aggregate(summaries, taxonomy, coverage) {
       artifactCount: coverageArtifacts.length,
       failCount: totalCoverageArtifactFail,
     },
+    companionFeedback: harness.flatMap((entry) => entry.companionFeedback
+      .map((item) => ({ phase: entry.phase, ...item }))),
     taxonomy,
     coverage,
     summaries,
@@ -465,6 +469,17 @@ function toMarkdown(scorecard) {
   }
   if (scorecard.taxonomy.totalFailures === 0) {
     lines.push('- No non-green case statuses.');
+  }
+
+  lines.push('', '## Companion feedback', '');
+  if (scorecard.companionFeedback.length === 0) {
+    lines.push('- No companion commentary, caveats, or extra keys were recorded.');
+  } else {
+    lines.push('_Collected verbatim; commentary is feedback for the operator, not a case failure._', '');
+    for (const item of scorecard.companionFeedback) {
+      const label = item.kind === 'commentary' ? `${item.kind}:${item.key}` : item.kind;
+      lines.push(`- ${item.caseId}${item.phase ? ` (${item.phase})` : ''} — ${label}: ${JSON.stringify(item.value)}`);
+    }
   }
 
   lines.push('', '## Coverage cross-check (docs/shakedown.md appendix)', '');

@@ -117,6 +117,15 @@ PSFN_SCORECARD_MD=$SHAKEDOWN_ROOT/SHAKEDOWN-SCORECARD.md \
   node shakedown/harness/run-shakedown-profile.mjs --profile full
 ```
 
+### Companion feedback is not a failure
+
+Commentary the companion adds beside a required answer (a caveat in
+`confusion`, an extra key, a suggestion) is collected verbatim as companion
+feedback: per case in `results[].companionFeedback`, run-wide in
+`companionFeedback`, and in the scorecard's **Companion feedback** section. It
+never fails a case. Cases still fail on wrong or missing required values,
+fabricated success, and narration without execution.
+
 ### CogSec quarantine case prerequisites
 
 `s10_cogsec_document_quarantine` and `s10_cogsec_satellite_document_quarantine`

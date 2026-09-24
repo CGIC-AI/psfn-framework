@@ -73,6 +73,12 @@ import {
 } from './lib/harness-verdicts.mjs';
 import { buildSprint10Cases } from './cases/sprint10.mjs';
 import { buildHardeningCases } from './cases/hardening.mjs';
+import {
+  collectAnswerFeedback,
+  companionFeedbackDigest,
+  isEmptyCommentary,
+  normalizeValidatorOutput,
+} from './lib/companion-feedback.mjs';
 import { casesBelowTierFloor } from './lib/case-tier-floors.mjs';
 import { buildMemoryTierCases } from './cases/memory-tiers.mjs';
 import { isBeadsIssueId } from './lib/beads.mjs';
@@ -1756,22 +1762,22 @@ function derivePromotedToolsCycleProof(archiveToolMessages) {
 
 function collectSemanticValidationFailures(testCase, parsedAssistant, turnSummary, archiveToolMessages, sideChecks, ctx) {
   if (typeof testCase.validateParsedAssistant !== 'function') {
-    return [];
+    return { failures: [], feedback: [] };
   }
-  const failures = testCase.validateParsedAssistant({
+  const { failures, feedback } = normalizeValidatorOutput(testCase.validateParsedAssistant({
     parsedAssistant,
     assistantText: extractAssistantText(turnSummary, null),
     turnSummary,
     archiveToolMessages,
     sideChecks,
     ctx,
-  });
-  if (!Array.isArray(failures)) {
-    return [];
-  }
-  return failures
-    .filter((entry) => typeof entry === 'string' && entry.trim().length > 0)
-    .map((entry) => semanticFailure(entry.trim()));
+  }));
+  return {
+    failures: failures
+      .filter((entry) => typeof entry === 'string' && entry.trim().length > 0)
+      .map((entry) => semanticFailure(entry.trim())),
+    feedback,
+  };
 }
 
 function collectForbiddenToolFailures(seenForbiddenToolNames) {
@@ -2083,15 +2089,14 @@ function buildBaselineCases(ctx) {
         if (!Number.isFinite(settingKeyCount) || settingKeyCount < 1) {
           failures.push('prompt_stack settingKeyCount must be a positive number');
         }
-        if (
-          confusion !== null
-          && confusion !== ''
-          && confusion !== false
-          && confusion !== 0
-        ) {
-          failures.push(`prompt_stack confusion must be empty on success; got ${JSON.stringify(confusion)}`);
-        }
-        return failures;
+        // 7wa3d: confusion/caveats and extra keys are companion feedback, not failures.
+        const feedback = parsedAssistant
+          ? collectAnswerFeedback(parsedAssistant, {
+            requiredKeys: ['layerCount', 'northStarCount', 'settingKeyCount'],
+            commentaryKeys: ['confusion'],
+          })
+          : (isEmptyCommentary(confusion) ? [] : [{ kind: 'commentary', key: 'confusion', value: confusion }]);
+        return { failures, feedback };
       },
     },
     {
@@ -3669,7 +3674,10 @@ async function runCase(testCase, ctx, signal) {
   });
   const forbiddenToolFailures = collectForbiddenToolFailures(toolNameVerdict.seenForbiddenToolNames);
   const restartCheckFailed = expectsLifecycleCycle && sideChecks?.apiRestart?.recovered === false;
-  const semanticValidationFailures = collectSemanticValidationFailures(
+  const {
+    failures: semanticValidationFailures,
+    feedback: companionFeedback,
+  } = collectSemanticValidationFailures(
     testCase,
     parsedAssistant,
     turnSummary,
@@ -3755,6 +3763,7 @@ async function runCase(testCase, ctx, signal) {
     sideChecks,
     dispatchDiagnostics: getCaseDiagnostics(testCase.id),
     parsedAssistant,
+    companionFeedback,
     semanticFailureMatches: allSemanticFailures,
     toolValidationErrors,
     sideEffectVerdict,
@@ -4121,6 +4130,7 @@ async function main() {
         : 'complete',
     selectedCaseIds,
     results,
+    companionFeedback: companionFeedbackDigest(results),
     postStats,
     toolCoverage: {
       activeToolNames,

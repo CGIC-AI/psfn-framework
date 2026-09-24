@@ -630,4 +630,26 @@ describe('post-TTL re-drive delivers exactly once (qgqw.3 regression)', () => {
     expect(await sender.deliver(makeRequest())).toEqual({ outcome: 'delivered' });
     expect(delivery.send).toHaveBeenCalledTimes(1);
   });
+  it('re-appends an unrecorded delivered reply before the next room reply, in order (2oruf)', async () => {
+    const recorded: string[] = [];
+    let failing = true;
+    const replies = ['First reply.', 'Second reply.'];
+    const generator = { handleMessage: vi.fn(async () => makeResponse(replies.shift()!)) };
+    const delivery = { send: vi.fn(async () => undefined) };
+    const sender = makeSender(generator, delivery, {
+      roomTranscript: {
+        recordCompanionRoomReply: (entry) => {
+          if (failing) throw new Error('session store unavailable');
+          recorded.push(entry.content);
+        },
+      },
+    });
+
+    expect(await sender.deliver(makeRequest({ sourceEventId: 'evt-1' }))).toEqual({ outcome: 'delivered' });
+    expect(recorded).toEqual([]);
+
+    failing = false;
+    expect(await sender.deliver(makeRequest({ sourceEventId: 'evt-2' }))).toEqual({ outcome: 'delivered' });
+    expect(recorded).toEqual(['First reply.', 'Second reply.']);
+  });
 });

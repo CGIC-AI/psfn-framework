@@ -1,4 +1,3 @@
-import { isRecord } from '../../shared/utils/types.js';
 // ── Gateway Server ──
 // Host-side process that holds secrets and proxies all external interactions.
 
@@ -8,7 +7,6 @@ import {
   JSONRPCServer,
   JSONRPCClient,
   JSONRPCServerAndClient,
-  JSONRPCErrorException,
 } from 'json-rpc-2.0';
 import { DEFAULT_COMPANION_ID } from '../../core/identity/companion-naming.js';
 import type { CapabilityTier, WyomingShardRoutingConfig } from '../../system/config/runtime-config-contracts.js';
@@ -17,7 +15,6 @@ import type { GatewayRpcConnection } from './transport.js';
 import { GatewayInlineImageRetention } from './inline-image-retention.js';
 import { createSocketServer, createWebSocketRpcServer } from './transport.js';
 import {
-  GatewayErrors,
   type RuntimeHealthResult,
   type OperatorAlertResult,
   type NotifyNtfyParams,
@@ -50,7 +47,6 @@ import {
 import { GatewayRuntimeHealthTracker } from './runtime-health.js';
 import { evaluatePolicy } from './policy.js';
 import type { ApiChatCompletionRpcResult } from '../../channels/api/types.js';
-import { verifyCompanionAuthToken } from './companion-auth.js';
 import { createCanaryEgressGuard, type CanaryEgressGuard } from './canary-egress-guard.js';
 import type { GardenQueueName } from '../../shared/event-bus.js';
 import type {
@@ -83,6 +79,7 @@ import { GatewayAuditTrail } from './server/audit-trail.js';
 import { GatewayConnectionRpcMethods } from './server/rpc-method-registration.js';
 import { GatewayAgentRequests } from './server/agent-request-routing.js';
 import { GatewayIcpInvalidationQueue } from './server/icp-invalidation-queue.js';
+import { GatewayConnectionAdmission } from './server/connection-admission.js';
 import {
   assertGatewayFleetScreeningAndDocks,
   assertGatewayTopologyOptions,
@@ -95,14 +92,8 @@ import {
   DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS,
   GatewayConnectionLifecycle,
 } from './server/connection-lifecycle.js';
+import { type GatewayConnectionStatus } from './server/connection-status.js';
 import {
-  isIdentifiableGatewayConnectionRole,
-  type GatewayConnectionRole,
-  type GatewayConnectionStatus,
-  type MalformedFrameKind,
-} from './server/connection-status.js';
-import {
-  hasOwn,
   normalizeNdjsonFrameError,
   summarizeFramePreview,
   validateJsonRpcFrame,
@@ -110,14 +101,8 @@ import {
 
 const log = createComponentLogger('Gateway');
 const unknownCompanionDisplayIdentity = createCompanionDisplayIdentityResolver([]);
-const INVALID_FRAME_AUDIT_METHOD = 'gateway.ipc.frame.invalid';
 export { evaluatePolicy };
 export type { GatewayNtfyConfig, PolicyConfig, VoiceStreamRequestOptions };
-
-const INTERNAL_SESSION_INTEGRITY_METHODS = new Set([
-  'session.hmac.sign',
-  'session.hmac.verify',
-]);
 
 export { requireGatewaySessionHmacKeyring, resolveGatewaySessionHmacKeyring } from './session-hmac-env.js';
 export type { GatewayServerOptions } from './server/options.js';
@@ -181,6 +166,7 @@ export class GatewayServer {
   private readonly rpcMethods: GatewayConnectionRpcMethods;
   private readonly agentRequests: GatewayAgentRequests;
   private readonly icpInvalidations: GatewayIcpInvalidationQueue;
+  private readonly connectionAdmission: GatewayConnectionAdmission;
 
   private companionDisplayLabel(companionId: string): string {
     return this.options.approvalParentLabelProvider?.(companionId)?.trim()
@@ -199,6 +185,9 @@ export class GatewayServer {
       multiCompanion: this.multiCompanion,
       fleetCompanionIds: this.fleetCompanionIds,
       companionPostures: this.companionPostures,
+      fatigueFencedCompanionIds: this.fatigueFencedCompanionIds,
+      removeConnection: conn => this.removeConnection(conn),
+      companionDisplayLabel: companionId => this.companionDisplayLabel(companionId),
       ntfyNotifier: this.ntfyNotifier,
       flushInboundChannelReplay: companionId => this.inboundChannelDelivery.flushInboundChannelReplay(companionId),
       refreshConnectionHealth: now => this.refreshConnectionHealth(now),
@@ -228,9 +217,9 @@ export class GatewayServer {
       shardApprovalGrants: this.shardApprovalGrants,
       shardWorkloadRegistrar: this.shardWorkloadRegistrar,
       getRuntimeHealth: companionId => this.getRuntimeHealth(companionId),
-      identifyConnection: (conn, params) => this.identifyConnection(conn, params),
-      markConnectionReady: (conn, params) => this.markConnectionReady(conn, params),
-      recordConnectionPosture: (conn, params) => this.recordConnectionPosture(conn, params),
+      identifyConnection: (conn, params) => this.connectionAdmission.identifyConnection(conn, params),
+      markConnectionReady: (conn, params) => this.connectionAdmission.markConnectionReady(conn, params),
+      recordConnectionPosture: (conn, params) => this.connectionAdmission.recordConnectionPosture(conn, params),
       runtimeHealthTracker: this.runtimeHealthTracker,
       icpAutonomyBroker: this.icpAutonomyBroker,
       wyomingShardRouting: this.wyomingShardRouting,
@@ -399,6 +388,12 @@ export class GatewayServer {
       connectionRouter: this.connectionRouter,
       connectionScope: this.connectionScope,
       sharedSatellite: this.sharedSatellite,
+    });
+    this.connectionAdmission = new GatewayConnectionAdmission({
+      ...ports,
+      auditTrail: this.auditTrail,
+      connectionLifecycle: this.connectionLifecycle,
+      icpInvalidations: this.icpInvalidations,
     });
     this.rpcMethods = new GatewayConnectionRpcMethods({
       ...ports,
@@ -618,7 +613,7 @@ export class GatewayServer {
 
     conn.on('frameError', (error: unknown) => {
       const frameError = normalizeNdjsonFrameError(error);
-      this.handleMalformedFrame(conn, 'ndjson', frameError.reason, frameError.preview);
+      this.connectionAdmission.handleMalformedFrame(conn, 'ndjson', frameError.reason, frameError.preview);
     });
 
     conn.on('heartbeat', () => {
@@ -633,7 +628,7 @@ export class GatewayServer {
         this.connectionLifecycle.touchConnectionHealthcheck(conn);
         const validationError = validateJsonRpcFrame(message);
         if (validationError) {
-          this.handleMalformedFrame(
+          this.connectionAdmission.handleMalformedFrame(
             conn,
             'jsonrpc',
             validationError,
@@ -641,7 +636,7 @@ export class GatewayServer {
           );
           return;
         }
-        const verdict = this.enforceCompanionFrameIdentity(conn, message as Record<string, unknown>);
+        const verdict = this.connectionAdmission.enforceCompanionFrameIdentity(conn, message as Record<string, unknown>);
         if (verdict !== 'pass') {
           return;
         }
@@ -658,7 +653,7 @@ export class GatewayServer {
           await serverAndClient.receiveAndSend(message as any);
         } catch (error) {
           const messageText = toErrorMessage(error);
-          this.handleMalformedFrame(
+          this.connectionAdmission.handleMalformedFrame(
             conn,
             'jsonrpc',
             `JSON-RPC receive/send failed: ${messageText}`,
@@ -734,144 +729,6 @@ export class GatewayServer {
   }
 
   /**
-   * Fail-closed connection authorization applied to every inbound method:
-   * - unidentified connections may call only gateway.client.identify;
-   * - internal session-integrity connections may call only HMAC sign/verify;
-   * - normal agents may not call those internal signing methods;
-   * - multi-companion frames remain pinned to the authenticated companion id.
-   * - a frame claiming a companionId different from the connection's identified
-   *   companionId is treated as identity spoofing → audit + disconnect;
-   * - agent-role connections must identify with a companionId before any other
-   *   RPC → requests are rejected with COMPANION_IDENTIFY_REQUIRED.
-   * Responses to gateway-originated requests pass through untouched.
-   */
-  private enforceCompanionFrameIdentity(
-    conn: GatewayRpcConnection,
-    frame: Record<string, unknown>,
-  ): 'pass' | 'rejected' | 'disconnected' {
-    if (!hasOwn(frame, 'method')) {
-      return 'pass';
-    }
-    const method = typeof frame.method === 'string' ? frame.method : '';
-    if (method === 'gateway.client.identify') {
-      return 'pass';
-    }
-    const status = this.connectionStatuses.get(conn);
-    if (!status) {
-      return 'rejected';
-    }
-    const boundCompanionId = status.companionId;
-    const params = isRecord(frame.params) ? frame.params : undefined;
-    const hasClaimedCompanionId = params !== undefined && Object.hasOwn(params, 'companionId');
-    const claimedRaw = params?.companionId;
-
-    if (status.role === 'unidentified') {
-      this.companionViolations.alarmCompanionViolation(
-        'identify_required',
-        `RPC "${method}" rejected: connection has not authenticated a role`,
-        { method },
-      );
-      if (hasOwn(frame, 'id')) {
-        conn.send({
-          jsonrpc: '2.0' as const,
-          id: frame.id as string | number | null,
-          error: {
-            code: GatewayErrors.COMPANION_IDENTIFY_REQUIRED,
-            message: 'gateway.client.identify is required before other RPC methods',
-          },
-        });
-      }
-      return 'rejected';
-    }
-
-    const isInternalMethod = INTERNAL_SESSION_INTEGRITY_METHODS.has(method);
-    if (
-      (status.role === 'internal_session_integrity' && !isInternalMethod)
-      || (status.role === 'agent' && isInternalMethod)
-    ) {
-      this.companionViolations.alarmCompanionViolation(
-        'connection_role_denied',
-        `RPC "${method}" is not permitted for gateway role "${status.role}"`,
-        { method, role: status.role, ...(boundCompanionId ? { companionId: boundCompanionId } : {}) },
-      );
-      if (hasOwn(frame, 'id')) {
-        conn.send({
-          jsonrpc: '2.0' as const,
-          id: frame.id as string | number | null,
-          error: {
-            code: GatewayErrors.CONNECTION_ROLE_DENIED,
-            message: `Gateway role "${status.role}" is not authorized for ${method}`,
-          },
-        });
-      }
-      return 'rejected';
-    }
-
-    let claimedCompanionId: CompanionId | undefined;
-    if (hasClaimedCompanionId) {
-      try {
-        claimedCompanionId = createCompanionId(claimedRaw, 'RPC frame companionId');
-      } catch (error) {
-        this.companionViolations.alarmCompanionViolation(
-          'identity_claim_invalid',
-          'RPC frame carried an invalid companionId claim; disconnecting connection',
-          { method, boundCompanionId, reason: toErrorMessage(error) },
-        );
-        this.connectionLifecycle.transitionConnectionState(conn, 'degraded', 'companion_identity_claim_invalid');
-        this.connectionLifecycle.transitionConnectionState(conn, 'offline', 'companion_identity_claim_invalid');
-        this.removeConnection(conn);
-        if (!conn.destroyed) {
-          conn.destroy();
-        }
-        return 'disconnected';
-      }
-    }
-
-    // Single-companion mode retains its existing socket-trust contract for
-    // normal agent methods, but a frame that explicitly carries a malformed
-    // identity claim is still invalid and never reaches method dispatch.
-    if (!this.multiCompanion.enabled && status.role === 'agent') {
-      return 'pass';
-    }
-
-    if (claimedCompanionId && boundCompanionId && claimedCompanionId !== boundCompanionId) {
-      this.companionViolations.alarmCompanionViolation(
-        'identity_mismatch',
-        'Companion identity mismatch on RPC frame; disconnecting connection',
-        { method, boundCompanionId, claimedCompanionId },
-      );
-      this.connectionLifecycle.transitionConnectionState(conn, 'degraded', 'companion_identity_mismatch');
-      this.connectionLifecycle.transitionConnectionState(conn, 'offline', 'companion_identity_mismatch');
-      this.removeConnection(conn);
-      if (!conn.destroyed) {
-        conn.destroy();
-      }
-      return 'disconnected';
-    }
-
-    if (this.multiCompanion.enabled && !boundCompanionId) {
-      this.companionViolations.alarmCompanionViolation(
-        'identify_required',
-        `RPC "${method}" rejected: agent connection has not identified a companionId`,
-        { method },
-      );
-      if (hasOwn(frame, 'id')) {
-        conn.send({
-          jsonrpc: '2.0' as const,
-          id: frame.id as string | number | null,
-          error: {
-            code: GatewayErrors.COMPANION_IDENTIFY_REQUIRED,
-            message: 'Multi-companion mode requires an authenticated companionId before other RPC methods',
-          },
-        });
-      }
-      return 'rejected';
-    }
-
-    return 'pass';
-  }
-
-  /**
    * Read-only fleet health view: identified companion
    * connections, last-seen activity (retained across disconnects), and recent
    * multi-companion violation counts. Available for bounded, server-side fleet
@@ -926,41 +783,6 @@ export class GatewayServer {
     }
     this.rpcClients.delete(conn);
     this.connectionStatuses.delete(conn);
-  }
-
-  private handleMalformedFrame(
-    conn: GatewayRpcConnection,
-    frameKind: MalformedFrameKind,
-    reason: string,
-    preview?: string,
-  ): void {
-    if (!this.connectionStatuses.has(conn)) {
-      return;
-    }
-
-    const startedAt = Date.now();
-    const params: Record<string, unknown> = {
-      frameKind,
-      reason,
-      ...(preview ? { preview } : {}),
-    };
-    void (async (): Promise<void> => {
-      const auditId = await this.auditTrail.audit(INVALID_FRAME_AUDIT_METHOD, 'DENY', params);
-      await this.auditTrail.auditComplete(auditId, startedAt, reason);
-    })().catch((auditError: unknown) => {
-      log.error('Malformed IPC frame audit persistence failed after disconnecting peer fail closed', {
-        ...params,
-        error: toErrorMessage(auditError),
-      });
-    });
-
-    log.error('Malformed IPC frame received; disconnecting agent connection', params);
-    this.connectionLifecycle.transitionConnectionState(conn, 'degraded', 'malformed_frame', reason);
-    this.connectionLifecycle.transitionConnectionState(conn, 'offline', 'malformed_frame', reason);
-    this.removeConnection(conn);
-    if (!conn.destroyed) {
-      conn.destroy();
-    }
   }
   /** Local readiness of the same owner used by API requests, without sending RPC. */
   isApiReady(): boolean {
@@ -1043,193 +865,6 @@ export class GatewayServer {
     return {
       ...this.runtimeHealthTracker.getSnapshot(this.connectionLifecycle.getConnectionSummary(), companionId),
       operatorAlerting: this.operatorAlertDispatcher.configuration(),
-    };
-  }
-
-  private async recordConnectionPosture(
-    conn: GatewayRpcConnection,
-    params: unknown,
-  ): Promise<{ success: true }> {
-    const status = this.connectionStatuses.get(conn);
-    if (status?.role !== 'agent' || !status.companionId) {
-      throw new Error('gateway.client.health requires an authenticated companion agent');
-    }
-    if (!isRecord(params)
-      || !Object.hasOwn(params, 'posture')
-      || Object.keys(params).length !== 1) {
-      throw new Error('gateway.client.health accepts only the bounded posture envelope');
-    }
-    const posture = this.companionPostures.record(
-      conn,
-      status.companionId,
-      params.posture,
-    );
-    if (posture.fatigue.state === 'exhausted'
-      && !this.fatigueFencedCompanionIds.has(status.companionId)) {
-      await this.icpInvalidations.queueIcpInvalidation(status.companionId, 'fatigue_exhausted');
-      this.fatigueFencedCompanionIds.add(status.companionId);
-    } else if (posture.fatigue.state !== 'exhausted') {
-      this.fatigueFencedCompanionIds.delete(status.companionId);
-    }
-    return { success: true };
-  }
-
-  private markConnectionReady(
-    conn: GatewayRpcConnection,
-    params: unknown,
-  ): { success: true } {
-    if (!isRecord(params) || Object.keys(params).length !== 0) {
-      throw new Error('gateway.client.ready accepts only an empty object');
-    }
-    const status = this.connectionStatuses.get(conn);
-    if (status?.role !== 'agent') {
-      throw new Error('gateway.client.ready requires an authenticated companion agent');
-    }
-    if (this.multiCompanion.enabled && !status.companionId) {
-      throw new Error('gateway.client.ready requires an identified companion agent');
-    }
-    status.runtimeReadyDeclared = true;
-    this.connectionLifecycle.transitionConnectionState(conn, 'ready', 'agent_runtime_ready');
-    return { success: true };
-  }
-
-  private async identifyConnection(
-    conn: GatewayRpcConnection,
-    params: unknown,
-  ): Promise<{ success: true; role: GatewayConnectionRole; companionId?: CompanionId }> {
-    if (!isRecord(params) || !isIdentifiableGatewayConnectionRole(params.role)) {
-      throw new Error('gateway.client.identify requires a valid role');
-    }
-
-    const status = this.connectionStatuses.get(conn);
-    if (!status || status.state === 'offline') {
-      throw new Error('Cannot identify an inactive gateway connection');
-    }
-
-    if (params.companionId !== undefined
-      && (typeof params.companionId !== 'string' || !params.companionId.trim())) {
-      throw new Error('gateway.client.identify companionId must be a non-empty string');
-    }
-    const companionId = typeof params.companionId === 'string'
-      ? createCompanionId(params.companionId, 'gateway.client.identify companionId')
-      : undefined;
-    if (params.authToken !== undefined && typeof params.authToken !== 'string') {
-      throw new Error('gateway.client.identify authToken must be a string when provided');
-    }
-    const authToken = typeof params.authToken === 'string' ? params.authToken : undefined;
-
-    const maySelectSingleCompanionRole = !this.multiCompanion.enabled
-      && status.role === 'agent'
-      && status.stateReason === 'rpc_registered';
-    if (status.role !== 'unidentified' && !maySelectSingleCompanionRole) {
-      if (status.role !== params.role || status.companionId !== companionId) {
-        throw new Error('Gateway connection is already identified and cannot change role or companion identity');
-      }
-      return {
-        success: true,
-        role: status.role,
-        ...(status.companionId ? { companionId: status.companionId } : {}),
-      };
-    }
-
-    const requiresRoleProof = this.multiCompanion.enabled
-      || params.role === 'internal_session_integrity';
-    if (requiresRoleProof) {
-      if (!companionId) {
-        const missingCompanionMessage = this.multiCompanion.enabled
-          ? 'Multi-companion mode requires a companionId in gateway.client.identify'
-          : 'The internal session-integrity role requires a companionId in gateway.client.identify';
-        this.companionViolations.alarmCompanionViolation(
-          'identify_missing_companion',
-          'Authenticated gateway role identified without a companionId; rejecting',
-          {},
-        );
-        throw new Error(missingCompanionMessage);
-      }
-      if (this.multiCompanion.enabled && !this.fleetCompanionIds.has(companionId)) {
-        this.companionViolations.alarmCompanionViolation(
-          'identify_unknown_companion',
-          'Connection claimed a companionId absent from companions.json; rejecting',
-          { claimedCompanionId: companionId },
-        );
-        throw new JSONRPCErrorException(
-          `Companion ${JSON.stringify(companionId)} is not a member of the active fleet`,
-          GatewayErrors.COMPANION_AUTH_FAILED,
-        );
-      }
-      if (!verifyCompanionAuthToken(companionId, params.role, authToken, this.sessionHmacKeyring)) {
-        this.companionViolations.alarmCompanionViolation(
-          'identify_auth_failed',
-          'Connection presented invalid companion authentication; rejecting',
-          { claimedCompanionId: companionId },
-        );
-        throw new JSONRPCErrorException(
-          'Companion authentication failed',
-          GatewayErrors.COMPANION_AUTH_FAILED,
-        );
-      }
-    }
-
-    if (this.multiCompanion.enabled) {
-      if (!companionId) {
-        throw new Error('Multi-companion identification invariant violated: companionId is missing');
-      }
-      const authenticatedCompanionId = companionId;
-      if (status.companionId && status.companionId !== companionId) {
-        this.companionViolations.alarmCompanionViolation(
-          'identify_rebind_rejected',
-          'Connection attempted to re-identify as a different companion; rejecting',
-          { boundCompanionId: status.companionId, claimedCompanionId: companionId },
-        );
-        throw new Error(
-          `Connection is already identified as companion "${status.companionId}" and cannot rebind to "${companionId}"`,
-        );
-      }
-      if (params.role === 'agent') {
-        await this.icpInvalidations.awaitIcpInvalidationBeforeReconnect(authenticatedCompanionId);
-        const existing = this.companionConnections.get(authenticatedCompanionId);
-        if (existing && existing !== conn) {
-          if (this.connections.has(existing)) {
-            this.companionViolations.alarmCompanionViolation(
-              'duplicate_identify',
-              `Duplicate identify for companion "${companionId}"; keeping the existing connection and rejecting the new one`,
-              { companionId },
-            );
-            throw new Error(
-              `Companion "${companionId}" already has an active gateway connection; duplicate identify rejected`,
-            );
-          }
-          this.companionConnections.delete(authenticatedCompanionId);
-        }
-        this.companionConnections.set(authenticatedCompanionId, conn);
-        this.companionPostures.bind(conn, authenticatedCompanionId);
-      }
-      status.companionId = authenticatedCompanionId;
-      this.companionLastSeen.set(authenticatedCompanionId, Date.now());
-      log.info(`${this.companionDisplayLabel(authenticatedCompanionId)} connection authenticated`, {
-        companionId: authenticatedCompanionId,
-        role: params.role,
-      });
-    } else if (companionId) {
-      // Flag off (or non-agent role): record for observability only — routing
-      // semantics stay byte-identical to single-companion behavior.
-      status.companionId = companionId;
-      this.companionLastSeen.set(companionId, Date.now());
-      if (params.role === 'agent') {
-        this.companionPostures.bind(conn, companionId);
-      }
-    }
-
-    status.role = params.role;
-    if (params.role === 'agent' && this.multiCompanion.enabled) {
-      this.connectionLifecycle.transitionConnectionState(conn, 'registering', 'client_identified:agent');
-    } else {
-      this.connectionLifecycle.transitionConnectionState(conn, 'ready', `client_identified:${params.role}`);
-    }
-    return {
-      success: true,
-      role: params.role,
-      ...(companionId ? { companionId } : {}),
     };
   }
 

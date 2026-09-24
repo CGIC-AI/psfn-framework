@@ -41,6 +41,9 @@ export interface GatewayServerPorts {
   readonly multiCompanion: GatewayMultiCompanionConfig;
   readonly fleetCompanionIds: ReadonlySet<CompanionId>;
   readonly companionPostures: GatewayFleetPostureCache<GatewayRpcConnection>;
+  readonly fatigueFencedCompanionIds: Set<string>;
+  readonly removeConnection: (conn: GatewayRpcConnection) => void;
+  readonly companionDisplayLabel: (companionId: string) => string;
   readonly ntfyNotifier: GatewayNtfyNotifier;
   readonly operatorAlertDispatcher: GatewayOperatorAlertDispatcher;
   readonly canaryEgressGuard: CanaryEgressGuard | undefined;

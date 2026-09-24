@@ -1,5 +1,6 @@
 import { Type } from '@sinclair/typebox';
 import { RUNTIME_LANE_CLASSES } from '../../../../shared/contracts/runtime-lanes.js';
+import { DECISION_SITE_IDS } from '../../../../system/config/decision-backend-config.js';
 
 import {
   correlationProperties,
@@ -27,6 +28,24 @@ const embeddingUsageProvenance = strictObject({
   workloadType: nonEmptyCanonicalString,
   workloadId: nonEmptyCanonicalString,
 });
+
+const decisionQuestion = Type.Union([
+  strictObject({
+    type: Type.Literal('noul'),
+    instructions: Type.String(),
+    criteria: Type.Optional(strictObject({ true: Type.String(), false: Type.String() })),
+  }),
+  strictObject({
+    type: Type.Literal('choice'),
+    instructions: Type.String(),
+    criteria: Type.Record(Type.String(), Type.String()),
+  }),
+  strictObject({
+    type: Type.Literal('score'),
+    instructions: Type.String(),
+    criteria: Type.Array(Type.String(), { minItems: 1 }),
+  }),
+]);
 
 const gatewayLLMContentBlock = Type.Union([
   strictObject({
@@ -153,6 +172,13 @@ export const llmMethodParamDecoders = {
   'llm.cancel': gatewayDecoder('llm.cancel', strictObject({
     cancellationId: Type.String(),
     companionId: optionalString,
+  })),
+  'llm.decide': gatewayDecoder('llm.decide', strictObject({
+    siteId: enumSchema(DECISION_SITE_IDS),
+    state: unknownRecord,
+    questions: Type.Record(Type.String(), decisionQuestion),
+    companionId: optionalString,
+    telemetryVisibility: Type.Optional(enumSchema(['operator_visible', 'companion_private'])),
   })),
   'llm.discover_models': gatewayDecoder('llm.discover_models', emptyParams),
   'llm.invalidate_model_discovery': gatewayDecoder('llm.invalidate_model_discovery', emptyParams),

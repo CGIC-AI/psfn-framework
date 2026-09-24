@@ -1,4 +1,5 @@
 // Construction-time options contract for GatewayServer (the composition facade).
+import type { GatewayJevDecisionService } from '../jev-decision-service.js';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import type { EmbeddingProviderPort } from '../../../shared/contracts/embedding-provider.js';
 import type { ChannelOutboundDock } from '../../../channels/backplane/types.js';
@@ -82,6 +83,8 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
   gitOps?: GitOperations;
   imageConfig?: ImageRuntimeConfig;
   modelUsageRecorder?: ModelUsageRecorder;
+  /** Remote (Jev) decision backend for `llm.decide` (epic 4lf3r). */
+  jevDecisions?: GatewayJevDecisionService;
   credentialVault?: CredentialVaultPort;
   /** Value-free provider/channel credential inventory for the Garden status UI. */
   credentialPresence?: GatewayCredentialPresenceResult;

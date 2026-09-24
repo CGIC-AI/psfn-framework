@@ -1,4 +1,5 @@
 import type { ChannelOutboundDock } from '../../channels/backplane/types.js';
+import { createGatewayJevDecisionService } from './jev-decision-service.js';
 import {
   createEligibilityGate,
   type EligibilityDecision,
@@ -596,6 +597,10 @@ export async function buildGatewayPrivilegedCore(
       gitOps,
       imageConfig: input.config,
       ...(privilegedServices.modelUsageStore ? { modelUsageRecorder: privilegedServices.modelUsageStore } : {}),
+      jevDecisions: createGatewayJevDecisionService({
+        config: input.config,
+        ...(privilegedServices.modelUsageStore ? { usageRecorder: privilegedServices.modelUsageStore } : {}),
+      }),
       ...(input.config.credentialVault ? { credentialVault: input.config.credentialVault } : {}),
       intakeScreeningMode: intakeScreening.globalMode,
       ...(!input.bootstrap.server.multiCompanion.enabled

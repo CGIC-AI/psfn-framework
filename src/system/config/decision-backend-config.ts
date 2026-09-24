@@ -19,7 +19,7 @@ const DECISION_LOCAL_QUESTION_MODES = ['combined', 'per_question'] as const;
 export type DecisionLocalQuestionMode = typeof DECISION_LOCAL_QUESTION_MODES[number];
 
 /** Stable decision-site ids. Unknown ids in settings reject (fail closed). */
-const DECISION_SITE_IDS = [
+export const DECISION_SITE_IDS = [
   'participation.appraise',
   'room.ambiguity',
   'memory.rerank',

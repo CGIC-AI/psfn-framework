@@ -445,6 +445,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   const decisionRuntime = buildAgentDecisionRuntime({
     config,
     llmProvider,
+    gateway,
     companionDataDir: pathSnapshot.companionDataDir,
   });
   const automataBus = options.automataRuntime

@@ -104,3 +104,20 @@ export function validateDecisionAnswers(
   }
   return answers;
 }
+
+/**
+ * Re-validate answers already in the internal shape (noul carries `pYes`),
+ * e.g. a result that crossed the gateway RPC boundary. Same contract as
+ * {@link validateDecisionAnswers}; returns null on any violation.
+ */
+export function revalidateDecisionAnswers(
+  questions: DecisionQuestionSet,
+  answers: unknown,
+): DecisionAnswers | null {
+  if (!isRecord(answers)) return null;
+  const wire = Object.fromEntries(Object.entries(answers).map(([name, answer]) => [
+    name,
+    isRecord(answer) && answer.type === 'noul' ? { type: 'noul', noul: answer.pYes } : answer,
+  ]));
+  return validateDecisionAnswers(questions, wire);
+}

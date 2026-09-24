@@ -6,6 +6,8 @@
 // settings.json reload changes the backend without a restart.
 
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
+import type { GatewayClient } from '../../../boundary/gateway/client.js';
+import { createGatewayRemoteDecisionBackend } from './gateway-remote-backend.js';
 import { resolveDecisionShadowLedgerPath } from '../../../persistence/layout.js';
 import {
   createDecisionRuntime,
@@ -18,6 +20,8 @@ import type { SubstrateConfig } from '../../../system/config/runtime-config-cont
 export interface AgentDecisionRuntimeOptions {
   config: Pick<SubstrateConfig, 'decisionBackend'>;
   llmProvider: Pick<LLMProviderPort, 'complete'>;
+  /** Gateway RPC for the optional remote (Jev) backend. */
+  gateway: Pick<GatewayClient, 'decide'>;
   companionDataDir: string;
 }
 
@@ -28,6 +32,7 @@ export function buildAgentDecisionRuntime(options: AgentDecisionRuntimeOptions):
       llmProvider: options.llmProvider,
       resolveQuestionMode: () => config.decisionBackend?.localQuestionMode ?? 'combined',
     }),
+    jev: createGatewayRemoteDecisionBackend(options.gateway),
     resolveSettings: () => config.decisionBackend,
     shadowSink: createJsonlDecisionShadowSink(resolveDecisionShadowLedgerPath(options.companionDataDir)),
   });

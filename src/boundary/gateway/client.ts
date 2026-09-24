@@ -78,7 +78,9 @@ import type { JournalEntry } from '../../core/session/types.js';
 import type { ConfirmationResolveResult } from '../../system/capabilities/confirmation-queue.js';
 import type { CompanionRelayPublishParams } from '../../channels/backplane/companion-relay/relay.js';
 import { isGardenQueueName, type GardenQueueName } from '../../shared/event-bus.js';
-import { assertNoUnknownKeys, isRecord } from '../../shared/utils/types.js';
+import { isRecord } from '../../shared/utils/types.js';
+import { parseMemoryDeletionApprovalResult } from './client/memory-deletion-approval.js';
+import { requestGatewayDecision, type GatewayDecisionParams } from './client/decision-rpc.js';
 import type {
   MemoryDeletionApprovalPort,
   MemoryDeletionApprovalRequest,
@@ -107,6 +109,7 @@ import type {
   LLMCompleteResult,
   LLMDiscoverModelsResult,
   LLMEmbedResult,
+  LLMDecideResult,
   LLMInvalidateModelDiscoveryResult,
   DiscordSendResult,
   DiscordSendMediaResult,
@@ -1679,44 +1682,12 @@ export class GatewayClient implements
     request: MemoryDeletionApprovalRequest,
   ): Promise<MemoryDeletionApprovalResult> {
     const result = await this.transportRuntime.request('memory.deletion.propose', request);
-    if (!isRecord(result)) throw new Error('Gateway returned an invalid memory deletion approval result');
-    assertNoUnknownKeys(
-      result,
-      ['status', 'proposalId', 'approvalId', 'expiresAt', 'deleteId'],
-      'memory.deletion.propose result',
-    );
-    if (result.proposalId !== request.proposalId) {
-      throw new Error('Gateway returned a malformed memory deletion approval result');
-    }
-    if (result.status === 'already_approved' || result.status === 'already_denied') {
-      if ((result.approvalId !== undefined
-          && (typeof result.approvalId !== 'string' || !result.approvalId.trim()))
-        || (result.deleteId !== undefined
-          && (typeof result.deleteId !== 'string' || !result.deleteId.trim()))
-        || (result.status === 'already_approved'
-          && (typeof result.deleteId !== 'string' || !result.deleteId.trim()))
-        || (result.status === 'already_denied' && result.deleteId !== undefined)) {
-        throw new Error('Gateway returned a malformed terminal memory deletion result');
-      }
-      return {
-        status: result.status,
-        proposalId: request.proposalId,
-        ...(typeof result.approvalId === 'string' ? { approvalId: result.approvalId.trim() } : {}),
-        ...(typeof result.deleteId === 'string' ? { deleteId: result.deleteId.trim() } : {}),
-      };
-    }
-    if (result.status !== 'approval_required'
-      || typeof result.approvalId !== 'string'
-      || !result.approvalId.trim()
-      || !Number.isSafeInteger(result.expiresAt)) {
-      throw new Error('Gateway returned a malformed memory deletion approval result');
-    }
-    return {
-      status: 'approval_required',
-      proposalId: request.proposalId,
-      approvalId: result.approvalId.trim(),
-      expiresAt: result.expiresAt as number,
-    };
+    return parseMemoryDeletionApprovalResult(result, request);
+  }
+
+  /** Epic 4lf3r: one typed decision through the gateway-owned remote (Jev) backend. */
+  async decide(params: GatewayDecisionParams, signal?: AbortSignal): Promise<LLMDecideResult> {
+    return await requestGatewayDecision(this.transportRuntime, this.companionId, params, signal);
   }
 
   async sessionHmacSign(entry: JournalEntry, previousHmac: string | null): Promise<JournalEntry> {

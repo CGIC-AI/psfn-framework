@@ -1197,6 +1197,13 @@
       "value": "5"
     },
     {
+      "file": "src/boundary/gateway/methods/params/llm.ts",
+      "name": "decisionQuestion.criteria.minItems",
+      "value": "1",
+      "form": "object-member",
+      "note": "Protocol constant: the OpenRouter Decisions API schema requires a score question to list at least one ordered level (DecisionsScoreQuestion.criteria minItems 1); not a tuning value."
+    },
+    {
       "file": "src/boundary/gateway/methods/params/schema.ts",
       "name": "nonEmptyCanonicalString.minLength",
       "value": "1",

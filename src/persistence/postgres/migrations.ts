@@ -1820,6 +1820,28 @@ export const POSTGRES_COMPANION_AVAILABILITY_MIGRATIONS = [
   `,
 ];
 
+/**
+ * Companion-private scheduler lane state that must survive restart
+ * (psfn-framework-89muv rest silence, psfn-framework-orn69 world exploration).
+ */
+export const POSTGRES_SCHEDULER_LANE_STATE_MIGRATIONS = [
+  `
+  CREATE TABLE IF NOT EXISTS scheduler_rest_silences (
+    lane TEXT PRIMARY KEY,
+    silenced_until_ms BIGINT NOT NULL CHECK (silenced_until_ms >= 0),
+    updated_at_ms BIGINT NOT NULL CHECK (updated_at_ms >= 0)
+  );
+  `,
+  `
+  CREATE TABLE IF NOT EXISTS scheduler_world_exploration_state (
+    singleton_id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (singleton_id = 1),
+    last_invited_at_ms BIGINT NOT NULL CHECK (last_invited_at_ms >= 0),
+    day_key TEXT NOT NULL CHECK (day_key ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'),
+    turns_today INTEGER NOT NULL CHECK (turns_today >= 0)
+  );
+  `,
+];
+
 /** Companion-private durable queue for optional post-turn work (mmo9.3). */
 export const POSTGRES_BACKGROUND_WORK_MIGRATIONS = [
   `

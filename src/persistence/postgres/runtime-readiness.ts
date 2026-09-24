@@ -42,6 +42,7 @@ export const POSTGRES_STORE_READINESS_CATALOG = {
   reflection: { label: 'reflection mirror', requirement: 'required' },
   scheduled_prompts: { label: 'scheduled prompts', requirement: 'required' },
   companion_availability: { label: 'companion availability', requirement: 'required' },
+  scheduler_lane_state: { label: 'scheduler lane state', requirement: 'required' },
   letters: { label: 'letters', requirement: 'required' },
   doing_mirror: { label: 'doing mirror', requirement: 'required' },
   buzz_recovery: { label: 'Buzz recovery', requirement: 'required' },

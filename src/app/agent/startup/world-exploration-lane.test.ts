@@ -7,6 +7,24 @@ import {
   registerWorldExplorationLane,
   type WorldExplorationLaneDeps,
 } from './world-exploration-lane.js';
+import type {
+  WorldExplorationInvitationState,
+  WorldExplorationStatePort,
+} from '../../../core/scheduler/world-exploration-state.js';
+
+class InMemoryInvitationState implements WorldExplorationStatePort {
+  state: WorldExplorationInvitationState | null = null;
+  failLoad = false;
+  failSave = false;
+  async load(): Promise<WorldExplorationInvitationState | null> {
+    if (this.failLoad) throw new Error('state store down');
+    return this.state;
+  }
+  async save(state: WorldExplorationInvitationState): Promise<void> {
+    if (this.failSave) throw new Error('state store down');
+    this.state = state;
+  }
+}
 
 const REGISTRY: PlacesRegistryConfig = {
   schemaVersion: 1,
@@ -36,6 +54,7 @@ function makeDeps(overrides: Partial<WorldExplorationLaneDeps> = {}) {
     capabilityRuntime: { has: () => true },
     eventBus: {} as never,
     chargePolicy: undefined,
+    invitationState: new InMemoryInvitationState(),
     now: () => 1_000_000,
     ...overrides,
   };
@@ -141,5 +160,40 @@ describe('world exploration lane (07mw2)', () => {
     // A new day resets the cap.
     nowMs += 24 * 60 * 60_000;
     await expect(lane.runOnce()).resolves.toBe('silent');
+  });
+
+  it('honours the interval and the daily cap from durable state across a restart (orn69)', async () => {
+    let nowMs = 1_000_000;
+    const invitationState = new InMemoryInvitationState();
+    const first = makeDeps({ now: () => nowMs, invitationState });
+    await expect(registerWorldExplorationLane(first.deps).runOnce()).resolves.toBe('invited');
+
+    // A crash/restart re-registers the lane: the interval still holds.
+    const restarted = makeDeps({ now: () => nowMs, invitationState });
+    await expect(registerWorldExplorationLane(restarted.deps).runOnce()).resolves.toBe('interval');
+    expect(restarted.handleMessage).not.toHaveBeenCalled();
+
+    nowMs += 31 * 60_000;
+    await expect(registerWorldExplorationLane(makeDeps({ now: () => nowMs, invitationState }).deps).runOnce())
+      .resolves.toBe('invited');
+    nowMs += 31 * 60_000;
+    // maxTurnsPerDay=2 was spent by two different processes.
+    const capped = makeDeps({ now: () => nowMs, invitationState });
+    await expect(registerWorldExplorationLane(capped.deps).runOnce()).resolves.toBe('daily_cap');
+    expect(capped.handleMessage).not.toHaveBeenCalled();
+  });
+
+  it('never invites when the durable state cannot be read or spent', async () => {
+    const unreadable = new InMemoryInvitationState();
+    unreadable.failLoad = true;
+    const blind = makeDeps({ invitationState: unreadable });
+    await expect(registerWorldExplorationLane(blind.deps).runOnce()).resolves.toBe('state_unavailable');
+    expect(blind.handleMessage).not.toHaveBeenCalled();
+
+    const unwritable = new InMemoryInvitationState();
+    unwritable.failSave = true;
+    const unrecorded = makeDeps({ invitationState: unwritable });
+    await expect(registerWorldExplorationLane(unrecorded.deps).runOnce()).resolves.toBe('state_unavailable');
+    expect(unrecorded.handleMessage).not.toHaveBeenCalled();
   });
 });

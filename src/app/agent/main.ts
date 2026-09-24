@@ -2142,6 +2142,7 @@ async function main(): Promise<void> {
     capabilityRuntime,
     eventBus,
     chargePolicy: config.chargePolicy,
+    invitationState: persistenceRuntime.schedulerLaneStateStore,
   });
   registerTemporalWakeupLane({
     scheduler,
@@ -2179,6 +2180,7 @@ async function main(): Promise<void> {
       ? { automataLifecycle: coreRuntime.automataClassLifecycle }
       : {}),
     listPendingConcernCandidates,
+    restSilenceStore: persistenceRuntime.schedulerLaneStateStore,
   });
   // ── Weighted-thought outreach lane (E?/1xb.2) + Law 27 contradiction
   // dampening: extracted to startup/weighted-thought-outreach-lane.ts.

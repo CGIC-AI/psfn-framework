@@ -45,6 +45,9 @@ import type { InternalStateStorePort } from '../core/self-model/internal-state-p
 import { PostgresParticipantTrendStore } from './postgres/participant-trend-store.js';
 import type { ParticipantTrendStorePort } from '../core/emotion/participant-trend-persistence.js';
 import { PostgresScheduledPromptStore } from './postgres/scheduled-prompt-store.js';
+import { PostgresSchedulerLaneStateStore } from './postgres/scheduler-lane-state-store.js';
+import type { RestSilenceStorePort } from '../core/scheduler/rest-window-policy.js';
+import type { WorldExplorationStatePort } from '../core/scheduler/world-exploration-state.js';
 import type { ScheduledPromptStorePort } from '../core/scheduler/scheduled-prompt-store-port.js';
 import { PostgresCompanionAvailabilityStore } from './postgres/companion-availability-store.js';
 import type { CompanionAvailabilityStorePort } from '../core/agent/companion-availability.js';
@@ -139,6 +142,8 @@ export interface AgentPersistenceRuntime {
   internalStateStore: InternalStateStorePort;
   participantTrendStore: ParticipantTrendStorePort;
   scheduledPromptStore: ScheduledPromptStorePort;
+  /** Companion-private scheduler lane state (rest silence, world exploration). */
+  schedulerLaneStateStore: RestSilenceStorePort & WorldExplorationStatePort;
   companionAvailabilityStore: CompanionAvailabilityStorePort & { close(): Promise<void> };
   /** Companion-private durable asynchronous correspondence bin. */
   letterStore: LetterStorePort;
@@ -613,6 +618,10 @@ export async function createAgentPersistenceRuntime(
     scheduledPromptStore: await awaitPostgresStoreReadiness(
       'scheduled_prompts',
       () => PostgresScheduledPromptStore.connect(databaseUrl, { schema, role: tenantRole }),
+    ),
+    schedulerLaneStateStore: await awaitPostgresStoreReadiness(
+      'scheduler_lane_state',
+      () => PostgresSchedulerLaneStateStore.connect(databaseUrl, { schema, role: tenantRole }),
     ),
     companionAvailabilityStore: await awaitPostgresStoreReadiness(
       'companion_availability',

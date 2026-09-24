@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { InMemoryRestSilenceStore } from '../../../test-support/in-memory-rest-silence-store.js';
 import type { SubstrateAgent } from '../../../core/agent/substrate-agent.js';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import {
@@ -211,6 +212,7 @@ describe('registerFreeTimeLane production composition', () => {
         personalProjects,
         contactStore,
         listPendingConcernCandidates: async () => [],
+        restSilenceStore: new InMemoryRestSilenceStore(),
       };
       registerFreeTimeLane(deps);
       const handler = scheduler.getTask(FREE_TIME_IDLE_TASK_ID)?.handler;

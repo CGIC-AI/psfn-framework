@@ -121,4 +121,3 @@ export class LoopbackPlatform {
     return messages.length;
   }
 }
-

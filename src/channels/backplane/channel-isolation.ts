@@ -202,7 +202,9 @@ export class ChannelSurfaceSupervisor {
           });
         }
       }
-      entry.cleanedUp = true;
+      // Only a cleanup that actually ran releases the surface; without one,
+      // stop must still run the surface's own stop at shutdown.
+      entry.cleanedUp = spec.cleanup !== undefined;
       if (entry.stopping) {
         // Shutdown overtook an in-flight retry: not a new channel fault.
         entry.state = 'stopped';

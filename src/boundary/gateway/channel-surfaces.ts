@@ -639,6 +639,9 @@ export async function startGatewayChannelSurfaces(
     await surfaces.isolation.start({
       ...surfaces.discordSurfaces[index]!,
       start: () => discord.start(),
+      // A failed start (e.g. login succeeded, backfill threw) is released
+      // before any retry logs in again.
+      cleanup: () => discord.stop(),
       onStarted: attempts => log.info('Discord surface started', {
         attempts,
         ...(accountId ? { accountId } : {}),
@@ -655,6 +658,7 @@ export async function startGatewayChannelSurfaces(
     await surfaces.isolation.start({
       ...telegramSurface,
       start: () => telegram.start(),
+      cleanup: () => telegram.stop(),
       onStarted: () => log.info('Telegram gateway bridge enabled', {
         mode: bootstrap.channelsConfig.telegram.mode,
         allowlistSize: bootstrap.channelsConfig.telegram.allowedUsers.length,

@@ -170,9 +170,17 @@ export class ChannelPluginHost {
           ...(options?.signal ? { signal: options.signal } : {}),
           ...(accountId ? { channelAccountRoute: { pluginId, accountId } } : {}),
         };
-        const result = Object.keys(requestOptions).length > 0
-          ? await wiring.requestAgentVoiceStream(message, requestOptions)
-          : await wiring.requestAgentVoiceStream(message);
+        let result: Awaited<ReturnType<ChannelPluginMessageWiring['requestAgentVoiceStream']>>;
+        try {
+          result = Object.keys(requestOptions).length > 0
+            ? await wiring.requestAgentVoiceStream(message, requestOptions)
+            : await wiring.requestAgentVoiceStream(message);
+        } catch (error) {
+          // Recorded against this plugin alone, then rethrown so the
+          // adapter's own error-reply path still runs.
+          this.#supervisor.reportRuntimeFailure(surfaceOf(entry), error);
+          throw error;
+        }
         return {
           content: result.content,
           channelId: result.channelId,

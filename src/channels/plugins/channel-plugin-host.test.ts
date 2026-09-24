@@ -592,6 +592,49 @@ describe('ChannelPluginHost', () => {
     ]);
   });
 
+  it('records a runtime handler failure against that plugin alone and rethrows it', async () => {
+    const handlers = new Map<string, MessageHandler>();
+    const plugin = (id: string): ChannelPlugin => ({
+      manifest: { id, label: id },
+      parseConfig: () => ({ enabled: true, credentials: [], config: {} }),
+      create: () => ({
+        adapter: makeAdapter(id, {
+          onMessage: (handler) => {
+            handlers.set(id, handler);
+          },
+        }),
+      }),
+    });
+    const { supervisor, failures } = makeSupervisor();
+    const host = await ChannelPluginHost.load({
+      registry: createChannelPluginRegistry([plugin('alpha'), plugin('beta')]),
+      sections: {
+        alpha: { id: 'alpha', enabled: true, credentials: [], config: {} },
+        beta: { id: 'beta', enabled: true, credentials: [], config: {} },
+      },
+      vault: createStaticCredentialVault({}),
+      contextFor: () => makeContext(),
+      supervisor,
+    });
+    const requestAgentVoiceStream = vi.fn()
+      .mockRejectedValueOnce(new Error('alpha handler exploded'))
+      .mockResolvedValue({ content: 'ok', channelId: 'beta-channel', model: 'm', durationMs: 1 });
+    host.wireMessages({ requestAgentVoiceStream, notifyOperator: vi.fn() });
+    await host.initialize();
+    await host.start();
+
+    const message = { channelId: 'c', content: 'hi' } as unknown as Parameters<MessageHandler>[0];
+    await expect(handlers.get('alpha')!(message)).rejects.toThrow('alpha handler exploded');
+    await expect(handlers.get('beta')!(message)).resolves.toMatchObject({ content: 'ok' });
+
+    expect(failures).toEqual([expect.objectContaining({
+      surfaceId: 'alpha',
+      phase: 'runtime',
+      terminal: false,
+    })]);
+    expect(host.listRunning().map(entry => entry.id)).toEqual(['alpha', 'beta']);
+  });
+
   it('loads Multica through the same host as a probe plugin', async () => {
     const created: string[] = [];
     const probe = createProbePlugin({

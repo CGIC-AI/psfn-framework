@@ -105,6 +105,19 @@ describe('ChannelSurfaceSupervisor', () => {
     expect(supervisor.stateOf('multica')).toBe('stopped');
   });
 
+  it('still runs stop at shutdown for a failed surface that had no cleanup', async () => {
+    const { supervisor } = makeSupervisor({ isRetryable: () => false });
+    const stop = vi.fn(async () => undefined);
+    await supervisor.start({
+      surfaceId: 'discord',
+      start: async () => {
+        throw new Error('backfill failed after login');
+      },
+    });
+    await supervisor.stop({ surfaceId: 'discord' }, stop);
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+
   it('reports a stop failure without rejecting', async () => {
     const { supervisor, failures } = makeSupervisor();
     await supervisor.start({ surfaceId: 'discord', start: async () => undefined });

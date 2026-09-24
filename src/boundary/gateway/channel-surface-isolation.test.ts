@@ -148,7 +148,8 @@ describe('gateway channel surface isolation (psfn-framework-6cs5j)', () => {
 
     expect(events).toEqual([
       'init:telegram', 'init:multica', 'init:buzz', 'init:discord',
-      'start:discord', 'start:telegram', 'start:multica', 'start:buzz',
+      // Only the failed Discord surface is released; everything else starts.
+      'start:discord', 'stop:discord', 'start:telegram', 'start:multica', 'start:buzz',
     ]);
     expect(isolation.stateOf('discord')).toBe('disabled');
     expect(surfaces.plugins.listRunning().map(entry => entry.id)).toEqual(['multica', 'buzz']);
@@ -187,8 +188,9 @@ describe('gateway channel surface isolation (psfn-framework-6cs5j)', () => {
 
     await vi.advanceTimersByTimeAsync(50);
     expect(isolation.stateOf('discord')).toBe('running');
-    expect(healthEvents.map(event => [event.code, event.severity])).toEqual([
-      ['channel_surface_failed', 'degraded'],
+    expect(healthEvents.map(event => [event.code, event.severity, event.owner.kind])).toEqual([
+      // System-owned so the gateway's system-owned detector cycle counts it.
+      ['channel_surface_failed', 'degraded', 'system'],
     ]);
   });
 

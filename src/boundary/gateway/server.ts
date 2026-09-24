@@ -25,7 +25,6 @@ import {
 } from './protocol.js';
 import {
   disabledGatewayMultiCompanionConfig,
-  resolveGatewaySurfaceForChannelType,
   type GatewayChannelSurface,
   type GatewayMultiCompanionConfig,
 } from './multi-companion.js';
@@ -40,7 +39,6 @@ import { GatewayMcpInvocationAuthority } from './mcp/invocation-authority.js';
 import type { PolicyConfig } from './policy.js';
 import {
   DEFAULT_AGENT_TIMEOUT_MS,
-  requestAgentVoiceStream,
   type VoiceStreamRequestOptions,
 } from './voice-stream-request.js';
 import { GatewayNtfyNotifier, type GatewayNtfyConfig } from './ntfy-notifier.js';
@@ -69,7 +67,6 @@ import {
   type CompanionId,
 } from '../../shared/routing/companion-id.js';
 import { SharedCompanionWorkspaceReader } from '../../persistence/workspaces/shared-workspace-reader.js';
-import { materializeGatewayAttachments } from './attachment-materialization.js';
 import type { TurnPerformanceEvent } from '../../shared/telemetry/turn-performance.js';
 import { resolveTierCapabilityTokens } from '../../system/capabilities/tiers.js';
 import { ShardApprovalGrantAuthority } from '../../system/capabilities/shard-approval-grants.js';
@@ -84,6 +81,7 @@ import { GatewaySharedSatelliteOrchestrator } from './server/shared-satellite-or
 import { GatewayConnectionScope } from './server/connection-scope.js';
 import { GatewayAuditTrail } from './server/audit-trail.js';
 import { GatewayConnectionRpcMethods } from './server/rpc-method-registration.js';
+import { GatewayAgentRequests } from './server/agent-request-routing.js';
 import {
   GatewayCompanionViolations,
   type GatewayFleetConnectionSnapshot,
@@ -193,6 +191,7 @@ export class GatewayServer {
   private readonly connectionScope: GatewayConnectionScope;
   private readonly auditTrail: GatewayAuditTrail;
   private readonly rpcMethods: GatewayConnectionRpcMethods;
+  private readonly agentRequests: GatewayAgentRequests;
 
   private companionDisplayLabel(companionId: string): string {
     return this.options.approvalParentLabelProvider?.(companionId)?.trim()
@@ -484,6 +483,13 @@ export class GatewayServer {
     this.companionMessageLane = new GatewayCompanionMessageLane(ports);
     this.sharedSatellite = new GatewaySharedSatelliteOrchestrator(ports);
     this.connectionScope = new GatewayConnectionScope(ports);
+    this.agentRequests = new GatewayAgentRequests({
+      ...ports,
+      auditTrail: this.auditTrail,
+      connectionRouter: this.connectionRouter,
+      connectionScope: this.connectionScope,
+      sharedSatellite: this.sharedSatellite,
+    });
     this.rpcMethods = new GatewayConnectionRpcMethods({
       ...ports,
       auditTrail: this.auditTrail,
@@ -1091,17 +1097,9 @@ export class GatewayServer {
       conn.destroy();
     }
   }
-
   /** Local readiness of the same owner used by API requests, without sending RPC. */
   isApiReady(): boolean {
-    try {
-      if (this.multiCompanion.enabled) this.connectionRouter.resolveCompanionAgent('api');
-      else this.connectionRouter.resolveReadyAgentConnection();
-      return true;
-    } catch {
-      // Route resolution rejects absent, unready, stale, or unbound owners.
-      return false;
-    }
+    return this.agentRequests.isApiReady();
   }
 
   /**
@@ -1111,50 +1109,45 @@ export class GatewayServer {
    * multi-companion it routes fail-closed to the companion that owns the
    * `api` channel surface.
    */
-  async requestAgent<T = unknown>(
+  requestAgent<T = unknown>(
     method: string,
     params: unknown,
     timeoutMs = DEFAULT_AGENT_TIMEOUT_MS,
   ): Promise<T> {
-    const client = this.multiCompanion.enabled
-      ? this.connectionRouter.resolveCompanionAgent('api').client
-      : this.connectionRouter.resolveReadyRpcClient();
-
-    const result = await Promise.race([
-      client.request(method, params),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Agent request timed out')), timeoutMs),
-      ),
-    ]);
-    // d269: reverse-RPC results are reply egress — scan before returning to
-    // any channel surface.
-    return await this.auditTrail.inspectAgentReply(method, result) as T;
+    return this.agentRequests.requestAgent<T>(method, params, timeoutMs);
   }
 
   /** Route one exact authority read to the authenticated companion agent. */
-  async requestCompanionAgent<T = unknown>(
+  requestCompanionAgent<T = unknown>(
     companionId: string,
     method: string,
     params: unknown,
     timeoutMs = DEFAULT_AGENT_TIMEOUT_MS,
   ): Promise<T> {
-    const exactCompanionId = createCompanionId(
-      companionId,
-      'Explicit companion agent request companionId',
-    );
-    const client = this.multiCompanion.enabled
-      ? this.connectionRouter.requireReadyCompanionRoute('api', exactCompanionId).client
-      : this.connectionRouter.resolveReadyRpcClient();
-    const result = await Promise.race([
-      client.request(method, params),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Companion agent request timed out')), timeoutMs),
-      ),
-    ]);
-    // d269: reverse-RPC results are reply egress — scan before returning to
-    // any channel surface.
-    return await this.auditTrail.inspectAgentReply(method, result) as T;
+    return this.agentRequests.requestCompanionAgent<T>(companionId, method, params, timeoutMs);
   }
+
+  /**
+   * Forward a gateway-process timing observation to the owning agent process,
+   * where the canonical Garden tracker lives. Multi-companion routing requires
+   * an explicit event companionId and never falls back to another agent.
+   */
+  requestAgentTurnPerformance(
+    event: TurnPerformanceEvent,
+    timeoutMs = DEFAULT_AGENT_TIMEOUT_MS,
+  ): Promise<void> {
+    return this.agentRequests.requestAgentTurnPerformance(event, timeoutMs);
+  }
+
+  requestAgentVoiceStream(
+    message: SubstrateMessage,
+    options: VoiceStreamRequestOptions & {
+      channelAccountRoute?: ChannelPluginAccountRoute;
+    } = {},
+  ): Promise<VoiceHandleMessageResult> {
+    return this.agentRequests.requestAgentVoiceStream(message, options);
+  }
+
   /** Persist and publish a content-free observation-delivery audit. */
   recordSharedSatelliteObservationAudit(
     event: Parameters<GatewaySharedSatelliteOrchestrator['recordSharedSatelliteObservationAudit']>[0],
@@ -1180,169 +1173,6 @@ export class GatewayServer {
     return this.sharedSatellite.cancelSharedSatelliteChatCompletion(requestId, params, timeoutMs);
   }
 
-
-  /**
-   * Forward a gateway-process timing observation to the owning agent process,
-   * where the canonical Garden tracker lives. Multi-companion routing requires
-   * an explicit event companionId and never falls back to another agent.
-   */
-  async requestAgentTurnPerformance(
-    event: TurnPerformanceEvent,
-    timeoutMs = DEFAULT_AGENT_TIMEOUT_MS,
-  ): Promise<void> {
-    let client: JSONRPCServerAndClient;
-    if (this.multiCompanion.enabled) {
-      if (!event.companionId) {
-        throw new Error('Multi-companion turn performance forwarding requires event.companionId');
-      }
-      const companionId = createCompanionId(event.companionId, 'Turn performance companionId');
-      this.connectionLifecycle.refreshConnectionHealth();
-      const conn = this.companionConnections.get(companionId);
-      const status = conn ? this.connectionStatuses.get(conn) : undefined;
-      if (!conn
-        || !status
-        || status.role !== 'agent'
-        || status.state !== 'ready'
-        || status.health !== 'healthy') {
-        throw new Error(`No ready agent connection for turn performance companion "${companionId}"`);
-      }
-      const routedClient = this.rpcClients.get(conn);
-      if (!routedClient) {
-        throw new Error(`No RPC client for turn performance companion "${companionId}"`);
-      }
-      client = routedClient;
-    } else {
-      client = this.connectionRouter.resolveReadyRpcClient();
-    }
-
-    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<never>((_, reject) => {
-      timeoutHandle = setTimeout(
-        () => reject(new Error('Turn performance forwarding timed out')),
-        timeoutMs,
-      );
-      timeoutHandle.unref();
-    });
-    let result: unknown;
-    try {
-      result = await Promise.race([
-        client.request('telemetry.turn.performance', { event }),
-        timeout,
-      ]);
-    } finally {
-      if (timeoutHandle) clearTimeout(timeoutHandle);
-    }
-    if (!isRecord(result)
-      || result.accepted !== true
-      || Object.keys(result).some(key => key !== 'accepted')) {
-      throw new Error('Agent rejected turn performance telemetry');
-    }
-  }
-
-  async requestAgentVoiceStream(
-    message: SubstrateMessage,
-    options: VoiceStreamRequestOptions & {
-      channelAccountRoute?: ChannelPluginAccountRoute;
-    } = {},
-  ): Promise<VoiceHandleMessageResult> {
-    const { channelAccountRoute, ...voiceOptions } = options;
-    const sharedSatellite = this.multiCompanion.enabled
-      && message.routing?.source === 'satellite'
-      ? message.routing.satellite
-      : undefined;
-    if (channelAccountRoute && message.routing?.source === 'satellite') {
-      this.companionViolations.alarmCompanionViolation(
-        'invalid_satellite_route',
-        `Channel plugin "${channelAccountRoute.pluginId}" cannot supply satellite routing metadata`,
-        { channelType: message.channelType, pluginId: channelAccountRoute.pluginId },
-      );
-      throw new Error('Channel plugin account routes cannot select a satellite companion');
-    }
-    if (sharedSatellite?.sharedDevice) {
-      return await this.sharedSatellite.requestSharedSatelliteVoiceStream(
-        message,
-        { ...sharedSatellite, sharedDevice: sharedSatellite.sharedDevice },
-        voiceOptions,
-      );
-    }
-    let client: JSONRPCServerAndClient;
-    let conn: GatewayRpcConnection;
-    let companionId = this.options.companionId;
-    if (this.multiCompanion.enabled) {
-      const satellite = message.routing?.satellite;
-      const satelliteSource = message.routing?.source === 'satellite';
-      let route: ReturnType<GatewayConnectionRouter['resolveCompanionAgent']>;
-      if (satellite) {
-        if (!satelliteSource) {
-          this.companionViolations.alarmCompanionViolation(
-            'invalid_satellite_route',
-            'Inbound voice message carries satellite metadata without a satellite routing source',
-            { channelType: message.channelType, channelId: message.channelId },
-          );
-          throw new Error('Satellite voice routing metadata requires routing.source="satellite"');
-        }
-        route = this.connectionRouter.resolveSatelliteCompanionAgent(satellite);
-      } else {
-        if (satelliteSource) {
-          this.companionViolations.alarmCompanionViolation(
-            'invalid_satellite_route',
-            'Inbound satellite voice message is missing authenticated satellite routing metadata',
-            { channelType: message.channelType, channelId: message.channelId },
-          );
-          throw new Error('Satellite voice routing requires authenticated satellite metadata');
-        }
-        const surface = resolveGatewaySurfaceForChannelType(message.channelType);
-        if (!surface) {
-          this.companionViolations.alarmCompanionViolation(
-            'unrouted_channel',
-            `Inbound message channelType "${message.channelType}" has no multi-companion routing surface`,
-            { channelType: message.channelType, channelId: message.channelId },
-          );
-          throw new Error(
-            `Multi-companion routing cannot map channelType "${message.channelType}" to a companion`,
-          );
-        }
-        route = this.connectionRouter.resolveCompanionAgent(
-          surface,
-          channelAccountRoute
-            ? { kind: 'plugin', ...channelAccountRoute }
-            : undefined,
-        );
-      }
-      client = route.client;
-      conn = route.conn;
-      companionId = route.companionId;
-    } else {
-      const route = this.connectionRouter.resolveReadyAgentConnection();
-      client = route.client;
-      conn = route.conn;
-      companionId ??= this.connectionStatuses.get(conn)?.companionId;
-    }
-    if (!companionId) {
-      throw new Error(
-        'Gateway voice routing requires a lowercase RFC-4122 companion UUID binding',
-      );
-    }
-
-    const screenedMessage = voiceOptions.screenMessageForCompanion
-      ? await voiceOptions.screenMessageForCompanion(message, companionId)
-      : message;
-    const result = await requestAgentVoiceStream({
-      client,
-      message: screenedMessage,
-      options: voiceOptions,
-      wyomingShardRouting: this.wyomingShardRouting,
-      companionId,
-      nextRequestCounter: () => ++this.streamRequestCounter,
-      // d269: main-reply canary scan at the reverse-RPC seam.
-      inspectReply: (replyMethod, replyResult) => this.auditTrail.inspectAgentReply(replyMethod, replyResult),
-    });
-    const attachments = materializeGatewayAttachments(
-      result.attachments,
-      this.connectionScope.resolveConnectionWorkspacePath(conn),
-    );
-    return { ...result, ...(attachments ? { attachments } : {}) };
-  }
 
   private getRuntimeHealth(companionId?: string): RuntimeHealthResult {
     return {

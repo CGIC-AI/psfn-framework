@@ -22,11 +22,7 @@ import type { GatewayVisionIntakeScreener } from '../intake/compose-screening.js
 import type { PolicyConfig } from '../policy.js';
 import type { GatewayRpcConnection } from '../transport.js';
 import type { GatewayServerPorts } from './ports.js';
-import type { GatewayAuditTrail } from './audit-trail.js';
-import type { GatewayCompanionMessageLane } from './companion-message-lane.js';
-import type { GatewayConnectionRouter } from './connection-routing.js';
-import type { GatewayConnectionScope } from './connection-scope.js';
-import type { GatewaySharedSatelliteOrchestrator } from './shared-satellite-orchestration.js';
+import type { GatewayServerCollaboratorPorts } from './collaborator-ports.js';
 
 const EMPTY_CREDENTIAL_PRESENCE: GatewayCredentialPresenceResult = {
   discordToken: false,
@@ -37,15 +33,6 @@ const EMPTY_CREDENTIAL_PRESENCE: GatewayCredentialPresenceResult = {
   falApiKey: false,
   telegramBotToken: false,
 };
-
-/** Sibling lifecycle modules the method runtime delegates to (constructed first). */
-interface GatewayServerCollaboratorPorts {
-  readonly auditTrail: GatewayAuditTrail;
-  readonly companionMessageLane: GatewayCompanionMessageLane;
-  readonly connectionRouter: GatewayConnectionRouter;
-  readonly connectionScope: GatewayConnectionScope;
-  readonly sharedSatellite: GatewaySharedSatelliteOrchestrator;
-}
 
 export class GatewayConnectionRpcMethods {
   private readonly apiStreamListeners = new Map<
@@ -79,7 +66,10 @@ export class GatewayConnectionRpcMethods {
       | 'markConnectionReady'
       | 'recordConnectionPosture'
       | 'alarmCompanionViolation'
-    > & GatewayServerCollaboratorPorts,
+    > & Pick<
+      GatewayServerCollaboratorPorts,
+      'auditTrail' | 'companionMessageLane' | 'connectionRouter' | 'connectionScope' | 'sharedSatellite'
+    >,
   ) {}
 
   subscribeApiStream(

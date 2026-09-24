@@ -727,6 +727,10 @@ bad row from taking the foreground turn pipeline down with it:
   `pg_stat_activity.application_name`), so long-held fence clients can no
   longer exhaust the shared per-companion pool that `beginForeground` and every
   store draw from.
+  That lane holds 8 clients and every fenced background session holds one,
+  so the agent refuses to start when `scheduler.json`
+  `backgroundWork.supervisor.maxConcurrentSessions` is 8 or more; foreground
+  appends and handoff recovery always need a free lane client.
 
 Symptoms of a poisoned lane on an older build: every chat turn on every channel
 logs `[IntakeScreening] ... released` and then nothing (no `[ModelFallback]`

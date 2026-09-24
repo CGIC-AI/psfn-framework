@@ -219,6 +219,99 @@ class FakeMemoryPool {
     this.queryFailures.push({ fragment, error: new Error(errorMessage) });
   }
 
+  /**
+   * Emulates the query-time L2 read model (PostgresL2ReadModel) over the fake
+   * rows. Its statements all bind the readable-type list as
+   * `memory.type = ANY($n::text[])`, which no other store statement uses.
+   */
+  private queryL2ReadModel(normalized: string, values: readonly unknown[]): QueryResult | undefined {
+    if (!normalized.includes('memory.type = any(')) return undefined;
+    const result = (rows: Array<Record<string, unknown>>): QueryResult => (
+      { rows, rowCount: rows.length, command: 'SELECT', oid: 0, fields: [] } as QueryResult
+    );
+    const readableTypes = values.at(-1) as readonly string[];
+    const readable = [...this.memories.values()]
+      .filter(row => readableTypes.includes(String(row.type)))
+      .map(row => ({ ...row, embedding: null }));
+    const active = readable.filter(row => row.superseded_by === null && row.deleted_at === null);
+    const newestFirst = (left: MemoryRow, right: MemoryRow): number => (
+      Number(right.extracted_at) - Number(left.extracted_at) || (right.id < left.id ? -1 : right.id > left.id ? 1 : 0)
+    );
+    if (normalized.includes('select count(*) as count')) {
+      return result([{ count: String(active.length) }]);
+    }
+    if (normalized.includes('sum(memory.salience) as salience_sum')) {
+      const byType = new Map<string, { count: number; salience: number }>();
+      for (const row of active) {
+        const entry = byType.get(String(row.type)) ?? { count: 0, salience: 0 };
+        entry.count += 1;
+        entry.salience += Number(row.salience);
+        byType.set(String(row.type), entry);
+      }
+      return result([...byType].map(([type, entry]) => ({
+        type, count: String(entry.count), salience_sum: String(entry.salience),
+      })));
+    }
+    if (normalized.includes('lexical.hits')) {
+      const tokens = values[0] as string[];
+      const limit = Number(values[1]);
+      const rows = active
+        .map((row) => {
+          const tags = Array.isArray(row.tags) ? (row.tags as unknown[]).map(String) : [];
+          const haystack = `${row.text} ${tags.join(' ')} ${row.source_ref}`.toLowerCase();
+          return { row, hits: tokens.filter(token => haystack.includes(token)).length };
+        })
+        .filter(entry => entry.hits > 0)
+        .sort((left, right) => right.hits - left.hits
+          || Number(right.row.salience) - Number(left.row.salience)
+          || newestFirst(left.row, right.row))
+        .slice(0, limit)
+        .map(entry => entry.row);
+      return result(rows);
+    }
+    if (normalized.includes('where memory.type = any($2::text[]) and memory.id = $1')) {
+      return result(readable.filter(row => row.id === values[0]));
+    }
+    if (normalized.includes('memory.id = any($1::text[])')) {
+      const ids = values[0] as string[];
+      return result(readable.filter(row => ids.includes(row.id)));
+    }
+    if (normalized.includes('starts_with(memory.source_ref')) {
+      const prefix = `${String(values[0])}:`;
+      return result(active.filter(row => row.source_ref.startsWith(prefix)).sort(newestFirst)
+        .slice(0, Number(values[1])));
+    }
+    if (normalized.includes('memory.contact_id = $1')) {
+      return result(active.filter(row => row.contact_id === values[0])
+        .sort((left, right) => Number(right.salience) - Number(left.salience) || newestFirst(left, right))
+        .slice(0, Number(values[1])));
+    }
+    if (normalized.includes('order by case when memory.superseded_by is not null')) {
+      const archived = (row: MemoryRow): number => (row.superseded_by !== null || row.deleted_at !== null ? 1 : 0);
+      const ordered = [...readable].sort((left, right) => archived(left) - archived(right) || newestFirst(left, right));
+      const offset = Number(values[0]);
+      return result(normalized.includes('limit $2')
+        ? ordered.slice(offset, offset + Number(values[1]))
+        : ordered.slice(offset));
+    }
+    if (normalized.includes('order by memory.extracted_at desc, memory.id asc limit $1')) {
+      return result([...active].sort((left, right) => Number(right.extracted_at) - Number(left.extracted_at)
+        || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)).slice(0, Number(values[0])));
+    }
+    if (normalized.includes('order by memory.extracted_at desc, memory.id desc offset $1 limit $2')) {
+      const offset = Number(values[0]);
+      const before = normalized.includes('(memory.extracted_at, memory.id) <')
+        ? { extractedAt: Number(values[2]), memoryId: String(values[3]) }
+        : undefined;
+      return result(active
+        .filter(row => before === undefined || Number(row.extracted_at) < before.extractedAt
+          || (Number(row.extracted_at) === before.extractedAt && row.id < before.memoryId))
+        .sort(newestFirst)
+        .slice(offset, offset + Number(values[1])));
+    }
+    throw new Error(`Unhandled L2 read-model statement in FakeMemoryPool: ${normalized}`);
+  }
+
   async connect(): Promise<FakeTransactionClient> {
     const client = new FakeTransactionClient(this);
     this.clients.push(client);
@@ -403,6 +496,9 @@ class FakeMemoryPool {
         fields: [],
       } as QueryResult;
     }
+
+    const l2Read = this.queryL2ReadModel(normalized, values);
+    if (l2Read) return l2Read;
 
     if (normalized.startsWith('select id, embedding::text as embedding from l2_memories')) {
       const target = this.memories.get(String(values[0] ?? ''));
@@ -1730,10 +1826,14 @@ describe('postgres memory store unit coverage', () => {
     })).rejects.toThrow(
       'simulated delete-version failure',
     );
-    expect(await store.getById(memory.id)).toEqual({
+    // ufgwv: getById reads the committed row, so the result is the decoded
+    // canonical shape (defaulted optional fields) of the still-active memory.
+    const visible = await store.getById(memory.id);
+    expect(visible).toMatchObject({
       ...memory,
       salienceDecayAnchorAt: memory.lastAccessed,
     });
+    expect(visible?.deletedAt).toBeUndefined();
     expect(await store.getDeleteVersion('delete-version')).toBeUndefined();
     expect(await store.countActiveMemories()).toBe(1);
   });
@@ -1865,30 +1965,38 @@ describe('postgres memory store unit coverage', () => {
     );
   });
 
-  it('does not select or hydrate L2 embeddings at startup (a27w.1 bounded boot)', async () => {
+  it('issues no row-returning L2 SELECT at startup and reads rows at query time (ufgwv)', async () => {
     const pool = new FakeMemoryPool();
-    // Seed many rows that each carry an embedding. Startup cost must not scale
-    // with them: the hydration SELECT must not request the embedding column,
-    // so no Float32Array is ever decoded or retained at boot.
+    // Seed many rows. Startup cost must not scale with them: boot selects no
+    // l2_memories rows at all; detail and count are answered by bounded SQL.
     for (let index = 0; index < 50; index += 1) {
       const memory = makeMemory(`boot-embed-${index}`, `boot memory ${index}`);
       pool.memories.set(memory.id, makeMemoryRow(memory, '[0.1,0.2,0.3,0.4]'));
     }
     postgresMocks.activePool = pool;
     postgresMocks.queryRows.mockClear();
+    postgresMocks.executeQuery.mockClear();
 
-    const store = await createPostgresMemoryStore('postgres://unused', 4);
+    const store = await createPostgresMemoryStore('postgres://unused', 4, { subjectBackfill: false });
 
-    const hydrationSelects = postgresMocks.queryRows.mock.calls
+    const bootL2RowSelects = [
+      ...postgresMocks.queryRows.mock.calls,
+      ...postgresMocks.executeQuery.mock.calls,
+    ]
       .map(call => String(call[1]))
-      .filter(sql => /FROM\s+l2_memories/i.test(sql) && /ORDER BY extracted_at DESC, id DESC/i.test(sql));
-    expect(hydrationSelects.length).toBeGreaterThan(0);
-    for (const sql of hydrationSelects) {
-      expect(sql).not.toMatch(/embedding/i);
-    }
-    // Metadata still hydrates so getById / lexical search / counts are intact.
-    expect(await store.getById('boot-embed-0')).toBeDefined();
+      .filter(sql => /FROM\s+l2_memories\b/i.test(sql) && !/COUNT\(/i.test(sql));
+    expect(bootL2RowSelects).toEqual([]);
+    const detail = await store.getById('boot-embed-0');
+    expect(detail?.id).toBe('boot-embed-0');
+    expect(detail?.embedding).toBeUndefined();
     expect(await store.countActiveMemories()).toBe(50);
+    const readSql = postgresMocks.queryRows.mock.calls
+      .map(call => String(call[1]))
+      .filter(sql => /FROM\s+l2_memories\b/i.test(sql));
+    expect(readSql.length).toBeGreaterThan(0);
+    for (const sql of readSql) {
+      expect(sql).not.toMatch(/embedding::text/i);
+    }
   });
 
   it('fails closed at startup when the embedding schema probe is unreachable (a27w.1)', async () => {

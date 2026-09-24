@@ -1,8 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { assertMemoryListPosition } from './list-position.js';
-import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
-import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import {
   createPostgresPool,
   ensurePostgresSchema,
@@ -32,6 +29,7 @@ import type {
   MemoryMaintenanceDiagnostics,
   MemoryMaintenanceDiagnosticsOptions,
   MemoryListOptions,
+  ActiveMemoryListOptions,
   MemoryLink,
   MemoryMaintenanceReview,
   MemoryMaintenanceReviewInput,
@@ -66,70 +64,23 @@ import type {
 import type {
   MemoryDeletionProposalStorePort,
 } from './deletion-proposals.js';
-import { InactiveMemoryUpdateError, normalizeMemorySalienceUpdates } from './memory-store-port.js';
+import { InactiveMemoryUpdateError } from './memory-store-port.js';
 import {
   applyRetentionClassTags,
   normalizeMemoryProvenance,
-  normalizeMemoryScopeQuery,
   normalizeMemoryScopeRef,
   normalizeMemoryScopeTags,
   normalizeMemorySourceType,
   type MemoryScopeQuery,
   type PurrMemory,
 } from './types.js';
-import {
-  normalizeMemoryMaintenanceReviewInput,
-} from './maintenance-review.js';
-import {
-  ADMIN_DURABLE_MEMORY_TAGS,
-  ADMIN_FAVORITE_TEXT_REGEX,
-  ADMIN_PREFERENCE_MEMORY_TAGS,
-  ADMIN_PREFERENCE_TEXT_REGEX,
-  addPostgresQueryValue,
-  activeAdminMemoryClause,
-  buildPostgresAdminMemoryWhere,
-  durableAdminMemoryCondition,
-  mapPostgresAdminPrivacySummary,
-  preferenceAdminMemoryCondition,
-} from './postgres-store/admin.js';
-import {
-  fromEvolutionLinkRow,
-  normalizeEvolutionLinkInput,
-  normalizeEvolutionRelation,
-} from './postgres-store/evolution.js';
-import { fromMaintenanceReviewRow } from './postgres-store/reviews.js';
-import type {
-  AdminMemoryPrivacyAggregateRow,
-  RecentContactShapeRow,
-  CountRow,
-  MemoryAbstractionLinkRow,
-  MemoryDeleteVersionRow,
-  MemoryEmbeddingSearchRow,
-  MemoryEvolutionLinkRow,
-  MemoryLinkRow,
-  MemoryMaintenanceReviewPgRow,
-  MemoryRow,
-  ScratchpadRow,
-  SensitivityCountRow,
-} from './postgres-store/rows.js';
+import type { MemoryRow } from './postgres-store/rows.js';
 import {
   decodeEmbedding,
-  decodeStringArray,
-  encodeEmbeddingLiteral,
   tryFromMemoryRow,
-  parseOptionalPgNumber,
-  parsePgNumber,
   serializeJsonValue,
-  toMemoryRow,
   validateEmbeddingDimensions,
 } from './postgres-store/rows.js';
-import {
-  clampLimit,
-  increment,
-  lexicalScore,
-  memoryEvolutionKey,
-  memoryKey,
-} from './postgres-store/utils.js';
 import {
   inspectMemorySubjectClassificationCoverage,
 } from './postgres-store/subject-coverage.js';
@@ -138,13 +89,8 @@ import {
   validatePostgresMemorySchema,
 } from './postgres-store/schema.js';
 import {
-  ANN_MAX_CANDIDATES,
-  annCandidatePool,
-  annEfSearch,
   buildL2EmbeddingAnnIndexConcurrently,
   detectPgvectorIterativeScanSupport,
-  embeddingAnnOrderExpression,
-  runAnnTunedQuery,
   type L2EmbeddingAnnIndexBuildOutcome,
 } from './postgres-store/embedding-index.js';
 import {
@@ -158,47 +104,29 @@ import {
   resolveMemoryDeletionJustification,
   type MemoryDeletionPolicy,
 } from '../../system/config/memory-deletion-policy.js';
-import { buildMemorySubjectAuthorizationPredicate } from './postgres-store/subject-policy.js';
 import { persistMemorySubjectProjection } from './postgres-store/subject-projection.js';
 import {
   backfillMemorySubjectClassifications as runMemorySubjectBackfill,
   runMemorySubjectBackfillToCompletion,
 } from './postgres-store/subject-backfill.js';
+import type { MemorySubjectClassification } from '../../shared/contracts/memory-subject.js';
+import type { PostgresMemoryStoreCollaboratorContext } from './postgres-store/collaborator-context.js';
+import { PostgresMemoryDeletionStore } from './postgres-store/memory-deletion.js';
+import { PostgresMemorySubjectAuthorizedWrites } from './postgres-store/subject-authorized-writes.js';
+import { PostgresL2BoundedReads } from './postgres-store/bounded-reads.js';
+import { PostgresMemoryBulkUpdates } from './postgres-store/bulk-updates.js';
+import { PostgresMemoryLinkStore } from './postgres-store/memory-links.js';
+import { PostgresMemoryMaintenanceReviewStore } from './postgres-store/reviews.js';
+import { PostgresRecentContactShapeStore } from './postgres-store/contact-shapes.js';
+import { PostgresScratchpadStore } from './postgres-store/scratchpad.js';
+import { upsertL2MemoryRow } from './postgres-store/memory-row-upsert.js';
+import { PostgresL2ReadModel } from './postgres-store/l2-read-model.js';
 import {
-  MemorySubjectAuthorizationDeniedError,
-  parseMemorySubjectQueryAuthorization,
-  type MemorySubjectClassification,
-  type MemorySubjectQueryAuthorization,
-} from '../../shared/contracts/memory-subject.js';
+  listPostgresAdminMemories,
+  queryPostgresAdminMemoryPrivacySummary,
+} from './postgres-store/admin-queries.js';
 
-const SCRATCHPAD_TTL_MS = 24 * 60 * 60 * 1000;
-const SCRATCHPAD_MAX_ENTRIES = 64;
 const log = createComponentLogger('PostgresMemoryStore');
-
-function appendMemoryScopeSqlPredicate(
-  scopeQuery: MemoryScopeQuery | undefined,
-  values: unknown[],
-): string | undefined {
-  if (!scopeQuery) return undefined;
-  const refConditions = (scopeQuery.refs ?? []).map((ref) => {
-    values.push(ref.kind, ref.id);
-    return `(scope_ref_kind = $${values.length - 1} AND scope_ref_id = $${values.length})`;
-  });
-  const tags = scopeQuery.tags ?? [];
-  let tagCondition: string | undefined;
-  if (tags.length > 0) {
-    values.push(tags);
-    tagCondition = `scope_tags ?| $${values.length}::text[]`;
-  }
-  const refCondition = refConditions.length > 0 ? `(${refConditions.join(' OR ')})` : undefined;
-  if (scopeQuery.mode === 'only') {
-    const conditions = [refCondition, tagCondition]
-      .filter((condition): condition is string => condition !== undefined);
-    return conditions.length > 0 ? conditions.join(' AND ') : undefined;
-  }
-  if (refCondition && tagCondition) return `(${refCondition} OR ${tagCondition})`;
-  return refCondition ?? tagCondition;
-}
 
 export interface PostgresMemoryStoreOptions {
   notesDir?: string;
@@ -313,7 +241,6 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
   private annIndexBuild: Promise<L2EmbeddingAnnIndexBuildOutcome> | null = null;
   private annIndexBuildStatus: 'idle' | 'building' | 'ready' | 'degraded' = 'idle';
   private readonly journal: MemoryJournal | null;
-  private readonly scratchpadMirrorPath: string | null;
   private persistChain: Promise<void> = Promise.resolve();
   private readonly initialization: Promise<void>;
   private salienceMaintenanceRevision = 0;
@@ -323,19 +250,20 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
   readonly memoryDeletionProposalStore: MemoryDeletionProposalStorePort;
   private readonly deletionProposalPersistence: PostgresMemoryDeletionProposalStore;
 
-  private memories = new Map<string, PurrMemory>();
-  // Embeddings are NOT hydrated into memory (a27w.1). Similarity search runs in
-  // Postgres/pgvector (searchByEmbedding) and the remaining stored-embedding
-  // consumers read their vectors on demand via fetchStoredEmbedding /
-  // listActiveMemoryEmbeddingsSince, so resident memory no longer scales with
-  // lifetime corpus size × embedding dimensions.
-  private deleteVersions = new Map<string, MemoryDeleteVersion>();
-  private abstractionLinks = new Map<string, MemoryAbstractionLink>();
-  private memoryEvolutionLinks = new Map<string, MemoryEvolutionLink>();
-  private memoryLinks = new Map<string, MemoryLink>();
-  private maintenanceReviews = new Map<string, MemoryMaintenanceReview>();
-  private recentContactShapes = new Map<string, RecentContactShapeArtifact>();
-  private scratchpadEntries = new Map<string, ScratchpadEntry>();
+  private readonly collaboratorContext: PostgresMemoryStoreCollaboratorContext;
+  private readonly memoryDeletion: PostgresMemoryDeletionStore;
+  private readonly subjectAuthorizedWrites: PostgresMemorySubjectAuthorizedWrites;
+  private readonly boundedReads: PostgresL2BoundedReads;
+  private readonly bulkUpdates: PostgresMemoryBulkUpdates;
+  private readonly links: PostgresMemoryLinkStore;
+  private readonly maintenanceReviews: PostgresMemoryMaintenanceReviewStore;
+  private readonly recentContactShapes: PostgresRecentContactShapeStore;
+  private readonly scratchpad: PostgresScratchpadStore;
+  // L2 memory rows are NOT hydrated into process memory (ufgwv; embeddings
+  // since a27w.1). Detail/list/count/search reads are bounded SQL through
+  // PostgresL2ReadModel, so resident memory and boot cost no longer scale with
+  // lifetime corpus size.
+  private readonly readModel: PostgresL2ReadModel;
 
   constructor(
     pool: Pool,
@@ -349,7 +277,39 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
     this.annIterativeScanAvailable = options.annIterativeScanAvailable ?? false;
     this.startupSubjectClassificationCoverage = options.startupSubjectClassificationCoverage;
     this.journal = options.journal ?? null;
-    this.scratchpadMirrorPath = options.scratchpadMirrorPath?.trim() ? options.scratchpadMirrorPath.trim() : null;
+    const scratchpadMirrorPath = options.scratchpadMirrorPath?.trim() ? options.scratchpadMirrorPath.trim() : null;
+    const ctx: PostgresMemoryStoreCollaboratorContext = {
+      pool,
+      embeddingDims,
+      persist: <T>(task: () => Promise<T>): Promise<T> => this.persist(task),
+      settle: () => this.persistChain,
+      hasActiveTransaction: () => this.transactionContext.getStore() !== undefined,
+      runInTransaction: <T>(handler: () => T): Promise<T> => this.runInTransaction(handler),
+      queryWrite: <T extends QueryResultRow>(text: string, values: readonly unknown[]) => (
+        this.queryWrite<T>(text, values)
+      ),
+      persistClassifiedMemoryRow: (memory, embedding) => this.persistClassifiedMemoryRow(memory, embedding),
+      markSalienceMaintenanceChanged: () => this.markSalienceMaintenanceChanged(),
+      markRetrievalCorpusChanged: () => this.markRetrievalCorpusChanged(),
+    };
+    this.collaboratorContext = ctx;
+    this.readModel = new PostgresL2ReadModel(ctx);
+    this.memoryDeletion = new PostgresMemoryDeletionStore(
+      ctx,
+      this.readModel,
+      this.journal,
+      input => this.deletionProposalPersistence.markRestored(input),
+    );
+    this.subjectAuthorizedWrites = new PostgresMemorySubjectAuthorizedWrites(ctx, {
+      updateMemory: (id, updates, updateOptions) => this.updateMemory(id, updates, updateOptions),
+      insertMemory: (memory, embedding) => this.insertMemory(memory, embedding),
+    });
+    this.boundedReads = new PostgresL2BoundedReads(ctx, this.annIterativeScanAvailable);
+    this.bulkUpdates = new PostgresMemoryBulkUpdates(ctx, this.readModel);
+    this.links = new PostgresMemoryLinkStore(ctx);
+    this.maintenanceReviews = new PostgresMemoryMaintenanceReviewStore(ctx, () => this.links.evolutionLinks());
+    this.recentContactShapes = new PostgresRecentContactShapeStore(ctx);
+    this.scratchpad = new PostgresScratchpadStore(ctx, scratchpadMirrorPath);
     this.deletionProposalPersistence = new PostgresMemoryDeletionProposalStore({
       runInTransaction: async <T>(handler: () => Promise<T>): Promise<T> => (
         await this.runInTransaction(handler)
@@ -362,7 +322,7 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
         return await queryRows<T>(this.pool, text, values);
       },
       hasActiveTransaction: () => this.transactionContext.getStore() !== undefined,
-      upsertDeleteVersion: version => this.upsertDeleteVersion(version),
+      upsertDeleteVersion: version => this.memoryDeletion.upsertDeleteVersion(version),
       persistClassifiedMemoryRow: (memory, embedding) => this.persistClassifiedMemoryRow(memory, embedding),
       validateEmbedding: (embedding, operation) => (
         validateEmbeddingDimensions(embedding, this.embeddingDims, operation)
@@ -373,9 +333,8 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
           : options.memoryDeletionPolicy;
         return resolveMemoryDeletionJustification(policy, categoryId, explanation);
       },
-      onApproved: (version, deletedMemory) => {
-        this.memories.set(deletedMemory.id, deletedMemory);
-        this.deleteVersions.set(version.deleteId, version);
+      onApproved: (version) => {
+        this.memoryDeletion.recordVersion(version);
         this.markSalienceMaintenanceChanged();
         this.markRetrievalCorpusChanged();
         this.journal?.onSoftDelete(version);
@@ -446,136 +405,15 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
   }
 
   private async initialize(): Promise<void> {
-    // a27w.1: startup no longer selects or decodes embedding vectors. The
-    // embedding column is deliberately excluded here so boot cost stays
-    // O(rows) metadata rather than O(rows × dimensions). Embedding-table
-    // reachability is still asserted fail-closed before this method runs, by
-    // assertExistingMemorySchemaHasEmbeddingColumn + validatePostgresMemorySchema
-    // in createPostgresMemoryStoreFromPool.
-    const memoryRows = await queryRows<MemoryRow>(this.pool, `
-      SELECT
-        id, text, type, importance, confidence, emotional_valence, formation_vad, emotional_texture,
-        salience, salience_decay_anchor_at, source_ref, source_type, provenance_json, extracted_at, last_accessed,
-        access_count, superseded_by,
-        tags, scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,
-        retention_class, sensitivity, consent_flags, contact_id, deleted_at, deleted_by,
-        delete_reason
-      FROM l2_memories
-      ORDER BY extracted_at DESC, id DESC
-    `);
-    for (const row of memoryRows) {
-      const memory = tryFromMemoryRow(row);
-      if (memory) this.memories.set(row.id, memory);
-    }
-
-    const deleteRows = await queryRows<MemoryDeleteVersionRow>(this.pool, `
-      SELECT delete_id, proposal_id, memory_id, snapshot_json, deleted_at, deleted_by, delete_reason, restored_at, restored_by
-      FROM l2_memory_delete_versions
-    `);
-    for (const row of deleteRows) {
-      this.deleteVersions.set(row.delete_id, {
-        deleteId: row.delete_id,
-        ...(row.proposal_id ? { proposalId: row.proposal_id } : {}),
-        memoryId: row.memory_id,
-        snapshot: typeof row.snapshot_json === 'object' && row.snapshot_json !== null
-          ? (row.snapshot_json as PurrMemory)
-          : JSON.parse(String(row.snapshot_json)) as PurrMemory,
-        deletedAt: parsePgNumber(row.deleted_at, 'deleted_at'),
-        deletedBy: row.deleted_by ?? 'unknown',
-        deleteReason: row.delete_reason ?? undefined,
-        restoredAt: parseOptionalPgNumber(row.restored_at, 'restored_at'),
-        restoredBy: row.restored_by ?? undefined,
-      });
-    }
-
-    const linkRows = await queryRows<MemoryAbstractionLinkRow>(this.pool, `
-      SELECT id, source_memory_id, abstracted_memory_id, external_ref, created_at, created_by, reason
-      FROM l2_memory_abstraction_links
-    `);
-    for (const row of linkRows) {
-      const link = {
-        id: row.id,
-        sourceMemoryId: row.source_memory_id,
-        abstractedMemoryId: row.abstracted_memory_id,
-        externalRef: row.external_ref,
-        createdAt: row.created_at,
-        ...(row.created_by ? { createdBy: row.created_by } : {}),
-        ...(row.reason ? { reason: row.reason } : {}),
-      };
-      this.abstractionLinks.set(link.id, link);
-    }
-
-    const evolutionLinkRows = await queryRows<MemoryEvolutionLinkRow>(this.pool, `
-      SELECT
-        id, source_memory_id, target_memory_id, relation, confidence, reason,
-        source_ref, source_type, provenance_refs, provenance_json, created_at
-      FROM memory_evolution_links
-    `);
-    for (const row of evolutionLinkRows) {
-      const link = fromEvolutionLinkRow(row);
-      this.memoryEvolutionLinks.set(memoryEvolutionKey(
-        link.sourceMemoryId,
-        link.targetMemoryId,
-        link.relation,
-      ), link);
-    }
-
-    const memoryLinkRows = await queryRows<MemoryLinkRow>(this.pool, `
-      SELECT id1, id2, link_type, created_at FROM memory_links
-    `);
-    for (const row of memoryLinkRows) {
-      this.memoryLinks.set(memoryKey(row.id1, row.id2), {
-        id1: row.id1,
-        id2: row.id2,
-        linkType: row.link_type,
-        createdAt: row.created_at,
-      });
-    }
-
-    const maintenanceReviewRows = await queryRows<MemoryMaintenanceReviewPgRow>(this.pool, `
-      SELECT
-        id, kind, status, subject_memory_id, candidate_memory_ids, state_json,
-        quarantine_reason, created_at, updated_at
-      FROM l2_memory_maintenance_reviews
-    `);
-    for (const row of maintenanceReviewRows) {
-      const review = fromMaintenanceReviewRow(row);
-      this.maintenanceReviews.set(review.id, review);
-    }
-
-    const recentContactShapes = await queryRows<RecentContactShapeRow>(this.pool, `
-      SELECT schema_version, contact_id, summary_text, source_memory_ids,
-             confidence_score, novelty_score, updated_at, fresh_until
-      FROM recent_contact_shapes
-      WHERE schema_version = 1
-    `);
-    for (const row of recentContactShapes) {
-      this.recentContactShapes.set(row.contact_id, {
-        schemaVersion: 1,
-        contactId: row.contact_id,
-        summary: row.summary_text,
-        sourceMemoryIds: decodeStringArray(row.source_memory_ids),
-        confidenceScore: row.confidence_score,
-        noveltyScore: row.novelty_score,
-        updatedAt: row.updated_at,
-        freshUntil: row.fresh_until,
-      });
-    }
-
-    const scratchpadEntries = await queryRows<ScratchpadRow>(this.pool, `
-      SELECT id, content, created_at, updated_at
-      FROM scratchpad_entries
-      ORDER BY updated_at DESC, created_at DESC
-    `);
-    for (const row of scratchpadEntries) {
-      this.scratchpadEntries.set(row.id, {
-        id: row.id,
-        content: row.content,
-        createdAt: parsePgNumber(row.created_at, 'scratchpad_entries.created_at'),
-        updatedAt: parsePgNumber(row.updated_at, 'scratchpad_entries.updated_at'),
-      });
-    }
-    this.pruneExpiredScratchpadEntries();
+    // ufgwv: boot no longer selects l2_memories at all; L2 rows are read at
+    // query time. Embedding-column reachability is still asserted fail-closed
+    // before this method runs, by assertExistingMemorySchemaHasEmbeddingColumn +
+    // validatePostgresMemorySchema in createPostgresMemoryStoreFromPool.
+    await this.memoryDeletion.hydrate();
+    await this.links.hydrate();
+    await this.maintenanceReviews.hydrate();
+    await this.recentContactShapes.hydrate();
+    await this.scratchpad.hydrate();
   }
 
   private persist<T>(task: () => Promise<T>): Promise<T> {
@@ -603,33 +441,6 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
     await this.queryWrite(text, values);
   }
 
-  /**
-   * Reads a single memory's stored embedding on demand (a27w.1). Replaces the
-   * former hydrated `embeddings` map for the re-upsert paths (soft delete /
-   * restore) that must preserve the persisted vector. Runs on the active
-   * transaction client when inside one and takes a row lock so a concurrent
-   * write cannot swap the vector between this read and the re-upsert. A NULL /
-   * absent embedding yields undefined; a present-but-undecodable vector fails
-   * closed, matching the old hydration contract.
-   */
-  private async fetchStoredEmbedding(
-    id: string,
-    operation: string,
-  ): Promise<Float32Array | undefined> {
-    const rows = await this.queryWrite<{ embedding: string | null }>(
-      'SELECT id, embedding::text AS embedding FROM l2_memories WHERE id = $1 FOR UPDATE',
-      [id],
-    );
-    const raw = rows.at(0)?.embedding;
-    if (!raw) return undefined;
-    const embedding = decodeEmbedding(raw);
-    if (!embedding) {
-      throw new Error(`PostgreSQL memory schema returned an unreadable pgvector embedding for memory ${id}`);
-    }
-    validateEmbeddingDimensions(embedding, this.embeddingDims, operation);
-    return embedding;
-  }
-
   private async queryWrite<T extends QueryResultRow>(
     text: string,
     values: readonly unknown[],
@@ -642,92 +453,7 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
   }
 
   private async upsertMemoryRow(memory: PurrMemory, embedding?: Float32Array): Promise<number> {
-    if (embedding) {
-      validateEmbeddingDimensions(embedding, this.embeddingDims, 'write');
-    }
-    const row = toMemoryRow(memory, embedding);
-    const revisions = await this.queryWrite<{ authorization_revision: string }>(`
-      INSERT INTO l2_memories (
-        id, text, type, importance, confidence, emotional_valence, formation_vad, salience,
-        salience_decay_anchor_at,
-        source_ref, source_type, provenance_json, extracted_at, last_accessed, access_count,
-        superseded_by, tags,
-        scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,
-        retention_class, sensitivity, consent_flags, contact_id, deleted_at, deleted_by,
-        delete_reason, emotional_texture, embedding
-      ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31::vector
-      )
-      ON CONFLICT (id) DO UPDATE SET
-        text = EXCLUDED.text,
-        type = EXCLUDED.type,
-        importance = EXCLUDED.importance,
-        confidence = EXCLUDED.confidence,
-        emotional_valence = EXCLUDED.emotional_valence,
-        formation_vad = EXCLUDED.formation_vad,
-        salience = EXCLUDED.salience,
-        salience_decay_anchor_at = EXCLUDED.salience_decay_anchor_at,
-        source_ref = EXCLUDED.source_ref,
-        source_type = EXCLUDED.source_type,
-        provenance_json = EXCLUDED.provenance_json,
-        extracted_at = EXCLUDED.extracted_at,
-        last_accessed = EXCLUDED.last_accessed,
-        access_count = EXCLUDED.access_count,
-        superseded_by = EXCLUDED.superseded_by,
-        tags = EXCLUDED.tags,
-        scope_ref_kind = EXCLUDED.scope_ref_kind,
-        scope_ref_id = EXCLUDED.scope_ref_id,
-        scope_ref_label = EXCLUDED.scope_ref_label,
-        scope_tags = EXCLUDED.scope_tags,
-        provenance_refs = EXCLUDED.provenance_refs,
-        retention_class = EXCLUDED.retention_class,
-        sensitivity = EXCLUDED.sensitivity,
-        consent_flags = EXCLUDED.consent_flags,
-        contact_id = EXCLUDED.contact_id,
-        deleted_at = EXCLUDED.deleted_at,
-        deleted_by = EXCLUDED.deleted_by,
-        delete_reason = EXCLUDED.delete_reason,
-        emotional_texture = EXCLUDED.emotional_texture,
-        embedding = EXCLUDED.embedding
-      RETURNING authorization_revision
-    `, [
-      row.id,
-      row.text,
-      row.type,
-      row.importance,
-      row.confidence,
-      row.emotional_valence,
-      serializeJsonValue(row.formation_vad),
-      row.salience,
-      row.salience_decay_anchor_at,
-      row.source_ref,
-      row.source_type,
-      serializeJsonValue(row.provenance_json),
-      row.extracted_at,
-      row.last_accessed,
-      row.access_count,
-      row.superseded_by,
-      serializeJsonValue(row.tags),
-      row.scope_ref_kind,
-      row.scope_ref_id,
-      row.scope_ref_label,
-      serializeJsonValue(row.scope_tags),
-      serializeJsonValue(row.provenance_refs),
-      row.retention_class,
-      row.sensitivity,
-      serializeJsonValue(row.consent_flags),
-      row.contact_id,
-      row.deleted_at,
-      row.deleted_by,
-      row.delete_reason,
-      serializeJsonValue(row.emotional_texture),
-      row.embedding,
-    ]);
-    const revision = Number(revisions[0]?.authorization_revision);
-    if (!Number.isSafeInteger(revision) || revision < 1) {
-      throw new Error(`Memory ${memory.id} did not return a valid authorization revision`);
-    }
-    return revision;
+    return await upsertL2MemoryRow(this.collaboratorContext, memory, embedding);
   }
 
   private async upsertMemorySubjectProjection(
@@ -757,106 +483,6 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
     await this.runInTransaction(write);
   }
 
-  private async upsertDeleteVersion(deleteVersion: MemoryDeleteVersion): Promise<void> {
-    await this.executeWrite(`
-      INSERT INTO l2_memory_delete_versions (
-        delete_id, proposal_id, memory_id, snapshot_json, deleted_at, deleted_by, delete_reason, restored_at, restored_by
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-      ON CONFLICT (delete_id) DO UPDATE SET
-        proposal_id = EXCLUDED.proposal_id,
-        snapshot_json = EXCLUDED.snapshot_json,
-        deleted_at = EXCLUDED.deleted_at,
-        deleted_by = EXCLUDED.deleted_by,
-        delete_reason = EXCLUDED.delete_reason,
-        restored_at = EXCLUDED.restored_at,
-        restored_by = EXCLUDED.restored_by
-    `, [
-      deleteVersion.deleteId,
-      deleteVersion.proposalId ?? null,
-      deleteVersion.memoryId,
-      serializeJsonValue(deleteVersion.snapshot),
-      deleteVersion.deletedAt,
-      deleteVersion.deletedBy,
-      deleteVersion.deleteReason ?? null,
-      deleteVersion.restoredAt ?? null,
-      deleteVersion.restoredBy ?? null,
-    ]);
-  }
-
-  private async upsertScratchpadEntry(entry: ScratchpadEntry): Promise<void> {
-    await executeQuery(this.pool, `
-      INSERT INTO scratchpad_entries (id, content, created_at, updated_at)
-      VALUES ($1,$2,$3,$4)
-      ON CONFLICT (id) DO UPDATE SET
-        content = EXCLUDED.content,
-        created_at = EXCLUDED.created_at,
-        updated_at = EXCLUDED.updated_at
-    `, [entry.id, entry.content, entry.createdAt, entry.updatedAt]);
-    this.syncScratchpadMirror();
-  }
-
-  private async persistRecentContactShape(shape: RecentContactShapeArtifact): Promise<void> {
-    await executeQuery(this.pool, `
-      INSERT INTO recent_contact_shapes (
-        schema_version, contact_id, summary_text, source_memory_ids,
-        confidence_score, novelty_score, updated_at, fresh_until
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-      ON CONFLICT (contact_id) DO UPDATE SET
-        schema_version = EXCLUDED.schema_version,
-        summary_text = EXCLUDED.summary_text,
-        source_memory_ids = EXCLUDED.source_memory_ids,
-        confidence_score = EXCLUDED.confidence_score,
-        novelty_score = EXCLUDED.novelty_score,
-        updated_at = EXCLUDED.updated_at,
-        fresh_until = EXCLUDED.fresh_until
-    `, [
-      shape.schemaVersion,
-      shape.contactId,
-      shape.summary,
-      serializeJsonValue(shape.sourceMemoryIds),
-      shape.confidenceScore,
-      shape.noveltyScore,
-      shape.updatedAt,
-      shape.freshUntil,
-    ]);
-  }
-
-  private syncScratchpadMirror(): void {
-    if (!this.scratchpadMirrorPath) return;
-    const payload = {
-      entries: this.listScratchpadEntries(),
-    };
-    writeJsonAtomic(this.scratchpadMirrorPath, payload);
-  }
-
-  private collectExpiredScratchpadEntryIds(now = Date.now()): string[] {
-    const cutoff = now - SCRATCHPAD_TTL_MS;
-    return Array.from(this.scratchpadEntries.values())
-      .filter(entry => entry.updatedAt < cutoff)
-      .map(entry => entry.id);
-  }
-
-  private pruneExpiredScratchpadEntries(now = Date.now()): string[] {
-    const expiredIds = this.collectExpiredScratchpadEntryIds(now);
-    if (expiredIds.length === 0) {
-      return [];
-    }
-
-    for (const id of expiredIds) {
-      this.scratchpadEntries.delete(id);
-    }
-
-    void this.persist(async () => {
-      for (const id of expiredIds) {
-        await executeQuery(this.pool, 'DELETE FROM scratchpad_entries WHERE id = $1', [id]);
-      }
-    }).catch((error: unknown) => {
-      log.warn('Failed to prune expired scratchpad entries', { error: String(error) });
-    });
-    this.syncScratchpadMirror();
-    return expiredIds;
-  }
-
   async insertMemory(memory: PurrMemory, embedding: Float32Array): Promise<void> {
     validateEmbeddingDimensions(embedding, this.embeddingDims, 'insert');
     const anchoredMemory = {
@@ -864,7 +490,6 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
       salienceDecayAnchorAt: memory.salienceDecayAnchorAt ?? memory.lastAccessed,
     };
     await this.persistClassifiedMemoryRow(anchoredMemory, embedding);
-    this.memories.set(memory.id, anchoredMemory);
     this.markSalienceMaintenanceChanged();
     this.markRetrievalCorpusChanged();
     this.journal?.onInsert(anchoredMemory);
@@ -901,8 +526,7 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
     return this.persist(async () => {
       const client = await this.pool.connect();
       const state: MemoryStoreTransactionState = { client, operations: [] };
-      const memoriesSnapshot = new Map(this.memories);
-      const deleteVersionsSnapshot = new Map(this.deleteVersions);
+      const deleteVersionsSnapshot = this.memoryDeletion.snapshotVersions();
       const salienceMaintenanceRevisionSnapshot = this.salienceMaintenanceRevision;
       try {
         await client.query('BEGIN');
@@ -923,8 +547,7 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
         }
         // Embeddings are not held in memory (a27w.1); the database ROLLBACK
         // above is the sole authority for their transactional state.
-        this.memories = memoriesSnapshot;
-        this.deleteVersions = deleteVersionsSnapshot;
+        this.memoryDeletion.restoreVersions(deleteVersionsSnapshot);
         this.salienceMaintenanceRevision = salienceMaintenanceRevisionSnapshot;
         // Generations are monotonic. A rollback is itself a corpus transition:
         // any refresh that observed staged in-memory data must become stale.
@@ -963,89 +586,7 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
     scopeQuery: MemoryScopeQuery | undefined,
     authorization: EmbeddingSearchAuthorization,
   ): Promise<Array<PurrMemory & { similarity: number }>> {
-    // Fail closed: the raw store cannot apply subject authorization. A caller
-    // that declares it MUST be subject-enforced (product recall) but reaches
-    // this raw path is misconfigured — throw rather than silently return
-    // unscoped rows. Only an explicit `bypass-system-internal` opt-out (memory
-    // formation dedup, operator admin surfaces) is permitted here, and every
-    // such site is greppable by that literal.
-    if (authorization.authorization !== 'bypass-system-internal') {
-      throw new Error(
-        'PostgresMemoryStore.searchByEmbedding cannot enforce subject authorization; '
-        + 'wrap the store with createSubjectAuthorizedMemoryStore for product recall, '
-        + "or pass { authorization: 'bypass-system-internal' } for system-internal access",
-      );
-    }
-    validateEmbeddingDimensions(embedding, this.embeddingDims, 'search');
-    // Bound the requested result count: reject a non-finite/non-positive limit
-    // (no silent fallback) and clamp the effective return to the ANN candidate
-    // ceiling so a caller can never ask the raw path for an unbounded result set
-    // to transfer, decode, and allocate.
-    if (!Number.isFinite(limit) || limit <= 0) {
-      throw new Error(`searchByEmbedding requires a positive finite limit, got ${String(limit)}`);
-    }
-    const boundedLimit = clampLimit(limit, ANN_MAX_CANDIDATES, 1, ANN_MAX_CANDIDATES);
-    const normalizedScopeQuery = normalizeMemoryScopeQuery(scopeQuery);
-    // Bounded ANN retrieval: order by the fixed-dimension cast distance with a
-    // candidate-pool LIMIT so the HNSW index serves a top-N scan instead of a
-    // sequential scan over the whole corpus. Scope predicates are part of the
-    // indexed query, before LIMIT, so other scopes cannot crowd matching rows out
-    // of the candidate horizon. ef_search and iterative scans make that filtered
-    // top-k exact when pgvector supports them.
-    // The similarity column and threshold keep the unbounded `<=>` form (the same
-    // distance) so scoring is unchanged from the pre-ANN query.
-    const candidatePool = annCandidatePool(boundedLimit);
-    const orderExpression = embeddingAnnOrderExpression('embedding', '$1', this.embeddingDims);
-    const values: unknown[] = [encodeEmbeddingLiteral(embedding), threshold];
-    const scopePredicate = appendMemoryScopeSqlPredicate(normalizedScopeQuery, values);
-    values.push(candidatePool);
-    const candidateLimitParameter = `$${values.length}`;
-    const rows = await runAnnTunedQuery<MemoryEmbeddingSearchRow>(
-      this.pool,
-      { efSearch: annEfSearch(candidatePool), iterativeScan: this.annIterativeScanAvailable },
-      `
-      SELECT
-        id, text, type, importance, confidence, emotional_valence, formation_vad, emotional_texture,
-        salience, salience_decay_anchor_at, source_ref, source_type, provenance_json, extracted_at, last_accessed,
-        access_count, superseded_by,
-        tags, scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,
-        retention_class, sensitivity, consent_flags, contact_id, deleted_at, deleted_by,
-        delete_reason, embedding::text AS embedding,
-        1 - (embedding <=> $1::vector) AS similarity
-      FROM l2_memories
-      WHERE embedding IS NOT NULL
-        AND vector_dims(embedding) = ${this.embeddingDims}
-        AND superseded_by IS NULL
-        AND deleted_at IS NULL
-        AND CASE WHEN vector_dims(embedding) = ${this.embeddingDims}
-          THEN 1 - (embedding <=> $1::vector) END >= $2
-        ${scopePredicate ? `AND ${scopePredicate}` : ''}
-      ORDER BY ${orderExpression} ASC
-      LIMIT ${candidateLimitParameter}
-    `,
-      values,
-    );
-
-    return rows
-      .flatMap((row) => {
-        const memory = tryFromMemoryRow(row);
-        if (!memory) return [];
-        return [{ ...memory, similarity: parsePgNumber(row.similarity, 'similarity') }];
-      })
-      .filter((memory) => {
-        if (!normalizedScopeQuery) return true;
-        const refs = normalizedScopeQuery.refs ?? [];
-        const tags = normalizedScopeQuery.tags ?? [];
-        if (refs.length === 0 && tags.length === 0) return true;
-        const scopeMatch = refs.length === 0 || refs.some(ref => {
-          const scope = memory.scopeRef;
-          return scope?.kind === ref.kind && scope.id === ref.id;
-        });
-        const tagMatch = tags.length === 0 || tags.some(tag => memory.scopeTags?.includes(tag));
-        return normalizedScopeQuery.mode === 'only' ? scopeMatch && tagMatch : scopeMatch || tagMatch;
-      })
-      .sort((left, right) => right.similarity - left.similarity || right.salience - left.salience || right.extractedAt - left.extractedAt)
-      .slice(0, boundedLimit);
+    return await this.boundedReads.searchByEmbedding(embedding, threshold, limit, scopeQuery, authorization);
   }
 
   async searchByText(
@@ -1053,25 +594,7 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
     limit: number,
     scopeQuery?: MemoryScopeQuery,
   ): Promise<Array<PurrMemory & { similarity: number }>> {
-    const normalizedScopeQuery = normalizeMemoryScopeQuery(scopeQuery);
-    return Array.from(this.memories.values())
-      .filter((memory) => {
-        if (memory.supersededBy || memory.deletedAt) return false;
-        if (!normalizedScopeQuery) return true;
-        const refs = normalizedScopeQuery.refs ?? [];
-        const tags = normalizedScopeQuery.tags ?? [];
-        if (refs.length === 0 && tags.length === 0) return true;
-        const scopeMatch = refs.length === 0 || refs.some(ref => {
-          const scope = memory.scopeRef;
-          return scope?.kind === ref.kind && scope.id === ref.id;
-        });
-        const tagMatch = tags.length === 0 || tags.some(tag => memory.scopeTags?.includes(tag));
-        return normalizedScopeQuery.mode === 'only' ? scopeMatch && tagMatch : scopeMatch || tagMatch;
-      })
-      .map(memory => ({ ...memory, similarity: lexicalScore(memory, query) }))
-      .filter(memory => memory.similarity > 0)
-      .sort((left, right) => right.similarity - left.similarity || right.salience - left.salience || right.extractedAt - left.extractedAt)
-      .slice(0, limit);
+    return await this.readModel.searchByText(query, limit, scopeQuery);
   }
 
   async updateMemory(
@@ -1130,7 +653,6 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
       if (storedEmbedding) validateEmbeddingDimensions(storedEmbedding, this.embeddingDims, 'update');
       const embedding = updates.embedding ?? storedEmbedding;
       await this.persistClassifiedMemoryRow(next, embedding);
-      this.memories.set(id, next);
       this.markSalienceMaintenanceChanged();
       if (Object.keys(updates).some(key => key !== 'lastAccessed' && key !== 'accessCount')) {
         this.markRetrievalCorpusChanged();
@@ -1144,252 +666,48 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
   }
 
   async getAllActiveMemories(limit: number = 10_000): Promise<PurrMemory[]> {
-    return Array.from(this.memories.values())
-      .filter(memory => !memory.supersededBy && !memory.deletedAt)
-      .sort((left, right) => right.extractedAt - left.extractedAt || left.id.localeCompare(right.id))
-      .slice(0, limit);
+    return await this.readModel.getAllActiveMemories(limit);
   }
 
-  /**
-   * Active memories written at/after `sinceMs`, paired with their stored
-   * embeddings (htm9.15 second-arrow evidence read). a27w.1: queried from
-   * Postgres on demand rather than scanning a hydrated embedding map, so the
-   * read cost is bounded by the `limit` window (default 4096) and the active
-   * corpus since `sinceMs`, not by lifetime corpus size. The WHERE/ORDER/LIMIT
-   * reproduce the former in-memory semantics exactly: active rows only, rows
-   * lacking a persisted embedding excluded (never re-embedded), ordered by
-   * extractedAt ASC then id ASC. A present-but-undecodable vector fails closed.
-   */
   async listActiveMemoryEmbeddingsSince(
     sinceMs: number,
     limit: number = 4096,
   ): Promise<MemoryEmbeddingSample[]> {
-    if (this.transactionContext.getStore()) {
-      throw new Error('Active memory embedding reads are unavailable inside a memory-store transaction');
-    }
-    // Settle any in-flight write/rollback so the pool read observes committed
-    // state, matching queryAuthorizedMemorySubjects / getRetrievalCorpusVersion.
-    await this.persistChain;
-    const rows = await queryRows<MemoryRow>(this.pool, `
-      SELECT
-        id, text, type, importance, confidence, emotional_valence, formation_vad, emotional_texture,
-        salience, salience_decay_anchor_at, source_ref, source_type, provenance_json, extracted_at, last_accessed,
-        access_count, superseded_by,
-        tags, scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,
-        retention_class, sensitivity, consent_flags, contact_id, deleted_at, deleted_by,
-        delete_reason, embedding::text AS embedding
-      FROM l2_memories
-      WHERE superseded_by IS NULL
-        AND deleted_at IS NULL
-        AND embedding IS NOT NULL
-        AND extracted_at >= $1
-      ORDER BY extracted_at ASC, id ASC
-      LIMIT $2
-    `, [sinceMs, limit]);
-    const samples: MemoryEmbeddingSample[] = [];
-    for (const row of rows) {
-      const embedding = decodeEmbedding(row.embedding);
-      if (!embedding) {
-        throw new Error(`PostgreSQL memory schema returned an unreadable pgvector embedding for memory ${row.id}`);
-      }
-      validateEmbeddingDimensions(embedding, this.embeddingDims, 'evidence');
-      const memory = tryFromMemoryRow(row);
-      if (!memory) continue;
-      samples.push({
-        id: memory.id,
-        text: memory.text,
-        type: memory.type,
-        extractedAt: memory.extractedAt,
-        ...(memory.contactId !== undefined ? { contactId: memory.contactId } : {}),
-        ...(memory.sourceType !== undefined ? { sourceType: memory.sourceType } : {}),
-        salience: memory.salience,
-        embedding,
-      });
-    }
-    return samples;
+    return await this.boundedReads.listActiveMemoryEmbeddingsSince(sinceMs, limit);
   }
 
   async listMemories(options: MemoryListOptions = {}): Promise<PurrMemory[]> {
-    const offset = clampLimit(options.offset, 0, 0, 100_000);
-    const memories = Array.from(this.memories.values())
-      .sort((left, right) => {
-        const leftArchived = left.supersededBy || left.deletedAt ? 1 : 0;
-        const rightArchived = right.supersededBy || right.deletedAt ? 1 : 0;
-        return leftArchived - rightArchived
-          || right.extractedAt - left.extractedAt
-          || right.id.localeCompare(left.id);
-      });
-    if (options.limit === undefined) {
-      return memories.slice(offset);
-    }
-    const limit = clampLimit(options.limit, 50, 1, 500);
-    return memories.slice(offset, offset + limit);
+    return await this.readModel.listMemories(options);
   }
 
-  async listActiveMemories(options: import('./memory-store-port.js').ActiveMemoryListOptions = {}): Promise<PurrMemory[]> {
-    const before = options.before === undefined ? undefined : assertMemoryListPosition(options.before);
-    const limit = clampLimit(options.limit, 50, 1, 500);
-    const offset = clampLimit(options.offset, 0, 0, 100_000);
-    return Array.from(this.memories.values())
-      .filter(memory => !memory.supersededBy && !memory.deletedAt)
-      .filter(memory => before === undefined || memory.extractedAt < before.extractedAt
-        || (memory.extractedAt === before.extractedAt && memory.id.localeCompare(before.memoryId) < 0))
-      .sort((left, right) => right.extractedAt - left.extractedAt || right.id.localeCompare(left.id))
-      .slice(offset, offset + limit);
+  async listActiveMemories(options: ActiveMemoryListOptions = {}): Promise<PurrMemory[]> {
+    return await this.readModel.listActiveMemories(options);
   }
 
   async listActiveMemoriesInWindow(
     options: ActiveMemoryWindowOptions,
   ): Promise<ActiveMemoryWindowResult> {
-    if (!Number.isFinite(options.fromMs) || !Number.isFinite(options.toMs) || options.fromMs > options.toMs) {
-      throw new Error('Active memory window requires finite ordered bounds');
-    }
-    if (!Number.isSafeInteger(options.limit) || options.limit < 1) {
-      throw new Error('Active memory window limit must be a positive safe integer');
-    }
-    if (this.transactionContext.getStore()) {
-      throw new Error('Active memory window reads are unavailable inside a memory-store transaction');
-    }
-    await this.persistChain;
-
-    const limit = clampLimit(options.limit, 50, 1, 500);
-    const values: unknown[] = [options.fromMs, options.toMs];
-    const scopeConditions: string[] = [];
-    if (options.scope.kind !== 'companion') {
-      values.push(options.scope.conversationId);
-      const conversationParameter = `$${values.length}`;
-      scopeConditions.push(
-        `provenance_json ->> 'channelId' = ${conversationParameter}`,
-        `(scope_ref_kind = 'conversation' AND scope_ref_id = ${conversationParameter})`,
-      );
-      if (options.scope.kind === 'contact') {
-        values.push(options.scope.contactId);
-        scopeConditions.push(`contact_id = $${values.length}`);
-      }
-    }
-    values.push(limit + 1);
-    const rows = await queryRows<MemoryRow>(this.pool, `
-      SELECT
-        id, text, type, importance, confidence, emotional_valence, formation_vad, emotional_texture,
-        salience, salience_decay_anchor_at, source_ref, source_type, provenance_json, extracted_at, last_accessed,
-        access_count, superseded_by,
-        tags, scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,
-        retention_class, sensitivity, consent_flags, contact_id, deleted_at, deleted_by,
-        delete_reason, NULL::text AS embedding
-      FROM l2_memories
-      WHERE superseded_by IS NULL
-        AND deleted_at IS NULL
-        AND extracted_at >= $1
-        AND extracted_at <= $2
-        ${scopeConditions.length > 0 ? `AND (${scopeConditions.join(' OR ')})` : ''}
-      ORDER BY extracted_at DESC, id DESC
-      LIMIT $${values.length}
-    `, values);
-    return {
-      memories: rows.slice(0, limit).flatMap((row) => {
-        const memory = tryFromMemoryRow(row);
-        return memory ? [memory] : [];
-      }),
-      saturated: rows.length > limit,
-    };
+    return await this.boundedReads.listActiveMemoriesInWindow(options);
   }
 
   async listAdminMemories(options: MemoryAdminListOptions = {}): Promise<MemoryAdminListResult> {
-    const limit = clampLimit(options.limit, 50, 1, 500);
-    const offset = clampLimit(options.offset, 0, 0, 100_000);
-    const where = buildPostgresAdminMemoryWhere(options);
-    const pageValues = [
-      ...where.values,
-      limit,
-      offset,
-    ];
-    const limitParam = `$${where.values.length + 1}`;
-    const offsetParam = `$${where.values.length + 2}`;
-    const rows = await queryRows<MemoryRow>(this.pool, `
-      SELECT
-        id, text, type, importance, confidence, emotional_valence, formation_vad, emotional_texture,
-        salience, salience_decay_anchor_at, source_ref, source_type, provenance_json, extracted_at, last_accessed,
-        access_count, superseded_by,
-        tags, scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,
-        retention_class, sensitivity, consent_flags, contact_id, deleted_at, deleted_by,
-        delete_reason, embedding::text AS embedding
-      FROM l2_memories
-      WHERE ${where.sql}
-      ORDER BY extracted_at DESC, id DESC
-      LIMIT ${limitParam}
-      OFFSET ${offsetParam}
-    `, pageValues);
-    const totalRows = await queryRows<CountRow>(this.pool, `
-      SELECT COUNT(*) AS count
-      FROM l2_memories
-      WHERE ${where.sql}
-    `, where.values);
-    return {
-      memories: rows.flatMap((row) => {
-        const memory = tryFromMemoryRow(row);
-        return memory ? [memory] : [];
-      }),
-      total: totalRows[0] ? parsePgNumber(totalRows[0].count, 'count') : 0,
-      privacySummary: await this.getAdminMemoryPrivacySummary(),
-    };
+    return await listPostgresAdminMemories(this.pool, options);
   }
 
   async getAdminMemoryPrivacySummary(): Promise<MemoryAdminPrivacySummary> {
-    const values: unknown[] = [];
-    const durableCondition = durableAdminMemoryCondition(
-      addPostgresQueryValue(values, [...ADMIN_DURABLE_MEMORY_TAGS]),
-    );
-    const preferenceCondition = preferenceAdminMemoryCondition(
-      addPostgresQueryValue(values, [...ADMIN_PREFERENCE_MEMORY_TAGS]),
-      addPostgresQueryValue(values, ADMIN_FAVORITE_TEXT_REGEX),
-      addPostgresQueryValue(values, ADMIN_PREFERENCE_TEXT_REGEX),
-    );
-    const activeWhere = activeAdminMemoryClause();
-    const aggregateRows = await queryRows<AdminMemoryPrivacyAggregateRow>(this.pool, `
-      SELECT
-        COUNT(*) AS active_memory_count,
-        COALESCE(SUM(CASE WHEN sensitivity IN ('intimate', 'confidential') THEN 1 ELSE 0 END), 0) AS high_sensitivity_count,
-        COALESCE(SUM(CASE WHEN consent_flags->>'allowRecall' = 'false' THEN 1 ELSE 0 END), 0) AS consent_gated_count,
-        COALESCE(SUM(CASE WHEN contact_id IS NOT NULL THEN 1 ELSE 0 END), 0) AS contact_linked_count,
-        COALESCE(SUM(CASE
-          WHEN (scope_ref_kind IS NOT NULL AND scope_ref_id IS NOT NULL)
-            OR (jsonb_typeof(scope_tags) = 'array' AND jsonb_array_length(scope_tags) > 0)
-          THEN 1 ELSE 0 END), 0) AS scoped_count,
-        COALESCE(SUM(CASE WHEN ${preferenceCondition} THEN 1 ELSE 0 END), 0) AS preference_count,
-        COALESCE(SUM(CASE WHEN ${preferenceCondition} AND ${durableCondition} THEN 1 ELSE 0 END), 0) AS durable_preference_count
-      FROM l2_memories
-      WHERE ${activeWhere}
-    `, values);
-    const sensitivityRows = await queryRows<SensitivityCountRow>(this.pool, `
-      SELECT COALESCE(sensitivity, 'personal') AS sensitivity, COUNT(*) AS count
-      FROM l2_memories
-      WHERE ${activeWhere}
-      GROUP BY COALESCE(sensitivity, 'personal')
-    `);
-    return mapPostgresAdminPrivacySummary(aggregateRows[0], sensitivityRows);
+    return await queryPostgresAdminMemoryPrivacySummary(this.pool);
   }
 
   async countActiveMemories(): Promise<number> {
-    return Array.from(this.memories.values()).filter(memory => !memory.supersededBy && !memory.deletedAt).length;
+    return await this.readModel.countActiveMemories();
   }
 
   async getById(id: string): Promise<PurrMemory | undefined> {
-    return this.memories.get(id);
+    return await this.readModel.getById(id);
   }
 
   async getByIds(ids: readonly string[]): Promise<PurrMemory[]> {
-    // Batch counterpart to getById over the hydrated snapshot: deduplicated,
-    // first-seen input order, misses dropped. Identical result set to calling
-    // getById per id, only without the per-id iteration overhead.
-    const seen = new Set<string>();
-    const result: PurrMemory[] = [];
-    for (const id of ids) {
-      if (seen.has(id)) continue;
-      seen.add(id);
-      const memory = this.memories.get(id);
-      if (memory) result.push(memory);
-    }
-    return result;
+    return await this.readModel.getByIds(ids);
   }
 
   async queryAuthorizedMemorySubjects(
@@ -1424,221 +742,24 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
     return await loadMemorySubjectClassification(this.pool, memoryId);
   }
 
-  private async lockAuthorizedActiveMemoryRows(
-    authorization: MemorySubjectQueryAuthorization,
-    memoryIds: readonly string[],
-  ): Promise<MemoryRow[]> {
-    if (memoryIds.length === 0) return [];
-    const predicate = buildMemorySubjectAuthorizationPredicate(authorization, {
-      memoryAlias: 'memory',
-      firstParameter: 2,
-    });
-    const authorizedRows = await this.queryWrite<MemoryRow>(`
-      SELECT ${MEMORY_SUBJECT_SELECT_COLUMNS}
-      FROM l2_memories memory
-      WHERE memory.id = ANY($1::text[])
-        AND memory.superseded_by IS NULL
-        AND memory.deleted_at IS NULL
-        AND ${predicate.sql}
-      ORDER BY memory.id
-      FOR UPDATE
-    `, [memoryIds, ...predicate.values]);
-    if (authorizedRows.length !== memoryIds.length) {
-      throw new MemorySubjectAuthorizationDeniedError();
-    }
-    return authorizedRows;
-  }
-
-  /**
-   * Refreshes the in-memory `memories` snapshot from freshly locked rows so a
-   * concurrent committed write cannot be overwritten by stale data. a27w.1:
-   * embeddings are no longer cached, so the locked vector is only validated
-   * fail-closed (bounded to the locked set) and never retained.
-   */
-  private hydrateLockedMemoryRows(rows: readonly MemoryRow[], operation: string): void {
-    for (const row of rows) {
-      const memory = tryFromMemoryRow(row);
-      if (!memory) continue;
-      this.memories.set(row.id, memory);
-      const embedding = decodeEmbedding(row.embedding);
-      if (embedding) {
-        validateEmbeddingDimensions(embedding, this.embeddingDims, operation);
-      }
-    }
-  }
-
   async mutateAuthorizedMemorySubjects(input: MemorySubjectAuthorizedMutation): Promise<number> {
-    const authorization = parseMemorySubjectQueryAuthorization(input.authorization);
-    if (authorization.action !== 'bulk_mutation' && authorization.action !== 'update') {
-      throw new Error('Memory subject authorization action does not permit mutation');
-    }
-    const memoryIds = [...new Set(input.memoryIds.flatMap(id => {
-      const normalized = id.trim();
-      return normalized ? [normalized] : [];
-    }))].sort();
-    if (memoryIds.length === 0) return 0;
-    const mutate = async (): Promise<number> => {
-      const authorizedRows = await this.lockAuthorizedActiveMemoryRows(authorization, memoryIds);
-      // The SQL lock is authoritative. Refresh the local snapshot before
-      // applying the patch so a sibling maintenance/contact process cannot
-      // have its committed fields overwritten by stale hydrated state.
-      this.hydrateLockedMemoryRows(authorizedRows, 'authorized mutation');
-      for (const memoryId of memoryIds) {
-        await this.updateMemory(memoryId, input.updates);
-      }
-      return memoryIds.length;
-    };
-    return this.transactionContext.getStore()
-      ? await mutate()
-      : await this.runInTransaction(mutate);
+    return await this.subjectAuthorizedWrites.mutateAuthorizedMemorySubjects(input);
   }
 
   async persistAuthorizedMemoryWrite(input: MemorySubjectAuthorizedWrite): Promise<void> {
-    const authorization = parseMemorySubjectQueryAuthorization(input.authorization);
-    if (authorization.action !== 'bulk_mutation' && authorization.action !== 'update') {
-      throw new Error('Memory subject authorization action does not permit write');
-    }
-    const supersededMemoryIds = [...new Set(input.supersededMemoryIds?.flatMap(id => {
-      const normalized = id.trim();
-      return normalized ? [normalized] : [];
-    }) ?? [])].sort();
-    const commit = async (): Promise<void> => {
-      const authorizedRows = await this.lockAuthorizedActiveMemoryRows(
-        authorization,
-        supersededMemoryIds,
-      );
-      this.hydrateLockedMemoryRows(authorizedRows, 'authorized write');
-      for (const memoryId of supersededMemoryIds) {
-        await this.updateMemory(memoryId, { supersededBy: input.memory.id });
-      }
-      await this.insertMemory(input.memory, input.embedding);
-      // The writer must be able to read back the row it persists. The SQL
-      // predicate runs against the new row's persisted subject projection in
-      // this transaction; a denial throws and rolls back the whole write,
-      // including the superseded-row updates above.
-      await this.lockAuthorizedActiveMemoryRows(authorization, [input.memory.id]);
-    };
-    if (this.transactionContext.getStore()) {
-      await commit();
-      return;
-    }
-    await this.runInTransaction(commit);
+    await this.subjectAuthorizedWrites.persistAuthorizedMemoryWrite(input);
   }
 
   async softDeleteAuthorizedMemorySubject(
     input: MemorySubjectAuthorizedDelete,
   ): Promise<MemoryDeleteVersion | null> {
-    const authorization = parseMemorySubjectQueryAuthorization(input.authorization);
-    if (authorization.action !== 'update') {
-      throw new Error('Memory subject authorization action does not permit delete');
-    }
-    const memoryId = input.memoryId.trim();
-    if (!memoryId) return null;
-    const version = await this.runInTransaction(async () => {
-      const predicate = buildMemorySubjectAuthorizationPredicate(authorization, {
-        memoryAlias: 'memory',
-        firstParameter: 2,
-      });
-      const rows = await this.queryWrite<MemoryRow>(`
-        SELECT ${MEMORY_SUBJECT_SELECT_COLUMNS}
-        FROM l2_memories memory
-        WHERE memory.id = $1
-          AND memory.superseded_by IS NULL
-          AND memory.deleted_at IS NULL
-          AND ${predicate.sql}
-        FOR UPDATE
-      `, [memoryId, ...predicate.values]);
-      const row = rows.at(0);
-      if (!row) return null;
-      const memory = tryFromMemoryRow(row);
-      if (!memory) return null;
-      const embedding = decodeEmbedding(row.embedding);
-      if (embedding) validateEmbeddingDimensions(embedding, this.embeddingDims, 'authorized delete');
-      const deleteId = input.options?.deleteId ?? randomUUID();
-      const deletedAt = input.options?.deletedAt ?? Date.now();
-      const deletedBy = input.options?.deletedBy?.trim() || 'agent';
-      const deleteReason = input.options?.reason?.trim();
-      const nextVersion: MemoryDeleteVersion = {
-        deleteId,
-        ...(input.options?.proposalId ? { proposalId: input.options.proposalId } : {}),
-        memoryId,
-        snapshot: memory,
-        deletedAt,
-        deletedBy,
-        ...(deleteReason ? { deleteReason } : {}),
-      };
-      await this.upsertDeleteVersion(nextVersion);
-      const deletedMemory = { ...memory, deletedAt, deletedBy, deleteReason };
-      await this.persistClassifiedMemoryRow(deletedMemory, embedding);
-      this.memories.set(memoryId, deletedMemory);
-      return nextVersion;
-    });
-    if (!version) return null;
-    this.markSalienceMaintenanceChanged();
-    this.markRetrievalCorpusChanged();
-    this.deleteVersions.set(version.deleteId, version);
-    this.journal?.onSoftDelete(version);
-    return version;
+    return await this.memoryDeletion.softDeleteAuthorizedMemorySubject(input);
   }
 
   async undoAuthorizedMemorySubjectDelete(
     input: MemorySubjectAuthorizedRestore,
   ): Promise<MemoryDeleteVersion | null> {
-    const authorization = parseMemorySubjectQueryAuthorization(input.authorization);
-    if (authorization.action !== 'update') {
-      throw new Error('Memory subject authorization action does not permit restore');
-    }
-    const deleteId = input.deleteId.trim();
-    const version = this.deleteVersions.get(deleteId);
-    if (!version || version.restoredAt !== undefined) return null;
-    const nextVersion = await this.runInTransaction(async () => {
-      const predicate = buildMemorySubjectAuthorizationPredicate(authorization, {
-        memoryAlias: 'memory',
-        firstParameter: 2,
-      });
-      const rows = await this.queryWrite<MemoryRow>(`
-        SELECT ${MEMORY_SUBJECT_SELECT_COLUMNS}
-        FROM l2_memories memory
-        WHERE memory.id = $1
-          AND memory.deleted_at IS NOT NULL
-          AND ${predicate.sql}
-        FOR UPDATE
-      `, [version.memoryId, ...predicate.values]);
-      const row = rows.at(0);
-      if (!row) return null;
-      const current = tryFromMemoryRow(row);
-      if (!current) return null;
-      const embedding = decodeEmbedding(row.embedding);
-      if (embedding) validateEmbeddingDimensions(embedding, this.embeddingDims, 'authorized restore');
-      const restoredAt = input.options?.restoredAt ?? Date.now();
-      const restoredBy = input.options?.restoredBy?.trim() || 'agent';
-      const restored = {
-        ...current,
-        deletedAt: undefined,
-        deletedBy: undefined,
-        deleteReason: undefined,
-      };
-      const restoredVersion = { ...version, restoredAt, restoredBy };
-      await this.upsertDeleteVersion(restoredVersion);
-      await this.persistClassifiedMemoryRow(restored, embedding);
-      if (version.proposalId) {
-        await this.deletionProposalPersistence.markRestored({
-          proposalId: version.proposalId,
-          deleteId,
-          restoredAt,
-          restoredBy,
-          actorRole: input.options?.actorRole,
-        });
-      }
-      this.memories.set(version.memoryId, restored);
-      return restoredVersion;
-    });
-    if (!nextVersion) return null;
-    this.markSalienceMaintenanceChanged();
-    this.markRetrievalCorpusChanged();
-    this.deleteVersions.set(deleteId, nextVersion);
-    this.journal?.onRestore(nextVersion);
-    return nextVersion;
+    return await this.memoryDeletion.undoAuthorizedMemorySubjectDelete(input);
   }
 
   async backfillMemorySubjectClassifications(
@@ -1652,519 +773,120 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
   }
 
   async softDeleteMemory(id: string, options: MemorySoftDeleteOptions = {}): Promise<MemoryDeleteVersion | null> {
-    const memory = this.memories.get(id);
-    if (!memory || memory.deletedAt) return null;
-    const deleteId = options.deleteId ?? randomUUID();
-    const deletedAt = options.deletedAt ?? Date.now();
-    const deletedBy = options.deletedBy?.trim() || 'agent';
-    const deleteReason = options.reason?.trim();
-    const version: MemoryDeleteVersion = {
-      deleteId,
-      ...(options.proposalId ? { proposalId: options.proposalId } : {}),
-      memoryId: id,
-      snapshot: memory,
-      deletedAt,
-      deletedBy,
-      ...(deleteReason ? { deleteReason } : {}),
-    };
-    await this.runInTransaction(async () => {
-      // a27w.1: read the stored vector under a row lock instead of a hydrated
-      // map so the re-upsert preserves it (passing undefined would NULL it).
-      const embedding = await this.fetchStoredEmbedding(id, 'soft delete');
-      await this.upsertDeleteVersion(version);
-      await this.persistClassifiedMemoryRow(
-        { ...memory, deletedAt, deletedBy, deleteReason },
-        embedding,
-      );
-    });
-    this.memories.set(id, { ...memory, deletedAt, deletedBy, deleteReason });
-    this.markSalienceMaintenanceChanged();
-    this.markRetrievalCorpusChanged();
-    this.deleteVersions.set(deleteId, version);
-    this.journal?.onSoftDelete(version);
-    return version;
+    return await this.memoryDeletion.softDeleteMemory(id, options);
   }
 
   async undoSoftDelete(deleteId: string, options: MemoryUndoSoftDeleteOptions = {}): Promise<MemoryDeleteVersion | null> {
-    const version = this.deleteVersions.get(deleteId);
-    if (!version) return null;
-    const current = this.memories.get(version.memoryId);
-    if (!current) return null;
-    const restoredAt = options.restoredAt ?? Date.now();
-    const restoredBy = options.restoredBy?.trim() || 'agent';
-    const restored = { ...current, deletedAt: undefined, deletedBy: undefined, deleteReason: undefined };
-    const nextVersion = { ...version, restoredAt, restoredBy };
-    await this.runInTransaction(async () => {
-      // a27w.1: preserve the persisted vector by reading it under a row lock
-      // rather than from a hydrated map.
-      const embedding = await this.fetchStoredEmbedding(version.memoryId, 'undo soft delete');
-      await this.upsertDeleteVersion(nextVersion);
-      await this.persistClassifiedMemoryRow(restored, embedding);
-      if (version.proposalId) {
-        await this.deletionProposalPersistence.markRestored({
-          proposalId: version.proposalId,
-          deleteId,
-          restoredAt,
-          restoredBy,
-          actorRole: options.actorRole,
-        });
-      }
-    });
-    this.memories.set(version.memoryId, restored);
-    this.markSalienceMaintenanceChanged();
-    this.markRetrievalCorpusChanged();
-    this.deleteVersions.set(deleteId, nextVersion);
-    this.journal?.onRestore(nextVersion);
-    return nextVersion;
+    return await this.memoryDeletion.undoSoftDelete(deleteId, options);
   }
 
   async getDeleteVersion(deleteId: string): Promise<MemoryDeleteVersion | undefined> {
-    return this.deleteVersions.get(deleteId);
+    return await this.memoryDeletion.getDeleteVersion(deleteId);
   }
 
   async recordAbstractionLink(input: MemoryAbstractionLinkInput): Promise<MemoryAbstractionLink> {
-    const id = input.linkId?.trim() || randomUUID();
-    const link: MemoryAbstractionLink = {
-      id,
-      sourceMemoryId: input.sourceMemoryId.trim(),
-      abstractedMemoryId: input.abstractedMemoryId.trim(),
-      externalRef: input.externalRef.trim(),
-      createdAt: input.createdAt ?? Date.now(),
-      ...(input.createdBy ? { createdBy: input.createdBy.trim() } : {}),
-      ...(input.reason ? { reason: input.reason.trim() } : {}),
-    };
-    await this.persist(async () => {
-      await executeQuery(this.pool, `
-        INSERT INTO l2_memory_abstraction_links (
-          id, source_memory_id, abstracted_memory_id, external_ref, created_at, created_by, reason
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7)
-        ON CONFLICT (id) DO UPDATE SET
-          source_memory_id = EXCLUDED.source_memory_id,
-          abstracted_memory_id = EXCLUDED.abstracted_memory_id,
-          external_ref = EXCLUDED.external_ref,
-          created_at = EXCLUDED.created_at,
-          created_by = EXCLUDED.created_by,
-          reason = EXCLUDED.reason
-      `, [link.id, link.sourceMemoryId, link.abstractedMemoryId, link.externalRef, link.createdAt, link.createdBy ?? null, link.reason ?? null]);
-    });
-    this.abstractionLinks.set(link.id, link);
-    return link;
+    return await this.links.recordAbstractionLink(input);
   }
 
   async getAbstractionLinksForSourceMemory(sourceMemoryId: string): Promise<MemoryAbstractionLink[]> {
-    return Array.from(this.abstractionLinks.values()).filter(link => link.sourceMemoryId === sourceMemoryId);
+    return await this.links.getAbstractionLinksForSourceMemory(sourceMemoryId);
   }
 
   async getAbstractionLinksForAbstractedMemory(abstractedMemoryId: string): Promise<MemoryAbstractionLink[]> {
-    return Array.from(this.abstractionLinks.values()).filter(link => link.abstractedMemoryId === abstractedMemoryId);
+    return await this.links.getAbstractionLinksForAbstractedMemory(abstractedMemoryId);
   }
 
   async recordEvolutionLink(input: MemoryEvolutionLinkInput): Promise<MemoryEvolutionLink> {
-    const link = normalizeEvolutionLinkInput(input);
-    await this.persist(async () => {
-      await executeQuery(this.pool, `
-        INSERT INTO memory_evolution_links (
-          id, source_memory_id, target_memory_id, relation, confidence, reason,
-          source_ref, source_type, provenance_refs, provenance_json, created_at
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-        ON CONFLICT (source_memory_id, target_memory_id, relation) DO UPDATE SET
-          id = EXCLUDED.id,
-          confidence = EXCLUDED.confidence,
-          reason = EXCLUDED.reason,
-          source_ref = EXCLUDED.source_ref,
-          source_type = EXCLUDED.source_type,
-          provenance_refs = EXCLUDED.provenance_refs,
-          provenance_json = EXCLUDED.provenance_json,
-          created_at = EXCLUDED.created_at
-      `, [
-        link.id,
-        link.sourceMemoryId,
-        link.targetMemoryId,
-        link.relation,
-        link.confidence,
-        link.reason ?? null,
-        link.sourceRef ?? null,
-        link.sourceType,
-        serializeJsonValue(link.provenanceRefs),
-        serializeJsonValue(link.provenance ?? {}),
-        link.createdAt,
-      ]);
-    });
-    this.memoryEvolutionLinks.set(memoryEvolutionKey(
-      link.sourceMemoryId,
-      link.targetMemoryId,
-      link.relation,
-    ), link);
-    this.markRetrievalCorpusChanged();
-    return link;
+    return await this.links.recordEvolutionLink(input);
   }
 
   async getEvolutionLinksForSourceMemory(
     sourceMemoryId: string,
     relation?: MemoryEvolutionRelation,
   ): Promise<MemoryEvolutionLink[]> {
-    const normalized = sourceMemoryId.trim();
-    if (!normalized) return [];
-    const normalizedRelation = relation ? normalizeEvolutionRelation(relation) : undefined;
-    return Array.from(this.memoryEvolutionLinks.values())
-      .filter(link => link.sourceMemoryId === normalized)
-      .filter(link => normalizedRelation === undefined || link.relation === normalizedRelation)
-      .sort((left, right) => right.createdAt - left.createdAt || right.id.localeCompare(left.id));
+    return await this.links.getEvolutionLinksForSourceMemory(sourceMemoryId, relation);
   }
 
   async getEvolutionLinksForTargetMemory(
     targetMemoryId: string,
     relation?: MemoryEvolutionRelation,
   ): Promise<MemoryEvolutionLink[]> {
-    const normalized = targetMemoryId.trim();
-    if (!normalized) return [];
-    const normalizedRelation = relation ? normalizeEvolutionRelation(relation) : undefined;
-    return Array.from(this.memoryEvolutionLinks.values())
-      .filter(link => link.targetMemoryId === normalized)
-      .filter(link => normalizedRelation === undefined || link.relation === normalizedRelation)
-      .sort((left, right) => right.createdAt - left.createdAt || right.id.localeCompare(left.id));
+    return await this.links.getEvolutionLinksForTargetMemory(targetMemoryId, relation);
   }
 
   async getStats(): Promise<MemoryStoreStats> {
-    const active = Array.from(this.memories.values()).filter(memory => !memory.supersededBy && !memory.deletedAt);
-    const byType: Record<string, number> = {};
-    let salience = 0;
-    for (const memory of active) {
-      byType[memory.type] = (byType[memory.type] ?? 0) + 1;
-      salience += memory.salience;
-    }
-    return {
-      total: active.length,
-      byType,
-      avgSalience: active.length > 0 ? salience / active.length : 0,
-    };
+    return await this.readModel.getStats();
   }
 
   async upsertMemoryMaintenanceReview(input: MemoryMaintenanceReviewInput): Promise<MemoryMaintenanceReview> {
-    const review = normalizeMemoryMaintenanceReviewInput(input);
-    await this.persist(async () => {
-      await executeQuery(this.pool, `
-        INSERT INTO l2_memory_maintenance_reviews (
-          id, kind, status, subject_memory_id, candidate_memory_ids, state_json,
-          quarantine_reason, created_at, updated_at
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-        ON CONFLICT (id) DO UPDATE SET
-          kind = EXCLUDED.kind,
-          status = EXCLUDED.status,
-          subject_memory_id = EXCLUDED.subject_memory_id,
-          candidate_memory_ids = EXCLUDED.candidate_memory_ids,
-          state_json = EXCLUDED.state_json,
-          quarantine_reason = EXCLUDED.quarantine_reason,
-          updated_at = EXCLUDED.updated_at
-      `, [
-        review.id,
-        review.kind,
-        review.status,
-        review.subjectMemoryId,
-        serializeJsonValue(review.candidateMemoryIds),
-        serializeJsonValue(review.state),
-        review.quarantineReason ?? null,
-        review.createdAt,
-        review.updatedAt,
-      ]);
-    });
-    this.maintenanceReviews.set(review.id, review);
-    return review;
+    return await this.maintenanceReviews.upsertMemoryMaintenanceReview(input);
   }
 
   async listMemoryMaintenanceReviews(
     options: MemoryMaintenanceReviewListOptions = {},
   ): Promise<MemoryMaintenanceReview[]> {
-    return Array.from(this.maintenanceReviews.values())
-      .filter(review => options.status === undefined || review.status === options.status)
-      .filter(review => options.kind === undefined || review.kind === options.kind)
-      .sort((left, right) => right.updatedAt - left.updatedAt || right.createdAt - left.createdAt)
-      .slice(0, clampLimit(options.limit, 100, 1, 500));
+    return await this.maintenanceReviews.listMemoryMaintenanceReviews(options);
   }
 
   async getMemoryMaintenanceReview(id: string): Promise<MemoryMaintenanceReview | undefined> {
-    return this.maintenanceReviews.get(id.trim());
+    return await this.maintenanceReviews.getMemoryMaintenanceReview(id);
   }
 
   async getMemoryMaintenanceDiagnostics(
     options: MemoryMaintenanceDiagnosticsOptions = {},
   ): Promise<MemoryMaintenanceDiagnostics> {
-    const now = Number.isFinite(options.now) ? Number(options.now) : Date.now();
-    const reviewCountsByKind: Record<string, number> = {};
-    const reviewCountsByStatus: Record<string, number> = {};
-    const pendingReviewAges: number[] = [];
-    for (const review of this.maintenanceReviews.values()) {
-      increment(reviewCountsByKind, review.kind);
-      increment(reviewCountsByStatus, review.status);
-      if (review.status === 'pending') {
-        pendingReviewAges.push(Math.max(0, now - review.createdAt));
-      }
-    }
-
-    const evolutionDecisionCountsByRelation: Record<MemoryEvolutionRelation, number> = {
-      supersedes: 0,
-      updates: 0,
-      negates: 0,
-      conflicts_with: 0,
-    };
-    let latestEvolutionDecisionAt: number | undefined;
-    for (const link of this.memoryEvolutionLinks.values()) {
-      evolutionDecisionCountsByRelation[link.relation] += 1;
-      latestEvolutionDecisionAt = Math.max(latestEvolutionDecisionAt ?? 0, link.createdAt);
-    }
-
-    const pendingAgeTotal = pendingReviewAges.reduce((sum, age) => sum + age, 0);
-    return {
-      reviewCount: this.maintenanceReviews.size,
-      pendingReviewCount: pendingReviewAges.length,
-      reviewCountsByKind,
-      reviewCountsByStatus,
-      oldestPendingReviewAgeMs: pendingReviewAges.length > 0 ? Math.max(...pendingReviewAges) : 0,
-      averagePendingReviewAgeMs: pendingReviewAges.length > 0
-        ? pendingAgeTotal / pendingReviewAges.length
-        : 0,
-      evolutionDecisionCount: this.memoryEvolutionLinks.size,
-      evolutionDecisionCountsByRelation,
-      supersessionDecisionCount: evolutionDecisionCountsByRelation.supersedes,
-      conflictDecisionCount: evolutionDecisionCountsByRelation.conflicts_with
-        + evolutionDecisionCountsByRelation.negates,
-      ...(latestEvolutionDecisionAt !== undefined && latestEvolutionDecisionAt > 0
-        ? { latestEvolutionDecisionAt }
-        : {}),
-    };
+    return await this.maintenanceReviews.getMemoryMaintenanceDiagnostics(options);
   }
 
   async getMemoriesByChannel(channelId: string, limit: number): Promise<PurrMemory[]> {
-    return Array.from(this.memories.values())
-      .filter(memory => !memory.supersededBy && !memory.deletedAt && memory.sourceRef.startsWith(`${channelId}:`))
-      .sort((left, right) => right.extractedAt - left.extractedAt)
-      .slice(0, limit);
+    return await this.readModel.getMemoriesByChannel(channelId, limit);
   }
 
   async getMemoriesByContact(contactId: string, limit: number): Promise<PurrMemory[]> {
-    return Array.from(this.memories.values())
-      .filter(memory => !memory.supersededBy && !memory.deletedAt && memory.contactId === contactId)
-      .sort((left, right) => right.salience - left.salience || right.extractedAt - left.extractedAt)
-      .slice(0, limit);
+    return await this.readModel.getMemoriesByContact(contactId, limit);
   }
 
   async linkMemories(id1: string, id2: string, linkType: string = 'related'): Promise<MemoryLink | null> {
-    const normalizedId1 = id1.trim();
-    const normalizedId2 = id2.trim();
-    if (!normalizedId1 || !normalizedId2 || normalizedId1 === normalizedId2) return null;
-    const [first, second] = normalizedId1 < normalizedId2 ? [normalizedId1, normalizedId2] : [normalizedId2, normalizedId1];
-    const key = memoryKey(first, second);
-    if (this.memoryLinks.has(key)) return null;
-    const link: MemoryLink = { id1: first, id2: second, linkType: linkType.trim() || 'related', createdAt: Date.now() };
-    await this.persist(async () => {
-      await executeQuery(this.pool, `
-        INSERT INTO memory_links (id1, id2, link_type, created_at)
-        VALUES ($1,$2,$3,$4)
-        ON CONFLICT (id1, id2) DO UPDATE SET
-          link_type = EXCLUDED.link_type,
-          created_at = EXCLUDED.created_at
-      `, [link.id1, link.id2, link.linkType, link.createdAt]);
-    });
-    this.memoryLinks.set(key, link);
-    this.markRetrievalCorpusChanged();
-    return link;
+    return await this.links.linkMemories(id1, id2, linkType);
   }
 
   async unlinkMemories(id1: string, id2: string): Promise<boolean> {
-    const normalizedId1 = id1.trim();
-    const normalizedId2 = id2.trim();
-    if (!normalizedId1 || !normalizedId2) return false;
-    const [first, second] = normalizedId1 < normalizedId2 ? [normalizedId1, normalizedId2] : [normalizedId2, normalizedId1];
-    const key = memoryKey(first, second);
-    if (!this.memoryLinks.has(key)) return false;
-    await this.persist(async () => {
-      await executeQuery(this.pool, 'DELETE FROM memory_links WHERE id1 = $1 AND id2 = $2', [first, second]);
-    });
-    this.memoryLinks.delete(key);
-    this.markRetrievalCorpusChanged();
-    return true;
+    return await this.links.unlinkMemories(id1, id2);
   }
 
   async getLinkedMemories(id: string): Promise<MemoryLink[]> {
-    const normalizedId = id.trim();
-    if (!normalizedId) return [];
-    return Array.from(this.memoryLinks.values())
-      .filter(link => link.id1 === normalizedId || link.id2 === normalizedId)
-      .sort((left, right) => right.createdAt - left.createdAt);
+    return await this.links.getLinkedMemories(id);
   }
 
   async bulkDelete(ids: string[]): Promise<number> {
-    let count = 0;
-    for (const id of ids) {
-      const deleted = await this.softDeleteMemory(id, { deletedBy: 'admin:bulk', reason: 'bulk delete' });
-      if (deleted) count += 1;
-    }
-    return count;
+    return await this.memoryDeletion.bulkDelete(ids);
   }
 
   async bulkUpdate(ids: string[], fields: MemoryBulkUpdatePatch): Promise<number> {
-    if (
-      fields.type === undefined
-      && fields.sensitivity === undefined
-      && fields.retentionClass === undefined
-    ) {
-      return 0;
-    }
-
-    const updatesById = new Map<string, PurrMemory>();
-    for (const id of ids) {
-      const normalizedId = id.trim();
-      if (!normalizedId) continue;
-      const existing = this.memories.get(normalizedId);
-      if (!existing || existing.deletedAt) continue;
-      const next = { ...existing };
-      if (fields.type !== undefined) next.type = fields.type;
-      if (fields.sensitivity !== undefined) next.sensitivity = fields.sensitivity;
-      if (fields.retentionClass !== undefined) {
-        next.retentionClass = fields.retentionClass;
-        next.tags = applyRetentionClassTags(existing, fields.retentionClass);
-      }
-      updatesById.set(normalizedId, next);
-    }
-    const updates = [...updatesById.values()];
-    if (updates.length === 0) return 0;
-
-    const values: unknown[] = [];
-    const valueColumns = ['id'];
-    const setClauses: string[] = [];
-    if (fields.type !== undefined) {
-      valueColumns.push('type');
-      setClauses.push('type = updates.type');
-    }
-    if (fields.sensitivity !== undefined) {
-      valueColumns.push('sensitivity');
-      setClauses.push('sensitivity = updates.sensitivity');
-    }
-    if (fields.retentionClass !== undefined) {
-      valueColumns.push('retention_class', 'tags');
-      setClauses.push('retention_class = updates.retention_class', 'tags = updates.tags');
-    }
-
-    const rows = updates.map((update) => {
-      const row: string[] = [];
-      values.push(update.id);
-      row.push(`$${values.length}::text`);
-      if (fields.type !== undefined) {
-        values.push(update.type);
-        row.push(`$${values.length}::text`);
-      }
-      if (fields.sensitivity !== undefined) {
-        values.push(update.sensitivity);
-        row.push(`$${values.length}::text`);
-      }
-      if (fields.retentionClass !== undefined) {
-        values.push(update.retentionClass ?? null);
-        row.push(`$${values.length}::text`);
-        values.push(JSON.stringify(update.tags));
-        row.push(`$${values.length}::jsonb`);
-      }
-      return `(${row.join(', ')})`;
-    });
-
-    const result = await this.persist(() => executeQuery<{ id: unknown }>(this.pool, `
-      UPDATE l2_memories AS memory
-      SET ${setClauses.join(', ')}
-      FROM (VALUES ${rows.join(', ')}) AS updates(${valueColumns.join(', ')})
-      WHERE memory.id = updates.id
-        AND memory.deleted_at IS NULL
-      RETURNING memory.id
-    `, values));
-
-    const updatedIds = new Set(result.rows.flatMap(row => (
-      typeof row.id === 'string' ? [row.id] : []
-    )));
-    for (const update of updates) {
-      if (updatedIds.has(update.id)) {
-        this.memories.set(update.id, update);
-      }
-    }
-    if (updatedIds.size > 0) {
-      this.markSalienceMaintenanceChanged();
-      this.markRetrievalCorpusChanged();
-    }
-    return result.rowCount ?? updatedIds.size;
+    return await this.bulkUpdates.bulkUpdate(ids, fields);
   }
 
   async bulkUpdateSalience(updates: MemorySalienceUpdate[]): Promise<number> {
-    const normalizedUpdates = normalizeMemorySalienceUpdates(updates);
-    if (normalizedUpdates.length === 0) return 0;
-
-    const values: unknown[] = [];
-    const rows = normalizedUpdates.map((update, index) => {
-      const idParam = index * 3 + 1;
-      const salienceParam = idParam + 1;
-      const anchorParam = salienceParam + 1;
-      values.push(update.id, update.salience, update.salienceDecayAnchorAt);
-      return `($${idParam}::text, $${salienceParam}::numeric, $${anchorParam}::bigint)`;
-    });
-
-    const result = await this.persist(() => executeQuery<{ id: unknown }>(this.pool, `
-      UPDATE l2_memories AS memory
-      SET salience = updates.salience,
-          salience_decay_anchor_at = updates.salience_decay_anchor_at
-      FROM (VALUES ${rows.join(', ')}) AS updates(id, salience, salience_decay_anchor_at)
-      WHERE memory.id = updates.id
-        AND memory.deleted_at IS NULL
-        AND memory.superseded_by IS NULL
-      RETURNING memory.id
-    `, values));
-
-    const updatedIds = new Set(result.rows.flatMap(row => (
-      typeof row.id === 'string' ? [row.id] : []
-    )));
-    for (const update of normalizedUpdates) {
-      if (!updatedIds.has(update.id)) continue;
-      const existing = this.memories.get(update.id);
-      if (!existing || existing.deletedAt) continue;
-      this.memories.set(update.id, {
-        ...existing,
-        salience: update.salience,
-        salienceDecayAnchorAt: update.salienceDecayAnchorAt,
-      });
-    }
-
-    if (updatedIds.size > 0) {
-      this.markSalienceMaintenanceChanged();
-      this.markRetrievalCorpusChanged();
-    }
-
-    return result.rowCount ?? 0;
+    return await this.bulkUpdates.bulkUpdateSalience(updates);
   }
 
   async upsertRecentContactShape(shape: RecentContactShapeArtifact): Promise<void> {
-    await this.persist(() => this.persistRecentContactShape(shape));
-    this.recentContactShapes.set(shape.contactId, shape);
-    this.markRetrievalCorpusChanged();
+    await this.recentContactShapes.upsertRecentContactShape(shape);
   }
 
   async getRecentContactShape(contactId: string): Promise<RecentContactShapeArtifact | undefined> {
-    return this.recentContactShapes.get(contactId);
+    return await this.recentContactShapes.getRecentContactShape(contactId);
   }
 
   async listRecentContactShapes(): Promise<RecentContactShapeArtifact[]> {
-    return Array.from(this.recentContactShapes.values()).sort((left, right) => right.updatedAt - left.updatedAt);
+    return await this.recentContactShapes.listRecentContactShapes();
   }
 
   async addScratchpadEntry(
     content: string,
     options: ScratchpadEntryCreateOptions = {},
   ): Promise<ScratchpadAddResult> {
-    const normalized = content.trim();
-    if (!normalized) throw new Error('Scratchpad content is required');
-    const now = options.now ?? Date.now();
-    const id = options.id?.trim() || randomUUID();
-    const entry: ScratchpadEntry = { id, content: normalized, createdAt: now, updatedAt: now };
-    await this.persist(() => this.upsertScratchpadEntry(entry));
-    this.scratchpadEntries.set(id, entry);
-    const evictedIds = await this.pruneScratchpadEntries();
-    const current = this.scratchpadEntries.get(id);
-    if (!current) throw new Error(`Failed to load scratchpad entry after insert: ${id}`);
-    return { entry: current, evictedIds };
+    return await this.scratchpad.addScratchpadEntry(content, options);
   }
 
   async replaceScratchpadEntry(
@@ -2172,18 +894,7 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
     content: string,
     options: ScratchpadEntryReplaceOptions = {},
   ): Promise<ScratchpadEntry | null> {
-    const normalizedId = id.trim();
-    if (!normalizedId) return null;
-    const existing = this.scratchpadEntries.get(normalizedId);
-    if (!existing) return null;
-    const updated = {
-      ...existing,
-      content: content.trim(),
-      updatedAt: options.now ?? Date.now(),
-    };
-    await this.persist(() => this.upsertScratchpadEntry(updated));
-    this.scratchpadEntries.set(normalizedId, updated);
-    return updated;
+    return await this.scratchpad.replaceScratchpadEntry(id, content, options);
   }
 
   async appendScratchpadEntry(
@@ -2191,68 +902,18 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
     content: string,
     options: ScratchpadEntryReplaceOptions = {},
   ): Promise<ScratchpadEntry | null> {
-    const normalizedId = id.trim();
-    if (!normalizedId) return null;
-    const existing = this.scratchpadEntries.get(normalizedId);
-    if (!existing) return null;
-    const appendix = content.trim();
-    if (!appendix) {
-      throw new Error('Scratchpad content is required');
-    }
-
-    const separator = existing.content.length > 0 ? '\n' : '';
-    const updated = {
-      ...existing,
-      content: `${existing.content}${separator}${appendix}`,
-      updatedAt: options.now ?? Date.now(),
-    };
-    await this.persist(() => this.upsertScratchpadEntry(updated));
-    this.scratchpadEntries.set(normalizedId, updated);
-    return updated;
+    return await this.scratchpad.appendScratchpadEntry(id, content, options);
   }
 
   async removeScratchpadEntry(id: string): Promise<boolean> {
-    const normalizedId = id.trim();
-    if (!normalizedId) return false;
-    if (!this.scratchpadEntries.has(normalizedId)) return false;
-    await this.persist(async () => {
-      await executeQuery(this.pool, 'DELETE FROM scratchpad_entries WHERE id = $1', [normalizedId]);
-    });
-    this.scratchpadEntries.delete(normalizedId);
-    this.syncScratchpadMirror();
-    return true;
+    return await this.scratchpad.removeScratchpadEntry(id);
   }
 
   async getScratchpadEntry(id: string): Promise<ScratchpadEntry | undefined> {
-    this.pruneExpiredScratchpadEntries();
-    return this.scratchpadEntries.get(id.trim());
+    return await this.scratchpad.getScratchpadEntry(id);
   }
 
   listScratchpadEntries(limit: number = 64): ScratchpadEntry[] {
-    this.pruneExpiredScratchpadEntries();
-    return Array.from(this.scratchpadEntries.values())
-      .sort((left, right) => right.updatedAt - left.updatedAt || right.createdAt - left.createdAt)
-      .slice(0, clampLimit(limit, SCRATCHPAD_MAX_ENTRIES, 1, SCRATCHPAD_MAX_ENTRIES));
-  }
-
-  private async pruneScratchpadEntries(): Promise<string[]> {
-    this.pruneExpiredScratchpadEntries();
-    const maxEntries = SCRATCHPAD_MAX_ENTRIES;
-    const ordered = Array.from(this.scratchpadEntries.values())
-      .sort((left, right) => left.updatedAt - right.updatedAt || left.createdAt - right.createdAt);
-    const overflow = Math.max(0, ordered.length - maxEntries);
-    const evicted = ordered.slice(0, overflow).map(entry => entry.id);
-    if (evicted.length > 0) {
-      await this.persist(async () => {
-        for (const id of evicted) {
-          await executeQuery(this.pool, 'DELETE FROM scratchpad_entries WHERE id = $1', [id]);
-        }
-      });
-      for (const id of evicted) {
-        this.scratchpadEntries.delete(id);
-      }
-    }
-    this.syncScratchpadMirror();
-    return evicted;
+    return this.scratchpad.listScratchpadEntries(limit);
   }
 }

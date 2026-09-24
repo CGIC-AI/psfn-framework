@@ -348,6 +348,17 @@ export const VALID_MEMORY_TYPES: MemoryType[] = [
 ];
 
 const PERSISTED_MEMORY_TYPE_REPAIR_VERSION = 1;
+const LEGACY_FACT_PERSISTED_MEMORY_TYPE = 'fact';
+
+/**
+ * Persisted `type` values that {@link resolvePersistedMemoryType} does not
+ * quarantine (valid types plus the mapped legacy alias). SQL read paths bind
+ * this list so LIMIT/COUNT windows contain exactly the decodable rows.
+ */
+export const READABLE_PERSISTED_MEMORY_TYPES: readonly string[] = [
+  ...VALID_MEMORY_TYPES,
+  LEGACY_FACT_PERSISTED_MEMORY_TYPE,
+];
 
 type PersistedMemoryTypeResolution =
   | { disposition: 'valid'; type: MemoryType }
@@ -388,7 +399,7 @@ export function assertMemoryType(value: unknown, field = 'memory.type'): MemoryT
 export function resolvePersistedMemoryType(value: unknown): PersistedMemoryTypeResolution {
   if (isMemoryType(value)) return { disposition: 'valid', type: value };
   const originalType = typeof value === 'string' ? value : String(value);
-  if (originalType === 'fact') {
+  if (originalType === LEGACY_FACT_PERSISTED_MEMORY_TYPE) {
     return {
       disposition: 'mapped',
       originalType,

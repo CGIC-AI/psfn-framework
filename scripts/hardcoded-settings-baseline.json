@@ -7636,7 +7636,7 @@
       "note": "Existing mutable policy candidate NearTurnMemoryLane.inferPostTurnAction.maxRetries; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
-      "file": "src/faculties/memory/postgres-store.ts",
+      "file": "src/faculties/memory/postgres-store/scratchpad.ts",
       "name": "SCRATCHPAD_MAX_ENTRIES",
       "value": "64"
     },

@@ -187,7 +187,7 @@ function providerPreferenceSchema() {
   return Type.Optional(Type.Union(
     IMAGE_PROVIDER_PREFERENCE_VALUES.map((value) => Type.Literal(value)),
     {
-      description: 'Optional provider preference: auto picks the configured default, fal is hosted and paid, comfyui uses raw local HTTP, and comfyui_mcp uses the governed MCP adapter.',
+      description: 'Optional provider preference: auto picks the configured default, fal is hosted and paid, comfyui uses raw local HTTP, comfyui_mcp uses the governed MCP adapter, and openrouter uses the models.json image model with the OpenRouter credential (paid).',
     },
   ));
 }
@@ -1056,7 +1056,9 @@ function createImageGenerationTool(
             },
           });
 
-          if (isLocalImageProvider(effectiveProvider)) {
+          // Local providers and OpenRouter run their one configured model; only
+          // the hosted Fal path walks the selfie edit-model chain.
+          if (isLocalImageProvider(effectiveProvider) || effectiveProvider === 'openrouter') {
             result = await runReferenceEdit(params.edit_model, prompt);
           } else {
             const editChain = resolveSelfieEditModelChain(

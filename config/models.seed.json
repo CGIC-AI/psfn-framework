@@ -233,5 +233,14 @@
       },
       "tuning": { "maxOutputTokens": 4096, "thinkingEnabled": false }
     }
+  ],
+  "imageModels": [
+    {
+      "id": "openrouter-image",
+      "provider": "openrouter",
+      "model": "google/gemini-2.5-flash-image",
+      "modes": ["create", "edit"],
+      "primary": true
+    }
   ]
 }

@@ -1580,11 +1580,26 @@ export interface ModelRegistryPromptCachingPolicy {
   scope?: PromptCacheScope;
 }
 
+/**
+ * Image-output model (models.json `imageModels`, s5b89). Kept apart from
+ * `models` so image generators never enter LLM purpose routing. `provider`
+ * names a providers.json entry; the credential comes from that entry only.
+ */
+export interface ImageModelRegistryEntry {
+  id: string;
+  provider: string;
+  model: string;
+  modes: ('create' | 'edit')[];
+  /** At most one primary per mode; the primary is the default for that mode. */
+  primary: boolean;
+}
+
 export interface CanonicalModelRegistry {
   schemaVersion: 1;
   models: ModelRegistryEntry[];
   budgetPolicy?: ModelRegistryBudgetPolicy;
   promptCaching?: ModelRegistryPromptCachingPolicy;
+  imageModels?: ImageModelRegistryEntry[];
 }
 
 export interface ModelBudgetWindowSnapshot {

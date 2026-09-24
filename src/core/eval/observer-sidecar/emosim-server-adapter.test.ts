@@ -45,10 +45,93 @@ describe('EmoSim server adapter', () => {
     expect(server.eventBodies).toEqual([]);
   });
 
-  it('refuses missing or ambiguous session ownership during read-only sampling', async () => {
+  it('creates the companion session from the live-state sampler when the engine is empty', async () => {
     const server = new FakeEmoSimServer();
     const runner = makeRunner(server);
-    await expect(runner.readCurrentState()).rejects.toThrow('session is unavailable');
+
+    const first = await runner.readCurrentState();
+    const second = await runner.readCurrentState();
+
+    expect(first.sessionId).toBe(SESSION_ID);
+    expect(second.snapshot.t).toBeGreaterThan(first.snapshot.t);
+    expect(server.createCount).toBe(1);
+    expect(server.createBodies[0]).toMatchObject({
+      label: SESSION_LABEL,
+      autonomy: false,
+      human: { name: AGENT_NAME, personality: { ...COMPANION_PERSONALITY } },
+      npcs: [{ name: EMOSIM_SERVER_ANCHOR_NPC_NAME }],
+      drive_config: {
+        hunger: { enabled: false },
+        thirst: { enabled: false },
+        sleep_pressure: { enabled: false },
+      },
+    });
+    // Sampling never injects a stimulus.
+    expect(server.eventBodies).toEqual([]);
+  });
+
+  it('creates exactly one session when the sampler and first observation race on an empty engine', async () => {
+    const server = new FakeEmoSimServer();
+    const runner = makeRunner(server);
+
+    const [reading, observed] = await Promise.all([
+      runner.readCurrentState(),
+      runEmoSimProjectedStimulus(makeInput(), { runner }),
+    ]);
+
+    expect(reading.sessionId).toBe(SESSION_ID);
+    expect(observed.ok).toBe(true);
+    expect(server.createCount).toBe(1);
+    expect(server.calls.filter((call) => call.path === '/api/sessions' && call.method === 'GET')).toHaveLength(1);
+  });
+
+  it('a stale failed read never orphans a newer in-flight bootstrap into a second creation', async () => {
+    const server = new FakeEmoSimServer();
+    const runner = makeRunner(server);
+    await runner.readCurrentState();
+    expect(server.createCount).toBe(1);
+
+    // The engine restarts and loses the session. Two reads are in flight on
+    // the old bootstrap; the second read's failure lands only after a newer
+    // bootstrap has started recreating the session.
+    let releaseStale!: () => void;
+    const staleGate = new Promise<void>(resolve => { releaseStale = resolve; });
+    let staleReadsSeen = 0;
+    server.beforeRespond = async (method, path) => {
+      if (method === 'GET' && path === `/api/session/${SESSION_ID}?full=1` && staleReadsSeen < 2) {
+        staleReadsSeen += 1;
+        if (staleReadsSeen === 2) await staleGate;
+        throw new TypeError('fetch failed');
+      }
+    };
+    server.forgetCreated();
+    const readA = runner.readCurrentState();
+    const readB = runner.readCurrentState();
+    await expect(readA).rejects.toThrow('fetch failed');
+
+    let releaseList!: () => void;
+    const listGate = new Promise<void>(resolve => { releaseList = resolve; });
+    const previous = server.beforeRespond;
+    server.beforeRespond = async (method, path) => {
+      await previous(method, path);
+      if (method === 'GET' && path === '/api/sessions') await listGate;
+    };
+    const recreate = runner.readCurrentState();
+    releaseStale();
+    await expect(readB).rejects.toThrow('fetch failed');
+    const concurrent = runner.readCurrentState();
+    // Let any (incorrect) second bootstrap reach the listing before release.
+    await new Promise(resolve => setTimeout(resolve, 10));
+    releaseList();
+
+    await expect(recreate).resolves.toMatchObject({ sessionId: SESSION_ID });
+    await expect(concurrent).resolves.toMatchObject({ sessionId: SESSION_ID });
+    expect(server.createCount).toBe(2);
+  });
+
+  it('refuses ambiguous or foreign session ownership during live-state sampling', async () => {
+    const server = new FakeEmoSimServer();
+    const runner = makeRunner(server);
     const session = {
       session: SESSION_ID, label: SESSION_LABEL,
       agents: [{ uid: 'uid-observer', name: AGENT_NAME }],
@@ -58,6 +141,7 @@ describe('EmoSim server adapter', () => {
     server.existingSessions = [{ ...session, agents: [{ uid: 'other', name: 'another-companion' }] }];
     await expect(runner.readCurrentState()).rejects.toThrow('has no agent named');
     expect(server.calls.every(call => call.method === 'GET')).toBe(true);
+    expect(server.createCount).toBe(0);
   });
 
   it('verifies the model contract, bootstraps once, and produces schema-valid output', async () => {
@@ -588,6 +672,7 @@ class FakeEmoSimServer {
   };
   agentPersonality: Record<string, number> = { ...COMPANION_PERSONALITY };
   personalityBodies: unknown[] = [];
+  beforeRespond: (method: string, path: string) => Promise<void> = async () => {};
   private stateReads = 0;
   private created: FakeSessionListing | null = null;
   private anchorRoom = 'chapel';
@@ -603,6 +688,7 @@ class FakeEmoSimServer {
       this.failNextRequests -= 1;
       throw new TypeError('fetch failed');
     }
+    await this.beforeRespond(method, path);
 
     if (method === 'GET' && parsed.pathname === '/api/model') {
       return json(this.modelPayload());
@@ -644,6 +730,11 @@ class FakeEmoSimServer {
     }
     return json({ error: `unknown route ${method} ${path}` }, 404);
   }) as typeof fetch;
+
+  /** Simulate an engine restart that lost the created session. */
+  forgetCreated(): void {
+    this.created = null;
+  }
 
   private modelPayload(): Record<string, unknown> {
     const names = this.extraEmotion

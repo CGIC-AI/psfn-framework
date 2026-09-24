@@ -166,7 +166,7 @@ export class EmoSimServerRunner implements EmoSimRunner {
     const externalActor = context.socialContactKey === undefined
       ? undefined
       : buildEmoSimExternalActor(this.sessionLabel, context.socialContactKey);
-    const bootstrap = await this.ensureBootstrap(input);
+    const bootstrap = await this.ensureBootstrap();
 
     const beforeState = await this.readSessionState(bootstrap.sessionId);
     const before = this.toEngineSnapshot(beforeState);
@@ -255,37 +255,55 @@ export class EmoSimServerRunner implements EmoSimRunner {
     return output;
   }
 
-  /** Read the existing live session without creating it or injecting a stimulus. */
+  /**
+   * Read the live session without injecting a stimulus. The companion's
+   * session is created here when the engine has none, so the 24/7 drive clock
+   * starts within one sampling interval of agent start instead of waiting for
+   * the first observed turn. Ownership rules are identical to the observation
+   * path: an ambiguous label or a session lacking this agent rejects.
+   */
   async readCurrentState(): Promise<{ sessionId: string; snapshot: EmoSimEngineSnapshot }> {
+    const pending = this.ensureBootstrap();
     try {
-      const bootstrap = await this.ensureBootstrap();
+      const bootstrap = await pending;
       const state = await this.readSessionState(bootstrap.sessionId);
       if (state.session !== bootstrap.sessionId || state.label !== this.sessionLabel) {
         throw incompatible('EmoSim live state does not match the configured session identity');
       }
       return { sessionId: bootstrap.sessionId, snapshot: this.toEngineSnapshot(state) };
     } catch (error) {
-      // Re-discover after a server restart; never create a session from a
-      // read-only sampling request (bootstrap only reconciles personality).
-      this.bootstrapPromise = null;
+      // Re-discover after a server restart (the engine may have lost the
+      // session). Only drop the bootstrap this read used, so a newer in-flight
+      // bootstrap is never orphaned into a second concurrent creation.
+      this.clearBootstrap(pending);
       throw error;
     }
   }
 
-  private ensureBootstrap(input?: EmoSimAdapterInput): Promise<EmoSimServerBootstrap> {
+  /**
+   * Single-flight session resolution shared by the sampler and observations:
+   * concurrent callers await one find-or-create, so an empty engine gets
+   * exactly one session.
+   */
+  private ensureBootstrap(): Promise<EmoSimServerBootstrap> {
     if (!this.bootstrapPromise) {
-      this.bootstrapPromise = this.bootstrap(input).catch((error: unknown) => {
-        // Allow the next observation to retry bootstrap after transient
-        // failures (server restarting, network blip). Session creation is
-        // idempotent because it is guarded by the find-by-label lookup.
-        this.bootstrapPromise = null;
+      const pending: Promise<EmoSimServerBootstrap> = this.bootstrap().catch((error: unknown) => {
+        // Allow the next call to retry bootstrap after transient failures
+        // (server restarting, network blip). Session creation is idempotent
+        // because it is guarded by the find-by-label lookup.
+        this.clearBootstrap(pending);
         throw error;
       });
+      this.bootstrapPromise = pending;
     }
     return this.bootstrapPromise;
   }
 
-  private async bootstrap(input?: EmoSimAdapterInput): Promise<EmoSimServerBootstrap> {
+  private clearBootstrap(pending: Promise<EmoSimServerBootstrap>): void {
+    if (this.bootstrapPromise === pending) this.bootstrapPromise = null;
+  }
+
+  private async bootstrap(): Promise<EmoSimServerBootstrap> {
     const model = expectRecord(await this.request('GET', '/api/model'), '/api/model response');
     this.verifyModelContract(model);
     verifyExternalSocialActorCapability(model);
@@ -318,10 +336,12 @@ export class EmoSimServerRunner implements EmoSimRunner {
       }
       await this.reconcileExistingSession(sessionId);
     } else {
-      if (!input) {
-        throw incompatible('Configured EmoSim session is unavailable for live-state sampling');
-      }
       sessionId = await this.createSession();
+      log.info('Created companion emo_sim session', {
+        sessionId,
+        sessionLabel: this.sessionLabel,
+        agentName: this.agentName,
+      });
     }
 
     const sessionModel = expectRecord(

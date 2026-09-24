@@ -11,7 +11,7 @@ import type { CompanionId } from '../../shared/routing/companion-id.js';
 import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
 
 /** Gateway-facing channel surfaces that can be routed to a companion. */
-export const GATEWAY_CHANNEL_SURFACES = ['discord', 'telegram', 'api'] as const;
+export const GATEWAY_CHANNEL_SURFACES = ['discord', 'telegram', 'api', 'external'] as const;
 export type GatewayChannelSurface = (typeof GATEWAY_CHANNEL_SURFACES)[number];
 
 export type AuthenticatedGatewayAccountRoute =
@@ -111,6 +111,8 @@ export function resolveGatewaySurfaceForChannelType(
       return 'telegram';
     case 'api':
       return 'api';
+    case 'external':
+      return 'external';
     default:
       return null;
   }

@@ -322,12 +322,121 @@ same `requestAgentVoiceStream` and `notifyOperator` entry points.
 
 ## Builtin plugins
 
-`createBuiltinChannelPlugins` returns no plugins today. The Buzz and Multica
-plugins were removed (psfn-framework-lef2o); a generic channel adapter
-interface (psfn-framework-pus8m) is the planned replacement. The host,
-registry, section parser, and isolation supervisor stay in place, and
-`channels.json` keys `buzz` or `multica` fail startup with a pointer to the
-`migrate-required-settings-blocks` owner-file migration that strips them.
+`createBuiltinChannelPlugins` registers one plugin: the generic external
+channel adapter (`external`, below). The Buzz and Multica plugins were removed
+(psfn-framework-lef2o); `channels.json` keys `buzz` or `multica` fail startup
+with a pointer to the `migrate-required-settings-blocks` owner-file migration
+that strips them.
+
+## External channel adapters
+
+New messaging systems (SMS, WhatsApp, iMessage, ...) are not added as in-tree
+channel code. Each one is an out-of-process **bridge** that connects to the
+gateway over a small, versioned MCP protocol, in the same way Hermes connects for
+companion memory. The gateway is the MCP server and the bridge is the client.
+The gateway never dials a bridge or waits on one. Adding a channel needs only a
+bridge and one `channels.json` entry. Source: `src/channels/external/*`.
+
+### Configuration
+
+```json
+"external": {
+  "enabled": true,
+  "limits": {
+    "maxRequestBytes": 65536, "requestReadTimeoutMs": 5000,
+    "maxTextChars": 8000, "maxIdChars": 256,
+    "maxInFlightTurns": 4, "turnTimeoutMs": 120000,
+    "outboundQueueMax": 100, "outboundPullMax": 20,
+    "heartbeatTimeoutMs": 120000, "failureReportIntervalMs": 60000
+  },
+  "adapters": [{
+    "id": "sms", "label": "SMS gateway",
+    "companionId": "<companion uuid>",
+    "tokenRef": { "kind": "env", "envName": "EXTERNAL_CHANNEL_SMS_TOKEN" }
+  }]
+}
+```
+
+The configuration follows these rules:
+
+- Every limit is required owner-file data. The runtime has no defaults for them.
+  The example values are illustrations.
+- The bearer token is env-owned. It must be unique across adapters and must not
+  be reused from `API_KEY`, `ADMIN_TOKEN`, the testing harness, satellite keys,
+  trusted-proxy tokens or external-memory bindings.
+- Each adapter is bound to exactly one companion.
+- The whole section is validated even when it is disabled. Unknown keys, inline
+  secrets, duplicate ids and shared token env names are rejected.
+- Adapters are served by the gateway API server, so `API_PORT` must be set. If it
+  is not set, the adapters are disabled and the other channels keep running.
+
+### Protocol (version 1)
+
+Each adapter is served at `POST /v1/channels/external/<id>/mcp` as stateless
+streamable-HTTP MCP. The request sends `Authorization: Bearer <token>` and has
+no `Origin` or `Mcp-Session-Id` header. Unknown adapters and bad credentials
+both get `401`. Each tool input carries `protocolVersion: 1`, and any other
+version is refused. Identity comes only from the endpoint and its token, never
+from tool arguments.
+
+| Tool | Input | Result |
+| --- | --- | --- |
+| `channel_hello` | `bridge: {name, version}` | `protocolVersion`, `instanceId`, capabilities, advertised limits |
+| `channel_inbound` | `message: {id, conversationId, conversationKind: direct\|group, senderId, senderName, text, sentAt?, replyToMessageId?}` | `replied` with `reply: {conversationId, text}`, `no_reply`, or `rejected` with `reason` |
+| `channel_pull_outbound` | `maxItems?` | `messages: [{deliveryId, conversationId, text, replyToMessageId?}]` |
+| `channel_health` | `status: ok\|degraded, detail?` | adapter status (`connected`, `stale`, queue depths, counters) |
+
+The companion's reply to an inbound message is returned in the same
+`channel_inbound` result. Each adapter's `outbound.sendText` puts messages in a
+bounded per-adapter queue, and the bridge drains that queue with
+`channel_pull_outbound`. The queue and the pull tool are covered by the
+conformance tests. However, no agent-initiated delivery path (scheduled
+continuity, wake notes, outreach) targets external adapters yet. That is why
+the `external` channel type has neither scheduled continuity nor live wakeup. Rejection reasons are `busy`, `duplicate`, `invalid`,
+`turn_timeout`, `turn_failed` and `not_running`. The bridge should back off and
+retry `busy` and `turn_timeout`. It should drop `invalid`.
+
+Inbound ids are namespaced as `external:<id>:<native id>` for the channel,
+message and author. This keeps two bridges from colliding with or impersonating
+each other. The message body is screened by chat intake as the `external`
+surface. The author gets the least-privileged DM-conditioned trust class
+(`regular_contact` in direct conversations, `public_contact` in groups).
+
+### Isolation
+
+A bridge can never take down the gateway, agent turns or another channel:
+
+- Each adapter is its own supervised surface (`external:<id>`) under the channel
+  isolation supervisor and the `CHANNEL_SURFACE_START_RETRY_*` policy. A load,
+  credential or endpoint failure disables that surface alone.
+- The route handler always answers. A malformed, oversized (`413`), stalled
+  (`408`), wrong-version or unauthenticated request gets an answer and goes no
+  further.
+- Companion turns are limited by `maxInFlightTurns`. Excess turns are refused
+  as `busy`, not queued. Each turn is abandoned after `turnTimeoutMs`.
+- The outbound queue is bounded. When it is full, new sends are refused.
+- A bridge that is silent for longer than `heartbeatTimeoutMs` is reported as
+  `stale`. It recovers on its next call.
+- Floods, timeouts, full queues, malformed requests and silence are reported as
+  degraded runtime failures of that surface, at most once per
+  `failureReportIntervalMs` for each kind. They are never process failures.
+
+### Writing an adapter
+
+`src/channels/external/reference-bridge.ts` is the reference bridge. It has a
+typed MCP client (`ReferenceExternalChannelBridge`) and an in-memory
+`LoopbackPlatform` that shows the full round trip. To write a real bridge,
+replace the loopback platform with your messaging API:
+
+1. Call `channel_hello` and check the protocol version and limits.
+2. Send each platform message with `channel_inbound` and post the reply.
+3. Poll `channel_pull_outbound` and deliver the messages you receive.
+4. Call `channel_health` at an interval shorter than `heartbeatTimeoutMs`.
+
+Every bridge must pass the conformance suite in
+`src/test-support/external-channel-conformance.ts`
+(`describeExternalChannelBridgeConformance`). A bridge written in another
+language is tested through a thin driver that forwards these calls.
 
 ## Fail-closed invariants
 

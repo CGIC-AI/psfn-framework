@@ -58,6 +58,12 @@ export interface ChannelPluginCreateInput<TConfig = unknown> {
   config: TConfig;
   secrets: Readonly<Record<string, string>>;
   context: ChannelPluginHostContext;
+  /**
+   * Reports a contained runtime fault of THIS instance's surface to the
+   * isolation supervisor, which projects it as degraded channel health. It
+   * never throws and never affects any other surface.
+   */
+  reportRuntimeFailure: (error: unknown) => void;
 }
 
 export interface ChannelPluginInstance {

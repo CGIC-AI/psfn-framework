@@ -89,7 +89,7 @@ flowchart TD
     DISCORD["Discord adapter - discord.js client"]
     TELEGRAM["Telegram adapter - Bot API polling or webhook"]
     API["API adapter - OpenAI-compatible HTTP server"]
-    PLUGIN["Channel plugin host - no builtin plugins"]
+    PLUGIN["Channel plugin host - external channel adapters"]
     REG["ChannelAdapterRegistry"]
     LIFE["Manifest lifecycle - load, start, stop"]
     ELIG["Eligibility gate - plugin activation and actions"]

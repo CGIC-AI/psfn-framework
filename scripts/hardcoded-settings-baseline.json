@@ -2540,6 +2540,20 @@
       "value": "10"
     },
     {
+      "file": "src/channels/external/config.ts",
+      "name": "nonempty.minLength",
+      "value": "1",
+      "form": "object-member",
+      "note": "Nonempty text is a structural channels.json.external owner-file invariant (adapter label, companion id, token env name). minLength 1 excludes missing identity; it is not an operator-tunable limit."
+    },
+    {
+      "file": "src/channels/external/protocol.ts",
+      "name": "text.minLength",
+      "value": "1",
+      "form": "object-member",
+      "note": "Nonempty text is a structural external channel protocol invariant for identifiers and message bodies. Size limits are owner-file bounds (channels.json.external.limits); minLength 1 only excludes missing fields."
+    },
+    {
       "file": "src/channels/shared/long-running-tool-status.ts",
       "name": "INITIAL_DELAY_MS",
       "value": "12_000",

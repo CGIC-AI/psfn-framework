@@ -89,7 +89,10 @@ export class ChannelPluginHost {
             pluginId: plugin.manifest.id,
             ...(account.accountId ? { accountId: account.accountId } : {}),
             ...(companionId ? { companionId } : {}),
-            instance: await instantiatePlugin(plugin, account.section, options),
+            instance: await instantiatePlugin(plugin, account.section, options, {
+              surfaceId: account.id,
+              ...(companionId ? { companionId } : {}),
+            }),
           });
         } catch (error) {
           options.supervisor.disable(
@@ -201,6 +204,7 @@ async function instantiatePlugin(
   plugin: ChannelPlugin,
   section: ChannelPluginLoadedSection,
   options: ChannelPluginHostOptions,
+  surface: { surfaceId: string; companionId?: CompanionId },
 ): Promise<ChannelPluginInstance> {
   const secrets: Record<string, string> = {};
   for (const need of section.credentials) {
@@ -210,6 +214,7 @@ async function instantiatePlugin(
     config: section.config,
     secrets,
     context: options.contextFor(plugin.manifest.id, section),
+    reportRuntimeFailure: error => options.supervisor.reportRuntimeFailure(surface, error),
   });
   if (instance.adapter.id !== plugin.manifest.id) {
     throw new Error(

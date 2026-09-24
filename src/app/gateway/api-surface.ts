@@ -2,6 +2,8 @@ import { resolveTestingHarnessDevicesConfig } from '../../channels/backplane/tes
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import { ExternalMemoryMcpRoute } from '../../channels/api/server/external-memory-mcp.js';
+import type { ExternalChannelAdapter } from '../../channels/external/adapter.js';
+import { ExternalChannelMcpRoute } from '../../channels/external/mcp-route.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type {
   SatelliteClientCertIdentity,
@@ -147,6 +149,8 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
   /** Exact gateway topology posture after fleet/single configuration resolution. */
   multiCompanion: boolean;
   channelsConfig?: RuntimeChannelsConfig;
+  /** Loaded external channel adapters; served only when the API server runs. */
+  externalChannelAdapters?: readonly ExternalChannelAdapter[];
   satelliteRegistryProvider: SatelliteRegistryProvider;
   satelliteRegistry?: SatelliteRegistryConfig;
   /**
@@ -1211,6 +1215,16 @@ export async function startOptionalGatewayApiServer(
         ),
         [env.API_KEY, env.ADMIN_TOKEN, options.channelsConfig.api.testingHarness?.apiKey, ...satelliteApiKeys],
       ),
+    } : {}),
+    ...(options.externalChannelAdapters && options.externalChannelAdapters.length > 0 ? {
+      externalChannelMcp: new ExternalChannelMcpRoute(options.externalChannelAdapters, [
+        env.API_KEY,
+        env.ADMIN_TOKEN,
+        options.channelsConfig?.api.testingHarness?.apiKey,
+        trustedProxyClientCertToken,
+        ...satelliteApiKeys,
+        ...(options.channelsConfig?.api.externalMemory?.bindings.map(binding => binding.apiKey) ?? []),
+      ]),
     } : {}),
     // ADMIN_TOKEN remains available to the private Garden -> Gateway operator
     // confirmation endpoint and to the fleet router's alternative admin door.

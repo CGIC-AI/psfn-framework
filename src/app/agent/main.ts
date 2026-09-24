@@ -145,6 +145,7 @@ import {
   runWithPostgresPoolOwner,
 } from '../../persistence/postgres.js';
 import { sealPostgresStoreReadinessBeforeReady } from '../../persistence/postgres/runtime-readiness.js';
+import { assertBackgroundWorkFitsTurnRecordFenceLane } from '../../persistence/postgres/turn-record-eligibility-fence.js';
 import { CompanionPresenceRuntime } from '../../core/agent/companion-presence-runtime.js';
 import {
   CompanionAvailabilityRuntime,
@@ -397,6 +398,9 @@ async function main(): Promise<void> {
     ...(config.companionId ? { companionId: config.companionId } : {}),
   });
 
+  assertBackgroundWorkFitsTurnRecordFenceLane(
+    schedulerConfig.backgroundWork.supervisor.maxConcurrentSessions,
+  );
   const persistenceRuntime = await createAgentPersistenceRuntime({
     config,
     pathSnapshot,

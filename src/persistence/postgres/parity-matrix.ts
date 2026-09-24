@@ -234,6 +234,11 @@ export const POSTGRES_PARITY_MATRIX = [
     ],
     codeReferences: [
       'src/faculties/memory/postgres-store.ts',
+      'src/faculties/memory/postgres-store/l2-read-model.ts',
+      'src/faculties/memory/postgres-store/memory-deletion.ts',
+      'src/faculties/memory/postgres-store/memory-links.ts',
+      'src/faculties/memory/postgres-store/reviews.ts',
+      'src/faculties/memory/postgres-store/contact-shapes.ts',
       'src/faculties/memory/memory-store-port.ts',
       'src/persistence/postgres/migrations.ts',
     ],
@@ -258,6 +263,7 @@ export const POSTGRES_PARITY_MATRIX = [
     postgresArtifacts: ['vector embedding column and cosine-distance index/query path'],
     codeReferences: [
       'src/faculties/memory/postgres-store.ts',
+      'src/faculties/memory/postgres-store/bounded-reads.ts',
       'src/faculties/memory/retrieval.ts',
       'src/persistence/postgres/migrations.ts',
     ],
@@ -306,6 +312,7 @@ export const POSTGRES_PARITY_MATRIX = [
     postgresArtifacts: ['memory_evolution_links'],
     codeReferences: [
       'src/faculties/memory/postgres-store/evolution.ts',
+      'src/faculties/memory/postgres-store/memory-links.ts',
       'src/faculties/memory/memory-store-port.ts',
       'src/persistence/postgres/migrations.ts',
     ],
@@ -329,7 +336,7 @@ export const POSTGRES_PARITY_MATRIX = [
     sourceOfTruthArtifacts: ['scratchpad_entries'],
     postgresArtifacts: ['scratchpad_entries', 'derived notes/scratchpad.json mirror'],
     codeReferences: [
-      'src/faculties/memory/postgres-store.ts',
+      'src/faculties/memory/postgres-store/scratchpad.ts',
       'src/faculties/memory/memory-store-port.ts',
       'src/persistence/postgres/migrations.ts',
     ],

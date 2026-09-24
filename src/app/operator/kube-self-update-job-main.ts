@@ -18,12 +18,18 @@ import {
   isPinnedKubeImageReference,
 } from '../../system/lifecycle/kube-self-management.js';
 import type { DeployPipelinePlan } from '../../system/lifecycle/kube-deploy-pipeline.js';
+import {
+  deriveKubeImageDelivery,
+  type KubeImageDeliveryMode,
+  type RegistryFetch,
+} from '../../system/lifecycle/kube-image-delivery.js';
 import { isExplicitTrue } from '../startup/support/env-parsing.js';
 import {
   createLiveDeployPipelineRunner,
   createLiveHelmRollbackApi,
   createLiveRollbackTargetResolver,
   createExecFileCommandRunner,
+  globalRegistryFetch,
   type LiveDeployPipelineRunnerConfig,
   type CommandRunner,
 } from './kube-self-update-transport.js';
@@ -86,6 +92,10 @@ export interface KubeSelfUpdateJobEnvConfig {
   helmGlobalArgs: string[];
   kubectlGlobalArgs: string[];
   autoRollbackEnabled: boolean;
+  /** Derived from PSFN_KUBE_TARGET_IMAGE (see kube-image-delivery.ts). */
+  imageDelivery: KubeImageDeliveryMode;
+  /** PSFN_IMPORT_IMAGE_CMD; present only (and then required) for ctr-import delivery. */
+  importImageCommand?: string;
 }
 
 export interface KubeSelfUpdateJobConfig extends KubeSelfUpdateJobEnvConfig {
@@ -140,6 +150,19 @@ export function resolveKubeSelfUpdateJobEnvConfig(
   }
   const sourceBranch = requireEnv(env, 'PSFN_SOURCE_BRANCH');
   const { repository, tag } = splitPinnedImage(requireEnv(env, 'PSFN_KUBE_TARGET_IMAGE'));
+  const imageDelivery = deriveKubeImageDelivery(`${repository}:${tag}`).mode;
+  const importImageCommand = env.PSFN_IMPORT_IMAGE_CMD?.trim() || undefined;
+  if (imageDelivery === 'ctr-import' && importImageCommand === undefined) {
+    throw new Error(
+      'Kube self-update job requires PSFN_IMPORT_IMAGE_CMD for a registry-less localhost/ target image.',
+    );
+  }
+  if (imageDelivery === 'registry-push' && importImageCommand !== undefined) {
+    throw new Error(
+      'Kube self-update job delivers a registry target image by push; unset PSFN_IMPORT_IMAGE_CMD '
+      + '(containerd import is exposed to kubelet image GC).',
+    );
+  }
 
   const plan: DeployPipelinePlan = {
     action: 'deploy',
@@ -178,14 +201,18 @@ export function resolveKubeSelfUpdateJobEnvConfig(
     autoRollbackEnabled: env.PSFN_AUTO_ROLLBACK_ENABLED
       ? isExplicitTrue(env.PSFN_AUTO_ROLLBACK_ENABLED)
       : true,
+    imageDelivery,
+    ...(importImageCommand !== undefined ? { importImageCommand } : {}),
   };
 }
 
 export interface BuildKubeSelfUpdateJobOptionsDeps {
   run?: CommandRunner;
   http?: HttpJsonFetcher;
-  /** Import the built+retagged image into the runtime; supplied by the operator env. */
-  importImage: LiveDeployPipelineRunnerConfig['importImage'];
+  /** Containerd import for ctr-import delivery; supplied by the operator env. */
+  importImage?: LiveDeployPipelineRunnerConfig['importImage'];
+  /** Registry API fetch for registry-push digest verification (default: global fetch). */
+  registryFetch?: RegistryFetch;
   /** Verify a fresh restorable backup exists before mutation. */
   verifyBackup: (context: { namespace: string; release: string }) => Promise<boolean>;
 }
@@ -269,7 +296,11 @@ export function buildKubeSelfUpdateJobOptions(
     dockerfile: config.dockerfile,
     buildContext: config.buildContext,
     chartPath: config.chartPath,
-    importImage: deps.importImage,
+    ...(deps.importImage ? { importImage: deps.importImage } : {}),
+    registry: {
+      fetch: deps.registryFetch ?? globalRegistryFetch,
+      timeoutMs: config.lifecycleKubernetes.operatorHttpTimeoutMs,
+    },
     verifyBackup: (context) => deps.verifyBackup({ namespace: context.namespace, release: context.release }),
   });
 
@@ -310,16 +341,16 @@ async function main(): Promise<void> {
   const config: KubeSelfUpdateJobConfig = { ...envConfig, lifecycleKubernetes };
   const run = createExecFileCommandRunner(lifecycleKubernetes.operatorCommandTimeoutMs);
   const http = createNodeHttpJsonFetcher(lifecycleKubernetes.operatorHttpTimeoutMs);
+  const importImageCommand = config.importImageCommand;
   const options = buildKubeSelfUpdateJobOptions(config, {
     run,
     http,
-    // The concrete image import + backup verification are operator-environment
-    // specific; they are wired here from env-provided commands so the agent
-    // never carries them. Absent configuration fails closed.
-    importImage: async (context, retag) => {
-      const cmd = process.env.PSFN_IMPORT_IMAGE_CMD?.trim();
-      if (!cmd) throw new Error('Kube self-update job requires PSFN_IMPORT_IMAGE_CMD to import the built image.');
-      const result = await run('sh', ['-c', cmd], {
+    // The containerd import (registry-less localhost/ targets only) and backup
+    // verification are operator-environment specific; they are wired here from
+    // env-provided commands so the agent never carries them. Registry targets
+    // are pushed and digest-verified by the transport itself.
+    ...(importImageCommand !== undefined ? { importImage: async (context, retag) => {
+      const result = await run('sh', ['-c', importImageCommand], {
         env: {
           ...process.env,
           PSFN_IMPORT_FROM: retag.from,
@@ -330,7 +361,7 @@ async function main(): Promise<void> {
       if (result.code !== 0) {
         throw new Error(`Kube self-update job image import failed: ${(result.stderr || result.stdout).trim().slice(-300)}`);
       }
-    },
+    } } : {}),
     verifyBackup: async () => {
       const cmd = process.env.PSFN_VERIFY_BACKUP_CMD?.trim();
       if (!cmd) throw new Error('Kube self-update job requires PSFN_VERIFY_BACKUP_CMD to verify a restorable backup.');

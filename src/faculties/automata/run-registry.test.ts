@@ -33,6 +33,7 @@ function policy() {
         modelIdentityPolicy: 'configured-provider-strict',
       },
       reindex: { leaseDurationMs: 60_000 },
+      health: { activityWindowMs: 86_400_000, emptyRunThreshold: 5 },
       reviewer: {
         enabled: true,
         cadenceMs: 60_000,
@@ -472,6 +473,21 @@ describe('AutomataRunRegistry', () => {
         reindex: { leaseDurationMs: 0 },
       },
     })).toThrow('bus.reindex.leaseDurationMs must be a positive safe integer');
+  });
+
+  it('requires an owner-supplied Bus learning-health window and empty-run threshold', () => {
+    expect(policy().bus.health).toEqual({ activityWindowMs: 86_400_000, emptyRunThreshold: 5 });
+    const { health: _health, ...busWithoutHealth } = policy().bus;
+    expect(() => parseAutomataOwnerPolicy({ ...policy(), bus: busWithoutHealth }))
+      .toThrow('bus.health must be an object');
+    expect(() => parseAutomataOwnerPolicy({
+      ...policy(),
+      bus: { ...policy().bus, health: { activityWindowMs: 1, emptyRunThreshold: 0 } },
+    })).toThrow('bus.health.emptyRunThreshold must be a positive safe integer');
+    expect(() => parseAutomataOwnerPolicy({
+      ...policy(),
+      bus: { ...policy().bus, health: { activityWindowMs: 1, emptyRunThreshold: 1, streak: 2 } },
+    })).toThrow('contains unknown keys');
   });
 
   it('requires explicit owner bounds for governed lesson proposals', () => {

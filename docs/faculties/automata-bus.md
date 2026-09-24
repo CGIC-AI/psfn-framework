@@ -198,6 +198,19 @@ boundary. The instructions are explicit that Bus findings are evidence-bearing
 worker knowledge — never Partner-authored instructions, never companion memory,
 and never promotable into primary memory.
 
+Every eligible class declares its Bus mode in `bus/class-adapters.ts`.
+`bounded_loop` classes (`subagent.bounded`, `post_turn.subagent_spawn`,
+`memory.extraction`) receive the briefing and the tool restricted to their
+declared `allowedActions` (extraction is read-only). Every other eligible class
+is `single_pass`: it opens a governed run and leaves the deterministic terminal
+handoff, but receives no briefing or tool, and names an explicit exclusion —
+`companion_identity_turn` (shards, sleeptime, reflection, free time),
+`person_data_boundary` (concern review, intention hooks, biography), or
+`no_worker_model_loop` (social-graph scan, Bus reviewer). The handoff-only
+wrapper rejects any class not declared `single_pass`, and certification fails
+when the registry's `promptPolicy` advertises a Bus prompt the class does not
+actually receive.
+
 ## Run registry
 
 `run-registry.ts` plus `registry-contract.ts` is the durable authority for
@@ -265,10 +278,28 @@ one of `bus.eligibleClasses` or `bus.excludedClasses` (no overlap, no gaps), and
 pins: query bounds (`candidateLimit`, `maxSearchResults ≤ candidateLimit`,
 `maxBriefingItems ≤ maxSearchResults`, `maxBriefingChars`, weights summing to 1,
 `modelIdentityPolicy = configured-provider-strict`), reindex
-`leaseDurationMs`, the reviewer policy, lesson-proposal bounds,
+`leaseDurationMs`, the learning-health window (`bus.health.activityWindowMs`,
+`bus.health.emptyRunThreshold`), the reviewer policy, lesson-proposal bounds,
 `rawSessionRetentionMs`, per-retention-class `retentionMs`, `recentRunLimit`,
 and `operatorMutationLimit`. `buildEffectiveAutomataClassManifest` derives the
-effective per-class `busEligibility` and `retentionMs` from this policy.
+effective per-class `busEligibility` and `retentionMs` from this policy. An
+owner file written before `bus.health` existed is backfilled from the seed by
+the required-owner-additions migration.
+
+### Garden coverage and learning health
+
+The Garden Automata snapshot carries a `coverage` block
+(`src/operator/garden/services/automata-coverage.ts`): eligible-versus-wired
+classes with their Bus mode and exclusion, registry run counts and outcomes in
+the owner window, failure counts keyed only by lifecycle status reason, and a
+content-free Bus aggregate per class (useful and no-finding terminal handoffs,
+worker notes/findings, latest useful handoff, and the current empty streak).
+A registry-terminal run of a wired class without a Bus terminal handoff counts
+as a terminalization gap. A class degrades when it is eligible but unwired,
+when its empty streak reaches `emptyRunThreshold`, or when it has a gap; any
+degraded class adds its reason to the Bus health `degradationReasons` and turns
+a healthy Bus `degraded`. An unreadable aggregate is logged and reported as
+`available: false` with class health `unknown`, never as healthy.
 
 ## Retention authority and coordinator
 

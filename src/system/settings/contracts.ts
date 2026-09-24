@@ -50,6 +50,19 @@ export const REMOVED_RUNTIME_SETTINGS_KEYS = [
   'memoryRetrievalLimit',
 ] as const;
 
+/**
+ * Retired settings.json keys that must fail closed instead of being silently
+ * ignored. The deprecated local-crawler web-fetch lane was removed
+ * (psfn-framework-xvtc1); webFetchAllowHttp, webFetchDomainAllowlist, and
+ * webFetchAllowInternalNetwork are the only web-fetch authorities.
+ */
+export const RETIRED_WEB_FETCH_LOCAL_CRAWLER_SETTINGS_KEYS = [
+  'webFetchLocalCrawlerEnabled',
+  'webFetchLocalCrawlerAllowHttp',
+  'webFetchLocalCrawlerHostAllowlist',
+  'webFetchLocalCrawlerDomainAllowlist',
+] as const;
+
 export const MODEL_SLOT_KEY_PATTERN = /^[A-Za-z0-9._-]+$/;
 
 // Characters permitted in the Obsidian CLI executable path (bead lget / w3pj).
@@ -286,14 +299,6 @@ export interface EditableSettings {
   webFetchDomainAllowlist?: string[];
   webFetchAllowInternalNetwork?: boolean;
   homeAssistantEnabled?: boolean;
-  /** @deprecated Use webFetchAllowInternalNetwork + webFetchDomainAllowlist instead */
-  webFetchLocalCrawlerEnabled?: boolean;
-  /** @deprecated Use webFetchAllowHttp instead */
-  webFetchLocalCrawlerAllowHttp?: boolean;
-  /** @deprecated Use webFetchDomainAllowlist instead */
-  webFetchLocalCrawlerHostAllowlist?: string[];
-  /** @deprecated Use webFetchDomainAllowlist instead */
-  webFetchLocalCrawlerDomainAllowlist?: string[];
   webFetchTlsCaCertPaths?: string[];
   capabilityTier?: CapabilityTier;
   promotedExtendedTools?: string[];
@@ -454,10 +459,6 @@ export const RUNTIME_SETTINGS_KEYS = [
   'webFetchDomainAllowlist',
   'webFetchAllowInternalNetwork',
   'homeAssistantEnabled',
-  'webFetchLocalCrawlerEnabled',
-  'webFetchLocalCrawlerAllowHttp',
-  'webFetchLocalCrawlerHostAllowlist',
-  'webFetchLocalCrawlerDomainAllowlist',
   'webFetchTlsCaCertPaths',
   'capabilityTier',
   'promotedExtendedTools',

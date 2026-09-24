@@ -28,6 +28,11 @@ function runner(handlers: Array<{ match: (file: string, args: readonly string[])
   return { run, calls };
 }
 
+const unreachableRegistry = {
+  fetch: async () => { throw new Error('registry must not be contacted'); },
+  timeoutMs: 1_000,
+};
+
 const ok = (stdout: string): CommandResult => ({ code: 0, stdout, stderr: '' });
 const err = (stderr: string): CommandResult => ({ code: 1, stdout: '', stderr });
 
@@ -139,6 +144,7 @@ describe('createLiveDeployPipelineRunner', () => {
       buildContext: '.',
       chartPath: '/external/config/charts/psfn',
       importImage: async () => undefined,
+      registry: unreachableRegistry,
       verifyBackup: async () => true,
     });
 
@@ -187,6 +193,7 @@ describe('createLiveDeployPipelineRunner', () => {
       buildContext: '.',
       chartPath: '/external/config/charts/psfn',
       importImage: async () => undefined,
+      registry: unreachableRegistry,
       verifyBackup: async () => true,
     });
 
@@ -223,6 +230,7 @@ describe('createLiveDeployPipelineRunner', () => {
       buildContext: '.',
       chartPath: '/external/config/charts/psfn',
       importImage: async () => undefined,
+      registry: unreachableRegistry,
       verifyBackup: async () => true,
     });
 
@@ -257,5 +265,119 @@ describe('readHelmHistory', () => {
       { revision: 1, status: 'superseded' },
       { revision: 2, status: 'deployed' },
     ]);
+  });
+});
+
+describe('createLiveDeployPipelineRunner image delivery', () => {
+  const MANIFEST = `sha256:${'1'.repeat(64)}`;
+  const IMAGE_ID = `sha256:${'3'.repeat(64)}`;
+  const context = (imageRepository: string) => ({
+    action: 'deploy' as const,
+    namespace: 'psfn',
+    release: 'psfn',
+    sourceBranch: 'fix/registry-delivery',
+    sourceCommit: 'd'.repeat(40),
+    imageRepository,
+    imageTag: '0.1.0-kube-dddddddd',
+    imageRevisionLabel: 'd'.repeat(40),
+  });
+  const inspectJson = JSON.stringify([{
+    Id: IMAGE_ID,
+    RepoDigests: [`localhost:19500/psfn-framework@${MANIFEST}`],
+  }]);
+  const registryServing = (tagDigest: string) => ({
+    fetch: vi.fn(async (_url: string, init: { method: 'GET' | 'HEAD' }) => ({
+      ok: true,
+      status: 200,
+      headers: { get: (name: string) => (init.method === 'HEAD' && name === 'docker-content-digest' ? tagDigest : null) },
+      json: async () => ({ config: { digest: IMAGE_ID } }),
+    })),
+    timeoutMs: 1_000,
+  });
+
+  it('pushes a loopback-registry image and verifies its digests without a containerd import', async () => {
+    const { run, calls } = runner([
+      { match: (f, a) => f === 'docker' && a[0] === 'push', result: ok('pushed') },
+      { match: (f, a) => f === 'docker' && a[0] === 'image' && a[1] === 'inspect', result: ok(inspectJson) },
+    ]);
+    const importImage = vi.fn(async () => undefined);
+    const registry = registryServing(MANIFEST);
+    const deploy = createLiveDeployPipelineRunner({
+      run,
+      repoDir: '/repo',
+      dockerfile: 'docker/Dockerfile.agent',
+      buildContext: '.',
+      chartPath: '/external/config/charts/psfn',
+      importImage,
+      registry,
+      verifyBackup: async () => true,
+    });
+
+    await deploy.importImage(context('localhost:19500/psfn-framework'));
+
+    expect(calls.map(call => `${call.file} ${call.args.join(' ')}`)).toEqual([
+      'docker push localhost:19500/psfn-framework:0.1.0-kube-dddddddd',
+      'docker image inspect localhost:19500/psfn-framework:0.1.0-kube-dddddddd',
+    ]);
+    expect(registry.fetch).toHaveBeenCalledTimes(2);
+    expect(importImage).not.toHaveBeenCalled();
+  });
+
+  it('fails the delivery when the registry serves a different digest than docker pushed', async () => {
+    const { run } = runner([
+      { match: (f, a) => f === 'docker' && a[0] === 'push', result: ok('pushed') },
+      { match: (f, a) => f === 'docker' && a[0] === 'image' && a[1] === 'inspect', result: ok(inspectJson) },
+    ]);
+    const deploy = createLiveDeployPipelineRunner({
+      run,
+      repoDir: '/repo',
+      dockerfile: 'docker/Dockerfile.agent',
+      buildContext: '.',
+      chartPath: '/external/config/charts/psfn',
+      registry: registryServing(`sha256:${'9'.repeat(64)}`),
+      verifyBackup: async () => true,
+    });
+
+    await expect(deploy.importImage(context('localhost:19500/psfn-framework')))
+      .rejects.toThrow(/digest mismatch/);
+  });
+
+  it('fails when docker push fails', async () => {
+    const { run } = runner([
+      { match: (f, a) => f === 'docker' && a[0] === 'push', result: err('connection refused') },
+    ]);
+    const deploy = createLiveDeployPipelineRunner({
+      run,
+      repoDir: '/repo',
+      dockerfile: 'docker/Dockerfile.agent',
+      buildContext: '.',
+      chartPath: '/external/config/charts/psfn',
+      registry: unreachableRegistry,
+      verifyBackup: async () => true,
+    });
+    await expect(deploy.importImage(context('localhost:19500/psfn-framework')))
+      .rejects.toThrow(/docker push failed: connection refused/);
+  });
+
+  it('imports a registry-less localhost/ image only through the explicitly configured import', async () => {
+    const importImage = vi.fn(async () => undefined);
+    const base = {
+      run: runner([]).run,
+      repoDir: '/repo',
+      dockerfile: 'docker/Dockerfile.agent',
+      buildContext: '.',
+      chartPath: '/external/config/charts/psfn',
+      registry: unreachableRegistry,
+      verifyBackup: async () => true,
+    };
+    await createLiveDeployPipelineRunner({ ...base, importImage })
+      .importImage(context('localhost/psfn-framework'));
+    expect(importImage).toHaveBeenCalledWith(expect.anything(), {
+      from: 'docker.io/library/psfn-framework:0.1.0-kube-dddddddd',
+      to: 'localhost/psfn-framework:0.1.0-kube-dddddddd',
+    });
+
+    await expect(createLiveDeployPipelineRunner(base).importImage(context('localhost/psfn-framework')))
+      .rejects.toThrow(/no import command is configured/);
   });
 });

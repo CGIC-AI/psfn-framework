@@ -307,11 +307,11 @@ test("psfn model adapter mints a fresh Hub assertion only from authenticated dev
   }
 });
 
-test("authenticated recovery retries reuse one exact Hub assertion for one logical turn", async () => {
+test("authenticated recovery signs a fresh Hub assertion per request and never re-presents one", async () => {
   const originalFetch = globalThis.fetch;
   const originalRetryBase = process.env.PSFN_AGENT_BUSY_RETRY_BASE_MS;
   process.env.PSFN_AGENT_BUSY_RETRY_BASE_MS = "1";
-  const scenarios = ["agent_busy", "empty", "timeout"] as const;
+  const scenarios = ["agent_busy", "empty"] as const;
 
   try {
     for (const scenario of scenarios) {
@@ -330,12 +330,7 @@ test("authenticated recovery retries reuse one exact Hub assertion for one logic
             { status: 503, headers: { "Content-Type": "application/json" } },
           );
         }
-        if (scenario === "empty") return jsonResponse(EMPTY_COMPLETION);
-        return await delayedResponse(
-          200,
-          '{"choices":[{"message":{"role":"assistant","content":"Too late"}}]}',
-          init?.signal,
-        );
+        return jsonResponse(EMPTY_COMPLETION);
       };
       const adapter = new PsfnModelAdapter(
         authenticatedAssertionRuntime({
@@ -354,7 +349,8 @@ test("authenticated recovery retries reuse one exact Hub assertion for one logic
       assert.equal(calls, 2, `${scenario} must make exactly one recovery request`);
       assert.equal(assertions.length, 2);
       assert.ok(assertions[0]);
-      assert.equal(assertions[1], assertions[0], `${scenario} must reuse identical assertion bytes`);
+      assert.ok(assertions[1]);
+      assert.notEqual(assertions[1], assertions[0], `${scenario} must not re-present a consumed assertion`);
     }
   } finally {
     if (originalRetryBase === undefined) delete process.env.PSFN_AGENT_BUSY_RETRY_BASE_MS;
@@ -363,40 +359,60 @@ test("authenticated recovery retries reuse one exact Hub assertion for one logic
   }
 });
 
-test("authenticated recovery retries byte-identical request bytes after a consumed transport loss", async () => {
+test("authenticated turns fail instead of retrying an ambiguous timeout or transport loss", async () => {
   const originalFetch = globalThis.fetch;
-  const assertions: string[] = [];
-  const bodies: string[] = [];
-  let calls = 0;
-
-  globalThis.fetch = async (_input: string | URL | Request, init?: RequestInit) => {
-    calls += 1;
-    const headers = init?.headers as Record<string, string>;
-    assertions.push(headers["X-PSFN-Hub-Device-Assertion"] ?? "");
-    bodies.push(String(init?.body ?? ""));
-    if (calls === 1) {
-      throw new TypeError("fetch failed after Framework consumed the request");
-    }
-    return jsonResponse('{"choices":[{"message":{"role":"assistant","content":"Recovered"}}]}');
-  };
-
-  const adapter = new PsfnModelAdapter(
-    authenticatedAssertionRuntime({ textReplyDeadlineMs: 250, textAttemptTimeoutMs: 100 }),
-    undefined,
-    authenticatedRegistryAuthority(),
-  );
+  const scenarios: Array<{
+    name: string;
+    respond: (init?: RequestInit) => Promise<Response>;
+    expectedError: RegExp;
+  }> = [
+    {
+      name: "timeout",
+      respond: async init => await delayedResponse(
+        200,
+        '{"choices":[{"message":{"role":"assistant","content":"Too late"}}]}',
+        init?.signal,
+      ),
+      expectedError: /exceeded/,
+    },
+    {
+      name: "consumed transport loss",
+      respond: async () => { throw new TypeError("fetch failed after Framework consumed the request"); },
+      expectedError: /fetch failed after Framework consumed the request/,
+    },
+    {
+      name: "ECONNRESET",
+      respond: async () => { throw Object.assign(new Error("socket closed after write"), { code: "ECONNRESET" }); },
+      expectedError: /socket closed after write/,
+    },
+  ];
 
   try {
-    await drainReply(adapter, {
-      inputMode: "text",
-      userText: "recover the consumed request",
-      conversationId: authenticatedChannel().sessionId,
-      channel: authenticatedChannel(),
-    });
-    assert.equal(calls, 2);
-    assert.ok(assertions[0]);
-    assert.equal(assertions[1], assertions[0], "the replay must reuse exact assertion bytes");
-    assert.equal(bodies[1], bodies[0], "the replay must reuse the exact request body");
+    for (const scenario of scenarios) {
+      let calls = 0;
+      globalThis.fetch = async (_input: string | URL | Request, init?: RequestInit) => {
+        calls += 1;
+        if (calls > 1) {
+          return jsonResponse('{"choices":[{"message":{"role":"assistant","content":"must not recover"}}]}');
+        }
+        return await scenario.respond(init);
+      };
+      const adapter = new PsfnModelAdapter(
+        authenticatedAssertionRuntime({ textReplyDeadlineMs: 250, textAttemptTimeoutMs: 25 }),
+        undefined,
+        authenticatedRegistryAuthority(),
+      );
+      await assert.rejects(
+        drainReply(adapter, {
+          inputMode: "text",
+          userText: `do not retry ${scenario.name}`,
+          conversationId: authenticatedChannel().sessionId,
+          channel: authenticatedChannel(),
+        }),
+        scenario.expectedError,
+      );
+      assert.equal(calls, 1, `${scenario.name} must not retry`);
+    }
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -426,37 +442,6 @@ test("unauthenticated transport loss does not retry without replay protection", 
       /without an authenticated replay assertion/,
     );
     assert.equal(calls, 1);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-test("authenticated recovery retries an ECONNRESET-equivalent transport loss", async () => {
-  const originalFetch = globalThis.fetch;
-  let calls = 0;
-
-  globalThis.fetch = async () => {
-    calls += 1;
-    if (calls === 1) {
-      throw Object.assign(new Error("socket closed after write"), { code: "ECONNRESET" });
-    }
-    return jsonResponse('{"choices":[{"message":{"role":"assistant","content":"Recovered"}}]}');
-  };
-
-  const adapter = new PsfnModelAdapter(
-    authenticatedAssertionRuntime({ textReplyDeadlineMs: 250, textAttemptTimeoutMs: 100 }),
-    undefined,
-    authenticatedRegistryAuthority(),
-  );
-
-  try {
-    await drainReply(adapter, {
-      inputMode: "text",
-      userText: "recover the reset request",
-      conversationId: authenticatedChannel().sessionId,
-      channel: authenticatedChannel(),
-    });
-    assert.equal(calls, 2);
   } finally {
     globalThis.fetch = originalFetch;
   }

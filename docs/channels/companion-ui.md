@@ -234,9 +234,11 @@ renew). Frames dispatch with the key principal exactly as the REST API does:
 principal (not a `companion-ui` channel turn — that classification comes from
 a Hub attachment), `confirmations.*` use the gateway confirmation queue,
 `artifact.preview`, `conversation.status`, `conversation.interrupt` and
-`tool_activity.subscribe` map onto the key routes, and `shards.*` /
-`embodiment.*` are denied (they exist only as fleet child-capability and Hub
-attachment routes). The PWA itself still signs in through the Hub; a browser
+`tool_activity.subscribe` map onto the key routes, `embodiment.status` reads
+the primary-embodiment state without an attachment (the key session is never
+the primary itself), and `shards.*` and `embodiment.handoff` are denied
+(shards exist only as fleet child-capability routes; a handoff moves the
+embodiment onto the requesting device and stays device-bound). The PWA itself still signs in through the Hub; a browser
 that holds an operator key needs a Hub-side intake to use this path, tracked
 separately.
 
@@ -265,7 +267,12 @@ flowchart TD
 
 *Unknown, replayed, uncorrelated, discriminator-only, or structurally
 malformed frames fail closed: the adapter sends one `ok: false` result with
-`error.code = denied` and closes the socket.*
+`error.code = denied` and closes the socket. A frame that was admitted and
+then failed inside its dispatcher for a reason other than a typed refusal
+(provider outage, preview crash) is reported as `error.code =
+internal_error` instead. Once the frame's `requestId` was reserved the
+failure echoes it (otherwise `requestId: ''`), the gateway logs the error
+with that request id, and no error text reaches the browser.*
 
 ## Wire protocol
 
@@ -289,8 +296,8 @@ negotiated event capabilities. The authenticated gateway sends only:
 The client parses every one of these strictly (`gateway-protocol.ts`):
 `parseAttachmentReady` requires exact keys, a bounded device/place label, and
 capability values drawn from closed registry sets; `parseGatewayResult`
-accepts only `requestId: ''` + `error.code: 'denied'` for failures and exact
-keys for success; `parseGatewayEvent` re-validates the embedded relay event
+accepts only an empty or well-formed `requestId` with `error.code` `denied` or
+`internal_error` for failures and exact keys for success; `parseGatewayEvent` re-validates the embedded relay event
 through the legacy Hub mirror and additionally requires the v2 approval
 fields when the event is `approval.requested`.
 

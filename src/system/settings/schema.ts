@@ -1,4 +1,5 @@
 import {
+  RETIRED_WEB_FETCH_LOCAL_CRAWLER_SETTINGS_KEYS,
   RUNTIME_SETTINGS_KEYS,
   type EditableSettings,
   type SettingsDomainSplit,
@@ -81,10 +82,29 @@ export function toRuntimeOwnedSettings(settings: EditableSettings): EditableSett
   return splitSettingsByDomain(settings).runtime;
 }
 
+/**
+ * Fail closed on retired owner keys that would otherwise be silently ignored
+ * by the normalization spreads (loadSettings does not run the exact-key check).
+ */
+function assertNoRetiredRuntimeSettingsKeys(settings: object): void {
+  const present = RETIRED_WEB_FETCH_LOCAL_CRAWLER_SETTINGS_KEYS
+    .filter(key => Object.prototype.hasOwnProperty.call(settings, key));
+  if (present.length === 0) return;
+  throw new Error(
+    `settings.json contains retired local-crawler web-fetch keys: ${present.join(', ')}. `
+    + 'The local_crawler lane was removed; web fetches use only webFetchAllowHttp, '
+    + 'webFetchDomainAllowlist, and webFetchAllowInternalNetwork. To keep fetching internal '
+    + 'hosts (for example a local ComfyUI origin), set webFetchAllowInternalNetwork=true, '
+    + 'webFetchAllowHttp=true for http:// targets, and add the hosts to webFetchDomainAllowlist; '
+    + 'then delete the retired keys.',
+  );
+}
+
 export function normalizeEditableSettings(
   settings: EditableSettings,
   options?: { defaultContextWindow?: number },
 ): EditableSettings {
+  assertNoRetiredRuntimeSettingsKeys(settings);
   const normalizedInput = normalizeContextControlSettings(settings);
 
   const hasLegacyModelInputs = hasLegacyModelSettingsPayload(normalizedInput);
@@ -123,6 +143,7 @@ export function parseRuntimeSettingsOwnerPayload(value: unknown): EditableSettin
   if (!isRecord(value)) {
     throw new Error('settings.json payload must be an object');
   }
+  assertNoRetiredRuntimeSettingsKeys(value);
   assertNoUnknownKeys(
     value,
     RUNTIME_SETTINGS_KEYS,

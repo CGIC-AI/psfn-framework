@@ -132,6 +132,26 @@ for capability_owner in \
   echo "[smoke-seed] configured Autonomous capability tier: $capability_owner"
 done
 
+# automata-policy.seed.json names a production reviewer model slot; startup
+# fails closed when that slot is absent from models.json, and this stack's
+# models.json is the smoke fixture. Point the reviewer at the fixture's
+# background slot so the gateway can start without a real provider.
+AUTOMATA_POLICY_OWNER="${SYSTEM_DATA_DIR}/automata-policy.json"
+node -e '
+  const fs = require("node:fs");
+  const [path, modelsPath] = process.argv.slice(1);
+  const owner = JSON.parse(fs.readFileSync(path, "utf8"));
+  const models = JSON.parse(fs.readFileSync(modelsPath, "utf8"));
+  const slot = "smoke-stub-background";
+  if (!models.models?.some(model => model.id === slot)) {
+    throw new Error(`smoke models.json has no ${slot} slot for the automata reviewer`);
+  }
+  if (!owner.bus?.reviewer) throw new Error("automata-policy.json has no bus.reviewer block");
+  owner.bus.reviewer.model = slot;
+  fs.writeFileSync(path, `${JSON.stringify(owner, null, 2)}\n`);
+' "$AUTOMATA_POLICY_OWNER" "${SYSTEM_DATA_DIR}/models.json"
+echo "[smoke-seed] pointed the automata reviewer at the smoke stub: $AUTOMATA_POLICY_OWNER"
+
 # ── Fleet manifest ──
 # Every PSFN deployment is a fleet of one or more companions and the gateway
 # fails closed without companions.json, so write a one-entry fleet naming THIS

@@ -50,6 +50,7 @@ function service(registry: AutomataRunRegistry): AdminAutomataDataService {
     registry,
     companionId: 'companion-test',
     readPolicy: { defaultPageLimit: 10, maxPageLimit: 100 },
+    coveragePolicy: loadAutomataPolicySeedDefaults().bus.health,
   });
 }
 

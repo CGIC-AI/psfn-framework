@@ -137,6 +137,12 @@ journal, performs a full runtime restart (Compose restart, supervised restart,
 or `kubectl rollout restart` of all three Deployments), and re-proves the same
 persisted turn plus the authenticated surfaces afterwards.
 
+Garden `/health` reports admin-transport reachability only (one companion, or
+every registered fleet target). The Garden operator process opens no
+PostgreSQL store, so a degraded optional store (model usage, analysis traces,
+and so on) is reported by the process that owns it: the agent `/health`
+`memory` check lists it under `meta.postgresReadiness.degradedStores`.
+
 `*:down` on every path stops compute while retaining runtime data; resume with
 the corresponding `*:up` and then run `*:doctor`. Manual volume deletion,
 `docker compose down --volumes`, or Helm uninstall are not ordinary stop
@@ -184,10 +190,18 @@ workspace, logs, tmp, backups, and models are created.
 `docker/docker-compose.smoke.yml` is a separate, disposable stack for the
 "someone can run it" contributor path; it is not the persistent deployment above
 and is explicitly not production-hardened. Drive it with `npm run smoke:docker`
-(`scripts/smoke-docker.mjs`), which brings the stack up, proves the gateway API
-edge and the gateway/agent RPC, verifies the Satellite Hub and companion-ui
-surfaces, and then drives one chat turn. Its exit codes are `0` (full turn),
-`3` (hub/companion-ui source-contract divergence), and `1` (failure).
+(`scripts/smoke-docker.mjs`). It is the one local command that runs gateway,
+agent, Garden, Satellite Hub, and companion-ui together: it brings the stack up,
+proves the gateway API edge and the gateway/agent RPC, checks Garden `/health`,
+verifies the Satellite Hub and companion-ui surfaces (including the hub
+`session.ready` handshake decoded by companion-ui's own codec), and then drives
+one chat turn while a hub websocket session is open. That turn's `post_turn`
+`emotion.snapshot` must arrive on the session through the gateway companion
+relay and the hub, which proves a relay payload end to end. Its exit codes are
+`0` (full turn and relay), `3` (hub/companion-ui source-contract divergence),
+and `1` (failure). Host ports are loopback-only and overridable with
+`PSFN_SMOKE_API_PORT`, `PSFN_SMOKE_HUB_PORT`, `PSFN_SMOKE_COMPANION_UI_PORT`,
+and `PSFN_SMOKE_GARDEN_PORT`.
 `--keep-up` leaves the stack running; the default tears it down with
 `docker compose down -v`.
 
@@ -419,9 +433,28 @@ resource prefix, a 40-character `PSFN_GIT_COMMIT`, a pinned
 model route / chat completions URLs, the expected model id, the
 `PSFN_CONFORMANCE_EXEC_CMD` and `PSFN_DIAGNOSTICS_EXEC_CMD` JSON arrays, and
 optional `PSFN_HELM_GLOBAL_ARGS`/`PSFN_KUBECTL_GLOBAL_ARGS`.
-`PSFN_AUTO_ROLLBACK_ENABLED` defaults to true; `PSFN_IMPORT_IMAGE_CMD` and
-`PSFN_VERIFY_BACKUP_CMD` are required at run time and are executed through the
-injected command runner.
+`PSFN_AUTO_ROLLBACK_ENABLED` defaults to true; `PSFN_VERIFY_BACKUP_CMD` is
+required at run time and is executed through the injected command runner.
+
+The target image reference also selects how the built image reaches the node
+(`src/system/lifecycle/kube-image-delivery.ts`):
+
+- A loopback-registry reference (`localhost:<port>/<name>:<tag>` or
+  `127.0.0.1:<port>/<name>:<tag>`) is delivered by `docker push`. The job then
+  proves through the registry API (`http://127.0.0.1:<port>/v2/`) that the tag
+  serves exactly the manifest digest Docker recorded for the push and that the
+  manifest's config digest is the local image ID; any mismatch fails the
+  `import` stage before Helm runs. This is the production path: kubelet image
+  GC can delete an unused image at any time, and only a registry image can be
+  pulled again. `PSFN_IMPORT_IMAGE_CMD` must be unset for these references.
+- A registry-less `localhost/<name>:<tag>` reference (local k3d/k3s test
+  clusters) is imported into containerd by the operator-supplied
+  `PSFN_IMPORT_IMAGE_CMD`, which receives `PSFN_IMPORT_FROM`
+  (`docker.io/library/<name>:<tag>`), `PSFN_IMPORT_TO`, and
+  `PSFN_IMPORT_REFERENCE`. It is required for these references. Imported images
+  exist only in containerd and are exposed to image GC.
+- Any other reference (an off-host registry, a digest reference, a floating
+  tag) is rejected while the configuration is resolved.
 
 ```mermaid
 flowchart TD
@@ -430,7 +463,7 @@ flowchart TD
   PRE["preconditions: clean tree at sourceCommit + verified restorable backup"]
   ARC["archive source + sha256"]
   GATE["quality gates"]
-  BUILD["docker build + import via PSFN_IMPORT_IMAGE_CMD"]
+  BUILD["docker build + deliver: registry push with digest verification, or PSFN_IMPORT_IMAGE_CMD for localhost/ test images"]
   K3D["k3d validation"]
   HELM["helm upgrade: the only live mutation"]
   VERDICT["post-rollout gate writes bound verdict release + helmRevision + sourceCommit"]
@@ -635,6 +668,17 @@ the operator's external configuration authority.
 <!-- openwiki: broken internal link [maintenance-scripts-inventory.md] file "maintenance-scripts-inventory.md" does not exist. Fix the href or restore the target, then delete this comment. -->
   mutation (see the [maintenance scripts inventory](maintenance-scripts-inventory.md)).
 
+## Live owner-file reloads
+
+`models.json` hot-reloads in every process: the agent and the gateway each poll
+its mtime and apply an edit (a Garden save or a direct write) without a
+restart. In the gateway that covers model routing, which reads the registry per
+call, and the CogSec intake screeners, whose L2/L3/vision models are
+re-resolved and re-verified against the provider backend; a reload that fails
+to parse, or a screener selection that would not start, is logged and the
+running selection stays. Other owner files load at startup and need a restart
+after a direct edit unless their own section says otherwise.
+
 ## Owner-file contract upgrades
 
 A release that adds a required owner-file field ships two things: the field's
@@ -721,6 +765,10 @@ bad row from taking the foreground turn pipeline down with it:
   `pg_stat_activity.application_name`), so long-held fence clients can no
   longer exhaust the shared per-companion pool that `beginForeground` and every
   store draw from.
+  That lane holds 8 clients and every fenced background session holds one,
+  so the agent refuses to start when `scheduler.json`
+  `backgroundWork.supervisor.maxConcurrentSessions` is 8 or more; foreground
+  appends and handoff recovery always need a free lane client.
 
 Symptoms of a poisoned lane on an older build: every chat turn on every channel
 logs `[IntakeScreening] ... released` and then nothing (no `[ModelFallback]`
@@ -728,6 +776,22 @@ line, no model call), `/health` still answers, a restart re-claims the same
 jobs and stalls again, and `pg_locks` shows idle `agent-persistence` sessions
 holding advisory locks whose key is
 `hashtextextended('["turn-record-source-eligibility-v2","<schema>","<turnId>"]', 0)`.
+
+Inspect and retire with the maintenance CLI (it connects with the companion's
+own `POSTGRES_DATABASE_URL` and tenant schema/role, prints content-free rows
+including `lease_expiry_count`, and is a dry run unless `--apply`):
+
+```bash
+npm run background-work:jobs -- list --state retry_wait --channel-prefix hub-device:
+npm run background-work:jobs -- retire --channel-prefix hub-device:          # dry run
+npm run background-work:jobs -- retire --channel-prefix hub-device: --apply  # or --job <id> ...
+```
+
+`retire` marks the selected non-terminal jobs `stale_discarded` (keeping the
+reason code they got stuck on), skips any `running` job whose lease is still live (stop the
+agent first), and writes the retired rows to an audit file under
+`<data-dir>/repair-backups/background-work-retirement-<timestamp>/`. The SQL
+below remains the fallback.
 
 Inspect before acting (read-only):
 

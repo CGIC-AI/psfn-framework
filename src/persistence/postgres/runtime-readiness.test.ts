@@ -42,7 +42,6 @@ describe('PostgresRuntimeReadiness', () => {
     expect(snapshot.degraded).toEqual([{
       store: 'analysis_workbench_trace',
       label: 'analysis workbench trace',
-      degradesOperatorReadiness: false,
       requirement: 'optional',
       mismatch: 'migration role cannot create relation',
     }]);
@@ -164,9 +163,6 @@ describe('PostgresRuntimeReadiness', () => {
       expect(snapshot.degraded).toEqual([{
         store: 'model_usage_diagnostics',
         label: 'model usage diagnostics',
-        // ...but it is no longer an anonymous degraded count: the operator
-        // surface is required to reflect this one.
-        degradesOperatorReadiness: true,
         requirement: 'optional',
         mismatch: 'password authentication failed',
       }]);

@@ -1,11 +1,14 @@
 #!/usr/bin/env node
 // ── Docker Compose smoke harness (psfn-framework-65rk.12) ──
 // The Compose analogue of the k8s smoke:chat. Brings up the split runtime
-// (postgres + gateway + agent + provider-stub + satellite-hub + companion-ui)
-// from docker/docker-compose.smoke.yml, proves the plumbing (gateway API edge
-// up, gateway<->agent RPC connected), verifies the Satellite Hub and
-// companion-ui surfaces, then drives one OpenAI-compatible chat turn through the
-// gateway /v1 edge.
+// (postgres + gateway + agent + garden + provider-stub + satellite-hub +
+// companion-ui) from docker/docker-compose.smoke.yml, proves the plumbing
+// (gateway API edge up, gateway<->agent RPC connected, Garden healthy), verifies
+// the Satellite Hub and companion-ui surfaces, then drives one OpenAI-compatible
+// chat turn through the gateway /v1 edge while a hub websocket satellite
+// session is open, and requires that turn's post_turn emotion.snapshot to
+// arrive on that session through the gateway relay and the hub
+// (psfn-framework-2ahwj).
 //
 // KEYLESS BY CONTRACT (psfn-framework-j3iol). The stack needs no provider
 // account: docker/smoke-fixtures/{providers,models}.json route every model
@@ -22,8 +25,9 @@
 //   3  hub contract boundary reached: the whole stack is healthy and the hub
 //      handshake works, but companion-ui's own protocol decoder rejects a live
 //      hub frame. That is a source-contract divergence, not a deployment fault.
-//   1  failure: the stack did not come up, the gateway API edge never became
-//      healthy, or the chat turn did not complete and persist.
+//   1  failure: the stack did not come up, the gateway API edge or Garden never
+//      became healthy, the chat turn did not complete and persist, or its
+//      emotion.snapshot never reached the hub websocket session.
 //
 // Usage:
 //   npm run smoke:docker -- [--no-up] [--keep-up] [--message <text>]
@@ -38,7 +42,11 @@ import { createHash } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { verifyComposeHub } from './compose-hub-verification.ts';
+import {
+  judgeRelayedEmotionSnapshot,
+  openEmotionRelaySession,
+  verifyComposeHub,
+} from './compose-hub-verification.ts';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, '..');
@@ -52,6 +60,7 @@ const API_PRINCIPAL_ID = `api-key-${createHash('sha256').update(API_KEY.trim()).
 const SMOKE_CHANNEL_ID = `api:${API_PRINCIPAL_ID}:${SMOKE_SESSION_ID}`;
 const HUB_PORT = process.env.PSFN_SMOKE_HUB_PORT || '18787';
 const COMPANION_UI_PORT = process.env.PSFN_SMOKE_COMPANION_UI_PORT || '18080';
+const GARDEN_PORT = process.env.PSFN_SMOKE_GARDEN_PORT || '18053';
 const SATELLITE_API_KEY = process.env.PSFN_SMOKE_SATELLITE_API_KEY
   || 'psfn-smoke-satellite-key-please-rotate';
 const HUB_VERIFY_TIMEOUT_MS = 20_000;
@@ -202,7 +211,7 @@ async function main() {
 
   try {
     if (opts.up) {
-      log('Bringing up postgres + provider-stub + gateway + agent + satellite-hub '
+      log('Bringing up postgres + provider-stub + gateway + agent + garden + satellite-hub '
         + '+ companion-ui (docker compose up -d --wait)...');
       const up = compose(['up', '-d', '--wait', '--wait-timeout', '240']);
       if (up.status !== 0) {
@@ -211,7 +220,7 @@ async function main() {
         return 1;
       }
       pass('all services reported healthy (postgres, provider-stub, gateway, agent, '
-        + 'satellite-hub, companion-ui)');
+        + 'garden, satellite-hub, companion-ui)');
     }
 
     log(`Waiting for gateway API edge at ${API_BASE}/health ...`);
@@ -238,6 +247,14 @@ async function main() {
     }
     pass(`Postgres reachable; companion_smoke + shared schemas hold ${tableCount} tables `
       + '(runtime migrations ran)');
+
+    const garden = await fetchWithTimeout(`http://127.0.0.1:${GARDEN_PORT}/health`, { method: 'GET' }, 10_000)
+      .catch((err) => err);
+    if (!(garden instanceof Response) || !garden.ok) {
+      fail(`Garden /health is not ready: ${garden instanceof Response ? `HTTP ${garden.status}` : String(garden)}`);
+      return 1;
+    }
+    pass(`Garden (operator) /health answered HTTP ${garden.status} on 127.0.0.1:${GARDEN_PORT}`);
 
     log('Verifying the Satellite Hub and companion-ui surfaces ...');
     let hubContractBoundary = null;
@@ -269,52 +286,21 @@ async function main() {
       return 1;
     }
 
-    log('Driving one chat turn: POST /v1/chat/completions ...');
-    let res;
+    // Held open across the turn: the relay proof is that turn's own
+    // emotion.snapshot arriving on a hub satellite session that advertised the
+    // emotion output, decoded with companion-ui's codec.
+    let relaySession;
     try {
-      res = await fetchWithTimeout(`${API_BASE}/v1/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-          'X-Session-Id': SMOKE_SESSION_ID,
-          ...AUTH_HEADERS,
-        },
-        body: JSON.stringify({
-          model: 'companion',
-          messages: [{ role: 'user', content: opts.message }],
-          stream: false,
-        }),
-      }, 90_000);
+      relaySession = await openEmotionRelaySession(`ws://127.0.0.1:${HUB_PORT}/`, HUB_VERIFY_TIMEOUT_MS);
     } catch (err) {
-      fail(`chat request transport failed before reaching the provider: ${err instanceof Error ? err.message : String(err)}`);
+      fail(`could not open a hub websocket session for the relay proof: ${err instanceof Error ? err.message : String(err)}`);
       return 1;
     }
-
-    const bodyText = await res.text();
-    if (res.ok) {
-      let payload;
-      try { payload = JSON.parse(bodyText); } catch { payload = null; }
-      const content = payload?.choices?.[0]?.message?.content;
-      if (typeof content === 'string' && content.trim().length > 0) {
-        if (!verifyPersistedTurn(opts.message, content)) {
-          fail(`chat reply returned but the exact user/assistant turn was not found in ${SMOKE_CHANNEL_ID}`);
-          return 1;
-        }
-        pass(`full Autonomous turn persisted and returned: ${content.slice(0, 160)}`);
-        pass(`canonical L0 session journal contains the exact user/assistant pair (${SMOKE_CHANNEL_ID})`);
-        return contractExit(0, hubContractBoundary);
-      }
-      fail(`chat returned ${res.status} but no assistant content: ${bodyText.slice(0, 240)}`);
-      return 1;
+    try {
+      return await driveTurnAndRelay(opts, relaySession, hubContractBoundary);
+    } finally {
+      relaySession.close();
     }
-
-    // The provider double is part of this stack, so there is no external
-    // boundary left to excuse a non-2xx: every one of them is a real failure.
-    fail(`chat turn failed (status ${res.status}): ${bodyText.slice(0, 280)}`);
-    log('The provider double runs inside this stack; inspect the gateway, agent, '
-      + 'and provider-stub logs (docker compose -f docker/docker-compose.smoke.yml logs).');
-    return 1;
   } catch (err) {
     fail(err instanceof Error ? err.message : String(err));
     return 1;
@@ -325,6 +311,68 @@ async function main() {
     }
     void exitCode;
   }
+}
+
+async function driveTurnAndRelay(opts, relaySession, hubContractBoundary) {
+  log('Driving one chat turn: POST /v1/chat/completions ...');
+  let res;
+  try {
+    res = await fetchWithTimeout(`${API_BASE}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        'X-Session-Id': SMOKE_SESSION_ID,
+        ...AUTH_HEADERS,
+      },
+      body: JSON.stringify({
+        model: 'companion',
+        messages: [{ role: 'user', content: opts.message }],
+        stream: false,
+      }),
+    }, 90_000);
+  } catch (err) {
+    fail(`chat request transport failed before reaching the provider: ${err instanceof Error ? err.message : String(err)}`);
+    return 1;
+  }
+
+  const bodyText = await res.text();
+  if (res.ok) {
+    let payload;
+    try { payload = JSON.parse(bodyText); } catch { payload = null; }
+    const content = payload?.choices?.[0]?.message?.content;
+    if (typeof content === 'string' && content.trim().length > 0) {
+      if (!verifyPersistedTurn(opts.message, content)) {
+        fail(`chat reply returned but the exact user/assistant turn was not found in ${SMOKE_CHANNEL_ID}`);
+        return 1;
+      }
+      pass(`full Autonomous turn persisted and returned: ${content.slice(0, 160)}`);
+      pass(`canonical L0 session journal contains the exact user/assistant pair (${SMOKE_CHANNEL_ID})`);
+      let relayed;
+      try {
+        relayed = await relaySession.waitForFrame('emotion.snapshot', HUB_VERIFY_TIMEOUT_MS);
+      } catch (err) {
+        fail(`hub relay payload: ${err instanceof Error ? err.message : String(err)}`);
+        return 1;
+      }
+      const relayCheck = judgeRelayedEmotionSnapshot(relayed);
+      if (!relayCheck.ok) {
+        fail(`${relayCheck.name}: ${relayCheck.detail}`);
+        return 1;
+      }
+      pass(`${relayCheck.name} (${relayCheck.detail})`);
+      return contractExit(0, hubContractBoundary);
+    }
+    fail(`chat returned ${res.status} but no assistant content: ${bodyText.slice(0, 240)}`);
+    return 1;
+  }
+
+  // The provider double is part of this stack, so there is no external
+  // boundary left to excuse a non-2xx: every one of them is a real failure.
+  fail(`chat turn failed (status ${res.status}): ${bodyText.slice(0, 280)}`);
+  log('The provider double runs inside this stack; inspect the gateway, agent, '
+    + 'and provider-stub logs (docker compose -f docker/docker-compose.smoke.yml logs).');
+  return 1;
 }
 
 main()

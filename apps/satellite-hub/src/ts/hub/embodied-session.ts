@@ -10,6 +10,30 @@ export const DEFAULT_REALTIME_CAPABILITIES: Required<SatelliteCapabilities> = {
   safety: [],
 };
 
+/**
+ * Presentation-only capability ceiling for hellos on a Hub that runs without a
+ * device registry. Without enrolled device authority the Hub never adopts
+ * browser-declared authority: companion relays (approvals, touch,
+ * tool_activity, emotion, artifact), world/location input, and safety grants
+ * such as action_allowlist all require a registry device whose
+ * maxCapabilities grants them. Requests outside the ceiling are dropped, not
+ * rejected, so dev clients still attach for plain realtime presentation.
+ */
+export const UNREGISTERED_SESSION_CAPABILITY_CEILING: Required<SatelliteCapabilities> = DEFAULT_REALTIME_CAPABILITIES;
+
+export function ceilUnregisteredCapabilities(
+  requested: SatelliteCapabilities | undefined,
+): SatelliteCapabilities | undefined {
+  if (!requested) return undefined;
+  const ceiling = UNREGISTERED_SESSION_CAPABILITY_CEILING;
+  return {
+    ...(requested.input ? { input: requested.input.filter(item => ceiling.input.includes(item)) } : {}),
+    ...(requested.output ? { output: requested.output.filter(item => ceiling.output.includes(item)) } : {}),
+    ...(requested.control ? { control: requested.control.filter(item => ceiling.control.includes(item)) } : {}),
+    ...(requested.safety ? { safety: requested.safety.filter(item => ceiling.safety.includes(item)) } : {}),
+  };
+}
+
 export const THIN_SHELL_CAPABILITIES: Required<SatelliteCapabilities> = {
   input: ["text"],
   output: ["text", "subtitle"],

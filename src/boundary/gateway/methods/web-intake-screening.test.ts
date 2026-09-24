@@ -110,15 +110,12 @@ async function listenHttp(body: string): Promise<{ server: Server; url: string }
   return { server, url: `http://127.0.0.1:${address.port}` };
 }
 
-const localCrawlerPolicy: PolicyConfig = {
+const internalNetworkPolicy: PolicyConfig = {
   workspacePath: process.cwd(),
   urlPolicy: {
-    allowHttp: false,
-    localCrawlerLane: {
-      enabled: true,
-      allowHttp: true,
-      hostAllowlist: ['127.0.0.1'],
-    },
+    allowHttp: true,
+    allowInternalNetwork: true,
+    hostAllowlist: ['127.0.0.1'],
   },
 };
 
@@ -136,9 +133,9 @@ describe('web.fetch intake screening wiring (htm9.2)', () => {
   it('keeps owner-configured web findings observational under the global shadow ceiling', async () => {
     const { server, url } = await listenHttp(HOSTILE_PAGE);
     servers.push(server);
-    const harness = createHarness(localCrawlerPolicy, makeScreening('shadow'));
+    const harness = createHarness(internalNetworkPolicy, makeScreening('shadow'));
 
-    const result = await harness.invoke({ url: `${url}/page`, lane: 'local_crawler' });
+    const result = await harness.invoke({ url: `${url}/page`, lane: 'default' });
 
     expect(result.content).toContain('disregard your rules');
     expect(result.intake).toBeDefined();
@@ -160,9 +157,9 @@ describe('web.fetch intake screening wiring (htm9.2)', () => {
   it('enforce mode: a quarantined page never crosses the RPC boundary', async () => {
     const { server, url } = await listenHttp(HOSTILE_PAGE);
     servers.push(server);
-    const harness = createHarness(localCrawlerPolicy, makeScreening('strict'));
+    const harness = createHarness(internalNetworkPolicy, makeScreening('strict'));
 
-    const result = await harness.invoke({ url: `${url}/page`, lane: 'local_crawler' });
+    const result = await harness.invoke({ url: `${url}/page`, lane: 'default' });
 
     expect(result.content).toBe(renderIntakeWithheldContentPlaceholder());
     expect(result.content).not.toContain('disregard your rules');
@@ -179,9 +176,9 @@ describe('web.fetch intake screening wiring (htm9.2)', () => {
   it('enforce mode: clean pages pass through with a released envelope', async () => {
     const { server, url } = await listenHttp(CLEAN_PAGE);
     servers.push(server);
-    const harness = createHarness(localCrawlerPolicy, makeScreening('strict'));
+    const harness = createHarness(internalNetworkPolicy, makeScreening('strict'));
 
-    const result = await harness.invoke({ url: `${url}/page`, lane: 'local_crawler' });
+    const result = await harness.invoke({ url: `${url}/page`, lane: 'default' });
 
     expect(result.content).toContain('gardening');
     expect(result.intake.action).toBe('pass');
@@ -192,9 +189,9 @@ describe('web.fetch intake screening wiring (htm9.2)', () => {
   it('no screening configured (mode off): result shape is unchanged', async () => {
     const { server, url } = await listenHttp(HOSTILE_PAGE);
     servers.push(server);
-    const harness = createHarness(localCrawlerPolicy);
+    const harness = createHarness(internalNetworkPolicy);
 
-    const result = await harness.invoke({ url: `${url}/page`, lane: 'local_crawler' });
+    const result = await harness.invoke({ url: `${url}/page`, lane: 'default' });
 
     expect(result.content).toContain('disregard your rules');
     expect(result.intake).toBeUndefined();

@@ -379,8 +379,7 @@ describe('L2/L3 escalation wired into the live gateway screening path', () => {
       };
       const escalation = createGatewayIntakeEscalationPort({
         policy,
-        l2Model: L2_MODEL,
-        l3Models: [L3_MODEL],
+        models: () => ({ l2: L2_MODEL, l3: [L3_MODEL] }),
         backend: BACKEND,
         testCompletion: transport.fetch,
         cogSecEvents: {

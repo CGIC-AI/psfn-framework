@@ -256,7 +256,7 @@ describe('memory participant name repair', () => {
   it.each([
     ['provider failure', async () => { throw new Error('embedding provider down'); }, /embedding provider down/],
     ['dimension mismatch', async (texts: string[]) => texts.map(() => new Float32Array([0.1])), /expected 3/],
-    ['short batch', async () => [], /returned 0 embeddings for 1/],
+    ['short batch', async () => [], /returned 0 embeddings for a batch of 1/],
   ] as const)('leaves rows and patch events unchanged on %s', async (_label, embedBatch, message) => {
     const pool = new FakePostgresRepairPool([{
       id: 'm-active',
@@ -270,6 +270,52 @@ describe('memory participant name repair', () => {
       dryRun: false,
       embeddingProvider: fakeEmbeddingProvider(embedBatch),
     })).rejects.toThrow(message);
+    expect(pool.clientQueries).toHaveLength(0);
+    expect(pool.patchEvents).toHaveLength(0);
+  });
+
+  // psfn-framework-h1ji2: a provider with a per-request batch cap.
+  function manyPlaceholderRows(count: number) {
+    return Array.from({ length: count }, (_, index) => ({
+      id: `m-${String(index).padStart(3, '0')}`,
+      text: `The user told the companion about kiln firing ${index}.`,
+      superseded_by: null,
+      deleted_at: null,
+    }));
+  }
+
+  const cappedProvider = (cap: number, failOnCall?: number) => {
+    let call = 0;
+    return fakeEmbeddingProvider(async (texts) => {
+      call += 1;
+      if (texts.length > cap) throw new Error(`batch of ${texts.length} exceeds provider cap ${cap}`);
+      if (call === failOnCall) throw new Error('embedding provider down mid-repair');
+      return texts.map(() => new Float32Array([0.1, 0.2, 0.3]));
+    });
+  };
+
+  it('embeds a repair larger than one provider batch in bounded requests before writing', async () => {
+    const pool = new FakePostgresRepairPool(manyPlaceholderRows(150));
+    const embeddingProvider = cappedProvider(64);
+    const report = await repairPostgresMemoryParticipantNames(pool as unknown as Pool, {
+      canonicalContactName: 'Alex',
+      companionName: 'Lyra',
+      dryRun: false,
+      embeddingProvider,
+    });
+    expect(report.updated).toBe(150);
+    expect(embeddingProvider.calls.map(batch => batch.length)).toEqual([64, 64, 22]);
+    expect(pool.patchEvents).toHaveLength(150);
+  });
+
+  it('writes nothing when any bounded batch fails', async () => {
+    const pool = new FakePostgresRepairPool(manyPlaceholderRows(150));
+    await expect(repairPostgresMemoryParticipantNames(pool as unknown as Pool, {
+      canonicalContactName: 'Alex',
+      companionName: 'Lyra',
+      dryRun: false,
+      embeddingProvider: cappedProvider(64, 2),
+    })).rejects.toThrow(/down mid-repair/);
     expect(pool.clientQueries).toHaveLength(0);
     expect(pool.patchEvents).toHaveLength(0);
   });

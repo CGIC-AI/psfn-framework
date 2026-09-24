@@ -480,6 +480,12 @@
       "note": "Code-owned safety floor: minimum byte length of HUB_DEVICE_ASSERTION_AUDIT_PEPPER (n66dn.2); a shorter audit pepper weakens assertion digest unlinkability and must never be operator-tunable downward."
     },
     {
+      "file": "src/app/maintenance/background-work-jobs.ts",
+      "name": "BACKGROUND_WORK_JOBS_CLI_DEFAULT_LIMIT",
+      "value": "200",
+      "note": "Code-owned maintenance-CLI default page (psfn-framework-gbwpq): bounds one operator invocation's read/retire set and is overridden per run with --limit; not runtime tuning."
+    },
+    {
       "file": "src/app/maintenance/migrate-journal-message-addressing.ts",
       "name": "runJournalAddressingMigrationCli.tailCache.maxEntriesPerChannel",
       "value": "1",
@@ -777,18 +783,18 @@
       "note": "Existing mutable policy candidate DEFAULT_VOICE_STREAM_OVERFLOW_POLICY; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
-      "file": "src/boundary/gateway/discord-startup.ts",
-      "name": "DEFAULT_DISCORD_START_RETRY_BASE_DELAY_MS",
+      "file": "src/boundary/gateway/channel-start-retry.ts",
+      "name": "DEFAULT_CHANNEL_SURFACE_START_RETRY_BASE_DELAY_MS",
       "value": "2_000"
     },
     {
-      "file": "src/boundary/gateway/discord-startup.ts",
-      "name": "DEFAULT_DISCORD_START_RETRY_MAX_ATTEMPTS",
+      "file": "src/boundary/gateway/channel-start-retry.ts",
+      "name": "DEFAULT_CHANNEL_SURFACE_START_RETRY_MAX_ATTEMPTS",
       "value": "0"
     },
     {
-      "file": "src/boundary/gateway/discord-startup.ts",
-      "name": "DEFAULT_DISCORD_START_RETRY_MAX_DELAY_MS",
+      "file": "src/boundary/gateway/channel-start-retry.ts",
+      "name": "DEFAULT_CHANNEL_SURFACE_START_RETRY_MAX_DELAY_MS",
       "value": "30_000"
     },
     {
@@ -1333,41 +1339,41 @@
       "value": "50_000"
     },
     {
-      "file": "src/boundary/gateway/server.ts",
+      "file": "src/boundary/gateway/server/connection-lifecycle.ts",
       "name": "$call:math-clamp:Math.max.arg0#1",
       "value": "1_000",
       "form": "math-clamp",
       "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
-      "file": "src/boundary/gateway/server.ts",
+      "file": "src/boundary/gateway/server/connection-lifecycle.ts",
       "name": "$call:math-clamp:Math.min.arg0#1",
       "value": "30_000",
       "form": "math-clamp",
       "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
-      "file": "src/boundary/gateway/server.ts",
+      "file": "src/boundary/gateway/server/companion-message-send-params.ts",
       "name": "COMPANION_MESSAGE_MAX_AUTHOR_NAME_CHARS",
       "value": "200"
     },
     {
-      "file": "src/boundary/gateway/server.ts",
+      "file": "src/boundary/gateway/server/companion-message-send-params.ts",
       "name": "COMPANION_MESSAGE_MAX_CONTENT_CHARS",
       "value": "65_536"
     },
     {
-      "file": "src/boundary/gateway/server.ts",
+      "file": "src/boundary/gateway/server/companion-message-send-params.ts",
       "name": "COMPANION_MESSAGE_MAX_REPLY_TO_ID_CHARS",
       "value": "256"
     },
     {
-      "file": "src/boundary/gateway/server.ts",
+      "file": "src/boundary/gateway/server/companion-violations.ts",
       "name": "COMPANION_VIOLATION_LOG_LIMIT",
       "value": "1_000"
     },
     {
-      "file": "src/boundary/gateway/server.ts",
+      "file": "src/boundary/gateway/server/rpc-frame-validation.ts",
       "name": "FRAME_PREVIEW_LIMIT",
       "value": "200"
     },
@@ -1996,6 +2002,12 @@
       "file": "src/channels/api/agent-backend.ts",
       "name": "MIN_CHAT_COMPLETION_TIMEOUT_MS",
       "value": "1_000"
+    },
+    {
+      "file": "src/channels/api/companion-ui-session-renewal.ts",
+      "name": "COMPANION_UI_REFRESH_PASS_LIMIT",
+      "value": "4",
+      "note": "Code-owned fail-closed DoS guard (psfn-framework-ztocx): bounds how many times one Companion UI refresh chases an assertion replaced by serialized Hub renewals; not operator tuning, exceeding it closes the socket with a structured error."
     },
     {
       "file": "src/channels/api/companion-ui-websocket.ts",
@@ -7636,7 +7648,7 @@
       "note": "Existing mutable policy candidate NearTurnMemoryLane.inferPostTurnAction.maxRetries; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
-      "file": "src/faculties/memory/postgres-store.ts",
+      "file": "src/faculties/memory/postgres-store/scratchpad.ts",
       "name": "SCRATCHPAD_MAX_ENTRIES",
       "value": "64"
     },
@@ -7676,11 +7688,6 @@
       "name": "MEMORY_SUBJECT_DETAILS_BATCH_MAX",
       "value": "256",
       "note": "Code-owned fail-closed SQL and parameter ceiling that bounds subject-authorized detail batches; callers chunk larger sets."
-    },
-    {
-      "file": "src/faculties/memory/research-library/store.ts",
-      "name": "PREVIEW_MAX_CHARS",
-      "value": "12_000"
     },
     {
       "file": "src/faculties/memory/retrieval-compose.ts",
@@ -9459,11 +9466,6 @@
       "value": "'TLSv1.3'",
       "form": "object-member",
       "note": "Existing mutable policy candidate GardenAdminTransportServer.loadNetworkTlsOptions.minVersion; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
-    },
-    {
-      "file": "src/persistence/artifact-lifecycle/manager.ts",
-      "name": "MAX_RECENT_RUNS",
-      "value": "20"
     },
     {
       "file": "src/persistence/backups/config.ts",

@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { compileCompanionUiAction } from '../fleet-auth/companion-ui-action.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import type { HubDeviceAttachmentSnapshot } from '../../shared/contracts/hub-device-ingress.js';
-import { dispatchCompanionUiPrimaryEmbodiment } from './companion-ui-primary-embodiment.js';
+import {
+  dispatchCompanionUiKeyEmbodiment,
+  dispatchCompanionUiPrimaryEmbodiment,
+} from './companion-ui-primary-embodiment.js';
+import { CompanionUiActionDeniedError } from './companion-ui-action-broker.js';
 
 const companionId = createCompanionId('11111111-1111-4111-8111-111111111111');
 const attachment = {
@@ -106,5 +110,40 @@ describe('Companion UI primary embodiment dispatch', () => {
     expect(serialized).not.toContain('server-place');
     expect(serialized).not.toContain(attachment.attachmentId);
     expect(serialized).not.toContain('88888888-8888-4888-8888-888888888888');
+  });
+});
+
+describe('Companion UI key-path embodiment dispatch (psfn-framework-m1is8)', () => {
+  const primary = { companionId, generation: 3, version: 4, lastDecision: null,
+    current: { attachmentId: '99999999-9999-4999-8999-999999999999',
+      deviceId: 'server-device', enrollmentVersion: 2, hubSessionId: 'server-session' } };
+
+  it('reads status without an attachment and is never the primary itself', async () => {
+    const authority = { read: vi.fn(async () => primary), handoff: vi.fn() };
+    await expect(dispatchCompanionUiKeyEmbodiment({
+      compiled: compiled('embodiment.status', {}), authority,
+    })).resolves.toEqual({
+      handled: true,
+      result: { generation: 3, version: 4, primaryPresent: true, currentDeviceIsPrimary: false, lastDecision: null },
+    });
+    expect(authority.read).toHaveBeenCalledWith(companionId);
+  });
+
+  it('refuses a device-bound handoff and leaves other frames to their dispatchers', async () => {
+    const authority = { read: vi.fn(), handoff: vi.fn() };
+    await expect(dispatchCompanionUiKeyEmbodiment({
+      compiled: compiled('embodiment.handoff', {
+        expectedGeneration: 3,
+        decisionId: '88888888-8888-4888-8888-888888888888',
+        reason: 'user_requested',
+      }),
+      authority,
+    })).rejects.toBeInstanceOf(CompanionUiActionDeniedError);
+    await expect(dispatchCompanionUiKeyEmbodiment({
+      compiled: compiled('conversation.interact', { content: 'hello' }), authority,
+    })).resolves.toEqual({ handled: false });
+    expect(authority.handoff).not.toHaveBeenCalled();
+    await expect(dispatchCompanionUiKeyEmbodiment({ compiled: compiled('embodiment.status', {}) }))
+      .rejects.toThrow(/authority unavailable/);
   });
 });

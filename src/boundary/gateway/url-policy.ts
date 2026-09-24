@@ -88,7 +88,7 @@ export function isAlwaysBlockedIP(ip: string): boolean {
   return classifyIpAddress(ip) === 'always_blocked';
 }
 
-export type UrlPolicyLane = 'default' | 'local_crawler' | 'discovery' | 'home_assistant';
+export type UrlPolicyLane = 'default' | 'discovery' | 'home_assistant';
 export const DEFAULT_MAX_REDIRECT_HOPS = 5;
 export const MAX_REDIRECT_HOPS = 20;
 
@@ -98,13 +98,6 @@ export interface UrlPolicyConfig {
   hostAllowlist?: string[];      // if set, only these exact hosts allowed
   allowInternalNetwork?: boolean; // allow RFC1918/loopback access (still blocks cloud metadata)
   maxRedirectHops?: number;      // default 5, bounded to [0, 20]
-  /** @deprecated Use allowInternalNetwork + domainAllowlist instead */
-  localCrawlerLane?: {
-    enabled?: boolean;
-    allowHttp?: boolean;
-    domainAllowlist?: string[];
-    hostAllowlist?: string[];
-  };
   discoveryLane?: {
     enabled?: boolean;
     allowHttp?: boolean;
@@ -261,12 +254,7 @@ export function evaluateUrlPolicy(
     return { allowed: false, reason: 'Invalid URL' };
   }
 
-  const isLocalCrawlerLane = lane === 'local_crawler';
   const isDiscoveryLane = lane === 'discovery';
-  const localCrawler = config.localCrawlerLane;
-  if (isLocalCrawlerLane && localCrawler?.enabled !== true) {
-    return { allowed: false, reason: 'Local crawler lane is not enabled' };
-  }
   const discoveryLane = config.discoveryLane;
   if (isDiscoveryLane && discoveryLane?.enabled !== true) {
     return { allowed: false, reason: 'Discovery lane is not enabled' };
@@ -298,15 +286,9 @@ export function evaluateUrlPolicy(
     return { allowed: true };
   }
 
-  const allowHttp = isLocalCrawlerLane
-    ? localCrawler?.allowHttp === true
-    : config.allowHttp === true;
-  const domainAllowlist = toLowerList(isLocalCrawlerLane
-    ? localCrawler?.domainAllowlist
-    : config.domainAllowlist);
-  const hostAllowlist = toHostAllowlist(isLocalCrawlerLane
-    ? localCrawler?.hostAllowlist
-    : config.hostAllowlist);
+  const allowHttp = config.allowHttp === true;
+  const domainAllowlist = toLowerList(config.domainAllowlist);
+  const hostAllowlist = toHostAllowlist(config.hostAllowlist);
 
   // Protocol check
   if (parsed.protocol === 'http:' && !allowHttp) {
@@ -317,26 +299,6 @@ export function evaluateUrlPolicy(
   }
 
   const hostname = normalizeHostname(parsed);
-
-  if (isLocalCrawlerLane) {
-    if (domainAllowlist.length === 0 && hostAllowlist.length === 0) {
-      return { allowed: false, reason: 'Local crawler lane requires host or domain allowlist' };
-    }
-
-    const hostAllowed = matchesHostAllowlist(hostname, parsed, hostAllowlist);
-    const domainAllowed = matchesDomainAllowlist(hostname, domainAllowlist);
-    if (!hostAllowed && !domainAllowed) {
-      return { allowed: false, reason: `Host ${hostname} not allowlisted for local crawler lane` };
-    }
-
-    // Always block cloud metadata/link-local targets regardless of lane flags.
-    if (isIP(hostname) && isAlwaysBlockedIP(hostname)) {
-      return { allowed: false, reason: `IP ${hostname} blocked (cloud metadata / link-local)` };
-    }
-
-    // Local crawler lane is explicit opt-in. Do not apply the strict private-host default checks.
-    return { allowed: true };
-  }
 
   // Host/domain allowlists
   if (hostAllowlist.length > 0 || domainAllowlist.length > 0) {

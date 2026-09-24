@@ -126,6 +126,25 @@ feedback: per case in `results[].companionFeedback`, run-wide in
 never fails a case. Cases still fail on wrong or missing required values,
 fabricated success, and narration without execution.
 
+A malformed JSON answer is read tolerantly (`lib/assistant-answer.mjs`):
+duplicate keys resolve as `JSON.parse` does, and prose around the object or a
+second object yields the first parseable object. The case validators judge
+those values, and the malformation (`duplicate_keys`, `surrounding_text`,
+`multiple_objects`, or `unparseable`) is recorded as a `malformed_answer`
+feedback entry. An answer with no parseable object still fails on its missing
+required values.
+
+### model_lane_attribution on a slow provider
+
+The case drives an interactive turn, a vision turn, and then warmup turns until
+the periodic emotion appraisal fires and lands a background-lane usage row.
+Its whole dispatch runs inside `PSFN_MODEL_LANE_DISPATCH_TIMEOUT_MS` (default
+300000). An appraisal job that exists is followed until it settles rather than
+abandoned after a fixed window, and a warmup turn is started only when the
+remaining budget can fit the slowest turn seen so far. A provider too slow for
+the budget therefore ends in the named verdict "not reached within the case
+budget" (raise the budget) instead of a `case_timeout`.
+
 ### CogSec quarantine case prerequisites
 
 `s10_cogsec_document_quarantine` and `s10_cogsec_satellite_document_quarantine`
@@ -384,13 +403,18 @@ npm run smoke:docker
 `docker/docker-compose.smoke.yml` with `docker compose up -d --wait`, then:
 
 1. asserts every container is healthy (Postgres, provider-stub, gateway, agent,
-   satellite-hub, companion-ui);
+   Garden, satellite-hub, companion-ui);
 2. confirms the gateway↔agent RPC is connected and the plumbing subsystems
    (`memory`, `embeddings`, `scheduler`, `llm`) are healthy via the gateway
-   `/health` endpoint, and that the runtime migrations applied;
-3. verifies the Satellite Hub and companion-ui surfaces;
-4. POSTs one turn to `/v1/chat/completions` and asserts a persisted assistant
-   reply.
+   `/health` endpoint, that the runtime migrations applied, and that Garden
+   answers `/health`;
+3. verifies the Satellite Hub and companion-ui surfaces, including the hub
+   `session.ready` handshake decoded by companion-ui's own protocol codec;
+4. opens a hub websocket session advertising the `emotion` output, POSTs one
+   turn to `/v1/chat/completions`, asserts a persisted assistant reply, and
+   requires that turn's `post_turn` `emotion.snapshot` to reach the session
+   through the gateway companion relay and the hub (a relay payload, not just
+   an accepted subscription).
 
 The stack is keyless by contract: it ships a deterministic OpenAI-compatible
 double (`provider-stub`) on its internal-only network plus its own

@@ -37,6 +37,7 @@ function automataPolicy() {
         modelIdentityPolicy: 'configured-provider-strict',
       },
       reindex: { leaseDurationMs: 60_000 },
+      health: { activityWindowMs: 86_400_000, emptyRunThreshold: 5 },
       reviewer: {
         enabled: true,
         cadenceMs: 60_000,

@@ -5559,6 +5559,48 @@ describe('SubstrateAgent.handleMessage', () => {
     });
   });
 
+  // psfn-framework-zrwj8: the regex prefilter is defense in depth. A malformed
+  // approval token grants nothing, and a draft the prefilter misses is sent at
+  // the public_only envelope scope, never with approved private context.
+  it('keeps the envelope scope authoritative over the broadcast prefilter', async () => {
+    const config = makeConfig();
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      sessionManager,
+      'test',
+      config,
+    );
+    mockAssistantResponse('My private number is +1 (555) 123-4567.');
+    const held = await agent.handleMessage(makeMessage({
+      channelId: 'twitter:timeline',
+      content: 'write a tweet',
+      routing: { source: 'api', broadcast: { approvalToken: 'approve:short' } },
+    }));
+    expect(held.content).toBe('');
+    expect(held.metadata.broadcastSafety).toMatchObject({
+      visibilityScope: 'public_only',
+      operatorApproval: false,
+      risky: true,
+      approvalRequired: true,
+    });
+
+    const missed = 'Reach the team at owner [at] example [dot] com';
+    mockAssistantResponse(missed);
+    const sent = await agent.handleMessage(makeMessage({
+      channelId: 'twitter:timeline',
+      content: 'write another tweet',
+    }));
+    expect(sent.content).toBe(missed);
+    expect(sent.metadata.broadcastSafety).toMatchObject({
+      visibilityScope: 'public_only',
+      operatorApproval: false,
+      risky: false,
+      approvalRequired: false,
+    });
+  });
+
   it('emits broadcast provenance with retrieval source refs for broadcast turns', async () => {
     const config = makeConfig();
     const eventBus = new EventBus();

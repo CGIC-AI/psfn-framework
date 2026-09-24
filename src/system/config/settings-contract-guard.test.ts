@@ -424,7 +424,6 @@ describe('settings contract guard', () => {
     const contractData = buildSettingsContractData();
     const uiFieldExposureKeys = Object.keys(contractData.fields).filter((fieldKey) => (
       fieldKey !== 'primaryModel'
-      && fieldKey !== 'webFetchLocalCrawlerEnabled'
     ));
 
     const result = verifySettingsContractGuard({

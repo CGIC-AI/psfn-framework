@@ -48,10 +48,14 @@ export interface AttachmentReady {
   readonly eventCapabilities: readonly string[];
 }
 
+/** `denied`: an authority/protocol refusal; `internal_error`: a server fault. */
+export type GatewayFailureCode = 'denied' | 'internal_error';
+
 export interface GatewayResult {
   readonly requestId: string;
   readonly ok: boolean;
   readonly result?: unknown;
+  readonly failure?: GatewayFailureCode;
 }
 
 function boundedLabel(value: unknown): value is string {
@@ -132,9 +136,11 @@ export function parseGatewayResult(value: unknown): GatewayResult | undefined {
     return { requestId: value.requestId, ok: true, result: value.result };
   }
   if (!hasExactKeys(value, ['schemaVersion', 'type', 'requestId', 'ok', 'error'])
-    || value.requestId !== '' || !isRecord(value.error)
-    || !hasExactKeys(value.error, ['code']) || value.error.code !== 'denied') return undefined;
-  return { requestId: '', ok: false };
+    || typeof value.requestId !== 'string'
+    || (value.requestId !== '' && !REQUEST_ID.test(value.requestId))
+    || !isRecord(value.error) || !hasExactKeys(value.error, ['code'])
+    || (value.error.code !== 'denied' && value.error.code !== 'internal_error')) return undefined;
+  return { requestId: value.requestId, ok: false, failure: value.error.code };
 }
 
 export function parseAgentResponse(value: unknown): { content: string } | undefined {

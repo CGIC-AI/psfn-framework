@@ -360,6 +360,14 @@ telemetry so discarded text cannot leak
 - the requested capabilities are intersected with the registry
   `maxCapabilities` per category, so a satellite can only ever advertise less
   than its registry maximum;
+- without a device registry the Hub is presentation-only: hello capabilities
+  are clamped to the plain realtime defaults (text/audio input and output,
+  interrupt/presence/session-attach control, no safety grants), so companion
+  relays (`approvals`, `touch`, `tool_activity`, `emotion`, `artifact`),
+  `device_location`, and `action_allowlist` are never browser-declared; the
+  pre-hello `session.ready` sent on such a connection is provisional
+  (connection-minted ids and default capabilities) and `hello.ack` is the
+  authoritative accepted attachment;
 - requested `sessionId`s are hashed under the device id
   (`realtime:<deviceId>:<sha256-prefix>`) to keep continuity bound to the
   enrolled device

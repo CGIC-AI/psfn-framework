@@ -273,6 +273,27 @@ describe('runGovernedAutomataClass', () => {
     expect(outcome).toEqual({ status: 'executed', value: 'ran' });
   });
 
+  it('fails closed before any work for a class not declared handoff-only', async () => {
+    const { registry } = await createRegistry();
+    let ran = false;
+    for (const automatonClass of ['subagent.bounded', 'memory.extraction', 'memory.retrieval'] as const) {
+      await expect(runGovernedAutomataClass({
+        runtime: { registry },
+        spec: spec({ automatonClass, runId: `run-governed-${automatonClass}` }),
+        briefingQuery: 'bounded worker job',
+        work: async () => { ran = true; return { value: undefined }; },
+      })).rejects.toThrow(automatonClass);
+      // Also without a composed runtime: the declaration is policy, not wiring.
+      await expect(runGovernedAutomataClass({
+        spec: spec({ automatonClass, runId: `run-governed-bare-${automatonClass}` }),
+        briefingQuery: 'bounded worker job',
+        work: async () => { ran = true; return { value: undefined }; },
+      })).rejects.toThrow(automatonClass);
+      expect(registry.getRun(`run-governed-${automatonClass}`)).toBeNull();
+    }
+    expect(ran).toBe(false);
+  });
+
   it('carries a class-authored terminal outcome for work that finished without doing its job', async () => {
     const { registry } = await createRegistry();
     const outcome = await runGovernedAutomataClass({

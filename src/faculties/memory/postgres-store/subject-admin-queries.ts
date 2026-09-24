@@ -13,7 +13,7 @@ import {
 } from './rows.js';
 import { clampLimit } from './utils.js';
 import { buildMemorySubjectAuthorizationPredicate } from './subject-policy.js';
-import { MEMORY_SUBJECT_SELECT_COLUMNS } from './subject-queries.js';
+import { MEMORY_SUBJECT_METADATA_SELECT_COLUMNS } from './subject-queries.js';
 import {
   ADMIN_DURABLE_MEMORY_TAGS,
   ADMIN_PREFERENCE_MEMORY_TAGS,
@@ -198,7 +198,7 @@ async function queryAdminPage(
       WHERE ${allWhere}
     ),
     authorized AS MATERIALIZED (
-      SELECT ${MEMORY_SUBJECT_SELECT_COLUMNS}
+      SELECT ${MEMORY_SUBJECT_METADATA_SELECT_COLUMNS}
       FROM l2_memories memory
       WHERE ${where}
     )
@@ -247,7 +247,7 @@ async function querySourcePrefixSlice(
   const safeLimit = clampLimit(limit, 50, 1, 500);
   const rows = await pool.query<MemoryRow>(
     `
-    SELECT ${MEMORY_SUBJECT_SELECT_COLUMNS}
+    SELECT ${MEMORY_SUBJECT_METADATA_SELECT_COLUMNS}
     FROM l2_memories memory
     WHERE ${where}
     ORDER BY memory.extracted_at DESC, memory.id DESC

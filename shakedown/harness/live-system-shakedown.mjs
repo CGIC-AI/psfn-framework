@@ -80,6 +80,7 @@ import {
   normalizeValidatorOutput,
 } from './lib/companion-feedback.mjs';
 import { casesBelowTierFloor } from './lib/case-tier-floors.mjs';
+import { malformedAnswerFeedback, readAssistantAnswer } from './lib/assistant-answer.mjs';
 import { buildMemoryTierCases } from './cases/memory-tiers.mjs';
 import { isBeadsIssueId } from './lib/beads.mjs';
 import { prepareCaseChatDispatch } from './lib/case-dispatch-auth.mjs';
@@ -512,17 +513,6 @@ function stripJsonCodeFence(text) {
   const trimmed = text.trim();
   const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```/i);
   return fenced ? fenced[1].trim() : trimmed;
-}
-
-function parseAssistantJson(text) {
-  if (typeof text !== 'string' || text.trim().length === 0) {
-    return null;
-  }
-  try {
-    return JSON.parse(stripJsonCodeFence(text));
-  } catch {
-    return extractJsonObjectFromText(text);
-  }
 }
 
 function semanticFailure(sample, pattern = 'semantic_validation') {
@@ -3658,7 +3648,10 @@ async function runCase(testCase, ctx, signal) {
       event: 'side_checks_complete',
     });
   }
-  const parsedAssistant = parseAssistantJson(extractAssistantText(turnSummary, outcome.response));
+  // Malformed-but-readable answers are judged on their values; the
+  // malformation is companion feedback, not a failure (psfn-framework-7wa3d).
+  const assistantAnswer = readAssistantAnswer(extractAssistantText(turnSummary, outcome.response));
+  const parsedAssistant = assistantAnswer.value;
   const expectedToolNames = Array.isArray(testCase.expectedTools) ? testCase.expectedTools : [];
   const toolNameVerdict = evaluateToolNameVerdict({
     expectedToolNames,
@@ -3676,7 +3669,7 @@ async function runCase(testCase, ctx, signal) {
   const restartCheckFailed = expectsLifecycleCycle && sideChecks?.apiRestart?.recovered === false;
   const {
     failures: semanticValidationFailures,
-    feedback: companionFeedback,
+    feedback: validatorFeedback,
   } = collectSemanticValidationFailures(
     testCase,
     parsedAssistant,
@@ -3685,6 +3678,10 @@ async function runCase(testCase, ctx, signal) {
     sideChecks,
     ctx,
   );
+  const companionFeedback = [
+    ...malformedAnswerFeedback(assistantAnswer.malformation),
+    ...validatorFeedback,
+  ];
   const assistantText = extractAssistantText(turnSummary, outcome.response);
   const claimedActionSuccess = assistantClaimsActionSuccess(
     parsedAssistant,

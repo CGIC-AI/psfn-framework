@@ -225,7 +225,6 @@ export function resetWebCircuitBreakersForTests(): void {
 
 function parseLane(value: unknown): UrlPolicyLane | null {
   if (value === undefined || value === null || value === '' || value === 'default') return 'default';
-  if (value === 'local_crawler') return 'local_crawler';
   if (value === 'discovery') return 'discovery';
   return null;
 }
@@ -475,8 +474,7 @@ async function fetchWithPolicyChecks(
   const parsed = new URL(url);
   const dnsCheck = await checkResolvedIP(parsed.hostname, dnsResolver, {
     allowPrivateResolvedIp:
-      lane === 'local_crawler'
-      || lane === 'discovery'
+      lane === 'discovery'
       || urlPolicyConfig.allowInternalNetwork === true,
   });
   if (!dnsCheck.allowed) {

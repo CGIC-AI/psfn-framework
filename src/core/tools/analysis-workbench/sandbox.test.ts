@@ -458,7 +458,7 @@ describe('REPLSandbox', () => {
     expect(result.output).toContain('2');
     expect(result.output).toContain('https://example.com/a');
     expect((fromAny(llm)).webFetch).toHaveBeenCalledTimes(3);
-    expect((fromAny(llm)).webFetch).toHaveBeenCalledWith('https://example.com/a', undefined, 'local_crawler');
+    expect((fromAny(llm)).webFetch).toHaveBeenCalledWith('https://example.com/a', undefined);
   });
 
   it('read_file/write_file/list_files/web helpers call gateway RPC capabilities', async () => {
@@ -513,7 +513,7 @@ describe('REPLSandbox', () => {
     });
     expect((fromAny(llm)).fsWrite).toHaveBeenCalledWith('/app/workspace/out.txt', 'hello');
     expect((fromAny(llm)).fsList).toHaveBeenCalledWith('src/**/*.ts', 10);
-    expect((fromAny(llm)).webFetch).toHaveBeenCalledWith('https://example.com', undefined, 'default');
+    expect((fromAny(llm)).webFetch).toHaveBeenCalledWith('https://example.com', undefined);
   });
 
   it('omits repo and workspace mutation helpers under the default read-only parent policy', async () => {

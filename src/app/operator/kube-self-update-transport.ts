@@ -14,7 +14,13 @@ import { join } from 'node:path';
 import { isRecord } from '../../shared/utils/types.js';
 import type { KubeDeploymentDiagnostic } from '../../system/lifecycle/kube-diagnostics.js';
 import {
-  deriveLocalImportRetag,
+  deriveKubeImageDelivery,
+  selectPushedRepoDigest,
+  verifyRegistryManifest,
+  type KubeImageDelivery,
+  type RegistryFetch,
+} from '../../system/lifecycle/kube-image-delivery.js';
+import {
   type DeployPipelineGate,
   type DeployPipelineRunner,
   type DeployPipelineRunnerContext,
@@ -112,6 +118,17 @@ function mapDeploymentJson(name: string, json: unknown): KubeDeploymentDiagnosti
     availableReplicas: asInt(status.availableReplicas),
   };
 }
+
+function parseJsonArray(stdout: string, label: string): unknown[] {
+  const parsed: unknown = JSON.parse(stdout);
+  if (!Array.isArray(parsed)) {
+    throw new Error(`Kube self-update transport: ${label} did not return a JSON array.`);
+  }
+  return parsed;
+}
+
+/** Registry API fetch backed by the runtime's global fetch. */
+export const globalRegistryFetch: RegistryFetch = (url, init) => fetch(url, init);
 
 export interface HelmKubectlConfig {
   helmBin?: string;
@@ -270,8 +287,14 @@ export interface LiveDeployPipelineRunnerConfig extends HelmKubectlConfig {
   /** Helm chart path relative to repoDir. */
   chartPath: string;
   dockerBin?: string;
-  /** Import the built+retagged image into the target runtime (k3d/k3s). */
-  importImage: (context: DeployPipelineRunnerContext, retag: { from: string; to: string }) => Promise<void>;
+  /**
+   * Containerd import for a registry-less `localhost/...` reference (local
+   * k3d/k3s test clusters only). Absent, such references fail closed; a
+   * loopback-registry reference never uses it.
+   */
+  importImage?: (context: DeployPipelineRunnerContext, retag: { from: string; to: string }) => Promise<void>;
+  /** Registry API access used to verify a pushed image's digests. */
+  registry: { fetch: RegistryFetch; timeoutMs: number };
   /** Verify a fresh, restorable backup exists before any live mutation. */
   verifyBackup: (context: DeployPipelineRunnerContext) => Promise<boolean>;
   /** Optional local-k3d smoke validation of the imported image. */
@@ -292,6 +315,32 @@ export function createLiveDeployPipelineRunner(
   const docker = config.dockerBin ?? 'docker';
   const now = config.now ?? (() => new Date());
   const gitEnv = { cwd: config.repoDir } as const;
+  requirePositiveInt('registry.timeoutMs', config.registry.timeoutMs);
+
+  const pushToLocalRegistry = async (
+    delivery: Extract<KubeImageDelivery, { mode: 'registry-push' }>,
+  ): Promise<void> => {
+    const push = await run(docker, ['push', delivery.reference]);
+    if (push.code !== 0) {
+      throw new Error(`Kube self-update transport: docker push failed: ${tail(push.stderr || push.stdout)}`);
+    }
+    const inspect = await run(docker, ['image', 'inspect', delivery.reference]);
+    if (inspect.code !== 0) {
+      throw new Error(`Kube self-update transport: docker image inspect failed: ${tail(inspect.stderr || inspect.stdout)}`);
+    }
+    const [image]: unknown[] = parseJsonArray(inspect.stdout, 'docker image inspect');
+    if (!isRecord(image) || typeof image.Id !== 'string' || !Array.isArray(image.RepoDigests)) {
+      throw new Error('Kube self-update transport: docker image inspect returned no Id/RepoDigests.');
+    }
+    const repoDigests = image.RepoDigests.filter((entry): entry is string => typeof entry === 'string');
+    await verifyRegistryManifest({
+      delivery,
+      pushedDigest: selectPushedRepoDigest(delivery, repoDigests),
+      imageId: image.Id,
+      fetch: config.registry.fetch,
+      timeoutMs: config.registry.timeoutMs,
+    });
+  };
 
   return {
     verifyPreconditions: async (context) => {
@@ -351,9 +400,17 @@ export function createLiveDeployPipelineRunner(
       return {};
     },
     importImage: async (context) => {
-      const reference = `${context.imageRepository}:${context.imageTag}`;
-      const retag = deriveLocalImportRetag(reference);
-      await config.importImage(context, retag);
+      const delivery = deriveKubeImageDelivery(`${context.imageRepository}:${context.imageTag}`);
+      if (delivery.mode === 'registry-push') {
+        await pushToLocalRegistry(delivery);
+        return;
+      }
+      if (!config.importImage) {
+        throw new Error(
+          `Kube self-update transport: ${delivery.reference} needs a containerd import, but no import command is configured.`,
+        );
+      }
+      await config.importImage(context, delivery.retag);
     },
     validateOnK3d: async (context) => {
       if (config.validateOnK3d) return config.validateOnK3d(context);

@@ -9,7 +9,7 @@ import { createBuiltinChannelPluginRegistry } from '../../channels/plugins/built
 import { ChannelPluginHost } from '../../channels/plugins/host.js';
 import type { ChannelPluginRegistry } from '../../channels/plugins/types.js';
 import { createStaticCredentialVault } from '../custody/credential-vault.js';
-import { isRetryableDiscordStartError } from './discord-startup.js';
+import { isRetryableChannelSurfaceStartError } from './channel-start-retry.js';
 import {
   ChannelSurfaceSupervisor,
   type ChannelSurfaceIdentity,
@@ -395,10 +395,10 @@ export async function loadGatewayChannelSurfaces(
   }
   const isolation = new ChannelSurfaceSupervisor({
     log: input.log,
-    // Interim: the one owner-backed start-retry policy the gateway has applies
-    // to every channel surface, with its network/5xx retryability classifier.
-    retry: input.bootstrap.discordStartRetry,
-    isRetryable: isRetryableDiscordStartError,
+    // One env-owned start-retry policy for every channel surface, with its
+    // network/5xx retryability classifier (psfn-framework-hvyrl).
+    retry: input.bootstrap.channelSurfaceStartRetry,
+    isRetryable: isRetryableChannelSurfaceStartError,
     report: createChannelSurfaceHealthReporter(input.eventBus),
   });
   const plugins = await ChannelPluginHost.load({

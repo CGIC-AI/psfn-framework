@@ -366,6 +366,28 @@ reviewed and resolved; its exception must not grow to other metadata corrections
 Keep original backups until the deployment's evidence-retention policy permits
 removal. See the command's `--help` for its explicit invocation contract.
 
+### Retired local-crawler web-fetch settings
+
+The deprecated `local_crawler` web-fetch lane and its four settings.json keys
+(`webFetchLocalCrawlerEnabled`, `webFetchLocalCrawlerAllowHttp`,
+`webFetchLocalCrawlerHostAllowlist`, `webFetchLocalCrawlerDomainAllowlist`) are
+removed. `webFetchAllowHttp`, `webFetchDomainAllowlist`, and
+`webFetchAllowInternalNetwork` are the only web-fetch authorities; `web` browse
+and search, sandbox `crawler_fetch`, and vision image fetches (including a
+configured ComfyUI origin) ride the default lane under that policy. A
+settings.json that still carries any retired key fails settings load with an
+explicit migration message instead of being silently ignored. The
+required-owner-additions migration (`migrate-required-settings-blocks`, run by
+the deploy init container) removes the retired keys: a dry run lists them under
+`settings.removedPaths`, `--apply` removes them atomically with the canonical
+owner-file mode, and a rerun is `not_needed`. Its `settings.retiredLocalCrawler`
+report records only whether `webFetchLocalCrawlerEnabled` was true and the
+current `webFetchAllowInternalNetwork` boolean, so an operator who fetched
+internal hosts through the old lane (for example ComfyUI) knows to set
+`webFetchAllowInternalNetwork`, `webFetchAllowHttp` for `http://` targets, and a
+`webFetchDomainAllowlist` entry. The rejection guard is removed once every
+deployed settings.json is confirmed free of the keys (psfn-framework-g8a5c).
+
 ### Identifiers, pools, and the fail-closed seam
 
 - **Identifier validation** (`src/persistence/postgres.ts`): schema and role

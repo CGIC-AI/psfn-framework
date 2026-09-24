@@ -1,4 +1,6 @@
 import { Value } from '@sinclair/typebox/value';
+import { createComponentLogger } from '../../shared/logger.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import type { AgentTool, AgentToolResult } from '../../boundary/pi-agent/index.js';
 import type { TextContent } from '@earendil-works/pi-ai';
 import type { CapabilityTier } from '../config/runtime-config-contracts.js';
@@ -94,6 +96,24 @@ function deniedResult(
       capabilityDenied: true,
       tier,
       missingTokens,
+    },
+  );
+}
+
+const log = createComponentLogger('CapabilityGate');
+
+/**
+ * A record-first custody commit that throws has recorded nothing, so the
+ * egress is held exactly as an unrecordable commit is (psfn-framework-uvdiy).
+ */
+function egressCommitFailedResult(toolName: string): AgentToolResult<Record<string, unknown>> {
+  return toTextResult(
+    `Tool "${toolName}" was held: its delivery could not be recorded.`,
+    {
+      isError: true,
+      egressGated: true,
+      policyDenied: true,
+      toolName,
     },
   );
 }
@@ -347,7 +367,16 @@ export function gateToolWithCapabilities<T extends AgentTool<any>>(
       // that cannot be recorded withholds a proof-requiring egress instead of
       // releasing bytes nothing can account for.
       if (gated.commit) {
-        const committed = await gated.commit(effectiveParams);
+        let committed: EgressToolGuardCommit;
+        try {
+          committed = await gated.commit(effectiveParams);
+        } catch (error) {
+          log.error('Egress custody commit threw; holding the tool call', {
+            toolName: tool.name,
+            error: toErrorMessage(error),
+          });
+          return egressCommitFailedResult(tool.name);
+        }
         if (!committed.allowed) {
           return toTextResult(committed.noticeText, {
             isError: true,

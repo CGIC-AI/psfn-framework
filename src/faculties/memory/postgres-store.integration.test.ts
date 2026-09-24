@@ -15,7 +15,7 @@ import {
   embeddingAnnOrderExpression,
   l2EmbeddingAnnIndexName,
 } from './postgres-store/embedding-index.js';
-import { MEMORY_SUBJECT_SELECT_COLUMNS } from './postgres-store/subject-queries.js';
+import { MEMORY_SUBJECT_METADATA_SELECT_COLUMNS } from './postgres-store/subject-queries.js';
 import { buildMemorySubjectAuthorizationPredicate } from './postgres-store/subject-policy.js';
 import type { PurrMemory } from './types.js';
 import type { MemoryAdminListOptions } from './memory-store-port.js';
@@ -2531,7 +2531,7 @@ describe('postgres memory store ANN embedding search (a27w.2)', () => {
       const values: unknown[] = [embeddingLiteral([...QUERY_VECTOR]), -1, ...predicate.values];
       const sql = `
         WITH authorized AS MATERIALIZED (
-          SELECT ${MEMORY_SUBJECT_SELECT_COLUMNS}, 1 - (memory.embedding <=> ${embeddingParam}::vector) AS similarity
+          SELECT ${MEMORY_SUBJECT_METADATA_SELECT_COLUMNS}, 1 - (memory.embedding <=> ${embeddingParam}::vector) AS similarity
           FROM l2_memories memory
           WHERE ${where}
           ORDER BY ${orderExpr} ASC

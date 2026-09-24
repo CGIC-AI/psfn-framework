@@ -1,8 +1,10 @@
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { SETTINGS_FILE_NAME } from './contracts.js';
+import { loadSettings } from './io.js';
+import { canonicalOwnerFileMode } from '../config/owner-file-modes.js';
 import {
   DEFAULT_LIFECYCLE_KUBERNETES_SETTINGS,
   DEFAULT_WIKI_STARTUP_HYDRATION_SETTINGS,
@@ -58,6 +60,71 @@ describe('migrateRequiredSettingsBlocks', () => {
     });
     expect(readFileSync(filePath, 'utf8')).toBe(bytes);
     expect(statSync(filePath).ino).toBe(inode);
+  });
+
+  it('removes retired local-crawler keys, reports only booleans, and stays idempotent (xvtc1)', () => {
+    const { dataDir, filePath } = prepare({
+      sessionHistoryBudgetPct: 9,
+      webFetchAllowInternalNetwork: false,
+      webFetchLocalCrawlerEnabled: true,
+      webFetchLocalCrawlerAllowHttp: true,
+      webFetchLocalCrawlerHostAllowlist: ['comfyui.internal.example'],
+    });
+    chmodSync(filePath, 0o640);
+    const before = readFileSync(filePath, 'utf8');
+    // Startup keeps failing closed until the migration actually runs.
+    expect(() => loadSettings(dataDir)).toThrow(/retired local-crawler web-fetch keys/);
+
+    const planned = migrateRequiredSettingsBlocks({ dataDir });
+    expect(planned).toMatchObject({
+      mode: 'dry-run',
+      status: 'planned',
+      removedPaths: [
+        'webFetchLocalCrawlerEnabled',
+        'webFetchLocalCrawlerAllowHttp',
+        'webFetchLocalCrawlerHostAllowlist',
+      ],
+      retiredLocalCrawler: {
+        webFetchLocalCrawlerEnabled: true,
+        webFetchAllowInternalNetwork: false,
+      },
+    });
+    // Key names and booleans only: no retired or unrelated setting value leaks.
+    expect(JSON.stringify(planned)).not.toContain('comfyui.internal.example');
+    expect(readFileSync(filePath, 'utf8')).toBe(before);
+    expect(() => loadSettings(dataDir)).toThrow(/retired local-crawler web-fetch keys/);
+
+    expect(migrateRequiredSettingsBlocks({ dataDir, apply: true })).toMatchObject({
+      mode: 'apply',
+      status: 'applied',
+      removedPaths: expect.arrayContaining(['webFetchLocalCrawlerEnabled']),
+      retiredLocalCrawler: { webFetchLocalCrawlerEnabled: true },
+    });
+    const migrated = JSON.parse(readFileSync(filePath, 'utf8')) as Record<string, unknown>;
+    for (const key of Object.keys(migrated)) expect(key).not.toMatch(/^webFetchLocalCrawler/);
+    expect(migrated.sessionHistoryBudgetPct).toBe(9);
+    expect(migrated.webFetchAllowInternalNetwork).toBe(false);
+    expect(statSync(filePath).mode & 0o777)
+      .toBe(canonicalOwnerFileMode({ ownerFileName: SETTINGS_FILE_NAME, scope: 'system' }));
+    expect(() => loadSettings(dataDir)).not.toThrow();
+
+    const bytes = readFileSync(filePath, 'utf8');
+    const settled = migrateRequiredSettingsBlocks({ dataDir, apply: true });
+    expect(settled).toMatchObject({ status: 'not_needed' });
+    expect(settled).not.toHaveProperty('removedPaths');
+    expect(settled).not.toHaveProperty('retiredLocalCrawler');
+    expect(readFileSync(filePath, 'utf8')).toBe(bytes);
+  });
+
+  it('reports a disabled retired crawler lane without inventing an enabled one', () => {
+    const { dataDir } = prepare({ webFetchLocalCrawlerAllowHttp: false });
+    expect(migrateRequiredSettingsBlocks({ dataDir })).toMatchObject({
+      removedPaths: ['webFetchLocalCrawlerAllowHttp'],
+      retiredLocalCrawler: {
+        webFetchLocalCrawlerEnabled: false,
+        webFetchAllowInternalNetwork: false,
+      },
+    });
   });
 
   it('preserves a present block while adding only the absent block', () => {

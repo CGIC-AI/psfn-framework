@@ -4,6 +4,7 @@ import {
   normalizeSensitiveKey,
 } from '../../persistence/backups/kubernetes-helm-chart.js';
 import { isRecord } from '../../shared/utils/types.js';
+import { deriveKubeImageDelivery } from './kube-image-delivery.js';
 import {
   isKubeDnsLabel,
   isKubeSourceRevision,
@@ -254,6 +255,8 @@ function assertValidPlan(plan: DeployPipelinePlan): void {
   if (!isPinnedKubeImageReference(`${plan.imageRepository}:${plan.imageTag}`)) {
     throw new Error('Kube deploy pipeline image reference must be an exact, non-floating pinned tag.');
   }
+  // Fail before any build when the reference names no supported delivery path.
+  deriveKubeImageDelivery(`${plan.imageRepository}:${plan.imageTag}`);
   if (plan.emergencyRecovery !== undefined
     && (typeof plan.emergencyRecovery.justification !== 'string'
       || plan.emergencyRecovery.justification.trim().length === 0)) {
@@ -382,35 +385,6 @@ function fail(
   record.failedStage = stage;
   record.errorCode = errorCode;
   throw new DeployPipelineError(message, record, cause !== undefined ? { cause } : undefined);
-}
-
-/**
- * Encodes the proven k3s import trap: `k3s ctr images import` names the image
- * `docker.io/library/<name>:<tag>`, so it MUST be retagged to
- * `localhost/<name>:<tag>` or the Deployments (which pull `localhost/...`) will
- * not find it. Given the pinned `localhost/...` reference the runtime targets,
- * this returns the import-time source tag and the required destination tag.
- */
-export function deriveLocalImportRetag(
-  reference: string,
-): { from: string; to: string } {
-  if (!isPinnedKubeImageReference(reference)) {
-    throw new Error('Kube deploy pipeline image retag requires a pinned image reference.');
-  }
-  const localhostPrefix = 'localhost/';
-  if (!reference.startsWith(localhostPrefix)) {
-    throw new Error('Kube deploy pipeline expects a localhost/-scoped runtime image reference.');
-  }
-  const bareName = reference.slice(localhostPrefix.length);
-  const lastSlash = bareName.lastIndexOf('/');
-  const lastColon = bareName.lastIndexOf(':');
-  if (!(lastColon > lastSlash)) {
-    throw new Error('Kube deploy pipeline image retag requires an explicit tag.');
-  }
-  return {
-    from: `docker.io/library/${bareName}`,
-    to: reference,
-  };
 }
 
 /**
@@ -551,8 +525,10 @@ export async function runKubeDeployPipeline(
       'Kube deploy pipeline image build failed.', error);
   }
 
-  // 5. Import the image into the runtime (docker.io/library -> localhost retag).
-  // Importing does not change running pods; live stays untouched.
+  // 5. Deliver the image to the node (kube-image-delivery.ts): push to the
+  // loopback registry with digest verification, or an explicitly configured
+  // containerd import for registry-less localhost/ test references. Delivery
+  // does not change running pods; live stays untouched.
   try {
     await runner.importImage(context);
     setStage(record, 'import', 'passed');

@@ -16,7 +16,7 @@ interface VisionAttachmentFetchCapabilities {
   webFetchBinary?: (
     url: string,
     options?: {
-      lane?: 'default' | 'local_crawler';
+      lane?: 'default';
       maxBytes?: number;
     },
   ) => Promise<{

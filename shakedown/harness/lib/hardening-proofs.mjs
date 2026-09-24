@@ -297,6 +297,13 @@ export function validateBackgroundModelDriveProof(driven) {
     return ['case-owned background appraisal evidence is missing'];
   }
   const failures = [];
+  if (driven.backgroundBudgetExhausted === true && driven.backgroundObserved !== true) {
+    failures.push(
+      `case-owned background appraisal was not reached within the case budget after `
+      + `${String(driven.backgroundWarmupTurns)} warmup turn(s); raise PSFN_MODEL_LANE_DISPATCH_TIMEOUT_MS `
+      + 'for a slow provider',
+    );
+  }
   if (driven.backgroundJobState !== 'succeeded') {
     failures.push(
       `case-owned background appraisal did not succeed (state=${String(driven.backgroundJobState)})`,

@@ -77,6 +77,7 @@ describe('migrateAutomataPolicyOwner bus class assignments', () => {
       mode: 'dry-run',
       status: 'planned',
       addedPaths: [
+        'bus.health',
         'bus.eligibleClasses[memory.biography_synthesis]',
         'bus.eligibleClasses[memory.biography_review]',
       ],
@@ -87,6 +88,7 @@ describe('migrateAutomataPolicyOwner bus class assignments', () => {
       mode: 'apply',
       status: 'applied',
       addedPaths: [
+        'bus.health',
         'bus.eligibleClasses[memory.biography_synthesis]',
         'bus.eligibleClasses[memory.biography_review]',
       ],
@@ -117,6 +119,7 @@ describe('migrateAutomataPolicyOwner bus class assignments', () => {
     expect(migrate(fixture, true)).toMatchObject({
       status: 'applied',
       addedPaths: [
+        'bus.health',
         'bus.eligibleClasses[memory.biography_synthesis]',
         'bus.eligibleClasses[memory.biography_review]',
       ],

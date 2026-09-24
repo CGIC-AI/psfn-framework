@@ -24,13 +24,23 @@ _UUID_PATTERN = re.compile(
 
 @dataclass(frozen=True, slots=True)
 class HubDeviceAssertionConfig:
-    fleet_auth_path: Path
+    """Where the verifier ring comes from, mirroring the TypeScript issuer.
+
+    Exactly one of ``fleet_auth_path`` (a fleet-auth.json whose
+    ``hubDeviceAssertions`` block is the ring) or ``ring_path`` (a file holding
+    the bare block or ``{"hubDeviceAssertions": ...}``) may be set; with
+    neither, the ring is the top-level ``hubDeviceAssertions`` block of the
+    satellite registry (satellites.json), so fleet auth is never required.
+    """
+
     satellite_registry_path: Path
     private_key_path: Path
     ttl_seconds: int
     companion_id: str
     satellite_id: str
     endpoint_id: str
+    fleet_auth_path: Path | None = None
+    ring_path: Path | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +64,8 @@ class HubDeviceAssertionIssuer:
         _require_token(config.endpoint_id, "Hub device assertion endpoint id")
         if config.ttl_seconds < 5 or config.ttl_seconds > 60:
             raise ValueError("Hub device assertion TTL must be between 5 and 60 seconds")
+        if config.fleet_auth_path is not None and config.ring_path is not None:
+            raise ValueError("Hub device assertion ring must come from fleet auth or a ring file, not both")
         self._read_authority()
 
     def issue(self, session_id: str) -> str:
@@ -91,8 +103,8 @@ class HubDeviceAssertionIssuer:
 
     def _read_authority(self) -> _AssertionAuthority:
         private_key = _read_private_key(self._config.private_key_path)
-        fleet_auth = _read_object(self._config.fleet_auth_path, "Fleet auth owner")
-        assertions = _require_object(fleet_auth.get("hubDeviceAssertions"), "Hub device assertion owner")
+        registry = _read_object(self._config.satellite_registry_path, "Satellite registry")
+        assertions = self._read_ring(registry)
         issuer = _require_stable_id(assertions.get("issuer"), "Hub device assertion issuer")
         audience = _require_exact_https_origin(assertions.get("audience"))
         maximum_ttl = _require_positive_integer(
@@ -101,16 +113,8 @@ class HubDeviceAssertionIssuer:
         )
         if self._config.ttl_seconds > maximum_ttl:
             raise ValueError("Hub device assertion TTL exceeds the active verifier maximum")
-        keys = assertions.get("keys")
-        if not isinstance(keys, list):
-            raise ValueError("Hub device assertion verifier keys must be an array")
-        active = [item for item in keys if isinstance(item, dict) and item.get("status") == "active"]
-        if len(active) != 1:
-            raise ValueError("Hub device assertion owner must have exactly one active verifier")
-        kid = _require_stable_id(active[0].get("kid"), "Hub device assertion key id")
-        _require_matching_public_key(private_key, active[0].get("publicKeyPem"))
+        kid = _select_signing_key_id(private_key, assertions.get("keys"))
 
-        registry = _read_object(self._config.satellite_registry_path, "Satellite registry")
         if registry.get("enabled") is not True:
             raise ValueError("Hub device assertions require an enabled satellite registry")
         satellites = registry.get("satellites")
@@ -157,6 +161,50 @@ class HubDeviceAssertionIssuer:
         )
 
 
+    def _read_ring(self, registry: dict[str, Any]) -> dict[str, Any]:
+        if self._config.fleet_auth_path is not None:
+            fleet_auth = _read_object(self._config.fleet_auth_path, "Fleet auth owner")
+            return _require_object(fleet_auth.get("hubDeviceAssertions"), "Hub device assertion owner")
+        if self._config.ring_path is not None:
+            document = _read_object(self._config.ring_path, "Hub device assertion ring file")
+            if "hubDeviceAssertions" in document:
+                return _require_object(document["hubDeviceAssertions"], "Hub device assertion ring")
+            return document
+        return _require_object(
+            registry.get("hubDeviceAssertions"),
+            "Satellite registry hubDeviceAssertions ring (set HUB_DEVICE_ASSERTION_RING_PATH or "
+            "HUB_DEVICE_ASSERTION_FLEET_AUTH_PATH when the ring lives elsewhere)",
+        )
+
+
+def _select_signing_key_id(private_key: Ed25519PrivateKey, keys: object) -> str:
+    """Pick the ring entry whose public key matches the private key.
+
+    The ring must hold exactly one ``active`` key. The signing key is matched by
+    public key among non-revoked entries, preferring ``active``, so a rotation
+    may carry ``retiring`` entries (same rule as selectHubDeviceSigningKey).
+    """
+    if not isinstance(keys, list):
+        raise ValueError("Hub device assertion verifier keys must be an array")
+    entries = [item for item in keys if isinstance(item, dict)]
+    if len(entries) != len(keys):
+        raise ValueError("Hub device assertion verifier keys must be objects")
+    if sum(1 for item in entries if item.get("status") == "active") != 1:
+        raise ValueError("Hub device assertion owner must have exactly one active verifier")
+    candidates = [
+        item
+        for item in entries
+        if item.get("status") in ("active", "retiring")
+        and _public_key_matches(private_key, item.get("publicKeyPem"))
+    ]
+    if not candidates:
+        raise ValueError(
+            "Hub device assertion private key does not match any active or retiring verifier key"
+        )
+    chosen = next((item for item in candidates if item.get("status") == "active"), candidates[0])
+    return _require_stable_id(chosen.get("kid"), "Hub device assertion key id")
+
+
 def _read_object(path: Path, field: str) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -181,9 +229,9 @@ def _read_private_key(path: Path) -> Ed25519PrivateKey:
     return key
 
 
-def _require_matching_public_key(private_key: Ed25519PrivateKey, value: object) -> None:
+def _public_key_matches(private_key: Ed25519PrivateKey, value: object) -> bool:
     if not isinstance(value, str) or not value.strip():
-        raise ValueError("Hub device assertion active verifier must contain a public key")
+        raise ValueError("Hub device assertion verifier entry must contain a public key")
     try:
         public_key = serialization.load_pem_public_key(value.encode("utf-8"))
         actual = private_key.public_key().public_bytes(
@@ -195,9 +243,8 @@ def _require_matching_public_key(private_key: Ed25519PrivateKey, value: object) 
             serialization.PublicFormat.SubjectPublicKeyInfo,
         )
     except (TypeError, ValueError) as exc:
-        raise ValueError("Hub device assertion active verifier public key is invalid") from exc
-    if actual != expected:
-        raise ValueError("Hub device assertion private key does not match the active verifier")
+        raise ValueError("Hub device assertion verifier public key is invalid") from exc
+    return actual == expected
 
 
 def _require_object(value: object, field: str) -> dict[str, Any]:

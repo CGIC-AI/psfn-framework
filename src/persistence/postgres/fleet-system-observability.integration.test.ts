@@ -219,6 +219,55 @@ describe('fleet system observability across two tenant pool scopes', () => {
     }
   });
 
+  it('fences a companion\'s answer-path retention ring to system rows and its own (n4hwt)', async () => {
+    const fixture = await fleet();
+    const ringOfOne = { ...DEFAULT_HUMAN_ESCALATION_CONFIG.retention, maxResolvedRowsPerKind: 1 };
+    try {
+      const gatewayLedger = await PostgresHumanEscalationStore.connectShared(
+        fixture.databaseUrl,
+        { access: 'raise', bounds: DEFAULT_HUMAN_ESCALATION_CONFIG.retention },
+      );
+      const ownedByA = await gatewayLedger.openOrReopen(escalationFacts({
+        owner: { kind: 'companion', companionId: COMPANION_A as never },
+        dedupeKey: 'owned-by-a',
+      }));
+      const ownedByB = await gatewayLedger.openOrReopen(escalationFacts({
+        owner: { kind: 'companion', companionId: COMPANION_B as never },
+        dedupeKey: 'owned-by-b',
+      }));
+      await gatewayLedger.close();
+
+      const fleetLedgerA = await PostgresHumanEscalationStore.connectShared(
+        fixture.databaseUrl,
+        { answeringCompanionId: COMPANION_A, bounds: ringOfOne },
+      );
+      const fleetLedgerB = await PostgresHumanEscalationStore.connectShared(
+        fixture.databaseUrl,
+        { answeringCompanionId: COMPANION_B, bounds: ringOfOne },
+      );
+      const resolution = (resolvedAtMs: number) => ({
+        state: 'resolved' as const, reason: 'handled' as const, actor: 'operator' as const, resolvedAtMs,
+      });
+      await fleetLedgerA.applyResolution({
+        escalationId: ownedByA.escalationId, expectedState: 'open', resolution: resolution(NOW_MS),
+      });
+      // B's answer runs B's ring with a cap of one. Unfenced, it ranked A's
+      // answered row too and deleted it.
+      await fleetLedgerB.applyResolution({
+        escalationId: ownedByB.escalationId, expectedState: 'open', resolution: resolution(NOW_MS + 1),
+      });
+      expect(await fleetLedgerA.getById(ownedByA.escalationId)).toMatchObject({ state: 'resolved' });
+      expect(await fleetLedgerB.getById(ownedByB.escalationId)).toMatchObject({ state: 'resolved' });
+      await Promise.all([fleetLedgerA.close(), fleetLedgerB.close()]);
+
+      await expect(PostgresHumanEscalationStore.connectShared(fixture.databaseUrl, {
+        bounds: DEFAULT_HUMAN_ESCALATION_CONFIG.retention,
+      })).rejects.toThrow(/requires the answering companion id/u);
+    } finally {
+      await closeAll(fixture);
+    }
+  });
+
   it('lets each companion answer the gateway\'s escalation on its own Garden', async () => {
     const fixture = await fleet();
     try {
@@ -251,11 +300,11 @@ describe('fleet system observability across two tenant pool scopes', () => {
 
       const fleetLedgerA = await PostgresHumanEscalationStore.connectShared(
         fixture.databaseUrl,
-        { bounds: DEFAULT_HUMAN_ESCALATION_CONFIG.retention },
+        { answeringCompanionId: COMPANION_A, bounds: DEFAULT_HUMAN_ESCALATION_CONFIG.retention },
       );
       const fleetLedgerB = await PostgresHumanEscalationStore.connectShared(
         fixture.databaseUrl,
-        { bounds: DEFAULT_HUMAN_ESCALATION_CONFIG.retention },
+        { answeringCompanionId: COMPANION_B, bounds: DEFAULT_HUMAN_ESCALATION_CONFIG.retention },
       );
       const gardenA = new AdminHumanEscalationDataService({
         ledger: companionLedgerA,
@@ -378,6 +427,7 @@ describe('shared observability readiness proves the privileges each path uses', 
       await expect(PostgresHumanEscalationStore.connectShared(fixture.databaseUrl, {
         role,
         access: 'answer',
+        answeringCompanionId: COMPANION_A,
         bounds: DEFAULT_HUMAN_ESCALATION_CONFIG.retention,
       })).rejects.toThrow(/missing required role privileges: DELETE/u);
 
@@ -395,6 +445,7 @@ describe('shared observability readiness proves the privileges each path uses', 
       const answerer = await PostgresHumanEscalationStore.connectShared(fixture.databaseUrl, {
         role,
         access: 'answer',
+        answeringCompanionId: COMPANION_A,
         bounds: DEFAULT_HUMAN_ESCALATION_CONFIG.retention,
       });
       await expect(answerer.list({ limit: 1 })).resolves.toEqual([]);

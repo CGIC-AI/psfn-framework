@@ -12,21 +12,21 @@ const { Pool } = pg;
 const SAFE_SECRET_PATTERN = /^[A-Za-z0-9._~+-]+$/u;
 const SAFE_IDENTIFIER_PATTERN = /^[a-z_][a-z0-9_]*$/u;
 
-function assertSafeIdentifier(label, value) {
+export function assertSafeIdentifier(label, value) {
   if (typeof value !== 'string' || !SAFE_IDENTIFIER_PATTERN.test(value)) {
     throw new Error(`${label} must be a lowercase PostgreSQL identifier`);
   }
   return value;
 }
 
-function assertSafeSecret(label, value) {
+export function assertSafeSecret(label, value) {
   if (typeof value !== 'string' || !SAFE_SECRET_PATTERN.test(value)) {
     throw new Error(`${label} contains characters unsupported by the runtime credential handoff`);
   }
   return value;
 }
 
-function assertConnectionLimit(label, value) {
+export function assertConnectionLimit(label, value) {
   if (!Number.isSafeInteger(value) || value < 1) {
     throw new Error(`${label} must be an integer >= 1`);
   }
@@ -40,7 +40,7 @@ async function quotedLiteral(client, value) {
   return literal;
 }
 
-async function ensureLoginRole(client, role, password, connectionLimit) {
+export async function ensureLoginRole(client, role, password, connectionLimit) {
   const passwordLiteral = await quotedLiteral(client, password);
   const exists = await client.query(
     'SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1) AS value',
@@ -57,7 +57,7 @@ async function ensureLoginRole(client, role, password, connectionLimit) {
   );
 }
 
-async function assertRoleIsolation(client, roles) {
+export async function assertRoleIsolation(client, roles) {
   const result = await client.query(`
     SELECT authority.rolname AS authority_role, related.rolname AS related_role
     FROM pg_roles authority

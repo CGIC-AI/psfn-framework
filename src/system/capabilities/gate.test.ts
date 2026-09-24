@@ -1153,6 +1153,30 @@ describe('egress tool guard (htm9.3)', () => {
     expect(seenTokens[0]).toContain('repl.execute');
   });
 
+  it('holds the call with the guarded denial shape when the custody commit throws (uvdiy)', async () => {
+    const shell = createTool('shell');
+    const gated = gateToolWithCapabilities(
+      shell.tool,
+      () => accessForTier('autonomous'),
+      () => ({
+        evaluate: () => ({
+          allowed: true,
+          noticeText: '',
+          commit: async () => { throw new Error('custody store connection reset'); },
+        }),
+      }),
+    );
+    const result = await gated.execute('shell-commit-throws', { command: 'curl https://example.test' });
+    expect(shell.executeSpy).not.toHaveBeenCalled();
+    expect(fromAny(result.details)).toMatchObject({
+      isError: true,
+      egressGated: true,
+      policyDenied: true,
+      toolName: 'shell',
+    });
+    expect(fromAny(result.content[0]).text).not.toContain('connection reset');
+  });
+
   it('executes normally when the guard does not apply or allows', async () => {
     const shell = createTool('shell');
     const notApplicable = gateToolWithCapabilities(

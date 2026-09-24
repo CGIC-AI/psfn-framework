@@ -48,3 +48,44 @@ describe('GuestOnlyHubDeviceAttachmentStore attachment bounds', () => {
     expect(store.attachmentCount).toBe(1);
   });
 });
+
+describe('GuestOnlyHubDeviceAttachmentStore assertion binding (psfn-framework-xwcqm)', () => {
+  it('keeps a same-connection re-presentation as a retry', async () => {
+    const store = new GuestOnlyHubDeviceAttachmentStore();
+    const first = await store.attach(attachInput('c1', 'shared-digest'));
+    await expect(store.attach(attachInput('c1', 'shared-digest'))).resolves.toMatchObject({
+      disposition: 'retry',
+      attachmentId: first.attachmentId,
+      channel: { id: first.channel.id },
+    });
+  });
+
+  it('denies an assertion replayed on a different connection and fences the original', async () => {
+    const store = new GuestOnlyHubDeviceAttachmentStore();
+    await store.attach(attachInput('c1', 'shared-digest'));
+    await expect(store.attach(attachInput('c2', 'shared-digest'))).rejects.toMatchObject({
+      name: 'HubDeviceAttachmentRejectedError',
+      code: 'device_binding_mismatch',
+    });
+    expect(store.isFenced('c1')).toBe(true);
+    expect(store.isFenced('c2')).toBe(false);
+    expect(store.attachmentCount).toBe(0);
+  });
+
+  it('releases the binding after the assertion window', async () => {
+    let nowMs = 0;
+    const store = new GuestOnlyHubDeviceAttachmentStore({ now: () => nowMs, fenceTtlMs: 70_000 });
+    await store.attach(attachInput('c1', 'shared-digest'));
+    nowMs += 70_000;
+    await expect(store.attach(attachInput('c2', 'shared-digest'))).resolves.toMatchObject({
+      disposition: 'created',
+    });
+  });
+
+  it('refuses a new assertion at binding capacity instead of evicting a live binding', async () => {
+    const store = new GuestOnlyHubDeviceAttachmentStore({ maxAssertionBindings: 1 });
+    await store.attach(attachInput('c1', 'd1'));
+    await expect(store.attach(attachInput('c2', 'd2'))).rejects.toThrow(/at capacity/);
+    await expect(store.attach(attachInput('c1', 'd1'))).resolves.toMatchObject({ disposition: 'retry' });
+  });
+});

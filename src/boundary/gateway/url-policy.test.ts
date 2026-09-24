@@ -465,126 +465,18 @@ describe('evaluateUrlPolicy', () => {
     });
   });
 
-  describe('local crawler lane', () => {
-    it('is disabled by default', () => {
-      const result = evaluateUrlPolicy(
-        'https://localhost:8443/fetch',
-        {},
-        'local_crawler',
-      );
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toContain('not enabled');
+  describe('retired local crawler lane', () => {
+    it('does not let a host allowlist alone reach localhost or private IPs', () => {
+      const config = { allowHttp: true, hostAllowlist: ['localhost', '127.0.0.1'] };
+      expect(evaluateUrlPolicy('http://localhost:8080/fetch', config).allowed).toBe(false);
+      expect(evaluateUrlPolicy('http://127.0.0.1:8080/fetch', config).allowed).toBe(false);
     });
 
-    it('requires host/domain allowlist when enabled', () => {
-      const result = evaluateUrlPolicy(
-        'https://localhost:8443/fetch',
-        {
-          localCrawlerLane: {
-            enabled: true,
-          },
-        },
-        'local_crawler',
-      );
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toContain('requires host or domain allowlist');
-    });
-
-    it('allows localhost and private IP when explicitly allowlisted', () => {
-      const localhostResult = evaluateUrlPolicy(
-        'https://localhost:8443/fetch',
-        {
-          localCrawlerLane: {
-            enabled: true,
-            hostAllowlist: ['localhost', '127.0.0.1'],
-          },
-        },
-        'local_crawler',
-      );
-      expect(localhostResult.allowed).toBe(true);
-
-      const privateIpResult = evaluateUrlPolicy(
-        'https://127.0.0.1:8443/fetch',
-        {
-          localCrawlerLane: {
-            enabled: true,
-            hostAllowlist: ['localhost', '127.0.0.1'],
-          },
-        },
-        'local_crawler',
-      );
-      expect(privateIpResult.allowed).toBe(true);
-    });
-
-    it('still blocks always-blocked metadata IP when explicitly allowlisted', () => {
-      const result = evaluateUrlPolicy(
-        'https://169.254.169.254/latest/meta-data/',
-        {
-          localCrawlerLane: {
-            enabled: true,
-            hostAllowlist: ['169.254.169.254'],
-          },
-        },
-        'local_crawler',
-      );
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toContain('cloud metadata');
-    });
-
-    it('still blocks the IPv6 unspecified/ULA targets even when explicitly allowlisted', () => {
-      const config = {
-        localCrawlerLane: {
-          enabled: true,
-          allowHttp: true,
-          hostAllowlist: ['::', 'fd00:ec2::254'],
-        },
-      };
-      expect(evaluateUrlPolicy('http://[::]/', config, 'local_crawler').allowed).toBe(false);
-      expect(evaluateUrlPolicy('http://[fd00:ec2::254]/', config, 'local_crawler').allowed).toBe(false);
-    });
-
-    it('denies local crawler host outside allowlist', () => {
-      const result = evaluateUrlPolicy(
-        'https://crawler.internal/fetch',
-        {
-          localCrawlerLane: {
-            enabled: true,
-            hostAllowlist: ['localhost'],
-          },
-        },
-        'local_crawler',
-      );
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toContain('not allowlisted');
-    });
-
-    it('respects per-lane HTTP toggle', () => {
-      const denied = evaluateUrlPolicy(
-        'http://localhost:8080/fetch',
-        {
-          localCrawlerLane: {
-            enabled: true,
-            hostAllowlist: ['localhost'],
-            allowHttp: false,
-          },
-        },
-        'local_crawler',
-      );
-      expect(denied.allowed).toBe(false);
-      expect(denied.reason).toContain('HTTP not allowed');
-
-      const allowed = evaluateUrlPolicy(
-        'http://localhost:8080/fetch',
-        {
-          localCrawlerLane: {
-            enabled: true,
-            hostAllowlist: ['localhost'],
-            allowHttp: true,
-          },
-        },
-        'local_crawler',
-      );
-      expect(allowed.allowed).toBe(true);
+    it('reaches allowlisted internal hosts only through allowInternalNetwork', () => {
+      const config = { allowHttp: true, allowInternalNetwork: true, hostAllowlist: ['localhost', '127.0.0.1'] };
+      expect(evaluateUrlPolicy('http://localhost:8080/fetch', config).allowed).toBe(true);
+      expect(evaluateUrlPolicy('http://127.0.0.1:8080/fetch', config).allowed).toBe(true);
+      expect(evaluateUrlPolicy('http://crawler.internal/fetch', config).allowed).toBe(false);
     });
   });
 });

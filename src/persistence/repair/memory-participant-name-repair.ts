@@ -19,6 +19,7 @@ import { encodeEmbeddingLiteral } from '../../faculties/memory/postgres-store/ro
 import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import { createMaintenanceEmbeddingUsageProvenance } from '../../core/agent/embedding-usage-provenance.js';
 import { queryRows } from '../postgres.js';
+import { chunk } from '../../shared/utils/arrays.js';
 
 const DEFAULT_REPAIR_LIMIT = 500;
 const MAX_REPAIR_LIMIT = 10_000;
@@ -343,22 +344,41 @@ export async function runMemoryParticipantNameRepair(
 }
 
 /**
- * Embeds every repaired text before any write. A provider failure or a
- * malformed/mismatched result throws here, so no row or patch event changes.
+ * Texts per `embedBatch` request. Matches the re-embed migration's batch so a
+ * provider that accepts one accepts the other; a repair larger than this is
+ * embedded in several bounded requests (psfn-framework-h1ji2).
+ */
+const PARTICIPANT_NAME_REPAIR_EMBED_BATCH_SIZE = 64;
+
+/**
+ * Embeds every repaired text before any write, in bounded provider batches. A
+ * provider failure in any batch or a malformed/mismatched result throws here,
+ * so no row or patch event changes.
  */
 async function embedRepairedTexts(
   updates: readonly MemoryParticipantNameRepairUpdate[],
   embeddingProvider: EmbeddingProviderPort,
 ): Promise<MemoryParticipantNameRepairEmbeddedUpdate[]> {
-  const embeddings = await embeddingProvider.embedBatch(updates.map(update => update.afterText), {
-    usageProvenance: createMaintenanceEmbeddingUsageProvenance({
-      purpose: 'memory.participant_name_repair',
-      service: 'memory',
-      process: 'participant-name-repair',
-      workloadType: 'memory_participant_name_repair',
-      workloadId: 'participant-name-repair',
-    }),
+  const usageProvenance = createMaintenanceEmbeddingUsageProvenance({
+    purpose: 'memory.participant_name_repair',
+    service: 'memory',
+    process: 'participant-name-repair',
+    workloadType: 'memory_participant_name_repair',
+    workloadId: 'participant-name-repair',
   });
+  const embeddings: Float32Array[] = [];
+  for (const batch of chunk(updates, PARTICIPANT_NAME_REPAIR_EMBED_BATCH_SIZE)) {
+    const batchEmbeddings = await embeddingProvider.embedBatch(
+      batch.map(update => update.afterText),
+      { usageProvenance },
+    );
+    if (batchEmbeddings.length !== batch.length) {
+      throw new Error(
+        `Embedding provider returned ${batchEmbeddings.length} embeddings for a batch of ${batch.length} repaired memories`,
+      );
+    }
+    embeddings.push(...batchEmbeddings);
+  }
   if (embeddings.length !== updates.length) {
     throw new Error(
       `Embedding provider returned ${embeddings.length} embeddings for ${updates.length} repaired memories`,

@@ -268,8 +268,6 @@ export const SETTINGS_BOOLEAN_FIELDS = new Set<string>([
   'webFetchAllowHttp',
   'webFetchAllowInternalNetwork',
   'homeAssistantEnabled',
-  'webFetchLocalCrawlerEnabled',
-  'webFetchLocalCrawlerAllowHttp',
   'telegramEnabled',
   'obsidianAutoPublish',
   'moaEnabled',
@@ -284,8 +282,6 @@ export const SETTINGS_BOOLEAN_FIELDS = new Set<string>([
 export const SETTINGS_STRING_ARRAY_FIELDS = new Set<string>([
   'openRouterProviderOrder',
   'webFetchDomainAllowlist',
-  'webFetchLocalCrawlerHostAllowlist',
-  'webFetchLocalCrawlerDomainAllowlist',
   'webFetchTlsCaCertPaths',
   'promotedExtendedTools',
   'moaReferenceModels',
@@ -419,10 +415,6 @@ const DEPRECATED_SETTINGS_FIELDS = new Set<string>([
   'extractionMaxTokens',
   'modelRoleAssignments',
   'modelRoster',
-  'webFetchLocalCrawlerEnabled',
-  'webFetchLocalCrawlerAllowHttp',
-  'webFetchLocalCrawlerHostAllowlist',
-  'webFetchLocalCrawlerDomainAllowlist',
 ]);
 
 const STRUCTURED_SETTINGS_FIELD_KEYS = [...new Set<string>([

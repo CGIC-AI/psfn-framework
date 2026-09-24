@@ -48,7 +48,7 @@ export interface SchedulerOwnerMigrationResult {
 }
 
 /**
- * psfn-framework-c4twp: owner keys retired because nothing consumed them. The
+ * psfn-framework-c4twp / cziwg: owner keys retired because nothing consumed them. The
  * migration removes exactly these paths and leaves every sibling untouched.
  */
 function removeRetiredSchedulerOwnerKeys(
@@ -61,6 +61,11 @@ function removeRetiredSchedulerOwnerKeys(
     delete next.wakeSummary;
     candidate.temporalWakeup = next;
     removedPaths.push('temporalWakeup.wakeSummary');
+  }
+  // psfn-framework-cziwg: artifactLifecycle lost its only reader.
+  if (candidate.artifactLifecycle !== undefined) {
+    delete candidate.artifactLifecycle;
+    removedPaths.push('artifactLifecycle');
   }
 }
 

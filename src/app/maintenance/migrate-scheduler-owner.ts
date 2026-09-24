@@ -20,7 +20,8 @@ function printUsage(): void {
   console.log('');
   console.log('Migrates the retired salience/social-graph scheduler cadences into');
   console.log('scheduler.json > backgroundMaintenance, removes the retired');
-  console.log('temporalWakeup.wakeSummary block, and seeds missing default blocks.');
+  console.log('temporalWakeup.wakeSummary and artifactLifecycle blocks, and seeds');
+  console.log('missing default blocks.');
   console.log('Dry-run is the default.');
   console.log('');
   console.log('Options:');

@@ -8,7 +8,7 @@ const ROOT = dirname(fileURLToPath(import.meta.url));
 const OWNERS = [
   'primitives.ts:toInterval,toPositiveInteger,toBoolean,toNumberAtLeast,toUnitFactor,toPositiveUnitFactor,toLocalTime,toTimeZone,toUnitInterval,toCadenceTimezone,toWakeTimingMode,toHourOfDay,toPositiveNumber,toNonEmptyString,toNonNegativeInteger',
   'background-work.ts:DEFAULT_BACKGROUND_WORK_TUNING,validateBackgroundWorkConfig,BackgroundWorkWelfareConfig,DEFAULT_BACKGROUND_WORK_WELFARE_CONFIG,validateBackgroundWorkWelfareConfig',
-  'maintenance.ts:ArtifactLifecyclePolicyConfig,validateArtifactLifecycleConfig,BackgroundMaintenanceConfig,DEFAULT_BACKGROUND_MAINTENANCE_CONFIG,validateBackgroundMaintenanceConfig',
+  'maintenance.ts:assertArtifactLifecycleRetired,BackgroundMaintenanceConfig,DEFAULT_BACKGROUND_MAINTENANCE_CONFIG,validateBackgroundMaintenanceConfig',
   'social-autonomy.ts:SocialAutonomyConfig,createDefaultSocialAutonomyConfig,DEFAULT_SOCIAL_AUTONOMY_CONFIG,validateSocialAutonomyConfig',
   'social-graph.ts:SocialGraphBuilderCadenceConfig,DEFAULT_SOCIAL_GRAPH_BUILDER_CADENCE,validateSocialGraphBuilderConfig',
 ].map((owner) => {

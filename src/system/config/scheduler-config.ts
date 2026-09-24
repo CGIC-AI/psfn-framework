@@ -19,9 +19,8 @@ import {
   type BackgroundWorkWelfareConfig,
 } from './scheduler-config/background-work.js';
 import {
-  validateArtifactLifecycleConfig,
+  assertArtifactLifecycleRetired,
   validateBackgroundMaintenanceConfig,
-  type ArtifactLifecyclePolicyConfig,
   type BackgroundMaintenanceConfig,
 } from './scheduler-config/maintenance.js';
 import {
@@ -214,7 +213,6 @@ export interface SchedulerRuntimeConfig {
   /** Per-companion offset window for fixed wall-clock fleet work (vcq8v.7). */
   fleetStagger: FleetStaggerConfig;
   backgroundWork: BackgroundWorkRuntimeTuning;
-  artifactLifecycle: ArtifactLifecyclePolicyConfig;
   episodicProcessing: EpisodicProcessingRestWindowConfig;
   nearTurnMemory: NearTurnMemoryCadenceConfig;
   episodeSynthesis: EpisodeSynthesisLaneConfig;
@@ -311,6 +309,7 @@ export function validateSchedulerConfig(
       + 'Rename the key and remove any heavy-pass expectations from turn cadence.',
     );
   }
+  assertArtifactLifecycleRetired(raw, sourcePath);
   if (raw.salienceDecayIntervalMs !== undefined) {
     throw new Error(
       `Invalid scheduler config at ${sourcePath}: salienceDecayIntervalMs was removed; `
@@ -337,7 +336,6 @@ export function validateSchedulerConfig(
     }),
     fleetStagger: validateFleetStaggerConfig(raw.fleetStagger, sourcePath),
     backgroundWork: validateBackgroundWorkConfig(raw.backgroundWork, sourcePath),
-    artifactLifecycle: validateArtifactLifecycleConfig(raw.artifactLifecycle, sourcePath),
     episodicProcessing,
     nearTurnMemory: validateNearTurnMemoryConfig(raw.nearTurnMemory, sourcePath),
     episodeSynthesis: validateEpisodeSynthesisConfig(raw.episodeSynthesis, sourcePath),

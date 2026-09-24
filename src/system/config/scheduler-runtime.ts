@@ -53,7 +53,6 @@ export function resolveRuntimeSchedulerConfig(
       retention: { ...persisted.humanEscalation.retention },
     },
     fleetStagger: { ...persisted.fleetStagger },
-    artifactLifecycle: { ...persisted.artifactLifecycle },
     episodicProcessing: { ...persisted.episodicProcessing },
     nearTurnMemory: {
       direct: { ...persisted.nearTurnMemory.direct },

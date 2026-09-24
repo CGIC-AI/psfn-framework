@@ -225,12 +225,6 @@ describe('startup owner-file loaders', () => {
       fleetStagger: structuredClone(DEFAULT_FLEET_STAGGER_CONFIG),
       humanEscalation: structuredClone(DEFAULT_HUMAN_ESCALATION_CONFIG),
       backgroundWork: structuredClone(DEFAULT_BACKGROUND_WORK_TUNING),
-      artifactLifecycle: {
-        scratchpadRetentionDays: 7,
-        generatedMediaRetentionDays: 30,
-        workspaceTempRetentionDays: 3,
-        cleanupBatchSize: 50,
-      },
       episodicProcessing: {
         enabled: true,
         startLocalTime: '00:00',

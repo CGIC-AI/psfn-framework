@@ -55,12 +55,6 @@ function buildValidSchedulerConfig(): Record<string, unknown> {
     fleetStagger: structuredClone(DEFAULT_FLEET_STAGGER_CONFIG),
     humanEscalation: structuredClone(DEFAULT_HUMAN_ESCALATION_CONFIG),
     backgroundWork: structuredClone(DEFAULT_BACKGROUND_WORK_TUNING),
-    artifactLifecycle: {
-      scratchpadRetentionDays: 10,
-      generatedMediaRetentionDays: 20,
-      workspaceTempRetentionDays: 30,
-      cleanupBatchSize: 40,
-    },
     episodicProcessing: {
       enabled: true,
       startLocalTime: '23:00',
@@ -592,6 +586,20 @@ describe('scheduler config seed defaults', () => {
       expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
         'temporalWakeup.morningWake.habit.wakeBandEndHour must be greater than wakeBandStartHour',
       );
+    });
+  });
+
+  it('rejects the retired artifactLifecycle block with migration guidance (cziwg)', () => {
+    withSeedDir((seedDir) => {
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), {
+        ...buildValidSchedulerConfig(),
+        artifactLifecycle: { scratchpadRetentionDays: 14 },
+      });
+      expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
+        /artifactLifecycle was retired.*migrate:scheduler-owner/u,
+      );
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), buildValidSchedulerConfig());
+      expect(loadSchedulerSeedDefaults({ seedDir })).not.toHaveProperty('artifactLifecycle');
     });
   });
 

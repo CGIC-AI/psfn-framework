@@ -3,10 +3,10 @@
 // Offline by default (a deterministic fixture backend). Live runs are explicit
 // and spend money / need a local model server:
 //
-//   npm --prefix tools/evals run eval:decision:bakeoff -- --live \
+//   npm run decision-eval:bakeoff -- --live \
 //     --jev-model typesafe/jev-1.13 [--jev-snapshot typesafe/jev-1.13-20260917] \
 //     --local-endpoint http://127.0.0.1:18080/v1 --local-model <served-model-id> \
-//     [--run-id <id>] [--output-dir eval/decision/results]
+//     [--run-id <id>] [--output-dir scripts/decision-eval/results]
 //
 // Jev is called through the production transport (ZDR-only routing) with
 // OPENROUTER_API_KEY; the local side is the production generic local backend
@@ -18,12 +18,12 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import type { LLMContext, LLMResponse } from '../../../../src/shared/contracts/runtime.js';
-import { createLocalDecisionBackend } from '../../../../src/primitives/llm/decision/local-backend.js';
-import { requestJevDecision, type DecisionsFetch } from '../../../../src/primitives/llm/decision/jev-transport.js';
-import { buildDecisionShadowRecord } from '../../../../src/primitives/llm/decision/shadow-record.js';
-import type { DecisionAnswers, DecisionOutcome } from '../../../../src/primitives/llm/decision/types.js';
-import { buildLLMWorkSpec } from '../../../../src/primitives/llm/work-spec.js';
+import type { LLMContext, LLMResponse } from '../../src/shared/contracts/runtime.js';
+import { createLocalDecisionBackend } from '../../src/primitives/llm/decision/local-backend.js';
+import { requestJevDecision, type DecisionsFetch } from '../../src/primitives/llm/decision/jev-transport.js';
+import { buildDecisionShadowRecord } from '../../src/primitives/llm/decision/shadow-record.js';
+import type { DecisionAnswers, DecisionOutcome } from '../../src/primitives/llm/decision/types.js';
+import { buildLLMWorkSpec } from '../../src/primitives/llm/work-spec.js';
 import {
   aggregateDecisionComparison,
   renderComparisonMarkdown,
@@ -40,7 +40,7 @@ export interface BakeoffBackend {
 
 export interface BakeoffArtifact {
   schemaVersion: 1;
-  artifactType: 'psfn.decision_bakeoff';
+  artifactType: 'decision_bakeoff';
   runId: string;
   generatedAt: string;
   local: { id: string; model: string };
@@ -75,7 +75,7 @@ export async function runBakeoff(input: {
   const answeredBy = [...new Set(rows.flatMap(row => (row.record.jev.model ? [row.record.jev.model] : [])))];
   return {
     schemaVersion: 1,
-    artifactType: 'psfn.decision_bakeoff',
+    artifactType: 'decision_bakeoff',
     runId: input.runId,
     generatedAt: now().toISOString(),
     local: { id: input.local.id, model: input.local.model },
@@ -191,7 +191,7 @@ function parseCli(args: readonly string[]): CliOptions {
   const options: CliOptions = {
     live: false,
     runId: `decision-bakeoff-${new Date().toISOString().replace(/[:.]/g, '-')}`,
-    outputDir: path.resolve('eval/decision/results'),
+    outputDir: path.resolve('scripts/decision-eval/results'),
     jevModel: 'typesafe/jev-1.13',
     jevSnapshot: null,
   };

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { DecisionOutcome } from '../../../../src/primitives/llm/decision/types.js';
-import { QAO_JUDGE_RUBRIC, type QaoJudgeRunArtifact } from '../companion-shape/qao-judge.js';
+import type { DecisionOutcome } from '../../src/primitives/llm/decision/types.js';
+import { QAO_JUDGE_RUBRIC, type QaoJudgeRunArtifact } from '../../tools/evals/eval/companion-shape/qao-judge.js';
 import { BAKEOFF_CASES } from './bakeoff-cases.js';
 import { createFixtureBackend, runBakeoff, type BakeoffBackend } from './bakeoff.js';
 import { buildJevJudgeQuestions, compareJevWithCouncil } from './qao-jev-judge.js';
@@ -31,7 +31,7 @@ describe('decision bake-off', () => {
       now: () => new Date('2026-09-24T00:00:00.000Z'),
     });
     expect(artifact).toMatchObject({
-      artifactType: 'psfn.decision_bakeoff',
+      artifactType: 'decision_bakeoff',
       runId: 'test-run',
       caseCount: BAKEOFF_CASES.length,
       local: { model: 'fixture:fixture-local' },

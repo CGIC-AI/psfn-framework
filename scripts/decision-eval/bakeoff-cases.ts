@@ -3,8 +3,8 @@
 // wording mirrors the runtime sites; the participation questions come from the
 // runtime builder itself so they cannot drift.
 
-import { buildAppraisalDecisionQuestions } from '../../../../src/core/participation/appraiser-decision.js';
-import type { DecisionQuestionSet } from '../../../../src/primitives/llm/decision/types.js';
+import { buildAppraisalDecisionQuestions } from '../../src/core/participation/appraiser-decision.js';
+import type { DecisionQuestionSet } from '../../src/primitives/llm/decision/types.js';
 import type { DecisionTruth } from './aggregate.js';
 
 export interface BakeoffCase {

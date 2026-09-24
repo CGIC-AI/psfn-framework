@@ -3,6 +3,7 @@
 // copies) plus narrow callbacks; modules pick only the members they need and
 // never import GatewayServer itself.
 import type { JSONRPCServerAndClient } from 'json-rpc-2.0';
+import type { SharedCompanionWorkspaceReader } from '../../../persistence/workspaces/shared-workspace-reader.js';
 import type { WyomingShardRoutingConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { CompanionId } from '../../../shared/routing/companion-id.js';
 import type {
@@ -47,6 +48,8 @@ export interface GatewayServerPorts {
     companionId: CompanionId;
   };
   readonly resolveConnectionWorkspacePath: (conn: GatewayRpcConnection) => string;
+  readonly sharedWorkspaceReader: SharedCompanionWorkspaceReader | null;
+  readonly discordAccountRoutingActive: () => boolean;
   readonly flushInboundChannelReplay: (companionId: CompanionId) => void;
   readonly refreshConnectionHealth: (now?: number) => void;
   readonly alarmCompanionViolation: (

@@ -14,6 +14,7 @@ import type { GatewayRpcConnection } from '../transport.js';
 import type { GatewayPolicyDecision } from '../protocol.js';
 import type { GatewayNtfyNotifier } from '../ntfy-notifier.js';
 import type { GatewayFleetPostureCache } from '../fleet-posture-cache.js';
+import type { GatewayIcpAutonomyBroker } from '../icp-autonomy-broker.js';
 import type { GatewayServerOptions } from './options.js';
 import type { GatewayConnectionStatus } from './connection-status.js';
 
@@ -29,6 +30,7 @@ export interface GatewayServerPorts {
   readonly companionPostures: GatewayFleetPostureCache<GatewayRpcConnection>;
   readonly ntfyNotifier: GatewayNtfyNotifier;
   readonly operatorAlertDispatcher: GatewayOperatorAlertDispatcher;
+  readonly icpAutonomyBroker: GatewayIcpAutonomyBroker | null;
   readonly flushInboundChannelReplay: (companionId: CompanionId) => void;
   readonly refreshConnectionHealth: (now?: number) => void;
   readonly alarmCompanionViolation: (

@@ -137,6 +137,12 @@ journal, performs a full runtime restart (Compose restart, supervised restart,
 or `kubectl rollout restart` of all three Deployments), and re-proves the same
 persisted turn plus the authenticated surfaces afterwards.
 
+Garden `/health` reports admin-transport reachability only (one companion, or
+every registered fleet target). The Garden operator process opens no
+PostgreSQL store, so a degraded optional store (model usage, analysis traces,
+and so on) is reported by the process that owns it: the agent `/health`
+`memory` check lists it under `meta.postgresReadiness.degradedStores`.
+
 `*:down` on every path stops compute while retaining runtime data; resume with
 the corresponding `*:up` and then run `*:doctor`. Manual volume deletion,
 `docker compose down --volumes`, or Helm uninstall are not ordinary stop

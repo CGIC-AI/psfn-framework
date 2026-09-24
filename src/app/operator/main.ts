@@ -33,10 +33,7 @@ import {
 } from '../../operator/garden/garden-intake-quarantine-reads.js';
 import { FleetGardenAdminTransportProxy } from '../../operator/garden/fleet-transport-client.js';
 import { FleetModelUsageService } from '../../operator/garden/services/fleet-model-usage-service.js';
-import {
-  getPostgresStoreReadinessSnapshot,
-  sealPostgresStoreReadinessBeforeReady,
-} from '../../persistence/postgres/runtime-readiness.js';
+import { sealPostgresStoreReadinessBeforeReady } from '../../persistence/postgres/runtime-readiness.js';
 import { resolveGatewayAuthPlan } from './gateway-auth-plan.js';
 
 const log = createComponentLogger('OperatorSurface');
@@ -139,7 +136,6 @@ async function main(): Promise<void> {
           ),
         }
       : {}),
-    postgresReadiness: getPostgresStoreReadinessSnapshot,
   });
   await surface.init();
   const postgresReadiness = await sealPostgresStoreReadinessBeforeReady();

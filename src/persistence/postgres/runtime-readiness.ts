@@ -7,14 +7,6 @@ export type PostgresRuntimeDdlAuthority = 'isolated_workload_migration';
 interface PostgresStoreReadinessCatalogEntry {
   label: string;
   requirement: PostgresStoreReadinessRequirement;
-  /**
-   * An `optional` store whose terminal failure must still be visible on the
-   * operator health surface rather than folded into an anonymous degraded
-   * count (psfn-framework-6c6cq). The store stays optional — nothing refuses
-   * to boot — but a process that finished its retry budget without this store
-   * no longer advertises an unqualified healthy operator surface.
-   */
-  degradesOperatorReadiness?: true;
   failureDiagnostic?: {
     component: string;
     message: string;
@@ -113,10 +105,6 @@ export const POSTGRES_STORE_READINESS_CATALOG = {
   model_usage_diagnostics: {
     label: 'model usage diagnostics',
     requirement: 'optional',
-    // 6c6cq: a persistently unreadable model-usage ledger leaves Garden's cost
-    // and budget telemetry silently blank. The reader stays optional, but the
-    // operator surface must say so instead of reporting an unqualified ok.
-    degradesOperatorReadiness: true,
     failureDiagnostic: {
       component: 'ModelUsageStore',
       message: 'Model usage schema migration failed',
@@ -186,8 +174,6 @@ export interface PostgresStoreDegradation {
   store: PostgresStoreReadinessId;
   label: string;
   requirement: PostgresStoreReadinessRequirement;
-  /** Whether this degradation must be reflected on the operator health surface. */
-  degradesOperatorReadiness: boolean;
   mismatch: string;
 }
 
@@ -497,7 +483,6 @@ export class PostgresRuntimeReadiness {
           store: entry.store,
           label: classification.label,
           requirement: classification.requirement,
-          degradesOperatorReadiness: classification.degradesOperatorReadiness === true,
           mismatch: entry.error.mismatch,
         });
       }

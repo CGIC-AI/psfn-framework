@@ -51,7 +51,6 @@ import {
   verifyPeerCertificateSpiffeUri,
   type RequiredMtlsPeerFileConfig,
 } from '../../shared/net/mtls.js';
-import type { PostgresRuntimeReadinessSnapshot } from '../../persistence/postgres/runtime-readiness.js';
 
 const log = createComponentLogger('GardenOperatorSurface');
 const ADMIN_MAX_BODY_SIZE = 65_536;
@@ -86,8 +85,6 @@ export interface GardenOperatorSurfaceConfig {
   fleetChildAssertions?: GardenFleetChildAssertionClient;
   /** Required for a non-loopback fleet-auth Garden listener. */
   fleetSsoTls?: RequiredMtlsPeerFileConfig;
-  /** Process-lifetime optional-store degradation for public aggregate health. */
-  postgresReadiness?: () => PostgresRuntimeReadinessSnapshot;
 }
 
 export type { FleetGardenTransportProxyPort } from './fleet-transport-client.js';
@@ -538,44 +535,19 @@ export class GardenOperatorSurface implements Lifecycle {
     );
   }
 
+  /**
+   * Public aggregate health of the Garden operator surface: admin-transport
+   * reachability only (psfn-framework-yqqn7). This process opens no PostgreSQL
+   * store, so it has no store readiness of its own to report; a companion's
+   * optional-store degradation (model usage, analysis traces, ...) is reported
+   * by the process that owns the store, on that process's health checks.
+   */
   private async handleHealth(res: ServerResponse): Promise<void> {
     const probe = await this.routing.probe();
-    const postgresReadiness = this.config.postgresReadiness?.();
-    const degradedStores = postgresReadiness?.degraded ?? [];
-    const postgresDegraded = degradedStores.some(entry => entry.requirement === 'optional');
-    // psfn-framework-6c6cq. A degradation is only visible here AFTER
-    // `sealPostgresStoreReadinessBeforeReady` settled every task, so by
-    // construction a store listed below has already spent its whole retry
-    // budget: this is a persistent failure, not a transient one. An optional
-    // store the catalog marks `degradesOperatorReadiness` therefore stops the
-    // surface reporting an unqualified healthy status, instead of vanishing
-    // into an anonymous degraded count while its telemetry stays blank.
-    const postgresBlocksReadiness = postgresReadiness !== undefined && (
-      postgresReadiness.phase !== 'ready'
-      || degradedStores.some(entry => (
-        entry.requirement === 'required' || entry.degradesOperatorReadiness
-      ))
-    );
-    const postgresDependency = postgresReadiness
-      ? {
-          postgresStores: {
-            status: postgresDegraded ? 'degraded' : 'ok',
-            degradedCount: degradedStores.length,
-            // Named, so a persistently broken single store is diagnosable from
-            // the probe itself. Code-owned catalog identifiers only: the raw
-            // mismatch text never reaches this always-public response.
-            degradedStores: degradedStores.map(entry => ({
-              store: entry.store,
-              requirement: entry.requirement,
-              degradesOperatorReadiness: entry.degradesOperatorReadiness,
-            })),
-          },
-        }
-      : {};
     if (probe.kind === 'fleet') {
       const { readiness } = probe;
       if (res.writableEnded || res.destroyed) return;
-      const healthy = readiness.status === 'ready' && !postgresBlocksReadiness;
+      const healthy = readiness.status === 'ready';
       sendJson(res, healthy ? 200 : 503, {
         status: healthy ? 'ok' : 'degraded',
         uptime: process.uptime(),
@@ -585,7 +557,6 @@ export class GardenOperatorSurface implements Lifecycle {
         // reasons through this response.
         dependencies: {
           adminTransports: { status: readiness.status },
-          ...postgresDependency,
         },
       });
       return;
@@ -596,12 +567,11 @@ export class GardenOperatorSurface implements Lifecycle {
     }
 
     const payload = {
-      status: adminTransport.status === 'ok' && !postgresBlocksReadiness ? 'ok' : 'degraded',
+      status: adminTransport.status === 'ok' ? 'ok' : 'degraded',
       uptime: process.uptime(),
       gardenDenialsLastHour: getGardenDenialsLastHour(),
       dependencies: {
         adminTransport,
-        ...postgresDependency,
       },
     };
 

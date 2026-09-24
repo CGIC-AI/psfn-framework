@@ -314,7 +314,6 @@ const dynamicRoutes: readonly RouteTuple[] = [
   ['POST', '/api/admin/biographical-claims/:claimId/review'],
   [['GET', 'PUT', 'PATCH', 'DELETE'], '/api/admin/contacts/:id'],
   ['POST', '/api/admin/contacts/:id/merge'],
-  ['POST', '/api/admin/contacts/:id/channel-identity/transfer'],
   ['POST', '/api/admin/contacts/:id/unlink'],
   ['POST', '/api/admin/contacts/:id/conversation-channel/delete'],
   ['POST', '/api/admin/action-pipe/actions/:actionRef/acknowledge'],

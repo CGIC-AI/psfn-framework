@@ -301,7 +301,7 @@
       "recentParticipantWindowMessages": 75,
       "recentParticipantWindowMs": 21600000,
       "minDistinctHumanContacts": 2,
-      "groupCapableChannelTypes": ["discord", "buzz"],
+      "groupCapableChannelTypes": ["discord"],
       "fallbackModeWhenOneHuman": "direct",
       "excludeCompanionContact": true,
       "excludeSystemContacts": true,

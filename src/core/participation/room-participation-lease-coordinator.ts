@@ -172,7 +172,7 @@ export class RoomParticipationLeaseCoordinator {
     if (input.isDirectMessage === true) {
       return { outcome: 'skipped', reason: 'direct_message' };
     }
-    if (input.channelType !== 'discord' && input.channelType !== 'buzz') {
+    if (input.channelType !== 'discord') {
       // The lease is a verified group-room membership; other transports (ICP,
       // terminal, voice) have their own consent moments.
       return { outcome: 'skipped', reason: 'unsupported_channel' };

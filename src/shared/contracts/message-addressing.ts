@@ -123,7 +123,11 @@ export interface MessageAddressingMetadata {
   authorClass?: MessageAddressingAuthorClass;
 }
 
-/** Connectors that can assert transport-authoritative addressing. */
+/**
+ * Connectors that can assert transport-authoritative addressing. 'buzz' is a
+ * retired connector (psfn-framework-lef2o) kept only so persisted journal
+ * envelopes it wrote remain parseable; no live connector emits it.
+ */
 const MESSAGE_ADDRESSING_SOURCES = ['discord', 'buzz', 'telegram'] as const;
 
 export type MessageAddressingSource = typeof MESSAGE_ADDRESSING_SOURCES[number];

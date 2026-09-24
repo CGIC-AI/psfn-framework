@@ -135,6 +135,19 @@ describe('message addressing contract', () => {
   it('omits an unasserted author class instead of inventing a trusted default', () => {
     const parsed = parseMessageAddressingMetadata({
       schemaVersion: 2,
+      source: 'telegram',
+      author: { authorId: 'human-1', authorName: 'Morgan' },
+      observer: { authorId: 'bot-1', authorName: 'Lyra' },
+      mentionedTargets: [],
+      channel: { scope: 'group', channelId: 'telegram:-1001' },
+      resolvedAddressee: { kind: 'room', channelId: 'telegram:-1001' },
+    });
+    expect(parsed.authorClass).toBeUndefined();
+  });
+
+  it('still parses a persisted envelope written by the retired Buzz connector', () => {
+    const parsed = parseMessageAddressingMetadata({
+      schemaVersion: 2,
       source: 'buzz',
       author: { authorId: 'npub-1', authorName: 'Morgan' },
       observer: { authorId: 'npub-bot', authorName: 'Lyra' },
@@ -142,7 +155,7 @@ describe('message addressing contract', () => {
       channel: { scope: 'group', channelId: 'buzz-1' },
       resolvedAddressee: { kind: 'room', channelId: 'buzz-1' },
     });
-    expect(parsed.authorClass).toBeUndefined();
+    expect(parsed.source).toBe('buzz');
   });
 
   it('rejects an unknown addressing source and an unknown author class member', () => {

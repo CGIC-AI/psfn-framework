@@ -1,6 +1,6 @@
 // Real-Postgres proof that channel ingress is anchored (psfn-framework-ccgdz.2).
 //
-// The highest-volume ingress path — a Discord/Telegram/buzz chat body arriving
+// The highest-volume ingress path — a Discord/Telegram chat body arriving
 // through `screenChatMessageBody` — must produce a persisted receipt over the
 // exact admitted bytes, and the envelope snapshot that travels with the message
 // must carry that receipt's id. Every screening that produces no receipt says

@@ -2,7 +2,7 @@
 type: concept
 title: Channel Plugins
 description: The channel plugin contract — how channel adapters are declared, validated, credential-resolved, eligibility-gated, and attached to the gateway backplane via the ChannelPluginHost, the manifest-driven adapter loader, and the channels.json plugin sections.
-tags: [channel-plugins, channel-adapters, backplane, plugin-host, plugin-registry, eligibility, channels-json, credential-vault, multica, fail-closed]
+tags: [channel-plugins, channel-adapters, backplane, plugin-host, plugin-registry, eligibility, channels-json, credential-vault, fail-closed]
 verified:
   - by: openwiki/0.4.3
     at: 2026-08-28T13:30:04.287Z
@@ -23,12 +23,6 @@ sources:
     resource: repo://src/channels/backplane/registry-port.ts
   - id: openwiki-source-37a1709217ee148534fa7cd2
     resource: repo://src/channels/backplane/types.ts
-  - id: openwiki-source-65a3763570bdb7aaa77f367c
-    resource: repo://src/channels/multica/adapter.ts
-  - id: openwiki-source-35893e4dd91a17311329af46
-    resource: repo://src/channels/multica/origin.ts
-  - id: openwiki-source-e8fe16e192c6f79f6927a072
-    resource: repo://src/channels/multica/plugin.ts
   - id: openwiki-source-1f32e7474fe1c6a42875d023
     resource: repo://src/channels/plugins/builtin.ts
   - id: openwiki-source-ec8bd9f3110235aeef8a0aaa
@@ -72,8 +66,7 @@ neither a manifest adapter entry nor a plugin in the gateway composition.
 The authority for this page is `src/channels/plugins/*` and
 `src/channels/backplane/*` together with the gateway composition in
 `src/boundary/gateway/channel-surfaces.ts` and the startup order in
-`src/app/gateway/main.ts`. See [multica.md](multica.md) for the one built-in
-plugin end to end, [overview.md](overview.md) for the channels subsystem, and
+`src/app/gateway/main.ts`. See [overview.md](overview.md) for the channels subsystem, and
 <!-- openwiki: broken internal link [../chat-turn-lifecycle.md] file "../chat-turn-lifecycle.md" does not exist. Fix the href or restore the target, then delete this comment. -->
 [chat-turn-lifecycle.md](../chat-turn-lifecycle.md) for what happens to an
 inbound message after an adapter delivers it.
@@ -140,7 +133,7 @@ rejected fail-closed instead of persisted.
 plugin-declared adapters. It is constructed via `ChannelPluginHost.load` and
 then driven by the gateway through explicit phases. The gateway's actual call
 order is **load → wireMessages → initialize → start → stop**: `wireMessages`
-runs before `initialize`/`start` because adapters such as Multica refuse to
+runs before `initialize`/`start` because a plugin adapter may refuse to
 start without the inbound message handler and operator-alert handler that
 wiring installs.
 
@@ -329,20 +322,12 @@ same `requestAgentVoiceStream` and `notifyOperator` entry points.
 
 ## Builtin plugins
 
-`createBuiltinChannelPlugins` returns exactly one plugin today: Multica
-(`src/channels/multica/plugin.ts`), the gateway-to-Multica work-item channel
-(see [multica.md](multica.md) for the adapter end to end). Its `parseConfig` is
-the reference example of the fail-closed section contract: an inline `token`
-field is rejected in favor of `tokenRef`; unknown keys throw; `workspaceId`
-must be a lowercase RFC-4122 UUID; `baseUrl` must be HTTPS unless loopback and
-free of credentials, path, query, or fragment; `pollIntervalMs` must sit in
-`[250, 60_000]`; and an `enabled: true` section must configure `baseUrl`,
-`workspaceId`, `companionId`, `tokenRef`, and `pollIntervalMs`. The declared
-credential need is id `token` with description `Multica gateway token`.
-`create` fails when an enabled plugin has no companion or no resolved token,
-and when the plugin needs its own runtime ownership it derives a Postgres
-runtime lease from `context.postgresDatabaseUrl` — falling back fail-closed if
-the gateway did not supply one.
+`createBuiltinChannelPlugins` returns no plugins today. The Buzz and Multica
+plugins were removed (psfn-framework-lef2o); a generic channel adapter
+interface (psfn-framework-pus8m) is the planned replacement. The host,
+registry, section parser, and isolation supervisor stay in place, and
+`channels.json` keys `buzz` or `multica` fail startup with a pointer to the
+`migrate-required-settings-blocks` owner-file migration that strips them.
 
 ## Fail-closed invariants
 

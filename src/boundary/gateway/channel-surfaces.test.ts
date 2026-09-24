@@ -21,34 +21,34 @@ async function createInput(): Promise<{
   input: WireGatewayChannelMessagesInput;
   discordHandler: ((message: any) => Promise<any>) | undefined;
   telegramHandler: ((message: any) => Promise<any>) | undefined;
-  multicaHandler: ((message: any, options?: any) => Promise<any>) | undefined;
-  multicaAlertHandler: ((alert: any) => Promise<void>) | undefined;
+  probeHandler: ((message: any, options?: any) => Promise<any>) | undefined;
+  probeAlertHandler: ((alert: any) => Promise<void>) | undefined;
 }> {
   let discordHandler: ((message: any) => Promise<any>) | undefined;
   let telegramHandler: ((message: any) => Promise<any>) | undefined;
-  let multicaHandler: ((message: any, options?: any) => Promise<any>) | undefined;
-  let multicaAlertHandler: ((alert: any) => Promise<void>) | undefined;
+  let probeHandler: ((message: any, options?: any) => Promise<any>) | undefined;
+  let probeAlertHandler: ((alert: any) => Promise<void>) | undefined;
 
   const plugin: ChannelPlugin = {
-    manifest: { id: 'multica', label: 'Multica' },
+    manifest: { id: 'probe', label: 'Probe' },
     parseConfig: () => ({ enabled: true, credentials: [], config: {} }),
     create: () => ({
       adapter: {
-        id: 'multica',
+        id: 'probe',
         start: async () => undefined,
         stop: async () => undefined,
         onMessage: (handler) => {
-          multicaHandler = handler as (message: any, options?: any) => Promise<any>;
+          probeHandler = handler as (message: any, options?: any) => Promise<any>;
         },
       } as ChannelAdapterPort,
       onOperatorAlert: (handler) => {
-        multicaAlertHandler = handler;
+        probeAlertHandler = handler;
       },
     }),
   };
   const plugins = await ChannelPluginHost.load({
     registry: createChannelPluginRegistry([plugin]),
-    sections: { multica: { id: 'multica', enabled: true, credentials: [], config: {} } },
+    sections: { probe: { id: 'probe', enabled: true, credentials: [], config: {} } },
     vault: createStaticCredentialVault({}),
     supervisor: new ChannelSurfaceSupervisor({
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -95,11 +95,11 @@ async function createInput(): Promise<{
     get telegramHandler() {
       return telegramHandler;
     },
-    get multicaHandler() {
-      return multicaHandler;
+    get probeHandler() {
+      return probeHandler;
     },
-    get multicaAlertHandler() {
-      return multicaAlertHandler;
+    get probeAlertHandler() {
+      return probeAlertHandler;
     },
   };
 }
@@ -179,44 +179,44 @@ describe('wireGatewayChannelMessages', () => {
     });
   });
 
-  it('routes Multica work through the same companion request pipeline', async () => {
+  it('routes Probe work through the same companion request pipeline', async () => {
     const setup = await createInput();
 
     wireGatewayChannelMessages(setup.input);
 
     const controller = new AbortController();
-    await setup.multicaHandler?.({
-      channelId: 'multica:issue:42',
-      channelType: 'multica',
+    await setup.probeHandler?.({
+      channelId: 'probe:issue:42',
+      channelType: 'api',
       content: 'manage the squad',
     }, { signal: controller.signal });
 
     expect(setup.input.gateway.requestAgentVoiceStream).toHaveBeenCalledWith(
       {
-        channelId: 'multica:issue:42',
-        channelType: 'multica',
+        channelId: 'probe:issue:42',
+        channelType: 'api',
         content: 'manage the squad',
       },
       { signal: controller.signal },
     );
   });
 
-  it('routes terminal Multica failures to the operator alert dispatcher', async () => {
+  it('routes terminal Probe failures to the operator alert dispatcher', async () => {
     const setup = await createInput();
     wireGatewayChannelMessages(setup.input);
 
-    await setup.multicaAlertHandler?.({
-      title: 'Multica channel stopped',
+    await setup.probeAlertHandler?.({
+      title: 'Probe channel stopped',
       message: 'Heartbeat failed after 3 attempts',
-      idempotencyKey: 'multica-channel:heartbeat',
+      idempotencyKey: 'probe-channel:heartbeat',
     });
 
     expect(setup.input.gateway.notifyOperator).toHaveBeenCalledWith({
-      sender: { kind: 'system', provenance: 'system.channels.multica_failure' },
-      title: 'Multica channel stopped',
+      sender: { kind: 'system', provenance: 'system.channels.probe_failure' },
+      title: 'Probe channel stopped',
       message: 'Heartbeat failed after 3 attempts',
       priority: 5,
-      idempotencyKey: 'multica-channel:heartbeat',
+      idempotencyKey: 'probe-channel:heartbeat',
     });
   });
 
@@ -235,10 +235,10 @@ describe('wireGatewayChannelMessages', () => {
     });
     wireGatewayChannelMessages(setup.input);
 
-    await setup.multicaAlertHandler?.({
-      title: 'Multica channel stopped',
+    await setup.probeAlertHandler?.({
+      title: 'Probe channel stopped',
       message: 'Heartbeat failed after 3 attempts',
-      idempotencyKey: 'multica-channel:heartbeat',
+      idempotencyKey: 'probe-channel:heartbeat',
     });
 
     expect(dispatch).toHaveBeenCalledOnce();

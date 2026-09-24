@@ -43,7 +43,7 @@ export interface SpeakingArbiterLaneDeps {
   coreRuntime: AgentCoreRuntime;
   gatewaySender: {
     send: (
-      channelType: 'discord' | 'buzz',
+      channelType: 'discord',
       channelId: string,
       content: string,
     ) => Promise<void>;

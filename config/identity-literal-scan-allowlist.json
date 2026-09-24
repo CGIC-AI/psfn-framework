@@ -1885,24 +1885,6 @@
       "pattern": "identity-legacy-slug"
     },
     {
-      "path": "src/channels/multica/adapter.ts",
-      "contains": "PSFN",
-      "reason": "Multica registration labels and protocol errors name the framework runtime boundary, not a companion identity or persona default (psfn-framework-87nkt).",
-      "pattern": "identity-proper-name"
-    },
-    {
-      "path": "src/channels/multica/adapter.ts",
-      "contains": "psfn",
-      "reason": "The Multica wire contract requires the honest fixed provider discriminator and daemon namespace; this product protocol identifier is not a companion identity (psfn-framework-87nkt).",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/channels/multica/plugin.ts",
-      "contains": "psfn",
-      "reason": "The Postgres application_name for the Multica runtime lease names the framework runtime boundary for connection attribution, not a companion identity or persona default (psfn-framework-lj32q).",
-      "pattern": "identity-legacy-slug"
-    },
-    {
       "path": "scripts/verify-chart-render.ts",
       "contains": "psfn",
       "reason": "The chart render gate names the repository's generic public Helm chart directory deploy/helm/psfn and its release/namespace identifiers, not a companion identity.",

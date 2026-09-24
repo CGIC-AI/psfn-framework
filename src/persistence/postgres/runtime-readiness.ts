@@ -37,7 +37,6 @@ export const POSTGRES_STORE_READINESS_CATALOG = {
   scheduler_lane_state: { label: 'scheduler lane state', requirement: 'required' },
   letters: { label: 'letters', requirement: 'required' },
   doing_mirror: { label: 'doing mirror', requirement: 'required' },
-  buzz_recovery: { label: 'Buzz recovery', requirement: 'required' },
   introspection: { label: 'introspection landmarks', requirement: 'required' },
   background_work: { label: 'background work', requirement: 'required' },
   automata_runs: { label: 'automata runs', requirement: 'required' },

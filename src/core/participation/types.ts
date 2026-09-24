@@ -53,7 +53,7 @@ export interface EndogenousRoomParticipationCandidate {
   /** Hash-bound identity of the companion's exact disposition and room choice. */
   candidateId: string;
   channelId: string;
-  channelType: 'discord' | 'buzz';
+  channelType: 'discord';
   companionId: string;
   /** Companion-authored local topic/intent; never represented as participant speech. */
   roomIntent: string;

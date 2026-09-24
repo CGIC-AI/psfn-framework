@@ -64,7 +64,7 @@ builds by is [`docs/PSFN_PROJECT_CHARTER.md`](./docs/PSFN_PROJECT_CHARTER.md).
   sink gates, and drift review. See
   [`docs/security/context-envelope.md`](./docs/security/context-envelope.md) and
   [`docs/security/cognitive-security.md`](./docs/security/cognitive-security.md).
-- **Channels and embodiment**: Discord (text + voice), Telegram, Multica, an
+- **Channels and embodiment**: Discord (text + voice), Telegram, an
   OpenAI-compatible API, the Garden operator UI, a companion PWA, and Satellite
   Hub endpoints with situated presence and Home Assistant world tooling.
 - **Autonomy surfaces**: scheduler-driven reflection, free-time work, weighted
@@ -165,7 +165,7 @@ on the framework.
 src/
   app/           # gateway / agent / operator entrypoints + composition
   boundary/      # gateway RPC, policy, privileged adapters, custody
-  channels/      # API, Discord, Telegram, Multica, voice, backplane
+  channels/      # API, Discord, Telegram, voice, backplane
   core/          # SubstrateAgent, prompts, scheduler, session, identity
   faculties/     # memory, skills, subagents, shards, media, wiki
   operator/      # Garden server, admin routes, services

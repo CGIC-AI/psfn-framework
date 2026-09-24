@@ -1,4 +1,5 @@
 import { isRecord } from '../../shared/utils/types.js';
+import { isRetiredChannelPluginId } from './retired.js';
 import type { ChannelPluginLoadedSection, ChannelPluginRegistry } from './types.js';
 
 const FIRST_CLASS_CHANNEL_CONFIG_KEYS: Record<string, true> = {
@@ -17,6 +18,12 @@ export function parseChannelPluginSections(
   for (const key of Object.keys(scopedRoot)) {
     if (FIRST_CLASS_CHANNEL_CONFIG_KEYS[key]) continue;
     const plugin = registry.get(key);
+    if (!plugin && isRetiredChannelPluginId(key)) {
+      throw new Error(
+        `Channel plugin "${key}" was removed; run migrate-required-settings-blocks --apply `
+        + 'to strip its channels.json section',
+      );
+    }
     if (!plugin) {
       throw new Error(`Unknown channel plugin "${key}"`);
     }

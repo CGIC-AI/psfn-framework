@@ -90,15 +90,15 @@ describe('buildBubblewrapArgs', () => {
   it('shares the gateway network only for a policy-resolved top-level command', () => {
     const args = buildBubblewrapArgs({
       ...request(),
-      command: 'multica',
-      executableCommand: '/usr/local/bin/multica',
+      command: 'example-cli',
+      executableCommand: '/usr/local/bin/example-cli',
       args: ['workspace', 'list', '--output', 'json'],
       networkAccess: true,
     });
 
     expect(args).not.toContain('--unshare-net');
     expect(args.slice(-5)).toEqual([
-      '/usr/local/bin/multica',
+      '/usr/local/bin/example-cli',
       'workspace',
       'list',
       '--output',

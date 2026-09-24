@@ -263,7 +263,7 @@ describe('session runtime composition transcript projection wiring', () => {
       automataRetentionCompanionId: 'companion-test',
       enableContinuity: true,
       continuityChannelIds: ['discord:configured-room'],
-      continuityChannelPrefixes: ['multica:11111111-1111-4111-8111-111111111111:'],
+      continuityChannelPrefixes: ['psfn-amica:configured-workspace:'],
     });
     // Continuity content only renders when it resolves against a live L0
     // journal row, so seed through the manager (which stamps sourceEntryId)
@@ -285,16 +285,16 @@ describe('session runtime composition transcript projection wiring', () => {
       'contact-1',
     )).not.toBeNull();
     expect(composition.sessionManager.recordUserMessage(
-      'multica:11111111-1111-4111-8111-111111111111:chat:member-session',
-      'Configured Multica workspace entry',
+      'psfn-amica:configured-workspace:member-session',
+      'Configured prefixed workspace entry',
       'contact-1',
       'Contact',
       true,
       'contact-1',
     )).not.toBeNull();
     expect(composition.sessionManager.recordUserMessage(
-      'multica:22222222-2222-4222-8222-222222222222:chat:foreign-session',
-      'Foreign Multica workspace entry',
+      'psfn-amica:foreign-workspace:foreign-session',
+      'Foreign prefixed workspace entry',
       'contact-1',
       'Contact',
       true,
@@ -308,7 +308,7 @@ describe('session runtime composition transcript projection wiring', () => {
       channelId: 'api:current',
     }).map(entry => entry.content)).toEqual([
       'Configured room entry',
-      'Configured Multica workspace entry',
+      'Configured prefixed workspace entry',
     ]);
   });
 

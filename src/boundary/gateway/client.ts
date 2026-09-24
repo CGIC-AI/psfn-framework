@@ -950,9 +950,6 @@ export class GatewayClient implements
     await this.transportRuntime.request('llm.invalidate_model_discovery', {}) as LLMInvalidateModelDiscoveryResult;
   }
   // ── Channel methods ──
-  async channelSend(channelType: 'buzz', channelId: string, content: string): Promise<void> {
-    await this.transportRuntime.request('channel.send', { channelType, channelId, content });
-  }
   async discordSend(channelId: string, content: string): Promise<void> {
     await this.transportRuntime.request('discord.send', {
       channelId,

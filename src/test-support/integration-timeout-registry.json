@@ -287,13 +287,6 @@
       "note": "psfn-framework-52epa: beforeAll harness start (container reuse or cold initdb plus semaphore wait) and afterAll drop, matching the sibling background-work-store suite's 90s hook cap. Baseline is the harness's own worst-case cold start on this host."
     },
     {
-      "file": "src/persistence/postgres/buzz-recovery-store.integration.test.ts",
-      "timeoutMs": 120000,
-      "measuredBaselineMs": 1000,
-      "baselineSource": "measured",
-      "note": "y2mqh.2 Buzz recovery persistence, causal-chain, membership-order, and cancellation suite against the real containerized Postgres harness. Worst observed full-file wall was 0.94s on this host (2026-08-27); the repo-standard 120s cap preserves ample headroom for cold-start and shared-heavy harness variance."
-    },
-    {
       "file": "src/persistence/postgres/companion-presence.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": null,
@@ -635,6 +628,13 @@
       "measuredBaselineMs": 3000,
       "baselineSource": "measured",
       "note": "S12B custody stores: real-Postgres suite measured warm under 3s; 120s cap keeps >2x headroom on cold container start."
+    },
+    {
+      "file": "src/persistence/postgres/gateway-audit-retired-buzz-tables.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 1000,
+      "baselineSource": "measured",
+      "note": "psfn-framework-lef2o: real-Postgres proof that the gateway audit chain drops the retired Buzz recovery tables idempotently; warm full-file wall measured at 0.44s on this host (2026-09-24); 120s cap keeps >2x headroom on cold container start."
     },
     {
       "file": "src/persistence/postgres/gateway-ingress-receipt.integration.test.ts",

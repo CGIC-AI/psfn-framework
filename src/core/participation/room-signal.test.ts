@@ -291,7 +291,7 @@ describe('evaluateRoomSignalEligibility canonical name detection', () => {
   it('reads the same line identically on every connector', () => {
     // Cross-connector parity: nothing in the staged decision may depend on
     // which adapter translated the event.
-    const connectors = ['discord', 'telegram', 'buzz'] as const;
+    const connectors = ['discord', 'telegram'] as const;
     for (const content of [
       'Lyra, can you help?',
       '<@bot-1> can you look?',
@@ -308,15 +308,14 @@ describe('evaluateRoomSignalEligibility canonical name detection', () => {
         settings: settings(),
       }));
       expect(results[1]).toEqual(results[0]);
-      expect(results[2]).toEqual(results[0]);
     }
   });
 
   it('gives an untrusted author the same direct-address-only bar on every connector', () => {
-    // The Buzz trust floor now matches Discord/Telegram (a room author the
+    // Every connector applies the same trust floor (a room author the
     // connector cannot vouch for is `public_contact`), so the same untrusted
     // author is admitted only when actually addressed — never contextually.
-    for (const connector of ['discord', 'telegram', 'buzz'] as const) {
+    for (const connector of ['discord', 'telegram'] as const) {
       expect(evaluate({
         observation: observation({
           connector,

@@ -138,7 +138,7 @@ describe('AdminContactsDataService', () => {
     if (sourceIsMachine) {
       expect(await contactStore.setMachineIntelligence(source.id, true, 'operator:test')).toBe(true);
     }
-    await contactStore.linkChannelIdentity(source.id, 'multica', 'workspace-system');
+    await contactStore.linkChannelIdentity(source.id, 'api', 'workspace-system');
     const targetBefore = await contactStore.getById(target.id);
     const sourceBefore = await contactStore.getById(source.id);
 
@@ -151,7 +151,7 @@ describe('AdminContactsDataService', () => {
       ok: false,
       message: 'Cannot merge human and machine-intelligence contacts',
     });
-    expect(await contactStore.getByChannelIdentity('multica', 'workspace-system'))
+    expect(await contactStore.getByChannelIdentity('api', 'workspace-system'))
       .toMatchObject({ id: source.id });
     expect(await contactStore.getById(target.id)).toEqual(targetBefore);
     expect(await contactStore.getById(source.id)).toEqual(sourceBefore);
@@ -202,58 +202,6 @@ describe('AdminContactsDataService', () => {
     expect(result).toEqual({ ok: false, message: 'Fleet contact merging is unavailable' });
     expect((await contactStore.getById(target.id))?.archivedAt).toBeUndefined();
     expect((await contactStore.getById(source.id))?.archivedAt).toBeUndefined();
-  });
-
-  it('moves one exact Multica member identity onto the Fleet owner without merging contacts', async () => {
-    const { contactStore, service } = await createServiceHarness();
-    const target = await contactStore.upsert({ displayName: 'Fleet owner' });
-    const source = await contactStore.upsert({ displayName: 'Multica member duplicate' });
-    const system = await contactStore.upsert({ displayName: 'Multica system' });
-    expect(await contactStore.setMachineIntelligence(system.id, true, 'system:test')).toBe(true);
-    const memberUserId = 'multica:member:99999999-9999-4999-8999-999999999999';
-    const systemUserId = 'multica:system:11111111-1111-4111-8111-111111111111';
-    expect(await contactStore.linkChannelIdentity(source.id, 'multica', memberUserId)).toBe('linked');
-    expect(await contactStore.linkChannelIdentity(system.id, 'multica', systemUserId)).toBe('linked');
-
-    const result = await service.transferChannelIdentity(
-      target.id,
-      JSON.stringify({ sourceContactId: source.id, channel: 'multica', userId: memberUserId }),
-      authenticatedContactMutationContext({ contactId: target.id }),
-    );
-
-    expect(result).toMatchObject({ ok: true, message: 'Multica member channel moved to this contact' });
-    expect(await contactStore.getByChannelIdentity('multica', memberUserId)).toMatchObject({ id: target.id });
-    expect(await contactStore.getByChannelIdentity('multica', systemUserId)).toMatchObject({ id: system.id });
-    expect(await contactStore.getById(source.id)).toMatchObject({ id: source.id });
-    expect(await contactStore.getById(system.id)).toMatchObject({ isMachineIntelligence: true });
-  });
-
-  it('refuses to move a Multica system identity onto a human contact', async () => {
-    const { contactStore, service } = await createServiceHarness();
-    const target = await contactStore.upsert({ displayName: 'Fleet owner' });
-    const source = await contactStore.upsert({ displayName: 'Multica system' });
-    expect(await contactStore.setMachineIntelligence(source.id, true, 'system:test')).toBe(true);
-    const systemUserId = 'multica:system:11111111-1111-4111-8111-111111111111';
-    expect(await contactStore.linkChannelIdentity(source.id, 'multica', systemUserId)).toBe('linked');
-
-    const result = await service.transferChannelIdentity(
-      target.id,
-      JSON.stringify({ sourceContactId: source.id, channel: 'multica', userId: systemUserId }),
-      authenticatedContactMutationContext({ contactId: target.id }),
-    );
-
-    expect(result).toEqual({ ok: false, message: 'Only Multica member identities can move between human contacts' });
-    expect(await contactStore.getByChannelIdentity('multica', systemUserId)).toMatchObject({ id: source.id });
-  });
-
-  it.each(['null', '{"sourceContactId":42,"channel":"multica","userId":true}'])('rejects malformed channel-transfer payload %s', async body => {
-    const { contactStore, service } = await createServiceHarness();
-    const target = await contactStore.upsert({ displayName: 'Fleet owner' });
-    await expect(service.transferChannelIdentity(
-      target.id,
-      body,
-      authenticatedContactMutationContext({ contactId: target.id }),
-    )).resolves.toMatchObject({ ok: false });
   });
 
   it.each([

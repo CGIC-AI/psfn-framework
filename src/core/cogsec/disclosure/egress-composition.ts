@@ -38,7 +38,6 @@ import type {
  * companion handoffs retain their existing sink/trifecta controls.
  */
 export const DISCLOSURE_SOCIAL_EGRESS_METHODS: ReadonlySet<string> = new Set([
-  'channel.send',
   'discord.send',
   'discord.sendMedia',
   'discord.sendReaction',

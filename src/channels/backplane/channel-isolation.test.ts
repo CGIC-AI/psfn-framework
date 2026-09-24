@@ -83,10 +83,10 @@ describe('ChannelSurfaceSupervisor', () => {
     const start = vi.fn(async () => {
       throw new Error('fetch failed');
     });
-    await supervisor.start({ surfaceId: 'buzz', start });
+    await supervisor.start({ surfaceId: 'beta', start });
     await vi.advanceTimersByTimeAsync(10_000);
     expect(start).toHaveBeenCalledTimes(2);
-    expect(supervisor.stateOf('buzz')).toBe('disabled');
+    expect(supervisor.stateOf('beta')).toBe('disabled');
     expect(failures.map(failure => failure.terminal)).toEqual([false, true]);
   });
 
@@ -96,13 +96,13 @@ describe('ChannelSurfaceSupervisor', () => {
       throw new Error('fetch failed');
     });
     const stop = vi.fn(async () => undefined);
-    await supervisor.start({ surfaceId: 'multica', start, cleanup: stop });
+    await supervisor.start({ surfaceId: 'alpha', start, cleanup: stop });
     expect(stop).toHaveBeenCalledTimes(1);
-    await supervisor.stop({ surfaceId: 'multica' }, stop);
+    await supervisor.stop({ surfaceId: 'alpha' }, stop);
     await vi.advanceTimersByTimeAsync(10_000);
     expect(start).toHaveBeenCalledTimes(1);
     expect(stop).toHaveBeenCalledTimes(1);
-    expect(supervisor.stateOf('multica')).toBe('stopped');
+    expect(supervisor.stateOf('alpha')).toBe('stopped');
   });
 
   it('still runs stop at shutdown for a failed surface that had no cleanup', async () => {

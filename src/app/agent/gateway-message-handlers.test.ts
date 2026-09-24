@@ -1155,17 +1155,17 @@ describe('registerGatewayMessageHandlers', () => {
     });
   });
 
-  it('routes plugin room observations through group memory and the shared speaking arbiter', async () => {
+  it('routes non-Discord room observations through group memory and the shared speaking arbiter', async () => {
     const message = makeMessage({
-      id: 'buzz-observe-1',
-      channelId: 'buzz:relay.example:room-1',
-      channelType: 'buzz',
-      routing: { source: 'buzz', responseMode: 'observe' },
+      id: 'telegram-observe-1',
+      channelId: 'telegram:-1001234567890',
+      channelType: 'telegram',
+      routing: { source: 'telegram', responseMode: 'observe' },
     });
     const candidate: ParticipationCandidate = {
       schemaVersion: 1,
       channelId: message.channelId,
-      channelType: 'buzz',
+      channelType: 'telegram',
       sourceMessageId: message.id,
       trigger: 'direct_address',
       triggerAuthorId: message.authorId,
@@ -1183,7 +1183,7 @@ describe('registerGatewayMessageHandlers', () => {
       channelId: message.channelId,
       triggerEventId: message.id,
       companionId: '11111111-1111-4111-8111-111111111111',
-      episodeId: 'buzz-episode-1',
+      episodeId: 'telegram-episode-1',
       reservedAtMs: 1_000,
       expiresAtMs: 2_000,
       status: 'reserved',
@@ -1237,7 +1237,7 @@ describe('registerGatewayMessageHandlers', () => {
       expect.objectContaining({
         kind: 'inbound_room_message',
         channelId: message.channelId,
-        channelType: 'buzz',
+        channelType: 'telegram',
         sourceEventId: message.id,
       }),
       expect.any(Number),

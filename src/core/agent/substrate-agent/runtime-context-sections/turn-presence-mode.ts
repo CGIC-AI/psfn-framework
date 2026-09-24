@@ -77,6 +77,23 @@ export function isPlacelessSatelliteTurn(message: Pick<SubstrateMessage, 'routin
 }
 
 /**
+ * The world tool's deictic default place (perceive/list/move without placeId).
+ * The turn's own bound place wins; a placeless satellite endpoint gets NO
+ * default, exactly as the situated block renders its location as unknown
+ * (psfn-framework-fwlzf, sibling of 1n6s9); every other turn falls back to the
+ * remembered emanation.
+ */
+export function resolveDeicticSituatedPlaceId(input: {
+  turnOwnPlaceId: string | undefined;
+  placelessSatelliteTurn: boolean;
+  trackerPlaceId: () => string | undefined;
+}): string | undefined {
+  if (input.turnOwnPlaceId !== undefined) return input.turnOwnPlaceId;
+  if (input.placelessSatelliteTurn) return undefined;
+  return input.trackerPlaceId();
+}
+
+/**
  * Classify a turn's presence mode from its routing/channel origin.
  *
  * Physical-emanation origin = structured device routing: satellite metadata

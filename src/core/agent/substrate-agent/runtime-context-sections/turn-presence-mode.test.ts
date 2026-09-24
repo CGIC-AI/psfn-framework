@@ -10,6 +10,7 @@ import type { SubstrateMessage } from '../../../../shared/contracts/runtime.js';
 import type { PlacesRegistryConfig } from '../../../../shared/contracts/places-registry.js';
 import type { SituatedLocation } from '../../../self-model/state.js';
 import {
+  resolveDeicticSituatedPlaceId,
   classifyTurnPresenceMode,
   resolveTurnOwnPlaceId,
   resolveTurnSituatedFallbackPlaceId,
@@ -254,5 +255,30 @@ describe('resolveTurnSituatedFallbackPlaceId', () => {
       message: makeMessage({ source: 'discord' }),
       placesRegistry: REGISTRY,
     })).toBeUndefined();
+  });
+});
+
+describe('resolveDeicticSituatedPlaceId (fwlzf)', () => {
+  const tracker = () => 'kitchen';
+
+  it('gives a placeless satellite turn no deictic default instead of the tracker room', () => {
+    expect(resolveDeicticSituatedPlaceId({
+      turnOwnPlaceId: undefined,
+      placelessSatelliteTurn: true,
+      trackerPlaceId: tracker,
+    })).toBeUndefined();
+  });
+
+  it('keeps the turn-bound place first and the tracker fallback for other turns', () => {
+    expect(resolveDeicticSituatedPlaceId({
+      turnOwnPlaceId: 'office',
+      placelessSatelliteTurn: false,
+      trackerPlaceId: tracker,
+    })).toBe('office');
+    expect(resolveDeicticSituatedPlaceId({
+      turnOwnPlaceId: undefined,
+      placelessSatelliteTurn: false,
+      trackerPlaceId: tracker,
+    })).toBe('kitchen');
   });
 });

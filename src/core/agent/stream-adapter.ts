@@ -71,8 +71,10 @@ import {
 } from '../../primitives/llm/client-response-helpers.js';
 import {
   applyExactExplicitToolArguments,
+  assertExactExplicitToolArgumentsAdmissible,
   assertExplicitToolResponseSatisfied,
   isMissingRequiredToolCallError,
+  isRuntimeAuthoredTurnTrigger,
   resolveExplicitToolContract,
 } from '../../primitives/llm/explicit-tool-request.js';
 import {
@@ -321,6 +323,12 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
     : DEFAULT_BASE_DELAY_MS;
 
   return (async function* executeWithRetry() {
+    // Participant-authored exact arguments the active execution schema refuses
+    // are a request defect, not a model failure: fail before any provider call.
+    assertExactExplicitToolArgumentsAdmissible({
+      contract: explicitToolContract,
+      tools: executionTools,
+    });
     let retryAttempt = 0;
     let missingRequiredCallRetries = retryAttempt;
     let corruptEmptyArgumentRetries = retryAttempt;
@@ -490,7 +498,7 @@ function hasExplicitToolExecutionRequest(context: unknown): boolean {
   const latestUserMessage = [...context.messages]
     .reverse()
     .find(message => isRecord(message) && message.role === 'user');
-  if (!isRecord(latestUserMessage)) return false;
+  if (!isRecord(latestUserMessage) || isRuntimeAuthoredTurnTrigger(latestUserMessage)) return false;
   const content = latestUserMessage.content;
   const requestText = typeof content === 'string'
     ? content

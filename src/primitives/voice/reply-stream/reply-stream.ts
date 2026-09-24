@@ -21,6 +21,7 @@
 // by construction.
 
 import { createStreamingHistoryStampStripper } from '../../../shared/utils/history-stamp-hygiene.js';
+import { MISSING_IMAGE_ATTACHMENT_CORRECTION } from '../../images/attachment-claim-guard.js';
 import { evaluateSegmentGates } from './content-gate.js';
 import { createReplySegmenter } from './segmenter.js';
 import type {
@@ -61,6 +62,10 @@ export function createVoiceReplyStream(options: VoiceReplyStreamOptions): VoiceR
 
   const committed: CommittedSegment[] = [];
   let committedConcat = '';
+  // Source text of every segment the gates consumed (healed or not); the
+  // defensive prefix invariant is over the generation, not the spoken text.
+  let consumedConcat = '';
+  let healedClaim = false;
   // Every stripped delta seen, for the defensive prefix invariant.
   let accumulatedStripped = '';
 
@@ -83,17 +88,25 @@ export function createVoiceReplyStream(options: VoiceReplyStreamOptions): VoiceR
         state = 'aborted';
         return { committed: out, aborted: { reason: outcome.reason } };
       }
-      const segment: CommittedSegment = { seq: seq++, text, turnId, cancellationId };
-      committed.push(segment);
-      committedConcat += text;
-      // Defensive Law-18 invariant: everything committed is a verbatim in-order
-      // prefix of the stripped generation. Never false by construction.
-      if (!accumulatedStripped.startsWith(committedConcat)) {
-        throw new ReplyStreamReconciliationError(committedConcat, accumulatedStripped);
+      consumedConcat += text;
+      // Defensive Law-18 invariant: every consumed segment is a verbatim
+      // in-order prefix of the stripped generation. Never false by construction.
+      if (!accumulatedStripped.startsWith(consumedConcat)) {
+        throw new ReplyStreamReconciliationError(consumedConcat, accumulatedStripped);
       }
-      out.push(segment);
+      const spoken = outcome.action === 'heal' ? outcome.text : text;
+      if (outcome.action === 'heal') healedClaim = true;
+      if (spoken.length === 0) continue;
+      out.push(commitSegment(spoken));
     }
     return { committed: out };
+  }
+
+  function commitSegment(text: string): CommittedSegment {
+    const segment: CommittedSegment = { seq: seq++, text, turnId, cancellationId };
+    committed.push(segment);
+    committedConcat += text;
+    return segment;
   }
 
   return {
@@ -137,6 +150,12 @@ export function createVoiceReplyStream(options: VoiceReplyStreamOptions): VoiceR
       const result = commitSegments(tail);
       if (result.aborted) {
         return { kind: 'abort', reason: result.aborted.reason, segments: committed };
+      }
+      // A reply that was nothing but an unsupported image claim speaks the
+      // canonical correction, exactly as the batch healer's final text does,
+      // rather than ending in silence.
+      if (healedClaim && committedConcat.trim().length === 0) {
+        commitSegment(MISSING_IMAGE_ATTACHMENT_CORRECTION);
       }
       // Fail-closed reconciliation tripwire (Law 18). Relaxed only on the live
       // voice-streaming path (reconcileFinalContent: false), where the spoken

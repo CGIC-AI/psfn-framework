@@ -679,7 +679,7 @@
       "note": "Code-owned fleet-auth envelope bound: rejects oversized device assertions before compact-token parsing and verification."
     },
     {
-      "file": "src/boundary/fleet-auth/hub-device-guest-attachments.ts",
+      "file": "src/boundary/fleet-auth/hub-device-endpoint-fence.ts",
       "name": "DEFAULT_MAX_FENCES",
       "value": "1024",
       "note": "Code-owned DoS guard: bound on the guest-only Hub device attachment fence map (n66dn.2); fences lift after 70 s, the cap only limits memory under rejection floods."

@@ -673,9 +673,13 @@ gateway which has fleet auth configured actually wires the SSO bootstrap
 routes. The browser-facing Gateway Garden route remains the single admission
 seam and accepts either fleet SSO or a configured ADMIN_TOKEN, replacing
 either credential with an internal signed capability before the mTLS hop to
-Garden. `ALLOW_INSECURE_LOCAL_API=true` therefore stays in effect under fleet
-auth; the gateway logs a loud startup warning so the bypass is removed from
-fleet deployments deliberately rather than lingering.
+Garden. Key authentication is never removed, but the unauthenticated no-key
+bypass is not carried over silently: a gateway with fleet auth configured and
+`ALLOW_INSECURE_LOCAL_API=true` refuses to start unless
+`ALLOW_INSECURE_LOCAL_API_UNDER_FLEET_AUTH=true` is also set. When upgrading a
+deployment to fleet auth, remove a stale `ALLOW_INSECURE_LOCAL_API`; set the
+second flag only if the loopback no-key API is intentional, and the gateway then
+logs a loud startup warning that the bypass remains in effect.
 
 ## Invariants and failure modes
 

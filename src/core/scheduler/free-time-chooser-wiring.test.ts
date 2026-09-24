@@ -65,6 +65,7 @@ function buildRuntime(chooseWorkspace: FreeTimeRuntimeOptions['chooseWorkspace']
     listRecentlyActiveChannels: () => [],
     getRecentMessages: () => entries,
     getRecentSessionEntries: () => entries,
+    findAssistantEntryForSourceMessage: () => null,
     appendSystemNote,
     appendContextSystemNote: vi.fn(),
   };

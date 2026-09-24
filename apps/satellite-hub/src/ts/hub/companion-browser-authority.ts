@@ -34,19 +34,53 @@ export function resolveBrowserDevices(
   return devices;
 }
 
+const SESSION_COOKIE_NAME = "__Host-psfn_session";
+const SESSION_COOKIE_VALUE = /^[A-Za-z0-9_-]{43}$/u;
+
+/**
+ * Find the session cookie by pair: browsers send every host cookie in one
+ * Cookie header. Unrelated cookies are ignored (and never forwarded); a
+ * duplicated or malformed session cookie, or several Cookie headers, is invalid.
+ */
+export function resolveBrowserSessionCookie(
+  request: Pick<IncomingMessage, "headers" | "rawHeaders">,
+): { state: "absent" } | { state: "valid"; cookie: string } | { state: "invalid" } {
+  const cookieHeaderCount = request.rawHeaders
+    .filter((_, index) => index % 2 === 0)
+    .filter(name => name.toLowerCase() === "cookie").length;
+  const header = request.headers.cookie;
+  if (cookieHeaderCount > 1) return { state: "invalid" };
+  if (cookieHeaderCount === 0 || header === undefined) return { state: "absent" };
+  const values = header.split(";")
+    .map(pair => pair.trim())
+    .filter(pair => pair.length > 0)
+    .flatMap((pair) => {
+      const separator = pair.indexOf("=");
+      return separator > 0 && pair.slice(0, separator).trim() === SESSION_COOKIE_NAME
+        ? [pair.slice(separator + 1).trim()]
+        : [];
+    });
+  if (values.length === 0) return { state: "absent" };
+  const [value] = values;
+  if (values.length !== 1 || value === undefined || !SESSION_COOKIE_VALUE.test(value)) {
+    return { state: "invalid" };
+  }
+  return { state: "valid", cookie: `${SESSION_COOKIE_NAME}=${value}` };
+}
+
 export function admitBrowserRequest(request: IncomingMessage, config: CompanionBrowserConfig): string {
   const route = /^\/companion-ui\/companions\/([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/ws$/u.exec(request.url ?? "");
   const headers = request.headers;
   const names = request.rawHeaders.filter((_, index) => index % 2 === 0).map(name => name.toLowerCase());
-  const cookieCount = names.filter(name => name === "cookie").length;
-  const validCookie = typeof headers.cookie === "string" && /^__Host-psfn_session=[A-Za-z0-9_-]{43}$/u.test(headers.cookie);
+  const session = resolveBrowserSessionCookie(request);
   if (!route?.[1] || request.method !== "GET"
     || headers.host !== new URL(config.canonicalOrigin).host
     || headers.origin !== config.canonicalOrigin
     || !["host", "origin"].every(name => names.filter(value => value === name).length === 1)
     || names.some(name => name === "authorization" || name === "sec-websocket-protocol"
       || name.startsWith("x-psfn-") || name.startsWith("x-identity-claim-"))
-    || !(validCookie ? cookieCount === 1 : cookieCount === 0 && config.guestMode === "explicit")) {
+    || session.state === "invalid"
+    || (session.state === "absent" && config.guestMode !== "explicit")) {
     throw new Error("Companion browser upgrade denied");
   }
   return route[1];

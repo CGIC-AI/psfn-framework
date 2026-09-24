@@ -190,8 +190,14 @@ export class ExternalMemoryService {
         sourceChannelId: channelId, sourceMessageId,
         canonicalContactId: contact.id, channelPrivacy: 'private', atMs: timestamp,
       });
-      if (request.operation === 'remember' && result.withheld) {
-        throw new Error('External memory note was withheld by intake policy');
+      if (result.withheld) {
+        // An ingest with any withheld message is refused whole, exactly like
+        // remember: withheld text must never be archived into the durable
+        // session (psfn-framework-fyzor), and archiving half an exchange
+        // would misrepresent the conversation.
+        throw new Error(request.operation === 'remember'
+          ? 'External memory note was withheld by intake policy'
+          : 'External conversation was withheld by intake policy');
       }
       const metadata = buildSessionMetadataWithIntakeScreening(JSON.stringify({
         type: 'observed_message',
@@ -214,6 +220,11 @@ export class ExternalMemoryService {
 
   private archive(record: ExternalMemoryIntakeRecord): void {
     if (record.completed || record.operation !== 'ingest') return;
+    // A durable intake prepared before withheld ingests were refused must not
+    // reach the session either.
+    if (record.entries.some(entry => parseIntakeScreeningMetadata(entry.metadata)?.withheld !== false)) {
+      throw new Error('External conversation was withheld by intake policy');
+    }
     const channelId = this.options.intakeStore.channelId(record);
     this.assertActive(channelId);
     const tail = this.options.sessions.getEntriesInRange(

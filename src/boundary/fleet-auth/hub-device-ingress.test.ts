@@ -10,6 +10,8 @@ import {
   type AuthenticatedHubDeviceConnection,
   type HubDeviceHumanAttachmentPort,
 } from './hub-device-ingress.js';
+import { HubDeviceAssertionRejectedError } from './hub-device-assertion.js';
+import { HubDeviceEndpointFence } from './hub-device-endpoint-fence.js';
 
 const COMPANION_ID = '11111111-1111-4111-8111-111111111111';
 
@@ -206,5 +208,42 @@ describe('GatewayHubDeviceIngressService', () => {
       connectionId: 'connection-digest',
       reason: 'assertion_rejected',
     });
+  });
+  it('fences a virtual_space endpoint after a rejected assertion for the human_surface window', async () => {
+    let nowMs = Date.parse('2026-07-16T12:00:00.000Z');
+    let accept = false;
+    const verifyAndConsume = vi.fn(async () => {
+      if (!accept) throw new HubDeviceAssertionRejectedError('Hub device assertion signature is invalid');
+      return principal({ placeId: undefined });
+    });
+    const service = new GatewayHubDeviceIngressService({
+      verifyAndConsume,
+      enrollmentAuthority: enrollmentAuthority(),
+      attachments: guestAttachments(),
+      virtualSpaceFence: new HubDeviceEndpointFence({ now: () => nowMs }),
+    });
+    const expected = {
+      deviceId: 'office-device',
+      enrollmentVersion: 7,
+      enrollmentStatus: 'active' as const,
+      companionId: COMPANION_ID,
+      sessionId: 'realtime:office-device:session',
+    };
+    const request = { assertion: 'guessed', expected, satelliteId: 'sat-1', endpointId: 'world-1' };
+
+    await expect(service.verifyVirtualSpaceAssertion(request)).rejects.toThrow('signature is invalid');
+    accept = true;
+    // Fenced: refused before the assertion is verified or consumed.
+    await expect(service.verifyVirtualSpaceAssertion(request)).rejects.toMatchObject({ code: 'device_fenced' });
+    expect(verifyAndConsume).toHaveBeenCalledTimes(1);
+    // A different endpoint of the same satellite is not fenced.
+    await expect(service.verifyVirtualSpaceAssertion({ ...request, endpointId: 'world-2' }))
+      .resolves.toMatchObject({ kind: 'virtual_space', endpointId: 'world-2' });
+
+    nowMs += 69_999;
+    await expect(service.verifyVirtualSpaceAssertion(request)).rejects.toMatchObject({ code: 'device_fenced' });
+    nowMs += 1;
+    await expect(service.verifyVirtualSpaceAssertion(request))
+      .resolves.toMatchObject({ kind: 'virtual_space', endpointId: 'world-1' });
   });
 });

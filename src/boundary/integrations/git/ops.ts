@@ -2,7 +2,7 @@
 // Core git operations for self-modification tools.
 // All write operations audit-logged, path-validated, and branch-protected.
 
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { resolve, relative, normalize, dirname } from 'node:path';
 import { DEFAULT_COMPANION_NAME } from '../../../core/identity/companion-naming.js';
@@ -95,7 +95,7 @@ export class GitOps implements GitOperations {
   // ── Read-only operations ──
 
   status(): GitStatusResult {
-    const raw = this.exec('git status --porcelain=v2 --branch');
+    const raw = this.exec('git', ['status', '--porcelain=v2', '--branch']);
     const lines = raw.split('\n').filter(Boolean);
 
     let branch = '';
@@ -135,13 +135,13 @@ export class GitOps implements GitOperations {
   }
 
   diff(opts?: { staged?: boolean }): GitDiffResult {
-    const staged = opts?.staged !== false ? this.exec('git diff --cached') : '';
-    const unstaged = this.exec('git diff');
+    const staged = opts?.staged !== false ? this.exec('git', ['diff', '--cached']) : '';
+    const unstaged = this.exec('git', ['diff']);
     return { staged, unstaged };
   }
 
   currentBranch(): string {
-    return this.exec('git rev-parse --abbrev-ref HEAD').trim();
+    return this.exec('git', ['rev-parse', '--abbrev-ref', 'HEAD']).trim();
   }
 
   isProtectedBranch(branch?: string): boolean {
@@ -153,17 +153,21 @@ export class GitOps implements GitOperations {
 
   createBranch(name: string, startPoint?: string): string {
     // Validate branch name -- only allow safe characters
-    if (!/^[a-zA-Z0-9._\/-]+$/.test(name)) {
+    if (!/^[a-zA-Z0-9._\/-]+$/.test(name) || name.startsWith('-')) {
       throw new Error(`Invalid branch name: ${name}`);
     }
     if (this.config.protectedBranches.includes(name)) {
       throw new Error(`Cannot create branch with protected name: ${name}`);
     }
 
-    const cmd = startPoint
-      ? `git checkout -b ${this.shellEscape(name)} ${this.shellEscape(startPoint)}`
-      : `git checkout -b ${this.shellEscape(name)}`;
-    this.exec(cmd);
+    if (startPoint !== undefined && (startPoint.length === 0 || startPoint.startsWith('-'))) {
+      throw new Error(`Invalid start point: ${startPoint}`);
+    }
+    // The trailing `--` pins the start point as a revision, never a pathspec.
+    const args = startPoint
+      ? ['checkout', '-b', name, startPoint, '--']
+      : ['checkout', '-b', name];
+    this.exec('git', args);
     this.appendAudit({
       timestamp: new Date().toISOString(),
       operation: 'createBranch',
@@ -179,7 +183,7 @@ export class GitOps implements GitOperations {
     const fullPath = resolve(this.config.repoRoot, filePath);
     mkdirSync(dirname(fullPath), { recursive: true });
     writeFileSync(fullPath, content, 'utf-8');
-    this.exec(`git add ${this.shellEscape(filePath)}`);
+    this.exec('git', ['add', '--', filePath]);
     this.appendAudit({
       timestamp: new Date().toISOString(),
       operation: 'applyPatch',
@@ -203,10 +207,10 @@ export class GitOps implements GitOperations {
       `[Signed-off-by] ${companionId}-agent`,
     ].filter(Boolean).join('\n');
 
-    this.exec(`git commit -m ${this.shellEscape(fullMessage)}`);
+    this.exec('git', ['commit', '-m', fullMessage]);
 
-    const hash = this.exec('git rev-parse --short HEAD').trim();
-    const stat = this.exec('git diff --stat HEAD~1..HEAD');
+    const hash = this.exec('git', ['rev-parse', '--short', 'HEAD']).trim();
+    const stat = this.exec('git', ['diff', '--stat', 'HEAD~1..HEAD']);
     const filesMatch = stat.match(/(\d+) file/);
     const filesChanged = filesMatch ? parseInt(filesMatch[1] ?? '0', 10) : 0;
 
@@ -221,12 +225,12 @@ export class GitOps implements GitOperations {
   }
 
   openPR(title: string, body: string, base?: string): string {
-    const baseArg = base ? `--base ${this.shellEscape(base)}` : '';
     try {
       this.assertNotProtected();
-      const result = this.exec(
-        `gh pr create --title ${this.shellEscape(title)} --body ${this.shellEscape(body)} ${baseArg}`,
-      );
+      // `--flag=value` binds each value to its flag even when it begins with '-'.
+      const args = ['pr', 'create', `--title=${title}`, `--body=${body}`];
+      if (base) args.push(`--base=${base}`);
+      const result = this.exec('gh', args);
       const url = result.trim();
       this.appendAudit({
         timestamp: new Date().toISOString(),
@@ -286,9 +290,10 @@ export class GitOps implements GitOperations {
 
   // ── Private helpers ──
 
-  private exec(cmd: string): string {
+  // Commands run as argv (no shell): every argument reaches the binary literally.
+  private exec(file: 'git' | 'gh', args: readonly string[]): string {
     try {
-      return execSync(cmd, {
+      return execFileSync(file, args, {
         cwd: this.config.repoRoot,
         timeout: this.config.execTimeoutMs,
         encoding: 'utf-8',
@@ -300,10 +305,6 @@ export class GitOps implements GitOperations {
       const msg = stderr || toErrorMessage(err);
       throw new Error(`Git command failed: ${msg}`);
     }
-  }
-
-  private shellEscape(str: string): string {
-    return "'" + str.replace(/'/g, "'\\''") + "'";
   }
 
   private appendAudit(entry: AuditEntry): void {

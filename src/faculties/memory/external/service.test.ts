@@ -154,20 +154,19 @@ describe('external companion memory service', () => {
     expect(h.sessions.getRecent(externalMemorySessionId(binding, 'session-one'), 10)).toHaveLength(2);
   });
 
-  it('archives screened text and rejects a quarantined explicit note before acknowledgment', async () => {
+  it('refuses a withheld ingest or explicit note before archival or acknowledgment (fyzor)', async () => {
     const h = fixture();
     const withheld = () => fromAny({ effectiveText: '[withheld]', mode: 'enforce', withheld: true,
       snapshot: { envelopeId: 'envelope-quarantine', sourceClass: 'primary_user', sourceRiskTier: 'untrusted',
         state: 'quarantined', riskLabels: ['injection/override_attempt'],
         enforcementPosture: 'enforce', subject: { kind: 'body' } } });
     h.screen.mockResolvedValueOnce(withheld());
-    await h.service.execute(h.input());
-    const entries = h.sessions.getRecent(externalMemorySessionId(binding, 'session-one'), 10);
-    expect(entries[0]?.content).toBe('[withheld]');
-    expect(JSON.parse(entries[0]!.metadata!).intakeScreening.withheld).toBe(true);
+    await expect(h.service.execute(h.input())).rejects.toThrow('External conversation was withheld by intake policy');
+    // Neither the withheld message nor its safe sibling reaches the durable session.
+    expect(h.sessions.getRecent(externalMemorySessionId(binding, 'session-one'), 10)).toEqual([]);
     h.screen.mockResolvedValueOnce(withheld());
     await expect(h.service.execute({ binding, request: { operation: 'remember', sessionId: 'session', eventId: 'bad-note', text: 'Rejected source' } })).rejects.toThrow('withheld by intake policy');
-    expect(h.queued).toHaveLength(1);
+    expect(h.queued).toHaveLength(0);
     expect(h.write).not.toHaveBeenCalled();
   });
 

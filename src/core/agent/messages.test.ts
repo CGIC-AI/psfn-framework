@@ -186,14 +186,36 @@ describe('convertToLlm', () => {
   });
 
   it('converts system note to an assistant-side internal note with prefix', () => {
-    const messages: AgentMessage[] = [makeSystemNote('Agent restarted')];
+    const messages: AgentMessage[] = [makeSystemNote('Agent restarted'), makeAssistant('ok')];
     const result = convertToLlm(messages);
-    expect(result).toHaveLength(1);
+    expect(result).toHaveLength(2);
     expect(result[0].role).toBe('assistant');
     expect((result[0] as AssistantMessage).content).toEqual([
       { type: 'text', text: '[System note] Agent restarted' },
     ]);
     expect((result[0] as { messageClass?: string }).messageClass).toBe(MESSAGE_CLASSES.systemNote);
+  });
+
+  it('sends a trailing self-directed system note as the user-role turn trigger (3pye5)', () => {
+    const fresh = convertToLlm([makeSystemNote('[SYSTEM: world-exploration] Look around.')]);
+    expect(fresh).toHaveLength(1);
+    expect(fresh[0].role).toBe('user');
+    expect((fresh[0] as UserMessage).content)
+      .toBe('[System note] [SYSTEM: world-exploration] Look around.');
+    expect((fresh[0] as { messageClass?: string }).messageClass).toBe(MESSAGE_CLASSES.systemNote);
+
+    const continuing = convertToLlm([
+      makeUser('hello'),
+      makeAssistant('hi'),
+      makeSystemNote('[SYSTEM: free-time] Idle.'),
+    ]);
+    expect(continuing.map(message => message.role)).toEqual(['user', 'assistant', 'user']);
+    expect(continuing.at(-1)?.role).not.toBe('assistant');
+  });
+
+  it('keeps a trailing assistant reply and a mid-conversation note unchanged', () => {
+    const result = convertToLlm([makeUser('hello'), makeSystemNote('config changed'), makeAssistant('hi')]);
+    expect(result.map(message => message.role)).toEqual(['user', 'assistant', 'assistant']);
   });
 
   it('converts internal whispers to an assistant-side internal note', () => {

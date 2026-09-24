@@ -2,29 +2,45 @@ import { createComponentLogger } from '../../shared/logger.js';
 
 const log = createComponentLogger('FleetAuthSurfaceGuard');
 
+/** Second, explicit acknowledgement required to keep the no-key bypass under fleet auth. */
+const INSECURE_LOCAL_API_UNDER_FLEET_AUTH_ACK_ENV = 'ALLOW_INSECURE_LOCAL_API_UNDER_FLEET_AUTH';
+
+function isExplicitTrueEnv(value: string | undefined): boolean {
+  // Mirrors isExplicitTrue without importing the app layer into system/.
+  return value?.trim().toLowerCase() === 'true';
+}
+
 /**
- * Fleet auth ADDS SSO principals; it never removes key authentication or the
- * explicit insecure-local bypass (operator rule, S13). `ALLOW_INSECURE_LOCAL_API=true`
- * therefore stays in effect under fleet auth exactly as it does without it,
- * which is almost never what a fleet deployment wants: the no-auth bypass now
- * sits next to a browser SSO surface. Emit a loud startup warning so the flag is
- * noticed and removed rather than lingering.
+ * Fleet auth ADDS SSO principals; it never removes key authentication (operator
+ * rule, S13). It does not have to keep the unauthenticated no-key path, though:
+ * a fleet deployment carrying a stale `ALLOW_INSECURE_LOCAL_API=true` would turn
+ * on the insecure local principal next to the browser SSO surface at upgrade
+ * time. Refuse that at startup unless the operator also sets
+ * `ALLOW_INSECURE_LOCAL_API_UNDER_FLEET_AUTH=true`; an acknowledged bypass still
+ * logs a loud warning.
  *
- * Returns whether the warning fired (for callers and tests).
+ * Returns whether the acknowledged bypass stays in effect under fleet auth.
  */
-export function warnIfInsecureLocalApiUnderFleetAuth(options: {
+export function assertInsecureLocalApiAcknowledgedUnderFleetAuth(options: {
   fleetAuthEnabled: boolean;
   env: NodeJS.ProcessEnv;
   logger?: { warn(message: string): void };
 }): boolean {
   if (!options.fleetAuthEnabled) return false;
-  // Mirrors isExplicitTrue without importing the app layer into system/.
-  if (options.env.ALLOW_INSECURE_LOCAL_API?.trim().toLowerCase() !== 'true') return false;
+  if (!isExplicitTrueEnv(options.env.ALLOW_INSECURE_LOCAL_API)) return false;
+  if (!isExplicitTrueEnv(options.env[INSECURE_LOCAL_API_UNDER_FLEET_AUTH_ACK_ENV])) {
+    throw new Error(
+      'ALLOW_INSECURE_LOCAL_API=true is set while fleet auth (fleet-auth.json) is active; '
+      + 'refusing to start with an unauthenticated API bypass beside SSO. Remove '
+      + 'ALLOW_INSECURE_LOCAL_API from the fleet deployment, or set '
+      + `${INSECURE_LOCAL_API_UNDER_FLEET_AUTH_ACK_ENV}=true if the loopback no-key API is intentional. `
+      + 'Key authentication is unaffected either way.',
+    );
+  }
   (options.logger ?? log).warn(
-    'ALLOW_INSECURE_LOCAL_API=true is set while fleet auth (PSFN_FLEET_AUTH) is active; '
-    + 'the insecure no-auth bypass REMAINS IN EFFECT on the gateway API alongside SSO. '
-    + 'Remove ALLOW_INSECURE_LOCAL_API from the fleet deployment unless the unauthenticated '
-    + 'loopback API is intentional.',
+    'ALLOW_INSECURE_LOCAL_API=true is acknowledged under fleet auth '
+    + `(${INSECURE_LOCAL_API_UNDER_FLEET_AUTH_ACK_ENV}=true); `
+    + 'the insecure no-auth bypass REMAINS IN EFFECT on the gateway API alongside SSO.',
   );
   return true;
 }

@@ -158,7 +158,11 @@ import {
   type CompanionSubstrateHealthContext,
 } from './substrate-agent/runtime-context.js';
 import { SituatedEmanationTracker } from './substrate-agent/runtime-context-sections/situated-emanation.js';
-import { resolveTurnOwnPlaceId } from './substrate-agent/runtime-context-sections/turn-presence-mode.js';
+import {
+  isPlacelessSatelliteTurn,
+  resolveDeicticSituatedPlaceId,
+  resolveTurnOwnPlaceId,
+} from './substrate-agent/runtime-context-sections/turn-presence-mode.js';
 import type { WorldPlaneMapReader } from '../../shared/contracts/world-plane-map.js';
 import type { WorldNotesReader } from '../../shared/contracts/world-notes.js';
 import { createVirtualRoomFollower, type VirtualRoomFollower } from './virtual-room-follow.js';
@@ -482,6 +486,7 @@ export class SubstrateAgent {
   private currentTurnIntakeEnvelopes: readonly IntakeEnvelopeSnapshot[] = [];
   /** The current turn's own bound place (satellite claim placeId), for tool deictic defaults; unset outside a turn. */
   private currentTurnOwnPlaceId: string | undefined;
+  private currentTurnPlacelessSatellite = false;
   /**
    * Per-turn outbound disclosure lineage (bible §9.2), set once the generation
    * context is folded and cleared at turn end. The egress tool guard composes
@@ -587,7 +592,11 @@ export class SubstrateAgent {
     // The current turn's own bound place outranks the remembered emanation:
     // a world-plane turn perceives its world, not the last physical room
     // (the tracker deliberately ignores world turns, u2dx3/gs899).
-    return this.currentTurnOwnPlaceId ?? this.situatedEmanationTracker.resolvePlaceId();
+    return resolveDeicticSituatedPlaceId({
+      turnOwnPlaceId: this.currentTurnOwnPlaceId,
+      placelessSatelliteTurn: this.currentTurnPlacelessSatellite,
+      trackerPlaceId: () => this.situatedEmanationTracker.resolvePlaceId(),
+    });
   }
 
   /**
@@ -2042,6 +2051,7 @@ export class SubstrateAgent {
       // the next turn).
       this.currentTurnIntakeEnvelopes = message.routing?.intakeEnvelopes ?? [];
       this.currentTurnOwnPlaceId = resolveTurnOwnPlaceId(message);
+      this.currentTurnPlacelessSatellite = isPlacelessSatelliteTurn(message);
       this.currentTurnEvidenceDependency = resolveTurnEvidenceDependency(message);
       // Fail closed: no lineage is published until the generation context is
       // folded this turn, so a social send before then is denied outward.
@@ -2072,6 +2082,7 @@ export class SubstrateAgent {
       } finally {
         this.currentTurnIntakeEnvelopes = [];
         this.currentTurnOwnPlaceId = undefined;
+        this.currentTurnPlacelessSatellite = false;
         this.currentTurnDisclosureLineage = undefined;
         this.currentTurnEgressCustody = null;
         this.currentTurnEvidenceDependency = 'required';

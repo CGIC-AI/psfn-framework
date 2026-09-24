@@ -1125,6 +1125,24 @@ describe('SessionManager', () => {
     ]));
   });
 
+  it('finds a turn reply by its source message even when later entries push it out of a recent window (993cv)', () => {
+    const mgr = new SessionManager(store, makeConfig());
+    const turnMetadata = {
+      turnId: createTurnId(),
+      requestId: 'req-free-time',
+      sourceMessageId: 'free-time-lane-0',
+    };
+    mgr.recordAssistantMessage('ch1', 'I spent the hour sketching.', undefined, undefined, undefined, turnMetadata);
+    for (let index = 0; index < 12; index += 1) {
+      mgr.appendSystemNote('ch1', `interleaved note ${index}`);
+    }
+    expect(mgr.getRecentSessionEntries('ch1', 8).some(entry => entry.role === 'assistant')).toBe(false);
+
+    expect(mgr.findAssistantEntryForSourceMessage('ch1', 'free-time-lane-0')?.content)
+      .toBe('I spent the hour sketching.');
+    expect(mgr.findAssistantEntryForSourceMessage('ch1', 'other-message')).toBeNull();
+  });
+
   it('persists tool observations without rendering stale tool blocks in session prompt history', async () => {
     const config = makeConfig();
     const mgr = new SessionManager(store, config);

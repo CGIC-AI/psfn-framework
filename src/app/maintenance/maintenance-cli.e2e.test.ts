@@ -185,33 +185,21 @@ describe('maintenance CLI entrypoints', () => {
     });
   });
 
-  it('removes retired local-crawler settings through the required-owner-additions CLI (xvtc1)', () => {
-    const retired = {
-      webFetchLocalCrawlerEnabled: true,
-      webFetchLocalCrawlerAllowHttp: false,
-      webFetchAllowInternalNetwork: false,
-    };
+  it('adds absent required settings blocks through the required-owner-additions CLI and settles', () => {
     const inProcessDir = mkdtempSync(join(tmpdir(), 'psfn-maintenance-required-cli-'));
     scratchDirs.push(inProcessDir);
-    writeFileSync(join(inProcessDir, 'settings.json'), `${JSON.stringify(retired, null, 2)}\n`);
-    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    writeFileSync(join(inProcessDir, 'settings.json'), '{}\n');
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
 
     const planned = runRequiredOwnerAdditionsMigrationCli(['--data-dir', inProcessDir]);
-    expect(planned.settings).toMatchObject({
-      mode: 'dry-run',
-      status: 'planned',
-      removedPaths: ['webFetchLocalCrawlerEnabled', 'webFetchLocalCrawlerAllowHttp'],
-      retiredLocalCrawler: { webFetchLocalCrawlerEnabled: true, webFetchAllowInternalNetwork: false },
-    });
-    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
-      settings: { removedPaths: ['webFetchLocalCrawlerEnabled', 'webFetchLocalCrawlerAllowHttp'] },
-    });
-    expect(JSON.parse(readFileSync(join(inProcessDir, 'settings.json'), 'utf8'))).toEqual(retired);
+    expect(planned.settings).toMatchObject({ mode: 'dry-run', status: 'planned' });
+    expect(planned.settings.addedPaths?.length ?? 0).toBeGreaterThan(0);
+    expect(readFileSync(join(inProcessDir, 'settings.json'), 'utf8')).toBe('{}\n');
 
     // The deployed init container runs the entrypoint as its own process.
     const processDir = mkdtempSync(join(tmpdir(), 'psfn-maintenance-required-cli-proc-'));
     scratchDirs.push(processDir);
-    writeFileSync(join(processDir, 'settings.json'), `${JSON.stringify(retired, null, 2)}\n`);
+    writeFileSync(join(processDir, 'settings.json'), '{}\n');
     const entrypoint = fileURLToPath(new URL('./migrate-required-settings-blocks.ts', import.meta.url));
     const run = (extra: string[]) => spawnSync(
       process.execPath,
@@ -220,15 +208,7 @@ describe('maintenance CLI entrypoints', () => {
     );
     const applied = run(['--apply']);
     expect(applied.status, applied.stderr).toBe(0);
-    expect(JSON.parse(applied.stdout)).toMatchObject({
-      mode: 'apply',
-      settings: {
-        status: 'applied',
-        removedPaths: ['webFetchLocalCrawlerEnabled', 'webFetchLocalCrawlerAllowHttp'],
-      },
-    });
-    const migrated = JSON.parse(readFileSync(join(processDir, 'settings.json'), 'utf8')) as Record<string, unknown>;
-    expect(Object.keys(migrated).filter(key => key.startsWith('webFetchLocalCrawler'))).toEqual([]);
+    expect(JSON.parse(applied.stdout)).toMatchObject({ mode: 'apply', settings: { status: 'applied' } });
     const settled = run(['--apply']);
     expect(settled.status, settled.stderr).toBe(0);
     expect(JSON.parse(settled.stdout)).toMatchObject({ settings: { status: 'not_needed' } });

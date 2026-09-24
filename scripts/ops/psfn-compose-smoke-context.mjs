@@ -68,7 +68,7 @@ export function stageSmokeBuildContext({ repoRoot, stageRoot }) {
     throw new Error('stageSmokeBuildContext requires absolute repoRoot and stageRoot paths');
   }
   mkdirSync(stageRoot, { recursive: true });
-  const target = mkdtempSync(join(stageRoot, 'psfn-smoke-context-'));
+  const target = mkdtempSync(join(stageRoot, 'smoke-context-'));
   chmodSync(target, DIRECTORY_MODE);
   let staged = 0;
   for (const relativePath of listWorkingTreePaths(repoRoot)) {

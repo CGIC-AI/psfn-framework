@@ -11,6 +11,7 @@
 
 import type { LLMContext, LLMWorkSpec } from '../../../shared/contracts/runtime.js';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
+import type { DecisionLocalQuestionMode } from '../../../system/config/decision-backend-config.js';
 import { completeWithWorkSpec } from '../work-spec.js';
 import { validateDecisionAnswers } from './answer-validation.js';
 import type {
@@ -22,13 +23,11 @@ import type {
   DecisionRequest,
 } from './types.js';
 
-/** How the local backend spreads several questions over model calls. */
-export type LocalDecisionQuestionMode = 'combined' | 'per_question';
 
 export interface LocalDecisionBackendOptions {
   llmProvider: Pick<LLMProviderPort, 'complete'>;
   /** Read per call so a settings reload applies without a restart. */
-  resolveQuestionMode: () => LocalDecisionQuestionMode;
+  resolveQuestionMode: () => DecisionLocalQuestionMode;
   /**
    * Optional token-logprob reader. Returns option -> probability for a single
    * noul (`true`/`false`) or choice question, or null when unavailable.

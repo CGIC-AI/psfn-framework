@@ -8,6 +8,7 @@
 // configured background model.
 
 import type { LLMWorkSpec } from '../../../shared/contracts/runtime.js';
+import type { DecisionSiteId } from '../../../system/config/decision-backend-config.js';
 
 interface NoulDecisionQuestion {
   type: 'noul';
@@ -80,16 +81,11 @@ type DecisionBackendId = 'local' | 'jev' | 'local-fallback';
  * Privacy class of a decision site. `companion_private` state never leaves the
  * local backend, whatever the configured mode.
  */
-type DecisionSitePrivacy = 'shareable' | 'companion_private';
-
-interface DecisionSite {
-  /** Stable decision-site id, e.g. `participation.appraise`. */
-  id: string;
-  privacy: DecisionSitePrivacy;
-}
+export type DecisionSitePrivacy = 'shareable' | 'companion_private';
 
 export interface DecisionRequest {
-  site: DecisionSite;
+  /** Stable decision-site id; its privacy class is code-owned (sites.ts). */
+  siteId: DecisionSiteId;
   /** JSON state the questions are evaluated against. */
   state: Readonly<Record<string, unknown>>;
   questions: DecisionQuestionSet;

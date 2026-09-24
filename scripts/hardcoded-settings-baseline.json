@@ -11950,6 +11950,41 @@
       "value": "63"
     },
     {
+      "file": "src/system/config/decision-backend-config.ts",
+      "name": "DECISION_BACKEND_RANGES.latencyBudgetMs",
+      "value": "{ min: 10, max: 30_000 }",
+      "form": "object-member",
+      "note": "Canonical owner-file/schema metadata for settings.json decisionBackend (epic 4lf3r); the literal defines validation or bootstrap defaults for the owned JSON contract rather than a parallel runtime override."
+    },
+    {
+      "file": "src/system/config/decision-backend-config.ts",
+      "name": "DECISION_BACKEND_RANGES.maxRequestChars",
+      "value": "{ min: 1_000, max: 120_000 }",
+      "form": "object-member",
+      "note": "Canonical owner-file/schema metadata for settings.json decisionBackend (epic 4lf3r); the literal defines validation or bootstrap defaults for the owned JSON contract rather than a parallel runtime override."
+    },
+    {
+      "file": "src/system/config/decision-backend-config.ts",
+      "name": "DECISION_BACKEND_RANGES.timeoutMs",
+      "value": "{ min: 50, max: 30_000 }",
+      "form": "object-member",
+      "note": "Canonical owner-file/schema metadata for settings.json decisionBackend (epic 4lf3r); the literal defines validation or bootstrap defaults for the owned JSON contract rather than a parallel runtime override."
+    },
+    {
+      "file": "src/system/config/decision-backend-config.ts",
+      "name": "createDefaultDecisionBackendSettings.jev.maxRequestChars",
+      "value": "96_000",
+      "form": "object-member",
+      "note": "Canonical owner-file/schema metadata for settings.json decisionBackend (epic 4lf3r); the literal defines validation or bootstrap defaults for the owned JSON contract rather than a parallel runtime override."
+    },
+    {
+      "file": "src/system/config/decision-backend-config.ts",
+      "name": "createDefaultDecisionBackendSettings.jev.timeoutMs",
+      "value": "1_500",
+      "form": "object-member",
+      "note": "Canonical owner-file/schema metadata for settings.json decisionBackend (epic 4lf3r); the literal defines validation or bootstrap defaults for the owned JSON contract rather than a parallel runtime override."
+    },
+    {
       "file": "src/system/config/emotion-scoping-config.ts",
       "name": "createDefaultEmotionScopingSettings.carryOver.minEffectThreshold",
       "value": "0.02",

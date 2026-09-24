@@ -9,6 +9,7 @@ import type { BiographicalDepthPolicy } from '../config/biographical-depth-polic
 import type { BiographicalCandidatePolicy } from '../config/biographical-candidate-policy.js';
 import type { CapabilityTier, CompositionalPolicyConfig, LifecycleKubernetesSettings, SessionRestartBehavior, SessionTailCacheSettings, SubstrateConfig, VoiceReplySegmenterSettings, WikiStartupHydrationSettings } from '../config/runtime-config-contracts.js';
 import type { ShellExecSettings } from '../config/shell-exec-config.js';
+import type { DecisionBackendSettings } from '../config/decision-backend-config.js';
 import type {
   FalCreateModel,
   FalEditModel,
@@ -290,6 +291,7 @@ export interface EditableSettings {
   capabilityTier?: CapabilityTier;
   promotedExtendedTools?: string[];
   shellExec?: ShellExecSettings;
+  decisionBackend?: DecisionBackendSettings;
   /** Override the base URL used by Garden Chat to reach the OpenAI-compatible API.
    *  When set, this takes priority over the `API_BASE_URL` env var and the
    *  auto-resolved URL derived from `API_HOST`/`API_PORT`. Useful when the
@@ -450,6 +452,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'capabilityTier',
   'promotedExtendedTools',
   'shellExec',
+  'decisionBackend',
   'chatApiBaseUrl',
   'comfyUiBaseUrl',
   'imageProvider',
@@ -539,6 +542,7 @@ export type RuntimeSettingValue =
   | EmoSimProactivitySettings
   | SessionTailCacheSettings
   | ShellExecSettings
+  | DecisionBackendSettings
   | WikiStartupHydrationSettings
   | LifecycleKubernetesSettings
   | CogSecPersonaConformanceSettings

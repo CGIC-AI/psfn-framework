@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { LLMResponse } from '../../../shared/contracts/runtime.js';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import { buildLLMWorkSpec } from '../work-spec.js';
-import { createLocalDecisionBackend, type LocalDecisionQuestionMode } from './local-backend.js';
+import type { DecisionLocalQuestionMode } from '../../../system/config/decision-backend-config.js';
+import { createLocalDecisionBackend } from './local-backend.js';
 import type { DecisionQuestionSet, DecisionRequest } from './types.js';
 
 function makeResponse(content: string): LLMResponse {
@@ -58,7 +59,7 @@ const VALID_OUTPUT = JSON.stringify({
 
 function makeRequest(overrides: Partial<DecisionRequest> = {}): DecisionRequest {
   return {
-    site: { id: 'test.site', privacy: 'shareable' },
+    siteId: 'room.ambiguity',
     state: { ticket: 'Checkout shows a blank page.' },
     questions: QUESTIONS,
     workSpec: buildLLMWorkSpec({ purpose: 'decision', durable: false, maxOutputTokens: 256 }),
@@ -68,7 +69,7 @@ function makeRequest(overrides: Partial<DecisionRequest> = {}): DecisionRequest 
 
 function backendFor(
   provider: Pick<LLMProviderPort, 'complete'>,
-  mode: LocalDecisionQuestionMode = 'combined',
+  mode: DecisionLocalQuestionMode = 'combined',
   extra: Partial<Parameters<typeof createLocalDecisionBackend>[0]> = {},
 ) {
   let tick = 0;

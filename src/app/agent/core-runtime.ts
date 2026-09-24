@@ -442,7 +442,11 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   });
   const appCache = await createAppCacheFromEnv();
   const llmProvider = createLLMProviderPort(gateway);
-  const decisionRuntime = buildAgentDecisionRuntime({ llmProvider });
+  const decisionRuntime = buildAgentDecisionRuntime({
+    config,
+    llmProvider,
+    companionDataDir: pathSnapshot.companionDataDir,
+  });
   const automataBus = options.automataRuntime
     ? (() => {
         const companionId = resolveCompanionIdFromConfig(config);

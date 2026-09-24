@@ -402,6 +402,7 @@ const SETTINGS_OBJECT_FIELDS = new Set<string>([
   'wyomingShardRouting',
   'shardToolsets',
   'shellExec',
+  'decisionBackend',
 ]);
 
 const DEPRECATED_SETTINGS_FIELDS = new Set<string>([

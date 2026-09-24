@@ -11,7 +11,8 @@ Non-goals:
 - [ ] Targeted local tests passed
 - [ ] Changed-file lint passed
 - [ ] `ci-required` passed
-- [ ] Commits are coherent and ready for rebase merge
+- [ ] Commits are coherent; use rebase merge for a linear branch or a merge commit for an integration train
+- [ ] Merge the validated PR head with `--match-head-commit <validated-sha>`
 
 ## Labels
 

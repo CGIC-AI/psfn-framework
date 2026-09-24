@@ -83,6 +83,13 @@ This repository opts into the **team-maintainer** profile.
   every non-main work branch. Work left only in a local worktree is not saved.
 - Direct pushes to `main` are prohibited. Delivery to `main` uses a PR unless the
   current operator explicitly authorizes a direct-main exception.
+- GitHub repository settings should allow rebase merges and merge commits, with
+  squash merging disabled. Use rebase merging for straightforward linear
+  branches. Use a merge commit for integration trains containing lane merges so
+  their history and conflict resolutions are preserved. Do not flatten a
+  validated train solely to make it eligible for rebase merging.
+- Both merge methods require a passing local-gate attestation and `ci-required`
+  on the current PR head. Guard the merge with `--match-head-commit <validated-sha>`.
 - A checkpoint push is remote backup, not publication. It does not claim that
   broad gates or review passed.
 - Run `npm run hooks:install` once in every clone. It configures the shared Git
@@ -96,9 +103,11 @@ This repository opts into the **team-maintainer** profile.
   mutable `node_modules` directories between worktrees.
 - Before publication, run `npm run gate:pre-pr` once on the exact final committed
   head and publish through `npm run pr:publish`.
-- Never manually force-push or rewrite a shared branch. Rebase before publication
-  when the base moves; the exact-head `pr:publish` wrapper alone may update that
-  branch with an attestation-checked, exact-remote `--force-with-lease`.
+- Never manually force-push or rewrite a shared branch. When the base moves,
+  rebase a linear branch before publication, or merge the base into an integration
+  train to preserve its lane merges. The exact-head `pr:publish` wrapper alone
+  may update a rebased branch with an attestation-checked,
+  exact-remote `--force-with-lease`.
 - A parked lane is still remotely durable: its bead note records the remote
   branch, exact pushed head, validation state, and blocker. Local-only parking is
   forbidden.
@@ -331,7 +340,8 @@ broad suite after every edit or checkpoint push.
 
 Before publication:
 
-1. Fetch and rebase onto the intended base.
+1. Fetch the intended base. If it is not already an ancestor of the branch,
+   rebase a linear branch or merge the base into an integration train as above.
 2. Commit the exact clean head.
 3. Ensure `npm run hooks:install` has configured the tracked pre-push hook.
 4. Run `npm run gate:pre-pr` once; it owns broad PREFLIGHT and HEAVY validation.

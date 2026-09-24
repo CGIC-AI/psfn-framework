@@ -117,6 +117,18 @@ PSFN_SCORECARD_MD=$SHAKEDOWN_ROOT/SHAKEDOWN-SCORECARD.md \
   node shakedown/harness/run-shakedown-profile.mjs --profile full
 ```
 
+### CogSec quarantine case prerequisites
+
+`s10_cogsec_document_quarantine` and `s10_cogsec_satellite_document_quarantine`
+require `intake-policy.json` `mode` to enforce external ingress: `boundary` or
+`strict` (the runtime vocabulary is `shadow | boundary | strict`). A `shadow`
+stack reports `coverage_hole` with `invalid_owner:intake-policy.json.mode`. An
+older owner file still carrying the retired `enforce` (or `off`) value does not
+boot; rewrite it with
+`npm run migrate:intake-policy-owner -- --data-dir <system-data-dir> --apply`
+(`enforce` becomes
+`strict`, `off` becomes `shadow`).
+
 ### Case minimum tiers
 
 A few diagnostics call tool actions a lower tier does not grant (for example

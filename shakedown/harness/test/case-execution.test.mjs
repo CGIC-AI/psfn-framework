@@ -281,7 +281,7 @@ test('a setup MissingEnvError is a named coverage hole and does not abort later 
             before: () => {
               throw new CaseConfigurationError(
                 'invalid_owner:intake-policy.json.mode',
-                'intake-policy.json must use enforce mode',
+                'intake-policy.json must use an enforcing mode (boundary or strict)',
               );
             },
           },

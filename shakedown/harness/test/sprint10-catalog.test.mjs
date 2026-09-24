@@ -523,7 +523,7 @@ test('satellite CogSec dispatch uses the scoped satellite bearer and binds proof
 test('satellite CogSec case fails closed when its scoped bearer is absent', async () => {
   const cases = buildSprint10Cases(context, {
     ...services,
-    readJsonIfExists: () => ({ mode: 'enforce' }),
+    readJsonIfExists: () => ({ mode: 'strict' }),
   }, {
     PSFN_SHAKEDOWN_PHYSICAL_SATELLITE_CLAIM_TYPE: 'satellite-endpoint',
     PSFN_SHAKEDOWN_PHYSICAL_SATELLITE_ID: 'satellite-fixture',
@@ -662,4 +662,28 @@ test('API CogSec proof reads the quarantined envelope from its durable current-t
     readToolCallCount: 1,
     queuedAccessAttemptCount: 1,
   });
+});
+
+test('CogSec quarantine cases accept the current enforcing vocabulary only (p6txh/8glaf)', async () => {
+  for (const [mode, admitted] of [
+    ['strict', true],
+    ['boundary', true],
+    ['shadow', false],
+    ['enforce', false],
+    [undefined, false],
+  ]) {
+    const cases = buildSprint10Cases(context, {
+      ...services,
+      readJsonIfExists: () => (mode === undefined ? null : { mode }),
+    }, {});
+    const documentCase = cases.find((entry) => entry.id === 's10_cogsec_document_quarantine');
+    if (admitted) {
+      assert.deepEqual(await documentCase.before(), { intakePolicyMode: mode });
+    } else {
+      await assert.rejects(
+        documentCase.before(),
+        (error) => error?.reason === 'invalid_owner:intake-policy.json.mode',
+      );
+    }
+  }
 });

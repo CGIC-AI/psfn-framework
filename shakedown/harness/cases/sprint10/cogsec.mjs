@@ -20,6 +20,11 @@ import {
 
 const FIXED_FIREWALL_NOTICE_SIGNATURE = 'being kept aside for your human to look over';
 const INTAKE_POLICY_FILE = 'intake-policy.json';
+// Current runtime vocabulary (src/system/config/intake-policy-config.ts):
+// shadow | boundary | strict. External document ingress is enforced by both
+// 'boundary' and 'strict' (isIntakeEnforcingMode). The retired 'enforce' value
+// is rewritten by `npm run migrate:intake-policy-owner` and rejected at load.
+const INTAKE_DOCUMENT_ENFORCING_MODES = new Set(['boundary', 'strict']);
 const QUARANTINE_FILE = 'state/intake-quarantine.json';
 const TERMINAL_BACKGROUND_STATES = new Set(['succeeded', 'failed', 'stale_discarded']);
 const UNEXPECTED_CONTENT_READ_METHODS = new Set(['fs.search', 'fs.edit', 'shell.exec']);
@@ -268,10 +273,11 @@ function buildCogSecCase(ctx, services, env, {
       const policy = services.readJsonIfExists(
         join(services.systemDataDir, INTAKE_POLICY_FILE),
       );
-      if (policy?.mode !== 'enforce') {
+      if (!INTAKE_DOCUMENT_ENFORCING_MODES.has(policy?.mode)) {
         throw new CaseConfigurationError(
           'invalid_owner:intake-policy.json.mode',
-          `${id} requires intake-policy.json mode "enforce"`,
+          `${id} requires an intake-policy.json mode that enforces external ingress `
+          + `(${[...INTAKE_DOCUMENT_ENFORCING_MODES].join(' or ')}); found ${JSON.stringify(policy?.mode ?? null)}`,
         );
       }
       if (requireSatellitePrefix) {

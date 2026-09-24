@@ -6,6 +6,7 @@ import {
   type HubDeviceHumanAttachmentPort,
 } from './hub-device-ingress.js';
 import { DEFAULT_FENCE_TTL_MS, DEFAULT_MAX_FENCES } from './hub-device-endpoint-fence.js';
+import { DEFAULT_MAX_ENTRIES as DEFAULT_MAX_ASSERTION_BINDINGS } from './hub-device-assertion-replay-memory.js';
 
 /**
  * Hub device attachment authority for a gateway running without fleet auth.
@@ -23,12 +24,24 @@ import { DEFAULT_FENCE_TTL_MS, DEFAULT_MAX_FENCES } from './hub-device-endpoint-
  * `fenceTtlMs` (default 70 s, the longest an assertion can live) so a single
  * clock-skew rejection does not brick a hub whose session id is stable until
  * it re-hellos.
+ *
+ * Each admitted assertion is bound to the connection that first presented it
+ * for the same window, mirroring the durable store's assertion-digest lookup
+ * (psfn-framework-xwcqm): re-presenting it on a different connection is a
+ * `device_binding_mismatch` that fences the original connection, instead of
+ * a fresh guest attachment on a forked hub-device channel.
  */
 export interface GuestOnlyHubDeviceAttachmentStoreOptions {
   now?: () => number;
   randomId?: () => string;
   fenceTtlMs?: number;
   maxFences?: number;
+  /**
+   * Upper bound on live assertion-to-connection bindings. At the bound a NEW
+   * assertion is refused (fail closed) rather than evicting a live binding,
+   * matching the in-memory replay fence it pairs with.
+   */
+  maxAssertionBindings?: number;
 }
 
 const CHANNEL_DIGEST_DOMAIN = 'hub-device-channel:guest:v1\0';
@@ -47,12 +60,15 @@ export class GuestOnlyHubDeviceAttachmentStore implements HubDeviceHumanAttachme
     assertionDigest: string;
     expiresAtMs: number;
   }>();
+  private readonly maxAssertionBindings: number;
+  private readonly assertionBindings = new Map<string, { connectionId: string; expiresAtMs: number }>();
 
   constructor(options: GuestOnlyHubDeviceAttachmentStoreOptions = {}) {
     this.now = options.now ?? (() => Date.now());
     this.randomId = options.randomId ?? randomUUID;
     this.fenceTtlMs = options.fenceTtlMs ?? DEFAULT_FENCE_TTL_MS;
     this.maxFences = options.maxFences ?? DEFAULT_MAX_FENCES;
+    this.maxAssertionBindings = options.maxAssertionBindings ?? DEFAULT_MAX_ASSERTION_BINDINGS;
   }
 
   isFenced(connectionId: string): boolean {
@@ -86,6 +102,7 @@ export class GuestOnlyHubDeviceAttachmentStore implements HubDeviceHumanAttachme
     const companionId = input.connection.companionId;
     const nowMs = this.now();
     this.sweepAttachments(nowMs);
+    await this.bindAssertionToConnection(input.assertionDigest, connectionId, nowMs);
     const existing = this.attachments.get(connectionId);
     let disposition: HubDeviceAttachmentSnapshot['disposition'];
     let attachmentId: string;
@@ -141,6 +158,30 @@ export class GuestOnlyHubDeviceAttachmentStore implements HubDeviceHumanAttachme
     for (const [connectionId, attachment] of this.attachments) {
       if (attachment.expiresAtMs <= nowMs) this.attachments.delete(connectionId);
     }
+    for (const [assertionDigest, binding] of this.assertionBindings) {
+      if (binding.expiresAtMs <= nowMs) this.assertionBindings.delete(assertionDigest);
+    }
+  }
+
+  private async bindAssertionToConnection(
+    assertionDigest: string,
+    connectionId: string,
+    nowMs: number,
+  ): Promise<void> {
+    const bound = this.assertionBindings.get(assertionDigest);
+    if (bound) {
+      if (bound.connectionId === connectionId) return;
+      await this.fenceDevice({
+        assertionDigest,
+        connectionId: bound.connectionId,
+        reason: 'assertion_rejected',
+      });
+      throw new HubDeviceAttachmentRejectedError('device_binding_mismatch');
+    }
+    if (this.assertionBindings.size >= this.maxAssertionBindings) {
+      throw new Error('Hub device guest attachment assertion bindings are at capacity');
+    }
+    this.assertionBindings.set(assertionDigest, { connectionId, expiresAtMs: nowMs + this.fenceTtlMs });
   }
 
   async fenceDevice(

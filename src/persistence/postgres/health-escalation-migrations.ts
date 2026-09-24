@@ -82,6 +82,14 @@ const RUNTIME_HEALTH_EVENT_TABLE_STATEMENTS: readonly string[] = [
  * surface adopts the plane, because `CREATE TABLE IF NOT EXISTS` never updates
  * an existing constraint.
  */
+const HUMAN_ESCALATION_SETTLEMENT_LEASE_STATEMENTS: readonly string[] = [
+  `
+  ALTER TABLE human_escalation_attempts
+    ADD COLUMN IF NOT EXISTS settlement_lease_until_ms BIGINT
+      CHECK (settlement_lease_until_ms IS NULL OR settlement_lease_until_ms >= 0);
+  `,
+];
+
 const HUMAN_ESCALATION_TABLE_STATEMENTS: readonly string[] = [
   `
   CREATE TABLE IF NOT EXISTS human_escalations (
@@ -162,8 +170,25 @@ export const POSTGRES_HEALTH_EVENT_MIGRATIONS: readonly string[] =
 /**
  * The durable human escalation ledger a per-companion runtime opens in its own
  * schema. Identical DDL to the shared-schema copy the fleet's system-owned
- * escalations live in (shared migration version 21) — one definition, so the
+ * escalations live in (shared migration versions 21 and 22) — one definition, so the
  * two can never drift into a projection that cannot be read back.
  */
-export const POSTGRES_HUMAN_ESCALATION_MIGRATIONS: readonly string[] =
+export const POSTGRES_HUMAN_ESCALATION_MIGRATIONS: readonly string[] = [
+  ...HUMAN_ESCALATION_TABLE_STATEMENTS,
+  ...HUMAN_ESCALATION_SETTLEMENT_LEASE_STATEMENTS,
+];
+
+/** The ledger's table DDL alone: what shared migration version 21 installed. */
+export const POSTGRES_HUMAN_ESCALATION_TABLE_MIGRATIONS: readonly string[] =
   HUMAN_ESCALATION_TABLE_STATEMENTS;
+
+/**
+ * Settlement lease on a delivery attempt (bead psfn-framework-ycr3z): set while
+ * the claimer's sink call is out, cleared by its settle. The attempt ring skips
+ * a live lease, so an attempt in flight in ANOTHER process (gateway and agent
+ * share this table in single-companion mode) survives a burst of claims; a
+ * claimer that dies releases the row when the lease lapses. Shared migration
+ * version 22 installs it in the shared schema.
+ */
+export const POSTGRES_HUMAN_ESCALATION_SETTLEMENT_LEASE_MIGRATIONS: readonly string[] =
+  HUMAN_ESCALATION_SETTLEMENT_LEASE_STATEMENTS;

@@ -85,6 +85,9 @@ export const DEFAULT_HUMAN_ESCALATION_CONFIG: HumanEscalationConfig = {
     maxResolvedRowsPerKind: 256,
     maxAttemptsPerEscalation: 64,
     maxOpenRowsPerKind: 128,
+    // Well above any sink call: an operator alert is one bounded webhook or
+    // chat post. Too short re-exposes a still-delivering attempt to the ring.
+    settlementLeaseMs: 300_000,
   },
 };
 
@@ -138,6 +141,7 @@ function validateRetention(raw: unknown, sourcePath: string): HumanEscalationLed
       'maxResolvedRowsPerKind',
       'maxAttemptsPerEscalation',
       'maxOpenRowsPerKind',
+      'settlementLeaseMs',
     ],
     `${sourcePath}.${field}`,
     { errorPrefix: 'Invalid scheduler config' },
@@ -165,6 +169,11 @@ function validateRetention(raw: unknown, sourcePath: string): HumanEscalationLed
       1,
     ),
     maxOpenRowsPerKind,
+    settlementLeaseMs: toPositiveInteger(
+      retention.settlementLeaseMs,
+      `${field}.settlementLeaseMs`,
+      1,
+    ),
   };
 }
 

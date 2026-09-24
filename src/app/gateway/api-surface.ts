@@ -52,7 +52,10 @@ import {
 } from '../../system/config/fleet-auth-standalone-surface-guard.js';
 import type { GatewayFleetAuthBroker } from '../../boundary/gateway/fleet-auth-broker.js';
 import type { GatewayFleetAuthChildAssertionBroker } from '../../boundary/gateway/fleet-auth-child-assertions.js';
-import { GatewayCompanionUiActionBroker } from '../../boundary/gateway/companion-ui-action-broker.js';
+import {
+  CompanionUiActionDeniedError,
+  GatewayCompanionUiActionBroker,
+} from '../../boundary/gateway/companion-ui-action-broker.js';
 import { GatewayCompanionUiAudioIngress } from '../../boundary/gateway/companion-ui-audio-ingress.js';
 import type {
   GatewayRequestCapabilitySigner,
@@ -76,7 +79,10 @@ import {
 import type {
   PrimaryEmbodimentAuthorityPort,
 } from '../../boundary/fleet-auth/primary-embodiment.js';
-import { dispatchCompanionUiPrimaryEmbodiment } from '../../boundary/gateway/companion-ui-primary-embodiment.js';
+import {
+  dispatchCompanionUiKeyEmbodiment,
+  dispatchCompanionUiPrimaryEmbodiment,
+} from '../../boundary/gateway/companion-ui-primary-embodiment.js';
 import { dispatchCompanionUiApproval } from '../../boundary/gateway/companion-ui-approvals.js';
 import { FleetAuthHttpRoutes } from '../../channels/api/server/fleet-auth-routes.js';
 import type { FleetEscalationCoordinator } from '../../boundary/fleet-auth/escalation.js';
@@ -858,10 +864,10 @@ export async function startOptionalGatewayApiServer(
           operatorActionBroker: {
             // Key path (psfn-framework-7oh9y): the bearer is the human authority,
             // so frames dispatch with the key principal exactly as the REST API
-            // does. No Hub attachment, no fleet child assertion: shard and
-            // embodiment frames are denied here (they exist only as fleet
-            // child-capability / Hub-attachment routes), everything else maps
-            // onto the key routes.
+            // does. No Hub attachment, no fleet child assertion: shard frames
+            // and embodiment handoff are denied here (fleet child-capability /
+            // Hub-attachment routes only), embodiment status is read without an
+            // attachment (m1is8), everything else maps onto the key routes.
             execute: async input => {
               const compiled = compileCompanionUiAction(
                 input.rawBody,
@@ -883,7 +889,7 @@ export async function startOptionalGatewayApiServer(
                   String(body.id),
                   input.companionId,
                 );
-                if (!preview?.previewable || !preview.bytes) throw new Error('Artifact preview unavailable');
+                if (!preview?.previewable || !preview.bytes) throw new CompanionUiActionDeniedError();
                 return {
                   artifactId: preview.artifactId,
                   mediaType: preview.mediaType,
@@ -891,6 +897,11 @@ export async function startOptionalGatewayApiServer(
                   dataBase64: preview.bytes.toString('base64'),
                 };
               }
+              const embodiment = await dispatchCompanionUiKeyEmbodiment({
+                compiled,
+                ...(options.primaryEmbodiments ? { authority: options.primaryEmbodiments } : {}),
+              });
+              if (embodiment.handled) return embodiment.result;
               const approval = await dispatchCompanionUiApproval({
                 compiled,
                 gateway: options.gateway,
@@ -898,7 +909,7 @@ export async function startOptionalGatewayApiServer(
               if (approval.handled) return approval.result;
               const content = companionUiPromptContent(frame);
               if (!content || frame.resource === 'shards.interact') {
-                throw new Error('Companion UI operator action has no key dispatcher');
+                throw new CompanionUiActionDeniedError();
               }
               const interaction = beginCompanionUiInteraction(frame.requestId, input.signal);
               try {
@@ -989,7 +1000,7 @@ export async function startOptionalGatewayApiServer(
                   String(body.id),
                   input.compiled.target.companionId,
                 );
-                if (!preview?.previewable || !preview.bytes) throw new Error('Artifact preview unavailable');
+                if (!preview?.previewable || !preview.bytes) throw new CompanionUiActionDeniedError();
                 return {
                   artifactId: preview.artifactId,
                   mediaType: preview.mediaType,

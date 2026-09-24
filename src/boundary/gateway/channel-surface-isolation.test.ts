@@ -7,7 +7,7 @@ import {
   type GatewayChannelSurfaces,
 } from './channel-surfaces.js';
 import { createChannelSurfaceHealthReporter } from './channel-surface-health.js';
-import { isRetryableDiscordStartError } from './discord-startup.js';
+import { isRetryableChannelSurfaceStartError } from './channel-start-retry.js';
 import { ChannelSurfaceSupervisor } from '../../channels/backplane/channel-isolation.js';
 import { ChannelPluginHost } from '../../channels/plugins/host.js';
 import { createChannelPluginRegistry } from '../../channels/plugins/registry.js';
@@ -68,7 +68,7 @@ async function buildSurfaces(input: {
   const isolation = new ChannelSurfaceSupervisor({
     log,
     retry: { baseDelayMs: 50, maxDelayMs: 50, maxAttempts: 0 },
-    isRetryable: isRetryableDiscordStartError,
+    isRetryable: isRetryableChannelSurfaceStartError,
     report: createChannelSurfaceHealthReporter({
       emit: async (_name, data) => {
         healthEvents.push(data.event);

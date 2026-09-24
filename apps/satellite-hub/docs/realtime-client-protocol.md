@@ -252,6 +252,12 @@ A satellite that did not advertise the matching capability receives none of
 the hub-to-client events, and its `approval.decision` is rejected with an
 `error-event`.
 
+These capabilities are registry-granted: they are honoured only for an
+enrolled device whose registry `maxCapabilities` includes them. A Hub running
+without a device registry is presentation-only and drops them from `hello`
+(`hello.ack` reports the accepted set); its pre-hello `session.ready` is
+provisional.
+
 ### Client To Hub Touch
 
 ```json

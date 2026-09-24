@@ -155,13 +155,21 @@ export function assertSharedWorkspaceListingCursor(cursor: string): string {
 }
 
 /**
+ * ICU root collation, pinned rather than taken from the process locale: the
+ * Garden store and the governed reader run in different processes, and a
+ * cursor minted under one `LANG` must page identically under another
+ * (psfn-framework-emz0r).
+ */
+const SHARED_WORKSPACE_PATH_COLLATOR = new Intl.Collator('und');
+
+/**
  * The one total order both listing surfaces page in. Declared once so the
  * Garden store and the governed reader cannot drift into two orders that share
  * a cursor namespace, and tie-broken by code unit so it stays a strict order
- * even where `localeCompare` calls two distinct paths equal.
+ * even where the collator calls two distinct paths equal.
  */
 export function compareSharedWorkspaceArtifactPaths(left: string, right: string): number {
-  const collated = left.localeCompare(right);
+  const collated = SHARED_WORKSPACE_PATH_COLLATOR.compare(left, right);
   if (collated !== 0) return collated;
   if (left === right) return 0;
   return left < right ? -1 : 1;

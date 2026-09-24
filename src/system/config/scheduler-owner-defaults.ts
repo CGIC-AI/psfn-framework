@@ -195,6 +195,17 @@ function addMissingHumanEscalation(
     addedPaths.push(`humanEscalation.${key}`);
     changed = true;
   }
+  // psfn-framework-ycr3z added `retention.settlementLeaseMs` to a retention
+  // block operators already had; seed only the absent sub-key.
+  const retention = seeded.retention;
+  if (isRecord(retention) && retention.settlementLeaseMs === undefined) {
+    seeded.retention = {
+      ...retention,
+      settlementLeaseMs: DEFAULT_HUMAN_ESCALATION_CONFIG.retention.settlementLeaseMs,
+    };
+    addedPaths.push('humanEscalation.retention.settlementLeaseMs');
+    changed = true;
+  }
   if (changed) {
     candidate.humanEscalation = seeded;
   }

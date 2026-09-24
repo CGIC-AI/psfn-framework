@@ -110,10 +110,11 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
       apiKey: this.runtime.apiKey,
     });
     const channelMetadata = buildChannelMetadata(channel, satelliteClaim);
-    const headers = this.buildHeaders(channel, satelliteClaim, channelMetadata);
-    const hasAuthenticatedReplayProtection = Boolean(
-      channel.deviceAuthority && headers["X-PSFN-Hub-Device-Assertion"],
-    );
+    // Every Framework request carries a freshly signed device assertion: the
+    // gateway consumes each assertion for exactly one turn and refuses a
+    // re-presentation instead of running it again (psfn-framework-xwcqm).
+    const requestHeaders = (): Record<string, string> => this.buildHeaders(channel, satelliteClaim, channelMetadata);
+    const deviceAuthenticated = Boolean(channel.deviceAuthority);
     const body = JSON.stringify({
       model: this.runtime.model,
       stream: false,
@@ -157,7 +158,7 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
       const scope = createAttemptScope(externalSignal, Math.min(attemptTimeoutMs, remainingMs));
       try {
         const response = await this.postChatCompletionWithBusyRetry(
-          headers,
+          requestHeaders,
           body,
           scope.signal,
           () => this.assertCurrentDeviceAuthority(channel),
@@ -197,11 +198,9 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
         }
         if (isAbortError(error)) {
           attempts.push({ attempt, status: "timeout", elapsedMs: Date.now() - attemptStart });
-          continue;
-        }
-        if (hasAuthenticatedReplayProtection && isRetryableTransportLoss(error)) {
-          attempts.push({ attempt, status: "error", elapsedMs: Date.now() - attemptStart });
-          continue;
+          // A timed-out device turn may still be running on the gateway;
+          // retrying would start a second turn, so it fails instead.
+          if (!deviceAuthenticated) continue;
         }
         emit("failed");
         throw error;
@@ -286,7 +285,7 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
   }
 
   private async postChatCompletionWithBusyRetry(
-    headers: Record<string, string>,
+    headers: () => Record<string, string>,
     body: string,
     signal?: AbortSignal,
     assertCurrentAuthority: () => void = () => undefined,
@@ -297,7 +296,7 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
         throw abortReason(signal);
       }
       assertCurrentAuthority();
-      const response = await this.postChatCompletion(headers, body, signal);
+      const response = await this.postChatCompletion(headers(), body, signal);
       if (response.ok) {
         return response;
       }
@@ -813,30 +812,6 @@ function createAttemptScope(external: AbortSignal | undefined, timeoutMs: number
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError");
-}
-
-const RETRYABLE_TRANSPORT_ERROR_CODES = new Set([
-  "ECONNABORTED",
-  "ECONNRESET",
-  "EPIPE",
-  "UND_ERR_SOCKET",
-]);
-
-function isRetryableTransportLoss(error: unknown): boolean {
-  if (error instanceof TypeError) {
-    return /fetch failed|failed to fetch|network|socket|terminated|connection|reset/i.test(error.message);
-  }
-  let current: unknown = error;
-  const seen = new Set<unknown>();
-  while (current && typeof current === "object" && !seen.has(current)) {
-    seen.add(current);
-    const candidate = current as { code?: unknown; cause?: unknown };
-    if (typeof candidate.code === "string" && RETRYABLE_TRANSPORT_ERROR_CODES.has(candidate.code)) {
-      return true;
-    }
-    current = candidate.cause;
-  }
-  return false;
 }
 
 function abortReason(signal?: AbortSignal): Error {

@@ -77,6 +77,41 @@ const EMOTION_PAYLOAD = {
   timestamp: "2026-07-09T00:00:04.000Z",
 };
 
+// Companion relays (approvals, touch, tool_activity, emotion, artifact) are
+// registry-granted: a Hub without a device registry is presentation-only, so
+// these tests enroll their clients.
+const COMPANION_RELAY_MAX_CAPABILITIES: Required<SatelliteCapabilities> = {
+  input: ["text"],
+  output: ["text", "subtitle", "artifact", "tool_activity", "emotion"],
+  control: ["interrupt", "session_attach", "approvals", "touch"],
+  safety: [],
+};
+
+function companionClientCredential(satelliteId: string): string {
+  return `companion-client-secret:${satelliteId}`;
+}
+
+function companionClientRegistry(satelliteIds: readonly string[]): HubConfig["deviceRegistry"] {
+  return createHubDeviceRegistryAuthority(() => ({
+    schemaVersion: 1,
+    devices: satelliteIds.map((satelliteId, index) => ({
+      deviceId: `${satelliteId}-device`,
+      deviceName: `${satelliteId} device`,
+      satelliteId,
+      satelliteName: satelliteId,
+      endpointId: satelliteId,
+      claimType: "companion-app",
+      credentialSha256: createHash("sha256").update(companionClientCredential(satelliteId)).digest("hex"),
+      enrollmentVersion: 1,
+      enrollmentAssurance: "device_credential",
+      enrollmentStatus: "active",
+      companionId: `11111111-1111-4111-8111-${String(index + 2).padStart(12, "0")}`,
+      maxCapabilities: COMPANION_RELAY_MAX_CAPABILITIES,
+      homeAssistantEntityIds: [],
+    })),
+  }));
+}
+
 const LOCATION_CREDENTIAL = "phone-location-test-secret";
 const LOCATION_ASSERTION_ISSUER = createHubDeviceAssertionIssuer({
   issuer: "psfn-satellite-hub",
@@ -648,7 +683,7 @@ test("hub relays companion events only to satellites that advertised the matchin
   const backplane = new FakeBackplane();
   const baseUrl = await backplane.start();
   const bridge = new CompanionBridge(bridgeConfig(baseUrl));
-  const server = new RealtimeHubServer(testHubConfig(), {
+  const server = new RealtimeHubServer(testHubConfig({ deviceRegistry: companionClientRegistry(["companion-app", "plain-speaker"]) }), {
     agent: new FakeAgent(),
     voxtaTts: null,
     voxtaStt: null,
@@ -661,8 +696,8 @@ test("hub relays companion events only to satellites that advertised the matchin
     await server.start();
     await waitFor(() => backplane.sseConnectionCount >= 1, "bridge SSE connection");
     const port = (server.address() as AddressInfo).port;
-    capable = await TestClient.connect(port, "companion-app", APPROVAL_CAPABILITIES);
-    plain = await TestClient.connect(port, "plain-speaker", PLAIN_CAPABILITIES);
+    capable = await TestClient.connectEnrolled(port, "companion-app", APPROVAL_CAPABILITIES);
+    plain = await TestClient.connectEnrolled(port, "plain-speaker", PLAIN_CAPABILITIES);
 
     backplane.emit({
       kind: "approval.requested",
@@ -744,7 +779,7 @@ test("hub forwards a capable client's typed touch interaction and relays the com
     }),
   };
   const bridge = new CompanionBridge(bridgeConfig(baseUrl));
-  const server = new RealtimeHubServer(testHubConfig(), {
+  const server = new RealtimeHubServer(testHubConfig({ deviceRegistry: companionClientRegistry(["companion-app"]) }), {
     agent: new FakeAgent(),
     voxtaTts: null,
     voxtaStt: null,
@@ -755,7 +790,7 @@ test("hub forwards a capable client's typed touch interaction and relays the com
   try {
     await server.start();
     const port = (server.address() as AddressInfo).port;
-    client = await TestClient.connect(port, "companion-app", TOUCH_CAPABILITIES);
+    client = await TestClient.connectEnrolled(port, "companion-app", TOUCH_CAPABILITIES);
     client.clearMessages();
     client.send({
       type: "touch.interaction",
@@ -768,7 +803,7 @@ test("hub forwards a capable client's typed touch interaction and relays the com
     await waitFor(() => backplane.stimulusRequests.length === 1, "touch stimulus forwarding");
     assert.deepEqual(backplane.stimulusRequests[0]?.body, {
       ...TEST_IDENTITY,
-      sessionId: "companion-test:companion-app",
+      sessionId: "realtime:companion-app-device",
       deviceId: "companion-app-device",
       kind: "headpat",
       region: "head",
@@ -1063,7 +1098,7 @@ test("hub proxies approval decisions with satellite attribution and relays failu
   const backplane = new FakeBackplane();
   const baseUrl = await backplane.start();
   const bridge = new CompanionBridge(bridgeConfig(baseUrl));
-  const server = new RealtimeHubServer(testHubConfig(), {
+  const server = new RealtimeHubServer(testHubConfig({ deviceRegistry: companionClientRegistry(["companion-app"]) }), {
     agent: new FakeAgent(),
     voxtaTts: null,
     voxtaStt: null,
@@ -1075,7 +1110,7 @@ test("hub proxies approval decisions with satellite attribution and relays failu
     await server.start();
     await waitFor(() => backplane.sseConnectionCount >= 1, "bridge SSE connection");
     const port = (server.address() as AddressInfo).port;
-    client = await TestClient.connect(port, "companion-app", APPROVAL_CAPABILITIES);
+    client = await TestClient.connectEnrolled(port, "companion-app", APPROVAL_CAPABILITIES);
 
     backplane.approvalResponse = { status: 200, body: JSON.stringify({ id: "appr-1", status: "approved" }) };
     client.send({ type: "approval.decision", id: "appr-1", decision: "approve" });
@@ -1129,7 +1164,7 @@ test("hub serves artifact previews to capable satellites and fails closed otherw
   const backplane = new FakeBackplane();
   const baseUrl = await backplane.start();
   const bridge = new CompanionBridge(bridgeConfig(baseUrl, { previewMaxBytes: 32 }));
-  const server = new RealtimeHubServer(testHubConfig(), {
+  const server = new RealtimeHubServer(testHubConfig({ deviceRegistry: companionClientRegistry(["companion-app", "plain-speaker"]) }), {
     agent: new FakeAgent(),
     voxtaTts: null,
     voxtaStt: null,
@@ -1141,8 +1176,8 @@ test("hub serves artifact previews to capable satellites and fails closed otherw
   try {
     await server.start();
     const port = (server.address() as AddressInfo).port;
-    capable = await TestClient.connect(port, "companion-app", APPROVAL_CAPABILITIES);
-    plain = await TestClient.connect(port, "plain-speaker", PLAIN_CAPABILITIES);
+    capable = await TestClient.connectEnrolled(port, "companion-app", APPROVAL_CAPABILITIES);
+    plain = await TestClient.connectEnrolled(port, "plain-speaker", PLAIN_CAPABILITIES);
 
     backplane.previewResponse = {
       status: 200,
@@ -1191,7 +1226,7 @@ test("hub serves artifact previews to capable satellites and fails closed otherw
 });
 
 test("hub without a companion bridge fails closed for approvals and previews", async () => {
-  const server = new RealtimeHubServer(testHubConfig(), {
+  const server = new RealtimeHubServer(testHubConfig({ deviceRegistry: companionClientRegistry(["companion-app"]) }), {
     agent: new FakeAgent(),
     voxtaTts: null,
     voxtaStt: null,
@@ -1202,7 +1237,7 @@ test("hub without a companion bridge fails closed for approvals and previews", a
   try {
     await server.start();
     const port = (server.address() as AddressInfo).port;
-    client = await TestClient.connect(port, "companion-app", APPROVAL_CAPABILITIES);
+    client = await TestClient.connectEnrolled(port, "companion-app", APPROVAL_CAPABILITIES);
 
     client.send({ type: "approval.decision", id: "appr-1", decision: "approve" });
     const decisionError = await client.waitForMessage("error-event");
@@ -1321,6 +1356,20 @@ class TestClient {
     });
     await client.waitForMessage("hello.ack");
     return client;
+  }
+
+  static async connectEnrolled(
+    port: number,
+    satelliteId: string,
+    capabilities: SatelliteCapabilities,
+  ): Promise<TestClient> {
+    return TestClient.connectAuthenticated(port, {
+      type: "hello",
+      deviceId: `${satelliteId}-device`,
+      deviceName: `${satelliteId} device`,
+      credential: companionClientCredential(satelliteId),
+      capabilities,
+    });
   }
 
   static async connectAuthenticated(port: number, hello: unknown): Promise<TestClient> {

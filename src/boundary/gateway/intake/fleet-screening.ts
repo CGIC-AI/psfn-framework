@@ -153,6 +153,12 @@ export interface GatewayIntakeScreeningRuntime {
   screeningFor(companionId?: string): IntakeScreeningService | null;
   /** Fleet-wide bounded async screening pool. */
   readonly screeningPool: ScreeningPool;
+  /**
+   * Re-resolve every composition's screener models after a models.json reload.
+   * Returns how many compositions switched; throws on the first composition
+   * whose new selection would not start (that one keeps its running models).
+   */
+  refreshScreenerModels(): { applied: number };
   dispose(): Promise<void>;
 }
 
@@ -427,6 +433,11 @@ export async function composeGatewayIntakeScreeningRuntime(
     screeningPool: pool,
     resolve,
     screeningFor,
+    refreshScreenerModels: () => ({
+      applied: compositions
+        .map(composition => composition.refreshScreenerModels())
+        .filter(outcome => outcome === 'applied').length,
+    }),
     dispose: disposeCompositionsAndPool,
   };
 }

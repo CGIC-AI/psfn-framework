@@ -541,8 +541,13 @@ export class CompanionGatewayClient {
     const result = parseGatewayResult(value);
     if (!result) return this.failProtocol('Companion gateway frame was malformed');
     if (!result.ok) {
-      this.embodimentRequests.reset(new Error('The embodiment request was denied. Refresh its status before trying again.'));
-      this.emitLocalError('Companion action was denied', true);
+      if (result.failure === 'internal_error') {
+        this.embodimentRequests.reset(new Error('The embodiment request failed on the server. Refresh its status before trying again.'));
+        this.emitLocalError('Companion action failed on the server', true);
+      } else {
+        this.embodimentRequests.reset(new Error('The embodiment request was denied. Refresh its status before trying again.'));
+        this.emitLocalError('Companion action was denied', true);
+      }
       return false;
     }
     const pending = this.pending.get(result.requestId);

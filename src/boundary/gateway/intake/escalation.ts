@@ -63,10 +63,12 @@ export const L2_SCREENER_ERROR_FIELD = 'l2_error';
 
 export interface GatewayIntakeEscalationDeps {
   policy: IntakePolicyConfig;
-  /** Startup-resolved canonical background-purpose model for L2. */
-  l2Model: ScreenerModel;
-  /** Startup-resolved reasoning (+ optional background) purpose models for L3. */
-  l3Models: readonly ScreenerModel[];
+  /**
+   * The current screener models, read per escalation so a models.json reload
+   * applies without a restart: L2 is the canonical background-purpose model,
+   * L3 the reasoning (+ optional background) purpose models.
+   */
+  models: () => { l2: ScreenerModel; l3: readonly ScreenerModel[] };
   /** Gateway-owned pi-ai runtime and credential resolver (never logged). */
   backend: ScreenerBackend;
   /** Durable quarantine store (htm9.11) for the L3 hard-rule hold. */
@@ -166,7 +168,7 @@ export function createGatewayIntakeEscalationPort(
         context,
         priorScore: request.priorScore,
         config: deps.policy,
-        model: deps.l2Model,
+        model: deps.models().l2,
         backend: deps.backend,
         ...(deps.testCompletion ? { testCompletion: deps.testCompletion } : {}),
         ...(deps.onScreenerProviderRejected
@@ -237,7 +239,7 @@ export function createGatewayIntakeEscalationPort(
         context,
         ...(l2ForL3 ? { l2: l2ForL3 } : {}),
         config: deps.policy,
-        models: deps.l3Models,
+        models: deps.models().l3,
         backend: deps.backend,
       ...(deps.testCompletion ? { testCompletion: deps.testCompletion } : {}),
       });

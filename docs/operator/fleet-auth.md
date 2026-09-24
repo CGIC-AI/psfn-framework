@@ -508,9 +508,17 @@ through a single-use replay fence keyed on the full signed token digest that
 returns `consumed` / `replayed` / `mismatch` — durable in Postgres under fleet
 auth (`fleet_auth.hub_device_assertion_replays`), process-local without it
 (`InMemoryHubDeviceAssertionReplayStore`, bounded by the ≤70 s assertion
-lifetime). An exact re-presentation is `replayed` and admitted as a transport
-retry of the same turn; a different token reusing a jti is `mismatch` and
-rejected. Audit digests for issuer, key id,
+lifetime). An exact re-presentation is `replayed`; a different token reusing
+a jti is `mismatch` and rejected. A `replayed` assertion never runs a second
+turn: re-presented on a different connection, the attachment authority denies
+it as `device_binding_mismatch` and fences the connection that first used it
+(the durable store by assertion digest, `GuestOnlyHubDeviceAttachmentStore`
+by an in-memory assertion-to-connection binding held for the assertion
+window); re-presented on the same connection, the attachment is a `retry` and
+`/v1/chat/completions` answers `409 hub_device_assertion_replayed` without
+running the turn. The Hub therefore signs a fresh assertion for every request
+(agent-busy and empty-reply recovery included) and does not retry a device
+turn after an ambiguous timeout or transport loss, which may already have run. Audit digests for issuer, key id,
 audience, companion, device, session, enrollment version, and jti are keyed
 HMAC-SHA256 under the configured session pepper (fleet auth's
 `sessionPepperRef`, or `HUB_DEVICE_ASSERTION_AUDIT_PEPPER` / a derivation of
@@ -713,6 +721,31 @@ supported. The superuser credential is used for this run only and is never
 handed to the gateway. Run the bootstrap after `npm run onboard` has
 provisioned the companion roles, and again whenever `fleet-auth.json` roles or
 passwords change.
+
+## Disabling fleet auth
+
+The inverse of the bootstrap above. Removing `fleet-auth.json` does not remove
+what fleet auth granted: its roles
+keep schema ACLs, per-object grants, and owner default privileges on every
+companion schema and on `shared`, and the shared-runtime readiness proof then
+refuses to boot on the unexpected grantees. That proof stays fail-closed (with
+the owner file gone the former role names are unknowable). Tear the grants down
+with one command after removing the owner file:
+
+```bash
+npm run fleet-auth:teardown -- --role <runtime-role> --role <migration-role> \
+  --role <backup-role>            # dry run: prints every planned statement
+npm run fleet-auth:teardown -- --role <runtime-role> --role <migration-role> \
+  --role <backup-role> --apply
+```
+
+It resolves every companion schema and the shared schema from the gateway fleet
+topology, connects as each schema owner (the only role that can revoke its own
+default privileges), revokes exactly the named roles' residue in one
+transaction per schema, and re-reads it. It refuses while fleet auth is still
+configured and refuses any role that is a companion or shared-migration
+authority. It then prints the superuser-only remainder (`DROP SCHEMA fleet_auth
+CASCADE`, the restore-verification database, `DROP OWNED BY`, `DROP ROLE`).
 
 ## Configuration
 

@@ -43,10 +43,10 @@ import {
   resolveCompanionStateDir,
   resolvePersonalSkillsDir,
 } from '../../persistence/layout.js';
-import { DEFAULT_DISCORD_START_RETRY_BASE_DELAY_MS,
-  DEFAULT_DISCORD_START_RETRY_MAX_DELAY_MS,
-  DEFAULT_DISCORD_START_RETRY_MAX_ATTEMPTS,
-} from './discord-startup.js';
+import {
+  resolveChannelSurfaceStartRetry,
+  type ChannelSurfaceStartRetryPolicy,
+} from './channel-start-retry.js';
 import {
   resolveGatewayRpcEndpointFromEnv,
   type GatewayRpcEndpoint,
@@ -112,11 +112,7 @@ export interface GatewayBootstrapInput {
   policyConfig: PolicyConfig;
   server: GatewayBootstrapServerInput;
   providerEnv: NodeJS.ProcessEnv;
-  discordStartRetry: {
-    baseDelayMs: number;
-    maxDelayMs: number;
-    maxAttempts: number;
-  };
+  channelSurfaceStartRetry: ChannelSurfaceStartRetryPolicy;
   shutdownForceExitTimeoutMs: number;
 }
 
@@ -480,20 +476,7 @@ export function resolveGatewayBootstrapInput(
       },
     },
     providerEnv,
-    discordStartRetry: {
-      baseDelayMs: parsePositiveIntEnv(
-        env.DISCORD_START_RETRY_BASE_DELAY_MS,
-        DEFAULT_DISCORD_START_RETRY_BASE_DELAY_MS,
-      ),
-      maxDelayMs: parsePositiveIntEnv(
-        env.DISCORD_START_RETRY_MAX_DELAY_MS,
-        DEFAULT_DISCORD_START_RETRY_MAX_DELAY_MS,
-      ),
-      maxAttempts: parsePositiveIntEnv(
-        env.DISCORD_START_RETRY_MAX_ATTEMPTS,
-        DEFAULT_DISCORD_START_RETRY_MAX_ATTEMPTS,
-      ),
-    },
+    channelSurfaceStartRetry: resolveChannelSurfaceStartRetry(env),
     shutdownForceExitTimeoutMs: parsePositiveIntEnv(
       env.SHUTDOWN_FORCE_EXIT_TIMEOUT_MS,
       DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS,

@@ -67,7 +67,10 @@ import {
   type VisionIntakeImageInput,
   type VisionIntakeImageScreenResult,
 } from './vision-screener.js';
-import { resolveIntakeScreenerModels } from './screener-model-selection.js';
+import {
+  createLiveIntakeScreenerModels,
+  type IntakeScreenerModelSelection,
+} from './screener-model-selection.js';
 import type { OperatorAlertSinkConfiguration } from '../../../shared/contracts/operator-alerting.js';
 
 const log = createComponentLogger('GatewayIntakeScreening');
@@ -138,6 +141,12 @@ export interface GatewayIntakeScreeningComposition {
     degraded: boolean;
     modelDir: string;
   };
+  /**
+   * Re-resolve the L2/L3/vision screener models after models.json changed
+   * (psfn-framework-hye2n). A changed selection is backend-verified before it
+   * serves; if it would not start, this throws and the running one stays.
+   */
+  refreshScreenerModels(): 'unchanged' | 'applied';
   /** For shutdown: disposes the ONNX session when one was loaded. */
   dispose(): Promise<void>;
 }
@@ -222,7 +231,7 @@ export async function composeGatewayIntakeScreening(input: {
       'CogSec surface posture requires at least one configured operator alert sink',
     );
   }
-  const screenerModels = resolveIntakeScreenerModels(input.config, {
+  const liveScreenerModels = createLiveIntakeScreenerModels(input.config, {
     l3DualModel: policy.l3Screener.dualModel,
     visionEnabled: policy.visionScreener.enabled,
   });
@@ -297,20 +306,24 @@ export async function composeGatewayIntakeScreening(input: {
       'Configured CogSec surface posture requires a resolvable pi-ai deep-screening backend',
     );
   }
-  if (!input.screenerTestCompletion) {
+  const verifyScreenerModels = (selection: IntakeScreenerModelSelection): void => {
+    if (input.screenerTestCompletion) return;
     assertScreenerBackendReady(backend, [
-      screenerModels.l2,
-      ...screenerModels.l3,
-      ...(screenerModels.vision ? [screenerModels.vision] : []),
+      selection.l2,
+      ...selection.l3,
+      ...(selection.vision ? [selection.vision] : []),
     ]);
-  }
+  };
+  verifyScreenerModels(liveScreenerModels.current());
   // Multi-writer JSON store (same file the gateway core, contact-block gate,
   // and Garden use); reloads from disk per operation.
   const cogSecEvents = new CogSecEventStore(resolveCogSecEventsPath(input.companionDataDir));
   const escalation: IntakeEscalationPort = createGatewayIntakeEscalationPort({
     policy,
-    l2Model: screenerModels.l2,
-    l3Models: screenerModels.l3,
+    models: () => {
+      const selection = liveScreenerModels.current();
+      return { l2: selection.l2, l3: selection.l3 };
+    },
     backend,
     quarantine,
     cogSecEvents,
@@ -370,7 +383,7 @@ export async function composeGatewayIntakeScreening(input: {
             ? { canonicalContactId: request.canonicalContactId }
             : {}),
           policy,
-          model: screenerModels.vision!,
+          model: liveScreenerModels.current().vision!,
           screening,
           backend,
           quarantine,
@@ -414,6 +427,7 @@ export async function composeGatewayIntakeScreening(input: {
       degraded: injectionClassifierDegraded,
       modelDir,
     },
+    refreshScreenerModels: () => liveScreenerModels.refresh(verifyScreenerModels),
     dispose: async () => {
       await classifier?.dispose();
     },

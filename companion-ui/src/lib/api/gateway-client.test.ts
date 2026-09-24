@@ -118,6 +118,16 @@ describe('CompanionGatewayClient', () => {
     expect(JSON.parse(String(socket.sent[1])).resource).toBe('embodiment.status');
   });
 
+  it('distinguishes a server fault from a denial (psfn-framework-u42t5)', async () => {
+    const socket = new FakeSocket();
+    const client = await connectClient(socket, ['handoff-1']);
+    const failed = expect(client.primaryEmbodiment!.handoff(4)).rejects.toThrow(/failed on the server/);
+    socket.message({
+      schemaVersion: 1, type: 'result', requestId: 'handoff-1', ok: false, error: { code: 'internal_error' },
+    });
+    await failed;
+  });
+
   it('rejects malformed embodiment responses and clears the attachment', async () => {
     const socket = new FakeSocket();
     const client = await connectClient(socket, ['status-1']);

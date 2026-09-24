@@ -28,6 +28,24 @@ export const DEFAULT_TURN_RECORD_ELIGIBILITY_FENCE_ACQUIRE_TIMEOUT_MS = 30_000;
  */
 export const TURN_RECORD_ELIGIBILITY_FENCE_POOL_CAPACITY = 8;
 
+/**
+ * Startup guard for the invariant above (psfn-framework-wp8h2). Background
+ * sessions that fill the whole fence lane leave foreground TurnRecord appends
+ * and handoff recovery to time out after the acquire bound, so an owner file
+ * that asks for that many concurrent sessions is refused at composition
+ * rather than degrading into fence timeouts later.
+ */
+export function assertBackgroundWorkFitsTurnRecordFenceLane(maxConcurrentSessions: number): void {
+  if (maxConcurrentSessions >= TURN_RECORD_ELIGIBILITY_FENCE_POOL_CAPACITY) {
+    throw new Error(
+      `scheduler.json backgroundWork.supervisor.maxConcurrentSessions (${maxConcurrentSessions}) `
+      + `must be below the TurnRecord eligibility fence lane capacity `
+      + `(${TURN_RECORD_ELIGIBILITY_FENCE_POOL_CAPACITY}); every fenced background session holds `
+      + 'one lane client, and foreground appends need a free one',
+    );
+  }
+}
+
 /** Pool lane name; see {@link PostgresConnectionOptions.lane}. */
 export const TURN_RECORD_ELIGIBILITY_FENCE_POOL_LANE = 'turn-record-eligibility-fence';
 

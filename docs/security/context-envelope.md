@@ -156,6 +156,29 @@ classification and disclosure enforcement see identical precedence and demotion
 boundaries (`repo://src/boundary/gateway/bootstrap-input.ts#L406-L420`,
 `repo://src/app/agent/startup-context.ts#L143-L153`).
 
+### Broadcast safety is layered; the regex prefilter is the outermost layer
+
+A broadcast turn is bounded by three layers, in order of authority:
+
+1. **Envelope scope.** A broadcast channel resolves to `public_only` retrieval
+   and context scope unless the turn carries an explicit operator approval
+   token (`approved_private_context`); a non-broadcast channel never becomes
+   a broadcast because a token is present
+   (`repo://src/system/trust/broadcast-safety.ts`).
+2. **Approval and trust ceilings.** An approval token is honoured only when it
+   matches the configured allowlist (`BROADCAST_APPROVAL_TOKENS` /
+   `BROADCAST_APPROVAL_TOKEN`) or, without one, carries the `approve:` prefix
+   and a suffix of at least eight characters; anything else grants nothing.
+3. **Draft prefilter.** `classifyBroadcastDraft` runs a small regex set over
+   the drafted reply for sensitive, private (including emails and phone
+   numbers), and off-brand signals; a match holds the draft for approval. It is
+   a **heuristic**, not an enforcement boundary: a non-match is never proof of
+   safety. Spelled-out or obfuscated contact details, homoglyphs, zero-width
+   characters, and masked profanity pass it, and long numeric ids can trip it.
+   Those limits are pinned in
+   `repo://src/system/trust/broadcast-safety.corpus.test.ts` so a coverage
+   change is a reviewed decision.
+
 ### Derivation fails closed
 
 `deriveScopeContextEnvelope` produces the full envelope from channel

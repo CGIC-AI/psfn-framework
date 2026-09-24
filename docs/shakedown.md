@@ -126,6 +126,25 @@ feedback: per case in `results[].companionFeedback`, run-wide in
 never fails a case. Cases still fail on wrong or missing required values,
 fabricated success, and narration without execution.
 
+A malformed JSON answer is read tolerantly (`lib/assistant-answer.mjs`):
+duplicate keys resolve as `JSON.parse` does, and prose around the object or a
+second object yields the first parseable object. The case validators judge
+those values, and the malformation (`duplicate_keys`, `surrounding_text`,
+`multiple_objects`, or `unparseable`) is recorded as a `malformed_answer`
+feedback entry. An answer with no parseable object still fails on its missing
+required values.
+
+### model_lane_attribution on a slow provider
+
+The case drives an interactive turn, a vision turn, and then warmup turns until
+the periodic emotion appraisal fires and lands a background-lane usage row.
+Its whole dispatch runs inside `PSFN_MODEL_LANE_DISPATCH_TIMEOUT_MS` (default
+300000). An appraisal job that exists is followed until it settles rather than
+abandoned after a fixed window, and a warmup turn is started only when the
+remaining budget can fit the slowest turn seen so far. A provider too slow for
+the budget therefore ends in the named verdict "not reached within the case
+budget" (raise the budget) instead of a `case_timeout`.
+
 ### CogSec quarantine case prerequisites
 
 `s10_cogsec_document_quarantine` and `s10_cogsec_satellite_document_quarantine`

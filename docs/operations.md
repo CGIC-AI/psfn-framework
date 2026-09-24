@@ -137,6 +137,12 @@ journal, performs a full runtime restart (Compose restart, supervised restart,
 or `kubectl rollout restart` of all three Deployments), and re-proves the same
 persisted turn plus the authenticated surfaces afterwards.
 
+Garden `/health` reports admin-transport reachability only (one companion, or
+every registered fleet target). The Garden operator process opens no
+PostgreSQL store, so a degraded optional store (model usage, analysis traces,
+and so on) is reported by the process that owns it: the agent `/health`
+`memory` check lists it under `meta.postgresReadiness.degradedStores`.
+
 `*:down` on every path stops compute while retaining runtime data; resume with
 the corresponding `*:up` and then run `*:doctor`. Manual volume deletion,
 `docker compose down --volumes`, or Helm uninstall are not ordinary stop
@@ -662,6 +668,17 @@ the operator's external configuration authority.
 <!-- openwiki: broken internal link [maintenance-scripts-inventory.md] file "maintenance-scripts-inventory.md" does not exist. Fix the href or restore the target, then delete this comment. -->
   mutation (see the [maintenance scripts inventory](maintenance-scripts-inventory.md)).
 
+## Live owner-file reloads
+
+`models.json` hot-reloads in every process: the agent and the gateway each poll
+its mtime and apply an edit (a Garden save or a direct write) without a
+restart. In the gateway that covers model routing, which reads the registry per
+call, and the CogSec intake screeners, whose L2/L3/vision models are
+re-resolved and re-verified against the provider backend; a reload that fails
+to parse, or a screener selection that would not start, is logged and the
+running selection stays. Other owner files load at startup and need a restart
+after a direct edit unless their own section says otherwise.
+
 ## Owner-file contract upgrades
 
 A release that adds a required owner-file field ships two things: the field's
@@ -748,6 +765,10 @@ bad row from taking the foreground turn pipeline down with it:
   `pg_stat_activity.application_name`), so long-held fence clients can no
   longer exhaust the shared per-companion pool that `beginForeground` and every
   store draw from.
+  That lane holds 8 clients and every fenced background session holds one,
+  so the agent refuses to start when `scheduler.json`
+  `backgroundWork.supervisor.maxConcurrentSessions` is 8 or more; foreground
+  appends and handoff recovery always need a free lane client.
 
 Symptoms of a poisoned lane on an older build: every chat turn on every channel
 logs `[IntakeScreening] ... released` and then nothing (no `[ModelFallback]`
@@ -755,6 +776,22 @@ line, no model call), `/health` still answers, a restart re-claims the same
 jobs and stalls again, and `pg_locks` shows idle `agent-persistence` sessions
 holding advisory locks whose key is
 `hashtextextended('["turn-record-source-eligibility-v2","<schema>","<turnId>"]', 0)`.
+
+Inspect and retire with the maintenance CLI (it connects with the companion's
+own `POSTGRES_DATABASE_URL` and tenant schema/role, prints content-free rows
+including `lease_expiry_count`, and is a dry run unless `--apply`):
+
+```bash
+npm run background-work:jobs -- list --state retry_wait --channel-prefix hub-device:
+npm run background-work:jobs -- retire --channel-prefix hub-device:          # dry run
+npm run background-work:jobs -- retire --channel-prefix hub-device: --apply  # or --job <id> ...
+```
+
+`retire` marks the selected non-terminal jobs `stale_discarded` (keeping the
+reason code they got stuck on), skips any `running` job whose lease is still live (stop the
+agent first), and writes the retired rows to an audit file under
+`<data-dir>/repair-backups/background-work-retirement-<timestamp>/`. The SQL
+below remains the fallback.
 
 Inspect before acting (read-only):
 

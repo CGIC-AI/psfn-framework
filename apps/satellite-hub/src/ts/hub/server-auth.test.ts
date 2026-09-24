@@ -75,6 +75,44 @@ test("browser hello without device authority keeps the hub-minted identity when 
   await server.close();
 });
 
+test("hub without a registry is presentation-only and never adopts browser-declared relay capabilities", async () => {
+  const server = new RealtimeHubServer({ ...config(), deviceRegistry: null }, { agent: agent() });
+  await server.start();
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const socket = new WebSocket(`ws://127.0.0.1:${address.port}`);
+  const messages: HubToClientMessage[] = [];
+  socket.on("message", (raw) => messages.push(JSON.parse(raw.toString()) as HubToClientMessage));
+  await new Promise<void>((resolve) => socket.once("open", resolve));
+  socket.send(JSON.stringify({
+    type: "hello",
+    capabilities: {
+      input: ["text", "device_location", "vision_upload"],
+      output: ["text", "artifact", "tool_activity", "emotion", "action"],
+      control: ["interrupt", "approvals", "touch"],
+      safety: ["action_allowlist"],
+    },
+  }));
+  await waitFor(() => messages.some((message) => message.type === "hello.ack"));
+  const ack = messages.find((message) => message.type === "hello.ack");
+  assert.ok(ack && ack.type === "hello.ack");
+  assert.deepEqual(ack.capabilities, {
+    input: ["text"],
+    output: ["text"],
+    control: ["interrupt"],
+    safety: [],
+  });
+  messages.length = 0;
+  socket.send(JSON.stringify({ type: "approval.decision", id: "appr-1", decision: "approve" }));
+  await waitFor(() => messages.some((message) => message.type === "error-event"));
+  const error = messages.find((message) => message.type === "error-event");
+  assert.ok(error && error.type === "error-event");
+  assert.match(error.data.message, /did not advertise the approvals capability/);
+  socket.close();
+  await new Promise<void>((resolve) => socket.once("close", () => resolve()));
+  await server.close();
+});
+
 test("authenticated hello uses registry-owned identity and bounded capabilities", async () => {
   const server = new RealtimeHubServer(config(), { agent: agent() });
   await server.start();

@@ -98,6 +98,9 @@ class EidoverseMcplWakeRuntime {
   private droppedBatches = 0;
   private droppedMessages = 0;
   private overflowReported = false;
+  /** Cumulative counts when the current overflow episode opened. */
+  private episodeBaseBatches = 0;
+  private episodeBaseMessages = 0;
   private nextWakeSequence = 1;
 
   constructor(
@@ -155,16 +158,20 @@ class EidoverseMcplWakeRuntime {
   /**
    * Close one overflow episode. The opening line froze its counts at the first
    * drop — which is the least informative moment of a storm — so the episode
-   * also reports its cumulative totals once the backlog has drained. Two
-   * bounded lines per episode, counts only.
+   * also reports what it dropped once the backlog has drained, beside the
+   * process-lifetime totals (the counters are never reset). Two bounded lines
+   * per episode, counts only.
    */
   private reportDrain(): void {
     if (!this.overflowReported) return;
     this.overflowReported = false;
-    this.logger.warn(
-      "Eidoverse MCPL wake dispatch queue drained; "
-      + `dropped batches ${this.droppedBatches}, dropped messages ${this.droppedMessages}`,
-    );
+    this.logger.warn(`Eidoverse MCPL wake dispatch queue drained; ${this.dropCounts()}`);
+  }
+
+  private dropCounts(): string {
+    return `episode dropped batches ${this.droppedBatches - this.episodeBaseBatches}, `
+      + `dropped messages ${this.droppedMessages - this.episodeBaseMessages}; `
+      + `cumulative dropped batches ${this.droppedBatches}, dropped messages ${this.droppedMessages}`;
   }
 
   /**
@@ -173,13 +180,17 @@ class EidoverseMcplWakeRuntime {
    * the log, so the rest of the episode stays quiet until it drains.
    */
   private recordDrop(messageCount: number): void {
+    if (!this.overflowReported) {
+      this.episodeBaseBatches = this.droppedBatches;
+      this.episodeBaseMessages = this.droppedMessages;
+    }
     this.droppedBatches += 1;
     this.droppedMessages += messageCount;
     if (this.overflowReported) return;
     this.overflowReported = true;
     this.logger.warn(
       `Eidoverse MCPL wake dispatch queue is full (limit ${this.config.wakeQueueLimit}); `
-      + `dropped batches ${this.droppedBatches}, dropped messages ${this.droppedMessages}`,
+      + this.dropCounts(),
     );
   }
 

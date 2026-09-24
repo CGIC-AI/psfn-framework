@@ -623,6 +623,44 @@ describe('migrateLegacySchedulerOwner', () => {
     });
   });
 
+  it('seeds only the settlement lease into a retention block written before it existed', () => {
+    const { dataDir, filePath } = prepareOwner((owner) => {
+      makePreCaretakerCanonical(owner);
+      (owner.backgroundMaintenance as Record<string, unknown>).sharedWorldWikiCaretaker =
+        structuredClone(DEFAULT_BACKGROUND_MAINTENANCE_CONFIG.sharedWorldWikiCaretaker);
+      owner.backgroundWork = structuredClone(DEFAULT_BACKGROUND_WORK_TUNING);
+      (owner.icpAutonomy as Record<string, unknown>).policyHolds = structuredClone(
+        DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG.policyHolds,
+      );
+      owner.intentionFollowUp = structuredClone(DEFAULT_INTENTION_FOLLOW_UP_SCHEDULER_CONFIG);
+      owner.healthDetectors = structuredClone(DEFAULT_HEALTH_DETECTORS_CONFIG);
+      const { settlementLeaseMs: _absent, ...preLeaseRetention } = structuredClone(
+        DEFAULT_HUMAN_ESCALATION_CONFIG.retention,
+      );
+      owner.humanEscalation = {
+        ...structuredClone(DEFAULT_HUMAN_ESCALATION_CONFIG),
+        retention: { ...preLeaseRetention, maxAttemptsPerEscalation: 16 },
+      };
+      owner.fleetStagger = structuredClone(DEFAULT_FLEET_STAGGER_CONFIG);
+    });
+
+    expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
+      mode: 'apply',
+      status: 'applied',
+      addedPaths: ['humanEscalation.retention.settlementLeaseMs'],
+    });
+    const migrated = loadSchedulerConfig(dataDir).humanEscalation.retention;
+    expect(migrated.maxAttemptsPerEscalation).toBe(16);
+    expect(migrated.settlementLeaseMs)
+      .toBe(DEFAULT_HUMAN_ESCALATION_CONFIG.retention.settlementLeaseMs);
+    expect(JSON.parse(readFileSync(filePath, 'utf8'))).toMatchObject({
+      humanEscalation: { retention: { maxAttemptsPerEscalation: 16 } },
+    });
+    expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
+      status: 'not_needed',
+    });
+  });
+
   it('explicitly adds background-work tuning to owners written before it existed', () => {
     const { dataDir, filePath } = prepareOwner((owner) => {
       delete owner.salienceDecayIntervalMs;

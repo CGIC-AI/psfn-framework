@@ -2,7 +2,8 @@
 // DDL a per-companion runtime opens, from one definition.
 import {
   POSTGRES_HEALTH_EVENT_MIGRATIONS as RUNTIME_HEALTH_EVENT_TABLE_STATEMENTS,
-  POSTGRES_HUMAN_ESCALATION_MIGRATIONS as HUMAN_ESCALATION_TABLE_STATEMENTS,
+  POSTGRES_HUMAN_ESCALATION_SETTLEMENT_LEASE_MIGRATIONS as HUMAN_ESCALATION_SETTLEMENT_LEASE_STATEMENTS,
+  POSTGRES_HUMAN_ESCALATION_TABLE_MIGRATIONS as HUMAN_ESCALATION_TABLE_STATEMENTS,
 } from './health-escalation-migrations.js';
 import { POSTGRES_VECTOR_EXTENSION_MIGRATION } from './vector-extension-migration.js';
 
@@ -37,16 +38,17 @@ import { POSTGRES_VECTOR_EXTENSION_MIGRATION } from './vector-extension-migratio
 //  19 — bounded durable room-participation lease (jp36.5.5)
 //  20 — non-expiring ICP lifecycle admission fence (h248l.9)
 //  21 — fleet-wide system-owned health events and human escalations (e5r0s)
+//  22 — human-escalation attempt settlement lease (ycr3z)
 export const SHARED_SCHEMA_NAME = 'shared';
 
 /** Ledger versions installed by POSTGRES_SHARED_MIGRATIONS (excluding wiki versions 3 and 8). */
 export const POSTGRES_SHARED_BASE_MIGRATION_VERSIONS = [
-  1, 2, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
+  1, 2, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
 ] as const;
 
 /** Complete ledger across the base and shared-wiki chains. */
 export const POSTGRES_SHARED_ALL_MIGRATION_VERSIONS = [
-  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
+  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
 ] as const;
 
 export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
@@ -943,6 +945,10 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
   ...HUMAN_ESCALATION_TABLE_STATEMENTS,
   `INSERT INTO shared_schema_migrations (version, name)
     VALUES (21, 'fleet-system-health-and-escalations')
+    ON CONFLICT (version) DO NOTHING;`,
+  ...HUMAN_ESCALATION_SETTLEMENT_LEASE_STATEMENTS,
+  `INSERT INTO shared_schema_migrations (version, name)
+    VALUES (22, 'human-escalation-settlement-lease')
     ON CONFLICT (version) DO NOTHING;`,
 ];
 

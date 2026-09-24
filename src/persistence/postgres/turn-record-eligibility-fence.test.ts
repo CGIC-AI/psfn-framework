@@ -2,6 +2,8 @@ import type { Pool, PoolClient } from 'pg';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  assertBackgroundWorkFitsTurnRecordFenceLane,
+  TURN_RECORD_ELIGIBILITY_FENCE_POOL_CAPACITY,
   PostgresTurnRecordEligibilityFence,
   TurnRecordEligibilityFenceTimeoutError,
 } from './turn-record-eligibility-fence.js';
@@ -181,5 +183,19 @@ describe('PostgresTurnRecordEligibilityFence', () => {
     expect(unlocks).toHaveLength(1);
     expect(String(unlocks[0]?.[1]?.[0])).toContain('turn-a');
     expect(release).toHaveBeenCalledWith(undefined);
+  });
+});
+
+describe('assertBackgroundWorkFitsTurnRecordFenceLane (psfn-framework-wp8h2)', () => {
+  it('accepts the default and anything leaving a lane client free', () => {
+    expect(() => assertBackgroundWorkFitsTurnRecordFenceLane(4)).not.toThrow();
+    expect(() => assertBackgroundWorkFitsTurnRecordFenceLane(TURN_RECORD_ELIGIBILITY_FENCE_POOL_CAPACITY - 1))
+      .not.toThrow();
+  });
+
+  it('refuses background concurrency that could fill the fence lane', () => {
+    expect(() => assertBackgroundWorkFitsTurnRecordFenceLane(TURN_RECORD_ELIGIBILITY_FENCE_POOL_CAPACITY))
+      .toThrow(/must be below the TurnRecord eligibility fence lane capacity \(8\)/);
+    expect(() => assertBackgroundWorkFitsTurnRecordFenceLane(32)).toThrow(/maxConcurrentSessions \(32\)/);
   });
 });

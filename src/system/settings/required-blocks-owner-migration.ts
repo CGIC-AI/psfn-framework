@@ -19,7 +19,6 @@ import type {
   WikiStartupHydrationSettings,
 } from '../config/runtime-config-contracts.js';
 import {
-  RETIRED_WEB_FETCH_LOCAL_CRAWLER_SETTINGS_KEYS,
   SETTINGS_FILE_NAME,
   type EditableSettings,
 } from './contracts.js';
@@ -62,36 +61,6 @@ export interface RequiredSettingsBlocksMigrationResult {
   filePath: string;
   addedPaths?: string[];
   updatedPaths?: string[];
-  removedPaths?: string[];
-  /**
-   * Present only when retired local-crawler keys were removed. Booleans only:
-   * an operator whose crawler lane was enabled (for example to reach a local
-   * ComfyUI origin) must now grant webFetchAllowInternalNetwork explicitly.
-   */
-  retiredLocalCrawler?: {
-    webFetchLocalCrawlerEnabled: boolean;
-    webFetchAllowInternalNetwork: boolean;
-  };
-}
-
-/**
- * psfn-framework-xvtc1: remove the retired local-crawler web-fetch keys so an
- * upgraded owner starts. Startup still fails closed on these keys when this
- * migration has not run (see assertNoRetiredRuntimeSettingsKeys).
- */
-function removeRetiredLocalCrawlerKeys(candidate: Record<string, unknown>): {
-  removedPaths: string[];
-  report?: NonNullable<RequiredSettingsBlocksMigrationResult['retiredLocalCrawler']>;
-} {
-  const removedPaths = RETIRED_WEB_FETCH_LOCAL_CRAWLER_SETTINGS_KEYS
-    .filter(key => Object.prototype.hasOwnProperty.call(candidate, key));
-  if (removedPaths.length === 0) return { removedPaths };
-  const report = {
-    webFetchLocalCrawlerEnabled: candidate.webFetchLocalCrawlerEnabled === true,
-    webFetchAllowInternalNetwork: candidate.webFetchAllowInternalNetwork === true,
-  };
-  for (const key of removedPaths) delete candidate[key];
-  return { removedPaths: [...removedPaths], report };
 }
 
 function migrateLegacyEmosimProactivityBlock(
@@ -177,7 +146,6 @@ export function migrateRequiredSettingsBlocks(
     const defaults = loadRuntimeSettingsContractDefaults(
       options.seedDir ?? process.env.CONFIG_DIR ?? './config',
     );
-    const retired = removeRetiredLocalCrawlerKeys(candidate);
     if (migrateLegacyEmosimProactivityBlock(candidate, defaults)) {
       updatedPaths.push('emosimProactivity');
     }
@@ -191,7 +159,7 @@ export function migrateRequiredSettingsBlocks(
     }
 
     normalizeEditableSettings(candidate as EditableSettings);
-    if (addedPaths.length === 0 && updatedPaths.length === 0 && retired.removedPaths.length === 0) {
+    if (addedPaths.length === 0 && updatedPaths.length === 0) {
       assertSourceStillCurrent();
       const canonicalMode = canonicalOwnerFileMode({
         ownerFileName: SETTINGS_FILE_NAME,
@@ -222,8 +190,6 @@ export function migrateRequiredSettingsBlocks(
       filePath,
       ...(addedPaths.length > 0 ? { addedPaths } : {}),
       ...(updatedPaths.length > 0 ? { updatedPaths } : {}),
-      ...(retired.removedPaths.length > 0 ? { removedPaths: retired.removedPaths } : {}),
-      ...(retired.report ? { retiredLocalCrawler: retired.report } : {}),
     };
     if (options.apply) {
       writeFileDurableAtomicSync(

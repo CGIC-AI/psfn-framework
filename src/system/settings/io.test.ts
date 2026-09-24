@@ -48,23 +48,9 @@ describe('settings owner-file load logging', () => {
     roots.length = 0;
   });
 
-  it('fails closed with migration guidance when settings.json still carries retired local-crawler keys', () => {
-    const root = mkdtempSync(join(tmpdir(), 'psfn-settings-retired-'));
-    roots.push(root);
-    writeFileSync(
-      join(root, 'settings.json'),
-      JSON.stringify({ webFetchAllowHttp: false, webFetchLocalCrawlerEnabled: true, webFetchLocalCrawlerHostAllowlist: ['localhost'] }),
-      'utf-8',
-    );
-
-    expect(() => loadSettings(root)).toThrow(
-      /retired local-crawler web-fetch keys: webFetchLocalCrawlerEnabled, webFetchLocalCrawlerHostAllowlist\..*webFetchAllowInternalNetwork=true/,
-    );
-  });
-
-  it('rejects retired local-crawler keys on the owner-payload path before the generic unknown-key check', () => {
+  it('rejects a retired local-crawler key on the owner-payload path as an unknown key (g8a5c)', () => {
     expect(() => parseRuntimeSettingsOwnerPayload({ webFetchLocalCrawlerAllowHttp: true })).toThrow(
-      /retired local-crawler web-fetch keys: webFetchLocalCrawlerAllowHttp\./,
+      /webFetchLocalCrawlerAllowHttp/,
     );
   });
 

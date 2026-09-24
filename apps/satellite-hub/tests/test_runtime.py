@@ -6,7 +6,7 @@ import pytest
 
 from hub.adapters.tts.elevenlabs_streaming import _should_flush, _take_flush_chunk
 from hub.media.http_audio import StaticAudioServer
-from hub.runtime import load_runtime_config
+from hub.runtime import _load_hub_device_assertion_config, load_runtime_config
 
 
 def test_load_runtime_config_reads_psfn_and_project_env(tmp_path: Path, monkeypatch) -> None:
@@ -39,6 +39,7 @@ def test_load_runtime_config_reads_psfn_and_project_env(tmp_path: Path, monkeypa
         "PSFN_CA_CERT_PATH",
         "VOICE_CONVERSATION_ID",
         "HUB_DEVICE_ASSERTION_FLEET_AUTH_PATH",
+        "HUB_DEVICE_ASSERTION_RING_PATH",
         "HUB_DEVICE_ASSERTION_SATELLITE_REGISTRY_PATH",
         "HUB_DEVICE_ASSERTION_PRIVATE_KEY_PATH",
         "HUB_DEVICE_ASSERTION_TTL_SECONDS",
@@ -284,6 +285,7 @@ def test_load_runtime_config_requires_complete_hub_device_assertion_authority(
 ) -> None:
     for name in (
         "HUB_DEVICE_ASSERTION_FLEET_AUTH_PATH",
+        "HUB_DEVICE_ASSERTION_RING_PATH",
         "HUB_DEVICE_ASSERTION_SATELLITE_REGISTRY_PATH",
         "HUB_DEVICE_ASSERTION_PRIVATE_KEY_PATH",
         "HUB_DEVICE_ASSERTION_TTL_SECONDS",
@@ -387,3 +389,46 @@ def test_take_flush_chunk_prefers_sentence_boundaries() -> None:
 
     assert flush_text == "First sentence."
     assert remainder == "Second one"
+
+
+def _set_hub_device_assertion_env(monkeypatch, **overrides: str | None) -> None:
+    values = {
+        "HUB_DEVICE_ASSERTION_SATELLITE_REGISTRY_PATH": "/srv/system-data/satellites.json",
+        "HUB_DEVICE_ASSERTION_PRIVATE_KEY_PATH": "/run/secrets/hub-private.pem",
+        "HUB_DEVICE_ASSERTION_TTL_SECONDS": "30",
+        "PSFN_COMPANION_ID": "8e88cd65-38da-4f93-855a-d01276521eff",
+        "HUB_DEVICE_ASSERTION_FLEET_AUTH_PATH": None,
+        "HUB_DEVICE_ASSERTION_RING_PATH": None,
+        **overrides,
+    }
+    for name, value in values.items():
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+
+
+def test_hub_device_assertion_config_does_not_require_fleet_auth(tmp_path: Path, monkeypatch) -> None:
+    _set_hub_device_assertion_env(monkeypatch)
+    config = _load_hub_device_assertion_config(tmp_path, satellite_id="bedroom", endpoint_id="waveshare")
+
+    assert config is not None
+    assert config.fleet_auth_path is None
+    assert config.ring_path is None
+    assert config.satellite_registry_path == Path("/srv/system-data/satellites.json")
+
+    _set_hub_device_assertion_env(monkeypatch, HUB_DEVICE_ASSERTION_RING_PATH="/srv/system-data/hub-ring.json")
+    config = _load_hub_device_assertion_config(tmp_path, satellite_id="bedroom", endpoint_id="waveshare")
+    assert config is not None
+    assert config.ring_path == Path("/srv/system-data/hub-ring.json")
+
+
+def test_hub_device_assertion_config_rejects_two_ring_sources(tmp_path: Path, monkeypatch) -> None:
+    _set_hub_device_assertion_env(
+        monkeypatch,
+        HUB_DEVICE_ASSERTION_FLEET_AUTH_PATH="/srv/system-data/fleet-auth.json",
+        HUB_DEVICE_ASSERTION_RING_PATH="/srv/system-data/hub-ring.json",
+    )
+
+    with pytest.raises(ValueError, match="Set only one of"):
+        _load_hub_device_assertion_config(tmp_path, satellite_id="bedroom", endpoint_id="waveshare")

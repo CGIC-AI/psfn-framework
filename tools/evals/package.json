@@ -27,6 +27,8 @@
     "eval:llm-response": "tsx eval/llm-response/run.ts",
     "eval:logprob:collect": "tsx eval/logprob-harness/collect.ts",
     "eval:decision:shadow-report": "tsx eval/decision/shadow-report.ts",
+    "eval:decision:bakeoff": "tsx eval/decision/bakeoff.ts",
+    "eval:decision:qao-jev-judge": "tsx eval/decision/qao-jev-judge.ts",
     "verify:fast": "npm run lint && npm run build && npm test && npm run test:python"
   },
   "devDependencies": {

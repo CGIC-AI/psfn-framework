@@ -19,6 +19,7 @@ import { normalizeToolArguments } from '../../../shared/tool-argument-normalizat
 import { buildSessionMetadataWithIcpCorrelation } from '../../session/icp-correlation-metadata.js';
 import { buildSessionMetadataWithReflectionTurn } from '../../session/reflection-turn-provenance.js';
 import { buildSessionMetadataWithTestingHarnessProvenance } from '../../session/testing-harness-provenance.js';
+import { buildSessionMetadataWithSpeakerAttribution } from '../../session/speaker-attribution.js';
 import type { SessionActorKind } from '../../session/turn-provenance.js';
 import type { IntrospectionTurnSensitivityDecision } from '../../../faculties/introspection/turn-sensitivity.js';
 import { resolveMessagePlaceId } from './message-location.js';
@@ -157,6 +158,8 @@ export function recordUserMessage(input: {
   continuityUserId?: string;
   contentOverride?: string;
   actorKind: SessionActorKind;
+  /** Proven canonical contact of the speaker (bs4m0); absent when unresolved. */
+  speakerContactId?: string;
 }): number | null {
   const content = input.contentOverride ?? input.message.content;
   // htm9.3: intake-envelope snapshots screened by the channel adapter ride
@@ -171,6 +174,9 @@ export function recordUserMessage(input: {
       metadata,
       input.message.routing.testingHarness,
     );
+  }
+  if (input.speakerContactId) {
+    metadata = buildSessionMetadataWithSpeakerAttribution(metadata, input.speakerContactId);
   }
   const recordOptions = {
     trustLevel: input.trustLevel,

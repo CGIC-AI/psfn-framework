@@ -309,6 +309,7 @@ export function createTurnExecutionRuntimeAdapter(
       continuityUserId,
       contentOverride,
       actorKind,
+      speakerContactId,
     ) => options.turnSupportRuntime.recordUserMessage(
       message,
       turnSessionIdentity,
@@ -318,6 +319,7 @@ export function createTurnExecutionRuntimeAdapter(
       continuityUserId,
       contentOverride,
       actorKind,
+      speakerContactId,
     ),
     recordSystemMessage: (message, turnSessionIdentity, turnId, requestId, content, continuityUserId) => (
       options.turnSupportRuntime.recordSystemMessage(

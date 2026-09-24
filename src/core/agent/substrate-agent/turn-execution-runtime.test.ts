@@ -5672,6 +5672,8 @@ describe('handleMessageForTurn compaction scheduling', () => {
       'contact-123',
       undefined,
       'human',
+      // bs4m0: proven canonical speaker attribution, never the raw author id.
+      'contact-123',
     );
     expect(recordAssistantMessage).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -6036,6 +6038,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
       'contact-morgan',
       undefined,
       'human',
+      'contact-morgan',
     );
     const buildTurnRecordMock = runtime.buildTurnRecord as ReturnType<typeof vi.fn>;
     const recordedInput = buildTurnRecordMock.mock.calls[0]?.[0] as { turnSnapshot?: Record<string, unknown> };

@@ -543,6 +543,7 @@ export class TurnSupportRuntime {
     continuityUserId?: string,
     contentOverride?: string,
     actorKind: SessionActorKind = 'unknown',
+    speakerContactId?: string,
   ): number | null {
     return recordUserMessageForTurn({
       sessionManager: this.sessionManager,
@@ -554,6 +555,7 @@ export class TurnSupportRuntime {
       continuityUserId,
       contentOverride,
       actorKind,
+      ...(speakerContactId ? { speakerContactId } : {}),
     });
   }
 

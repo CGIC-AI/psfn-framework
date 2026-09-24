@@ -4,6 +4,7 @@
 // path creates conversational speech or outbound IO without passing the
 // existing turn-session recording and message-class rules.
 
+import { resolveProvenSpeakerContactId } from '../../session/speaker-attribution.js';
 import type { Agent } from '../../../boundary/pi-agent/index.js';
 import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import type { UserMessage } from '@earendil-works/pi-ai';
@@ -159,6 +160,9 @@ export class FollowUpIngressRouter {
         message.id,
         authorContext.trustLevel,
         authorContext.subjectIdentityKey ?? authorContext.canonicalContactKey,
+        undefined,
+        authorContext.actorKind,
+        resolveProvenSpeakerContactId(authorContext),
       );
     }
     this.deps.agent.followUp(isSystemOriginated

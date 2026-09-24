@@ -122,7 +122,7 @@ export class PostgresL2BoundedReads {
         access_count, superseded_by,
         tags, scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,
         retention_class, sensitivity, consent_flags, contact_id, deleted_at, deleted_by,
-        delete_reason, embedding::text AS embedding,
+        delete_reason, NULL::text AS embedding,
         1 - (embedding <=> $1::vector) AS similarity
       FROM l2_memories
       WHERE embedding IS NOT NULL

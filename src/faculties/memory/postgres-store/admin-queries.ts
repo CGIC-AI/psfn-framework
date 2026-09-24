@@ -53,7 +53,7 @@ export async function listPostgresAdminMemories(
         access_count, superseded_by,
         tags, scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,
         retention_class, sensitivity, consent_flags, contact_id, deleted_at, deleted_by,
-        delete_reason, embedding::text AS embedding
+        delete_reason, NULL::text AS embedding
       FROM l2_memories
       WHERE ${where.sql}
       ORDER BY extracted_at DESC, id DESC

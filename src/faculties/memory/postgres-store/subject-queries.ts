@@ -39,7 +39,7 @@ export interface AuthorizedMemorySubjectQueryOptions {
  */
 export const MEMORY_SUBJECT_DETAILS_BATCH_MAX = 256;
 
-export const MEMORY_SUBJECT_SELECT_COLUMNS = `
+const MEMORY_SUBJECT_METADATA_COLUMNS = `
   memory.id, memory.text, memory.type, memory.importance, memory.confidence,
   memory.emotional_valence, memory.formation_vad, memory.emotional_texture, memory.salience,
   memory.salience_decay_anchor_at, memory.source_ref, memory.source_type,
@@ -48,8 +48,24 @@ export const MEMORY_SUBJECT_SELECT_COLUMNS = `
   memory.scope_ref_kind, memory.scope_ref_id, memory.scope_ref_label,
   memory.scope_tags, memory.provenance_refs, memory.retention_class,
   memory.sensitivity, memory.consent_flags, memory.contact_id,
-  memory.deleted_at, memory.deleted_by, memory.delete_reason,
+  memory.deleted_at, memory.deleted_by, memory.delete_reason`;
+
+/**
+ * Full row projection including the stored pgvector as text. Only write and
+ * lock paths that must validate or re-persist the stored vector use it
+ * (update, authorized mutation/write, delete/restore, deletion proposals).
+ */
+export const MEMORY_SUBJECT_SELECT_COLUMNS = `${MEMORY_SUBJECT_METADATA_COLUMNS},
   memory.embedding::text AS embedding
+`;
+
+/**
+ * Metadata-only row projection for read selectors. Decoded memories never
+ * carry the stored vector (tryFromMemoryRow ignores it), so read paths
+ * project NULL instead of transferring embedding::text for every row.
+ */
+export const MEMORY_SUBJECT_METADATA_SELECT_COLUMNS = `${MEMORY_SUBJECT_METADATA_COLUMNS},
+  NULL::text AS embedding
 `;
 
 interface ClassificationRow {
@@ -294,7 +310,7 @@ export async function queryAuthorizedMemorySubjects(
   const pageValues = [...values, selector.limit, selector.offset];
   const rows = await pool.query<AuthorizedPageRow>(`
     WITH authorized AS MATERIALIZED (
-      SELECT ${MEMORY_SUBJECT_SELECT_COLUMNS}, ${selector.similaritySql} AS similarity
+      SELECT ${MEMORY_SUBJECT_METADATA_SELECT_COLUMNS}, ${selector.similaritySql} AS similarity
       FROM l2_memories memory
       WHERE ${where}
       ORDER BY ${selector.orderBy}
@@ -354,7 +370,7 @@ async function queryAuthorizedEmbeddingAnn(
     { efSearch: annEfSearch(candidatePool), iterativeScan: options.iterativeScanAvailable },
     `
     WITH authorized AS MATERIALIZED (
-      SELECT ${MEMORY_SUBJECT_SELECT_COLUMNS}, ${input.similaritySql} AS similarity
+      SELECT ${MEMORY_SUBJECT_METADATA_SELECT_COLUMNS}, ${input.similaritySql} AS similarity
       FROM l2_memories memory
       WHERE ${input.where}
       ORDER BY ${input.annOrderExpr} ASC

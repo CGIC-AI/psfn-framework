@@ -12,6 +12,7 @@ import {
 import { openAutomataBusWorkerRun, type AutomataWorkerRunPort } from './worker-access.js';
 import type { AutomataWorkerLifecycleEvent } from './worker-execution.js';
 import { runGovernedAutomataClass } from './class-lifecycle.js';
+import { NO_AUTOMATA_REDELIVERY } from '../../../test-support/automata-run-redelivery.js';
 
 const COMPANION_ID = 'companion-a';
 const BOUNDS = {
@@ -103,6 +104,7 @@ function createBus() {
 
 async function createRegistry(runIds: readonly string[]) {
   const registry = await AutomataRunRegistry.hydrate({
+    redelivery: NO_AUTOMATA_REDELIVERY,
     companionId: COMPANION_ID,
     policy: loadAutomataPolicySeedDefaults(),
     store: new InMemoryAutomataRunStore(),
@@ -229,6 +231,7 @@ describe('automata worker run notes', () => {
   it('gives handoff-only classes no briefing query and no tool', async () => {
     const bus = createBus();
     const registry = await AutomataRunRegistry.hydrate({
+      redelivery: NO_AUTOMATA_REDELIVERY,
       companionId: COMPANION_ID,
       policy: loadAutomataPolicySeedDefaults(),
       store: new InMemoryAutomataRunStore(),

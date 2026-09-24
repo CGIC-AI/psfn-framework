@@ -17,6 +17,7 @@ import {
   runGovernedAutomataClass,
   type AutomataClassRunSpec,
 } from './class-lifecycle.js';
+import { NO_AUTOMATA_REDELIVERY, automataRedeliveryOf } from '../../../test-support/automata-run-redelivery.js';
 
 const COMPANION_ID = 'companion-public-example';
 
@@ -25,6 +26,7 @@ async function createRegistry(store = new InMemoryAutomataRunStore()): Promise<{
   store: InMemoryAutomataRunStore;
 }> {
   const registry = await AutomataRunRegistry.hydrate({
+    redelivery: NO_AUTOMATA_REDELIVERY,
     companionId: COMPANION_ID,
     policy: loadAutomataPolicySeedDefaults(),
     store,
@@ -132,6 +134,7 @@ describe('governed automata class run port', () => {
 
     // A restart rehydrates the same durable run from the same store.
     const restarted = await AutomataRunRegistry.hydrate({
+      redelivery: automataRedeliveryOf(['run-governed-1']),
       companionId: COMPANION_ID,
       policy: loadAutomataPolicySeedDefaults(),
       store,
@@ -161,6 +164,7 @@ describe('governed automata class run port', () => {
     await createAutomataClassRunPort(registry, spec()).begin();
 
     const restarted = await AutomataRunRegistry.hydrate({
+      redelivery: NO_AUTOMATA_REDELIVERY,
       companionId: COMPANION_ID,
       policy: loadAutomataPolicySeedDefaults(),
       store,
@@ -235,6 +239,7 @@ describe('runGovernedAutomataClass', () => {
       return await store.update(record, previousStatus);
     };
     const failingRegistry = await AutomataRunRegistry.hydrate({
+      redelivery: NO_AUTOMATA_REDELIVERY,
       companionId: COMPANION_ID,
       policy: loadAutomataPolicySeedDefaults(),
       store: failingStore,
@@ -298,6 +303,7 @@ describe('crash-window execution guard (psfn-framework-8n40k)', () => {
     expect(registry.getRun('run-governed-1')?.status).toBe('running');
 
     const restarted = await AutomataRunRegistry.hydrate({
+      redelivery: automataRedeliveryOf(['run-governed-1']),
       companionId: COMPANION_ID,
       policy: loadAutomataPolicySeedDefaults(),
       store,
@@ -332,6 +338,7 @@ describe('crash-window execution guard (psfn-framework-8n40k)', () => {
     const { registry, store } = await createRegistry();
     await createAutomataClassRunPort(registry, restartableSpec()).begin();
     const restarted = await AutomataRunRegistry.hydrate({
+      redelivery: automataRedeliveryOf(['run-governed-1']),
       companionId: COMPANION_ID,
       policy: loadAutomataPolicySeedDefaults(),
       store,
@@ -372,6 +379,7 @@ describe('crash-window execution guard (psfn-framework-8n40k)', () => {
     const { registry, store } = await createRegistry();
     await createAutomataClassRunPort(registry, restartableSpec()).begin();
     const restarted = await AutomataRunRegistry.hydrate({
+      redelivery: automataRedeliveryOf(['run-governed-1']),
       companionId: COMPANION_ID,
       policy: loadAutomataPolicySeedDefaults(),
       store,
@@ -432,6 +440,7 @@ describe('crash-window execution guard (psfn-framework-8n40k)', () => {
     const { registry, store } = await createRegistry();
     await createAutomataClassRunPort(registry, restartableSpec()).begin();
     const restarted = await AutomataRunRegistry.hydrate({
+      redelivery: automataRedeliveryOf(['run-governed-1']),
       companionId: COMPANION_ID,
       policy: loadAutomataPolicySeedDefaults(),
       store,

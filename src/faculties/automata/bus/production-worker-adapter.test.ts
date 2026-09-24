@@ -26,6 +26,7 @@ import {
   buildAutomataBusWorkerScope,
   resolveAutomataBusWorkerFormation,
 } from './worker-access.js';
+import { NO_AUTOMATA_REDELIVERY } from '../../../test-support/automata-run-redelivery.js';
 
 const WORKER_BOUNDS = {
   maxQueryChars: 120,
@@ -124,6 +125,7 @@ function createHarness() {
 
 async function createRegistry() {
   const registry = await AutomataRunRegistry.hydrate({
+    redelivery: NO_AUTOMATA_REDELIVERY,
     companionId: 'companion-a',
     policy: loadAutomataPolicySeedDefaults(),
     store: new InMemoryAutomataRunStore(),

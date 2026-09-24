@@ -9,6 +9,7 @@ import {
 } from '../../faculties/automata/run-registry.js';
 import { loadAutomataPolicySeedDefaults } from '../../system/config/automata-policy-config.js';
 import { createBackgroundWorkAutomataLifecycle } from './automata-background-work-lifecycle.js';
+import { NO_AUTOMATA_REDELIVERY } from '../../test-support/automata-run-redelivery.js';
 
 function memoryExtractionJob(): ClaimedBackgroundWorkJob {
   return {
@@ -55,6 +56,7 @@ function memoryExtractionPayload(): MemoryExtractionBackgroundPayload {
 
 async function registry(): Promise<AutomataRunRegistry> {
   return AutomataRunRegistry.hydrate({
+    redelivery: NO_AUTOMATA_REDELIVERY,
     companionId: 'companion-a',
     policy: loadAutomataPolicySeedDefaults(),
     store: new InMemoryAutomataRunStore(),

@@ -24,6 +24,7 @@ import {
 } from './types.js';
 import { assertMemorySourceIsNotTestingHarness } from '../../session/testing-harness-provenance.js';
 import type { BackgroundWorkPostTurnTuning } from './config.js';
+import { intentionPostTurnHooksRunId } from './automata-run-redelivery.js';
 import { buildSubsystemOutputRef } from '../../../shared/contracts/subsystem-output-refs.js';
 import { extractTurnRecordSelfSnapshotRef } from '../../../shared/contracts/turn-record-internal-state-ref.js';
 import type { SocialDesireFeltSignalWriter } from '../../intention/social-desire-felt-signal.js';
@@ -542,7 +543,7 @@ async function runPostTurnBackgroundWork(
       // rather than colliding with the failed one.
       await automataRunner.run(
         {
-          runId: `intention-post-turn-hooks:${payload.source.requestId}:${job.attemptCount}`,
+          runId: intentionPostTurnHooksRunId(payload.source.requestId, job.attemptCount),
           taskId: payload.source.logicalSessionId,
           taskLabel: INTENTION_HOOKS_TASK_LABEL,
           taskSummary: INTENTION_HOOKS_TASK_SUMMARY,

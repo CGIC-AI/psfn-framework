@@ -219,6 +219,15 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
     private readonly onSaturated: HumanEscalationLedgerSaturationReporter | null,
     private readonly now: () => number,
     private readonly ownsPool: boolean,
+    /**
+     * Whose answered rows this store's retention ring may evict (bead
+     * psfn-framework-n4hwt). `null` for a ledger the store owns outright (a
+     * tenant schema, or the gateway that raises the fleet's escalations). A
+     * companion's Garden answering the shared fleet ledger is fenced to
+     * system-owned rows plus its own companion's, the same rows it can read;
+     * it never prunes a sibling companion's answered history.
+     */
+    private readonly retentionCompanionId: string | null = null,
   ) {}
 
   static async connect(
@@ -264,13 +273,23 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
     options: {
       role?: string;
       access?: SharedHumanEscalationStoreAccess;
+      /** Required for `answer`: the companion whose Garden answers here. */
+      answeringCompanionId?: string;
       bounds: HumanEscalationLedgerBounds;
       onSaturated?: HumanEscalationLedgerSaturationReporter;
       now?: () => number;
     },
   ): Promise<PostgresHumanEscalationStore> {
     const bounds = requireHumanEscalationLedgerBounds(options.bounds);
-    const privileges = SHARED_HUMAN_ESCALATION_PRIVILEGES[options.access ?? 'answer'];
+    const access = options.access ?? 'answer';
+    const answeringCompanionId = options.answeringCompanionId?.trim();
+    if (access === 'answer' && !answeringCompanionId) {
+      throw new Error(
+        'Answering the shared fleet escalation ledger requires the answering companion id, '
+        + 'so its retention ring cannot evict a sibling companion\'s rows',
+      );
+    }
+    const privileges = SHARED_HUMAN_ESCALATION_PRIVILEGES[access];
     const pool = createPostgresPool(databaseUrl, {
       applicationName: 'psfn-fleet-human-escalations',
       allowExitOnIdle: true,
@@ -312,6 +331,7 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
       options.onSaturated ?? null,
       options.now ?? (() => Date.now()),
       true,
+      access === 'answer' ? answeringCompanionId! : null,
     );
   }
 
@@ -597,12 +617,17 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
    * make it a deletion candidate. Attempts cascade with their escalation.
    */
   private async enforceBounds(kind: HumanEscalationKind): Promise<void> {
+    // $2 fences both statements to the rows this store may evict: every row
+    // when it owns the ledger (NULL), otherwise system-owned rows plus the
+    // answering companion's own.
+    const ownerFence = `($2::text IS NULL OR owner_kind = 'system' OR owner_companion_id = $2)`;
     const cutoffMs = this.now() - this.bounds.resolvedRetentionMs;
     if (cutoffMs > 0) {
       await executeQuery(this.pool, `
         DELETE FROM human_escalations
         WHERE state <> 'open' AND resolved_at_ms IS NOT NULL AND resolved_at_ms < $1
-      `, [cutoffMs]);
+          AND ${ownerFence}
+      `, [cutoffMs, this.retentionCompanionId]);
     }
     // Ranked by ANSWER time, not raise time. A long-open escalation raised
     // before every row now in the ring is the OLDEST by raise time and the
@@ -616,10 +641,11 @@ export class PostgresHumanEscalationStore implements HumanEscalationLedgerPort {
         SELECT escalation_id
         FROM human_escalations
         WHERE kind = $1 AND state <> 'open'
+          AND ($3::text IS NULL OR owner_kind = 'system' OR owner_companion_id = $3)
         ORDER BY resolved_at_ms DESC, escalation_id DESC
         OFFSET $2
       )
-    `, [kind, this.bounds.maxResolvedRowsPerKind]);
+    `, [kind, this.bounds.maxResolvedRowsPerKind, this.retentionCompanionId]);
     await this.reportSaturation(kind);
   }
 

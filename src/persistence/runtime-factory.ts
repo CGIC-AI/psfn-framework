@@ -421,6 +421,8 @@ export async function createAgentPersistenceRuntime(
         'fleet_system_human_escalations',
         () => PostgresHumanEscalationStore.connectShared(databaseUrl, {
           ...(tenantRole ? { role: tenantRole } : {}),
+          access: 'answer',
+          ...(options.config.companionId ? { answeringCompanionId: options.config.companionId } : {}),
           bounds: options.humanEscalationLedgerBounds,
         }),
       )

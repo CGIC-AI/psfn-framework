@@ -12,6 +12,10 @@ import {
   type AutomataClassLifecycleRuntime,
 } from '../../faculties/automata/bus/class-lifecycle.js';
 import type { ProductionAutomataClassId } from '../../faculties/automata/registry-contract.js';
+import {
+  backgroundWorkLinkedRunIds,
+  RUN_CLASS_JOB_KIND,
+} from '../../core/agent/background-work/automata-run-redelivery.js';
 import type { AutomataRunRecord } from '../../faculties/automata/registry-contract.js';
 import type {
   AutomataRunRegistry,
@@ -100,6 +104,29 @@ async function terminalizeMemoryExtractionRun(
       });
 }
 
+/**
+ * vxllk: fail every non-terminal Automata run a dead-lettered job could have
+ * opened (the same derivation the restart redelivery oracle uses). Only runs of
+ * the job's own class are touched; absent and already-terminal runs are left.
+ */
+async function failRunsOfExpiredJob(
+  registry: AutomataRunRegistry,
+  job: StoredBackgroundWorkJob,
+  reasonCode: StoredBackgroundWorkJob['reasonCode'],
+): Promise<void> {
+  for (const runId of backgroundWorkLinkedRunIds(job)) {
+    const run = await registry.loadExactRun(runId);
+    if (!run || RUN_CLASS_JOB_KIND[run.automatonClass] !== job.kind) continue;
+    if (run.status !== 'queued' && run.status !== 'running') continue;
+    await registry.transition(run.runId, {
+      status: 'failed',
+      reason: 'background_work_failed',
+      outcome: 'blocked',
+      failureReason: reasonCode,
+    });
+  }
+}
+
 export function createBackgroundWorkAutomataLifecycle(
   registry: AutomataRunRegistry,
 ): BackgroundWorkAutomataLifecyclePort {
@@ -115,6 +142,9 @@ export function createBackgroundWorkAutomataLifecycle(
     async onFailed({ job, payload, reasonCode }): Promise<void> {
       if (payload.kind !== 'memory_extraction') return;
       await terminalizeMemoryExtractionRun(registry, job, payload, { status: 'failed', reasonCode });
+    },
+    async onExpiredTerminal({ job, reasonCode }): Promise<void> {
+      await failRunsOfExpiredJob(registry, job, reasonCode);
     },
   };
 }

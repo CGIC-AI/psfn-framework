@@ -52,12 +52,12 @@ describe('loopback platform round trip', () => {
       await bridge.connect();
       const platform = new LoopbackPlatform(bridge);
       await platform.userSays({
-        conversationId: 'dm-ada', conversationKind: 'direct', senderId: 'ada', senderName: 'Ada', text: 'hello',
+        conversationId: 'dm-juno', conversationKind: 'direct', senderId: 'juno', senderName: 'Juno', text: 'hello',
       });
-      expect(platform.replies).toEqual([{ conversationId: 'dm-ada', text: 'hi Ada' }]);
-      await adapter.outbound.sendText({ channelId: 'external:loopback:dm-ada' }, 'thinking of you');
+      expect(platform.replies).toEqual([{ conversationId: 'dm-juno', text: 'hi Juno' }]);
+      await adapter.outbound.sendText({ channelId: 'external:loopback:dm-juno' }, 'thinking of you');
       expect(await platform.pumpOutbound()).toBe(1);
-      expect(platform.delivered[0]).toMatchObject({ conversationId: 'dm-ada', text: 'thinking of you' });
+      expect(platform.delivered[0]).toMatchObject({ conversationId: 'dm-juno', text: 'thinking of you' });
     } finally {
       await bridge.close();
       await adapter.stop();

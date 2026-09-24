@@ -427,6 +427,13 @@
       "note": "h248l.4 bounded Fleet ICP health read over the real shared schema. Focused local full-file wall baseline about 1.2s on 2026-09-24 with a warm harness; 120s is the repo-standard integration cap with headroom for cold image startup and shared harness-slot contention."
     },
     {
+      "file": "src/system/fleet-lifecycle/fleet-lifecycle-cli.integration.test.ts",
+      "timeoutMs": 180000,
+      "measuredBaselineMs": 3500,
+      "baselineSource": "measured",
+      "note": "h248l.5 local fleet lifecycle CLI end to end against real Postgres: seven tsx subprocess invocations (plan/apply add, remove, refused and readmitted re-add). Focused local wall about 3.5s on 2026-09-24 with a warm harness; 180s leaves headroom for cold image startup and tsx cold compiles under shared harness contention."
+    },
+    {
       "file": "src/persistence/postgres/icp-local-policy-authority.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": 1640,

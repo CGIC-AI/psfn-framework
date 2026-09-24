@@ -107,6 +107,11 @@ export type ContentGateReason =
 
 export type ContentGateOutcome =
   | { readonly action: 'commit' }
+  /**
+   * Commit `text` in place of the candidate: the canonical attachment-claim
+   * healer removed an unsupported image claim. Empty text commits nothing.
+   */
+  | { readonly action: 'heal'; readonly text: string; readonly reason: ContentGateReason }
   | { readonly action: 'abort'; readonly reason: ContentGateReason };
 
 export interface ContentGateConfig {

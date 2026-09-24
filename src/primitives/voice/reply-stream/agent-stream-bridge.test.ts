@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { MISSING_IMAGE_ATTACHMENT_CORRECTION } from '../../images/attachment-claim-guard.js';
 import {
   createAgentReplyStreamBridge,
   type AgentReplyDeltaEvent,
@@ -176,7 +177,7 @@ describe('createAgentReplyStreamBridge', () => {
     expect(spoken.join('')).toBe('The streamed words. ');
   });
 
-  it('forward-aborts on a content-gate trip (image-claim) and never speaks it', async () => {
+  it('heals an unsupported image claim (never spoken) and speaks the canonical correction', async () => {
     const events = new FakeAgentEvents();
     const bridge = createAgentReplyStreamBridge({
       deltaSource: events,
@@ -189,9 +190,28 @@ describe('createAgentReplyStreamBridge', () => {
     });
 
     events.emitText('I attached an image for you. ');
-    // Gate should have aborted; the stream is closed and nothing more speaks.
-    expect(bridge.closed).toBe(true);
+    // The claim is healed away, not a transport abort: the turn keeps streaming.
+    expect(bridge.closed).toBe(false);
+    bridge.finish('I attached an image for you. ');
     const spoken = await drainAll(bridge);
-    expect(spoken).toEqual([]);
+    expect(spoken).toEqual([MISSING_IMAGE_ATTACHMENT_CORRECTION]);
+  });
+
+  it('keeps speaking safe text around a healed claim', async () => {
+    const events = new FakeAgentEvents();
+    const bridge = createAgentReplyStreamBridge({
+      deltaSource: events,
+      channelId: CHANNEL,
+      turnId: TURN,
+      cancellationId: TURN,
+      gate: { attachmentCount: 0, datetimePromptContext: null },
+      segmenter: { minSegmentLength: 4, maxBufferLength: 200 },
+    });
+
+    events.emitText('Of course. ');
+    events.emitText('I attached an image for you. The lake was calm. ');
+    bridge.finish('Of course. The lake was calm. ');
+    const spoken = await drainAll(bridge);
+    expect(spoken.join('')).toBe('Of course. The lake was calm. ');
   });
 });

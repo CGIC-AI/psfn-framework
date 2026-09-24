@@ -1,5 +1,6 @@
 import type { HubDeviceAttachmentSnapshot } from '../../shared/contracts/hub-device-ingress.js';
 import type { CompiledCompanionUiAction } from '../fleet-auth/companion-ui-action.js';
+import { CompanionUiActionDeniedError } from './companion-ui-action-broker.js';
 import type {
   PrimaryEmbodimentAuthorityPort,
   PrimaryEmbodimentHandoffReason,
@@ -8,13 +9,15 @@ import type {
 
 function browserProjection(
   state: PrimaryEmbodimentSnapshot,
-  attachment: HubDeviceAttachmentSnapshot,
+  attachment: HubDeviceAttachmentSnapshot | null,
 ): Readonly<Record<string, unknown>> {
   return Object.freeze({
     generation: state.generation,
     version: state.version,
     primaryPresent: state.current !== null,
-    currentDeviceIsPrimary: state.current !== null
+    // A key session has no device, so it is never the primary embodiment.
+    currentDeviceIsPrimary: attachment !== null
+      && state.current !== null
       && state.current.deviceId === attachment.deviceActor.principal.deviceId
       && state.current.enrollmentVersion === attachment.deviceActor.principal.enrollmentVersion
       && state.current.hubSessionId === attachment.deviceActor.principal.sessionId,
@@ -56,4 +59,22 @@ export async function dispatchCompanionUiPrimaryEmbodiment(input: {
     handled: true,
     result: browserProjection(state, input.attachment),
   });
+}
+
+/**
+ * Key-path embodiment frames (psfn-framework-m1is8). An ADMIN_TOKEN / API_KEY
+ * session has no Hub device attachment, so it may READ the primary-embodiment
+ * status (never primary itself); a handoff moves the embodiment onto the
+ * requesting device and stays device-bound, so it is refused.
+ */
+export async function dispatchCompanionUiKeyEmbodiment(input: {
+  compiled: CompiledCompanionUiAction;
+  authority?: PrimaryEmbodimentAuthorityPort;
+}): Promise<Readonly<{ handled: false }> | Readonly<{ handled: true; result: unknown }>> {
+  const resource = input.compiled.frame.resource;
+  if (resource === 'embodiment.handoff') throw new CompanionUiActionDeniedError();
+  if (resource !== 'embodiment.status') return Object.freeze({ handled: false });
+  if (!input.authority) throw new Error('Primary embodiment authority unavailable');
+  const state = await input.authority.read(input.compiled.target.companionId);
+  return Object.freeze({ handled: true, result: browserProjection(state, null) });
 }

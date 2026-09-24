@@ -234,9 +234,11 @@ renew). Frames dispatch with the key principal exactly as the REST API does:
 principal (not a `companion-ui` channel turn — that classification comes from
 a Hub attachment), `confirmations.*` use the gateway confirmation queue,
 `artifact.preview`, `conversation.status`, `conversation.interrupt` and
-`tool_activity.subscribe` map onto the key routes, and `shards.*` /
-`embodiment.*` are denied (they exist only as fleet child-capability and Hub
-attachment routes). The PWA itself still signs in through the Hub; a browser
+`tool_activity.subscribe` map onto the key routes, `embodiment.status` reads
+the primary-embodiment state without an attachment (the key session is never
+the primary itself), and `shards.*` and `embodiment.handoff` are denied
+(shards exist only as fleet child-capability routes; a handoff moves the
+embodiment onto the requesting device and stays device-bound). The PWA itself still signs in through the Hub; a browser
 that holds an operator key needs a Hub-side intake to use this path, tracked
 separately.
 

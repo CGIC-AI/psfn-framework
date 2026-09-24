@@ -79,7 +79,10 @@ import {
 import type {
   PrimaryEmbodimentAuthorityPort,
 } from '../../boundary/fleet-auth/primary-embodiment.js';
-import { dispatchCompanionUiPrimaryEmbodiment } from '../../boundary/gateway/companion-ui-primary-embodiment.js';
+import {
+  dispatchCompanionUiKeyEmbodiment,
+  dispatchCompanionUiPrimaryEmbodiment,
+} from '../../boundary/gateway/companion-ui-primary-embodiment.js';
 import { dispatchCompanionUiApproval } from '../../boundary/gateway/companion-ui-approvals.js';
 import { FleetAuthHttpRoutes } from '../../channels/api/server/fleet-auth-routes.js';
 import type { FleetEscalationCoordinator } from '../../boundary/fleet-auth/escalation.js';
@@ -861,10 +864,10 @@ export async function startOptionalGatewayApiServer(
           operatorActionBroker: {
             // Key path (psfn-framework-7oh9y): the bearer is the human authority,
             // so frames dispatch with the key principal exactly as the REST API
-            // does. No Hub attachment, no fleet child assertion: shard and
-            // embodiment frames are denied here (they exist only as fleet
-            // child-capability / Hub-attachment routes), everything else maps
-            // onto the key routes.
+            // does. No Hub attachment, no fleet child assertion: shard frames
+            // and embodiment handoff are denied here (fleet child-capability /
+            // Hub-attachment routes only), embodiment status is read without an
+            // attachment (m1is8), everything else maps onto the key routes.
             execute: async input => {
               const compiled = compileCompanionUiAction(
                 input.rawBody,
@@ -894,6 +897,11 @@ export async function startOptionalGatewayApiServer(
                   dataBase64: preview.bytes.toString('base64'),
                 };
               }
+              const embodiment = await dispatchCompanionUiKeyEmbodiment({
+                compiled,
+                ...(options.primaryEmbodiments ? { authority: options.primaryEmbodiments } : {}),
+              });
+              if (embodiment.handled) return embodiment.result;
               const approval = await dispatchCompanionUiApproval({
                 compiled,
                 gateway: options.gateway,

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createDmConversationScope, createGroupConversationScope } from '../../../core/session/conversation-scope.js';
 import type { PurrMemory, RetrievalAccessScope } from '../types.js';
 import { evaluateRetrievalAccessDecision } from './access.js';
 
@@ -52,7 +53,7 @@ function primaryDmOptions() {
     canonicalContactId: PRIMARY_CONTACT_ID,
     roomVisibility: {
       currentChannelId: PRIMARY_DM_ID,
-      currentIsDirectMessage: true,
+      conversationScope: createDmConversationScope({ channelId: PRIMARY_DM_ID, contact: { contactId: PRIMARY_CONTACT_ID } }),
       canonicalContactRoomIds: new Set([PRIMARY_DM_ID]),
     },
   };
@@ -131,7 +132,7 @@ describe('evaluateRetrievalAccessDecision participant-aware DM access', () => {
         canonicalContactId: PRIMARY_CONTACT_ID,
         roomVisibility: {
           currentChannelId: 'discord:guild:shared-room',
-          currentIsDirectMessage: false,
+          conversationScope: createGroupConversationScope({ channelId: 'discord:guild:shared-room' }),
         },
       },
     );
@@ -218,7 +219,7 @@ describe('evaluateRetrievalAccessDecision companion self access', () => {
           canonicalContactId: PRIMARY_CONTACT_ID,
           roomVisibility: {
             currentChannelId: 'internal:self-directed',
-            currentIsDirectMessage: false,
+            conversationScope: createGroupConversationScope({ channelId: 'internal:self-directed' }),
           },
         })).toEqual({ allowed: true });
       }
@@ -237,7 +238,7 @@ describe('evaluateRetrievalAccessDecision companion self access', () => {
           canonicalContactId: PRIMARY_CONTACT_ID,
           roomVisibility: {
             currentChannelId: 'internal:self-directed',
-            currentIsDirectMessage: false,
+            conversationScope: createGroupConversationScope({ channelId: 'internal:self-directed' }),
           },
         }).allowed).toBe(false);
       }

@@ -8,6 +8,10 @@
 // MemoryExtractor) are re-exported here for callers that import contracts
 // from the SubstrateAgent module.
 
+import {
+  buildSessionMetadataWithSpeakerAttribution,
+  resolveProvenSpeakerContactId,
+} from '../session/speaker-attribution.js';
 import { Agent } from '../../boundary/pi-agent/index.js';
 import type { AgentTool, StreamFn } from '../../boundary/pi-agent/index.js';
 import type { UserMessage } from '@earendil-works/pi-ai';
@@ -1375,6 +1379,9 @@ export class SubstrateAgent {
       message.id,
       authorContext.trustLevel,
       authorContext.subjectIdentityKey ?? authorContext.canonicalContactKey,
+      undefined,
+      authorContext.actorKind,
+      resolveProvenSpeakerContactId(authorContext),
     );
     this.agent.steer({
       role: 'user',
@@ -1475,6 +1482,7 @@ export class SubstrateAgent {
       subjectIdentityKey: authorContext.subjectIdentityKey,
       authorId: message.authorId,
     });
+    const speakerContactId = resolveProvenSpeakerContactId(authorContext);
     this.sessionManager.recordUserMessage(
       message.channelId,
       message.content,
@@ -1484,6 +1492,9 @@ export class SubstrateAgent {
       continuitySubjectKey,
       {
         ...recordOptions,
+        ...(speakerContactId
+          ? { metadata: buildSessionMetadataWithSpeakerAttribution(recordOptions.metadata, speakerContactId) }
+          : {}),
         trustLevel: authorContext.trustLevel,
         // htm9.3: observed (no-turn) messages persist their adapter-screened
         // intake envelopes too, so later context builds gate them.

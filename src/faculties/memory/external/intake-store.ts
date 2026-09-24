@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { Type, type Static } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
@@ -10,6 +10,10 @@ import {
   type ExternalMemoryReceipt,
 } from '../../../shared/contracts/external-memory.js';
 import { writeFileDurableAtomicSync } from '../../../shared/utils/fs.js';
+import { createComponentLogger } from '../../../shared/logger.js';
+import { toErrorMessage } from '../../../shared/utils/errors.js';
+
+const log = createComponentLogger('ExternalMemoryIntake');
 
 const text = Type.String({ minLength: 1 });
 const strict = { additionalProperties: false } as const;
@@ -84,13 +88,57 @@ export class ExternalMemoryIntakeStore {
     writeFileDurableAtomicSync(this.path(record.receiptId), JSON.stringify(record), { exclusive });
   }
 
+  private receiptIds(): string[] {
+    if (!existsSync(this.directory)) return [];
+    return readdirSync(this.directory)
+      .filter(file => file.endsWith('.json'))
+      .sort()
+      .map(file => file.slice(0, -'.json'.length));
+  }
+
+  /**
+   * Every not-yet-completed receipt (cin6q). One unreadable or corrupt receipt
+   * is reported and skipped so it cannot abort recovery of the others; it is
+   * left in place (never auto-deleted) for operator inspection.
+   */
   *pending(): Iterable<ExternalMemoryIntakeRecord> {
-    if (!existsSync(this.directory)) return;
-    for (const file of readdirSync(this.directory).sort()) {
-      if (!file.endsWith('.json')) continue;
-      const record = this.read(file.slice(0, -'.json'.length));
+    for (const receiptId of this.receiptIds()) {
+      let record: ExternalMemoryIntakeRecord | undefined;
+      try {
+        record = this.read(receiptId);
+      } catch (error) {
+        log.error('Skipping unreadable external memory intake receipt during recovery', {
+          receiptId,
+          error: toErrorMessage(error),
+        });
+        continue;
+      }
       if (record && !record.completed) yield record;
     }
+  }
+
+  /**
+   * Age out completed receipts (cin6q). A completed receipt is the idempotency
+   * record for its event id, so it is kept for the retention window and removed
+   * only after its last write is older than `olderThanMs`. Pending and
+   * unreadable receipts are never pruned. Returns the number removed.
+   */
+  pruneCompleted(olderThanMs: number): number {
+    let removed = 0;
+    for (const receiptId of this.receiptIds()) {
+      const file = this.path(receiptId);
+      let record: ExternalMemoryIntakeRecord | undefined;
+      try {
+        record = this.read(receiptId);
+      } catch {
+        // Unreadable receipts are reported by pending() and never pruned.
+        continue;
+      }
+      if (!record?.completed || statSync(file).mtimeMs >= olderThanMs) continue;
+      unlinkSync(file);
+      removed += 1;
+    }
+    return removed;
   }
 
   channelId(record: ExternalMemoryIntakeRecord): string {

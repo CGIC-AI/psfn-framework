@@ -17,7 +17,8 @@ import {
   type FreeTimeChooserPorts,
   type FreeTimeProjectSummary,
 } from './free-time-chooser.js';
-import { InMemoryRestWindowPolicy } from './rest-window-policy.js';
+import { DurableRestWindowPolicy } from './rest-window-policy.js';
+import { InMemoryRestSilenceStore } from '../../test-support/in-memory-rest-silence-store.js';
 
 // ── Fixtures ──
 
@@ -75,14 +76,14 @@ const MOON_PROJECT: Record<string, FreeTimeProjectRecord> = {
 
 function makeChooser(overrides: Partial<FreeTimeChooserPorts> = {}): {
   chooser: FreeTimeChooser;
-  restWindowPolicy: InMemoryRestWindowPolicy;
+  restWindowPolicy: DurableRestWindowPolicy;
   resolver: FreeTimeWorkspaceResolver;
   provider: { complete: ReturnType<typeof vi.fn> };
 } {
   const provider = (overrides.llmProvider ?? providerReturning('{"optionId":"private_wander"}')) as {
     complete: ReturnType<typeof vi.fn>;
   };
-  const restWindowPolicy = (overrides.restWindowPolicy ?? new InMemoryRestWindowPolicy()) as InMemoryRestWindowPolicy;
+  const restWindowPolicy = (overrides.restWindowPolicy ?? new DurableRestWindowPolicy(new InMemoryRestSilenceStore())) as DurableRestWindowPolicy;
   const resolver = overrides.resolver ?? new FreeTimeWorkspaceResolver({
     projectDirectory: (ref: string) => MOON_PROJECT[ref] ?? null,
     roomChannelResolver: () => null,
@@ -223,7 +224,7 @@ describe('FreeTimeChooser.chooseWorkspace — fail closed to rest', () => {
     const { chooser, restWindowPolicy } = makeChooser({ llmProvider: { complete } });
     const outcome = await chooser.chooseWorkspace(CTX);
     expect(outcome).toEqual({ kind: 'rest', reason: 'chooser_error' });
-    expect(restWindowPolicy.isSilenced({ lane: 'quiet_hours', nowMs: 2_000 })).toBe(true);
+    await expect(restWindowPolicy.isSilenced({ lane: 'quiet_hours', nowMs: 2_000 })).resolves.toBe(true);
   });
 
   it('falls closed to rest on a chooser timeout', async () => {
@@ -272,7 +273,7 @@ describe('FreeTimeChooser.chooseWorkspace — fail closed to rest', () => {
     const outcome = await chooser.chooseWorkspace(CTX);
     expect(outcome).toEqual({ kind: 'rest', reason: 'chooser_disabled' });
     expect(provider.complete).not.toHaveBeenCalled();
-    expect(restWindowPolicy.isSilenced({ lane: 'quiet_hours', nowMs: 2_000 })).toBe(false);
+    await expect(restWindowPolicy.isSilenced({ lane: 'quiet_hours', nowMs: 2_000 })).resolves.toBe(false);
   });
 });
 
@@ -339,5 +340,42 @@ describe('parseFreeTimeChoiceOptionId', () => {
     expect(parseFreeTimeChoiceOptionId('{"optionId":42}')).toBeNull();
     expect(parseFreeTimeChoiceOptionId('{"reason":"x"}')).toBeNull();
     expect(parseFreeTimeChoiceOptionId(`{"optionId":"${'a'.repeat(200)}"}`)).toBeNull();
+  });
+});
+
+// ── durable rest state (89muv) ──
+
+describe('FreeTimeChooser.chooseWorkspace — durable rest state', () => {
+  it('stays silent across a restart once she rested', async () => {
+    const store = new InMemoryRestSilenceStore();
+    const first = makeChooser({
+      llmProvider: providerReturning('{"optionId":"rest"}'),
+      restWindowPolicy: new DurableRestWindowPolicy(store),
+    });
+    expect(await first.chooser.chooseWorkspace(CTX)).toMatchObject({ kind: 'rest' });
+
+    const restarted = makeChooser({ restWindowPolicy: new DurableRestWindowPolicy(store) });
+    expect(await restarted.chooser.chooseWorkspace({ ...CTX, nowMs: CTX.nowMs + 60_000 }))
+      .toEqual({ kind: 'suppressed', reason: 'rest_silenced' });
+    expect(restarted.provider.complete).not.toHaveBeenCalled();
+  });
+
+  it('suppresses without a model call when the rest state cannot be read', async () => {
+    const store = new InMemoryRestSilenceStore();
+    store.failReads = true;
+    const { chooser, provider } = makeChooser({ restWindowPolicy: new DurableRestWindowPolicy(store) });
+    expect(await chooser.chooseWorkspace(CTX)).toEqual({ kind: 'suppressed', reason: 'rest_state_unavailable' });
+    expect(provider.complete).not.toHaveBeenCalled();
+  });
+
+  it('still rests (and stays silenced in-process) when the durable write fails', async () => {
+    const store = new InMemoryRestSilenceStore();
+    store.failWrites = true;
+    const { chooser, restWindowPolicy } = makeChooser({
+      llmProvider: providerReturning('{"optionId":"rest"}'),
+      restWindowPolicy: new DurableRestWindowPolicy(store),
+    });
+    expect(await chooser.chooseWorkspace(CTX)).toMatchObject({ kind: 'rest' });
+    await expect(restWindowPolicy.isSilenced({ lane: 'quiet_hours', nowMs: 2_000 })).resolves.toBe(true);
   });
 });

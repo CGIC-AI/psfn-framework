@@ -48,6 +48,23 @@ export interface SchedulerOwnerMigrationResult {
 }
 
 /**
+ * psfn-framework-c4twp: owner keys retired because nothing consumed them. The
+ * migration removes exactly these paths and leaves every sibling untouched.
+ */
+function removeRetiredSchedulerOwnerKeys(
+  candidate: Record<string, unknown>,
+  removedPaths: string[],
+): void {
+  const temporalWakeup = candidate.temporalWakeup;
+  if (isRecord(temporalWakeup) && temporalWakeup.wakeSummary !== undefined) {
+    const next = { ...temporalWakeup };
+    delete next.wakeSummary;
+    candidate.temporalWakeup = next;
+    removedPaths.push('temporalWakeup.wakeSummary');
+  }
+}
+
+/**
  * Converts the pre-bundled scheduler owner shape into the canonical shared
  * background-maintenance cadence. Dry-run is the default. The candidate is
  * fully validated before an atomic replacement, and already-migrated files are
@@ -126,6 +143,8 @@ export function migrateLegacySchedulerOwner(
         intervalMs: selectedInterval,
       };
       seedMissingSchedulerOwnerBlocks(candidate, addedPaths);
+      const retiredPaths: string[] = [];
+      removeRetiredSchedulerOwnerKeys(candidate, retiredPaths);
 
       const validated = validateSchedulerConfig(candidate, filePath);
       result = {
@@ -145,13 +164,16 @@ export function migrateLegacySchedulerOwner(
         removedPaths: [
           ...(hasSalienceInterval ? ['salienceDecayIntervalMs'] : []),
           ...(hasSocialGraphInterval ? ['socialGraphBuilder.intervalMs'] : []),
+          ...retiredPaths,
         ],
         ...(addedPaths.length > 0 ? { addedPaths } : {}),
       };
     } else {
       candidate = structuredClone(raw);
+      const removedPaths: string[] = [];
+      removeRetiredSchedulerOwnerKeys(candidate, removedPaths);
       const addedPaths = seedMissingSchedulerOwnerDefaults(candidate);
-      if (addedPaths.length === 0) {
+      if (addedPaths.length === 0 && removedPaths.length === 0) {
         validateSchedulerConfig(raw, filePath);
         assertSourceStillCurrent();
         return { mode, status: 'not_needed', filePath };
@@ -162,7 +184,8 @@ export function migrateLegacySchedulerOwner(
         mode,
         status: options.apply ? 'applied' : 'planned',
         filePath,
-        addedPaths,
+        ...(addedPaths.length > 0 ? { addedPaths } : {}),
+        ...(removedPaths.length > 0 ? { removedPaths } : {}),
       };
     }
 

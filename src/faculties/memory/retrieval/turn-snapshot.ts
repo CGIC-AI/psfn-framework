@@ -90,9 +90,9 @@ export interface CaptureTurnMemorySnapshotDeps {
   embeddingSearchAuthorization: EmbeddingSearchAuthorization;
   resolveMemoryRetrievalPolicy(): MemoryRetrievalPolicy;
   resolveRetrievalBudget(turn?: ContextBudgetTurnCharacteristics): ResolvedContextBudget;
+  /** No ConversationScope here: the room kind stays unknown (fail closed). */
   resolveRoomVisibilityContext(
     channelId: string,
-    channelMeta: ChannelMeta | undefined,
     canonicalContactId: string | undefined,
   ): Promise<RetrievalRoomVisibilityContext>;
   resolveRecentContactShapeAccess(
@@ -164,7 +164,7 @@ export async function captureTurnMemorySnapshot(
   const visibilityScope = resolveBroadcastVisibilityScope(channelId, channelMeta) ?? 'non_broadcast';
   const operatorApproval = visibilityScope === 'approved_private_context';
   const roomVisibility = input.roomVisibility
-    ?? await deps.resolveRoomVisibilityContext(channelId, channelMeta, canonicalContactId);
+    ?? await deps.resolveRoomVisibilityContext(channelId, canonicalContactId);
   const rawRecentContactShape = canonicalContactId
     ? await deps.memoryStore.getRecentContactShape(canonicalContactId)
     : undefined;

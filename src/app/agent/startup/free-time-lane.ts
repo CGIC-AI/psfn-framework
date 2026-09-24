@@ -38,7 +38,10 @@ import {
   createFreeTimeRoomChannelResolver,
   type FreeTimeProjectSummary,
 } from '../../../core/scheduler/free-time-chooser.js';
-import { InMemoryRestWindowPolicy } from '../../../core/scheduler/rest-window-policy.js';
+import {
+  DurableRestWindowPolicy,
+  type RestSilenceStorePort,
+} from '../../../core/scheduler/rest-window-policy.js';
 import type { PromptRegistryStatePort } from '../../../core/identity/prompt-state-port.js';
 import type { PersonalProjectLibrary, PersonalProjectWorkContext } from '../../../faculties/wiki/personal-projects.js';
 import type { EventBus } from '../../../shared/event-bus.js';
@@ -75,6 +78,8 @@ export interface FreeTimeLaneDeps {
   automataLifecycle?: AutomataClassLifecycleRuntime;
   /** Concern candidates still waiting for her decision, shown in free time (vcq8v.5). */
   listPendingConcernCandidates: () => Promise<readonly PendingConcernCandidate[]>;
+  /** Companion-private durable rest silence (89muv); survives restart. */
+  restSilenceStore: RestSilenceStorePort;
 }
 
 const FREE_TIME_CLASS: ProductionAutomataClassId = 'scheduler.free_time';
@@ -210,7 +215,7 @@ export function registerFreeTimeLane(deps: FreeTimeLaneDeps): void {
     },
     roomChannelResolver: freeTimeRoomChannelResolver,
   });
-  const freeTimeRestWindowPolicy = new InMemoryRestWindowPolicy();
+  const freeTimeRestWindowPolicy = new DurableRestWindowPolicy(deps.restSilenceStore);
   const freeTimeChooser = new FreeTimeChooser({
     llmProvider,
     resolver: freeTimeResolver,

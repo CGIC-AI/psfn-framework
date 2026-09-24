@@ -1524,6 +1524,8 @@ async function main(): Promise<void> {
     quarantine: episodeSessionQuarantineFilter,
     actions: postTurnActions,
     retryDelayMs: schedulerConfig.backgroundWork.supervisor.retryBaseDelayMs,
+    // Completed receipts follow the durable background-work terminal retention.
+    completedReceiptRetentionMs: schedulerConfig.backgroundWork.supervisor.terminalRetentionMs,
     searchLimit: resolveMemoryRetrievalPolicy(config.memoryRetrievalPolicy).lexicalAugment.selectedLimit,
     goals: () => new NorthStarStore(resolveNorthStarPath(pathSnapshot.companionDataDir)).buildPromptLayer()?.content ?? '',
     extract: input => memoryExtractor.extractExternalConversation(input),
@@ -2142,6 +2144,7 @@ async function main(): Promise<void> {
     capabilityRuntime,
     eventBus,
     chargePolicy: config.chargePolicy,
+    invitationState: persistenceRuntime.schedulerLaneStateStore,
   });
   registerTemporalWakeupLane({
     scheduler,
@@ -2179,6 +2182,7 @@ async function main(): Promise<void> {
       ? { automataLifecycle: coreRuntime.automataClassLifecycle }
       : {}),
     listPendingConcernCandidates,
+    restSilenceStore: persistenceRuntime.schedulerLaneStateStore,
   });
   // ── Weighted-thought outreach lane (E?/1xb.2) + Law 27 contradiction
   // dampening: extracted to startup/weighted-thought-outreach-lane.ts.

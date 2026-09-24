@@ -515,7 +515,6 @@ describe('scheduler config seed defaults', () => {
           ...DEFAULT_TEMPORAL_WAKEUP_CONFIG.idleRefresher,
           minIdleMinutes: 120,
         },
-        wakeSummary: { ...DEFAULT_TEMPORAL_WAKEUP_CONFIG.wakeSummary },
       });
 
       writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), {
@@ -596,54 +595,17 @@ describe('scheduler config seed defaults', () => {
     });
   });
 
-  it('owns the wake summary budgets and continuity floor with validated defaults (67ka)', () => {
+  it('rejects the retired temporalWakeup.wakeSummary block with migration guidance (c4twp)', () => {
     withSeedDir((seedDir) => {
-      expect(DEFAULT_TEMPORAL_WAKEUP_CONFIG.wakeSummary).toEqual({
-        sessionSummaryMaxTokens: 160,
-        continuitySummaryMaxTokens: 160,
-        continuityMinEntries: 2,
-      });
-
+      expect(DEFAULT_TEMPORAL_WAKEUP_CONFIG).not.toHaveProperty('wakeSummary');
       writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), {
         ...buildValidSchedulerConfig(),
         temporalWakeup: {
-          wakeSummary: { continuitySummaryMaxTokens: 96, continuityMinEntries: 3 },
-        },
-      });
-      expect(loadSchedulerSeedDefaults({ seedDir }).temporalWakeup.wakeSummary).toEqual({
-        sessionSummaryMaxTokens: 160,
-        continuitySummaryMaxTokens: 96,
-        continuityMinEntries: 3,
-      });
-
-      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), {
-        ...buildValidSchedulerConfig(),
-        temporalWakeup: {
-          wakeSummary: { sessionSummaryMaxTokens: 0 },
+          wakeSummary: { continuitySummaryMaxTokens: 96 },
         },
       });
       expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
-        'temporalWakeup.wakeSummary.sessionSummaryMaxTokens must be an integer >= 1',
-      );
-
-      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), {
-        ...buildValidSchedulerConfig(),
-        temporalWakeup: {
-          wakeSummary: { continuityMinEntries: 0 },
-        },
-      });
-      expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
-        'temporalWakeup.wakeSummary.continuityMinEntries must be an integer >= 1',
-      );
-
-      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), {
-        ...buildValidSchedulerConfig(),
-        temporalWakeup: {
-          wakeSummary: 'tiny',
-        },
-      });
-      expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
-        'temporalWakeup.wakeSummary must be an object',
+        /temporalWakeup\.wakeSummary was retired.*migrate:scheduler-owner/u,
       );
     });
   });

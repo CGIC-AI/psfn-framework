@@ -51,7 +51,9 @@ export type PostTurnActionFailureReason =
   | 'missing_handler'
   | 'eligibility_denied'
   | 'retries_exhausted'
-  | 'malformed_action';
+  | 'malformed_action'
+  /** ritxj: two kinds shared one dedupe key; the incoming action was rejected. */
+  | 'dedupe_key_collision';
 export type PostTurnActionTerminalReason = 'cancelled' | 'acknowledged';
 export type PostTurnActionStatusState =
   | PostTurnActionQueueEntryState

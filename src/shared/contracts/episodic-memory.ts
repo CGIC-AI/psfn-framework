@@ -137,6 +137,15 @@ export interface EpisodeMeaning {
   source: 'companion_dream_pass' | 'companion_direct';
 }
 
+/**
+ * Reserved `participantContactIds` marker for a speaker whose canonical
+ * contact could not be proven at synthesis (psfn-framework-bs4m0). It can
+ * never equal a canonical contact id (contact ids are UUIDs), so it grants no
+ * viewer access, and it keeps the episode out of the "unattributed" admin
+ * projection that an empty participant list would select.
+ */
+export const UNRESOLVED_EPISODE_PARTICIPANT = 'unresolved-participant:withheld';
+
 export interface Episode {
   schemaVersion: EpisodeContractVersion;
   id: string;

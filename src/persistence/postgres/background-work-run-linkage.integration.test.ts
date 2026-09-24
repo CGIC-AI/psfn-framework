@@ -256,4 +256,53 @@ describe('background-work restart linkage for lease_retry Automata runs', () => 
       await close();
     }
   }, INTEGRATION_TIMEOUT_MS);
+
+  it('terminalizes the linked runs of a job the sweep dead-letters in a live process (vxllk)', async () => {
+    const { jobs, hydrate, close } = await fixture();
+    try {
+      const exhausted = memoryInput('turn-live-poison');
+      await jobs.enqueue(exhausted);
+      let nowMs = 200;
+      for (let expiry = 0; expiry < BACKGROUND_WORK_LEASE_EXPIRY_LIMIT - 1; expiry += 1) {
+        await claim(jobs, nowMs);
+        nowMs += LEASE_MS;
+        expect((await jobs.recoverExpired({ nowMs })).recoveredCount).toBe(1);
+      }
+      // One live registry for the whole scenario: no restart hydrate runs.
+      const live = await hydrate(nowMs);
+      const lifecycle = createBackgroundWorkAutomataLifecycle(live);
+      const lastClaim = await claim(jobs, nowMs);
+      await lifecycle.onClaimed({ job: lastClaim, payload: exhausted.payload });
+      await live.register({
+        runId: 'turn-live-poison:memory-extraction',
+        automatonClass: 'memory.extraction',
+        workerId: 'memory-extraction',
+        taskId: 'session-turn-live-poison',
+        taskLabel: 'Memory extraction',
+        taskSummary: 'Memory extraction triggered by response_turn',
+        sessionIds: ['session-turn-live-poison'],
+        createdAtMs: nowMs,
+      });
+
+      // The claiming process dies mid-lifetime; the live supervisor's sweep
+      // dead-letters the job and terminalizes what it could have opened.
+      nowMs += LEASE_MS + 1;
+      const recovery = await jobs.recoverExpired({ nowMs });
+      expect(recovery.terminalJobs.map(job => job.jobId)).toEqual([exhausted.jobId]);
+      for (const job of recovery.terminalJobs) {
+        await lifecycle.onExpiredTerminal({ job, reasonCode: job.reasonCode });
+      }
+
+      expect(live.listRuns({ status: 'running' })).toEqual([]);
+      expect(live.listRuns({ status: 'queued' })).toEqual([]);
+      for (const runId of ['request-turn-live-poison', 'turn-live-poison:memory-extraction']) {
+        expect(live.getRun(runId)).toMatchObject({ status: 'failed', statusReason: 'background_work_failed' });
+      }
+      // Durable, not just in-memory: a fresh hydrate sees the same terminal state.
+      const reloaded = await hydrate(nowMs + 1);
+      expect(reloaded.getRun('request-turn-live-poison')).toMatchObject({ status: 'failed' });
+    } finally {
+      await close();
+    }
+  }, INTEGRATION_TIMEOUT_MS);
 });

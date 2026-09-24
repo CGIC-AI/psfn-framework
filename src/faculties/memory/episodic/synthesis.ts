@@ -29,6 +29,7 @@ import {
   type ConsolidationCandidateScore,
   type EpisodeCandidateInput,
 } from './synthesis/consolidation.js';
+import { resolveEpisodeParticipantContactIds } from './synthesis/participant-attribution.js';
 import { proposeTopicSegments, type TopicSegment } from './topic-segmentation.js';
 import { applyThreadUnionForArc, type ThreadAssignmentEvent } from './thread-assignment.js';
 import type { PersonaPreamblePort } from '../../../core/identity/persona-preamble.js';
@@ -630,9 +631,8 @@ function buildEpisodeInput(
     // produced the unbounded per-channel mega-thread.
     threadId: id,
     channelId: first.channelId,
-    participantContactIds: [...new Set(entries
-      .map(entry => entry.authorId)
-      .filter((authorId): authorId is string => typeof authorId === 'string' && authorId.trim().length > 0))].sort(),
+    // bs4m0: proven canonical attribution only — never the raw authorId.
+    participantContactIds: resolveEpisodeParticipantContactIds(entries),
     salience: inferSalience(narrative, themes),
     // Episodes are born affect-empty (bead h4fp.6): machine emotion heuristics
     // must never masquerade as her felt affect. The keyword/VAD signals move to

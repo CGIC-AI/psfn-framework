@@ -123,6 +123,12 @@ export function coalesceDeferredPostTurnQueueEntry(input: {
     ? (shouldReplacePending ? incomingAction : existing.pendingAction)
     : undefined;
   const successorPending = pendingAction !== undefined;
+  // ritxj decision: newer demand folded into an entry that is already in
+  // retry backoff keeps its attempt count AND its backoff. Fresh demand for the
+  // same dedupe key is the same work; resetting the budget or pulling the run
+  // forward would turn a persistently failing handler into an unbounded,
+  // demand-driven retry loop. The folded demand still runs on the next attempt.
+  const inRetryBackoff = existing.attempt > 0;
   return {
     entry: {
       ...existing,
@@ -134,7 +140,7 @@ export function coalesceDeferredPostTurnQueueEntry(input: {
         incomingAction.inferredAt,
       ),
       coalescedCount: existing.coalescedCount + 1,
-      nextRunAt: currentRunMustFinish
+      nextRunAt: currentRunMustFinish || inRetryBackoff
         ? existing.nextRunAt
         : Math.min(existing.nextRunAt, incomingNextRunAt),
       maxRetries: Math.max(existing.maxRetries, incomingMaxRetries),

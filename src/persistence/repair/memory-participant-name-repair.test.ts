@@ -1,5 +1,6 @@
 import type { Pool, PoolClient, QueryResult } from 'pg';
 import { describe, expect, it } from 'vitest';
+import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import {
   planMemoryParticipantNameRepair,
   repairPostgresMemoryParticipantNames,
@@ -63,6 +64,21 @@ class FakePostgresRepairPool {
       },
     } as PoolClient;
   }
+}
+
+function fakeEmbeddingProvider(
+  embedBatch: EmbeddingProviderPort['embedBatch'] = async texts => texts.map(() => new Float32Array([0.1, 0.2, 0.3])),
+): EmbeddingProviderPort & { calls: string[][] } {
+  const calls: string[][] = [];
+  return {
+    dims: 3,
+    calls,
+    embed: async () => { throw new Error('unexpected single embed'); },
+    embedBatch: async (texts, options) => {
+      calls.push([...texts]);
+      return await embedBatch(texts, options);
+    },
+  };
 }
 
 describe('memory participant name repair', () => {
@@ -168,12 +184,14 @@ describe('memory participant name repair', () => {
       deleted_at: null,
     }]);
 
+    const embeddingProvider = fakeEmbeddingProvider();
     const report = await repairPostgresMemoryParticipantNames(pool as unknown as Pool, {
       canonicalContactName: 'Alex',
       companionName: 'Lyra',
       dryRun: false,
       now: 456,
       createPatchEventId: () => 'patch-active',
+      embeddingProvider,
     });
 
     expect(report).toMatchObject({
@@ -213,5 +231,46 @@ describe('memory participant name repair', () => {
     expect(pool.patchEvents[0]?.[5]).toBe(
       'memory_participant_name_backfill',
     );
+    expect(embeddingProvider.calls).toEqual([['Alex told Lyra about the kiln schedule.']]);
+    const update = pool.clientQueries.find(query => query.text.includes('UPDATE l2_memories'));
+    expect(update?.text).toContain('embedding = $4::vector');
+    expect(update?.values[3]).toBe('[0.10000000149011612,0.20000000298023224,0.30000001192092896]');
+  });
+
+  it('refuses to apply without an embedding provider before touching storage', async () => {
+    const pool = new FakePostgresRepairPool([{
+      id: 'm-active',
+      text: 'The user told the companion about the kiln schedule.',
+      superseded_by: null,
+      deleted_at: null,
+    }]);
+    await expect(repairPostgresMemoryParticipantNames(pool as unknown as Pool, {
+      canonicalContactName: 'Alex',
+      companionName: 'Lyra',
+      dryRun: false,
+    })).rejects.toThrow(/requires an embedding provider/);
+    expect(pool.poolQueries).toHaveLength(0);
+    expect(pool.clientQueries).toHaveLength(0);
+  });
+
+  it.each([
+    ['provider failure', async () => { throw new Error('embedding provider down'); }, /embedding provider down/],
+    ['dimension mismatch', async (texts: string[]) => texts.map(() => new Float32Array([0.1])), /expected 3/],
+    ['short batch', async () => [], /returned 0 embeddings for 1/],
+  ] as const)('leaves rows and patch events unchanged on %s', async (_label, embedBatch, message) => {
+    const pool = new FakePostgresRepairPool([{
+      id: 'm-active',
+      text: 'The user told the companion about the kiln schedule.',
+      superseded_by: null,
+      deleted_at: null,
+    }]);
+    await expect(repairPostgresMemoryParticipantNames(pool as unknown as Pool, {
+      canonicalContactName: 'Alex',
+      companionName: 'Lyra',
+      dryRun: false,
+      embeddingProvider: fakeEmbeddingProvider(embedBatch),
+    })).rejects.toThrow(message);
+    expect(pool.clientQueries).toHaveLength(0);
+    expect(pool.patchEvents).toHaveLength(0);
   });
 });

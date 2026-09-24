@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createDmConversationScope, createGroupConversationScope } from '../../core/session/conversation-scope.js';
 import { fromPartial } from '@total-typescript/shoehorn';
 import {
   MemoryRetriever,
@@ -235,6 +236,8 @@ describe('MemoryRetriever active memory context', () => {
       'regular',
       { isDirectMessage: true },
       'contact-a',
+      undefined, undefined, undefined, undefined, undefined, undefined,
+      createDmConversationScope({ channelId: 'api:test', contact: { contactId: 'contact-a' } }),
     );
 
     expect(output).toContain('subject visible retrieval marker');
@@ -328,6 +331,8 @@ describe('MemoryRetriever active memory context', () => {
       'primary',
       { isDirectMessage: true, privacyLevel: 'private' },
       'contact-briar',
+      undefined, undefined, undefined, undefined, undefined, undefined,
+      createDmConversationScope({ channelId: dyadChannel, contact: { contactId: 'contact-briar' } }),
     );
     expect(exactDyad).toContain(privateMemory.text);
 
@@ -513,6 +518,8 @@ describe('MemoryRetriever active memory context', () => {
       'primary',
       { isDirectMessage: true, privacyLevel: 'private' },
       'contact-primary',
+      undefined, undefined, undefined, undefined, undefined, undefined,
+      createDmConversationScope({ channelId: 'api:primary-self-recall', contact: { contactId: 'contact-primary' } }),
     );
 
     expect(output).toContain(selfExperience.text);
@@ -3927,6 +3934,8 @@ describe('MemoryRetriever room-scoped visibility', () => {
       'primary',
       { isDirectMessage: true, privacyLevel: 'private' },
       morganId,
+      undefined, undefined, undefined, undefined, undefined, undefined,
+      createDmConversationScope({ channelId: MORGAN_DM, contact: { contactId: morganId } }),
     );
 
     expect(result).toContain('Morgan DM reminder: prefer short deployment summaries.');
@@ -3939,6 +3948,69 @@ describe('MemoryRetriever room-scoped visibility', () => {
       'room_visibility.blocked': 1,
     });
     expect(telemetry.returnedCount).toBe(2);
+  });
+
+  describe('ConversationScope is the sole room-visibility authority (bd9tx)', () => {
+    async function roomXRetriever() {
+      const { contactStore, morganId } = await makeRoomVisibilityContactStore();
+      await contactStore.recordChannelActivity(morganId, 'discord', GROUP_ROOM_X, 'invite_only');
+      const roomXMemory = makeMemory({
+        id: 'group-x-memory',
+        text: 'Room X agreed Morgan owns the smoke test checklist.',
+        sensitivity: 'public',
+        contactId: morganId,
+        provenance: { channelId: GROUP_ROOM_X },
+        scopeRef: { kind: 'conversation', id: GROUP_ROOM_X },
+        similarity: 0.97,
+      });
+      const retriever = new MemoryRetriever(
+        makeMockStore([roomXMemory]),
+        makeMockEmbedding(),
+        { retrievalLimit: 20 },
+        makeMockEventBus(),
+        contactStore,
+      );
+      return { retriever, morganId };
+    }
+
+    it('ignores DM channel metadata that conflicts with a group scope', async () => {
+      const { retriever, morganId } = await roomXRetriever();
+      const result = await retriever.retrieve(
+        'smoke test checklist',
+        GROUP_ROOM_Y,
+        'primary',
+        { isDirectMessage: true, privacyLevel: 'private' },
+        morganId,
+        undefined, undefined, undefined, undefined, undefined, undefined,
+        createGroupConversationScope({ channelId: GROUP_ROOM_Y }),
+      );
+      expect(result).not.toContain('Room X agreed Morgan owns the smoke test checklist.');
+    });
+
+    it('fails closed on DM-only allowances when no scope is supplied', async () => {
+      const { retriever, morganId } = await roomXRetriever();
+      const result = await retriever.retrieve(
+        'smoke test checklist',
+        MORGAN_DM,
+        'primary',
+        { isDirectMessage: true, privacyLevel: 'private' },
+        morganId,
+      );
+      expect(result).not.toContain('Room X agreed Morgan owns the smoke test checklist.');
+    });
+
+    it('rejects a DM scope whose contact conflicts with the recall contact', async () => {
+      const { retriever, morganId } = await roomXRetriever();
+      await expect(retriever.retrieve(
+        'smoke test checklist',
+        MORGAN_DM,
+        'primary',
+        { isDirectMessage: true, privacyLevel: 'private' },
+        morganId,
+        undefined, undefined, undefined, undefined, undefined, undefined,
+        createDmConversationScope({ channelId: MORGAN_DM, contact: { contactId: 'contact-someone-else' } }),
+      )).rejects.toThrow(/conflicts with the DM ConversationScope/);
+    });
   });
 
   it('allows participated group personal memories in the participant DM for regular contacts', async () => {
@@ -3968,6 +4040,8 @@ describe('MemoryRetriever room-scoped visibility', () => {
       'regular',
       { isDirectMessage: true, privacyLevel: 'private' },
       morganId,
+      undefined, undefined, undefined, undefined, undefined, undefined,
+      createDmConversationScope({ channelId: MORGAN_DM, contact: { contactId: morganId } }),
     );
 
     expect(result).toContain('Room X knows Morgan volunteered to own the risky checklist.');
@@ -4006,6 +4080,8 @@ describe('MemoryRetriever room-scoped visibility', () => {
       'primary',
       { isDirectMessage: true, privacyLevel: 'private' },
       morganId,
+      undefined, undefined, undefined, undefined, undefined, undefined,
+      createDmConversationScope({ channelId: MORGAN_DM, contact: { contactId: morganId } }),
     );
 
     expect(result).toContain('Room X discussed a private server migration plan.');

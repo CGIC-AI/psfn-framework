@@ -187,11 +187,6 @@
       "checkIntervalMs": 900000,
       "minIdleMinutes": 120,
       "minNoteIntervalMinutes": 120
-    },
-    "wakeSummary": {
-      "sessionSummaryMaxTokens": 160,
-      "continuitySummaryMaxTokens": 160,
-      "continuityMinEntries": 2
     }
   },
   "freeTime": {

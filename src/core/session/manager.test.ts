@@ -1963,7 +1963,11 @@ describe('SessionManager', () => {
   });
 
   it('allows an audited foreign-session read and then restores the admitted owner', () => {
-    const mgr = new SessionManager(store, makeConfig());
+    const eventBus = new EventBus();
+    const audited: unknown[] = [];
+    const recentReads: unknown[] = [];
+    eventBus.on('session.foreign_read.audited', (event) => { audited.push(event); });
+    const mgr = new SessionManager(store, makeConfig(), eventBus);
     const admittedOwner = 'discord:admitted-owner';
     const foreignOwner = 'discord:foreign-owner';
     mgr.recordUserMessage(admittedOwner, 'admitted history', 'user-a', 'User');
@@ -1974,8 +1978,12 @@ describe('SessionManager', () => {
     });
 
     sessionReads.run(() => {
+      // Ordinary owner reads emit no audit event.
+      recentReads.push(...sessionReads.getRecentMessages(10));
+      expect(audited).toHaveLength(0);
+
       const foreignMessages = sessionReads.resolveForeignSessionForTurn(
-        'inspect explicitly linked room',
+        'reflection_group_conversation_scope',
         foreignOwner,
         foreignReads => foreignReads.getRecentMessages(10),
       );
@@ -1985,6 +1993,56 @@ describe('SessionManager', () => {
         'admitted history',
       ]);
     });
+
+    // ls15s: exactly one bounded, content-free event for the one foreign read.
+    expect(audited).toHaveLength(1);
+    const event = audited[0] as Record<string, unknown>;
+    expect(Object.keys(event).sort()).toEqual(['reason', 'sourceSessionRef', 'targetSessionRef', 'timestamp']);
+    expect(event.reason).toBe('reflection_group_conversation_scope');
+    expect(event.sourceSessionRef).toMatch(/^session-ref:[0-9a-f]{24}$/);
+    expect(event.targetSessionRef).toMatch(/^session-ref:[0-9a-f]{24}$/);
+    expect(event.sourceSessionRef).not.toBe(event.targetSessionRef);
+    const serialized = JSON.stringify(event);
+    for (const forbidden of [admittedOwner, foreignOwner, 'admitted history', 'foreign history']) {
+      expect(serialized).not.toContain(forbidden);
+    }
+    expect(recentReads).toHaveLength(1);
+  });
+
+  it('refuses foreign-session reads with blank or unregistered reasons, or without an audit channel', () => {
+    const eventBus = new EventBus();
+    const audited: unknown[] = [];
+    eventBus.on('session.foreign_read.audited', (event) => { audited.push(event); });
+    const audit = new SessionManager(store, makeConfig(), eventBus);
+    const reads = audit.createCapturedSessionReads({
+      logicalSessionId: 'discord:admitted-owner',
+      sourceChannelId: 'discord:admitted-owner',
+    });
+    const operation = vi.fn(() => 'read');
+    reads.run(() => {
+      for (const reason of ['   ', 'inspect explicitly linked room']) {
+        expect(() => reads.resolveForeignSessionForTurn(
+          reason as 'reflection_group_conversation_scope',
+          'discord:foreign-owner',
+          operation,
+        )).toThrow(/audit reason/);
+      }
+    });
+
+    const unaudited = new SessionManager(store, makeConfig());
+    const unauditedReads = unaudited.createCapturedSessionReads({
+      logicalSessionId: 'discord:admitted-owner',
+      sourceChannelId: 'discord:admitted-owner',
+    });
+    unauditedReads.run(() => {
+      expect(() => unauditedReads.resolveForeignSessionForTurn(
+        'reflection_group_conversation_scope',
+        'discord:foreign-owner',
+        operation,
+      )).toThrow(/no foreign-read audit sink/);
+    });
+    expect(operation).not.toHaveBeenCalled();
+    expect(audited).toHaveLength(0);
   });
 
   // B2 closure property (test 3): resolveSessionChannelId is a public mutable

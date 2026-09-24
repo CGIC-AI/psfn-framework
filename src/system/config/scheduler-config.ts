@@ -156,7 +156,6 @@ export {
   type TemporalWakeupHabitConfig,
   type TemporalWakeupIdleRefresherConfig,
   type TemporalWakeupMorningConfig,
-  type TemporalWakeupWakeSummaryConfig,
 } from './scheduler-config/temporal.js';
 export {
   DEFAULT_FREE_TIME_CONFIG,

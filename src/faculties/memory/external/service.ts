@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { createDmConversationScope } from '../../../core/session/conversation-scope.js';
 import { v7 as uuidv7 } from 'uuid';
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import type { Contact } from '../../../core/contacts/types.js';
@@ -55,6 +56,9 @@ interface ExternalMemoryServiceOptions {
   quarantine: MemorySessionQuarantineFilter;
   actions: PostTurnActionRuntime;
   retryDelayMs: number;
+  /** How long a completed receipt is kept as the event-id idempotency record (cin6q). */
+  completedReceiptRetentionMs: number;
+  now?: () => number;
   searchLimit: number;
   goals: () => string;
   extract: (input: {
@@ -128,9 +132,13 @@ export class ExternalMemoryService {
       }
       if (request.operation === 'context') {
         if (!this.options.memoryProvider) throw new Error('Memory retrieval is unavailable');
+        // bd9tx: the authenticated one-to-one binding is the DM scope; room
+        // visibility derives only from this ConversationScope.
         const recalled = await this.options.memoryProvider.retrieve(
           request.query, channelId, contact.trustLevel,
           { isDirectMessage: true }, contact.id,
+          undefined, undefined, undefined, undefined, undefined, undefined,
+          createDmConversationScope({ channelId, contact: { contactId: contact.id } }),
         );
         const goals = contact.trustLevel === 'primary' ? this.options.goals() : '';
         return { context: [goals, recalled].filter(Boolean).join('\n\n') };
@@ -295,6 +303,9 @@ export class ExternalMemoryService {
 
   /** Replay durable intents after restart, including the append-before-receipt crash window. */
   async recover(): Promise<void> {
+    const now = this.options.now?.() ?? Date.now();
+    const pruned = this.options.intakeStore.pruneCompleted(now - this.options.completedReceiptRetentionMs);
+    if (pruned > 0) log.info('Pruned completed external memory intake receipts', { pruned });
     for (const record of this.options.intakeStore.pending()) {
       await this.serialized(this.options.intakeStore.channelId(record), async () => {
         if (record.binding.companionId !== this.options.companionId) {

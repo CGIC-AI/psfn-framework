@@ -35,6 +35,8 @@ import type { WorldExplorationConfig } from '../../../system/config/scheduler-co
 import type { CapabilityRuntime } from '../../../system/capabilities/runtime.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
+import type { WorldExplorationStatePort } from '../../../core/scheduler/world-exploration-state.js';
+import { toErrorMessage } from '../../../shared/utils/errors.js';
 
 const log = createComponentLogger('WorldExplorationLane');
 
@@ -61,6 +63,8 @@ type WorldExplorationSkipReason =
   | 'quiet_hours'
   | 'interval'
   | 'daily_cap'
+  /** The durable interval/cap state could not be read or spent; never invite blind. */
+  | 'state_unavailable'
   /** The invitation was issued but the turn itself failed (provider, runtime); logged, never rethrown. */
   | 'turn_failed';
 
@@ -74,6 +78,8 @@ export interface WorldExplorationLaneDeps {
   capabilityRuntime: Pick<CapabilityRuntime, 'has'>;
   eventBus: EventBus;
   chargePolicy: ChargePolicyConfig | undefined;
+  /** Companion-private durable interval and daily-cap state (orn69). */
+  invitationState: WorldExplorationStatePort;
   now?: () => number;
 }
 
@@ -110,9 +116,6 @@ function resolveWorldPlace(registry: PlacesRegistryConfig, perception: WorldAvat
 
 export function registerWorldExplorationLane(deps: WorldExplorationLaneDeps): WorldExplorationLane {
   const now = deps.now ?? (() => Date.now());
-  let lastInvitedAtMs: number | undefined;
-  let dayKey = '';
-  let turnsToday = 0;
 
   const localDayKey = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
 
@@ -123,9 +126,18 @@ export function registerWorldExplorationLane(deps: WorldExplorationLaneDeps): Wo
     const nowMs = now();
     const gate = evaluateProactiveOutboundTimeGate({ nowMs, quietHours: deps.quietHours });
     if (!gate.allowed) return 'quiet_hours';
-    if (lastInvitedAtMs !== undefined && nowMs - lastInvitedAtMs < deps.config.intervalMinutes * MINUTE_MS) return 'interval';
+    // orn69: the interval and the daily cap are read from durable state, so a
+    // restart (or a crash loop) never resets them.
+    let persisted: Awaited<ReturnType<WorldExplorationStatePort['load']>>;
+    try {
+      persisted = await deps.invitationState.load();
+    } catch (error) {
+      log.error('World exploration state unavailable; not inviting', { error: toErrorMessage(error) });
+      return 'state_unavailable';
+    }
+    if (persisted && nowMs - persisted.lastInvitedAtMs < deps.config.intervalMinutes * MINUTE_MS) return 'interval';
     const today = localDayKey(nowMs);
-    if (today !== dayKey) { dayKey = today; turnsToday = 0; }
+    const turnsToday = persisted && persisted.dayKey === today ? persisted.turnsToday : 0;
     if (turnsToday >= deps.config.maxTurnsPerDay) return 'daily_cap';
 
     // A body, alive, right now: the Hub must answer a perceive, wherever the body is.
@@ -144,8 +156,14 @@ export function registerWorldExplorationLane(deps: WorldExplorationLaneDeps): Wo
     const people = perception.people.length;
     const things = perception.things.length;
 
-    lastInvitedAtMs = nowMs;
-    turnsToday += 1;
+    // Spend the interval and the cap durably BEFORE the paid turn; an
+    // unrecordable spend refuses the invitation rather than risk a repeat.
+    try {
+      await deps.invitationState.save({ lastInvitedAtMs: nowMs, dayKey: today, turnsToday: turnsToday + 1 });
+    } catch (error) {
+      log.error('World exploration state could not be recorded; not inviting', { error: toErrorMessage(error) });
+      return 'state_unavailable';
+    }
     const prompt = buildWorldExplorationPrompt({
       world: place.eidoverse.world,
       placeLabel: place.displayName || place.placeId,

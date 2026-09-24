@@ -80,6 +80,15 @@ export interface BackgroundWorkAutomataLifecyclePort {
     payload: BackgroundWorkPayload;
     reasonCode: StoredBackgroundWorkJob['reasonCode'];
   }): Promise<void>;
+  /**
+   * vxllk: the expiry sweep dead-lettered a claim whose owning process is
+   * gone. The recovering process terminalizes every Automata run that job
+   * could have opened, so none stays running until the next restart.
+   */
+  onExpiredTerminal(input: {
+    job: StoredBackgroundWorkJob;
+    reasonCode: StoredBackgroundWorkJob['reasonCode'];
+  }): Promise<void>;
 }
 
 export interface BackgroundWorkSupervisorOptions extends BackgroundWorkSupervisorTuning {
@@ -510,7 +519,7 @@ export class BackgroundWorkSupervisor {
     const nowMs = this.now();
     await this.heartbeat();
     const expired = await this.store.recoverExpired({ nowMs });
-    for (const job of expired.terminalJobs) this.settleExpiredTerminal(job);
+    for (const job of expired.terminalJobs) await this.settleExpiredTerminal(job);
     if (nowMs - this.lastCleanupAtMs >= this.cleanupIntervalMs) {
       await this.store.purgeTerminal({
         completedBeforeMs: Math.max(0, nowMs - this.terminalRetentionMs),
@@ -1073,11 +1082,13 @@ export class BackgroundWorkSupervisor {
    * A claim the expiry sweep failed terminally: its lease expired the budgeted
    * number of times (a poison claim that died with its process at every
    * restart) or it had crossed an effect boundary with an unknown outcome. No
-   * in-process owner ran it, so only telemetry and the health signal fire
-   * (bead psfn-framework-52epa); the automata lifecycle and owner cleanup
-   * belong to the process that held the claim.
+   * in-process owner ran it, so telemetry and the health signal fire (bead
+   * psfn-framework-52epa), and the recovering process terminalizes the job's
+   * linked Automata runs (psfn-framework-vxllk): the process that held the
+   * claim is gone and would otherwise leave them running until a restart.
+   * In-process owner cleanup still belongs to the process that held the claim.
    */
-  private settleExpiredTerminal(job: StoredBackgroundWorkJob): void {
+  private async settleExpiredTerminal(job: StoredBackgroundWorkJob): Promise<void> {
     log.warn('Background claim failed by lease-expiry recovery', {
       jobId: job.jobId,
       kind: job.kind,
@@ -1088,6 +1099,17 @@ export class BackgroundWorkSupervisor {
     this.emitJobTelemetry(job);
     if (!isBackgroundWorkKind(job.kind)) return;
     this.emitTerminalFailureHealthEvent(job.kind, job, 0);
+    try {
+      await this.automataLifecycle?.onExpiredTerminal({ job, reasonCode: job.reasonCode });
+    } catch (error) {
+      // The durable failure is committed; a run left non-terminal here is
+      // failed by the restart hydrate oracle (y5tu1). Surface, never mask.
+      log.error('Background expired-terminal automata lifecycle failed', {
+        jobId: job.jobId,
+        kind: job.kind,
+        errorName: error instanceof Error ? error.name : 'UnknownError',
+      });
+    }
   }
 
   private emitTerminalFailureHealthEvent(

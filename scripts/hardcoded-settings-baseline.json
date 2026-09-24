@@ -1333,14 +1333,14 @@
       "value": "50_000"
     },
     {
-      "file": "src/boundary/gateway/server.ts",
+      "file": "src/boundary/gateway/server/connection-lifecycle.ts",
       "name": "$call:math-clamp:Math.max.arg0#1",
       "value": "1_000",
       "form": "math-clamp",
       "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
-      "file": "src/boundary/gateway/server.ts",
+      "file": "src/boundary/gateway/server/connection-lifecycle.ts",
       "name": "$call:math-clamp:Math.min.arg0#1",
       "value": "30_000",
       "form": "math-clamp",

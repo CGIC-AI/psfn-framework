@@ -124,6 +124,19 @@ import {
   type InboundChannelReplayDrop,
 } from './inbound-channel-replay.js';
 import type { GatewayServerOptions } from './server/options.js';
+import type { GatewayServerPorts } from './server/ports.js';
+import {
+  DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS,
+  GatewayConnectionLifecycle,
+} from './server/connection-lifecycle.js';
+import {
+  isIdentifiableGatewayConnectionRole,
+  type GatewayConnectionHealth,
+  type GatewayConnectionRole,
+  type GatewayConnectionState,
+  type GatewayConnectionStatus,
+  type MalformedFrameKind,
+} from './server/connection-status.js';
 import { parseCompanionMessageSendParams } from './server/companion-message-send-params.js';
 import {
   hasOwn,
@@ -134,43 +147,10 @@ import {
 
 const log = createComponentLogger('Gateway');
 const unknownCompanionDisplayIdentity = createCompanionDisplayIdentityResolver([]);
-const DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS = 90_000;
-const CONNECTION_IN_FLIGHT_HEALTH_TOUCH_INTERVAL_MS = Math.min(
-  30_000,
-  Math.max(1_000, Math.floor(DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS / 3)),
-);
 const INVALID_FRAME_AUDIT_METHOD = 'gateway.ipc.frame.invalid';
 const ICP_DELIVERY_REPLAY_CACHE_TTL_MS = 15 * 60_000;
 export { evaluatePolicy };
 export type { GatewayNtfyConfig, PolicyConfig, VoiceStreamRequestOptions };
-
-type GatewayConnectionState = 'registering' | 'ready' | 'degraded' | 'offline';
-type GatewayConnectionHealth = 'healthy' | 'stale' | 'failed';
-type GatewayConnectionRole = 'unidentified' | 'agent' | 'internal_session_integrity';
-type MalformedFrameKind = 'ndjson' | 'jsonrpc';
-
-interface GatewayConnectionStatus {
-  role: GatewayConnectionRole;
-  state: GatewayConnectionState;
-  stateReason: string;
-  health: GatewayConnectionHealth;
-  connectedAt: number;
-  lastHealthcheckAt: number;
-  lastTransitionAt: number;
-  healthcheckStaleAfterMs: number;
-  runtimeReadyDeclared: boolean;
-  failureReason?: string;
-  /** Multi-companion (W1): companionId this connection identified as. */
-  companionId?: CompanionId;
-}
-
-const GATEWAY_CONNECTION_STATE_TRANSITIONS:
-Readonly<Record<GatewayConnectionState, readonly GatewayConnectionState[]>> = {
-  registering: ['ready', 'degraded', 'offline'],
-  ready: ['degraded', 'offline'],
-  degraded: ['registering', 'ready', 'offline'],
-  offline: [],
-};
 
 // ── Fleet health snapshot (bounded multi-companion fleet view) ──
 // Cheap, read-only view over state the gateway already tracks: the companion
@@ -315,10 +295,24 @@ export class GatewayServer {
   private readonly sharedWorkspaceReader: SharedCompanionWorkspaceReader | null;
   private readonly sharedSatelliteResponseArbiter: SharedSatelliteResponseArbiter;
   private readonly sharedSatelliteChatRequests = new Map<string, CompanionId>();
+  private readonly connectionLifecycle: GatewayConnectionLifecycle;
 
   private companionDisplayLabel(companionId: string): string {
     return this.options.approvalParentLabelProvider?.(companionId)?.trim()
       || unknownCompanionDisplayIdentity.resolve(companionId).displayLabel;
+  }
+
+  /** Typed ports handed to lifecycle modules: shared registry state + narrow callbacks. */
+  private createServerPorts(): GatewayServerPorts {
+    return {
+      connections: this.connections,
+      rpcClients: this.rpcClients,
+      connectionStatuses: this.connectionStatuses,
+      companionConnections: this.companionConnections,
+      companionLastSeen: this.companionLastSeen,
+      multiCompanion: this.multiCompanion,
+      flushInboundChannelReplay: companionId => this.flushInboundChannelReplay(companionId),
+    };
   }
 
   constructor(options: GatewayServerOptions) {
@@ -338,6 +332,8 @@ export class GatewayServer {
     this.sessionHmacKeyring = options.sessionHmacKeyring;
     this.multiCompanion = options.multiCompanion ?? disabledGatewayMultiCompanionConfig();
     this.fleetCompanionIds = new Set(this.multiCompanion.fleetCompanionIds);
+    const ports = this.createServerPorts();
+    this.connectionLifecycle = new GatewayConnectionLifecycle(ports);
     this.sharedWorkspaceReader = this.multiCompanion.enabled && this.multiCompanion.sharedWorkspacePath
       ? new SharedCompanionWorkspaceReader(this.multiCompanion.sharedWorkspacePath)
       : null;
@@ -1622,7 +1618,7 @@ export class GatewayServer {
       ...(senderReplyReceipt ? { replyToMessageId: senderReplyReceipt.messageId } : {}),
     };
 
-    this.refreshConnectionHealth();
+    this.connectionLifecycle.refreshConnectionHealth();
     const deliveredTo: string[] = [];
     const skippedOffline: string[] = [];
     for (const recipientId of resolution.recipients) {
@@ -1753,7 +1749,7 @@ export class GatewayServer {
       );
     }
 
-    this.refreshConnectionHealth();
+    this.connectionLifecycle.refreshConnectionHealth();
     const senderConn = this.resolveReadyCompanionConnection(receipt.senderCompanionId);
     if (!senderConn) {
       throw new JSONRPCErrorException(
@@ -1867,7 +1863,7 @@ export class GatewayServer {
     companionId: string,
     queue: GardenQueueName,
   ): void {
-    this.refreshConnectionHealth();
+    this.connectionLifecycle.refreshConnectionHealth();
     if (this.multiCompanion.enabled) {
       const conn = this.resolveReadyCompanionConnection(
         createCompanionId(companionId, 'garden queue change companionId'),
@@ -1929,7 +1925,7 @@ export class GatewayServer {
       healthcheckStaleAfterMs: DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS,
       runtimeReadyDeclared: !this.multiCompanion.enabled,
     });
-    this.appendConnectionTransition(conn, 'none', 'registering', 'connection_opened');
+    this.connectionLifecycle.appendConnectionTransition(conn, 'none', 'registering', 'connection_opened');
 
     const serverAndClient = new JSONRPCServerAndClient(
       new JSONRPCServer(),
@@ -1938,7 +1934,7 @@ export class GatewayServer {
     this.registerMethods(serverAndClient, conn);
     this.rpcClients.set(conn, serverAndClient);
     if (!this.multiCompanion.enabled) {
-      this.transitionConnectionState(conn, 'ready', 'rpc_registered');
+      this.connectionLifecycle.transitionConnectionState(conn, 'ready', 'rpc_registered');
     }
 
     conn.on('frameError', (error: unknown) => {
@@ -1947,7 +1943,7 @@ export class GatewayServer {
     });
 
     conn.on('heartbeat', () => {
-      this.touchConnectionHealthcheck(conn);
+      this.connectionLifecycle.touchConnectionHealthcheck(conn);
     });
 
     conn.onMessage((message) => {
@@ -1955,7 +1951,7 @@ export class GatewayServer {
         if (!this.connections.has(conn)) {
           return;
         }
-        this.touchConnectionHealthcheck(conn);
+        this.connectionLifecycle.touchConnectionHealthcheck(conn);
         const validationError = validateJsonRpcFrame(message);
         if (validationError) {
           this.handleMalformedFrame(
@@ -1974,9 +1970,9 @@ export class GatewayServer {
           !this.multiCompanion.enabled
           && (message as Record<string, unknown>).method !== 'gateway.client.identify'
         ) {
-          this.transitionConnectionState(conn, 'ready', 'rpc_message_received');
+          this.connectionLifecycle.transitionConnectionState(conn, 'ready', 'rpc_message_received');
         }
-        const releaseInFlightHealthcheck = this.beginInFlightHealthcheck(conn);
+        const releaseInFlightHealthcheck = this.connectionLifecycle.beginInFlightHealthcheck(conn);
         // json-rpc-2.0 receiveAndSend() payload param is typed as `any`; message is parsed JSON
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         try {
@@ -2001,15 +1997,15 @@ export class GatewayServer {
 
     conn.on('close', () => {
       log.info('Agent disconnected');
-      this.transitionConnectionState(conn, 'offline', 'connection_closed');
+      this.connectionLifecycle.transitionConnectionState(conn, 'offline', 'connection_closed');
       this.removeConnection(conn);
     });
 
     conn.on('error', (err) => {
       const messageText = err instanceof Error ? err.message : String(err);
       log.error('Connection error', { error: messageText });
-      this.transitionConnectionState(conn, 'degraded', 'connection_error', messageText);
-      this.transitionConnectionState(conn, 'offline', 'connection_error', messageText);
+      this.connectionLifecycle.transitionConnectionState(conn, 'degraded', 'connection_error', messageText);
+      this.connectionLifecycle.transitionConnectionState(conn, 'offline', 'connection_error', messageText);
       this.removeConnection(conn);
     });
   }
@@ -2056,14 +2052,14 @@ export class GatewayServer {
     discordAccountId?: string,
   ): number {
     if (!this.multiCompanion.enabled) {
-      this.refreshConnectionHealth();
+      this.connectionLifecycle.refreshConnectionHealth();
       return this.notifyAll(method, params);
     }
     const companionId = this.resolveRoutedCompanionId(
       surface,
       discordAccountId ? { kind: 'discord', accountId: discordAccountId } : undefined,
     );
-    this.refreshConnectionHealth();
+    this.connectionLifecycle.refreshConnectionHealth();
     this.flushInboundChannelReplay(companionId);
 
     if (this.inboundChannelReplay.size(companionId) === 0) {
@@ -2279,8 +2275,8 @@ export class GatewayServer {
           'RPC frame carried an invalid companionId claim; disconnecting connection',
           { method, boundCompanionId, reason: toErrorMessage(error) },
         );
-        this.transitionConnectionState(conn, 'degraded', 'companion_identity_claim_invalid');
-        this.transitionConnectionState(conn, 'offline', 'companion_identity_claim_invalid');
+        this.connectionLifecycle.transitionConnectionState(conn, 'degraded', 'companion_identity_claim_invalid');
+        this.connectionLifecycle.transitionConnectionState(conn, 'offline', 'companion_identity_claim_invalid');
         this.removeConnection(conn);
         if (!conn.destroyed) {
           conn.destroy();
@@ -2302,8 +2298,8 @@ export class GatewayServer {
         'Companion identity mismatch on RPC frame; disconnecting connection',
         { method, boundCompanionId, claimedCompanionId },
       );
-      this.transitionConnectionState(conn, 'degraded', 'companion_identity_mismatch');
-      this.transitionConnectionState(conn, 'offline', 'companion_identity_mismatch');
+      this.connectionLifecycle.transitionConnectionState(conn, 'degraded', 'companion_identity_mismatch');
+      this.connectionLifecycle.transitionConnectionState(conn, 'offline', 'companion_identity_mismatch');
       this.removeConnection(conn);
       if (!conn.destroyed) {
         conn.destroy();
@@ -2352,7 +2348,7 @@ export class GatewayServer {
     companionId: CompanionId;
   } {
     const companionId = this.resolveRoutedCompanionId(surface, route);
-    this.refreshConnectionHealth();
+    this.connectionLifecycle.refreshConnectionHealth();
     return this.requireReadyCompanionRoute(surface, companionId);
   }
 
@@ -2366,7 +2362,7 @@ export class GatewayServer {
       // One-companion fleet: there is nobody to arbitrate between, so an
       // ungoverned satellite routes to the sole companion (psfn-framework-bbprt).
       const [soleCompanionId] = this.fleetCompanionIds;
-      this.refreshConnectionHealth();
+      this.connectionLifecycle.refreshConnectionHealth();
       return this.requireReadyCompanionRoute(routeLabel, soleCompanionId!);
     }
     if (!satellite.sharedDevice) {
@@ -2395,7 +2391,7 @@ export class GatewayServer {
         + 'which is absent from companions.json',
       );
     }
-    this.refreshConnectionHealth();
+    this.connectionLifecycle.refreshConnectionHealth();
     return this.requireReadyCompanionRoute(routeLabel, companionId);
   }
 
@@ -2510,7 +2506,7 @@ export class GatewayServer {
    * projections and internal operations; never mutates connection state.
    */
   getFleetConnectionSnapshot(now = Date.now()): GatewayFleetConnectionSnapshot {
-    this.refreshConnectionHealth(now);
+    this.connectionLifecycle.refreshConnectionHealth(now);
 
     const connections: GatewayFleetCompanionConnection[] = [];
     for (const [companionId, conn] of this.companionConnections.entries()) {
@@ -2674,8 +2670,8 @@ export class GatewayServer {
     });
 
     log.error('Malformed IPC frame received; disconnecting agent connection', params);
-    this.transitionConnectionState(conn, 'degraded', 'malformed_frame', reason);
-    this.transitionConnectionState(conn, 'offline', 'malformed_frame', reason);
+    this.connectionLifecycle.transitionConnectionState(conn, 'degraded', 'malformed_frame', reason);
+    this.connectionLifecycle.transitionConnectionState(conn, 'offline', 'malformed_frame', reason);
     this.removeConnection(conn);
     if (!conn.destroyed) {
       conn.destroy();
@@ -2956,7 +2952,7 @@ export class GatewayServer {
         throw new Error('Multi-companion turn performance forwarding requires event.companionId');
       }
       const companionId = createCompanionId(event.companionId, 'Turn performance companionId');
-      this.refreshConnectionHealth();
+      this.connectionLifecycle.refreshConnectionHealth();
       const conn = this.companionConnections.get(companionId);
       const status = conn ? this.connectionStatuses.get(conn) : undefined;
       if (!conn
@@ -3238,7 +3234,7 @@ export class GatewayServer {
       explicitHumanInboundCompanionId?: CompanionId;
     },
   ): Promise<SharedSatelliteEligibility[]> {
-    this.refreshConnectionHealth();
+    this.connectionLifecycle.refreshConnectionHealth();
     return await Promise.all(input.policy.emanationMemberIds.map(async (
       companionId,
     ): Promise<SharedSatelliteEligibility> => {
@@ -3319,7 +3315,7 @@ export class GatewayServer {
     conn: GatewayRpcConnection;
     client: JSONRPCServerAndClient;
   } {
-    this.refreshConnectionHealth();
+    this.connectionLifecycle.refreshConnectionHealth();
     if (this.rpcClients.size === 0) {
       throw new Error('No agent connected');
     }
@@ -3337,157 +3333,9 @@ export class GatewayServer {
     throw new Error('No ready agent connected');
   }
 
-  private refreshConnectionHealth(now = Date.now()): void {
-    for (const [conn, status] of this.connectionStatuses.entries()) {
-      if (status.role !== 'agent') {
-        continue;
-      }
-      if (status.state !== 'ready' && status.state !== 'registering') {
-        continue;
-      }
-
-      const staleForMs = now - status.lastHealthcheckAt;
-      if (staleForMs <= status.healthcheckStaleAfterMs) {
-        continue;
-      }
-
-      const reason = `No healthcheck observed for ${staleForMs}ms (limit ${status.healthcheckStaleAfterMs}ms).`;
-      this.transitionConnectionState(conn, 'degraded', 'healthcheck_stale', reason);
-    }
-  }
-
-  private touchConnectionHealthcheck(conn: GatewayRpcConnection): void {
-    const status = this.connectionStatuses.get(conn);
-    if (!status || status.state === 'offline') {
-      return;
-    }
-    status.lastHealthcheckAt = Date.now();
-    if (status.companionId) {
-      this.companionLastSeen.set(status.companionId, status.lastHealthcheckAt);
-    }
-    if (status.state === 'degraded' && status.stateReason === 'healthcheck_stale') {
-      if (
-        this.multiCompanion.enabled
-        && status.role === 'agent'
-        && !status.runtimeReadyDeclared
-      ) {
-        this.transitionConnectionState(
-          conn,
-          'registering',
-          'healthcheck_recovered_pending_runtime_ready',
-        );
-      } else {
-        this.transitionConnectionState(conn, 'ready', 'healthcheck_recovered');
-      }
-    }
-  }
-
-  private beginInFlightHealthcheck(conn: GatewayRpcConnection): () => void {
-    const timer = setInterval(() => {
-      this.touchConnectionHealthcheck(conn);
-    }, CONNECTION_IN_FLIGHT_HEALTH_TOUCH_INTERVAL_MS);
-    timer.unref();
-
-    return () => {
-      clearInterval(timer);
-      this.touchConnectionHealthcheck(conn);
-    };
-  }
-
-  private transitionConnectionState(
-    conn: GatewayRpcConnection,
-    nextState: GatewayConnectionState,
-    reason: string,
-    failureReason?: string,
-  ): void {
-    const status = this.connectionStatuses.get(conn);
-    if (!status) {
-      return;
-    }
-
-    const currentState = status.state;
-    if (currentState === nextState && status.stateReason === reason && !failureReason) {
-      return;
-    }
-    if (currentState !== nextState) {
-      const allowedTransitions = GATEWAY_CONNECTION_STATE_TRANSITIONS[currentState];
-      if (!allowedTransitions.includes(nextState)) {
-        throw new Error(
-          `Invalid gateway connection transition: ${currentState} -> ${nextState}.`,
-        );
-      }
-      status.state = nextState;
-      status.lastTransitionAt = Date.now();
-    }
-    status.stateReason = reason;
-
-    if (nextState === 'ready' || nextState === 'registering') {
-      status.health = 'healthy';
-      delete status.failureReason;
-    } else if (nextState === 'degraded') {
-      status.health = reason === 'healthcheck_stale' ? 'stale' : 'failed';
-      if (failureReason) {
-        status.failureReason = failureReason;
-      }
-    } else if (failureReason) {
-      status.failureReason = failureReason;
-    }
-
-    this.appendConnectionTransition(conn, currentState, nextState, reason, failureReason);
-    if (nextState === 'ready' && status.role === 'agent' && status.companionId) {
-      this.flushInboundChannelReplay(status.companionId);
-    }
-  }
-
-  private appendConnectionTransition(
-    conn: GatewayRpcConnection,
-    from: GatewayConnectionState | 'none',
-    to: GatewayConnectionState,
-    reason: string,
-    failureReason?: string,
-  ): void {
-    const status = this.connectionStatuses.get(conn);
-    log.info('Gateway connection lifecycle transition', {
-      from,
-      to,
-      reason,
-      health: status?.health,
-      ...(failureReason ? { failureReason } : {}),
-    });
-  }
-
-  private getConnectionSummary(): {
-    total: number;
-    registering: number;
-    ready: number;
-    degraded: number;
-    offline: number;
-  } {
-    const summary = {
-      total: 0,
-      registering: 0,
-      ready: 0,
-      degraded: 0,
-      offline: 0,
-    };
-
-    for (const status of this.connectionStatuses.values()) {
-      if (status.role !== 'agent') {
-        continue;
-      }
-      summary.total += 1;
-      if (status.state === 'registering') summary.registering += 1;
-      else if (status.state === 'ready') summary.ready += 1;
-      else if (status.state === 'degraded') summary.degraded += 1;
-      else summary.offline += 1;
-    }
-
-    return summary;
-  }
-
   private getRuntimeHealth(companionId?: string): RuntimeHealthResult {
     return {
-      ...this.runtimeHealthTracker.getSnapshot(this.getConnectionSummary(), companionId),
+      ...this.runtimeHealthTracker.getSnapshot(this.connectionLifecycle.getConnectionSummary(), companionId),
       operatorAlerting: this.operatorAlertDispatcher.configuration(),
     };
   }
@@ -3535,7 +3383,7 @@ export class GatewayServer {
       throw new Error('gateway.client.ready requires an identified companion agent');
     }
     status.runtimeReadyDeclared = true;
-    this.transitionConnectionState(conn, 'ready', 'agent_runtime_ready');
+    this.connectionLifecycle.transitionConnectionState(conn, 'ready', 'agent_runtime_ready');
     return { success: true };
   }
 
@@ -3668,15 +3516,20 @@ export class GatewayServer {
 
     status.role = params.role;
     if (params.role === 'agent' && this.multiCompanion.enabled) {
-      this.transitionConnectionState(conn, 'registering', 'client_identified:agent');
+      this.connectionLifecycle.transitionConnectionState(conn, 'registering', 'client_identified:agent');
     } else {
-      this.transitionConnectionState(conn, 'ready', `client_identified:${params.role}`);
+      this.connectionLifecycle.transitionConnectionState(conn, 'ready', `client_identified:${params.role}`);
     }
     return {
       success: true,
       role: params.role,
       ...(companionId ? { companionId } : {}),
     };
+  }
+
+  /** Stale-healthcheck sweep; delegates to the connection lifecycle owner. */
+  private refreshConnectionHealth(now = Date.now()): void {
+    this.connectionLifecycle.refreshConnectionHealth(now);
   }
 
   async stop(): Promise<void> {
@@ -3796,10 +3649,4 @@ function extractGatewayCorrelation(
     correlation[key] = trimmed;
   }
   return correlation;
-}
-
-function isIdentifiableGatewayConnectionRole(
-  value: unknown,
-): value is Exclude<GatewayConnectionRole, 'unidentified'> {
-  return value === 'agent' || value === 'internal_session_integrity';
 }

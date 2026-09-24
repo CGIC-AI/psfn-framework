@@ -35,6 +35,25 @@ function attachmentAuthorityKey(attachment: HubDeviceAttachmentSnapshot): string
     deviceActor: attachment.deviceActor, actor: attachment.actor, channel: attachment.channel });
 }
 
+/**
+ * A refresh retries only when a renewal replaced the assertion while its
+ * admission was in flight. Renewals are serialized and each one must extend
+ * the attachment, so a handful of passes is enough for any honest Hub; more
+ * means the assertion is churning and the refresh fails closed instead of
+ * chasing it (psfn-framework-ztocx).
+ */
+const COMPANION_UI_REFRESH_PASS_LIMIT = 4;
+
+/** Structured refresh failure: renewals kept replacing the assertion. */
+export class CompanionUiSessionRefreshContendedError extends Error {
+  readonly code = 'session_refresh_contended';
+
+  constructor(readonly passes: number) {
+    super(`Companion UI session refresh lost ${passes} consecutive races to assertion renewals`);
+    this.name = 'CompanionUiSessionRefreshContendedError';
+  }
+}
+
 /** Maintains one socket attachment across short-lived Hub assertion receipts. */
 export class CompanionUiSessionAuthority {
   attachment: HubDeviceAttachmentSnapshot;
@@ -53,15 +72,19 @@ export class CompanionUiSessionAuthority {
   }
 
   async refresh(): Promise<void> {
-    if (this.isClosed()) throw new Error('socket closed');
-    const assertion = this.assertion;
-    const authorityKey = this.authorityKey;
-    const refreshed = await this.admit(assertion);
-    // Independent interrupts must remain runnable while another admission is
-    // awaiting persistence. If a renewal wins that race, use its fresh receipt.
-    if (assertion !== this.assertion) return this.refresh();
-    if (attachmentAuthorityKey(refreshed) !== authorityKey) throw new Error('socket authority changed');
-    this.attachment = refreshed;
+    for (let pass = 1; pass <= COMPANION_UI_REFRESH_PASS_LIMIT; pass += 1) {
+      if (this.isClosed()) throw new Error('socket closed');
+      const assertion = this.assertion;
+      const authorityKey = this.authorityKey;
+      const refreshed = await this.admit(assertion);
+      // Independent interrupts must remain runnable while another admission is
+      // awaiting persistence. If a renewal wins that race, use its fresh receipt.
+      if (assertion !== this.assertion) continue;
+      if (attachmentAuthorityKey(refreshed) !== authorityKey) throw new Error('socket authority changed');
+      this.attachment = refreshed;
+      return;
+    }
+    throw new CompanionUiSessionRefreshContendedError(COMPANION_UI_REFRESH_PASS_LIMIT);
   }
 
   renew(assertion: string): Promise<void> {

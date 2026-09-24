@@ -1998,6 +1998,12 @@
       "value": "1_000"
     },
     {
+      "file": "src/channels/api/companion-ui-session-renewal.ts",
+      "name": "COMPANION_UI_REFRESH_PASS_LIMIT",
+      "value": "4",
+      "note": "Code-owned fail-closed DoS guard (psfn-framework-ztocx): bounds how many times one Companion UI refresh chases an assertion replaced by serialized Hub renewals; not operator tuning, exceeding it closes the socket with a structured error."
+    },
+    {
       "file": "src/channels/api/companion-ui-websocket.ts",
       "name": "RUNTIME_LIMITS.maxPayloadBytes",
       "value": "1_048_576",

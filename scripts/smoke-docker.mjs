@@ -39,6 +39,8 @@
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -47,10 +49,15 @@ import {
   openEmotionRelaySession,
   verifyComposeHub,
 } from './compose-hub-verification.ts';
+import { stageSmokeBuildContext } from './ops/psfn-compose-smoke-context.mjs';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, '..');
-const COMPOSE_FILE = resolve(REPO_ROOT, 'docker/docker-compose.smoke.yml');
+const COMPOSE_RELATIVE_PATH = 'docker/docker-compose.smoke.yml';
+// Where `up` stages the mode-normalized build context (psfn-framework-1080c).
+const CONTEXT_STAGE_ROOT = resolve(process.env.PSFN_SMOKE_CONTEXT_ROOT || tmpdir());
+// The compose project root: the checkout for --no-up, the staged copy for up.
+let composeRoot = REPO_ROOT;
 const API_PORT = process.env.PSFN_SMOKE_API_PORT || '13000';
 const API_BASE = `http://127.0.0.1:${API_PORT}`;
 const API_KEY = process.env.PSFN_SMOKE_API_KEY || 'psfn-smoke-api-key-please-rotate';
@@ -93,8 +100,8 @@ function parseArgs(argv) {
 }
 
 function compose(args, { capture = false } = {}) {
-  const result = spawnSync('docker', ['compose', '-f', COMPOSE_FILE, ...args], {
-    cwd: REPO_ROOT,
+  const result = spawnSync('docker', ['compose', '-f', resolve(composeRoot, COMPOSE_RELATIVE_PATH), ...args], {
+    cwd: composeRoot,
     stdio: capture ? ['ignore', 'pipe', 'pipe'] : 'inherit',
     encoding: 'utf8',
     env: process.env,
@@ -211,9 +218,18 @@ async function main() {
 
   try {
     if (opts.up) {
+      // Build and bind-mount from a mode-normalized copy of the working tree so
+      // a checkout written under a restrictive umask (e.g. 0027) still yields
+      // files the non-root (uid 999) containers can read.
+      const staged = stageSmokeBuildContext({ repoRoot: REPO_ROOT, stageRoot: CONTEXT_STAGE_ROOT });
+      composeRoot = staged.root;
+      // models/ is gitignored, so the default ../models/transformers cache
+      // input must keep pointing at the checkout.
+      process.env.PSFN_SMOKE_MODEL_CACHE_SOURCE ||= resolve(REPO_ROOT, 'models/transformers');
+      log(`staged ${staged.files} working-tree files with normalized modes at ${staged.root}`);
       log('Bringing up postgres + provider-stub + gateway + agent + garden + satellite-hub '
-        + '+ companion-ui (docker compose up -d --wait)...');
-      const up = compose(['up', '-d', '--wait', '--wait-timeout', '240']);
+        + '+ companion-ui (docker compose up -d --build --wait)...');
+      const up = compose(['up', '-d', '--build', '--wait', '--wait-timeout', '240']);
       if (up.status !== 0) {
         fail('docker compose up did not reach a healthy state');
         compose(['ps']);
@@ -308,6 +324,7 @@ async function main() {
     if (opts.up && !opts.keepUp) {
       log('Tearing down (docker compose down -v)...');
       compose(['down', '-v']);
+      if (composeRoot !== REPO_ROOT) rmSync(composeRoot, { recursive: true, force: true });
     }
     void exitCode;
   }

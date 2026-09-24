@@ -24,6 +24,7 @@ import {
   type DecisionBackendMode,
   type DecisionBackendSettings,
   type DecisionSiteId,
+  type DecisionSiteSettings,
 } from '../../../system/config/decision-backend-config.js';
 import type { LocalDecisionBackend } from './local-backend.js';
 import { buildDecisionShadowRecord, type DecisionShadowSink } from './shadow-record.js';
@@ -55,6 +56,8 @@ export interface DecisionRuntime {
   decide(request: DecisionRequest, options?: DecideOptions): Promise<DecisionOutcome>;
   /** Effective mode for a site after privacy enforcement. */
   effectiveMode(siteId: DecisionSiteId): DecisionBackendMode;
+  /** The site's owner-configured knobs (threshold, topN, ...), read live. */
+  siteSettings(siteId: DecisionSiteId): DecisionSiteSettings | undefined;
 }
 
 export interface DecisionRuntimeOptions {
@@ -140,6 +143,7 @@ export function createDecisionRuntime(options: DecisionRuntimeOptions): Decision
 
   return {
     effectiveMode: (siteId) => effectiveMode(siteId),
+    siteSettings: (siteId) => options.resolveSettings()?.sites[siteId],
     async decide(request, decideOptions) {
       const mode = effectiveMode(request.siteId, request);
       if (mode === 'local') return await runLocal(request, decideOptions);

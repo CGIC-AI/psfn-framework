@@ -14,6 +14,7 @@ import { ParticipationAppraiser } from '../../../core/participation/appraiser.js
 import { PassiveNameCandidateBuilder } from '../../../core/participation/passive-name-candidate.js';
 import { RoomParticipationLeaseCoordinator } from '../../../core/participation/room-participation-lease-coordinator.js';
 import { RoomMessageFeatureExtractor } from '../../../core/participation/room-signal.js';
+import { buildRoomAmbiguityClassifier } from './room-ambiguity-classifier.js';
 import type { RoomSignalRuntime } from '../../../core/participation/passive-name-candidate.js';
 import { SpeakingReservationPhase, type IcpSocialPrecedenceResolver } from '../../../core/agent/arbiter/reservation-phase.js';
 import { SpeakingEgressLeasePhase } from '../../../core/agent/arbiter/egress-lease-phase.js';
@@ -106,12 +107,15 @@ export function wireSpeakingArbiterLane(deps: SpeakingArbiterLaneDeps): Speaking
   // whether this companion may be nominated at all. Constructed only when owner
   // policy enables it, so the public default adds nothing to the observe path.
   //
-  // The optional shared ambiguity classifier is deliberately NOT constructed
-  // here: there is no pinned cheap classifier model yet, and a fleet runtime
-  // additionally needs a durable cross-process claim before one message could be
-  // classified exactly once. Until both exist, ambiguity resolves to suppression
-  // (`room_signal_ambiguous`) rather than to participation.
+  // The optional shared ambiguity classifier runs on decide() (site
+  // room.ambiguity) and is built only when the owner opted in on both
+  // scheduler.json and settings.json decisionBackend, and never in a fleet
+  // runtime, which still needs a durable cross-process claim. Otherwise
+  // ambiguity resolves to suppression (`room_signal_ambiguous`).
   const roomSignalSettings = schedulerConfig.socialAutonomy.roomSignal;
+  const roomAmbiguityClassifier = roomSignalSettings.enabled
+    ? buildRoomAmbiguityClassifier({ config, roomSignalSettings, decisions: coreRuntime.decisionRuntime })
+    : undefined;
   const roomSignal: RoomSignalRuntime | undefined = (
     roomSignalSettings.enabled && config.companionId
   )
@@ -126,6 +130,7 @@ export function wireSpeakingArbiterLane(deps: SpeakingArbiterLaneDeps): Speaking
         interests: roomSignalSettings.companionInterests,
       },
       settings: roomSignalSettings,
+      ...(roomAmbiguityClassifier ? { classifier: roomAmbiguityClassifier } : {}),
       // Content-free staged diagnostics (acceptance #8): stage identity,
       // bounded reason codes, connector label, and the model-call counter. No
       // transcript, alias, interest tag, biography, or reasoning ever appears.
@@ -175,6 +180,9 @@ export function wireSpeakingArbiterLane(deps: SpeakingArbiterLaneDeps): Speaking
   const participationAppraiser = new ParticipationAppraiser({
     llmProvider,
     companionName,
+    // Typed decision runtime (site participation.appraise); local unless the
+    // owner selects jev/shadow in settings.json decisionBackend.
+    decisions: coreRuntime.decisionRuntime,
     // Appraiser bounds are owned by scheduler.json socialAutonomy.appraiser
     // (jp36.8.2).
     settings: schedulerConfig.socialAutonomy.appraiser,

@@ -49,7 +49,7 @@ const REQUIRED_KNOBS_WHEN_ENABLED: Partial<Record<DecisionSiteId, readonly Decis
 
 type DecisionSiteKnob = 'threshold' | 'topN' | 'latencyBudgetMs' | 'blendWeight';
 
-interface DecisionSiteSettings {
+export interface DecisionSiteSettings {
   /** Overrides the global mode for this site. */
   mode?: DecisionBackendMode;
   /** Opt-in sites run only when true. Existing sites ignore it. */

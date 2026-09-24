@@ -566,7 +566,24 @@ class FakeMemoryPool {
     }
 
     if (normalized.includes('from memory_evolution_links')) {
-      const rows = [...this.evolutionLinks.values()];
+      const all = [...this.evolutionLinks.values()];
+      let rows: Array<Record<string, unknown>>;
+      if (normalized.includes('group by relation')) {
+        const groups = new Map<string, { relation: string; count: number; latest: number }>();
+        for (const link of all) {
+          const group = groups.get(link.relation) ?? { relation: link.relation, count: 0, latest: 0 };
+          group.count += 1;
+          group.latest = Math.max(group.latest, link.created_at);
+          groups.set(link.relation, group);
+        }
+        rows = [...groups.values()];
+      } else {
+        const endpoint = normalized.includes('where source_memory_id = $1') ? 'source_memory_id' : 'target_memory_id';
+        rows = all
+          .filter(link => link[endpoint] === values[0])
+          .filter(link => values[1] == null || link.relation === values[1])
+          .sort((left, right) => right.created_at - left.created_at || right.id.localeCompare(left.id));
+      }
       return { rows, rowCount: rows.length, command: 'SELECT', oid: 0, fields: [] } as QueryResult;
     }
 
@@ -575,7 +592,35 @@ class FakeMemoryPool {
     }
 
     if (normalized.includes('from l2_memory_maintenance_reviews')) {
-      const rows = [...this.maintenanceReviews.values()];
+      const all = [...this.maintenanceReviews.values()];
+      let rows: Array<Record<string, unknown>>;
+      if (normalized.includes('group by kind, status')) {
+        const groups = new Map<string, { kind: string; status: string; count: number }>();
+        for (const review of all) {
+          const key = `${review.kind}::${review.status}`;
+          const group = groups.get(key) ?? { kind: review.kind, status: review.status, count: 0 };
+          group.count += 1;
+          groups.set(key, group);
+        }
+        rows = [...groups.values()];
+      } else if (normalized.includes("where status = 'pending'")) {
+        const ages = all
+          .filter(review => review.status === 'pending')
+          .map(review => Math.max(0, Number(values[0]) - review.created_at));
+        rows = [{
+          count: ages.length,
+          oldest: ages.length > 0 ? Math.max(...ages) : null,
+          average: ages.length > 0 ? ages.reduce((sum, age) => sum + age, 0) / ages.length : null,
+        }];
+      } else if (normalized.includes('where id = $1')) {
+        rows = all.filter(review => review.id === values[0]);
+      } else {
+        rows = all
+          .filter(review => values[0] == null || review.status === values[0])
+          .filter(review => values[1] == null || review.kind === values[1])
+          .sort((left, right) => right.updated_at - left.updated_at || right.created_at - left.created_at)
+          .slice(0, Number(values[2]));
+      }
       return { rows, rowCount: rows.length, command: 'SELECT', oid: 0, fields: [] } as QueryResult;
     }
 

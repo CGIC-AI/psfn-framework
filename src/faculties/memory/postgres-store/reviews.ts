@@ -1,7 +1,5 @@
 import { executeQuery, queryRows } from '../../../persistence/postgres.js';
 import type {
-  MemoryEvolutionLink,
-  MemoryEvolutionRelation,
   MemoryMaintenanceDiagnostics,
   MemoryMaintenanceDiagnosticsOptions,
   MemoryMaintenanceReview,
@@ -13,8 +11,9 @@ import {
   normalizeMemoryMaintenanceReviewInput,
 } from '../maintenance-review.js';
 import type { MemoryMaintenanceReviewPgRow } from './rows.js';
-import { serializeJsonValue } from './rows.js';
+import { parsePgNumber, serializeJsonValue } from './rows.js';
 import { clampLimit, increment } from './utils.js';
+import type { MemoryEvolutionDecisionSummary } from './memory-links.js';
 import type { PostgresMemoryStoreCollaboratorContext } from './collaborator-context.js';
 
 function fromMaintenanceReviewRow(row: MemoryMaintenanceReviewPgRow): MemoryMaintenanceReview {
@@ -26,36 +25,27 @@ function fromMaintenanceReviewRow(row: MemoryMaintenanceReviewPgRow): MemoryMain
     candidateMemoryIdsJson: serializeJsonValue(row.candidate_memory_ids),
     stateJson: serializeJsonValue(row.state_json),
     quarantineReason: row.quarantine_reason,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    createdAt: parsePgNumber(row.created_at, 'l2_memory_maintenance_reviews.created_at'),
+    updatedAt: parsePgNumber(row.updated_at, 'l2_memory_maintenance_reviews.updated_at'),
   });
 }
+
+const MAINTENANCE_REVIEW_COLUMNS = `
+  id, kind, status, subject_memory_id, candidate_memory_ids, state_json,
+  quarantine_reason, created_at, updated_at
+`;
 
 /**
  * Memory maintenance reviews for PostgresMemoryStore
  * (`l2_memory_maintenance_reviews`) plus the maintenance diagnostics that
- * summarize them alongside the recorded evolution decisions.
+ * summarize them alongside the recorded evolution decisions. Reviews are read
+ * at query time (t4mia); nothing is hydrated into process memory.
  */
 export class PostgresMemoryMaintenanceReviewStore {
-  private readonly maintenanceReviews = new Map<string, MemoryMaintenanceReview>();
-
   constructor(
     private readonly ctx: Pick<PostgresMemoryStoreCollaboratorContext, 'pool' | 'persist'>,
-    private readonly evolutionLinks: () => ReadonlyMap<string, MemoryEvolutionLink>,
+    private readonly evolutionDecisions: () => Promise<MemoryEvolutionDecisionSummary>,
   ) {}
-
-  async hydrate(): Promise<void> {
-    const maintenanceReviewRows = await queryRows<MemoryMaintenanceReviewPgRow>(this.ctx.pool, `
-      SELECT
-        id, kind, status, subject_memory_id, candidate_memory_ids, state_json,
-        quarantine_reason, created_at, updated_at
-      FROM l2_memory_maintenance_reviews
-    `);
-    for (const row of maintenanceReviewRows) {
-      const review = fromMaintenanceReviewRow(row);
-      this.maintenanceReviews.set(review.id, review);
-    }
-  }
 
   async upsertMemoryMaintenanceReview(input: MemoryMaintenanceReviewInput): Promise<MemoryMaintenanceReview> {
     const review = normalizeMemoryMaintenanceReviewInput(input);
@@ -85,69 +75,84 @@ export class PostgresMemoryMaintenanceReviewStore {
         review.updatedAt,
       ]);
     });
-    this.maintenanceReviews.set(review.id, review);
     return review;
   }
 
   async listMemoryMaintenanceReviews(
     options: MemoryMaintenanceReviewListOptions = {},
   ): Promise<MemoryMaintenanceReview[]> {
-    return Array.from(this.maintenanceReviews.values())
+    const rows = await queryRows<MemoryMaintenanceReviewPgRow>(this.ctx.pool, `
+      SELECT ${MAINTENANCE_REVIEW_COLUMNS}
+      FROM l2_memory_maintenance_reviews
+      WHERE ($1::text IS NULL OR status = $1)
+        AND ($2::text IS NULL OR kind = $2)
+      ORDER BY updated_at DESC, created_at DESC, id ASC
+      LIMIT $3
+    `, [options.status ?? null, options.kind ?? null, clampLimit(options.limit, 100, 1, 500)]);
+    // A malformed stored row decodes as quarantined; it never answers a filter
+    // its decoded status/kind does not match.
+    return rows
+      .map(fromMaintenanceReviewRow)
       .filter(review => options.status === undefined || review.status === options.status)
-      .filter(review => options.kind === undefined || review.kind === options.kind)
-      .sort((left, right) => right.updatedAt - left.updatedAt || right.createdAt - left.createdAt)
-      .slice(0, clampLimit(options.limit, 100, 1, 500));
+      .filter(review => options.kind === undefined || review.kind === options.kind);
   }
 
   async getMemoryMaintenanceReview(id: string): Promise<MemoryMaintenanceReview | undefined> {
-    return this.maintenanceReviews.get(id.trim());
+    const rows = await queryRows<MemoryMaintenanceReviewPgRow>(this.ctx.pool, `
+      SELECT ${MAINTENANCE_REVIEW_COLUMNS}
+      FROM l2_memory_maintenance_reviews
+      WHERE id = $1
+    `, [id.trim()]);
+    const row = rows.at(0);
+    return row ? fromMaintenanceReviewRow(row) : undefined;
   }
 
   async getMemoryMaintenanceDiagnostics(
     options: MemoryMaintenanceDiagnosticsOptions = {},
   ): Promise<MemoryMaintenanceDiagnostics> {
     const now = Number.isFinite(options.now) ? Number(options.now) : Date.now();
+    const groups = await queryRows<{ kind: string; status: string; count: unknown }>(this.ctx.pool, `
+      SELECT kind, status, COUNT(*) AS count
+      FROM l2_memory_maintenance_reviews
+      GROUP BY kind, status
+    `);
+    const pendingRows = await queryRows<{ count: unknown; oldest: unknown; average: unknown }>(this.ctx.pool, `
+      SELECT COUNT(*) AS count,
+             MAX(GREATEST(0, $1::double precision - created_at)) AS oldest,
+             AVG(GREATEST(0, $1::double precision - created_at)) AS average
+      FROM l2_memory_maintenance_reviews
+      WHERE status = 'pending'
+    `, [now]);
     const reviewCountsByKind: Record<string, number> = {};
     const reviewCountsByStatus: Record<string, number> = {};
-    const pendingReviewAges: number[] = [];
-    for (const review of this.maintenanceReviews.values()) {
-      increment(reviewCountsByKind, review.kind);
-      increment(reviewCountsByStatus, review.status);
-      if (review.status === 'pending') {
-        pendingReviewAges.push(Math.max(0, now - review.createdAt));
-      }
+    let reviewCount = 0;
+    for (const group of groups) {
+      const count = parsePgNumber(group.count, 'l2_memory_maintenance_reviews.count');
+      increment(reviewCountsByKind, group.kind, count);
+      increment(reviewCountsByStatus, group.status, count);
+      reviewCount += count;
     }
-
-    const memoryEvolutionLinks = this.evolutionLinks();
-    const evolutionDecisionCountsByRelation: Record<MemoryEvolutionRelation, number> = {
-      supersedes: 0,
-      updates: 0,
-      negates: 0,
-      conflicts_with: 0,
-    };
-    let latestEvolutionDecisionAt: number | undefined;
-    for (const link of memoryEvolutionLinks.values()) {
-      evolutionDecisionCountsByRelation[link.relation] += 1;
-      latestEvolutionDecisionAt = Math.max(latestEvolutionDecisionAt ?? 0, link.createdAt);
-    }
-
-    const pendingAgeTotal = pendingReviewAges.reduce((sum, age) => sum + age, 0);
+    const pending = pendingRows.at(0);
+    const pendingReviewCount = pending ? parsePgNumber(pending.count, 'pending.count') : 0;
+    const evolution = await this.evolutionDecisions();
     return {
-      reviewCount: this.maintenanceReviews.size,
-      pendingReviewCount: pendingReviewAges.length,
+      reviewCount,
+      pendingReviewCount,
       reviewCountsByKind,
       reviewCountsByStatus,
-      oldestPendingReviewAgeMs: pendingReviewAges.length > 0 ? Math.max(...pendingReviewAges) : 0,
-      averagePendingReviewAgeMs: pendingReviewAges.length > 0
-        ? pendingAgeTotal / pendingReviewAges.length
+      oldestPendingReviewAgeMs: pendingReviewCount > 0 && pending
+        ? parsePgNumber(pending.oldest, 'pending.oldest')
         : 0,
-      evolutionDecisionCount: memoryEvolutionLinks.size,
-      evolutionDecisionCountsByRelation,
-      supersessionDecisionCount: evolutionDecisionCountsByRelation.supersedes,
-      conflictDecisionCount: evolutionDecisionCountsByRelation.conflicts_with
-        + evolutionDecisionCountsByRelation.negates,
-      ...(latestEvolutionDecisionAt !== undefined && latestEvolutionDecisionAt > 0
-        ? { latestEvolutionDecisionAt }
+      averagePendingReviewAgeMs: pendingReviewCount > 0 && pending
+        ? parsePgNumber(pending.average, 'pending.average')
+        : 0,
+      evolutionDecisionCount: evolution.total,
+      evolutionDecisionCountsByRelation: { ...evolution.byRelation },
+      supersessionDecisionCount: evolution.byRelation.supersedes,
+      conflictDecisionCount: evolution.byRelation.conflicts_with
+        + evolution.byRelation.negates,
+      ...(evolution.latestCreatedAt !== undefined && evolution.latestCreatedAt > 0
+        ? { latestEvolutionDecisionAt: evolution.latestCreatedAt }
         : {}),
     };
   }

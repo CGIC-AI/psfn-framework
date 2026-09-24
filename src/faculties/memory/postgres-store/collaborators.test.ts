@@ -4,14 +4,12 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fromAny } from '@total-typescript/shoehorn';
 import type { QueryResult } from 'pg';
-import type { MemoryEvolutionLink } from '../memory-store-port.js';
 import type { PurrMemory } from '../types.js';
 import {
   MemorySubjectAuthorizationDeniedError,
   type MemorySubjectQueryAuthorization,
 } from '../../../shared/contracts/memory-subject.js';
 import type { PostgresMemoryStoreCollaboratorContext } from './collaborator-context.js';
-import { buildHighImpactLowConfidenceReviewInput } from '../maintenance-review.js';
 import { PostgresScratchpadStore } from './scratchpad.js';
 import { PostgresRecentContactShapeStore } from './contact-shapes.js';
 import { PostgresMemoryLinkStore } from './memory-links.js';
@@ -128,85 +126,104 @@ describe('PostgresScratchpadStore', () => {
 });
 
 describe('PostgresRecentContactShapeStore', () => {
-  it('invalidates the retrieval corpus on upsert and lists newest first', async () => {
-    const pool = new ScriptedPool();
+  it('invalidates the retrieval corpus on upsert and reads shapes at query time by contact', async () => {
+    const pool = new ScriptedPool(sql => sql.includes('from recent_contact_shapes')
+      ? [{
+        schema_version: 1, contact_id: 'newer', summary_text: 'summary newer', source_memory_ids: [],
+        confidence_score: 0.5, novelty_score: 0.5, updated_at: '2', fresh_until: '3',
+      }]
+      : []);
     const { ctx } = makeContext(pool);
     const store = new PostgresRecentContactShapeStore(ctx);
-    const shape = (contactId: string, updatedAt: number) => ({
-      schemaVersion: 1 as const,
-      contactId,
-      summary: `summary ${contactId}`,
-      sourceMemoryIds: [],
-      confidenceScore: 0.5,
-      noveltyScore: 0.5,
-      updatedAt,
-      freshUntil: updatedAt + 1,
+    await store.upsertRecentContactShape({
+      schemaVersion: 1, contactId: 'newer', summary: 'summary newer', sourceMemoryIds: [],
+      confidenceScore: 0.5, noveltyScore: 0.5, updatedAt: 2, freshUntil: 3,
     });
 
-    await store.upsertRecentContactShape(shape('older', 1));
-    await store.upsertRecentContactShape(shape('newer', 2));
-
-    expect(ctx.markRetrievalCorpusChanged).toHaveBeenCalledTimes(2);
-    expect((await store.listRecentContactShapes()).map(item => item.contactId)).toEqual(['newer', 'older']);
+    expect(ctx.markRetrievalCorpusChanged).toHaveBeenCalledTimes(1);
+    expect(await store.getRecentContactShape('newer')).toMatchObject({ contactId: 'newer', updatedAt: 2, freshUntil: 3 });
+    const lookup = pool.statements.find(statement => statement.sql.includes('contact_id = $1'));
+    expect(lookup?.values).toEqual(['newer']);
+    expect((await store.listRecentContactShapes()).map(item => item.contactId)).toEqual(['newer']);
+    expect(pool.statements.at(-1)?.sql).toContain('order by updated_at desc');
   });
 });
 
 describe('PostgresMemoryLinkStore', () => {
-  it('canonicalizes undirected links and rejects self or duplicate links', async () => {
-    const pool = new ScriptedPool();
+  it('canonicalizes undirected links and reports duplicates from the insert result', async () => {
+    let linked = false;
+    const pool = new ScriptedPool((sql) => {
+      if (sql.startsWith('insert into memory_links')) {
+        if (linked) return [];
+        linked = true;
+        return [{ id1: 'a' }];
+      }
+      if (sql.startsWith('delete from memory_links')) {
+        if (!linked) return [];
+        linked = false;
+        return [{ id1: 'a' }];
+      }
+      if (sql.includes('from memory_links')) {
+        return linked ? [{ id1: 'a', id2: 'b', link_type: 'related', created_at: '5' }] : [];
+      }
+      return [];
+    });
     const { ctx } = makeContext(pool);
     const store = new PostgresMemoryLinkStore(ctx);
 
     expect(await store.linkMemories(' b ', 'a')).toMatchObject({ id1: 'a', id2: 'b', linkType: 'related' });
     expect(await store.linkMemories('a', 'b')).toBeNull();
     expect(await store.linkMemories('a', 'a')).toBeNull();
-    expect((await store.getLinkedMemories('b')).map(link => link.id1)).toEqual(['a']);
+    expect(await store.getLinkedMemories('b')).toEqual([{ id1: 'a', id2: 'b', linkType: 'related', createdAt: 5 }]);
     expect(await store.unlinkMemories('b', 'a')).toBe(true);
     expect(await store.unlinkMemories('b', 'a')).toBe(false);
     expect(ctx.markRetrievalCorpusChanged).toHaveBeenCalledTimes(2);
   });
 
-  it('filters evolution links by endpoint and relation, newest first', async () => {
-    const store = new PostgresMemoryLinkStore(makeContext(new ScriptedPool()).ctx);
-    await store.recordEvolutionLink({
-      sourceMemoryId: 'next', targetMemoryId: 'prev', relation: 'supersedes', confidence: 0.9, createdAt: 1,
-    });
-    await store.recordEvolutionLink({
-      sourceMemoryId: 'next', targetMemoryId: 'other', relation: 'updates', confidence: 0.9, createdAt: 2,
-    });
+  it('reads evolution links by endpoint and relation, newest first, without a resident view', async () => {
+    const pool = new ScriptedPool();
+    const store = new PostgresMemoryLinkStore(makeContext(pool).ctx);
 
-    expect((await store.getEvolutionLinksForSourceMemory('next')).map(link => link.targetMemoryId))
-      .toEqual(['other', 'prev']);
-    expect((await store.getEvolutionLinksForSourceMemory('next', 'supersedes')).map(link => link.targetMemoryId))
-      .toEqual(['prev']);
+    await store.getEvolutionLinksForSourceMemory(' next ', 'supersedes');
+    expect(pool.statements.at(-1)?.sql).toContain('where source_memory_id = $1');
+    expect(pool.statements.at(-1)?.sql).toContain('order by created_at desc, id desc');
+    expect(pool.statements.at(-1)?.values).toEqual(['next', 'supersedes']);
+    await store.getEvolutionLinksForTargetMemory('prev');
+    expect(pool.statements.at(-1)?.sql).toContain('where target_memory_id = $1');
+    expect(pool.statements.at(-1)?.values).toEqual(['prev', null]);
+    const before = pool.statements.length;
     expect(await store.getEvolutionLinksForTargetMemory('  ')).toEqual([]);
-    expect(store.evolutionLinks().size).toBe(2);
+    expect(pool.statements).toHaveLength(before);
   });
 });
 
 describe('PostgresMemoryMaintenanceReviewStore', () => {
-  it('summarizes pending review ages and evolution decisions from the link view', async () => {
-    const evolution = new Map<string, MemoryEvolutionLink>([
-      ['a', fromAny({ relation: 'supersedes', createdAt: 50 })],
-      ['b', fromAny({ relation: 'negates', createdAt: 70 })],
-    ]);
-    const store = new PostgresMemoryMaintenanceReviewStore(makeContext(new ScriptedPool()).ctx, () => evolution);
-    const input = buildHighImpactLowConfidenceReviewInput({
-      memoryId: 'memory-1',
-      text: 'The partner said they are moving abroad next month.',
-      sourceRef: 'api:test:memory-1',
-      confidence: 0.2,
-      type: 'boundary',
-    }, 100);
-    if (!input) throw new Error('fixture must queue a high-impact low-confidence review');
-    await store.upsertMemoryMaintenanceReview(input);
+  it('summarizes pending review ages and evolution decisions with aggregate SQL', async () => {
+    const pool = new ScriptedPool((sql, values) => {
+      if (sql.includes('group by kind, status')) {
+        return [{ kind: 'high_impact_low_confidence', status: 'pending', count: '1' }];
+      }
+      if (sql.includes("where status = 'pending'")) {
+        expect(values).toEqual([400]);
+        return [{ count: '1', oldest: 300, average: '300' }];
+      }
+      return [];
+    });
+    const store = new PostgresMemoryMaintenanceReviewStore(makeContext(pool).ctx, async () => ({
+      total: 2,
+      byRelation: { supersedes: 1, updates: 0, negates: 1, conflicts_with: 0 },
+      latestCreatedAt: 70,
+    }));
 
     const diagnostics = await store.getMemoryMaintenanceDiagnostics({ now: 400 });
 
     expect(diagnostics).toMatchObject({
       reviewCount: 1,
       pendingReviewCount: 1,
+      reviewCountsByKind: { high_impact_low_confidence: 1 },
+      reviewCountsByStatus: { pending: 1 },
       oldestPendingReviewAgeMs: 300,
+      averagePendingReviewAgeMs: 300,
       evolutionDecisionCount: 2,
       supersessionDecisionCount: 1,
       conflictDecisionCount: 1,
@@ -284,7 +301,7 @@ describe('PostgresMemorySubjectAuthorizedWrites', () => {
 });
 
 describe('PostgresMemoryDeletionStore', () => {
-  it('rejects non-update authorization and restores snapshotted delete versions', async () => {
+  it('rejects non-update authorization and reads delete versions by id on the write client', async () => {
     const pool = new ScriptedPool();
     const reads = { getById: vi.fn(async () => undefined) };
     const deletion = new PostgresMemoryDeletionStore(
@@ -298,21 +315,13 @@ describe('PostgresMemoryDeletionStore', () => {
       authorization: authorization('bulk_mutation'),
       memoryId: 'memory-1',
     })).rejects.toThrow('does not permit delete');
+    expect(pool.statements).toHaveLength(0);
 
-    const snapshot = deletion.snapshotVersions();
-    deletion.recordVersion({
-      deleteId: 'delete-1',
-      memoryId: 'memory-1',
-      snapshot: makeMemory('memory-1'),
-      deletedAt: 1,
-      deletedBy: 'agent',
-    });
-    expect(await deletion.getDeleteVersion('delete-1')).toBeDefined();
-    deletion.restoreVersions(snapshot);
     expect(await deletion.getDeleteVersion('delete-1')).toBeUndefined();
+    expect(pool.statements.at(-1)?.sql).toContain('from l2_memory_delete_versions where delete_id = $1');
+    expect(pool.statements.at(-1)?.values).toEqual(['delete-1']);
     expect(await deletion.undoSoftDelete('delete-1')).toBeNull();
     expect(await deletion.softDeleteMemory('absent')).toBeNull();
     expect(reads.getById).toHaveBeenCalledWith('absent');
-    expect(pool.statements).toHaveLength(0);
   });
 });

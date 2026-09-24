@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { queryRows } from '../../../persistence/postgres.js';
 import type { MemoryJournal } from '../journal.js';
 import type {
   MemoryDeleteVersion,
@@ -25,15 +24,35 @@ import type { PostgresMemoryDeletionProposalStore } from './deletion-proposals.j
 import type { PostgresMemoryStoreCollaboratorContext } from './collaborator-context.js';
 import type { PostgresL2ReadModel } from './l2-read-model.js';
 
+const DELETE_VERSION_COLUMNS = `
+  delete_id, proposal_id, memory_id, snapshot_json, deleted_at, deleted_by, delete_reason, restored_at, restored_by
+`;
+
+function fromDeleteVersionRow(row: MemoryDeleteVersionRow): MemoryDeleteVersion {
+  return {
+    deleteId: row.delete_id,
+    ...(row.proposal_id ? { proposalId: row.proposal_id } : {}),
+    memoryId: row.memory_id,
+    snapshot: typeof row.snapshot_json === 'object' && row.snapshot_json !== null
+      ? (row.snapshot_json as PurrMemory)
+      : JSON.parse(String(row.snapshot_json)) as PurrMemory,
+    deletedAt: parsePgNumber(row.deleted_at, 'deleted_at'),
+    deletedBy: row.deleted_by ?? 'unknown',
+    deleteReason: row.delete_reason ?? undefined,
+    restoredAt: parseOptionalPgNumber(row.restored_at, 'restored_at'),
+    restoredBy: row.restored_by ?? undefined,
+  };
+}
+
 /**
  * Soft delete, restore, and delete-version history for PostgresMemoryStore
  * (`l2_memory_delete_versions`). Every delete/restore re-upserts the classified
  * memory row inside one memory-store transaction, preserving the stored vector.
- * The delete-version mirror is snapshotted and restored by the facade's
- * transaction rollback.
+ * Delete versions are read at query time by primary key on the active
+ * transaction client (t4mia), so the database ROLLBACK is their only
+ * transactional authority and no version history is held in process memory.
  */
 export class PostgresMemoryDeletionStore {
-  private deleteVersions = new Map<string, MemoryDeleteVersion>();
 
   constructor(
     private readonly ctx: Pick<
@@ -51,41 +70,14 @@ export class PostgresMemoryDeletionStore {
     private readonly markProposalRestored: PostgresMemoryDeletionProposalStore['markRestored'],
   ) {}
 
-  async hydrate(): Promise<void> {
-    const deleteRows = await queryRows<MemoryDeleteVersionRow>(this.ctx.pool, `
-      SELECT delete_id, proposal_id, memory_id, snapshot_json, deleted_at, deleted_by, delete_reason, restored_at, restored_by
-      FROM l2_memory_delete_versions
-    `);
-    for (const row of deleteRows) {
-      this.deleteVersions.set(row.delete_id, {
-        deleteId: row.delete_id,
-        ...(row.proposal_id ? { proposalId: row.proposal_id } : {}),
-        memoryId: row.memory_id,
-        snapshot: typeof row.snapshot_json === 'object' && row.snapshot_json !== null
-          ? (row.snapshot_json as PurrMemory)
-          : JSON.parse(String(row.snapshot_json)) as PurrMemory,
-        deletedAt: parsePgNumber(row.deleted_at, 'deleted_at'),
-        deletedBy: row.deleted_by ?? 'unknown',
-        deleteReason: row.delete_reason ?? undefined,
-        restoredAt: parseOptionalPgNumber(row.restored_at, 'restored_at'),
-        restoredBy: row.restored_by ?? undefined,
-      });
-    }
-
-  }
-
-  /** Transaction rollback support: copy of the delete-version mirror. */
-  snapshotVersions(): Map<string, MemoryDeleteVersion> {
-    return new Map(this.deleteVersions);
-  }
-
-  restoreVersions(snapshot: Map<string, MemoryDeleteVersion>): void {
-    this.deleteVersions = snapshot;
-  }
-
-  /** Record a delete version committed by an approved deletion proposal. */
-  recordVersion(version: MemoryDeleteVersion): void {
-    this.deleteVersions.set(version.deleteId, version);
+  /** One delete version by id, read on the active transaction client when inside one. */
+  private async readVersion(deleteId: string): Promise<MemoryDeleteVersion | undefined> {
+    const rows = await this.ctx.queryWrite<MemoryDeleteVersionRow>(
+      `SELECT ${DELETE_VERSION_COLUMNS} FROM l2_memory_delete_versions WHERE delete_id = $1`,
+      [deleteId],
+    );
+    const row = rows.at(0);
+    return row ? fromDeleteVersionRow(row) : undefined;
   }
 
   /**
@@ -191,7 +183,6 @@ export class PostgresMemoryDeletionStore {
     if (!version) return null;
     this.ctx.markSalienceMaintenanceChanged();
     this.ctx.markRetrievalCorpusChanged();
-    this.deleteVersions.set(version.deleteId, version);
     this.journal?.onSoftDelete(version);
     return version;
   }
@@ -204,7 +195,7 @@ export class PostgresMemoryDeletionStore {
       throw new Error('Memory subject authorization action does not permit restore');
     }
     const deleteId = input.deleteId.trim();
-    const version = this.deleteVersions.get(deleteId);
+    const version = await this.readVersion(deleteId);
     if (!version || version.restoredAt !== undefined) return null;
     const nextVersion = await this.ctx.runInTransaction(async () => {
       const predicate = buildMemorySubjectAuthorizationPredicate(authorization, {
@@ -250,7 +241,6 @@ export class PostgresMemoryDeletionStore {
     if (!nextVersion) return null;
     this.ctx.markSalienceMaintenanceChanged();
     this.ctx.markRetrievalCorpusChanged();
-    this.deleteVersions.set(deleteId, nextVersion);
     this.journal?.onRestore(nextVersion);
     return nextVersion;
   }
@@ -283,13 +273,12 @@ export class PostgresMemoryDeletionStore {
     });
     this.ctx.markSalienceMaintenanceChanged();
     this.ctx.markRetrievalCorpusChanged();
-    this.deleteVersions.set(deleteId, version);
     this.journal?.onSoftDelete(version);
     return version;
   }
 
   async undoSoftDelete(deleteId: string, options: MemoryUndoSoftDeleteOptions = {}): Promise<MemoryDeleteVersion | null> {
-    const version = this.deleteVersions.get(deleteId);
+    const version = await this.readVersion(deleteId);
     if (!version) return null;
     const current = await this.reads.getById(version.memoryId);
     if (!current) return null;
@@ -315,13 +304,12 @@ export class PostgresMemoryDeletionStore {
     });
     this.ctx.markSalienceMaintenanceChanged();
     this.ctx.markRetrievalCorpusChanged();
-    this.deleteVersions.set(deleteId, nextVersion);
     this.journal?.onRestore(nextVersion);
     return nextVersion;
   }
 
   async getDeleteVersion(deleteId: string): Promise<MemoryDeleteVersion | undefined> {
-    return this.deleteVersions.get(deleteId);
+    return await this.readVersion(deleteId);
   }
 
   async bulkDelete(ids: string[]): Promise<number> {

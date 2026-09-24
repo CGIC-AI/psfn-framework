@@ -7,6 +7,7 @@ import type { PurrMemory } from './types.js';
 import type { Contact, SocialGraphEntity } from '../../core/contacts/types.js';
 import type { ConsentFlags, SensitivityLevel } from '../../system/trust/types.js';
 import { createSharedBackgroundProvider } from './retrieval/shared-background.js';
+import { keysetActiveMemoryPages } from '../../test-support/active-memory-pages.js';
 
 function resultText(result: { content: Array<{ type: string; text: string }> }): string {
   return result.content.map(c => c.text).join('');
@@ -79,7 +80,7 @@ function makeFixtureTool() {
   const provider = createSharedBackgroundProvider({
     memoryStore: {
       getById: async (id: string) => memories.find(m => m.id === id),
-      listMemories: async () => memories,
+      listActiveMemories: keysetActiveMemoryPages(() => memories),
     },
     contactStore: {
       getById: async (id: string) => (id === 'contact-a' ? contactA : id === 'contact-b' ? contactB : undefined),

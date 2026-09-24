@@ -28,6 +28,7 @@ import { createDefaultMemoryRetrievalPolicy } from '../../system/config/memory-r
 import { retrieveReflectionMemoryBlock } from '../../core/scheduler/reflection-template-runtime/reflection-contact-context.js';
 import { classifyMemorySubject } from './subject-classification.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
+import { keysetActiveMemoryPages, recentlyAccessedMemories } from '../../test-support/active-memory-pages.js';
 
 // ── Helpers ──
 
@@ -72,7 +73,8 @@ function makeMockStore(memories: Array<PurrMemory & { similarity: number }>): Me
     getMemoriesByChannel: vi.fn().mockReturnValue([]),
     aggregateAuthorizedMemorySubjects: vi.fn(async () => ({ kind: 'memories', memories: [], total: 0 })),
     getAllActiveMemories: vi.fn().mockReturnValue(memories),
-    listActiveMemories: vi.fn().mockReturnValue(memories),
+    listActiveMemories: vi.fn(keysetActiveMemoryPages(() => memories)),
+    getRecentlyAccessedMemories: vi.fn(recentlyAccessedMemories(() => memories)),
     recordEvolutionLink: vi.fn(),
     getEvolutionLinksForSourceMemory: vi.fn().mockReturnValue([]),
     getEvolutionLinksForTargetMemory: vi.fn().mockReturnValue([]),

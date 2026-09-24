@@ -5,6 +5,7 @@ import type { PurrMemory } from '../../../faculties/memory/types.js';
 import type { Contact, SocialGraphEntity } from '../../../core/contacts/types.js';
 import type { SensitivityLevel } from '../../../system/trust/types.js';
 import { AdminMemoryDataService } from './memory-service.js';
+import { keysetActiveMemoryPages } from '../../../test-support/active-memory-pages.js';
 
 function makeMemory(id: string, overrides: Partial<PurrMemory> = {}): PurrMemory {
   return {
@@ -71,7 +72,7 @@ function makeService() {
   const entities = { a: makeEntity('ent-a', 'contact-a'), b: makeEntity('ent-b', 'contact-b') };
   const memoryStore = {
     getById: async (id: string) => memories.find(m => m.id === id),
-    listMemories: async () => memories,
+    listActiveMemories: keysetActiveMemoryPages(() => memories),
   } as unknown as MemoryStorePort;
   const contactStore = {
     listAll: async () => [contactA, contactB],

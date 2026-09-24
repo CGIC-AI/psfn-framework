@@ -19,6 +19,7 @@ import {
   ADMIN_PREFERENCE_MEMORY_TAGS,
   mapPostgresAdminPrivacySummary,
 } from './admin.js';
+import { INTERNAL_ARTIFACT_EXCLUSION_SQL } from './internal-artifact-sql.js';
 
 /**
  * Subject-authorized admin aggregation/filter queries (a27w.5).
@@ -61,24 +62,6 @@ type AdminPageRow = (MemoryRow & AdminPageTotals) | EmptyAdminPageRow;
 function hasAdminPage(row: AdminPageRow): row is MemoryRow & AdminPageTotals {
   return row.id !== null;
 }
-
-/**
- * Excludes internal cognitive artifacts (context-feedback) exactly like
- * `isInternalMemoryArtifact`: a `source:context_feedback|` source-ref prefix or
- * a `context_feedback` tag (case-insensitive).
- */
-const INTERNAL_ARTIFACT_EXCLUSION_SQL = `
-  NOT (
-    lower(memory.source_ref) LIKE 'source:context_feedback|%'
-    OR (
-      jsonb_typeof(memory.tags) = 'array'
-      AND EXISTS (
-        SELECT 1 FROM jsonb_array_elements_text(memory.tags) AS tag(value)
-        WHERE lower(tag.value) = 'context_feedback'
-      )
-    )
-  )
-`;
 
 const ACTIVE_CLAUSES = ['memory.superseded_by IS NULL', 'memory.deleted_at IS NULL'] as const;
 
@@ -143,6 +126,7 @@ function assertAdminActionMatchesSelector(input: MemorySubjectAdminQuery): void 
       case 'admin_page':
       case 'channel_prefix':
       case 'contact_filter':
+      case 'recently_accessed':
         return ['list'] as const;
       case 'privacy_summary':
       case 'admin_stats':
@@ -242,6 +226,7 @@ async function querySourcePrefixSlice(
   clause: string,
   filterValues: unknown[],
   limit: number,
+  orderBy = 'memory.extracted_at DESC, memory.id DESC',
 ): Promise<MemorySubjectAdminResult> {
   const { where, values } = appendAuthorizationPredicate(input, filterValues, [clause]);
   const safeLimit = clampLimit(limit, 50, 1, 500);
@@ -250,7 +235,7 @@ async function querySourcePrefixSlice(
     SELECT ${MEMORY_SUBJECT_METADATA_SELECT_COLUMNS}
     FROM l2_memories memory
     WHERE ${where}
-    ORDER BY memory.extracted_at DESC, memory.id DESC
+    ORDER BY ${orderBy}
     LIMIT $${values.length + 1}
   `,
     [...values, safeLimit],
@@ -295,6 +280,21 @@ async function queryContactFilter(
     `memory.contact_id = ${contactParam}`,
     filterValues,
     limit,
+  );
+}
+
+async function queryRecentlyAccessed(
+  pool: Pool,
+  input: MemorySubjectAdminQuery,
+  limit: number,
+): Promise<MemorySubjectAdminResult> {
+  return await querySourcePrefixSlice(
+    pool,
+    input,
+    INTERNAL_ARTIFACT_EXCLUSION_SQL,
+    [],
+    limit,
+    'memory.last_accessed DESC, memory.extracted_at DESC, memory.id DESC',
   );
 }
 
@@ -401,6 +401,8 @@ export async function queryAuthorizedMemorySubjectAdmin(
       return await queryChannelPrefix(pool, input, input.selector.channelId, input.selector.limit);
     case 'contact_filter':
       return await queryContactFilter(pool, input, input.selector.contactId, input.selector.limit);
+    case 'recently_accessed':
+      return await queryRecentlyAccessed(pool, input, input.selector.limit);
     case 'privacy_summary':
       return await queryPrivacySummary(pool, input);
     case 'admin_stats':

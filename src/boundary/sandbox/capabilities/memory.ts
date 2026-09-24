@@ -145,6 +145,10 @@ function nextReplInvocationId(): string {
   return `repl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+// The getAllActiveMemories fallbacks below only run for partial stores that
+// lack countActiveMemories/listMemories; PostgresMemoryStore and the
+// subject-authorized proxy implement both, so production never takes them
+// (psfn-framework-dnaqt).
 function createCompatibleMemoryStore(memoryStore: MemoryStorePort | null): MemoryStorePort | null {
   if (!memoryStore) {
     return null;

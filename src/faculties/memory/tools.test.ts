@@ -1,3 +1,4 @@
+import type { ActiveMemoryListOptions } from './memory-store-port.js';
 import { fromAny } from '@total-typescript/shoehorn';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
@@ -38,6 +39,7 @@ import {
 import type { EpisodicTimelineStore } from './retrieval/episodic.js';
 import { createDefaultMemoryRetrievalPolicy } from '../../system/config/memory-retrieval-policy.js';
 import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../core/agent/tool-surface/descriptions.js';
+import { keysetActiveMemoryPages } from '../../test-support/active-memory-pages.js';
 
 /** Extract text from AgentToolResult content array */
 function resultText(result: { content: Array<{ type: string; text: string }> }): string {
@@ -236,7 +238,7 @@ describe('createMemoryTool', () => {
     return {
       searchByText: vi.fn(),
       listMemories: vi.fn(async () => cloneMemories(memories)),
-      listActiveMemories: vi.fn(async () => cloneMemories(memories.filter(memory => !memory.deletedAt && !memory.supersededBy))),
+      listActiveMemories: vi.fn(async (options?: ActiveMemoryListOptions) => cloneMemories(await keysetActiveMemoryPages(() => memories)(options))),
       getAllActiveMemories: vi.fn(async () => cloneMemories(memories.filter(memory => !memory.deletedAt && !memory.supersededBy))),
       softDeleteMemory: vi.fn(),
       undoSoftDelete: vi.fn(),

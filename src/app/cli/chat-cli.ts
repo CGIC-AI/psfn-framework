@@ -10,6 +10,7 @@ import { sanitizeCoreSubstrateConfig } from '../../system/config/runtime-config-
 import { EventBus } from '../../shared/event-bus.js';
 import { resolveCompanionNameFromCard } from '../../core/identity/companion-runtime.js';
 import { SalienceDecay } from '../../faculties/memory/decay.js';
+import { activeMemoryPages } from '../../faculties/memory/active-memory-scan.js';
 import { DEFAULT_REPL_CONFIG } from '../../core/tools/analysis-workbench/types.js';
 import { hydrateCanonicalStartupConfig } from '../startup/support/bootstrap-helpers.js';
 import { hydrateSecretBearingConfig } from '../startup/support/secret-hydration.js';
@@ -138,13 +139,17 @@ async function main(): Promise<void> {
     }
 
     if (input === '/memories') {
-      const memories = await memoryStore.getAllActiveMemories();
-      if (memories.length === 0) {
+      // Printed page by page from the keyset scan; the corpus is never
+      // resident at once (psfn-framework-dnaqt).
+      const activeCount = await memoryStore.countActiveMemories();
+      if (activeCount === 0) {
         console.log('[Memory] No memories stored yet.\n');
       } else {
-        console.log(`[Memory] ${memories.length} active memories:`);
-        for (const m of memories) {
-          console.log(`  [${m.type}] ${m.text} (salience: ${m.salience.toFixed(2)}, confidence: ${m.confidence.toFixed(2)})`);
+        console.log(`[Memory] ${activeCount} active memories:`);
+        for await (const page of activeMemoryPages(memoryStore)) {
+          for (const m of page) {
+            console.log(`  [${m.type}] ${m.text} (salience: ${m.salience.toFixed(2)}, confidence: ${m.confidence.toFixed(2)})`);
+          }
         }
         console.log();
       }

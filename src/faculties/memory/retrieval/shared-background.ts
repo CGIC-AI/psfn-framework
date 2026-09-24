@@ -1,4 +1,5 @@
 import { isMemoryOwnedByCompanion, type CompanionRoomMembershipAuthority } from '../companion-provenance.js';
+import { activeMemoryPages } from '../active-memory-scan.js';
 import type { RetrievalAccessScope } from '../types.js';
 // ── Shared-background retrieval (E4.5) ──
 // "What links contact A and contact B" — a union of the memories that connect
@@ -82,7 +83,7 @@ export interface SharedBackgroundCandidate {
 export interface SharedBackgroundDeps {
   companionId?: string;
   roomMembershipAuthority?: CompanionRoomMembershipAuthority | null;
-  memoryStore: Pick<MemoryStorePort, 'getById' | 'listMemories'>
+  memoryStore: Pick<MemoryStorePort, 'getById' | 'listActiveMemories'>
     & Partial<Pick<MemoryStorePort, 'getByIds'>>;
   contactStore: {
     getById(contactId: string): PromiseLike<Contact | undefined> | Contact | undefined;
@@ -319,18 +320,21 @@ export async function collectSharedBackgroundUnion(
     }
   }
 
-  // (b) co-mention + (c) shared-room: single scan over active memories.
+  // (b) co-mention + (c) shared-room: single keyset scan over active memories,
+  // one store page resident at a time (psfn-framework-dnaqt). Ownership and
+  // lifecycle are enforced per memory by addSource.
   const sharedRooms = intersect(collectContactRoomIds(contactA), collectContactRoomIds(contactB));
-  const memories = await deps.memoryStore.listMemories();
-  for (const memory of memories) {
-    if (!isCurrentMemory(memory)) continue;
-    if (memoryNamesBoth(memory, contactAId, contactBId)) {
-      addSource(memory, 'co_mention');
-    }
-    if (sharedRooms.size > 0) {
-      const roomId = resolveMemorySourceRoomId(memory);
-      if (roomId && sharedRooms.has(roomId)) {
-        addSource(memory, 'shared_room');
+  for await (const page of activeMemoryPages(deps.memoryStore)) {
+    for (const memory of page) {
+      if (!isCurrentMemory(memory)) continue;
+      if (memoryNamesBoth(memory, contactAId, contactBId)) {
+        addSource(memory, 'co_mention');
+      }
+      if (sharedRooms.size > 0) {
+        const roomId = resolveMemorySourceRoomId(memory);
+        if (roomId && sharedRooms.has(roomId)) {
+          addSource(memory, 'shared_room');
+        }
       }
     }
   }

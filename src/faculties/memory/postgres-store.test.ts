@@ -298,6 +298,12 @@ class FakeMemoryPool {
       return result([...active].sort((left, right) => Number(right.extracted_at) - Number(left.extracted_at)
         || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)).slice(0, Number(values[0])));
     }
+    if (normalized.includes('order by memory.last_accessed desc, memory.extracted_at desc, memory.id desc limit $1')) {
+      // Internal-artifact exclusion is covered against real Postgres.
+      return result([...active]
+        .sort((left, right) => Number(right.last_accessed) - Number(left.last_accessed) || newestFirst(left, right))
+        .slice(0, Number(values[0])));
+    }
     if (normalized.includes('order by memory.extracted_at desc, memory.id desc offset $1 limit $2')) {
       const offset = Number(values[0]);
       const before = normalized.includes('(memory.extracted_at, memory.id) <')

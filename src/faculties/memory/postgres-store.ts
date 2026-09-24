@@ -844,6 +844,10 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
     return await this.readModel.getMemoriesByContact(contactId, limit);
   }
 
+  async getRecentlyAccessedMemories(limit: number): Promise<PurrMemory[]> {
+    return await this.readModel.getRecentlyAccessedMemories(limit);
+  }
+
   async linkMemories(id1: string, id2: string, linkType: string = 'related'): Promise<MemoryLink | null> {
     return await this.links.linkMemories(id1, id2, linkType);
   }

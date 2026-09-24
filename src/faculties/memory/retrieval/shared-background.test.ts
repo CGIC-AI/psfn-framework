@@ -8,6 +8,7 @@ import {
   type SharedBackgroundAccessOptions,
   type SharedBackgroundDeps,
 } from './shared-background.js';
+import { keysetActiveMemoryPages } from '../../../test-support/active-memory-pages.js';
 
 // ── Fixtures ──
 
@@ -74,7 +75,7 @@ function makeDeps(fixture: FixtureOptions): SharedBackgroundDeps {
   return {
     memoryStore: {
       getById: async (id: string) => fixture.memories.find(m => m.id === id),
-      listMemories: async () => fixture.memories,
+      listActiveMemories: keysetActiveMemoryPages(() => fixture.memories),
     },
     contactStore: {
       getById: async (id: string) => fixture.contacts[id],

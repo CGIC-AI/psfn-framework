@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
@@ -13,6 +13,7 @@ import {
 } from '../../src/system/settings/schema-model-registry.js';
 import type { OnboardingPlan } from './types.js';
 import {
+  buildChannelsOwnerFile,
   buildModelsRegistry,
   buildProvidersRegistry,
   commitOwnerFiles,
@@ -266,6 +267,33 @@ describe('declared chat fallback (asd4w)', () => {
       ...plan,
       fallbackChat: { provider: plan.provider, modelSlug: plan.models.primaryModelSlug },
     })).toThrow(/single chat candidate/);
+  });
+});
+
+describe('channels.json testing-harness principal (7agdz)', () => {
+  it('preserves an existing channels.json and only adds the missing harness principal', () => {
+    const roots = freshRoot(true);
+    commitOwnerFiles(makePlan({ roots }));
+    const channelsPath = join(roots.systemDataDir, 'channels.json');
+    writeFileSync(channelsPath, JSON.stringify({ api: { companionId: '11111111-1111-4111-8111-111111111111' } }));
+    expect(buildChannelsOwnerFile(makePlan({ roots }))).toEqual({
+      api: {
+        companionId: '11111111-1111-4111-8111-111111111111',
+        testingHarness: {
+          principalId: 'testing-harness',
+          tokenRef: { kind: 'env', envName: 'TESTING_HARNESS_API_KEY' },
+        },
+      },
+    });
+    const custom = { api: { testingHarness: { principalId: 'custom', tokenRef: { kind: 'env', envName: 'X' } } } };
+    writeFileSync(channelsPath, JSON.stringify(custom));
+    expect(buildChannelsOwnerFile(makePlan({ roots }))).toEqual(custom);
+  });
+
+  it('is written only for repository-native installs', () => {
+    const roots = freshRoot(true);
+    commitOwnerFiles(makePlan({ roots, mode: 'compose' }));
+    expect(existsSync(join(roots.systemDataDir, 'channels.json'))).toBe(false);
   });
 });
 

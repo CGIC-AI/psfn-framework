@@ -334,6 +334,46 @@ function buildAutomataPolicy(plan: OnboardingPlan): unknown {
   };
 }
 
+/** Env var holding the Layer A testing-harness bearer (value lives only in .env). */
+export const TESTING_HARNESS_TOKEN_ENV_NAME = 'TESTING_HARNESS_API_KEY';
+
+function readExistingJsonObject(path: string): Record<string, unknown> | undefined {
+  if (!existsSync(path)) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, 'utf-8'));
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`Existing owner file ${path} is not valid JSON; repair it before re-running onboard: ${reason}`);
+  }
+  if (!isRecord(parsed)) throw new Error(`Existing owner file ${path} must contain a JSON object`);
+  return parsed;
+}
+
+/**
+ * channels.json for a repository-native install: declares the Layer A
+ * testing-harness principal (bearer resolved from TESTING_HARNESS_API_KEY in
+ * .env) so the shakedown harness authenticates as `testing-harness` rather
+ * than as the operator API key. An existing channels.json is preserved; only a
+ * missing `api.testingHarness` declaration is added.
+ */
+export function buildChannelsOwnerFile(plan: OnboardingPlan): Record<string, unknown> {
+  const existing = readExistingJsonObject(join(plan.roots.systemDataDir, 'channels.json')) ?? {};
+  const api = existing.api === undefined ? {} : existing.api;
+  if (!isRecord(api)) throw new Error('Existing channels.json.api must be an object');
+  if (api.testingHarness !== undefined) return existing;
+  return {
+    ...existing,
+    api: {
+      ...api,
+      testingHarness: {
+        principalId: 'testing-harness',
+        tokenRef: { kind: 'env', envName: TESTING_HARNESS_TOKEN_ENV_NAME },
+      },
+    },
+  };
+}
+
 /** All owner-file entries this plan will write, rooted at the FINAL target paths. */
 export function ownerFileEntries(plan: OnboardingPlan): OwnerFileEntry[] {
   const entries: OwnerFileEntry[] = [];
@@ -349,6 +389,12 @@ export function ownerFileEntries(plan: OnboardingPlan): OwnerFileEntry[] {
   }
   for (const name of SEED_COPIED_OWNER_FILES) {
     entries.push({ name, path: join(ownerFileRoot(plan, name), name), value: readSeed(plan.seedDir, name) });
+  }
+  // Only repository-native mode writes the harness bearer to the process
+  // environment; Compose and Helm own their own secret wiring.
+  if (plan.mode === 'local') {
+    const name = 'channels.json';
+    entries.push({ name, path: join(ownerFileRoot(plan, name), name), value: buildChannelsOwnerFile(plan) });
   }
   return entries;
 }

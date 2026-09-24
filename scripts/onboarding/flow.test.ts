@@ -10,7 +10,9 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { parseEnv } from 'node:util';
 import { loadCharacterCard } from '../../src/core/identity/loader.js';
+import { loadRuntimeChannelsConfig } from '../../src/channels/backplane/config.js';
 import { resolveConfiguredCompanionFleet } from '../companion-fleet-runtime.js';
 import type { Prompter, PrompterChoiceOption } from './types.js';
 import {
@@ -116,6 +118,25 @@ describe('runOnboarding — local dev happy path', () => {
     expect(envText).toContain('ADMIN_PORT=10053');
     expect(envText).toContain('API_PORT=10054');
     expect(prompter.log.join('\n')).toContain('npm run local:up');
+
+    // 7agdz: Layer A harness principal + its own bearer, never the operator API_KEY.
+    expect(envText).toMatch(/^TESTING_HARNESS_API_KEY=[0-9a-f]{64}$/mu);
+    const harnessKey = /^TESTING_HARNESS_API_KEY=(.+)$/mu.exec(envText)?.[1];
+    expect(harnessKey).not.toBe(/^API_KEY=(.+)$/mu.exec(envText)?.[1]);
+    const channels = JSON.parse(readFileSync(join(dataDir, 'channels.json'), 'utf-8')) as unknown;
+    expect(channels).toEqual({
+      api: {
+        testingHarness: {
+          principalId: 'testing-harness',
+          tokenRef: { kind: 'env', envName: 'TESTING_HARNESS_API_KEY' },
+        },
+      },
+    });
+    const runtimeChannels = loadRuntimeChannelsConfig(dataDir, parseEnv(envText));
+    expect(runtimeChannels.api.testingHarness).toMatchObject({
+      principalId: 'testing-harness',
+      apiKey: harnessKey,
+    });
 
     const fleet = resolveConfiguredCompanionFleet({
       PSFN_RUNTIME_ROOT: root,

@@ -30,6 +30,7 @@ import {
   readExistingCompanionId,
   resolveOnboardingCompanionDataDir,
   resolveOnboardingRuntimeRoot,
+  TESTING_HARNESS_TOKEN_ENV_NAME,
 } from './config-generator.js';
 import { commitEnv, readEnvText, type EnvEntry } from './env-writer.js';
 import { checkProviderConnectivity, type ConnectivityResult } from './connectivity.js';
@@ -650,6 +651,11 @@ export function buildEnvEntries(input: {
       ['PSFN_COMPANION_DATABASE_PASSWORD', companionPassword, 'Companion database role password'],
       ['PSFN_SHARED_MIGRATION_DATABASE_PASSWORD', sharedPassword, 'Shared migration role password'],
       ['API_KEY', retainedSecret('API_KEY'), 'Repository-native gateway API bearer'],
+      [
+        TESTING_HARNESS_TOKEN_ENV_NAME,
+        retainedSecret(TESTING_HARNESS_TOKEN_ENV_NAME),
+        'Layer A testing-harness bearer (channels.json api.testingHarness)',
+      ],
       ['ADMIN_TOKEN', retainedSecret('ADMIN_TOKEN'), 'Repository-native Garden login token'],
       ['GATEWAY_SESSION_HMAC_KEY', retainedSecret('GATEWAY_SESSION_HMAC_KEY'), 'Gateway session signing key'],
       ['PSFN_BACKUP_ENCRYPTION_KEY', retainedSecret('PSFN_BACKUP_ENCRYPTION_KEY'), 'Encrypted-backup key'],

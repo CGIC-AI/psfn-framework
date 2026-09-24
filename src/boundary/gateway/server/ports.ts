@@ -17,6 +17,8 @@ import type { GatewayPolicyDecision } from '../protocol.js';
 import type { GatewayNtfyNotifier } from '../ntfy-notifier.js';
 import type { GatewayFleetPostureCache } from '../fleet-posture-cache.js';
 import type { GatewayIcpAutonomyBroker } from '../icp-autonomy-broker.js';
+import type { CanaryEgressGuard } from '../canary-egress-guard.js';
+import type { GatewayRuntimeHealthTracker } from '../runtime-health.js';
 import type { GatewayServerOptions } from './options.js';
 import type { GatewayConnectionStatus } from './connection-status.js';
 
@@ -32,6 +34,8 @@ export interface GatewayServerPorts {
   readonly companionPostures: GatewayFleetPostureCache<GatewayRpcConnection>;
   readonly ntfyNotifier: GatewayNtfyNotifier;
   readonly operatorAlertDispatcher: GatewayOperatorAlertDispatcher;
+  readonly canaryEgressGuard: CanaryEgressGuard | undefined;
+  readonly runtimeHealthTracker: GatewayRuntimeHealthTracker;
   readonly icpAutonomyBroker: GatewayIcpAutonomyBroker | null;
   readonly wyomingShardRouting: WyomingShardRoutingConfig;
   readonly nextStreamRequestCounter: () => number;

@@ -19,7 +19,6 @@ import { createSocketServer, createWebSocketRpcServer } from './transport.js';
 import {
   GatewayErrors,
   type GatewayCredentialPresenceResult,
-  type GatewayPolicyDecision,
   type RuntimeHealthResult,
   type OperatorAlertResult,
   type NotifyNtfyParams,
@@ -62,10 +61,7 @@ import type {
 import { verifyCompanionAuthToken } from './companion-auth.js';
 import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 import { createCanaryEgressGuard, type CanaryEgressGuard } from './canary-egress-guard.js';
-import {
-  readCanaryCarrier,
-  stripCanaryCarrier,
-} from '../../core/cogsec/canary/egress-scan.js';
+import { readCanaryCarrier } from '../../core/cogsec/canary/egress-scan.js';
 import type { GatewayVisionIntakeScreener } from './intake/compose-screening.js';
 import type { GardenQueueName } from '../../shared/event-bus.js';
 import type {
@@ -102,6 +98,7 @@ import { GatewayInboundChannelDelivery } from './server/inbound-channel-delivery
 import { GatewayCompanionMessageLane } from './server/companion-message-lane.js';
 import { GatewaySharedSatelliteOrchestrator } from './server/shared-satellite-orchestration.js';
 import { GatewayConnectionScope } from './server/connection-scope.js';
+import { GatewayAuditTrail } from './server/audit-trail.js';
 import {
   GatewayCompanionViolations,
   type GatewayFleetConnectionSnapshot,
@@ -223,6 +220,7 @@ export class GatewayServer {
   private readonly companionMessageLane: GatewayCompanionMessageLane;
   private readonly sharedSatellite: GatewaySharedSatelliteOrchestrator;
   private readonly connectionScope: GatewayConnectionScope;
+  private readonly auditTrail: GatewayAuditTrail;
 
   private companionDisplayLabel(companionId: string): string {
     return this.options.approvalParentLabelProvider?.(companionId)?.trim()
@@ -259,10 +257,12 @@ export class GatewayServer {
         this.connectionRouter.resolveRoutedCompanionId(surface, route)
       ),
       operatorAlertDispatcher: this.operatorAlertDispatcher,
+      canaryEgressGuard: this.canaryEgressGuard,
+      runtimeHealthTracker: this.runtimeHealthTracker,
       icpAutonomyBroker: this.icpAutonomyBroker,
       wyomingShardRouting: this.wyomingShardRouting,
       nextStreamRequestCounter: () => ++this.streamRequestCounter,
-      inspectAgentReply: (method, result) => this.inspectAgentReply(method, result),
+      inspectAgentReply: (method, result) => this.auditTrail.inspectAgentReply(method, result),
       requestCompanionAgent: (companionId, method, params, timeoutMs) => (
         this.requestCompanionAgent(companionId, method, params, timeoutMs)
       ),
@@ -272,8 +272,8 @@ export class GatewayServer {
       resolveConnectionWorkspacePath: conn => this.connectionScope.resolveConnectionWorkspacePath(conn),
       sharedWorkspaceReader: this.sharedWorkspaceReader,
       discordAccountRoutingActive: () => this.discordAccountRoutingActive(),
-      audit: (method, decision, params) => this.audit(method, decision, params),
-      auditComplete: (id, startTime, error) => this.auditComplete(id, startTime, error),
+      audit: (method, decision, params) => this.auditTrail.audit(method, decision, params),
+      auditComplete: (id, startTime, error) => this.auditTrail.auditComplete(id, startTime, error),
     };
   }
 
@@ -452,8 +452,8 @@ export class GatewayServer {
       ...(options.confirmationEscalation
         ? { confirmationEscalation: options.confirmationEscalation }
         : {}),
-      audit: this.audit.bind(this),
-      auditComplete: this.auditComplete.bind(this),
+      audit: (method, decision, params) => this.auditTrail.audit(method, decision, params),
+      auditComplete: (id, startTime, error) => this.auditTrail.auditComplete(id, startTime, error),
       recordMethodSuccess: (method) => this.runtimeHealthTracker.recordMethodSuccess(method),
       recordMethodFailure: (method, error) => this.runtimeHealthTracker.recordMethodFailure(method, error),
       recordApprovalNotificationSuccess: () => this.runtimeHealthTracker.recordApprovalNotificationSuccess(),
@@ -491,6 +491,7 @@ export class GatewayServer {
       versionCount: Object.keys(this.sessionHmacKeyring.keys).length,
     });
     const ports = this.createServerPorts();
+    this.auditTrail = new GatewayAuditTrail(ports);
     this.connectionLifecycle = new GatewayConnectionLifecycle(ports);
     this.companionViolations = new GatewayCompanionViolations(ports);
     this.connectionRouter = new GatewayConnectionRouter(ports);
@@ -502,65 +503,6 @@ export class GatewayServer {
 
   async notifyOperator(params: NotifyNtfyParams): Promise<OperatorAlertResult> {
     return await this.operatorAlertDispatcher.dispatch(params);
-  }
-
-  // Wrap a handler with audit timing — logs call, records duration/error on completion
-  private audited<P, R>(
-    method: string,
-    handler: (params: P) => Promise<R>,
-    paramsSummary?: (params: P) => Record<string, unknown>,
-  ): (params: P) => Promise<R> {
-    return async (params: P) => {
-      // htm9.18 egress tripwire: hold the action if the session canary leaked
-      // into an outbound method, and strip the carrier before it reaches the
-      // handler or any audit summary.
-      let cleaned: P;
-      try {
-        cleaned = (this.canaryEgressGuard
-          ? this.canaryEgressGuard.inspect(method, params)
-          : params) as P;
-      } catch (err) {
-        this.runtimeHealthTracker.recordMethodFailure(method, err);
-        const heldAuditId = await this.audit(method, 'DENY', { canaryEgressHeld: true });
-        await this.auditComplete(heldAuditId, Date.now(), toErrorMessage(err));
-        throw err;
-      }
-      const summary = paramsSummary ? paramsSummary(cleaned) : undefined;
-      const auditId = await this.audit(method, 'ALLOW', summary);
-      const startTime = Date.now();
-      try {
-        const result = await handler(cleaned);
-        this.runtimeHealthTracker.recordMethodSuccess(method);
-        await this.auditComplete(auditId, startTime);
-        return result;
-      } catch (err) {
-        this.runtimeHealthTracker.recordMethodFailure(method, err);
-        const msg = toErrorMessage(err);
-        await this.auditComplete(auditId, startTime, msg);
-        throw err;
-      }
-    };
-  }
-
-  /**
-   * d269: scan a reverse-RPC reply result at the gateway seam before it can
-   * reach any channel adapter. Strips the reserved canary carrier in every
-   * mode; when the CogSec guard is active, a reply carrying its own session
-   * canary is HELD in enforce mode (recorded + audited) and observed in
-   * shadow. This adds no RPC round-trips — one substring scan on the already
-   * in-hand result.
-   */
-  private async inspectAgentReply<T>(method: string, result: T): Promise<T> {
-    if (!this.canaryEgressGuard) {
-      return stripCanaryCarrier(result) as T;
-    }
-    try {
-      return this.canaryEgressGuard.inspectReply(method, result) as T;
-    } catch (error) {
-      const auditId = await this.audit(method, 'DENY', { canaryReplyHeld: true });
-      await this.auditComplete(auditId, Date.now(), toErrorMessage(error));
-      throw error;
-    }
   }
 
   subscribeApiStream(
@@ -727,7 +669,7 @@ export class GatewayServer {
           await this.options.auditStore.recordSummary(entry);
         }
       },
-      audited: (method, handler, paramsSummary) => this.audited(method, handler, paramsSummary),
+      audited: (method, handler, paramsSummary) => this.auditTrail.audited(method, handler, paramsSummary),
     };
 
     registerGatewayMethods(runtime);
@@ -735,7 +677,7 @@ export class GatewayServer {
       target,
       broker: this.icpAutonomyBroker,
       requireAuthenticatedCompanionId: () => this.connectionRouter.requireAuthenticatedAgentCompanionId(conn),
-      audited: (method, handler, paramsSummary) => this.audited(method, handler, paramsSummary),
+      audited: (method, handler, paramsSummary) => this.auditTrail.audited(method, handler, paramsSummary),
     });
     target.addMethod('gateway.client.identify', (params: unknown) => this.identifyConnection(conn, params));
     target.addMethod('gateway.client.ready', (params: unknown) => this.markConnectionReady(conn, params));
@@ -743,7 +685,7 @@ export class GatewayServer {
       'gateway.client.health',
       (params: unknown) => this.recordConnectionPosture(conn, params),
     );
-    target.addMethod('shard.workload.register', this.audited(
+    target.addMethod('shard.workload.register', this.auditTrail.audited(
       'shard.workload.register',
       async (params: unknown) => {
         const companionId = this.connectionRouter.requireAuthenticatedAgentCompanionId(conn);
@@ -759,7 +701,7 @@ export class GatewayServer {
         companionId: this.connectionStatuses.get(conn)?.companionId ?? '(unidentified)',
       }),
     ));
-    target.addMethod('shard.workload.end', this.audited(
+    target.addMethod('shard.workload.end', this.auditTrail.audited(
       'shard.workload.end',
       async (params: unknown) => {
         this.connectionRouter.requireAuthenticatedAgentCompanionId(conn);
@@ -775,7 +717,7 @@ export class GatewayServer {
         companionId: this.connectionStatuses.get(conn)?.companionId ?? '(unidentified)',
       }),
     ));
-    target.addMethod('companion.message.send', this.audited(
+    target.addMethod('companion.message.send', this.auditTrail.audited(
       'companion.message.send',
       (params: unknown) => this.companionMessageLane.handleCompanionMessageSend(conn, params),
       (params: unknown) => ({
@@ -784,7 +726,7 @@ export class GatewayServer {
         ...(isRecord(params) && typeof params.content === 'string' ? { contentLength: params.content.length } : {}),
       }),
     ));
-    target.addMethod('companion.message.report_failure', this.audited(
+    target.addMethod('companion.message.report_failure', this.auditTrail.audited(
       'companion.message.report_failure',
       (params: unknown) => this.companionMessageLane.handleCompanionMessageFailureReport(conn, params),
       (params: unknown) => ({
@@ -849,7 +791,7 @@ export class GatewayServer {
       await this.dispatchCompanionEventPublish(conn, params);
       return null;
     });
-    target.addMethod('shared.workspace.list', this.audited(
+    target.addMethod('shared.workspace.list', this.auditTrail.audited(
       'shared.workspace.list',
       (params: unknown) => this.connectionScope.listSharedWorkspaceArtifacts(conn, params),
       (params: unknown) => ({
@@ -858,7 +800,7 @@ export class GatewayServer {
           : {}),
       }),
     ));
-    target.addMethod('shared.workspace.read', this.audited(
+    target.addMethod('shared.workspace.read', this.auditTrail.audited(
       'shared.workspace.read',
       (params: unknown) => this.connectionScope.readSharedWorkspaceArtifact(conn, params),
       (params: unknown) => ({
@@ -1549,8 +1491,8 @@ export class GatewayServer {
       ...(preview ? { preview } : {}),
     };
     void (async (): Promise<void> => {
-      const auditId = await this.audit(INVALID_FRAME_AUDIT_METHOD, 'DENY', params);
-      await this.auditComplete(auditId, startedAt, reason);
+      const auditId = await this.auditTrail.audit(INVALID_FRAME_AUDIT_METHOD, 'DENY', params);
+      await this.auditTrail.auditComplete(auditId, startedAt, reason);
     })().catch((auditError: unknown) => {
       log.error('Malformed IPC frame audit persistence failed after disconnecting peer fail closed', {
         ...params,
@@ -1603,7 +1545,7 @@ export class GatewayServer {
     ]);
     // d269: reverse-RPC results are reply egress — scan before returning to
     // any channel surface.
-    return await this.inspectAgentReply(method, result) as T;
+    return await this.auditTrail.inspectAgentReply(method, result) as T;
   }
 
   /** Route one exact authority read to the authenticated companion agent. */
@@ -1628,7 +1570,7 @@ export class GatewayServer {
     ]);
     // d269: reverse-RPC results are reply egress — scan before returning to
     // any channel surface.
-    return await this.inspectAgentReply(method, result) as T;
+    return await this.auditTrail.inspectAgentReply(method, result) as T;
   }
   /** Persist and publish a content-free observation-delivery audit. */
   recordSharedSatelliteObservationAudit(
@@ -1810,7 +1752,7 @@ export class GatewayServer {
       companionId,
       nextRequestCounter: () => ++this.streamRequestCounter,
       // d269: main-reply canary scan at the reverse-RPC seam.
-      inspectReply: (replyMethod, replyResult) => this.inspectAgentReply(replyMethod, replyResult),
+      inspectReply: (replyMethod, replyResult) => this.auditTrail.inspectAgentReply(replyMethod, replyResult),
     });
     const attachments = materializeGatewayAttachments(
       result.attachments,
@@ -2067,49 +2009,4 @@ export class GatewayServer {
 
     log.info('Stopped');
   }
-
-  private async audit(method: string, decision: GatewayPolicyDecision, params?: Record<string, unknown>): Promise<number> {
-    const correlation = extractGatewayCorrelation(params);
-    if (decision !== 'ALLOW') {
-      log.info(`${method} → ${decision}`, {
-        ...(Object.keys(correlation).length > 0 ? correlation : {}),
-      });
-    }
-    if (this.options.auditStore) {
-      return await this.options.auditStore.append({ method, decision, params });
-    }
-    return 0;
-  }
-
-  private async auditComplete(id: number, startTime: number, error?: string): Promise<void> {
-    if (this.options.auditStore && id > 0) {
-      await this.options.auditStore.complete(id, Date.now() - startTime, error);
-    }
-  }
-}
-
-function extractGatewayCorrelation(
-  params: Record<string, unknown> | undefined,
-): Record<string, string> {
-  if (!params) return {};
-  const correlation: Record<string, string> = {};
-  for (const key of [
-    'companionId',
-    'turnId',
-    'requestId',
-    'channelId',
-    'callType',
-    'originType',
-    'originStage',
-    'toolName',
-    'toolCallId',
-    'purpose',
-  ]) {
-    const value = params[key];
-    if (typeof value !== 'string') continue;
-    const trimmed = value.trim();
-    if (!trimmed) continue;
-    correlation[key] = trimmed;
-  }
-  return correlation;
 }

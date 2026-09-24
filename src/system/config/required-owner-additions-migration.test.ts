@@ -79,6 +79,13 @@ afterEach(() => {
 describe('migrateRequiredOwnerAdditions', () => {
   it('preflights, applies, and idempotently validates every owner addition required by startup', () => {
     const fixture = prepareLegacyOwners();
+    const channelsPath = join(fixture.dataDir, 'channels.json');
+    writeJson(channelsPath, {
+      api: {},
+      multica: { enabled: true },
+      buzz: { enabled: true },
+    });
+    chmodSync(channelsPath, 0o644);
     const options = {
       dataDir: fixture.dataDir,
       companionDataDir: fixture.companionDataDir,
@@ -88,10 +95,12 @@ describe('migrateRequiredOwnerAdditions', () => {
       settings: readFileSync(fixture.settingsPath, 'utf8'),
       intake: readFileSync(fixture.intakePath, 'utf8'),
       automata: readFileSync(fixture.automataPath, 'utf8'),
+      channels: readFileSync(channelsPath, 'utf8'),
     };
 
     expect(migrateRequiredOwnerAdditions(options)).toMatchObject({
       mode: 'dry-run',
+      channels: { status: 'planned', removedPaths: ['buzz', 'multica'] },
       settings: { status: 'planned' },
       intakePolicy: { status: 'planned', addedPaths: ['surfacePostures'] },
       automataPolicy: { status: 'planned', addedPaths: ['bus.reindex'] },
@@ -104,16 +113,19 @@ describe('migrateRequiredOwnerAdditions', () => {
     expect(readFileSync(fixture.settingsPath, 'utf8')).toBe(before.settings);
     expect(readFileSync(fixture.intakePath, 'utf8')).toBe(before.intake);
     expect(readFileSync(fixture.automataPath, 'utf8')).toBe(before.automata);
+    expect(readFileSync(channelsPath, 'utf8')).toBe(before.channels);
     expect(() => statSync(fixture.partnerAffectPath)).toThrow();
 
     expect(migrateRequiredOwnerAdditions({ ...options, apply: true })).toMatchObject({
       mode: 'apply',
+      channels: { status: 'applied', removedPaths: ['buzz', 'multica'] },
       settings: { status: 'applied' },
       intakePolicy: { status: 'applied' },
       automataPolicy: { status: 'applied' },
       companionOwnerAdditions: { status: 'applied' },
       ownerModes: { status: 'applied' },
     });
+    expect(readJson(channelsPath)).toEqual({ api: {} });
     const settings = readJson(fixture.settingsPath);
     expect(settings.sessionHistoryBudgetPct).toBe(9);
     expect(settings.lifecycleKubernetes).toBeDefined();
@@ -132,9 +144,11 @@ describe('migrateRequiredOwnerAdditions', () => {
       automata: readFileSync(fixture.automataPath, 'utf8'),
       partnerAffect: readFileSync(fixture.partnerAffectPath, 'utf8'),
       models: readFileSync(fixture.modelsPath, 'utf8'),
+      channels: readFileSync(channelsPath, 'utf8'),
     };
     expect(migrateRequiredOwnerAdditions({ ...options, apply: true })).toMatchObject({
       mode: 'apply',
+      channels: { status: 'not_needed' },
       settings: { status: 'not_needed' },
       intakePolicy: { status: 'not_needed' },
       automataPolicy: { status: 'not_needed' },
@@ -146,6 +160,7 @@ describe('migrateRequiredOwnerAdditions', () => {
     expect(readFileSync(fixture.automataPath, 'utf8')).toBe(settledBytes.automata);
     expect(readFileSync(fixture.partnerAffectPath, 'utf8')).toBe(settledBytes.partnerAffect);
     expect(readFileSync(fixture.modelsPath, 'utf8')).toBe(settledBytes.models);
+    expect(readFileSync(channelsPath, 'utf8')).toBe(settledBytes.channels);
   });
 
   it('repairs mode-only drift on already current owners', () => {

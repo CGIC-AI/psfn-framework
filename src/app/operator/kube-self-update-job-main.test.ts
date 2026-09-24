@@ -33,6 +33,7 @@ function validEnv(overrides: Record<string, string | undefined> = {}): NodeJS.Pr
     PSFN_CHAT_COMPLETIONS_URL: 'http://gateway:8081/v1/chat/completions',
     PSFN_CONFORMANCE_EXEC_CMD: '["node","dist/tool-conformance.js","--json"]',
     PSFN_DIAGNOSTICS_EXEC_CMD: '["node","dist/diagnostics.js","--json"]',
+    PSFN_IMPORT_IMAGE_CMD: 'k3d image import "$PSFN_IMPORT_TO"',
     ...overrides,
   };
 }
@@ -61,6 +62,30 @@ describe('resolveKubeSelfUpdateJobEnvConfig (fail-closed operator config)', () =
       .toThrow(/PSFN_CONFORMANCE_EXEC_CMD/);
     expect(() => resolveKubeSelfUpdateJobEnvConfig(validEnv({ PSFN_DIAGNOSTICS_EXEC_CMD: '{}' })))
       .toThrow(/JSON array/);
+  });
+
+  it('requires PSFN_IMPORT_IMAGE_CMD only for a registry-less localhost/ image', () => {
+    expect(() => resolveKubeSelfUpdateJobEnvConfig(validEnv({ PSFN_IMPORT_IMAGE_CMD: undefined })))
+      .toThrow(/PSFN_IMPORT_IMAGE_CMD/);
+    const registry = resolveKubeSelfUpdateJobEnvConfig(validEnv({
+      PSFN_KUBE_TARGET_IMAGE: 'localhost:19500/psfn-framework:0.1.0-kube-abcd1234',
+      PSFN_IMPORT_IMAGE_CMD: undefined,
+    }));
+    expect(registry.imageDelivery).toBe('registry-push');
+    expect(registry.importImageCommand).toBeUndefined();
+    expect(registry.plan).toMatchObject({
+      imageRepository: 'localhost:19500/psfn-framework',
+      imageTag: '0.1.0-kube-abcd1234',
+    });
+  });
+
+  it('rejects a containerd import command for a registry target and off-host registries', () => {
+    expect(() => resolveKubeSelfUpdateJobEnvConfig(validEnv({
+      PSFN_KUBE_TARGET_IMAGE: 'localhost:19500/psfn-framework:0.1.0-kube-abcd1234',
+    }))).toThrow(/unset PSFN_IMPORT_IMAGE_CMD/);
+    expect(() => resolveKubeSelfUpdateJobEnvConfig(validEnv({
+      PSFN_KUBE_TARGET_IMAGE: 'registry.example.com/psfn-framework:0.1.0-kube-abcd1234',
+    }))).toThrow(/loopback registry/);
   });
 
   it('resolves a complete, valid environment into a deploy plan', () => {

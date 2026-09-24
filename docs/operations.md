@@ -419,9 +419,28 @@ resource prefix, a 40-character `PSFN_GIT_COMMIT`, a pinned
 model route / chat completions URLs, the expected model id, the
 `PSFN_CONFORMANCE_EXEC_CMD` and `PSFN_DIAGNOSTICS_EXEC_CMD` JSON arrays, and
 optional `PSFN_HELM_GLOBAL_ARGS`/`PSFN_KUBECTL_GLOBAL_ARGS`.
-`PSFN_AUTO_ROLLBACK_ENABLED` defaults to true; `PSFN_IMPORT_IMAGE_CMD` and
-`PSFN_VERIFY_BACKUP_CMD` are required at run time and are executed through the
-injected command runner.
+`PSFN_AUTO_ROLLBACK_ENABLED` defaults to true; `PSFN_VERIFY_BACKUP_CMD` is
+required at run time and is executed through the injected command runner.
+
+The target image reference also selects how the built image reaches the node
+(`src/system/lifecycle/kube-image-delivery.ts`):
+
+- A loopback-registry reference (`localhost:<port>/<name>:<tag>` or
+  `127.0.0.1:<port>/<name>:<tag>`) is delivered by `docker push`. The job then
+  proves through the registry API (`http://127.0.0.1:<port>/v2/`) that the tag
+  serves exactly the manifest digest Docker recorded for the push and that the
+  manifest's config digest is the local image ID; any mismatch fails the
+  `import` stage before Helm runs. This is the production path: kubelet image
+  GC can delete an unused image at any time, and only a registry image can be
+  pulled again. `PSFN_IMPORT_IMAGE_CMD` must be unset for these references.
+- A registry-less `localhost/<name>:<tag>` reference (local k3d/k3s test
+  clusters) is imported into containerd by the operator-supplied
+  `PSFN_IMPORT_IMAGE_CMD`, which receives `PSFN_IMPORT_FROM`
+  (`docker.io/library/<name>:<tag>`), `PSFN_IMPORT_TO`, and
+  `PSFN_IMPORT_REFERENCE`. It is required for these references. Imported images
+  exist only in containerd and are exposed to image GC.
+- Any other reference (an off-host registry, a digest reference, a floating
+  tag) is rejected while the configuration is resolved.
 
 ```mermaid
 flowchart TD
@@ -430,7 +449,7 @@ flowchart TD
   PRE["preconditions: clean tree at sourceCommit + verified restorable backup"]
   ARC["archive source + sha256"]
   GATE["quality gates"]
-  BUILD["docker build + import via PSFN_IMPORT_IMAGE_CMD"]
+  BUILD["docker build + deliver: registry push with digest verification, or PSFN_IMPORT_IMAGE_CMD for localhost/ test images"]
   K3D["k3d validation"]
   HELM["helm upgrade: the only live mutation"]
   VERDICT["post-rollout gate writes bound verdict release + helmRevision + sourceCommit"]

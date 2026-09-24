@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   createKubeDeployPipelineExecutor,
-  deriveLocalImportRetag,
   DeployPipelineError,
   redactLiveHelmValues,
   runKubeDeployPipeline,
@@ -287,6 +286,14 @@ describe('runKubeDeployPipeline', () => {
     )).rejects.toThrow('must be DNS labels');
   });
 
+  it('rejects an image no delivery path supports before any runner call', async () => {
+    const { runner, calls } = fakeRunner();
+    await expect(runKubeDeployPipeline(
+      basePlan({ imageRepository: 'registry.example.com/psfn-framework' }), { runner },
+    )).rejects.toThrow('loopback registry');
+    expect(calls).toEqual([]);
+  });
+
   it('rejects an invalid archive checksum from the runner', async () => {
     const { runner } = fakeRunner({ archiveSource: async () => ({ sha256: 'nope' }) });
     const error = await runKubeDeployPipeline(basePlan(), { runner }).catch(caught => caught);
@@ -380,21 +387,6 @@ describe('redactLiveHelmValues', () => {
     // Non-secret values are preserved.
     expect((redacted as { postgres: { auth: { username: string } } }).postgres.auth.username)
       .toBe('psfn');
-  });
-});
-
-describe('deriveLocalImportRetag', () => {
-  it('maps the containerd import name to the localhost runtime tag', () => {
-    expect(deriveLocalImportRetag('localhost/psfn-framework:0.1.0-kube-aaaaaaaa')).toEqual({
-      from: 'docker.io/library/psfn-framework:0.1.0-kube-aaaaaaaa',
-      to: 'localhost/psfn-framework:0.1.0-kube-aaaaaaaa',
-    });
-  });
-
-  it('rejects floating tags and non-localhost references', () => {
-    expect(() => deriveLocalImportRetag('localhost/psfn-framework:latest')).toThrow('pinned');
-    expect(() => deriveLocalImportRetag('docker.io/library/psfn-framework:1.0'))
-      .toThrow('localhost/-scoped');
   });
 });
 

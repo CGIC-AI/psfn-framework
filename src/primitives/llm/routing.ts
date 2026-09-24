@@ -15,7 +15,7 @@ import type { SubstrateConfig } from '../../system/config/runtime-config-contrac
 import { toFlooredPositiveInteger } from '../../shared/utils/numeric.js';
 import { resolveCompletionTokenBudget } from './completion-budget.js';
 
-export type RoutingPurpose = CanonicalModelPurpose | 'context';
+export type RoutingPurpose = CanonicalModelPurpose | 'context' | 'decision';
 
 /**
  * Canonical CompletionPurpose → RoutingPurpose mapping for non-streamed
@@ -49,7 +49,7 @@ export function toCompletionRoutingPurpose(purpose: CompletionPurpose): RoutingP
   if (purpose === 'vision') {
     return 'vision';
   }
-  return 'background';
+  return purpose === 'decision' ? 'decision' : 'background';
 }
 
 /**
@@ -518,7 +518,7 @@ function resolveCanonicalPurposeChain(purpose: RoutingPurpose): CanonicalModelPu
   if (purpose === 'context') {
     return ['longContext', 'background', 'chat'];
   }
-  return [purpose];
+  return purpose === 'decision' ? ['background', 'chat'] : [purpose];
 }
 
 function capabilityWeightsForPurpose(

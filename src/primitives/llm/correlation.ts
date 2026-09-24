@@ -42,6 +42,7 @@ export function inferCallType(
     case 'summary':
       return 'summary';
     case 'context':
+    case 'decision':
     case 'background':
     case 'import_processing':
     case 'vision':

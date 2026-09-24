@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { CanonicalModelPurpose, CanonicalModelRegistry, ModelRegistryEntry } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import { evaluateImportPolicy, resolveGlobalPromptCachePolicy, resolveRoutingCandidates } from './routing.js';
+import {
+  evaluateImportPolicy,
+  resolveGlobalPromptCachePolicy,
+  resolveRoutingCandidates,
+  toCompletionRoutingPurpose,
+} from './routing.js';
 
 interface RegistryModelInput {
   id: string;
@@ -602,6 +607,21 @@ describe('resolveRoutingCandidates(context legacy alias)', () => {
       'background/model',
       'chat/model',
     ]);
+  });
+});
+
+describe('resolveRoutingCandidates(decision)', () => {
+  it('routes the decision purpose through the background lane first and then chat', () => {
+    const candidates = resolveRoutingCandidates(makeConfig({ modelRegistry: makeBaseRegistry() }), 'decision');
+
+    expect(candidates.map(candidate => candidate.model)).toEqual([
+      'background/model',
+      'chat/model',
+    ]);
+  });
+
+  it('maps a decision completion onto its own routing purpose', () => {
+    expect(toCompletionRoutingPurpose('decision')).toBe('decision');
   });
 });
 

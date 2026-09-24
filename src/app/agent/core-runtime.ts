@@ -1,4 +1,6 @@
 import type { CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import type { DecisionRuntime } from '../../primitives/llm/decision/decide.js';
+import { buildAgentDecisionRuntime } from './decision/decision-runtime.js';
 import type { PlacesRegistryConfig } from '../../shared/contracts/places-registry.js';
 import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
 import type { EventBus } from '../../shared/event-bus.js';
@@ -343,6 +345,8 @@ export interface AgentCoreRuntime {
   appCache: AppCache;
   /** Redis-backed hot session tail; null unless settings.json enables it (psfn-framework-hgw3.5). */
   sessionTailCache: SessionTailCachePort | null;
+  /** Typed decision primitive shared by every decision site (epic 4lf3r). */
+  decisionRuntime: DecisionRuntime;
   fatigueBudget: FatigueBudgetComposition['fatigueBudget'];
   fatigueLedger: FatigueBudgetComposition['fatigueLedger'];
   humanAttentionLedger: FatigueBudgetComposition['humanAttentionLedger'];
@@ -438,6 +442,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   });
   const appCache = await createAppCacheFromEnv();
   const llmProvider = createLLMProviderPort(gateway);
+  const decisionRuntime = buildAgentDecisionRuntime({ llmProvider });
   const automataBus = options.automataRuntime
     ? (() => {
         const companionId = resolveCompanionIdFromConfig(config);
@@ -1307,6 +1312,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     worldNotes: wikiRuntime.worldNotes,
     appCache,
     sessionTailCache: sessionComposition.sessionTailCache,
+    decisionRuntime,
     fatigueBudget: fatigueRuntime.fatigueBudget,
     fatigueLedger: fatigueRuntime.fatigueLedger,
     humanAttentionLedger: fatigueRuntime.humanAttentionLedger,

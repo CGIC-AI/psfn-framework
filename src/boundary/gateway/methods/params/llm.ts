@@ -142,7 +142,7 @@ export const llmMethodParamDecoders = {
     ...llmCommon,
     purpose: enumSchema([
       'chat', 'background', 'memory', 'context', 'extraction', 'summary', 'reasoning',
-      'import_processing', 'vision',
+      'import_processing', 'vision', 'decision',
     ]),
   })),
   'llm.embed': gatewayDecoder('llm.embed', correlatedParams({

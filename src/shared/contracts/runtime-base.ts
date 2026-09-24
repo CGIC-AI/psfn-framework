@@ -1651,6 +1651,10 @@ export const COMPLETION_PURPOSES = [
   'reasoning',
   'import_processing',
   'vision',
+  // Typed decision calls (epic 4lf3r). Not a canonical registry purpose: it
+  // routes the background lane first, then chat, so existing models.json files
+  // need no new primary tag.
+  'decision',
 ] as const;
 export type CompletionPurpose = typeof COMPLETION_PURPOSES[number];
 

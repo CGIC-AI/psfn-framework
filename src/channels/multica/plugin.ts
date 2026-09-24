@@ -144,7 +144,11 @@ function createMulticaPluginInstance(
   if (!token) {
     throw new Error('Enabled Multica channel is missing resolved credential "token"');
   }
-  const runtimeLease = injectedLease ?? createGatewayMulticaRuntimeLease(input.context.postgresDatabaseUrl);
+  const runtimeLease = injectedLease ?? createGatewayMulticaRuntimeLease(
+    input.context.postgresDatabaseUrl,
+    input.context.postgresSchema,
+    input.context.postgresRole,
+  );
   const adapter = new MulticaAdapter({
     enabled: input.config.enabled,
     baseUrl: input.config.baseUrl,
@@ -165,7 +169,11 @@ function createMulticaPluginInstance(
   };
 }
 
-function createGatewayMulticaRuntimeLease(postgresDatabaseUrl: string | undefined): MulticaRuntimeLease {
+function createGatewayMulticaRuntimeLease(
+  postgresDatabaseUrl: string | undefined,
+  postgresSchema: string | undefined,
+  postgresRole: string | undefined,
+): MulticaRuntimeLease {
   const databaseUrl = postgresDatabaseUrl?.trim();
   if (!databaseUrl) {
     throw new Error('Enabled Multica channel requires config.postgresDatabaseUrl for runtime ownership');
@@ -174,6 +182,8 @@ function createGatewayMulticaRuntimeLease(postgresDatabaseUrl: string | undefine
     applicationName: 'psfn-multica-runtime-lease',
     connectionTimeoutMillis: 5_000,
     max: 1,
+    ...(postgresSchema?.trim() ? { schema: postgresSchema.trim() } : {}),
+    ...(postgresRole?.trim() ? { role: postgresRole.trim() } : {}),
   }));
 }
 

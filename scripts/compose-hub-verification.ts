@@ -6,8 +6,12 @@
 //   * the gateway ADMITS the hub's satellite claim on the companion relay, and
 //     REJECTS a claim that is not in satellites.json (the positive alone would
 //     also pass against a vacuous registry);
-//   * the hub completes the websocket handshake with session.ready and answers
-//     a companion-ui-serialized ping with pong;
+//   * the hub enforces its device registry: a hello without the enrolled
+//     device credential is refused (psfn-framework-gdv64);
+//   * a session that authenticates as the enrolled smoke device with
+//     companion-ui's own hello capabilities completes the handshake with
+//     session.ready, is granted the `emotion` output, and answers a
+//     companion-ui-serialized ping with pong;
 //   * companion-ui's own protocol decoder accepts the hub's pong, and whether it
 //     accepts the hub's session.ready;
 //   * (openEmotionRelaySession + judgeRelayedEmotionSnapshot, driven by
@@ -35,8 +39,19 @@ export interface HubVerificationCheck {
   detail: string;
 }
 
+/**
+ * The enrolled smoke device (docker/docker-compose.smoke.yml hub-device
+ * volume, scripts/ops/psfn-compose-smoke-hub-device.mjs). The credential is
+ * generated per run by smoke:docker; only its digest is enrolled.
+ */
+export interface HubDeviceCredential {
+  deviceId: string;
+  credential: string;
+}
+
 export interface HubVerificationOptions {
   hubBase: string;
+  hubDevice: HubDeviceCredential;
   hubWsUrl: string;
   companionUiBase: string;
   gatewayApiBase: string;
@@ -107,12 +122,27 @@ export interface HubSession {
 }
 
 /**
- * Open a hub websocket the way companion-ui does (no hello: the text-only hub
- * admits it without a device credential) and wait for the unsolicited
- * session.ready. Every later frame is buffered, so a frame that arrives before
- * the caller starts waiting for it is not lost.
+ * companion-ui's own hello (buildSatelliteHello, validated by companion-ui's
+ * strict codec) plus the device authentication a registry Hub requires. The
+ * browser codec deliberately cannot carry device authority, so the credential
+ * envelope is added after companion-ui has serialized its hello.
  */
-export async function openHubSession(wsUrl: string, timeoutMs: number): Promise<HubSession> {
+export function buildEnrolledDeviceHello(device: HubDeviceCredential): string {
+  const hello = JSON.parse(serializeClientToHubMessage(buildSatelliteHello())) as Record<string, unknown>;
+  return JSON.stringify({ ...hello, deviceId: device.deviceId, credential: device.credential });
+}
+
+/**
+ * Open a hub websocket, authenticate as the enrolled device with companion-ui's
+ * hello capabilities, and wait for the post-authentication session.ready and
+ * hello.ack. Every frame is buffered, so a frame that arrives before the caller
+ * starts waiting for it is not lost.
+ */
+export async function openHubSession(
+  wsUrl: string,
+  timeoutMs: number,
+  device: HubDeviceCredential,
+): Promise<HubSession & { helloAck: unknown }> {
   const socket = new WebSocket(wsUrl);
   const frames: unknown[] = [];
   const waiters = new Set<(frame: unknown) => void>();
@@ -152,9 +182,12 @@ export async function openHubSession(wsUrl: string, timeoutMs: number): Promise<
         rejectPromise(new Error(`hub websocket ${wsUrl} failed to connect`));
       }, { once: true });
     });
+    socket.send(buildEnrolledDeviceHello(device));
     const sessionReady = await waitForFrame('session.ready', timeoutMs);
+    const helloAck = await waitForFrame('hello.ack', timeoutMs);
     return {
       sessionReady,
+      helloAck,
       send: frame => socket.send(frame),
       waitForFrame,
       close: () => socket.close(),
@@ -172,38 +205,78 @@ export async function openHubSession(wsUrl: string, timeoutMs: number): Promise<
 export async function collectHubHandshake(
   wsUrl: string,
   timeoutMs: number,
-): Promise<{ sessionReady: unknown; pong: unknown }> {
-  const session = await openHubSession(wsUrl, timeoutMs);
+  device: HubDeviceCredential,
+): Promise<{ sessionReady: unknown; helloAck: unknown; pong: unknown }> {
+  const session = await openHubSession(wsUrl, timeoutMs, device);
   try {
     // Serialized by companion-ui's own encoder, so the outbound half of the
     // exchange is the real client codec rather than a hand-rolled frame.
     session.send(serializeClientToHubMessage({ type: 'ping', sentAt: Date.now() }));
     const pong = await session.waitForFrame('pong', timeoutMs);
-    return { sessionReady: session.sessionReady, pong };
+    return { sessionReady: session.sessionReady, helloAck: session.helloAck, pong };
   } finally {
     session.close();
   }
 }
 
 /**
- * Open a hub satellite session with companion-ui's own hello
- * (buildSatelliteHello, serialized by companion-ui's codec), which advertises
- * the `emotion` output, and wait for hello.ack. The hub forwards a companion
- * relay event only for outputs the session advertised AND its device ceiling
- * grants: a registry-less hub clamps every hello to the presentation-only
- * realtime ceiling (no `emotion`), so the relay payload arrives only on a hub
- * whose enrolled device grants `emotion` (see the returned hello.ack).
+ * The relay-proof session: authenticated as the enrolled device with
+ * companion-ui's own hello, which advertises the `emotion` output. The hub
+ * forwards a companion relay event only for outputs the session advertised AND
+ * its device enrollment grants; a registry-less hub would clamp `emotion` away.
  */
-export async function openEmotionRelaySession(wsUrl: string, timeoutMs: number): Promise<HubSession> {
-  const session = await openHubSession(wsUrl, timeoutMs);
-  try {
-    session.send(serializeClientToHubMessage(buildSatelliteHello()));
-    await session.waitForFrame('hello.ack', timeoutMs);
-    return session;
-  } catch (error) {
+export async function openEmotionRelaySession(
+  wsUrl: string,
+  timeoutMs: number,
+  device: HubDeviceCredential,
+): Promise<HubSession> {
+  const session = await openHubSession(wsUrl, timeoutMs, device);
+  if (!grantsOutput(session.helloAck, 'emotion')) {
     session.close();
-    throw error;
+    throw new Error(`hub hello.ack did not grant the emotion output: ${JSON.stringify(session.helloAck)?.slice(0, 200)}`);
   }
+  return session;
+}
+
+/** Whether a hello.ack grants the given output capability. */
+export function grantsOutput(helloAck: unknown, output: string): boolean {
+  if (!isRecord(helloAck) || !isRecord(helloAck.capabilities)) return false;
+  const outputs = helloAck.capabilities.output;
+  return Array.isArray(outputs) && outputs.includes(output);
+}
+
+/**
+ * Send companion-ui's hello WITHOUT the device credential and report how the
+ * hub answered: a registry hub must refuse it (error-event, then close), which
+ * is what makes the enrolled grant meaningful.
+ */
+export async function probeUnauthenticatedHello(
+  wsUrl: string,
+  timeoutMs: number,
+): Promise<{ refused: boolean; detail: string }> {
+  const socket = new WebSocket(wsUrl);
+  const frames: unknown[] = [];
+  socket.addEventListener('message', (event: MessageEvent) => {
+    frames.push(JSON.parse(String(event.data)));
+  });
+  const closed = new Promise<{ code: number; reason: string }>((resolvePromise) => {
+    socket.addEventListener('close', event => resolvePromise({ code: event.code, reason: event.reason }), { once: true });
+  });
+  const timeout = new Promise<null>(resolvePromise => setTimeout(() => resolvePromise(null), timeoutMs));
+  socket.addEventListener('open', () => {
+    socket.send(serializeClientToHubMessage(buildSatelliteHello()));
+  }, { once: true });
+  const outcome = await Promise.race([closed, timeout]);
+  socket.close();
+  const types = frames.map(frame => (isRecord(frame) ? String(frame.type) : typeof frame));
+  if (!outcome) {
+    return { refused: false, detail: `socket stayed open (received: ${types.join(', ') || 'nothing'})` };
+  }
+  const granted = types.includes('hello.ack') || types.includes('session.ready');
+  return {
+    refused: !granted && outcome.code === 1008,
+    detail: `close ${outcome.code} ${outcome.reason} (received: ${types.join(', ') || 'nothing'})`,
+  };
 }
 
 /**
@@ -281,7 +354,14 @@ export async function verifyComposeHub(
     `HTTP ${unregistered.status} ${unregisteredBody.replace(/\s+/gu, ' ').slice(0, 120)}`,
   );
 
-  const handshake = await collectHubHandshake(options.hubWsUrl, options.timeoutMs);
+  const unauthenticated = await probeUnauthenticatedHello(options.hubWsUrl, options.timeoutMs);
+  record(
+    'hub refuses a hello without the enrolled device credential (device registry enforced)',
+    unauthenticated.refused,
+    unauthenticated.detail,
+  );
+
+  const handshake = await collectHubHandshake(options.hubWsUrl, options.timeoutMs, options.hubDevice);
   let sessionReadyOk = true;
   try {
     assertHubSessionReady(handshake.sessionReady);
@@ -297,6 +377,12 @@ export async function verifyComposeHub(
       `sessionId=${String(frame.sessionId)} audioFormat=${String(frame.audioFormat)}`,
     );
   }
+
+  record(
+    'hub grants the enrolled device companion-ui\'s emotion output (hello.ack)',
+    grantsOutput(handshake.helloAck, 'emotion'),
+    JSON.stringify(isRecord(handshake.helloAck) ? handshake.helloAck.capabilities : handshake.helloAck)?.slice(0, 200) ?? '',
+  );
 
   record(
     'hub answers a client ping with pong',

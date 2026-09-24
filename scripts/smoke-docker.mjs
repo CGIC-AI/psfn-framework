@@ -38,7 +38,7 @@
 // protocol codec so the handshake is decoded by the real client, not a copy.
 
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
@@ -50,6 +50,7 @@ import {
   verifyComposeHub,
 } from './compose-hub-verification.ts';
 import { stageSmokeBuildContext } from './ops/psfn-compose-smoke-context.mjs';
+import { SMOKE_HUB_DEVICE_ID } from './ops/psfn-compose-smoke-hub-device.mjs';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, '..');
@@ -71,6 +72,22 @@ const GARDEN_PORT = process.env.PSFN_SMOKE_GARDEN_PORT || '18053';
 const SATELLITE_API_KEY = process.env.PSFN_SMOKE_SATELLITE_API_KEY
   || 'psfn-smoke-satellite-key-please-rotate';
 const HUB_VERIFY_TIMEOUT_MS = 20_000;
+const HUB_DEVICE_CREDENTIAL_BYTES = 32;
+
+/**
+ * The enrolled Hub device credential (psfn-framework-gdv64). `up` generates a
+ * fresh one per run and hands it to the seed through the compose environment;
+ * the seed enrolls only its SHA-256. `--no-up` must be given the credential the
+ * running stack was seeded with.
+ */
+function resolveHubDevice(up) {
+  if (up) {
+    process.env.PSFN_SMOKE_HUB_DEVICE_CREDENTIAL = randomBytes(HUB_DEVICE_CREDENTIAL_BYTES).toString('hex');
+  } else if (!process.env.PSFN_SMOKE_HUB_DEVICE_CREDENTIAL) {
+    throw new Error('--no-up requires PSFN_SMOKE_HUB_DEVICE_CREDENTIAL (the credential the running stack was seeded with)');
+  }
+  return { deviceId: SMOKE_HUB_DEVICE_ID, credential: process.env.PSFN_SMOKE_HUB_DEVICE_CREDENTIAL };
+}
 
 function log(msg) {
   console.log(`[smoke:docker] ${msg}`);
@@ -217,6 +234,7 @@ async function main() {
   let exitCode = 1;
 
   try {
+    const hubDevice = resolveHubDevice(opts.up);
     if (opts.up) {
       // Build and bind-mount from a mode-normalized copy of the working tree so
       // a checkout written under a restrictive umask (e.g. 0027) still yields
@@ -277,6 +295,7 @@ async function main() {
     try {
       const hubResult = await verifyComposeHub({
         hubBase: `http://127.0.0.1:${HUB_PORT}`,
+        hubDevice,
         hubWsUrl: `ws://127.0.0.1:${HUB_PORT}/`,
         companionUiBase: `http://127.0.0.1:${COMPANION_UI_PORT}`,
         gatewayApiBase: `${API_BASE}/v1`,
@@ -307,7 +326,7 @@ async function main() {
     // emotion output, decoded with companion-ui's codec.
     let relaySession;
     try {
-      relaySession = await openEmotionRelaySession(`ws://127.0.0.1:${HUB_PORT}/`, HUB_VERIFY_TIMEOUT_MS);
+      relaySession = await openEmotionRelaySession(`ws://127.0.0.1:${HUB_PORT}/`, HUB_VERIFY_TIMEOUT_MS, hubDevice);
     } catch (err) {
       fail(`could not open a hub websocket session for the relay proof: ${err instanceof Error ? err.message : String(err)}`);
       return 1;

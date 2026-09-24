@@ -56,6 +56,9 @@ interface ExternalMemoryServiceOptions {
   quarantine: MemorySessionQuarantineFilter;
   actions: PostTurnActionRuntime;
   retryDelayMs: number;
+  /** How long a completed receipt is kept as the event-id idempotency record (cin6q). */
+  completedReceiptRetentionMs: number;
+  now?: () => number;
   searchLimit: number;
   goals: () => string;
   extract: (input: {
@@ -300,6 +303,9 @@ export class ExternalMemoryService {
 
   /** Replay durable intents after restart, including the append-before-receipt crash window. */
   async recover(): Promise<void> {
+    const now = this.options.now?.() ?? Date.now();
+    const pruned = this.options.intakeStore.pruneCompleted(now - this.options.completedReceiptRetentionMs);
+    if (pruned > 0) log.info('Pruned completed external memory intake receipts', { pruned });
     for (const record of this.options.intakeStore.pending()) {
       await this.serialized(this.options.intakeStore.channelId(record), async () => {
         if (record.binding.companionId !== this.options.companionId) {

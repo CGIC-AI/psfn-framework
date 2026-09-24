@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fromAny } from '@total-typescript/shoehorn';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { PostTurnActionHandler } from '../../../core/agent/post-turn-action-runtime.js';
@@ -25,7 +25,8 @@ function fixture() {
   const directory = mkdtempSync(join(tmpdir(), 'psfn-external-memory-'));
   directories.push(directory);
   const sessions = new SessionStore(join(directory, 'sessions'));
-  const store = new ExternalMemoryIntakeStore(join(directory, 'intake'));
+  const storeDirectory = join(directory, 'intake');
+  const store = new ExternalMemoryIntakeStore(storeDirectory);
   const queued: InferredPostTurnAction[] = [];
   let handler: PostTurnActionHandler;
   let persisted = true;
@@ -50,7 +51,7 @@ function fixture() {
   const options = { companionId: binding.companionId, companionName: 'Lyra', intakeStore: store,
     sessions, contacts: { getById }, memoryStore: { queryAuthorizedMemorySubjects: query },
     memoryProvider: { retrieve }, writer: { write }, screening: { screen }, quarantine,
-    actions, retryDelayMs: 100, searchLimit: 5, goals: () => 'Finish the garden project', extract };
+    actions, retryDelayMs: 100, completedReceiptRetentionMs: 60_000, searchLimit: 5, goals: () => 'Finish the garden project', extract };
   const makeService = () => new ExternalMemoryService(fromAny(options));
   const service = makeService();
   const input = (eventId = 'event-one', sessionId = 'session-one'): ExternalMemoryExecuteParams => ({
@@ -59,7 +60,7 @@ function fixture() {
       occurredAt: Date.now() - 1000 },
   });
   const run = (index = 0) => handler!(queued[index]!);
-  return { service, makeService, input, run, sessions, store, queued, screen, extract,
+  return { service, makeService, input, run, sessions, store, storeDirectory, queued, screen, extract,
     write, getById, query, retrieve, quarantine, actions, setPersistence: (value: boolean) => { persisted = value; } };
 }
 
@@ -227,5 +228,49 @@ describe('external companion memory service', () => {
       provenance: expect.objectContaining({ actor: 'companion', companionId: binding.companionId,
         sessionId: externalMemorySessionId(binding, 'session'), toolName: 'psfn_memory_remember' }) }));
     expect(h.sessions.listChannels()).toEqual([]);
+  });
+
+  it('ages out completed receipts at recovery and keeps pending ones (cin6q)', async () => {
+    const h = fixture();
+    const done = await h.service.execute(h.input('event-done'));
+    await h.run(0);
+    const pending = await h.service.execute(h.input('event-pending'));
+    if (!('receipt' in done) || !('receipt' in pending)) throw new Error('expected receipts');
+    const doneFile = join(h.storeDirectory, `${done.receipt.receiptId}.json`);
+    const aged = new Date(Date.now() - 120_000);
+    utimesSync(doneFile, aged, aged);
+
+    await h.makeService().recover();
+
+    expect(existsSync(doneFile)).toBe(false);
+    expect([...h.store.pending()].map(record => record.receiptId)).toEqual([pending.receipt.receiptId]);
+  });
+
+  it('keeps a recently completed receipt as the event-id idempotency record (cin6q)', async () => {
+    const h = fixture();
+    const request = h.input('event-recent');
+    const done = await h.service.execute(request);
+    await h.run(0);
+    await h.makeService().recover();
+    if (!('receipt' in done)) throw new Error('expected receipt');
+    expect(h.store.read(done.receipt.receiptId)?.completed).toBe(true);
+    // A replay of the same event is recognized, not re-ingested.
+    await expect(h.service.execute(request)).resolves.toMatchObject({ receipt: { status: 'accepted' } });
+    expect(h.extract).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips a corrupt receipt during recovery while the others still recover (cin6q)', async () => {
+    const h = fixture();
+    const good = await h.service.execute(h.input('event-good'));
+    if (!('receipt' in good)) throw new Error('expected receipt');
+    const corruptId = 'f'.repeat(64);
+    writeFileSync(join(h.storeDirectory, `${corruptId}.json`), '{"schemaVersion":1,"truncat');
+    writeFileSync(join(h.storeDirectory, `${'e'.repeat(64)}.json`), JSON.stringify({ schemaVersion: 1 }));
+
+    expect([...h.store.pending()].map(record => record.receiptId)).toEqual([good.receipt.receiptId]);
+    await expect(h.makeService().recover()).resolves.toBeUndefined();
+    // The corrupt file is left for inspection, never deleted by pruning.
+    expect(h.store.pruneCompleted(Date.now() + 1)).toBe(0);
+    expect(existsSync(join(h.storeDirectory, `${corruptId}.json`))).toBe(true);
   });
 });

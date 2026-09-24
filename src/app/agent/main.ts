@@ -1524,6 +1524,8 @@ async function main(): Promise<void> {
     quarantine: episodeSessionQuarantineFilter,
     actions: postTurnActions,
     retryDelayMs: schedulerConfig.backgroundWork.supervisor.retryBaseDelayMs,
+    // Completed receipts follow the durable background-work terminal retention.
+    completedReceiptRetentionMs: schedulerConfig.backgroundWork.supervisor.terminalRetentionMs,
     searchLimit: resolveMemoryRetrievalPolicy(config.memoryRetrievalPolicy).lexicalAugment.selectedLimit,
     goals: () => new NorthStarStore(resolveNorthStarPath(pathSnapshot.companionDataDir)).buildPromptLayer()?.content ?? '',
     extract: input => memoryExtractor.extractExternalConversation(input),

@@ -1458,7 +1458,9 @@ export class MemoryRetriever implements MemoryProvider {
           ...(this.runtimeConfig?.companionId ? { companionId: this.runtimeConfig.companionId } : {}),
         }
         : null;
+      // Synchronous site check first: with the site off, no extra await is taken.
       const scoringRetrievalMode = decisionContext
+        && decisionContext.decisions.siteSettings('memory.query_intent')?.enabled === true
         ? await resolveQueryIntentRetrievalMode({ ...decisionContext, current: effectiveRetrievalMode })
         : effectiveRetrievalMode;
       const allScored = policyAllowed
@@ -1485,6 +1487,7 @@ export class MemoryRetriever implements MemoryProvider {
       });
       const lexicallyRanked = rerankDecision.ranked ?? allScored;
       const decisionRanked = decisionContext
+        && decisionContext.decisions.siteSettings('memory.rerank')?.enabled === true
         ? await applyDecisionRelevanceRerank({ ...decisionContext, candidates: lexicallyRanked })
         : null;
       const scoredCandidates = await applySocialContextRankingAdjustments(

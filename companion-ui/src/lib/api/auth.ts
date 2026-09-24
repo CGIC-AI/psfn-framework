@@ -21,7 +21,9 @@ export interface SatelliteHelloOptions {
  */
 export const MOBILE_CHAT_APP_CAPABILITIES: Required<SatelliteCapabilities> = {
   input: ['text', 'device_location'],
-  output: ['text', 'subtitle', 'artifact', 'tool_activity'],
+  // The hub relays emotion.snapshot only to sessions that advertised
+  // `emotion` (and whose device ceiling grants it); the avatar renders it.
+  output: ['text', 'subtitle', 'artifact', 'tool_activity', 'emotion'],
   control: ['interrupt', 'presence', 'session_attach', 'approvals', 'touch'],
   safety: ['confirmation_required', 'local_only'],
 };

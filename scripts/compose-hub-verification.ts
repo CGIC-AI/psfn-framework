@@ -20,6 +20,7 @@
 // session.ready frame have diverged.
 
 import { parseHubToClientMessage, serializeClientToHubMessage } from '../companion-ui/src/lib/protocol/framing.js';
+import { buildSatelliteHello } from '../companion-ui/src/lib/api/auth.js';
 import { isRecord } from '../src/shared/utils/types.js';
 
 /** Keys companion-ui's strict session.ready validator accepts. */
@@ -185,23 +186,18 @@ export async function collectHubHandshake(
 }
 
 /**
- * Open a hub satellite session that advertises the `emotion` output, using the
- * hub's own hello contract (a device id and name, no credential: the
- * text-only hub runs without a device registry), and wait for hello.ack. The
- * hub forwards a companion relay event to a session only for outputs that
- * session advertised. companion-ui cannot be that session: its capability
- * vocabulary has no `emotion` output, so its serializer rejects such a hello
- * even though its decoder accepts emotion.snapshot frames.
+ * Open a hub satellite session with companion-ui's own hello
+ * (buildSatelliteHello, serialized by companion-ui's codec), which advertises
+ * the `emotion` output, and wait for hello.ack. The hub forwards a companion
+ * relay event only for outputs the session advertised AND its device ceiling
+ * grants: a registry-less hub clamps every hello to the presentation-only
+ * realtime ceiling (no `emotion`), so the relay payload arrives only on a hub
+ * whose enrolled device grants `emotion` (see the returned hello.ack).
  */
 export async function openEmotionRelaySession(wsUrl: string, timeoutMs: number): Promise<HubSession> {
   const session = await openHubSession(wsUrl, timeoutMs);
   try {
-    session.send(JSON.stringify({
-      type: 'hello',
-      deviceId: 'smoke-relay-probe',
-      deviceName: 'Compose smoke relay probe',
-      capabilities: { input: ['text'], output: ['text', 'emotion'] },
-    }));
+    session.send(serializeClientToHubMessage(buildSatelliteHello()));
     await session.waitForFrame('hello.ack', timeoutMs);
     return session;
   } catch (error) {

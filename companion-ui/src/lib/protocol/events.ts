@@ -487,7 +487,8 @@ export type SatelliteOutputCapability =
   | 'gaze'
   | 'servo'
   | 'artifact'
-  | 'tool_activity';
+  | 'tool_activity'
+  | 'emotion';
 
 export type SatelliteControlCapability =
   | 'interrupt'

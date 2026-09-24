@@ -509,8 +509,6 @@
   "webFetchAllowHttp": false,
   "webFetchAllowInternalNetwork": false,
   "homeAssistantEnabled": false,
-  "webFetchLocalCrawlerEnabled": false,
-  "webFetchLocalCrawlerAllowHttp": false,
   "discordTriggerReactions": "👆",
   "discordTriggerListenWindowMs": 120000,
   "telegramEnabled": false,

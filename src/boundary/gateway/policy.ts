@@ -142,7 +142,6 @@ const VAULT_ACTION_BY_METHOD: Readonly<Record<string, VaultPolicyAction>> = {
 
 function normalizeWebLane(value: unknown): UrlPolicyLane | null {
   if (value === undefined || value === null || value === '' || value === 'default') return 'default';
-  if (value === 'local_crawler') return 'local_crawler';
   if (value === 'discovery') return 'discovery';
   return null;
 }

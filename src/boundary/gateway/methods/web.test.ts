@@ -238,7 +238,7 @@ describe('registerWebMethods', () => {
     });
   });
 
-  it('allows local crawler lane on explicit allowlist + optional HTTP', async () => {
+  it('allows an allowlisted internal host with allowInternalNetwork + HTTP', async () => {
     const { server, url } = await listenHttp(() => ({
       body: '<html><body>crawler ok</body></html>',
       contentType: 'text/html; charset=utf-8',
@@ -248,18 +248,15 @@ describe('registerWebMethods', () => {
     const harness = createRuntimeHarness({
       workspacePath: process.cwd(),
       urlPolicy: {
-        allowHttp: false,
-        localCrawlerLane: {
-          enabled: true,
-          allowHttp: true,
-          hostAllowlist: ['127.0.0.1'],
-        },
+        allowHttp: true,
+        allowInternalNetwork: true,
+        hostAllowlist: ['127.0.0.1'],
       },
     });
 
     const result = await harness.invoke({
       url: `${url}/crawl`,
-      lane: 'local_crawler',
+      lane: 'default',
     });
 
     expect(result.sanitized).toBe(true);
@@ -275,18 +272,16 @@ describe('registerWebMethods', () => {
     const harness = createRuntimeHarness({
       workspacePath: process.cwd(),
       urlPolicy: {
-        localCrawlerLane: {
-          enabled: true,
-          allowHttp: true,
-          hostAllowlist: ['127.0.0.1'],
-        },
+        allowHttp: true,
+        allowInternalNetwork: true,
+        hostAllowlist: ['127.0.0.1'],
       },
       webFetchTlsCaCertPaths: ['/definitely/missing/local-ca.pem'],
     });
 
     await expect(harness.invoke({
       url: `${url}/crawl`,
-      lane: 'local_crawler',
+      lane: 'default',
     })).rejects.toMatchObject({
       code: GatewayErrors.PROVIDER_ERROR,
       message: expect.stringContaining('TLS setup failed'),
@@ -303,11 +298,9 @@ describe('registerWebMethods', () => {
     const harness = createRuntimeHarness({
       workspacePath: process.cwd(),
       urlPolicy: {
-        localCrawlerLane: {
-          enabled: true,
-          allowHttp: true,
-          hostAllowlist: ['127.0.0.1'],
-        },
+        allowHttp: true,
+        allowInternalNetwork: true,
+        hostAllowlist: ['127.0.0.1'],
       },
     });
 
@@ -315,7 +308,7 @@ describe('registerWebMethods', () => {
     try {
       await harness.invoke({
         url: `${url}/fail`,
-        lane: 'local_crawler',
+        lane: 'default',
       });
     } catch (error) {
       thrown = error;
@@ -347,16 +340,14 @@ describe('registerWebMethods', () => {
     const harness = createRuntimeHarness({
       workspacePath: process.cwd(),
       urlPolicy: {
-        localCrawlerLane: {
-          enabled: true,
-          allowHttp: true,
-          hostAllowlist: ['127.0.0.1'],
-        },
+        allowHttp: true,
+        allowInternalNetwork: true,
+        hostAllowlist: ['127.0.0.1'],
       },
     });
     const params = {
       url: `${url}/unstable`,
-      lane: 'local_crawler',
+      lane: 'default',
     };
 
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -383,17 +374,15 @@ describe('registerWebMethods', () => {
     const harness = createRuntimeHarness({
       workspacePath: process.cwd(),
       urlPolicy: {
-        localCrawlerLane: {
-          enabled: true,
-          allowHttp: true,
-          hostAllowlist: ['127.0.0.1'],
-        },
+        allowHttp: true,
+        allowInternalNetwork: true,
+        hostAllowlist: ['127.0.0.1'],
       },
     });
 
     const result = await harness.invokeBinary({
       url: `${url}/image`,
-      lane: 'local_crawler',
+      lane: 'default',
       maxBytes: 16,
     });
 
@@ -435,17 +424,15 @@ describe('registerWebMethods', () => {
     const harness = createRuntimeHarness({
       workspacePath: process.cwd(),
       urlPolicy: {
-        localCrawlerLane: {
-          enabled: true,
-          allowHttp: true,
-          hostAllowlist: ['127.0.0.1'],
-        },
+        allowHttp: true,
+        allowInternalNetwork: true,
+        hostAllowlist: ['127.0.0.1'],
       },
     });
 
     await harness.invokeBinary({
       url: `${url}/headers`,
-      lane: 'local_crawler',
+      lane: 'default',
       headers: {
         Authorization: 'Bearer test-token',
         'X-Discovery': 'enabled',
@@ -471,17 +458,15 @@ describe('registerWebMethods', () => {
     const harness = createRuntimeHarness({
       workspacePath: process.cwd(),
       urlPolicy: {
-        localCrawlerLane: {
-          enabled: true,
-          allowHttp: true,
-          hostAllowlist: ['127.0.0.1'],
-        },
+        allowHttp: true,
+        allowInternalNetwork: true,
+        hostAllowlist: ['127.0.0.1'],
       },
     });
 
     await expect(harness.invokeBinary({
       url: `${url}/image`,
-      lane: 'local_crawler',
+      lane: 'default',
       maxBytes: 2,
     })).rejects.toMatchObject({
       code: GatewayErrors.PROVIDER_ERROR,
@@ -521,17 +506,15 @@ describe('registerWebMethods', () => {
     const harness = createRuntimeHarness({
       workspacePath: process.cwd(),
       urlPolicy: {
-        localCrawlerLane: {
-          enabled: true,
-          allowHttp: true,
-          hostAllowlist: ['127.0.0.1'],
-        },
+        allowHttp: true,
+        allowInternalNetwork: true,
+        hostAllowlist: ['127.0.0.1'],
       },
     });
 
     const result = await harness.invoke({
       url: `${url}/start`,
-      lane: 'local_crawler',
+      lane: 'default',
     });
 
     expect(result.content).toContain('redirect chain ok');
@@ -583,20 +566,18 @@ describe('registerWebMethods', () => {
     const harness = createRuntimeHarness({
       workspacePath: process.cwd(),
       urlPolicy: {
-        localCrawlerLane: {
-          enabled: true,
-          allowHttp: true,
-          hostAllowlist: ['127.0.0.1'],
-        },
+        allowHttp: true,
+        allowInternalNetwork: true,
+        hostAllowlist: ['127.0.0.1'],
       },
     });
 
     await expect(harness.invoke({
       url: `${url}/start`,
-      lane: 'local_crawler',
+      lane: 'default',
     })).rejects.toMatchObject({
       code: GatewayErrors.POLICY_DENIED,
-      message: expect.stringContaining('not allowlisted'),
+      message: expect.stringContaining('Host localhost not in allowlist'),
     });
 
     expect(harness.recordAuditEvent).toHaveBeenCalledWith(
@@ -638,17 +619,15 @@ describe('registerWebMethods', () => {
     const harness = createRuntimeHarness({
       workspacePath: process.cwd(),
       urlPolicy: {
-        localCrawlerLane: {
-          enabled: true,
-          allowHttp: true,
-          hostAllowlist: ['127.0.0.1'],
-        },
+        allowHttp: true,
+        allowInternalNetwork: true,
+        hostAllowlist: ['127.0.0.1'],
       },
     });
 
     await expect(harness.invoke({
       url: `${url}/loop-a`,
-      lane: 'local_crawler',
+      lane: 'default',
     })).rejects.toMatchObject({
       code: GatewayErrors.PROVIDER_ERROR,
       message: expect.stringContaining('redirect loop'),
@@ -692,17 +671,15 @@ describe('registerWebMethods', () => {
       workspacePath: process.cwd(),
       urlPolicy: {
         maxRedirectHops: 2,
-        localCrawlerLane: {
-          enabled: true,
-          allowHttp: true,
-          hostAllowlist: ['127.0.0.1'],
-        },
+        allowHttp: true,
+        allowInternalNetwork: true,
+        hostAllowlist: ['127.0.0.1'],
       },
     });
 
     await expect(harness.invoke({
       url: `${url}/depth-0`,
-      lane: 'local_crawler',
+      lane: 'default',
     })).rejects.toMatchObject({
       code: GatewayErrors.PROVIDER_ERROR,
       message: expect.stringContaining('exceeded 2 hops'),
@@ -720,16 +697,14 @@ describe('registerWebMethods', () => {
     );
   });
 
-  it('blocks metadata IP resolved by DNS even in local crawler lane', async () => {
+  it('blocks metadata IP resolved by DNS even with internal network access', async () => {
     const dnsResolver: DnsResolver = vi.fn(async () => ({ address: '169.254.169.254', family: 4 }));
     const policyConfig = {
       workspacePath: process.cwd(),
       urlPolicy: {
-        localCrawlerLane: {
-          enabled: true,
-          allowHttp: true,
-          hostAllowlist: ['crawler.allowed.test'],
-        },
+        allowHttp: true,
+        allowInternalNetwork: true,
+        hostAllowlist: ['crawler.allowed.test'],
       },
       webFetchDnsResolver: dnsResolver,
     } as PolicyConfig & { webFetchDnsResolver: DnsResolver };
@@ -737,7 +712,7 @@ describe('registerWebMethods', () => {
     const harness = createRuntimeHarness(policyConfig);
     await expect(harness.invoke({
       url: 'http://crawler.allowed.test/resource',
-      lane: 'local_crawler',
+      lane: 'default',
     })).rejects.toMatchObject({
       code: GatewayErrors.POLICY_DENIED,
       message: expect.stringContaining('cloud metadata'),
@@ -786,14 +761,12 @@ describe('registerWebMethods', () => {
     return { server, url: `http://127.0.0.1:${address.port}`, stats };
   }
 
-  const localCrawlerPolicy = {
+  const internalNetworkPolicy = {
     workspacePath: process.cwd(),
     urlPolicy: {
-      localCrawlerLane: {
-        enabled: true,
-        allowHttp: true,
-        hostAllowlist: ['127.0.0.1', 'localhost'],
-      },
+      allowHttp: true,
+      allowInternalNetwork: true,
+      hostAllowlist: ['127.0.0.1', 'localhost'],
     },
   };
 
@@ -802,11 +775,11 @@ describe('registerWebMethods', () => {
     const { server, url, stats } = await listenStreamingHttp(Buffer.alloc(1024 * 1024, 0x61), 32);
     servers.push(server);
 
-    const harness = createRuntimeHarness(localCrawlerPolicy);
+    const harness = createRuntimeHarness(internalNetworkPolicy);
 
     await expect(harness.invoke({
       url: `${url}/unbounded-text`,
-      lane: 'local_crawler',
+      lane: 'default',
     })).rejects.toMatchObject({
       code: GatewayErrors.PROVIDER_ERROR,
       message: expect.stringContaining('too large'),
@@ -824,11 +797,11 @@ describe('registerWebMethods', () => {
     const { server, url, stats } = await listenStreamingHttp(Buffer.alloc(1024, 0x62), 64);
     servers.push(server);
 
-    const harness = createRuntimeHarness(localCrawlerPolicy);
+    const harness = createRuntimeHarness(internalNetworkPolicy);
 
     await expect(harness.invokeBinary({
       url: `${url}/unbounded-binary`,
-      lane: 'local_crawler',
+      lane: 'default',
       maxBytes: 2048,
     })).rejects.toMatchObject({
       code: GatewayErrors.PROVIDER_ERROR,
@@ -858,10 +831,10 @@ describe('registerWebMethods', () => {
     }));
     servers.push(originServer);
 
-    const harness = createRuntimeHarness(localCrawlerPolicy);
+    const harness = createRuntimeHarness(internalNetworkPolicy);
     await harness.invokeBinary({
       url: `${originUrl}/start`,
-      lane: 'local_crawler',
+      lane: 'default',
       headers: {
         Authorization: 'Bearer secret-token',
         Cookie: 'session=abc',
@@ -897,12 +870,12 @@ describe('registerWebMethods', () => {
     // Pin `localhost` to the IPv4 test server (system resolvers may prefer ::1).
     const dnsResolver: DnsResolver = async () => ({ address: '127.0.0.1', family: 4 });
     const harness = createRuntimeHarness({
-      ...localCrawlerPolicy,
+      ...internalNetworkPolicy,
       webFetchDnsResolver: dnsResolver,
     } as PolicyConfig & { webFetchDnsResolver: DnsResolver });
     await harness.invokeBinary({
       url: `${url}/start`,
-      lane: 'local_crawler',
+      lane: 'default',
       headers: {
         Authorization: 'Bearer secret-token',
         Cookie: 'session=abc',
@@ -932,10 +905,10 @@ describe('registerWebMethods', () => {
     });
     servers.push(server);
 
-    const harness = createRuntimeHarness(localCrawlerPolicy);
+    const harness = createRuntimeHarness(internalNetworkPolicy);
     await harness.invokeBinary({
       url: `${url}/start`,
-      lane: 'local_crawler',
+      lane: 'default',
       headers: { Authorization: 'Bearer secret-token' },
     });
 
@@ -961,12 +934,9 @@ describe('registerWebMethods', () => {
     const policyConfig = {
       workspacePath: process.cwd(),
       urlPolicy: {
-        allowHttp: false,
-        localCrawlerLane: {
-          enabled: true,
-          allowHttp: true,
-          hostAllowlist: ['crawler.allowed.test'],
-        },
+        allowHttp: true,
+        allowInternalNetwork: true,
+        hostAllowlist: ['crawler.allowed.test'],
       },
       webFetchDnsResolver: dnsResolver,
     } as PolicyConfig & { webFetchDnsResolver: DnsResolver };
@@ -974,7 +944,7 @@ describe('registerWebMethods', () => {
     const harness = createRuntimeHarness(policyConfig);
     const result = await harness.invoke({
       url: `http://crawler.allowed.test:${parsed.port}/resource`,
-      lane: 'local_crawler',
+      lane: 'default',
     });
 
     expect(result.content).toContain('pinned ok');

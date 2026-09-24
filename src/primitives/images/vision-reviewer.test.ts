@@ -64,7 +64,7 @@ describe('DefaultImageVisionReviewer', () => {
     expect(result.model).toBe('vision-model');
   });
 
-  it('routes configured ComfyUI output URLs through the local crawler lane and still fails closed on gateway denial', async () => {
+  it('routes configured ComfyUI output URLs through the default lane and still fails closed on gateway denial', async () => {
     const binaryFetcher = vi.fn(async () => {
       throw new Error('gateway denied');
     });
@@ -93,7 +93,7 @@ describe('DefaultImageVisionReviewer', () => {
     expect(binaryFetcher).toHaveBeenCalledTimes(1);
     expect(binaryFetcher).toHaveBeenCalledWith(
       'https://comfy.local.example.test/view?filename=review.png',
-      { lane: 'local_crawler', maxBytes: VISION_IMAGE_MAX_BYTES },
+      { lane: 'default', maxBytes: VISION_IMAGE_MAX_BYTES },
     );
     expect(completeImpl).not.toHaveBeenCalled();
   });

@@ -1292,22 +1292,6 @@ function normalizeWebFetchSettings(
   normalizeStringListSetting(normalized, settings, 'webFetchDomainAllowlist');
   normalizeBooleanSetting(normalized, settings, 'webFetchAllowInternalNetwork');
   normalizeBooleanSetting(normalized, settings, 'homeAssistantEnabled');
-  normalizeBooleanSetting(normalized, settings, 'webFetchLocalCrawlerEnabled');
-  normalizeBooleanSetting(
-    normalized,
-    settings,
-    'webFetchLocalCrawlerAllowHttp',
-  );
-  normalizeStringListSetting(
-    normalized,
-    settings,
-    'webFetchLocalCrawlerHostAllowlist',
-  );
-  normalizeStringListSetting(
-    normalized,
-    settings,
-    'webFetchLocalCrawlerDomainAllowlist',
-  );
   normalizeStringListSetting(normalized, settings, 'webFetchTlsCaCertPaths');
 }
 

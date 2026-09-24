@@ -14,6 +14,7 @@ vi.mock('../../shared/logger.js', () => ({
 }));
 
 import { loadSettings, saveSettings } from './io.js';
+import { parseRuntimeSettingsOwnerPayload } from './schema.js';
 import { applySettings, getRuntimeSettingsSnapshot } from './runtime.js';
 import type { SubstrateConfig } from '../config/runtime-config-contracts.js';
 
@@ -45,6 +46,26 @@ describe('settings owner-file load logging', () => {
       rmSync(root, { recursive: true, force: true });
     }
     roots.length = 0;
+  });
+
+  it('fails closed with migration guidance when settings.json still carries retired local-crawler keys', () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-settings-retired-'));
+    roots.push(root);
+    writeFileSync(
+      join(root, 'settings.json'),
+      JSON.stringify({ webFetchAllowHttp: false, webFetchLocalCrawlerEnabled: true, webFetchLocalCrawlerHostAllowlist: ['localhost'] }),
+      'utf-8',
+    );
+
+    expect(() => loadSettings(root)).toThrow(
+      /retired local-crawler web-fetch keys: webFetchLocalCrawlerEnabled, webFetchLocalCrawlerHostAllowlist\..*webFetchAllowInternalNetwork=true/,
+    );
+  });
+
+  it('rejects retired local-crawler keys on the owner-payload path before the generic unknown-key check', () => {
+    expect(() => parseRuntimeSettingsOwnerPayload({ webFetchLocalCrawlerAllowHttp: true })).toThrow(
+      /retired local-crawler web-fetch keys: webFetchLocalCrawlerAllowHttp\./,
+    );
   });
 
   it('logs only when settings are read from disk, not on a cache hit', () => {

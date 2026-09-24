@@ -10,8 +10,9 @@ version: 1
 
 Prefer `web` with `action="fetch"` for routine page reads.
 
-Use `lane: "default"` for normal web pages.
-Use `lane: "local_crawler"` only when you explicitly need the local crawler path.
+Use `lane: "default"` (or leave the lane unset) for web pages; internal hosts
+are reachable only when the operator enables internal network access and
+allowlists them.
 
 The raw crawl4ai endpoint is deployment-specific backend detail. Never guess or
 hard-code an internal hostname; the operator must supply it through the

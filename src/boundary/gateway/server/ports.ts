@@ -3,6 +3,7 @@
 // copies) plus narrow callbacks; modules pick only the members they need and
 // never import GatewayServer itself.
 import type { JSONRPCServerAndClient } from 'json-rpc-2.0';
+import type { WyomingShardRoutingConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { CompanionId } from '../../../shared/routing/companion-id.js';
 import type {
   AuthenticatedGatewayAccountRoute,
@@ -31,6 +32,21 @@ export interface GatewayServerPorts {
   readonly ntfyNotifier: GatewayNtfyNotifier;
   readonly operatorAlertDispatcher: GatewayOperatorAlertDispatcher;
   readonly icpAutonomyBroker: GatewayIcpAutonomyBroker | null;
+  readonly wyomingShardRouting: WyomingShardRoutingConfig;
+  readonly nextStreamRequestCounter: () => number;
+  readonly inspectAgentReply: <T>(method: string, result: T) => Promise<T>;
+  readonly requestCompanionAgent: <T = unknown>(
+    companionId: string,
+    method: string,
+    params: unknown,
+    timeoutMs?: number,
+  ) => Promise<T>;
+  readonly requireReadyCompanionRoute: (surface: string, companionId: CompanionId) => {
+    conn: GatewayRpcConnection;
+    client: JSONRPCServerAndClient;
+    companionId: CompanionId;
+  };
+  readonly resolveConnectionWorkspacePath: (conn: GatewayRpcConnection) => string;
   readonly flushInboundChannelReplay: (companionId: CompanionId) => void;
   readonly refreshConnectionHealth: (now?: number) => void;
   readonly alarmCompanionViolation: (

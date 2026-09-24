@@ -72,6 +72,7 @@ import {
 } from './lib/harness-verdicts.mjs';
 import { buildSprint10Cases } from './cases/sprint10.mjs';
 import { buildHardeningCases } from './cases/hardening.mjs';
+import { casesBelowTierFloor } from './lib/case-tier-floors.mjs';
 import { buildMemoryTierCases } from './cases/memory-tiers.mjs';
 import { isBeadsIssueId } from './lib/beads.mjs';
 import { prepareCaseChatDispatch } from './lib/case-dispatch-auth.mjs';
@@ -453,7 +454,9 @@ function selectRequestedCasesOrThrow(cases, outputBase) {
   const requestedCaseIds = [...CASE_IDS];
   const duplicateCaseIds = findDuplicateCaseIds(cases);
   const unknownRequestedCaseIds = requestedCaseIds.filter((caseId) => !knownCaseIds.includes(caseId));
-  if (duplicateCaseIds.length > 0 || unknownRequestedCaseIds.length > 0) {
+  // mfr7t: an explicitly requested case below its minimum tier fails closed.
+  const belowTierFloorCaseIds = casesBelowTierFloor(requestedCaseIds, EXPECTED_CAPABILITY_TIER);
+  if (duplicateCaseIds.length > 0 || unknownRequestedCaseIds.length > 0 || belowTierFloorCaseIds.length > 0) {
     const failure = {
       ...outputBase,
       generatedAt: new Date().toISOString(),
@@ -463,18 +466,26 @@ function selectRequestedCasesOrThrow(cases, outputBase) {
       requestedCaseIds,
       unknownRequestedCaseIds,
       duplicateCaseIds,
+      belowTierFloorCaseIds,
       knownCaseIds,
       results: [],
     };
     writeJsonArtifact(OUTPUT_PATH, failure);
     writeJsonArtifact(PARTIAL_OUTPUT_PATH, failure);
     throw new Error(
-      `case selection failed: unknown=${unknownRequestedCaseIds.join(',') || 'none'} duplicate=${duplicateCaseIds.join(',') || 'none'}`,
+      `case selection failed: unknown=${unknownRequestedCaseIds.join(',') || 'none'} duplicate=${duplicateCaseIds.join(',') || 'none'} `
+      + `below_tier_floor(${EXPECTED_CAPABILITY_TIER ?? 'unset'})=${belowTierFloorCaseIds.join(',') || 'none'}`,
     );
   }
-  return CASE_IDS.size > 0
-    ? cases.filter((testCase) => CASE_IDS.has(testCase.id))
-    : cases;
+  if (CASE_IDS.size > 0) return cases.filter((testCase) => CASE_IDS.has(testCase.id));
+  const excluded = casesBelowTierFloor(knownCaseIds, EXPECTED_CAPABILITY_TIER);
+  if (excluded.length > 0) {
+    console.warn(
+      `[shakedown] not scheduling ${excluded.join(',')} below their minimum tier `
+      + `(tier=${EXPECTED_CAPABILITY_TIER ?? 'unset'})`,
+    );
+  }
+  return cases.filter((testCase) => !excluded.includes(testCase.id));
 }
 
 function isMatrixAbortResult(caseResult) {

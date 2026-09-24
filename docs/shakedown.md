@@ -117,6 +117,18 @@ PSFN_SCORECARD_MD=$SHAKEDOWN_ROOT/SHAKEDOWN-SCORECARD.md \
   node shakedown/harness/run-shakedown-profile.mjs --profile full
 ```
 
+### Case minimum tiers
+
+A few diagnostics call tool actions a lower tier does not grant (for example
+`prompt_stack` uses `system.read`, which needs `internal.read`, absent at
+nursery). `shakedown/harness/lib/case-tier-floors.mjs` declares each such
+case's minimum tier. The lite profile schedules a floored smoke case at the
+lowest required tier that admits it, the full matrix lists it in that tier's
+case set, and the harness refuses (`case_selection_failed`,
+`belowTierFloorCaseIds`) an explicit `PSFN_CASE_IDS` selection below the floor
+or with no `PSFN_CAPABILITY_TIER_EXPECTED`. This is scheduling only: every
+companion still composes its normal system prompt at every tier.
+
 ### What lite does (and why it is safe to skip the cross-check)
 
 The lite profile is a **thin wrapper** — it never forks the matrix logic. It:

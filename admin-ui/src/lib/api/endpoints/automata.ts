@@ -76,8 +76,39 @@ interface AutomataEventView {
   };
 }
 
+interface AutomataClassCoverageView {
+  automatonClass: string;
+  busEligibility: 'eligible' | 'excluded';
+  wired: boolean;
+  busMode: 'bounded_loop' | 'single_pass' | null;
+  exclusion: string | null;
+  runs: { total: number; active: number; completed: number; failed: number; cancelled: number };
+  outcomes: Record<string, number>;
+  failureReasons: Record<string, number>;
+  handoffs: {
+    usefulHandoffs: number;
+    noFindingHandoffs: number;
+    workerFindings: number;
+    lastUsefulAt: string | null;
+    emptyStreak: number;
+  } | null;
+  terminalizationGaps: number | null;
+  health: 'healthy' | 'degraded' | 'idle' | 'excluded' | 'unknown';
+  degradationReasons: string[];
+}
+
 export interface AutomataSnapshot {
   classes: AutomataClassView[];
+  coverage: {
+    available: boolean;
+    windowStart: string;
+    activityWindowMs: number;
+    emptyRunThreshold: number;
+    eligibleCount: number;
+    wiredCount: number;
+    classes: AutomataClassCoverageView[];
+    degradationReasons: string[];
+  };
   runs: AutomataRunView[];
   runPage: { offset: number; limit: number; hasMore: boolean };
   bus: {

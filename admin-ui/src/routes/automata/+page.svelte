@@ -309,6 +309,45 @@
       {/if}
     </section>
 
+    <section class="garden-section card-garden p-5" aria-labelledby="coverage-heading">
+      <div class="flex items-end justify-between gap-3">
+        <div>
+          <p class="page-kicker">Bus learning, last {formatDuration(snapshot.coverage.activityWindowMs)}</p>
+          <h2 id="coverage-heading" class="text-lg font-semibold text-shadow-900">Coverage and learning health</h2>
+        </div>
+        <span class="text-sm text-shadow-500">{snapshot.coverage.wiredCount} of {snapshot.coverage.eligibleCount} eligible classes wired</span>
+      </div>
+      {#if !snapshot.coverage.available}
+        <p class="mt-3 text-sm text-shadow-600">Bus activity could not be read. Run counts come from the registry; no learning health is inferred.</p>
+      {:else if snapshot.coverage.degradationReasons.length > 0}
+        <p class="mt-3 text-sm text-wilt-700" role="status">Coverage is degraded: {snapshot.coverage.degradationReasons.join(', ')}. An empty streak of {snapshot.coverage.emptyRunThreshold} no-finding handoffs degrades a class.</p>
+      {/if}
+      <div class="garden-table-shell mt-4">
+        <div class="garden-table-scroll">
+          <table class="garden-table">
+            <thead><tr><th>Class</th><th>Bus mode</th><th>Health</th><th>Runs</th><th>Failed</th><th>Useful</th><th>Empty</th><th>Notes</th><th>Empty streak</th><th>Last useful</th><th>Gaps</th></tr></thead>
+            <tbody>
+              {#each snapshot.coverage.classes.filter(entry => entry.busEligibility === 'eligible') as entry (entry.automatonClass)}
+                <tr>
+                  <td class="font-mono text-xs">{entry.automatonClass}</td>
+                  <td>{entry.wired ? (entry.busMode === 'single_pass' ? `handoff only (${entry.exclusion})` : 'briefing + tool') : 'not wired'}</td>
+                  <td title={entry.degradationReasons.join(', ')}>{entry.health}</td>
+                  <td>{entry.runs.total}</td>
+                  <td title={Object.entries(entry.failureReasons).map(([reason, count]) => `${reason}: ${count}`).join(', ')}>{entry.runs.failed}</td>
+                  <td>{entry.handoffs?.usefulHandoffs ?? '-'}</td>
+                  <td>{entry.handoffs?.noFindingHandoffs ?? '-'}</td>
+                  <td>{entry.handoffs?.workerFindings ?? '-'}</td>
+                  <td>{entry.handoffs?.emptyStreak ?? '-'}</td>
+                  <td class="text-sm">{entry.handoffs?.lastUsefulAt ? formatDate(entry.handoffs.lastUsefulAt) : '-'}</td>
+                  <td>{entry.terminalizationGaps ?? '-'}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
     <section class="garden-section card-garden p-5" aria-labelledby="runs-heading">
       <div class="flex flex-wrap items-end justify-between gap-3">
         <div>

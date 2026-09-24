@@ -256,6 +256,16 @@ interface AutomataBusReindexOwnerPolicy {
   leaseDurationMs: number;
 }
 
+/**
+ * Operator health window for Bus learning. A wired class whose most recent
+ * `emptyRunThreshold` terminal handoffs inside `activityWindowMs` were all
+ * no-finding degrades Bus health instead of appearing healthy.
+ */
+export interface AutomataBusHealthOwnerPolicy {
+  activityWindowMs: number;
+  emptyRunThreshold: number;
+}
+
 export interface AutomataOwnerPolicy {
   schemaVersion: 1;
   bus: {
@@ -263,6 +273,7 @@ export interface AutomataOwnerPolicy {
     excludedClasses: ProductionAutomataClassId[];
     query: AutomataBusQueryOwnerPolicy;
     reindex: AutomataBusReindexOwnerPolicy;
+    health: AutomataBusHealthOwnerPolicy;
     reviewer: AutomataBusReviewerPolicy;
     lessonProposal: AutomataLessonProposalPolicy;
   };
@@ -406,6 +417,15 @@ function parseBusReindexPolicy(value: unknown, path: string): AutomataBusReindex
   };
 }
 
+function parseBusHealthPolicy(value: unknown, path: string): AutomataBusHealthOwnerPolicy {
+  if (!isRecord(value)) throw new Error(`${path} must be an object`);
+  assertExactKeys(value, ['activityWindowMs', 'emptyRunThreshold'], path);
+  return {
+    activityWindowMs: requirePositiveInteger(value.activityWindowMs, `${path}.activityWindowMs`),
+    emptyRunThreshold: requirePositiveInteger(value.emptyRunThreshold, `${path}.emptyRunThreshold`),
+  };
+}
+
 function parseClassList(value: unknown, path: string): ProductionAutomataClassId[] {
   if (!Array.isArray(value)) throw new Error(`${path} must be an array`);
   const classes = value.map((entry, index) => {
@@ -437,7 +457,7 @@ export function parseAutomataOwnerPolicy(value: unknown, source = 'automata-poli
   );
   assertExactKeys(
     value.bus,
-    ['eligibleClasses', 'excludedClasses', 'query', 'reindex', 'reviewer', 'lessonProposal'],
+    ['eligibleClasses', 'excludedClasses', 'query', 'reindex', 'health', 'reviewer', 'lessonProposal'],
     `${source}.bus`,
   );
   assertExactKeys(retentionValues, RETENTION_CLASSES, `${source}.retentionMs`);
@@ -450,6 +470,7 @@ export function parseAutomataOwnerPolicy(value: unknown, source = 'automata-poli
   if (missing.length > 0) throw new Error(`${source} does not assign bus policy for: ${missing.join(', ')}`);
   const query = parseBusQueryPolicy(value.bus.query, `${source}.bus.query`);
   const reindex = parseBusReindexPolicy(value.bus.reindex, `${source}.bus.reindex`);
+  const health = parseBusHealthPolicy(value.bus.health, `${source}.bus.health`);
   const reviewer = parseAutomataBusReviewerPolicy(value.bus.reviewer, `${source}.bus.reviewer`);
   const lessonProposal = parseLessonProposalPolicy(
     value.bus.lessonProposal,
@@ -461,7 +482,7 @@ export function parseAutomataOwnerPolicy(value: unknown, source = 'automata-poli
   ])) as Record<AutomataRetentionClass, number>;
   return {
     schemaVersion: 1,
-    bus: { eligibleClasses, excludedClasses, query, reindex, reviewer, lessonProposal },
+    bus: { eligibleClasses, excludedClasses, query, reindex, health, reviewer, lessonProposal },
     rawSessionRetentionMs: requirePositiveInteger(
       value.rawSessionRetentionMs,
       `${source}.rawSessionRetentionMs`,

@@ -125,6 +125,7 @@ describe('AdminAutomataDataService', () => {
       registry,
       companionId: 'companion-test',
       readPolicy: { defaultPageLimit: 5, maxPageLimit: 20 },
+      coveragePolicy: loadAutomataPolicySeedDefaults().bus.health,
     })).toThrow('registry companion scope mismatch');
   });
 
@@ -135,6 +136,7 @@ describe('AdminAutomataDataService', () => {
       registry,
       companionId: 'companion-test',
       readPolicy: { defaultPageLimit: 5, maxPageLimit: 20 },
+      coveragePolicy: loadAutomataPolicySeedDefaults().bus.health,
       bus: port,
     });
 
@@ -191,6 +193,7 @@ describe('AdminAutomataDataService', () => {
       registry,
       companionId: 'companion-test',
       readPolicy: { defaultPageLimit: 5, maxPageLimit: 20 },
+      coveragePolicy: loadAutomataPolicySeedDefaults().bus.health,
       bus: unknown.port,
     });
     await expect(unknownService.getSnapshot({ eventId: 'missing' }))
@@ -201,6 +204,7 @@ describe('AdminAutomataDataService', () => {
       registry,
       companionId: 'companion-test',
       readPolicy: { defaultPageLimit: 5, maxPageLimit: 20 },
+      coveragePolicy: loadAutomataPolicySeedDefaults().bus.health,
       bus: crossCompanion.port,
     });
     const snapshot = await scopedService.getSnapshot();
@@ -218,6 +222,7 @@ describe('AdminAutomataDataService', () => {
       registry,
       companionId: 'companion-test',
       readPolicy: { defaultPageLimit: 5, maxPageLimit: 20 },
+      coveragePolicy: loadAutomataPolicySeedDefaults().bus.health,
     });
 
     await expect(service.getSnapshot({ limit: 21 })).rejects.toThrow(/between 1 and 20/);
@@ -241,6 +246,7 @@ describe('AdminAutomataDataService', () => {
       registry,
       companionId: 'companion-test',
       readPolicy: { defaultPageLimit: 5, maxPageLimit: 20 },
+      coveragePolicy: loadAutomataPolicySeedDefaults().bus.health,
       reindex: { reindex },
     });
 
@@ -254,6 +260,7 @@ describe('AdminAutomataDataService', () => {
       registry,
       companionId: 'companion-test',
       readPolicy: { defaultPageLimit: 5, maxPageLimit: 20 },
+      coveragePolicy: loadAutomataPolicySeedDefaults().bus.health,
       reindex: {
         async reindex() {
           return {
@@ -276,6 +283,7 @@ describe('AdminAutomataDataService', () => {
       registry,
       companionId: 'companion-test',
       readPolicy: { defaultPageLimit: 5, maxPageLimit: 20 },
+      coveragePolicy: loadAutomataPolicySeedDefaults().bus.health,
       bus: {
         async readPage() {
           throw new Error('canonical Bus read unavailable');
@@ -337,6 +345,7 @@ describe('AdminAutomataDataService', () => {
       registry,
       companionId: 'companion-test',
       readPolicy: { defaultPageLimit: 5, maxPageLimit: 20 },
+      coveragePolicy: loadAutomataPolicySeedDefaults().bus.health,
       lessons,
     });
 
@@ -344,6 +353,93 @@ describe('AdminAutomataDataService', () => {
       available: true,
       groups: [{ support: 'supported', evidenceQuality: 'verified', sourceCount: 2 }],
       proposalReviewPath: '/api/admin/shared-workspace/proposals',
+    });
+  });
+
+  it('degrades healthy Bus state when a wired class keeps leaving no useful handoff', async () => {
+    const registry = await createRegistry();
+    const { port } = busPort({
+      health: {
+        condition: 'healthy',
+        freshness: 'fresh',
+        observedAt: '2026-08-11T12:01:00.000Z',
+        lastEventAt: findingEvent.occurredAt,
+        indexState: 'ready',
+        reindexState: 'current',
+        pendingIndexCount: 0,
+        degradationReasons: [],
+      },
+    });
+    const activityInputs: unknown[] = [];
+    const threshold = loadAutomataPolicySeedDefaults().bus.health.emptyRunThreshold;
+    const service = new AdminAutomataDataService({
+      registry,
+      companionId: 'companion-test',
+      readPolicy: { defaultPageLimit: 5, maxPageLimit: 20 },
+      coveragePolicy: loadAutomataPolicySeedDefaults().bus.health,
+      bus: {
+        ...port,
+        async readClassActivity(input) {
+          activityInputs.push(input);
+          return {
+            companionId: 'companion-test',
+            windowStart: new Date(input.windowStartMs).toISOString(),
+            classes: [{
+              automatonClass: 'memory.extraction',
+              usefulHandoffs: 0,
+              noFindingHandoffs: threshold,
+              workerFindings: 0,
+              lastUsefulAt: null,
+              emptyStreak: threshold,
+            }],
+            handoffRunIds: [],
+          };
+        },
+      },
+    });
+
+    const snapshot = await service.getSnapshot();
+
+    expect(activityInputs).toEqual([expect.objectContaining({ companionId: 'companion-test' })]);
+    expect(snapshot.bus.health).toMatchObject({
+      condition: 'degraded',
+      degradationReasons: ['empty_useful_streak'],
+    });
+    expect(snapshot.coverage).toMatchObject({ available: true, degradationReasons: ['empty_useful_streak'] });
+    expect(snapshot.coverage.classes.find(entry => entry.automatonClass === 'memory.extraction'))
+      .toMatchObject({ health: 'degraded', handoffs: { usefulHandoffs: 0, emptyStreak: threshold } });
+  });
+
+  it('logs an unreadable coverage aggregate and reports coverage unknown, never healthy', async () => {
+    const registry = await createRegistry();
+    const logger = { error: vi.fn() };
+    const { port } = busPort();
+    const service = new AdminAutomataDataService({
+      registry,
+      companionId: 'companion-test',
+      readPolicy: { defaultPageLimit: 5, maxPageLimit: 20 },
+      coveragePolicy: loadAutomataPolicySeedDefaults().bus.health,
+      bus: {
+        ...port,
+        async readClassActivity() {
+          return {
+            companionId: 'companion-other',
+            windowStart: '2026-08-11T12:00:00.000Z',
+            classes: [],
+            handoffRunIds: [],
+          };
+        },
+      },
+      logger,
+    });
+
+    const snapshot = await service.getSnapshot();
+
+    expect(snapshot.coverage.available).toBe(false);
+    expect(snapshot.coverage.classes.find(entry => entry.automatonClass === 'subagent.bounded'))
+      .toMatchObject({ health: 'unknown', handoffs: null });
+    expect(logger.error).toHaveBeenCalledWith('Automata class coverage read failed', {
+      error: 'Automata class activity returned a cross-companion aggregate',
     });
   });
 });

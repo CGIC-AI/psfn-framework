@@ -143,6 +143,10 @@ export function migrateAutomataPolicyOwner(
       bus.reindex = structuredClone(requireSeedDefaults().bus.reindex);
       addedPaths.push('bus.reindex');
     }
+    if (!Object.hasOwn(bus, 'health')) {
+      bus.health = structuredClone(requireSeedDefaults().bus.health);
+      addedPaths.push('bus.health');
+    }
     addMissingBusClassAssignments(bus, requireSeedDefaults, addedPaths);
 
     if (addedPaths.length === 0) {

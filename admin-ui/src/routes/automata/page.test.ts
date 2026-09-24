@@ -31,6 +31,10 @@ describe('Automata Garden page', () => {
     expect(source).toContain('Lesson projection unavailable');
     expect(source).toContain('low support, contradictions, inference-only evidence, or truncated traces');
     expect(source).toContain('Candidate pattern, not verified defect');
+    expect(source).toContain('Coverage and learning health');
+    expect(source).toContain('eligible classes wired');
+    expect(source).toContain('Bus activity could not be read');
+    expect(source).toContain('Coverage is degraded');
   });
 
   it('keeps diagnostics content-safe and sends proposals only through governed review', () => {

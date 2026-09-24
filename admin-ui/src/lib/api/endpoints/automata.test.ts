@@ -8,6 +8,16 @@ import {
 
 const snapshot = {
   classes: [],
+  coverage: {
+    available: true,
+    windowStart: '2026-09-17T00:00:00.000Z',
+    activityWindowMs: 604800000,
+    emptyRunThreshold: 20,
+    eligibleCount: 0,
+    wiredCount: 0,
+    classes: [],
+    degradationReasons: [],
+  },
   runs: [],
   runPage: { offset: 0, limit: 20, hasMore: false },
   bus: {

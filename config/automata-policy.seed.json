@@ -38,6 +38,10 @@
     "reindex": {
       "leaseDurationMs": 1800000
     },
+    "health": {
+      "activityWindowMs": 604800000,
+      "emptyRunThreshold": 20
+    },
     "reviewer": {
       "enabled": true,
       "cadenceMs": 21600000,

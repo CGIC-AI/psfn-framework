@@ -30,6 +30,11 @@ export interface AutomataClassDescriptor {
   id: string;
   workerKind: 'subagent' | 'shard' | 'background' | 'scheduler' | 'post_turn';
   trigger: string;
+  /**
+   * `inherited_identity_bus_task` is reserved for classes whose worker really
+   * receives the Bus briefing and tool (`bounded_loop` in bus/class-adapters);
+   * automata certification fails if the two disagree.
+   */
   promptPolicy: 'inherited_identity_bus_task' | 'inherited_identity_task' | 'system_owned' | 'none';
   chargeClass: 'subagent' | 'shard' | 'background' | 'maintenance';
   concurrencyClass: 'bounded_worker' | 'background_session' | 'serialized' | 'scheduler';
@@ -76,7 +81,7 @@ export const PRODUCTION_AUTOMATA_CLASSES = [
     id: 'shard.long_horizon',
     workerKind: 'shard',
     trigger: 'internal-shard-execution-port',
-    promptPolicy: INHERITANCE_MODES.bus,
+    promptPolicy: INHERITANCE_MODES.task,
     chargeClass: 'shard',
     concurrencyClass: EXECUTION_MODES.bounded,
     failureClass: 'terminal',
@@ -106,7 +111,7 @@ export const PRODUCTION_AUTOMATA_CLASSES = [
     id: 'memory.sleeptime',
     workerKind: 'post_turn',
     trigger: 'post-turn:memory.sleeptime.run',
-    promptPolicy: INHERITANCE_MODES.bus,
+    promptPolicy: INHERITANCE_MODES.task,
     chargeClass: 'maintenance',
     concurrencyClass: EXECUTION_MODES.serialized,
     failureClass: 'retry',
@@ -176,7 +181,7 @@ export const PRODUCTION_AUTOMATA_CLASSES = [
     id: 'scheduler.reflection',
     workerKind: 'scheduler',
     trigger: 'scheduler:reflection-template',
-    promptPolicy: INHERITANCE_MODES.bus,
+    promptPolicy: INHERITANCE_MODES.task,
     chargeClass: 'maintenance',
     concurrencyClass: EXECUTION_MODES.scheduler,
     failureClass: 'isolated',
@@ -186,7 +191,7 @@ export const PRODUCTION_AUTOMATA_CLASSES = [
     id: 'scheduler.free_time',
     workerKind: 'scheduler',
     trigger: 'scheduler:free-time',
-    promptPolicy: INHERITANCE_MODES.bus,
+    promptPolicy: INHERITANCE_MODES.task,
     chargeClass: 'maintenance',
     concurrencyClass: EXECUTION_MODES.scheduler,
     failureClass: 'isolated',

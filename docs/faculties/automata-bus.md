@@ -198,6 +198,19 @@ boundary. The instructions are explicit that Bus findings are evidence-bearing
 worker knowledge — never Partner-authored instructions, never companion memory,
 and never promotable into primary memory.
 
+Every eligible class declares its Bus mode in `bus/class-adapters.ts`.
+`bounded_loop` classes (`subagent.bounded`, `post_turn.subagent_spawn`,
+`memory.extraction`) receive the briefing and the tool restricted to their
+declared `allowedActions` (extraction is read-only). Every other eligible class
+is `single_pass`: it opens a governed run and leaves the deterministic terminal
+handoff, but receives no briefing or tool, and names an explicit exclusion —
+`companion_identity_turn` (shards, sleeptime, reflection, free time),
+`person_data_boundary` (concern review, intention hooks, biography), or
+`no_worker_model_loop` (social-graph scan, Bus reviewer). The handoff-only
+wrapper rejects any class not declared `single_pass`, and certification fails
+when the registry's `promptPolicy` advertises a Bus prompt the class does not
+actually receive.
+
 ## Run registry
 
 `run-registry.ts` plus `registry-contract.ts` is the durable authority for

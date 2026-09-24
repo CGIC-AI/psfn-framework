@@ -22,10 +22,14 @@ import {
 } from '../../persistence/sessions/exact-session-purge-surfaces.js';
 import { sanitizeChannelId } from '../../persistence/sessions/store-file-contracts.js';
 import { loadAutomataPolicySeedDefaults } from '../../system/config/automata-policy-config.js';
+import { EXTRACTION_AUTOMATA_BUS_ACTIONS } from '../memory/extraction/automata-bus-completion.js';
 import {
   AUTOMATA_CLASS_GOVERNED_ADAPTERS,
   AUTOMATA_GOVERNED_LIFECYCLE_ENTRYPOINTS,
 } from './bus/class-adapters.js';
+import { AUTOMATA_BUS_TOOL_ACTIONS } from './bus/worker-access-contracts.js';
+import { PRODUCTION_AUTOMATA_SPAWN_PATHS } from './production-registration.js';
+import { PRODUCTION_AUTOMATA_CLASSES } from './registry-contract.js';
 import type { AutomataBusEvent } from './bus/contract.js';
 import type { PostgresAutomataBusRuntimeStore } from './bus/runtime-store.js';
 import {
@@ -135,6 +139,71 @@ describe('Automata governed-class coverage certification', () => {
       );
       expect({ class: adapter.automatonClass, opensLifecycle })
         .toEqual({ class: adapter.automatonClass, opensLifecycle: true });
+    }
+  });
+
+  it('binds each Bus mode to the lifecycle entrypoint that actually forms it', () => {
+    const repoRoot = join(SRC_DIR, '..', '..', '..');
+    for (const adapter of AUTOMATA_CLASS_GOVERNED_ADAPTERS) {
+      const source = readFileSync(join(repoRoot, adapter.adapterModule), 'utf8');
+      // bounded_loop classes form the briefing and tool through the worker
+      // run; single_pass classes go through the handoff-only class wrapper.
+      const entrypoint = adapter.busMode === 'bounded_loop'
+        ? 'openAutomataBusWorkerRun'
+        : 'runGovernedAutomataClass';
+      expect({ class: adapter.automatonClass, entrypoint, wired: source.includes(entrypoint) })
+        .toEqual({ class: adapter.automatonClass, entrypoint, wired: true });
+    }
+  });
+
+  it('keeps registry prompt policy and executable Bus mode as one fact', () => {
+    const promptPolicyByClass = new Map<string, string>(
+      PRODUCTION_AUTOMATA_CLASSES.map(entry => [entry.id, entry.promptPolicy]),
+    );
+    for (const adapter of AUTOMATA_CLASS_GOVERNED_ADAPTERS) {
+      // A class may only advertise a Bus-bearing prompt when its worker really
+      // receives the briefing and tool, and vice versa.
+      const advertisesBus = promptPolicyByClass.get(adapter.automatonClass)
+        === 'inherited_identity_bus_task';
+      expect({ class: adapter.automatonClass, advertisesBus })
+        .toEqual({ class: adapter.automatonClass, advertisesBus: adapter.busMode === 'bounded_loop' });
+    }
+    for (const excluded of policy.bus.excludedClasses) {
+      expect({ class: excluded, promptPolicy: promptPolicyByClass.get(excluded) })
+        .not.toEqual({ class: excluded, promptPolicy: 'inherited_identity_bus_task' });
+    }
+  });
+
+  it('declares an explicit owner exclusion for every handoff-only class', () => {
+    for (const adapter of AUTOMATA_CLASS_GOVERNED_ADAPTERS) {
+      if (adapter.busMode !== 'single_pass') continue;
+      expect(['companion_identity_turn', 'person_data_boundary', 'no_worker_model_loop'])
+        .toContain(adapter.exclusion);
+      expect(adapter.exclusionRationale.trim().length).toBeGreaterThan(0);
+    }
+  });
+
+  it('declares the exact tool actions each bounded_loop class is granted', () => {
+    for (const adapter of AUTOMATA_CLASS_GOVERNED_ADAPTERS) {
+      if (adapter.busMode !== 'bounded_loop') continue;
+      for (const action of adapter.allowedActions) {
+        expect(AUTOMATA_BUS_TOOL_ACTIONS).toContain(action);
+      }
+      // The declaration must match what the runtime enforces: extraction's
+      // read-only set, and the full action set for subagents (which pass none).
+      const enforced = adapter.automatonClass === 'memory.extraction'
+        ? EXTRACTION_AUTOMATA_BUS_ACTIONS
+        : AUTOMATA_BUS_TOOL_ACTIONS;
+      expect([...adapter.allowedActions].sort()).toEqual([...enforced].sort());
+    }
+  });
+
+  it('resolves every production spawn path to a governed adapter or an owner exclusion', () => {
+    const adapted = new Set<string>(AUTOMATA_CLASS_GOVERNED_ADAPTERS.map(entry => entry.automatonClass));
+    const excluded = new Set<string>(policy.bus.excludedClasses);
+    for (const spawn of PRODUCTION_AUTOMATA_SPAWN_PATHS) {
+      expect({ spawn: spawn.id, covered: adapted.has(spawn.classId) !== excluded.has(spawn.classId) })
+        .toEqual({ spawn: spawn.id, covered: true });
     }
   });
 });

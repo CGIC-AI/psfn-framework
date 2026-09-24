@@ -287,6 +287,83 @@ test('model attribution turns a bounded proof-query rejection into a semantic ve
   }
 });
 
+test('model attribution stops warming up when the budget cannot fit another turn (iqj3c)', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    choices: [{ message: { content: 'ok' } }],
+  }), { status: 200 });
+  let turnIndex = 0;
+  const slowServices = {
+    ...services,
+    // Every turn takes 300ms, and no appraisal is ever scheduled.
+    waitForTurnRecord: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      return { turnId: `turn-slow-${++turnIndex}`, status: 'completed', assistantMessage: { content: 'ok' } };
+    },
+    pgAll: async () => [],
+    pgScalar: async () => null,
+  };
+
+  try {
+    const attribution = buildHardeningCases(context, slowServices, {
+      modelLaneDispatchTimeoutMs: 4_000,
+    }).find((entry) => entry.id === 'model_lane_attribution');
+    const outcome = await attribution.execute({
+      ctx: context,
+      sessionId: 'hardening-spend-slow-provider',
+      apiUserId: context.primaryApiUserId,
+    });
+    const driven = outcome.sideChecks.modelLane.driven;
+    assert.equal(driven.backgroundBudgetExhausted, true);
+    assert.ok(driven.backgroundWarmupTurns >= 1 && driven.backgroundWarmupTurns < 10);
+    const failures = attribution.validatePersistedProof({ outcome });
+    assert.ok(failures.some((failure) => /not reached within the case budget/u.test(failure)));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('model attribution follows a slow appraisal to success instead of abandoning it (iqj3c)', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    choices: [{ message: { content: 'ok' } }],
+  }), { status: 200 });
+  let turnIndex = 0;
+  let polls = 0;
+  const appraisalServices = {
+    ...services,
+    waitForTurnRecord: async () => ({
+      turnId: `turn-appraisal-${++turnIndex}`, status: 'completed', assistantMessage: { content: 'ok' },
+    }),
+    pgAll: async (sql, params) => {
+      if (!/emotion_appraisal/u.test(sql)) return [];
+      polls += 1;
+      return [{
+        job_id: 'job-1', kind: 'emotion_appraisal', source_turn_id: params[0],
+        state: polls < 12 ? 'running' : 'succeeded',
+      }];
+    },
+    pgScalar: async () => 'emotion.appraisal',
+  };
+
+  try {
+    const attribution = buildHardeningCases(context, appraisalServices, {
+      modelLaneDispatchTimeoutMs: 20_000,
+    }).find((entry) => entry.id === 'model_lane_attribution');
+    const outcome = await attribution.execute({
+      ctx: context,
+      sessionId: 'hardening-spend-slow-appraisal',
+      apiUserId: context.primaryApiUserId,
+    });
+    const driven = outcome.sideChecks.modelLane.driven;
+    assert.equal(driven.backgroundWarmupTurns, 1, 'one warmup turn whose appraisal is followed to success');
+    assert.equal(driven.backgroundObserved, true);
+    assert.equal(driven.backgroundBudgetExhausted, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('the backup round-trip case self-derives a benign scalar flip and full payloads from backup.json', async () => {
   const svc = backupServices(backupOwnerFile());
   const beforeChecks = await backupCase(svc).before({ ctx: context });

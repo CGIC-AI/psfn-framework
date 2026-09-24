@@ -110,6 +110,9 @@ const BACKGROUND_APPRAISAL_ORIGIN_QUERY = `
 const TERMINAL_BACKGROUND_JOB_STATES = new Set(['succeeded', 'failed', 'stale_discarded']);
 export const MODEL_LANE_DISPATCH_TIMEOUT_MS = 120_000;
 const MODEL_LANE_CANCELLATION_DRAIN_TIMEOUT_MS = 10_000;
+// Kept back from the background drive so the ledger and attribution reads that
+// follow it still run inside the dispatch budget.
+const MODEL_LANE_PROOF_READ_RESERVE_MS = 5_000;
 
 export class ModelLaneAttributionDispatchTimeoutError extends Error {
   constructor(stage, timeoutMs) {
@@ -209,10 +212,14 @@ async function postAndWaitVisionInline({ services, sessionId, apiUserId, signal 
 }
 
 // Await a turn's post-turn emotion-appraisal background job to a terminal state.
-async function waitForEmotionAppraisal(services, turnId, signal) {
+// A job that exists is followed until it settles or the case budget runs out
+// (psfn-framework-iqj3c): on a slow provider the appraisal call can outlast any
+// fixed poll window, and abandoning it only moves the proof five turns further
+// away, because the next appraisal waits for the cadence to come round again.
+async function waitForEmotionAppraisal(services, turnId, signal, deadlineAtMs) {
   if (typeof turnId !== 'string' || turnId.length === 0) return null;
   let appraisalObserved = false;
-  for (let attempt = 0; attempt < 80; attempt += 1) {
+  for (let attempt = 0; Date.now() < deadlineAtMs; attempt += 1) {
     let jobs;
     try {
       jobs = await services.pgAll(
@@ -269,9 +276,12 @@ async function driveBackgroundLane({
   signal,
   setStage,
   stepDelayMs,
+  deadlineAtMs,
 }) {
   const maxWarmupTurns = 10;
   let warmupTurns = 0;
+  let budgetExhausted = false;
+  let slowestTurnMs = 0;
   let backgroundObserved = false;
   let backgroundOriginStage = null;
   let backgroundJobState = null;
@@ -279,8 +289,16 @@ async function driveBackgroundLane({
   let backgroundJobId = null;
   const proofQueryFailures = [];
   for (let i = 0; i < maxWarmupTurns; i += 1) {
+    // Per-turn budget: do not start a warmup turn the remaining case budget
+    // cannot finish, so a slow provider ends in an honest "not reached within
+    // budget" verdict rather than a case_timeout mid-turn.
+    if (warmupTurns > 0 && deadlineAtMs - Date.now() < stepDelayMs + slowestTurnMs) {
+      budgetExhausted = true;
+      break;
+    }
     if (stepDelayMs > 0) await sleep(stepDelayMs, signal);
     setStage?.('background_warmup_turn');
+    const turnStartedAtMs = Date.now();
     const turn = await postAndWait({
       services,
       sessionId,
@@ -290,11 +308,13 @@ async function driveBackgroundLane({
       stage: 'model_lane_attribution background warmup turn',
     });
     warmupTurns += 1;
+    slowestTurnMs = Math.max(slowestTurnMs, Date.now() - turnStartedAtMs);
     setStage?.('background_appraisal_poll');
     const appraisal = await waitForEmotionAppraisal(
       services,
       turn.turnRecord?.turnId,
       signal,
+      deadlineAtMs,
     );
     backgroundJobState = appraisal?.state ?? null;
     if (appraisal?.proofQueryFailure) {
@@ -327,6 +347,7 @@ async function driveBackgroundLane({
   }
   return {
     warmupTurns,
+    budgetExhausted,
     backgroundObserved,
     backgroundOriginStage,
     backgroundJobState,
@@ -357,7 +378,7 @@ async function runModelLaneAttributionDispatch({
     ),
     run: (dispatchSignal) => run(parentSignal
       ? AbortSignal.any([dispatchSignal, parentSignal])
-      : dispatchSignal),
+      : dispatchSignal, Date.now() + executionTimeoutMs),
   });
 }
 
@@ -458,7 +479,7 @@ export function buildHardeningCases(ctx, services, options = {}) {
           timeoutMs: modelLaneDispatchTimeoutMs,
           parentSignal: signal,
           getStage: () => stage,
-          run: async (dispatchSignal) => {
+          run: async (dispatchSignal, deadlineAtMs) => {
             // (1) Interactive lane: a plain foreground chat turn.
             const interactive = await postAndWait({
               services,
@@ -489,6 +510,10 @@ export function buildHardeningCases(ctx, services, options = {}) {
               apiUserId,
               signal: dispatchSignal,
               stepDelayMs: modelLaneStepDelayMs,
+              deadlineAtMs: deadlineAtMs - Math.min(
+                MODEL_LANE_PROOF_READ_RESERVE_MS,
+                Math.max(0, Math.floor((deadlineAtMs - Date.now()) / 4)),
+              ),
               setStage: (nextStage) => {
                 stage = nextStage;
               },
@@ -548,6 +573,7 @@ export function buildHardeningCases(ctx, services, options = {}) {
                     visionInline: Boolean(vision.response),
                     visionTurnId,
                     backgroundWarmupTurns: background.warmupTurns,
+                    backgroundBudgetExhausted: background.budgetExhausted,
                     backgroundObserved: background.backgroundObserved,
                     backgroundOriginStage: background.backgroundOriginStage,
                     backgroundJobState: background.backgroundJobState,

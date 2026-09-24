@@ -34,9 +34,7 @@ import {
 } from './protocol.js';
 import {
   disabledGatewayMultiCompanionConfig,
-  resolveConfiguredGatewayCompanion,
   resolveGatewaySurfaceForChannelType,
-  type AuthenticatedGatewayAccountRoute,
   type GatewayChannelSurface,
   type GatewayMultiCompanionConfig,
 } from './multi-companion.js';
@@ -117,13 +115,10 @@ import {
   type SharedSatelliteLeaseAuditEvent,
 } from './shared-satellite-response-arbiter.js';
 import { GatewayFleetPostureCache } from './fleet-posture-cache.js';
-import {
-  GatewayInboundChannelReplay,
-  inboundChannelMessageId,
-  type InboundChannelReplayDrop,
-} from './inbound-channel-replay.js';
 import type { GatewayServerOptions } from './server/options.js';
 import type { GatewayServerPorts } from './server/ports.js';
+import { GatewayConnectionRouter } from './server/connection-routing.js';
+import { GatewayInboundChannelDelivery } from './server/inbound-channel-delivery.js';
 import {
   GatewayCompanionViolations,
   type GatewayFleetConnectionSnapshot,
@@ -236,7 +231,6 @@ export class GatewayServer {
   private readonly companionLastSeen = new Map<CompanionId, number>();
   private readonly companionPostures = new GatewayFleetPostureCache<GatewayRpcConnection>();
   private readonly companionDeliveryFailureReceipts = new CompanionDeliveryFailureReceipts();
-  private readonly inboundChannelReplay: GatewayInboundChannelReplay;
   private readonly icpAutonomyBroker: GatewayIcpAutonomyBroker | null;
   private readonly pendingIcpInvalidations = new Map<string, PendingIcpInvalidation>();
   private readonly fatigueFencedCompanionIds = new Set<string>();
@@ -261,6 +255,8 @@ export class GatewayServer {
   private readonly sharedSatelliteChatRequests = new Map<string, CompanionId>();
   private readonly connectionLifecycle: GatewayConnectionLifecycle;
   private readonly companionViolations: GatewayCompanionViolations;
+  private readonly connectionRouter: GatewayConnectionRouter;
+  private readonly inboundChannelDelivery: GatewayInboundChannelDelivery;
 
   private companionDisplayLabel(companionId: string): string {
     return this.options.approvalParentLabelProvider?.(companionId)?.trim()
@@ -275,11 +271,28 @@ export class GatewayServer {
       connectionStatuses: this.connectionStatuses,
       companionConnections: this.companionConnections,
       companionLastSeen: this.companionLastSeen,
+      options: this.options,
       multiCompanion: this.multiCompanion,
+      fleetCompanionIds: this.fleetCompanionIds,
       companionPostures: this.companionPostures,
       ntfyNotifier: this.ntfyNotifier,
-      flushInboundChannelReplay: companionId => this.flushInboundChannelReplay(companionId),
+      flushInboundChannelReplay: companionId => this.inboundChannelDelivery.flushInboundChannelReplay(companionId),
       refreshConnectionHealth: now => this.refreshConnectionHealth(now),
+      alarmCompanionViolation: (event, message, details) => (
+        this.companionViolations.alarmCompanionViolation(event, message, details)
+      ),
+      notifyAll: (method, params) => this.notifyAll(method, params),
+      notifyOne: (conn, method, params) => this.notifyOne(conn, method, params),
+      recordCompanionViolation: (event, details) => (
+        this.companionViolations.recordCompanionViolation(event, details)
+      ),
+      resolveReadyCompanionConnection: companionId => (
+        this.connectionRouter.resolveReadyCompanionConnection(companionId)
+      ),
+      resolveRoutedCompanionId: (surface, route) => (
+        this.connectionRouter.resolveRoutedCompanionId(surface, route)
+      ),
+      operatorAlertDispatcher: this.operatorAlertDispatcher,
       audit: (method, decision, params) => this.audit(method, decision, params),
       auditComplete: (id, startTime, error) => this.auditComplete(id, startTime, error),
     };
@@ -337,7 +350,7 @@ export class GatewayServer {
           store: options.icpAutonomyStore,
           fleetCompanionIds: this.fleetCompanionIds,
           companionChannels: options.companionChannels,
-          isCompanionReady: companionId => this.resolveReadyCompanionConnection(
+          isCompanionReady: companionId => this.connectionRouter.resolveReadyCompanionConnection(
             createCompanionId(companionId, 'isCompanionReady companionId'),
           ) !== null,
           readCompanionFatiguePosture: companionId => {
@@ -345,7 +358,7 @@ export class GatewayServer {
               companionId,
               'ICP fatigue posture companionId',
             );
-            const connection = this.resolveReadyCompanionConnection(exactCompanionId);
+            const connection = this.connectionRouter.resolveReadyCompanionConnection(exactCompanionId);
             return connection === null
               ? null
               : this.companionPostures.read(connection, exactCompanionId)?.fatigue.state ?? null;
@@ -434,9 +447,6 @@ export class GatewayServer {
         ? { discordChannelId: options.operatorDiscordChannelId }
         : {}),
     });
-    this.inboundChannelReplay = new GatewayInboundChannelReplay({
-      onDrop: drop => this.alertInboundChannelDrop(drop),
-    });
     const cogSecMode = options.intakeScreeningMode;
     this.canaryEgressGuard = createCanaryEgressGuard({
       mode: cogSecMode,
@@ -516,6 +526,8 @@ export class GatewayServer {
     const ports = this.createServerPorts();
     this.connectionLifecycle = new GatewayConnectionLifecycle(ports);
     this.companionViolations = new GatewayCompanionViolations(ports);
+    this.connectionRouter = new GatewayConnectionRouter(ports);
+    this.inboundChannelDelivery = new GatewayInboundChannelDelivery(ports);
   }
 
   async notifyOperator(params: NotifyNtfyParams): Promise<OperatorAlertResult> {
@@ -633,11 +645,11 @@ export class GatewayServer {
     const resolvePolicyConfig = (): PolicyConfig => this.resolveConnectionPolicyConfig(conn);
     const resolveIntakeScreening = (): IntakeScreeningService | undefined =>
       this.options.intakeScreeningProvider
-        ? this.options.intakeScreeningProvider(this.authenticatedCompanionId(conn)) ?? undefined
+        ? this.options.intakeScreeningProvider(this.connectionRouter.authenticatedCompanionId(conn)) ?? undefined
         : this.options.intakeScreening;
     const resolveVisionIntake = (): GatewayVisionIntakeScreener | undefined =>
       this.options.visionIntakeProvider
-        ? this.options.visionIntakeProvider(this.authenticatedCompanionId(conn)) ?? undefined
+        ? this.options.visionIntakeProvider(this.connectionRouter.authenticatedCompanionId(conn)) ?? undefined
         : this.options.visionIntake;
     const runtime: GatewayMethodRuntime = {
       target,
@@ -672,11 +684,11 @@ export class GatewayServer {
       // an52.3: bind the tier to THIS connection's authenticated companion so
       // shard.backend.request (and any gated method) resolves the caller's own
       // capability tier, not the gateway's single hydrated root.
-      capabilityTierProvider: () => this.capabilityTierProvider(this.authenticatedCompanionId(conn)),
+      capabilityTierProvider: () => this.capabilityTierProvider(this.connectionRouter.authenticatedCompanionId(conn)),
       ...(this.options.capabilityGrantSnapshotProvider
         ? {
             capabilityGrantSnapshotProvider: () =>
-              this.options.capabilityGrantSnapshotProvider!(this.authenticatedCompanionId(conn)),
+              this.options.capabilityGrantSnapshotProvider!(this.connectionRouter.authenticatedCompanionId(conn)),
           }
         : {}),
       ...(this.options.shardBackendExecutor
@@ -696,18 +708,18 @@ export class GatewayServer {
         ? { systemDataWriter: this.options.systemDataWriter }
         : {}),
       ...(this.options.mcpBroker ? { mcpBroker: this.options.mcpBroker } : {}),
-      authenticatedCompanionId: () => this.authenticatedCompanionId(conn),
+      authenticatedCompanionId: () => this.connectionRouter.authenticatedCompanionId(conn),
       ...(this.options.welfareGrantVerifier
         ? {
             verifyWelfareGrant: (jobId: string, companionId: string) =>
               this.options.welfareGrantVerifier!.verify(jobId, companionId),
           }
         : {}),
-      notifyRequester: (method, params) => this.notifyRequestingConnection(conn, method, params),
+      notifyRequester: (method, params) => this.connectionRouter.notifyRequestingConnection(conn, method, params),
       listPendingConfirmations: () => this.approvalBoundary.listPendingConfirmations(),
       listConfirmationHistory: () => this.approvalBoundary.listConfirmationHistory(),
       resolveConfirmation: (params) => {
-        const companionId = this.authenticatedCompanionId(conn);
+        const companionId = this.connectionRouter.authenticatedCompanionId(conn);
         if (!companionId) {
           return Promise.resolve({
             id: params.id,
@@ -724,7 +736,7 @@ export class GatewayServer {
       },
       sendNtfy: (params) => this.ntfyNotifier.send(params),
       sendOperatorAlert: (params) => this.operatorAlertDispatcher.dispatch(params),
-      getRuntimeHealth: () => this.getRuntimeHealth(this.authenticatedCompanionId(conn)),
+      getRuntimeHealth: () => this.getRuntimeHealth(this.connectionRouter.authenticatedCompanionId(conn)),
       getCredentialPresence: () => this.options.credentialPresence ?? EMPTY_CREDENTIAL_PRESENCE,
       nextStreamRequestId: () => `gw-${++this.streamRequestCounter}`,
       authorizeIcpConversationCorrelation: async (correlation) => {
@@ -734,7 +746,7 @@ export class GatewayServer {
             GatewayErrors.COMPANION_ROUTING_UNAVAILABLE,
           );
         }
-        const companionId = this.requireAuthenticatedAgentCompanionId(conn);
+        const companionId = this.connectionRouter.requireAuthenticatedAgentCompanionId(conn);
         return await this.icpAutonomyBroker.bindConversationCostCorrelation(
           companionId,
           correlation,
@@ -752,7 +764,7 @@ export class GatewayServer {
     registerGatewayIcpAutonomyRpc({
       target,
       broker: this.icpAutonomyBroker,
-      requireAuthenticatedCompanionId: () => this.requireAuthenticatedAgentCompanionId(conn),
+      requireAuthenticatedCompanionId: () => this.connectionRouter.requireAuthenticatedAgentCompanionId(conn),
       audited: (method, handler, paramsSummary) => this.audited(method, handler, paramsSummary),
     });
     target.addMethod('gateway.client.identify', (params: unknown) => this.identifyConnection(conn, params));
@@ -764,7 +776,7 @@ export class GatewayServer {
     target.addMethod('shard.workload.register', this.audited(
       'shard.workload.register',
       async (params: unknown) => {
-        const companionId = this.requireAuthenticatedAgentCompanionId(conn);
+        const companionId = this.connectionRouter.requireAuthenticatedAgentCompanionId(conn);
         if (!this.shardWorkloadRegistrar) {
           throw new JSONRPCErrorException(
             'Shard workload registration is unavailable',
@@ -780,7 +792,7 @@ export class GatewayServer {
     target.addMethod('shard.workload.end', this.audited(
       'shard.workload.end',
       async (params: unknown) => {
-        this.requireAuthenticatedAgentCompanionId(conn);
+        this.connectionRouter.requireAuthenticatedAgentCompanionId(conn);
         if (!this.shardWorkloadRegistrar) {
           throw new JSONRPCErrorException(
             'Shard workload registration is unavailable',
@@ -1593,7 +1605,7 @@ export class GatewayServer {
     const deliveredTo: string[] = [];
     const skippedOffline: string[] = [];
     for (const recipientId of resolution.recipients) {
-      const recipientConn = this.resolveReadyCompanionConnection(recipientId);
+      const recipientConn = this.connectionRouter.resolveReadyCompanionConnection(recipientId);
       if (!recipientConn) {
         if (resolution.kind === 'dm') {
           // DM to a disconnected peer fails closed back to the sender.
@@ -1721,7 +1733,7 @@ export class GatewayServer {
     }
 
     this.connectionLifecycle.refreshConnectionHealth();
-    const senderConn = this.resolveReadyCompanionConnection(receipt.senderCompanionId);
+    const senderConn = this.connectionRouter.resolveReadyCompanionConnection(receipt.senderCompanionId);
     if (!senderConn) {
       throw new JSONRPCErrorException(
         `Original companion sender "${receipt.senderCompanionId}" is not connected`,
@@ -1740,27 +1752,6 @@ export class GatewayServer {
     this.companionDeliveryFailureReceipts.consume(reportingCompanionId, messageId);
     log.warn('Companion message delivery failure reported to original sender', notification);
     return { reportedTo: receipt.senderCompanionId };
-  }
-
-  /** Ready+healthy agent connection for a companion, or null. Never throws. */
-  private resolveReadyCompanionConnection(companionId: CompanionId): GatewayRpcConnection | null {
-    const conn = this.companionConnections.get(companionId);
-    if (!conn) {
-      return null;
-    }
-    const status = this.connectionStatuses.get(conn);
-    if (!status || status.role !== 'agent' || status.state !== 'ready' || status.health !== 'healthy') {
-      return null;
-    }
-    return conn;
-  }
-
-  private requireAuthenticatedAgentCompanionId(conn: GatewayRpcConnection): string {
-    const status = this.connectionStatuses.get(conn);
-    if (status?.role !== 'agent' || !status.companionId) {
-      throw new Error('ICP autonomy RPC requires an authenticated agent companion connection');
-    }
-    return status.companionId;
   }
 
   /**
@@ -1789,7 +1780,7 @@ export class GatewayServer {
       return undefined;
     }
     const registry = this.options.shardApprovalWorkloads;
-    const companionId = this.authenticatedCompanionId(conn);
+    const companionId = this.connectionRouter.authenticatedCompanionId(conn);
     if (registry && companionId) {
       // May throw on ambiguous channel lineage — ambiguity is a denial.
       const workload = registry.resolveWorkloadForChannel(companionId, normalized);
@@ -1819,24 +1810,13 @@ export class GatewayServer {
     return undefined;
   }
 
-  private authenticatedCompanionId(conn: GatewayRpcConnection): string | undefined {
-    const status = this.connectionStatuses.get(conn);
-    if (!status || status.role !== 'agent' || status.state === 'offline') {
-      return undefined;
-    }
-    if (this.multiCompanion.enabled) {
-      return status.companionId;
-    }
-    return status.companionId ?? this.options.companionId ?? DEFAULT_COMPANION_ID;
-  }
-
   private notifyCompanionGardenQueueChanged(
     companionId: string,
     queue: GardenQueueName,
   ): void {
     this.connectionLifecycle.refreshConnectionHealth();
     if (this.multiCompanion.enabled) {
-      const conn = this.resolveReadyCompanionConnection(
+      const conn = this.connectionRouter.resolveReadyCompanionConnection(
         createCompanionId(companionId, 'garden queue change companionId'),
       );
       if (!conn) {
@@ -2022,144 +2002,7 @@ export class GatewayServer {
     params: unknown,
     discordAccountId?: string,
   ): number {
-    if (!this.multiCompanion.enabled) {
-      this.connectionLifecycle.refreshConnectionHealth();
-      return this.notifyAll(method, params);
-    }
-    const companionId = this.resolveRoutedCompanionId(
-      surface,
-      discordAccountId ? { kind: 'discord', accountId: discordAccountId } : undefined,
-    );
-    this.connectionLifecycle.refreshConnectionHealth();
-    this.flushInboundChannelReplay(companionId);
-
-    if (this.inboundChannelReplay.size(companionId) === 0) {
-      const conn = this.resolveReadyCompanionConnection(companionId);
-      if (conn && this.notifyOne(conn, method, params)) {
-        return 1;
-      }
-    }
-
-    const queueDepth = this.inboundChannelReplay.enqueue({
-      companionId,
-      surface,
-      method,
-      params,
-      ...(discordAccountId ? { discordAccountId } : {}),
-      enqueuedAt: Date.now(),
-    });
-    const messageId = inboundChannelMessageId(params);
-    log.warn('Inbound channel message queued until companion is ready', {
-      companionId,
-      surface,
-      method,
-      queueDepth,
-      ...(messageId ? { messageId } : {}),
-    });
-    // The gateway accepted durable-in-process responsibility for this
-    // notification. Returning positive keeps the adapter from treating a
-    // safely queued deploy-window message as an immediate delivery failure.
-    return 1;
-  }
-
-  private flushInboundChannelReplay(companionId: CompanionId): void {
-    const conn = this.resolveReadyCompanionConnection(companionId);
-    if (!conn) return;
-
-    let replayed = 0;
-    let notification = this.inboundChannelReplay.peek(companionId);
-    while (notification) {
-      if (!this.notifyOne(conn, notification.method, notification.params)) {
-        break;
-      }
-      this.inboundChannelReplay.removeHead(companionId, notification);
-      replayed += 1;
-      notification = this.inboundChannelReplay.peek(companionId);
-    }
-    if (replayed > 0) {
-      log.info('Replayed queued inbound channel messages', {
-        companionId,
-        replayed,
-        remaining: this.inboundChannelReplay.size(companionId),
-      });
-    }
-  }
-
-  private alertInboundChannelDrop(drop: InboundChannelReplayDrop): void {
-    const { notification, reason } = drop;
-    const messageId = inboundChannelMessageId(notification.params);
-    const details = {
-      companionId: notification.companionId,
-      surface: notification.surface,
-      method: notification.method,
-      reason,
-      enqueuedAt: notification.enqueuedAt,
-      ...(messageId ? { messageId } : {}),
-    };
-    log.error('Inbound channel replay queue dropped a message', details);
-    this.companionViolations.recordCompanionViolation('inbound_channel_message_dropped', details);
-    const startedAt = Date.now();
-    const auditDrop = async (): Promise<void> => {
-      try {
-        const auditId = await this.audit(
-          'gateway.companion.inbound_channel_message_dropped',
-          'DENY',
-          details,
-        );
-        await this.auditComplete(
-          auditId,
-          startedAt,
-          'Inbound channel message dropped before replay',
-        );
-      } catch (error) {
-        log.error('Failed to persist inbound channel drop audit', {
-          ...details,
-          error: toErrorMessage(error),
-        });
-      }
-    };
-    const deliverAlert = async (): Promise<void> => {
-      try {
-        await this.operatorAlertDispatcher.dispatch({
-          title: 'Inbound companion message dropped',
-          priority: 5,
-          message: [
-            `Gateway replay queue dropped an inbound ${notification.surface} message.`,
-            `Companion: ${notification.companionId}`,
-            `Reason: ${reason}`,
-            ...(messageId ? [`Message ID: ${messageId}`] : []),
-          ].join('\n'),
-          sender: {
-            kind: 'system',
-            provenance: 'system.operator_alert.inbound_channel_drop',
-          },
-        });
-      } catch (error) {
-        log.error('Failed to deliver inbound channel drop alert', {
-          ...details,
-          error: toErrorMessage(error),
-        });
-      }
-    };
-    void Promise.all([auditDrop(), deliverAlert()]);
-  }
-
-  /**
-   * Notify the connection that originated the in-flight request (e.g.
-   * llm.chunk streaming deltas). Single-companion mode preserves the existing
-   * broadcast path byte-identically; multi-companion mode pins delivery to the
-   * requesting connection so one companion's stream can never reach another.
-   */
-  private notifyRequestingConnection(
-    conn: GatewayRpcConnection,
-    method: string,
-    params: unknown,
-  ): void {
-    if (this.multiCompanion.enabled) {
-      this.notifyOne(conn, method, params);
-      return;
-    }
-    this.notifyAll(method, params);
+    return this.inboundChannelDelivery.notifyChannelMessage(surface, method, params, discordAccountId);
   }
 
   /**
@@ -2298,126 +2141,6 @@ export class GatewayServer {
     }
 
     return 'pass';
-  }
-
-  /**
-   * Resolve the ready agent connection owning a channel surface. Fail-closed:
-   * unrouted surface, unknown/disconnected companion, or unhealthy connection
-   * all alarm loudly and throw — traffic is never rerouted to another agent.
-   *
-   * When multi-account discord routing is active (W1-P2), the discord surface
-   * routes per bot account: the adapter that received the message names its
-   * accountId, and only that account's companion receives it. A missing or
-   * unknown accountId fails closed — never a broadcast, never another account.
-   */
-  private resolveCompanionAgent(
-    surface: GatewayChannelSurface,
-    route?: AuthenticatedGatewayAccountRoute,
-  ): {
-    conn: GatewayRpcConnection;
-    client: JSONRPCServerAndClient;
-    companionId: CompanionId;
-  } {
-    const companionId = this.resolveRoutedCompanionId(surface, route);
-    this.connectionLifecycle.refreshConnectionHealth();
-    return this.requireReadyCompanionRoute(surface, companionId);
-  }
-
-  private resolveSatelliteCompanionAgent(satellite: SatelliteRoutingMetadata): {
-    conn: GatewayRpcConnection;
-    client: JSONRPCServerAndClient;
-    companionId: CompanionId;
-  } {
-    const routeLabel = `satellite:${satellite.satelliteId}`;
-    if (!satellite.sharedDevice && this.fleetCompanionIds.size === 1) {
-      // One-companion fleet: there is nobody to arbitrate between, so an
-      // ungoverned satellite routes to the sole companion (psfn-framework-bbprt).
-      const [soleCompanionId] = this.fleetCompanionIds;
-      this.connectionLifecycle.refreshConnectionHealth();
-      return this.requireReadyCompanionRoute(routeLabel, soleCompanionId!);
-    }
-    if (!satellite.sharedDevice) {
-      this.companionViolations.alarmCompanionViolation(
-        'unbound_satellite',
-        `Satellite "${satellite.satelliteId}" has no shared-device policy in satellites.json`,
-        { satelliteId: satellite.satelliteId, endpointId: satellite.endpointId },
-      );
-      throw new Error(
-        `Multi-companion satellite "${satellite.satelliteId}" has no shared-device policy in satellites.json`,
-      );
-    }
-    const companionId = satellite.sharedDevice.primaryCompanionId;
-    if (!this.fleetCompanionIds.has(companionId)) {
-      this.companionViolations.alarmCompanionViolation(
-        'satellite_unknown_companion',
-        `Satellite "${satellite.satelliteId}" names a companion absent from companions.json`,
-        {
-          satelliteId: satellite.satelliteId,
-          endpointId: satellite.endpointId,
-          companionId,
-        },
-      );
-      throw new Error(
-        `Satellite "${satellite.satelliteId}" routes to companion "${companionId}" `
-        + 'which is absent from companions.json',
-      );
-    }
-    this.connectionLifecycle.refreshConnectionHealth();
-    return this.requireReadyCompanionRoute(routeLabel, companionId);
-  }
-
-  private resolveRoutedCompanionId(
-    surface: GatewayChannelSurface,
-    route?: AuthenticatedGatewayAccountRoute,
-  ): CompanionId {
-    return resolveConfiguredGatewayCompanion(this.multiCompanion, surface, route, violation => {
-      this.companionViolations.alarmCompanionViolation(
-        violation.code,
-        violation.message,
-        violation.details,
-      );
-      throw new Error(violation.errorMessage);
-    });
-  }
-
-  private requireReadyCompanionRoute(surface: string, companionId: CompanionId): {
-    conn: GatewayRpcConnection;
-    client: JSONRPCServerAndClient;
-    companionId: CompanionId;
-  } {
-    const conn = this.companionConnections.get(companionId);
-    if (!conn) {
-      this.companionViolations.alarmCompanionViolation(
-        'companion_not_connected',
-        `Companion "${companionId}" (surface "${surface}") has no connected agent`,
-        { surface, companionId },
-      );
-      throw new Error(`No agent connection for companion "${companionId}" (surface "${surface}")`);
-    }
-    const status = this.connectionStatuses.get(conn);
-    if (!status || status.role !== 'agent' || status.state !== 'ready' || status.health !== 'healthy') {
-      this.companionViolations.alarmCompanionViolation(
-        'companion_not_ready',
-        `Companion "${companionId}" (surface "${surface}") connection is not ready`,
-        {
-          surface,
-          companionId,
-          state: status?.state ?? 'missing',
-          health: status?.health ?? 'missing',
-        },
-      );
-      throw new Error(`Agent connection for companion "${companionId}" is not ready (surface "${surface}")`);
-    }
-    const client = this.rpcClients.get(conn);
-    if (!client) {
-      this.companionViolations.alarmCompanionViolation(
-        'companion_rpc_client_missing',
-        `Companion "${companionId}" (surface "${surface}") has no RPC client bound`,
-        { surface, companionId },
-      );
-      throw new Error(`No RPC client for companion "${companionId}" (surface "${surface}")`);
-    }
-    return { conn, client, companionId };
   }
 
   /**
@@ -2560,8 +2283,8 @@ export class GatewayServer {
   /** Local readiness of the same owner used by API requests, without sending RPC. */
   isApiReady(): boolean {
     try {
-      if (this.multiCompanion.enabled) this.resolveCompanionAgent('api');
-      else this.resolveReadyAgentConnection();
+      if (this.multiCompanion.enabled) this.connectionRouter.resolveCompanionAgent('api');
+      else this.connectionRouter.resolveReadyAgentConnection();
       return true;
     } catch {
       // Route resolution rejects absent, unready, stale, or unbound owners.
@@ -2582,8 +2305,8 @@ export class GatewayServer {
     timeoutMs = DEFAULT_AGENT_TIMEOUT_MS,
   ): Promise<T> {
     const client = this.multiCompanion.enabled
-      ? this.resolveCompanionAgent('api').client
-      : this.resolveReadyRpcClient();
+      ? this.connectionRouter.resolveCompanionAgent('api').client
+      : this.connectionRouter.resolveReadyRpcClient();
 
     const result = await Promise.race([
       client.request(method, params),
@@ -2608,8 +2331,8 @@ export class GatewayServer {
       'Explicit companion agent request companionId',
     );
     const client = this.multiCompanion.enabled
-      ? this.requireReadyCompanionRoute('api', exactCompanionId).client
-      : this.resolveReadyRpcClient();
+      ? this.connectionRouter.requireReadyCompanionRoute('api', exactCompanionId).client
+      : this.connectionRouter.resolveReadyRpcClient();
     const result = await Promise.race([
       client.request(method, params),
       new Promise<never>((_, reject) =>
@@ -2691,7 +2414,7 @@ export class GatewayServer {
       }
       const { lease } = acquisition;
       try {
-        const route = this.requireReadyCompanionRoute(
+        const route = this.connectionRouter.requireReadyCompanionRoute(
           `satellite:${satellite.satelliteId}`,
           lease.companionId,
         );
@@ -2847,7 +2570,7 @@ export class GatewayServer {
       }
       client = routedClient;
     } else {
-      client = this.resolveReadyRpcClient();
+      client = this.connectionRouter.resolveReadyRpcClient();
     }
 
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
@@ -2906,7 +2629,7 @@ export class GatewayServer {
     if (this.multiCompanion.enabled) {
       const satellite = message.routing?.satellite;
       const satelliteSource = message.routing?.source === 'satellite';
-      let route: ReturnType<GatewayServer['resolveCompanionAgent']>;
+      let route: ReturnType<GatewayConnectionRouter['resolveCompanionAgent']>;
       if (satellite) {
         if (!satelliteSource) {
           this.companionViolations.alarmCompanionViolation(
@@ -2916,7 +2639,7 @@ export class GatewayServer {
           );
           throw new Error('Satellite voice routing metadata requires routing.source="satellite"');
         }
-        route = this.resolveSatelliteCompanionAgent(satellite);
+        route = this.connectionRouter.resolveSatelliteCompanionAgent(satellite);
       } else {
         if (satelliteSource) {
           this.companionViolations.alarmCompanionViolation(
@@ -2937,7 +2660,7 @@ export class GatewayServer {
             `Multi-companion routing cannot map channelType "${message.channelType}" to a companion`,
           );
         }
-        route = this.resolveCompanionAgent(
+        route = this.connectionRouter.resolveCompanionAgent(
           surface,
           channelAccountRoute
             ? { kind: 'plugin', ...channelAccountRoute }
@@ -2948,7 +2671,7 @@ export class GatewayServer {
       conn = route.conn;
       companionId = route.companionId;
     } else {
-      const route = this.resolveReadyAgentConnection();
+      const route = this.connectionRouter.resolveReadyAgentConnection();
       client = route.client;
       conn = route.conn;
       companionId ??= this.connectionStatuses.get(conn)?.companionId;
@@ -3014,7 +2737,7 @@ export class GatewayServer {
       }
       const { lease } = acquisition;
       try {
-        const route = this.requireReadyCompanionRoute(
+        const route = this.connectionRouter.requireReadyCompanionRoute(
           `satellite:${satellite.satelliteId}`,
           lease.companionId,
         );
@@ -3125,7 +2848,7 @@ export class GatewayServer {
       // (psfn-framework-5ybt1).
       const availabilityUnfenced = this.icpAutonomyBroker === null;
       const availabilityState = availability?.lease?.state;
-      const connection = this.resolveReadyCompanionConnection(companionId);
+      const connection = this.connectionRouter.resolveReadyCompanionConnection(companionId);
       const client = connection ? this.rpcClients.get(connection) : undefined;
       const nowMs = Date.now();
       const isExplicitHumanInbound = input.explicitHumanInboundCompanionId === companionId;
@@ -3184,32 +2907,6 @@ export class GatewayServer {
         deviceAllows: input.policy.emanationMemberIds.includes(companionId),
       };
     }));
-  }
-
-  private resolveReadyRpcClient(): JSONRPCServerAndClient {
-    return this.resolveReadyAgentConnection().client;
-  }
-
-  private resolveReadyAgentConnection(): {
-    conn: GatewayRpcConnection;
-    client: JSONRPCServerAndClient;
-  } {
-    this.connectionLifecycle.refreshConnectionHealth();
-    if (this.rpcClients.size === 0) {
-      throw new Error('No agent connected');
-    }
-
-    for (const [conn, client] of this.rpcClients.entries()) {
-      const status = this.connectionStatuses.get(conn);
-      if (!status) {
-        continue;
-      }
-      if (status.role === 'agent' && status.state === 'ready' && status.health === 'healthy') {
-        return { conn, client };
-      }
-    }
-
-    throw new Error('No ready agent connected');
   }
 
   private getRuntimeHealth(companionId?: string): RuntimeHealthResult {

@@ -78,6 +78,7 @@ const HEALTH_EVENT_COMPONENTS = [
   'memory',
   'automata',
   'cogsec', // psfn-framework-mlhn3
+  'channels', // psfn-framework-6cs5j
 ] as const;
 
 export type HealthEventComponent = typeof HEALTH_EVENT_COMPONENTS[number];
@@ -180,6 +181,23 @@ const HEALTH_EVENT_CODES = [
    * Evidence-free — the digest is the whole subject.
    */
   'shared_store_write_failed', // psfn-framework-2xt9c
+  /**
+   * One channel surface (a built-in adapter or a plugin-host instance) failed
+   * to start, stop, or run, and was contained to itself (bead
+   * psfn-framework-6cs5j). Grouped by a digest of the SURFACE id, so a channel
+   * that keeps failing its bounded retries accumulates into one episode in the
+   * background-failure detector rather than one incident per attempt. The
+   * error text stays in the gateway log.
+   */
+  'channel_surface_failed', // psfn-framework-6cs5j
+  /**
+   * A channel surface refused to run and will not be retried: its own
+   * admission rejected it (missing credential, invalid wiring, failed init), a
+   * start error was not retryable, or its retry budget is spent. Every other
+   * channel and the gateway keep running; this is the standing incident that
+   * tells an operator the channel is down.
+   */
+  'channel_surface_disabled', // psfn-framework-6cs5j
 ] as const;
 
 export type HealthEventCode = typeof HEALTH_EVENT_CODES[number];
@@ -675,15 +693,26 @@ export function validateHealthEvent(value: unknown): HealthEvent {
 export function stableHealthConditionCorrelationId(
   code: HealthEventCode,
   owner: HealthEventOwner,
+  subjectHash?: string,
 ): string {
   const normalized = normalizeOwner(owner);
+  const identity: Array<string | null> = [
+    'psfn.health.condition',
+    code,
+    normalized.kind,
+    normalized.kind === 'companion' ? normalized.companionId : null,
+  ];
+  // A condition that exists once per SUBJECT (one per channel surface, say)
+  // keys on that subject's digest too, so two subjects are two incidents.
+  // Omitted, the identity is byte-identical to the subject-free form.
+  if (subjectHash !== undefined) {
+    if (!SHA256_HEX_PATTERN.test(subjectHash)) {
+      throw invalid('subjectHash', 'must be a lowercase SHA-256 hex digest');
+    }
+    identity.push(subjectHash);
+  }
   const digest = createHash('sha256')
-    .update(JSON.stringify([
-      'psfn.health.condition',
-      code,
-      normalized.kind,
-      normalized.kind === 'companion' ? normalized.companionId : null,
-    ]), 'utf8')
+    .update(JSON.stringify(identity), 'utf8')
     .digest('hex');
   // Version 5 (name-based) and the RFC-4122 variant, so the result satisfies
   // the same identifier contract every other correlation id here does.

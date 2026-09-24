@@ -9,7 +9,12 @@ import { createBuiltinChannelPluginRegistry } from '../../channels/plugins/built
 import { ChannelPluginHost } from '../../channels/plugins/host.js';
 import type { ChannelPluginRegistry } from '../../channels/plugins/types.js';
 import { createStaticCredentialVault } from '../custody/credential-vault.js';
-import { startDiscordWithRetry } from './discord-startup.js';
+import { isRetryableDiscordStartError } from './discord-startup.js';
+import {
+  ChannelSurfaceSupervisor,
+  type ChannelSurfaceIdentity,
+} from '../../channels/backplane/channel-isolation.js';
+import { createChannelSurfaceHealthReporter } from './channel-surface-health.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { GatewayBootstrapInput } from './bootstrap-input.js';
 import type { GatewayServer } from './server.js';
@@ -58,6 +63,15 @@ export interface GatewayChannelSurfaces {
   discordAccounts?: GatewayDiscordAccountSurface[];
   telegram?: TelegramAdapter;
   plugins: ChannelPluginHost;
+  /**
+   * Per-surface isolation (bead psfn-framework-6cs5j): every surface above is
+   * initialized, started, and stopped through it, so one failing channel is
+   * degraded or disabled alone while the gateway and other channels run.
+   */
+  isolation: ChannelSurfaceSupervisor;
+  /** Isolation identity of each Discord adapter, in `listDiscordAdapters` order. */
+  discordSurfaces: readonly ChannelSurfaceIdentity[];
+  telegramSurface?: ChannelSurfaceIdentity;
 }
 
 interface DiscordPrimaryUserAuthority {
@@ -179,7 +193,7 @@ export interface LoadGatewayChannelSurfacesInput {
   intakeScreeningForCompanion?: (
     companionId: CompanionId,
   ) => IntakeScreeningService | null;
-  log: RuntimeChannelLifecycleLogger;
+  log: GatewayChannelStartupLogger;
   enableDiscordEvidenceLifecycle?: boolean;
   /** Test seam; production uses the builtin channel plugin registry. */
   pluginRegistry?: ChannelPluginRegistry;
@@ -187,33 +201,6 @@ export interface LoadGatewayChannelSurfacesInput {
 
 export interface GatewayChannelStartupLogger extends RuntimeChannelLifecycleLogger {
   info(message: string, meta?: Record<string, unknown>): void;
-}
-
-const MULTICA_START_FAILURE = /^Channel plugin "multica(?:[^"]*)" failed to start:/u;
-
-/**
- * Multica is an auxiliary work channel, not a gateway availability dependency.
- * Its startup failure is reported and isolated while authority/configuration
- * failures in every other plugin retain the host's fail-closed behavior.
- */
-export async function startGatewayChannelPlugins(
-  plugins: Pick<ChannelPluginHost, 'start' | 'list'>,
-  log: GatewayChannelStartupLogger,
-): Promise<void> {
-  try {
-    await plugins.start();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (!MULTICA_START_FAILURE.test(message)) throw error;
-    log.warn('Multica channel unavailable; gateway continuing without it', {
-      pluginId: 'multica',
-      error: message,
-    });
-    return;
-  }
-  for (const entry of plugins.list()) {
-    log.info('Channel plugin started', { pluginId: entry.id });
-  }
 }
 
 export interface GatewayChannelIntakeScreeningRouting {
@@ -259,12 +246,13 @@ export function resolveChannelIntakeScreening(
 export async function initGatewayChannelSurfaces(
   surfaces: GatewayChannelSurfaces,
 ): Promise<void> {
-  if (surfaces.telegram) {
-    await surfaces.telegram.init();
+  const { telegram, telegramSurface } = surfaces;
+  if (telegram && telegramSurface) {
+    await surfaces.isolation.init(telegramSurface, () => telegram.init());
   }
   await surfaces.plugins.initialize();
-  for (const discord of listDiscordAdapters(surfaces)) {
-    await discord.init();
+  for (const [index, discord] of listDiscordAdapters(surfaces).entries()) {
+    await surfaces.isolation.init(surfaces.discordSurfaces[index]!, () => discord.init());
   }
 }
 
@@ -405,7 +393,16 @@ export async function loadGatewayChannelSurfaces(
   if (enabledPlugins && !vault) {
     throw new Error('Channel plugins require a credential vault');
   }
+  const isolation = new ChannelSurfaceSupervisor({
+    log: input.log,
+    // Interim: the one owner-backed start-retry policy the gateway has applies
+    // to every channel surface, with its network/5xx retryability classifier.
+    retry: input.bootstrap.discordStartRetry,
+    isRetryable: isRetryableDiscordStartError,
+    report: createChannelSurfaceHealthReporter(input.eventBus),
+  });
   const plugins = await ChannelPluginHost.load({
+    supervisor: isolation,
     registry: input.pluginRegistry ?? createBuiltinChannelPluginRegistry(),
     sections: input.bootstrap.channelsConfig.plugins,
     vault: vault ?? createStaticCredentialVault({}),
@@ -431,25 +428,59 @@ export async function loadGatewayChannelSurfaces(
     }),
   });
 
+  const telegram = getOptionalChannelAdapter<TelegramAdapter>(gatewayChannelRegistry, 'telegram')
+    ?? undefined;
+  const telegramSurface: ChannelSurfaceIdentity | undefined = telegram
+    ? { surfaceId: 'telegram', ...(telegramCompanionId ? { companionId: telegramCompanionId } : {}) }
+    : undefined;
+
   if (multiAccount) {
     const discordAccounts: GatewayDiscordAccountSurface[] = accountConfigs.map((account, index) => ({
       accountId: account.accountId,
       companionId: account.companionId,
       adapter: requireChannelAdapter<DiscordAdapter>(gatewayChannelRegistry, accountRegistryIds[index]!),
     }));
+    const discordSurfaces = discordAccounts.map((account, index) => ({
+      surfaceId: accountRegistryIds[index]!,
+      companionId: account.companionId,
+    }));
+    observeDiscordClientErrors(isolation, discordAccounts.map(account => account.adapter), discordSurfaces);
     return {
       discord: discordAccounts[0]!.adapter,
       discordAccounts,
-      telegram: getOptionalChannelAdapter<TelegramAdapter>(gatewayChannelRegistry, 'telegram') ?? undefined,
+      telegram,
       plugins,
+      isolation,
+      discordSurfaces,
+      ...(telegramSurface ? { telegramSurface } : {}),
     };
   }
 
+  const discord = requireChannelAdapter<DiscordAdapter>(gatewayChannelRegistry, 'discord');
+  const discordSurfaces: ChannelSurfaceIdentity[] = [{
+    surfaceId: 'discord',
+    ...(singleDiscordCompanionId ? { companionId: singleDiscordCompanionId } : {}),
+  }];
+  observeDiscordClientErrors(isolation, [discord], discordSurfaces);
   return {
-    discord: requireChannelAdapter<DiscordAdapter>(gatewayChannelRegistry, 'discord'),
-    telegram: getOptionalChannelAdapter<TelegramAdapter>(gatewayChannelRegistry, 'telegram') ?? undefined,
+    discord,
+    telegram,
     plugins,
+    isolation,
+    discordSurfaces,
+    ...(telegramSurface ? { telegramSurface } : {}),
   };
+}
+
+function observeDiscordClientErrors(
+  isolation: ChannelSurfaceSupervisor,
+  adapters: readonly Pick<DiscordAdapter, 'onClientError'>[],
+  surfaces: readonly ChannelSurfaceIdentity[],
+): void {
+  for (const [index, adapter] of adapters.entries()) {
+    const surface = surfaces[index]!;
+    adapter.onClientError(error => isolation.reportRuntimeFailure(surface, error));
+  }
 }
 
 export interface WireGatewayChannelMessagesInput {
@@ -605,64 +636,51 @@ export async function startGatewayChannelSurfaces(
   const discordAdapters = listDiscordAdapters(surfaces);
   for (const [index, discord] of discordAdapters.entries()) {
     const accountId = surfaces.discordAccounts?.[index]?.accountId;
-    let discordStartAttempts = 0;
-    await startDiscordWithRetry(
-      async () => {
-        discordStartAttempts += 1;
-        await discord.start();
-      },
-      {
-        baseDelayMs: bootstrap.discordStartRetry.baseDelayMs,
-        maxDelayMs: bootstrap.discordStartRetry.maxDelayMs,
-        maxAttempts: bootstrap.discordStartRetry.maxAttempts,
-        onRetry: ({ attempt, delayMs, maxAttempts, error }) => {
-          const rawCode = (error as Error & { code?: unknown }).code;
-          const code = typeof rawCode === 'string' ? rawCode : undefined;
-          log.warn('Discord startup failed; retrying', {
-            attempt,
-            ...(accountId ? { accountId } : {}),
-            ...(maxAttempts > 0 ? { maxAttempts } : { maxAttempts: 'unbounded' }),
-            delayMs,
-            ...(code ? { code } : {}),
-            error: error.message,
-          });
-        },
-      },
-    );
-    if (discordStartAttempts > 1) {
-      log.info('Discord startup recovered after retries', {
-        attempts: discordStartAttempts,
+    await surfaces.isolation.start({
+      ...surfaces.discordSurfaces[index]!,
+      start: () => discord.start(),
+      onStarted: attempts => log.info('Discord surface started', {
+        attempts,
         ...(accountId ? { accountId } : {}),
-      });
-    }
-  }
-  if (surfaces.discordAccounts && surfaces.discordAccounts.length > 0) {
-    log.info('Discord multi-account surfaces started', {
-      accounts: surfaces.discordAccounts.map(account => ({
-        accountId: account.accountId,
-        companionId: account.companionId,
-        botUserId: account.adapter.getBotUserId(),
-      })),
+        ...(surfaces.discordAccounts
+          ? { companionId: surfaces.discordAccounts[index]!.companionId }
+          : {}),
+        botUserId: discord.getBotUserId(),
+      }),
     });
   }
 
-  if (surfaces.telegram) {
-    await surfaces.telegram.start();
-    log.info('Telegram gateway bridge enabled', {
-      mode: bootstrap.channelsConfig.telegram.mode,
-      allowlistSize: bootstrap.channelsConfig.telegram.allowedUsers.length,
+  const { telegram, telegramSurface } = surfaces;
+  if (telegram && telegramSurface) {
+    await surfaces.isolation.start({
+      ...telegramSurface,
+      start: () => telegram.start(),
+      onStarted: () => log.info('Telegram gateway bridge enabled', {
+        mode: bootstrap.channelsConfig.telegram.mode,
+        allowlistSize: bootstrap.channelsConfig.telegram.allowedUsers.length,
+      }),
     });
   }
 
-  await startGatewayChannelPlugins(surfaces.plugins, log);
+  await surfaces.plugins.start(entry => {
+    log.info('Channel plugin started', { pluginId: entry.id });
+  });
 }
 
+/** Stops every surface; one surface's stop failure never skips the others. */
 export async function stopGatewayChannelSurfaces(
   surfaces: GatewayChannelSurfaces,
 ): Promise<void> {
   await surfaces.plugins.stop();
-  await surfaces.telegram?.stop();
-  for (const discord of [...listDiscordAdapters(surfaces)].reverse()) {
-    await discord.stop();
+  const { telegram, telegramSurface } = surfaces;
+  if (telegram && telegramSurface) {
+    await surfaces.isolation.stop(telegramSurface, () => telegram.stop());
+  }
+  const discordAdapters = listDiscordAdapters(surfaces);
+  for (let index = discordAdapters.length - 1; index >= 0; index -= 1) {
+    await surfaces.isolation.stop(
+      surfaces.discordSurfaces[index]!,
+      () => discordAdapters[index]!.stop(),
+    );
   }
 }

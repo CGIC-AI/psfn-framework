@@ -5,6 +5,7 @@ import { ChannelPluginHost } from './host.js';
 import { createChannelPluginRegistry } from './registry.js';
 import type {
   ChannelPlugin,
+  ChannelPluginInstance,
   ChannelPluginCreateInput,
   ChannelPluginHostContext,
   ChannelPluginLoadedSection,
@@ -12,12 +13,30 @@ import type {
 } from './types.js';
 import { parseChannelPluginSections } from './load-sections.js';
 import { createMulticaChannelPlugin } from '../multica/plugin.js';
+import {
+  ChannelSurfaceSupervisor,
+  type ChannelSurfaceFailure,
+} from '../backplane/channel-isolation.js';
 
 function makeLogger() {
   return {
     error: vi.fn(),
     warn: vi.fn(),
   };
+}
+
+function makeSupervisor(isRetryable: (error: Error) => boolean = () => false) {
+  const failures: ChannelSurfaceFailure[] = [];
+  const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  const supervisor = new ChannelSurfaceSupervisor({
+    log,
+    retry: { baseDelayMs: 10, maxDelayMs: 40, maxAttempts: 0 },
+    isRetryable,
+    report: (failure) => {
+      failures.push(failure);
+    },
+  });
+  return { supervisor, failures, log };
 }
 
 function makeContext(): ChannelPluginHostContext {
@@ -156,6 +175,7 @@ describe('ChannelPluginHost', () => {
       sections: parseChannelPluginSections({ probe: { enabled: true } }, registry),
       vault: createStaticCredentialVault({}),
       contextFor: () => makeContext(),
+      supervisor: makeSupervisor().supervisor,
     });
     const requestAgentVoiceStream = vi.fn(async () => ({
       content: 'ok',
@@ -256,6 +276,7 @@ describe('ChannelPluginHost', () => {
         ALPHA_TOKEN: 'alpha-secret',
         BETA_TOKEN: 'beta-secret',
       }),
+      supervisor: makeSupervisor().supervisor,
       contextFor: (_pluginId, section) => {
         contextCompanions.push(section.companionId);
         return makeContext();
@@ -332,27 +353,49 @@ describe('ChannelPluginHost', () => {
         BETA_TOKEN: 'beta-secret',
       }),
       contextFor: () => makeContext(),
+      supervisor: makeSupervisor().supervisor,
     });
     expect(seen.alpha).toEqual({ token: 'alpha-secret' });
     expect(seen.beta).toEqual({ token: 'beta-secret' });
     expect(Object.keys(seen.alpha)).toEqual(['token']);
   });
 
-  it('rejects missing credentials without constructing the plugin', async () => {
+  it('disables only the plugin whose credential is missing, without constructing it', async () => {
     const created = vi.fn();
     const plugin = createProbePlugin({ onCreate: created });
-    const registry = createChannelPluginRegistry([plugin]);
-    const sections = parseChannelPluginSections({ probe: { enabled: true } }, registry);
-    await expect(ChannelPluginHost.load({
+    const sibling: ChannelPlugin = {
+      manifest: { id: 'sibling', label: 'Sibling' },
+      parseConfig: () => ({ enabled: true, credentials: [], config: {} }),
+      create: () => ({ adapter: makeAdapter('sibling') }),
+    };
+    const registry = createChannelPluginRegistry([plugin, sibling]);
+    const sections = parseChannelPluginSections(
+      { probe: { enabled: true }, sibling: { enabled: true } },
+      registry,
+    );
+    const { supervisor, failures } = makeSupervisor();
+    const host = await ChannelPluginHost.load({
       registry,
       sections,
       vault: createStaticCredentialVault({}),
       contextFor: () => makeContext(),
-    })).rejects.toThrow('Probe token is not configured');
+      supervisor,
+    });
     expect(created).not.toHaveBeenCalled();
+    expect(host.list().map(entry => entry.id)).toEqual(['sibling']);
+    expect(supervisor.stateOf('probe')).toBe('disabled');
+    expect(failures).toEqual([expect.objectContaining({
+      surfaceId: 'probe',
+      phase: 'load',
+      terminal: true,
+      error: expect.objectContaining({ message: expect.stringContaining('Probe token is not configured') }),
+    })]);
+    await host.initialize();
+    await host.start();
+    expect(host.listRunning().map(entry => entry.id)).toEqual(['sibling']);
   });
 
-  it('starts plugins in registration order and stops them in reverse after a later failure', async () => {
+  it('isolates a start failure: earlier and later plugins keep running', async () => {
     const events: string[] = [];
     const first: ChannelPlugin = {
       manifest: { id: 'first', label: 'First' },
@@ -383,20 +426,49 @@ describe('ChannelPluginHost', () => {
         }),
       }),
     };
+    const third: ChannelPlugin = {
+      manifest: { id: 'third', label: 'Third' },
+      parseConfig: () => ({ enabled: true, credentials: [], config: {} }),
+      create: () => ({
+        adapter: makeAdapter('third', {
+          start: async () => {
+            events.push('start:third');
+          },
+          stop: async () => {
+            events.push('stop:third');
+          },
+        }),
+      }),
+    };
+    const { supervisor, failures } = makeSupervisor();
     const host = await ChannelPluginHost.load({
-      registry: createChannelPluginRegistry([first, second]),
+      registry: createChannelPluginRegistry([first, second, third]),
       sections: {
         first: { id: 'first', enabled: true, credentials: [], config: {} },
         second: { id: 'second', enabled: true, credentials: [], config: {} },
+        third: { id: 'third', enabled: true, credentials: [], config: {} },
       },
       vault: createStaticCredentialVault({}),
       contextFor: () => makeContext(),
+      supervisor,
     });
-    await expect(host.start()).rejects.toThrow('Channel plugin "second" failed to start');
-    expect(events).toEqual(['start:first', 'start:second', 'stop:second', 'stop:first']);
+    await expect(host.start()).resolves.toBeUndefined();
+    // Only the failing plugin is released; the third still starts.
+    expect(events).toEqual(['start:first', 'start:second', 'stop:second', 'start:third']);
+    expect(host.listRunning().map(entry => entry.id)).toEqual(['first', 'third']);
+    expect(supervisor.stateOf('second')).toBe('disabled');
+    expect(failures).toEqual([expect.objectContaining({
+      surfaceId: 'second',
+      phase: 'start',
+      terminal: true,
+    })]);
+
+    await host.stop();
+    // Stop runs in reverse and never re-stops the already-released plugin.
+    expect(events.slice(4)).toEqual(['stop:third', 'stop:first']);
   });
 
-  it('rolls back earlier accounts when a later account of the same plugin fails', async () => {
+  it('keeps earlier accounts running when a later account of the same plugin fails', async () => {
     const firstCompanionId = '11111111-1111-4111-8111-111111111111';
     const secondCompanionId = '22222222-2222-4222-8222-222222222222';
     const events: string[] = [];
@@ -428,21 +500,95 @@ describe('ChannelPluginHost', () => {
       },
     };
     const registry = createChannelPluginRegistry([plugin]);
+    const { supervisor, failures } = makeSupervisor();
     const host = await ChannelPluginHost.load({
       registry,
       sections: parseChannelPluginSections({ probe: { enabled: true } }, registry),
       vault: createStaticCredentialVault({}),
       contextFor: () => makeContext(),
+      supervisor,
     });
 
-    await expect(host.start()).rejects.toThrow(
-      `Channel plugin "probe:${secondCompanionId}" failed to start`,
-    );
+    await expect(host.start()).resolves.toBeUndefined();
     expect(events).toEqual([
       `start:${firstCompanionId}`,
       `start:${secondCompanionId}`,
       `stop:${secondCompanionId}`,
-      `stop:${firstCompanionId}`,
+    ]);
+    expect(host.listRunning().map(entry => entry.id)).toEqual([`probe:${firstCompanionId}`]);
+    expect(failures).toEqual([expect.objectContaining({
+      surfaceId: `probe:${secondCompanionId}`,
+      companionId: secondCompanionId,
+      phase: 'start',
+    })]);
+  });
+
+  it('isolates init, wiring, and stop failures to the failing plugin', async () => {
+    const events: string[] = [];
+    const plugin = (id: string, behavior: Parameters<typeof makeAdapter>[1] = {}): ChannelPlugin => ({
+      manifest: { id, label: id },
+      parseConfig: () => ({ enabled: true, credentials: [], config: {} }),
+      create: () => ({
+        adapter: makeAdapter(id, {
+          start: async () => {
+            events.push(`start:${id}`);
+          },
+          stop: async () => {
+            events.push(`stop:${id}`);
+          },
+          ...behavior,
+        }),
+      }),
+    });
+    const noHook = plugin('nohook');
+    const noHookCreate = noHook.create;
+    noHook.create = (input) => {
+      const instance = noHookCreate(input) as ChannelPluginInstance;
+      return { adapter: { ...instance.adapter, onMessage: undefined } as unknown as ChannelAdapterPort };
+    };
+    const registry = createChannelPluginRegistry([
+      plugin('badinit', { init: async () => { throw new Error('init exploded'); } }),
+      noHook,
+      plugin('badstop', {
+        stop: async () => {
+          events.push('stop:badstop');
+          throw new Error('stop exploded');
+        },
+      }),
+      plugin('healthy'),
+    ]);
+    const { supervisor, failures } = makeSupervisor();
+    const host = await ChannelPluginHost.load({
+      registry,
+      sections: Object.fromEntries(['badinit', 'nohook', 'badstop', 'healthy'].map(id => [
+        id,
+        { id, enabled: true, credentials: [], config: {} },
+      ])),
+      vault: createStaticCredentialVault({}),
+      contextFor: () => makeContext(),
+      supervisor,
+    });
+    host.wireMessages({
+      requestAgentVoiceStream: vi.fn(),
+      notifyOperator: vi.fn(),
+    });
+    await host.initialize();
+    await host.start();
+
+    expect(events).toEqual(['start:badstop', 'start:healthy']);
+    expect(host.listRunning().map(entry => entry.id)).toEqual(['badstop', 'healthy']);
+    expect(supervisor.stateOf('badinit')).toBe('disabled');
+    expect(supervisor.stateOf('nohook')).toBe('disabled');
+
+    await expect(host.stop()).resolves.toBeUndefined();
+    // Reverse order; badstop's failure does not stop badinit (registered
+    // before it) from releasing its partial init. The never-initialized
+    // nohook plugin has nothing to release.
+    expect(events.slice(2)).toEqual(['stop:healthy', 'stop:badstop', 'stop:badinit']);
+    expect(failures.map(failure => [failure.surfaceId, failure.phase, failure.terminal])).toEqual([
+      ['nohook', 'load', true],
+      ['badinit', 'init', true],
+      ['badstop', 'stop', false],
     ]);
   });
 
@@ -485,6 +631,7 @@ describe('ChannelPluginHost', () => {
         PROBE_TOKEN: 'probe-token',
       }),
       contextFor: () => makeContext(),
+      supervisor: makeSupervisor().supervisor,
     });
     expect(sections.multica?.continuityChannelPrefixes).toEqual([
       'multica:11111111-1111-4111-8111-111111111111:',

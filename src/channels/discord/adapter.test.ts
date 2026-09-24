@@ -92,6 +92,7 @@ vi.mock('discord.js', () => {
         MessageCreate: 'messageCreate',
         MessageReactionAdd: 'messageReactionAdd',
         ClientReady: 'ready',
+        Error: 'error',
         VoiceStateUpdate: 'voiceStateUpdate',
       },
       GatewayIntentBits: {
@@ -750,6 +751,20 @@ describe('DiscordAdapter DM routing', () => {
     expect(client.on.mock.calls.filter((call: unknown[]) => call[0] === 'messageReactionAdd')).toHaveLength(1);
     expect(client.on.mock.calls.filter((call: unknown[]) => call[0] === 'ready')).toHaveLength(1);
     expect(voiceMock.init).toHaveBeenCalledTimes(1);
+  });
+
+  it('always observes client errors so one cannot escape as an uncaught exception', async () => {
+    const adapter = new DiscordAdapter(makeConfig(), new EventBus());
+    const observed: Error[] = [];
+    adapter.onClientError(error => observed.push(error));
+    await adapter.init();
+
+    const client = discordMock.createdClients.at(-1);
+    const errorListeners = client.on.mock.calls.filter((call: unknown[]) => call[0] === 'error');
+    expect(errorListeners).toHaveLength(1);
+    const failure = new Error('gateway socket closed');
+    expect(() => (errorListeners[0][1] as (error: Error) => void)(failure)).not.toThrow();
+    expect(observed).toEqual([failure]);
   });
 
   it('routes DMs without requiring a bot mention', async () => {

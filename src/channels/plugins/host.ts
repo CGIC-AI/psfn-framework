@@ -1,5 +1,7 @@
+import type { CompanionId } from '../../shared/routing/companion-id.js';
 import type { CredentialVaultPort } from '../../boundary/custody/credential-vault.js';
 import type { AgentResponse, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { ChannelSurfaceSupervisor } from '../backplane/channel-isolation.js';
 import type { MessageHandlerOptions } from '../backplane/types.js';
 import type {
   ChannelPlugin,
@@ -15,13 +17,15 @@ export interface ChannelPluginHostOptions {
   sections: Readonly<Record<string, ChannelPluginLoadedSection>>;
   vault: CredentialVaultPort;
   contextFor: (pluginId: string, section: ChannelPluginLoadedSection) => ChannelPluginHostContext;
+  /** Per-instance isolation: one plugin's failure never reaches another. */
+  supervisor: ChannelSurfaceSupervisor;
 }
 
 export interface ChannelPluginWiredInstance {
   id: string;
   pluginId: string;
   accountId?: string;
-  companionId?: string;
+  companionId?: CompanionId;
   instance: ChannelPluginInstance;
 }
 
@@ -44,53 +48,68 @@ export interface ChannelPluginMessageWiring {
 
 export class ChannelPluginHost {
   readonly #instances: ChannelPluginWiredInstance[] = [];
-  #started = 0;
+  readonly #supervisor: ChannelSurfaceSupervisor;
 
-  private constructor(instances: readonly ChannelPluginWiredInstance[]) {
+  private constructor(
+    instances: readonly ChannelPluginWiredInstance[],
+    supervisor: ChannelSurfaceSupervisor,
+  ) {
     this.#instances.push(...instances);
+    this.#supervisor = supervisor;
   }
 
+  /**
+   * Instantiates every enabled plugin account. An account that cannot be
+   * constructed (missing credential, invalid adapter) refuses to run itself:
+   * it is disabled and reported while every other account still loads.
+   */
   static async load(options: ChannelPluginHostOptions): Promise<ChannelPluginHost> {
     const created: ChannelPluginWiredInstance[] = [];
-    try {
-      for (const plugin of options.registry.list()) {
-        const section = options.sections[plugin.manifest.id];
-        if (!section?.enabled) continue;
-        if (section.instances && section.instances.length > 0) {
-          for (const account of section.instances) {
-            const loadedAccount: ChannelPluginLoadedSection = {
-              id: plugin.manifest.id,
-              enabled: true,
-              config: account.config,
-              credentials: account.credentials,
-              ...(account.companionId ? { companionId: account.companionId } : {}),
-            };
-            created.push({
-              id: `${plugin.manifest.id}:${account.id}`,
-              pluginId: plugin.manifest.id,
-              accountId: account.id,
-              ...(account.companionId ? { companionId: account.companionId } : {}),
-              instance: await instantiatePlugin(plugin, loadedAccount, options),
-            });
-          }
-          continue;
+    for (const plugin of options.registry.list()) {
+      const section = options.sections[plugin.manifest.id];
+      if (!section?.enabled) continue;
+      const accounts = section.instances && section.instances.length > 0
+        ? section.instances.map(account => ({
+          id: `${plugin.manifest.id}:${account.id}`,
+          accountId: account.id,
+          section: {
+            id: plugin.manifest.id,
+            enabled: true,
+            config: account.config,
+            credentials: account.credentials,
+            ...(account.companionId ? { companionId: account.companionId } : {}),
+          } satisfies ChannelPluginLoadedSection,
+        }))
+        : [{ id: plugin.manifest.id, accountId: undefined, section }];
+      for (const account of accounts) {
+        const companionId = account.section.companionId;
+        try {
+          created.push({
+            id: account.id,
+            pluginId: plugin.manifest.id,
+            ...(account.accountId ? { accountId: account.accountId } : {}),
+            ...(companionId ? { companionId } : {}),
+            instance: await instantiatePlugin(plugin, account.section, options),
+          });
+        } catch (error) {
+          options.supervisor.disable(
+            { surfaceId: account.id, ...(companionId ? { companionId } : {}) },
+            'load',
+            error,
+          );
         }
-        created.push({
-          id: plugin.manifest.id,
-          pluginId: plugin.manifest.id,
-          ...(section.companionId ? { companionId: section.companionId } : {}),
-          instance: await instantiatePlugin(plugin, section, options),
-        });
       }
-      return new ChannelPluginHost(created);
-    } catch (error) {
-      await stopInstances(created);
-      throw error;
     }
+    return new ChannelPluginHost(created, options.supervisor);
   }
 
   list(): readonly ChannelPluginWiredInstance[] {
     return this.#instances;
+  }
+
+  /** Instances currently running (not degraded, disabled, or stopped). */
+  listRunning(): readonly ChannelPluginWiredInstance[] {
+    return this.#instances.filter(entry => this.#supervisor.stateOf(entry.id) === 'running');
   }
 
   get(id: string): ChannelPluginInstance | undefined {
@@ -98,46 +117,45 @@ export class ChannelPluginHost {
   }
 
   async initialize(): Promise<void> {
-    for (const [index, entry] of this.#instances.entries()) {
-      try {
-        await entry.instance.adapter.init();
-      } catch (error) {
-        await stopInstances(this.#instances.slice(0, index + 1));
-        throw new Error(
-          `Channel plugin "${entry.id}" failed to initialize: ${String(error)}`,
-          { cause: error },
-        );
-      }
+    for (const entry of this.#instances) {
+      await this.#supervisor.init(surfaceOf(entry), () => entry.instance.adapter.init());
     }
   }
 
-  async start(): Promise<void> {
-    this.#started = 0;
+  /**
+   * Starts every plugin independently. A failed start releases that plugin
+   * alone (its own stop) and, when retryable, retries it in the background.
+   */
+  async start(onStarted?: (entry: ChannelPluginWiredInstance) => void): Promise<void> {
     for (const entry of this.#instances) {
-      try {
-        await entry.instance.adapter.start();
-        this.#started += 1;
-      } catch (error) {
-        // Stop the adapter whose start just failed plus every adapter that
-        // started before it, mirroring the initialize() rollback contract.
-        await stopInstances(this.#instances.slice(0, this.#started + 1));
-        this.#started = 0;
-        throw new Error(
-          `Channel plugin "${entry.id}" failed to start: ${String(error)}`,
-          { cause: error },
-        );
-      }
+      await this.#supervisor.start({
+        ...surfaceOf(entry),
+        start: () => entry.instance.adapter.start(),
+        cleanup: () => entry.instance.adapter.stop(),
+        ...(onStarted ? { onStarted: () => onStarted(entry) } : {}),
+      });
     }
   }
 
   async stop(): Promise<void> {
-    const running = this.#instances.slice(0, this.#started);
-    this.#started = 0;
-    await stopInstances(running);
+    for (const entry of [...this.#instances].reverse()) {
+      await this.#supervisor.stop(surfaceOf(entry), () => entry.instance.adapter.stop());
+    }
   }
 
   wireMessages(wiring: ChannelPluginMessageWiring): void {
-    for (const { id, pluginId, accountId, instance } of this.#instances) {
+    for (const entry of this.#instances) {
+      const { id, pluginId, accountId, instance } = entry;
+      const onMessage = instance.adapter.onMessage;
+      if (typeof onMessage !== 'function') {
+        // The plugin cannot receive messages: it refuses to run, alone.
+        this.#supervisor.disable(
+          surfaceOf(entry),
+          'load',
+          new Error(`Channel plugin "${id}" is missing onMessage bootstrap hook`),
+        );
+        continue;
+      }
       instance.onOperatorAlert?.(async alert => {
         await wiring.notifyOperator({
           sender: { kind: 'system', provenance: `system.channels.${pluginId}_failure` },
@@ -147,10 +165,6 @@ export class ChannelPluginHost {
           idempotencyKey: alert.idempotencyKey,
         });
       });
-      const onMessage = instance.adapter.onMessage;
-      if (typeof onMessage !== 'function') {
-        throw new Error(`Channel plugin "${id}" is missing onMessage bootstrap hook`);
-      }
       onMessage.call(instance.adapter, async (message: SubstrateMessage, options?: MessageHandlerOptions) => {
         const requestOptions = {
           ...(options?.signal ? { signal: options.signal } : {}),
@@ -197,17 +211,9 @@ async function instantiatePlugin(
   return instance;
 }
 
-async function stopInstances(entries: readonly ChannelPluginWiredInstance[]): Promise<void> {
-  const errors: unknown[] = [];
-  for (const entry of [...entries].reverse()) {
-    try {
-      await entry.instance.adapter.stop();
-    } catch (error) {
-      errors.push(error);
-    }
-  }
-  if (errors.length === 1) throw errors[0];
-  if (errors.length > 1) {
-    throw new AggregateError(errors, 'Channel plugin host failed to stop one or more plugins');
-  }
+function surfaceOf(entry: ChannelPluginWiredInstance): { surfaceId: string; companionId?: CompanionId } {
+  return {
+    surfaceId: entry.id,
+    ...(entry.companionId ? { companionId: entry.companionId } : {}),
+  };
 }

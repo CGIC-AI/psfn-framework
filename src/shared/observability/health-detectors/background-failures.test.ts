@@ -168,6 +168,31 @@ describe('repeated background-work failure detector', () => {
     expect(opened[0]!.evidence.failureCount).toBe(3);
   });
 
+  it('turns a channel that keeps failing its retries into one incident per channel', async () => {
+    const detector = harness();
+    // psfn-framework-6cs5j: each failed start attempt of a contained channel is
+    // one observation grouped by the SURFACE, so a retrying channel is one
+    // episode and a second failing channel is a second one.
+    const discord = hashHealthEventSubject('channel:discord');
+    const buzz = hashHealthEventSubject('channel:buzz');
+    for (let index = 0; index < 3; index += 1) {
+      for (const subjectHash of [discord, buzz]) {
+        detector.record(failure({
+          code: 'channel_surface_failed',
+          component: 'channels',
+          subjectHash,
+          evidence: { attemptCount: index + 1, terminal: false },
+          observedAtMs: NOW_MS + index * MINUTE_MS,
+        }));
+      }
+    }
+    await detector.runAt(NOW_MS + 4 * MINUTE_MS);
+
+    const opened = detector.events.filter(e => e.code === 'background_work_failures_opened');
+    expect(opened.map(e => e.provenance.subjectHash).sort()).toEqual([discord, buzz].sort());
+    expect(opened.every(e => e.provenance.component === 'channels')).toBe(true);
+  });
+
   it('closes the episode once the lane stops failing for a full window', async () => {
     const detector = harness();
     for (let index = 0; index < 3; index += 1) {

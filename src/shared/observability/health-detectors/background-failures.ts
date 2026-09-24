@@ -54,6 +54,10 @@ const COUNTED_FAILURE_CODES: readonly HealthEventCode[] = [
   // psfn-framework-zu8d2: grouped by a digest of the handoff KIND, so a settle
   // path that keeps diverging on replay becomes one episode.
   'terminal_handoff_replay_diverged',
+  // psfn-framework-6cs5j: grouped by a digest of the channel SURFACE, so a
+  // channel failing its bounded retries becomes one episode that closes once
+  // the channel recovers and its observations age out of the window.
+  'channel_surface_failed',
 ];
 
 interface FailureGroup {

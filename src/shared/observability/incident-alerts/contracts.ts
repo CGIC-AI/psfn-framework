@@ -33,9 +33,9 @@ import type { SandboxDeniedCapability } from '../../contracts/sandbox-analysis-c
  * Health-event codes that are an incident in their own right rather than one
  * phase of a detector episode.
  *
- * `operator_alert_sinks_unconfigured` is the only member and the reason this
- * concept exists: a runtime that cannot deliver an operator alert is the one
- * fault nobody would otherwise be told about. It has no detector, no `closed`
+ * `operator_alert_sinks_unconfigured` is the reason this concept exists: a
+ * runtime that cannot deliver an operator alert is the one fault nobody would
+ * otherwise be told about. It has no detector, no `closed`
  * partner, and no recovery event, so it is alerted on sight and never
  * re-stated. Its correlation id is derived from the CONDITION rather than
  * minted per boot (psfn-framework-yu03d), so a sinkless crash loop stays one
@@ -43,6 +43,9 @@ import type { SandboxDeniedCapability } from '../../contracts/sandbox-analysis-c
  */
 const STANDALONE_INCIDENT_CODES = [
   'operator_alert_sinks_unconfigured',
+  // psfn-framework-6cs5j: a channel that refused to run is down until a human
+  // fixes it; it is keyed per surface, so each disabled channel is one incident.
+  'channel_surface_disabled',
 ] as const satisfies readonly HealthEventCode[];
 
 function isStandaloneIncidentCode(code: HealthEventCode): boolean {

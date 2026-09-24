@@ -121,6 +121,25 @@ describe('incident projection', () => {
     expect(incident.evidence).toEqual({ configuredSinkCount: 0 });
   });
 
+  it('treats a disabled channel surface as an open incident of its own', () => {
+    const disabled = event({
+      code: 'channel_surface_disabled',
+      severity: 'critical',
+      provenance: {
+        process: 'gateway',
+        component: 'channels',
+        observerId: processObserverId(),
+        subjectHash: 'a'.repeat(64),
+      },
+      evidence: { attemptCount: 1, terminal: true },
+    } as Partial<HealthEventInput> & Pick<HealthEventInput, 'code'>);
+
+    const incident = summarizeIncident([disabled], { timelineLimit: TIMELINE_LIMIT })!;
+    expect(incident.family).toBeNull();
+    expect(incident.status).toBe('open');
+    expect(incident.component).toBe('channels');
+  });
+
   it('never mixes one companion incident into another companion tenancy', () => {
     const opened = event({
       code: 'background_work_failures_opened',

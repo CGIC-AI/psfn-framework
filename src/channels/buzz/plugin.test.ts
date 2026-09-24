@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createStaticCredentialVault } from '../../boundary/custody/credential-vault.js';
 import { ChannelPluginHost } from '../plugins/host.js';
+import { ChannelSurfaceSupervisor } from '../backplane/channel-isolation.js';
 import { parseChannelPluginSections } from '../plugins/load-sections.js';
 import { createChannelPluginRegistry } from '../plugins/registry.js';
 import { createBuiltinChannelPluginRegistry } from '../plugins/builtin.js';
@@ -53,6 +54,12 @@ describe('Buzz channel plugin config', () => {
       vault: createStaticCredentialVault({
         BUZZ_ONE_NSEC: '1'.repeat(64),
         BUZZ_TWO_NSEC: '2'.repeat(64),
+      }),
+      supervisor: new ChannelSurfaceSupervisor({
+        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        retry: { baseDelayMs: 10, maxDelayMs: 10, maxAttempts: 1 },
+        isRetryable: () => false,
+        report: vi.fn(),
       }),
       contextFor: () => ({
         log: { error: vi.fn(), warn: vi.fn() },

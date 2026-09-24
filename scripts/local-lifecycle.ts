@@ -262,6 +262,11 @@ function runtimeEnvironment(context: LocalContext): NodeJS.ProcessEnv {
     // Testing-harness devices (psfn-framework-ajgo2): the agent stamps the
     // fixture turn, so it must see the same flag as the gateway.
     'PSFN_TESTING_HARNESS_DEVICES',
+    // Testing-harness Garden verifier (psfn-framework-mpwyc): Garden and the
+    // agent resolve it in loadConfig, so the harness gardenAdmin door behaves
+    // as it does on k3d. TESTING_HARNESS_API_KEY stays gateway-only: no Garden
+    // or agent code reads it (the harness capability arrives gateway-signed).
+    'PSFN_TESTING_HARNESS_GARDEN_VERIFIER',
   ];
   return Object.fromEntries(names.flatMap(name => (
     context.env[name] === undefined ? [] : [[name, context.env[name]!]]
@@ -281,7 +286,7 @@ function agentEnvironment(context: LocalContext): NodeJS.ProcessEnv {
   };
 }
 
-function gardenEnvironment(context: LocalContext): NodeJS.ProcessEnv {
+export function gardenEnvironment(context: LocalContext): NodeJS.ProcessEnv {
   return {
     ...runtimeEnvironment(context),
     POSTGRES_DATABASE_URL: context.env.POSTGRES_DATABASE_URL,

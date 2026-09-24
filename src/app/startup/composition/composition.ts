@@ -5,6 +5,7 @@
 // - src/app/agent/main.ts runs in split mode (gateway + isolated agent) and wires gateway-backed providers.
 // Keep core construction through these helpers so behavior stays aligned across split entrypoints.
 
+import type { RetrievalDecisionPort } from '../../../faculties/memory/retrieval/decision-routing.js';
 import type { CoreSubstrateConfig, SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { PlacesRegistryConfig } from '../../../shared/contracts/places-registry.js';
 import type { EventBus } from '../../../shared/event-bus.js';
@@ -679,6 +680,8 @@ export function wireCoreMemoryRuntime(options: CoreMemoryRuntimeOptions): CoreMe
 export interface MemoryRuntimeOptions {
   agentLoop: SubstrateAgent;
   llmProvider: LLMProviderPort;
+  /** Typed decision runtime for opt-in retrieval sites (epic 4lf3r). */
+  decisionRuntime?: RetrievalDecisionPort;
   sessionManager: SessionManager;
   sessionStore?: SessionStore | null;
   memoryStore: MemoryStorePort;
@@ -708,7 +711,7 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
   const roomMembershipAuthority = options.sessionStore
     ? createCompanionRoomMembershipAuthority(options.sessionStore)
     : null;
-  options.agentLoop.memoryProvider = options.config
+  const memoryRetriever = options.config
     ? new MemoryRetriever(
       options.memoryStore,
       options.embeddingService,
@@ -735,6 +738,8 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
 	      options.biographicalProjection ?? null,
 	      roomMembershipAuthority,
 	    );
+  if (options.decisionRuntime) memoryRetriever.setDecisionRuntime(options.decisionRuntime);
+  options.agentLoop.memoryProvider = memoryRetriever;
 
   const extractorFormationOptions = {
     ...(options.concernCandidateSink

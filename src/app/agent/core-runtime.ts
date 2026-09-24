@@ -1265,6 +1265,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   const memoryExtractor = wireMemoryRuntime({
     agentLoop,
     llmProvider,
+    decisionRuntime,
     sessionManager,
     sessionStore,
     memoryStore,

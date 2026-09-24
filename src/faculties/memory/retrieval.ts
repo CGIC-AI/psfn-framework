@@ -3,6 +3,11 @@ import type {
   LLMProviderPort,
   RetrievalVADInput,
 } from '../../core/agent/contracts.js';
+import {
+  applyDecisionRelevanceRerank,
+  resolveQueryIntentRetrievalMode,
+  type RetrievalDecisionPort,
+} from './retrieval/decision-routing.js';
 import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import { MemorySubjectAuthorizationDeniedError } from '../../shared/contracts/memory-subject.js';
 import { createHash } from 'node:crypto';
@@ -270,6 +275,8 @@ export class MemoryRetriever implements MemoryProvider {
   private enforceSubjectAuthorization: boolean;
   private biographicalProjection: Pick<MemoryProvider, 'projectBiographicalContext'> | null;
   private roomMembershipAuthority: CompanionRoomMembershipAuthority | null;
+  /** Optional typed decisions for query-intent routing and rerank (epic 4lf3r). */
+  private decisions: RetrievalDecisionPort | null = null;
 
   constructor(
     memoryStore: MemoryStorePort,
@@ -320,6 +327,11 @@ export class MemoryRetriever implements MemoryProvider {
     this.roomMembershipAuthority = roomMembershipAuthority ?? null;
     this.activeMemoryContexts = new Map();
     this.activeMemoryRefreshLoops = new Map();
+  }
+
+  /** Attach the typed decision runtime; its retrieval sites stay off unless enabled. */
+  setDecisionRuntime(decisions: RetrievalDecisionPort): void {
+    this.decisions = decisions;
   }
 
   async projectBiographicalContext(
@@ -1437,6 +1449,18 @@ export class MemoryRetriever implements MemoryProvider {
       // memories surface even when privacy penalties zero their composite score.
       // This prevents "water in the well, bucket has holes" retrieval gaps.
       const rankingStartedAt = performance.now();
+      const decisionContext = this.decisions
+        ? {
+          decisions: this.decisions,
+          contextText,
+          channelId,
+          accessScope: effectiveAccessScope,
+          ...(this.runtimeConfig?.companionId ? { companionId: this.runtimeConfig.companionId } : {}),
+        }
+        : null;
+      const scoringRetrievalMode = decisionContext
+        ? await resolveQueryIntentRetrievalMode({ ...decisionContext, current: effectiveRetrievalMode })
+        : effectiveRetrievalMode;
       const allScored = policyAllowed
         .map(memory => ({
           memory,
@@ -1445,7 +1469,7 @@ export class MemoryRetriever implements MemoryProvider {
             moodCongruenceWeight: this.moodCongruenceWeight,
             scopeQuery: normalizedScopeQuery,
             callerContext: effectiveCallerContext,
-            retrievalMode: effectiveRetrievalMode,
+            retrievalMode: scoringRetrievalMode,
             memoryRetrievalPolicy,
             taskKind: effectiveBudgetTurn.taskKind,
           }),
@@ -1459,9 +1483,13 @@ export class MemoryRetriever implements MemoryProvider {
         runtimeConfig: this.runtimeConfig,
         llmProvider: this.llmProvider,
       });
+      const lexicallyRanked = rerankDecision.ranked ?? allScored;
+      const decisionRanked = decisionContext
+        ? await applyDecisionRelevanceRerank({ ...decisionContext, candidates: lexicallyRanked })
+        : null;
       const scoredCandidates = await applySocialContextRankingAdjustments(
         this.contactStore,
-        rerankDecision.ranked ?? allScored,
+        decisionRanked ?? lexicallyRanked,
         contextText,
         socialContext,
       );

@@ -102,9 +102,9 @@ describe('Postgres ICP fleet health reader', () => {
         [A, { state: 'available', expiresAtMs: NOW + 60_000 }],
       ]);
       expect([...read.lifecycleFenced]).toEqual([C]);
+      // Only active episodes count as active channels; invited and ended do not.
       expect(read.openEpisodes.map(episode => [...episode.participantCompanionIds].sort()))
-        .toEqual(expect.arrayContaining([[A, B], [A, C]]));
-      expect(read.openEpisodes).toHaveLength(2);
+        .toEqual([[A, B]]);
       expect(read.openEpisodesTruncated).toBe(false);
       expect(read.pairVolume).toEqual([
         { firstCompanionId: A, secondCompanionId: B, deliveredTurns: 2 },

@@ -41,7 +41,7 @@ export interface IcpFleetHealthRead {
   readonly availability: ReadonlyMap<string, IcpFleetHealthAvailability>;
   readonly lifecycleFenced: ReadonlySet<string>;
   readonly openEpisodes: readonly IcpFleetHealthOpenEpisode[];
-  /** True when more open episodes existed than the bounded read returned. */
+  /** True when more active episodes existed than the bounded read returned. */
   readonly openEpisodesTruncated: boolean;
   readonly pairVolume: readonly IcpFleetHealthPairVolume[];
 }
@@ -128,7 +128,7 @@ async function readIcpFleetHealth(
     queryRows<EpisodeRow>(pool, `
       SELECT participant_companion_ids
       FROM icp_conversation_episodes
-      WHERE status IN ('invited', 'active')
+      WHERE status = 'active'
       ORDER BY last_activity_at_ms DESC, conversation_id
       LIMIT $1
     `, [ICP_FLEET_HEALTH_READ_PROTOCOL.maxOpenEpisodes + 1]),

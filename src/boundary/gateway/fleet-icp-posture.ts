@@ -91,10 +91,15 @@ export class IcpPolicyOutcomeRecorder {
     this.outcomes.set(companionId, outcome);
   }
 
-  /** A failure is current until a later success or until it ages out. */
-  isFailing(companionId: string, nowMs: number): boolean {
+  /**
+   * A failure is current until a later success, until the agent reconnects
+   * (a fresh connection supersedes failures against the old one), or until it
+   * ages out.
+   */
+  isFailing(companionId: string, nowMs: number, connectedAtMs: number): boolean {
     const outcome = this.outcomes.get(companionId);
     if (outcome?.lastFailureMs === undefined) return false;
+    if (outcome.lastFailureMs < connectedAtMs) return false;
     if (outcome.lastSuccessMs !== undefined && outcome.lastSuccessMs >= outcome.lastFailureMs) {
       return false;
     }
@@ -170,7 +175,7 @@ export function deriveFleetIcpPosture(input: {
       }));
       continue;
     }
-    if (input.policyOutcomes.isFailing(id, input.nowMs)) {
+    if (input.policyOutcomes.isFailing(id, input.nowMs, connection.connectedAt)) {
       companions.set(id, Object.freeze({
         state: 'policy_unavailable', reason: 'policy_authority_failed', lifecycle: 'member',
       }));

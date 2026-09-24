@@ -137,6 +137,7 @@ describe('fleet ICP posture derivation', () => {
   it('resolves missing availability to explicit policy-unavailable reasons', () => {
     const failing = new IcpPolicyOutcomeRecorder(new Set([A, B, C]));
     failing.recordFailure(B, NOW - 5_000);
+    failing.recordFailure(A, NOW - 20_000);
     const snapshot = deriveFleetIcpPosture({
       fleetCompanionIds: [A, B, C],
       icpActive: true,
@@ -157,6 +158,8 @@ describe('fleet ICP posture derivation', () => {
     expect(snapshot.companions.get(C)).toEqual({
       state: 'policy_unavailable', reason: 'availability_withdrawn', lifecycle: 'member',
     });
+    // A's failure predates its current connection (reconnect after restart).
+    expect(snapshot.companions.get(A)).toEqual({ state: 'ready', reason: 'available', lifecycle: 'member' });
 
     const unreadable = deriveFleetIcpPosture({
       fleetCompanionIds: [A, B],
@@ -228,11 +231,12 @@ describe('ICP policy outcome recorder', () => {
     await expect(recorder.observe(A, () => NOW, async () => {
       throw new Error('rpc down');
     })).rejects.toThrow('rpc down');
-    expect(recorder.isFailing(A, NOW)).toBe(true);
+    expect(recorder.isFailing(A, NOW, NOW - 1)).toBe(true);
+    expect(recorder.isFailing(A, NOW, NOW + 1)).toBe(false);
     await expect(recorder.observe(A, () => NOW + 1, async () => 'ok')).resolves.toBe('ok');
-    expect(recorder.isFailing(A, NOW + 1)).toBe(false);
+    expect(recorder.isFailing(A, NOW + 1, 0)).toBe(false);
     recorder.recordFailure(D, NOW);
-    expect(recorder.isFailing(D, NOW)).toBe(false);
+    expect(recorder.isFailing(D, NOW, 0)).toBe(false);
   });
 });
 

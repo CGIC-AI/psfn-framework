@@ -69,6 +69,7 @@ import {
   parseFleetSsoOuterTarget,
   type FleetSsoGardenUpstream,
 } from '../fleet-auth/fleet-sso-transport.js';
+import type { GatewayFleetLifecycleHttpRoutes } from './fleet-lifecycle-http-routes.js';
 import {
   FLEET_PORTAL_API_PATH,
   GatewayFleetPortalHttpRoutes,
@@ -183,6 +184,8 @@ export interface GatewayFleetSsoRouterOptions extends FleetSsoTrustedOriginOptio
   readonly nowSeconds?: () => number;
   readonly testingHarness?: TestingHarnessGardenDoorOptions;
   readonly denialLogger?: GardenDenialLogger;
+  /** h248l.6: operator-only fleet lifecycle door; absent means the routes 404. */
+  readonly lifecycleRoutes?: Pick<GatewayFleetLifecycleHttpRoutes, 'matches' | 'handle'>;
 }
 
 export interface FleetGardenChatAdmission {
@@ -699,7 +702,8 @@ export class GatewayFleetSsoRouter {
         || rawPath === FLEET_LOGIN_PATH || rawPath.startsWith(FLEET_PORTAL_API_PATH)
         || rawPath === FLEET_MODEL_USAGE_API_PATH
         || rawPath.startsWith(COMPANION_PREFIX)
-        || rawPath === COMPANION_UI_PREFIX || rawPath.startsWith(`${COMPANION_UI_PREFIX}/`);
+        || rawPath === COMPANION_UI_PREFIX || rawPath.startsWith(`${COMPANION_UI_PREFIX}/`)
+        || this.options.lifecycleRoutes?.matches(rawPath) === true;
     } catch {
       return rawTarget === '/' || rawTarget.startsWith(FLEET_PATH) || rawTarget.startsWith(FLEET_PORTAL_API_PATH)
         || rawTarget.startsWith('/_app/')
@@ -822,6 +826,23 @@ export class GatewayFleetSsoRouter {
           return;
         }
         await this.proxyHttp(request, response, upstream, route, body, issued);
+        return;
+      }
+      const lifecycleRoutes = this.options.lifecycleRoutes;
+      if (lifecycleRoutes?.matches(rawPath)) {
+        const hasSession = readOpaqueSessionCookie(request) !== undefined;
+        if (!adminTokenMatched && !hasSession) {
+          throw new FleetSsoRequestError(401, 'Authentication required');
+        }
+        await lifecycleRoutes.handle({
+          request,
+          response,
+          rawPath,
+          rawQuery,
+          requester: adminTokenMatched
+            ? { kind: 'operator', actor: 'operator:admin-token' }
+            : { kind: 'session' },
+        });
         return;
       }
       const sessionToken = readOpaqueSessionCookie(request);

@@ -9,7 +9,7 @@ import type { FleetWorkloadPort } from './ports.js';
 const execFileAsync = promisify(execFile);
 const KUBE_NAME_PATTERN = /^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$/u;
 const SECRET_KEY_PATTERN = /^[-._a-zA-Z0-9]+$/u;
-// Mirrors the chart's `psfn.fleetAgentDeploymentName` prefix truncation.
+// Mirrors the chart's fleetAgentDeploymentName helper prefix truncation.
 const CHART_AGENT_PREFIX_MAX_LENGTH = 26;
 
 /** Read-only cluster view. No method may create, patch, scale, or delete. */

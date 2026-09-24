@@ -5,7 +5,6 @@ import {
   type CompanionsFleetConfig,
 } from '../config/companions-config.js';
 import {
-  digestFleetLifecyclePlan,
   FLEET_LIFECYCLE_ADD_STAGES,
   FLEET_LIFECYCLE_REMOVE_STAGES,
   FLEET_LIFECYCLE_SCHEMA_VERSION,
@@ -14,6 +13,7 @@ import {
   type FleetLifecyclePlan,
   type FleetLifecycleStageId,
 } from './contracts.js';
+import { digestFleetLifecyclePlan } from './digest.js';
 import type { FleetTopologyPort, IcpLifecycleFencePort } from './ports.js';
 
 function composeNextTopology(

@@ -105,6 +105,8 @@ import type { FleetPortalAuthorizationBatchPort } from '../../boundary/gateway/f
 import type { FleetPortalChannelHealthSource } from '../../boundary/gateway/fleet-portal-projection.js';
 import { createGatewayFleetPortalProjection } from './fleet-portal-composition.js';
 import type { FleetIcpPostureSource } from '../../boundary/gateway/fleet-icp-posture.js';
+import { GatewayFleetLifecycleHttpRoutes } from '../../boundary/gateway/fleet-lifecycle-http-routes.js';
+import type { FleetLifecycleCommandPort } from '../../system/fleet-lifecycle/service.js';
 import type { FleetModelUsageSummaryQueryPort } from '../../shared/telemetry/model-usage.js';
 import { createGatewayFleetModelUsageProjection } from './fleet-model-usage-composition.js';
 import { createBearerCompanionRoutingConfig } from '../../channels/api/server/bearer-companion-selector.js';
@@ -178,6 +180,8 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
   fleetPortalChannelHealth?: FleetPortalChannelHealthSource;
   /** Required with fleet auth: bounded passive ICP readiness for the Fleet page. */
   fleetPortalIcpPosture?: FleetIcpPostureSource;
+  /** h248l.6: operator-only Fleet lifecycle commands (fleet auth only). */
+  fleetLifecycle?: FleetLifecycleCommandPort;
   /** Canonical fleet-scoped model-attempt ledger used by the authenticated budget projection. */
   fleetModelUsage?: FleetModelUsageSummaryQueryPort;
   primaryEmbodiments?: PrimaryEmbodimentAuthorityPort;
@@ -698,6 +702,17 @@ export async function startOptionalGatewayApiServer(
             }
           : {}),
         ...(options.fleetAuthEscalation ? { escalation: options.fleetAuthEscalation } : {}),
+        ...(options.fleetLifecycle
+          ? {
+              lifecycleRoutes: new GatewayFleetLifecycleHttpRoutes({
+                commands: options.fleetLifecycle,
+                canonicalOrigin: options.config.fleetAuth.canonicalOrigin,
+                reportError: error => log.error('Fleet lifecycle command failed', {
+                  error: error instanceof Error ? error.message : String(error),
+                }),
+              }),
+            }
+          : {}),
         ...(options.config.fleetAuth.accountRoster
           ? { accountRoster: options.config.fleetAuth.accountRoster }
           : {}),

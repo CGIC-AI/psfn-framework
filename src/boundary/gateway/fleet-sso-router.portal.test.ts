@@ -321,3 +321,80 @@ describe('unified-origin fleet portal routing', () => {
     expect(harness.resolveProjection).not.toHaveBeenCalled();
   });
 });
+
+describe('unified-origin fleet lifecycle door', () => {
+  it('routes only the operator credential to lifecycle commands and 401s anonymous callers', async () => {
+    const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+    const handle = vi.fn(async (input: { response: import('node:http').ServerResponse }) => {
+      input.response.writeHead(204);
+      input.response.end();
+    });
+    const router = new GatewayFleetSsoRouter({
+      canonicalOrigin: CANONICAL_ORIGIN,
+      trustProxy: true,
+      adminToken: 'operator-token-for-lifecycle-route-test',
+      broker: { resolveAuthorizationContext: async () => { throw new Error('not used'); } },
+      signer: createGatewayRequestCapabilitySigner({
+        issuer: 'lifecycle-route-test',
+        kid: 'lifecycle-key',
+        privateKeyPem: privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(),
+        ttlSeconds: 30,
+        nowSeconds: () => 1_783_000_000,
+      }),
+      verifier: createRequestCapabilityVerifier({
+        issuer: 'lifecycle-route-test',
+        maxTtlSeconds: 30,
+        keys: [{
+          issuer: 'lifecycle-route-test',
+          kid: 'lifecycle-key',
+          publicKeyPem: publicKey.export({ format: 'pem', type: 'spki' }).toString(),
+          notBefore: '2026-07-16T00:00:00.000Z',
+          notAfter: '2026-07-17T00:00:00.000Z',
+          status: 'active',
+        }],
+      }),
+      replay: { consume: async input => ({ outcome: 'consumed', result: input.consumeResult }) },
+      portalProjection: { resolve: async () => { throw new Error('not used'); } },
+      modelUsageProjection: { resolve: async () => { throw new Error('not used'); } },
+      upstreams: [{ companionId: COMPANION_ID, origin: new URL('http://127.0.0.1:3211') }],
+      lifecycleRoutes: {
+        matches: rawPath => rawPath.startsWith('/v1/fleet/lifecycle/plans'),
+        handle,
+      },
+    });
+    expect(router.matches('/v1/fleet/lifecycle/plans')).toBe(true);
+    const server = createServer((incoming, response) => { void router.handle(incoming, response); });
+    try {
+      const port = await listen(server);
+      expect((await request(port, '/v1/fleet/lifecycle/plans')).status).toBe(401);
+      expect(handle).not.toHaveBeenCalled();
+
+      expect((await request(port, '/v1/fleet/lifecycle/plans', { session: SESSION_TOKEN })).status).toBe(204);
+      expect(handle.mock.calls[0]?.[0]).toMatchObject({ requester: { kind: 'session' } });
+
+      const operator = await new Promise<number>((resolve, reject) => {
+        const outgoing = httpRequest({
+          hostname: '127.0.0.1',
+          port,
+          path: '/v1/fleet/lifecycle/plans',
+          headers: {
+            host: 'fleet.example.test',
+            'x-forwarded-host': 'fleet.example.test',
+            'x-forwarded-proto': 'https',
+            'x-forwarded-port': '443',
+            'x-forwarded-for': '198.51.100.9',
+            authorization: 'Bearer operator-token-for-lifecycle-route-test',
+          },
+        }, (response) => { response.resume(); resolve(response.statusCode ?? 0); });
+        outgoing.once('error', reject);
+        outgoing.end();
+      });
+      expect(operator).toBe(204);
+      expect(handle.mock.calls[1]?.[0]).toMatchObject({
+        requester: { kind: 'operator', actor: 'operator:admin-token' },
+      });
+    } finally {
+      await new Promise<void>(resolve => server.close(() => resolve()));
+    }
+  });
+});

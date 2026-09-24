@@ -1,5 +1,3 @@
-import { createHash } from 'node:crypto';
-
 import type { CompanionFleetEntry } from '../config/companions-config.js';
 import { isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
 
@@ -7,7 +5,8 @@ import { isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
  * Companion fleet lifecycle contracts (h248l.5). One plan/apply shape shared by
  * the CLI and the Fleet UI: requests carry companions.json entry metadata and
  * credential *references* only, never secret values; plans are digest-bound to
- * the exact topology revision they were computed against.
+ * the exact topology revision they were computed against. Browser-safe: the
+ * Fleet UI imports these contracts, so no Node built-ins belong here.
  */
 export const FLEET_LIFECYCLE_SCHEMA_VERSION = 1 as const;
 
@@ -104,6 +103,8 @@ export const FLEET_LIFECYCLE_ERROR_CODES = [
   'workload_still_running',
   'icp_fence_failed',
   'topology_conflict',
+  'apply_requires_cli',
+  'unauthorized',
   'stage_error',
 ] as const;
 export type FleetLifecycleErrorCode = typeof FLEET_LIFECYCLE_ERROR_CODES[number];
@@ -138,25 +139,6 @@ export interface FleetLifecycleProgress {
   readonly status: FleetLifecycleProgressStatus;
   readonly receipts: readonly FleetLifecycleReceipt[];
   readonly failure?: FleetLifecycleFailure;
-}
-
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
-  if (isRecord(value)) {
-    return `{${Object.keys(value).sort()
-      .filter(key => value[key] !== undefined)
-      .map(key => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
-      .join(',')}}`;
-  }
-  return JSON.stringify(value);
-}
-
-export function sha256Hex(value: string | Buffer): string {
-  return createHash('sha256').update(value).digest('hex');
-}
-
-export function digestFleetLifecyclePlan(plan: Omit<FleetLifecyclePlan, 'digest'>): string {
-  return sha256Hex(`fleet-lifecycle-plan:v1\0${canonicalJson(plan)}`);
 }
 
 function exactKeys(value: Record<string, unknown>, required: readonly string[], optional: readonly string[] = []): boolean {

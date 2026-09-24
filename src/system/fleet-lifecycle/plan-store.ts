@@ -1,10 +1,9 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
 import {
-  digestFleetLifecyclePlan,
   FLEET_LIFECYCLE_ADD_STAGES,
   FLEET_LIFECYCLE_ERROR_CODES,
   FLEET_LIFECYCLE_REMOVE_STAGES,
@@ -15,6 +14,18 @@ import {
   type FleetLifecycleReceipt,
   type FleetLifecycleStageId,
 } from './contracts.js';
+import { digestFleetLifecyclePlan } from './digest.js';
+
+/** Content-free lifecycle audit record: who did what to which plan, and the outcome code. */
+export interface FleetLifecycleAuditEntry {
+  readonly at: string;
+  readonly actor: string;
+  readonly action: 'plan' | 'apply';
+  readonly outcome: 'ok' | string;
+  readonly planId?: string;
+  readonly operation?: 'add' | 'remove';
+  readonly companionId?: string;
+}
 
 const OWNER_ONLY_FILE_MODE = 0o600;
 const STAGE_IDS: readonly string[] = [...FLEET_LIFECYCLE_ADD_STAGES, ...FLEET_LIFECYCLE_REMOVE_STAGES];
@@ -119,6 +130,16 @@ export class FleetLifecyclePlanStore {
       status,
       receipts: Object.freeze(receipts),
       ...(status === 'failed' && failure ? { failure } : {}),
+    });
+  }
+
+  /** Append-only JSONL audit beside the plans; entries never carry request payloads. */
+  appendAudit(entry: FleetLifecycleAuditEntry): void {
+    const dir = join(this.root, '..');
+    mkdirSync(dir, { recursive: true });
+    appendFileSync(join(dir, 'audit.jsonl'), `${JSON.stringify(entry)}\n`, {
+      encoding: 'utf8',
+      mode: OWNER_ONLY_FILE_MODE,
     });
   }
 

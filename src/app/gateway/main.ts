@@ -78,6 +78,7 @@ import {
   registerProcessErrorHandlers,
 } from '../startup/support/signal-shutdown.js';
 import { resolveGatewayApiSurfaceBindings, startOptionalGatewayApiServer } from './api-surface.js';
+import { createGatewayFleetLifecycle } from './fleet-lifecycle-composition.js';
 import {
   createGatewayFleetIcpPosture,
   createGatewayFleetPortalChannelHealthSource,
@@ -1307,6 +1308,16 @@ async function main(): Promise<void> {
     channelsConfig: bootstrap.channelsConfig,
     fleetPortalChannelHealth,
     ...(fleetIcpPosture ? { fleetPortalIcpPosture: fleetIcpPosture.source } : {}),
+    ...(config.fleetAuth && config.companionFleet
+      ? {
+          fleetLifecycle: createGatewayFleetLifecycle({
+            systemDataDir: startupHydration.pathSnapshot.systemDataDir,
+            runtimeRootDir: startupHydration.pathSnapshot.runtimePathLayout.runtimeRootDir,
+            env: process.env,
+            fleetAuthConfig: config.fleetAuth,
+          }),
+        }
+      : {}),
     satelliteRegistryProvider: () => loadSatelliteRegistryConfig(
       startupHydration.pathSnapshot.systemDataDir,
     ),

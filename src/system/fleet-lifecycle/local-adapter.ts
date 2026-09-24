@@ -11,7 +11,8 @@ import {
 } from '../config/companions-config.js';
 import { resolveCanonicalPathInsideRoot } from '../config/companion-workspace-layout.js';
 import { verifyCompanionStartupOwnerFiles } from '../config/startup-owner-files.js';
-import { FleetLifecycleError, sha256Hex } from './contracts.js';
+import { FleetLifecycleError } from './contracts.js';
+import { sha256Hex } from './digest.js';
 import type {
   FleetPrerequisitePort,
   FleetTopologyPort,

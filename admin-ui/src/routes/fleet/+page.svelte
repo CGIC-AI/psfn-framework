@@ -15,6 +15,7 @@
   import FleetGlobalFirewall from '$lib/components/fleet/FleetGlobalFirewall.svelte';
   import FleetAttention from '$lib/components/fleet/FleetAttention.svelte';
   import FleetIcpPosture from '$lib/components/fleet/FleetIcpPosture.svelte';
+  import FleetLifecycle from '$lib/components/fleet/FleetLifecycle.svelte';
   import {
     fetchCompanionAttention,
     fleetAttentionBannerVisible,
@@ -389,6 +390,8 @@
       <FleetCostUsage mode="fleet" {projection} />
       {:else if activeView === 'firewall'}
       <FleetGlobalFirewall {projection} />
+      {:else if activeView === 'lifecycle'}
+      <FleetLifecycle {projection} />
       {/if}
     {/if}
     {/if}

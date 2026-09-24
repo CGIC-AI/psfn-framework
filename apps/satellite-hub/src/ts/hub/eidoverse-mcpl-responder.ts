@@ -134,12 +134,12 @@ export class EidoverseMcplResponder {
     for (const descriptor of updated) {
       if (this.channels.has(descriptor.id)) this.channels.set(descriptor.id, descriptor);
     }
+    // Current is only ever a channel the door itself named (registered,
+    // prepared, or added). Retiring it leaves no current world rather than
+    // promoting whichever tracked channel happens to sort last (g66lc).
     for (const id of removed) {
       this.channels.delete(id);
       if (this.latestChannelId === id) this.latestChannelId = null;
-    }
-    if (this.latestChannelId === null) {
-      this.latestChannelId = [...this.channels.keys()].at(-1) ?? null;
     }
   }
 

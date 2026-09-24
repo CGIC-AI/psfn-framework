@@ -1,5 +1,6 @@
 import type { HubDeviceAttachmentSnapshot } from '../../shared/contracts/hub-device-ingress.js';
 import { hasExactKeys, isRecord } from '../../shared/utils/types.js';
+import { CompanionUiSocketDeniedError } from './companion-ui-action-failure.js';
 
 /** Server-to-server control; the Hub must never forward this from a browser. */
 export function parseCompanionUiSessionRenewal(raw: Uint8Array): {
@@ -45,12 +46,11 @@ function attachmentAuthorityKey(attachment: HubDeviceAttachmentSnapshot): string
 const COMPANION_UI_REFRESH_PASS_LIMIT = 4;
 
 /** Structured refresh failure: renewals kept replacing the assertion. */
-export class CompanionUiSessionRefreshContendedError extends Error {
+export class CompanionUiSessionRefreshContendedError extends CompanionUiSocketDeniedError {
   readonly code = 'session_refresh_contended';
 
   constructor(readonly passes: number) {
     super(`Companion UI session refresh lost ${passes} consecutive races to assertion renewals`);
-    this.name = 'CompanionUiSessionRefreshContendedError';
   }
 }
 
@@ -73,14 +73,14 @@ export class CompanionUiSessionAuthority {
 
   async refresh(): Promise<void> {
     for (let pass = 1; pass <= COMPANION_UI_REFRESH_PASS_LIMIT; pass += 1) {
-      if (this.isClosed()) throw new Error('socket closed');
+      if (this.isClosed()) throw new CompanionUiSocketDeniedError('socket closed');
       const assertion = this.assertion;
       const authorityKey = this.authorityKey;
       const refreshed = await this.admit(assertion);
       // Independent interrupts must remain runnable while another admission is
       // awaiting persistence. If a renewal wins that race, use its fresh receipt.
       if (assertion !== this.assertion) continue;
-      if (attachmentAuthorityKey(refreshed) !== authorityKey) throw new Error('socket authority changed');
+      if (attachmentAuthorityKey(refreshed) !== authorityKey) throw new CompanionUiSocketDeniedError('socket authority changed');
       this.attachment = refreshed;
       return;
     }
@@ -89,13 +89,13 @@ export class CompanionUiSessionAuthority {
 
   renew(assertion: string): Promise<void> {
     const pending = this.renewals.then(async () => {
-      if (this.isClosed() || assertion === this.assertion) throw new Error('invalid assertion renewal');
+      if (this.isClosed() || assertion === this.assertion) throw new CompanionUiSocketDeniedError('invalid assertion renewal');
       const renewed = await this.admit(assertion);
       if (this.isClosed()
         || companionUiSessionContinuityKey(renewed) !== this.continuityKey
         || Date.parse(renewed.deviceActor.principal.expiresAt)
           <= Date.parse(this.attachment.deviceActor.principal.expiresAt)) {
-        throw new Error('renewal changed attached authority');
+        throw new CompanionUiSocketDeniedError('renewal changed attached authority');
       }
       this.assertion = assertion;
       this.attachment = renewed;

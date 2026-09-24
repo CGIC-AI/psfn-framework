@@ -52,7 +52,10 @@ import {
 } from '../../system/config/fleet-auth-standalone-surface-guard.js';
 import type { GatewayFleetAuthBroker } from '../../boundary/gateway/fleet-auth-broker.js';
 import type { GatewayFleetAuthChildAssertionBroker } from '../../boundary/gateway/fleet-auth-child-assertions.js';
-import { GatewayCompanionUiActionBroker } from '../../boundary/gateway/companion-ui-action-broker.js';
+import {
+  CompanionUiActionDeniedError,
+  GatewayCompanionUiActionBroker,
+} from '../../boundary/gateway/companion-ui-action-broker.js';
 import { GatewayCompanionUiAudioIngress } from '../../boundary/gateway/companion-ui-audio-ingress.js';
 import type {
   GatewayRequestCapabilitySigner,
@@ -883,7 +886,7 @@ export async function startOptionalGatewayApiServer(
                   String(body.id),
                   input.companionId,
                 );
-                if (!preview?.previewable || !preview.bytes) throw new Error('Artifact preview unavailable');
+                if (!preview?.previewable || !preview.bytes) throw new CompanionUiActionDeniedError();
                 return {
                   artifactId: preview.artifactId,
                   mediaType: preview.mediaType,
@@ -898,7 +901,7 @@ export async function startOptionalGatewayApiServer(
               if (approval.handled) return approval.result;
               const content = companionUiPromptContent(frame);
               if (!content || frame.resource === 'shards.interact') {
-                throw new Error('Companion UI operator action has no key dispatcher');
+                throw new CompanionUiActionDeniedError();
               }
               const interaction = beginCompanionUiInteraction(frame.requestId, input.signal);
               try {
@@ -989,7 +992,7 @@ export async function startOptionalGatewayApiServer(
                   String(body.id),
                   input.compiled.target.companionId,
                 );
-                if (!preview?.previewable || !preview.bytes) throw new Error('Artifact preview unavailable');
+                if (!preview?.previewable || !preview.bytes) throw new CompanionUiActionDeniedError();
                 return {
                   artifactId: preview.artifactId,
                   mediaType: preview.mediaType,

@@ -1042,8 +1042,20 @@ export class ApiServer implements ChannelAdapterPort {
         sendApiError(res, 401, 'hub_device_assertion_rejected', 'Hub device assertion was rejected');
         return;
       }
-      log.error('Virtual-space emanation admission failed');
-      sendApiError(res, 503, 'hub_device_ingress_unavailable', 'Hub device authentication is unavailable');
+      // psfn-framework-u42t5: a registry/verifier misconfiguration must be
+      // diagnosable. The reference ties the operator log line to the reply
+      // without putting the error text in a response.
+      const failureRef = randomUUID();
+      log.error('Virtual-space emanation admission failed', {
+        failureRef,
+        error: toErrorMessage(error),
+      });
+      sendApiError(
+        res,
+        503,
+        'hub_device_ingress_unavailable',
+        `Hub device authentication is unavailable (ref ${failureRef})`,
+      );
     }
   }
 

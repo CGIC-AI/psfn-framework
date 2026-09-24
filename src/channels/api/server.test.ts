@@ -2855,6 +2855,19 @@ describe('ApiServer with fleet auth configured alongside key auth', () => {
     expect(call.routing?.satellite?.hubDevicePrincipal).toBeUndefined();
   });
 
+  it('answers a virtual_space verifier fault with a correlatable 503, never its error text (u42t5)', async () => {
+    const { verifyVirtualSpaceAssertion, send } = await projectionFixture('virtual_space');
+    verifyVirtualSpaceAssertion.mockImplementationOnce(async () => {
+      throw new Error('verifier ring file /secret/path is unreadable');
+    });
+    const failed = await send();
+    expect(failed.status).toBe(503);
+    const error = JSON.parse(failed.body).error;
+    expect(error.type).toBe('hub_device_ingress_unavailable');
+    expect(error.message).toMatch(/\(ref [0-9a-f-]{36}\)$/u);
+    expect(failed.body).not.toContain('/secret/path');
+  });
+
   it('routes an assertion from a human_surface projection through device admission unchanged (rqm6t)', async () => {
     const { verifyVirtualSpaceAssertion, send } = await projectionFixture('human_surface');
     const deviceTurn = await send();

@@ -11,6 +11,7 @@ import type {
 import type { CompanionId } from '../../shared/routing/companion-id.js';
 import { isRfc4122Uuid } from '../../shared/utils/types.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import type { GatewayHubDeviceIngressService } from '../../boundary/fleet-auth/hub-device-ingress.js';
 import type { HubDeviceAttachmentSnapshot } from '../../shared/contracts/hub-device-ingress.js';
 import type {
@@ -51,6 +52,11 @@ import {
 import { readExclusiveFleetSessionCookie } from './server/fleet-auth-cookie.js';
 import { REQUEST_CAPABILITY_ASSERTION_HEADERS } from '../../boundary/fleet-auth/request-capability-transport.js';
 import { CompanionUiAudioSocketSession } from './companion-ui-audio-socket.js';
+import {
+  classifyCompanionUiActionFailure,
+  companionUiActionFailureFrame,
+  CompanionUiSocketDeniedError,
+} from './companion-ui-action-failure.js';
 import type { CompanionUiAudioOutputRelay } from '../backplane/companion-ui-audio-output-relay.js';
 import type { CompanionUiAudioOutputBinding } from '../../shared/contracts/companion-ui-audio-output.js';
 import {
@@ -599,7 +605,7 @@ export class CompanionUiWebSocketAdapter {
     const reserveRequestId = (requestId: string): void => {
       if (seenRequestIds.has(requestId)
         || seenRequestIds.size >= RUNTIME_LIMITS.maxRequestIdsPerSocket) {
-        throw new Error('duplicate or exhausted request identifier');
+        throw new CompanionUiSocketDeniedError('duplicate or exhausted request identifier');
       }
       seenRequestIds.add(requestId);
     };
@@ -617,7 +623,7 @@ export class CompanionUiWebSocketAdapter {
         ? await this.config.actionBroker!.execute({ ...common, sessionToken: authority.sessionToken })
         : await this.config.guestActionBroker?.execute(common);
       if (!authority.sessionToken && !this.config.guestActionBroker) {
-        throw new Error('guest actions disabled');
+        throw new CompanionUiSocketDeniedError('guest actions disabled');
       }
       return result;
     };
@@ -657,6 +663,7 @@ export class CompanionUiWebSocketAdapter {
         return;
       }
       const body = rawDataBytes(raw);
+      const failure = { requestId: '', dispatching: false };
       void (async () => {
         if (!configured) {
           parseCompanionUiSessionConfigureFrame(body);
@@ -736,6 +743,8 @@ export class CompanionUiWebSocketAdapter {
         if (audioSocket && await audioSocket.tryHandleControl(body)) return;
         const frame = parseCompanionUiActionFrame(body);
         reserveRequestId(frame.requestId);
+        failure.requestId = frame.requestId;
+        failure.dispatching = true;
         const result = await dispatchAction(body);
         sendJson(socket, {
           schemaVersion: 1,
@@ -744,15 +753,18 @@ export class CompanionUiWebSocketAdapter {
           ok: true,
           result,
         });
-      })().catch(() => {
-        sendJson(socket, {
-          schemaVersion: 1,
-          type: 'result',
-          requestId: '',
-          ok: false,
-          error: { code: 'denied' },
-        });
-        close(CLOSE.denied, 'action denied');
+      })().catch((error: unknown) => {
+        const code = classifyCompanionUiActionFailure(error, failure.dispatching);
+        const details = {
+          companionId: authority.companionId,
+          requestId: failure.requestId,
+          code,
+          error: toErrorMessage(error),
+        };
+        if (code === 'denied') log.warn('Companion UI action denied', details);
+        else log.error('Companion UI action failed', details);
+        sendJson(socket, companionUiActionFailureFrame(failure.requestId, code));
+        close(CLOSE.denied, code === 'denied' ? 'action denied' : 'action failed');
       });
     });
     socket.once('close', () => close(CLOSE.authorityChanged, 'closed'));
@@ -792,12 +804,12 @@ export class CompanionUiWebSocketAdapter {
     const reserveRequestId = (requestId: string): void => {
       if (seenRequestIds.has(requestId)
         || seenRequestIds.size >= RUNTIME_LIMITS.maxRequestIdsPerSocket) {
-        throw new Error('duplicate or exhausted request identifier');
+        throw new CompanionUiSocketDeniedError('duplicate or exhausted request identifier');
       }
       seenRequestIds.add(requestId);
     };
     const dispatchAction = async (body: Uint8Array, signal?: AbortSignal): Promise<unknown> => {
-      if (closed || this.stopped) throw new Error('operator session closed');
+      if (closed || this.stopped) throw new CompanionUiSocketDeniedError('operator session closed');
       return await this.config.operatorActionBroker!.execute({
         rawBody: body,
         companionId: authority.companionId,
@@ -815,7 +827,7 @@ export class CompanionUiWebSocketAdapter {
         maxPendingFrames: this.maxPendingAudioFrames,
         send: value => sendJson(socket, value),
         refreshAuthority: async () => {
-          if (closed || this.stopped) throw new Error('operator session closed');
+          if (closed || this.stopped) throw new CompanionUiSocketDeniedError('operator session closed');
         },
         attachment: () => undefined,
         reserveRequestId,
@@ -840,6 +852,7 @@ export class CompanionUiWebSocketAdapter {
         return;
       }
       const body = rawDataBytes(raw);
+      const failure = { requestId: '', dispatching: false };
       void (async () => {
         if (!configured) {
           parseCompanionUiSessionConfigureFrame(body);
@@ -865,10 +878,12 @@ export class CompanionUiWebSocketAdapter {
           });
           return;
         }
-        if (parseCompanionUiSessionRenewal(body)) throw new Error('operator key sessions do not renew');
+        if (parseCompanionUiSessionRenewal(body)) throw new CompanionUiSocketDeniedError('operator key sessions do not renew');
         if (audioSocket && await audioSocket.tryHandleControl(body)) return;
         const frame = parseCompanionUiActionFrame(body);
         reserveRequestId(frame.requestId);
+        failure.requestId = frame.requestId;
+        failure.dispatching = true;
         const result = await dispatchAction(body);
         sendJson(socket, {
           schemaVersion: 1,
@@ -877,15 +892,18 @@ export class CompanionUiWebSocketAdapter {
           ok: true,
           result,
         });
-      })().catch(() => {
-        sendJson(socket, {
-          schemaVersion: 1,
-          type: 'result',
-          requestId: '',
-          ok: false,
-          error: { code: 'denied' },
-        });
-        close(CLOSE.denied, 'action denied');
+      })().catch((error: unknown) => {
+        const code = classifyCompanionUiActionFailure(error, failure.dispatching);
+        const details = {
+          companionId: authority.companionId,
+          requestId: failure.requestId,
+          code,
+          error: toErrorMessage(error),
+        };
+        if (code === 'denied') log.warn('Companion UI action denied', details);
+        else log.error('Companion UI action failed', details);
+        sendJson(socket, companionUiActionFailureFrame(failure.requestId, code));
+        close(CLOSE.denied, code === 'denied' ? 'action denied' : 'action failed');
       });
     });
     socket.once('close', () => close(CLOSE.authorityChanged, 'closed'));

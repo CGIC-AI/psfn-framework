@@ -1,3 +1,4 @@
+import { CompanionUiActionDeniedError } from '../../boundary/gateway/companion-ui-action-broker.js';
 import { EventEmitter } from 'node:events';
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
@@ -257,6 +258,56 @@ describe('Companion UI WebSocket operator key path', () => {
       schemaVersion: 1, type: 'hub.session.renew', requestId: 'renew-1', assertion: 'fresh-signed-assertion',
     })), false);
     await vi.waitFor(() => expect(f.webSocket.closeArgs[0]).toBe(4403));
+    await f.adapter.stop();
+  });
+
+  // psfn-framework-u42t5: a provider outage behind an admitted action is not a
+  // denial; the client sees which one happened, with the request id, and never
+  // the error text.
+  it.each([
+    ['a typed refusal', () => new CompanionUiActionDeniedError(), 'denied'],
+    ['a server fault', () => new Error('provider outage: upstream 502 at https://provider.example'), 'internal_error'],
+  ] as const)('reports %s as %s with its request id', async (_label, makeError, code) => {
+    const f = fixture();
+    f.operatorExecute.mockImplementationOnce(async () => { throw makeError(); });
+    await admitted(f, keyRequest());
+    f.webSocket.emit('message', CONFIGURE, false);
+    await vi.waitFor(() => expect(f.webSocket.sent.length).toBe(1));
+    f.webSocket.emit('message', Buffer.from(JSON.stringify({
+      schemaVersion: 1,
+      requestId: 'req-fail',
+      action: 'companion.interact',
+      resource: 'conversation.interact',
+      body: { content: 'hello' },
+    })), false);
+    await vi.waitFor(() => expect(f.webSocket.sent.length).toBe(2));
+    expect(JSON.parse(f.webSocket.sent[1]!)).toEqual({
+      schemaVersion: 1, type: 'result', requestId: 'req-fail', ok: false, error: { code },
+    });
+    expect(f.webSocket.sent[1]).not.toContain('provider');
+    expect(f.webSocket.closeArgs[0]).toBe(4403);
+    await f.adapter.stop();
+  });
+
+  it('reports a duplicate request id as denied without echoing it', async () => {
+    const f = fixture();
+    await admitted(f, keyRequest());
+    f.webSocket.emit('message', CONFIGURE, false);
+    await vi.waitFor(() => expect(f.webSocket.sent.length).toBe(1));
+    const frame = Buffer.from(JSON.stringify({
+      schemaVersion: 1,
+      requestId: 'req-dup',
+      action: 'companion.interact',
+      resource: 'conversation.interact',
+      body: { content: 'hello' },
+    }));
+    f.webSocket.emit('message', frame, false);
+    await vi.waitFor(() => expect(f.webSocket.sent.length).toBe(2));
+    f.webSocket.emit('message', frame, false);
+    await vi.waitFor(() => expect(f.webSocket.sent.length).toBe(3));
+    expect(JSON.parse(f.webSocket.sent[2]!)).toEqual({
+      schemaVersion: 1, type: 'result', requestId: '', ok: false, error: { code: 'denied' },
+    });
     await f.adapter.stop();
   });
 });

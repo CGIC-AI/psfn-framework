@@ -9,6 +9,7 @@ import {
   AutomataRunRegistry,
   InMemoryAutomataRunStore,
 } from '../automata/run-registry.js';
+import { NO_AUTOMATA_REDELIVERY } from '../../test-support/automata-run-redelivery.js';
 
 function automataPolicy() {
   return parseAutomataOwnerPolicy({
@@ -153,6 +154,7 @@ describe('SubagentTaskRegistry', () => {
 
   it('uses the durable registry for lineage, task discovery, and linked references', async () => {
     const runRegistry = await AutomataRunRegistry.hydrate({
+      redelivery: NO_AUTOMATA_REDELIVERY,
       companionId: 'companion-a',
       policy: automataPolicy(),
       store: new InMemoryAutomataRunStore(),
@@ -198,6 +200,7 @@ describe('SubagentTaskRegistry', () => {
     const store = new InMemoryAutomataRunStore();
     const previous = new SubagentTaskRegistry({
       runRegistry: await AutomataRunRegistry.hydrate({
+        redelivery: NO_AUTOMATA_REDELIVERY,
         companionId: 'companion-a',
         policy: automataPolicy(),
         store,
@@ -217,6 +220,7 @@ describe('SubagentTaskRegistry', () => {
 
     const restarted = new SubagentTaskRegistry({
       runRegistry: await AutomataRunRegistry.hydrate({
+        redelivery: NO_AUTOMATA_REDELIVERY,
         companionId: 'companion-a',
         policy: automataPolicy(),
         store,

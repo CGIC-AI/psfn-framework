@@ -9637,31 +9637,31 @@
     },
     {
       "file": "src/persistence/postgres/background-work-store.ts",
-      "name": "normalizeWelfarePolicy.ageThresholdMs@L93",
+      "name": "normalizeWelfarePolicy.ageThresholdMs@L99",
       "value": "0",
       "form": "object-member",
-      "note": "Code-owned fail-closed default for normalizeWelfarePolicy: a missing/invalid welfare policy collapses to age threshold 0 and defer threshold 1 (no deferral) rather than inventing tuning; the real values are owner-file settings validated upstream (entry re-keyed after 52epa moved the surrounding lines)."
+      "note": "Code-owned fail-closed default for normalizeWelfarePolicy: a missing/invalid welfare policy collapses to age threshold 0 and defer threshold 1 (no deferral) rather than inventing tuning; the real values are owner-file settings validated upstream (entry re-keyed after 52epa and y5tu1 moved the surrounding lines)."
     },
     {
       "file": "src/persistence/postgres/background-work-store.ts",
-      "name": "normalizeWelfarePolicy.ageThresholdMs@L95",
+      "name": "normalizeWelfarePolicy.ageThresholdMs@L101",
       "value": "0",
       "form": "object-member",
-      "note": "Code-owned fail-closed default for normalizeWelfarePolicy: a missing/invalid welfare policy collapses to age threshold 0 and defer threshold 1 (no deferral) rather than inventing tuning; the real values are owner-file settings validated upstream (entry re-keyed after 52epa moved the surrounding lines)."
+      "note": "Code-owned fail-closed default for normalizeWelfarePolicy: a missing/invalid welfare policy collapses to age threshold 0 and defer threshold 1 (no deferral) rather than inventing tuning; the real values are owner-file settings validated upstream (entry re-keyed after 52epa and y5tu1 moved the surrounding lines)."
     },
     {
       "file": "src/persistence/postgres/background-work-store.ts",
-      "name": "normalizeWelfarePolicy.deferThreshold@L93",
+      "name": "normalizeWelfarePolicy.deferThreshold@L99",
       "value": "1",
       "form": "object-member",
-      "note": "Code-owned fail-closed default for normalizeWelfarePolicy: a missing/invalid welfare policy collapses to age threshold 0 and defer threshold 1 (no deferral) rather than inventing tuning; the real values are owner-file settings validated upstream (entry re-keyed after 52epa moved the surrounding lines)."
+      "note": "Code-owned fail-closed default for normalizeWelfarePolicy: a missing/invalid welfare policy collapses to age threshold 0 and defer threshold 1 (no deferral) rather than inventing tuning; the real values are owner-file settings validated upstream (entry re-keyed after 52epa and y5tu1 moved the surrounding lines)."
     },
     {
       "file": "src/persistence/postgres/background-work-store.ts",
-      "name": "normalizeWelfarePolicy.deferThreshold@L95",
+      "name": "normalizeWelfarePolicy.deferThreshold@L101",
       "value": "1",
       "form": "object-member",
-      "note": "Code-owned fail-closed default for normalizeWelfarePolicy: a missing/invalid welfare policy collapses to age threshold 0 and defer threshold 1 (no deferral) rather than inventing tuning; the real values are owner-file settings validated upstream (entry re-keyed after 52epa moved the surrounding lines)."
+      "note": "Code-owned fail-closed default for normalizeWelfarePolicy: a missing/invalid welfare policy collapses to age threshold 0 and defer threshold 1 (no deferral) rather than inventing tuning; the real values are owner-file settings validated upstream (entry re-keyed after 52epa and y5tu1 moved the surrounding lines)."
     },
     {
       "file": "src/persistence/postgres/background-work-store.ts",

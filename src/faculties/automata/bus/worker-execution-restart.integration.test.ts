@@ -14,7 +14,11 @@ import {
 } from '../../../test-support/postgres-test-harness.js';
 import { createMemoryExtractionAutomataRunPort } from '../../memory/extraction/memory-extraction-automata-run.js';
 import { parseAutomataOwnerPolicy } from '../registry-contract.js';
-import { AUTOMATA_RUN_PROCESS_RESTART_REASON, AutomataRunRegistry } from '../run-registry.js';
+import {
+  AUTOMATA_RUN_PROCESS_RESTART_REASON,
+  AutomataRunRegistry,
+  type AutomataRunRedeliveryOracle,
+} from '../run-registry.js';
 import {
   AUTOMATA_TERMINAL_HANDOFF_SOURCE,
   AUTOMATA_TERMINAL_NO_FINDING_SOURCE,
@@ -35,6 +39,7 @@ import {
   runGovernedAutomataClass,
   type AutomataClassRunSpec,
 } from './class-lifecycle.js';
+import { NO_AUTOMATA_REDELIVERY, automataRedeliveryOf } from '../../../test-support/automata-run-redelivery.js';
 
 const INTEGRATION_TIMEOUT_MS = 120_000;
 const COMPANION_A = 'companion-public-example-a';
@@ -101,10 +106,14 @@ interface Process {
 }
 
 /** Build every companion-scoped runtime object as a cold process would. */
-async function startProcess(databaseUrl: string, companionId: string): Promise<Process> {
+async function startProcess(
+  databaseUrl: string,
+  companionId: string,
+  redelivery: AutomataRunRedeliveryOracle = NO_AUTOMATA_REDELIVERY,
+): Promise<Process> {
   const policy = ownerPolicy();
   const runStore = await PostgresAutomataRunStore.connect(databaseUrl, companionId);
-  const registry = await AutomataRunRegistry.hydrate({ companionId, policy, store: runStore });
+  const registry = await AutomataRunRegistry.hydrate({ redelivery, companionId, policy, store: runStore });
   const pool = createPostgresPool(databaseUrl, {
     applicationName: `automata-restart-${companionId}`,
     allowExitOnIdle: true,
@@ -364,8 +373,9 @@ describe('governed Automata lifecycle restart certification', () => {
         expect(await terminalEvents(crashed)).toHaveLength(0);
         await crashed.close();
 
-        // Restart: the class re-enters its own run and settles it once.
-        const restarted = await startProcess(databaseUrl, COMPANION_A);
+        // Restart: the durable job still owns the run, so the class re-enters
+        // its own run and settles it once.
+        const restarted = await startProcess(databaseUrl, COMPANION_A, automataRedeliveryOf([spec.runId]));
         let executions = 0;
         const resumed = await runGovernedAutomataClass({
           runtime: governedRuntime(restarted),
@@ -492,7 +502,8 @@ describe('governed Automata lifecycle restart certification', () => {
       // Restart: the governed class re-enters the same run. Its work must NOT
       // run a second time — that is where a chargeable model call would be
       // duplicated — and the registry converges on the durable Bus terminal.
-      const restarted = await startProcess(databaseUrl, COMPANION_A);
+      // The durable job still owns the run, so hydration keeps it for re-entry.
+      const restarted = await startProcess(databaseUrl, COMPANION_A, automataRedeliveryOf([spec.runId]));
       const resumed = await runGovernedAutomataClass({
         runtime: governedRuntime(restarted),
         spec,
@@ -552,7 +563,8 @@ describe('governed Automata lifecycle restart certification', () => {
 
       // Restart: the orchestrator's own short-circuit (`binding.execute` false)
       // is what keeps `executeExtractionLlmPass` from running a second time.
-      const restarted = await startProcess(databaseUrl, COMPANION_A);
+      // The durable job still owns the run, so hydration keeps it for re-entry.
+      const restarted = await startProcess(databaseUrl, COMPANION_A, automataRedeliveryOf([RUN_ID]));
       const resumed = await openRun(restarted, createdAtMs);
       expect(resumed.binding.execute).toBe(false);
       const settlement = await resumed.settle({

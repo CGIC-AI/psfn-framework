@@ -16,6 +16,23 @@ const MEMORY_EXTRACTION_WORKER_ID = 'memory-extraction';
 const MEMORY_EXTRACTION_TASK_LABEL = 'Memory extraction';
 const MEMORY_EXTRACTION_COMPLETED_REASON = 'memory_extraction_completed';
 const MEMORY_EXTRACTION_FAILED_REASON = 'memory_extraction_failed';
+const MEMORY_EXTRACTION_TURN_RUN_SUFFIX = ':memory-extraction';
+
+/**
+ * The run id an extraction opens for a turn whose context carries no request
+ * id. Shared with background-work restart linkage so a redelivered job is
+ * recognized as the owner of the run it would re-enter.
+ */
+export function memoryExtractionTurnRunId(turnId: string): string {
+  return `${turnId}${MEMORY_EXTRACTION_TURN_RUN_SUFFIX}`;
+}
+
+/** The turn id a {@link memoryExtractionTurnRunId} run id was derived from. */
+export function memoryExtractionTurnIdFromRunId(runId: string): string | undefined {
+  if (!runId.endsWith(MEMORY_EXTRACTION_TURN_RUN_SUFFIX)) return undefined;
+  const turnId = runId.slice(0, -MEMORY_EXTRACTION_TURN_RUN_SUFFIX.length);
+  return turnId.length > 0 ? turnId : undefined;
+}
 
 export interface BeginMemoryExtractionAutomataRunInput {
   runId: string;

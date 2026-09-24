@@ -86,6 +86,7 @@ import { ContactLifecycleRecoveryRuntime } from '../core/contacts/contact-lifecy
 import { awaitPostgresStoreReadiness } from './postgres/runtime-readiness.js';
 import { PostgresAutomataRunStore } from './postgres/automata-run-store.js';
 import { AutomataRunRegistry } from '../faculties/automata/run-registry.js';
+import { createBackgroundWorkRunRedeliveryOracle } from '../core/agent/background-work/automata-run-redelivery.js';
 import {
   connectPostgresAutomataBusRuntimeStore,
   type PostgresAutomataBusRuntimeStore,
@@ -545,10 +546,18 @@ export async function createAgentPersistenceRuntime(
     'automata_runs',
     () => PostgresAutomataRunStore.connect(databaseUrl, companionId, { schema, role: tenantRole }),
   );
+  // The durable background-work queue is the only redelivery owner for
+  // lease_retry runs, so it must be readable before the registry reconciles
+  // runs orphaned by the previous process.
+  const backgroundWorkStore = await awaitPostgresStoreReadiness(
+    'background_work',
+    () => PostgresBackgroundWorkStore.connect(databaseUrl, { schema, role: tenantRole }),
+  );
   const automataRunRegistry = await AutomataRunRegistry.hydrate({
     companionId,
     policy: options.config.automataPolicy,
     store: automataRunStore,
+    redelivery: createBackgroundWorkRunRedeliveryOracle(backgroundWorkStore),
   });
   const automataBusStore = await awaitPostgresStoreReadiness(
     'automata_bus',
@@ -621,10 +630,7 @@ export async function createAgentPersistenceRuntime(
       'introspection',
       () => IntrospectionLandmarkPostgresStore.connect(databaseUrl, { schema, role: tenantRole }),
     ),
-    backgroundWorkStore: await awaitPostgresStoreReadiness(
-      'background_work',
-      () => PostgresBackgroundWorkStore.connect(databaseUrl, { schema, role: tenantRole }),
-    ),
+    backgroundWorkStore,
     automataRunRegistry,
     automataRunStore,
     automataBusStore,

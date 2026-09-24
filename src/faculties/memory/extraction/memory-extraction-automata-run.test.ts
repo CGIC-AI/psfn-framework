@@ -12,6 +12,7 @@ import {
   createMemoryExtractionAutomataRunPort,
   failMemoryExtractionAutomataRun,
 } from './memory-extraction-automata-run.js';
+import { NO_AUTOMATA_REDELIVERY } from '../../../test-support/automata-run-redelivery.js';
 
 function automataPolicy() {
   return parseAutomataOwnerPolicy({
@@ -65,6 +66,7 @@ function automataPolicy() {
 
 async function registry(): Promise<AutomataRunRegistry> {
   return await AutomataRunRegistry.hydrate({
+    redelivery: NO_AUTOMATA_REDELIVERY,
     companionId: 'companion-a',
     policy: automataPolicy(),
     store: new InMemoryAutomataRunStore(),
@@ -76,6 +78,7 @@ describe('memory extraction Automata run lifecycle', () => {
   it('recovers failed external attempts after retention hydration and terminalizes the bound retry', async () => {
     const store = new InMemoryAutomataRunStore();
     const hydrate = (nowMs: number) => AutomataRunRegistry.hydrate({
+      redelivery: NO_AUTOMATA_REDELIVERY,
       companionId: 'companion-a', policy: automataPolicy(), store, nowMs,
     });
     const input = {

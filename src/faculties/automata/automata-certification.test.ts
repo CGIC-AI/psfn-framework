@@ -50,6 +50,7 @@ import { AutomataRetentionCoordinator } from './retention-coordinator.js';
 import { InMemoryAutomataRetentionStore } from './retention-store.js';
 import { AutomataRunRegistry, InMemoryAutomataRunStore } from './run-registry.js';
 import { AUTOMATA_TERMINAL_HANDOFF_SOURCE } from './terminal-lifecycle.js';
+import { NO_AUTOMATA_REDELIVERY } from '../../test-support/automata-run-redelivery.js';
 
 const SRC_DIR = dirname(fileURLToPath(import.meta.url));
 const COMPANION_ID = 'companion-a';
@@ -165,6 +166,7 @@ describe('Automata assembled certification', () => {
     try {
       const policy = loadAutomataPolicySeedDefaults();
       const registry = await AutomataRunRegistry.hydrate({
+        redelivery: NO_AUTOMATA_REDELIVERY,
         companionId: COMPANION_ID,
         policy,
         store: new InMemoryAutomataRunStore(),
@@ -319,6 +321,7 @@ describe('Automata assembled certification', () => {
     const policy = loadAutomataPolicySeedDefaults();
     const runs = new InMemoryAutomataRunStore();
     const initial = await AutomataRunRegistry.hydrate({
+      redelivery: NO_AUTOMATA_REDELIVERY,
       companionId: COMPANION_ID,
       policy,
       store: runs,
@@ -348,6 +351,7 @@ describe('Automata assembled certification', () => {
     });
     const cleanupAtMs = policy.rawSessionRetentionMs + 1;
     const restarted = await AutomataRunRegistry.hydrate({
+      redelivery: NO_AUTOMATA_REDELIVERY,
       companionId: COMPANION_ID,
       policy,
       store: runs,

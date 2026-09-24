@@ -11,6 +11,7 @@ import {
   type AdminAutomataBusReadPort,
   type AdminAutomataLessonReadPort,
 } from './automata-service.js';
+import { NO_AUTOMATA_REDELIVERY } from '../../../test-support/automata-run-redelivery.js';
 
 const findingEvent: AutomataBusFindingEvent = {
   schemaVersion: 1,
@@ -58,6 +59,7 @@ const currentFinding: AutomataBusEffectiveFinding = {
 
 async function createRegistry(): Promise<AutomataRunRegistry> {
   const registry = await AutomataRunRegistry.hydrate({
+    redelivery: NO_AUTOMATA_REDELIVERY,
     companionId: 'companion-test',
     policy: loadAutomataPolicySeedDefaults(),
     store: new InMemoryAutomataRunStore(),
@@ -113,6 +115,7 @@ function busPort(overrides: Partial<Awaited<ReturnType<AdminAutomataBusReadPort[
 describe('AdminAutomataDataService', () => {
   it('rejects a registry owned by a different companion before serving Garden', async () => {
     const registry = await AutomataRunRegistry.hydrate({
+      redelivery: NO_AUTOMATA_REDELIVERY,
       companionId: 'companion-other',
       policy: loadAutomataPolicySeedDefaults(),
       store: new InMemoryAutomataRunStore(),

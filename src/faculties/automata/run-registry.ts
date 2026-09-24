@@ -27,6 +27,26 @@ const ALLOWED_TRANSITIONS: Readonly<Record<AutomataRunStatus, readonly AutomataR
  */
 export const AUTOMATA_RUN_PROCESS_RESTART_REASON = 'process_restart_interrupted';
 
+/** One non-terminal `lease_retry` run a restarted process must account for. */
+export interface AutomataRedeliveryCandidate {
+  automatonClass: ProductionAutomataClassId;
+  /** The run itself followed by its `sourceRunId` ancestors, nearest first. */
+  lineageRunIds: readonly string[];
+}
+
+/**
+ * Durable authority over whether a live owner will re-enter a `lease_retry`
+ * run under an id in its lineage. Hydration consults it once, before any run
+ * is exposed; a run it does not vouch for is failed at restart.
+ */
+export interface AutomataRunRedeliveryOracle {
+  /** The lineage run ids, across all candidates, that a live owner will re-enter. */
+  findRedeliveredRunIds(
+    candidates: readonly AutomataRedeliveryCandidate[],
+    nowMs: number,
+  ): Promise<ReadonlySet<string>>;
+}
+
 export interface AutomataRunStorePort {
   loadRetained(companionId: string, nowMs: number): Promise<AutomataRunRecord[]>;
   loadExact(companionId: string, runId: string): Promise<AutomataRunRecord | null>;
@@ -115,6 +135,7 @@ export class AutomataRunRegistry {
     companionId: string;
     policy: AutomataOwnerPolicy;
     store: AutomataRunStorePort;
+    redelivery: AutomataRunRedeliveryOracle;
     nowMs?: number;
   }): Promise<AutomataRunRegistry> {
     const companionId = requiredText(input.companionId, 'companionId');
@@ -130,38 +151,97 @@ export class AutomataRunRegistry {
       if (registry.runs.has(record.runId)) throw new Error(`Automata store returned duplicate run "${record.runId}".`);
       registry.runs.set(record.runId, cloneAutomataRun(record));
     }
-    await registry.terminalizeOrphanedRuns(nowMs);
+    await registry.terminalizeOrphanedRuns(input.redelivery, nowMs);
     return registry;
   }
 
   /**
    * A freshly hydrated registry belongs to a new process, so every retained
    * non-terminal run was queued or running in a process that has since exited.
-   * Only `lease_retry` classes have an owner that re-enters the same run id
-   * after a restart: the durable background-work supervisor redelivers the
-   * job, and its begin path resumes the running run or converges on a
-   * committed Bus terminal. Every other class mints a fresh run id per attempt
-   * or held its execution state in memory (subagent tasks, live shards), so
-   * nothing will ever finish its orphaned run. Those are failed here, with the
-   * restart annotated, instead of staying non-terminal forever and holding a
-   * permanent stuck-job incident open. A concurrent store change aborts
-   * hydration: two processes reconciling one companion is a real fault.
+   * Only `lease_retry` classes can have an owner that re-enters the same run id
+   * after a restart: a live durable background-work job whose begin path
+   * resumes the running run or converges on a committed Bus terminal. Every
+   * other class mints a fresh run id per attempt or held its execution state in
+   * memory (subagent tasks, live shards), so nothing will ever finish its
+   * orphaned run.
+   *
+   * A `lease_retry` run is kept only when the redelivery oracle proves a live
+   * job will re-enter it (or a run in its retry lineage). Its job may have been
+   * dead-lettered, failed without terminalizing the run, or purged after
+   * retention; the class name alone never proves redelivery. Everything else
+   * is failed here, with the restart annotated, instead of staying
+   * non-terminal forever and holding a permanent stuck-job incident open. A
+   * concurrent store change aborts hydration: two processes reconciling one
+   * companion is a real fault.
    */
-  private async terminalizeOrphanedRuns(nowMs: number): Promise<void> {
-    for (const record of this.sortedRuns()) {
-      if (isTerminalStatus(record.status)) continue;
+  private async terminalizeOrphanedRuns(
+    redelivery: AutomataRunRedeliveryOracle,
+    nowMs: number,
+  ): Promise<void> {
+    const orphaned = this.sortedRuns().filter(record => !isTerminalStatus(record.status));
+    const leaseRetry: Array<{ record: AutomataRunRecord; lineageRunIds: string[] }> = [];
+    for (const record of orphaned) {
       const descriptor = this.classes.find(entry => entry.id === record.automatonClass);
       if (!descriptor) throw new Error(`Unknown automata class "${record.automatonClass}".`);
-      if (descriptor.failureClass === 'lease_retry') continue;
-      await this.transition(record.runId, {
-        status: 'failed',
-        reason: AUTOMATA_RUN_PROCESS_RESTART_REASON,
-        outcome: 'blocked',
-        failureReason: `Run was ${record.status} when its owning process exited; `
-          + `class ${record.automatonClass} has no redelivery path, so it was failed at restart.`,
-        atMs: nowMs,
-      });
+      if (descriptor.failureClass !== 'lease_retry') {
+        await this.failRestartOrphan(record, 'has no redelivery path', nowMs);
+        continue;
+      }
+      leaseRetry.push({ record, lineageRunIds: await this.lineageRunIds(record) });
     }
+    if (leaseRetry.length === 0) return;
+    const candidates = leaseRetry.map(({ record, lineageRunIds }) => ({
+      automatonClass: requireAutomataClass(record.automatonClass),
+      lineageRunIds,
+    }));
+    const redelivered = await redelivery.findRedeliveredRunIds(candidates, nowMs);
+    const lineageIds = new Set(candidates.flatMap(candidate => candidate.lineageRunIds));
+    for (const runId of redelivered) {
+      if (!lineageIds.has(runId)) {
+        throw new Error(`Automata redelivery oracle vouched for unrequested run "${runId}".`);
+      }
+    }
+    for (const { record, lineageRunIds } of leaseRetry) {
+      if (lineageRunIds.some(runId => redelivered.has(runId))) continue;
+      await this.failRestartOrphan(record, 'is lease_retry but no live background-work job owns this run', nowMs);
+    }
+  }
+
+  private async failRestartOrphan(record: AutomataRunRecord, why: string, nowMs: number): Promise<void> {
+    await this.transition(record.runId, {
+      status: 'failed',
+      reason: AUTOMATA_RUN_PROCESS_RESTART_REASON,
+      outcome: 'blocked',
+      failureReason: `Run was ${record.status} when its owning process exited; `
+        + `class ${record.automatonClass} ${why}, so it was failed at restart.`,
+      atMs: nowMs,
+    });
+  }
+
+  /**
+   * The run followed by its `sourceRunId` ancestors. A retry run is re-entered
+   * by redelivering the job that owned its root, so the whole lineage is what
+   * a live owner may vouch for. A cycle or cross-class ancestor fails closed.
+   */
+  private async lineageRunIds(record: AutomataRunRecord): Promise<string[]> {
+    const lineage = [record.runId];
+    let sourceRunId = record.sourceRunId;
+    while (sourceRunId !== undefined) {
+      if (lineage.includes(sourceRunId)) {
+        throw new Error(`Automata run "${record.runId}" has a cyclic source lineage.`);
+      }
+      const source = await this.loadExactRun(sourceRunId);
+      if (!source) {
+        lineage.push(sourceRunId);
+        break;
+      }
+      if (source.automatonClass !== record.automatonClass) {
+        throw new Error(`Automata run "${record.runId}" has a cross-class source lineage.`);
+      }
+      lineage.push(source.runId);
+      sourceRunId = source.sourceRunId;
+    }
+    return lineage;
   }
 
   listClasses(): EffectiveAutomataClassDescriptor[] {

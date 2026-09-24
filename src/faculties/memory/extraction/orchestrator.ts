@@ -75,6 +75,7 @@ import {
 } from './automata-bus-completion.js';
 import {
   createMemoryExtractionAutomataRunPort,
+  memoryExtractionTurnRunId,
   resolveMemoryExtractionDerivationRunId,
 } from './memory-extraction-automata-run.js';
 
@@ -259,7 +260,7 @@ export async function runExtractionOrchestration(
       ?? `memory-extraction:${options.channelId}:${options.triggerReason}`;
     const attemptRef = latestTurnContext?.requestId
       ?? options.welfareGrantJobId
-      ?? (turnId ? `${turnId}:memory-extraction` : undefined)
+      ?? (turnId ? memoryExtractionTurnRunId(turnId) : undefined)
       ?? `memory-extraction:${options.channelId}:${options.triggerReason}:${recentEntries.map(entry => entry.id).join(',')}`;
     await options.emitExtractionStart(options.channelId, options.triggerReason, turnId);
 

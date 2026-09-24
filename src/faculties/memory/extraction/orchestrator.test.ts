@@ -26,6 +26,7 @@ import {
   clearDiagnosticLogRingBufferForTests,
   getRecentDiagnosticLogRecords,
 } from '../../../shared/logger.js';
+import { NO_AUTOMATA_REDELIVERY } from '../../../test-support/automata-run-redelivery.js';
 
 type LlmCompletionContext = Parameters<ExtractionRunOptions['llmClient']['complete']>[0];
 type LlmCompletionResponse = Awaited<ReturnType<ExtractionRunOptions['llmClient']['complete']>>;
@@ -168,6 +169,7 @@ async function createAutomataRunRegistry(): Promise<AutomataRunRegistry> {
     'utf8',
   )));
   return await AutomataRunRegistry.hydrate({
+    redelivery: NO_AUTOMATA_REDELIVERY,
     companionId: 'companion-a',
     policy,
     store: new InMemoryAutomataRunStore(),

@@ -116,6 +116,8 @@ const gateway = createServer(async (request, response) => {
     const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
     const message = body.messages[0].content;
     const sessionId = request.headers['x-session-id'];
+    assert.equal(request.headers['x-testing-harness-run-id'], 'bootstrap-run');
+    assert.equal(request.headers['x-testing-harness-manifest-id'], 'bootstrap:first-conversation:bootstrap-run');
     const path = turnRecordPath(
       turnRecordsDir,
       sessionId,
@@ -174,6 +176,8 @@ try {
     message,
     sessionId,
     turnRecordsDir,
+    runId: 'bootstrap-run',
+    manifestId: 'bootstrap:first-conversation:bootstrap-run',
     turnRecordTimeoutMs: 1000,
     pollMs: 10,
   });
@@ -182,6 +186,11 @@ try {
   assert.equal(
     proof.turnRecordPath,
     turnRecordPath(turnRecordsDir, sessionId, 'testing-harness'),
+  );
+
+  await assert.rejects(
+    proveFirstConversation({ config, message, sessionId, turnRecordsDir, turnRecordTimeoutMs: 10, pollMs: 1 }),
+    /requires a non-empty testing-harness runId and manifestId/u,
   );
 
   console.log('bootstrap live readiness/persistence service test passed');

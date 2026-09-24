@@ -91,9 +91,9 @@ describe('resolveGatewayBootstrapInput', () => {
         NTFY_TOKEN: 'ntfy-token',
         CONFIRMATION_EXPIRY_MS: '86400000',
         SHUTDOWN_FORCE_EXIT_TIMEOUT_MS: '12000',
-        DISCORD_START_RETRY_BASE_DELAY_MS: '11',
-        DISCORD_START_RETRY_MAX_DELAY_MS: '22',
-        DISCORD_START_RETRY_MAX_ATTEMPTS: '3',
+        CHANNEL_SURFACE_START_RETRY_BASE_DELAY_MS: '11',
+        CHANNEL_SURFACE_START_RETRY_MAX_DELAY_MS: '22',
+        CHANNEL_SURFACE_START_RETRY_MAX_ATTEMPTS: '3',
         EMBEDDING_API_KEY: 'embedding-secret',
         OPENAI_API_KEY: 'openai-secret',
         LITELLM_API_KEY: 'litellm-secret',
@@ -147,7 +147,7 @@ describe('resolveGatewayBootstrapInput', () => {
       enabled: false,
     });
     expect(bootstrap.providerEnv.OPENAI_API_KEY).toBe('openai-secret');
-    expect(bootstrap.discordStartRetry).toEqual({
+    expect(bootstrap.channelSurfaceStartRetry).toEqual({
       baseDelayMs: 11,
       maxDelayMs: 22,
       maxAttempts: 3,

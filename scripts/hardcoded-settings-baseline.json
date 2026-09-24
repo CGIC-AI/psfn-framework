@@ -783,18 +783,18 @@
       "note": "Existing mutable policy candidate DEFAULT_VOICE_STREAM_OVERFLOW_POLICY; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
-      "file": "src/boundary/gateway/discord-startup.ts",
-      "name": "DEFAULT_DISCORD_START_RETRY_BASE_DELAY_MS",
+      "file": "src/boundary/gateway/channel-start-retry.ts",
+      "name": "DEFAULT_CHANNEL_SURFACE_START_RETRY_BASE_DELAY_MS",
       "value": "2_000"
     },
     {
-      "file": "src/boundary/gateway/discord-startup.ts",
-      "name": "DEFAULT_DISCORD_START_RETRY_MAX_ATTEMPTS",
+      "file": "src/boundary/gateway/channel-start-retry.ts",
+      "name": "DEFAULT_CHANNEL_SURFACE_START_RETRY_MAX_ATTEMPTS",
       "value": "0"
     },
     {
-      "file": "src/boundary/gateway/discord-startup.ts",
-      "name": "DEFAULT_DISCORD_START_RETRY_MAX_DELAY_MS",
+      "file": "src/boundary/gateway/channel-start-retry.ts",
+      "name": "DEFAULT_CHANNEL_SURFACE_START_RETRY_MAX_DELAY_MS",
       "value": "30_000"
     },
     {

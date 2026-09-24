@@ -13,6 +13,7 @@ import type {
   OnboardingPlan,
   PersistenceRootPlan,
   Prompter,
+  FallbackChatSelection,
   ProviderSelection,
   VoiceSelection,
 } from './types.js';
@@ -141,10 +142,22 @@ export async function runOnboarding(deps: OnboardingDeps): Promise<OnboardingOut
   // nothing lands on disk.
   const companion = await selectCompanion(prompter);
 
+  // Declared chat fallback. Asked last so every earlier scripted answer keeps
+  // its position; never optional, because one chat model alone cannot recover
+  // from provider-specific failures.
+  const fallbackChat = await selectFallbackChat(prompter, {
+    mode,
+    seedDir: deps.seedDir,
+    primary: provider,
+    primaryModelSlug: models.primaryModelSlug,
+    capturesHostSecret: modeInfo.capturesHostSecret,
+  });
+
   const envEntries = buildEnvEntries({
     mode,
     roots,
     provider,
+    fallbackChat,
     voice,
     companionId,
     capturesHostSecret: modeInfo.capturesHostSecret,
@@ -159,6 +172,7 @@ export async function runOnboarding(deps: OnboardingDeps): Promise<OnboardingOut
     seedDir: deps.seedDir,
     provider,
     models,
+    fallbackChat,
     voice,
     companionId,
     ...(kubernetesTarget ? { kubernetesTarget } : {}),
@@ -179,7 +193,9 @@ export async function runOnboarding(deps: OnboardingDeps): Promise<OnboardingOut
   prompter.info(`\nWrote ${writtenPaths.length} file(s) (owner files + companion card).`);
   if (envWritten) prompter.info(`Updated ${deps.envPath} with ${envEntries.length} entry/entries (secrets not shown).`);
   for (const line of modeGuidance(mode, provider, kubernetesTarget)) prompter.info(line);
-  for (const line of firstChatGapNotes({ mode, companionId, provider, capturesHostSecret: modeInfo.capturesHostSecret })) {
+  for (const line of firstChatGapNotes({
+    mode, companionId, provider, fallbackChat, capturesHostSecret: modeInfo.capturesHostSecret,
+  })) {
     prompter.info(line);
   }
 
@@ -266,9 +282,17 @@ export function firstChatGapNotes(input: {
   mode: InstallMode;
   companionId: string;
   provider: ProviderSelection;
+  fallbackChat?: FallbackChatSelection;
   capturesHostSecret: boolean;
 }): string[] {
   const lines = ['', 'Before your first chat:'];
+  if (input.fallbackChat && input.fallbackChat.provider.id === input.provider.id) {
+    lines.push(
+      `  - WARNING: the chat fallback (${input.fallbackChat.modelSlug}) shares provider ${input.provider.id}; `
+      + 'a provider outage or provider-wide defect still leaves no working chat candidate. '
+      + 'Add a second chat provider to providers.json/models.json for Autonomous companions.',
+    );
+  }
   if (input.capturesHostSecret) {
     lines.push(`  - COMPANION_ID was written to .env (${input.companionId}); it binds this runtime to the fleet manifest.`);
   } else {
@@ -341,10 +365,11 @@ async function selectProvider(
   prompter: Prompter,
   capturesHostSecret: boolean,
   mode: InstallMode,
+  role: 'primary' | 'fallback' = 'primary',
 ): Promise<ProviderSelection> {
   const types = discoverProviderTypes();
   const chosenType = await prompter.choice(
-    'Which LLM provider?',
+    role === 'primary' ? 'Which LLM provider?' : 'Which LLM provider serves the fallback chat model?',
     types.map((info) => ({ value: info.type, label: info.label, hint: info.type })),
   );
   const info = types.find((entry) => entry.type === chosenType);
@@ -415,6 +440,47 @@ async function selectModels(
   return { primaryModelSlug, extractionModelSlug, visionModelSlug };
 }
 
+async function selectFallbackChat(
+  prompter: Prompter,
+  input: {
+    mode: InstallMode;
+    seedDir: string;
+    primary: ProviderSelection;
+    primaryModelSlug: string;
+    capturesHostSecret: boolean;
+  },
+): Promise<FallbackChatSelection> {
+  prompter.info(
+    '\nA fallback chat model is required: a single chat model cannot recover from provider-specific failures.',
+  );
+  // Compose wires exactly one provider credential (PSFN_PROVIDER_API_KEY) and
+  // the Helm lifecycle stages one provider Secret, so a second provider is
+  // offered only for repository-native installs that read .env directly.
+  const secondProvider = input.mode === 'local'
+    && await prompter.confirm(
+      'Serve the fallback chat model from a second provider? (recommended)',
+      { default: false },
+    );
+  const provider = secondProvider
+    ? await selectProvider(prompter, input.capturesHostSecret, input.mode, 'fallback')
+    : input.primary;
+  if (secondProvider && provider.id === input.primary.id) {
+    throw new Error(`The fallback provider id must differ from the primary provider id (${input.primary.id}).`);
+  }
+  if (secondProvider && provider.apiKeyEnvName === input.primary.apiKeyEnvName) {
+    throw new Error(`The fallback provider needs its own API key env var, not ${input.primary.apiKeyEnvName}.`);
+  }
+  const defaults = defaultModelSlugs(input.seedDir);
+  const modelSlug = await prompter.text('Fallback chat model slug', {
+    default: defaults.fallbackChat,
+    allowEmpty: false,
+  });
+  if (provider.id === input.primary.id && modelSlug === input.primaryModelSlug) {
+    throw new Error('The fallback chat model must differ from the primary chat model on the same provider.');
+  }
+  return { provider, modelSlug };
+}
+
 async function selectVoice(prompter: Prompter, capturesHostSecret: boolean): Promise<VoiceSelection> {
   const enable = await prompter.confirm('Enable voice (STT/TTS)?', { default: false });
   if (!enable) return { enabled: false, secrets: [] };
@@ -451,6 +517,7 @@ export function buildEnvEntries(input: {
   mode: InstallMode;
   roots: PersistenceRootPlan;
   provider: ProviderSelection;
+  fallbackChat?: FallbackChatSelection;
   voice: VoiceSelection;
   companionId: string;
   capturesHostSecret: boolean;
@@ -613,6 +680,14 @@ export function buildEnvEntries(input: {
       comment: `Primary LLM provider key (${input.provider.label})`,
     });
   }
+  const fallbackProvider = input.fallbackChat?.provider;
+  if (fallbackProvider && fallbackProvider.id !== input.provider.id && fallbackProvider.apiKeyValue.length > 0) {
+    entries.push({
+      envName: fallbackProvider.apiKeyEnvName,
+      value: fallbackProvider.apiKeyValue,
+      comment: `Fallback chat LLM provider key (${fallbackProvider.label})`,
+    });
+  }
   for (const secret of input.voice.secrets) {
     entries.push({ envName: secret.envName, value: secret.value, comment: 'Voice provider key' });
   }
@@ -683,6 +758,17 @@ function draftPlan(input: { mode: InstallMode; roots: PersistenceRootPlan; seedD
       apiKeyValue: '',
     },
     models: { primaryModelSlug: 'x', extractionModelSlug: 'y', visionModelSlug: 'z' },
+    fallbackChat: {
+      provider: {
+        id: 'placeholder',
+        type: 'openrouter',
+        label: 'placeholder',
+        apiBaseUrl: 'https://example.invalid/v1',
+        apiKeyEnvName: 'PLACEHOLDER',
+        apiKeyValue: '',
+      },
+      modelSlug: 'w',
+    },
     voice: { enabled: false, secrets: [] },
     companionId: '00000000-0000-4000-8000-000000000000',
     envEntries: [],

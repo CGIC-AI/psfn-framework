@@ -120,6 +120,7 @@ import { resolveKubernetesHelmBackupConfig } from '../../persistence/backups/kub
 import { migrateFleetAuthSchema } from '../../persistence/postgres/fleet-auth/schema.js';
 import { buildFleetAuthBackupCycleOptions } from '../../persistence/backups/fleet-scheduler.js';
 import { prepareFleetSharedSchemaRuntime } from '../../persistence/backups/fleet-shared-schema-startup.js';
+import { startGatewayModelsOwnerFileReload } from './models-owner-file-reload.js';
 import {
   assertRestoreVerifyDatabasePreconditions,
 } from '../../persistence/backups/restore-verify-preconditions.js';
@@ -402,6 +403,12 @@ async function main(): Promise<void> {
     privilegedServices,
     createGatewayServer,
   } = privilegedCore;
+  // awhls/hye2n: models.json edits (Garden save or direct) reach gateway
+  // routing and the intake screeners without a restart.
+  const modelsOwnerFileReload = startGatewayModelsOwnerFileReload({
+    config,
+    intakeScreening: privilegedCore.intakeScreening,
+  });
   // Bounded persisted health plane for this process. Constructed and
   // subscribed here — before the first gateway emitter below — because
   // `EventBus.emit` returns silently with no subscriber, so a later
@@ -1372,6 +1379,7 @@ async function main(): Promise<void> {
         { step: 'close ICP initiation policy authority', action: async () => { await icpInitiationPolicyAuthority?.close(); } },
         { step: 'close fleet auth persistence', action: async () => { await fleetAuthPersistence?.close(); } },
         { step: 'stop channel adapters', action: () => stopGatewayChannelSurfaces(channelSurfaces) },
+        { step: 'stop models.json reload watcher', action: () => modelsOwnerFileReload.close() },
         { step: 'dispose intake screening', action: () => privilegedCore.intakeScreening.dispose() },
         { step: 'stop runtime incident alerts', action: () => detachIncidentAlerts() },
         { step: 'stop runtime health stream', action: () => detachHealthEventStream() },

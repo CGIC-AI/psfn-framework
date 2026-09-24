@@ -641,6 +641,17 @@ the operator's external configuration authority.
 <!-- openwiki: broken internal link [maintenance-scripts-inventory.md] file "maintenance-scripts-inventory.md" does not exist. Fix the href or restore the target, then delete this comment. -->
   mutation (see the [maintenance scripts inventory](maintenance-scripts-inventory.md)).
 
+## Live owner-file reloads
+
+`models.json` hot-reloads in every process: the agent and the gateway each poll
+its mtime and apply an edit (a Garden save or a direct write) without a
+restart. In the gateway that covers model routing, which reads the registry per
+call, and the CogSec intake screeners, whose L2/L3/vision models are
+re-resolved and re-verified against the provider backend; a reload that fails
+to parse, or a screener selection that would not start, is logged and the
+running selection stays. Other owner files load at startup and need a restart
+after a direct edit unless their own section says otherwise.
+
 ## Owner-file contract upgrades
 
 A release that adds a required owner-file field ships two things: the field's

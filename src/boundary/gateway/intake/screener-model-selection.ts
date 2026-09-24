@@ -107,3 +107,46 @@ export function resolveIntakeScreenerModels(
   }
   return { l2: background[0]!, l3, vision };
 }
+
+/** Identity of a selection: the routed models plus the card metadata they carry. */
+function selectionFingerprint(selection: IntakeScreenerModelSelection): string {
+  return JSON.stringify({ l2: selection.l2, l3: selection.l3, vision: selection.vision ?? null });
+}
+
+/**
+ * The intake screeners' model selection, re-resolvable when models.json changes
+ * on disk (beads psfn-framework-hye2n, psfn-framework-awhls). Resolution is the
+ * same fail-closed startup operation; a refresh that would not start (missing
+ * purpose, non-vision card, unready backend) throws and keeps the running
+ * selection, so a bad edit never leaves intake without a screener.
+ */
+export interface LiveIntakeScreenerModels {
+  current(): IntakeScreenerModelSelection;
+  /**
+   * Re-resolve from the (reloaded) config. `verify` proves a changed selection
+   * ready before it serves traffic; if resolution or `verify` throws, the
+   * running selection stays in place.
+   */
+  refresh(verify: (selection: IntakeScreenerModelSelection) => void): 'unchanged' | 'applied';
+}
+
+export function createLiveIntakeScreenerModels(
+  config: SubstrateConfig,
+  options: {
+    l3DualModel: boolean;
+    visionEnabled: boolean;
+  },
+): LiveIntakeScreenerModels {
+  const resolve = (): IntakeScreenerModelSelection => resolveIntakeScreenerModels(config, options);
+  let selection = resolve();
+  return {
+    current: () => selection,
+    refresh: (verify) => {
+      const next = resolve();
+      if (selectionFingerprint(next) === selectionFingerprint(selection)) return 'unchanged';
+      verify(next);
+      selection = next;
+      return 'applied';
+    },
+  };
+}

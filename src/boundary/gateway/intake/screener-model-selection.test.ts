@@ -4,7 +4,7 @@ import type {
   ModelRegistryEntry,
 } from '../../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
-import { resolveIntakeScreenerModels } from './screener-model-selection.js';
+import { createLiveIntakeScreenerModels, resolveIntakeScreenerModels } from './screener-model-selection.js';
 import { createIntakeScreenerTestConfig } from './screener-test-config.js';
 
 function entry(input: {
@@ -244,5 +244,48 @@ describe('resolveIntakeScreenerModels', () => {
       l3DualModel: false,
       visionEnabled: false,
     })).toThrow(/single-verdict.*at least two distinct.*single point of failure/is);
+  });
+});
+
+describe('createLiveIntakeScreenerModels (hye2n)', () => {
+  const models = () => [
+    entry({ id: 'background', model: 'vendor/background', purpose: 'background' }),
+    entry({ id: 'reasoning', model: 'vendor/reasoning', purpose: 'reasoning' }),
+  ];
+  const options = { l3DualModel: false, visionEnabled: false };
+
+  it('picks up a card change from the reloaded registry after verification', () => {
+    const runtime = config(models());
+    const live = createLiveIntakeScreenerModels(runtime, options);
+    const verified: string[] = [];
+    expect(live.refresh(selection => { verified.push(route(selection.l2)); })).toBe('unchanged');
+    expect(verified).toEqual([]);
+
+    // models.json reload mutates the live config in place, e.g. a
+    // rejectsTemperature capability flip on the L2 card.
+    runtime.modelRegistry!.models[0]!.capabilities = {
+      ...runtime.modelRegistry!.models[0]!.capabilities,
+      rejectsTemperature: true,
+    };
+    expect(live.refresh(selection => { verified.push(route(selection.l2)); })).toBe('applied');
+    expect(verified).toEqual(['openrouter:vendor/background']);
+    expect(live.current().l2.rejectsTemperature).toBe(true);
+  });
+
+  it('keeps the running selection when the reloaded one would not start', () => {
+    const runtime = config(models());
+    const live = createLiveIntakeScreenerModels(runtime, options);
+    const before = live.current();
+    runtime.modelRegistry!.models[1]!.identity = {
+      ...runtime.modelRegistry!.models[1]!.identity,
+      model: 'vendor/reasoning-v2',
+    };
+    expect(() => live.refresh(() => { throw new Error('backend has no credential for it'); }))
+      .toThrow(/no credential/);
+    expect(live.current()).toBe(before);
+
+    runtime.modelRegistry!.models.splice(0, 1);
+    expect(() => live.refresh(() => undefined)).toThrow(/no eligible model/);
+    expect(live.current()).toBe(before);
   });
 });

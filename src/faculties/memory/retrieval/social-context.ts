@@ -309,11 +309,11 @@ export async function collectProactiveRecallCandidates(
     .filter(memory => !isInternalMemoryArtifact(memory));
   if (byChannel.length > 0) return byChannel;
 
+  // Bounded SQL slice (psfn-framework-dnaqt): the store excludes internal
+  // artifacts and orders by lastAccessed; never the whole active corpus.
   return (await memoryStore
-    .getAllActiveMemories())
-    .filter(memory => !isInternalMemoryArtifact(memory))
-    .sort((left, right) => right.lastAccessed - left.lastAccessed)
-    .slice(0, 24);
+    .getRecentlyAccessedMemories(24))
+    .filter(memory => !isInternalMemoryArtifact(memory));
 }
 
 function shouldExpandEvolutionChains(input: {

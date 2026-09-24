@@ -202,6 +202,15 @@ fi
 # Skipped when no satellite key is configured (hub-less smoke runs).
 if [ -n "${PSFN_SMOKE_SATELLITE_API_KEY:-}" ]; then
   SYSTEM_DATA_DIR="$SYSTEM_DATA_DIR" node /app/scripts/ops/psfn-compose-smoke-satellites.mjs
+  # ── Hub device registry (psfn-framework-gdv64) ──
+  # Enroll one test device on the Hub so an authenticated session receives the
+  # outputs its enrollment grants (emotion included). smoke:docker generates the
+  # credential per run; this stores only its digest plus a fresh assertion key.
+  if [ -z "${PSFN_SMOKE_HUB_DEVICE_CREDENTIAL:-}" ]; then
+    echo "[smoke-seed] PSFN_SMOKE_HUB_DEVICE_CREDENTIAL is required to enroll the Hub test device (npm run smoke:docker generates it)" >&2
+    exit 2
+  fi
+  node /app/scripts/ops/psfn-compose-smoke-hub-device.mjs
 else
   echo "[smoke-seed] PSFN_SMOKE_SATELLITE_API_KEY unset; skipping satellite registry" >&2
 fi

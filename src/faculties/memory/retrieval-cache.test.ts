@@ -9,6 +9,7 @@ import { WikiRetrievalService } from '../wiki/retrieval.js';
 import { resolveEmbeddingProviderProvenanceFromConfig } from './embedding.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import type { Contact } from '../../core/contacts/types.js';
+import { keysetActiveMemoryPages, recentlyAccessedMemories } from '../../test-support/active-memory-pages.js';
 
 function makeMemory(id: string, text: string): PurrMemory & { similarity: number } {
   return {
@@ -43,7 +44,8 @@ function makeStore(initialMemories: Array<PurrMemory & { similarity: number }>) 
     getMemoriesByContact: vi.fn(async () => []),
     getMemoriesByChannel: vi.fn(async () => []),
     getAllActiveMemories: vi.fn(async () => memories),
-    listActiveMemories: vi.fn(async () => memories),
+    listActiveMemories: vi.fn(keysetActiveMemoryPages(() => memories)),
+    getRecentlyAccessedMemories: vi.fn(recentlyAccessedMemories(() => memories)),
     recordEvolutionLink: vi.fn(async () => undefined),
     getEvolutionLinksForSourceMemory: vi.fn(async () => []),
     getEvolutionLinksForTargetMemory: vi.fn(async () => []),

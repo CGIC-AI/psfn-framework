@@ -5,6 +5,7 @@ import type {
 } from './events.js';
 import type { MemoryProvenance, PurrMemory } from '../../faculties/memory/types.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
+import { activeMemoryPages } from '../../faculties/memory/active-memory-scan.js';
 import { uniqueStrings } from '../../shared/utils/strings.js';
 import { toPositiveInteger } from '../../shared/utils/numeric.js';
 import {
@@ -140,7 +141,7 @@ export interface CogSecLineagePreview {
 export interface BuildCogSecLineagePreviewInput {
   event: CogSecLineageSource | CogSecEvent;
   sessionReader?: CogSecLineageSessionReader;
-  memoryStore?: Pick<MemoryStorePort, 'listMemories'>;
+  memoryStore?: Pick<MemoryStorePort, 'listActiveMemories'>;
   externalArtifacts?: readonly CogSecExternalLineageArtifact[];
   /**
    * Admission identity of the affected bytes. Normally derived from the
@@ -712,20 +713,26 @@ export async function buildCogSecLineagePreview(
 
   const memories: CogSecLineageMemoryRef[] = [];
   if (input.memoryStore) {
-    for (const memory of await input.memoryStore.listMemories()) {
-      const match = memoryMatchesSpans(memory, spans, admissionIdentity);
-      if (!match) continue;
-      memories.push({
-        id: memory.id,
-        classification: match.classification,
-        reason: match.reason,
-        ...(memory.sourceRef ? { sourceRef: memory.sourceRef } : {}),
-        provenanceRefs: [...(memory.provenanceRefs ?? [])],
-        hasEmbedding: Boolean(memory.embedding),
-        actions: match.classification === 'tainted'
-          ? ['revoke', 'regenerate']
-          : ['manual_review'],
-      });
+    // A lineage sweep must see every active memory, so this is a deliberate
+    // full scan — walked in keyset pages with one page resident at a time
+    // (psfn-framework-dnaqt). Production passes the subject-authorized store,
+    // whose list selector is active-only.
+    for await (const page of activeMemoryPages(input.memoryStore)) {
+      for (const memory of page) {
+        const match = memoryMatchesSpans(memory, spans, admissionIdentity);
+        if (!match) continue;
+        memories.push({
+          id: memory.id,
+          classification: match.classification,
+          reason: match.reason,
+          ...(memory.sourceRef ? { sourceRef: memory.sourceRef } : {}),
+          provenanceRefs: [...(memory.provenanceRefs ?? [])],
+          hasEmbedding: Boolean(memory.embedding),
+          actions: match.classification === 'tainted'
+            ? ['revoke', 'regenerate']
+            : ['manual_review'],
+        });
+      }
     }
   } else {
     gaps.push(gap('memories', 'memory_store_not_provided'));

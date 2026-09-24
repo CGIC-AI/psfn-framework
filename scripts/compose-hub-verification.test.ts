@@ -1,15 +1,33 @@
+import { readFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
+import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { WebSocketServer } from 'ws';
-import { buildSatelliteHello } from '../companion-ui/src/lib/api/auth.js';
+import { WebSocketServer, type WebSocket as WsSocket } from 'ws';
+import { parse as parseYaml } from 'yaml';
+import { buildSatelliteHello, MOBILE_CHAT_APP_CAPABILITIES } from '../companion-ui/src/lib/api/auth.js';
+import { createHubDeviceAssertionIssuer } from '../apps/satellite-hub/src/ts/hub/device-assertion.js';
+import {
+  authenticateHubDevice,
+  createHubDeviceRegistryAuthority,
+  intersectCapabilities,
+  type HubDeviceRegistry,
+} from '../apps/satellite-hub/src/ts/hub/device-registry.js';
 import { parseSatelliteRegistryConfig } from '../src/channels/backplane/satellite-registry.js';
 import {
   assertHubSessionReady,
   companionUiSessionReadyDivergence,
+  buildEnrolledDeviceHello,
+  collectHubHandshake,
   judgeRelayedEmotionSnapshot,
   openEmotionRelaySession,
+  probeUnauthenticatedHello,
   relayEventsUrl,
 } from './compose-hub-verification.js';
+import {
+  buildSmokeHubDeviceRegistry,
+  generateSmokeHubDeviceAssertionKey,
+  SMOKE_HUB_DEVICE_ID,
+} from './ops/psfn-compose-smoke-hub-device.mjs';
 import {
   buildSmokeSatelliteRegistry,
   deriveApiKeyPrincipalId,
@@ -155,27 +173,170 @@ describe('Compose hub verification helpers', () => {
   });
 });
 
-describe('Compose smoke emotion relay probe', () => {
-  it('attaches with companion-ui\'s own hello, which advertises the emotion output', async () => {
-    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
-    const received: unknown[] = [];
-    server.on('connection', (socket) => {
-      socket.send(JSON.stringify({ type: 'session.ready' }));
-      socket.on('message', (raw) => {
-        const frame: unknown = JSON.parse(String(raw));
-        received.push(frame);
-        socket.send(JSON.stringify({ type: 'hello.ack' }));
-      });
+const TEST_DEVICE = { deviceId: SMOKE_HUB_DEVICE_ID, credential: 'a'.repeat(64) };
+const EMOTION_GRANT = { input: ['text'], output: ['text', 'emotion'], control: [], safety: [] };
+
+function smokeDeviceRegistry(credential = TEST_DEVICE.credential): HubDeviceRegistry {
+  return buildSmokeHubDeviceRegistry({
+    credential,
+    companionId: SMOKE_COMPANION_ID,
+    satelliteId: 'smoke-hub',
+    endpointId: 'smoke-hub-endpoint',
+    claimType: 'satellite.endpoint',
+  }) as HubDeviceRegistry;
+}
+
+describe('Compose smoke Hub device enrollment', () => {
+  it('produces a registry the Hub accepts, enrolling only the credential digest', () => {
+    const registry = smokeDeviceRegistry();
+    const authority = createHubDeviceRegistryAuthority(() => registry);
+    const [device] = authority.readCurrent().devices;
+    expect(device).toMatchObject({
+      deviceId: SMOKE_HUB_DEVICE_ID,
+      companionId: SMOKE_COMPANION_ID,
+      satelliteId: 'smoke-hub',
+      endpointId: 'smoke-hub-endpoint',
+      claimType: 'satellite.endpoint',
+      enrollmentStatus: 'active',
     });
-    await new Promise<void>(resolve => server.once('listening', () => resolve()));
+    expect(JSON.stringify(registry)).not.toContain(TEST_DEVICE.credential);
+  });
+
+  it('authenticates only the generated credential', () => {
+    const registry = smokeDeviceRegistry();
+    expect(authenticateHubDevice(registry, TEST_DEVICE.credential)?.deviceId).toBe(SMOKE_HUB_DEVICE_ID);
+    expect(authenticateHubDevice(registry, 'b'.repeat(64))).toBeNull();
+    expect(authenticateHubDevice(registry, undefined)).toBeNull();
+  });
+
+  it('grants exactly companion-ui\'s hello capabilities, emotion included', () => {
+    const device = authenticateHubDevice(smokeDeviceRegistry(), TEST_DEVICE.credential)!;
+    expect(device.maxCapabilities).toEqual(MOBILE_CHAT_APP_CAPABILITIES);
+    const granted = intersectCapabilities(buildSatelliteHello().capabilities, device.maxCapabilities);
+    expect(granted.output).toContain('emotion');
+  });
+
+  it('refuses a short credential and a missing companion', () => {
+    expect(() => smokeDeviceRegistry('short')).toThrow(/at least 32 characters/u);
+    expect(() => buildSmokeHubDeviceRegistry({
+      credential: TEST_DEVICE.credential,
+      satelliteId: 'smoke-hub',
+      endpointId: 'smoke-hub-endpoint',
+      claimType: 'satellite.endpoint',
+    })).toThrow(/companionId/u);
+  });
+
+  it('wires a registry-mode Hub whose assertion signing config the Hub accepts, with no committed credential', () => {
+    const repoRoot = resolve(import.meta.dirname, '..');
+    const composeText = readFileSync(join(repoRoot, 'docker/docker-compose.smoke.yml'), 'utf8');
+    const compose = parseYaml(composeText) as {
+      services: Record<string, {
+        environment?: Record<string, string>;
+        volumes?: string[];
+        depends_on?: Record<string, { condition: string }>;
+      }>;
+    };
+    const hub = compose.services['satellite-hub']!;
+    const seed = compose.services.seed!;
+    const env = hub.environment!;
+    expect(hub.volumes).toContain('hub-device:/app/hub-device:ro');
+    expect(hub.depends_on?.seed).toEqual({ condition: 'service_completed_successfully' });
+    expect(seed.volumes).toContain('hub-device:/run/psfn-hub-device');
+    expect(env.HUB_DEVICE_REGISTRY_PATH).toBe('/app/hub-device/devices.json');
+    expect(env.HUB_DEVICE_ASSERTION_PRIVATE_KEY_PATH).toBe('/app/hub-device/device-assertion-key.pem');
+    expect(seed.environment?.PSFN_SMOKE_HUB_DEVICE_CREDENTIAL).toBe('${PSFN_SMOKE_HUB_DEVICE_CREDENTIAL:-}');
+    const issuer = createHubDeviceAssertionIssuer({
+      issuer: env.HUB_DEVICE_ASSERTION_ISSUER!,
+      kid: env.HUB_DEVICE_ASSERTION_KID!,
+      audience: env.HUB_DEVICE_ASSERTION_AUDIENCE!,
+      privateKeyPem: generateSmokeHubDeviceAssertionKey(),
+      ttlSeconds: Number(env.HUB_DEVICE_ASSERTION_TTL_SECONDS),
+    });
+    const device = authenticateHubDevice(smokeDeviceRegistry(), TEST_DEVICE.credential)!;
+    expect(issuer.issue({ device, sessionId: 'realtime:smoke' }).split('.')).toHaveLength(3);
+  });
+});
+
+/** A registry-mode Hub double: refuses non-hello and credential-less hellos. */
+async function withRegistryHub(
+  grant: Record<string, string[]>,
+  run: (url: string, received: unknown[]) => Promise<void>,
+): Promise<void> {
+  const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+  const received: unknown[] = [];
+  server.on('connection', (socket: WsSocket) => {
+    socket.on('message', (raw) => {
+      const frame = JSON.parse(String(raw)) as Record<string, unknown>;
+      received.push(frame);
+      if (frame.type === 'ping') {
+        socket.send(JSON.stringify({ type: 'pong', sentAt: frame.sentAt }));
+        return;
+      }
+      if (frame.type !== 'hello' || frame.credential !== TEST_DEVICE.credential) {
+        socket.send(JSON.stringify({ type: 'error-event', data: { message: 'Satellite device authentication failed' } }));
+        socket.close(1008, 'device authentication failed');
+        return;
+      }
+      socket.send(JSON.stringify({ type: 'session.ready', capabilities: grant }));
+      socket.send(JSON.stringify({ type: 'hello.ack', capabilities: grant }));
+    });
+  });
+  await new Promise<void>(resolvePromise => server.once('listening', () => resolvePromise()));
+  try {
+    const { port } = server.address() as AddressInfo;
+    await run(`ws://127.0.0.1:${port}/`, received);
+  } finally {
+    for (const client of server.clients) client.terminate();
+    await new Promise<void>(resolvePromise => server.close(() => resolvePromise()));
+  }
+}
+
+describe('Compose smoke emotion relay probe', () => {
+  it('authenticates as the enrolled device with companion-ui\'s own hello capabilities', async () => {
+    await withRegistryHub(EMOTION_GRANT, async (url, received) => {
+      const session = await openEmotionRelaySession(url, 2_000, TEST_DEVICE);
+      session.close();
+      expect(received).toEqual([{ ...buildSatelliteHello(), ...TEST_DEVICE }]);
+      expect(JSON.parse(buildEnrolledDeviceHello(TEST_DEVICE)).capabilities.output).toContain('emotion');
+    });
+  });
+
+  it('fails the relay probe when the hub does not grant the emotion output', async () => {
+    await withRegistryHub({ ...EMOTION_GRANT, output: ['text'] }, async (url) => {
+      await expect(openEmotionRelaySession(url, 2_000, TEST_DEVICE)).rejects.toThrow(/did not grant the emotion output/u);
+    });
+  });
+
+  it('completes the authenticated handshake before ping/pong', async () => {
+    await withRegistryHub(EMOTION_GRANT, async (url) => {
+      const handshake = await collectHubHandshake(url, 2_000, TEST_DEVICE);
+      expect(handshake.sessionReady).toMatchObject({ type: 'session.ready' });
+      expect(handshake.helloAck).toMatchObject({ type: 'hello.ack' });
+      expect(handshake.pong).toMatchObject({ type: 'pong' });
+    });
+  });
+
+  it('reports a registry hub refusing a credential-less companion-ui hello', async () => {
+    await withRegistryHub(EMOTION_GRANT, async (url, received) => {
+      const probe = await probeUnauthenticatedHello(url, 2_000);
+      expect(probe.refused).toBe(true);
+      expect(received).toEqual([buildSatelliteHello()]);
+    });
+  });
+
+  it('does not report a refusal when the hub admits a credential-less hello', async () => {
+    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    server.on('connection', (socket: WsSocket) => {
+      socket.on('message', () => socket.send(JSON.stringify({ type: 'hello.ack', capabilities: EMOTION_GRANT })));
+    });
+    await new Promise<void>(resolvePromise => server.once('listening', () => resolvePromise()));
     try {
       const { port } = server.address() as AddressInfo;
-      const session = await openEmotionRelaySession(`ws://127.0.0.1:${port}/`, 2_000);
-      session.close();
-      expect(received).toEqual([buildSatelliteHello()]);
-      expect(buildSatelliteHello().capabilities.output).toContain('emotion');
+      const probe = await probeUnauthenticatedHello(`ws://127.0.0.1:${port}/`, 300);
+      expect(probe.refused).toBe(false);
     } finally {
-      await new Promise<void>(resolve => server.close(() => resolve()));
+      for (const client of server.clients) client.terminate();
+      await new Promise<void>(resolvePromise => server.close(() => resolvePromise()));
     }
   });
 });

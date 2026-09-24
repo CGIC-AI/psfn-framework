@@ -1,4 +1,5 @@
 import type { MemoryStorePort } from '../memory-store-port.js';
+import { collectActiveMemories } from '../active-memory-scan.js';
 import type {
   MemoryScopeKind,
   RetrievalAccessScope,
@@ -105,10 +106,10 @@ type MemoryScopeFilterResult =
   }
   | { ok: false; error: string };
 
+/** Filters an active-memory scan (archived memories are never scanned). */
 export interface MemoryVisibilityFilter {
   contactId?: string;
   scopeQuery?: MemoryScopeQuery;
-  includeArchived: boolean;
 }
 
 export interface MemoryAccessOptions {
@@ -390,7 +391,7 @@ function memoryState(memory: Pick<PurrMemory, 'deletedAt' | 'supersededBy'>): 'a
 }
 
 function memoryMatchesVisibilityFilter(memory: PurrMemory, filter: MemoryVisibilityFilter): boolean {
-  if (!filter.includeArchived && memoryState(memory) === 'archived') return false;
+  if (memoryState(memory) === 'archived') return false;
   if (filter.contactId && memory.contactId !== filter.contactId) return false;
   if (filter.scopeQuery && !memoryMatchesScopeQuery(memory, filter.scopeQuery)) return false;
   return true;
@@ -400,8 +401,9 @@ export async function listFilteredMemories(
   memoryStore: MemoryStorePort,
   filter: MemoryVisibilityFilter,
 ): Promise<PurrMemory[]> {
-  const memories = await memoryStore.listMemories();
-  return memories.filter(memory => memoryMatchesVisibilityFilter(memory, filter));
+  // Keyset pages of active memories, one page resident at a time; only the
+  // filtered matches are retained (psfn-framework-dnaqt).
+  return await collectActiveMemories(memoryStore, memory => memoryMatchesVisibilityFilter(memory, filter));
 }
 
 export function partitionVisibleMemories<T extends PurrMemory & { similarity?: number }>(

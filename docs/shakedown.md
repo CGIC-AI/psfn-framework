@@ -431,6 +431,13 @@ source-contract divergence; `1` failure. By default the harness tears the stack
 down with `docker compose down -v` on exit; pass `--keep-up` to inspect,
 `--no-up` to run against an already-running stack.
 
+The smoke Satellite Hub runs with a device registry: `up` generates a fresh
+test-device credential per run (`PSFN_SMOKE_HUB_DEVICE_CREDENTIAL`), the seed
+enrolls only its SHA-256 plus a generated Hub assertion key, and the relay probe
+authenticates as that device with companion-ui's own hello capabilities. A
+bare `docker compose up` without that variable fails at the seed, and
+`--no-up` needs the same credential the running stack was seeded with.
+
 Split-topology and seeding notes:
 
 - The gateway is the only service with external egress and the only holder of

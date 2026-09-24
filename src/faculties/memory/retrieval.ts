@@ -450,13 +450,10 @@ export class MemoryRetriever implements MemoryProvider {
               this.roomMembershipAuthority,
             )
           )),
-          listMemories: async options => (await productStore.listMemories(options)).filter(memory => (
-            isMemoryOwnedByCompanion(
-              memory,
-              this.runtimeConfig?.companionId,
-              this.roomMembershipAuthority,
-            )
-          )),
+          // Unfiltered raw pages so the keyset cursor always advances;
+          // collectSharedBackgroundUnion admits only companion-owned memories
+          // (isMemoryOwnedByCompanion with the same companionId/authority).
+          listActiveMemories: async options => await productStore.listActiveMemories(options),
         },
         contactStore: this.contactStore,
       },

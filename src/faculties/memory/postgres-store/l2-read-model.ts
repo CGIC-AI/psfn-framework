@@ -17,6 +17,7 @@ import type { CountRow, MemoryRow } from './rows.js';
 import { parsePgNumber, tryFromMemoryRow } from './rows.js';
 import { clampLimit, lexicalScore } from './utils.js';
 import { MEMORY_SUBJECT_METADATA_SELECT_COLUMNS } from './subject-queries.js';
+import { INTERNAL_ARTIFACT_EXCLUSION_SQL } from './internal-artifact-sql.js';
 import type { PostgresMemoryStoreCollaboratorContext } from './collaborator-context.js';
 
 interface TypeStatsRow extends QueryResultRow {
@@ -183,6 +184,14 @@ export class PostgresL2ReadModel {
       `${ACTIVE} AND memory.contact_id = $1`,
       [contactId, sqlRowLimit(limit, 'getMemoriesByContact')],
       'ORDER BY memory.salience DESC, memory.extracted_at DESC, memory.id DESC LIMIT $2',
+    );
+  }
+
+  async getRecentlyAccessedMemories(limit: number): Promise<PurrMemory[]> {
+    return await this.selectMemories(
+      `${ACTIVE} AND ${INTERNAL_ARTIFACT_EXCLUSION_SQL}`,
+      [sqlRowLimit(limit, 'getRecentlyAccessedMemories')],
+      'ORDER BY memory.last_accessed DESC, memory.extracted_at DESC, memory.id DESC LIMIT $1',
     );
   }
 

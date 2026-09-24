@@ -222,7 +222,7 @@ async function main(): Promise<void> {
     // Print session stats
     const sessionCount = sessionStore.count(CHANNEL);
     console.log(`\n  Session entries: ${sessionCount}`);
-    console.log(`  Total active memories in database: ${(await memoryStore.getAllActiveMemories()).length}`);
+    console.log(`  Total active memories in database: ${await memoryStore.countActiveMemories()}`);
 
     // Drain briefly, but do not block forever if one extraction call is still in-flight.
     await memoryExtractor.stop({ timeoutMs: 10_000 });

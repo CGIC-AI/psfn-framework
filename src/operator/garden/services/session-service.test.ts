@@ -43,6 +43,7 @@ import {
   buildSubsystemOutputRef,
   buildTurnSubsystemProjectionRef,
 } from '../../../shared/contracts/subsystem-output-refs.js';
+import { keysetActiveMemoryPages } from '../../../test-support/active-memory-pages.js';
 
 function makeTurnRecord(channelId: string, turnId: string): TurnRecord {
   return {
@@ -776,7 +777,7 @@ describe('AdminSessionDataService', () => {
       deletedBy: 'operator:garden',
     });
     const memoryStore = {
-      listMemories: vi.fn().mockResolvedValue([taintedMemory]),
+      listActiveMemories: vi.fn(keysetActiveMemoryPages(() => [taintedMemory])),
       softDeleteMemory,
     } as unknown as MemoryStorePort;
 

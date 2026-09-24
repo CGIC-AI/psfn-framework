@@ -364,6 +364,15 @@ export async function queryInMemoryAuthorizedAdmin(
         .map(memory => ({ ...memory, similarity: 1 }));
       return { kind: 'memories', memories, total: memories.length };
     }
+    case 'recently_accessed': {
+      // Stable sort over the extractedAt DESC, id DESC authorized order.
+      const memories = authorized
+        .filter(memory => !isInternalMemoryArtifact(memory))
+        .sort((left, right) => right.lastAccessed - left.lastAccessed)
+        .slice(0, selector.limit)
+        .map(memory => ({ ...memory, similarity: 1 }));
+      return { kind: 'memories', memories, total: memories.length };
+    }
     case 'contact_filter': {
       const memories = authorized
         .filter(memory => memory.contactId === selector.contactId)

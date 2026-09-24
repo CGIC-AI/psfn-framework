@@ -8,6 +8,7 @@ import {
   type SharedBackgroundAccessOptions,
   type SharedBackgroundDeps,
 } from './shared-background.js';
+import { keysetActiveMemoryPages } from '../../../test-support/active-memory-pages.js';
 
 // ── Fixtures ──
 
@@ -74,7 +75,7 @@ function makeDeps(fixture: FixtureOptions): SharedBackgroundDeps {
   return {
     memoryStore: {
       getById: async (id: string) => fixture.memories.find(m => m.id === id),
-      listMemories: async () => fixture.memories,
+      listActiveMemories: keysetActiveMemoryPages(() => fixture.memories),
     },
     contactStore: {
       getById: async (id: string) => fixture.contacts[id],
@@ -189,6 +190,31 @@ describe('collectSharedBackgroundUnion', () => {
     });
 
     expect(union.candidates.map(candidate => candidate.memory.id)).toEqual(['mem-room']);
+  });
+
+  it('scans past the first store page and still admits only companion-owned memories', async () => {
+    const self = '11111111-1111-4111-8111-111111111111';
+    const peerA = '22222222-2222-4222-8222-222222222222';
+    const peerB = '33333333-3333-4333-8333-333333333333';
+    const fixture = baseFixture();
+    const coMention = { sourceAuthorId: 'contact-a', subjectContactId: 'contact-b' };
+    fixture.memories = [
+      // Newest: 60 unrelated memories fill more than one default page.
+      ...Array.from({ length: 60 }, (_, index) => makeMemory({ id: `filler-${index}`, extractedAt: 5_000 + index })),
+      // Oldest: an owned co-mention and one from a DM between two OTHER companions.
+      makeMemory({ id: 'mem-owned-old', extractedAt: 10, provenance: coMention }),
+      makeMemory({
+        id: 'mem-foreign-dm',
+        extractedAt: 11,
+        provenance: { ...coMention, channelId: `companion-dm:${peerA}:${peerB}` },
+      }),
+    ];
+    fixture.edges = [];
+    const union = await collectSharedBackgroundUnion({ ...makeDeps(fixture), companionId: self }, {
+      contactAId: 'contact-a',
+      contactBId: 'contact-b',
+    });
+    expect(union.candidates.map(candidate => candidate.memory.id)).toEqual(['mem-owned-old']);
   });
 
   it('reports unresolved contacts without leaking a union', async () => {

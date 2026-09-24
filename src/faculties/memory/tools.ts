@@ -1344,7 +1344,6 @@ export function createMemoryTool(
             const filter: MemoryVisibilityFilter = {
               ...(filterResult.contactId ? { contactId: filterResult.contactId } : {}),
               ...(filterResult.scopeQuery ? { scopeQuery: filterResult.scopeQuery } : {}),
-              includeArchived: false,
             };
             const memories = (await listFilteredMemories(memoryStore, filter)).filter(memory => (
               isMemoryOwnedByCompanion(memory, options.companionId, options.roomMembershipAuthority)
@@ -1380,7 +1379,6 @@ export function createMemoryTool(
             const filter: MemoryVisibilityFilter = {
               ...(filterResult.contactId ? { contactId: filterResult.contactId } : {}),
               ...(filterResult.scopeQuery ? { scopeQuery: filterResult.scopeQuery } : {}),
-              includeArchived: false,
             };
             const memories = (await listFilteredMemories(memoryStore, filter)).filter(memory => (
               isMemoryOwnedByCompanion(memory, options.companionId, options.roomMembershipAuthority)

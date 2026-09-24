@@ -1,9 +1,13 @@
 import type { LLMContext } from '../../shared/contracts/runtime.js';
 import { describe, expect, it } from 'vitest';
+import { classifyLLMError } from './error-classify.js';
 import {
   applyExactExplicitToolArguments,
+  assertExactExplicitToolArgumentsAdmissible,
   assertExplicitToolContractSatisfied,
   assertExplicitToolResponseSatisfied,
+  isExplicitToolContractError,
+  isExplicitToolRequestError,
   resolveExplicitToolContract,
   resolveExplicitToolChoice,
   selectExplicitToolContractCall,
@@ -572,5 +576,43 @@ describe('explicit tool request choice', () => {
         },
       }],
     })).toThrow('Requested exact arguments are schema-invalid for required tool call: repo');
+  });
+
+  it('classifies schema-invalid participant exact arguments as a request defect, never a model contract error', () => {
+    const tools = [{
+      name: 'repo',
+      description: 'Repository operations',
+      inputSchema: {
+        type: 'object',
+        properties: { action: { type: 'string', enum: ['inspect', 'status'] } },
+        required: ['action'],
+        additionalProperties: false,
+      },
+    }];
+    const contract = {
+      choice: 'required' as const,
+      requiredToolName: 'repo',
+      expectedArguments: { action: 'branch' },
+    };
+    let failure: unknown;
+    try {
+      assertExactExplicitToolArgumentsAdmissible({ contract, tools });
+    } catch (error) {
+      failure = error;
+    }
+    expect(isExplicitToolRequestError(failure)).toBe(true);
+    expect(isExplicitToolContractError(failure)).toBe(false);
+    expect(classifyLLMError(failure)).toMatchObject({
+      category: 'explicit_tool_request_invalid',
+      retryable: false,
+    });
+    expect(() => assertExactExplicitToolArgumentsAdmissible({
+      contract: { ...contract, expectedArguments: { action: 'status' } },
+      tools,
+    })).not.toThrow();
+    expect(() => assertExactExplicitToolArgumentsAdmissible({
+      contract: { choice: 'required', requiredToolName: 'repo' },
+      tools,
+    })).not.toThrow();
   });
 });

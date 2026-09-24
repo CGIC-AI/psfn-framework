@@ -79,7 +79,10 @@ import {
 import { resolveApiTurnIdentity } from './external-channel-claim.js';
 import type { ExternalChannelProfileConfig } from '../backplane/config.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
-import { isExplicitToolContractError } from '../../primitives/llm/explicit-tool-request.js';
+import {
+  isExplicitToolContractError,
+  isExplicitToolRequestError,
+} from '../../primitives/llm/explicit-tool-request.js';
 import {
   clampHttpHeader as clampHeaderValue,
   singleHeader as firstHeaderValue,
@@ -658,6 +661,14 @@ export class AgentApiBackend {
       }
       if (isBusyTurnError(error)) {
         return this.fail(503, 'agent_busy', 'Agent is already processing another prompt');
+      }
+      if (isExplicitToolRequestError(error)) {
+        return this.fail(
+          422,
+          'explicit_tool_request_invalid',
+          'Requested tool arguments are not accepted by the active tool surface',
+          { cause: toErrorMessage(error) },
+        );
       }
       if (isExplicitToolContractError(error)) {
         return this.fail(

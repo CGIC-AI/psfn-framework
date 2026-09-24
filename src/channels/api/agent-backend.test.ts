@@ -17,7 +17,7 @@ import { monotonicEpochNowMs } from '../../shared/telemetry/turn-performance.js'
 import type { AgentResponse } from '../../shared/contracts/runtime.js';
 import { resolveConversationScopeFromMetadata } from '../../core/session/conversation-scope.js';
 import type { SessionManager } from '../../core/session/manager.js';
-import { ExplicitToolContractError } from '../../primitives/llm/explicit-tool-request.js';
+import { ExplicitToolContractError, ExplicitToolRequestError } from '../../primitives/llm/explicit-tool-request.js';
 
 function createSessionManagerStub() {
   return {
@@ -318,6 +318,49 @@ describe('AgentApiBackend model contract failures', () => {
         message: 'Selected model could not satisfy the required tool call',
         details: {
           cause: 'Provider violated explicit tool contract: expected exactly one "memory" call, received []',
+        },
+      },
+    });
+  });
+});
+
+describe('AgentApiBackend explicit tool request failures', () => {
+  it('reports participant exact arguments outside the tool surface as a request error, not a model failure', async () => {
+    const backend = new AgentApiBackend({
+      agentLoop: fromAny({
+        handleMessage: vi.fn(async () => {
+          throw new ExplicitToolRequestError(
+            'Requested exact arguments are schema-invalid for required tool call: repo.',
+            'repo',
+          );
+        }),
+        abort: vi.fn(),
+      }),
+      eventBus: new EventBus(),
+      sessionManager: createSessionManagerStub(),
+    });
+
+    const result = await backend.handleChatCompletion({
+      requestId: 'tool-request-invalid-1',
+      request: {
+        model: 'test-model',
+        messages: [{ role: 'user', content: 'Call repo exactly once with arguments {"action":"branch"}.' }],
+      },
+      principal: { id: 'principal-1', mode: 'api_key' },
+      headers: {
+        'x-session-id': 'tool-request-invalid',
+        'x-channel-privacy': 'private',
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        status: 422,
+        type: 'explicit_tool_request_invalid',
+        message: 'Requested tool arguments are not accepted by the active tool surface',
+        details: {
+          cause: 'Requested exact arguments are schema-invalid for required tool call: repo.',
         },
       },
     });

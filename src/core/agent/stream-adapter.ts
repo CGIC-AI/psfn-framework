@@ -71,6 +71,7 @@ import {
 } from '../../primitives/llm/client-response-helpers.js';
 import {
   applyExactExplicitToolArguments,
+  assertExactExplicitToolArgumentsAdmissible,
   assertExplicitToolResponseSatisfied,
   isMissingRequiredToolCallError,
   resolveExplicitToolContract,
@@ -321,6 +322,12 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
     : DEFAULT_BASE_DELAY_MS;
 
   return (async function* executeWithRetry() {
+    // Participant-authored exact arguments the active execution schema refuses
+    // are a request defect, not a model failure: fail before any provider call.
+    assertExactExplicitToolArgumentsAdmissible({
+      contract: explicitToolContract,
+      tools: executionTools,
+    });
     let retryAttempt = 0;
     let missingRequiredCallRetries = retryAttempt;
     let corruptEmptyArgumentRetries = retryAttempt;

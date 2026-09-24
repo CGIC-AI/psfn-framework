@@ -8,7 +8,7 @@
 // reliability buckets per backend. This report is the go/no-go evidence for
 // moving a site from shadow to jev; it never decides that by itself.
 
-import type { DecisionShadowRecord } from '../../../../src/primitives/llm/decision/shadow-record.js';
+import type { DecisionShadowRecord } from '../../src/primitives/llm/decision/shadow-record.js';
 
 type Side = DecisionShadowRecord['local'];
 type Answer = NonNullable<Side['answers']>[string];

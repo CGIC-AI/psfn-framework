@@ -5,7 +5,7 @@
 // reports per-axis mean absolute difference, exact-level agreement and
 // pass/fail (>= passing score) agreement. Live use is explicit:
 //
-//   npm --prefix tools/evals run eval:decision:qao-jev-judge -- --live \
+//   npm run decision-eval:qao-jev-judge -- --live \
 //     --council <qao-judge-council-run.json> --jev-model typesafe/jev-1.13 [--out <path>]
 //
 // Jev returns no rationale text; it complements, never replaces, the council.
@@ -13,14 +13,14 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { requestJevDecision, type DecisionsFetch } from '../../../../src/primitives/llm/decision/jev-transport.js';
-import type { DecisionOutcome, DecisionQuestionSet } from '../../../../src/primitives/llm/decision/types.js';
+import { requestJevDecision, type DecisionsFetch } from '../../src/primitives/llm/decision/jev-transport.js';
+import type { DecisionOutcome, DecisionQuestionSet } from '../../src/primitives/llm/decision/types.js';
 import {
   QAO_JUDGE_RUBRIC,
   type QaoJudgeExample,
   type QaoJudgeRubric,
   type QaoJudgeRunArtifact,
-} from '../companion-shape/qao-judge.js';
+} from '../../tools/evals/eval/companion-shape/qao-judge.js';
 
 export function buildJevJudgeQuestions(rubric: QaoJudgeRubric = QAO_JUDGE_RUBRIC): DecisionQuestionSet {
   const levels = [
@@ -122,7 +122,7 @@ async function main(args: readonly string[]): Promise<void> {
   }
   const comparison = {
     schemaVersion: 1,
-    artifactType: 'psfn.qao_jev_judge_comparison',
+    artifactType: 'qao_jev_judge_comparison',
     councilRunId: council.run.id,
     jevModel,
     answeredBy: [...new Set([...jevByExample.values()].flatMap(o => (o.ok && o.model ? [o.model] : [])))],

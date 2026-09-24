@@ -1,6 +1,6 @@
 // Shadow-mode agreement and latency report (epic 4lf3r .4).
 //
-//   npm --prefix tools/evals run eval:decision:shadow-report -- \
+//   npm run decision-eval:shadow-report -- \
 //     --input /path/to/<companion>/state/decision-shadow.jsonl [--input ...] [--out report.json]
 //
 // Reads the content-free comparison records written in shadow mode and prints

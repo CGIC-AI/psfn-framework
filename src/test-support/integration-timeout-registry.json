@@ -663,6 +663,13 @@
       "measuredBaselineMs": 750,
       "baselineSource": "measured",
       "note": "psfn-framework-znuav: upgrade path for the retired fleet welfare verifier against the real containerized PostgreSQL harness - a fleet carrying the legacy cross-schema USAGE/SELECT grants boots, the shared-schema startup authority revokes them, a second boot is idempotent, and a stray grantee still fails closed. Focused local full-file wall baseline was 0.72s on 2026-09-08 with a warm harness slot; 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
+    },
+    {
+      "file": "src/persistence/repair/memory-participant-name-repair.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 1000,
+      "baselineSource": "measured",
+      "note": "psfn-framework-rqpyv: participant-name repair re-embeds repaired text atomically with the text/patch-event write against the real containerized PostgreSQL. Focused local full-file wall baseline was 0.99s on 2026-09-23 with a warm harness slot; 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
     }
   ]
 }

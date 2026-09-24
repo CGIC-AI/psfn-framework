@@ -1,10 +1,22 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { QueryResult, QueryResultRow } from 'pg';
-import { assertExactSchemaGrantees } from './fleet-auth-schema-access.js';
+import {
+  applyFleetAuthSchemaAccessContracts,
+  assertExactSchemaGrantees,
+  buildFleetAuthSchemaAccessStatements,
+} from './fleet-auth-schema-access.js';
+import { createPostgresPool } from '../postgres.js';
 import {
   RETIRED_FLEET_WELFARE_VERIFIER_ROLE,
   type PostgresRetiredGranteeClient,
 } from '../postgres/retired-fleet-grantees.js';
+
+vi.mock('../postgres.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../postgres.js')>(),
+  createPostgresPool: vi.fn(() => {
+    throw new Error('schema access tests must not open a PostgreSQL pool');
+  }),
+}));
 
 /**
  * A client whose ACL probe answers a scripted grantee set per call, so the
@@ -97,5 +109,69 @@ describe('exact schema grantee proof', () => {
       schema: 'companion_default',
       allowedGrantees: ALLOWED,
     })).rejects.toThrow(/unexpected PostgreSQL grantees: psfn_stray_reader/);
+  });
+});
+
+describe('fleet-auth schema access restore SQL', () => {
+  const MAPPED = ['companion_alpha_runtime', 'companion_beta_runtime'];
+
+  it('keeps the exact companion least-privilege statements, canonically quoted', () => {
+    expect(buildFleetAuthSchemaAccessStatements({
+      kind: 'companion',
+      schema: 'companion_alpha',
+      runtimeRoles: ['companion_alpha_runtime'],
+    }, MAPPED)).toEqual([
+      'REVOKE ALL ON SCHEMA "companion_alpha" FROM PUBLIC',
+      'REVOKE ALL ON ALL TABLES IN SCHEMA "companion_alpha" FROM PUBLIC',
+      'REVOKE ALL ON ALL SEQUENCES IN SCHEMA "companion_alpha" FROM PUBLIC',
+      'REVOKE ALL ON ALL FUNCTIONS IN SCHEMA "companion_alpha" FROM PUBLIC',
+      'REVOKE ALL ON ALL TABLES IN SCHEMA "companion_alpha" FROM "companion_alpha_runtime", "companion_beta_runtime"',
+      'REVOKE ALL ON ALL SEQUENCES IN SCHEMA "companion_alpha" FROM "companion_alpha_runtime", "companion_beta_runtime"',
+      'REVOKE ALL ON ALL FUNCTIONS IN SCHEMA "companion_alpha" FROM "companion_alpha_runtime", "companion_beta_runtime"',
+      'REVOKE ALL ON SCHEMA "companion_alpha" FROM "companion_alpha_runtime", "companion_beta_runtime"',
+      'GRANT USAGE, CREATE ON SCHEMA "companion_alpha" TO "companion_alpha_runtime"',
+      'GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA "companion_alpha" TO "companion_alpha_runtime"',
+      'GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA "companion_alpha" TO "companion_alpha_runtime"',
+      'GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA "companion_alpha" TO "companion_alpha_runtime"',
+    ]);
+  });
+
+  it('keeps the shared schema read/write grant and the migration-ledger revoke', () => {
+    const statements = buildFleetAuthSchemaAccessStatements({
+      kind: 'shared',
+      schema: 'shared',
+      runtimeRoles: MAPPED,
+    }, MAPPED);
+    expect(statements.slice(8)).toEqual([
+      'GRANT USAGE ON SCHEMA "shared" TO "companion_alpha_runtime", "companion_beta_runtime"',
+      'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA "shared" TO "companion_alpha_runtime", "companion_beta_runtime"',
+      'REVOKE INSERT, UPDATE, DELETE ON "shared".shared_schema_migrations FROM "companion_alpha_runtime", "companion_beta_runtime"',
+      'GRANT SELECT, USAGE, UPDATE ON ALL SEQUENCES IN SCHEMA "shared" TO "companion_alpha_runtime", "companion_beta_runtime"',
+      'GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA "shared" TO "companion_alpha_runtime", "companion_beta_runtime"',
+    ]);
+  });
+
+  it.each([
+    ['a quote-breaking schema', { schema: 'companion"; DROP SCHEMA shared; --', runtimeRoles: ['companion_alpha_runtime'] }, MAPPED],
+    ['an uppercase schema', { schema: 'Companion_Alpha', runtimeRoles: ['companion_alpha_runtime'] }, MAPPED],
+    ['a quote-breaking runtime role', { schema: 'companion_alpha', runtimeRoles: ['runtime" WITH SUPERUSER --'] }, MAPPED],
+    ['the PUBLIC pseudo-role', { schema: 'companion_alpha', runtimeRoles: ['public'] }, MAPPED],
+    ['an unsafe mapped role', { schema: 'companion_alpha', runtimeRoles: ['companion_alpha_runtime'] }, ['bad role']],
+  ])('rejects %s', (_label, contract, mapped) => {
+    expect(() => buildFleetAuthSchemaAccessStatements({ kind: 'companion', ...contract }, mapped))
+      .toThrow(/Invalid (PostgreSQL role|Postgres schema) name/);
+  });
+
+  it('rejects an unsafe identifier before opening any connection', async () => {
+    await expect(applyFleetAuthSchemaAccessContracts({
+      contracts: [{
+        kind: 'companion',
+        schema: 'companion_alpha',
+        ownerRole: 'companion_alpha_owner',
+        runtimeRoles: ['runtime" WITH SUPERUSER --'],
+      }],
+      ownerDatabaseUrls: { companion_alpha: 'postgresql://owner:secret@db.invalid:5432/psfn' },
+    })).rejects.toThrow('Invalid PostgreSQL role name');
+    expect(createPostgresPool).not.toHaveBeenCalled();
   });
 });

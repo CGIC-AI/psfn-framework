@@ -225,26 +225,37 @@ def _load_hub_device_assertion_config(
     endpoint_id: str,
 ) -> HubDeviceAssertionConfig | None:
     names = (
-        "HUB_DEVICE_ASSERTION_FLEET_AUTH_PATH",
         "HUB_DEVICE_ASSERTION_SATELLITE_REGISTRY_PATH",
         "HUB_DEVICE_ASSERTION_PRIVATE_KEY_PATH",
         "HUB_DEVICE_ASSERTION_TTL_SECONDS",
         "PSFN_COMPANION_ID",
     )
+    # The verifier ring defaults to the satellite registry's hubDeviceAssertions
+    # block; either of these points it elsewhere (never both).
+    ring_names = (
+        "HUB_DEVICE_ASSERTION_FLEET_AUTH_PATH",
+        "HUB_DEVICE_ASSERTION_RING_PATH",
+    )
     values = {name: (os.getenv(name) or "").strip() for name in names}
-    if not any(values.values()):
+    ring_values = {name: (os.getenv(name) or "").strip() for name in ring_names}
+    if not any(values.values()) and not any(ring_values.values()):
         return None
     missing = [name for name, value in values.items() if not value]
     if missing:
         raise ValueError(
             "Hub device assertion configuration is incomplete: " + ", ".join(missing)
         )
+    if all(ring_values.values()):
+        raise ValueError(
+            "Set only one of HUB_DEVICE_ASSERTION_FLEET_AUTH_PATH or HUB_DEVICE_ASSERTION_RING_PATH"
+        )
     try:
         ttl_seconds = int(values["HUB_DEVICE_ASSERTION_TTL_SECONDS"])
     except ValueError as exc:
         raise ValueError("HUB_DEVICE_ASSERTION_TTL_SECONDS must be an integer") from exc
+    fleet_auth_value = ring_values["HUB_DEVICE_ASSERTION_FLEET_AUTH_PATH"]
+    ring_value = ring_values["HUB_DEVICE_ASSERTION_RING_PATH"]
     return HubDeviceAssertionConfig(
-        fleet_auth_path=_resolve_path(project_root, values["HUB_DEVICE_ASSERTION_FLEET_AUTH_PATH"]),
         satellite_registry_path=_resolve_path(
             project_root,
             values["HUB_DEVICE_ASSERTION_SATELLITE_REGISTRY_PATH"],
@@ -254,6 +265,8 @@ def _load_hub_device_assertion_config(
         companion_id=values["PSFN_COMPANION_ID"],
         satellite_id=satellite_id,
         endpoint_id=endpoint_id,
+        fleet_auth_path=_resolve_path(project_root, fleet_auth_value) if fleet_auth_value else None,
+        ring_path=_resolve_path(project_root, ring_value) if ring_value else None,
     )
 
 

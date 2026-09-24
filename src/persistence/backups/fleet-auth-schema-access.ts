@@ -3,6 +3,8 @@ import {
   assertValidPostgresRoleName,
   assertValidPostgresSchemaName,
   createPostgresPool,
+  quotePostgresRoleName,
+  quotePostgresSchemaName,
 } from '../postgres.js';
 import {
   FLEET_AUTH_SCHEMA_NAME,
@@ -51,10 +53,6 @@ function assertValidRoleName(role: string, field: string): string {
   } catch {
     throw new Error(`Fleet auth family restore ${field} is not a safe PostgreSQL role name`);
   }
-}
-
-function quoteIdentifier(value: string): string {
-  return `"${value}"`;
 }
 
 export function validateFleetAuthSchemaAccessContracts(
@@ -573,6 +571,46 @@ export async function assertExactSchemaGrantees(
   }
 }
 
+/**
+ * The ordered REVOKE/GRANT statements that reset one restored schema to its
+ * least-privilege contract. Every identifier goes through the canonical
+ * validated quoting helpers, so an unsafe schema or role name throws here.
+ */
+export function buildFleetAuthSchemaAccessStatements(
+  contract: Pick<FleetAuthSchemaAccessContract, 'kind' | 'schema' | 'runtimeRoles'>,
+  mappedRuntimeRoles: readonly string[],
+): string[] {
+  const schema = quotePostgresSchemaName(contract.schema);
+  const grantees = contract.runtimeRoles.map(quotePostgresRoleName).join(', ');
+  const mappedRuntimeGrantees = mappedRuntimeRoles.map(quotePostgresRoleName).join(', ');
+  const statements = [
+    `REVOKE ALL ON SCHEMA ${schema} FROM PUBLIC`,
+    `REVOKE ALL ON ALL TABLES IN SCHEMA ${schema} FROM PUBLIC`,
+    `REVOKE ALL ON ALL SEQUENCES IN SCHEMA ${schema} FROM PUBLIC`,
+    `REVOKE ALL ON ALL FUNCTIONS IN SCHEMA ${schema} FROM PUBLIC`,
+    `REVOKE ALL ON ALL TABLES IN SCHEMA ${schema} FROM ${mappedRuntimeGrantees}`,
+    `REVOKE ALL ON ALL SEQUENCES IN SCHEMA ${schema} FROM ${mappedRuntimeGrantees}`,
+    `REVOKE ALL ON ALL FUNCTIONS IN SCHEMA ${schema} FROM ${mappedRuntimeGrantees}`,
+    `REVOKE ALL ON SCHEMA ${schema} FROM ${mappedRuntimeGrantees}`,
+  ];
+  if (contract.kind === 'shared') {
+    statements.push(
+      `GRANT USAGE ON SCHEMA ${schema} TO ${grantees}`,
+      `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ${schema} TO ${grantees}`,
+      `REVOKE INSERT, UPDATE, DELETE ON ${schema}.shared_schema_migrations FROM ${grantees}`,
+      `GRANT SELECT, USAGE, UPDATE ON ALL SEQUENCES IN SCHEMA ${schema} TO ${grantees}`,
+    );
+  } else {
+    statements.push(
+      `GRANT USAGE, CREATE ON SCHEMA ${schema} TO ${grantees}`,
+      `GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA ${schema} TO ${grantees}`,
+      `GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA ${schema} TO ${grantees}`,
+    );
+  }
+  statements.push(`GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA ${schema} TO ${grantees}`);
+  return statements;
+}
+
 export async function applyFleetAuthSchemaAccessContracts(options: {
   contracts: readonly FleetAuthSchemaAccessContract[];
   ownerDatabaseUrls: Readonly<Record<string, string>>;
@@ -584,8 +622,10 @@ export async function applyFleetAuthSchemaAccessContracts(options: {
   const mappedRuntimeRoles = [...new Set(options.contracts.flatMap(
     contract => contract.runtimeRoles,
   ))].sort();
-  const mappedRuntimeGrantees = mappedRuntimeRoles.map(quoteIdentifier).join(', ');
   for (const contract of options.contracts) {
+    // Built (and every identifier validated) before any connection is opened,
+    // so an unsafe schema or role name never reaches SQL execution.
+    const accessStatements = buildFleetAuthSchemaAccessStatements(contract, mappedRuntimeRoles);
     const ownerDatabaseUrl = options.ownerDatabaseUrls[contract.schema];
     if (!ownerDatabaseUrl) {
       throw new Error(
@@ -600,8 +640,6 @@ export async function applyFleetAuthSchemaAccessContracts(options: {
     try {
       await client.query('BEGIN');
       await assertMappedRolesAreSafe(client, options.contracts, contract.ownerRole);
-      const schema = quoteIdentifier(contract.schema);
-      const grantees = contract.runtimeRoles.map(quoteIdentifier).join(', ');
       const owners = await client.query<{
         schema_owner: string;
         foreign_relation_owner_count: number;
@@ -635,31 +673,9 @@ export async function applyFleetAuthSchemaAccessContracts(options: {
           + `foreignRoutines=${ownership?.foreign_routine_owner_count ?? 0}`,
         );
       }
-      await client.query(`REVOKE ALL ON SCHEMA ${schema} FROM PUBLIC`);
-      await client.query(`REVOKE ALL ON ALL TABLES IN SCHEMA ${schema} FROM PUBLIC`);
-      await client.query(`REVOKE ALL ON ALL SEQUENCES IN SCHEMA ${schema} FROM PUBLIC`);
-      await client.query(`REVOKE ALL ON ALL FUNCTIONS IN SCHEMA ${schema} FROM PUBLIC`);
-      await client.query(`REVOKE ALL ON ALL TABLES IN SCHEMA ${schema} FROM ${mappedRuntimeGrantees}`);
-      await client.query(`REVOKE ALL ON ALL SEQUENCES IN SCHEMA ${schema} FROM ${mappedRuntimeGrantees}`);
-      await client.query(`REVOKE ALL ON ALL FUNCTIONS IN SCHEMA ${schema} FROM ${mappedRuntimeGrantees}`);
-      await client.query(`REVOKE ALL ON SCHEMA ${schema} FROM ${mappedRuntimeGrantees}`);
-      if (contract.kind === 'shared') {
-        await client.query(`GRANT USAGE ON SCHEMA ${schema} TO ${grantees}`);
-        await client.query(
-          `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ${schema} TO ${grantees}`,
-        );
-        await client.query(
-          `REVOKE INSERT, UPDATE, DELETE ON ${schema}.shared_schema_migrations FROM ${grantees}`,
-        );
-        await client.query(
-          `GRANT SELECT, USAGE, UPDATE ON ALL SEQUENCES IN SCHEMA ${schema} TO ${grantees}`,
-        );
-      } else {
-        await client.query(`GRANT USAGE, CREATE ON SCHEMA ${schema} TO ${grantees}`);
-        await client.query(`GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA ${schema} TO ${grantees}`);
-        await client.query(`GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA ${schema} TO ${grantees}`);
+      for (const statement of accessStatements) {
+        await client.query(statement);
       }
-      await client.query(`GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA ${schema} TO ${grantees}`);
       if (backupRole) {
         await grantBackupReadAccessToTenantSchema(client, {
           schema: contract.schema,

@@ -66,7 +66,7 @@ export function buildSmokeSatelliteRegistry(options) {
           primaryCompanionId: companionId,
           // Scopes must be a subset of what the endpoint below permits.
           observationRecipients: [
-            { companionId, scopes: ['approvals', 'artifacts', 'tool_activity'] },
+            { companionId, scopes: ['approvals', 'artifacts', 'tool_activity', 'emotion'] },
           ],
           emanationMemberIds: [companionId],
           responseLease: {
@@ -95,7 +95,10 @@ export function buildSmokeSatelliteRegistry(options) {
             maxCapabilities: ['text'],
             // Companion relay scopes. An empty array is rejected by the
             // registry parser, so omit the key rather than emptying it.
-            telemetryScopes: ['approvals', 'artifacts', 'tool_activity'],
+            // `emotion` lets smoke:docker prove a real relay payload: every
+            // turn's post_turn emotion.snapshot reaches the hub and its
+            // websocket clients (psfn-framework-2ahwj).
+            telemetryScopes: ['approvals', 'artifacts', 'tool_activity', 'emotion'],
           },
         ],
       },

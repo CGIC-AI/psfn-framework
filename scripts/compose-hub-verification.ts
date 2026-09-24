@@ -9,7 +9,11 @@
 //   * the hub completes the websocket handshake with session.ready and answers
 //     a companion-ui-serialized ping with pong;
 //   * companion-ui's own protocol decoder accepts the hub's pong, and whether it
-//     accepts the hub's session.ready.
+//     accepts the hub's session.ready;
+//   * (openEmotionRelaySession + judgeRelayedEmotionSnapshot, driven by
+//     smoke-docker around the chat turn) a real relay PAYLOAD: the turn's
+//     post_turn emotion.snapshot travels agent -> gateway relay -> hub -> a hub
+//     websocket session and decodes with companion-ui's own codec.
 //
 // The last check is a real contract boundary, not a plumbing failure, so it has
 // its own outcome: companion-ui's strict session.ready validator and the hub's
@@ -93,38 +97,50 @@ async function readFirstChunk(response: Response, timeoutMs: number): Promise<st
   }
 }
 
+/** A live hub websocket session that records every frame it receives. */
+export interface HubSession {
+  sessionReady: unknown;
+  send(frame: string): void;
+  waitForFrame(type: string, timeoutMs: number): Promise<unknown>;
+  close(): void;
+}
+
 /**
- * Open the hub websocket, collect the unsolicited handshake frame, then elicit
- * the two deterministic hub replies that need no provider and no audio device.
+ * Open a hub websocket the way companion-ui does (no hello: the text-only hub
+ * admits it without a device credential) and wait for the unsolicited
+ * session.ready. Every later frame is buffered, so a frame that arrives before
+ * the caller starts waiting for it is not lost.
  */
-export async function collectHubHandshake(
-  wsUrl: string,
-  timeoutMs: number,
-): Promise<{ sessionReady: unknown; pong: unknown }> {
+export async function openHubSession(wsUrl: string, timeoutMs: number): Promise<HubSession> {
   const socket = new WebSocket(wsUrl);
   const frames: unknown[] = [];
-  const waitFor = (predicate: (frame: unknown) => boolean, label: string): Promise<unknown> =>
+  const waiters = new Set<(frame: unknown) => void>();
+  socket.addEventListener('message', (event: MessageEvent) => {
+    const frame: unknown = JSON.parse(String(event.data));
+    frames.push(frame);
+    for (const waiter of [...waiters]) waiter(frame);
+  });
+  const isType = (type: string) => (frame: unknown): boolean => isRecord(frame) && frame.type === type;
+  const waitForFrame = (type: string, waitMs: number): Promise<unknown> =>
     new Promise((resolvePromise, rejectPromise) => {
-      const existing = frames.find(predicate);
+      const existing = frames.find(isType(type));
       if (existing) {
         resolvePromise(existing);
         return;
       }
-      const timer = setTimeout(() => {
-        socket.removeEventListener('message', onMessage);
-        rejectPromise(new Error(`timed out waiting for ${label} from ${wsUrl}`));
-      }, timeoutMs);
-      const onMessage = (event: MessageEvent): void => {
-        const frame: unknown = JSON.parse(String(event.data));
-        frames.push(frame);
-        if (!predicate(frame)) return;
+      const waiter = (frame: unknown): void => {
+        if (!isType(type)(frame)) return;
         clearTimeout(timer);
-        socket.removeEventListener('message', onMessage);
+        waiters.delete(waiter);
         resolvePromise(frame);
       };
-      socket.addEventListener('message', onMessage);
+      const timer = setTimeout(() => {
+        waiters.delete(waiter);
+        const seen = frames.map(frame => (isRecord(frame) ? String(frame.type) : typeof frame)).join(', ');
+        rejectPromise(new Error(`timed out waiting for ${type} from ${wsUrl} (received: ${seen || 'nothing'})`));
+      }, waitMs);
+      waiters.add(waiter);
     });
-  const isType = (type: string) => (frame: unknown): boolean => isRecord(frame) && frame.type === type;
 
   try {
     await new Promise<void>((resolvePromise, rejectPromise) => {
@@ -135,14 +151,88 @@ export async function collectHubHandshake(
         rejectPromise(new Error(`hub websocket ${wsUrl} failed to connect`));
       }, { once: true });
     });
-    const sessionReady = await waitFor(isType('session.ready'), 'session.ready');
+    const sessionReady = await waitForFrame('session.ready', timeoutMs);
+    return {
+      sessionReady,
+      send: frame => socket.send(frame),
+      waitForFrame,
+      close: () => socket.close(),
+    };
+  } catch (error) {
+    socket.close();
+    throw error;
+  }
+}
+
+/**
+ * Open the hub websocket, collect the unsolicited handshake frame, then elicit
+ * the deterministic hub reply that needs no provider and no audio device.
+ */
+export async function collectHubHandshake(
+  wsUrl: string,
+  timeoutMs: number,
+): Promise<{ sessionReady: unknown; pong: unknown }> {
+  const session = await openHubSession(wsUrl, timeoutMs);
+  try {
     // Serialized by companion-ui's own encoder, so the outbound half of the
     // exchange is the real client codec rather than a hand-rolled frame.
-    socket.send(serializeClientToHubMessage({ type: 'ping', sentAt: Date.now() }));
-    const pong = await waitFor(isType('pong'), 'pong');
-    return { sessionReady, pong };
+    session.send(serializeClientToHubMessage({ type: 'ping', sentAt: Date.now() }));
+    const pong = await session.waitForFrame('pong', timeoutMs);
+    return { sessionReady: session.sessionReady, pong };
   } finally {
-    socket.close();
+    session.close();
+  }
+}
+
+/**
+ * Open a hub satellite session that advertises the `emotion` output, using the
+ * hub's own hello contract (a device id and name, no credential: the
+ * text-only hub runs without a device registry), and wait for hello.ack. The
+ * hub forwards a companion relay event to a session only for outputs that
+ * session advertised. companion-ui cannot be that session: its capability
+ * vocabulary has no `emotion` output, so its serializer rejects such a hello
+ * even though its decoder accepts emotion.snapshot frames.
+ */
+export async function openEmotionRelaySession(wsUrl: string, timeoutMs: number): Promise<HubSession> {
+  const session = await openHubSession(wsUrl, timeoutMs);
+  try {
+    session.send(JSON.stringify({
+      type: 'hello',
+      deviceId: 'smoke-relay-probe',
+      deviceName: 'Compose smoke relay probe',
+      capabilities: { input: ['text'], output: ['text', 'emotion'] },
+    }));
+    await session.waitForFrame('hello.ack', timeoutMs);
+    return session;
+  } catch (error) {
+    session.close();
+    throw error;
+  }
+}
+
+/**
+ * Judge a frame the hub relayed from the gateway companion relay after a chat
+ * turn: it must be a post_turn emotion.snapshot that companion-ui's own
+ * decoder accepts. This is the payload half of the relay proof; the SSE
+ * admission check only shows the subscription was accepted.
+ */
+export function judgeRelayedEmotionSnapshot(frame: unknown): HubVerificationCheck {
+  const name = 'hub relays the turn\'s emotion.snapshot payload to a satellite session (companion-ui codec decodes it)';
+  try {
+    const decoded = parseHubToClientMessage(JSON.stringify(frame));
+    if (decoded.type !== 'emotion.snapshot') {
+      return { name, ok: false, detail: `decoded ${decoded.type}, expected emotion.snapshot` };
+    }
+    const data: unknown = decoded.data;
+    const trigger = isRecord(data) ? data.trigger : undefined;
+    return {
+      name,
+      ok: trigger === 'post_turn',
+      detail: `decoded emotion.snapshot trigger=${String(trigger)}`
+        + (isRecord(data) ? ` confidence=${String(data.confidence)}` : ''),
+    };
+  } catch (error) {
+    return { name, ok: false, detail: error instanceof Error ? error.message : String(error) };
   }
 }
 

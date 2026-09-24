@@ -542,6 +542,31 @@ keypair plus two owner-file records. No `fleet-auth.json`, no SSO, no Postgres
 `fleet_auth` schema (bead `psfn-framework-n66dn.2`; supersedes `wlls6`,
 `x4499`, `hc23v`).
 
+0. **Give the hub its own satellite-scoped key.** Device-bound turns
+   (`/v1/chat/completions` carrying `X-PSFN-Hub-Device-Assertion`) are admitted
+   only for a principal whose scope is `satellite`
+   (`resolveAuthenticatedHubDeviceConnection` rejects anything else with
+   `403 hub_device_credential_required`). The shared `API_KEY` — the onboarding
+   default — resolves to an operator-scoped principal and is never accepted
+   here, even when `satellites.json` lists its principal id. So:
+
+   - generate a separate key of at least 16 characters that is neither
+     `API_KEY` nor `ADMIN_TOKEN`, and add it to the gateway's
+     `API_SATELLITE_KEYS` (comma-separated; `.env` on the repository-native
+     path, the app Secret on Helm);
+   - set the hub's `PSFN_API_KEY` to that same key;
+   - list its derived principal id, `api-key-<first 24 hex of
+     sha256(key)>`, in the hub endpoint's `auth.apiKeyPrincipalIds` in
+     `satellites.json`:
+
+     ```bash
+     node -e 'const c=require("node:crypto");console.log("api-key-"+c.createHash("sha256").update(process.argv[1].trim()).digest("hex").slice(0,24))' "$HUB_SATELLITE_KEY"
+     ```
+
+   Restart the gateway after changing `API_SATELLITE_KEYS`. A hub still
+   presenting `API_KEY` gets a working ordinary chat path but every
+   device-assertion turn fails with `hub_device_credential_required`.
+
 1. **Generate the keypair** (the private half is written once, mode 0600, and
    never printed; the public entry goes to stdout):
 
@@ -649,6 +674,45 @@ if the later SQL fails, the durable floor remains advanced and the next startup
 quarantines the stale database. Account and companion reapproval stay
 subordinate to that floor: tombstoned resources and non-current lineage are
 rejected before the reapproval procedure runs.
+
+## Repository-native PostgreSQL provisioning
+
+Helm provisions the fleet-auth database contract for you. On the
+repository-native (`npm run local:*`) and Compose paths, onboarding provisions
+only the companion runtime and shared migration roles, and dropping a valid
+`fleet-auth.json` into `SYSTEM_DATA_DIR` then fails gateway startup one
+missing piece at a time. `scripts/ops/psfn-fleet-auth-bootstrap.mjs` provisions
+the whole contract in one idempotent run, deriving every role name from
+`fleet-auth.json` (`databaseRoles`, `welfareVerifier`) and `companions.json`
+(each `postgresRole`, `postgres.sharedMigrationRole`), and every password from
+the `FLEET_AUTH_*_DATABASE_URL` environment variables those files reference:
+
+```bash
+# fleet-auth.json is in SYSTEM_DATA_DIR and its credential env vars are exported
+SYSTEM_DATA_DIR=<system-data> \
+POSTGRES_ADMIN_DATABASE_URL=postgresql://postgres:<superuser-pw>@127.0.0.1:<port>/psfn \
+PSFN_FLEET_AUTH_DATABASE_CONNECTION_LIMIT=20 \
+  node scripts/ops/psfn-fleet-auth-bootstrap.mjs --check   # validate and print the SQL only
+# then the same command without --check, then restart the gateway
+```
+
+What it checks before touching anything, and what it provisions:
+
+| Gateway startup failure | Provisioned or checked by the bootstrap |
+|---|---|
+| `hubDeviceAssertions.audience must be an exact normalized https origin` | Refuses to run until `canonicalOrigin` and `hubDeviceAssertions.audience` are exact `https://host[:port]` origins (no path or trailing slash), even for a loopback deployment. |
+| `Fleet auth authority floor root must not be group/world accessible` | Creates `FLEET_AUTH_AUTHORITY_FLOOR_ROOT` (absolute path required) and sets it to mode `0700`. Keep it outside every restorable runtime root. |
+| `Fleet auth migration PostgreSQL role … must be NOINHERIT, credential-valid, finite CONNECTION LIMIT >= 1, and must not own the target database` | Creates or re-asserts the runtime, migration, and backup roles (and the welfare verifier when declared) as `LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT <n>` with the password from each credential URL, rejects any role membership, and refuses when one of them owns the database. |
+| `permission denied for database psfn` on `CREATE SCHEMA IF NOT EXISTS "fleet_auth"` | `GRANT CONNECT, TEMPORARY` on the runtime database to every fleet-auth role; `GRANT CREATE` to the migration role only. |
+| `database "psfn_restore_verify" does not exist` | Creates `<database>_restore_verify` (owned by the superuser) with `vector` in its `extensions` schema. |
+| `… requires CONNECT and CREATE on restore-verify database psfn_restore_verify` | `GRANT CONNECT, CREATE` on the scratch database to the migration and backup roles and to every schema owner (each companion runtime role and the shared migration role), `USAGE` on `extensions`, and each companion role's scratch `search_path`. |
+
+Every credential URL must target the same host, port, and database as
+`POSTGRES_ADMIN_DATABASE_URL`; only `{"kind":"env"}` credential references are
+supported. The superuser credential is used for this run only and is never
+handed to the gateway. Run the bootstrap after `npm run onboard` has
+provisioned the companion roles, and again whenever `fleet-auth.json` roles or
+passwords change.
 
 ## Configuration
 

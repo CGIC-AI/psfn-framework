@@ -220,7 +220,7 @@ async function queryAdminPage(
   };
 }
 
-async function querySourcePrefixSlice(
+async function queryAuthorizedSlice(
   pool: Pool,
   input: MemorySubjectAdminQuery,
   clause: string,
@@ -257,7 +257,7 @@ async function queryChannelPrefix(
   // avoids LIKE metacharacter escaping.
   const filterValues: unknown[] = [];
   const prefixParam = pushValue(filterValues, `${channelId}:`);
-  return await querySourcePrefixSlice(
+  return await queryAuthorizedSlice(
     pool,
     input,
     `starts_with(memory.source_ref, ${prefixParam})`,
@@ -274,7 +274,7 @@ async function queryContactFilter(
 ): Promise<MemorySubjectAdminResult> {
   const filterValues: unknown[] = [];
   const contactParam = pushValue(filterValues, contactId);
-  return await querySourcePrefixSlice(
+  return await queryAuthorizedSlice(
     pool,
     input,
     `memory.contact_id = ${contactParam}`,
@@ -288,7 +288,7 @@ async function queryRecentlyAccessed(
   input: MemorySubjectAdminQuery,
   limit: number,
 ): Promise<MemorySubjectAdminResult> {
-  return await querySourcePrefixSlice(
+  return await queryAuthorizedSlice(
     pool,
     input,
     INTERNAL_ARTIFACT_EXCLUSION_SQL,

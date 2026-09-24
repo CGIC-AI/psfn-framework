@@ -72,8 +72,8 @@ function makeMemory(id: string, overrides: Partial<PurrMemory> = {}): PurrMemory
 /**
  * 90 viewer-owned active memories (duplicate extractedAt pairs exercise the id
  * tie-break), 5 memories about another contact, 1 superseded and 1 deleted.
- * Every seventh viewer memory is an internal artifact (source-ref prefix or a
- * mixed-case tag); lastAccessed repeats so its ordering ties are exercised.
+ * Two of every seven viewer memories are internal artifacts (source-ref prefix
+ * or a mixed-case tag); lastAccessed repeats so its ordering ties are exercised.
  */
 function corpus(): PurrMemory[] {
   const memories: PurrMemory[] = [];

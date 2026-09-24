@@ -13,6 +13,9 @@ import {
   resolveGatewaySurfaceForChannelType,
 } from './multi-companion.js';
 import type { RuntimeChannelsConfig } from '../../channels/backplane/config.js';
+import { createBuiltinChannelPluginRegistry } from '../../channels/plugins/builtin.js';
+import { parseChannelPluginSections } from '../../channels/plugins/load-sections.js';
+import { EXTERNAL_CHANNEL_TEST_LIMITS } from '../../test-support/external-channel-conformance.js';
 import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { deriveCompanionAuthToken } from './companion-auth.js';
@@ -611,6 +614,25 @@ describe('resolveGatewayMultiCompanionConfig', () => {
       },
       sharedWorkspacePath: '/runtime/workspaces/shared',
     });
+  });
+
+  it('routes each external channel adapter to its declared companion', () => {
+    const companionId = '11111111-1111-4111-8111-111111111111';
+    const plugins = parseChannelPluginSections({
+      external: {
+        enabled: true,
+        limits: EXTERNAL_CHANNEL_TEST_LIMITS,
+        adapters: [{
+          id: 'sms', label: 'SMS', companionId, tokenRef: { kind: 'env', envName: 'EXTERNAL_SMS_TOKEN' },
+        }],
+      },
+    }, createBuiltinChannelPluginRegistry());
+    const resolved = resolveGatewayMultiCompanionConfig({
+      multiCompanion: true,
+      companionFleet: resolvedFleet([companionId]),
+    }, baseChannels({ plugins }), EMPTY_SATELLITE_REGISTRY);
+    expect(resolved.pluginAccounts).toEqual({ external: { sms: companionId } });
+    expect(resolveGatewaySurfaceForChannelType('external')).toBe('external');
   });
 
   it('fails closed when plugin accounts have no gateway routing surface', () => {

@@ -78,6 +78,7 @@ import {
   registerProcessErrorHandlers,
 } from '../startup/support/signal-shutdown.js';
 import { resolveGatewayApiSurfaceBindings, startOptionalGatewayApiServer } from './api-surface.js';
+import { listExternalChannelAdapters } from '../../channels/external/plugin.js';
 import { createGatewayFleetPortalChannelHealthSource } from './fleet-portal-composition.js';
 import { loadSatelliteRegistryConfig } from '../../channels/backplane/satellite-registry.js';
 import {
@@ -1283,6 +1284,7 @@ async function main(): Promise<void> {
     gateway,
     multiCompanion: bootstrap.server.multiCompanion.enabled,
     channelsConfig: bootstrap.channelsConfig,
+    externalChannelAdapters: listExternalChannelAdapters(channelSurfaces.plugins),
     fleetPortalChannelHealth,
     satelliteRegistryProvider: () => loadSatelliteRegistryConfig(
       startupHydration.pathSnapshot.systemDataDir,

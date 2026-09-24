@@ -4632,12 +4632,6 @@ describe('AdminServer JSON API routes', () => {
       humanEscalation: schedulerBaseline.humanEscalation,
       fleetStagger: schedulerBaseline.fleetStagger,
       backgroundWork: schedulerBaseline.backgroundWork,
-      artifactLifecycle: {
-        scratchpadRetentionDays: 14,
-        generatedMediaRetentionDays: 30,
-        workspaceTempRetentionDays: 14,
-        cleanupBatchSize: 128,
-      },
       episodicProcessing: {
         enabled: true,
         startLocalTime: '00:00',

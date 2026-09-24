@@ -123,12 +123,6 @@ describe('resolveRuntimeSchedulerConfig', () => {
         fleetStagger: structuredClone(DEFAULT_FLEET_STAGGER_CONFIG),
         humanEscalation: structuredClone(DEFAULT_HUMAN_ESCALATION_CONFIG),
         backgroundWork: DEFAULT_BACKGROUND_WORK_TUNING,
-        artifactLifecycle: {
-          scratchpadRetentionDays: 7,
-          generatedMediaRetentionDays: 21,
-          workspaceTempRetentionDays: 9,
-          cleanupBatchSize: 64,
-        },
         episodicProcessing: {
           enabled: true,
           startLocalTime: '23:00',
@@ -153,12 +147,6 @@ describe('resolveRuntimeSchedulerConfig', () => {
         healthDetectors: structuredClone(DEFAULT_HEALTH_DETECTORS_CONFIG),
         fleetStagger: structuredClone(DEFAULT_FLEET_STAGGER_CONFIG),
         humanEscalation: structuredClone(DEFAULT_HUMAN_ESCALATION_CONFIG),
-        artifactLifecycle: {
-          scratchpadRetentionDays: 7,
-          generatedMediaRetentionDays: 21,
-          workspaceTempRetentionDays: 9,
-          cleanupBatchSize: 64,
-        },
         episodicProcessing: {
           enabled: true,
           startLocalTime: '23:00',
@@ -203,12 +191,6 @@ describe('resolveRuntimeSchedulerConfig', () => {
         fleetStagger: structuredClone(DEFAULT_FLEET_STAGGER_CONFIG),
         humanEscalation: structuredClone(DEFAULT_HUMAN_ESCALATION_CONFIG),
         backgroundWork: DEFAULT_BACKGROUND_WORK_TUNING,
-        artifactLifecycle: {
-          scratchpadRetentionDays: 3,
-          generatedMediaRetentionDays: 4,
-          workspaceTempRetentionDays: 5,
-          cleanupBatchSize: 6,
-        },
         episodicProcessing: {
           enabled: false,
           startLocalTime: '01:00',
@@ -233,12 +215,6 @@ describe('resolveRuntimeSchedulerConfig', () => {
         healthDetectors: structuredClone(DEFAULT_HEALTH_DETECTORS_CONFIG),
         fleetStagger: structuredClone(DEFAULT_FLEET_STAGGER_CONFIG),
         humanEscalation: structuredClone(DEFAULT_HUMAN_ESCALATION_CONFIG),
-        artifactLifecycle: {
-          scratchpadRetentionDays: 3,
-          generatedMediaRetentionDays: 4,
-          workspaceTempRetentionDays: 5,
-          cleanupBatchSize: 6,
-        },
         episodicProcessing: {
           enabled: false,
           startLocalTime: '01:00',

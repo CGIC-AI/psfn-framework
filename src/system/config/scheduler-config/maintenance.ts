@@ -2,13 +2,6 @@ import { isRecord } from '../../../shared/utils/types.js';
 import { assertNoUnknownKeys } from '../validators.js';
 import { toInterval, toPositiveInteger } from './primitives.js';
 
-export interface ArtifactLifecyclePolicyConfig {
-  scratchpadRetentionDays: number;
-  generatedMediaRetentionDays: number;
-  workspaceTempRetentionDays: number;
-  cleanupBatchSize: number;
-}
-
 /**
  * Shared cadence for cheap background housekeeping. The runtime exposes every
  * operation attached to this tick in Garden; this is deliberately one honest
@@ -61,20 +54,19 @@ export const DEFAULT_BACKGROUND_MAINTENANCE_CONFIG: BackgroundMaintenanceConfig 
   },
 };
 
-export function validateArtifactLifecycleConfig(
-  raw: unknown,
-  sourcePath: string,
-): ArtifactLifecyclePolicyConfig {
-  if (!isRecord(raw)) {
-    throw new Error(`Invalid scheduler config at ${sourcePath}: artifactLifecycle must be an object`);
-  }
-
-  return {
-    scratchpadRetentionDays: toPositiveInteger(raw.scratchpadRetentionDays, 'artifactLifecycle.scratchpadRetentionDays', 1),
-    generatedMediaRetentionDays: toPositiveInteger(raw.generatedMediaRetentionDays, 'artifactLifecycle.generatedMediaRetentionDays', 1),
-    workspaceTempRetentionDays: toPositiveInteger(raw.workspaceTempRetentionDays, 'artifactLifecycle.workspaceTempRetentionDays', 1),
-    cleanupBatchSize: toPositiveInteger(raw.cleanupBatchSize, 'artifactLifecycle.cleanupBatchSize', 1),
-  };
+/**
+ * psfn-framework-cziwg: scheduler.json > artifactLifecycle lost its only
+ * reader when ArtifactLifecycleManager was retired (psfn-framework-yn6hy). An
+ * owner that still carries the block fails closed with migration guidance
+ * instead of being silently ignored.
+ */
+export function assertArtifactLifecycleRetired(raw: Record<string, unknown>, sourcePath: string): void {
+  if (raw.artifactLifecycle === undefined) return;
+  throw new Error(
+    `Invalid scheduler config at ${sourcePath}: artifactLifecycle was retired (it had no runtime consumer). `
+    + 'Run `npm run migrate:scheduler-owner -- --data-dir <companion-data-dir>` to plan the removal, then '
+    + 're-run it with --apply; no other setting changes.',
+  );
 }
 
 export function validateBackgroundMaintenanceConfig(

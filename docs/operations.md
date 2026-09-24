@@ -724,6 +724,10 @@ run the migration. An owner file still carrying the retired pre-bundled
 scheduler cadence (`salienceDecayIntervalMs`, `socialGraphBuilder.intervalMs`)
 is *not* adapted — that rewrite is ambiguous and only
 `migrate-scheduler-owner` resolves it, so startup still fails closed there.
+The same holds for the retired blocks that no runtime code read,
+`temporalWakeup.wakeSummary` and `artifactLifecycle`: loading fails with a
+message naming `migrate-scheduler-owner`, whose run removes exactly those
+paths (reported under `removedPaths`) and leaves every other setting as is.
 
 The settings half of the adaptation reads its defaults from
 `$CONFIG_DIR/settings.seed.json` (`./config` when `CONFIG_DIR` is unset), which

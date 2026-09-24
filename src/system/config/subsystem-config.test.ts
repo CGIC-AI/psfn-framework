@@ -364,12 +364,6 @@ describe('subsystem config round-trip', () => {
           foregroundPreemptionDeferDelayMs: 1_000,
         },
       },
-      artifactLifecycle: {
-        scratchpadRetentionDays: 14,
-        generatedMediaRetentionDays: 30,
-        workspaceTempRetentionDays: 14,
-        cleanupBatchSize: 128,
-      },
       episodicProcessing: {
         enabled: true,
         startLocalTime: '00:00',

@@ -35,7 +35,7 @@ describe('createIsolatedE2ERuntime', () => {
       tickIntervalMs: 60_000,
       heartbeatIntervalMs: 300_000,
       salienceDecayIntervalMs: 300_000,
-      artifactLifecycle: false,
+      backgroundMaintenance: false,
     }), 'utf8');
     process.env.DATA_DIR = ambientDataDir;
 
@@ -60,8 +60,8 @@ describe('createIsolatedE2ERuntime', () => {
 
       const scheduler = JSON.parse(
         readFileSync(join(runtime.companionDataDir, 'scheduler.json'), 'utf8'),
-      ) as { artifactLifecycle?: unknown };
-      expect(typeof scheduler.artifactLifecycle).toBe('object');
+      ) as { backgroundMaintenance?: unknown };
+      expect(typeof scheduler.backgroundMaintenance).toBe('object');
     } finally {
       runtime.cleanup();
     }

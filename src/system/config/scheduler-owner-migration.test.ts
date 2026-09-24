@@ -153,7 +153,7 @@ describe('migrateLegacySchedulerOwner', () => {
         salienceDecayIntervalMs: 3_600_000,
         socialGraphBuilderIntervalMs: 1_800_000,
       },
-      removedPaths: ['salienceDecayIntervalMs', 'socialGraphBuilder.intervalMs', 'temporalWakeup.wakeSummary'],
+      removedPaths: ['salienceDecayIntervalMs', 'socialGraphBuilder.intervalMs', 'temporalWakeup.wakeSummary', 'artifactLifecycle'],
     });
     expect(readFileSync(filePath, 'utf8')).toBe(before);
   });
@@ -253,6 +253,8 @@ describe('migrateLegacySchedulerOwner', () => {
         maxActiveConcerns: 7,
       },
     });
+    // cziwg: the retired artifactLifecycle block is removed.
+    expect(migratedRaw).not.toHaveProperty('artifactLifecycle');
     // c4twp: only the retired wakeSummary block leaves temporalWakeup.
     const { wakeSummary: retiredWakeSummary, ...keptTemporalWakeup } = original.temporalWakeup as Record<string, unknown>;
     expect(retiredWakeSummary).toBeDefined();
@@ -417,6 +419,42 @@ describe('migrateLegacySchedulerOwner', () => {
     expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
       status: 'applied',
       removedPaths: ['temporalWakeup.wakeSummary'],
+    });
+    expect(JSON.parse(readFileSync(filePath, 'utf8'))).toEqual(canonical);
+    expect(() => loadSchedulerConfig(dataDir)).not.toThrow();
+    expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({ status: 'not_needed' });
+  });
+
+  it('plans then removes only the retired artifactLifecycle block, idempotently (cziwg)', () => {
+    const { dataDir, filePath } = prepareOwner();
+    migrateLegacySchedulerOwner({ dataDir, apply: true });
+    const canonical = JSON.parse(readFileSync(filePath, 'utf8')) as Record<string, unknown>;
+    expect(canonical).not.toHaveProperty('artifactLifecycle');
+    // A deployed owner that is otherwise current still carries the retired block.
+    const stale = {
+      ...canonical,
+      artifactLifecycle: {
+        scratchpadRetentionDays: 14,
+        generatedMediaRetentionDays: 30,
+        workspaceTempRetentionDays: 14,
+        cleanupBatchSize: 128,
+      },
+    };
+    writeFileSync(filePath, `${JSON.stringify(stale, null, 2)}\n`, 'utf8');
+    expect(() => loadSchedulerConfig(dataDir)).toThrow(/artifactLifecycle was retired/u);
+    const before = readFileSync(filePath, 'utf8');
+
+    expect(migrateLegacySchedulerOwner({ dataDir })).toEqual({
+      mode: 'dry-run',
+      status: 'planned',
+      filePath,
+      removedPaths: ['artifactLifecycle'],
+    });
+    expect(readFileSync(filePath, 'utf8')).toBe(before);
+
+    expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
+      status: 'applied',
+      removedPaths: ['artifactLifecycle'],
     });
     expect(JSON.parse(readFileSync(filePath, 'utf8'))).toEqual(canonical);
     expect(() => loadSchedulerConfig(dataDir)).not.toThrow();

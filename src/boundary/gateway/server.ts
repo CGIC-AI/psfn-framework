@@ -92,7 +92,7 @@ import {
   DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS,
   GatewayConnectionLifecycle,
 } from './server/connection-lifecycle.js';
-import { type GatewayConnectionStatus } from './server/connection-status.js';
+import type { GatewayConnectionStatus } from './server/connection-status.js';
 import {
   normalizeNdjsonFrameError,
   summarizeFramePreview,

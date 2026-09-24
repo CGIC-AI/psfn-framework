@@ -11,6 +11,7 @@ import {
   type HubDeviceHumanAttachmentPort,
 } from '../../boundary/fleet-auth/hub-device-ingress.js';
 import { HubDeviceAssertionRejectedError } from '../../boundary/fleet-auth/hub-device-assertion.js';
+import { GuestOnlyHubDeviceAttachmentStore } from '../../boundary/fleet-auth/hub-device-guest-attachments.js';
 import type { ApiRuntimeChatRequest, ApiServerRuntime } from './types.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { SessionManager } from '../../core/session/manager.js';
@@ -36,11 +37,13 @@ function post(
   body: object,
   assertion: string | string[] | null = ASSERTION,
   closeConnection = false,
+  agent?: http.Agent,
 ): Promise<{ status: number; body: unknown }> {
   return new Promise((resolve, reject) => {
     const payload = JSON.stringify(body);
     const request = http.request({
       hostname: '127.0.0.1', port, method: 'POST', path: '/v1/chat/completions',
+      ...(agent ? { agent } : {}),
       headers: {
         'content-type': 'application/json',
         authorization: `Bearer ${TOKEN}`,
@@ -100,6 +103,7 @@ describe('ApiServer authenticated Hub device ingress', () => {
     satelliteRegistry = registry(),
     useProvider = false,
     withIngress = true,
+    attachmentStore?: HubDeviceHumanAttachmentPort,
   ) {
     const requests: ApiRuntimeChatRequest[] = [];
     const connectionIds: string[] = [];
@@ -129,7 +133,7 @@ describe('ApiServer authenticated Hub device ingress', () => {
         enrollmentAuthority: {
           resolve: async input => input.authenticatedConnection,
         },
-        attachments: {
+        attachments: attachmentStore ?? {
           attach: async (input) => {
             connectionIds.push(input.connection.connectionId);
             return {
@@ -237,6 +241,41 @@ describe('ApiServer authenticated Hub device ingress', () => {
     expect(connectionIds).toHaveLength(2);
     expect(connectionIds[0]).toMatch(/^[0-9a-f]{64}$/u);
     expect(connectionIds[1]).not.toBe(connectionIds[0]);
+  });
+
+  it('refuses a replayed assertion instead of running a second turn (psfn-framework-xwcqm)', async () => {
+    const verifier = vi.fn(async (_assertion: string, expected: {
+      deviceId: string; enrollmentVersion: number; companionId: string; sessionId: string; placeId?: string;
+    }) => ({
+      kind: 'hub_device' as const, issuer: 'psfn-satellite-hub', keyId: 'hub-key',
+      deviceId: expected.deviceId, enrollmentVersion: expected.enrollmentVersion,
+      enrollmentAssurance: 'device_credential' as const, placeId: expected.placeId,
+      audience: 'https://fleet.example.test', companionId: expected.companionId,
+      sessionId: expected.sessionId, issuedAt: new Date(), expiresAt: new Date(Date.now() + 30_000),
+      jti: '018f0f10-79b2-4cc7-8c99-0242ac120002',
+    }));
+    const request = { model: 'companion', messages: [{ role: 'user' as const, content: 'hello' }] };
+
+    // A new socket: the store denies the cross-connection re-presentation.
+    const crossSocket = await start(verifier, registry(), false, true, new GuestOnlyHubDeviceAttachmentStore());
+    await expect(post(crossSocket.port, request, ASSERTION, true)).resolves.toMatchObject({ status: 200 });
+    await expect(post(crossSocket.port, request, ASSERTION, true)).resolves.toMatchObject({
+      status: 401, body: { error: { type: 'hub_device_assertion_rejected' } },
+    });
+    expect(crossSocket.requests).toHaveLength(1);
+
+    // The same keep-alive socket: admitted as a retry attachment, refused as a turn.
+    const agent = new http.Agent({ keepAlive: true, maxSockets: 1 });
+    try {
+      const sameSocket = await start(verifier, registry(), false, true, new GuestOnlyHubDeviceAttachmentStore());
+      await expect(post(sameSocket.port, request, ASSERTION, false, agent)).resolves.toMatchObject({ status: 200 });
+      await expect(post(sameSocket.port, request, ASSERTION, false, agent)).resolves.toMatchObject({
+        status: 409, body: { error: { type: 'hub_device_assertion_replayed' } },
+      });
+      expect(sameSocket.requests).toHaveLength(1);
+    } finally {
+      agent.destroy();
+    }
   });
 
   it('fences the durable device attachment when server enrollment is removed', async () => {

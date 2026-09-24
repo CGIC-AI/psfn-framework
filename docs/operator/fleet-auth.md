@@ -508,9 +508,17 @@ through a single-use replay fence keyed on the full signed token digest that
 returns `consumed` / `replayed` / `mismatch` — durable in Postgres under fleet
 auth (`fleet_auth.hub_device_assertion_replays`), process-local without it
 (`InMemoryHubDeviceAssertionReplayStore`, bounded by the ≤70 s assertion
-lifetime). An exact re-presentation is `replayed` and admitted as a transport
-retry of the same turn; a different token reusing a jti is `mismatch` and
-rejected. Audit digests for issuer, key id,
+lifetime). An exact re-presentation is `replayed`; a different token reusing
+a jti is `mismatch` and rejected. A `replayed` assertion never runs a second
+turn: re-presented on a different connection, the attachment authority denies
+it as `device_binding_mismatch` and fences the connection that first used it
+(the durable store by assertion digest, `GuestOnlyHubDeviceAttachmentStore`
+by an in-memory assertion-to-connection binding held for the assertion
+window); re-presented on the same connection, the attachment is a `retry` and
+`/v1/chat/completions` answers `409 hub_device_assertion_replayed` without
+running the turn. The Hub therefore signs a fresh assertion for every request
+(agent-busy and empty-reply recovery included) and does not retry a device
+turn after an ambiguous timeout or transport loss, which may already have run. Audit digests for issuer, key id,
 audience, companion, device, session, enrollment version, and jti are keyed
 HMAC-SHA256 under the configured session pepper (fleet auth's
 `sessionPepperRef`, or `HUB_DEVICE_ASSERTION_AUDIT_PEPPER` / a derivation of

@@ -40,7 +40,7 @@ interface ReplayEntry {
   auditContext: HubDeviceAssertionReplayAuditContext;
 }
 
-const DEFAULT_MAX_ENTRIES = 4096;
+export const DEFAULT_MAX_ENTRIES = 4096;
 
 export class InMemoryHubDeviceAssertionReplayStore implements HubDeviceAssertionReplayStore {
   private readonly entries = new Map<string, ReplayEntry>();

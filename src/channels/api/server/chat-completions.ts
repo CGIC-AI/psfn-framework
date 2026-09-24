@@ -305,6 +305,14 @@ export class ApiChatCompletionsHandler {
           assertion: pendingHubDevice.assertion,
           connection: pendingHubDevice.connection,
         });
+        // psfn-framework-xwcqm: an assertion is consumed by exactly one turn.
+        // Re-presenting it on the same connection is admitted as a `retry`
+        // attachment, but running it would start a second turn, so refuse it
+        // (a different connection is already denied by the attachment store).
+        if (admission.attachment.disposition === 'retry') {
+          sendApiError(res, 409, 'hub_device_assertion_replayed', 'Hub device assertion was already used for a turn');
+          return;
+        }
         hubDevicePrincipal = admission.devicePrincipal;
         hubDeviceAttachment = admission.attachment;
       } catch (error) {

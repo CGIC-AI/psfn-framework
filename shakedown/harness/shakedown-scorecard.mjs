@@ -51,6 +51,9 @@ const TAXONOMY = {
     'missing_turn_record',
   ],
   unledgered_charge: ['unledgered_charge'],
+  // A failing case that ran after a previous case left the shared harness room
+  // with an unanswered turn the settle step could not clear (66cus).
+  contaminated: ['contaminated'],
 };
 
 const STATUS_TO_CATEGORY = (() => {

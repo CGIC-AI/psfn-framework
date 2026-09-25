@@ -88,6 +88,11 @@ import { buildMemoryTierCases } from './cases/memory-tiers.mjs';
 import { isBeadsIssueId } from './lib/beads.mjs';
 import { validateMemoryLookupAnswer } from './lib/memory-lookup-answer.mjs';
 import {
+  applyRoomIsolationOutcome,
+  createSharedRoomLedger,
+  settleSharedRoom,
+} from './lib/case-isolation.mjs';
+import {
   buildImageGenerationCases,
   resolveImageCaseProviderForCases,
 } from './lib/image-case-provider.mjs';
@@ -251,6 +256,9 @@ const resolveSessionChannelId = probe.resolveSessionChannelId;
 const readJsonl = probe.readJsonl;
 const isAgentBusyResponse = probe.isAgentBusyResponse;
 const isCompletedAssistantTurn = probe.isCompletedAssistantTurn;
+// Whether the shared api:testing-harness room holds an unanswered user message
+// (66cus); chatCase updates it on every dispatch.
+const SHARED_ROOM_LEDGER = createSharedRoomLedger();
 const turnRecordPath = (sessionId, apiUserId) =>
   probe.turnRecordPath(TURN_RECORDS_DIR, sessionId, apiUserId);
 const turnRecordsForSession = (sessionId, apiUserId) =>
@@ -1829,12 +1837,14 @@ async function chatCase(input) {
   let response;
   let matchingTurn = null;
   let lastRequestStartedAt = 0;
+  const roomChannelId = probe.resolveSessionChannelId(input.sessionId, apiUserId);
 
   while (submitAttempts < maxSubmitAttempts) {
     throwIfAborted(input.signal);
     submitAttempts += 1;
     const requestStartedAt = Date.now();
     lastRequestStartedAt = requestStartedAt;
+    SHARED_ROOM_LEDGER.dispatchStarted({ roomChannelId, sessionId: input.sessionId });
     response = await probe.postChatCompletion({
       apiUrl: API_URL,
       headers: dispatch.resolveHeaders(),
@@ -1930,6 +1940,10 @@ async function chatCase(input) {
     }
   }
 
+  SHARED_ROOM_LEDGER.dispatchSettled({
+    roomChannelId,
+    answered: isCompletedAssistantTurn(matchingTurn),
+  });
   await sleep(input.settleMs ?? 800, input.signal);
   throwIfAborted(input.signal);
   return {
@@ -3815,6 +3829,7 @@ async function main() {
   const results = [];
   let matrixAborted = false;
   let pendingBusyRecovery = null;
+  let pendingRoomFromCaseId = null;
   const writePartialProgress = (harnessStatus = matrixAborted ? 'matrix_aborted' : 'running') => {
     writeJsonArtifact(PARTIAL_OUTPUT_PATH, {
       ...outputBase,
@@ -3896,6 +3911,21 @@ async function main() {
           caseOverheadTimeoutMs: DEFAULT_CASE_OVERHEAD_TIMEOUT_MS,
           stepDelayMs: DEFAULT_STEP_DELAY_MS,
         });
+        const roomIsolation = pendingRoomFromCaseId === null
+          ? null
+          : await settleSharedRoom({
+            ledger: SHARED_ROOM_LEDGER,
+            fromCaseId: pendingRoomFromCaseId,
+            runSettleTurn: (message) => chatCase({
+              sessionId: `harness-room-settle-${ctx.runToken}`,
+              message,
+              privacy: 'private',
+              timeoutMs: DEFAULT_FETCH_TIMEOUT_MS,
+            }),
+          });
+        if (roomIsolation) {
+          recordCaseDiagnostic(testCase.id, { event: 'pre_case_room_settle', ...roomIsolation });
+        }
         try {
           caseResult = await runCaseWithTimeout({
             label: `case ${testCase.id}`,
@@ -3914,6 +3944,7 @@ async function main() {
             failure.reason,
           );
         }
+        caseResult = applyRoomIsolationOutcome(caseResult, roomIsolation);
       }
     }
     if (caseExecutionAttempted && typeof testCase.cleanup === 'function') {
@@ -3965,6 +3996,9 @@ async function main() {
       startedAt,
       selectedCaseIds,
     });
+    if (caseExecutionAttempted) {
+      pendingRoomFromCaseId = SHARED_ROOM_LEDGER.pending() === null ? null : testCase.id;
+    }
     results.push(caseResult);
     writePartialProgress();
     console.error(JSON.stringify({

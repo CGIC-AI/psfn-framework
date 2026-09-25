@@ -111,7 +111,7 @@ export async function freshContext() {
   const backupUrl = roleUrl(database.databaseUrl, ROLES.backupRestore);
   await migrateFleetAuthSchema({ databaseUrl: migrationUrl, roles: ROLES });
   const pool = createPostgresPool(backupUrl, { max: 6 });
-  const floorRoot = mkdtempSync(join(tmpdir(), 'psfn-lifecycle-authority-'));
+  const floorRoot = mkdtempSync(join(tmpdir(), 'fleet-lifecycle-authority-'));
   chmodSync(floorRoot, 0o700);
   const floors = new FleetAuthAuthorityFloorStore(floorRoot);
   const floor = floors.open({ activationGeneration: 1, databaseHasDurableAuthority: false });

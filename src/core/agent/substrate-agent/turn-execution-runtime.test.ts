@@ -4859,14 +4859,16 @@ describe('handleMessageForTurn compaction scheduling', () => {
       endForegroundBackgroundWork,
     });
     const requestId = 'msg-foreground-provider-loss';
-    (runtime.agent as unknown as { activeRun: unknown }).activeRun = {
-      requestId,
-      abortController: providerController,
-    };
     runtime.agent.abort = vi.fn(() => {
       providerController.abort(new Error('provider aborted after foreground ownership loss'));
     });
     runtime.agent.prompt = vi.fn(async () => {
+      // The run claims the agent when prompt starts, as the patched loop does
+      // (a pre-existing run would refuse this turn, psfn-framework-97epu).
+      (runtime.agent as unknown as { activeRun: unknown }).activeRun = {
+        requestId,
+        abortController: providerController,
+      };
       providerStarted.resolve();
       await new Promise<void>((_resolve, reject) => {
         if (providerController.signal.aborted) {

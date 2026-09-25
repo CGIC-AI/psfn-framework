@@ -12805,6 +12805,13 @@
     },
     {
       "file": "src/system/config/participation-config.ts",
+      "name": "createDefaultParticipationAppraiserSettings.operatorGuidanceMaxChars",
+      "value": "2_000",
+      "form": "object-member",
+      "note": "Canonical owner-file/schema metadata createDefaultParticipationAppraiserSettings.operatorGuidanceMaxChars; the code literal is the scheduler.json socialAutonomy.appraiser bootstrap default (seeded in config/scheduler.seed.json), not a parallel runtime override."
+    },
+    {
+      "file": "src/system/config/participation-config.ts",
       "name": "createDefaultParticipationAppraiserSettings.transcriptMessageCap",
       "value": "8",
       "form": "object-member",

@@ -89,6 +89,45 @@ describe('ParticipationAppraiser', () => {
     expect(result.appraisal).toEqual({ action: 'reply', reasonCode: 'asked', confidence: 0.7 });
   });
 
+  it('shows the operator-authored layers to the local appraisal, bounded (9iooo)', async () => {
+    const { provider, recorder } = recordingProvider(() =>
+      makeResponse('{"action":"reply","reasonCode":"test_engagement","confidence":0.8}'));
+    const briefing = 'You are a tester; engaging with sibling ICP requests is part of the testing.';
+    const appraiser = new ParticipationAppraiser({
+      llmProvider: provider,
+      companionName: COMPANION_NAME,
+      settings: { ...createDefaultParticipationAppraiserSettings(), operatorGuidanceMaxChars: 120 },
+      operatorGuidance: () => [
+        { name: 'shakedown tester briefing', content: briefing },
+        { name: 'long note', content: 'x'.repeat(500) },
+      ],
+    });
+
+    await appraiser.appraise(makeCandidate({ participationSurface: 'companion_dm' }));
+
+    const systemPrompt = recorder.contexts[0]!.systemPrompt;
+    expect(systemPrompt).toContain('OPERATOR GUIDANCE');
+    expect(systemPrompt).toContain(briefing);
+    expect(systemPrompt).not.toContain('x'.repeat(200));
+    // Guidance never displaces the hard rules or the output contract.
+    expect(systemPrompt.indexOf('HARD RULES')).toBeLessThan(systemPrompt.indexOf('OPERATOR GUIDANCE'));
+    expect(systemPrompt).toContain('Respond with exactly one JSON object');
+  });
+
+  it('adds no operator section when the companion has no operator layers', async () => {
+    const { provider, recorder } = recordingProvider(() =>
+      makeResponse('{"action":"ignore","reasonCode":"x","confidence":0.1}'));
+    const appraiser = new ParticipationAppraiser({
+      llmProvider: provider,
+      companionName: COMPANION_NAME,
+      operatorGuidance: () => [],
+    });
+
+    await appraiser.appraise(makeCandidate());
+
+    expect(recorder.contexts[0]!.systemPrompt).not.toContain('OPERATOR GUIDANCE');
+  });
+
   it('is tool-less and uses the background purpose', async () => {
     const { provider, recorder } = recordingProvider(() =>
       makeResponse('{"action":"ignore","reasonCode":"x","confidence":0.1}'));

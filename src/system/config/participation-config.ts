@@ -152,6 +152,11 @@ export interface ParticipationAppraiserSettings {
   transcriptMessageCap: number;
   /** Per-message character cap inside the transcript. */
   transcriptMessageChars: number;
+  /**
+   * Total character cap for the operator-authored prompt layers the local
+   * appraiser sees as operator guidance (psfn-framework-9iooo).
+   */
+  operatorGuidanceMaxChars: number;
 }
 
 /**
@@ -185,6 +190,7 @@ export function createDefaultParticipationAppraiserSettings(): ParticipationAppr
     appraisalMaxOutputTokens: 1_500,
     transcriptMessageCap: 8,
     transcriptMessageChars: 500,
+    operatorGuidanceMaxChars: 2_000,
   };
 }
 
@@ -469,6 +475,7 @@ export function parseParticipationAppraiserSettings(
       'appraisalMaxOutputTokens',
       'transcriptMessageCap',
       'transcriptMessageChars',
+      'operatorGuidanceMaxChars',
     ],
     fieldPath,
     { errorPrefix: PARTICIPATION_ERROR_PREFIX },
@@ -490,6 +497,10 @@ export function parseParticipationAppraiserSettings(
     transcriptMessageChars: participationPositiveInteger(
       record.transcriptMessageChars ?? defaults.transcriptMessageChars,
       `${fieldPath}.transcriptMessageChars`,
+    ),
+    operatorGuidanceMaxChars: participationPositiveInteger(
+      record.operatorGuidanceMaxChars ?? defaults.operatorGuidanceMaxChars,
+      `${fieldPath}.operatorGuidanceMaxChars`,
     ),
   };
 }

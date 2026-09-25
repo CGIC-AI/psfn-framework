@@ -310,7 +310,12 @@ schema versions (`npm run migrate:intake-policy-owner`). Key sections:
   for the deterministic URL scanner; must deny at least one scheme.
 - **`quarantine`**: held-item TTL and maximum held items.
 - **`injectionClassifier`**: L1.5 label threshold plus per-tier score
-  thresholds.
+  thresholds, and an optional `maxContentChars` bound on the span the ONNX
+  classifier scores (default: `l2Screener.maxContentChars`). Longer content is
+  scored over its leading span and escalated fail closed with a maximal L1.5
+  score, so an oversized page always reaches deep screening while the
+  classifier's CPU work stays bounded. Tokenization runs in whitespace-bounded
+  chunks, one event-loop turn each, and inference uses one ONNX thread.
 - **`l2Screener`**: per-tier escalation thresholds, mandatory tiers, per-tier
   fail-closed action (`quarantine` for high-risk, `l1_labels_only` for
   trusted), timeout and content cap.

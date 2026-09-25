@@ -46,7 +46,7 @@ import {
 } from '../../../core/cogsec/intake/quarantine-store.js';
 import { CogSecEventStore } from '../../../core/cogsec/events.js';
 import { resolveCogSecEventsPath, resolveIntakeQuarantinePath } from '../../../persistence/layout.js';
-import { loadIntakePolicyConfig } from '../../../system/config/intake-policy-config.js';
+import { injectionClassifierMaxContentChars, loadIntakePolicyConfig } from '../../../system/config/intake-policy-config.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { ProviderRuntime } from '../../../primitives/llm/provider-runtime.js';
 import { LLMRequestCapability } from '../../../primitives/llm/client-request-capability.js';
@@ -279,6 +279,7 @@ export async function composeGatewayIntakeScreening(input: {
     classifier = await createInjectionClassifier({
       modelDir,
       labelThreshold: policy.injectionClassifier.labelThreshold,
+      maxContentChars: injectionClassifierMaxContentChars(policy),
       ...(input.injectionBackendFactory
         ? { backendFactory: input.injectionBackendFactory }
         : {}),
@@ -375,7 +376,17 @@ export async function composeGatewayIntakeScreening(input: {
       ? {
         injectionScorer: {
           scannerId: INJECTION_CLASSIFIER_SCANNER_ID,
-          classify: (text: string) => classifier.classify(text),
+          classify: async (text: string) => {
+            const classified = await classifier.classify(text);
+            if (!classified.truncated) return classified;
+            // jerq6: content beyond the scored span is unscored; treat it fail
+            // closed (maximal score) so the item always reaches deep screening.
+            log.warn('Intake L1.5 scored only the leading span of oversized content; escalating fail closed', {
+              scoredChars: injectionClassifierMaxContentChars(policy),
+              contentChars: text.length,
+            });
+            return { ...classified, score: 1 };
+          },
         },
       }
       : {}),

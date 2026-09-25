@@ -26,7 +26,10 @@ import {
   recoveryResponse as icpRecoveryResponse,
 } from '../../session/icp-recovery.test-fixtures.js';
 import { buildSessionMetadataWithTurn } from '../../session/turn-provenance.js';
-import { MemoryExtractor as RealMemoryExtractor } from '../../../faculties/memory/extraction.js';
+import {
+  __test as extractionTestUtils,
+  MemoryExtractor as RealMemoryExtractor,
+} from '../../../faculties/memory/extraction.js';
 import { createDefaultGroupMemorySettings } from '../../../system/config/group-memory-config.js';
 import { ModelCallPreemptedError } from '../../../primitives/llm/model-call-gate.js';
 import { getRequestContext } from '../../../primitives/llm/request-context.js';
@@ -831,6 +834,92 @@ describe('executePostTurnBackgroundWork', () => {
     expect(prompt).toContain('Authoritative source turn B response.');
     expect(prompt).not.toContain('Unfenced live turn A must not enter the prompt.');
     expect(prompt).not.toContain('Unfenced newer live turn C must not enter the prompt.');
+  });
+
+  it('consults the extraction pre-gate on the durable post-turn interval path (rrgt2)', async () => {
+    // Interval coverage is process-wide per channel; start from a clean slate.
+    extractionTestUtils.resetLastExtractionCount();
+    const record = makeTurnRecord();
+    const execution = makeExecution(record);
+    delete execution.payload.canonicalContactId;
+    execution.job.payloadFingerprint = fingerprintBackgroundWorkPayload(execution.payload);
+    const sourceEntries: SessionEntry[] = [
+      {
+        id: 1,
+        channelId: record.sessionId!,
+        role: 'user',
+        content: 'hey, how is it going?',
+        authorName: 'Partner',
+        timestamp: record.startedAt,
+        metadata: buildSessionMetadataWithTurn(undefined, {
+          turnId: record.turnId,
+          requestId: record.requestId,
+          role: 'user',
+          actorKind: 'human',
+        }),
+      },
+      {
+        id: 2,
+        channelId: record.sessionId!,
+        role: 'assistant',
+        content: 'all good, thanks!',
+        timestamp: record.completedAt,
+        metadata: buildSessionMetadataWithTurn(undefined, {
+          turnId: record.turnId,
+          requestId: record.requestId,
+          role: 'assistant',
+          actorKind: 'machine_intelligence',
+        }),
+      },
+    ];
+    const fixture = makeDependencies({ record, recentEntries: sourceEntries });
+    const complete = vi.fn().mockResolvedValue({ content: '<response></response>' });
+    const decide = vi.fn(async () => ({
+      ok: true as const,
+      answers: { nothing_to_do: { type: 'noul' as const, pYes: 0.97 } },
+      backend: 'jev' as const,
+      probabilitySource: 'jev' as const,
+      latencyMs: 12,
+    }));
+    const extractor = new RealMemoryExtractor(
+      { complete } as unknown as LLMProviderPort,
+      fixture.dependencies.sessionManager,
+      {
+        getMemoriesByChannel: vi.fn().mockResolvedValue([]),
+      } as ConstructorParameters<typeof RealMemoryExtractor>[2],
+      {
+        embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+        embedBatch: vi.fn(),
+        dims: 8,
+      } as ConstructorParameters<typeof RealMemoryExtractor>[3],
+      {
+        emit: vi.fn().mockResolvedValue(undefined),
+      } as ConstructorParameters<typeof RealMemoryExtractor>[4],
+      { extractionInterval: 2 },
+      null,
+      null,
+      null,
+      {
+        decisions: {
+          decide,
+          siteSettings: () => ({ enabled: true, threshold: 0.9 }),
+        },
+      },
+    );
+    fixture.dependencies.getMemoryExtractor = () => extractor;
+
+    await executePostTurnBackgroundWork(execution, fixture.dependencies);
+
+    expect(decide).toHaveBeenCalledOnce();
+    expect(decide.mock.calls[0]?.[0]).toMatchObject({
+      siteId: 'memory.extraction_pregate',
+      state: { messages: [
+        { role: 'user', text: 'hey, how is it going?' },
+        { role: 'assistant', text: 'all good, thanks!' },
+      ] },
+      workSpec: { purpose: 'decision' },
+    });
+    expect(complete).not.toHaveBeenCalled();
   });
 
   it('does not complete durable B from an unrelated in-flight group extraction', async () => {

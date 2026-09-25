@@ -6,7 +6,7 @@ import type {
 import { InternalStateComputer } from '../../self-model/state.js';
 import { resolveInternalStatePendingFollowUps } from './internal-state-pending-follow-ups.js';
 
-const PEER_CHANNEL_ID = 'companion-dm:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222';
+const PEER_CHANNEL_ID = 'companion-dm:a7100000-0000-4000-8000-000000000001:b7100000-0000-4000-8000-000000000002';
 
 function makeFollowUp(overrides: Partial<PendingFollowUp> = {}): PendingFollowUp {
   return {

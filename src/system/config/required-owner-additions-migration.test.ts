@@ -285,4 +285,63 @@ describe('migrateRequiredOwnerAdditions', () => {
     validateIntakePolicy(readJson(fixture.intakePath), fixture.intakePath);
     parseAutomataOwnerPolicy(readJson(fixture.automataPath), fixture.automataPath);
   });
+
+  it('adds the r5 charge-policy keys for each fleet companion its workload migrates (2 companions)', () => {
+    const fixture = prepareLegacyOwners();
+    const second = join(root!, 'companion-two');
+    mkdirSync(second);
+    const seedCharge = readJson('config/charge-policy.seed.json');
+    const legacyCharge = structuredClone(seedCharge) as {
+      fatigue: { socialRegulation: Record<string, unknown> };
+      runChargeQuotaByLane: Record<string, number>;
+    };
+    delete legacyCharge.fatigue.socialRegulation.mutualReplyAllowancePerSide;
+    delete legacyCharge.fatigue.socialRegulation.mutualReplyPressureUnits;
+    legacyCharge.runChargeQuotaByLane.companion_social = 12;
+    for (const companionDataDir of [fixture.companionDataDir, second]) {
+      writeJson(join(companionDataDir, 'charge-policy.json'), legacyCharge);
+      chmodSync(join(companionDataDir, 'charge-policy.json'), 0o600);
+    }
+
+    // The chart runs the migration once per workload with that workload's
+    // own companion root (the only one mounted there).
+    for (const companionDataDir of [fixture.companionDataDir, second]) {
+      expect(migrateRequiredOwnerAdditions({
+        dataDir: fixture.dataDir,
+        companionDataDir,
+        seedDir: resolve('config'),
+        apply: true,
+      }).chargePolicy).toMatchObject({
+        status: 'applied',
+        addedPaths: [
+          'fatigue.socialRegulation.mutualReplyAllowancePerSide',
+          'fatigue.socialRegulation.mutualReplyPressureUnits',
+        ],
+      });
+    }
+    for (const companionDataDir of [fixture.companionDataDir, second]) {
+      const migrated = readJson(join(companionDataDir, 'charge-policy.json')) as typeof legacyCharge;
+      expect(migrated.fatigue.socialRegulation).toMatchObject({
+        mutualReplyAllowancePerSide: 8,
+        mutualReplyPressureUnits: 0.2,
+      });
+      expect(migrated.runChargeQuotaByLane.companion_social).toBe(12);
+      expect(migrateRequiredOwnerAdditions({
+        dataDir: fixture.dataDir,
+        companionDataDir,
+        seedDir: resolve('config'),
+        apply: true,
+      }).chargePolicy).toMatchObject({ status: 'not_needed' });
+    }
+  });
+
+  it('fails closed when the named companion root does not exist', () => {
+    const fixture = prepareLegacyOwners();
+    expect(() => migrateRequiredOwnerAdditions({
+      dataDir: fixture.dataDir,
+      companionDataDir: join(root!, 'missing-companion'),
+      seedDir: resolve('config'),
+      apply: true,
+    })).toThrow();
+  });
 });

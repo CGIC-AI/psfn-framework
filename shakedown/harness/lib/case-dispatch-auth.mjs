@@ -1,4 +1,4 @@
-import { buildChatHeaders } from './probe.mjs';
+import { buildChatHeaders, companionSelectorFor, withCompanionSelector } from './probe.mjs';
 
 function requireNonEmpty(value, label) {
   if (typeof value !== 'string' || value.trim().length === 0) {
@@ -19,7 +19,14 @@ export function prepareCaseChatDispatch({
   privacy = 'private',
   extraHeaders = {},
   resolveAttemptHeaders,
+  /**
+   * The run's fleet companion (kube COMPANION_ID; null on the pinned local
+   * target). Every harness-bearer dispatch carries its selector (cx97d);
+   * a dispatch under a satellite credential never does.
+   */
+  companionId = null,
 }) {
+  const selector = companionSelectorFor(companionId);
   const attemptedAuthorizationOverride = Object.keys(extraHeaders)
     .some((name) => name.toLowerCase() === 'authorization');
   if (attemptedAuthorizationOverride) {
@@ -50,12 +57,12 @@ export function prepareCaseChatDispatch({
     apiUserId = override.apiUserId.trim();
   }
 
-  const headers = buildChatHeaders({
+  const headers = withCompanionSelector(buildChatHeaders({
     apiKey,
     sessionId,
     privacy,
     extra: extraHeaders,
-  });
+  }), resolveDispatchAuth === undefined ? selector : {});
   const resolveHeaders = () => {
     if (resolveAttemptHeaders === undefined) return { ...headers };
     const attemptHeaders = typeof resolveAttemptHeaders === 'function'

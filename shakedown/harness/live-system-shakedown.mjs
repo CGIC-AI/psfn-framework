@@ -1886,6 +1886,9 @@ async function chatCase(input) {
       manifestId: HARNESS_MANIFEST_ID,
     }),
     resolveAttemptHeaders: input.resolveAttemptHeaders,
+    // cx97d: coverage chats target the run's fleet companion like every
+    // other harness-bearer dispatch.
+    companionId: CONFIG.companionId,
   });
   const apiUserId = dispatch.apiUserId;
   const busyRetryWindowMs = input.busyRetryWindowMs ?? DEFAULT_BUSY_RETRY_WINDOW_MS;

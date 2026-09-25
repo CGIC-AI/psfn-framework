@@ -88,6 +88,11 @@ import { buildMemoryTierCases } from './cases/memory-tiers.mjs';
 import { isBeadsIssueId } from './lib/beads.mjs';
 import { validateMemoryLookupAnswer } from './lib/memory-lookup-answer.mjs';
 import {
+  restorePromptLayers,
+  snapshotPromptLayers,
+  sweepHarnessPromptMarkers,
+} from './lib/prompt-layer-restore.mjs';
+import {
   applyRoomIsolationOutcome,
   buildRoomSettleTurnInput,
   createSharedRoomLedger,
@@ -1117,6 +1122,39 @@ function summarizeTurn(turn) {
     adaptiveSkipped: snapshot?.toolContext?.adaptiveSnapshot?.skipped ?? snapshot?.adaptiveTools?.skipped ?? null,
     promptAnalysis: analyzePromptContext(snapshot?.promptContext),
     metrics: summarizeTurnMetrics(turn),
+  };
+}
+
+/** Garden admin JSON request for harness-owned fixture restoration. */
+function adminRequest(method, path, body) {
+  return fetchJson(`${ADMIN_BASE}${path}`, {
+    method,
+    ...(body === undefined
+      ? {}
+      : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+  });
+}
+
+/**
+ * Case hooks that snapshot prompt layers before dispatch and restore them
+ * byte-identically afterwards (2pz3o).
+ */
+function promptLayerRestoreHooks() {
+  let before = null;
+  return {
+    before: async () => {
+      const listed = await adminRequest('GET', '/api/admin/prompts');
+      if (!listed?.ok) {
+        throw new Error(`prompt layer snapshot unavailable (${listed?.status ?? 'no response'})`);
+      }
+      before = snapshotPromptLayers(listed.body);
+      return { promptLayersSnapshotted: before.size };
+    },
+    cleanup: async () => (
+      before === null
+        ? { cleanup: {}, cleanupErrors: ['prompt layers were not snapshotted before the case'] }
+        : await restorePromptLayers({ before, adminRequest })
+    ),
   };
 }
 
@@ -2647,6 +2685,7 @@ function buildCoverageCases(ctx) {
     {
       id: 'prompt_mutation_cycle',
       sessionId: `coverage-prompt-mutate-${ctx.runToken}`,
+      ...promptLayerRestoreHooks(),
       expectedTools: ['identity'],
       actionSensitive: true,
       actionSuccessKeys: ['updated', 'rolledBack'],
@@ -2663,6 +2702,7 @@ function buildCoverageCases(ctx) {
     {
       id: 'prompt_toggle_cycle',
       sessionId: `coverage-prompt-toggle-${ctx.runToken}`,
+      ...promptLayerRestoreHooks(),
       expectedTools: ['identity'],
       actionSensitive: true,
       actionSuccessKeys: ['toggledTwice'],
@@ -3767,6 +3807,12 @@ async function runCase(testCase, ctx, signal) {
 
 async function main() {
   const startedAt = new Date().toISOString();
+  // Remove marker residue earlier rounds left in prompt layers (2pz3o) before
+  // this run takes its inventory and per-case snapshots.
+  const sweptPromptMarkerLayers = await sweepHarnessPromptMarkers({ adminRequest });
+  if (sweptPromptMarkerLayers.length > 0) {
+    console.error(JSON.stringify({ event: 'prompt_marker_residue_swept', layerIds: sweptPromptMarkerLayers }));
+  }
   const promptInventory = await fetchJson(`${ADMIN_BASE}/api/admin/prompts`);
   const ctx = buildBaseContext();
   ctx.promptInventory = promptInventory.body ?? null;

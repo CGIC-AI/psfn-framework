@@ -1,7 +1,8 @@
-import type { ImageModelRegistryEntry } from '../../shared/contracts/runtime-base.js';
+import type { ImageModelCost, ImageModelRegistryEntry } from '../../shared/contracts/runtime-base.js';
 import { isRecord } from '../../shared/utils/types.js';
 
-const IMAGE_MODEL_ENTRY_KEYS = ['id', 'provider', 'model', 'modes', 'primary'] as const;
+const IMAGE_MODEL_ENTRY_KEYS = ['id', 'provider', 'model', 'modes', 'primary', 'cost'] as const;
+const IMAGE_MODEL_COST_KEYS = ['perImageUsd', 'currency'] as const;
 const IMAGE_MODEL_MODES = ['create', 'edit'] as const;
 const IMAGE_MODEL_ID_PATTERN = /^[a-z0-9][a-z0-9._-]*$/u;
 // Provider model slugs such as `vendor/model-name` or `vendor/model:variant`.
@@ -55,12 +56,29 @@ export function normalizeImageModelRegistry(
         primaryModes.add(mode);
       }
     }
+    const cost = raw.cost === undefined ? undefined : normalizeImageModelCost(raw.cost, `${path}.cost`);
     return {
       id: raw.id,
       provider: raw.provider.trim(),
       model: raw.model,
       modes: [...modes],
       primary: raw.primary,
+      ...(cost ? { cost } : {}),
     };
   });
+}
+
+function normalizeImageModelCost(value: unknown, path: string): ImageModelCost {
+  if (!isRecord(value)) throw new Error(`Invalid model registry at ${path}: expected object`);
+  const unknown = Object.keys(value).filter(key => !(IMAGE_MODEL_COST_KEYS as readonly string[]).includes(key));
+  if (unknown.length > 0) {
+    throw new Error(`Invalid model registry at ${path}: unknown key(s) ${unknown.join(', ')}`);
+  }
+  if (typeof value.perImageUsd !== 'number' || !Number.isFinite(value.perImageUsd) || value.perImageUsd < 0) {
+    throw new Error(`Invalid model registry at ${path}.perImageUsd: expected a finite USD amount >= 0`);
+  }
+  if (value.currency !== 'USD') {
+    throw new Error(`Invalid model registry at ${path}.currency: expected USD`);
+  }
+  return { perImageUsd: value.perImageUsd, currency: 'USD' };
 }

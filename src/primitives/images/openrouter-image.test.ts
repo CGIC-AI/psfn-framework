@@ -141,6 +141,30 @@ describe('models.json imageModels contract', () => {
     expect(() => normalizeImageModelRegistry([{ ...base, modes: ['video'] }], 'imageModels')).toThrow(/modes/u);
     expect(() => normalizeImageModelRegistry([base, { ...base, id: 'b' }], 'imageModels')).toThrow(/already has a primary/u);
   });
+
+  it('accepts a per-image USD price and rejects malformed pricing (6da92)', () => {
+    const base = { id: 'a', provider: 'openrouter', model: IMAGE_MODEL, modes: ['create'], primary: true };
+    expect(normalizeImageModelRegistry([{ ...base, cost: { perImageUsd: 0.04, currency: 'USD' } }], 'imageModels')[0])
+      .toMatchObject({ cost: { perImageUsd: 0.04, currency: 'USD' } });
+    expect(() => normalizeImageModelRegistry([{ ...base, cost: { perImageUsd: -1, currency: 'USD' } }], 'imageModels'))
+      .toThrow(/perImageUsd/u);
+    expect(() => normalizeImageModelRegistry([{ ...base, cost: { perImageUsd: 0.04, currency: 'EUR' } }], 'imageModels'))
+      .toThrow(/currency/u);
+    expect(() => normalizeImageModelRegistry([{ ...base, cost: { perImageUsd: 0.04, currency: 'USD', tokens: 1 } }], 'imageModels'))
+      .toThrow(/unknown key/u);
+  });
+
+  it('carries the provider-reported cost on the generation result', async () => {
+    vi.stubEnv('OPENROUTER_API_KEY', 'test-openrouter-key');
+    dir = mkdtempSync(join(tmpdir(), 'openrouter-image-cost-'));
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      data: [{ b64_json: PNG_BASE64, media_type: 'image/png' }],
+      usage: { cost: 0.0387 },
+    }), { status: 200 }));
+    const service = new ImageService(config(), fetchImpl as unknown as typeof fetch, { generatedImagesDir: dir });
+    const result = await service.create({ prompt: 'a lighthouse', provider: 'openrouter' });
+    expect(result.providerCostUsd).toBe(0.0387);
+  });
 });
 
 describe('shipped models.json seed', () => {
@@ -154,6 +178,7 @@ describe('shipped models.json seed', () => {
       model: 'google/gemini-2.5-flash-image',
       modes: ['create', 'edit'],
       primary: true,
+      cost: { perImageUsd: 0.04, currency: 'USD' },
     }]);
   });
 });

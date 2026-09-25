@@ -1592,6 +1592,17 @@ export interface ImageModelRegistryEntry {
   modes: ('create' | 'edit')[];
   /** At most one primary per mode; the primary is the default for that mode. */
   primary: boolean;
+  /**
+   * Worst-case price of one generated image (6da92). The budget gate admits a
+   * request only when its images fit the budget at this price; an unpriced
+   * image model is refused while the model budget is enforced.
+   */
+  cost?: ImageModelCost;
+}
+
+export interface ImageModelCost {
+  perImageUsd: number;
+  currency: 'USD';
 }
 
 export interface CanonicalModelRegistry {

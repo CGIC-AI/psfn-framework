@@ -8,6 +8,8 @@
 // MemoryExtractor) are re-exported here for callers that import contracts
 // from the SubstrateAgent module.
 
+import { resolveUncontextedTurnChargeLane } from './worker-lanes.js';
+import { resolveTurnCallType } from './substrate-agent/turn-observability.js';
 import {
   buildSessionMetadataWithSpeakerAttribution,
   resolveProvenSpeakerContactId,
@@ -2068,7 +2070,11 @@ export class SubstrateAgent {
           response = await runWithChargeContext({
             chargePolicy: this.config.chargePolicy,
             eventBus: this.eventBus,
-            lane: 'interactive',
+            lane: resolveUncontextedTurnChargeLane({
+              channelId: message.channelId,
+              workerExecution: message.routing?.workerExecution !== undefined,
+              callType: resolveTurnCallType(message, undefined),
+            }),
             runId: message.id,
             correlation: {
               requestId: message.id,

@@ -4,6 +4,7 @@ import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import type { EmbeddingProviderPort } from '../../../shared/contracts/embedding-provider.js';
 import type { ChannelOutboundDock } from '../../../channels/backplane/types.js';
 import type { GatewayRoomReplyOutbound } from '../room-reply-outbound.js';
+import type { ModelBudgetController } from '../../../primitives/llm/model-budget.js';
 import type { GitOperations } from '../../integrations/git/ops.js';
 import type { ImageRuntimeConfig } from '../../../primitives/images/types.js';
 import type { ModelDiscoveryBackend } from '../../../primitives/llm/discovery.js';
@@ -100,6 +101,8 @@ export interface GatewayMethodRuntime {
   gitOps?: GitOperations;
   imageConfig?: ImageRuntimeConfig;
   modelUsageRecorder?: ModelUsageRecorder;
+  /** Model budget admission for non-token dispatches such as paid images (6da92). */
+  modelBudget?: ModelBudgetController;
   /** Gateway-owned remote (Jev) decision backend; absent when not wired. */
   jevDecisions?: GatewayJevDecisionService;
   credentialVault?: CredentialVaultPort;

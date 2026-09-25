@@ -22,6 +22,13 @@ import {
 } from '../../../primitives/images/fal-cost-estimate.js';
 import { resolveInlineOrEnvCredential } from '../../custody/credential-vault.js';
 import { roundModelUsageUsd } from '../../../shared/telemetry/model-usage-accounting.js';
+import { OpenRouterImageError } from '../../../primitives/images/openrouter-image.js';
+import {
+  admitPaidImageDispatch,
+  findImageModelPricing,
+  imageAttemptCost,
+  imageWorstCaseCostUsd,
+} from '../image-budget.js';
 import type { GatewayMethodRuntime } from './types.js';
 import { defineAuditedMethod } from './types.js';
 import { gatewayMethodParamDecoders } from './params.js';
@@ -43,6 +50,7 @@ async function recordImageProviderAttempt(
   logicalCallId: string,
   providerAttempt: ImageProviderAttempt,
   falCostEstimate?: FalImageCostEstimate,
+  paidImagePricing?: { perImageUsd: number | undefined; worstCaseUsd: number | undefined },
 ): Promise<void> {
   const recorder = runtime.modelUsageRecorder;
   if (!recorder) return;
@@ -115,9 +123,11 @@ async function recordImageProviderAttempt(
         : {})),
       ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
       ...(params.chargeLane ? { chargeLane: params.chargeLane } : {}),
-      chargeSurface: providerAttempt.provider === 'fal'
-        ? 'paidImageGeneration'
-        : 'localImageGeneration',
+      // Every non-local provider is a paid surface (6da92: OpenRouter images
+      // were labelled local).
+      chargeSurface: isLocalImageProvider(providerAttempt.provider)
+        ? 'localImageGeneration'
+        : 'paidImageGeneration',
       ...(params.chargeEventId ? { chargeEventId: params.chargeEventId } : {}),
       ...(params.chargeRunId ? { chargeRunId: params.chargeRunId } : {}),
       ...(params.chargeRootRunId ? { chargeRootRunId: params.chargeRootRunId } : {}),
@@ -138,7 +148,17 @@ async function recordImageProviderAttempt(
     cacheReadTokens: 0,
     cacheWriteTokens: 0,
     totalTokens: 0,
-    ...(costEstimate && estimatedCostUsd !== undefined ? {
+    ...(providerAttempt.provider === 'openrouter' ? {
+      ...imageAttemptCost({
+        status: providerAttempt.status,
+        providerCostUsd: result?.providerCostUsd,
+        perImageUsd: paidImagePricing?.perImageUsd,
+        imageCount,
+        worstCaseUsd: paidImagePricing?.worstCaseUsd,
+        httpRefusal: error instanceof OpenRouterImageError && error.status !== undefined,
+      }),
+      currency: 'USD',
+    } : costEstimate && estimatedCostUsd !== undefined ? {
       estimatedCostUsd,
       effectiveCostUsd: estimatedCostUsd,
       costSource: 'estimate' as const,
@@ -175,8 +195,35 @@ async function runImageWithUsage(
     'FAL_API_KEY',
   ) ?? '';
   const falCostEstimatesByAttempt = new Map<number, FalImageCostEstimate>();
+  const paidImagePricingByAttempt = new Map<number, { perImageUsd: number | undefined; worstCaseUsd: number | undefined }>();
   const falCostEstimateRequests = new Map<string, Promise<FalImageCostEstimate>>();
   const beforeProviderAttempt = async (providerAttempt: ImageProviderAttemptStart): Promise<void> => {
+    if (providerAttempt.provider === 'openrouter') {
+      const pricing = findImageModelPricing(
+        runtime.imageConfig?.modelRegistry?.imageModels,
+        mode,
+        providerAttempt.model,
+      );
+      const worstCaseUsd = pricing ? imageWorstCaseCostUsd(pricing.perImageUsd, params.numImages ?? 1) : undefined;
+      paidImagePricingByAttempt.set(providerAttempt.attempt, { perImageUsd: pricing?.perImageUsd, worstCaseUsd });
+      await admitPaidImageDispatch({
+        budget: runtime.modelBudget,
+        budgetEnforced: runtime.modelBudget?.isEnforced() === true,
+        provider: providerAttempt.provider,
+        model: providerAttempt.model,
+        imageCount: params.numImages ?? 1,
+        worstCaseUsd,
+        // The fleet budget query needs the owning companion; the authenticated
+        // connection supplies it when the call did not.
+        correlation: {
+          ...params,
+          ...(!params.companionId && runtime.authenticatedCompanionId()
+            ? { companionId: runtime.authenticatedCompanionId() }
+            : {}),
+        },
+      });
+      return;
+    }
     if (providerAttempt.provider !== 'fal') return;
     const unitQuantity = params.numImages ?? 1;
     const cacheKey = `${providerAttempt.model}:${String(unitQuantity)}`;
@@ -239,6 +286,7 @@ async function runImageWithUsage(
         logicalCallId,
         providerAttempt,
         falCostEstimatesByAttempt.get(providerAttempt.attempt),
+        paidImagePricingByAttempt.get(providerAttempt.attempt),
       );
     },
   });

@@ -14,6 +14,7 @@ import { ReferenceExternalChannelBridge } from './reference-bridge.js';
 
 function adapter(instanceId: string, token: string): ExternalChannelAdapter {
   const created = new ExternalChannelAdapter({
+    observer: { authorId: 'external-companion:test', displayName: 'Test Companion' },
     config: {
       instanceId, label: instanceId, companionId: EXTERNAL_CHANNEL_TEST_COMPANION_ID,
       limits: EXTERNAL_CHANNEL_TEST_LIMITS,

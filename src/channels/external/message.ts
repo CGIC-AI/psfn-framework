@@ -9,6 +9,10 @@ import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { classifyChannelEnvelope } from '../../system/trust/policy.js';
 import { EXTERNAL_CHANNEL_PLUGIN_ID, type ExternalChannelLimits } from './config.js';
 import type { ExternalChannelInboundMessage } from './protocol.js';
+import {
+  buildExternalMessageAddressing,
+  type ExternalObserverIdentity,
+} from './message-addressing.js';
 
 export function externalChannelIdPrefix(instanceId: string): string {
   return `${EXTERNAL_CHANNEL_PLUGIN_ID}:${instanceId}:`;
@@ -53,6 +57,7 @@ function parseSentAt(sentAt: string | undefined, receivedAt: Date): Date {
 
 export interface ExternalInboundContext {
   instanceId: string;
+  observer: ExternalObserverIdentity;
   intakeScreening: IntakeScreeningService | null;
   receivedAt: Date;
 }
@@ -69,10 +74,15 @@ export async function toExternalSubstrateMessage(
   const channelPrivacy = classifyChannelEnvelope(channelId, { isDirectMessage }).privacy;
   // A bridge asserts no platform role or relationship, so its authors take the
   // same least-privileged DM-conditioned trust floor Telegram uses.
+  const sourceClass = isDirectMessage ? 'regular_contact' as const : 'public_contact' as const;
+  const authorId = `${prefix}${message.senderId}`;
+  const replyToMessageId = message.replyToMessageId
+    ? `${prefix}${message.replyToMessageId}`
+    : undefined;
   const screened = await screenChatMessageBody({
     content: message.text,
     screening: context.intakeScreening,
-    sourceClass: isDirectMessage ? 'regular_contact' : 'public_contact',
+    sourceClass,
     surface: 'external',
     channelId,
     messageId,
@@ -84,13 +94,25 @@ export async function toExternalSubstrateMessage(
     channelId,
     channelType: 'external',
     isDirectMessage,
-    authorId: `${prefix}${message.senderId}`,
+    authorId,
     authorName: message.senderName,
     content: screened.content,
     timestamp,
-    ...(message.replyToMessageId ? { replyToMessageId: `${prefix}${message.replyToMessageId}` } : {}),
+    ...(replyToMessageId ? { replyToMessageId } : {}),
     routing: {
       source: 'external',
+      // w1lc2: the validated envelope is what makes a group conversation a
+      // VERIFIED room for the participation gate; without it the room-signal
+      // stage fails closed (room_unverified) before any candidate exists.
+      addressing: buildExternalMessageAddressing({
+        author: { authorId, authorName: message.senderName },
+        observer: context.observer,
+        channelId,
+        isDirectMessage,
+        addressedToCompanion: message.addressedToCompanion === true,
+        ...(replyToMessageId ? { replyToMessageId } : {}),
+        sourceClass,
+      }),
       // uf06o: like Discord and Telegram, only a direct message or a group line
       // the platform addressed to the companion is a responding turn. Ambient
       // group chatter is observation: the agent's shared observe path runs the

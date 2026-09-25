@@ -25,6 +25,7 @@ tests=(
   "probe-provenance.test.mjs" # chat cases auto-attach testing-harness provenance headers
   "case-chat-provenance.test.mjs" # every case-module chat dispatch carries run provenance
   "target-contract.test.mjs"   # A: tier flip uses the canonical capabilities editor
+  "target-companion.test.mjs"  # gz50o: kube COMPANION_ID selects one fleet companion, fail closed
   "flip-abort.test.mjs"        # C: an unconfirmed forward flip aborts the phase
   "coverage-hole-continuation.test.mjs" # case-local config holes do not abort later tiers
   "persisted-proofs.test.mjs"  # S10 persisted-state proofs fail closed

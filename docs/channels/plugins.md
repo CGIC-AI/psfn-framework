@@ -412,6 +412,36 @@ each other. The message body is screened by chat intake as the `external`
 surface. The author gets the least-privileged DM-conditioned trust class
 (`regular_contact` in direct conversations, `public_contact` in groups).
 
+#### Group rooms and participation
+
+Every inbound line carries a validated `external` addressing envelope (bead
+`psfn-framework-w1lc2`): the bridge-declared `conversationKind` is the room
+scope, `addressedToCompanion: true` is a connector mention of the companion's
+own account, and the author standing is `public_contact` / role `unknown` /
+size `unknown`. That envelope is what makes a group conversation a *verified*
+room; without it the room-signal gate refuses every line with
+`room_unverified` before a participation candidate exists. The companion's own
+account is `external-companion:<id>`, which no bridge sender id can take, and
+its display name is the companion's `companions.json` `displayName` (without
+one, the gateway logs a warning and names it by the companion id).
+
+For a line naming the companion to reach the appraiser and an appraised reply
+to be queued for `channel_pull_outbound`, the companion needs (all owner
+files, no env):
+
+- `scheduler.json` `socialAutonomy.passiveNameCandidate.enabled: true` with an
+  autonomy level of at least `contextual` for the room;
+- `socialAutonomy.roomSignal.enabled: true`. A line that *starts* with the
+  companion's name is a direct address and is admitted for any author. A name
+  later in the line is a contextual summons, admitted only for authors whose
+  class is in `roomSignal.contextualEligibleSourceClasses`; external group
+  authors are `public_contact`, so add it there to let them summon the
+  companion by name (otherwise the line is suppressed `untrusted_room_member`);
+- `socialAutonomy.appraiser.enabled: true`;
+- delivery of an appraised reply runs through the speaking arbiter, so the
+  gateway must be a companion fleet (`multiCompanion`) with a charge policy and
+  `socialAutonomy.egressLease.mode` other than `off`.
+
 ### Isolation
 
 A bridge can never take down the gateway, agent turns or another channel:

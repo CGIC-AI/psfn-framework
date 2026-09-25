@@ -81,6 +81,16 @@ interface DiscordPrimaryUserAuthority {
   };
 }
 
+function resolvePluginCompanionDisplayName(
+  fleet: SubstrateConfig['companionFleet'],
+  companionId: string | undefined,
+): { companionDisplayName?: string } {
+  if (!companionId) return {};
+  const displayName = fleet?.companions
+    .find(companion => companion.companionId === companionId)?.displayName?.trim();
+  return displayName ? { companionDisplayName: displayName } : {};
+}
+
 /**
  * Resolve only system-owner roster entries that prove a Discord subject owns
  * the exact companion behind this bot account. Mutable social labels are not
@@ -409,6 +419,7 @@ export async function loadGatewayChannelSurfaces(
     contextFor: (pluginId, section) => ({
       log: input.log,
       shutdownTimeoutMs: Math.ceil(input.bootstrap.shutdownForceExitTimeoutMs / 2),
+      ...resolvePluginCompanionDisplayName(input.config.companionFleet, section.companionId),
       intakeScreening: section.enabled
         ? resolveChannelIntakeScreening(
           intakeScreeningRouting,

@@ -21,6 +21,7 @@ describeExternalChannelBridgeConformance('reference bridge', endpoint => new Ref
 describe('loopback platform round trip', () => {
   it('relays a user message to the companion and a companion send back to the platform', async () => {
     const adapter = new ExternalChannelAdapter({
+      observer: { authorId: 'external-companion:test', displayName: 'Test Companion' },
       config: {
         instanceId: 'loopback',
         label: 'Loopback',

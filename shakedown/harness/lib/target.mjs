@@ -80,7 +80,9 @@ export function resolveTarget(env = process.env) {
     env,
   );
   const companionId = isKube
-    ? requireEnv('COMPANION_ID', 'fleet companion selected by the unified Garden route', env)
+    ? requireRfc4122CompanionId(
+      requireEnv('COMPANION_ID', 'fleet companion selected by the unified Garden route and the chat selector', env),
+    )
     : null;
   const adminBaseUrl = isKube
     ? `${chatBaseUrl.replace(/\/$/u, '')}/companions/${encodeURIComponent(companionId)}/garden`
@@ -106,6 +108,19 @@ export function resolveTarget(env = process.env) {
     ),
     tierFlipPollMs: optionalIntEnv('PSFN_TIER_FLIP_POLL_MS', 1500, env),
   };
+}
+
+/**
+ * The kube target's companion drives both the Garden route and the chat
+ * selector, so it must be an exact fleet companion id (fail closed on anything
+ * else; the gateway then refuses a companion outside the fleet).
+ */
+function requireRfc4122CompanionId(raw) {
+  const value = raw.trim();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value)) {
+    throw new InvalidEnvError('COMPANION_ID', `expected an RFC 4122 fleet companion id, got ${JSON.stringify(raw)}`);
+  }
+  return value.toLowerCase();
 }
 
 function adminAuthHeaders(adminToken, contentType = null) {

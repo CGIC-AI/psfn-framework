@@ -74,6 +74,12 @@ export interface EpisodicRetrievalInput {
   maxDepth?: number;
   maxEpisodesPerChain?: number;
   memoryRetrievalPolicy?: MemoryRetrievalPolicy;
+  /**
+   * Receives the id of each candidate episode the visibility gate withholds
+   * from this turn, so deliberate tool results can report a content-free
+   * gated count instead of implying no memory exists (psfn-framework-jequ8).
+   */
+  onVisibilityWithheld?: (episodeId: string) => void;
 }
 
 export type EpisodicLexicalSearchInput = Omit<
@@ -111,6 +117,12 @@ export interface EpisodicTimelineInput {
   maxDepth?: number;
   maxEpisodesPerRoot?: number;
   memoryRetrievalPolicy?: MemoryRetrievalPolicy;
+  /**
+   * Receives the id of each candidate episode the visibility gate withholds
+   * from this turn, so deliberate tool results can report a content-free
+   * gated count instead of implying no memory exists (psfn-framework-jequ8).
+   */
+  onVisibilityWithheld?: (episodeId: string) => void;
 }
 
 interface EpisodeCandidate {
@@ -223,13 +235,25 @@ async function retrieveRankedEpisodicChains(
     limit: positiveIntegerOr(input.scanLimit, episodicPolicy.scanLimit),
   })).map(cloneEpisode);
   const episodeIndex = new Map<string, Episode>();
+  const isRootCandidate = (candidate: EpisodeCandidate | null): candidate is EpisodeCandidate => (
+    candidate !== null && candidate.score >= episodicPolicy.minRootMatchScore
+  );
   const roots = episodes
     .map((episode) => parseEpisode(episode))
-    .filter(episode => isEpisodeVisibleForTurn(episode, input))
+    .filter((episode) => {
+      if (isEpisodeVisibleForTurn(episode, input)) return true;
+      // Report only withheld episodes that would have matched the query.
+      if (
+        input.onVisibilityWithheld
+        && isEpisodeWithheldByVisibility(episode, input)
+        && isRootCandidate(scoreEpisode(episode, queryTokens, normalizedQuery, input.scopeQuery))
+      ) {
+        input.onVisibilityWithheld(episode.id);
+      }
+      return false;
+    })
     .map(episode => scoreEpisode(episode, queryTokens, normalizedQuery, input.scopeQuery))
-    .filter((candidate): candidate is EpisodeCandidate => (
-      candidate !== null && candidate.score >= episodicPolicy.minRootMatchScore
-    ))
+    .filter(isRootCandidate)
     .sort(compareEpisodeCandidates);
 
   for (const episode of episodes) {
@@ -320,10 +344,13 @@ export async function buildEpisodicChainFromRoot(
   const root = await store.getEpisode(input.episodeId);
   if (!root) return null;
   const parsedRoot = parseEpisode(cloneEpisode(root));
-  if (!isEpisodeVisibleForTurn(parsedRoot, {
-    ...input,
-    contextText: input.contextText ?? '',
-  })) return null;
+  const rootVisibilityInput = { ...input, contextText: input.contextText ?? '' };
+  if (!isEpisodeVisibleForTurn(parsedRoot, rootVisibilityInput)) {
+    if (isEpisodeWithheldByVisibility(parsedRoot, rootVisibilityInput)) {
+      input.onVisibilityWithheld?.(parsedRoot.id);
+    }
+    return null;
+  }
   if (input.scopeQuery?.mode === 'only' && !episodeMatchesScopeQuery(parsedRoot, input.scopeQuery)) {
     return null;
   }
@@ -412,7 +439,13 @@ export async function retrieveEpisodicTimeline(
   }
 
   const visibleRoots = scannedEpisodes
-    .filter(episode => isEpisodeVisibleForTurn(episode, visibilityInput))
+    .filter((episode) => {
+      if (isEpisodeVisibleForTurn(episode, visibilityInput)) return true;
+      if (isEpisodeWithheldByVisibility(episode, visibilityInput)) {
+        input.onVisibilityWithheld?.(episode.id);
+      }
+      return false;
+    })
     .filter(episode => input.includeEpisode?.(episode) !== false)
     .slice(0, limit);
   const inRangeEpisodeIds = new Set(visibleRoots.map(episode => episode.id));
@@ -764,6 +797,15 @@ export function isEpisodeVisibleForTurn(episode: Episode, input: EpisodicRetriev
 
   // E3.3: the retired 'broadcast' visibility check is now the envelope flag.
   return !input.channelDisclosure.broadcast && trustAtLeast(input.trustLevel, 'trusted');
+}
+
+/**
+ * An episode the trust/room gate hides from this turn. An episode excluded
+ * only because the caller asked for a narrower scope is filtered, not gated.
+ */
+function isEpisodeWithheldByVisibility(episode: Episode, input: EpisodicRetrievalInput): boolean {
+  if (isEpisodeVisibleForTurn(episode, input)) return false;
+  return !(input.scopeQuery?.mode === 'only' && !episodeMatchesScopeQuery(episode, input.scopeQuery));
 }
 
 function episodeMatchesScopeQuery(episode: Episode, scopeQuery: MemoryScopeQuery | undefined): boolean {

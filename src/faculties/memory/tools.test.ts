@@ -584,7 +584,7 @@ describe('createMemoryTool', () => {
     expect(text).not.toContain('Quarantined answer');
   });
 
-  it('makes privacy-withheld and absent lexical search results indistinguishable to chat callers', async () => {
+  it('distinguishes privacy-withheld from absent search results only by a content-free withheld note (jequ8)', async () => {
     const hiddenStore = mockUnifiedStore();
     hiddenStore.searchByText.mockResolvedValue([
       {
@@ -613,9 +613,12 @@ describe('createMemoryTool', () => {
     const hidden = resultText(fromAny(await hiddenTool.execute('memory-call-hidden-search', input)));
     const absent = resultText(fromAny(await emptyTool.execute('memory-call-empty-search', input)));
 
-    expect(hidden).toBe(absent);
-    expect(hidden).toBe('No memories matched the search query.');
+    expect(absent).toBe('No memories matched the search query.');
+    expect(hidden.startsWith('No memories matched the search query.\nWithheld by visibility gating: 1 matching memory')).toBe(true);
+    expect(hidden).toContain('not visible from this conversation');
     expect(hidden).not.toContain('Protected cross-room answer');
+    expect(hidden).not.toContain('mem-hidden-room');
+    expect(hidden).not.toContain('discord:room:hidden');
   });
 
   it('census reports only visible current counts without enumerating lifecycle or privacy records', async () => {

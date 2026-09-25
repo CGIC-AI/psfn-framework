@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { fromPartial } from '@total-typescript/shoehorn';
 import type { ToolResultMessage } from '@earendil-works/pi-ai';
 import { EventBus } from '../../shared/event-bus.js';
+import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 import { executeToolCallsWithScheduler } from '../agent/tool-call-scheduler.js';
 import type {
   PendingFollowUp,
@@ -69,11 +70,27 @@ function createPendingFollowUpStore() {
       return record;
     }),
     list: vi.fn(async () => records),
-    dequeue: vi.fn(async () => null),
+    dequeue: vi.fn(async (id: string) => records.find(record => record.id === id) ?? null),
+    peek: vi.fn(async (id: string) => records.find(record => record.id === id) ?? null),
   };
 }
 
+/** The companion's owner at primary trust in a private room (sees every channel). */
+function asOwner<T>(fn: () => Promise<T>): Promise<T> {
+  return runWithRequestContext({
+    callType: 'tool', purpose: 'agent.turn', channelId: 'api:owner-console',
+    viewerTrustLevel: 'primary', viewerChannelPrivacy: 'private',
+  }, fn);
+}
+
 async function executeScheduleCall(
+  tool: ReturnType<typeof createScheduleTool>,
+  args: Record<string, unknown>,
+): Promise<ToolResultMessage> {
+  return await asOwner(() => executeScheduleCallAsViewer(tool, args));
+}
+
+async function executeScheduleCallAsViewer(
   tool: ReturnType<typeof createScheduleTool>,
   args: Record<string, unknown>,
 ): Promise<ToolResultMessage> {
@@ -391,5 +408,60 @@ describe('schedule tool', () => {
 
     expect(resultText(result)).toContain('scheduled prompt store is unavailable');
     expect(result.details.isError).toBe(true);
+  });
+
+  describe('viewer visibility (o5wf5)', () => {
+    const TRUSTED_ROOM = 'api:api-key-owner:kitchen-room';
+    const PUBLIC_ROOM = 'api:api-key-stranger:checkin-room';
+
+    function inRoom<T>(channelId: string, trust: 'trusted' | 'public', fn: () => Promise<T>): Promise<T> {
+      return runWithRequestContext({
+        callType: 'tool', purpose: 'agent.turn', channelId,
+        viewerTrustLevel: trust, viewerChannelPrivacy: 'private',
+      }, fn);
+    }
+
+    it('withholds a follow-up formed in a trusted room from a public-trust room', async () => {
+      const pendingFollowUpStore = createPendingFollowUpStore();
+      await pendingFollowUpStore.enqueue({
+        content: 'Surprise retirement dinner at the harbor bistro; confidential.',
+        priority: 'medium',
+        timing: 'next_conversation',
+        channelId: TRUSTED_ROOM,
+        channelType: 'api',
+        authorId: 'system:intention',
+        authorName: 'Whisper',
+        contextSummary: 'confidential planning thread',
+      } as PendingFollowUpCreateInput);
+      const { tool } = createTool({ pendingFollowUpStore });
+
+      const publicList = await inRoom(PUBLIC_ROOM, 'public', () => executeScheduleCallAsViewer(tool, { action: 'list' }));
+      const publicText = resultText(publicList);
+      expect(publicText).not.toContain('retirement dinner');
+      expect(publicText).not.toContain(TRUSTED_ROOM);
+      expect(JSON.parse(publicText)).toMatchObject({ counts: { followUps: 0 }, withheldByVisibility: 1 });
+
+      const activate = await inRoom(PUBLIC_ROOM, 'public', () => executeScheduleCallAsViewer(tool, {
+        action: 'activate_follow_up', follow_up_id: 'follow-up-1',
+      }));
+      expect(activate.isError).toBe(true);
+      expect(pendingFollowUpStore.dequeue).not.toHaveBeenCalled();
+
+      const ownRoom = await inRoom(TRUSTED_ROOM, 'trusted', () => executeScheduleCallAsViewer(tool, { action: 'list' }));
+      expect(resultText(ownRoom)).toContain('retirement dinner');
+    });
+
+    it('refuses to schedule a follow-up into a room the conversation cannot read', async () => {
+      const pendingFollowUpStore = createPendingFollowUpStore();
+      const { tool } = createTool({ pendingFollowUpStore });
+      const planted = await inRoom(PUBLIC_ROOM, 'public', () => executeScheduleCallAsViewer(tool, {
+        action: 'create_follow_up',
+        content: 'planted',
+        channel_id: TRUSTED_ROOM,
+        channel_type: 'api',
+      }));
+      expect(planted.isError).toBe(true);
+      expect(pendingFollowUpStore.enqueue).not.toHaveBeenCalled();
+    });
   });
 });

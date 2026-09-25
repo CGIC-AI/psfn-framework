@@ -680,7 +680,7 @@ describe("Postgres ICP fatigue regulation reservations", () => {
   );
 
   it(
-    "does not count a turn whose peer failed to appraise or process it as relationship pressure (0eq2x, 9rima)",
+    "does not count a turn whose peer appraisal failed as relationship pressure (0eq2x)",
     async () => {
       if (!harness)
         throw new Error("Postgres integration harness is unavailable");
@@ -693,7 +693,6 @@ describe("Postgres ICP fatigue regulation reservations", () => {
       const fixtures = [
         { conversationId: "55555555-5555-4555-8555-000000000071", closeReasonCode: "peer_appraisal_unavailable" as const },
         { conversationId: "55555555-5555-4555-8555-000000000072", closeReasonCode: "conversation_ended" as const },
-        { conversationId: "55555555-5555-4555-8555-000000000073", closeReasonCode: "peer_processing_failed" as const },
       ];
       try {
         for (const [index, fixture] of fixtures.entries()) {

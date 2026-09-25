@@ -1,6 +1,5 @@
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import type { CompanionDeliveryFailureReason } from '../../boundary/gateway/protocol.js';
-import type { IcpActivityEndReasonCode } from '../../shared/contracts/icp-autonomy.js';
 import {
   DISCORD_DELIVERY_FAILURE_NOTICE,
   DISCORD_TURN_FAILURE_NOTICE,
@@ -106,14 +105,6 @@ export interface CompanionFailureOutcomePorts {
     messageId: string;
     reason: CompanionDeliveryFailureReason;
   }): Promise<unknown>;
-  /**
-   * Ends a correlated ICP conversation whose inbound turn failed as a system
-   * error, so the episode does not stay active with nothing left to answer.
-   */
-  companionEndIcpEpisodeActivity(input: {
-    conversationId: string;
-    reasonCode: IcpActivityEndReasonCode;
-  }): Promise<unknown>;
   audit: PumpAuditPort;
   log: PumpLogPort;
 }
@@ -130,8 +121,6 @@ export async function handleCompanionTurnFailure(params: {
   channelId: string;
   messageId: string;
   failureReason: CompanionDeliveryFailureReason;
-  /** The inbound message's ICP conversation, when it was correlated. */
-  icpConversationId?: string;
   ports: CompanionFailureOutcomePorts;
 }): Promise<void> {
   const { error, channelId, messageId, ports } = params;
@@ -141,29 +130,6 @@ export async function handleCompanionTurnFailure(params: {
   const errorText = toErrorMessage(error);
   ports.log.error('Error handling companion message', { channelId, messageId, error: errorText });
   ports.audit.append('companion.message.error', { channelId, messageId, error: errorText, reason });
-  // 9rima: a processing failure leaves nothing that will answer the peer. End
-  // the episode with a system-failure reason (never relationship pressure)
-  // instead of leaving it active. A reply-delivery failure keeps its durable
-  // delivery recovery and is not ended here.
-  if (params.icpConversationId && reason === 'processing_failed') {
-    try {
-      await ports.companionEndIcpEpisodeActivity({
-        conversationId: params.icpConversationId,
-        reasonCode: 'peer_processing_failed',
-      });
-      ports.audit.append('companion.message.icp_episode_ended', {
-        channelId, messageId, conversationId: params.icpConversationId, reasonCode: 'peer_processing_failed',
-      });
-    } catch (endError) {
-      const endErrorText = toErrorMessage(endError);
-      ports.log.error('Failed to end ICP episode after companion processing failure', {
-        channelId, messageId, conversationId: params.icpConversationId, error: endErrorText,
-      });
-      ports.audit.append('companion.message.icp_episode_end_error', {
-        channelId, messageId, conversationId: params.icpConversationId, error: endErrorText,
-      });
-    }
-  }
   try {
     await ports.companionReportFailure({ channelId, messageId, reason });
     ports.audit.append('companion.message.failure_reported', { channelId, messageId, reason });

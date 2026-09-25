@@ -809,8 +809,8 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
           AND outcome IN ('pending', 'delivering', 'delivered', 'no_reply')
           AND reserved_at_ms BETWEEN $5::bigint AND $4::bigint
           AND ($11::uuid IS NULL OR turn_id <> $11::uuid)
-          -- 0eq2x/9rima: a turn the peer failed to appraise or process
-          -- (system timeout/error) is not relationship pressure.
+          -- 0eq2x: a turn the peer failed to appraise (system
+          -- timeout/error) is not relationship pressure.
           AND NOT EXISTS (
             SELECT 1 FROM icp_conversation_episodes AS episode
             WHERE episode.conversation_id::text = reservation.conversation_id::text

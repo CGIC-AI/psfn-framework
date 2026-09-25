@@ -1589,61 +1589,6 @@ describe('registerGatewayMessageHandlers', () => {
     expect(harness.gateway.companionReportFailure).not.toHaveBeenCalled();
   });
 
-  it('ends the ICP episode as peer_processing_failed when the correlated inbound turn throws (9rima)', async () => {
-    const harness = createHarness({
-      config: { companionId: ICP_B } as SubstrateConfig,
-      handleMessage: async () => {
-        throw new Error('InternalState field "pendingFollowUp[0].channelType" is invalid');
-      },
-    });
-
-    await harness.onCompanionMessage(makeCorrelatedCompanionMessage());
-
-    await vi.waitFor(() => {
-      expect(harness.gateway.companionReportFailure).toHaveBeenCalledWith({
-        channelId: ICP_CHANNEL,
-        messageId: INBOUND_ICP_MESSAGE_ID,
-        reason: 'processing_failed',
-      });
-    });
-    expect(harness.gateway.companionEndIcpEpisodeActivity).toHaveBeenCalledWith({
-      conversationId: inboundIcpCorrelation.conversationId,
-      reasonCode: 'peer_processing_failed',
-    });
-  });
-
-  it('leaves a reply-delivery failure to durable delivery recovery instead of ending the episode', async () => {
-    const reply = {
-      ...makeResponse('durable reply'),
-      channelId: ICP_CHANNEL,
-      metadata: {
-        ...makeResponse('').metadata,
-        turnId: replyIcpCorrelation.turnId,
-        requestId: replyIcpCorrelation.requestId,
-        icpCorrelation: replyIcpCorrelation,
-      },
-    };
-    const harness = createHarness({
-      config: { companionId: ICP_B } as SubstrateConfig,
-      handleMessage: async (_message, lifecycle) => {
-        if (!lifecycle) throw new Error('test expected delivery lifecycle');
-        await lifecycle.finalizeDelivery(reply);
-        return reply;
-      },
-      companionSend: async () => {
-        throw new Error('peer route unavailable');
-      },
-    });
-
-    await harness.onCompanionMessage(makeCorrelatedCompanionMessage());
-    await vi.waitFor(() => {
-      expect(harness.gateway.companionReportFailure).toHaveBeenCalledWith(expect.objectContaining({
-        reason: 'reply_delivery_failed',
-      }));
-    });
-    expect(harness.gateway.companionEndIcpEpisodeActivity).not.toHaveBeenCalled();
-  });
-
   it('recovers a failed correlated reply after restart without another generated turn', async () => {
     const reply = {
       ...makeResponse('durable reply'),

@@ -111,9 +111,6 @@ export const ICP_AUTONOMY_REASON_CODES = [
   // 0eq2x: the peer's participation appraisal failed as a system (timeout,
   // model error, unparseable output) — not a social decline, never pressure.
   'peer_appraisal_unavailable',
-  // 9rima: the peer's turn for a delivered message failed as a system error
-  // (the turn threw before any reply) — not a social decline, never pressure.
-  'peer_processing_failed',
   'fatigue_exhausted',
   'cost_hard_stop',
   'peer_blocked',
@@ -161,7 +158,6 @@ export const ICP_ACTIVITY_END_REASON_CODES = [
   'inactivity_timeout',
   'conversation_ended',
   'peer_appraisal_unavailable',
-  'peer_processing_failed',
 ] as const satisfies readonly (typeof ICP_AUTONOMY_REASON_CODES)[number][];
 
 export type IcpActivityEndReasonCode = typeof ICP_ACTIVITY_END_REASON_CODES[number];
@@ -173,7 +169,6 @@ export type IcpActivityEndReasonCode = typeof ICP_ACTIVITY_END_REASON_CODES[numb
  */
 export const ICP_SYSTEM_FAILURE_END_REASON_CODES = [
   'peer_appraisal_unavailable',
-  'peer_processing_failed',
 ] as const satisfies readonly IcpActivityEndReasonCode[];
 export type IcpAutonomyReasonCode = typeof ICP_AUTONOMY_REASON_CODES[number];
 

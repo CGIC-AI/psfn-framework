@@ -17,6 +17,7 @@
     updatePrompt,
     togglePrompt,
     rollbackPrompt,
+    deletePromptLayer,
     getPromptDiff,
     countPromptTokens,
   } from '$lib/api/endpoints/prompts';
@@ -46,6 +47,9 @@
     formatTokenCount,
     groupRuntimeMacroHints,
     isProtected,
+    canDeleteLayer,
+    creatableLayerTypes,
+    operatorIdentifierError,
     layerBadge,
     reorderNorthStarItems,
     roleBadge,
@@ -62,6 +66,9 @@
   let runtimeBlocks = $state<PromptRuntimeBlock[]>([]);
   let runtimeLayerCoverage = $state<{ ok: boolean; entries: PromptRuntimeLayerCoverageEntry[] }>({ ok: true, entries: [] });
   let runtimeMacroHints = $state<PromptRuntimeMacroHint[]>([]);
+  // Server-authoritative (psfn-framework-cavke): only operator writers see the
+  // operator layer type, its identifier field and the delete action.
+  let canWriteOperatorLayers = $state(false);
   let runtimeBlockDrafts = $state<Record<string, string>>({});
   let runtimeBlockSaving = $state<Record<string, boolean>>({});
   let runtimeBlockMessages = $state<Record<string, string>>({});
@@ -338,6 +345,7 @@
     runtimeBlocks = data?.runtimeBlocks ?? [];
     runtimeLayerCoverage = data?.runtimeLayerCoverage ?? { ok: true, entries: [] };
     runtimeMacroHints = data?.runtimeMacroHints ?? [];
+    canWriteOperatorLayers = data?.canWriteOperatorLayers === true;
     syncRuntimeBlockDrafts(runtimeBlocks);
   }
 
@@ -530,6 +538,26 @@
     }
   }
 
+  async function handleDeleteLayer(layer: PromptLayer) {
+    if (!canDeleteLayer(layer, canWriteOperatorLayers)) return;
+    if (typeof window !== 'undefined'
+      && !window.confirm(`Delete operator layer "${layer.name}"? This cannot be undone.`)) {
+      return;
+    }
+    deletingLayerId = layer.id;
+    try {
+      const result = await deletePromptLayer(layer.id);
+      showToast(result.message || 'Layer deleted');
+      expandedLayerId = null;
+      detailData = null;
+      await refreshList();
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Failed to delete layer';
+    } finally {
+      deletingLayerId = null;
+    }
+  }
+
   function startEditContent(layer: PromptLayer) {
     editRawContent = layer.content;
     editName = layer.name;
@@ -541,6 +569,13 @@
   }
 
   async function saveContent(layerId: string) {
+    if (layers.find(layer => layer.id === layerId)?.type === 'operator') {
+      const identifierError = operatorIdentifierError(editIdentifier);
+      if (identifierError) {
+        error = identifierError;
+        return;
+      }
+    }
     savingContent = true;
     saveMessage = '';
     try {
@@ -668,7 +703,12 @@
   // ── New layer form ──
   let showNewLayerForm = $state(false);
   let newLayerName = $state('');
-  let newLayerType = $state<'runtime' | 'channel' | 'task'>('runtime');
+  let newLayerType = $state<'runtime' | 'channel' | 'task' | 'operator'>('runtime');
+  let newLayerIdentifier = $state('');
+  let newLayerIdentifierError = $derived(
+    newLayerType === 'operator' ? operatorIdentifierError(newLayerIdentifier) : null
+  );
+  let deletingLayerId = $state<string | null>(null);
   let newLayerContent = $state('');
   let newLayerPriority = $state(10);
   let newLayerChannelType = $state('');
@@ -733,10 +773,11 @@
     newLayerPriority = 10;
     newLayerChannelType = '';
     newLayerTaskKind = '';
+    newLayerIdentifier = '';
   }
 
   async function handleCreateLayer() {
-    if (!newLayerName.trim()) return;
+    if (!newLayerName.trim() || newLayerIdentifierError) return;
     creatingLayer = true;
     try {
       const body: Record<string, unknown> = {
@@ -750,6 +791,9 @@
       }
       if (newLayerType === 'task' && newLayerTaskKind.trim()) {
         body.taskKind = newLayerTaskKind.trim();
+      }
+      if (newLayerType === 'operator') {
+        body.identifier = newLayerIdentifier.trim();
       }
       const result = await createPromptLayer(body);
       if (result.ok) {
@@ -896,9 +940,9 @@
               <span class="block text-sm font-medium text-shadow-700 mb-1">Type <span class="text-wilt-500">*</span></span>
               <select bind:value={newLayerType}
                 class="w-full px-3 py-1.5 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400">
-                <option value="runtime">Runtime</option>
-                <option value="channel">Channel</option>
-                <option value="task">Task</option>
+                {#each creatableLayerTypes(canWriteOperatorLayers) as layerType (layerType)}
+                  <option value={layerType}>{layerType.charAt(0).toUpperCase() + layerType.slice(1)}</option>
+                {/each}
               </select>
             </label>
             <label class="block">
@@ -913,6 +957,17 @@
               <span class="block text-sm font-medium text-shadow-700 mb-1">Channel Type <span class="text-shadow-500">(optional -- e.g. discord_text, api, admin)</span></span>
               <input type="text" bind:value={newLayerChannelType} placeholder="discord_text"
                 class="w-full px-3 py-1.5 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400" />
+            </label>
+          {/if}
+          {#if newLayerType === 'operator'}
+            <label class="block mb-3">
+              <span class="block text-sm font-medium text-shadow-700 mb-1">Identifier <span class="text-wilt-500">*</span> <span class="text-shadow-500">(always-on operator instruction, e.g. operator.briefing)</span></span>
+              <input type="text" bind:value={newLayerIdentifier} placeholder="operator.briefing"
+                aria-invalid={newLayerIdentifierError !== null}
+                class="w-full px-3 py-1.5 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400" />
+              {#if newLayerIdentifierError}
+                <span class="text-sm text-wilt-600 mt-1">{newLayerIdentifierError}</span>
+              {/if}
             </label>
           {/if}
           {#if newLayerType === 'task'}
@@ -937,7 +992,7 @@
           <div class="flex items-center gap-2">
             <button
               onclick={handleCreateLayer}
-              disabled={creatingLayer || !newLayerName.trim()}
+              disabled={creatingLayer || !newLayerName.trim() || newLayerIdentifierError !== null}
               class="px-4 py-1.5 rounded-lg bg-gold-600 text-white text-sm font-medium hover:bg-gold-700 disabled:opacity-50 transition-colors"
             >
               {creatingLayer ? 'Creating...' : 'Create Layer'}
@@ -1106,7 +1161,7 @@
             {@const badge = layerBadge(layer.type)}
             {@const rBadge = roleBadge(layer.role)}
             {@const isExpanded = expandedLayerId === layer.id}
-            {@const locked = isProtected(layer)}
+            {@const locked = isProtected(layer, canWriteOperatorLayers)}
             {@const tokens = promptTokenCount(layer.content)}
             {@const isDragSource = dragSourceIdx === idx}
             {@const isDragTarget = dragOverIdx === idx}
@@ -1255,12 +1310,23 @@
                                   {diffLoading ? 'Loading...' : showDiff ? 'Hide Diff' : 'Show Diff'}
                                 </button>
                               {/if}
-                              <button
-                                onclick={() => startEditContent(dl)}
-                                class="text-sm text-gold-600 hover:text-gold-700 hover:underline font-medium"
-                              >
-                                Edit
-                              </button>
+                              {#if !isProtected(dl, canWriteOperatorLayers)}
+                                <button
+                                  onclick={() => startEditContent(dl)}
+                                  class="text-sm text-gold-600 hover:text-gold-700 hover:underline font-medium"
+                                >
+                                  Edit
+                                </button>
+                              {/if}
+                              {#if canDeleteLayer(dl, canWriteOperatorLayers)}
+                                <button
+                                  onclick={() => handleDeleteLayer(dl)}
+                                  disabled={deletingLayerId === dl.id}
+                                  class="text-sm text-wilt-600 hover:text-wilt-700 hover:underline font-medium disabled:opacity-50"
+                                >
+                                  {deletingLayerId === dl.id ? 'Deleting...' : 'Delete'}
+                                </button>
+                              {/if}
                             </div>
                           </div>
 

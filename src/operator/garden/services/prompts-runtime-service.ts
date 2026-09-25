@@ -23,7 +23,7 @@ import type { AdminPromptsServiceContext } from './prompts-service-context.js';
 export class PromptsRuntimeService {
   constructor(private readonly context: AdminPromptsServiceContext) {}
 
-  listPrompts(): AdminPromptListData {
+  listPrompts(): Omit<AdminPromptListData, 'canWriteOperatorLayers'> {
     const runtimeBlocks = this.listRuntimeBlocks();
     return {
       layers: this.context.deps.promptStore.getAll(),

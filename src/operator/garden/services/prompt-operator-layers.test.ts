@@ -167,4 +167,23 @@ describe('operator-type prompt layers through the Garden prompt API', () => {
       type: 'task', name: 'Task note', content: 'task scoped', taskKind: 'research',
     }), member)).toMatchObject({ ok: true, layer: { type: 'task' } });
   });
+
+  it('tells the Garden list which principals may write operator layers (psfn-framework-cavke)', () => {
+    const { service } = harness();
+    for (const context of [ADMIN_TOKEN, SSO_OWNER, STANDALONE]) {
+      expect(service.listPrompts(context).canWriteOperatorLayers).toBe(true);
+    }
+    for (const context of [
+      fleetContext({ provider: 'testing_harness', role: 'owner' }),
+      fleetContext({ provider: 'discord', role: 'member' }),
+      { kind: 'public' } as unknown as GardenRequestContext,
+      undefined,
+    ]) {
+      expect(service.listPrompts(context).canWriteOperatorLayers).toBe(false);
+    }
+    // The read route's action does not grant write; the list flag reflects the principal.
+    expect(service.listPrompts(fleetContext({ provider: 'discord', role: 'owner' }, 'prompts.read'))
+      .canWriteOperatorLayers).toBe(true);
+  });
 });
+

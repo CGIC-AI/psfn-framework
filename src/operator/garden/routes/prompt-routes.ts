@@ -28,8 +28,8 @@ export function buildAdminPromptRoutes(options: {
     {
       method: 'GET',
       match: exactPath('/api/admin/prompts'),
-      handle: (_req, res) => {
-        sendJson(res, 200, promptsService.listPrompts());
+      handle: (_req, res, _params, context) => {
+        sendJson(res, 200, promptsService.listPrompts(context));
       },
     },
     {

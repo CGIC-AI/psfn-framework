@@ -1,4 +1,5 @@
 import type { GardenRequestContext } from '../garden-request-context.js';
+import { canWriteOperatorLayers } from './prompt-operator-layer-authority.js';
 import type { PromptLayerMetadataUpdate } from '../../../core/identity/prompt-store.js';
 import type {
   AdminConstitutionSnapshotData,
@@ -37,8 +38,11 @@ export class AdminPromptsDataService implements AdminPromptsService {
     this.snapshots = new PromptsSnapshotService(this.context);
   }
 
-  listPrompts(): AdminPromptListData {
-    return this.runtime.listPrompts();
+  listPrompts(requestContext?: GardenRequestContext): AdminPromptListData {
+    return {
+      ...this.runtime.listPrompts(),
+      canWriteOperatorLayers: canWriteOperatorLayers(requestContext),
+    };
   }
 
   getFoundationSnapshot(): AdminFoundationSnapshotData | null {

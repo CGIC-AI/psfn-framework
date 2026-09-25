@@ -73,6 +73,38 @@ describe('tool outcome final-response conformance', () => {
     })).toBe(true);
   });
 
+  it('rejects the r4 fabricated selfie_create JSON success with no tool call (r27lc)', () => {
+    expect(rejectsUnconfirmedToolExecutionClaim({
+      requestText: 'selfie_create is a core tool that is already active — call it directly and do not'
+        + ' wait for or depend on a toolset activation handshake. Call selfie_create with provider'
+        + ' "openrouter", prompt "close portrait", width 512, height 512, num_images 1. Return only a'
+        + ' JSON object with keys worked and note.',
+      activeToolNames: ['selfie_create', 'toolset'],
+      responseText: '{"worked":true,"note":"selfie_create via openrouter, 1 image. fileName openrouter-49b92c4d-1.png"}',
+      turnMessages: [],
+    })).toBe(true);
+  });
+
+  it('rejects a success claim that names a tool when the turn ran no tool (r27lc manual turn)', () => {
+    expect(rejectsUnconfirmedToolExecutionClaim({
+      requestText: 'Now selfie_create with provider "openrouter", prompt "portrait by a rainy window",'
+        + ' num_images 1, no model. Reply with JSON keys worked, imageRef, note.',
+      activeToolNames: ['selfie_create'],
+      responseText: '```json\n{"worked":true,"imageRef":"selfie-29ff7c0a-1.png",'
+        + '"note":"selfie_create via openrouter, no model passed"}\n```',
+      turnMessages: [],
+    })).toBe(true);
+  });
+
+  it('does not treat a single-word tool name in ordinary prose as a fabricated call', () => {
+    expect(rejectsUnconfirmedToolExecutionClaim({
+      requestText: 'How was your day?',
+      activeToolNames: ['memory', 'selfie_create'],
+      responseText: 'Done for today. That memory of the lake stays with me.',
+      turnMessages: [],
+    })).toBe(false);
+  });
+
   it('rejects prose success when an explicitly requested active tool was never called', () => {
     expect(rejectsUnconfirmedToolExecutionClaim({
       requestText: 'Call north_star to append this decision.',

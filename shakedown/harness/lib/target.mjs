@@ -88,6 +88,7 @@ export function resolveTarget(env = process.env) {
   return {
     target,
     isKube,
+    companionId,
     chatBaseUrl,
     adminBaseUrl,
     adminReadinessUrl: isKube

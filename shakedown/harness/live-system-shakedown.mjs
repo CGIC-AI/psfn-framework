@@ -31,7 +31,10 @@ import {
   resolveTarget,
   fetchCurrentTierWithRetry,
 } from './lib/target.mjs';
-import { resolveOperatorApprovalTargetForCases } from './lib/operator-approval-target.mjs';
+import {
+  buildOperatorConfirmationApproval,
+  resolveOperatorApprovalTargetForCases,
+} from './lib/operator-approval-target.mjs';
 import {
   buildCapabilityMatrixExecutionPlan,
   buildCapabilityMatrixSideEffectEvidence,
@@ -101,6 +104,7 @@ const CONFIG = (() => {
       adminReadinessUrl: targetContract.adminReadinessUrl,
       apiKey: targetContract.apiKey,
       adminToken: targetContract.adminToken,
+      companionId: targetContract.companionId,
       outputPath: requireEnv('PSFN_SHAKEDOWN_OUTPUT', 'per-phase run JSON path'),
       repoRoot: requireEnv('PSFN_REPO_ROOT', 'RC repo clone under test'),
       workspacePath: requireEnv('WORKSPACE_PATH', 'companion Personal Workspace root'),
@@ -170,6 +174,7 @@ const OPERATOR_APPROVAL_TARGET = (() => {
     return resolveOperatorApprovalTargetForCases({
       chatBaseUrl: API_BASE,
       apiKey: API_KEY,
+      companionId: CONFIG.companionId,
     }, {
       caseIds: CASE_IDS,
       phase: PHASE,
@@ -3334,18 +3339,13 @@ function buildCases(ctx) {
       if (!OPERATOR_APPROVAL_TARGET) {
         throw new Error('memory_delete_restore requires preflighted Operator approval authority');
       }
-      return fetchJson(
-        `${OPERATOR_APPROVAL_TARGET.apiBaseUrl.replace(/\/$/u, '')}/operator/confirmations/resolve`,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${OPERATOR_APPROVAL_TARGET.adminToken}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ id: confirmationId, decision: 'approve' }),
-          signal,
-        },
-      );
+      const approval = buildOperatorConfirmationApproval(OPERATOR_APPROVAL_TARGET, confirmationId);
+      return fetchJson(approval.url, {
+        method: 'POST',
+        headers: approval.headers,
+        body: approval.body,
+        signal,
+      });
     },
     chatCase,
     fetchJson,

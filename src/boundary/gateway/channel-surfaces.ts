@@ -76,7 +76,7 @@ export interface GatewayChannelSurfaces {
 
 interface DiscordPrimaryUserAuthority {
   fleetAuth?: {
-    provider: { kind: 'discord' };
+    provider: { kind: 'discord' | 'none' };
     accountRoster?: readonly FleetAuthAccountRosterEntry[];
   };
 }

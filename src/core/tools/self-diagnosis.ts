@@ -336,18 +336,26 @@ function resolveTooling(deps: SelfDiagnosisDeps, fs: DiagnosisFs, which: Diagnos
     binaries[bin] = which(bin);
   }
 
-  const workspaceMarker = fs.existsSync(join(deps.paths.workspacePath, '.beads'));
-  const repoMarker = fs.existsSync(join(deps.repoRoot, '.beads'));
-  const markerPresent = workspaceMarker || repoMarker;
+  // Mirrors resolveBeadsToolsEnablement (psfn-framework-povuo): the tool is
+  // registered only when a Beads database is provisioned where bd looks
+  // (BEADS_DIR when set, else a .beads marker at the workspace or repo root).
+  const beadsDir = deps.env.BEADS_DIR?.trim();
+  const workspaceMarker = !beadsDir && fs.existsSync(join(deps.paths.workspacePath, '.beads'));
+  const repoMarker = !beadsDir && fs.existsSync(join(deps.repoRoot, '.beads'));
+  const markerPresent = beadsDir ? fs.existsSync(beadsDir) : workspaceMarker || repoMarker;
   const envFlagRaw = deps.env.BEADS_TOOLS_ENABLED?.trim();
   const envFlag = parseBooleanFlag(envFlagRaw);
-  const enabled = envFlag !== undefined ? envFlag : markerPresent;
+  const enabled = envFlag !== false && markerPresent;
 
   let reason: string;
-  if (envFlag !== undefined) {
-    reason = `BEADS_TOOLS_ENABLED=${envFlagRaw} overrides marker detection`;
+  if (envFlag === false) {
+    reason = `BEADS_TOOLS_ENABLED=${envFlagRaw} disables beads tools`;
   } else if (markerPresent) {
-    reason = `.beads marker present (${workspaceMarker ? 'workspace' : 'repo'} root)`;
+    reason = beadsDir
+      ? 'BEADS_DIR database present'
+      : `.beads marker present (${workspaceMarker ? 'workspace' : 'repo'} root)`;
+  } else if (envFlag === true) {
+    reason = `BEADS_TOOLS_ENABLED=${envFlagRaw} but no Beads database is provisioned; tool not registered`;
   } else {
     reason = 'no .beads marker at workspace or repo root and BEADS_TOOLS_ENABLED unset';
   }

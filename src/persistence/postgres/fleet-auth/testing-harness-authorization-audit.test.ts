@@ -2,7 +2,7 @@ import { createHmac } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import type { Pool, PoolClient, QueryResult } from 'pg';
 import { createCompanionId } from '../../../shared/routing/companion-id.js';
-import { PostgresTestingHarnessGardenAuthorizationAudit } from './testing-harness-authorization-audit.js';
+import { PostgresGardenDoorAuthorizationAudit } from './testing-harness-authorization-audit.js';
 
 function result(rows: readonly Record<string, unknown>[] = [], rowCount = rows.length): QueryResult {
   return {
@@ -27,7 +27,7 @@ function fakePool(query: PoolClient['query']): {
   };
 }
 
-describe('PostgresTestingHarnessGardenAuthorizationAudit', () => {
+describe('PostgresGardenDoorAuthorizationAudit', () => {
   it('locks authority and durably labels the synthetic provider before returning versions', async () => {
     const calls: Array<{ sql: string; values?: readonly unknown[] }> = [];
     const query = vi.fn(async (sql: string, values?: readonly unknown[]) => {
@@ -40,7 +40,7 @@ describe('PostgresTestingHarnessGardenAuthorizationAudit', () => {
     }) as unknown as PoolClient['query'];
     const { pool, release } = fakePool(query);
     const occurredAt = new Date('2026-07-21T12:00:00.000Z');
-    const audit = new PostgresTestingHarnessGardenAuthorizationAudit({
+    const audit = new PostgresGardenDoorAuthorizationAudit({
       pool,
       sessionPepper: 'p'.repeat(32),
       now: () => occurredAt,
@@ -58,7 +58,7 @@ describe('PostgresTestingHarnessGardenAuthorizationAudit', () => {
       'BEGIN', 'SELECT', 'INSERT', 'COMMIT',
     ]);
     const insert = calls[2]!;
-    expect(insert.sql).toContain("'testing_harness_garden_authorization_allowed'");
+    expect(insert.values?.[10]).toBe('testing_harness_garden_authorization_allowed');
     expect(insert.values?.[1]).toContain('"provider":"testing_harness"');
     expect(insert.values?.[7]).toBe(createHmac('sha256', 'p'.repeat(32))
       .update('testing-harness-garden-correlation-v1\0')
@@ -73,6 +73,38 @@ describe('PostgresTestingHarnessGardenAuthorizationAudit', () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it('labels the ADMIN_TOKEN operator door distinctly from the testing harness', async () => {
+    const calls: Array<{ sql: string; values?: readonly unknown[] }> = [];
+    const query = vi.fn(async (sql: string, values?: readonly unknown[]) => {
+      calls.push({ sql, ...(values ? { values } : {}) });
+      if (sql.includes('lock_authority_state_for_broker')) {
+        return result([{ authority_generation: '3', global_auth_epoch: '4' }]);
+      }
+      if (sql.includes('INSERT INTO')) return result([], 1);
+      return result();
+    }) as unknown as PoolClient['query'];
+    const { pool } = fakePool(query);
+    const audit = new PostgresGardenDoorAuthorizationAudit({ pool, sessionPepper: 'p'.repeat(32) });
+
+    const recorded = await audit.record({
+      action: 'settings.read',
+      companionId: createCompanionId('22222222-2222-4222-8222-222222222222'),
+      principalId: 'admin-token-operator',
+      provider: 'admin_token',
+      correlationId: 'request-secret',
+    });
+
+    const insert = calls.find(call => call.sql.includes('INSERT INTO'))!;
+    expect(insert.values?.[1]).toContain('"kind":"admin_token_operator"');
+    expect(insert.values?.[9]).toContain('"authorizationSource":"gateway_admin_token"');
+    expect(insert.values?.[10]).toBe('admin_token_garden_authorization_allowed');
+    expect(insert.values?.[7]).toBe(createHmac('sha256', 'p'.repeat(32))
+      .update('admin-token-garden-correlation-v1\0')
+      .update('request-secret')
+      .digest('hex'));
+    expect(recorded).toMatchObject({ authorityGeneration: 3, globalAuthEpoch: 4 });
+  });
+
   it('rolls back and fails closed when the durable audit insert fails', async () => {
     const query = vi.fn(async (sql: string) => {
       if (sql.includes('lock_authority_state_for_broker')) {
@@ -82,7 +114,7 @@ describe('PostgresTestingHarnessGardenAuthorizationAudit', () => {
       return result();
     }) as unknown as PoolClient['query'];
     const { pool, release } = fakePool(query);
-    const audit = new PostgresTestingHarnessGardenAuthorizationAudit({
+    const audit = new PostgresGardenDoorAuthorizationAudit({
       pool,
       sessionPepper: 'p'.repeat(32),
     });

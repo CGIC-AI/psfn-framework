@@ -313,6 +313,18 @@ describe('buildSelfDiagnosisReport', () => {
     expect(tooling.beads.reason).toContain('no .beads marker');
   });
 
+  it('reports explicit beads enablement without a provisioned database as not registered (psfn-framework-povuo)', async () => {
+    const world = baseWorld();
+    world.existing.delete(join(WORKSPACE, '.beads'));
+    const deps = makeDeps(world, {
+      env: { PATH: '/usr/bin', PSFN_REPOSITORY_DIR: CHECKOUT, BEADS_TOOLS_ENABLED: 'true' },
+    });
+    const report = await buildSelfDiagnosisReport(deps);
+    const tooling = fromAny(report.tooling);
+    expect(tooling.beads).toMatchObject({ enabled: false, markerPresent: false, envFlag: 'true' });
+    expect(tooling.beads.reason).toContain('no Beads database is provisioned');
+  });
+
   it('reports storage mount unavailable when a path is missing', async () => {
     const world = baseWorld();
     world.existing.delete(LOGS);

@@ -73,7 +73,7 @@ import type { RequestCapabilityReplayPort } from '../../boundary/fleet-auth/requ
 import {
   GatewayFleetSsoRouter,
 } from '../../boundary/gateway/fleet-sso-router.js';
-import type { TestingHarnessGardenAuthorizationAuditPort } from '../../boundary/gateway/testing-harness-garden-door.js';
+import type { GardenDoorAuthorizationAuditPort } from '../../boundary/gateway/testing-harness-garden-door.js';
 import {
   requireFleetSsoFleetManifest,
   resolveFleetSsoGardenUpstreams,
@@ -179,7 +179,7 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
   fleetAuthRequestCapabilities?: GatewayRequestCapabilitySigner;
   fleetAuthRequestCapabilityVerifier?: RequestCapabilityVerifier;
   fleetAuthRequestCapabilityReplay?: RequestCapabilityReplayPort;
-  fleetAuthTestingHarnessGardenAuthorizationAudit?: TestingHarnessGardenAuthorizationAuditPort;
+  fleetAuthGardenDoorAuthorizationAudit?: GardenDoorAuthorizationAuditPort;
   fleetPortalAuthorization?: FleetPortalAuthorizationBatchPort;
   fleetPortalChannelHealth?: FleetPortalChannelHealthSource;
   /** Required with fleet auth: bounded passive ICP readiness for the Fleet page. */
@@ -675,7 +675,7 @@ export async function startOptionalGatewayApiServer(
   const testingHarnessGardenAdmin = options.channelsConfig?.api.testingHarness?.gardenAdmin;
   if (options.config.fleetAuth
     && testingHarnessGardenAdmin
-    && !options.fleetAuthTestingHarnessGardenAuthorizationAudit) {
+    && !options.fleetAuthGardenDoorAuthorizationAudit) {
     throw new Error(
       'Testing-harness Garden admin requires durable fleet authorization audit wiring',
     );
@@ -687,7 +687,15 @@ export async function startOptionalGatewayApiServer(
     ? new GatewayFleetSsoRouter({
         canonicalOrigin: options.config.fleetAuth.canonicalOrigin,
         trustProxy: isExplicitTrue(env.FLEET_SSO_TRUST_PROXY),
-        ...(env.ADMIN_TOKEN ? { adminToken: env.ADMIN_TOKEN } : {}),
+        ...(env.ADMIN_TOKEN
+          ? {
+              adminToken: env.ADMIN_TOKEN,
+              ...(options.fleetAuthGardenDoorAuthorizationAudit
+                ? { adminTokenAudit: options.fleetAuthGardenDoorAuthorizationAudit }
+                : {}),
+            }
+          : {}),
+        ssoLoginEnabled: options.config.fleetAuth.provider.kind === 'discord',
         broker: options.fleetAuthBroker,
         signer: options.fleetAuthRequestCapabilities,
         verifier: options.fleetAuthRequestCapabilityVerifier,
@@ -696,12 +704,12 @@ export async function startOptionalGatewayApiServer(
         modelUsageProjection: fleetModelUsageProjection,
         ...(testingHarnessGardenAdmin
           && options.channelsConfig?.api.testingHarness
-          && options.fleetAuthTestingHarnessGardenAuthorizationAudit
+          && options.fleetAuthGardenDoorAuthorizationAudit
           ? {
               testingHarness: {
                 apiKey: options.channelsConfig.api.testingHarness.apiKey,
                 policy: testingHarnessGardenAdmin,
-                audit: options.fleetAuthTestingHarnessGardenAuthorizationAudit,
+                audit: options.fleetAuthGardenDoorAuthorizationAudit,
               },
             }
           : {}),

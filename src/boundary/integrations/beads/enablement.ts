@@ -6,7 +6,7 @@
 // gates registration on this same resolver so registration and policy match,
 // fail-closed.
 
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseBooleanEnv, parseEnvList } from '../../../shared/utils/env.js';
 
@@ -31,23 +31,56 @@ export const COMPANION_BEADS_ACTIONS: readonly BeadsAction[] = Object.freeze([
 export interface BeadsEnablementRoots {
   workspaceRoot: string;
   codebaseRoot: string;
+  /** bd's own `BEADS_DIR` override (the `.beads` directory itself), inherited by the gateway's bd child. */
+  beadsDir?: string;
+}
+
+export type BeadsToolsEnablement =
+  | { enabled: true; databaseDir: string }
+  | {
+    enabled: false;
+    /**
+     * `disabled_by_policy`: BEADS_TOOLS_ENABLED=false.
+     * `not_discovered`: unset and no database found (dev-convenience fallback).
+     * `database_missing`: BEADS_TOOLS_ENABLED=true but no Beads database is
+     * provisioned, so every call would fail with "no beads database found".
+     */
+    reason: 'disabled_by_policy' | 'not_discovered' | 'database_missing';
+    searched: string[];
+  };
+
+function isDirectory(path: string): boolean {
+  return existsSync(path) && statSync(path).isDirectory();
 }
 
 /**
- * Resolve whether beads tools are enabled. An explicit BEADS_TOOLS_ENABLED
- * env value wins; otherwise fall back to whether a `.beads` directory exists at
- * the workspace or codebase root (single-process dev convenience).
+ * Resolve whether beads tools are enabled. The tool is registered (agent) and
+ * permitted (gateway policy) only when a Beads database is actually
+ * provisioned where the gateway's `bd` child will look for it: `BEADS_DIR`
+ * when set, else a `.beads` directory at the workspace or codebase root.
+ * An explicit BEADS_TOOLS_ENABLED=false always wins; an explicit `true` with
+ * no provisioned database fails closed at registration time
+ * (psfn-framework-povuo) instead of advertising a tool whose every call fails.
  */
-export function resolveBeadsToolsEnabled(
+export function resolveBeadsToolsEnablement(
   value: string | undefined,
   roots: BeadsEnablementRoots,
-): boolean {
+): BeadsToolsEnablement {
   const parsed = parseBooleanEnv(value);
-  if (parsed !== undefined) {
-    return parsed;
+  const beadsDir = roots.beadsDir?.trim();
+  const candidates = beadsDir
+    ? [resolve(beadsDir)]
+    : [resolve(roots.workspaceRoot, '.beads'), resolve(roots.codebaseRoot, '.beads')];
+  if (parsed === false) {
+    return { enabled: false, reason: 'disabled_by_policy', searched: [] };
   }
-  return existsSync(resolve(roots.workspaceRoot, '.beads'))
-    || existsSync(resolve(roots.codebaseRoot, '.beads'));
+  const databaseDir = candidates.find(isDirectory);
+  if (databaseDir) return { enabled: true, databaseDir };
+  return {
+    enabled: false,
+    reason: parsed === true ? 'database_missing' : 'not_discovered',
+    searched: candidates,
+  };
 }
 
 export function parseBeadsActionsEnv(value: string | undefined): BeadsAction[] | undefined {

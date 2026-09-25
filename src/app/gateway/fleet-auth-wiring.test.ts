@@ -62,8 +62,11 @@ describe('gateway fleet authorization context wiring', () => {
     expect(apiSurfaceSource).toContain('const fleetSsoCompositionWired =');
     expect(apiSurfaceSource).toContain('if (fleetAuthEnabled && !fleetSsoCompositionWired)');
     expect(apiSurfaceSource).toContain('adminToken: env.ADMIN_TOKEN || undefined,');
+    expect(apiSurfaceSource).toContain('adminToken: env.ADMIN_TOKEN,');
+    // The fleet ADMIN_TOKEN door is audited: the router refuses the token
+    // without the durable Garden door audit (psfn-framework-zc6uo).
     expect(apiSurfaceSource).toContain(
-      '...(env.ADMIN_TOKEN ? { adminToken: env.ADMIN_TOKEN } : {}),',
+      '? { adminTokenAudit: options.fleetAuthGardenDoorAuthorizationAudit }',
     );
     expect(apiSurfaceSource).not.toContain(
       'adminToken: fleetAuthBootstrapOnly ? undefined : env.ADMIN_TOKEN || undefined,',

@@ -270,7 +270,17 @@ function createRouter(
     },
     nowSeconds: () => nowSeconds,
     denialLogger,
-    ...(options.adminToken ? { adminToken: options.adminToken } : {}),
+    ...(options.adminToken
+      ? {
+          adminToken: options.adminToken,
+          adminTokenAudit: { record: vi.fn(async () => ({
+            authorizationEventId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+            authorityGeneration: 1,
+            globalAuthEpoch: 1,
+            occurredAt: new Date(nowSeconds * 1_000),
+          })) },
+        }
+      : {}),
   } as ConstructorParameters<typeof GatewayFleetSsoRouter>[0]);
 }
 

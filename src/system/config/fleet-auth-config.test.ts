@@ -1008,6 +1008,86 @@ describe('fleet-auth owner-file configuration', () => {
   });
 });
 
+describe('fleet-auth without an SSO provider (psfn-framework-p39zg)', () => {
+  const keyPair = generateKeyPairSync('ed25519');
+  const publicKeyPem = keyPair.publicKey.export({ type: 'spki', format: 'pem' }).toString();
+  const privateKeyPem = keyPair.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+  const hubPublicKeyPem = generateKeyPairSync('ed25519').publicKey
+    .export({ type: 'spki', format: 'pem' }).toString();
+  const tempDirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  function noSsoConfig(): FleetAuthConfig {
+    return {
+      ...validConfig(publicKeyPem, hubPublicKeyPem),
+      provider: { kind: 'none' },
+      discordEvidenceMappings: [],
+    };
+  }
+
+  it('accepts an explicit provider.kind none with no OAuth values', () => {
+    const parsed = validateFleetAuthConfig(noSsoConfig(), 'fleet-auth.json');
+    expect(parsed.provider).toEqual({ kind: 'none' });
+    expect(projectFleetAuthGardenMetadata(parsed).providerPolicy).toEqual({ kind: 'none' });
+  });
+
+  it('fails closed on a missing, partial, or unknown provider block', () => {
+    const { provider: _omitted, ...missing } = noSsoConfig();
+    expect(() => validateFleetAuthConfig(missing, 'fleet-auth.json')).toThrow(/root\.provider is required/);
+    expect(() => validateFleetAuthConfig(
+      { ...noSsoConfig(), provider: { kind: 'none', clientId: '123456789012345678' } },
+      'fleet-auth.json',
+    )).toThrow(/provider/);
+    expect(() => validateFleetAuthConfig(
+      { ...noSsoConfig(), provider: { kind: 'github' } },
+      'fleet-auth.json',
+    )).toThrow(/provider\.kind must be discord or none/);
+  });
+
+  it('rejects Discord-subject authority that no login could ever produce', () => {
+    const base = validConfig(publicKeyPem, hubPublicKeyPem);
+    expect(() => validateFleetAuthConfig(
+      { ...base, provider: { kind: 'none' } },
+      'fleet-auth.json',
+    )).toThrow(/discordEvidenceMappings must be empty when provider\.kind is none/);
+    expect(() => validateFleetAuthConfig({
+      ...noSsoConfig(),
+      accountRoster: [{
+        providerSubjectId: '123456789012345678',
+        companionId: COMPANION_ID,
+        contactId: 'contact-owner',
+        role: 'owner',
+      }],
+    }, 'fleet-auth.json')).toThrow(/accountRoster requires provider\.kind discord/);
+  });
+
+  it('resolves gateway secrets without any Discord client secret', () => {
+    const floorRoot = join(mkdtempSync(join(tmpdir(), 'fleet-auth-no-sso-')), 'authority');
+    tempDirs.push(join(floorRoot, '..'));
+    mkdirSync(floorRoot, { mode: 0o700 });
+    chmodSync(floorRoot, 0o700);
+    const resolved = resolveGatewayFleetAuthSecrets({
+      config: validateFleetAuthConfig(noSsoConfig(), 'fleet-auth.json'),
+      credentialVault: createStaticCredentialVault({
+        FLEET_AUTH_TOKEN_ENCRYPTION_KEY: 't'.repeat(32),
+        FLEET_AUTH_SESSION_PEPPER: 'p'.repeat(32),
+        FLEET_AUTH_ASSERTION_PRIVATE_KEY: privateKeyPem,
+        FLEET_AUTH_RECOVERY_CREDENTIAL: 'r'.repeat(32),
+        FLEET_AUTH_RUNTIME_DATABASE_URL: 'postgres://fleet_auth_runtime:runtime@db.example.test/fleet',
+        FLEET_AUTH_MIGRATION_DATABASE_URL: 'postgres://fleet_auth_migration:migrate@db.example.test/fleet',
+        FLEET_AUTH_BACKUP_DATABASE_URL: 'postgres://fleet_auth_backup:backup@db.example.test/fleet',
+        FLEET_AUTH_AUTHORITY_FLOOR_ROOT: floorRoot,
+      }),
+      protectedRestoreRoots: [],
+    });
+    expect(resolved.oauthClientSecret).toBeUndefined();
+    expect(resolved.sessionPepper).toBe('p'.repeat(32));
+  });
+});
+
 describe('fleet-auth account roster validation', () => {
   const rosterKeyPair = generateKeyPairSync('ed25519');
   const rosterPublicKeyPem = rosterKeyPair.publicKey

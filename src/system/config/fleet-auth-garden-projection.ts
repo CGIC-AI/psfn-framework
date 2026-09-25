@@ -8,11 +8,13 @@ interface FleetAuthGardenProjectionInput {
   activationGeneration: number;
   canonicalOrigin: string;
   callbackPath: string;
-  provider: {
-    kind: 'discord';
-    scopes: readonly string[];
-    tokenCustody: 'discard' | 'encrypted_refresh';
-  };
+  provider:
+    | {
+      kind: 'discord';
+      scopes: readonly string[];
+      tokenCustody: 'discard' | 'encrypted_refresh';
+    }
+    | { kind: 'none' };
   ttls: {
     oauthTransactionMs: number;
     sessionIdleMs: number;
@@ -85,11 +87,13 @@ export interface FleetAuthGardenMetadata {
     status: 'configured_https';
   };
   callbackPath: string;
-  providerPolicy: {
-    kind: 'discord';
-    scopes: string[];
-    tokenCustody: 'discard' | 'encrypted_refresh';
-  };
+  providerPolicy:
+    | {
+      kind: 'discord';
+      scopes: string[];
+      tokenCustody: 'discard' | 'encrypted_refresh';
+    }
+    | { kind: 'none' };
   ttls: FleetAuthGardenProjectionInput['ttls'];
   disabledActionsByRole: Record<FleetAuthGardenRole, string[]>;
   discordEvidence: {
@@ -132,11 +136,13 @@ export function projectFleetAuthGardenMetadata(
       status: 'configured_https',
     },
     callbackPath: config.callbackPath,
-    providerPolicy: {
-      kind: config.provider.kind,
-      scopes: [...config.provider.scopes],
-      tokenCustody: config.provider.tokenCustody,
-    },
+    providerPolicy: config.provider.kind === 'discord'
+      ? {
+          kind: 'discord',
+          scopes: [...config.provider.scopes],
+          tokenCustody: config.provider.tokenCustody,
+        }
+      : { kind: 'none' },
     ttls: { ...config.ttls },
     disabledActionsByRole: Object.fromEntries(
       Object.entries(config.rolePolicy.disabledActionsByRole)

@@ -1,3 +1,6 @@
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { StartupConfigHydrationResult } from '../../app/startup/support/bootstrap-helpers.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
@@ -82,6 +85,8 @@ describe('resolveGatewayBootstrapInput', () => {
         MODULE_REGISTRY_PATH: 'registry/module-registry.json',
         GATEWAY_SESSION_HMAC_KEY: 'v1:test-session-secret',
         BEADS_TOOLS_ENABLED: 'true',
+        // Explicit enablement requires a provisioned database (psfn-framework-povuo).
+        BEADS_DIR: mkdtempSync(join(tmpdir(), 'bootstrap-beads-')),
         NTFY_BASE_URL: 'https://ntfy.local',
         NTFY_TOPIC: 'alerts',
         NTFY_TOKEN: 'ntfy-token',

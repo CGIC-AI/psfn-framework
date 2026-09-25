@@ -153,6 +153,9 @@ const CASE_CHAT_HEADERS = createChatHeaderBuilder({
   apiKey: CONFIG.apiKey,
   runId: HARNESS_RUN_ID,
   manifestId: HARNESS_MANIFEST_ID,
+  // gz50o: on kube the chat lane targets the same fleet companion as the
+  // Garden route (COMPANION_ID), so Layer A runs against any fleet companion.
+  ...(CONFIG.companionId ? { companionId: CONFIG.companionId } : {}),
 });
 const EXPECTED_CAPABILITY_TIER = optionalEnv('PSFN_CAPABILITY_TIER_EXPECTED');
 const OUTPUT_PATH = CONFIG.outputPath;

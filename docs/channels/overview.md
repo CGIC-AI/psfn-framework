@@ -399,7 +399,8 @@ config, validated fail-closed at load **and** on save
   `heartbeatChannelId`); `assertDiscordAccountTokensConfigured` aborts gateway
   startup when any configured account's token env var is unset
 - `api` — `companionId`, `selectableCompanionIds` (requires `companionId`;
-  enables per-request Bearer companion selection), `testingHarness`
+  enables per-request Bearer companion selection for the unscoped API key and
+  the testing-harness principal; satellite keys stay pinned), `testingHarness`
   (`principalId` + `tokenRef`, `gardenAdmin`)
 - `plugins` — fail-closed plugin sections (see
 <!-- openwiki: broken internal link [../channel-plugins.md] file "../channel-plugins.md" does not exist. Fix the href or restore the target, then delete this comment. -->

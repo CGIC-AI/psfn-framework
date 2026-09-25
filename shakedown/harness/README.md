@@ -286,6 +286,16 @@ export COMPANION_ID=…                            # selected fleet companion UU
 export PSFN_MATRIX_DIR=$SHAKEDOWN_ROOT/artifacts/matrix   # or PSFN_ROUND_DIR — output dir
 ```
 
+`COMPANION_ID` selects the fleet companion for **both** lanes: the Garden route
+(`/companions/<id>/garden/...`) and chat, where the harness sends the gateway's
+Bearer companion selector (`X-PSFN-Companion-ID`) on every testing-harness
+dispatch (bead `psfn-framework-gz50o`). To run Layer A against a follower,
+list it in `channels.json` `api.selectableCompanionIds` and point
+`COMPANION_ID`, `COMPANION_PG_SCHEMA`, `COMPANION_DATA_DIR` and
+`WORKSPACE_PATH` at that companion. An unknown or unselectable companion fails
+closed (404 `bearer_companion_not_found` / 403 `bearer_companion_unauthorized`);
+the harness never falls back to the pinned primary.
+
 Optional knobs (all have safe defaults): `PSFN_ROUND_DIR` (alias for the output
 dir), `PSFN_ORIGINAL_TIER_FILE` (durable pre-sweep record, default
 `$PSFN_MATRIX_DIR/original-capability-tier`), `PSFN_CONFORMANCE_RUN_TIMEOUT_MS`,

@@ -1,4 +1,5 @@
 import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
+import { filterConcernsForViewer, resolveConcernViewerFromRequest } from './concern-visibility.js';
 import type {
   ActiveConcernEvidenceRef,
   ActiveConcernOwner,
@@ -43,15 +44,22 @@ export async function executeListConcernsAction(
   params: ListConcernsParams,
 ): Promise<AgentToolResult<{ isError?: boolean }>> {
   try {
-    const concerns = await store.list({
+    const listed = await store.list({
       contactId: params.contactId,
       includeResolved: params.includeResolved,
       includeExpired: params.includeExpired,
       limit: params.limit,
     });
+    // The same viewer gate as the open-threads prompt block (xz8m1/o5wf5):
+    // concerns are companion-wide and formed in many conversations.
+    const concerns = filterConcernsForViewer(listed, resolveConcernViewerFromRequest());
+    const withheld = listed.length - concerns.length;
 
     return textResult(JSON.stringify({
       count: concerns.length,
+      ...(withheld > 0
+        ? { withheldByVisibility: withheld, withheldNote: 'Some concerns are not visible from this conversation.' }
+        : {}),
       concerns,
     }, null, 2));
   } catch (error) {

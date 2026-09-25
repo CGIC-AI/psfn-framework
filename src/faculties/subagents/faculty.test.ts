@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 import { fromAny } from '@total-typescript/shoehorn';
 import { CompletionNoticeBuffer } from '../../core/agent/completion-notices.js';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -2265,7 +2266,7 @@ describe('SubagentFaculty core-authoritative tool governance (p0le)', () => {
     const find = (name: string) => mockFirstPromptTools.find(tool => tool.name === name)!;
 
     // Reads pass through to the parent-catalog tool.
-    await find('orient').execute('call-1', { action: 'values_list' }, undefined);
+    await runWithRequestContext({ callType: 'tool', purpose: 'agent.turn', channelId: 'api:owner-console', viewerTrustLevel: 'primary', viewerChannelPrivacy: 'private' }, () => find('orient').execute('call-1', { action: 'values_list' }, undefined));
     expect(tools.orient.execute).toHaveBeenCalledTimes(1);
 
     // Every reproduced escalation from the bead is denied and audit-trailed.

@@ -1256,13 +1256,13 @@ describe('GatewayServer ICP autonomy RPC', () => {
     });
     expect(closed.result).toEqual({
       eligible: false,
-      reasonCode: 'charge_pressure',
+      reasonCode: 'relationship_pressure',
       reasonClass: 'deferrable',
     });
     expect(llmProvider.stream).not.toHaveBeenCalled();
     expect(llmProvider.complete).not.toHaveBeenCalled();
     expect(gates).toEqual([
-      expect.objectContaining({ outcome: 'closed', reasonCode: 'charge_pressure' }),
+      expect.objectContaining({ outcome: 'closed', reasonCode: 'relationship_pressure' }),
     ]);
   });
 

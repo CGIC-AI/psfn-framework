@@ -1260,9 +1260,8 @@ export class GatewayIcpAutonomyBroker {
     if (!policy.trustAllows) return closedDecision('policy_denied', 'terminal');
     if (!policy.provenanceFresh) return closedDecision('stale_provenance', 'terminal');
     if (policy.recursiveMiOnlyRoot) return closedDecision('recursive_trigger', 'terminal');
-    if (!policy.socialPressureAllows || !policy.chargeAllows) {
-      return closedDecision('charge_pressure', 'deferrable');
-    }
+    if (!policy.socialPressureAllows) return closedDecision('relationship_pressure', 'deferrable');
+    if (!policy.chargeAllows) return closedDecision('charge_pressure', 'deferrable');
     if (!policy.fatigueAllows) return closedDecision('fatigue_exhausted', 'terminal');
     if (!policy.costAllows) return closedDecision('cost_hard_stop', 'terminal');
 

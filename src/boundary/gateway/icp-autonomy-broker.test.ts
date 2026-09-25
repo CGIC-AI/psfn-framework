@@ -1052,7 +1052,7 @@ describe('GatewayIcpAutonomyBroker', () => {
     ['senderBlocksPeer', true, 'peer_blocked', 'terminal'],
     ['provenanceFresh', false, 'stale_provenance', 'terminal'],
     ['recursiveMiOnlyRoot', true, 'recursive_trigger', 'terminal'],
-    ['socialPressureAllows', false, 'charge_pressure', 'deferrable'],
+    ['socialPressureAllows', false, 'relationship_pressure', 'deferrable'],
     ['chargeAllows', false, 'charge_pressure', 'deferrable'],
     ['fatigueAllows', false, 'fatigue_exhausted', 'terminal'],
     ['costAllows', false, 'cost_hard_stop', 'terminal'],

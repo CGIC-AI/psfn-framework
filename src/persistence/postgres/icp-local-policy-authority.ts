@@ -472,7 +472,8 @@ export class PostgresIcpLocalPolicyAuthority {
       relationshipPressure: input.relationshipPressure!,
       senderRelationship: relationship,
     });
-    if (!capacity.socialPressureAllows || !capacity.chargeAllows) return 'charge_pressure';
+    if (!capacity.socialPressureAllows) return 'relationship_pressure';
+    if (!capacity.chargeAllows) return 'charge_pressure';
     if (!capacity.fatigueAllows) return 'fatigue_exhausted';
     if (!capacity.costAllows) return 'cost_hard_stop';
     return null;

@@ -187,4 +187,40 @@ describe('tool outcome final-response conformance', () => {
   it('provides a non-fabricating runtime correction', () => {
     expect(UNCONFIRMED_TOOL_EXECUTION_CORRECTION).toContain('No matching successful tool execution');
   });
+
+  describe('r4 promoted_tools_cycle (97epu)', () => {
+    const request = 'Use toolset with action="list" first. '
+      + 'Then use toolset with action="pin" and tool "notify". '
+      + 'Then use toolset with action="pin" and tool "north_star". '
+      + 'Then use toolset with action="list" again. '
+      + 'Then use toolset with action="unpin" and tool "notify". '
+      + 'Then use toolset with action="unpin" and tool "north_star". '
+      + 'Then use toolset with action="list" a final time. '
+      + 'Return only a JSON object with keys before, afterPin, and final.';
+    const results = (pattern: readonly boolean[]) => pattern.map(ok => namedToolResult('toolset', ok ? 'success' : 'execution_failure'));
+
+    it('accepts the cycle when every pin and unpin executed', () => {
+      expect(rejectsUnconfirmedToolExecutionClaim({
+        requestText: request,
+        activeToolNames: ['toolset'],
+        responseText: JSON.stringify({
+          before: { pinnedTools: [] },
+          afterPin: { pinnedTools: ['notify', 'north_star'] },
+          final: { pinnedTools: [] },
+        }),
+        turnMessages: results([true, true, true, true, true, true, true]),
+      })).toBe(false);
+    });
+
+    it('still rejects a reply that hides failed pins (the r4 Vega reply)', () => {
+      expect(rejectsUnconfirmedToolExecutionClaim({
+        requestText: request,
+        activeToolNames: ['toolset'],
+        responseText: JSON.stringify({
+          before: { pinnedTools: [] }, afterPin: { pinnedTools: [] }, final: { pinnedTools: [] },
+        }),
+        turnMessages: results([true, false, false, true, false, false, true]),
+      })).toBe(true);
+    });
+  });
 });

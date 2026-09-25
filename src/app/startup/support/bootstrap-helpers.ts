@@ -137,7 +137,13 @@ export function installPromotedToolsPersistenceHook(
     env?: NodeJS.ProcessEnv;
   } = {},
 ): void {
-  const existingHooks = config.runtimeHooks ?? {};
+  // Mutate the shared hooks object in place (psfn-framework-97epu): the agent
+  // runtime runs on a sanitized shallow copy of this config taken before the
+  // gateway writer is installed, so replacing config.runtimeHooks left that
+  // copy on the direct file writer, which fails on the read-only system-data
+  // mount. Every copy that shares the hooks object sees the gateway writer.
+  config.runtimeHooks ??= {};
+  const hooks = config.runtimeHooks;
   const env = options.env ?? process.env;
   const configStore = options.configStore ?? createDefaultConfigStore({
     dataDir: config.dataDir,
@@ -145,31 +151,28 @@ export function installPromotedToolsPersistenceHook(
     defaultContextWindow: config.defaultContextWindow,
     env,
   });
-  config.runtimeHooks = {
-    ...existingHooks,
-    persistPromotedExtendedTools: async (toolNames) => {
-      const current = configStore.loadRuntimeSettings();
-      const next = {
-        ...current,
-        promotedExtendedTools: [...toolNames],
-      };
-      if (options.systemDataWriter) {
-        try {
-          await options.systemDataWriter.writeSystemData({
-            kind: 'owner_file',
-            ownerFile: 'settings',
-            payload: next,
-          });
-        } catch (error) {
-          throw new Error(
-            'The authenticated gateway system-data writer could not persist tool preferences: '
-            + toErrorMessage(error),
-          );
-        }
-      } else {
-        configStore.saveRuntimeSettings(next);
+  hooks.persistPromotedExtendedTools = async (toolNames) => {
+    const current = configStore.loadRuntimeSettings();
+    const next = {
+      ...current,
+      promotedExtendedTools: [...toolNames],
+    };
+    if (options.systemDataWriter) {
+      try {
+        await options.systemDataWriter.writeSystemData({
+          kind: 'owner_file',
+          ownerFile: 'settings',
+          payload: next,
+        });
+      } catch (error) {
+        throw new Error(
+          'The authenticated gateway system-data writer could not persist tool preferences: '
+          + toErrorMessage(error),
+        );
       }
-    },
+    } else {
+      configStore.saveRuntimeSettings(next);
+    }
   };
 }
 

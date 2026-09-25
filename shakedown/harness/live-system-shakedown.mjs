@@ -2796,10 +2796,12 @@ function buildCoverageCases(ctx) {
       expectedTools: ['toolset'],
       message:
         'Use toolset with action="list" first. '
-        + 'Then use toolset with action="pin" and tool "scratchpad_write". '
+        // Canonical extended tools only: scratchpad_write is a retired alias
+        // that can never be pinned (97epu).
+        + 'Then use toolset with action="pin" and tool "notify". '
         + 'Then use toolset with action="pin" and tool "north_star". '
         + 'Then use toolset with action="list" again. '
-        + 'Then use toolset with action="unpin" and tool "scratchpad_write". '
+        + 'Then use toolset with action="unpin" and tool "notify". '
         + 'Then use toolset with action="unpin" and tool "north_star". '
         + 'Then use toolset with action="list" a final time. '
         + 'Return only a JSON object with keys before, afterPin, and final. '
@@ -2824,6 +2826,15 @@ function buildCoverageCases(ctx) {
         }
         if (!hasPinnedToolsArray(final)) {
           failures.push('promoted_tools_cycle final.pinnedTools must be an array');
+        }
+        // An all-empty cycle proves nothing: the pins must have taken effect.
+        const pinned = Array.isArray(afterPin?.pinnedTools)
+          ? afterPin.pinnedTools
+          : Object.values(afterPin ?? {}).flatMap((entry) => (Array.isArray(entry?.pinnedTools) ? entry.pinnedTools : []));
+        for (const toolName of ['notify', 'north_star']) {
+          if (!pinned.includes(toolName)) {
+            failures.push(`promoted_tools_cycle afterPin.pinnedTools must include ${toolName}`);
+          }
         }
         return failures;
       },

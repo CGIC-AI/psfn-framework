@@ -9,7 +9,10 @@ import type {
   IcpInitiationPressureSnapshot,
 } from "../../core/agent/fatigue/regulation-reservation.js";
 import type { IcpConversationCorrelation } from "../../shared/contracts/icp-autonomy.js";
-import { parseIcpConversationCorrelation } from "../../shared/contracts/icp-autonomy.js";
+import {
+  ICP_SYSTEM_FAILURE_END_REASON_CODES,
+  parseIcpConversationCorrelation,
+} from "../../shared/contracts/icp-autonomy.js";
 import type { FatigueEnforcementMetadata } from "../../shared/contracts/runtime.js";
 import { isRfc4122Uuid } from "../../shared/utils/types.js";
 import { createPostgresPool, withPostgresClient } from "../postgres.js";
@@ -806,12 +809,12 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
           AND outcome IN ('pending', 'delivering', 'delivered', 'no_reply')
           AND reserved_at_ms BETWEEN $5::bigint AND $4::bigint
           AND ($11::uuid IS NULL OR turn_id <> $11::uuid)
-          -- 0eq2x: a turn the peer's appraisal failed to process (system
-          -- timeout/error) is not relationship pressure.
+          -- 0eq2x/9rima: a turn the peer failed to appraise or process
+          -- (system timeout/error) is not relationship pressure.
           AND NOT EXISTS (
             SELECT 1 FROM icp_conversation_episodes AS episode
             WHERE episode.conversation_id::text = reservation.conversation_id::text
-              AND episode.close_reason_code = 'peer_appraisal_unavailable'
+              AND episode.close_reason_code = ANY($12::text[])
           )
       ), episode_pressure AS (
         SELECT
@@ -852,6 +855,7 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
         input.unansweredPressureUnits,
         input.unansweredAfterMs,
         excludedTurnId ?? null,
+        [...ICP_SYSTEM_FAILURE_END_REASON_CODES],
       ],
     );
     const row = result.rows.at(0);

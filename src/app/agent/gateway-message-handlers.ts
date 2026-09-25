@@ -1750,8 +1750,12 @@ export function registerGatewayMessageHandlers(
             channelId: message.channelId,
             messageId: message.id,
             failureReason,
+            ...(message.routing?.icpCorrelation
+              ? { icpConversationId: message.routing.icpCorrelation.conversationId }
+              : {}),
             ports: {
               companionReportFailure: (reportParams) => gateway.companionReportFailure(reportParams),
+              companionEndIcpEpisodeActivity: (endInput) => gateway.companionEndIcpEpisodeActivity(endInput),
               audit: safeguardAuditTrail,
               log,
             },

@@ -5,7 +5,7 @@ import type { IcpAutonomyReasonCode } from '../../shared/contracts/icp-autonomy.
 import { createComponentLogger } from '../../shared/logger.js';
 import { isRfc4122Uuid } from '../../shared/utils/types.js';
 import type { CompanionId } from '../../shared/routing/companion-id.js';
-import type { KnownCompanionPeer } from './agent-facing-autonomy.js';
+import { IcpOutreachHandoffDeniedError, type KnownCompanionPeer } from './agent-facing-autonomy.js';
 import type {
   IcpInitiationCandidateClaim,
   IcpInitiationCandidateProducerClaim,
@@ -55,6 +55,16 @@ export type {
 } from './initiation-source-support.js';
 
 const log = createComponentLogger('IcpInitiationSource');
+
+function unusablePermitTerminal(error: unknown): {
+  status: Extract<IcpInitiationCandidateStatus, 'expired' | 'cancelled'>;
+  reasonCode: Extract<IcpAutonomyReasonCode, 'permit_expired' | 'permit_revoked'>;
+} | null {
+  if (!(error instanceof IcpOutreachHandoffDeniedError)) return null;
+  if (error.reasonCode === 'permit_expired') return { status: 'expired', reasonCode: 'permit_expired' };
+  if (error.reasonCode === 'permit_revoked') return { status: 'cancelled', reasonCode: 'permit_revoked' };
+  return null;
+}
 const DEFAULT_CANDIDATE_TTL_MS = 24 * 60 * 60_000;
 const DEFAULT_PERMIT_TTL_MS = 5 * 60_000;
 export const ICP_INITIATION_RETRY_COOLDOWN_MS = 5 * 60_000;
@@ -233,6 +243,56 @@ export function createIcpInitiationSourceRuntime(
     ...(reasonCode ? { reasonCode } : {}),
     ...(deliveryDisposition ? { deliveryDisposition } : {}),
   }, claimToken);
+
+  /**
+   * Executes a permitted candidate's outreach. A permit the broker reports as
+   * expired or revoked can never be used again, so the candidate ends
+   * (expired/cancelled) instead of being retried by every lifecycle pass (9rima).
+   */
+  const executePermittedOutreach = async (
+    permitted: IcpInitiationCandidate,
+    peerContactId: string,
+    permitId: string,
+    claimToken?: string,
+  ): Promise<IcpInitiationSourceResult> => {
+    let execution: Awaited<ReturnType<IcpInitiationSourcePeerPort['executeCompanionOutreach']>>;
+    try {
+      execution = await peerPort.executeCompanionOutreach(
+        peerContactId,
+        permitId,
+        toIcpCandidateOrigin(permitted),
+        dependencies.isExternalCompanionAuthorized,
+      );
+    } catch (error) {
+      const unusable = unusablePermitTerminal(error);
+      if (!unusable) throw error;
+      const ended = await transition(
+        permitted,
+        unusable.status,
+        unusable.reasonCode,
+        undefined,
+        claimToken,
+      );
+      log.info('ICP candidate ended: its permit can no longer be used', {
+        candidateId: permitted.candidateId,
+        permitId,
+        status: ended.status,
+        reasonCode: unusable.reasonCode,
+      });
+      return toIcpSourceResult('suppressed', ended, unusable.reasonCode);
+    }
+    const consumed = await transition(
+      permitted,
+      'consumed',
+      undefined,
+      execution.disposition,
+      claimToken,
+    );
+    return toIcpSourceResult(
+      execution.disposition === 'delivered' ? 'sent' : 'suppressed',
+      consumed,
+    );
+  };
 
   const deferCandidateForCooldown = async (
     candidate: IcpInitiationCandidate,
@@ -501,22 +561,11 @@ export function createIcpInitiationSourceRuntime(
       if (!dependencies.isExternalCompanionAuthorized()) {
         throw new Error('companion outreach authorization is unavailable during permit recovery');
       }
-      const execution = await peerPort.executeCompanionOutreach(
+      return await executePermittedOutreach(
+        candidate,
         peer.contactId,
         candidate.permitId,
-        toIcpCandidateOrigin(candidate),
-        dependencies.isExternalCompanionAuthorized,
-      );
-      const consumed = await transition(
-        candidate,
-        'consumed',
-        undefined,
-        execution.disposition,
         lifecycleClaim?.claimToken,
-      );
-      return toIcpSourceResult(
-        execution.disposition === 'delivered' ? 'sent' : 'suppressed',
-        consumed,
       );
     }
 
@@ -684,22 +733,11 @@ export function createIcpInitiationSourceRuntime(
       permittedInput,
       lifecycleClaim?.claimToken,
     );
-    const execution = await peerPort.executeCompanionOutreach(
+    return await executePermittedOutreach(
+      permitted,
       peer.contactId,
       permitResult.permit.permitId,
-      toIcpCandidateOrigin(permitted),
-      dependencies.isExternalCompanionAuthorized,
-    );
-    const consumed = await transition(
-      permitted,
-      'consumed',
-      undefined,
-      execution.disposition,
       lifecycleClaim?.claimToken,
-    );
-    return toIcpSourceResult(
-      execution.disposition === 'delivered' ? 'sent' : 'suppressed',
-      consumed,
     );
   };
 

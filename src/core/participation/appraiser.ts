@@ -92,10 +92,11 @@ export class ParticipationAppraiser {
     if (!this.settings.enabled) {
       return failClosed('appraiser_disabled');
     }
-    if (!this.decisions || this.decisions.effectiveMode(APPRAISE_SITE) === 'local') {
+    const siteId = appraisalSiteFor(candidate);
+    if (!this.decisions || this.decisions.effectiveMode(siteId) === 'local') {
       return await this.appraiseLocally(candidate);
     }
-    return await this.appraiseWithDecision(candidate, this.decisions);
+    return await this.appraiseWithDecision(candidate, this.decisions, siteId);
   }
 
   /**
@@ -106,11 +107,12 @@ export class ParticipationAppraiser {
   private async appraiseWithDecision(
     candidate: ParticipationCandidate,
     decisions: NonNullable<ParticipationAppraiserOptions['decisions']>,
+    siteId: AppraisalSiteId,
   ): Promise<ParticipationAppraisalResult> {
     let local: ParticipationAppraisalResult | undefined;
     const surface = candidate.participationSurface ?? 'group_room';
     const outcome = await decisions.decide({
-      siteId: APPRAISE_SITE,
+      siteId,
       state: buildAppraisalDecisionState({
         companionName: this.companionName,
         surface,
@@ -136,7 +138,7 @@ export class ParticipationAppraiser {
     if (!outcome.ok) return failClosed('appraiser_error');
     const appraisal = appraisalFromDecision(
       outcome.answers,
-      decisions.siteSettings(APPRAISE_SITE)?.threshold,
+      decisions.siteSettings(siteId)?.threshold,
     );
     return appraisal ? { appraisal, failClosed: false } : failClosed('appraiser_unparseable');
   }
@@ -303,7 +305,16 @@ export class ParticipationAppraiser {
   }
 }
 
-const APPRAISE_SITE = 'participation.appraise';
+type AppraisalSiteId = 'participation.appraise' | 'participation.appraise_dm';
+
+/**
+ * A private companion-dm (ICP) appraisal carries that conversation's history
+ * and is a companion_private decision site, so it always runs on the local
+ * backend; only group-room appraisal may use a remote backend.
+ */
+function appraisalSiteFor(candidate: ParticipationCandidate): AppraisalSiteId {
+  return candidate.participationSurface === 'companion_dm' ? 'participation.appraise_dm' : 'participation.appraise';
+}
 
 function describeSummons(candidate: ParticipationCandidate): string {
   if (candidate.participationSurface === 'companion_dm') return 'private companion conversation';

@@ -10,6 +10,7 @@ import type { DecisionShadowRecord } from '../../primitives/llm/decision/shadow-
 import type { DecisionOutcome } from '../../primitives/llm/decision/types.js';
 import { createDefaultParticipationAppraiserSettings } from '../../system/config/participation-config.js';
 import { ParticipationAppraiser } from './appraiser.js';
+import { buildAppraisalDecisionQuestions } from './appraiser-decision.js';
 import type { ParticipationCandidate } from './types.js';
 
 const COMPANION_NAME = 'Persephone';
@@ -154,22 +155,44 @@ describe('ParticipationAppraiser on decide()', () => {
     });
   });
 
-  it('offers only ignore and reply on the private companion surface', async () => {
-    const { provider } = recordingProvider();
-    const { decisions, jevSpy } = runtime(settingsFor('jev'), async () => ({
-      ok: true,
-      answers: { action: { type: 'choice', choice: 'ignore', probabilities: { ignore: 0.9, reply: 0.1 } } },
-      backend: 'jev',
-      probabilitySource: 'jev',
-      latencyMs: 20,
-    }));
-    await new ParticipationAppraiser({
-      llmProvider: provider, companionName: COMPANION_NAME, decisions,
-    }).appraise(makeCandidate({ participationSurface: 'companion_dm', trigger: 'companion_message' }));
-    const questions = jevSpy.mock.calls[0]?.[0].questions;
-    expect(Object.keys(questions ?? {})).toEqual(['action']);
-    expect(questions?.action).toMatchObject({ type: 'choice' });
-    expect(Object.keys((questions?.action as { criteria: object }).criteria)).toEqual(['ignore', 'reply']);
+  it('never sends a private companion-dm appraisal with its history to jev (p6s1f)', async () => {
+    const dmCandidate = makeCandidate({
+      channelId: 'companion-dm:aaaaaaaa-0000-4000-8000-00000000000a:bbbbbbbb-0000-4000-8000-00000000000b',
+      channelType: 'companion',
+      participationSurface: 'companion_dm',
+      trigger: 'companion_message',
+      triggerContent: 'private sibling message',
+      precedingContext: [{
+        messageId: 'dm-1', authorId: 'peer', authorName: 'Nova',
+        content: 'private sibling history', timestampMs: 999_000,
+      }],
+    });
+    const settingsVariants: DecisionBackendSettings[] = [
+      { ...createDefaultDecisionBackendSettings(), mode: 'jev' },
+      { ...createDefaultDecisionBackendSettings(), mode: 'shadow' },
+      settingsFor('jev'),
+      {
+        ...createDefaultDecisionBackendSettings(),
+        mode: 'jev',
+        sites: { 'participation.appraise_dm': { mode: 'jev' } },
+      },
+    ];
+    for (const settings of settingsVariants) {
+      const { provider, calls } = recordingProvider();
+      const { decisions, jevSpy, records } = runtime(settings);
+      const result = await new ParticipationAppraiser({
+        llmProvider: provider, companionName: COMPANION_NAME, decisions,
+      }).appraise(dmCandidate);
+      expect(jevSpy).not.toHaveBeenCalled();
+      expect(records).toHaveLength(0);
+      expect(calls).toHaveLength(1);
+      expect(JSON.stringify(calls[0])).toContain('private sibling history');
+      expect(result.appraisal).toEqual({ action: 'reply', reasonCode: 'asked', confidence: 0.7 });
+    }
+  });
+
+  it('refuses to build remote questions for the private companion surface', () => {
+    expect(() => buildAppraisalDecisionQuestions('companion_dm')).toThrow('companion_private');
   });
 
   it('falls back to the exact local appraisal when jev fails', async () => {

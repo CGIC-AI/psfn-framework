@@ -85,6 +85,84 @@ function makeBudgetConfig(dataDir: string): SubstrateConfig {
 }
 
 describe('Postgres model-usage budget projection', () => {
+  it('counts provider-priced decision rows as known spend and unpriced rows as unknown (21c4v)', async () => {
+    if (!harness) throw new Error('Postgres test harness is unavailable');
+    const { databaseUrl } = await harness.createDatabase();
+    const pool = createPostgresPool(databaseUrl, {
+      applicationName: 'model-usage-provider-priced-budget',
+      allowExitOnIdle: true,
+      max: 1,
+    });
+    const dataDir = mkdtempSync(join(tmpdir(), 'model-usage-provider-priced-budget-'));
+    const config = makeBudgetConfig(dataDir);
+    try {
+      const store = new PostgresModelUsageStore(pool, { companionId: 'companion-a' });
+      const nowMs = Date.now();
+      const decisionRow = {
+        attempt: 1,
+        recordedAtMs: nowMs - 1_000,
+        startedAtMs: nowMs - 1_010,
+        completedAtMs: nowMs - 1_000,
+        callKind: 'completion' as const,
+        attribution: { callType: 'background' as const, purpose: 'decision', originStage: 'decision:memory.rerank' },
+        provider: 'openrouter',
+        model: 'decision-vendor/decision-model',
+      };
+      await store.recordUsageEvent({
+        ...decisionRow,
+        logicalCallId: 'decision-provider-priced',
+        status: 'success',
+        inputTokens: 400,
+        outputTokens: 60,
+        providerCostUsd: 0.000025,
+        costSource: 'provider',
+      });
+      await store.recordUsageEvent({
+        ...decisionRow,
+        logicalCallId: 'decision-http-refusal',
+        status: 'failure',
+        inputTokens: 0,
+        outputTokens: 0,
+        estimatedCostUsd: 0,
+        costSource: 'none',
+        errorCode: 'http_502',
+      });
+      const spend = await store.getModelBudgetSpend(nowMs, undefined, []);
+      expect(spend.dailyUnknownCostAttempts).toBe(0);
+      expect(spend.dailyEstimatedCostUsd).toBeCloseTo(0.000025, 9);
+
+      const preflight = await new ModelBudgetController(config, store).evaluatePreflight({
+        candidate: {
+          provider: MODEL_ENTRY.identity.provider,
+          model: MODEL_ENTRY.identity.model,
+          maxTokens: MODEL_ENTRY.capabilities.maxOutputTokens,
+          slotKey: MODEL_ENTRY.id,
+        },
+        purpose: 'background',
+        service: 'background',
+        process: 'regression.after-decision',
+        estimatedInputTokens: 1,
+        estimatedOutputTokens: 1,
+        nowMs,
+      });
+      expect(preflight.allowed).toBe(true);
+
+      await store.recordUsageEvent({
+        ...decisionRow,
+        logicalCallId: 'decision-aborted-unpriced',
+        status: 'failure',
+        inputTokens: 0,
+        outputTokens: 0,
+        costSource: 'none',
+        errorCode: 'aborted',
+      });
+      expect((await store.getModelBudgetSpend(nowMs, undefined, [])).dailyUnknownCostAttempts).toBe(1);
+    } finally {
+      await pool.end();
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
   it('prices only a registry-matched historical success before budget preflight', async () => {
     if (!harness) throw new Error('Postgres test harness is unavailable');
     const { databaseUrl } = await harness.createDatabase();

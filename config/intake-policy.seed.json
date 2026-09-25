@@ -90,7 +90,7 @@
     "mandatoryTiers": ["hostile"],
     "timeoutMs": 30000,
     "maxContentChars": 48000,
-    "maxOutputTokens": 1200
+    "maxOutputTokens": 4096
   },
   "visionScreener": {
     "enabled": true,

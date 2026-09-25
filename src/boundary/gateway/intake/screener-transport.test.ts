@@ -393,3 +393,41 @@ describe('screener per-dispatch usage report (1fyyi)', () => {
     }]);
   });
 });
+
+
+describe('screener completion cap exhausted by reasoning (L3 GLM)', () => {
+  it('names the owner-file cap and does not repeat the request', async () => {
+    const selected = model('shared-router', 'reasoning/model');
+    let calls = 0;
+    const runtime = fromAny<ProviderRuntime>({
+      getModels: (provider: string) => provider === 'shared-router' ? [selected] : [],
+      resolveProviderApiKey: () => 'vault-key',
+      complete: async () => {
+        calls += 1;
+        return fromAny<AssistantMessage>({
+          role: 'assistant',
+          provider: 'shared-router',
+          model: selected.id,
+          api: 'openai-completions',
+          content: [{ type: 'thinking', thinking: 'long deliberation' }],
+          stopReason: 'length',
+          usage: { input: 900, output: 1200, cacheRead: 0, cacheWrite: 0, totalTokens: 2100, cost: {} },
+        });
+      },
+    });
+    await expect(callValidatedToolLessJsonScreener({
+      backend: { runtime, requestCapability: new LLMRequestCapability(fromAny({}), runtime) },
+      model: fromAny({ provider: 'shared-router', model: selected.id, maxTokens: 8192 }),
+      timeoutMs: 30_000,
+      maxOutputTokens: 1200,
+      systemPrompt: 'classifier',
+      userMessage: 'untrusted input',
+      screenerName: 'L3 screener',
+      makeError: (message: string) => new Error(message),
+      validateContent: (content: string) => JSON.parse(content) as object,
+      // As in the L2/L3 callers: only caller-owned schema errors are repaired.
+      isValidationError: () => false,
+    })).rejects.toThrow(/completion cap of 1200 tokens was exhausted before any answer/);
+    expect(calls).toBe(1);
+  });
+});

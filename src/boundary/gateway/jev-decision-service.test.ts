@@ -130,7 +130,9 @@ describe('createGatewayJevDecisionService', () => {
     const { svc, usage } = service(makeConfig(), okFetch(502, { error: { message: 'echo: checkout page' } }));
     const outcome = await svc.decide(INPUT);
     expect(outcome).toMatchObject({ ok: false, reason: 'error' });
-    expect(usage[0]).toMatchObject({ status: 'failure', errorCode: 'http_502', costSource: 'none' });
+    expect(usage[0]).toMatchObject({
+      status: 'failure', errorCode: 'http_502', costSource: 'none', estimatedCostUsd: 0,
+    });
     expect(JSON.stringify(usage[0])).not.toContain('checkout page');
   });
 
@@ -148,7 +150,9 @@ describe('createGatewayJevDecisionService', () => {
     const config = makeConfig({
       decisionBackend: { ...settings('jev'), jev: { ...settings('jev').jev, timeoutMs: 50 } },
     });
-    const { svc } = service(config, hanging);
+    const { svc, usage } = service(config, hanging);
     await expect(svc.decide(INPUT)).resolves.toMatchObject({ ok: false, reason: 'aborted' });
+    // An aborted call may have been billed: its cost stays unknown (21c4v).
+    expect(usage[0]).not.toHaveProperty('estimatedCostUsd');
   });
 });

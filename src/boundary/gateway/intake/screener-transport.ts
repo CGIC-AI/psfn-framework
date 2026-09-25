@@ -392,6 +392,16 @@ async function callToolLessJsonScreenerThroughPi(
     );
   }
   const content = extractPiMessageText(response);
+  if (content.trim().length === 0 && response.stopReason === 'length') {
+    // A reasoning model spent the whole completion cap thinking. Repeating the
+    // same request under the same cap cannot succeed, so this is not repaired:
+    // it names the owner-file cap the operator must raise.
+    throw input.makeError(
+      `${input.screenerName} completion cap${input.maxOutputTokens !== undefined
+        ? ` of ${String(input.maxOutputTokens)} tokens` : ''} was exhausted before any answer `
+      + '(reasoning output); raise the screener maxOutputTokens for this model',
+    );
+  }
   if (content.trim().length === 0) {
     throw responseFailure(input, `${input.screenerName} response contained no assistant content`);
   }
@@ -503,6 +513,7 @@ export async function callValidatedToolLessJsonScreener<T>(
     callInput: ToolLessScreenerCallInput,
   ): Promise<T> => input.validateContent(await callToolLessJsonScreener(callInput));
 
+  let repairHint: string | undefined;
   try {
     return await validateAttempt(input);
   } catch (error) {
@@ -510,12 +521,25 @@ export async function callValidatedToolLessJsonScreener<T>(
       && error !== null
       && retryableResponseFailures.has(error);
     if (!retryableResponse && !input.isValidationError(error)) throw error;
+    repairHint = screenerRepairHint(error);
   }
 
   return validateAttempt({
     ...input,
-    systemPrompt: `${input.systemPrompt}\n\n${SCHEMA_REPAIR_INSTRUCTION}`,
+    systemPrompt: [input.systemPrompt, SCHEMA_REPAIR_INSTRUCTION, repairHint]
+      .filter((part): part is string => Boolean(part))
+      .join('\n\n'),
   });
+}
+
+/**
+ * A caller's schema error may carry fixed, code-owned repair guidance (never
+ * model output or screened text) naming what the first answer got wrong.
+ */
+function screenerRepairHint(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null) return undefined;
+  const hint = (error as { repairHint?: unknown }).repairHint;
+  return typeof hint === 'string' && hint.trim().length > 0 ? hint : undefined;
 }
 
 /**

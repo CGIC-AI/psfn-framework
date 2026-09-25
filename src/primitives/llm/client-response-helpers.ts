@@ -565,6 +565,38 @@ export function extractToolCallsFromContentBlocks(blocks?: unknown[]): ToolCall[
   });
 }
 
+const PROVIDER_ERROR_LEADING_STATUS = /^\s*([1-5]\d{2})\b/u;
+
+/**
+ * pi-ai resolves (does not throw) a completion whose provider call failed or
+ * was aborted, as an assistant message with stopReason 'error' or 'aborted'
+ * and no content. Surface that as the real failure instead of an "empty
+ * response": an abort (e.g. a model-call gate preemption) is an AbortError that
+ * stops fallback, and a provider error carries the provider's own message and
+ * HTTP status so fallback classifies it (rate limit, auth, 5xx, ...).
+ */
+export function assertProviderCompletionStopReason(
+  response: { stopReason?: unknown; errorMessage?: unknown },
+  candidate: RoutingCandidate,
+): void {
+  const detail = typeof response.errorMessage === 'string' ? response.errorMessage.trim() : '';
+  if (response.stopReason === 'aborted') {
+    const error = new Error(
+      `LLM request to ${candidate.provider}/${candidate.model} was aborted${detail ? `: ${detail}` : ''}`,
+    );
+    error.name = 'AbortError';
+    throw error;
+  }
+  if (response.stopReason === 'error') {
+    const error = new Error(
+      `LLM provider error from ${candidate.provider}/${candidate.model}: ${detail || 'no provider detail'}`,
+    ) as Error & { status?: number };
+    const status = PROVIDER_ERROR_LEADING_STATUS.exec(detail)?.[1];
+    if (status) error.status = Number(status);
+    throw error;
+  }
+}
+
 export function assertUsableProviderResponse(
   response: {
     content?: unknown;

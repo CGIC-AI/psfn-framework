@@ -72,6 +72,7 @@ import {
 } from '../../shared/resilience/circuit-breaker.js';
 import { classifyLLMError } from './error-classify.js';
 import {
+  assertProviderCompletionStopReason,
   assertUsableProviderResponse,
   extractCompletionToolCalls,
   normalizeContent,
@@ -1293,6 +1294,7 @@ export class LLMClient {
             throw err;
           }
           try {
+            assertProviderCompletionStopReason(response, candidateTarget);
             assertUsableProviderResponse(response, candidateTarget);
             assertExplicitToolContractSatisfied({
               choice: requestOptions.explicitToolContract?.choice,
@@ -1321,6 +1323,7 @@ export class LLMClient {
                 requestedModel: requestedModel ?? candidateTarget.model,
                 status: 'failure',
                 settlement: 'complete',
+                stopReason: response.stopReason,
                 error: err,
                 providerObservability,
                 metadata: {

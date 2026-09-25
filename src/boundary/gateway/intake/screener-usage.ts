@@ -99,7 +99,10 @@ export function createIntakeScreenerUsageLedger(options: {
         cacheReadTokens: attempt.cacheReadTokens,
         cacheWriteTokens: attempt.cacheWriteTokens,
         estimatedCostUsd,
-        costSource: 'estimate',
+        // The store derives the cost source from the reconciled totals: a
+        // positive estimate is 'estimate', a zero-rate (subscription) dispatch
+        // is a known $0 with source 'none' (y3k38).
+        costSource: estimatedCostUsd > 0 ? 'estimate' : 'none',
         ...(attempt.errorCode ? { errorCode: attempt.errorCode } : {}),
       }).catch((error: unknown) => {
         log.warn('Failed to record intake screener usage', {

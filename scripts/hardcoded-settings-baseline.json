@@ -943,6 +943,12 @@
     },
     {
       "file": "src/boundary/gateway/intake/l3-screener.ts",
+      "name": "L3_MIN_VERBATIM_QUOTE_WORDS",
+      "value": "8",
+      "note": "Code-owned CogSec safety guard (summary-instead-of-quote), sibling of L3_MIN_VERBATIM_QUOTE_CHARS; lowering it re-breaks honest L3 summaries of long pages, raising it weakens the echo guard, so it is not an operator tuning knob."
+    },
+    {
+      "file": "src/boundary/gateway/intake/l3-screener.ts",
       "name": "MAX_CONTENT_TYPE_CHARS",
       "value": "64"
     },

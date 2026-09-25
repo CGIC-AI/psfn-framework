@@ -1,4 +1,5 @@
 import { isRecord } from '../../../shared/utils/types.js';
+import { filterConcernsForViewer, type ConcernViewer } from '../../intention/concern-visibility.js';
 import type { AgentTool } from '../../../boundary/pi-agent/index.js';
 import type {
   RequesterProvenance,
@@ -560,6 +561,8 @@ export function buildRuntimeContext(input: {
 export function resolveActiveConcernsRuntimeData(input: {
   activeConcernProvider: ActiveConcernContextProvider | null | undefined;
   canonicalContactKey?: string;
+  /** Viewer of this turn; threads it may not see never render (xz8m1). */
+  viewer: Omit<ConcernViewer, 'canonicalContactKey'>;
   logger: RuntimeContextLogger;
 }): ActiveConcernRuntimeData | undefined {
   if (!input.activeConcernProvider) return undefined;
@@ -574,8 +577,12 @@ export function resolveActiveConcernsRuntimeData(input: {
     return undefined;
   }
 
-  if (concerns.length === 0) return undefined;
-  return buildActiveConcernsRuntimeData(concerns);
+  const visible = filterConcernsForViewer(concerns, {
+    ...input.viewer,
+    ...(input.canonicalContactKey ? { canonicalContactKey: input.canonicalContactKey } : {}),
+  });
+  if (visible.length === 0) return undefined;
+  return buildActiveConcernsRuntimeData(visible);
 }
 
 export function buildMetacognitiveNotesContextBlock(

@@ -4818,7 +4818,10 @@ describe('SubstrateAgent.handleMessage', () => {
         source: 'agent',
         createdAt: '2026-02-01T10:00:00.000Z',
         expiresAt: '2026-02-03T10:00:00.000Z',
-        contactId: 'user-123',
+        // Companion-wide and public so this plumbing test is independent of the
+        // viewer gate (xz8m1), which the gate's own tests cover.
+        sensitivity: 'public',
+        evidenceRefs: [],
       }]),
     }));
 
@@ -5025,6 +5028,8 @@ describe('SubstrateAgent.handleMessage', () => {
           source: 'agent',
           createdAt: '2026-01-01T00:00:00.000Z',
           expiresAt: '2026-01-02T00:00:00.000Z',
+          sensitivity: 'personal',
+          evidenceRefs: [],
         },
       ]),
     });

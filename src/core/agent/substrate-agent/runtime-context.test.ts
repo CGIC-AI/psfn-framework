@@ -397,6 +397,7 @@ describe('active concerns runtime data resolution', () => {
         },
       },
       canonicalContactKey: 'contact-alex',
+      viewer: { trustLevel: 'primary', channelDisclosure: { channelPrivacy: 'private', broadcast: false } },
       logger,
     });
 
@@ -407,6 +408,37 @@ describe('active concerns runtime data resolution', () => {
     );
   });
 
+  it('renders no other-conversation open thread for a public caller in a fresh room (xz8m1)', () => {
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+    const otherConversationThread = {
+      id: 'concern-halcyon',
+      text: 'Research boat leak severity unconfirmed',
+      priority: 'medium',
+      source: 'agent',
+      status: 'active',
+      createdAt: '2026-09-25T00:00:00.000Z',
+      expiresAt: '2026-09-26T00:00:00.000Z',
+      salience: 0.4,
+      sensitivity: 'personal',
+      owner: 'companion',
+      evidenceRefs: [{ kind: 'turn', ref: 'turn-other-room' }],
+      resolutionEvidenceRefs: [],
+    } as const;
+    const provider = { getActiveConcerns: () => [otherConversationThread] as never };
+    const publicCaller = resolveActiveConcernsRuntimeData({
+      activeConcernProvider: provider,
+      viewer: { trustLevel: 'public', channelDisclosure: { channelPrivacy: 'private', broadcast: false } },
+      logger,
+    });
+    expect(publicCaller).toBeUndefined();
+
+    const owner = resolveActiveConcernsRuntimeData({
+      activeConcernProvider: provider,
+      viewer: { trustLevel: 'primary', channelDisclosure: { channelPrivacy: 'private', broadcast: false } },
+      logger,
+    });
+    expect(owner?.totalCount).toBe(1);
+  });
 });
 
 describe('runtime subject identity', () => {

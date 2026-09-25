@@ -5,6 +5,7 @@
 // assembly, the agent owns the state. Deps are callback-shaped because most
 // providers are null-until-wired after construction.
 
+import type { ConcernViewer } from '../../intention/concern-visibility.js';
 import type { SubstrateMessage, ResponseStyle } from '../../../shared/contracts/runtime.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import type { CoreSubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
@@ -225,7 +226,13 @@ export class PromptContextBuilder {
       extendedTools,
       coreToolNames,
       skillsContext,
-      activeConcerns: this.resolveActiveConcernsRuntimeData(canonicalContactKey),
+      activeConcerns: this.resolveActiveConcernsRuntimeData(canonicalContactKey, {
+        trustLevel,
+        channelDisclosure: {
+          channelPrivacy: conversationScope.envelope.channelPrivacy,
+          broadcast: conversationScope.envelope.broadcast,
+        },
+      }),
       behavioralNotesBlock: this.buildBehavioralNotesContextBlock(canonicalContactKey),
       lastMessageReceivedAtMs: latestPriorMessage?.timestamp ?? null,
       recentChannelEntries: recentMessages,
@@ -324,10 +331,14 @@ export class PromptContextBuilder {
     });
   }
 
-  resolveActiveConcernsRuntimeData(canonicalContactKey?: string): ActiveConcernRuntimeData | undefined {
+  resolveActiveConcernsRuntimeData(
+    canonicalContactKey: string | undefined,
+    viewer: Omit<ConcernViewer, 'canonicalContactKey'>,
+  ): ActiveConcernRuntimeData | undefined {
     return resolveActiveConcernsRuntimeDataForTurn({
       activeConcernProvider: this.deps.getActiveConcernProvider(),
       canonicalContactKey,
+      viewer,
       logger: this.deps.log,
     });
   }

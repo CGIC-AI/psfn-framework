@@ -58,6 +58,8 @@ export type FleetAuthLifecycleCorsDisposition = 'not_applicable' | 'continue' | 
  */
 export interface FleetAuthRosterSource {
   resolveRoster(input: { sessionToken: string }): Promise<FleetPortalRoster>;
+  /** Whole-fleet roster for the audited ADMIN_TOKEN key (key-or-SSO ruling). */
+  resolveAdminTokenRoster(): FleetPortalRoster;
 }
 
 function singleHeader(value: string | string[] | undefined): string | undefined {
@@ -269,6 +271,12 @@ export class FleetAuthHttpRoutes {
       throw new FleetAuthBrokerError('fleet_auth_route_not_found', 404);
     }
     response.setHeader('Vary', 'Cookie');
+    if (this.matchesAdminToken(request)) {
+      sendJson(response, 200, this.rosterSource.resolveAdminTokenRoster(), {
+        'Cache-Control': 'no-store, private',
+      });
+      return;
+    }
     const sessionToken = readSessionCookie(request);
     if (!sessionToken) {
       throw new FleetAuthBrokerError('invalid_session', 401, 'Session is invalid or expired');
@@ -290,11 +298,16 @@ export class FleetAuthHttpRoutes {
       throw new FleetAuthBrokerError('fleet_auth_route_not_found', 404);
     }
     response.setHeader('Vary', 'Cookie');
+    const approvalsSource = this.approvalsSource;
+    if (this.matchesAdminToken(request)) {
+      const approvals = buildFleetApprovalsView(this.rosterSource.resolveAdminTokenRoster(), approvalsSource);
+      sendJson(response, 200, { schemaVersion: 1, approvals }, { 'Cache-Control': 'no-store, private' });
+      return;
+    }
     const sessionToken = readSessionCookie(request);
     if (!sessionToken) {
       throw new FleetAuthBrokerError('invalid_session', 401, 'Session is invalid or expired');
     }
-    const approvalsSource = this.approvalsSource;
     try {
       // The roster is the single authorization/attribution source: only the
       // companions the session may reach get display names here, so any
@@ -392,7 +405,23 @@ export class FleetAuthHttpRoutes {
         if (!returnPath || [...url.searchParams.keys()].some(key => key !== 'return_to')) {
           throw new FleetAuthBrokerError('invalid_login_request', 400, 'Login request is malformed');
         }
-        const started = await this.broker.beginLogin({ returnPath });
+        let started: Awaited<ReturnType<GatewayFleetAuthBroker['beginLogin']>>;
+        try {
+          started = await this.broker.beginLogin({ returnPath });
+        } catch (error) {
+          // Key mode (no SSO provider): a browser navigation lands on the
+          // ADMIN_TOKEN sign-in instead of a JSON dead end; API clients still
+          // get the typed provider_disabled error.
+          if (error instanceof FleetAuthBrokerError && error.code === 'provider_disabled'
+            && (singleHeader(request.headers.accept) ?? '').includes('text/html')) {
+            response.statusCode = 303;
+            response.setHeader('Location', '/fleet/login');
+            response.setHeader('Cache-Control', 'no-store');
+            response.end();
+            return;
+          }
+          throw error;
+        }
         response.statusCode = 302;
         response.setHeader('Location', started.authorizationUrl);
         response.setHeader('Set-Cookie', preauthCookie(
@@ -440,6 +469,22 @@ export class FleetAuthHttpRoutes {
           throw new FleetAuthBrokerError('fleet_auth_route_not_found', 404);
         }
         response.setHeader('Vary', 'Cookie');
+        if (this.matchesAdminToken(request)) {
+          // The audited ADMIN_TOKEN key is the deployment operator; no SSO
+          // session or Discord identity is involved (key-or-SSO ruling).
+          sendJson(response, 200, {
+            schemaVersion: 1,
+            state: 'signed_in',
+            displayStateBinding: this.broker.displayStateBinding({
+              principalId: 'admin-token-operator',
+              authority: { authorityGeneration: 0, globalAuthEpoch: 0 },
+            }),
+            guestMode: this.companionUi.guestMode,
+            websocketPath: `/companion-ui/companions/${this.companionUi.companionId}/ws`,
+            human: { provider: 'admin_token', label: 'Administrator', role: 'owner' },
+          }, { 'Cache-Control': 'no-store, private' });
+          return;
+        }
         const statusToken = readSessionCookie(request);
         if (!statusToken) {
           sendJson(response, 200, {

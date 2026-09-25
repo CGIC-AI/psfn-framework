@@ -30,6 +30,9 @@ import {
 } from '../../operator/garden/garden-request-context.js';
 import { resolveOperatorLayerWriter } from '../../operator/garden/services/prompt-operator-layer-authority.js';
 import { GatewayFleetSsoRouter } from './fleet-sso-router.js';
+import { TESTING_HARNESS_GARDEN_ADMIN_ACTIONS } from '../../channels/backplane/testing-harness-garden-config.js';
+import { validateFleetAuthConfig } from '../../system/config/fleet-auth-config.js';
+import { noSsoOwnerFile } from '../../test-support/fixtures/fleet-auth-no-sso-owner-file.js';
 
 const { httpRequest } = vi.hoisted(() => ({ httpRequest: vi.fn() }));
 
@@ -148,7 +151,7 @@ function captureProxy(): { headers: () => IncomingHttpHeaders; path: () => strin
   return { headers: () => capturedHeaders, path: () => capturedPath };
 }
 
-function createAdminTokenOnlyGateway() {
+function createAdminTokenOnlyGateway(options: { harnessKey?: string } = {}) {
   const { privateKey, publicKey } = generateKeyPairSync('ed25519');
   const audit = {
     record: vi.fn(async () => ({
@@ -194,6 +197,21 @@ function createAdminTokenOnlyGateway() {
     upstreams: [{ companionId: COMPANION_ID, origin: new URL('http://127.0.0.1:19321') }],
     nowSeconds: () => NOW_SECONDS,
     denialLogger: { warn: vi.fn() },
+    ...(options.harnessKey
+      ? {
+          testingHarness: {
+            apiKey: options.harnessKey,
+            policy: {
+              enabled: true,
+              principalId: 'testing-harness',
+              operatorGrantId: 'testing-harness-grant',
+              role: 'owner',
+              allowedActions: [...TESTING_HARNESS_GARDEN_ADMIN_ACTIONS],
+            },
+            audit,
+          },
+        }
+      : {}),
   } as ConstructorParameters<typeof GatewayFleetSsoRouter>[0]);
   const chatAdmissions: string[] = [];
   router.registerGardenChatHandler(async (admission) => {
@@ -362,3 +380,117 @@ describe('audited ADMIN_TOKEN operator reaches every Garden mutation without SSO
     }
   });
 });
+
+describe('provider-none fleet: keys alone reach every operator capability (key-or-SSO ruling)', () => {
+  const HARNESS_KEY = 'testing-harness-key-for-provider-none';
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(NOW_SECONDS * 1_000);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    httpRequest.mockReset();
+  });
+
+  async function drive(route: GardenRouteCapability, authorization: string) {
+    const gateway = createAdminTokenOnlyGateway({ harnessKey: HARNESS_KEY });
+    captureProxy();
+    const body = route.body.mode === 'forbidden' ? undefined : Buffer.from('{}');
+    const probe = responseProbe();
+    await gateway.router.handle(gatewayRequest({
+      method: route.method,
+      // The fleet cost view requires an explicit range (it is not optional).
+      path: `/companions/${COMPANION_ID}/garden${concretePath(route.pattern)}${
+        route.id === 'GET /api/admin/fleet-model-usage' ? '?range=week' : ''}`,
+      headers: {
+        authorization,
+        origin: CANONICAL_ORIGIN,
+        ...(body ? { 'content-type': 'application/json' } : {}),
+      },
+      ...(body ? { body } : {}),
+    }), probe.response as never);
+    return { status: probe.response.statusCode, audit: gateway.audit, broker: gateway.broker };
+  }
+
+  it('declares no SSO provider and needs no Discord credential', () => {
+    const config = validateFleetAuthConfig(noSsoOwnerFile(CANONICAL_ORIGIN), 'fleet-auth.json');
+    expect(config.provider).toEqual({ kind: 'none' });
+    expect(JSON.stringify(config)).not.toMatch(/DISCORD_CLIENT|clientSecret/u);
+  });
+
+  const harnessRoutes = operatorMutations()
+    .filter(route => route.id !== 'POST /v1/chat/completions');
+  it.each(harnessRoutes.map(route => [route.id, route] as const))(
+    'harness key or ADMIN_TOKEN reaches %s with no SSO',
+    async (_id, route) => {
+      const harnessAllowed = (TESTING_HARNESS_GARDEN_ADMIN_ACTIONS as readonly string[])
+        .includes(route.authorization.action);
+      const harness = await drive(route, `Bearer ${HARNESS_KEY}`);
+      if (harnessAllowed) {
+        expect(harness.status).toBe(200);
+        expect(harness.audit.record).toHaveBeenCalledWith(expect.objectContaining({
+          provider: 'testing_harness',
+          action: route.authorization.action,
+        }));
+      } else {
+        // Operator-only by design (e.g. prompts.manage): the harness door
+        // refuses without revealing the route, and the ADMIN_TOKEN covers it below.
+        expect([403, 404]).toContain(harness.status);
+        expect(harness.audit.record).not.toHaveBeenCalled();
+      }
+      expect(harness.broker.resolveAuthorizationContext).not.toHaveBeenCalled();
+      const operator = await drive(route, `Bearer ${ADMIN_TOKEN}`);
+      expect(operator.status).toBe(200);
+      expect(operator.broker.resolveAuthorizationContext).not.toHaveBeenCalled();
+    },
+  );
+
+  it('signs the harness key as the deployment operator (sole_admin) when there is no SSO provider', async () => {
+    const gateway = createAdminTokenOnlyGateway({ harnessKey: HARNESS_KEY });
+    const upstream = captureProxy();
+    const probe = responseProbe();
+    await gateway.router.handle(gatewayRequest({
+      method: 'GET',
+      path: `/companions/${COMPANION_ID}/garden/api/admin/sessions`,
+      headers: { authorization: `Bearer ${HARNESS_KEY}` },
+    }), probe.response as never);
+    expect(probe.response.statusCode).toBe(200);
+    const admitted = await admitFleetGardenRequest({
+      admission: {
+        kind: 'fleet-principal',
+        audience: 'operator',
+        companionId: COMPANION_ID,
+        verifier: gateway.verifier,
+        replay: { consume: async input => ({ outcome: 'consumed', result: input.consumeResult }) },
+        testingHarness: { enabled: true },
+      },
+      rawTarget: upstream.path() ?? '/api/admin/sessions',
+      method: 'GET',
+      headers: upstream.headers(),
+      body: Buffer.alloc(0),
+    });
+    expect(admitted.decision).toBe('allow');
+    if (admitted.decision !== 'allow' || !('verified' in admitted)) return;
+    expect(admitted.verified.authContext).toMatchObject({
+      provider: 'testing_harness',
+      fleetAccessMode: 'sole_admin',
+    });
+  });
+
+  const readRoutes = GARDEN_ROUTE_CAPABILITIES.filter(route => (
+    route.method === 'GET'
+    && route.authorization.publicAccess === 'never'
+    && !route.pattern.startsWith('/_app/')
+  ));
+  it.each(readRoutes.map(route => [route.id, route] as const))(
+    'ADMIN_TOKEN reads %s with no SSO',
+    async (_id, route) => {
+      const operator = await drive(route, `Bearer ${ADMIN_TOKEN}`);
+      expect(operator.status).toBe(200);
+      expect(operator.broker.resolveAuthorizationContext).not.toHaveBeenCalled();
+    },
+  );
+});
+

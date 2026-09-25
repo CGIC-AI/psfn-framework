@@ -245,7 +245,7 @@ export const FLEET_LIFECYCLE_ERROR_HELP: Readonly<Partial<Record<FleetLifecycleE
   stale_topology: 'The roster changed after this plan was made. Create a new plan.',
   resume_required: 'This plan was partially applied. Resume it to continue.',
   approval_mismatch: 'The approval does not match this exact plan.',
-  readmission_requires_reapproval: 'This companion was removed before. Complete fleet-auth readd and reapproval, then plan with readmit.',
+  readmission_requires_reapproval: 'This companion was removed before. Complete fleet-auth readd and operator reinstatement, then plan with readmit.',
   fleet_auth_not_admitted: 'Fleet auth has not reapproved this companion yet.',
   fleet_auth_not_retired: 'Complete the fleet-auth companion removal ceremony first.',
   apply_requires_cli: 'This deployment applies plans through the CLI: npm run ops:fleet-lifecycle -- apply.',

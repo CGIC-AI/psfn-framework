@@ -22,6 +22,7 @@ import {
 import { GatewayFleetAuthBroker, type FleetAuthBrokerStore } from './fleet-auth-broker.js';
 import type { FleetPortalProjection } from './fleet-portal-projection.js';
 import { GatewayFleetSsoRouter, type FleetGardenChatAdmission } from './fleet-sso-router.js';
+import { noSsoOwnerFile } from '../../test-support/fixtures/fleet-auth-no-sso-owner-file.js';
 
 const { httpRequest } = vi.hoisted(() => ({ httpRequest: vi.fn() }));
 
@@ -34,73 +35,6 @@ const COMPANION_ID = createCompanionId('11111111-1111-4111-8111-111111111111');
 const CANONICAL_ORIGIN = 'https://fleet.example.test';
 const ADMIN_TOKEN = 'fleet-admin-token-for-no-sso-tests';
 const NOW_SECONDS = 1_783_000_000;
-
-function credential(envName: string) {
-  return { kind: 'env' as const, envName };
-}
-
-function publicPem(): string {
-  return generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'pem' }).toString();
-}
-
-/** A complete fleet-auth.json that declares no human SSO provider. */
-function noSsoOwnerFile(): unknown {
-  return {
-    schemaVersion: 1,
-    activationGeneration: 1,
-    canonicalOrigin: CANONICAL_ORIGIN,
-    callbackPath: '/auth/discord/callback',
-    provider: { kind: 'none' },
-    credentials: {
-      tokenEncryptionKeyRef: credential('FLEET_AUTH_TOKEN_ENCRYPTION_KEY'),
-      sessionPepperRef: credential('FLEET_AUTH_SESSION_PEPPER'),
-      assertionPrivateKeyRef: credential('FLEET_AUTH_ASSERTION_PRIVATE_KEY'),
-      trustedHostRecoveryCredentialRef: credential('FLEET_AUTH_RECOVERY_CREDENTIAL'),
-      runtimeDatabaseUrlRef: credential('FLEET_AUTH_RUNTIME_DATABASE_URL'),
-      migrationDatabaseUrlRef: credential('FLEET_AUTH_MIGRATION_DATABASE_URL'),
-      backupRestoreDatabaseUrlRef: credential('FLEET_AUTH_BACKUP_DATABASE_URL'),
-      authorityFloorRootRef: credential('FLEET_AUTH_AUTHORITY_FLOOR_ROOT'),
-    },
-    databaseRoles: {
-      runtime: 'fleet_auth_runtime',
-      migration: 'fleet_auth_migration',
-      backupRestore: 'fleet_auth_backup',
-    },
-    verifierKeys: [{
-      issuer: 'fleet-no-sso-test',
-      kid: 'broker-2026-07',
-      publicKeyPem: publicPem(),
-      notBefore: '2026-07-01T00:00:00.000Z',
-      notAfter: '2099-07-01T00:00:00.000Z',
-      status: 'active',
-    }],
-    hubDeviceAssertions: {
-      issuer: 'fleet-no-sso-hub',
-      audience: CANONICAL_ORIGIN,
-      maxTtlSeconds: 60,
-      clockSkewSeconds: 2,
-      keys: [{
-        kid: 'hub-2026-07',
-        publicKeyPem: publicPem(),
-        notBefore: '2026-07-01T00:00:00.000Z',
-        notAfter: '2099-07-01T00:00:00.000Z',
-        status: 'active',
-      }],
-    },
-    ttls: {
-      oauthTransactionMs: 300_000,
-      sessionIdleMs: 1_800_000,
-      sessionAbsoluteMs: 28_800_000,
-      discordEvidenceMs: 300_000,
-      escalationGrantMs: 900_000,
-      internalAssertionMs: 30_000,
-    },
-    rolePolicy: {
-      disabledActionsByRole: { owner: [], admin: [], member: [], guest: [] },
-    },
-    discordEvidenceMappings: [],
-  };
-}
 
 function gatewayRequest(options: {
   method: string;
@@ -187,7 +121,7 @@ function adminPortalProjection(): FleetPortalProjection {
   };
 }
 
-function createNoSsoRouter(config: FleetAuthConfig) {
+function createNoSsoRouter(config: FleetAuthConfig, options: { companionUi?: boolean } = {}) {
   const { privateKey, publicKey } = generateKeyPairSync('ed25519');
   const audit = {
     record: vi.fn(async () => ({
@@ -202,6 +136,7 @@ function createNoSsoRouter(config: FleetAuthConfig) {
     input.response.end();
   });
   const resolveAdminToken = vi.fn(async () => adminPortalProjection());
+  const resolveAdminTokenUsage = vi.fn(async () => ({ schemaVersion: 1, generatedAt: 'now' }));
   const router = new GatewayFleetSsoRouter({
     canonicalOrigin: config.canonicalOrigin,
     trustProxy: true,
@@ -230,7 +165,7 @@ function createNoSsoRouter(config: FleetAuthConfig) {
     }),
     replay: { consume: async input => ({ outcome: 'consumed', result: input.consumeResult }) },
     portalProjection: { resolve: vi.fn(), resolveAdminToken },
-    modelUsageProjection: { resolve: vi.fn() },
+    modelUsageProjection: { resolve: vi.fn(), resolveAdminToken: resolveAdminTokenUsage },
     upstreams: [{ companionId: COMPANION_ID, origin: new URL('http://127.0.0.1:3219') }],
     lifecycleRoutes: {
       matches: (rawPath: string) => rawPath.startsWith('/v1/fleet/lifecycle/'),
@@ -238,8 +173,11 @@ function createNoSsoRouter(config: FleetAuthConfig) {
     },
     nowSeconds: () => NOW_SECONDS,
     denialLogger: { warn: vi.fn() },
+    ...(options.companionUi
+      ? { companionUi: { companionId: COMPANION_ID, origin: new URL('http://127.0.0.1:3212') } }
+      : {}),
   } as ConstructorParameters<typeof GatewayFleetSsoRouter>[0]);
-  return { router, audit, lifecycleHandle, resolveAdminToken };
+  return { router, audit, lifecycleHandle, resolveAdminToken, resolveAdminTokenUsage };
 }
 
 const ADMIN_BEARER = { authorization: `Bearer ${ADMIN_TOKEN}` };
@@ -249,7 +187,7 @@ describe('fleet with no SSO provider: full ADMIN_TOKEN access', () => {
     httpRequest.mockReset();
   });
 
-  const config = validateFleetAuthConfig(noSsoOwnerFile(), 'fleet-auth.json');
+  const config = validateFleetAuthConfig(noSsoOwnerFile(CANONICAL_ORIGIN), 'fleet-auth.json');
 
   it('validates the owner file without any Discord OAuth values', () => {
     expect(config.provider).toEqual({ kind: 'none' });
@@ -290,6 +228,16 @@ describe('fleet with no SSO provider: full ADMIN_TOKEN access', () => {
       expect(JSON.parse(probe.body())).toMatchObject({ error: { type: 'provider_disabled' } });
     }
     expect(fetchImpl).not.toHaveBeenCalled();
+
+    // A browser navigation to the SSO entry lands on the key sign-in instead.
+    const browser = responseProbe();
+    await routes.handle(
+      gatewayRequest({ method: 'GET', path: '/v1/fleet-auth/login?return_to=%2Ffleet', headers: { accept: 'text/html' } }),
+      browser.response as never,
+      new URL('/v1/fleet-auth/login?return_to=%2Ffleet', CANONICAL_ORIGIN),
+    );
+    expect(browser.response.statusCode).toBe(303);
+    expect(browser.header('location')).toBe('/fleet/login');
   });
 
   it('keeps browsers off the disabled Discord login and offers only the administrator form', async () => {
@@ -323,6 +271,63 @@ describe('fleet with no SSO provider: full ADMIN_TOKEN access', () => {
     expect(probe.response.statusCode).toBe(200);
     expect(JSON.parse(probe.body())).toMatchObject({ schemaVersion: 3, icp: { state: 'inactive_singleton' } });
     expect(resolveAdminToken).toHaveBeenCalledOnce();
+  });
+
+  it('serves the fleet usage summary to the ADMIN_TOKEN key and 401s anonymous callers', async () => {
+    const { router, resolveAdminTokenUsage } = createNoSsoRouter(config);
+    const probe = responseProbe();
+    await router.handle(
+      gatewayRequest({
+        method: 'GET',
+        path: '/v1/fleet/model-usage?range=week',
+        headers: { accept: 'application/json', cookie: `psfn_token=${ADMIN_TOKEN}` },
+      }),
+      probe.response as never,
+    );
+    expect(probe.response.statusCode).toBe(200);
+    expect(resolveAdminTokenUsage).toHaveBeenCalledWith(expect.objectContaining({ range: 'week' }));
+    const anonymous = responseProbe();
+    await router.handle(
+      gatewayRequest({ method: 'GET', path: '/v1/fleet/model-usage?range=week', headers: { accept: 'application/json' } }),
+      anonymous.response as never,
+    );
+    expect(anonymous.response.statusCode).toBe(401);
+  });
+
+  it('serves the browser Companion UI to the ADMIN_TOKEN cookie instead of the login landing', async () => {
+    const { router } = createNoSsoRouter(config, { companionUi: true });
+    const serve = vi.spyOn(router as unknown as { serveCompanionUi: () => Promise<void> }, 'serveCompanionUi')
+      .mockResolvedValue(undefined);
+    const keyed = responseProbe();
+    await router.handle(
+      gatewayRequest({ method: 'GET', path: '/companion-ui/', headers: { cookie: `psfn_token=${ADMIN_TOKEN}` } }),
+      keyed.response as never,
+    );
+    expect(serve).toHaveBeenCalledOnce();
+    const anonymous = responseProbe();
+    await router.handle(gatewayRequest({ method: 'GET', path: '/companion-ui/' }), anonymous.response as never);
+    expect(serve).toHaveBeenCalledOnce();
+    expect(anonymous.body()).toContain('Login with administrator token');
+  });
+
+  it('signs the key operator out by clearing the HttpOnly key cookie and the door marker', async () => {
+    const { router } = createNoSsoRouter(config);
+    const probe = responseProbe();
+    await router.handle(
+      gatewayRequest({ method: 'POST', path: '/fleet/logout', headers: { origin: CANONICAL_ORIGIN } }),
+      probe.response as never,
+    );
+    expect(probe.response.statusCode).toBe(204);
+    expect(probe.header('set-cookie')).toEqual([
+      expect.stringMatching(/^psfn_token=; .*Max-Age=0/u),
+      expect.stringMatching(/^garden_operator_door=; .*Max-Age=0/u),
+    ]);
+    const foreign = responseProbe();
+    await router.handle(
+      gatewayRequest({ method: 'POST', path: '/fleet/logout', headers: { origin: 'https://evil.example.test' } }),
+      foreign.response as never,
+    );
+    expect(foreign.response.statusCode).toBe(400);
   });
 
   it('routes the lifecycle UI routes to the ADMIN_TOKEN operator and 401s anonymous callers', async () => {

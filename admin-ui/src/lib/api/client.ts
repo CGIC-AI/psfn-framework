@@ -1,4 +1,5 @@
 import { getToken } from '$lib/stores/auth.svelte';
+import { usesAdminTokenOperatorDoor } from '$lib/stores/auth-storage';
 import {
   currentCompanionGardenScope,
   getCompanionCacheScope,
@@ -37,6 +38,13 @@ function redirectToLogin(): void {
   if (typeof window !== 'undefined') {
     const pathname = window.location.pathname;
     if (currentCompanionGardenScope(pathname) || isFleetOverviewPath(pathname)) {
+      // A key-mode operator signs in again at the fleet landing (the ADMIN_TOKEN
+      // form). Otherwise the SSO entry keeps the exact return path; with no SSO
+      // provider the gateway sends that browser navigation to the landing too.
+      if (usesAdminTokenOperatorDoor()) {
+        window.location.href = '/fleet/login';
+        return;
+      }
       const returnPath = `${pathname}${window.location.search ?? ''}`;
       window.location.href = `/v1/fleet-auth/login?return_to=${encodeURIComponent(returnPath)}`;
       return;

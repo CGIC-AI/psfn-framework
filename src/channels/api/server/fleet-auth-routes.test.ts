@@ -584,6 +584,7 @@ describe('gateway-only fleet auth HTTP routes', () => {
   }
 
   const authorizedRoster: FleetAuthRosterSource = {
+    resolveAdminTokenRoster: () => { throw new Error('ADMIN_TOKEN roster not expected'); },
     resolveRoster: async () => ({
       schemaVersion: 1,
       companions: [
@@ -611,7 +612,7 @@ describe('gateway-only fleet auth HTTP routes', () => {
 
     it('returns the authenticated roster with private no-store caching', async () => {
       const resolveRoster = vi.fn(authorizedRoster.resolveRoster);
-      const handler = rosterHandler({ rosterSource: { resolveRoster } });
+      const handler = rosterHandler({ rosterSource: { resolveRoster, resolveAdminTokenRoster: () => { throw new Error('unexpected'); } } });
       const res = response();
       await handler.handle(
         request('GET', { cookie: `__Host-psfn_session=${'a'.repeat(43)}` }),
@@ -1075,6 +1076,69 @@ describe('key mode has no provider-link ceremony (key-or-SSO ruling)', () => {
     expect(res.statusCode).toBe(400);
     expect(ceremonies.completeAsAdminTokenOperator).not.toHaveBeenCalled();
     expect(ceremonies.complete).not.toHaveBeenCalled();
+  });
+});
+
+describe('Companion UI and roster with the ADMIN_TOKEN key alone (key-or-SSO ruling)', () => {
+  const ADMIN_TOKEN = 'fleet-admin-token-for-companion-ui-tests';
+  const roster = {
+    schemaVersion: 1 as const,
+    companions: [{
+      companionId: COMPANION_ID,
+      displayName: 'Flagship',
+      websocketPath: `/companion-ui/companions/${COMPANION_ID}/ws`,
+    }],
+  };
+  function keyHandler() {
+    const resolveRoster = vi.fn(async () => { throw new Error('no SSO session'); });
+    const resolveAdminTokenRoster = vi.fn(() => roster);
+    const handler = new FleetAuthHttpRoutes({
+      broker: { displayStateBinding: vi.fn(() => 'c'.repeat(64)) } as unknown as GatewayFleetAuthBroker,
+      canonicalOrigin: 'https://fleet.example.test',
+      callbackPath: '/auth/discord/callback',
+      companionUi: { companionId: COMPANION_ID, guestMode: 'disabled' },
+      rosterSource: { resolveRoster, resolveAdminTokenRoster },
+      approvalsSource: { listPending: () => [], ownerOfConfirmation: () => undefined } as never,
+      adminToken: ADMIN_TOKEN,
+    });
+    return { handler, resolveRoster, resolveAdminTokenRoster };
+  }
+
+  it('reports a signed-in administrator status with no Discord identity', async () => {
+    const { handler } = keyHandler();
+    const res = response();
+    await handler.handle(
+      request('GET', { cookie: `psfn_token=${ADMIN_TOKEN}` }),
+      res,
+      new URL('https://fleet.example.test/v1/fleet-auth/session/status'),
+    );
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toEqual({
+      schemaVersion: 1,
+      state: 'signed_in',
+      displayStateBinding: 'c'.repeat(64),
+      guestMode: 'disabled',
+      websocketPath: `/companion-ui/companions/${COMPANION_ID}/ws`,
+      human: { provider: 'admin_token', label: 'Administrator', role: 'owner' },
+    });
+  });
+
+  it('serves the whole-fleet roster and approvals to the key, never the SSO resolver', async () => {
+    const { handler, resolveRoster, resolveAdminTokenRoster } = keyHandler();
+    for (const path of ['companions', 'approvals']) {
+      const res = response();
+      await handler.handle(
+        request('GET', { authorization: `Bearer ${ADMIN_TOKEN}` }),
+        res,
+        new URL(`https://fleet.example.test/v1/fleet-auth/${path}`),
+      );
+      expect(res.statusCode).toBe(200);
+    }
+    expect(resolveAdminTokenRoster).toHaveBeenCalledTimes(2);
+    expect(resolveRoster).not.toHaveBeenCalled();
+    const anonymous = response();
+    await handler.handle(request('GET'), anonymous, new URL('https://fleet.example.test/v1/fleet-auth/companions'));
+    expect(anonymous.statusCode).toBe(401);
   });
 });
 

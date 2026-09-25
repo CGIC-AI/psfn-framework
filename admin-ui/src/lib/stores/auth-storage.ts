@@ -37,7 +37,7 @@ const GARDEN_OPERATOR_DOOR_COOKIE = 'garden_operator_door';
 export function usesAdminTokenOperatorDoor(
   documentRef: LegacyAdminTokenDocument | undefined = globalThis.document,
 ): boolean {
-  if (!documentRef) return false;
+  if (!documentRef || typeof documentRef.cookie !== 'string') return false;
   return documentRef.cookie
     .split(';')
     .some(entry => entry.trim() === `${GARDEN_OPERATOR_DOOR_COOKIE}=admin_token`);

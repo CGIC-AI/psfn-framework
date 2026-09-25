@@ -159,7 +159,7 @@
       <input class="w-full rounded border border-bark-300 px-2 py-1 text-sm" placeholder="Postgres runtime role" bind:value={add.postgresRole} autocomplete="off" />
       <input class="w-full rounded border border-bark-300 px-2 py-1 text-sm" placeholder="Database URL env reference (e.g. COMPANION_X_DATABASE_URL)" bind:value={add.credentialEnvName} autocomplete="off" />
       <label class="flex items-center gap-2 text-sm text-shadow-700">
-        <input type="checkbox" bind:checked={add.readmit} /> Re-adding a previously removed companion (after fleet-auth reapproval)
+        <input type="checkbox" bind:checked={add.readmit} /> Re-adding a previously removed companion (after fleet-auth readd and operator reinstatement)
       </label>
       <button type="submit" class="garden-action rounded-lg border border-bark-300 px-3 py-1.5 text-sm" disabled={busy}>Plan add</button>
     </form>

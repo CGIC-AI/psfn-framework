@@ -69,7 +69,7 @@ function keyRequest(bearer = adminToken, extra: Record<string, string> = {}): In
   });
 }
 
-function fixture(options: { hub?: boolean; keys?: readonly string[] } = {}) {
+function fixture(options: { hub?: boolean; keys?: readonly string[]; adminCookie?: boolean } = {}) {
   const eventBus = new EventBus();
   const eventRelay = new CompanionEventRelay({
     eventBus,
@@ -106,6 +106,7 @@ function fixture(options: { hub?: boolean; keys?: readonly string[] } = {}) {
       guestMode: 'explicit' as const,
     } : {}),
     operatorKeys: options.keys ?? [adminToken, apiKey],
+    ...(options.adminCookie ? { adminTokenCookieKey: adminToken } : {}),
     operatorActionBroker: { execute: operatorExecute },
     eventRelay,
     authorityPollMs: 60_000,
@@ -310,4 +311,34 @@ describe('Companion UI WebSocket operator key path', () => {
     });
     await f.adapter.stop();
   });
+
+  describe('browser ADMIN_TOKEN cookie (key-or-SSO ruling)', () => {
+    const cookieRequest = (cookie: string, extra: Record<string, string> = {}) => request({
+      host: '127.0.0.1:10183', origin, cookie, ...extra,
+    });
+
+    it('admits the HttpOnly psfn_token cookie as the ADMIN_TOKEN key, even with the Hub path composed', async () => {
+      for (const hub of [false, true]) {
+        const f = fixture({ adminCookie: true, hub });
+        await admitted(f, cookieRequest(`psfn_token=${adminToken}`));
+        f.webSocket.emit('message', CONFIGURE, false);
+        await vi.waitFor(() => expect(f.webSocket.sent.length).toBe(1));
+        expect(JSON.parse(f.webSocket.sent[0]!)).toMatchObject({ type: 'session.ready', device: { id: 'operator-key' } });
+        expect(f.admit).not.toHaveBeenCalled();
+        await f.adapter.stop();
+      }
+    });
+
+    it('denies a wrong cookie, a foreign origin, extra cookies, and the cookie when not composed', async () => {
+      await denied(fixture({ adminCookie: true }), cookieRequest('psfn_token=not-the-admin-token-value'));
+      await denied(fixture({ adminCookie: true }), request({
+        host: '127.0.0.1:10183', origin: 'http://evil.example.test', cookie: `psfn_token=${adminToken}`,
+      }));
+      await denied(fixture({ adminCookie: true }), cookieRequest(`psfn_token=${adminToken}; other=1`, {
+        'x-identity-claim-author': 'someone',
+      }));
+      await denied(fixture(), cookieRequest(`psfn_token=${adminToken}`));
+    });
+  });
 });
+

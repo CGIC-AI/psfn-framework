@@ -281,11 +281,13 @@ role, a workspace scope and resource area, a subject relation
 (`none` / `current_companion` / `self` / `self_or_co_subject`), and conjunctive
 requirements:
 
-- **assurance** — `oauth` (authenticated Discord SSO session; the only
-  authentication tier), `escalated` (a consumed audited escalation grant,
+- **assurance** — `oauth` (an authenticated Discord SSO session, or the
+  testing-harness key door), `escalated` (a consumed audited escalation grant,
   reserved for other-humans' sensitive memories and cogsec remediation), or
   `privacy_break_glass` (the gateway mints `break_glass` session assurance from
-  the same audited escalation grant path);
+  the same audited escalation grant path). The audited ADMIN_TOKEN door is
+  signed `break_glass` / `sole_admin` and satisfies every tier with the key
+  alone (key or SSO, never key and SSO);
 - **confirmation** — `none` or `explicit`;
 - **approvals** — `contact_approval`, `cogsec`, and/or `independent_reviewer`;
 - **publicAccess** — `never`, `always`, or `feature_off_only`;

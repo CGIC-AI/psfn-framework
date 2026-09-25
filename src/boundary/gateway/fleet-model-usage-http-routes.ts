@@ -12,7 +12,10 @@ export const FLEET_MODEL_USAGE_API_PATH = '/v1/fleet/model-usage';
 interface FleetModelUsageRouteRequest {
   readonly request: IncomingMessage;
   readonly response: ServerResponse;
-  readonly sessionToken: string;
+  /** SSO session identity; absent when the request authenticated with ADMIN_TOKEN. */
+  readonly sessionToken?: string;
+  /** True when the request carried the configured ADMIN_TOKEN (bearer or cookie). */
+  readonly adminToken?: boolean;
   readonly rawPath: string;
   readonly rawQuery: string;
 }
@@ -133,10 +136,16 @@ export class GatewayFleetModelUsageHttpRoutes {
       return;
     }
     try {
-      sendJson(input.response, 200, await this.options.projection.resolve({
-        sessionToken: input.sessionToken,
-        query: query.value,
-      }));
+      if (input.adminToken === true) {
+        sendJson(input.response, 200, await this.options.projection.resolveAdminToken(query.value));
+      } else if (input.sessionToken) {
+        sendJson(input.response, 200, await this.options.projection.resolve({
+          sessionToken: input.sessionToken,
+          query: query.value,
+        }));
+      } else {
+        this.sendUnauthenticated(input.response);
+      }
     } catch (error) {
       if (error instanceof FleetAuthorizationDeniedError) {
         if (error.code === 'authorization_store_error') {

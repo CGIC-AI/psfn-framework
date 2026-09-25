@@ -667,6 +667,7 @@ export async function startOptionalGatewayApiServer(
   });
   const fleetModelUsageProjection = createGatewayFleetModelUsageProjection({
     fleetAuthEnabled,
+    fleetCompanionIds: options.config.companionFleet?.companions.map(entry => entry.companionId) ?? [],
     ...(options.fleetPortalAuthorization
       ? { portalAuthorization: options.fleetPortalAuthorization }
       : {}),
@@ -898,6 +899,7 @@ export async function startOptionalGatewayApiServer(
         } : {}),
         ...(companionUiOperatorKeys.length > 0 ? {
           operatorKeys: companionUiOperatorKeys,
+          ...(env.ADMIN_TOKEN?.trim() ? { adminTokenCookieKey: env.ADMIN_TOKEN } : {}),
           operatorActionBroker: {
             // Key path (psfn-framework-7oh9y): the bearer is the human authority,
             // so frames dispatch with the key principal exactly as the REST API

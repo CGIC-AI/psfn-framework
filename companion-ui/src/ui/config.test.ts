@@ -13,7 +13,7 @@ describe('companion UI runtime config', () => {
     })).toEqual({
       origin: 'https://fleet.example.test',
       sessionStatusPath: '/v1/fleet-auth/session/status',
-      loginPath: '/v1/fleet-auth/login?return_to=%2Fcompanion-ui%2F',
+      loginPath: '/fleet/login',
     });
   });
 

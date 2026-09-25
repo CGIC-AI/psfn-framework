@@ -5,6 +5,8 @@ const STATUS_PATH = '/v1/fleet-auth/session/status';
 const CSRF_PATH = '/v1/fleet-auth/session/csrf';
 const REFRESH_PATH = '/v1/fleet-auth/session/refresh';
 const LOGOUT_PATH = '/v1/fleet-auth/logout';
+/** Key-mode sign-out: the gateway clears the HttpOnly ADMIN_TOKEN cookie. */
+const KEY_LOGOUT_PATH = '/fleet/logout';
 const FLEET_SESSION_TRANSITION_LOCK_NAME = 'fleet-session-transition';
 const FLEET_SESSION_TRANSITION_TIMEOUT_MS = 10_000;
 const fleetSessionTransitionSignals = new WeakSet<AbortSignal>();
@@ -26,7 +28,8 @@ export type FleetSessionStatus = Readonly<{
   guestMode: 'disabled' | 'explicit';
   websocketPath: string;
   human: Readonly<{
-    provider: 'discord';
+    /** `admin_token`: the deployment ADMIN_TOKEN key, no SSO (key-or-SSO ruling). */
+    provider: 'discord' | 'admin_token';
     label: string;
     role: typeof ROLES[number];
   }>;
@@ -78,7 +81,7 @@ export function parseFleetSessionStatus(value: unknown): FleetSessionStatus {
     || !validWebsocketPath(value.websocketPath)
     || !isRecord(value.human)
     || !hasExactKeys(value.human, ['provider', 'label', 'role'])
-    || value.human.provider !== 'discord'
+    || (value.human.provider !== 'discord' && value.human.provider !== 'admin_token')
     || typeof value.human.label !== 'string'
     || value.human.label.length < 1 || value.human.label.length > 80
     || typeof value.human.role !== 'string'
@@ -92,7 +95,7 @@ export function parseFleetSessionStatus(value: unknown): FleetSessionStatus {
     guestMode: value.guestMode,
     websocketPath: value.websocketPath,
     human: Object.freeze({
-      provider: 'discord',
+      provider: value.human.provider,
       label: value.human.label,
       role: value.human.role as typeof ROLES[number],
     }),
@@ -139,6 +142,8 @@ export async function withFleetSessionTransitionLock<T>(
 
 export class FleetSessionClient {
   private renewalDueAtMs = 0;
+  /** Set from the last status: an ADMIN_TOKEN key session has nothing to renew. */
+  private keyMode = false;
 
   constructor(private readonly fetchImpl: FetchLike = (...args) => fetch(...args)) {}
 
@@ -155,11 +160,24 @@ export class FleetSessionClient {
       if (!response.ok || response.headers.get('cache-control')?.toLowerCase().includes('no-store') !== true) {
         throw new FleetSessionProtocolError('Fleet session status was unavailable');
       }
-      return parseFleetSessionStatus(await response.json());
+      const status = parseFleetSessionStatus(await response.json());
+      this.keyMode = status.state === 'signed_in' && status.human.provider === 'admin_token';
+      return status;
     });
   }
 
   async logout(): Promise<void> {
+    if (this.keyMode) {
+      const response = await this.fetchImpl(KEY_LOGOUT_PATH, {
+        method: 'POST',
+        credentials: 'include',
+        cache: 'no-store',
+        redirect: 'error',
+      });
+      if (response.status !== 204) throw new FleetSessionProtocolError('Fleet logout was denied');
+      this.keyMode = false;
+      return;
+    }
     await withFleetSessionTransitionLock(async transitionSignal => {
       const csrf = await this.readCsrf(transitionSignal);
       const response = await this.fetchImpl(LOGOUT_PATH, {
@@ -178,7 +196,7 @@ export class FleetSessionClient {
   }
 
   async renewIfDue(): Promise<void> {
-    if (Date.now() < this.renewalDueAtMs) return;
+    if (this.keyMode || Date.now() < this.renewalDueAtMs) return;
     await withFleetSessionTransitionLock(async transitionSignal => {
       const now = Date.now();
       if (now < this.renewalDueAtMs) return;

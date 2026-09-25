@@ -108,6 +108,7 @@ const MAX_PROXY_BODY_BYTES = 1_048_576;
 const MAX_CAPABILITY_HEADER_BYTES = 65_536;
 const FLEET_PATH = '/fleet';
 const FLEET_LOGIN_PATH = '/fleet/login';
+const FLEET_LOGOUT_PATH = '/fleet/logout';
 const FLEET_AUTH_LOGIN_PATH = '/v1/fleet-auth/login';
 const GARDEN_OPERATOR_DOOR_COOKIE = 'garden_operator_door';
 const FLEET_GARDEN_CHAT_PATH = '/v1/chat/completions';
@@ -723,7 +724,8 @@ export class GatewayFleetSsoRouter {
       return rawPath === '/' || rawPath === FLEET_PATH || rawPath === `${FLEET_PATH}/`
         || rawPath.startsWith(`${FLEET_PATH}/_app/`)
         || rawPath.startsWith('/_app/')
-        || rawPath === FLEET_LOGIN_PATH || rawPath.startsWith(FLEET_PORTAL_API_PATH)
+        || rawPath === FLEET_LOGIN_PATH || rawPath === FLEET_LOGOUT_PATH
+        || rawPath.startsWith(FLEET_PORTAL_API_PATH)
         || rawPath === FLEET_MODEL_USAGE_API_PATH
         || rawPath.startsWith(COMPANION_PREFIX)
         || rawPath === COMPANION_UI_PREFIX || rawPath.startsWith(`${COMPANION_UI_PREFIX}/`)
@@ -800,6 +802,26 @@ export class GatewayFleetSsoRouter {
         response.end();
         return;
       }
+      if (rawPath === FLEET_LOGOUT_PATH) {
+        // Key-mode sign-out (key-or-SSO ruling): the HttpOnly ADMIN_TOKEN
+        // cookie can only be cleared by the gateway. Exact origin, POST only;
+        // clearing cookies grants nothing, so no credential is required.
+        if (request.method !== 'POST' || rawQuery) {
+          throw new FleetSsoRequestError(404, 'Resource not found');
+        }
+        if (singleHeader(request.headers.origin) !== this.options.canonicalOrigin) {
+          throw new FleetSsoRequestError(400, 'Browser origin is invalid');
+        }
+        response.writeHead(204, {
+          'Cache-Control': 'no-store',
+          'Set-Cookie': [
+            'psfn_token=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0',
+            `${GARDEN_OPERATOR_DOOR_COOKIE}=; Path=/; Secure; SameSite=Strict; Max-Age=0`,
+          ],
+        });
+        response.end();
+        return;
+      }
       const companionUiRequest = rawPath === COMPANION_UI_PREFIX
         || rawPath.startsWith(`${COMPANION_UI_PREFIX}/`);
       if (this.testingHarnessDoor?.matchesBearer(request)) {
@@ -819,10 +841,13 @@ export class GatewayFleetSsoRouter {
           ...authorization,
           authContext: Object.freeze({
             ...authorization.authContext,
-            fleetAccessMode: resolveFleetAccessMode(
-              this.options.accountRoster,
-              route.companionId,
-            ),
+            // Without an SSO provider there are no human principals whose
+            // subjects could need partitioning, and the Discord-keyed roster
+            // is empty by construction: the harness key acts for the whole
+            // deployment like the ADMIN_TOKEN (key-or-SSO ruling).
+            fleetAccessMode: this.options.ssoLoginEnabled === false
+              ? 'sole_admin'
+              : resolveFleetAccessMode(this.options.accountRoster, route.companionId),
           }),
         });
         await this.proxyHttp(request, response, upstream, route, body, issued);
@@ -894,6 +919,16 @@ export class GatewayFleetSsoRouter {
           });
           return;
         }
+        if (adminTokenMatched && this.modelUsageRoutes.matches(rawPath)) {
+          await this.modelUsageRoutes.handle({
+            request,
+            response,
+            adminToken: true,
+            rawPath,
+            rawQuery,
+          });
+          return;
+        }
         if (isHtmlNavigation(request) && (
           rawPath === FLEET_PATH
           || rawPath === `${FLEET_PATH}/`
@@ -914,6 +949,11 @@ export class GatewayFleetSsoRouter {
           return;
         }
         if (request.method === 'GET' && companionUiRequest) {
+          if (adminTokenMatched && this.options.companionUi) {
+            // The browser Companion UI works with the ADMIN_TOKEN key alone.
+            await this.serveCompanionUi(request, response, rawPath, rawQuery);
+            return;
+          }
           this.loginLanding.send(response);
           return;
         }

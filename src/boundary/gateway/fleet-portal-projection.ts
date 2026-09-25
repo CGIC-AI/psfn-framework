@@ -311,6 +311,15 @@ export class GatewayFleetPortalProjection {
       }
       visibleManifest.push(manifest);
     }
+    return this.buildRoster(visibleManifest);
+  }
+
+  /** Whole-fleet roster for the audited ADMIN_TOKEN key (key-or-SSO ruling). */
+  resolveAdminTokenRoster(): FleetPortalRoster {
+    return this.buildRoster([...this.fleetByCompanionId.values()]);
+  }
+
+  private buildRoster(visibleManifest: readonly ProjectionManifestEntry[]): FleetPortalRoster {
     const displayIdentity = createCompanionDisplayIdentityResolver(visibleManifest);
     const companions: FleetPortalRosterCompanion[] = [];
     for (const manifest of visibleManifest) {

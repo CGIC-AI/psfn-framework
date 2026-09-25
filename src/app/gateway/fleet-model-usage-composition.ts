@@ -10,6 +10,7 @@ export function createGatewayFleetModelUsageProjection(input: {
   readonly portalAuthorization?: FleetPortalAuthorizationBatchPort;
   readonly modelAuthorization?: FleetModelUsageAuthorizationPort;
   readonly usage?: FleetModelUsageSummaryQueryPort;
+  readonly fleetCompanionIds: readonly string[];
 }): GatewayFleetModelUsageProjection | undefined {
   if (!input.fleetAuthEnabled) return undefined;
   if (!input.portalAuthorization || !input.modelAuthorization || !input.usage) {
@@ -19,5 +20,6 @@ export function createGatewayFleetModelUsageProjection(input: {
     portalAuthorizer: input.portalAuthorization,
     modelAuthorizer: input.modelAuthorization,
     usage: input.usage,
+    fleetCompanionIds: input.fleetCompanionIds,
   });
 }

@@ -427,6 +427,18 @@ silently leave a rostered subject live and must revoke sessions as well.
 
 ## Authentication and escalation doctrine
 
+**Key or SSO, never key and SSO** (operator ruling, 2026-09-25). Either path
+alone is sufficient for everything. A person without Discord, or who does not
+want SSO, is never forced into it: nothing requires an SSO login, a Discord
+account, a Discord proof or any other Discord step. In key mode the
+`ADMIN_TOKEN` operator (Garden, fleet portal, lifecycle, account authority),
+`API_KEY` / `API_SATELLITE_KEYS`, Hub device keys and the testing-harness key
+cover every operator and companion capability. Testing never uses SSO or
+Discord: the harness key plus `ADMIN_TOKEN` can do everything. Discord SSO,
+its escalation grants and its Discord-proof ceremonies (provider
+link/relink/replace) are optional features of SSO mode, and nothing in key
+mode depends on them.
+
 Discord SSO is the only *human sign-in* provider (operator rulings D1/D2,
 2026-07-30). There are no passkeys, no WebAuthn, and no just-in-time step-up
 ceremonies; the former `webauthn_uv` assurance tier, JIT challenge/grant
@@ -457,11 +469,21 @@ keyed by Discord subjects no login can produce. Every OAuth entry point
 (`/v1/fleet-auth/login`, the OAuth callback, lifecycle proof ceremonies)
 returns the typed `provider_disabled` error, and the `/fleet/login` landing
 page offers only the administrator-token form. Every other fleet surface
-works with keys: `ADMIN_TOKEN` reaches the Fleet portal and
-`/v1/fleet/portal` (ICP readiness), the lifecycle routes (as the
-`operator:admin-token` actor), Garden admin and Garden chat through
-`/companions/<id>/garden/...`; `API_KEY` reaches `/v1`; the testing-harness
-key reaches its Garden door. The key itself (`provider`) stays required, so
+works with keys. `ADMIN_TOKEN` reaches:
+
+- the Fleet portal, `/v1/fleet/portal` (ICP readiness) and the
+  `/v1/fleet/model-usage` summary for the whole fleet;
+- the lifecycle plan routes (as the `operator:admin-token` actor), the
+  lifecycle ceremonies and `/v1/fleet-auth/lifecycle/account/complete`;
+- Garden admin and Garden chat through `/companions/<id>/garden/...`;
+- the browser Companion UI: page, session status, roster, approvals, and its
+  WebSocket through the HttpOnly `psfn_token` cookie.
+
+`POST /fleet/logout` clears the key cookie. `API_KEY` reaches `/v1`. The
+testing-harness key reaches its Garden door, signed `sole_admin` when there is
+no SSO provider (there are no human subjects to partition).
+`npm run provision:postgres-tenancy -- --apply` provisions only
+companion-to-companion contacts in key mode; no Discord roster is needed. The key itself (`provider`) stays required, so
 a missing block still fails closed.
 
 Garden chat through the unified origin works for both principals (bead
@@ -479,8 +501,7 @@ gateway durably records every Garden capability it mints for that principal in
 reason `admin_token_garden_authorization_allowed`) before signing, with the
 audited authority versions, and a gateway configured with `ADMIN_TOKEN` but
 without that audit wiring refuses to start. On Kubernetes the chart delivers
-`ADMIN_TOKEN` to the gateway under fleet auth only when the operator enables
-the admin door explicitly.
+`ADMIN_TOKEN` to the gateway whenever it is set.
 
 Deployment access mode is derived from the roster, per companion
 (`resolveFleetAccessMode`), and signed into every request capability:
@@ -854,7 +875,8 @@ CASCADE`, the restore-verification database, `DROP OWNED BY`, `DROP ROLE`).
 
 ## Configuration
 
-`fleet-auth.json` (seed `config/fleet-auth.seed.json`) is validated strictly on
+`fleet-auth.json` (seed `config/fleet-auth.seed.json`, an SSO-mode example;
+for key mode declare `"provider": { "kind": "none" }` as shown above) is validated strictly on
 load: `canonicalOrigin` must be an exact normalized HTTPS origin with no
 wildcard, username/password, path, query, or fragment; `callbackPath` must be an
 absolute normalized path; OAuth scopes are limited to the closed set

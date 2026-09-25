@@ -247,6 +247,16 @@ export interface FatigueSocialRegulationConfig {
   deferredPressureUnits: number;
   /** Initiation pressure added while an invitation remains unanswered. */
   unansweredPressureUnits: number;
+  /**
+   * Replies per side of a mutual conversation (both participants delivered a
+   * turn) that count toward initiation pressure at mutualReplyPressureUnits
+   * instead of their full charge. Replies past it, and every turn of a
+   * one-sided conversation, count in full. In-conversation fatigue is not
+   * affected.
+   */
+  mutualReplyAllowancePerSide: number;
+  /** Initiation pressure per mutual reply within the allowance (a full turn is 1). */
+  mutualReplyPressureUnits: number;
   /** Owner-selected structured facts that may justify a bounded continuation. */
   continuationEvidence: {
     recentHumanParticipation: boolean;

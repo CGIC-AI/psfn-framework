@@ -32,6 +32,10 @@ import {
   validatePartnerAffectShadowConfig,
 } from './partner-affect-shadow-config.js';
 import { canonicalOwnerFileMode } from './owner-file-modes.js';
+import {
+  migrateChargePolicyOwner,
+  type ChargePolicyOwnerMigrationResult,
+} from './charge-policy-owner-migration.js';
 import { describeStartupOwnerFileChecks } from './startup-owner-files.js';
 
 export interface RequiredOwnerAdditionsMigrationOptions {
@@ -57,6 +61,8 @@ export interface RequiredOwnerAdditionsMigrationResult {
   automataPolicy: ReturnType<typeof migrateAutomataPolicyOwner> | RequiredSystemOwnerAdditionResult;
   channels: ReturnType<typeof migrateRetiredChannelPluginSections>;
   companionOwnerAdditions?: RequiredCompanionOwnerAdditionsMigrationResult;
+  /** Companion charge-policy.json keys added after first seeding (r5). */
+  chargePolicy?: ChargePolicyOwnerMigrationResult;
   ownerModes: RequiredOwnerModesMigrationResult;
 }
 
@@ -349,6 +355,12 @@ function runRequiredOwnerAdditions(
     ...(options.companionDataDir
       ? {
         companionOwnerAdditions: migrateRequiredCompanionOwnerAdditions({
+          companionDataDir: options.companionDataDir,
+          seedDir,
+          apply,
+          faultInjection: options.faultInjection,
+        }),
+        chargePolicy: migrateChargePolicyOwner({
           companionDataDir: options.companionDataDir,
           seedDir,
           apply,

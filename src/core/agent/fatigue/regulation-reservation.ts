@@ -44,6 +44,10 @@ export interface IcpInitiationPressureInput {
   declinedPressureUnits: number;
   deferredPressureUnits: number;
   unansweredPressureUnits: number;
+  /** Replies per side of a mutual conversation that weigh mutualReplyPressureUnits. */
+  mutualReplyAllowancePerSide: number;
+  /** Weight of a mutual, within-allowance charged turn (full turns weigh 1). */
+  mutualReplyPressureUnits: number;
 }
 
 export interface IcpInitiationPressureSnapshot {

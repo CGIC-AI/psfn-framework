@@ -1012,6 +1012,8 @@ async function main(): Promise<void> {
           declinedPressureUnits: regulation.declinedPressureUnits,
           deferredPressureUnits: regulation.deferredPressureUnits,
           unansweredPressureUnits: regulation.unansweredPressureUnits,
+          mutualReplyAllowancePerSide: regulation.mutualReplyAllowancePerSide,
+          mutualReplyPressureUnits: regulation.mutualReplyPressureUnits,
         });
         return pressure.relationshipPressure;
       },

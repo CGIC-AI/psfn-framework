@@ -756,7 +756,11 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
         Math.ceil(snapshot.directionalChargedPressure),
       ),
       overchargeSpentBefore: snapshot.rootOverchargeSpent,
-      relationshipPressure: snapshot.relationshipPressure,
+      // 6087o: in-conversation fatigue is per ordered pair. This side's soft
+      // state reads only its own decayed charged replies to this peer (the
+      // same quantity as normalSpentBefore and as the in-memory ledger),
+      // never the pair-wide relationship pressure that gates initiations.
+      relationshipPressure: snapshot.directionalChargedPressure,
       rootNormalSpent: snapshot.rootNormalSpent,
       rootOverchargeSpent: snapshot.rootOverchargeSpent,
       contributingReservationCount: snapshot.contributingReservationCount,

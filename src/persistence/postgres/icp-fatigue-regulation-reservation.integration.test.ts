@@ -372,7 +372,8 @@ describe("Postgres ICP fatigue regulation reservations", () => {
             rootNormalSpent: 0,
             contributingReservationCount: 1,
           });
-          expect(peerReservation.relationshipPressure).toBeGreaterThan(0);
+          // 6087o: the peer's own budget ignores this side's turns.
+          expect(peerReservation.relationshipPressure).toBe(0);
         } finally {
           await restarted.close();
         }
@@ -791,6 +792,191 @@ describe("Postgres ICP fatigue regulation reservations", () => {
         expect(pressure.chargedPressure).toBeCloseTo(1, 6);
       } finally {
         await Promise.allSettled([episodes.close(), store.close(), sqlPool.end()]);
+      }
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    "budgets each side of a conversation by its own replies with decayed carry-over (6087o)",
+    async () => {
+      if (!harness)
+        throw new Error("Postgres integration harness is unavailable");
+      const databaseUrl = await freshDatabaseUrl();
+      const episodes = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
+        knownCompanionIds: [A, B],
+      });
+      const store =
+        await PostgresIcpFatigueRegulationReservationStore.connect(databaseUrl);
+      let turnCounter = 0;
+      const takeTurn = async (input: {
+        conversationId: string;
+        rootInitiationId: string;
+        local: string;
+        peer: string;
+        timestampMs: number;
+      }) => {
+        turnCounter += 1;
+        const value = correlation({
+          conversationId: input.conversationId,
+          rootInitiationId: input.rootInitiationId,
+          channelId: DM,
+          turnId: `99999999-9999-4999-8999-${String(turnCounter).padStart(12, "0")}`,
+          localCompanionId: input.local,
+          peerCompanionId: input.peer,
+        });
+        const result = await store.reserve({
+          ...reservationInput(value, input.timestampMs),
+          hardLimit: 16,
+        });
+        if (result.outcome === "reserved") {
+          await store.prepareDelivery({ correlation: value, fatigue: finalizationFatigue(value) });
+          await store.finalize({
+            correlation: value,
+            outcome: "delivered",
+            finalizedAtMs: input.timestampMs,
+            fatigue: finalizationFatigue(value),
+          });
+        }
+        return result;
+      };
+      const createEpisode = async (conversationId: string, rootInitiationId: string) => {
+        await episodes.createEpisode({
+          conversationId,
+          channelId: DM,
+          participantCompanionIds: [A, B],
+          rootInitiationId,
+          initiatedByCompanionId: A,
+          initiationSource: "operator_test",
+          provenanceRef: `icp-prov:${conversationId}`,
+          openedAtMs: 1_000,
+          lastActivityAtMs: 1_000,
+          status: "invited",
+          revision: 1,
+        });
+      };
+      try {
+        // A two-sided conversation, alternating sides one second apart.
+        const first = "55555555-5555-4555-8555-0000000000a1";
+        const firstRoot = "66666666-6666-4666-8666-0000000000a1";
+        await createEpisode(first, firstRoot);
+        const reservedBySide = new Map<string, number>([[A, 0], [B, 0]]);
+        const aSnapshots: Array<{ normalSpentBefore: number; relationshipPressure: number }> = [];
+        let exhaustedAt: Record<string, number | undefined> = {};
+        for (let step = 0; step < 40; step += 1) {
+          const local = step % 2 === 0 ? A : B;
+          if (exhaustedAt[local] !== undefined) continue;
+          const result = await takeTurn({
+            conversationId: first,
+            rootInitiationId: firstRoot,
+            local,
+            peer: local === A ? B : A,
+            timestampMs: 10_000 + step * 1_000,
+          });
+          if (result.outcome === "exhausted") {
+            exhaustedAt = { ...exhaustedAt, [local]: reservedBySide.get(local) };
+            continue;
+          }
+          reservedBySide.set(local, reservedBySide.get(local)! + 1);
+          if (local === A) {
+            aSnapshots.push({
+              normalSpentBefore: result.normalSpentBefore,
+              relationshipPressure: result.relationshipPressure,
+            });
+          }
+        }
+        // Each side reaches the hard stop at its own 16 replies; the other
+        // side's turns never count toward it.
+        expect(exhaustedAt).toEqual({ [A]: 16, [B]: 16 });
+        // Before A's 9th reply its soft state reads its own 8 replies (the
+        // designed soft allowance), not the pair's 15 turns.
+        expect(aSnapshots[8]!.normalSpentBefore).toBe(8);
+        expect(aSnapshots[8]!.relationshipPressure).toBeGreaterThan(7.99);
+        expect(aSnapshots[8]!.relationshipPressure).toBeLessThanOrEqual(8);
+
+        // A second conversation an hour after a short one of 4 replies per
+        // side starts with only A's own decayed carry-over.
+        const shortConversation = "55555555-5555-4555-8555-0000000000a2";
+        const shortRoot = "66666666-6666-4666-8666-0000000000a2";
+        const later = "55555555-5555-4555-8555-0000000000a3";
+        const laterRoot = "66666666-6666-4666-8666-0000000000a3";
+        const pairDatabaseUrl = await freshDatabaseUrl();
+        const pairEpisodes = await PostgresIcpSharedAutonomyStore.connect(pairDatabaseUrl, {
+          knownCompanionIds: [A, B],
+        });
+        const pairStore =
+          await PostgresIcpFatigueRegulationReservationStore.connect(pairDatabaseUrl);
+        try {
+          for (const [conversationId, rootInitiationId] of [
+            [shortConversation, shortRoot],
+            [later, laterRoot],
+          ] as const) {
+            await pairEpisodes.createEpisode({
+              conversationId,
+              channelId: DM,
+              participantCompanionIds: [A, B],
+              rootInitiationId,
+              initiatedByCompanionId: A,
+              initiationSource: "operator_test",
+              provenanceRef: `icp-prov:${conversationId}`,
+              openedAtMs: 1_000,
+              lastActivityAtMs: 1_000,
+              status: "invited",
+              revision: 1,
+            });
+          }
+          let pairTurn = 0;
+          const pairReserve = async (
+            conversationId: string,
+            rootInitiationId: string,
+            local: string,
+            timestampMs: number,
+          ) => {
+            pairTurn += 1;
+            const value = correlation({
+              conversationId,
+              rootInitiationId,
+              channelId: DM,
+              turnId: `aaaaaaaa-aaaa-4aaa-8aaa-${String(pairTurn).padStart(12, "0")}`,
+              localCompanionId: local,
+              peerCompanionId: local === A ? B : A,
+            });
+            const result = await pairStore.reserve({ ...reservationInput(value, timestampMs), hardLimit: 16 });
+            if (result.outcome === "reserved") {
+              await pairStore.prepareDelivery({ correlation: value, fatigue: finalizationFatigue(value) });
+              await pairStore.finalize({
+                correlation: value,
+                outcome: "delivered",
+                finalizedAtMs: timestampMs,
+                fatigue: finalizationFatigue(value),
+              });
+            }
+            return result;
+          };
+          for (let step = 0; step < 8; step += 1) {
+            await pairReserve(shortConversation, shortRoot, step % 2 === 0 ? A : B, 10_000 + step * 1_000);
+          }
+          const oneHourLater = 10_000 + 60 * 60_000;
+          const opening = await pairReserve(later, laterRoot, A, oneHourLater);
+          expect(opening.outcome).toBe("reserved");
+          // 4 own replies at a 6 h half-life: 4 x 2^(-1/6) ~ 3.56, never the pair's 8.
+          expect(opening.relationshipPressure).toBeCloseTo(4 * 2 ** (-1 / 6), 3);
+          expect(opening.normalSpentBefore).toBe(4);
+          let aReplies = 1;
+          for (let step = 1; step < 60; step += 1) {
+            const local = step % 2 === 0 ? A : B;
+            const result = await pairReserve(later, laterRoot, local, oneHourLater + step * 1_000);
+            if (local !== A) continue;
+            if (result.outcome === "exhausted") break;
+            aReplies += 1;
+          }
+          // Only partly used: A has 12 of its 16 replies left in the new conversation.
+          expect(aReplies).toBe(12);
+        } finally {
+          await Promise.allSettled([pairEpisodes.close(), pairStore.close()]);
+        }
+      } finally {
+        await Promise.allSettled([episodes.close(), store.close()]);
       }
     },
     TIMEOUT_MS,

@@ -1,3 +1,4 @@
+import { fromAny } from '@total-typescript/shoehorn';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -98,4 +99,20 @@ describe('createToolchainCapabilities read_file', () => {
       expect(fileRead).not.toHaveBeenCalled();
     },
   );
+
+  it('refuses journal paths and hides journal entries (75oi4)', async () => {
+    const fileRead = vi.fn();
+    const fsWrite = vi.fn();
+    const fsList = vi.fn(async () => ({ paths: ['docs/a.md', 'journal/dream-pass-2026-09-25.md'] }));
+    const { read_file, write_file, list_files } = createToolchainCapabilities({
+      gatewayCaps: fromAny({ fsWrite, fsList }),
+      fileRead,
+      fsReadMaxBytes: 123_456,
+    });
+    expect(await read_file('journal/dream-pass-2026-09-25.md')).toEqual({ error: expect.stringContaining('journal tool') });
+    expect(await write_file('journal/x.md', 'y')).toEqual({ ok: false, error: expect.stringContaining('journal tool') });
+    expect(fileRead).not.toHaveBeenCalled();
+    expect(fsWrite).not.toHaveBeenCalled();
+    expect(await list_files('**/*.md')).toEqual({ paths: ['docs/a.md'] });
+  });
 });

@@ -524,4 +524,24 @@ describe('fs tool', () => {
     expect(readFileSync(join(workspace, 'docs', 'new.txt'), 'utf-8')).toBe('hello\n');
     expect(readFileSync(join(workspace, 'docs', 'draft.txt'), 'utf-8')).toBe('new text\n');
   });
+
+  it('keeps journal notes behind the journal tool (75oi4)', async () => {
+    mkdirSync(join(workspace, 'journal'), { recursive: true });
+    writeFileSync(join(workspace, 'journal', 'dream-pass-2026-09-25.md'), 'Gerald the starter and Lena visiting\n', 'utf-8');
+    const tool = createFsTool(ops);
+
+    for (const path of ['journal/dream-pass-2026-09-25.md', './journal/dream-pass-2026-09-25.md', join(workspace, 'journal', 'dream-pass-2026-09-25.md')]) {
+      const read = await tool.execute('read-journal', { action: 'read', path });
+      expect(resultText(read)).toContain('journal tool');
+      expect(resultText(read)).not.toContain('Gerald');
+    }
+    const write = await tool.execute('write-journal', { action: 'write', path: 'journal/planted.md', content: 'x' });
+    expect(resultText(write)).toContain('journal tool');
+
+    const listed = resultText(await tool.execute('list', { action: 'list', glob: '**/*.md', max_entries: 50 }));
+    expect(listed).not.toContain('dream-pass');
+    const searched = resultText(await tool.execute('search', { action: 'search', query: 'Gerald' }));
+    expect(searched).not.toContain('Gerald the starter');
+    expect(JSON.parse(searched).match_count).toBe(0);
+  });
 });

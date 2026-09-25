@@ -1,4 +1,5 @@
 import type { AgentMessage } from '../../../../boundary/pi-agent/index.js';
+import { isAgentRunActive } from '../../../../boundary/pi-agent/agent-loop-patch.js';
 import type { AssistantMessage, UserMessage } from '@earendil-works/pi-ai';
 import { enforceUntrustedCompactionGuard } from '../../../identity/prompt-composer.js';
 import {
@@ -559,7 +560,6 @@ export async function invokeAgentForTurn(input: {
     };
   }
 
-  runtime.agent.state.systemPrompt = enforceUntrustedCompactionGuard(providerSystemPrompt);
   const adaptiveToolSnapshot = cloneObservedAdaptiveToolSnapshot(
     runtime.getAdaptiveToolRuntimeState().lastSnapshot,
   );
@@ -707,6 +707,16 @@ export async function invokeAgentForTurn(input: {
     turnUserContentBuildResult.content,
   );
   const historyMessages = agentMessages.slice();
+  // Concurrent ordinary turns share this pi Agent and only the run owner may
+  // write its state. A turn that is not the owner must fail here, BEFORE it
+  // replaces the running turn's system prompt and transcript; replacing them
+  // emptied the running turn's recorded tool calls, so the success-claim guard
+  // rejected true completions (psfn-framework-97epu). No await separates this
+  // check from agent.prompt(), which claims the run synchronously.
+  if (isAgentRunActive(runtime.agent)) {
+    throw new Error('Agent is already processing.');
+  }
+  runtime.agent.state.systemPrompt = enforceUntrustedCompactionGuard(providerSystemPrompt);
   runtime.agent.state.messages = historyMessages;
   mutableState.turnStartMessageIndex = runtime.agent.state.messages.length;
   if (turnSnapshot.promptContext?.providerObservability?.providerWireMessages) {

@@ -96,6 +96,9 @@ import { isBeadsIssueId } from './lib/beads.mjs';
 import { validateMemoryLookupAnswer } from './lib/memory-lookup-answer.mjs';
 import {
   countHarnessScratchpadResidue,
+  restoreContactAfterMutation,
+  snapshotContactNotes,
+  sweepHarnessContactNote,
   removeHarnessSkill,
   scratchpadRoundTripFailures,
   sweepHarnessSkills,
@@ -2417,6 +2420,7 @@ function buildBaselineCases(ctx) {
 
 function buildApprenticeCases(ctx) {
   const contactNote = `matrix-note-${ctx.runToken}`;
+  let contactNotesSnapshot = null;
   const linkedIdentity = `identity-${ctx.runToken}`;
   const valueInitial = `matrix-value-${ctx.runToken}`;
   const valueUpdated = `matrix-value-updated-${ctx.runToken}`;
@@ -2440,6 +2444,13 @@ function buildApprenticeCases(ctx) {
         + 'Do not call any non-contact tool unless one of those exact calls errors. '
         + 'If a direct tool call fails, report the exact tool error. '
         + 'Return only a JSON object with keys noted, linked, and privacy.',
+      // Harness-owned restore (ob6w1): the note action replaces the contact's
+      // notes, so snapshot them and put them back, detach the case identity,
+      // and prove both.
+      before: async () => {
+        contactNotesSnapshot = await snapshotContactNotes({ adminRequest: operatorAdminRequest, contactId: ctx.primaryContactId });
+        return { contactNotesSnapshotted: true };
+      },
       after: async () => ({
         primaryContact: readJsonIfExists(ctx.primaryContactPath),
       }),
@@ -2447,6 +2458,17 @@ function buildApprenticeCases(ctx) {
         sideChecksContainText(sideChecks, contactNote) && sideChecksContainText(sideChecks, linkedIdentity)
           ? []
           : ['contact_mutation must persist the note and linked identity']
+      ),
+      cleanup: async () => (
+        contactNotesSnapshot === null
+          ? { cleanup: {}, cleanupErrors: ['contact notes were not snapshotted before the case'] }
+          : await restoreContactAfterMutation({
+            adminRequest: operatorAdminRequest,
+            contactId: ctx.primaryContactId,
+            originalNotes: contactNotesSnapshot,
+            noteToken: contactNote,
+            linkedUserId: linkedIdentity,
+          })
       ),
     },
     {
@@ -3856,6 +3878,12 @@ async function main() {
   }
   const promptInventory = await fetchJson(`${ADMIN_BASE}/api/admin/prompts`);
   const ctx = buildBaseContext();
+  if (ctx.primaryContactId) {
+    // Earlier runs left the primary contact's notes as a bare harness marker (ob6w1).
+    if (await sweepHarnessContactNote({ adminRequest: operatorAdminRequest, contactId: ctx.primaryContactId })) {
+      console.error(JSON.stringify({ event: 'harness_contact_note_residue_swept', contactId: ctx.primaryContactId }));
+    }
+  }
   ctx.promptInventory = promptInventory.body ?? null;
   ctx.promptToggleLayer = selectRuntimePromptLayer(promptInventory.body, 'runtime.last_message_received');
   ctx.promptBaseLayer = selectPromptLayerByType(promptInventory.body, 'base');

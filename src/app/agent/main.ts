@@ -496,8 +496,12 @@ async function main(): Promise<void> {
       ? wireFleetMaintenanceForegroundPreemption({
           eventBus,
           coordinator: persistenceRuntime.fleetMaintenanceCoordinator,
+          // Best-effort signal (jrki1): the turn never waits on it, and the
+          // holder's own turns preempt in memory. A failure is a typed,
+          // bounded degradation, not a turn error.
           onError: error => {
-            log.error('Fleet maintenance foreground preemption failed', {
+            log.warn('Fleet maintenance foreground preemption signal unavailable', {
+              code: 'fleet_maintenance_preemption_unavailable',
               error: error instanceof Error ? error.message : String(error),
             });
           },

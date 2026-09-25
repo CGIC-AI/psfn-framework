@@ -85,6 +85,8 @@ function toLease(row: BatonRow, checkpointRef: string | null): FleetMaintenanceL
   };
 }
 
+const FLEET_MAINTENANCE_PREEMPTION_LANE = 'fleet-maintenance-preemption';
+
 /**
  * Shared-schema scheduling authority for heavyweight maintenance. The store
  * contains no memory or prompt content; checkpointRef is an opaque pointer to
@@ -94,7 +96,17 @@ export class PostgresFleetMaintenanceStore implements FleetMaintenanceStorePort 
   private closed = false;
   private closePromise: Promise<void> | null = null;
 
-  private constructor(private readonly pool: Pool) {}
+  private constructor(
+    private readonly pool: Pool,
+    /**
+     * Foreground preemption signals run on their own one-connection lane
+     * (psfn-framework-jrki1). They fire at every foreground turn start when
+     * another instance may hold the baton; on the shared-authority lane a
+     * stalled cold connect for this best-effort signal held one of the three
+     * slots every store and the foreground turn draw from.
+     */
+    private readonly preemptionPool: Pool,
+  ) {}
 
   static async connect(databaseUrl: string): Promise<PostgresFleetMaintenanceStore> {
     const pool = createPostgresPool(databaseUrl, {
@@ -102,11 +114,18 @@ export class PostgresFleetMaintenanceStore implements FleetMaintenanceStorePort 
       allowExitOnIdle: true,
       schema: SHARED_SCHEMA_NAME,
     });
+    const preemptionPool = createPostgresPool(databaseUrl, {
+      applicationName: FLEET_MAINTENANCE_PREEMPTION_LANE,
+      allowExitOnIdle: true,
+      lane: FLEET_MAINTENANCE_PREEMPTION_LANE,
+      max: 1,
+      schema: SHARED_SCHEMA_NAME,
+    });
     try {
       await assertSharedSchemaReady(pool);
-      return new PostgresFleetMaintenanceStore(pool);
+      return new PostgresFleetMaintenanceStore(pool, preemptionPool);
     } catch (error) {
-      await pool.end();
+      await Promise.all([pool.end(), preemptionPool.end()]);
       throw error;
     }
   }
@@ -401,7 +420,7 @@ export class PostgresFleetMaintenanceStore implements FleetMaintenanceStorePort 
     input: FleetMaintenanceStoreBinding & { nowMs: number },
   ): Promise<boolean> {
     this.assertOpen();
-    const updated = await this.pool.query(
+    const updated = await this.preemptionPool.query(
       `UPDATE fleet_maintenance_baton
        SET preempt_requested = TRUE, revision = revision + 1
        WHERE scope = $1 AND holder_companion_id IS NOT NULL
@@ -535,7 +554,7 @@ export class PostgresFleetMaintenanceStore implements FleetMaintenanceStorePort 
   async close(): Promise<void> {
     if (this.closePromise) return await this.closePromise;
     this.closed = true;
-    this.closePromise = this.pool.end();
+    this.closePromise = Promise.all([this.pool.end(), this.preemptionPool.end()]).then(() => undefined);
     return await this.closePromise;
   }
 }

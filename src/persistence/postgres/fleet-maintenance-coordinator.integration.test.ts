@@ -3,6 +3,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { Pool } from 'pg';
 
 import {
   createFleetMaintenanceCoordinator,
@@ -251,6 +252,17 @@ describe('Postgres fleet maintenance coordinator', () => {
       expect(renewed.expiresAtMs).toBe(nowMs + 25_000);
 
       expect(await first.requestForegroundPreemption({ nowMs: nowMs + 2 })).toBe(true);
+      // The holder's own foreground turn marks its baton in memory; the shared
+      // row is untouched, so preemption needs no fresh connection (jrki1).
+      const probe = new Pool({ connectionString: databaseUrl });
+      try {
+        const row = await probe.query<{ preempt_requested: boolean }>(
+          'SELECT preempt_requested FROM shared.fleet_maintenance_baton',
+        );
+        expect(row.rows.map(entry => entry.preempt_requested)).toEqual([false]);
+      } finally {
+        await probe.end();
+      }
       const checkpointed = await first.commitCheckpoint({
         lease: renewed,
         nowMs: nowMs + 3,

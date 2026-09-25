@@ -7383,6 +7383,66 @@ describe('SubstrateAgent turn cancellation identity (mmo9.6.1)', () => {
     await voiceTurn;
   });
 
+  it('keeps a running turn\'s tool calls when a concurrent turn is refused (97epu)', async () => {
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), sessionManager, 'test', makeConfig(),
+    );
+    const usage = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+    let entered!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const releaseGate = new Promise<void>((resolve) => { release = resolve; });
+    // Turn A owns the pi run (the patched loop sets activeRun) and executes a
+    // tool while a concurrent sleeptime turn is dispatched.
+    promptSpy.mockImplementationOnce(async function (this: Agent) {
+      const patched = this as unknown as { activeRun?: unknown };
+      patched.activeRun = { requestId: 'turn-A' };
+      entered();
+      await releaseGate;
+      this.state.messages.push({
+        role: 'assistant',
+        content: [{ type: 'toolCall', id: 'tool-1', name: 'skill', arguments: { action: 'create' } }],
+        api: fromAny(''), provider: fromAny(''), model: '', usage, stopReason: fromAny('toolUse'), timestamp: Date.now(),
+      });
+      this.state.messages.push(fromAny({
+        role: 'toolResult', toolCallId: 'tool-1', toolName: 'skill',
+        content: [{ type: 'text', text: 'Skill created: matrix-runbook' }], isError: false, timestamp: Date.now(),
+      }));
+      this.state.messages.push({
+        role: 'assistant',
+        content: [{ type: 'text', text: '{"created":true}' }],
+        api: fromAny(''), provider: fromAny(''), model: '', usage, stopReason: fromAny('stop'), timestamp: Date.now(),
+      });
+      patched.activeRun = undefined;
+    });
+
+    const turnA = agent.handleMessage(makeMessage({ id: 'turn-A', channelId: 'api:harness' }));
+    await started;
+    const piAgent = fromAny<{ agent: Agent }>(agent).agent;
+    const promptCallsBefore = promptSpy.mock.calls.length;
+    const systemPromptBefore = piAgent.state.systemPrompt;
+    const transcriptBefore = piAgent.state.messages;
+
+    await expect(agent.handleMessage(makeMessage({
+      id: 'sleeptime-review-1',
+      channelId: 'internal:reflection:sleeptime-review',
+      content: 'Review the day.',
+    }))).rejects.toThrow('Agent is already processing');
+    // The refused turn never touched the running turn's shared state.
+    expect(promptSpy.mock.calls.length).toBe(promptCallsBefore);
+    expect(piAgent.state.systemPrompt).toBe(systemPromptBefore);
+    expect(piAgent.state.messages).toBe(transcriptBefore);
+
+    release();
+    const response = await turnA;
+    expect(response.content).toBe('{"created":true}');
+    const record = vi.mocked(sessionManager.recordTurn).mock.calls
+      .map(call => call[0] as { requestId: string; toolCalls: Array<{ toolName: string }> })
+      .find(entry => entry.requestId === 'turn-A');
+    expect(record?.toolCalls.map(call => call.toolName)).toEqual(['skill']);
+  });
+
   it('does not let a late cancel for a finished turn abort a newer turn with a different id', async () => {
     const agent = new SubstrateAgent(
       new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', makeConfig(),

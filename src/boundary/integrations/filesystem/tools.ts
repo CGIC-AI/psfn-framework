@@ -10,6 +10,7 @@ import {
   validateFilesystemReadMaxBytes,
 } from '../../../shared/contracts/filesystem.js';
 import { PARTIAL_TOOL_RESULT_DETAILS_KEY } from '../../../shared/contracts/tool-call-outcome.js';
+import { isJournalPath, JOURNAL_PATH_REFUSAL } from '../journal/path-guard.js';
 
 /**
  * A result the tool itself declares as carrying only PART of what was asked
@@ -121,6 +122,12 @@ function normalizeListGlobParam(value: unknown): string | undefined {
     return undefined;
   }
   return value;
+}
+
+function refuseJournalPath(path: string | undefined): void {
+  if (path !== undefined && isJournalPath(path)) {
+    throw new Error(JOURNAL_PATH_REFUSAL);
+  }
 }
 
 export interface CreateFsToolOptions {
@@ -245,7 +252,8 @@ export function createFsTool(
             const path = typeof params.path === 'string' && params.path.trim().length > 0
               ? params.path.trim()
               : undefined;
-            const result = await ops.list(
+            refuseJournalPath(path);
+            const listed = await ops.list(
               glob,
               typeof params.max_entries === 'number' ? params.max_entries : DEFAULT_LIST_MAX_ENTRIES,
               {
@@ -255,6 +263,7 @@ export function createFsTool(
                   : {}),
               },
             );
+            const result = { ...listed, paths: listed.paths.filter(entry => !isJournalPath(entry)) };
             return boundedTextResult(JSON.stringify({
               action: 'list',
               ...(path ? { path } : {}),
@@ -272,6 +281,7 @@ export function createFsTool(
 
           case 'read': {
             const path = requireString(params.path, 'path');
+            refuseJournalPath(path);
             const maxBytes = optionalSafeIntegerInRange(
               params.max_bytes,
               'max_bytes',
@@ -304,7 +314,7 @@ export function createFsTool(
 
           case 'search': {
             const glob = normalizeSearchGlobParam(params.glob);
-            const result = await ops.search({
+            const searched = await ops.search({
               query: requireString(params.query, 'query'),
               ...(glob ? { glob } : {}),
               ...(params.mode === 'regex' ? { mode: 'regex' as const } : {}),
@@ -313,6 +323,7 @@ export function createFsTool(
               ...(typeof params.max_bytes_per_file === 'number' ? { maxBytesPerFile: params.max_bytes_per_file } : {}),
               ...(typeof params.context_lines === 'number' ? { contextLines: params.context_lines } : {}),
             });
+            const result = { ...searched, matches: searched.matches.filter(match => !isJournalPath(match.path)) };
             return boundedTextResult(JSON.stringify({
               action: 'search',
               query: result.query,
@@ -327,6 +338,7 @@ export function createFsTool(
           }
 
           case 'write': {
+            refuseJournalPath(requireString(params.path, 'path'));
             const result = await ops.write({
               path: requireString(params.path, 'path'),
               content: requireStringField(params.content, 'content'),
@@ -341,6 +353,7 @@ export function createFsTool(
           }
 
           case 'edit': {
+            refuseJournalPath(requireString(params.path, 'path'));
             const result = await ops.edit({
               path: requireString(params.path, 'path'),
               oldText: requireString(params.old_text, 'old_text'),

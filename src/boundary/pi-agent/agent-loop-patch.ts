@@ -148,6 +148,15 @@ export function abortActiveAgentRun(
     : { status: 'not_signaled' };
 }
 
+/**
+ * Whether a run currently owns the agent. Concurrent ordinary turns share one
+ * pi Agent; only the run owner may write the agent's shared state
+ * (psfn-framework-97epu).
+ */
+export function isAgentRunActive(agent: Agent): boolean {
+  return (agent as unknown as PatchedAgent).activeRun !== undefined;
+}
+
 export function installAgentToolSchedulerPatch(
   agent: Agent,
   schedulerOptions: ToolCallSchedulerOptions,

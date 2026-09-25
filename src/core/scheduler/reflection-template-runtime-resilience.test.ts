@@ -321,6 +321,44 @@ describe('createReflectionTemplateRuntime failure resilience', () => {
     });
   });
 
+  it('defers a busy or preempted scheduled reflection through the durable action queue (tpkqi)', async () => {
+    tempDir = createDailyReflectionDataDir(
+      'reflection-template-runtime-durable-deferral-',
+      'standard',
+    );
+    const nowSpy = vi.spyOn(Date, 'now');
+    nowSpy.mockReturnValue(1_700_000_000_000);
+    const scheduler = createScheduler();
+    const enqueue = vi.fn(() => 'queued' as const);
+    createReflectionTemplateRuntime({
+      scheduler,
+      agentLoop: {
+        handleMessage: vi.fn<ReflectionAgent['handleMessage']>().mockRejectedValueOnce(
+          new Error('Agent is already processing another prompt. Background run preempted by a foreground turn.'),
+        ),
+        waitForIdle: vi.fn(async () => undefined),
+      },
+      dataDir: tempDir,
+      runtimeOptions: {
+        postTurnActions: {
+          enqueue,
+          registerHandler: vi.fn(() => () => undefined),
+        } as never,
+      },
+    });
+
+    nowSpy.mockReturnValue(1_700_000_000_000 + (2 * 24 * 60 * 60_000));
+    await scheduler.tick();
+
+    expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'heartbeat.run_template',
+      dedupeKey: 'heartbeat.run_template:daily-review',
+      payload: { templateId: 'daily-review' },
+    }));
+    expect(scheduler.listTasks().some(task => task.id.startsWith('reflection-run:deferred:'))).toBe(false);
+    expect(scheduler.getTask('reflection:daily-review')).toMatchObject({ lastOutcome: 'succeeded' });
+  });
+
   it('leaves a failed deferred scheduled reflection on its one-shot task for Garden polling', async () => {
     tempDir = createDailyReflectionDataDir(
       'reflection-template-runtime-deferred-failure-',

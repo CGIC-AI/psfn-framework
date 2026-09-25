@@ -22,6 +22,7 @@ import { SessionManager, type StartupSessionMetadata } from '../session/manager.
 import type { SessionEntry } from '../session/types.js';
 import { evaluateAmbientPresenceEligibility } from './ambient-presence.js';
 import { Scheduler } from './scheduler.js';
+import { wirePostTurnActionRuntime } from '../../app/startup/composition/post-turn-actions.js';
 import {
   buildMorningWakeNote,
   buildTimeOfDayRefreshNote,
@@ -827,49 +828,116 @@ describe('morning wake outward phase', () => {
     expect(sent).toEqual(['thinking of you this morning']);
   });
 
-  it('defers a morning wake preempted by a foreground turn and runs it again later (tpkqi)', async () => {
+  it('keeps a preempted morning wake durable across a restart and runs it again later (tpkqi)', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(DAY1_NIGHT));
+    const tempDir = mkdtempSync(join(tmpdir(), 'psfn-preempted-wake-'));
+    const persistencePath = join(tempDir, 'post-turn-actions.json');
+    try {
+      const { port, appended } = makePort({ sessionId: APPROVED_PRIMARY_DM_CHANNEL });
+      const eventBus = new EventBus();
+      const failures = vi.fn();
+      eventBus.on('schedule.task.failed', failures);
+      const scheduler = makeScheduler(eventBus);
+      const actions = wirePostTurnActionRuntime({
+        eventBus,
+        scheduler,
+        agentLoop: { waitForIdle: vi.fn().mockResolvedValue(undefined) },
+        persistencePath,
+      });
+      const preempted = Object.assign(
+        new Error('Agent is already processing another prompt. Background run preempted by a foreground turn.'),
+        { name: 'AgentRunPreemptedError' },
+      );
+      const firstProcessWakeTurn = vi.fn().mockRejectedValue(preempted);
+      const config = makeWakeConfig({ refresher: { enabled: false } });
+      registerTemporalWakeupTasks({
+        scheduler,
+        sessionManager: port,
+        config,
+        postTurnActions: actions,
+        invokeWakeTurn: firstProcessWakeTurn,
+      });
+
+      vi.setSystemTime(new Date(DAY2_MORNING));
+      await scheduler.tick();
+
+      expect(firstProcessWakeTurn).toHaveBeenCalledTimes(1);
+      expect(appended).toHaveLength(0);
+      expect(failures).not.toHaveBeenCalled();
+      const retryAt = DAY2_MORNING + config.morningWake.minPartnerIdleMinutes * 60_000;
+      expect(actions.listQueued()).toEqual([expect.objectContaining({
+        actionKind: `scheduler.preempted_retry:${TEMPORAL_WAKEUP_MORNING_TASK_ID}`,
+        nextRunAt: retryAt,
+      })]);
+
+      // Restart: a new process loads the persisted queue and registers again.
+      const restartedBus = new EventBus();
+      restartedBus.on('schedule.task.failed', failures);
+      const restartedScheduler = makeScheduler(restartedBus);
+      const restartedActions = wirePostTurnActionRuntime({
+        eventBus: restartedBus,
+        scheduler: restartedScheduler,
+        agentLoop: { waitForIdle: vi.fn().mockResolvedValue(undefined) },
+        persistencePath,
+      });
+      const restartedWakeTurn = vi.fn().mockResolvedValue(null);
+      registerTemporalWakeupTasks({
+        scheduler: restartedScheduler,
+        sessionManager: port,
+        config,
+        postTurnActions: restartedActions,
+        invokeWakeTurn: restartedWakeTurn,
+      });
+      expect(restartedActions.listQueued()).toHaveLength(1);
+
+      vi.setSystemTime(new Date(retryAt + 1));
+      await restartedScheduler.tick();
+
+      expect(restartedWakeTurn).toHaveBeenCalledTimes(1);
+      expect(appended).toHaveLength(1);
+      expect(appended[0].source).toBe(TEMPORAL_WAKEUP_MORNING_NOTE_SOURCE);
+      expect(restartedActions.listQueued()).toHaveLength(0);
+      expect(failures).not.toHaveBeenCalled();
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('drops a preempted morning wake retry that only fires after its day ended', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(DAY1_NIGHT));
     const { port, appended } = makePort({ sessionId: APPROVED_PRIMARY_DM_CHANNEL });
     const eventBus = new EventBus();
-    const failures = vi.fn();
-    eventBus.on('schedule.task.failed', failures);
     const scheduler = makeScheduler(eventBus);
-    const preempted = Object.assign(
-      new Error('Agent is already processing another prompt. Background run preempted by a foreground turn.'),
-      { name: 'AgentRunPreemptedError' },
-    );
+    const actions = wirePostTurnActionRuntime({
+      eventBus,
+      scheduler,
+      agentLoop: { waitForIdle: vi.fn().mockResolvedValue(undefined) },
+    });
     const invokeWakeTurn = vi.fn()
-      .mockRejectedValueOnce(preempted)
-      .mockResolvedValueOnce(null);
-    const config = makeWakeConfig({ refresher: { enabled: false } });
+      .mockRejectedValueOnce(Object.assign(
+        new Error('Agent is already processing another prompt. Background run preempted by a foreground turn.'),
+        { name: 'AgentRunPreemptedError' },
+      ))
+      .mockResolvedValue(null);
     registerTemporalWakeupTasks({
       scheduler,
       sessionManager: port,
-      config,
+      config: makeWakeConfig({ refresher: { enabled: false } }),
+      postTurnActions: actions,
       invokeWakeTurn,
     });
 
     vi.setSystemTime(new Date(DAY2_MORNING));
     await scheduler.tick();
+    // The process was down until the next day's small hours.
+    vi.setSystemTime(new Date(DAY2_MORNING + 20 * 60 * 60_000));
+    await scheduler.tick();
 
     expect(invokeWakeTurn).toHaveBeenCalledTimes(1);
     expect(appended).toHaveLength(0);
-    expect(failures).not.toHaveBeenCalled();
-    expect(scheduler.getTask(TEMPORAL_WAKEUP_MORNING_TASK_ID)).toMatchObject({ lastOutcome: 'succeeded' });
-    const retry = scheduler.getTask(`${TEMPORAL_WAKEUP_MORNING_TASK_ID}:preempted-retry`);
-    expect(retry).toMatchObject({
-      type: 'one-shot',
-      runAt: DAY2_MORNING + config.morningWake.minPartnerIdleMinutes * 60_000,
-    });
-
-    vi.setSystemTime(new Date(retry!.runAt!));
-    await scheduler.tick();
-
-    expect(invokeWakeTurn).toHaveBeenCalledTimes(2);
-    expect(appended).toHaveLength(1);
-    expect(appended[0].source).toBe(TEMPORAL_WAKEUP_MORNING_NOTE_SOURCE);
-    expect(failures).not.toHaveBeenCalled();
+    expect(actions.listQueued()).toHaveLength(0);
   });
 
   it('does not escalate a routine rate-limit block into a channel-configuration failure', async () => {

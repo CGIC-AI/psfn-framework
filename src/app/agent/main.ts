@@ -2192,6 +2192,7 @@ async function main(): Promise<void> {
     promptRegistry: promptState.registry,
     proactiveOutbound,
     companionName: card.data.name,
+    postTurnActions,
     ...(fleetScheduleStagger ? { fleetScheduleStagger } : {}),
   });
 

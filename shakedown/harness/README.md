@@ -279,12 +279,21 @@ Export (values elided; `POSTGRES_DATABASE_URL` is required because the shared
 ```bash
 export PSFN_TARGET=kube
 export PSFN_API_BASE=https://fleet.example.test  # canonical Fleet SSO origin
-export ADMIN_TOKEN                              # independent Operator credential fetched above
+export ADMIN_TOKEN                              # independent Operator credential fetched above (required on kube)
 export TESTING_HARNESS_API_KEY=…                 # dedicated harness key from the secret above
 export POSTGRES_DATABASE_URL=…                   # round Postgres (resolver requires it)
 export COMPANION_ID=…                            # selected fleet companion UUID
 export PSFN_MATRIX_DIR=$SHAKEDOWN_ROOT/artifacts/matrix   # or PSFN_ROUND_DIR — output dir
 ```
+
+On kube, `ADMIN_TOKEN` (or `PSFN_OPERATOR_ADMIN_TOKEN`) is required and must
+differ from `TESTING_HARNESS_API_KEY`: prompt-marker and harness-skill residue
+sweeps and the per-case prompt/skill restores are operator maintenance on the
+companion's identity material, which the bounded testing-harness Garden door
+cannot manage (`prompts.manage` / `skills.manage` are outside its action list by
+design). They run through the audited ADMIN_TOKEN Garden door on the unified
+origin (bead `psfn-framework-xpgnr`); the harness never falls back to its own
+key for them.
 
 `COMPANION_ID` selects the fleet companion for **both** lanes: the Garden route
 (`/companions/<id>/garden/...`) and chat, where the harness sends the gateway's

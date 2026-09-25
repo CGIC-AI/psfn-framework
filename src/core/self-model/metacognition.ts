@@ -1,6 +1,5 @@
 import { isObjectRecord as isRecord } from '../../shared/utils/types.js';
 import { clampUnit } from '../../shared/utils/numeric.js';
-import { escapeXmlText } from '../../shared/utils/escaping.js';
 import { cloneInternalState, type InternalState } from './state.js';
 import { wrapPromptSectionXml } from '../identity/prompt-sections.js';
 import {
@@ -290,21 +289,14 @@ function detectAvoidanceFlag(
     return null;
   }
   const confidence = roundDecimal(clampUnit(unresolvedConcernTexts.length / consideredConcernCount));
-  const excerpts = unresolvedConcernTexts
-    .slice(0, 2)
-    .map(text => `"${compactConcernExcerpt(text)}"`)
-    .join(', ');
   const count = unresolvedConcernTexts.length;
-  const evidence = `${count} open concern${count === 1 ? '' : 's'} untouched across the last ${lookback.length} turns (${excerpts})`;
+  // Content-free by design (psfn-framework-qblju): active concerns are
+  // companion-wide and can come from other conversations, while flag evidence
+  // flows into this turn's prompt variables and metacognitive notes. Quoting
+  // concern text here carried another room's thread into a public room; the
+  // gated open-threads block is where visible concern text belongs.
+  const evidence = `${count} open concern${count === 1 ? '' : 's'} untouched across the last ${lookback.length} turns`;
   return buildMetacognitiveFlag('avoidance', confidence, evidence);
-}
-
-function compactConcernExcerpt(text: string): string {
-  const compact = text.replace(/\s+/g, ' ').trim();
-  const truncated = compact.length <= 60 ? compact : `${compact.slice(0, 57)}...`;
-  // Concern text is free-form and flows into XML-wrapped prompt sections via
-  // flag evidence; escape after truncation so entities are never cut in half.
-  return escapeXmlText(truncated);
 }
 
 function detectHighEngagementFlag(

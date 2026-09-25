@@ -435,7 +435,12 @@ the L3 verdict (`l2-screener.ts#L1-L38`).
 
 `src/boundary/gateway/intake/l3-screener.ts` is the deep pass on the canonical
 `reasoning` purpose (optional dual-model mode adds the `background` purpose and
-aggregates with either-flags fail-closed). **Hard rule**: anything that reaches
+aggregates with either-flags fail-closed). The verbatim-quote guard rejects a
+safe representation that repeats eight or more consecutive words, or any
+unbroken token of 24 or more characters, of the screened content; the one
+schema-repair attempt tells the model which rule it broke. A reasoning model
+that spends the whole `l3Screener.maxOutputTokens` cap thinking fails closed
+with an error naming that cap (the seed allows 4096 tokens). **Hard rule**: anything that reaches
 L3 writes an auditable CogSec event. In enforce posture, flagged or
 failed-closed content is quarantined; cleared content is released_sanitized as
 the **safe representation** (bounded neutral summary + typed extracted fields,

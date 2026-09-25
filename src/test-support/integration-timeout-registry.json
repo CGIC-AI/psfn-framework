@@ -733,6 +733,13 @@
       "measuredBaselineMs": 1500,
       "baselineSource": "measured",
       "note": "psfn-framework-mgdks.3: per-class Automata Bus learning aggregate (useful/no-finding/worker counts, empty streak, terminal-handoff probe, companion isolation) against the real containerized PostgreSQL harness. Focused local full-file wall baseline was about 1.2s on 2026-09-24 with a warm harness slot; 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
+    },
+    {
+      "file": "src/app/agent/external-group-arbiter.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 1910,
+      "baselineSource": "measured",
+      "note": "psfn-framework-znqh6: external group appraisal through the real PostgreSQL speaking-arbiter store, social pot, reservation and egress-lease phases into channel_pull_outbound. Focused full-file wall time measured 1.91s twice on 2026-09-25 with a warm harness slot; 120s matches the repo integration cap and leaves headroom for cold container startup and shared harness-slot contention."
     }
   ]
 }

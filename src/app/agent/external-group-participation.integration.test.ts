@@ -44,7 +44,7 @@ import {
   type ReservationPhasePort,
 } from './gateway-message-handlers.js';
 
-const COMPANION_NAME = 'Artemis';
+const COMPANION_NAME = 'Juniper';
 const ROOM = 'garden-club';
 
 /** The agent sees the message after the gateway-agent RPC's JSON round trip. */
@@ -249,7 +249,7 @@ describe('external group room participation (w1lc2 + ze2fx)', () => {
         rig.adapter,
         'sam',
         'Sam',
-        'Artemis would probably know which herbs survive a north-facing balcony, right?',
+        'Juniper would probably know which herbs survive a north-facing balcony, right?',
       );
       expect(named).toEqual({ status: 'no_reply' });
 
@@ -269,7 +269,7 @@ describe('external group room participation (w1lc2 + ze2fx)', () => {
 
       // The bridge drains the appraised room reply (channel_pull_outbound).
       expect(rig.adapter.pullOutbound({ protocolVersion: 1 }).messages).toMatchObject([
-        { conversationId: ROOM, text: 'Artemis: mint, parsley and chives.' },
+        { conversationId: ROOM, text: 'Juniper: mint, parsley and chives.' },
       ]);
     } finally {
       await rig.adapter.stop();

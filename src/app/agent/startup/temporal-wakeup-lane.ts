@@ -33,6 +33,8 @@ export interface TemporalWakeupLaneDeps {
   proactiveOutbound: ProactiveOutboundDispatcher | null;
   companionName: string;
   fleetScheduleStagger?: TemporalWakeupRuntimeOptions['fleetScheduleStagger'];
+  /** Durable queue that keeps a preempted morning wake's retry across restarts. */
+  postTurnActions: NonNullable<TemporalWakeupRuntimeOptions['postTurnActions']>;
 }
 
 export function buildTemporalWakeTurnPrompt(note: string): string {
@@ -61,6 +63,7 @@ export function registerTemporalWakeupLane(deps: TemporalWakeupLaneDeps): void {
     proactiveOutbound,
     companionName,
     fleetScheduleStagger,
+    postTurnActions,
   } = deps;
 
   registerTemporalWakeupTasks({
@@ -68,6 +71,7 @@ export function registerTemporalWakeupLane(deps: TemporalWakeupLaneDeps): void {
     sessionManager,
     config,
     quietHours,
+    postTurnActions,
     ...(fleetScheduleStagger ? { fleetScheduleStagger } : {}),
     // Surface how the morning wake slot was resolved (E7.2): fixed, habit
     // estimate, or habit fallback with a reason. Typed event + Garden read route.

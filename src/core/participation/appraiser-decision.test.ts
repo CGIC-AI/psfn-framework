@@ -130,6 +130,19 @@ describe('ParticipationAppraiser on decide()', () => {
     expect(JSON.stringify(request?.state)).toContain('I wonder what Persephone thinks about that');
   });
 
+  it('keeps operator guidance out of the remote decision state (9iooo)', async () => {
+    const { provider } = recordingProvider();
+    const { decisions, jevSpy } = runtime(settingsFor('jev'));
+    await new ParticipationAppraiser({
+      llmProvider: provider,
+      companionName: COMPANION_NAME,
+      decisions,
+      operatorGuidance: () => [{ name: 'tester briefing', content: 'OPERATOR-ONLY-BRIEFING-TEXT' }],
+    }).appraise(makeCandidate());
+
+    expect(JSON.stringify(jevSpy.mock.calls[0]?.[0])).not.toContain('OPERATOR-ONLY-BRIEFING-TEXT');
+  });
+
   it('maps a jev react to the reaction class question', async () => {
     const { provider } = recordingProvider();
     const { decisions } = runtime(settingsFor('jev'), async () => jevAnswer('react', { react: 0.9 }, 0.85));

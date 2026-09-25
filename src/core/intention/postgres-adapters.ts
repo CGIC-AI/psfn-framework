@@ -55,6 +55,7 @@ function createPostgresIntentionRuntimeState(
       },
       pendingFollowUpProvider: {
         getPendingFollowUps: (contactId?: string) => pendingFollowUpBackend.snapshotPendingFollowUps(contactId),
+        quarantinePendingFollowUp: async input => await pendingFollowUpBackend.quarantine(input),
       },
       behavioralPatternProvider: {
         getBehavioralNotes: (contactId?: string, limit?: number) => (

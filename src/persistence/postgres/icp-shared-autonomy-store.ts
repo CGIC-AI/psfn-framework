@@ -1231,6 +1231,28 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
     return mapConversation(row, this.knownCompanionIds);
   }
 
+  async reclassifyEndedEpisodeCloseReason(input: {
+    conversationId: string;
+    expectedRevision: number;
+    fromReasonCode: IcpAutonomyReasonCode;
+    toReasonCode: IcpAutonomyReasonCode;
+  }): Promise<IcpConversationEpisode> {
+    const row = await queryOne<ConversationRow>(this.pool, `
+      UPDATE icp_conversation_episodes
+      SET close_reason_code = $4, revision = revision + 1
+      WHERE conversation_id = $1 AND status = 'ended' AND revision = $2
+        AND close_reason_code = $3
+      RETURNING ${CONVERSATION_COLUMNS}
+    `, [
+      requireUuid(input.conversationId, 'conversationId'),
+      requirePositiveInteger(input.expectedRevision, 'expectedRevision'),
+      requireReasonCode(input.fromReasonCode, 'fromReasonCode'),
+      requireReasonCode(input.toReasonCode, 'toReasonCode'),
+    ]);
+    if (!row) throw new Error(`ICP conversation close-reason reclassification conflict for ${input.conversationId}`);
+    return mapConversation(row, this.knownCompanionIds);
+  }
+
   async captureInvalidationFence(
     firstCompanionId: string,
     secondCompanionId: string,

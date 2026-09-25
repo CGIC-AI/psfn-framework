@@ -8,6 +8,7 @@ import type {
   IcpInitiationCandidate,
   IcpInitiationCandidateStatus,
 } from './initiation-candidate.js';
+import { IcpOutreachHandoffDeniedError } from './agent-facing-autonomy.js';
 import {
   createIcpInitiationSourceRuntime,
   ICP_INITIATION_RETRY_COOLDOWN_MS,
@@ -693,6 +694,50 @@ describe('ICP initiation source runtime', () => {
       }),
       restartedDeps.isExternalCompanionAuthorized,
     );
+  });
+
+  it.each([
+    ['permit_expired', 'expired'],
+    ['permit_revoked', 'cancelled'],
+  ] as const)('ends a permitted candidate whose permit is %s instead of retrying it forever', async (reasonCode, status) => {
+    const store = createStore();
+    const firstDeps = dependencies({ store }).deps;
+    vi.mocked(firstDeps.peers.executeCompanionOutreach).mockRejectedValueOnce(
+      new Error('local turn failed after permit issue'),
+    );
+    await expect(createIcpInitiationSourceRuntime(firstDeps).submit(request('foreground')))
+      .rejects.toThrow('local turn failed');
+    const candidateId = vi.mocked(firstDeps.gateway.companionIssueInitiationPermit)
+      .mock.calls[0]![0].candidate.candidateId;
+
+    const restartedDeps = dependencies({ store }).deps;
+    vi.mocked(restartedDeps.peers.executeCompanionOutreach).mockRejectedValue(
+      new IcpOutreachHandoffDeniedError(reasonCode),
+    );
+    const restarted = createIcpInitiationSourceRuntime(restartedDeps);
+    await expect(restarted.submit(request('foreground'))).resolves.toMatchObject({
+      outcome: 'suppressed',
+      status,
+      reasonCode,
+    });
+    await expect(store.getCandidate(candidateId)).resolves.toMatchObject({ status, reasonCode });
+
+    // The ended candidate is terminal: a later pass dedupes without outreach.
+    await expect(restarted.submit(request('foreground'))).resolves.toMatchObject({ status });
+    expect(restartedDeps.peers.executeCompanionOutreach).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a permitted candidate retryable when outreach fails for a non-permit reason', async () => {
+    const store = createStore();
+    const deps = dependencies({ store }).deps;
+    vi.mocked(deps.peers.executeCompanionOutreach).mockRejectedValue(
+      new IcpOutreachHandoffDeniedError('peer_busy'),
+    );
+    await expect(createIcpInitiationSourceRuntime(deps).submit(request('foreground')))
+      .rejects.toThrow('companion outreach denied: peer_busy');
+    const candidateId = vi.mocked(deps.gateway.companionIssueInitiationPermit)
+      .mock.calls[0]![0].candidate.candidateId;
+    await expect(store.getCandidate(candidateId)).resolves.toMatchObject({ status: 'permitted' });
   });
 
   it('pins a felt-impulse correlation to its first durable peer across crash and peer reselection', async () => {

@@ -827,6 +827,51 @@ describe('morning wake outward phase', () => {
     expect(sent).toEqual(['thinking of you this morning']);
   });
 
+  it('defers a morning wake preempted by a foreground turn and runs it again later (tpkqi)', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(DAY1_NIGHT));
+    const { port, appended } = makePort({ sessionId: APPROVED_PRIMARY_DM_CHANNEL });
+    const eventBus = new EventBus();
+    const failures = vi.fn();
+    eventBus.on('schedule.task.failed', failures);
+    const scheduler = makeScheduler(eventBus);
+    const preempted = Object.assign(
+      new Error('Agent is already processing another prompt. Background run preempted by a foreground turn.'),
+      { name: 'AgentRunPreemptedError' },
+    );
+    const invokeWakeTurn = vi.fn()
+      .mockRejectedValueOnce(preempted)
+      .mockResolvedValueOnce(null);
+    const config = makeWakeConfig({ refresher: { enabled: false } });
+    registerTemporalWakeupTasks({
+      scheduler,
+      sessionManager: port,
+      config,
+      invokeWakeTurn,
+    });
+
+    vi.setSystemTime(new Date(DAY2_MORNING));
+    await scheduler.tick();
+
+    expect(invokeWakeTurn).toHaveBeenCalledTimes(1);
+    expect(appended).toHaveLength(0);
+    expect(failures).not.toHaveBeenCalled();
+    expect(scheduler.getTask(TEMPORAL_WAKEUP_MORNING_TASK_ID)).toMatchObject({ lastOutcome: 'succeeded' });
+    const retry = scheduler.getTask(`${TEMPORAL_WAKEUP_MORNING_TASK_ID}:preempted-retry`);
+    expect(retry).toMatchObject({
+      type: 'one-shot',
+      runAt: DAY2_MORNING + config.morningWake.minPartnerIdleMinutes * 60_000,
+    });
+
+    vi.setSystemTime(new Date(retry!.runAt!));
+    await scheduler.tick();
+
+    expect(invokeWakeTurn).toHaveBeenCalledTimes(2);
+    expect(appended).toHaveLength(1);
+    expect(appended[0].source).toBe(TEMPORAL_WAKEUP_MORNING_NOTE_SOURCE);
+    expect(failures).not.toHaveBeenCalled();
+  });
+
   it('does not escalate a routine rate-limit block into a channel-configuration failure', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(DAY1_NIGHT));

@@ -11,6 +11,7 @@ import type { SubstrateConfig } from '../../../system/config/runtime-config-cont
 import type { SchedulerRuntimeConfig as SchedulerConfig } from '../../../system/config/scheduler-config.js';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import { ParticipationAppraiser } from '../../../core/participation/appraiser.js';
+import { selectAppraiserOperatorGuidance } from '../../../core/participation/operator-guidance.js';
 import { PassiveNameCandidateBuilder } from '../../../core/participation/passive-name-candidate.js';
 import { RoomParticipationLeaseCoordinator } from '../../../core/participation/room-participation-lease-coordinator.js';
 import { RoomMessageFeatureExtractor } from '../../../core/participation/room-signal.js';
@@ -181,6 +182,10 @@ export function wireSpeakingArbiterLane(deps: SpeakingArbiterLaneDeps): Speaking
     // (jp36.8.2).
     settings: schedulerConfig.socialAutonomy.appraiser,
     ...(config.companionId ? { companionId: config.companionId } : {}),
+    // psfn-framework-9iooo: operator-authored layers inform reply/ignore.
+    operatorGuidance: () => selectAppraiserOperatorGuidance(
+      coreRuntime.promptState.layers.getByType('operator'),
+    ),
   });
 
   // ICP-over-social precedence transport (jp36.5.2.1): the arbiter's reservation

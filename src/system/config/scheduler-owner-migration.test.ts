@@ -430,7 +430,7 @@ describe('migrateLegacySchedulerOwner', () => {
     const { dataDir, filePath } = prepareOwner();
     migrateLegacySchedulerOwner({ dataDir, apply: true });
     const canonical = JSON.parse(readFileSync(filePath, 'utf8')) as Record<string, unknown>;
-    const withAppraiser = (deadline: number) => {
+    const withAppraiser = (deadline: number, maxOutputTokens = 1_500) => {
       const owner = structuredClone(canonical);
       const socialAutonomy = (owner.socialAutonomy ?? {}) as Record<string, unknown>;
       owner.socialAutonomy = socialAutonomy;
@@ -438,7 +438,7 @@ describe('migrateLegacySchedulerOwner', () => {
         ...(socialAutonomy.appraiser as Record<string, unknown> | undefined),
         enabled: true,
         appraisalDeadlineMs: deadline,
-        appraisalMaxOutputTokens: 200,
+        appraisalMaxOutputTokens: maxOutputTokens,
         transcriptMessageCap: 8,
         transcriptMessageChars: 500,
       };
@@ -459,6 +459,22 @@ describe('migrateLegacySchedulerOwner', () => {
     withAppraiser(12_000);
     expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).not.toHaveProperty('upgradedPaths');
     expect(deadlineOnDisk()).toBe(12_000);
+
+    // 9z2z9: the seeded 200-token output budget truncated reasoning-model
+    // verdicts; an inherited 200 moves to the current default, others stay.
+    const maxTokensOnDisk = () => (((JSON.parse(readFileSync(filePath, 'utf8')) as Record<string, unknown>)
+      .socialAutonomy as Record<string, unknown>).appraiser as Record<string, unknown>).appraisalMaxOutputTokens;
+    withAppraiser(12_000, 200);
+    expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
+      status: 'applied',
+      upgradedPaths: ['socialAutonomy.appraiser.appraisalMaxOutputTokens'],
+    });
+    expect(maxTokensOnDisk()).toBe(createDefaultParticipationAppraiserSettings().appraisalMaxOutputTokens);
+    expect(deadlineOnDisk()).toBe(12_000);
+    expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({ status: 'not_needed' });
+    withAppraiser(12_000, 600);
+    expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).not.toHaveProperty('upgradedPaths');
+    expect(maxTokensOnDisk()).toBe(600);
   });
 
   it('plans then removes only the retired artifactLifecycle block, idempotently (cziwg)', () => {

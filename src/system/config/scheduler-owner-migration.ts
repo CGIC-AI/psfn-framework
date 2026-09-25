@@ -17,6 +17,7 @@ import { canonicalOwnerFileMode } from './owner-file-modes.js';
 import {
   createDefaultParticipationAppraiserSettings,
   RETIRED_APPRAISAL_DEADLINE_MS,
+  RETIRED_APPRAISAL_MAX_OUTPUT_TOKENS,
 } from './participation-config.js';
 import {
   DEFAULT_BACKGROUND_MAINTENANCE_CONFIG,
@@ -67,6 +68,11 @@ const RETIRED_SCHEDULER_DEFAULTS: ReadonlyArray<{
   path: ['socialAutonomy', 'appraiser', 'appraisalDeadlineMs'],
   retired: RETIRED_APPRAISAL_DEADLINE_MS,
   current: () => createDefaultParticipationAppraiserSettings().appraisalDeadlineMs,
+}, {
+  // psfn-framework-9z2z9: reasoning tokens exhausted the seeded 200.
+  path: ['socialAutonomy', 'appraiser', 'appraisalMaxOutputTokens'],
+  retired: RETIRED_APPRAISAL_MAX_OUTPUT_TOKENS,
+  current: () => createDefaultParticipationAppraiserSettings().appraisalMaxOutputTokens,
 }];
 
 function upgradeRetiredSchedulerDefaults(

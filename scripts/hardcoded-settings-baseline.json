@@ -5259,6 +5259,13 @@
       "note": "Existing mutable policy candidate createReflectionTemplateRuntime.buildDeferredReflectionAction.maxRetries; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
+      "file": "src/core/scheduler/preempted-task-retry.ts",
+      "name": "deferPreemptedTaskRetry.input.scheduler.register.arg0.intervalMs",
+      "value": "0",
+      "form": "object-member",
+      "note": "Structural field of a one-shot task registration (tpkqi): one-shot tasks fire on runAt and never read intervalMs; not a tuning value."
+    },
+    {
       "file": "src/core/scheduler/reflection-template-runtime.ts",
       "name": "createReflectionTemplateRuntime.queueDeferredTemplateRun.scheduler.register.arg0.intervalMs",
       "value": "0",
@@ -5506,7 +5513,7 @@
     },
     {
       "file": "src/core/scheduler/temporal-wakeup.ts",
-      "name": "registerTemporalWakeupTasks.$call:math-clamp:Math.max.arg1#1",
+      "name": "registerTemporalWakeupTasks.runMorningWake.$call:math-clamp:Math.max.arg1#1",
       "value": "8",
       "form": "math-clamp",
       "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
@@ -12804,9 +12811,16 @@
     {
       "file": "src/system/config/participation-config.ts",
       "name": "createDefaultParticipationAppraiserSettings.appraisalMaxOutputTokens",
-      "value": "200",
+      "value": "1_500",
       "form": "object-member",
       "note": "Canonical owner-file/schema metadata createDefaultParticipationAppraiserSettings.appraisalMaxOutputTokens; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
+    },
+    {
+      "file": "src/system/config/participation-config.ts",
+      "name": "createDefaultParticipationAppraiserSettings.operatorGuidanceMaxChars",
+      "value": "2_000",
+      "form": "object-member",
+      "note": "Canonical owner-file/schema metadata createDefaultParticipationAppraiserSettings.operatorGuidanceMaxChars; the code literal is the scheduler.json socialAutonomy.appraiser bootstrap default (seeded in config/scheduler.seed.json), not a parallel runtime override."
     },
     {
       "file": "src/system/config/participation-config.ts",
@@ -12884,6 +12898,12 @@
       "value": "12",
       "form": "object-member",
       "note": "Canonical owner-file/schema metadata createDefaultRoomSignalSettings.maxRoomVelocity; the code literal is the scheduler.json socialAutonomy.roomSignal bootstrap default (seeded in config/scheduler.seed.json and added by the owner migration), not a parallel runtime override."
+    },
+    {
+      "file": "src/system/config/participation-config.ts",
+      "name": "RETIRED_APPRAISAL_MAX_OUTPUT_TOKENS",
+      "value": "200",
+      "note": "Migration marker (9z2z9): the exact retired seed value the scheduler owner migration recognizes as inherited and upgrades; not a runtime tunable."
     },
     {
       "file": "src/system/config/runtime-config-contracts.ts",

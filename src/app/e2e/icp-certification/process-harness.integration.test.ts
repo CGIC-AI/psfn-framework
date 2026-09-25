@@ -1179,7 +1179,7 @@ describe('ICP certification real process harness', () => {
     await Promise.all([agentA.enterPrivateRoom(), agentB.enterPrivateRoom()]);
     const roomEvasion = await exhaustedAgent.runRoomWeightedThoughtScheduler();
     expect(['deferred', 'rejected']).toContain(roomEvasion.status);
-    expect(['charge_pressure', 'fatigue_exhausted']).toContain(roomEvasion.reasonCode);
+    expect(['relationship_pressure', 'charge_pressure', 'fatigue_exhausted']).toContain(roomEvasion.reasonCode);
     expect(await waitForModelRequestQuiescence(processes)).toBe(providerRequestsAfterConversation);
 
     const pool = createPostgresPool(databaseUrl, {

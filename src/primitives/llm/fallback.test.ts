@@ -192,4 +192,19 @@ describe('FallbackRunner', () => {
 
     expect(seen).toEqual([chatPrimary.model]);
   });
+
+  it('stops fallback without a candidate-failure log when the caller cancelled the call (tpkqi)', async () => {
+    const runner = new FallbackRunner({ rateLimitCooldownMs: 1000, now: () => 0 });
+    const seen: string[] = [];
+    const preempted = Object.assign(new Error('Background run preempted by a foreground turn.'), {
+      name: 'AgentRunPreemptedError',
+    });
+
+    await expect(runner.run('chat', [chatPrimary, chatFallback], async (candidate) => {
+      seen.push(candidate.model);
+      throw new NonRecoverableFallbackError(preempted, { callerCancelled: true });
+    })).rejects.toBe(preempted);
+
+    expect(seen).toEqual([chatPrimary.model]);
+  });
 });

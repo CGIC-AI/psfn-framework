@@ -113,6 +113,17 @@ export interface IcpConversationEpisodeStorePort {
   createEpisode(episode: IcpConversationEpisode): Promise<IcpConversationEpisode>;
   getEpisode(conversationId: string): Promise<IcpConversationEpisode | null>;
   transitionEpisode(input: IcpConversationTransitionInput): Promise<IcpConversationEpisode>;
+  /**
+   * Re-record why an already-ended conversation closed, guarded by the exact
+   * prior reason and revision. Used only to correct a system-failure closure
+   * that was recorded as a social one (see ICP_SYSTEM_FAILURE_END_REASON_CODES).
+   */
+  reclassifyEndedEpisodeCloseReason(input: {
+    conversationId: string;
+    expectedRevision: number;
+    fromReasonCode: IcpAutonomyReasonCode;
+    toReasonCode: IcpAutonomyReasonCode;
+  }): Promise<IcpConversationEpisode>;
 }
 
 export interface IcpDyadTransitionInput {

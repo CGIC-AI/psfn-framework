@@ -60,6 +60,17 @@ function claimsExecutionSuccess(responseText: string, explicitToolRequest: boole
 }
 
 /**
+ * Whether the text names a tool by its identifier. Only snake_case identifiers
+ * count: a single-word tool name ("memory", "notify") is ordinary prose.
+ */
+function namesToolIdentifier(text: string, toolNames: readonly string[]): boolean {
+  return toolNames.some(name => (
+    name.includes('_')
+    && new RegExp(`(?<![\\p{L}\\p{N}_])${name.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}(?![\\p{L}\\p{N}_])`, 'u').test(text)
+  ));
+}
+
+/**
  * Reject a final assistant claim of execution success when every observed tool
  * result was a denial/rejection/skip. A prior success in the same parent turn
  * makes a later duplicate skip truthful and therefore does not trigger this
@@ -96,19 +107,30 @@ export function rejectsUnconfirmedToolExecutionClaim(input: {
     }
   }
 
+  const knownToolNames = [
+    ...new Set([
+      ...(input.activeToolNames ?? []),
+      ...CANONICAL_FIRST_PARTY_TOOL_SURFACES.map(tool => tool.name),
+    ]),
+  ];
   const explicitlyRequestedToolSequence = resolveExplicitToolRequestSequence(
     input.requestText ?? '',
-    [
-      ...new Set([
-        ...(input.activeToolNames ?? []),
-        ...CANONICAL_FIRST_PARTY_TOOL_SURFACES.map(tool => tool.name),
-      ]),
-    ],
+    knownToolNames,
   );
   const successClaimed = claimsExecutionSuccess(
     input.responseText,
     explicitlyRequestedToolSequence.length > 0,
   );
+  // r27lc: a success claim that names a tool when the turn ran no tool at all
+  // is a fabricated execution (e.g. an invented selfie_create file name),
+  // whether or not the request phrased the call as an explicit directive.
+  if (
+    successClaimed
+    && observedToolOutcomes.length === 0
+    && namesToolIdentifier(input.responseText, knownToolNames)
+  ) {
+    return true;
+  }
   if (explicitlyRequestedToolSequence.length > 0 && successClaimed) {
     let observedIndex = 0;
     for (const requestedToolName of explicitlyRequestedToolSequence) {

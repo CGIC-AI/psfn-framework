@@ -9,7 +9,10 @@ import type {
   IcpInitiationPressureSnapshot,
 } from "../../core/agent/fatigue/regulation-reservation.js";
 import type { IcpConversationCorrelation } from "../../shared/contracts/icp-autonomy.js";
-import { parseIcpConversationCorrelation } from "../../shared/contracts/icp-autonomy.js";
+import {
+  ICP_SYSTEM_FAILURE_END_REASON_CODES,
+  parseIcpConversationCorrelation,
+} from "../../shared/contracts/icp-autonomy.js";
 import type { FatigueEnforcementMetadata } from "../../shared/contracts/runtime.js";
 import { isRfc4122Uuid } from "../../shared/utils/types.js";
 import { createPostgresPool, withPostgresClient } from "../postgres.js";
@@ -806,12 +809,27 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
           AND outcome IN ('pending', 'delivering', 'delivered', 'no_reply')
           AND reserved_at_ms BETWEEN $5::bigint AND $4::bigint
           AND ($11::uuid IS NULL OR turn_id <> $11::uuid)
-          -- 0eq2x: a turn the peer's appraisal failed to process (system
+          -- 0eq2x: a turn the peer failed to appraise (system
           -- timeout/error) is not relationship pressure.
           AND NOT EXISTS (
             SELECT 1 FROM icp_conversation_episodes AS episode
             WHERE episode.conversation_id::text = reservation.conversation_id::text
-              AND episode.close_reason_code = 'peer_appraisal_unavailable'
+              AND episode.close_reason_code = ANY($12::text[])
+          )
+          -- 9rima: nor is a conversation in which one participant never
+          -- completed a turn because each of its turns failed as a system
+          -- error (a recipient processing failure). A successful retry
+          -- gives that participant a counted turn and the rule lifts.
+          AND NOT EXISTS (
+            SELECT 1 FROM icp_fatigue_turn_reservations AS failed
+            WHERE failed.conversation_id::text = reservation.conversation_id::text
+              AND failed.outcome = 'failed'
+              AND NOT EXISTS (
+                SELECT 1 FROM icp_fatigue_turn_reservations AS completed
+                WHERE completed.conversation_id::text = failed.conversation_id::text
+                  AND completed.local_companion_id = failed.local_companion_id
+                  AND completed.outcome IN ('pending', 'delivering', 'delivered', 'no_reply')
+              )
           )
       ), episode_pressure AS (
         SELECT
@@ -825,12 +843,22 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
             $9::double precision * POWER(2::double precision, -($4::bigint - last_activity_at_ms)::double precision / $6::double precision)
             ELSE 0 END), 0) AS unanswered_pressure,
           COUNT(*) AS episode_count
-        FROM icp_conversation_episodes
+        FROM (
+          -- 9rima: an invitation whose permit was never consumed never reached
+          -- the peer, so it cannot be left unanswered.
+          SELECT episode.*, EXISTS (
+            SELECT 1 FROM icp_initiation_permits AS permit
+            WHERE permit.conversation_id::text = episode.conversation_id::text
+              AND permit.status = 'consumed'
+          ) AS invitation_delivered
+          FROM icp_conversation_episodes AS episode
+        ) AS episode_view
         WHERE initiated_by_companion_id = ANY(ARRAY[$1::uuid, $2::uuid])
           AND participant_companion_ids @> ARRAY[$1::uuid, $2::uuid]
           AND last_activity_at_ms BETWEEN $5::bigint AND $4::bigint
           AND (status IN ('declined', 'deferred')
-            OR (status = 'invited' AND last_activity_at_ms <= $4::bigint - $10::bigint))
+            OR (status = 'invited' AND last_activity_at_ms <= $4::bigint - $10::bigint
+              AND invitation_delivered))
       )
       SELECT root_spend.normal_spent, root_spend.overcharge_spent,
         reservation_pressure.charged_pressure,
@@ -852,6 +880,7 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
         input.unansweredPressureUnits,
         input.unansweredAfterMs,
         excludedTurnId ?? null,
+        [...ICP_SYSTEM_FAILURE_END_REASON_CODES],
       ],
     );
     const row = result.rows.at(0);

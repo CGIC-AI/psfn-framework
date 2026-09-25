@@ -929,6 +929,50 @@ describe('createSubstrateStreamFn', () => {
     expect((streamAdapterMocks.transportStream.mock.calls[1]?.[0] as LLMContext).modelHint?.model).toBe('moonshotai/kimi-k2.5');
   });
 
+  it('does not walk a preempted run through the fallback chain (tpkqi)', async () => {
+    const baseConfig = makeConfig();
+    const baseRegistry = baseConfig.modelRegistry!;
+    const config = makeConfig({
+      modelRegistry: {
+        ...baseRegistry,
+        models: [
+          ...baseRegistry.models,
+          {
+            id: 'chat-fallback',
+            rank: 500,
+            identity: {
+              provider: 'openrouter',
+              model: 'moonshotai/kimi-k2.5',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'chat', primary: false }],
+            capabilities: { maxOutputTokens: 8192, contextWindow: 128_000 },
+            tuning: { maxOutputTokens: 8192, contextWindow: 128_000 },
+          },
+        ],
+      },
+    });
+    const preempted = Object.assign(
+      new Error('Agent is already processing another prompt. Background run preempted by a foreground turn.'),
+      { name: 'AgentRunPreemptedError' },
+    );
+    const controller = new AbortController();
+    streamAdapterMocks.transportStream.mockImplementation(() => {
+      controller.abort(preempted);
+      return Promise.reject(new Error(preempted.message));
+    });
+
+    const streamFn = makeStreamFn(config);
+    const model = resolveModel(config, makeRuntime(), 'chat');
+    const stream = await streamFn(model, fromAny({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'hello' }],
+    }), { signal: controller.signal });
+    await expect(collectStreamEvents(stream as AsyncIterable<unknown>)).rejects.toBe(preempted);
+
+    expect(streamAdapterMocks.transportStream).toHaveBeenCalledTimes(1);
+  });
+
   describe('mid-reply stream termination (p3of8)', () => {
     function fallbackConfig() {
       const baseConfig = makeConfig();

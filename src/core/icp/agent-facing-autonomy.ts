@@ -10,6 +10,7 @@ import type {
 import type { ContactStorePort } from '../contacts/contact-store-port.js';
 import type { Contact } from '../contacts/types.js';
 import type {
+  IcpAutonomyReasonCode,
   IcpAvailabilityLease,
   IcpAvailabilityState,
   IcpInitiationPermit,
@@ -22,6 +23,14 @@ import type {
 } from '../../shared/contracts/runtime.js';
 import { isRfc4122Uuid } from '../../shared/utils/types.js';
 import { parseIcpAutonomyCandidateOrigin } from './candidate-scheduler-origin.js';
+
+/** The gateway broker refused an outreach handoff with a typed reason. */
+export class IcpOutreachHandoffDeniedError extends Error {
+  constructor(readonly reasonCode: IcpAutonomyReasonCode) {
+    super(`companion outreach denied: ${reasonCode}`);
+    this.name = 'IcpOutreachHandoffDeniedError';
+  }
+}
 
 export interface KnownCompanionPeer {
   contactId: string;
@@ -268,7 +277,7 @@ export function createAgentFacingIcpAutonomyRuntime(input: {
       peerContactId: peer.contactId,
     });
     if (!handoff.authorized) {
-      throw new Error(`companion outreach denied: ${handoff.reasonCode}`);
+      throw new IcpOutreachHandoffDeniedError(handoff.reasonCode);
     }
     if (handoff.permit.recipientCompanionId !== peer.peerCompanionId) {
       throw new Error('companion outreach permit recipient does not match the canonical contact');

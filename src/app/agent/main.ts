@@ -186,6 +186,7 @@ import { buildAgentControlPlane } from './control-plane.js';
 import type { AgentControlPlaneShutdownTargets } from './control-plane.js';
 import { createLLMProviderPort } from '../../core/agent/contracts.js';
 import { wireIcpInitiationSources } from './icp-initiation-source-wiring.js';
+import { reconcileIcpAppraisalFailureClosures } from './icp-appraisal-failure-reconciliation.js';
 import { createIcpTestInitiationTrigger } from './icp-test-initiation.js';
 import { registerSocialImpulseOutreachLane } from './startup/social-impulse-outreach-lane.js';
 import { createIntentionFollowUpDestinationResolver } from './intention-follow-up-destination.js';
@@ -1810,6 +1811,18 @@ async function main(): Promise<void> {
       fatigueHistory: coreRuntime.fatigueLedger,
     });
     await gateway.startFleetPostureReporting(fleetPostureProvider);
+    // 0eq2x/9rima: re-record pre-fix appraisal-failure closures so they stop
+    // counting as relationship pressure. Idempotent; runs in the background.
+    void reconcileIcpAppraisalFailureClosures({
+      sessions: sessionManager,
+      endEpisodeActivity: endInput => gateway.companionEndIcpEpisodeActivity(endInput),
+      windowMs: config.chargePolicy.fatigue.socialRegulation.relationshipPressureWindowMs,
+      nowMs: Date.now(),
+    }).catch((error: unknown) => {
+      log.error('ICP appraisal-failure closure reconciliation failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
     icpRuntimeAvailabilityLane = {
       gateway,
       isEnabled: () => icpRuntimeEnablement.isEnabled()

@@ -680,7 +680,7 @@ describe("Postgres ICP fatigue regulation reservations", () => {
   );
 
   it(
-    "does not count a turn whose peer appraisal failed as relationship pressure (0eq2x)",
+    "does not count a turn whose peer appraisal or processing failed as relationship pressure (0eq2x, 9rima)",
     async () => {
       if (!harness)
         throw new Error("Postgres integration harness is unavailable");
@@ -690,9 +690,22 @@ describe("Postgres ICP fatigue regulation reservations", () => {
       });
       const store =
         await PostgresIcpFatigueRegulationReservationStore.connect(databaseUrl);
-      const fixtures = [
+      const sqlPool = createPostgresPool(databaseUrl, {
+        applicationName: "icp-pressure-failed-peer-test",
+        allowExitOnIdle: true,
+      });
+      const fixtures: Array<{
+        conversationId: string;
+        closeReasonCode: "peer_appraisal_unavailable" | "conversation_ended" | null;
+        peerTurnFailed?: true;
+        reclassify?: true;
+      }> = [
         { conversationId: "55555555-5555-4555-8555-000000000071", closeReasonCode: "peer_appraisal_unavailable" as const },
         { conversationId: "55555555-5555-4555-8555-000000000072", closeReasonCode: "conversation_ended" as const },
+        // 9rima: B's reply turn failed as a system error; B never completed a turn.
+        { conversationId: "55555555-5555-4555-8555-000000000073", closeReasonCode: null, peerTurnFailed: true },
+        // A pre-0eq2x appraisal failure recorded as conversation_ended, then corrected.
+        { conversationId: "55555555-5555-4555-8555-000000000074", closeReasonCode: "conversation_ended", reclassify: true },
       ];
       try {
         for (const [index, fixture] of fixtures.entries()) {
@@ -717,6 +730,24 @@ describe("Postgres ICP fatigue regulation reservations", () => {
             })),
             hardLimit: 100,
           })).resolves.toMatchObject({ outcome: "reserved" });
+          if (fixture.peerTurnFailed) {
+            const peerTurnId = `77777777-7777-4777-8777-00000000008${String(index)}`;
+            await expect(store.reserve({
+              ...reservationInput(correlation({
+                conversationId: fixture.conversationId,
+                channelId: DM,
+                turnId: peerTurnId,
+                localCompanionId: B,
+                peerCompanionId: A,
+              })),
+              hardLimit: 100,
+            })).resolves.toMatchObject({ outcome: "reserved" });
+            await sqlPool.query(
+              "UPDATE shared.icp_fatigue_turn_reservations SET outcome = 'failed', finalized_at_ms = reserved_at_ms WHERE turn_id = $1",
+              [peerTurnId],
+            );
+            continue;
+          }
           await episodes.transitionEpisode({
             conversationId: fixture.conversationId,
             expectedStatus: "invited",
@@ -724,8 +755,22 @@ describe("Postgres ICP fatigue regulation reservations", () => {
             expectedLastActivityAtMs: 1_000,
             status: "ended",
             lastActivityAtMs: 1_000,
-            closeReasonCode: fixture.closeReasonCode,
+            closeReasonCode: fixture.closeReasonCode!,
           });
+          if (fixture.reclassify) {
+            await expect(episodes.reclassifyEndedEpisodeCloseReason({
+              conversationId: fixture.conversationId,
+              expectedRevision: 1,
+              fromReasonCode: "conversation_ended",
+              toReasonCode: "peer_appraisal_unavailable",
+            })).rejects.toThrow(/reclassification conflict/);
+            await expect(episodes.reclassifyEndedEpisodeCloseReason({
+              conversationId: fixture.conversationId,
+              expectedRevision: 2,
+              fromReasonCode: "conversation_ended",
+              toReasonCode: "peer_appraisal_unavailable",
+            })).resolves.toMatchObject({ closeReasonCode: "peer_appraisal_unavailable", revision: 3 });
+          }
         }
 
         const pressure = await store.readInitiationPressure({
@@ -743,14 +788,14 @@ describe("Postgres ICP fatigue regulation reservations", () => {
         expect(pressure.contributingReservationCount).toBe(1);
         expect(pressure.chargedPressure).toBeCloseTo(1, 6);
       } finally {
-        await Promise.allSettled([episodes.close(), store.close()]);
+        await Promise.allSettled([episodes.close(), store.close(), sqlPool.end()]);
       }
     },
     TIMEOUT_MS,
   );
 
   it(
-    "decays declined, deferred, and unanswered initiation pressure without a daily reset",
+    "decays declined, deferred, and delivered-but-unanswered initiation pressure without a daily reset",
     async () => {
       if (!harness)
         throw new Error("Postgres integration harness is unavailable");
@@ -782,8 +827,20 @@ describe("Postgres ICP fatigue regulation reservations", () => {
           conversationId: "55555555-5555-4555-8555-555555555553",
           rootInitiationId: "66666666-6666-4666-8666-666666666663",
           provenanceRef: "icp-prov:33333333-3333-4333-8333-333333333333",
+          permitStatus: "consumed" as const,
+        },
+        // 9rima: the permit expired before delivery, so the peer never saw it.
+        {
+          conversationId: "55555555-5555-4555-8555-555555555554",
+          rootInitiationId: "66666666-6666-4666-8666-666666666664",
+          provenanceRef: "icp-prov:44444444-4444-4444-8444-444444444444",
+          permitStatus: "expired" as const,
         },
       ];
+      const sqlPool = createPostgresPool(databaseUrl, {
+        applicationName: "icp-pressure-undelivered-invite-test",
+        allowExitOnIdle: true,
+      });
       try {
         for (const fixture of episodeFixtures) {
           await episodes.createEpisode({
@@ -799,7 +856,20 @@ describe("Postgres ICP fatigue regulation reservations", () => {
             status: "invited",
             revision: 1,
           });
-          if (fixture.status) {
+          if ("permitStatus" in fixture) {
+            await sqlPool.query(
+              `INSERT INTO shared.icp_initiation_permits (
+                permit_id, candidate_id, conversation_id, sender_companion_id,
+                recipient_companion_id, channel_id, provenance_ref, issued_at_ms,
+                expires_at_ms, status, consumed_at_ms, revision
+              ) VALUES (gen_random_uuid(), gen_random_uuid(), $1, $2, $3, $4, $5, 900, 1100, $6, $7, 2)`,
+              [
+                fixture.conversationId, A, B, DM, fixture.provenanceRef, fixture.permitStatus,
+                fixture.permitStatus === "consumed" ? 950 : null,
+              ],
+            );
+          }
+          if ("status" in fixture && fixture.status) {
             await episodes.transitionEpisode({
               conversationId: fixture.conversationId,
               expectedStatus: "invited",
@@ -849,7 +919,7 @@ describe("Postgres ICP fatigue regulation reservations", () => {
           contributingEpisodeCount: 3,
         });
       } finally {
-        await Promise.all([episodes.close(), store.close()]);
+        await Promise.all([episodes.close(), store.close(), sqlPool.end()]);
       }
     },
     TIMEOUT_MS,

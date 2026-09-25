@@ -530,6 +530,15 @@ function normalizeConcern(concern: ActiveConcern, index: number): ActiveConcern 
   };
 }
 
+/**
+ * Validates one pending follow-up against the InternalState contract, so a
+ * caller assembling state can isolate (and quarantine) a single bad row
+ * instead of letting it fail the whole InternalState computation (9rima).
+ */
+export function validatePendingFollowUpForInternalState(followUp: PendingFollowUp): PendingFollowUp {
+  return normalizePendingFollowUp(followUp, 0);
+}
+
 function normalizePendingFollowUp(followUp: PendingFollowUp, index: number): PendingFollowUp {
   if (!isRecord(followUp)) {
     throw new Error(`InternalState pendingFollowUp[${String(index)}] must be an object`);
@@ -567,7 +576,7 @@ function normalizePendingFollowUp(followUp: PendingFollowUp, index: number): Pen
     timing,
     createdAt,
     channelId: normalizeIdentifier(followUp.channelId, `${prefix}.channelId`),
-    channelType: normalizePendingFollowUpChannelType(followUp.channelType, `${prefix}.channelType`),
+    channelType: normalizeChannelType(followUp.channelType, `${prefix}.channelType`),
     authorId: normalizeIdentifier(followUp.authorId, `${prefix}.authorId`),
     authorName: normalizeText(followUp.authorName, `${prefix}.authorName`),
     ...(dueAt ? { dueAt } : {}),
@@ -752,22 +761,6 @@ function normalizeChannelType(value: string, fieldName: string): ChannelType {
     throw new Error(`InternalState field "${fieldName}" has unsupported channelType "${String(value)}"`);
   }
   return value as ChannelType;
-}
-
-function normalizePendingFollowUpChannelType(
-  value: string,
-  fieldName: string,
-): PendingFollowUp['channelType'] {
-  if (
-    value !== 'terminal'
-    && value !== 'api'
-    && value !== 'discord'
-    && value !== 'telegram'
-    && value !== 'psfn-amica'
-  ) {
-    throw new Error(`InternalState field "${fieldName}" has unsupported channelType "${String(value)}"`);
-  }
-  return value;
 }
 
 function compareConcerns(left: ActiveConcern, right: ActiveConcern): number {

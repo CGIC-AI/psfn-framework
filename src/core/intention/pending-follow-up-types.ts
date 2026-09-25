@@ -77,4 +77,16 @@ export interface PendingFollowUpStoreOptions {
 
 export interface PendingFollowUpContextProvider {
   getPendingFollowUps(contactId?: string): PendingFollowUp[];
+  /**
+   * Moves one follow-up that fails the InternalState contract into the durable
+   * quarantine table so it cannot fail every later state computation (9rima).
+   * A provider without it cannot isolate a bad row: the state build then fails
+   * closed with the validation error.
+   */
+  quarantinePendingFollowUp?(input: {
+    followUpId: string;
+    reason: string;
+    raw: unknown;
+    source: string;
+  }): Promise<unknown>;
 }

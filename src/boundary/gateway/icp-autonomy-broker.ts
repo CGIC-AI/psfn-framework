@@ -1099,7 +1099,21 @@ export class GatewayIcpAutonomyBroker {
       throw new Error(`ICP activity cannot end for relationship/policy reason ${reasonCode}`);
     }
     let episode = await this.requireOwnedEpisode(companionId, conversationId);
-    if (episode.status === 'ended') return episode;
+    if (episode.status === 'ended') {
+      // A participant whose own appraisal failed as a system error may correct
+      // a closure recorded before that was distinguishable (0eq2x) from the
+      // social conversation_ended to peer_appraisal_unavailable, so it stops
+      // counting as relationship pressure. No other reclassification exists.
+      if (reasonCode === 'peer_appraisal_unavailable' && episode.closeReasonCode === 'conversation_ended') {
+        return await this.options.store.reclassifyEndedEpisodeCloseReason({
+          conversationId,
+          expectedRevision: episode.revision,
+          fromReasonCode: 'conversation_ended',
+          toReasonCode: 'peer_appraisal_unavailable',
+        });
+      }
+      return episode;
+    }
     if (episode.status !== 'invited' && episode.status !== 'active') {
       throw new Error(`ICP activity cannot end from ${episode.status}`);
     }
@@ -1260,9 +1274,8 @@ export class GatewayIcpAutonomyBroker {
     if (!policy.trustAllows) return closedDecision('policy_denied', 'terminal');
     if (!policy.provenanceFresh) return closedDecision('stale_provenance', 'terminal');
     if (policy.recursiveMiOnlyRoot) return closedDecision('recursive_trigger', 'terminal');
-    if (!policy.socialPressureAllows || !policy.chargeAllows) {
-      return closedDecision('charge_pressure', 'deferrable');
-    }
+    if (!policy.socialPressureAllows) return closedDecision('relationship_pressure', 'deferrable');
+    if (!policy.chargeAllows) return closedDecision('charge_pressure', 'deferrable');
     if (!policy.fatigueAllows) return closedDecision('fatigue_exhausted', 'terminal');
     if (!policy.costAllows) return closedDecision('cost_hard_stop', 'terminal');
 

@@ -86,6 +86,7 @@ import { casesBelowTierFloor } from './lib/case-tier-floors.mjs';
 import { malformedAnswerFeedback, readAssistantAnswer } from './lib/assistant-answer.mjs';
 import { buildMemoryTierCases } from './cases/memory-tiers.mjs';
 import { isBeadsIssueId } from './lib/beads.mjs';
+import { validateMemoryLookupAnswer } from './lib/memory-lookup-answer.mjs';
 import { prepareCaseChatDispatch } from './lib/case-dispatch-auth.mjs';
 import { createFrameworkHubDeviceAssertionIssuer } from './lib/hub-device-assertion.mjs';
 
@@ -2220,16 +2221,9 @@ function buildBaselineCases(ctx) {
         + 'Use memory with action "search", query "primary user Local API Principal", and limit 5. '
         + 'Return only a JSON object with keys count and summary.',
       timeoutMs: 120000,
-      validateParsedAssistant: ({ parsedAssistant }) => {
-        const failures = [];
-        if (typeof parsedAssistant?.count !== 'number') {
-          failures.push('analysis_workbench_memory_lookup_avoidance count must be a number');
-        }
-        if (typeof parsedAssistant?.summary !== 'string' || parsedAssistant.summary.trim().length === 0) {
-          failures.push('analysis_workbench_memory_lookup_avoidance summary must be non-empty');
-        }
-        return failures;
-      },
+      validateParsedAssistant: ({ parsedAssistant }) => (
+        validateMemoryLookupAnswer(parsedAssistant, 'analysis_workbench_memory_lookup_avoidance')
+      ),
     },
     {
       id: 'scratchpad_roundtrip',

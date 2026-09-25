@@ -336,6 +336,7 @@ async function main(): Promise<void> {
       reader: sessionRuntime.sessionStore,
       messageLimit: startup.schedulerConfig.socialAutonomy.passiveNameCandidate.precedingContextMessages,
     },
+    companionReplyBusyWaitMs: startup.schedulerConfig.icpAutonomy.permit.ttlMs,
   });
   const autonomy = createAgentFacingIcpAutonomyRuntime({
     contactStore,

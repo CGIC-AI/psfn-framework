@@ -211,6 +211,14 @@ describe('audited ADMIN_TOKEN operator reaches every Garden mutation without SSO
     httpRequest.mockReset();
   });
 
+  it('includes the operator account authority route (reinstate, disable, re-enable)', () => {
+    // Served by the fleet-auth door; its ADMIN_TOKEN-only behaviour is proven
+    // in fleet-auth-routes.test.ts and against real Postgres in
+    // schema.integration.test.ts (psfn-framework-aol3m).
+    expect(operatorMutations().map(route => route.id))
+      .toContain('POST /v1/fleet-auth/lifecycle/account/complete');
+  });
+
   it('includes the operator prompt-layer delete route', () => {
     expect(operatorMutations().map(route => route.id)).toContain('DELETE /api/admin/prompts/:layerId');
   });

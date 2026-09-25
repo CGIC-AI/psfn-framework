@@ -22,6 +22,11 @@ import type { GatewayTrustedHostGardenRecoveryService } from '../../../boundary/
 import { FleetAuthRecoveryHttpRoutes } from './fleet-auth-recovery-routes.js';
 import type { GatewayFleetAuthLifecycleCeremonyService } from '../../../boundary/fleet-auth/lifecycle-ceremony.js';
 import { FleetAuthLifecycleCeremonyHttpRoutes } from './fleet-auth-lifecycle-ceremony-routes.js';
+import {
+  FLEET_AUTH_ACCOUNT_COMPLETE_PATH,
+  type GatewayOperatorAccountAuthorityService,
+} from '../../../boundary/fleet-auth/operator-account-authority.js';
+import { FleetAuthLifecycleCeremonyError } from '../../../boundary/fleet-auth/lifecycle-ceremony.js';
 import type { FleetPortalRoster } from '../../../boundary/gateway/fleet-portal-projection.js';
 import {
   buildFleetApprovalsView,
@@ -155,6 +160,7 @@ export class FleetAuthHttpRoutes {
   private readonly recoveryRoutes?: FleetAuthRecoveryHttpRoutes;
   private readonly lifecycleCeremonyRoutes?: FleetAuthLifecycleCeremonyHttpRoutes;
   private readonly adminToken?: string;
+  private readonly operatorAccountAuthority?: GatewayOperatorAccountAuthorityService;
 
   constructor(options: {
     broker: GatewayFleetAuthBroker;
@@ -177,9 +183,12 @@ export class FleetAuthHttpRoutes {
     approvalsSource?: FleetAuthApprovalsSource;
     /** The deployment ADMIN_TOKEN: the audited operator may approve lifecycle ceremonies. */
     adminToken?: string;
+    /** Audited ADMIN_TOKEN operator account authority (reinstate/disable/re-enable). */
+    operatorAccountAuthority?: GatewayOperatorAccountAuthorityService;
   }) {
     this.broker = options.broker;
     this.adminToken = options.adminToken || undefined;
+    this.operatorAccountAuthority = options.operatorAccountAuthority;
     this.canonicalOrigin = options.canonicalOrigin;
     this.callbackPath = options.callbackPath;
     this.trustProxy = options.trustProxy === true;
@@ -197,6 +206,37 @@ export class FleetAuthHttpRoutes {
       : undefined;
   }
 
+  private async handleOperatorAccount(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    const body = await readJsonBodyWithLimit(request, response, { maxBytes: MUTATION_BODY_LIMIT });
+    if (!body.ok) return;
+    if (!isRecord(body.value) || Object.keys(body.value).some(key => key !== 'request')) {
+      throw new FleetAuthBrokerError('invalid_request', 400, 'Account authority request is malformed');
+    }
+    try {
+      const completed = await this.operatorAccountAuthority!.complete({
+        requestOrigin: mutationOrigin(request),
+        request: body.value.request,
+      });
+      sendJson(response, 200, {
+        action: completed.action,
+        authorityGeneration: completed.authorityGeneration,
+        globalAuthEpoch: completed.globalAuthEpoch,
+        auditEventId: completed.auditEventId,
+      }, { 'Cache-Control': 'no-store' });
+    } catch (error) {
+      if (error instanceof FleetAuthLifecycleCeremonyError) {
+        throw new FleetAuthBrokerError(
+          error.code,
+          error.code === 'origin_mismatch' ? 403
+            : error.code === 'invalid_request' ? 400
+              : error.code === 'operator_approval_unavailable' ? 503 : 409,
+          error.message,
+        );
+      }
+      throw error;
+    }
+  }
+
   private matchesAdminToken(request: IncomingMessage): boolean {
     const token = this.adminToken;
     if (!token) return false;
@@ -204,7 +244,9 @@ export class FleetAuthHttpRoutes {
   }
 
   matches(method: string | undefined, path: string): boolean {
-    return (this.escalationRoutes?.matches(method, path) ?? false)
+    return (method === 'POST' && path === FLEET_AUTH_ACCOUNT_COMPLETE_PATH
+        && this.operatorAccountAuthority !== undefined)
+      || (this.escalationRoutes?.matches(method, path) ?? false)
       || (this.recoveryRoutes?.matches(method, path) ?? false)
       || (this.lifecycleCeremonyRoutes?.matches(method, path) ?? false)
       || (method === 'GET' && (
@@ -461,6 +503,16 @@ export class FleetAuthHttpRoutes {
       if (request.method === 'GET' && url.pathname === APPROVALS_PATH
         && this.rosterSource && this.approvalsSource) {
         await this.handleFleetApprovals(request, response, url);
+        return;
+      }
+      if (request.method === 'POST' && url.pathname === FLEET_AUTH_ACCOUNT_COMPLETE_PATH
+        && this.operatorAccountAuthority) {
+        // Operator-only (psfn-framework-aol3m): the ADMIN_TOKEN key alone is
+        // the credential; an SSO session is neither needed nor accepted.
+        if (!this.matchesAdminToken(request)) {
+          throw new FleetAuthBrokerError('admin_token_required', 401, 'Administrator token is required');
+        }
+        await this.handleOperatorAccount(request, response);
         return;
       }
       if (this.lifecycleCeremonyRoutes?.matches(request.method, url.pathname)

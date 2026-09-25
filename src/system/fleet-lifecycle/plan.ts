@@ -63,7 +63,7 @@ export async function planFleetLifecycle(input: {
     if (fenced && request.readmit?.confirmCompanionId !== companionId) {
       throw new FleetLifecycleError(
         'readmission_requires_reapproval',
-        'Companion was previously removed; re-add requires fleet-auth readd/reapproval and an explicit readmit confirmation',
+        'Companion was previously removed; re-add requires fleet-auth readd plus operator companion reinstatement and an explicit readmit confirmation',
       );
     }
     if (!fenced && request.readmit !== undefined) {

@@ -301,8 +301,9 @@ subjects, bindings, and grants; a companion-authority row also enters
 quarantine unless a current owner for that shared companion carries it forward
 under the narrow exception below. Ephemeral sessions, OAuth transactions, token
 custody, challenges, grants, evidence, ceremonies, and decision receipts are
-removed. A regular account returns only through the explicit trusted-host
-reapproval flow; the runtime cannot reactivate quarantined rows directly.
+removed. A regular account or companion returns only when the audited
+ADMIN_TOKEN operator reinstates it (see *Operator account authority* below);
+ordinary runtime SQL cannot reactivate quarantined rows directly.
 
 An already-current owner is the narrow exception. Reconciliation recognizes a
 principal only when it is active and live and holds an active, live `owner`
@@ -318,14 +319,43 @@ provider metadata, or a partial row.
 stateDiagram-v2
   [*] --> Live
   Live --> Quarantined: trusted-host floor advance
-  Quarantined --> Live: explicit trusted-host reapproval
+  Quarantined --> Live: audited ADMIN_TOKEN operator reinstatement
   Quarantined --> Tombstoned: non-restored floor tombstone
   Live --> Revoked: provider revocation or lineage removal
   Revoked --> [*]
   Tombstoned --> [*]
 ```
 
-*Authority state transitions: floor advances quarantine restorable rows; only the owner exception or the explicit reapproval flow returns them to live; tombstones from the non-restored floor are permanent.*
+*Authority state transitions: floor advances quarantine restorable rows; only the owner exception or an audited operator reinstatement returns them to live; tombstones from the non-restored floor are permanent.*
+
+### Operator account authority (ADMIN_TOKEN, no SSO)
+
+The audited ADMIN_TOKEN operator manages accounts directly with the key. No
+Discord session, OAuth proof or SSO principal is involved
+(`POST /v1/fleet-auth/lifecycle/account/complete`, `Authorization: Bearer
+$ADMIN_TOKEN` or the HttpOnly `psfn_token` cookie, exact canonical `Origin`;
+an SSO session alone is refused with 401):
+
+| Action | Effect |
+|---|---|
+| `companion.reinstate` | quarantined companion authority (restored, or a re-added lineage the floor admits) at an exact version becomes active and live |
+| `principal.reinstate` | a quarantined account's principal, its non-tombstoned provider subjects, and one exact binding and role grant for a live companion become active and live |
+| `principal.suspend` | a live account is disabled; every session and escalation grant is revoked |
+| `principal.reactivate` | a disabled account is re-enabled; the person signs in again |
+
+Each request first writes a durable `admin_token_operator` approval row
+(`reason_code = 'admin_token_lifecycle_approval_allowed'`, action
+`roles.manage`) bound to the action, companion, audit event id and current
+authority generation/epoch. A bounded `SECURITY DEFINER` procedure
+(`fleet_auth.operator_reinstate_principal`, `operator_reinstate_companion`,
+`operator_set_principal_status`) then proves that row in the same
+transaction. It honours the non-restored floor (tombstones, companion
+lineage), refuses conflicts, advances the auth epoch, and appends its own
+audit event (`admin_token_operator_account_lifecycle`). A missing, stale or
+foreign approval, or reusing an audit id, fails closed. Only the runtime role
+may EXECUTE these procedures. The backup/restore coordinator cannot. The former trusted-host
+reapproval procedures had no remaining entry point and were dropped by fleet
+auth migration 30 (`retire_trusted_host_reapproval`).
 
 **Hand-seeding is unsupported.** Inserting an `owner` grant is not sufficient:
 the principal, provider subject, companion authority, contact binding, role
@@ -486,7 +516,7 @@ authorization batch, request-capability signer/verifier/replay, child-assertion
 broker, primary embodiments, escalation coordinator, trusted-host recovery,
 authority-lifecycle store, contact-lifecycle authority, lifecycle ceremonies
 (composed exactly once), Discord evidence runtime, hub-device assertion
-verification, and account/companion reapproval authorities. The gateway
+verification, and the audited ADMIN_TOKEN operator account authority. The gateway
 API-surface wiring keeps every principal-composition conjunct mandatory — a
 dropped conjunct must fail closed at startup, never silently downgrade.
 
@@ -717,7 +747,7 @@ mutate runtime tables but cannot write `authority_state`,
 `companion_authority_state`, lifecycle decision receipts, contact authority
 intents, or the replay/tombstone tables directly; quarantine and epoch
 transitions run only inside `SECURITY DEFINER` functions
-(`reconcile_authority_floor`, reapproval procedures, first-owner procedures).
+(`reconcile_authority_floor`, operator account procedures, first-owner procedures).
 
 Two non-secret, system-owned files make authority durable across the
 database/trusted-host split:
@@ -744,9 +774,10 @@ reconciliation transaction (quarantine, epoch advance, audit) atomically.
 Provider revocation publishes the non-restored tombstone **before** any
 database mutation (`revokeProviderAuthority` → `createGatewayAccountAuthorityFencePort`):
 if the later SQL fails, the durable floor remains advanced and the next startup
-quarantines the stale database. Account and companion reapproval stay
-subordinate to that floor: tombstoned resources and non-current lineage are
-rejected before the reapproval procedure runs.
+quarantines the stale database. Operator account and companion reinstatement
+stay subordinate to that floor: tombstoned resources and non-current lineage
+are rejected, both against the floor file and inside the procedure against its
+projection.
 
 ## Repository-native PostgreSQL provisioning
 

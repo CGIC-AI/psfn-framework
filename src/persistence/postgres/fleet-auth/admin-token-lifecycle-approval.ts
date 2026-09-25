@@ -26,7 +26,26 @@ const APPROVAL_AUDIT = Object.freeze({
   reasonCode: 'admin_token_lifecycle_approval_allowed',
 });
 
+/**
+ * Account actions the ADMIN_TOKEN operator performs directly through the bounded
+ * SECURITY DEFINER procedures (operator-account-authority-sql.ts), audited
+ * under `roles.manage` (psfn-framework-aol3m, key-or-SSO ruling).
+ */
+const ADMIN_TOKEN_OPERATOR_ACCOUNT_ACTIONS = [
+  'principal.reinstate',
+  'principal.suspend',
+  'principal.reactivate',
+  'companion.reinstate',
+] as const;
+export type OperatorAccountAction = typeof ADMIN_TOKEN_OPERATOR_ACCOUNT_ACTIONS[number];
 type OperatorLifecycleAction = typeof ADMIN_TOKEN_OPERATOR_LIFECYCLE_ACTIONS[number];
+type OperatorApprovedAction = OperatorLifecycleAction | OperatorAccountAction;
+
+function approvalAction(action: OperatorApprovedAction): string {
+  return (ADMIN_TOKEN_OPERATOR_ACCOUNT_ACTIONS as readonly string[]).includes(action)
+    ? 'roles.manage'
+    : adminTokenLifecycleApprovalAction(action as OperatorLifecycleAction);
+}
 
 export interface AdminTokenLifecycleApprovalRecord {
   authorizationEventId: string;
@@ -46,16 +65,21 @@ function isOperatorLifecycleAction(value: string): value is OperatorLifecycleAct
   return (ADMIN_TOKEN_OPERATOR_LIFECYCLE_ACTIONS as readonly string[]).includes(value);
 }
 
+function isOperatorApprovedAction(value: string): value is OperatorApprovedAction {
+  return isOperatorLifecycleAction(value)
+    || (ADMIN_TOKEN_OPERATOR_ACCOUNT_ACTIONS as readonly string[]).includes(value);
+}
+
 export async function recordAdminTokenLifecycleApproval(
   pool: Pool,
   input: {
     decisionId: string;
     ceremonyId: string;
     companionId: string;
-    lifecycleAction: OperatorLifecycleAction;
+    lifecycleAction: OperatorApprovedAction;
   },
 ): Promise<AdminTokenLifecycleApprovalRecord> {
-  if (!isOperatorLifecycleAction(input.lifecycleAction)) {
+  if (!isOperatorApprovedAction(input.lifecycleAction)) {
     throw new Error('ADMIN_TOKEN operator cannot approve this lifecycle action');
   }
   const client = await pool.connect();
@@ -84,7 +108,7 @@ export async function recordAdminTokenLifecycleApproval(
         boundary: APPROVAL_AUDIT.boundary,
         principalId: APPROVAL_AUDIT.principalId,
       }),
-      adminTokenLifecycleApprovalAction(input.lifecycleAction),
+      approvalAction(input.lifecycleAction),
       `companion:${input.companionId}:fleet-auth-lifecycle`,
       APPROVAL_AUDIT.reasonCode,
       input.companionId,

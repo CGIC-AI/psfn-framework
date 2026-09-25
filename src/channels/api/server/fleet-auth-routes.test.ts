@@ -990,3 +990,70 @@ describe('ADMIN_TOKEN operator lifecycle ceremony door (psfn-framework-ja7n0)', 
     expect(ceremonies.complete).not.toHaveBeenCalled();
   });
 });
+
+describe('ADMIN_TOKEN operator account door (psfn-framework-aol3m)', () => {
+  const ADMIN_TOKEN = 'fleet-admin-token-for-account-tests';
+  const body = {
+    request: {
+      action: 'principal.suspend',
+      ceremonyId: '00000000-0000-4000-8000-000000000703',
+      companionId: COMPANION_ID,
+      principalId: '00000000-0000-4000-8000-000000000702',
+    },
+  };
+
+  function accountHandler() {
+    const complete = vi.fn(async () => ({
+      action: 'principal.suspend' as const,
+      companionId: COMPANION_ID,
+      authorityGeneration: 5,
+      globalAuthEpoch: 6,
+      auditEventId: '00000000-0000-4000-8000-000000000705',
+    }));
+    const handler = new FleetAuthHttpRoutes({
+      broker: {} as unknown as GatewayFleetAuthBroker,
+      canonicalOrigin: 'https://fleet.example.test',
+      callbackPath: '/auth/discord/callback',
+      adminToken: ADMIN_TOKEN,
+      operatorAccountAuthority: { complete } as never,
+    });
+    return { handler, complete };
+  }
+
+  it('performs an account action with the ADMIN_TOKEN alone', async () => {
+    const { handler, complete } = accountHandler();
+    const res = response();
+    await handler.handle(
+      jsonRequest(body, {
+        'content-type': 'application/json',
+        origin: 'https://fleet.example.test',
+        authorization: `Bearer ${ADMIN_TOKEN}`,
+      }),
+      res,
+      new URL('https://fleet.example.test/v1/fleet-auth/lifecycle/account/complete'),
+    );
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toMatchObject({ action: 'principal.suspend', globalAuthEpoch: 6 });
+    expect(complete).toHaveBeenCalledWith({
+      requestOrigin: 'https://fleet.example.test',
+      request: body.request,
+    });
+  });
+
+  it.each([
+    ['anonymous', {}],
+    ['an SSO session only', { cookie: `__Host-psfn_session=${'a'.repeat(43)}` }],
+    ['a wrong token', { authorization: 'Bearer nope' }],
+  ])('refuses %s', async (_label, auth) => {
+    const { handler, complete } = accountHandler();
+    const res = response();
+    await handler.handle(
+      jsonRequest(body, { 'content-type': 'application/json', origin: 'https://fleet.example.test', ...auth }),
+      res,
+      new URL('https://fleet.example.test/v1/fleet-auth/lifecycle/account/complete'),
+    );
+    expect(res.statusCode).toBe(401);
+    expect(complete).not.toHaveBeenCalled();
+  });
+});
+

@@ -38,7 +38,8 @@ type FleetAuthCompanionState =
 
 /**
  * Read-only view of fleet-auth companion authority. Re-adding a removed
- * companion requires the existing fleet-auth readd + reapproval ceremonies to
+ * companion requires fleet-auth readd plus the audited ADMIN_TOKEN operator's
+ * companion reinstatement to
  * have returned it to lifecycle `active` with a `live` restore state.
  */
 export type FleetAuthAdmissionPort =

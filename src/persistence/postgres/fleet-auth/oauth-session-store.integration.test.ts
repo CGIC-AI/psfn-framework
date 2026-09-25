@@ -6,8 +6,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { GatewayFleetAuthBroker } from '../../../boundary/gateway/fleet-auth-broker.js';
 import { FleetAuthHttpRoutes } from '../../../channels/api/server/fleet-auth-routes.js';
 import type { FleetAuthConfig } from '../../../system/config/fleet-auth-config.js';
+import { GatewayOperatorAccountAuthorityService } from '../../../boundary/fleet-auth/operator-account-authority.js';
+import { recordAdminTokenLifecycleApproval } from './admin-token-lifecycle-approval.js';
+import { executeOperatorAccountAction } from './operator-account-authority.js';
 import {
-  createGatewayAccountReapprovalAuthority,
   reconcileFleetAuthAuthorityState,
 } from './gateway-persistence.js';
 import {
@@ -876,21 +878,27 @@ describe('Postgres gateway OAuth/session authority', () => {
         state: 'quarantined',
         sessions: '0',
       });
-      await expect(createGatewayAccountReapprovalAuthority(
-        runtime,
-        authorityFloors,
-      )({
-        ceremonyId: randomUUID(),
-        principalId: login.principalId,
-        provider: 'discord',
-        providerSubjectId: PROVIDER_SUBJECT_ID,
-        companionId: randomUUID(),
-        contactId: 'partial-revoke-reapproval-attempt',
-        bindingId: randomUUID(),
-        roleGrantId: randomUUID(),
-        auditEventId: randomUUID(),
-        at: new Date(NOW.getTime() + 2000).toISOString(),
-      })).rejects.toThrow(/permanently tombstoned by non-restored authority/i);
+      // The audited ADMIN_TOKEN operator cannot reinstate a revoked, tombstoned
+      // account either: reinstatement stays subordinate to the floor.
+      const operatorAccounts = new GatewayOperatorAccountAuthorityService({
+        canonicalOrigin: 'https://fleet.example.test',
+        ports: {
+          recordApproval: input => recordAdminTokenLifecycleApproval(runtime, input),
+          execute: input => executeOperatorAccountAction(runtime, input),
+          isAccountAuthorityTombstoned: (kind, id) => authorityFloors.isAccountAuthorityTombstoned(kind, id),
+        },
+      });
+      await expect(operatorAccounts.complete({
+        requestOrigin: 'https://fleet.example.test',
+        request: {
+          action: 'principal.reinstate',
+          ceremonyId: randomUUID(),
+          companionId: randomUUID(),
+          principalId: login.principalId,
+          bindingId: randomUUID(),
+          roleGrantId: randomUUID(),
+        },
+      })).rejects.toThrow(/tombstoned|denied/i);
     } finally {
       await migration.end();
       await coordinator.end();

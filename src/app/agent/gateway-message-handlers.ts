@@ -486,6 +486,17 @@ export function registerGatewayMessageHandlers(
     eventBus,
     icpAppraisalContext,
   } = deps;
+  /**
+   * The participation chain's verdicts (candidate, reservation, appraisal
+   * verdict, egress outcome) go to the durable audit trail AND the info log,
+   * so an operator can see why a room line did or did not get a reply
+   * (psfn-framework-znqh6). Every field is content-free: ids, typed reason
+   * codes, actions and confidences only.
+   */
+  const recordParticipationOutcome = (event: string, details: Record<string, unknown>): void => {
+    safeguardAuditTrail.append(event, details);
+    log.info(`Participation ${event.slice('participation.'.length)}`, details);
+  };
   const observedGroupMemoryLane = observedGroupMemoryScheduler
     ? new ObservedGroupMemoryLane({
       scheduler: observedGroupMemoryScheduler,
@@ -639,7 +650,7 @@ export function registerGatewayMessageHandlers(
     try {
       const result = await participationAppraiser.appraise(candidate);
       const { appraisal } = result;
-      safeguardAuditTrail.append('participation.appraisal.completed', {
+      recordParticipationOutcome('participation.appraisal.completed', {
         channelId: candidate.channelId,
         sourceMessageId: candidate.sourceMessageId,
         trigger: candidate.trigger,
@@ -792,7 +803,7 @@ export function registerGatewayMessageHandlers(
       nowMs: nowArbiterMs(),
     });
     if (decision.outcome === 'gated') {
-      safeguardAuditTrail.append('participation.reservation.gated', {
+      recordParticipationOutcome('participation.reservation.gated', {
         channelId: candidate.channelId,
         sourceMessageId: candidate.sourceMessageId,
         trigger: candidate.trigger,
@@ -816,7 +827,7 @@ export function registerGatewayMessageHandlers(
       await closeRoomParticipationForGate(candidate.channelId, decision.blockedBy);
       return;
     }
-    safeguardAuditTrail.append('participation.reservation.reserved', {
+    recordParticipationOutcome('participation.reservation.reserved', {
       channelId: candidate.channelId,
       sourceMessageId: candidate.sourceMessageId,
       trigger: candidate.trigger,
@@ -848,7 +859,7 @@ export function registerGatewayMessageHandlers(
         action,
         nowArbiterMs(),
       );
-      safeguardAuditTrail.append('participation.reservation.settled', {
+      recordParticipationOutcome('participation.reservation.settled', {
         channelId: candidate.channelId,
         sourceMessageId: candidate.sourceMessageId,
         trigger: candidate.trigger,
@@ -945,12 +956,14 @@ export function registerGatewayMessageHandlers(
           authorIsMachine: candidate.triggerAuthorIsMachine,
         });
       }
-      safeguardAuditTrail.append('participation.egress.settled', {
+      recordParticipationOutcome('participation.egress.settled', {
         channelId: candidate.channelId,
         sourceMessageId: candidate.sourceMessageId,
         trigger: candidate.trigger,
         reservationId: decision.reservation.reservationId,
         action: result.appraisal.action,
+        // The appraisal confidence the lease compared against its bar.
+        confidence: result.appraisal.confidence,
         outcome: egressDecision.outcome,
         ...(egressDecision.declineReason ? { declineReason: egressDecision.declineReason } : {}),
         ...(egressDecision.drawOutcome ? { drawOutcome: egressDecision.drawOutcome } : {}),
@@ -1038,7 +1051,7 @@ export function registerGatewayMessageHandlers(
       const decision = await passiveNameCandidateBuilder.build(message);
       if (decision.status === 'created') {
         const { candidate } = decision;
-        safeguardAuditTrail.append('participation.candidate.created', {
+        recordParticipationOutcome('participation.candidate.created', {
           channelId: candidate.channelId,
           sourceMessageId: candidate.sourceMessageId,
           trigger: candidate.trigger,

@@ -120,10 +120,10 @@ describe('ParticipationAppraiser on decide()', () => {
     }).appraise(makeCandidate());
 
     expect(calls).toHaveLength(0);
-    expect(result).toEqual({
-      appraisal: { action: 'reply', reasonCode: 'decision_backend', confidence: 0.8 },
-      failClosed: false,
-    });
+    // Speak-vs-silence: 0.8 / (0.8 + 0.1).
+    expect(result.failClosed).toBe(false);
+    expect(result.appraisal).toMatchObject({ action: 'reply', reasonCode: 'decision_backend' });
+    expect(result.appraisal.confidence).toBeCloseTo(0.8 / 0.9, 10);
     const request = jevSpy.mock.calls[0]?.[0];
     expect(request?.siteId).toBe('participation.appraise');
     expect(Object.keys(request?.questions ?? {})).toEqual(['action', 'reaction_class']);
@@ -139,6 +139,22 @@ describe('ParticipationAppraiser on decide()', () => {
     expect(result.appraisal).toEqual({
       action: 'react', reactionClass: 'agree', reasonCode: 'decision_backend', confidence: 0.85,
     });
+  });
+
+  // psfn-framework-znqh6: a calibrated three-way argmax reply near 1/3 raw
+  // probability must reach the egress bar as speak-vs-silence confidence.
+  it.each([
+    [{ ignore: 0.3, react: 0.27, reply: 0.43 }, 0.43 / 0.73],
+    [{ ignore: 0.33, react: 0.34, reply: 0.33 }, 0.5],
+    [{ ignore: 0.7, react: 0.1, reply: 0.2 }, 0.2 / 0.9],
+  ])('reports reply confidence as p(reply) / (p(reply) + p(ignore)) for %j', async (probabilities, expected) => {
+    const { provider } = recordingProvider();
+    const { decisions } = runtime(settingsFor('jev'), async () => jevAnswer('reply', probabilities, probabilities.reply));
+    const result = await new ParticipationAppraiser({
+      llmProvider: provider, companionName: COMPANION_NAME, decisions,
+    }).appraise(makeCandidate());
+    expect(result.appraisal.action).toBe('reply');
+    expect(result.appraisal.confidence).toBeCloseTo(expected, 10);
   });
 
   it('downgrades a jev action below the configured probability threshold to ignore', async () => {

@@ -68,6 +68,7 @@ import { PiProviderRuntime } from '../../primitives/llm/provider-runtime.js';
 import { createActiveEmanationSatellitePresencePort } from './satellite-adapter-port.js';
 import {
   abortActiveAgentRun,
+  preemptActiveAgentRun,
   installAgentToolSchedulerPatch,
   type AgentRunAbortResult,
 } from '../../boundary/pi-agent/agent-loop-patch.js';
@@ -226,6 +227,10 @@ import type { IcpFatigueRegulationReservationPort } from './fatigue/regulation-r
 import type { RuntimeServiceHealthStatus } from '../../operator/tool-health/types.js';
 import type { IntakeFirewallMode } from '../../system/config/intake-policy-config.js';
 
+import {
+  BackgroundTurnPreemption,
+  resolveTurnRunLaneClass,
+} from './substrate-agent/background-run-preemption.js';
 const log = createComponentLogger('SubstrateAgent');
 
 export type {
@@ -398,6 +403,17 @@ export class SubstrateAgent {
   });
   private readonly promptCacheRuntime = new PromptCacheTurnRuntime();
   private readonly turnRunReservation = new TurnRunReservation();
+  /**
+   * z4vhu: a person's turn preempts background reflection turns (sleeptime,
+   * dream pass, heartbeat) instead of being rejected agent_busy.
+   */
+  private readonly backgroundTurnPreemption = new BackgroundTurnPreemption({
+    preemptActiveRun: (shouldPreempt) => preemptActiveAgentRun(this.agent, shouldPreempt),
+    currentTurnMessageId: () => this.turnRunReservation.getCurrentOwnerAttribution()?.sourceId ?? null,
+    onPreempted: (event) => {
+      log.info('Foreground turn preempted a background turn', { ...event });
+    },
+  });
   private readonly turnQueueIngress: TurnQueueIngressCoordinator;
   readonly completionNotices = new CompletionNoticeBuffer();
   private readonly turnSupportRuntime: TurnSupportRuntime;
@@ -911,6 +927,9 @@ export class SubstrateAgent {
     }, {
       resolvePromptCacheBoundaries: (systemPrompt) => this.promptCacheRuntime.resolveBoundariesFor(systemPrompt),
       resolveTurnTools: () => this.toolRuntimeFacade.resolveOwnedTurnTools(),
+    }, undefined, {
+      // z4vhu: a preempted background turn never takes the run slot afterwards.
+      isCurrentTurnPreempted: () => this.backgroundTurnPreemption.isCurrentTurnPreempted(),
     });
 
     this.installRuntimeHooks();
@@ -1735,7 +1754,8 @@ export class SubstrateAgent {
     captureCompletedTurnEgressCustody?: CompletedTurnEgressCustodyCapture,
   ): Promise<AgentResponse> {
     await this.classifySessionAtCreation?.(message);
-    return this.turnRunReservation.runShared(
+    const laneClass = resolveTurnRunLaneClass(message);
+    const runTurn = (): Promise<AgentResponse> => this.turnRunReservation.runShared(
       { kind: 'ordinary-turn', sourceId: message.id },
       () => {
         this.turnQueueIngress.enqueuePendingInternalFollowUpsForOrdinaryRun();
@@ -1748,6 +1768,15 @@ export class SubstrateAgent {
         );
       },
     );
+    if (this.backgroundTurnPreemption.isPreemptableLane(laneClass)) {
+      return this.backgroundTurnPreemption.track({ messageId: message.id, laneClass }, runTurn);
+    }
+    // A higher-priority turn clears lower-priority background turns off the
+    // agent BEFORE it touches agent state (z4vhu).
+    const preempting = this.backgroundTurnPreemption.preemptFor({ messageId: message.id, laneClass });
+    if (preempting === null) return runTurn();
+    await preempting;
+    return runTurn();
   }
 
   private async handleMessageUnderReservation(

@@ -31,6 +31,8 @@ const services = {
   fetchJson: async () => ({ ok: true, status: 200, body: {} }),
   pgAll: async () => [],
   pgScalar: async () => 0,
+  gatewayPgAll: async () => [],
+  gatewayPgScalar: async () => 0,
   readJsonIfExists: () => null,
   readJsonl: () => [],
   waitForTurnRecord: async () => null,
@@ -159,6 +161,7 @@ test('model attribution dispatch terminates with a named isolation failure when 
       assistantMessage: { content: 'ok' },
     }),
     pgAll: async () => stalledQuery,
+    gatewayPgAll: async () => stalledQuery,
   };
 
   try {
@@ -260,6 +263,9 @@ test('model attribution turns a bounded proof-query rejection into a semantic ve
     pgAll: async () => {
       throw new Error('Query read timeout');
     },
+    gatewayPgAll: async () => {
+      throw new Error('Query read timeout');
+    },
   };
 
   try {
@@ -343,7 +349,8 @@ test('model attribution follows a slow appraisal to success instead of abandonin
         state: polls < 12 ? 'running' : 'succeeded',
       }];
     },
-    pgScalar: async () => 'emotion.appraisal',
+    pgScalar: async () => { throw new Error('the spend ledger is gateway-owned (ypah0)'); },
+    gatewayPgScalar: async () => 'emotion.appraisal',
   };
 
   try {

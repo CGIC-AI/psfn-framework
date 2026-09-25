@@ -295,6 +295,15 @@ design). They run through the audited ADMIN_TOKEN Garden door on the unified
 origin (bead `psfn-framework-xpgnr`); the harness never falls back to its own
 key for them.
 
+Gateway-owned tables (`gateway_audit`, the fleet `model_usage_events` spend
+ledger) live in the fleet gateway's schema, the primary tenant, not in each
+follower's (bead `psfn-framework-ypah0`). Whenever `COMPANION_PG_SCHEMA` is set,
+also set `PSFN_GATEWAY_PG_SCHEMA` to that gateway schema. For a follower run it
+differs from `COMPANION_PG_SCHEMA`, so `PSFN_GATEWAY_POSTGRES_DATABASE_URL` must
+name an operator-provisioned credential that can read it (read-only is
+enough); the harness never reads gateway tables through the follower tenant
+role, and preflight fails if `gateway_audit` is not readable.
+
 `COMPANION_ID` selects the fleet companion for **both** lanes: the Garden route
 (`/companions/<id>/garden/...`) and chat, where the harness sends the gateway's
 Bearer companion selector (`X-PSFN-Companion-ID`) on every testing-harness

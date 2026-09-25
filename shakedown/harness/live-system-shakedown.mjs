@@ -20,7 +20,13 @@ import {
   optionalIntEnv,
   failClosedOnEnv,
 } from './lib/env.mjs';
-import { pgAll, pgScalar, closePool } from './lib/postgres.mjs';
+import {
+  closePool,
+  gatewayPgAll,
+  gatewayPgScalar,
+  pgAll,
+  pgScalar,
+} from './lib/postgres.mjs';
 import * as probe from './lib/probe.mjs';
 import {
   INSECURE_LOCAL_API_PRINCIPAL_ID,
@@ -3418,6 +3424,9 @@ function buildCases(ctx) {
       fetchJson,
       pgAll,
       pgScalar,
+      // The fleet spend ledger is gateway-owned (ypah0).
+      gatewayPgAll,
+      gatewayPgScalar,
       readJsonIfExists,
       readJsonl,
       waitForTurnRecord: waitForCaseTurnRecord,
@@ -3512,7 +3521,8 @@ async function runCase(testCase, ctx, signal) {
       });
     }
   }
-  const auditStartId = Number(await pgScalar(
+  // gateway_audit is gateway-owned: read it from the gateway schema (ypah0).
+  const auditStartId = Number(await gatewayPgScalar(
     'select coalesce(max(id), 0) as id from gateway_audit;',
   ) ?? 0);
   throwIfAborted(signal);
@@ -3606,7 +3616,7 @@ async function runCase(testCase, ctx, signal) {
   if (!outcome) {
     throw new Error(`case ${testCase.id} produced no dispatch outcome`);
   }
-  const auditRows = await pgAll(
+  const auditRows = await gatewayPgAll(
     `select id, timestamp, method, decision, params_json, error from gateway_audit where id > ${auditStartId} order by id asc;`,
   );
   throwIfAborted(signal);

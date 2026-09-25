@@ -26,6 +26,10 @@ tests=(
   "case-chat-provenance.test.mjs" # every case-module chat dispatch carries run provenance
   "target-contract.test.mjs"   # A: tier flip uses the canonical capabilities editor
   "target-companion.test.mjs"  # gz50o: kube COMPANION_ID selects one fleet companion, fail closed
+  "prompt-layer-restore.test.mjs" # 2pz3o: marker sweep and byte-identical prompt restore
+  "operator-garden.test.mjs"   # xpgnr: prompt/skill residue maintenance runs as the ADMIN_TOKEN operator
+  "postgres.test.mjs"          # ypah0: gateway-owned tables read from the gateway schema, fail closed
+  "chat-companion-selector.test.mjs" # cx97d: every harness-bearer chat dispatch carries the companion selector
   "flip-abort.test.mjs"        # C: an unconfirmed forward flip aborts the phase
   "coverage-hole-continuation.test.mjs" # case-local config holes do not abort later tiers
   "persisted-proofs.test.mjs"  # S10 persisted-state proofs fail closed

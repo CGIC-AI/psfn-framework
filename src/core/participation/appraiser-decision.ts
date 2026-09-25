@@ -82,9 +82,32 @@ export function appraisalToDecisionOutcome(
 }
 
 /**
+ * The appraisal `confidence` a speaking action carries downstream. The egress
+ * lease compares it against `minReplyConfidence` (+ pressure bias), a bar
+ * written for the local appraiser's "how sure is it that speaking is right"
+ * self-report. A calibrated backend answers a THREE-way choice, so the raw
+ * probability of a winning `reply` can sit near 1/3 while reply still clearly
+ * beats staying silent (shakedown r3: reply 0.33 / 0.43 argmax answers were
+ * all dropped as `below_confidence_bar`, psfn-framework-znqh6). The comparable
+ * quantity is speak-vs-silence: p(action) / (p(action) + p(ignore)). Without
+ * both probabilities the backend's own number is used unchanged.
+ */
+function speakingConfidence(
+  choice: 'react' | 'reply',
+  probabilities: Record<string, number> | undefined,
+  fallback: number,
+): number {
+  const pAction = probabilities?.[choice];
+  const pIgnore = probabilities?.ignore;
+  if (pAction === undefined || pIgnore === undefined || pAction + pIgnore <= 0) return fallback;
+  return pAction / (pAction + pIgnore);
+}
+
+/**
  * Map a remote answer onto the appraisal contract. An action other than ignore
- * whose probability is under the owner threshold is downgraded to ignore.
- * Returns null when the answer set does not carry a usable action.
+ * whose probability is under the owner threshold is downgraded to ignore; the
+ * threshold keeps its raw-probability meaning. Returns null when the answer
+ * set does not carry a usable action.
  */
 export function appraisalFromDecision(
   answers: DecisionAnswers,
@@ -102,7 +125,19 @@ export function appraisalFromDecision(
   if (choice === 'react') {
     const reaction = answers.reaction_class;
     if (reaction?.type !== 'choice') return null;
-    return { action: 'react', reactionClass: reaction.choice, reasonCode: 'decision_backend', confidence };
+    return {
+      action: 'react',
+      reactionClass: reaction.choice,
+      reasonCode: 'decision_backend',
+      confidence: speakingConfidence('react', action.probabilities, confidence),
+    };
+  }
+  if (choice === 'reply') {
+    return {
+      action: 'reply',
+      reasonCode: 'decision_backend',
+      confidence: speakingConfidence('reply', action.probabilities, confidence),
+    };
   }
   return { action: choice, reasonCode: 'decision_backend', confidence };
 }

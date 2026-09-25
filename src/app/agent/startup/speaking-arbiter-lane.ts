@@ -129,7 +129,7 @@ export function wireSpeakingArbiterLane(deps: SpeakingArbiterLaneDeps): Speaking
       // bounded reason codes, connector label, and the model-call counter. No
       // transcript, alias, interest tag, biography, or reasoning ever appears.
       onNomination: (nomination) => {
-        log.debug('Room signal nominated a companion', {
+        log.info('Room signal nominated a companion', {
           companionId: nomination.companionId,
           channelId: nomination.roomId,
           messageId: nomination.messageId,

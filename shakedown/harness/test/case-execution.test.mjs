@@ -8,6 +8,7 @@ import {
   CaseConfigurationError,
   caseStatusAfterCleanupFailure,
   classifyCaseFailure,
+  decidePreCaseBusyAction,
   caseFailureStatus,
   isMatrixAbortStatus,
   probeKnownBusySettlement,
@@ -413,4 +414,60 @@ test('an unconfirmed capability-matrix sink degrades only that case to a coverag
 test('buildConfigurationHoleCase rethrows unexpected failures instead of hiding them', () => {
   const unexpected = new TypeError('bug');
   assert.throws(() => buildConfigurationHoleCase({ id: 'x' }, unexpected), (error) => error === unexpected);
+});
+
+// e04wp: a background busy owner (sleeptime / dream pass) writes no TurnRecord,
+// so the crossing settlement never fires. The probe names the owner, and the
+// phase loop retries the next case instead of skipping it.
+function sessionsFixture(turns) {
+  return async (url) => {
+    if (url.endsWith('/api/admin/settings/capabilities')) return { ok: true, status: 200, body: { tier: 'autonomous' } };
+    if (url.endsWith('/api/admin/sessions')) {
+      return { ok: true, status: 200, body: { channels: [{ sessionId: 'api:testing-harness', lastActivityAt: 90 }] } };
+    }
+    return { ok: true, status: 200, body: { turns } };
+  };
+}
+
+test('settlement probe names a background owner when no turn holds the agent', async () => {
+  const result = await probeKnownBusySettlement({
+    adminBase: 'http://admin.fixture',
+    busyObservedAtMs: 100,
+    fetchJson: sessionsFixture([{ record: { turnId: 'old', startedAt: 10, completedAt: 20 } }]),
+  });
+  assert.equal(result.busy, true);
+  assert.equal(result.busyOwner, 'background');
+});
+
+test('settlement probe names a foreground owner for an in-flight turn that predates the rejection', async () => {
+  const result = await probeKnownBusySettlement({
+    adminBase: 'http://admin.fixture',
+    busyObservedAtMs: 100,
+    fetchJson: sessionsFixture([{ record: { turnId: 'running', startedAt: 50 } }]),
+  });
+  assert.equal(result.busy, true);
+  assert.equal(result.busyOwner, 'foreground');
+});
+
+test('an unsettled busy owner retries the next case instead of skipping it', () => {
+  assert.deepEqual(decidePreCaseBusyAction(null), { run: true, reason: null });
+  assert.deepEqual(decidePreCaseBusyAction({ quiescent: true, attempts: [] }), { run: true, reason: null });
+  assert.deepEqual(decidePreCaseBusyAction({
+    quiescent: false,
+    reason: 'agent_busy',
+    attempts: [{ reachable: true, busy: true, busyOwner: 'background' }],
+  }), { run: true, reason: 'busy_owner_unsettled_retry_case', busyOwner: 'background' });
+  assert.deepEqual(decidePreCaseBusyAction({
+    quiescent: false,
+    reason: 'admin_unreachable',
+    attempts: [],
+  }), { run: false, reason: 'harness_error:admin_quiescence_unreachable' });
+});
+
+test('the phase loop never skips a case on an agent_busy quiescence timeout', async () => {
+  const { readFileSync } = await import('node:fs');
+  const source = readFileSync(new URL('../live-system-shakedown.mjs', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /agent_busy:pre_case_quiescence_timeout/u, 'no phase-wide busy skip remains');
+  assert.match(source, /decidePreCaseBusyAction\(quiescence\)/u);
+  assert.match(source, /busyOwner:/u, 'busy cases record their lock owner');
 });

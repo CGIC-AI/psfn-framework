@@ -20,7 +20,13 @@ import {
   optionalIntEnv,
   failClosedOnEnv,
 } from './lib/env.mjs';
-import { pgAll, pgScalar, closePool } from './lib/postgres.mjs';
+import {
+  closePool,
+  gatewayPgAll,
+  gatewayPgScalar,
+  pgAll,
+  pgScalar,
+} from './lib/postgres.mjs';
 import * as probe from './lib/probe.mjs';
 import {
   INSECURE_LOCAL_API_PRINCIPAL_ID,
@@ -51,6 +57,7 @@ import {
   caseStatusAfterCleanupFailure,
   classifyCaseFailure,
   isMatrixAbortStatus,
+  decidePreCaseBusyAction,
   probeKnownBusySettlement,
   resolveCaseTimeoutMs,
   resolveCaseCoverageHoleReason,
@@ -109,6 +116,7 @@ import {
   buildImageGenerationCases,
   resolveImageCaseProviderForCases,
 } from './lib/image-case-provider.mjs';
+import { operatorGardenHeaders, resolveOperatorGardenToken } from './lib/operator-garden.mjs';
 import { prepareCaseChatDispatch } from './lib/case-dispatch-auth.mjs';
 import { createFrameworkHubDeviceAssertionIssuer } from './lib/hub-device-assertion.mjs';
 
@@ -128,6 +136,9 @@ const CONFIG = (() => {
       apiKey: targetContract.apiKey,
       adminToken: targetContract.adminToken,
       companionId: targetContract.companionId,
+      // xpgnr: prompt-marker sweep/restore are operator maintenance and use
+      // the audited ADMIN_TOKEN Garden door (required on kube, fail closed).
+      operatorGardenToken: resolveOperatorGardenToken(targetContract),
       outputPath: requireEnv('PSFN_SHAKEDOWN_OUTPUT', 'per-phase run JSON path'),
       repoRoot: requireEnv('PSFN_REPO_ROOT', 'RC repo clone under test'),
       workspacePath: requireEnv('WORKSPACE_PATH', 'companion Personal Workspace root'),
@@ -150,6 +161,7 @@ const ADMIN_READINESS_URL = CONFIG.adminReadinessUrl;
 const API_URL = `${API_BASE}/v1/chat/completions`;
 const API_KEY = CONFIG.apiKey;
 const ADMIN_TOKEN = CONFIG.adminToken;
+const OPERATOR_GARDEN_TOKEN = CONFIG.operatorGardenToken;
 const REPO_ROOT = CONFIG.repoRoot;
 const COMPANION_DATA_DIR = CONFIG.companionDataDir;
 const SYSTEM_DATA_DIR = CONFIG.systemDataDir;
@@ -1134,25 +1146,29 @@ function summarizeTurn(turn) {
   };
 }
 
-/** Garden admin JSON request for harness-owned fixture restoration. */
-function adminRequest(method, path, body) {
+/**
+ * Garden admin JSON request under the OPERATOR credential (xpgnr): prompt
+ * layers and managed skills are identity/capability material the
+ * testing-harness door cannot manage, so marker/skill residue sweeps and the
+ * prompt/skill restores run as the audited ADMIN_TOKEN operator.
+ */
+function operatorAdminRequest(method, path, body) {
   return fetchJson(`${ADMIN_BASE}${path}`, {
     method,
-    ...(body === undefined
-      ? {}
-      : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+    headers: operatorGardenHeaders(OPERATOR_GARDEN_TOKEN, body),
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
 }
 
 /**
  * Case hooks that snapshot prompt layers before dispatch and restore them
- * byte-identically afterwards (2pz3o).
+ * byte-identically afterwards (2pz3o), as the operator (xpgnr).
  */
 function promptLayerRestoreHooks() {
   let before = null;
   return {
     before: async () => {
-      const listed = await adminRequest('GET', '/api/admin/prompts');
+      const listed = await operatorAdminRequest('GET', '/api/admin/prompts');
       if (!listed?.ok) {
         throw new Error(`prompt layer snapshot unavailable (${listed?.status ?? 'no response'})`);
       }
@@ -1162,7 +1178,7 @@ function promptLayerRestoreHooks() {
     cleanup: async () => (
       before === null
         ? { cleanup: {}, cleanupErrors: ['prompt layers were not snapshotted before the case'] }
-        : await restorePromptLayers({ before, adminRequest })
+        : await restorePromptLayers({ before, adminRequest: operatorAdminRequest })
     ),
   };
 }
@@ -1179,7 +1195,8 @@ async function fetchJson(url, init = {}, timeoutMs = DEFAULT_FETCH_TIMEOUT_MS) {
   }
   try {
     const headers = new Headers(init.headers ?? {});
-    if (typeof url === 'string' && url.startsWith(ADMIN_BASE) && ADMIN_TOKEN) {
+    // An explicit credential (the operator door) is never overridden.
+    if (typeof url === 'string' && url.startsWith(ADMIN_BASE) && ADMIN_TOKEN && !headers.has('Authorization')) {
       headers.set('Authorization', `Bearer ${ADMIN_TOKEN}`);
     }
     if (typeof url === 'string' && url.startsWith(API_BASE) && API_KEY && !headers.has('Authorization')) {
@@ -1870,6 +1887,9 @@ async function chatCase(input) {
       manifestId: HARNESS_MANIFEST_ID,
     }),
     resolveAttemptHeaders: input.resolveAttemptHeaders,
+    // cx97d: coverage chats target the run's fleet companion like every
+    // other harness-bearer dispatch.
+    companionId: CONFIG.companionId,
   });
   const apiUserId = dispatch.apiUserId;
   const busyRetryWindowMs = input.busyRetryWindowMs ?? DEFAULT_BUSY_RETRY_WINDOW_MS;
@@ -2837,7 +2857,7 @@ function buildCoverageCases(ctx) {
           : ['skill_manage must persist the updated managed skill content']
       ),
       // The case-created skill is removed through Garden and proven absent (ob6w1).
-      cleanup: async () => await removeHarnessSkill({ adminRequest, name: skillName }),
+      cleanup: async () => await removeHarnessSkill({ adminRequest: operatorAdminRequest, name: skillName }),
     },
     {
       id: 'orient_append',
@@ -3408,6 +3428,9 @@ function buildCases(ctx) {
       fetchJson,
       pgAll,
       pgScalar,
+      // The fleet spend ledger is gateway-owned (ypah0).
+      gatewayPgAll,
+      gatewayPgScalar,
       readJsonIfExists,
       readJsonl,
       waitForTurnRecord: waitForCaseTurnRecord,
@@ -3502,7 +3525,8 @@ async function runCase(testCase, ctx, signal) {
       });
     }
   }
-  const auditStartId = Number(await pgScalar(
+  // gateway_audit is gateway-owned: read it from the gateway schema (ypah0).
+  const auditStartId = Number(await gatewayPgScalar(
     'select coalesce(max(id), 0) as id from gateway_audit;',
   ) ?? 0);
   throwIfAborted(signal);
@@ -3596,7 +3620,7 @@ async function runCase(testCase, ctx, signal) {
   if (!outcome) {
     throw new Error(`case ${testCase.id} produced no dispatch outcome`);
   }
-  const auditRows = await pgAll(
+  const auditRows = await gatewayPgAll(
     `select id, timestamp, method, decision, params_json, error from gateway_audit where id > ${auditStartId} order by id asc;`,
   );
   throwIfAborted(signal);
@@ -3816,11 +3840,11 @@ async function main() {
   const startedAt = new Date().toISOString();
   // Remove marker residue earlier rounds left in prompt layers (2pz3o) before
   // this run takes its inventory and per-case snapshots.
-  const sweptPromptMarkerLayers = await sweepHarnessPromptMarkers({ adminRequest });
+  const sweptPromptMarkerLayers = await sweepHarnessPromptMarkers({ adminRequest: operatorAdminRequest });
   if (sweptPromptMarkerLayers.length > 0) {
     console.error(JSON.stringify({ event: 'prompt_marker_residue_swept', layerIds: sweptPromptMarkerLayers }));
   }
-  const sweptHarnessSkills = await sweepHarnessSkills({ adminRequest });
+  const sweptHarnessSkills = await sweepHarnessSkills({ adminRequest: operatorAdminRequest });
   if (sweptHarnessSkills.length > 0) {
     console.error(JSON.stringify({ event: 'harness_skill_residue_swept', skills: sweptHarnessSkills }));
   }
@@ -3949,17 +3973,20 @@ async function main() {
           ...quiescence,
         });
       }
-      if (quiescence && !quiescence.quiescent) {
-        const agentBusy = quiescence.reason === 'agent_busy';
+      const busyAction = decidePreCaseBusyAction(quiescence);
+      if (quiescence && busyAction.reason) {
+        recordCaseDiagnostic(testCase.id, {
+          event: 'pre_case_busy_decision',
+          blockedByCaseId: pendingBusyRecovery?.caseId ?? null,
+          ...busyAction,
+        });
+      }
+      if (!busyAction.run) {
         caseResult = buildHarnessErrorResult(
           testCase,
-          agentBusy
-            ? 'Agent remained busy through the bounded pre-case quiescence window'
-            : 'Admin session state remained unavailable through the bounded pre-case quiescence window',
-          agentBusy ? 'agent_busy' : 'harness_error',
-          agentBusy
-            ? 'agent_busy:pre_case_quiescence_timeout'
-            : 'harness_error:admin_quiescence_unreachable',
+          'Admin session state remained unavailable through the bounded pre-case quiescence window',
+          'harness_error',
+          busyAction.reason,
         );
         caseResult.sideChecks.preCaseQuiescence = quiescence;
       } else {
@@ -4046,6 +4073,26 @@ async function main() {
           caseId: testCase.id,
           busyObservedAtMs: caseResult.busyObservedAtMs,
         };
+        // e04wp: record who held the agent (foreground turn vs background work)
+        // on the busy case itself; the next case retries instead of skipping.
+        try {
+          const ownerProbe = await probeKnownBusySettlement({
+            adminBase: ADMIN_BASE,
+            busyObservedAtMs: caseResult.busyObservedAtMs,
+            fetchJson,
+          });
+          caseResult.sideChecks = {
+            ...(caseResult.sideChecks ?? {}),
+            busyOwner: ownerProbe.busy === false ? 'settled' : (ownerProbe.busyOwner ?? 'unknown'),
+          };
+        } catch (error) {
+          caseResult.sideChecks = {
+            ...(caseResult.sideChecks ?? {}),
+            busyOwner: 'unknown',
+            busyOwnerProbeError: error instanceof Error ? error.message : String(error),
+          };
+        }
+        caseResult.failureReason ??= 'agent_busy:retry_exhausted';
       } else {
         caseResult.caseStatus = 'harness_error';
         caseResult.failureReason = 'harness_error:missing_busy_observation';

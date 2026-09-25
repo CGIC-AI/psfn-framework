@@ -83,6 +83,10 @@ function resolveFetch(fetch: DecisionsFetch | undefined): DecisionsFetch {
   return globalThis.fetch as unknown as DecisionsFetch;
 }
 
+function isProviderRefusal(httpStatus: number | undefined): boolean {
+  return httpStatus !== undefined && (httpStatus < 200 || httpStatus >= 300);
+}
+
 export function createGatewayJevDecisionService(
   options: GatewayJevDecisionServiceOptions,
 ): GatewayJevDecisionService {
@@ -145,6 +149,10 @@ export function createGatewayJevDecisionService(
         ...(outcome.ok && outcome.costUsd !== undefined
           ? { providerCostUsd: outcome.costUsd, costSource: 'provider' as const }
           : { costSource: 'none' as const }),
+        // 21c4v: an HTTP error answer generated nothing and is known $0. An
+        // abort, network failure or unpriced answer stays unknown cost, which
+        // the budget gate treats fail closed.
+        ...(!outcome.ok && isProviderRefusal(result.httpStatus) ? { estimatedCostUsd: 0 } : {}),
         ...(outcome.ok ? {} : {
           errorCode: result.httpStatus !== undefined ? `http_${result.httpStatus}` : outcome.reason,
         }),

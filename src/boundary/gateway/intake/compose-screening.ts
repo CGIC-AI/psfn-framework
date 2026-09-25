@@ -21,6 +21,8 @@
 // closed), and the classifier never downloads at runtime.
 
 import { createL2DecisionSignal } from './l2-decision-signal.js';
+import { createIntakeScreenerUsageLedger } from './screener-usage.js';
+import type { ModelUsageRecorder } from '../../../shared/telemetry/model-usage.js';
 import type { CompanionId } from '../../../shared/routing/companion-id.js';
 import type { GatewayJevDecisionService } from '../jev-decision-service.js';
 import { createJsonlDecisionShadowSink } from '../../../primitives/llm/decision/shadow-record.js';
@@ -195,6 +197,8 @@ export async function composeGatewayIntakeScreening(input: {
   onScreenerProviderRejected?: GatewayIntakeEscalationDeps['onScreenerProviderRejected'];
   /** Gateway-owned remote decision service for the additive intake.l2 signal (epic 4lf3r). */
   jevDecisions?: GatewayJevDecisionService;
+  /** Gateway usage ledger; screener dispatches are recorded here (1fyyi). */
+  modelUsageRecorder?: ModelUsageRecorder;
   /** Content-free per-stage latency observer; never receives screened text. */
   onScreeningTiming?: IntakeScreeningServiceOptions['onTiming'];
   /** Content-free completion path for asynchronous post-pass deep screening. */
@@ -330,7 +334,15 @@ export async function composeGatewayIntakeScreening(input: {
   // Multi-writer JSON store (same file the gateway core, contact-block gate,
   // and Garden use); reloads from disk per operation.
   const cogSecEvents = new CogSecEventStore(resolveCogSecEventsPath(input.companionDataDir));
+  const usageLedger = input.modelUsageRecorder
+    ? createIntakeScreenerUsageLedger({
+      recorder: input.modelUsageRecorder,
+      config: input.config,
+      ...(input.companionId ? { companionId: input.companionId } : {}),
+    })
+    : undefined;
   const escalation: IntakeEscalationPort = createGatewayIntakeEscalationPort({
+    ...(usageLedger ? { usageLedger } : {}),
     policy,
     models: () => {
       const selection = liveScreenerModels.current();
@@ -408,6 +420,7 @@ export async function composeGatewayIntakeScreening(input: {
           model: liveScreenerModels.current().vision!,
           screening,
           backend,
+          ...(usageLedger ? { usageLedger } : {}),
           quarantine,
           ...(input.screenerTestCompletion
             ? { testCompletion: input.screenerTestCompletion }

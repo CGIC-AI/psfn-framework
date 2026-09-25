@@ -97,6 +97,24 @@ interface ToolLessScreenerCallInput {
   screenerName: string;
   /** Error constructor so callers keep their own typed error hierarchy. */
   makeError: (message: string) => Error;
+  /**
+   * Content-free observer called once per provider dispatch (including the
+   * one schema-repair retry) with its outcome and token usage, for the usage
+   * ledger (1fyyi). It never sees prompt or response text.
+   */
+  onAttempt?: (attempt: ScreenerAttemptUsage) => void;
+}
+
+/** Content-free record of one screener provider dispatch. */
+export interface ScreenerAttemptUsage {
+  status: 'success' | 'failure';
+  startedAtMs: number;
+  completedAtMs: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  errorCode?: 'timeout' | 'provider_error';
 }
 
 export interface ValidatedToolLessScreenerCallInput<T>
@@ -319,8 +337,13 @@ function buildPiOptions(
   };
 }
 
+interface ObservedUsage {
+  value?: AssistantMessage['usage'];
+}
+
 async function callToolLessJsonScreenerThroughPi(
   input: ToolLessScreenerCallInput,
+  observed: ObservedUsage,
 ): Promise<string> {
   const { runtime, requestCapability, candidate, model, apiKey } = resolvePiModel(input);
   const controller = new AbortController();
@@ -352,6 +375,7 @@ async function callToolLessJsonScreenerThroughPi(
   } finally {
     clearTimeout(timeout);
   }
+  observed.value = response.usage;
   // The screener never passes a caller abort signal, so an aborted response is
   // always its own deadline (this controller or pi-ai's `timeoutMs`); pi-ai
   // reports that as a resolved `aborted` message rather than a throw.
@@ -423,9 +447,45 @@ async function callToolLessJsonScreenerThroughTestCompletion(
 async function callToolLessJsonScreener(
   input: ToolLessScreenerCallInput,
 ): Promise<string> {
-  return input.testCompletion
-    ? callToolLessJsonScreenerThroughTestCompletion(input)
-    : callToolLessJsonScreenerThroughPi(input);
+  const startedAtMs = Date.now();
+  const observed: ObservedUsage = {};
+  try {
+    const content = input.testCompletion
+      ? await callToolLessJsonScreenerThroughTestCompletion(input)
+      : await callToolLessJsonScreenerThroughPi(input, observed);
+    reportScreenerAttempt(input, 'success', startedAtMs, observed);
+    return content;
+  } catch (error) {
+    reportScreenerAttempt(
+      input,
+      'failure',
+      startedAtMs,
+      observed,
+      isScreenerTimeout(error) ? 'timeout' : 'provider_error',
+    );
+    throw error;
+  }
+}
+
+function reportScreenerAttempt(
+  input: ToolLessScreenerCallInput,
+  status: ScreenerAttemptUsage['status'],
+  startedAtMs: number,
+  observed: ObservedUsage,
+  errorCode?: ScreenerAttemptUsage['errorCode'],
+): void {
+  if (!input.onAttempt) return;
+  const usage = observed.value;
+  input.onAttempt({
+    status,
+    startedAtMs,
+    completedAtMs: Date.now(),
+    inputTokens: usage?.input ?? 0,
+    outputTokens: usage?.output ?? 0,
+    cacheReadTokens: usage?.cacheRead ?? 0,
+    cacheWriteTokens: usage?.cacheWrite ?? 0,
+    ...(errorCode ? { errorCode } : {}),
+  });
 }
 
 /**

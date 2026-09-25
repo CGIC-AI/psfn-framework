@@ -27,6 +27,7 @@
 //   quarantine hold THROWS out of this port; the screening service catches
 //   that and quarantines (an unauditable L3 result is never delivered).
 
+import type { IntakeScreenerUsageLedger } from './screener-usage.js';
 import type { L2DecisionSignal } from './l2-decision-signal.js';
 import { performance } from 'node:perf_hooks';
 
@@ -91,6 +92,8 @@ export interface GatewayIntakeEscalationDeps {
   onScreenerProviderRejected?: (event: L2ScreenerProviderRejectedEvent) => void;
   /** Additive remote L2 signal (epic 4lf3r); may only raise escalation. */
   decisionSignal?: L2DecisionSignal;
+  /** Usage ledger for L2/L3 provider dispatches (1fyyi). */
+  usageLedger?: IntakeScreenerUsageLedger;
 }
 
 function mergeContributions(
@@ -178,6 +181,7 @@ export function createGatewayIntakeEscalationPort(
           ? { onProviderRejected: deps.onScreenerProviderRejected }
           : {}),
         ...(deps.decisionSignal ? { decisionSignal: deps.decisionSignal } : {}),
+        ...(deps.usageLedger ? { usageLedger: deps.usageLedger } : {}),
       });
     } catch (error) {
       request.emitTiming?.('l2', 'observed', Math.max(0, performance.now() - l2StartedAt));
@@ -245,7 +249,8 @@ export function createGatewayIntakeEscalationPort(
         config: deps.policy,
         models: deps.models().l3,
         backend: deps.backend,
-      ...(deps.testCompletion ? { testCompletion: deps.testCompletion } : {}),
+        ...(deps.testCompletion ? { testCompletion: deps.testCompletion } : {}),
+        ...(deps.usageLedger ? { usageLedger: deps.usageLedger } : {}),
       });
     } catch (error) {
       request.emitTiming?.('l3', 'observed', Math.max(0, performance.now() - l3StartedAt));

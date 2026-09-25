@@ -38,6 +38,7 @@
 // (l3-screener.ts); this module only routes, it never decides the L3 verdict.
 
 import type { L2DecisionSignal } from './l2-decision-signal.js';
+import type { IntakeScreenerUsageLedger } from './screener-usage.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import {
   INTAKE_RISK_LABELS,
@@ -118,6 +119,8 @@ export interface L2ScreenerDeps {
   maxContentChars?: number;
   /** Test seam; production uses the global fetch. */
   testCompletion?: ScreenerTestCompletion;
+  /** Usage ledger for each provider dispatch (1fyyi). */
+  usageLedger?: IntakeScreenerUsageLedger;
 }
 
 // ── Errors (fail closed, never swallowed) ──
@@ -275,10 +278,12 @@ export async function screenL2(
   }
 
   const startedAt = performance.now();
+  const onAttempt = deps.usageLedger?.('l2', deps.model);
   const classification = await callValidatedToolLessJsonScreener({
     backend: deps.backend,
     model: deps.model,
     timeoutMs: deps.timeoutMs,
+    ...(onAttempt ? { onAttempt } : {}),
     systemPrompt: CLASSIFIER_SYSTEM_PROMPT,
     userMessage: buildUserMessage(neutralized, context),
     ...(deps.testCompletion ? { testCompletion: deps.testCompletion } : {}),
@@ -335,6 +340,8 @@ export interface EvaluateL2Input {
    * escalation, skip L3, or replace a fail-closed outcome.
    */
   decisionSignal?: L2DecisionSignal;
+  /** Usage ledger for each L2 provider dispatch (1fyyi). */
+  usageLedger?: IntakeScreenerUsageLedger;
 }
 
 /** Content-free description of a screener request the provider refused. */
@@ -406,6 +413,7 @@ export async function evaluateL2(input: EvaluateL2Input): Promise<L2ScreeningOut
       timeoutMs: config.l2Screener.timeoutMs,
       maxContentChars: config.l2Screener.maxContentChars,
       ...(input.testCompletion ? { testCompletion: input.testCompletion } : {}),
+      ...(input.usageLedger ? { usageLedger: input.usageLedger } : {}),
     });
     // ── htm9.7 L3 escalation ──
     // A flagged L2 verdict — or a tier whose policy mandates deep screening —

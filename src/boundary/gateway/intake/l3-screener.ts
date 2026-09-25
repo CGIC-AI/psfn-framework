@@ -37,6 +37,7 @@
 // shadow mode the failure is fully audited (envelope + CogSec event + error
 // log) while `effectiveText` stays the original input (observe-only rollout).
 
+import type { IntakeScreenerUsageLedger } from './screener-usage.js';
 import { createHash } from 'node:crypto';
 import { createComponentLogger } from '../../../shared/logger.js';
 import {
@@ -197,6 +198,8 @@ export interface L3ScreenerDeps {
   maxOutputTokens: number;
   /** Test seam; production uses the global fetch. */
   testCompletion?: ScreenerTestCompletion;
+  /** Usage ledger for each provider dispatch (1fyyi). */
+  usageLedger?: IntakeScreenerUsageLedger;
 }
 
 // ── Errors (fail closed, never swallowed) ──
@@ -465,10 +468,12 @@ export async function screenL3(
   }
 
   const startedAt = performance.now();
+  const onAttempt = deps.usageLedger?.('l3', deps.model);
   const verdict = await callValidatedToolLessJsonScreener({
     backend: deps.backend,
     model: deps.model,
     timeoutMs: deps.timeoutMs,
+    ...(onAttempt ? { onAttempt } : {}),
     maxOutputTokens: deps.maxOutputTokens,
     systemPrompt: L3_CLASSIFIER_SYSTEM_PROMPT,
     userMessage: buildUserMessage(neutralized, context),
@@ -560,6 +565,8 @@ export interface EvaluateL3Input {
   backend: L3ScreenerBackend;
   /** Test seam; production uses the global fetch. */
   testCompletion?: ScreenerTestCompletion;
+  /** Usage ledger for each L3 provider dispatch (1fyyi). */
+  usageLedger?: IntakeScreenerUsageLedger;
 }
 
 export type L3ScreeningOutcome =
@@ -646,7 +653,8 @@ export async function evaluateL3(input: EvaluateL3Input): Promise<L3ScreeningOut
       timeoutMs: l3.timeoutMs,
       maxContentChars: l3.maxContentChars,
       maxOutputTokens: l3.maxOutputTokens,
-        ...(input.testCompletion ? { testCompletion: input.testCompletion } : {}),
+      ...(input.testCompletion ? { testCompletion: input.testCompletion } : {}),
+      ...(input.usageLedger ? { usageLedger: input.usageLedger } : {}),
     },
   );
 

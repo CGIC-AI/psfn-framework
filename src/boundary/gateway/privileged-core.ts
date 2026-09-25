@@ -349,6 +349,9 @@ export async function buildGatewayPrivilegedCore(
   const intakeScreening = await composeGatewayIntakeScreeningRuntime({
     config: input.config,
     jevDecisions,
+    ...(privilegedServices.modelUsageStore
+      ? { modelUsageRecorder: privilegedServices.modelUsageStore }
+      : {}),
     resolveReceipts: resolveIntakeReceipts,
     disposeReceipts: async () => {
       for (const store of receiptStoresByCompanionId.values()) {

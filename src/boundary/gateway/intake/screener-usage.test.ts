@@ -3,6 +3,7 @@ import type { ModelUsageEventInput } from '../../../shared/telemetry/model-usage
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { RoutingCandidate } from '../../../primitives/llm/routing.js';
 import { createIntakeScreenerUsageLedger } from './screener-usage.js';
+import { reconcileModelUsageAccounting } from '../../../shared/telemetry/model-usage-accounting.js';
 import { evaluateL2 } from './l2-screener.js';
 import type { ScreenerAttemptUsage } from './screener-transport.js';
 import { readFileSync } from 'node:fs';
@@ -48,7 +49,22 @@ function attempt(overrides: Partial<ScreenerAttemptUsage> = {}): ScreenerAttempt
 function ledgerFor(config: SubstrateConfig) {
   const rows: ModelUsageEventInput[] = [];
   const ledger = createIntakeScreenerUsageLedger({
-    recorder: { recordUsageEvent: async (event) => { rows.push(event); } },
+    recorder: {
+      recordUsageEvent: async (event) => {
+        // Same reconciliation the Postgres store applies before persisting.
+        reconcileModelUsageAccounting({
+          usage: {
+            inputTokens: event.inputTokens ?? 0,
+            outputTokens: event.outputTokens ?? 0,
+            cacheReadTokens: event.cacheReadTokens ?? 0,
+            cacheWriteTokens: event.cacheWriteTokens ?? 0,
+          },
+          ...(event.estimatedCostUsd !== undefined ? { estimatedCost: { total: event.estimatedCostUsd } } : {}),
+          ...(event.costSource ? { costSource: event.costSource } : {}),
+        });
+        rows.push(event);
+      },
+    },
     config,
     companionId: 'companion-b',
   });
@@ -74,7 +90,7 @@ describe('intake screener usage ledger (1fyyi)', () => {
     });
   });
 
-  it('records a zero-rate subscription model at $0 and a timeout as a failure', async () => {
+  it('records a zero-rate subscription model at a known $0 the store accepts (y3k38)', async () => {
     const { ledger, rows } = ledgerFor(registryConfig({ inputPer1MUsd: 0, outputPer1MUsd: 0 }));
     const onAttempt = ledger('l3', CANDIDATE);
     onAttempt?.(attempt({
@@ -82,8 +98,10 @@ describe('intake screener usage ledger (1fyyi)', () => {
     }));
     onAttempt?.(attempt());
     await vi.waitFor(() => expect(rows).toHaveLength(2));
-    expect(rows[0]).toMatchObject({ status: 'failure', errorCode: 'timeout', estimatedCostUsd: 0, attempt: 1 });
-    expect(rows[1]).toMatchObject({ status: 'success', estimatedCostUsd: 0, attempt: 2 });
+    expect(rows[0]).toMatchObject({
+      status: 'failure', errorCode: 'timeout', estimatedCostUsd: 0, costSource: 'none', attempt: 1,
+    });
+    expect(rows[1]).toMatchObject({ status: 'success', estimatedCostUsd: 0, costSource: 'none', attempt: 2 });
     expect(rows[0]?.logicalCallId).toBe(rows[1]?.logicalCallId);
   });
 

@@ -131,6 +131,7 @@ function createHarness(overrides?: {
   ) => Promise<AgentResponse>;
   observeMessage?: (message: SubstrateMessage) => Promise<void>;
   waitForIdle?: () => Promise<void>;
+  companionReplyBusyWaitMs?: number;
   observedGroupMemoryScheduler?: ObservedGroupMemorySchedulerPort;
   passiveNameCandidateBuilder?: PassiveNameCandidatePort;
   participationAppraiser?: ParticipationAppraiserPort;
@@ -303,6 +304,7 @@ function createHarness(overrides?: {
       reader: { getRecent: (channelId: string) => (overrides?.icpHistory ?? []).filter(entry => entry.channelId === channelId) },
       messageLimit: 6,
     },
+    companionReplyBusyWaitMs: overrides?.companionReplyBusyWaitMs ?? 300_000,
   });
 
   if (!onHandleMessage || !onDiscordMessage || !onCompanionMessage || !onCompanionDeliveryFailure) {
@@ -1587,6 +1589,66 @@ describe('registerGatewayMessageHandlers', () => {
     });
     expect(harness.gateway.companionSend).not.toHaveBeenCalled();
     expect(harness.gateway.companionReportFailure).not.toHaveBeenCalled();
+  });
+
+  it('holds an approved ICP reply while the agent is busy instead of failing it (q2kao)', async () => {
+    const reply = {
+      ...makeResponse('answer after the chat'),
+      channelId: ICP_CHANNEL,
+      metadata: {
+        ...makeResponse('').metadata,
+        turnId: replyIcpCorrelation.turnId,
+        requestId: replyIcpCorrelation.requestId,
+        icpCorrelation: replyIcpCorrelation,
+      },
+    };
+    let calls = 0;
+    const harness = createHarness({
+      config: { companionId: ICP_B } as SubstrateConfig,
+      handleMessage: async (_message, lifecycle) => {
+        calls += 1;
+        // The exact r7 busy error from the agent invocation path.
+        if (calls === 1) throw new Error('Agent is already processing.');
+        if (!lifecycle) throw new Error('test expected delivery lifecycle');
+        await lifecycle.finalizeDelivery(reply);
+        return reply;
+      },
+    });
+
+    await harness.onCompanionMessage(makeCorrelatedCompanionMessage());
+
+    await vi.waitFor(() => {
+      expect(harness.gateway.companionSend).toHaveBeenCalledOnce();
+    });
+    expect(harness.agentLoop.waitForIdle).toHaveBeenCalled();
+    expect(harness.gateway.companionReportFailure).not.toHaveBeenCalled();
+    expect(harness.gateway.companionEndIcpEpisodeActivity).not.toHaveBeenCalled();
+  });
+
+  it('ends the conversation as recipient_busy_timeout when the agent stays busy past the bound (q2kao)', async () => {
+    const harness = createHarness({
+      config: { companionId: ICP_B } as SubstrateConfig,
+      companionReplyBusyWaitMs: 50,
+      waitForIdle: () => new Promise<void>(() => undefined),
+      handleMessage: async () => {
+        throw new Error('Agent is already processing.');
+      },
+    });
+
+    await harness.onCompanionMessage(makeCorrelatedCompanionMessage());
+
+    await vi.waitFor(() => {
+      expect(harness.gateway.companionReportFailure).toHaveBeenCalledWith({
+        channelId: ICP_CHANNEL,
+        messageId: INBOUND_ICP_MESSAGE_ID,
+        reason: 'processing_failed',
+      });
+    });
+    expect(harness.gateway.companionEndIcpEpisodeActivity).toHaveBeenCalledWith({
+      conversationId: inboundIcpCorrelation.conversationId,
+      reasonCode: 'recipient_busy_timeout',
+    });
+    expect(harness.gateway.companionSend).not.toHaveBeenCalled();
   });
 
   it('recovers a failed correlated reply after restart without another generated turn', async () => {

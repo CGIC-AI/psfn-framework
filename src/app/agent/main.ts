@@ -2473,6 +2473,7 @@ async function main(): Promise<void> {
       reader: sessionStore,
       messageLimit: schedulerConfig.socialAutonomy.passiveNameCandidate.precedingContextMessages,
     },
+    companionReplyBusyWaitMs: schedulerConfig.icpAutonomy.permit.ttlMs,
   });
   if (registeredGatewayMessageHandlers.observedGroupMemory) {
     shutdownTargets.observedGroupMemory = registeredGatewayMessageHandlers.observedGroupMemory;

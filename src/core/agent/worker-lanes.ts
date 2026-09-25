@@ -257,6 +257,11 @@ export function resolveRuntimeLaneClassForModelCall(input: {
     || originStage === 'intention.follow_up'
     || originStage.startsWith('intention.appraisal.')
     || originStage === 'intention.concern_candidate_review'
+    // se807: the participation appraisal decides whether an inbound ICP (or
+    // room) message is answered at all. On the preemptable background lane
+    // the companion's own post-turn appraisal preempted it, and the aborted
+    // call fail-closed and ended the conversation.
+    || originStage === 'participation.appraisal'
   ) {
     return POST_TURN_APPRAISAL_RUNTIME_CLASS;
   }

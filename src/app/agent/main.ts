@@ -90,7 +90,7 @@ import {
 } from '../../boundary/integrations/beads/runtime-wiring.js';
 import {
   resolveBeadsActionsForCaller,
-  resolveBeadsToolsEnabled,
+  resolveBeadsToolsEnablement,
 } from '../../boundary/integrations/beads/enablement.js';
 import { assertPolicyToolHydration } from '../../core/agent/tool-surface/hydration.js';
 import { GatewayBeadsOps } from '../../boundary/integrations/beads/gateway-ops.js';
@@ -1563,10 +1563,21 @@ async function main(): Promise<void> {
   // policy uses so registration and policy agree; the gateway DENYs beads.*
   // when disabled, so advertising the tool anyway makes it fail at every call
   // (psfn-framework-e7s0). Fail-closed: policy wins.
-  const beadsToolsEnabled = resolveBeadsToolsEnabled(process.env.BEADS_TOOLS_ENABLED, {
+  const beadsEnablement = resolveBeadsToolsEnablement(process.env.BEADS_TOOLS_ENABLED, {
     workspaceRoot: pathSnapshot.workspaceRoot,
     codebaseRoot: resolve('.'),
+    ...(process.env.BEADS_DIR ? { beadsDir: process.env.BEADS_DIR } : {}),
   });
+  if (!beadsEnablement.enabled && beadsEnablement.reason === 'database_missing') {
+    // Fail closed at registration (psfn-framework-povuo): advertising a tool
+    // whose every call fails with "no beads database found" is worse than not
+    // offering it. Provision the database (bd init in the Personal Workspace,
+    // or BEADS_DIR) to enable it.
+    log.error('BEADS_TOOLS_ENABLED=true but no Beads database is provisioned; beads tool not registered', {
+      searched: beadsEnablement.searched,
+    });
+  }
+  const beadsToolsEnabled = beadsEnablement.enabled;
   const beadsAllowedActions = resolveBeadsActionsForCaller(
     process.env.BEADS_ALLOW_ACTIONS,
     'companion',

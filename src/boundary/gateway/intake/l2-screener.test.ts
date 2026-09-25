@@ -542,6 +542,28 @@ describe('evaluateL2 fail-closed per tier', () => {
     }
   });
 
+  it('fails closed on its own deadline and labels the cause as a timeout (q8l79)', async () => {
+    const policy = testPolicy();
+    const outcome = await evaluateL2(evalInput({
+      context: baseContext({ sourceClass: 'web_fetch', sourceRiskTier: 'untrusted' }),
+      config: { ...policy, l2Screener: { ...policy.l2Screener, timeoutMs: 20 } },
+      testCompletion: ({ signal }) => new Promise<string>((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(new Error('Request was aborted')));
+      }),
+    }));
+    expect(outcome).toMatchObject({
+      kind: 'failed_closed',
+      action: 'quarantine',
+      cause: 'timeout',
+      error: 'L2 screener call timed out after 20ms',
+    });
+  });
+
+  it('labels a provider failure as failed, not a timeout', async () => {
+    const outcome = await evaluateL2(evalInput({}));
+    expect(outcome).toMatchObject({ kind: 'failed_closed', cause: 'failed' });
+  });
+
   it('never returns a silent-pass outcome on failure', async () => {
     const outcome = await evaluateL2(evalInput({}));
     // The only outcomes are skipped | classified | failed_closed. On a forced

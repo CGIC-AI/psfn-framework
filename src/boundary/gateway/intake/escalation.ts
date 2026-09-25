@@ -126,7 +126,7 @@ function l2Trace(
       };
     }
     case 'failed_closed':
-      return { status: 'failed_closed', reason: `L2 failed closed to ${outcome.action}` };
+      return { status: 'failed_closed', reason: `L2 failed closed to ${outcome.action} (${outcome.cause})` };
   }
 }
 

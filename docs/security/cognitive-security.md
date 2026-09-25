@@ -415,7 +415,13 @@ sees untrusted content but holds no tools and no capabilities. `evaluateL2`
 skips L2 for below-threshold, non-mandatory items (the trusted-tier fast path
 pays no latency), runs `screenL2` when the item escalates, and on failure
 produces a **per-tier fail-closed outcome** — quarantine for high-risk sources,
-L1-labels-only for trusted — never a silent pass. A flagged L2 verdict (or an
+L1-labels-only for trusted — never a silent pass. The fail-closed outcome
+carries a content-free cause (`timeout`, `provider_rejected`, or `failed`), and
+the semantic trace records it, so an `l2Screener.timeoutMs` too short for the
+routed `background` model shows up as timeouts rather than provider failures.
+The seed sizes the timeout for reasoning-class background models (30 s, the
+same order as L3); reduce it only for a fast non-reasoning classifier model.
+A flagged L2 verdict (or an
 L3-mandatory tier) returns an `escalate_l3` outcome; L2 routes, it never decides
 the L3 verdict (`l2-screener.ts#L1-L38`).
 

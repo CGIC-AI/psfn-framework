@@ -35,7 +35,7 @@ export interface GardenDoorAuthorizationAuditResult {
  * origin. Each admitted request is durably audited before a capability is
  * minted, and the capability carries the audited authority versions.
  */
-export type GardenDoorPrincipal =
+type GardenDoorPrincipal =
   | { readonly principalId: 'testing-harness'; readonly provider: 'testing_harness' }
   | {
     readonly principalId: typeof ADMIN_TOKEN_REQUEST_CAPABILITY_PRINCIPAL_ID;

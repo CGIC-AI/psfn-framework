@@ -5,6 +5,7 @@
 // assembly, the agent owns the state. Deps are callback-shaped because most
 // providers are null-until-wired after construction.
 
+import type { ScratchpadViewer } from '../../../faculties/memory/scratchpad-visibility.js';
 import type { ConcernViewer } from '../../intention/concern-visibility.js';
 import type { SubstrateMessage, ResponseStyle } from '../../../shared/contracts/runtime.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
@@ -351,9 +352,10 @@ export class PromptContextBuilder {
     });
   }
 
-  buildScratchpadContextBlock(): string {
+  buildScratchpadContextBlock(viewer: ScratchpadViewer): string {
     return buildScratchpadContextBlockForTurn({
       scratchpadProvider: this.deps.getScratchpadProvider(),
+      viewer,
       logger: this.deps.log,
     });
   }

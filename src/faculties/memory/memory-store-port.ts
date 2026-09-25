@@ -1,7 +1,7 @@
 import type { ScratchpadProvider } from '../../core/agent/scratchpad-port.js';
 import type { Awaitable } from '../../shared/utils/types.js';
 import type { MemoryListPosition } from './list-position.js';
-import type { ScratchpadEntry } from './scratchpad-types.js';
+import type { ScratchpadEntry, ScratchpadProvenance } from './scratchpad-types.js';
 import type {
   CoreMemoryAppendOptions,
   CoreMemoryBlock,
@@ -501,6 +501,8 @@ export function normalizeMemorySalienceUpdates(
 }
 
 export interface ScratchpadEntryCreateOptions {
+  /** Required: where the note was written (psfn-framework-yy0r2). */
+  provenance: ScratchpadProvenance;
   id?: string;
   now?: number;
 }
@@ -619,7 +621,7 @@ interface MemoryStorePortBackend extends ScratchpadProvider {
   listRecentContactShapes(): Awaitable<RecentContactShapeArtifact[]>;
   addScratchpadEntry(
     content: string,
-    options?: ScratchpadEntryCreateOptions,
+    options: ScratchpadEntryCreateOptions,
   ): Awaitable<ScratchpadAddResult>;
   replaceScratchpadEntry(
     id: string,
@@ -732,7 +734,7 @@ export interface MemoryStorePort extends ScratchpadProvider {
   upsertRecentContactShape(shape: RecentContactShapeArtifact): Promise<void>;
   getRecentContactShape(contactId: string): Promise<RecentContactShapeArtifact | undefined>;
   listRecentContactShapes(): Promise<RecentContactShapeArtifact[]>;
-  addScratchpadEntry(content: string, options?: ScratchpadEntryCreateOptions): Promise<ScratchpadAddResult>;
+  addScratchpadEntry(content: string, options: ScratchpadEntryCreateOptions): Promise<ScratchpadAddResult>;
   replaceScratchpadEntry(
     id: string,
     content: string,

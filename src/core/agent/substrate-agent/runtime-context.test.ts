@@ -1816,12 +1816,14 @@ describe('runtime subject identity', () => {
           : `Recent useful note ${index}: keep prompt-visible scratchpad context concise.`,
         createdAt: Date.parse('2026-05-11T04:00:00.000Z') + index,
         updatedAt: Date.parse('2026-05-11T04:10:00.000Z') + index,
+        provenance: { scope: 'companion_global' as const },
       })),
       ...Array.from({ length: 20 }, (_, index) => ({
         id: `stale-${index}`,
         content: `${staleFullText}${index}`,
         createdAt: Date.parse('2026-05-10T04:00:00.000Z') + index,
         updatedAt: Date.parse('2026-05-10T04:10:00.000Z') + index,
+        provenance: { scope: 'companion_global' as const },
       })),
     ];
 
@@ -1832,6 +1834,7 @@ describe('runtime subject identity', () => {
           return entries;
         },
       },
+      viewer: { channelId: 'api:room-a', trustLevel: 'regular' },
       logger: TEST_RUNTIME_CONTEXT_LOGGER,
     });
 
@@ -1851,18 +1854,21 @@ describe('runtime subject identity', () => {
         content: 'Recent useful note: run targeted runtime-context and core-memory tests.',
         createdAt: Date.parse('2026-05-11T04:00:00.000Z'),
         updatedAt: Date.parse('2026-05-11T04:15:00.000Z'),
+        provenance: { scope: 'companion_global' as const },
       },
       ...Array.from({ length: 7 }, (_, index) => ({
         id: `recent-budget-${index}`,
         content: `Recent budget filler ${index}: ${'keep only fresh scratchpad context '.repeat(12)}`,
         createdAt: Date.parse('2026-05-11T04:01:00.000Z') + index,
         updatedAt: Date.parse('2026-05-11T04:14:00.000Z') + index,
+        provenance: { scope: 'companion_global' as const },
       })),
       ...Array.from({ length: 12 }, (_, index) => ({
         id: `old-bulk-${index}`,
         content: stalePayload,
         createdAt: Date.parse('2026-05-09T04:00:00.000Z') + index,
         updatedAt: Date.parse('2026-05-09T04:10:00.000Z') + index,
+        provenance: { scope: 'companion_global' as const },
       })),
     ];
 
@@ -1870,6 +1876,7 @@ describe('runtime subject identity', () => {
       scratchpadProvider: {
         listScratchpadEntries: () => entries,
       },
+      viewer: { channelId: 'api:room-a', trustLevel: 'regular' },
       logger: TEST_RUNTIME_CONTEXT_LOGGER,
     });
     const visibleEntries = block
@@ -1883,6 +1890,32 @@ describe('runtime subject identity', () => {
     expect(block.length).toBeLessThan(2_000);
   });
 
+  it('renders only this conversation\'s and companion-global notes (yy0r2)', () => {
+    const entries = [
+      { id: 'here', content: 'note from this room', createdAt: 3, updatedAt: 3,
+        provenance: { scope: 'conversation' as const, channelId: 'api:room-a' } },
+      { id: 'elsewhere', content: 'PRIVATE note from another room', createdAt: 2, updatedAt: 2,
+        provenance: { scope: 'conversation' as const, channelId: 'companion-dm:peer' } },
+      { id: 'global', content: 'note for every room', createdAt: 1, updatedAt: 1,
+        provenance: { scope: 'companion_global' as const } },
+      { id: 'legacy', content: 'LEGACY note without provenance', createdAt: 0, updatedAt: 0,
+        provenance: { scope: 'unknown' as const } },
+    ];
+    const render = (trustLevel: 'public' | 'primary') => buildScratchpadContextBlock({
+      scratchpadProvider: { listScratchpadEntries: () => entries },
+      viewer: { channelId: 'api:room-a', trustLevel },
+      logger: TEST_RUNTIME_CONTEXT_LOGGER,
+    });
+    const publicView = render('public');
+    expect(publicView).toContain('note from this room');
+    expect(publicView).toContain('note for every room');
+    expect(publicView).not.toContain('PRIVATE note from another room');
+    expect(publicView).not.toContain('LEGACY note without provenance');
+    const primaryView = render('primary');
+    expect(primaryView).toContain('LEGACY note without provenance');
+    expect(primaryView).not.toContain('PRIVATE note from another room');
+  });
+
   it('warns when scratchpad context injection degrades after a provider failure', () => {
     const logger = { warn: vi.fn(), debug: vi.fn() };
 
@@ -1892,6 +1925,7 @@ describe('runtime subject identity', () => {
           throw new Error('scratchpad store unavailable');
         },
       },
+      viewer: { channelId: 'api:room-a', trustLevel: 'regular' },
       logger,
     })).toBe('');
 

@@ -4883,6 +4883,7 @@ describe('SubstrateAgent.handleMessage', () => {
           content: 'Remember to confirm backup status before restart.',
           createdAt: 1_700_000_000_000,
           updatedAt: 1_700_000_010_000,
+          provenance: { scope: 'conversation', channelId: 'test-channel' },
         },
       ]),
     });
@@ -4912,6 +4913,7 @@ describe('SubstrateAgent.handleMessage', () => {
           content: `note ${index} ${'x'.repeat(80)}`,
           createdAt: 1_700_000_000_000 + index,
           updatedAt: 1_700_000_000_000 + index,
+          provenance: { scope: 'companion_global' },
         })),
       ),
     });

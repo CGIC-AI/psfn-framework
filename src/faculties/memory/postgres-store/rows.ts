@@ -133,6 +133,8 @@ export interface ScratchpadRow {
   content: string;
   created_at: PgNumeric;
   updated_at: PgNumeric;
+  source_scope: string;
+  source_channel_id: string | null;
 }
 
 export interface CountRow {

@@ -631,8 +631,16 @@ export class AgentApiBackend {
 
       turnCompletion = this.observeTurnCompletion(pendingTurn.value.substrateMsg.id);
       activeRequest.markActive();
+      // p3of8: without a live delta consumer this reply is delivered only on
+      // completion, so a model stream that fails mid-reply may still fall back.
+      const turnMessage = params.onDelta
+        ? pendingTurn.value.substrateMsg
+        : {
+          ...pendingTurn.value.substrateMsg,
+          routing: { ...(pendingTurn.value.substrateMsg.routing ?? {}), bufferedTextDelivery: true as const },
+        };
       const turnPromise = this.agentLoop.handleMessage(
-        pendingTurn.value.substrateMsg,
+        turnMessage,
         undefined,
         pendingTurn.value.conversationScope
           ? { conversationScope: pendingTurn.value.conversationScope }

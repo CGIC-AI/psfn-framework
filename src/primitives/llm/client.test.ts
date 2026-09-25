@@ -1,3 +1,4 @@
+import { isRetryableError } from './retry.js';
 import { createHash } from 'node:crypto';
 import { fromAny } from '@total-typescript/shoehorn';
 import { Type } from '@sinclair/typebox';
@@ -1027,6 +1028,26 @@ describe('LLMClient provider observability', () => {
     expect(streamedVisibleText.join('')).toBe(expected);
     expect(response.content).toBe(expected);
     expect(response.stopReason).toBe('unknown');
+  });
+
+  it('does not deliver a withheld kimi-k3 tail when the stream fails (p3of8)', async () => {
+    const client = new LLMClient(makeKimiConfig(), {});
+    mocks.streamSimple.mockImplementation(async function* kimiStreamThatFails() {
+      yield { type: 'text_delta', delta: '<|end_' };
+      yield { type: 'error', reason: 'error', error: { errorMessage: 'terminated' } };
+    });
+    const streamedVisibleText: string[] = [];
+    const failure = await client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Reply normally' }],
+    }, {
+      onText: delta => streamedVisibleText.push(delta),
+    }).then(() => null, (error: unknown) => error as Error);
+
+    expect(failure?.message).toContain('terminated');
+    // Nothing was shown, so the failure must stay retryable for fallback.
+    expect(streamedVisibleText).toEqual([]);
+    expect(isRetryableError(failure!, ['terminated'])).toBe(true);
   });
 
   it('preserves end-message-looking text outside the proven kimi-k3 terminal position', () => {

@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  restoreContactAfterMutation,
+  snapshotContactNotes,
+  sweepHarnessContactNote,
   removeHarnessSkill,
   scratchpadRoundTripFailures,
   sweepHarnessSkills,
@@ -93,4 +96,64 @@ test('a scratchpad note left in Postgres after the case is a cleanup error', asy
     token,
   });
   assert.deepEqual(gone.cleanupErrors, []);
+});
+
+function fakeContactGarden(contact) {
+  const state = { ...contact, channelIdentities: [...(contact.channelIdentities ?? [])] };
+  const adminRequest = async (method, path, body) => {
+    const detail = /^\/api\/admin\/contacts\/([^/]+)$/u.exec(path);
+    const detach = /^\/api\/admin\/contacts\/([^/]+)\/unlink$/u.exec(path);
+    if (method === 'GET' && detail) return { ok: true, status: 200, body: { contact: { ...state } } };
+    if (method === 'PATCH' && detail) {
+      state.notes = body.notes;
+      return { ok: true, status: 200, body: {} };
+    }
+    if (method === 'POST' && detach) {
+      state.channelIdentities = state.channelIdentities.filter(
+        (entry) => !(entry.channel === body.channel && entry.userId === body.userId),
+      );
+      return { ok: true, status: 200, body: {} };
+    }
+    return { ok: false, status: 404, body: null };
+  };
+  return { state, adminRequest };
+}
+
+test('contact_mutation cleanup restores the original notes and detaches the case identity (ob6w1)', async () => {
+  const garden = fakeContactGarden({ id: 'contact-api', notes: 'Prefers morning check-ins.', channelIdentities: [{ channel: 'api', userId: 'api-key-x' }] });
+  const originalNotes = await snapshotContactNotes({ adminRequest: garden.adminRequest, contactId: 'contact-api' });
+  // What the case leaves behind.
+  garden.state.notes = 'matrix-note-2026-09-25T06-10-00-000Z';
+  garden.state.channelIdentities.push({ channel: 'matrix', userId: 'matrix-user-tok' });
+
+  const result = await restoreContactAfterMutation({
+    adminRequest: garden.adminRequest,
+    contactId: 'contact-api',
+    originalNotes,
+    noteToken: 'matrix-note-2026-09-25T06-10-00-000Z',
+    linkedUserId: 'matrix-user-tok',
+  });
+  assert.deepEqual(result.cleanupErrors, []);
+  assert.equal(garden.state.notes, 'Prefers morning check-ins.');
+  assert.deepEqual(garden.state.channelIdentities, [{ channel: 'api', userId: 'api-key-x' }]);
+});
+
+test('a contact restore that does not stick is a cleanup error', async () => {
+  const garden = fakeContactGarden({ id: 'c', notes: 'matrix-note-tok', channelIdentities: [] });
+  const ignoringPatch = async (method, path, body) => (
+    method === 'PATCH' ? { ok: true, status: 200, body: {} } : garden.adminRequest(method, path, body)
+  );
+  const result = await restoreContactAfterMutation({
+    adminRequest: ignoringPatch, contactId: 'c', originalNotes: '', noteToken: 'matrix-note-tok', linkedUserId: 'u',
+  });
+  assert.ok(result.cleanupErrors.includes('contact notes not restored after cleanup'));
+});
+
+test('the startup sweep clears only notes that are exactly a harness marker', async () => {
+  const residue = fakeContactGarden({ id: 'c', notes: 'matrix-note-2026-09-24T22-51-02-294Z' });
+  assert.equal(await sweepHarnessContactNote({ adminRequest: residue.adminRequest, contactId: 'c' }), true);
+  assert.equal(residue.state.notes, '');
+  const real = fakeContactGarden({ id: 'c', notes: 'Real notes mentioning matrix-note-x inline.' });
+  assert.equal(await sweepHarnessContactNote({ adminRequest: real.adminRequest, contactId: 'c' }), false);
+  assert.equal(real.state.notes, 'Real notes mentioning matrix-note-x inline.');
 });

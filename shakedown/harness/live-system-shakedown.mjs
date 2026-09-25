@@ -87,8 +87,12 @@ import { malformedAnswerFeedback, readAssistantAnswer } from './lib/assistant-an
 import { buildMemoryTierCases } from './cases/memory-tiers.mjs';
 import { isBeadsIssueId } from './lib/beads.mjs';
 import { validateMemoryLookupAnswer } from './lib/memory-lookup-answer.mjs';
+import { resolveFixtureAdminToken } from './lib/fixture-admin.mjs';
 import {
   countHarnessScratchpadResidue,
+  restoreContactAfterMutation,
+  snapshotContactNotes,
+  sweepHarnessContactNote,
   removeHarnessSkill,
   scratchpadRoundTripFailures,
   sweepHarnessSkills,
@@ -128,6 +132,7 @@ const CONFIG = (() => {
       apiKey: targetContract.apiKey,
       adminToken: targetContract.adminToken,
       companionId: targetContract.companionId,
+      fixtureAdminToken: resolveFixtureAdminToken(targetContract),
       outputPath: requireEnv('PSFN_SHAKEDOWN_OUTPUT', 'per-phase run JSON path'),
       repoRoot: requireEnv('PSFN_REPO_ROOT', 'RC repo clone under test'),
       workspacePath: requireEnv('WORKSPACE_PATH', 'companion Personal Workspace root'),
@@ -1138,9 +1143,11 @@ function summarizeTurn(turn) {
 function adminRequest(method, path, body) {
   return fetchJson(`${ADMIN_BASE}${path}`, {
     method,
-    ...(body === undefined
-      ? {}
-      : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+    headers: {
+      Authorization: `Bearer ${CONFIG.fixtureAdminToken}`,
+      ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+    },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
 }
 
@@ -1179,7 +1186,7 @@ async function fetchJson(url, init = {}, timeoutMs = DEFAULT_FETCH_TIMEOUT_MS) {
   }
   try {
     const headers = new Headers(init.headers ?? {});
-    if (typeof url === 'string' && url.startsWith(ADMIN_BASE) && ADMIN_TOKEN) {
+    if (typeof url === 'string' && url.startsWith(ADMIN_BASE) && ADMIN_TOKEN && !headers.has('Authorization')) {
       headers.set('Authorization', `Bearer ${ADMIN_TOKEN}`);
     }
     if (typeof url === 'string' && url.startsWith(API_BASE) && API_KEY && !headers.has('Authorization')) {
@@ -2397,6 +2404,7 @@ function buildBaselineCases(ctx) {
 
 function buildApprenticeCases(ctx) {
   const contactNote = `matrix-note-${ctx.runToken}`;
+  let contactNotesSnapshot = null;
   const linkedIdentity = `identity-${ctx.runToken}`;
   const valueInitial = `matrix-value-${ctx.runToken}`;
   const valueUpdated = `matrix-value-updated-${ctx.runToken}`;
@@ -2420,6 +2428,13 @@ function buildApprenticeCases(ctx) {
         + 'Do not call any non-contact tool unless one of those exact calls errors. '
         + 'If a direct tool call fails, report the exact tool error. '
         + 'Return only a JSON object with keys noted, linked, and privacy.',
+      // Harness-owned restore (ob6w1): the note action replaces the contact's
+      // notes, so snapshot them and put them back, detach the case identity,
+      // and prove both.
+      before: async () => {
+        contactNotesSnapshot = await snapshotContactNotes({ adminRequest, contactId: ctx.primaryContactId });
+        return { contactNotesSnapshotted: true };
+      },
       after: async () => ({
         primaryContact: readJsonIfExists(ctx.primaryContactPath),
       }),
@@ -2427,6 +2442,17 @@ function buildApprenticeCases(ctx) {
         sideChecksContainText(sideChecks, contactNote) && sideChecksContainText(sideChecks, linkedIdentity)
           ? []
           : ['contact_mutation must persist the note and linked identity']
+      ),
+      cleanup: async () => (
+        contactNotesSnapshot === null
+          ? { cleanup: {}, cleanupErrors: ['contact notes were not snapshotted before the case'] }
+          : await restoreContactAfterMutation({
+            adminRequest,
+            contactId: ctx.primaryContactId,
+            originalNotes: contactNotesSnapshot,
+            noteToken: contactNote,
+            linkedUserId: linkedIdentity,
+          })
       ),
     },
     {
@@ -3832,6 +3858,12 @@ async function main() {
   }
   const promptInventory = await fetchJson(`${ADMIN_BASE}/api/admin/prompts`);
   const ctx = buildBaseContext();
+  if (ctx.primaryContactId) {
+    // Earlier runs left the primary contact's notes as a bare harness marker (ob6w1).
+    if (await sweepHarnessContactNote({ adminRequest, contactId: ctx.primaryContactId })) {
+      console.error(JSON.stringify({ event: 'harness_contact_note_residue_swept', contactId: ctx.primaryContactId }));
+    }
+  }
   ctx.promptInventory = promptInventory.body ?? null;
   ctx.promptToggleLayer = selectRuntimePromptLayer(promptInventory.body, 'runtime.last_message_received');
   ctx.promptBaseLayer = selectPromptLayerByType(promptInventory.body, 'base');

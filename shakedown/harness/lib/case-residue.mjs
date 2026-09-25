@@ -104,3 +104,91 @@ export async function countHarnessScratchpadResidue({ pgAll }) {
   const rows = await pgAll('select id from scratchpad_entries where content like $1', [`${HARNESS_SCRATCHPAD_PREFIX}%`]);
   return rows.length;
 }
+
+export const HARNESS_CONTACT_NOTE_PREFIX = 'matrix-note-';
+const HARNESS_LINKED_CHANNEL = 'matrix';
+const HARNESS_CONTACT_NOTE_ONLY = /^matrix-note-\S+$/u;
+
+function contactOf(detailBody) {
+  const contact = detailBody?.contact;
+  if (!contact || typeof contact !== 'object') throw new Error('contact detail must contain a contact');
+  return contact;
+}
+
+function hasLinkedHarnessIdentity(contact, userId) {
+  const identities = [
+    ...(Array.isArray(contact.channelIdentities) ? contact.channelIdentities : []),
+    ...(Array.isArray(contact.channels) ? contact.channels : []),
+  ];
+  return identities.some((entry) => entry?.channel === HARNESS_LINKED_CHANNEL && entry?.userId === userId);
+}
+
+function contactPath(contactId) {
+  return `/api/admin/contacts/${encodeURIComponent(contactId)}`;
+}
+
+/**
+ * contact_mutation replaces the primary contact's notes with a
+ * `matrix-note-<token>` marker and links a `matrix` identity; nothing restored
+ * them, so the marker stayed on the API contact across rounds
+ * (psfn-framework-ob6w1). The case snapshots the notes before dispatch; its
+ * cleanup restores them, detaches the case identity, and proves both.
+ */
+export async function snapshotContactNotes({ adminRequest, contactId }) {
+  const detail = await adminRequest('GET', contactPath(contactId));
+  if (!detail?.ok) throw new Error(`contact snapshot unavailable (${detail?.status ?? 'no response'})`);
+  const notes = contactOf(detail.body).notes;
+  return typeof notes === 'string' ? notes : '';
+}
+
+export async function restoreContactAfterMutation({ adminRequest, contactId, originalNotes, noteToken, linkedUserId }) {
+  if (!noteToken.startsWith(HARNESS_CONTACT_NOTE_PREFIX)) {
+    throw new Error(`refusing to restore contact notes for non-harness token ${noteToken}`);
+  }
+  const cleanupErrors = [];
+  const path = contactPath(contactId);
+  const current = await adminRequest('GET', path);
+  if (!current?.ok) {
+    return { cleanup: {}, cleanupErrors: [`contact detail unavailable (${current?.status ?? 'no response'})`] };
+  }
+  const contact = contactOf(current.body);
+  if ((contact.notes ?? '') !== originalNotes) {
+    const patched = await adminRequest('PATCH', path, { notes: originalNotes });
+    if (!patched?.ok) cleanupErrors.push(`could not restore contact notes (${patched?.status ?? 'no response'})`);
+  }
+  if (hasLinkedHarnessIdentity(contact, linkedUserId)) {
+    const detached = await adminRequest('POST', `${path}/unlink`, { channel: HARNESS_LINKED_CHANNEL, userId: linkedUserId });
+    if (!detached?.ok) cleanupErrors.push(`could not detach the ${HARNESS_LINKED_CHANNEL} identity (${detached?.status ?? 'no response'})`);
+  }
+  const verify = await adminRequest('GET', path);
+  if (!verify?.ok) {
+    cleanupErrors.push('contact detail unavailable for post-cleanup verification');
+  } else {
+    const verified = contactOf(verify.body);
+    if ((verified.notes ?? '') !== originalNotes) cleanupErrors.push('contact notes not restored after cleanup');
+    if (hasLinkedHarnessIdentity(verified, linkedUserId)) {
+      cleanupErrors.push(`${HARNESS_LINKED_CHANNEL} identity still attached after cleanup`);
+    }
+  }
+  return { cleanup: { notesRestored: cleanupErrors.length === 0 }, cleanupErrors };
+}
+
+/**
+ * Earlier runs left the contact's notes as a bare harness marker. At startup
+ * a notes value that is exactly one marker is cleared (the original was
+ * overwritten and cannot be recovered); returns true when it was cleared.
+ */
+export async function sweepHarnessContactNote({ adminRequest, contactId }) {
+  const path = contactPath(contactId);
+  const detail = await adminRequest('GET', path);
+  if (!detail?.ok) throw new Error(`contact detail unavailable (${detail?.status ?? 'no response'})`);
+  const notes = contactOf(detail.body).notes;
+  if (typeof notes !== 'string' || !HARNESS_CONTACT_NOTE_ONLY.test(notes.trim())) return false;
+  const patched = await adminRequest('PATCH', path, { notes: '' });
+  if (!patched?.ok) throw new Error(`could not clear harness contact note residue (${patched?.status ?? 'no response'})`);
+  const verify = await adminRequest('GET', path);
+  if (!verify?.ok || (contactOf(verify.body).notes ?? '') !== '') {
+    throw new Error('harness contact note residue still present after the sweep');
+  }
+  return true;
+}

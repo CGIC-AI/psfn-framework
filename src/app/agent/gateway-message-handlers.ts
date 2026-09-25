@@ -1,4 +1,8 @@
 import type { AgentResponse, Attachment, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import {
+  loadIcpAppraisalPrecedingContext,
+  type IcpAppraisalContextSource,
+} from '../../core/participation/icp-inbound-context.js';
 import type { MessageHandlerOptions } from '../../channels/backplane/types.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
@@ -440,6 +444,12 @@ export interface GatewayMessageHandlersDeps {
   nowMonotonicMs?: () => number;
   /** Durable non-preempting ingress used while protected autonomous work owns availability. */
   protectedMessageQueue?: CompanionProtectedMessageQueuePort;
+  /**
+   * Reader for the receiving companion's own companion-dm history, so the
+   * inbound ICP reply/no-reply appraisal sees the conversation it is judging
+   * instead of a lone trigger line (psfn-framework-p6s1f).
+   */
+  icpAppraisalContext: IcpAppraisalContextSource;
 }
 
 export interface RegisteredGatewayMessageHandlers {
@@ -467,6 +477,7 @@ export function registerGatewayMessageHandlers(
     outboundReplyGuard,
     companionAuthorName,
     eventBus,
+    icpAppraisalContext,
   } = deps;
   const localCompanionId = resolveCompanionIdFromConfig(config);
   const targetHumanRelayReplayGuard = createInMemoryHumanRelayReplayGuard();
@@ -705,7 +716,11 @@ export function registerGatewayMessageHandlers(
       triggerTimestampMs: timestampMs,
       matchedName: false,
       matchedDirectAddress: correlation.surface === 'companion_dm',
-      precedingContext: [],
+      precedingContext: await loadIcpAppraisalPrecedingContext(icpAppraisalContext, {
+        channelId: message.channelId,
+        messageId: message.id,
+        timestampMs,
+      }),
       createdAtMs: nowArbiterMs(),
     };
     const result = await appraiseParticipationCandidate(candidate);
@@ -723,6 +738,18 @@ export function registerGatewayMessageHandlers(
       failClosed: result?.failClosed ?? true,
     });
     if (appraisal.action === 'reply') return undefined;
+    // A declined ICP turn is a real outcome, not a stall: say so in the log
+    // next to the receive line (the durable record is the suppressed
+    // icp_delivery observation written by the delivery lifecycle).
+    log.info('Inbound ICP message declined before generation', {
+      channelId: message.channelId,
+      messageId: message.id,
+      action: appraisal.action,
+      reasonCode: appraisal.reasonCode,
+      confidence: appraisal.confidence,
+      failClosed: result?.failClosed ?? true,
+      precedingContextCount: candidate.precedingContext.length,
+    });
     return {
       source: 'participation_appraiser',
       reasonCode: appraisal.reasonCode,

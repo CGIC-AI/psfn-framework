@@ -2451,6 +2451,10 @@ async function main(): Promise<void> {
     outboundReplyGuard,
     companionAuthorName: card.data.name,
     protectedMessageQueue: companionAvailability,
+    icpAppraisalContext: {
+      reader: sessionStore,
+      messageLimit: schedulerConfig.socialAutonomy.passiveNameCandidate.precedingContextMessages,
+    },
   });
   const unregisterIcpTargetChannelInitiationCommand = registerIcpTargetChannelInitiationCommand(
     registeredGatewayMessageHandlers.icpTargetChannelInitiator,

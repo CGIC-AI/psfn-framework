@@ -332,6 +332,10 @@ async function main(): Promise<void> {
     log: logger,
     trackSessionActivity: () => undefined,
     companionAuthorName: identity.card.data.name,
+    icpAppraisalContext: {
+      reader: sessionRuntime.sessionStore,
+      messageLimit: startup.schedulerConfig.socialAutonomy.passiveNameCandidate.precedingContextMessages,
+    },
   });
   const autonomy = createAgentFacingIcpAutonomyRuntime({
     contactStore,

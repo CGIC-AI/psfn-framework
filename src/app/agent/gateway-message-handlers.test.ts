@@ -100,6 +100,7 @@ function createDeferred<T>() {
 function createHarness(overrides?: {
   eventBus?: EventBus;
   nowMonotonicMs?: () => number;
+  icpHistory?: SessionEntry[];
   config?: SubstrateConfig;
   delegateSatelliteSession?: (request: {
     message: SubstrateMessage;
@@ -298,6 +299,10 @@ function createHarness(overrides?: {
       : {}),
     companionAuthorName: 'Selene',
     ...(overrides?.nowMonotonicMs ? { nowMonotonicMs: overrides.nowMonotonicMs } : {}),
+    icpAppraisalContext: {
+      reader: { getRecent: (channelId: string) => (overrides?.icpHistory ?? []).filter(entry => entry.channelId === channelId) },
+      messageLimit: 6,
+    },
   });
 
   if (!onHandleMessage || !onDiscordMessage || !onCompanionMessage || !onCompanionDeliveryFailure) {
@@ -1444,6 +1449,49 @@ describe('registerGatewayMessageHandlers', () => {
     expect(harness.gateway.companionEndIcpEpisodeActivity).toHaveBeenCalledWith({
       conversationId: inboundIcpCorrelation.conversationId,
       reasonCode: 'conversation_ended',
+    });
+  });
+
+  it('appraises an inbound ICP turn with its own DM history and logs a typed decline (p6s1f)', async () => {
+    const participationAppraiser: ParticipationAppraiserPort = {
+      appraise: vi.fn(async () => ({
+        appraisal: { action: 'ignore', reasonCode: 'decision_backend', confidence: 0.61 },
+        failClosed: false,
+      })),
+    };
+    const history: SessionEntry[] = [
+      { id: 1, channelId: ICP_CHANNEL, role: 'assistant', content: 'Earlier I asked about the runbook.', timestamp: 1_000 },
+      { id: 2, channelId: ICP_CHANNEL, role: 'tool', content: '{"tool":"output"}', timestamp: 1_100 },
+      { id: 3, channelId: ICP_CHANNEL, role: 'system', content: '{"kind":"icp_delivery"}', timestamp: 1_200 },
+      { id: 4, channelId: ICP_CHANNEL, role: 'user', authorName: 'Nova', content: 'Runbook v2 is stamped.', timestamp: 1_300 },
+      { id: 5, channelId: 'api:someone-else', role: 'user', content: 'other conversation text', timestamp: 1_400 },
+    ];
+    const harness = createHarness({
+      config: { companionId: ICP_B, multiCompanion: true } as SubstrateConfig,
+      participationAppraiser,
+      icpHistory: history,
+      handleMessage: async () => makeResponse(''),
+    });
+
+    await harness.onCompanionMessage(makeCorrelatedCompanionMessage());
+
+    await vi.waitFor(() => {
+      expect(participationAppraiser.appraise).toHaveBeenCalledOnce();
+    });
+    const candidate = vi.mocked(participationAppraiser.appraise).mock.calls[0]![0];
+    expect(candidate.precedingContext.map(entry => entry.content)).toEqual([
+      'Earlier I asked about the runbook.',
+      'Runbook v2 is stamped.',
+    ]);
+    expect(JSON.stringify(candidate)).not.toContain('other conversation text');
+    await vi.waitFor(() => {
+      expect(harness.log.info).toHaveBeenCalledWith('Inbound ICP message declined before generation', expect.objectContaining({
+        channelId: ICP_CHANNEL,
+        messageId: INBOUND_ICP_MESSAGE_ID,
+        reasonCode: 'decision_backend',
+        confidence: 0.61,
+        precedingContextCount: 2,
+      }));
     });
   });
 

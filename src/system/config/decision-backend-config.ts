@@ -21,6 +21,9 @@ export type DecisionLocalQuestionMode = typeof DECISION_LOCAL_QUESTION_MODES[num
 /** Stable decision-site ids. Unknown ids in settings reject (fail closed). */
 export const DECISION_SITE_IDS = [
   'participation.appraise',
+  // Private companion-to-companion (ICP) reply appraisal. Its state carries
+  // private DM history, so it is companion_private and always answers locally.
+  'participation.appraise_dm',
   'room.ambiguity',
   'memory.rerank',
   'memory.query_intent',

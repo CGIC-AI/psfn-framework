@@ -88,6 +88,13 @@ import { buildMemoryTierCases } from './cases/memory-tiers.mjs';
 import { isBeadsIssueId } from './lib/beads.mjs';
 import { validateMemoryLookupAnswer } from './lib/memory-lookup-answer.mjs';
 import {
+  countHarnessScratchpadResidue,
+  removeHarnessSkill,
+  scratchpadRoundTripFailures,
+  sweepHarnessSkills,
+  verifyScratchpadNoteRemoved,
+} from './lib/case-residue.mjs';
+import {
   restorePromptLayers,
   snapshotPromptLayers,
   sweepHarnessPromptMarkers,
@@ -173,7 +180,6 @@ const TURN_RECORDS_DIR = optionalEnv('PSFN_TURN_RECORDS_DIR') ?? `${SESSIONS_DIR
 const CHANNEL_INDEX_PATH = `${SESSIONS_DIR}/_channel_index.json`;
 const HEARTBEAT_POLICY_PATH = `${COMPANION_DATA_DIR}/state/heartbeat-policy.json`;
 const VALUES_JOURNAL_PATH = `${COMPANION_DATA_DIR}/state/notes/values.jsonl`;
-const SCRATCHPAD_JSON_PATH = `${COMPANION_DATA_DIR}/state/notes/scratchpad.json`;
 const MEMORIES_JOURNAL_PATH = `${COMPANION_DATA_DIR}/state/notes/memories.jsonl`;
 const CORE_MEMORY_JSON_PATH = `${COMPANION_DATA_DIR}/state/core_memory.json`;
 const NORTH_STAR_JSON_PATH = `${COMPANION_DATA_DIR}/state/north-star.json`;
@@ -2305,20 +2311,16 @@ function buildBaselineCases(ctx) {
       message:
         `Use scratchpad with action "add" and content "${scratchpadToken}". `
         + 'Then use scratchpad with action "list". '
+        + 'Then use scratchpad with action "remove" with the id returned by the add call. '
         + 'Do not use any tool besides scratchpad. '
         + 'If a direct tool call fails, report the exact tool error instead of paraphrasing. '
-        + 'Return only a JSON object with keys wrote and readBack.',
-      after: async () => ({
-        scratchpadDbRows: await pgAll(
-          `select id, content, created_at from scratchpad_entries where content like '%${scratchpadToken}%';`,
-        ),
-        scratchpadJson: readJsonIfExists(SCRATCHPAD_JSON_PATH),
-      }),
-      validateSideEffects: ({ sideChecks }) => (
-        sideChecksContainText(sideChecks, scratchpadToken)
-          ? []
-          : ['scratchpad_roundtrip must persist the scratchpad token']
+        + 'Return only a JSON object with keys wrote, readBack, and removed.',
+      // A real round trip that leaves no residue (ob6w1): the persisted tool
+      // results prove add/list/remove and cleanup proves the row is gone.
+      validateParsedAssistant: ({ archiveToolMessages }) => (
+        scratchpadRoundTripFailures(archiveToolMessages, scratchpadToken)
       ),
+      cleanup: async () => await verifyScratchpadNoteRemoved({ pgAll, token: scratchpadToken }),
     },
     {
       id: 'memory_write_private',
@@ -2834,6 +2836,8 @@ function buildCoverageCases(ctx) {
           ? []
           : ['skill_manage must persist the updated managed skill content']
       ),
+      // The case-created skill is removed through Garden and proven absent (ob6w1).
+      cleanup: async () => await removeHarnessSkill({ adminRequest, name: skillName }),
     },
     {
       id: 'orient_append',
@@ -3815,6 +3819,16 @@ async function main() {
   const sweptPromptMarkerLayers = await sweepHarnessPromptMarkers({ adminRequest });
   if (sweptPromptMarkerLayers.length > 0) {
     console.error(JSON.stringify({ event: 'prompt_marker_residue_swept', layerIds: sweptPromptMarkerLayers }));
+  }
+  const sweptHarnessSkills = await sweepHarnessSkills({ adminRequest });
+  if (sweptHarnessSkills.length > 0) {
+    console.error(JSON.stringify({ event: 'harness_skill_residue_swept', skills: sweptHarnessSkills }));
+  }
+  // Scratchpad notes live in the running agent's store; earlier runs' notes
+  // are reported (they expire within 24h and render only in their own room).
+  const scratchpadResidue = await countHarnessScratchpadResidue({ pgAll });
+  if (scratchpadResidue > 0) {
+    console.error(JSON.stringify({ event: 'harness_scratchpad_residue_present', count: scratchpadResidue }));
   }
   const promptInventory = await fetchJson(`${ADMIN_BASE}/api/admin/prompts`);
   const ctx = buildBaseContext();

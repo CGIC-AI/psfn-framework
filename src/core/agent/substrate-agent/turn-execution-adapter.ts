@@ -1,4 +1,5 @@
 import type { Agent } from '../../../boundary/pi-agent/index.js';
+import type { ScratchpadViewer } from '../../../faculties/memory/scratchpad-visibility.js';
 import type { AssistantMessage } from '@earendil-works/pi-ai';
 import type { EventBus } from '../../../shared/event-bus.js';
 import type { CostTelemetryPort } from '../../../shared/telemetry/cost-telemetry-port.js';
@@ -69,7 +70,7 @@ interface TurnExecutionAdapterCallbacks {
   ensureModel: (message?: SubstrateMessage) => void;
   captureTurnPromptSnapshot: (ctx: ComposeContext) => import('../../turns/snapshot.js').TurnPromptSnapshot;
   captureAuthoritativeSystemPrompt?: (systemPrompt: string) => void;
-  buildScratchpadContextBlock: () => string;
+  buildScratchpadContextBlock: (viewer: ScratchpadViewer) => string;
   normalizeTurnPromptOverride: (message: SubstrateMessage) => MessagePromptOverride;
   resolveResponseStyle: (
     message: SubstrateMessage,
@@ -340,7 +341,7 @@ export function createTurnExecutionRuntimeAdapter(
           .captureAuthoritativeSystemPrompt?.(systemPrompt),
       }
       : {}),
-    buildScratchpadContextBlock: () => options.callbacks.buildScratchpadContextBlock(),
+    buildScratchpadContextBlock: (viewer) => options.callbacks.buildScratchpadContextBlock(viewer),
     normalizeTurnPromptOverride: (message) => options.callbacks.normalizeTurnPromptOverride(message),
     resolveResponseStyle: (message, channelType, channelMeta) => options.callbacks
       .resolveResponseStyle(message, channelType, channelMeta),

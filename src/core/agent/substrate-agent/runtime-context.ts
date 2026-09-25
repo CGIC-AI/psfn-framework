@@ -1,4 +1,8 @@
 import { isRecord } from '../../../shared/utils/types.js';
+import {
+  partitionScratchpadEntriesForViewer,
+  type ScratchpadViewer,
+} from '../../../faculties/memory/scratchpad-visibility.js';
 import { filterConcernsForViewer, type ConcernViewer } from '../../intention/concern-visibility.js';
 import type { AgentTool } from '../../../boundary/pi-agent/index.js';
 import type {
@@ -614,12 +618,17 @@ export function buildBehavioralNotesContextBlock(input: {
 
 export function buildScratchpadContextBlock(input: {
   scratchpadProvider: ScratchpadProvider | null | undefined;
+  /** The turn's conversation and trust; other conversations' notes never render. */
+  viewer: ScratchpadViewer;
   logger: RuntimeContextLogger;
 }): string {
   if (!input.scratchpadProvider) return '';
 
   try {
-    const entries = input.scratchpadProvider.listScratchpadEntries(SCRATCHPAD_PROMPT_SCAN_LIMIT);
+    const { visible: entries } = partitionScratchpadEntriesForViewer(
+      input.scratchpadProvider.listScratchpadEntries(SCRATCHPAD_PROMPT_SCAN_LIMIT),
+      input.viewer,
+    );
     if (entries.length === 0) return '';
 
     const lines = [

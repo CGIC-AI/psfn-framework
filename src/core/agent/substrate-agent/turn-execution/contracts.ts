@@ -1,4 +1,5 @@
 import type { Agent, AgentMessage, AgentTool } from '../../../../boundary/pi-agent/index.js';
+import type { ScratchpadViewer } from '../../../../faculties/memory/scratchpad-visibility.js';
 import type { AssistantMessage } from '@earendil-works/pi-ai';
 import type { EventBus, EventMap } from '../../../../shared/event-bus.js';
 import type { CostTelemetryPort } from '../../../../shared/telemetry/cost-telemetry-port.js';
@@ -256,7 +257,7 @@ export interface TurnExecutionRuntime {
   ensureModel: (message?: SubstrateMessage) => void;
   captureTurnPromptSnapshot: (ctx: ComposeContext) => TurnPromptSnapshot;
   captureAuthoritativeSystemPrompt?: (systemPrompt: string) => void;
-  buildScratchpadContextBlock: () => string;
+  buildScratchpadContextBlock: (viewer: ScratchpadViewer) => string;
   normalizeTurnPromptOverride: (message: SubstrateMessage) => MessagePromptOverride;
   resolveResponseStyle: (
     message: SubstrateMessage,

@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionEntry } from '../session/types.js';
 import { loadIcpAppraisalPrecedingContext } from './icp-inbound-context.js';
-import { buildAppraisalDecisionQuestions } from './appraiser-decision.js';
 
 const DM = 'companion-dm:aaaaaaaa-0000-4000-8000-00000000000a:bbbbbbbb-0000-4000-8000-00000000000b';
 
@@ -44,13 +43,5 @@ describe('loadIcpAppraisalPrecedingContext (p6s1f)', () => {
       { reader: { getRecent: () => [] }, messageLimit: -1 },
       { channelId: DM, messageId: 'x', timestampMs: 1 },
     )).rejects.toThrow('non-negative integer');
-  });
-});
-
-describe('companion_dm decision framing (p6s1f)', () => {
-  it('frames the trigger as a direct message in the private conversation, not a group mention', () => {
-    const instructions = buildAppraisalDecisionQuestions('companion_dm').action!.instructions;
-    expect(instructions).toContain('sent directly to');
-    expect(instructions).not.toContain('usually not an invitation to speak');
   });
 });

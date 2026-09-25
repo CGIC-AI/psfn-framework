@@ -1205,7 +1205,9 @@ export async function computePreTurnState(input: {
     });
   }
   const wikiContextBlock = wikiContext?.block ?? '';
-  const scratchpadBlock = runtime.buildScratchpadContextBlock();
+  // Only notes written in this conversation (or marked companion-global)
+  // render here (psfn-framework-yy0r2).
+  const scratchpadBlock = runtime.buildScratchpadContextBlock({ channelId: message.channelId, trustLevel });
   observability.emitObservedTurnStage('memory', {
     durationMs: Date.now() - memoryStageStart,
     hasMemoryProvider: memoryProvider != null,

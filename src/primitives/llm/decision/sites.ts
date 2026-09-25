@@ -14,7 +14,11 @@ import type { DecisionSiteId } from '../../../system/config/decision-backend-con
 import type { DecisionSitePrivacy } from './types.js';
 
 const SITE_PRIVACY: Readonly<Record<DecisionSiteId, DecisionSitePrivacy>> = {
+  // Group-room appraisal: quoted room lines only, no private history.
   'participation.appraise': 'shareable',
+  // Private companion-dm (ICP) appraisal carries the conversation's own recent
+  // turns (psfn-framework-p6s1f); private DM content never leaves the process.
+  'participation.appraise_dm': 'companion_private',
   'room.ambiguity': 'shareable',
   'memory.rerank': 'shareable',
   'memory.query_intent': 'shareable',

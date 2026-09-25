@@ -886,7 +886,7 @@ class PostgresMemoryStore implements PostgresMemoryStorePort {
 
   async addScratchpadEntry(
     content: string,
-    options: ScratchpadEntryCreateOptions = {},
+    options: ScratchpadEntryCreateOptions,
   ): Promise<ScratchpadAddResult> {
     return await this.scratchpad.addScratchpadEntry(content, options);
   }

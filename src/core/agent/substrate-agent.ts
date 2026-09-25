@@ -1888,7 +1888,7 @@ export class SubstrateAgent {
         captureAuthoritativeSystemPrompt: (systemPrompt) => {
           this.currentAuthoritativeSystemPrompt = systemPrompt.trim() || null;
         },
-        buildScratchpadContextBlock: () => this.promptContextBuilder.buildScratchpadContextBlock(),
+        buildScratchpadContextBlock: (viewer) => this.promptContextBuilder.buildScratchpadContextBlock(viewer),
         normalizeTurnPromptOverride: (turnMessage) => this.normalizeTurnPromptOverride(turnMessage),
         resolveResponseStyle: (turnMessage, channelType, channelMeta) => this.resolveResponseStyle(
           turnMessage,

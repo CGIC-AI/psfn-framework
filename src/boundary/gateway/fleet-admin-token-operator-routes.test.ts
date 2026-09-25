@@ -44,20 +44,19 @@ const NOW_SECONDS = 1_783_000_000;
 const ISSUER = 'fleet-admin-token-routes-test';
 
 /**
- * Mutations that are not reachable by ANY fleet operator door, or that only
- * exist to complete an SSO identity ceremony. Each needs a reason; the list is
- * closed so a new SSO-only operator mutation cannot hide here.
+ * Mutations the ADMIN_TOKEN operator cannot perform because they are
+ * inherently the subject's OWN proof of controlling an identity (the Discord
+ * OAuth callback of the account being linked). Nothing else may be listed:
+ * the operator approves ceremonies but never impersonates the subject's proof.
+ * The fleet-auth identity ceremonies themselves
+ * (`/v1/fleet-auth/lifecycle/{binding,provider,role}/complete`) are operator-
+ * approvable (psfn-framework-ja7n0); they are served by the gateway fleet-auth
+ * door rather than the Garden proxy, and their ADMIN_TOKEN path is proven end
+ * to end in fleet-auth-routes.test.ts, lifecycle-ceremony.test.ts and
+ * authority-lifecycle-operator-approval.integration.test.ts. The Discord OAuth
+ * callback and lifecycle OAuth start are not Garden catalogue routes at all.
  */
-const NON_OPERATOR_MUTATIONS: Readonly<Record<string, string>> = Object.freeze({
-  'POST /v1/fleet-auth/lifecycle/binding/complete':
-    'SSO identity ceremony: binds a Discord OAuth provider proof under the acting SSO session',
-  'POST /v1/fleet-auth/lifecycle/provider/complete':
-    'SSO identity ceremony: links a Discord OAuth provider proof under the acting SSO session',
-  'POST /v1/fleet-auth/lifecycle/role/complete':
-    'SSO identity ceremony: changes an SSO principal role under the acting SSO session',
-  'POST /api/admin/memory/elevation':
-    'session-wide body elevation is refused for every fleet principal; reveal is per memory',
-});
+const NON_OPERATOR_MUTATIONS: Readonly<Record<string, string>> = Object.freeze({});
 
 function operatorMutations(): GardenRouteCapability[] {
   return GARDEN_ROUTE_CAPABILITIES.filter(capability => (

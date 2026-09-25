@@ -2,11 +2,13 @@ import { createHash, createHmac, randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { LifecycleMutationDenied } from './authority-lifecycle-mutation-contract.js';
 import { lifecycleProviderProofs } from './authority-lifecycle-proof.js';
-import type {
-  FleetAuthLifecycleResult,
-  PrincipalAuthorityClaim,
-  VerifiedFleetAuthLifecycleDecision,
+import {
+  lifecyclePrincipalActor,
+  type FleetAuthLifecycleResult,
+  type PrincipalAuthorityClaim,
+  type VerifiedFleetAuthLifecycleDecision,
 } from './authority-lifecycle-types.js';
+import { adminTokenLifecycleActorContext } from './admin-token-lifecycle-approval.js';
 import { FLEET_AUTH_SCHEMA_NAME } from './schema.js';
 import { fleetAuthLifecycleDecisionFingerprint } from './authority-lifecycle-fingerprint.js';
 import { createPositiveIntegerCoercer } from './row-utils.js';
@@ -73,6 +75,45 @@ function redactedClaim(claim: PrincipalAuthorityClaim): Record<string, unknown> 
   };
 }
 
+/**
+ * The approving authority. A principal actor keeps its exact historical shape;
+ * the ADMIN_TOKEN operator is recorded as `admin_token_operator` with its keyed
+ * approval audit id and no principal or session (psfn-framework-ja7n0).
+ */
+function redactedApprover(
+  digest: FleetAuthLifecycleAuditDigest,
+  decision: VerifiedFleetAuthLifecycleDecision,
+): Record<string, unknown> {
+  const principal = lifecyclePrincipalActor(decision);
+  if (!principal) {
+    return {
+      actor: {
+        kind: 'admin_token_operator',
+        approvalDigest: digest(decision.operator!.authorizationEventId),
+      },
+      target: redactedClaim(decision.target),
+      actorIsTarget: false,
+    };
+  }
+  const { actor, actorSession } = principal;
+  return {
+    actor: redactedClaim(actor),
+    target: redactedClaim(decision.target),
+    actorIsTarget: actor.principalId === decision.target.principalId,
+    actorSession: {
+      sessionDigest: digest(actorSession.sessionId),
+      authnVersion: actorSession.authnVersion,
+      authzVersion: actorSession.authzVersion,
+      bindingVersion: actorSession.bindingVersion,
+      grantVersion: actorSession.grantVersion,
+      policyVersion: actorSession.policyVersion,
+      globalAuthEpoch: actorSession.globalAuthEpoch,
+      provider: actorSession.provider,
+      providerSubjectDigest: digest(actorSession.providerSubjectId),
+    },
+  };
+}
+
 function redactedContext(
   digest: FleetAuthLifecycleAuditDigest,
   decision: VerifiedFleetAuthLifecycleDecision,
@@ -108,20 +149,7 @@ function redactedContext(
       authorityGeneration: decision.authorityGeneration,
       globalAuthEpoch: decision.globalAuthEpoch,
     },
-    actor: redactedClaim(decision.actor),
-    target: redactedClaim(decision.target),
-    actorIsTarget: decision.actor.principalId === decision.target.principalId,
-    actorSession: {
-      sessionDigest: digest(decision.actorSession.sessionId),
-      authnVersion: decision.actorSession.authnVersion,
-      authzVersion: decision.actorSession.authzVersion,
-      bindingVersion: decision.actorSession.bindingVersion,
-      grantVersion: decision.actorSession.grantVersion,
-      policyVersion: decision.actorSession.policyVersion,
-      globalAuthEpoch: decision.actorSession.globalAuthEpoch,
-      provider: decision.actorSession.provider,
-      providerSubjectDigest: digest(decision.actorSession.providerSubjectId),
-    },
+    ...redactedApprover(digest, decision),
     ...('source' in decision ? { source: redactedClaim(decision.source) } : {}),
     ...('currentRole' in decision ? { oldRole: decision.currentRole } : {}),
     ...('role' in decision ? { newRole: decision.role } : {}),
@@ -391,7 +419,9 @@ export async function insertLifecycleAudit(
     // actor principalId is recovery-shared (structural, unkeyed); the resource
     // is a content hash of the redacted context and follows the same unkeyed
     // convention the recovery-reconciliation writer uses for its resource key.
-    JSON.stringify({ kind: 'principal', idDigest: structuralDigest(decision.actor.principalId) }),
+    JSON.stringify(decision.operator
+      ? adminTokenLifecycleActorContext(decision.operator.authorizationEventId)
+      : { kind: 'principal', idDigest: structuralDigest(decision.actor!.principalId) }),
     decision.action,
     `lifecycle:${decision.action}:${structuralDigest(JSON.stringify(context))}`,
     outcome,

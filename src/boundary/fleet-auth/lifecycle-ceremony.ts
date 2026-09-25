@@ -131,6 +131,20 @@ interface PrincipalRow {
   policy_version: string;
 }
 
+/** Records the ADMIN_TOKEN operator's approval before a decision executes. */
+export interface AdminTokenLifecycleApprovalPort {
+  record(input: {
+    decisionId: string;
+    ceremonyId: string;
+    companionId: string;
+    lifecycleAction: FleetAuthLifecycleCeremonyRequest['action'];
+  }): Promise<{
+    authorizationEventId: string;
+    authorityGeneration: number;
+    globalAuthEpoch: number;
+  }>;
+}
+
 export class FleetAuthLifecycleCeremonyError extends Error {
   constructor(
     readonly code:
@@ -139,6 +153,7 @@ export class FleetAuthLifecycleCeremonyError extends Error {
       | 'session_unavailable'
       | 'contact_authority_unavailable'
       | 'denial_audit_failed'
+      | 'operator_approval_unavailable'
       | 'lifecycle_denied',
     message: string,
     options?: ErrorOptions,
@@ -357,6 +372,70 @@ function actionFor(request: FleetAuthLifecycleCeremonyRequest): FleetAuthAction 
 }
 
 
+type LifecycleDecisionApprovalKeys =
+  | 'verification' | 'decisionId' | 'ceremonyId' | 'target' | 'authorityGeneration'
+  | 'globalAuthEpoch' | 'reasonDigest' | 'decidedAt' | 'actor' | 'actorSession' | 'operator';
+type LifecycleDecisionFields = VerifiedFleetAuthLifecycleDecision extends infer Decision
+  ? Decision extends unknown ? Omit<Decision, LifecycleDecisionApprovalKeys> : never
+  : never;
+
+/** The action-specific fields of a ceremony decision, shared by every approver. */
+function lifecycleDecisionFields(
+  request: FleetAuthLifecycleCeremonyRequest,
+  contactAuthority: VerifiedDiscordContactAuthoritySnapshot | undefined,
+): LifecycleDecisionFields {
+  if (request.action === 'binding.activate') {
+    return {
+      action: request.action,
+      companionId: request.companionId,
+      contactId: request.contactId,
+      bindingId: request.bindingId,
+      newProvider: request.newProvider,
+      contactAuthority: contactAuthority!,
+    };
+  } else if (request.action === 'provider.replace') {
+    return {
+      action: request.action,
+      companionId: request.companionId,
+      contactId: request.contactId,
+      currentProvider: request.currentProvider,
+      newProvider: request.newProvider,
+      contactAuthority: contactAuthority!,
+    };
+  } else if (request.action === 'role.grant') {
+    return {
+      action: request.action,
+      companionId: request.companionId,
+      grantId: request.grantId,
+      role: request.role,
+    };
+  } else if (request.action === 'role.change') {
+    return {
+      action: request.action,
+      companionId: request.companionId,
+      grantId: request.grantId,
+      newGrantId: request.newGrantId,
+      currentRole: request.currentRole,
+      role: request.role,
+    };
+  } else if (request.action === 'role.revoke') {
+    return {
+      action: request.action,
+      companionId: request.companionId,
+      grantId: request.grantId,
+      currentRole: request.currentRole,
+    };
+  } else {
+    return {
+      action: request.action,
+      companionId: request.companionId,
+      contactId: request.contactId,
+      newProvider: request.newProvider,
+      contactAuthority: contactAuthority!,
+    };
+  }
+}
+
 export class GatewayFleetAuthLifecycleCeremonyService {
   private readonly origin: string;
 
@@ -367,6 +446,8 @@ export class GatewayFleetAuthLifecycleCeremonyService {
     lifecycle: Pick<GatewayFleetAuthAuthorityLifecycleStore, 'execute'>;
     contactAuthority: FleetContactAuthorityPort;
     denialAudit: FleetLifecycleCeremonyDenialAuditPort;
+    /** Durable approval audit for the ADMIN_TOKEN operator; absent -> operator path 503s. */
+    adminTokenApproval?: AdminTokenLifecycleApprovalPort;
     now?: () => Date;
   }) {
     const origin = new URL(options.canonicalOrigin);
@@ -424,23 +505,7 @@ export class GatewayFleetAuthLifecycleCeremonyService {
         );
       }
     }
-    if (request.action === 'binding.activate'
-      || request.action === 'provider.add'
-      || request.action === 'provider.relink'
-      || request.action === 'provider.replace') {
-      contactAuthority = await this.options.contactAuthority.read({
-        companionId: request.companionId,
-        contactId: request.contactId,
-        providerSubjectId: request.newProvider.subjectId,
-      });
-      if (!contactAuthority) {
-        await this.auditDenial(request, 'contact_authority_unavailable');
-        throw new FleetAuthLifecycleCeremonyError(
-          'contact_authority_unavailable',
-          'Exact current companion contact authority is unavailable',
-        );
-      }
-    }
+    contactAuthority = await this.readContactAuthority(request);
     const actor = claim(session);
     const base = {
       verification: 'gateway_verified' as const,
@@ -467,63 +532,11 @@ export class GatewayFleetAuthLifecycleCeremonyService {
       reasonDigest: digest(request.reason),
       decidedAt: (this.options.now ?? (() => new Date()))(),
     };
-    let decision: VerifiedFleetAuthLifecycleDecision;
-    if (request.action === 'binding.activate') {
-      decision = {
-        ...base,
-        action: request.action,
-        companionId: request.companionId,
-        contactId: request.contactId,
-        bindingId: request.bindingId,
-        newProvider: request.newProvider,
-        contactAuthority: contactAuthority!,
-      };
-    } else if (request.action === 'provider.replace') {
-      decision = {
-        ...base,
-        action: request.action,
-        companionId: request.companionId,
-        contactId: request.contactId,
-        currentProvider: request.currentProvider,
-        newProvider: request.newProvider,
-        contactAuthority: contactAuthority!,
-      };
-    } else if (request.action === 'role.grant') {
-      decision = {
-        ...base,
-        action: request.action,
-        companionId: request.companionId,
-        grantId: request.grantId,
-        role: request.role,
-      };
-    } else if (request.action === 'role.change') {
-      decision = {
-        ...base,
-        action: request.action,
-        companionId: request.companionId,
-        grantId: request.grantId,
-        newGrantId: request.newGrantId,
-        currentRole: request.currentRole,
-        role: request.role,
-      };
-    } else if (request.action === 'role.revoke') {
-      decision = {
-        ...base,
-        action: request.action,
-        companionId: request.companionId,
-        grantId: request.grantId,
-        currentRole: request.currentRole,
-      };
-    } else {
-      decision = {
-        ...base,
-        action: request.action,
-        companionId: request.companionId,
-        contactId: request.contactId,
-        newProvider: request.newProvider,
-        contactAuthority: contactAuthority!,
-      };
-    }
+    // The store re-validates the assembled decision exactly (fail closed).
+    const decision = {
+      ...base,
+      ...lifecycleDecisionFields(request, contactAuthority),
+    } as VerifiedFleetAuthLifecycleDecision;
     try {
       return await this.options.lifecycle.execute(decision);
     } catch (error) {
@@ -594,6 +607,130 @@ export class GatewayFleetAuthLifecycleCeremonyService {
       );
     }
     return row;
+  }
+
+  /**
+   * The audited ADMIN_TOKEN operator completes a ceremony as its approving
+   * authority (psfn-framework-ja7n0). It replaces only the approving
+   * companion owner/administrator: the target is the ceremony's subject, every
+   * provider proof must still come from the subject's own session-initiated
+   * Discord OAuth (enforced by the lifecycle store), and the approval itself is
+   * a durable `admin_token_operator` audit row bound to this exact decision.
+   */
+  async completeAsAdminTokenOperator(input: {
+    requestOrigin: string;
+    request: unknown;
+  }): Promise<FleetAuthLifecycleResult> {
+    this.assertOrigin(input.requestOrigin);
+    const request = parseFleetAuthLifecycleCeremonyRequest(input.request);
+    const approval = this.options.adminTokenApproval;
+    if (!approval) {
+      throw new FleetAuthLifecycleCeremonyError(
+        'operator_approval_unavailable',
+        'Administrator lifecycle approval is unavailable',
+      );
+    }
+    let target: PrincipalAuthorityClaim;
+    try {
+      if (request.action === 'binding.activate') {
+        target = await this.readPrincipal(request.targetPrincipalId, 'pending');
+      } else if (request.action === 'role.grant'
+        || request.action === 'role.change'
+        || request.action === 'role.revoke') {
+        target = await this.readPrincipal(request.targetPrincipalId, 'active');
+      } else {
+        target = await this.readPrincipal(
+          await this.readBoundPrincipalId(request.companionId, request.contactId),
+          'active',
+        );
+      }
+    } catch (error) {
+      await this.auditDenial(request, 'target_unavailable');
+      throw error;
+    }
+    const contactAuthority = await this.readContactAuthority(request);
+    const decisionId = randomUUID();
+    let approved: Awaited<ReturnType<AdminTokenLifecycleApprovalPort['record']>>;
+    try {
+      approved = await approval.record({
+        decisionId,
+        ceremonyId: request.ceremonyId,
+        companionId: request.companionId,
+        lifecycleAction: request.action,
+      });
+    } catch (error) {
+      // No durable approval evidence, no transition.
+      throw new FleetAuthLifecycleCeremonyError(
+        'operator_approval_unavailable',
+        'Administrator lifecycle approval could not be recorded',
+        { cause: error },
+      );
+    }
+    const decision = {
+      verification: 'gateway_verified' as const,
+      decisionId,
+      ceremonyId: request.ceremonyId,
+      operator: {
+        kind: 'admin_token_operator' as const,
+        authorizationEventId: approved.authorizationEventId,
+      },
+      target,
+      authorityGeneration: approved.authorityGeneration,
+      globalAuthEpoch: approved.globalAuthEpoch,
+      reasonDigest: digest(request.reason),
+      decidedAt: (this.options.now ?? (() => new Date()))(),
+      ...lifecycleDecisionFields(request, contactAuthority),
+    } as VerifiedFleetAuthLifecycleDecision;
+    try {
+      return await this.options.lifecycle.execute(decision);
+    } catch (error) {
+      throw new FleetAuthLifecycleCeremonyError(
+        'lifecycle_denied',
+        'Fleet lifecycle transition was denied',
+        { cause: error },
+      );
+    }
+  }
+
+  /** The principal holding the exact active binding of a provider ceremony's contact. */
+  private async readBoundPrincipalId(companionId: string, contactId: string): Promise<string> {
+    const result = await this.options.pool.query<{ principal_id: string }>(`
+      SELECT principal_id
+      FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings
+      WHERE companion_id = $1 AND contact_id = $2
+        AND state = 'active' AND restore_state = 'live'
+    `, [companionId, contactId]);
+    if (result.rowCount !== 1 || !result.rows[0]) {
+      throw new FleetAuthLifecycleCeremonyError(
+        'lifecycle_denied',
+        'Provider lifecycle contact has no exact active binding',
+      );
+    }
+    return result.rows[0].principal_id;
+  }
+
+  private async readContactAuthority(
+    request: FleetAuthLifecycleCeremonyRequest,
+  ): Promise<VerifiedDiscordContactAuthoritySnapshot | undefined> {
+    if (request.action !== 'binding.activate'
+      && request.action !== 'provider.add'
+      && request.action !== 'provider.relink'
+      && request.action !== 'provider.replace') {
+      return undefined;
+    }
+    const contactAuthority = await this.options.contactAuthority.read({
+      companionId: request.companionId,
+      contactId: request.contactId,
+      providerSubjectId: request.newProvider.subjectId,
+    });
+    if (!contactAuthority) {
+      await this.auditDenial(request, 'contact_authority_unavailable');
+      throw new FleetAuthLifecycleCeremonyError(
+        'contact_authority_unavailable',
+        'Exact current companion contact authority is unavailable',
+      );
+    }
+    return contactAuthority;
   }
 
   private async readPrincipal(

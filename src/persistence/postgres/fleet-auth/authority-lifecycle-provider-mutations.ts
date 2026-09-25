@@ -7,6 +7,7 @@ import type {
 import {
   denyLifecycleMutation,
   mergeLifecycleBumps,
+  requireLifecyclePrincipalActorId,
   requireOneLifecycleRow,
   type PreparedLifecycleMutation,
 } from './authority-lifecycle-mutation-contract.js';
@@ -80,12 +81,19 @@ async function lockProviderCompanionContactScope(
   if (bindingRow.state !== 'active' || bindingRow.restore_state !== 'live') {
     denyLifecycleMutation('provider_contact_binding_unavailable');
   }
+  // The audited ADMIN_TOKEN operator is the approving authority in place of a
+  // companion owner; its exact door audit is validated by the store, and the
+  // subject's own provider proof is still required (psfn-framework-ja7n0).
+  if (decision.operator) return;
   const owner = await client.query<{ role: string; lifecycle: string; restore_state: string }>(`
     SELECT role, lifecycle, restore_state
     FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants
     WHERE principal_id = $1 AND companion_id = $2 AND role = 'owner'
     FOR UPDATE
-  `, [decision.actor.principalId, decision.companionId]);
+  `, [
+    requireLifecyclePrincipalActorId(decision, 'provider_actor_not_companion_owner'),
+    decision.companionId,
+  ]);
   if (!owner.rows.some(row => row.lifecycle === 'active' && row.restore_state === 'live')) {
     denyLifecycleMutation('provider_actor_not_companion_owner');
   }
@@ -99,7 +107,12 @@ export async function prepareProviderLifecycleMutation(
   >,
 ): Promise<PreparedLifecycleMutation> {
   const targetId = decision.target.principalId;
-  if (decision.actor.principalId !== targetId) {
+  // A principal links only its own identity. An operator-approved link acts on
+  // the target, whose own session initiated every provider proof (validated in
+  // authority-lifecycle-proof); removal of a provider is never operator-approved.
+  if (decision.operator
+    ? decision.action === 'provider.unlink'
+    : requireLifecyclePrincipalActorId(decision, 'provider_actor_target_mismatch') !== targetId) {
     denyLifecycleMutation('provider_actor_target_mismatch');
   }
   if (decision.action === 'provider.add'

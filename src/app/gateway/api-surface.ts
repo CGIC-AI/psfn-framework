@@ -1322,6 +1322,7 @@ export async function startOptionalGatewayApiServer(
             ...(options.fleetAuthLifecycleCeremonies
               ? { lifecycleCeremonies: options.fleetAuthLifecycleCeremonies }
               : {}),
+            ...(env.ADMIN_TOKEN ? { adminToken: env.ADMIN_TOKEN } : {}),
             trustProxy: isExplicitTrue(env.FLEET_SSO_TRUST_PROXY),
             ...(fleetSsoCompanionUi ? {
               companionUi: {

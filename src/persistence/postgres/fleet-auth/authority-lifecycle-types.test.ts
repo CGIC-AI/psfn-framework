@@ -112,4 +112,53 @@ describe('verified fleet-auth lifecycle decision contract', () => {
   ])('rejects %s', (_label, candidate) => {
     expect(() => assertVerifiedFleetAuthLifecycleDecision(candidate)).toThrow();
   });
+
+  describe('ADMIN_TOKEN operator approval branch (psfn-framework-ja7n0)', () => {
+    function operatorReplace(): Record<string, unknown> {
+      const { actor: _actor, actorSession: _session, ...rest } = providerReplace() as unknown as
+        Record<string, unknown>;
+      return {
+        ...rest,
+        operator: { kind: 'admin_token_operator', authorizationEventId: randomUUID() },
+      };
+    }
+
+    it('accepts an exact operator approval with no principal actor', () => {
+      const decision = assertVerifiedFleetAuthLifecycleDecision(operatorReplace());
+      expect(decision.operator?.kind).toBe('admin_token_operator');
+      expect(decision.actor).toBeUndefined();
+    });
+
+    it.each([
+      ['operator plus principal actor', { ...operatorReplace(), actor: principal() }],
+      ['unknown operator kind', {
+        ...operatorReplace(),
+        operator: { kind: 'testing_harness', authorizationEventId: randomUUID() },
+      }],
+      ['extra operator field', {
+        ...operatorReplace(),
+        operator: { kind: 'admin_token_operator', authorizationEventId: randomUUID(), role: 'owner' },
+      }],
+      ['approval id reused as decision id', (() => {
+        const decision = operatorReplace();
+        const id = randomUUID();
+        return { ...decision, decisionId: id, operator: { kind: 'admin_token_operator', authorizationEventId: id } };
+      })()],
+      ['action outside the ceremony allowlist', {
+        verification: 'gateway_verified',
+        action: 'companion.remove',
+        decisionId: randomUUID(),
+        ceremonyId: randomUUID(),
+        operator: { kind: 'admin_token_operator', authorizationEventId: randomUUID() },
+        target: principal(),
+        authorityGeneration: 1,
+        globalAuthEpoch: 1,
+        companionId: randomUUID(),
+        reasonDigest: DIGEST,
+        decidedAt: new Date('2026-07-16T12:00:00.000Z'),
+      }],
+    ])('rejects %s', (_label, candidate) => {
+      expect(() => assertVerifiedFleetAuthLifecycleDecision(candidate)).toThrow();
+    });
+  });
 });

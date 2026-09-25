@@ -25,6 +25,7 @@ function translate(error: unknown): never {
       error.code === 'origin_mismatch' ? 403
         : error.code === 'session_unavailable' ? 401
           : error.code === 'denial_audit_failed' ? 503
+          : error.code === 'operator_approval_unavailable' ? 503
           : error.code === 'invalid_request' ? 400 : 409,
       error.message,
     );
@@ -38,7 +39,7 @@ function translate(error: unknown): never {
 
 export class FleetAuthLifecycleCeremonyHttpRoutes {
   constructor(private readonly ceremonies: Pick<GatewayFleetAuthLifecycleCeremonyService,
-    'complete'>) {}
+    'complete' | 'completeAsAdminTokenOperator'>) {}
 
   matches(method: string | undefined, path: string): boolean {
     return method === 'POST' && PATHS.has(path);
@@ -48,8 +49,11 @@ export class FleetAuthLifecycleCeremonyHttpRoutes {
     request: IncomingMessage;
     response: ServerResponse;
     path: string;
-    token: string;
-    csrfToken: string;
+    /**
+     * The approving authority: the caller's own SSO session (CSRF already
+     * verified), or the audited ADMIN_TOKEN operator door (psfn-framework-ja7n0).
+     */
+    approver: { kind: 'session'; token: string } | { kind: 'admin_token_operator' };
     requestOrigin: string;
   }): Promise<void> {
     const body = await readJsonBodyWithLimit(input.request, input.response, { maxBytes: 16_384 });
@@ -66,11 +70,16 @@ export class FleetAuthLifecycleCeremonyHttpRoutes {
       if (input.path !== expectedPath) {
         throw new Error('Lifecycle action does not match its exact completion route');
       }
-      const completed = await this.ceremonies.complete({
-        token: input.token,
-        requestOrigin: input.requestOrigin,
-        request,
-      });
+      const completed = input.approver.kind === 'admin_token_operator'
+        ? await this.ceremonies.completeAsAdminTokenOperator({
+          requestOrigin: input.requestOrigin,
+          request,
+        })
+        : await this.ceremonies.complete({
+          token: input.approver.token,
+          requestOrigin: input.requestOrigin,
+          request,
+        });
       sendJson(input.response, 200, {
         decisionId: completed.decisionId,
         action: completed.action,

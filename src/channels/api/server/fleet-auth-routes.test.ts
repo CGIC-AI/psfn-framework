@@ -857,3 +857,136 @@ describe('gateway-only fleet auth HTTP routes', () => {
     expect(confusedOrigin.headers.get('set-cookie')).toBeUndefined();
   });
 });
+
+describe('ADMIN_TOKEN operator lifecycle ceremony door (psfn-framework-ja7n0)', () => {
+  const ADMIN_TOKEN = 'fleet-admin-token-for-ceremony-tests';
+  const ceremonyBody = {
+    request: {
+      action: 'role.grant',
+      ceremonyId: '00000000-0000-4000-8000-000000000503',
+      companionId: COMPANION_ID,
+      targetPrincipalId: '00000000-0000-4000-8000-000000000502',
+      grantId: '00000000-0000-4000-8000-000000000504',
+      role: 'member',
+      reason: 'operator grants ordinary access',
+    },
+  };
+
+  function ceremonyHandler() {
+    const ceremonies = {
+      complete: vi.fn(),
+      completeAsAdminTokenOperator: vi.fn(async () => ({
+        decisionId: '00000000-0000-4000-8000-000000000505',
+        action: 'role.grant' as const,
+        authorityGeneration: 3,
+        globalAuthEpoch: 4,
+        target: {
+          principalId: '00000000-0000-4000-8000-000000000502',
+          authnVersion: 1,
+          authzVersion: 1,
+          bindingVersion: 1,
+          grantVersion: 1,
+          policyVersion: 1,
+        },
+      })),
+    };
+    const handler = new FleetAuthHttpRoutes({
+      broker: {} as unknown as GatewayFleetAuthBroker,
+      canonicalOrigin: 'https://fleet.example.test',
+      callbackPath: '/auth/discord/callback',
+      lifecycleCeremonies: ceremonies as never,
+      adminToken: ADMIN_TOKEN,
+    });
+    return { handler, ceremonies };
+  }
+
+  it.each([
+    ['binding', 'binding/complete', {
+      action: 'binding.activate',
+      ceremonyId: '00000000-0000-4000-8000-000000000513',
+      companionId: COMPANION_ID,
+      targetPrincipalId: '00000000-0000-4000-8000-000000000502',
+      contactId: 'contact-new',
+      bindingId: '00000000-0000-4000-8000-000000000514',
+      newProvider: {
+        provider: 'discord',
+        subjectId: '223456789012345678',
+        callbackTransactionId: '00000000-0000-4000-8000-000000000515',
+        proofDigest: 'a'.repeat(64),
+      },
+      reason: 'operator approves the subject binding',
+    }],
+    ['provider link', 'provider/complete', {
+      action: 'provider.add',
+      ceremonyId: '00000000-0000-4000-8000-000000000516',
+      companionId: COMPANION_ID,
+      contactId: 'contact-member',
+      newProvider: {
+        provider: 'discord',
+        subjectId: '323456789012345678',
+        callbackTransactionId: '00000000-0000-4000-8000-000000000517',
+        proofDigest: 'b'.repeat(64),
+      },
+      reason: 'operator approves the subject provider link',
+    }],
+    ['role', 'role/complete', ceremonyBody.request],
+  ])('reaches the %s completion through the operator door', async (_label, path, body) => {
+    const { handler, ceremonies } = ceremonyHandler();
+    const res = response();
+    await handler.handle(
+      jsonRequest({ request: body }, {
+        'content-type': 'application/json',
+        origin: 'https://fleet.example.test',
+        authorization: `Bearer ${ADMIN_TOKEN}`,
+      }),
+      res,
+      new URL(`https://fleet.example.test/v1/fleet-auth/lifecycle/${path}`),
+    );
+    expect(res.statusCode).toBe(200);
+    expect(ceremonies.completeAsAdminTokenOperator).toHaveBeenCalledOnce();
+    expect(ceremonies.complete).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['bearer', { authorization: `Bearer ${ADMIN_TOKEN}` }],
+    ['HttpOnly cookie', { cookie: `psfn_token=${ADMIN_TOKEN}` }],
+  ])('completes a ceremony with the %s and no SSO session or CSRF', async (_label, auth) => {
+    const { handler, ceremonies } = ceremonyHandler();
+    const res = response();
+    await handler.handle(
+      jsonRequest(ceremonyBody, {
+        'content-type': 'application/json',
+        origin: 'https://fleet.example.test',
+        ...auth,
+      }),
+      res,
+      new URL('https://fleet.example.test/v1/fleet-auth/lifecycle/role/complete'),
+    );
+    expect(res.statusCode).toBe(200);
+    expect(ceremonies.complete).not.toHaveBeenCalled();
+    expect(ceremonies.completeAsAdminTokenOperator).toHaveBeenCalledWith({
+      requestOrigin: 'https://fleet.example.test',
+      request: expect.objectContaining({ action: 'role.grant' }),
+    });
+  });
+
+  it.each([
+    ['anonymous', {}],
+    ['wrong token', { authorization: 'Bearer not-the-admin-token' }],
+  ])('keeps %s ceremony completion fail-closed', async (_label, auth) => {
+    const { handler, ceremonies } = ceremonyHandler();
+    const res = response();
+    await handler.handle(
+      jsonRequest(ceremonyBody, {
+        'content-type': 'application/json',
+        origin: 'https://fleet.example.test',
+        ...auth,
+      }),
+      res,
+      new URL('https://fleet.example.test/v1/fleet-auth/lifecycle/role/complete'),
+    );
+    expect(res.statusCode).toBe(401);
+    expect(ceremonies.completeAsAdminTokenOperator).not.toHaveBeenCalled();
+    expect(ceremonies.complete).not.toHaveBeenCalled();
+  });
+});

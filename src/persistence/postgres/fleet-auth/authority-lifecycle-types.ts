@@ -63,12 +63,15 @@ interface AdminTokenOperatorApproval {
   authorizationEventId: string;
 }
 
-/** Ceremony actions the ADMIN_TOKEN operator may approve; everything else rejects. */
+/**
+ * Ceremony actions the ADMIN_TOKEN operator performs directly with the key;
+ * everything else rejects (key-or-SSO ruling). The operator's binding
+ * activation needs no OAuth proof: the pending principal's own Discord subject
+ * is already on record from its SSO login. Provider link/relink/replace prove
+ * control of a Discord account and are SSO-mode features only.
+ */
 export const ADMIN_TOKEN_OPERATOR_LIFECYCLE_ACTIONS = [
   'binding.activate',
-  'provider.add',
-  'provider.relink',
-  'provider.replace',
   'role.grant',
   'role.change',
   'role.revoke',
@@ -77,10 +80,8 @@ export const ADMIN_TOKEN_OPERATOR_LIFECYCLE_ACTIONS = [
 /** The fleet action an ADMIN_TOKEN approval of a ceremony action is audited under. */
 export function adminTokenLifecycleApprovalAction(
   action: typeof ADMIN_TOKEN_OPERATOR_LIFECYCLE_ACTIONS[number],
-): 'contacts.bind' | 'provider.link' | 'roles.manage' {
-  if (action === 'binding.activate') return 'contacts.bind';
-  if (action.startsWith('role.')) return 'roles.manage';
-  return 'provider.link';
+): 'contacts.bind' | 'roles.manage' {
+  return action === 'binding.activate' ? 'contacts.bind' : 'roles.manage';
 }
 
 interface LifecycleDecisionCommon {
@@ -117,13 +118,21 @@ export function lifecyclePrincipalActor(
 }
 
 export type VerifiedFleetAuthLifecycleDecision =
-  | (LifecycleDecisionBase & {
+  | (PrincipalActorDecision & {
     action: 'binding.activate';
     companionId: string;
     contactId: string;
     bindingId: string;
     newProvider: VerifiedProviderProof;
     contactAuthority: VerifiedDiscordContactAuthoritySnapshot;
+  })
+  | (AdminTokenOperatorDecision & {
+    action: 'binding.activate';
+    companionId: string;
+    contactId: string;
+    bindingId: string;
+    /** The pending principal's own Discord subject, recorded by its SSO login. */
+    providerSubjectId: string;
   })
   | (LifecycleDecisionBase & {
     action: 'provider.add' | 'provider.relink';
@@ -407,6 +416,16 @@ export function assertVerifiedFleetAuthLifecycleDecision(
   assertCommon(decision);
   switch (decision.action) {
     case 'binding.activate':
+      if (Object.hasOwn(decision, 'operator')) {
+        assertDecisionKeys(decision, ['companionId', 'contactId', 'bindingId', 'providerSubjectId']);
+        assertIds(decision, ['companionId', 'bindingId']);
+        assertContactId(decision.contactId, 'contactId');
+        if (typeof decision.providerSubjectId !== 'string'
+          || !DISCORD_SUBJECT_PATTERN.test(decision.providerSubjectId)) {
+          throw new Error('binding.activate providerSubjectId is invalid');
+        }
+        break;
+      }
       assertDecisionKeys(decision, [
         'companionId',
         'contactId',

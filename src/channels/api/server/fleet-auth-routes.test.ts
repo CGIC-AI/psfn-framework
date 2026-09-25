@@ -584,6 +584,7 @@ describe('gateway-only fleet auth HTTP routes', () => {
   }
 
   const authorizedRoster: FleetAuthRosterSource = {
+    resolveAdminTokenRoster: () => { throw new Error('ADMIN_TOKEN roster not expected'); },
     resolveRoster: async () => ({
       schemaVersion: 1,
       companions: [
@@ -611,7 +612,7 @@ describe('gateway-only fleet auth HTTP routes', () => {
 
     it('returns the authenticated roster with private no-store caching', async () => {
       const resolveRoster = vi.fn(authorizedRoster.resolveRoster);
-      const handler = rosterHandler({ rosterSource: { resolveRoster } });
+      const handler = rosterHandler({ rosterSource: { resolveRoster, resolveAdminTokenRoster: () => { throw new Error('unexpected'); } } });
       const res = response();
       await handler.handle(
         request('GET', { cookie: `__Host-psfn_session=${'a'.repeat(43)}` }),
@@ -908,26 +909,9 @@ describe('ADMIN_TOKEN operator lifecycle ceremony door (psfn-framework-ja7n0)', 
       targetPrincipalId: '00000000-0000-4000-8000-000000000502',
       contactId: 'contact-new',
       bindingId: '00000000-0000-4000-8000-000000000514',
-      newProvider: {
-        provider: 'discord',
-        subjectId: '223456789012345678',
-        callbackTransactionId: '00000000-0000-4000-8000-000000000515',
-        proofDigest: 'a'.repeat(64),
-      },
-      reason: 'operator approves the subject binding',
-    }],
-    ['provider link', 'provider/complete', {
-      action: 'provider.add',
-      ceremonyId: '00000000-0000-4000-8000-000000000516',
-      companionId: COMPANION_ID,
-      contactId: 'contact-member',
-      newProvider: {
-        provider: 'discord',
-        subjectId: '323456789012345678',
-        callbackTransactionId: '00000000-0000-4000-8000-000000000517',
-        proofDigest: 'b'.repeat(64),
-      },
-      reason: 'operator approves the subject provider link',
+      // Key mode: no OAuth proof, just the pending principal's own subject.
+      providerSubjectId: '223456789012345678',
+      reason: 'operator activates the pending account',
     }],
     ['role', 'role/complete', ceremonyBody.request],
   ])('reaches the %s completion through the operator door', async (_label, path, body) => {
@@ -990,3 +974,171 @@ describe('ADMIN_TOKEN operator lifecycle ceremony door (psfn-framework-ja7n0)', 
     expect(ceremonies.complete).not.toHaveBeenCalled();
   });
 });
+
+describe('ADMIN_TOKEN operator account door (psfn-framework-aol3m)', () => {
+  const ADMIN_TOKEN = 'fleet-admin-token-for-account-tests';
+  const body = {
+    request: {
+      action: 'principal.suspend',
+      ceremonyId: '00000000-0000-4000-8000-000000000703',
+      companionId: COMPANION_ID,
+      principalId: '00000000-0000-4000-8000-000000000702',
+    },
+  };
+
+  function accountHandler() {
+    const complete = vi.fn(async () => ({
+      action: 'principal.suspend' as const,
+      companionId: COMPANION_ID,
+      authorityGeneration: 5,
+      globalAuthEpoch: 6,
+      auditEventId: '00000000-0000-4000-8000-000000000705',
+    }));
+    const handler = new FleetAuthHttpRoutes({
+      broker: {} as unknown as GatewayFleetAuthBroker,
+      canonicalOrigin: 'https://fleet.example.test',
+      callbackPath: '/auth/discord/callback',
+      adminToken: ADMIN_TOKEN,
+      operatorAccountAuthority: { complete } as never,
+    });
+    return { handler, complete };
+  }
+
+  it('performs an account action with the ADMIN_TOKEN alone', async () => {
+    const { handler, complete } = accountHandler();
+    const res = response();
+    await handler.handle(
+      jsonRequest(body, {
+        'content-type': 'application/json',
+        origin: 'https://fleet.example.test',
+        authorization: `Bearer ${ADMIN_TOKEN}`,
+      }),
+      res,
+      new URL('https://fleet.example.test/v1/fleet-auth/lifecycle/account/complete'),
+    );
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toMatchObject({ action: 'principal.suspend', globalAuthEpoch: 6 });
+    expect(complete).toHaveBeenCalledWith({
+      requestOrigin: 'https://fleet.example.test',
+      request: body.request,
+    });
+  });
+
+  it.each([
+    ['anonymous', {}],
+    ['an SSO session only', { cookie: `__Host-psfn_session=${'a'.repeat(43)}` }],
+    ['a wrong token', { authorization: 'Bearer nope' }],
+  ])('refuses %s', async (_label, auth) => {
+    const { handler, complete } = accountHandler();
+    const res = response();
+    await handler.handle(
+      jsonRequest(body, { 'content-type': 'application/json', origin: 'https://fleet.example.test', ...auth }),
+      res,
+      new URL('https://fleet.example.test/v1/fleet-auth/lifecycle/account/complete'),
+    );
+    expect(res.statusCode).toBe(401);
+    expect(complete).not.toHaveBeenCalled();
+  });
+});
+
+describe('key mode has no provider-link ceremony (key-or-SSO ruling)', () => {
+  it('refuses an ADMIN_TOKEN provider link: it proves a Discord account and is SSO-only', async () => {
+    const ceremonies = { complete: vi.fn(), completeAsAdminTokenOperator: vi.fn() };
+    const handler = new FleetAuthHttpRoutes({
+      broker: {} as unknown as GatewayFleetAuthBroker,
+      canonicalOrigin: 'https://fleet.example.test',
+      callbackPath: '/auth/discord/callback',
+      lifecycleCeremonies: ceremonies as never,
+      adminToken: 'fleet-admin-token-for-provider-tests',
+    });
+    const res = response();
+    await handler.handle(
+      jsonRequest({ request: {
+        action: 'provider.add',
+        ceremonyId: '00000000-0000-4000-8000-000000000516',
+        companionId: COMPANION_ID,
+        contactId: 'contact-member',
+        newProvider: {
+          provider: 'discord',
+          subjectId: '323456789012345678',
+          callbackTransactionId: '00000000-0000-4000-8000-000000000517',
+          proofDigest: 'b'.repeat(64),
+        },
+        reason: 'not applicable in key mode',
+      } }, {
+        'content-type': 'application/json',
+        origin: 'https://fleet.example.test',
+        authorization: 'Bearer fleet-admin-token-for-provider-tests',
+      }),
+      res,
+      new URL('https://fleet.example.test/v1/fleet-auth/lifecycle/provider/complete'),
+    );
+    expect(res.statusCode).toBe(400);
+    expect(ceremonies.completeAsAdminTokenOperator).not.toHaveBeenCalled();
+    expect(ceremonies.complete).not.toHaveBeenCalled();
+  });
+});
+
+describe('Companion UI and roster with the ADMIN_TOKEN key alone (key-or-SSO ruling)', () => {
+  const ADMIN_TOKEN = 'fleet-admin-token-for-companion-ui-tests';
+  const roster = {
+    schemaVersion: 1 as const,
+    companions: [{
+      companionId: COMPANION_ID,
+      displayName: 'Flagship',
+      websocketPath: `/companion-ui/companions/${COMPANION_ID}/ws`,
+    }],
+  };
+  function keyHandler() {
+    const resolveRoster = vi.fn(async () => { throw new Error('no SSO session'); });
+    const resolveAdminTokenRoster = vi.fn(() => roster);
+    const handler = new FleetAuthHttpRoutes({
+      broker: { displayStateBinding: vi.fn(() => 'c'.repeat(64)) } as unknown as GatewayFleetAuthBroker,
+      canonicalOrigin: 'https://fleet.example.test',
+      callbackPath: '/auth/discord/callback',
+      companionUi: { companionId: COMPANION_ID, guestMode: 'disabled' },
+      rosterSource: { resolveRoster, resolveAdminTokenRoster },
+      approvalsSource: { listPending: () => [], ownerOfConfirmation: () => undefined } as never,
+      adminToken: ADMIN_TOKEN,
+    });
+    return { handler, resolveRoster, resolveAdminTokenRoster };
+  }
+
+  it('reports a signed-in administrator status with no Discord identity', async () => {
+    const { handler } = keyHandler();
+    const res = response();
+    await handler.handle(
+      request('GET', { cookie: `psfn_token=${ADMIN_TOKEN}` }),
+      res,
+      new URL('https://fleet.example.test/v1/fleet-auth/session/status'),
+    );
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toEqual({
+      schemaVersion: 1,
+      state: 'signed_in',
+      displayStateBinding: 'c'.repeat(64),
+      guestMode: 'disabled',
+      websocketPath: `/companion-ui/companions/${COMPANION_ID}/ws`,
+      human: { provider: 'admin_token', label: 'Administrator', role: 'owner' },
+    });
+  });
+
+  it('serves the whole-fleet roster and approvals to the key, never the SSO resolver', async () => {
+    const { handler, resolveRoster, resolveAdminTokenRoster } = keyHandler();
+    for (const path of ['companions', 'approvals']) {
+      const res = response();
+      await handler.handle(
+        request('GET', { authorization: `Bearer ${ADMIN_TOKEN}` }),
+        res,
+        new URL(`https://fleet.example.test/v1/fleet-auth/${path}`),
+      );
+      expect(res.statusCode).toBe(200);
+    }
+    expect(resolveAdminTokenRoster).toHaveBeenCalledTimes(2);
+    expect(resolveRoster).not.toHaveBeenCalled();
+    const anonymous = response();
+    await handler.handle(request('GET'), anonymous, new URL('https://fleet.example.test/v1/fleet-auth/companions'));
+    expect(anonymous.statusCode).toBe(401);
+  });
+});
+

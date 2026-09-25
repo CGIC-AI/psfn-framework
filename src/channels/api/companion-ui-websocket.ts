@@ -35,6 +35,7 @@ import {
 import type { CompanionEventRelay } from '../backplane/companion-relay/relay.js';
 import {
   getBearerToken,
+  hasCookieValue,
   isExpectedApiToken,
   principalFromApiKeyToken,
   principalFromSatelliteApiKeyToken,
@@ -136,6 +137,13 @@ export interface CompanionUiWebSocketConfig {
    * Fleet auth adds SSO; it is never a precondition for this surface.
    */
   readonly operatorKeys?: readonly string[];
+  /**
+   * The deployment ADMIN_TOKEN, admitted from its HttpOnly `psfn_token`
+   * cookie so a browser (which cannot set an Authorization header on a
+   * WebSocket) reaches the key path (key-or-SSO ruling). Must be one of
+   * `operatorKeys`; the exact canonical Origin still gates the upgrade.
+   */
+  readonly adminTokenCookieKey?: string;
   readonly operatorActionBroker?: CompanionUiOperatorActionBroker;
   readonly audioIngress?: CompanionUiAudioIngressPort;
   readonly screenAudioTranscript?: (
@@ -337,7 +345,9 @@ export class CompanionUiWebSocketAdapter {
       rejectUpgrade(socket, 404);
       return true;
     }
-    if (this.hubPath && this.config.browserHubOrigin && rawHeaderCount(request, 'authorization') === 0) {
+    if (this.adminTokenFromCookie(request) !== undefined) {
+      void this.admitUpgrade(request, socket, head, match[1] as CompanionId);
+    } else if (this.hubPath && this.config.browserHubOrigin && rawHeaderCount(request, 'authorization') === 0) {
       proxyCompanionUiBrowserUpgrade({ request, socket, head,
         hubOrigin: this.config.browserHubOrigin, canonicalOrigin: this.expectedOrigin,
         timeoutMs: this.config.browserHubTimeoutMs!, allowGuest: this.config.guestMode === 'explicit' });
@@ -372,12 +382,18 @@ export class CompanionUiWebSocketAdapter {
   ): Promise<void> {
     let authority: UpgradeAuthority;
     try {
-      this.assertUpgradeMetadata(request);
-      const operatorKey = this.keyPath
+      const cookieKey = this.adminTokenFromCookie(request);
+      this.assertUpgradeMetadata(request, cookieKey !== undefined ? 'cookie' : 'bearer');
+      const operatorKey = cookieKey ?? (this.keyPath
         ? this.config.operatorKeys!.find(key => isExpectedApiToken(getBearerToken(request), key))
-        : undefined;
+        : undefined);
       if (operatorKey !== undefined) {
-        const operator = this.resolveOperatorUpgradeAuthority(request, companionId, operatorKey);
+        const operator = this.resolveOperatorUpgradeAuthority(
+          request,
+          companionId,
+          operatorKey,
+          cookieKey !== undefined ? 'cookie' : 'bearer',
+        );
         this.webSocketServer.handleUpgrade(request, socket, head, webSocket => {
           this.attachOperatorSocket(webSocket, operator);
         });
@@ -406,11 +422,23 @@ export class CompanionUiWebSocketAdapter {
     }
   }
 
-  private assertUpgradeMetadata(request: IncomingMessage): void {
+  /** The ADMIN_TOKEN carried by exactly one `psfn_token` cookie, or undefined. */
+  private adminTokenFromCookie(request: IncomingMessage): string | undefined {
+    const key = this.config.adminTokenCookieKey;
+    if (!this.keyPath || !key
+      || rawHeaderCount(request, 'authorization') !== 0
+      || rawHeaderCount(request, 'cookie') !== 1
+      || !(this.config.operatorKeys ?? []).some(operatorKey => isExpectedApiToken(key, operatorKey))) {
+      return undefined;
+    }
+    return hasCookieValue(request, 'psfn_token', key) ? key : undefined;
+  }
+
+  private assertUpgradeMetadata(request: IncomingMessage, credential: 'bearer' | 'cookie' = 'bearer'): void {
     if (this.stopped
       || rawHeaderCount(request, 'host') !== 1
       || rawHeaderCount(request, 'origin') !== 1
-      || rawHeaderCount(request, 'authorization') !== 1
+      || rawHeaderCount(request, 'authorization') !== (credential === 'cookie' ? 0 : 1)
       || rawHeaderCount(request, 'sec-websocket-protocol') !== 0
       || request.headers.host !== this.expectedHost
       || request.headers.origin !== this.expectedOrigin
@@ -426,8 +454,13 @@ export class CompanionUiWebSocketAdapter {
     request: IncomingMessage,
     companionId: CompanionId,
     operatorKey: string,
+    credential: 'bearer' | 'cookie' = 'bearer',
   ): OperatorUpgradeAuthority {
-    if (rawHeaderCount(request, 'cookie') !== 0) throw new Error('operator key sessions carry no cookie');
+    // A bearer session carries no cookie; a browser key session carries only
+    // the single ADMIN_TOKEN cookie that authenticated it.
+    if (rawHeaderCount(request, 'cookie') !== (credential === 'cookie' ? 1 : 0)) {
+      throw new Error('operator key sessions carry no other cookie');
+    }
     for (let index = 0; index < request.rawHeaders.length; index += 2) {
       const name = request.rawHeaders[index]?.toLowerCase() ?? '';
       if (name.startsWith('x-psfn-') || name.startsWith('x-identity-claim-')) {
@@ -435,6 +468,7 @@ export class CompanionUiWebSocketAdapter {
       }
     }
     delete request.headers.authorization;
+    delete request.headers.cookie;
     const audio = this.config.audioIngress !== undefined
       && this.config.screenAudioTranscript !== undefined
       && this.config.cancelAudioInteraction !== undefined;

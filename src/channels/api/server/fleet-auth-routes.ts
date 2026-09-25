@@ -22,6 +22,11 @@ import type { GatewayTrustedHostGardenRecoveryService } from '../../../boundary/
 import { FleetAuthRecoveryHttpRoutes } from './fleet-auth-recovery-routes.js';
 import type { GatewayFleetAuthLifecycleCeremonyService } from '../../../boundary/fleet-auth/lifecycle-ceremony.js';
 import { FleetAuthLifecycleCeremonyHttpRoutes } from './fleet-auth-lifecycle-ceremony-routes.js';
+import {
+  FLEET_AUTH_ACCOUNT_COMPLETE_PATH,
+  type GatewayOperatorAccountAuthorityService,
+} from '../../../boundary/fleet-auth/operator-account-authority.js';
+import { FleetAuthLifecycleCeremonyError } from '../../../boundary/fleet-auth/lifecycle-ceremony.js';
 import type { FleetPortalRoster } from '../../../boundary/gateway/fleet-portal-projection.js';
 import {
   buildFleetApprovalsView,
@@ -53,6 +58,8 @@ export type FleetAuthLifecycleCorsDisposition = 'not_applicable' | 'continue' | 
  */
 export interface FleetAuthRosterSource {
   resolveRoster(input: { sessionToken: string }): Promise<FleetPortalRoster>;
+  /** Whole-fleet roster for the audited ADMIN_TOKEN key (key-or-SSO ruling). */
+  resolveAdminTokenRoster(): FleetPortalRoster;
 }
 
 function singleHeader(value: string | string[] | undefined): string | undefined {
@@ -155,6 +162,7 @@ export class FleetAuthHttpRoutes {
   private readonly recoveryRoutes?: FleetAuthRecoveryHttpRoutes;
   private readonly lifecycleCeremonyRoutes?: FleetAuthLifecycleCeremonyHttpRoutes;
   private readonly adminToken?: string;
+  private readonly operatorAccountAuthority?: GatewayOperatorAccountAuthorityService;
 
   constructor(options: {
     broker: GatewayFleetAuthBroker;
@@ -177,9 +185,12 @@ export class FleetAuthHttpRoutes {
     approvalsSource?: FleetAuthApprovalsSource;
     /** The deployment ADMIN_TOKEN: the audited operator may approve lifecycle ceremonies. */
     adminToken?: string;
+    /** Audited ADMIN_TOKEN operator account authority (reinstate/disable/re-enable). */
+    operatorAccountAuthority?: GatewayOperatorAccountAuthorityService;
   }) {
     this.broker = options.broker;
     this.adminToken = options.adminToken || undefined;
+    this.operatorAccountAuthority = options.operatorAccountAuthority;
     this.canonicalOrigin = options.canonicalOrigin;
     this.callbackPath = options.callbackPath;
     this.trustProxy = options.trustProxy === true;
@@ -197,6 +208,37 @@ export class FleetAuthHttpRoutes {
       : undefined;
   }
 
+  private async handleOperatorAccount(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    const body = await readJsonBodyWithLimit(request, response, { maxBytes: MUTATION_BODY_LIMIT });
+    if (!body.ok) return;
+    if (!isRecord(body.value) || Object.keys(body.value).some(key => key !== 'request')) {
+      throw new FleetAuthBrokerError('invalid_request', 400, 'Account authority request is malformed');
+    }
+    try {
+      const completed = await this.operatorAccountAuthority!.complete({
+        requestOrigin: mutationOrigin(request),
+        request: body.value.request,
+      });
+      sendJson(response, 200, {
+        action: completed.action,
+        authorityGeneration: completed.authorityGeneration,
+        globalAuthEpoch: completed.globalAuthEpoch,
+        auditEventId: completed.auditEventId,
+      }, { 'Cache-Control': 'no-store' });
+    } catch (error) {
+      if (error instanceof FleetAuthLifecycleCeremonyError) {
+        throw new FleetAuthBrokerError(
+          error.code,
+          error.code === 'origin_mismatch' ? 403
+            : error.code === 'invalid_request' ? 400
+              : error.code === 'operator_approval_unavailable' ? 503 : 409,
+          error.message,
+        );
+      }
+      throw error;
+    }
+  }
+
   private matchesAdminToken(request: IncomingMessage): boolean {
     const token = this.adminToken;
     if (!token) return false;
@@ -204,7 +246,9 @@ export class FleetAuthHttpRoutes {
   }
 
   matches(method: string | undefined, path: string): boolean {
-    return (this.escalationRoutes?.matches(method, path) ?? false)
+    return (method === 'POST' && path === FLEET_AUTH_ACCOUNT_COMPLETE_PATH
+        && this.operatorAccountAuthority !== undefined)
+      || (this.escalationRoutes?.matches(method, path) ?? false)
       || (this.recoveryRoutes?.matches(method, path) ?? false)
       || (this.lifecycleCeremonyRoutes?.matches(method, path) ?? false)
       || (method === 'GET' && (
@@ -227,6 +271,12 @@ export class FleetAuthHttpRoutes {
       throw new FleetAuthBrokerError('fleet_auth_route_not_found', 404);
     }
     response.setHeader('Vary', 'Cookie');
+    if (this.matchesAdminToken(request)) {
+      sendJson(response, 200, this.rosterSource.resolveAdminTokenRoster(), {
+        'Cache-Control': 'no-store, private',
+      });
+      return;
+    }
     const sessionToken = readSessionCookie(request);
     if (!sessionToken) {
       throw new FleetAuthBrokerError('invalid_session', 401, 'Session is invalid or expired');
@@ -248,11 +298,16 @@ export class FleetAuthHttpRoutes {
       throw new FleetAuthBrokerError('fleet_auth_route_not_found', 404);
     }
     response.setHeader('Vary', 'Cookie');
+    const approvalsSource = this.approvalsSource;
+    if (this.matchesAdminToken(request)) {
+      const approvals = buildFleetApprovalsView(this.rosterSource.resolveAdminTokenRoster(), approvalsSource);
+      sendJson(response, 200, { schemaVersion: 1, approvals }, { 'Cache-Control': 'no-store, private' });
+      return;
+    }
     const sessionToken = readSessionCookie(request);
     if (!sessionToken) {
       throw new FleetAuthBrokerError('invalid_session', 401, 'Session is invalid or expired');
     }
-    const approvalsSource = this.approvalsSource;
     try {
       // The roster is the single authorization/attribution source: only the
       // companions the session may reach get display names here, so any
@@ -350,7 +405,23 @@ export class FleetAuthHttpRoutes {
         if (!returnPath || [...url.searchParams.keys()].some(key => key !== 'return_to')) {
           throw new FleetAuthBrokerError('invalid_login_request', 400, 'Login request is malformed');
         }
-        const started = await this.broker.beginLogin({ returnPath });
+        let started: Awaited<ReturnType<GatewayFleetAuthBroker['beginLogin']>>;
+        try {
+          started = await this.broker.beginLogin({ returnPath });
+        } catch (error) {
+          // Key mode (no SSO provider): a browser navigation lands on the
+          // ADMIN_TOKEN sign-in instead of a JSON dead end; API clients still
+          // get the typed provider_disabled error.
+          if (error instanceof FleetAuthBrokerError && error.code === 'provider_disabled'
+            && (singleHeader(request.headers.accept) ?? '').includes('text/html')) {
+            response.statusCode = 303;
+            response.setHeader('Location', '/fleet/login');
+            response.setHeader('Cache-Control', 'no-store');
+            response.end();
+            return;
+          }
+          throw error;
+        }
         response.statusCode = 302;
         response.setHeader('Location', started.authorizationUrl);
         response.setHeader('Set-Cookie', preauthCookie(
@@ -398,6 +469,22 @@ export class FleetAuthHttpRoutes {
           throw new FleetAuthBrokerError('fleet_auth_route_not_found', 404);
         }
         response.setHeader('Vary', 'Cookie');
+        if (this.matchesAdminToken(request)) {
+          // The audited ADMIN_TOKEN key is the deployment operator; no SSO
+          // session or Discord identity is involved (key-or-SSO ruling).
+          sendJson(response, 200, {
+            schemaVersion: 1,
+            state: 'signed_in',
+            displayStateBinding: this.broker.displayStateBinding({
+              principalId: 'admin-token-operator',
+              authority: { authorityGeneration: 0, globalAuthEpoch: 0 },
+            }),
+            guestMode: this.companionUi.guestMode,
+            websocketPath: `/companion-ui/companions/${this.companionUi.companionId}/ws`,
+            human: { provider: 'admin_token', label: 'Administrator', role: 'owner' },
+          }, { 'Cache-Control': 'no-store, private' });
+          return;
+        }
         const statusToken = readSessionCookie(request);
         if (!statusToken) {
           sendJson(response, 200, {
@@ -461,6 +548,16 @@ export class FleetAuthHttpRoutes {
       if (request.method === 'GET' && url.pathname === APPROVALS_PATH
         && this.rosterSource && this.approvalsSource) {
         await this.handleFleetApprovals(request, response, url);
+        return;
+      }
+      if (request.method === 'POST' && url.pathname === FLEET_AUTH_ACCOUNT_COMPLETE_PATH
+        && this.operatorAccountAuthority) {
+        // Operator-only (psfn-framework-aol3m): the ADMIN_TOKEN key alone is
+        // the credential; an SSO session is neither needed nor accepted.
+        if (!this.matchesAdminToken(request)) {
+          throw new FleetAuthBrokerError('admin_token_required', 401, 'Administrator token is required');
+        }
+        await this.handleOperatorAccount(request, response);
         return;
       }
       if (this.lifecycleCeremonyRoutes?.matches(request.method, url.pathname)

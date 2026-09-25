@@ -121,6 +121,24 @@ describe('Garden admin session auth guard', () => {
     auth.stopServerSessionRefresh();
   });
 
+  it('never rotates an SSO session for a key-mode ADMIN_TOKEN operator (key-or-SSO ruling)', async () => {
+    const documentRef = new FakeVisibilityDocument();
+    (documentRef as unknown as { cookie: string }).cookie = 'garden_operator_door=admin_token';
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const path = String(input);
+      if (path === '/v1/fleet/portal') {
+        return new Response(JSON.stringify({ schemaVersion: 2 }), { status: 200 });
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const auth = await loadAuthStore(fetchImpl as typeof fetch, { pathname: '/fleet', documentRef });
+    auth.startServerSessionRefresh();
+    await expect(auth.ensureAuthResolved()).resolves.toBe(true);
+    await flushAsyncWork();
+    expect(fetchImpl.mock.calls.map(call => String(call[0]))).toEqual(['/v1/fleet/portal']);
+    auth.stopServerSessionRefresh();
+  });
+
   it('rotates an authenticated fleet session and schedules from the returned idle expiry', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-08-03T12:00:00.000Z'));

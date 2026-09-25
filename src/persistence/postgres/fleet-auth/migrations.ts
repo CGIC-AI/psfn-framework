@@ -1714,6 +1714,20 @@ ALTER TABLE hub_device_assertion_replays
 -- discontinuity for append-only deny records, not a uniqueness regression.
 `;
 
+// Key-or-SSO ruling (psfn-framework-aol3m): the trusted-host reapproval
+// procedures had no runtime entrypoint left after the Discord-SSO-only doctrine
+// removed WebAuthn and the reapproval routes. They are dropped; reinstatement of
+// restored authority is the audited ADMIN_TOKEN operator's bounded procedures
+// (operator-account-authority-sql.ts), reasserted with the other procedures.
+const RETIRE_TRUSTED_HOST_REAPPROVAL_SQL = `
+DROP FUNCTION IF EXISTS fleet_auth.reapprove_account_authority(
+  uuid, uuid, text, text, uuid, text, uuid, uuid, uuid, timestamptz
+);
+DROP FUNCTION IF EXISTS fleet_auth.reapprove_companion_authority(
+  uuid, uuid, text, bigint, bigint, uuid, uuid, timestamptz
+);
+`;
+
 const DISCORD_SSO_ONLY_AUTHORITY_SQL = `
 -- Operator ruling D2 (2026-07-30): the passkey/WebAuthn/JIT step-up stack is
 -- removed. Discord SSO is the only authentication authority, and escalation is
@@ -1830,4 +1844,5 @@ export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
   },
   { version: 28, name: 'trusted_host_provider_recovery', sql: TRUSTED_HOST_PROVIDER_RECOVERY_SQL },
   { version: 29, name: 'discord_sso_only_authority', sql: DISCORD_SSO_ONLY_AUTHORITY_SQL },
+  { version: 30, name: 'retire_trusted_host_reapproval', sql: RETIRE_TRUSTED_HOST_REAPPROVAL_SQL },
 ] as const;

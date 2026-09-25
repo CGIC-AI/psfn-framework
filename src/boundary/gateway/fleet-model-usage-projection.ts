@@ -157,6 +157,11 @@ export interface FleetModelUsageProjectionPort {
     sessionToken: string;
     query: FleetModelUsageQuery;
   }): Promise<FleetModelUsageProjection>;
+  /**
+   * Whole-fleet projection for the audited ADMIN_TOKEN door (key-or-SSO
+   * ruling): the key operator operates every fleet companion.
+   */
+  resolveAdminToken(query: FleetModelUsageQuery): Promise<FleetModelUsageProjection>;
 }
 
 export interface FleetModelUsageAuthorizationPort {
@@ -173,6 +178,8 @@ export interface GatewayFleetModelUsageProjectionOptions {
   portalAuthorizer: FleetPortalAuthorizationBatchPort;
   modelAuthorizer: FleetModelUsageAuthorizationPort;
   usage: FleetModelUsageSummaryQueryPort;
+  /** Every fleet companion; the ADMIN_TOKEN operator's roster. */
+  fleetCompanionIds: readonly string[];
   now?: () => Date;
 }
 
@@ -218,14 +225,25 @@ export class GatewayFleetModelUsageProjection implements FleetModelUsageProjecti
     const companionIds = authorized
       .filter((companionId): companionId is string => companionId !== null)
       .sort((left, right) => left.localeCompare(right));
+    return await this.summarize(input.query, companionIds);
+  }
+
+  async resolveAdminToken(query: FleetModelUsageQuery): Promise<FleetModelUsageProjection> {
+    return await this.summarize(query, [...this.options.fleetCompanionIds]
+      .sort((left, right) => left.localeCompare(right)));
+  }
+
+  private async summarize(
+    query: FleetModelUsageQuery,
+    companionIds: string[],
+  ): Promise<FleetModelUsageProjection> {
     if (companionIds.length === 0) {
       throw new FleetAuthorizationDeniedError('role_action_denied');
     }
-
     const now = this.now();
     const generatedAt = now.toISOString();
     const summary = await this.options.usage.getFleetModelUsageSummary(
-      input.query,
+      query,
       companionIds,
       now.getTime(),
     );

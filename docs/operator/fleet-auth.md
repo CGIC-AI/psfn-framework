@@ -271,26 +271,35 @@ validates the actor/target version claims, bumps the affected versions, writes
 a lifecycle decision receipt, and audits the transition. Every denial path is
 audited (`authorization_audit_events` with `resource = 'lifecycle-ceremony'`).
 
-The audited ADMIN_TOKEN operator can be the approving authority for the same
-seven ceremony actions, with or without SSO configured. It sends the completion
-request to the same `/v1/fleet-auth/lifecycle/{binding,provider,role}/complete`
-route with `Authorization: Bearer $ADMIN_TOKEN` (or the HttpOnly `psfn_token`
-cookie) and the exact canonical `Origin`; no SSO session or CSRF token is
-involved. The gateway first writes a durable `admin_token_operator` approval row
-(`reason_code = 'admin_token_lifecycle_approval_allowed'`) bound to the decision
-id, ceremony, action, companion and current authority generation/epoch. The
-store re-reads that row inside the decision transaction and denies anything
-stale, foreign or missing. Because the epoch advances, an approval can be used
-only once. The operator replaces only the approving companion
-owner/administrator. It never supplies the subject's proof. For
-`binding.activate` and every `provider.*` action, each Discord proof must be a
-lifecycle OAuth callback that the target principal started from its own live
-session. A pending principal signs in with Discord and then starts the
-lifecycle OAuth itself. A proof that the operator's or anyone else's browser
-started is refused (`provider_callback_proof_invalid`). The anti-rollback
-floor, target version claims, last-owner protection and contact-authority
-snapshot checks are unchanged. Any action outside the seven ceremony actions
-rejects an operator approval as an invalid decision.
+**Key mode (ADMIN_TOKEN, no SSO or Discord).** The audited ADMIN_TOKEN
+operator performs these ceremonies directly with the key, whether or not SSO
+is configured:
+
+- `binding.activate` activates a pending principal's contact binding. It
+  names the principal's own Discord subject (`providerSubjectId`), which its
+  SSO login already recorded as pending. There is no OAuth proof and no
+  contact-authority snapshot.
+- `role.grant`, `role.change` and `role.revoke`.
+
+Send them to the same `/v1/fleet-auth/lifecycle/{binding,role}/complete`
+routes with `Authorization: Bearer $ADMIN_TOKEN` (or the HttpOnly
+`psfn_token` cookie) and the exact canonical `Origin`. No SSO session or CSRF
+token is involved. The gateway first writes a durable `admin_token_operator`
+approval row (`reason_code = 'admin_token_lifecycle_approval_allowed'`). It is
+bound to the decision id, ceremony, action, companion and current authority
+generation/epoch. The store re-reads that row inside the decision transaction
+and denies anything stale, foreign or missing. The epoch advance makes each
+approval single-use. The anti-rollback floor, target version claims,
+last-owner protection and conflict checks are unchanged.
+
+`provider.add`, `provider.relink` and `provider.replace` prove control of a
+Discord account through that account's own OAuth callback. They are an
+optional SSO-mode feature and are refused on the key path; nothing in key mode
+depends on them. Linking a platform identity (Discord, Telegram and others)
+to a contact is ordinary contact management through
+`PATCH /api/admin/contacts/:id` (`addChannel`), which works with the key and
+needs no OAuth. Account reinstatement, disable and re-enable are described in
+*Operator account authority* below.
 
 ## Reconciliation quarantine and recovery
 
@@ -301,8 +310,9 @@ subjects, bindings, and grants; a companion-authority row also enters
 quarantine unless a current owner for that shared companion carries it forward
 under the narrow exception below. Ephemeral sessions, OAuth transactions, token
 custody, challenges, grants, evidence, ceremonies, and decision receipts are
-removed. A regular account returns only through the explicit trusted-host
-reapproval flow; the runtime cannot reactivate quarantined rows directly.
+removed. A regular account or companion returns only when the audited
+ADMIN_TOKEN operator reinstates it (see *Operator account authority* below);
+ordinary runtime SQL cannot reactivate quarantined rows directly.
 
 An already-current owner is the narrow exception. Reconciliation recognizes a
 principal only when it is active and live and holds an active, live `owner`
@@ -318,14 +328,43 @@ provider metadata, or a partial row.
 stateDiagram-v2
   [*] --> Live
   Live --> Quarantined: trusted-host floor advance
-  Quarantined --> Live: explicit trusted-host reapproval
+  Quarantined --> Live: audited ADMIN_TOKEN operator reinstatement
   Quarantined --> Tombstoned: non-restored floor tombstone
   Live --> Revoked: provider revocation or lineage removal
   Revoked --> [*]
   Tombstoned --> [*]
 ```
 
-*Authority state transitions: floor advances quarantine restorable rows; only the owner exception or the explicit reapproval flow returns them to live; tombstones from the non-restored floor are permanent.*
+*Authority state transitions: floor advances quarantine restorable rows; only the owner exception or an audited operator reinstatement returns them to live; tombstones from the non-restored floor are permanent.*
+
+### Operator account authority (ADMIN_TOKEN, no SSO)
+
+The audited ADMIN_TOKEN operator manages accounts directly with the key. No
+Discord session, OAuth proof or SSO principal is involved
+(`POST /v1/fleet-auth/lifecycle/account/complete`, `Authorization: Bearer
+$ADMIN_TOKEN` or the HttpOnly `psfn_token` cookie, exact canonical `Origin`;
+an SSO session alone is refused with 401):
+
+| Action | Effect |
+|---|---|
+| `companion.reinstate` | quarantined companion authority (restored, or a re-added lineage the floor admits) at an exact version becomes active and live |
+| `principal.reinstate` | a quarantined account's principal, its non-tombstoned provider subjects, and one exact binding and role grant for a live companion become active and live |
+| `principal.suspend` | a live account is disabled; every session and escalation grant is revoked |
+| `principal.reactivate` | a disabled account is re-enabled; the person signs in again |
+
+Each request first writes a durable `admin_token_operator` approval row
+(`reason_code = 'admin_token_lifecycle_approval_allowed'`, action
+`roles.manage`) bound to the action, companion, audit event id and current
+authority generation/epoch. A bounded `SECURITY DEFINER` procedure
+(`fleet_auth.operator_reinstate_principal`, `operator_reinstate_companion`,
+`operator_set_principal_status`) then proves that row in the same
+transaction. It honours the non-restored floor (tombstones, companion
+lineage), refuses conflicts, advances the auth epoch, and appends its own
+audit event (`admin_token_operator_account_lifecycle`). A missing, stale or
+foreign approval, or reusing an audit id, fails closed. Only the runtime role
+may EXECUTE these procedures. The backup/restore coordinator cannot. The former trusted-host
+reapproval procedures had no remaining entry point and were dropped by fleet
+auth migration 30 (`retire_trusted_host_reapproval`).
 
 **Hand-seeding is unsupported.** Inserting an `owner` grant is not sufficient:
 the principal, provider subject, companion authority, contact binding, role
@@ -388,6 +427,18 @@ silently leave a rostered subject live and must revoke sessions as well.
 
 ## Authentication and escalation doctrine
 
+**Key or SSO, never key and SSO** (operator ruling, 2026-09-25). Either path
+alone is sufficient for everything. A person without Discord, or who does not
+want SSO, is never forced into it: nothing requires an SSO login, a Discord
+account, a Discord proof or any other Discord step. In key mode the
+`ADMIN_TOKEN` operator (Garden, fleet portal, lifecycle, account authority),
+`API_KEY` / `API_SATELLITE_KEYS`, Hub device keys and the testing-harness key
+cover every operator and companion capability. Testing never uses SSO or
+Discord: the harness key plus `ADMIN_TOKEN` can do everything. Discord SSO,
+its escalation grants and its Discord-proof ceremonies (provider
+link/relink/replace) are optional features of SSO mode, and nothing in key
+mode depends on them.
+
 Discord SSO is the only *human sign-in* provider (operator rulings D1/D2,
 2026-07-30). There are no passkeys, no WebAuthn, and no just-in-time step-up
 ceremonies; the former `webauthn_uv` assurance tier, JIT challenge/grant
@@ -418,11 +469,21 @@ keyed by Discord subjects no login can produce. Every OAuth entry point
 (`/v1/fleet-auth/login`, the OAuth callback, lifecycle proof ceremonies)
 returns the typed `provider_disabled` error, and the `/fleet/login` landing
 page offers only the administrator-token form. Every other fleet surface
-works with keys: `ADMIN_TOKEN` reaches the Fleet portal and
-`/v1/fleet/portal` (ICP readiness), the lifecycle routes (as the
-`operator:admin-token` actor), Garden admin and Garden chat through
-`/companions/<id>/garden/...`; `API_KEY` reaches `/v1`; the testing-harness
-key reaches its Garden door. The key itself (`provider`) stays required, so
+works with keys. `ADMIN_TOKEN` reaches:
+
+- the Fleet portal, `/v1/fleet/portal` (ICP readiness) and the
+  `/v1/fleet/model-usage` summary for the whole fleet;
+- the lifecycle plan routes (as the `operator:admin-token` actor), the
+  lifecycle ceremonies and `/v1/fleet-auth/lifecycle/account/complete`;
+- Garden admin and Garden chat through `/companions/<id>/garden/...`;
+- the browser Companion UI: page, session status, roster, approvals, and its
+  WebSocket through the HttpOnly `psfn_token` cookie.
+
+`POST /fleet/logout` clears the key cookie. `API_KEY` reaches `/v1`. The
+testing-harness key reaches its Garden door, signed `sole_admin` when there is
+no SSO provider (there are no human subjects to partition).
+`npm run provision:postgres-tenancy -- --apply` provisions only
+companion-to-companion contacts in key mode; no Discord roster is needed. The key itself (`provider`) stays required, so
 a missing block still fails closed.
 
 Garden chat through the unified origin works for both principals (bead
@@ -440,8 +501,7 @@ gateway durably records every Garden capability it mints for that principal in
 reason `admin_token_garden_authorization_allowed`) before signing, with the
 audited authority versions, and a gateway configured with `ADMIN_TOKEN` but
 without that audit wiring refuses to start. On Kubernetes the chart delivers
-`ADMIN_TOKEN` to the gateway under fleet auth only when the operator enables
-the admin door explicitly.
+`ADMIN_TOKEN` to the gateway whenever it is set.
 
 Deployment access mode is derived from the roster, per companion
 (`resolveFleetAccessMode`), and signed into every request capability:
@@ -486,7 +546,7 @@ authorization batch, request-capability signer/verifier/replay, child-assertion
 broker, primary embodiments, escalation coordinator, trusted-host recovery,
 authority-lifecycle store, contact-lifecycle authority, lifecycle ceremonies
 (composed exactly once), Discord evidence runtime, hub-device assertion
-verification, and account/companion reapproval authorities. The gateway
+verification, and the audited ADMIN_TOKEN operator account authority. The gateway
 API-surface wiring keeps every principal-composition conjunct mandatory — a
 dropped conjunct must fail closed at startup, never silently downgrade.
 
@@ -717,7 +777,7 @@ mutate runtime tables but cannot write `authority_state`,
 `companion_authority_state`, lifecycle decision receipts, contact authority
 intents, or the replay/tombstone tables directly; quarantine and epoch
 transitions run only inside `SECURITY DEFINER` functions
-(`reconcile_authority_floor`, reapproval procedures, first-owner procedures).
+(`reconcile_authority_floor`, operator account procedures, first-owner procedures).
 
 Two non-secret, system-owned files make authority durable across the
 database/trusted-host split:
@@ -744,9 +804,10 @@ reconciliation transaction (quarantine, epoch advance, audit) atomically.
 Provider revocation publishes the non-restored tombstone **before** any
 database mutation (`revokeProviderAuthority` → `createGatewayAccountAuthorityFencePort`):
 if the later SQL fails, the durable floor remains advanced and the next startup
-quarantines the stale database. Account and companion reapproval stay
-subordinate to that floor: tombstoned resources and non-current lineage are
-rejected before the reapproval procedure runs.
+quarantines the stale database. Operator account and companion reinstatement
+stay subordinate to that floor: tombstoned resources and non-current lineage
+are rejected, both against the floor file and inside the procedure against its
+projection.
 
 ## Repository-native PostgreSQL provisioning
 
@@ -814,7 +875,8 @@ CASCADE`, the restore-verification database, `DROP OWNED BY`, `DROP ROLE`).
 
 ## Configuration
 
-`fleet-auth.json` (seed `config/fleet-auth.seed.json`) is validated strictly on
+`fleet-auth.json` (seed `config/fleet-auth.seed.json`, an SSO-mode example;
+for key mode declare `"provider": { "kind": "none" }` as shown above) is validated strictly on
 load: `canonicalOrigin` must be an exact normalized HTTPS origin with no
 wildcard, username/password, path, query, or fragment; `callbackPath` must be an
 absolute normalized path; OAuth scopes are limited to the closed set

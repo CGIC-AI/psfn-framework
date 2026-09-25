@@ -81,10 +81,6 @@ async function lockProviderCompanionContactScope(
   if (bindingRow.state !== 'active' || bindingRow.restore_state !== 'live') {
     denyLifecycleMutation('provider_contact_binding_unavailable');
   }
-  // The audited ADMIN_TOKEN operator is the approving authority in place of a
-  // companion owner; its exact door audit is validated by the store, and the
-  // subject's own provider proof is still required (psfn-framework-ja7n0).
-  if (decision.operator) return;
   const owner = await client.query<{ role: string; lifecycle: string; restore_state: string }>(`
     SELECT role, lifecycle, restore_state
     FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants
@@ -107,12 +103,10 @@ export async function prepareProviderLifecycleMutation(
   >,
 ): Promise<PreparedLifecycleMutation> {
   const targetId = decision.target.principalId;
-  // A principal links only its own identity. An operator-approved link acts on
-  // the target, whose own session initiated every provider proof (validated in
-  // authority-lifecycle-proof); removal of a provider is never operator-approved.
-  if (decision.operator
-    ? decision.action === 'provider.unlink'
-    : requireLifecyclePrincipalActorId(decision, 'provider_actor_target_mismatch') !== targetId) {
+  // Provider link, relink, replace and unlink prove control of a Discord
+  // account: SSO-mode ceremonies a principal performs for its own identity.
+  // The ADMIN_TOKEN operator never takes them (rejected at validation).
+  if (requireLifecyclePrincipalActorId(decision, 'provider_actor_target_mismatch') !== targetId) {
     denyLifecycleMutation('provider_actor_target_mismatch');
   }
   if (decision.action === 'provider.add'

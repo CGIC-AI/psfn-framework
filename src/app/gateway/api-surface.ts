@@ -88,6 +88,7 @@ import {
 import { dispatchCompanionUiApproval } from '../../boundary/gateway/companion-ui-approvals.js';
 import { dispatchCompanionUiKeyShard } from '../../boundary/gateway/companion-ui-key-shards.js';
 import { FleetAuthHttpRoutes } from '../../channels/api/server/fleet-auth-routes.js';
+import type { GatewayOperatorAccountAuthorityService } from '../../boundary/fleet-auth/operator-account-authority.js';
 import type { FleetEscalationCoordinator } from '../../boundary/fleet-auth/escalation.js';
 import type { GatewayTrustedHostGardenRecoveryService } from '../../boundary/gateway/trusted-host-garden-recovery.js';
 import type { GatewayFleetAuthLifecycleCeremonyService } from '../../boundary/fleet-auth/lifecycle-ceremony.js';
@@ -175,6 +176,7 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
   fleetAuthEscalation?: FleetEscalationCoordinator;
   fleetAuthTrustedHostRecovery?: GatewayTrustedHostGardenRecoveryService;
   fleetAuthLifecycleCeremonies?: GatewayFleetAuthLifecycleCeremonyService;
+  fleetAuthOperatorAccountAuthority?: GatewayOperatorAccountAuthorityService;
   fleetAuthChildAssertions?: GatewayFleetAuthChildAssertionBroker;
   fleetAuthRequestCapabilities?: GatewayRequestCapabilitySigner;
   fleetAuthRequestCapabilityVerifier?: RequestCapabilityVerifier;
@@ -586,6 +588,7 @@ export async function startOptionalGatewayApiServer(
     && options.fleetAuthEscalation !== undefined
     && options.fleetAuthTrustedHostRecovery !== undefined
     && options.fleetAuthLifecycleCeremonies !== undefined
+    && options.fleetAuthOperatorAccountAuthority !== undefined
     && options.fleetAuthChildAssertions !== undefined
     && options.fleetAuthRequestCapabilities !== undefined
     && options.fleetAuthRequestCapabilityVerifier !== undefined
@@ -664,6 +667,7 @@ export async function startOptionalGatewayApiServer(
   });
   const fleetModelUsageProjection = createGatewayFleetModelUsageProjection({
     fleetAuthEnabled,
+    fleetCompanionIds: options.config.companionFleet?.companions.map(entry => entry.companionId) ?? [],
     ...(options.fleetPortalAuthorization
       ? { portalAuthorization: options.fleetPortalAuthorization }
       : {}),
@@ -895,6 +899,7 @@ export async function startOptionalGatewayApiServer(
         } : {}),
         ...(companionUiOperatorKeys.length > 0 ? {
           operatorKeys: companionUiOperatorKeys,
+          ...(env.ADMIN_TOKEN?.trim() ? { adminTokenCookieKey: env.ADMIN_TOKEN } : {}),
           operatorActionBroker: {
             // Key path (psfn-framework-7oh9y): the bearer is the human authority,
             // so frames dispatch with the key principal exactly as the REST API
@@ -1321,6 +1326,9 @@ export async function startOptionalGatewayApiServer(
               : {}),
             ...(options.fleetAuthLifecycleCeremonies
               ? { lifecycleCeremonies: options.fleetAuthLifecycleCeremonies }
+              : {}),
+            ...(options.fleetAuthOperatorAccountAuthority
+              ? { operatorAccountAuthority: options.fleetAuthOperatorAccountAuthority }
               : {}),
             ...(env.ADMIN_TOKEN ? { adminToken: env.ADMIN_TOKEN } : {}),
             trustProxy: isExplicitTrue(env.FLEET_SSO_TRUST_PROXY),

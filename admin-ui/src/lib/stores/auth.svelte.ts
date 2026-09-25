@@ -1,5 +1,6 @@
 import {
   clearAdminTokenOperatorDoor,
+  usesAdminTokenOperatorDoor,
   clearLegacyPersistentAdminToken,
   clearLegacyScriptReadableAdminTokenCookie,
 } from './auth-storage';
@@ -157,9 +158,11 @@ async function runServerSessionRefresh(
 }
 
 function requestServerSessionRefresh(): Promise<void> | null {
+  // The ADMIN_TOKEN key has no SSO session to rotate (key-or-SSO ruling).
   if (!sessionRefreshRunning
     || !serverSessionAuthenticated
     || token.length > 0
+    || usesAdminTokenOperatorDoor()
     || !isFleetSessionPath()
     || sessionRefreshDocumentHidden()) {
     return sessionRefreshPromise;

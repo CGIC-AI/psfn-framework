@@ -691,14 +691,21 @@
       "note": "Code-owned DoS guard: bound on the guest-only Hub device attachment fence map (n66dn.2); fences lift after 70 s, the cap only limits memory under rejection floods."
     },
     {
-      "file": "src/boundary/fleet-auth/lifecycle-ceremony.ts",
+      "file": "src/boundary/fleet-auth/lifecycle-ceremony-request.ts",
       "name": "boundedReason.$call:length-guard:GreaterThanToken#1",
       "value": "512",
       "form": "length-guard",
       "note": "Code-owned fleet-auth ceremony record bound coupled to the signed lifecycle evidence shape."
     },
     {
-      "file": "src/boundary/fleet-auth/lifecycle-ceremony.ts",
+      "file": "src/boundary/fleet-auth/lifecycle-ceremony-request.ts",
+      "name": "parseAdminTokenOperatorCeremonyRequest.$call:length-guard:GreaterThanToken#1",
+      "value": "256",
+      "form": "length-guard",
+      "note": "Code-owned fleet-auth key-mode ceremony request bound on the contact id, identical to the SSO ceremony contract."
+    },
+    {
+      "file": "src/boundary/fleet-auth/lifecycle-ceremony-request.ts",
       "name": "parseFleetAuthLifecycleCeremonyRequest.$call:length-guard:GreaterThanToken#1",
       "value": "256",
       "form": "length-guard",
@@ -940,20 +947,6 @@
       "file": "src/boundary/gateway/intake/l3-screener.ts",
       "name": "L3_MIN_VERBATIM_QUOTE_CHARS",
       "value": "24"
-    },
-    {
-      "file": "src/system/config/intake-policy-config.ts",
-      "name": "createDefaultInjectionClassifierWorkerConfig.queueMax",
-      "value": "32",
-      "form": "object-member",
-      "note": "Bootstrap default for intake-policy.json injectionClassifier.worker, used only when an owner file written before 3mbpi lacks the block; the seed carries the same value and the owner file is the authority."
-    },
-    {
-      "file": "src/system/config/intake-policy-config.ts",
-      "name": "createDefaultInjectionClassifierWorkerConfig.callTimeoutMs",
-      "value": "60_000",
-      "form": "object-member",
-      "note": "Bootstrap default for intake-policy.json injectionClassifier.worker, used only when an owner file written before 3mbpi lacks the block; the seed carries the same value and the owner file is the authority."
     },
     {
       "file": "src/boundary/gateway/intake/l3-screener.ts",
@@ -3414,7 +3407,7 @@
       "file": "src/core/cogsec/disclosure/capsule-custody.ts",
       "name": "DEFAULT_MAX_ACTIVE_CAPSULES",
       "value": "3",
-      "note": "Code-owned DEFAULT for the active-capsule queue bound (bible \u00a710.11 'initial cap of three'); already overridable via createShareCapsuleCustodyStore's maxActiveCapsules option. Owned-setting/Garden exposure is deferred to the publication approvals surface (jp36.7.2)."
+      "note": "Code-owned DEFAULT for the active-capsule queue bound (bible §10.11 'initial cap of three'); already overridable via createShareCapsuleCustodyStore's maxActiveCapsules option. Owned-setting/Garden exposure is deferred to the publication approvals surface (jp36.7.2)."
     },
     {
       "file": "src/core/cogsec/disclosure/publication-tool.ts",
@@ -3488,13 +3481,13 @@
       "file": "src/core/cogsec/intake/corpus/corpus.ts",
       "name": "MAX_FIXTURE_NOTE_CHARS",
       "value": "512",
-      "note": "Corpus fixture-schema size guard (hrmrq.141): bounds attacker-influenceable test data files, not runtime policy \u2014 same class as scanner MAX_SCAN_CHARS."
+      "note": "Corpus fixture-schema size guard (hrmrq.141): bounds attacker-influenceable test data files, not runtime policy — same class as scanner MAX_SCAN_CHARS."
     },
     {
       "file": "src/core/cogsec/intake/corpus/corpus.ts",
       "name": "MAX_FIXTURE_PAYLOAD_CHARS",
       "value": "8192",
-      "note": "Corpus fixture-schema size guard (hrmrq.141): bounds attacker-influenceable test data files, not runtime policy \u2014 same class as scanner MAX_SCAN_CHARS."
+      "note": "Corpus fixture-schema size guard (hrmrq.141): bounds attacker-influenceable test data files, not runtime policy — same class as scanner MAX_SCAN_CHARS."
     },
     {
       "file": "src/core/cogsec/intake/marking.ts",
@@ -5506,17 +5499,17 @@
     },
     {
       "file": "src/core/scheduler/temporal-wakeup.ts",
-      "name": "registerTemporalWakeupTasks.runMorningWake.$call:math-clamp:Math.max.arg1#1",
-      "value": "8",
-      "form": "math-clamp",
-      "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
-    },
-    {
-      "file": "src/core/scheduler/temporal-wakeup.ts",
       "name": "registerTemporalWakeupTasks.options.scheduler.register.arg0.cadence",
       "value": "{ kind: 'daily', hour, minute, timezone: morning.timezone }",
       "form": "object-member",
       "note": "Existing mutable policy candidate registerTemporalWakeupTasks.options.scheduler.register.arg0.cadence; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+    },
+    {
+      "file": "src/core/scheduler/temporal-wakeup.ts",
+      "name": "registerTemporalWakeupTasks.runMorningWake.$call:math-clamp:Math.max.arg1#1",
+      "value": "8",
+      "form": "math-clamp",
+      "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/core/scheduler/time-texture.ts",
@@ -8465,7 +8458,7 @@
     {
       "file": "src/faculties/subagents/tool-governance.ts",
       "name": "VAULT_POLICY",
-      "value": "{ readActionsHelp: 'read, search, daily (without content)', classify(params) { const explicit = resolveExplicitAction(params); if (!isRecord(params)) { return classifyByActionSets(explicit, VAULT_READ_ACTIONS, VAULT_MUTATION_ACTIONS); } if (explicit !== null) { if (VAULT_DAILY_ACTIONS.has(explicit)) { // daily appends when content is a string and reads otherwise // (executeVaultDaily in boundary/integrations/vault/tools.ts). return typeof params.content === 'string' ? { action: explicit, kind: 'mutation' } : { action: explicit, kind: 'read' }; } return classifyByActionSets(explicit, VAULT_READ_ACTIONS, VAULT_MUTATION_ACTIONS); } // Mirrors normalizeVaultAction's omitted-action inference, which can // resolve to a write or daily-append \u2014 classify those as mutations. const hasName = typeof params.name === 'string'; const hasContent = typeof params.content === 'string'; const hasQuery = typeof params.query === 'string'; const hasFolder = typeof params.folder === 'string'; const hasMode = typeof params.mode === 'string'; const hasLimit = typeof params.limit === 'number'; if (hasQuery && !hasName && !hasContent && !hasFolder && !hasMode) { return { action: 'search', kind: 'read' }; } if (hasName && hasContent) return { action: 'write', kind: 'mutation' }; if (hasName && !hasContent && !hasQuery && !hasFolder && !hasMode && !hasLimit) { return { action: 'read', kind: 'read' }; } if (!hasName && hasContent && !hasQuery && !hasFolder && !hasMode && !hasLimit) { return { action: 'daily', kind: 'mutation' }; } return { action: null, kind: 'unresolved' }; }, }",
+      "value": "{ readActionsHelp: 'read, search, daily (without content)', classify(params) { const explicit = resolveExplicitAction(params); if (!isRecord(params)) { return classifyByActionSets(explicit, VAULT_READ_ACTIONS, VAULT_MUTATION_ACTIONS); } if (explicit !== null) { if (VAULT_DAILY_ACTIONS.has(explicit)) { // daily appends when content is a string and reads otherwise // (executeVaultDaily in boundary/integrations/vault/tools.ts). return typeof params.content === 'string' ? { action: explicit, kind: 'mutation' } : { action: explicit, kind: 'read' }; } return classifyByActionSets(explicit, VAULT_READ_ACTIONS, VAULT_MUTATION_ACTIONS); } // Mirrors normalizeVaultAction's omitted-action inference, which can // resolve to a write or daily-append — classify those as mutations. const hasName = typeof params.name === 'string'; const hasContent = typeof params.content === 'string'; const hasQuery = typeof params.query === 'string'; const hasFolder = typeof params.folder === 'string'; const hasMode = typeof params.mode === 'string'; const hasLimit = typeof params.limit === 'number'; if (hasQuery && !hasName && !hasContent && !hasFolder && !hasMode) { return { action: 'search', kind: 'read' }; } if (hasName && hasContent) return { action: 'write', kind: 'mutation' }; if (hasName && !hasContent && !hasQuery && !hasFolder && !hasMode && !hasLimit) { return { action: 'read', kind: 'read' }; } if (!hasName && hasContent && !hasQuery && !hasFolder && !hasMode && !hasLimit) { return { action: 'daily', kind: 'mutation' }; } return { action: null, kind: 'unresolved' }; }, }",
       "form": "object",
       "note": "Existing mutable policy candidate VAULT_POLICY; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
@@ -8666,7 +8659,7 @@
     {
       "file": "src/faculties/wiki/sleeptime-wiki-pass.ts",
       "name": "PERSONAL_MARKER_PATTERN",
-      "value": "/\\bmy\\s+(partner|wife|husband|spouse|boyfriend|girlfriend|fianc[\u00e9e]+|mother|mom|father|dad|sister|brother|son|daughter|friend|parents?|family|ex|kid|child|children)\\b/i",
+      "value": "/\\bmy\\s+(partner|wife|husband|spouse|boyfriend|girlfriend|fianc[ée]+|mother|mom|father|dad|sister|brother|son|daughter|friend|parents?|family|ex|kid|child|children)\\b/i",
       "form": "regex",
       "note": "Sleeptime-wiki personal-context classifier currently encoded in code; explicitly baselined as named migration debt by psfn-framework-7qeo1.18, not immutable policy."
     },
@@ -9693,12 +9686,6 @@
       "note": "Existing mutable policy candidate PostgresFleetAuthBrokerStore.resolveOrCreatePendingPrincipal.policy_version; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
-      "file": "src/persistence/postgres/fleet-auth/reapproval.ts",
-      "name": "CONTACT_ID_MAX_LENGTH",
-      "value": "256",
-      "note": "Code-owned protocol boundary mirroring the fleet_auth.contact_bindings database CHECK constraint; it is not an operator-tunable policy."
-    },
-    {
       "file": "src/persistence/postgres/health-event-store.ts",
       "name": "DEFAULT_HEALTH_EVENT_LIST_LIMIT",
       "value": "200",
@@ -10251,7 +10238,7 @@
     {
       "file": "src/primitives/images/vision-reviewer.ts",
       "name": "EMBODIMENT_MARKER",
-      "value": "/EMBODIMENT:\\s*(same_me|drifted|different_person)\\b\\s*[\u2014:-]?\\s*(.*)$/im",
+      "value": "/EMBODIMENT:\\s*(same_me|drifted|different_person)\\b\\s*[—:-]?\\s*(.*)$/im",
       "form": "regex",
       "note": "Parser for the fixed EMBODIMENT reviewer response marker; code-owned protocol grammar coupled to the reviewer prompt contract."
     },
@@ -10259,18 +10246,6 @@
       "file": "src/primitives/images/vision-reviewer.ts",
       "name": "VISION_IMAGE_MAX_COUNT",
       "value": "4"
-    },
-    {
-      "file": "src/primitives/llm/tokens.ts",
-      "name": "TOKEN_COUNT_CACHE_MIN_TEXT_UNITS",
-      "value": "256",
-      "note": "Code-owned memo threshold for the token-count cache (psfn-framework-z9rkr): below it hashing costs about as much as counting; affects only CPU, never a count."
-    },
-    {
-      "file": "src/primitives/llm/tokens.ts",
-      "name": "TOKEN_COUNT_CACHE_MAX_ENTRIES",
-      "value": "4096",
-      "note": "Memory guard bounding the process-wide token-count LRU (psfn-framework-z9rkr); covers a 36 h history window many times over and changes only CPU, never a count."
     },
     {
       "file": "src/primitives/llm/accounting-context.ts",
@@ -10472,6 +10447,18 @@
       "value": "0.5",
       "form": "object-member",
       "note": "Existing mutable policy candidate capabilityWeightsForPurpose.maxTokens; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+    },
+    {
+      "file": "src/primitives/llm/tokens.ts",
+      "name": "TOKEN_COUNT_CACHE_MAX_ENTRIES",
+      "value": "4096",
+      "note": "Memory guard bounding the process-wide token-count LRU (psfn-framework-z9rkr); covers a 36 h history window many times over and changes only CPU, never a count."
+    },
+    {
+      "file": "src/primitives/llm/tokens.ts",
+      "name": "TOKEN_COUNT_CACHE_MIN_TEXT_UNITS",
+      "value": "256",
+      "note": "Code-owned memo threshold for the token-count cache (psfn-framework-z9rkr): below it hashing costs about as much as counting; affects only CPU, never a count."
     },
     {
       "file": "src/primitives/llm/vision-limits.ts",
@@ -12290,6 +12277,20 @@
       "name": "MAX_ICP_POLICY_OUTSTANDING_HOLDS",
       "value": "8",
       "note": "Code-owned pool-exhaustion ceiling for retained database locks; scheduler.json may lower it but can never raise it."
+    },
+    {
+      "file": "src/system/config/intake-policy-config.ts",
+      "name": "createDefaultInjectionClassifierWorkerConfig.callTimeoutMs",
+      "value": "60_000",
+      "form": "object-member",
+      "note": "Bootstrap default for intake-policy.json injectionClassifier.worker, used only when an owner file written before 3mbpi lacks the block; the seed carries the same value and the owner file is the authority."
+    },
+    {
+      "file": "src/system/config/intake-policy-config.ts",
+      "name": "createDefaultInjectionClassifierWorkerConfig.queueMax",
+      "value": "32",
+      "form": "object-member",
+      "note": "Bootstrap default for intake-policy.json injectionClassifier.worker, used only when an owner file written before 3mbpi lacks the block; the seed carries the same value and the owner file is the authority."
     },
     {
       "file": "src/system/config/intake-policy-config.ts",

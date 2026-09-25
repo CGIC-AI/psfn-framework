@@ -39,21 +39,13 @@ import { GatewayFleetAuthAuthorityLifecycleStore } from '../../persistence/postg
 import { FleetAuthAuthorityFloorStore } from '../../persistence/postgres/fleet-auth/authority-floor.js';
 import { PostgresFleetAuthorizationContextStore } from '../../persistence/postgres/fleet-auth/authorization-context-store.js';
 import { PostgresChildAssertionAuthority } from '../../persistence/postgres/fleet-auth/child-assertion-authority.js';
-import type {
-  AccountReapprovalRequest,
-  AccountReapprovalResult,
-} from '../../persistence/postgres/fleet-auth/reapproval.js';
-import type {
-  CompanionReapprovalRequest,
-  CompanionReapprovalResult,
-} from '../../persistence/postgres/fleet-auth/companion-reapproval.js';
+import { executeOperatorAccountAction } from '../../persistence/postgres/fleet-auth/operator-account-authority.js';
+import { GatewayOperatorAccountAuthorityService } from '../../boundary/fleet-auth/operator-account-authority.js';
 import { PostgresContactLifecycleAuthorityStore } from '../../persistence/postgres/fleet-auth/contact-lifecycle-authority-store.js';
 import { PostgresDiscordEvidenceStore } from '../../persistence/postgres/fleet-auth/discord-evidence-store.js';
 import { PostgresFleetEscalationGrantStore } from '../../persistence/postgres/fleet-auth/escalation-grant-store.js';
 import {
   createGatewayAccountAuthorityFencePort,
-  createGatewayAccountReapprovalAuthority,
-  createGatewayCompanionReapprovalAuthority,
   reconcileFleetAuthAuthorityState,
   recordPostgresFleetLifecycleCeremonyDenial,
 } from '../../persistence/postgres/fleet-auth/gateway-persistence.js';
@@ -105,12 +97,8 @@ export interface GatewayFleetAuthPersistence {
   ): GatewayFleetAuthLifecycleCeremonyService;
   discordEvidence?: DiscordEvidenceRuntime;
   discordEvidenceLifecycle?: DiscordEvidenceLifecycleCoordinator;
-  reapproveAccountAuthority(
-    request: AccountReapprovalRequest,
-  ): Promise<AccountReapprovalResult>;
-  reapproveCompanionAuthority(
-    request: CompanionReapprovalRequest,
-  ): Promise<CompanionReapprovalResult>;
+  /** Audited ADMIN_TOKEN operator account authority (reinstate, disable, re-enable). */
+  operatorAccountAuthority: GatewayOperatorAccountAuthorityService;
   verifyAndConsumeHubDeviceAssertion(
     token: string,
     expected: HubDeviceAssertionExpectedBinding,
@@ -264,10 +252,16 @@ export async function initializeGatewayFleetAuthPersistence(options: {
         ...(config.accountRoster ? { accountRoster: config.accountRoster } : {}),
       }),
     });
-    const reapproveAccountAuthority = createGatewayAccountReapprovalAuthority(
-      pool,
-      authorityFloors,
-    );
+    const operatorAccountAuthority = new GatewayOperatorAccountAuthorityService({
+      canonicalOrigin: config.canonicalOrigin,
+      ports: {
+        recordApproval: input => recordAdminTokenLifecycleApproval(pool, input),
+        execute: input => executeOperatorAccountAction(pool, input),
+        isAccountAuthorityTombstoned: (kind, resourceId) => (
+          authorityFloors.isAccountAuthorityTombstoned(kind, resourceId)
+        ),
+      },
+    });
     const authorityLifecycle = new GatewayFleetAuthAuthorityLifecycleStore({
       pool: authorityPool,
       accountAuthority,
@@ -387,11 +381,7 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       },
       ...(discordEvidence ? { discordEvidence } : {}),
       ...(discordEvidenceLifecycle ? { discordEvidenceLifecycle } : {}),
-      reapproveAccountAuthority,
-      reapproveCompanionAuthority: createGatewayCompanionReapprovalAuthority(
-        pool,
-        authorityFloors,
-      ),
+      operatorAccountAuthority,
       verifyAndConsumeHubDeviceAssertion: (token, expected) => verifyAndConsumeHubDeviceAssertion({
         token,
         expected,

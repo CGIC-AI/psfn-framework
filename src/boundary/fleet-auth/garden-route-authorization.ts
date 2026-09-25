@@ -88,7 +88,11 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
   },
   {
     action: 'roles.manage', area: 'identity',
-    routeIds: ids('POST', ['/v1/fleet-auth/lifecycle/role/complete']),
+    routeIds: ids('POST', [
+      '/v1/fleet-auth/lifecycle/role/complete',
+      // Audited ADMIN_TOKEN operator account authority (psfn-framework-aol3m).
+      '/v1/fleet-auth/lifecycle/account/complete',
+    ]),
     confirmation: 'explicit',
   },
   {

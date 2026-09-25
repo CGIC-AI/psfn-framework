@@ -139,7 +139,7 @@ describe('fleet contact provisioning', () => {
       [COMPANION_B, ownerB.store],
     ]);
 
-    await provisionFleetContactTopology({ companions, accountRoster, stores });
+    await provisionFleetContactTopology({ companions, ssoProvider: 'discord', accountRoster, stores });
 
     for (const owner of [ownerA, ownerB]) {
       expect(owner.setMachineIntelligence).not.toHaveBeenCalled();
@@ -175,18 +175,18 @@ describe('fleet contact provisioning', () => {
       [COMPANION_A, ownerA.store],
       [COMPANION_B, ownerB.store],
     ]);
-    await provisionFleetContactTopology({ companions, accountRoster, stores });
+    await provisionFleetContactTopology({ companions, ssoProvider: 'discord', accountRoster, stores });
 
     for (const contact of [...ownerA.contacts, ...ownerB.contacts]) {
       contact.trustLevel = contact.discordUserId === OPERATOR ? 'trusted' : 'regular';
     }
-    await expect(verifyFleetContactTopology({ companions, accountRoster, stores }))
+    await expect(verifyFleetContactTopology({ companions, ssoProvider: 'discord', accountRoster, stores }))
       .resolves.toMatchObject({ companionCount: 2, siblingContactCount: 2, humanContactCount: 4 });
 
     const sibling = ownerA.contacts.find(contact => contact.relationshipType === 'ai_companion');
     if (!sibling) throw new Error('missing test sibling');
     sibling.relationshipType = 'stranger';
-    await expect(verifyFleetContactTopology({ companions, accountRoster, stores }))
+    await expect(verifyFleetContactTopology({ companions, ssoProvider: 'discord', accountRoster, stores }))
       .rejects.toThrow(/expected relationship ai_companion/u);
   });
 
@@ -209,7 +209,7 @@ describe('fleet contact provisioning', () => {
       [COMPANION_B, ownerB.store],
     ]);
 
-    await provisionFleetContactTopology({ companions, accountRoster, stores });
+    await provisionFleetContactTopology({ companions, ssoProvider: 'discord', accountRoster, stores });
 
     expect(ownerA.contacts.find(contact => contact.id === 'operator-a')).toMatchObject({
       discordUserId: OPERATOR,
@@ -218,4 +218,27 @@ describe('fleet contact provisioning', () => {
     });
     expect(ownerA.setTrustLevel).not.toHaveBeenCalled();
   });
+
+  it('provisions companion-to-companion contacts in key mode with no SSO roster (key-or-SSO ruling)', async () => {
+    const ownerA = fakeStore();
+    const ownerB = fakeStore();
+    const stores = new Map([
+      [COMPANION_A, ownerA.store],
+      [COMPANION_B, ownerB.store],
+    ]);
+    await provisionFleetContactTopology({ companions, ssoProvider: 'none', accountRoster: [], stores });
+    for (const owner of [ownerA, ownerB]) {
+      expect(owner.contacts).toHaveLength(1);
+      expect(owner.contacts[0]).toMatchObject({ relationshipType: 'ai_companion' });
+    }
+    await expect(verifyFleetContactTopology({ companions, ssoProvider: 'none', accountRoster: [], stores }))
+      .resolves.toMatchObject({ humanContactCount: 0, siblingContactCount: 2 });
+    await expect(provisionFleetContactTopology({
+      companions, ssoProvider: 'none', accountRoster, stores,
+    })).rejects.toThrow(/cannot use a Discord roster/u);
+    await expect(provisionFleetContactTopology({
+      companions, ssoProvider: 'discord', accountRoster: [], stores,
+    })).rejects.toThrow(/rostered owner or admin/u);
+  });
 });
+

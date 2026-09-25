@@ -60,12 +60,12 @@ const STAGES: Readonly<Record<FleetLifecycleStageId, (context: StageContext) => 
     const state = await fleetAuth.readCompanion(context.plan.companionId);
     // A never-registered companion is a fresh add; fleet auth registers it
     // through its own roster ceremonies. A retired one (removed/quarantined)
-    // must come back through fleet-auth readd + reapproval first.
+    // must come back through fleet-auth readd + operator reinstatement first.
     if (state.state === 'absent') return 'verified';
     if (state.lifecycle !== 'active' || state.restoreState !== 'live') {
       throw new FleetLifecycleError(
         'fleet_auth_not_admitted',
-        'Fleet-auth companion authority must be active and live (complete readd/reapproval first)',
+        'Fleet-auth companion authority must be active and live (complete readd and operator companion reinstatement first)',
       );
     }
     return 'verified';

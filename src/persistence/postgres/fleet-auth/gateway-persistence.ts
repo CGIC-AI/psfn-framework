@@ -5,16 +5,6 @@ import {
   type FleetAuthAuthorityFloor,
 } from './authority-floor.js';
 import { FLEET_AUTH_SCHEMA_NAME } from './schema.js';
-import {
-  executeAccountReapproval,
-  type AccountReapprovalRequest,
-  type AccountReapprovalResult,
-} from './reapproval.js';
-import {
-  executeCompanionReapproval,
-  type CompanionReapprovalRequest,
-  type CompanionReapprovalResult,
-} from './companion-reapproval.js';
 import type {
   AccountAuthorityFencePort,
   ProviderRevocationAuthorityPort,
@@ -110,8 +100,8 @@ export async function reconcileFleetAuthAuthorityStateInTransaction(
   auditEventId: string,
 ): Promise<void> {
   const trusted = floor.trustedHost;
-  // Serialize projection replacement with both reapproval procedures. They
-  // lock this singleton before consulting the projection, so no caller can
+  // Serialize projection replacement with the operator reinstatement
+  // procedures. They lock this singleton before consulting the projection, so no caller can
   // authorize against the prior committed floor while reconciliation swaps it.
   await client.query(`
     SELECT 1
@@ -218,47 +208,5 @@ export function createGatewayAccountAuthorityFencePort(
       return lineage;
     },
     findCompanionReadd: companionId => authorityFloors.findCompanionAuthorityReadd(companionId),
-  };
-}
-
-/**
- * Keep trusted-host reapproval subordinate to the non-restored provider floor.
- * This guard remains authoritative even when a prior database transaction
- * rolled back after publishing its floor tombstone.
- */
-export function createGatewayAccountReapprovalAuthority(
-  pool: Pool,
-  authorityFloors: FleetAuthAuthorityFloorStore,
-): (request: AccountReapprovalRequest) => Promise<AccountReapprovalResult> {
-  return async (request) => {
-    const resources = [
-      ['provider_subject', `${request.provider}:${request.providerSubjectId}`],
-      ['principal', request.principalId],
-      ['companion', request.companionId],
-      ['contact_binding', request.bindingId],
-      ['role_grant', request.roleGrantId],
-    ] as const;
-    if (resources.some(([kind, resourceId]) => (
-      authorityFloors.isAccountAuthorityTombstoned(kind, resourceId)
-    ))) {
-      throw new Error('Account authority is permanently tombstoned by non-restored authority');
-    }
-    return await executeAccountReapproval(pool, request);
-  };
-}
-
-export function createGatewayCompanionReapprovalAuthority(
-  pool: Pool,
-  authorityFloors: FleetAuthAuthorityFloorStore,
-): (request: CompanionReapprovalRequest) => Promise<CompanionReapprovalResult> {
-  return async request => {
-    if (!authorityFloors.companionAuthorityLineageIsCurrent({
-      companionId: request.companionId,
-      lineageId: request.lineageId,
-      lineageGeneration: request.lineageGeneration,
-    })) {
-      throw new Error('Companion authority lineage is not current in non-restored authority');
-    }
-    return await executeCompanionReapproval(pool, request);
   };
 }

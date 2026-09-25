@@ -1389,6 +1389,7 @@ async function main(): Promise<void> {
           fleetAuthEscalation: fleetAuthPersistence.escalation,
           fleetAuthTrustedHostRecovery: fleetAuthPersistence.trustedHostRecovery,
           ...(fleetAuthLifecycleCeremonies ? { fleetAuthLifecycleCeremonies } : {}),
+          fleetAuthOperatorAccountAuthority: fleetAuthPersistence.operatorAccountAuthority,
           fleetAuthChildAssertions: fleetAuthPersistence.childAssertions,
           fleetAuthRequestCapabilities: fleetAuthPersistence.requestCapabilities,
           fleetAuthRequestCapabilityVerifier: fleetAuthPersistence.requestCapabilityVerifier,

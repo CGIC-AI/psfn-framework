@@ -53,9 +53,15 @@ export function createIntakeScreenerUsageLedger(options: {
     return (attempt) => {
       attemptNumber += 1;
       const rates = resolveModelUsageCostRates(options.config, model);
+      const reportedTokens = attempt.inputTokens + attempt.outputTokens
+        + attempt.cacheReadTokens + attempt.cacheWriteTokens;
+      // A timed-out dispatch reports no usage but may have been billed: charge
+      // its request bound so the row is a conservative known cost.
+      const billed = attempt.errorCode === 'timeout' && reportedTokens === 0
+        ? { inputTokens: attempt.worstCaseTokens.input, outputTokens: attempt.worstCaseTokens.output }
+        : { inputTokens: attempt.inputTokens, outputTokens: attempt.outputTokens };
       const estimatedCostUsd = estimateConservativeModelUsageCostUsd({
-        inputTokens: attempt.inputTokens,
-        outputTokens: attempt.outputTokens,
+        ...billed,
         cacheReadTokens: attempt.cacheReadTokens,
         cacheWriteTokens: attempt.cacheWriteTokens,
       }, rates);

@@ -140,6 +140,7 @@ export function runTestingSessionPurgeCli(
       const adapters = await createTestingSessionPurgePostgresAdapters({
         databaseUrl,
         multiCompanion: runtime.config.multiCompanion === true,
+        ...(target.postgresRole ? { postgresRole: target.postgresRole } : {}),
         postgresSchema: target.postgresSchema,
         sessionsDir: target.sessionsDir,
       });

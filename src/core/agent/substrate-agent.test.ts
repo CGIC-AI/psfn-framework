@@ -3,6 +3,9 @@ import { fromAny } from '@total-typescript/shoehorn';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { getRequestContext } from '../../primitives/llm/request-context.js';
+import { isBusyTurnError } from '../../system/lifecycle/turn-contention.js';
+import { classifyPostTurnActionContention } from './post-turn-action-contention.js';
 import { Agent, type AgentTool } from '../../boundary/pi-agent/index.js';
 import type { CanonicalModelRegistry, LLMContext, LLMResponse, MessageAddressingMetadata, ModelRegistryEntry, ModelSlot, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
@@ -7710,5 +7713,103 @@ describe('resolveTurnEvidenceDependency', () => {
       },
     })))).toBe('required');
     expect(resolveTurnEvidenceDependency(messageWithRouting())).toBe('required');
+  });
+});
+
+// psfn-framework-z4vhu: a background sleeptime/dream-pass turn that holds the
+// agent run must not reject a person's chat with agent_busy. The foreground turn
+// preempts it and proceeds within a bounded latency; the background turn fails
+// with the typed contention its owner already defers/yields on.
+describe('SubstrateAgent foreground preemption of background turns (z4vhu)', () => {
+  type RunSlot = {
+    promise: Promise<void>;
+    resolve: () => void;
+    abortController: AbortController;
+    laneClass?: string;
+  };
+
+  /**
+   * Hang the next prompt as a real active run: it occupies the agent's run
+   * slot (with its request-context lane) until its AbortController fires, like
+   * the patched pi-agent loop does.
+   */
+  function occupyRunSlotUntilAborted(): { started: Promise<void>; aborted: Promise<void> } {
+    let entered!: () => void;
+    let abortedResolve!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const aborted = new Promise<void>((resolve) => { abortedResolve = resolve; });
+    promptSpy.mockImplementationOnce(async function (this: Agent) {
+      const slot = this as unknown as { activeRun?: RunSlot };
+      let release!: () => void;
+      const promise = new Promise<void>((resolve) => { release = resolve; });
+      const abortController = new AbortController();
+      const laneClass = getRequestContext()?.runtimeLaneClass;
+      slot.activeRun = { promise, resolve: release, abortController, ...(laneClass ? { laneClass } : {}) };
+      entered();
+      await new Promise<void>((resolve) => abortController.signal.addEventListener('abort', () => resolve(), { once: true }));
+      slot.activeRun = undefined;
+      release();
+      abortedResolve();
+      throw new Error('Request was aborted');
+    });
+    return { started, aborted };
+  }
+
+  it('lets a foreground chat preempt an active sleeptime review turn within a bounded latency', async () => {
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', makeConfig(),
+    );
+    const background = occupyRunSlotUntilAborted();
+    const sleeptimeTurn = agent.handleMessage(makeMessage({
+      id: 'sleeptime-review-action-1-1',
+      channelId: 'internal:reflection:sleeptime-review',
+      authorId: 'scheduler',
+      authorName: 'Sleeptime Review',
+      content: 'review the day',
+    }));
+    const sleeptimeOutcome = sleeptimeTurn.then(
+      () => 'resolved' as const,
+      (error: unknown) => error,
+    );
+    await background.started;
+
+    const startedAtMs = Date.now();
+    const foreground = await Promise.race([
+      agent.handleMessage(makeMessage({ id: 'chat-1', channelId: 'api:person:session-1', content: 'hello?' })),
+      new Promise<'blocked'>((resolve) => setTimeout(() => resolve('blocked'), 2_000)),
+    ]);
+    const elapsedMs = Date.now() - startedAtMs;
+
+    expect(foreground).not.toBe('blocked');
+    expect(elapsedMs).toBeLessThan(2_000);
+    await background.aborted;
+    const preempted = await sleeptimeOutcome;
+    expect(preempted).toBeInstanceOf(Error);
+    expect((preempted as Error).name).toBe('AgentRunPreemptedError');
+    // The sleeptime workset / reflection runtime treat it as durable contention.
+    expect(isBusyTurnError(preempted)).toBe(true);
+    expect(classifyPostTurnActionContention(preempted)).toBe('agent_busy');
+  });
+
+  it('never preempts a foreground turn for a background one', async () => {
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', makeConfig(),
+    );
+    const foreground = occupyRunSlotUntilAborted();
+    const chat = agent.handleMessage(makeMessage({ id: 'chat-2', channelId: 'api:person:session-2' }))
+      .catch((error: unknown) => error);
+    await foreground.started;
+    promptSpy.mockImplementationOnce(async () => {
+      throw new Error('Agent is already processing a prompt.');
+    });
+    await expect(agent.handleMessage(makeMessage({
+      id: 'sleeptime-review-action-2-1',
+      channelId: 'internal:reflection:sleeptime-review',
+    }))).rejects.toThrow(/already processing/u);
+    // The foreground run was not aborted by the background attempt.
+    const slot = agent as unknown as { agent: { activeRun?: RunSlot } };
+    expect(slot.agent.activeRun?.abortController.signal.aborted).toBe(false);
+    slot.agent.activeRun?.abortController.abort();
+    await chat;
   });
 });

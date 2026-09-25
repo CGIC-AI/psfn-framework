@@ -171,6 +171,22 @@ repeated warnings, never silent loss (`promptWhenIdle`,
 `src/app/agent/gateway-message-handlers.ts#L699-L724`; covered by tests at
 `src/app/agent/gateway-message-handlers.test.ts#L819-L863`).
 
+**Background turns never make a person's chat busy** (bead
+`psfn-framework-z4vhu`). Sleeptime review, dream-pass, heartbeat and other
+background reflection turns run through the same agent loop, whose run slot
+holds one run at a time. A turn in a preemptable runtime lane (maintenance
+reflection, background continuation) is tracked for its lifetime; a turn of a
+higher-priority lane (foreground chat), before it touches agent state, marks
+those turns preempted, aborts the active run if it is one of them, and starts
+as soon as they release the slot. A preempted turn that has not reached its run
+is refused at `prompt()`. Every preempted turn fails with
+`AgentRunPreemptedError`, an agent-busy contention that its owner already treats
+as durable: the sleeptime workset releases its claim and reschedules the pass,
+reflection defers on busy. The policy is the lane profiles' `preemptable` flag
+and priority (`src/core/agent/worker-lanes.ts`), the same one the model-call
+gate uses; the mechanism is
+`src/core/agent/substrate-agent/background-run-preemption.ts`.
+
 The Discord lane uses a dedicated queue with a single pump. While a turn is in
 flight, messages that arrive are **bundled** — same channel, same author,
 contiguous — into one follow-up turn whose content joins the newest envelope's

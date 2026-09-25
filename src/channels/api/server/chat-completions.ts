@@ -26,6 +26,7 @@ import type {
   ApiServerRuntime,
   ApiChatCompletionRpcSuccess,
   ChatCompletionRequest,
+  FleetGardenContactBinding,
 } from '../types.js';
 import { buildChatCompletionResponse } from '../response-format.js';
 import {
@@ -168,6 +169,12 @@ export interface PendingHubDeviceAdmission {
 
 export interface FleetGardenChatRouting {
   companionId: string;
+  /**
+   * Present only for an SSO principal admitted by the gateway's fleet
+   * authorization snapshot: its canonical contact travels as a server-derived
+   * RPC field, never as a browser-style identity claim header.
+   */
+  verifiedContact?: FleetGardenContactBinding;
 }
 
 export class ApiChatCompletionsHandler {
@@ -1145,6 +1152,9 @@ export class ApiChatCompletionsHandler {
             principal,
             headers: extractRpcHeaders(req),
             ...(fleetRouting ? { companionId: fleetRouting.companionId } : {}),
+            ...(fleetRouting?.verifiedContact
+              ? { fleetGardenContact: fleetRouting.verifiedContact }
+              : {}),
             ...(clientCert ? { clientCert } : {}),
             ...(hubDevicePrincipal ? { hubDevicePrincipal } : {}),
             ...(hubDeviceAttachment ? { hubDeviceAttachment } : {}),
@@ -1191,6 +1201,13 @@ export class ApiChatCompletionsHandler {
 
     if (hubDevicePrincipal) {
       sendApiError(res, 503, 'hub_device_ingress_unavailable', 'Hub device turns require the authenticated gateway runtime');
+      return;
+    }
+
+    if (fleetRouting?.verifiedContact) {
+      // A verified fleet contact is honored only by the authenticated agent
+      // runtime; the in-process path has no way to apply it, so fail closed.
+      sendApiError(res, 503, 'fleet_garden_chat_unavailable', 'Fleet Garden chat requires the gateway agent runtime');
       return;
     }
 
@@ -1269,6 +1286,9 @@ export class ApiChatCompletionsHandler {
             principal,
             headers: extractRpcHeaders(req),
             ...(fleetRouting ? { companionId: fleetRouting.companionId } : {}),
+            ...(fleetRouting?.verifiedContact
+              ? { fleetGardenContact: fleetRouting.verifiedContact }
+              : {}),
             ...(clientCert ? { clientCert } : {}),
             ...(hubDevicePrincipal ? { hubDevicePrincipal } : {}),
             ...(hubDeviceAttachment ? { hubDeviceAttachment } : {}),
@@ -1311,6 +1331,13 @@ export class ApiChatCompletionsHandler {
 
     if (hubDevicePrincipal) {
       sendApiError(res, 503, 'hub_device_ingress_unavailable', 'Hub device turns require the authenticated gateway runtime');
+      return;
+    }
+
+    if (fleetRouting?.verifiedContact) {
+      // A verified fleet contact is honored only by the authenticated agent
+      // runtime; the in-process path has no way to apply it, so fail closed.
+      sendApiError(res, 503, 'fleet_garden_chat_unavailable', 'Fleet Garden chat requires the gateway agent runtime');
       return;
     }
 

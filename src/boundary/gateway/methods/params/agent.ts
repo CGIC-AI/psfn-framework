@@ -70,6 +70,9 @@ export const agentMethodParamDecoders = {
     requestId: nonEmptyCanonicalString, request: unknownRecord, principal: apiPrincipal, headers: stringRecord,
     clientCert: Type.Optional(unknownRecord), hubDevicePrincipal: Type.Optional(unknownRecord),
     hubDeviceAttachment: Type.Optional(unknownRecord), companionUiCapability: Type.Optional(unknownRecord),
+    fleetGardenContact: Type.Optional(strictObject({
+      principalId: nonEmptyCanonicalString, contactId: nonEmptyCanonicalString,
+    })),
     timeoutMs: optionalNumber, performance: Type.Optional(strictObject({
       receivedMonotonicAtMs: Type.Number(), receivedTimestampMs: Type.Number(),
     })),

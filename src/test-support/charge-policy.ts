@@ -112,6 +112,8 @@ export function makeTestFatiguePolicyConfig(): FatiguePolicyConfig {
       declinedPressureUnits: 3,
       deferredPressureUnits: 2,
       unansweredPressureUnits: 1,
+      mutualReplyAllowancePerSide: 8,
+      mutualReplyPressureUnits: 0.2,
       continuationEvidence: {
         recentHumanParticipation: true,
         activeWorkOrResearch: true,

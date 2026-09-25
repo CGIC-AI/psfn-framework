@@ -571,6 +571,8 @@ function parseFatigueSocialRegulationConfig(
     'declinedPressureUnits',
     'deferredPressureUnits',
     'unansweredPressureUnits',
+    'mutualReplyAllowancePerSide',
+    'mutualReplyPressureUnits',
     'continuationEvidence',
     'roomEpisodePressure',
     'roomEpisodeCircuitBreaker',
@@ -634,6 +636,14 @@ function parseFatigueSocialRegulationConfig(
     unansweredPressureUnits: parseNonNegativeNumber(
       raw.unansweredPressureUnits,
       `${fieldPath}.unansweredPressureUnits`,
+    ),
+    mutualReplyAllowancePerSide: parseNonNegativeInteger(
+      raw.mutualReplyAllowancePerSide,
+      `${fieldPath}.mutualReplyAllowancePerSide`,
+    ),
+    mutualReplyPressureUnits: parseNonNegativeNumber(
+      raw.mutualReplyPressureUnits,
+      `${fieldPath}.mutualReplyPressureUnits`,
     ),
     continuationEvidence: {
       recentHumanParticipation: parseBoolean(

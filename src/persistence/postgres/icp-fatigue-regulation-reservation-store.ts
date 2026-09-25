@@ -54,6 +54,13 @@ function requireNonNegativeFinite(value: number, field: string): number {
   return value;
 }
 
+function requireNonNegativeInteger(value: number, field: string): number {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`${field} must be a non-negative safe integer`);
+  }
+  return value;
+}
+
 function requireCompanionId(value: string, field: string): string {
   if (!isRfc4122Uuid(value))
     throw new Error(`${field} must be an RFC 4122 UUID`);
@@ -437,6 +444,14 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
         input.unansweredPressureUnits,
         "initiationPressure.unansweredPressureUnits",
       ),
+      mutualReplyAllowancePerSide: requireNonNegativeInteger(
+        input.mutualReplyAllowancePerSide,
+        "initiationPressure.mutualReplyAllowancePerSide",
+      ),
+      mutualReplyPressureUnits: requireNonNegativeFinite(
+        input.mutualReplyPressureUnits,
+        "initiationPressure.mutualReplyPressureUnits",
+      ),
     };
     if (normalized.localCompanionId === normalized.peerCompanionId) {
       throw new Error("initiationPressure companion pair must be distinct");
@@ -750,7 +765,11 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
 
   private async pressureSnapshot(
     client: Pick<Pool, "query">,
-    input: IcpInitiationPressureInput & { rootInitiationId?: string },
+    input: Omit<IcpInitiationPressureInput, 'mutualReplyAllowancePerSide' | 'mutualReplyPressureUnits'> & {
+      rootInitiationId?: string;
+      mutualReplyAllowancePerSide?: number;
+      mutualReplyPressureUnits?: number;
+    },
     excludedTurnId?: string,
   ): Promise<{
     rootNormalSpent: number;
@@ -772,6 +791,7 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
       normal_spent: string | number;
       overcharge_spent: string | number;
       charged_pressure: string | number;
+      initiation_charged_pressure: string | number;
       directional_charged_pressure: string | number;
       declined_pressure: string | number;
       deferred_pressure: string | number;
@@ -802,7 +822,33 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
               THEN amount * POWER(2::double precision, -($4::bigint - reserved_at_ms)::double precision / $6::double precision)
               ELSE 0 END
           ), 0) AS directional_charged_pressure,
+          -- r5: initiation pressure models unwanted strain. A charged turn of
+          -- a mutual conversation (the other participant delivered a reply)
+          -- within the per-side reply allowance weighs $14 instead of its
+          -- full amount; one-sided turns and replies beyond the allowance
+          -- keep their full amount. $13/$14 are null for in-conversation
+          -- fatigue reads, which keep the unweighted sum.
+          COALESCE(SUM(
+            CASE WHEN decision = 'charged'
+              THEN amount
+                * CASE WHEN $13::integer IS NOT NULL AND mutual AND side_rank <= $13::integer
+                    THEN $14::double precision ELSE 1 END
+                * POWER(2::double precision, -($4::bigint - reserved_at_ms)::double precision / $6::double precision)
+              ELSE 0 END
+          ), 0) AS initiation_charged_pressure,
           COUNT(*) FILTER (WHERE decision = 'charged') AS reservation_count
+        FROM (
+        SELECT reservation.*,
+          ROW_NUMBER() OVER (
+            PARTITION BY reservation.conversation_id, reservation.local_companion_id, reservation.decision
+            ORDER BY reservation.reserved_at_ms, reservation.turn_id
+          ) AS side_rank,
+          EXISTS (
+            SELECT 1 FROM icp_fatigue_turn_reservations AS reply
+            WHERE reply.conversation_id::text = reservation.conversation_id::text
+              AND reply.local_companion_id <> reservation.local_companion_id
+              AND reply.outcome = 'delivered'
+          ) AS mutual
         FROM icp_fatigue_turn_reservations AS reservation
         WHERE ((local_companion_id = $1 AND peer_companion_id = $2)
             OR (local_companion_id = $2 AND peer_companion_id = $1))
@@ -831,6 +877,7 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
                   AND completed.outcome IN ('pending', 'delivering', 'delivered', 'no_reply')
               )
           )
+        ) AS reservation
       ), episode_pressure AS (
         SELECT
           COALESCE(SUM(CASE WHEN status = 'declined' THEN
@@ -862,6 +909,7 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
       )
       SELECT root_spend.normal_spent, root_spend.overcharge_spent,
         reservation_pressure.charged_pressure,
+        reservation_pressure.initiation_charged_pressure,
         reservation_pressure.directional_charged_pressure,
         episode_pressure.declined_pressure, episode_pressure.deferred_pressure,
         episode_pressure.unanswered_pressure, reservation_pressure.reservation_count,
@@ -881,6 +929,8 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
         input.unansweredAfterMs,
         excludedTurnId ?? null,
         [...ICP_SYSTEM_FAILURE_END_REASON_CODES],
+        input.mutualReplyAllowancePerSide ?? null,
+        input.mutualReplyPressureUnits ?? null,
       ],
     );
     const row = result.rows.at(0);
@@ -891,7 +941,11 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
       "reservation.normalSpent",
     );
     const pressures = {
-      chargedPressure: Number(row.charged_pressure),
+      chargedPressure: Number(
+        input.mutualReplyAllowancePerSide === undefined
+          ? row.charged_pressure
+          : row.initiation_charged_pressure,
+      ),
       declinedPressure: Number(row.declined_pressure),
       deferredPressure: Number(row.deferred_pressure),
       unansweredPressure: Number(row.unanswered_pressure),

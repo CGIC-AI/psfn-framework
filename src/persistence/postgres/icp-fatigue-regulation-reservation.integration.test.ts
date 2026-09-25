@@ -783,10 +783,117 @@ describe("Postgres ICP fatigue regulation reservations", () => {
           declinedPressureUnits: 3,
           deferredPressureUnits: 2,
           unansweredPressureUnits: 1,
+          mutualReplyAllowancePerSide: 8,
+          mutualReplyPressureUnits: 0.2,
         });
         // Only the socially ended conversation's charged turn counts.
         expect(pressure.contributingReservationCount).toBe(1);
         expect(pressure.chargedPressure).toBeCloseTo(1, 6);
+      } finally {
+        await Promise.allSettled([episodes.close(), store.close(), sqlPool.end()]);
+      }
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    "weighs a friendly mutual conversation lightly and one-sided outreach and declines in full (r5)",
+    async () => {
+      if (!harness)
+        throw new Error("Postgres integration harness is unavailable");
+      const databaseUrl = await freshDatabaseUrl();
+      const episodes = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
+        knownCompanionIds: [A, B],
+      });
+      const store =
+        await PostgresIcpFatigueRegulationReservationStore.connect(databaseUrl);
+      const sqlPool = createPostgresPool(databaseUrl, {
+        applicationName: "icp-pressure-mutual-model-test",
+        allowExitOnIdle: true,
+      });
+      const pressureInput = (allowance: number) => ({
+        localCompanionId: A,
+        peerCompanionId: B,
+        timestampMs: 10_000,
+        relationshipPressureHalfLifeMs: HALF_LIFE_MS,
+        relationshipPressureWindowMs: WINDOW_MS,
+        unansweredAfterMs: 15 * 60_000,
+        declinedPressureUnits: 3,
+        deferredPressureUnits: 2,
+        unansweredPressureUnits: 1,
+        mutualReplyAllowancePerSide: allowance,
+        mutualReplyPressureUnits: 0.2,
+      });
+      let turn = 0;
+      const deliveredTurn = async (conversationId: string, local: string, peer: string) => {
+        turn += 1;
+        const turnId = `88888888-8888-4888-8888-${String(turn).padStart(12, "0")}`;
+        await expect(store.reserve({
+          ...reservationInput(correlation({
+            conversationId,
+            channelId: DM,
+            turnId,
+            localCompanionId: local,
+            peerCompanionId: peer,
+          })),
+          hardLimit: 100,
+        })).resolves.toMatchObject({ outcome: "reserved" });
+        await sqlPool.query(
+          "UPDATE shared.icp_fatigue_turn_reservations SET outcome = 'delivered', finalized_at_ms = reserved_at_ms WHERE turn_id = $1",
+          [turnId],
+        );
+      };
+      const createEpisode = async (conversationId: string, _label: string) => {
+        await episodes.createEpisode({
+          conversationId,
+          channelId: DM,
+          participantCompanionIds: [A, B],
+          rootInitiationId: ROOT,
+          initiatedByCompanionId: A,
+          initiationSource: "operator_test",
+          provenanceRef: `icp-prov:${conversationId}`,
+          openedAtMs: 1_000,
+          lastActivityAtMs: 1_000,
+          status: "invited",
+          revision: 1,
+        });
+      };
+      try {
+        // The r5 exchange: Artemis 3 turns, Vega 2, both delivered.
+        const mutual = "55555555-5555-4555-8555-000000000091";
+        await createEpisode(mutual, "mutual");
+        for (const [local, peer] of [[A, B], [B, A], [A, B], [B, A], [A, B]] as const) {
+          await deliveredTurn(mutual, local, peer);
+        }
+        const friendly = await store.readInitiationPressure(pressureInput(8));
+        expect(friendly.chargedPressure).toBeCloseTo(1, 6);
+        expect(friendly.relationshipPressure).toBeCloseTo(1, 6);
+        // Past the per-side allowance a reply counts in full: A's third turn.
+        const tightAllowance = await store.readInitiationPressure(pressureInput(2));
+        expect(tightAllowance.chargedPressure).toBeCloseTo(0.2 * 4 + 1, 6);
+
+        // Three unanswered one-sided initiations and one declined invitation.
+        for (const suffix of ["92", "93", "94"]) {
+          const oneSided = `55555555-5555-4555-8555-0000000000${suffix}`;
+          await createEpisode(oneSided, suffix);
+          await deliveredTurn(oneSided, A, B);
+        }
+        const declined = "55555555-5555-4555-8555-000000000095";
+        await createEpisode(declined, "declined");
+        await episodes.transitionEpisode({
+          conversationId: declined,
+          expectedStatus: "invited",
+          expectedRevision: 1,
+          expectedLastActivityAtMs: 1_000,
+          status: "declined",
+          lastActivityAtMs: 10_000,
+          closeReasonCode: "conversation_declined",
+        });
+        const pushy = await store.readInitiationPressure(pressureInput(8));
+        expect(pushy.chargedPressure).toBeCloseTo(1 + 3, 6);
+        expect(pushy.declinedPressure).toBeCloseTo(3, 6);
+        // ceil(7) is past a soft target of 6: initiation backs off.
+        expect(pushy.relationshipPressure).toBeCloseTo(7, 6);
       } finally {
         await Promise.allSettled([episodes.close(), store.close(), sqlPool.end()]);
       }
@@ -892,6 +999,8 @@ describe("Postgres ICP fatigue regulation reservations", () => {
           declinedPressureUnits: 3,
           deferredPressureUnits: 2,
           unansweredPressureUnits: 1,
+          mutualReplyAllowancePerSide: 8,
+          mutualReplyPressureUnits: 0.2,
         });
         expect(pressure).toEqual({
           relationshipPressure: 3,
@@ -913,6 +1022,8 @@ describe("Postgres ICP fatigue regulation reservations", () => {
             declinedPressureUnits: 3,
             deferredPressureUnits: 2,
             unansweredPressureUnits: 1,
+            mutualReplyAllowancePerSide: 8,
+            mutualReplyPressureUnits: 0.2,
           }),
         ).resolves.toMatchObject({
           relationshipPressure: 3,

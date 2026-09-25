@@ -314,8 +314,12 @@ schema versions (`npm run migrate:intake-policy-owner`). Key sections:
   classifier scores (default: `l2Screener.maxContentChars`). Longer content is
   scored over its leading span and escalated fail closed with a maximal L1.5
   score, so an oversized page always reaches deep screening while the
-  classifier's CPU work stays bounded. Tokenization runs in whitespace-bounded
-  chunks, one event-loop turn each, and inference uses one ONNX thread.
+  classifier's CPU work stays bounded. Tokenization and inference run on a
+  bounded worker-thread pool (`injectionClassifier.worker`: `poolSize`,
+  `queueMax`, `callTimeoutMs`), never on the gateway event loop; each worker
+  loads the model once and uses one ONNX thread. A full queue, a timed-out
+  call or a crashed worker (which is replaced) leaves the content unscored,
+  and the gateway escalates it fail closed with a maximal L1.5 score.
 - **`l2Screener`**: per-tier escalation thresholds, mandatory tiers, per-tier
   fail-closed action (`quarantine` for high-risk, `l1_labels_only` for
   trusted), timeout and content cap.

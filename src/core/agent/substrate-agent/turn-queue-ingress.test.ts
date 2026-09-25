@@ -76,13 +76,25 @@ function makeSubstrateMessage(id: string): SubstrateMessage {
 }
 
 describe('TurnQueueIngressCoordinator pending-flush bookkeeping', () => {
+  it('delivers a deferred whisper only to a run of its own conversation (o5wf5)', () => {
+    const { coordinator, agent } = makeCoordinator();
+    const whisper = makeWhisper('private note formed in the trusted room');
+    coordinator.deferInternalFollowUp(whisper, 'api:trusted-room');
+
+    coordinator.enqueuePendingInternalFollowUpsForOrdinaryRun('api:public-room');
+    expect(agent.followUpCalls).toEqual([]);
+
+    coordinator.enqueuePendingInternalFollowUpsForOrdinaryRun('api:trusted-room');
+    expect(agent.followUpCalls).toEqual([whisper]);
+  });
+
   it('flushes a deferred whisper once and does not re-enqueue it on a later flush', () => {
     const { coordinator, agent } = makeCoordinator();
     const whisper = makeWhisper('breathe');
-    coordinator.deferInternalFollowUp(whisper);
+    coordinator.deferInternalFollowUp(whisper, 'test-channel');
 
-    coordinator.enqueuePendingInternalFollowUpsForOrdinaryRun();
-    coordinator.enqueuePendingInternalFollowUpsForOrdinaryRun();
+    coordinator.enqueuePendingInternalFollowUpsForOrdinaryRun('test-channel');
+    coordinator.enqueuePendingInternalFollowUpsForOrdinaryRun('test-channel');
 
     expect(agent.followUpCalls).toEqual([whisper]);
   });
@@ -90,14 +102,14 @@ describe('TurnQueueIngressCoordinator pending-flush bookkeeping', () => {
   it('splices a delivered whisper on the message_start carrying its exact reference', () => {
     const { coordinator, agent } = makeCoordinator();
     const whisper = makeWhisper('breathe');
-    coordinator.deferInternalFollowUp(whisper);
-    coordinator.enqueuePendingInternalFollowUpsForOrdinaryRun();
+    coordinator.deferInternalFollowUp(whisper, 'test-channel');
+    coordinator.enqueuePendingInternalFollowUpsForOrdinaryRun('test-channel');
 
     // The by-reference message_start removes the delivered entry, so re-deferring
     // the same object produces a fresh entry that flushes again.
     coordinator.observeAgentEvent({ type: 'message_start', message: whisper });
-    coordinator.deferInternalFollowUp(whisper);
-    coordinator.enqueuePendingInternalFollowUpsForOrdinaryRun();
+    coordinator.deferInternalFollowUp(whisper, 'test-channel');
+    coordinator.enqueuePendingInternalFollowUpsForOrdinaryRun('test-channel');
 
     expect(agent.followUpCalls).toEqual([whisper, whisper]);
   });
@@ -105,13 +117,13 @@ describe('TurnQueueIngressCoordinator pending-flush bookkeeping', () => {
   it('never splices a whisper on a spread-cloned message_start', () => {
     const { coordinator, agent } = makeCoordinator();
     const whisper = makeWhisper('breathe');
-    coordinator.deferInternalFollowUp(whisper);
-    coordinator.enqueuePendingInternalFollowUpsForOrdinaryRun();
+    coordinator.deferInternalFollowUp(whisper, 'test-channel');
+    coordinator.enqueuePendingInternalFollowUpsForOrdinaryRun('test-channel');
 
     // Assistant message_start events are spread-cloned upstream and must never
     // false-match a pending whisper.
     coordinator.observeAgentEvent({ type: 'message_start', message: { ...whisper } as AgentMessage });
-    coordinator.enqueuePendingInternalFollowUpsForOrdinaryRun();
+    coordinator.enqueuePendingInternalFollowUpsForOrdinaryRun('test-channel');
 
     expect(agent.followUpCalls).toEqual([whisper]);
   });
@@ -162,8 +174,8 @@ describe('TurnQueueIngressCoordinator active-run coalescing', () => {
     // coalesces into it rather than starting yet another fresh turn.
     expect(coordinator.canQueueIntoActiveOrdinaryRun()).toBe(true);
     const whisper = makeWhisper('coalesce me');
-    coordinator.deferInternalFollowUp(whisper);
-    coordinator.enqueuePendingInternalFollowUpsForOrdinaryRun();
+    coordinator.deferInternalFollowUp(whisper, 'test-channel');
+    coordinator.enqueuePendingInternalFollowUpsForOrdinaryRun('test-channel');
     expect(agent.followUpCalls).toEqual([whisper]);
 
     runGate.release();

@@ -26,6 +26,7 @@ import type { SubstrateConfig } from '../../system/config/runtime-config-contrac
 import { SUBAGENT_RUN_NOTES_PROMPT } from './automata-run-notes.js';
 import { SubagentFaculty } from './faculty.js';
 import { createSubagentTool } from './tools.js';
+import { withViewerReadGate } from '../../core/agent/tool-surface/viewer-read-gate.js';
 import { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import { parseSubagentRoleRegistryConfig } from './role-registry.js';
 import { SubagentExecutionError } from './types.js';
@@ -306,6 +307,46 @@ describe('SubagentFaculty', () => {
       const { seen, wiki } = await spawnAndReadWiki({ viewerTrustLevel: 'primary', viewerChannelPrivacy: 'private' });
       expect(seen.text).toBe('wiki ok');
       expect(wiki.execute).toHaveBeenCalledTimes(1);
+    });
+
+    it('lets a public room wait on and inspect its own subagent, not another room\'s (3o6zu)', async () => {
+      mockSubagentContent = 'worker finished';
+      const { faculty } = makeWikiFaculty();
+      const tool = withViewerReadGate(createSubagentTool(faculty));
+      const asRoom = <T,>(channelId: string, fn: () => Promise<T>) => runWithRequestContext({
+        callType: 'tool', purpose: 'agent.turn', channelId, viewerTrustLevel: 'public', viewerChannelPrivacy: 'public',
+      }, fn);
+      const text = (result: { content: Array<{ text?: string }> }) => result.content.map(block => block.text ?? '').join('');
+
+      const spawned = JSON.parse(text(await asRoom('api:public-room', () => tool.execute('s1', {
+        action: 'spawn', name: 'worker', task: 'do the bounded task',
+      })))) as { subagent_id: string };
+      const waited = text(await asRoom('api:public-room', () => tool.execute('w1', {
+        action: 'wait', subagent_id: spawned.subagent_id,
+      })));
+      expect(waited).toContain('worker finished');
+      expect(waited).not.toContain('withheld');
+      const status = text(await asRoom('api:public-room', () => tool.execute('st1', {
+        action: 'status', subagent_id: spawned.subagent_id,
+      })));
+      expect(status).toContain(spawned.subagent_id);
+      const inspected = text(await asRoom('api:public-room', () => tool.execute('i1', {
+        action: 'inspect', subagent_id: spawned.subagent_id,
+      })));
+      expect(inspected).not.toContain('Unknown automaton task');
+
+      // Another public room sees neither the worker nor its result.
+      const foreignWait = text(await asRoom('api:other-room', () => tool.execute('w2', {
+        action: 'wait', subagent_id: spawned.subagent_id,
+      })));
+      expect(foreignWait).toContain('Unknown automaton task');
+      expect(foreignWait).not.toContain('worker finished');
+      const foreignSnapshot = JSON.parse(text(await asRoom('api:other-room', () => tool.execute('st2', {
+        action: 'status',
+      })))) as { snapshot: { recentTasks: unknown[]; activeTasks: unknown[] }; withheldByVisibility?: number };
+      expect(foreignSnapshot.snapshot.recentTasks).toEqual([]);
+      expect(foreignSnapshot.snapshot.activeTasks).toEqual([]);
+      expect(foreignSnapshot.withheldByVisibility).toBe(1);
     });
 
     it('refuses a spawn without an admitted viewer context', async () => {

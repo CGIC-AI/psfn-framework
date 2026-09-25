@@ -1,3 +1,4 @@
+import { ICP_ACTIVITY_END_REASON_CODES } from '../../shared/contracts/icp-autonomy.js';
 import { randomUUID } from 'node:crypto';
 
 import {
@@ -1093,13 +1094,7 @@ export class GatewayIcpAutonomyBroker {
     conversationId: string,
     reasonCode: IcpAutonomyReasonCode,
   ): Promise<IcpConversationEpisode> {
-    const allowedReasons: readonly IcpAutonomyReasonCode[] = [
-      'fatigue_exhausted',
-      'charge_pressure',
-      'cost_hard_stop',
-      'inactivity_timeout',
-      'conversation_ended',
-    ];
+    const allowedReasons: readonly IcpAutonomyReasonCode[] = ICP_ACTIVITY_END_REASON_CODES;
     if (!allowedReasons.includes(reasonCode)) {
       throw new Error(`ICP activity cannot end for relationship/policy reason ${reasonCode}`);
     }

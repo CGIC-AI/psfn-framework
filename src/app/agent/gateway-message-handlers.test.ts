@@ -1455,6 +1455,55 @@ describe('registerGatewayMessageHandlers', () => {
     });
   });
 
+  it('closes a timed-out appraisal decline as peer_appraisal_unavailable, not a social end (0eq2x)', async () => {
+    const participationAppraiser: ParticipationAppraiserPort = {
+      appraise: vi.fn(async () => ({
+        appraisal: { action: 'ignore', reasonCode: 'appraiser_timeout', confidence: 0 },
+        failClosed: true,
+        failClosedReason: 'appraiser_timeout',
+      })),
+    };
+    const suppressed = {
+      ...makeResponse(''),
+      channelId: ICP_CHANNEL,
+      metadata: {
+        ...makeResponse('').metadata,
+        turnId: replyIcpCorrelation.turnId,
+        requestId: replyIcpCorrelation.requestId,
+        icpCorrelation: replyIcpCorrelation,
+        noReply: {
+          schemaVersion: 1 as const,
+          disposition: 'intentional_no_reply' as const,
+          source: 'participation_appraiser' as const,
+          auditId: 'no-reply:appraiser',
+          decidedAt: Date.parse('2026-03-02T00:00:00.000Z'),
+          turnId: replyIcpCorrelation.turnId as TurnID,
+          requestId: replyIcpCorrelation.requestId,
+          channelId: ICP_CHANNEL,
+          reason: 'appraiser_timeout',
+        },
+      },
+    } as AgentResponse;
+    const harness = createHarness({
+      config: { companionId: ICP_B, multiCompanion: true } as SubstrateConfig,
+      participationAppraiser,
+      handleMessage: async (_message, lifecycle) => {
+        if (!lifecycle) throw new Error('test expected delivery lifecycle');
+        await lifecycle.finalizeDelivery(suppressed);
+        return suppressed;
+      },
+    });
+
+    await harness.onCompanionMessage(makeCorrelatedCompanionMessage());
+
+    await vi.waitFor(() => {
+      expect(harness.gateway.companionEndIcpEpisodeActivity).toHaveBeenCalledWith({
+        conversationId: replyIcpCorrelation.conversationId,
+        reasonCode: 'peer_appraisal_unavailable',
+      });
+    });
+  });
+
   it('appraises an inbound ICP turn with its own DM history and logs a typed decline (p6s1f)', async () => {
     const participationAppraiser: ParticipationAppraiserPort = {
       appraise: vi.fn(async () => ({

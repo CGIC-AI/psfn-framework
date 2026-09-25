@@ -103,6 +103,9 @@ export const ICP_AUTONOMY_REASON_CODES = [
   'peer_do_not_disturb',
   'quiet_hours',
   'charge_pressure',
+  // 0eq2x: the peer's participation appraisal failed as a system (timeout,
+  // model error, unparseable output) — not a social decline, never pressure.
+  'peer_appraisal_unavailable',
   'fatigue_exhausted',
   'cost_hard_stop',
   'peer_blocked',
@@ -141,6 +144,18 @@ export const ICP_AUTONOMY_REASON_CODES = [
   'dyad_blocked',
   'dyad_stale_revision',
 ] as const;
+
+/** Reasons an ICP conversation's activity may end with (companion.episode.end_activity). */
+export const ICP_ACTIVITY_END_REASON_CODES = [
+  'fatigue_exhausted',
+  'charge_pressure',
+  'cost_hard_stop',
+  'inactivity_timeout',
+  'conversation_ended',
+  'peer_appraisal_unavailable',
+] as const satisfies readonly (typeof ICP_AUTONOMY_REASON_CODES)[number][];
+
+export type IcpActivityEndReasonCode = typeof ICP_ACTIVITY_END_REASON_CODES[number];
 export type IcpAutonomyReasonCode = typeof ICP_AUTONOMY_REASON_CODES[number];
 
 export function icpDyadStatusReasonCode(status: IcpDyadStatus): Extract<

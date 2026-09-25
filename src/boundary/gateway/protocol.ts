@@ -1,3 +1,4 @@
+import type { IcpActivityEndReasonCode } from '../../shared/contracts/icp-autonomy.js';
 import type {
   WorldAvatarActOutcome,
   WorldAvatarMap,
@@ -1290,9 +1291,7 @@ export interface IcpPermitConsumeParams {
 
 export interface IcpEpisodeActivityEndParams {
   conversationId: string;
-  reasonCode: Extract<IcpAutonomyReasonCode,
-    'fatigue_exhausted' | 'charge_pressure' | 'cost_hard_stop'
-      | 'inactivity_timeout' | 'conversation_ended'>;
+  reasonCode: IcpActivityEndReasonCode;
   companionId?: string;
 }
 

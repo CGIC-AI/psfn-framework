@@ -155,6 +155,13 @@ export interface ParticipationAppraiserSettings {
 }
 
 /**
+ * The shipped appraisal deadline before 0eq2x. The scheduler owner migration
+ * moves an owner file still carrying exactly this seeded value to the current
+ * default; it is a migration marker, not a runtime tunable.
+ */
+export const RETIRED_APPRAISAL_DEADLINE_MS = 8_000;
+
+/**
  * Defaults factory (owner-file / settings pattern). All numeric tunables live
  * inside the function body — never as module-level tuning constants — so the
  * hardcoded-settings gate stays satisfied and Garden/config can own overrides.
@@ -162,7 +169,9 @@ export interface ParticipationAppraiserSettings {
 export function createDefaultParticipationAppraiserSettings(): ParticipationAppraiserSettings {
   return {
     enabled: true,
-    appraisalDeadlineMs: 8_000,
+    // Sized for a reasoning-class background model under load (0eq2x): 8 s
+    // timed out every ICP DM appraisal on Kimi k3 and fail-closed ignored it.
+    appraisalDeadlineMs: 30_000,
     appraisalMaxOutputTokens: 200,
     transcriptMessageCap: 8,
     transcriptMessageChars: 500,

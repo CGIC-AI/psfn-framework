@@ -680,6 +680,76 @@ describe("Postgres ICP fatigue regulation reservations", () => {
   );
 
   it(
+    "does not count a turn whose peer appraisal failed as relationship pressure (0eq2x)",
+    async () => {
+      if (!harness)
+        throw new Error("Postgres integration harness is unavailable");
+      const databaseUrl = await freshDatabaseUrl();
+      const episodes = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
+        knownCompanionIds: [A, B],
+      });
+      const store =
+        await PostgresIcpFatigueRegulationReservationStore.connect(databaseUrl);
+      const fixtures = [
+        { conversationId: "55555555-5555-4555-8555-000000000071", closeReasonCode: "peer_appraisal_unavailable" as const },
+        { conversationId: "55555555-5555-4555-8555-000000000072", closeReasonCode: "conversation_ended" as const },
+      ];
+      try {
+        for (const [index, fixture] of fixtures.entries()) {
+          await episodes.createEpisode({
+            conversationId: fixture.conversationId,
+            channelId: DM,
+            participantCompanionIds: [A, B],
+            rootInitiationId: ROOT,
+            initiatedByCompanionId: A,
+            initiationSource: "operator_test",
+            provenanceRef: `icp-prov:${fixture.conversationId}`,
+            openedAtMs: 1_000,
+            lastActivityAtMs: 1_000,
+            status: "invited",
+            revision: 1,
+          });
+          await expect(store.reserve({
+            ...reservationInput(correlation({
+              conversationId: fixture.conversationId,
+              channelId: DM,
+              turnId: `77777777-7777-4777-8777-00000000007${String(index)}`,
+            })),
+            hardLimit: 100,
+          })).resolves.toMatchObject({ outcome: "reserved" });
+          await episodes.transitionEpisode({
+            conversationId: fixture.conversationId,
+            expectedStatus: "invited",
+            expectedRevision: 1,
+            expectedLastActivityAtMs: 1_000,
+            status: "ended",
+            lastActivityAtMs: 1_000,
+            closeReasonCode: fixture.closeReasonCode,
+          });
+        }
+
+        const pressure = await store.readInitiationPressure({
+          localCompanionId: A,
+          peerCompanionId: B,
+          timestampMs: 10_000,
+          relationshipPressureHalfLifeMs: HALF_LIFE_MS,
+          relationshipPressureWindowMs: WINDOW_MS,
+          unansweredAfterMs: 15 * 60_000,
+          declinedPressureUnits: 3,
+          deferredPressureUnits: 2,
+          unansweredPressureUnits: 1,
+        });
+        // Only the socially ended conversation's charged turn counts.
+        expect(pressure.contributingReservationCount).toBe(1);
+        expect(pressure.chargedPressure).toBeCloseTo(1, 6);
+      } finally {
+        await Promise.allSettled([episodes.close(), store.close()]);
+      }
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
     "decays declined, deferred, and unanswered initiation pressure without a daily reset",
     async () => {
       if (!harness)

@@ -87,6 +87,10 @@ import { malformedAnswerFeedback, readAssistantAnswer } from './lib/assistant-an
 import { buildMemoryTierCases } from './cases/memory-tiers.mjs';
 import { isBeadsIssueId } from './lib/beads.mjs';
 import { validateMemoryLookupAnswer } from './lib/memory-lookup-answer.mjs';
+import {
+  buildImageGenerationCases,
+  resolveImageCaseProviderForCases,
+} from './lib/image-case-provider.mjs';
 import { prepareCaseChatDispatch } from './lib/case-dispatch-auth.mjs';
 import { createFrameworkHubDeviceAssertionIssuer } from './lib/hub-device-assertion.mjs';
 
@@ -180,6 +184,16 @@ const OPERATOR_APPROVAL_TARGET = (() => {
       caseIds: CASE_IDS,
       phase: PHASE,
     });
+  } catch (error) {
+    failClosedOnEnv(error);
+    throw error;
+  }
+})();
+// Image cases run only with an explicitly named provider (t2q1w); unselected
+// image cases are not built, so an unset variable cannot reach a prompt.
+const IMAGE_CASE_PROVIDER = (() => {
+  try {
+    return resolveImageCaseProviderForCases({ caseIds: CASE_IDS, phase: PHASE });
   } catch (error) {
     failClosedOnEnv(error);
     throw error;
@@ -2479,56 +2493,13 @@ function buildApprenticeCases(ctx) {
       },
       timeoutMs: 60000,
     },
-    {
-      id: 'image_create',
-      sessionId: `apprentice-image-create-${ctx.runToken}`,
-      expectedTools: ['generate_image'],
-      actionSensitive: true,
-      actionSuccessKeys: ['worked'],
-      message:
-        'Then call generate_image with action "generate", provider "auto", prompt "a red ceramic mug on a steel workbench, sharp studio lighting", width 512, height 512, aspect_ratio "1:1", num_images 1. '
-        + 'Return only a JSON object with keys worked and note.',
-      validateParsedAssistant: ({ parsedAssistant, archiveToolMessages }) => (
-        parsedAssistant?.worked === true || archiveToolSucceeded(archiveToolMessages, 'generate_image')
-          ? []
-          : ['image_create worked must be true or have successful generate_image tool proof']
-      ),
-      timeoutMs: 90000,
-    },
-    {
-      id: 'image_edit',
-      sessionId: `apprentice-image-edit-${ctx.runToken}`,
-      expectedTools: ['generate_image'],
-      actionSensitive: true,
-      actionSuccessKeys: ['worked'],
-      message:
-        `Then call generate_image with action "edit", provider "auto", input_urls=${JSON.stringify(falEditSourceUrls)}, prompt "make a photo of the man driving the car down the california coastline", aspect_ratio "auto", resolution "1K", num_images 1. `
-        + 'Return only a JSON object with keys worked and note.',
-      validateParsedAssistant: ({ parsedAssistant, archiveToolMessages }) => (
-        parsedAssistant?.worked === true || archiveToolSucceeded(archiveToolMessages, 'generate_image')
-          ? []
-          : ['image_edit worked must be true or have successful generate_image tool proof']
-      ),
-      timeoutMs: 90000,
-    },
-    {
-      id: 'selfie_create',
-      sessionId: `apprentice-selfie-${ctx.runToken}`,
-      expectedTools: ['selfie_create'],
-      suggestTools: ['selfie_create'],
-      actionSensitive: true,
-      actionSuccessKeys: ['worked'],
-      message:
-        'selfie_create is a core tool that is already active — call it directly and do not wait for or depend on a toolset activation handshake. '
-        + 'Call selfie_create with provider "auto", prompt "close portrait, direct eye contact, neutral lighting, plain background", width 512, height 512, aspect_ratio "1:1", num_images 1. '
-        + 'Return only a JSON object with keys worked and note.',
-      validateParsedAssistant: ({ parsedAssistant, archiveToolMessages }) => (
-        parsedAssistant?.worked === true || archiveToolSucceeded(archiveToolMessages, 'selfie_create')
-          ? []
-          : ['selfie_create worked must be true or have successful selfie_create tool proof']
-      ),
-      timeoutMs: 90000,
-    },
+    ...(IMAGE_CASE_PROVIDER === null
+      ? []
+      : buildImageGenerationCases({
+        runToken: ctx.runToken,
+        provider: IMAGE_CASE_PROVIDER,
+        editSourceUrls: falEditSourceUrls,
+      })),
     {
       id: 'spawn_subagent',
       sessionId: `apprentice-subagent-${ctx.runToken}`,

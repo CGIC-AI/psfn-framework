@@ -18,14 +18,15 @@ function successfulResult(toolName, provider) {
   };
 }
 
-test('selecting an image case without a provider fails closed', () => {
-  assert.throws(
-    () => resolveImageCaseProviderForCases({ caseIds: new Set(['image_create']), phase: 'baseline' }, {}),
-    /Missing required environment variable: PSFN_SHAKEDOWN_IMAGE_PROVIDER/u,
-  );
-  assert.throws(
-    () => resolveImageCaseProviderForCases({ caseIds: new Set(), phase: 'apprentice' }, {}),
-    /PSFN_SHAKEDOWN_IMAGE_PROVIDER/u,
+test('unset selects the deployment settings provider; an explicit round names its provider', () => {
+  assert.equal(resolveImageCaseProviderForCases({ caseIds: new Set(['image_create']), phase: 'baseline' }, {}), 'settings');
+  assert.equal(resolveImageCaseProviderForCases({ caseIds: new Set(), phase: 'apprentice' }, {}), 'settings');
+  assert.equal(
+    resolveImageCaseProviderForCases(
+      { caseIds: new Set(), phase: 'apprentice' },
+      { PSFN_SHAKEDOWN_IMAGE_PROVIDER: 'openrouter' },
+    ),
+    'openrouter',
   );
 });
 

@@ -1,4 +1,4 @@
-import { InvalidEnvError, requireEnv } from './env.mjs';
+import { InvalidEnvError, optionalEnv } from './env.mjs';
 
 /**
  * Image-provider selection for the image_create / image_edit / selfie_create
@@ -12,8 +12,11 @@ import { InvalidEnvError, requireEnv } from './env.mjs';
  *   passes that provider and the case requires a successful tool result
  *   reporting it (for every value except `auto`).
  *
- * There is no default: selecting an image case without the variable fails
- * closed, so an OpenRouter round cannot silently exercise another provider.
+ * Unset means `settings`: the deployment's own imageProvider selects, which is
+ * how an OpenRouter-only deployment is exercised without naming the provider.
+ * A round that must prove a specific provider (for example the OpenRouter
+ * variant) names it and fails unless that provider served the image. Unknown
+ * values are rejected.
  */
 export const IMAGE_CASE_PROVIDER_ENV = 'PSFN_SHAKEDOWN_IMAGE_PROVIDER';
 
@@ -23,11 +26,7 @@ const IMAGE_CASE_PROVIDERS = new Set(['settings', 'auto', 'fal', 'comfyui', 'com
 const PROVIDERS_WITHOUT_PROOF = new Set(['settings', 'auto']);
 
 export function resolveImageCaseProvider(env = process.env) {
-  const provider = requireEnv(
-    IMAGE_CASE_PROVIDER_ENV,
-    `image case provider (${[...IMAGE_CASE_PROVIDERS].join('|')}); "settings" uses the deployment's configured imageProvider`,
-    env,
-  );
+  const provider = optionalEnv(IMAGE_CASE_PROVIDER_ENV, 'settings', env);
   if (!IMAGE_CASE_PROVIDERS.has(provider)) {
     throw new InvalidEnvError(
       IMAGE_CASE_PROVIDER_ENV,

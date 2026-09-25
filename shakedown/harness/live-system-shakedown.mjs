@@ -195,8 +195,8 @@ const OPERATOR_APPROVAL_TARGET = (() => {
     throw error;
   }
 })();
-// Image cases run only with an explicitly named provider (t2q1w); unselected
-// image cases are not built, so an unset variable cannot reach a prompt.
+// Image-case provider (t2q1w): settings by default, or the round's explicit
+// provider. Resolved only when an image case is selected.
 const IMAGE_CASE_PROVIDER = (() => {
   try {
     return resolveImageCaseProviderForCases({ caseIds: CASE_IDS, phase: PHASE });

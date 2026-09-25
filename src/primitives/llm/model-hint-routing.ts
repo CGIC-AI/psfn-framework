@@ -270,7 +270,11 @@ function resolveModelHintCandidate(
 
   let provider = modelHint.provider ?? qualified?.provider ?? baseCandidate.provider;
   let model = qualified?.model ?? hintedModel ?? baseCandidate.model;
-  const registryEntry = exactSelection?.entry
+  // Usage and budget attribution need the ONE registry entry serving this
+  // identity for this purpose; tuning may fall back to a looser match.
+  const attributionEntry = exactSelection?.entry
+    ?? resolveHintAttributionEntry(config, provider, model, fallbackCandidates);
+  const registryEntry = attributionEntry
     ?? findRegistryModelEntry(config, provider, model);
   // The hinted model's own catalog output cap beats the base candidate's:
   // inheriting a roster default above the target model's maximum is a guaranteed
@@ -320,7 +324,7 @@ function resolveModelHintCandidate(
 
   if (!Number.isFinite(maxTokens) || maxTokens <= 0) return null;
 
-  const slotKey = resolveHintedSlotKey(baseCandidate, registryEntry, provider, model);
+  const slotKey = resolveHintedSlotKey(baseCandidate, attributionEntry, provider, model);
   const hinted: RoutingCandidate = {
     ...(slotKey ? { slotKey } : {}),
     provider,
@@ -400,6 +404,33 @@ function resolveHintedSlotKey(
     return baseCandidate.slotKey;
   }
   return undefined;
+}
+
+/**
+ * The registry entry a hinted provider/model is attributed to. Several enabled
+ * entries may share one identity (e.g. the same model as a background slot and
+ * as a chat fallback, priced differently), so the purpose's own routing chain
+ * decides first; otherwise the identity must be unique registry-wide. An
+ * ambiguous identity resolves to none, and budget pricing then fails closed.
+ */
+function resolveHintAttributionEntry(
+  config: SubstrateConfig,
+  provider: string,
+  model: string,
+  purposeCandidates: readonly RoutingCandidate[],
+): ModelRegistryEntry | undefined {
+  const matches = (config.modelRegistry?.models ?? []).filter(entry => (
+    entry.enabled !== false
+    && sameModelIdentity(entry.identity.provider, entry.identity.model, provider, model)
+  ));
+  const chainSlotKeys = new Set(purposeCandidates
+    .filter(candidate => candidate.slotKey
+      && sameModelIdentity(candidate.provider, candidate.model, provider, model))
+    .map(candidate => candidate.slotKey));
+  const inChain = matches.filter(entry => chainSlotKeys.has(entry.id));
+  if (inChain.length === 1) return inChain[0];
+  if (inChain.length > 1) return undefined;
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 function findRegistryModelEntry(

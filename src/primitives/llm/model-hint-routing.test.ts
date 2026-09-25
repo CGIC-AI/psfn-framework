@@ -462,6 +462,58 @@ describe('resolveCandidates hinted slot attribution (iu5dw)', () => {
     expect(candidates[0]?.slotKey).toBeUndefined();
   });
 
+  it('attributes a shared identity to the slot on the purpose chain, not the first registry match', () => {
+    const base = makeFailoverConfig();
+    const registry = base.modelRegistry!;
+    const config = makeConfig({
+      ...base,
+      modelRegistry: {
+        ...registry,
+        models: [
+          {
+            ...registry.models[1]!,
+            id: 'background-twin',
+            purposes: [{ purpose: 'background', primary: true }],
+            cost: { inputPer1MUsd: 0, outputPer1MUsd: 0, currency: 'USD' },
+          },
+          ...registry.models,
+        ],
+      },
+    });
+    const [chatHint] = resolveCandidates(config, 'chat', {
+      provider: 'failover-provider',
+      model: 'failover-model',
+      pin: true,
+    });
+    expect(chatHint?.slotKey).toBe('failover-secondary');
+    const [backgroundHint] = resolveCandidates(config, 'background', {
+      provider: 'failover-provider',
+      model: 'failover-model',
+      pin: true,
+    });
+    expect(backgroundHint?.slotKey).toBe('background-twin');
+  });
+
+  it('leaves an ambiguous identity off the purpose chain unattributed', () => {
+    const base = makeFailoverConfig();
+    const registry = base.modelRegistry!;
+    const twin = (id: string) => ({
+      ...registry.models[1]!,
+      id,
+      purposes: [{ purpose: 'background' as const, primary: false }],
+    });
+    const config = makeConfig({
+      ...base,
+      modelRegistry: { ...registry, models: [registry.models[0]!, twin('twin-a'), twin('twin-b')] },
+    });
+    const [hinted] = resolveCandidates(config, 'chat', {
+      provider: 'failover-provider',
+      model: 'failover-model',
+      pin: true,
+    });
+    expect(hinted?.slotKey).toBeUndefined();
+  });
+
   it('lets the budget gate price a retargeted hint from its own entry', async () => {
     const config = makeFailoverConfig();
     const [hinted] = resolveCandidates(config, 'chat', {

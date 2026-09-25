@@ -6,7 +6,7 @@ import type {
 } from '../../shared/contracts/runtime.js';
 import type { LLMProviderPort } from '../agent/contracts.js';
 import { createDefaultParticipationAppraiserSettings } from '../../system/config/participation-config.js';
-import { ParticipationAppraiser } from './appraiser.js';
+import { isAppraiserSystemFailureReason, ParticipationAppraiser } from './appraiser.js';
 import type { ParticipationCandidate } from './types.js';
 
 const COMPANION_NAME = 'Persephone';
@@ -180,6 +180,34 @@ describe('ParticipationAppraiser', () => {
     expect(result.failClosedReason).toBe('appraiser_error');
     // The failure reason must not echo the provider error text.
     expect(result.appraisal.reasonCode).toBe('appraiser_error');
+  });
+
+  it('reports a verdict cut off by the output budget as appraiser_truncated (9z2z9)', async () => {
+    const { provider } = recordingProvider(() => ({
+      ...makeResponse('{"action":"reply","reasonCode":"active_ex'),
+      stopReason: 'length',
+    }));
+    const appraiser = new ParticipationAppraiser({ llmProvider: provider, companionName: COMPANION_NAME });
+
+    const result = await appraiser.appraise(makeCandidate());
+
+    expect(result.appraisal.action).toBe('ignore');
+    expect(result.failClosed).toBe(true);
+    expect(result.failClosedReason).toBe('appraiser_truncated');
+    expect(isAppraiserSystemFailureReason(result.failClosedReason)).toBe(true);
+  });
+
+  it('does not trust an earlier draft verdict in an answer cut off by the output budget', async () => {
+    const { provider } = recordingProvider(() => ({
+      ...makeResponse('{"action":"ignore","reasonCode":"draft","confidence":0.2} final: {"action":"rep'),
+      stopReason: 'length',
+    }));
+    const appraiser = new ParticipationAppraiser({ llmProvider: provider, companionName: COMPANION_NAME });
+
+    const result = await appraiser.appraise(makeCandidate());
+
+    expect(result.failClosed).toBe(true);
+    expect(result.failClosedReason).toBe('appraiser_truncated');
   });
 
   it('fails closed to ignore on malformed model output', async () => {

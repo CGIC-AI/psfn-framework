@@ -77,6 +77,31 @@ describe('parseParticipationAppraisal', () => {
     expect(parseParticipationAppraisal('[{"action":"obey"}]')).toBeNull();
   });
 
+  it('takes the last complete verdict after reasoning that echoes the contract shape (9z2z9)', () => {
+    const raw = [
+      'The contract is { "action": "ignore" | "react" | "reply" } so I weigh it.',
+      'Draft: {"action":"ignore","reasonCode":"draft","confidence":0.2}',
+      'Final: {"action":"reply","reasonCode":"asked_a_question","confidence":0.7}',
+    ].join('\n');
+    expect(parseParticipationAppraisal(raw)).toEqual({
+      action: 'reply',
+      reasonCode: 'asked_a_question',
+      confidence: 0.7,
+    });
+  });
+
+  it('ignores braces inside JSON strings when finding the verdict', () => {
+    expect(parseParticipationAppraisal('{"action":"ignore","reasonCode":"a}b{c","confidence":0.5}')).toEqual({
+      action: 'ignore',
+      reasonCode: 'abc',
+      confidence: 0.5,
+    });
+  });
+
+  it('never accepts a truncated verdict object', () => {
+    expect(parseParticipationAppraisal('{"action":"reply","reasonCode":"x"')).toBeNull();
+  });
+
   it('clamps confidence into [0, 1] and defaults non-numbers to 0', () => {
     expect(parseParticipationAppraisal('{"action":"ignore","reasonCode":"x","confidence":5}')?.confidence)
       .toBe(1);

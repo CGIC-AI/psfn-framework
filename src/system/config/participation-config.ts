@@ -162,6 +162,14 @@ export interface ParticipationAppraiserSettings {
 export const RETIRED_APPRAISAL_DEADLINE_MS = 8_000;
 
 /**
+ * The shipped appraisal output budget before 9z2z9. Reasoning tokens count
+ * against it, so it truncated the verdict on reasoning models; the scheduler
+ * owner migration moves an owner file still carrying exactly this seeded value
+ * to the current default. A migration marker, not a runtime tunable.
+ */
+export const RETIRED_APPRAISAL_MAX_OUTPUT_TOKENS = 200;
+
+/**
  * Defaults factory (owner-file / settings pattern). All numeric tunables live
  * inside the function body — never as module-level tuning constants — so the
  * hardcoded-settings gate stays satisfied and Garden/config can own overrides.
@@ -172,7 +180,9 @@ export function createDefaultParticipationAppraiserSettings(): ParticipationAppr
     // Sized for a reasoning-class background model under load (0eq2x): 8 s
     // timed out every ICP DM appraisal on Kimi k3 and fail-closed ignored it.
     appraisalDeadlineMs: 30_000,
-    appraisalMaxOutputTokens: 200,
+    // Reasoning tokens count against this budget (9z2z9): 200 cut the JSON
+    // verdict off on Kimi k3; 1500 was validated in the r4 shakedown.
+    appraisalMaxOutputTokens: 1_500,
     transcriptMessageCap: 8,
     transcriptMessageChars: 500,
   };

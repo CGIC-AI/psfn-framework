@@ -198,6 +198,12 @@ export class ParticipationAppraiser {
         return failClosed('appraiser_timeout');
       }
 
+      // 9z2z9: an answer cut off by the output budget (reasoning tokens count
+      // against it) is a sizing failure, distinct from an unparseable answer.
+      // Any object in it may be a draft, so none is trusted as the verdict.
+      if (outcome.stopReason === 'length') {
+        return failClosed('appraiser_truncated');
+      }
       const parsed = parseParticipationAppraisal(outcome.content);
       if (parsed === null) {
         return failClosed('appraiser_unparseable');
@@ -333,6 +339,7 @@ const APPRAISER_SYSTEM_FAILURE_REASONS: ReadonlySet<string> = new Set([
   'appraiser_timeout',
   'appraiser_error',
   'appraiser_unparseable',
+  'appraiser_truncated',
   'appraiser_unavailable',
 ]);
 
@@ -374,7 +381,8 @@ function buildAppraiserSystemPrompt(
     '- A name inside quoted logs, code, a user list, or a reference to a DM is usually NOT an'
       + ' invitation to speak; distinguish a same-named human or a mention-about-the-companion'
       + ' from an actual summons.',
-    'Respond with exactly one JSON object and nothing else, matching this contract:',
+    'Keep any deliberation short. Respond with exactly one JSON object and nothing else,'
+      + ' matching this contract:',
     '  { "action": "ignore" | "react" | "reply", "reasonCode": string, "confidence": number }',
     'When action is "react", also include "reactionClass": string (a short semantic class such'
       + ' as "acknowledge", "agree", or "amused").',

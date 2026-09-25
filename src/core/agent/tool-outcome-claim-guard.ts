@@ -41,6 +41,30 @@ function parseStructuredResponse(responseText: string): unknown {
   }
 }
 
+/**
+ * The JSON object a reply ends with after a prose preamble (r6: "Correction -
+ * ... Updated final:\n\n{"redacted":false,...}"), or undefined.
+ */
+function parseTrailingJsonObject(responseText: string): unknown {
+  const trimmed = responseText.trim();
+  if (!trimmed.endsWith('}')) return undefined;
+  for (let start = trimmed.lastIndexOf('{'); start >= 0; start = trimmed.lastIndexOf('{', start - 1)) {
+    try {
+      return JSON.parse(trimmed.slice(start));
+    } catch {
+      // Not a complete object from here; widen to an earlier brace.
+    }
+  }
+  return undefined;
+}
+
+/** A success key explicitly set to false, and none set to true. */
+function reportsStructuredExecutionFailure(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  if (containsStructuredExecutionSuccess(value)) return false;
+  return Object.entries(value).some(([key, entry]) => entry === false && STRUCTURED_EXECUTION_SUCCESS_KEY.test(key));
+}
+
 function containsStructuredExecutionSuccess(value: unknown): boolean {
   if (Array.isArray(value)) return value.some(containsStructuredExecutionSuccess);
   if (!value || typeof value !== 'object') return false;
@@ -51,8 +75,12 @@ function containsStructuredExecutionSuccess(value: unknown): boolean {
 }
 
 function claimsExecutionSuccess(responseText: string, explicitToolRequest: boolean): boolean {
+  const structured = parseStructuredResponse(responseText) ?? parseTrailingJsonObject(responseText);
+  // r6 memory_redact: a structured answer that explicitly reports the
+  // operation as not done is not a success claim, whatever its preamble says
+  // ("Updated final:" read as an "updated" success verb).
+  if (reportsStructuredExecutionFailure(structured)) return false;
   if (EXECUTION_SUCCESS_CLAIM_PATTERNS.some(pattern => pattern.test(responseText))) return true;
-  const structured = parseStructuredResponse(responseText);
   if (containsStructuredExecutionSuccess(structured)) return true;
   if (!explicitToolRequest || STRUCTURED_EXECUTION_FAILURE_PATTERN.test(responseText)) return false;
   return (Array.isArray(structured) && structured.length > 0)

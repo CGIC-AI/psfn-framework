@@ -186,4 +186,3 @@ describe('operator-type prompt layers through the Garden prompt API', () => {
       .canWriteOperatorLayers).toBe(true);
   });
 });
-

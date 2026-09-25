@@ -86,4 +86,3 @@ export async function lockAndValidateLifecycleProviderProofs(
     if (result.rowCount !== 1) denyLifecycleMutation('provider_callback_proof_invalid');
   }
 }
-

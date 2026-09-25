@@ -233,4 +233,3 @@ describe('ADMIN_TOKEN key mode (key-or-SSO ruling)', () => {
     })).toThrow(FleetSessionProtocolError);
   });
 });
-

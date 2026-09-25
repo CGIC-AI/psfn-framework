@@ -1141,4 +1141,3 @@ describe('Companion UI and roster with the ADMIN_TOKEN key alone (key-or-SSO rul
     expect(anonymous.statusCode).toBe(401);
   });
 });
-

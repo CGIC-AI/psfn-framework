@@ -341,4 +341,3 @@ describe('Companion UI WebSocket operator key path', () => {
     });
   });
 });
-

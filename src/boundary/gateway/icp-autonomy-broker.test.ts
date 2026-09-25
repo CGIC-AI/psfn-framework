@@ -339,6 +339,26 @@ class MemoryStore implements IcpSharedAutonomyStorePort {
     return next;
   }
 
+  async reclassifyEndedEpisodeCloseReason(input: {
+    conversationId: string;
+    expectedRevision: number;
+    fromReasonCode: IcpConversationEpisode['closeReasonCode'];
+    toReasonCode: NonNullable<IcpConversationEpisode['closeReasonCode']>;
+  }): Promise<IcpConversationEpisode> {
+    const current = this.episodes.get(input.conversationId);
+    if (!current || current.status !== 'ended' || current.revision !== input.expectedRevision
+      || current.closeReasonCode !== input.fromReasonCode) {
+      throw new Error('reclassification conflict');
+    }
+    const next: IcpConversationEpisode = {
+      ...current,
+      closeReasonCode: input.toReasonCode,
+      revision: current.revision + 1,
+    };
+    this.episodes.set(input.conversationId, next);
+    return next;
+  }
+
   async captureInvalidationFence(
     firstCompanionId: string,
     secondCompanionId: string,
@@ -984,6 +1004,40 @@ describe('GatewayIcpAutonomyBroker', () => {
       status: 'open',
       lifecycleRevision: 7,
     });
+  });
+
+  it('re-records only an ended conversation_ended closure as peer_appraisal_unavailable (0eq2x/9rima)', async () => {
+    const { broker, store } = makeBroker();
+    const ended = (closeReasonCode: 'conversation_ended' | 'fatigue_exhausted') => ({
+      conversationId: CONVERSATION_ID,
+      channelId: CHANNEL,
+      participantCompanionIds: [A, B],
+      rootInitiationId: ROOT_ID,
+      initiatedByCompanionId: A,
+      initiationSource: 'foreground' as const,
+      provenanceRef: PROVENANCE_HANDLE,
+      openedAtMs: NOW - 10_000,
+      lastActivityAtMs: NOW - 1_000,
+      status: 'ended' as const,
+      closeReasonCode,
+      revision: 3,
+    });
+    store.episodes.set(CONVERSATION_ID, ended('conversation_ended'));
+
+    await expect(broker.endEpisodeActivity(B, CONVERSATION_ID, 'peer_appraisal_unavailable'))
+      .resolves.toMatchObject({ status: 'ended', closeReasonCode: 'peer_appraisal_unavailable', revision: 4 });
+    // Idempotent: a second correction is a no-op.
+    await expect(broker.endEpisodeActivity(B, CONVERSATION_ID, 'peer_appraisal_unavailable'))
+      .resolves.toMatchObject({ closeReasonCode: 'peer_appraisal_unavailable', revision: 4 });
+
+    // Any other ended closure is left exactly as recorded.
+    store.episodes.set(CONVERSATION_ID, ended('fatigue_exhausted'));
+    await expect(broker.endEpisodeActivity(B, CONVERSATION_ID, 'peer_appraisal_unavailable'))
+      .resolves.toMatchObject({ closeReasonCode: 'fatigue_exhausted', revision: 3 });
+    // A non-participant cannot touch it.
+    store.episodes.set(CONVERSATION_ID, ended('conversation_ended'));
+    await expect(broker.endEpisodeActivity(C, CONVERSATION_ID, 'peer_appraisal_unavailable'))
+      .rejects.toThrow(/not owned/);
   });
 
   it('authorizes charged background work only for the authenticated durable episode participant', async () => {

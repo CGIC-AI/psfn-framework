@@ -182,6 +182,26 @@ class RpcMemoryStore implements IcpSharedAutonomyStorePort {
     return next;
   }
 
+  async reclassifyEndedEpisodeCloseReason(input: {
+    conversationId: string;
+    expectedRevision: number;
+    fromReasonCode: IcpConversationEpisode['closeReasonCode'];
+    toReasonCode: NonNullable<IcpConversationEpisode['closeReasonCode']>;
+  }): Promise<IcpConversationEpisode> {
+    const current = this.episodes.get(input.conversationId);
+    if (!current || current.status !== 'ended' || current.revision !== input.expectedRevision
+      || current.closeReasonCode !== input.fromReasonCode) {
+      throw new Error('reclassification conflict');
+    }
+    const next: IcpConversationEpisode = {
+      ...current,
+      closeReasonCode: input.toReasonCode,
+      revision: current.revision + 1,
+    };
+    this.episodes.set(input.conversationId, next);
+    return next;
+  }
+
   async captureInvalidationFence(
     firstCompanionId: string,
     secondCompanionId: string,

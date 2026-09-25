@@ -942,6 +942,20 @@
       "value": "24"
     },
     {
+      "file": "src/system/config/intake-policy-config.ts",
+      "name": "createDefaultInjectionClassifierWorkerConfig.queueMax",
+      "value": "32",
+      "form": "object-member",
+      "note": "Bootstrap default for intake-policy.json injectionClassifier.worker, used only when an owner file written before 3mbpi lacks the block; the seed carries the same value and the owner file is the authority."
+    },
+    {
+      "file": "src/system/config/intake-policy-config.ts",
+      "name": "createDefaultInjectionClassifierWorkerConfig.callTimeoutMs",
+      "value": "60_000",
+      "form": "object-member",
+      "note": "Bootstrap default for intake-policy.json injectionClassifier.worker, used only when an owner file written before 3mbpi lacks the block; the seed carries the same value and the owner file is the authority."
+    },
+    {
       "file": "src/boundary/gateway/intake/l3-screener.ts",
       "name": "L3_MIN_VERBATIM_QUOTE_WORDS",
       "value": "8",

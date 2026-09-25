@@ -46,6 +46,7 @@ import {
 } from '../../../core/cogsec/intake/quarantine-store.js';
 import { CogSecEventStore } from '../../../core/cogsec/events.js';
 import { resolveCogSecEventsPath, resolveIntakeQuarantinePath } from '../../../persistence/layout.js';
+import { createInjectionClassifierWorkerPool } from './injection-classifier-worker-pool.js';
 import { injectionClassifierMaxContentChars, loadIntakePolicyConfig } from '../../../system/config/intake-policy-config.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { ProviderRuntime } from '../../../primitives/llm/provider-runtime.js';
@@ -280,9 +281,13 @@ export async function composeGatewayIntakeScreening(input: {
       modelDir,
       labelThreshold: policy.injectionClassifier.labelThreshold,
       maxContentChars: injectionClassifierMaxContentChars(policy),
-      ...(input.injectionBackendFactory
-        ? { backendFactory: input.injectionBackendFactory }
-        : {}),
+      // 3mbpi: production inference runs on a bounded worker-thread pool so a
+      // large untrusted page never blocks the gateway event loop.
+      backendFactory: input.injectionBackendFactory
+        ?? (async (dir: string) => await createInjectionClassifierWorkerPool({
+          modelDir: dir,
+          ...policy.injectionClassifier.worker,
+        })),
     });
     log.info('Intake L1.5 injection classifier loaded', { modelDir });
   } else if (existsSync(modelDir)) {
@@ -377,7 +382,18 @@ export async function composeGatewayIntakeScreening(input: {
         injectionScorer: {
           scannerId: INJECTION_CLASSIFIER_SCANNER_ID,
           classify: async (text: string) => {
-            const classified = await classifier.classify(text);
+            let classified: Awaited<ReturnType<InjectionClassifier['classify']>>;
+            try {
+              classified = await classifier.classify(text);
+            } catch (error) {
+              // 3mbpi: a worker crash, timeout or full queue means the content
+              // was not scored; escalate it fail closed, never pass it.
+              log.error('Intake L1.5 classifier could not score content; escalating fail closed', {
+                error: error instanceof Error ? error.message : String(error),
+                contentChars: text.length,
+              });
+              return { score: 1, labels: [] };
+            }
             if (!classified.truncated) return classified;
             // jerq6: content beyond the scored span is unscored; treat it fail
             // closed (maximal score) so the item always reaches deep screening.

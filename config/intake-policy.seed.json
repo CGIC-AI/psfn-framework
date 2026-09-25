@@ -55,6 +55,11 @@
   },
   "injectionClassifier": {
     "labelThreshold": 0.5,
+    "worker": {
+      "poolSize": 1,
+      "queueMax": 32,
+      "callTimeoutMs": 60000
+    },
     "scoreThresholdsByTier": {
       "trusted": 0.98,
       "standard": 0.9,

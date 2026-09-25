@@ -231,6 +231,29 @@ export interface IntakeInjectionClassifierPolicyConfig {
    * same span the L2 screener reads (`l2Screener.maxContentChars`).
    */
   maxContentChars?: number;
+  /**
+   * Worker-thread pool that runs L1.5 inference off the gateway event loop
+   * (3mbpi). Each worker holds one copy of the model (~0.7 GiB).
+   */
+  worker: IntakeInjectionClassifierWorkerConfig;
+}
+
+interface IntakeInjectionClassifierWorkerConfig {
+  /** Workers (model copies). */
+  poolSize: number;
+  /** Calls allowed to wait for a worker; beyond it a call is refused and the item escalates. */
+  queueMax: number;
+  /** Deadline for one worker call (model load, one tokenize chunk or one window). */
+  callTimeoutMs: number;
+}
+
+/** Owner-file defaults for the L1.5 worker pool (seeded in intake-policy.json). */
+function createDefaultInjectionClassifierWorkerConfig(): IntakeInjectionClassifierWorkerConfig {
+  return {
+    poolSize: 1,
+    queueMax: 32,
+    callTimeoutMs: 60_000,
+  };
 }
 
 /**
@@ -1158,7 +1181,7 @@ function validateInjectionClassifier(
     throw invalid(sourcePath, 'injectionClassifier must be an object');
   }
   const unknownKeys = Object.keys(raw)
-    .filter((key) => !['labelThreshold', 'scoreThresholdsByTier', 'maxContentChars'].includes(key));
+    .filter((key) => !['labelThreshold', 'scoreThresholdsByTier', 'maxContentChars', 'worker'].includes(key));
   if (unknownKeys.length > 0) {
     throw invalid(sourcePath, `injectionClassifier has unsupported keys: ${unknownKeys.join(', ')}`);
   }
@@ -1179,6 +1202,28 @@ function validateInjectionClassifier(
         ),
       }
       : {}),
+    worker: validateInjectionClassifierWorker(raw.worker, sourcePath),
+  };
+}
+
+function validateInjectionClassifierWorker(
+  raw: unknown,
+  sourcePath: string,
+): IntakeInjectionClassifierWorkerConfig {
+  // Absent in owner files written before 3mbpi: the canonical defaults apply.
+  if (raw === undefined) return createDefaultInjectionClassifierWorkerConfig();
+  if (!isRecord(raw)) {
+    throw invalid(sourcePath, 'injectionClassifier.worker must be an object');
+  }
+  const unknownKeys = Object.keys(raw)
+    .filter((key) => !['poolSize', 'queueMax', 'callTimeoutMs'].includes(key));
+  if (unknownKeys.length > 0) {
+    throw invalid(sourcePath, `injectionClassifier.worker has unsupported keys: ${unknownKeys.join(', ')}`);
+  }
+  return {
+    poolSize: validatePositiveInteger(raw.poolSize, sourcePath, 'injectionClassifier.worker.poolSize'),
+    queueMax: validatePositiveInteger(raw.queueMax, sourcePath, 'injectionClassifier.worker.queueMax'),
+    callTimeoutMs: validatePositiveInteger(raw.callTimeoutMs, sourcePath, 'injectionClassifier.worker.callTimeoutMs'),
   };
 }
 

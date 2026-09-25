@@ -167,10 +167,20 @@ function assertSnapshotInvariants(metadata: FatigueEnforcementMetadata): void {
   }
 }
 
+/**
+ * The one soft-limit measure (kfu2s). Every producer of a policy base state
+ * and this invariant read it, so they cannot disagree: this side's integer
+ * spend (current root plus rounded decayed carry-over) or its unrounded
+ * decayed pressure, whichever is larger.
+ */
+export function resolveEffectiveSoftSpend(normalSpentBefore: number, relationshipPressure: number): number {
+  return Math.max(normalSpentBefore, relationshipPressure);
+}
+
 function assertPolicyStateBudgetInvariants(metadata: FatigueEnforcementMetadata): void {
   const peerIsMachineIntelligence = metadata.peer.isMachineIntelligence === true;
   const { normalSpentBefore, softLimit, hardLimit } = metadata.budget;
-  const effectiveSoftPressure = Math.max(
+  const effectiveSoftPressure = resolveEffectiveSoftSpend(
     normalSpentBefore,
     metadata.socialRegulation.relationshipPressure,
   );

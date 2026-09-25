@@ -164,12 +164,21 @@ export async function reserveIcpFatigueRegulation(input: {
     reservedDecision = 'overcharge';
   }
   if (reservation.outcome !== 'exhausted') {
-    const fatigueDecision = reconcileFatigueWithReservationSnapshot({
-      fatigueDecision: input.fatigueDecision,
-      reservation,
-      fatiguePolicy: input.fatiguePolicy,
-      decision: reservedDecision,
-    });
+    let fatigueDecision: FatigueTurnDecision;
+    try {
+      fatigueDecision = reconcileFatigueWithReservationSnapshot({
+        fatigueDecision: input.fatigueDecision,
+        reservation,
+        fatiguePolicy: input.fatiguePolicy,
+        decision: reservedDecision,
+      });
+    } catch (error) {
+      // kfu2s: the durable slot is already reserved here, but the caller only
+      // learns about it from this function's result. Fail and release it
+      // before rethrowing, so it never stays pending with no owner.
+      await releaseUnreconciledReservation(input, reservedDecision, error);
+      throw error;
+    }
     const correlationDecision = fatigueDecision.metadata.decision === 'overcharge_charged'
       ? 'allow_overcharge' as const
       : 'allow' as const;
@@ -208,6 +217,43 @@ export async function reserveIcpFatigueRegulation(input: {
     },
     durableReservation: null,
   };
+}
+
+async function releaseUnreconciledReservation(
+  input: {
+    correlation: IcpConversationCorrelation;
+    fatigueDecision: FatigueTurnDecision;
+    reservationPort: IcpFatigueRegulationReservationPort | null | undefined;
+  },
+  reservedDecision: 'charged' | 'overcharge',
+  cause: unknown,
+): Promise<void> {
+  const port = input.reservationPort;
+  if (!port) return;
+  const failures: unknown[] = [];
+  try {
+    await port.finalize({
+      correlation: input.correlation,
+      outcome: 'failed',
+      finalizedAtMs: Date.now(),
+      // The row records the decision that was reserved, which can be an
+      // overcharge the pre-reservation metadata did not carry.
+      fatigue: { ...input.fatigueDecision.metadata, spendDecision: reservedDecision },
+    });
+  } catch (error) {
+    failures.push(error);
+  }
+  try {
+    await port.handoff(input.correlation);
+  } catch (error) {
+    failures.push(error);
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(
+      [cause, ...failures],
+      `ICP fatigue reservation ${input.correlation.turnId} could not be released after a reconciliation failure`,
+    );
+  }
 }
 
 /** Apply the marginal social charge in its own folded run-charge lane. */

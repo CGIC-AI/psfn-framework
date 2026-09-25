@@ -104,13 +104,43 @@ export interface FleetGardenContactMutationActor {
   readonly auditMetadata: ContactMutationAuditMetadata;
 }
 
+/**
+ * The gateway's audited ADMIN_TOKEN Garden door (actor kind
+ * `admin_token_operator`, psfn-framework-jxthv). The gateway signs this exact
+ * shape only after a constant-time ADMIN_TOKEN match and a durable door audit
+ * row (`assertAdminTokenAuthContext` rejects any other admin_token shape), so
+ * it is operator authority equivalent to an SSO owner — never a fallback for a
+ * missing or failed SSO session.
+ */
+export function isAuditedAdminTokenOperator(
+  context: GardenRequestContext,
+): context is FleetGardenRequestContext {
+  return context.kind === 'fleet_principal'
+    && context.actor.provider === 'admin_token'
+    && context.actor.role === 'owner'
+    && context.actor.accessMode === 'sole_admin'
+    && context.actor.sessionAssurance === 'break_glass';
+}
+
+/**
+ * Operator assurance for escalated operator actions: an SSO session that
+ * consumed an audited escalation grant for this request, or the audited
+ * ADMIN_TOKEN operator door (whose every request is already door-audited).
+ */
+export function hasEscalatedOperatorAssurance(context: FleetGardenRequestContext): boolean {
+  return context.actor.sessionAssurance === 'escalated' || isAuditedAdminTokenOperator(context);
+}
+
 /** Provider identity is audit attribution, never an actor or authority selector. */
 export function resolveFleetGardenContactMutationActor(
   context: GardenRequestContext,
 ): FleetGardenContactMutationActor | null {
   if (context.kind !== 'fleet_principal'
-    || context.actor.provider !== 'discord'
     || context.actor.role !== 'owner') return null;
+  const provider = context.actor.provider === 'discord'
+    ? 'discord' as const
+    : isAuditedAdminTokenOperator(context) ? 'admin_token' as const : null;
+  if (!provider) return null;
   const required = [context.actor.providerSubjectId, context.actor.principalId,
     context.requestId, context.decisionId, context.authorizationEventId,
     context.actor.operatorGrantId, context.actor.sessionRecordId, context.actor.contactBindingId];
@@ -118,7 +148,7 @@ export function resolveFleetGardenContactMutationActor(
   return Object.freeze({
     actorId: FLEET_GARDEN_CONTACT_OPERATOR_ACTOR,
     auditMetadata: Object.freeze({
-      source: 'fleet_garden', provider: 'discord',
+      source: 'fleet_garden', provider,
       providerSubjectId: context.actor.providerSubjectId,
       principalId: context.actor.principalId, requestId: context.requestId,
       decisionId: context.decisionId, authorizationEventId: context.authorizationEventId,
@@ -345,6 +375,17 @@ export function soleAdminFleetActor(
 ): boolean {
   return (context.actor.role === 'owner' || context.actor.role === 'admin')
     && context.actor.accessMode === 'sole_admin';
+}
+
+/**
+ * True when a fleet request is partitioned to its own subject (contact).
+ * Sole-admin actors — including the audited ADMIN_TOKEN operator, whose
+ * contact id is synthetic — act for the whole deployment (D1 doctrine).
+ */
+export function isSubjectBoundFleetRequest(
+  context: GardenRequestContext | undefined,
+): context is FleetGardenRequestContext {
+  return context?.kind === 'fleet_principal' && !soleAdminFleetActor(context);
 }
 
 export function gardenRequestServiceBoundaryDenial(

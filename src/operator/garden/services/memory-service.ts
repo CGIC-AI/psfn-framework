@@ -63,7 +63,10 @@ import {
 import { MemoryWriter, MemoryCandidacyPolicyError } from '../../../faculties/memory/writer.js';
 import type { CompanionRoomMembershipAuthority } from '../../../faculties/memory/companion-provenance.js';
 import type { GardenRequestContext } from '../garden-request-context.js';
-import type { FleetGardenRequestContext } from '../garden-request-context.js';
+import {
+  hasEscalatedOperatorAssurance,
+  type FleetGardenRequestContext,
+} from '../garden-request-context.js';
 import { partitionMemoriesByLifecycle } from '../../../faculties/memory/current-memory.js';
 
 const log = createComponentLogger('AdminMemoryService');
@@ -342,7 +345,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
       ...(memoryId ? {
         action: 'memory.reveal' as const,
         resourceMemoryId: memoryId,
-        assurance: context.actor.sessionAssurance === 'escalated'
+        assurance: hasEscalatedOperatorAssurance(context)
           ? 'escalated' as const
           : undefined,
         requestExpiresAtSeconds: context.expiresAt,
@@ -598,9 +601,10 @@ export class AdminMemoryDataService implements AdminMemoryService {
       : undefined;
     const normalizedId = id.trim();
     if (!normalizedId || signedMemoryId !== normalizedId
-      || context.actor.sessionAssurance !== 'escalated') {
+      || !hasEscalatedOperatorAssurance(context)) {
       // The gateway mints `escalated` only after consuming an audited
-      // escalation grant scoped to exactly this reveal route and memory id.
+      // escalation grant scoped to exactly this reveal route and memory id;
+      // the audited ADMIN_TOKEN operator door is door-audited per request.
       throw new Error('Memory reveal requires an audited escalation grant');
     }
     const classification = await this.deps.memoryStore.getMemorySubjectClassification(normalizedId);

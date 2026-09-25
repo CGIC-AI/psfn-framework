@@ -109,6 +109,7 @@ const MAX_CAPABILITY_HEADER_BYTES = 65_536;
 const FLEET_PATH = '/fleet';
 const FLEET_LOGIN_PATH = '/fleet/login';
 const FLEET_AUTH_LOGIN_PATH = '/v1/fleet-auth/login';
+const GARDEN_OPERATOR_DOOR_COOKIE = 'garden_operator_door';
 const FLEET_GARDEN_CHAT_PATH = '/v1/chat/completions';
 const COMPANION_PREFIX = FLEET_SSO_COMPANION_ROUTE_PREFIX;
 const COMPANION_UI_PREFIX = '/companion-ui';
@@ -555,6 +556,12 @@ async function readBoundedBody(request: IncomingMessage): Promise<Buffer> {
   return Buffer.concat(chunks, received);
 }
 
+function isFleetModelUsageTarget(target: CompiledGardenRequestTarget): boolean {
+  return target.method === 'GET'
+    && target.canonicalPath === '/api/admin/fleet-model-usage'
+    && target.action === 'models.read';
+}
+
 function authorityVersions(context: FleetAuthorizationContext): RequestCapabilityAuthorityVersions {
   return Object.freeze({
     authorityGeneration: context.authority.authorityGeneration,
@@ -780,7 +787,15 @@ export class GatewayFleetSsoRouter {
           'Cache-Control': 'no-store',
           Location: FLEET_PATH,
           'Referrer-Policy': 'no-referrer',
-          'Set-Cookie': `psfn_token=${encodeURIComponent(candidate)}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=86400`,
+          'Set-Cookie': [
+            `psfn_token=${encodeURIComponent(candidate)}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=86400`,
+            // Non-secret, script-readable door marker (jxthv): tells the
+            // Garden UI to send protected mutations straight through the
+            // audited ADMIN_TOKEN door instead of minting an SSO escalation
+            // grant. It carries no authority; the gateway still requires the
+            // HttpOnly token on every request.
+            `${GARDEN_OPERATOR_DOOR_COOKIE}=admin_token; Path=/; Secure; SameSite=Strict; Max-Age=86400`,
+          ],
         });
         response.end();
         return;
@@ -1267,32 +1282,16 @@ export class GatewayFleetSsoRouter {
       input.route.companionId,
     );
     const authContext = toRequestCapabilityAuthContext(context);
-    const fleetCompanionIds = target.method === 'GET'
-      && target.canonicalPath === '/api/admin/fleet-model-usage'
-      && target.action === 'models.read'
+    const fleetCompanionIds = isFleetModelUsageTarget(target)
       ? await this.resolveFleetModelUsageRoster(
           input.sessionToken,
           input.route.companionId,
           context,
         )
       : undefined;
-    let fleetModelUsageRequestTarget: string | undefined;
-    if (fleetCompanionIds) {
-      try {
-        fleetModelUsageRequestTarget = resolveFleetModelUsageInternalRequestTarget(
-          parseFleetModelUsageResourceQuery(target.resource.query),
-          Date.parse(authContext.resolvedAt),
-        );
-      } catch {
-        throw new FleetSsoRequestError(400, 'Invalid fleet model usage query', {
-          reasonCode: 'request_target_invalid',
-          reason: 'fleet_model_usage_query_invalid',
-          routeId: target.resource.routeId,
-          action: target.action,
-          principalId: context.principalId,
-        });
-      }
-    }
+    const fleetModelUsageRequestTarget = fleetCompanionIds
+      ? this.fleetModelUsageRequestTarget(target, authContext.resolvedAt, context.principalId)
+      : undefined;
     return await this.issueCapability({
       target,
       requestId,
@@ -1408,15 +1407,29 @@ export class GatewayFleetSsoRouter {
       resolvedAt,
       provenanceSource: 'gateway_admin_token',
     });
+    // The ADMIN_TOKEN operator is the operator of every fleet companion, so
+    // the fleet model-usage roster is the whole gateway fleet (jxthv).
+    const authContext = toRequestCapabilityAuthContext(context);
+    const fleetModelUsage = isFleetModelUsageTarget(target)
+      ? {
+          fleetCompanionIds: Object.freeze([...this.upstreams.keys()].sort()),
+          fleetModelUsageRequestTarget: this.fleetModelUsageRequestTarget(
+            target,
+            authContext.resolvedAt,
+            principalId,
+          ),
+        }
+      : {};
     return await this.issueCapability({
       target,
       requestId,
       decisionId: authorizationEventId,
       authContext: Object.freeze({
-        ...toRequestCapabilityAuthContext(context),
+        ...authContext,
         // The shared ADMIN_TOKEN is the fleet deployment's unconditional
         // operator credential, so it must not inherit SSO subject filtering.
         fleetAccessMode: 'sole_admin',
+        ...fleetModelUsage,
       }),
       versions: authorityVersions(context),
       context,
@@ -1491,6 +1504,27 @@ export class GatewayFleetSsoRouter {
       });
     }
     return { token, verified, context: input.context };
+  }
+
+  private fleetModelUsageRequestTarget(
+    target: CompiledGardenRequestTarget,
+    resolvedAt: string,
+    principalId: string,
+  ): string {
+    try {
+      return resolveFleetModelUsageInternalRequestTarget(
+        parseFleetModelUsageResourceQuery(target.resource.query),
+        Date.parse(resolvedAt),
+      );
+    } catch {
+      throw new FleetSsoRequestError(400, 'Invalid fleet model usage query', {
+        reasonCode: 'request_target_invalid',
+        reason: 'fleet_model_usage_query_invalid',
+        routeId: target.resource.routeId,
+        action: target.action,
+        principalId,
+      });
+    }
   }
 
   private async resolveFleetModelUsageRoster(

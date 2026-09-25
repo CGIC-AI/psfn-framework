@@ -51,8 +51,9 @@ async function createServiceHarness(options?: {
 function authenticatedContactMutationContext(input: {
   contactId: string;
   role?: 'owner' | 'admin' | 'member';
-  provider?: 'discord' | 'testing_harness';
+  provider?: 'discord' | 'testing_harness' | 'admin_token';
   accessMode?: 'sole_admin' | 'multi_admin';
+  sessionAssurance?: 'oauth' | 'break_glass';
 }): FleetGardenRequestContext {
   return {
     kind: 'fleet_principal', requestId: 'request-fixture', decisionId: 'decision-fixture',
@@ -64,7 +65,7 @@ function authenticatedContactMutationContext(input: {
       provider: input.provider ?? 'discord', providerSubjectId: 'provider-subject-fixture',
       contactId: input.contactId, contactBindingId: 'binding-fixture', role: input.role ?? 'owner',
       operatorGrantId: 'grant-fixture', sessionRecordId: 'session-fixture',
-      sessionAssurance: 'oauth', accessMode: input.accessMode ?? 'sole_admin' },
+      sessionAssurance: input.sessionAssurance ?? 'oauth', accessMode: input.accessMode ?? 'sole_admin' },
     action: 'contacts.manage',
     resource: { routeId: 'PATCH /api/admin/contacts/:id', scope: 'personal_workspace',
       area: 'contacts', companionId: '11111111-1111-4111-8111-111111111111',
@@ -99,7 +100,34 @@ describe('AdminContactsDataService', () => {
       .toHaveLength(3);
   });
 
+  it('persists protected contact edits from the audited ADMIN_TOKEN operator with no SSO (jxthv)', async () => {
+    const { contactStore, service } = await createServiceHarness();
+    const protectedContact = await contactStore.upsert({ displayName: 'Chosen Family', relationshipType: 'friend' });
+    const context = authenticatedContactMutationContext({
+      contactId: 'admin-token-contact-11111111-1111-4111-8111-111111111111',
+      provider: 'admin_token',
+      sessionAssurance: 'break_glass',
+    });
+
+    await expect(service.updateContact(protectedContact.id, JSON.stringify({
+      displayName: 'Chosen Family Updated', trustLevel: 'trusted', relationshipType: 'family',
+    }), context)).resolves.toMatchObject({ ok: true });
+
+    const audit = await contactStore.listMutationAuditEntries({ contactId: protectedContact.id });
+    expect(audit.filter(entry => ['display_name', 'trust_level', 'relationship_type'].includes(entry.field)))
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ actor: FLEET_GARDEN_CONTACT_OPERATOR_ACTOR,
+          metadata: expect.objectContaining({ source: 'fleet_garden', provider: 'admin_token' }) }),
+      ]));
+  });
+
   it.each([
+    ['admin-token shape without the signed door assurance', {
+      provider: 'admin_token' as const, sessionAssurance: 'oauth' as const,
+    }],
+    ['admin-token shape outside sole-admin mode', {
+      provider: 'admin_token' as const, sessionAssurance: 'break_glass' as const, accessMode: 'multi_admin' as const,
+    }],
     ['non-owner', { role: 'admin' as const }],
     ['automated harness', { provider: 'testing_harness' as const }],
   ])('denies %s protected fleet mutations', async (_label, overrides) => {

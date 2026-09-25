@@ -34,3 +34,21 @@ describe('admin auth storage cleanup', () => {
     expect(documentRef.cookie).toContain('expires=Thu, 01 Jan 1970 00:00:00 GMT');
   });
 });
+
+describe('ADMIN_TOKEN operator door marker', () => {
+  it('recognizes only the exact gateway marker', async () => {
+    const { usesAdminTokenOperatorDoor } = await import('./auth-storage');
+    expect(usesAdminTokenOperatorDoor({ cookie: 'a=1; garden_operator_door=admin_token' })).toBe(true);
+    expect(usesAdminTokenOperatorDoor({ cookie: 'garden_operator_door=sso' })).toBe(false);
+    expect(usesAdminTokenOperatorDoor({ cookie: 'xgarden_operator_door=admin_token' })).toBe(false);
+    expect(usesAdminTokenOperatorDoor({ cookie: '' })).toBe(false);
+  });
+
+  it('expires the marker on sign-out cleanup', async () => {
+    const { clearAdminTokenOperatorDoor } = await import('./auth-storage');
+    const documentRef = { cookie: '' };
+    clearAdminTokenOperatorDoor(documentRef);
+    expect(documentRef.cookie).toContain('garden_operator_door=;');
+    expect(documentRef.cookie).toContain('expires=Thu, 01 Jan 1970 00:00:00 GMT');
+  });
+});

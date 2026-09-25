@@ -2,7 +2,10 @@ import { checkedEscalationReason } from '../../../boundary/fleet-auth/escalation
 import type { SessionManager } from '../../../core/session/manager.js';
 import { readLastActiveSession } from '../../../system/lifecycle/notifications.js';
 import type { FleetAuthAction } from '../../../system/config/fleet-auth-config.js';
-import type { FleetGardenRequestContext } from '../garden-request-context.js';
+import {
+  hasEscalatedOperatorAssurance,
+  type FleetGardenRequestContext,
+} from '../garden-request-context.js';
 import type { AdminAuditHistoryService } from './audit-history-service.js';
 
 export type ProtectedConcernAction = 'resolve' | 'suppress' | 'transition' | 'resolve_stale';
@@ -141,7 +144,7 @@ export class AdminSubjectVisibleAuditService {
     const { context, category, expectedRouteId, actionLabel } = input;
     if (context.action !== category.action
       || context.resource.area !== category.area
-      || context.actor.sessionAssurance !== 'escalated'
+      || !hasEscalatedOperatorAssurance(context)
       || context.resource.routeId !== expectedRouteId) {
       throw new Error('Subject-visible protected action requires an exact escalated request');
     }

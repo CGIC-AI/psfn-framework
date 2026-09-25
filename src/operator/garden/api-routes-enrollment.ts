@@ -13,6 +13,7 @@
 import { sendJson } from '../../channels/backplane/http/primitives.js';
 import { parseAdminJsonBody } from './request-body.js';
 import { isRecord } from '../../shared/utils/types.js';
+import { isSubjectBoundFleetRequest } from './garden-request-context.js';
 import {
   exactPath,
   prefixedParamPath,
@@ -72,7 +73,7 @@ export function buildAdminEnrollmentRoutes(options: {
             sendJson(res, 400, { error: 'canonicalContactId is required' });
             return;
           }
-          if (context?.kind === 'fleet_principal'
+          if (isSubjectBoundFleetRequest(context)
             && payload.canonicalContactId.trim() !== context.actor.contactId) {
             sendJson(res, 403, { error: 'Enrollment contact must be the current trusted subject' });
             return;

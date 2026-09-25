@@ -177,21 +177,21 @@
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidate.limit@L1049",
+      "name": "main.candidate.limit@L1053",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidate.limit; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidate.limit@L1085",
+      "name": "main.candidate.limit@L1089",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidate.limit; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidate.limit@L1125",
+      "name": "main.candidate.limit@L1129",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidate.limit; code-owned only for harness behavior and not used as an unowned production setting."
@@ -205,28 +205,28 @@
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidateIdsBefore.limit@L1034",
+      "name": "main.candidateIdsBefore.limit@L1038",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidateIdsBefore.limit; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidateIdsBefore.limit@L1066",
+      "name": "main.candidateIdsBefore.limit@L1070",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidateIdsBefore.limit; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidateIdsBefore.limit@L1106",
+      "name": "main.candidateIdsBefore.limit@L1110",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidateIdsBefore.limit; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidateIdsBefore.limit@L639",
+      "name": "main.candidateIdsBefore.limit@L643",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidateIdsBefore.limit; code-owned only for harness behavior and not used as an unowned production setting."
@@ -3394,7 +3394,7 @@
       "file": "src/core/cogsec/disclosure/capsule-custody.ts",
       "name": "DEFAULT_MAX_ACTIVE_CAPSULES",
       "value": "3",
-      "note": "Code-owned DEFAULT for the active-capsule queue bound (bible §10.11 'initial cap of three'); already overridable via createShareCapsuleCustodyStore's maxActiveCapsules option. Owned-setting/Garden exposure is deferred to the publication approvals surface (jp36.7.2)."
+      "note": "Code-owned DEFAULT for the active-capsule queue bound (bible \u00a710.11 'initial cap of three'); already overridable via createShareCapsuleCustodyStore's maxActiveCapsules option. Owned-setting/Garden exposure is deferred to the publication approvals surface (jp36.7.2)."
     },
     {
       "file": "src/core/cogsec/disclosure/publication-tool.ts",
@@ -3468,13 +3468,13 @@
       "file": "src/core/cogsec/intake/corpus/corpus.ts",
       "name": "MAX_FIXTURE_NOTE_CHARS",
       "value": "512",
-      "note": "Corpus fixture-schema size guard (hrmrq.141): bounds attacker-influenceable test data files, not runtime policy — same class as scanner MAX_SCAN_CHARS."
+      "note": "Corpus fixture-schema size guard (hrmrq.141): bounds attacker-influenceable test data files, not runtime policy \u2014 same class as scanner MAX_SCAN_CHARS."
     },
     {
       "file": "src/core/cogsec/intake/corpus/corpus.ts",
       "name": "MAX_FIXTURE_PAYLOAD_CHARS",
       "value": "8192",
-      "note": "Corpus fixture-schema size guard (hrmrq.141): bounds attacker-influenceable test data files, not runtime policy — same class as scanner MAX_SCAN_CHARS."
+      "note": "Corpus fixture-schema size guard (hrmrq.141): bounds attacker-influenceable test data files, not runtime policy \u2014 same class as scanner MAX_SCAN_CHARS."
     },
     {
       "file": "src/core/cogsec/intake/marking.ts",
@@ -7854,7 +7854,7 @@
     {
       "file": "src/faculties/memory/subject-authorized-store.ts",
       "name": "MEMORY_STORE_METHOD_POLICY",
-      "value": "{ // --- authorized: explicit projection / denial in the proxy trap below --- insertMemory: 'authorized', persistMemoryWrite: 'authorized', searchByEmbedding: 'authorized', searchByText: 'authorized', updateMemory: 'authorized', recordPatchEvent: 'authorized', getAllActiveMemories: 'authorized', listMemories: 'authorized', listActiveMemories: 'authorized', listActiveMemoriesInWindow: 'authorized', listAdminMemories: 'authorized', getAdminMemoryPrivacySummary: 'authorized', countActiveMemories: 'authorized', getById: 'authorized', getByIds: 'authorized', softDeleteMemory: 'authorized', undoSoftDelete: 'authorized', getDeleteVersion: 'authorized', recordAbstractionLink: 'authorized', getAbstractionLinksForSourceMemory: 'authorized', getAbstractionLinksForAbstractedMemory: 'authorized', recordEvolutionLink: 'authorized', getEvolutionLinksForSourceMemory: 'authorized', getEvolutionLinksForTargetMemory: 'authorized', getStats: 'authorized', getMemoriesByChannel: 'authorized', getMemoriesByContact: 'authorized', linkMemories: 'authorized', unlinkMemories: 'authorized', getLinkedMemories: 'authorized', bulkDelete: 'authorized', bulkUpdate: 'authorized', bulkUpdateSalience: 'authorized', upsertRecentContactShape: 'authorized', getRecentContactShape: 'authorized', listRecentContactShapes: 'authorized', upsertMemoryMaintenanceReview: 'authorized', listMemoryMaintenanceReviews: 'authorized', getMemoryMaintenanceReview: 'authorized', getMemoryMaintenanceDiagnostics: 'authorized', listActiveMemoryEmbeddingsSince: 'authorized', queryAuthorizedMemorySubjects: 'authorized', aggregateAuthorizedMemorySubjects: 'authorized', mutateAuthorizedMemorySubjects: 'authorized', persistAuthorizedMemoryWrite: 'authorized', softDeleteAuthorizedMemorySubject: 'authorized', undoAuthorizedMemorySubjectDelete: 'authorized', getMemorySubjectClassification: 'authorized', backfillMemorySubjectClassifications: 'authorized', // --- pass-through-safe: exposes no contact-subject rows --- // Process-local monotonic counters (retrieval-cache / salience-decay // invalidation signals). They carry no memory content and are feature-detected // by their consumers; the bead requires the retrieval-cache getter keep working. getSalienceMaintenanceRevision: 'pass-through-safe', getRetrievalCorpusVersion: 'pass-through-safe', // Startup aggregate counts only; no memory identity, body, or subject rows. getStartupMemorySubjectClassificationCoverage: 'pass-through-safe', // Capability-free transaction boundary. Used by MemoryWriter.patch/patchMemory // through the subject store (memory tool action=patch). The operations inside // the handler run through this same authorized proxy (e.g. updateMemory -> // mutateAuthorizedMemorySubjects), so wrapping them in a DB transaction adds // atomicity without granting any unauthorized read or write. runInTransaction: 'pass-through-safe', // Companion-owned working scratchpad (ScratchpadProvider). Distinct ownership // contract from contact-subject memories: entries are process/companion-local // notes keyed by entry id, never per-contact subject rows, and the scratchpad // tool operates on this same store. No subject predicate applies. addScratchpadEntry: 'pass-through-safe', replaceScratchpadEntry: 'pass-through-safe', appendScratchpadEntry: 'pass-through-safe', removeScratchpadEntry: 'pass-through-safe', getScratchpadEntry: 'pass-through-safe', listScratchpadEntries: 'pass-through-safe', }",
+      "value": "{ // --- authorized: explicit projection / denial in the proxy trap below --- insertMemory: 'authorized', persistMemoryWrite: 'authorized', searchByEmbedding: 'authorized', searchByText: 'authorized', updateMemory: 'authorized', recordPatchEvent: 'authorized', getAllActiveMemories: 'authorized', listMemories: 'authorized', listActiveMemories: 'authorized', listActiveMemoriesInWindow: 'authorized', listAdminMemories: 'authorized', getAdminMemoryPrivacySummary: 'authorized', countActiveMemories: 'authorized', getById: 'authorized', getByIds: 'authorized', softDeleteMemory: 'authorized', undoSoftDelete: 'authorized', getDeleteVersion: 'authorized', recordAbstractionLink: 'authorized', getAbstractionLinksForSourceMemory: 'authorized', getAbstractionLinksForAbstractedMemory: 'authorized', recordEvolutionLink: 'authorized', getEvolutionLinksForSourceMemory: 'authorized', getEvolutionLinksForTargetMemory: 'authorized', getStats: 'authorized', getMemoriesByChannel: 'authorized', getMemoriesByContact: 'authorized', getRecentlyAccessedMemories: 'authorized', linkMemories: 'authorized', unlinkMemories: 'authorized', getLinkedMemories: 'authorized', bulkDelete: 'authorized', bulkUpdate: 'authorized', bulkUpdateSalience: 'authorized', upsertRecentContactShape: 'authorized', getRecentContactShape: 'authorized', listRecentContactShapes: 'authorized', upsertMemoryMaintenanceReview: 'authorized', listMemoryMaintenanceReviews: 'authorized', getMemoryMaintenanceReview: 'authorized', getMemoryMaintenanceDiagnostics: 'authorized', listActiveMemoryEmbeddingsSince: 'authorized', queryAuthorizedMemorySubjects: 'authorized', aggregateAuthorizedMemorySubjects: 'authorized', mutateAuthorizedMemorySubjects: 'authorized', persistAuthorizedMemoryWrite: 'authorized', softDeleteAuthorizedMemorySubject: 'authorized', undoAuthorizedMemorySubjectDelete: 'authorized', getMemorySubjectClassification: 'authorized', backfillMemorySubjectClassifications: 'authorized', // --- pass-through-safe: exposes no contact-subject rows --- // Process-local monotonic counters (retrieval-cache / salience-decay // invalidation signals). They carry no memory content and are feature-detected // by their consumers; the bead requires the retrieval-cache getter keep working. getSalienceMaintenanceRevision: 'pass-through-safe', getRetrievalCorpusVersion: 'pass-through-safe', // Startup aggregate counts only; no memory identity, body, or subject rows. getStartupMemorySubjectClassificationCoverage: 'pass-through-safe', // Capability-free transaction boundary. Used by MemoryWriter.patch/patchMemory // through the subject store (memory tool action=patch). The operations inside // the handler run through this same authorized proxy (e.g. updateMemory -> // mutateAuthorizedMemorySubjects), so wrapping them in a DB transaction adds // atomicity without granting any unauthorized read or write. runInTransaction: 'pass-through-safe', // Companion-owned working scratchpad (ScratchpadProvider). Distinct ownership // contract from contact-subject memories: entries are process/companion-local // notes keyed by entry id, never per-contact subject rows, and the scratchpad // tool operates on this same store. No subject predicate applies. addScratchpadEntry: 'pass-through-safe', replaceScratchpadEntry: 'pass-through-safe', appendScratchpadEntry: 'pass-through-safe', removeScratchpadEntry: 'pass-through-safe', getScratchpadEntry: 'pass-through-safe', listScratchpadEntries: 'pass-through-safe', }",
       "form": "object",
       "note": "Existing mutable policy candidate MEMORY_STORE_METHOD_POLICY; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
@@ -8445,7 +8445,7 @@
     {
       "file": "src/faculties/subagents/tool-governance.ts",
       "name": "VAULT_POLICY",
-      "value": "{ readActionsHelp: 'read, search, daily (without content)', classify(params) { const explicit = resolveExplicitAction(params); if (!isRecord(params)) { return classifyByActionSets(explicit, VAULT_READ_ACTIONS, VAULT_MUTATION_ACTIONS); } if (explicit !== null) { if (VAULT_DAILY_ACTIONS.has(explicit)) { // daily appends when content is a string and reads otherwise // (executeVaultDaily in boundary/integrations/vault/tools.ts). return typeof params.content === 'string' ? { action: explicit, kind: 'mutation' } : { action: explicit, kind: 'read' }; } return classifyByActionSets(explicit, VAULT_READ_ACTIONS, VAULT_MUTATION_ACTIONS); } // Mirrors normalizeVaultAction's omitted-action inference, which can // resolve to a write or daily-append — classify those as mutations. const hasName = typeof params.name === 'string'; const hasContent = typeof params.content === 'string'; const hasQuery = typeof params.query === 'string'; const hasFolder = typeof params.folder === 'string'; const hasMode = typeof params.mode === 'string'; const hasLimit = typeof params.limit === 'number'; if (hasQuery && !hasName && !hasContent && !hasFolder && !hasMode) { return { action: 'search', kind: 'read' }; } if (hasName && hasContent) return { action: 'write', kind: 'mutation' }; if (hasName && !hasContent && !hasQuery && !hasFolder && !hasMode && !hasLimit) { return { action: 'read', kind: 'read' }; } if (!hasName && hasContent && !hasQuery && !hasFolder && !hasMode && !hasLimit) { return { action: 'daily', kind: 'mutation' }; } return { action: null, kind: 'unresolved' }; }, }",
+      "value": "{ readActionsHelp: 'read, search, daily (without content)', classify(params) { const explicit = resolveExplicitAction(params); if (!isRecord(params)) { return classifyByActionSets(explicit, VAULT_READ_ACTIONS, VAULT_MUTATION_ACTIONS); } if (explicit !== null) { if (VAULT_DAILY_ACTIONS.has(explicit)) { // daily appends when content is a string and reads otherwise // (executeVaultDaily in boundary/integrations/vault/tools.ts). return typeof params.content === 'string' ? { action: explicit, kind: 'mutation' } : { action: explicit, kind: 'read' }; } return classifyByActionSets(explicit, VAULT_READ_ACTIONS, VAULT_MUTATION_ACTIONS); } // Mirrors normalizeVaultAction's omitted-action inference, which can // resolve to a write or daily-append \u2014 classify those as mutations. const hasName = typeof params.name === 'string'; const hasContent = typeof params.content === 'string'; const hasQuery = typeof params.query === 'string'; const hasFolder = typeof params.folder === 'string'; const hasMode = typeof params.mode === 'string'; const hasLimit = typeof params.limit === 'number'; if (hasQuery && !hasName && !hasContent && !hasFolder && !hasMode) { return { action: 'search', kind: 'read' }; } if (hasName && hasContent) return { action: 'write', kind: 'mutation' }; if (hasName && !hasContent && !hasQuery && !hasFolder && !hasMode && !hasLimit) { return { action: 'read', kind: 'read' }; } if (!hasName && hasContent && !hasQuery && !hasFolder && !hasMode && !hasLimit) { return { action: 'daily', kind: 'mutation' }; } return { action: null, kind: 'unresolved' }; }, }",
       "form": "object",
       "note": "Existing mutable policy candidate VAULT_POLICY; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
@@ -8646,7 +8646,7 @@
     {
       "file": "src/faculties/wiki/sleeptime-wiki-pass.ts",
       "name": "PERSONAL_MARKER_PATTERN",
-      "value": "/\\bmy\\s+(partner|wife|husband|spouse|boyfriend|girlfriend|fianc[ée]+|mother|mom|father|dad|sister|brother|son|daughter|friend|parents?|family|ex|kid|child|children)\\b/i",
+      "value": "/\\bmy\\s+(partner|wife|husband|spouse|boyfriend|girlfriend|fianc[\u00e9e]+|mother|mom|father|dad|sister|brother|son|daughter|friend|parents?|family|ex|kid|child|children)\\b/i",
       "form": "regex",
       "note": "Sleeptime-wiki personal-context classifier currently encoded in code; explicitly baselined as named migration debt by psfn-framework-7qeo1.18, not immutable policy."
     },
@@ -10231,7 +10231,7 @@
     {
       "file": "src/primitives/images/vision-reviewer.ts",
       "name": "EMBODIMENT_MARKER",
-      "value": "/EMBODIMENT:\\s*(same_me|drifted|different_person)\\b\\s*[—:-]?\\s*(.*)$/im",
+      "value": "/EMBODIMENT:\\s*(same_me|drifted|different_person)\\b\\s*[\u2014:-]?\\s*(.*)$/im",
       "form": "regex",
       "note": "Parser for the fixed EMBODIMENT reviewer response marker; code-owned protocol grammar coupled to the reviewer prompt contract."
     },
@@ -11941,6 +11941,20 @@
     },
     {
       "file": "src/system/config/decision-backend-config.ts",
+      "name": "createDefaultDecisionBackendSettings.jev.maxRequestChars",
+      "value": "96_000",
+      "form": "object-member",
+      "note": "Canonical owner-file/schema metadata for settings.json decisionBackend (epic 4lf3r); the literal defines validation or bootstrap defaults for the owned JSON contract rather than a parallel runtime override."
+    },
+    {
+      "file": "src/system/config/decision-backend-config.ts",
+      "name": "createDefaultDecisionBackendSettings.jev.timeoutMs",
+      "value": "1_500",
+      "form": "object-member",
+      "note": "Canonical owner-file/schema metadata for settings.json decisionBackend (epic 4lf3r); the literal defines validation or bootstrap defaults for the owned JSON contract rather than a parallel runtime override."
+    },
+    {
+      "file": "src/system/config/decision-backend-config.ts",
       "name": "DECISION_BACKEND_RANGES.latencyBudgetMs",
       "value": "{ min: 10, max: 30_000 }",
       "form": "object-member",
@@ -11957,20 +11971,6 @@
       "file": "src/system/config/decision-backend-config.ts",
       "name": "DECISION_BACKEND_RANGES.timeoutMs",
       "value": "{ min: 50, max: 30_000 }",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata for settings.json decisionBackend (epic 4lf3r); the literal defines validation or bootstrap defaults for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/decision-backend-config.ts",
-      "name": "createDefaultDecisionBackendSettings.jev.maxRequestChars",
-      "value": "96_000",
-      "form": "object-member",
-      "note": "Canonical owner-file/schema metadata for settings.json decisionBackend (epic 4lf3r); the literal defines validation or bootstrap defaults for the owned JSON contract rather than a parallel runtime override."
-    },
-    {
-      "file": "src/system/config/decision-backend-config.ts",
-      "name": "createDefaultDecisionBackendSettings.jev.timeoutMs",
-      "value": "1_500",
       "form": "object-member",
       "note": "Canonical owner-file/schema metadata for settings.json decisionBackend (epic 4lf3r); the literal defines validation or bootstrap defaults for the owned JSON contract rather than a parallel runtime override."
     },

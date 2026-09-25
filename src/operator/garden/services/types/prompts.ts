@@ -1,3 +1,4 @@
+import type { GardenRequestContext } from '../../garden-request-context.js';
 import type { PromptLayerMetadataUpdate } from '../../../../core/identity/prompt-store.js';
 import type {
   PromptRegistryEntry,
@@ -184,11 +185,13 @@ export interface AdminPromptsService {
   saveRuntimePromptBlocks(body: string): RuntimePromptUpdateResult;
   getPromptDetail(layerId: string): AdminPromptDetailData | null;
   getStaticPromptDetail(key: string): AdminPromptDetailData | null;
-  createPromptLayer(body: string): PromptUpdateResult;
-  updatePromptLayer(body: string): PromptUpdateResult;
+  createPromptLayer(body: string, requestContext?: GardenRequestContext): PromptUpdateResult;
+  updatePromptLayer(body: string, requestContext?: GardenRequestContext): PromptUpdateResult;
   updatePromptRegistry(body: string): PromptUpdateResult;
-  togglePromptLayer(body: string): PromptUpdateResult;
-  rollbackPromptLayer(body: string): PromptUpdateResult;
+  togglePromptLayer(body: string, requestContext?: GardenRequestContext): PromptUpdateResult;
+  rollbackPromptLayer(body: string, requestContext?: GardenRequestContext): PromptUpdateResult;
+  /** Delete an operator-authored layer (audited operator only). */
+  deletePromptLayer(body: string, requestContext?: GardenRequestContext): PromptUpdateResult;
   rollbackPromptRegistry(body: string): PromptUpdateResult;
   previewPromptLayerDiff(body: string): { oldContent: string; newContent: string } | null;
   resolvePromptLayerMetadata(params: URLSearchParams): { metadata: PromptLayerMetadataUpdate } | { error: string };

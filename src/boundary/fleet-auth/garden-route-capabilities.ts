@@ -221,6 +221,7 @@ const noBodyMutationPatterns = new Set([
   'POST /api/admin/automata/reindex',
   'POST /api/admin/models/refresh',
   'POST /api/admin/prompts/:layerId/toggle',
+  'DELETE /api/admin/prompts/:layerId',
   'POST /api/admin/wiki/shared-world/:siteId/publish',
   'POST /api/admin/doing-mirror/:itemType/:itemId/retry-letter',
 ]);
@@ -345,7 +346,7 @@ const dynamicRoutes: readonly RouteTuple[] = [
   ['POST', '/api/admin/privacy-break-glass/journal/:id/confirm'],
   ['POST', '/api/admin/privacy-break-glass/journal/:id/decide'],
   ['PATCH', '/api/admin/places/satellites/:satelliteId/binding'],
-  [['GET', 'PATCH'], '/api/admin/prompts/:layerId'], ['GET', '/api/admin/prompts/:layerId/diff'],
+  [['GET', 'PATCH', 'DELETE'], '/api/admin/prompts/:layerId'], ['GET', '/api/admin/prompts/:layerId/diff'],
   ['POST', '/api/admin/prompts/:layerId/rollback'], ['POST', '/api/admin/prompts/:layerId/toggle'],
   ['GET', '/api/admin/rooms/:channelId/roster'], ['PATCH', '/api/admin/scheduler/reflections/:reflectionId'],
   [['PATCH', 'DELETE'], '/api/admin/scheduler/tasks/:taskId'],

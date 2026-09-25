@@ -28,6 +28,7 @@ import {
   isSubjectBoundFleetRequest,
   resolveFleetGardenContactMutationActor,
 } from '../../operator/garden/garden-request-context.js';
+import { resolveOperatorLayerWriter } from '../../operator/garden/services/prompt-operator-layer-authority.js';
 import { GatewayFleetSsoRouter } from './fleet-sso-router.js';
 
 const { httpRequest } = vi.hoisted(() => ({ httpRequest: vi.fn() }));
@@ -210,6 +211,10 @@ describe('audited ADMIN_TOKEN operator reaches every Garden mutation without SSO
     httpRequest.mockReset();
   });
 
+  it('includes the operator prompt-layer delete route', () => {
+    expect(operatorMutations().map(route => route.id)).toContain('DELETE /api/admin/prompts/:layerId');
+  });
+
   it('enumerates a non-trivial operator mutation surface with only real exclusions', () => {
     const catalogued = new Set(GARDEN_ROUTE_CAPABILITIES.map(route => route.id));
     for (const excluded of Object.keys(NON_OPERATOR_MUTATIONS)) {
@@ -281,6 +286,13 @@ describe('audited ADMIN_TOKEN operator reaches every Garden mutation without SSO
       expect(isSubjectBoundFleetRequest(context)).toBe(false);
       if (route.authorization.requirements.assurance === 'escalated') {
         expect(hasEscalatedOperatorAssurance(context)).toBe(true);
+      }
+      if (route.authorization.action === 'prompts.manage') {
+        // Operator-type prompt layers (psfn-framework-c5e65), incl. DELETE.
+        expect(resolveOperatorLayerWriter(context)).toEqual({
+          ok: true,
+          actor: 'admin-token:admin-token-operator',
+        });
       }
       if (route.authorization.resource.area === 'contacts') {
         expect(resolveFleetGardenContactMutationActor(context)?.auditMetadata).toMatchObject({

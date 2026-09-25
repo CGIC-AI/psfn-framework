@@ -1,3 +1,4 @@
+import type { GardenRequestContext } from '../garden-request-context.js';
 import { createHash } from 'node:crypto';
 import type { SessionManager } from '../../../core/session/manager.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
@@ -75,6 +76,7 @@ export interface AdminPromptsDataServiceDeps {
     decision: 'allowed' | 'denied',
     narrative: string,
     details?: Array<string | null | undefined>,
+    requestContext?: GardenRequestContext,
   ) => void;
   companionValuesLayerProvider?: () => CompanionValuesLayerSnapshot | null;
   promptRuntimeLayoutStore?: PromptRuntimeLayoutStore | null;

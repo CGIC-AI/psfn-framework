@@ -508,7 +508,7 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
         '/api/admin/prompts/constitution', '/api/admin/prompts/foundation',
         '/api/admin/prompts/north-star', '/api/admin/prompts/runtime-blocks',
       ]),
-      ...ids('PATCH', ['/api/admin/prompts/:layerId']),
+      ...ids(['PATCH', 'DELETE'], ['/api/admin/prompts/:layerId']),
     ], confirmation: 'explicit',
   },
   {

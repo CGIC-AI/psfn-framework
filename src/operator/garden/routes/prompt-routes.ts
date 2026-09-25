@@ -35,14 +35,14 @@ export function buildAdminPromptRoutes(options: {
     {
       method: 'POST',
       match: exactPath('/api/admin/prompts'),
-      handle: (req, res) => {
+      handle: (req, res, _params, context) => {
         withBody(req, res, (body) => {
           const parsed = parseAdminJsonBody(body);
           if (!parsed.ok) {
             sendJson(res, 400, { error: parsed.error });
             return;
           }
-          const result = promptsService.createPromptLayer(JSON.stringify(parsed.value));
+          const result = promptsService.createPromptLayer(JSON.stringify(parsed.value), context);
           if (!result.ok) {
             sendJson(res, 400, { error: result.message });
             return;
@@ -220,8 +220,8 @@ export function buildAdminPromptRoutes(options: {
     {
       method: 'POST',
       match: paramWithSuffix('/api/admin/prompts/', 'layerId', '/toggle'),
-      handle: (_req, res, { layerId }) => {
-        const result = promptsService.togglePromptLayer(JSON.stringify({ layerId }));
+      handle: (_req, res, { layerId }, context) => {
+        const result = promptsService.togglePromptLayer(JSON.stringify({ layerId }), context);
         if (!result.ok) {
           sendJson(res, 400, { error: result.message });
           return;
@@ -232,7 +232,7 @@ export function buildAdminPromptRoutes(options: {
     {
       method: 'POST',
       match: paramWithSuffix('/api/admin/prompts/', 'layerId', '/rollback'),
-      handle: (req, res, { layerId }) => {
+      handle: (req, res, { layerId }, context) => {
         withBody(req, res, (body) => {
           const parsed = parseAdminJsonBody(body);
           if (!parsed.ok) {
@@ -242,7 +242,7 @@ export function buildAdminPromptRoutes(options: {
           const payload = parsed.value && typeof parsed.value === 'object'
             ? { ...(parsed.value as Record<string, unknown>), layerId }
             : { layerId };
-          const result = promptsService.rollbackPromptLayer(JSON.stringify(payload));
+          const result = promptsService.rollbackPromptLayer(JSON.stringify(payload), context);
           if (!result.ok) {
             sendJson(res, 400, { error: result.message });
             return;
@@ -282,7 +282,7 @@ export function buildAdminPromptRoutes(options: {
     {
       method: 'PATCH',
       match: prefixedParamPath('/api/admin/prompts/', 'layerId'),
-      handle: (req, res, { layerId }) => {
+      handle: (req, res, { layerId }, context) => {
         withBody(req, res, (body) => {
           const parsed = parseAdminJsonBody(body);
           if (!parsed.ok) {
@@ -292,13 +292,25 @@ export function buildAdminPromptRoutes(options: {
           const payload = parsed.value && typeof parsed.value === 'object'
             ? { ...(parsed.value as Record<string, unknown>), layerId }
             : { layerId };
-          const result = promptsService.updatePromptLayer(JSON.stringify(payload));
+          const result = promptsService.updatePromptLayer(JSON.stringify(payload), context);
           if (!result.ok) {
             sendJson(res, 400, { error: result.message });
             return;
           }
           sendJson(res, 200, result);
         });
+      },
+    },
+      {
+      method: 'DELETE',
+      match: prefixedParamPath('/api/admin/prompts/', 'layerId'),
+      handle: (_req, res, { layerId }, context) => {
+        const result = promptsService.deletePromptLayer(JSON.stringify({ layerId }), context);
+        if (!result.ok) {
+          sendJson(res, 400, { error: result.message });
+          return;
+        }
+        sendJson(res, 200, result);
       },
     },
   ];

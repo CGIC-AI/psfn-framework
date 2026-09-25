@@ -74,6 +74,7 @@ import { classifyLLMError } from './error-classify.js';
 import {
   assertProviderCompletionStopReason,
   assertUsableProviderResponse,
+  capInputTokensToContextWindow,
   resolveAbortedAttemptWorstCaseUsd,
   extractCompletionToolCalls,
   normalizeContent,
@@ -522,7 +523,7 @@ export class LLMClient {
     const preflight = await this.budgetController.evaluatePreflight({
       candidate,
       purpose,
-      estimatedInputTokens,
+      estimatedInputTokens: capInputTokensToContextWindow(estimatedInputTokens, candidate),
       service,
       process,
       correlation,
@@ -698,7 +699,12 @@ export class LLMClient {
       error: options.error,
       reportedTokens: (usageDetails?.input ?? inputTokens) + (usageDetails?.output ?? outputTokens)
         + (usageDetails?.cacheRead ?? 0) + (usageDetails?.cacheWrite ?? 0),
-      worstCaseTokens: options.worstCaseTokens,
+      worstCaseTokens: options.worstCaseTokens
+        ? {
+          input: capInputTokensToContextWindow(options.worstCaseTokens.input, candidate),
+          output: options.worstCaseTokens.output,
+        }
+        : undefined,
       rates: accountingRates,
     });
     const accounting = reconcileModelUsageAccounting({

@@ -483,6 +483,31 @@ async function callToolLessJsonScreener(
   }
 }
 
+/**
+ * Worst-case input tokens of one screener dispatch. Text is bounded by its
+ * UTF-8 bytes (a byte-level tokenizer never emits more tokens than bytes).
+ * An image part is NOT priced by its base64 data-URL bytes (2sm32: a 3.5 MB
+ * photo counted as 3.6M tokens, $2.15 for one timed-out vision screen): the
+ * provider tokenizes the decoded image, and no single request can exceed the
+ * routed model's context window, so a request with images, like any request,
+ * is capped at that window. Only an unrouted model with no known window falls
+ * back to the raw bytes.
+ */
+function screenerWorstCaseInputTokens(input: ToolLessScreenerCallInput): number {
+  const parts = typeof input.userMessage === 'string'
+    ? [{ type: 'text' as const, text: input.userMessage }]
+    : input.userMessage;
+  const textBytes = Buffer.byteLength(input.systemPrompt, 'utf8') + parts
+    .reduce((total, part) => total + (part.type === 'text' ? Buffer.byteLength(part.text, 'utf8') : 0), 0);
+  const imageParts = parts.filter(part => part.type === 'image_url');
+  const contextWindow = typeof input.model === 'string' ? undefined : input.model.contextWindow;
+  if (contextWindow === undefined || !Number.isFinite(contextWindow) || contextWindow <= 0) {
+    return textBytes + imageParts
+      .reduce((total, part) => total + Buffer.byteLength(part.image_url.url, 'utf8'), 0);
+  }
+  return imageParts.length > 0 ? contextWindow : Math.min(textBytes, contextWindow);
+}
+
 function reportScreenerAttempt(
   input: ToolLessScreenerCallInput,
   status: ScreenerAttemptUsage['status'],
@@ -492,15 +517,12 @@ function reportScreenerAttempt(
 ): void {
   if (!input.onAttempt) return;
   const usage = observed.value;
-  const promptText = typeof input.userMessage === 'string'
-    ? input.userMessage
-    : input.userMessage.map(part => (part.type === 'text' ? part.text : part.image_url.url)).join('');
   const outputCap = typeof input.model === 'string'
     ? input.maxOutputTokens ?? 0
     : Math.min(input.model.maxTokens, input.maxOutputTokens ?? input.model.maxTokens);
   input.onAttempt({
     worstCaseTokens: {
-      input: Buffer.byteLength(input.systemPrompt, 'utf8') + Buffer.byteLength(promptText, 'utf8'),
+      input: screenerWorstCaseInputTokens(input),
       output: outputCap,
     },
     status,

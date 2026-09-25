@@ -185,6 +185,34 @@ export function describeExternalChannelBridgeConformance(
       expect(harness.received[0]?.isDirectMessage).toBe(false);
     });
 
+    it('hands ambient group chatter to the participation gate as observation only', async () => {
+      await bridge.connect();
+      harness.setCompanion(async message => companionReply(
+        message,
+        message.routing?.responseMode === 'observe' ? '' : `echo: ${message.content}`,
+      ));
+      const ambient = await bridge.deliverInbound(inbound({
+        conversationKind: 'group',
+        conversationId: 'room-1',
+        text: 'anyone watching the game tonight?',
+      }));
+      expect(harness.received[0]?.routing).toMatchObject({ responseMode: 'observe' });
+      expect(ambient).toEqual({ status: 'no_reply' });
+
+      const addressed = await bridge.deliverInbound(inbound({
+        id: 'm-2',
+        conversationKind: 'group',
+        conversationId: 'room-1',
+        text: 'quick question for you',
+        addressedToCompanion: true,
+      }));
+      expect(harness.received[1]?.routing).toMatchObject({ responseMode: 'respond' });
+      expect(addressed).toEqual({
+        status: 'replied',
+        reply: { conversationId: 'room-1', text: 'echo: quick question for you' },
+      });
+    });
+
     it('reports no_reply when the companion stays silent', async () => {
       await bridge.connect();
       harness.setCompanion(async message => companionReply(message, ''));

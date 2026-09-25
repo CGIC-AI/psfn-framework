@@ -107,6 +107,7 @@ export class LoopbackPlatform {
     senderId: string;
     senderName: string;
     text: string;
+    addressedToCompanion?: boolean;
   }): Promise<ExternalChannelInboundResult> {
     this.#sequence += 1;
     const result = await this.bridge.deliverInbound({ id: `loopback-${this.#sequence}`, ...input });

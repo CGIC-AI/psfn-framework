@@ -91,7 +91,12 @@ export async function toExternalSubstrateMessage(
     ...(message.replyToMessageId ? { replyToMessageId: `${prefix}${message.replyToMessageId}` } : {}),
     routing: {
       source: 'external',
-      responseMode: 'respond',
+      // uf06o: like Discord and Telegram, only a direct message or a group line
+      // the platform addressed to the companion is a responding turn. Ambient
+      // group chatter is observation: the agent's shared observe path runs the
+      // participation gate (passive-name candidate, appraiser, reservation,
+      // egress lease), and not replying is a valid outcome.
+      responseMode: isDirectMessage || message.addressedToCompanion === true ? 'respond' : 'observe',
       channelPrivacy,
       ...(screened.snapshot ? { intakeEnvelopes: [screened.snapshot] } : {}),
     },

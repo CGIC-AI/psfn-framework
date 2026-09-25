@@ -228,6 +228,7 @@ import type { FatigueBudgetPort } from './fatigue/fatigue-budget.js';
 import type { IcpFatigueRegulationReservationPort } from './fatigue/regulation-reservation.js';
 import type { RuntimeServiceHealthStatus } from '../../operator/tool-health/types.js';
 import type { IntakeFirewallMode } from '../../system/config/intake-policy-config.js';
+import type { ViewerCeiling } from '../session/viewer-ceiling.js';
 
 import {
   BackgroundTurnPreemption,
@@ -373,6 +374,7 @@ export class SubstrateAgent {
    * uses so a `custom` grant governs the agent without an owner file.
    */
   private explicitCapabilityAccess: CapabilityAccess | null = null;
+  private viewerCeiling: ViewerCeiling | null = null;
   private readonly allowCapabilityDeniedTransport:
     | import('../../system/capabilities/gate.js').CapabilityDeniedTransportPolicy
     | undefined;
@@ -993,6 +995,7 @@ export class SubstrateAgent {
       getContactStore: () => this.contactStore,
       contactTrackingGate: this.contactTrackingGate,
       snapshotCapabilityGrant: () => this.snapshotCapabilityGrant(),
+      getViewerCeiling: () => this.viewerCeiling,
       log,
     });
     // Queued follow-up ingress + completion-notice routing (emh3p.2).
@@ -1363,6 +1366,16 @@ export class SubstrateAgent {
     this.explicitCapabilityAccess = access;
     this.gatedToolCache = new WeakMap<AgentTool<any>, AgentTool<any>>();
     this.refreshCapabilityRuntime();
+  }
+
+  /**
+   * Hold every turn of this agent to a delegating conversation's viewer
+   * (psfn-framework-mzytp): a subagent or shard never reads as a more trusted
+   * viewer, or from a more private room, than the conversation that spawned
+   * it.
+   */
+  setViewerCeiling(ceiling: ViewerCeiling): void {
+    this.viewerCeiling = ceiling;
   }
 
   // ── Steering + follow-up + lifecycle ──
@@ -1898,6 +1911,7 @@ export class SubstrateAgent {
           taskKind,
         ),
         resolveAuthorContext: (turnMessage) => this.promptContextBuilder.resolveAuthorContext(turnMessage),
+        viewerCeiling: () => this.viewerCeiling,
         countResolvableSpeakerContacts: (turnMessage, speakers) => countResolvableSpeakerContactsForTurn({
           message: turnMessage,
           speakers,

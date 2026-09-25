@@ -8233,24 +8233,24 @@
     },
     {
       "file": "src/faculties/shards/manager.ts",
-      "name": "ShardManager.assertShardRoutable.retryHint@L1584",
+      "name": "ShardManager.assertShardRoutable.retryHint@L1601",
       "value": "'retry_after_delay'",
       "form": "object-member",
-      "note": "Existing mutable policy candidate ShardManager.assertShardRoutable.retryHint@L1584; line relocation only, retaining the named migration debt from psfn-framework-7qeo1.18 rather than approving immutable code ownership."
+      "note": "Existing mutable policy candidate ShardManager.assertShardRoutable.retryHint@L1601; line relocation only, retaining the named migration debt from psfn-framework-7qeo1.18 rather than approving immutable code ownership."
     },
     {
       "file": "src/faculties/shards/manager.ts",
-      "name": "ShardManager.assertShardRoutable.retryHint@L1595",
+      "name": "ShardManager.assertShardRoutable.retryHint@L1612",
       "value": "'retry_after_delay'",
       "form": "object-member",
-      "note": "Existing mutable policy candidate ShardManager.assertShardRoutable.retryHint@L1595; line relocation only, retaining the named migration debt from psfn-framework-7qeo1.18 rather than approving immutable code ownership."
+      "note": "Existing mutable policy candidate ShardManager.assertShardRoutable.retryHint@L1612; line relocation only, retaining the named migration debt from psfn-framework-7qeo1.18 rather than approving immutable code ownership."
     },
     {
       "file": "src/faculties/shards/manager.ts",
-      "name": "ShardManager.assertShardRoutable.retryHint@L1608",
+      "name": "ShardManager.assertShardRoutable.retryHint@L1625",
       "value": "'try_alternative_input'",
       "form": "object-member",
-      "note": "Existing mutable policy candidate ShardManager.assertShardRoutable.retryHint@L1608; line relocation only, retaining the named migration debt from psfn-framework-7qeo1.18 rather than approving immutable code ownership."
+      "note": "Existing mutable policy candidate ShardManager.assertShardRoutable.retryHint@L1625; line relocation only, retaining the named migration debt from psfn-framework-7qeo1.18 rather than approving immutable code ownership."
     },
     {
       "file": "src/faculties/shards/manager.ts",
@@ -8261,17 +8261,17 @@
     },
     {
       "file": "src/faculties/shards/manager.ts",
-      "name": "ShardManager.executeShard.retryHint@L706",
+      "name": "ShardManager.executeShard.retryHint@L721",
       "value": "'retry_after_delay'",
       "form": "object-member",
-      "note": "Existing mutable policy candidate ShardManager.executeShard.retryHint@L706; line relocation only, retaining the named migration debt from psfn-framework-7qeo1.18 rather than approving immutable code ownership."
+      "note": "Existing mutable policy candidate ShardManager.executeShard.retryHint@L721; line relocation only, retaining the named migration debt from psfn-framework-7qeo1.18 rather than approving immutable code ownership."
     },
     {
       "file": "src/faculties/shards/manager.ts",
-      "name": "ShardManager.executeShard.retryHint@L730",
+      "name": "ShardManager.executeShard.retryHint@L745",
       "value": "'try_alternative_input'",
       "form": "object-member",
-      "note": "Existing mutable policy candidate ShardManager.executeShard.retryHint@L730; line relocation only, retaining the named migration debt from psfn-framework-7qeo1.18 rather than approving immutable code ownership."
+      "note": "Existing mutable policy candidate ShardManager.executeShard.retryHint@L745; line relocation only, retaining the named migration debt from psfn-framework-7qeo1.18 rather than approving immutable code ownership."
     },
     {
       "file": "src/faculties/shards/parent-icp-tool.ts",
@@ -10259,6 +10259,18 @@
       "file": "src/primitives/images/vision-reviewer.ts",
       "name": "VISION_IMAGE_MAX_COUNT",
       "value": "4"
+    },
+    {
+      "file": "src/primitives/llm/tokens.ts",
+      "name": "TOKEN_COUNT_CACHE_MIN_TEXT_UNITS",
+      "value": "256",
+      "note": "Code-owned memo threshold for the token-count cache (psfn-framework-z9rkr): below it hashing costs about as much as counting; affects only CPU, never a count."
+    },
+    {
+      "file": "src/primitives/llm/tokens.ts",
+      "name": "TOKEN_COUNT_CACHE_MAX_ENTRIES",
+      "value": "4096",
+      "note": "Memory guard bounding the process-wide token-count LRU (psfn-framework-z9rkr); covers a 36 h history window many times over and changes only CPU, never a count."
     },
     {
       "file": "src/primitives/llm/accounting-context.ts",

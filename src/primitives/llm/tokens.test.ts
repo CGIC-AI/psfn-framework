@@ -118,3 +118,39 @@ describe('countTokens on long whitespace-free runs (jrki1)', () => {
     expect(countTokens(prose)).toBe(exact.encode(prose).length);
   });
 });
+
+describe('countTokens content-hash cache (z9rkr)', () => {
+  function countingTokenizer() {
+    const encoded: string[] = [];
+    const real = new Tiktoken(cl100kBase);
+    tokenTestUtils.setTokenizerFactory(() => ({
+      encode: (text: string) => {
+        encoded.push(text);
+        return real.encode(text);
+      },
+    }));
+    return encoded;
+  }
+
+  it('counts a long text once and reuses the count until its content changes', () => {
+    const encoded = countingTokenizer();
+    const entry = 'A long history entry that is recounted every turn. '.repeat(10);
+    const first = countTokens(entry);
+    const callsAfterFirst = encoded.length;
+    expect(countTokens(entry)).toBe(first);
+    expect(encoded.length).toBe(callsAfterFirst);
+
+    const edited = `${entry}One more sentence.`;
+    countTokens(edited);
+    expect(encoded.length).toBeGreaterThan(callsAfterFirst);
+  });
+
+  it('stays within its bound', () => {
+    tokenTestUtils.setTokenizerFactory(() => ({ encode: (text: string) => ({ length: text.length }) }));
+    const bound = tokenTestUtils.tokenCountCacheBound();
+    for (let index = 0; index < bound + 50; index += 1) {
+      countTokens(`${'x '.repeat(130)}${index}`);
+    }
+    expect(tokenTestUtils.tokenCountCacheSize()).toBe(bound);
+  });
+});

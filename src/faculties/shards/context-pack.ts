@@ -1,3 +1,4 @@
+import type { ViewerCeiling } from '../../core/session/viewer-ceiling.js';
 import type { CapabilityTier, SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { MemoryProvider } from '../../core/agent/contracts.js';
 import type { SessionManager } from '../../core/session/manager.js';
@@ -49,6 +50,7 @@ export class ShardContextPackHelper {
     shardChannelId: string,
     shardConfig: ShardConfig,
     companionName: string,
+    viewerCeiling: ViewerCeiling,
   ): Promise<ShardContextPack | null> {
     const source = this.normalizeSourceContext(shardConfig.sourceContext);
     if (!source) {
@@ -113,6 +115,7 @@ export class ShardContextPackHelper {
         shardConfig.task,
         source.channelId,
         this.resolveContextPackMemoryScopeQuery(source.channelId),
+        viewerCeiling,
       )
       : '';
     if (sessionEntries.length === 0 && memoryBlock.length === 0) {
@@ -303,6 +306,7 @@ export class ShardContextPackHelper {
     task: string,
     sourceChannelId: string,
     scopeQuery: MemoryScopeQuery | undefined,
+    viewerCeiling: ViewerCeiling,
   ): Promise<string> {
     const query = task.trim();
     if (!query || !this.deps.memoryProvider) {
@@ -312,8 +316,9 @@ export class ShardContextPackHelper {
     const memoryBlock = await this.deps.memoryProvider.retrieve(
       query,
       sourceChannelId,
-      undefined,
-      undefined,
+      // Retrieved as the spawning viewer (psfn-framework-mzytp).
+      viewerCeiling.trustLevel,
+      { privacyLevel: viewerCeiling.channelPrivacy },
       undefined,
       undefined,
       {

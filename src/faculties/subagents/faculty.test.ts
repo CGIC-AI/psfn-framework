@@ -1,5 +1,9 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { runWithRequestContext } from '../../primitives/llm/request-context.js';
+import { describe, expect, vi, beforeEach, afterEach } from 'vitest';
+import { viewerContextIt } from '../../test-support/viewer-context-it.js';
+
+// Spawns run inside an admitted viewer, as from a real turn (mzytp).
+const it = viewerContextIt();
+import { getRequestContext, runWithRequestContext } from '../../primitives/llm/request-context.js';
 import { fromAny } from '@total-typescript/shoehorn';
 import { CompletionNoticeBuffer } from '../../core/agent/completion-notices.js';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -56,6 +60,8 @@ let mockSubagentContent = 'subagent response';
 let mockSubagentError: Error | null = null;
 let mockSubagentDelayMs = 0;
 let mockFirstPromptTools: AgentTool<any>[] = [];
+/** Runs inside the worker's turn, before it answers (mzytp). */
+let mockPromptHook: ((tools: readonly AgentTool<any>[]) => Promise<void>) | null = null;
 
 const AUTOMATA_BUS_BRIEFING_DIAGNOSTICS = {
   cache: 'miss',
@@ -68,6 +74,7 @@ const AUTOMATA_BUS_BRIEFING_DIAGNOSTICS = {
 
 const promptSpy = vi.spyOn(Agent.prototype, 'prompt').mockImplementation(async function (this: Agent) {
   mockFirstPromptTools = [...resolveInstalledAgentTurnTools(this)];
+  if (mockPromptHook) await mockPromptHook(mockFirstPromptTools);
   if (mockSubagentError) throw mockSubagentError;
   if (mockSubagentDelayMs > 0) {
     await new Promise(resolve => setTimeout(resolve, mockSubagentDelayMs));
@@ -237,12 +244,77 @@ describe('SubagentFaculty', () => {
     mockSubagentError = null;
     mockSubagentDelayMs = 0;
     mockFirstPromptTools = [];
+    mockPromptHook = null;
     promptSpy.mockClear();
     resetCompletionHandoffDedupeForTests();
   });
 
   afterEach(() => {
     rmSync(root, { recursive: true, force: true });
+  });
+
+  describe('viewer ceiling (psfn-framework-mzytp)', () => {
+    function makeWikiFaculty() {
+      const wiki = makeCatalogTool('wiki', 'identity.read');
+      const faculty = new SubagentFaculty({
+        eventBus,
+        llmProvider: mockLLM(),
+        sessionStore,
+        embeddingService: null,
+        memoryProvider: null,
+        config: TEST_CONFIG,
+        parentSystemPrompt: 'test prompt',
+        toolCatalogProvider: () => ({ core: [wiki.tool], extended: [] }),
+      });
+      return { faculty, wiki };
+    }
+
+    async function spawnAndReadWiki(viewer: {
+      viewerTrustLevel: 'primary' | 'public';
+      viewerChannelPrivacy: 'private' | 'public';
+    }) {
+      const { faculty, wiki } = makeWikiFaculty();
+      const seen: { trust?: unknown; privacy?: unknown; text?: string } = {};
+      mockPromptHook = async (tools) => {
+        seen.trust = getRequestContext()?.viewerTrustLevel;
+        seen.privacy = getRequestContext()?.viewerChannelPrivacy;
+        const tool = tools.find(candidate => candidate.name === 'wiki');
+        const result = await tool!.execute('call-wiki', { action: 'read', path: 'people/partner.md' });
+        seen.text = result.content.map((block: { text?: string }) => block.text ?? '').join('');
+      };
+      await runWithRequestContext({
+        callType: 'tool',
+        purpose: 'agent.turn',
+        channelId: 'api:spawning-room',
+        ...viewer,
+      }, async () => {
+        const task = await faculty.spawn({ name: 'reader', task: 'read the partner page', workSpec: buildSubagentWorkSpec() });
+        await faculty.wait(task.subagentId);
+      });
+      return { seen, wiki };
+    }
+
+    it('a public-room spawn cannot read gated content through the subagent', async () => {
+      const { seen, wiki } = await spawnAndReadWiki({ viewerTrustLevel: 'public', viewerChannelPrivacy: 'public' });
+      expect(seen.trust).toBe('public');
+      expect(seen.privacy).toBe('public');
+      expect(seen.text).toContain('withheld by visibility gating');
+      expect(wiki.execute).not.toHaveBeenCalled();
+    });
+
+    it('an owner spawn from a private room keeps its access', async () => {
+      const { seen, wiki } = await spawnAndReadWiki({ viewerTrustLevel: 'primary', viewerChannelPrivacy: 'private' });
+      expect(seen.text).toBe('wiki ok');
+      expect(wiki.execute).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses a spawn without an admitted viewer context', async () => {
+      const { faculty } = makeWikiFaculty();
+      await expect(runWithRequestContext(
+        { callType: 'tool', purpose: 'agent.turn', channelId: 'api:unknown-room' },
+        async () => await faculty.spawn({ name: 'reader', task: 'read', workSpec: buildSubagentWorkSpec() }),
+      )).rejects.toThrow(/no admitted viewer context/);
+    });
   });
 
   // Wiring proof (bead zet.7): an operator-set subagentMaxConcurrent in the
@@ -1931,6 +2003,7 @@ describe('SubagentFaculty memory-write governance (c7d)', () => {
     mockSubagentError = null;
     mockSubagentDelayMs = 0;
     mockFirstPromptTools = [];
+    mockPromptHook = null;
     promptSpy.mockClear();
     resetCompletionHandoffDedupeForTests();
   });
@@ -2157,6 +2230,7 @@ describe('SubagentFaculty core-authoritative tool governance (p0le)', () => {
     mockSubagentError = null;
     mockSubagentDelayMs = 0;
     mockFirstPromptTools = [];
+    mockPromptHook = null;
     promptSpy.mockClear();
     resetCompletionHandoffDedupeForTests();
   });

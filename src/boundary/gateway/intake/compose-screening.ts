@@ -21,6 +21,7 @@
 // closed), and the classifier never downloads at runtime.
 
 import { createL2DecisionSignal } from './l2-decision-signal.js';
+import type { CompanionId } from '../../../shared/routing/companion-id.js';
 import type { GatewayJevDecisionService } from '../jev-decision-service.js';
 import { createJsonlDecisionShadowSink } from '../../../primitives/llm/decision/shadow-record.js';
 import { resolveDecisionShadowLedgerPath } from '../../../persistence/layout.js';
@@ -161,6 +162,11 @@ export async function composeGatewayIntakeScreening(input: {
   systemDataDir: string;
   /** Companion data root; hosts the durable quarantine store (htm9.11). */
   companionDataDir: string;
+  /**
+   * Owning companion of this composition in a fleet gateway; attributes the
+   * composition's paid screening calls. Absent in single-companion mode.
+   */
+  companionId?: CompanionId;
   /**
    * Pi-ai provider backend for the L2/L3 escalation screeners (htm9.6/htm9.7)
    * and the vision intake screener (htm9.8), resolved by the caller via
@@ -343,6 +349,7 @@ export async function composeGatewayIntakeScreening(input: {
         decisionSignal: createL2DecisionSignal({
           config: input.config,
           jev: input.jevDecisions,
+          ...(input.companionId ? { companionId: input.companionId } : {}),
           shadowSink: createJsonlDecisionShadowSink(resolveDecisionShadowLedgerPath(input.companionDataDir)),
         }),
       }

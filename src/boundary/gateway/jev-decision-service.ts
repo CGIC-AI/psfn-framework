@@ -4,8 +4,9 @@
 // here: agents reach it through the `llm.decide` RPC, and gateway-side sites
 // (the L2 intake signal) call it directly. The service re-checks the owner
 // policy on every call and refuses — before any network call — when the site
-// resolves to local, when the site or the call is companion-private, or when
-// no OpenRouter key/base URL is configured. With the setting absent or `local`
+// resolves to local, when the site or the call is companion-private, when a
+// fleet call carries no owning companion (its usage could not be ledgered), or
+// when no OpenRouter key/base URL is configured. With the setting absent or `local`
 // this service never touches the network.
 //
 // Backoff reuses the model fallback cooldowns: a 429/529 pauses remote calls
@@ -65,6 +66,11 @@ type JevServiceConfig = Pick<
 
 export interface GatewayJevDecisionServiceOptions {
   config: JevServiceConfig;
+  /**
+   * Fleet gateways ledger every paid call to its owning companion; a call with
+   * no companion attribution is refused before any network request.
+   */
+  requireCompanionAttribution: boolean;
   usageRecorder?: ModelUsageRecorder;
   fetch?: DecisionsFetch;
   now?: () => number;
@@ -95,6 +101,9 @@ export function createGatewayJevDecisionService(
     }
     if (resolveDecisionSiteMode(settings, input.siteId) === 'local') {
       throw new JevDecisionRefusedError('site_mode_local');
+    }
+    if (options.requireCompanionAttribution && !input.companionId?.trim()) {
+      throw new JevDecisionRefusedError('missing_companion_attribution');
     }
     return settings;
   }

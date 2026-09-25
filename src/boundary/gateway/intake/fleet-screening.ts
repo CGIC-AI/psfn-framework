@@ -241,6 +241,7 @@ export async function composeGatewayIntakeScreeningRuntime(
     const composition = await composeGatewayIntakeScreening({
       ...baseInput,
       companionDataDir: ownedCompanionDataDir,
+      ...(companionId ? { companionId } : {}),
       ...(receipts ? { receipts } : {}),
       ...(onQuarantineHeld
         ? { onQuarantineHeld: entry => onQuarantineHeld(companionId, entry) }

@@ -41,11 +41,12 @@ function okFetch(status = 200, body: unknown = TUTORIAL_RESPONSE_BODY) {
   }));
 }
 
-function service(config = makeConfig(), fetch = okFetch()) {
+function service(config = makeConfig(), fetch = okFetch(), requireCompanionAttribution = false) {
   const usage: ModelUsageEventInput[] = [];
   let clock = 1_000;
   const svc = createGatewayJevDecisionService({
     config,
+    requireCompanionAttribution,
     fetch,
     usageRecorder: { recordUsageEvent: async (event) => { usage.push(event); } },
     now: () => (clock += 10),
@@ -81,6 +82,25 @@ describe('createGatewayJevDecisionService', () => {
     await expect(svc.decide(input)).rejects.toMatchObject({ reasonCode });
     await expect(svc.decide(input)).rejects.toBeInstanceOf(JevDecisionRefusedError);
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unattributed call on a fleet gateway before any network call (45z3w)', async () => {
+    const { companionId: _unused, ...unattributed } = INPUT;
+    const { svc, fetch, usage } = service(makeConfig(), okFetch(), true);
+    await expect(svc.decide({ ...unattributed, siteId: 'intake.l2' }))
+      .rejects.toMatchObject({ reasonCode: 'missing_companion_attribution' });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(usage).toEqual([]);
+  });
+
+  it('ledgers a fleet intake.l2 call to its owning companion (45z3w)', async () => {
+    const { svc, usage } = service(makeConfig(), okFetch(), true);
+    await svc.decide({ ...INPUT, siteId: 'intake.l2', companionId: 'companion-b' });
+    expect(usage).toHaveLength(1);
+    expect(usage[0]).toMatchObject({
+      costSource: 'provider',
+      attribution: { companionId: 'companion-b', purpose: 'decision', originStage: 'decision:intake.l2' },
+    });
   });
 
   it('calls the Decisions endpoint on the OpenRouter origin and records provider cost', async () => {

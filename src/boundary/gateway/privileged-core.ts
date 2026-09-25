@@ -341,6 +341,7 @@ export async function buildGatewayPrivilegedCore(
   // agent-facing llm.decide RPC and the additive intake.l2 signal.
   const jevDecisions = createGatewayJevDecisionService({
     config: input.config,
+    requireCompanionAttribution: input.bootstrap.server.multiCompanion.enabled,
     ...(privilegedServices.modelUsageStore ? { usageRecorder: privilegedServices.modelUsageStore } : {}),
   });
   const intakeScreening = await composeGatewayIntakeScreeningRuntime({

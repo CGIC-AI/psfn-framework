@@ -60,6 +60,8 @@ export type L2DecisionSignal = (input: {
 export function createL2DecisionSignal(deps: {
   config: Pick<SubstrateConfig, 'decisionBackend'>;
   jev: GatewayJevDecisionService;
+  /** Owning companion of the screening composition; ledgers the paid call. */
+  companionId?: string;
   shadowSink?: DecisionShadowSink;
   now?: () => number;
 }): L2DecisionSignal {
@@ -80,6 +82,7 @@ export function createL2DecisionSignal(deps: {
         source_risk_tier: input.context.sourceRiskTier,
       },
       questions: INJECTION_QUESTION,
+      ...(deps.companionId ? { companionId: deps.companionId } : {}),
     }).catch((error: unknown) => {
       log.warn('Remote L2 signal unavailable; L2 stands alone', {
         error: error instanceof Error ? error.name : typeof error,

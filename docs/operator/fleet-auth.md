@@ -404,6 +404,15 @@ works with keys: `ADMIN_TOKEN` reaches the Fleet portal and
 key reaches its Garden door. The key itself (`provider`) stays required, so
 a missing block still fails closed.
 
+Garden chat through the unified origin works for both principals (bead
+`psfn-framework-upwko`). An SSO principal's turn carries its canonical contact,
+resolved by the gateway's fleet authorization snapshot, as a server-derived RPC
+field (`fleetGardenContact`), never as an `X-Canonical-Contact-ID` identity
+claim; the agent fails closed unless the binding matches the RPC principal,
+no identity-claim header competes with it, the contact exists, and the api
+identity is not linked to a different contact. The ADMIN_TOKEN operator's turn
+runs as a key principal with no contact claim.
+
 The ADMIN_TOKEN door is a first-class operator principal, not a bypass: the
 gateway durably records every Garden capability it mints for that principal in
 `fleet_auth.authorization_audit_events` (actor kind `admin_token_operator`,

@@ -209,6 +209,17 @@ export interface ApiRpcHeaders {
   [name: string]: string | undefined;
 }
 
+/**
+ * The fleet SSO principal and its canonical contact, as resolved by the
+ * gateway's fleet authorization snapshot for a Garden chat turn. It is
+ * server-derived and crosses the internal gateway-agent RPC only; browsers
+ * cannot supply it, and the agent never reads it from headers.
+ */
+export interface FleetGardenContactBinding {
+  principalId: string;
+  contactId: string;
+}
+
 export interface ApiChatCompletionRpcParams {
   requestId: string;
   request: ChatCompletionRequest;
@@ -225,6 +236,8 @@ export interface ApiChatCompletionRpcParams {
   /** Sibling human/guest + device contexts and server-owned channel binding. */
   hubDeviceAttachment?: HubDeviceAttachmentSnapshot;
   companionUiCapability?: CompanionUiAgentCapability;
+  /** Gateway-verified fleet SSO contact for a Garden chat turn. */
+  fleetGardenContact?: FleetGardenContactBinding;
   timeoutMs?: number;
   /** Server-authored content-free timing anchor captured at HTTP ingress. */
   performance?: {
@@ -345,6 +358,8 @@ export interface ApiRuntimeChatRequest {
    */
   virtualSpaceEmanation?: HubVirtualSpaceAdmission;
   companionUiCapability?: CompanionUiAgentCapability;
+  /** See `ApiChatCompletionRpcParams.fleetGardenContact`. */
+  fleetGardenContact?: FleetGardenContactBinding;
   onDelta?: (text: string, companionId?: string) => void;
   signal?: AbortSignal;
 }

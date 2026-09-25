@@ -141,6 +141,7 @@ import {
   stripHubDeviceDownstreamAuthorityHeaders,
 } from './server/hub-device-ingress.js';
 import type { CompanionUiWebSocketAdapter } from './companion-ui-websocket.js';
+import { buildFleetGardenChatTurn } from './server/fleet-garden-chat-turn.js';
 import type {
   FleetGardenChatAdmission,
   GatewayFleetSsoRouter,
@@ -160,13 +161,6 @@ const ICP_OPERATOR_CANCEL_PATH = /^\/v1\/operator\/icp-autonomy\/companions\/([^
 const CONFIRMATION_OPERATOR_RESOLVE_PATH = '/v1/operator/confirmations/resolve';
 const CONFIRMATION_OPERATOR_MAX_BODY_BYTES = 16 * 1024;
 const CONFIRMATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u;
-const FLEET_CHAT_BROWSER_HEADERS = new Set([
-  'accept',
-  'content-type',
-  'x-channel-id',
-  'x-channel-privacy',
-  'x-session-id',
-]);
 
 export interface IcpAutonomyOperatorPort {
   cancelForCompanion(companionId: string): Promise<number>;
@@ -948,27 +942,9 @@ export class ApiServer implements ChannelAdapterPort {
       );
       return;
     }
-    const headers: IncomingMessage['headers'] = {};
-    for (const [name, value] of Object.entries(admission.request.headers)) {
-      if (FLEET_CHAT_BROWSER_HEADERS.has(name) && value !== undefined) {
-        headers[name] = value;
-      }
-    }
-    headers['content-length'] = String(admission.body.byteLength);
-    headers['content-type'] = 'application/json';
-    headers['x-user-id'] = admission.authorization.principalId;
-    headers['x-user-name'] = 'Fleet operator';
-    // Only an SSO-resolved principal carries a real canonical contact. The
-    // ADMIN_TOKEN operator's contact is a synthetic capability binding that no
-    // contact store holds, so its turns run as the key principal they are
-    // (exactly like ADMIN_TOKEN on /v1/chat/completions) instead of claiming
-    // a contact that can never verify.
-    if (admission.authorization.provenance.source === 'gateway_fleet_authorization_snapshot') {
-      headers['x-canonical-contact-id'] = admission.authorization.contact.contactId;
-    }
-
+    const turn = buildFleetGardenChatTurn(admission);
     const admittedRequest = Readable.from([admission.body]) as IncomingMessage;
-    admittedRequest.headers = headers;
+    admittedRequest.headers = turn.headers;
     admittedRequest.method = 'POST';
     admittedRequest.url = '/v1/chat/completions';
     Object.defineProperty(admittedRequest, 'socket', {
@@ -979,17 +955,13 @@ export class ApiServer implements ChannelAdapterPort {
     const onAborted = () => admittedRequest.emit('aborted');
     admission.request.once('aborted', onAborted);
     try {
-      const principal: ApiAuthPrincipal = {
-        id: admission.authorization.principalId,
-        mode: 'api_key',
-      };
       await this.chatCompletions.handle(
         admittedRequest,
         admission.response,
-        principal,
+        turn.principal,
         undefined,
         undefined,
-        { companionId: admission.companionId },
+        turn.routing,
       );
     } finally {
       admission.request.off('aborted', onAborted);

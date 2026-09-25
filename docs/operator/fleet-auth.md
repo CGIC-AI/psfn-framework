@@ -378,6 +378,41 @@ required: every surface SSO reaches is also reachable with a key
 device key for enrolled devices), with or without `fleet-auth.json`
 (operator rule 2026-09-09, bead `psfn-framework-n66dn`).
 
+### Fleet auth without any SSO provider
+
+SSO is not mandatory even when `fleet-auth.json` is present (for the unified
+gateway origin, the ADMIN_TOKEN Garden door and the testing-harness Garden
+door). Declare the no-SSO posture explicitly instead of fabricating Discord
+credentials (bead `psfn-framework-p39zg`):
+
+```json
+"provider": { "kind": "none" },
+"discordEvidenceMappings": []
+```
+
+With `provider.kind: "none"` the gateway needs no OAuth client ID or client
+secret (`FLEET_AUTH_DISCORD_CLIENT_SECRET` is not read), and validation rejects
+non-empty `discordEvidenceMappings` and any `accountRoster`, because both are
+keyed by Discord subjects no login can produce. Every OAuth entry point
+(`/v1/fleet-auth/login`, the OAuth callback, lifecycle proof ceremonies)
+returns the typed `provider_disabled` error, and the `/fleet/login` landing
+page offers only the administrator-token form. Every other fleet surface
+works with keys: `ADMIN_TOKEN` reaches the Fleet portal and
+`/v1/fleet/portal` (ICP readiness), the lifecycle routes (as the
+`operator:admin-token` actor), Garden admin and Garden chat through
+`/companions/<id>/garden/...`; `API_KEY` reaches `/v1`; the testing-harness
+key reaches its Garden door. The key itself (`provider`) stays required, so
+a missing block still fails closed.
+
+The ADMIN_TOKEN door is a first-class operator principal, not a bypass: the
+gateway durably records every Garden capability it mints for that principal in
+`fleet_auth.authorization_audit_events` (actor kind `admin_token_operator`,
+reason `admin_token_garden_authorization_allowed`) before signing, with the
+audited authority versions, and a gateway configured with `ADMIN_TOKEN` but
+without that audit wiring refuses to start. On Kubernetes the chart delivers
+`ADMIN_TOKEN` to the gateway under fleet auth only when the operator enables
+the admin door explicitly.
+
 Deployment access mode is derived from the roster, per companion
 (`resolveFleetAccessMode`), and signed into every request capability:
 

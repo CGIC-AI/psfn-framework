@@ -958,7 +958,14 @@ export class ApiServer implements ChannelAdapterPort {
     headers['content-type'] = 'application/json';
     headers['x-user-id'] = admission.authorization.principalId;
     headers['x-user-name'] = 'Fleet operator';
-    headers['x-canonical-contact-id'] = admission.authorization.contact.contactId;
+    // Only an SSO-resolved principal carries a real canonical contact. The
+    // ADMIN_TOKEN operator's contact is a synthetic capability binding that no
+    // contact store holds, so its turns run as the key principal they are
+    // (exactly like ADMIN_TOKEN on /v1/chat/completions) instead of claiming
+    // a contact that can never verify.
+    if (admission.authorization.provenance.source === 'gateway_fleet_authorization_snapshot') {
+      headers['x-canonical-contact-id'] = admission.authorization.contact.contactId;
+    }
 
     const admittedRequest = Readable.from([admission.body]) as IncomingMessage;
     admittedRequest.headers = headers;

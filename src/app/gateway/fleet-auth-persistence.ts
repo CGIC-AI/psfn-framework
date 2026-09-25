@@ -32,7 +32,7 @@ import {
   GatewayFleetPortalAuthorizationBatchResolver,
   type FleetPortalAuthorizationBatchPort,
 } from '../../boundary/gateway/fleet-portal-authorization.js';
-import type { TestingHarnessGardenAuthorizationAuditPort } from '../../boundary/gateway/testing-harness-garden-door.js';
+import type { GardenDoorAuthorizationAuditPort } from '../../boundary/gateway/testing-harness-garden-door.js';
 import { GatewayTrustedHostGardenRecoveryService } from '../../boundary/gateway/trusted-host-garden-recovery.js';
 import { createPostgresPool } from '../../persistence/postgres.js';
 import { GatewayFleetAuthAuthorityLifecycleStore } from '../../persistence/postgres/fleet-auth/authority-lifecycle-store.js';
@@ -74,7 +74,7 @@ import {
   hasDurableFleetAuthAuthority,
   migrateFleetAuthSchema,
 } from '../../persistence/postgres/fleet-auth/schema.js';
-import { PostgresTestingHarnessGardenAuthorizationAudit } from '../../persistence/postgres/fleet-auth/testing-harness-authorization-audit.js';
+import { PostgresGardenDoorAuthorizationAudit } from '../../persistence/postgres/fleet-auth/testing-harness-authorization-audit.js';
 import {
   resolveGatewayFleetAuthSecrets,
   type FleetAuthConfig,
@@ -92,7 +92,7 @@ export interface GatewayFleetAuthPersistence {
   requestCapabilities: GatewayRequestCapabilitySigner;
   requestCapabilityVerifier: RequestCapabilityVerifier;
   requestCapabilityReplay: RequestCapabilityReplayPort;
-  testingHarnessGardenAuthorizationAudit: TestingHarnessGardenAuthorizationAuditPort;
+  gardenDoorAuthorizationAudit: GardenDoorAuthorizationAuditPort;
   childAssertions: GatewayFleetAuthChildAssertionBroker;
   primaryEmbodiments: PrimaryEmbodimentAuthorityPort;
   escalation: FleetEscalationCoordinator;
@@ -330,8 +330,8 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       resolveAuthorizationContext: input => broker.resolveAuthorizationContext(input),
     });
     const requestCapabilityReplay = new PostgresRequestCapabilityReplayStore(pool);
-    const testingHarnessGardenAuthorizationAudit =
-      new PostgresTestingHarnessGardenAuthorizationAudit({
+    const gardenDoorAuthorizationAudit =
+      new PostgresGardenDoorAuthorizationAudit({
         pool,
         sessionPepper: secrets.sessionPepper,
       });
@@ -358,7 +358,7 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       requestCapabilities,
       requestCapabilityVerifier,
       requestCapabilityReplay,
-      testingHarnessGardenAuthorizationAudit,
+      gardenDoorAuthorizationAudit,
       childAssertions,
       primaryEmbodiments,
       escalation,

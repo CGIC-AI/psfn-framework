@@ -333,6 +333,7 @@ describe('unified-origin fleet lifecycle door', () => {
       canonicalOrigin: CANONICAL_ORIGIN,
       trustProxy: true,
       adminToken: 'operator-token-for-lifecycle-route-test',
+      adminTokenAudit: { record: vi.fn() },
       broker: { resolveAuthorizationContext: async () => { throw new Error('not used'); } },
       signer: createGatewayRequestCapabilitySigner({
         issuer: 'lifecycle-route-test',

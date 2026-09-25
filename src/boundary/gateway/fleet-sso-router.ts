@@ -91,6 +91,7 @@ import {
 import {
   TestingHarnessGardenDoor,
   TestingHarnessGardenDoorDeniedError,
+  type GardenDoorAuthorizationAuditPort,
   type TestingHarnessGardenDoorOptions,
 } from './testing-harness-garden-door.js';
 import { createComponentLogger } from '../../shared/logger.js';
@@ -163,8 +164,14 @@ export interface FleetSsoTrustedOriginOptions {
 }
 
 export interface GatewayFleetSsoRouterOptions extends FleetSsoTrustedOriginOptions {
-  /** Optional shared operator credential accepted as an alternative to fleet SSO. */
+  /**
+   * Optional shared operator credential accepted as an alternative to fleet
+   * SSO. It is a first-class operator principal: every Garden capability it
+   * mints is durably audited through {@link adminTokenAudit} first.
+   */
   readonly adminToken?: string;
+  /** Required whenever {@link adminToken} is configured. */
+  readonly adminTokenAudit?: GardenDoorAuthorizationAuditPort;
   /**
    * False when fleet-auth.json declares `provider.kind: none`: browsers are
    * never sent to the (disabled) Discord login and the landing page offers
@@ -652,6 +659,9 @@ export class GatewayFleetSsoRouter {
     }
     if (options.upstreams.length === 0) {
       throw new Error('Fleet SSO router requires at least one Garden upstream');
+    }
+    if (options.adminToken && !options.adminTokenAudit) {
+      throw new Error('Fleet SSO ADMIN_TOKEN door requires durable authorization audit wiring');
     }
     this.testingHarnessDoor = options.testingHarness
       ? new TestingHarnessGardenDoor(options.testingHarness)
@@ -1337,11 +1347,20 @@ export class GatewayFleetSsoRouter {
       headers: targetHeaders,
       body: input.body,
     });
+    const audit = this.options.adminTokenAudit;
+    if (!audit) {
+      throw new FleetSsoRequestError(503, 'Administrator access is unavailable');
+    }
     const requestId = randomUUID();
-    const authorizationEventId = randomUUID();
-    const resolvedAt = new Date(
-      this.options.nowSeconds ? this.options.nowSeconds() * 1_000 : Date.now(),
-    );
+    const audited = await audit.record({
+      action: target.action,
+      companionId: input.route.companionId,
+      principalId: ADMIN_TOKEN_REQUEST_CAPABILITY_PRINCIPAL_ID,
+      provider: 'admin_token',
+      correlationId: requestId,
+    });
+    const authorizationEventId = audited.authorizationEventId;
+    const resolvedAt = audited.occurredAt;
     const syntheticVersion = 1;
     const principalId = ADMIN_TOKEN_REQUEST_CAPABILITY_PRINCIPAL_ID;
     const providerSubjectId = ADMIN_TOKEN_REQUEST_CAPABILITY_SUBJECT_ID;
@@ -1372,8 +1391,8 @@ export class GatewayFleetSsoRouter {
         providerSubjectId,
       },
       authority: {
-        authorityGeneration: syntheticVersion,
-        globalAuthEpoch: syntheticVersion,
+        authorityGeneration: audited.authorityGeneration,
+        globalAuthEpoch: audited.globalAuthEpoch,
       },
     };
     const context = createImmutableFleetAuthorizationContext({

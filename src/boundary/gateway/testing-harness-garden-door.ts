@@ -12,7 +12,10 @@ import {
   type CompiledGardenRequestTarget,
 } from '../fleet-auth/request-capability-target.js';
 import { stripBrowserRequestCapabilityHeaders } from '../fleet-auth/request-capability-transport.js';
-import type { RequestCapabilityAuthorityVersions } from '../fleet-auth/request-capability.js';
+import {
+  type ADMIN_TOKEN_REQUEST_CAPABILITY_PRINCIPAL_ID,
+  type RequestCapabilityAuthorityVersions,
+} from '../fleet-auth/request-capability.js';
 import {
   createImmutableFleetAuthorizationContext,
   toRequestCapabilityAuthContext,
@@ -20,27 +23,37 @@ import {
   type FleetAuthorizationFacts,
 } from './fleet-authorization-context.js';
 
-export interface TestingHarnessGardenAuthorizationAuditResult {
+export interface GardenDoorAuthorizationAuditResult {
   readonly authorizationEventId: string;
   readonly authorityGeneration: number;
   readonly globalAuthEpoch: number;
   readonly occurredAt: Date;
 }
 
-export interface TestingHarnessGardenAuthorizationAuditPort {
-  record(input: {
+/**
+ * Synthetic (non-SSO) principals admitted to Garden through the unified
+ * origin. Each admitted request is durably audited before a capability is
+ * minted, and the capability carries the audited authority versions.
+ */
+export type GardenDoorPrincipal =
+  | { readonly principalId: 'testing-harness'; readonly provider: 'testing_harness' }
+  | {
+    readonly principalId: typeof ADMIN_TOKEN_REQUEST_CAPABILITY_PRINCIPAL_ID;
+    readonly provider: 'admin_token';
+  };
+
+export interface GardenDoorAuthorizationAuditPort {
+  record(input: GardenDoorPrincipal & {
     readonly action: FleetAuthorizationContext['authorization']['action'];
     readonly companionId: CompanionId;
-    readonly principalId: 'testing-harness';
-    readonly provider: 'testing_harness';
     readonly correlationId: string;
-  }): Promise<TestingHarnessGardenAuthorizationAuditResult>;
+  }): Promise<GardenDoorAuthorizationAuditResult>;
 }
 
 export interface TestingHarnessGardenDoorOptions {
   readonly apiKey: string;
   readonly policy: TestingHarnessGardenAdminConfig;
-  readonly audit: TestingHarnessGardenAuthorizationAuditPort;
+  readonly audit: GardenDoorAuthorizationAuditPort;
 }
 
 export interface TestingHarnessGardenCapabilityAuthorization {

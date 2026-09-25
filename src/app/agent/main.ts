@@ -2452,6 +2452,9 @@ async function main(): Promise<void> {
     companionAuthorName: card.data.name,
     protectedMessageQueue: companionAvailability,
   });
+  if (registeredGatewayMessageHandlers.observedGroupMemory) {
+    shutdownTargets.observedGroupMemory = registeredGatewayMessageHandlers.observedGroupMemory;
+  }
   const unregisterIcpTargetChannelInitiationCommand = registerIcpTargetChannelInitiationCommand(
     registeredGatewayMessageHandlers.icpTargetChannelInitiator,
   );

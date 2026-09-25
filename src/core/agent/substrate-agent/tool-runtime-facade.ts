@@ -1,4 +1,5 @@
 import { isWorldPlaneTurn } from './runtime-context-sections/turn-presence-mode.js';
+import { withViewerReadGate } from '../tool-surface/viewer-read-gate.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Agent, AgentTool } from '../../../boundary/pi-agent/index.js';
 import { tagToolWithReversibility } from '../../../system/capabilities/safeguards.js';
@@ -369,7 +370,7 @@ export class ToolRuntimeFacade {
       ? { ...tool, description: canonicalSurface.description }
       : tool;
     const taggedTool = this.withCandidateExecutionGuard(
-      this.withToolConcurrencyMetadata(tagToolWithReversibility(describedTool), category),
+      this.withToolConcurrencyMetadata(tagToolWithReversibility(withViewerReadGate(describedTool)), category),
     );
     if (category === 'core') {
       this.coreTools.push(taggedTool);

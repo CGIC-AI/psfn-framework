@@ -1,4 +1,6 @@
 import { getAllowedSensitivities } from '../../system/trust/policy.js';
+import { getRequestContext } from '../../primitives/llm/request-context.js';
+import { normalizeChannelPrivacy } from '../../system/trust/context-envelope.js';
 import type { ChannelDisclosureContext } from '../../system/trust/policy.js';
 import type { SensitivityLevel, TrustLevel } from '../../system/trust/types.js';
 import type { ActiveConcern } from '../../shared/contracts/intention-contracts.js';
@@ -41,4 +43,23 @@ export function filterConcernsForViewer(
     if (concern.contactId === undefined || viewer.trustLevel === 'primary') return true;
     return concern.contactId === viewer.canonicalContactKey;
   });
+}
+
+/**
+ * The concern viewer of the current tool call, from the admitted request
+ * context. Missing trust is regular and missing room privacy is public, so a
+ * call without viewer context sees only public, companion-wide concerns.
+ */
+export function resolveConcernViewerFromRequest(): ConcernViewer {
+  const context = getRequestContext();
+  const trustLevel = context?.viewerTrustLevel ?? 'regular';
+  const channelPrivacy = normalizeChannelPrivacy(context?.viewerChannelPrivacy) ?? 'public';
+  const contactId = typeof context?.viewerMemorySubjectContactId === 'string'
+    ? context.viewerMemorySubjectContactId
+    : undefined;
+  return {
+    trustLevel,
+    channelDisclosure: { channelPrivacy, broadcast: false },
+    ...(contactId ? { canonicalContactKey: contactId } : {}),
+  };
 }

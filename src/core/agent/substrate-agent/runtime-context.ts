@@ -1,4 +1,5 @@
 import { isRecord } from '../../../shared/utils/types.js';
+import { getAllowedSensitivities } from '../../../system/trust/policy.js';
 import {
   partitionScratchpadEntriesForViewer,
   type ScratchpadViewer,
@@ -406,7 +407,18 @@ export function buildDynamicPromptTemplateVariables(
     }),
     ...buildMetacognitiveFlagPromptVariables(input.metacognitiveFlags ?? []),
     ...buildInternalStatePromptVariables(input.internalState),
-    ...buildSituatedLocationPromptVariables(input.internalState, now),
+    // The companion's physical place (often a room in the partner's home) is
+    // set by a satellite turn and carried companion-wide; it renders only
+    // where personal material is admitted (o5wf5 sweep).
+    ...buildSituatedLocationPromptVariables(
+      getAllowedSensitivities(input.trustLevel, {
+        channelPrivacy: input.conversationScope.envelope.channelPrivacy,
+        broadcast: input.conversationScope.envelope.broadcast,
+      }).includes('personal')
+        ? input.internalState
+        : undefined,
+      now,
+    ),
     ...buildConcernPromptVariables(input.activeConcerns),
     ...buildEmotionAppraisalPromptVariables(input.emotionAppraisalChain ?? []),
     ...buildBehavioralNotesPromptVariables(input.behavioralNotesBlock),

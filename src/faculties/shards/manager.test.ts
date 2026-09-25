@@ -2087,11 +2087,11 @@ describe('ShardManager', () => {
 
     // Read passes through to the underlying tool.
     orient.execute.mockClear();
-    const readResult = await injectedOrient!.execute(
+    const readResult = await runWithRequestContext({ callType: 'tool', purpose: 'agent.turn', channelId: 'api:owner-console', viewerTrustLevel: 'primary', viewerChannelPrivacy: 'private' }, () => injectedOrient!.execute(
       'call-orient-read',
       { action: 'values_list' } as never,
       undefined,
-    );
+    ));
     expect(orient.execute).toHaveBeenCalledTimes(1);
     expect((readResult.details as { isError?: boolean }).isError).not.toBe(true);
 

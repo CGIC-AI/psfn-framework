@@ -1,8 +1,12 @@
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { normalizeChannelPrivacy } from '../../system/trust/context-envelope.js';
 import type { TrustLevel } from '../../system/trust/types.js';
+import { getAllowedSensitivities } from '../../system/trust/policy.js';
+import type { SensitivityLevel } from '../../system/trust/types.js';
 import {
   canViewerAccessSessionHit,
+  resolveSessionSearchViewerTrustLevel,
+  resolveSessionSearchViewerVisibility,
   type SessionSearchViewerContext,
 } from './search-runtime.js';
 
@@ -73,4 +77,20 @@ export function gateSessionSummariesForViewer<T extends { channelId: string }>(
 ): { visible: T[]; gatedOutCount: number } {
   const visible = sessions.filter(session => canViewerReadSessionChannel(viewer, session.channelId));
   return { visible, gatedOutCount: sessions.length - visible.length };
+}
+
+/**
+ * Whether the viewer's trust and room admit material of this sensitivity
+ * (the getAllowedSensitivities policy memory retrieval uses). Used for
+ * companion-wide records that carry no source conversation: they are
+ * readable only where their sensitivity class is (psfn-framework-o5wf5).
+ */
+export function viewerAdmitsSensitivity(
+  level: SensitivityLevel,
+  viewer: SessionSearchViewerContext = resolveViewerContextFromRequest(),
+): boolean {
+  return getAllowedSensitivities(
+    resolveSessionSearchViewerTrustLevel(viewer.trustLevel),
+    { channelPrivacy: resolveSessionSearchViewerVisibility(viewer), broadcast: false },
+  ).includes(level);
 }

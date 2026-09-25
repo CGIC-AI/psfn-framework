@@ -2246,6 +2246,57 @@ describe('runtime subject identity', () => {
     expect(tatemaeOutput).not.toContain('{{');
   });
 
+  it('renders the companion situated location only where personal material is admitted (o5wf5)', () => {
+    const now = new Date('2026-03-18T13:30:00Z');
+    const located = {
+      ...TEST_INTERNAL_STATE,
+      situated: {
+        location: {
+          placeId: 'living-room',
+          siteId: 'home',
+          label: 'the living room',
+          kind: 'physical' as const,
+          updatedAt: now.toISOString(),
+        },
+      },
+    };
+    const baseInput = {
+      resolvedUserName: 'Visitor',
+      channelType: 'api',
+      canonicalContactKey: undefined,
+      responseStyle: 'expressive',
+      now,
+      templateVariables: {},
+      modelId: 'test-model',
+      capabilityTier: 'autonomous',
+      activeToolCounts: { core: 0, extended: 0, total: 0 },
+      extendedTools: [],
+      coreToolNames: new Set<string>(),
+      loadedExtended: new Map(),
+      classifyExtendedToolForTurn: () => 'overlay' as const,
+      promotedExtendedToolNames: new Set<string>(),
+      skillsContext: '',
+      behavioralNotesBlock: '',
+      config: {},
+      internalState: located,
+    };
+
+    const stranger = buildDynamicPromptTemplateVariables(withConversationScope({
+      ...baseInput,
+      message: makeMessage({ channelId: 'api:stranger-room', channelType: 'api', content: 'where are you?' }),
+      trustLevel: 'public',
+    }));
+    expect(stranger.runtime_situated_location_present).toBe('false');
+    expect(Object.values(stranger).join('\n')).not.toContain('the living room');
+
+    const partner = buildDynamicPromptTemplateVariables(withConversationScope({
+      ...baseInput,
+      message: makeMessage({ channelId: 'discord:dm:partner', channelType: 'discord_text', isDirectMessage: true, content: 'where are you?' }),
+      trustLevel: 'primary',
+    }));
+    expect(partner.runtime_situated_location_label).toBe('the living room');
+  });
+
   it('substitutes atomic internal-state macros using the existing describe helper labels', () => {
     const baseInput = {
       message: makeMessage({

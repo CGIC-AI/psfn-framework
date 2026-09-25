@@ -398,8 +398,8 @@ function resolvePurposeTag(
 }
 
 function estimateCost(cost: ModelRegistryCostMetadata | undefined): number | null {
-  const inputCost = toPositiveNumber(cost?.inputPer1MUsd);
-  const outputCost = toPositiveNumber(cost?.outputPer1MUsd);
+  const inputCost = toNonNegativeRate(cost?.inputPer1MUsd);
+  const outputCost = toNonNegativeRate(cost?.outputPer1MUsd);
   if (inputCost === undefined && outputCost === undefined) return null;
   const normalizedInput = inputCost ?? outputCost ?? 0;
   const normalizedOutput = outputCost ?? inputCost ?? 0;
@@ -547,9 +547,10 @@ function scoreCandidates(
     .map(candidate => candidate.estimatedCost)
     .filter((value): value is number => value !== null);
 
-  const syntheticMissingCost = explicitCosts.length > 0
-    ? Math.max(...explicitCosts) * 1.5
-    : 1;
+  // A candidate with no cost metadata always ranks worse than every priced
+  // one, including when every explicit cost is a known $0.
+  const maxExplicitCost = explicitCosts.length > 0 ? Math.max(...explicitCosts) : 0;
+  const syntheticMissingCost = maxExplicitCost > 0 ? maxExplicitCost * 1.5 : 1;
 
   const resolvedCosts = candidates.map((candidate) => candidate.estimatedCost ?? syntheticMissingCost);
   const minCost = Math.min(...resolvedCosts);
@@ -762,4 +763,12 @@ export function resolveRoutingCandidates(
   }
 
   return buildStandardCandidates(config, purpose);
+}
+
+/** An explicit zero rate (subscription/free route) is known $0 pricing (ylgkh). */
+function toNonNegativeRate(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    return undefined;
+  }
+  return value;
 }

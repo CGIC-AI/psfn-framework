@@ -13,6 +13,7 @@ import {
 } from '../../../system/config/group-memory-config.js';
 import type { ChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import type { ChannelType } from '../../../shared/contracts/runtime.js';
+import { isGroupCapableChannelType } from '../../../shared/contracts/channel-types.js';
 import { isRecord } from '../../../shared/utils/types.js';
 
 export type GroupMemoryClassificationMode =
@@ -340,8 +341,11 @@ function resolveGroupMemoryTopology(params: {
     };
   }
 
+  // nfmdd: a connector's own declared topology makes its channels group
+  // capable; the owner-file list only adds further channel types.
   if (
-    params.settings.autoDetection.groupCapableChannelTypes
+    isGroupCapableChannelType(params.channelType)
+    || params.settings.autoDetection.groupCapableChannelTypes
       .includes(params.channelType)
   ) {
     return {

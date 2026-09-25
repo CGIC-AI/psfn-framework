@@ -9,6 +9,9 @@ import {
   type PassiveNameCandidateBuilderOptions,
 } from './passive-name-candidate.js';
 import type { PassiveNameCandidateDecision } from './types.js';
+import { fromAny } from '@total-typescript/shoehorn';
+import { ObservedGroupMemoryScheduler } from '../../faculties/memory/extraction/group-observed-scheduler.js';
+import { createDefaultGroupMemorySettings } from '../../system/config/group-memory-config.js';
 
 const COMPANION_NAME = 'Persephone';
 const COMPANION_BOT_ID = 'bot-persephone';
@@ -527,4 +530,28 @@ describe('PassiveNameCandidateBuilder', () => {
       );
     });
   });
+});
+
+describe('PassiveNameCandidateBuilder connector topology (nfmdd)', () => {
+  it.each(['external', 'telegram'] as const)(
+    'reaches a candidate for a %s group room with default group-memory settings',
+    async (channelType) => {
+      const channelId = `${channelType}:bridge:room-1`;
+      const entries = [
+        makeEntry(1, { channelId, authorId: `${channelType}:u1`, authorName: 'Dana' }),
+        makeEntry(2, { channelId, authorId: `${channelType}:u2`, authorName: 'Robin' }),
+      ];
+      const scheduler = new ObservedGroupMemoryScheduler(fromAny({
+        groupMemory: createDefaultGroupMemorySettings(),
+        sessionReader: { getRecent: () => entries, getRange: () => [] },
+        watermarkStore: {},
+        memoryExtractor: {},
+        companionNames: [COMPANION_NAME],
+        companionAuthorIds: [COMPANION_BOT_ID],
+      }));
+      const builder = makeBuilder({ scopeClassifier: scheduler, contextReader: stubContextReader(entries) });
+      const decision = await builder.build(makeMessage({ channelId, channelType, isDirectMessage: false }));
+      expect(decision.status).toBe('created');
+    },
+  );
 });

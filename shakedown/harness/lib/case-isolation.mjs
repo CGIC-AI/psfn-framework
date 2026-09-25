@@ -10,6 +10,8 @@
  * failing next case `contaminated` instead of blaming its own probe.
  */
 
+import { resolveSessionChannelId } from './probe.mjs';
+
 export const SHARED_HARNESS_ROOM_CHANNEL_ID = 'api:testing-harness';
 
 export const ROOM_SETTLE_REPLY = 'settled';
@@ -38,6 +40,27 @@ export function createSharedRoomLedger() {
     pending() {
       return pending;
     },
+  };
+}
+
+/**
+ * The chatCase input for the settle turn. It must dispatch as the same
+ * testing-harness principal as the cases so it lands in (and answers) the
+ * shared room; any other principal is a separate room and is rejected.
+ */
+export function buildRoomSettleTurnInput({ runToken, apiUserId, timeoutMs }) {
+  const sessionId = `harness-room-settle-${runToken}`;
+  if (resolveSessionChannelId(sessionId, apiUserId) !== SHARED_HARNESS_ROOM_CHANNEL_ID) {
+    throw new Error(
+      `room settle turn must dispatch into ${SHARED_HARNESS_ROOM_CHANNEL_ID}; principal ${JSON.stringify(apiUserId)} does not`,
+    );
+  }
+  return {
+    sessionId,
+    apiUserId,
+    message: ROOM_SETTLE_MESSAGE,
+    privacy: 'private',
+    timeoutMs,
   };
 }
 

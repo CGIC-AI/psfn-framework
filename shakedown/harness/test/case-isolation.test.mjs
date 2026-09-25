@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { prepareCaseChatDispatch } from '../lib/case-dispatch-auth.mjs';
+import { resolveSessionChannelId } from '../lib/probe.mjs';
 import {
   ROOM_SETTLE_MESSAGE,
+  buildRoomSettleTurnInput,
   SHARED_HARNESS_ROOM_CHANNEL_ID,
   applyRoomIsolationOutcome,
   createSharedRoomLedger,
@@ -108,4 +111,27 @@ test('a settle turn that throws is recorded and treated as unsettled', async () 
   });
   assert.equal(outcome.settled, false);
   assert.equal(outcome.error, 'Error: gateway unavailable');
+});
+
+test('the real settle turn input dispatches as the testing-harness principal into the shared room', () => {
+  const input = buildRoomSettleTurnInput({ runToken: 'tok', apiUserId: 'testing-harness', timeoutMs: 1000 });
+  assert.equal(input.message, ROOM_SETTLE_MESSAGE);
+  const dispatch = prepareCaseChatDispatch({
+    defaultApiKey: 'testing-harness-key',
+    defaultApiUserId: input.apiUserId,
+    sessionId: input.sessionId,
+    privacy: input.privacy,
+  });
+  assert.equal(resolveSessionChannelId(input.sessionId, dispatch.apiUserId), ROOM);
+});
+
+test('a settle turn for any other principal is rejected', () => {
+  assert.throws(
+    () => buildRoomSettleTurnInput({ runToken: 'tok', apiUserId: undefined, timeoutMs: 1000 }),
+    /must dispatch into api:testing-harness/u,
+  );
+  assert.throws(
+    () => buildRoomSettleTurnInput({ runToken: 'tok', apiUserId: 'api-key-other', timeoutMs: 1000 }),
+    /must dispatch into api:testing-harness/u,
+  );
 });

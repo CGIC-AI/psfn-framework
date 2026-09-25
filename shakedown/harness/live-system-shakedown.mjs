@@ -89,6 +89,7 @@ import { isBeadsIssueId } from './lib/beads.mjs';
 import { validateMemoryLookupAnswer } from './lib/memory-lookup-answer.mjs';
 import {
   applyRoomIsolationOutcome,
+  buildRoomSettleTurnInput,
   createSharedRoomLedger,
   settleSharedRoom,
 } from './lib/case-isolation.mjs';
@@ -3916,12 +3917,11 @@ async function main() {
           : await settleSharedRoom({
             ledger: SHARED_ROOM_LEDGER,
             fromCaseId: pendingRoomFromCaseId,
-            runSettleTurn: (message) => chatCase({
-              sessionId: `harness-room-settle-${ctx.runToken}`,
-              message,
-              privacy: 'private',
+            runSettleTurn: () => chatCase(buildRoomSettleTurnInput({
+              runToken: ctx.runToken,
+              apiUserId: ctx.primaryApiUserId,
               timeoutMs: DEFAULT_FETCH_TIMEOUT_MS,
-            }),
+            })),
           });
         if (roomIsolation) {
           recordCaseDiagnostic(testCase.id, { event: 'pre_case_room_settle', ...roomIsolation });

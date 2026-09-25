@@ -3,7 +3,6 @@
 import '../../shared/utils/load-dotenv.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import { createPostgresContactStore } from '../../core/contacts/postgres-adapter.js';
-import { derivePostgresTenantRole } from '../../persistence/postgres/tenancy.js';
 import { resolveSystemOwnerFleetContext } from './system-owner-fleet-context.js';
 import type { TrustLevel } from '../../system/trust/types.js';
 import {
@@ -95,6 +94,46 @@ export async function seedSiblingContact(
   return contact.id;
 }
 
+/** The companions.json fields that pin one companion's contact-store authority. */
+interface SiblingContactOwner {
+  companionId: string;
+  postgresSchema: string;
+  postgresRole: string;
+}
+
+type SiblingContactStoreFactory = (
+  databaseUrl: string,
+  target: { schema: string; role: string },
+) => Promise<ContactStorePort>;
+
+/**
+ * Write every mutual sibling contact. Each owner's contact store connects with
+ * the tenant role that companions.json provisions for it (the same role the
+ * runtime persistence factory and the chart use), never a derived name: a
+ * provisioned fleet only has the configured roles (psfn-framework-w6f98).
+ */
+export async function applySiblingContactSeeding(input: {
+  databaseUrl: string;
+  companions: readonly SiblingContactOwner[];
+  trust: TrustLevel;
+  createStore: SiblingContactStoreFactory;
+}): Promise<Array<{ owner: string; peer: string; contactId: string }>> {
+  const seeded: Array<{ owner: string; peer: string; contactId: string }> = [];
+  for (const owner of input.companions) {
+    const role = owner.postgresRole.trim();
+    if (!role) {
+      throw new Error(`seed:sibling-contacts requires companions.json postgresRole for companion ${owner.companionId}`);
+    }
+    const store = await input.createStore(input.databaseUrl, { schema: owner.postgresSchema, role });
+    for (const peer of input.companions) {
+      if (peer.companionId === owner.companionId) continue;
+      const contactId = await seedSiblingContact(store, peer.companionId, input.trust);
+      seeded.push({ owner: owner.companionId, peer: peer.companionId, contactId });
+    }
+  }
+  return seeded;
+}
+
 async function run(options: CliOptions): Promise<void> {
   const runtime = await bootstrapMaintenanceRuntime();
   const databaseUrl = runtime.config.postgresDatabaseUrl?.trim();
@@ -106,10 +145,6 @@ async function run(options: CliOptions): Promise<void> {
   if (companions.length < 2) {
     throw new Error('seed:sibling-contacts requires a fleet of at least two companions');
   }
-  // Topology matches load-config: a fleet (>1 companion) pins each companion's
-  // contact writes to its own tenant role + schema, exactly as the runtime
-  // persistence factory does. A degenerate single-schema install needs neither.
-  const multiCompanion = companions.length > 1;
 
   const plannedPairs = companions.flatMap((owner) =>
     companions
@@ -121,25 +156,23 @@ async function run(options: CliOptions): Promise<void> {
     console.log(JSON.stringify({
       mode: 'dry-run',
       trust: options.trust,
-      companions: companions.map((companion) => companion.companionId),
+      companions: companions.map((companion) => ({
+        companionId: companion.companionId,
+        postgresSchema: companion.postgresSchema,
+        postgresRole: companion.postgresRole,
+      })),
       plannedContacts: plannedPairs,
       note: 'Re-run with --apply to write these mutual sibling contacts.',
     }, null, 2));
     return;
   }
 
-  const seeded: Array<{ owner: string; peer: string; contactId: string }> = [];
-  for (const owner of companions) {
-    const store = await createPostgresContactStore(databaseUrl, undefined, {
-      schema: owner.postgresSchema,
-      ...(multiCompanion ? { role: derivePostgresTenantRole(owner.postgresSchema) } : {}),
-    });
-    for (const peer of companions) {
-      if (peer.companionId === owner.companionId) continue;
-      const contactId = await seedSiblingContact(store, peer.companionId, options.trust);
-      seeded.push({ owner: owner.companionId, peer: peer.companionId, contactId });
-    }
-  }
+  const seeded = await applySiblingContactSeeding({
+    databaseUrl,
+    companions,
+    trust: options.trust,
+    createStore: (url, target) => createPostgresContactStore(url, undefined, target),
+  });
   console.log(JSON.stringify({ mode: 'apply', trust: options.trust, seeded }, null, 2));
 }
 

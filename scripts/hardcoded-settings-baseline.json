@@ -5259,6 +5259,13 @@
       "note": "Existing mutable policy candidate createReflectionTemplateRuntime.buildDeferredReflectionAction.maxRetries; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
+      "file": "src/core/scheduler/preempted-task-retry.ts",
+      "name": "deferPreemptedTaskRetry.input.scheduler.register.arg0.intervalMs",
+      "value": "0",
+      "form": "object-member",
+      "note": "Structural field of a one-shot task registration (tpkqi): one-shot tasks fire on runAt and never read intervalMs; not a tuning value."
+    },
+    {
       "file": "src/core/scheduler/reflection-template-runtime.ts",
       "name": "createReflectionTemplateRuntime.queueDeferredTemplateRun.scheduler.register.arg0.intervalMs",
       "value": "0",
@@ -5506,7 +5513,7 @@
     },
     {
       "file": "src/core/scheduler/temporal-wakeup.ts",
-      "name": "registerTemporalWakeupTasks.$call:math-clamp:Math.max.arg1#1",
+      "name": "registerTemporalWakeupTasks.runMorningWake.$call:math-clamp:Math.max.arg1#1",
       "value": "8",
       "form": "math-clamp",
       "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."

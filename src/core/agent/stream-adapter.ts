@@ -449,6 +449,17 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
           ? error.causeError
           : (error instanceof Error ? error : new Error(String(error)));
 
+        // tpkqi: the run's own signal was aborted (e.g. a foreground turn
+        // preempted this background run). Surface the abort reason itself and
+        // never retry it or walk it through the fallback chain as a model failure.
+        if (streamSignal?.aborted) {
+          const abortReason: unknown = streamSignal.reason;
+          throw new NonRecoverableFallbackError(
+            abortReason instanceof Error ? abortReason : err,
+            { callerCancelled: true },
+          );
+        }
+
         if (committed) {
           throw explicitNonRecoverable ? error : new NonRecoverableFallbackError(err);
         }

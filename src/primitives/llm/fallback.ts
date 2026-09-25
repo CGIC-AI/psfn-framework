@@ -24,11 +24,18 @@ export interface FallbackRunResult<T> {
 
 export class NonRecoverableFallbackError extends Error {
   readonly causeError: Error;
+  /**
+   * The call's own caller cancelled it (e.g. a background run preempted by a
+   * foreground turn). That is not a model failure: fallback stops and the
+   * cancellation is logged as such, not as a candidate failure.
+   */
+  readonly callerCancelled: boolean;
 
-  constructor(error: Error) {
+  constructor(error: Error, options: { callerCancelled?: boolean } = {}) {
     super(error.message);
     this.name = 'NonRecoverableFallbackError';
     this.causeError = error;
+    this.callerCancelled = options.callerCancelled === true;
   }
 }
 
@@ -108,6 +115,17 @@ export class FallbackRunner {
     const explicitNonRecoverable = rawError instanceof NonRecoverableFallbackError;
     const err = unwrapFallbackError(rawError);
     const candidate = orderedCandidates[attempt - 1]!;
+    if (explicitNonRecoverable && rawError.callerCancelled) {
+      log.info('Model call cancelled by its caller; not trying fallback models', {
+        purpose,
+        model: candidate.model,
+        provider: candidate.provider,
+        attempt,
+        reason: err.name,
+        ...correlationFields,
+      });
+      throw err;
+    }
     const classification = classifyLLMError(err);
     const isLastAttempt = attempt >= orderedCandidates.length;
 

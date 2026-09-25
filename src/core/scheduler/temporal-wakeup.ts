@@ -46,6 +46,8 @@ import {
 } from '../session/session-lane-metadata.js';
 import type { SessionEntry } from '../session/types.js';
 import type { Scheduler } from './scheduler.js';
+import { deferPreemptedTaskRetry } from './preempted-task-retry.js';
+import type { EligibilityRequirements } from '../../system/capabilities/eligibility.js';
 import type { FleetSlotStagger } from './types.js';
 import {
   evaluateMorningWakePreflight,
@@ -967,16 +969,8 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
         ? { window: `${registrationSnapshot.window.startLocalTime}-${registrationSnapshot.window.endLocalTime}` }
         : {}),
     });
-    options.scheduler.register({
-      id: TEMPORAL_WAKEUP_MORNING_TASK_ID,
-      name: TEMPORAL_WAKEUP_MORNING_TASK_NAME,
-      type: 'every',
-      intervalMs: 24 * HOUR_MS,
-      cadence: { kind: 'daily', hour, minute, timezone: morning.timezone },
-      ...(options.fleetScheduleStagger
-        ? { fleetStagger: options.fleetScheduleStagger }
-        : {}),
-      handler: async () => {
+    const morningEligibility: EligibilityRequirements = { requiredTokens: ['memory.write'] };
+    const runMorningWake = async (): Promise<void> => {
         // Fan the internal new-day frame out to EVERY recently-active channel
         // (bead 2x37.3), each gated by its own eligibility + anti-loop state via
         // the shared fan-out pipeline (bead 2x37.9 item 1). Outward delivery
@@ -1112,14 +1106,38 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
             },
           );
         } catch (error) {
+          // tpkqi: a foreground turn preempting the wake turn is a yield, not
+          // a failure; the same handler runs again once the partner has been
+          // idle for the lane's own idle gate (its eligibility is re-checked).
+          if (deferPreemptedTaskRetry({
+            scheduler: options.scheduler,
+            error,
+            taskId: TEMPORAL_WAKEUP_MORNING_TASK_ID,
+            taskName: TEMPORAL_WAKEUP_MORNING_TASK_NAME,
+            retryDelayMs: morning.minPartnerIdleMinutes * MINUTE_MS,
+            handler: runMorningWake,
+            eligibility: morningEligibility,
+          })) {
+            return;
+          }
           log.error('Morning wake model/outward phase failed', {
             sessionId: outwardTarget.decision.sessionId,
             error: String(error),
           });
           throw error;
         }
-      },
-      eligibility: { requiredTokens: ['memory.write'] },
+    };
+    options.scheduler.register({
+      id: TEMPORAL_WAKEUP_MORNING_TASK_ID,
+      name: TEMPORAL_WAKEUP_MORNING_TASK_NAME,
+      type: 'every',
+      intervalMs: 24 * HOUR_MS,
+      cadence: { kind: 'daily', hour, minute, timezone: morning.timezone },
+      ...(options.fleetScheduleStagger
+        ? { fleetStagger: options.fleetScheduleStagger }
+        : {}),
+      handler: runMorningWake,
+      eligibility: morningEligibility,
       state: 'idle',
     });
   }

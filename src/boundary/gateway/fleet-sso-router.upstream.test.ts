@@ -511,7 +511,11 @@ describe('Fleet Garden dual admin admission', () => {
     expect(probe.response.statusCode).toBe(302);
     expect(probe.response.writeHead).toHaveBeenCalledWith(302, expect.objectContaining({
       Location: '/fleet',
-      'Set-Cookie': `psfn_token=${ADMIN_TOKEN}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=86400`,
+      'Set-Cookie': [
+        `psfn_token=${ADMIN_TOKEN}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=86400`,
+        // Non-secret door marker (jxthv): never the token, never authority.
+        'garden_operator_door=admin_token; Path=/; Secure; SameSite=Strict; Max-Age=86400',
+      ],
     }));
     expect(httpRequest).not.toHaveBeenCalled();
   });

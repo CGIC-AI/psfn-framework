@@ -64,6 +64,8 @@ export async function prepareFleetSharedSchemaRuntime(options: {
     backupRestoreDatabaseUrl: string;
     roles: FleetAuthDatabaseRoles;
   };
+  /** Declared read-only gateway audit reader role (companions.json, jqg13). */
+  gatewayAuditReaderRole?: string;
 }): Promise<FleetAuthSchemaAccessContract[]> {
   const migrationCredential = parseExactPostgresCredential(
     options.sharedMigrationDatabaseUrl,
@@ -98,12 +100,14 @@ export async function prepareFleetSharedSchemaRuntime(options: {
   }
 
   const protectedRoles = options.fleetAuth ? Object.values(options.fleetAuth.roles) : [];
+  const readerRoles = options.gatewayAuditReaderRole ? [options.gatewayAuditReaderRole] : [];
   const mappedRoles = [...new Set([
     ...protectedRoles,
     options.sharedMigrationRole,
     ...companionRoles,
+    ...readerRoles,
   ])].sort();
-  if (mappedRoles.length !== protectedRoles.length + companionRoles.length + 1) {
+  if (mappedRoles.length !== protectedRoles.length + companionRoles.length + 1 + readerRoles.length) {
     throw new Error('Fleet shared schema startup requires every authority role to be distinct');
   }
   const credentialValues = [
@@ -236,6 +240,16 @@ export async function prepareFleetSharedSchemaRuntime(options: {
       [sharedSchema, options.sharedMigrationDatabaseUrl],
     ]),
     ...(options.fleetAuth ? { backupRole: options.fleetAuth.roles.backupRestore } : {}),
+    // The gateway's own schema is the primary/canonical companion's (the
+    // topology proves the gateway credential is companions[0]).
+    ...(options.gatewayAuditReaderRole
+      ? {
+          gatewayAuditReader: {
+            schema: companionDatabases[0]!.schema,
+            role: options.gatewayAuditReaderRole,
+          },
+        }
+      : {}),
   });
   await assertFleetAuthSchemaAccessIsolation({
     databaseUrl: options.sharedMigrationDatabaseUrl,

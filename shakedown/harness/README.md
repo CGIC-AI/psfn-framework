@@ -303,6 +303,11 @@ differs from `COMPANION_PG_SCHEMA`, so `PSFN_GATEWAY_POSTGRES_DATABASE_URL` must
 name an operator-provisioned credential that can read it (read-only is
 enough); the harness never reads gateway tables through the follower tenant
 role, and preflight fails if `gateway_audit` is not readable.
+Declare that credential's role as `postgres.gatewayAuditReaderRole` in
+`companions.json` and create it `LOGIN NOINHERIT CONNECTION LIMIT <n>` with no
+grants: the gateway grants it exactly `SELECT` on those two tables at startup
+and refuses to boot on any undeclared grantee on its schema (bead
+`psfn-framework-jqg13`).
 
 `COMPANION_ID` selects the fleet companion for **both** lanes: the Garden route
 (`/companions/<id>/garden/...`) and chat, where the harness sends the gateway's

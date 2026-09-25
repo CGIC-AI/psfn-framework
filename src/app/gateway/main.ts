@@ -125,6 +125,7 @@ import { assertFleetAuthStandaloneSurfacesUnavailable } from '../../system/confi
 import { resolveGatewayFleetAuthSecrets } from '../../system/config/fleet-auth-config.js';
 import { resolveCompanionDatabaseTopology } from '../../system/config/companion-database-config.js';
 import { grantFleetModelUsageReadAccess } from '../../persistence/postgres/model-usage-access.js';
+import { grantGatewayAuditReaderAccess } from '../../persistence/postgres/gateway-audit-reader-access.js';
 import { resolveBackupRuntimeConfig } from '../../persistence/backups/config.js';
 import { resolveKubernetesHelmBackupConfig } from '../../persistence/backups/kubernetes-helm.js';
 import { migrateFleetAuthSchema } from '../../persistence/postgres/fleet-auth/schema.js';
@@ -331,6 +332,9 @@ async function main(): Promise<void> {
           schema: entry.companion.postgresSchema,
         })),
         sharedSchema: DEFAULT_SHARED_WORLD_SCHEMA,
+        ...(config.companionFleet?.postgres.gatewayAuditReaderRole
+          ? { gatewayAuditReaderRole: config.companionFleet.postgres.gatewayAuditReaderRole }
+          : {}),
         ...(config.fleetAuth && fleetAuthSecrets
           ? {
               fleetAuth: {
@@ -595,6 +599,23 @@ async function main(): Promise<void> {
       primarySchema: primary.companion.postgresSchema,
       primaryRole: primary.role,
       followerRoles: companionDatabaseTopology.companions.slice(1).map(entry => entry.role),
+    });
+  }
+  const gatewayAuditReaderRole = config.companionFleet?.postgres.gatewayAuditReaderRole;
+  if (gatewayAuditReaderRole) {
+    // Declared read-only audit reader (psfn-framework-jqg13): now that the
+    // audit and model-usage stores have migrated, grant and prove exact access.
+    const primary = companionDatabaseTopology?.companions[0];
+    const modelUsageStore = privilegedServices.modelUsageStore;
+    if (!primary || !modelUsageStore) {
+      throw new Error('postgres.gatewayAuditReaderRole requires the companion fleet database topology');
+    }
+    await modelUsageStore.waitUntilReady();
+    await grantGatewayAuditReaderAccess({
+      ownerDatabaseUrl: primary.databaseUrl,
+      ownerRole: primary.role,
+      schema: primary.companion.postgresSchema,
+      role: gatewayAuditReaderRole,
     });
   }
   let fleetAuthBackupScheduler: Scheduler | undefined;

@@ -173,6 +173,30 @@ describe('companions owner-file config', () => {
         .toThrow(/shared migration role must be distinct/);
     });
 
+    it('accepts a declared gateway audit reader role and rejects reuse or a malformed name', () => {
+      const declared = clone(VALID_FLEET) as typeof VALID_FLEET & {
+        postgres: { gatewayAuditReaderRole?: unknown };
+      };
+      declared.postgres.gatewayAuditReaderRole = 'fleet_audit_reader';
+      expect(validateCompanionsConfig(declared, 'companions.json').postgres.gatewayAuditReaderRole)
+        .toBe('fleet_audit_reader');
+      expect(validateCompanionsConfig(clone(VALID_FLEET), 'companions.json').postgres)
+        .not.toHaveProperty('gatewayAuditReaderRole');
+
+      for (const reused of [declared.postgres.sharedMigrationRole, declared.companions[1].postgresRole]) {
+        const fleet = clone(declared);
+        fleet.postgres.gatewayAuditReaderRole = reused;
+        expect(() => validateCompanionsConfig(fleet, 'companions.json'))
+          .toThrow(/gatewayAuditReaderRole must be distinct/);
+      }
+      for (const malformed of ['', 'Bad Role', 42]) {
+        const fleet = clone(declared);
+        fleet.postgres.gatewayAuditReaderRole = malformed;
+        expect(() => validateCompanionsConfig(fleet, 'companions.json'))
+          .toThrow(/gatewayAuditReaderRole/);
+      }
+    });
+
     it('rejects reuse of every observer identity field across three companions', () => {
       const createFleet = () => {
         const fleet = clone(VALID_FLEET) as unknown as {

@@ -19,7 +19,10 @@ import type {
   HubIdentityEnrollment,
   HubIdentityEnrollmentStatus,
 } from '../../../core/enrollment/types.js';
-import type { GardenRequestContext } from '../garden-request-context.js';
+import {
+  isSubjectBoundFleetRequest,
+  type GardenRequestContext,
+} from '../garden-request-context.js';
 
 /** Admin-safe view of a binding: opaque handle + contact link + audit only. */
 export interface AdminEnrollmentBindingView {
@@ -89,7 +92,7 @@ export function createAdminEnrollmentService(options: {
       const bindings = await enrollmentService.listAll();
       const enrollments = bindings
         .filter(binding => (
-          _context?.kind !== 'fleet_principal'
+          !isSubjectBoundFleetRequest(_context)
           || binding.canonicalContactId === _context.actor.contactId
         ))
         .map(toBindingView);
@@ -110,7 +113,7 @@ export function createAdminEnrollmentService(options: {
       if (!canonicalContactId) {
         throw new Error('canonicalContactId is required to enroll a hub identity');
       }
-      if (context?.kind === 'fleet_principal'
+      if (isSubjectBoundFleetRequest(context)
         && canonicalContactId !== context.actor.contactId) {
         throw new Error('Enrollment contact must be the current trusted subject');
       }
@@ -139,7 +142,7 @@ export function createAdminEnrollmentService(options: {
       if (!handle) {
         throw new Error('hubIdentityId is required to revoke a hub identity');
       }
-      if (context?.kind === 'fleet_principal') {
+      if (isSubjectBoundFleetRequest(context)) {
         const binding = (await enrollmentService.listAll())
           .find(candidate => candidate.hubIdentityId === handle);
         if (!binding || binding.canonicalContactId !== context.actor.contactId) {

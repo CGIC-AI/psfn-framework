@@ -1,4 +1,5 @@
 import {
+  clearAdminTokenOperatorDoor,
   clearLegacyPersistentAdminToken,
   clearLegacyScriptReadableAdminTokenCookie,
 } from './auth-storage';
@@ -395,4 +396,5 @@ export function clearToken() {
   cancelSessionProbeRetry();
   clearLegacyPersistentAdminToken();
   clearLegacyScriptReadableAdminTokenCookie();
+  clearAdminTokenOperatorDoor();
 }

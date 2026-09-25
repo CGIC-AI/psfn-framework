@@ -1059,7 +1059,7 @@ export function createInProcessGardenAdminContract(
       sessionStore: options.sessionStore,
       sessionManager: options.sessionManager,
       resolveCompanionName: () => resolveCompanionNameFromConfig(options.config),
-      appendAuditTimelineEntry: (actionType, decision, narrative, details) => {
+      appendAuditTimelineEntry: (actionType, decision, narrative, details, requestContext) => {
         const joinedDetails = details
           ?.filter((detail): detail is string => typeof detail === 'string' && detail.trim().length > 0)
           .join(' ');
@@ -1069,6 +1069,7 @@ export function createInProcessGardenAdminContract(
           narrative,
           ...(joinedDetails ? { details: joinedDetails } : {}),
           actor: 'operator',
+          ...(requestContext ? { requestContext } : {}),
         });
       },
       companionValuesLayerProvider: () => valuesJournal.buildCompanionDerivedLayer(),

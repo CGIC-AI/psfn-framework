@@ -3,11 +3,16 @@ import type { PromptLayerUpdatePatch } from '../../../core/identity/prompt-store
 import type { PromptRuntimeSystemPromptBlockId } from '../../../core/identity/prompt-runtime.js';
 import type { PromptUpdateResult } from './types.js';
 import type { AdminPromptsServiceContext } from './prompts-service-context.js';
+import type { GardenRequestContext } from '../garden-request-context.js';
+import {
+  operatorLayerIdentifierError,
+  resolveOperatorLayerWriter,
+} from './prompt-operator-layer-authority.js';
 
 export class PromptsLayerService {
   constructor(private readonly context: AdminPromptsServiceContext) {}
 
-  createPromptLayer(body: string): PromptUpdateResult {
+  createPromptLayer(body: string, requestContext?: GardenRequestContext): PromptUpdateResult {
     const params = this.context.parseBody(body);
     const name = params.get('name')?.trim();
     const type = params.get('type')?.trim() as LayerType | undefined;
@@ -20,7 +25,7 @@ export class PromptsLayerService {
       return { ok: false, message: 'type is required' };
     }
 
-    const validTypes: LayerType[] = ['runtime', 'channel', 'task'];
+    const validTypes: LayerType[] = ['runtime', 'channel', 'task', 'operator'];
     if (!validTypes.includes(type)) {
       return { ok: false, message: `type must be one of: ${validTypes.join(', ')}` };
     }
@@ -28,6 +33,21 @@ export class PromptsLayerService {
     const resolvedMetadata = this.context.resolvePromptLayerMetadata(params);
     if ('error' in resolvedMetadata) {
       return { ok: false, message: resolvedMetadata.error };
+    }
+
+    let operatorActor: string | undefined;
+    if (type === 'operator') {
+      const writer = resolveOperatorLayerWriter(requestContext);
+      if (!writer.ok) return { ok: false, message: writer.message };
+      if (params.get('channelType')?.trim() || params.get('taskKind')?.trim()) {
+        return { ok: false, message: 'Operator prompt layers apply everywhere; channelType/taskKind are not allowed' };
+      }
+      const identifierError = operatorLayerIdentifierError(
+        resolvedMetadata.metadata.identifier ?? undefined,
+        this.context.deps.promptStore.getAll(),
+      );
+      if (identifierError) return { ok: false, message: identifierError };
+      operatorActor = writer.actor;
     }
 
     const priority = parseInt(params.get('priority') ?? '0', 10);
@@ -71,7 +91,12 @@ export class PromptsLayerService {
         'identity_edit',
         'allowed',
         `Admin created ${layer.type} prompt layer "${layer.name}".`,
-        [`layerId=${layer.id}`, `version=${layer.version}`],
+        [
+          `layerId=${layer.id}`,
+          `version=${layer.version}`,
+          operatorActor ? `operatorActor=${operatorActor}` : null,
+        ],
+        requestContext,
       );
 
       return {
@@ -84,7 +109,7 @@ export class PromptsLayerService {
     }
   }
 
-  updatePromptLayer(body: string): PromptUpdateResult {
+  updatePromptLayer(body: string, requestContext?: GardenRequestContext): PromptUpdateResult {
     const params = this.context.parseBody(body);
     const layerId = params.get('layerId') ?? params.get('id') ?? '';
     const name = params.get('name')?.trim();
@@ -116,6 +141,17 @@ export class PromptsLayerService {
     const existingLayer = this.context.deps.promptStore.getById(layerId);
     if (!existingLayer) {
       return { ok: false, message: `Prompt layer not found: ${layerId}` };
+    }
+
+    const operatorActor = this.operatorLayerActor(existingLayer.type, requestContext);
+    if (operatorActor && !operatorActor.ok) return { ok: false, message: operatorActor.message };
+    if (existingLayer.type === 'operator' && hasIdentifier) {
+      const identifierError = operatorLayerIdentifierError(
+        resolvedMetadata.metadata.identifier ?? undefined,
+        this.context.deps.promptStore.getAll(),
+        existingLayer.id,
+      );
+      if (identifierError) return { ok: false, message: identifierError };
     }
 
     if (existingLayer.type === 'runtime') {
@@ -151,7 +187,12 @@ export class PromptsLayerService {
         'identity_edit',
         'allowed',
         `${this.context.resolveCompanionName()} edited ${layer.type} prompt layer "${layer.name}".`,
-        [`layerId=${layer.id}`, `version=${layer.version}`],
+        [
+          `layerId=${layer.id}`,
+          `version=${layer.version}`,
+          operatorActor?.ok ? `operatorActor=${operatorActor.actor}` : null,
+        ],
+        requestContext,
       );
       return {
         ok: true,
@@ -284,7 +325,7 @@ export class PromptsLayerService {
     }
   }
 
-  togglePromptLayer(body: string): PromptUpdateResult {
+  togglePromptLayer(body: string, requestContext?: GardenRequestContext): PromptUpdateResult {
     const params = this.context.parseBody(body);
     const layerId = params.get('layerId') ?? '';
 
@@ -292,6 +333,8 @@ export class PromptsLayerService {
     if (!existingLayer) {
       return { ok: false, message: `Prompt layer not found: ${layerId}` };
     }
+    const operatorActor = this.operatorLayerActor(existingLayer.type, requestContext);
+    if (operatorActor && !operatorActor.ok) return { ok: false, message: operatorActor.message };
 
     if (existingLayer.type === 'runtime') {
       const validationMessage = this.context.buildRuntimePromptLayerValidationMessage(this.context.replacePromptLayerPreview({
@@ -309,6 +352,15 @@ export class PromptsLayerService {
     try {
       this.context.deps.promptStore.toggle(layerId);
       const toggledLayer = this.context.deps.promptStore.getById(layerId);
+      if (operatorActor?.ok && toggledLayer) {
+        this.context.deps.appendAuditTimelineEntry?.(
+          'identity_edit',
+          'allowed',
+          `Admin ${toggledLayer.enabled ? 'enabled' : 'disabled'} operator prompt layer "${toggledLayer.name}".`,
+          [`layerId=${toggledLayer.id}`, `operatorActor=${operatorActor.actor}`],
+          requestContext,
+        );
+      }
       return {
         ok: true,
         message: `Toggled "${toggledLayer?.name ?? layerId}"`,
@@ -320,5 +372,55 @@ export class PromptsLayerService {
         message: String(error),
       };
     }
+  }
+
+  /**
+   * Delete an operator-authored prompt layer (psfn-framework-c5e65). Only
+   * operator layers are deletable here; the system-seeded temporal rules layer
+   * is disabled instead of deleted, since startup re-seeds it.
+   */
+  deletePromptLayer(body: string, requestContext?: GardenRequestContext): PromptUpdateResult {
+    const params = this.context.parseBody(body);
+    const layerId = params.get('layerId') ?? '';
+    const existingLayer = this.context.deps.promptStore.getById(layerId);
+    if (!existingLayer) {
+      return { ok: false, message: `Prompt layer not found: ${layerId}` };
+    }
+    if (existingLayer.type !== 'operator') {
+      return { ok: false, message: 'Only operator prompt layers can be deleted through this route' };
+    }
+    const writer = resolveOperatorLayerWriter(requestContext);
+    if (!writer.ok) return { ok: false, message: writer.message };
+    if (existingLayer.updatedBy === 'system' || existingLayer.updatedBy.startsWith('system:')) {
+      return { ok: false, message: 'System-seeded operator prompt layers are re-seeded; disable them instead' };
+    }
+    try {
+      this.context.deps.promptStore.delete(existingLayer.id);
+      this.context.injectPromptEditSystemNote(
+        `Admin deleted operator prompt layer "${existingLayer.name}".`,
+      );
+      this.context.deps.appendAuditTimelineEntry?.(
+        'identity_edit',
+        'allowed',
+        `Admin deleted operator prompt layer "${existingLayer.name}".`,
+        [
+          `layerId=${existingLayer.id}`,
+          `version=${existingLayer.version}`,
+          `operatorActor=${writer.actor}`,
+        ],
+        requestContext,
+      );
+      return { ok: true, message: `Deleted "${existingLayer.name}"` };
+    } catch (error) {
+      return { ok: false, message: String(error) };
+    }
+  }
+
+  /** Operator-layer writes require the audited operator; other types are unaffected. */
+  private operatorLayerActor(
+    type: LayerType,
+    requestContext: GardenRequestContext | undefined,
+  ): ReturnType<typeof resolveOperatorLayerWriter> | null {
+    return type === 'operator' ? resolveOperatorLayerWriter(requestContext) : null;
   }
 }

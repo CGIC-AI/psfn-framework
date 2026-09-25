@@ -38,6 +38,14 @@ export async function lockAndValidateLifecycleProviderProofs(
   decision: VerifiedFleetAuthLifecycleDecision,
 ): Promise<void> {
   if (!isLifecycleOAuthAction(decision.action)) return;
+  // Who must have initiated each provider proof. A principal actor proves
+  // under its own session. Under an ADMIN_TOKEN operator approval the proof
+  // is the SUBJECT's own: the target principal's own live session initiated
+  // the Discord OAuth, so the operator approves but never supplies the proof
+  // (psfn-framework-ja7n0).
+  const initiator = decision.operator
+    ? await lockTargetInitiatedProofSessions(client, decision)
+    : { principalId: decision.actor!.principalId, sessionIds: [decision.actorSession!.sessionId] };
   for (const { role, proof } of lifecycleProviderProofs(decision)) {
     const result = await client.query<{ transaction_id: string }>(`
       SELECT transaction.transaction_id
@@ -55,7 +63,7 @@ export async function lockAndValidateLifecycleProviderProofs(
         AND transaction.lifecycle_action = $7
         AND transaction.lifecycle_proof_role = $8
         AND transaction.initiating_principal_id = $9
-        AND transaction.initiating_session_id = $10
+        AND transaction.initiating_session_id = ANY($10::uuid[])
         AND transaction.kind = $11
       FOR UPDATE OF transaction
     `, [
@@ -67,10 +75,37 @@ export async function lockAndValidateLifecycleProviderProofs(
       decision.ceremonyId,
       decision.action,
       role,
-      decision.actor.principalId,
-      decision.actorSession.sessionId,
+      initiator.principalId,
+      initiator.sessionIds,
       lifecycleOAuthKindFor(decision.action, role),
     ]);
     if (result.rowCount !== 1) denyLifecycleMutation('provider_callback_proof_invalid');
   }
+}
+
+/**
+ * The target principal's own live, unrevoked sessions: the only sessions that
+ * may have initiated a provider proof an ADMIN_TOKEN operator approves. The
+ * session must still be live at decision time, so a proof transaction cannot
+ * be approved after its subject signed out or was revoked.
+ */
+async function lockTargetInitiatedProofSessions(
+  client: PoolClient,
+  decision: VerifiedFleetAuthLifecycleDecision,
+): Promise<{ principalId: string; sessionIds: string[] }> {
+  const result = await client.query<{ record_id: string }>(`
+    SELECT session.record_id
+    FROM ${FLEET_AUTH_SCHEMA_NAME}.browser_sessions AS session
+    WHERE session.principal_id = $1
+      AND session.revoked_at IS NULL
+      AND session.idle_expires_at > clock_timestamp()
+      AND session.absolute_expires_at > clock_timestamp()
+    ORDER BY session.record_id
+    FOR UPDATE OF session
+  `, [decision.target.principalId]);
+  if (result.rows.length === 0) denyLifecycleMutation('provider_proof_subject_session_unavailable');
+  return {
+    principalId: decision.target.principalId,
+    sessionIds: result.rows.map(row => row.record_id),
+  };
 }

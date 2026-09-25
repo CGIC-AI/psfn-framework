@@ -49,6 +49,7 @@ function bindingRequest(): Extract<
 function harness(options: {
   role?: string;
   contact?: boolean;
+  adminTokenApproval?: boolean;
 } = {}) {
   const session = {
     record_id: SESSION_ID,
@@ -78,7 +79,9 @@ function harness(options: {
     query: vi.fn(async (sql: string) => (
       sql.includes('browser_sessions')
         ? { rowCount: 1, rows: [session] }
-        : { rowCount: 1, rows: [target] }
+        : sql.includes('principal_contact_bindings')
+          ? { rowCount: 1, rows: [{ principal_id: TARGET_ID }] }
+          : { rowCount: 1, rows: [target] }
     )),
   });
   const execute = vi.fn(async (decision: any) => ({
@@ -104,6 +107,11 @@ function harness(options: {
     restoreState: 'live' as const,
   }));
   const recordDenial = vi.fn(async () => undefined);
+  const recordApproval = vi.fn(async () => ({
+    authorizationEventId: '00000000-0000-4000-8000-000000000199',
+    authorityGeneration: 21,
+    globalAuthEpoch: 22,
+  }));
   const service = new GatewayFleetAuthLifecycleCeremonyService({
     pool,
     sessionPepper: 'session-pepper',
@@ -111,9 +119,10 @@ function harness(options: {
     lifecycle: { execute },
     contactAuthority: { read },
     denialAudit: { record: recordDenial },
+    ...(options.adminTokenApproval === false ? {} : { adminTokenApproval: { record: recordApproval } }),
     now: () => new Date('2026-07-16T22:00:00.000Z'),
   });
-  return { service, execute, read, recordDenial };
+  return { service, execute, read, recordDenial, recordApproval, pool };
 }
 
 describe('gateway fleet-auth lifecycle ceremony', () => {
@@ -271,5 +280,92 @@ describe('gateway fleet-auth lifecycle ceremony', () => {
     expect(recordDenial).toHaveBeenCalledWith(expect.objectContaining({
       reasonCode: 'session_unavailable',
     }));
+  });
+
+  describe('ADMIN_TOKEN operator approval (psfn-framework-ja7n0)', () => {
+    function roleGrant() {
+      return {
+        action: 'role.grant' as const,
+        ceremonyId: randomUUID(),
+        companionId: COMPANION_ID,
+        targetPrincipalId: TARGET_ID,
+        grantId: randomUUID(),
+        role: 'owner' as const,
+        reason: 'operator grants ownership',
+      };
+    }
+
+    it('approves under a durable approval bound to the decision, with no session lookup', async () => {
+      const { service, execute, recordApproval, pool } = harness();
+      const request = roleGrant();
+      await service.completeAsAdminTokenOperator({ requestOrigin: ORIGIN, request });
+      const decision = execute.mock.calls[0]![0];
+      expect(recordApproval).toHaveBeenCalledWith({
+        decisionId: decision.decisionId,
+        ceremonyId: request.ceremonyId,
+        companionId: COMPANION_ID,
+        lifecycleAction: 'role.grant',
+      });
+      expect(decision).toMatchObject({
+        operator: {
+          kind: 'admin_token_operator',
+          authorizationEventId: '00000000-0000-4000-8000-000000000199',
+        },
+        authorityGeneration: 21,
+        globalAuthEpoch: 22,
+        target: { principalId: TARGET_ID },
+      });
+      expect(decision.actor).toBeUndefined();
+      expect(decision.actorSession).toBeUndefined();
+      const sql = vi.mocked(pool.query).mock.calls.map(call => String(call[0]));
+      expect(sql.some(text => text.includes('browser_sessions'))).toBe(false);
+    });
+
+    it('resolves a provider ceremony subject from its exact active contact binding', async () => {
+      const { service, execute } = harness();
+      await service.completeAsAdminTokenOperator({
+        requestOrigin: ORIGIN,
+        request: {
+          action: 'provider.add',
+          ceremonyId: randomUUID(),
+          companionId: COMPANION_ID,
+          contactId: 'contact-member',
+          newProvider: proof('323456789012345679'),
+          reason: 'member links a second account',
+        },
+      });
+      expect(execute.mock.calls[0]![0]).toMatchObject({
+        action: 'provider.add',
+        target: { principalId: TARGET_ID },
+        contactId: 'contact-member',
+        newProvider: { subjectId: '323456789012345679' },
+      });
+    });
+
+    it('fails closed without approval audit wiring or with a foreign origin', async () => {
+      const unwired = harness({ adminTokenApproval: false });
+      await expect(unwired.service.completeAsAdminTokenOperator({
+        requestOrigin: ORIGIN,
+        request: roleGrant(),
+      })).rejects.toMatchObject({ code: 'operator_approval_unavailable' });
+      expect(unwired.execute).not.toHaveBeenCalled();
+
+      const wired = harness();
+      await expect(wired.service.completeAsAdminTokenOperator({
+        requestOrigin: 'https://evil.example.test',
+        request: roleGrant(),
+      })).rejects.toBeInstanceOf(FleetAuthLifecycleCeremonyError);
+      expect(wired.recordApproval).not.toHaveBeenCalled();
+    });
+
+    it('never executes when the approval audit cannot be recorded', async () => {
+      const { service, execute, recordApproval } = harness();
+      recordApproval.mockRejectedValueOnce(new Error('audit store unavailable'));
+      await expect(service.completeAsAdminTokenOperator({
+        requestOrigin: ORIGIN,
+        request: roleGrant(),
+      })).rejects.toMatchObject({ code: 'operator_approval_unavailable' });
+      expect(execute).not.toHaveBeenCalled();
+    });
   });
 });

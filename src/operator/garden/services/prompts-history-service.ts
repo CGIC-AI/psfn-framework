@@ -3,6 +3,8 @@ import type {
   PromptUpdateResult,
 } from './types.js';
 import type { AdminPromptsServiceContext } from './prompts-service-context.js';
+import type { GardenRequestContext } from '../garden-request-context.js';
+import { resolveOperatorLayerWriter } from './prompt-operator-layer-authority.js';
 
 export class PromptsHistoryService {
   constructor(private readonly context: AdminPromptsServiceContext) {}
@@ -25,7 +27,7 @@ export class PromptsHistoryService {
     };
   }
 
-  rollbackPromptLayer(body: string): PromptUpdateResult {
+  rollbackPromptLayer(body: string, requestContext?: GardenRequestContext): PromptUpdateResult {
     const params = this.context.parseBody(body);
     const layerId = params.get('layerId') ?? '';
     const version = parseInt(params.get('version') ?? '0', 10);
@@ -33,6 +35,10 @@ export class PromptsHistoryService {
     const existingLayer = this.context.deps.promptStore.getById(layerId);
     if (!existingLayer) {
       return { ok: false, message: `Prompt layer not found: ${layerId}` };
+    }
+    if (existingLayer.type === 'operator') {
+      const writer = resolveOperatorLayerWriter(requestContext);
+      if (!writer.ok) return { ok: false, message: writer.message };
     }
 
     if (existingLayer.type === 'runtime') {

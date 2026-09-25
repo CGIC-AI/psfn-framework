@@ -57,6 +57,7 @@ import {
   reconcileFleetAuthAuthorityState,
   recordPostgresFleetLifecycleCeremonyDenial,
 } from '../../persistence/postgres/fleet-auth/gateway-persistence.js';
+import { recordAdminTokenLifecycleApproval } from '../../persistence/postgres/fleet-auth/admin-token-lifecycle-approval.js';
 import { PostgresHubDeviceAssertionReplayStore } from '../../persistence/postgres/fleet-auth/hub-device-assertion-replay.js';
 import { PostgresHubDeviceHumanAttachmentStore } from '../../persistence/postgres/fleet-auth/hub-device-human-attachment-store.js';
 import { FleetAuthLifecycleWitnessStore } from '../../persistence/postgres/fleet-auth/lifecycle-witness.js';
@@ -378,6 +379,9 @@ export async function initializeGatewayFleetAuthPersistence(options: {
           contactAuthority,
           denialAudit: {
             record: input => recordPostgresFleetLifecycleCeremonyDenial(pool, input),
+          },
+          adminTokenApproval: {
+            record: input => recordAdminTokenLifecycleApproval(pool, input),
           },
         });
       },

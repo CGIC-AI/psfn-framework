@@ -50,3 +50,16 @@ export function mergeLifecycleBumps(
   }
   return merged;
 }
+
+/**
+ * The human principal actor of a decision that only a principal may take.
+ * Operator approvals are rejected at decision validation for these actions;
+ * this denies again at the mutation so a new call site cannot skip the check.
+ */
+export function requireLifecyclePrincipalActorId(
+  decision: { actor?: { principalId: string }; operator?: unknown },
+  reasonCode: string,
+): string {
+  if (decision.operator !== undefined || !decision.actor) denyLifecycleMutation(reasonCode);
+  return decision.actor.principalId;
+}

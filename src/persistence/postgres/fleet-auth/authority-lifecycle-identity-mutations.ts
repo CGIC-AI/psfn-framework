@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg';
 import {
   denyLifecycleMutation,
   mergeLifecycleBumps,
+  requireLifecyclePrincipalActorId,
   type PreparedLifecycleMutation,
 } from './authority-lifecycle-mutation-contract.js';
 import { lockCurrentLifecycleProvider } from './authority-lifecycle-provider-mutations.js';
@@ -12,7 +13,8 @@ export async function preparePrincipalMergeMutation(
   client: PoolClient,
   decision: Extract<VerifiedFleetAuthLifecycleDecision, { action: 'principal.merge' }>,
 ): Promise<PreparedLifecycleMutation> {
-  if (decision.actor.principalId !== decision.target.principalId) {
+  if (requireLifecyclePrincipalActorId(decision, 'principal_merge_actor_mismatch')
+    !== decision.target.principalId) {
     denyLifecycleMutation('principal_merge_actor_mismatch');
   }
   await lockCurrentLifecycleProvider(

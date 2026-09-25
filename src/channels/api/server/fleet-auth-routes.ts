@@ -4,6 +4,7 @@ import {
   type GatewayFleetAuthBroker,
 } from '../../../boundary/gateway/fleet-auth-broker.js';
 import { readJsonBodyWithLimit, sendJson } from '../../backplane/http/primitives.js';
+import { hasBearerToken, hasCookieValue } from '../../backplane/http/auth.js';
 import { appendVaryValue } from '../http-policy.js';
 import {
   isLifecycleOAuthAction,
@@ -153,6 +154,7 @@ export class FleetAuthHttpRoutes {
   private readonly approvalsSource?: FleetAuthApprovalsSource;
   private readonly recoveryRoutes?: FleetAuthRecoveryHttpRoutes;
   private readonly lifecycleCeremonyRoutes?: FleetAuthLifecycleCeremonyHttpRoutes;
+  private readonly adminToken?: string;
 
   constructor(options: {
     broker: GatewayFleetAuthBroker;
@@ -173,8 +175,11 @@ export class FleetAuthHttpRoutes {
     rosterSource?: FleetAuthRosterSource;
     /** Pending-approval source for the fleet-wide approvals view. */
     approvalsSource?: FleetAuthApprovalsSource;
+    /** The deployment ADMIN_TOKEN: the audited operator may approve lifecycle ceremonies. */
+    adminToken?: string;
   }) {
     this.broker = options.broker;
+    this.adminToken = options.adminToken || undefined;
     this.canonicalOrigin = options.canonicalOrigin;
     this.callbackPath = options.callbackPath;
     this.trustProxy = options.trustProxy === true;
@@ -190,6 +195,12 @@ export class FleetAuthHttpRoutes {
     this.lifecycleCeremonyRoutes = options.lifecycleCeremonies
       ? new FleetAuthLifecycleCeremonyHttpRoutes(options.lifecycleCeremonies)
       : undefined;
+  }
+
+  private matchesAdminToken(request: IncomingMessage): boolean {
+    const token = this.adminToken;
+    if (!token) return false;
+    return hasBearerToken(request, token) || hasCookieValue(request, 'psfn_token', token);
   }
 
   matches(method: string | undefined, path: string): boolean {
@@ -452,6 +463,21 @@ export class FleetAuthHttpRoutes {
         await this.handleFleetApprovals(request, response, url);
         return;
       }
+      if (this.lifecycleCeremonyRoutes?.matches(request.method, url.pathname)
+        && this.matchesAdminToken(request)) {
+        // The audited ADMIN_TOKEN operator approves ceremonies without an SSO
+        // session. It is not CSRF-able: the bearer is never ambient and the
+        // psfn_token cookie is HttpOnly SameSite=Strict; the service still
+        // requires the exact canonical Origin (psfn-framework-ja7n0).
+        await this.lifecycleCeremonyRoutes.handle({
+          request,
+          response,
+          path: url.pathname,
+          approver: { kind: 'admin_token_operator' },
+          requestOrigin: mutationOrigin(request),
+        });
+        return;
+      }
       const token = readSessionCookie(request);
       if (!token) {
         throw new FleetAuthBrokerError('invalid_session', 401, 'Session is invalid or expired');
@@ -484,8 +510,7 @@ export class FleetAuthHttpRoutes {
           request,
           response,
           path: url.pathname,
-          token,
-          csrfToken,
+          approver: { kind: 'session', token },
           requestOrigin: mutationOrigin(request),
         });
         return;

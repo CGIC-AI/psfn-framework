@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg';
 import {
   denyLifecycleMutation as deny,
   mergeLifecycleBumps as bumps,
+  requireLifecyclePrincipalActorId,
   requireOneLifecycleRow as one,
   type PreparedLifecycleMutation,
 } from './authority-lifecycle-mutation-contract.js';
@@ -47,6 +48,36 @@ async function assertCompanionAdministrator(
     && (row.lifecycle === 'active'
       || (allowSuspendedOwner && row.role === 'owner' && row.lifecycle === 'suspended')));
   if (!allowed) deny('actor_not_companion_administrator');
+}
+
+/**
+ * The approving authority of a ceremony. A principal must hold the companion
+ * role; the audited ADMIN_TOKEN operator is the deployment operator, whose
+ * exact door audit the store has already locked and validated for this
+ * decision (psfn-framework-ja7n0).
+ */
+async function assertApproverIsCompanionAdministrator(
+  client: PoolClient,
+  decision: VerifiedFleetAuthLifecycleDecision & { companionId: string },
+): Promise<void> {
+  if (decision.operator) return;
+  await assertCompanionAdministrator(
+    client,
+    requireLifecyclePrincipalActorId(decision, 'actor_not_companion_administrator'),
+    decision.companionId,
+  );
+}
+
+async function assertApproverIsCompanionOwner(
+  client: PoolClient,
+  decision: VerifiedFleetAuthLifecycleDecision & { companionId: string },
+): Promise<void> {
+  if (decision.operator) return;
+  await assertCompanionOwner(
+    client,
+    requireLifecyclePrincipalActorId(decision, 'actor_not_companion_owner'),
+    decision.companionId,
+  );
 }
 
 async function assertCompanionOwner(
@@ -106,7 +137,7 @@ async function prepareBindingActivation(
   decision: Extract<VerifiedFleetAuthLifecycleDecision, { action: 'binding.activate' }>,
 ): Promise<PreparedLifecycleMutation> {
   await assertCompanion(client, decision.companionId, 'active');
-  await assertCompanionAdministrator(client, decision.actor.principalId, decision.companionId);
+  await assertApproverIsCompanionAdministrator(client, decision);
   const provider = await client.query<{ state: string; restore_state: string }>(`
     SELECT state, restore_state
     FROM ${FLEET_AUTH_SCHEMA_NAME}.provider_subjects
@@ -180,12 +211,12 @@ async function prepareRoleMutation(
   decision: Extract<VerifiedFleetAuthLifecycleDecision, { action: `role.${string}` }>,
 ): Promise<PreparedLifecycleMutation> {
   await assertCompanion(client, decision.companionId, 'active');
-  await assertCompanionAdministrator(client, decision.actor.principalId, decision.companionId);
+  await assertApproverIsCompanionAdministrator(client, decision);
   if ((decision.action === 'role.grant' && decision.role === 'owner')
     || (decision.action !== 'role.grant'
       && (decision.currentRole === 'owner'
         || (decision.action === 'role.change' && decision.role === 'owner')))) {
-    await assertCompanionOwner(client, decision.actor.principalId, decision.companionId);
+    await assertApproverIsCompanionOwner(client, decision);
   }
   const targetId = decision.target.principalId;
   const binding = await client.query<{ present: boolean }>(`
@@ -317,7 +348,11 @@ async function prepareExactBindingMutation(
   >,
 ): Promise<PreparedLifecycleMutation> {
   await assertCompanion(client, decision.companionId, 'active');
-  await assertCompanionAdministrator(client, decision.actor.principalId, decision.companionId);
+  await assertCompanionAdministrator(
+    client,
+    requireLifecyclePrincipalActorId(decision, 'actor_not_companion_administrator'),
+    decision.companionId,
+  );
   await lockBinding(client, decision);
   const revoke = decision.action === 'contact.unlink';
   if (revoke) {
@@ -379,7 +414,11 @@ async function prepareContactMutation(
   >,
 ): Promise<PreparedLifecycleMutation> {
   await assertCompanion(client, decision.companionId, 'active');
-  await assertCompanionAdministrator(client, decision.actor.principalId, decision.companionId);
+  await assertCompanionAdministrator(
+    client,
+    requireLifecyclePrincipalActorId(decision, 'actor_not_companion_administrator'),
+    decision.companionId,
+  );
   const sourceContact = decision.action === 'contact.merge'
     ? decision.sourceContactId
     : decision.contactId;
@@ -463,7 +502,7 @@ async function prepareCompanionMutation(
   const companion = await assertCompanion(client, decision.companionId, expected);
   await assertCompanionAdministrator(
     client,
-    decision.actor.principalId,
+    requireLifecyclePrincipalActorId(decision, 'actor_not_companion_administrator'),
     decision.companionId,
     decision.action === 'companion.readd',
   );

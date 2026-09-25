@@ -308,6 +308,13 @@
       "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
     },
     {
+      "file": "src/persistence/postgres/fleet-auth/authority-lifecycle-operator-approval.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 1500,
+      "baselineSource": "measured",
+      "note": "psfn-framework-ja7n0: ADMIN_TOKEN operator approval of binding, provider-link and role ceremonies against the real containerized PostgreSQL harness - the subject's own session-initiated proof is required, the approval audit row binds exactly one decision, and stale or foreign approvals fail closed. Focused local full-file wall baseline was about 1.4s on 2026-09-25 with a warm harness slot; 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
+    },
+    {
       "file": "src/persistence/postgres/fleet-auth/authorization-context-store.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": null,

@@ -1414,6 +1414,8 @@ export class SubstrateAgent {
   private async trySteerActiveRun(message: SubstrateMessage): Promise<boolean> {
     const authorContext = await this.promptContextBuilder.resolveAuthorContext(message);
     if (!this.turnQueueIngress.canQueueIntoActiveOrdinaryRun()) return false;
+    // A steer joins only a run of its own conversation (psfn-framework-o5wf5).
+    if (this.turnSupportRuntime.getActiveTurnSessionIdentity()?.sourceChannelId !== message.channelId) return false;
     const turnSessionIdentity = this.requireActiveTurnSessionIdentity();
     this.turnSupportRuntime.recordUserMessage(
       message,
@@ -1773,7 +1775,7 @@ export class SubstrateAgent {
     const runTurn = (): Promise<AgentResponse> => this.turnRunReservation.runShared(
       { kind: 'ordinary-turn', sourceId: message.id },
       () => {
-        this.turnQueueIngress.enqueuePendingInternalFollowUpsForOrdinaryRun();
+        this.turnQueueIngress.enqueuePendingInternalFollowUpsForOrdinaryRun(message.channelId);
         return this.handleMessageUnderReservation(
           message,
           deliveryLifecycle,

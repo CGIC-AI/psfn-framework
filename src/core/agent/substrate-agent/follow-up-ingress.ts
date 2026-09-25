@@ -59,7 +59,10 @@ export class FollowUpIngressRouter {
       try {
         if (!deferredFromExclusive && await this.tryQueueFollowUpOnActiveOrdinaryRun(message)) return;
         if (message.authorId === INTENTION_FOLLOW_UP_AUTHOR_ID) {
-          this.deps.turnQueueIngress.deferInternalFollowUp(this.createInternalWhisperMessage(message));
+          this.deps.turnQueueIngress.deferInternalFollowUp(
+            this.createInternalWhisperMessage(message),
+            message.channelId,
+          );
           return;
         }
         await slot.run(message);
@@ -118,11 +121,21 @@ export class FollowUpIngressRouter {
     };
   }
 
+  /**
+   * Whether the active ordinary run serves `channelId` (psfn-framework-o5wf5).
+   * A follow-up joins a run only in its own conversation: a private note or
+   * review formed for one room is never injected into another room's run.
+   */
+  private activeRunServesChannel(channelId: string): boolean {
+    return this.deps.turnQueueIngress.canQueueIntoActiveOrdinaryRun()
+      && this.deps.turnSupportRuntime.getActiveTurnSessionIdentity()?.sourceChannelId === channelId;
+  }
+
   private async tryQueueFollowUpOnActiveOrdinaryRun(
     message: SubstrateMessage,
   ): Promise<boolean> {
+    if (!this.activeRunServesChannel(message.channelId)) return false;
     if (message.authorId === INTENTION_FOLLOW_UP_AUTHOR_ID) {
-      if (!this.deps.turnQueueIngress.canQueueIntoActiveOrdinaryRun()) return false;
       this.deps.agent.followUp(this.createInternalWhisperMessage(message));
       log.debug('Queued follow-up', {
         channelId: message.channelId,
@@ -139,7 +152,7 @@ export class FollowUpIngressRouter {
     const authorContext: ResolvedAuthorContext | null = isSystemOriginated
       ? null
       : await this.deps.resolveAuthorContext(message);
-    if (!this.deps.turnQueueIngress.canQueueIntoActiveOrdinaryRun()) return false;
+    if (!this.activeRunServesChannel(message.channelId)) return false;
     const turnSessionIdentity = this.deps.requireActiveTurnSessionIdentity();
     if (isSystemOriginated) {
       this.deps.turnSupportRuntime.recordSystemMessage(

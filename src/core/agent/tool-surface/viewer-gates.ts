@@ -260,14 +260,13 @@ export const TOOL_VIEWER_GATE_DECISIONS: Readonly<Record<string, Readonly<Record
     status: na('publication status of this companion'),
   },
   subagent: {
-    spawn: write('subagent task'),
-    message: write('subagent task'),
-    wait: PERSONAL,
-    cancel: write('subagent task'),
-    // Task transcripts from runs spawned in other conversations.
-    status: PERSONAL,
-    discover: PERSONAL,
-    inspect: PERSONAL,
+    spawn: inTool('the worker runs at no more than the spawning viewer (viewer-ceiling)'),
+    message: inTool('the spawning conversation always sees its own workers; other conversations\' workers only where their transcript is readable (task-visibility)'),
+    wait: inTool('the spawning conversation always sees its own workers; other conversations\' workers only where their transcript is readable (task-visibility)'),
+    cancel: inTool('the spawning conversation always sees its own workers; other conversations\' workers only where their transcript is readable (task-visibility)'),
+    status: inTool('the spawning conversation always sees its own workers; other conversations\' workers only where their transcript is readable (task-visibility)'),
+    discover: inTool('the spawning conversation always sees its own workers; other conversations\' workers only where their transcript is readable (task-visibility)'),
+    inspect: inTool('the spawning conversation always sees its own workers; other conversations\' workers only where their transcript is readable (task-visibility)'),
   },
   vault: { write: write('vault note'), read: PERSONAL, search: PERSONAL, daily: write('vault daily note') },
   journal: {

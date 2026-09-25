@@ -9,6 +9,11 @@ import { textResult, textResultWithError } from '../../core/tools/results.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { buildSubagentWorkSpec } from './work-spec.js';
+import {
+  canViewerSeeSubagentTask,
+  partitionSubagentTaskViews,
+  requireVisibleSubagentTask,
+} from './task-visibility.js';
 
 type SubagentToolAction = 'spawn' | 'message' | 'wait' | 'cancel' | 'status' | 'discover' | 'inspect';
 
@@ -139,8 +144,10 @@ export function createSubagentTool(port: SubagentControlPort): SubstrateAgentToo
           }
 
           case 'message': {
+            const subagentId = normalizeRequiredText(params.subagent_id, 'subagent_id');
+            await requireVisibleSubagentTask(port, subagentId);
             const view = await port.message(
-              normalizeRequiredText(params.subagent_id, 'subagent_id'),
+              subagentId,
               normalizeRequiredText(params.message, 'message'),
             );
             return textResult(formatPayload({
@@ -153,7 +160,9 @@ export function createSubagentTool(port: SubagentControlPort): SubstrateAgentToo
           }
 
           case 'wait': {
-            const result = await port.wait(resolveWaitSubagentId(port, params.subagent_id));
+            const subagentId = resolveWaitSubagentId(port, params.subagent_id);
+            await requireVisibleSubagentTask(port, subagentId);
+            const result = await port.wait(subagentId);
             const payload = formatPayload({
               action,
               surface: 'subagent',
@@ -166,10 +175,9 @@ export function createSubagentTool(port: SubagentControlPort): SubstrateAgentToo
           }
 
           case 'cancel': {
-            const result = await port.cancel(
-              normalizeRequiredText(params.subagent_id, 'subagent_id'),
-              params.reason,
-            );
+            const subagentId = normalizeRequiredText(params.subagent_id, 'subagent_id');
+            await requireVisibleSubagentTask(port, subagentId);
+            const result = await port.cancel(subagentId, params.reason);
             return textResult(formatPayload({
               action,
               surface: 'subagent',
@@ -184,7 +192,7 @@ export function createSubagentTool(port: SubagentControlPort): SubstrateAgentToo
               const detail = port.getRuntimeTaskDetail(params.subagent_id, {
                 ...(typeof transcriptLimit === 'number' ? { transcriptLimit } : {}),
               });
-              if (!detail) {
+              if (!detail || !canViewerSeeSubagentTask(detail.view.task)) {
                 return textResultWithError(`Unknown automaton task "${params.subagent_id}".`, true);
               }
               return textResult(formatPayload({
@@ -195,27 +203,44 @@ export function createSubagentTool(port: SubagentControlPort): SubstrateAgentToo
               }));
             }
 
+            const snapshot = port.getRuntimeSnapshot({
+              ...(typeof params.task_limit === 'number' ? { taskLimit: params.task_limit } : {}),
+              ...(typeof transcriptLimit === 'number' ? { transcriptLimit } : {}),
+            });
+            const active = partitionSubagentTaskViews(snapshot.activeTasks);
+            const recent = partitionSubagentTaskViews(snapshot.recentTasks);
+            const withheld = active.withheldCount + recent.withheldCount;
             return textResult(formatPayload({
               action,
               surface: 'subagent',
               semantics: 'bounded_worker',
-              snapshot: port.getRuntimeSnapshot({
-                ...(typeof params.task_limit === 'number' ? { taskLimit: params.task_limit } : {}),
-                ...(typeof transcriptLimit === 'number' ? { transcriptLimit } : {}),
-              }),
+              snapshot: {
+                ...snapshot,
+                activeCount: snapshot.activeCount - active.withheldCount,
+                activeTasks: active.visible,
+                recentTasks: recent.visible,
+              },
+              ...(withheld > 0
+                ? { withheldByVisibility: withheld, withheldNote: 'Some automata tasks belong to other conversations.' }
+                : {}),
             }));
           }
 
           case 'discover': {
-            const tasks = await port.discover(
+            const discovered = await port.discover(
               normalizeRequiredText(params.task_query, 'task_query'),
               params.task_limit,
             );
+            const tasks = discovered.filter(task => canViewerSeeSubagentTask(task));
+            const withheld = discovered.length - tasks.length;
             return textResult(formatPayload({
               action,
               surface: 'subagent',
               semantics: 'durable_registry_discovery',
               tasks,
+              ...(withheld > 0
+                ? { withheldByVisibility: withheld, withheldNote: 'Some automata tasks belong to other conversations.' }
+                : {}),
             }));
           }
 
@@ -223,7 +248,7 @@ export function createSubagentTool(port: SubagentControlPort): SubstrateAgentToo
             const detail = await port.inspect(
               normalizeRequiredText(params.subagent_id, 'subagent_id'),
             );
-            if (!detail) {
+            if (!detail || !canViewerSeeSubagentTask(detail.task)) {
               return textResultWithError(`Unknown automaton task "${params.subagent_id}".`, true);
             }
             return textResult(formatPayload({
@@ -287,7 +312,8 @@ function resolveWaitSubagentId(port: SubagentControlPort, value: string | undefi
 
   const snapshot = port.getRuntimeSnapshot({ taskLimit: 2 });
   const candidates = new Set<string>();
-  for (const view of [...snapshot.activeTasks, ...snapshot.recentTasks]) {
+  const views = partitionSubagentTaskViews([...snapshot.activeTasks, ...snapshot.recentTasks]).visible;
+  for (const view of views) {
     const subagentId = view.task.subagentId.trim();
     if (subagentId) {
       candidates.add(subagentId);

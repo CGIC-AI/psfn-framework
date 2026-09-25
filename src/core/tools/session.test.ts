@@ -408,6 +408,111 @@ describe('session tool list/resume actions', () => {
   });
 });
 
+describe('own ICP sessions stay visible where they were before the gating train (pnktt regression guard)', () => {
+  // The companion's own companion-dm sessions must stay listed, resumable and
+  // searchable from its owner and trusted rooms exactly as before the k0sr0 /
+  // s6a6o / o5wf5 gating (284a2d82d): list/resume were ungated then, and
+  // transcript search already applied canViewerAccessSessionHit to each entry's
+  // stored visibility. Only public/stranger rooms now lose them.
+  const ICP_DM = 'companion-dm:aaaaaaaa-0000-4000-8000-00000000000a:bbbbbbbb-0000-4000-8000-00000000000b';
+  let dir: string;
+  let store: SessionStore;
+  let manager: SessionManager;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'psfn-session-icp-'));
+    store = new SessionStore(join(dir, 'sessions'));
+    // Transcript search reads the indexed projection; mirror appends into it.
+    const indexed: Array<{ messageId: number; channelId: string; role: 'user' | 'assistant' | 'system' | 'tool'; content: string; timestamp: number; channelVisibility?: string }> = [];
+    const append = store.append.bind(store);
+    store.append = ((entry: Parameters<SessionStore['append']>[0]) => {
+      const messageId = append(entry);
+      indexed.push({ messageId, channelId: entry.channelId, role: entry.role, content: entry.content, timestamp: entry.timestamp, channelVisibility: entry.channelVisibility });
+      return messageId;
+    }) as SessionStore['append'];
+    const transcriptSearch = {
+      searchByKeywords: async (query: string, limit = 10) => indexed
+        .filter(entry => entry.content.toLowerCase().includes(query.toLowerCase()))
+        .slice(0, limit)
+        .map(entry => ({ ...entry, score: 1, snippet: entry.content })),
+    };
+    manager = new SessionManager(store, makeConfig({ dataDir: dir }), undefined, undefined, fromAny(transcriptSearch));
+    // ICP entries are stored with both visibilities in live deployments:
+    // inbound sibling messages as invite_only, DM-flagged turns as private.
+    store.append({
+      channelId: ICP_DM,
+      role: 'user',
+      content: 'Sibling asks about the lighthouse ledger',
+      authorId: 'companion:bbbbbbbb',
+      authorName: 'Sibling',
+      timestamp: 5_000,
+      channelVisibility: 'invite_only',
+    });
+    store.append({
+      channelId: ICP_DM,
+      role: 'assistant',
+      content: 'Reply about the lighthouse ledger from the DM turn',
+      timestamp: 6_000,
+      channelVisibility: 'private',
+    });
+  });
+
+  afterEach(async () => {
+    await new Promise(resolve => setTimeout(resolve, 10));
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 10 });
+  });
+
+  function makeTool(): ReturnType<typeof createSessionTool> {
+    return createSessionTool({
+      manager,
+      llmProvider: fromPartial({ complete: vi.fn() }),
+      sessionsDir: join(dir, 'sessions'),
+      dataDir: dir,
+    });
+  }
+
+  const rooms = [
+    { room: 'owner DM', channelId: 'api:owner-console', trust: 'primary', privacy: 'private', seesPrivateEntries: true },
+    { room: 'trusted DM', channelId: 'api:trusted-friend', trust: 'trusted', privacy: 'private', seesPrivateEntries: false },
+    { room: 'trusted group', channelId: 'discord:guild:friends', trust: 'trusted', privacy: 'invite_only', seesPrivateEntries: false },
+  ] as const;
+
+  for (const room of rooms) {
+    it(`lists, resumes and searches the ICP session from the ${room.room}`, async () => {
+      const asRoom = <T,>(fn: () => Promise<T>) => runWithRequestContext({
+        callType: 'tool',
+        purpose: 'agent.turn.prompt',
+        channelId: room.channelId,
+        viewerTrustLevel: room.trust,
+        viewerChannelPrivacy: room.privacy,
+      }, fn);
+
+      const list = JSON.parse(toolText(await asRoom(() => makeTool().execute('icp-list', { action: 'list', limit: 10 })))) as {
+        sessions: Array<{ sessionId: string }>;
+      };
+      expect(list.sessions.map(session => session.sessionId)).toContain(ICP_DM);
+
+      const search = JSON.parse(toolText(await asRoom(() => makeTool().execute('icp-search', {
+        action: 'search', query: 'lighthouse ledger', summarize: false,
+      })))) as { hits: Array<{ channelId: string; snippet: string }> };
+      const icpHits = search.hits.filter(hit => hit.channelId === ICP_DM).map(hit => hit.snippet);
+      expect(icpHits.some(snippet => snippet.includes('Sibling asks'))).toBe(true);
+      expect(icpHits.some(snippet => snippet.includes('from the DM turn'))).toBe(room.seesPrivateEntries);
+
+      const resumed = await asRoom(() => makeTool().execute('icp-resume', { action: 'resume', sessionId: ICP_DM }));
+      expect((resumed.details as { isError?: boolean }).isError).not.toBe(true);
+    });
+  }
+
+  it('withholds the ICP session from a public/stranger room (expected)', async () => {
+    const list = JSON.parse(toolText(await runWithRequestContext({
+      callType: 'tool', purpose: 'agent.turn.prompt', channelId: 'api:stranger', viewerTrustLevel: 'public', viewerChannelPrivacy: 'private',
+    }, () => makeTool().execute('icp-list-public', { action: 'list', limit: 10 })))) as { sessions: Array<{ sessionId: string }>; gatedOutCount: number };
+    expect(list.sessions.map(session => session.sessionId)).not.toContain(ICP_DM);
+    expect(list.gatedOutCount).toBeGreaterThan(0);
+  });
+});
+
 describe('session tool channel visibility gate (k0sr0)', () => {
   const SIBLING_DM = 'companion-dm:aaaaaaaa-0000-4000-8000-00000000000a:bbbbbbbb-0000-4000-8000-00000000000b';
   const PUBLIC_CALLER = 'api:api-key-publiccaller:stranger-room';

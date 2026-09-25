@@ -74,6 +74,21 @@ interface JevDecisionSettings {
   timeoutMs: number;
   /** Upper bound on the serialized state plus questions (the API allows 32k tokens). */
   maxRequestChars: number;
+  /**
+   * Jev's per-token price and output bound. Every decision call is priced
+   * before dispatch at its worst case (request bytes as input tokens plus
+   * `maxOutputTokens`), so an aborted or timed-out call is never unknown cost.
+   * Null means unpriced: with an enabled model budget the gateway then refuses
+   * Jev calls (the site answers locally) rather than risk unknown spend.
+   */
+  pricing: JevDecisionPricing | null;
+}
+
+export interface JevDecisionPricing {
+  inputPer1MUsd: number;
+  outputPer1MUsd: number;
+  /** Worst-case output tokens one decision answer can bill. */
+  maxOutputTokens: number;
 }
 
 export interface DecisionBackendSettings {
@@ -84,12 +99,14 @@ export interface DecisionBackendSettings {
 }
 
 const DECISION_BACKEND_KEYS = ['mode', 'localQuestionMode', 'jev', 'sites'] as const;
-const JEV_KEYS = ['model', 'expectedSnapshot', 'timeoutMs', 'maxRequestChars'] as const;
+const JEV_KEYS = ['model', 'expectedSnapshot', 'timeoutMs', 'maxRequestChars', 'pricing'] as const;
+const JEV_PRICING_KEYS = ['inputPer1MUsd', 'outputPer1MUsd', 'maxOutputTokens'] as const;
 const SITE_KEYS = ['mode', 'enabled', 'threshold', 'topN', 'latencyBudgetMs', 'blendWeight'] as const;
 
 const DECISION_BACKEND_RANGES = {
   timeoutMs: { min: 50, max: 30_000 },
   maxRequestChars: { min: 1_000, max: 120_000 },
+  pricingMaxOutputTokens: { min: 1, max: 32_000 },
   topN: { min: 1, max: 500 },
   latencyBudgetMs: { min: 10, max: 30_000 },
 } as const;
@@ -108,6 +125,7 @@ export function createDefaultDecisionBackendSettings(): DecisionBackendSettings 
       expectedSnapshot: null,
       timeoutMs: 1_500,
       maxRequestChars: 96_000,
+      pricing: null,
     },
     sites: {},
   };
@@ -161,6 +179,29 @@ function normalizeJevSettings(value: unknown, fieldPath: string): JevDecisionSet
       value.maxRequestChars,
       `${fieldPath}.maxRequestChars`,
       DECISION_BACKEND_RANGES.maxRequestChars,
+    ),
+    pricing: normalizeJevPricing(value.pricing, `${fieldPath}.pricing`),
+  };
+}
+
+function expectRate(value: unknown, fieldPath: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    fail(fieldPath, 'expected a finite USD rate per million tokens >= 0');
+  }
+  return value;
+}
+
+function normalizeJevPricing(value: unknown, fieldPath: string): JevDecisionPricing | null {
+  if (value === undefined || value === null) return null;
+  if (!isRecord(value)) fail(fieldPath, 'expected object or null');
+  assertNoUnknownKeys(value, JEV_PRICING_KEYS, fieldPath, { errorPrefix: 'Invalid settings' });
+  return {
+    inputPer1MUsd: expectRate(value.inputPer1MUsd, `${fieldPath}.inputPer1MUsd`),
+    outputPer1MUsd: expectRate(value.outputPer1MUsd, `${fieldPath}.outputPer1MUsd`),
+    maxOutputTokens: expectInteger(
+      value.maxOutputTokens,
+      `${fieldPath}.maxOutputTokens`,
+      DECISION_BACKEND_RANGES.pricingMaxOutputTokens,
     ),
   };
 }

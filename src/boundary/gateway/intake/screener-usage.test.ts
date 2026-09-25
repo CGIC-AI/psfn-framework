@@ -42,6 +42,7 @@ function attempt(overrides: Partial<ScreenerAttemptUsage> = {}): ScreenerAttempt
     outputTokens: 1_000_000,
     cacheReadTokens: 0,
     cacheWriteTokens: 0,
+    worstCaseTokens: { input: 40_000, output: 1_200 },
     ...overrides,
   };
 }
@@ -103,6 +104,20 @@ describe('intake screener usage ledger (1fyyi)', () => {
     });
     expect(rows[1]).toMatchObject({ status: 'success', estimatedCostUsd: 0, costSource: 'none', attempt: 2 });
     expect(rows[0]?.logicalCallId).toBe(rows[1]?.logicalCallId);
+  });
+
+  it('charges a timed-out dispatch with no reported usage its request bound', async () => {
+    const { ledger, rows } = ledgerFor(registryConfig({ inputPer1MUsd: 0.5, outputPer1MUsd: 2 }));
+    ledger('l3', CANDIDATE)?.(attempt({
+      status: 'failure', errorCode: 'timeout', inputTokens: 0, outputTokens: 0,
+    }));
+    await vi.waitFor(() => expect(rows).toHaveLength(1));
+    expect(rows[0]).toMatchObject({
+      status: 'failure',
+      errorCode: 'timeout',
+      costSource: 'estimate',
+      estimatedCostUsd: ((40_000 * 0.5) + (1_200 * 2)) / 1_000_000,
+    });
   });
 
   it('never writes an unpriced row that would block budgeted dispatch', async () => {

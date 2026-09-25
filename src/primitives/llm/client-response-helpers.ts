@@ -12,6 +12,11 @@ import {
   type ResolvedCorrelationMetadata,
 } from './correlation.js';
 import type { RoutingCandidate } from './routing.js';
+import { classifyLLMError } from './error-classify.js';
+import {
+  estimateConservativeModelUsageCostUsd,
+  type ModelUsageCostRates,
+} from '../../shared/telemetry/model-usage-accounting.js';
 
 const PROVIDER_RESPONSE_PREFIX_ARTIFACTS = [
   '<｜begin▁of▁sentence｜>',
@@ -703,4 +708,30 @@ export function inferCallType(
   channelId?: string,
 ) {
   return inferCorrelationCallType(purpose, channelId);
+}
+
+/**
+ * An aborted or timed-out attempt reports no usage, yet the provider may have
+ * billed it. When the request is bounded (estimated input tokens, the
+ * candidate's output cap) and the model is priced, charge that worst case so
+ * the row is a conservative known cost; provider errors with no usage stay $0
+ * and unpriced models stay unknown (fail closed at the budget gate).
+ */
+export function resolveAbortedAttemptWorstCaseUsd(input: {
+  status: 'success' | 'failure';
+  error: Error | undefined;
+  reportedTokens: number;
+  worstCaseTokens: { input: number; output: number } | undefined;
+  rates: ModelUsageCostRates | undefined;
+}): number | undefined {
+  if (input.status !== 'failure' || !input.error || !input.worstCaseTokens || !input.rates) return undefined;
+  if (input.reportedTokens > 0) return undefined;
+  const category = classifyLLMError(input.error).category;
+  if (category !== 'abort' && category !== 'timeout') return undefined;
+  return estimateConservativeModelUsageCostUsd({
+    inputTokens: Math.max(0, Math.ceil(input.worstCaseTokens.input)),
+    outputTokens: Math.max(0, Math.ceil(input.worstCaseTokens.output)),
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+  }, input.rates);
 }

@@ -115,6 +115,12 @@ export interface ScreenerAttemptUsage {
   cacheReadTokens: number;
   cacheWriteTokens: number;
   errorCode?: 'timeout' | 'provider_error';
+  /**
+   * The dispatch's request bound: UTF-8 bytes of the prompt text as input
+   * tokens (a byte-level tokenizer never emits more) plus the completion cap.
+   * The ledger charges it when a timed-out dispatch reports no usage.
+   */
+  worstCaseTokens: { input: number; output: number };
 }
 
 export interface ValidatedToolLessScreenerCallInput<T>
@@ -486,7 +492,17 @@ function reportScreenerAttempt(
 ): void {
   if (!input.onAttempt) return;
   const usage = observed.value;
+  const promptText = typeof input.userMessage === 'string'
+    ? input.userMessage
+    : input.userMessage.map(part => (part.type === 'text' ? part.text : part.image_url.url)).join('');
+  const outputCap = typeof input.model === 'string'
+    ? input.maxOutputTokens ?? 0
+    : Math.min(input.model.maxTokens, input.maxOutputTokens ?? input.model.maxTokens);
   input.onAttempt({
+    worstCaseTokens: {
+      input: Buffer.byteLength(input.systemPrompt, 'utf8') + Buffer.byteLength(promptText, 'utf8'),
+      output: outputCap,
+    },
     status,
     startedAtMs,
     completedAtMs: Date.now(),

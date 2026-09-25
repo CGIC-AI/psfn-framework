@@ -74,6 +74,7 @@ import { classifyLLMError } from './error-classify.js';
 import {
   assertProviderCompletionStopReason,
   assertUsableProviderResponse,
+  resolveAbortedAttemptWorstCaseUsd,
   extractCompletionToolCalls,
   normalizeContent,
   normalizeLLMUsageDetails,
@@ -622,6 +623,8 @@ export class LLMClient {
       error?: Error;
       providerObservability?: LLMProviderObservability;
       metadata?: Record<string, unknown>;
+      /** Request bound charged when an aborted/timed-out attempt reports no usage. */
+      worstCaseTokens?: { input: number; output: number };
     },
   ): Promise<void> {
     const companionPrivate = correlation?.telemetryVisibility === 'companion_private';
@@ -690,6 +693,14 @@ export class LLMClient {
       usageDetails?.costEvidenceConflict,
     );
     const providerCost = providerCostReconciliation.providerCost;
+    const abortedWorstCaseUsd = resolveAbortedAttemptWorstCaseUsd({
+      status: options.status,
+      error: options.error,
+      reportedTokens: (usageDetails?.input ?? inputTokens) + (usageDetails?.output ?? outputTokens)
+        + (usageDetails?.cacheRead ?? 0) + (usageDetails?.cacheWrite ?? 0),
+      worstCaseTokens: options.worstCaseTokens,
+      rates: accountingRates,
+    });
     const accounting = reconcileModelUsageAccounting({
       usage: {
         inputTokens: usageDetails?.input ?? inputTokens,
@@ -701,7 +712,9 @@ export class LLMClient {
           : {}),
       },
       ...(providerCost ? { providerCost } : {}),
-      ...(accountingRates ? { estimatedRates: accountingRates } : {}),
+      ...(abortedWorstCaseUsd !== undefined
+        ? { estimatedCost: { total: abortedWorstCaseUsd, currency: 'USD' } }
+        : (accountingRates ? { estimatedRates: accountingRates } : {})),
     });
     const metadata = {
       ...(providerResponse ? { providerResponse } : {}),
@@ -1008,7 +1021,10 @@ export class LLMClient {
                     record.outputTokens,
                     correlation,
                     record.usageDetails,
-                    record.options,
+                    {
+                      ...record.options,
+                      worstCaseTokens: { input: accountingInputTokens, output: candidateTarget.maxTokens },
+                    },
                   ),
                   throwIfAborted: () => throwIfTransportAborted(transportSignal),
                 });
@@ -1095,6 +1111,7 @@ export class LLMClient {
     }
     this.assertAutonomousCallAccountable(routingPurpose, correlation, Boolean(options.workSpec));
     const estimatedInputTokens = this.resolveEstimatedBudgetInputTokens(piContext, correlation);
+    const worstCaseInputTokens = estimatedInputTokens ?? this.estimateBudgetInputTokens(piContext);
     const modelHint = mergeModelHints(context.modelHint, options.modelHint);
     const externalAccounting = normalizeLLMCallAccountingContext(context.accounting);
     const logicalCallId = externalAccounting?.logicalCallId
@@ -1224,6 +1241,7 @@ export class LLMClient {
                 settlement: 'unknown',
                 error: err,
                 providerObservability,
+                worstCaseTokens: { input: worstCaseInputTokens, output: candidateTarget.maxTokens },
                 metadata: { completionPurpose: purpose, routingPurpose, emptyArgsRetries },
               },
             );
@@ -1326,6 +1344,7 @@ export class LLMClient {
                 stopReason: response.stopReason,
                 error: err,
                 providerObservability,
+                worstCaseTokens: { input: worstCaseInputTokens, output: candidateTarget.maxTokens },
                 metadata: {
                   completionPurpose: purpose,
                   routingPurpose,

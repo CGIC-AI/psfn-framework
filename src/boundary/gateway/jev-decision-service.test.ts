@@ -156,3 +156,51 @@ describe('createGatewayJevDecisionService', () => {
     expect(usage[0]).not.toHaveProperty('estimatedCostUsd');
   });
 });
+
+describe('Jev decision pricing (worst case before dispatch)', () => {
+  const PRICING = { inputPer1MUsd: 0.5, outputPer1MUsd: 2, maxOutputTokens: 400 };
+  const pricedConfig = (budgetEnabled = true) => makeConfig({
+    decisionBackend: { ...settings('jev'), jev: { ...settings('jev').jev, timeoutMs: 50, pricing: PRICING } },
+    modelRegistry: {
+      schemaVersion: 1,
+      models: [],
+      budgetPolicy: { enabled: budgetEnabled, dailyUsdLimit: 1, monthlyUsdLimit: 1, currency: 'USD' },
+    },
+  });
+  const hanging = () => vi.fn<DecisionsFetch>((_url, init) => new Promise((_resolve, reject) => {
+    init.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+  }));
+
+  it('charges an aborted call its worst-case estimate instead of unknown cost', async () => {
+    const { svc, usage } = service(pricedConfig(), hanging());
+    await expect(svc.decide(INPUT)).resolves.toMatchObject({ ok: false, reason: 'aborted' });
+    expect(usage).toHaveLength(1);
+    const row = usage[0]!;
+    expect(row).toMatchObject({ status: 'failure', costSource: 'estimate' });
+    // Worst case: request bytes as input tokens at $0.5/M plus 400 output tokens at $2/M.
+    expect(row.estimatedCostUsd).toBeGreaterThan((400 / 1_000_000) * 2);
+    expect(row.estimatedCostUsd).toBeLessThan(0.01);
+  });
+
+  it('charges a completed call its reported tokens and keeps the provider cost', async () => {
+    const { svc, usage } = service(pricedConfig());
+    await svc.decide(INPUT);
+    expect(usage[0]).toMatchObject({
+      status: 'success',
+      costSource: 'provider',
+      providerCostUsd: 0.000019992,
+      estimatedCostUsd: expect.closeTo(((476 * 0.5) + (70 * 2)) / 1_000_000, 9),
+    });
+  });
+
+  it('refuses an unpriced Jev call before dispatch while the budget is enforced', async () => {
+    const config = pricedConfig();
+    const unpriced = makeConfig({
+      ...config,
+      decisionBackend: { ...config.decisionBackend!, jev: { ...config.decisionBackend!.jev, pricing: null } },
+    });
+    const { svc, fetch } = service(unpriced);
+    await expect(svc.decide(INPUT)).rejects.toMatchObject({ reasonCode: 'jev_pricing_unavailable' });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});

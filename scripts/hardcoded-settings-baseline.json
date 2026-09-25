@@ -11975,6 +11975,13 @@
     },
     {
       "file": "src/system/config/decision-backend-config.ts",
+      "name": "DECISION_BACKEND_RANGES.pricingMaxOutputTokens",
+      "value": "{ min: 1, max: 32_000 }",
+      "form": "object-member",
+      "note": "Canonical owner-file/schema metadata for settings.json decisionBackend.jev.pricing.maxOutputTokens (worst-case Jev pricing); validation bounds for the owned JSON contract, not a parallel runtime override."
+    },
+    {
+      "file": "src/system/config/decision-backend-config.ts",
       "name": "DECISION_BACKEND_RANGES.timeoutMs",
       "value": "{ min: 50, max: 30_000 }",
       "form": "object-member",

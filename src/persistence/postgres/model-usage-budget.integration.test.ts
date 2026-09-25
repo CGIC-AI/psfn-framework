@@ -10,6 +10,8 @@ import {
 import { ModelBudgetController } from '../../primitives/llm/model-budget.js';
 import { createPostgresPool } from '../postgres.js';
 import { PostgresModelUsageStore } from './model-usage-store.js';
+import { createGatewayJevDecisionService } from '../../boundary/gateway/jev-decision-service.js';
+import { createDefaultDecisionBackendSettings } from '../../system/config/decision-backend-config.js';
 
 const TEST_IMAGE = 'postgres:16.8-alpine';
 const INTEGRATION_TIMEOUT_MS = 120_000;
@@ -157,6 +159,71 @@ describe('Postgres model-usage budget projection', () => {
         errorCode: 'aborted',
       });
       expect((await store.getModelBudgetSpend(nowMs, undefined, [])).dailyUnknownCostAttempts).toBe(1);
+    } finally {
+      await pool.end();
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('charges an aborted Jev decision its worst case and keeps later chat admitted', async () => {
+    if (!harness) throw new Error('Postgres test harness is unavailable');
+    const { databaseUrl } = await harness.createDatabase();
+    const pool = createPostgresPool(databaseUrl, {
+      applicationName: 'model-usage-jev-worst-case-budget',
+      allowExitOnIdle: true,
+      max: 1,
+    });
+    const dataDir = mkdtempSync(join(tmpdir(), 'model-usage-jev-worst-case-budget-'));
+    const config = makeBudgetConfig(dataDir);
+    config.decisionBackend = {
+      ...createDefaultDecisionBackendSettings(),
+      mode: 'jev',
+      jev: {
+        ...createDefaultDecisionBackendSettings().jev,
+        timeoutMs: 50,
+        pricing: { inputPer1MUsd: 0.5, outputPer1MUsd: 2, maxOutputTokens: 400 },
+      },
+    };
+    config.openRouterApiBaseUrl = 'https://openrouter.test/api/v1';
+    config.credentialVault = { resolveOptional: () => 'sk-or-test-key' } as unknown as SubstrateConfig['credentialVault'];
+    config.openRouterApiKeyRef = { source: 'env', envName: 'OPENROUTER_API_KEY' } as SubstrateConfig['openRouterApiKeyRef'];
+    try {
+      const store = new PostgresModelUsageStore(pool, { companionId: 'companion-a' });
+      const jev = createGatewayJevDecisionService({
+        config,
+        requireCompanionAttribution: false,
+        usageRecorder: store,
+        fetch: (_url, init) => new Promise((_resolve, reject) => {
+          init.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+        }),
+      });
+      await expect(jev.decide({
+        siteId: 'memory.rerank',
+        state: { query: 'what did we plan for the weekend?', candidates: ['a hike', 'a movie'] },
+        questions: { relevant: { type: 'noul', instructions: 'Is a candidate relevant to the query?' } },
+        companionId: 'companion-a',
+      })).resolves.toMatchObject({ ok: false, reason: 'aborted' });
+
+      const nowMs = Date.now();
+      const spend = await store.getModelBudgetSpend(nowMs, undefined, []);
+      expect(spend.dailyUnknownCostAttempts).toBe(0);
+      expect(spend.dailyEstimatedCostUsd).toBeGreaterThan((400 / 1_000_000) * 2);
+
+      const preflight = await new ModelBudgetController(config, store).evaluatePreflight({
+        candidate: {
+          provider: MODEL_ENTRY.identity.provider,
+          model: MODEL_ENTRY.identity.model,
+          maxTokens: MODEL_ENTRY.capabilities.maxOutputTokens,
+          slotKey: MODEL_ENTRY.id,
+        },
+        purpose: 'background',
+        service: 'chat',
+        process: 'regression.after-aborted-decision',
+        estimatedInputTokens: 1,
+        estimatedOutputTokens: 1,
+        nowMs,
+      });
+      expect(preflight.allowed).toBe(true);
     } finally {
       await pool.end();
       rmSync(dataDir, { recursive: true, force: true });

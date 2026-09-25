@@ -16,7 +16,9 @@
 import { randomUUID } from 'node:crypto';
 import { DEFAULT_CONNECTIVITY_COOLDOWN_MS, DEFAULT_RATE_LIMIT_COOLDOWN_MS } from '../../primitives/llm/fallback.js';
 import { resolveConfiguredProviderCredential } from '../../primitives/llm/provider-runtime.js';
+import { jevDecisionRowCost, jevWorstCaseCostUsd } from './jev-decision-pricing.js';
 import {
+  buildJevDecisionsRequestBody,
   requestJevDecision,
   type DecisionsFetch,
   type JevTransportResult,
@@ -83,10 +85,6 @@ function resolveFetch(fetch: DecisionsFetch | undefined): DecisionsFetch {
   return globalThis.fetch as unknown as DecisionsFetch;
 }
 
-function isProviderRefusal(httpStatus: number | undefined): boolean {
-  return httpStatus !== undefined && (httpStatus < 200 || httpStatus >= 300);
-}
-
 export function createGatewayJevDecisionService(
   options: GatewayJevDecisionServiceOptions,
 ): GatewayJevDecisionService {
@@ -109,6 +107,11 @@ export function createGatewayJevDecisionService(
     if (options.requireCompanionAttribution && !input.companionId?.trim()) {
       throw new JevDecisionRefusedError('missing_companion_attribution');
     }
+    // An unpriced call could only be ledgered as unknown cost, which an
+    // enforced budget treats as blocking; refuse it so the site answers locally.
+    if (!settings.jev.pricing && options.config.modelRegistry?.budgetPolicy?.enabled === true) {
+      throw new JevDecisionRefusedError('jev_pricing_unavailable');
+    }
     return settings;
   }
 
@@ -117,6 +120,7 @@ export function createGatewayJevDecisionService(
     requestedModel: string,
     startedAtMs: number,
     result: JevTransportResult,
+    cost: ReturnType<typeof jevDecisionRowCost>,
   ): Promise<void> {
     if (!options.usageRecorder) return;
     const completedAtMs = now();
@@ -146,13 +150,8 @@ export function createGatewayJevDecisionService(
         requestedModel,
         inputTokens: result.usage?.inputTokens ?? 0,
         outputTokens: result.usage?.outputTokens ?? 0,
-        ...(outcome.ok && outcome.costUsd !== undefined
-          ? { providerCostUsd: outcome.costUsd, costSource: 'provider' as const }
-          : { costSource: 'none' as const }),
-        // 21c4v: an HTTP error answer generated nothing and is known $0. An
-        // abort, network failure or unpriced answer stays unknown cost, which
-        // the budget gate treats fail closed.
-        ...(!outcome.ok && isProviderRefusal(result.httpStatus) ? { estimatedCostUsd: 0 } : {}),
+        ...(outcome.ok && outcome.costUsd !== undefined ? { providerCostUsd: outcome.costUsd } : {}),
+        ...cost,
         ...(outcome.ok ? {} : {
           errorCode: result.httpStatus !== undefined ? `http_${result.httpStatus}` : outcome.reason,
         }),
@@ -177,6 +176,14 @@ export function createGatewayJevDecisionService(
       const apiBaseUrl = options.config.openRouterApiBaseUrl?.trim();
       if (!apiKey || !apiBaseUrl) throw new JevDecisionRefusedError('openrouter_credentials_unavailable');
 
+      // Priced before dispatch: an abort or timeout is charged this worst case.
+      const pricing = settings.jev.pricing;
+      const worstCaseUsd = pricing
+        ? jevWorstCaseCostUsd(
+          pricing,
+          buildJevDecisionsRequestBody(settings.jev.model, input.state, input.questions),
+        )
+        : undefined;
       const controller = new AbortController();
       const abortFromCaller = (): void => controller.abort();
       signal?.addEventListener('abort', abortFromCaller, { once: true });
@@ -211,7 +218,13 @@ export function createGatewayJevDecisionService(
           ...(status !== undefined ? { httpStatus: status } : {}),
         });
       }
-      await recordUsage(input, settings.jev.model, startedAtMs, result);
+      await recordUsage(
+        input,
+        settings.jev.model,
+        startedAtMs,
+        result,
+        jevDecisionRowCost({ pricing, worstCaseUsd, result }),
+      );
       return result.outcome;
     },
   };

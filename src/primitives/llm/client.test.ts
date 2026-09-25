@@ -4357,6 +4357,29 @@ describe('LLMClient model budget gates and usage metering', () => {
       expect(failed.errorMessage).not.toContain('contained no text');
     });
 
+    it('charges an aborted attempt on a priced model its worst case, never unknown', async () => {
+      const config = twoCandidateConfig();
+      config.modelRegistry!.models = config.modelRegistry!.models.map(entry => ({
+        ...entry,
+        cost: { inputPer1MUsd: 1, outputPer1MUsd: 4, cacheReadPer1MUsd: 0.1, cacheWritePer1MUsd: 1, currency: 'USD' },
+      }));
+      const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+      const client = new LLMClient(config, { usageRecorder });
+      mocks.completeSimple.mockResolvedValueOnce({
+        content: [],
+        model: 'primary-model',
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { total: 0 } },
+        stopReason: 'aborted',
+        errorMessage: 'Request was aborted',
+      });
+      await expect(client.complete(request, 'background', { disableRetry: true }))
+        .rejects.toMatchObject({ name: 'AbortError' });
+      const [failed] = usageRecorder.recordUsageEvent.mock.calls.map(call => call[0]);
+      // Output cap 1024 tokens at $4/M alone is ~$0.0041; the input bound adds more.
+      expect(failed.estimatedCost?.total).toBeGreaterThan(0.004);
+      expect(failed.costSource).toBe('estimate');
+    });
+
     it('reports a resolved abort as an abort, not an empty response, and does not fall back', async () => {
       const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
       const client = new LLMClient(twoCandidateConfig(), { usageRecorder });

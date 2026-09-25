@@ -21,6 +21,7 @@ function validSettings() {
       expectedSnapshot: 'typesafe/jev-1.13-20260917',
       timeoutMs: 1_200,
       maxRequestChars: 80_000,
+      pricing: { inputPer1MUsd: 0.04, outputPer1MUsd: 0.12, maxOutputTokens: 512 },
     },
     sites: {
       'participation.appraise': { mode: 'jev' },
@@ -57,6 +58,15 @@ describe('decisionBackend settings', () => {
     }, /dated snapshot of typesafe\/jev-1.13/],
     ['an unknown site id', { sites: { 'cogsec.blind_review': { mode: 'jev' } } }, /expected one of/],
     ['an unknown mode', { mode: 'remote' }, /expected one of local, jev, shadow/],
+    ['a negative Jev rate', {
+      jev: { ...validSettings().jev, pricing: { ...validSettings().jev.pricing, inputPer1MUsd: -1 } },
+    }, /inputPer1MUsd: expected a finite USD rate/],
+    ['an unknown Jev pricing key', {
+      jev: { ...validSettings().jev, pricing: { ...validSettings().jev.pricing, cachePer1MUsd: 1 } },
+    }, /cachePer1MUsd/],
+    ['a Jev output bound of zero', {
+      jev: { ...validSettings().jev, pricing: { ...validSettings().jev.pricing, maxOutputTokens: 0 } },
+    }, /maxOutputTokens/],
     ['an enabled site without its knobs', { sites: { 'room.ambiguity': { enabled: true } } }, /threshold: required/],
     ['an out-of-range threshold', { sites: { 'room.ambiguity': { enabled: true, threshold: 1.5 } } }, /0-1/],
     ['an unknown key', { extra: true }, /unknown keys: extra/],

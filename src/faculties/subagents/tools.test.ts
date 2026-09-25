@@ -1,4 +1,8 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, vi } from 'vitest';
+import { viewerContextIt } from '../../test-support/viewer-context-it.js';
+
+// Tool calls come from the owner's own conversation (3o6zu).
+const it = viewerContextIt();
 import { fromAny } from '@total-typescript/shoehorn';
 import { createSubagentTool } from './tools.js';
 import type { SubagentControlPort } from './port.js';

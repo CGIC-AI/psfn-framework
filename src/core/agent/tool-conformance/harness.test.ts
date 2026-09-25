@@ -3,6 +3,8 @@ import type { AgentTool, AgentToolResult } from '../../../boundary/pi-agent/inde
 import { runToolConformanceSweep } from './harness.js';
 import type { ToolProbeSpec, ActionProbeSpec } from './probe-registry.js';
 import { ToolConformanceHarnessError } from './types.js';
+import { withViewerReadGate } from '../tool-surface/viewer-read-gate.js';
+import { getRequestContext, runWithRequestContext } from '../../../primitives/llm/request-context.js';
 
 function okResult(text = 'ok'): AgentToolResult<Record<string, never>> {
   return { content: [{ type: 'text', text }], details: {} };
@@ -41,6 +43,32 @@ function sweep(
 }
 
 describe('tool conformance harness', () => {
+  it('probes viewer-gated reads as the owner whatever conversation triggered the sweep (3o6zu)', async () => {
+    const seen: unknown[] = [];
+    const contacts = withViewerReadGate(tool('contact', async () => {
+      seen.push(getRequestContext());
+      return okResult('contact records');
+    }, actionSchema));
+    // Triggered from a public room: the probe must still exercise the real read path.
+    const result = await runWithRequestContext({
+      callType: 'tool', purpose: 'agent.turn', channelId: 'api:public-room',
+      viewerTrustLevel: 'public', viewerChannelPrivacy: 'public', viewerMemorySubjectContactId: 'contact-stranger',
+      requestId: 'req-trigger',
+    }, async () => await sweep([contacts], { contact: { kind: 'read_only', action: 'list', args: { action: 'list' } } }));
+    expect(result.results.find(r => r.toolName === 'contact' && r.probeKind === 'read_only')).toMatchObject({ ok: true });
+    expect(seen.length).toBeGreaterThan(0);
+    for (const context of seen) {
+      expect(context).toMatchObject({
+        channelId: 'internal:tool-conformance',
+        viewerTrustLevel: 'primary',
+        viewerChannelPrivacy: 'private',
+        requesterProvenance: 'system',
+        requestId: 'req-trigger',
+      });
+      expect(context).not.toHaveProperty('viewerMemorySubjectContactId');
+    }
+  });
+
   it('records a passing read_only probe', async () => {
     const result = await sweep(
       [tool('reader', async () => okResult())],

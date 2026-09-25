@@ -128,6 +128,20 @@ describe('ParticipationAppraiser', () => {
     expect(recorder.contexts[0]!.systemPrompt).not.toContain('OPERATOR GUIDANCE');
   });
 
+  it('runs the inbound ICP appraisal on the non-preemptable appraisal lane (se807)', async () => {
+    const { provider, recorder } = recordingProvider(() =>
+      makeResponse('{"action":"reply","reasonCode":"x","confidence":0.8}'));
+    const appraiser = new ParticipationAppraiser({ llmProvider: provider, companionName: COMPANION_NAME });
+
+    await appraiser.appraise(makeCandidate({ participationSurface: 'companion_dm' }));
+
+    // The same companion's post-turn appraisal shares this lane class and a
+    // lane never preempts its own class, so its bookkeeping cannot abort the
+    // gate that decides whether the sibling gets an answer.
+    const options = recorder.options[0] as { workSpec?: { lane?: string } };
+    expect(options.workSpec?.lane).toBe('post_turn_appraisal');
+  });
+
   it('is tool-less and uses the background purpose', async () => {
     const { provider, recorder } = recordingProvider(() =>
       makeResponse('{"action":"ignore","reasonCode":"x","confidence":0.1}'));

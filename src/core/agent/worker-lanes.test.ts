@@ -78,8 +78,13 @@ describe('worker lanes', () => {
       callType: 'scheduled',
       channelId: 'internal:social-outreach:contact-1',
     })).toBe(FOREGROUND_CHAT_RUNTIME_CLASS);
-    // Concern formation must not be preempted away (vcq8v.5).
-    for (const originStage of ['intention.appraisal.post_turn', 'intention.concern_candidate_review']) {
+    // Concern formation must not be preempted away (vcq8v.5), nor may the
+    // participation appraisal that gates an inbound ICP reply (se807).
+    for (const originStage of [
+      'intention.appraisal.post_turn',
+      'intention.concern_candidate_review',
+      'participation.appraisal',
+    ]) {
       expect(resolveRuntimeLaneClassForModelCall({
         purpose: 'background',
         callType: 'background',

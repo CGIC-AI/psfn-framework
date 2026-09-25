@@ -10261,6 +10261,18 @@
       "value": "4"
     },
     {
+      "file": "src/primitives/llm/tokens.ts",
+      "name": "TOKEN_COUNT_CACHE_MIN_TEXT_UNITS",
+      "value": "256",
+      "note": "Code-owned memo threshold for the token-count cache (psfn-framework-z9rkr): below it hashing costs about as much as counting; affects only CPU, never a count."
+    },
+    {
+      "file": "src/primitives/llm/tokens.ts",
+      "name": "TOKEN_COUNT_CACHE_MAX_ENTRIES",
+      "value": "4096",
+      "note": "Memory guard bounding the process-wide token-count LRU (psfn-framework-z9rkr); covers a 36 h history window many times over and changes only CPU, never a count."
+    },
+    {
       "file": "src/primitives/llm/accounting-context.ts",
       "name": "MAX_LOGICAL_CALL_ID_LENGTH",
       "value": "512"

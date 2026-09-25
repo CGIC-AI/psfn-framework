@@ -682,6 +682,51 @@ describe('orientation context surface wiring', () => {
     }
   });
 
+  it('does not recount unchanged history entries on the next turn (z9rkr)', async () => {
+    const encoded: string[] = [];
+    tokenTestUtils.setTokenizerFactory(() => ({
+      encode: (text: string) => {
+        encoded.push(text);
+        return { length: text.length };
+      },
+    }));
+    try {
+      const entries: SessionEntry[] = Array.from({ length: 40 }, (_, index) => ({
+        id: index + 1,
+        channelId: 'api:main',
+        role: index % 2 === 0 ? 'user' as const : 'assistant' as const,
+        content: `History entry ${index + 1} ${'long context '.repeat(30)}`,
+        ...(index % 2 === 0
+          ? { authorId: 'u1', authorName: 'User' }
+          : { authorName: 'Companion' }),
+        timestamp: 1_700_000_000_000 + (index * 60_000),
+      }));
+      const assemble = async (history: SessionEntry[]) => await assembleSessionHistoryForContext({
+        entries: history,
+        channelVisibility: 'private',
+        renderGroupUserAttribution: false,
+        tokenBudget: 1_000_000,
+      });
+
+      await assemble(entries);
+      const firstTurnLongCounts = encoded.filter(text => text.length >= 256).length;
+      expect(firstTurnLongCounts).toBeGreaterThan(0);
+
+      encoded.length = 0;
+      await assemble(entries);
+      expect(encoded.filter(text => text.length >= 256)).toEqual([]);
+
+      // An edited entry is counted again; the rest are not.
+      encoded.length = 0;
+      const edited = entries.map(entry => entry.id === 7 ? { ...entry, content: `${entry.content} (edited)` } : entry);
+      await assemble(edited);
+      expect(encoded.filter(text => text.length >= 256)).toHaveLength(1);
+      expect(encoded.find(text => text.length >= 256)).toContain('(edited)');
+    } finally {
+      tokenTestUtils.resetTokenizerState();
+    }
+  });
+
   it('uses deterministic trimming across repaired and projected tails without summarization', async () => {
     tokenTestUtils.setTokenizerFactory(() => ({
       encode: (text: string) => ({ length: text.length }),

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { Tiktoken } from 'js-tiktoken/lite';
 import cl100kBase from 'js-tiktoken/ranks/cl100k_base';
 
@@ -9,14 +10,20 @@ const TOKENS_PER_MESSAGE_OVERHEAD = 4;
 const TOKENS_PER_NAME_OVERHEAD = 1;
 const TOKENS_REPLY_PRIMER = 2;
 // Byte-pair merging is quadratic in the length of one pre-tokenized piece, and
-// the cl100k pre-tokenizer keeps a whitespace-free letter run as one piece: a
-// 17,750-char runaway reply cost about 29.5 s of main-thread CPU on every turn
-// that counted its history (psfn-framework-jrki1). Runs longer than this are
+// the cl100k pre-tokenizer keeps a letter run as one piece: a 17,750-char
+// runaway reply cost about 29.5 s of main-thread CPU on every turn that
+// counted its history (psfn-framework-jrki1). Pieces longer than this are
 // encoded in slices of this many UTF-16 units, so the cost is linear
-// (measured sweet spot: ~0.02 ms per char). Ordinary prose never has a run
-// this long and is encoded exactly as before.
+// (measured sweet spot: ~0.02 ms per char). Text is only ever split at the
+// tokenizer's own piece boundaries, so any text without such a piece (prose,
+// code, JSON) counts exactly as an unsplit encode.
 const BPE_RUN_SLICE_UNITS = 128;
-const LONG_RUN_PATTERN = new RegExp(`\\s?\\S{${BPE_RUN_SLICE_UNITS + 1},}`, 'gu');
+const PRETOKENIZER_PATTERN = new RegExp(cl100kBase.pat_str, 'gu');
+// History is recounted every turn (psfn-framework-z9rkr): counts of texts at
+// least this long are memoized by content hash, process-wide, evicting the
+// least recently used beyond the bound (a memory guard, not a tuning knob).
+const TOKEN_COUNT_CACHE_MIN_TEXT_UNITS = 256;
+const TOKEN_COUNT_CACHE_MAX_ENTRIES = 4096;
 
 interface TokenizerLike {
   encode(text: string): { length: number };
@@ -31,6 +38,7 @@ export interface TokenCountMessage {
 let tokenizerFactory: () => TokenizerLike = () => new Tiktoken(cl100kBase);
 let cachedTokenizer: TokenizerLike | null = null;
 let tokenizerUnavailable = false;
+const tokenCountCache = new Map<string, number>();
 
 function estimateByChars(text: string): number {
   return Math.ceil(text.length / CHARS_PER_TOKEN_FALLBACK);
@@ -67,23 +75,44 @@ function encodeRunLength(tokenizer: TokenizerLike, run: string): number {
 }
 
 /**
- * Token length of `text`, encoding whitespace-free runs longer than
- * BPE_RUN_SLICE_UNITS in slices (a slice boundary may differ from the exact
- * count by about one token) and everything else unchanged.
+ * Token length of `text`. Text between pre-tokenizer pieces longer than
+ * BPE_RUN_SLICE_UNITS is encoded unchanged; each such piece is encoded in
+ * slices (a slice boundary may differ from the exact count by about one
+ * token).
  */
-function encodeLengthWithBoundedRuns(tokenizer: TokenizerLike, text: string): number {
+function encodeLengthWithBoundedPieces(tokenizer: TokenizerLike, text: string): number {
   if (text.length <= BPE_RUN_SLICE_UNITS) return tokenizer.encode(text).length;
   let total = 0;
   let cursor = 0;
-  for (const match of text.matchAll(LONG_RUN_PATTERN)) {
-    const runStart = match.index;
-    if (runStart > cursor) total += tokenizer.encode(text.slice(cursor, runStart)).length;
+  for (const match of text.matchAll(PRETOKENIZER_PATTERN)) {
+    if (match[0].length <= BPE_RUN_SLICE_UNITS) continue;
+    const pieceStart = match.index;
+    if (pieceStart > cursor) total += tokenizer.encode(text.slice(cursor, pieceStart)).length;
     total += encodeRunLength(tokenizer, match[0]);
-    cursor = runStart + match[0].length;
+    cursor = pieceStart + match[0].length;
   }
   if (cursor === 0) return tokenizer.encode(text).length;
   if (cursor < text.length) total += tokenizer.encode(text.slice(cursor)).length;
   return total;
+}
+
+function countWithCache(tokenizer: TokenizerLike, text: string): number {
+  if (text.length < TOKEN_COUNT_CACHE_MIN_TEXT_UNITS) return encodeLengthWithBoundedPieces(tokenizer, text);
+  const key = createHash('sha256').update(text).digest('base64');
+  const cached = tokenCountCache.get(key);
+  if (cached !== undefined) {
+    // Refresh recency: Map iteration order is insertion order.
+    tokenCountCache.delete(key);
+    tokenCountCache.set(key, cached);
+    return cached;
+  }
+  const count = encodeLengthWithBoundedPieces(tokenizer, text);
+  tokenCountCache.set(key, count);
+  if (tokenCountCache.size > TOKEN_COUNT_CACHE_MAX_ENTRIES) {
+    const oldest = tokenCountCache.keys().next();
+    if (!oldest.done) tokenCountCache.delete(oldest.value);
+  }
+  return count;
 }
 
 /**
@@ -96,7 +125,7 @@ export function countTokens(text: string): number {
   if (!tokenizer) return estimateByChars(text);
 
   try {
-    return encodeLengthWithBoundedRuns(tokenizer, text);
+    return countWithCache(tokenizer, text);
   } catch {
     tokenizerUnavailable = true;
     cachedTokenizer = null;
@@ -142,12 +171,20 @@ export function formatTokens(n: number): string {
 }
 
 export const __test = {
+  tokenCountCacheSize(): number {
+    return tokenCountCache.size;
+  },
+  tokenCountCacheBound(): number {
+    return TOKEN_COUNT_CACHE_MAX_ENTRIES;
+  },
   resetTokenizerState(): void {
+    tokenCountCache.clear();
     cachedTokenizer = null;
     tokenizerUnavailable = false;
     tokenizerFactory = () => new Tiktoken(cl100kBase);
   },
   setTokenizerFactory(factory: () => TokenizerLike): void {
+    tokenCountCache.clear();
     tokenizerFactory = factory;
     cachedTokenizer = null;
     tokenizerUnavailable = false;

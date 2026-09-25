@@ -118,10 +118,31 @@ describe('focus tools', () => {
       sourceChannelId: 'api:captured-owner',
     });
 
-    await expect(sessionReads.run(() => executeStartFocusAction(manager, {
+    await expect(sessionReads.run(() => runWithRequestContext({
+      callType: 'tool',
+      purpose: 'agent.turn',
+      channelId: 'api:captured-owner',
+      viewerTrustLevel: 'primary',
+      viewerChannelPrivacy: 'private',
+    }, () => executeStartFocusAction(manager, {
       scope: 'Probe an explicitly selected focus target',
       channelId: 'api:other-session',
-    }))).rejects.toThrow('cannot apply mutable active-context resolution');
+    })))).rejects.toThrow('cannot apply mutable active-context resolution');
+  });
+
+  it('refuses an explicit focus target the conversation cannot read (k0sr0)', async () => {
+    const siblingDm = 'companion-dm:aaaaaaaa-0000-4000-8000-00000000000a:bbbbbbbb-0000-4000-8000-00000000000b';
+    const result = await runWithRequestContext({
+      callType: 'tool',
+      purpose: 'agent.turn',
+      channelId: 'api:api-key-publiccaller:stranger-room',
+      viewerTrustLevel: 'public',
+      viewerChannelPrivacy: 'private',
+    }, () => executeCompleteFocusAction(manager, fromAny({ complete: vi.fn() }), {
+      channelId: siblingDm,
+    }));
+    expect((result.details as { isError?: boolean }).isError).toBe(true);
+    expect((result.content[0] as { text: string }).text).toContain('not readable from this conversation');
   });
 
   it('completes focus by persisting durable knowledge and pruning compacted focus range from context', async () => {

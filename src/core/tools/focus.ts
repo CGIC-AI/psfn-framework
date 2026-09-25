@@ -8,6 +8,10 @@ import { toErrorMessage } from '../../shared/utils/errors.js';
 import { isCapturedSessionOwnerInvariantError } from '../session/manager/captured-session-owner.js';
 import { deriveChildIcpConversationCostCorrelation } from '../../shared/contracts/icp-autonomy.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import {
+  canViewerReadSessionChannel,
+  resolveViewerContextFromRequest,
+} from '../session/session-viewer-access.js';
 
 const log = createComponentLogger('FocusTool');
 
@@ -74,24 +78,33 @@ function compactText(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
 }
 
+type FocusTargetResolution = { channelId: string } | { error: string };
+
 function resolveTargetChannelId(
   sessionManager: FocusSessionManager,
+  action: 'start_focus' | 'complete_focus',
   channelId?: string,
-): string | null {
+): FocusTargetResolution {
   if (typeof channelId === 'string' && channelId.trim().length > 0) {
-    return channelId.trim();
+    const explicit = channelId.trim();
+    // A focus transcript is channel content; another channel is a target only
+    // when this conversation may read it (psfn-framework-k0sr0).
+    if (!canViewerReadSessionChannel(resolveViewerContextFromRequest(), explicit)) {
+      return { error: `${action} refused: "${explicit}" is not readable from this conversation.` };
+    }
+    return { channelId: explicit };
   }
 
   const requestChannelId = getRequestContext()?.channelId;
   if (typeof requestChannelId === 'string' && requestChannelId.trim().length > 0) {
-    return requestChannelId.trim();
+    return { channelId: requestChannelId.trim() };
   }
 
   const active = sessionManager.getActiveContextSessionForTool();
   if (typeof active === 'string' && active.trim().length > 0) {
-    return active.trim();
+    return { channelId: active.trim() };
   }
-  return null;
+  return { error: `${action} failed: unable to resolve channelId for this turn.` };
 }
 
 function clampLine(value: string): string {
@@ -167,10 +180,11 @@ export async function executeStartFocusAction(
   sessionManager: FocusSessionManager,
   params: { scope: string; channelId?: string },
 ): Promise<AgentToolResult<Record<string, unknown>>> {
-  const channelId = resolveTargetChannelId(sessionManager, params.channelId);
-  if (!channelId) {
-    return textResultWithError('start_focus failed: unable to resolve channelId for this turn.', true);
+  const target = resolveTargetChannelId(sessionManager, 'start_focus', params.channelId);
+  if ('error' in target) {
+    return textResultWithError(target.error, true);
   }
+  const channelId = target.channelId;
   if (sessionManager.getFocusSessionContext(channelId)) {
     return textResultWithError(
       `start_focus failed: focus session already active for "${channelId}".`,
@@ -214,10 +228,11 @@ export async function executeCompleteFocusAction(
   llmProvider: LLMProviderPort,
   params: { channelId?: string; conclusion?: string },
 ): Promise<AgentToolResult<Record<string, unknown>>> {
-  const channelId = resolveTargetChannelId(sessionManager, params.channelId);
-  if (!channelId) {
-    return textResultWithError('complete_focus failed: unable to resolve channelId for this turn.', true);
+  const target = resolveTargetChannelId(sessionManager, 'complete_focus', params.channelId);
+  if ('error' in target) {
+    return textResultWithError(target.error, true);
   }
+  const channelId = target.channelId;
 
   const focusContext = sessionManager.getFocusSessionContext(channelId);
   if (!focusContext) {

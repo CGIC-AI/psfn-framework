@@ -88,6 +88,11 @@ import {
   resolveMemoryVisibilityFilter,
   resolveTimelineRange,
 } from './tools/visibility.js';
+import {
+  appendWithheldNote,
+  formatEpisodesWithheldNote,
+  formatMemoryWithheldNote,
+} from './tools/withheld-note.js';
 
 export {
   createScratchpadReadTool,
@@ -932,7 +937,7 @@ export function createMemoryTool(
         Type.Boolean({ description: 'For action=census or action=exists, include soft-deleted or superseded memories in aggregate counts.' }),
       ),
       date: Type.Optional(
-        Type.String({ description: 'For action=timeline, UTC day to navigate as YYYY-MM-DD.' }),
+        Type.String({ description: 'For action=timeline, UTC day to navigate as YYYY-MM-DD. Omit date, after, and before to navigate today (UTC).' }),
       ),
       after: Type.Optional(
         Type.String({ description: 'For action=timeline, inclusive range start as YYYY-MM-DD or ISO-8601 timestamp with timezone.' }),
@@ -1124,7 +1129,7 @@ export function createMemoryTool(
             ).memories.filter(memory => isMemoryOwnedByCompanion(
               memory, options.companionId, options.roomMembershipAuthority,
             ));
-            const results = partitionVisibleMemories(eligible, {
+            const partition = partitionVisibleMemories(eligible, {
               accessScope: resolveAuthorizedRetrievalAccessScope(
                 visibility.channelId,
                 typeof options.retrievalAccessScope === 'function'
@@ -1135,14 +1140,14 @@ export function createMemoryTool(
               channelPrivacy: visibility.channelVisibility,
               broadcast: visibility.broadcast,
               ...(visibility.canonicalContactId ? { canonicalContactId: visibility.canonicalContactId } : {}),
-            }).visible;
-            return textResult(formatMemorySearchResults(results.map(memory => ({
+            });
+            return textResult(appendWithheldNote(formatMemorySearchResults(partition.visible.map(memory => ({
               id: memory.id,
               text: memory.text,
               type: memory.type,
               sensitivity: memory.sensitivity,
               similarity: memory.similarity,
-            }))));
+            }))), formatMemoryWithheldNote(partition.withheldSummary)));
           }
 
           case 'episode_search': {
@@ -1181,6 +1186,7 @@ export function createMemoryTool(
               visibility.channelId,
               requestedAccessScope,
             );
+            const withheldEpisodeIds = new Set<string>();
             const searchInput = {
               query,
               channelId: visibility.channelId,
@@ -1196,6 +1202,7 @@ export function createMemoryTool(
               accessScope,
               memoryRetrievalPolicy,
               sessionQuarantineFilter: options.sessionQuarantineFilter ?? null,
+              onVisibilityWithheld: (episodeId: string) => { withheldEpisodeIds.add(episodeId); },
             };
             const response: HybridEpisodeSearchResponse = options.episodeSearch
               ? await options.episodeSearch.search(searchInput)
@@ -1225,7 +1232,10 @@ export function createMemoryTool(
                   degraded: true,
                 };
               })();
-            return textResult(formatEpisodicSearchResults(response));
+            return textResult(appendWithheldNote(
+              formatEpisodicSearchResults(response),
+              formatEpisodesWithheldNote(withheldEpisodeIds.size),
+            ));
           }
 
           case 'get': {
@@ -1432,6 +1442,7 @@ export function createMemoryTool(
               visibility.channelId,
               requestedAccessScope,
             );
+            const withheldEpisodeIds = new Set<string>();
             const entries = await retrieveEpisodicTimeline(options.episodicStore, {
               ...(range.from ? { from: range.from } : {}),
               ...(range.to ? { to: range.to } : {}),
@@ -1453,8 +1464,12 @@ export function createMemoryTool(
               ),
               ...(explicitLimit !== undefined ? { limit: explicitLimit } : {}),
               memoryRetrievalPolicy,
+              onVisibilityWithheld: (episodeId) => { withheldEpisodeIds.add(episodeId); },
             });
-            return textResult(formatEpisodicTimeline(entries, range.label));
+            return textResult(appendWithheldNote(
+              formatEpisodicTimeline(entries, range.label),
+              formatEpisodesWithheldNote(withheldEpisodeIds.size),
+            ));
           }
 
           case 'import': {

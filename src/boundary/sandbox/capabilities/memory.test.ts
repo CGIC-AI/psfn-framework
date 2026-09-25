@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { fromAny } from '@total-typescript/shoehorn';
 import type {
   LLMProviderPort,
 } from '../../../core/agent/contracts.js';
@@ -363,11 +364,11 @@ describe('createMemoryCapabilities session_search', () => {
       pushEvidence: vi.fn(),
     });
 
-    const result = await capabilities.session_search('Kyoto', 5, {
+    const result = await runWithRequestContext({
       channelId: 'api:current',
-      isDirectMessage: true,
-      trustLevel: 'primary',
-    });
+      viewerIsDirectMessage: true,
+      viewerTrustLevel: 'primary',
+    }, () => capabilities.session_search('Kyoto', 5));
 
     expect(result.summary).toContain('Kyoto notes');
     expect(result.hits).toHaveLength(2);
@@ -439,11 +440,11 @@ describe('createMemoryCapabilities session_search', () => {
       pushEvidence: vi.fn(),
     });
 
-    const result = await capabilities.session_search('launch', 5, {
+    const result = await runWithRequestContext({
       channelId: 'api:current',
-      isDirectMessage: true,
-      trustLevel: 'public',
-    });
+      viewerIsDirectMessage: true,
+      viewerTrustLevel: 'public',
+    }, () => capabilities.session_search('launch', 5));
 
     expect(result.totalHits).toBe(3);
     expect(result.gatedOutCount).toBe(2);
@@ -454,5 +455,63 @@ describe('createMemoryCapabilities session_search', () => {
     expect(summaryPayload).toContain('public launch announcement');
     expect(summaryPayload).not.toContain('ultra-private confidences');
     expect(summaryPayload).not.toContain('guild planning notes');
+  });
+
+  it('rejects caller-supplied viewer trust so sandbox code cannot widen its own gate (k0sr0)', async () => {
+    const llm = mockLLM('unused');
+    const searchTranscripts = vi.fn(() => []);
+    const capabilities = createMemoryCapabilities({
+      llmProvider: llm,
+      embeddingService: null,
+      memoryStore: null,
+      sessionManager: {
+        searchTranscripts,
+        getRecentMessages: vi.fn(() => []),
+        appendSystemNote: vi.fn(),
+      } as unknown as SessionManager,
+      pushEvidence: vi.fn(),
+    });
+
+    await expect(runWithRequestContext({
+      channelId: 'api:current',
+      viewerTrustLevel: 'public',
+    }, () => capabilities.session_search('launch', 5, fromAny({
+      channelId: 'companion-dm:aaaaaaaa-0000-4000-8000-00000000000a:bbbbbbbb-0000-4000-8000-00000000000b',
+      trustLevel: 'primary',
+      isDirectMessage: true,
+    })))).rejects.toThrow('accept only channelId');
+    expect(searchTranscripts).not.toHaveBeenCalled();
+  });
+
+  it('treats options.channelId as a scope filter under the request viewer gate', async () => {
+    const llm = mockLLM('scoped');
+    const siblingDm = 'companion-dm:aaaaaaaa-0000-4000-8000-00000000000a:bbbbbbbb-0000-4000-8000-00000000000b';
+    const capabilities = createMemoryCapabilities({
+      llmProvider: llm,
+      embeddingService: null,
+      memoryStore: null,
+      sessionManager: {
+        searchTranscripts: vi.fn(() => [{
+          channelId: siblingDm,
+          messageId: 7,
+          role: 'user',
+          content: 'sibling words',
+          snippet: 'sibling words',
+          timestamp: 1_000,
+          channelVisibility: 'invite_only',
+          score: -1,
+        }]),
+        getRecentMessages: vi.fn(() => []),
+        appendSystemNote: vi.fn(),
+      } as unknown as SessionManager,
+      pushEvidence: vi.fn(),
+    });
+
+    const result = await runWithRequestContext({
+      channelId: 'api:current',
+      viewerTrustLevel: 'public',
+    }, () => capabilities.session_search('sibling', 5, { channelId: siblingDm }));
+    expect(result.hits).toHaveLength(0);
+    expect(result.gatedOutCount).toBe(1);
   });
 });

@@ -151,6 +151,7 @@ export function createHybridEpisodeSearch(
             : {}),
           ...(input.accessScope ? { accessScope: input.accessScope } : {}),
           ...(input.scopeQuery ? { scopeQuery: input.scopeQuery } : {}),
+          ...(input.onVisibilityWithheld ? { onVisibilityWithheld: input.onVisibilityWithheld } : {}),
           scanLimit: input.scanLimit,
           maxDepth: input.maxDepth,
           maxEpisodesPerChain: input.maxEpisodesPerChain,

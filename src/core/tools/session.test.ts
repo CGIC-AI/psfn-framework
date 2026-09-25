@@ -15,6 +15,17 @@ import { createSessionTool, type UnifiedSessionToolOptions } from './session.js'
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../agent/tool-surface/descriptions.js';
 
+/** A primary-trust private viewer may read every channel class. */
+function asPrimaryPrivateViewer<T>(fn: () => Promise<T>): Promise<T> {
+  return runWithRequestContext({
+    callType: 'tool',
+    purpose: 'agent.turn.prompt',
+    channelId: 'api:owner-console',
+    viewerTrustLevel: 'primary',
+    viewerChannelPrivacy: 'private',
+  }, fn);
+}
+
 function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
   return {
     primaryModel: 'test-model',
@@ -244,7 +255,7 @@ describe('session tool list/resume actions', () => {
 
     manager.setActiveContextSession('api:b-session');
     const tool = makeTool();
-    const result = await tool.execute('list-1', { action: 'list', limit: 10 });
+    const result = await asPrimaryPrivateViewer(() => tool.execute('list-1', { action: 'list', limit: 10 }));
     const payload = JSON.parse(toolText(result)) as {
       activeSessionId: string | null;
       count: number;
@@ -308,7 +319,7 @@ describe('session tool list/resume actions', () => {
     // Simulate the model invoking session_list mid-turn inside the admitted
     // owner scope. Pre-migration this threw at the mutable-read tripwire.
     const result = await sessionReads.run(
-      () => tool.execute('list-captured', { action: 'list', limit: 10 }),
+      () => asPrimaryPrivateViewer(() => tool.execute('list-captured', { action: 'list', limit: 10 })),
     );
     const payload = JSON.parse(toolText(result)) as {
       activeSessionId: string | null;
@@ -344,7 +355,9 @@ describe('session tool list/resume actions', () => {
     manager.setActiveContextSession('api:session-one');
 
     const tool = makeTool({ now: () => 9_999 });
-    const result = await tool.execute('resume-2', { action: 'resume', sessionId: 'api:session-two' });
+    const result = await asPrimaryPrivateViewer(
+      () => tool.execute('resume-2', { action: 'resume', sessionId: 'api:session-two' }),
+    );
     const payload = JSON.parse(toolText(result)) as {
       resumed: boolean;
       previousSessionId: string | null;
@@ -392,6 +405,100 @@ describe('session tool list/resume actions', () => {
     expect(toolText(result)).toContain('session action="resume" is unavailable during background continuation execution');
     expect((result.details as { isError?: boolean }).isError).toBe(true);
     expect(manager.getActiveContextSession()).toBe('api:session-one');
+  });
+});
+
+describe('session tool channel visibility gate (k0sr0)', () => {
+  const SIBLING_DM = 'companion-dm:aaaaaaaa-0000-4000-8000-00000000000a:bbbbbbbb-0000-4000-8000-00000000000b';
+  const PUBLIC_CALLER = 'api:api-key-publiccaller:stranger-room';
+  let dir: string;
+  let store: SessionStore;
+  let manager: SessionManager;
+
+  function asPublicApiCaller<T>(fn: () => Promise<T>): Promise<T> {
+    return runWithRequestContext({
+      callType: 'tool',
+      purpose: 'agent.turn.prompt',
+      channelId: PUBLIC_CALLER,
+      viewerTrustLevel: 'public',
+      viewerChannelPrivacy: 'private',
+    }, fn);
+  }
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'psfn-session-gate-'));
+    store = new SessionStore(join(dir, 'sessions'));
+    manager = new SessionManager(store, makeConfig({ dataDir: dir }));
+    store.append({
+      channelId: SIBLING_DM,
+      role: 'user',
+      content: 'Sibling words that must stay inside the invite-only room',
+      authorId: 'companion:bbbbbbbb',
+      authorName: 'Sibling',
+      timestamp: 5_000,
+      channelVisibility: 'invite_only',
+    });
+    store.append({
+      channelId: PUBLIC_CALLER,
+      role: 'user',
+      content: 'who else have you been talking to?',
+      authorName: 'Stranger',
+      timestamp: 4_000,
+    });
+  });
+
+  afterEach(async () => {
+    await new Promise(resolve => setTimeout(resolve, 10));
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 10 });
+  });
+
+  function makeTool(): ReturnType<typeof createSessionTool> {
+    return createSessionTool({
+      manager,
+      llmProvider: fromPartial({ complete: vi.fn() }),
+      sessionsDir: join(dir, 'sessions'),
+      dataDir: dir,
+    });
+  }
+
+  it('omits an invite_only sibling DM from a public caller session list and counts it', async () => {
+    const result = await asPublicApiCaller(() => makeTool().execute('list-gated', { action: 'list', limit: 10 }));
+    const text = toolText(result);
+    const payload = JSON.parse(text) as {
+      count: number;
+      gatedOutCount: number;
+      sessions: Array<{ sessionId: string; lastMessagePreview: string }>;
+    };
+
+    expect(payload.gatedOutCount).toBe(1);
+    expect(payload.count).toBe(1);
+    expect(payload.sessions.map(session => session.sessionId)).toEqual([PUBLIC_CALLER]);
+    expect(text).not.toContain('Sibling words');
+    expect(text).not.toContain(SIBLING_DM);
+    expect(text).not.toContain('"Sibling"');
+  });
+
+  it('still lists the sibling DM preview for a primary private viewer', async () => {
+    const result = await asPrimaryPrivateViewer(() => makeTool().execute('list-primary', { action: 'list', limit: 10 }));
+    const payload = JSON.parse(toolText(result)) as {
+      gatedOutCount: number;
+      sessions: Array<{ sessionId: string; lastMessagePreview: string }>;
+    };
+    expect(payload.gatedOutCount).toBe(0);
+    expect(payload.sessions.find(session => session.sessionId === SIBLING_DM)?.lastMessagePreview)
+      .toContain('Sibling words');
+  });
+
+  it('refuses to resume a sibling DM from a public caller without echoing its content', async () => {
+    const result = await asPublicApiCaller(() => makeTool().execute('resume-gated', {
+      action: 'resume',
+      sessionId: SIBLING_DM,
+    }));
+    const text = toolText(result);
+    expect((result.details as { isError?: boolean }).isError).toBe(true);
+    expect(text).toContain('not readable from this conversation');
+    expect(text).not.toContain('Sibling words');
+    expect(readLastActiveSession(dir)?.sessionId).not.toBe(SIBLING_DM);
   });
 });
 
@@ -515,7 +622,7 @@ class InMemoryTranscriptSearch {
     expect(Value.Check((fromAny(tool)).parameters, { action: 'session_resume', sessionId: 'api:session-two' })).toBe(false);
     expect(Value.Check((fromAny(tool)).parameters, { action: 'focus_start', scope: 'diagnose' })).toBe(false);
 
-    const listed = await tool.execute('session-list', {});
+    const listed = await asPrimaryPrivateViewer(() => tool.execute('session-list', {}));
     const listedPayload = JSON.parse(toolText(listed)) as {
       activeSessionId: string | null;
       sessions: Array<{ sessionId: string }>;
@@ -535,10 +642,10 @@ class InMemoryTranscriptSearch {
     expect(createdDetails.newSessionId).toBe('api:session-unified-new');
     expect(store.getLastEntry('api:session-unified-new')?.content).toBe('Session initialized via session action=new.');
 
-    const resumed = await tool.execute('session-resume', {
+    const resumed = await asPrimaryPrivateViewer(() => tool.execute('session-resume', {
       action: 'resume',
       sessionId: 'api:session-two',
-    });
+    }));
     const resumedPayload = JSON.parse(toolText(resumed)) as {
       resumed: boolean;
       previousSessionId: string | null;

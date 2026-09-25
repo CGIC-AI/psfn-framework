@@ -126,7 +126,10 @@ export interface MemoryAccessPartition<T extends PurrMemory = PurrMemory> {
   withheldSummary?: MemoryWithheldSummary;
 }
 
-export function resolveTimelineRange(params: TimelineRangeParams): TimelineRangeResult {
+export function resolveTimelineRange(
+  params: TimelineRangeParams,
+  now: () => Date = () => new Date(),
+): TimelineRangeResult {
   const date = normalizeOptionalToolString(params.date);
   const after = normalizeOptionalToolString(params.after);
   const before = normalizeOptionalToolString(params.before);
@@ -149,7 +152,19 @@ export function resolveTimelineRange(params: TimelineRangeParams): TimelineRange
   }
 
   if (!after && !before) {
-    return { ok: false, error: 'Error: date or after/before is required for action=timeline' };
+    // No range: navigate today (UTC) instead of failing, so a timeline call in
+    // a parallel tool batch never cancels its siblings (psfn-framework-jequ8).
+    const today = now().toISOString().slice(0, 10);
+    const todayRange = normalizeTimelineDate(today);
+    if (!todayRange) {
+      throw new Error(`timeline default date is not a valid UTC day: ${today}`);
+    }
+    return {
+      ok: true,
+      from: todayRange.from,
+      to: todayRange.to,
+      label: `date ${today} (default: today UTC; pass date or after/before for another range)`,
+    };
   }
 
   const from = after ? normalizeTimelineBoundary(after, 'after', 'start') : undefined;

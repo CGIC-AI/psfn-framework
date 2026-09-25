@@ -8,14 +8,16 @@ import type { SessionSearchHit } from '../../../persistence/sessions/transcript-
 import {
   VALID_MEMORY_TYPES,
 } from '../../../faculties/memory/types.js';
-import type { TrustLevel } from '../../../system/trust/types.js';
 import type { AnalysisWorkbenchEvidence } from '../../../core/tools/analysis-workbench/types.js';
 import { addEvidence, splitCsvTags, toTrimmedString } from './common.js';
 import {
   runSessionSearch,
   type SessionSearchResult,
-  type SessionSearchViewerContext,
 } from '../../../core/session/search-runtime.js';
+import {
+  canViewerReadSessionChannel,
+  resolveViewerContextFromRequest,
+} from '../../../core/session/session-viewer-access.js';
 import { getRequestContext } from '../../../primitives/llm/request-context.js';
 import {
   createSubjectAuthorizedMemoryStore,
@@ -33,10 +35,34 @@ import type {
 import { resolveMemoryVisibility } from '../../../faculties/memory/tools/visibility.js';
 import { isMemoryOwnedByCompanion } from '../../../faculties/memory/companion-provenance.js';
 
+/**
+ * Caller-supplied session_search options. `channelId` only narrows the search
+ * scope; the viewer (trust, room privacy, DM flag) always comes from the
+ * admitted request context and is never caller-supplied (psfn-framework-k0sr0).
+ */
 export interface SessionSearchOptions {
-  channelId?: SessionSearchViewerContext['channelId'];
-  isDirectMessage?: SessionSearchViewerContext['isDirectMessage'];
-  trustLevel?: TrustLevel;
+  channelId?: string;
+}
+
+const SESSION_SEARCH_OPTION_KEYS: ReadonlySet<string> = new Set(['channelId']);
+
+function parseSessionSearchOptions(value: unknown): SessionSearchOptions {
+  if (value === undefined || value === null) return {};
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('session_search options must be an object');
+  }
+  const unknownKeys = Object.keys(value).filter(key => !SESSION_SEARCH_OPTION_KEYS.has(key));
+  if (unknownKeys.length > 0) {
+    throw new Error(
+      `session_search options accept only channelId (viewer trust comes from the conversation); rejected: ${unknownKeys.join(', ')}`,
+    );
+  }
+  const channelId = (value as { channelId?: unknown }).channelId;
+  if (channelId === undefined) return {};
+  if (typeof channelId !== 'string' || channelId.trim().length === 0) {
+    throw new Error('session_search options.channelId must be a non-empty string');
+  }
+  return { channelId: channelId.trim() };
 }
 
 export interface MemoryCapabilities {
@@ -490,6 +516,12 @@ export function createMemoryCapabilities(options: CreateMemoryCapabilitiesOption
     if (!options.sessionManager) {
       return [];
     }
+    // Raw transcript content obeys the same disclosure gate as transcript
+    // search: a channel this conversation cannot read is refused, never
+    // silently emptied (psfn-framework-k0sr0).
+    if (!canViewerReadSessionChannel(resolveViewerContextFromRequest(), channelId)) {
+      throw new Error(`session_messages refused: "${channelId}" is not readable from this conversation`);
+    }
 
     const entries = options.sessionManager.getRecentMessages(channelId, limit);
     addEvidence(options.pushEvidence, {
@@ -512,13 +544,15 @@ export function createMemoryCapabilities(options: CreateMemoryCapabilitiesOption
     searchOptions?: SessionSearchOptions,
   ): Promise<SessionSearchResult> => {
     const normalizedQuery = toTrimmedString(query);
+    const scope = parseSessionSearchOptions(searchOptions);
     const result = await runSessionSearch({
       transcriptSearch: resolveTranscriptSearchPort(options.sessionManager),
       llmProvider: options.llmProvider,
       query: normalizedQuery,
       limit,
       summarize: true,
-      viewer: searchOptions,
+      ...(scope.channelId ? { targetChannelId: scope.channelId } : {}),
+      viewer: resolveViewerContextFromRequest(),
     });
 
     addEvidence(options.pushEvidence, {

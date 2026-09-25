@@ -31,7 +31,10 @@ import {
   resolveTarget,
   fetchCurrentTierWithRetry,
 } from './lib/target.mjs';
-import { resolveOperatorApprovalTargetForCases } from './lib/operator-approval-target.mjs';
+import {
+  buildOperatorConfirmationApproval,
+  resolveOperatorApprovalTargetForCases,
+} from './lib/operator-approval-target.mjs';
 import {
   buildCapabilityMatrixExecutionPlan,
   buildCapabilityMatrixSideEffectEvidence,
@@ -83,6 +86,17 @@ import { casesBelowTierFloor } from './lib/case-tier-floors.mjs';
 import { malformedAnswerFeedback, readAssistantAnswer } from './lib/assistant-answer.mjs';
 import { buildMemoryTierCases } from './cases/memory-tiers.mjs';
 import { isBeadsIssueId } from './lib/beads.mjs';
+import { validateMemoryLookupAnswer } from './lib/memory-lookup-answer.mjs';
+import {
+  applyRoomIsolationOutcome,
+  buildRoomSettleTurnInput,
+  createSharedRoomLedger,
+  settleSharedRoom,
+} from './lib/case-isolation.mjs';
+import {
+  buildImageGenerationCases,
+  resolveImageCaseProviderForCases,
+} from './lib/image-case-provider.mjs';
 import { prepareCaseChatDispatch } from './lib/case-dispatch-auth.mjs';
 import { createFrameworkHubDeviceAssertionIssuer } from './lib/hub-device-assertion.mjs';
 
@@ -101,6 +115,7 @@ const CONFIG = (() => {
       adminReadinessUrl: targetContract.adminReadinessUrl,
       apiKey: targetContract.apiKey,
       adminToken: targetContract.adminToken,
+      companionId: targetContract.companionId,
       outputPath: requireEnv('PSFN_SHAKEDOWN_OUTPUT', 'per-phase run JSON path'),
       repoRoot: requireEnv('PSFN_REPO_ROOT', 'RC repo clone under test'),
       workspacePath: requireEnv('WORKSPACE_PATH', 'companion Personal Workspace root'),
@@ -170,10 +185,21 @@ const OPERATOR_APPROVAL_TARGET = (() => {
     return resolveOperatorApprovalTargetForCases({
       chatBaseUrl: API_BASE,
       apiKey: API_KEY,
+      companionId: CONFIG.companionId,
     }, {
       caseIds: CASE_IDS,
       phase: PHASE,
     });
+  } catch (error) {
+    failClosedOnEnv(error);
+    throw error;
+  }
+})();
+// Image-case provider (t2q1w): settings by default, or the round's explicit
+// provider. Resolved only when an image case is selected.
+const IMAGE_CASE_PROVIDER = (() => {
+  try {
+    return resolveImageCaseProviderForCases({ caseIds: CASE_IDS, phase: PHASE });
   } catch (error) {
     failClosedOnEnv(error);
     throw error;
@@ -231,6 +257,9 @@ const resolveSessionChannelId = probe.resolveSessionChannelId;
 const readJsonl = probe.readJsonl;
 const isAgentBusyResponse = probe.isAgentBusyResponse;
 const isCompletedAssistantTurn = probe.isCompletedAssistantTurn;
+// Whether the shared api:testing-harness room holds an unanswered user message
+// (66cus); chatCase updates it on every dispatch.
+const SHARED_ROOM_LEDGER = createSharedRoomLedger();
 const turnRecordPath = (sessionId, apiUserId) =>
   probe.turnRecordPath(TURN_RECORDS_DIR, sessionId, apiUserId);
 const turnRecordsForSession = (sessionId, apiUserId) =>
@@ -1809,12 +1838,14 @@ async function chatCase(input) {
   let response;
   let matchingTurn = null;
   let lastRequestStartedAt = 0;
+  const roomChannelId = probe.resolveSessionChannelId(input.sessionId, apiUserId);
 
   while (submitAttempts < maxSubmitAttempts) {
     throwIfAborted(input.signal);
     submitAttempts += 1;
     const requestStartedAt = Date.now();
     lastRequestStartedAt = requestStartedAt;
+    SHARED_ROOM_LEDGER.dispatchStarted({ roomChannelId, sessionId: input.sessionId });
     response = await probe.postChatCompletion({
       apiUrl: API_URL,
       headers: dispatch.resolveHeaders(),
@@ -1910,6 +1941,10 @@ async function chatCase(input) {
     }
   }
 
+  SHARED_ROOM_LEDGER.dispatchSettled({
+    roomChannelId,
+    answered: isCompletedAssistantTurn(matchingTurn),
+  });
   await sleep(input.settleMs ?? 800, input.signal);
   throwIfAborted(input.signal);
   return {
@@ -2215,16 +2250,9 @@ function buildBaselineCases(ctx) {
         + 'Use memory with action "search", query "primary user Local API Principal", and limit 5. '
         + 'Return only a JSON object with keys count and summary.',
       timeoutMs: 120000,
-      validateParsedAssistant: ({ parsedAssistant }) => {
-        const failures = [];
-        if (typeof parsedAssistant?.count !== 'number') {
-          failures.push('analysis_workbench_memory_lookup_avoidance count must be a number');
-        }
-        if (typeof parsedAssistant?.summary !== 'string' || parsedAssistant.summary.trim().length === 0) {
-          failures.push('analysis_workbench_memory_lookup_avoidance summary must be non-empty');
-        }
-        return failures;
-      },
+      validateParsedAssistant: ({ parsedAssistant }) => (
+        validateMemoryLookupAnswer(parsedAssistant, 'analysis_workbench_memory_lookup_avoidance')
+      ),
     },
     {
       id: 'scratchpad_roundtrip',
@@ -2480,56 +2508,13 @@ function buildApprenticeCases(ctx) {
       },
       timeoutMs: 60000,
     },
-    {
-      id: 'image_create',
-      sessionId: `apprentice-image-create-${ctx.runToken}`,
-      expectedTools: ['generate_image'],
-      actionSensitive: true,
-      actionSuccessKeys: ['worked'],
-      message:
-        'Then call generate_image with action "generate", provider "auto", prompt "a red ceramic mug on a steel workbench, sharp studio lighting", width 512, height 512, aspect_ratio "1:1", num_images 1. '
-        + 'Return only a JSON object with keys worked and note.',
-      validateParsedAssistant: ({ parsedAssistant, archiveToolMessages }) => (
-        parsedAssistant?.worked === true || archiveToolSucceeded(archiveToolMessages, 'generate_image')
-          ? []
-          : ['image_create worked must be true or have successful generate_image tool proof']
-      ),
-      timeoutMs: 90000,
-    },
-    {
-      id: 'image_edit',
-      sessionId: `apprentice-image-edit-${ctx.runToken}`,
-      expectedTools: ['generate_image'],
-      actionSensitive: true,
-      actionSuccessKeys: ['worked'],
-      message:
-        `Then call generate_image with action "edit", provider "auto", input_urls=${JSON.stringify(falEditSourceUrls)}, prompt "make a photo of the man driving the car down the california coastline", aspect_ratio "auto", resolution "1K", num_images 1. `
-        + 'Return only a JSON object with keys worked and note.',
-      validateParsedAssistant: ({ parsedAssistant, archiveToolMessages }) => (
-        parsedAssistant?.worked === true || archiveToolSucceeded(archiveToolMessages, 'generate_image')
-          ? []
-          : ['image_edit worked must be true or have successful generate_image tool proof']
-      ),
-      timeoutMs: 90000,
-    },
-    {
-      id: 'selfie_create',
-      sessionId: `apprentice-selfie-${ctx.runToken}`,
-      expectedTools: ['selfie_create'],
-      suggestTools: ['selfie_create'],
-      actionSensitive: true,
-      actionSuccessKeys: ['worked'],
-      message:
-        'selfie_create is a core tool that is already active — call it directly and do not wait for or depend on a toolset activation handshake. '
-        + 'Call selfie_create with provider "auto", prompt "close portrait, direct eye contact, neutral lighting, plain background", width 512, height 512, aspect_ratio "1:1", num_images 1. '
-        + 'Return only a JSON object with keys worked and note.',
-      validateParsedAssistant: ({ parsedAssistant, archiveToolMessages }) => (
-        parsedAssistant?.worked === true || archiveToolSucceeded(archiveToolMessages, 'selfie_create')
-          ? []
-          : ['selfie_create worked must be true or have successful selfie_create tool proof']
-      ),
-      timeoutMs: 90000,
-    },
+    ...(IMAGE_CASE_PROVIDER === null
+      ? []
+      : buildImageGenerationCases({
+        runToken: ctx.runToken,
+        provider: IMAGE_CASE_PROVIDER,
+        editSourceUrls: falEditSourceUrls,
+      })),
     {
       id: 'spawn_subagent',
       sessionId: `apprentice-subagent-${ctx.runToken}`,
@@ -3334,18 +3319,13 @@ function buildCases(ctx) {
       if (!OPERATOR_APPROVAL_TARGET) {
         throw new Error('memory_delete_restore requires preflighted Operator approval authority');
       }
-      return fetchJson(
-        `${OPERATOR_APPROVAL_TARGET.apiBaseUrl.replace(/\/$/u, '')}/operator/confirmations/resolve`,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${OPERATOR_APPROVAL_TARGET.adminToken}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ id: confirmationId, decision: 'approve' }),
-          signal,
-        },
-      );
+      const approval = buildOperatorConfirmationApproval(OPERATOR_APPROVAL_TARGET, confirmationId);
+      return fetchJson(approval.url, {
+        method: 'POST',
+        headers: approval.headers,
+        body: approval.body,
+        signal,
+      });
     },
     chatCase,
     fetchJson,
@@ -3850,6 +3830,7 @@ async function main() {
   const results = [];
   let matrixAborted = false;
   let pendingBusyRecovery = null;
+  let pendingRoomFromCaseId = null;
   const writePartialProgress = (harnessStatus = matrixAborted ? 'matrix_aborted' : 'running') => {
     writeJsonArtifact(PARTIAL_OUTPUT_PATH, {
       ...outputBase,
@@ -3931,6 +3912,20 @@ async function main() {
           caseOverheadTimeoutMs: DEFAULT_CASE_OVERHEAD_TIMEOUT_MS,
           stepDelayMs: DEFAULT_STEP_DELAY_MS,
         });
+        const roomIsolation = pendingRoomFromCaseId === null
+          ? null
+          : await settleSharedRoom({
+            ledger: SHARED_ROOM_LEDGER,
+            fromCaseId: pendingRoomFromCaseId,
+            runSettleTurn: () => chatCase(buildRoomSettleTurnInput({
+              runToken: ctx.runToken,
+              apiUserId: ctx.primaryApiUserId,
+              timeoutMs: DEFAULT_FETCH_TIMEOUT_MS,
+            })),
+          });
+        if (roomIsolation) {
+          recordCaseDiagnostic(testCase.id, { event: 'pre_case_room_settle', ...roomIsolation });
+        }
         try {
           caseResult = await runCaseWithTimeout({
             label: `case ${testCase.id}`,
@@ -3949,6 +3944,7 @@ async function main() {
             failure.reason,
           );
         }
+        caseResult = applyRoomIsolationOutcome(caseResult, roomIsolation);
       }
     }
     if (caseExecutionAttempted && typeof testCase.cleanup === 'function') {
@@ -4000,6 +3996,9 @@ async function main() {
       startedAt,
       selectedCaseIds,
     });
+    if (caseExecutionAttempted) {
+      pendingRoomFromCaseId = SHARED_ROOM_LEDGER.pending() === null ? null : testCase.id;
+    }
     results.push(caseResult);
     writePartialProgress();
     console.error(JSON.stringify({

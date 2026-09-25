@@ -3,10 +3,8 @@ import { createInterface } from 'node:readline';
 import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
 import type { LLMProviderPort } from '../agent/contracts.js';
 import type { SessionEntry, JournalEntry } from '../session/types.js';
-import { getRequestContext } from '../../primitives/llm/request-context.js';
-import type { TrustLevel } from '../../system/trust/types.js';
 import type { PromptRegistryStatePort } from '../identity/prompt-state-port.js';
-import { normalizeChannelPrivacy, type ChannelPrivacy } from '../../system/trust/context-envelope.js';
+import type { ChannelPrivacy } from '../../system/trust/context-envelope.js';
 import type { TranscriptSearchPort } from '../../persistence/sessions/transcript-search-port.js';
 import {
   canViewerAccessSessionHit,
@@ -16,8 +14,8 @@ import {
   truncateSessionSearchSnippet,
   type SessionSearchRouteLabel,
   type SessionSearchRouteStateProvider,
-  type SessionSearchViewerContext,
 } from '../session/search-runtime.js';
+import { resolveViewerContextFromRequest } from '../session/session-viewer-access.js';
 import { textResult, textResultWithError } from './results.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { isCogSecTombstoneSessionEntry } from '../cogsec/tombstones.js';
@@ -165,39 +163,6 @@ function asSessionRouteStateProvider(value: unknown): SessionSearchRouteStatePro
     || typeof candidate?.getSessionRouteForLogicalSession === 'function'
     ? value as SessionSearchRouteStateProvider
     : undefined;
-}
-
-function normalizeOptionalTrustLevel(value: unknown): TrustLevel | undefined {
-  switch (value) {
-    case 'primary':
-    case 'trusted':
-    case 'regular':
-    case 'public':
-      return value;
-    default:
-      return undefined;
-  }
-}
-
-function normalizeOptionalChannelVisibility(value: unknown): ChannelPrivacy | undefined {
-  return normalizeChannelPrivacy(value);
-}
-
-function resolveViewerContextFromRequest(): SessionSearchViewerContext {
-  const requestContext = getRequestContext();
-  const channelId = typeof requestContext?.channelId === 'string' && requestContext.channelId.trim().length > 0
-    ? requestContext.channelId.trim()
-    : undefined;
-  const trustLevel = normalizeOptionalTrustLevel(requestContext?.viewerTrustLevel);
-  const channelVisibility = normalizeOptionalChannelVisibility(requestContext?.viewerChannelPrivacy);
-  return {
-    ...(channelId ? { channelId } : {}),
-    ...(trustLevel ? { trustLevel } : {}),
-    ...(channelVisibility ? { channelVisibility } : {}),
-    ...(typeof requestContext?.viewerIsDirectMessage === 'boolean'
-      ? { isDirectMessage: requestContext.viewerIsDirectMessage }
-      : {}),
-  };
 }
 
 function normalizeSessionGrepLimit(limit: number | undefined): number {

@@ -4,6 +4,8 @@ import {
   requireEnvOneOf,
 } from './env.mjs';
 
+const RFC4122_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
 /**
  * Resolve the independent Operator authority used by HITL approval cases.
  *
@@ -25,9 +27,38 @@ export function resolveOperatorApprovalTarget(target, env = process.env) {
     );
   }
   const defaultApiBaseUrl = `${target.chatBaseUrl.replace(/\/$/u, '')}/v1`;
+  // A fleet gateway resolves confirmations per companion and rejects a body
+  // without companionId. The kube target always names its fleet companion; the
+  // single-companion local target names none and resolves as the standalone
+  // Operator.
+  const companionId = target.companionId ?? null;
+  if (companionId !== null && !RFC4122_UUID_PATTERN.test(companionId)) {
+    throw new InvalidEnvError('COMPANION_ID', 'Operator approval companionId must be an RFC 4122 UUID');
+  }
   return {
     apiBaseUrl: optionalEnv('PSFN_OPERATOR_API_BASE', defaultApiBaseUrl, env),
     adminToken,
+    companionId,
+  };
+}
+
+/**
+ * Build the private Operator confirmation-resolution request. The fleet
+ * gateway requires the target companionId; it is included whenever the
+ * approval target names one.
+ */
+export function buildOperatorConfirmationApproval(approvalTarget, confirmationId) {
+  return {
+    url: `${approvalTarget.apiBaseUrl.replace(/\/$/u, '')}/operator/confirmations/resolve`,
+    headers: {
+      Authorization: `Bearer ${approvalTarget.adminToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      id: confirmationId,
+      decision: 'approve',
+      ...(approvalTarget.companionId ? { companionId: approvalTarget.companionId } : {}),
+    }),
   };
 }
 

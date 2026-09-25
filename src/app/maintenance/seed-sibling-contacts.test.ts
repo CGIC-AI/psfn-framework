@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { parseSiblingTrust, seedSiblingContact } from './seed-sibling-contacts.js';
+import {
+  applySiblingContactSeeding,
+  parseSiblingTrust,
+  seedSiblingContact,
+} from './seed-sibling-contacts.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import type { Contact } from '../../core/contacts/contact-store-port.js';
 
@@ -52,5 +56,50 @@ describe('seed-sibling-contacts (x5t4)', () => {
     expect(() => parseSiblingTrust('public')).toThrow('ICP floor');
     expect(() => parseSiblingTrust('primary')).toThrow('regular, trusted');
     expect(() => parseSiblingTrust('nonsense')).toThrow();
+  });
+
+  describe('fleet apply (w6f98)', () => {
+    const fleet = [
+      { companionId: 'aaaaaaaa-0000-4000-8000-000000000001', postgresSchema: 'companion_alpha', postgresRole: 'companion_alpha_runtime' },
+      { companionId: 'bbbbbbbb-0000-4000-8000-000000000002', postgresSchema: 'companion_beta', postgresRole: 'companion_beta_runtime' },
+    ];
+
+    it("opens each owner's contact store with its companions.json postgresRole", async () => {
+      const targets: Array<{ schema: string; role: string }> = [];
+      const fakes: ReturnType<typeof createFakeContactStore>[] = [];
+      const seeded = await applySiblingContactSeeding({
+        databaseUrl: 'postgres://seed@db.invalid/fleet',
+        companions: fleet,
+        trust: 'regular',
+        createStore: async (_url, target) => {
+          targets.push(target);
+          const fake = createFakeContactStore();
+          fakes.push(fake);
+          return fake.store;
+        },
+      });
+
+      expect(targets).toEqual([
+        { schema: 'companion_alpha', role: 'companion_alpha_runtime' },
+        { schema: 'companion_beta', role: 'companion_beta_runtime' },
+      ]);
+      expect(seeded).toEqual([
+        { owner: fleet[0].companionId, peer: fleet[1].companionId, contactId: 'contact-1' },
+        { owner: fleet[1].companionId, peer: fleet[0].companionId, contactId: 'contact-1' },
+      ]);
+      expect(fakes[0].resolveChannelIdentity).toHaveBeenCalledWith('companion', fleet[1].companionId, expect.any(String));
+      expect(fakes[1].resolveChannelIdentity).toHaveBeenCalledWith('companion', fleet[0].companionId, expect.any(String));
+    });
+
+    it('fails closed when a fleet entry has no configured role', async () => {
+      const createStore = vi.fn();
+      await expect(applySiblingContactSeeding({
+        databaseUrl: 'postgres://seed@db.invalid/fleet',
+        companions: [{ ...fleet[0], postgresRole: ' ' }, fleet[1]],
+        trust: 'regular',
+        createStore,
+      })).rejects.toThrow('postgresRole');
+      expect(createStore).not.toHaveBeenCalled();
+    });
   });
 });

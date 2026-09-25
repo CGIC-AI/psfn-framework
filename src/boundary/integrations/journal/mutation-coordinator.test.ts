@@ -5,6 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { JournalOps } from './ops.js';
 
+const RESTRICTED = { scope: 'restricted' } as const;
+const HEADER = '<!-- journal-provenance: {"scope":"restricted"} -->\n';
+
 /**
  * Publication durability (psfn-framework-b695g follow-up).
  *
@@ -71,10 +74,10 @@ describe('journal mutation publication durability', () => {
   });
 
   it('fsyncs the pinned parent directory after the create path publishes with link(2)', async () => {
-    const result = await new JournalOps(root).write('created.md', 'first durable note');
+    const result = await new JournalOps(root).write('created.md', 'first durable note', RESTRICTED);
 
     expect(result.created).toBe(true);
-    expect(readFileSync(join(root, 'created.md'), 'utf8')).toBe('first durable note\n');
+    expect(readFileSync(join(root, 'created.md'), 'utf8')).toBe(`${HEADER}first durable note\n`);
     expect(publishTrace).toEqual(['link', 'directory-sync']);
     expect(renameMock).not.toHaveBeenCalled();
   });
@@ -83,7 +86,7 @@ describe('journal mutation publication durability', () => {
     writeFileSync(join(root, 'replaced.md'), 'original note\n', 'utf8');
     publishTrace.length = 0;
 
-    const result = await new JournalOps(root).append('replaced.md', 'appended line');
+    const result = await new JournalOps(root).append('replaced.md', 'appended line', RESTRICTED);
 
     expect(result.created).toBe(false);
     expect(readFileSync(join(root, 'replaced.md'), 'utf8')).toContain('appended line');
@@ -110,7 +113,7 @@ describe('journal mutation publication durability', () => {
       return handle;
     });
 
-    await expect(new JournalOps(root).write('undurable.md', 'never durable')).rejects.toThrow(
+    await expect(new JournalOps(root).write('undurable.md', 'never durable', RESTRICTED)).rejects.toThrow(
       /injected directory sync failure/,
     );
 

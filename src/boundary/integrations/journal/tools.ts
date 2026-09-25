@@ -6,6 +6,7 @@ import type { JournalOperations } from './ops.js';
 import { textResult, textResultWithError } from '../../../core/tools/results.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { requireNonEmptyString } from '../../../shared/utils/strings.js';
+import { canViewerReadJournalNote, resolveWriterJournalProvenance } from './provenance.js';
 
 const JOURNAL_ACTIONS = ['list', 'read', 'write', 'append', 'search'] as const;
 type JournalAction = typeof JOURNAL_ACTIONS[number];
@@ -98,17 +99,27 @@ export function createJournalTool(ops: JournalOperations): SubstrateAgentTool {
         switch (action) {
           case 'list': {
             const result = await ops.list();
-            if (result.notes.length === 0) {
-              return textResult('Journal is empty.');
+            const visible = await visibleNotePaths(ops, result.notes);
+            const withheld = withheldNotice(result.notes.length - visible.length);
+            if (visible.length === 0) {
+              return textResult(`Journal is empty.${withheld}`);
             }
             return textResult(
-              `Journal notes (${String(result.notes.length)} of ${String(result.totalFiles)}):\n`
+              `Journal notes (${String(visible.length)} of ${String(result.totalFiles)}):\n`
               + `List truncated: ${String(result.truncated)}\n`
-              + result.notes.map(note => `- ${note}`).join('\n'),
+              + visible.map(note => `- ${note}`).join('\n')
+              + withheld,
             );
           }
           case 'read': {
-            const result = await ops.read(resolveNotePath(params), {
+            const path = resolveNotePath(params);
+            const provenance = await ops.readProvenance(path);
+            // A note this conversation may not read is reported like a
+            // missing one, never confirmed (psfn-framework-75oi4).
+            if (!provenance || !canViewerReadJournalNote(provenance)) {
+              return textResultWithError(`journal failed for action=read: Journal note not readable from this conversation: ${path}`, true);
+            }
+            const result = await ops.read(path, {
               offsetBytes: params.offset_bytes,
             });
             return textResult(
@@ -119,27 +130,40 @@ export function createJournalTool(ops: JournalOperations): SubstrateAgentTool {
               + result.content,
             );
           }
-          case 'write': {
-            const result = await ops.write(resolveNotePath(params), requireNonEmptyString(params.content, 'content'));
-            return textResult(`Journal note ${result.created ? 'created' : 'replaced'}: ${result.path}`);
-          }
+          case 'write':
           case 'append': {
-            const result = await ops.append(resolveNotePath(params), requireNonEmptyString(params.content, 'content'));
+            const path = resolveNotePath(params);
+            const content = requireNonEmptyString(params.content, 'content');
+            const existing = await ops.readProvenance(path);
+            if (existing && !canViewerReadJournalNote(existing)) {
+              return textResultWithError(`journal failed for action=${action}: Journal note not readable from this conversation: ${path}`, true);
+            }
+            const provenance = resolveWriterJournalProvenance();
+            if (action === 'write') {
+              const result = await ops.write(path, content, provenance);
+              return textResult(`Journal note ${result.created ? 'created' : 'replaced'}: ${result.path}`);
+            }
+            const result = await ops.append(path, content, provenance);
             return textResult(`Journal note ${result.created ? 'created' : 'appended'}: ${result.path}`);
           }
           case 'search': {
             const result = await ops.search(requireNonEmptyString(params.query, 'query'), params.limit);
-            if (result.results.length === 0) {
+            const visiblePaths = new Set(await visibleNotePaths(ops, result.results.map(entry => entry.path)));
+            const visibleResults = result.results.filter(entry => visiblePaths.has(entry.path));
+            const withheld = withheldNotice(result.results.length - visibleResults.length);
+            if (visibleResults.length === 0) {
               return textResult(
                 `No journal results for: ${result.query}\n`
-                + formatSearchMetadata(result),
+                + formatSearchMetadata(result)
+                + withheld,
               );
             }
-            const lines = result.results.map((entry, index) => `${index + 1}. ${entry.path}\n   ${entry.snippet}`);
+            const lines = visibleResults.map((entry, index) => `${index + 1}. ${entry.path}\n   ${entry.snippet}`);
             return textResult(
-              `Journal search: "${result.query}" (${String(result.results.length)} results)\n`
+              `Journal search: "${result.query}" (${String(visibleResults.length)} results)\n`
               + `${formatSearchMetadata(result)}\n\n`
-              + lines.join('\n'),
+              + lines.join('\n')
+              + withheld,
             );
           }
         }
@@ -149,6 +173,22 @@ export function createJournalTool(ops: JournalOperations): SubstrateAgentTool {
       }
     },
   };
+}
+
+/** Notes the current conversation may read (psfn-framework-75oi4). */
+async function visibleNotePaths(ops: JournalOperations, paths: readonly string[]): Promise<string[]> {
+  const visible: string[] = [];
+  for (const path of paths) {
+    const provenance = await ops.readProvenance(path);
+    if (provenance && canViewerReadJournalNote(provenance)) visible.push(path);
+  }
+  return visible;
+}
+
+function withheldNotice(count: number): string {
+  if (count <= 0) return '';
+  return `\n${String(count)} journal note${count === 1 ? '' : 's'} withheld by visibility gating `
+    + '(written from other conversations or private reflection); they exist but are not readable from this conversation.';
 }
 
 function formatSearchMetadata(result: Awaited<ReturnType<JournalOperations['search']>>): string {

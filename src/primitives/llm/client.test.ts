@@ -4289,6 +4289,92 @@ describe('LLMClient model budget gates and usage metering', () => {
     });
   });
 
+  describe('provider stop reasons on completions (Kimi empty-response triage)', () => {
+    function twoCandidateConfig() {
+      const config = makeConfig({ retryMaxAttempts: 0, openRouterApiBaseUrl: 'http://litellm.test/v1' });
+      const entry = (id: string, model: string, primary: boolean, rank: number) => ({
+        id,
+        rank,
+        identity: { provider: 'openrouter', model, source: { type: 'openrouter' } },
+        purposes: [{ purpose: 'background' as const, primary }],
+        capabilities: { maxOutputTokens: 1024, contextWindow: 128_000 },
+        tuning: { maxOutputTokens: 1024 },
+        cost: { inputPer1MUsd: 0, outputPer1MUsd: 0, cacheReadPer1MUsd: 0, cacheWritePer1MUsd: 0, currency: 'USD' },
+      });
+      config.modelRegistry = {
+        schemaVersion: 1,
+        models: [entry('primary', 'primary-model', true, 10), entry('fallback', 'fallback-model', false, 20)],
+      };
+      return config;
+    }
+    const fallbackReply = {
+      content: [{ type: 'text', text: 'done' }],
+      model: 'fallback-model',
+      usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15, cost: { total: 0 } },
+      stopReason: 'stop',
+    };
+    const request = {
+      systemPrompt: 'System',
+      messages: [{ role: 'user' as const, content: 'Do the work' }],
+      correlation: { requestId: 'request-stop-reason', callType: 'background' as const },
+    };
+
+    it('fails an empty completion over to the next candidate', async () => {
+      const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+      const client = new LLMClient(twoCandidateConfig(), { usageRecorder });
+      mocks.completeSimple
+        .mockResolvedValueOnce({
+          content: [{ type: 'thinking', thinking: 'reasoning only' }],
+          model: 'primary-model',
+          usage: { input: 30, output: 12, cacheRead: 0, cacheWrite: 0, totalTokens: 42, cost: { total: 0 } },
+          stopReason: 'stop',
+        })
+        .mockResolvedValueOnce(fallbackReply);
+      const response = await client.complete(request, 'background', { disableRetry: true });
+      expect(response.content).toBe('done');
+      const [failed] = usageRecorder.recordUsageEvent.mock.calls.map(call => call[0]);
+      expect(failed).toMatchObject({ status: 'failure', model: 'primary-model', stopReason: 'stop' });
+      expect(failed.errorMessage).toContain('contained no text or tool calls');
+    });
+
+    it('reports a resolved provider error with its own detail and fails over', async () => {
+      const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+      const client = new LLMClient(twoCandidateConfig(), { usageRecorder });
+      mocks.completeSimple
+        .mockResolvedValueOnce({
+          content: [],
+          model: 'primary-model',
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { total: 0 } },
+          stopReason: 'error',
+          errorMessage: '429 too many concurrent requests',
+        })
+        .mockResolvedValueOnce(fallbackReply);
+      const response = await client.complete(request, 'background', { disableRetry: true });
+      expect(response.content).toBe('done');
+      const [failed] = usageRecorder.recordUsageEvent.mock.calls.map(call => call[0]);
+      expect(failed).toMatchObject({ status: 'failure', stopReason: 'error' });
+      expect(failed.errorMessage).toContain('429 too many concurrent requests');
+      expect(failed.errorMessage).not.toContain('contained no text');
+    });
+
+    it('reports a resolved abort as an abort, not an empty response, and does not fall back', async () => {
+      const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+      const client = new LLMClient(twoCandidateConfig(), { usageRecorder });
+      mocks.completeSimple.mockResolvedValueOnce({
+        content: [],
+        model: 'primary-model',
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { total: 0 } },
+        stopReason: 'aborted',
+        errorMessage: 'Request was aborted',
+      });
+      await expect(client.complete(request, 'background', { disableRetry: true }))
+        .rejects.toMatchObject({ name: 'AbortError' });
+      expect(mocks.completeSimple).toHaveBeenCalledTimes(1);
+      const [failed] = usageRecorder.recordUsageEvent.mock.calls.map(call => call[0]);
+      expect(failed).toMatchObject({ status: 'failure', stopReason: 'aborted', errorCode: 'AbortError' });
+    });
+  });
+
   it('settles a stream failure after emitted text as one partial attempt', async () => {
     const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
     const client = new LLMClient(makeConfig({ retryMaxAttempts: 0 }), {

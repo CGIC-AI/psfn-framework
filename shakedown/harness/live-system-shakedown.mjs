@@ -57,6 +57,7 @@ import {
   caseStatusAfterCleanupFailure,
   classifyCaseFailure,
   isMatrixAbortStatus,
+  decidePreCaseBusyAction,
   probeKnownBusySettlement,
   resolveCaseTimeoutMs,
   resolveCaseCoverageHoleReason,
@@ -3972,17 +3973,20 @@ async function main() {
           ...quiescence,
         });
       }
-      if (quiescence && !quiescence.quiescent) {
-        const agentBusy = quiescence.reason === 'agent_busy';
+      const busyAction = decidePreCaseBusyAction(quiescence);
+      if (quiescence && busyAction.reason) {
+        recordCaseDiagnostic(testCase.id, {
+          event: 'pre_case_busy_decision',
+          blockedByCaseId: pendingBusyRecovery?.caseId ?? null,
+          ...busyAction,
+        });
+      }
+      if (!busyAction.run) {
         caseResult = buildHarnessErrorResult(
           testCase,
-          agentBusy
-            ? 'Agent remained busy through the bounded pre-case quiescence window'
-            : 'Admin session state remained unavailable through the bounded pre-case quiescence window',
-          agentBusy ? 'agent_busy' : 'harness_error',
-          agentBusy
-            ? 'agent_busy:pre_case_quiescence_timeout'
-            : 'harness_error:admin_quiescence_unreachable',
+          'Admin session state remained unavailable through the bounded pre-case quiescence window',
+          'harness_error',
+          busyAction.reason,
         );
         caseResult.sideChecks.preCaseQuiescence = quiescence;
       } else {
@@ -4069,6 +4073,26 @@ async function main() {
           caseId: testCase.id,
           busyObservedAtMs: caseResult.busyObservedAtMs,
         };
+        // e04wp: record who held the agent (foreground turn vs background work)
+        // on the busy case itself; the next case retries instead of skipping.
+        try {
+          const ownerProbe = await probeKnownBusySettlement({
+            adminBase: ADMIN_BASE,
+            busyObservedAtMs: caseResult.busyObservedAtMs,
+            fetchJson,
+          });
+          caseResult.sideChecks = {
+            ...(caseResult.sideChecks ?? {}),
+            busyOwner: ownerProbe.busy === false ? 'settled' : (ownerProbe.busyOwner ?? 'unknown'),
+          };
+        } catch (error) {
+          caseResult.sideChecks = {
+            ...(caseResult.sideChecks ?? {}),
+            busyOwner: 'unknown',
+            busyOwnerProbeError: error instanceof Error ? error.message : String(error),
+          };
+        }
+        caseResult.failureReason ??= 'agent_busy:retry_exhausted';
       } else {
         caseResult.caseStatus = 'harness_error';
         caseResult.failureReason = 'harness_error:missing_busy_observation';

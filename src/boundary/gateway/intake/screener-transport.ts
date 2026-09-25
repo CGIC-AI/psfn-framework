@@ -197,6 +197,25 @@ function providerFailure(
   return error;
 }
 
+const screenerTimeouts = new WeakSet<object>();
+
+/**
+ * True when a screener error is the call's own deadline expiring (q8l79), so
+ * callers and telemetry can tell an undersized timeout apart from a provider
+ * failure. The fail-closed handling is identical either way.
+ */
+export function isScreenerTimeout(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && screenerTimeouts.has(error);
+}
+
+function screenerTimeout(input: ToolLessScreenerCallInput): Error {
+  const error = input.makeError(
+    `${input.screenerName} call timed out after ${String(input.timeoutMs)}ms`,
+  );
+  screenerTimeouts.add(error);
+  return error;
+}
+
 const SCHEMA_REPAIR_INSTRUCTION = [
   'Your previous response failed validation. Retry once from the original input.',
   'Return one complete JSON object matching the requested schema exactly.',
@@ -323,9 +342,7 @@ async function callToolLessJsonScreenerThroughPi(
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     if (controller.signal.aborted) {
-      throw input.makeError(
-        `${input.screenerName} call timed out after ${String(input.timeoutMs)}ms`,
-      );
+      throw screenerTimeout(input);
     }
     throw providerFailure(
       input,
@@ -335,7 +352,13 @@ async function callToolLessJsonScreenerThroughPi(
   } finally {
     clearTimeout(timeout);
   }
-  if (response.stopReason === 'error' || response.stopReason === 'aborted') {
+  // The screener never passes a caller abort signal, so an aborted response is
+  // always its own deadline (this controller or pi-ai's `timeoutMs`); pi-ai
+  // reports that as a resolved `aborted` message rather than a throw.
+  if (controller.signal.aborted || response.stopReason === 'aborted') {
+    throw screenerTimeout(input);
+  }
+  if (response.stopReason === 'error') {
     const detail = response.errorMessage ?? '';
     throw providerFailure(
       input,
@@ -377,9 +400,7 @@ async function callToolLessJsonScreenerThroughTestCompletion(
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     if (controller.signal.aborted) {
-      throw input.makeError(
-        `${input.screenerName} call timed out after ${String(input.timeoutMs)}ms`,
-      );
+      throw screenerTimeout(input);
     }
     // Classified identically to the pi path (psfn-framework-mlhn3): the seam's
     // contract is "return assistant text or throw the way a provider does", so

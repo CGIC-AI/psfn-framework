@@ -1,11 +1,12 @@
 // Memory extraction pre-gate (epic 4lf3r, site `memory.extraction_pregate`).
 //
-// Asked only for the foreground interval trigger ("every N messages"): is
-// there nothing in the new messages worth remembering? When the owner-set
-// threshold is cleared the heavy extraction call is skipped for this interval.
-// Context-threshold, pre-compaction, crash-recovery, manual and durable
-// snapshot extractions are never gated, so compacted content is still
-// extracted before it leaves the context. Default off.
+// Asked only for the interval trigger ("every N messages"), on both the live
+// foreground path and the durable post-turn snapshot path (the production
+// caller): is there nothing in the new messages worth remembering? When the
+// owner-set threshold is cleared the heavy extraction call is skipped for this
+// interval. Context-threshold, pre-compaction, crash-recovery and manual
+// extractions are never gated, so compacted content is still extracted before
+// it leaves the context. Default off.
 
 import type { SessionEntry } from '../../../core/session/types.js';
 import { runDecisionPreGate } from '../../../primitives/llm/decision/pre-gate.js';

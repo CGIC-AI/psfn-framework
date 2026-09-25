@@ -76,7 +76,7 @@
       "untrusted": "quarantine",
       "hostile": "quarantine"
     },
-    "timeoutMs": 8000,
+    "timeoutMs": 30000,
     "maxContentChars": 24000
   },
   "l3Screener": {

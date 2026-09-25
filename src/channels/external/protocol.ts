@@ -50,6 +50,13 @@ export const EXTERNAL_CHANNEL_TOOL_SCHEMAS = {
       /** ISO-8601 send time; the gateway receive time when absent. */
       sentAt: Type.Optional(text),
       replyToMessageId: Type.Optional(text),
+      /**
+       * Group conversations only: the platform marks this message as addressed
+       * to the companion's own account (a mention of it, or a reply to one of
+       * its messages). Absent or false in a group means ambient room chatter,
+       * which the companion observes and may choose not to answer.
+       */
+      addressedToCompanion: Type.Optional(Type.Boolean()),
     }, strict),
   }, strict),
   pullOutbound: Type.Object({

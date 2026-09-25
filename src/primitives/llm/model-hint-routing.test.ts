@@ -7,6 +7,7 @@ import {
   resolveModelSelectionSlotForPurpose,
   UnknownModelSelectionSlotError,
 } from './model-hint-routing.js';
+import { ModelBudgetController, resolveModelUsageCostRatesForIdentity } from './model-budget.js';
 
 interface RegistryModelInput {
   id: string;
@@ -391,6 +392,107 @@ describe('resolveCandidates per-companion model selection (23pp)', () => {
       provider: 'openrouter',
       model: 'chat/model',
       importRouteMode: 'background',
+    });
+  });
+});
+
+describe('resolveCandidates hinted slot attribution (iu5dw)', () => {
+  function makeFailoverConfig(): SubstrateConfig {
+    const registry = makeRegistry([
+      {
+        id: 'plan-primary',
+        rank: 10,
+        provider: 'plan-provider',
+        model: 'plan-model',
+        maxOutputTokens: 8192,
+        contextWindow: 128_000,
+        purposes: [{ purpose: 'chat', primary: true }],
+      },
+      {
+        id: 'failover-secondary',
+        rank: 20,
+        provider: 'failover-provider',
+        model: 'failover-model',
+        maxOutputTokens: 4096,
+        contextWindow: 128_000,
+        purposes: [{ purpose: 'chat', primary: false }],
+      },
+    ]);
+    return makeConfig({
+      primaryModel: 'plan-model',
+      primaryProvider: 'plan-provider',
+      modelRegistry: {
+        ...registry,
+        budgetPolicy: { enabled: true, dailyUsdLimit: 5, monthlyUsdLimit: 5, currency: 'USD' },
+        models: registry.models.map(entry => ({
+          ...entry,
+          cost: { inputPer1MUsd: 0.5, outputPer1MUsd: 1, currency: 'USD' },
+        })),
+      },
+    });
+  }
+
+  it('carries the slot key of the registry entry the hint retargets to', () => {
+    const candidates = resolveCandidates(makeFailoverConfig(), 'chat', {
+      provider: 'failover-provider',
+      model: 'failover-model',
+    });
+    expect(candidates[0]).toMatchObject({
+      provider: 'failover-provider',
+      model: 'failover-model',
+      slotKey: 'failover-secondary',
+    });
+  });
+
+  it('keeps the base slot key when the hint does not change identity', () => {
+    const candidates = resolveCandidates(makeFailoverConfig(), 'chat', {
+      provider: 'plan-provider',
+      model: 'plan-model',
+      maxTokens: 1024,
+    });
+    expect(candidates[0]).toMatchObject({ model: 'plan-model', slotKey: 'plan-primary' });
+  });
+
+  it('drops the base slot key for an unregistered override', () => {
+    const candidates = resolveCandidates(makeFailoverConfig(), 'chat', {
+      provider: 'other-provider',
+      model: 'unregistered-model',
+    });
+    expect(candidates[0]).toMatchObject({ provider: 'other-provider', model: 'unregistered-model' });
+    expect(candidates[0]?.slotKey).toBeUndefined();
+  });
+
+  it('lets the budget gate price a retargeted hint from its own entry', async () => {
+    const config = makeFailoverConfig();
+    const [hinted] = resolveCandidates(config, 'chat', {
+      provider: 'failover-provider',
+      model: 'failover-model',
+    });
+    if (!hinted) throw new Error('expected a hinted candidate');
+    const controller = new ModelBudgetController(config, {
+      getModelBudgetSpend: async () => ({
+        dayKey: '2026-03-06',
+        monthKey: '2026-03',
+        dailyEstimatedCostUsd: 0,
+        monthlyEstimatedCostUsd: 0,
+        dailyUnknownCostAttempts: 0,
+        monthlyUnknownCostAttempts: 0,
+      }),
+    });
+    const preflight = await controller.evaluatePreflight({
+      candidate: hinted,
+      purpose: 'chat',
+      service: 'chat',
+      process: 'agent.turn.prompt',
+      estimatedInputTokens: 1_000_000,
+      estimatedOutputTokens: 0,
+      nowMs: Date.parse('2026-03-06T10:00:00.000Z'),
+    });
+    expect(preflight.allowed).toBe(true);
+    expect(preflight.estimatedRequestCostUsd).toBeCloseTo(0.5, 8);
+    expect(resolveModelUsageCostRatesForIdentity(config, hinted)).toMatchObject({
+      inputPer1MUsd: 0.5,
+      outputPer1MUsd: 1,
     });
   });
 });

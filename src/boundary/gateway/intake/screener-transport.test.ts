@@ -6,6 +6,7 @@ import { LLMRequestCapability } from '../../../primitives/llm/client-request-cap
 import {
   callValidatedToolLessJsonScreener,
   classifyScreenerProviderFailure,
+  isScreenerTimeout,
   screenerProviderRejection,
   type ScreenerBackend,
 } from './screener-transport.js';
@@ -301,5 +302,63 @@ describe('screener provider rejection marking', () => {
       caught = error;
     }
     expect(screenerProviderRejection(caught)).toEqual({ httpStatus: 400 });
+  });
+});
+
+
+describe('screener deadline classification (q8l79)', () => {
+  it('reports a resolved aborted provider message as the screener timeout', async () => {
+    const selected = model('shared-router', 'slow/reasoner');
+    const runtime = fromAny<ProviderRuntime>({
+      getModels: (provider: string) => provider === 'shared-router' ? [selected] : [],
+      resolveProviderApiKey: () => 'vault-key',
+      complete: async () => fromAny<AssistantMessage>({
+        role: 'assistant',
+        provider: 'shared-router',
+        model: selected.id,
+        api: 'openai-completions',
+        content: [],
+        stopReason: 'aborted',
+        errorMessage: 'Request was aborted',
+      }),
+    });
+    const failure = await callValidatedToolLessJsonScreener({
+      backend: { runtime, requestCapability: new LLMRequestCapability(fromAny({}), runtime) },
+      model: fromAny({ provider: 'shared-router', model: selected.id, maxTokens: 500 }),
+      timeoutMs: 30_000,
+      systemPrompt: 'classifier',
+      userMessage: 'untrusted input',
+      screenerName: 'L2 screener',
+      makeError: (message: string) => new Error(message),
+      validateContent: (content: string) => JSON.parse(content) as object,
+      isValidationError: () => false,
+    }).then(() => null, (error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toBe('L2 screener call timed out after 30000ms');
+    expect(isScreenerTimeout(failure)).toBe(true);
+    expect(screenerProviderRejection(failure)).toBeUndefined();
+  });
+
+  it('does not mark a provider error as a timeout', async () => {
+    const selected = model('shared-router', 'card/model');
+    const runtime = fromAny<ProviderRuntime>({
+      getModels: (provider: string) => provider === 'shared-router' ? [selected] : [],
+      resolveProviderApiKey: () => 'vault-key',
+      complete: async () => errorAssistant('shared-router', selected.id, '503 upstream unavailable'),
+    });
+    const failure = await callValidatedToolLessJsonScreener({
+      backend: { runtime, requestCapability: new LLMRequestCapability(fromAny({}), runtime) },
+      model: fromAny({ provider: 'shared-router', model: selected.id, maxTokens: 500 }),
+      timeoutMs: 30_000,
+      systemPrompt: 'classifier',
+      userMessage: 'untrusted input',
+      screenerName: 'L2 screener',
+      makeError: (message: string) => new Error(message),
+      validateContent: (content: string) => JSON.parse(content) as object,
+      isValidationError: () => false,
+    }).then(() => null, (error: unknown) => error);
+
+    expect(isScreenerTimeout(failure)).toBe(false);
   });
 });

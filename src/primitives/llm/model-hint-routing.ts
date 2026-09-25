@@ -320,8 +320,9 @@ function resolveModelHintCandidate(
 
   if (!Number.isFinite(maxTokens) || maxTokens <= 0) return null;
 
+  const slotKey = resolveHintedSlotKey(baseCandidate, registryEntry, provider, model);
   const hinted: RoutingCandidate = {
-    ...(baseCandidate.slotKey ? { slotKey: baseCandidate.slotKey } : {}),
+    ...(slotKey ? { slotKey } : {}),
     provider,
     model,
     maxTokens: Math.floor(maxTokens),
@@ -360,6 +361,45 @@ function resolveModelHintCandidate(
     withOpenRouterPreferences(config, hinted),
     resolveGlobalPromptCachePolicy(config),
   );
+}
+
+function sameModelIdentity(
+  leftProvider: string,
+  leftModel: string,
+  rightProvider: string,
+  rightModel: string,
+): boolean {
+  const left = leftProvider.trim().toLowerCase();
+  const right = rightProvider.trim().toLowerCase();
+  return left === right
+    && normalizeModelIdForProvider(left, leftModel) === normalizeModelIdForProvider(right, rightModel);
+}
+
+/**
+ * The slot key identifies the registry entry that actually serves the
+ * candidate; budget pricing and usage attribution resolve by it. A hint that
+ * retargets provider/model must carry the matched entry's id, never the base
+ * lane's slot. An unregistered override carries no slot key.
+ */
+function resolveHintedSlotKey(
+  baseCandidate: RoutingCandidate,
+  registryEntry: ModelRegistryEntry | undefined,
+  provider: string,
+  model: string,
+): string | undefined {
+  if (
+    registryEntry
+    && sameModelIdentity(registryEntry.identity.provider, registryEntry.identity.model, provider, model)
+  ) {
+    return registryEntry.id;
+  }
+  if (
+    baseCandidate.slotKey
+    && sameModelIdentity(baseCandidate.provider, baseCandidate.model, provider, model)
+  ) {
+    return baseCandidate.slotKey;
+  }
+  return undefined;
 }
 
 function findRegistryModelEntry(

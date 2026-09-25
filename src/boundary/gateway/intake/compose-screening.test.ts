@@ -16,6 +16,7 @@ import type { SubstrateConfig } from '../../../system/config/runtime-config-cont
 import { loadSeedIntakeScreenerTestConfig } from './screener-test-config.js';
 import type { IntakeFirewallMode } from '../../../system/config/intake-policy-config.js';
 import { createCompanionId } from '../../../shared/routing/companion-id.js';
+import { createDefaultDecisionBackendSettings } from '../../../system/config/decision-backend-config.js';
 import { createIntakeQuarantineStore } from '../../../core/cogsec/intake/quarantine-store.js';
 import type { ProviderRuntime } from '../../../primitives/llm/provider-runtime.js';
 
@@ -413,6 +414,56 @@ describe('composeGatewayIntakeScreeningRuntime fleet quarantine ownership', () =
       { via: `gateway:fs.read:${companionB}` },
     ).withheld).toBe(true);
 
+    await runtime.dispose();
+  });
+
+  it('attributes the intake.l2 remote decision to the screening companion (45z3w)', async () => {
+    const input = makeDataDirs('strict', false);
+    const companionA = createCompanionId('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'test companion A');
+    const companionB = createCompanionId('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'test companion B');
+    const companionBDataDir = mkdtempSync(join(tmpdir(), 'intake-companion-b-'));
+    tempDirs.push(companionBDataDir);
+    const decide = vi.fn(async () => ({
+      ok: false as const,
+      reason: 'error' as const,
+      backend: 'jev' as const,
+      latencyMs: 1,
+    }));
+    const runtime = await composeGatewayIntakeScreeningRuntime({
+      config: {
+        ...input.config,
+        decisionBackend: {
+          ...createDefaultDecisionBackendSettings(),
+          sites: { 'intake.l2': { mode: 'jev', enabled: true, threshold: 0.7 } },
+        },
+      },
+      jevDecisions: { decide },
+      systemDataDir: input.systemDataDir,
+      companionDataDir: input.companionDataDir,
+      multiCompanion: true,
+      companions: [
+        { companionId: companionA, companionDataDir: input.companionDataDir },
+        { companionId: companionB, companionDataDir: companionBDataDir },
+      ],
+      screenerBackend: TEST_SCREENER_BACKEND,
+      screenerTestCompletion: unusedScreenerCompletion,
+      injectionBackendFactory: fakeInjectionBackendFactory,
+      env: input.env,
+      operatorAlerting: input.operatorAlerting,
+      onInlineShadowFinding: input.onInlineShadowFinding,
+    });
+
+    await runtime.resolve(companionB).screening!.screen(
+      'A short note about tomato plants and when to water them in summer.',
+      {
+        sourceClass: 'document',
+        origin: { ref: 'discord:account-b:channel-1:message-1:attachment-0' },
+        scope: 'context',
+      },
+    );
+
+    expect(decide).toHaveBeenCalledOnce();
+    expect(decide.mock.calls[0]?.[0]).toMatchObject({ siteId: 'intake.l2', companionId: companionB });
     await runtime.dispose();
   });
 

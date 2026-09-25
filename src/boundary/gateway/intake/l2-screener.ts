@@ -54,6 +54,7 @@ import {
 } from '../../../system/config/intake-policy-config.js';
 import {
   callValidatedToolLessJsonScreener,
+  isScreenerTimeout,
   neutralizeUntrustedDelimiters,
   screenerModelId,
   screenerModelLabel,
@@ -355,7 +356,20 @@ export type L2ScreeningOutcome =
    * the L2 classification is carried for the L3 routing decision and audit.
    */
   | { kind: 'escalate_l3'; classification: L2Classification; reason: string }
-  | { kind: 'failed_closed'; action: IntakeL2FailClosedAction; error: string };
+  | {
+    kind: 'failed_closed';
+    action: IntakeL2FailClosedAction;
+    error: string;
+    /**
+     * Content-free failure class (q8l79): `timeout` is the screener's own
+     * deadline expiring — an undersized `l2Screener.timeoutMs` for the routed
+     * model — as opposed to a provider or response failure.
+     */
+    cause: L2ScreenerFailureCause;
+  };
+
+/** Content-free class of an L2 screener failure. */
+export type L2ScreenerFailureCause = 'timeout' | 'provider_rejected' | 'failed';
 
 /**
  * Routing + fail-closed wrapper. Skips L2 for below-threshold, non-mandatory
@@ -423,6 +437,9 @@ export async function evaluateL2(input: EvaluateL2Input): Promise<L2ScreeningOut
     // condition, so a misconfigured screener model is visible as a
     // misconfiguration instead of as an endless stream of quarantines.
     const rejection = screenerProviderRejection(error);
+    const cause: L2ScreenerFailureCause = isScreenerTimeout(error)
+      ? 'timeout'
+      : rejection ? 'provider_rejected' : 'failed';
     if (rejection) {
       input.onProviderRejected?.({
         tier: 'l2',
@@ -431,10 +448,11 @@ export async function evaluateL2(input: EvaluateL2Input): Promise<L2ScreeningOut
       });
     }
     log.warn(
-      `L2 screen failed for ${context.sourceClass}/${tier}; failing closed to `
-      + `${action}: ${message}`,
+      `L2 screen failed (${cause}) for ${context.sourceClass}/${tier} `
+      + `model=${screenerModelLabel(input.model)} timeoutMs=${String(config.l2Screener.timeoutMs)}; `
+      + `failing closed to ${action}: ${message}`,
     );
-    return { kind: 'failed_closed', action, error: message };
+    return { kind: 'failed_closed', action, error: message, cause };
   }
 }
 

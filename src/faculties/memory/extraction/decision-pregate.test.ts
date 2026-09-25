@@ -79,21 +79,53 @@ describe('memory extraction pre-gate', () => {
     expect(started()).toBe(true);
   });
 
-  it('never gates a durable snapshot or manual extraction', async () => {
-    const snapshot = rig('api:pregate-snapshot', { threshold: 0.1, pNothing: 1 });
+  it('gates an interval-triggered durable post-turn snapshot over its uncovered entries', async () => {
+    const channelId = 'api:pregate-snapshot';
+    const snapshotEntries = Array.from({ length: 5 }, (_value, index) => ({
+      id: index + 1,
+      channelId,
+      role: 'user' as const,
+      content: `message ${index}`,
+      timestamp: 1_000 + index,
+    }));
+    const snapshot = rig(channelId, { threshold: 0.8, pNothing: 0.95 });
     await snapshot.extractor.maybeExtract(
-      'api:pregate-snapshot', undefined, undefined, undefined, undefined, undefined,
+      channelId, undefined, undefined, undefined, undefined, undefined, snapshotEntries,
+    );
+    expect(snapshot.decide).toHaveBeenCalledTimes(1);
+    expect(snapshot.decide.mock.calls[0]?.[0]).toMatchObject({
+      siteId: 'memory.extraction_pregate',
+      state: { messages: snapshotEntries.map(entry => ({ role: 'user', text: entry.content })) },
+    });
+    expect(snapshot.llmClient.complete).not.toHaveBeenCalled();
+    expect(snapshot.started()).toBe(false);
+
+    // The skipped interval is consumed: the same snapshot no longer triggers.
+    await snapshot.extractor.maybeExtract(
+      channelId, undefined, undefined, undefined, undefined, undefined, snapshotEntries,
+    );
+    expect(snapshot.decide).toHaveBeenCalledTimes(1);
+    expect(snapshot.started()).toBe(false);
+  });
+
+  it('runs a durable snapshot extraction when the pre-gate does not clear the threshold', async () => {
+    const channelId = 'api:pregate-snapshot-run';
+    const snapshot = rig(channelId, { threshold: 0.8, pNothing: 0.2 });
+    await snapshot.extractor.maybeExtract(
+      channelId, undefined, undefined, undefined, undefined, undefined,
       Array.from({ length: 5 }, (_value, index) => ({
         id: index + 1,
-        channelId: 'api:pregate-snapshot',
+        channelId,
         role: 'user' as const,
         content: `message ${index}`,
         timestamp: 1_000 + index,
       })),
     );
-    expect(snapshot.decide).not.toHaveBeenCalled();
+    expect(snapshot.decide).toHaveBeenCalledTimes(1);
     expect(snapshot.started()).toBe(true);
+  });
 
+  it('never gates a manual extraction', async () => {
     const manual = rig('api:pregate-manual', { threshold: 0.1, pNothing: 1 });
     await manual.extractor.extract('api:pregate-manual');
     expect(manual.decide).not.toHaveBeenCalled();

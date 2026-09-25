@@ -382,12 +382,17 @@ from tool arguments.
 | Tool | Input | Result |
 | --- | --- | --- |
 | `channel_hello` | `bridge: {name, version}` | `protocolVersion`, `instanceId`, capabilities, advertised limits |
-| `channel_inbound` | `message: {id, conversationId, conversationKind: direct\|group, senderId, senderName, text, sentAt?, replyToMessageId?}` | `replied` with `reply: {conversationId, text}`, `no_reply`, or `rejected` with `reason` |
+| `channel_inbound` | `message: {id, conversationId, conversationKind: direct\|group, senderId, senderName, text, sentAt?, replyToMessageId?, addressedToCompanion?}` | `replied` with `reply: {conversationId, text}`, `no_reply`, or `rejected` with `reason` |
 | `channel_pull_outbound` | `maxItems?` | `messages: [{deliveryId, conversationId, text, replyToMessageId?}]` |
 | `channel_health` | `status: ok\|degraded, detail?` | adapter status (`connected`, `stale`, queue depths, counters) |
 
 The companion's reply to an inbound message is returned in the same
-`channel_inbound` result. Each adapter's `outbound.sendText` puts messages in a
+`channel_inbound` result. In a `group` conversation only a message the platform
+addressed to the companion's account (`addressedToCompanion: true`, meaning a
+mention of it or a reply to it) is a responding turn. Other group messages are
+ambient chatter: like Discord and Telegram room lines, they go through the
+agent's observe path and participation gate (passive-name candidate, appraiser,
+reservation, egress lease) and usually return `no_reply`. Each adapter's `outbound.sendText` puts messages in a
 bounded per-adapter queue, and the bridge drains that queue with
 `channel_pull_outbound`. The queue and the pull tool are covered by the
 conformance tests. However, no agent-initiated delivery path (scheduled

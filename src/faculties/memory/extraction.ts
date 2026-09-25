@@ -78,6 +78,7 @@ import {
   resetLastExtractionCount,
   resolveCoveredUpToMessageId as resolveCoveredMarker,
   scheduleProfileRefresh,
+  selectUncoveredSnapshotEntries,
 } from './extraction/runtime-helpers.js';
 import { applyEmotionalIntensityImportanceMultiplier } from './extraction/importance.js';
 import { applyLocationTag } from './extraction/location-tags.js';
@@ -374,19 +375,28 @@ export class MemoryExtractor {
         this.extractionInterval,
       );
     if (!trigger) return;
-    // Epic 4lf3r: only the foreground "every N messages" trigger may be
-    // pre-gated; threshold, pre-compaction, recovery and snapshot runs never are.
+    // Epic 4lf3r: only the "every N messages" interval trigger may be
+    // pre-gated — the live foreground path and the durable post-turn snapshot
+    // path alike. Threshold, pre-compaction, crash-recovery and manual runs
+    // never are.
     if (
-      boundedEntries === undefined
-      && trigger.triggerReason === 'interval'
+      trigger.triggerReason === 'interval'
       && this.decisions?.siteSettings('memory.extraction_pregate')?.enabled === true
       && await extractionPreGateSkips({
         decisions: this.decisions,
         channelId,
-        entries: this.sessionManager.getRecentMessages(channelId, trigger.currentCount - trigger.lastCount),
+        entries: boundedEntries === undefined
+          ? this.sessionManager.getRecentMessages(channelId, trigger.currentCount - trigger.lastCount)
+          : selectUncoveredSnapshotEntries(channelId, boundedEntries),
       })
     ) {
       log.debug('Extraction pre-gate found nothing to remember; skipping this interval', { channelId });
+      // The foreground trigger already consumed its interval; a skipped bounded
+      // snapshot consumes its interval the same way so the next post-turn job
+      // does not re-ask about the same messages.
+      if (boundedEntries !== undefined) {
+        this.advanceIntervalWatermarkAfterCoverage(channelId, trigger.triggerReason, boundedEntries);
+      }
       return;
     }
 

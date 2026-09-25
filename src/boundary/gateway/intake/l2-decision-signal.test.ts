@@ -142,6 +142,18 @@ describe('additive intake.l2 decision signal', () => {
     expect(JSON.stringify(records[0])).not.toContain('Ignore previous instructions');
   });
 
+  it('attributes the remote call to the composition companion', async () => {
+    const jev = jevSaying(0.1);
+    const signal = createL2DecisionSignal({
+      config: { decisionBackend: settings('jev') },
+      jev,
+      companionId: 'companion-b',
+    });
+    const { completion } = l2Returning(CLEAN);
+    await evaluateL2(input({ testCompletion: completion, decisionSignal: signal }));
+    expect(jev.decide.mock.calls[0]?.[0]).toMatchObject({ siteId: 'intake.l2', companionId: 'companion-b' });
+  });
+
   it('is silent when the site is not enabled', async () => {
     const jev = jevSaying(0.99);
     const signal = createL2DecisionSignal({ config: { decisionBackend: settings('jev', false) }, jev });

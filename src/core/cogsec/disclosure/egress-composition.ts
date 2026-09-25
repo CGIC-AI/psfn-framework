@@ -41,6 +41,7 @@ export const DISCLOSURE_SOCIAL_EGRESS_METHODS: ReadonlySet<string> = new Set([
   'discord.send',
   'discord.sendMedia',
   'discord.sendReaction',
+  'channel.sendRoomReply',
   'notify',
 ]);
 

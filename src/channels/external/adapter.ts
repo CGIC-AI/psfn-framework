@@ -80,6 +80,10 @@ export class ExternalChannelAdapter implements ChannelAdapterPort {
   readonly config: ChannelConfigAdapter;
   readonly outbound: ChannelOutboundAdapter;
   readonly gateway: ChannelGatewayAdapter;
+  /** Companion this adapter instance serves (channels.json `companionId`). */
+  readonly ownerCompanionId: string;
+  /** Every channel id of this adapter starts with this namespace. */
+  readonly channelIdPrefix: string;
 
   readonly #options: ExternalChannelAdapterOptions;
   readonly #prefix: string;
@@ -106,6 +110,8 @@ export class ExternalChannelAdapter implements ChannelAdapterPort {
     this.meta = { label };
     this.config = { enabled: true, accountId: instanceId, connectionLabel: label };
     this.#prefix = externalChannelIdPrefix(instanceId);
+    this.channelIdPrefix = this.#prefix;
+    this.ownerCompanionId = options.config.companionId;
     this.#now = options.now ?? Date.now;
     this.#queue = new ExternalChannelOutboundQueue(limits.outboundQueueMax);
     this.outbound = {

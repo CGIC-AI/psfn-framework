@@ -3,6 +3,7 @@ import type { GatewayJevDecisionService } from '../jev-decision-service.js';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import type { EmbeddingProviderPort } from '../../../shared/contracts/embedding-provider.js';
 import type { ChannelOutboundDock } from '../../../channels/backplane/types.js';
+import type { GatewayRoomReplyOutbound } from '../room-reply-outbound.js';
 import type { GitOperations } from '../../integrations/git/ops.js';
 import type { ImageRuntimeConfig } from '../../../primitives/images/types.js';
 import type { ModelDiscoveryBackend } from '../../../primitives/llm/discovery.js';
@@ -94,6 +95,8 @@ export interface GatewayMethodRuntime {
    * {@link GatewayMethodRuntime.discordAdapter} dock for account isolation.
    */
   telegramDock?: ChannelOutboundDock;
+  /** Autonomous room-reply outbound for Telegram and external channels (ze2fx). */
+  roomReplyOutbound?: GatewayRoomReplyOutbound;
   gitOps?: GitOperations;
   imageConfig?: ImageRuntimeConfig;
   modelUsageRecorder?: ModelUsageRecorder;

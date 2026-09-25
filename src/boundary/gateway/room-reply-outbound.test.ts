@@ -19,6 +19,7 @@ function stubDock(): ChannelOutboundDock & { outbound: { sendText: ReturnType<ty
 
 async function startedExternalAdapter(): Promise<ExternalChannelAdapter> {
   const adapter = new ExternalChannelAdapter({
+    observer: { authorId: 'external-companion:test', displayName: 'Test Companion' },
     config: {
       instanceId: 'sms',
       label: 'SMS',

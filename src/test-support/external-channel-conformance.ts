@@ -90,6 +90,7 @@ async function startHarness(): Promise<ConformanceHarness> {
   let companion: ScriptedCompanion = async message => companionReply(message, `echo: ${message.content}`);
   const token = 'conformance-bridge-token';
   const adapter = new ExternalChannelAdapter({
+    observer: { authorId: 'external-companion:test', displayName: 'Test Companion' },
     config: {
       instanceId: 'conformance',
       label: 'Conformance bridge',

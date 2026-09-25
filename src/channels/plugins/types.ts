@@ -52,6 +52,12 @@ export interface ChannelPluginHostContext {
   log: RuntimeChannelLifecycleLogger;
   shutdownTimeoutMs: number;
   intakeScreening: IntakeScreeningService | null;
+  /**
+   * Display name of the companion this account serves (companions.json
+   * `displayName`), when the fleet manifest declares one. Connectors that
+   * assert room addressing name the companion's own account with it.
+   */
+  companionDisplayName?: string;
 }
 
 export interface ChannelPluginCreateInput<TConfig = unknown> {

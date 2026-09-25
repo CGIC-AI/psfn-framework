@@ -1,6 +1,7 @@
 import type { ChannelPluginHost } from '../plugins/host.js';
 import type { ChannelPlugin } from '../plugins/types.js';
 import { ExternalChannelAdapter } from './adapter.js';
+import { externalObserverIdentity } from './message-addressing.js';
 import {
   EXTERNAL_CHANNEL_PLUGIN_ID,
   EXTERNAL_CHANNEL_TOKEN_CREDENTIAL_ID,
@@ -25,10 +26,24 @@ export function createExternalChannelPlugin(): ChannelPlugin<ExternalChannelInst
       if (!token) {
         throw new Error(`External channel adapter "${config.instanceId}" has no bearer token`);
       }
+      // The companion's own account in this adapter's rooms. Its label comes
+      // from companions.json displayName; without one the companion id names
+      // it (a display label only, never an authority) and the operator is told.
+      if (!context.companionDisplayName) {
+        context.log.warn(
+          'External channel adapter companion has no companions.json displayName; '
+          + 'group-room addressing names the companion by its id',
+          { instanceId: config.instanceId, companionId: config.companionId },
+        );
+      }
       return {
         adapter: new ExternalChannelAdapter({
           config,
           token,
+          observer: externalObserverIdentity({
+            instanceId: config.instanceId,
+            displayName: context.companionDisplayName ?? config.companionId,
+          }),
           intakeScreening: context.intakeScreening,
           log: context.log,
           reportRuntimeFailure,

@@ -36,6 +36,7 @@ import {
   toExternalSubstrateMessage,
 } from './message.js';
 import { ExternalChannelOutboundQueue } from './outbound-queue.js';
+import type { ExternalObserverIdentity } from './message-addressing.js';
 import {
   EXTERNAL_CHANNEL_PROTOCOL_VERSION,
   type ExternalChannelConnectionState,
@@ -54,6 +55,8 @@ type DegradedKind = 'heartbeat' | 'flood' | 'turn_timeout' | 'outbound_full' | '
 export interface ExternalChannelAdapterOptions {
   config: ExternalChannelInstanceConfig;
   token: string;
+  /** The companion account this adapter speaks as in its rooms. */
+  observer: ExternalObserverIdentity;
   intakeScreening: IntakeScreeningService | null;
   log: RuntimeChannelLifecycleLogger;
   /** Reports a contained fault of this surface to the degraded-health plane. */
@@ -278,6 +281,7 @@ export class ExternalChannelAdapter implements ChannelAdapterPort {
     try {
       const substrate = await toExternalSubstrateMessage(message, {
         instanceId: this.instanceId,
+        observer: this.#options.observer,
         intakeScreening: this.#options.intakeScreening,
         receivedAt: new Date(this.#now()),
       });

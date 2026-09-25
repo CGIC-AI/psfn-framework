@@ -328,6 +328,7 @@ describe('external bridge liveness', () => {
     const reports: unknown[] = [];
     const limits = { ...EXTERNAL_CHANNEL_TEST_LIMITS, heartbeatTimeoutMs: 1_000, failureReportIntervalMs: 5_000 };
     const adapter = new ExternalChannelAdapter({
+      observer: { authorId: 'external-companion:test', displayName: 'Test Companion' },
       config: { instanceId: 'quiet', label: 'Quiet', companionId: EXTERNAL_CHANNEL_TEST_COMPANION_ID, limits },
       token: 'quiet-token',
       intakeScreening: null,
@@ -355,6 +356,7 @@ describe('external bridge liveness', () => {
   it('a bridge that stops pulling fills its bounded queue and further sends are refused', async () => {
     const reports: unknown[] = [];
     const adapter = new ExternalChannelAdapter({
+      observer: { authorId: 'external-companion:test', displayName: 'Test Companion' },
       config: {
         instanceId: 'full', label: 'Full', companionId: EXTERNAL_CHANNEL_TEST_COMPANION_ID,
         limits: EXTERNAL_CHANNEL_TEST_LIMITS,

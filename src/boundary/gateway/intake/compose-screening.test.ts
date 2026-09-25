@@ -497,6 +497,42 @@ describe('composeGatewayIntakeScreeningRuntime fleet quarantine ownership', () =
     await runtime.dispose();
   });
 
+  it('loads one shared L1.5 classifier for every fleet companion and disposes it once (3mbpi)', async () => {
+    const input = makeDataDirs('strict', false);
+    const companions = ['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'cccccccc-cccc-4ccc-8ccc-cccccccccccc']
+      .map((id, index) => {
+        const companionDataDir = mkdtempSync(join(tmpdir(), `intake-shared-${String(index)}-`));
+        tempDirs.push(companionDataDir);
+        return { companionId: createCompanionId(id, `test companion ${String(index)}`), companionDataDir };
+      });
+    const backend = fakeInjectionBackend();
+    const classified = vi.spyOn(backend, 'injectionProbability');
+    const disposed = vi.spyOn(backend, 'dispose');
+    const factory = vi.fn(() => Promise.resolve(backend));
+    const runtime = await composeGatewayIntakeScreeningRuntime({
+      ...input,
+      multiCompanion: true,
+      companions,
+      screenerBackend: TEST_SCREENER_BACKEND,
+      screenerTestCompletion: unusedScreenerCompletion,
+      injectionBackendFactory: factory,
+    });
+
+    expect(factory).toHaveBeenCalledOnce();
+    const warmupCalls = classified.mock.calls.length;
+    for (const companion of companions) {
+      await runtime.resolve(companion.companionId).screening!.screen('A friendly note about the garden.', {
+        sourceClass: 'primary_user',
+        origin: { ref: `discord:${companion.companionId}:channel-1:message-1` },
+        scope: 'context',
+      });
+    }
+    // Every companion's screening scored through the one shared classifier.
+    expect(classified.mock.calls.length - warmupCalls).toBe(companions.length);
+    await runtime.dispose();
+    expect(disposed).toHaveBeenCalledOnce();
+  });
+
   it('surfaces cleanup failures together with the fleet composition failure', async () => {
     const input = makeDataDirs('strict', false);
     const companionA = createCompanionId(

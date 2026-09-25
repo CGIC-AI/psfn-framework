@@ -76,6 +76,21 @@ describe('injection classifier worker pool (3mbpi)', () => {
     }
   });
 
+  it('starts exactly poolSize workers that serve calls in parallel', async () => {
+    const backend = await pool({ poolSize: 2 });
+    try {
+      const startedAt = performance.now();
+      await Promise.all([
+        backend.injectionProbability([1, 97, 2]),
+        backend.injectionProbability([1, 97, 2]),
+      ]);
+      // Two 1.5 s busy calls finish together only on two workers.
+      expect(performance.now() - startedAt).toBeLessThan(2_600);
+    } finally {
+      await backend.dispose();
+    }
+  });
+
   it('refuses a call beyond the queue bound instead of waiting (backpressure)', async () => {
     const backend = await pool({ queueMax: 1 });
     try {

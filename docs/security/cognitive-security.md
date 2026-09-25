@@ -317,7 +317,9 @@ schema versions (`npm run migrate:intake-policy-owner`). Key sections:
   classifier's CPU work stays bounded. Tokenization and inference run on a
   bounded worker-thread pool (`injectionClassifier.worker`: `poolSize`,
   `queueMax`, `callTimeoutMs`), never on the gateway event loop; each worker
-  loads the model once and uses one ONNX thread. A full queue, a timed-out
+  loads the model once and uses one ONNX thread. A fleet gateway shares one
+  classifier and one pool across every companion (the model is identical);
+  companion attribution and audit stay in each companion's composition. A full queue, a timed-out
   call or a crashed worker (which is replaced) leaves the content unscored,
   and the gateway escalates it fail closed with a maximal L1.5 score.
 - **`l2Screener`**: per-tier escalation thresholds, mandatory tiers, per-tier

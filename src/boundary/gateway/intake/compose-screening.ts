@@ -47,6 +47,7 @@ import {
 import { CogSecEventStore } from '../../../core/cogsec/events.js';
 import { resolveCogSecEventsPath, resolveIntakeQuarantinePath } from '../../../persistence/layout.js';
 import { createInjectionClassifierWorkerPool } from './injection-classifier-worker-pool.js';
+import type { SharedInjectionClassifier } from './shared-injection-classifier.js';
 import { injectionClassifierMaxContentChars, loadIntakePolicyConfig } from '../../../system/config/intake-policy-config.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { ProviderRuntime } from '../../../primitives/llm/provider-runtime.js';
@@ -196,6 +197,11 @@ export async function composeGatewayIntakeScreening(input: {
    * transient failure. Content-free: screener tier, model label, HTTP status.
    */
   onScreenerProviderRejected?: GatewayIntakeEscalationDeps['onScreenerProviderRejected'];
+  /**
+   * Process-wide L1.5 classifier shared by every companion composition (one
+   * model copy, one worker pool). Absent: this composition owns its own.
+   */
+  sharedInjectionClassifier?: SharedInjectionClassifier;
   /** Gateway-owned remote decision service for the additive intake.l2 signal (epic 4lf3r). */
   jevDecisions?: GatewayJevDecisionService;
   /** Gateway usage ledger; screener dispatches are recorded here (1fyyi). */
@@ -271,13 +277,14 @@ export async function composeGatewayIntakeScreening(input: {
   const quarantine: IntakeQuarantineStore = durableQuarantine;
 
   let classifier: InjectionClassifier | null = null;
+  let ownsClassifier = false;
   const injectionClassifierDegraded = false;
   const injectionModelProvisioned = input.injectionBackendFactory != null
     || isInjectionModelProvisioned(modelDir);
   if (injectionModelProvisioned) {
     // Present model directories must load correctly — a broken provision
     // throws here and stops gateway startup (fail closed, no silent skip).
-    classifier = await createInjectionClassifier({
+    const createClassifier = (): Promise<InjectionClassifier> => createInjectionClassifier({
       modelDir,
       labelThreshold: policy.injectionClassifier.labelThreshold,
       maxContentChars: injectionClassifierMaxContentChars(policy),
@@ -289,6 +296,12 @@ export async function composeGatewayIntakeScreening(input: {
           ...policy.injectionClassifier.worker,
         })),
     });
+    // A fleet gateway shares one classifier (one worker pool) across every
+    // companion composition; the runtime that owns it disposes it.
+    classifier = input.sharedInjectionClassifier
+      ? await input.sharedInjectionClassifier.acquire({ modelDir, create: createClassifier })
+      : await createClassifier();
+    ownsClassifier = input.sharedInjectionClassifier === undefined;
     log.info('Intake L1.5 injection classifier loaded', { modelDir });
   } else if (existsSync(modelDir)) {
     // A partial footprint means provisioning began but did not complete.
@@ -491,7 +504,7 @@ export async function composeGatewayIntakeScreening(input: {
     },
     refreshScreenerModels: () => liveScreenerModels.refresh(verifyScreenerModels),
     dispose: async () => {
-      await classifier?.dispose();
+      if (ownsClassifier) await classifier?.dispose();
     },
   };
 }

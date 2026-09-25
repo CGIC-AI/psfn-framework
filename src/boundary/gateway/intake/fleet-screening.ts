@@ -1,3 +1,7 @@
+import {
+  createSharedInjectionClassifier,
+  type SharedInjectionClassifier,
+} from './shared-injection-classifier.js';
 import type { CompanionId } from '../../../shared/routing/companion-id.js';
 import type { IntakeScreeningService } from '../../../core/cogsec/intake/screening.js';
 import type { CogSecMode, IntakeEnforcementPosture } from '../../../shared/contracts/cogsec-mode.js';
@@ -184,6 +188,7 @@ function compositionGlobalMode(
 
 async function disposeCompositions(
   compositions: readonly GatewayIntakeScreeningComposition[],
+  sharedInjectionClassifier: SharedInjectionClassifier,
   primaryError?: unknown,
 ): Promise<void> {
   const cleanupErrors: unknown[] = [];
@@ -193,6 +198,12 @@ async function disposeCompositions(
     } catch (error) {
       cleanupErrors.push(error);
     }
+  }
+  // The shared classifier outlives every composition that used it.
+  try {
+    await sharedInjectionClassifier.dispose();
+  } catch (error) {
+    cleanupErrors.push(error);
   }
   if (cleanupErrors.length === 0) {
     if (primaryError !== undefined) throw primaryError;
@@ -232,6 +243,8 @@ export async function composeGatewayIntakeScreeningRuntime(
   } = input;
   const compositions: GatewayIntakeScreeningComposition[] = [];
   const byCompanionId = new Map<CompanionId, GatewayIntakeScreeningComposition>();
+  // 3mbpi: one L1.5 classifier (one worker pool) for the whole process.
+  const sharedInjectionClassifier = createSharedInjectionClassifier();
 
   const composeOne = async (
     ownedCompanionDataDir: string,
@@ -240,6 +253,7 @@ export async function composeGatewayIntakeScreeningRuntime(
     const receipts = resolveReceipts?.(companionId);
     const composition = await composeGatewayIntakeScreening({
       ...baseInput,
+      sharedInjectionClassifier,
       companionDataDir: ownedCompanionDataDir,
       ...(companionId ? { companionId } : {}),
       ...(receipts ? { receipts } : {}),
@@ -297,7 +311,7 @@ export async function composeGatewayIntakeScreeningRuntime(
       }
     }
   } catch (error) {
-    await disposeCompositions(compositions, error);
+    await disposeCompositions(compositions, sharedInjectionClassifier, error);
     throw error;
   }
 
@@ -311,6 +325,7 @@ export async function composeGatewayIntakeScreeningRuntime(
     if (compositionMode(composition) !== mode) {
       await disposeCompositions(
         compositions,
+        sharedInjectionClassifier,
         new Error('Fleet intake screening compositions resolved inconsistent firewall modes'),
       );
     }
@@ -333,8 +348,9 @@ export async function composeGatewayIntakeScreeningRuntime(
   // fleet-wide concurrency. Each companion's service is wrapped so its screen()
   // is keyed by that companion's id: independent companions overlap up to the
   // bound, a single companion's inbound stream stays serial (deterministic
-  // decision/delivery order), and each companion's classifier/quarantine is
-  // reached by at most one in-flight item at a time (no shared-mutable races).
+  // decision/delivery order), and each companion's quarantine is reached by at
+  // most one in-flight item at a time (no shared-mutable races). The L1.5
+  // classifier is shared and stateless; its worker pool bounds concurrency.
   const SINGLE_STREAM_KEY = singleStreamKey ?? '__single__';
   const screeningPolicy = loadIntakePolicyConfig(baseInput.systemDataDir);
   const pool = createScreeningPool({
@@ -417,7 +433,7 @@ export async function composeGatewayIntakeScreeningRuntime(
       // teardown if an observer misbehaved.
     }
     try {
-      await disposeCompositions(compositions);
+      await disposeCompositions(compositions, sharedInjectionClassifier);
     } finally {
       // Caller-owned receipt stores close last: a composition teardown failure
       // must not strand their pools.

@@ -204,6 +204,17 @@ export function createFleetMaintenanceCoordinator(input: {
     manifestFingerprint: createHash('sha256').update(fleet.join('\n')).digest('hex'),
   };
 
+  // The lease this instance holds, if any (psfn-framework-jrki1). A foreground
+  // turn of the holding instance marks the held baton in memory: the heavy
+  // runner sees it at its next checkpoint with no database round trip, so
+  // preemption never depends on opening a fresh connection per turn.
+  let heldFencingToken: number | null = null;
+  let heldExpiresAtMs = 0;
+  let localPreemptRequested = false;
+  const noteHeldLease = (lease: FleetMaintenanceLease): void => {
+    if (lease.fencingToken === heldFencingToken) heldExpiresAtMs = lease.expiresAtMs;
+  };
+
   const requireLocalLease = (lease: FleetMaintenanceLease): number => {
     if (lease.companionId !== input.companionId) {
       throw new FleetMaintenanceFenceLostError(
@@ -231,7 +242,7 @@ export function createFleetMaintenanceCoordinator(input: {
     },
     async tryAcquire({ nowMs, leaseExpiresAtMs, phase }) {
       const now = requireTimestamp(nowMs, 'fleetMaintenance.nowMs');
-      return await input.store.tryAcquire({
+      const result = await input.store.tryAcquire({
         ...binding,
         nowMs: now,
         leaseExpiresAtMs: requireFutureTimestamp(
@@ -241,10 +252,16 @@ export function createFleetMaintenanceCoordinator(input: {
         ),
         phase: requirePhase(phase),
       });
+      if (result.outcome === 'acquired') {
+        heldFencingToken = result.lease.fencingToken;
+        heldExpiresAtMs = result.lease.expiresAtMs;
+        localPreemptRequested = false;
+      }
+      return result;
     },
     async renew({ lease, nowMs, leaseExpiresAtMs }) {
       const now = requireTimestamp(nowMs, 'fleetMaintenance.nowMs');
-      return await input.store.renew({
+      const renewed = await input.store.renew({
         ...binding,
         fencingToken: requireLocalLease(lease),
         nowMs: now,
@@ -254,10 +271,12 @@ export function createFleetMaintenanceCoordinator(input: {
           'fleetMaintenance.leaseExpiresAtMs',
         ),
       });
+      noteHeldLease(renewed);
+      return renewed;
     },
     async commitCheckpoint({ lease, nowMs, leaseExpiresAtMs, phase, checkpointRef }) {
       const now = requireTimestamp(nowMs, 'fleetMaintenance.nowMs');
-      return await input.store.commitCheckpoint({
+      const committed = await input.store.commitCheckpoint({
         ...binding,
         fencingToken: requireLocalLease(lease),
         nowMs: now,
@@ -269,19 +288,43 @@ export function createFleetMaintenanceCoordinator(input: {
         phase: requirePhase(phase),
         checkpointRef: requireCheckpointRef(checkpointRef),
       });
+      noteHeldLease(committed.lease);
+      if (localPreemptRequested && heldFencingToken === committed.lease.fencingToken) {
+        return {
+          lease: { ...committed.lease, preemptRequested: true },
+          disposition: 'yield_requested',
+        };
+      }
+      return committed;
     },
     async release({ lease, nowMs, outcome }) {
-      await input.store.release({
-        ...binding,
-        fencingToken: requireLocalLease(lease),
-        nowMs: requireTimestamp(nowMs, 'fleetMaintenance.nowMs'),
-        outcome,
-      });
+      try {
+        await input.store.release({
+          ...binding,
+          fencingToken: requireLocalLease(lease),
+          nowMs: requireTimestamp(nowMs, 'fleetMaintenance.nowMs'),
+          outcome,
+        });
+      } finally {
+        if (heldFencingToken === lease.fencingToken) {
+          heldFencingToken = null;
+          localPreemptRequested = false;
+        }
+      }
     },
     async requestForegroundPreemption({ nowMs }) {
+      const now = requireTimestamp(nowMs, 'fleetMaintenance.nowMs');
+      if (heldFencingToken !== null && now < heldExpiresAtMs) {
+        localPreemptRequested = true;
+        return true;
+      }
+      // Another instance (or nobody) holds the baton: signal it through the
+      // shared row. An expired local lease is no longer authority.
+      heldFencingToken = null;
+      localPreemptRequested = false;
       return await input.store.requestPreemption({
         ...binding,
-        nowMs: requireTimestamp(nowMs, 'fleetMaintenance.nowMs'),
+        nowMs: now,
       });
     },
     async withdrawDemand() {

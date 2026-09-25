@@ -297,8 +297,42 @@ export function roleBadge(role: string | undefined): RoleBadgeMeta | null {
   return { label: role, cls: ROLE_BADGE_CLASS_BY_ROLE[role] ?? 'bg-bark-400 text-white' };
 }
 
-export function isProtected(_layer: PromptLayer): boolean {
-  return false;
+/**
+ * Operator layers are writable only by the audited operator principal; the
+ * server says so through `canWriteOperatorLayers` and re-authorizes every
+ * write. Other layer types are not locked here.
+ */
+export function isProtected(layer: PromptLayer, canWriteOperatorLayers: boolean): boolean {
+  return layer.type === 'operator' && !canWriteOperatorLayers;
+}
+
+export type CreatablePromptLayerType = 'runtime' | 'channel' | 'task' | 'operator';
+
+export function creatableLayerTypes(canWriteOperatorLayers: boolean): CreatablePromptLayerType[] {
+  return canWriteOperatorLayers
+    ? ['runtime', 'channel', 'task', 'operator']
+    : ['runtime', 'channel', 'task'];
+}
+
+const OPERATOR_LAYER_IDENTIFIER = /^operator\.[a-z0-9][a-z0-9_-]*(?:\.[a-z0-9][a-z0-9_-]*)*$/u;
+
+/** Client-side mirror of the server's operator identifier rule (server stays authoritative). */
+export function operatorIdentifierError(identifier: string): string | null {
+  const trimmed = identifier.trim();
+  if (!trimmed) return 'Operator layers need an identifier under operator.*';
+  if (!OPERATOR_LAYER_IDENTIFIER.test(trimmed)) {
+    return 'Identifier must look like operator.briefing (lowercase segments)';
+  }
+  if (trimmed === 'operator.temporal_rules') return 'operator.temporal_rules is reserved';
+  return null;
+}
+
+/** Operator-authored layers may be deleted by operator writers; system seeds may not. */
+export function canDeleteLayer(layer: PromptLayer, canWriteOperatorLayers: boolean): boolean {
+  return canWriteOperatorLayers
+    && layer.type === 'operator'
+    && layer.updatedBy !== 'system'
+    && !layer.updatedBy.startsWith('system:');
 }
 
 export function reorderNorthStarItems(

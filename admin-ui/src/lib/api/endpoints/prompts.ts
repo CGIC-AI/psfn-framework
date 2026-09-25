@@ -1,4 +1,4 @@
-import { apiGet, apiPatch, apiPost, apiPut } from '$lib/api/client';
+import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from '$lib/api/client';
 import { isRecord } from '../../../../../src/shared/utils/types.js';
 import type {
   ConstitutionUpdateResult,
@@ -133,5 +133,14 @@ export function getPromptDiff(
 ): Promise<PromptDiffResult> {
   return apiGet<PromptDiffResult>(
     `/api/admin/prompts/${encodeURIComponent(id)}/diff`
+  );
+}
+
+/** Delete an operator-authored prompt layer (audited operator only). */
+export function deletePromptLayer(
+  id: string
+): Promise<PromptUpdateResult> {
+  return apiDelete<PromptUpdateResult>(
+    `/api/admin/prompts/${encodeURIComponent(id)}`
   );
 }

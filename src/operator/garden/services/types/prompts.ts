@@ -28,6 +28,8 @@ export interface AdminPromptListData {
   runtimeBlocks: AdminPromptRuntimeBlock[];
   runtimeLayerCoverage: AdminRuntimePromptLayerCoverage;
   runtimeMacroHints: AdminPromptRuntimeMacroHint[];
+  /** Server-authoritative: the requesting principal may write operator layers. */
+  canWriteOperatorLayers: boolean;
 }
 
 export interface AdminPromptRuntimeBlock {
@@ -175,7 +177,7 @@ export interface RuntimePromptUpdateResult {
 }
 
 export interface AdminPromptsService {
-  listPrompts(): AdminPromptListData;
+  listPrompts(requestContext?: GardenRequestContext): AdminPromptListData;
   getFoundationSnapshot(): AdminFoundationSnapshotData | null;
   saveFoundationSections(body: string): FoundationUpdateResult;
   getConstitutionSnapshot(): AdminConstitutionSnapshotData;

@@ -24,6 +24,25 @@ export type OperatorLayerWriter =
 export function resolveOperatorLayerWriter(
   context: GardenRequestContext | undefined,
 ): OperatorLayerWriter {
+  if (context?.kind === 'fleet_principal'
+    && context.actor.provider !== 'testing_harness'
+    && context.action !== 'prompts.manage') {
+    return { ok: false, message: 'Operator prompt layers require prompts.manage authority' };
+  }
+  return operatorLayerPrincipal(context);
+}
+
+/**
+ * Whether the request's principal is one that may write operator layers,
+ * independent of the current route's action. The Garden prompt list exposes
+ * this so the UI only offers operator-layer editing to writers; every write is
+ * still re-authorized by resolveOperatorLayerWriter.
+ */
+export function canWriteOperatorLayers(context: GardenRequestContext | undefined): boolean {
+  return operatorLayerPrincipal(context).ok;
+}
+
+function operatorLayerPrincipal(context: GardenRequestContext | undefined): OperatorLayerWriter {
   if (!context || context.kind === 'public') {
     return { ok: false, message: 'Operator prompt layers require an authenticated operator' };
   }
@@ -32,9 +51,6 @@ export function resolveOperatorLayerWriter(
   }
   if (context.actor.provider === 'testing_harness') {
     return { ok: false, message: 'The testing-harness door cannot write operator prompt layers' };
-  }
-  if (context.action !== 'prompts.manage') {
-    return { ok: false, message: 'Operator prompt layers require prompts.manage authority' };
   }
   const adminTokenDoor: boolean = isAuditedAdminTokenOperator(context);
   if (adminTokenDoor) {

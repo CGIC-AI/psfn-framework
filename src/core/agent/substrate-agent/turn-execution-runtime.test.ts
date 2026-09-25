@@ -840,6 +840,7 @@ function createRuntime(params: {
       sessionId: logicalSessionId,
     })),
     withCorrelationPurpose: vi.fn((correlation, purpose) => ({ ...correlation, purpose })),
+    viewerCeiling: vi.fn(() => null),
     countResolvableSpeakerContacts: vi.fn(async () => 0),
     resolveParticipantRelationships: vi.fn(async () => []),
     resolveAuthorContext: params.resolveAuthorContext ?? vi.fn(() => ({

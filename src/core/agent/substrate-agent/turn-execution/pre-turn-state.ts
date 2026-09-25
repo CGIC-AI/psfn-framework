@@ -1,3 +1,4 @@
+import { capConversationScopeToCeiling } from '../../../session/viewer-ceiling.js';
 import { resolveProvenSpeakerContactId } from '../../../session/speaker-attribution.js';
 import { isCompanionSelfReflectionContext } from '../../../../primitives/llm/request-context.js';
 import { isObserverSocialContactTurn } from './observer-social-interaction.js';
@@ -571,6 +572,14 @@ export async function prepareTurnIdentityState(input: {
           }
         : {}),
     });
+  }
+
+  // A delegated worker's room is never more private than the room that
+  // spawned it (psfn-framework-mzytp); its trust is already held to the
+  // ceiling by resolveAuthorContext.
+  const viewerCeiling = runtime.viewerCeiling();
+  if (viewerCeiling) {
+    conversationScope = capConversationScopeToCeiling(conversationScope, viewerCeiling);
   }
 
   const requesterProvenance = resolveRequesterProvenance(authorContext, message);

@@ -50,6 +50,7 @@ import type {
 } from '../../cogsec/disclosure/index.js';
 import type { ProviderRuntime } from '../../../primitives/llm/provider-runtime.js';
 
+import type { ViewerCeiling } from '../../session/viewer-ceiling.js';
 interface TurnExecutionAdapterCallbacks {
   resolveTaskKind: (message: SubstrateMessage) => string | undefined;
   buildTurnBudgetCharacteristics: (
@@ -57,6 +58,7 @@ interface TurnExecutionAdapterCallbacks {
     taskKind?: string,
   ) => ContextBudgetTurnCharacteristics;
   resolveAuthorContext: (message: SubstrateMessage) => Promise<ResolvedAuthorContext>;
+  viewerCeiling: () => ViewerCeiling | null;
   countResolvableSpeakerContacts: (
     message: SubstrateMessage,
     speakers: readonly ConversationScopeSpeaker[],
@@ -280,6 +282,7 @@ export function createTurnExecutionRuntimeAdapter(
     ),
     withCorrelationPurpose: (correlation, purpose) => options.turnSupportRuntime.withCorrelationPurpose(correlation, purpose),
     resolveAuthorContext: (message) => options.callbacks.resolveAuthorContext(message),
+    viewerCeiling: () => options.callbacks.viewerCeiling(),
     countResolvableSpeakerContacts: (message, speakers) => options.callbacks
       .countResolvableSpeakerContacts(message, speakers),
     resolveParticipantRelationships: (message, conversationScope, trustLevel) => options.callbacks

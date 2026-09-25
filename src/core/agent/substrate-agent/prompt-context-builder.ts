@@ -51,6 +51,7 @@ import type { SituatedEmanationTracker } from './runtime-context-sections/situat
 import type { WorldPlaneMapReader } from '../../../shared/contracts/world-plane-map.js';
 import type { WorldNotesReader } from '../../../shared/contracts/world-notes.js';
 import type { CompanionPresenceTurnPort } from '../companion-presence-runtime.js';
+import { capTrustLevelToCeiling, type ViewerCeiling } from '../../session/viewer-ceiling.js';
 import type { createComponentLogger } from '../../../shared/logger.js';
 
 type Log = ReturnType<typeof createComponentLogger>;
@@ -84,6 +85,8 @@ export interface PromptContextBuilderDeps {
   getContactStore: () => ContactStorePort | null;
   contactTrackingGate: ContactTrackingGate | null;
   snapshotCapabilityGrant: () => Pick<CapabilityGrantSnapshot, 'tier' | 'grantedTokens'>;
+  /** The delegating conversation's viewer ceiling, for a subagent or shard. */
+  getViewerCeiling: () => ViewerCeiling | null;
   log: Log;
 }
 
@@ -376,7 +379,7 @@ export class PromptContextBuilder {
   }
 
   async resolveAuthorContext(message: SubstrateMessage): Promise<ResolvedAuthorContext> {
-    return resolveAuthorContextForTurn({
+    const resolved = await resolveAuthorContextForTurn({
       message,
       contactStore: this.deps.getContactStore(),
       logger: this.deps.log,
@@ -384,5 +387,9 @@ export class PromptContextBuilder {
       companionDisplayName: this.deps.getCharacterName(),
       ...(this.deps.contactTrackingGate ? { contactTracking: this.deps.contactTrackingGate } : {}),
     });
+    const ceiling = this.deps.getViewerCeiling();
+    if (!ceiling) return resolved;
+    const trustLevel = capTrustLevelToCeiling(resolved.trustLevel, ceiling);
+    return trustLevel === resolved.trustLevel ? resolved : { ...resolved, trustLevel };
   }
 }

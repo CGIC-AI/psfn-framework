@@ -1,3 +1,4 @@
+import { captureViewerCeilingFromRequest, type ViewerCeiling } from '../../core/session/viewer-ceiling.js';
 // ── ShardManager ──
 // Manages bounded subagent launches plus shard routing/state for parallel task execution.
 // Bounded launches share parent's heavy resources (LLM, DB, memory) but get isolated channelIds.
@@ -401,6 +402,9 @@ export class ShardManager implements ShardExecutionPort {
       }, async () => this.spawn(shardConfig));
     }
 
+    // A shard reads as no more than the conversation that spawned it
+    // (psfn-framework-mzytp); a spawn without an admitted viewer is refused.
+    const viewerCeiling = captureViewerCeilingFromRequest('Shard spawn');
     this.refreshShardHealth();
     const shardId = `shard-${randomUUID()}`;
     const channelId = `shard:${shardId}`;
@@ -424,6 +428,7 @@ export class ShardManager implements ShardExecutionPort {
         channelId,
         shardConfig,
         coreCompanionName,
+        viewerCeiling,
       );
     const preparedConfig = contextPack
       ? { ...shardConfig, contextPack }
@@ -456,6 +461,7 @@ export class ShardManager implements ShardExecutionPort {
         shardRuntimeConfig,
         capabilityGrant,
         chargePolicy,
+        viewerCeiling,
         shardPostgres,
       )
       : this.executeShard(
@@ -467,6 +473,7 @@ export class ShardManager implements ShardExecutionPort {
         shardRuntimeConfig,
         capabilityGrant,
         chargePolicy,
+        viewerCeiling,
       );
     const charged = (): Promise<ShardResult> => (chargePolicy
       ? runWithChargeContext({
@@ -621,6 +628,7 @@ export class ShardManager implements ShardExecutionPort {
         shardRuntimeConfig,
         capabilityGrant,
         chargePolicy,
+        null,
         shardPostgres,
       )
       : this.executeShard(
@@ -632,6 +640,7 @@ export class ShardManager implements ShardExecutionPort {
         shardRuntimeConfig,
         capabilityGrant,
         chargePolicy,
+        null,
       );
 
     try {
@@ -687,6 +696,12 @@ export class ShardManager implements ShardExecutionPort {
     runtimeConfig: SubstrateConfig,
     capabilityGrant: DerivedShardCapabilityGrant,
     shardChargePolicy: ChargePolicyConfig | null,
+    /**
+     * The spawning conversation's viewer ceiling (psfn-framework-mzytp). Null
+     * only for a satellite delegation, where the shard turn is the inbound
+     * satellite message itself and resolves that speaker's own viewer.
+     */
+    viewerCeiling: ViewerCeiling | null,
     shardPostgres?: PostgresShardSchemaBinding,
   ): Promise<ShardResult> {
     this.refreshShardHealth();
@@ -859,6 +874,7 @@ export class ShardManager implements ShardExecutionPort {
         memoryProvider: this.deps.memoryProvider,
         exposeMemory: !shardConfig.contextPack,
         tools: injectedTools,
+        viewerCeiling,
         // hrmrq.54: resolved at spawn time — composition assigns the parent
         // SessionManager's screening service after construction.
         intakeScreening: this.deps.sessionManager?.intakeScreening ?? null,
@@ -880,6 +896,7 @@ export class ShardManager implements ShardExecutionPort {
         memoryProvider: this.deps.memoryProvider,
         exposeMemory: !shardConfig.contextPack,
         tools: chatTools,
+        viewerCeiling,
         // hrmrq.54: the human-to-shard chat runtime screens tool results too.
         intakeScreening: this.deps.sessionManager?.intakeScreening ?? null,
       });

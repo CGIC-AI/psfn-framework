@@ -1,3 +1,8 @@
+import {
+  captureViewerCeilingFromRequest,
+  hasAdmittedViewerContext,
+  type ViewerCeiling,
+} from '../../core/session/viewer-ceiling.js';
 import { randomUUID } from 'node:crypto';
 import type { AgentTool } from '../../boundary/pi-agent/index.js';
 import type {
@@ -263,6 +268,8 @@ interface ActiveSubagentHandle {
   request: SubagentExecutionRequest;
   baseMessage: SubstrateMessage;
   ingestedIntakeEnvelopes: IntakeEnvelopeSnapshot[];
+  /** The spawning conversation's viewer ceiling (psfn-framework-mzytp). */
+  viewerCeiling: ViewerCeiling | null;
   channelId: string;
   startTime: number;
   maxTurns: number;
@@ -341,6 +348,13 @@ export class SubagentFaculty implements SubagentControlPort {
     // Fail closed on a work spec whose declared lane does not reconcile with the
     // single runtime lane resolver (Law 12.4) before any worker is registered.
     assertWorkSpecLaneParity(request.workSpec);
+    // psfn-framework-mzytp: the worker reads as no more than the conversation
+    // that spawned it. A programmatic delegation of an inbound message outside
+    // any turn runs that message's own conversation, which resolves its own
+    // viewer; every other spawn without an admitted viewer is refused.
+    const viewerCeiling: ViewerCeiling | null = request.message && !hasAdmittedViewerContext()
+      ? null
+      : captureViewerCeilingFromRequest('Automata spawn');
     const subagentId = `subagent-${randomUUID()}`;
     const executionChannelId = normalizeExecutionChannelId(request.executionChannelId)
       ?? `subagent:${subagentId}`;
@@ -560,6 +574,7 @@ export class SubagentFaculty implements SubagentControlPort {
       request,
       baseMessage,
       ingestedIntakeEnvelopes,
+      viewerCeiling,
       channelId: executionChannelId,
       startTime,
       maxTurns,
@@ -753,6 +768,7 @@ export class SubagentFaculty implements SubagentControlPort {
         },
       );
       agentLoop.setCapabilityAccess(handle.capabilityAccess);
+      if (handle.viewerCeiling) agentLoop.setViewerCeiling(handle.viewerCeiling);
       handle.agentLoop = agentLoop;
 
       if (this.deps.memoryProvider) {

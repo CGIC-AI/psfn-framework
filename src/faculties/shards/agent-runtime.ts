@@ -9,6 +9,7 @@ import type { CapabilityAccess } from '../../system/capabilities/access.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { sanitizeCoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { allowShardRequestScopedCapabilityTransport } from './request-scoped-capability-transport.js';
+import type { ViewerCeiling } from '../../core/session/viewer-ceiling.js';
 
 export interface CreateShardAgentRuntimeOptions {
   readonly eventBus: EventBus;
@@ -21,6 +22,8 @@ export interface CreateShardAgentRuntimeOptions {
   readonly memoryProvider: MemoryProvider | null;
   readonly exposeMemory: boolean;
   readonly tools: readonly AgentTool<any>[];
+  /** The spawning conversation's viewer ceiling; null only for satellite delegation. */
+  readonly viewerCeiling: ViewerCeiling | null;
   /**
    * hrmrq.54: the parent's intake screening service. A shard's SessionManager
    * must screen its tool results (scheduler seam + persistence seam) exactly
@@ -53,6 +56,7 @@ export function createShardAgentRuntime(
     },
   );
   agentLoop.setCapabilityAccess(options.capabilityAccess);
+  if (options.viewerCeiling) agentLoop.setViewerCeiling(options.viewerCeiling);
   if (options.memoryProvider && options.exposeMemory) {
     agentLoop.memoryProvider = options.memoryProvider;
   }

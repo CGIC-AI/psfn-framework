@@ -215,8 +215,9 @@ const LOCK_ICON = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" s
 const DISCORD_MARK = '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M20.317 4.369a19.79 19.79 0 0 0-4.885-1.515.074.074 0 0 0-.79.037c-.211.375-.445.865-.608 1.249a18.27 18.27 0 0 0-5.487 0 12.65 12.65 0 0 0-.617-1.25.077.077 0 0 0-.079-.036c-1.714.29-3.354.8-4.885 1.515a.07.07 0 0 0-.32.027C.533 9.045-.32 13.579.099 18.057a.082.082 0 0 0 .31.056 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.1 13.1 0 0 1-1.872-.892.077.077 0 0 1-.008-.128c.126-.094.252-.192.372-.291a.074.074 0 0 1 .078-.01c3.927 1.793 8.18 1.793 12.061 0a.074.074 0 0 1 .79.009c.12.099.245.198.372.292a.077.077 0 0 1-.6.127c-.598.35-1.22.645-1.873.891a.077.077 0 0 0-.41.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .84.029 19.84 19.84 0 0 0 6.002-3.03.077.077 0 0 0 .032-.055c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.028ZM8.02 15.331c-1.182 0-2.157-1.086-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.332-.956 2.418-2.157 2.418Zm7.975 0c-1.183 0-2.157-1.086-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.332-.946 2.418-2.157 2.418Z"/></svg>';
 
 function pageBody(
-  registration?: FleetBreakGlassLoginRegistration,
-  adminTokenEnabled = false,
+  registration: FleetBreakGlassLoginRegistration | undefined,
+  adminTokenEnabled: boolean,
+  ssoLoginEnabled: boolean,
   error?: string,
 ): Buffer {
   if (registration) validateLoginPath(registration.loginPath);
@@ -237,6 +238,8 @@ function pageBody(
         </form>
       </div>`
     : '';
+  const discordLogin = `<p class="intro">Sign in to continue to the PSFN Cluster Portal. Operator identity is verified through Discord, then bound to your session.</p>
+      <a class="primary" href="${DISCORD_LOGIN_PATH}">${DISCORD_MARK}<span>Login with Discord</span></a>`;
   return Buffer.from(`<!doctype html>
 <html lang="en">
 <head>
@@ -258,8 +261,7 @@ function pageBody(
       </div>
       <div class="rule" aria-hidden="true"></div>
       <h1 id="login-title">Welcome back.</h1>
-      <p class="intro">Sign in to continue to the PSFN Cluster Portal. Operator identity is verified through Discord, then bound to your session.</p>
-      <a class="primary" href="${DISCORD_LOGIN_PATH}">${DISCORD_MARK}<span>Login with Discord</span></a>
+      ${ssoLoginEnabled ? discordLogin : operatorOnlyIntro(adminTokenEnabled)}
       <p class="privacy">${LOCK_ICON}<span>Authentication is handled at this Gateway.</span></p>${adminToken}${breakGlass}
     </section>
   </main>
@@ -267,10 +269,18 @@ function pageBody(
 </html>`, 'utf8');
 }
 
+function operatorOnlyIntro(adminTokenEnabled: boolean): string {
+  return adminTokenEnabled
+    ? '<p class="intro">This deployment has no single sign-on provider. Sign in with the administrator token.</p>'
+    : '<p class="intro">This deployment has no single sign-on provider and no administrator token; interactive sign-in is unavailable.</p>';
+}
+
 export class GatewayFleetLoginLanding {
   constructor(
     private readonly registration?: FleetBreakGlassLoginRegistration,
     private readonly adminTokenEnabled = false,
+    /** False when fleet-auth.json declares `provider.kind: none`. */
+    private readonly ssoLoginEnabled = true,
   ) {
     // Fail closed at startup, not at first request: an off-origin break-glass
     // login target is a misconfiguration the deployment must not boot with.
@@ -278,7 +288,7 @@ export class GatewayFleetLoginLanding {
   }
 
   send(response: ServerResponse, error?: string): void {
-    const body = pageBody(this.registration, this.adminTokenEnabled, error);
+    const body = pageBody(this.registration, this.adminTokenEnabled, this.ssoLoginEnabled, error);
     response.writeHead(error ? 401 : 200, {
       'Cache-Control': 'no-store',
       'Content-Length': String(body.byteLength),

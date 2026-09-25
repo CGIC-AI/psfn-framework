@@ -688,6 +688,7 @@ export async function startOptionalGatewayApiServer(
         canonicalOrigin: options.config.fleetAuth.canonicalOrigin,
         trustProxy: isExplicitTrue(env.FLEET_SSO_TRUST_PROXY),
         ...(env.ADMIN_TOKEN ? { adminToken: env.ADMIN_TOKEN } : {}),
+        ssoLoginEnabled: options.config.fleetAuth.provider.kind === 'discord',
         broker: options.fleetAuthBroker,
         signer: options.fleetAuthRequestCapabilities,
         verifier: options.fleetAuthRequestCapabilityVerifier,

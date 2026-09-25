@@ -4,7 +4,10 @@ import {
   randomBytes as cryptoRandomBytes,
   randomUUID,
 } from 'node:crypto';
-import type { FleetAuthConfig } from '../../system/config/fleet-auth-config.js';
+import type {
+  FleetAuthConfig,
+  FleetAuthDiscordSsoProvider,
+} from '../../system/config/fleet-auth-config.js';
 import {
   digestFleetAuthVerifiedProviderProof,
   lifecycleOAuthKindFor,
@@ -172,7 +175,8 @@ interface DiscordIdentity {
 }
 
 export interface GatewayFleetAuthBrokerOptions extends DiscordEvidenceBrokerOptions<FleetAuthBrokerStore> {
-  oauthClientSecret: string;
+  /** Required exactly when `config.provider.kind` is `discord`. */
+  oauthClientSecret?: string;
   sessionPepper: string;
   fetchImpl?: typeof fetch;
   now?: () => Date;
@@ -226,7 +230,7 @@ function parseReturnPath(value: string, canonicalOrigin: string): string {
 export class GatewayFleetAuthBroker {
   private readonly config: FleetAuthConfig;
   private readonly store: FleetAuthBrokerStore;
-  private readonly oauthClientSecret: string;
+  private readonly oauthClientSecret: string | undefined;
   private readonly sessionPepper: string;
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => Date;
@@ -237,6 +241,12 @@ export class GatewayFleetAuthBroker {
   constructor(options: GatewayFleetAuthBrokerOptions) {
     this.config = options.config;
     this.store = options.store;
+    const discordProvider = options.config.provider.kind === 'discord';
+    if (discordProvider !== (options.oauthClientSecret !== undefined)) {
+      throw new Error(discordProvider
+        ? 'Fleet auth broker requires the Discord OAuth client secret'
+        : 'Fleet auth broker must not receive an OAuth client secret without an SSO provider');
+    }
     this.oauthClientSecret = options.oauthClientSecret;
     this.sessionPepper = options.sessionPepper;
     this.fetchImpl = options.fetchImpl ?? fetch;
@@ -279,6 +289,7 @@ export class GatewayFleetAuthBroker {
     initiatingBrowserToken: string;
     expiresAt: Date;
   }> {
+    const provider = this.requireSsoProvider();
     const returnPath = parseReturnPath(input.returnPath, this.config.canonicalOrigin);
     const state = opaqueToken(this.randomBytes);
     const initiatingBrowserToken = opaqueToken(this.randomBytes);
@@ -300,8 +311,8 @@ export class GatewayFleetAuthBroker {
 
     const authorization = new URL(DISCORD_AUTHORIZE_URL);
     authorization.searchParams.set('response_type', 'code');
-    authorization.searchParams.set('client_id', this.config.provider.clientId);
-    authorization.searchParams.set('scope', this.config.provider.scopes.join(' '));
+    authorization.searchParams.set('client_id', provider.clientId);
+    authorization.searchParams.set('scope', provider.scopes.join(' '));
     authorization.searchParams.set('redirect_uri', callbackUri);
     authorization.searchParams.set('state', state);
     authorization.searchParams.set(
@@ -325,6 +336,7 @@ export class GatewayFleetAuthBroker {
     initiatingBrowserToken: string;
     expiresAt: Date;
   }> {
+    this.requireSsoProvider();
     this.assertMutationOrigin(input.requestOrigin);
     const returnPath = parseReturnPath(input.returnPath, this.config.canonicalOrigin);
     if (!isRfc4122Uuid(input.ceremonyId)) {
@@ -380,6 +392,7 @@ export class GatewayFleetAuthBroker {
     | ({ kind: 'login' } & Awaited<ReturnType<GatewayFleetAuthBroker['completeCallback']>>)
     | ({ kind: 'lifecycle' } & Awaited<ReturnType<GatewayFleetAuthBroker['completeLifecycleOAuthCallback']>>)
   > {
+    this.requireSsoProvider();
     this.assertCallbackInput(input);
     const destination = await this.store.resolveOAuthCallbackDestination({
       stateDigest: this.digest(input.state),
@@ -396,6 +409,7 @@ export class GatewayFleetAuthBroker {
     returnPath: string;
     session: FleetAuthSessionRecord;
   }> {
+    const provider = this.requireSsoProvider();
     this.assertCallbackInput(input);
     const now = this.now();
     const transaction = await this.store.consumeOAuthTransaction({
@@ -413,7 +427,7 @@ export class GatewayFleetAuthBroker {
     const providerTokens = await this.exchangeCode(input.code, transaction);
     const identity = await this.resolveDiscordIdentity(providerTokens.accessToken);
     const providerMembershipEvidence = await this.discordEvidence.collectOAuthMembership(providerTokens.accessToken, identity.subjectId);
-    if (this.config.provider.tokenCustody === 'encrypted_refresh'
+    if (provider.tokenCustody === 'encrypted_refresh'
       && providerTokens.refreshToken === undefined) {
       throw new FleetAuthBrokerError(
         'malformed_provider_response',
@@ -435,7 +449,7 @@ export class GatewayFleetAuthBroker {
       now,
       idleTtlMs: this.config.ttls.sessionIdleMs,
       absoluteTtlMs: this.config.ttls.sessionAbsoluteMs,
-      ...(this.config.provider.tokenCustody === 'encrypted_refresh' && providerTokens.refreshToken
+      ...(provider.tokenCustody === 'encrypted_refresh' && providerTokens.refreshToken
         ? {
             refreshToken: providerTokens.refreshToken,
             providerTokenExpiresAt: new Date(
@@ -460,6 +474,7 @@ export class GatewayFleetAuthBroker {
       proofDigest: string;
     };
   }> {
+    this.requireSsoProvider();
     this.assertCallbackInput(input);
     const now = this.now();
     const transaction = await this.store.consumeOAuthTransaction({
@@ -598,15 +613,33 @@ export class GatewayFleetAuthBroker {
     }
   }
 
+  /**
+   * Every OAuth entry point starts here: a fleet declared with
+   * `provider.kind: none` has no human SSO door, so login, lifecycle proof
+   * and callbacks reject with a typed error instead of reaching Discord.
+   */
+  private requireSsoProvider(): FleetAuthDiscordSsoProvider {
+    const provider = this.config.provider;
+    if (provider.kind !== 'discord') {
+      throw new FleetAuthBrokerError(
+        'provider_disabled',
+        404,
+        'Fleet SSO is disabled: this deployment declares no human SSO provider',
+      );
+    }
+    return provider;
+  }
+
   private digest(value: string): string {
     return createHmac('sha256', this.sessionPepper).update(value).digest('hex');
   }
 
   private authorizationUrl(state: string, pkceVerifier: string, callbackUri: string): string {
+    const provider = this.requireSsoProvider();
     const authorization = new URL(DISCORD_AUTHORIZE_URL);
     authorization.searchParams.set('response_type', 'code');
-    authorization.searchParams.set('client_id', this.config.provider.clientId);
-    authorization.searchParams.set('scope', this.config.provider.scopes.join(' '));
+    authorization.searchParams.set('client_id', provider.clientId);
+    authorization.searchParams.set('scope', provider.scopes.join(' '));
     authorization.searchParams.set('redirect_uri', callbackUri);
     authorization.searchParams.set('state', state);
     authorization.searchParams.set(
@@ -621,12 +654,17 @@ export class GatewayFleetAuthBroker {
     code: string,
     transaction: ConsumedOAuthTransaction,
   ): Promise<DiscordTokenResponse> {
+    const provider = this.requireSsoProvider();
+    const oauthClientSecret = this.oauthClientSecret;
+    if (oauthClientSecret === undefined) {
+      throw new Error('Fleet auth broker has no Discord OAuth client secret');
+    }
     const form = new URLSearchParams({
       grant_type: 'authorization_code',
       code,
       redirect_uri: transaction.callbackUri,
-      client_id: this.config.provider.clientId,
-      client_secret: this.oauthClientSecret,
+      client_id: provider.clientId,
+      client_secret: oauthClientSecret,
       code_verifier: transaction.pkceVerifier,
     });
     let response: Response;
@@ -673,7 +711,7 @@ export class GatewayFleetAuthBroker {
       );
     }
     const returnedScopes = body.scope.split(/\s+/u).filter(Boolean).sort();
-    const configuredScopes = [...this.config.provider.scopes].sort();
+    const configuredScopes = [...provider.scopes].sort();
     if (returnedScopes.length !== configuredScopes.length
       || returnedScopes.some((scope, index) => scope !== configuredScopes[index])) {
       throw new FleetAuthBrokerError(

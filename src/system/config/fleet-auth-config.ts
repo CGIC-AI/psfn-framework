@@ -183,19 +183,32 @@ export interface FleetAuthVerifierKey {
   status: FleetAuthVerifierKeyStatus;
 }
 
+export interface FleetAuthDiscordSsoProvider {
+  kind: 'discord';
+  clientId: string;
+  scopes: Array<typeof OAUTH_SCOPES[number]>;
+  clientSecretRef: CredentialReference;
+  tokenCustody: 'discard' | 'encrypted_refresh';
+}
+
+export interface FleetAuthNoSsoProvider {
+  kind: 'none';
+}
+
 export interface FleetAuthConfig {
   schemaVersion: 1;
   /** Operator-incremented when retained state is deliberately re-enabled. */
   activationGeneration: number;
   canonicalOrigin: string;
   callbackPath: string;
-  provider: {
-    kind: 'discord';
-    clientId: string;
-    scopes: Array<typeof OAUTH_SCOPES[number]>;
-    clientSecretRef: CredentialReference;
-    tokenCustody: 'discard' | 'encrypted_refresh';
-  };
+  /**
+   * Human SSO provider. `{ kind: 'none' }` is the explicit no-SSO posture:
+   * the fleet boots and serves every surface through ADMIN_TOKEN, API keys and
+   * the testing-harness door, and the OAuth login/lifecycle routes reject with
+   * a typed `provider_disabled` error. The key itself stays required so a
+   * missing block never silently disables SSO.
+   */
+  provider: FleetAuthDiscordSsoProvider | FleetAuthNoSsoProvider;
   credentials: {
     tokenEncryptionKeyRef: CredentialReference;
     sessionPepperRef: CredentialReference;
@@ -277,7 +290,8 @@ export interface FleetAuthGatewayConfig {
 export type FleetAuthRuntimeProjection = FleetAuthGatewayConfig | FleetAuthVerifierConfig;
 
 export interface ResolvedGatewayFleetAuthSecrets {
-  oauthClientSecret: string;
+  /** Absent exactly when fleet-auth.json declares `provider.kind: none`. */
+  oauthClientSecret?: string;
   tokenEncryptionKey: string;
   sessionPepper: string;
   assertionPrivateKeyPem: string;
@@ -630,6 +644,32 @@ function parseAccountRoster(value: unknown): FleetAuthAccountRosterEntry[] {
   });
 }
 
+function parseProvider(value: unknown): FleetAuthConfig['provider'] {
+  const provider = requireRecord(value, 'provider');
+  if (provider.kind === 'none') {
+    requireExactKeys(provider, ['kind'], 'provider');
+    return { kind: 'none' };
+  }
+  if (provider.kind !== 'discord') fail('provider.kind must be discord or none');
+  requireExactKeys(provider, ['kind', 'clientId', 'scopes', 'clientSecretRef', 'tokenCustody'], 'provider');
+  const clientId = parseSnowflake(provider.clientId, 'provider.clientId');
+  const scopes = parseScopes(provider.scopes);
+  const clientSecretRef = parseCredentialReference(
+    provider.clientSecretRef,
+    'provider.clientSecretRef',
+  );
+  if (provider.tokenCustody !== 'discard' && provider.tokenCustody !== 'encrypted_refresh') {
+    fail('provider.tokenCustody must be discard or encrypted_refresh');
+  }
+  return {
+    kind: 'discord',
+    clientId,
+    scopes,
+    clientSecretRef,
+    tokenCustody: provider.tokenCustody,
+  };
+}
+
 export function validateFleetAuthConfig(value: unknown, sourcePath: string): FleetAuthConfig {
   const root = requireRecord(value, 'root');
   const requiredRootKeys = [
@@ -661,18 +701,7 @@ export function validateFleetAuthConfig(value: unknown, sourcePath: string): Fle
     ? parseAccountRoster(root.accountRoster)
     : undefined;
 
-  const provider = requireRecord(root.provider, 'provider');
-  requireExactKeys(provider, ['kind', 'clientId', 'scopes', 'clientSecretRef', 'tokenCustody'], 'provider');
-  if (provider.kind !== 'discord') fail('provider.kind must be discord');
-  const clientId = parseSnowflake(provider.clientId, 'provider.clientId');
-  const scopes = parseScopes(provider.scopes);
-  const clientSecretRef = parseCredentialReference(
-    provider.clientSecretRef,
-    'provider.clientSecretRef',
-  );
-  if (provider.tokenCustody !== 'discard' && provider.tokenCustody !== 'encrypted_refresh') {
-    fail('provider.tokenCustody must be discard or encrypted_refresh');
-  }
+  const provider = parseProvider(root.provider);
 
   const credentials = requireRecord(root.credentials, 'credentials');
   const credentialKeys = [
@@ -695,7 +724,7 @@ export function validateFleetAuthConfig(value: unknown, sourcePath: string): Fle
     ? parseWelfareVerifierAuthority(root.welfareVerifier, databaseRoles)
     : undefined;
   const credentialNames = [
-    clientSecretRef.envName,
+    ...(provider.kind === 'discord' ? [provider.clientSecretRef.envName] : []),
     ...credentialKeys.map(key => parsedCredentials[key].envName),
     ...(welfareVerifier ? [welfareVerifier.databaseUrlRef.envName] : []),
   ];
@@ -707,8 +736,17 @@ export function validateFleetAuthConfig(value: unknown, sourcePath: string): Fle
   }
 
   const discordEvidenceMappings = parseMappings(root.discordEvidenceMappings);
-  if (discordEvidenceMappings.length > 0
-    && (!scopes.includes('guilds') || !scopes.includes('guilds.members.read'))) {
+  if (provider.kind === 'none') {
+    // Both are keyed by Discord subjects that no login can ever produce
+    // without a provider; accepting them would configure dead authority.
+    if (discordEvidenceMappings.length > 0) {
+      fail('discordEvidenceMappings must be empty when provider.kind is none');
+    }
+    if (accountRoster !== undefined) {
+      fail('accountRoster requires provider.kind discord');
+    }
+  } else if (discordEvidenceMappings.length > 0
+    && (!provider.scopes.includes('guilds') || !provider.scopes.includes('guilds.members.read'))) {
     fail('provider.scopes must include guilds and guilds.members.read when Discord evidence mappings exist');
   }
 
@@ -729,13 +767,7 @@ export function validateFleetAuthConfig(value: unknown, sourcePath: string): Fle
     activationGeneration: requireInteger(root.activationGeneration, 'activationGeneration', 1, Number.MAX_SAFE_INTEGER),
     canonicalOrigin: parseCanonicalOrigin(root.canonicalOrigin),
     callbackPath: parseCallbackPath(root.callbackPath),
-    provider: {
-      kind: 'discord',
-      clientId,
-      scopes,
-      clientSecretRef,
-      tokenCustody: provider.tokenCustody,
-    },
+    provider,
     credentials: parsedCredentials,
     databaseRoles,
     verifierKeys,
@@ -985,11 +1017,13 @@ export function resolveGatewayFleetAuthSecrets(options: {
   companionDatabaseUrl?: string;
 }): ResolvedGatewayFleetAuthSecrets {
   const { config, credentialVault } = options;
-  const oauthClientSecret = resolveRequiredSecret(
-    credentialVault,
-    config.provider.clientSecretRef,
-    'Fleet auth Discord OAuth client secret',
-  );
+  const oauthClientSecret = config.provider.kind === 'discord'
+    ? resolveRequiredSecret(
+        credentialVault,
+        config.provider.clientSecretRef,
+        'Fleet auth Discord OAuth client secret',
+      )
+    : undefined;
   const tokenEncryptionKey = resolveRequiredSecret(
     credentialVault,
     config.credentials.tokenEncryptionKeyRef,
@@ -1036,13 +1070,14 @@ export function resolveGatewayFleetAuthSecrets(options: {
     'Fleet auth trusted-host recovery credential',
     32,
   );
-  if (new Set([
-    oauthClientSecret,
+  const securityCredentials = [
+    ...(oauthClientSecret === undefined ? [] : [oauthClientSecret]),
     tokenEncryptionKey,
     sessionPepper,
     assertionPrivateKeyPem,
     trustedHostRecoveryCredential,
-  ]).size !== 5) {
+  ];
+  if (new Set(securityCredentials).size !== securityCredentials.length) {
     throw new Error('Fleet auth gateway and trusted-host security credentials must be distinct');
   }
   const runtimeUrl = resolveRequiredSecret(
@@ -1125,7 +1160,7 @@ export function resolveGatewayFleetAuthSecrets(options: {
   );
 
   return {
-    oauthClientSecret,
+    ...(oauthClientSecret === undefined ? {} : { oauthClientSecret }),
     tokenEncryptionKey,
     sessionPepper,
     assertionPrivateKeyPem,

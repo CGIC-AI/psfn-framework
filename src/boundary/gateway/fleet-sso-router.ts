@@ -165,6 +165,12 @@ export interface FleetSsoTrustedOriginOptions {
 export interface GatewayFleetSsoRouterOptions extends FleetSsoTrustedOriginOptions {
   /** Optional shared operator credential accepted as an alternative to fleet SSO. */
   readonly adminToken?: string;
+  /**
+   * False when fleet-auth.json declares `provider.kind: none`: browsers are
+   * never sent to the (disabled) Discord login and the landing page offers
+   * only the ADMIN_TOKEN form. Defaults to true (a Discord provider).
+   */
+  readonly ssoLoginEnabled?: boolean;
   readonly broker: Pick<GatewayFleetAuthBroker, 'resolveAuthorizationContext'>;
   readonly signer: GatewayRequestCapabilitySigner;
   readonly verifier: RequestCapabilityVerifier;
@@ -352,11 +358,11 @@ function isHtmlNavigation(request: IncomingMessage): boolean {
 function sendFleetLoginRedirect(
   response: ServerResponse,
   returnPath: string,
-  adminTokenEnabled = false,
+  localLoginLanding: boolean,
 ): void {
   response.writeHead(302, {
     'Cache-Control': 'no-store',
-    Location: adminTokenEnabled
+    Location: localLoginLanding
       ? FLEET_LOGIN_PATH
       : `${FLEET_AUTH_LOGIN_PATH}?return_to=${encodeURIComponent(returnPath)}`,
     'Referrer-Policy': 'no-referrer',
@@ -658,6 +664,7 @@ export class GatewayFleetSsoRouter {
     this.loginLanding = new GatewayFleetLoginLanding(
       options.breakGlassLogin,
       Boolean(options.adminToken),
+      options.ssoLoginEnabled !== false,
     );
     this.modelUsageRoutes = new GatewayFleetModelUsageHttpRoutes({
       projection: options.modelUsageProjection,
@@ -869,7 +876,7 @@ export class GatewayFleetSsoRouter {
           sendFleetLoginRedirect(
             response,
             request.url ?? FLEET_PATH,
-            Boolean(this.options.adminToken),
+            this.usesLocalLoginLanding(),
           );
           return;
         }
@@ -877,7 +884,7 @@ export class GatewayFleetSsoRouter {
           sendFleetLoginRedirect(
             response,
             request.url ?? '/',
-            Boolean(this.options.adminToken),
+            this.usesLocalLoginLanding(),
           );
           return;
         }
@@ -1296,6 +1303,11 @@ export class GatewayFleetSsoRouter {
       versions,
       context,
     });
+  }
+
+  /** The local landing serves the ADMIN_TOKEN form and the no-SSO notice. */
+  private usesLocalLoginLanding(): boolean {
+    return Boolean(this.options.adminToken) || this.options.ssoLoginEnabled === false;
   }
 
   private matchesAdminToken(request: IncomingMessage): boolean {

@@ -397,6 +397,7 @@ describe('active concerns runtime data resolution', () => {
         },
       },
       canonicalContactKey: 'contact-alex',
+      viewer: { trustLevel: 'primary', channelDisclosure: { channelPrivacy: 'private', broadcast: false } },
       logger,
     });
 
@@ -407,6 +408,37 @@ describe('active concerns runtime data resolution', () => {
     );
   });
 
+  it('renders no other-conversation open thread for a public caller in a fresh room (xz8m1)', () => {
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+    const otherConversationThread = {
+      id: 'concern-halcyon',
+      text: 'Research boat leak severity unconfirmed',
+      priority: 'medium',
+      source: 'agent',
+      status: 'active',
+      createdAt: '2026-09-25T00:00:00.000Z',
+      expiresAt: '2026-09-26T00:00:00.000Z',
+      salience: 0.4,
+      sensitivity: 'personal',
+      owner: 'companion',
+      evidenceRefs: [{ kind: 'turn', ref: 'turn-other-room' }],
+      resolutionEvidenceRefs: [],
+    } as const;
+    const provider = { getActiveConcerns: () => [otherConversationThread] as never };
+    const publicCaller = resolveActiveConcernsRuntimeData({
+      activeConcernProvider: provider,
+      viewer: { trustLevel: 'public', channelDisclosure: { channelPrivacy: 'private', broadcast: false } },
+      logger,
+    });
+    expect(publicCaller).toBeUndefined();
+
+    const owner = resolveActiveConcernsRuntimeData({
+      activeConcernProvider: provider,
+      viewer: { trustLevel: 'primary', channelDisclosure: { channelPrivacy: 'private', broadcast: false } },
+      logger,
+    });
+    expect(owner?.totalCount).toBe(1);
+  });
 });
 
 describe('runtime subject identity', () => {
@@ -1037,23 +1069,23 @@ describe('runtime subject identity', () => {
     });
   });
 
-  it('gives a linked Multica member session the canonical human contact context', async () => {
-    const memberUserId = 'multica:member:99999999-9999-4999-8999-999999999999';
+  it('gives a linked non-Discord channel identity the canonical human contact context', async () => {
+    const memberUserId = '424242424';
     const authorContext = await resolveAuthorContext({
       message: makeMessage({
-        channelId: 'multica:11111111-1111-4111-8111-111111111111:chat:session-a',
-        channelType: 'multica',
+        channelId: 'telegram:-1001234567890',
+        channelType: 'telegram',
         authorId: memberUserId,
         authorName: 'Operator',
         routing: {
-          source: 'multica',
+          source: 'telegram',
           channelPrivacy: 'invite_only',
           authorIsMachineIntelligence: false,
         },
       }),
       contactStore: {
         resolveChannelIdentity: (channel: string, channelUserId: string) => {
-          expect(channel).toBe('multica');
+          expect(channel).toBe('telegram');
           expect(channelUserId).toBe(memberUserId);
           return {
             id: 'contact-canonical-owner',
@@ -1064,7 +1096,7 @@ describe('runtime subject identity', () => {
             relationshipType: 'partner',
             channelIdentities: [
               { channel: 'discord', userId: 'discord-owner' },
-              { channel: 'multica', userId: memberUserId },
+              { channel: 'telegram', userId: memberUserId },
             ],
             firstSeen: '2026-03-17T12:00:00Z',
             lastSeen: '2026-03-17T12:00:00Z',
@@ -1083,7 +1115,7 @@ describe('runtime subject identity', () => {
     expect(authorContext).toMatchObject({
       canonicalContactKey: 'contact-canonical-owner',
       continuitySubjectKey: 'contact-canonical-owner',
-      continuityFallbackKeys: ['discord-owner', memberUserId],
+      continuityFallbackKeys: [memberUserId, 'discord-owner'],
       trustLevel: 'primary',
       relationshipType: 'partner',
       resolvedUserName: 'Owner',
@@ -1784,12 +1816,14 @@ describe('runtime subject identity', () => {
           : `Recent useful note ${index}: keep prompt-visible scratchpad context concise.`,
         createdAt: Date.parse('2026-05-11T04:00:00.000Z') + index,
         updatedAt: Date.parse('2026-05-11T04:10:00.000Z') + index,
+        provenance: { scope: 'companion_global' as const },
       })),
       ...Array.from({ length: 20 }, (_, index) => ({
         id: `stale-${index}`,
         content: `${staleFullText}${index}`,
         createdAt: Date.parse('2026-05-10T04:00:00.000Z') + index,
         updatedAt: Date.parse('2026-05-10T04:10:00.000Z') + index,
+        provenance: { scope: 'companion_global' as const },
       })),
     ];
 
@@ -1800,6 +1834,7 @@ describe('runtime subject identity', () => {
           return entries;
         },
       },
+      viewer: { channelId: 'api:room-a', trustLevel: 'regular' },
       logger: TEST_RUNTIME_CONTEXT_LOGGER,
     });
 
@@ -1819,18 +1854,21 @@ describe('runtime subject identity', () => {
         content: 'Recent useful note: run targeted runtime-context and core-memory tests.',
         createdAt: Date.parse('2026-05-11T04:00:00.000Z'),
         updatedAt: Date.parse('2026-05-11T04:15:00.000Z'),
+        provenance: { scope: 'companion_global' as const },
       },
       ...Array.from({ length: 7 }, (_, index) => ({
         id: `recent-budget-${index}`,
         content: `Recent budget filler ${index}: ${'keep only fresh scratchpad context '.repeat(12)}`,
         createdAt: Date.parse('2026-05-11T04:01:00.000Z') + index,
         updatedAt: Date.parse('2026-05-11T04:14:00.000Z') + index,
+        provenance: { scope: 'companion_global' as const },
       })),
       ...Array.from({ length: 12 }, (_, index) => ({
         id: `old-bulk-${index}`,
         content: stalePayload,
         createdAt: Date.parse('2026-05-09T04:00:00.000Z') + index,
         updatedAt: Date.parse('2026-05-09T04:10:00.000Z') + index,
+        provenance: { scope: 'companion_global' as const },
       })),
     ];
 
@@ -1838,6 +1876,7 @@ describe('runtime subject identity', () => {
       scratchpadProvider: {
         listScratchpadEntries: () => entries,
       },
+      viewer: { channelId: 'api:room-a', trustLevel: 'regular' },
       logger: TEST_RUNTIME_CONTEXT_LOGGER,
     });
     const visibleEntries = block
@@ -1851,6 +1890,32 @@ describe('runtime subject identity', () => {
     expect(block.length).toBeLessThan(2_000);
   });
 
+  it('renders only this conversation\'s and companion-global notes (yy0r2)', () => {
+    const entries = [
+      { id: 'here', content: 'note from this room', createdAt: 3, updatedAt: 3,
+        provenance: { scope: 'conversation' as const, channelId: 'api:room-a' } },
+      { id: 'elsewhere', content: 'PRIVATE note from another room', createdAt: 2, updatedAt: 2,
+        provenance: { scope: 'conversation' as const, channelId: 'companion-dm:peer' } },
+      { id: 'global', content: 'note for every room', createdAt: 1, updatedAt: 1,
+        provenance: { scope: 'companion_global' as const } },
+      { id: 'legacy', content: 'LEGACY note without provenance', createdAt: 0, updatedAt: 0,
+        provenance: { scope: 'unknown' as const } },
+    ];
+    const render = (trustLevel: 'public' | 'primary') => buildScratchpadContextBlock({
+      scratchpadProvider: { listScratchpadEntries: () => entries },
+      viewer: { channelId: 'api:room-a', trustLevel },
+      logger: TEST_RUNTIME_CONTEXT_LOGGER,
+    });
+    const publicView = render('public');
+    expect(publicView).toContain('note from this room');
+    expect(publicView).toContain('note for every room');
+    expect(publicView).not.toContain('PRIVATE note from another room');
+    expect(publicView).not.toContain('LEGACY note without provenance');
+    const primaryView = render('primary');
+    expect(primaryView).toContain('LEGACY note without provenance');
+    expect(primaryView).not.toContain('PRIVATE note from another room');
+  });
+
   it('warns when scratchpad context injection degrades after a provider failure', () => {
     const logger = { warn: vi.fn(), debug: vi.fn() };
 
@@ -1860,6 +1925,7 @@ describe('runtime subject identity', () => {
           throw new Error('scratchpad store unavailable');
         },
       },
+      viewer: { channelId: 'api:room-a', trustLevel: 'regular' },
       logger,
     })).toBe('');
 
@@ -2178,6 +2244,57 @@ describe('runtime subject identity', () => {
     expect(tatemaeOutput).toContain('present=true');
     expect(tatemaeOutput).toContain('mode=tatemae');
     expect(tatemaeOutput).not.toContain('{{');
+  });
+
+  it('renders the companion situated location only where personal material is admitted (o5wf5)', () => {
+    const now = new Date('2026-03-18T13:30:00Z');
+    const located = {
+      ...TEST_INTERNAL_STATE,
+      situated: {
+        location: {
+          placeId: 'living-room',
+          siteId: 'home',
+          label: 'the living room',
+          kind: 'physical' as const,
+          updatedAt: now.toISOString(),
+        },
+      },
+    };
+    const baseInput = {
+      resolvedUserName: 'Visitor',
+      channelType: 'api',
+      canonicalContactKey: undefined,
+      responseStyle: 'expressive',
+      now,
+      templateVariables: {},
+      modelId: 'test-model',
+      capabilityTier: 'autonomous',
+      activeToolCounts: { core: 0, extended: 0, total: 0 },
+      extendedTools: [],
+      coreToolNames: new Set<string>(),
+      loadedExtended: new Map(),
+      classifyExtendedToolForTurn: () => 'overlay' as const,
+      promotedExtendedToolNames: new Set<string>(),
+      skillsContext: '',
+      behavioralNotesBlock: '',
+      config: {},
+      internalState: located,
+    };
+
+    const stranger = buildDynamicPromptTemplateVariables(withConversationScope({
+      ...baseInput,
+      message: makeMessage({ channelId: 'api:stranger-room', channelType: 'api', content: 'where are you?' }),
+      trustLevel: 'public',
+    }));
+    expect(stranger.runtime_situated_location_present).toBe('false');
+    expect(Object.values(stranger).join('\n')).not.toContain('the living room');
+
+    const partner = buildDynamicPromptTemplateVariables(withConversationScope({
+      ...baseInput,
+      message: makeMessage({ channelId: 'discord:dm:partner', channelType: 'discord_text', isDirectMessage: true, content: 'where are you?' }),
+      trustLevel: 'primary',
+    }));
+    expect(partner.runtime_situated_location_label).toBe('the living room');
   });
 
   it('substitutes atomic internal-state macros using the existing describe helper labels', () => {

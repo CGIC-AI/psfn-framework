@@ -298,11 +298,12 @@ export async function runLLMStreamAttempt(
       }
     }
   } catch (error) {
-    const withheldText = responseTerminatorFilter.flush();
-    if (withheldText) {
-      emittedData = true;
-      input.callbacks?.onText?.(withheldText);
-    }
+    // p3of8: a failed stream does not deliver the terminator filter's withheld
+    // tail. Flushing it here turned a stream that had shown nothing yet into
+    // "emitted data", which marks the failure non-retryable and blocks the
+    // caller's fallback to the next candidate. The tail is dropped with the
+    // failed attempt.
+    responseTerminatorFilter.flush();
     const err = error instanceof Error ? error : new Error(String(error));
     if (emittedData) {
       markErrorAsNonRetryable(err);

@@ -100,6 +100,7 @@ function createDeferred<T>() {
 function createHarness(overrides?: {
   eventBus?: EventBus;
   nowMonotonicMs?: () => number;
+  icpHistory?: SessionEntry[];
   config?: SubstrateConfig;
   delegateSatelliteSession?: (request: {
     message: SubstrateMessage;
@@ -130,6 +131,7 @@ function createHarness(overrides?: {
   ) => Promise<AgentResponse>;
   observeMessage?: (message: SubstrateMessage) => Promise<void>;
   waitForIdle?: () => Promise<void>;
+  companionReplyBusyWaitMs?: number;
   observedGroupMemoryScheduler?: ObservedGroupMemorySchedulerPort;
   passiveNameCandidateBuilder?: PassiveNameCandidatePort;
   participationAppraiser?: ParticipationAppraiserPort;
@@ -298,6 +300,11 @@ function createHarness(overrides?: {
       : {}),
     companionAuthorName: 'Selene',
     ...(overrides?.nowMonotonicMs ? { nowMonotonicMs: overrides.nowMonotonicMs } : {}),
+    icpAppraisalContext: {
+      reader: { getRecent: (channelId: string) => (overrides?.icpHistory ?? []).filter(entry => entry.channelId === channelId) },
+      messageLimit: 6,
+    },
+    companionReplyBusyWaitMs: overrides?.companionReplyBusyWaitMs ?? 300_000,
   });
 
   if (!onHandleMessage || !onDiscordMessage || !onCompanionMessage || !onCompanionDeliveryFailure) {
@@ -551,7 +558,10 @@ describe('registerGatewayMessageHandlers', () => {
       route: 'discord',
       channelId: 'discord:general',
       messageId: 'discord-observe-memory-dup',
-      disposition: 'in_flight',
+      // qvwem: the first observation returned without waiting for its memory
+      // scheduling (still pending here), so the replay hits the completed
+      // cache instead of the in-flight map; either way it never re-schedules.
+      disposition: 'cached',
     });
 
     deferredSchedule.resolve({
@@ -1155,17 +1165,17 @@ describe('registerGatewayMessageHandlers', () => {
     });
   });
 
-  it('routes plugin room observations through group memory and the shared speaking arbiter', async () => {
+  it('routes non-Discord room observations through group memory and the shared speaking arbiter', async () => {
     const message = makeMessage({
-      id: 'buzz-observe-1',
-      channelId: 'buzz:relay.example:room-1',
-      channelType: 'buzz',
-      routing: { source: 'buzz', responseMode: 'observe' },
+      id: 'telegram-observe-1',
+      channelId: 'telegram:-1001234567890',
+      channelType: 'telegram',
+      routing: { source: 'telegram', responseMode: 'observe' },
     });
     const candidate: ParticipationCandidate = {
       schemaVersion: 1,
       channelId: message.channelId,
-      channelType: 'buzz',
+      channelType: 'telegram',
       sourceMessageId: message.id,
       trigger: 'direct_address',
       triggerAuthorId: message.authorId,
@@ -1183,7 +1193,7 @@ describe('registerGatewayMessageHandlers', () => {
       channelId: message.channelId,
       triggerEventId: message.id,
       companionId: '11111111-1111-4111-8111-111111111111',
-      episodeId: 'buzz-episode-1',
+      episodeId: 'telegram-episode-1',
       reservedAtMs: 1_000,
       expiresAtMs: 2_000,
       status: 'reserved',
@@ -1237,7 +1247,7 @@ describe('registerGatewayMessageHandlers', () => {
       expect.objectContaining({
         kind: 'inbound_room_message',
         channelId: message.channelId,
-        channelType: 'buzz',
+        channelType: 'telegram',
         sourceEventId: message.id,
       }),
       expect.any(Number),
@@ -1447,6 +1457,98 @@ describe('registerGatewayMessageHandlers', () => {
     });
   });
 
+  it('closes a timed-out appraisal decline as peer_appraisal_unavailable, not a social end (0eq2x)', async () => {
+    const participationAppraiser: ParticipationAppraiserPort = {
+      appraise: vi.fn(async () => ({
+        appraisal: { action: 'ignore', reasonCode: 'appraiser_timeout', confidence: 0 },
+        failClosed: true,
+        failClosedReason: 'appraiser_timeout',
+      })),
+    };
+    const suppressed = {
+      ...makeResponse(''),
+      channelId: ICP_CHANNEL,
+      metadata: {
+        ...makeResponse('').metadata,
+        turnId: replyIcpCorrelation.turnId,
+        requestId: replyIcpCorrelation.requestId,
+        icpCorrelation: replyIcpCorrelation,
+        noReply: {
+          schemaVersion: 1 as const,
+          disposition: 'intentional_no_reply' as const,
+          source: 'participation_appraiser' as const,
+          auditId: 'no-reply:appraiser',
+          decidedAt: Date.parse('2026-03-02T00:00:00.000Z'),
+          turnId: replyIcpCorrelation.turnId as TurnID,
+          requestId: replyIcpCorrelation.requestId,
+          channelId: ICP_CHANNEL,
+          reason: 'appraiser_timeout',
+        },
+      },
+    } as AgentResponse;
+    const harness = createHarness({
+      config: { companionId: ICP_B, multiCompanion: true } as SubstrateConfig,
+      participationAppraiser,
+      handleMessage: async (_message, lifecycle) => {
+        if (!lifecycle) throw new Error('test expected delivery lifecycle');
+        await lifecycle.finalizeDelivery(suppressed);
+        return suppressed;
+      },
+    });
+
+    await harness.onCompanionMessage(makeCorrelatedCompanionMessage());
+
+    await vi.waitFor(() => {
+      expect(harness.gateway.companionEndIcpEpisodeActivity).toHaveBeenCalledWith({
+        conversationId: replyIcpCorrelation.conversationId,
+        reasonCode: 'peer_appraisal_unavailable',
+      });
+    });
+  });
+
+  it('appraises an inbound ICP turn with its own DM history and logs a typed decline (p6s1f)', async () => {
+    const participationAppraiser: ParticipationAppraiserPort = {
+      appraise: vi.fn(async () => ({
+        appraisal: { action: 'ignore', reasonCode: 'decision_backend', confidence: 0.61 },
+        failClosed: false,
+      })),
+    };
+    const history: SessionEntry[] = [
+      { id: 1, channelId: ICP_CHANNEL, role: 'assistant', content: 'Earlier I asked about the runbook.', timestamp: 1_000 },
+      { id: 2, channelId: ICP_CHANNEL, role: 'tool', content: '{"tool":"output"}', timestamp: 1_100 },
+      { id: 3, channelId: ICP_CHANNEL, role: 'system', content: '{"kind":"icp_delivery"}', timestamp: 1_200 },
+      { id: 4, channelId: ICP_CHANNEL, role: 'user', authorName: 'Nova', content: 'Runbook v2 is stamped.', timestamp: 1_300 },
+      { id: 5, channelId: 'api:someone-else', role: 'user', content: 'other conversation text', timestamp: 1_400 },
+    ];
+    const harness = createHarness({
+      config: { companionId: ICP_B, multiCompanion: true } as SubstrateConfig,
+      participationAppraiser,
+      icpHistory: history,
+      handleMessage: async () => makeResponse(''),
+    });
+
+    await harness.onCompanionMessage(makeCorrelatedCompanionMessage());
+
+    await vi.waitFor(() => {
+      expect(participationAppraiser.appraise).toHaveBeenCalledOnce();
+    });
+    const candidate = vi.mocked(participationAppraiser.appraise).mock.calls[0]![0];
+    expect(candidate.precedingContext.map(entry => entry.content)).toEqual([
+      'Earlier I asked about the runbook.',
+      'Runbook v2 is stamped.',
+    ]);
+    expect(JSON.stringify(candidate)).not.toContain('other conversation text');
+    await vi.waitFor(() => {
+      expect(harness.log.info).toHaveBeenCalledWith('Inbound ICP message declined before generation', expect.objectContaining({
+        channelId: ICP_CHANNEL,
+        messageId: INBOUND_ICP_MESSAGE_ID,
+        reasonCode: 'decision_backend',
+        confidence: 0.61,
+        precedingContextCount: 2,
+      }));
+    });
+  });
+
   it('persists a fresh fatigue-suppressed reply without an impossible prepared state', async () => {
     const suppressedCorrelation: IcpConversationCorrelation = {
       ...replyIcpCorrelation,
@@ -1487,6 +1589,66 @@ describe('registerGatewayMessageHandlers', () => {
     });
     expect(harness.gateway.companionSend).not.toHaveBeenCalled();
     expect(harness.gateway.companionReportFailure).not.toHaveBeenCalled();
+  });
+
+  it('holds an approved ICP reply while the agent is busy instead of failing it (q2kao)', async () => {
+    const reply = {
+      ...makeResponse('answer after the chat'),
+      channelId: ICP_CHANNEL,
+      metadata: {
+        ...makeResponse('').metadata,
+        turnId: replyIcpCorrelation.turnId,
+        requestId: replyIcpCorrelation.requestId,
+        icpCorrelation: replyIcpCorrelation,
+      },
+    };
+    let calls = 0;
+    const harness = createHarness({
+      config: { companionId: ICP_B } as SubstrateConfig,
+      handleMessage: async (_message, lifecycle) => {
+        calls += 1;
+        // The exact r7 busy error from the agent invocation path.
+        if (calls === 1) throw new Error('Agent is already processing.');
+        if (!lifecycle) throw new Error('test expected delivery lifecycle');
+        await lifecycle.finalizeDelivery(reply);
+        return reply;
+      },
+    });
+
+    await harness.onCompanionMessage(makeCorrelatedCompanionMessage());
+
+    await vi.waitFor(() => {
+      expect(harness.gateway.companionSend).toHaveBeenCalledOnce();
+    });
+    expect(harness.agentLoop.waitForIdle).toHaveBeenCalled();
+    expect(harness.gateway.companionReportFailure).not.toHaveBeenCalled();
+    expect(harness.gateway.companionEndIcpEpisodeActivity).not.toHaveBeenCalled();
+  });
+
+  it('ends the conversation as recipient_busy_timeout when the agent stays busy past the bound (q2kao)', async () => {
+    const harness = createHarness({
+      config: { companionId: ICP_B } as SubstrateConfig,
+      companionReplyBusyWaitMs: 50,
+      waitForIdle: () => new Promise<void>(() => undefined),
+      handleMessage: async () => {
+        throw new Error('Agent is already processing.');
+      },
+    });
+
+    await harness.onCompanionMessage(makeCorrelatedCompanionMessage());
+
+    await vi.waitFor(() => {
+      expect(harness.gateway.companionReportFailure).toHaveBeenCalledWith({
+        channelId: ICP_CHANNEL,
+        messageId: INBOUND_ICP_MESSAGE_ID,
+        reason: 'processing_failed',
+      });
+    });
+    expect(harness.gateway.companionEndIcpEpisodeActivity).toHaveBeenCalledWith({
+      conversationId: inboundIcpCorrelation.conversationId,
+      reasonCode: 'recipient_busy_timeout',
+    });
+    expect(harness.gateway.companionSend).not.toHaveBeenCalled();
   });
 
   it('recovers a failed correlated reply after restart without another generated turn', async () => {
@@ -2330,6 +2492,37 @@ describe('registerGatewayMessageHandlers — participation appraiser wiring (jp3
       watermarkLagMessageIds: 1,
     });
     await receipt;
+  });
+
+  it('returns from observing a group line while its memory extraction never completes (qvwem)', async () => {
+    const candidate = makeParticipationCandidate();
+    // The extraction never settles: observe latency must not depend on it.
+    const observedGroupMemoryScheduler: ObservedGroupMemorySchedulerPort = {
+      observeMessage: vi.fn(() => new Promise<never>(() => undefined)),
+    };
+    const appraiser: ParticipationAppraiserPort = {
+      appraise: vi.fn(async (): Promise<ParticipationAppraisalResult> => ({
+        appraisal: { action: 'ignore', reasonCode: 'room_context', confidence: 0.7 },
+        failClosed: false,
+      })),
+    };
+    const harness = createHarness({
+      observedGroupMemoryScheduler,
+      passiveNameCandidateBuilder: createdBuilder(candidate),
+      participationAppraiser: appraiser,
+    });
+
+    const outcome = await Promise.race([
+      harness.onDiscordMessage(observeMessage()).then(() => 'returned' as const),
+      new Promise<'blocked'>(resolve => setTimeout(() => resolve('blocked'), 1_000)),
+    ]);
+
+    expect(outcome).toBe('returned');
+    // The line was journaled, handed to memory scheduling, and still got its
+    // participation decision.
+    expect(harness.agentLoop.observeMessage).toHaveBeenCalledTimes(1);
+    expect(observedGroupMemoryScheduler.observeMessage).toHaveBeenCalledTimes(1);
+    expect(appraiser.appraise).toHaveBeenCalledWith(candidate);
   });
 
   it('records a fail-closed appraisal on the audit trail and bus (no reply invented)', async () => {

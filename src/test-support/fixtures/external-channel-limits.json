@@ -1,0 +1,12 @@
+{
+  "maxRequestBytes": 16384,
+  "requestReadTimeoutMs": 200,
+  "maxTextChars": 2000,
+  "maxIdChars": 128,
+  "maxInFlightTurns": 2,
+  "turnTimeoutMs": 150,
+  "outboundQueueMax": 3,
+  "outboundPullMax": 2,
+  "heartbeatTimeoutMs": 60000,
+  "failureReportIntervalMs": 1
+}

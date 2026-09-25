@@ -177,21 +177,21 @@
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidate.limit@L1049",
+      "name": "main.candidate.limit@L1054",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidate.limit; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidate.limit@L1085",
+      "name": "main.candidate.limit@L1090",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidate.limit; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidate.limit@L1125",
+      "name": "main.candidate.limit@L1130",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidate.limit; code-owned only for harness behavior and not used as an unowned production setting."
@@ -205,28 +205,28 @@
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidateIdsBefore.limit@L1034",
+      "name": "main.candidateIdsBefore.limit@L1039",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidateIdsBefore.limit; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidateIdsBefore.limit@L1066",
+      "name": "main.candidateIdsBefore.limit@L1071",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidateIdsBefore.limit; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidateIdsBefore.limit@L1106",
+      "name": "main.candidateIdsBefore.limit@L1111",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidateIdsBefore.limit; code-owned only for harness behavior and not used as an unowned production setting."
     },
     {
       "file": "src/app/e2e/icp-certification/agent-process.ts",
-      "name": "main.candidateIdsBefore.limit@L639",
+      "name": "main.candidateIdsBefore.limit@L644",
       "value": "50",
       "form": "object-member",
       "note": "Deterministic test/certification fixture main.candidateIdsBefore.limit; code-owned only for harness behavior and not used as an unowned production setting."
@@ -691,14 +691,21 @@
       "note": "Code-owned DoS guard: bound on the guest-only Hub device attachment fence map (n66dn.2); fences lift after 70 s, the cap only limits memory under rejection floods."
     },
     {
-      "file": "src/boundary/fleet-auth/lifecycle-ceremony.ts",
+      "file": "src/boundary/fleet-auth/lifecycle-ceremony-request.ts",
       "name": "boundedReason.$call:length-guard:GreaterThanToken#1",
       "value": "512",
       "form": "length-guard",
       "note": "Code-owned fleet-auth ceremony record bound coupled to the signed lifecycle evidence shape."
     },
     {
-      "file": "src/boundary/fleet-auth/lifecycle-ceremony.ts",
+      "file": "src/boundary/fleet-auth/lifecycle-ceremony-request.ts",
+      "name": "parseAdminTokenOperatorCeremonyRequest.$call:length-guard:GreaterThanToken#1",
+      "value": "256",
+      "form": "length-guard",
+      "note": "Code-owned fleet-auth key-mode ceremony request bound on the contact id, identical to the SSO ceremony contract."
+    },
+    {
+      "file": "src/boundary/fleet-auth/lifecycle-ceremony-request.ts",
       "name": "parseFleetAuthLifecycleCeremonyRequest.$call:length-guard:GreaterThanToken#1",
       "value": "256",
       "form": "length-guard",
@@ -766,6 +773,21 @@
       "note": "Code-owned denial-of-service guard bounding per-request split-frame canary scan state; operator expansion would weaken the egress boundary's memory ceiling."
     },
     {
+      "file": "src/boundary/gateway/channel-start-retry.ts",
+      "name": "DEFAULT_CHANNEL_SURFACE_START_RETRY_BASE_DELAY_MS",
+      "value": "2_000"
+    },
+    {
+      "file": "src/boundary/gateway/channel-start-retry.ts",
+      "name": "DEFAULT_CHANNEL_SURFACE_START_RETRY_MAX_ATTEMPTS",
+      "value": "0"
+    },
+    {
+      "file": "src/boundary/gateway/channel-start-retry.ts",
+      "name": "DEFAULT_CHANNEL_SURFACE_START_RETRY_MAX_DELAY_MS",
+      "value": "30_000"
+    },
+    {
       "file": "src/boundary/gateway/client.ts",
       "name": "DEFAULT_GATEWAY_KEEPALIVE_INTERVAL_MS",
       "value": "30_000"
@@ -781,21 +803,6 @@
       "value": "'error'",
       "form": "string",
       "note": "Existing mutable policy candidate DEFAULT_VOICE_STREAM_OVERFLOW_POLICY; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
-    },
-    {
-      "file": "src/boundary/gateway/channel-start-retry.ts",
-      "name": "DEFAULT_CHANNEL_SURFACE_START_RETRY_BASE_DELAY_MS",
-      "value": "2_000"
-    },
-    {
-      "file": "src/boundary/gateway/channel-start-retry.ts",
-      "name": "DEFAULT_CHANNEL_SURFACE_START_RETRY_MAX_ATTEMPTS",
-      "value": "0"
-    },
-    {
-      "file": "src/boundary/gateway/channel-start-retry.ts",
-      "name": "DEFAULT_CHANNEL_SURFACE_START_RETRY_MAX_DELAY_MS",
-      "value": "30_000"
     },
     {
       "file": "src/boundary/gateway/filesystem-paths.ts",
@@ -816,6 +823,13 @@
       "note": "Code-owned OAuth callback input bound paired with control-character rejection at the authentication trust boundary."
     },
     {
+      "file": "src/boundary/gateway/fleet-lifecycle-http-routes.ts",
+      "name": "FLEET_LIFECYCLE_HTTP_PROTOCOL.maxBodyBytes",
+      "value": "16_384",
+      "form": "object-member",
+      "note": "Code-owned DoS bound on operator lifecycle command bodies; a request carries one companions.json entry of metadata and references."
+    },
+    {
       "file": "src/boundary/gateway/fleet-portal-projection.ts",
       "name": "FLEET_PORTAL_PROJECTION_PROTOCOL.maxCompanions",
       "value": "256",
@@ -825,7 +839,7 @@
     {
       "file": "src/boundary/gateway/fleet-portal-projection.ts",
       "name": "FLEET_PORTAL_PROJECTION_PROTOCOL.maxSerializedBytes",
-      "value": "65_536",
+      "value": "327_680",
       "form": "object-member",
       "note": "Code-owned safety/resource guard FLEET_PORTAL_PROJECTION_PROTOCOL.maxSerializedBytes; this fixed bound protects untrusted input or resource use independently of operator tuning."
     },
@@ -933,6 +947,12 @@
       "file": "src/boundary/gateway/intake/l3-screener.ts",
       "name": "L3_MIN_VERBATIM_QUOTE_CHARS",
       "value": "24"
+    },
+    {
+      "file": "src/boundary/gateway/intake/l3-screener.ts",
+      "name": "L3_MIN_VERBATIM_QUOTE_WORDS",
+      "value": "8",
+      "note": "Code-owned CogSec safety guard (summary-instead-of-quote), sibling of L3_MIN_VERBATIM_QUOTE_CHARS; lowering it re-breaks honest L3 summaries of long pages, raising it weakens the echo guard, so it is not an operator tuning knob."
     },
     {
       "file": "src/boundary/gateway/intake/l3-screener.ts",
@@ -1197,6 +1217,13 @@
       "value": "5"
     },
     {
+      "file": "src/boundary/gateway/methods/params/llm.ts",
+      "name": "decisionQuestion.criteria.minItems",
+      "value": "1",
+      "form": "object-member",
+      "note": "Protocol constant: the OpenRouter Decisions API schema requires a score question to list at least one ordered level (DecisionsScoreQuestion.criteria minItems 1); not a tuning value."
+    },
+    {
       "file": "src/boundary/gateway/methods/params/schema.ts",
       "name": "nonEmptyCanonicalString.minLength",
       "value": "1",
@@ -1339,20 +1366,6 @@
       "value": "50_000"
     },
     {
-      "file": "src/boundary/gateway/server/connection-lifecycle.ts",
-      "name": "$call:math-clamp:Math.max.arg0#1",
-      "value": "1_000",
-      "form": "math-clamp",
-      "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
-    },
-    {
-      "file": "src/boundary/gateway/server/connection-lifecycle.ts",
-      "name": "$call:math-clamp:Math.min.arg0#1",
-      "value": "30_000",
-      "form": "math-clamp",
-      "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
-    },
-    {
       "file": "src/boundary/gateway/server/companion-message-send-params.ts",
       "name": "COMPANION_MESSAGE_MAX_AUTHOR_NAME_CHARS",
       "value": "200"
@@ -1371,6 +1384,20 @@
       "file": "src/boundary/gateway/server/companion-violations.ts",
       "name": "COMPANION_VIOLATION_LOG_LIMIT",
       "value": "1_000"
+    },
+    {
+      "file": "src/boundary/gateway/server/connection-lifecycle.ts",
+      "name": "$call:math-clamp:Math.max.arg0#1",
+      "value": "1_000",
+      "form": "math-clamp",
+      "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
+    },
+    {
+      "file": "src/boundary/gateway/server/connection-lifecycle.ts",
+      "name": "$call:math-clamp:Math.min.arg0#1",
+      "value": "30_000",
+      "form": "math-clamp",
+      "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/boundary/gateway/server/rpc-frame-validation.ts",
@@ -2463,12 +2490,6 @@
       "value": "30_000"
     },
     {
-      "file": "src/channels/buzz/protocol.ts",
-      "name": "BUZZ_STREAM_TEXT_CHUNK_LIMIT",
-      "value": "64 * 1_024",
-      "note": "Immutable Buzz Stream kind-9 wire limit matching the relay SDK's 64 KiB content ceiling; code-owned because changing it requires a protocol release rather than operator tuning."
-    },
-    {
       "file": "src/channels/discord/adapter.ts",
       "name": "DISCORD_LISTEN_WINDOW_MAX_MS",
       "value": "600_000"
@@ -2546,52 +2567,18 @@
       "value": "10"
     },
     {
-      "file": "src/channels/multica/adapter.ts",
-      "name": "DEFAULT_MULTICA_HEARTBEAT_INTERVAL_MS",
-      "value": "15_000",
-      "note": "Code-owned Multica runtime liveness cadence; tests can override it through adapter options and operators do not tune protocol heartbeats."
-    },
-    {
-      "file": "src/channels/multica/adapter.ts",
-      "name": "MULTICA_MAX_OPERATION_ATTEMPTS",
-      "value": "3",
-      "note": "Code-owned safety ceiling required by the Multica adapter failure contract; it bounds auth, schema, heartbeat, settlement, deregistration, and alert delivery instead of creating an operator-tunable retry loop."
-    },
-    {
-      "file": "src/channels/multica/adapter.ts",
-      "name": "MulticaAdapter.constructor.this.outbound.textChunkLimit",
-      "value": "100_000",
+      "file": "src/channels/external/config.ts",
+      "name": "nonempty.minLength",
+      "value": "1",
       "form": "object-member",
-      "note": "Code-owned defensive envelope for an internal task-result handoff; Multica completion is atomic and does not expose configurable message chunking."
+      "note": "Nonempty text is a structural channels.json.external owner-file invariant (adapter label, companion id, token env name). minLength 1 excludes missing identity; it is not an operator-tunable limit."
     },
     {
-      "file": "src/channels/multica/plugin.ts",
-      "name": "createGatewayMulticaRuntimeLease.createPostgresPool.arg1.connectionTimeoutMillis",
-      "value": "5_000",
+      "file": "src/channels/external/protocol.ts",
+      "name": "text.minLength",
+      "value": "1",
       "form": "object-member",
-      "note": "Code-owned safety/resource guard for the internal single-connection Multica runtime-lease pool; a fixed connect timeout bounds startup failure latency independently of operator tuning (moved from channel-surfaces.ts by psfn-framework-lj32q)."
-    },
-    {
-      "file": "src/channels/multica/plugin.ts",
-      "name": "DEFAULT_MULTICA_POLL_INTERVAL_MS",
-      "value": "1_000"
-    },
-    {
-      "file": "src/channels/multica/plugin.ts",
-      "name": "ENV_CREDENTIAL_NAME_PATTERN",
-      "value": "/^[A-Z][A-Z0-9_]*$/",
-      "form": "regex",
-      "note": "Immutable parser/wire/schema contract ENV_CREDENTIAL_NAME_PATTERN; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning (moved from channels/backplane/config.ts by psfn-framework-lj32q)."
-    },
-    {
-      "file": "src/channels/multica/plugin.ts",
-      "name": "MAX_MULTICA_POLL_INTERVAL_MS",
-      "value": "60_000"
-    },
-    {
-      "file": "src/channels/multica/plugin.ts",
-      "name": "MIN_MULTICA_POLL_INTERVAL_MS",
-      "value": "250"
+      "note": "Nonempty text is a structural external channel protocol invariant for identifiers and message bodies. Size limits are owner-file bounds (channels.json.external.limits); minLength 1 only excludes missing fields."
     },
     {
       "file": "src/channels/shared/long-running-tool-status.ts",
@@ -5512,17 +5499,17 @@
     },
     {
       "file": "src/core/scheduler/temporal-wakeup.ts",
-      "name": "registerTemporalWakeupTasks.$call:math-clamp:Math.max.arg1#1",
-      "value": "8",
-      "form": "math-clamp",
-      "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
-    },
-    {
-      "file": "src/core/scheduler/temporal-wakeup.ts",
       "name": "registerTemporalWakeupTasks.options.scheduler.register.arg0.cadence",
       "value": "{ kind: 'daily', hour, minute, timezone: morning.timezone }",
       "form": "object-member",
       "note": "Existing mutable policy candidate registerTemporalWakeupTasks.options.scheduler.register.arg0.cadence; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+    },
+    {
+      "file": "src/core/scheduler/temporal-wakeup.ts",
+      "name": "registerTemporalWakeupTasks.runMorningWake.$call:math-clamp:Math.max.arg1#1",
+      "value": "8",
+      "form": "math-clamp",
+      "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
       "file": "src/core/scheduler/time-texture.ts",
@@ -7648,11 +7635,6 @@
       "note": "Existing mutable policy candidate NearTurnMemoryLane.inferPostTurnAction.maxRetries; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
-      "file": "src/faculties/memory/postgres-store/scratchpad.ts",
-      "name": "SCRATCHPAD_MAX_ENTRIES",
-      "value": "64"
-    },
-    {
       "file": "src/faculties/memory/postgres-store/embedding-index.ts",
       "name": "ANN_MAX_CANDIDATES",
       "value": "1000",
@@ -7669,6 +7651,11 @@
       "name": "ANN_MIN_CANDIDATES",
       "value": "200",
       "note": "Code-owned ANN correctness floor that preserves recall after authorization and threshold post-filtering; callers cannot safely tune below it."
+    },
+    {
+      "file": "src/faculties/memory/postgres-store/scratchpad.ts",
+      "name": "SCRATCHPAD_MAX_ENTRIES",
+      "value": "64"
     },
     {
       "file": "src/faculties/memory/postgres-store/subject-backfill.ts",
@@ -7880,7 +7867,7 @@
     {
       "file": "src/faculties/memory/subject-authorized-store.ts",
       "name": "MEMORY_STORE_METHOD_POLICY",
-      "value": "{ // --- authorized: explicit projection / denial in the proxy trap below --- insertMemory: 'authorized', persistMemoryWrite: 'authorized', searchByEmbedding: 'authorized', searchByText: 'authorized', updateMemory: 'authorized', recordPatchEvent: 'authorized', getAllActiveMemories: 'authorized', listMemories: 'authorized', listActiveMemories: 'authorized', listActiveMemoriesInWindow: 'authorized', listAdminMemories: 'authorized', getAdminMemoryPrivacySummary: 'authorized', countActiveMemories: 'authorized', getById: 'authorized', getByIds: 'authorized', softDeleteMemory: 'authorized', undoSoftDelete: 'authorized', getDeleteVersion: 'authorized', recordAbstractionLink: 'authorized', getAbstractionLinksForSourceMemory: 'authorized', getAbstractionLinksForAbstractedMemory: 'authorized', recordEvolutionLink: 'authorized', getEvolutionLinksForSourceMemory: 'authorized', getEvolutionLinksForTargetMemory: 'authorized', getStats: 'authorized', getMemoriesByChannel: 'authorized', getMemoriesByContact: 'authorized', linkMemories: 'authorized', unlinkMemories: 'authorized', getLinkedMemories: 'authorized', bulkDelete: 'authorized', bulkUpdate: 'authorized', bulkUpdateSalience: 'authorized', upsertRecentContactShape: 'authorized', getRecentContactShape: 'authorized', listRecentContactShapes: 'authorized', upsertMemoryMaintenanceReview: 'authorized', listMemoryMaintenanceReviews: 'authorized', getMemoryMaintenanceReview: 'authorized', getMemoryMaintenanceDiagnostics: 'authorized', listActiveMemoryEmbeddingsSince: 'authorized', queryAuthorizedMemorySubjects: 'authorized', aggregateAuthorizedMemorySubjects: 'authorized', mutateAuthorizedMemorySubjects: 'authorized', persistAuthorizedMemoryWrite: 'authorized', softDeleteAuthorizedMemorySubject: 'authorized', undoAuthorizedMemorySubjectDelete: 'authorized', getMemorySubjectClassification: 'authorized', backfillMemorySubjectClassifications: 'authorized', // --- pass-through-safe: exposes no contact-subject rows --- // Process-local monotonic counters (retrieval-cache / salience-decay // invalidation signals). They carry no memory content and are feature-detected // by their consumers; the bead requires the retrieval-cache getter keep working. getSalienceMaintenanceRevision: 'pass-through-safe', getRetrievalCorpusVersion: 'pass-through-safe', // Startup aggregate counts only; no memory identity, body, or subject rows. getStartupMemorySubjectClassificationCoverage: 'pass-through-safe', // Capability-free transaction boundary. Used by MemoryWriter.patch/patchMemory // through the subject store (memory tool action=patch). The operations inside // the handler run through this same authorized proxy (e.g. updateMemory -> // mutateAuthorizedMemorySubjects), so wrapping them in a DB transaction adds // atomicity without granting any unauthorized read or write. runInTransaction: 'pass-through-safe', // Companion-owned working scratchpad (ScratchpadProvider). Distinct ownership // contract from contact-subject memories: entries are process/companion-local // notes keyed by entry id, never per-contact subject rows, and the scratchpad // tool operates on this same store. No subject predicate applies. addScratchpadEntry: 'pass-through-safe', replaceScratchpadEntry: 'pass-through-safe', appendScratchpadEntry: 'pass-through-safe', removeScratchpadEntry: 'pass-through-safe', getScratchpadEntry: 'pass-through-safe', listScratchpadEntries: 'pass-through-safe', }",
+      "value": "{ // --- authorized: explicit projection / denial in the proxy trap below --- insertMemory: 'authorized', persistMemoryWrite: 'authorized', searchByEmbedding: 'authorized', searchByText: 'authorized', updateMemory: 'authorized', recordPatchEvent: 'authorized', getAllActiveMemories: 'authorized', listMemories: 'authorized', listActiveMemories: 'authorized', listActiveMemoriesInWindow: 'authorized', listAdminMemories: 'authorized', getAdminMemoryPrivacySummary: 'authorized', countActiveMemories: 'authorized', getById: 'authorized', getByIds: 'authorized', softDeleteMemory: 'authorized', undoSoftDelete: 'authorized', getDeleteVersion: 'authorized', recordAbstractionLink: 'authorized', getAbstractionLinksForSourceMemory: 'authorized', getAbstractionLinksForAbstractedMemory: 'authorized', recordEvolutionLink: 'authorized', getEvolutionLinksForSourceMemory: 'authorized', getEvolutionLinksForTargetMemory: 'authorized', getStats: 'authorized', getMemoriesByChannel: 'authorized', getMemoriesByContact: 'authorized', getRecentlyAccessedMemories: 'authorized', linkMemories: 'authorized', unlinkMemories: 'authorized', getLinkedMemories: 'authorized', bulkDelete: 'authorized', bulkUpdate: 'authorized', bulkUpdateSalience: 'authorized', upsertRecentContactShape: 'authorized', getRecentContactShape: 'authorized', listRecentContactShapes: 'authorized', upsertMemoryMaintenanceReview: 'authorized', listMemoryMaintenanceReviews: 'authorized', getMemoryMaintenanceReview: 'authorized', getMemoryMaintenanceDiagnostics: 'authorized', listActiveMemoryEmbeddingsSince: 'authorized', queryAuthorizedMemorySubjects: 'authorized', aggregateAuthorizedMemorySubjects: 'authorized', mutateAuthorizedMemorySubjects: 'authorized', persistAuthorizedMemoryWrite: 'authorized', softDeleteAuthorizedMemorySubject: 'authorized', undoAuthorizedMemorySubjectDelete: 'authorized', getMemorySubjectClassification: 'authorized', backfillMemorySubjectClassifications: 'authorized', // --- pass-through-safe: exposes no contact-subject rows --- // Process-local monotonic counters (retrieval-cache / salience-decay // invalidation signals). They carry no memory content and are feature-detected // by their consumers; the bead requires the retrieval-cache getter keep working. getSalienceMaintenanceRevision: 'pass-through-safe', getRetrievalCorpusVersion: 'pass-through-safe', // Startup aggregate counts only; no memory identity, body, or subject rows. getStartupMemorySubjectClassificationCoverage: 'pass-through-safe', // Capability-free transaction boundary. Used by MemoryWriter.patch/patchMemory // through the subject store (memory tool action=patch). The operations inside // the handler run through this same authorized proxy (e.g. updateMemory -> // mutateAuthorizedMemorySubjects), so wrapping them in a DB transaction adds // atomicity without granting any unauthorized read or write. runInTransaction: 'pass-through-safe', // Companion-owned working scratchpad (ScratchpadProvider). Distinct ownership // contract from contact-subject memories: entries are process/companion-local // notes keyed by entry id, never per-contact subject rows, and the scratchpad // tool operates on this same store. No subject predicate applies. addScratchpadEntry: 'pass-through-safe', replaceScratchpadEntry: 'pass-through-safe', appendScratchpadEntry: 'pass-through-safe', removeScratchpadEntry: 'pass-through-safe', getScratchpadEntry: 'pass-through-safe', listScratchpadEntries: 'pass-through-safe', }",
       "form": "object",
       "note": "Existing mutable policy candidate MEMORY_STORE_METHOD_POLICY; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
@@ -8239,24 +8226,24 @@
     },
     {
       "file": "src/faculties/shards/manager.ts",
-      "name": "ShardManager.assertShardRoutable.retryHint@L1584",
+      "name": "ShardManager.assertShardRoutable.retryHint@L1601",
       "value": "'retry_after_delay'",
       "form": "object-member",
-      "note": "Existing mutable policy candidate ShardManager.assertShardRoutable.retryHint@L1584; line relocation only, retaining the named migration debt from psfn-framework-7qeo1.18 rather than approving immutable code ownership."
+      "note": "Existing mutable policy candidate ShardManager.assertShardRoutable.retryHint@L1601; line relocation only, retaining the named migration debt from psfn-framework-7qeo1.18 rather than approving immutable code ownership."
     },
     {
       "file": "src/faculties/shards/manager.ts",
-      "name": "ShardManager.assertShardRoutable.retryHint@L1595",
+      "name": "ShardManager.assertShardRoutable.retryHint@L1612",
       "value": "'retry_after_delay'",
       "form": "object-member",
-      "note": "Existing mutable policy candidate ShardManager.assertShardRoutable.retryHint@L1595; line relocation only, retaining the named migration debt from psfn-framework-7qeo1.18 rather than approving immutable code ownership."
+      "note": "Existing mutable policy candidate ShardManager.assertShardRoutable.retryHint@L1612; line relocation only, retaining the named migration debt from psfn-framework-7qeo1.18 rather than approving immutable code ownership."
     },
     {
       "file": "src/faculties/shards/manager.ts",
-      "name": "ShardManager.assertShardRoutable.retryHint@L1608",
+      "name": "ShardManager.assertShardRoutable.retryHint@L1625",
       "value": "'try_alternative_input'",
       "form": "object-member",
-      "note": "Existing mutable policy candidate ShardManager.assertShardRoutable.retryHint@L1608; line relocation only, retaining the named migration debt from psfn-framework-7qeo1.18 rather than approving immutable code ownership."
+      "note": "Existing mutable policy candidate ShardManager.assertShardRoutable.retryHint@L1625; line relocation only, retaining the named migration debt from psfn-framework-7qeo1.18 rather than approving immutable code ownership."
     },
     {
       "file": "src/faculties/shards/manager.ts",
@@ -8267,17 +8254,17 @@
     },
     {
       "file": "src/faculties/shards/manager.ts",
-      "name": "ShardManager.executeShard.retryHint@L706",
+      "name": "ShardManager.executeShard.retryHint@L721",
       "value": "'retry_after_delay'",
       "form": "object-member",
-      "note": "Existing mutable policy candidate ShardManager.executeShard.retryHint@L706; line relocation only, retaining the named migration debt from psfn-framework-7qeo1.18 rather than approving immutable code ownership."
+      "note": "Existing mutable policy candidate ShardManager.executeShard.retryHint@L721; line relocation only, retaining the named migration debt from psfn-framework-7qeo1.18 rather than approving immutable code ownership."
     },
     {
       "file": "src/faculties/shards/manager.ts",
-      "name": "ShardManager.executeShard.retryHint@L730",
+      "name": "ShardManager.executeShard.retryHint@L745",
       "value": "'try_alternative_input'",
       "form": "object-member",
-      "note": "Existing mutable policy candidate ShardManager.executeShard.retryHint@L730; line relocation only, retaining the named migration debt from psfn-framework-7qeo1.18 rather than approving immutable code ownership."
+      "note": "Existing mutable policy candidate ShardManager.executeShard.retryHint@L745; line relocation only, retaining the named migration debt from psfn-framework-7qeo1.18 rather than approving immutable code ownership."
     },
     {
       "file": "src/faculties/shards/parent-icp-tool.ts",
@@ -9699,12 +9686,6 @@
       "note": "Existing mutable policy candidate PostgresFleetAuthBrokerStore.resolveOrCreatePendingPrincipal.policy_version; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
-      "file": "src/persistence/postgres/fleet-auth/reapproval.ts",
-      "name": "CONTACT_ID_MAX_LENGTH",
-      "value": "256",
-      "note": "Code-owned protocol boundary mirroring the fleet_auth.contact_bindings database CHECK constraint; it is not an operator-tunable policy."
-    },
-    {
       "file": "src/persistence/postgres/health-event-store.ts",
       "name": "DEFAULT_HEALTH_EVENT_LIST_LIMIT",
       "value": "200",
@@ -9724,6 +9705,27 @@
       "file": "src/persistence/postgres/icp-fatigue-regulation-reservation-store.ts",
       "name": "FATIGUE_LEASE_POOL_MAX",
       "value": "8"
+    },
+    {
+      "file": "src/persistence/postgres/icp-fleet-health-reader.ts",
+      "name": "ICP_FLEET_HEALTH_READ_PROTOCOL.maxCompanions",
+      "value": "256",
+      "form": "object-member",
+      "note": "Code-owned read bound mirroring the fleet portal manifest cap; rejects oversized roster reads before any shared-schema query."
+    },
+    {
+      "file": "src/persistence/postgres/icp-fleet-health-reader.ts",
+      "name": "ICP_FLEET_HEALTH_READ_PROTOCOL.maxOpenEpisodes",
+      "value": "1_024",
+      "form": "object-member",
+      "note": "Code-owned DoS bound on the Fleet ICP open-episode scan; overflow is reported as activeChannelsTruncated on the wire instead of an unbounded read."
+    },
+    {
+      "file": "src/persistence/postgres/icp-fleet-health-reader.ts",
+      "name": "ICP_FLEET_HEALTH_READ_PROTOCOL.maxPairRows",
+      "value": "32_640",
+      "form": "object-member",
+      "note": "Code-owned bound on grouped delivered-turn pair rows equal to every unordered pair of a 256-companion roster, so the grouped read is bounded yet can never truncate."
     },
     {
       "file": "src/persistence/postgres/model-usage-store/queries.ts",
@@ -9754,11 +9756,6 @@
       "file": "src/persistence/postgres/model-usage-store/query-input.ts",
       "name": "MAX_TOP_N",
       "value": "100"
-    },
-    {
-      "file": "src/persistence/postgres/multica-runtime-lease.ts",
-      "name": "MULTICA_RUNTIME_LEASE_OPERATION_TIMEOUT_MS",
-      "value": "5_000"
     },
     {
       "file": "src/persistence/postgres/partner-affect-shadow-store.ts",
@@ -10450,6 +10447,18 @@
       "value": "0.5",
       "form": "object-member",
       "note": "Existing mutable policy candidate capabilityWeightsForPurpose.maxTokens; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+    },
+    {
+      "file": "src/primitives/llm/tokens.ts",
+      "name": "TOKEN_COUNT_CACHE_MAX_ENTRIES",
+      "value": "4096",
+      "note": "Memory guard bounding the process-wide token-count LRU (psfn-framework-z9rkr); covers a 36 h history window many times over and changes only CPU, never a count."
+    },
+    {
+      "file": "src/primitives/llm/tokens.ts",
+      "name": "TOKEN_COUNT_CACHE_MIN_TEXT_UNITS",
+      "value": "256",
+      "note": "Code-owned memo threshold for the token-count cache (psfn-framework-z9rkr): below it hashing costs about as much as counting; affects only CPU, never a count."
     },
     {
       "file": "src/primitives/llm/vision-limits.ts",
@@ -11950,6 +11959,48 @@
       "value": "63"
     },
     {
+      "file": "src/system/config/decision-backend-config.ts",
+      "name": "createDefaultDecisionBackendSettings.jev.maxRequestChars",
+      "value": "96_000",
+      "form": "object-member",
+      "note": "Canonical owner-file/schema metadata for settings.json decisionBackend (epic 4lf3r); the literal defines validation or bootstrap defaults for the owned JSON contract rather than a parallel runtime override."
+    },
+    {
+      "file": "src/system/config/decision-backend-config.ts",
+      "name": "createDefaultDecisionBackendSettings.jev.timeoutMs",
+      "value": "1_500",
+      "form": "object-member",
+      "note": "Canonical owner-file/schema metadata for settings.json decisionBackend (epic 4lf3r); the literal defines validation or bootstrap defaults for the owned JSON contract rather than a parallel runtime override."
+    },
+    {
+      "file": "src/system/config/decision-backend-config.ts",
+      "name": "DECISION_BACKEND_RANGES.latencyBudgetMs",
+      "value": "{ min: 10, max: 30_000 }",
+      "form": "object-member",
+      "note": "Canonical owner-file/schema metadata for settings.json decisionBackend (epic 4lf3r); the literal defines validation or bootstrap defaults for the owned JSON contract rather than a parallel runtime override."
+    },
+    {
+      "file": "src/system/config/decision-backend-config.ts",
+      "name": "DECISION_BACKEND_RANGES.maxRequestChars",
+      "value": "{ min: 1_000, max: 120_000 }",
+      "form": "object-member",
+      "note": "Canonical owner-file/schema metadata for settings.json decisionBackend (epic 4lf3r); the literal defines validation or bootstrap defaults for the owned JSON contract rather than a parallel runtime override."
+    },
+    {
+      "file": "src/system/config/decision-backend-config.ts",
+      "name": "DECISION_BACKEND_RANGES.pricingMaxOutputTokens",
+      "value": "{ min: 1, max: 32_000 }",
+      "form": "object-member",
+      "note": "Canonical owner-file/schema metadata for settings.json decisionBackend.jev.pricing.maxOutputTokens (worst-case Jev pricing); validation bounds for the owned JSON contract, not a parallel runtime override."
+    },
+    {
+      "file": "src/system/config/decision-backend-config.ts",
+      "name": "DECISION_BACKEND_RANGES.timeoutMs",
+      "value": "{ min: 50, max: 30_000 }",
+      "form": "object-member",
+      "note": "Canonical owner-file/schema metadata for settings.json decisionBackend (epic 4lf3r); the literal defines validation or bootstrap defaults for the owned JSON contract rather than a parallel runtime override."
+    },
+    {
       "file": "src/system/config/emotion-scoping-config.ts",
       "name": "createDefaultEmotionScopingSettings.carryOver.minEffectThreshold",
       "value": "0.02",
@@ -12226,6 +12277,20 @@
       "name": "MAX_ICP_POLICY_OUTSTANDING_HOLDS",
       "value": "8",
       "note": "Code-owned pool-exhaustion ceiling for retained database locks; scheduler.json may lower it but can never raise it."
+    },
+    {
+      "file": "src/system/config/intake-policy-config.ts",
+      "name": "createDefaultInjectionClassifierWorkerConfig.callTimeoutMs",
+      "value": "60_000",
+      "form": "object-member",
+      "note": "Bootstrap default for intake-policy.json injectionClassifier.worker, used only when an owner file written before 3mbpi lacks the block; the seed carries the same value and the owner file is the authority."
+    },
+    {
+      "file": "src/system/config/intake-policy-config.ts",
+      "name": "createDefaultInjectionClassifierWorkerConfig.queueMax",
+      "value": "32",
+      "form": "object-member",
+      "note": "Bootstrap default for intake-policy.json injectionClassifier.worker, used only when an owner file written before 3mbpi lacks the block; the seed carries the same value and the owner file is the authority."
     },
     {
       "file": "src/system/config/intake-policy-config.ts",
@@ -12740,9 +12805,16 @@
     {
       "file": "src/system/config/participation-config.ts",
       "name": "createDefaultParticipationAppraiserSettings.appraisalMaxOutputTokens",
-      "value": "200",
+      "value": "1_500",
       "form": "object-member",
       "note": "Canonical owner-file/schema metadata createDefaultParticipationAppraiserSettings.appraisalMaxOutputTokens; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
+    },
+    {
+      "file": "src/system/config/participation-config.ts",
+      "name": "createDefaultParticipationAppraiserSettings.operatorGuidanceMaxChars",
+      "value": "2_000",
+      "form": "object-member",
+      "note": "Canonical owner-file/schema metadata createDefaultParticipationAppraiserSettings.operatorGuidanceMaxChars; the code literal is the scheduler.json socialAutonomy.appraiser bootstrap default (seeded in config/scheduler.seed.json), not a parallel runtime override."
     },
     {
       "file": "src/system/config/participation-config.ts",
@@ -12820,6 +12892,12 @@
       "value": "12",
       "form": "object-member",
       "note": "Canonical owner-file/schema metadata createDefaultRoomSignalSettings.maxRoomVelocity; the code literal is the scheduler.json socialAutonomy.roomSignal bootstrap default (seeded in config/scheduler.seed.json and added by the owner migration), not a parallel runtime override."
+    },
+    {
+      "file": "src/system/config/participation-config.ts",
+      "name": "RETIRED_APPRAISAL_MAX_OUTPUT_TOKENS",
+      "value": "200",
+      "note": "Migration marker (9z2z9): the exact retired seed value the scheduler owner migration recognizes as inherited and upgrades; not a runtime tunable."
     },
     {
       "file": "src/system/config/runtime-config-contracts.ts",
@@ -13854,6 +13932,26 @@
       "value": "'trust-policy.seed.json'",
       "form": "string",
       "note": "Canonical owner-file/schema metadata TRUST_POLICY_SEED_FILE_NAME; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
+    },
+    {
+      "file": "src/system/fleet-lifecycle/kubernetes-adapter.ts",
+      "name": "CHART_AGENT_PREFIX_MAX_LENGTH",
+      "value": "26",
+      "note": "Code-owned mirror of the Helm chart fleetAgentDeploymentName trunc 26; must change together with deploy/helm templates, never by settings."
+    },
+    {
+      "file": "src/system/fleet-lifecycle/kubernetes-adapter.ts",
+      "name": "SECRET_KEY_PATTERN",
+      "value": "/^[-._a-zA-Z0-9]+$/u",
+      "form": "regex",
+      "note": "Code-owned Kubernetes Secret data-key grammar (API validation rule) guarding the read-only kubectl argument boundary; not tunable."
+    },
+    {
+      "file": "src/system/fleet-lifecycle/service.ts",
+      "name": "FLEET_LIFECYCLE_SERVICE_PROTOCOL.maxListedPlans",
+      "value": "50",
+      "form": "object-member",
+      "note": "Code-owned wire bound on the Fleet lifecycle listing, mirrored by the strict client parser; older plans stay readable by id and via the CLI."
     },
     {
       "file": "src/system/lifecycle/command-runner.ts",

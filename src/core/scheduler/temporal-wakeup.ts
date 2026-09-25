@@ -46,6 +46,11 @@ import {
 } from '../session/session-lane-metadata.js';
 import type { SessionEntry } from '../session/types.js';
 import type { Scheduler } from './scheduler.js';
+import {
+  registerDurablePreemptedTaskRetry,
+  type DurablePreemptedTaskRetry,
+} from './preempted-task-retry.js';
+import type { PostTurnActionRuntime } from '../agent/post-turn-action-runtime.js';
 import type { FleetSlotStagger } from './types.js';
 import {
   evaluateMorningWakePreflight,
@@ -560,6 +565,11 @@ export interface TemporalWakeupRuntimeOptions {
    * Optional full wake turn for warm sessions. Returns outward-candidate
    * content, or null when the companion has nothing to say outward.
    */
+  /**
+   * Durable action queue for preempted wake retries (tpkqi). Without it a
+   * preempted wake is recorded as a task failure, never retried in memory.
+   */
+  postTurnActions?: Pick<PostTurnActionRuntime, 'enqueue' | 'registerHandler'>;
   invokeWakeTurn?: (input: {
     channelId: string;
     channelType: ChannelType;
@@ -967,16 +977,10 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
         ? { window: `${registrationSnapshot.window.startLocalTime}-${registrationSnapshot.window.endLocalTime}` }
         : {}),
     });
-    options.scheduler.register({
-      id: TEMPORAL_WAKEUP_MORNING_TASK_ID,
-      name: TEMPORAL_WAKEUP_MORNING_TASK_NAME,
-      type: 'every',
-      intervalMs: 24 * HOUR_MS,
-      cadence: { kind: 'daily', hour, minute, timezone: morning.timezone },
-      ...(options.fleetScheduleStagger
-        ? { fleetStagger: options.fleetScheduleStagger }
-        : {}),
-      handler: async () => {
+    // tpkqi: a preempted wake re-runs through the durable action queue, so a
+    // restart before the retry fires does not lose the day's wake.
+    let morningRetry: DurablePreemptedTaskRetry | undefined;
+    const runMorningWake = async (retryOfDateKey?: string): Promise<void> => {
         // Fan the internal new-day frame out to EVERY recently-active channel
         // (bead 2x37.3), each gated by its own eligibility + anti-loop state via
         // the shared fan-out pipeline (bead 2x37.9 item 1). Outward delivery
@@ -984,6 +988,15 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
         const nowMs = Date.now();
         const timeZone = resolveActiveTimezone();
         const currentFrameDateKey = temporalWakeupLocalDateKey(nowMs, timeZone);
+        if (retryOfDateKey !== undefined && retryOfDateKey !== currentFrameDateKey) {
+          // The day the wake was preempted on is over; its retry must not
+          // become an early wake for the new day.
+          log.info('Preempted morning wake retry expired with its day', {
+            retryOfDateKey,
+            currentFrameDateKey,
+          });
+          return;
+        }
         if (morningFrameDateKey === currentFrameDateKey) return;
         if (options.sessionManager.getRecentSessionEntries) {
           for (const channel of enumerateWakeupChannels(options, nowMs)) {
@@ -1112,13 +1125,39 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
             },
           );
         } catch (error) {
+          // tpkqi: a foreground turn preempting the wake turn is a yield, not
+          // a failure. The scheduled run queues a durable retry after the
+          // lane's own idle gate; a retry run lets the contention propagate so
+          // the durable queue reschedules it.
+          if (retryOfDateKey === undefined
+            && morningRetry?.deferIfPreempted(error, currentFrameDateKey)) {
+            return;
+          }
           log.error('Morning wake model/outward phase failed', {
             sessionId: outwardTarget.decision.sessionId,
             error: String(error),
           });
           throw error;
         }
-      },
+    };
+    if (options.postTurnActions) {
+      morningRetry = registerDurablePreemptedTaskRetry({
+        actions: options.postTurnActions,
+        taskId: TEMPORAL_WAKEUP_MORNING_TASK_ID,
+        retryDelayMs: () => morning.minPartnerIdleMinutes * MINUTE_MS,
+        run: async (dateKey) => await runMorningWake(dateKey),
+      });
+    }
+    options.scheduler.register({
+      id: TEMPORAL_WAKEUP_MORNING_TASK_ID,
+      name: TEMPORAL_WAKEUP_MORNING_TASK_NAME,
+      type: 'every',
+      intervalMs: 24 * HOUR_MS,
+      cadence: { kind: 'daily', hour, minute, timezone: morning.timezone },
+      ...(options.fleetScheduleStagger
+        ? { fleetStagger: options.fleetScheduleStagger }
+        : {}),
+      handler: async () => await runMorningWake(),
       eligibility: { requiredTokens: ['memory.write'] },
       state: 'idle',
     });

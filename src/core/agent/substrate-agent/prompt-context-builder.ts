@@ -5,6 +5,8 @@
 // assembly, the agent owns the state. Deps are callback-shaped because most
 // providers are null-until-wired after construction.
 
+import type { ScratchpadViewer } from '../../../faculties/memory/scratchpad-visibility.js';
+import type { ConcernViewer } from '../../intention/concern-visibility.js';
 import type { SubstrateMessage, ResponseStyle } from '../../../shared/contracts/runtime.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import type { CoreSubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
@@ -49,6 +51,7 @@ import type { SituatedEmanationTracker } from './runtime-context-sections/situat
 import type { WorldPlaneMapReader } from '../../../shared/contracts/world-plane-map.js';
 import type { WorldNotesReader } from '../../../shared/contracts/world-notes.js';
 import type { CompanionPresenceTurnPort } from '../companion-presence-runtime.js';
+import { capTrustLevelToCeiling, type ViewerCeiling } from '../../session/viewer-ceiling.js';
 import type { createComponentLogger } from '../../../shared/logger.js';
 
 type Log = ReturnType<typeof createComponentLogger>;
@@ -82,6 +85,8 @@ export interface PromptContextBuilderDeps {
   getContactStore: () => ContactStorePort | null;
   contactTrackingGate: ContactTrackingGate | null;
   snapshotCapabilityGrant: () => Pick<CapabilityGrantSnapshot, 'tier' | 'grantedTokens'>;
+  /** The delegating conversation's viewer ceiling, for a subagent or shard. */
+  getViewerCeiling: () => ViewerCeiling | null;
   log: Log;
 }
 
@@ -225,7 +230,13 @@ export class PromptContextBuilder {
       extendedTools,
       coreToolNames,
       skillsContext,
-      activeConcerns: this.resolveActiveConcernsRuntimeData(canonicalContactKey),
+      activeConcerns: this.resolveActiveConcernsRuntimeData(canonicalContactKey, {
+        trustLevel,
+        channelDisclosure: {
+          channelPrivacy: conversationScope.envelope.channelPrivacy,
+          broadcast: conversationScope.envelope.broadcast,
+        },
+      }),
       behavioralNotesBlock: this.buildBehavioralNotesContextBlock(canonicalContactKey),
       lastMessageReceivedAtMs: latestPriorMessage?.timestamp ?? null,
       recentChannelEntries: recentMessages,
@@ -324,10 +335,14 @@ export class PromptContextBuilder {
     });
   }
 
-  resolveActiveConcernsRuntimeData(canonicalContactKey?: string): ActiveConcernRuntimeData | undefined {
+  resolveActiveConcernsRuntimeData(
+    canonicalContactKey: string | undefined,
+    viewer: Omit<ConcernViewer, 'canonicalContactKey'>,
+  ): ActiveConcernRuntimeData | undefined {
     return resolveActiveConcernsRuntimeDataForTurn({
       activeConcernProvider: this.deps.getActiveConcernProvider(),
       canonicalContactKey,
+      viewer,
       logger: this.deps.log,
     });
   }
@@ -340,9 +355,10 @@ export class PromptContextBuilder {
     });
   }
 
-  buildScratchpadContextBlock(): string {
+  buildScratchpadContextBlock(viewer: ScratchpadViewer): string {
     return buildScratchpadContextBlockForTurn({
       scratchpadProvider: this.deps.getScratchpadProvider(),
+      viewer,
       logger: this.deps.log,
     });
   }
@@ -363,7 +379,7 @@ export class PromptContextBuilder {
   }
 
   async resolveAuthorContext(message: SubstrateMessage): Promise<ResolvedAuthorContext> {
-    return resolveAuthorContextForTurn({
+    const resolved = await resolveAuthorContextForTurn({
       message,
       contactStore: this.deps.getContactStore(),
       logger: this.deps.log,
@@ -371,5 +387,9 @@ export class PromptContextBuilder {
       companionDisplayName: this.deps.getCharacterName(),
       ...(this.deps.contactTrackingGate ? { contactTracking: this.deps.contactTrackingGate } : {}),
     });
+    const ceiling = this.deps.getViewerCeiling();
+    if (!ceiling) return resolved;
+    const trustLevel = capTrustLevelToCeiling(resolved.trustLevel, ceiling);
+    return trustLevel === resolved.trustLevel ? resolved : { ...resolved, trustLevel };
   }
 }

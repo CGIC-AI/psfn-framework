@@ -28,6 +28,7 @@
     startServerSessionRefresh,
     stopServerSessionRefresh,
   } from '$lib/stores/auth.svelte';
+  import { usesAdminTokenOperatorDoor } from '$lib/stores/auth-storage';
   import {
     ensureCompanionNameLoaded,
     getCompanionName,
@@ -235,7 +236,13 @@
   async function handleLogout() {
     if (companionScope || isFleetPage) {
       try {
-        await logoutFleetSession();
+        if (usesAdminTokenOperatorDoor()) {
+          // Key-mode sign-out: only the gateway can clear the HttpOnly key cookie.
+          const response = await fetch('/fleet/logout', { method: 'POST', credentials: 'include' });
+          if (!response.ok) throw new Error(`Sign out failed (${response.status})`);
+        } else {
+          await logoutFleetSession();
+        }
         clearJournalDisclosures();
         clearToken();
         clearAttentionCounts();

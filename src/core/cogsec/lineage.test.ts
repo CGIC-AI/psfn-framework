@@ -7,6 +7,7 @@ import {
   type CogSecLineageSessionReader,
   type CogSecLineageSource,
 } from './lineage.js';
+import { keysetActiveMemoryPages } from '../../test-support/active-memory-pages.js';
 
 function event(overrides: Partial<CogSecLineageSource> = {}): CogSecLineageSource {
   return {
@@ -39,7 +40,7 @@ function makeMemory(overrides: Partial<PurrMemory> & { id: string }): PurrMemory
 
 function memoryStore(memories: PurrMemory[]): NonNullable<BuildCogSecLineagePreviewInput['memoryStore']> {
   return {
-    listMemories: async () => memories,
+    listActiveMemories: keysetActiveMemoryPages(() => memories),
   };
 }
 

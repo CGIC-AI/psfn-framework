@@ -51,8 +51,9 @@ async function createServiceHarness(options?: {
 function authenticatedContactMutationContext(input: {
   contactId: string;
   role?: 'owner' | 'admin' | 'member';
-  provider?: 'discord' | 'testing_harness';
+  provider?: 'discord' | 'testing_harness' | 'admin_token';
   accessMode?: 'sole_admin' | 'multi_admin';
+  sessionAssurance?: 'oauth' | 'break_glass';
 }): FleetGardenRequestContext {
   return {
     kind: 'fleet_principal', requestId: 'request-fixture', decisionId: 'decision-fixture',
@@ -64,7 +65,7 @@ function authenticatedContactMutationContext(input: {
       provider: input.provider ?? 'discord', providerSubjectId: 'provider-subject-fixture',
       contactId: input.contactId, contactBindingId: 'binding-fixture', role: input.role ?? 'owner',
       operatorGrantId: 'grant-fixture', sessionRecordId: 'session-fixture',
-      sessionAssurance: 'oauth', accessMode: input.accessMode ?? 'sole_admin' },
+      sessionAssurance: input.sessionAssurance ?? 'oauth', accessMode: input.accessMode ?? 'sole_admin' },
     action: 'contacts.manage',
     resource: { routeId: 'PATCH /api/admin/contacts/:id', scope: 'personal_workspace',
       area: 'contacts', companionId: '11111111-1111-4111-8111-111111111111',
@@ -99,7 +100,53 @@ describe('AdminContactsDataService', () => {
       .toHaveLength(3);
   });
 
+  it('persists protected contact edits from the audited ADMIN_TOKEN operator with no SSO (jxthv)', async () => {
+    const { contactStore, service } = await createServiceHarness();
+    const protectedContact = await contactStore.upsert({ displayName: 'Chosen Family', relationshipType: 'friend' });
+    const context = authenticatedContactMutationContext({
+      contactId: 'admin-token-contact-11111111-1111-4111-8111-111111111111',
+      provider: 'admin_token',
+      sessionAssurance: 'break_glass',
+    });
+
+    await expect(service.updateContact(protectedContact.id, JSON.stringify({
+      displayName: 'Chosen Family Updated', trustLevel: 'trusted', relationshipType: 'family',
+    }), context)).resolves.toMatchObject({ ok: true });
+
+    const audit = await contactStore.listMutationAuditEntries({ contactId: protectedContact.id });
+    expect(audit.filter(entry => ['display_name', 'trust_level', 'relationship_type'].includes(entry.field)))
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ actor: FLEET_GARDEN_CONTACT_OPERATOR_ACTOR,
+          metadata: expect.objectContaining({ source: 'fleet_garden', provider: 'admin_token' }) }),
+      ]));
+  });
+
+  it('links platform identities to a contact with ADMIN_TOKEN alone, no OAuth or SSO (key-or-SSO ruling)', async () => {
+    const { contactStore, service } = await createServiceHarness();
+    const contact = await contactStore.upsert({ displayName: 'Key Mode Friend', relationshipType: 'friend' });
+    const context = authenticatedContactMutationContext({
+      contactId: 'admin-token-contact-11111111-1111-4111-8111-111111111111',
+      provider: 'admin_token',
+      sessionAssurance: 'break_glass',
+    });
+    for (const addChannel of [
+      { channel: 'discord', userId: '623456789012345678' },
+      { channel: 'telegram', userId: 'tg-4242' },
+    ]) {
+      await expect(service.updateContact(contact.id, JSON.stringify({ addChannel }), context))
+        .resolves.toMatchObject({ ok: true });
+    }
+    expect(await contactStore.getByChannelIdentity('discord', '623456789012345678')).toMatchObject({ id: contact.id });
+    expect(await contactStore.getByChannelIdentity('telegram', 'tg-4242')).toMatchObject({ id: contact.id });
+  });
+
   it.each([
+    ['admin-token shape without the signed door assurance', {
+      provider: 'admin_token' as const, sessionAssurance: 'oauth' as const,
+    }],
+    ['admin-token shape outside sole-admin mode', {
+      provider: 'admin_token' as const, sessionAssurance: 'break_glass' as const, accessMode: 'multi_admin' as const,
+    }],
     ['non-owner', { role: 'admin' as const }],
     ['automated harness', { provider: 'testing_harness' as const }],
   ])('denies %s protected fleet mutations', async (_label, overrides) => {
@@ -138,7 +185,7 @@ describe('AdminContactsDataService', () => {
     if (sourceIsMachine) {
       expect(await contactStore.setMachineIntelligence(source.id, true, 'operator:test')).toBe(true);
     }
-    await contactStore.linkChannelIdentity(source.id, 'multica', 'workspace-system');
+    await contactStore.linkChannelIdentity(source.id, 'api', 'workspace-system');
     const targetBefore = await contactStore.getById(target.id);
     const sourceBefore = await contactStore.getById(source.id);
 
@@ -151,7 +198,7 @@ describe('AdminContactsDataService', () => {
       ok: false,
       message: 'Cannot merge human and machine-intelligence contacts',
     });
-    expect(await contactStore.getByChannelIdentity('multica', 'workspace-system'))
+    expect(await contactStore.getByChannelIdentity('api', 'workspace-system'))
       .toMatchObject({ id: source.id });
     expect(await contactStore.getById(target.id)).toEqual(targetBefore);
     expect(await contactStore.getById(source.id)).toEqual(sourceBefore);
@@ -202,58 +249,6 @@ describe('AdminContactsDataService', () => {
     expect(result).toEqual({ ok: false, message: 'Fleet contact merging is unavailable' });
     expect((await contactStore.getById(target.id))?.archivedAt).toBeUndefined();
     expect((await contactStore.getById(source.id))?.archivedAt).toBeUndefined();
-  });
-
-  it('moves one exact Multica member identity onto the Fleet owner without merging contacts', async () => {
-    const { contactStore, service } = await createServiceHarness();
-    const target = await contactStore.upsert({ displayName: 'Fleet owner' });
-    const source = await contactStore.upsert({ displayName: 'Multica member duplicate' });
-    const system = await contactStore.upsert({ displayName: 'Multica system' });
-    expect(await contactStore.setMachineIntelligence(system.id, true, 'system:test')).toBe(true);
-    const memberUserId = 'multica:member:99999999-9999-4999-8999-999999999999';
-    const systemUserId = 'multica:system:11111111-1111-4111-8111-111111111111';
-    expect(await contactStore.linkChannelIdentity(source.id, 'multica', memberUserId)).toBe('linked');
-    expect(await contactStore.linkChannelIdentity(system.id, 'multica', systemUserId)).toBe('linked');
-
-    const result = await service.transferChannelIdentity(
-      target.id,
-      JSON.stringify({ sourceContactId: source.id, channel: 'multica', userId: memberUserId }),
-      authenticatedContactMutationContext({ contactId: target.id }),
-    );
-
-    expect(result).toMatchObject({ ok: true, message: 'Multica member channel moved to this contact' });
-    expect(await contactStore.getByChannelIdentity('multica', memberUserId)).toMatchObject({ id: target.id });
-    expect(await contactStore.getByChannelIdentity('multica', systemUserId)).toMatchObject({ id: system.id });
-    expect(await contactStore.getById(source.id)).toMatchObject({ id: source.id });
-    expect(await contactStore.getById(system.id)).toMatchObject({ isMachineIntelligence: true });
-  });
-
-  it('refuses to move a Multica system identity onto a human contact', async () => {
-    const { contactStore, service } = await createServiceHarness();
-    const target = await contactStore.upsert({ displayName: 'Fleet owner' });
-    const source = await contactStore.upsert({ displayName: 'Multica system' });
-    expect(await contactStore.setMachineIntelligence(source.id, true, 'system:test')).toBe(true);
-    const systemUserId = 'multica:system:11111111-1111-4111-8111-111111111111';
-    expect(await contactStore.linkChannelIdentity(source.id, 'multica', systemUserId)).toBe('linked');
-
-    const result = await service.transferChannelIdentity(
-      target.id,
-      JSON.stringify({ sourceContactId: source.id, channel: 'multica', userId: systemUserId }),
-      authenticatedContactMutationContext({ contactId: target.id }),
-    );
-
-    expect(result).toEqual({ ok: false, message: 'Only Multica member identities can move between human contacts' });
-    expect(await contactStore.getByChannelIdentity('multica', systemUserId)).toMatchObject({ id: source.id });
-  });
-
-  it.each(['null', '{"sourceContactId":42,"channel":"multica","userId":true}'])('rejects malformed channel-transfer payload %s', async body => {
-    const { contactStore, service } = await createServiceHarness();
-    const target = await contactStore.upsert({ displayName: 'Fleet owner' });
-    await expect(service.transferChannelIdentity(
-      target.id,
-      body,
-      authenticatedContactMutationContext({ contactId: target.id }),
-    )).resolves.toMatchObject({ ok: false });
   });
 
   it.each([

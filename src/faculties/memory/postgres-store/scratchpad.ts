@@ -11,6 +11,7 @@ import type {
 import type { ScratchpadRow } from './rows.js';
 import { parsePgNumber } from './rows.js';
 import { clampLimit } from './utils.js';
+import { parseScratchpadProvenance } from '../scratchpad-visibility.js';
 import type { PostgresMemoryStoreCollaboratorContext } from './collaborator-context.js';
 
 const SCRATCHPAD_TTL_MS = 24 * 60 * 60 * 1000;
@@ -33,7 +34,7 @@ export class PostgresScratchpadStore {
 
   async hydrate(): Promise<void> {
     const scratchpadEntries = await queryRows<ScratchpadRow>(this.ctx.pool, `
-      SELECT id, content, created_at, updated_at
+      SELECT id, content, created_at, updated_at, source_scope, source_channel_id
       FROM scratchpad_entries
       ORDER BY updated_at DESC, created_at DESC
     `);
@@ -43,6 +44,7 @@ export class PostgresScratchpadStore {
         content: row.content,
         createdAt: parsePgNumber(row.created_at, 'scratchpad_entries.created_at'),
         updatedAt: parsePgNumber(row.updated_at, 'scratchpad_entries.updated_at'),
+        provenance: parseScratchpadProvenance(row.source_scope, row.source_channel_id, row.id),
       });
     }
     this.pruneExpiredScratchpadEntries();
@@ -50,13 +52,20 @@ export class PostgresScratchpadStore {
 
   private async upsertScratchpadEntry(entry: ScratchpadEntry): Promise<void> {
     await executeQuery(this.ctx.pool, `
-      INSERT INTO scratchpad_entries (id, content, created_at, updated_at)
-      VALUES ($1,$2,$3,$4)
+      INSERT INTO scratchpad_entries (id, content, created_at, updated_at, source_scope, source_channel_id)
+      VALUES ($1,$2,$3,$4,$5,$6)
       ON CONFLICT (id) DO UPDATE SET
         content = EXCLUDED.content,
         created_at = EXCLUDED.created_at,
         updated_at = EXCLUDED.updated_at
-    `, [entry.id, entry.content, entry.createdAt, entry.updatedAt]);
+    `, [
+      entry.id,
+      entry.content,
+      entry.createdAt,
+      entry.updatedAt,
+      entry.provenance.scope,
+      entry.provenance.scope === 'conversation' ? entry.provenance.channelId : null,
+    ]);
     this.syncScratchpadMirror();
   }
 
@@ -98,13 +107,19 @@ export class PostgresScratchpadStore {
 
   async addScratchpadEntry(
     content: string,
-    options: ScratchpadEntryCreateOptions = {},
+    options: ScratchpadEntryCreateOptions,
   ): Promise<ScratchpadAddResult> {
     const normalized = content.trim();
     if (!normalized) throw new Error('Scratchpad content is required');
     const now = options.now ?? Date.now();
     const id = options.id?.trim() || randomUUID();
-    const entry: ScratchpadEntry = { id, content: normalized, createdAt: now, updatedAt: now };
+    const entry: ScratchpadEntry = {
+      id,
+      content: normalized,
+      createdAt: now,
+      updatedAt: now,
+      provenance: options.provenance,
+    };
     await this.ctx.persist(() => this.upsertScratchpadEntry(entry));
     this.entries.set(id, entry);
     const evictedIds = await this.pruneScratchpadEntries();

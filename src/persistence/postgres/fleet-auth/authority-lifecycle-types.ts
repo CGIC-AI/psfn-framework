@@ -51,12 +51,43 @@ export function digestVerifiedProviderProof(input: {
   return digestFleetAuthVerifiedProviderProof(input);
 }
 
-interface LifecycleDecisionBase {
+/**
+ * The audited ADMIN_TOKEN operator as the approving authority of a lifecycle
+ * ceremony (psfn-framework-ja7n0). It carries no principal and no session: its
+ * evidence is the durable `admin_token_operator` approval audit row, which is
+ * bound to exactly this decision id, ceremony, action, companion and authority
+ * snapshot. The operator approves; it never supplies the subject's proof.
+ */
+interface AdminTokenOperatorApproval {
+  kind: 'admin_token_operator';
+  authorizationEventId: string;
+}
+
+/**
+ * Ceremony actions the ADMIN_TOKEN operator performs directly with the key;
+ * everything else rejects (key-or-SSO ruling). The operator's binding
+ * activation needs no OAuth proof: the pending principal's own Discord subject
+ * is already on record from its SSO login. Provider link/relink/replace prove
+ * control of a Discord account and are SSO-mode features only.
+ */
+export const ADMIN_TOKEN_OPERATOR_LIFECYCLE_ACTIONS = [
+  'binding.activate',
+  'role.grant',
+  'role.change',
+  'role.revoke',
+] as const;
+
+/** The fleet action an ADMIN_TOKEN approval of a ceremony action is audited under. */
+export function adminTokenLifecycleApprovalAction(
+  action: typeof ADMIN_TOKEN_OPERATOR_LIFECYCLE_ACTIONS[number],
+): 'contacts.bind' | 'roles.manage' {
+  return action === 'binding.activate' ? 'contacts.bind' : 'roles.manage';
+}
+
+interface LifecycleDecisionCommon {
   verification: 'gateway_verified';
   decisionId: string;
   ceremonyId: string;
-  actor: PrincipalAuthorityClaim;
-  actorSession: ActorSessionAuthorityClaim;
   target: PrincipalAuthorityClaim;
   authorityGeneration: number;
   globalAuthEpoch: number;
@@ -64,14 +95,44 @@ interface LifecycleDecisionBase {
   decidedAt: Date;
 }
 
+/** A human principal acting under its exact live SSO session (unchanged shape). */
+interface PrincipalActorDecision extends LifecycleDecisionCommon {
+  actor: PrincipalAuthorityClaim;
+  actorSession: ActorSessionAuthorityClaim;
+  operator?: never;
+}
+
+interface AdminTokenOperatorDecision extends LifecycleDecisionCommon {
+  operator: AdminTokenOperatorApproval;
+  actor?: never;
+  actorSession?: never;
+}
+
+type LifecycleDecisionBase = PrincipalActorDecision | AdminTokenOperatorDecision;
+
+/** Narrow a decision to its human principal actor; operator approvals have none. */
+export function lifecyclePrincipalActor(
+  decision: VerifiedFleetAuthLifecycleDecision,
+): { actor: PrincipalAuthorityClaim; actorSession: ActorSessionAuthorityClaim } | null {
+  return decision.operator ? null : { actor: decision.actor!, actorSession: decision.actorSession! };
+}
+
 export type VerifiedFleetAuthLifecycleDecision =
-  | (LifecycleDecisionBase & {
+  | (PrincipalActorDecision & {
     action: 'binding.activate';
     companionId: string;
     contactId: string;
     bindingId: string;
     newProvider: VerifiedProviderProof;
     contactAuthority: VerifiedDiscordContactAuthoritySnapshot;
+  })
+  | (AdminTokenOperatorDecision & {
+    action: 'binding.activate';
+    companionId: string;
+    contactId: string;
+    bindingId: string;
+    /** The pending principal's own Discord subject, recorded by its SSO login. */
+    providerSubjectId: string;
   })
   | (LifecycleDecisionBase & {
     action: 'provider.add' | 'provider.relink';
@@ -148,13 +209,11 @@ export interface FleetAuthLifecycleResult {
   target: PrincipalAuthorityClaim;
 }
 
-const BASE_KEYS = [
+const COMMON_KEYS = [
   'verification',
   'action',
   'decisionId',
   'ceremonyId',
-  'actor',
-  'actorSession',
   'target',
   'authorityGeneration',
   'globalAuthEpoch',
@@ -274,12 +333,22 @@ function assertActorSession(value: unknown): ActorSessionAuthorityClaim {
   return session as unknown as ActorSessionAuthorityClaim;
 }
 
-function assertCommon(decision: Record<string, unknown>): void {
-  if (decision.verification !== 'gateway_verified') {
-    throw new Error('verification must be gateway_verified');
+function assertOperatorApproval(decision: Record<string, unknown>): void {
+  const operator = assertRecord(decision.operator, 'operator');
+  assertNoUnknownKeys(operator, ['kind', 'authorizationEventId'], 'operator', {
+    errorPrefix: 'Invalid fleet-auth lifecycle decision',
+  });
+  if (operator.kind !== 'admin_token_operator') throw new Error('operator.kind is unknown');
+  assertUuid(operator.authorizationEventId, 'operator.authorizationEventId');
+  if (operator.authorizationEventId === decision.decisionId) {
+    throw new Error('operator approval audit and decision identities must be distinct');
   }
-  assertUuid(decision.decisionId, 'decisionId');
-  assertUuid(decision.ceremonyId, 'ceremonyId');
+  if (!(ADMIN_TOKEN_OPERATOR_LIFECYCLE_ACTIONS as readonly unknown[]).includes(decision.action)) {
+    throw new Error('ADMIN_TOKEN operator cannot approve this lifecycle action');
+  }
+}
+
+function assertPrincipalActor(decision: Record<string, unknown>): void {
   const actorSession = assertActorSession(decision.actorSession);
   const actor = assertPrincipalClaim(decision.actor, 'actor');
   if (actorSession.authnVersion !== actor.authnVersion
@@ -289,11 +358,28 @@ function assertCommon(decision: Record<string, unknown>): void {
     || actorSession.policyVersion !== actor.policyVersion) {
     throw new Error('actorSession versions do not match the actor authority claim');
   }
+  if (actorSession.globalAuthEpoch !== decision.globalAuthEpoch) {
+    throw new Error('actorSession global epoch does not match the decision');
+  }
+}
+
+function assertCommon(decision: Record<string, unknown>): void {
+  if (decision.verification !== 'gateway_verified') {
+    throw new Error('verification must be gateway_verified');
+  }
+  assertUuid(decision.decisionId, 'decisionId');
+  assertUuid(decision.ceremonyId, 'ceremonyId');
   assertPrincipalClaim(decision.target, 'target');
   assertPositiveInteger(decision.authorityGeneration, 'authorityGeneration');
   assertPositiveInteger(decision.globalAuthEpoch, 'globalAuthEpoch');
-  if (actorSession.globalAuthEpoch !== decision.globalAuthEpoch) {
-    throw new Error('actorSession global epoch does not match the decision');
+  // Exactly one approving authority: a principal session or the operator door.
+  if (Object.hasOwn(decision, 'operator')) {
+    if (Object.hasOwn(decision, 'actor') || Object.hasOwn(decision, 'actorSession')) {
+      throw new Error('operator approval cannot also carry a principal actor');
+    }
+    assertOperatorApproval(decision);
+  } else {
+    assertPrincipalActor(decision);
   }
   assertDigest(decision.reasonDigest, 'reasonDigest');
   if (!(decision.decidedAt instanceof Date) || Number.isNaN(decision.decidedAt.getTime())) {
@@ -315,7 +401,10 @@ function assertDecisionKeys(
   decision: Record<string, unknown>,
   additional: readonly string[],
 ): void {
-  assertNoUnknownKeys(decision, [...BASE_KEYS, ...additional], 'decision', {
+  const approval = Object.hasOwn(decision, 'operator')
+    ? ['operator'] as const
+    : ['actor', 'actorSession'] as const;
+  assertNoUnknownKeys(decision, [...COMMON_KEYS, ...approval, ...additional], 'decision', {
     errorPrefix: 'Invalid fleet-auth lifecycle decision',
   });
 }
@@ -327,6 +416,16 @@ export function assertVerifiedFleetAuthLifecycleDecision(
   assertCommon(decision);
   switch (decision.action) {
     case 'binding.activate':
+      if (Object.hasOwn(decision, 'operator')) {
+        assertDecisionKeys(decision, ['companionId', 'contactId', 'bindingId', 'providerSubjectId']);
+        assertIds(decision, ['companionId', 'bindingId']);
+        assertContactId(decision.contactId, 'contactId');
+        if (typeof decision.providerSubjectId !== 'string'
+          || !DISCORD_SUBJECT_PATTERN.test(decision.providerSubjectId)) {
+          throw new Error('binding.activate providerSubjectId is invalid');
+        }
+        break;
+      }
       assertDecisionKeys(decision, [
         'companionId',
         'contactId',

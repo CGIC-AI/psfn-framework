@@ -78,6 +78,7 @@ import {
 import type { ExternalChannelProfileConfig } from '../backplane/config.js';
 import { resolveCompanionIdFromConfig } from '../../core/identity/companion-runtime.js';
 import type { ExternalMemoryMcpRoute } from './server/external-memory-mcp.js';
+import type { ExternalChannelMcpRoute } from '../external/mcp-route.js';
 import { ApiChatCompletionsHandler } from './server/chat-completions.js';
 import {
   BEARER_COMPANION_SELECTOR_HEADER,
@@ -140,6 +141,7 @@ import {
   stripHubDeviceDownstreamAuthorityHeaders,
 } from './server/hub-device-ingress.js';
 import type { CompanionUiWebSocketAdapter } from './companion-ui-websocket.js';
+import { buildFleetGardenChatTurn } from './server/fleet-garden-chat-turn.js';
 import type {
   FleetGardenChatAdmission,
   GatewayFleetSsoRouter,
@@ -159,13 +161,6 @@ const ICP_OPERATOR_CANCEL_PATH = /^\/v1\/operator\/icp-autonomy\/companions\/([^
 const CONFIRMATION_OPERATOR_RESOLVE_PATH = '/v1/operator/confirmations/resolve';
 const CONFIRMATION_OPERATOR_MAX_BODY_BYTES = 16 * 1024;
 const CONFIRMATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u;
-const FLEET_CHAT_BROWSER_HEADERS = new Set([
-  'accept',
-  'content-type',
-  'x-channel-id',
-  'x-channel-privacy',
-  'x-session-id',
-]);
 
 export interface IcpAutonomyOperatorPort {
   cancelForCompanion(companionId: string): Promise<number>;
@@ -449,6 +444,8 @@ export interface ApiServerConfig {
   /** See `ApiChatCompletionsHandlerConfig.testingHarnessDevices` (psfn-framework-ajgo2). */
   testingHarnessDevices?: TestingHarnessDevicesConfig;
   externalMemoryMcp?: ExternalMemoryMcpRoute;
+  /** Generic external channel bridges (psfn-framework-pus8m). */
+  externalChannelMcp?: ExternalChannelMcpRoute;
   adminToken?: string;
   modelName?: string;
   requestTimeoutMs?: number;
@@ -552,6 +549,7 @@ export class ApiServer implements ChannelAdapterPort {
   private apiKey?: string;
   private testingHarnessPrincipal?: TestingHarnessApiPrincipalCredential;
   private externalMemoryMcp?: ExternalMemoryMcpRoute;
+  private externalChannelMcp?: ExternalChannelMcpRoute;
   private adminToken?: string;
   private satelliteApiKeys: string[];
   private trustedProxyClientCertToken?: string;
@@ -589,6 +587,7 @@ export class ApiServer implements ChannelAdapterPort {
     this.sessionManager = config.sessionManager;
     this.runtime = config.runtime ?? null;
     this.externalMemoryMcp = config.externalMemoryMcp;
+    this.externalChannelMcp = config.externalChannelMcp;
     this.apiKey = clampHeaderValue(config.apiKey, 512);
     this.adminToken = clampHeaderValue(config.adminToken, 512);
     // Re-validate satellite keys at the trust boundary (fail closed on weak
@@ -745,6 +744,10 @@ export class ApiServer implements ChannelAdapterPort {
     stripBrowserRequestCapabilityHeaders(req.headers);
     if (this.externalMemoryMcp?.matches(req.url ?? '/')) {
       void this.externalMemoryMcp.handle(req, res);
+      return;
+    }
+    if (this.externalChannelMcp?.matches(req.url ?? '/')) {
+      void this.externalChannelMcp.handle(req, res);
       return;
     }
     if (this.fleetSsoRouter?.matches(req.url ?? '/')) {
@@ -939,20 +942,9 @@ export class ApiServer implements ChannelAdapterPort {
       );
       return;
     }
-    const headers: IncomingMessage['headers'] = {};
-    for (const [name, value] of Object.entries(admission.request.headers)) {
-      if (FLEET_CHAT_BROWSER_HEADERS.has(name) && value !== undefined) {
-        headers[name] = value;
-      }
-    }
-    headers['content-length'] = String(admission.body.byteLength);
-    headers['content-type'] = 'application/json';
-    headers['x-user-id'] = admission.authorization.principalId;
-    headers['x-user-name'] = 'Fleet operator';
-    headers['x-canonical-contact-id'] = admission.authorization.contact.contactId;
-
+    const turn = buildFleetGardenChatTurn(admission);
     const admittedRequest = Readable.from([admission.body]) as IncomingMessage;
-    admittedRequest.headers = headers;
+    admittedRequest.headers = turn.headers;
     admittedRequest.method = 'POST';
     admittedRequest.url = '/v1/chat/completions';
     Object.defineProperty(admittedRequest, 'socket', {
@@ -963,17 +955,13 @@ export class ApiServer implements ChannelAdapterPort {
     const onAborted = () => admittedRequest.emit('aborted');
     admission.request.once('aborted', onAborted);
     try {
-      const principal: ApiAuthPrincipal = {
-        id: admission.authorization.principalId,
-        mode: 'api_key',
-      };
       await this.chatCompletions.handle(
         admittedRequest,
         admission.response,
-        principal,
+        turn.principal,
         undefined,
         undefined,
-        { companionId: admission.companionId },
+        turn.routing,
       );
     } finally {
       admission.request.off('aborted', onAborted);

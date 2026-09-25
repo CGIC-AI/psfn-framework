@@ -1,4 +1,5 @@
 import type { FsListView, GatewayREPLCapabilities, SandboxBudgetRef } from './contracts.js';
+import { isJournalPath, JOURNAL_PATH_REFUSAL } from '../../integrations/journal/path-guard.js';
 import {
   FILESYSTEM_READ_PAGE_CONTRACT,
   validateFilesystemReadMaxBytes,
@@ -126,6 +127,9 @@ export function createToolchainCapabilities(
     if (!normalizedPath) {
       return { error: 'path is required' };
     }
+    if (isJournalPath(normalizedPath)) {
+      return { error: JOURNAL_PATH_REFUSAL };
+    }
     const normalizedOffset = normalizeReadOffset(readOptions?.offsetBytes);
     if ('error' in normalizedOffset) {
       return normalizedOffset;
@@ -155,6 +159,9 @@ export function createToolchainCapabilities(
     const normalizedPath = normalizePath(path);
     if (!normalizedPath) {
       return { ok: false, error: 'path is required' };
+    }
+    if (isJournalPath(normalizedPath)) {
+      return { ok: false, error: JOURNAL_PATH_REFUSAL };
     }
     if (typeof content !== 'string') {
       return { ok: false, error: 'content must be a string' };
@@ -191,7 +198,8 @@ export function createToolchainCapabilities(
     }
 
     try {
-      return await options.gatewayCaps.fsList(normalizedGlob.glob, normalizeMaxEntries(maxEntries));
+      const listed = await options.gatewayCaps.fsList(normalizedGlob.glob, normalizeMaxEntries(maxEntries));
+      return { ...listed, paths: listed.paths.filter(entry => !isJournalPath(entry)) };
     } catch (err) {
       return { error: toErrorMessage(err) };
     }

@@ -55,6 +55,11 @@
   },
   "injectionClassifier": {
     "labelThreshold": 0.5,
+    "worker": {
+      "poolSize": 1,
+      "queueMax": 32,
+      "callTimeoutMs": 60000
+    },
     "scoreThresholdsByTier": {
       "trusted": 0.98,
       "standard": 0.9,
@@ -76,7 +81,7 @@
       "untrusted": "quarantine",
       "hostile": "quarantine"
     },
-    "timeoutMs": 8000,
+    "timeoutMs": 30000,
     "maxContentChars": 24000
   },
   "l3Screener": {
@@ -90,7 +95,7 @@
     "mandatoryTiers": ["hostile"],
     "timeoutMs": 30000,
     "maxContentChars": 48000,
-    "maxOutputTokens": 1200
+    "maxOutputTokens": 4096
   },
   "visionScreener": {
     "enabled": true,

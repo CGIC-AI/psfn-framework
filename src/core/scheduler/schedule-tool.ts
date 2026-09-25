@@ -1,4 +1,9 @@
 import { Type, type Static } from '@sinclair/typebox';
+import {
+  assertViewerMayScheduleInto,
+  canViewerSeeScheduledItem,
+  partitionScheduledItemsForViewer,
+} from './schedule-visibility.js';
 import { createHash } from 'node:crypto';
 import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../agent/tool-surface/descriptions.js';
 import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
@@ -125,13 +130,13 @@ export interface ScheduleToolOptions {
   memoryWriter?: Pick<MemoryWriter, 'write'>;
   pendingFollowUpStore?: Pick<
     PendingFollowUpStorePort,
-    'enqueue' | 'list' | 'dequeue'
+    'enqueue' | 'list' | 'dequeue' | 'peek'
   > | null;
   intentionFollowUpHorizonMs?: number;
   routeLongHorizonFollowUp?: (input: LongHorizonFollowUpInput) => Promise<string>;
   careReminderStore?: Pick<
     CareReminderStorePort,
-    'create' | 'list' | 'markTriggered'
+    'create' | 'list' | 'markTriggered' | 'getById'
   > | null;
   scheduledPromptStore?: Pick<
     ScheduledPromptStorePort,
@@ -600,21 +605,25 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
           case 'list': {
             const limit = normalizeListLimit(params.limit);
             const contactId = normalizeOptionalString(params.contact_id);
-            const reminders = options.careReminderStore
+            // Only items owned by conversations this one may read (o5wf5).
+            const reminderPartition = partitionScheduledItemsForViewer(options.careReminderStore
               ? options.careReminderStore.list({
                 ...(contactId ? { contactId } : {}),
                 includeCompleted: params.include_completed === true,
                 includeDismissed: params.include_dismissed === true,
                 limit,
-              }).map(mapReminder)
-              : [];
-            const followUps = options.pendingFollowUpStore
-              ? (await options.pendingFollowUpStore.list({
+              })
+              : []);
+            const followUpPartition = partitionScheduledItemsForViewer(options.pendingFollowUpStore
+              ? await options.pendingFollowUpStore.list({
                 ...(contactId ? { contactId } : {}),
                 includeActivated: params.include_activated === true,
                 limit,
-              })).map(mapFollowUp)
-              : [];
+              })
+              : []);
+            const reminders = reminderPartition.visible.map(mapReminder);
+            const followUps = followUpPartition.visible.map(mapFollowUp);
+            const withheld = reminderPartition.withheldCount + followUpPartition.withheldCount;
             const plannedTasks = options.scheduler.listTasks()
               .filter(task => task.id.startsWith('planned:'))
               .map(mapPlannedTask);
@@ -636,6 +645,12 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
                 plannedTasks: plannedTasks.length,
                 templates: templates.length,
               },
+              ...(withheld > 0
+                ? {
+                  withheldByVisibility: withheld,
+                  withheldNote: 'Some reminders and follow-ups belong to other conversations and are not shown here.',
+                }
+                : {}),
               reflectionPolicy: {
                 version: reflectionPolicy.version,
                 updatedAt: reflectionPolicy.updatedAt,
@@ -655,6 +670,7 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
             const dueAt = normalizeOptionalIsoTimestamp(params.due_at, 'due_at');
             const channelType = normalizeChannelType(params.channel_type, 'channel_type');
             const channelId = normalizeFollowUpChannelId(params.channel_id, channelType);
+            assertViewerMayScheduleInto(channelId);
             const content = normalizeNonEmptyString(params.content, 'content');
             const contactId = normalizeOptionalString(params.contact_id);
             const sourceMessageId = normalizeOptionalString(params.source_message_id);
@@ -722,6 +738,10 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
               throw new Error('Pending follow-up store is unavailable');
             }
             const followUpId = normalizeNonEmptyString(params.follow_up_id, 'follow_up_id');
+            const existing = await options.pendingFollowUpStore.peek(followUpId);
+            if (!existing || !canViewerSeeScheduledItem(existing)) {
+              return textResultWithError(`No pending follow-up found for id: ${followUpId}`, true);
+            }
             const activationReason = normalizeOptionalString(params.activation_reason);
             const activated = await options.pendingFollowUpStore.dequeue(
               followUpId,
@@ -743,7 +763,7 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
             if (!options.careReminderStore) {
               throw new Error('Care reminder store is unavailable');
             }
-            const created = options.careReminderStore.create({
+            const reminderFields = {
               kind: normalizeReminderKind(params.kind),
               classification: normalizeReminderClassification(params.classification),
               title: normalizeNonEmptyString(params.title, 'title'),
@@ -752,6 +772,10 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
               dueAt: normalizeIsoTimestamp(params.due_at, 'due_at'),
               channelId: normalizeNonEmptyString(params.channel_id, 'channel_id'),
               channelType: normalizeChannelType(params.channel_type, 'channel_type'),
+            };
+            assertViewerMayScheduleInto(reminderFields.channelId);
+            const created = options.careReminderStore.create({
+              ...reminderFields,
               authorId: 'system:intention',
               authorName: 'Whisper',
               provenanceSource: 'companion_appraisal',
@@ -773,6 +797,10 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
               throw new Error('Care reminder store is unavailable');
             }
             const reminderId = normalizeNonEmptyString(params.reminder_id, 'reminder_id');
+            const reminder = options.careReminderStore.getById(reminderId);
+            if (!reminder || !canViewerSeeScheduledItem(reminder)) {
+              return textResultWithError(`No active reminder found for id: ${reminderId}`, true);
+            }
             const triggered = options.careReminderStore.markTriggered(reminderId);
             if (!triggered) {
               return textResultWithError(`No active reminder found for id: ${reminderId}`, true);

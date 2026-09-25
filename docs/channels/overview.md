@@ -74,8 +74,7 @@ which also owns eligibility gating, voice-provider selection, the
 backplane's job is to make every channel surface obey the same lifecycle,
 <!-- openwiki: broken internal link [../channel-plugins.md] file "../channel-plugins.md" does not exist. Fix the href or restore the target, then delete this comment. -->
 identity, and fail-closed rules. See [channel-plugins.md](../channel-plugins.md)
-for the plugin-declared channel contract (Multica), [multica.md](./multica.md)
-for that adapter, [companion-ui.md](./companion-ui.md) for the PWA surface,
+for the plugin-declared channel contract, [companion-ui.md](./companion-ui.md) for the PWA surface,
 <!-- openwiki: broken internal link [../chat-turn-lifecycle.md] file "../chat-turn-lifecycle.md" does not exist. Fix the href or restore the target, then delete this comment. -->
 [chat-turn-lifecycle.md](../chat-turn-lifecycle.md) for what happens to a
 synthesized message after an adapter accepts it, and
@@ -90,7 +89,7 @@ flowchart TD
     DISCORD["Discord adapter - discord.js client"]
     TELEGRAM["Telegram adapter - Bot API polling or webhook"]
     API["API adapter - OpenAI-compatible HTTP server"]
-    PLUGIN["Channel plugin host - multica daemon"]
+    PLUGIN["Channel plugin host - external channel adapters"]
     REG["ChannelAdapterRegistry"]
     LIFE["Manifest lifecycle - load, start, stop"]
     ELIG["Eligibility gate - plugin activation and actions"]
@@ -286,9 +285,9 @@ adapter id matches the plugin manifest id, then `initialize`, `start`, and
 `stop` in order. `wireMessages` binds each plugin's `onMessage` through
 `requestAgentVoiceStream` and routes plugin operator alerts through
 `notifyOperator` with a `system.channels.<pluginId>_failure` provenance. The
-builtin registry (`plugins/builtin.ts`) contains exactly one plugin:
-`multica` (see [multica.md](./multica.md)); gateway surfaces require a
-credential vault when any plugin section is enabled.
+builtin registry (`plugins/builtin.ts`) is currently empty (Buzz and Multica
+were removed); gateway surfaces require a credential vault when any plugin
+section is enabled.
 
 ## First-class adapters
 
@@ -400,7 +399,8 @@ config, validated fail-closed at load **and** on save
   `heartbeatChannelId`); `assertDiscordAccountTokensConfigured` aborts gateway
   startup when any configured account's token env var is unset
 - `api` — `companionId`, `selectableCompanionIds` (requires `companionId`;
-  enables per-request Bearer companion selection), `testingHarness`
+  enables per-request Bearer companion selection for the unscoped API key and
+  the testing-harness principal; satellite keys stay pinned), `testingHarness`
   (`principalId` + `tokenRef`, `gardenAdmin`)
 - `plugins` — fail-closed plugin sections (see
 <!-- openwiki: broken internal link [../channel-plugins.md] file "../channel-plugins.md" does not exist. Fix the href or restore the target, then delete this comment. -->

@@ -1680,7 +1680,8 @@ describe('AdminSettingsDataService', () => {
       ownerFile: 'charge-policy.json',
       restartRequired: false,
       effectiveValue: {
-        companionSocialQuota: 12,
+        // Seeded default (r5): room for a couple of full conversations a day.
+        companionSocialQuota: 24,
         companionSocialContinuationCost: 1,
       },
     });

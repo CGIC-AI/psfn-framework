@@ -86,6 +86,10 @@ type PatchedAgent = {
     resolve: () => void;
     abortController: AbortController;
     requestId?: string;
+    /** Runtime lane class of the turn that owns this run (from its request context). */
+    laneClass?: string;
+    /** Set when a higher-priority run preempted this one (z4vhu). */
+    preempted?: boolean;
   };
   _state: {
     model: unknown;
@@ -104,6 +108,50 @@ type PatchedAgent = {
   };
   streamFunction: Parameters<typeof agentLoopWithScheduler>[4];
 };
+
+/**
+ * Canonical agent-busy prefix, so every existing busy / yield classifier
+ * (isBusyTurnError, isAgentProcessingPromptError) treats a preempted run as the
+ * durable contention it is.
+ */
+const AGENT_RUN_PREEMPTED_MESSAGE =
+  'Agent is already processing another prompt. Background run preempted by a foreground turn.';
+
+/** The active run was aborted so a higher-priority turn could take the run slot (z4vhu). */
+export class AgentRunPreemptedError extends Error {
+  constructor() {
+    super(AGENT_RUN_PREEMPTED_MESSAGE);
+    this.name = 'AgentRunPreemptedError';
+  }
+}
+
+/**
+ * Run-slot preemption hooks injected by the owning runtime (z4vhu). The
+ * boundary only knows lane-class strings from the request context; the runtime
+ * owns the priority policy and which turns are preempted.
+ */
+export interface AgentRunPreemptionHooks {
+  /** True when the turn calling prompt() was preempted before it started its run. */
+  isCurrentTurnPreempted(): boolean;
+}
+
+/**
+ * Abort the active run when `shouldPreempt(itsLaneClass)` says a
+ * higher-priority turn may take the slot. Returns the run's settlement promise
+ * (resolves once it released the slot), or null when nothing was preempted.
+ */
+export function preemptActiveAgentRun(
+  agent: Agent,
+  shouldPreempt: (activeLaneClass: string | undefined) => boolean,
+): Promise<void> | null {
+  const activeRun = (agent as unknown as PatchedAgent).activeRun;
+  if (!activeRun || !shouldPreempt(activeRun.laneClass)) return null;
+  activeRun.preempted = true;
+  if (!hasObservedAbort(activeRun.abortController.signal)) {
+    activeRun.abortController.abort(new AgentRunPreemptedError());
+  }
+  return activeRun.promise;
+}
 
 export type AgentRunAbortResult =
   | { status: 'signaled' }
@@ -148,11 +196,21 @@ export function abortActiveAgentRun(
     : { status: 'not_signaled' };
 }
 
+/**
+ * Whether a run currently owns the agent. Concurrent ordinary turns share one
+ * pi Agent; only the run owner may write the agent's shared state
+ * (psfn-framework-97epu).
+ */
+export function isAgentRunActive(agent: Agent): boolean {
+  return (agent as unknown as PatchedAgent).activeRun !== undefined;
+}
+
 export function installAgentToolSchedulerPatch(
   agent: Agent,
   schedulerOptions: ToolCallSchedulerOptions,
   promptCacheHooks?: AgentLoopPromptCacheHooks,
   continuationFuseLimits?: Partial<ParentTurnContinuationFuseLimits>,
+  runPreemption?: AgentRunPreemptionHooks,
 ): void {
   const target = agent as unknown as PatchedAgent;
   if (target.__psfnToolSchedulerPatched) {
@@ -179,6 +237,7 @@ export function installAgentToolSchedulerPatch(
     });
     const abortController = new AbortController();
     const requestId = getRequestContext()?.requestId;
+    const laneClass = getRequestContext()?.runtimeLaneClass;
     const promptCacheBoundaries = promptCacheHooks?.resolvePromptCacheBoundaries?.(
       typeof this._state.systemPrompt === 'string' ? this._state.systemPrompt : '',
     );
@@ -210,12 +269,14 @@ export function installAgentToolSchedulerPatch(
     const runPromise = new Promise<void>((resolve) => {
       resolveRun = resolve;
     });
-    this.activeRun = {
+    const ownRun: NonNullable<PatchedAgent['activeRun']> = {
       promise: runPromise,
       resolve: resolveRun,
       abortController,
       ...(requestId !== undefined ? { requestId } : {}),
+      ...(laneClass !== undefined ? { laneClass } : {}),
     };
+    this.activeRun = ownRun;
     this._state.isStreaming = true;
     this._state.streamingMessage = undefined;
     this._state.errorMessage = undefined;
@@ -292,6 +353,9 @@ export function installAgentToolSchedulerPatch(
         await this.processEvents(event);
       }
 
+      if (ownRun.preempted) {
+        throw new AgentRunPreemptedError();
+      }
       const continuationBudgetError = continuationFuse.getError();
       if (continuationBudgetError) {
         throw continuationBudgetError;
@@ -313,8 +377,10 @@ export function installAgentToolSchedulerPatch(
         }
       }
     } catch (error) {
-      const finalError = continuationFuse.getError()
-        ?? (error instanceof Error ? error : new Error(String(error)));
+      const finalError = ownRun.preempted
+        ? new AgentRunPreemptedError()
+        : continuationFuse.getError()
+          ?? (error instanceof Error ? error : new Error(String(error)));
       const errorMessage = finalError.message;
       this._state.errorMessage = errorMessage;
       partial = null;
@@ -336,6 +402,18 @@ export function installAgentToolSchedulerPatch(
       this.activeRun = undefined;
       run.resolve();
     }
+  }
+
+  if (runPreemption) {
+    // A preempted turn that had not started its run yet must not take the
+    // slot afterwards: it fails with the same typed contention instead.
+    const stockPrompt = agent.prompt.bind(agent);
+    agent.prompt = (async (...args: Parameters<Agent['prompt']>): Promise<void> => {
+      if (runPreemption.isCurrentTurnPreempted()) {
+        throw new AgentRunPreemptedError();
+      }
+      await stockPrompt(...args);
+    }) as Agent['prompt'];
   }
 
   target.runPromptMessages = async function patchedRunPromptMessages(

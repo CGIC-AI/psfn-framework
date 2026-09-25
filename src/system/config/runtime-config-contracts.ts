@@ -25,6 +25,7 @@ import type { MemoryDeletionPolicy } from './memory-deletion-policy.js';
 import type { BiographicalDepthPolicy } from './biographical-depth-policy.js';
 import type { BiographicalCandidatePolicy } from './biographical-candidate-policy.js';
 import type { ShellExecSettings } from './shell-exec-config.js';
+import type { DecisionBackendSettings } from './decision-backend-config.js';
 import type { RuntimeCompanionId } from '../../shared/routing/companion-id.js';
 import type {
   FleetAuthConfig,
@@ -420,6 +421,8 @@ export interface SubstrateConfig {
   promotedExtendedTools?: string[];
   /** settings.json-owned gateway shell execution policy and hard limits. */
   shellExec?: ShellExecSettings;
+  /** settings.json-owned typed-decision backend selection (epic 4lf3r); absent = local. */
+  decisionBackend?: DecisionBackendSettings;
   capabilityTier?: CapabilityTier;
   compositionalPolicy?: CompositionalPolicyConfig;
   observerEvalSidecar?: ObserverEvalSidecarSettings;

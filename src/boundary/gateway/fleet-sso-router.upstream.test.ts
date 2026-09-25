@@ -149,14 +149,16 @@ function portalRequest(path: string, headers: IncomingHttpHeaders = {}): Incomin
 
 function adminPortalProjection(): FleetPortalProjection {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     generatedAt: new Date(1_783_000_000 * 1_000).toISOString(),
     session: { state: 'authenticated' },
+    icp: { state: 'inactive_singleton', activity: { status: 'not_applicable' } },
     companions: [{
       companionId: COMPANION_ID,
       displayName: 'Test Companion',
       health: { agentRpc: 'up', adminTransport: 'unknown', channels: 'unknown' },
       posture: { status: 'unavailable' },
+      icp: { state: 'not_applicable', reason: 'singleton_fleet', lifecycle: 'member' },
       gardenPath: `/companions/${COMPANION_ID}/garden`,
     }],
   };
@@ -268,7 +270,17 @@ function createRouter(
     },
     nowSeconds: () => nowSeconds,
     denialLogger,
-    ...(options.adminToken ? { adminToken: options.adminToken } : {}),
+    ...(options.adminToken
+      ? {
+          adminToken: options.adminToken,
+          adminTokenAudit: { record: vi.fn(async () => ({
+            authorizationEventId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+            authorityGeneration: 1,
+            globalAuthEpoch: 1,
+            occurredAt: new Date(nowSeconds * 1_000),
+          })) },
+        }
+      : {}),
   } as ConstructorParameters<typeof GatewayFleetSsoRouter>[0]);
 }
 
@@ -499,7 +511,11 @@ describe('Fleet Garden dual admin admission', () => {
     expect(probe.response.statusCode).toBe(302);
     expect(probe.response.writeHead).toHaveBeenCalledWith(302, expect.objectContaining({
       Location: '/fleet',
-      'Set-Cookie': `psfn_token=${ADMIN_TOKEN}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=86400`,
+      'Set-Cookie': [
+        `psfn_token=${ADMIN_TOKEN}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=86400`,
+        // Non-secret door marker (jxthv): never the token, never authority.
+        'garden_operator_door=admin_token; Path=/; Secure; SameSite=Strict; Max-Age=86400',
+      ],
     }));
     expect(httpRequest).not.toHaveBeenCalled();
   });

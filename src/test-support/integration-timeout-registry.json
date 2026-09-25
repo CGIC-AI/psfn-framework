@@ -217,6 +217,13 @@
       "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
     },
     {
+      "file": "src/faculties/memory/postgres-store/whole-corpus-reads.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 1200,
+      "baselineSource": "measured",
+      "note": "psfn-framework-dnaqt: keyset page scans and the bounded recently-accessed recall slice against the real containerized PostgreSQL harness, raw and through the subject-authorized proxy. Focused local full-file wall was 1.19s on 2026-09-24 with a warm harness slot; 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
+    },
+    {
       "file": "src/faculties/memory/postgres-store/l2-read-model.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": 2000,
@@ -287,13 +294,6 @@
       "note": "psfn-framework-52epa: beforeAll harness start (container reuse or cold initdb plus semaphore wait) and afterAll drop, matching the sibling background-work-store suite's 90s hook cap. Baseline is the harness's own worst-case cold start on this host."
     },
     {
-      "file": "src/persistence/postgres/buzz-recovery-store.integration.test.ts",
-      "timeoutMs": 120000,
-      "measuredBaselineMs": 1000,
-      "baselineSource": "measured",
-      "note": "y2mqh.2 Buzz recovery persistence, causal-chain, membership-order, and cancellation suite against the real containerized Postgres harness. Worst observed full-file wall was 0.94s on this host (2026-08-27); the repo-standard 120s cap preserves ample headroom for cold-start and shared-heavy harness variance."
-    },
-    {
       "file": "src/persistence/postgres/companion-presence.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": null,
@@ -306,6 +306,13 @@
       "measuredBaselineMs": null,
       "baselineSource": "inherited",
       "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/persistence/postgres/fleet-auth/authority-lifecycle-operator-approval.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 1500,
+      "baselineSource": "measured",
+      "note": "psfn-framework-ja7n0: ADMIN_TOKEN operator approval of binding, provider-link and role ceremonies against the real containerized PostgreSQL harness - the subject's own session-initiated proof is required, the approval audit row binds exactly one decision, and stale or foreign approvals fail closed. Focused local full-file wall baseline was about 1.4s on 2026-09-25 with a warm harness slot; 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
     },
     {
       "file": "src/persistence/postgres/fleet-auth/authorization-context-store.integration.test.ts",
@@ -418,6 +425,20 @@
       "measuredBaselineMs": null,
       "baselineSource": "inherited",
       "note": "Pre-policy 120s override (repo-standard integration cap). Registered as measurement debt: pinned to its current value so any change forces a re-measured registry update. No independent baseline measured under this bead (timing wiring scoped to the restore suite)."
+    },
+    {
+      "file": "src/persistence/postgres/icp-fleet-health-reader.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 1200,
+      "baselineSource": "measured",
+      "note": "h248l.4 bounded Fleet ICP health read over the real shared schema. Focused local full-file wall baseline about 1.2s on 2026-09-24 with a warm harness; 120s is the repo-standard integration cap with headroom for cold image startup and shared harness-slot contention."
+    },
+    {
+      "file": "src/system/fleet-lifecycle/fleet-lifecycle-cli.integration.test.ts",
+      "timeoutMs": 180000,
+      "measuredBaselineMs": 3500,
+      "baselineSource": "measured",
+      "note": "h248l.5 local fleet lifecycle CLI end to end against real Postgres: seven tsx subprocess invocations (plan/apply add, remove, refused and readmitted re-add). Focused local wall about 3.5s on 2026-09-24 with a warm harness; 180s leaves headroom for cold image startup and tsx cold compiles under shared harness contention."
     },
     {
       "file": "src/persistence/postgres/icp-local-policy-authority.integration.test.ts",
@@ -637,6 +658,13 @@
       "note": "S12B custody stores: real-Postgres suite measured warm under 3s; 120s cap keeps >2x headroom on cold container start."
     },
     {
+      "file": "src/persistence/postgres/gateway-audit-retired-buzz-tables.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 1000,
+      "baselineSource": "measured",
+      "note": "psfn-framework-lef2o: real-Postgres proof that the gateway audit chain drops the retired Buzz recovery tables idempotently; warm full-file wall measured at 0.44s on this host (2026-09-24); 120s cap keeps >2x headroom on cold container start."
+    },
+    {
       "file": "src/persistence/postgres/gateway-ingress-receipt.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": 3000,
@@ -670,6 +698,13 @@
       "measuredBaselineMs": 750,
       "baselineSource": "measured",
       "note": "psfn-framework-znuav: upgrade path for the retired fleet welfare verifier against the real containerized PostgreSQL harness - a fleet carrying the legacy cross-schema USAGE/SELECT grants boots, the shared-schema startup authority revokes them, a second boot is idempotent, and a stray grantee still fails closed. Focused local full-file wall baseline was 0.72s on 2026-09-08 with a warm harness slot; 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
+    },
+    {
+      "file": "src/persistence/backups/gateway-audit-reader.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 1000,
+      "baselineSource": "measured",
+      "note": "psfn-framework-jqg13: a declared read-only gateway audit reader against the real containerized PostgreSQL harness - startup admits it on the gateway schema only, the post-readiness grant is exact SELECT on gateway_audit/model_usage_events, a restart with the grants converges, and an undeclared, foreign-schema, unbounded or authority-reusing reader fails closed. 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
     },
     {
       "file": "src/persistence/postgres/background-work-operator.integration.test.ts",
@@ -712,6 +747,13 @@
       "measuredBaselineMs": 1500,
       "baselineSource": "measured",
       "note": "psfn-framework-mgdks.3: per-class Automata Bus learning aggregate (useful/no-finding/worker counts, empty streak, terminal-handoff probe, companion isolation) against the real containerized PostgreSQL harness. Focused local full-file wall baseline was about 1.2s on 2026-09-24 with a warm harness slot; 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
+    },
+    {
+      "file": "src/app/agent/external-group-arbiter.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 1910,
+      "baselineSource": "measured",
+      "note": "psfn-framework-znqh6: external group appraisal through the real PostgreSQL speaking-arbiter store, social pot, reservation and egress-lease phases into channel_pull_outbound. Focused full-file wall time measured 1.91s twice on 2026-09-25 with a warm harness slot; 120s matches the repo integration cap and leaves headroom for cold container startup and shared harness-slot contention."
     }
   ]
 }

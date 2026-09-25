@@ -15,6 +15,11 @@ import {
 } from '../../persistence/pinned-filesystem.js';
 import { canonicalOwnerFileMode } from './owner-file-modes.js';
 import {
+  createDefaultParticipationAppraiserSettings,
+  RETIRED_APPRAISAL_DEADLINE_MS,
+  RETIRED_APPRAISAL_MAX_OUTPUT_TOKENS,
+} from './participation-config.js';
+import {
   DEFAULT_BACKGROUND_MAINTENANCE_CONFIG,
   SCHEDULER_FILE_NAME,
   validateSchedulerConfig,
@@ -45,6 +50,44 @@ export interface SchedulerOwnerMigrationResult {
   };
   removedPaths?: string[];
   addedPaths?: string[];
+  /** Paths whose value was the retired shipped default and now carries the current one. */
+  upgradedPaths?: string[];
+}
+
+/**
+ * psfn-framework-0eq2x: shipped defaults that proved wrong for real models.
+ * An owner file still carrying EXACTLY the retired seed value never chose it —
+ * it inherited it from the seed — so the migration moves it to the current
+ * default. Any other operator value is left untouched.
+ */
+const RETIRED_SCHEDULER_DEFAULTS: ReadonlyArray<{
+  path: readonly [string, string, string];
+  retired: number;
+  current: () => number;
+}> = [{
+  path: ['socialAutonomy', 'appraiser', 'appraisalDeadlineMs'],
+  retired: RETIRED_APPRAISAL_DEADLINE_MS,
+  current: () => createDefaultParticipationAppraiserSettings().appraisalDeadlineMs,
+}, {
+  // psfn-framework-9z2z9: reasoning tokens exhausted the seeded 200.
+  path: ['socialAutonomy', 'appraiser', 'appraisalMaxOutputTokens'],
+  retired: RETIRED_APPRAISAL_MAX_OUTPUT_TOKENS,
+  current: () => createDefaultParticipationAppraiserSettings().appraisalMaxOutputTokens,
+}];
+
+function upgradeRetiredSchedulerDefaults(
+  candidate: Record<string, unknown>,
+  upgradedPaths: string[],
+): void {
+  for (const entry of RETIRED_SCHEDULER_DEFAULTS) {
+    const [outer, inner, leaf] = entry.path;
+    const outerBlock = candidate[outer];
+    if (!isRecord(outerBlock)) continue;
+    const innerBlock = outerBlock[inner];
+    if (!isRecord(innerBlock) || innerBlock[leaf] !== entry.retired) continue;
+    candidate[outer] = { ...outerBlock, [inner]: { ...innerBlock, [leaf]: entry.current() } };
+    upgradedPaths.push(entry.path.join('.'));
+  }
 }
 
 /**
@@ -150,6 +193,8 @@ export function migrateLegacySchedulerOwner(
       seedMissingSchedulerOwnerBlocks(candidate, addedPaths);
       const retiredPaths: string[] = [];
       removeRetiredSchedulerOwnerKeys(candidate, retiredPaths);
+      const upgradedPaths: string[] = [];
+      upgradeRetiredSchedulerDefaults(candidate, upgradedPaths);
 
       const validated = validateSchedulerConfig(candidate, filePath);
       result = {
@@ -172,13 +217,16 @@ export function migrateLegacySchedulerOwner(
           ...retiredPaths,
         ],
         ...(addedPaths.length > 0 ? { addedPaths } : {}),
+        ...(upgradedPaths.length > 0 ? { upgradedPaths } : {}),
       };
     } else {
       candidate = structuredClone(raw);
       const removedPaths: string[] = [];
       removeRetiredSchedulerOwnerKeys(candidate, removedPaths);
       const addedPaths = seedMissingSchedulerOwnerDefaults(candidate);
-      if (addedPaths.length === 0 && removedPaths.length === 0) {
+      const upgradedPaths: string[] = [];
+      upgradeRetiredSchedulerDefaults(candidate, upgradedPaths);
+      if (addedPaths.length === 0 && removedPaths.length === 0 && upgradedPaths.length === 0) {
         validateSchedulerConfig(raw, filePath);
         assertSourceStillCurrent();
         return { mode, status: 'not_needed', filePath };
@@ -191,6 +239,7 @@ export function migrateLegacySchedulerOwner(
         filePath,
         ...(addedPaths.length > 0 ? { addedPaths } : {}),
         ...(removedPaths.length > 0 ? { removedPaths } : {}),
+        ...(upgradedPaths.length > 0 ? { upgradedPaths } : {}),
       };
     }
 

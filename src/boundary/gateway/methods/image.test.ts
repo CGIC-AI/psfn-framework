@@ -603,3 +603,111 @@ describe('registerImageMethods model usage accounting', () => {
   });
 
 });
+
+describe('OpenRouter image generation budget (6da92)', () => {
+  const tempDirs: string[] = [];
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    await Promise.all(tempDirs.splice(0).map(async dir => { await rm(dir, { recursive: true, force: true }); }));
+  });
+
+  const PNG = Buffer.from('fake-png').toString('base64');
+
+  async function harness(input: {
+    perImageUsd?: number;
+    budget?: { enforced: boolean; allowed: boolean };
+  }) {
+    vi.stubEnv('OPENROUTER_API_KEY', 'test-openrouter-key');
+    const workspacePath = await mkdtemp(join(tmpdir(), 'image-budget-'));
+    tempDirs.push(workspacePath);
+    const fetchMock = vi.fn(async () => jsonResponse({
+      data: [{ b64_json: PNG, media_type: 'image/png' }],
+      usage: { cost: 0.039 },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const usageEvents: ModelUsageEventInput[] = [];
+    const preflights: unknown[] = [];
+    const methods = new Map<string, (params: unknown) => Promise<unknown>>();
+    const runtime = {
+      target: { addMethod(name: string, handler: (params: unknown) => Promise<unknown>) { methods.set(name, handler); } },
+      audited: (_method: string, handler: (params: unknown) => Promise<unknown>) => handler,
+      imageConfig: {
+        modelRegistry: {
+          imageModels: [{
+            id: 'or-image',
+            provider: 'openrouter',
+            model: 'vendor/image-model-1',
+            modes: ['create'],
+            primary: true,
+            ...(input.perImageUsd !== undefined ? { cost: { perImageUsd: input.perImageUsd, currency: 'USD' } } : {}),
+          }],
+        },
+        providerRegistry: {
+          schemaVersion: 1,
+          providers: [{
+            id: 'openrouter',
+            type: 'openrouter',
+            enabled: true,
+            apiBaseUrl: 'https://openrouter.example.test/api/v1',
+            apiKeyRef: { kind: 'env', envName: 'OPENROUTER_API_KEY' },
+          }],
+        },
+      },
+      workspacePath,
+      authenticatedCompanionId: () => 'companion-a',
+      ...(input.budget ? {
+        modelBudget: {
+          isEnforced: () => input.budget!.enforced,
+          evaluatePreflight: async (params: unknown) => {
+            preflights.push(params);
+            return input.budget!.allowed
+              ? { allowed: true, estimatedRequestCostUsd: 0.05, snapshot: null }
+              : {
+                allowed: false,
+                estimatedRequestCostUsd: 0.05,
+                snapshot: null,
+                blockedEvent: { reason: 'daily_budget_exceeded', provider: 'openrouter', model: 'vendor/image-model-1' },
+              };
+          },
+        },
+      } : {}),
+      modelUsageRecorder: { async recordUsageEvent(event: ModelUsageEventInput) { usageEvents.push(event); } },
+    } as unknown as GatewayMethodRuntime;
+    registerImageMethods(runtime);
+    const handler = methods.get('image.create');
+    if (!handler) throw new Error('image.create was not registered');
+    return { handler, fetchMock, usageEvents, preflights };
+  }
+
+  it('ledgers the provider-reported cost and the per-image estimate as paid image spend', async () => {
+    const { handler, usageEvents, preflights } = await harness({
+      perImageUsd: 0.05,
+      budget: { enforced: true, allowed: true },
+    });
+    await handler({ prompt: 'a lighthouse', provider: 'openrouter', companionId: 'companion-a' });
+    expect(preflights[0]).toMatchObject({ fixedEstimatedCostUsd: 0.05, correlation: { companionId: 'companion-a' } });
+    expect(usageEvents).toMatchObject([{
+      provider: 'openrouter',
+      status: 'success',
+      providerCostUsd: 0.039,
+      estimatedCostUsd: 0.05,
+      costSource: 'provider',
+      attribution: { chargeSurface: 'paidImageGeneration' },
+    }]);
+  });
+
+  it('refuses an image that does not fit the enforced budget before dispatch', async () => {
+    const { handler, fetchMock } = await harness({ perImageUsd: 0.05, budget: { enforced: true, allowed: false } });
+    const error = await handler({ prompt: 'a lighthouse', provider: 'openrouter' }).then(() => null, (e: unknown) => e);
+    expect((error as Error & { cause?: Error }).cause?.name).toBe('ModelBudgetExceededError');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unpriced image model while the budget is enforced', async () => {
+    const { handler, fetchMock } = await harness({ budget: { enforced: true, allowed: true } });
+    const error = await handler({ prompt: 'a lighthouse', provider: 'openrouter' }).then(() => null, (e: unknown) => e);
+    expect((error as Error & { cause?: Error }).cause?.message).toMatch(/no models\.json imageModels cost/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});

@@ -90,7 +90,7 @@ import {
 } from '../../boundary/integrations/beads/runtime-wiring.js';
 import {
   resolveBeadsActionsForCaller,
-  resolveBeadsToolsEnabled,
+  resolveBeadsToolsEnablement,
 } from '../../boundary/integrations/beads/enablement.js';
 import { assertPolicyToolHydration } from '../../core/agent/tool-surface/hydration.js';
 import { GatewayBeadsOps } from '../../boundary/integrations/beads/gateway-ops.js';
@@ -186,6 +186,7 @@ import { buildAgentControlPlane } from './control-plane.js';
 import type { AgentControlPlaneShutdownTargets } from './control-plane.js';
 import { createLLMProviderPort } from '../../core/agent/contracts.js';
 import { wireIcpInitiationSources } from './icp-initiation-source-wiring.js';
+import { reconcileIcpAppraisalFailureClosures } from './icp-appraisal-failure-reconciliation.js';
 import { createIcpTestInitiationTrigger } from './icp-test-initiation.js';
 import { registerSocialImpulseOutreachLane } from './startup/social-impulse-outreach-lane.js';
 import { createIntentionFollowUpDestinationResolver } from './intention-follow-up-destination.js';
@@ -496,8 +497,12 @@ async function main(): Promise<void> {
       ? wireFleetMaintenanceForegroundPreemption({
           eventBus,
           coordinator: persistenceRuntime.fleetMaintenanceCoordinator,
+          // Best-effort signal (jrki1): the turn never waits on it, and the
+          // holder's own turns preempt in memory. A failure is a typed,
+          // bounded degradation, not a turn error.
           onError: error => {
-            log.error('Fleet maintenance foreground preemption failed', {
+            log.warn('Fleet maintenance foreground preemption signal unavailable', {
+              code: 'fleet_maintenance_preemption_unavailable',
               error: error instanceof Error ? error.message : String(error),
             });
           },
@@ -1563,10 +1568,21 @@ async function main(): Promise<void> {
   // policy uses so registration and policy agree; the gateway DENYs beads.*
   // when disabled, so advertising the tool anyway makes it fail at every call
   // (psfn-framework-e7s0). Fail-closed: policy wins.
-  const beadsToolsEnabled = resolveBeadsToolsEnabled(process.env.BEADS_TOOLS_ENABLED, {
+  const beadsEnablement = resolveBeadsToolsEnablement(process.env.BEADS_TOOLS_ENABLED, {
     workspaceRoot: pathSnapshot.workspaceRoot,
     codebaseRoot: resolve('.'),
+    ...(process.env.BEADS_DIR ? { beadsDir: process.env.BEADS_DIR } : {}),
   });
+  if (!beadsEnablement.enabled && beadsEnablement.reason === 'database_missing') {
+    // Fail closed at registration (psfn-framework-povuo): advertising a tool
+    // whose every call fails with "no beads database found" is worse than not
+    // offering it. Provision the database (bd init in the Personal Workspace,
+    // or BEADS_DIR) to enable it.
+    log.error('BEADS_TOOLS_ENABLED=true but no Beads database is provisioned; beads tool not registered', {
+      searched: beadsEnablement.searched,
+    });
+  }
+  const beadsToolsEnabled = beadsEnablement.enabled;
   const beadsAllowedActions = resolveBeadsActionsForCaller(
     process.env.BEADS_ALLOW_ACTIONS,
     'companion',
@@ -1795,6 +1811,18 @@ async function main(): Promise<void> {
       fatigueHistory: coreRuntime.fatigueLedger,
     });
     await gateway.startFleetPostureReporting(fleetPostureProvider);
+    // 0eq2x/9rima: re-record pre-fix appraisal-failure closures so they stop
+    // counting as relationship pressure. Idempotent; runs in the background.
+    void reconcileIcpAppraisalFailureClosures({
+      sessions: sessionManager,
+      endEpisodeActivity: endInput => gateway.companionEndIcpEpisodeActivity(endInput),
+      windowMs: config.chargePolicy.fatigue.socialRegulation.relationshipPressureWindowMs,
+      nowMs: Date.now(),
+    }).catch((error: unknown) => {
+      log.error('ICP appraisal-failure closure reconciliation failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
     icpRuntimeAvailabilityLane = {
       gateway,
       isEnabled: () => icpRuntimeEnablement.isEnabled()
@@ -2164,6 +2192,7 @@ async function main(): Promise<void> {
     promptRegistry: promptState.registry,
     proactiveOutbound,
     companionName: card.data.name,
+    postTurnActions,
     ...(fleetScheduleStagger ? { fleetScheduleStagger } : {}),
   });
 
@@ -2275,11 +2304,9 @@ async function main(): Promise<void> {
     persistenceRuntime,
     coreRuntime,
     gatewaySender: {
-      send: (channelType, channelId, content) => (
-        channelType === 'discord'
-          ? gateway.discordSend(channelId, content)
-          : gateway.channelSend(channelType, channelId, content)
-      ),
+      send: (channelType, channelId, content) => (channelType === 'discord'
+        ? gateway.discordSend(channelId, content)
+        : gateway.channelSendRoomReply(channelType, channelId, content)),
     },
     outboundReplyGuard,
   });
@@ -2310,6 +2337,7 @@ async function main(): Promise<void> {
     {
       eventBus,
       llmProvider,
+      decisionRuntime: coreRuntime.decisionRuntime,
       ...(coreRuntime.automataClassLifecycle
         ? { automataClassLifecycle: coreRuntime.automataClassLifecycle }
         : {}),
@@ -2441,7 +2469,15 @@ async function main(): Promise<void> {
     outboundReplyGuard,
     companionAuthorName: card.data.name,
     protectedMessageQueue: companionAvailability,
+    icpAppraisalContext: {
+      reader: sessionStore,
+      messageLimit: schedulerConfig.socialAutonomy.passiveNameCandidate.precedingContextMessages,
+    },
+    companionReplyBusyWaitMs: schedulerConfig.icpAutonomy.permit.ttlMs,
   });
+  if (registeredGatewayMessageHandlers.observedGroupMemory) {
+    shutdownTargets.observedGroupMemory = registeredGatewayMessageHandlers.observedGroupMemory;
+  }
   const unregisterIcpTargetChannelInitiationCommand = registerIcpTargetChannelInitiationCommand(
     registeredGatewayMessageHandlers.icpTargetChannelInitiator,
   );

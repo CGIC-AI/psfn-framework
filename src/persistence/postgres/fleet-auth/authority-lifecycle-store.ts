@@ -10,8 +10,10 @@ import { appendAccountAuthorityFloorProjection } from './authority-floor-project
 import type { AccountAuthorityFencePort } from './provider-revocation-authority.js';
 import {
   LifecycleMutationDenied,
+  requireLifecyclePrincipalActorId,
   type LifecycleVersionBump,
 } from './authority-lifecycle-mutation-contract.js';
+import { lockAndValidateAdminTokenLifecycleApproval } from './admin-token-lifecycle-approval.js';
 import { prepareLifecycleMutation } from './authority-lifecycle-mutations.js';
 import {
   lifecycleProviderProofs,
@@ -24,6 +26,7 @@ import {
 } from './authority-lifecycle-terminal.js';
 import {
   assertVerifiedFleetAuthLifecycleDecision,
+  lifecyclePrincipalActor,
   type FleetAuthLifecycleResult,
   type PrincipalAuthorityClaim,
   type VerifiedFleetAuthLifecycleDecision,
@@ -68,7 +71,8 @@ function integer(value: string, field: string): number {
 function claims(decision: VerifiedFleetAuthLifecycleDecision): PrincipalAuthorityClaim[] {
   const byId = new Map<string, PrincipalAuthorityClaim>();
   const candidates = [
-    decision.actor,
+    // An ADMIN_TOKEN operator approval has no principal actor to claim.
+    ...(decision.operator ? [] : [decision.actor!]),
     decision.target,
     ...('source' in decision ? [decision.source] : []),
   ];
@@ -202,7 +206,10 @@ export class GatewayFleetAuthAuthorityLifecycleStore {
             decisionId: decision.decisionId,
             ceremonyId: decision.ceremonyId,
             decisionFingerprint,
-            actorPrincipalId: decision.actor.principalId,
+            actorPrincipalId: requireLifecyclePrincipalActorId(
+              decision,
+              'actor_not_companion_administrator',
+            ),
             target: decision.target,
             priorCompanionVersion: mutation.companionReadd.priorVersion,
             priorAuthorityGeneration: decision.authorityGeneration,
@@ -526,6 +533,13 @@ export class GatewayFleetAuthAuthorityLifecycleStore {
     client: PoolClient,
     decision: VerifiedFleetAuthLifecycleDecision,
   ): Promise<void> {
+    // The ADMIN_TOKEN operator has no session: its exact durable approval
+    // audit row is the approving evidence (psfn-framework-ja7n0).
+    if (decision.operator) {
+      await lockAndValidateAdminTokenLifecycleApproval(client, decision);
+      return;
+    }
+    const principal = lifecyclePrincipalActor(decision)!;
     const result = await client.query<{
       principal_id: string;
       authn_version: string;
@@ -557,7 +571,7 @@ export class GatewayFleetAuthAuthorityLifecycleStore {
         AND session.idle_expires_at > clock_timestamp()
         AND session.absolute_expires_at > clock_timestamp()
       FOR UPDATE OF session, subject
-    `, [decision.actorSession.sessionId, decision.actor.principalId]);
+    `, [principal.actorSession.sessionId, principal.actor.principalId]);
     if (result.rowCount !== 1) {
       throw new FleetAuthLifecycleDeniedError('actor_session_stale_or_invalid');
     }
@@ -565,7 +579,7 @@ export class GatewayFleetAuthAuthorityLifecycleStore {
     if (!row) {
       throw new FleetAuthLifecycleDeniedError('actor_session_stale_or_invalid');
     }
-    const session = decision.actorSession;
+    const session = principal.actorSession;
     if (row.revoked_at !== null
       || row.replaced_by !== null
       || row.provider_state !== 'active'

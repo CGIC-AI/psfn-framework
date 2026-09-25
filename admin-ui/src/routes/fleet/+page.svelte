@@ -14,6 +14,8 @@
   import FleetUsageSummary from '$lib/components/fleet/FleetUsageSummary.svelte';
   import FleetGlobalFirewall from '$lib/components/fleet/FleetGlobalFirewall.svelte';
   import FleetAttention from '$lib/components/fleet/FleetAttention.svelte';
+  import FleetIcpPosture from '$lib/components/fleet/FleetIcpPosture.svelte';
+  import FleetLifecycle from '$lib/components/fleet/FleetLifecycle.svelte';
   import {
     fetchCompanionAttention,
     fleetAttentionBannerVisible,
@@ -262,6 +264,7 @@
       </section>
     {:else if projection}
       {#if activeView === 'info'}
+      <FleetIcpPosture {projection} />
       <section class="garden-section" aria-labelledby="companion-health-heading">
         <div class="mb-3 flex flex-wrap items-end justify-between gap-2">
           <div>
@@ -387,6 +390,8 @@
       <FleetCostUsage mode="fleet" {projection} />
       {:else if activeView === 'firewall'}
       <FleetGlobalFirewall {projection} />
+      {:else if activeView === 'lifecycle'}
+      <FleetLifecycle {projection} />
       {/if}
     {/if}
     {/if}

@@ -1,7 +1,7 @@
 import type { ScratchpadProvider } from '../../core/agent/scratchpad-port.js';
 import type { Awaitable } from '../../shared/utils/types.js';
 import type { MemoryListPosition } from './list-position.js';
-import type { ScratchpadEntry } from './scratchpad-types.js';
+import type { ScratchpadEntry, ScratchpadProvenance } from './scratchpad-types.js';
 import type {
   CoreMemoryAppendOptions,
   CoreMemoryBlock,
@@ -284,6 +284,7 @@ export type MemorySubjectAdminSelector =
   | { kind: 'admin_stats' }
   | { kind: 'channel_prefix'; channelId: string; limit: number }
   | { kind: 'contact_filter'; contactId: string; limit: number }
+  | { kind: 'recently_accessed'; limit: number }
   | { kind: 'privacy_summary' }
   | { kind: 'stats' };
 
@@ -500,6 +501,8 @@ export function normalizeMemorySalienceUpdates(
 }
 
 export interface ScratchpadEntryCreateOptions {
+  /** Required: where the note was written (psfn-framework-yy0r2). */
+  provenance: ScratchpadProvenance;
   id?: string;
   now?: number;
 }
@@ -601,6 +604,12 @@ interface MemoryStorePortBackend extends ScratchpadProvider {
   getStats(): Awaitable<MemoryStoreStats>;
   getMemoriesByChannel(channelId: string, limit: number): Awaitable<PurrMemory[]>;
   getMemoriesByContact(contactId: string, limit: number): Awaitable<PurrMemory[]>;
+  /**
+   * The `limit` most recently accessed active memories, excluding internal
+   * cognitive artifacts (`isInternalMemoryArtifact`), ordered lastAccessed DESC
+   * then extractedAt DESC, id DESC. A bounded SQL slice (psfn-framework-dnaqt).
+   */
+  getRecentlyAccessedMemories(limit: number): Awaitable<PurrMemory[]>;
   linkMemories(id1: string, id2: string, linkType?: string): Awaitable<MemoryLink | null>;
   unlinkMemories(id1: string, id2: string): Awaitable<boolean>;
   getLinkedMemories(id: string): Awaitable<MemoryLink[]>;
@@ -612,7 +621,7 @@ interface MemoryStorePortBackend extends ScratchpadProvider {
   listRecentContactShapes(): Awaitable<RecentContactShapeArtifact[]>;
   addScratchpadEntry(
     content: string,
-    options?: ScratchpadEntryCreateOptions,
+    options: ScratchpadEntryCreateOptions,
   ): Awaitable<ScratchpadAddResult>;
   replaceScratchpadEntry(
     id: string,
@@ -715,6 +724,7 @@ export interface MemoryStorePort extends ScratchpadProvider {
   getStats(): Promise<MemoryStoreStats>;
   getMemoriesByChannel(channelId: string, limit: number): Promise<PurrMemory[]>;
   getMemoriesByContact(contactId: string, limit: number): Promise<PurrMemory[]>;
+  getRecentlyAccessedMemories(limit: number): Promise<PurrMemory[]>;
   linkMemories(id1: string, id2: string, linkType?: string): Promise<MemoryLink | null>;
   unlinkMemories(id1: string, id2: string): Promise<boolean>;
   getLinkedMemories(id: string): Promise<MemoryLink[]>;
@@ -724,7 +734,7 @@ export interface MemoryStorePort extends ScratchpadProvider {
   upsertRecentContactShape(shape: RecentContactShapeArtifact): Promise<void>;
   getRecentContactShape(contactId: string): Promise<RecentContactShapeArtifact | undefined>;
   listRecentContactShapes(): Promise<RecentContactShapeArtifact[]>;
-  addScratchpadEntry(content: string, options?: ScratchpadEntryCreateOptions): Promise<ScratchpadAddResult>;
+  addScratchpadEntry(content: string, options: ScratchpadEntryCreateOptions): Promise<ScratchpadAddResult>;
   replaceScratchpadEntry(
     id: string,
     content: string,
@@ -836,6 +846,7 @@ export function createMemoryStorePort(store: MemoryStorePortBackend): MemoryStor
     getStats: async () => await store.getStats(),
     getMemoriesByChannel: async (channelId, limit) => await store.getMemoriesByChannel(channelId, limit),
     getMemoriesByContact: async (contactId, limit) => await store.getMemoriesByContact(contactId, limit),
+    getRecentlyAccessedMemories: async limit => await store.getRecentlyAccessedMemories(limit),
     linkMemories: async (id1, id2, linkType) => await store.linkMemories(id1, id2, linkType),
     unlinkMemories: async (id1, id2) => await store.unlinkMemories(id1, id2),
     getLinkedMemories: async (id) => await store.getLinkedMemories(id),

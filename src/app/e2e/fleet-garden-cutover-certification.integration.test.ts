@@ -546,6 +546,14 @@ function buildRouter(input: {
     canonicalOrigin: CANONICAL_ORIGIN,
     trustProxy: true,
     adminToken: ADMIN_TOKEN,
+    adminTokenAudit: {
+      record: async () => ({
+        authorizationEventId: randomUUID(),
+        authorityGeneration: 1,
+        globalAuthEpoch: 1,
+        occurredAt: new Date(),
+      }),
+    },
     upstreams: resolveFleetSsoGardenUpstreams({
       fleet: input.runtime.fleet,
       fleetGardenPort: input.gardenPort,

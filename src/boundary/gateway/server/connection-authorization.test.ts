@@ -88,7 +88,10 @@ describe('gateway.client.identify decisions (fptm)', () => {
     expect(decideIdentifyReentry({ status: { role: 'agent', companionId: A, stateReason: 'ready' }, request, multiCompanionEnabled: true }))
       .toEqual({ kind: 'already_identified', role: 'agent', companionId: A });
     expect(decideIdentifyReentry({ status: { role: 'agent', companionId: A, stateReason: 'ready' }, request: { role: 'agent', companionId: B }, multiCompanionEnabled: true }))
-      .toMatchObject({ kind: 'reject' });
+      .toMatchObject({
+        kind: 'reject',
+        violation: { event: 'identify_rebind_rejected', details: { boundCompanionId: A, claimedCompanionId: B } },
+      });
     expect(decideIdentifyReentry({ status: { role: 'agent', stateReason: 'rpc_registered' }, request: { role: 'internal_session_integrity', companionId: A }, multiCompanionEnabled: true }))
       .toMatchObject({ kind: 'reject' });
   });

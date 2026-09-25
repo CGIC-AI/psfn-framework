@@ -1,7 +1,10 @@
 // Construction-time options contract for GatewayServer (the composition facade).
+import type { GatewayJevDecisionService } from '../jev-decision-service.js';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import type { EmbeddingProviderPort } from '../../../shared/contracts/embedding-provider.js';
 import type { ChannelOutboundDock } from '../../../channels/backplane/types.js';
+import type { GatewayRoomReplyOutbound } from '../room-reply-outbound.js';
+import type { ModelBudgetController } from '../../../primitives/llm/model-budget.js';
 import type { CapabilityTier, WyomingShardRoutingConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { GatewayRpcEndpoint } from '../transport.js';
 import type {
@@ -61,19 +64,14 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
    * only, so one companion can never egress through another companion's bot.
    */
   discordAccountDocks?: ReadonlyMap<CompanionId, ChannelOutboundDock>;
-  /** Native channel-plugin outbound accounts, resolved only by authenticated caller identity. */
-  pluginOutboundRoutes?: readonly {
-    pluginId: 'buzz';
-    accountId?: string;
-    companionId?: string;
-    dock: ChannelOutboundDock;
-  }[];
   /**
    * vvf.5.2: single-account Telegram outbound dock for interactive clarify
    * delivery. Present only when Telegram is configured; clarify.deliver fails
    * closed on the telegram channel without it.
    */
   telegramDock?: ChannelOutboundDock;
+  /** Autonomous room-reply outbound for Telegram and external channels (ze2fx). */
+  roomReplyOutbound?: GatewayRoomReplyOutbound;
   /** Numeric Telegram destination for secondary system/operator alerts. */
   operatorTelegramChatId?: string;
   /** Explicit Discord system-alert outbound identity and destination. */
@@ -82,6 +80,10 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
   gitOps?: GitOperations;
   imageConfig?: ImageRuntimeConfig;
   modelUsageRecorder?: ModelUsageRecorder;
+  /** Model budget admission for non-token dispatches such as paid images (6da92). */
+  modelBudget?: ModelBudgetController;
+  /** Remote (Jev) decision backend for `llm.decide` (epic 4lf3r). */
+  jevDecisions?: GatewayJevDecisionService;
   credentialVault?: CredentialVaultPort;
   /** Value-free provider/channel credential inventory for the Garden status UI. */
   credentialPresence?: GatewayCredentialPresenceResult;

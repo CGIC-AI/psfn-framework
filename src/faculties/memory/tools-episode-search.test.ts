@@ -373,4 +373,85 @@ describe('memory action=episode_search', () => {
     expect(resultText(timeline)).not.toContain('timeline-quarantined-link');
     expect(resultText(timeline)).not.toContain('This relationship must not be disclosed.');
   });
+
+  describe('visibility-gated episodes are reported, never implied absent (jequ8)', () => {
+    async function seedOtherRoomEpisode(store: PostgresEpisodicStore): Promise<void> {
+      await store.createCompanionAuthoredEpisode({
+        id: 'other-room-lighthouse',
+        title: 'Lighthouse evening',
+        landmark: 'Protected other-room lighthouse detail.',
+        startedAt: '2026-07-18T12:00:00.000Z',
+        endedAt: '2026-07-18T13:00:00.000Z',
+        threadId: 'thread:other-room',
+        channelId: 'api:other-room',
+        participantContactIds: ['contact:someone-else'],
+        salience: { score: 0.8 },
+        affect: { labels: [] },
+        themes: ['lighthouse'],
+        spanRefs: [{ spanId: 'span-other-room', sessionId: 'session:other-room' }],
+        artifactRefs: [],
+        provenanceRefs: [],
+      });
+    }
+
+    function createStore(): PostgresEpisodicStore {
+      return new PostgresEpisodicStore(
+        new FakeEpisodicPool() as unknown as Pool,
+        { now: () => new Date('2026-07-18T12:00:00.000Z') },
+      );
+    }
+
+    it('episode_search reports a content-free withheld count', async () => {
+      const store = createStore();
+      await seedOtherRoomEpisode(store);
+      const tool = createMemoryTool({} as MemoryWriter, {} as MemoryStorePort, { episodicStore: store });
+
+      const text = resultText(await tool.execute('memory-episode-search-gated', {
+        action: 'episode_search',
+        query: 'lighthouse',
+        channel_id: CHANNEL_ID,
+        trust_level: 'regular',
+        channel_visibility: 'private',
+      }));
+
+      expect(text).toContain('No visible canonical episodes matched the search query');
+      expect(text).toContain('Withheld by visibility gating: 1 episode from other conversations.');
+      expect(text).not.toContain('other-room-lighthouse');
+      expect(text).not.toContain('Protected other-room lighthouse detail');
+      expect(text).not.toContain('api:other-room');
+    });
+
+    it('timeline reports a content-free withheld count', async () => {
+      const store = createStore();
+      await seedOtherRoomEpisode(store);
+      const tool = createMemoryTool({} as MemoryWriter, {} as MemoryStorePort, { episodicStore: store });
+
+      const text = resultText(await tool.execute('memory-timeline-gated', {
+        action: 'timeline',
+        date: '2026-07-18',
+        channel_id: CHANNEL_ID,
+        trust_level: 'regular',
+        channel_visibility: 'private',
+      }));
+
+      expect(text).toContain('No visible episodic memories found for date 2026-07-18.');
+      expect(text).toContain('Withheld by visibility gating: 1 episode from other conversations.');
+      expect(text).not.toContain('Protected other-room lighthouse detail');
+    });
+
+    it('timeline without date/after/before navigates today (UTC) instead of failing', async () => {
+      const store = createStore();
+      const tool = createMemoryTool({} as MemoryWriter, {} as MemoryStorePort, { episodicStore: store });
+
+      const result = await tool.execute('memory-timeline-default', {
+        action: 'timeline',
+        channel_id: CHANNEL_ID,
+        trust_level: 'regular',
+        channel_visibility: 'private',
+      });
+
+      expect((result.details as { isError?: boolean } | undefined)?.isError).not.toBe(true);
+      expect(resultText(result)).toMatch(/for date \d{4}-\d{2}-\d{2} \(default: today UTC;/u);
+    });
+  });
 });

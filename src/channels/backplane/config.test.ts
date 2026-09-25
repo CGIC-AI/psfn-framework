@@ -46,76 +46,6 @@ describe('loadRuntimeChannelsConfig', () => {
     }
   });
 
-  it('loads fail-closed Multica gateway channel config from the owner file', () => {
-    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
-    try {
-      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
-        multica: {
-          enabled: true,
-          baseUrl: 'http://127.0.0.1:8080/',
-          workspaceId: '11111111-1111-4111-8111-111111111111',
-          companionId: '22222222-2222-4222-8222-222222222222',
-          tokenRef: { kind: 'env', envName: 'MULTICA_GATEWAY_TOKEN' },
-          pollIntervalMs: 2500,
-          runtimeName: 'V Unit 00',
-        },
-      }));
-
-      const config = loadRuntimeChannelsConfig(dataDir, {
-        MULTICA_GATEWAY_TOKEN: ' owner-token ',
-      });
-
-      expect(config.plugins.multica).toEqual({
-        id: 'multica',
-        enabled: true,
-        continuityChannelPrefixes: ['multica:11111111-1111-4111-8111-111111111111:'],
-        companionId: '22222222-2222-4222-8222-222222222222',
-        credentials: [{
-          id: 'token',
-          reference: { kind: 'env', envName: 'MULTICA_GATEWAY_TOKEN' },
-          description: 'Multica gateway token',
-        }],
-        config: {
-          enabled: true,
-          baseUrl: 'http://127.0.0.1:8080',
-          workspaceId: '11111111-1111-4111-8111-111111111111',
-          companionId: '22222222-2222-4222-8222-222222222222',
-          tokenRef: { kind: 'env', envName: 'MULTICA_GATEWAY_TOKEN' },
-          pollIntervalMs: 2500,
-          runtimeName: 'V Unit 00',
-        },
-      });
-    } finally {
-      rmSync(dataDir, { recursive: true, force: true });
-    }
-  });
-
-  it('keeps Multica credential references unresolved at config load', () => {
-    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
-    try {
-      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
-        multica: {
-          enabled: true,
-          baseUrl: 'http://127.0.0.1:8080',
-          workspaceId: '11111111-1111-4111-8111-111111111111',
-          companionId: '22222222-2222-4222-8222-222222222222',
-          tokenRef: { kind: 'env', envName: 'MULTICA_GATEWAY_TOKEN' },
-          pollIntervalMs: 1000,
-        },
-      }));
-
-      const config = loadRuntimeChannelsConfig(dataDir, {});
-      expect(config.plugins.multica?.credentials).toEqual([{
-        id: 'token',
-        reference: { kind: 'env', envName: 'MULTICA_GATEWAY_TOKEN' },
-        description: 'Multica gateway token',
-      }]);
-      expect(config.plugins.multica?.config).not.toHaveProperty('token');
-    } finally {
-      rmSync(dataDir, { recursive: true, force: true });
-    }
-  });
-
   it('rejects unknown channel plugin ids', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
     try {
@@ -130,57 +60,14 @@ describe('loadRuntimeChannelsConfig', () => {
     }
   });
 
-  it('rejects unsafe or incomplete Multica channel config', () => {
+  it.each(['buzz', 'multica'])('rejects the retired %s plugin section with a migration hint', (pluginId) => {
     const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
     try {
-      const writeMultica = (multica: Record<string, unknown>): void => {
-        writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({ multica }));
-      };
-
-      writeMultica({ enabled: true, token: 'inline-secret' });
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        [pluginId]: { enabled: false },
+      }));
       expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
-        'channels.json.multica.tokenRef must be used instead',
-      );
-
-      writeMultica({ enabled: true, unknown: true });
-      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
-        'channels.json.multica has unsupported keys: unknown',
-      );
-
-      writeMultica({
-        enabled: true,
-        baseUrl: 'http://user:pass@127.0.0.1:8080/path',
-        workspaceId: '11111111-1111-4111-8111-111111111111',
-        companionId: '22222222-2222-4222-8222-222222222222',
-        tokenRef: { kind: 'env', envName: 'MULTICA_GATEWAY_TOKEN' },
-        pollIntervalMs: 1000,
-      });
-      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
-        'channels.json.multica.baseUrl must not contain credentials, a path, query, or fragment',
-      );
-
-      writeMultica({
-        enabled: true,
-        baseUrl: 'http://multica.example.test',
-        workspaceId: '11111111-1111-4111-8111-111111111111',
-        companionId: '22222222-2222-4222-8222-222222222222',
-        tokenRef: { kind: 'env', envName: 'MULTICA_GATEWAY_TOKEN' },
-        pollIntervalMs: 1000,
-      });
-      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
-        'channels.json.multica.baseUrl must use HTTPS unless the host is loopback',
-      );
-
-      writeMultica({
-        enabled: true,
-        baseUrl: 'http://127.0.0.1:8080',
-        workspaceId: '11111111-1111-4111-8111-111111111111',
-        companionId: '22222222-2222-4222-8222-222222222222',
-        tokenRef: { kind: 'env', envName: 'MULTICA_GATEWAY_TOKEN' },
-        pollIntervalMs: 100,
-      });
-      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
-        'channels.json.multica.pollIntervalMs must be between 250 and 60000',
+        `Channel plugin "${pluginId}" was removed; run migrate-required-settings-blocks --apply`,
       );
     } finally {
       rmSync(dataDir, { recursive: true, force: true });

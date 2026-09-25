@@ -97,6 +97,30 @@ interface ToolLessScreenerCallInput {
   screenerName: string;
   /** Error constructor so callers keep their own typed error hierarchy. */
   makeError: (message: string) => Error;
+  /**
+   * Content-free observer called once per provider dispatch (including the
+   * one schema-repair retry) with its outcome and token usage, for the usage
+   * ledger (1fyyi). It never sees prompt or response text.
+   */
+  onAttempt?: (attempt: ScreenerAttemptUsage) => void;
+}
+
+/** Content-free record of one screener provider dispatch. */
+export interface ScreenerAttemptUsage {
+  status: 'success' | 'failure';
+  startedAtMs: number;
+  completedAtMs: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  errorCode?: 'timeout' | 'provider_error';
+  /**
+   * The dispatch's request bound: UTF-8 bytes of the prompt text as input
+   * tokens (a byte-level tokenizer never emits more) plus the completion cap.
+   * The ledger charges it when a timed-out dispatch reports no usage.
+   */
+  worstCaseTokens: { input: number; output: number };
 }
 
 export interface ValidatedToolLessScreenerCallInput<T>
@@ -194,6 +218,25 @@ function providerFailure(
   const error = input.makeError(message);
   const rejection = classifyScreenerProviderFailure(rawDetail);
   if (rejection) providerRejections.set(error, rejection);
+  return error;
+}
+
+const screenerTimeouts = new WeakSet<object>();
+
+/**
+ * True when a screener error is the call's own deadline expiring (q8l79), so
+ * callers and telemetry can tell an undersized timeout apart from a provider
+ * failure. The fail-closed handling is identical either way.
+ */
+export function isScreenerTimeout(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && screenerTimeouts.has(error);
+}
+
+function screenerTimeout(input: ToolLessScreenerCallInput): Error {
+  const error = input.makeError(
+    `${input.screenerName} call timed out after ${String(input.timeoutMs)}ms`,
+  );
+  screenerTimeouts.add(error);
   return error;
 }
 
@@ -300,8 +343,13 @@ function buildPiOptions(
   };
 }
 
+interface ObservedUsage {
+  value?: AssistantMessage['usage'];
+}
+
 async function callToolLessJsonScreenerThroughPi(
   input: ToolLessScreenerCallInput,
+  observed: ObservedUsage,
 ): Promise<string> {
   const { runtime, requestCapability, candidate, model, apiKey } = resolvePiModel(input);
   const controller = new AbortController();
@@ -323,9 +371,7 @@ async function callToolLessJsonScreenerThroughPi(
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     if (controller.signal.aborted) {
-      throw input.makeError(
-        `${input.screenerName} call timed out after ${String(input.timeoutMs)}ms`,
-      );
+      throw screenerTimeout(input);
     }
     throw providerFailure(
       input,
@@ -335,7 +381,14 @@ async function callToolLessJsonScreenerThroughPi(
   } finally {
     clearTimeout(timeout);
   }
-  if (response.stopReason === 'error' || response.stopReason === 'aborted') {
+  observed.value = response.usage;
+  // The screener never passes a caller abort signal, so an aborted response is
+  // always its own deadline (this controller or pi-ai's `timeoutMs`); pi-ai
+  // reports that as a resolved `aborted` message rather than a throw.
+  if (controller.signal.aborted || response.stopReason === 'aborted') {
+    throw screenerTimeout(input);
+  }
+  if (response.stopReason === 'error') {
     const detail = response.errorMessage ?? '';
     throw providerFailure(
       input,
@@ -345,6 +398,16 @@ async function callToolLessJsonScreenerThroughPi(
     );
   }
   const content = extractPiMessageText(response);
+  if (content.trim().length === 0 && response.stopReason === 'length') {
+    // A reasoning model spent the whole completion cap thinking. Repeating the
+    // same request under the same cap cannot succeed, so this is not repaired:
+    // it names the owner-file cap the operator must raise.
+    throw input.makeError(
+      `${input.screenerName} completion cap${input.maxOutputTokens !== undefined
+        ? ` of ${String(input.maxOutputTokens)} tokens` : ''} was exhausted before any answer `
+      + '(reasoning output); raise the screener maxOutputTokens for this model',
+    );
+  }
   if (content.trim().length === 0) {
     throw responseFailure(input, `${input.screenerName} response contained no assistant content`);
   }
@@ -377,9 +440,7 @@ async function callToolLessJsonScreenerThroughTestCompletion(
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     if (controller.signal.aborted) {
-      throw input.makeError(
-        `${input.screenerName} call timed out after ${String(input.timeoutMs)}ms`,
-      );
+      throw screenerTimeout(input);
     }
     // Classified identically to the pi path (psfn-framework-mlhn3): the seam's
     // contract is "return assistant text or throw the way a provider does", so
@@ -402,9 +463,77 @@ async function callToolLessJsonScreenerThroughTestCompletion(
 async function callToolLessJsonScreener(
   input: ToolLessScreenerCallInput,
 ): Promise<string> {
-  return input.testCompletion
-    ? callToolLessJsonScreenerThroughTestCompletion(input)
-    : callToolLessJsonScreenerThroughPi(input);
+  const startedAtMs = Date.now();
+  const observed: ObservedUsage = {};
+  try {
+    const content = input.testCompletion
+      ? await callToolLessJsonScreenerThroughTestCompletion(input)
+      : await callToolLessJsonScreenerThroughPi(input, observed);
+    reportScreenerAttempt(input, 'success', startedAtMs, observed);
+    return content;
+  } catch (error) {
+    reportScreenerAttempt(
+      input,
+      'failure',
+      startedAtMs,
+      observed,
+      isScreenerTimeout(error) ? 'timeout' : 'provider_error',
+    );
+    throw error;
+  }
+}
+
+/**
+ * Worst-case input tokens of one screener dispatch. Text is bounded by its
+ * UTF-8 bytes (a byte-level tokenizer never emits more tokens than bytes).
+ * An image part is NOT priced by its base64 data-URL bytes (2sm32: a 3.5 MB
+ * photo counted as 3.6M tokens, $2.15 for one timed-out vision screen): the
+ * provider tokenizes the decoded image, and no single request can exceed the
+ * routed model's context window, so a request with images, like any request,
+ * is capped at that window. Only an unrouted model with no known window falls
+ * back to the raw bytes.
+ */
+function screenerWorstCaseInputTokens(input: ToolLessScreenerCallInput): number {
+  const parts = typeof input.userMessage === 'string'
+    ? [{ type: 'text' as const, text: input.userMessage }]
+    : input.userMessage;
+  const textBytes = Buffer.byteLength(input.systemPrompt, 'utf8') + parts
+    .reduce((total, part) => total + (part.type === 'text' ? Buffer.byteLength(part.text, 'utf8') : 0), 0);
+  const imageParts = parts.filter(part => part.type === 'image_url');
+  const contextWindow = typeof input.model === 'string' ? undefined : input.model.contextWindow;
+  if (contextWindow === undefined || !Number.isFinite(contextWindow) || contextWindow <= 0) {
+    return textBytes + imageParts
+      .reduce((total, part) => total + Buffer.byteLength(part.image_url.url, 'utf8'), 0);
+  }
+  return imageParts.length > 0 ? contextWindow : Math.min(textBytes, contextWindow);
+}
+
+function reportScreenerAttempt(
+  input: ToolLessScreenerCallInput,
+  status: ScreenerAttemptUsage['status'],
+  startedAtMs: number,
+  observed: ObservedUsage,
+  errorCode?: ScreenerAttemptUsage['errorCode'],
+): void {
+  if (!input.onAttempt) return;
+  const usage = observed.value;
+  const outputCap = typeof input.model === 'string'
+    ? input.maxOutputTokens ?? 0
+    : Math.min(input.model.maxTokens, input.maxOutputTokens ?? input.model.maxTokens);
+  input.onAttempt({
+    worstCaseTokens: {
+      input: screenerWorstCaseInputTokens(input),
+      output: outputCap,
+    },
+    status,
+    startedAtMs,
+    completedAtMs: Date.now(),
+    inputTokens: usage?.input ?? 0,
+    outputTokens: usage?.output ?? 0,
+    cacheReadTokens: usage?.cacheRead ?? 0,
+    cacheWriteTokens: usage?.cacheWrite ?? 0,
+    ...(errorCode ? { errorCode } : {}),
+  });
 }
 
 /**
@@ -422,6 +551,7 @@ export async function callValidatedToolLessJsonScreener<T>(
     callInput: ToolLessScreenerCallInput,
   ): Promise<T> => input.validateContent(await callToolLessJsonScreener(callInput));
 
+  let repairHint: string | undefined;
   try {
     return await validateAttempt(input);
   } catch (error) {
@@ -429,12 +559,25 @@ export async function callValidatedToolLessJsonScreener<T>(
       && error !== null
       && retryableResponseFailures.has(error);
     if (!retryableResponse && !input.isValidationError(error)) throw error;
+    repairHint = screenerRepairHint(error);
   }
 
   return validateAttempt({
     ...input,
-    systemPrompt: `${input.systemPrompt}\n\n${SCHEMA_REPAIR_INSTRUCTION}`,
+    systemPrompt: [input.systemPrompt, SCHEMA_REPAIR_INSTRUCTION, repairHint]
+      .filter((part): part is string => Boolean(part))
+      .join('\n\n'),
   });
+}
+
+/**
+ * A caller's schema error may carry fixed, code-owned repair guidance (never
+ * model output or screened text) naming what the first answer got wrong.
+ */
+function screenerRepairHint(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null) return undefined;
+  const hint = (error as { repairHint?: unknown }).repairHint;
+  return typeof hint === 'string' && hint.trim().length > 0 ? hint : undefined;
 }
 
 /**

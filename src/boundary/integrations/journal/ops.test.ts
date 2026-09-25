@@ -23,6 +23,9 @@ import {
 } from './bounded-io.js';
 import { withJournalMutationLock } from './mutation-coordinator.js';
 
+const RESTRICTED = { scope: 'restricted' } as const;
+const HEADER = '<!-- journal-provenance: {"scope":"restricted"} -->\n';
+
 const { renameMock } = vi.hoisted(() => ({
   renameMock: vi.fn(),
 }));
@@ -176,12 +179,12 @@ describe('JournalOps governed I/O', () => {
       writeFileSync(path, original, 'utf8');
 
       await Promise.all([
-        firstOps.append(`actual/${noteName}`, firstAppend),
-        secondOps.append(`alias/${noteName}`, secondAppend),
+        firstOps.append(`actual/${noteName}`, firstAppend, RESTRICTED),
+        secondOps.append(`alias/${noteName}`, secondAppend, RESTRICTED),
       ]);
 
       const persisted = readFileSync(path, 'utf8');
-      expect(persisted.startsWith(`${original}\n`)).toBe(true);
+      expect(persisted.startsWith(`${HEADER}${original}\n`)).toBe(true);
       expect(persisted.split(firstAppend)).toHaveLength(2);
       expect(persisted.split(secondAppend)).toHaveLength(2);
     }
@@ -192,8 +195,8 @@ describe('JournalOps governed I/O', () => {
     expect(readdirSync(actualDirectory).filter(name => name.includes('journal-append'))).toEqual([]);
 
     await Promise.all([
-      firstOps.append('actual/new-note.md', 'first new append'),
-      secondOps.append('alias/new-note.md', 'second new append'),
+      firstOps.append('actual/new-note.md', 'first new append', RESTRICTED),
+      secondOps.append('alias/new-note.md', 'second new append', RESTRICTED),
     ]);
     const created = readFileSync(join(actualDirectory, 'new-note.md'), 'utf8');
     expect(created.split('first new append')).toHaveLength(2);
@@ -229,7 +232,7 @@ describe('JournalOps governed I/O', () => {
 
     let aliasMutationSettled = false;
     const aliasMutation = new JournalOps(root)
-      .append('alias/note.md', 'must not escape')
+      .append('alias/note.md', 'must not escape', RESTRICTED)
       .finally(() => {
         aliasMutationSettled = true;
       });
@@ -392,17 +395,17 @@ describe('JournalOps governed I/O', () => {
 
   it('publishes a normal create and replace losslessly through the single commit', async () => {
     const ops = new JournalOps(root);
-    const created = await ops.write('lossless.md', 'first');
+    const created = await ops.write('lossless.md', 'first', RESTRICTED);
     expect(created.created).toBe(true);
-    expect(readFileSync(join(root, 'lossless.md'), 'utf8')).toBe('first\n');
+    expect(readFileSync(join(root, 'lossless.md'), 'utf8')).toBe(`${HEADER}first\n`);
 
-    const appended = await ops.append('lossless.md', 'second');
+    const appended = await ops.append('lossless.md', 'second', RESTRICTED);
     expect(appended.created).toBe(false);
-    expect(readFileSync(join(root, 'lossless.md'), 'utf8')).toBe('first\nsecond\n');
+    expect(readFileSync(join(root, 'lossless.md'), 'utf8')).toBe(`${HEADER}first\nsecond\n`);
 
-    const replaced = await ops.write('lossless.md', 'third');
+    const replaced = await ops.write('lossless.md', 'third', RESTRICTED);
     expect(replaced.created).toBe(false);
-    expect(readFileSync(join(root, 'lossless.md'), 'utf8')).toBe('third\n');
+    expect(readFileSync(join(root, 'lossless.md'), 'utf8')).toBe(`${HEADER}third\n`);
     expect(readdirSync(root).filter(name => name.includes('journal-'))).toEqual([]);
   });
 
@@ -453,7 +456,7 @@ describe('JournalOps governed I/O', () => {
       new Error('injected commit failure'),
     );
 
-    await expect(new JournalOps(root).append('failure.md', 'lost append')).rejects.toThrow(
+    await expect(new JournalOps(root).append('failure.md', 'lost append', RESTRICTED)).rejects.toThrow(
       /injected commit failure/,
     );
 

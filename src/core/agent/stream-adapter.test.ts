@@ -929,6 +929,129 @@ describe('createSubstrateStreamFn', () => {
     expect((streamAdapterMocks.transportStream.mock.calls[1]?.[0] as LLMContext).modelHint?.model).toBe('moonshotai/kimi-k2.5');
   });
 
+  it('does not walk a preempted run through the fallback chain (tpkqi)', async () => {
+    const baseConfig = makeConfig();
+    const baseRegistry = baseConfig.modelRegistry!;
+    const config = makeConfig({
+      modelRegistry: {
+        ...baseRegistry,
+        models: [
+          ...baseRegistry.models,
+          {
+            id: 'chat-fallback',
+            rank: 500,
+            identity: {
+              provider: 'openrouter',
+              model: 'moonshotai/kimi-k2.5',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'chat', primary: false }],
+            capabilities: { maxOutputTokens: 8192, contextWindow: 128_000 },
+            tuning: { maxOutputTokens: 8192, contextWindow: 128_000 },
+          },
+        ],
+      },
+    });
+    const preempted = Object.assign(
+      new Error('Agent is already processing another prompt. Background run preempted by a foreground turn.'),
+      { name: 'AgentRunPreemptedError' },
+    );
+    const controller = new AbortController();
+    streamAdapterMocks.transportStream.mockImplementation(() => {
+      controller.abort(preempted);
+      return Promise.reject(new Error(preempted.message));
+    });
+
+    const streamFn = makeStreamFn(config);
+    const model = resolveModel(config, makeRuntime(), 'chat');
+    const stream = await streamFn(model, fromAny({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'hello' }],
+    }), { signal: controller.signal });
+    await expect(collectStreamEvents(stream as AsyncIterable<unknown>)).rejects.toBe(preempted);
+
+    expect(streamAdapterMocks.transportStream).toHaveBeenCalledTimes(1);
+  });
+
+  describe('mid-reply stream termination (p3of8)', () => {
+    function fallbackConfig() {
+      const baseConfig = makeConfig();
+      const baseRegistry = baseConfig.modelRegistry!;
+      return makeConfig({
+        modelRegistry: {
+          ...baseRegistry,
+          models: [
+            ...baseRegistry.models,
+            {
+              id: 'chat-fallback',
+              rank: 500,
+              identity: { provider: 'openrouter', model: 'moonshotai/kimi-k2.5', source: { type: 'openrouter' } },
+              purposes: [{ purpose: 'chat', primary: false }],
+              capabilities: { maxOutputTokens: 8192, contextWindow: 128_000 },
+              tuning: { maxOutputTokens: 8192, contextWindow: 128_000 },
+            },
+          ],
+        },
+      });
+    }
+
+    function primaryTerminatesAfterText() {
+      streamAdapterMocks.transportStream.mockImplementation(async (context: LLMContext, callbacks?: StreamCallbacks) => {
+        if (context.modelHint?.model === 'deepseek/deepseek-v3.2') {
+          callbacks?.onText?.('Partial answer that never fin');
+          throw new Error('terminated');
+        }
+        return {
+          content: 'Recovered on fallback.',
+          toolCalls: [],
+          model: 'openrouter/moonshotai/kimi-k2.5',
+          inputTokens: 7,
+          outputTokens: 4,
+          stopReason: 'stop',
+        };
+      });
+    }
+
+    async function runTurn(bufferedTextDelivery: boolean) {
+      const config = fallbackConfig();
+      const streamFn = makeStreamFn(config);
+      const model = resolveModel(config, makeRuntime(), 'chat');
+      return await runWithRequestContext(
+        {
+          turnId: 'turn-terminated-1',
+          requestId: 'req-terminated-1',
+          channelId: 'api:channel-terminated-1',
+          callType: 'chat',
+          originType: 'chat',
+          originStage: 'agent.turn.prompt',
+          purpose: 'agent.turn.prompt',
+          ...(bufferedTextDelivery ? { bufferedTextDelivery: true } : {}),
+        },
+        async () => {
+          const stream = await streamFn(model, fromAny({
+            systemPrompt: 'System',
+            messages: [{ role: 'user', content: 'hello' }],
+          }), {});
+          return await collectStreamEvents(stream as AsyncIterable<unknown>);
+        },
+      );
+    }
+
+    it('falls back after partial text when the reply is delivered only on completion', async () => {
+      primaryTerminatesAfterText();
+      const events = await runTurn(true);
+      expect((events.at(-1) as { message: { model: string } }).message.model).toBe('openrouter/moonshotai/kimi-k2.5');
+      expect(JSON.stringify(events)).not.toContain('Partial answer that never fin');
+      expect(streamAdapterMocks.transportStream).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not restart a reply whose partial text may already be streaming live', async () => {
+      primaryTerminatesAfterText();
+      await expect(runTurn(false)).rejects.toThrow('terminated');
+      expect(streamAdapterMocks.transportStream).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('retries a split-runtime zero-call response once on the same candidate and discards its narration', async () => {
     const config = makeConfig({
       retryMaxAttempts: 0,

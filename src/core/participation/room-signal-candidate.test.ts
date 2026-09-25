@@ -38,7 +38,7 @@ function roomSignalSettings(overrides: Partial<RoomSignalSettings> = {}): RoomSi
 }
 
 interface ConnectorLineOptions {
-  source: 'discord' | 'telegram' | 'buzz';
+  source: 'discord' | 'telegram';
   channelType: ChannelType;
   content: string;
   messageId?: string;
@@ -116,7 +116,7 @@ function outcome(decision: PassiveNameCandidateDecision): string {
 }
 
 describe('room signal through the participation candidate gate', () => {
-  it('reaches the same decision for equivalent Discord, Telegram, and Buzz lines', async () => {
+  it('reaches the same decision for equivalent Discord and Telegram lines', async () => {
     const cases = [
       { label: 'ambient relevant topic', content: 'the migration is stuck again', expected: 'no_name_match' },
       { label: 'platform mention', content: 'can you look?', mention: true, expected: 'created:direct_mention' },
@@ -130,7 +130,6 @@ describe('room signal through the participation candidate gate', () => {
       for (const [index, connector] of ([
         { source: 'discord', channelType: 'discord' },
         { source: 'telegram', channelType: 'telegram' },
-        { source: 'buzz', channelType: 'buzz' },
       ] as const).entries()) {
         // A fresh builder per connector: only the transport differs.
         const builder = makeBuilder(makeRuntime());
@@ -143,7 +142,7 @@ describe('room signal through the participation candidate gate', () => {
         }))));
       }
       expect(decisions, testCase.label)
-        .toEqual([testCase.expected, testCase.expected, testCase.expected]);
+        .toEqual([testCase.expected, testCase.expected]);
     }
   });
 
@@ -243,8 +242,8 @@ describe('room signal through the participation candidate gate', () => {
       onNomination: nomination => nominations.push(nomination),
     }));
     await builder.build(connectorLine({
-      source: 'buzz',
-      channelType: 'buzz',
+      source: 'telegram',
+      channelType: 'telegram',
       content: 'Persephone the migration is stuck again',
     }));
 
@@ -257,7 +256,7 @@ describe('room signal through the participation candidate gate', () => {
       companionId: COMPANION_ID,
       roomId: 'room-1',
       messageId: 'msg-1',
-      connector: 'buzz',
+      connector: 'telegram',
       trigger: 'direct_mention',
       reasonCodes: ['alias_leading_address'],
       classifierConsulted: false,

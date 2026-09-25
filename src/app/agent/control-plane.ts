@@ -73,6 +73,8 @@ export interface AgentControlPlaneShutdownTargets {
   chargeLedger?: Pick<RunChargeLedger, 'close'>;
   sessionTailCache?: { close?: () => Promise<void> } | null;
   skillUsageTelemetry?: { flushSkillUsageTelemetry: () => void };
+  /** Observed group memory lane (psfn-framework-qvwem); drained before the extractor. */
+  observedGroupMemory?: { stop(options: { timeoutMs: number }): Promise<boolean> };
 }
 
 export interface BuildAgentControlPlaneOptions {
@@ -245,6 +247,18 @@ export function buildAgentControlPlane(
         action: prepareRestartCommand,
         maxAttempts: 1,
         failClosed: true,
+      },
+      {
+        // Scheduling still queued here only STARTS extractions; drain it first
+        // so the extractor drain below covers every extraction it started.
+        // Anything left unscheduled stays group-watermark backlog.
+        step: 'drain observed group memory lane',
+        action: async () => {
+          const drained = await shutdownTargets.observedGroupMemory?.stop({ timeoutMs }) ?? true;
+          if (!drained) {
+            log.warn('Proceeding with shutdown before observed group memory lane drained', { timeoutMs });
+          }
+        },
       },
       {
         step: 'drain memory extractor',

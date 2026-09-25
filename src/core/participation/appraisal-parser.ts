@@ -24,11 +24,18 @@ import { isRecord } from '../../shared/utils/types.js';
  * the caller owns the fail-closed decision and its telemetry.
  */
 export function parseParticipationAppraisal(raw: string): ParticipationAppraisal | null {
-  const jsonObject = extractJsonObject(raw);
-  if (jsonObject === null) {
-    return null;
+  // 9z2z9: a reasoning model may think aloud (sometimes quoting the contract
+  // shape) before its answer. The verdict is the LAST complete object that
+  // satisfies the contract; earlier drafts and echoed shapes are skipped.
+  const candidates = extractJsonObjectCandidates(raw);
+  for (let index = candidates.length - 1; index >= 0; index -= 1) {
+    const appraisal = parseAppraisalObject(candidates[index]!);
+    if (appraisal) return appraisal;
   }
+  return null;
+}
 
+function parseAppraisalObject(jsonObject: string): ParticipationAppraisal | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(jsonObject);
@@ -60,39 +67,41 @@ export function parseParticipationAppraisal(raw: string): ParticipationAppraisal
 }
 
 /**
- * Pull the first balanced-looking JSON object out of a model response,
- * tolerating a ```json fence or leading/trailing prose the way the intention
- * appraiser's parser does. Returns `null` (never throws) when no object shape
- * is present.
+ * Collect every complete top-level JSON object in a model response, in order,
+ * tolerating a ```json fence or surrounding prose the way the intention
+ * appraiser's parser does. Braces inside JSON strings do not count. A
+ * truncated trailing object is not complete and is never returned. Returns an
+ * empty list (never throws) when no object shape is present.
  */
-function extractJsonObject(raw: string): string | null {
+function extractJsonObjectCandidates(raw: string): string[] {
   if (typeof raw !== 'string') {
-    return null;
+    return [];
   }
-  const trimmed = raw.trim();
-  if (trimmed.length === 0) {
-    return null;
-  }
-
-  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
-    return trimmed;
-  }
-
-  const fenced = /```(?:json)?\s*([\s\S]*?)```/iu.exec(trimmed);
-  if (fenced?.[1]) {
-    const body = fenced[1].trim();
-    if (body.startsWith('{') && body.endsWith('}')) {
-      return body;
+  const text = raw.trim();
+  const objects: string[] = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escaped = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') {
+      if (depth > 0) inString = true;
+    } else if (char === '{') {
+      if (depth === 0) start = index;
+      depth += 1;
+    } else if (char === '}' && depth > 0) {
+      depth -= 1;
+      if (depth === 0) objects.push(text.slice(start, index + 1));
     }
   }
-
-  const firstBrace = trimmed.indexOf('{');
-  const lastBrace = trimmed.lastIndexOf('}');
-  if (firstBrace >= 0 && lastBrace > firstBrace) {
-    return trimmed.slice(firstBrace, lastBrace + 1);
-  }
-
-  return null;
+  return objects;
 }
 
 function parseAction(value: unknown): ParticipationAction | null {

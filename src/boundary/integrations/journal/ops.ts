@@ -1,4 +1,11 @@
 import { mkdir } from 'node:fs/promises';
+import {
+  mergeJournalProvenance,
+  parseJournalNote,
+  renderJournalProvenanceHeader,
+  stripJournalProvenanceHeaders,
+  type JournalProvenance,
+} from './provenance.js';
 import { dirname, extname, normalize, relative, resolve, sep } from 'node:path';
 import {
   appendJournalNoteAtomically,
@@ -22,6 +29,7 @@ export interface JournalListResult {
 
 export interface JournalReadResult {
   path: string;
+  provenance: JournalProvenance;
   content: string;
   offsetBytes: number;
   nextOffsetBytes: number | null;
@@ -53,8 +61,10 @@ export interface JournalSearchResult {
 export interface JournalOperations {
   list(): Promise<JournalListResult>;
   read(path: string, options?: JournalReadOptions): Promise<JournalReadResult>;
-  write(path: string, content: string): Promise<JournalWriteResult>;
-  append(path: string, content: string): Promise<JournalWriteResult>;
+  /** The note's visibility provenance, or null when the note does not exist. */
+  readProvenance(path: string): Promise<JournalProvenance | null>;
+  write(path: string, content: string, provenance: JournalProvenance): Promise<JournalWriteResult>;
+  append(path: string, content: string, provenance: JournalProvenance): Promise<JournalWriteResult>;
   search(query: string, limit?: number): Promise<JournalSearchResult>;
 }
 
@@ -82,34 +92,66 @@ export class JournalOps implements JournalOperations {
 
   async read(path: string, options: JournalReadOptions = {}): Promise<JournalReadResult> {
     const resolved = this.resolveNotePath(path);
+    const provenance = await this.readProvenance(path);
+    if (!provenance) {
+      throw new Error(`Journal note not found: ${resolved.relativePath}`);
+    }
     const page = await readJournalPage(
       resolved.absolutePath,
       options.offsetBytes ?? 0,
     );
-    return { path: resolved.relativePath, ...page };
+    return { path: resolved.relativePath, provenance, ...page };
   }
 
-  async write(path: string, content: string): Promise<JournalWriteResult> {
+  async readProvenance(path: string): Promise<JournalProvenance | null> {
     const resolved = this.resolveNotePath(path);
-    const normalizedContent = requireContent(content);
+    let firstPage: Awaited<ReturnType<typeof readJournalPage>>;
+    try {
+      firstPage = await readJournalPage(resolved.absolutePath, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw error;
+    }
+    return parseJournalNote(firstPage.content).provenance;
+  }
+
+  async write(path: string, content: string, provenance: JournalProvenance): Promise<JournalWriteResult> {
+    const resolved = this.resolveNotePath(path);
+    const body = requireContent(stripJournalProvenanceHeaders(content));
     await mkdir(dirname(resolved.absolutePath), { recursive: true });
     return withJournalMutationLock(this.root, resolved.absolutePath, async (target) => {
       const created = await writeJournalNoteAtomically(
         target,
-        normalizedContent.endsWith('\n') ? normalizedContent : `${normalizedContent}\n`,
+        `${renderJournalProvenanceHeader(provenance)}\n${body.endsWith('\n') ? body : `${body}\n`}`,
       );
       return { path: resolved.relativePath, mode: 'write' as const, created };
     });
   }
 
-  async append(path: string, content: string): Promise<JournalWriteResult> {
+  async append(path: string, content: string, provenance: JournalProvenance): Promise<JournalWriteResult> {
     const resolved = this.resolveNotePath(path);
-    const normalizedContent = requireContent(content);
+    const addition = requireContent(stripJournalProvenanceHeaders(content));
     await mkdir(dirname(resolved.absolutePath), { recursive: true });
     return withJournalMutationLock(this.root, resolved.absolutePath, async (target) => {
-      const created = await appendJournalNoteAtomically(
+      if (!target.existingHandle) {
+        const created = await writeJournalNoteAtomically(
+          target,
+          `${renderJournalProvenanceHeader(provenance)}\n${addition}\n`,
+        );
+        return { path: resolved.relativePath, mode: 'append' as const, created };
+      }
+      const existing = parseJournalNote(await target.existingHandle.readFile('utf8'));
+      const merged = mergeJournalProvenance(existing.provenance, provenance);
+      if (existing.stamped && renderJournalProvenanceHeader(merged) === renderJournalProvenanceHeader(existing.provenance)) {
+        const created = await appendJournalNoteAtomically(target, addition);
+        return { path: resolved.relativePath, mode: 'append' as const, created };
+      }
+      // The note's provenance tightens (or is stamped for the first time):
+      // rewrite it with the merged header, never loosening an existing one.
+      const separator = existing.body.length === 0 || existing.body.endsWith('\n') ? '' : '\n';
+      const created = await writeJournalNoteAtomically(
         target,
-        normalizedContent,
+        `${renderJournalProvenanceHeader(merged)}\n${existing.body}${separator}${addition}\n`,
       );
       return { path: resolved.relativePath, mode: 'append' as const, created };
     });

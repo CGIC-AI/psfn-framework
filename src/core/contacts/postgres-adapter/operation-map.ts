@@ -100,7 +100,6 @@ export interface PostgresContactOperationContext extends ContactStorePort {
     lifecycleIntentId?: string,
     recoveryLeaseOwner?: string,
   ): Promise<boolean>;
-  transferChannelIdentity: ContactStorePort['transferChannelIdentity'];
   deleteContactDirect(
     id: string,
     lifecycleIntentId?: string,

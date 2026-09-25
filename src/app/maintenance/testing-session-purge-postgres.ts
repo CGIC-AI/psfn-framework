@@ -1,7 +1,6 @@
 import { createPostgresPool } from '../../persistence/postgres.js';
 import {
   assertPostgresTenantAccessProvisioned,
-  derivePostgresTenantRole,
   planPostgresTenantAccess,
 } from '../../persistence/postgres/tenancy.js';
 import {
@@ -19,8 +18,20 @@ export interface CreateTestingSessionPurgePostgresAdaptersOptions {
   databaseUrl: string;
   dependencies?: Partial<TestingSessionPurgePostgresDependencies>;
   multiCompanion: boolean;
+  /** companions.json postgresRole of the target companion; required in a fleet. */
+  postgresRole?: string;
   postgresSchema: string;
   sessionsDir: string;
+}
+
+export function requireFleetTenantRole(role: string | undefined, postgresSchema: string): string {
+  const configured = role?.trim();
+  if (!configured) {
+    throw new Error(
+      `Fleet maintenance for schema ${postgresSchema} requires the companion's companions.json postgresRole`,
+    );
+  }
+  return configured;
 }
 
 const defaultDependencies: TestingSessionPurgePostgresDependencies = {
@@ -42,8 +53,10 @@ export async function createTestingSessionPurgePostgresAdapters(
     ...defaultDependencies,
     ...options.dependencies,
   };
+  // A provisioned fleet only has the companions.json tenant roles, never a
+  // schema-derived name (psfn-framework-p9jea).
   const role = options.multiCompanion
-    ? derivePostgresTenantRole(options.postgresSchema)
+    ? requireFleetTenantRole(options.postgresRole, options.postgresSchema)
     : undefined;
 
   if (role) {

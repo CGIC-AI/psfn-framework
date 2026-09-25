@@ -6,7 +6,7 @@ import type {
 } from '../../shared/contracts/runtime.js';
 import type { LLMProviderPort } from '../agent/contracts.js';
 import { createDefaultParticipationAppraiserSettings } from '../../system/config/participation-config.js';
-import { ParticipationAppraiser } from './appraiser.js';
+import { isAppraiserSystemFailureReason, ParticipationAppraiser } from './appraiser.js';
 import type { ParticipationCandidate } from './types.js';
 
 const COMPANION_NAME = 'Persephone';
@@ -87,6 +87,59 @@ describe('ParticipationAppraiser', () => {
 
     expect(result.failClosed).toBe(false);
     expect(result.appraisal).toEqual({ action: 'reply', reasonCode: 'asked', confidence: 0.7 });
+  });
+
+  it('shows the operator-authored layers to the local appraisal, bounded (9iooo)', async () => {
+    const { provider, recorder } = recordingProvider(() =>
+      makeResponse('{"action":"reply","reasonCode":"test_engagement","confidence":0.8}'));
+    const briefing = 'You are a tester; engaging with sibling ICP requests is part of the testing.';
+    const appraiser = new ParticipationAppraiser({
+      llmProvider: provider,
+      companionName: COMPANION_NAME,
+      settings: { ...createDefaultParticipationAppraiserSettings(), operatorGuidanceMaxChars: 120 },
+      operatorGuidance: () => [
+        { name: 'shakedown tester briefing', content: briefing },
+        { name: 'long note', content: 'x'.repeat(500) },
+      ],
+    });
+
+    await appraiser.appraise(makeCandidate({ participationSurface: 'companion_dm' }));
+
+    const systemPrompt = recorder.contexts[0]!.systemPrompt;
+    expect(systemPrompt).toContain('OPERATOR GUIDANCE');
+    expect(systemPrompt).toContain(briefing);
+    expect(systemPrompt).not.toContain('x'.repeat(200));
+    // Guidance never displaces the hard rules or the output contract.
+    expect(systemPrompt.indexOf('HARD RULES')).toBeLessThan(systemPrompt.indexOf('OPERATOR GUIDANCE'));
+    expect(systemPrompt).toContain('Respond with exactly one JSON object');
+  });
+
+  it('adds no operator section when the companion has no operator layers', async () => {
+    const { provider, recorder } = recordingProvider(() =>
+      makeResponse('{"action":"ignore","reasonCode":"x","confidence":0.1}'));
+    const appraiser = new ParticipationAppraiser({
+      llmProvider: provider,
+      companionName: COMPANION_NAME,
+      operatorGuidance: () => [],
+    });
+
+    await appraiser.appraise(makeCandidate());
+
+    expect(recorder.contexts[0]!.systemPrompt).not.toContain('OPERATOR GUIDANCE');
+  });
+
+  it('runs the inbound ICP appraisal on the non-preemptable appraisal lane (se807)', async () => {
+    const { provider, recorder } = recordingProvider(() =>
+      makeResponse('{"action":"reply","reasonCode":"x","confidence":0.8}'));
+    const appraiser = new ParticipationAppraiser({ llmProvider: provider, companionName: COMPANION_NAME });
+
+    await appraiser.appraise(makeCandidate({ participationSurface: 'companion_dm' }));
+
+    // The same companion's post-turn appraisal shares this lane class and a
+    // lane never preempts its own class, so its bookkeeping cannot abort the
+    // gate that decides whether the sibling gets an answer.
+    const options = recorder.options[0] as { workSpec?: { lane?: string } };
+    expect(options.workSpec?.lane).toBe('post_turn_appraisal');
   });
 
   it('is tool-less and uses the background purpose', async () => {
@@ -180,6 +233,34 @@ describe('ParticipationAppraiser', () => {
     expect(result.failClosedReason).toBe('appraiser_error');
     // The failure reason must not echo the provider error text.
     expect(result.appraisal.reasonCode).toBe('appraiser_error');
+  });
+
+  it('reports a verdict cut off by the output budget as appraiser_truncated (9z2z9)', async () => {
+    const { provider } = recordingProvider(() => ({
+      ...makeResponse('{"action":"reply","reasonCode":"active_ex'),
+      stopReason: 'length',
+    }));
+    const appraiser = new ParticipationAppraiser({ llmProvider: provider, companionName: COMPANION_NAME });
+
+    const result = await appraiser.appraise(makeCandidate());
+
+    expect(result.appraisal.action).toBe('ignore');
+    expect(result.failClosed).toBe(true);
+    expect(result.failClosedReason).toBe('appraiser_truncated');
+    expect(isAppraiserSystemFailureReason(result.failClosedReason)).toBe(true);
+  });
+
+  it('does not trust an earlier draft verdict in an answer cut off by the output budget', async () => {
+    const { provider } = recordingProvider(() => ({
+      ...makeResponse('{"action":"ignore","reasonCode":"draft","confidence":0.2} final: {"action":"rep'),
+      stopReason: 'length',
+    }));
+    const appraiser = new ParticipationAppraiser({ llmProvider: provider, companionName: COMPANION_NAME });
+
+    const result = await appraiser.appraise(makeCandidate());
+
+    expect(result.failClosed).toBe(true);
+    expect(result.failClosedReason).toBe('appraiser_truncated');
   });
 
   it('fails closed to ignore on malformed model output', async () => {

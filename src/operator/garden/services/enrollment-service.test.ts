@@ -205,6 +205,32 @@ describe('AdminEnrollmentService', () => {
   });
 });
 
+describe('AdminEnrollmentService with the audited ADMIN_TOKEN operator (jxthv)', () => {
+  it('enrolls, lists and revokes any existing contact through the sole-admin door', async () => {
+    const service = buildService(['contact-1', 'contact-2']);
+    await service.enroll({ hubIdentityId: 'hub-2', canonicalContactId: 'contact-2' });
+    const adminToken = {
+      kind: 'fleet_principal',
+      actor: {
+        principalId: 'admin-token-operator',
+        provider: 'admin_token',
+        contactId: 'admin-token-contact-11111111-1111-4111-8111-111111111111',
+        role: 'owner',
+        sessionAssurance: 'break_glass',
+        accessMode: 'sole_admin',
+      },
+    } as unknown as GardenRequestContext;
+
+    await expect(service.enroll(adminToken, { hubIdentityId: 'hub-1', canonicalContactId: 'contact-1' }))
+      .resolves.toMatchObject({ canonicalContactId: 'contact-1', enrolledBy: 'fleet-principal:admin-token-operator' });
+    await expect(service.listEnrollments(adminToken)).resolves.toMatchObject({ total: 2 });
+    await expect(service.revoke(adminToken, 'hub-2')).resolves.toEqual({ revoked: true, hubIdentityId: 'hub-2' });
+    // The contact must still exist: the operator door never auto-creates one.
+    await expect(service.enroll(adminToken, { hubIdentityId: 'hub-x', canonicalContactId: 'contact-ghost' }))
+      .rejects.toThrow(/does not exist/);
+  });
+});
+
 describe('buildAdminEnrollmentRoutes', () => {
   it('POST enrolls and GET lists', async () => {
     const routes = buildAdminEnrollmentRoutes({ enrollmentService: buildService(), withBody });

@@ -358,6 +358,36 @@ describe('postgres companion-internal memory writes (h4bq1)', () => {
         .toBe((await restarted.getMemorySubjectClassification('legacy-internal-note'))?.memoryRevision);
     });
   }, INTEGRATION_TIMEOUT_MS);
+
+  it('backfills pre-provenance scratchpad rows as unknown and round-trips recorded provenance (yy0r2)', async () => {
+    await withMemoryDatabase(async (pool) => {
+      const first = await createPostgresMemoryStoreFromPool(pool, 4);
+      await first.addScratchpadEntry('conversation note', {
+        id: 'sp-conversation', provenance: { scope: 'conversation', channelId: 'api:room-a' },
+      });
+      await first.addScratchpadEntry('global note', { id: 'sp-global', provenance: { scope: 'companion_global' } });
+      // A row as written before the provenance columns existed.
+      await pool.query('ALTER TABLE scratchpad_entries DROP CONSTRAINT scratchpad_entries_source_check');
+      await pool.query('ALTER TABLE scratchpad_entries ALTER COLUMN source_scope DROP NOT NULL');
+      await pool.query(
+        'INSERT INTO scratchpad_entries (id, content, created_at, updated_at, source_scope, source_channel_id) VALUES ($1,$2,$3,$3,NULL,NULL)',
+        ['sp-legacy', 'legacy note', Date.now()],
+      );
+
+      const restarted = await createPostgresMemoryStoreFromPool(pool, 4);
+      const byId = new Map(restarted.listScratchpadEntries(64).map(entry => [entry.id, entry.provenance]));
+      expect(byId.get('sp-conversation')).toEqual({ scope: 'conversation', channelId: 'api:room-a' });
+      expect(byId.get('sp-global')).toEqual({ scope: 'companion_global' });
+      expect(byId.get('sp-legacy')).toEqual({ scope: 'unknown' });
+
+      await expect(pool.query(
+        "INSERT INTO scratchpad_entries (id, content, created_at, updated_at, source_scope, source_channel_id) VALUES ('bad','x',1,1,'conversation',NULL)",
+      )).rejects.toThrow(/scratchpad_entries_source_check/u);
+      await expect(pool.query(
+        "INSERT INTO scratchpad_entries (id, content, created_at, updated_at) VALUES ('bad2','x',1,1)",
+      )).rejects.toThrow(/source_scope/u);
+    });
+  }, INTEGRATION_TIMEOUT_MS);
 });
 
 describe('postgres memory store integration', () => {

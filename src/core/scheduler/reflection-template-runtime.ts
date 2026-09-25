@@ -1481,6 +1481,32 @@ export function createReflectionTemplateRuntime(
       if (!isBusyTurnError(error)) {
         throw error;
       }
+      // tpkqi: a preempted or busy scheduled reflection is deferred through
+      // the durable action queue when one is wired, so a restart does not
+      // lose it; the in-process one-shot remains only for rigs without it.
+      if (runtimeOptions.postTurnActions) {
+        const candidate = buildDeferredReflectionAction(template);
+        const dedupeKey = candidate.dedupeKey ?? `${candidate.kind}:${template.id}`;
+        const inferredAt = Date.now();
+        const result = runtimeOptions.postTurnActions.enqueue({
+          id: `${dedupeKey}:${String(inferredAt)}`,
+          kind: candidate.kind,
+          payload: candidate.payload ?? {},
+          dedupeKey,
+          channelId: 'internal:scheduler',
+          sourceMessageId: `reflection:${template.id}:${String(inferredAt)}`,
+          inferredAt,
+          ...(candidate.maxRetries !== undefined ? { maxRetries: candidate.maxRetries } : {}),
+        });
+        if (result === 'dropped_budget') {
+          throw new Error(`Deferred reflection "${template.id}" could not be queued durably`, { cause: error });
+        }
+        log.info('Deferred scheduled reflection template execution through the durable queue', {
+          templateId: template.id,
+          enqueue: result,
+        });
+        return;
+      }
       const deferred = queueDeferredTemplateRun(template.id, { requestedSource: 'scheduled' });
       log.info('Deferred scheduled reflection template execution', {
         templateId: template.id,

@@ -26,7 +26,11 @@ import { createServer, type Server } from 'node:http';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, vi } from 'vitest';
+import { viewerContextIt } from '../../test-support/viewer-context-it.js';
+
+// Shards are spawned from an owner turn, as the runtime spawns them (mzytp).
+const it = viewerContextIt();
 import { GatewayServer, type GatewayServerOptions } from './server.js';
 import { GatewayErrors } from './protocol.js';
 import type { GatewayRpcConnection } from './transport.js';

@@ -2,6 +2,10 @@ import { isRecord } from '../../shared/utils/types.js';
 import { normalizeJsonRecordForSerialization } from '../../shared/utils/json-serialization.js';
 import type { CredentialVaultPort } from '../../boundary/custody/credential-vault.js';
 import type { DnsResolver } from '../../boundary/gateway/url-policy.js';
+import type {
+  CanonicalModelRegistry,
+  CanonicalProviderRegistry,
+} from '../../shared/contracts/runtime-base.js';
 import { IMAGE_MODEL_CATALOG } from './model-catalog.js';
 
 export const FAL_CREATE_MODELS = IMAGE_MODEL_CATALOG.createModels;
@@ -28,7 +32,7 @@ export const IMAGE_ASPECT_RATIO_VALUES = [
   '1:8',
 ] as const;
 
-export const IMAGE_PROVIDER_VALUES = ['fal', 'comfyui', 'comfyui_mcp'] as const;
+export const IMAGE_PROVIDER_VALUES = ['fal', 'comfyui', 'comfyui_mcp', 'openrouter'] as const;
 export const IMAGE_PROVIDER_PREFERENCE_VALUES = ['auto', ...IMAGE_PROVIDER_VALUES] as const;
 
 export type FalCreateModel = typeof FAL_CREATE_MODELS[number];
@@ -101,6 +105,10 @@ export interface ImageWorkflowSettings {
 
 export interface ImageRuntimeConfig {
   credentialVault?: CredentialVaultPort;
+  /** models.json: `imageModels` names the OpenRouter image models (s5b89). */
+  modelRegistry?: Pick<CanonicalModelRegistry, 'imageModels'>;
+  /** providers.json: owns the image provider endpoint and credential reference. */
+  providerRegistry?: CanonicalProviderRegistry;
   falApiKey?: string;
   comfyUiBaseUrl?: string;
   imageProvider?: ImageProvider;
@@ -154,6 +162,8 @@ export interface ImageGenerationResult {
   fallbackReason?: string;
   requestId?: string;
   images: ImageResultAsset[];
+  /** Provider-reported cost of this generation, when the provider exposes it (6da92). */
+  providerCostUsd?: number;
 }
 
 export interface MediaToolResultDetails {

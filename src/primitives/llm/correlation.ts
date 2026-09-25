@@ -42,6 +42,7 @@ export function inferCallType(
     case 'summary':
       return 'summary';
     case 'context':
+    case 'decision':
     case 'background':
     case 'import_processing':
     case 'vision':
@@ -64,7 +65,12 @@ export function resolveCorrelationMetadata(
 
   const companionPrivate = merged.telemetryVisibility === 'companion_private';
   if (companionPrivate) {
+    // Source identifiers (turn, request, channel, tool) are dropped; the owning
+    // companion is not source content and must survive, or a fleet budget gate
+    // cannot attribute the call and refuses it (ygx6f).
+    const privateCompanionId = normalizeCorrelationValue(merged.companionId);
     return {
+      ...(privateCompanionId ? { companionId: privateCompanionId } : {}),
       requestId: 'companion-private',
       callType: 'background',
       purpose: COMPANION_PRIVATE_BACKGROUND_PURPOSE,

@@ -77,6 +77,7 @@ const COMPANIONS_ROOT_KEYS = ['postgres', 'companions'] as const;
 const POSTGRES_TOPOLOGY_KEYS = [
   'sharedMigrationRole',
   'sharedMigrationDatabaseUrlRef',
+  'gatewayAuditReaderRole',
 ] as const;
 const CREDENTIAL_REFERENCE_KEYS = ['kind', 'envName'] as const;
 
@@ -85,6 +86,15 @@ export interface CompanionFleetPostgresConfig {
   sharedMigrationRole: string;
   /** Gateway-only credential reference for shared DDL. */
   sharedMigrationDatabaseUrlRef: CredentialReference;
+  /**
+   * Optional least-privilege read-only role for audit/test tooling
+   * (psfn-framework-jqg13). When declared, gateway startup grants it exactly
+   * USAGE on the gateway (primary) schema and SELECT on the gateway-owned
+   * audit tables there, and the exact-grantee proof admits it on that schema
+   * only. The gateway never connects as this role; its credential stays with
+   * the operator's tooling.
+   */
+  gatewayAuditReaderRole?: string;
 }
 
 export interface CompanionFleetEntry {
@@ -255,6 +265,14 @@ function validatePostgresTopology(raw: unknown): CompanionFleetPostgresConfig {
       raw.sharedMigrationDatabaseUrlRef,
       'postgres.sharedMigrationDatabaseUrlRef',
     ),
+    ...(raw.gatewayAuditReaderRole === undefined
+      ? {}
+      : {
+          gatewayAuditReaderRole: requirePostgresRole(
+            raw.gatewayAuditReaderRole,
+            'postgres.gatewayAuditReaderRole',
+          ),
+        }),
   };
 }
 
@@ -587,6 +605,16 @@ export function validateCompanionsConfig(raw: unknown, sourcePath: string): Comp
   if (companions.some(entry => entry.postgresRole === postgres.sharedMigrationRole)) {
     throw new Error(
       `${COMPANIONS_ERROR_PREFIX}: shared migration role must be distinct from every companion role`,
+    );
+  }
+  const auditReader = postgres.gatewayAuditReaderRole;
+  if (auditReader !== undefined && (
+    auditReader === postgres.sharedMigrationRole
+    || companions.some(entry => entry.postgresRole === auditReader)
+  )) {
+    throw new Error(
+      `${COMPANIONS_ERROR_PREFIX}: postgres.gatewayAuditReaderRole must be distinct from the shared `
+      + 'migration role and every companion role',
     );
   }
   if (companions.some(entry => (

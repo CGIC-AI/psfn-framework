@@ -1,3 +1,5 @@
+import { isAppraiserSystemFailureReason } from '../../core/participation/appraiser.js';
+import type { IcpActivityEndReasonCode } from '../../shared/contracts/icp-autonomy.js';
 import type { AgentResponse, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
@@ -20,8 +22,7 @@ interface CompanionReplyDeliveryGatewayPort {
   ): Promise<{ messageId: string; deliveredTo: string[] }>;
   companionEndIcpEpisodeActivity(input: {
     conversationId: string;
-    reasonCode: 'fatigue_exhausted' | 'charge_pressure' | 'cost_hard_stop'
-      | 'inactivity_timeout' | 'conversation_ended';
+    reasonCode: IcpActivityEndReasonCode;
   }): Promise<unknown>;
 }
 
@@ -95,14 +96,21 @@ export function createCompanionReplyDeliveryLifecycle(input: {
           };
           await input.agent.recordIcpDeliveryObservation(deliveryObservation);
         }
-        const terminalReason = response.metadata.noReply
-          ? 'conversation_ended'
+        const noReply = response.metadata.noReply;
+        // 0eq2x: a fail-closed appraisal (timeout, model error, unparseable
+        // output) is a system failure, not the companion declining the peer:
+        // close with a reason the pressure projection does not count.
+        const terminalReason = noReply
+          ? (noReply.source === 'participation_appraiser' && isAppraiserSystemFailureReason(noReply.reason)
+            ? 'peer_appraisal_unavailable'
+            : 'conversation_ended')
           : correlation.fatigueReasonCode;
         if (terminalReason === 'fatigue_exhausted'
           || terminalReason === 'charge_pressure'
           || terminalReason === 'cost_hard_stop'
           || terminalReason === 'inactivity_timeout'
-          || terminalReason === 'conversation_ended') {
+          || terminalReason === 'conversation_ended'
+          || terminalReason === 'peer_appraisal_unavailable') {
           await input.gateway.companionEndIcpEpisodeActivity({
             conversationId: correlation.conversationId,
             reasonCode: terminalReason,

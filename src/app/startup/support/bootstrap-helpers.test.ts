@@ -12,6 +12,7 @@ import {
   createDefaultObserverEvalSidecarLeverSettings,
   createDefaultObserverEvalSidecarSettings,
   type SubstrateConfig,
+  sanitizeCoreSubstrateConfig,
 } from '../../../system/config/runtime-config-contracts.js';
 import {
   createEligibilityGate,
@@ -1053,6 +1054,27 @@ describe('installPromotedToolsPersistenceHook', () => {
         promotedExtendedTools: ['memory_recall'],
       },
     });
+  });
+
+  it('reaches the agent runtime\'s sanitized config copy taken before the gateway writer (97epu)', async () => {
+    const saveRuntimeSettings = vi.fn();
+    const configStore = {
+      loadRuntimeSettings: () => ({ promotedExtendedTools: [] }),
+      saveRuntimeSettings,
+    } as unknown as ConfigStorePort;
+    const config = fromPartial<SubstrateConfig>({ dataDir: '/runtime/system-data' });
+    // Startup hydration installs the file-backed hook first ...
+    installPromotedToolsPersistenceHook(config, { configStore });
+    // ... then the agent runtime is built from a sanitized shallow copy ...
+    const coreConfig = sanitizeCoreSubstrateConfig(config);
+    // ... and only afterwards is the gateway writer installed.
+    const writeSystemData = vi.fn(async () => ({ ok: true as const }));
+    installPromotedToolsPersistenceHook(config, { configStore, systemDataWriter: { writeSystemData } });
+
+    await coreConfig.runtimeHooks!.persistPromotedExtendedTools!(['north_star']);
+
+    expect(saveRuntimeSettings).not.toHaveBeenCalled();
+    expect(writeSystemData).toHaveBeenCalledWith(expect.objectContaining({ kind: 'owner_file', ownerFile: 'settings' }));
   });
 
   it('surfaces an actionable error when gateway tool-pin persistence is unavailable', async () => {

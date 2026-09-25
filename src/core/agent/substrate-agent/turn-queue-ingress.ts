@@ -30,6 +30,8 @@ export class TurnQueueIngressCoordinator {
   private activePiQueueOwner: TurnRunOwnerAttribution | null = null;
   private readonly pendingOrdinaryInternalFollowUps: Array<{
     message: AgentMessage;
+    /** The conversation the whisper belongs to; it is delivered only there. */
+    channelId: string;
     enqueued: boolean;
   }> = [];
   private freshOrdinaryIngressTail: Promise<void> = Promise.resolve();
@@ -60,13 +62,18 @@ export class TurnQueueIngressCoordinator {
       && this.activePiQueueOwner.kind !== 'candidate-turn';
   }
 
-  deferInternalFollowUp(message: AgentMessage): void {
-    this.pendingOrdinaryInternalFollowUps.push({ message, enqueued: false });
+  /**
+   * Hold a private whisper for the next ordinary run of its own conversation
+   * (psfn-framework-o5wf5): a note formed in one room never reaches a run
+   * serving another.
+   */
+  deferInternalFollowUp(message: AgentMessage, channelId: string): void {
+    this.pendingOrdinaryInternalFollowUps.push({ message, channelId, enqueued: false });
   }
 
-  enqueuePendingInternalFollowUpsForOrdinaryRun(): void {
+  enqueuePendingInternalFollowUpsForOrdinaryRun(channelId: string): void {
     for (const pending of this.pendingOrdinaryInternalFollowUps) {
-      if (pending.enqueued) continue;
+      if (pending.enqueued || pending.channelId !== channelId) continue;
       pending.enqueued = true;
       this.options.agent.followUp(pending.message);
     }
@@ -96,7 +103,7 @@ export class TurnQueueIngressCoordinator {
           // Coordinator-created fresh ordinary turns must flush deferred internal
           // whispers too; otherwise a fresh-turn-only sequence (idle steer/followUp)
           // never delivers a whisper that public handleMessage would have flushed.
-          this.enqueuePendingInternalFollowUpsForOrdinaryRun();
+          this.enqueuePendingInternalFollowUpsForOrdinaryRun(message.channelId);
           await this.options.runFreshOrdinary(message);
         } finally {
           settle();

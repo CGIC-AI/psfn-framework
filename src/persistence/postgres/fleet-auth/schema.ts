@@ -2,18 +2,18 @@ import { createHash } from 'node:crypto';
 import type { Pool } from 'pg';
 import { createPostgresPool } from '../../postgres.js';
 import { FLEET_AUTH_MIGRATIONS } from './migrations.js';
-import {
-  FLEET_AUTH_REAPPROVAL_DDL_SQL,
-  FLEET_AUTH_REAPPROVE_FUNCTION_ARG_TYPES,
-  FLEET_AUTH_REAPPROVE_FUNCTION_NAME,
-} from './reapproval-sql.js';
+import { FLEET_AUTH_RESTORE_QUARANTINE_GUARD_DDL_SQL } from './restore-quarantine-guard-sql.js';
 import { assertPostgresRolesAreLeastPrivilege } from '../role-posture.js';
 import { assertPostgresRuntimeDdlAllowed } from '../runtime-readiness.js';
 import {
-  FLEET_AUTH_COMPANION_REAPPROVAL_DDL_SQL,
-  FLEET_AUTH_REAPPROVE_COMPANION_FUNCTION_ARG_TYPES,
-  FLEET_AUTH_REAPPROVE_COMPANION_FUNCTION_NAME,
-} from './companion-reapproval-sql.js';
+  FLEET_AUTH_OPERATOR_ACCOUNT_AUTHORITY_DDL_SQL,
+  FLEET_AUTH_OPERATOR_REINSTATE_COMPANION_FUNCTION_ARG_TYPES,
+  FLEET_AUTH_OPERATOR_REINSTATE_COMPANION_FUNCTION_NAME,
+  FLEET_AUTH_OPERATOR_REINSTATE_PRINCIPAL_FUNCTION_ARG_TYPES,
+  FLEET_AUTH_OPERATOR_REINSTATE_PRINCIPAL_FUNCTION_NAME,
+  FLEET_AUTH_OPERATOR_SET_PRINCIPAL_STATUS_FUNCTION_ARG_TYPES,
+  FLEET_AUTH_OPERATOR_SET_PRINCIPAL_STATUS_FUNCTION_NAME,
+} from './operator-account-authority-sql.js';
 import {
   FLEET_AUTH_FIRST_OWNER_DDL_SQL,
   FLEET_AUTH_FIRST_OWNER_FUNCTION_ARG_TYPES,
@@ -310,8 +310,8 @@ async function applyRoleGrants(
   // The restorable database copy of the non-restored authority floor is
   // observable by the broker, never directly mutable by its ordinary SQL
   // credential. Startup/restore reconciliation uses the coordinator role;
-  // trusted-host reapproval changes the epoch only inside the constrained
-  // SECURITY DEFINER procedure.
+  // audited operator account procedures change the epoch only inside their
+  // constrained SECURITY DEFINER bodies.
   await client.query(
     `GRANT SELECT ON ${[
       qualifiedTable('authority_state'),
@@ -319,13 +319,8 @@ async function applyRoleGrants(
     ].join(', ')} TO ${runtime}`,
   );
   // The runtime broker may invalidate pending trusted-host ceremonies during
-  // reconciliation (DELETE) and observe them (SELECT), but it must never author
-  // or tamper with one: the ceremony is the reapproval procedure's only external
-  // gate, so a runtime able to INSERT/UPDATE a ceremony could self-mint a fully
-  // sanctioned reapproval. Ceremony minting belongs to the schema owner
-  // (migration / SECURITY DEFINER) or a future distinct trusted-host credential.
-  // The reapproval procedure consumes the row as the schema owner, so revoking
-  // the caller's INSERT/UPDATE does not affect it.
+  // reconciliation (DELETE) and observe them (SELECT), but it never authors or
+  // tampers with one. Ceremony minting belongs to the schema owner.
   await client.query(
     `REVOKE INSERT, UPDATE ON ${qualifiedTable('trusted_host_ceremonies')} FROM ${runtime}`,
   );
@@ -362,17 +357,19 @@ async function applyRoleGrants(
     `GRANT SELECT, INSERT ON ${FLEET_AUTH_IMMUTABLE_TABLES.map(qualifiedTable).join(', ')} TO ${backup}`,
   );
   await client.query(`REVOKE ALL ON ${qualifiedTable('schema_migrations')} FROM ${runtime}, ${backup}`);
-  // The broker runtime alone may invoke the constrained reapproval procedure.
-  // Its SECURITY DEFINER body — not this EXECUTE grant — is what actually
-  // reactivates quarantined authority; the runtime's ordinary UPDATE is fenced
-  // by restore_quarantine_activation_guard. The backup/restore coordinator
-  // never reapproves, so it receives no EXECUTE.
-  await client.query(
-    `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_REAPPROVE_FUNCTION_NAME}(${FLEET_AUTH_REAPPROVE_FUNCTION_ARG_TYPES}) TO ${runtime}`,
-  );
-  await client.query(
-    `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_REAPPROVE_COMPANION_FUNCTION_NAME}(${FLEET_AUTH_REAPPROVE_COMPANION_FUNCTION_ARG_TYPES}) TO ${runtime}`,
-  );
+  // The broker runtime alone may invoke the audited ADMIN_TOKEN operator
+  // account procedures. Their SECURITY DEFINER bodies, not these EXECUTE
+  // grants, are what reinstate or re-state accounts, and each one requires the
+  // exact gateway-written admin_token_operator approval row; the runtime's
+  // ordinary UPDATE stays fenced by restore_quarantine_activation_guard. The
+  // backup/restore coordinator never reinstates, so it receives no EXECUTE.
+  for (const [name, argTypes] of [
+    [FLEET_AUTH_OPERATOR_REINSTATE_PRINCIPAL_FUNCTION_NAME, FLEET_AUTH_OPERATOR_REINSTATE_PRINCIPAL_FUNCTION_ARG_TYPES],
+    [FLEET_AUTH_OPERATOR_REINSTATE_COMPANION_FUNCTION_NAME, FLEET_AUTH_OPERATOR_REINSTATE_COMPANION_FUNCTION_ARG_TYPES],
+    [FLEET_AUTH_OPERATOR_SET_PRINCIPAL_STATUS_FUNCTION_NAME, FLEET_AUTH_OPERATOR_SET_PRINCIPAL_STATUS_FUNCTION_ARG_TYPES],
+  ] as const) {
+    await client.query(`GRANT EXECUTE ON FUNCTION ${name}(${argTypes}) TO ${runtime}`);
+  }
   await client.query(
     `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_FIRST_OWNER_FUNCTION_NAME}(${FLEET_AUTH_FIRST_OWNER_FUNCTION_ARG_TYPES}) TO ${runtime}`,
   );
@@ -424,17 +421,17 @@ async function applyRoleGrants(
 }
 
 /**
- * Idempotently (re)assert the trusted-host reapproval boundary: the
- * quarantine-activation guard triggers and the SECURITY DEFINER reapproval
- * procedure. Applied on every migration run, like applyRoleGrants, so the
+ * Idempotently (re)assert the restore-quarantine boundary: the
+ * quarantine-activation guard triggers, the audited operator account
+ * procedures and the other bounded procedures. Applied on every migration run, like applyRoleGrants, so the
  * boundary can never drift or be left half-applied. Requires the transaction's
  * search_path to already include fleet_auth (set by migrateFleetAuthSchema).
  */
-async function applyFleetAuthReapprovalBoundary(
+async function applyFleetAuthBoundedProcedures(
   client: import('pg').PoolClient,
 ): Promise<void> {
-  await client.query(FLEET_AUTH_REAPPROVAL_DDL_SQL);
-  await client.query(FLEET_AUTH_COMPANION_REAPPROVAL_DDL_SQL);
+  await client.query(FLEET_AUTH_RESTORE_QUARANTINE_GUARD_DDL_SQL);
+  await client.query(FLEET_AUTH_OPERATOR_ACCOUNT_AUTHORITY_DDL_SQL);
   await client.query(FLEET_AUTH_FIRST_OWNER_DDL_SQL);
   await client.query(FLEET_AUTH_REGISTER_ROSTERED_FIRST_OWNER_COMPANIONS_DDL_SQL);
   await client.query(FLEET_AUTH_LOCK_AUTHORITY_STATE_DDL_SQL);
@@ -514,7 +511,7 @@ export async function migrateFleetAuthSchema(options: {
           [migration.version, migration.name, checksum],
         );
       }
-      await applyFleetAuthReapprovalBoundary(client);
+      await applyFleetAuthBoundedProcedures(client);
       await applyRoleGrants(client, options.roles);
       await client.query('COMMIT');
     } catch (error) {
@@ -638,7 +635,7 @@ async function assertExactDml(
       }
       // The runtime broker cannot author or tamper with trusted-host ceremonies;
       // it may only SELECT/DELETE them. The backup/restore coordinator retains
-      // full DML on every mutable table and never receives reapproval EXECUTE.
+      // full DML on every mutable table and never receives operator reinstatement EXECUTE.
       if (expectedRole === roles.runtime && tableName === 'trusted_host_ceremonies') {
         return new Set(['SELECT', 'DELETE']);
       }

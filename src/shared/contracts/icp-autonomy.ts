@@ -102,7 +102,18 @@ export const ICP_AUTONOMY_REASON_CODES = [
   'peer_resting',
   'peer_do_not_disturb',
   'quiet_hours',
+  // The companion_social run-charge quota cannot afford another initiation.
   'charge_pressure',
+  // Recent relationship pressure with this peer (declines, deferrals,
+  // unanswered initiations, charged turns) is at the social soft target. A
+  // system failure on the peer's side never counts toward it.
+  'relationship_pressure',
+  // 0eq2x: the peer's participation appraisal failed as a system (timeout,
+  // model error, unparseable output) — not a social decline, never pressure.
+  'peer_appraisal_unavailable',
+  // q2kao: the recipient approved a reply but stayed busy past the bounded
+  // wait, so the reply never started. A system condition, never pressure.
+  'recipient_busy_timeout',
   'fatigue_exhausted',
   'cost_hard_stop',
   'peer_blocked',
@@ -141,6 +152,29 @@ export const ICP_AUTONOMY_REASON_CODES = [
   'dyad_blocked',
   'dyad_stale_revision',
 ] as const;
+
+/** Reasons an ICP conversation's activity may end with (companion.episode.end_activity). */
+export const ICP_ACTIVITY_END_REASON_CODES = [
+  'fatigue_exhausted',
+  'charge_pressure',
+  'cost_hard_stop',
+  'inactivity_timeout',
+  'conversation_ended',
+  'peer_appraisal_unavailable',
+  'recipient_busy_timeout',
+] as const satisfies readonly (typeof ICP_AUTONOMY_REASON_CODES)[number][];
+
+export type IcpActivityEndReasonCode = typeof ICP_ACTIVITY_END_REASON_CODES[number];
+
+/**
+ * Activity-end reasons that record a system failure on the peer's side rather
+ * than a social outcome. Conversations closed for these reasons never count
+ * toward relationship pressure.
+ */
+export const ICP_SYSTEM_FAILURE_END_REASON_CODES = [
+  'peer_appraisal_unavailable',
+  'recipient_busy_timeout',
+] as const satisfies readonly IcpActivityEndReasonCode[];
 export type IcpAutonomyReasonCode = typeof ICP_AUTONOMY_REASON_CODES[number];
 
 export function icpDyadStatusReasonCode(status: IcpDyadStatus): Extract<

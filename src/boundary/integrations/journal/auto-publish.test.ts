@@ -47,6 +47,8 @@ describe('JournalAutoPublisher', () => {
     expect(ops.write).toHaveBeenCalledWith(
       'reflections/daily/2026-03-02-23h30-daily-review.md',
       expect.stringContaining('date: 2026-03-02T23:30:00.000-05:00'),
+      // Reflections synthesize across conversations: restricted (75oi4).
+      { scope: 'restricted' },
     );
   });
 

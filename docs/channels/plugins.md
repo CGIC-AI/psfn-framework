@@ -2,7 +2,7 @@
 type: concept
 title: Channel Plugins
 description: The channel plugin contract — how channel adapters are declared, validated, credential-resolved, eligibility-gated, and attached to the gateway backplane via the ChannelPluginHost, the manifest-driven adapter loader, and the channels.json plugin sections.
-tags: [channel-plugins, channel-adapters, backplane, plugin-host, plugin-registry, eligibility, channels-json, credential-vault, multica, fail-closed]
+tags: [channel-plugins, channel-adapters, backplane, plugin-host, plugin-registry, eligibility, channels-json, credential-vault, fail-closed]
 verified:
   - by: openwiki/0.4.3
     at: 2026-08-28T13:30:04.287Z
@@ -23,12 +23,6 @@ sources:
     resource: repo://src/channels/backplane/registry-port.ts
   - id: openwiki-source-37a1709217ee148534fa7cd2
     resource: repo://src/channels/backplane/types.ts
-  - id: openwiki-source-65a3763570bdb7aaa77f367c
-    resource: repo://src/channels/multica/adapter.ts
-  - id: openwiki-source-35893e4dd91a17311329af46
-    resource: repo://src/channels/multica/origin.ts
-  - id: openwiki-source-e8fe16e192c6f79f6927a072
-    resource: repo://src/channels/multica/plugin.ts
   - id: openwiki-source-1f32e7474fe1c6a42875d023
     resource: repo://src/channels/plugins/builtin.ts
   - id: openwiki-source-ec8bd9f3110235aeef8a0aaa
@@ -72,8 +66,7 @@ neither a manifest adapter entry nor a plugin in the gateway composition.
 The authority for this page is `src/channels/plugins/*` and
 `src/channels/backplane/*` together with the gateway composition in
 `src/boundary/gateway/channel-surfaces.ts` and the startup order in
-`src/app/gateway/main.ts`. See [multica.md](multica.md) for the one built-in
-plugin end to end, [overview.md](overview.md) for the channels subsystem, and
+`src/app/gateway/main.ts`. See [overview.md](overview.md) for the channels subsystem, and
 <!-- openwiki: broken internal link [../chat-turn-lifecycle.md] file "../chat-turn-lifecycle.md" does not exist. Fix the href or restore the target, then delete this comment. -->
 [chat-turn-lifecycle.md](../chat-turn-lifecycle.md) for what happens to an
 inbound message after an adapter delivers it.
@@ -140,7 +133,7 @@ rejected fail-closed instead of persisted.
 plugin-declared adapters. It is constructed via `ChannelPluginHost.load` and
 then driven by the gateway through explicit phases. The gateway's actual call
 order is **load → wireMessages → initialize → start → stop**: `wireMessages`
-runs before `initialize`/`start` because adapters such as Multica refuse to
+runs before `initialize`/`start` because a plugin adapter may refuse to
 start without the inbound message handler and operator-alert handler that
 wiring installs.
 
@@ -329,20 +322,161 @@ same `requestAgentVoiceStream` and `notifyOperator` entry points.
 
 ## Builtin plugins
 
-`createBuiltinChannelPlugins` returns exactly one plugin today: Multica
-(`src/channels/multica/plugin.ts`), the gateway-to-Multica work-item channel
-(see [multica.md](multica.md) for the adapter end to end). Its `parseConfig` is
-the reference example of the fail-closed section contract: an inline `token`
-field is rejected in favor of `tokenRef`; unknown keys throw; `workspaceId`
-must be a lowercase RFC-4122 UUID; `baseUrl` must be HTTPS unless loopback and
-free of credentials, path, query, or fragment; `pollIntervalMs` must sit in
-`[250, 60_000]`; and an `enabled: true` section must configure `baseUrl`,
-`workspaceId`, `companionId`, `tokenRef`, and `pollIntervalMs`. The declared
-credential need is id `token` with description `Multica gateway token`.
-`create` fails when an enabled plugin has no companion or no resolved token,
-and when the plugin needs its own runtime ownership it derives a Postgres
-runtime lease from `context.postgresDatabaseUrl` — falling back fail-closed if
-the gateway did not supply one.
+`createBuiltinChannelPlugins` registers one plugin: the generic external
+channel adapter (`external`, below). The Buzz and Multica plugins were removed
+(psfn-framework-lef2o); `channels.json` keys `buzz` or `multica` fail startup
+with a pointer to the `migrate-required-settings-blocks` owner-file migration
+that strips them.
+
+## External channel adapters
+
+New messaging systems (SMS, WhatsApp, iMessage, ...) are not added as in-tree
+channel code. Each one is an out-of-process **bridge** that connects to the
+gateway over a small, versioned MCP protocol, in the same way Hermes connects for
+companion memory. The gateway is the MCP server and the bridge is the client.
+The gateway never dials a bridge or waits on one. Adding a channel needs only a
+bridge and one `channels.json` entry. Source: `src/channels/external/*`.
+
+### Configuration
+
+```json
+"external": {
+  "enabled": true,
+  "limits": {
+    "maxRequestBytes": 65536, "requestReadTimeoutMs": 5000,
+    "maxTextChars": 8000, "maxIdChars": 256,
+    "maxInFlightTurns": 4, "turnTimeoutMs": 120000,
+    "outboundQueueMax": 100, "outboundPullMax": 20,
+    "heartbeatTimeoutMs": 120000, "failureReportIntervalMs": 60000
+  },
+  "adapters": [{
+    "id": "sms", "label": "SMS gateway",
+    "companionId": "<companion uuid>",
+    "tokenRef": { "kind": "env", "envName": "EXTERNAL_CHANNEL_SMS_TOKEN" }
+  }]
+}
+```
+
+The configuration follows these rules:
+
+- Every limit is required owner-file data. The runtime has no defaults for them.
+  The example values are illustrations.
+- The bearer token is env-owned. It must be unique across adapters and must not
+  be reused from `API_KEY`, `ADMIN_TOKEN`, the testing harness, satellite keys,
+  trusted-proxy tokens or external-memory bindings.
+- Each adapter is bound to exactly one companion.
+- The whole section is validated even when it is disabled. Unknown keys, inline
+  secrets, duplicate ids and shared token env names are rejected.
+- Adapters are served by the gateway API server, so `API_PORT` must be set. If it
+  is not set, the adapters are disabled and the other channels keep running.
+
+### Protocol (version 1)
+
+Each adapter is served at `POST /v1/channels/external/<id>/mcp` as stateless
+streamable-HTTP MCP. The request sends `Authorization: Bearer <token>` and has
+no `Origin` or `Mcp-Session-Id` header. Unknown adapters and bad credentials
+both get `401`. Each tool input carries `protocolVersion: 1`, and any other
+version is refused. Identity comes only from the endpoint and its token, never
+from tool arguments.
+
+| Tool | Input | Result |
+| --- | --- | --- |
+| `channel_hello` | `bridge: {name, version}` | `protocolVersion`, `instanceId`, capabilities, advertised limits |
+| `channel_inbound` | `message: {id, conversationId, conversationKind: direct\|group, senderId, senderName, text, sentAt?, replyToMessageId?, addressedToCompanion?}` | `replied` with `reply: {conversationId, text}`, `no_reply`, or `rejected` with `reason` |
+| `channel_pull_outbound` | `maxItems?` | `messages: [{deliveryId, conversationId, text, replyToMessageId?}]` |
+| `channel_health` | `status: ok\|degraded, detail?` | adapter status (`connected`, `stale`, queue depths, counters) |
+
+The companion's reply to an inbound message is returned in the same
+`channel_inbound` result. In a `group` conversation only a message the platform
+addressed to the companion's account (`addressedToCompanion: true`, meaning a
+mention of it or a reply to it) is a responding turn. Other group messages are
+ambient chatter: like Discord and Telegram room lines, they go through the
+agent's observe path and participation gate (passive-name candidate, appraiser,
+reservation, egress lease) and usually return `no_reply`. Each adapter's `outbound.sendText` puts messages in a
+bounded per-adapter queue, and the bridge drains that queue with
+`channel_pull_outbound`. The queue and the pull tool are covered by the
+conformance tests. The one agent-initiated path that targets external adapters
+is an appraised autonomous room reply: when the speaking-arbiter egress lease
+delivers a reply to an external group conversation, the gateway's
+`channel.sendRoomReply` method queues it on the owning adapter (refused for a
+channel another companion owns). Other agent-initiated delivery (scheduled
+continuity, wake notes, outreach) does not target external adapters yet. That
+is why the `external` channel type has neither scheduled continuity nor live
+wakeup. Rejection reasons are `busy`, `duplicate`, `invalid`,
+`turn_timeout`, `turn_failed` and `not_running`. The bridge should back off and
+retry `busy` and `turn_timeout`. It should drop `invalid`.
+
+Inbound ids are namespaced as `external:<id>:<native id>` for the channel,
+message and author. This keeps two bridges from colliding with or impersonating
+each other. The message body is screened by chat intake as the `external`
+surface. The author gets the least-privileged DM-conditioned trust class
+(`regular_contact` in direct conversations, `public_contact` in groups).
+
+#### Group rooms and participation
+
+Every inbound line carries a validated `external` addressing envelope (bead
+`psfn-framework-w1lc2`): the bridge-declared `conversationKind` is the room
+scope, `addressedToCompanion: true` is a connector mention of the companion's
+own account, and the author standing is `public_contact` / role `unknown` /
+size `unknown`. That envelope is what makes a group conversation a *verified*
+room; without it the room-signal gate refuses every line with
+`room_unverified` before a participation candidate exists. The companion's own
+account is `external-companion:<id>`, which no bridge sender id can take, and
+its display name is the companion's `companions.json` `displayName` (without
+one, the gateway logs a warning and names it by the companion id).
+
+For a line naming the companion to reach the appraiser and an appraised reply
+to be queued for `channel_pull_outbound`, the companion needs (all owner
+files, no env):
+
+- `scheduler.json` `socialAutonomy.passiveNameCandidate.enabled: true` with an
+  autonomy level of at least `contextual` for the room;
+- `socialAutonomy.roomSignal.enabled: true`. A line that *starts* with the
+  companion's name is a direct address and is admitted for any author. A name
+  later in the line is a contextual summons, admitted only for authors whose
+  class is in `roomSignal.contextualEligibleSourceClasses`; external group
+  authors are `public_contact`, so add it there to let them summon the
+  companion by name (otherwise the line is suppressed `untrusted_room_member`);
+- `socialAutonomy.appraiser.enabled: true`;
+- delivery of an appraised reply runs through the speaking arbiter, so the
+  gateway must be a companion fleet (`multiCompanion`) with a charge policy and
+  `socialAutonomy.egressLease.mode` other than `off`.
+
+### Isolation
+
+A bridge can never take down the gateway, agent turns or another channel:
+
+- Each adapter is its own supervised surface (`external:<id>`) under the channel
+  isolation supervisor and the `CHANNEL_SURFACE_START_RETRY_*` policy. A load,
+  credential or endpoint failure disables that surface alone.
+- The route handler always answers. A malformed, oversized (`413`), stalled
+  (`408`), wrong-version or unauthenticated request gets an answer and goes no
+  further.
+- Companion turns are limited by `maxInFlightTurns`. Excess turns are refused
+  as `busy`, not queued. Each turn is abandoned after `turnTimeoutMs`.
+- The outbound queue is bounded. When it is full, new sends are refused.
+- A bridge that is silent for longer than `heartbeatTimeoutMs` is reported as
+  `stale`. It recovers on its next call.
+- Floods, timeouts, full queues, malformed requests and silence are reported as
+  degraded runtime failures of that surface, at most once per
+  `failureReportIntervalMs` for each kind. They are never process failures.
+
+### Writing an adapter
+
+`src/channels/external/reference-bridge.ts` is the reference bridge. It has a
+typed MCP client (`ReferenceExternalChannelBridge`) and an in-memory
+`LoopbackPlatform` that shows the full round trip. To write a real bridge,
+replace the loopback platform with your messaging API:
+
+1. Call `channel_hello` and check the protocol version and limits.
+2. Send each platform message with `channel_inbound` and post the reply.
+3. Poll `channel_pull_outbound` and deliver the messages you receive.
+4. Call `channel_health` at an interval shorter than `heartbeatTimeoutMs`.
+
+Every bridge must pass the conformance suite in
+`src/test-support/external-channel-conformance.ts`
+(`describeExternalChannelBridgeConformance`). A bridge written in another
+language is tested through a thin driver that forwards these calls.
 
 ## Fail-closed invariants
 

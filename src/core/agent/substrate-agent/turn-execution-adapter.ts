@@ -1,4 +1,5 @@
 import type { Agent } from '../../../boundary/pi-agent/index.js';
+import type { ScratchpadViewer } from '../../../faculties/memory/scratchpad-visibility.js';
 import type { AssistantMessage } from '@earendil-works/pi-ai';
 import type { EventBus } from '../../../shared/event-bus.js';
 import type { CostTelemetryPort } from '../../../shared/telemetry/cost-telemetry-port.js';
@@ -49,6 +50,7 @@ import type {
 } from '../../cogsec/disclosure/index.js';
 import type { ProviderRuntime } from '../../../primitives/llm/provider-runtime.js';
 
+import type { ViewerCeiling } from '../../session/viewer-ceiling.js';
 interface TurnExecutionAdapterCallbacks {
   resolveTaskKind: (message: SubstrateMessage) => string | undefined;
   buildTurnBudgetCharacteristics: (
@@ -56,6 +58,7 @@ interface TurnExecutionAdapterCallbacks {
     taskKind?: string,
   ) => ContextBudgetTurnCharacteristics;
   resolveAuthorContext: (message: SubstrateMessage) => Promise<ResolvedAuthorContext>;
+  viewerCeiling: () => ViewerCeiling | null;
   countResolvableSpeakerContacts: (
     message: SubstrateMessage,
     speakers: readonly ConversationScopeSpeaker[],
@@ -69,7 +72,7 @@ interface TurnExecutionAdapterCallbacks {
   ensureModel: (message?: SubstrateMessage) => void;
   captureTurnPromptSnapshot: (ctx: ComposeContext) => import('../../turns/snapshot.js').TurnPromptSnapshot;
   captureAuthoritativeSystemPrompt?: (systemPrompt: string) => void;
-  buildScratchpadContextBlock: () => string;
+  buildScratchpadContextBlock: (viewer: ScratchpadViewer) => string;
   normalizeTurnPromptOverride: (message: SubstrateMessage) => MessagePromptOverride;
   resolveResponseStyle: (
     message: SubstrateMessage,
@@ -279,6 +282,7 @@ export function createTurnExecutionRuntimeAdapter(
     ),
     withCorrelationPurpose: (correlation, purpose) => options.turnSupportRuntime.withCorrelationPurpose(correlation, purpose),
     resolveAuthorContext: (message) => options.callbacks.resolveAuthorContext(message),
+    viewerCeiling: () => options.callbacks.viewerCeiling(),
     countResolvableSpeakerContacts: (message, speakers) => options.callbacks
       .countResolvableSpeakerContacts(message, speakers),
     resolveParticipantRelationships: (message, conversationScope, trustLevel) => options.callbacks
@@ -340,7 +344,7 @@ export function createTurnExecutionRuntimeAdapter(
           .captureAuthoritativeSystemPrompt?.(systemPrompt),
       }
       : {}),
-    buildScratchpadContextBlock: () => options.callbacks.buildScratchpadContextBlock(),
+    buildScratchpadContextBlock: (viewer) => options.callbacks.buildScratchpadContextBlock(viewer),
     normalizeTurnPromptOverride: (message) => options.callbacks.normalizeTurnPromptOverride(message),
     resolveResponseStyle: (message, channelType, channelMeta) => options.callbacks
       .resolveResponseStyle(message, channelType, channelMeta),

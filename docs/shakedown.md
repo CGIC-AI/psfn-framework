@@ -431,6 +431,13 @@ source-contract divergence; `1` failure. By default the harness tears the stack
 down with `docker compose down -v` on exit; pass `--keep-up` to inspect,
 `--no-up` to run against an already-running stack.
 
+The smoke Satellite Hub runs with a device registry: `up` generates a fresh
+test-device credential per run (`PSFN_SMOKE_HUB_DEVICE_CREDENTIAL`), the seed
+enrolls only its SHA-256 plus a generated Hub assertion key, and the relay probe
+authenticates as that device with companion-ui's own hello capabilities. A
+bare `docker compose up` without that variable fails at the seed, and
+`--no-up` needs the same credential the running stack was seeded with.
+
 Split-topology and seeding notes:
 
 - The gateway is the only service with external egress and the only holder of
@@ -578,7 +585,7 @@ stored as keyed digests, not raw request values.
 1. **Case harness** — the tier-tagged catalog run per matrix cell.
 2. **Tool-surface conformance** — `POST /api/admin/tool-conformance/run` then `GET /api/admin/tool-conformance/latest` (LLM-free sweep of the live tool surface), plus `GET /api/admin/tools/adaptive` for tool-health telemetry. Run per tier: it proves both that expected tools are live *and* that tier-gated tools are absent below their tier.
 3. **Garden behavioral sweep** — Playwright over the Garden routes, asserting **behavior, not HTTP 200s**: settings save/load round-trip, memory search returns results, episodic rendering, charge-ledger state, tool-health telemetry, cognitive-security queue. No console/page errors.
-4. **Scorecard** — aggregates all run JSONs and **cross-checks the coverage appendix**: every feature row must map to ≥1 executed case or an explicit manual/partner-session disposition. A scorecard that is green while coverage rows are untouched is itself a failure. The non-green taxonomy is enforced in code, not prose: `semantic_failure`, `completed_after_abort`, `agent_busy`, `runtime_stale`, `matrix_aborted`, `unproven_tool_claim`, `unledgered_charge` — all count as failures unless the operator records an explicit waiver.
+4. **Scorecard** — aggregates all run JSONs and **cross-checks the coverage appendix**: every feature row must map to ≥1 executed case or an explicit manual/partner-session disposition. A scorecard that is green while coverage rows are untouched is itself a failure. The non-green taxonomy is enforced in code, not prose: `semantic_failure`, `completed_after_abort`, `agent_busy`, `runtime_stale`, `matrix_aborted`, `unproven_tool_claim`, `unledgered_charge`, `contaminated` (a failing case that ran after an earlier case left the shared `api:testing-harness` room with an unanswered turn the harness could not settle) — all count as failures unless the operator records an explicit waiver.
 
 The harness lives in-repo (target: `shakedown/harness/`, built out under epic `65rk` — see "Build-out status" below). Run artifacts (round dirs, run JSONs, screenshots, interviews) stay **outside** the repo in the round root; only the process, the harness, and the reference companion's bootstrap artifacts are versioned.
 
@@ -635,7 +642,7 @@ Every finding — hers or the harness's — becomes a structured record: **Sever
 | Performance (`mmo9`) | local + kube | SSE first-chunk, background supervisor, admission controller; voice cancellation kube; compaction cliff Pi-class | epic still open — coordinate before certifying |
 | Tool-stack audit (`generate_image` rename, core/extended re-tiering) | local, all tiers | tool-conformance sweep per tier | watch `fpiu` attachment-claim bug |
 | Garden UX overhaul | both | behavioral sweep over new SPA routes | |
-| July hardening — `fleet-auth` SSO administration (opl1, reshaped by D2 2026-07-30) | kube + local, autonomous | SSO admin via Garden partner walk; audited escalation grant issue→consume on a memory reveal and a cogsec remediation action | passkeys/WebAuthn removed — Discord SSO is the only auth; escalation is scriptable (no ceremony) |
+| July hardening — `fleet-auth` SSO administration (opl1, reshaped by D2 2026-07-30) | kube + local, autonomous | SSO admin via Garden partner walk; audited escalation grant issue→consume on a memory reveal and a cogsec remediation action | passkeys/WebAuthn removed; Discord SSO is the only *human sign-in* provider and is optional (key or SSO, never key and SSO); escalation is scriptable (no ceremony) |
 | July hardening — DNLL owner migration upgrade path (dut9/k8si/kk6k) | own staged upgrade session | pre-upgrade owner snapshot → ship RC over an existing deployment → assert scheduler/caretaker owner migration; never a fresh-bootstrap round rider | staged session — fresh-bootstrap lanes never execute migration code |
 | July hardening — Voice reply streaming and barge-in (mmo9.8/mmo9.6) | kube, autonomous | operator voice session: committed-segment VoiceReplyStream plus preemptive interrupt/cancel | operator-eyes; voice ceremony not scriptable headless |
 | July hardening — Preemptable provider capacity admission (mmo9.5) | local + Pi-class, spot check | partner free-play load drives the admission controller to preempt under capacity pressure; observed via perf telemetry | needs real load; Pi-class blind spot |

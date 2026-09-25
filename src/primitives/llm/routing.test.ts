@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { CanonicalModelPurpose, CanonicalModelRegistry, ModelRegistryEntry } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import { evaluateImportPolicy, resolveGlobalPromptCachePolicy, resolveRoutingCandidates } from './routing.js';
+import {
+  evaluateImportPolicy,
+  resolveGlobalPromptCachePolicy,
+  resolveRoutingCandidates,
+  toCompletionRoutingPurpose,
+} from './routing.js';
 
 interface RegistryModelInput {
   id: string;
@@ -605,6 +610,21 @@ describe('resolveRoutingCandidates(context legacy alias)', () => {
   });
 });
 
+describe('resolveRoutingCandidates(decision)', () => {
+  it('routes the decision purpose through the background lane first and then chat', () => {
+    const candidates = resolveRoutingCandidates(makeConfig({ modelRegistry: makeBaseRegistry() }), 'decision');
+
+    expect(candidates.map(candidate => candidate.model)).toEqual([
+      'background/model',
+      'chat/model',
+    ]);
+  });
+
+  it('maps a decision completion onto its own routing purpose', () => {
+    expect(toCompletionRoutingPurpose('decision')).toBe('decision');
+  });
+});
+
 describe('resolveRoutingCandidates(import_processing)', () => {
   it('enforces openrouter_zdr mode for import processing', () => {
     const candidates = resolveRoutingCandidates(makeConfig({
@@ -960,5 +980,50 @@ describe('routing candidate sampling constraints', () => {
 
   it('carries an explicit false through unchanged', () => {
     expect(candidateFor(false)).toMatchObject({ rejectsTemperature: false });
+  });
+});
+
+describe('cost ranking with explicit zero rates (ylgkh)', () => {
+  function chatFallbacks(costs: Array<{ id: string; cost?: { inputPer1MUsd?: number; outputPer1MUsd?: number } }>) {
+    return makeConfig({
+      modelRegistry: makeRegistry([
+        {
+          id: 'lead',
+          rank: 1,
+          provider: 'openrouter',
+          model: 'lead/model',
+          maxOutputTokens: 4096,
+          contextWindow: 64_000,
+          purposes: [{ purpose: 'chat', primary: true }],
+        },
+        ...costs.map(({ id, cost }) => ({
+          id,
+          rank: 30,
+          provider: 'openrouter',
+          model: `${id}/model`,
+          maxOutputTokens: 4096,
+          contextWindow: 64_000,
+          purposes: [{ purpose: 'chat' as const, primary: false }],
+          ...(cost ? { cost } : {}),
+        })),
+      ]),
+    });
+  }
+
+  it('ranks a zero-rate subscription model as the cheapest fallback', () => {
+    const order = resolveRoutingCandidates(chatFallbacks([
+      { id: 'paid', cost: { inputPer1MUsd: 1, outputPer1MUsd: 2 } },
+      { id: 'unpriced' },
+      { id: 'subscription', cost: { inputPer1MUsd: 0, outputPer1MUsd: 0 } },
+    ]), 'chat').map(candidate => candidate.slotKey);
+    expect(order).toEqual(['lead', 'subscription', 'paid', 'unpriced']);
+  });
+
+  it('still ranks unpriced models last when every explicit cost is zero', () => {
+    const order = resolveRoutingCandidates(chatFallbacks([
+      { id: 'unpriced' },
+      { id: 'subscription', cost: { inputPer1MUsd: 0, outputPer1MUsd: 0 } },
+    ]), 'chat').map(candidate => candidate.slotKey);
+    expect(order).toEqual(['lead', 'subscription', 'unpriced']);
   });
 });

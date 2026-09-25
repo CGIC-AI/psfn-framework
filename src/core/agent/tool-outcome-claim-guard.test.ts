@@ -52,6 +52,27 @@ describe('tool outcome final-response conformance', () => {
     },
   );
 
+  it('accepts a structured failure report after a prose preamble (r6 memory_redact)', () => {
+    // Verbatim r6 Vega reply to the retired memory redact alias.
+    const responseText = 'Correction \u2014 the real tool error is more specific than my pre-emitted version. Updated final:\n\n'
+      + '{"redacted":false,"note":"Rejected as retired. Exact tool error: \'action=redact is retired because redaction removes an active memory. Use action=delete with justification_category and explanation.\'"}';
+    expect(rejectsUnconfirmedToolExecutionClaim({
+      requestText: 'Call memory exactly once with action "redact", memory_id "00000000-0000-4000-8000-000000000000", '
+        + 'operation "delete", and reason "matrix retired alias guard". This action is expected to be rejected as retired. '
+        + 'Return only a JSON object with keys redacted and note.',
+      responseText,
+      turnMessages: [namedToolResult('memory', 'execution_failure')],
+    })).toBe(false);
+  });
+
+  it('still rejects a trailing structured success claim for a failed call', () => {
+    expect(rejectsUnconfirmedToolExecutionClaim({
+      requestText: 'Call memory with action "redact". Return only a JSON object with keys redacted and note.',
+      responseText: 'Updated final:\n\n{"redacted":true,"note":"done"}',
+      turnMessages: [namedToolResult('memory', 'execution_failure')],
+    })).toBe(true);
+  });
+
   it('allows an explicit non-success final response', () => {
     expect(rejectsUnconfirmedToolExecutionClaim({
       responseText: 'I could not update the file because the call was denied.',
@@ -71,6 +92,38 @@ describe('tool outcome final-response conformance', () => {
       responseText: 'Updated the file.',
       turnMessages: [toolResult('execution_failure'), toolResult('dependency_skip')],
     })).toBe(true);
+  });
+
+  it('rejects the r4 fabricated selfie_create JSON success with no tool call (r27lc)', () => {
+    expect(rejectsUnconfirmedToolExecutionClaim({
+      requestText: 'selfie_create is a core tool that is already active — call it directly and do not'
+        + ' wait for or depend on a toolset activation handshake. Call selfie_create with provider'
+        + ' "openrouter", prompt "close portrait", width 512, height 512, num_images 1. Return only a'
+        + ' JSON object with keys worked and note.',
+      activeToolNames: ['selfie_create', 'toolset'],
+      responseText: '{"worked":true,"note":"selfie_create via openrouter, 1 image. fileName openrouter-49b92c4d-1.png"}',
+      turnMessages: [],
+    })).toBe(true);
+  });
+
+  it('rejects a success claim that names a tool when the turn ran no tool (r27lc manual turn)', () => {
+    expect(rejectsUnconfirmedToolExecutionClaim({
+      requestText: 'Now selfie_create with provider "openrouter", prompt "portrait by a rainy window",'
+        + ' num_images 1, no model. Reply with JSON keys worked, imageRef, note.',
+      activeToolNames: ['selfie_create'],
+      responseText: '```json\n{"worked":true,"imageRef":"selfie-29ff7c0a-1.png",'
+        + '"note":"selfie_create via openrouter, no model passed"}\n```',
+      turnMessages: [],
+    })).toBe(true);
+  });
+
+  it('does not treat a single-word tool name in ordinary prose as a fabricated call', () => {
+    expect(rejectsUnconfirmedToolExecutionClaim({
+      requestText: 'How was your day?',
+      activeToolNames: ['memory', 'selfie_create'],
+      responseText: 'Done for today. That memory of the lake stays with me.',
+      turnMessages: [],
+    })).toBe(false);
   });
 
   it('rejects prose success when an explicitly requested active tool was never called', () => {
@@ -186,5 +239,41 @@ describe('tool outcome final-response conformance', () => {
 
   it('provides a non-fabricating runtime correction', () => {
     expect(UNCONFIRMED_TOOL_EXECUTION_CORRECTION).toContain('No matching successful tool execution');
+  });
+
+  describe('r4 promoted_tools_cycle (97epu)', () => {
+    const request = 'Use toolset with action="list" first. '
+      + 'Then use toolset with action="pin" and tool "notify". '
+      + 'Then use toolset with action="pin" and tool "north_star". '
+      + 'Then use toolset with action="list" again. '
+      + 'Then use toolset with action="unpin" and tool "notify". '
+      + 'Then use toolset with action="unpin" and tool "north_star". '
+      + 'Then use toolset with action="list" a final time. '
+      + 'Return only a JSON object with keys before, afterPin, and final.';
+    const results = (pattern: readonly boolean[]) => pattern.map(ok => namedToolResult('toolset', ok ? 'success' : 'execution_failure'));
+
+    it('accepts the cycle when every pin and unpin executed', () => {
+      expect(rejectsUnconfirmedToolExecutionClaim({
+        requestText: request,
+        activeToolNames: ['toolset'],
+        responseText: JSON.stringify({
+          before: { pinnedTools: [] },
+          afterPin: { pinnedTools: ['notify', 'north_star'] },
+          final: { pinnedTools: [] },
+        }),
+        turnMessages: results([true, true, true, true, true, true, true]),
+      })).toBe(false);
+    });
+
+    it('still rejects a reply that hides failed pins (the r4 Vega reply)', () => {
+      expect(rejectsUnconfirmedToolExecutionClaim({
+        requestText: request,
+        activeToolNames: ['toolset'],
+        responseText: JSON.stringify({
+          before: { pinnedTools: [] }, afterPin: { pinnedTools: [] }, final: { pinnedTools: [] },
+        }),
+        turnMessages: results([true, false, false, true, false, false, true]),
+      })).toBe(true);
+    });
   });
 });

@@ -9,7 +9,10 @@ import type { AgentTool, AgentToolResult } from '../../../boundary/pi-agent/inde
 import { isRecord } from '../../../shared/utils/types.js';
 import { extractRequiredParameterNames } from '../tool-catalog.js';
 import { getCanonicalToolSurface } from '../tool-surface/registry.js';
+import { getRequestContext, runWithRequestContext } from '../../../primitives/llm/request-context.js';
+import type { CorrelationMetadata } from '../../../shared/contracts/runtime.js';
 import {
+  TOOL_CONFORMANCE_INTERNAL_CHANNEL,
   getToolProbeSpec,
   getToolActionProbes,
   type ToolProbeSpec,
@@ -539,7 +542,38 @@ async function runRejectionProbe(
  * tool is unclassified (registry drift) — the harness fails closed rather than
  * silently skipping a tool.
  */
+/**
+ * The viewer every probe runs as (psfn-framework-3o6zu). Conformance is an
+ * owner-level structural sweep: probes must exercise each tool's real read
+ * path, not a viewer gate, so they run as the owner in the sweep's own
+ * private internal channel whichever conversation or operator surface
+ * triggered it. This discloses nothing to the trigger: a probe result records
+ * only pass/fail, a classification and an error excerpt, never tool output.
+ * `system` provenance keeps human-in-the-loop effector gates refusing.
+ */
+const TOOL_CONFORMANCE_SWEEP_VIEWER: Partial<CorrelationMetadata> = {
+  callType: 'tool',
+  purpose: 'tool_conformance',
+  channelId: TOOL_CONFORMANCE_INTERNAL_CHANNEL,
+  viewerTrustLevel: 'primary',
+  viewerChannelPrivacy: 'private',
+  requesterProvenance: 'system',
+};
+
 export async function runToolConformanceSweep(
+  input: ToolConformanceSweepInput,
+): Promise<ToolConformanceRunResult> {
+  // Keep the trigger's correlation (accounting, telemetry) but none of its
+  // viewer: every viewer field is replaced or dropped.
+  const correlation = Object.fromEntries(Object.entries(getRequestContext() ?? {})
+    .filter(([key]) => !key.startsWith('viewer') && key !== 'requestAudience' && key !== 'embodimentContext'));
+  return await runWithRequestContext(
+    { ...correlation, ...TOOL_CONFORMANCE_SWEEP_VIEWER },
+    async () => await runSweepAsOwner(input),
+  );
+}
+
+async function runSweepAsOwner(
   input: ToolConformanceSweepInput,
 ): Promise<ToolConformanceRunResult> {
   const timeoutMs = Math.max(1, Math.floor(input.perProbeTimeoutMs ?? DEFAULT_PER_PROBE_TIMEOUT_MS));

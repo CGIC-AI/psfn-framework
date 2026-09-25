@@ -69,6 +69,7 @@ import {
   parseFleetSsoOuterTarget,
   type FleetSsoGardenUpstream,
 } from '../fleet-auth/fleet-sso-transport.js';
+import type { GatewayFleetLifecycleHttpRoutes } from './fleet-lifecycle-http-routes.js';
 import {
   FLEET_PORTAL_API_PATH,
   GatewayFleetPortalHttpRoutes,
@@ -90,6 +91,7 @@ import {
 import {
   TestingHarnessGardenDoor,
   TestingHarnessGardenDoorDeniedError,
+  type GardenDoorAuthorizationAuditPort,
   type TestingHarnessGardenDoorOptions,
 } from './testing-harness-garden-door.js';
 import { createComponentLogger } from '../../shared/logger.js';
@@ -106,7 +108,9 @@ const MAX_PROXY_BODY_BYTES = 1_048_576;
 const MAX_CAPABILITY_HEADER_BYTES = 65_536;
 const FLEET_PATH = '/fleet';
 const FLEET_LOGIN_PATH = '/fleet/login';
+const FLEET_LOGOUT_PATH = '/fleet/logout';
 const FLEET_AUTH_LOGIN_PATH = '/v1/fleet-auth/login';
+const GARDEN_OPERATOR_DOOR_COOKIE = 'garden_operator_door';
 const FLEET_GARDEN_CHAT_PATH = '/v1/chat/completions';
 const COMPANION_PREFIX = FLEET_SSO_COMPANION_ROUTE_PREFIX;
 const COMPANION_UI_PREFIX = '/companion-ui';
@@ -162,8 +166,20 @@ export interface FleetSsoTrustedOriginOptions {
 }
 
 export interface GatewayFleetSsoRouterOptions extends FleetSsoTrustedOriginOptions {
-  /** Optional shared operator credential accepted as an alternative to fleet SSO. */
+  /**
+   * Optional shared operator credential accepted as an alternative to fleet
+   * SSO. It is a first-class operator principal: every Garden capability it
+   * mints is durably audited through {@link adminTokenAudit} first.
+   */
   readonly adminToken?: string;
+  /** Required whenever {@link adminToken} is configured. */
+  readonly adminTokenAudit?: GardenDoorAuthorizationAuditPort;
+  /**
+   * False when fleet-auth.json declares `provider.kind: none`: browsers are
+   * never sent to the (disabled) Discord login and the landing page offers
+   * only the ADMIN_TOKEN form. Defaults to true (a Discord provider).
+   */
+  readonly ssoLoginEnabled?: boolean;
   readonly broker: Pick<GatewayFleetAuthBroker, 'resolveAuthorizationContext'>;
   readonly signer: GatewayRequestCapabilitySigner;
   readonly verifier: RequestCapabilityVerifier;
@@ -183,6 +199,8 @@ export interface GatewayFleetSsoRouterOptions extends FleetSsoTrustedOriginOptio
   readonly nowSeconds?: () => number;
   readonly testingHarness?: TestingHarnessGardenDoorOptions;
   readonly denialLogger?: GardenDenialLogger;
+  /** h248l.6: operator-only fleet lifecycle door; absent means the routes 404. */
+  readonly lifecycleRoutes?: Pick<GatewayFleetLifecycleHttpRoutes, 'matches' | 'handle'>;
 }
 
 export interface FleetGardenChatAdmission {
@@ -349,11 +367,11 @@ function isHtmlNavigation(request: IncomingMessage): boolean {
 function sendFleetLoginRedirect(
   response: ServerResponse,
   returnPath: string,
-  adminTokenEnabled = false,
+  localLoginLanding: boolean,
 ): void {
   response.writeHead(302, {
     'Cache-Control': 'no-store',
-    Location: adminTokenEnabled
+    Location: localLoginLanding
       ? FLEET_LOGIN_PATH
       : `${FLEET_AUTH_LOGIN_PATH}?return_to=${encodeURIComponent(returnPath)}`,
     'Referrer-Policy': 'no-referrer',
@@ -539,6 +557,12 @@ async function readBoundedBody(request: IncomingMessage): Promise<Buffer> {
   return Buffer.concat(chunks, received);
 }
 
+function isFleetModelUsageTarget(target: CompiledGardenRequestTarget): boolean {
+  return target.method === 'GET'
+    && target.canonicalPath === '/api/admin/fleet-model-usage'
+    && target.action === 'models.read';
+}
+
 function authorityVersions(context: FleetAuthorizationContext): RequestCapabilityAuthorityVersions {
   return Object.freeze({
     authorityGeneration: context.authority.authorityGeneration,
@@ -644,6 +668,9 @@ export class GatewayFleetSsoRouter {
     if (options.upstreams.length === 0) {
       throw new Error('Fleet SSO router requires at least one Garden upstream');
     }
+    if (options.adminToken && !options.adminTokenAudit) {
+      throw new Error('Fleet SSO ADMIN_TOKEN door requires durable authorization audit wiring');
+    }
     this.testingHarnessDoor = options.testingHarness
       ? new TestingHarnessGardenDoor(options.testingHarness)
       : undefined;
@@ -655,6 +682,7 @@ export class GatewayFleetSsoRouter {
     this.loginLanding = new GatewayFleetLoginLanding(
       options.breakGlassLogin,
       Boolean(options.adminToken),
+      options.ssoLoginEnabled !== false,
     );
     this.modelUsageRoutes = new GatewayFleetModelUsageHttpRoutes({
       projection: options.modelUsageProjection,
@@ -696,10 +724,12 @@ export class GatewayFleetSsoRouter {
       return rawPath === '/' || rawPath === FLEET_PATH || rawPath === `${FLEET_PATH}/`
         || rawPath.startsWith(`${FLEET_PATH}/_app/`)
         || rawPath.startsWith('/_app/')
-        || rawPath === FLEET_LOGIN_PATH || rawPath.startsWith(FLEET_PORTAL_API_PATH)
+        || rawPath === FLEET_LOGIN_PATH || rawPath === FLEET_LOGOUT_PATH
+        || rawPath.startsWith(FLEET_PORTAL_API_PATH)
         || rawPath === FLEET_MODEL_USAGE_API_PATH
         || rawPath.startsWith(COMPANION_PREFIX)
-        || rawPath === COMPANION_UI_PREFIX || rawPath.startsWith(`${COMPANION_UI_PREFIX}/`);
+        || rawPath === COMPANION_UI_PREFIX || rawPath.startsWith(`${COMPANION_UI_PREFIX}/`)
+        || this.options.lifecycleRoutes?.matches(rawPath) === true;
     } catch {
       return rawTarget === '/' || rawTarget.startsWith(FLEET_PATH) || rawTarget.startsWith(FLEET_PORTAL_API_PATH)
         || rawTarget.startsWith('/_app/')
@@ -759,7 +789,35 @@ export class GatewayFleetSsoRouter {
           'Cache-Control': 'no-store',
           Location: FLEET_PATH,
           'Referrer-Policy': 'no-referrer',
-          'Set-Cookie': `psfn_token=${encodeURIComponent(candidate)}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=86400`,
+          'Set-Cookie': [
+            `psfn_token=${encodeURIComponent(candidate)}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=86400`,
+            // Non-secret, script-readable door marker (jxthv): tells the
+            // Garden UI to send protected mutations straight through the
+            // audited ADMIN_TOKEN door instead of minting an SSO escalation
+            // grant. It carries no authority; the gateway still requires the
+            // HttpOnly token on every request.
+            `${GARDEN_OPERATOR_DOOR_COOKIE}=admin_token; Path=/; Secure; SameSite=Strict; Max-Age=86400`,
+          ],
+        });
+        response.end();
+        return;
+      }
+      if (rawPath === FLEET_LOGOUT_PATH) {
+        // Key-mode sign-out (key-or-SSO ruling): the HttpOnly ADMIN_TOKEN
+        // cookie can only be cleared by the gateway. Exact origin, POST only;
+        // clearing cookies grants nothing, so no credential is required.
+        if (request.method !== 'POST' || rawQuery) {
+          throw new FleetSsoRequestError(404, 'Resource not found');
+        }
+        if (singleHeader(request.headers.origin) !== this.options.canonicalOrigin) {
+          throw new FleetSsoRequestError(400, 'Browser origin is invalid');
+        }
+        response.writeHead(204, {
+          'Cache-Control': 'no-store',
+          'Set-Cookie': [
+            'psfn_token=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0',
+            `${GARDEN_OPERATOR_DOOR_COOKIE}=; Path=/; Secure; SameSite=Strict; Max-Age=0`,
+          ],
         });
         response.end();
         return;
@@ -783,10 +841,13 @@ export class GatewayFleetSsoRouter {
           ...authorization,
           authContext: Object.freeze({
             ...authorization.authContext,
-            fleetAccessMode: resolveFleetAccessMode(
-              this.options.accountRoster,
-              route.companionId,
-            ),
+            // Without an SSO provider there are no human principals whose
+            // subjects could need partitioning, and the Discord-keyed roster
+            // is empty by construction: the harness key acts for the whole
+            // deployment like the ADMIN_TOKEN (key-or-SSO ruling).
+            fleetAccessMode: this.options.ssoLoginEnabled === false
+              ? 'sole_admin'
+              : resolveFleetAccessMode(this.options.accountRoster, route.companionId),
           }),
         });
         await this.proxyHttp(request, response, upstream, route, body, issued);
@@ -824,6 +885,23 @@ export class GatewayFleetSsoRouter {
         await this.proxyHttp(request, response, upstream, route, body, issued);
         return;
       }
+      const lifecycleRoutes = this.options.lifecycleRoutes;
+      if (lifecycleRoutes?.matches(rawPath)) {
+        const hasSession = readOpaqueSessionCookie(request) !== undefined;
+        if (!adminTokenMatched && !hasSession) {
+          throw new FleetSsoRequestError(401, 'Authentication required');
+        }
+        await lifecycleRoutes.handle({
+          request,
+          response,
+          rawPath,
+          rawQuery,
+          requester: adminTokenMatched
+            ? { kind: 'operator', actor: 'operator:admin-token' }
+            : { kind: 'session' },
+        });
+        return;
+      }
       const sessionToken = readOpaqueSessionCookie(request);
       if (!sessionToken) {
         if (adminTokenMatched && (
@@ -841,6 +919,16 @@ export class GatewayFleetSsoRouter {
           });
           return;
         }
+        if (adminTokenMatched && this.modelUsageRoutes.matches(rawPath)) {
+          await this.modelUsageRoutes.handle({
+            request,
+            response,
+            adminToken: true,
+            rawPath,
+            rawQuery,
+          });
+          return;
+        }
         if (isHtmlNavigation(request) && (
           rawPath === FLEET_PATH
           || rawPath === `${FLEET_PATH}/`
@@ -848,7 +936,7 @@ export class GatewayFleetSsoRouter {
           sendFleetLoginRedirect(
             response,
             request.url ?? FLEET_PATH,
-            Boolean(this.options.adminToken),
+            this.usesLocalLoginLanding(),
           );
           return;
         }
@@ -856,11 +944,16 @@ export class GatewayFleetSsoRouter {
           sendFleetLoginRedirect(
             response,
             request.url ?? '/',
-            Boolean(this.options.adminToken),
+            this.usesLocalLoginLanding(),
           );
           return;
         }
         if (request.method === 'GET' && companionUiRequest) {
+          if (adminTokenMatched && this.options.companionUi) {
+            // The browser Companion UI works with the ADMIN_TOKEN key alone.
+            await this.serveCompanionUi(request, response, rawPath, rawQuery);
+            return;
+          }
           this.loginLanding.send(response);
           return;
         }
@@ -1229,32 +1322,16 @@ export class GatewayFleetSsoRouter {
       input.route.companionId,
     );
     const authContext = toRequestCapabilityAuthContext(context);
-    const fleetCompanionIds = target.method === 'GET'
-      && target.canonicalPath === '/api/admin/fleet-model-usage'
-      && target.action === 'models.read'
+    const fleetCompanionIds = isFleetModelUsageTarget(target)
       ? await this.resolveFleetModelUsageRoster(
           input.sessionToken,
           input.route.companionId,
           context,
         )
       : undefined;
-    let fleetModelUsageRequestTarget: string | undefined;
-    if (fleetCompanionIds) {
-      try {
-        fleetModelUsageRequestTarget = resolveFleetModelUsageInternalRequestTarget(
-          parseFleetModelUsageResourceQuery(target.resource.query),
-          Date.parse(authContext.resolvedAt),
-        );
-      } catch {
-        throw new FleetSsoRequestError(400, 'Invalid fleet model usage query', {
-          reasonCode: 'request_target_invalid',
-          reason: 'fleet_model_usage_query_invalid',
-          routeId: target.resource.routeId,
-          action: target.action,
-          principalId: context.principalId,
-        });
-      }
-    }
+    const fleetModelUsageRequestTarget = fleetCompanionIds
+      ? this.fleetModelUsageRequestTarget(target, authContext.resolvedAt, context.principalId)
+      : undefined;
     return await this.issueCapability({
       target,
       requestId,
@@ -1275,6 +1352,11 @@ export class GatewayFleetSsoRouter {
       versions,
       context,
     });
+  }
+
+  /** The local landing serves the ADMIN_TOKEN form and the no-SSO notice. */
+  private usesLocalLoginLanding(): boolean {
+    return Boolean(this.options.adminToken) || this.options.ssoLoginEnabled === false;
   }
 
   private matchesAdminToken(request: IncomingMessage): boolean {
@@ -1304,11 +1386,20 @@ export class GatewayFleetSsoRouter {
       headers: targetHeaders,
       body: input.body,
     });
+    const audit = this.options.adminTokenAudit;
+    if (!audit) {
+      throw new FleetSsoRequestError(503, 'Administrator access is unavailable');
+    }
     const requestId = randomUUID();
-    const authorizationEventId = randomUUID();
-    const resolvedAt = new Date(
-      this.options.nowSeconds ? this.options.nowSeconds() * 1_000 : Date.now(),
-    );
+    const audited = await audit.record({
+      action: target.action,
+      companionId: input.route.companionId,
+      principalId: ADMIN_TOKEN_REQUEST_CAPABILITY_PRINCIPAL_ID,
+      provider: 'admin_token',
+      correlationId: requestId,
+    });
+    const authorizationEventId = audited.authorizationEventId;
+    const resolvedAt = audited.occurredAt;
     const syntheticVersion = 1;
     const principalId = ADMIN_TOKEN_REQUEST_CAPABILITY_PRINCIPAL_ID;
     const providerSubjectId = ADMIN_TOKEN_REQUEST_CAPABILITY_SUBJECT_ID;
@@ -1339,8 +1430,8 @@ export class GatewayFleetSsoRouter {
         providerSubjectId,
       },
       authority: {
-        authorityGeneration: syntheticVersion,
-        globalAuthEpoch: syntheticVersion,
+        authorityGeneration: audited.authorityGeneration,
+        globalAuthEpoch: audited.globalAuthEpoch,
       },
     };
     const context = createImmutableFleetAuthorizationContext({
@@ -1356,15 +1447,29 @@ export class GatewayFleetSsoRouter {
       resolvedAt,
       provenanceSource: 'gateway_admin_token',
     });
+    // The ADMIN_TOKEN operator is the operator of every fleet companion, so
+    // the fleet model-usage roster is the whole gateway fleet (jxthv).
+    const authContext = toRequestCapabilityAuthContext(context);
+    const fleetModelUsage = isFleetModelUsageTarget(target)
+      ? {
+          fleetCompanionIds: Object.freeze([...this.upstreams.keys()].sort()),
+          fleetModelUsageRequestTarget: this.fleetModelUsageRequestTarget(
+            target,
+            authContext.resolvedAt,
+            principalId,
+          ),
+        }
+      : {};
     return await this.issueCapability({
       target,
       requestId,
       decisionId: authorizationEventId,
       authContext: Object.freeze({
-        ...toRequestCapabilityAuthContext(context),
+        ...authContext,
         // The shared ADMIN_TOKEN is the fleet deployment's unconditional
         // operator credential, so it must not inherit SSO subject filtering.
         fleetAccessMode: 'sole_admin',
+        ...fleetModelUsage,
       }),
       versions: authorityVersions(context),
       context,
@@ -1439,6 +1544,27 @@ export class GatewayFleetSsoRouter {
       });
     }
     return { token, verified, context: input.context };
+  }
+
+  private fleetModelUsageRequestTarget(
+    target: CompiledGardenRequestTarget,
+    resolvedAt: string,
+    principalId: string,
+  ): string {
+    try {
+      return resolveFleetModelUsageInternalRequestTarget(
+        parseFleetModelUsageResourceQuery(target.resource.query),
+        Date.parse(resolvedAt),
+      );
+    } catch {
+      throw new FleetSsoRequestError(400, 'Invalid fleet model usage query', {
+        reasonCode: 'request_target_invalid',
+        reason: 'fleet_model_usage_query_invalid',
+        routeId: target.resource.routeId,
+        action: target.action,
+        principalId,
+      });
+    }
   }
 
   private async resolveFleetModelUsageRoster(

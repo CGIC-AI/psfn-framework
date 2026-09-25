@@ -364,6 +364,8 @@ export interface CorrelationMetadata extends LLMRequestMetadata {
   purpose: string;
   /** Caller-owned completion ceiling propagated to the final provider request. */
   requestedMaxOutputTokens?: number;
+  /** The turn's reply is delivered only on completion (see MessageRoutingMetadata). */
+  bufferedTextDelivery?: boolean;
   viewerTrustLevel?: TrustLevel;
   /**
    * Origin of the requester driving this turn, independent of `viewerTrustLevel`.
@@ -424,6 +426,7 @@ export const CORRELATION_METADATA_KEYS = [
   'callType',
   'purpose',
   'requestedMaxOutputTokens',
+  'bufferedTextDelivery',
   'viewerTrustLevel',
   'requesterProvenance',
   'requestAudience',
@@ -509,7 +512,7 @@ export interface CompanionAvailabilitySnapshot {
 }
 
 export interface MessageRoutingMetadata {
-  source?: 'wyoming' | 'discord' | 'telegram' | 'multica' | 'buzz' | 'api' | 'terminal' | 'psfn-amica' | 'satellite' | 'companion' | 'companion-ui' | 'unknown';
+  source?: 'wyoming' | 'discord' | 'telegram' | 'api' | 'terminal' | 'psfn-amica' | 'satellite' | 'companion' | 'companion-ui' | 'external' | 'unknown';
   /** Server-authored provenance for the dedicated authenticated shakedown harness. */
   testingHarness?: import('./testing-harness.js').TestingHarnessRunProvenance;
   /**
@@ -545,6 +548,13 @@ export interface MessageRoutingMetadata {
   channelPrivacy?: ChannelPrivacy;
   /** Validated OpenAI-compatible `max_tokens` limit for this turn. */
   completionMaxTokens?: number;
+  /**
+   * The ingress delivers this turn's reply only once, when it completes (e.g. a
+   * non-streaming API request): no consumer receives partial text, so a model
+   * stream that fails mid-reply can still fall back to the next candidate
+   * (p3of8). Absent means text may be streamed live to someone.
+   */
+  bufferedTextDelivery?: true;
   modelOverride?: MessageModelOverride;
   promptOverride?: MessagePromptOverride;
   responseStyle?: ResponseStyle;
@@ -1580,11 +1590,37 @@ export interface ModelRegistryPromptCachingPolicy {
   scope?: PromptCacheScope;
 }
 
+/**
+ * Image-output model (models.json `imageModels`, s5b89). Kept apart from
+ * `models` so image generators never enter LLM purpose routing. `provider`
+ * names a providers.json entry; the credential comes from that entry only.
+ */
+export interface ImageModelRegistryEntry {
+  id: string;
+  provider: string;
+  model: string;
+  modes: ('create' | 'edit')[];
+  /** At most one primary per mode; the primary is the default for that mode. */
+  primary: boolean;
+  /**
+   * Worst-case price of one generated image (6da92). The budget gate admits a
+   * request only when its images fit the budget at this price; an unpriced
+   * image model is refused while the model budget is enforced.
+   */
+  cost?: ImageModelCost;
+}
+
+export interface ImageModelCost {
+  perImageUsd: number;
+  currency: 'USD';
+}
+
 export interface CanonicalModelRegistry {
   schemaVersion: 1;
   models: ModelRegistryEntry[];
   budgetPolicy?: ModelRegistryBudgetPolicy;
   promptCaching?: ModelRegistryPromptCachingPolicy;
+  imageModels?: ImageModelRegistryEntry[];
 }
 
 export interface ModelBudgetWindowSnapshot {
@@ -1651,6 +1687,10 @@ export const COMPLETION_PURPOSES = [
   'reasoning',
   'import_processing',
   'vision',
+  // Typed decision calls (epic 4lf3r). Not a canonical registry purpose: it
+  // routes the background lane first, then chat, so existing models.json files
+  // need no new primary tag.
+  'decision',
 ] as const;
 export type CompletionPurpose = typeof COMPLETION_PURPOSES[number];
 

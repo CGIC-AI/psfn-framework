@@ -76,9 +76,19 @@ export interface GatewayChannelSurfaces {
 
 interface DiscordPrimaryUserAuthority {
   fleetAuth?: {
-    provider: { kind: 'discord' };
+    provider: { kind: 'discord' | 'none' };
     accountRoster?: readonly FleetAuthAccountRosterEntry[];
   };
+}
+
+function resolvePluginCompanionDisplayName(
+  fleet: SubstrateConfig['companionFleet'],
+  companionId: string | undefined,
+): { companionDisplayName?: string } {
+  if (!companionId) return {};
+  const displayName = fleet?.companions
+    .find(companion => companion.companionId === companionId)?.displayName?.trim();
+  return displayName ? { companionDisplayName: displayName } : {};
 }
 
 /**
@@ -409,6 +419,7 @@ export async function loadGatewayChannelSurfaces(
     contextFor: (pluginId, section) => ({
       log: input.log,
       shutdownTimeoutMs: Math.ceil(input.bootstrap.shutdownForceExitTimeoutMs / 2),
+      ...resolvePluginCompanionDisplayName(input.config.companionFleet, section.companionId),
       intakeScreening: section.enabled
         ? resolveChannelIntakeScreening(
           intakeScreeningRouting,
@@ -416,15 +427,6 @@ export async function loadGatewayChannelSurfaces(
           pluginId,
         )
         : null,
-      ...(input.config.postgresDatabaseUrl
-        ? { postgresDatabaseUrl: input.config.postgresDatabaseUrl }
-        : {}),
-      ...(input.config.postgresSchema?.trim()
-        ? { postgresSchema: input.config.postgresSchema.trim() }
-        : {}),
-      ...(input.config.postgresRole?.trim()
-        ? { postgresRole: input.config.postgresRole.trim() }
-        : {}),
     }),
   });
 

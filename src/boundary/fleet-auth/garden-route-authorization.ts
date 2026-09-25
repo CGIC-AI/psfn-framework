@@ -88,7 +88,11 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
   },
   {
     action: 'roles.manage', area: 'identity',
-    routeIds: ids('POST', ['/v1/fleet-auth/lifecycle/role/complete']),
+    routeIds: ids('POST', [
+      '/v1/fleet-auth/lifecycle/role/complete',
+      // Audited ADMIN_TOKEN operator account authority (psfn-framework-aol3m).
+      '/v1/fleet-auth/lifecycle/account/complete',
+    ]),
     confirmation: 'explicit',
   },
   {
@@ -314,7 +318,7 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
     action: 'contacts.manage', area: 'contacts', routeIds: [
       ...ids('POST', [
         '/api/admin/contacts', '/api/admin/contacts/:id/merge',
-        '/api/admin/contacts/:id/channel-identity/transfer', '/api/admin/contacts/:id/unlink',
+        '/api/admin/contacts/:id/unlink',
         '/api/admin/contacts/:id/conversation-channel/delete',
       ]),
       ...ids(['PUT', 'PATCH', 'DELETE'], ['/api/admin/contacts/:id']),
@@ -508,7 +512,7 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
         '/api/admin/prompts/constitution', '/api/admin/prompts/foundation',
         '/api/admin/prompts/north-star', '/api/admin/prompts/runtime-blocks',
       ]),
-      ...ids('PATCH', ['/api/admin/prompts/:layerId']),
+      ...ids(['PATCH', 'DELETE'], ['/api/admin/prompts/:layerId']),
     ], confirmation: 'explicit',
   },
   {

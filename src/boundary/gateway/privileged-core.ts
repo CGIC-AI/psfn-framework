@@ -1,4 +1,7 @@
 import type { ChannelOutboundDock } from '../../channels/backplane/types.js';
+import type { GatewayRoomReplyOutbound } from './room-reply-outbound.js';
+import { ModelBudgetController } from '../../primitives/llm/model-budget.js';
+import { createGatewayJevDecisionService } from './jev-decision-service.js';
 import {
   createEligibilityGate,
   type EligibilityDecision,
@@ -119,17 +122,12 @@ export interface GatewayPrivilegedCore {
   createGatewayServer(input: {
     discordAdapter: ChannelOutboundDock;
     telegramDock?: ChannelOutboundDock;
+    roomReplyOutbound?: GatewayRoomReplyOutbound;
     operatorTelegramChatId?: string;
     operatorDiscordDock?: ChannelOutboundDock;
     operatorDiscordChannelId?: string;
     /** Multi-account discord (W1-P2): outbound dock per companionId. */
     discordAccountDocks?: ReadonlyMap<CompanionId, ChannelOutboundDock>;
-    pluginOutboundRoutes?: readonly {
-      pluginId: 'buzz';
-      accountId?: string;
-      companionId?: string;
-      dock: ChannelOutboundDock;
-    }[];
     /** Inter-companion channel lane (W6); multi-companion only. */
     companionChannels?: GatewayCompanionChannelLane;
     /** Shared durable authority for the ICP autonomy broker. */
@@ -279,7 +277,7 @@ export async function buildGatewayPrivilegedCore(
   );
   // ── Gateway ingress admission receipts (psfn-framework-ccgdz.2) ──
   // Receipt issuance was wired in the agent process but NOT here, so the
-  // highest-volume channel ingress (Discord/Telegram/buzz/multica/api) admitted
+  // highest-volume channel ingress (Discord/Telegram/api) admitted
   // bytes with no content-addressed proof. One receipt store per companion,
   // scoped to that companion's schema exactly like the fleet-wide read stores,
   // because a receipt is owned by exactly one companion.
@@ -342,8 +340,19 @@ export async function buildGatewayPrivilegedCore(
   // durable quarantine store per companion, then routes every ingress by its
   // authenticated/routed owner. Mode 'off' yields null services; a
   // provisioned-but-broken L1.5 model fails startup.
+  // Epic 4lf3r: one gateway-owned remote decision service, shared by the
+  // agent-facing llm.decide RPC and the additive intake.l2 signal.
+  const jevDecisions = createGatewayJevDecisionService({
+    config: input.config,
+    requireCompanionAttribution: input.bootstrap.server.multiCompanion.enabled,
+    ...(privilegedServices.modelUsageStore ? { usageRecorder: privilegedServices.modelUsageStore } : {}),
+  });
   const intakeScreening = await composeGatewayIntakeScreeningRuntime({
     config: input.config,
+    jevDecisions,
+    ...(privilegedServices.modelUsageStore
+      ? { modelUsageRecorder: privilegedServices.modelUsageStore }
+      : {}),
     resolveReceipts: resolveIntakeReceipts,
     disposeReceipts: async () => {
       for (const store of receiptStoresByCompanionId.values()) {
@@ -554,11 +563,11 @@ export async function buildGatewayPrivilegedCore(
     createGatewayServer: ({
       discordAdapter,
       telegramDock,
+      roomReplyOutbound,
       operatorTelegramChatId,
       operatorDiscordDock,
       operatorDiscordChannelId,
       discordAccountDocks,
-      pluginOutboundRoutes,
       companionChannels,
       icpAutonomyStore,
       icpInitiationPolicyAuthority,
@@ -570,7 +579,6 @@ export async function buildGatewayPrivilegedCore(
       credentialPresence,
     }) => new GatewayServer({
       ...(discordAccountDocks ? { discordAccountDocks } : {}),
-      ...(pluginOutboundRoutes ? { pluginOutboundRoutes } : {}),
       ...(companionChannels ? { companionChannels } : {}),
       ...(icpAutonomyStore ? { icpAutonomyStore } : {}),
       ...(icpInitiationPolicyAuthority ? { icpInitiationPolicyAuthority } : {}),
@@ -590,12 +598,15 @@ export async function buildGatewayPrivilegedCore(
       modelDiscovery: privilegedServices.modelDiscovery,
       discordAdapter,
       ...(telegramDock ? { telegramDock } : {}),
+      ...(roomReplyOutbound ? { roomReplyOutbound } : {}),
       ...(operatorTelegramChatId ? { operatorTelegramChatId } : {}),
       ...(operatorDiscordDock ? { operatorDiscordDock } : {}),
       ...(operatorDiscordChannelId ? { operatorDiscordChannelId } : {}),
       gitOps,
       imageConfig: input.config,
       ...(privilegedServices.modelUsageStore ? { modelUsageRecorder: privilegedServices.modelUsageStore } : {}),
+      modelBudget: new ModelBudgetController(input.config, privilegedServices.modelUsageStore ?? undefined),
+      jevDecisions,
       ...(input.config.credentialVault ? { credentialVault: input.config.credentialVault } : {}),
       intakeScreeningMode: intakeScreening.globalMode,
       ...(!input.bootstrap.server.multiCompanion.enabled

@@ -4,6 +4,7 @@ import {
   GatewayFleetPortalProjection,
   serializeFleetPortalProjection,
 } from './fleet-portal-projection.js';
+import type { FleetIcpCompanionPosture, FleetIcpPostureSource } from './fleet-icp-posture.js';
 
 const COMPANION_A = '11111111-1111-4111-8111-111111111111';
 const COMPANION_B = '22222222-2222-4222-8222-222222222222';
@@ -11,6 +12,21 @@ const COMPANION_C = '33333333-3333-4333-8333-333333333333';
 const COMPANION_D = '44444444-4444-4444-8444-444444444444';
 const SESSION_TOKEN = 'S'.repeat(43);
 const GENERATED_AT = new Date('2026-07-16T20:00:00.000Z');
+const SINGLETON_ICP: FleetIcpCompanionPosture = {
+  state: 'not_applicable', reason: 'singleton_fleet', lifecycle: 'member',
+};
+class InertIcpPostures extends Map<string, FleetIcpCompanionPosture> {
+  override get(): FleetIcpCompanionPosture {
+    return SINGLETON_ICP;
+  }
+}
+const INERT_ICP: FleetIcpPostureSource = {
+  snapshot: async () => ({
+    cluster: 'inactive_singleton',
+    companions: new InertIcpPostures(),
+    health: 'not_applicable',
+  }),
+};
 
 function snapshot(
   connections: GatewayFleetConnectionSnapshot['connections'],
@@ -80,19 +96,22 @@ describe('gateway fleet portal projection', () => {
       ],
       source: { getFleetConnectionSnapshot },
       channelHealth: { healthOf: () => 'up' },
+      icpPosture: INERT_ICP,
       now: () => GENERATED_AT,
     });
 
     const result = await projection.resolve({ sessionToken: SESSION_TOKEN });
     expect(result).toEqual({
-      schemaVersion: 2,
+      schemaVersion: 3,
       generatedAt: GENERATED_AT.toISOString(),
       session: { state: 'authenticated' },
+      icp: { state: 'inactive_singleton', activity: { status: 'not_applicable' } },
       companions: [{
         companionId: COMPANION_A,
         displayName: 'Unknown companion · 11111111',
         health: { agentRpc: 'up', adminTransport: 'unknown', channels: 'up' },
         posture: { status: 'unavailable' },
+        icp: SINGLETON_ICP,
         gardenPath: `/companions/${COMPANION_A}/garden`,
       }],
     });
@@ -149,6 +168,7 @@ describe('gateway fleet portal projection', () => {
           connection(COMPANION_D, 'degraded', 'stale'),
         ]),
       },
+      icpPosture: INERT_ICP,
       now: () => GENERATED_AT,
     });
 
@@ -211,6 +231,7 @@ describe('gateway fleet portal projection', () => {
           connection(COMPANION_C, 'ready', 'healthy', expiredPosture),
         ]),
       },
+      icpPosture: INERT_ICP,
       now: () => GENERATED_AT,
     });
 
@@ -258,6 +279,7 @@ describe('gateway fleet portal projection', () => {
           connection(COMPANION_A, 'ready', 'healthy'),
         ]),
       },
+      icpPosture: INERT_ICP,
       now: () => GENERATED_AT,
     });
     const first = await build(COMPANION_B).resolve({ sessionToken: SESSION_TOKEN });
@@ -277,6 +299,7 @@ describe('gateway fleet portal projection', () => {
       },
       fleet: [{ companionId: COMPANION_A }],
       source: { getFleetConnectionSnapshot: () => snapshot([]) },
+      icpPosture: INERT_ICP,
       now: () => GENERATED_AT,
     });
 
@@ -302,7 +325,8 @@ describe('gateway fleet portal projection', () => {
           { companionId: COMPANION_C, gardenPort: 3213, displayName: 'private-c' },
         ],
         source: { getFleetConnectionSnapshot: () => snapshot([]) },
-        now: () => GENERATED_AT,
+        icpPosture: INERT_ICP,
+      now: () => GENERATED_AT,
       });
 
       const roster = await projection.resolveRoster({ sessionToken: SESSION_TOKEN });
@@ -345,7 +369,8 @@ describe('gateway fleet portal projection', () => {
           { companionId: COMPANION_C },
         ],
         source: { getFleetConnectionSnapshot: () => snapshot([]) },
-        now: () => GENERATED_AT,
+        icpPosture: INERT_ICP,
+      now: () => GENERATED_AT,
       });
 
       const roster = await projection.resolveRoster({ sessionToken: SESSION_TOKEN });
@@ -366,7 +391,8 @@ describe('gateway fleet portal projection', () => {
         authorizer: { resolve: async () => ({ companions: [] }) },
         fleet: [{ companionId: COMPANION_A, gardenPort: 3211, displayName: 'Flagship' }],
         source: { getFleetConnectionSnapshot: () => snapshot([]) },
-        now: () => GENERATED_AT,
+        icpPosture: INERT_ICP,
+      now: () => GENERATED_AT,
       });
       await expect(projection.resolveRoster({ sessionToken: 'too-short' }))
         .rejects.toMatchObject({ code: 'malformed_request' });
@@ -379,7 +405,8 @@ describe('gateway fleet portal projection', () => {
         },
         fleet: [{ companionId: COMPANION_A, gardenPort: 3211, displayName: 'Flagship' }],
         source: { getFleetConnectionSnapshot: () => snapshot([]) },
-        now: () => GENERATED_AT,
+        icpPosture: INERT_ICP,
+      now: () => GENERATED_AT,
       });
       await expect(unknownManifest.resolveRoster({ sessionToken: SESSION_TOKEN }))
         .rejects.toThrow(/unknown manifest companion/i);
@@ -395,7 +422,8 @@ describe('gateway fleet portal projection', () => {
         },
         fleet: [{ companionId: COMPANION_A, gardenPort: 3211, displayName: 'Flagship' }],
         source: { getFleetConnectionSnapshot: () => snapshot([]) },
-        now: () => GENERATED_AT,
+        icpPosture: INERT_ICP,
+      now: () => GENERATED_AT,
       });
       await expect(colliding.resolveRoster({ sessionToken: SESSION_TOKEN }))
         .rejects.toThrow(/colliding/i);

@@ -85,6 +85,8 @@ interface ScratchpadTestRow {
   content: string;
   created_at: number | string;
   updated_at: number | string;
+  source_scope: string;
+  source_channel_id: string | null;
 }
 
 function postgresMemoryMigrationSql(): string {
@@ -297,6 +299,12 @@ class FakeMemoryPool {
     if (normalized.includes('order by memory.extracted_at desc, memory.id asc limit $1')) {
       return result([...active].sort((left, right) => Number(right.extracted_at) - Number(left.extracted_at)
         || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)).slice(0, Number(values[0])));
+    }
+    if (normalized.includes('order by memory.last_accessed desc, memory.extracted_at desc, memory.id desc limit $1')) {
+      // Internal-artifact exclusion is covered against real Postgres.
+      return result([...active]
+        .sort((left, right) => Number(right.last_accessed) - Number(left.last_accessed) || newestFirst(left, right))
+        .slice(0, Number(values[0])));
     }
     if (normalized.includes('order by memory.extracted_at desc, memory.id desc offset $1 limit $2')) {
       const offset = Number(values[0]);
@@ -634,6 +642,8 @@ class FakeMemoryPool {
         content: String(values[1] ?? ''),
         created_at: Number(values[2] ?? 0),
         updated_at: Number(values[3] ?? 0),
+        source_scope: String(values[4] ?? ''),
+        source_channel_id: values[5] === null || values[5] === undefined ? null : String(values[5]),
       };
       this.scratchpadEntries.set(row.id, row);
       return { rows: [], rowCount: 1, command: 'INSERT', oid: 0, fields: [] } as QueryResult;
@@ -1619,12 +1629,16 @@ describe('postgres memory store unit coverage', () => {
       content: 'Keep the current working note.',
       created_at: now - 1_000,
       updated_at: now - 1_000,
+      source_scope: 'conversation',
+      source_channel_id: 'api:room-a',
     });
     pool.scratchpadEntries.set('expired-note', {
       id: 'expired-note',
       content: 'Old scratchpad content should not enter chat context.',
       created_at: now - (25 * 60 * 60 * 1000),
       updated_at: now - (25 * 60 * 60 * 1000),
+      source_scope: 'unknown',
+      source_channel_id: null,
     });
     postgresMocks.activePool = pool;
 
@@ -1636,6 +1650,7 @@ describe('postgres memory store unit coverage', () => {
         content: 'Keep the current working note.',
         createdAt: now - 1_000,
         updatedAt: now - 1_000,
+        provenance: { scope: 'conversation', channelId: 'api:room-a' },
       },
     ]);
     expect(await store.getScratchpadEntry('expired-note')).toBeUndefined();
@@ -1652,6 +1667,8 @@ describe('postgres memory store unit coverage', () => {
       content: 'Hydrated from pg bigint strings.',
       created_at: String(now - 2_000),
       updated_at: String(now - 1_000),
+      source_scope: 'unknown',
+      source_channel_id: null,
     });
     postgresMocks.activePool = pool;
 
@@ -1664,10 +1681,26 @@ describe('postgres memory store unit coverage', () => {
         content: 'Hydrated from pg bigint strings.',
         createdAt: now - 2_000,
         updatedAt: now - 1_000,
+        provenance: { scope: 'unknown' },
       },
     ]);
     expect(typeof entries[0]?.createdAt).toBe('number');
     expect(typeof entries[0]?.updatedAt).toBe('number');
+  });
+
+  it('rejects a hydrated scratchpad row with inconsistent provenance (yy0r2)', async () => {
+    const pool = new FakeMemoryPool();
+    pool.scratchpadEntries.set('bad', {
+      id: 'bad',
+      content: 'conversation note without a channel',
+      created_at: Date.now(),
+      updated_at: Date.now(),
+      source_scope: 'conversation',
+      source_channel_id: null,
+    });
+    postgresMocks.activePool = pool;
+
+    await expect(createPostgresMemoryStore('postgres://unused', 4)).rejects.toThrow('Invalid scratchpad provenance');
   });
 
   it('persists and hydrates first-class memory evolution links', async () => {

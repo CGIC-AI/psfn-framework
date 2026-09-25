@@ -12,6 +12,11 @@ import {
   type ResolvedCorrelationMetadata,
 } from './correlation.js';
 import type { RoutingCandidate } from './routing.js';
+import { classifyLLMError } from './error-classify.js';
+import {
+  estimateConservativeModelUsageCostUsd,
+  type ModelUsageCostRates,
+} from '../../shared/telemetry/model-usage-accounting.js';
 
 const PROVIDER_RESPONSE_PREFIX_ARTIFACTS = [
   '<｜begin▁of▁sentence｜>',
@@ -565,6 +570,38 @@ export function extractToolCallsFromContentBlocks(blocks?: unknown[]): ToolCall[
   });
 }
 
+const PROVIDER_ERROR_LEADING_STATUS = /^\s*([1-5]\d{2})\b/u;
+
+/**
+ * pi-ai resolves (does not throw) a completion whose provider call failed or
+ * was aborted, as an assistant message with stopReason 'error' or 'aborted'
+ * and no content. Surface that as the real failure instead of an "empty
+ * response": an abort (e.g. a model-call gate preemption) is an AbortError that
+ * stops fallback, and a provider error carries the provider's own message and
+ * HTTP status so fallback classifies it (rate limit, auth, 5xx, ...).
+ */
+export function assertProviderCompletionStopReason(
+  response: { stopReason?: unknown; errorMessage?: unknown },
+  candidate: RoutingCandidate,
+): void {
+  const detail = typeof response.errorMessage === 'string' ? response.errorMessage.trim() : '';
+  if (response.stopReason === 'aborted') {
+    const error = new Error(
+      `LLM request to ${candidate.provider}/${candidate.model} was aborted${detail ? `: ${detail}` : ''}`,
+    );
+    error.name = 'AbortError';
+    throw error;
+  }
+  if (response.stopReason === 'error') {
+    const error = new Error(
+      `LLM provider error from ${candidate.provider}/${candidate.model}: ${detail || 'no provider detail'}`,
+    ) as Error & { status?: number };
+    const status = PROVIDER_ERROR_LEADING_STATUS.exec(detail)?.[1];
+    if (status) error.status = Number(status);
+    throw error;
+  }
+}
+
 export function assertUsableProviderResponse(
   response: {
     content?: unknown;
@@ -671,4 +708,45 @@ export function inferCallType(
   channelId?: string,
 ) {
   return inferCorrelationCallType(purpose, channelId);
+}
+
+/**
+ * An aborted or timed-out attempt reports no usage, yet the provider may have
+ * billed it. When the request is bounded (estimated input tokens, the
+ * candidate's output cap) and the model is priced, charge that worst case so
+ * the row is a conservative known cost; provider errors with no usage stay $0
+ * and unpriced models stay unknown (fail closed at the budget gate).
+ */
+export function resolveAbortedAttemptWorstCaseUsd(input: {
+  status: 'success' | 'failure';
+  error: Error | undefined;
+  reportedTokens: number;
+  worstCaseTokens: { input: number; output: number } | undefined;
+  rates: ModelUsageCostRates | undefined;
+}): number | undefined {
+  if (input.status !== 'failure' || !input.error || !input.worstCaseTokens || !input.rates) return undefined;
+  if (input.reportedTokens > 0) return undefined;
+  const category = classifyLLMError(input.error).category;
+  if (category !== 'abort' && category !== 'timeout') return undefined;
+  return estimateConservativeModelUsageCostUsd({
+    inputTokens: Math.max(0, Math.ceil(input.worstCaseTokens.input)),
+    outputTokens: Math.max(0, Math.ceil(input.worstCaseTokens.output)),
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+  }, input.rates);
+}
+
+/**
+ * The input-token estimate serializes message content, so an inline image's
+ * base64 bytes count as text (2sm32). No request can exceed the routed model's
+ * context window, which is therefore the ceiling for budget estimates.
+ */
+export function capInputTokensToContextWindow(
+  estimatedInputTokens: number,
+  candidate: Pick<RoutingCandidate, 'contextWindow'>,
+): number {
+  const window = candidate.contextWindow;
+  return window !== undefined && Number.isFinite(window) && window > 0
+    ? Math.min(estimatedInputTokens, window)
+    : estimatedInputTokens;
 }

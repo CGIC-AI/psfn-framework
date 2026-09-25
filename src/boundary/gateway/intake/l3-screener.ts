@@ -37,6 +37,7 @@
 // shadow mode the failure is fully audited (envelope + CogSec event + error
 // log) while `effectiveText` stays the original input (observe-only rollout).
 
+import type { IntakeScreenerUsageLedger } from './screener-usage.js';
 import { createHash } from 'node:crypto';
 import { createComponentLogger } from '../../../shared/logger.js';
 import {
@@ -119,11 +120,19 @@ const MAX_SOURCE_REF_CHARS = 300;
 const DEFAULT_MAX_CONTENT_CHARS = 48000;
 
 /**
- * Shortest verbatim run of screened content the safe representation may NOT
- * contain. Below this length, shared phrases are ordinary English; at or
- * above it, the screener is quoting instead of describing (fail closed).
+ * Shortest single unbroken token (URL, encoded blob, identifier) of screened
+ * content the safe representation may NOT repeat.
  */
 export const L3_MIN_VERBATIM_QUOTE_CHARS = 24;
+
+/**
+ * Shortest run of consecutive screened-content words the safe representation
+ * may NOT contain. A character window was too eager on long pages: an honest
+ * description of a 48k-character article about a topic shares 24-character
+ * topical phrases ("prompt injection attacks") with it by chance, so every
+ * real model's summary failed closed. Eight consecutive words is quoting.
+ */
+const L3_MIN_VERBATIM_QUOTE_WORDS = 8;
 
 // ── Public types ──
 
@@ -197,6 +206,8 @@ export interface L3ScreenerDeps {
   maxOutputTokens: number;
   /** Test seam; production uses the global fetch. */
   testCompletion?: ScreenerTestCompletion;
+  /** Usage ledger for each provider dispatch (1fyyi). */
+  usageLedger?: IntakeScreenerUsageLedger;
 }
 
 // ── Errors (fail closed, never swallowed) ──
@@ -211,9 +222,13 @@ export class L3ScreenerError extends Error {
 
 /** The L3 screener returned a response that failed schema validation. */
 export class L3ScreenerSchemaError extends L3ScreenerError {
-  constructor(message: string) {
+  /** Fixed, content-free guidance for the transport's one repair attempt. */
+  readonly repairHint?: string;
+
+  constructor(message: string, repairHint?: string) {
     super(message);
     this.name = 'L3ScreenerSchemaError';
+    if (repairHint) this.repairHint = repairHint;
   }
 }
 
@@ -306,34 +321,69 @@ function normalizeForOverlap(text: string): string {
     .toLowerCase();
 }
 
+function overlapWords(normalized: string): string[] {
+  return normalized
+    .split(' ')
+    .map(word => word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ''))
+    .filter(word => word.length > 0);
+}
+
+/** Screened content, prepared once per verdict for the verbatim-quote guard. */
+interface VerbatimGuardContent {
+  normalized: string;
+  wordRuns: ReadonlySet<string>;
+  longTokens: readonly string[];
+}
+
+function prepareVerbatimGuard(screenedText: string): VerbatimGuardContent {
+  const normalized = normalizeForOverlap(screenedText);
+  const words = overlapWords(normalized);
+  const wordRuns = new Set<string>();
+  for (let i = 0; i + L3_MIN_VERBATIM_QUOTE_WORDS <= words.length; i += 1) {
+    wordRuns.add(words.slice(i, i + L3_MIN_VERBATIM_QUOTE_WORDS).join(' '));
+  }
+  const longTokens = [...new Set(normalized.split(' ')
+    .filter(token => token.length >= L3_MIN_VERBATIM_QUOTE_CHARS))];
+  return { normalized, wordRuns, longTokens };
+}
+
 /**
  * Structural summary-instead-of-quote enforcement: throws when a screener
- * output field contains a verbatim run of the screened content (whitespace-
- * normalized, case-insensitive) of `L3_MIN_VERBATIM_QUOTE_CHARS` or longer.
- * A screener that echoes the hostile payload fails schema validation, and the
+ * output field repeats `L3_MIN_VERBATIM_QUOTE_WORDS` consecutive words of the
+ * screened content, repeats one of its unbroken tokens of
+ * `L3_MIN_VERBATIM_QUOTE_CHARS` or more, or (for very short content) contains
+ * all of it. Comparison is whitespace-normalized and case-insensitive. A
+ * screener that echoes the hostile payload fails schema validation, and the
  * item fails closed to quarantine — the echo never becomes companion-visible.
  */
 function assertNoVerbatimQuote(
   fieldValue: string,
   field: string,
-  normalizedContent: string,
+  content: VerbatimGuardContent,
 ): void {
   const normalizedField = normalizeForOverlap(fieldValue);
-  if (normalizedField.length === 0 || normalizedContent.length < 12) return;
+  if (normalizedField.length === 0 || content.normalized.length < 12) return;
   const quoteError = () => new L3ScreenerSchemaError(
     `L3 screener response \`${field}\` echoes the screened content verbatim `
     + '(summary-instead-of-quote violation)',
+    VERBATIM_REPAIR_HINT,
   );
-  if (normalizedContent.length < L3_MIN_VERBATIM_QUOTE_CHARS) {
-    if (normalizedField.includes(normalizedContent)) throw quoteError();
-    return;
+  if (content.wordRuns.size === 0 && normalizedField.includes(content.normalized)) {
+    throw quoteError();
   }
-  if (normalizedField.length < L3_MIN_VERBATIM_QUOTE_CHARS) return;
-  for (let i = 0; i + L3_MIN_VERBATIM_QUOTE_CHARS <= normalizedField.length; i += 1) {
-    const window = normalizedField.slice(i, i + L3_MIN_VERBATIM_QUOTE_CHARS);
-    if (normalizedContent.includes(window)) throw quoteError();
+  if (content.longTokens.some(token => normalizedField.includes(token))) throw quoteError();
+  const fieldWords = overlapWords(normalizedField);
+  for (let i = 0; i + L3_MIN_VERBATIM_QUOTE_WORDS <= fieldWords.length; i += 1) {
+    if (content.wordRuns.has(fieldWords.slice(i, i + L3_MIN_VERBATIM_QUOTE_WORDS).join(' '))) {
+      throw quoteError();
+    }
   }
 }
+
+/** Fixed, content-free guidance for the one schema-repair attempt. */
+const VERBATIM_REPAIR_HINT = 'Your previous summary, whyFlagged or keyEntities repeated the screened '
+  + 'text word for word. Describe the content only in your own words: no quotations, '
+  + 'no copied sentences, no URLs or long identifiers copied from it.';
 
 function validateLabels(value: unknown): IntakeRiskLabel[] {
   if (value === undefined || value === null) return [];
@@ -362,7 +412,7 @@ function validateConfidence(value: unknown): number {
   return value;
 }
 
-function validateKeyEntities(value: unknown, normalizedContent: string): string[] {
+function validateKeyEntities(value: unknown, guardContent: VerbatimGuardContent): string[] {
   if (value === undefined || value === null) return [];
   if (!Array.isArray(value)) {
     throw new L3ScreenerSchemaError('L3 screener response `keyEntities` must be an array');
@@ -377,7 +427,7 @@ function validateKeyEntities(value: unknown, normalizedContent: string): string[
       { allowEmpty: true },
     );
     if (!entity) continue;
-    assertNoVerbatimQuote(entity, `keyEntities[${String(index)}]`, normalizedContent);
+    assertNoVerbatimQuote(entity, `keyEntities[${String(index)}]`, guardContent);
     if (!entities.includes(entity)) entities.push(entity);
   }
   return entities;
@@ -409,19 +459,19 @@ function parseVerdict(
   const labels = validateLabels(record.labels);
   const injectionConfidence = validateConfidence(record.injectionConfidence);
 
-  const normalizedContent = normalizeForOverlap(screenedText);
+  const guardContent = prepareVerbatimGuard(screenedText);
   const summary = sanitizeBoundedLine(record.summary, 'summary', MAX_SUMMARY_CHARS);
-  assertNoVerbatimQuote(summary, 'summary', normalizedContent);
+  assertNoVerbatimQuote(summary, 'summary', guardContent);
   const contentType = sanitizeBoundedLine(record.contentType, 'contentType', MAX_CONTENT_TYPE_CHARS);
-  assertNoVerbatimQuote(contentType, 'contentType', normalizedContent);
-  const keyEntities = validateKeyEntities(record.keyEntities, normalizedContent);
+  assertNoVerbatimQuote(contentType, 'contentType', guardContent);
+  const keyEntities = validateKeyEntities(record.keyEntities, guardContent);
   const whyFlagged = sanitizeBoundedLine(
     record.whyFlagged,
     'whyFlagged',
     MAX_WHY_FLAGGED_CHARS,
     { allowEmpty: record.flagged !== true },
   );
-  assertNoVerbatimQuote(whyFlagged, 'whyFlagged', normalizedContent);
+  assertNoVerbatimQuote(whyFlagged, 'whyFlagged', guardContent);
 
   // Verdict coherence (fail closed): quarantine-family labels force a flag.
   const hasQuarantineLabel = labels.some(
@@ -465,10 +515,12 @@ export async function screenL3(
   }
 
   const startedAt = performance.now();
+  const onAttempt = deps.usageLedger?.('l3', deps.model);
   const verdict = await callValidatedToolLessJsonScreener({
     backend: deps.backend,
     model: deps.model,
     timeoutMs: deps.timeoutMs,
+    ...(onAttempt ? { onAttempt } : {}),
     maxOutputTokens: deps.maxOutputTokens,
     systemPrompt: L3_CLASSIFIER_SYSTEM_PROMPT,
     userMessage: buildUserMessage(neutralized, context),
@@ -560,6 +612,8 @@ export interface EvaluateL3Input {
   backend: L3ScreenerBackend;
   /** Test seam; production uses the global fetch. */
   testCompletion?: ScreenerTestCompletion;
+  /** Usage ledger for each L3 provider dispatch (1fyyi). */
+  usageLedger?: IntakeScreenerUsageLedger;
 }
 
 export type L3ScreeningOutcome =
@@ -646,7 +700,8 @@ export async function evaluateL3(input: EvaluateL3Input): Promise<L3ScreeningOut
       timeoutMs: l3.timeoutMs,
       maxContentChars: l3.maxContentChars,
       maxOutputTokens: l3.maxOutputTokens,
-        ...(input.testCompletion ? { testCompletion: input.testCompletion } : {}),
+      ...(input.testCompletion ? { testCompletion: input.testCompletion } : {}),
+      ...(input.usageLedger ? { usageLedger: input.usageLedger } : {}),
     },
   );
 

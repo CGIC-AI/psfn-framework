@@ -2,6 +2,7 @@ import type {
   PostTurnActionCandidate,
   SubstrateMessage,
 } from '../../shared/contracts/runtime.js';
+import type { DecisionRuntime } from '../../primitives/llm/decision/decide.js';
 import type { ConcernCandidateReviewPort, PendingConcernCandidate } from '../intention/concern-candidate-prompt.js';
 import type { CapabilityTier } from '../../system/capabilities/tier-types.js';
 import type { CompositionalPolicyConfig } from '../../system/config/runtime-config-contracts.js';
@@ -116,6 +117,8 @@ export interface ReflectionRuntimeOptions {
    */
   automataClassLifecycle?: AutomataClassLifecycleRuntime | null;
   llmProvider?: LLMProviderPort;
+  /** Typed decisions for opt-in post-turn pre-gates (epic 4lf3r). */
+  decisionRuntime?: Pick<DecisionRuntime, 'decide' | 'siteSettings'>;
   capabilityTier?: CapabilityTier;
   compositionalPolicy?: CompositionalPolicyConfig;
   characterPromptVariablesProvider?: () => Record<string, string>;

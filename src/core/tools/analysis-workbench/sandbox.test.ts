@@ -1259,12 +1259,47 @@ describe('evidence collection', () => {
       sessionManager,
     });
 
-    await sandbox.execute('session_messages("chan1", 10);', 5000, 8192);
+    await runWithRequestContext({
+      callType: 'tool',
+      purpose: 'agent.turn',
+      channelId: 'api:owner-console',
+      viewerTrustLevel: 'primary',
+      viewerChannelPrivacy: 'private',
+    }, () => sandbox.execute('session_messages("chan1", 10);', 5000, 8192));
     const evidence = sandbox.collectEvidence();
     expect(evidence).toHaveLength(1);
     expect(evidence[0].source).toBe('session_messages');
     expect(evidence[0].query).toBe('chan1');
     expect(evidence[0].resultCount).toBe(2);
+  });
+
+  it('refuses session_messages for a channel the conversation cannot read (k0sr0)', async () => {
+    const getRecentMessages = vi.fn(() => [
+      { role: 'user', content: 'sibling words', timestamp: Date.now() },
+    ]);
+    const sessionManager = fromAny<SessionManager>({ getRecentMessages, appendSystemNote: vi.fn() });
+    const sandbox = new REPLSandbox({
+      llmProvider: mockLLM(),
+      embeddingService: null,
+      memoryStore: null,
+      sessionManager,
+    });
+
+    const result = await runWithRequestContext({
+      callType: 'tool',
+      purpose: 'agent.turn',
+      channelId: 'api:api-key-publiccaller:stranger-room',
+      viewerTrustLevel: 'public',
+      viewerChannelPrivacy: 'private',
+    }, () => sandbox.execute(
+      'await session_messages("companion-dm:aaaaaaaa-0000-4000-8000-00000000000a:bbbbbbbb-0000-4000-8000-00000000000b", 10);',
+      5000,
+      8192,
+    ));
+    expect(JSON.stringify(result)).toContain('not readable from this conversation');
+    expect(JSON.stringify(result)).not.toContain('sibling words');
+    expect(getRecentMessages).not.toHaveBeenCalled();
+    expect(sandbox.collectEvidence()).toHaveLength(0);
   });
 
   it('records memory_get_by_id evidence', async () => {

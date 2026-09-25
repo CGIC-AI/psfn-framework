@@ -69,6 +69,7 @@ export function buildTurnCorrelation(
     ...(message.routing?.completionMaxTokens !== undefined
       ? { requestedMaxOutputTokens: message.routing.completionMaxTokens }
       : {}),
+    ...(message.routing?.bufferedTextDelivery === true ? { bufferedTextDelivery: true } : {}),
     runtimeLaneClass: resolveRuntimeLaneClassForTurn({
       callType,
       channelId: message.channelId,

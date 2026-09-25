@@ -1,7 +1,11 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, vi } from 'vitest';
+import { viewerContextIt } from '../../../test-support/viewer-context-it.js';
+
+// Spawns run inside an admitted viewer, as from a real turn (mzytp).
+const it = viewerContextIt();
 import { Agent, type AgentTool } from '../../../boundary/pi-agent/index.js';
 import { resolveInstalledAgentTurnTools } from '../../../boundary/pi-agent/agent-loop-patch.js';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';

@@ -1,3 +1,4 @@
+import { isGroupCapableChannelType } from '../../shared/contracts/channel-types.js';
 import type { NearTurnMemoryScopeClassifierPort } from '../../faculties/memory/near-turn-memory-lane.js';
 import type { RoomParticipationLeaseSettings } from '../../system/config/participation-config.js';
 import type { ChannelType } from '../../shared/contracts/runtime.js';
@@ -172,9 +173,10 @@ export class RoomParticipationLeaseCoordinator {
     if (input.isDirectMessage === true) {
       return { outcome: 'skipped', reason: 'direct_message' };
     }
-    if (input.channelType !== 'discord' && input.channelType !== 'buzz') {
-      // The lease is a verified group-room membership; other transports (ICP,
-      // terminal, voice) have their own consent moments.
+    if (!isGroupCapableChannelType(input.channelType)) {
+      // The lease is a verified group-room membership on a connector that
+      // declares group rooms (nfmdd); other transports (ICP, terminal, voice)
+      // have their own consent moments.
       return { outcome: 'skipped', reason: 'unsupported_channel' };
     }
     const sourceMessageId = input.sourceMessageId.trim();

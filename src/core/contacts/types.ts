@@ -192,7 +192,8 @@ export type ContactMutationAuditField = typeof CONTACT_MUTATION_AUDIT_FIELDS[num
 
 export interface ContactMutationAuditMetadata {
   source: 'fleet_garden';
-  provider: 'discord';
+  /** `admin_token` is the gateway's audited ADMIN_TOKEN operator door. */
+  provider: 'discord' | 'admin_token';
   providerSubjectId: string;
   principalId: string;
   requestId: string;

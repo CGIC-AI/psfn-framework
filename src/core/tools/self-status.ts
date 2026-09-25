@@ -34,6 +34,10 @@ import {
   SELF_AVAILABILITY_ACTIONS,
   type SelfAvailabilityAction,
 } from './self-availability.js';
+import {
+  gateSessionSummariesForViewer,
+  resolveViewerContextFromRequest,
+} from '../session/session-viewer-access.js';
 
 const DEFAULT_RECENT_CHANNEL_LIMIT = 8;
 
@@ -344,15 +348,24 @@ function sanitizeSession(summary: SessionActivitySummary): {
 
 function resolveChannels(runtime: SelfStatusToolRuntime, limit: number): MaybeAvailable<{
   recent: ReturnType<typeof sanitizeSession>[];
+  gatedOutCount: number;
 }> {
   if (!runtime.listRecentSessions) {
     return unavailable('recent session provider is not wired');
   }
 
   try {
+    // Channel ids name contacts and siblings; sessions this conversation
+    // cannot read are withheld whole with a content-free count
+    // (psfn-framework-s6a6o).
+    const { visible, gatedOutCount } = gateSessionSummariesForViewer(
+      resolveViewerContextFromRequest(),
+      runtime.listRecentSessions(limit),
+    );
     return {
       status: 'available',
-      recent: runtime.listRecentSessions(limit).map(sanitizeSession),
+      recent: visible.map(sanitizeSession),
+      gatedOutCount,
     };
   } catch {
     return sectionError('recent session provider failed');

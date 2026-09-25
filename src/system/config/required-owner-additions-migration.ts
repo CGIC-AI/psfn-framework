@@ -15,6 +15,7 @@ import {
 import { migrateRequiredSettingsBlocks } from '../settings/required-blocks-owner-migration.js';
 import { migrateIntakePolicyOwner } from './intake-policy-owner-migration.js';
 import { migrateAutomataPolicyOwner } from './automata-policy-owner-migration.js';
+import { migrateRetiredChannelPluginSections } from './channels-owner-migration.js';
 import {
   INTAKE_POLICY_FILE_NAME,
   INTAKE_POLICY_SEED_FILE_NAME,
@@ -31,6 +32,10 @@ import {
   validatePartnerAffectShadowConfig,
 } from './partner-affect-shadow-config.js';
 import { canonicalOwnerFileMode } from './owner-file-modes.js';
+import {
+  migrateChargePolicyOwner,
+  type ChargePolicyOwnerMigrationResult,
+} from './charge-policy-owner-migration.js';
 import { describeStartupOwnerFileChecks } from './startup-owner-files.js';
 
 export interface RequiredOwnerAdditionsMigrationOptions {
@@ -54,7 +59,10 @@ export interface RequiredOwnerAdditionsMigrationResult {
   settings: ReturnType<typeof migrateRequiredSettingsBlocks>;
   intakePolicy: ReturnType<typeof migrateIntakePolicyOwner> | RequiredSystemOwnerAdditionResult;
   automataPolicy: ReturnType<typeof migrateAutomataPolicyOwner> | RequiredSystemOwnerAdditionResult;
+  channels: ReturnType<typeof migrateRetiredChannelPluginSections>;
   companionOwnerAdditions?: RequiredCompanionOwnerAdditionsMigrationResult;
+  /** Companion charge-policy.json keys added after first seeding (r5). */
+  chargePolicy?: ChargePolicyOwnerMigrationResult;
   ownerModes: RequiredOwnerModesMigrationResult;
 }
 
@@ -339,9 +347,20 @@ function runRequiredOwnerAdditions(
         apply,
         faultInjection: options.faultInjection,
       }),
+    channels: migrateRetiredChannelPluginSections({
+      dataDir: options.dataDir,
+      apply,
+      faultInjection: options.faultInjection,
+    }),
     ...(options.companionDataDir
       ? {
         companionOwnerAdditions: migrateRequiredCompanionOwnerAdditions({
+          companionDataDir: options.companionDataDir,
+          seedDir,
+          apply,
+          faultInjection: options.faultInjection,
+        }),
+        chargePolicy: migrateChargePolicyOwner({
           companionDataDir: options.companionDataDir,
           seedDir,
           apply,

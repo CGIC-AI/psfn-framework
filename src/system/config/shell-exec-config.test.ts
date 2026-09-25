@@ -29,18 +29,18 @@ describe('shell exec owner settings', () => {
     expect(normalizeShellExecSettings({
       ...createDefaultShellExecSettings(),
       enabled: true,
-      allowlist: ['bash', 'multica'],
-      networkAllowlist: ['multica'],
+      allowlist: ['bash', 'example-cli'],
+      networkAllowlist: ['example-cli'],
     })).toMatchObject({
-      allowlist: ['bash', 'multica'],
-      networkAllowlist: ['multica'],
+      allowlist: ['bash', 'example-cli'],
+      networkAllowlist: ['example-cli'],
     });
 
     expect(() => normalizeShellExecSettings({
       ...createDefaultShellExecSettings(),
       enabled: true,
       allowlist: ['bash'],
-      networkAllowlist: ['multica'],
+      networkAllowlist: ['example-cli'],
     })).toThrow('shellExec.networkAllowlist');
   });
 

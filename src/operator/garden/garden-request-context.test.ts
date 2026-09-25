@@ -74,6 +74,7 @@ function context(
     assurance?: FleetGardenRequestContext['actor']['sessionAssurance'];
     role?: FleetGardenRequestContext['actor']['role'];
     accessMode?: FleetGardenRequestContext['actor']['accessMode'];
+    provider?: FleetGardenRequestContext['actor']['provider'];
   } = {},
 ): FleetGardenRequestContext {
   const area = overrides.area ?? 'memory';
@@ -110,7 +111,7 @@ function context(
     actor: Object.freeze({
       kind: 'fleet_principal',
       principalId,
-      provider: 'discord',
+      provider: overrides.provider ?? 'discord',
       providerSubjectId: `provider-${principalId}`,
       contactId,
       contactBindingId: `binding-${principalId}`,
@@ -583,6 +584,48 @@ describe('request-bound Garden principal isolation', () => {
       assurance: 'escalated',
       expiresAt: Math.floor(Date.now() / 1_000) + 60,
     })).revealMemory(intimate.id)).resolves.toBeNull();
+  });
+
+  it('reveals a memory body for the audited ADMIN_TOKEN operator without an SSO grant (jxthv)', async () => {
+    const intimate = { ...memory('contact-a'), text: 'private body', sensitivity: 'intimate' as const };
+    const classification: MemorySubjectClassification = {
+      memoryId: intimate.id,
+      subjectClass: 'single_contact',
+      status: 'current',
+      classifierVersion: 1,
+      memoryRevision: 3,
+      evidenceDigest: 'a'.repeat(64),
+      evidence: ['explicit_subject_contact'],
+      subjectContactIds: ['contact-a'],
+      reasonClass: 'explicit_subject_contact',
+      classifiedAt: 1,
+      updatedAt: 2,
+    };
+    const rawStore = {
+      queryAuthorizedMemorySubjects: vi.fn(async () => ({ memories: [intimate], total: 1 })),
+      getMemorySubjectClassification: vi.fn(async () => classification),
+    } as unknown as MemoryStorePort;
+    const service = new AdminMemoryDataService({ memoryStore: rawStore, fleetMemoryStore: rawStore });
+    const reveal = (overrides: Parameters<typeof context>[2]) => service.forRequest(
+      context('admin-token-operator', 'admin-token-contact-fixture', {
+        action: 'memory.reveal',
+        subjectRelation: 'self_or_co_subject',
+        routeId: 'POST /api/admin/memory/:id/reveal',
+        pathParams: { id: intimate.id },
+        expiresAt: Math.floor(Date.now() / 1_000) + 60,
+        provider: 'admin_token',
+        role: 'owner',
+        accessMode: 'sole_admin',
+        assurance: 'break_glass',
+        ...overrides,
+      }),
+    ).revealMemory(intimate.id);
+
+    await expect(reveal({})).resolves.toMatchObject({ memory: { text: 'private body' } });
+    // Only the signed door shape counts: a Discord break-glass session or an
+    // admin-token shape outside sole-admin mode still needs a grant.
+    await expect(reveal({ provider: 'discord' })).rejects.toThrow(/audited escalation grant/u);
+    await expect(reveal({ accessMode: 'multi_admin' })).rejects.toThrow(/audited escalation grant/u);
   });
 
   it('D1 sole-admin mode lifts every service boundary denial for the rostered admin', () => {

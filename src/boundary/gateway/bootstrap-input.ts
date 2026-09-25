@@ -18,7 +18,7 @@ import { HOOKS_DIRECTORY_NAME } from './hook-loader.js';
 import { resolveGitRepoRoot } from '../integrations/git/repo-root.js';
 import {
   resolveBeadsActionsForCaller,
-  resolveBeadsToolsEnabled,
+  resolveBeadsToolsEnablement,
 } from '../integrations/beads/enablement.js';
 import { resolveModuleRegistryPathFromWorkspace } from '../../system/modules/registry.js';
 import { parsePositiveIntEnv } from '../../shared/utils/env.js';
@@ -284,10 +284,13 @@ function buildGatewayPolicyConfig(
     systemDataRoot: systemDataDir,
     companionDataRoot: companionDataDir,
   };
-  const beadsToolsEnabled = resolveBeadsToolsEnabled(env.BEADS_TOOLS_ENABLED, {
+  // Same resolver as the agent's registration gate: explicit enablement with
+  // no provisioned Beads database denies beads.* here too (psfn-framework-povuo).
+  const beadsToolsEnabled = resolveBeadsToolsEnablement(env.BEADS_TOOLS_ENABLED, {
     workspaceRoot,
     codebaseRoot,
-  });
+    ...(env.BEADS_DIR ? { beadsDir: env.BEADS_DIR } : {}),
+  }).enabled;
   const beadsAllowActions = beadsToolsEnabled
     ? resolveBeadsActionsForCaller(env.BEADS_ALLOW_ACTIONS, 'companion')
     : undefined;

@@ -5,9 +5,12 @@ import { RUNTIME_LANE_CLASSES } from '../../../shared/contracts/runtime-lanes.js
 import type { EventBus } from '../../../shared/event-bus.js';
 
 /**
- * Foreground work never acquires or waits for the maintenance baton. Its turn
- * start only marks a held local baton for cooperative yield; the heavy runner
- * observes that request on its next fenced checkpoint boundary.
+ * Foreground work never acquires or waits for the maintenance baton. At turn
+ * start it asks the current holder to yield: a baton this instance holds is
+ * marked in memory, one held by another instance through the shared row on
+ * its own connection lane. The heavy runner observes the request at its next
+ * fenced checkpoint boundary. The signal is best-effort and never delays the
+ * turn (psfn-framework-jrki1).
  */
 export function wireFleetMaintenanceForegroundPreemption(input: {
   eventBus: EventBus;

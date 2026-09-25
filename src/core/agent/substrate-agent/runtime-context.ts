@@ -1,4 +1,10 @@
 import { isRecord } from '../../../shared/utils/types.js';
+import { getAllowedSensitivities } from '../../../system/trust/policy.js';
+import {
+  partitionScratchpadEntriesForViewer,
+  type ScratchpadViewer,
+} from '../../../faculties/memory/scratchpad-visibility.js';
+import { filterConcernsForViewer, type ConcernViewer } from '../../intention/concern-visibility.js';
 import type { AgentTool } from '../../../boundary/pi-agent/index.js';
 import type {
   RequesterProvenance,
@@ -401,7 +407,18 @@ export function buildDynamicPromptTemplateVariables(
     }),
     ...buildMetacognitiveFlagPromptVariables(input.metacognitiveFlags ?? []),
     ...buildInternalStatePromptVariables(input.internalState),
-    ...buildSituatedLocationPromptVariables(input.internalState, now),
+    // The companion's physical place (often a room in the partner's home) is
+    // set by a satellite turn and carried companion-wide; it renders only
+    // where personal material is admitted (o5wf5 sweep).
+    ...buildSituatedLocationPromptVariables(
+      getAllowedSensitivities(input.trustLevel, {
+        channelPrivacy: input.conversationScope.envelope.channelPrivacy,
+        broadcast: input.conversationScope.envelope.broadcast,
+      }).includes('personal')
+        ? input.internalState
+        : undefined,
+      now,
+    ),
     ...buildConcernPromptVariables(input.activeConcerns),
     ...buildEmotionAppraisalPromptVariables(input.emotionAppraisalChain ?? []),
     ...buildBehavioralNotesPromptVariables(input.behavioralNotesBlock),
@@ -560,6 +577,8 @@ export function buildRuntimeContext(input: {
 export function resolveActiveConcernsRuntimeData(input: {
   activeConcernProvider: ActiveConcernContextProvider | null | undefined;
   canonicalContactKey?: string;
+  /** Viewer of this turn; threads it may not see never render (xz8m1). */
+  viewer: Omit<ConcernViewer, 'canonicalContactKey'>;
   logger: RuntimeContextLogger;
 }): ActiveConcernRuntimeData | undefined {
   if (!input.activeConcernProvider) return undefined;
@@ -574,8 +593,12 @@ export function resolveActiveConcernsRuntimeData(input: {
     return undefined;
   }
 
-  if (concerns.length === 0) return undefined;
-  return buildActiveConcernsRuntimeData(concerns);
+  const visible = filterConcernsForViewer(concerns, {
+    ...input.viewer,
+    ...(input.canonicalContactKey ? { canonicalContactKey: input.canonicalContactKey } : {}),
+  });
+  if (visible.length === 0) return undefined;
+  return buildActiveConcernsRuntimeData(visible);
 }
 
 export function buildMetacognitiveNotesContextBlock(
@@ -607,12 +630,17 @@ export function buildBehavioralNotesContextBlock(input: {
 
 export function buildScratchpadContextBlock(input: {
   scratchpadProvider: ScratchpadProvider | null | undefined;
+  /** The turn's conversation and trust; other conversations' notes never render. */
+  viewer: ScratchpadViewer;
   logger: RuntimeContextLogger;
 }): string {
   if (!input.scratchpadProvider) return '';
 
   try {
-    const entries = input.scratchpadProvider.listScratchpadEntries(SCRATCHPAD_PROMPT_SCAN_LIMIT);
+    const { visible: entries } = partitionScratchpadEntriesForViewer(
+      input.scratchpadProvider.listScratchpadEntries(SCRATCHPAD_PROMPT_SCAN_LIMIT),
+      input.viewer,
+    );
     if (entries.length === 0) return '';
 
     const lines = [

@@ -3,7 +3,8 @@ const COMPANION_UI_PREFIX = '/companion-ui/';
 export interface CompanionUiRuntimeConfig {
   readonly origin: string;
   readonly sessionStatusPath: '/v1/fleet-auth/session/status';
-  readonly loginPath: '/v1/fleet-auth/login?return_to=%2Fcompanion-ui%2F';
+  /** The fleet sign-in landing offers every configured door: key, and SSO when enabled. */
+  readonly loginPath: '/fleet/login';
 }
 
 export function readCompanionUiRuntimeConfig(
@@ -19,7 +20,7 @@ export function readCompanionUiRuntimeConfig(
   return Object.freeze({
     origin: location.origin,
     sessionStatusPath: '/v1/fleet-auth/session/status',
-    loginPath: '/v1/fleet-auth/login?return_to=%2Fcompanion-ui%2F',
+    loginPath: '/fleet/login',
   });
 }
 

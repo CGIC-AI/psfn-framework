@@ -14,6 +14,7 @@ describe('fleet view destinations', () => {
       'usage',
       'costs',
       'firewall',
+      'lifecycle',
     ]);
     for (const destination of FLEET_VIEW_DESTINATIONS) {
       expect(destination.label.length).toBeGreaterThan(0);

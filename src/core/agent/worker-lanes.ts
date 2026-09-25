@@ -257,6 +257,11 @@ export function resolveRuntimeLaneClassForModelCall(input: {
     || originStage === 'intention.follow_up'
     || originStage.startsWith('intention.appraisal.')
     || originStage === 'intention.concern_candidate_review'
+    // se807: the participation appraisal decides whether an inbound ICP (or
+    // room) message is answered at all. On the preemptable background lane
+    // the companion's own post-turn appraisal preempted it, and the aborted
+    // call fail-closed and ended the conversation.
+    || originStage === 'participation.appraisal'
   ) {
     return POST_TURN_APPRAISAL_RUNTIME_CLASS;
   }
@@ -309,4 +314,25 @@ export function createWorkerExecutionPolicy(
     modelPurpose: 'memory',
     failClosed: true,
   };
+}
+
+/**
+ * Charge lane for a turn that runs without an inherited run-charge context
+ * (6da92). A worker-execution turn (whisper: sleeptime review, dream pass,
+ * reflection templates) is internal metacognitive work: it charges the lane
+ * of its runtime class (maintenance for internal reflection channels, whose
+ * owner-file quota admits no paid surface) instead of the interactive lane, so
+ * the charge gate refuses paid work nobody asked for. Every other turn keeps
+ * the interactive lane.
+ */
+export function resolveUncontextedTurnChargeLane(input: {
+  channelId: string;
+  workerExecution: boolean;
+  callType: ObservabilityCallType;
+}): ChargePolicyRuntimeLane {
+  if (!input.workerExecution) return 'interactive';
+  return resolveRuntimeLaneBudgetProfile(resolveRuntimeLaneClassForTurn({
+    callType: input.callType,
+    channelId: input.channelId,
+  })).chargeLane;
 }

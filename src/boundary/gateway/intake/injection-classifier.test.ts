@@ -239,6 +239,39 @@ describe('injection classifier windowing and labeling (fake backend)', () => {
     })).rejects.toThrow(/windowOverlapTokens must be an integer in \[0, 13\]/u);
   });
 
+  it('tokenizes long input in whitespace-bounded chunks, one event-loop turn each (jerq6)', async () => {
+    const fake = createFakeBackend(() => 0.1);
+    const encoded: string[] = [];
+    const encode = fake.backend.encode;
+    fake.backend.encode = (text) => { encoded.push(text); return encode(text); };
+    const classifier = await createInjectionClassifier({
+      modelDir: '/tmp/unused-injection-model',
+      labelThreshold: 0.5,
+      backendFactory: () => Promise.resolve(fake.backend),
+    });
+    encoded.length = 0;
+    const text = words(3_000);
+    const result = await classifier.classify(text);
+    expect(encoded.length).toBeGreaterThan(1);
+    expect(encoded.every(chunk => chunk.length <= 2_048)).toBe(true);
+    expect(encoded.join('')).toBe(text);
+    expect(result.tokenCount).toBe(3_000);
+    expect(result.truncated).toBe(false);
+  });
+
+  it('scores only the owner-bounded leading span of oversized input and reports truncation (jerq6)', async () => {
+    const fake = createFakeBackend(() => 0.1);
+    const classifier = await createInjectionClassifier({
+      modelDir: '/tmp/unused-injection-model',
+      labelThreshold: 0.5,
+      maxContentChars: 1_000,
+      backendFactory: () => Promise.resolve(fake.backend),
+    });
+    const result = await classifier.classify(words(5_000));
+    expect(result.truncated).toBe(true);
+    expect(result.tokenCount).toBeLessThan(300);
+  });
+
   it('exposes a stable scanner id for envelope score keys', () => {
     expect(INJECTION_CLASSIFIER_SCANNER_ID).toBe('onnx-prompt-injection');
   });

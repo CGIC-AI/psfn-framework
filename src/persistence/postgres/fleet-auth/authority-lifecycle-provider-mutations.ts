@@ -7,6 +7,7 @@ import type {
 import {
   denyLifecycleMutation,
   mergeLifecycleBumps,
+  requireLifecyclePrincipalActorId,
   requireOneLifecycleRow,
   type PreparedLifecycleMutation,
 } from './authority-lifecycle-mutation-contract.js';
@@ -85,7 +86,10 @@ async function lockProviderCompanionContactScope(
     FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants
     WHERE principal_id = $1 AND companion_id = $2 AND role = 'owner'
     FOR UPDATE
-  `, [decision.actor.principalId, decision.companionId]);
+  `, [
+    requireLifecyclePrincipalActorId(decision, 'provider_actor_not_companion_owner'),
+    decision.companionId,
+  ]);
   if (!owner.rows.some(row => row.lifecycle === 'active' && row.restore_state === 'live')) {
     denyLifecycleMutation('provider_actor_not_companion_owner');
   }
@@ -99,7 +103,10 @@ export async function prepareProviderLifecycleMutation(
   >,
 ): Promise<PreparedLifecycleMutation> {
   const targetId = decision.target.principalId;
-  if (decision.actor.principalId !== targetId) {
+  // Provider link, relink, replace and unlink prove control of a Discord
+  // account: SSO-mode ceremonies a principal performs for its own identity.
+  // The ADMIN_TOKEN operator never takes them (rejected at validation).
+  if (requireLifecyclePrincipalActorId(decision, 'provider_actor_target_mismatch') !== targetId) {
     denyLifecycleMutation('provider_actor_target_mismatch');
   }
   if (decision.action === 'provider.add'

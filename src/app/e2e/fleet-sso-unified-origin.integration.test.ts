@@ -25,6 +25,7 @@ import {
   type FleetAuthorizationContext,
 } from '../../boundary/gateway/fleet-authorization-context.js';
 import { GatewayFleetPortalProjection } from '../../boundary/gateway/fleet-portal-projection.js';
+import { GatewayFleetIcpPostureSource } from '../../boundary/gateway/fleet-icp-posture.js';
 import { fleetAuthRoleAllowsAction } from '../../boundary/fleet-auth/role-action-policy.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import { isRecord } from '../../shared/utils/types.js';
@@ -836,6 +837,29 @@ describe('unified Fleet SSO two-companion process boundary', () => {
       },
       fleet,
       source: { getFleetConnectionSnapshot: snapshot },
+      // h248l.4: a four-companion fleet runs a live ICP control plane. The
+      // shared read carries one A-B channel and A-B traffic; neither
+      // single-companion principal may see either, only the coarse cluster
+      // state.
+      icpPosture: new GatewayFleetIcpPostureSource({
+        fleetCompanionIds: fleet.map(entry => entry.companionId),
+        icpActive: true,
+        reader: {
+          read: async () => ({
+            availability: new Map([
+              [COMPANION_A, { state: 'available' as const, expiresAtMs: generatedAt + 60_000 }],
+              [COMPANION_B, { state: 'resting' as const, expiresAtMs: generatedAt + 60_000 }],
+            ]),
+            lifecycleFenced: new Set<string>(),
+            openEpisodes: [{ participantCompanionIds: [COMPANION_A, COMPANION_B] }],
+            openEpisodesTruncated: false,
+            pairVolume: [{ firstCompanionId: COMPANION_A, secondCompanionId: COMPANION_B, deliveredTurns: 3 }],
+          }),
+          close: async () => undefined,
+        },
+        policyOutcomes: { isFailing: () => false },
+        reportReadFailure: (error) => { throw error; },
+      }),
       now: () => new Date(generatedAt),
     });
 
@@ -919,11 +943,23 @@ describe('unified Fleet SSO two-companion process boundary', () => {
 
     const ownerPortal = await get(edgePort, '/v1/fleet/portal', SESSION_A);
     expect(ownerPortal.status).toBe(200);
+    // C dropped after being seen and D never connected, so the coarse
+    // cluster state is degraded; every count covers only visible members.
+    const hiddenPairActivity = {
+      status: 'available',
+      activeChannels: 0,
+      activeChannelsTruncated: false,
+      deliveredTurns24h: 0,
+      readyPairs: 0,
+    };
     expect(JSON.parse(ownerPortal.body)).toMatchObject({
+      schemaVersion: 3,
+      icp: { state: 'degraded', activity: hiddenPairActivity },
       companions: [
         {
           companionId: COMPANION_A,
           health: { agentRpc: 'up', adminTransport: 'unknown', channels: 'unknown' },
+          icp: { state: 'ready', reason: 'available', lifecycle: 'member' },
           gardenPath: `/companions/${COMPANION_A}/garden`,
         },
       ],
@@ -936,10 +972,13 @@ describe('unified Fleet SSO two-companion process boundary', () => {
     const adminPortal = await get(edgePort, '/v1/fleet/portal', SESSION_B);
     expect(adminPortal.status).toBe(200);
     expect(JSON.parse(adminPortal.body)).toMatchObject({
+      schemaVersion: 3,
+      icp: { state: 'degraded', activity: hiddenPairActivity },
       companions: [
         {
           companionId: COMPANION_B,
           health: { agentRpc: 'up', adminTransport: 'unknown', channels: 'unknown' },
+          icp: { state: 'ready', reason: 'resting', lifecycle: 'member' },
           gardenPath: `/companions/${COMPANION_B}/garden`,
         },
       ],

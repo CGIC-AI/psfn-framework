@@ -179,6 +179,23 @@ export function evaluateExtractionTriggerForSnapshot(
   });
 }
 
+/**
+ * The countable entries of a bounded snapshot that interval coverage has not
+ * yet consumed: exactly the entries an interval trigger over that snapshot
+ * counted. Read-only; never advances coverage.
+ */
+export function selectUncoveredSnapshotEntries(
+  channelId: string,
+  entries: readonly SessionEntry[],
+): SessionEntry[] {
+  const covered = extractionCoverage.get(channelId)?.covered ?? emptyCoverageRanges();
+  return entries.filter(entry => (
+    isCountableExtractionEntry(entry)
+    && Number.isSafeInteger(entry.id)
+    && !isCoveredId(covered, entry.id)
+  ));
+}
+
 export interface ExtractionWatermarkAdvance {
   previousCount: number;
   nextCount: number;

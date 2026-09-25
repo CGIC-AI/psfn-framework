@@ -91,6 +91,13 @@ function fakeStore(initial: Contact[] = []): {
     },
     setMachineIntelligence,
     setTrustLevel,
+    async updateIdentityProfile(id: string, displayName: string, nickname?: string) {
+      const contact = contacts.find(candidate => candidate.id === id);
+      if (!contact) return false;
+      contact.displayName = displayName;
+      if (nickname !== undefined) contact.nickname = nickname;
+      return true;
+    },
     async updateRelationshipType(id: string, relationshipType: Contact['relationshipType']) {
       const contact = contacts.find(candidate => candidate.id === id);
       if (!contact) return false;
@@ -102,8 +109,8 @@ function fakeStore(initial: Contact[] = []): {
 }
 
 const companions = [
-  { companionId: COMPANION_A },
-  { companionId: COMPANION_B },
+  { companionId: COMPANION_A, displayName: 'Selene' },
+  { companionId: COMPANION_B, displayName: 'Nova Unit One' },
 ] as const;
 const accountRoster = [
   {
@@ -139,7 +146,7 @@ describe('fleet contact provisioning', () => {
       [COMPANION_B, ownerB.store],
     ]);
 
-    await provisionFleetContactTopology({ companions, accountRoster, stores });
+    await provisionFleetContactTopology({ companions, ssoProvider: 'discord', accountRoster, stores });
 
     for (const owner of [ownerA, ownerB]) {
       expect(owner.setMachineIntelligence).not.toHaveBeenCalled();
@@ -175,18 +182,18 @@ describe('fleet contact provisioning', () => {
       [COMPANION_A, ownerA.store],
       [COMPANION_B, ownerB.store],
     ]);
-    await provisionFleetContactTopology({ companions, accountRoster, stores });
+    await provisionFleetContactTopology({ companions, ssoProvider: 'discord', accountRoster, stores });
 
     for (const contact of [...ownerA.contacts, ...ownerB.contacts]) {
       contact.trustLevel = contact.discordUserId === OPERATOR ? 'trusted' : 'regular';
     }
-    await expect(verifyFleetContactTopology({ companions, accountRoster, stores }))
+    await expect(verifyFleetContactTopology({ companions, ssoProvider: 'discord', accountRoster, stores }))
       .resolves.toMatchObject({ companionCount: 2, siblingContactCount: 2, humanContactCount: 4 });
 
     const sibling = ownerA.contacts.find(contact => contact.relationshipType === 'ai_companion');
     if (!sibling) throw new Error('missing test sibling');
     sibling.relationshipType = 'stranger';
-    await expect(verifyFleetContactTopology({ companions, accountRoster, stores }))
+    await expect(verifyFleetContactTopology({ companions, ssoProvider: 'discord', accountRoster, stores }))
       .rejects.toThrow(/expected relationship ai_companion/u);
   });
 
@@ -209,7 +216,7 @@ describe('fleet contact provisioning', () => {
       [COMPANION_B, ownerB.store],
     ]);
 
-    await provisionFleetContactTopology({ companions, accountRoster, stores });
+    await provisionFleetContactTopology({ companions, ssoProvider: 'discord', accountRoster, stores });
 
     expect(ownerA.contacts.find(contact => contact.id === 'operator-a')).toMatchObject({
       discordUserId: OPERATOR,
@@ -217,5 +224,62 @@ describe('fleet contact provisioning', () => {
       relationshipType: 'friend',
     });
     expect(ownerA.setTrustLevel).not.toHaveBeenCalled();
+  });
+
+  it('provisions companion-to-companion contacts in key mode with no SSO roster (key-or-SSO ruling)', async () => {
+    const ownerA = fakeStore();
+    const ownerB = fakeStore();
+    const stores = new Map([
+      [COMPANION_A, ownerA.store],
+      [COMPANION_B, ownerB.store],
+    ]);
+    await provisionFleetContactTopology({ companions, ssoProvider: 'none', accountRoster: [], stores });
+    for (const owner of [ownerA, ownerB]) {
+      expect(owner.contacts).toHaveLength(1);
+      expect(owner.contacts[0]).toMatchObject({ relationshipType: 'ai_companion' });
+    }
+    await expect(verifyFleetContactTopology({ companions, ssoProvider: 'none', accountRoster: [], stores }))
+      .resolves.toMatchObject({ humanContactCount: 0, siblingContactCount: 2 });
+    await expect(provisionFleetContactTopology({
+      companions, ssoProvider: 'none', accountRoster, stores,
+    })).rejects.toThrow(/cannot use a Discord roster/u);
+    await expect(provisionFleetContactTopology({
+      companions, ssoProvider: 'discord', accountRoster: [], stores,
+    })).rejects.toThrow(/rostered owner or admin/u);
+  });
+
+  it('names siblings from companions.json and renames only placeholder-named siblings (7frk9)', async () => {
+    const placeholder = {
+      id: 'sibling-b',
+      displayName: 'Companion 22222222',
+      trustLevel: 'regular',
+      relationshipType: 'ai_companion',
+      isMachineIntelligence: true,
+      emotionalBaseline: {},
+      firstSeen: '2026-07-29T00:00:00.000Z',
+      lastSeen: '2026-07-29T00:00:00.000Z',
+      channels: [{ channel: 'companion', userId: COMPANION_B, privacyLevel: 'private' }],
+    } satisfies Contact;
+    const ownerA = fakeStore([placeholder]);
+    const ownerB = fakeStore();
+    const stores = new Map([
+      [COMPANION_A, ownerA.store],
+      [COMPANION_B, ownerB.store],
+    ]);
+    await provisionFleetContactTopology({ companions, ssoProvider: 'none', accountRoster: [], stores });
+    expect(ownerA.contacts.find(contact => contact.id === 'sibling-b')?.displayName).toBe('Nova Unit One');
+    expect(ownerB.contacts[0]?.displayName).toBe('Selene');
+
+    // A name the companion or an operator chose is kept on the next apply.
+    const sibling = ownerA.contacts.find(contact => contact.id === 'sibling-b');
+    if (!sibling) throw new Error('missing test sibling');
+    sibling.displayName = 'Novi';
+    await provisionFleetContactTopology({ companions, ssoProvider: 'none', accountRoster: [], stores });
+    expect(sibling.displayName).toBe('Novi');
+
+    await expect(provisionFleetContactTopology({
+      companions: [{ companionId: COMPANION_A }, { companionId: COMPANION_B, displayName: 'Nova Unit One' }],
+      ssoProvider: 'none', accountRoster: [], stores,
+    })).rejects.toThrow(/has no name/u);
   });
 });

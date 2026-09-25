@@ -58,6 +58,19 @@ interface BiographicalCompanionAutoactivationPolicy {
   readonly maximumSensitivity: SensitivityLevel;
 }
 
+/**
+ * uz787: whether the companion may choose to make one of her own reviewed
+ * baseline claims travel everywhere (`universal` portability) WITHOUT lowering
+ * its sensitivity. The kernel still refuses anything that names a human and
+ * anything above `personal`; this cap can only narrow that further.
+ */
+interface BiographicalCompanionPortabilityChoicePolicy {
+  readonly enabled: boolean;
+  readonly maximumSensitivity: Extract<SensitivityLevel, 'public' | 'personal'>;
+}
+
+const PORTABLE_SENSITIVITY_CEILINGS = ['public', 'personal'] as const;
+
 export interface BiographicalCandidatePolicy {
   readonly schemaVersion: 1;
   readonly admittedSourceTypes: readonly MemoryPolicyType[];
@@ -67,6 +80,30 @@ export interface BiographicalCandidatePolicy {
   readonly reviewTriggers: readonly BiographicalReviewTrigger[];
   readonly companionOnlyAutoactivation: BiographicalCompanionAutoactivationPolicy;
   readonly projectionScopes: readonly BiographicalProjectionScope[];
+  /**
+   * Optional so existing owner files (and the policy digest their pending
+   * candidates were bound to) are unchanged; absent means the choice is off.
+   */
+  readonly companionPortabilityChoice?: BiographicalCompanionPortabilityChoicePolicy;
+}
+
+function portabilityChoice(
+  value: unknown,
+  path: string,
+): BiographicalCompanionPortabilityChoicePolicy {
+  if (!isRecord(value) || !hasExactKeys(value, ['enabled', 'maximumSensitivity'])) {
+    return invalid(path, 'expected exact { enabled, maximumSensitivity }');
+  }
+  if (typeof value.enabled !== 'boolean') invalid(`${path}.enabled`, 'expected boolean');
+  if (!(PORTABLE_SENSITIVITY_CEILINGS as readonly unknown[]).includes(value.maximumSensitivity)) {
+    // Intimate and confidential never travel (kernel invariant); a settings
+    // value must not even be able to ask for it.
+    invalid(`${path}.maximumSensitivity`, 'expected public or personal');
+  }
+  return {
+    enabled: value.enabled as boolean,
+    maximumSensitivity: value.maximumSensitivity as BiographicalCompanionPortabilityChoicePolicy['maximumSensitivity'],
+  };
 }
 
 const CLAIM_KINDS: readonly BiographicalClaimKind[] = [
@@ -131,7 +168,7 @@ export function normalizeBiographicalCandidatePolicy(
   value: unknown,
   fieldPath = 'biographicalCandidatePolicy',
 ): BiographicalCandidatePolicy {
-  if (!isRecord(value) || !hasExactKeys(value, [
+  const exactFieldNames = [
     'schemaVersion',
     'admittedSourceTypes',
     'maximumSourceSensitivity',
@@ -140,7 +177,13 @@ export function normalizeBiographicalCandidatePolicy(
     'reviewTriggers',
     'companionOnlyAutoactivation',
     'projectionScopes',
-  ])) {
+  ];
+  if (!isRecord(value) || !hasExactKeys(
+    value,
+    value.companionPortabilityChoice === undefined
+      ? exactFieldNames
+      : [...exactFieldNames, 'companionPortabilityChoice'],
+  )) {
     return invalid(fieldPath, 'expected an exact versioned candidate policy');
   }
   if (value.schemaVersion !== 1) invalid(`${fieldPath}.schemaVersion`, 'expected 1');
@@ -242,6 +285,14 @@ export function normalizeBiographicalCandidatePolicy(
       `${fieldPath}.projectionScopes`,
       { nonEmpty: true },
     ),
+    ...(value.companionPortabilityChoice !== undefined
+      ? {
+          companionPortabilityChoice: portabilityChoice(
+            value.companionPortabilityChoice,
+            `${fieldPath}.companionPortabilityChoice`,
+          ),
+        }
+      : {}),
   };
 }
 

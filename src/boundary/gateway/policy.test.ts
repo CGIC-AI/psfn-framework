@@ -38,8 +38,8 @@ describe('evaluatePolicy', () => {
     expect(evaluatePolicy({ method: 'discord.send', params: {} }, policyConfig)).toBe('ALLOW');
   });
 
-  it('allows account-routed native channel sends', () => {
-    expect(evaluatePolicy({ method: 'channel.send', params: {} }, policyConfig)).toBe('ALLOW');
+  it('denies the removed plugin channel.send method', () => {
+    expect(evaluatePolicy({ method: 'channel.send', params: {} }, policyConfig)).toBe('DENY');
   });
 
   it('allows discord.sendMedia', () => {

@@ -312,6 +312,7 @@ export const MEMORY_STORE_METHOD_POLICY: Record<keyof MemoryStorePort, SubjectPr
   getStats: 'authorized',
   getMemoriesByChannel: 'authorized',
   getMemoriesByContact: 'authorized',
+  getRecentlyAccessedMemories: 'authorized',
   linkMemories: 'authorized',
   unlinkMemories: 'authorized',
   getLinkedMemories: 'authorized',
@@ -665,6 +666,20 @@ export function createSubjectAuthorizedMemoryStore(
           const result = await target.aggregateAuthorizedMemorySubjects({
             authorization: auth,
             selector: { kind: 'contact_filter', contactId, limit },
+          });
+          if (result.kind !== 'memories') {
+            throw new Error('Unexpected subject admin aggregate result shape');
+          }
+          return result.memories;
+        };
+      }
+      if (property === 'getRecentlyAccessedMemories') {
+        return async (limit: number) => {
+          const auth = authorization(currentContext(), 'list');
+          if (!auth) return [];
+          const result = await target.aggregateAuthorizedMemorySubjects({
+            authorization: auth,
+            selector: { kind: 'recently_accessed', limit },
           });
           if (result.kind !== 'memories') {
             throw new Error('Unexpected subject admin aggregate result shape');

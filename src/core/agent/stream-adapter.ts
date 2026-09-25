@@ -290,6 +290,10 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
   // transport (it must not leak into the serialized model-hint requestOptions).
   const streamSignal = extractAbortSignal(params.options);
   const holdEventsUntilTerminal = hasExplicitToolExecutionRequest(params.context);
+  // p3of8: when the ingress delivers the reply only on completion, nothing
+  // partial is ever shown, so keep the attempt uncommitted until its terminal
+  // event; a mid-stream failure then still falls back to the next candidate.
+  const holdForBufferedDelivery = params.requestContext?.bufferedTextDelivery === true;
   const contextTools = (params.context as { tools?: unknown }).tools;
   const executionTools = normalizeExecutionTools(contextTools);
   const explicitToolContract = holdEventsUntilTerminal
@@ -422,7 +426,7 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
 
           if (!committed) {
             bufferedEvents.push(event);
-            if (!holdEventsUntilTerminal && shouldCommitBufferedEvent(event)) {
+            if (!holdEventsUntilTerminal && !holdForBufferedDelivery && shouldCommitBufferedEvent(event)) {
               committed = true;
               for (const bufferedEvent of bufferedEvents) {
                 yield bufferedEvent;
@@ -444,6 +448,17 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
         const err = explicitNonRecoverable
           ? error.causeError
           : (error instanceof Error ? error : new Error(String(error)));
+
+        // tpkqi: the run's own signal was aborted (e.g. a foreground turn
+        // preempted this background run). Surface the abort reason itself and
+        // never retry it or walk it through the fallback chain as a model failure.
+        if (streamSignal?.aborted) {
+          const abortReason: unknown = streamSignal.reason;
+          throw new NonRecoverableFallbackError(
+            abortReason instanceof Error ? abortReason : err,
+            { callerCancelled: true },
+          );
+        }
 
         if (committed) {
           throw explicitNonRecoverable ? error : new NonRecoverableFallbackError(err);

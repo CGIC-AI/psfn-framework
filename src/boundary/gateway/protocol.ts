@@ -1,3 +1,4 @@
+import type { IcpActivityEndReasonCode } from '../../shared/contracts/icp-autonomy.js';
 import type {
   WorldAvatarActOutcome,
   WorldAvatarMap,
@@ -45,6 +46,8 @@ import type {
 } from '../../primitives/images/types.js';
 import type { DiscoveredModel } from '../../primitives/llm/discovery.js';
 import type { LLMWorkSpecWireParams } from '../../primitives/llm/work-spec-wire.js';
+import type { DecisionOutcome, DecisionQuestionSet } from '../../primitives/llm/decision/types.js';
+import type { DecisionSiteId } from '../../system/config/decision-backend-config.js';
 import type {
   ConfirmationDecision,
   ConfirmationQueueEntry,
@@ -292,6 +295,21 @@ export interface LLMEmbedParams extends GatewayCorrelationParams {
   usageProvenance?: EmbeddingUsageProvenance;
 }
 
+/**
+ * Typed decision request for the optional remote (Jev) decision backend
+ * (epic 4lf3r). No work spec or message history crosses: only the site id,
+ * the JSON state and the typed questions.
+ */
+export interface LLMDecideParams {
+  siteId: DecisionSiteId;
+  state: Record<string, unknown>;
+  questions: DecisionQuestionSet;
+  companionId?: string;
+  telemetryVisibility?: TelemetryVisibility;
+}
+
+export type LLMDecideResult = DecisionOutcome;
+
 export type LLMDiscoverModelsParams = Record<string, never>;
 export type LLMInvalidateModelDiscoveryParams = Record<string, never>;
 
@@ -306,10 +324,15 @@ export interface DiscordSendParams {
   content: string;
 }
 
-export interface ChannelSendParams {
-  channelType: 'buzz';
+/** psfn-framework-ze2fx: an egress-leased autonomous room reply off Discord. */
+export interface ChannelSendRoomReplyParams {
+  channelType: 'telegram' | 'external';
   channelId: string;
   content: string;
+}
+
+export interface ChannelSendRoomReplyResult {
+  success: boolean;
 }
 
 export interface DiscordSendMediaParams {
@@ -1268,9 +1291,7 @@ export interface IcpPermitConsumeParams {
 
 export interface IcpEpisodeActivityEndParams {
   conversationId: string;
-  reasonCode: Extract<IcpAutonomyReasonCode,
-    'fatigue_exhausted' | 'charge_pressure' | 'cost_hard_stop'
-      | 'inactivity_timeout' | 'conversation_ended'>;
+  reasonCode: IcpActivityEndReasonCode;
   companionId?: string;
 }
 
@@ -1327,11 +1348,12 @@ export interface GatewayMethods {
   'llm.complete': [LLMCompleteParams, LLMCompleteResult];
   'llm.cancel': [LLMCancelParams, LLMCancelResult];
   'llm.embed': [LLMEmbedParams, LLMEmbedResult];
+  'llm.decide': [LLMDecideParams, LLMDecideResult];
   'llm.discover_models': [LLMDiscoverModelsParams, LLMDiscoverModelsResult];
   'llm.invalidate_model_discovery': [LLMInvalidateModelDiscoveryParams, LLMInvalidateModelDiscoveryResult];
   'discord.send': [DiscordSendParams, DiscordSendResult];
-  'channel.send': [ChannelSendParams, { success: boolean }];
   'discord.sendMedia': [DiscordSendMediaParams, DiscordSendMediaResult];
+  'channel.sendRoomReply': [ChannelSendRoomReplyParams, ChannelSendRoomReplyResult];
   'discord.typing': [DiscordTypingParams, DiscordTypingResult];
   'discord.availability': [DiscordAvailabilityParams, DiscordAvailabilityResult];
   'companion.message.send': [CompanionMessageSendParams, CompanionMessageSendResult];

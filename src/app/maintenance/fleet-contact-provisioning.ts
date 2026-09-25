@@ -5,11 +5,17 @@ import type {
   FleetAuthRole,
 } from '../../system/config/fleet-auth-config.js';
 
+import {
+  applySiblingContactName,
+  placeholderSiblingContactName,
+  resolveSiblingContactName,
+  type SiblingContactName,
+  type SiblingNameSource,
+} from './sibling-contact-name.js';
+
 const PROVISIONING_ACTOR = 'operator:provision:fleet-contacts';
 
-interface FleetContactCompanion {
-  readonly companionId: string;
-}
+type FleetContactCompanion = SiblingNameSource;
 
 interface FleetContactPlanEntry {
   readonly ownerCompanionId: string;
@@ -18,10 +24,19 @@ interface FleetContactPlanEntry {
   readonly displayName: string;
   readonly relationshipType: RelationshipType;
   readonly contactId?: string;
+  /** A sibling's real name (7frk9); absent for human contacts. */
+  readonly siblingName?: SiblingContactName;
 }
 
 export interface FleetContactTopologyOptions {
   readonly companions: readonly FleetContactCompanion[];
+  /**
+   * Human-account source. `discord`: SSO mode, whose Discord-keyed roster must
+   * name an owner or admin. `none`: key mode (key-or-SSO ruling), with no SSO
+   * humans; only companion-to-companion contacts are provisioned and the
+   * roster must be empty.
+   */
+  readonly ssoProvider: 'discord' | 'none';
   readonly accountRoster: readonly FleetAuthAccountRosterEntry[];
   readonly stores: ReadonlyMap<string, ContactStorePort>;
 }
@@ -49,6 +64,7 @@ function initialHumanRelationship(role: FleetAuthRole): RelationshipType {
 function buildFleetContactPlan(
   companions: readonly FleetContactCompanion[],
   accountRoster: readonly FleetAuthAccountRosterEntry[],
+  ssoProvider: 'discord' | 'none',
 ): FleetContactPlanEntry[] {
   if (companions.length === 0) {
     throw new Error('Fleet contact provisioning requires at least one companion');
@@ -63,26 +79,36 @@ function buildFleetContactPlan(
       `Fleet contact provisioning roster references unknown companion ${unknownRosterEntry.companionId}`,
     );
   }
+  if (ssoProvider === 'none' && accountRoster.length > 0) {
+    throw new Error('Fleet contact provisioning without an SSO provider cannot use a Discord roster');
+  }
   const administrators = accountRoster.filter(entry => (
     (entry.role === 'owner' || entry.role === 'admin')
   ));
-  if (administrators.length === 0) {
+  if (ssoProvider === 'discord' && administrators.length === 0) {
     throw new Error('Fleet contact provisioning requires a rostered owner or admin');
   }
   const administratorSubjects = [...new Set(
     administrators.map(entry => entry.providerSubjectId),
   )].sort();
 
+  const siblingNames = new Map(companions.map(companion => [
+    companion.companionId,
+    resolveSiblingContactName(companion),
+  ] as const));
   const plan: FleetContactPlanEntry[] = [];
   for (const owner of companions) {
     for (const peer of companions) {
       if (peer.companionId === owner.companionId) continue;
+      const siblingName = siblingNames.get(peer.companionId);
+      if (!siblingName) throw new Error(`Fleet contact provisioning lost the name of ${peer.companionId}`);
       plan.push({
         ownerCompanionId: owner.companionId,
         channel: 'companion',
         channelUserId: peer.companionId,
-        displayName: `Companion ${peer.companionId.slice(0, 8)}`,
+        displayName: siblingName.displayName,
         relationshipType: 'ai_companion',
+        siblingName,
       });
     }
     for (const providerSubjectId of administratorSubjects) {
@@ -126,7 +152,7 @@ function requireStore(
 export async function provisionFleetContactTopology(
   options: FleetContactTopologyOptions,
 ): Promise<FleetContactTopologyVerification> {
-  const plan = buildFleetContactPlan(options.companions, options.accountRoster);
+  const plan = buildFleetContactPlan(options.companions, options.accountRoster, options.ssoProvider);
   for (const entry of plan) {
     const store = requireStore(options.stores, entry.ownerCompanionId);
     let contact = await store.getByChannelIdentity(entry.channel, entry.channelUserId);
@@ -164,7 +190,7 @@ export async function provisionFleetContactTopology(
         contact = await store.resolveChannelIdentity(
           entry.channel,
           entry.channelUserId,
-          entry.displayName,
+          placeholderSiblingContactName(entry.channelUserId),
         );
       } else {
         contact = await store.upsert({
@@ -180,6 +206,9 @@ export async function provisionFleetContactTopology(
           }],
         }, { actor: PROVISIONING_ACTOR });
       }
+    }
+    if (entry.siblingName) {
+      await applySiblingContactName(store, contact, entry.channelUserId, entry.siblingName, PROVISIONING_ACTOR);
     }
     if (contact.relationshipType !== entry.relationshipType) {
       const updated = await store.updateRelationshipType(
@@ -198,7 +227,7 @@ export async function provisionFleetContactTopology(
 export async function verifyFleetContactTopology(
   options: FleetContactTopologyOptions,
 ): Promise<FleetContactTopologyVerification> {
-  const plan = buildFleetContactPlan(options.companions, options.accountRoster);
+  const plan = buildFleetContactPlan(options.companions, options.accountRoster, options.ssoProvider);
   let siblingContactCount = 0;
   let humanContactCount = 0;
   for (const entry of plan) {

@@ -20,7 +20,13 @@ import {
   optionalIntEnv,
   failClosedOnEnv,
 } from './lib/env.mjs';
-import { pgAll, pgScalar, closePool } from './lib/postgres.mjs';
+import {
+  closePool,
+  gatewayPgAll,
+  gatewayPgScalar,
+  pgAll,
+  pgScalar,
+} from './lib/postgres.mjs';
 import * as probe from './lib/probe.mjs';
 import {
   INSECURE_LOCAL_API_PRINCIPAL_ID,
@@ -31,7 +37,10 @@ import {
   resolveTarget,
   fetchCurrentTierWithRetry,
 } from './lib/target.mjs';
-import { resolveOperatorApprovalTargetForCases } from './lib/operator-approval-target.mjs';
+import {
+  buildOperatorConfirmationApproval,
+  resolveOperatorApprovalTargetForCases,
+} from './lib/operator-approval-target.mjs';
 import {
   buildCapabilityMatrixExecutionPlan,
   buildCapabilityMatrixSideEffectEvidence,
@@ -48,6 +57,7 @@ import {
   caseStatusAfterCleanupFailure,
   classifyCaseFailure,
   isMatrixAbortStatus,
+  decidePreCaseBusyAction,
   probeKnownBusySettlement,
   resolveCaseTimeoutMs,
   resolveCaseCoverageHoleReason,
@@ -83,6 +93,33 @@ import { casesBelowTierFloor } from './lib/case-tier-floors.mjs';
 import { malformedAnswerFeedback, readAssistantAnswer } from './lib/assistant-answer.mjs';
 import { buildMemoryTierCases } from './cases/memory-tiers.mjs';
 import { isBeadsIssueId } from './lib/beads.mjs';
+import { validateMemoryLookupAnswer } from './lib/memory-lookup-answer.mjs';
+import {
+  countHarnessScratchpadResidue,
+  restoreContactAfterMutation,
+  snapshotContactNotes,
+  sweepHarnessContactNote,
+  removeHarnessSkill,
+  scratchpadRoundTripFailures,
+  sweepHarnessSkills,
+  verifyScratchpadNoteRemoved,
+} from './lib/case-residue.mjs';
+import {
+  restorePromptLayers,
+  snapshotPromptLayers,
+  sweepHarnessPromptMarkers,
+} from './lib/prompt-layer-restore.mjs';
+import {
+  applyRoomIsolationOutcome,
+  buildRoomSettleTurnInput,
+  createSharedRoomLedger,
+  settleSharedRoom,
+} from './lib/case-isolation.mjs';
+import {
+  buildImageGenerationCases,
+  resolveImageCaseProviderForCases,
+} from './lib/image-case-provider.mjs';
+import { operatorGardenHeaders, resolveOperatorGardenToken } from './lib/operator-garden.mjs';
 import { prepareCaseChatDispatch } from './lib/case-dispatch-auth.mjs';
 import { createFrameworkHubDeviceAssertionIssuer } from './lib/hub-device-assertion.mjs';
 
@@ -101,6 +138,10 @@ const CONFIG = (() => {
       adminReadinessUrl: targetContract.adminReadinessUrl,
       apiKey: targetContract.apiKey,
       adminToken: targetContract.adminToken,
+      companionId: targetContract.companionId,
+      // xpgnr: prompt-marker sweep/restore are operator maintenance and use
+      // the audited ADMIN_TOKEN Garden door (required on kube, fail closed).
+      operatorGardenToken: resolveOperatorGardenToken(targetContract),
       outputPath: requireEnv('PSFN_SHAKEDOWN_OUTPUT', 'per-phase run JSON path'),
       repoRoot: requireEnv('PSFN_REPO_ROOT', 'RC repo clone under test'),
       workspacePath: requireEnv('WORKSPACE_PATH', 'companion Personal Workspace root'),
@@ -123,6 +164,7 @@ const ADMIN_READINESS_URL = CONFIG.adminReadinessUrl;
 const API_URL = `${API_BASE}/v1/chat/completions`;
 const API_KEY = CONFIG.apiKey;
 const ADMIN_TOKEN = CONFIG.adminToken;
+const OPERATOR_GARDEN_TOKEN = CONFIG.operatorGardenToken;
 const REPO_ROOT = CONFIG.repoRoot;
 const COMPANION_DATA_DIR = CONFIG.companionDataDir;
 const SYSTEM_DATA_DIR = CONFIG.systemDataDir;
@@ -138,6 +180,9 @@ const CASE_CHAT_HEADERS = createChatHeaderBuilder({
   apiKey: CONFIG.apiKey,
   runId: HARNESS_RUN_ID,
   manifestId: HARNESS_MANIFEST_ID,
+  // gz50o: on kube the chat lane targets the same fleet companion as the
+  // Garden route (COMPANION_ID), so Layer A runs against any fleet companion.
+  ...(CONFIG.companionId ? { companionId: CONFIG.companionId } : {}),
 });
 const EXPECTED_CAPABILITY_TIER = optionalEnv('PSFN_CAPABILITY_TIER_EXPECTED');
 const OUTPUT_PATH = CONFIG.outputPath;
@@ -150,7 +195,6 @@ const TURN_RECORDS_DIR = optionalEnv('PSFN_TURN_RECORDS_DIR') ?? `${SESSIONS_DIR
 const CHANNEL_INDEX_PATH = `${SESSIONS_DIR}/_channel_index.json`;
 const HEARTBEAT_POLICY_PATH = `${COMPANION_DATA_DIR}/state/heartbeat-policy.json`;
 const VALUES_JOURNAL_PATH = `${COMPANION_DATA_DIR}/state/notes/values.jsonl`;
-const SCRATCHPAD_JSON_PATH = `${COMPANION_DATA_DIR}/state/notes/scratchpad.json`;
 const MEMORIES_JOURNAL_PATH = `${COMPANION_DATA_DIR}/state/notes/memories.jsonl`;
 const CORE_MEMORY_JSON_PATH = `${COMPANION_DATA_DIR}/state/core_memory.json`;
 const NORTH_STAR_JSON_PATH = `${COMPANION_DATA_DIR}/state/north-star.json`;
@@ -170,10 +214,21 @@ const OPERATOR_APPROVAL_TARGET = (() => {
     return resolveOperatorApprovalTargetForCases({
       chatBaseUrl: API_BASE,
       apiKey: API_KEY,
+      companionId: CONFIG.companionId,
     }, {
       caseIds: CASE_IDS,
       phase: PHASE,
     });
+  } catch (error) {
+    failClosedOnEnv(error);
+    throw error;
+  }
+})();
+// Image-case provider (t2q1w): settings by default, or the round's explicit
+// provider. Resolved only when an image case is selected.
+const IMAGE_CASE_PROVIDER = (() => {
+  try {
+    return resolveImageCaseProviderForCases({ caseIds: CASE_IDS, phase: PHASE });
   } catch (error) {
     failClosedOnEnv(error);
     throw error;
@@ -231,6 +286,9 @@ const resolveSessionChannelId = probe.resolveSessionChannelId;
 const readJsonl = probe.readJsonl;
 const isAgentBusyResponse = probe.isAgentBusyResponse;
 const isCompletedAssistantTurn = probe.isCompletedAssistantTurn;
+// Whether the shared api:testing-harness room holds an unanswered user message
+// (66cus); chatCase updates it on every dispatch.
+const SHARED_ROOM_LEDGER = createSharedRoomLedger();
 const turnRecordPath = (sessionId, apiUserId) =>
   probe.turnRecordPath(TURN_RECORDS_DIR, sessionId, apiUserId);
 const turnRecordsForSession = (sessionId, apiUserId) =>
@@ -1091,6 +1149,43 @@ function summarizeTurn(turn) {
   };
 }
 
+/**
+ * Garden admin JSON request under the OPERATOR credential (xpgnr): prompt
+ * layers and managed skills are identity/capability material the
+ * testing-harness door cannot manage, so marker/skill residue sweeps and the
+ * prompt/skill restores run as the audited ADMIN_TOKEN operator.
+ */
+function operatorAdminRequest(method, path, body) {
+  return fetchJson(`${ADMIN_BASE}${path}`, {
+    method,
+    headers: operatorGardenHeaders(OPERATOR_GARDEN_TOKEN, body),
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+}
+
+/**
+ * Case hooks that snapshot prompt layers before dispatch and restore them
+ * byte-identically afterwards (2pz3o), as the operator (xpgnr).
+ */
+function promptLayerRestoreHooks() {
+  let before = null;
+  return {
+    before: async () => {
+      const listed = await operatorAdminRequest('GET', '/api/admin/prompts');
+      if (!listed?.ok) {
+        throw new Error(`prompt layer snapshot unavailable (${listed?.status ?? 'no response'})`);
+      }
+      before = snapshotPromptLayers(listed.body);
+      return { promptLayersSnapshotted: before.size };
+    },
+    cleanup: async () => (
+      before === null
+        ? { cleanup: {}, cleanupErrors: ['prompt layers were not snapshotted before the case'] }
+        : await restorePromptLayers({ before, adminRequest: operatorAdminRequest })
+    ),
+  };
+}
+
 async function fetchJson(url, init = {}, timeoutMs = DEFAULT_FETCH_TIMEOUT_MS) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -1103,7 +1198,8 @@ async function fetchJson(url, init = {}, timeoutMs = DEFAULT_FETCH_TIMEOUT_MS) {
   }
   try {
     const headers = new Headers(init.headers ?? {});
-    if (typeof url === 'string' && url.startsWith(ADMIN_BASE) && ADMIN_TOKEN) {
+    // An explicit credential (the operator door) is never overridden.
+    if (typeof url === 'string' && url.startsWith(ADMIN_BASE) && ADMIN_TOKEN && !headers.has('Authorization')) {
       headers.set('Authorization', `Bearer ${ADMIN_TOKEN}`);
     }
     if (typeof url === 'string' && url.startsWith(API_BASE) && API_KEY && !headers.has('Authorization')) {
@@ -1794,6 +1890,9 @@ async function chatCase(input) {
       manifestId: HARNESS_MANIFEST_ID,
     }),
     resolveAttemptHeaders: input.resolveAttemptHeaders,
+    // cx97d: coverage chats target the run's fleet companion like every
+    // other harness-bearer dispatch.
+    companionId: CONFIG.companionId,
   });
   const apiUserId = dispatch.apiUserId;
   const busyRetryWindowMs = input.busyRetryWindowMs ?? DEFAULT_BUSY_RETRY_WINDOW_MS;
@@ -1809,12 +1908,14 @@ async function chatCase(input) {
   let response;
   let matchingTurn = null;
   let lastRequestStartedAt = 0;
+  const roomChannelId = probe.resolveSessionChannelId(input.sessionId, apiUserId);
 
   while (submitAttempts < maxSubmitAttempts) {
     throwIfAborted(input.signal);
     submitAttempts += 1;
     const requestStartedAt = Date.now();
     lastRequestStartedAt = requestStartedAt;
+    SHARED_ROOM_LEDGER.dispatchStarted({ roomChannelId, sessionId: input.sessionId });
     response = await probe.postChatCompletion({
       apiUrl: API_URL,
       headers: dispatch.resolveHeaders(),
@@ -1910,6 +2011,10 @@ async function chatCase(input) {
     }
   }
 
+  SHARED_ROOM_LEDGER.dispatchSettled({
+    roomChannelId,
+    answered: isCompletedAssistantTurn(matchingTurn),
+  });
   await sleep(input.settleMs ?? 800, input.signal);
   throwIfAborted(input.signal);
   return {
@@ -2215,16 +2320,9 @@ function buildBaselineCases(ctx) {
         + 'Use memory with action "search", query "primary user Local API Principal", and limit 5. '
         + 'Return only a JSON object with keys count and summary.',
       timeoutMs: 120000,
-      validateParsedAssistant: ({ parsedAssistant }) => {
-        const failures = [];
-        if (typeof parsedAssistant?.count !== 'number') {
-          failures.push('analysis_workbench_memory_lookup_avoidance count must be a number');
-        }
-        if (typeof parsedAssistant?.summary !== 'string' || parsedAssistant.summary.trim().length === 0) {
-          failures.push('analysis_workbench_memory_lookup_avoidance summary must be non-empty');
-        }
-        return failures;
-      },
+      validateParsedAssistant: ({ parsedAssistant }) => (
+        validateMemoryLookupAnswer(parsedAssistant, 'analysis_workbench_memory_lookup_avoidance')
+      ),
     },
     {
       id: 'scratchpad_roundtrip',
@@ -2236,20 +2334,16 @@ function buildBaselineCases(ctx) {
       message:
         `Use scratchpad with action "add" and content "${scratchpadToken}". `
         + 'Then use scratchpad with action "list". '
+        + 'Then use scratchpad with action "remove" with the id returned by the add call. '
         + 'Do not use any tool besides scratchpad. '
         + 'If a direct tool call fails, report the exact tool error instead of paraphrasing. '
-        + 'Return only a JSON object with keys wrote and readBack.',
-      after: async () => ({
-        scratchpadDbRows: await pgAll(
-          `select id, content, created_at from scratchpad_entries where content like '%${scratchpadToken}%';`,
-        ),
-        scratchpadJson: readJsonIfExists(SCRATCHPAD_JSON_PATH),
-      }),
-      validateSideEffects: ({ sideChecks }) => (
-        sideChecksContainText(sideChecks, scratchpadToken)
-          ? []
-          : ['scratchpad_roundtrip must persist the scratchpad token']
+        + 'Return only a JSON object with keys wrote, readBack, and removed.',
+      // A real round trip that leaves no residue (ob6w1): the persisted tool
+      // results prove add/list/remove and cleanup proves the row is gone.
+      validateParsedAssistant: ({ archiveToolMessages }) => (
+        scratchpadRoundTripFailures(archiveToolMessages, scratchpadToken)
       ),
+      cleanup: async () => await verifyScratchpadNoteRemoved({ pgAll, token: scratchpadToken }),
     },
     {
       id: 'memory_write_private',
@@ -2326,6 +2420,7 @@ function buildBaselineCases(ctx) {
 
 function buildApprenticeCases(ctx) {
   const contactNote = `matrix-note-${ctx.runToken}`;
+  let contactNotesSnapshot = null;
   const linkedIdentity = `identity-${ctx.runToken}`;
   const valueInitial = `matrix-value-${ctx.runToken}`;
   const valueUpdated = `matrix-value-updated-${ctx.runToken}`;
@@ -2349,6 +2444,13 @@ function buildApprenticeCases(ctx) {
         + 'Do not call any non-contact tool unless one of those exact calls errors. '
         + 'If a direct tool call fails, report the exact tool error. '
         + 'Return only a JSON object with keys noted, linked, and privacy.',
+      // Harness-owned restore (ob6w1): the note action replaces the contact's
+      // notes, so snapshot them and put them back, detach the case identity,
+      // and prove both.
+      before: async () => {
+        contactNotesSnapshot = await snapshotContactNotes({ adminRequest: operatorAdminRequest, contactId: ctx.primaryContactId });
+        return { contactNotesSnapshotted: true };
+      },
       after: async () => ({
         primaryContact: readJsonIfExists(ctx.primaryContactPath),
       }),
@@ -2356,6 +2458,17 @@ function buildApprenticeCases(ctx) {
         sideChecksContainText(sideChecks, contactNote) && sideChecksContainText(sideChecks, linkedIdentity)
           ? []
           : ['contact_mutation must persist the note and linked identity']
+      ),
+      cleanup: async () => (
+        contactNotesSnapshot === null
+          ? { cleanup: {}, cleanupErrors: ['contact notes were not snapshotted before the case'] }
+          : await restoreContactAfterMutation({
+            adminRequest: operatorAdminRequest,
+            contactId: ctx.primaryContactId,
+            originalNotes: contactNotesSnapshot,
+            noteToken: contactNote,
+            linkedUserId: linkedIdentity,
+          })
       ),
     },
     {
@@ -2480,56 +2593,13 @@ function buildApprenticeCases(ctx) {
       },
       timeoutMs: 60000,
     },
-    {
-      id: 'image_create',
-      sessionId: `apprentice-image-create-${ctx.runToken}`,
-      expectedTools: ['generate_image'],
-      actionSensitive: true,
-      actionSuccessKeys: ['worked'],
-      message:
-        'Then call generate_image with action "generate", provider "auto", prompt "a red ceramic mug on a steel workbench, sharp studio lighting", width 512, height 512, aspect_ratio "1:1", num_images 1. '
-        + 'Return only a JSON object with keys worked and note.',
-      validateParsedAssistant: ({ parsedAssistant, archiveToolMessages }) => (
-        parsedAssistant?.worked === true || archiveToolSucceeded(archiveToolMessages, 'generate_image')
-          ? []
-          : ['image_create worked must be true or have successful generate_image tool proof']
-      ),
-      timeoutMs: 90000,
-    },
-    {
-      id: 'image_edit',
-      sessionId: `apprentice-image-edit-${ctx.runToken}`,
-      expectedTools: ['generate_image'],
-      actionSensitive: true,
-      actionSuccessKeys: ['worked'],
-      message:
-        `Then call generate_image with action "edit", provider "auto", input_urls=${JSON.stringify(falEditSourceUrls)}, prompt "make a photo of the man driving the car down the california coastline", aspect_ratio "auto", resolution "1K", num_images 1. `
-        + 'Return only a JSON object with keys worked and note.',
-      validateParsedAssistant: ({ parsedAssistant, archiveToolMessages }) => (
-        parsedAssistant?.worked === true || archiveToolSucceeded(archiveToolMessages, 'generate_image')
-          ? []
-          : ['image_edit worked must be true or have successful generate_image tool proof']
-      ),
-      timeoutMs: 90000,
-    },
-    {
-      id: 'selfie_create',
-      sessionId: `apprentice-selfie-${ctx.runToken}`,
-      expectedTools: ['selfie_create'],
-      suggestTools: ['selfie_create'],
-      actionSensitive: true,
-      actionSuccessKeys: ['worked'],
-      message:
-        'selfie_create is a core tool that is already active — call it directly and do not wait for or depend on a toolset activation handshake. '
-        + 'Call selfie_create with provider "auto", prompt "close portrait, direct eye contact, neutral lighting, plain background", width 512, height 512, aspect_ratio "1:1", num_images 1. '
-        + 'Return only a JSON object with keys worked and note.',
-      validateParsedAssistant: ({ parsedAssistant, archiveToolMessages }) => (
-        parsedAssistant?.worked === true || archiveToolSucceeded(archiveToolMessages, 'selfie_create')
-          ? []
-          : ['selfie_create worked must be true or have successful selfie_create tool proof']
-      ),
-      timeoutMs: 90000,
-    },
+    ...(IMAGE_CASE_PROVIDER === null
+      ? []
+      : buildImageGenerationCases({
+        runToken: ctx.runToken,
+        provider: IMAGE_CASE_PROVIDER,
+        editSourceUrls: falEditSourceUrls,
+      })),
     {
       id: 'spawn_subagent',
       sessionId: `apprentice-subagent-${ctx.runToken}`,
@@ -2662,6 +2732,7 @@ function buildCoverageCases(ctx) {
     {
       id: 'prompt_mutation_cycle',
       sessionId: `coverage-prompt-mutate-${ctx.runToken}`,
+      ...promptLayerRestoreHooks(),
       expectedTools: ['identity'],
       actionSensitive: true,
       actionSuccessKeys: ['updated', 'rolledBack'],
@@ -2678,6 +2749,7 @@ function buildCoverageCases(ctx) {
     {
       id: 'prompt_toggle_cycle',
       sessionId: `coverage-prompt-toggle-${ctx.runToken}`,
+      ...promptLayerRestoreHooks(),
       expectedTools: ['identity'],
       actionSensitive: true,
       actionSuccessKeys: ['toggledTwice'],
@@ -2724,10 +2796,12 @@ function buildCoverageCases(ctx) {
       expectedTools: ['toolset'],
       message:
         'Use toolset with action="list" first. '
-        + 'Then use toolset with action="pin" and tool "scratchpad_write". '
+        // Canonical extended tools only: scratchpad_write is a retired alias
+        // that can never be pinned (97epu).
+        + 'Then use toolset with action="pin" and tool "notify". '
         + 'Then use toolset with action="pin" and tool "north_star". '
         + 'Then use toolset with action="list" again. '
-        + 'Then use toolset with action="unpin" and tool "scratchpad_write". '
+        + 'Then use toolset with action="unpin" and tool "notify". '
         + 'Then use toolset with action="unpin" and tool "north_star". '
         + 'Then use toolset with action="list" a final time. '
         + 'Return only a JSON object with keys before, afterPin, and final. '
@@ -2752,6 +2826,15 @@ function buildCoverageCases(ctx) {
         }
         if (!hasPinnedToolsArray(final)) {
           failures.push('promoted_tools_cycle final.pinnedTools must be an array');
+        }
+        // An all-empty cycle proves nothing: the pins must have taken effect.
+        const pinned = Array.isArray(afterPin?.pinnedTools)
+          ? afterPin.pinnedTools
+          : Object.values(afterPin ?? {}).flatMap((entry) => (Array.isArray(entry?.pinnedTools) ? entry.pinnedTools : []));
+        for (const toolName of ['notify', 'north_star']) {
+          if (!pinned.includes(toolName)) {
+            failures.push(`promoted_tools_cycle afterPin.pinnedTools must include ${toolName}`);
+          }
         }
         return failures;
       },
@@ -2806,6 +2889,8 @@ function buildCoverageCases(ctx) {
           ? []
           : ['skill_manage must persist the updated managed skill content']
       ),
+      // The case-created skill is removed through Garden and proven absent (ob6w1).
+      cleanup: async () => await removeHarnessSkill({ adminRequest: operatorAdminRequest, name: skillName }),
     },
     {
       id: 'orient_append',
@@ -3334,18 +3419,13 @@ function buildCases(ctx) {
       if (!OPERATOR_APPROVAL_TARGET) {
         throw new Error('memory_delete_restore requires preflighted Operator approval authority');
       }
-      return fetchJson(
-        `${OPERATOR_APPROVAL_TARGET.apiBaseUrl.replace(/\/$/u, '')}/operator/confirmations/resolve`,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${OPERATOR_APPROVAL_TARGET.adminToken}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ id: confirmationId, decision: 'approve' }),
-          signal,
-        },
-      );
+      const approval = buildOperatorConfirmationApproval(OPERATOR_APPROVAL_TARGET, confirmationId);
+      return fetchJson(approval.url, {
+        method: 'POST',
+        headers: approval.headers,
+        body: approval.body,
+        signal,
+      });
     },
     chatCase,
     fetchJson,
@@ -3381,6 +3461,9 @@ function buildCases(ctx) {
       fetchJson,
       pgAll,
       pgScalar,
+      // The fleet spend ledger is gateway-owned (ypah0).
+      gatewayPgAll,
+      gatewayPgScalar,
       readJsonIfExists,
       readJsonl,
       waitForTurnRecord: waitForCaseTurnRecord,
@@ -3475,7 +3558,8 @@ async function runCase(testCase, ctx, signal) {
       });
     }
   }
-  const auditStartId = Number(await pgScalar(
+  // gateway_audit is gateway-owned: read it from the gateway schema (ypah0).
+  const auditStartId = Number(await gatewayPgScalar(
     'select coalesce(max(id), 0) as id from gateway_audit;',
   ) ?? 0);
   throwIfAborted(signal);
@@ -3569,7 +3653,7 @@ async function runCase(testCase, ctx, signal) {
   if (!outcome) {
     throw new Error(`case ${testCase.id} produced no dispatch outcome`);
   }
-  const auditRows = await pgAll(
+  const auditRows = await gatewayPgAll(
     `select id, timestamp, method, decision, params_json, error from gateway_audit where id > ${auditStartId} order by id asc;`,
   );
   throwIfAborted(signal);
@@ -3787,8 +3871,30 @@ async function runCase(testCase, ctx, signal) {
 
 async function main() {
   const startedAt = new Date().toISOString();
+  // Remove marker residue earlier rounds left in prompt layers (2pz3o) before
+  // this run takes its inventory and per-case snapshots.
+  const sweptPromptMarkerLayers = await sweepHarnessPromptMarkers({ adminRequest: operatorAdminRequest });
+  if (sweptPromptMarkerLayers.length > 0) {
+    console.error(JSON.stringify({ event: 'prompt_marker_residue_swept', layerIds: sweptPromptMarkerLayers }));
+  }
+  const sweptHarnessSkills = await sweepHarnessSkills({ adminRequest: operatorAdminRequest });
+  if (sweptHarnessSkills.length > 0) {
+    console.error(JSON.stringify({ event: 'harness_skill_residue_swept', skills: sweptHarnessSkills }));
+  }
+  // Scratchpad notes live in the running agent's store; earlier runs' notes
+  // are reported (they expire within 24h and render only in their own room).
+  const scratchpadResidue = await countHarnessScratchpadResidue({ pgAll });
+  if (scratchpadResidue > 0) {
+    console.error(JSON.stringify({ event: 'harness_scratchpad_residue_present', count: scratchpadResidue }));
+  }
   const promptInventory = await fetchJson(`${ADMIN_BASE}/api/admin/prompts`);
   const ctx = buildBaseContext();
+  if (ctx.primaryContactId) {
+    // Earlier runs left the primary contact's notes as a bare harness marker (ob6w1).
+    if (await sweepHarnessContactNote({ adminRequest: operatorAdminRequest, contactId: ctx.primaryContactId })) {
+      console.error(JSON.stringify({ event: 'harness_contact_note_residue_swept', contactId: ctx.primaryContactId }));
+    }
+  }
   ctx.promptInventory = promptInventory.body ?? null;
   ctx.promptToggleLayer = selectRuntimePromptLayer(promptInventory.body, 'runtime.last_message_received');
   ctx.promptBaseLayer = selectPromptLayerByType(promptInventory.body, 'base');
@@ -3850,6 +3956,7 @@ async function main() {
   const results = [];
   let matrixAborted = false;
   let pendingBusyRecovery = null;
+  let pendingRoomFromCaseId = null;
   const writePartialProgress = (harnessStatus = matrixAborted ? 'matrix_aborted' : 'running') => {
     writeJsonArtifact(PARTIAL_OUTPUT_PATH, {
       ...outputBase,
@@ -3905,17 +4012,20 @@ async function main() {
           ...quiescence,
         });
       }
-      if (quiescence && !quiescence.quiescent) {
-        const agentBusy = quiescence.reason === 'agent_busy';
+      const busyAction = decidePreCaseBusyAction(quiescence);
+      if (quiescence && busyAction.reason) {
+        recordCaseDiagnostic(testCase.id, {
+          event: 'pre_case_busy_decision',
+          blockedByCaseId: pendingBusyRecovery?.caseId ?? null,
+          ...busyAction,
+        });
+      }
+      if (!busyAction.run) {
         caseResult = buildHarnessErrorResult(
           testCase,
-          agentBusy
-            ? 'Agent remained busy through the bounded pre-case quiescence window'
-            : 'Admin session state remained unavailable through the bounded pre-case quiescence window',
-          agentBusy ? 'agent_busy' : 'harness_error',
-          agentBusy
-            ? 'agent_busy:pre_case_quiescence_timeout'
-            : 'harness_error:admin_quiescence_unreachable',
+          'Admin session state remained unavailable through the bounded pre-case quiescence window',
+          'harness_error',
+          busyAction.reason,
         );
         caseResult.sideChecks.preCaseQuiescence = quiescence;
       } else {
@@ -3931,6 +4041,20 @@ async function main() {
           caseOverheadTimeoutMs: DEFAULT_CASE_OVERHEAD_TIMEOUT_MS,
           stepDelayMs: DEFAULT_STEP_DELAY_MS,
         });
+        const roomIsolation = pendingRoomFromCaseId === null
+          ? null
+          : await settleSharedRoom({
+            ledger: SHARED_ROOM_LEDGER,
+            fromCaseId: pendingRoomFromCaseId,
+            runSettleTurn: () => chatCase(buildRoomSettleTurnInput({
+              runToken: ctx.runToken,
+              apiUserId: ctx.primaryApiUserId,
+              timeoutMs: DEFAULT_FETCH_TIMEOUT_MS,
+            })),
+          });
+        if (roomIsolation) {
+          recordCaseDiagnostic(testCase.id, { event: 'pre_case_room_settle', ...roomIsolation });
+        }
         try {
           caseResult = await runCaseWithTimeout({
             label: `case ${testCase.id}`,
@@ -3949,6 +4073,7 @@ async function main() {
             failure.reason,
           );
         }
+        caseResult = applyRoomIsolationOutcome(caseResult, roomIsolation);
       }
     }
     if (caseExecutionAttempted && typeof testCase.cleanup === 'function') {
@@ -3987,6 +4112,26 @@ async function main() {
           caseId: testCase.id,
           busyObservedAtMs: caseResult.busyObservedAtMs,
         };
+        // e04wp: record who held the agent (foreground turn vs background work)
+        // on the busy case itself; the next case retries instead of skipping.
+        try {
+          const ownerProbe = await probeKnownBusySettlement({
+            adminBase: ADMIN_BASE,
+            busyObservedAtMs: caseResult.busyObservedAtMs,
+            fetchJson,
+          });
+          caseResult.sideChecks = {
+            ...(caseResult.sideChecks ?? {}),
+            busyOwner: ownerProbe.busy === false ? 'settled' : (ownerProbe.busyOwner ?? 'unknown'),
+          };
+        } catch (error) {
+          caseResult.sideChecks = {
+            ...(caseResult.sideChecks ?? {}),
+            busyOwner: 'unknown',
+            busyOwnerProbeError: error instanceof Error ? error.message : String(error),
+          };
+        }
+        caseResult.failureReason ??= 'agent_busy:retry_exhausted';
       } else {
         caseResult.caseStatus = 'harness_error';
         caseResult.failureReason = 'harness_error:missing_busy_observation';
@@ -4000,6 +4145,9 @@ async function main() {
       startedAt,
       selectedCaseIds,
     });
+    if (caseExecutionAttempted) {
+      pendingRoomFromCaseId = SHARED_ROOM_LEDGER.pending() === null ? null : testCase.id;
+    }
     results.push(caseResult);
     writePartialProgress();
     console.error(JSON.stringify({

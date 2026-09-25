@@ -13,9 +13,15 @@ function escapeRegExp(value: string): string {
 
 function directiveSentenceAt(requestText: string, matchIndex: number, matchEnd: number): string {
   let sentenceStart = 0;
-  const priorText = requestText.slice(0, matchIndex);
-  for (const boundary of priorText.matchAll(/[.!?]["')\]]*\s+(?=[\p{Lu}\p{Lt}])/gu)) {
-    sentenceStart = boundary.index + boundary[0].length;
+  // r27lc: scan the whole text, not just the text before the directive. The
+  // boundary lookahead needs the capital that STARTS the directive's own
+  // sentence, which a prefix slice cuts off, so a directive opening a sentence
+  // was merged into the previous one and inherited its negation ("do not wait.
+  // Call selfie_create ..." read as prohibited).
+  for (const boundary of requestText.matchAll(/[.!?]["')\]]*\s+(?=[\p{Lu}\p{Lt}])/gu)) {
+    const boundaryEnd = boundary.index + boundary[0].length;
+    if (boundaryEnd > matchIndex) break;
+    sentenceStart = boundaryEnd;
   }
   const remainingText = requestText.slice(matchEnd);
   const nextBoundary = /[.!?]["')\]]*(?=\s+[\p{Lu}\p{Lt}]|$)/u.exec(remainingText);

@@ -1,4 +1,8 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, expect, vi, beforeEach, afterEach } from 'vitest';
+import { viewerContextIt } from '../../test-support/viewer-context-it.js';
+
+// Spawns run inside an admitted viewer, as from a real turn (mzytp).
+const it = viewerContextIt();
 import { fromAny } from '@total-typescript/shoehorn';
 import { CompletionNoticeBuffer } from '../../core/agent/completion-notices.js';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -10,7 +14,7 @@ import { EventBus } from '../../shared/event-bus.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
 import { SessionManager } from '../../core/session/manager.js';
 import { createShardAgentRuntime } from './agent-runtime.js';
-import { runWithRequestContext } from '../../primitives/llm/request-context.js';
+import { getRequestContext, runWithRequestContext } from '../../primitives/llm/request-context.js';
 import {
   getRunChargeSnapshot,
   resetRunChargeRollingWindowForTests,
@@ -57,6 +61,8 @@ let mockShardContent = 'shard response';
 let mockShardContents: string[] = [];
 let mockShardDelayMs = 0;
 let mockShardError: Error | null = null;
+/** Viewer trust seen inside each shard turn (mzytp). */
+const shardTurnViewerTrust: unknown[] = [];
 let mockParentCapabilitySnapshot: CapabilityGrantSnapshot;
 const snapshotParentCapabilityGrant = vi.fn(
   (): CapabilityGrantSnapshot => mockParentCapabilitySnapshot,
@@ -101,6 +107,7 @@ type AgentRunConfig = {
 };
 const agentRunConfigs: AgentRunConfig[] = [];
 function recordAgentRunConfig(agent: Agent): AgentRunConfig {
+  shardTurnViewerTrust.push(getRequestContext()?.viewerTrustLevel);
   const config = {
     agent,
     systemPrompt: agent.state.systemPrompt,
@@ -281,6 +288,7 @@ describe('ShardManager', () => {
     mockShardContents = [];
     mockShardDelayMs = 0;
     mockShardError = null;
+    shardTurnViewerTrust.length = 0;
     mockParentCapabilitySnapshot = Object.freeze({
       tier: 'autonomous',
       customTokens: Object.freeze([]),
@@ -868,6 +876,8 @@ describe('ShardManager', () => {
         channelId: 'api:launch',
         callType: 'tool',
         purpose: 'shard',
+        viewerTrustLevel: 'primary',
+        viewerChannelPrivacy: 'private',
       }),
       async () => runWithChargeContext({
         chargePolicy: makeChargePolicy(),
@@ -1583,6 +1593,67 @@ describe('ShardManager', () => {
     expect(memory.getActiveMemoryContext).toHaveBeenCalled();
   });
 
+  it('holds a shard spawned from a public room to that viewer (mzytp)', async () => {
+    const memory = mockMemoryProvider('A private memory about the partner.');
+    const manager = createTestShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: memory,
+      config: {
+        ...TEST_CONFIG,
+        capabilityTier: 'autonomous',
+        compositionalPolicy: {
+          enabled: true,
+          allowedTiers: ['autonomous'],
+          allowedChannelTypes: ['api'],
+          allowedPurposes: ['shard_context'],
+        },
+      },
+      parentSystemPrompt: 'You are a helpful assistant.',
+    });
+    sessionStore.append({
+      channelId: 'api:public-room',
+      role: 'user',
+      content: 'What do you know about your partner?',
+      authorId: 'stranger',
+      authorName: 'Stranger',
+      timestamp: Date.now() - 1_000,
+    });
+
+    await runWithRequestContext({
+      callType: 'tool',
+      purpose: 'agent.turn',
+      channelId: 'api:public-room',
+      viewerTrustLevel: 'public',
+      viewerChannelPrivacy: 'public',
+    }, async () => await manager.spawn({
+      name: 'public-room-shard',
+      task: 'Summarize what you know about the partner.',
+      sourceContext: { channelId: 'api:public-room' },
+    }));
+
+    expect(memory.retrieve).toHaveBeenCalledWith(
+      'Summarize what you know about the partner.',
+      'api:public-room',
+      'public',
+      { privacyLevel: 'public' },
+      undefined,
+      undefined,
+      expect.anything(),
+      undefined,
+      undefined,
+    );
+    expect(shardTurnViewerTrust.length).toBeGreaterThan(0);
+    expect(shardTurnViewerTrust.every(trust => trust === 'public')).toBe(true);
+
+    await expect(runWithRequestContext(
+      { callType: 'tool', purpose: 'agent.turn', channelId: 'api:unknown-room' },
+      async () => await manager.spawn({ name: 'no-viewer', task: 'anything' }),
+    )).rejects.toThrow(/no admitted viewer context/);
+  });
+
   it('injects a shard context pack from the source channel and keeps shard writes isolated', async () => {
     mockShardContent = 'context-packed response';
     const sourceTurnId = createTurnId();
@@ -1647,8 +1718,9 @@ describe('ShardManager', () => {
     expect(memory.retrieve).toHaveBeenCalledWith(
       'Summarize the deployment blockers.',
       sourceChannelId,
-      undefined,
-      undefined,
+      // Retrieved as the spawning viewer (mzytp).
+      'primary',
+      { privacyLevel: 'private' },
       undefined,
       undefined,
       {
@@ -1817,8 +1889,9 @@ describe('ShardManager', () => {
     expect(memory.retrieve).toHaveBeenCalledWith(
       'Summarize the memory improvement work.',
       sourceChannelId,
-      undefined,
-      undefined,
+      // Retrieved as the spawning viewer (mzytp).
+      'primary',
+      { privacyLevel: 'private' },
       undefined,
       undefined,
       {
@@ -2087,11 +2160,11 @@ describe('ShardManager', () => {
 
     // Read passes through to the underlying tool.
     orient.execute.mockClear();
-    const readResult = await injectedOrient!.execute(
+    const readResult = await runWithRequestContext({ callType: 'tool', purpose: 'agent.turn', channelId: 'api:owner-console', viewerTrustLevel: 'primary', viewerChannelPrivacy: 'private' }, () => injectedOrient!.execute(
       'call-orient-read',
       { action: 'values_list' } as never,
       undefined,
-    );
+    ));
     expect(orient.execute).toHaveBeenCalledTimes(1);
     expect((readResult.details as { isError?: boolean }).isError).not.toBe(true);
 
@@ -3186,6 +3259,8 @@ describe('ShardManager', () => {
           ownerVersion: expect.any(String),
         }),
       }),
+      null,
+      // Satellite delegation runs the inbound speaker's own turn: no ceiling.
       null,
     );
   });

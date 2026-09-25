@@ -139,13 +139,15 @@ export class GatewayConnectionRpcMethods {
       embeddingService: this.ports.options.embeddingService,
       ...(this.ports.options.modelDiscovery ? { modelDiscovery: this.ports.options.modelDiscovery } : {}),
       discordAdapter: this.ports.connectionScope.resolveConnectionDiscordDock(conn),
-      resolveChannelOutboundDock: channelType => (
-        this.ports.connectionScope.resolveConnectionPluginOutboundDock(conn, channelType)
-      ),
       ...(this.ports.options.telegramDock ? { telegramDock: this.ports.options.telegramDock } : {}),
+      ...(this.ports.options.modelBudget ? { modelBudget: this.ports.options.modelBudget } : {}),
+      ...(this.ports.options.roomReplyOutbound
+        ? { roomReplyOutbound: this.ports.options.roomReplyOutbound }
+        : {}),
       gitOps: this.ports.options.gitOps,
       imageConfig: this.ports.options.imageConfig,
       ...(this.ports.options.modelUsageRecorder ? { modelUsageRecorder: this.ports.options.modelUsageRecorder } : {}),
+      ...(this.ports.options.jevDecisions ? { jevDecisions: this.ports.options.jevDecisions } : {}),
       ...(this.ports.options.credentialVault ? { credentialVault: this.ports.options.credentialVault } : {}),
       get intakeScreening() { return resolveIntakeScreening(); },
       ...(this.ports.options.quarantinedArtifactGuard

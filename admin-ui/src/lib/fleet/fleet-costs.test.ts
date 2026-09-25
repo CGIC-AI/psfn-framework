@@ -108,6 +108,7 @@ describe('fleet costs helpers', () => {
         displayName: 'Offline',
         health: { agentRpc: 'down', adminTransport: 'unknown', channels: 'unknown' },
         posture: { status: 'unavailable' },
+        icp: { state: 'not_applicable', reason: 'singleton_fleet', lifecycle: 'member' },
         gardenPath: `/companions/${COMPANION_A}/garden`,
       },
       {
@@ -115,6 +116,7 @@ describe('fleet costs helpers', () => {
         displayName: 'Online',
         health: { agentRpc: 'up', adminTransport: 'unknown', channels: 'unknown' },
         posture: { status: 'unavailable' },
+        icp: { state: 'not_applicable', reason: 'singleton_fleet', lifecycle: 'member' },
         gardenPath: `/companions/${COMPANION_B}/garden`,
       },
     ])).toBe(`/companions/${COMPANION_B}/garden`);

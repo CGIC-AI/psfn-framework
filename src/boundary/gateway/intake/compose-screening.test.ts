@@ -16,6 +16,7 @@ import type { SubstrateConfig } from '../../../system/config/runtime-config-cont
 import { loadSeedIntakeScreenerTestConfig } from './screener-test-config.js';
 import type { IntakeFirewallMode } from '../../../system/config/intake-policy-config.js';
 import { createCompanionId } from '../../../shared/routing/companion-id.js';
+import { createDefaultDecisionBackendSettings } from '../../../system/config/decision-backend-config.js';
 import { createIntakeQuarantineStore } from '../../../core/cogsec/intake/quarantine-store.js';
 import type { ProviderRuntime } from '../../../primitives/llm/provider-runtime.js';
 
@@ -257,6 +258,36 @@ describe('composeGatewayIntakeScreening vision wiring (htm9.8)', () => {
     await composition.dispose();
   });
 
+  it('escalates oversized content fail closed with a maximal L1.5 score (jerq6)', async () => {
+    const input = makeDataDirs('shadow', false);
+    const policyPath = join(input.systemDataDir, 'intake-policy.json');
+    const policy = JSON.parse(readFileSync(policyPath, 'utf8')) as Record<string, Record<string, unknown>>;
+    policy.injectionClassifier = { ...policy.injectionClassifier, maxContentChars: 200 };
+    writeFileSync(policyPath, JSON.stringify(policy, null, 2));
+    const composition = await composeGatewayIntakeScreening({
+      ...input,
+      config: loadSeedIntakeScreenerTestConfig(input.systemDataDir),
+      screenerBackend: TEST_SCREENER_BACKEND,
+      screenerTestCompletion: unusedScreenerCompletion,
+      injectionBackendFactory: fakeInjectionBackendFactory,
+    });
+
+    const result = await composition.screening!.screen(
+      'A calm note about watering tomato plants in the summer heat. '.repeat(20),
+      {
+        sourceClass: 'primary_user',
+        origin: { ref: 'discord:channel-1:message-2' },
+        scope: 'context',
+        sourceChannelId: 'channel-1',
+        sourceMessageId: 'message-2',
+        surface: { channelClass: 'group_chat' },
+      },
+    );
+
+    expect(result.envelope.scores['onnx-prompt-injection']).toBe(1);
+    await composition.dispose();
+  });
+
   it('signals only after an image fail-closed quarantine hold is durable', async () => {
     const input = makeDataDirs('strict', true);
     const durableCounts: number[] = [];
@@ -414,6 +445,92 @@ describe('composeGatewayIntakeScreeningRuntime fleet quarantine ownership', () =
     ).withheld).toBe(true);
 
     await runtime.dispose();
+  });
+
+  it('attributes the intake.l2 remote decision to the screening companion (45z3w)', async () => {
+    const input = makeDataDirs('strict', false);
+    const companionA = createCompanionId('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'test companion A');
+    const companionB = createCompanionId('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'test companion B');
+    const companionBDataDir = mkdtempSync(join(tmpdir(), 'intake-companion-b-'));
+    tempDirs.push(companionBDataDir);
+    const decide = vi.fn(async () => ({
+      ok: false as const,
+      reason: 'error' as const,
+      backend: 'jev' as const,
+      latencyMs: 1,
+    }));
+    const runtime = await composeGatewayIntakeScreeningRuntime({
+      config: {
+        ...input.config,
+        decisionBackend: {
+          ...createDefaultDecisionBackendSettings(),
+          sites: { 'intake.l2': { mode: 'jev', enabled: true, threshold: 0.7 } },
+        },
+      },
+      jevDecisions: { decide },
+      systemDataDir: input.systemDataDir,
+      companionDataDir: input.companionDataDir,
+      multiCompanion: true,
+      companions: [
+        { companionId: companionA, companionDataDir: input.companionDataDir },
+        { companionId: companionB, companionDataDir: companionBDataDir },
+      ],
+      screenerBackend: TEST_SCREENER_BACKEND,
+      screenerTestCompletion: unusedScreenerCompletion,
+      injectionBackendFactory: fakeInjectionBackendFactory,
+      env: input.env,
+      operatorAlerting: input.operatorAlerting,
+      onInlineShadowFinding: input.onInlineShadowFinding,
+    });
+
+    await runtime.resolve(companionB).screening!.screen(
+      'A short note about tomato plants and when to water them in summer.',
+      {
+        sourceClass: 'document',
+        origin: { ref: 'discord:account-b:channel-1:message-1:attachment-0' },
+        scope: 'context',
+      },
+    );
+
+    expect(decide).toHaveBeenCalledOnce();
+    expect(decide.mock.calls[0]?.[0]).toMatchObject({ siteId: 'intake.l2', companionId: companionB });
+    await runtime.dispose();
+  });
+
+  it('loads one shared L1.5 classifier for every fleet companion and disposes it once (3mbpi)', async () => {
+    const input = makeDataDirs('strict', false);
+    const companions = ['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'cccccccc-cccc-4ccc-8ccc-cccccccccccc']
+      .map((id, index) => {
+        const companionDataDir = mkdtempSync(join(tmpdir(), `intake-shared-${String(index)}-`));
+        tempDirs.push(companionDataDir);
+        return { companionId: createCompanionId(id, `test companion ${String(index)}`), companionDataDir };
+      });
+    const backend = fakeInjectionBackend();
+    const classified = vi.spyOn(backend, 'injectionProbability');
+    const disposed = vi.spyOn(backend, 'dispose');
+    const factory = vi.fn(() => Promise.resolve(backend));
+    const runtime = await composeGatewayIntakeScreeningRuntime({
+      ...input,
+      multiCompanion: true,
+      companions,
+      screenerBackend: TEST_SCREENER_BACKEND,
+      screenerTestCompletion: unusedScreenerCompletion,
+      injectionBackendFactory: factory,
+    });
+
+    expect(factory).toHaveBeenCalledOnce();
+    const warmupCalls = classified.mock.calls.length;
+    for (const companion of companions) {
+      await runtime.resolve(companion.companionId).screening!.screen('A friendly note about the garden.', {
+        sourceClass: 'primary_user',
+        origin: { ref: `discord:${companion.companionId}:channel-1:message-1` },
+        scope: 'context',
+      });
+    }
+    // Every companion's screening scored through the one shared classifier.
+    expect(classified.mock.calls.length - warmupCalls).toBe(companions.length);
+    await runtime.dispose();
+    expect(disposed).toHaveBeenCalledOnce();
   });
 
   it('surfaces cleanup failures together with the fleet composition failure', async () => {

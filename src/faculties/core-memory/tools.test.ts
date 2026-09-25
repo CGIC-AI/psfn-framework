@@ -558,10 +558,10 @@ describe('orient tool', () => {
     expect(createdPayload.concern.status).toBe('watching');
     expect(createdPayload.concern.evidenceRefs).toEqual([{ kind: 'message', ref: 'msg-orient-1' }]);
 
-    const listedResult = await tool.execute('call-concern-list', {
+    const listedResult = await runWithRequestContext({ callType: 'tool', purpose: 'agent.turn', channelId: 'api:owner-console', viewerTrustLevel: 'primary', viewerChannelPrivacy: 'private' }, () => tool.execute('call-concern-list', {
       action: 'list_concerns',
       contactId: 'contact-a',
-    });
+    }));
     const listedPayload = JSON.parse(resultText(listedResult)) as {
       count: number;
       concerns: Array<{ id: string }>;

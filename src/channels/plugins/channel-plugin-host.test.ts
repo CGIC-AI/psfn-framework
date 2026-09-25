@@ -8,11 +8,9 @@ import type {
   ChannelPluginInstance,
   ChannelPluginCreateInput,
   ChannelPluginHostContext,
-  ChannelPluginLoadedSection,
   ChannelPluginParseResult,
 } from './types.js';
 import { parseChannelPluginSections } from './load-sections.js';
-import { createMulticaChannelPlugin } from '../multica/plugin.js';
 import {
   ChannelSurfaceSupervisor,
   type ChannelSurfaceFailure,
@@ -191,7 +189,7 @@ describe('ChannelPluginHost', () => {
     const message = {
       id: 'event-1',
       channelId: 'probe:room',
-      channelType: 'buzz' as const,
+      channelType: 'api' as const,
       authorId: 'author',
       authorName: 'Author',
       content: 'hello',
@@ -635,52 +633,4 @@ describe('ChannelPluginHost', () => {
     expect(host.listRunning().map(entry => entry.id)).toEqual(['alpha', 'beta']);
   });
 
-  it('loads Multica through the same host as a probe plugin', async () => {
-    const created: string[] = [];
-    const probe = createProbePlugin({
-      onCreate: () => {
-        created.push('probe');
-      },
-    });
-    const registry = createChannelPluginRegistry([
-      createMulticaChannelPlugin({
-        runtimeLease: {
-          tryAcquire: async () => null,
-          acquire: async () => {
-            throw new Error('unused');
-          },
-        },
-      }),
-      probe,
-    ]);
-    const sections: Record<string, ChannelPluginLoadedSection> = {
-      ...parseChannelPluginSections({
-        probe: { enabled: true },
-        multica: {
-          enabled: true,
-          baseUrl: 'http://127.0.0.1:8080',
-          workspaceId: '11111111-1111-4111-8111-111111111111',
-          companionId: '22222222-2222-4222-8222-222222222222',
-          tokenRef: { kind: 'env', envName: 'MULTICA_GATEWAY_TOKEN' },
-          pollIntervalMs: 1000,
-        },
-      }, registry),
-    };
-    const host = await ChannelPluginHost.load({
-      registry,
-      sections,
-      vault: createStaticCredentialVault({
-        MULTICA_GATEWAY_TOKEN: 'owner-token',
-        PROBE_TOKEN: 'probe-token',
-      }),
-      contextFor: () => makeContext(),
-      supervisor: makeSupervisor().supervisor,
-    });
-    expect(sections.multica?.continuityChannelPrefixes).toEqual([
-      'multica:11111111-1111-4111-8111-111111111111:',
-    ]);
-    expect(host.list().map(entry => entry.id)).toEqual(['multica', 'probe']);
-    expect(created).toEqual(['probe']);
-    expect(host.get('multica')?.adapter.id).toBe('multica');
-  });
 });

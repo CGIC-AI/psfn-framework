@@ -60,8 +60,8 @@ async function buildSurfaces(input: {
   events: string[];
   discord?: Behavior;
   telegram?: Behavior;
-  multica?: Behavior;
-  buzz?: Behavior;
+  alpha?: Behavior;
+  beta?: Behavior;
 }) {
   const healthEvents: HealthEvent[] = [];
   const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -77,12 +77,12 @@ async function buildSurfaces(input: {
   });
   const plugins = await ChannelPluginHost.load({
     registry: createChannelPluginRegistry([
-      probePlugin('multica', input.events, input.multica),
-      probePlugin('buzz', input.events, input.buzz),
+      probePlugin('alpha', input.events, input.alpha),
+      probePlugin('beta', input.events, input.beta),
     ]),
     sections: {
-      multica: { id: 'multica', enabled: true, credentials: [], config: {} },
-      buzz: { id: 'buzz', enabled: true, credentials: [], config: {} },
+      alpha: { id: 'alpha', enabled: true, credentials: [], config: {} },
+      beta: { id: 'beta', enabled: true, credentials: [], config: {} },
     },
     vault: createStaticCredentialVault({}),
     contextFor: () => ({ log, shutdownTimeoutMs: 1_000, intakeScreening: null }),
@@ -110,11 +110,11 @@ describe('gateway channel surface isolation (psfn-framework-6cs5j)', () => {
     vi.useRealTimers();
   });
 
-  it('keeps every other channel running when Multica cannot start', async () => {
+  it('keeps every other channel running when Alpha cannot start', async () => {
     const events: string[] = [];
     const { surfaces, bootstrap, log, isolation } = await buildSurfaces({
       events,
-      multica: {
+      alpha: {
         start: async () => {
           throw new Error('invalid authority');
         },
@@ -124,11 +124,11 @@ describe('gateway channel surface isolation (psfn-framework-6cs5j)', () => {
     await initGatewayChannelSurfaces(surfaces);
     await expect(startGatewayChannelSurfaces(surfaces, bootstrap, log)).resolves.toBeUndefined();
 
-    expect(surfaces.plugins.listRunning().map(entry => entry.id)).toEqual(['buzz']);
+    expect(surfaces.plugins.listRunning().map(entry => entry.id)).toEqual(['beta']);
     expect(isolation.stateOf('discord')).toBe('running');
     expect(isolation.stateOf('telegram')).toBe('running');
-    expect(isolation.stateOf('multica')).toBe('disabled');
-    expect(log.info).toHaveBeenCalledWith('Channel plugin started', { pluginId: 'buzz' });
+    expect(isolation.stateOf('alpha')).toBe('disabled');
+    expect(log.info).toHaveBeenCalledWith('Channel plugin started', { pluginId: 'beta' });
   });
 
   it('refuses a non-retryable Discord start alone and raises a per-surface incident', async () => {
@@ -147,12 +147,12 @@ describe('gateway channel surface isolation (psfn-framework-6cs5j)', () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect(events).toEqual([
-      'init:telegram', 'init:multica', 'init:buzz', 'init:discord',
+      'init:telegram', 'init:alpha', 'init:beta', 'init:discord',
       // Only the failed Discord surface is released; everything else starts.
-      'start:discord', 'stop:discord', 'start:telegram', 'start:multica', 'start:buzz',
+      'start:discord', 'stop:discord', 'start:telegram', 'start:alpha', 'start:beta',
     ]);
     expect(isolation.stateOf('discord')).toBe('disabled');
-    expect(surfaces.plugins.listRunning().map(entry => entry.id)).toEqual(['multica', 'buzz']);
+    expect(surfaces.plugins.listRunning().map(entry => entry.id)).toEqual(['alpha', 'beta']);
 
     const owner = { kind: 'companion' as const, companionId: COMPANION_ID };
     const subjectHash = hashHealthEventSubject('channel:discord');
@@ -184,7 +184,7 @@ describe('gateway channel surface isolation (psfn-framework-6cs5j)', () => {
     await startGatewayChannelSurfaces(surfaces, bootstrap, log);
     expect(isolation.stateOf('discord')).toBe('degraded');
     expect(isolation.stateOf('telegram')).toBe('running');
-    expect(surfaces.plugins.listRunning().map(entry => entry.id)).toEqual(['multica', 'buzz']);
+    expect(surfaces.plugins.listRunning().map(entry => entry.id)).toEqual(['alpha', 'beta']);
 
     await vi.advanceTimersByTimeAsync(50);
     expect(isolation.stateOf('discord')).toBe('running');
@@ -211,16 +211,16 @@ describe('gateway channel surface isolation (psfn-framework-6cs5j)', () => {
     expect(events).not.toContain('start:telegram');
     expect(isolation.stateOf('telegram')).toBe('disabled');
     expect(isolation.stateOf('discord')).toBe('running');
-    expect(surfaces.plugins.listRunning().map(entry => entry.id)).toEqual(['multica', 'buzz']);
+    expect(surfaces.plugins.listRunning().map(entry => entry.id)).toEqual(['alpha', 'beta']);
   });
 
   it('stops every channel even when one channel fails to stop', async () => {
     const events: string[] = [];
     const { surfaces, bootstrap, log, healthEvents } = await buildSurfaces({
       events,
-      buzz: {
+      beta: {
         stop: async () => {
-          throw new Error('buzz stop exploded');
+          throw new Error('beta stop exploded');
         },
       },
       telegram: {
@@ -236,14 +236,14 @@ describe('gateway channel surface isolation (psfn-framework-6cs5j)', () => {
     await expect(stopGatewayChannelSurfaces(surfaces)).resolves.toBeUndefined();
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(events).toEqual(['stop:buzz', 'stop:multica', 'stop:telegram', 'stop:discord']);
+    expect(events).toEqual(['stop:beta', 'stop:alpha', 'stop:telegram', 'stop:discord']);
     expect(healthEvents.map(event => event.code)).toEqual([
       'channel_surface_failed',
       'channel_surface_failed',
     ]);
     expect(log.error).toHaveBeenCalledWith(
       'Channel surface failed; other channels continue',
-      expect.objectContaining({ surfaceId: 'buzz', phase: 'stop', error: 'buzz stop exploded' }),
+      expect.objectContaining({ surfaceId: 'beta', phase: 'stop', error: 'beta stop exploded' }),
     );
   });
 });

@@ -75,12 +75,20 @@ export function resolveBearerCompanionTarget(input: {
     };
   }
 
-  if (input.principal.mode !== 'api_key' || input.principal.scope !== undefined) {
+  // The unscoped API key and the dedicated testing-harness principal may
+  // select; the harness needs it to run its catalog against each fleet
+  // companion, not only the pinned one (psfn-framework-gz50o). Satellite and
+  // every other scoped principal stay pinned. Both still select only from the
+  // operator-declared selectableCompanionIds.
+  if (
+    input.principal.mode !== 'api_key'
+    || (input.principal.scope !== undefined && input.principal.scope !== 'testing_harness')
+  ) {
     return {
       ok: false,
       status: 403,
       type: 'bearer_companion_unauthorized',
-      message: 'Bearer/OpenAI-compatible companion selection requires an unscoped API-key principal',
+      message: 'Bearer/OpenAI-compatible companion selection requires an unscoped API-key or testing-harness principal',
     };
   }
 

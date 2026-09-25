@@ -113,7 +113,7 @@ The key kinds, and what each opens:
 | key | where it lives | what it unlocks |
 |---|---|---|
 | `API_KEY` | `.env` / app Secret | the OpenAI-compatible `/v1` API as the operator principal, and the Companion UI WebSocket (`/companion-ui/companions/<uuid>/ws`) as an operator key session when `COMPANION_UI_ORIGIN` (or fleet auth) pins its origin |
-| `ADMIN_TOKEN` | `.env` / app Secret (`npm run helm:token`) | Garden login and the Garden admin API, alongside fleet SSO when that is also configured; the Companion UI WebSocket as above |
+| `ADMIN_TOKEN` | `.env` / app Secret (`npm run helm:token`) | Garden login and the Garden admin API, the Fleet portal and usage summary, lifecycle and account authority, and the browser Companion UI (page, session status, roster, approvals, and its WebSocket through the HttpOnly `psfn_token` cookie set by `/fleet/login`), with or without fleet SSO |
 | `API_SATELLITE_KEYS` | `.env` / app Secret | per-satellite `/v1` principals (`api-key-<sha256[:24]>`) that `satellites.json` `auth.apiKeyPrincipalIds` admits |
 | `TESTING_HARNESS_API_KEY` | `.env` / app Secret | the testing-harness door declared in `channels.json` `api.testingHarness` |
 | Hub device key (Ed25519) | operator-held private PEM on the hub; public half in the verifier ring | short-lived `X-PSFN-Hub-Device-Assertion` tokens that admit an enrolled Hub device — the authority behind `world.body`, `world.travel`, and device-bound turns |
@@ -728,6 +728,12 @@ The same holds for the retired blocks that no runtime code read,
 `temporalWakeup.wakeSummary` and `artifactLifecycle`: loading fails with a
 message naming `migrate-scheduler-owner`, whose run removes exactly those
 paths (reported under `removedPaths`) and leaves every other setting as is.
+Likewise the removed Buzz and Multica channel plugins: a system `channels.json`
+still carrying a `buzz` or `multica` section (at the root or under `channels`)
+fails startup with a message naming `migrate-required-settings-blocks`, whose
+run strips exactly those sections (reported under `channels.removedPaths`).
+Any other unknown channel plugin key still fails closed, in the migration and
+at startup.
 
 The settings half of the adaptation reads its defaults from
 `$CONFIG_DIR/settings.seed.json` (`./config` when `CONFIG_DIR` is unset), which

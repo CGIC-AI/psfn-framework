@@ -32,6 +32,7 @@
 // text carries the operator-reviewed signature phrase, so the existing
 // emotion/memory exclusions apply automatically.
 
+import type { IntakeScreenerUsageLedger } from './screener-usage.js';
 import { createHash } from 'node:crypto';
 import { createComponentLogger } from '../../../shared/logger.js';
 import {
@@ -195,6 +196,8 @@ export interface VisionScreenerDeps {
   maxOutputTokens: number;
   /** Test seam; production uses the global fetch. */
   testCompletion?: ScreenerTestCompletion;
+  /** Usage ledger for each provider dispatch (1fyyi). */
+  usageLedger?: IntakeScreenerUsageLedger;
 }
 
 // ── Prompt construction (image pixels are DATA, never instructions) ──
@@ -365,10 +368,12 @@ export async function screenImageWithVisionModel(
 ): Promise<VisionScreenerVerdict> {
   const imagePart = buildImageContentPart(image);
   const startedAt = performance.now();
+  const onAttempt = deps.usageLedger?.('vision', deps.model);
   const verdict = await callValidatedToolLessJsonScreener({
     backend: deps.backend,
     model: deps.model,
     timeoutMs: deps.timeoutMs,
+    ...(onAttempt ? { onAttempt } : {}),
     maxOutputTokens: deps.maxOutputTokens,
     systemPrompt: VISION_CLASSIFIER_SYSTEM_PROMPT,
     userMessage: [
@@ -459,6 +464,8 @@ export interface EvaluateVisionIntakeInput {
   quarantine?: IntakeQuarantineHoldPort;
   /** Test seam; production uses the global fetch. */
   testCompletion?: ScreenerTestCompletion;
+  /** Usage ledger for each vision provider dispatch (1fyyi). */
+  usageLedger?: IntakeScreenerUsageLedger;
   /** Acting principal for fail-closed envelope transitions. */
   actor?: string;
   atMs?: number;
@@ -647,7 +654,8 @@ export async function evaluateVisionIntake(
       model: input.model,
       timeoutMs: policy.visionScreener.timeoutMs,
       maxOutputTokens: policy.visionScreener.maxOutputTokens,
-        ...(input.testCompletion ? { testCompletion: input.testCompletion } : {}),
+      ...(input.testCompletion ? { testCompletion: input.testCompletion } : {}),
+      ...(input.usageLedger ? { usageLedger: input.usageLedger } : {}),
     });
   } catch (error) {
     return failClosed(input, posture, error instanceof Error ? error.message : String(error));

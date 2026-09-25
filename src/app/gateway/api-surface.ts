@@ -2,6 +2,8 @@ import { resolveTestingHarnessDevicesConfig } from '../../channels/backplane/tes
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import { ExternalMemoryMcpRoute } from '../../channels/api/server/external-memory-mcp.js';
+import type { ExternalChannelAdapter } from '../../channels/external/adapter.js';
+import { ExternalChannelMcpRoute } from '../../channels/external/mcp-route.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type {
   SatelliteClientCertIdentity,
@@ -71,7 +73,7 @@ import type { RequestCapabilityReplayPort } from '../../boundary/fleet-auth/requ
 import {
   GatewayFleetSsoRouter,
 } from '../../boundary/gateway/fleet-sso-router.js';
-import type { TestingHarnessGardenAuthorizationAuditPort } from '../../boundary/gateway/testing-harness-garden-door.js';
+import type { GardenDoorAuthorizationAuditPort } from '../../boundary/gateway/testing-harness-garden-door.js';
 import {
   requireFleetSsoFleetManifest,
   resolveFleetSsoGardenUpstreams,
@@ -86,6 +88,7 @@ import {
 import { dispatchCompanionUiApproval } from '../../boundary/gateway/companion-ui-approvals.js';
 import { dispatchCompanionUiKeyShard } from '../../boundary/gateway/companion-ui-key-shards.js';
 import { FleetAuthHttpRoutes } from '../../channels/api/server/fleet-auth-routes.js';
+import type { GatewayOperatorAccountAuthorityService } from '../../boundary/fleet-auth/operator-account-authority.js';
 import type { FleetEscalationCoordinator } from '../../boundary/fleet-auth/escalation.js';
 import type { GatewayTrustedHostGardenRecoveryService } from '../../boundary/gateway/trusted-host-garden-recovery.js';
 import type { GatewayFleetAuthLifecycleCeremonyService } from '../../boundary/fleet-auth/lifecycle-ceremony.js';
@@ -104,6 +107,9 @@ import { createComponentLogger } from '../../shared/logger.js';
 import type { FleetPortalAuthorizationBatchPort } from '../../boundary/gateway/fleet-portal-authorization.js';
 import type { FleetPortalChannelHealthSource } from '../../boundary/gateway/fleet-portal-projection.js';
 import { createGatewayFleetPortalProjection } from './fleet-portal-composition.js';
+import type { FleetIcpPostureSource } from '../../boundary/gateway/fleet-icp-posture.js';
+import { GatewayFleetLifecycleHttpRoutes } from '../../boundary/gateway/fleet-lifecycle-http-routes.js';
+import type { FleetLifecycleCommandPort } from '../../system/fleet-lifecycle/service.js';
 import type { FleetModelUsageSummaryQueryPort } from '../../shared/telemetry/model-usage.js';
 import { createGatewayFleetModelUsageProjection } from './fleet-model-usage-composition.js';
 import { createBearerCompanionRoutingConfig } from '../../channels/api/server/bearer-companion-selector.js';
@@ -147,6 +153,8 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
   /** Exact gateway topology posture after fleet/single configuration resolution. */
   multiCompanion: boolean;
   channelsConfig?: RuntimeChannelsConfig;
+  /** Loaded external channel adapters; served only when the API server runs. */
+  externalChannelAdapters?: readonly ExternalChannelAdapter[];
   satelliteRegistryProvider: SatelliteRegistryProvider;
   satelliteRegistry?: SatelliteRegistryConfig;
   /**
@@ -168,13 +176,18 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
   fleetAuthEscalation?: FleetEscalationCoordinator;
   fleetAuthTrustedHostRecovery?: GatewayTrustedHostGardenRecoveryService;
   fleetAuthLifecycleCeremonies?: GatewayFleetAuthLifecycleCeremonyService;
+  fleetAuthOperatorAccountAuthority?: GatewayOperatorAccountAuthorityService;
   fleetAuthChildAssertions?: GatewayFleetAuthChildAssertionBroker;
   fleetAuthRequestCapabilities?: GatewayRequestCapabilitySigner;
   fleetAuthRequestCapabilityVerifier?: RequestCapabilityVerifier;
   fleetAuthRequestCapabilityReplay?: RequestCapabilityReplayPort;
-  fleetAuthTestingHarnessGardenAuthorizationAudit?: TestingHarnessGardenAuthorizationAuditPort;
+  fleetAuthGardenDoorAuthorizationAudit?: GardenDoorAuthorizationAuditPort;
   fleetPortalAuthorization?: FleetPortalAuthorizationBatchPort;
   fleetPortalChannelHealth?: FleetPortalChannelHealthSource;
+  /** Required with fleet auth: bounded passive ICP readiness for the Fleet page. */
+  fleetPortalIcpPosture?: FleetIcpPostureSource;
+  /** h248l.6: operator-only Fleet lifecycle commands (fleet auth only). */
+  fleetLifecycle?: FleetLifecycleCommandPort;
   /** Canonical fleet-scoped model-attempt ledger used by the authenticated budget projection. */
   fleetModelUsage?: FleetModelUsageSummaryQueryPort;
   primaryEmbodiments?: PrimaryEmbodimentAuthorityPort;
@@ -575,6 +588,7 @@ export async function startOptionalGatewayApiServer(
     && options.fleetAuthEscalation !== undefined
     && options.fleetAuthTrustedHostRecovery !== undefined
     && options.fleetAuthLifecycleCeremonies !== undefined
+    && options.fleetAuthOperatorAccountAuthority !== undefined
     && options.fleetAuthChildAssertions !== undefined
     && options.fleetAuthRequestCapabilities !== undefined
     && options.fleetAuthRequestCapabilityVerifier !== undefined
@@ -647,9 +661,13 @@ export async function startOptionalGatewayApiServer(
     ...(options.fleetPortalChannelHealth
       ? { channelHealth: options.fleetPortalChannelHealth }
       : {}),
+    ...(options.fleetPortalIcpPosture
+      ? { icpPosture: options.fleetPortalIcpPosture }
+      : {}),
   });
   const fleetModelUsageProjection = createGatewayFleetModelUsageProjection({
     fleetAuthEnabled,
+    fleetCompanionIds: options.config.companionFleet?.companions.map(entry => entry.companionId) ?? [],
     ...(options.fleetPortalAuthorization
       ? { portalAuthorization: options.fleetPortalAuthorization }
       : {}),
@@ -661,7 +679,7 @@ export async function startOptionalGatewayApiServer(
   const testingHarnessGardenAdmin = options.channelsConfig?.api.testingHarness?.gardenAdmin;
   if (options.config.fleetAuth
     && testingHarnessGardenAdmin
-    && !options.fleetAuthTestingHarnessGardenAuthorizationAudit) {
+    && !options.fleetAuthGardenDoorAuthorizationAudit) {
     throw new Error(
       'Testing-harness Garden admin requires durable fleet authorization audit wiring',
     );
@@ -673,7 +691,15 @@ export async function startOptionalGatewayApiServer(
     ? new GatewayFleetSsoRouter({
         canonicalOrigin: options.config.fleetAuth.canonicalOrigin,
         trustProxy: isExplicitTrue(env.FLEET_SSO_TRUST_PROXY),
-        ...(env.ADMIN_TOKEN ? { adminToken: env.ADMIN_TOKEN } : {}),
+        ...(env.ADMIN_TOKEN
+          ? {
+              adminToken: env.ADMIN_TOKEN,
+              ...(options.fleetAuthGardenDoorAuthorizationAudit
+                ? { adminTokenAudit: options.fleetAuthGardenDoorAuthorizationAudit }
+                : {}),
+            }
+          : {}),
+        ssoLoginEnabled: options.config.fleetAuth.provider.kind === 'discord',
         broker: options.fleetAuthBroker,
         signer: options.fleetAuthRequestCapabilities,
         verifier: options.fleetAuthRequestCapabilityVerifier,
@@ -682,16 +708,27 @@ export async function startOptionalGatewayApiServer(
         modelUsageProjection: fleetModelUsageProjection,
         ...(testingHarnessGardenAdmin
           && options.channelsConfig?.api.testingHarness
-          && options.fleetAuthTestingHarnessGardenAuthorizationAudit
+          && options.fleetAuthGardenDoorAuthorizationAudit
           ? {
               testingHarness: {
                 apiKey: options.channelsConfig.api.testingHarness.apiKey,
                 policy: testingHarnessGardenAdmin,
-                audit: options.fleetAuthTestingHarnessGardenAuthorizationAudit,
+                audit: options.fleetAuthGardenDoorAuthorizationAudit,
               },
             }
           : {}),
         ...(options.fleetAuthEscalation ? { escalation: options.fleetAuthEscalation } : {}),
+        ...(options.fleetLifecycle
+          ? {
+              lifecycleRoutes: new GatewayFleetLifecycleHttpRoutes({
+                commands: options.fleetLifecycle,
+                canonicalOrigin: options.config.fleetAuth.canonicalOrigin,
+                reportError: error => log.error('Fleet lifecycle command failed', {
+                  error: error instanceof Error ? error.message : String(error),
+                }),
+              }),
+            }
+          : {}),
         ...(options.config.fleetAuth.accountRoster
           ? { accountRoster: options.config.fleetAuth.accountRoster }
           : {}),
@@ -862,6 +899,7 @@ export async function startOptionalGatewayApiServer(
         } : {}),
         ...(companionUiOperatorKeys.length > 0 ? {
           operatorKeys: companionUiOperatorKeys,
+          ...(env.ADMIN_TOKEN?.trim() ? { adminTokenCookieKey: env.ADMIN_TOKEN } : {}),
           operatorActionBroker: {
             // Key path (psfn-framework-7oh9y): the bearer is the human authority,
             // so frames dispatch with the key principal exactly as the REST API
@@ -1212,6 +1250,16 @@ export async function startOptionalGatewayApiServer(
         [env.API_KEY, env.ADMIN_TOKEN, options.channelsConfig.api.testingHarness?.apiKey, ...satelliteApiKeys],
       ),
     } : {}),
+    ...(options.externalChannelAdapters && options.externalChannelAdapters.length > 0 ? {
+      externalChannelMcp: new ExternalChannelMcpRoute(options.externalChannelAdapters, [
+        env.API_KEY,
+        env.ADMIN_TOKEN,
+        options.channelsConfig?.api.testingHarness?.apiKey,
+        trustedProxyClientCertToken,
+        ...satelliteApiKeys,
+        ...(options.channelsConfig?.api.externalMemory?.bindings.map(binding => binding.apiKey) ?? []),
+      ]),
+    } : {}),
     // ADMIN_TOKEN remains available to the private Garden -> Gateway operator
     // confirmation endpoint and to the fleet router's alternative admin door.
     adminToken: env.ADMIN_TOKEN || undefined,
@@ -1279,6 +1327,10 @@ export async function startOptionalGatewayApiServer(
             ...(options.fleetAuthLifecycleCeremonies
               ? { lifecycleCeremonies: options.fleetAuthLifecycleCeremonies }
               : {}),
+            ...(options.fleetAuthOperatorAccountAuthority
+              ? { operatorAccountAuthority: options.fleetAuthOperatorAccountAuthority }
+              : {}),
+            ...(env.ADMIN_TOKEN ? { adminToken: env.ADMIN_TOKEN } : {}),
             trustProxy: isExplicitTrue(env.FLEET_SSO_TRUST_PROXY),
             ...(fleetSsoCompanionUi ? {
               companionUi: {

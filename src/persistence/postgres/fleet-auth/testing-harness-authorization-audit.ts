@@ -1,8 +1,8 @@
 import { createHmac, randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import type {
-  TestingHarnessGardenAuthorizationAuditPort,
-  TestingHarnessGardenAuthorizationAuditResult,
+  GardenDoorAuthorizationAuditPort,
+  GardenDoorAuthorizationAuditResult,
 } from '../../../boundary/gateway/testing-harness-garden-door.js';
 import { FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME } from './authority-state-lock-sql.js';
 import { FLEET_AUTH_SCHEMA_NAME } from './schema.js';
@@ -10,18 +10,33 @@ import { FLEET_AUTH_SCHEMA_NAME } from './schema.js';
 function positiveInteger(value: string, field: string): number {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < 1) {
-    throw new Error(`Invalid testing-harness authorization ${field}`);
+    throw new Error(`Invalid Garden door authorization ${field}`);
   }
   return parsed;
 }
 
+const DOOR_AUDIT_LABELS = {
+  testing_harness: {
+    actorKind: 'testing_harness',
+    reasonCode: 'testing_harness_garden_authorization_allowed',
+    authorizationSource: 'gateway_testing_harness',
+    correlationDomain: 'testing-harness-garden-correlation-v1',
+  },
+  admin_token: {
+    actorKind: 'admin_token_operator',
+    reasonCode: 'admin_token_garden_authorization_allowed',
+    authorizationSource: 'gateway_admin_token',
+    correlationDomain: 'admin-token-garden-correlation-v1',
+  },
+} as const;
+
 /**
- * Persists the synthetic testing-harness authorization before a request
- * capability can be minted. The authority lock makes the audit row and the
+ * Persists a synthetic Garden door authorization (testing harness or the
+ * ADMIN_TOKEN operator) before a request capability can be minted. The authority lock makes the audit row and the
  * capability's authority versions one atomic snapshot.
  */
-export class PostgresTestingHarnessGardenAuthorizationAudit
-implements TestingHarnessGardenAuthorizationAuditPort {
+export class PostgresGardenDoorAuthorizationAudit
+implements GardenDoorAuthorizationAuditPort {
   constructor(private readonly options: {
     pool: Pool;
     sessionPepper: string;
@@ -29,16 +44,17 @@ implements TestingHarnessGardenAuthorizationAuditPort {
   }) {}
 
   async record(
-    input: Parameters<TestingHarnessGardenAuthorizationAuditPort['record']>[0],
-  ): Promise<TestingHarnessGardenAuthorizationAuditResult> {
+    input: Parameters<GardenDoorAuthorizationAuditPort['record']>[0],
+  ): Promise<GardenDoorAuthorizationAuditResult> {
     const client = await this.options.pool.connect();
     try {
       await client.query('BEGIN');
       const authority = await this.lockAuthority(client);
       const authorizationEventId = randomUUID();
       const occurredAt = this.options.now?.() ?? new Date();
+      const labels = DOOR_AUDIT_LABELS[input.provider];
       const correlationDigest = createHmac('sha256', this.options.sessionPepper)
-        .update('testing-harness-garden-correlation-v1\0')
+        .update(`${labels.correlationDomain}\0`)
         .update(input.correlationId)
         .digest('hex');
       const result = await client.query(`
@@ -46,13 +62,12 @@ implements TestingHarnessGardenAuthorizationAuditPort {
           (event_id, actor_context, action, resource, decision, reason_code,
            companion_id, principal_id, authority_generation, global_auth_epoch,
            correlation_id, occurred_at, decision_id, decision_context)
-        VALUES ($1, $2::jsonb, $3, $4, 'allow',
-                'testing_harness_garden_authorization_allowed',
+        VALUES ($1, $2::jsonb, $3, $4, 'allow', $11,
                 $5, NULL, $6, $7, $8, $9, $1, $10::jsonb)
       `, [
         authorizationEventId,
         JSON.stringify({
-          kind: 'testing_harness',
+          kind: labels.actorKind,
           boundary: 'fleet_sso_router',
           provider: input.provider,
           principalId: input.principalId,
@@ -66,13 +81,14 @@ implements TestingHarnessGardenAuthorizationAuditPort {
         occurredAt,
         JSON.stringify({
           schemaVersion: 1,
-          authorizationSource: 'gateway_testing_harness',
+          authorizationSource: labels.authorizationSource,
           principalId: input.principalId,
           provider: input.provider,
         }),
+        labels.reasonCode,
       ]);
       if (result.rowCount !== 1) {
-        throw new Error('Testing-harness authorization audit insert failed');
+        throw new Error(`Garden door authorization audit insert failed (${input.provider})`);
       }
       await client.query('COMMIT');
       return Object.freeze({

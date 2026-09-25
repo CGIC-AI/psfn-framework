@@ -25,7 +25,7 @@ import type { BackupRuntimeConfig } from '../../persistence/backups/config.js';
 import { runBackupCycle } from '../../persistence/backups/service.js';
 import { parseJournalText } from '../../persistence/journals/journal-utils.js';
 import { createPostgresPool, withPostgresClient } from '../../persistence/postgres.js';
-import { derivePostgresTenantRole } from '../../persistence/postgres/tenancy.js';
+import { requireFleetTenantRole } from './testing-session-purge-postgres.js';
 import {
   createFilesystemExactSessionPurgeSurfaces,
   RedisExactSessionTailPurgeSurface,
@@ -509,6 +509,8 @@ export async function createShakedownArtifactCleanupRuntime(input: {
   databaseUrl: string;
   mode: 'dry-run' | 'apply';
   multiCompanion: boolean;
+  /** companions.json postgresRole of the target companion; required in a fleet. */
+  postgresRole?: string;
   postgresSchema: string;
   sessionsDir: string;
   target: ShakedownCleanupTarget;
@@ -518,7 +520,7 @@ export async function createShakedownArtifactCleanupRuntime(input: {
     throw new Error('Shakedown cleanup accepts only the canonical testing-harness session');
   }
   const postgresRole = input.multiCompanion
-    ? derivePostgresTenantRole(input.postgresSchema)
+    ? requireFleetTenantRole(input.postgresRole, input.postgresSchema)
     : undefined;
   const inspectionPool = createPostgresPool(input.databaseUrl, {
     applicationName: 'shakedown-cleanup-inspection',
@@ -694,6 +696,7 @@ export async function createShakedownArtifactCleanupRuntime(input: {
       const adapters = await createTestingSessionPurgePostgresAdapters({
         databaseUrl: input.databaseUrl,
         multiCompanion: input.multiCompanion,
+        ...(postgresRole ? { postgresRole } : {}),
         postgresSchema: input.postgresSchema,
         sessionsDir: input.sessionsDir,
       });

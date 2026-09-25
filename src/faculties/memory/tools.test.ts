@@ -1,6 +1,8 @@
+import type { ActiveMemoryListOptions } from './memory-store-port.js';
 import { fromAny } from '@total-typescript/shoehorn';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
+import { InMemoryMemoryStore } from '../../test-support/in-memory-memory-store.js';
 import { TestingSessionMemoryWriteError } from './writer.js';
 import {
   createMemoryTool,
@@ -38,6 +40,7 @@ import {
 import type { EpisodicTimelineStore } from './retrieval/episodic.js';
 import { createDefaultMemoryRetrievalPolicy } from '../../system/config/memory-retrieval-policy.js';
 import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../core/agent/tool-surface/descriptions.js';
+import { keysetActiveMemoryPages } from '../../test-support/active-memory-pages.js';
 
 /** Extract text from AgentToolResult content array */
 function resultText(result: { content: Array<{ type: string; text: string }> }): string {
@@ -236,7 +239,7 @@ describe('createMemoryTool', () => {
     return {
       searchByText: vi.fn(),
       listMemories: vi.fn(async () => cloneMemories(memories)),
-      listActiveMemories: vi.fn(async () => cloneMemories(memories.filter(memory => !memory.deletedAt && !memory.supersededBy))),
+      listActiveMemories: vi.fn(async (options?: ActiveMemoryListOptions) => cloneMemories(await keysetActiveMemoryPages(() => memories)(options))),
       getAllActiveMemories: vi.fn(async () => cloneMemories(memories.filter(memory => !memory.deletedAt && !memory.supersededBy))),
       softDeleteMemory: vi.fn(),
       undoSoftDelete: vi.fn(),
@@ -582,7 +585,7 @@ describe('createMemoryTool', () => {
     expect(text).not.toContain('Quarantined answer');
   });
 
-  it('makes privacy-withheld and absent lexical search results indistinguishable to chat callers', async () => {
+  it('distinguishes privacy-withheld from absent search results only by a content-free withheld note (jequ8)', async () => {
     const hiddenStore = mockUnifiedStore();
     hiddenStore.searchByText.mockResolvedValue([
       {
@@ -611,9 +614,12 @@ describe('createMemoryTool', () => {
     const hidden = resultText(fromAny(await hiddenTool.execute('memory-call-hidden-search', input)));
     const absent = resultText(fromAny(await emptyTool.execute('memory-call-empty-search', input)));
 
-    expect(hidden).toBe(absent);
-    expect(hidden).toBe('No memories matched the search query.');
+    expect(absent).toBe('No memories matched the search query.');
+    expect(hidden.startsWith('No memories matched the search query.\nWithheld by visibility gating: 1 matching memory')).toBe(true);
+    expect(hidden).toContain('not visible from this conversation');
     expect(hidden).not.toContain('Protected cross-room answer');
+    expect(hidden).not.toContain('mem-hidden-room');
+    expect(hidden).not.toContain('discord:room:hidden');
   });
 
   it('census reports only visible current counts without enumerating lifecycle or privacy records', async () => {
@@ -2256,188 +2262,126 @@ describe('memory_delete and undo_memory_delete tools', () => {
 });
 
 describe('scratchpad tools', () => {
-  function mockScratchpadStore(): {
-    listScratchpadEntries: ReturnType<typeof vi.fn>;
-    addScratchpadEntry: ReturnType<typeof vi.fn>;
-    replaceScratchpadEntry: ReturnType<typeof vi.fn>;
-    appendScratchpadEntry: ReturnType<typeof vi.fn>;
-    removeScratchpadEntry: ReturnType<typeof vi.fn>;
-  } {
-    return {
-      listScratchpadEntries: vi.fn(),
-      addScratchpadEntry: vi.fn(),
-      replaceScratchpadEntry: vi.fn(),
-      appendScratchpadEntry: vi.fn(),
-      removeScratchpadEntry: vi.fn(),
-    };
+  const HERE = 'api:api-key-owner:room-here';
+  const ELSEWHERE = 'api:api-key-owner:room-elsewhere';
+
+  function inConversation<T>(
+    fn: () => Promise<T>,
+    channelId: string = HERE,
+    viewerTrustLevel: 'primary' | 'trusted' | 'regular' | 'public' = 'regular',
+  ): Promise<T> {
+    return runWithRequestContext({ callType: 'tool', purpose: 'agent.turn', channelId, viewerTrustLevel }, fn);
   }
 
-  it('scratchpad unified tool defaults to list and supports append', async () => {
-    const store = mockScratchpadStore();
-    store.listScratchpadEntries.mockReturnValue([
-      {
-        id: 'sp-1',
-        content: 'Working note',
-        createdAt: 1_700_000_000_000,
-        updatedAt: 1_700_000_100_000,
-      },
-    ]);
-    store.appendScratchpadEntry.mockResolvedValue({
-      id: 'sp-1',
-      content: 'Working note\nextra detail',
-      createdAt: 1_700_000_000_000,
-      updatedAt: 1_700_000_200_000,
+  function seededStore(): InMemoryMemoryStore {
+    const store = new InMemoryMemoryStore();
+    store.addScratchpadEntry('Working note here', {
+      id: 'sp-here', now: 1_700_000_100_000, provenance: { scope: 'conversation', channelId: HERE },
     });
-    const tool = createScratchpadTool(store as unknown as MemoryStorePort);
-
-    const listed = await tool.execute('scratchpad-list', { action: 'list' });
-    expect(resultText(fromAny(listed))).toContain('24h ephemeral working context');
-    expect(resultText(fromAny(listed))).toContain('durable reminders');
-    expect(store.listScratchpadEntries).toHaveBeenCalledWith(20);
-
-    const appended = await tool.execute('scratchpad-append', {
-      action: 'append',
-      id: 'sp-1',
-      content: 'extra detail',
+    store.addScratchpadEntry('Private note from another room', {
+      id: 'sp-elsewhere', now: 1_700_000_200_000, provenance: { scope: 'conversation', channelId: ELSEWHERE },
     });
-    expect(resultText(fromAny(appended))).toContain('Scratchpad entry appended');
-    expect(store.appendScratchpadEntry).toHaveBeenCalledWith('sp-1', 'extra detail');
+    store.addScratchpadEntry('Everywhere note', {
+      id: 'sp-global', now: 1_700_000_300_000, provenance: { scope: 'companion_global' },
+    });
+    store.addScratchpadEntry('Pre-provenance note', {
+      id: 'sp-unknown', now: 1_700_000_400_000, provenance: { scope: 'unknown' },
+    });
+    return store;
+  }
+
+  it('lists only this conversation\'s and companion-global notes, with a content-free withheld count (yy0r2)', async () => {
+    const tool = createScratchpadTool(seededStore().asPort());
+    const text = resultText(fromAny(await inConversation(() => tool.execute('scratchpad-list', { action: 'list' }))));
+    expect(text).toContain('24h ephemeral working context');
+    expect(text).toContain('durable reminders');
+    expect(text).toContain('Working note here');
+    expect(text).toContain('Everywhere note');
+    expect(text).not.toContain('Private note from another room');
+    expect(text).not.toContain('Pre-provenance note');
+    expect(text).toContain('2 notes from other conversations not shown here.');
   });
 
-  it('scratchpad unified tool validates required action params', async () => {
-    const store = mockScratchpadStore();
-    const tool = createScratchpadTool(store as unknown as MemoryStorePort);
-
-    const missingAddContent = await tool.execute('scratchpad-add', fromAny({ action: 'add' }));
-    expect(resultText(fromAny(missingAddContent))).toContain('content is required for action=add');
-    expect((fromAny(missingAddContent.details)).isError).toBe(true);
-
-    const missingAppendId = await tool.execute('scratchpad-append', fromAny({
-      action: 'append',
-      content: 'x',
-    }));
-    expect(resultText(fromAny(missingAppendId))).toContain('id is required for action=append');
-    expect((fromAny(missingAppendId.details)).isError).toBe(true);
+  it('shows unknown-provenance notes only at primary trust', async () => {
+    const tool = createScratchpadReadTool(seededStore().asPort());
+    const primary = resultText(fromAny(await inConversation(() => tool.execute('read', {}), HERE, 'primary')));
+    expect(primary).toContain('Pre-provenance note');
+    expect(primary).not.toContain('Private note from another room');
   });
 
-  it('rejects retired read helper action names on canonical scratchpad', async () => {
-    const store = mockScratchpadStore();
-    store.listScratchpadEntries.mockReturnValue([]);
-    const tool = createScratchpadTool(store as unknown as MemoryStorePort);
+  it('records the writing conversation, or companion_global only when asked', async () => {
+    const store = new InMemoryMemoryStore();
+    const tool = createScratchpadTool(store.asPort());
+    await inConversation(() => tool.execute('add-1', { action: 'add', content: 'local note' }));
+    await inConversation(() => tool.execute('add-2', { action: 'add', content: 'shared note', scope: 'companion_global' }));
+    const entries = store.listScratchpadEntries(10);
+    expect(entries.find(entry => entry.content === 'local note')?.provenance).toEqual({ scope: 'conversation', channelId: HERE });
+    expect(entries.find(entry => entry.content === 'shared note')?.provenance).toEqual({ scope: 'companion_global' });
+  });
 
-    const result = await tool.execute('scratchpad-read-alias', fromAny({
-      action: 'scratchpad_read',
-      limit: 4,
-    }));
-
-    expect(resultText(fromAny(result))).toContain('invalid action');
+  it('fails closed when a conversation note has no current conversation', async () => {
+    const store = new InMemoryMemoryStore();
+    const tool = createScratchpadWriteTool(store.asPort());
+    const result = await tool.execute('add-no-room', { operation: 'add', content: 'orphan' });
     expect((fromAny(result.details)).isError).toBe(true);
-    expect(store.listScratchpadEntries).not.toHaveBeenCalled();
+    expect(resultText(fromAny(result))).toContain('needs a current conversation');
+    expect(store.listScratchpadEntries(10)).toEqual([]);
   });
 
-  it('scratchpad_read returns empty-state message', async () => {
-    const store = mockScratchpadStore();
-    store.listScratchpadEntries.mockReturnValue([]);
-    const tool = createScratchpadReadTool(store as unknown as MemoryStorePort);
-
-    const result = await tool.execute('call-1', {});
-    expect(resultText(fromAny(result))).toContain('Scratchpad is empty');
-    expect(store.listScratchpadEntries).toHaveBeenCalledWith(20);
+  it('refuses to read, append to, replace, or remove another conversation\'s note', async () => {
+    const store = seededStore();
+    const unified = createScratchpadTool(store.asPort());
+    const writer = createScratchpadWriteTool(store.asPort());
+    const attempts = [
+      () => unified.execute('append-x', { action: 'append', id: 'sp-elsewhere', content: 'planted' }),
+      () => unified.execute('replace-x', { action: 'replace', id: 'sp-elsewhere', content: 'planted' }),
+      () => unified.execute('remove-x', { action: 'remove', id: 'sp-elsewhere' }),
+      () => writer.execute('replace-y', { operation: 'replace', id: 'sp-elsewhere', content: 'planted' }),
+      () => writer.execute('remove-y', { operation: 'remove', id: 'sp-elsewhere' }),
+    ];
+    for (const attempt of attempts) {
+      const result = await inConversation(attempt);
+      expect((fromAny(result.details)).isError).toBe(true);
+      expect(resultText(fromAny(result))).toContain('Scratchpad entry not found: sp-elsewhere');
+    }
+    expect(store.getScratchpadEntry('sp-elsewhere')?.content).toBe('Private note from another room');
   });
 
-  it('scratchpad_read returns formatted notes with timestamps', async () => {
-    const store = mockScratchpadStore();
-    store.listScratchpadEntries.mockReturnValue([
-      {
-        id: 'sp-1',
-        content: 'Remember to check weekly backup integrity.',
-        createdAt: 1_700_000_000_000,
-        updatedAt: 1_700_000_100_000,
-      },
-    ]);
-    const tool = createScratchpadReadTool(store as unknown as MemoryStorePort);
-
-    const result = await tool.execute('call-2', { limit: 3 });
-    const text = resultText(fromAny(result));
-    expect(text).toContain('Scratchpad entries (1)');
-    expect(text).toContain('sp-1');
-    expect(text).toContain('2023-11-14T22:15:00.000Z');
-    expect(text).toContain('Remember to check weekly backup integrity.');
-    expect(store.listScratchpadEntries).toHaveBeenCalledWith(3);
+  it('appends, replaces, and removes this conversation\'s own note', async () => {
+    const store = seededStore();
+    const unified = createScratchpadTool(store.asPort());
+    const writer = createScratchpadWriteTool(store.asPort());
+    expect(resultText(fromAny(await inConversation(() => unified.execute('append', {
+      action: 'append', id: 'sp-here', content: ' extra',
+    }))))).toContain('Scratchpad entry appended');
+    expect(resultText(fromAny(await inConversation(() => writer.execute('replace', {
+      operation: 'replace', id: 'sp-here', content: 'Updated note',
+    }))))).toContain('Scratchpad entry replaced');
+    expect(store.getScratchpadEntry('sp-here')?.content).toBe('Updated note');
+    expect(resultText(fromAny(await inConversation(() => writer.execute('remove', {
+      operation: 'remove', id: 'sp-here',
+    }))))).toContain('Scratchpad entry removed');
+    expect(store.getScratchpadEntry('sp-here')).toBeUndefined();
   });
 
-  it('scratchpad_write add creates a note', async () => {
-    const store = mockScratchpadStore();
-    store.addScratchpadEntry.mockReturnValue({
-      entry: {
-        id: 'sp-1',
-        content: 'Take a breath before responding',
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      },
-      evictedIds: [],
-    });
-    const tool = createScratchpadWriteTool(store as unknown as MemoryStorePort);
+  it('returns the empty state, validates params, and rejects retired aliases', async () => {
+    const store = new InMemoryMemoryStore();
+    const unified = createScratchpadTool(store.asPort());
+    const reader = createScratchpadReadTool(store.asPort());
+    const writer = createScratchpadWriteTool(store.asPort());
+    expect(resultText(fromAny(await inConversation(() => reader.execute('empty', {}))))).toContain('Scratchpad is empty');
 
-    const result = await tool.execute('call-3', {
-      operation: 'add',
-      content: 'Take a breath before responding',
-    });
-    expect(resultText(fromAny(result))).toContain('Scratchpad entry added');
-    expect(store.addScratchpadEntry).toHaveBeenCalledWith('Take a breath before responding');
-  });
-
-  it('scratchpad_write replace updates existing note', async () => {
-    const store = mockScratchpadStore();
-    store.replaceScratchpadEntry.mockReturnValue({
-      id: 'sp-2',
-      content: 'Updated note',
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    });
-    const tool = createScratchpadWriteTool(store as unknown as MemoryStorePort);
-
-    const result = await tool.execute('call-4', {
-      operation: 'replace',
-      id: 'sp-2',
-      content: 'Updated note',
-    });
-    expect(resultText(fromAny(result))).toContain('Scratchpad entry replaced');
-    expect(store.replaceScratchpadEntry).toHaveBeenCalledWith('sp-2', 'Updated note');
-  });
-
-  it('scratchpad_write remove deletes note', async () => {
-    const store = mockScratchpadStore();
-    store.removeScratchpadEntry.mockReturnValue(true);
-    const tool = createScratchpadWriteTool(store as unknown as MemoryStorePort);
-
-    const result = await tool.execute('call-5', {
-      operation: 'remove',
-      id: 'sp-3',
-    });
-    expect(resultText(fromAny(result))).toContain('Scratchpad entry removed');
-    expect(store.removeScratchpadEntry).toHaveBeenCalledWith('sp-3');
-  });
-
-  it('scratchpad_write validates required params per operation', async () => {
-    const store = mockScratchpadStore();
-    const tool = createScratchpadWriteTool(store as unknown as MemoryStorePort);
-
-    const missingAddContent = await tool.execute('call-6', { operation: 'add' });
-    expect(resultText(fromAny(missingAddContent))).toContain('content is required for add');
-    expect((fromAny(missingAddContent.details)).isError).toBe(true);
-
-    const missingReplaceId = await tool.execute('call-7', {
-      operation: 'replace',
-      content: 'x',
-    });
+    const missingAddContent = await unified.execute('scratchpad-add', fromAny({ action: 'add' }));
+    expect(resultText(fromAny(missingAddContent))).toContain('content is required for action=add');
+    const missingAppendId = await unified.execute('scratchpad-append', fromAny({ action: 'append', content: 'x' }));
+    expect(resultText(fromAny(missingAppendId))).toContain('id is required for action=append');
+    const alias = await unified.execute('alias', fromAny({ action: 'scratchpad_read', limit: 4 }));
+    expect(resultText(fromAny(alias))).toContain('invalid action');
+    const missingReplaceId = await writer.execute('call-7', { operation: 'replace', content: 'x' });
     expect(resultText(fromAny(missingReplaceId))).toContain('id is required for replace');
-    expect((fromAny(missingReplaceId.details)).isError).toBe(true);
-
-    const missingRemoveId = await tool.execute('call-8', {
-      operation: 'remove',
-    });
+    const missingRemoveId = await writer.execute('call-8', { operation: 'remove' });
     expect(resultText(fromAny(missingRemoveId))).toContain('id is required for remove');
-    expect((fromAny(missingRemoveId.details)).isError).toBe(true);
+    const badScope = await inConversation(() => writer.execute('bad-scope', fromAny({ operation: 'add', content: 'x', scope: 'everyone' })));
+    expect(resultText(fromAny(badScope))).toContain('scope must be one of');
   });
 });

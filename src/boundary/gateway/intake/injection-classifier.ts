@@ -65,6 +65,12 @@ export interface InjectionClassification {
   windowCount: number;
   /** Content token count (without special tokens). */
   tokenCount: number;
+  /**
+   * True when the input exceeded `maxContentChars` and only its leading span
+   * was scored (jerq6). The caller must treat the unscored remainder fail
+   * closed; the score describes the scored span only.
+   */
+  truncated: boolean;
   latencyMs: number;
 }
 
@@ -113,6 +119,11 @@ export interface InjectionClassifierOptions {
    * Default 64 (~24.6k content tokens at the defaults).
    */
   maxWindows?: number;
+  /**
+   * Largest input span scored (jerq6: owner-file bounded work). Longer input
+   * is scored over its leading span and reported `truncated`.
+   */
+  maxContentChars?: number;
   /** Test seam; production uses the transformers.js backend. */
   backendFactory?: InjectionClassifierBackendFactory;
 }
@@ -147,6 +158,7 @@ interface ResolvedInjectionClassifierOptions {
   maxSequenceLength: number;
   windowOverlapTokens: number;
   maxWindows: number;
+  maxContentChars: number | undefined;
   backendFactory: InjectionClassifierBackendFactory;
 }
 
@@ -177,6 +189,9 @@ function resolveOptions(options: InjectionClassifierOptions): ResolvedInjectionC
       1,
       4096,
     ),
+    maxContentChars: options.maxContentChars === undefined
+      ? undefined
+      : normalizePositiveInteger(options.maxContentChars, 'maxContentChars', 1, Number.MAX_SAFE_INTEGER),
     backendFactory: options.backendFactory ?? createTransformersInjectionBackend,
   };
 }
@@ -247,6 +262,10 @@ async function createTransformersInjectionBackend(
   const model = await AutoModelForSequenceClassification.from_pretrained(modelDir, {
     local_files_only: true,
     dtype: 'fp32',
+    // jerq6: one intra-op thread per inference, so scoring a long document
+    // never saturates every core the gateway's event loop and Postgres pool
+    // also run on.
+    session_options: { intraOpNumThreads: 1, interOpNumThreads: 1 },
   }) as unknown as TransformersModelLike;
 
   const id2label = model.config.id2label ?? {};
@@ -332,6 +351,54 @@ function windowTokenIds(
   return windows;
 }
 
+/**
+ * Characters tokenized per call. transformers.js SentencePiece Unigram
+ * encoding is super-linear in its input length and synchronous (jerq6: 20k
+ * chars 2.9 s, 40k chars 17 s, one event-loop block), so long input is split
+ * at whitespace into chunks tokenized one per event-loop turn. A chunk that
+ * starts after whitespace tokenizes exactly as it does inside the full text.
+ */
+const TOKENIZE_CHUNK_CHARS = 2_048;
+
+function truncateAtCodePoint(text: string, maxChars: number): string {
+  const end = maxChars;
+  const code = text.charCodeAt(end - 1);
+  return code >= 0xd800 && code <= 0xdbff ? text.slice(0, end - 1) : text.slice(0, end);
+}
+
+function splitAtWhitespace(text: string, chunkChars: number): string[] {
+  const chunks: string[] = [];
+  let start = 0;
+  while (start < text.length) {
+    let end = Math.min(text.length, start + chunkChars);
+    if (end < text.length) {
+      const boundary = text.lastIndexOf(' ', end);
+      if (boundary > start) end = boundary;
+      else {
+        const code = text.charCodeAt(end - 1);
+        if (code >= 0xd800 && code <= 0xdbff) end -= 1;
+      }
+    }
+    chunks.push(text.slice(start, end));
+    start = end;
+  }
+  return chunks;
+}
+
+async function encodeInBoundedChunks(
+  backend: InjectionClassifierBackend,
+  text: string,
+): Promise<number[]> {
+  if (text.length <= TOKENIZE_CHUNK_CHARS) return backend.encode(text);
+  const ids: number[] = [];
+  for (const chunk of splitAtWhitespace(text, TOKENIZE_CHUNK_CHARS)) {
+    // Yield between chunks so the event loop keeps serving I/O.
+    await new Promise<void>(resolve => { setImmediate(resolve); });
+    ids.push(...await backend.encode(chunk));
+  }
+  return ids;
+}
+
 class OnnxInjectionClassifier implements InjectionClassifier {
   constructor(
     private readonly backend: InjectionClassifierBackend,
@@ -347,7 +414,10 @@ class OnnxInjectionClassifier implements InjectionClassifier {
     }
     const startedAt = performance.now();
 
-    const ids = await this.backend.encode(text);
+    const maxContentChars = this.options.maxContentChars;
+    const truncated = maxContentChars !== undefined && text.length > maxContentChars;
+    const scored = truncated ? truncateAtCodePoint(text, maxContentChars) : text;
+    const ids = await encodeInBoundedChunks(this.backend, scored);
     if (ids.length === 0) {
       throw new Error(
         'Injection classifier input tokenized to zero tokens; refusing to emit a score for unscoreable content',
@@ -381,6 +451,7 @@ class OnnxInjectionClassifier implements InjectionClassifier {
       labels: score >= this.options.labelThreshold ? [INJECTION_CLASSIFIER_RISK_LABEL] : [],
       windowCount: windows.length,
       tokenCount: ids.length,
+      truncated,
       latencyMs: performance.now() - startedAt,
     };
   }

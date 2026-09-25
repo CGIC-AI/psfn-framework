@@ -787,6 +787,11 @@ export function resolveFatigueLedgerPath(companionDataDir: string): string {
   return join(resolveCompanionStateDir(companionDataDir), 'fatigue-ledger.jsonl');
 }
 
+/** Content-free decide() shadow comparison records (epic 4lf3r). */
+export function resolveDecisionShadowLedgerPath(companionDataDir: string): string {
+  return join(resolveCompanionStateDir(companionDataDir), 'decision-shadow.jsonl');
+}
+
 export function resolveHumanAttentionLedgerPath(companionDataDir: string): string {
   return join(resolveCompanionStateDir(companionDataDir), 'human-attention-ledger.jsonl');
 }

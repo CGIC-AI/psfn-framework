@@ -89,8 +89,14 @@ describe('PostgresScratchpadStore', () => {
   it('drops expired rows at hydration and mirrors the surviving entries', async () => {
     const now = Date.now();
     const pool = new ScriptedPool((sql) => sql.startsWith('select id, content') ? [
-      { id: 'fresh', content: 'keep', created_at: String(now), updated_at: String(now) },
-      { id: 'stale', content: 'expire', created_at: now - 3 * 86_400_000, updated_at: now - 3 * 86_400_000 },
+      {
+        id: 'fresh', content: 'keep', created_at: String(now), updated_at: String(now),
+        source_scope: 'companion_global', source_channel_id: null,
+      },
+      {
+        id: 'stale', content: 'expire', created_at: now - 3 * 86_400_000, updated_at: now - 3 * 86_400_000,
+        source_scope: 'unknown', source_channel_id: null,
+      },
     ] : []);
     const dir = mkdtempSync(join(tmpdir(), 'scratchpad-mirror-'));
     tempDirs.push(dir);
@@ -114,9 +120,15 @@ describe('PostgresScratchpadStore', () => {
     const store = new PostgresScratchpadStore(makeContext(pool).ctx, null);
     const base = Date.now();
     for (let index = 0; index < 64; index += 1) {
-      await store.addScratchpadEntry(`note ${index}`, { id: `note-${index}`, now: base + index });
+      await store.addScratchpadEntry(`note ${index}`, {
+        id: `note-${index}`, now: base + index, provenance: { scope: 'conversation', channelId: 'api:room-a' },
+      });
     }
-    const result = await store.addScratchpadEntry('newest', { id: 'note-new', now: base + 100 });
+    const result = await store.addScratchpadEntry('newest', {
+      id: 'note-new', now: base + 100, provenance: { scope: 'companion_global' },
+    });
+    const insert = pool.statements.filter(statement => statement.sql.startsWith('insert into scratchpad_entries')).at(-1);
+    expect(insert?.values.slice(4)).toEqual(['companion_global', null]);
 
     expect(result.evictedIds).toEqual(['note-0']);
     expect(await store.getScratchpadEntry('note-0')).toBeUndefined();

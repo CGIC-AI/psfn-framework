@@ -20,6 +20,13 @@
 // In every mode a present-but-broken model directory fails startup (fail
 // closed), and the classifier never downloads at runtime.
 
+import { createL2DecisionSignal } from './l2-decision-signal.js';
+import { createIntakeScreenerUsageLedger } from './screener-usage.js';
+import type { ModelUsageRecorder } from '../../../shared/telemetry/model-usage.js';
+import type { CompanionId } from '../../../shared/routing/companion-id.js';
+import type { GatewayJevDecisionService } from '../jev-decision-service.js';
+import { createJsonlDecisionShadowSink } from '../../../primitives/llm/decision/shadow-record.js';
+import { resolveDecisionShadowLedgerPath } from '../../../persistence/layout.js';
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createComponentLogger } from '../../../shared/logger.js';
@@ -39,7 +46,9 @@ import {
 } from '../../../core/cogsec/intake/quarantine-store.js';
 import { CogSecEventStore } from '../../../core/cogsec/events.js';
 import { resolveCogSecEventsPath, resolveIntakeQuarantinePath } from '../../../persistence/layout.js';
-import { loadIntakePolicyConfig } from '../../../system/config/intake-policy-config.js';
+import { createInjectionClassifierWorkerPool } from './injection-classifier-worker-pool.js';
+import type { SharedInjectionClassifier } from './shared-injection-classifier.js';
+import { injectionClassifierMaxContentChars, loadIntakePolicyConfig } from '../../../system/config/intake-policy-config.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { ProviderRuntime } from '../../../primitives/llm/provider-runtime.js';
 import { LLMRequestCapability } from '../../../primitives/llm/client-request-capability.js';
@@ -158,6 +167,11 @@ export async function composeGatewayIntakeScreening(input: {
   /** Companion data root; hosts the durable quarantine store (htm9.11). */
   companionDataDir: string;
   /**
+   * Owning companion of this composition in a fleet gateway; attributes the
+   * composition's paid screening calls. Absent in single-companion mode.
+   */
+  companionId?: CompanionId;
+  /**
    * Pi-ai provider backend for the L2/L3 escalation screeners (htm9.6/htm9.7)
    * and the vision intake screener (htm9.8), resolved by the caller via
    * `resolveIntakeScreenerBackend`. Null/absent means no backend is
@@ -183,6 +197,15 @@ export async function composeGatewayIntakeScreening(input: {
    * transient failure. Content-free: screener tier, model label, HTTP status.
    */
   onScreenerProviderRejected?: GatewayIntakeEscalationDeps['onScreenerProviderRejected'];
+  /**
+   * Process-wide L1.5 classifier shared by every companion composition (one
+   * model copy, one worker pool). Absent: this composition owns its own.
+   */
+  sharedInjectionClassifier?: SharedInjectionClassifier;
+  /** Gateway-owned remote decision service for the additive intake.l2 signal (epic 4lf3r). */
+  jevDecisions?: GatewayJevDecisionService;
+  /** Gateway usage ledger; screener dispatches are recorded here (1fyyi). */
+  modelUsageRecorder?: ModelUsageRecorder;
   /** Content-free per-stage latency observer; never receives screened text. */
   onScreeningTiming?: IntakeScreeningServiceOptions['onTiming'];
   /** Content-free completion path for asynchronous post-pass deep screening. */
@@ -254,19 +277,31 @@ export async function composeGatewayIntakeScreening(input: {
   const quarantine: IntakeQuarantineStore = durableQuarantine;
 
   let classifier: InjectionClassifier | null = null;
+  let ownsClassifier = false;
   const injectionClassifierDegraded = false;
   const injectionModelProvisioned = input.injectionBackendFactory != null
     || isInjectionModelProvisioned(modelDir);
   if (injectionModelProvisioned) {
     // Present model directories must load correctly — a broken provision
     // throws here and stops gateway startup (fail closed, no silent skip).
-    classifier = await createInjectionClassifier({
+    const createClassifier = (): Promise<InjectionClassifier> => createInjectionClassifier({
       modelDir,
       labelThreshold: policy.injectionClassifier.labelThreshold,
-      ...(input.injectionBackendFactory
-        ? { backendFactory: input.injectionBackendFactory }
-        : {}),
+      maxContentChars: injectionClassifierMaxContentChars(policy),
+      // 3mbpi: production inference runs on a bounded worker-thread pool so a
+      // large untrusted page never blocks the gateway event loop.
+      backendFactory: input.injectionBackendFactory
+        ?? (async (dir: string) => await createInjectionClassifierWorkerPool({
+          modelDir: dir,
+          ...policy.injectionClassifier.worker,
+        })),
     });
+    // A fleet gateway shares one classifier (one worker pool) across every
+    // companion composition; the runtime that owns it disposes it.
+    classifier = input.sharedInjectionClassifier
+      ? await input.sharedInjectionClassifier.acquire({ modelDir, create: createClassifier })
+      : await createClassifier();
+    ownsClassifier = input.sharedInjectionClassifier === undefined;
     log.info('Intake L1.5 injection classifier loaded', { modelDir });
   } else if (existsSync(modelDir)) {
     // A partial footprint means provisioning began but did not complete.
@@ -318,7 +353,15 @@ export async function composeGatewayIntakeScreening(input: {
   // Multi-writer JSON store (same file the gateway core, contact-block gate,
   // and Garden use); reloads from disk per operation.
   const cogSecEvents = new CogSecEventStore(resolveCogSecEventsPath(input.companionDataDir));
+  const usageLedger = input.modelUsageRecorder
+    ? createIntakeScreenerUsageLedger({
+      recorder: input.modelUsageRecorder,
+      config: input.config,
+      ...(input.companionId ? { companionId: input.companionId } : {}),
+    })
+    : undefined;
   const escalation: IntakeEscalationPort = createGatewayIntakeEscalationPort({
+    ...(usageLedger ? { usageLedger } : {}),
     policy,
     models: () => {
       const selection = liveScreenerModels.current();
@@ -332,6 +375,16 @@ export async function composeGatewayIntakeScreening(input: {
     ...(input.onScreenerProviderRejected
       ? { onScreenerProviderRejected: input.onScreenerProviderRejected }
       : {}),
+    ...(input.jevDecisions
+      ? {
+        decisionSignal: createL2DecisionSignal({
+          config: input.config,
+          jev: input.jevDecisions,
+          ...(input.companionId ? { companionId: input.companionId } : {}),
+          shadowSink: createJsonlDecisionShadowSink(resolveDecisionShadowLedgerPath(input.companionDataDir)),
+        }),
+      }
+      : {}),
   });
 
   const screening = createIntakeScreeningService({
@@ -341,7 +394,28 @@ export async function composeGatewayIntakeScreening(input: {
       ? {
         injectionScorer: {
           scannerId: INJECTION_CLASSIFIER_SCANNER_ID,
-          classify: (text: string) => classifier.classify(text),
+          classify: async (text: string) => {
+            let classified: Awaited<ReturnType<InjectionClassifier['classify']>>;
+            try {
+              classified = await classifier.classify(text);
+            } catch (error) {
+              // 3mbpi: a worker crash, timeout or full queue means the content
+              // was not scored; escalate it fail closed, never pass it.
+              log.error('Intake L1.5 classifier could not score content; escalating fail closed', {
+                error: error instanceof Error ? error.message : String(error),
+                contentChars: text.length,
+              });
+              return { score: 1, labels: [] };
+            }
+            if (!classified.truncated) return classified;
+            // jerq6: content beyond the scored span is unscored; treat it fail
+            // closed (maximal score) so the item always reaches deep screening.
+            log.warn('Intake L1.5 scored only the leading span of oversized content; escalating fail closed', {
+              scoredChars: injectionClassifierMaxContentChars(policy),
+              contentChars: text.length,
+            });
+            return { ...classified, score: 1 };
+          },
         },
       }
       : {}),
@@ -386,6 +460,7 @@ export async function composeGatewayIntakeScreening(input: {
           model: liveScreenerModels.current().vision!,
           screening,
           backend,
+          ...(usageLedger ? { usageLedger } : {}),
           quarantine,
           ...(input.screenerTestCompletion
             ? { testCompletion: input.screenerTestCompletion }
@@ -429,7 +504,7 @@ export async function composeGatewayIntakeScreening(input: {
     },
     refreshScreenerModels: () => liveScreenerModels.refresh(verifyScreenerModels),
     dispose: async () => {
-      await classifier?.dispose();
+      if (ownsClassifier) await classifier?.dispose();
     },
   };
 }

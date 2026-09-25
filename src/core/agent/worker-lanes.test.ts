@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  resolveUncontextedTurnChargeLane,
   BACKGROUND_CONTINUATION_RUNTIME_CLASS,
   FOREGROUND_CHAT_RUNTIME_CLASS,
   MAINTENANCE_REFLECTION_RUNTIME_CLASS,
@@ -77,8 +78,13 @@ describe('worker lanes', () => {
       callType: 'scheduled',
       channelId: 'internal:social-outreach:contact-1',
     })).toBe(FOREGROUND_CHAT_RUNTIME_CLASS);
-    // Concern formation must not be preempted away (vcq8v.5).
-    for (const originStage of ['intention.appraisal.post_turn', 'intention.concern_candidate_review']) {
+    // Concern formation must not be preempted away (vcq8v.5), nor may the
+    // participation appraisal that gates an inbound ICP reply (se807).
+    for (const originStage of [
+      'intention.appraisal.post_turn',
+      'intention.concern_candidate_review',
+      'participation.appraisal',
+    ]) {
       expect(resolveRuntimeLaneClassForModelCall({
         purpose: 'background',
         callType: 'background',
@@ -180,5 +186,24 @@ describe('worker lanes', () => {
       requiresForegroundIdle: true,
       degradationMode: 'defer_until_idle',
     });
+  });
+});
+
+
+describe('resolveUncontextedTurnChargeLane (6da92)', () => {
+  it('charges a whisper worker turn on an internal reflection channel to the maintenance lane', () => {
+    expect(resolveUncontextedTurnChargeLane({
+      channelId: 'internal:reflection:sleeptime-review',
+      workerExecution: true,
+      callType: 'scheduled',
+    })).toBe('maintenance');
+  });
+
+  it('keeps ordinary turns on the interactive lane', () => {
+    expect(resolveUncontextedTurnChargeLane({
+      channelId: 'api:session-1',
+      workerExecution: false,
+      callType: 'chat',
+    })).toBe('interactive');
   });
 });

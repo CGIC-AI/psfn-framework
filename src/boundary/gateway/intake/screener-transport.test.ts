@@ -6,6 +6,7 @@ import { LLMRequestCapability } from '../../../primitives/llm/client-request-cap
 import {
   callValidatedToolLessJsonScreener,
   classifyScreenerProviderFailure,
+  isScreenerTimeout,
   screenerProviderRejection,
   type ScreenerBackend,
 } from './screener-transport.js';
@@ -301,5 +302,169 @@ describe('screener provider rejection marking', () => {
       caught = error;
     }
     expect(screenerProviderRejection(caught)).toEqual({ httpStatus: 400 });
+  });
+});
+
+
+describe('screener deadline classification (q8l79)', () => {
+  it('reports a resolved aborted provider message as the screener timeout', async () => {
+    const selected = model('shared-router', 'slow/reasoner');
+    const runtime = fromAny<ProviderRuntime>({
+      getModels: (provider: string) => provider === 'shared-router' ? [selected] : [],
+      resolveProviderApiKey: () => 'vault-key',
+      complete: async () => fromAny<AssistantMessage>({
+        role: 'assistant',
+        provider: 'shared-router',
+        model: selected.id,
+        api: 'openai-completions',
+        content: [],
+        stopReason: 'aborted',
+        errorMessage: 'Request was aborted',
+      }),
+    });
+    const failure = await callValidatedToolLessJsonScreener({
+      backend: { runtime, requestCapability: new LLMRequestCapability(fromAny({}), runtime) },
+      model: fromAny({ provider: 'shared-router', model: selected.id, maxTokens: 500 }),
+      timeoutMs: 30_000,
+      systemPrompt: 'classifier',
+      userMessage: 'untrusted input',
+      screenerName: 'L2 screener',
+      makeError: (message: string) => new Error(message),
+      validateContent: (content: string) => JSON.parse(content) as object,
+      isValidationError: () => false,
+    }).then(() => null, (error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toBe('L2 screener call timed out after 30000ms');
+    expect(isScreenerTimeout(failure)).toBe(true);
+    expect(screenerProviderRejection(failure)).toBeUndefined();
+  });
+
+  it('does not mark a provider error as a timeout', async () => {
+    const selected = model('shared-router', 'card/model');
+    const runtime = fromAny<ProviderRuntime>({
+      getModels: (provider: string) => provider === 'shared-router' ? [selected] : [],
+      resolveProviderApiKey: () => 'vault-key',
+      complete: async () => errorAssistant('shared-router', selected.id, '503 upstream unavailable'),
+    });
+    const failure = await callValidatedToolLessJsonScreener({
+      backend: { runtime, requestCapability: new LLMRequestCapability(fromAny({}), runtime) },
+      model: fromAny({ provider: 'shared-router', model: selected.id, maxTokens: 500 }),
+      timeoutMs: 30_000,
+      systemPrompt: 'classifier',
+      userMessage: 'untrusted input',
+      screenerName: 'L2 screener',
+      makeError: (message: string) => new Error(message),
+      validateContent: (content: string) => JSON.parse(content) as object,
+      isValidationError: () => false,
+    }).then(() => null, (error: unknown) => error);
+
+    expect(isScreenerTimeout(failure)).toBe(false);
+  });
+});
+
+
+describe('screener per-dispatch usage report (1fyyi)', () => {
+  it('reports provider token usage for a successful dispatch', async () => {
+    const selected = model('shared-router', 'card/model');
+    const runtime = fromAny<ProviderRuntime>({
+      getModels: (provider: string) => provider === 'shared-router' ? [selected] : [],
+      resolveProviderApiKey: () => 'vault-key',
+      complete: async () => fromAny<AssistantMessage>({
+        ...assistant('shared-router', selected.id, '{"ok":true}'),
+        usage: { input: 1200, output: 80, cacheRead: 30, cacheWrite: 0, totalTokens: 1310, cost: {} },
+      }),
+    });
+    const attempts: unknown[] = [];
+    await callValidatedToolLessJsonScreener({
+      backend: { runtime, requestCapability: new LLMRequestCapability(fromAny({}), runtime) },
+      model: fromAny({ provider: 'shared-router', model: selected.id, maxTokens: 500 }),
+      timeoutMs: 30_000,
+      systemPrompt: 'classifier',
+      userMessage: 'untrusted input',
+      screenerName: 'L2 screener',
+      makeError: (message: string) => new Error(message),
+      validateContent: (content: string) => JSON.parse(content) as object,
+      isValidationError: () => false,
+      onAttempt: attempt => attempts.push(attempt),
+    });
+    expect(attempts).toMatchObject([{
+      status: 'success', inputTokens: 1200, outputTokens: 80, cacheReadTokens: 30, cacheWriteTokens: 0,
+    }]);
+  });
+});
+
+
+describe('screener completion cap exhausted by reasoning (L3 GLM)', () => {
+  it('names the owner-file cap and does not repeat the request', async () => {
+    const selected = model('shared-router', 'reasoning/model');
+    let calls = 0;
+    const runtime = fromAny<ProviderRuntime>({
+      getModels: (provider: string) => provider === 'shared-router' ? [selected] : [],
+      resolveProviderApiKey: () => 'vault-key',
+      complete: async () => {
+        calls += 1;
+        return fromAny<AssistantMessage>({
+          role: 'assistant',
+          provider: 'shared-router',
+          model: selected.id,
+          api: 'openai-completions',
+          content: [{ type: 'thinking', thinking: 'long deliberation' }],
+          stopReason: 'length',
+          usage: { input: 900, output: 1200, cacheRead: 0, cacheWrite: 0, totalTokens: 2100, cost: {} },
+        });
+      },
+    });
+    await expect(callValidatedToolLessJsonScreener({
+      backend: { runtime, requestCapability: new LLMRequestCapability(fromAny({}), runtime) },
+      model: fromAny({ provider: 'shared-router', model: selected.id, maxTokens: 8192 }),
+      timeoutMs: 30_000,
+      maxOutputTokens: 1200,
+      systemPrompt: 'classifier',
+      userMessage: 'untrusted input',
+      screenerName: 'L3 screener',
+      makeError: (message: string) => new Error(message),
+      validateContent: (content: string) => JSON.parse(content) as object,
+      // As in the L2/L3 callers: only caller-owned schema errors are repaired.
+      isValidationError: () => false,
+    })).rejects.toThrow(/completion cap of 1200 tokens was exhausted before any answer/);
+    expect(calls).toBe(1);
+  });
+});
+
+describe('screener worst-case input bound (2sm32)', () => {
+  async function attemptFor(userMessage: Parameters<typeof callValidatedToolLessJsonScreener>[0]['userMessage']) {
+    const attempts: Array<{ worstCaseTokens: { input: number; output: number } }> = [];
+    await callValidatedToolLessJsonScreener({
+      backend: {},
+      model: fromAny({ provider: 'openrouter', model: 'vendor/vision-model', maxTokens: 4096, contextWindow: 65_536 }),
+      timeoutMs: 5_000,
+      maxOutputTokens: 1_600,
+      systemPrompt: 'classifier',
+      userMessage,
+      testCompletion: async () => '{"ok":true}',
+      screenerName: 'vision screener',
+      makeError: (message: string) => new Error(message),
+      validateContent: (content: string) => JSON.parse(content) as object,
+      isValidationError: () => false,
+      onAttempt: attempt => attempts.push(attempt),
+    });
+    return attempts[0]!;
+  }
+
+  it('caps an image request at the model context window instead of counting base64 bytes', async () => {
+    const hugeImage = `data:image/png;base64,${'A'.repeat(3_500_000)}`;
+    const attempt = await attemptFor([
+      { type: 'text', text: 'describe this' },
+      { type: 'image_url', image_url: { url: hugeImage } },
+    ]);
+    expect(attempt.worstCaseTokens).toEqual({ input: 65_536, output: 1_600 });
+  });
+
+  it('keeps text bytes as the bound for a text-only request under the window', async () => {
+    const attempt = await attemptFor('short untrusted text');
+    expect(attempt.worstCaseTokens.input).toBe(
+      Buffer.byteLength('classifier', 'utf8') + Buffer.byteLength('short untrusted text', 'utf8'),
+    );
   });
 });

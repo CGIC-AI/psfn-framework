@@ -632,6 +632,17 @@ export class InMemoryMemoryStore {
       .slice(0, limit);
   }
 
+  getRecentlyAccessedMemories(limit: number): PurrMemory[] {
+    return this.getAllActiveMemories()
+      .filter(memory => !isInternalMemoryArtifact(memory))
+      .sort((left, right) => (
+        right.lastAccessed - left.lastAccessed
+        || right.extractedAt - left.extractedAt
+        || right.id.localeCompare(left.id)
+      ))
+      .slice(0, limit);
+  }
+
   getMemoriesByContact(contactId: string, limit: number): PurrMemory[] {
     return this.getAllActiveMemories()
       .filter(memory => memory.contactId === contactId)
@@ -640,11 +651,11 @@ export class InMemoryMemoryStore {
 
   addScratchpadEntry(
     content: string,
-    options: ScratchpadEntryCreateOptions = {},
+    options: ScratchpadEntryCreateOptions,
   ): ScratchpadAddResult {
     const id = options.id ?? `scratch-${this.scratchpad.size + 1}`;
     const now = options.now ?? Date.now();
-    const entry: ScratchpadEntry = { id, content, createdAt: now, updatedAt: now };
+    const entry: ScratchpadEntry = { id, content, createdAt: now, updatedAt: now, provenance: options.provenance };
     this.scratchpad.set(id, entry);
     return { entry: { ...entry }, evictedIds: [] };
   }

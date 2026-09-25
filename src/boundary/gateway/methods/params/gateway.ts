@@ -68,11 +68,14 @@ const imageCommon = {
 };
 
 export const gatewayOperationalParamDecoders = {
-  'channel.send': gatewayDecoder('channel.send', strictObject({
-    channelType: enumSchema(['buzz']), channelId: Type.String(), content: Type.String(),
-  })),
   'discord.send': gatewayDecoder('discord.send', strictObject({
     channelId: Type.String(), content: Type.String(), companionId: optionalString,
+  })),
+  'channel.sendRoomReply': gatewayDecoder('channel.sendRoomReply', strictObject({
+    channelType: enumSchema(['telegram', 'external']),
+    channelId: Type.String(),
+    content: Type.String(),
+    companionId: optionalString,
   })),
   'discord.sendMedia': gatewayDecoder('discord.sendMedia', strictObject({
     channelId: Type.String(), media: attachment, companionId: optionalString,

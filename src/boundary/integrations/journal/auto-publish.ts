@@ -1,4 +1,5 @@
 import type { JournalOperations } from './ops.js';
+import { RESTRICTED_JOURNAL_PROVENANCE } from './provenance.js';
 import type { ReflectionPublishInput } from '../reflection-publish-input.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { formatActiveDateTimeIso } from '../../../shared/time/active-timezone.js';
@@ -77,7 +78,9 @@ export class JournalAutoPublisher {
     const frontmatter = buildFrontmatter({ ...input, templateId });
     const content = `${frontmatter}\n\n${input.reflection}`;
 
-    await this.ops.write(notePath, content);
+    // Reflections synthesize across conversations (psfn-framework-75oi4):
+    // they are restricted notes, readable only where confidential material is.
+    await this.ops.write(notePath, content, RESTRICTED_JOURNAL_PROVENANCE);
     log.debug('Published reflection to journal', {
       templateId,
       path: notePath,

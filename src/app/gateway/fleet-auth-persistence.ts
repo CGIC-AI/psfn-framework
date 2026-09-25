@@ -32,31 +32,24 @@ import {
   GatewayFleetPortalAuthorizationBatchResolver,
   type FleetPortalAuthorizationBatchPort,
 } from '../../boundary/gateway/fleet-portal-authorization.js';
-import type { TestingHarnessGardenAuthorizationAuditPort } from '../../boundary/gateway/testing-harness-garden-door.js';
+import type { GardenDoorAuthorizationAuditPort } from '../../boundary/gateway/testing-harness-garden-door.js';
 import { GatewayTrustedHostGardenRecoveryService } from '../../boundary/gateway/trusted-host-garden-recovery.js';
 import { createPostgresPool } from '../../persistence/postgres.js';
 import { GatewayFleetAuthAuthorityLifecycleStore } from '../../persistence/postgres/fleet-auth/authority-lifecycle-store.js';
 import { FleetAuthAuthorityFloorStore } from '../../persistence/postgres/fleet-auth/authority-floor.js';
 import { PostgresFleetAuthorizationContextStore } from '../../persistence/postgres/fleet-auth/authorization-context-store.js';
 import { PostgresChildAssertionAuthority } from '../../persistence/postgres/fleet-auth/child-assertion-authority.js';
-import type {
-  AccountReapprovalRequest,
-  AccountReapprovalResult,
-} from '../../persistence/postgres/fleet-auth/reapproval.js';
-import type {
-  CompanionReapprovalRequest,
-  CompanionReapprovalResult,
-} from '../../persistence/postgres/fleet-auth/companion-reapproval.js';
+import { executeOperatorAccountAction } from '../../persistence/postgres/fleet-auth/operator-account-authority.js';
+import { GatewayOperatorAccountAuthorityService } from '../../boundary/fleet-auth/operator-account-authority.js';
 import { PostgresContactLifecycleAuthorityStore } from '../../persistence/postgres/fleet-auth/contact-lifecycle-authority-store.js';
 import { PostgresDiscordEvidenceStore } from '../../persistence/postgres/fleet-auth/discord-evidence-store.js';
 import { PostgresFleetEscalationGrantStore } from '../../persistence/postgres/fleet-auth/escalation-grant-store.js';
 import {
   createGatewayAccountAuthorityFencePort,
-  createGatewayAccountReapprovalAuthority,
-  createGatewayCompanionReapprovalAuthority,
   reconcileFleetAuthAuthorityState,
   recordPostgresFleetLifecycleCeremonyDenial,
 } from '../../persistence/postgres/fleet-auth/gateway-persistence.js';
+import { recordAdminTokenLifecycleApproval } from '../../persistence/postgres/fleet-auth/admin-token-lifecycle-approval.js';
 import { PostgresHubDeviceAssertionReplayStore } from '../../persistence/postgres/fleet-auth/hub-device-assertion-replay.js';
 import { PostgresHubDeviceHumanAttachmentStore } from '../../persistence/postgres/fleet-auth/hub-device-human-attachment-store.js';
 import { FleetAuthLifecycleWitnessStore } from '../../persistence/postgres/fleet-auth/lifecycle-witness.js';
@@ -74,7 +67,7 @@ import {
   hasDurableFleetAuthAuthority,
   migrateFleetAuthSchema,
 } from '../../persistence/postgres/fleet-auth/schema.js';
-import { PostgresTestingHarnessGardenAuthorizationAudit } from '../../persistence/postgres/fleet-auth/testing-harness-authorization-audit.js';
+import { PostgresGardenDoorAuthorizationAudit } from '../../persistence/postgres/fleet-auth/testing-harness-authorization-audit.js';
 import {
   resolveGatewayFleetAuthSecrets,
   type FleetAuthConfig,
@@ -92,7 +85,7 @@ export interface GatewayFleetAuthPersistence {
   requestCapabilities: GatewayRequestCapabilitySigner;
   requestCapabilityVerifier: RequestCapabilityVerifier;
   requestCapabilityReplay: RequestCapabilityReplayPort;
-  testingHarnessGardenAuthorizationAudit: TestingHarnessGardenAuthorizationAuditPort;
+  gardenDoorAuthorizationAudit: GardenDoorAuthorizationAuditPort;
   childAssertions: GatewayFleetAuthChildAssertionBroker;
   primaryEmbodiments: PrimaryEmbodimentAuthorityPort;
   escalation: FleetEscalationCoordinator;
@@ -104,12 +97,8 @@ export interface GatewayFleetAuthPersistence {
   ): GatewayFleetAuthLifecycleCeremonyService;
   discordEvidence?: DiscordEvidenceRuntime;
   discordEvidenceLifecycle?: DiscordEvidenceLifecycleCoordinator;
-  reapproveAccountAuthority(
-    request: AccountReapprovalRequest,
-  ): Promise<AccountReapprovalResult>;
-  reapproveCompanionAuthority(
-    request: CompanionReapprovalRequest,
-  ): Promise<CompanionReapprovalResult>;
+  /** Audited ADMIN_TOKEN operator account authority (reinstate, disable, re-enable). */
+  operatorAccountAuthority: GatewayOperatorAccountAuthorityService;
   verifyAndConsumeHubDeviceAssertion(
     token: string,
     expected: HubDeviceAssertionExpectedBinding,
@@ -263,10 +252,16 @@ export async function initializeGatewayFleetAuthPersistence(options: {
         ...(config.accountRoster ? { accountRoster: config.accountRoster } : {}),
       }),
     });
-    const reapproveAccountAuthority = createGatewayAccountReapprovalAuthority(
-      pool,
-      authorityFloors,
-    );
+    const operatorAccountAuthority = new GatewayOperatorAccountAuthorityService({
+      canonicalOrigin: config.canonicalOrigin,
+      ports: {
+        recordApproval: input => recordAdminTokenLifecycleApproval(pool, input),
+        execute: input => executeOperatorAccountAction(pool, input),
+        isAccountAuthorityTombstoned: (kind, resourceId) => (
+          authorityFloors.isAccountAuthorityTombstoned(kind, resourceId)
+        ),
+      },
+    });
     const authorityLifecycle = new GatewayFleetAuthAuthorityLifecycleStore({
       pool: authorityPool,
       accountAuthority,
@@ -330,8 +325,8 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       resolveAuthorizationContext: input => broker.resolveAuthorizationContext(input),
     });
     const requestCapabilityReplay = new PostgresRequestCapabilityReplayStore(pool);
-    const testingHarnessGardenAuthorizationAudit =
-      new PostgresTestingHarnessGardenAuthorizationAudit({
+    const gardenDoorAuthorizationAudit =
+      new PostgresGardenDoorAuthorizationAudit({
         pool,
         sessionPepper: secrets.sessionPepper,
       });
@@ -358,7 +353,7 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       requestCapabilities,
       requestCapabilityVerifier,
       requestCapabilityReplay,
-      testingHarnessGardenAuthorizationAudit,
+      gardenDoorAuthorizationAudit,
       childAssertions,
       primaryEmbodiments,
       escalation,
@@ -379,15 +374,14 @@ export async function initializeGatewayFleetAuthPersistence(options: {
           denialAudit: {
             record: input => recordPostgresFleetLifecycleCeremonyDenial(pool, input),
           },
+          adminTokenApproval: {
+            record: input => recordAdminTokenLifecycleApproval(pool, input),
+          },
         });
       },
       ...(discordEvidence ? { discordEvidence } : {}),
       ...(discordEvidenceLifecycle ? { discordEvidenceLifecycle } : {}),
-      reapproveAccountAuthority,
-      reapproveCompanionAuthority: createGatewayCompanionReapprovalAuthority(
-        pool,
-        authorityFloors,
-      ),
+      operatorAccountAuthority,
       verifyAndConsumeHubDeviceAssertion: (token, expected) => verifyAndConsumeHubDeviceAssertion({
         token,
         expected,

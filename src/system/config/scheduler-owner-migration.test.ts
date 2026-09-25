@@ -25,6 +25,7 @@ import { migrateLegacySchedulerOwner } from './scheduler-owner-migration.js';
 import { DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG } from './icp-autonomy-scheduler-config.js';
 import { DEFAULT_INTENTION_FOLLOW_UP_SCHEDULER_CONFIG } from './scheduler-config/intention-follow-up.js';
 import {
+  createDefaultParticipationAppraiserSettings,
   createDefaultRoomParticipationLeaseSettings,
   createDefaultRoomSignalSettings,
 } from './participation-config.js';
@@ -423,6 +424,57 @@ describe('migrateLegacySchedulerOwner', () => {
     expect(JSON.parse(readFileSync(filePath, 'utf8'))).toEqual(canonical);
     expect(() => loadSchedulerConfig(dataDir)).not.toThrow();
     expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({ status: 'not_needed' });
+  });
+
+  it('moves an inherited 8000 ms appraisal deadline to the current default, idempotently (0eq2x)', () => {
+    const { dataDir, filePath } = prepareOwner();
+    migrateLegacySchedulerOwner({ dataDir, apply: true });
+    const canonical = JSON.parse(readFileSync(filePath, 'utf8')) as Record<string, unknown>;
+    const withAppraiser = (deadline: number, maxOutputTokens = 1_500) => {
+      const owner = structuredClone(canonical);
+      const socialAutonomy = (owner.socialAutonomy ?? {}) as Record<string, unknown>;
+      owner.socialAutonomy = socialAutonomy;
+      socialAutonomy.appraiser = {
+        ...(socialAutonomy.appraiser as Record<string, unknown> | undefined),
+        enabled: true,
+        appraisalDeadlineMs: deadline,
+        appraisalMaxOutputTokens: maxOutputTokens,
+        transcriptMessageCap: 8,
+        transcriptMessageChars: 500,
+      };
+      writeFileSync(filePath, `${JSON.stringify(owner, null, 2)}\n`, 'utf8');
+    };
+    const deadlineOnDisk = () => (((JSON.parse(readFileSync(filePath, 'utf8')) as Record<string, unknown>)
+      .socialAutonomy as Record<string, unknown>).appraiser as Record<string, unknown>).appraisalDeadlineMs;
+
+    withAppraiser(8_000);
+    expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
+      status: 'applied',
+      upgradedPaths: ['socialAutonomy.appraiser.appraisalDeadlineMs'],
+    });
+    expect(deadlineOnDisk()).toBe(createDefaultParticipationAppraiserSettings().appraisalDeadlineMs);
+    expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({ status: 'not_needed' });
+
+    // A deadline the operator chose is never rewritten.
+    withAppraiser(12_000);
+    expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).not.toHaveProperty('upgradedPaths');
+    expect(deadlineOnDisk()).toBe(12_000);
+
+    // 9z2z9: the seeded 200-token output budget truncated reasoning-model
+    // verdicts; an inherited 200 moves to the current default, others stay.
+    const maxTokensOnDisk = () => (((JSON.parse(readFileSync(filePath, 'utf8')) as Record<string, unknown>)
+      .socialAutonomy as Record<string, unknown>).appraiser as Record<string, unknown>).appraisalMaxOutputTokens;
+    withAppraiser(12_000, 200);
+    expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
+      status: 'applied',
+      upgradedPaths: ['socialAutonomy.appraiser.appraisalMaxOutputTokens'],
+    });
+    expect(maxTokensOnDisk()).toBe(createDefaultParticipationAppraiserSettings().appraisalMaxOutputTokens);
+    expect(deadlineOnDisk()).toBe(12_000);
+    expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({ status: 'not_needed' });
+    withAppraiser(12_000, 600);
+    expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).not.toHaveProperty('upgradedPaths');
+    expect(maxTokensOnDisk()).toBe(600);
   });
 
   it('plans then removes only the retired artifactLifecycle block, idempotently (cziwg)', () => {

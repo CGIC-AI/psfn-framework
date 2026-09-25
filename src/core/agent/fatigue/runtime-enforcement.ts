@@ -21,7 +21,7 @@ import {
   type FatigueBudgetEvaluation,
   type FatigueBudgetPort,
 } from './fatigue-budget.js';
-import { assertFatigueEnforcementMetadataInvariants } from './enforcement-invariants.js';
+import { assertFatigueEnforcementMetadataInvariants, resolveEffectiveSoftSpend } from './enforcement-invariants.js';
 import {
   evaluateFatiguePolicy,
   type FatiguePolicyChannelType,
@@ -486,8 +486,13 @@ function resolveReconciledPolicyBaseState(input: {
     <= input.config.stateThresholds.wrapUpRemainingResponses) {
     return 'wrap_up_allowed';
   }
-  if (input.relationshipPressure >= input.softLimit) return 'soft_exhausted';
-  if (input.softLimit - input.relationshipPressure
+  // kfu2s: the soft checks read the same measure the production invariant
+  // does. Reading only the unrounded pressure left the state `normal` while
+  // the rounded spend had already reached the soft limit, and the invariant
+  // threw on the reply.
+  const softSpend = resolveEffectiveSoftSpend(input.normalSpentBefore, input.relationshipPressure);
+  if (softSpend >= input.softLimit) return 'soft_exhausted';
+  if (input.softLimit - softSpend
     <= input.config.stateThresholds.nearingLimitRemainingResponses) {
     return 'nearing_limit';
   }

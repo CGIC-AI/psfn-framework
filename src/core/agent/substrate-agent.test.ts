@@ -3,6 +3,9 @@ import { fromAny } from '@total-typescript/shoehorn';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { getRequestContext } from '../../primitives/llm/request-context.js';
+import { isBusyTurnError } from '../../system/lifecycle/turn-contention.js';
+import { classifyPostTurnActionContention } from './post-turn-action-contention.js';
 import { Agent, type AgentTool } from '../../boundary/pi-agent/index.js';
 import type { CanonicalModelRegistry, LLMContext, LLMResponse, MessageAddressingMetadata, ModelRegistryEntry, ModelSlot, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
@@ -4818,7 +4821,10 @@ describe('SubstrateAgent.handleMessage', () => {
         source: 'agent',
         createdAt: '2026-02-01T10:00:00.000Z',
         expiresAt: '2026-02-03T10:00:00.000Z',
-        contactId: 'user-123',
+        // Companion-wide and public so this plumbing test is independent of the
+        // viewer gate (xz8m1), which the gate's own tests cover.
+        sensitivity: 'public',
+        evidenceRefs: [],
       }]),
     }));
 
@@ -4880,6 +4886,7 @@ describe('SubstrateAgent.handleMessage', () => {
           content: 'Remember to confirm backup status before restart.',
           createdAt: 1_700_000_000_000,
           updatedAt: 1_700_000_010_000,
+          provenance: { scope: 'conversation', channelId: 'test-channel' },
         },
       ]),
     });
@@ -4909,6 +4916,7 @@ describe('SubstrateAgent.handleMessage', () => {
           content: `note ${index} ${'x'.repeat(80)}`,
           createdAt: 1_700_000_000_000 + index,
           updatedAt: 1_700_000_000_000 + index,
+          provenance: { scope: 'companion_global' },
         })),
       ),
     });
@@ -5025,6 +5033,8 @@ describe('SubstrateAgent.handleMessage', () => {
           source: 'agent',
           createdAt: '2026-01-01T00:00:00.000Z',
           expiresAt: '2026-01-02T00:00:00.000Z',
+          sensitivity: 'personal',
+          evidenceRefs: [],
         },
       ]),
     });
@@ -7376,6 +7386,66 @@ describe('SubstrateAgent turn cancellation identity (mmo9.6.1)', () => {
     await voiceTurn;
   });
 
+  it('keeps a running turn\'s tool calls when a concurrent turn is refused (97epu)', async () => {
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), sessionManager, 'test', makeConfig(),
+    );
+    const usage = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+    let entered!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const releaseGate = new Promise<void>((resolve) => { release = resolve; });
+    // Turn A owns the pi run (the patched loop sets activeRun) and executes a
+    // tool while a concurrent sleeptime turn is dispatched.
+    promptSpy.mockImplementationOnce(async function (this: Agent) {
+      const patched = this as unknown as { activeRun?: unknown };
+      patched.activeRun = { requestId: 'turn-A' };
+      entered();
+      await releaseGate;
+      this.state.messages.push({
+        role: 'assistant',
+        content: [{ type: 'toolCall', id: 'tool-1', name: 'skill', arguments: { action: 'create' } }],
+        api: fromAny(''), provider: fromAny(''), model: '', usage, stopReason: fromAny('toolUse'), timestamp: Date.now(),
+      });
+      this.state.messages.push(fromAny({
+        role: 'toolResult', toolCallId: 'tool-1', toolName: 'skill',
+        content: [{ type: 'text', text: 'Skill created: matrix-runbook' }], isError: false, timestamp: Date.now(),
+      }));
+      this.state.messages.push({
+        role: 'assistant',
+        content: [{ type: 'text', text: '{"created":true}' }],
+        api: fromAny(''), provider: fromAny(''), model: '', usage, stopReason: fromAny('stop'), timestamp: Date.now(),
+      });
+      patched.activeRun = undefined;
+    });
+
+    const turnA = agent.handleMessage(makeMessage({ id: 'turn-A', channelId: 'api:harness' }));
+    await started;
+    const piAgent = fromAny<{ agent: Agent }>(agent).agent;
+    const promptCallsBefore = promptSpy.mock.calls.length;
+    const systemPromptBefore = piAgent.state.systemPrompt;
+    const transcriptBefore = piAgent.state.messages;
+
+    await expect(agent.handleMessage(makeMessage({
+      id: 'sleeptime-review-1',
+      channelId: 'internal:reflection:sleeptime-review',
+      content: 'Review the day.',
+    }))).rejects.toThrow('Agent is already processing');
+    // The refused turn never touched the running turn's shared state.
+    expect(promptSpy.mock.calls.length).toBe(promptCallsBefore);
+    expect(piAgent.state.systemPrompt).toBe(systemPromptBefore);
+    expect(piAgent.state.messages).toBe(transcriptBefore);
+
+    release();
+    const response = await turnA;
+    expect(response.content).toBe('{"created":true}');
+    const record = vi.mocked(sessionManager.recordTurn).mock.calls
+      .map(call => call[0] as { requestId: string; toolCalls: Array<{ toolName: string }> })
+      .find(entry => entry.requestId === 'turn-A');
+    expect(record?.toolCalls.map(call => call.toolName)).toEqual(['skill']);
+  });
+
   it('does not let a late cancel for a finished turn abort a newer turn with a different id', async () => {
     const agent = new SubstrateAgent(
       new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', makeConfig(),
@@ -7703,5 +7773,103 @@ describe('resolveTurnEvidenceDependency', () => {
       },
     })))).toBe('required');
     expect(resolveTurnEvidenceDependency(messageWithRouting())).toBe('required');
+  });
+});
+
+// psfn-framework-z4vhu: a background sleeptime/dream-pass turn that holds the
+// agent run must not reject a person's chat with agent_busy. The foreground turn
+// preempts it and proceeds within a bounded latency; the background turn fails
+// with the typed contention its owner already defers/yields on.
+describe('SubstrateAgent foreground preemption of background turns (z4vhu)', () => {
+  type RunSlot = {
+    promise: Promise<void>;
+    resolve: () => void;
+    abortController: AbortController;
+    laneClass?: string;
+  };
+
+  /**
+   * Hang the next prompt as a real active run: it occupies the agent's run
+   * slot (with its request-context lane) until its AbortController fires, like
+   * the patched pi-agent loop does.
+   */
+  function occupyRunSlotUntilAborted(): { started: Promise<void>; aborted: Promise<void> } {
+    let entered!: () => void;
+    let abortedResolve!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const aborted = new Promise<void>((resolve) => { abortedResolve = resolve; });
+    promptSpy.mockImplementationOnce(async function (this: Agent) {
+      const slot = this as unknown as { activeRun?: RunSlot };
+      let release!: () => void;
+      const promise = new Promise<void>((resolve) => { release = resolve; });
+      const abortController = new AbortController();
+      const laneClass = getRequestContext()?.runtimeLaneClass;
+      slot.activeRun = { promise, resolve: release, abortController, ...(laneClass ? { laneClass } : {}) };
+      entered();
+      await new Promise<void>((resolve) => abortController.signal.addEventListener('abort', () => resolve(), { once: true }));
+      slot.activeRun = undefined;
+      release();
+      abortedResolve();
+      throw new Error('Request was aborted');
+    });
+    return { started, aborted };
+  }
+
+  it('lets a foreground chat preempt an active sleeptime review turn within a bounded latency', async () => {
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', makeConfig(),
+    );
+    const background = occupyRunSlotUntilAborted();
+    const sleeptimeTurn = agent.handleMessage(makeMessage({
+      id: 'sleeptime-review-action-1-1',
+      channelId: 'internal:reflection:sleeptime-review',
+      authorId: 'scheduler',
+      authorName: 'Sleeptime Review',
+      content: 'review the day',
+    }));
+    const sleeptimeOutcome = sleeptimeTurn.then(
+      () => 'resolved' as const,
+      (error: unknown) => error,
+    );
+    await background.started;
+
+    const startedAtMs = Date.now();
+    const foreground = await Promise.race([
+      agent.handleMessage(makeMessage({ id: 'chat-1', channelId: 'api:person:session-1', content: 'hello?' })),
+      new Promise<'blocked'>((resolve) => setTimeout(() => resolve('blocked'), 2_000)),
+    ]);
+    const elapsedMs = Date.now() - startedAtMs;
+
+    expect(foreground).not.toBe('blocked');
+    expect(elapsedMs).toBeLessThan(2_000);
+    await background.aborted;
+    const preempted = await sleeptimeOutcome;
+    expect(preempted).toBeInstanceOf(Error);
+    expect((preempted as Error).name).toBe('AgentRunPreemptedError');
+    // The sleeptime workset / reflection runtime treat it as durable contention.
+    expect(isBusyTurnError(preempted)).toBe(true);
+    expect(classifyPostTurnActionContention(preempted)).toBe('agent_busy');
+  });
+
+  it('never preempts a foreground turn for a background one', async () => {
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', makeConfig(),
+    );
+    const foreground = occupyRunSlotUntilAborted();
+    const chat = agent.handleMessage(makeMessage({ id: 'chat-2', channelId: 'api:person:session-2' }))
+      .catch((error: unknown) => error);
+    await foreground.started;
+    promptSpy.mockImplementationOnce(async () => {
+      throw new Error('Agent is already processing a prompt.');
+    });
+    await expect(agent.handleMessage(makeMessage({
+      id: 'sleeptime-review-action-2-1',
+      channelId: 'internal:reflection:sleeptime-review',
+    }))).rejects.toThrow(/already processing/u);
+    // The foreground run was not aborted by the background attempt.
+    const slot = agent as unknown as { agent: { activeRun?: RunSlot } };
+    expect(slot.agent.activeRun?.abortController.signal.aborted).toBe(false);
+    slot.agent.activeRun?.abortController.abort();
+    await chat;
   });
 });

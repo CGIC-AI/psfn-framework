@@ -130,6 +130,7 @@ async function main(): Promise<void> {
     }
     const contacts = await provisionFleetContactTopology({
       companions: fleet.companions,
+      ssoProvider: fleetAuth.config.provider.kind,
       accountRoster,
       stores,
     });

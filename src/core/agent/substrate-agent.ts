@@ -8,6 +8,8 @@
 // MemoryExtractor) are re-exported here for callers that import contracts
 // from the SubstrateAgent module.
 
+import { resolveUncontextedTurnChargeLane } from './worker-lanes.js';
+import { resolveTurnCallType } from './substrate-agent/turn-observability.js';
 import {
   buildSessionMetadataWithSpeakerAttribution,
   resolveProvenSpeakerContactId,
@@ -68,6 +70,7 @@ import { PiProviderRuntime } from '../../primitives/llm/provider-runtime.js';
 import { createActiveEmanationSatellitePresencePort } from './satellite-adapter-port.js';
 import {
   abortActiveAgentRun,
+  preemptActiveAgentRun,
   installAgentToolSchedulerPatch,
   type AgentRunAbortResult,
 } from '../../boundary/pi-agent/agent-loop-patch.js';
@@ -225,7 +228,12 @@ import type { FatigueBudgetPort } from './fatigue/fatigue-budget.js';
 import type { IcpFatigueRegulationReservationPort } from './fatigue/regulation-reservation.js';
 import type { RuntimeServiceHealthStatus } from '../../operator/tool-health/types.js';
 import type { IntakeFirewallMode } from '../../system/config/intake-policy-config.js';
+import type { ViewerCeiling } from '../session/viewer-ceiling.js';
 
+import {
+  BackgroundTurnPreemption,
+  resolveTurnRunLaneClass,
+} from './substrate-agent/background-run-preemption.js';
 const log = createComponentLogger('SubstrateAgent');
 
 export type {
@@ -366,6 +374,7 @@ export class SubstrateAgent {
    * uses so a `custom` grant governs the agent without an owner file.
    */
   private explicitCapabilityAccess: CapabilityAccess | null = null;
+  private viewerCeiling: ViewerCeiling | null = null;
   private readonly allowCapabilityDeniedTransport:
     | import('../../system/capabilities/gate.js').CapabilityDeniedTransportPolicy
     | undefined;
@@ -398,6 +407,17 @@ export class SubstrateAgent {
   });
   private readonly promptCacheRuntime = new PromptCacheTurnRuntime();
   private readonly turnRunReservation = new TurnRunReservation();
+  /**
+   * z4vhu: a person's turn preempts background reflection turns (sleeptime,
+   * dream pass, heartbeat) instead of being rejected agent_busy.
+   */
+  private readonly backgroundTurnPreemption = new BackgroundTurnPreemption({
+    preemptActiveRun: (shouldPreempt) => preemptActiveAgentRun(this.agent, shouldPreempt),
+    currentTurnMessageId: () => this.turnRunReservation.getCurrentOwnerAttribution()?.sourceId ?? null,
+    onPreempted: (event) => {
+      log.info('Foreground turn preempted a background turn', { ...event });
+    },
+  });
   private readonly turnQueueIngress: TurnQueueIngressCoordinator;
   readonly completionNotices = new CompletionNoticeBuffer();
   private readonly turnSupportRuntime: TurnSupportRuntime;
@@ -911,6 +931,9 @@ export class SubstrateAgent {
     }, {
       resolvePromptCacheBoundaries: (systemPrompt) => this.promptCacheRuntime.resolveBoundariesFor(systemPrompt),
       resolveTurnTools: () => this.toolRuntimeFacade.resolveOwnedTurnTools(),
+    }, undefined, {
+      // z4vhu: a preempted background turn never takes the run slot afterwards.
+      isCurrentTurnPreempted: () => this.backgroundTurnPreemption.isCurrentTurnPreempted(),
     });
 
     this.installRuntimeHooks();
@@ -972,6 +995,7 @@ export class SubstrateAgent {
       getContactStore: () => this.contactStore,
       contactTrackingGate: this.contactTrackingGate,
       snapshotCapabilityGrant: () => this.snapshotCapabilityGrant(),
+      getViewerCeiling: () => this.viewerCeiling,
       log,
     });
     // Queued follow-up ingress + completion-notice routing (emh3p.2).
@@ -1344,6 +1368,16 @@ export class SubstrateAgent {
     this.refreshCapabilityRuntime();
   }
 
+  /**
+   * Hold every turn of this agent to a delegating conversation's viewer
+   * (psfn-framework-mzytp): a subagent or shard never reads as a more trusted
+   * viewer, or from a more private room, than the conversation that spawned
+   * it.
+   */
+  setViewerCeiling(ceiling: ViewerCeiling): void {
+    this.viewerCeiling = ceiling;
+  }
+
   // ── Steering + follow-up + lifecycle ──
 
   /** Whether the agent is currently processing a prompt */
@@ -1380,6 +1414,8 @@ export class SubstrateAgent {
   private async trySteerActiveRun(message: SubstrateMessage): Promise<boolean> {
     const authorContext = await this.promptContextBuilder.resolveAuthorContext(message);
     if (!this.turnQueueIngress.canQueueIntoActiveOrdinaryRun()) return false;
+    // A steer joins only a run of its own conversation (psfn-framework-o5wf5).
+    if (this.turnSupportRuntime.getActiveTurnSessionIdentity()?.sourceChannelId !== message.channelId) return false;
     const turnSessionIdentity = this.requireActiveTurnSessionIdentity();
     this.turnSupportRuntime.recordUserMessage(
       message,
@@ -1735,10 +1771,11 @@ export class SubstrateAgent {
     captureCompletedTurnEgressCustody?: CompletedTurnEgressCustodyCapture,
   ): Promise<AgentResponse> {
     await this.classifySessionAtCreation?.(message);
-    return this.turnRunReservation.runShared(
+    const laneClass = resolveTurnRunLaneClass(message);
+    const runTurn = (): Promise<AgentResponse> => this.turnRunReservation.runShared(
       { kind: 'ordinary-turn', sourceId: message.id },
       () => {
-        this.turnQueueIngress.enqueuePendingInternalFollowUpsForOrdinaryRun();
+        this.turnQueueIngress.enqueuePendingInternalFollowUpsForOrdinaryRun(message.channelId);
         return this.handleMessageUnderReservation(
           message,
           deliveryLifecycle,
@@ -1748,6 +1785,15 @@ export class SubstrateAgent {
         );
       },
     );
+    if (this.backgroundTurnPreemption.isPreemptableLane(laneClass)) {
+      return this.backgroundTurnPreemption.track({ messageId: message.id, laneClass }, runTurn);
+    }
+    // A higher-priority turn clears lower-priority background turns off the
+    // agent BEFORE it touches agent state (z4vhu).
+    const preempting = this.backgroundTurnPreemption.preemptFor({ messageId: message.id, laneClass });
+    if (preempting === null) return runTurn();
+    await preempting;
+    return runTurn();
   }
 
   private async handleMessageUnderReservation(
@@ -1867,6 +1913,7 @@ export class SubstrateAgent {
           taskKind,
         ),
         resolveAuthorContext: (turnMessage) => this.promptContextBuilder.resolveAuthorContext(turnMessage),
+        viewerCeiling: () => this.viewerCeiling,
         countResolvableSpeakerContacts: (turnMessage, speakers) => countResolvableSpeakerContactsForTurn({
           message: turnMessage,
           speakers,
@@ -1888,7 +1935,7 @@ export class SubstrateAgent {
         captureAuthoritativeSystemPrompt: (systemPrompt) => {
           this.currentAuthoritativeSystemPrompt = systemPrompt.trim() || null;
         },
-        buildScratchpadContextBlock: () => this.promptContextBuilder.buildScratchpadContextBlock(),
+        buildScratchpadContextBlock: (viewer) => this.promptContextBuilder.buildScratchpadContextBlock(viewer),
         normalizeTurnPromptOverride: (turnMessage) => this.normalizeTurnPromptOverride(turnMessage),
         resolveResponseStyle: (turnMessage, channelType, channelMeta) => this.resolveResponseStyle(
           turnMessage,
@@ -2068,7 +2115,11 @@ export class SubstrateAgent {
           response = await runWithChargeContext({
             chargePolicy: this.config.chargePolicy,
             eventBus: this.eventBus,
-            lane: 'interactive',
+            lane: resolveUncontextedTurnChargeLane({
+              channelId: message.channelId,
+              workerExecution: message.routing?.workerExecution !== undefined,
+              callType: resolveTurnCallType(message, undefined),
+            }),
             runId: message.id,
             correlation: {
               requestId: message.id,

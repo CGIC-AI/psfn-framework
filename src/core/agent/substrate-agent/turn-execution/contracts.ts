@@ -1,4 +1,5 @@
 import type { Agent, AgentMessage, AgentTool } from '../../../../boundary/pi-agent/index.js';
+import type { ScratchpadViewer } from '../../../../faculties/memory/scratchpad-visibility.js';
 import type { AssistantMessage } from '@earendil-works/pi-ai';
 import type { EventBus, EventMap } from '../../../../shared/event-bus.js';
 import type { CostTelemetryPort } from '../../../../shared/telemetry/cost-telemetry-port.js';
@@ -76,6 +77,7 @@ import type { CompletionNoticeBuffer } from '../../completion-notices.js';
 import type { ProviderRuntime } from '../../../../primitives/llm/provider-runtime.js';
 import type { SessionActorKind } from '../../../session/turn-provenance.js';
 import type { ConversationScopeSpeaker } from '../../../session/conversation-scope.js';
+import type { ViewerCeiling } from '../../../session/viewer-ceiling.js';
 import type { IntakeFirewallMode } from '../../../../system/config/intake-policy-config.js';
 import type { ForegroundWorkLease } from '../../background-work/supervisor.js';
 import type { EnqueueBackgroundWorkInput } from '../../background-work/types.js';
@@ -206,6 +208,11 @@ export interface TurnExecutionRuntime {
   ) => CorrelationMetadata;
   resolveAuthorContext: (message: SubstrateMessage) => Promise<ResolvedAuthorContext>;
   /**
+   * The delegating conversation's viewer ceiling for a subagent or shard
+   * (psfn-framework-mzytp); null for an ordinary agent.
+   */
+  viewerCeiling: () => ViewerCeiling | null;
+  /**
    * E3.3 envelope derivation input: how many of the recent-speaker window's
    * distinct speakers resolve to contacts. Fail closed: lookup failures count
    * as unresolved, never resolved.
@@ -256,7 +263,7 @@ export interface TurnExecutionRuntime {
   ensureModel: (message?: SubstrateMessage) => void;
   captureTurnPromptSnapshot: (ctx: ComposeContext) => TurnPromptSnapshot;
   captureAuthoritativeSystemPrompt?: (systemPrompt: string) => void;
-  buildScratchpadContextBlock: () => string;
+  buildScratchpadContextBlock: (viewer: ScratchpadViewer) => string;
   normalizeTurnPromptOverride: (message: SubstrateMessage) => MessagePromptOverride;
   resolveResponseStyle: (
     message: SubstrateMessage,

@@ -38,6 +38,18 @@ export async function lockAndValidateLifecycleProviderProofs(
   decision: VerifiedFleetAuthLifecycleDecision,
 ): Promise<void> {
   if (!isLifecycleOAuthAction(decision.action)) return;
+  // The ADMIN_TOKEN operator never presents or relies on an OAuth proof
+  // (key-or-SSO ruling); such a decision carrying one is malformed.
+  if (decision.operator) {
+    if (lifecycleProviderProofs(decision).length > 0) {
+      denyLifecycleMutation('operator_decision_carries_provider_proof');
+    }
+    return;
+  }
+  const initiator = {
+    principalId: decision.actor.principalId,
+    sessionIds: [decision.actorSession.sessionId],
+  };
   for (const { role, proof } of lifecycleProviderProofs(decision)) {
     const result = await client.query<{ transaction_id: string }>(`
       SELECT transaction.transaction_id
@@ -55,7 +67,7 @@ export async function lockAndValidateLifecycleProviderProofs(
         AND transaction.lifecycle_action = $7
         AND transaction.lifecycle_proof_role = $8
         AND transaction.initiating_principal_id = $9
-        AND transaction.initiating_session_id = $10
+        AND transaction.initiating_session_id = ANY($10::uuid[])
         AND transaction.kind = $11
       FOR UPDATE OF transaction
     `, [
@@ -67,8 +79,8 @@ export async function lockAndValidateLifecycleProviderProofs(
       decision.ceremonyId,
       decision.action,
       role,
-      decision.actor.principalId,
-      decision.actorSession.sessionId,
+      initiator.principalId,
+      initiator.sessionIds,
       lifecycleOAuthKindFor(decision.action, role),
     ]);
     if (result.rowCount !== 1) denyLifecycleMutation('provider_callback_proof_invalid');

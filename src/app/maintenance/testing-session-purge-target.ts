@@ -24,6 +24,8 @@ export interface TestingSessionPurgeTargetOptions {
 export interface TestingSessionPurgeTarget {
   companionDataDir: string;
   companionId?: string;
+  /** Fleet only: the target companion's companions.json postgresRole. */
+  postgresRole?: string;
   postgresSchema: string;
   sessionsDir: string;
 }
@@ -97,9 +99,16 @@ export function resolveTestingSessionPurgeTarget(
         `--sessions-dir must match the manifest-owned sessions directory for ${companionId}`,
       );
     }
+    const postgresRole = companion.postgresRole.trim();
+    if (!postgresRole) {
+      throw new TestingSessionPurgeSchemaResolutionError(
+        `Cannot determine PostgreSQL role for purge target companion ${companionId}`,
+      );
+    }
     return {
       companionDataDir,
       companionId,
+      postgresRole,
       postgresSchema: requireTargetSchema(companion.postgresSchema, companionId),
       sessionsDir,
     };

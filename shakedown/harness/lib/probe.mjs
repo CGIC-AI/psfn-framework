@@ -47,6 +47,38 @@ export function chatCompletionsUrl(base) {
 // (src/shared/contracts/testing-harness.ts); the gateway reads exactly these.
 export const TESTING_HARNESS_RUN_ID_HEADER = 'x-testing-harness-run-id';
 export const TESTING_HARNESS_MANIFEST_ID_HEADER = 'x-testing-harness-manifest-id';
+// Canonical Bearer companion selector (src/channels/api/server/
+// bearer-companion-selector.ts). The gateway honors it for the testing-harness
+// principal only for companions in channels.json api.selectableCompanionIds
+// and refuses an unknown one (404 bearer_companion_not_found), so a follower
+// target fails closed instead of silently falling back to the pinned primary.
+export const COMPANION_SELECTOR_HEADER = 'x-psfn-companion-id';
+const RFC4122_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
+/**
+ * Validate the run's fleet companion for the selector (null/undefined = the
+ * pinned companion, no selector). Fails closed on anything but a UUID.
+ */
+export function companionSelectorFor(companionId) {
+  if (companionId === undefined || companionId === null) return {};
+  if (typeof companionId !== 'string' || !RFC4122_UUID.test(companionId)) {
+    throw new Error('companionId must be an RFC 4122 UUID when provided');
+  }
+  return { [COMPANION_SELECTOR_HEADER]: companionId.toLowerCase() };
+}
+
+/**
+ * Bind the run's companion selector onto one harness-bearer chat dispatch
+ * (gz50o / cx97d). A case-supplied selector is dropped first, so no case can
+ * retarget its dispatch; the selector is applied last.
+ */
+export function withCompanionSelector(headers, selector) {
+  const bound = { ...(headers ?? {}) };
+  for (const name of Object.keys(bound)) {
+    if (name.toLowerCase() === COMPANION_SELECTOR_HEADER) delete bound[name];
+  }
+  return { ...bound, ...selector };
+}
 
 /**
  * Build the testing-harness provenance headers the gateway records on turns.
@@ -372,8 +404,16 @@ export function buildChatHeaders({ apiKey, sessionId, privacy = 'private', ident
  * Fails closed at creation: an empty run or manifest id is a configuration
  * error, never a silently unprovenanced run.
  */
-export function createChatHeaderBuilder({ apiKey, runId, manifestId }) {
+export function createChatHeaderBuilder({ apiKey, runId, manifestId, companionId }) {
   const provenance = testingHarnessProvenanceHeaders({ runId, manifestId });
+  // Bound after every caller-supplied header, like provenance: a case can
+  // never retarget its dispatch to another companion.
+  let selector;
+  try {
+    selector = companionSelectorFor(companionId);
+  } catch (error) {
+    throw new Error(`createChatHeaderBuilder ${error instanceof Error ? error.message : String(error)}`);
+  }
   if (
     typeof provenance[TESTING_HARNESS_RUN_ID_HEADER] !== 'string'
     || typeof provenance[TESTING_HARNESS_MANIFEST_ID_HEADER] !== 'string'
@@ -390,7 +430,7 @@ export function createChatHeaderBuilder({ apiKey, runId, manifestId }) {
     identityClaim = {},
     extra = {},
   } = {}) {
-    return withTestingHarnessProvenance(
+    const headers = withTestingHarnessProvenance(
       buildChatHeaders({
         apiKey: dispatchApiKey ?? boundApiKey,
         sessionId,
@@ -400,6 +440,11 @@ export function createChatHeaderBuilder({ apiKey, runId, manifestId }) {
       }),
       { runId, manifestId },
     );
+    // Only the harness's own bearer selects a companion. A dispatch under
+    // another credential (a scoped satellite key) is routed by that
+    // credential's own binding, and the gateway refuses a selector from it.
+    const harnessBearer = dispatchApiKey === undefined || dispatchApiKey === boundApiKey;
+    return withCompanionSelector(headers, harnessBearer ? selector : {});
   };
 }
 

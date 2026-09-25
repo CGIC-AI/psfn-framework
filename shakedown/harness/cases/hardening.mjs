@@ -326,7 +326,7 @@ async function driveBackgroundLane({
     setStage?.('background_usage_origin_read');
     let originStage;
     try {
-      originStage = await services.pgScalar(
+      originStage = await services.gatewayPgScalar(
         BACKGROUND_APPRAISAL_ORIGIN_QUERY,
         [sourceTurnId],
       );
@@ -522,7 +522,7 @@ export function buildHardeningCases(ctx, services, options = {}) {
             let ledgerRows = [];
             const proofQueryFailures = [...background.proofQueryFailures];
             try {
-              ledgerRows = await services.pgAll(
+              ledgerRows = await services.gatewayPgAll(
                 MODEL_USAGE_QUERY,
                 [sessionId, background.backgroundTurnId],
               );
@@ -535,7 +535,7 @@ export function buildHardeningCases(ctx, services, options = {}) {
             stage = 'unknown_embedding_attribution_read';
             let unknownEmbeddingRows = [];
             try {
-              unknownEmbeddingRows = await services.pgAll(
+              unknownEmbeddingRows = await services.gatewayPgAll(
                 UNKNOWN_EMBEDDING_ATTRIBUTION_QUERY,
               );
             } catch (error) {

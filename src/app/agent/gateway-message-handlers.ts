@@ -1,4 +1,11 @@
+import type { IcpActivityEndReasonCode } from '../../shared/contracts/icp-autonomy.js';
+import { isAgentProcessingPromptError } from '../../system/lifecycle/turn-contention.js';
 import type { AgentResponse, Attachment, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import { ObservedGroupMemoryLane } from './observed-group-memory-lane.js';
+import {
+  loadIcpAppraisalPrecedingContext,
+  type IcpAppraisalContextSource,
+} from '../../core/participation/icp-inbound-context.js';
 import type { MessageHandlerOptions } from '../../channels/backplane/types.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
@@ -80,7 +87,17 @@ import {
 import type { CompanionProtectedMessageQueuePort } from '../../core/agent/companion-availability.js';
 
 const DUPLICATE_MESSAGE_WINDOW_MS = 2 * 60_000;
-const AGENT_BUSY_PATTERN = /already processing a prompt/i;
+/**
+ * q2kao: an inbound companion reply that cannot start within its bounded busy
+ * wait. Distinct from an ordinary processing failure, which keeps the
+ * sender-retry contract and leaves the episode open.
+ */
+class InboundReplyBusyTimeoutError extends Error {
+  constructor(readonly waitedMs: number) {
+    super(`Agent stayed busy for ${String(waitedMs)} ms; the inbound companion reply could not start`);
+    this.name = 'InboundReplyBusyTimeoutError';
+  }
+}
 const CANONICAL_COMPANION_ROUTING_KEYS = new Set([
   'source',
   'authorIsMachineIntelligence',
@@ -240,8 +257,7 @@ export interface GatewayMessageGateway {
   }): Promise<{ outcome: string }>;
   companionEndIcpEpisodeActivity(input: {
     conversationId: string;
-    reasonCode: 'fatigue_exhausted' | 'charge_pressure' | 'cost_hard_stop'
-      | 'inactivity_timeout' | 'conversation_ended';
+    reasonCode: IcpActivityEndReasonCode;
   }): Promise<unknown>;
   companionReportFailure(params: CompanionMessageFailureReportParams): Promise<unknown>;
   onCompanionDeliveryFailure(
@@ -440,10 +456,29 @@ export interface GatewayMessageHandlersDeps {
   nowMonotonicMs?: () => number;
   /** Durable non-preempting ingress used while protected autonomous work owns availability. */
   protectedMessageQueue?: CompanionProtectedMessageQueuePort;
+  /**
+   * Reader for the receiving companion's own companion-dm history, so the
+   * inbound ICP reply/no-reply appraisal sees the conversation it is judging
+   * instead of a lone trigger line (psfn-framework-p6s1f).
+   */
+  icpAppraisalContext: IcpAppraisalContextSource;
+  /**
+   * q2kao: how long an inbound companion reply may wait for a busy agent
+   * before its ICP conversation is ended as recipient_busy_timeout. Wired
+   * from scheduler.json icpAutonomy.permit.ttlMs: a reply that cannot start
+   * within the handoff window is stale.
+   */
+  companionReplyBusyWaitMs: number;
 }
 
 export interface RegisteredGatewayMessageHandlers {
   icpTargetChannelInitiator: IcpTargetChannelInitiator & IcpTargetChannelContinuation;
+  /**
+   * Observed group memory scheduling that the observe path no longer awaits
+   * (psfn-framework-qvwem); undefined when no scheduler is wired. Shutdown
+   * stops and drains it before the memory extractor drains.
+   */
+  observedGroupMemory: Pick<ObservedGroupMemoryLane, 'stop' | 'pendingCount'> | undefined;
 }
 
 export function registerGatewayMessageHandlers(
@@ -467,7 +502,27 @@ export function registerGatewayMessageHandlers(
     outboundReplyGuard,
     companionAuthorName,
     eventBus,
+    icpAppraisalContext,
+    companionReplyBusyWaitMs,
   } = deps;
+  /**
+   * The participation chain's verdicts (candidate, reservation, appraisal
+   * verdict, egress outcome) go to the durable audit trail AND the info log,
+   * so an operator can see why a room line did or did not get a reply
+   * (psfn-framework-znqh6). Every field is content-free: ids, typed reason
+   * codes, actions and confidences only.
+   */
+  const recordParticipationOutcome = (event: string, details: Record<string, unknown>): void => {
+    safeguardAuditTrail.append(event, details);
+    log.info(`Participation ${event.slice('participation.'.length)}`, details);
+  };
+  const observedGroupMemoryLane = observedGroupMemoryScheduler
+    ? new ObservedGroupMemoryLane({
+      scheduler: observedGroupMemoryScheduler,
+      audit: safeguardAuditTrail,
+      log,
+    })
+    : undefined;
   const localCompanionId = resolveCompanionIdFromConfig(config);
   const targetHumanRelayReplayGuard = createInMemoryHumanRelayReplayGuard();
   const sourceHumanRelayReplayGuard = createInMemoryHumanRelayReplayGuard();
@@ -614,7 +669,7 @@ export function registerGatewayMessageHandlers(
     try {
       const result = await participationAppraiser.appraise(candidate);
       const { appraisal } = result;
-      safeguardAuditTrail.append('participation.appraisal.completed', {
+      recordParticipationOutcome('participation.appraisal.completed', {
         channelId: candidate.channelId,
         sourceMessageId: candidate.sourceMessageId,
         trigger: candidate.trigger,
@@ -705,7 +760,11 @@ export function registerGatewayMessageHandlers(
       triggerTimestampMs: timestampMs,
       matchedName: false,
       matchedDirectAddress: correlation.surface === 'companion_dm',
-      precedingContext: [],
+      precedingContext: await loadIcpAppraisalPrecedingContext(icpAppraisalContext, {
+        channelId: message.channelId,
+        messageId: message.id,
+        timestampMs,
+      }),
       createdAtMs: nowArbiterMs(),
     };
     const result = await appraiseParticipationCandidate(candidate);
@@ -723,6 +782,18 @@ export function registerGatewayMessageHandlers(
       failClosed: result?.failClosed ?? true,
     });
     if (appraisal.action === 'reply') return undefined;
+    // A declined ICP turn is a real outcome, not a stall: say so in the log
+    // next to the receive line (the durable record is the suppressed
+    // icp_delivery observation written by the delivery lifecycle).
+    log.info('Inbound ICP message declined before generation', {
+      channelId: message.channelId,
+      messageId: message.id,
+      action: appraisal.action,
+      reasonCode: appraisal.reasonCode,
+      confidence: appraisal.confidence,
+      failClosed: result?.failClosed ?? true,
+      precedingContextCount: candidate.precedingContext.length,
+    });
     return {
       source: 'participation_appraiser',
       reasonCode: appraisal.reasonCode,
@@ -751,7 +822,7 @@ export function registerGatewayMessageHandlers(
       nowMs: nowArbiterMs(),
     });
     if (decision.outcome === 'gated') {
-      safeguardAuditTrail.append('participation.reservation.gated', {
+      recordParticipationOutcome('participation.reservation.gated', {
         channelId: candidate.channelId,
         sourceMessageId: candidate.sourceMessageId,
         trigger: candidate.trigger,
@@ -775,7 +846,7 @@ export function registerGatewayMessageHandlers(
       await closeRoomParticipationForGate(candidate.channelId, decision.blockedBy);
       return;
     }
-    safeguardAuditTrail.append('participation.reservation.reserved', {
+    recordParticipationOutcome('participation.reservation.reserved', {
       channelId: candidate.channelId,
       sourceMessageId: candidate.sourceMessageId,
       trigger: candidate.trigger,
@@ -807,7 +878,7 @@ export function registerGatewayMessageHandlers(
         action,
         nowArbiterMs(),
       );
-      safeguardAuditTrail.append('participation.reservation.settled', {
+      recordParticipationOutcome('participation.reservation.settled', {
         channelId: candidate.channelId,
         sourceMessageId: candidate.sourceMessageId,
         trigger: candidate.trigger,
@@ -904,12 +975,14 @@ export function registerGatewayMessageHandlers(
           authorIsMachine: candidate.triggerAuthorIsMachine,
         });
       }
-      safeguardAuditTrail.append('participation.egress.settled', {
+      recordParticipationOutcome('participation.egress.settled', {
         channelId: candidate.channelId,
         sourceMessageId: candidate.sourceMessageId,
         trigger: candidate.trigger,
         reservationId: decision.reservation.reservationId,
         action: result.appraisal.action,
+        // The appraisal confidence the lease compared against its bar.
+        confidence: result.appraisal.confidence,
         outcome: egressDecision.outcome,
         ...(egressDecision.declineReason ? { declineReason: egressDecision.declineReason } : {}),
         ...(egressDecision.drawOutcome ? { drawOutcome: egressDecision.drawOutcome } : {}),
@@ -984,62 +1057,20 @@ export function registerGatewayMessageHandlers(
       messageId: message.id,
       authorId: message.authorId,
     });
-    // Memory extraction can involve a slow background-model call. Start it now,
-    // but do not serialize the latency-sensitive participation decision behind
-    // it: both consumers already see the source entry recorded above.
-    const observedMemoryWork = (async (): Promise<void> => {
-      if (observedGroupMemoryScheduler) {
-        try {
-          const decision = await observedGroupMemoryScheduler.observeMessage(message);
-          if (decision.status === 'scheduled') {
-            safeguardAuditTrail.append('memory.group_observed.scheduled', {
-              channelId: decision.channelId,
-              messageId: message.id,
-              triggerReason: decision.triggerReason,
-              spanStartMessageId: decision.spanStartMessageId,
-              spanEndMessageId: decision.spanEndMessageId,
-              newEntryCount: decision.newEntryCount,
-              watermarkLagMessageIds: decision.watermarkLagMessageIds,
-              hasDeferredBacklog: decision.hasDeferredBacklog,
-            });
-          } else if (decision.reason === 'extraction_failed') {
-            log.warn('Observed group memory extraction failed', {
-              channelId: decision.channelId,
-              messageId: message.id,
-              watermarkLagMessageIds: decision.watermarkLagMessageIds,
-              error: decision.error,
-            });
-            safeguardAuditTrail.append('memory.group_observed.error', {
-              channelId: decision.channelId,
-              messageId: message.id,
-              reason: decision.reason,
-              error: decision.error,
-            });
-          }
-        } catch (schedulerError) {
-          const errorText = toErrorMessage(schedulerError);
-          log.warn('Observed group memory scheduling failed', {
-            channelId: message.channelId,
-            messageId: message.id,
-            error: errorText,
-          });
-          safeguardAuditTrail.append('memory.group_observed.error', {
-            channelId: message.channelId,
-            messageId: message.id,
-            error: errorText,
-          });
-        }
-      }
-    })();
+    // psfn-framework-qvwem: observed memory scheduling (a slow background-model
+    // extraction) runs on its own per-channel lane and is NEVER awaited here,
+    // so observing a line returns once it is journaled and the participation
+    // gate has run. The lane preserves per-channel order, audits every outcome,
+    // and its enqueue promise never rejects; shutdown drains it.
+    if (observedGroupMemoryLane) void observedGroupMemoryLane.enqueue(message);
     if (!passiveNameCandidateBuilder) {
-      await observedMemoryWork;
       return;
     }
     try {
       const decision = await passiveNameCandidateBuilder.build(message);
       if (decision.status === 'created') {
         const { candidate } = decision;
-        safeguardAuditTrail.append('participation.candidate.created', {
+        recordParticipationOutcome('participation.candidate.created', {
           channelId: candidate.channelId,
           sourceMessageId: candidate.sourceMessageId,
           trigger: candidate.trigger,
@@ -1079,7 +1110,6 @@ export function registerGatewayMessageHandlers(
         } else if (participationAppraiser) {
           await appraiseParticipationCandidate(candidate);
         }
-        await observedMemoryWork;
         return;
       }
       safeguardAuditTrail.append('participation.candidate.suppressed', {
@@ -1115,7 +1145,6 @@ export function registerGatewayMessageHandlers(
         timestamp: nowMonotonicMs(),
       });
     }
-    await observedMemoryWork;
   };
 
   const pruneDuplicateCaches = (now: number): void => {
@@ -1148,7 +1177,9 @@ export function registerGatewayMessageHandlers(
       finalizeDelivery(response: AgentResponse): Promise<void>;
     },
     turnControl?: MessageHandlerOptions,
+    busyWaitMs?: number,
   ): Promise<AgentResponse> => {
+    const startedAt = Date.now();
     for (let attempt = 1; ; attempt += 1) {
       try {
         if (deliveryLifecycle) {
@@ -1158,13 +1189,30 @@ export function registerGatewayMessageHandlers(
           ? await agentLoop.handleMessage(message, undefined, turnControl)
           : await agentLoop.handleMessage(message);
       } catch (err) {
-        if (!(err instanceof Error) || !AGENT_BUSY_PATTERN.test(err.message)) throw err;
-        log.warn('Agent busy; holding discord message until in-flight work finishes', {
+        // q2kao: every busy/preempted variant ("Agent is already processing."
+        // included), not only "...already processing a prompt".
+        if (!isAgentProcessingPromptError(err)) throw err;
+        log.warn('Agent busy; holding the message until in-flight work finishes', {
           channelId: message.channelId,
           messageId: message.id,
           attempt,
         });
-        await agentLoop.waitForIdle();
+        if (busyWaitMs === undefined) {
+          await agentLoop.waitForIdle();
+          continue;
+        }
+        const remainingMs = startedAt + busyWaitMs - Date.now();
+        if (remainingMs <= 0) throw new InboundReplyBusyTimeoutError(Date.now() - startedAt);
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const idle = await Promise.race([
+          agentLoop.waitForIdle().then(() => true),
+          new Promise<false>(resolveTimeout => {
+            timer = setTimeout(() => resolveTimeout(false), remainingMs);
+          }),
+        ]).finally(() => {
+          if (timer !== undefined) clearTimeout(timer);
+        });
+        if (!idle) throw new InboundReplyBusyTimeoutError(Date.now() - startedAt);
       }
     }
   };
@@ -1698,6 +1746,7 @@ export function registerGatewayMessageHandlers(
       message,
       deliveryLifecycle,
       precomputedNoReplyDisposition ? { precomputedNoReplyDisposition } : undefined,
+      companionReplyBusyWaitMs,
     );
   };
 
@@ -1735,6 +1784,26 @@ export function registerGatewayMessageHandlers(
           }
           completed = true;
         } catch (err) {
+          const busyTimeoutCorrelation = err instanceof InboundReplyBusyTimeoutError
+            ? message.routing?.icpCorrelation
+            : undefined;
+          if (busyTimeoutCorrelation) {
+            // q2kao: the reply never started, so nothing will answer the
+            // sibling; end the conversation with a typed reason instead of
+            // leaving it active. Ordinary failures keep the sender-retry path.
+            try {
+              await gateway.companionEndIcpEpisodeActivity({
+                conversationId: busyTimeoutCorrelation.conversationId,
+                reasonCode: 'recipient_busy_timeout',
+              });
+            } catch (endError) {
+              log.error('Failed to end an ICP conversation after the reply busy wait expired', {
+                channelId: message.channelId,
+                messageId: message.id,
+                error: toErrorMessage(endError),
+              });
+            }
+          }
           await handleCompanionTurnFailure({
             error: err,
             channelId: message.channelId,
@@ -1998,6 +2067,7 @@ export function registerGatewayMessageHandlers(
   });
 
   return {
+    observedGroupMemory: observedGroupMemoryLane,
     icpTargetChannelInitiator: {
       ...createIcpTargetChannelInitiator({
         localCompanionId,

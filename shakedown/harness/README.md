@@ -42,9 +42,10 @@ targets, so nothing hardcodes a namespace, service, port, or `/mnt` path:
 | `PSFN_SHAKEDOWN_PHYSICAL_SATELLITE_API_KEY` | enrolled bearer for satellite-claim chat and telemetry cases | Helm `secrets.satelliteHubApiKey` (hub) or `secrets.extraSatelliteApiKeys` (additional satellites) feeds gateway `API_SATELLITE_KEYS`; list the derived principal in every synthetic fixture endpoint's `satellites.json` `auth.apiKeyPrincipalIds` |
 | `HUB_DEVICE_ASSERTION_PRIVATE_KEY_PATH` / `HUB_DEVICE_ASSERTION_TTL_SECONDS` | mode-0600 canonical Hub signing key and 5–60 second TTL | the key must match the active `fleet-auth.json > hubDeviceAssertions` verifier; authority and enrollment are derived from owner files, assertions are minted afresh per HTTP attempt, and tokens are excluded from artifacts |
 | `API_KEY` | shared gateway credential used to start a fresh local runtime | local bootstrap/restart only; never use it for harness chat |
-| `ADMIN_TOKEN` / `PSFN_ADMIN_TOKEN` | independent Operator token and local Garden admin token | required for HITL confirmation resolution even when fleet SSO is enabled; never reuse `TESTING_HARNESS_API_KEY` |
+| `ADMIN_TOKEN` / `PSFN_ADMIN_TOKEN` | independent Operator token and local Garden admin token | required on kube for every run: harness fixture sweeps/restores (prompt layers, harness skills, contact notes) and HITL confirmation resolution use this Operator door because the testing-harness Garden door cannot manage them; never reuse `TESTING_HARNESS_API_KEY` |
 | `PSFN_OPERATOR_API_BASE` | optional versioned Operator API override; defaults to `PSFN_API_BASE` plus `/v1` | use only when the private confirmation endpoint has a distinct versioned base |
 | `PSFN_OPERATOR_ADMIN_TOKEN` | optional Operator confirmation credential override; defaults to `ADMIN_TOKEN` / `PSFN_ADMIN_TOKEN` | must remain distinct from `TESTING_HARNESS_API_KEY` |
+| `PSFN_SHAKEDOWN_IMAGE_PROVIDER` | image provider for `image_create` / `image_edit` / `selfie_create`: `settings` (omit provider; the deployment's `imageProvider` selects), or `auto` / `fal` / `comfyui` / `comfyui_mcp` / `openrouter` | defaults to `settings`; set it to prove a specific provider (e.g. `openrouter` for the OpenRouter-only variant) — an explicit provider other than `auto` must appear in a successful tool result; unknown values fail at startup |
 | `POSTGRES_DATABASE_URL` | round Postgres | reach the deployment DB via a port-forward; proofs run against it |
 | `PSFN_TIER_FLIP_CONFIRM_TIMEOUT_MS` | tier-flip confirm budget (default 30000) | kube only |
 | `PSFN_TIER_FLIP_POLL_MS` | tier-flip confirm poll interval (default 1500) | kube only |
@@ -278,12 +279,45 @@ Export (values elided; `POSTGRES_DATABASE_URL` is required because the shared
 ```bash
 export PSFN_TARGET=kube
 export PSFN_API_BASE=https://fleet.example.test  # canonical Fleet SSO origin
-export ADMIN_TOKEN                              # independent Operator credential fetched above
+export ADMIN_TOKEN                              # independent Operator credential fetched above (required on kube)
 export TESTING_HARNESS_API_KEY=…                 # dedicated harness key from the secret above
 export POSTGRES_DATABASE_URL=…                   # round Postgres (resolver requires it)
 export COMPANION_ID=…                            # selected fleet companion UUID
 export PSFN_MATRIX_DIR=$SHAKEDOWN_ROOT/artifacts/matrix   # or PSFN_ROUND_DIR — output dir
 ```
+
+On kube, `ADMIN_TOKEN` (or `PSFN_OPERATOR_ADMIN_TOKEN`) is required and must
+differ from `TESTING_HARNESS_API_KEY`: prompt-marker and harness-skill residue
+sweeps and the per-case prompt/skill restores are operator maintenance on the
+companion's identity material, which the bounded testing-harness Garden door
+cannot manage (`prompts.manage` / `skills.manage` are outside its action list by
+design). They run through the audited ADMIN_TOKEN Garden door on the unified
+origin (bead `psfn-framework-xpgnr`); the harness never falls back to its own
+key for them.
+
+Gateway-owned tables (`gateway_audit`, the fleet `model_usage_events` spend
+ledger) live in the fleet gateway's schema, the primary tenant, not in each
+follower's (bead `psfn-framework-ypah0`). Whenever `COMPANION_PG_SCHEMA` is set,
+also set `PSFN_GATEWAY_PG_SCHEMA` to that gateway schema. For a follower run it
+differs from `COMPANION_PG_SCHEMA`, so `PSFN_GATEWAY_POSTGRES_DATABASE_URL` must
+name an operator-provisioned credential that can read it (read-only is
+enough); the harness never reads gateway tables through the follower tenant
+role, and preflight fails if `gateway_audit` is not readable.
+Declare that credential's role as `postgres.gatewayAuditReaderRole` in
+`companions.json` and create it `LOGIN NOINHERIT CONNECTION LIMIT <n>` with no
+grants: the gateway grants it exactly `SELECT` on those two tables at startup
+and refuses to boot on any undeclared grantee on its schema (bead
+`psfn-framework-jqg13`).
+
+`COMPANION_ID` selects the fleet companion for **both** lanes: the Garden route
+(`/companions/<id>/garden/...`) and chat, where the harness sends the gateway's
+Bearer companion selector (`X-PSFN-Companion-ID`) on every testing-harness
+dispatch (bead `psfn-framework-gz50o`). To run Layer A against a follower,
+list it in `channels.json` `api.selectableCompanionIds` and point
+`COMPANION_ID`, `COMPANION_PG_SCHEMA`, `COMPANION_DATA_DIR` and
+`WORKSPACE_PATH` at that companion. An unknown or unselectable companion fails
+closed (404 `bearer_companion_not_found` / 403 `bearer_companion_unauthorized`);
+the harness never falls back to the pinned primary.
 
 Optional knobs (all have safe defaults): `PSFN_ROUND_DIR` (alias for the output
 dir), `PSFN_ORIGINAL_TIER_FILE` (durable pre-sweep record, default

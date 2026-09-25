@@ -32,6 +32,11 @@ import {
   type SessionSearchWithin,
 } from './session-search.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import {
+  canViewerReadSessionChannel,
+  gateSessionSummariesForViewer,
+  resolveViewerContextFromRequest,
+} from '../session/session-viewer-access.js';
 import { isCapturedSessionOwnerInvariantError } from '../session/manager/captured-session-owner.js';
 import { createComponentLogger } from '../../shared/logger.js';
 
@@ -199,7 +204,13 @@ function buildListPayload(
   const activeSessionId = manager.getActiveContextSessionForTool()
     ?? readLastActiveSession(dataDir)?.sessionId
     ?? null;
-  const sessions = manager.listRecentSessions(limit).map((session) => ({
+  // Previews and author names are channel content: a session the current
+  // conversation cannot read is withheld whole, with a content-free count.
+  const { visible, gatedOutCount } = gateSessionSummariesForViewer(
+    resolveViewerContextFromRequest(),
+    manager.listRecentSessions(limit),
+  );
+  const sessions = visible.map((session) => ({
     sessionId: session.sessionId,
     channelType: session.channelType ?? null,
     lastActivityAt: session.lastActivityAt,
@@ -213,6 +224,10 @@ function buildListPayload(
   return {
     activeSessionId,
     count: sessions.length,
+    gatedOutCount,
+    ...(gatedOutCount > 0
+      ? { gatedNote: 'Some recent sessions are withheld because they are not readable from this conversation.' }
+      : {}),
     sessions,
   };
 }
@@ -393,6 +408,12 @@ async function executeSessionResumeAction(
   if (!target) {
     return textResultWithError(`Session not found: ${requestedSessionId}`, true);
   }
+  if (!canViewerReadSessionChannel(resolveViewerContextFromRequest(), target.channelId)) {
+    return textResultWithError(
+      `session action="resume" refused: ${requestedSessionId} is not readable from this conversation.`,
+      true,
+    );
+  }
 
   const previousSessionId = manager.getActiveContextSessionForTool()
     ?? readLastActiveSession(options.dataDir)?.sessionId
@@ -556,6 +577,16 @@ export function createSessionTool(options: UnifiedSessionToolOptions): Substrate
               options.dataDir,
               params.sessionId,
             );
+            // A wake_return artifact is injected into that session's future
+            // prompt context, so writing it obeys the same viewer gate as
+            // reading the session (psfn-framework-4i11j). Fail closed.
+            const targetChannelId = options.manager.getSessionActivity(sessionId)?.channelId ?? sessionId;
+            if (!canViewerReadSessionChannel(resolveViewerContextFromRequest(), targetChannelId)) {
+              return textResultWithError(
+                `session action="wake_return" refused: ${sessionId} is not writable from this conversation.`,
+                true,
+              );
+            }
             const nextAnchor = normalizeWakeReturnNextAnchor(params.nextAnchor);
             const artifact = options.manager.recordSessionContinuityArtifact({
               sessionId,

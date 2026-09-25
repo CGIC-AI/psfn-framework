@@ -13,6 +13,9 @@ import {
   resolveGatewaySurfaceForChannelType,
 } from './multi-companion.js';
 import type { RuntimeChannelsConfig } from '../../channels/backplane/config.js';
+import { createBuiltinChannelPluginRegistry } from '../../channels/plugins/builtin.js';
+import { parseChannelPluginSections } from '../../channels/plugins/load-sections.js';
+import { EXTERNAL_CHANNEL_TEST_LIMITS } from '../../test-support/external-channel-conformance.js';
 import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { deriveCompanionAuthToken } from './companion-auth.js';
@@ -427,7 +430,7 @@ function fleetPosture(updatedAt: number, utilizationPercent: number) {
   };
 }
 
-function makeChannelMessage(channelType: 'discord' | 'telegram' | 'api' | 'buzz' | 'terminal') {
+function makeChannelMessage(channelType: 'discord' | 'telegram' | 'api' | 'terminal') {
   return fromAny({
     id: `msg-${channelType}-1`,
     channelId: `${channelType}:test-channel`,
@@ -557,29 +560,13 @@ describe('resolveGatewayMultiCompanionConfig', () => {
     channels.discord.companionId = '11111111-1111-4111-8111-111111111111';
     channels.telegram.companionId = '22222222-2222-4222-8222-222222222222';
     channels.api.companionId = '22222222-2222-4222-8222-222222222222';
-    channels.plugins = {
-      multica: {
-        id: 'multica',
-        enabled: true,
-        companionId: '11111111-1111-4111-8111-111111111111',
-        credentials: [],
-        config: {},
-      },
-      buzz: {
-        id: 'buzz',
-        enabled: true,
-        companionId: '22222222-2222-4222-8222-222222222222',
-        credentials: [],
-        config: {},
-      },
-    };
     expect(resolveGatewayMultiCompanionConfig({
       multiCompanion: true,
       companionFleet: resolvedFleet(['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222']),
     }, channels, EMPTY_SATELLITE_REGISTRY)).toEqual({
       enabled: true,
       fleetCompanionIds: ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222'],
-      channelRouting: { discord: '11111111-1111-4111-8111-111111111111', telegram: '22222222-2222-4222-8222-222222222222', api: '22222222-2222-4222-8222-222222222222', multica: '11111111-1111-4111-8111-111111111111', buzz: '22222222-2222-4222-8222-222222222222' },
+      channelRouting: { discord: '11111111-1111-4111-8111-111111111111', telegram: '22222222-2222-4222-8222-222222222222', api: '22222222-2222-4222-8222-222222222222' },
       discordAccounts: {},
       pluginAccounts: {},
       personalWorkspaceByCompanionId: {
@@ -629,62 +616,44 @@ describe('resolveGatewayMultiCompanionConfig', () => {
     });
   });
 
-  it('builds per-account plugin routing from Buzz instances when enabled', () => {
-    const firstCompanionId = '11111111-1111-4111-8111-111111111111';
-    const secondCompanionId = '22222222-2222-4222-8222-222222222222';
-    const channels = baseChannels({
-      plugins: {
-        buzz: {
-          id: 'buzz',
-          enabled: true,
-          credentials: [],
-          config: {},
-          instances: [
-            { id: firstCompanionId, companionId: firstCompanionId, credentials: [], config: {} },
-            { id: secondCompanionId, companionId: secondCompanionId, credentials: [], config: {} },
-          ],
-        },
+  it('routes each external channel adapter to its declared companion', () => {
+    const companionId = '11111111-1111-4111-8111-111111111111';
+    const plugins = parseChannelPluginSections({
+      external: {
+        enabled: true,
+        limits: EXTERNAL_CHANNEL_TEST_LIMITS,
+        adapters: [{
+          id: 'sms', label: 'SMS', companionId, tokenRef: { kind: 'env', envName: 'EXTERNAL_SMS_TOKEN' },
+        }],
       },
-    });
-
-    expect(resolveGatewayMultiCompanionConfig({
+    }, createBuiltinChannelPluginRegistry());
+    const resolved = resolveGatewayMultiCompanionConfig({
       multiCompanion: true,
-      companionFleet: resolvedFleet([firstCompanionId, secondCompanionId]),
-    }, channels, EMPTY_SATELLITE_REGISTRY)).toMatchObject({
-      channelRouting: {},
-      pluginAccounts: {
-        buzz: {
-          [firstCompanionId]: firstCompanionId,
-          [secondCompanionId]: secondCompanionId,
-        },
-      },
-    });
+      companionFleet: resolvedFleet([companionId]),
+    }, baseChannels({ plugins }), EMPTY_SATELLITE_REGISTRY);
+    expect(resolved.pluginAccounts).toEqual({ external: { sms: companionId } });
+    expect(resolveGatewaySurfaceForChannelType('external')).toBe('external');
   });
 
-  it('fails closed when a plugin account names a companion outside the fleet', () => {
-    const knownCompanionId = '11111111-1111-4111-8111-111111111111';
-    const unknownCompanionId = '22222222-2222-4222-8222-222222222222';
+  it('fails closed when plugin accounts have no gateway routing surface', () => {
+    const companionId = '11111111-1111-4111-8111-111111111111';
     const channels = baseChannels({
       plugins: {
-        buzz: {
-          id: 'buzz',
+        probe: {
+          id: 'probe',
           enabled: true,
           credentials: [],
           config: {},
-          instances: [{
-            id: unknownCompanionId,
-            companionId: unknownCompanionId,
-            credentials: [],
-            config: {},
-          }],
+          instances: [{ id: companionId, companionId, credentials: [], config: {} }],
         },
       },
     });
+
     expect(() => resolveGatewayMultiCompanionConfig({
       multiCompanion: true,
-      companionFleet: resolvedFleet([knownCompanionId]),
+      companionFleet: resolvedFleet([companionId]),
     }, channels, EMPTY_SATELLITE_REGISTRY)).toThrow(
-      /routes buzz account.*absent from companions\.json/,
+      'Channel plugin "probe" has no gateway routing surface',
     );
   });
 
@@ -747,11 +716,11 @@ describe('resolveGatewayMultiCompanionConfig', () => {
     }, channels, EMPTY_SATELLITE_REGISTRY)).toThrow(/absent from companions\.json/);
   });
 
-  it('fails closed when Multica names a companion outside the fleet', () => {
+  it('fails closed when a plugin names a companion outside the fleet', () => {
     const channels = baseChannels({
       plugins: {
-        multica: {
-          id: 'multica',
+        probe: {
+          id: 'probe',
           enabled: true,
           companionId: '22222222-2222-4222-8222-222222222222',
           credentials: [],
@@ -763,7 +732,7 @@ describe('resolveGatewayMultiCompanionConfig', () => {
       multiCompanion: true,
       companionFleet: resolvedFleet(['11111111-1111-4111-8111-111111111111']),
     }, channels, EMPTY_SATELLITE_REGISTRY)).toThrow(
-      /channels\.json routes multica.*absent from companions\.json/,
+      /channels\.json routes probe.*absent from companions\.json/,
     );
   });
 
@@ -887,8 +856,8 @@ describe('resolveGatewayMultiCompanionConfig', () => {
     expect(resolveGatewaySurfaceForChannelType('discord')).toBe('discord');
     expect(resolveGatewaySurfaceForChannelType('telegram')).toBe('telegram');
     expect(resolveGatewaySurfaceForChannelType('api')).toBe('api');
-    expect(resolveGatewaySurfaceForChannelType('multica')).toBe('multica');
-    expect(resolveGatewaySurfaceForChannelType('buzz')).toBe('buzz');
+    expect(resolveGatewaySurfaceForChannelType('multica')).toBeNull();
+    expect(resolveGatewaySurfaceForChannelType('buzz')).toBeNull();
     expect(resolveGatewaySurfaceForChannelType('terminal')).toBeNull();
     expect(resolveGatewaySurfaceForChannelType('psfn-amica')).toBeNull();
   });
@@ -2566,14 +2535,14 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
     expect(methodFrames(connB, 'voice.transcript.begin')).toHaveLength(1);
   });
 
-  it('routes a Buzz stream request through the exact configured plugin account', async () => {
+  it('routes a plugin-account stream request through the exact configured plugin account', async () => {
     const firstCompanionId = '11111111-1111-4111-8111-111111111111';
     const secondCompanionId = '22222222-2222-4222-8222-222222222222';
     const routed = { messages: fromAny([]) };
     const { server, connect } = await setupServer({
       ...createMinimalOptions(),
       multiCompanion: multiCompanion({}, {}, {
-        buzz: { [firstCompanionId]: firstCompanionId, [secondCompanionId]: secondCompanionId },
+        api: { [firstCompanionId]: firstCompanionId, [secondCompanionId]: secondCompanionId },
       }),
     });
     const connA = await connect();
@@ -2581,31 +2550,31 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
     await identifyAgent(connA, firstCompanionId, 1);
     await identifyAgent(connB, secondCompanionId, 2);
 
-    const result = await server.requestAgentVoiceStream(makeChannelMessage('buzz'), {
-      channelAccountRoute: { pluginId: 'buzz', accountId: secondCompanionId },
+    const result = await server.requestAgentVoiceStream(makeChannelMessage('api'), {
+      channelAccountRoute: { pluginId: 'api', accountId: secondCompanionId },
     });
     expect(result.content).toBe('voice response');
     expect(methodFrames(connA, 'voice.transcript.begin')).toHaveLength(0);
     expect(methodFrames(connB, 'voice.transcript.begin')).toHaveLength(1);
   });
 
-  it('fails closed when a Buzz stream request omits or invents its plugin account', async () => {
+  it('fails closed when a plugin-account stream request omits or invents its plugin account', async () => {
     const companionId = '11111111-1111-4111-8111-111111111111';
     const { server, connect } = await setupServer({
       ...createMinimalOptions(),
-      multiCompanion: multiCompanion({}, {}, { buzz: { [companionId]: companionId } }),
+      multiCompanion: multiCompanion({}, {}, { api: { [companionId]: companionId } }),
     });
     const conn = await connect();
     await identifyAgent(conn, companionId, 1);
 
-    await expect(server.requestAgentVoiceStream(makeChannelMessage('buzz')))
-      .rejects.toThrow('Multi-account buzz routing requires an account route');
-    await expect(server.requestAgentVoiceStream(makeChannelMessage('buzz'), {
-      channelAccountRoute: { pluginId: 'buzz', accountId: 'unknown-account' },
-    })).rejects.toThrow('no companion for buzz account "unknown-account"');
-    await expect(server.requestAgentVoiceStream(makeChannelMessage('buzz'), {
-      channelAccountRoute: { pluginId: 'multica', accountId: companionId },
-    })).rejects.toThrow('Channel plugin "multica" cannot route channel surface "buzz"');
+    await expect(server.requestAgentVoiceStream(makeChannelMessage('api')))
+      .rejects.toThrow('Multi-account api routing requires an account route');
+    await expect(server.requestAgentVoiceStream(makeChannelMessage('api'), {
+      channelAccountRoute: { pluginId: 'api', accountId: 'unknown-account' },
+    })).rejects.toThrow('no companion for api account "unknown-account"');
+    await expect(server.requestAgentVoiceStream(makeChannelMessage('api'), {
+      channelAccountRoute: { pluginId: 'probe', accountId: companionId },
+    })).rejects.toThrow('Channel plugin "probe" cannot route channel surface "api"');
     expect(methodFrames(conn, 'voice.transcript.begin')).toHaveLength(0);
   });
 
@@ -3714,73 +3683,6 @@ describe('GatewayServer multi-account discord routing (flag on, W1-P2)', () => {
     expect(dockA.sendText).toHaveBeenCalledWith({ channelId: 'ch-1' }, 'from companion a');
     expect(dockB.sendText).toHaveBeenCalledTimes(1);
     expect(dockB.sendText).toHaveBeenCalledWith({ channelId: 'ch-1' }, 'from companion b');
-  });
-
-  it('sends channel.send through the calling companion\'s own Buzz plugin account', async () => {
-    const companionA = '11111111-1111-4111-8111-111111111111';
-    const companionB = '22222222-2222-4222-8222-222222222222';
-    const buzzA = createAccountDock('buzz:acct-a');
-    const buzzB = createAccountDock('buzz:acct-b');
-    const { connect } = await setupServer({
-      ...createMinimalOptions(),
-      pluginOutboundRoutes: [
-        { pluginId: 'buzz', accountId: 'acct-a', companionId: companionA, dock: buzzA.dock },
-        { pluginId: 'buzz', accountId: 'acct-b', companionId: companionB, dock: buzzB.dock },
-      ],
-      multiCompanion: multiCompanion({}, {}, {
-        buzz: { 'acct-a': companionA, 'acct-b': companionB },
-      }),
-    });
-    const connA = await connect();
-    const connB = await connect();
-    await identifyAgent(connA, companionA, 1);
-    await identifyAgent(connB, companionB, 2);
-
-    const responseA = await invokeRpc(connA, 10, 'channel.send', {
-      channelType: 'buzz',
-      channelId: 'buzz:relay:room-1',
-      content: 'from companion a',
-    });
-    const responseB = await invokeRpc(connB, 11, 'channel.send', {
-      channelType: 'buzz',
-      channelId: 'buzz:relay:room-1',
-      content: 'from companion b',
-    });
-
-    expect(responseA.result).toEqual({ success: true });
-    expect(responseB.result).toEqual({ success: true });
-    expect(buzzA.sendText).toHaveBeenCalledWith(
-      { channelId: 'buzz:relay:room-1' },
-      'from companion a',
-    );
-    expect(buzzB.sendText).toHaveBeenCalledWith(
-      { channelId: 'buzz:relay:room-1' },
-      'from companion b',
-    );
-  });
-
-  it('rejects channel.send when the calling companion owns no Buzz account', async () => {
-    const companionA = '11111111-1111-4111-8111-111111111111';
-    const companionB = '22222222-2222-4222-8222-222222222222';
-    const buzzA = createAccountDock('buzz:acct-a');
-    const { connect } = await setupServer({
-      ...createMinimalOptions(),
-      pluginOutboundRoutes: [
-        { pluginId: 'buzz', accountId: 'acct-a', companionId: companionA, dock: buzzA.dock },
-      ],
-      multiCompanion: multiCompanion({}, {}, { buzz: { 'acct-a': companionA } }),
-    });
-    const connB = await connect();
-    await identifyAgent(connB, companionB, 1);
-
-    const response = await invokeRpc(connB, 12, 'channel.send', {
-      channelType: 'buzz',
-      channelId: 'buzz:relay:room-1',
-      content: 'stolen egress',
-    });
-
-    expect(response.error?.message).toContain('does not own exactly one buzz account');
-    expect(buzzA.sendText).not.toHaveBeenCalled();
   });
 
   it('rejects outbound discord sends from a companion that owns no bot account', async () => {

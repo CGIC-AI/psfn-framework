@@ -36,8 +36,10 @@
  *   boundary and become autonomous room speech.
  *
  * Scope note (jp36.5.1.3): this promotion path is gated OFF by default and may
- * deliver to the room transports that expose an account-routed gateway sender
- * (`discord` and `buzz`). Unsupported channel types fail closed. A follow-up
+ * deliver to the room transport that exposes an account-routed gateway sender
+ * (`discord`, plus `telegram` and `external` through the gateway's
+ * `channel.sendRoomReply` outbound, ze2fx). Unsupported channel types fail
+ * closed. A follow-up
  * should route generation through the full normal response
  * path and its egress gates per bible §8.2, and add reaction delivery (§8.3)
  * once a `discord.sendReaction` RPC exists.
@@ -87,9 +89,22 @@ export interface EgressReplyGenerator {
   ): Promise<AgentResponse>;
 }
 
+/** Room transports an autonomous reply can be delivered to (ze2fx). */
+type EgressReplyChannelType = 'discord' | 'telegram' | 'external';
+
+const EGRESS_REPLY_CHANNEL_TYPES: ReadonlySet<string> = new Set<EgressReplyChannelType>([
+  'discord',
+  'telegram',
+  'external',
+]);
+
+function isEgressReplyChannelType(value: string): value is EgressReplyChannelType {
+  return EGRESS_REPLY_CHANNEL_TYPES.has(value);
+}
+
 /** Delivery primitive: send text to a channel (the gateway sender). */
 export interface EgressReplyDelivery {
-  send(channelType: 'discord' | 'buzz', channelId: string, content: string): Promise<void>;
+  send(channelType: EgressReplyChannelType, channelId: string, content: string): Promise<void>;
 }
 
 /** Narrow append seam for the companion's own delivered room reply. */
@@ -370,10 +385,8 @@ export function createAgentLoopEgressReplySender(
 
   return {
     async deliver(request: EgressReplyDeliveryRequest): Promise<EgressReplyDeliveryResult> {
-      if (
-        request.trigger.channelType !== 'discord'
-        && request.trigger.channelType !== 'buzz'
-      ) {
+      const channelType = request.trigger.channelType;
+      if (!isEgressReplyChannelType(channelType)) {
         return { outcome: 'failed', detail: 'unsupported_channel_type' };
       }
 
@@ -427,7 +440,7 @@ export function createAgentLoopEgressReplySender(
             schemaVersion: 1,
             sourceEventId: request.trigger.sourceEventId,
             channelId: request.trigger.channelId,
-            channelType: request.trigger.channelType,
+            channelType,
           },
         },
       };
@@ -496,7 +509,7 @@ export function createAgentLoopEgressReplySender(
       fencedEvents.set(fenceKey, fence);
       try {
         await deps.delivery.send(
-          request.trigger.channelType,
+          channelType,
           request.trigger.channelId,
           reply,
         );

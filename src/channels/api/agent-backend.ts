@@ -30,6 +30,7 @@ import type {
   ApiChatCompletionCancelRpcParams,
   ApiChatCompletionCancelRpcResult,
   ApiChatCompletionRpcParams,
+  FleetGardenContactBinding,
   ApiChatCompletionRpcResult,
   ApiCompanionUiKeyShardActionRpcParams,
   ApiCompanionUiShardActionRpcParams,
@@ -378,6 +379,7 @@ export class AgentApiBackend {
       hubDevicePrincipal: params.hubDevicePrincipal,
       hubDeviceAttachment: params.hubDeviceAttachment,
       companionUiCapability: params.companionUiCapability,
+      fleetGardenContact: params.fleetGardenContact,
       timeoutMs: params.timeoutMs,
       performance: params.performance,
       onDelta: params.request.stream && this.onStreamDelta
@@ -498,6 +500,7 @@ export class AgentApiBackend {
     hubDevicePrincipal?: HubDevicePrincipalSnapshot;
     hubDeviceAttachment?: HubDeviceAttachmentSnapshot;
     companionUiCapability?: ApiChatCompletionRpcParams['companionUiCapability'];
+    fleetGardenContact?: FleetGardenContactBinding;
     onDelta?: (text: string) => void | Promise<void>;
     signal?: AbortSignal;
     timeoutMs?: number;
@@ -581,6 +584,7 @@ export class AgentApiBackend {
         params.clientCert,
         params.hubDevicePrincipal,
         params.hubDeviceAttachment,
+        params.fleetGardenContact,
         activeRequest.signal,
         channelId => {
           activeRequest.setChannelId(channelId);
@@ -627,8 +631,16 @@ export class AgentApiBackend {
 
       turnCompletion = this.observeTurnCompletion(pendingTurn.value.substrateMsg.id);
       activeRequest.markActive();
+      // p3of8: without a live delta consumer this reply is delivered only on
+      // completion, so a model stream that fails mid-reply may still fall back.
+      const turnMessage = params.onDelta
+        ? pendingTurn.value.substrateMsg
+        : {
+          ...pendingTurn.value.substrateMsg,
+          routing: { ...(pendingTurn.value.substrateMsg.routing ?? {}), bufferedTextDelivery: true as const },
+        };
       const turnPromise = this.agentLoop.handleMessage(
-        pendingTurn.value.substrateMsg,
+        turnMessage,
         undefined,
         pendingTurn.value.conversationScope
           ? { conversationScope: pendingTurn.value.conversationScope }
@@ -1326,6 +1338,52 @@ export class AgentApiBackend {
     };
   }
 
+  /**
+   * Fleet Garden chat for an SSO principal (psfn-framework-upwko). The gateway
+   * already resolved principal -> contact through its fleet authorization
+   * snapshot, so no browser identity-claim ceremony applies; the agent still
+   * fails closed unless the binding matches the RPC principal and turn
+   * author, carries no competing header claim, names an existing contact,
+   * and does not contradict an existing api identity link.
+   */
+  private async verifyFleetGardenContact(input: {
+    headers: ApiRpcHeaders;
+    principal: ApiAuthPrincipal;
+    authorId: string;
+    binding: FleetGardenContactBinding;
+    hubDevice: boolean;
+  }): Promise<true | ApiRpcFailure> {
+    const { binding } = input;
+    if (input.hubDevice) {
+      return this.fail(403, 'fleet_contact_binding_invalid', 'Fleet Garden contact cannot accompany a Hub device turn');
+    }
+    if (input.principal.id !== binding.principalId || input.authorId !== binding.principalId) {
+      return this.fail(403, 'fleet_contact_principal_mismatch', 'Fleet Garden contact does not belong to this principal');
+    }
+    if (this.readIdentityClaimHeaders(input.headers) !== null) {
+      return this.fail(400, 'fleet_contact_claim_conflict', 'Fleet Garden chat must not carry an identity claim header');
+    }
+    if (!this.contactStore) {
+      return this.fail(
+        503,
+        'identity_claim_unavailable',
+        'Identity claim verification is unavailable because contact store is not configured',
+      );
+    }
+    if (!await this.contactStore.getById(binding.contactId)) {
+      return this.fail(404, 'identity_claim_contact_not_found', `Canonical contact ${binding.contactId} was not found`);
+    }
+    const existingApiIdentity = await this.contactStore.getByChannelIdentity('api', input.authorId);
+    if (existingApiIdentity && existingApiIdentity.id !== binding.contactId) {
+      return this.fail(
+        409,
+        'identity_claim_conflict',
+        `API identity api:${input.authorId} is already linked to another canonical contact`,
+      );
+    }
+    return true;
+  }
+
   private async enforceIdentityClaim(
     headers: ApiRpcHeaders,
     authorId: string,
@@ -1657,6 +1715,7 @@ export class AgentApiBackend {
     clientCert: SatelliteClientCertIdentity | undefined,
     hubDevicePrincipal: HubDevicePrincipalSnapshot | undefined,
     hubDeviceAttachment: HubDeviceAttachmentSnapshot | undefined,
+    fleetGardenContact: FleetGardenContactBinding | undefined,
     signal: AbortSignal,
     onChannelResolved: (channelId: string) => void,
   ): Promise<{ ok: true; value: PendingTurn } | { ok: false; error: ApiRpcFailure }> {
@@ -1849,7 +1908,18 @@ export class AgentApiBackend {
     }
     onChannelResolved(channelId);
 
-    if (!hubDevicePrincipal) {
+    if (fleetGardenContact) {
+      const binding = await this.verifyFleetGardenContact({
+        headers,
+        principal,
+        authorId,
+        binding: fleetGardenContact,
+        hubDevice: hubDevicePrincipal !== undefined,
+      });
+      if (binding !== true) {
+        return { ok: false, error: binding };
+      }
+    } else if (!hubDevicePrincipal) {
       const identityClaim = await this.enforceIdentityClaim(headers, authorId);
       if (identityClaim !== true) {
         return { ok: false, error: identityClaim };
@@ -1863,9 +1933,11 @@ export class AgentApiBackend {
       };
     }
 
-    const canonicalContactId = hubDevicePrincipal
-      ? hubDeviceCanonicalContactId
-      : this.readHeader(headers, 'x-canonical-contact-id', 256) ?? claimedCanonicalContactId;
+    const canonicalContactId = fleetGardenContact
+      ? fleetGardenContact.contactId
+      : hubDevicePrincipal
+        ? hubDeviceCanonicalContactId
+        : this.readHeader(headers, 'x-canonical-contact-id', 256) ?? claimedCanonicalContactId;
     const resolvedChannelPrivacy = channelPrivacy.value ?? claimedChannelPrivacy;
     if (source !== 'api' && !hubDevicePrincipal) {
       // A speaker-named satellite turn carries its contact mapping in the

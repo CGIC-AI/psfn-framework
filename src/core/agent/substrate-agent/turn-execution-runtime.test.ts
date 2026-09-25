@@ -840,6 +840,7 @@ function createRuntime(params: {
       sessionId: logicalSessionId,
     })),
     withCorrelationPurpose: vi.fn((correlation, purpose) => ({ ...correlation, purpose })),
+    viewerCeiling: vi.fn(() => null),
     countResolvableSpeakerContacts: vi.fn(async () => 0),
     resolveParticipantRelationships: vi.fn(async () => []),
     resolveAuthorContext: params.resolveAuthorContext ?? vi.fn(() => ({
@@ -2535,6 +2536,101 @@ describe('handleMessageForTurn fatigue enforcement', () => {
       fatigueReasonCode: 'fatigue_exhausted',
     });
     expect(history.events).toHaveLength(0);
+  });
+
+  function reservationsReturning(
+    snapshot: () => { normalSpentBefore: number; relationshipPressure: number },
+  ): IcpFatigueRegulationReservationPort & {
+    reserve: ReturnType<typeof vi.fn>;
+    finalize: ReturnType<typeof vi.fn>;
+    handoff: ReturnType<typeof vi.fn>;
+  } {
+    return {
+      reserve: vi.fn(async () => {
+        const current = snapshot();
+        return {
+          outcome: 'reserved' as const,
+          reservationOutcome: 'pending' as const,
+          normalSpentBefore: current.normalSpentBefore,
+          overchargeSpentBefore: 0,
+          relationshipPressure: current.relationshipPressure,
+          rootNormalSpent: 0,
+          rootOverchargeSpent: 0,
+          contributingReservationCount: 1,
+        };
+      }),
+      readInitiationPressure: vi.fn(),
+      prepareDelivery: vi.fn(async () => undefined),
+      handoff: vi.fn(async () => undefined),
+      finalize: vi.fn(async () => undefined),
+      close: vi.fn(),
+    };
+  }
+
+  it('moves to the paid phase instead of crashing when carry-over rounds up to the soft limit (kfu2s)', async () => {
+    const localCompanionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const peerCompanionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    let snapshot = { normalSpentBefore: 0, relationshipPressure: 0 };
+    const reservations = reservationsReturning(() => snapshot);
+    const { fatigueBudget } = createFatigueBudgetHarness();
+    const { runtime } = createFatigueRuntime({
+      fatigueBudget,
+      fatigueRegulationReservations: reservations,
+      configOverrides: { multiCompanion: true, companionId: localCompanionId },
+    });
+    const probe = await handleMessageForTurn(runtime, createInboundIcpFatigueMessage({
+      id: 'kfu2s-probe',
+      localCompanionId,
+      peerCompanionId,
+      turnId: '77777777-7777-4777-8777-7777777777a1',
+    }));
+    const softLimit = probe.metadata.fatigue!.budget.softLimit;
+
+    // r6: this side's decayed carry-over (7.6 of 8) rounds up to the soft
+    // limit in the integer spend while the raw pressure stays below it.
+    snapshot = { normalSpentBefore: softLimit, relationshipPressure: softLimit - 0.4 };
+    const response = await runWithChargeContext({
+      chargePolicy: runtime.config.chargePolicy!,
+      eventBus: runtime.eventBus,
+      lane: 'interactive',
+      runId: 'kfu2s-at-soft-limit',
+    }, async () => await handleMessageForTurn(runtime, createInboundIcpFatigueMessage({
+      id: 'kfu2s-at-soft-limit',
+      localCompanionId,
+      peerCompanionId,
+      turnId: '77777777-7777-4777-8777-7777777777a2',
+    })));
+
+    expect(response.content).toBe('assistant reply');
+    expect(response.metadata.fatigue).toMatchObject({
+      policyBaseState: 'soft_exhausted',
+      decision: 'wrap_up_charged',
+      socialRegulation: { state: 'charge_lane_active', chargeLane: 'companion_social' },
+    });
+  });
+
+  it('fails and releases a reserved slot whose reconciliation throws, then rethrows (kfu2s)', async () => {
+    const localCompanionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const peerCompanionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    // A charged slot reported at the hard limit is contradictory and makes
+    // reconciliation throw after the durable row was already reserved.
+    const reservations = reservationsReturning(() => ({ normalSpentBefore: 1_000, relationshipPressure: 1_000 }));
+    const { fatigueBudget } = createFatigueBudgetHarness();
+    const { runtime } = createFatigueRuntime({
+      fatigueBudget,
+      fatigueRegulationReservations: reservations,
+      configOverrides: { multiCompanion: true, companionId: localCompanionId },
+    });
+
+    await expect(handleMessageForTurn(runtime, createInboundIcpFatigueMessage({
+      id: 'kfu2s-reconcile-throws',
+      localCompanionId,
+      peerCompanionId,
+      turnId: '77777777-7777-4777-8777-7777777777a3',
+    }))).rejects.toThrow('charged slot after hard exhaustion');
+    expect(reservations.finalize).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'failed' }));
+    expect(reservations.handoff).toHaveBeenCalledOnce();
+    expect(runtime.agent.prompt).not.toHaveBeenCalled();
   });
 
   it('marks an already-exhausted ICP reply with the terminal fatigue reason', async () => {
@@ -4859,14 +4955,16 @@ describe('handleMessageForTurn compaction scheduling', () => {
       endForegroundBackgroundWork,
     });
     const requestId = 'msg-foreground-provider-loss';
-    (runtime.agent as unknown as { activeRun: unknown }).activeRun = {
-      requestId,
-      abortController: providerController,
-    };
     runtime.agent.abort = vi.fn(() => {
       providerController.abort(new Error('provider aborted after foreground ownership loss'));
     });
     runtime.agent.prompt = vi.fn(async () => {
+      // The run claims the agent when prompt starts, as the patched loop does
+      // (a pre-existing run would refuse this turn, psfn-framework-97epu).
+      (runtime.agent as unknown as { activeRun: unknown }).activeRun = {
+        requestId,
+        abortController: providerController,
+      };
       providerStarted.resolve();
       await new Promise<void>((_resolve, reject) => {
         if (providerController.signal.aborted) {

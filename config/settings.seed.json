@@ -229,7 +229,11 @@
       "companion_self",
       "current_author",
       "explicitly_relevant_subject"
-    ]
+    ],
+    "companionPortabilityChoice": {
+      "enabled": false,
+      "maximumSensitivity": "personal"
+    }
   },
   "memoryPresentationProfile": {
     "version": 1,
@@ -301,7 +305,7 @@
       "recentParticipantWindowMessages": 75,
       "recentParticipantWindowMs": 21600000,
       "minDistinctHumanContacts": 2,
-      "groupCapableChannelTypes": ["discord", "buzz"],
+      "groupCapableChannelTypes": ["discord"],
       "fallbackModeWhenOneHuman": "direct",
       "excludeCompanionContact": true,
       "excludeSystemContacts": true,

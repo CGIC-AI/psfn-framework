@@ -94,6 +94,7 @@ describe('resolveTestingSessionPurgeTarget', () => {
             characterCardPath: join(companionDataDir, 'companion.json'),
             personalWorkspacePath: join(runtimeRoot, 'workspaces', 'personal', COMPANION_A),
             postgresSchema: 'companion_alpha',
+            postgresRole: 'companion_alpha_runtime',
           },
           {
             companionId: COMPANION_B,
@@ -101,6 +102,7 @@ describe('resolveTestingSessionPurgeTarget', () => {
             characterCardPath: join(companionBDataDir, 'companion.json'),
             personalWorkspacePath: join(runtimeRoot, 'workspaces', 'personal', COMPANION_B),
             postgresSchema: 'companion_beta',
+            postgresRole: 'companion_beta_runtime',
           },
         ],
       } as SubstrateConfig['companionFleet'],
@@ -112,6 +114,7 @@ describe('resolveTestingSessionPurgeTarget', () => {
     expect(resolveTestingSessionPurgeTarget(runtime, { companionId: COMPANION_B })).toEqual({
       companionDataDir: resolve(companionBDataDir),
       companionId: COMPANION_B,
+      postgresRole: 'companion_beta_runtime',
       postgresSchema: 'companion_beta',
       sessionsDir: resolve(companionBDataDir, 'state', 'sessions'),
     });
@@ -138,6 +141,7 @@ describe('resolveTestingSessionPurgeTarget', () => {
           characterCardPath: join(companionDataDir, 'companion.json'),
           personalWorkspacePath: join(runtimeRoot, 'workspaces', 'personal', COMPANION_A),
           postgresSchema: '',
+          postgresRole: 'companion_alpha_runtime',
         }],
       } as unknown as SubstrateConfig['companionFleet'],
     });
@@ -146,5 +150,33 @@ describe('resolveTestingSessionPurgeTarget', () => {
       { config, dataDir: resolve(systemDataDir) },
       { companionId: COMPANION_A },
     )).toThrow(TestingSessionPurgeSchemaResolutionError);
+  });
+
+  it('fails closed when a multi-companion target has no companions.json postgresRole (p9jea)', () => {
+    const { runtimeRoot, systemDataDir, companionDataDir } = makeLiveRoots();
+    const config = createTestConfig({
+      dataDir: systemDataDir,
+      systemDataDir,
+      companionDataDir,
+      multiCompanion: true,
+      companionFleet: {
+        persistenceRoot: runtimeRoot,
+        workspacesRoot: join(runtimeRoot, 'workspaces'),
+        sharedWorkspacePath: join(runtimeRoot, 'workspaces', 'shared'),
+        companions: [{
+          companionId: COMPANION_A,
+          companionDataDir,
+          characterCardPath: join(companionDataDir, 'companion.json'),
+          personalWorkspacePath: join(runtimeRoot, 'workspaces', 'personal', COMPANION_A),
+          postgresSchema: 'companion_alpha',
+          postgresRole: ' ',
+        }],
+      } as unknown as SubstrateConfig['companionFleet'],
+    });
+
+    expect(() => resolveTestingSessionPurgeTarget(
+      { config, dataDir: resolve(systemDataDir) },
+      { companionId: COMPANION_A },
+    )).toThrow('Cannot determine PostgreSQL role');
   });
 });

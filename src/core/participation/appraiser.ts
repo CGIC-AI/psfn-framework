@@ -11,6 +11,17 @@ import {
   type ParticipationAppraiserSettings,
 } from '../../system/config/participation-config.js';
 import { parseParticipationAppraisal } from './appraisal-parser.js';
+import {
+  renderAppraiserOperatorGuidance,
+  type AppraiserOperatorGuidance,
+} from './operator-guidance.js';
+import type { DecisionRuntime } from '../../primitives/llm/decision/decide.js';
+import {
+  appraisalFromDecision,
+  appraisalToDecisionOutcome,
+  buildAppraisalDecisionQuestions,
+  buildAppraisalDecisionState,
+} from './appraiser-decision.js';
 import type {
   ParticipationAppraisal,
   ParticipationAppraisalResult,
@@ -56,6 +67,20 @@ export interface ParticipationAppraiserOptions {
   /** Owning companion id for cost attribution; omitted in bare test rigs. */
   companionId?: string;
   settings?: ParticipationAppraiserSettings;
+  /**
+   * Typed decision runtime (epic 4lf3r, site `participation.appraise`). When
+   * absent, or when the site resolves to local, the appraisal below runs
+   * exactly as before and the runtime is never consulted.
+   */
+  decisions?: Pick<DecisionRuntime, 'decide' | 'effectiveMode' | 'siteSettings'>;
+  /**
+   * psfn-framework-9iooo: the companion's operator-authored prompt layers
+   * (see selectAppraiserOperatorGuidance), read at each appraisal so an edit
+   * applies without a restart. Only the local appraisal sees them: prompt
+   * layers carry no privacy class, so they are treated as companion-private
+   * and never sent to a remote decision backend.
+   */
+  operatorGuidance?: () => readonly AppraiserOperatorGuidance[];
 }
 
 const TIMEOUT_SENTINEL = Symbol('participation-appraiser-timeout');
@@ -65,18 +90,92 @@ export class ParticipationAppraiser {
   private readonly companionName: string;
   private readonly companionId?: string;
   private readonly settings: ParticipationAppraiserSettings;
+  private readonly decisions?: ParticipationAppraiserOptions['decisions'];
+  private readonly operatorGuidance?: ParticipationAppraiserOptions['operatorGuidance'];
 
   constructor(options: ParticipationAppraiserOptions) {
     this.llmProvider = options.llmProvider;
     this.companionName = options.companionName;
     this.companionId = options.companionId;
     this.settings = options.settings ?? createDefaultParticipationAppraiserSettings();
+    this.decisions = options.decisions;
+    this.operatorGuidance = options.operatorGuidance;
   }
 
   async appraise(candidate: ParticipationCandidate): Promise<ParticipationAppraisalResult> {
     if (!this.settings.enabled) {
       return failClosed('appraiser_disabled');
     }
+    const siteId = appraisalSiteFor(candidate);
+    if (!this.decisions || this.decisions.effectiveMode(siteId) === 'local') {
+      return await this.appraiseLocally(candidate);
+    }
+    return await this.appraiseWithDecision(candidate, this.decisions, siteId);
+  }
+
+  /**
+   * Remote or shadow appraisal through decide(). The local strategy is the
+   * unchanged background-model appraisal: shadow and every fallback return its
+   * exact result; only a successful remote answer is mapped.
+   */
+  private async appraiseWithDecision(
+    candidate: ParticipationCandidate,
+    decisions: NonNullable<ParticipationAppraiserOptions['decisions']>,
+    siteId: AppraisalSiteId,
+  ): Promise<ParticipationAppraisalResult> {
+    let local: ParticipationAppraisalResult | undefined;
+    const surface = candidate.participationSurface ?? 'group_room';
+    const outcome = await decisions.decide({
+      siteId,
+      state: buildAppraisalDecisionState({
+        companionName: this.companionName,
+        surface,
+        summons: describeSummons(candidate),
+        triggerAuthor: sanitizeDisplayName(candidate.triggerAuthorName),
+        transcript: this.transcriptEntries(candidate),
+      }),
+      questions: buildAppraisalDecisionQuestions(surface),
+      workSpec: buildLLMWorkSpec({
+        purpose: 'decision',
+        durable: false,
+        deadlineMs: this.settings.appraisalDeadlineMs,
+        correlation: this.buildCorrelation(candidate),
+      }),
+    }, {
+      localStrategy: async () => {
+        const startedAt = Date.now();
+        local = await this.appraiseLocally(candidate);
+        return appraisalToDecisionOutcome(local, Date.now() - startedAt);
+      },
+    });
+    if (local) return local;
+    if (!outcome.ok) return failClosed('appraiser_error');
+    const appraisal = appraisalFromDecision(
+      outcome.answers,
+      decisions.siteSettings(siteId)?.threshold,
+    );
+    return appraisal ? { appraisal, failClosed: false } : failClosed('appraiser_unparseable');
+  }
+
+  private transcriptEntries(
+    candidate: ParticipationCandidate,
+  ): Array<{ author: string; text: string; trigger: boolean }> {
+    const cap = this.settings.transcriptMessageChars;
+    return [
+      ...candidate.precedingContext.slice(-this.settings.transcriptMessageCap).map((message) => ({
+        author: sanitizeDisplayName(message.authorName),
+        text: sanitizeMessageBody(message.content, cap),
+        trigger: false,
+      })),
+      {
+        author: sanitizeDisplayName(candidate.triggerAuthorName),
+        text: sanitizeMessageBody(candidate.triggerContent, cap),
+        trigger: true,
+      },
+    ];
+  }
+
+  private async appraiseLocally(candidate: ParticipationCandidate): Promise<ParticipationAppraisalResult> {
 
     const controller = new AbortController();
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
@@ -113,6 +212,12 @@ export class ParticipationAppraiser {
         return failClosed('appraiser_timeout');
       }
 
+      // 9z2z9: an answer cut off by the output budget (reasoning tokens count
+      // against it) is a sizing failure, distinct from an unparseable answer.
+      // Any object in it may be a draft, so none is trusted as the verdict.
+      if (outcome.stopReason === 'length') {
+        return failClosed('appraiser_truncated');
+      }
       const parsed = parseParticipationAppraisal(outcome.content);
       if (parsed === null) {
         return failClosed('appraiser_unparseable');
@@ -138,6 +243,10 @@ export class ParticipationAppraiser {
       systemPrompt: buildAppraiserSystemPrompt(
         this.companionName,
         candidate.participationSurface ?? 'group_room',
+        renderAppraiserOperatorGuidance(
+          this.operatorGuidance?.() ?? [],
+          this.settings.operatorGuidanceMaxChars,
+        ),
       ),
       messages: [userMessage],
     };
@@ -220,6 +329,42 @@ export class ParticipationAppraiser {
   }
 }
 
+type AppraisalSiteId = 'participation.appraise' | 'participation.appraise_dm';
+
+/**
+ * A private companion-dm (ICP) appraisal carries that conversation's history
+ * and is a companion_private decision site, so it always runs on the local
+ * backend; only group-room appraisal may use a remote backend.
+ */
+function appraisalSiteFor(candidate: ParticipationCandidate): AppraisalSiteId {
+  return candidate.participationSurface === 'companion_dm' ? 'participation.appraise_dm' : 'participation.appraise';
+}
+
+function describeSummons(candidate: ParticipationCandidate): string {
+  if (candidate.participationSurface === 'companion_dm') return 'private companion conversation';
+  if (candidate.trigger === 'contextual_continuation') {
+    return 'nobody named you; you are already taking part in this conversation';
+  }
+  return candidate.matchedDirectAddress ? 'you were addressed directly' : 'your name/alias was mentioned in passing';
+}
+
+/**
+ * Fail-closed reasons that describe the appraisal machinery failing, not a
+ * decision about the conversation (0eq2x). `appraiser_unavailable` is the
+ * caller's reason when no appraiser result exists at all.
+ */
+const APPRAISER_SYSTEM_FAILURE_REASONS: ReadonlySet<string> = new Set([
+  'appraiser_timeout',
+  'appraiser_error',
+  'appraiser_unparseable',
+  'appraiser_truncated',
+  'appraiser_unavailable',
+]);
+
+export function isAppraiserSystemFailureReason(reason: string | undefined): boolean {
+  return reason !== undefined && APPRAISER_SYSTEM_FAILURE_REASONS.has(reason);
+}
+
 function failClosed(reason: string): ParticipationAppraisalResult {
   const appraisal: ParticipationAppraisal = {
     action: 'ignore',
@@ -232,6 +377,7 @@ function failClosed(reason: string): ParticipationAppraisalResult {
 function buildAppraiserSystemPrompt(
   companionName: string,
   surface: 'group_room' | 'companion_dm',
+  operatorGuidance: string,
 ): string {
   const situation = surface === 'companion_dm'
     ? [
@@ -254,7 +400,9 @@ function buildAppraiserSystemPrompt(
     '- A name inside quoted logs, code, a user list, or a reference to a DM is usually NOT an'
       + ' invitation to speak; distinguish a same-named human or a mention-about-the-companion'
       + ' from an actual summons.',
-    'Respond with exactly one JSON object and nothing else, matching this contract:',
+    ...(operatorGuidance ? [operatorGuidance] : []),
+    'Keep any deliberation short. Respond with exactly one JSON object and nothing else,'
+      + ' matching this contract:',
     '  { "action": "ignore" | "react" | "reply", "reasonCode": string, "confidence": number }',
     'When action is "react", also include "reactionClass": string (a short semantic class such'
       + ' as "acknowledge", "agree", or "amused").',

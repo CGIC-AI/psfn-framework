@@ -310,7 +310,18 @@ schema versions (`npm run migrate:intake-policy-owner`). Key sections:
   for the deterministic URL scanner; must deny at least one scheme.
 - **`quarantine`**: held-item TTL and maximum held items.
 - **`injectionClassifier`**: L1.5 label threshold plus per-tier score
-  thresholds.
+  thresholds, and an optional `maxContentChars` bound on the span the ONNX
+  classifier scores (default: `l2Screener.maxContentChars`). Longer content is
+  scored over its leading span and escalated fail closed with a maximal L1.5
+  score, so an oversized page always reaches deep screening while the
+  classifier's CPU work stays bounded. Tokenization and inference run on a
+  bounded worker-thread pool (`injectionClassifier.worker`: `poolSize`,
+  `queueMax`, `callTimeoutMs`), never on the gateway event loop; each worker
+  loads the model once and uses one ONNX thread. A fleet gateway shares one
+  classifier and one pool across every companion (the model is identical);
+  companion attribution and audit stay in each companion's composition. A full queue, a timed-out
+  call or a crashed worker (which is replaced) leaves the content unscored,
+  and the gateway escalates it fail closed with a maximal L1.5 score.
 - **`l2Screener`**: per-tier escalation thresholds, mandatory tiers, per-tier
   fail-closed action (`quarantine` for high-risk, `l1_labels_only` for
   trusted), timeout and content cap.
@@ -415,7 +426,19 @@ sees untrusted content but holds no tools and no capabilities. `evaluateL2`
 skips L2 for below-threshold, non-mandatory items (the trusted-tier fast path
 pays no latency), runs `screenL2` when the item escalates, and on failure
 produces a **per-tier fail-closed outcome** — quarantine for high-risk sources,
-L1-labels-only for trusted — never a silent pass. A flagged L2 verdict (or an
+L1-labels-only for trusted — never a silent pass. The fail-closed outcome
+carries a content-free cause (`timeout`, `provider_rejected`, or `failed`), and
+the semantic trace records it, so an `l2Screener.timeoutMs` too short for the
+routed `background` model shows up as timeouts rather than provider failures.
+The seed sizes the timeout for reasoning-class background models (30 s, the
+same order as L3); reduce it only for a fast non-reasoning classifier model.
+Every L2, L3 and vision screener provider dispatch (including the one
+schema-repair retry) writes a `model_usage_events` row with `originStage`
+`intake:<tier>`, priced from the routed models.json entry and attributed to the
+screening companion. A screener model with no registry pricing is logged once
+and not ledgered, because an unpriced row would count as unknown cost and block
+every later dispatch under an enabled budget.
+A flagged L2 verdict (or an
 L3-mandatory tier) returns an `escalate_l3` outcome; L2 routes, it never decides
 the L3 verdict (`l2-screener.ts#L1-L38`).
 
@@ -423,7 +446,12 @@ the L3 verdict (`l2-screener.ts#L1-L38`).
 
 `src/boundary/gateway/intake/l3-screener.ts` is the deep pass on the canonical
 `reasoning` purpose (optional dual-model mode adds the `background` purpose and
-aggregates with either-flags fail-closed). **Hard rule**: anything that reaches
+aggregates with either-flags fail-closed). The verbatim-quote guard rejects a
+safe representation that repeats eight or more consecutive words, or any
+unbroken token of 24 or more characters, of the screened content; the one
+schema-repair attempt tells the model which rule it broke. A reasoning model
+that spends the whole `l3Screener.maxOutputTokens` cap thinking fails closed
+with an error naming that cap (the seed allows 4096 tokens). **Hard rule**: anything that reaches
 L3 writes an auditable CogSec event. In enforce posture, flagged or
 failed-closed content is quarantined; cleared content is released_sanitized as
 the **safe representation** (bounded neutral summary + typed extracted fields,

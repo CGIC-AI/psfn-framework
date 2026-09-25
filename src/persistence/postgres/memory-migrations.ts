@@ -804,4 +804,27 @@ export const POSTGRES_MEMORY_MIGRATIONS = [
     updated_at = (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT
   WHERE EXISTS (SELECT 1 FROM repaired);
   `,
+  // psfn-framework-yy0r2: scratchpad notes record the conversation they were
+  // written in, so the prompt block renders a note only where it belongs.
+  // Existing rows predate provenance and are backfilled as 'unknown' (visible
+  // only at primary trust). Idempotent and append-only.
+  `
+  ALTER TABLE scratchpad_entries
+    ADD COLUMN IF NOT EXISTS source_scope TEXT;
+  ALTER TABLE scratchpad_entries
+    ADD COLUMN IF NOT EXISTS source_channel_id TEXT;
+  UPDATE scratchpad_entries
+    SET source_scope = 'unknown', source_channel_id = NULL
+    WHERE source_scope IS NULL;
+  ALTER TABLE scratchpad_entries
+    ALTER COLUMN source_scope SET NOT NULL;
+  ALTER TABLE scratchpad_entries
+    DROP CONSTRAINT IF EXISTS scratchpad_entries_source_check;
+  ALTER TABLE scratchpad_entries
+    ADD CONSTRAINT scratchpad_entries_source_check
+    CHECK (
+      (source_scope = 'conversation' AND source_channel_id IS NOT NULL AND source_channel_id <> '')
+      OR (source_scope IN ('companion_global', 'unknown') AND source_channel_id IS NULL)
+    );
+  `,
 ];

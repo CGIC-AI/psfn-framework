@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "runChargeQuotaByLane": {
     "interactive": 24,
-    "companion_social": 12,
+    "companion_social": 24,
     "background": 16,
     "maintenance": 0,
     "subagent": 6,
@@ -156,6 +156,8 @@
       "declinedPressureUnits": 3,
       "deferredPressureUnits": 2,
       "unansweredPressureUnits": 1,
+      "mutualReplyAllowancePerSide": 8,
+      "mutualReplyPressureUnits": 0.2,
       "continuationEvidence": {
         "recentHumanParticipation": true,
         "activeWorkOrResearch": true,

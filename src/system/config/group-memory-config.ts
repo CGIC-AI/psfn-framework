@@ -298,7 +298,7 @@ export function createDefaultGroupMemorySettings(): GroupMemorySettings {
       recentParticipantWindowMessages: 75,
       recentParticipantWindowMs: 6 * 60 * 60 * 1000,
       minDistinctHumanContacts: 2,
-      groupCapableChannelTypes: ['discord', 'buzz'],
+      groupCapableChannelTypes: ['discord'],
       fallbackModeWhenOneHuman: 'direct',
       excludeCompanionContact: true,
       excludeSystemContacts: true,

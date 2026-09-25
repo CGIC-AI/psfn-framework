@@ -152,6 +152,38 @@ describe('AdminSubjectVisibleAuditService', () => {
     expect(appendContextSystemNote).not.toHaveBeenCalled();
   });
 
+  it('accepts the audited ADMIN_TOKEN operator and nothing that merely resembles it (jxthv)', () => {
+    const { service, appendGardenEntry } = harness();
+    const adminToken = context({
+      actor: {
+        ...context().actor,
+        principalId: 'admin-token-operator',
+        provider: 'admin_token',
+        providerSubjectId: 'admin-token',
+        sessionAssurance: 'break_glass',
+        accessMode: 'sole_admin',
+      },
+    });
+    service.recordConcernAction({ context: adminToken, action: 'resolve', reason: 'Operator cleanup' });
+    expect(appendGardenEntry).toHaveBeenCalledOnce();
+    expect(JSON.stringify(appendGardenEntry.mock.calls)).toContain('admin-token-operator');
+
+    // A Discord privacy break-glass session is not escalated operator assurance,
+    // and an admin-token shape outside the signed sole-admin door is refused.
+    for (const actor of [
+      { ...context().actor, sessionAssurance: 'break_glass' as const },
+      { ...adminToken.actor, accessMode: 'multi_admin' as const },
+      { ...adminToken.actor, sessionAssurance: 'oauth' as const },
+    ]) {
+      expect(() => service.recordConcernAction({
+        context: context({ actor }),
+        action: 'resolve',
+        reason: 'Operator cleanup',
+      })).toThrow(/exact escalated request/u);
+    }
+    expect(appendGardenEntry).toHaveBeenCalledOnce();
+  });
+
   it('records a memory body reveal without copying the memory id or body', () => {
     const { service, appendGardenEntry, appendContextSystemNote } = harness();
     const reason = 'Read a welfare-critical memory body to triage a report';

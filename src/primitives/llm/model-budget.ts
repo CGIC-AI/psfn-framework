@@ -24,6 +24,11 @@ export interface BudgetPreflightParams {
   estimatedOutputTokens?: number;
   correlation?: Partial<CorrelationMetadata>;
   nowMs?: number;
+  /**
+   * A non-token dispatch (e.g. image generation) priced by its caller at its
+   * worst case from owner-file pricing; replaces the registry token estimate.
+   */
+  fixedEstimatedCostUsd?: number;
 }
 
 export interface BudgetPreflightResult {
@@ -49,8 +54,12 @@ export class ModelBudgetExceededError extends Error {
   }
 }
 
-function toPositiveNumber(value: unknown): number | undefined {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+/**
+ * An explicit zero rate is known pricing (subscription or free route); only an
+ * absent or invalid rate is unknown.
+ */
+function toNonNegativeRate(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
     return undefined;
   }
   return value;
@@ -126,8 +135,8 @@ function resolveUsdCostRates(
     : 'USD';
   if (currency !== 'USD') return null;
 
-  const inputRate = toPositiveNumber(entry.cost?.inputPer1MUsd);
-  const outputRate = toPositiveNumber(entry.cost?.outputPer1MUsd);
+  const inputRate = toNonNegativeRate(entry.cost?.inputPer1MUsd);
+  const outputRate = toNonNegativeRate(entry.cost?.outputPer1MUsd);
   if (inputRate === undefined && outputRate === undefined) return null;
   return {
     inputPer1MUsd: inputRate ?? outputRate ?? 0,
@@ -158,11 +167,7 @@ function resolveCostRatesForEntry(
     ? entry.cost.currency.trim().toUpperCase()
     : 'USD';
   if (currency !== 'USD') return undefined;
-  const rate = (value: unknown): number | undefined => (
-    typeof value === 'number' && Number.isFinite(value) && value >= 0
-      ? value
-      : undefined
-  );
+  const rate = toNonNegativeRate;
   const rates: ModelUsageCostRates = {
     ...(rate(entry.cost.inputPer1MUsd) !== undefined
       ? { inputPer1MUsd: rate(entry.cost.inputPer1MUsd) }
@@ -337,6 +342,11 @@ export class ModelBudgetController {
     private readonly usageQuery?: ModelUsageBudgetQueryPort,
   ) {}
 
+  /** True when the owner-file budget policy refuses over-budget dispatch. */
+  isEnforced(): boolean {
+    return this.config.modelRegistry?.budgetPolicy?.enabled === true;
+  }
+
   requiresPreflightEstimate(): boolean {
     return this.config.modelRegistry?.budgetPolicy !== undefined;
   }
@@ -427,24 +437,31 @@ export class ModelBudgetController {
       };
     }
 
-    const entry = resolveRegistryEntryForIdentity(this.config, params.candidate, params.purpose);
-    const rates = resolveUsdCostRates(entry);
-    if (!rates) {
-      return {
-        allowed: !policy.enabled,
-        estimatedRequestCostUsd: 0,
-        snapshot,
-        ...(policy.enabled
-          ? { blockedEvent: buildBlockedEvent('missing_cost_metadata', nowMs, params, 0, snapshot) }
-          : {}),
-      };
+    let estimatedRequestCostUsd: number;
+    if (params.fixedEstimatedCostUsd !== undefined) {
+      if (!Number.isFinite(params.fixedEstimatedCostUsd) || params.fixedEstimatedCostUsd < 0) {
+        throw new Error('fixedEstimatedCostUsd must be a finite number >= 0');
+      }
+      estimatedRequestCostUsd = params.fixedEstimatedCostUsd;
+    } else {
+      const entry = resolveRegistryEntryForIdentity(this.config, params.candidate, params.purpose);
+      const rates = resolveUsdCostRates(entry);
+      if (!rates) {
+        return {
+          allowed: !policy.enabled,
+          estimatedRequestCostUsd: 0,
+          snapshot,
+          ...(policy.enabled
+            ? { blockedEvent: buildBlockedEvent('missing_cost_metadata', nowMs, params, 0, snapshot) }
+            : {}),
+        };
+      }
+      estimatedRequestCostUsd = estimateCostUsd(
+        params.estimatedInputTokens,
+        params.estimatedOutputTokens ?? params.candidate.maxTokens,
+        rates,
+      );
     }
-
-    const estimatedRequestCostUsd = estimateCostUsd(
-      params.estimatedInputTokens,
-      params.estimatedOutputTokens ?? params.candidate.maxTokens,
-      rates,
-    );
     if (snapshot.dailySpentUsd + estimatedRequestCostUsd > snapshot.dailyLimitUsd) {
       const budgetEvent = buildBlockedEvent(
         'daily_budget_exceeded', nowMs, params, estimatedRequestCostUsd, snapshot,

@@ -1,4 +1,5 @@
 import type { MemoryStorePort } from '../memory-store-port.js';
+import { collectActiveMemories } from '../active-memory-scan.js';
 import type {
   MemoryScopeKind,
   RetrievalAccessScope,
@@ -105,10 +106,10 @@ type MemoryScopeFilterResult =
   }
   | { ok: false; error: string };
 
+/** Filters an active-memory scan (archived memories are never scanned). */
 export interface MemoryVisibilityFilter {
   contactId?: string;
   scopeQuery?: MemoryScopeQuery;
-  includeArchived: boolean;
 }
 
 export interface MemoryAccessOptions {
@@ -125,7 +126,10 @@ export interface MemoryAccessPartition<T extends PurrMemory = PurrMemory> {
   withheldSummary?: MemoryWithheldSummary;
 }
 
-export function resolveTimelineRange(params: TimelineRangeParams): TimelineRangeResult {
+export function resolveTimelineRange(
+  params: TimelineRangeParams,
+  now: () => Date = () => new Date(),
+): TimelineRangeResult {
   const date = normalizeOptionalToolString(params.date);
   const after = normalizeOptionalToolString(params.after);
   const before = normalizeOptionalToolString(params.before);
@@ -148,7 +152,19 @@ export function resolveTimelineRange(params: TimelineRangeParams): TimelineRange
   }
 
   if (!after && !before) {
-    return { ok: false, error: 'Error: date or after/before is required for action=timeline' };
+    // No range: navigate today (UTC) instead of failing, so a timeline call in
+    // a parallel tool batch never cancels its siblings (psfn-framework-jequ8).
+    const today = now().toISOString().slice(0, 10);
+    const todayRange = normalizeTimelineDate(today);
+    if (!todayRange) {
+      throw new Error(`timeline default date is not a valid UTC day: ${today}`);
+    }
+    return {
+      ok: true,
+      from: todayRange.from,
+      to: todayRange.to,
+      label: `date ${today} (default: today UTC; pass date or after/before for another range)`,
+    };
   }
 
   const from = after ? normalizeTimelineBoundary(after, 'after', 'start') : undefined;
@@ -390,7 +406,7 @@ function memoryState(memory: Pick<PurrMemory, 'deletedAt' | 'supersededBy'>): 'a
 }
 
 function memoryMatchesVisibilityFilter(memory: PurrMemory, filter: MemoryVisibilityFilter): boolean {
-  if (!filter.includeArchived && memoryState(memory) === 'archived') return false;
+  if (memoryState(memory) === 'archived') return false;
   if (filter.contactId && memory.contactId !== filter.contactId) return false;
   if (filter.scopeQuery && !memoryMatchesScopeQuery(memory, filter.scopeQuery)) return false;
   return true;
@@ -400,8 +416,9 @@ export async function listFilteredMemories(
   memoryStore: MemoryStorePort,
   filter: MemoryVisibilityFilter,
 ): Promise<PurrMemory[]> {
-  const memories = await memoryStore.listMemories();
-  return memories.filter(memory => memoryMatchesVisibilityFilter(memory, filter));
+  // Keyset pages of active memories, one page resident at a time; only the
+  // filtered matches are retained (psfn-framework-dnaqt).
+  return await collectActiveMemories(memoryStore, memory => memoryMatchesVisibilityFilter(memory, filter));
 }
 
 export function partitionVisibleMemories<T extends PurrMemory & { similarity?: number }>(

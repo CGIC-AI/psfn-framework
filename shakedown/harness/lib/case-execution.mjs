@@ -207,6 +207,28 @@ export async function waitForAgentQuiescence({
 }
 
 /**
+ * What the phase loop does with a case after a previous case hit agent_busy
+ * (e04wp). The crossing-TurnRecord settlement is the preferred evidence, but a
+ * background owner (sleeptime, dream pass) never writes one, so a timed-out
+ * wait must not skip the case: the case runs anyway and its own bounded
+ * agent_busy retry window is the second settlement signal (a successful
+ * submit proves the agent is idle; exhaustion marks only THIS case busy).
+ * Only an unreachable control plane, which proves nothing, skips the case.
+ */
+export function decidePreCaseBusyAction(quiescence) {
+  if (!quiescence || quiescence.quiescent) return { run: true, reason: null };
+  if (quiescence.reason === 'agent_busy') {
+    const last = quiescence.attempts?.[quiescence.attempts.length - 1];
+    return {
+      run: true,
+      reason: 'busy_owner_unsettled_retry_case',
+      busyOwner: last?.busyOwner ?? 'unknown',
+    };
+  }
+  return { run: false, reason: 'harness_error:admin_quiescence_unreachable' };
+}
+
+/**
  * Prove that the run which caused an agent_busy rejection has since produced a
  * terminal TurnRecord. The capability route is the isolated recovery-plane
  * reachability check; the session scan is global because scheduler, heartbeat,
@@ -270,6 +292,11 @@ export async function probeKnownBusySettlement({
   const sessionScanTruncated = allSessionIds.length > sessionIds.length;
   let latestCompletedAtMs = null;
   let checkedSessionCount = 0;
+  // e04wp: a TurnRecord that started before the rejection and has not
+  // completed is a FOREGROUND owner (a chat/scheduler turn). No such record
+  // means the lock is held by background work (sleeptime, dream pass) that
+  // writes no TurnRecord and can never produce a crossing settlement.
+  let foregroundInFlight = false;
   const detailResponses = await Promise.all(sessionIds.map(async (sessionId) => ({
     sessionId,
     detail: await fetchJson(
@@ -311,6 +338,8 @@ export async function probeKnownBusySettlement({
         latestCompletedAtMs = latestCompletedAtMs === null
           ? completedAtMs
           : Math.max(latestCompletedAtMs, completedAtMs);
+      } else if (startedAtMs >= 0 && startedAtMs < busyObservedAtMs) {
+        foregroundInFlight = true;
       }
       // The failed throw-away request caused by agent_busy can itself persist a
       // terminal record after this timestamp. It is not the lock owner. Only a
@@ -334,6 +363,7 @@ export async function probeKnownBusySettlement({
   return {
     reachable: true,
     busy: true,
+    busyOwner: foregroundInFlight ? 'foreground' : (sessionScanTruncated ? 'unknown' : 'background'),
     controlPlaneStatus: capabilities.status,
     sessionListStatus: sessions.status,
     checkedSessionCount,

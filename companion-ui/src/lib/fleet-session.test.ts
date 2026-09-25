@@ -204,3 +204,32 @@ describe('fleet session protocol', () => {
     expect(maximumActiveRequests).toBe(1);
   });
 });
+
+describe('ADMIN_TOKEN key mode (key-or-SSO ruling)', () => {
+  const KEY_SIGNED_IN = {
+    ...SIGNED_IN,
+    human: { provider: 'admin_token', label: 'Administrator', role: 'owner' },
+  };
+
+  it('accepts a key-mode status and neither renews nor uses the SSO logout', async () => {
+    expect(parseFleetSessionStatus(KEY_SIGNED_IN)).toEqual(KEY_SIGNED_IN);
+    const fetchImpl = vi.fn(async (path: RequestInfo | URL) => (
+      String(path) === '/fleet/logout' ? new Response(null, { status: 204 }) : json(KEY_SIGNED_IN)
+    ));
+    const client = new FleetSessionClient(fetchImpl as unknown as typeof fetch);
+    await client.readStatus();
+    await client.renewIfDue();
+    await client.logout();
+    expect(fetchImpl.mock.calls.map(call => String(call[0]))).toEqual([
+      '/v1/fleet-auth/session/status',
+      '/fleet/logout',
+    ]);
+  });
+
+  it('still rejects unknown providers', () => {
+    expect(() => parseFleetSessionStatus({
+      ...SIGNED_IN,
+      human: { provider: 'github', label: 'x', role: 'owner' },
+    })).toThrow(FleetSessionProtocolError);
+  });
+});

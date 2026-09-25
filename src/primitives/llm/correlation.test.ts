@@ -230,6 +230,25 @@ describe('correlation helpers', () => {
         telemetryVisibility: 'companion_private',
       });
     });
+
+    it('keeps the owning companion on companion-private telemetry for fleet budget attribution (ygx6f)', () => {
+      expect(resolveCorrelationMetadata({
+        companionId: 'companion-b',
+        turnId: 'source-turn',
+        requestId: 'source-request',
+        callType: 'background',
+        purpose: 'companion_private.background',
+        telemetryVisibility: 'companion_private',
+      }, undefined, 'background')).toEqual({
+        companionId: 'companion-b',
+        requestId: 'companion-private',
+        callType: 'background',
+        purpose: 'companion_private.background',
+        originType: 'background',
+        originStage: 'companion_private.background',
+        telemetryVisibility: 'companion_private',
+      });
+    });
   });
 
   describe('toCorrelationLogFields', () => {

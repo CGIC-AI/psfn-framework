@@ -166,22 +166,6 @@ describe('group memory classifier', () => {
     });
   });
 
-  it('treats Buzz rooms as group-capable by default', async () => {
-    const classification = await classifyGroupMemoryChannel({
-      channelId: 'buzz-room',
-      channelType: 'buzz',
-      recentEntries: [],
-    });
-
-    expect(classification.mode).toBe('group_capable_direct_tail');
-    expect(classification.reason).toBe('group_capable_no_recent_humans');
-    expect(classification.topology).toMatchObject({
-      source: 'channel_type',
-      isDirect: false,
-      isGroupCapable: true,
-    });
-  });
-
   it('keeps group-capable one-speaker rooms on the direct-tail path', async () => {
     const classification = await classifyGroupMemoryChannel({
       channelId: 'discord-room',
@@ -225,6 +209,32 @@ describe('group memory classifier', () => {
     expect(classification.reason).toBe('recent_participant_threshold');
     expect(classification.recentParticipantCount).toBe(2);
     expect(classification.topology.kind).toBe('thread');
+  });
+
+  it.each(['external', 'telegram', 'discord'] as const)(
+    'treats the %s connector as group capable from its declared topology, not the owner list (nfmdd)',
+    async (channelType) => {
+      const classification = await classifyGroupMemoryChannel({
+        channelId: `${channelType}:room-1`,
+        channelType,
+        groupMemory: groupMemory({
+          autoDetection: { ...createDefaultGroupMemorySettings().autoDetection, groupCapableChannelTypes: [] },
+        }),
+        recentEntries: [entry(1, 'u1', 'User One'), entry(2, 'u2', 'User Two')],
+      });
+      expect(classification.topology.isGroupCapable).toBe(true);
+      expect(classification.mode).toBe('group');
+    },
+  );
+
+  it('keeps connectors without group rooms non-group-capable', async () => {
+    const classification = await classifyGroupMemoryChannel({
+      channelId: 'api:session-1',
+      channelType: 'api',
+      recentEntries: [entry(1, 'u1', 'User One'), entry(2, 'u2', 'User Two')],
+    });
+    expect(classification.mode).toBe('direct');
+    expect(classification.reason).toBe('topology_not_group_capable');
   });
 
   it('uses bounded recent reads from configured channel overrides', async () => {

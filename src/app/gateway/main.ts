@@ -78,7 +78,17 @@ import {
   registerProcessErrorHandlers,
 } from '../startup/support/signal-shutdown.js';
 import { resolveGatewayApiSurfaceBindings, startOptionalGatewayApiServer } from './api-surface.js';
-import { createGatewayFleetPortalChannelHealthSource } from './fleet-portal-composition.js';
+import { listExternalChannelAdapters } from '../../channels/external/plugin.js';
+import {
+  createGatewayRoomReplyOutbound,
+  resolveRoomReplyOutboundTargets,
+} from '../../boundary/gateway/room-reply-outbound.js';
+import { createGatewayFleetLifecycle } from './fleet-lifecycle-composition.js';
+import {
+  createGatewayFleetIcpPosture,
+  createGatewayFleetPortalChannelHealthSource,
+  type GatewayFleetIcpPostureWiring,
+} from './fleet-portal-composition.js';
 import { loadSatelliteRegistryConfig } from '../../channels/backplane/satellite-registry.js';
 import {
   loadStandaloneHubDeviceAssertionConfig,
@@ -115,6 +125,7 @@ import { assertFleetAuthStandaloneSurfacesUnavailable } from '../../system/confi
 import { resolveGatewayFleetAuthSecrets } from '../../system/config/fleet-auth-config.js';
 import { resolveCompanionDatabaseTopology } from '../../system/config/companion-database-config.js';
 import { grantFleetModelUsageReadAccess } from '../../persistence/postgres/model-usage-access.js';
+import { grantGatewayAuditReaderAccess } from '../../persistence/postgres/gateway-audit-reader-access.js';
 import { resolveBackupRuntimeConfig } from '../../persistence/backups/config.js';
 import { resolveKubernetesHelmBackupConfig } from '../../persistence/backups/kubernetes-helm.js';
 import { migrateFleetAuthSchema } from '../../persistence/postgres/fleet-auth/schema.js';
@@ -321,6 +332,9 @@ async function main(): Promise<void> {
           schema: entry.companion.postgresSchema,
         })),
         sharedSchema: DEFAULT_SHARED_WORLD_SCHEMA,
+        ...(config.companionFleet?.postgres.gatewayAuditReaderRole
+          ? { gatewayAuditReaderRole: config.companionFleet.postgres.gatewayAuditReaderRole }
+          : {}),
         ...(config.fleetAuth && fleetAuthSecrets
           ? {
               fleetAuth: {
@@ -585,6 +599,23 @@ async function main(): Promise<void> {
       primarySchema: primary.companion.postgresSchema,
       primaryRole: primary.role,
       followerRoles: companionDatabaseTopology.companions.slice(1).map(entry => entry.role),
+    });
+  }
+  const gatewayAuditReaderRole = config.companionFleet?.postgres.gatewayAuditReaderRole;
+  if (gatewayAuditReaderRole) {
+    // Declared read-only audit reader (psfn-framework-jqg13): now that the
+    // audit and model-usage stores have migrated, grant and prove exact access.
+    const primary = companionDatabaseTopology?.companions[0];
+    const modelUsageStore = privilegedServices.modelUsageStore;
+    if (!primary || !modelUsageStore) {
+      throw new Error('postgres.gatewayAuditReaderRole requires the companion fleet database topology');
+    }
+    await modelUsageStore.waitUntilReady();
+    await grantGatewayAuditReaderAccess({
+      ownerDatabaseUrl: primary.databaseUrl,
+      ownerRole: primary.role,
+      schema: primary.companion.postgresSchema,
+      role: gatewayAuditReaderRole,
     });
   }
   let fleetAuthBackupScheduler: Scheduler | undefined;
@@ -898,14 +929,6 @@ async function main(): Promise<void> {
   const discordAccountDocks = channelSurfaces.discordAccounts
     ? new Map(channelSurfaces.discordAccounts.map(account => [account.companionId, account.adapter]))
     : undefined;
-  const pluginOutboundRoutes = channelSurfaces.plugins.list()
-    .filter(entry => entry.pluginId === 'buzz')
-    .map(entry => ({
-      pluginId: 'buzz' as const,
-      ...(entry.accountId ? { accountId: entry.accountId } : {}),
-      ...(entry.companionId ? { companionId: entry.companionId } : {}),
-      dock: entry.instance.adapter,
-    }));
 
   // ── Inter-companion channel lane (sprint-10 W6) ──
   // Multi-companion only: the gateway owns cross-companion routing. Room
@@ -916,6 +939,7 @@ async function main(): Promise<void> {
   let icpAutonomyStore: PostgresIcpSharedAutonomyStore | null = null;
   let icpFatigueRegulationStore: PostgresIcpFatigueRegulationReservationStore | null = null;
   let icpInitiationPolicyAuthority: GatewayIcpLocalPolicyCoordinator | null = null;
+  let fleetIcpPosture: GatewayFleetIcpPostureWiring | undefined;
   // One lazily-bound route to an authenticated companion agent's local
   // authorities (ICP policy, welfare grants). Bound once the gateway server
   // exists; every consumer is constructed before it and calls it later.
@@ -955,9 +979,21 @@ async function main(): Promise<void> {
       () => PostgresIcpFatigueRegulationReservationStore.connect(databaseUrl),
     );
     const requiredFatigueRegulationStore = icpFatigueRegulationStore;
+    const icpPosture = createGatewayFleetIcpPosture({
+      fleetCompanionIds,
+      sharedDatabaseUrl: databaseUrl,
+      reportReadFailure: (error) => {
+        log.warn('Fleet ICP posture read unavailable', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      },
+    });
+    fleetIcpPosture = icpPosture;
     icpInitiationPolicyAuthority = new GatewayIcpLocalPolicyCoordinator({
       requestCompanionAgent: async (companionId, method, params) => (
-        await requestCompanionAuthorityAgent(companionId, method, params)
+        await icpPosture.policyOutcomes.observe(companionId, Date.now, async () => (
+          await requestCompanionAuthorityAgent(companionId, method, params)
+        ))
       ),
       readRelationshipPressure: async ({
         senderCompanionId,
@@ -976,6 +1012,8 @@ async function main(): Promise<void> {
           declinedPressureUnits: regulation.declinedPressureUnits,
           deferredPressureUnits: regulation.deferredPressureUnits,
           unansweredPressureUnits: regulation.unansweredPressureUnits,
+          mutualReplyAllowancePerSide: regulation.mutualReplyAllowancePerSide,
+          mutualReplyPressureUnits: regulation.mutualReplyPressureUnits,
         });
         return pressure.relationshipPressure;
       },
@@ -996,6 +1034,11 @@ async function main(): Promise<void> {
     log.info('Inter-companion channel lane enabled', {
       fleetSize: companionFleet.companions.length,
       placeCount: placesRegistryConfig.places.length,
+    });
+  } else if (config.companionFleet) {
+    fleetIcpPosture = createGatewayFleetIcpPosture({
+      fleetCompanionIds: config.companionFleet.companions.map(entry => entry.companionId),
+      reportReadFailure: () => undefined,
     });
   }
 
@@ -1055,9 +1098,19 @@ async function main(): Promise<void> {
   }
 
   const shardWorkloadRegistry = new ShardWorkloadRegistry();
+  const roomReplyOutbound = createGatewayRoomReplyOutbound({
+    multiCompanion: bootstrap.server.multiCompanion.enabled,
+    targets: resolveRoomReplyOutboundTargets({
+      multiCompanion: bootstrap.server.multiCompanion.enabled,
+      ...(telegram ? { telegram } : {}),
+      ...(telegramCompanionId ? { telegramCompanionId } : {}),
+      externalAdapters: listExternalChannelAdapters(channelSurfaces.plugins),
+    }),
+  });
   const gateway = createGatewayServer({
     discordAdapter: discord,
     ...(telegram ? { telegramDock: telegram } : {}),
+    roomReplyOutbound,
     ...(bootstrap.channelsConfig.telegram.operatorChatId
       ? { operatorTelegramChatId: bootstrap.channelsConfig.telegram.operatorChatId }
       : {}),
@@ -1066,7 +1119,6 @@ async function main(): Promise<void> {
       ? { operatorDiscordChannelId: discordOperatorAlert.channelId }
       : {}),
     ...(discordAccountDocks ? { discordAccountDocks } : {}),
-    ...(pluginOutboundRoutes.length > 0 ? { pluginOutboundRoutes } : {}),
     ...(companionChannelLane ? { companionChannels: companionChannelLane } : {}),
     ...(icpAutonomyStore ? { icpAutonomyStore } : {}),
     ...(icpInitiationPolicyAuthority ? { icpInitiationPolicyAuthority } : {}),
@@ -1292,7 +1344,19 @@ async function main(): Promise<void> {
     gateway,
     multiCompanion: bootstrap.server.multiCompanion.enabled,
     channelsConfig: bootstrap.channelsConfig,
+    externalChannelAdapters: listExternalChannelAdapters(channelSurfaces.plugins),
     fleetPortalChannelHealth,
+    ...(fleetIcpPosture ? { fleetPortalIcpPosture: fleetIcpPosture.source } : {}),
+    ...(config.fleetAuth && config.companionFleet
+      ? {
+          fleetLifecycle: createGatewayFleetLifecycle({
+            systemDataDir: startupHydration.pathSnapshot.systemDataDir,
+            runtimeRootDir: startupHydration.pathSnapshot.runtimePathLayout.runtimeRootDir,
+            env: process.env,
+            fleetAuthConfig: config.fleetAuth,
+          }),
+        }
+      : {}),
     satelliteRegistryProvider: () => loadSatelliteRegistryConfig(
       startupHydration.pathSnapshot.systemDataDir,
     ),
@@ -1325,12 +1389,13 @@ async function main(): Promise<void> {
           fleetAuthEscalation: fleetAuthPersistence.escalation,
           fleetAuthTrustedHostRecovery: fleetAuthPersistence.trustedHostRecovery,
           ...(fleetAuthLifecycleCeremonies ? { fleetAuthLifecycleCeremonies } : {}),
+          fleetAuthOperatorAccountAuthority: fleetAuthPersistence.operatorAccountAuthority,
           fleetAuthChildAssertions: fleetAuthPersistence.childAssertions,
           fleetAuthRequestCapabilities: fleetAuthPersistence.requestCapabilities,
           fleetAuthRequestCapabilityVerifier: fleetAuthPersistence.requestCapabilityVerifier,
           fleetAuthRequestCapabilityReplay: fleetAuthPersistence.requestCapabilityReplay,
-          fleetAuthTestingHarnessGardenAuthorizationAudit:
-            fleetAuthPersistence.testingHarnessGardenAuthorizationAudit,
+          fleetAuthGardenDoorAuthorizationAudit:
+            fleetAuthPersistence.gardenDoorAuthorizationAudit,
           fleetPortalAuthorization: fleetAuthPersistence.portalAuthorization,
           primaryEmbodiments: fleetAuthPersistence.primaryEmbodiments,
         }
@@ -1377,6 +1442,7 @@ async function main(): Promise<void> {
         { step: 'close ICP autonomy store', action: async () => { await icpAutonomyStore?.close(); } },
         { step: 'close ICP fatigue regulation store', action: async () => { await icpFatigueRegulationStore?.close(); } },
         { step: 'close ICP initiation policy authority', action: async () => { await icpInitiationPolicyAuthority?.close(); } },
+        { step: 'close fleet ICP posture reader', action: async () => { await fleetIcpPosture?.close(); } },
         { step: 'close fleet auth persistence', action: async () => { await fleetAuthPersistence?.close(); } },
         { step: 'stop channel adapters', action: () => stopGatewayChannelSurfaces(channelSurfaces) },
         { step: 'stop models.json reload watcher', action: () => modelsOwnerFileReload.close() },

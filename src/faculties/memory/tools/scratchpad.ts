@@ -5,7 +5,14 @@ import type { SubstrateAgentTool } from '../../../boundary/pi-agent/index.js';
 
 import { textResult, textResultWithError } from '../../../core/tools/results.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
-import type { MemoryStorePort } from '../memory-store-port.js';
+import type { MemoryStorePort, ScratchpadEntry } from '../memory-store-port.js';
+import { resolveViewerContextFromRequest } from '../../../core/session/session-viewer-access.js';
+import {
+  canViewerSeeScratchpadEntry,
+  partitionScratchpadEntriesForViewer,
+  resolveScratchpadWriteProvenance,
+  type ScratchpadViewer,
+} from '../scratchpad-visibility.js';
 
 const SCRATCHPAD_DEFAULT_LIMIT = 20;
 const SCRATCHPAD_MAX_LIMIT = 64;
@@ -18,11 +25,55 @@ function clampInt(val: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, Math.floor(val)));
 }
 
+type ScratchpadWriteScope = 'conversation' | 'companion_global';
+const SCRATCHPAD_WRITE_SCOPES: ScratchpadWriteScope[] = ['conversation', 'companion_global'];
+
+/** The conversation reading or writing notes, from the admitted request context. */
+function currentScratchpadViewer(): ScratchpadViewer {
+  const viewer = resolveViewerContextFromRequest();
+  return {
+    ...(viewer.channelId ? { channelId: viewer.channelId } : {}),
+    ...(viewer.trustLevel ? { trustLevel: viewer.trustLevel } : {}),
+  };
+}
+
+function parseWriteScope(value: unknown): ScratchpadWriteScope {
+  if (value === undefined) return 'conversation';
+  if (typeof value === 'string' && (SCRATCHPAD_WRITE_SCOPES as string[]).includes(value)) {
+    return value as ScratchpadWriteScope;
+  }
+  throw new Error(`scope must be one of: ${SCRATCHPAD_WRITE_SCOPES.join(', ')}`);
+}
+
+/**
+ * Notes from another conversation are treated as absent (never confirmed or
+ * mutated from here), psfn-framework-yy0r2.
+ */
+async function findVisibleEntry(memoryStore: MemoryStorePort, id: string): Promise<ScratchpadEntry | undefined> {
+  const entry = await memoryStore.getScratchpadEntry(id);
+  return entry && canViewerSeeScratchpadEntry(entry, currentScratchpadViewer()) ? entry : undefined;
+}
+
+function listVisibleEntries(memoryStore: MemoryStorePort, limit: number): {
+  entries: ScratchpadEntry[];
+  withheldCount: number;
+} {
+  const { visible, withheldCount } = partitionScratchpadEntriesForViewer(
+    memoryStore.listScratchpadEntries(SCRATCHPAD_MAX_LIMIT),
+    currentScratchpadViewer(),
+  );
+  return { entries: visible.slice(0, limit), withheldCount };
+}
+
 function formatScratchpadList(
   entries: Array<{ id: string; content: string; updatedAt: number }>,
+  withheldCount: number,
 ): string {
+  const withheld = withheldCount > 0
+    ? `\n${withheldCount} note${withheldCount === 1 ? '' : 's'} from other conversations not shown here.`
+    : '';
   if (entries.length === 0) {
-    return 'Scratchpad is empty. Use it for temporary same-day working notes, excerpts, and working summaries.';
+    return 'Scratchpad is empty. Use it for temporary same-day working notes, excerpts, and working summaries.' + withheld;
   }
 
   const lines = [
@@ -32,8 +83,14 @@ function formatScratchpadList(
   for (const entry of entries) {
     lines.push(`- ${entry.id} [${new Date(entry.updatedAt).toISOString()}]: ${entry.content}`);
   }
-  return lines.join('\n');
+  return lines.join('\n') + withheld;
 }
+
+const SCOPE_PARAMETER = Type.Optional(Type.Unsafe<ScratchpadWriteScope>({
+  type: 'string',
+  enum: [...SCRATCHPAD_WRITE_SCOPES],
+  description: 'Used with add. conversation (default): the note shows only in this conversation. companion_global: shows in every conversation.',
+}));
 
 export function createScratchpadTool(memoryStore: MemoryStorePort): SubstrateAgentTool {
   return {
@@ -55,6 +112,7 @@ export function createScratchpadTool(memoryStore: MemoryStorePort): SubstrateAge
       content: Type.Optional(
         Type.String({ description: 'Required for action=add, action=replace, and action=append. Scratchpad note text.' }),
       ),
+      scope: SCOPE_PARAMETER,
     }),
     execute: async (
       _toolCallId: string,
@@ -63,6 +121,7 @@ export function createScratchpadTool(memoryStore: MemoryStorePort): SubstrateAge
         limit?: number;
         id?: string;
         content?: string;
+        scope?: ScratchpadWriteScope;
       },
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
@@ -77,8 +136,8 @@ export function createScratchpadTool(memoryStore: MemoryStorePort): SubstrateAge
             const limit = params.limit === undefined
               ? SCRATCHPAD_DEFAULT_LIMIT
               : clampInt(params.limit, 1, SCRATCHPAD_MAX_LIMIT);
-            const entries = memoryStore.listScratchpadEntries(limit);
-            return textResult(formatScratchpadList(entries));
+            const { entries, withheldCount } = listVisibleEntries(memoryStore, limit);
+            return textResult(formatScratchpadList(entries, withheldCount));
           }
 
           case 'add': {
@@ -86,7 +145,9 @@ export function createScratchpadTool(memoryStore: MemoryStorePort): SubstrateAge
             if (!content) {
               return textResultWithError('Error: content is required for action=add', true);
             }
-            const result = await memoryStore.addScratchpadEntry(content);
+            const result = await memoryStore.addScratchpadEntry(content, {
+              provenance: resolveScratchpadWriteProvenance(parseWriteScope(params.scope), currentScratchpadViewer()),
+            });
             const evictedSuffix = result.evictedIds.length > 0
               ? ` Evicted oldest ids: ${result.evictedIds.join(', ')}`
               : '';
@@ -106,6 +167,9 @@ export function createScratchpadTool(memoryStore: MemoryStorePort): SubstrateAge
             if (!content) {
               return textResultWithError('Error: content is required for action=replace', true);
             }
+            if (!await findVisibleEntry(memoryStore, id)) {
+              return textResultWithError(`Scratchpad entry not found: ${id}`, true);
+            }
             const replaced = await memoryStore.replaceScratchpadEntry(id, content);
             if (!replaced) {
               return textResultWithError(`Scratchpad entry not found: ${id}`, true);
@@ -122,6 +186,9 @@ export function createScratchpadTool(memoryStore: MemoryStorePort): SubstrateAge
             if (!content) {
               return textResultWithError('Error: content is required for action=append', true);
             }
+            if (!await findVisibleEntry(memoryStore, id)) {
+              return textResultWithError(`Scratchpad entry not found: ${id}`, true);
+            }
             const appended = await memoryStore.appendScratchpadEntry(id, content);
             if (!appended) {
               return textResultWithError(`Scratchpad entry not found: ${id}`, true);
@@ -133,6 +200,9 @@ export function createScratchpadTool(memoryStore: MemoryStorePort): SubstrateAge
             const id = params.id?.trim();
             if (!id) {
               return textResultWithError('Error: id is required for action=remove', true);
+            }
+            if (!await findVisibleEntry(memoryStore, id)) {
+              return textResultWithError(`Scratchpad entry not found: ${id}`, true);
             }
             const removed = await memoryStore.removeScratchpadEntry(id);
             if (!removed) {
@@ -171,8 +241,8 @@ export function createScratchpadReadTool(memoryStore: MemoryStorePort): Substrat
         const limit = params.limit === undefined
           ? SCRATCHPAD_DEFAULT_LIMIT
           : clampInt(params.limit, 1, SCRATCHPAD_MAX_LIMIT);
-        const entries = memoryStore.listScratchpadEntries(limit);
-        return textResult(formatScratchpadList(entries));
+        const { entries, withheldCount } = listVisibleEntries(memoryStore, limit);
+        return textResult(formatScratchpadList(entries, withheldCount));
       } catch (error) {
         return textResultWithError(`Error reading scratchpad: ${toErrorMessage(error)}`, true);
       }
@@ -202,6 +272,7 @@ export function createScratchpadWriteTool(memoryStore: MemoryStorePort): Substra
       content: Type.Optional(
         Type.String({ description: 'Required for add/replace. Scratchpad note text.' }),
       ),
+      scope: SCOPE_PARAMETER,
     }),
     execute: async (
       _toolCallId: string,
@@ -209,6 +280,7 @@ export function createScratchpadWriteTool(memoryStore: MemoryStorePort): Substra
         operation: ScratchpadWriteOperation;
         id?: string;
         content?: string;
+        scope?: ScratchpadWriteScope;
       },
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
@@ -224,7 +296,9 @@ export function createScratchpadWriteTool(memoryStore: MemoryStorePort): Substra
             if (!content) {
               return textResultWithError('Error: content is required for add', true);
             }
-            const result = await memoryStore.addScratchpadEntry(content);
+            const result = await memoryStore.addScratchpadEntry(content, {
+              provenance: resolveScratchpadWriteProvenance(parseWriteScope(params.scope), currentScratchpadViewer()),
+            });
             const evictedSuffix = result.evictedIds.length > 0
               ? ` Evicted oldest ids: ${result.evictedIds.join(', ')}`
               : '';
@@ -239,6 +313,9 @@ export function createScratchpadWriteTool(memoryStore: MemoryStorePort): Substra
             if (!content) {
               return textResultWithError('Error: content is required for replace', true);
             }
+            if (!await findVisibleEntry(memoryStore, id)) {
+              return textResultWithError(`Scratchpad entry not found: ${id}`, true);
+            }
             const replaced = await memoryStore.replaceScratchpadEntry(id, content);
             if (!replaced) {
               return textResultWithError(`Scratchpad entry not found: ${id}`, true);
@@ -249,6 +326,9 @@ export function createScratchpadWriteTool(memoryStore: MemoryStorePort): Substra
             const id = params.id?.trim();
             if (!id) {
               return textResultWithError('Error: id is required for remove', true);
+            }
+            if (!await findVisibleEntry(memoryStore, id)) {
+              return textResultWithError(`Scratchpad entry not found: ${id}`, true);
             }
             const removed = await memoryStore.removeScratchpadEntry(id);
             if (!removed) {

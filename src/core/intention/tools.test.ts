@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 import type { ConcernStorePort } from './concern-store-port.js';
 import { createTestPostgresIntentionPorts } from '../../test-support/postgres-intention-ports.js';
 import { createOrientTool } from '../../faculties/core-memory/tools.js';
@@ -70,7 +71,7 @@ describe('orient concern actions', () => {
     });
     const tool = makeTool();
 
-    const result = await tool.execute('call-2', { action: 'list_concerns' });
+    const result = await runWithRequestContext({ callType: 'tool', purpose: 'agent.turn', channelId: 'api:owner-console', viewerTrustLevel: 'primary', viewerChannelPrivacy: 'private' }, () => tool.execute('call-2', { action: 'list_concerns' }));
     const payload = JSON.parse(resultText(result)) as {
       count: number;
       concerns: Array<{ id: string }>;
@@ -78,6 +79,25 @@ describe('orient concern actions', () => {
 
     expect(payload.count).toBe(1);
     expect(payload.concerns[0]?.id).toBe(created.id);
+  });
+
+  it('list_concerns withholds concerns a lower-trust room may not see (o5wf5)', async () => {
+    const open = await store.create({ text: 'Water the shared garden.', priority: 'low', sensitivity: 'public' });
+    await store.create({ text: 'Private worry about a partner.', priority: 'high', sensitivity: 'confidential' });
+    await store.create({ text: 'Check on another contact.', priority: 'medium', sensitivity: 'public', contactId: 'contact-other' });
+    const tool = makeTool();
+
+    const result = await runWithRequestContext({
+      callType: 'tool', purpose: 'agent.turn', channelId: 'api:stranger-room',
+      viewerTrustLevel: 'public', viewerChannelPrivacy: 'public',
+    }, () => tool.execute('call-gated', { action: 'list_concerns' }));
+    const text = resultText(result);
+    const payload = JSON.parse(text) as { count: number; withheldByVisibility?: number; concerns: Array<{ id: string }> };
+
+    expect(payload.concerns.map(concern => concern.id)).toEqual([open.id]);
+    expect(payload.withheldByVisibility).toBe(2);
+    expect(text).not.toContain('Private worry');
+    expect(text).not.toContain('another contact');
   });
 
   it('resolve_concern is idempotent for resolved concerns and reports unknown ids', async () => {

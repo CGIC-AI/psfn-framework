@@ -52,15 +52,24 @@ export interface ChannelPluginHostContext {
   log: RuntimeChannelLifecycleLogger;
   shutdownTimeoutMs: number;
   intakeScreening: IntakeScreeningService | null;
-  postgresDatabaseUrl?: string;
-  postgresSchema?: string;
-  postgresRole?: string;
+  /**
+   * Display name of the companion this account serves (companions.json
+   * `displayName`), when the fleet manifest declares one. Connectors that
+   * assert room addressing name the companion's own account with it.
+   */
+  companionDisplayName?: string;
 }
 
 export interface ChannelPluginCreateInput<TConfig = unknown> {
   config: TConfig;
   secrets: Readonly<Record<string, string>>;
   context: ChannelPluginHostContext;
+  /**
+   * Reports a contained runtime fault of THIS instance's surface to the
+   * isolation supervisor, which projects it as degraded channel health. It
+   * never throws and never affects any other surface.
+   */
+  reportRuntimeFailure: (error: unknown) => void;
 }
 
 export interface ChannelPluginInstance {

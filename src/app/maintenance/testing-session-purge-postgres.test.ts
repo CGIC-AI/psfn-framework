@@ -4,7 +4,7 @@ import type { PostgresSessionAdapters } from '../../persistence/sessions/postgre
 import { createTestingSessionPurgePostgresAdapters } from './testing-session-purge-postgres.js';
 
 const DATABASE_URL = 'postgresql://maintenance@example.invalid/psfn';
-const FLEET_ROLE = 'psfn_companion_alpha_a629819705fa71b94777dc6f';
+const FLEET_ROLE = 'companion_alpha_runtime';
 
 function adaptersFixture(): PostgresSessionAdapters {
   return {} as PostgresSessionAdapters;
@@ -34,6 +34,7 @@ describe('createTestingSessionPurgePostgresAdapters', () => {
     await expect(createTestingSessionPurgePostgresAdapters({
       databaseUrl: DATABASE_URL,
       multiCompanion: true,
+      postgresRole: FLEET_ROLE,
       postgresSchema: 'companion_alpha',
       sessionsDir: '/runtime/companions/alpha/state/sessions',
       dependencies: {
@@ -70,6 +71,7 @@ describe('createTestingSessionPurgePostgresAdapters', () => {
     await expect(createTestingSessionPurgePostgresAdapters({
       databaseUrl: DATABASE_URL,
       multiCompanion: true,
+      postgresRole: FLEET_ROLE,
       postgresSchema: 'companion_alpha',
       sessionsDir: '/runtime/companions/alpha/state/sessions',
       dependencies: {
@@ -107,5 +109,23 @@ describe('createTestingSessionPurgePostgresAdapters', () => {
       sessionsDir: '/runtime/companion-data/state/sessions',
       schema: 'public',
     });
+  });
+
+  it('fails closed in a fleet without the companions.json postgresRole (p9jea)', async () => {
+    const createPostgresPool = vi.fn();
+    const createDefaultPostgresSessionAdapters = vi.fn();
+    await expect(createTestingSessionPurgePostgresAdapters({
+      databaseUrl: DATABASE_URL,
+      multiCompanion: true,
+      postgresSchema: 'companion_alpha',
+      sessionsDir: '/runtime/companions/alpha/state/sessions',
+      dependencies: {
+        assertPostgresTenantAccessProvisioned: vi.fn(),
+        createDefaultPostgresSessionAdapters,
+        createPostgresPool,
+      },
+    })).rejects.toThrow('companions.json postgresRole');
+    expect(createPostgresPool).not.toHaveBeenCalled();
+    expect(createDefaultPostgresSessionAdapters).not.toHaveBeenCalled();
   });
 });

@@ -1,5 +1,10 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, expect, beforeEach, vi } from 'vitest';
+import { viewerContextIt } from '../../test-support/viewer-context-it.js';
+
+// Contact reads run from the owner's own conversation (r6 sibling gate).
+const it = viewerContextIt();
 import { fromAny, fromPartial } from '@total-typescript/shoehorn';
+import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 import type { ContactStorePort } from './contact-store-port.js';
 import { ConfirmationQueue } from '../../system/capabilities/confirmation-queue.js';
 import { createApprovalQueuePortFromConfirmationQueue } from '../../system/capabilities/approval-queue-port.js';
@@ -1011,6 +1016,63 @@ describe('contact tools', () => {
 
       expect(resultText(result)).toContain('Invalid channel privacy level');
       expect(result.details?.isError).toBe(true);
+    });
+  });
+
+  describe('fleet sibling lookup from any room (r6)', () => {
+    const SIBLING_COMPANION_ID = '22222222-2222-4222-8222-222222222222';
+    const asPublicApiRoom = <T,>(fn: () => Promise<T>) => runWithRequestContext({
+      callType: 'tool', purpose: 'agent.turn', channelId: 'api:api-key-stranger:room',
+      viewerTrustLevel: 'public', viewerChannelPrivacy: 'private',
+    }, fn);
+
+    async function seed() {
+      const sibling = await store.resolveChannelIdentity('companion', SIBLING_COMPANION_ID, 'Vega');
+      await store.updateRelationshipType(sibling.id, 'ai_companion', 'system:fleet-contact-provisioning');
+      await store.updateNotes(sibling.id, 'Sibling note written in a private room');
+      const human = await store.upsert({ displayName: 'Priya', trustLevel: 'trusted', relationshipType: 'friend', notes: 'Private note about Priya' });
+      return { sibling, human };
+    }
+
+    it('lists and finds the fleet sibling by name from a public room, and nothing else', async () => {
+      const { sibling, human } = await seed();
+      const tool = createContactTool(store);
+
+      const listed = resultText(await asPublicApiRoom(() => tool.execute('l', { action: 'list' })));
+      expect(listed).toContain(`${sibling.id}: Vega [fleet sibling companion] companion_id=${SIBLING_COMPANION_ID}`);
+      expect(listed).toContain('withheld by visibility gating');
+      expect(listed).not.toContain('Priya');
+      expect(listed).not.toContain('Sibling note');
+      expect(listed).not.toContain(human.id);
+
+      const found = resultText(await asPublicApiRoom(() => tool.execute('s', { action: 'search', query: 'vega' })));
+      expect(found).toContain(sibling.id);
+      const humanSearch = resultText(await asPublicApiRoom(() => tool.execute('s2', { action: 'search', query: 'priya' })));
+      expect(humanSearch).toContain('No contacts matched');
+      // Notes are not searchable outside a personal room, even on a sibling.
+      const noteSearch = resultText(await asPublicApiRoom(() => tool.execute('s3', { action: 'search', query: 'private room' })));
+      expect(noteSearch).toContain('No contacts matched');
+    });
+
+    it('looks up the sibling projection but reads a human contact as missing', async () => {
+      const { sibling, human } = await seed();
+      const tool = createContactTool(store);
+
+      const siblingLookup = resultText(await asPublicApiRoom(() => tool.execute('k', { action: 'lookup', contactId: sibling.id })));
+      expect(siblingLookup).toContain(`Companion peer ID: ${SIBLING_COMPANION_ID}`);
+      expect(siblingLookup).toContain('ICP: a companion DM with this sibling is available');
+      expect(siblingLookup).not.toContain('Sibling note');
+
+      const humanLookup = await asPublicApiRoom(() => tool.execute('k2', { action: 'lookup', contactId: human.id }));
+      expect(resultText(humanLookup)).toContain(`No contact found for contactId "${human.id}"`);
+      expect(resultText(humanLookup)).not.toContain('Priya');
+    });
+
+    it('keeps full records for the owner', async () => {
+      const { human } = await seed();
+      const listed = resultText(await createContactTool(store).execute('o', { action: 'list' }));
+      expect(listed).toContain('Priya');
+      expect(listed).toContain(human.id);
     });
   });
 });

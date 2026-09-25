@@ -323,6 +323,17 @@ export interface DiscordSendParams {
   content: string;
 }
 
+/** psfn-framework-ze2fx: an egress-leased autonomous room reply off Discord. */
+export interface ChannelSendRoomReplyParams {
+  channelType: 'telegram' | 'external';
+  channelId: string;
+  content: string;
+}
+
+export interface ChannelSendRoomReplyResult {
+  success: boolean;
+}
+
 export interface DiscordSendMediaParams {
   channelId: string;
   media: Attachment;
@@ -1343,6 +1354,7 @@ export interface GatewayMethods {
   'llm.invalidate_model_discovery': [LLMInvalidateModelDiscoveryParams, LLMInvalidateModelDiscoveryResult];
   'discord.send': [DiscordSendParams, DiscordSendResult];
   'discord.sendMedia': [DiscordSendMediaParams, DiscordSendMediaResult];
+  'channel.sendRoomReply': [ChannelSendRoomReplyParams, ChannelSendRoomReplyResult];
   'discord.typing': [DiscordTypingParams, DiscordTypingResult];
   'discord.availability': [DiscordAvailabilityParams, DiscordAvailabilityResult];
   'companion.message.send': [CompanionMessageSendParams, CompanionMessageSendResult];

@@ -3,6 +3,7 @@ import type { GatewayJevDecisionService } from '../jev-decision-service.js';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import type { EmbeddingProviderPort } from '../../../shared/contracts/embedding-provider.js';
 import type { ChannelOutboundDock } from '../../../channels/backplane/types.js';
+import type { GatewayRoomReplyOutbound } from '../room-reply-outbound.js';
 import type { CapabilityTier, WyomingShardRoutingConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { GatewayRpcEndpoint } from '../transport.js';
 import type {
@@ -68,6 +69,8 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
    * closed on the telegram channel without it.
    */
   telegramDock?: ChannelOutboundDock;
+  /** Autonomous room-reply outbound for Telegram and external channels (ze2fx). */
+  roomReplyOutbound?: GatewayRoomReplyOutbound;
   /** Numeric Telegram destination for secondary system/operator alerts. */
   operatorTelegramChatId?: string;
   /** Explicit Discord system-alert outbound identity and destination. */

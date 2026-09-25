@@ -291,6 +291,7 @@ const RPC_TO_CLIENT_METHOD: Record<string, string> = {
   'llm.embed': 'embed',
   'llm.decide': 'decide',
   'discord.send': 'discordSend',
+  'channel.sendRoomReply': 'channelSendRoomReply',
   'discord.typing': 'discordTyping',
   'web.fetch': 'webFetch',
   'web.fetch_binary': 'webFetchBinary',

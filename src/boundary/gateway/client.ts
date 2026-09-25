@@ -112,6 +112,7 @@ import type {
   LLMDecideResult,
   LLMInvalidateModelDiscoveryResult,
   DiscordSendResult,
+  ChannelSendRoomReplyResult,
   DiscordSendMediaResult,
   DiscordAvailabilityResult,
   WebFetchResult,
@@ -958,6 +959,18 @@ export class GatewayClient implements
       channelId,
       content,
     }) as DiscordSendResult;
+  }
+
+  async channelSendRoomReply(
+    channelType: 'telegram' | 'external',
+    channelId: string,
+    content: string,
+  ): Promise<void> {
+    await this.transportRuntime.request('channel.sendRoomReply', {
+      channelType,
+      channelId,
+      content,
+    }) as ChannelSendRoomReplyResult;
   }
 
   async discordSendMedia(channelId: string, media: Attachment): Promise<void> {

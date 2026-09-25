@@ -26,6 +26,7 @@ export const EGRESS_CANARY_METHODS: ReadonlySet<string> = new Set([
   // adjudication S6.4, review R5.4): a leaked canary could ride out in a custom
   // emoji name or reaction payload, so the reaction method joins the tripwire.
   'discord.sendReaction',
+  'channel.sendRoomReply',
   'notify.ntfy',
   'web.fetch',
   'web.fetch_binary',

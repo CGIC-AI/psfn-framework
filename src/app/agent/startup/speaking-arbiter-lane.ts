@@ -20,7 +20,7 @@ import { SpeakingReservationPhase, type IcpSocialPrecedenceResolver } from '../.
 import { SpeakingEgressLeasePhase } from '../../../core/agent/arbiter/egress-lease-phase.js';
 import { createIcpSpeakingPrecedenceResolver } from '../../../core/icp/speaking-precedence-resolver.js';
 import { readRoomEpisodePressureFromLedger } from '../../../core/agent/fatigue/room-episode-pressure.js';
-import { createAgentLoopEgressReplySender } from '../egress-reply-sender.js';
+import { createAgentLoopEgressReplySender, type EgressReplyDelivery } from '../egress-reply-sender.js';
 import type { ObservedGroupMemoryScheduler } from '../../../faculties/memory/extraction/group-observed-scheduler.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
 import type { OutboundReplyDeduper } from '../../../system/lifecycle/outbound-reply-dedupe.js';
@@ -42,13 +42,7 @@ export interface SpeakingArbiterLaneDeps {
   sessionStore: SessionStore;
   persistenceRuntime: Awaited<ReturnType<typeof createAgentPersistenceRuntime>>;
   coreRuntime: AgentCoreRuntime;
-  gatewaySender: {
-    send: (
-      channelType: 'discord',
-      channelId: string,
-      content: string,
-    ) => Promise<void>;
-  };
+  gatewaySender: EgressReplyDelivery;
   outboundReplyGuard: OutboundReplyDeduper;
 }
 

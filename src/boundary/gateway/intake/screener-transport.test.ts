@@ -362,3 +362,34 @@ describe('screener deadline classification (q8l79)', () => {
     expect(isScreenerTimeout(failure)).toBe(false);
   });
 });
+
+
+describe('screener per-dispatch usage report (1fyyi)', () => {
+  it('reports provider token usage for a successful dispatch', async () => {
+    const selected = model('shared-router', 'card/model');
+    const runtime = fromAny<ProviderRuntime>({
+      getModels: (provider: string) => provider === 'shared-router' ? [selected] : [],
+      resolveProviderApiKey: () => 'vault-key',
+      complete: async () => fromAny<AssistantMessage>({
+        ...assistant('shared-router', selected.id, '{"ok":true}'),
+        usage: { input: 1200, output: 80, cacheRead: 30, cacheWrite: 0, totalTokens: 1310, cost: {} },
+      }),
+    });
+    const attempts: unknown[] = [];
+    await callValidatedToolLessJsonScreener({
+      backend: { runtime, requestCapability: new LLMRequestCapability(fromAny({}), runtime) },
+      model: fromAny({ provider: 'shared-router', model: selected.id, maxTokens: 500 }),
+      timeoutMs: 30_000,
+      systemPrompt: 'classifier',
+      userMessage: 'untrusted input',
+      screenerName: 'L2 screener',
+      makeError: (message: string) => new Error(message),
+      validateContent: (content: string) => JSON.parse(content) as object,
+      isValidationError: () => false,
+      onAttempt: attempt => attempts.push(attempt),
+    });
+    expect(attempts).toMatchObject([{
+      status: 'success', inputTokens: 1200, outputTokens: 80, cacheReadTokens: 30, cacheWriteTokens: 0,
+    }]);
+  });
+});

@@ -79,6 +79,10 @@ import {
 } from '../startup/support/signal-shutdown.js';
 import { resolveGatewayApiSurfaceBindings, startOptionalGatewayApiServer } from './api-surface.js';
 import { listExternalChannelAdapters } from '../../channels/external/plugin.js';
+import {
+  createGatewayRoomReplyOutbound,
+  resolveRoomReplyOutboundTargets,
+} from '../../boundary/gateway/room-reply-outbound.js';
 import { createGatewayFleetLifecycle } from './fleet-lifecycle-composition.js';
 import {
   createGatewayFleetIcpPosture,
@@ -1071,9 +1075,19 @@ async function main(): Promise<void> {
   }
 
   const shardWorkloadRegistry = new ShardWorkloadRegistry();
+  const roomReplyOutbound = createGatewayRoomReplyOutbound({
+    multiCompanion: bootstrap.server.multiCompanion.enabled,
+    targets: resolveRoomReplyOutboundTargets({
+      multiCompanion: bootstrap.server.multiCompanion.enabled,
+      ...(telegram ? { telegram } : {}),
+      ...(telegramCompanionId ? { telegramCompanionId } : {}),
+      externalAdapters: listExternalChannelAdapters(channelSurfaces.plugins),
+    }),
+  });
   const gateway = createGatewayServer({
     discordAdapter: discord,
     ...(telegram ? { telegramDock: telegram } : {}),
+    roomReplyOutbound,
     ...(bootstrap.channelsConfig.telegram.operatorChatId
       ? { operatorTelegramChatId: bootstrap.channelsConfig.telegram.operatorChatId }
       : {}),

@@ -166,6 +166,19 @@ describe('createAgentLoopEgressReplySender', () => {
     expect(delivery.send).not.toHaveBeenCalled();
   });
 
+  it.each(['telegram', 'external'] as const)(
+    'delivers a %s room reply through the gateway sender (ze2fx)',
+    async (channelType) => {
+      const generator = { handleMessage: vi.fn(async () => makeResponse('sounds fun')) };
+      const delivery = { send: vi.fn(async () => undefined) };
+      const sender = makeSender(generator, delivery);
+      const channelId = `${channelType}:room-1`;
+      const result = await sender.deliver(makeRequest({ channelType, channelId }));
+      expect(result.outcome).toBe('delivered');
+      expect(delivery.send).toHaveBeenCalledWith(channelType, channelId, 'sounds fun');
+    },
+  );
+
   it('fails closed for an unsupported channel (no generation, no send)', async () => {
     const generator = { handleMessage: vi.fn(async () => makeResponse('hi')) };
     const delivery = { send: vi.fn(async () => undefined) };

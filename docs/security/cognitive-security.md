@@ -421,6 +421,12 @@ the semantic trace records it, so an `l2Screener.timeoutMs` too short for the
 routed `background` model shows up as timeouts rather than provider failures.
 The seed sizes the timeout for reasoning-class background models (30 s, the
 same order as L3); reduce it only for a fast non-reasoning classifier model.
+Every L2, L3 and vision screener provider dispatch (including the one
+schema-repair retry) writes a `model_usage_events` row with `originStage`
+`intake:<tier>`, priced from the routed models.json entry and attributed to the
+screening companion. A screener model with no registry pricing is logged once
+and not ledgered, because an unpriced row would count as unknown cost and block
+every later dispatch under an enabled budget.
 A flagged L2 verdict (or an
 L3-mandatory tier) returns an `escalate_l3` outcome; L2 routes, it never decides
 the L3 verdict (`l2-screener.ts#L1-L38`).

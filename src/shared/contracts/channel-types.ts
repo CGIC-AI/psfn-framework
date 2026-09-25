@@ -20,25 +20,36 @@ export type ChannelType = typeof CHANNEL_TYPES[number];
 interface ChannelPolicy {
   scheduledContinuity: boolean;
   liveWakeup: boolean;
+  /**
+   * The connector carries multi-party group rooms as well as direct
+   * conversations (psfn-framework-nfmdd). Group-room participation and group
+   * memory detection read this declaration instead of an operator list.
+   */
+  groupCapable: boolean;
 }
 
 /** Central policy authority for channel behavior consumed outside adapters. */
 const CHANNEL_BEHAVIOR: Readonly<Record<ChannelType, ChannelPolicy>> = Object.freeze({
-  discord: { scheduledContinuity: true, liveWakeup: true },
-  terminal: { scheduledContinuity: true, liveWakeup: false },
-  api: { scheduledContinuity: true, liveWakeup: true },
-  telegram: { scheduledContinuity: true, liveWakeup: true },
-  multica: { scheduledContinuity: false, liveWakeup: false },
-  buzz: { scheduledContinuity: false, liveWakeup: false },
-  'psfn-amica': { scheduledContinuity: true, liveWakeup: true },
-  companion: { scheduledContinuity: false, liveWakeup: false },
-  'companion-ui': { scheduledContinuity: false, liveWakeup: true },
+  discord: { scheduledContinuity: true, liveWakeup: true, groupCapable: true },
+  terminal: { scheduledContinuity: true, liveWakeup: false, groupCapable: false },
+  api: { scheduledContinuity: true, liveWakeup: true, groupCapable: false },
+  telegram: { scheduledContinuity: true, liveWakeup: true, groupCapable: true },
+  multica: { scheduledContinuity: false, liveWakeup: false, groupCapable: false },
+  buzz: { scheduledContinuity: false, liveWakeup: false, groupCapable: false },
+  'psfn-amica': { scheduledContinuity: true, liveWakeup: true, groupCapable: false },
+  companion: { scheduledContinuity: false, liveWakeup: false, groupCapable: false },
+  'companion-ui': { scheduledContinuity: false, liveWakeup: true, groupCapable: false },
   // No agent-initiated delivery path reaches an external bridge yet.
-  external: { scheduledContinuity: false, liveWakeup: false },
+  external: { scheduledContinuity: false, liveWakeup: false, groupCapable: true },
 });
 
 export function supportsScheduledContinuity(channelType: ChannelType): boolean {
   return CHANNEL_BEHAVIOR[channelType].scheduledContinuity;
+}
+
+/** True when the connector declares multi-party group rooms (nfmdd). */
+export function isGroupCapableChannelType(channelType: ChannelType): boolean {
+  return CHANNEL_BEHAVIOR[channelType].groupCapable;
 }
 
 export function supportsLiveWakeup(channelType: string | undefined): boolean {

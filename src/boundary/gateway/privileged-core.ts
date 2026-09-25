@@ -1,4 +1,5 @@
 import type { ChannelOutboundDock } from '../../channels/backplane/types.js';
+import type { GatewayRoomReplyOutbound } from './room-reply-outbound.js';
 import { createGatewayJevDecisionService } from './jev-decision-service.js';
 import {
   createEligibilityGate,
@@ -120,6 +121,7 @@ export interface GatewayPrivilegedCore {
   createGatewayServer(input: {
     discordAdapter: ChannelOutboundDock;
     telegramDock?: ChannelOutboundDock;
+    roomReplyOutbound?: GatewayRoomReplyOutbound;
     operatorTelegramChatId?: string;
     operatorDiscordDock?: ChannelOutboundDock;
     operatorDiscordChannelId?: string;
@@ -347,6 +349,9 @@ export async function buildGatewayPrivilegedCore(
   const intakeScreening = await composeGatewayIntakeScreeningRuntime({
     config: input.config,
     jevDecisions,
+    ...(privilegedServices.modelUsageStore
+      ? { modelUsageRecorder: privilegedServices.modelUsageStore }
+      : {}),
     resolveReceipts: resolveIntakeReceipts,
     disposeReceipts: async () => {
       for (const store of receiptStoresByCompanionId.values()) {
@@ -557,6 +562,7 @@ export async function buildGatewayPrivilegedCore(
     createGatewayServer: ({
       discordAdapter,
       telegramDock,
+      roomReplyOutbound,
       operatorTelegramChatId,
       operatorDiscordDock,
       operatorDiscordChannelId,
@@ -591,6 +597,7 @@ export async function buildGatewayPrivilegedCore(
       modelDiscovery: privilegedServices.modelDiscovery,
       discordAdapter,
       ...(telegramDock ? { telegramDock } : {}),
+      ...(roomReplyOutbound ? { roomReplyOutbound } : {}),
       ...(operatorTelegramChatId ? { operatorTelegramChatId } : {}),
       ...(operatorDiscordDock ? { operatorDiscordDock } : {}),
       ...(operatorDiscordChannelId ? { operatorDiscordChannelId } : {}),

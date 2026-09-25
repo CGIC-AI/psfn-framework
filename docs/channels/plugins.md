@@ -395,9 +395,14 @@ agent's observe path and participation gate (passive-name candidate, appraiser,
 reservation, egress lease) and usually return `no_reply`. Each adapter's `outbound.sendText` puts messages in a
 bounded per-adapter queue, and the bridge drains that queue with
 `channel_pull_outbound`. The queue and the pull tool are covered by the
-conformance tests. However, no agent-initiated delivery path (scheduled
-continuity, wake notes, outreach) targets external adapters yet. That is why
-the `external` channel type has neither scheduled continuity nor live wakeup. Rejection reasons are `busy`, `duplicate`, `invalid`,
+conformance tests. The one agent-initiated path that targets external adapters
+is an appraised autonomous room reply: when the speaking-arbiter egress lease
+delivers a reply to an external group conversation, the gateway's
+`channel.sendRoomReply` method queues it on the owning adapter (refused for a
+channel another companion owns). Other agent-initiated delivery (scheduled
+continuity, wake notes, outreach) does not target external adapters yet. That
+is why the `external` channel type has neither scheduled continuity nor live
+wakeup. Rejection reasons are `busy`, `duplicate`, `invalid`,
 `turn_timeout`, `turn_failed` and `not_running`. The bridge should back off and
 retry `busy` and `turn_timeout`. It should drop `invalid`.
 

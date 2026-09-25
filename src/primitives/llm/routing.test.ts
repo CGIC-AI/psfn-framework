@@ -982,3 +982,48 @@ describe('routing candidate sampling constraints', () => {
     expect(candidateFor(false)).toMatchObject({ rejectsTemperature: false });
   });
 });
+
+describe('cost ranking with explicit zero rates (ylgkh)', () => {
+  function chatFallbacks(costs: Array<{ id: string; cost?: { inputPer1MUsd?: number; outputPer1MUsd?: number } }>) {
+    return makeConfig({
+      modelRegistry: makeRegistry([
+        {
+          id: 'lead',
+          rank: 1,
+          provider: 'openrouter',
+          model: 'lead/model',
+          maxOutputTokens: 4096,
+          contextWindow: 64_000,
+          purposes: [{ purpose: 'chat', primary: true }],
+        },
+        ...costs.map(({ id, cost }) => ({
+          id,
+          rank: 30,
+          provider: 'openrouter',
+          model: `${id}/model`,
+          maxOutputTokens: 4096,
+          contextWindow: 64_000,
+          purposes: [{ purpose: 'chat' as const, primary: false }],
+          ...(cost ? { cost } : {}),
+        })),
+      ]),
+    });
+  }
+
+  it('ranks a zero-rate subscription model as the cheapest fallback', () => {
+    const order = resolveRoutingCandidates(chatFallbacks([
+      { id: 'paid', cost: { inputPer1MUsd: 1, outputPer1MUsd: 2 } },
+      { id: 'unpriced' },
+      { id: 'subscription', cost: { inputPer1MUsd: 0, outputPer1MUsd: 0 } },
+    ]), 'chat').map(candidate => candidate.slotKey);
+    expect(order).toEqual(['lead', 'subscription', 'paid', 'unpriced']);
+  });
+
+  it('still ranks unpriced models last when every explicit cost is zero', () => {
+    const order = resolveRoutingCandidates(chatFallbacks([
+      { id: 'unpriced' },
+      { id: 'subscription', cost: { inputPer1MUsd: 0, outputPer1MUsd: 0 } },
+    ]), 'chat').map(candidate => candidate.slotKey);
+    expect(order).toEqual(['lead', 'subscription', 'unpriced']);
+  });
+});

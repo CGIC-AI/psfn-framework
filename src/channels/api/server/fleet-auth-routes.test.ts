@@ -908,26 +908,9 @@ describe('ADMIN_TOKEN operator lifecycle ceremony door (psfn-framework-ja7n0)', 
       targetPrincipalId: '00000000-0000-4000-8000-000000000502',
       contactId: 'contact-new',
       bindingId: '00000000-0000-4000-8000-000000000514',
-      newProvider: {
-        provider: 'discord',
-        subjectId: '223456789012345678',
-        callbackTransactionId: '00000000-0000-4000-8000-000000000515',
-        proofDigest: 'a'.repeat(64),
-      },
-      reason: 'operator approves the subject binding',
-    }],
-    ['provider link', 'provider/complete', {
-      action: 'provider.add',
-      ceremonyId: '00000000-0000-4000-8000-000000000516',
-      companionId: COMPANION_ID,
-      contactId: 'contact-member',
-      newProvider: {
-        provider: 'discord',
-        subjectId: '323456789012345678',
-        callbackTransactionId: '00000000-0000-4000-8000-000000000517',
-        proofDigest: 'b'.repeat(64),
-      },
-      reason: 'operator approves the subject provider link',
+      // Key mode: no OAuth proof, just the pending principal's own subject.
+      providerSubjectId: '223456789012345678',
+      reason: 'operator activates the pending account',
     }],
     ['role', 'role/complete', ceremonyBody.request],
   ])('reaches the %s completion through the operator door', async (_label, path, body) => {
@@ -1054,6 +1037,44 @@ describe('ADMIN_TOKEN operator account door (psfn-framework-aol3m)', () => {
     );
     expect(res.statusCode).toBe(401);
     expect(complete).not.toHaveBeenCalled();
+  });
+});
+
+describe('key mode has no provider-link ceremony (key-or-SSO ruling)', () => {
+  it('refuses an ADMIN_TOKEN provider link: it proves a Discord account and is SSO-only', async () => {
+    const ceremonies = { complete: vi.fn(), completeAsAdminTokenOperator: vi.fn() };
+    const handler = new FleetAuthHttpRoutes({
+      broker: {} as unknown as GatewayFleetAuthBroker,
+      canonicalOrigin: 'https://fleet.example.test',
+      callbackPath: '/auth/discord/callback',
+      lifecycleCeremonies: ceremonies as never,
+      adminToken: 'fleet-admin-token-for-provider-tests',
+    });
+    const res = response();
+    await handler.handle(
+      jsonRequest({ request: {
+        action: 'provider.add',
+        ceremonyId: '00000000-0000-4000-8000-000000000516',
+        companionId: COMPANION_ID,
+        contactId: 'contact-member',
+        newProvider: {
+          provider: 'discord',
+          subjectId: '323456789012345678',
+          callbackTransactionId: '00000000-0000-4000-8000-000000000517',
+          proofDigest: 'b'.repeat(64),
+        },
+        reason: 'not applicable in key mode',
+      } }, {
+        'content-type': 'application/json',
+        origin: 'https://fleet.example.test',
+        authorization: 'Bearer fleet-admin-token-for-provider-tests',
+      }),
+      res,
+      new URL('https://fleet.example.test/v1/fleet-auth/lifecycle/provider/complete'),
+    );
+    expect(res.statusCode).toBe(400);
+    expect(ceremonies.completeAsAdminTokenOperator).not.toHaveBeenCalled();
+    expect(ceremonies.complete).not.toHaveBeenCalled();
   });
 });
 

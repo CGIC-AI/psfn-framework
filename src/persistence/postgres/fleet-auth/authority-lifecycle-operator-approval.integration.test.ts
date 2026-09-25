@@ -1,10 +1,9 @@
-// psfn-framework-ja7n0: the audited ADMIN_TOKEN operator is the approving
-// authority of the binding, provider-link and role ceremonies against real
-// PostgreSQL. It replaces only the approving companion owner/administrator:
-// every provider proof must still be the SUBJECT's own session-initiated
-// Discord OAuth, the approval is a durable `admin_token_operator` audit row
-// bound to exactly one decision and authority snapshot, and everything else
-// fails closed.
+// psfn-framework-ja7n0 under the key-or-SSO ruling: the audited ADMIN_TOKEN
+// operator performs binding activation and role grant/change/revoke directly
+// with the key against real PostgreSQL. No SSO session and no Discord OAuth
+// proof is involved; the approval is a durable `admin_token_operator` audit
+// row bound to exactly one decision and authority snapshot, and everything
+// else fails closed. Provider-link ceremonies are SSO-mode only.
 import { randomUUID } from 'node:crypto';
 import { rmSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
@@ -19,13 +18,8 @@ import {
   DIGEST,
   claim,
   freshContext,
-  providerContactScope,
-  providerProof,
   registerLifecycleStoreHarness,
-  seedActorSession,
-  seedDecisionProviderProofs,
   seedOwnerAndTarget,
-  sessionFor,
 } from './fixtures/authority-lifecycle-store.js';
 
 // Timeout-margin policy (see src/test-support/integration-timeout-registry.json):
@@ -35,7 +29,7 @@ const TIMEOUT_MS = 120_000;
 registerLifecycleStoreHarness();
 
 type Context = Awaited<ReturnType<typeof freshContext>>;
-type OperatorAction = 'binding.activate' | 'provider.add' | 'role.grant' | 'role.change';
+type OperatorAction = 'binding.activate' | 'role.grant' | 'role.change';
 
 async function operatorBase(
   context: Context,
@@ -89,9 +83,7 @@ async function seedPendingSubject(context: Context, subjectId: string) {
       (provider, subject_id, principal_id, state, authority_generation)
     VALUES ('discord', $2, $1, 'pending', 1)
   `, [pendingId, subjectId]);
-  // The pending subject signs in with Discord and holds its own session.
-  const session = await seedActorSession(context.pool, claim(pendingId), subjectId, 1);
-  return { pendingId, session };
+  return { pendingId };
 }
 
 function bindingFields(companionId: string, subjectId: string) {
@@ -99,19 +91,7 @@ function bindingFields(companionId: string, subjectId: string) {
     companionId,
     contactId: 'operator-approved-contact',
     bindingId: randomUUID(),
-    newProvider: providerProof(subjectId),
-    contactAuthority: {
-      schemaVersion: 1 as const,
-      contactId: 'operator-approved-contact',
-      channel: 'discord' as const,
-      providerSubjectId: subjectId,
-      identityVersion: 2,
-      verificationId: randomUUID(),
-      verificationDigest: 'c'.repeat(64),
-      contactAuthorityVersion: 3,
-      ownershipState: 'verified' as const,
-      restoreState: 'live' as const,
-    },
+    providerSubjectId: subjectId,
   };
 }
 
@@ -126,10 +106,10 @@ async function withContext(run: (context: Context) => Promise<void>): Promise<vo
 }
 
 describe('ADMIN_TOKEN operator approval of lifecycle ceremonies', () => {
-  it('activates a binding on the subject\'s own proof, audited as admin_token_operator', async () => {
+  it('activates a pending binding with the key alone, audited as admin_token_operator', async () => {
     await withContext(async (context) => {
       const seeded = await seedOwnerAndTarget(context.pool);
-      const { pendingId, session } = await seedPendingSubject(context, '523456789012345678');
+      const { pendingId } = await seedPendingSubject(context, '523456789012345678');
       const decision = {
         ...await operatorBase(context, {
           action: 'binding.activate',
@@ -138,12 +118,16 @@ describe('ADMIN_TOKEN operator approval of lifecycle ceremonies', () => {
         }),
         ...bindingFields(seeded.companionId, '523456789012345678'),
       } satisfies VerifiedFleetAuthLifecycleDecision;
-      await seedDecisionProviderProofs(context.pool, decision, {
-        principalId: pendingId,
-        sessionId: session.sessionId,
-      });
       const result = await context.store.execute(decision);
       expect(result.target).toMatchObject({ principalId: pendingId, bindingVersion: 2 });
+      const binding = await context.pool.query<{ state: string; provenance: Record<string, string> }>(`
+        SELECT state, verification_provenance AS provenance
+        FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings WHERE binding_id = $1
+      `, [decision.bindingId]);
+      expect(binding.rows[0]).toMatchObject({
+        state: 'active',
+        provenance: { kind: 'admin_token_operator_binding', approvalEventId: decision.operator.authorizationEventId },
+      });
 
       const audit = await context.pool.query<{ actor_context: Record<string, string> }>(`
         SELECT actor_context
@@ -159,7 +143,7 @@ describe('ADMIN_TOKEN operator approval of lifecycle ceremonies', () => {
     });
   }, TIMEOUT_MS);
 
-  it('refuses a binding whose provider proof was not initiated by the subject itself', async () => {
+  it('refuses a key binding for a subject the pending principal does not own', async () => {
     await withContext(async (context) => {
       const seeded = await seedOwnerAndTarget(context.pool);
       const { pendingId } = await seedPendingSubject(context, '533456789012345678');
@@ -169,42 +153,12 @@ describe('ADMIN_TOKEN operator approval of lifecycle ceremonies', () => {
           companionId: seeded.companionId,
           target: claim(pendingId),
         }),
-        ...bindingFields(seeded.companionId, '533456789012345678'),
+        // Another principal's active subject cannot be bound by assertion.
+        ...bindingFields(seeded.companionId, '223456789012345678'),
       } satisfies VerifiedFleetAuthLifecycleDecision;
-      // The owner's browser ran the Discord OAuth: that is not the subject's proof.
-      await seedDecisionProviderProofs(context.pool, decision, {
-        principalId: seeded.actorId,
-        sessionId: sessionFor(seeded.actorId).sessionId,
-      });
       await expect(context.store.execute(decision)).rejects.toMatchObject({
-        reasonCode: 'provider_callback_proof_invalid',
+        reasonCode: 'binding_provider_mismatch',
       });
-    });
-  }, TIMEOUT_MS);
-
-  it('links a provider for a non-owner subject on its own proof', async () => {
-    await withContext(async (context) => {
-      const seeded = await seedOwnerAndTarget(context.pool);
-      const addedProvider = providerProof('643456789012345678');
-      const decision = {
-        ...await operatorBase(context, {
-          action: 'provider.add',
-          companionId: seeded.companionId,
-          target: claim(seeded.targetId),
-        }),
-        ...providerContactScope(seeded, addedProvider),
-        newProvider: addedProvider,
-      } satisfies VerifiedFleetAuthLifecycleDecision;
-      await seedDecisionProviderProofs(context.pool, decision, {
-        principalId: seeded.targetId,
-        sessionId: sessionFor(seeded.targetId).sessionId,
-      });
-      await context.store.execute(decision);
-      const subjects = await context.pool.query<{ subject_id: string }>(`
-        SELECT subject_id FROM ${FLEET_AUTH_SCHEMA_NAME}.provider_subjects
-        WHERE principal_id = $1 AND state = 'active' ORDER BY subject_id
-      `, [seeded.targetId]);
-      expect(subjects.rows.map(row => row.subject_id)).toContain('643456789012345678');
     });
   }, TIMEOUT_MS);
 

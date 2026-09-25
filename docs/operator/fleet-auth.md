@@ -271,26 +271,35 @@ validates the actor/target version claims, bumps the affected versions, writes
 a lifecycle decision receipt, and audits the transition. Every denial path is
 audited (`authorization_audit_events` with `resource = 'lifecycle-ceremony'`).
 
-The audited ADMIN_TOKEN operator can be the approving authority for the same
-seven ceremony actions, with or without SSO configured. It sends the completion
-request to the same `/v1/fleet-auth/lifecycle/{binding,provider,role}/complete`
-route with `Authorization: Bearer $ADMIN_TOKEN` (or the HttpOnly `psfn_token`
-cookie) and the exact canonical `Origin`; no SSO session or CSRF token is
-involved. The gateway first writes a durable `admin_token_operator` approval row
-(`reason_code = 'admin_token_lifecycle_approval_allowed'`) bound to the decision
-id, ceremony, action, companion and current authority generation/epoch. The
-store re-reads that row inside the decision transaction and denies anything
-stale, foreign or missing. Because the epoch advances, an approval can be used
-only once. The operator replaces only the approving companion
-owner/administrator. It never supplies the subject's proof. For
-`binding.activate` and every `provider.*` action, each Discord proof must be a
-lifecycle OAuth callback that the target principal started from its own live
-session. A pending principal signs in with Discord and then starts the
-lifecycle OAuth itself. A proof that the operator's or anyone else's browser
-started is refused (`provider_callback_proof_invalid`). The anti-rollback
-floor, target version claims, last-owner protection and contact-authority
-snapshot checks are unchanged. Any action outside the seven ceremony actions
-rejects an operator approval as an invalid decision.
+**Key mode (ADMIN_TOKEN, no SSO or Discord).** The audited ADMIN_TOKEN
+operator performs these ceremonies directly with the key, whether or not SSO
+is configured:
+
+- `binding.activate` activates a pending principal's contact binding. It
+  names the principal's own Discord subject (`providerSubjectId`), which its
+  SSO login already recorded as pending. There is no OAuth proof and no
+  contact-authority snapshot.
+- `role.grant`, `role.change` and `role.revoke`.
+
+Send them to the same `/v1/fleet-auth/lifecycle/{binding,role}/complete`
+routes with `Authorization: Bearer $ADMIN_TOKEN` (or the HttpOnly
+`psfn_token` cookie) and the exact canonical `Origin`. No SSO session or CSRF
+token is involved. The gateway first writes a durable `admin_token_operator`
+approval row (`reason_code = 'admin_token_lifecycle_approval_allowed'`). It is
+bound to the decision id, ceremony, action, companion and current authority
+generation/epoch. The store re-reads that row inside the decision transaction
+and denies anything stale, foreign or missing. The epoch advance makes each
+approval single-use. The anti-rollback floor, target version claims,
+last-owner protection and conflict checks are unchanged.
+
+`provider.add`, `provider.relink` and `provider.replace` prove control of a
+Discord account through that account's own OAuth callback. They are an
+optional SSO-mode feature and are refused on the key path; nothing in key mode
+depends on them. Linking a platform identity (Discord, Telegram and others)
+to a contact is ordinary contact management through
+`PATCH /api/admin/contacts/:id` (`addChannel`), which works with the key and
+needs no OAuth. Account reinstatement, disable and re-enable are described in
+*Operator account authority* below.
 
 ## Reconciliation quarantine and recovery
 

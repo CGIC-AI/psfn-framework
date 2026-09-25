@@ -49,15 +49,20 @@ const ISSUER = 'fleet-admin-token-routes-test';
  * inherently the subject's OWN proof of controlling an identity (the Discord
  * OAuth callback of the account being linked). Nothing else may be listed:
  * the operator approves ceremonies but never impersonates the subject's proof.
- * The fleet-auth identity ceremonies themselves
- * (`/v1/fleet-auth/lifecycle/{binding,provider,role}/complete`) are operator-
- * approvable (psfn-framework-ja7n0); they are served by the gateway fleet-auth
+ * Binding activation, role changes and account authority
+ * (`/v1/fleet-auth/lifecycle/{binding,role,account}/complete`) work with the
+ * key alone (key-or-SSO ruling); they are served by the gateway fleet-auth
  * door rather than the Garden proxy, and their ADMIN_TOKEN path is proven end
- * to end in fleet-auth-routes.test.ts, lifecycle-ceremony.test.ts and
- * authority-lifecycle-operator-approval.integration.test.ts. The Discord OAuth
- * callback and lifecycle OAuth start are not Garden catalogue routes at all.
+ * to end in fleet-auth-routes.test.ts, lifecycle-ceremony.test.ts,
+ * authority-lifecycle-operator-approval.integration.test.ts and
+ * schema.integration.test.ts. The Discord OAuth callback and lifecycle OAuth
+ * start are not Garden catalogue routes at all.
  */
-const NON_OPERATOR_MUTATIONS: Readonly<Record<string, string>> = Object.freeze({});
+const NON_OPERATOR_MUTATIONS: Readonly<Record<string, string>> = Object.freeze({
+  'POST /v1/fleet-auth/lifecycle/provider/complete':
+    'inherently the subject\'s own proof: links a Discord account by that account\'s OAuth callback; '
+    + 'an SSO-mode feature that nothing in key mode depends on (the fleet-auth door refuses it for ADMIN_TOKEN)',
+});
 
 function operatorMutations(): GardenRouteCapability[] {
   return GARDEN_ROUTE_CAPABILITIES.filter(capability => (

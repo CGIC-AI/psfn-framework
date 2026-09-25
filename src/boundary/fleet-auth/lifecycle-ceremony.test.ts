@@ -321,9 +321,39 @@ describe('gateway fleet-auth lifecycle ceremony', () => {
       expect(sql.some(text => text.includes('browser_sessions'))).toBe(false);
     });
 
-    it('resolves a provider ceremony subject from its exact active contact binding', async () => {
-      const { service, execute } = harness();
+    it('activates a pending binding with the key alone: no OAuth proof, no contact snapshot', async () => {
+      const { service, execute, read } = harness();
+      const bindingId = randomUUID();
       await service.completeAsAdminTokenOperator({
+        requestOrigin: ORIGIN,
+        request: {
+          action: 'binding.activate',
+          ceremonyId: randomUUID(),
+          companionId: COMPANION_ID,
+          targetPrincipalId: TARGET_ID,
+          contactId: 'contact-new',
+          bindingId,
+          providerSubjectId: '223456789012345679',
+          reason: 'operator activates the pending account',
+        },
+      });
+      const decision = execute.mock.calls[0]![0];
+      expect(decision).toMatchObject({
+        action: 'binding.activate',
+        target: { principalId: TARGET_ID },
+        contactId: 'contact-new',
+        bindingId,
+        providerSubjectId: '223456789012345679',
+        operator: { kind: 'admin_token_operator' },
+      });
+      expect(decision).not.toHaveProperty('newProvider');
+      expect(decision).not.toHaveProperty('contactAuthority');
+      expect(read).not.toHaveBeenCalled();
+    });
+
+    it('refuses provider ceremonies on the key path: they are SSO-only', async () => {
+      const { service, execute, recordApproval } = harness();
+      await expect(service.completeAsAdminTokenOperator({
         requestOrigin: ORIGIN,
         request: {
           action: 'provider.add',
@@ -331,15 +361,11 @@ describe('gateway fleet-auth lifecycle ceremony', () => {
           companionId: COMPANION_ID,
           contactId: 'contact-member',
           newProvider: proof('323456789012345679'),
-          reason: 'member links a second account',
+          reason: 'not applicable in key mode',
         },
-      });
-      expect(execute.mock.calls[0]![0]).toMatchObject({
-        action: 'provider.add',
-        target: { principalId: TARGET_ID },
-        contactId: 'contact-member',
-        newProvider: { subjectId: '323456789012345679' },
-      });
+      })).rejects.toMatchObject({ code: 'invalid_request' });
+      expect(recordApproval).not.toHaveBeenCalled();
+      expect(execute).not.toHaveBeenCalled();
     });
 
     it('fails closed without approval audit wiring or with a foreign origin', async () => {

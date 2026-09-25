@@ -691,14 +691,21 @@
       "note": "Code-owned DoS guard: bound on the guest-only Hub device attachment fence map (n66dn.2); fences lift after 70 s, the cap only limits memory under rejection floods."
     },
     {
-      "file": "src/boundary/fleet-auth/lifecycle-ceremony.ts",
+      "file": "src/boundary/fleet-auth/lifecycle-ceremony-request.ts",
       "name": "boundedReason.$call:length-guard:GreaterThanToken#1",
       "value": "512",
       "form": "length-guard",
       "note": "Code-owned fleet-auth ceremony record bound coupled to the signed lifecycle evidence shape."
     },
     {
-      "file": "src/boundary/fleet-auth/lifecycle-ceremony.ts",
+      "file": "src/boundary/fleet-auth/lifecycle-ceremony-request.ts",
+      "name": "parseAdminTokenOperatorCeremonyRequest.$call:length-guard:GreaterThanToken#1",
+      "value": "256",
+      "form": "length-guard",
+      "note": "Code-owned fleet-auth key-mode ceremony request bound on the contact id, identical to the SSO ceremony contract."
+    },
+    {
+      "file": "src/boundary/fleet-auth/lifecycle-ceremony-request.ts",
       "name": "parseFleetAuthLifecycleCeremonyRequest.$call:length-guard:GreaterThanToken#1",
       "value": "256",
       "form": "length-guard",

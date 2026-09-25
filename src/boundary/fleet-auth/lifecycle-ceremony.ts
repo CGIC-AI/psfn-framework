@@ -3,7 +3,6 @@ import type { Pool } from 'pg';
 import type {
   VerifiedDiscordContactAuthoritySnapshot,
 } from '../../shared/contracts/contact-authority-snapshot.js';
-import { assertNoUnknownKeys, isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
 import {
   type FleetAuthAction,
   type FleetAuthRole,
@@ -12,14 +11,18 @@ import type {
   FleetAuthLifecycleResult,
   PrincipalAuthorityClaim,
   VerifiedFleetAuthLifecycleDecision,
-  VerifiedProviderProof,
 } from '../../persistence/postgres/fleet-auth/authority-lifecycle-types.js';
 import type { GatewayFleetAuthAuthorityLifecycleStore } from '../../persistence/postgres/fleet-auth/authority-lifecycle-store.js';
 import { FLEET_AUTH_SCHEMA_NAME } from '../../persistence/postgres/fleet-auth/schema.js';
 import { fleetAuthRoleAllowsAction } from './role-action-policy.js';
+import {
+  parseAdminTokenOperatorCeremonyRequest,
+  parseFleetAuthLifecycleCeremonyRequest,
+  type AdminTokenOperatorCeremonyRequest,
+  type FleetAuthLifecycleCeremonyRequest,
+} from './lifecycle-ceremony-request.js';
 
 const SUBJECT_PATTERN = /^[1-9][0-9]{16,19}$/u;
-const DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
 
 export const FLEET_AUTH_BINDING_COMPLETE_PATH =
   '/v1/fleet-auth/lifecycle/binding/complete';
@@ -27,62 +30,6 @@ export const FLEET_AUTH_PROVIDER_COMPLETE_PATH =
   '/v1/fleet-auth/lifecycle/provider/complete';
 export const FLEET_AUTH_ROLE_COMPLETE_PATH =
   '/v1/fleet-auth/lifecycle/role/complete';
-
-type SupportedLifecycleAction =
-  | 'binding.activate'
-  | 'provider.add'
-  | 'provider.relink'
-  | 'provider.replace'
-  | 'role.grant'
-  | 'role.change'
-  | 'role.revoke';
-
-interface CeremonyBase {
-  action: SupportedLifecycleAction;
-  ceremonyId: string;
-  companionId: string;
-  reason: string;
-}
-
-export type FleetAuthLifecycleCeremonyRequest =
-  | (CeremonyBase & {
-      action: 'binding.activate';
-      targetPrincipalId: string;
-      contactId: string;
-      bindingId: string;
-      newProvider: VerifiedProviderProof;
-    })
-  | (CeremonyBase & {
-      action: 'provider.add' | 'provider.relink';
-      contactId: string;
-      newProvider: VerifiedProviderProof;
-    })
-  | (CeremonyBase & {
-      action: 'provider.replace';
-      contactId: string;
-      currentProvider: VerifiedProviderProof;
-      newProvider: VerifiedProviderProof;
-    })
-  | (CeremonyBase & {
-      action: 'role.grant';
-      targetPrincipalId: string;
-      grantId: string;
-      role: FleetAuthRole;
-    })
-  | (CeremonyBase & {
-      action: 'role.change';
-      targetPrincipalId: string;
-      grantId: string;
-      newGrantId: string;
-      currentRole: FleetAuthRole;
-      role: FleetAuthRole;
-    })
-  | (CeremonyBase & {
-      action: 'role.revoke';
-      targetPrincipalId: string;
-      grantId: string;
-      currentRole: FleetAuthRole;
-    });
 
 export interface FleetContactAuthorityPort {
   read(input: {
@@ -137,7 +84,7 @@ export interface AdminTokenLifecycleApprovalPort {
     decisionId: string;
     ceremonyId: string;
     companionId: string;
-    lifecycleAction: FleetAuthLifecycleCeremonyRequest['action'];
+    lifecycleAction: AdminTokenOperatorCeremonyRequest['action'];
   }): Promise<{
     authorizationEventId: string;
     authorityGeneration: number;
@@ -177,182 +124,6 @@ function positiveInteger(value: string, field: string): number {
   }
   return parsed;
 }
-
-function providerProof(value: unknown, field: string): VerifiedProviderProof {
-  if (!isRecord(value)) throw new Error(`${field} must be an object`);
-  assertNoUnknownKeys(
-    value,
-    ['provider', 'subjectId', 'callbackTransactionId', 'proofDigest'],
-    field,
-  );
-  if (value.provider !== 'discord'
-    || typeof value.subjectId !== 'string'
-    || !SUBJECT_PATTERN.test(value.subjectId)
-    || typeof value.callbackTransactionId !== 'string'
-    || !isRfc4122Uuid(value.callbackTransactionId)
-    || typeof value.proofDigest !== 'string'
-    || !DIGEST_PATTERN.test(value.proofDigest)) {
-    throw new Error(`${field} is invalid`);
-  }
-  return value as unknown as VerifiedProviderProof;
-}
-
-function boundedReason(value: unknown): string {
-  if (typeof value !== 'string') throw new Error('reason must be a string');
-  const reason = value.trim();
-  if (!reason || reason.length > 512 || /[\u0000-\u001f\u007f]/u.test(reason)) {
-    throw new Error('reason is invalid');
-  }
-  return reason;
-}
-
-function contactId(value: unknown): string {
-  if (typeof value !== 'string'
-    || value.length < 1
-    || value.length > 256
-    || /[\u0000-\u001f\u007f]/u.test(value)) {
-    throw new Error('contactId is invalid');
-  }
-  return value;
-}
-
-function role(value: unknown, field: string): FleetAuthRole {
-  if (value !== 'owner' && value !== 'admin' && value !== 'member' && value !== 'guest') {
-    throw new Error(`${field} is invalid`);
-  }
-  return value;
-}
-
-function uuid(value: unknown, field: string): string {
-  if (typeof value !== 'string' || !isRfc4122Uuid(value)) {
-    throw new Error(`${field} is invalid`);
-  }
-  return value;
-}
-
-export function parseFleetAuthLifecycleCeremonyRequest(
-  input: unknown,
-): FleetAuthLifecycleCeremonyRequest {
-  if (!isRecord(input)) throw new Error('Lifecycle ceremony request must be an object');
-  const common = ['action', 'ceremonyId', 'companionId', 'reason'] as const;
-  if (typeof input.ceremonyId !== 'string' || !isRfc4122Uuid(input.ceremonyId)
-    || typeof input.companionId !== 'string' || !isRfc4122Uuid(input.companionId)) {
-    throw new Error('Lifecycle ceremony scope is invalid');
-  }
-  const reason = boundedReason(input.reason);
-  if (input.action === 'binding.activate') {
-    assertNoUnknownKeys(input, [
-      ...common,
-      'targetPrincipalId',
-      'contactId',
-      'bindingId',
-      'newProvider',
-    ], 'lifecycleCeremony');
-    if (typeof input.targetPrincipalId !== 'string' || !isRfc4122Uuid(input.targetPrincipalId)
-      || typeof input.bindingId !== 'string' || !isRfc4122Uuid(input.bindingId)
-      || typeof input.contactId !== 'string' || !input.contactId
-      || input.contactId.length > 256) {
-      throw new Error('Binding activation scope is invalid');
-    }
-    return {
-      action: input.action,
-      ceremonyId: input.ceremonyId,
-      companionId: input.companionId,
-      reason,
-      targetPrincipalId: input.targetPrincipalId,
-      contactId: input.contactId,
-      bindingId: input.bindingId,
-      newProvider: providerProof(input.newProvider, 'newProvider'),
-    };
-  }
-  if (input.action === 'provider.add' || input.action === 'provider.relink') {
-    assertNoUnknownKeys(input, [...common, 'contactId', 'newProvider'], 'lifecycleCeremony');
-    return {
-      action: input.action,
-      ceremonyId: input.ceremonyId,
-      companionId: input.companionId,
-      reason,
-      contactId: contactId(input.contactId),
-      newProvider: providerProof(input.newProvider, 'newProvider'),
-    };
-  }
-  if (input.action === 'provider.replace') {
-    assertNoUnknownKeys(
-      input,
-      [...common, 'contactId', 'currentProvider', 'newProvider'],
-      'lifecycleCeremony',
-    );
-    return {
-      action: input.action,
-      ceremonyId: input.ceremonyId,
-      companionId: input.companionId,
-      reason,
-      contactId: contactId(input.contactId),
-      currentProvider: providerProof(input.currentProvider, 'currentProvider'),
-      newProvider: providerProof(input.newProvider, 'newProvider'),
-    };
-  }
-  if (input.action === 'role.grant') {
-    assertNoUnknownKeys(
-      input,
-      [...common, 'targetPrincipalId', 'grantId', 'role'],
-      'lifecycleCeremony',
-    );
-    return {
-      action: input.action,
-      ceremonyId: input.ceremonyId,
-      companionId: input.companionId,
-      reason,
-      targetPrincipalId: uuid(input.targetPrincipalId, 'targetPrincipalId'),
-      grantId: uuid(input.grantId, 'grantId'),
-      role: role(input.role, 'role'),
-    };
-  }
-  if (input.action === 'role.change') {
-    assertNoUnknownKeys(
-      input,
-      [...common, 'targetPrincipalId', 'grantId', 'newGrantId', 'currentRole', 'role'],
-      'lifecycleCeremony',
-    );
-    const currentRole = role(input.currentRole, 'currentRole');
-    const newRole = role(input.role, 'role');
-    const grantId = uuid(input.grantId, 'grantId');
-    const newGrantId = uuid(input.newGrantId, 'newGrantId');
-    if (currentRole === newRole || grantId === newGrantId) {
-      throw new Error('Role change must replace both role and grant identity');
-    }
-    return {
-      action: input.action,
-      ceremonyId: input.ceremonyId,
-      companionId: input.companionId,
-      reason,
-      targetPrincipalId: uuid(input.targetPrincipalId, 'targetPrincipalId'),
-      grantId,
-      newGrantId,
-      currentRole,
-      role: newRole,
-    };
-  }
-  if (input.action === 'role.revoke') {
-    assertNoUnknownKeys(
-      input,
-      [...common, 'targetPrincipalId', 'grantId', 'currentRole'],
-      'lifecycleCeremony',
-    );
-    return {
-      action: input.action,
-      ceremonyId: input.ceremonyId,
-      companionId: input.companionId,
-      reason,
-      targetPrincipalId: uuid(input.targetPrincipalId, 'targetPrincipalId'),
-      grantId: uuid(input.grantId, 'grantId'),
-      currentRole: role(input.currentRole, 'currentRole'),
-    };
-  }
-  throw new Error('Lifecycle ceremony action is unknown');
-}
-
-
 
 function claim(row: PrincipalRow): PrincipalAuthorityClaim {
   return {
@@ -622,7 +393,14 @@ export class GatewayFleetAuthLifecycleCeremonyService {
     request: unknown;
   }): Promise<FleetAuthLifecycleResult> {
     this.assertOrigin(input.requestOrigin);
-    const request = parseFleetAuthLifecycleCeremonyRequest(input.request);
+    let request: AdminTokenOperatorCeremonyRequest;
+    try {
+      request = parseAdminTokenOperatorCeremonyRequest(input.request);
+    } catch (error) {
+      throw new FleetAuthLifecycleCeremonyError('invalid_request', 'Lifecycle ceremony request is malformed', {
+        cause: error,
+      });
+    }
     const approval = this.options.adminTokenApproval;
     if (!approval) {
       throw new FleetAuthLifecycleCeremonyError(
@@ -632,23 +410,14 @@ export class GatewayFleetAuthLifecycleCeremonyService {
     }
     let target: PrincipalAuthorityClaim;
     try {
-      if (request.action === 'binding.activate') {
-        target = await this.readPrincipal(request.targetPrincipalId, 'pending');
-      } else if (request.action === 'role.grant'
-        || request.action === 'role.change'
-        || request.action === 'role.revoke') {
-        target = await this.readPrincipal(request.targetPrincipalId, 'active');
-      } else {
-        target = await this.readPrincipal(
-          await this.readBoundPrincipalId(request.companionId, request.contactId),
-          'active',
-        );
-      }
+      target = await this.readPrincipal(
+        request.targetPrincipalId,
+        request.action === 'binding.activate' ? 'pending' : 'active',
+      );
     } catch (error) {
-      await this.auditDenial(request, 'target_unavailable');
+      await this.auditDenial(request as FleetAuthLifecycleCeremonyRequest, 'target_unavailable');
       throw error;
     }
-    const contactAuthority = await this.readContactAuthority(request);
     const decisionId = randomUUID();
     let approved: Awaited<ReturnType<AdminTokenLifecycleApprovalPort['record']>>;
     try {
@@ -666,10 +435,12 @@ export class GatewayFleetAuthLifecycleCeremonyService {
         { cause: error },
       );
     }
+    const { ceremonyId, reason, ...fields } = request;
+    const { targetPrincipalId: _target, ...actionFields } = fields;
     const decision = {
       verification: 'gateway_verified' as const,
       decisionId,
-      ceremonyId: request.ceremonyId,
+      ceremonyId,
       operator: {
         kind: 'admin_token_operator' as const,
         authorizationEventId: approved.authorizationEventId,
@@ -677,9 +448,9 @@ export class GatewayFleetAuthLifecycleCeremonyService {
       target,
       authorityGeneration: approved.authorityGeneration,
       globalAuthEpoch: approved.globalAuthEpoch,
-      reasonDigest: digest(request.reason),
+      reasonDigest: digest(reason),
       decidedAt: (this.options.now ?? (() => new Date()))(),
-      ...lifecycleDecisionFields(request, contactAuthority),
+      ...actionFields,
     } as VerifiedFleetAuthLifecycleDecision;
     try {
       return await this.options.lifecycle.execute(decision);
@@ -690,23 +461,6 @@ export class GatewayFleetAuthLifecycleCeremonyService {
         { cause: error },
       );
     }
-  }
-
-  /** The principal holding the exact active binding of a provider ceremony's contact. */
-  private async readBoundPrincipalId(companionId: string, contactId: string): Promise<string> {
-    const result = await this.options.pool.query<{ principal_id: string }>(`
-      SELECT principal_id
-      FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings
-      WHERE companion_id = $1 AND contact_id = $2
-        AND state = 'active' AND restore_state = 'live'
-    `, [companionId, contactId]);
-    if (result.rowCount !== 1 || !result.rows[0]) {
-      throw new FleetAuthLifecycleCeremonyError(
-        'lifecycle_denied',
-        'Provider lifecycle contact has no exact active binding',
-      );
-    }
-    return result.rows[0].principal_id;
   }
 
   private async readContactAuthority(

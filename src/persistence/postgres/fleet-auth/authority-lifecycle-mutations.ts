@@ -138,12 +138,30 @@ async function prepareBindingActivation(
 ): Promise<PreparedLifecycleMutation> {
   await assertCompanion(client, decision.companionId, 'active');
   await assertApproverIsCompanionAdministrator(client, decision);
+  // Under the ADMIN_TOKEN key no OAuth proof exists: the pending principal's
+  // own Discord subject, recorded by its SSO login, is the identity bound.
+  const subjectId = decision.operator ? decision.providerSubjectId : decision.newProvider.subjectId;
+  const provenance = decision.operator
+    ? {
+        kind: 'admin_token_operator_binding',
+        decisionId: decision.decisionId,
+        approvalEventId: decision.operator.authorizationEventId,
+      }
+    : {
+        kind: 'verified_lifecycle_binding',
+        decisionId: decision.decisionId,
+        proofDigest: decision.newProvider.proofDigest,
+        contactAuthorityVersion: decision.contactAuthority.contactAuthorityVersion,
+        identityVersion: decision.contactAuthority.identityVersion,
+        verificationId: decision.contactAuthority.verificationId,
+        verificationDigest: decision.contactAuthority.verificationDigest,
+      };
   const provider = await client.query<{ state: string; restore_state: string }>(`
     SELECT state, restore_state
     FROM ${FLEET_AUTH_SCHEMA_NAME}.provider_subjects
     WHERE provider = 'discord' AND subject_id = $1 AND principal_id = $2
     FOR UPDATE
-  `, [decision.newProvider.subjectId, decision.target.principalId]);
+  `, [subjectId, decision.target.principalId]);
   const providerRow = one(provider.rows, 'binding_provider_mismatch');
   if (providerRow.state !== 'pending' || providerRow.restore_state !== 'live') {
     deny('binding_provider_not_pending');
@@ -170,7 +188,7 @@ async function prepareBindingActivation(
         SET state = 'active', authority_generation = $3, updated_at = $4
         WHERE provider = 'discord' AND subject_id = $1 AND principal_id = $2
       `, [
-        decision.newProvider.subjectId,
+        subjectId,
         decision.target.principalId,
         authorityGeneration,
         decision.decidedAt,
@@ -190,15 +208,7 @@ async function prepareBindingActivation(
         decision.target.principalId,
         decision.companionId,
         decision.contactId,
-        JSON.stringify({
-          kind: 'verified_lifecycle_binding',
-          decisionId: decision.decisionId,
-          proofDigest: decision.newProvider.proofDigest,
-          contactAuthorityVersion: decision.contactAuthority.contactAuthorityVersion,
-          identityVersion: decision.contactAuthority.identityVersion,
-          verificationId: decision.contactAuthority.verificationId,
-          verificationDigest: decision.contactAuthority.verificationDigest,
-        }),
+        JSON.stringify(provenance),
         authorityGeneration,
         decision.decidedAt,
       ]);

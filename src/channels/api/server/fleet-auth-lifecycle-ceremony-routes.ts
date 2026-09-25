@@ -4,9 +4,12 @@ import {
   FLEET_AUTH_PROVIDER_COMPLETE_PATH,
   FLEET_AUTH_ROLE_COMPLETE_PATH,
   FleetAuthLifecycleCeremonyError,
-  parseFleetAuthLifecycleCeremonyRequest,
   type GatewayFleetAuthLifecycleCeremonyService,
 } from '../../../boundary/fleet-auth/lifecycle-ceremony.js';
+import {
+  parseAdminTokenOperatorCeremonyRequest,
+  parseFleetAuthLifecycleCeremonyRequest,
+} from '../../../boundary/fleet-auth/lifecycle-ceremony-request.js';
 import { FleetAuthBrokerError } from '../../../boundary/gateway/fleet-auth-broker.js';
 import { assertNoUnknownKeys, isRecord } from '../../../shared/utils/types.js';
 import { readJsonBodyWithLimit, sendJson } from '../../backplane/http/primitives.js';
@@ -61,7 +64,11 @@ export class FleetAuthLifecycleCeremonyHttpRoutes {
     try {
       if (!isRecord(body.value)) throw new Error('Lifecycle body must be an object');
       assertNoUnknownKeys(body.value, ['request'], 'lifecycleComplete');
-      const request = parseFleetAuthLifecycleCeremonyRequest(body.value.request);
+      // The ADMIN_TOKEN operator's key-mode ceremonies carry no OAuth proof;
+      // SSO-session ceremonies keep their exact provider-proof contract.
+      const request = input.approver.kind === 'admin_token_operator'
+        ? parseAdminTokenOperatorCeremonyRequest(body.value.request)
+        : parseFleetAuthLifecycleCeremonyRequest(body.value.request);
       const expectedPath = request.action === 'binding.activate'
         ? FLEET_AUTH_BINDING_COMPLETE_PATH
         : request.action.startsWith('role.')

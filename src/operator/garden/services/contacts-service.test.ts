@@ -121,6 +121,25 @@ describe('AdminContactsDataService', () => {
       ]));
   });
 
+  it('links platform identities to a contact with ADMIN_TOKEN alone, no OAuth or SSO (key-or-SSO ruling)', async () => {
+    const { contactStore, service } = await createServiceHarness();
+    const contact = await contactStore.upsert({ displayName: 'Key Mode Friend', relationshipType: 'friend' });
+    const context = authenticatedContactMutationContext({
+      contactId: 'admin-token-contact-11111111-1111-4111-8111-111111111111',
+      provider: 'admin_token',
+      sessionAssurance: 'break_glass',
+    });
+    for (const addChannel of [
+      { channel: 'discord', userId: '623456789012345678' },
+      { channel: 'telegram', userId: 'tg-4242' },
+    ]) {
+      await expect(service.updateContact(contact.id, JSON.stringify({ addChannel }), context))
+        .resolves.toMatchObject({ ok: true });
+    }
+    expect(await contactStore.getByChannelIdentity('discord', '623456789012345678')).toMatchObject({ id: contact.id });
+    expect(await contactStore.getByChannelIdentity('telegram', 'tg-4242')).toMatchObject({ id: contact.id });
+  });
+
   it.each([
     ['admin-token shape without the signed door assurance', {
       provider: 'admin_token' as const, sessionAssurance: 'oauth' as const,

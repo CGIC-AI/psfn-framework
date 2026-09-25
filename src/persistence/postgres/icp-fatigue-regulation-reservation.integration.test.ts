@@ -1045,7 +1045,7 @@ describe("Postgres ICP fatigue regulation reservations", () => {
         });
       };
       try {
-        // The r5 exchange: Artemis 3 turns, Vega 2, both delivered.
+        // A mutual exchange: companion A 3 turns, companion B 2, both delivered.
         const mutual = "55555555-5555-4555-8555-000000000091";
         await createEpisode(mutual, "mutual");
         for (const [local, peer] of [[A, B], [B, A], [A, B], [B, A], [A, B]] as const) {

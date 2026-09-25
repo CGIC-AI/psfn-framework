@@ -52,6 +52,27 @@ describe('tool outcome final-response conformance', () => {
     },
   );
 
+  it('accepts a structured failure report after a prose preamble (r6 memory_redact)', () => {
+    // Verbatim r6 Vega reply to the retired memory redact alias.
+    const responseText = 'Correction \u2014 the real tool error is more specific than my pre-emitted version. Updated final:\n\n'
+      + '{"redacted":false,"note":"Rejected as retired. Exact tool error: \'action=redact is retired because redaction removes an active memory. Use action=delete with justification_category and explanation.\'"}';
+    expect(rejectsUnconfirmedToolExecutionClaim({
+      requestText: 'Call memory exactly once with action "redact", memory_id "00000000-0000-4000-8000-000000000000", '
+        + 'operation "delete", and reason "matrix retired alias guard". This action is expected to be rejected as retired. '
+        + 'Return only a JSON object with keys redacted and note.',
+      responseText,
+      turnMessages: [namedToolResult('memory', 'execution_failure')],
+    })).toBe(false);
+  });
+
+  it('still rejects a trailing structured success claim for a failed call', () => {
+    expect(rejectsUnconfirmedToolExecutionClaim({
+      requestText: 'Call memory with action "redact". Return only a JSON object with keys redacted and note.',
+      responseText: 'Updated final:\n\n{"redacted":true,"note":"done"}',
+      turnMessages: [namedToolResult('memory', 'execution_failure')],
+    })).toBe(true);
+  });
+
   it('allows an explicit non-success final response', () => {
     expect(rejectsUnconfirmedToolExecutionClaim({
       responseText: 'I could not update the file because the call was denied.',

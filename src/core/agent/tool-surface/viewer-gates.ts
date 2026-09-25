@@ -135,10 +135,10 @@ export const TOOL_VIEWER_GATE_DECISIONS: Readonly<Record<string, Readonly<Record
   },
   contact: {
     // Contact records hold notes, trust and identities about people met in
-    // other conversations.
-    list: PERSONAL,
-    search: PERSONAL,
-    lookup: PERSONAL,
+    // other conversations; fleet siblings are the companion's own peers.
+    list: inTool('human contacts only where personal material is admitted; fleet sibling companions (name, ids, ICP availability) always (contact-viewer-access)'),
+    search: inTool('human contacts only where personal material is admitted; fleet sibling companions (name, ids, ICP availability) always (contact-viewer-access)'),
+    lookup: inTool('human contacts only where personal material is admitted; fleet sibling companions (name, ids, ICP availability) always (contact-viewer-access)'),
     note: write('contact'),
     set_trust: write('contact'),
     propose_trust: write('contact'),

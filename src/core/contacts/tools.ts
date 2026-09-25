@@ -47,6 +47,16 @@ import type {
   KnownCompanionPeerAvailability,
 } from '../icp/agent-facing-autonomy.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
+import {
+  CONTACTS_WITHHELD_NOTE,
+  fleetSiblingSearchHaystack,
+  formatFleetSiblingLine,
+  formatFleetSiblingLookup,
+  isContactVisible,
+  partitionVisibleContacts,
+  resolveContactReadAccess,
+  type ContactReadAccess,
+} from './contact-viewer-access.js';
 
 const CONTACT_ACTION_NAMES = [
   'list',
@@ -159,7 +169,7 @@ function formatRelatedChannels(contact: Contact): string {
 }
 
 async function formatContactIdRecoveryGuidance(contactStore: ContactStorePort): Promise<string> {
-  const contacts = await contactStore.listAll();
+  const contacts = partitionVisibleContacts(await contactStore.listAll(), resolveContactReadAccess()).visible;
   if (contacts.length === 0) {
     return 'Run contact with {"action":"list"} first to get valid contactId values. '
       + 'Minimal valid JSON: {"action":"lookup","contactId":"<contactId from list>"}. '
@@ -552,10 +562,16 @@ async function executeContactLookup(
     return textResultWithError(`Missing required field "contactId" for action=lookup. ${guidance}`, true);
   }
 
-  const contact = await lookupContact(contactStore, id);
+  const access = resolveContactReadAccess();
+  const found = await lookupContact(contactStore, id);
+  // A contact this conversation may not read reads exactly like a missing one.
+  const contact = found && isContactVisible(found, access) ? found : undefined;
   if (!contact) {
     const guidance = await formatContactIdRecoveryGuidance(contactStore);
     return textResultWithError(`No contact found for contactId "${id}". ${guidance}`, true);
+  }
+  if (access === 'fleet_siblings_only') {
+    return textResult(formatFleetSiblingLookup(contact, resolvePreferredContactName(contact) ?? contact.displayName));
   }
 
   const identities = contact.channelIdentities
@@ -649,18 +665,26 @@ async function executeContactLinkIdentity(
 async function executeContactList(
   contactStore: ContactStorePort,
 ): Promise<AgentToolResult<{ isError?: boolean }>> {
-  const contacts = await contactStore.listAll();
+  const access = resolveContactReadAccess();
+  const { visible: contacts, withheldCount } = partitionVisibleContacts(await contactStore.listAll(), access);
+  const withheld = withheldCount > 0 ? `\n${CONTACTS_WITHHELD_NOTE} (${withheldCount} withheld)` : '';
 
   if (contacts.length === 0) {
-    return textResult('No contacts in address book.');
+    return textResult(`No contacts in address book.${withheld}`);
   }
 
-  const lines = contacts.map(formatContactSummaryLine);
+  const lines = contacts.map(contact => formatVisibleContactLine(contact, access));
   return textResult(
-    `Contacts (${contacts.length}):\n${lines.join('\n')}\n`
+    `Contacts (${contacts.length}):\n${lines.join('\n')}${withheld}\n`
     + 'Pass contactId from this list to action=lookup, action=set_trust, action=set_relationship, or action=note; '
     + 'do not guess from display names.',
   );
+}
+
+function formatVisibleContactLine(contact: Contact, access: ContactReadAccess): string {
+  return access === 'fleet_siblings_only'
+    ? formatFleetSiblingLine(contact, resolvePreferredContactName(contact) ?? contact.displayName)
+    : formatContactSummaryLine(contact);
 }
 
 function formatContactSummaryLine(contact: Contact): string {
@@ -726,22 +750,26 @@ async function executeContactSearch(
     );
   }
 
-  const contacts = await contactStore.listAll();
+  const access = resolveContactReadAccess();
+  const { visible: contacts, withheldCount } = partitionVisibleContacts(await contactStore.listAll(), access);
   const tokens = normalizeContactSearchTokens(query);
   const matches = contacts.filter((contact) => {
-    const haystack = contactSearchHaystack(contact);
+    const haystack = access === 'full'
+      ? contactSearchHaystack(contact)
+      : fleetSiblingSearchHaystack(contact, resolvePreferredContactName(contact) ?? contact.displayName);
     return tokens.every(token => haystack.includes(token));
   });
+  const withheld = withheldCount > 0 ? ` ${CONTACTS_WITHHELD_NOTE}` : '';
 
   if (matches.length === 0) {
     return textResult(
-      `No contacts matched query "${query}". `
+      `No contacts matched query "${query}".${withheld} `
       + 'Run contact with {"action":"list"} to browse valid contactId values, or search for a name, handle, channel, or note phrase.',
     );
   }
 
   return textResult(
-    `Contact search results for "${query}" (${matches.length}):\n${matches.map(formatContactSummaryLine).join('\n')}\n`
+    `Contact search results for "${query}" (${matches.length}):\n${matches.map(contact => formatVisibleContactLine(contact, access)).join('\n')}${withheld}\n`
     + 'Pass an exact contactId from these results to action=lookup, action=set_trust, action=set_relationship, '
     + 'or action=note; do not guess from display names.',
   );

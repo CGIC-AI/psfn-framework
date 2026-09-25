@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  resolveUncontextedTurnChargeLane,
   BACKGROUND_CONTINUATION_RUNTIME_CLASS,
   FOREGROUND_CHAT_RUNTIME_CLASS,
   MAINTENANCE_REFLECTION_RUNTIME_CLASS,
@@ -180,5 +181,24 @@ describe('worker lanes', () => {
       requiresForegroundIdle: true,
       degradationMode: 'defer_until_idle',
     });
+  });
+});
+
+
+describe('resolveUncontextedTurnChargeLane (6da92)', () => {
+  it('charges a whisper worker turn on an internal reflection channel to the maintenance lane', () => {
+    expect(resolveUncontextedTurnChargeLane({
+      channelId: 'internal:reflection:sleeptime-review',
+      workerExecution: true,
+      callType: 'scheduled',
+    })).toBe('maintenance');
+  });
+
+  it('keeps ordinary turns on the interactive lane', () => {
+    expect(resolveUncontextedTurnChargeLane({
+      channelId: 'api:session-1',
+      workerExecution: false,
+      callType: 'chat',
+    })).toBe('interactive');
   });
 });

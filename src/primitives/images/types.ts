@@ -162,6 +162,8 @@ export interface ImageGenerationResult {
   fallbackReason?: string;
   requestId?: string;
   images: ImageResultAsset[];
+  /** Provider-reported cost of this generation, when the provider exposes it (6da92). */
+  providerCostUsd?: number;
 }
 
 export interface MediaToolResultDetails {

@@ -1,3 +1,7 @@
+import {
+  ICP_ACTIVITY_END_REASON_CODES,
+  type IcpActivityEndReasonCode,
+} from '../../shared/contracts/icp-autonomy.js';
 import type { IcpPermitConsumptionOutcome } from '../../core/icp/autonomy-store-ports.js';
 import {
   parseIcpInitiationCandidateSharedMetadata,
@@ -478,9 +482,7 @@ export function parseIcpPermitConsumeParams(value: unknown): {
 
 export function parseIcpEpisodeActivityEndParams(value: unknown): {
   conversationId: string;
-  reasonCode: Extract<IcpAutonomyReasonCode,
-    'fatigue_exhausted' | 'charge_pressure' | 'cost_hard_stop'
-      | 'inactivity_timeout' | 'conversation_ended'>;
+  reasonCode: IcpActivityEndReasonCode;
 } {
   if (!isRecord(value)) throw new Error('ICP episode activity end params must be an object');
   assertNoUnknownKeys(
@@ -488,20 +490,12 @@ export function parseIcpEpisodeActivityEndParams(value: unknown): {
     ['conversationId', 'reasonCode', 'companionId'],
     'ICP episode activity end params',
   );
-  if (![
-    'fatigue_exhausted',
-    'charge_pressure',
-    'cost_hard_stop',
-    'inactivity_timeout',
-    'conversation_ended',
-  ].includes(String(value.reasonCode))) {
+  if (!(ICP_ACTIVITY_END_REASON_CODES as readonly string[]).includes(String(value.reasonCode))) {
     throw new Error('ICP episode activity end reasonCode is not an activity terminal reason');
   }
   return {
     conversationId: requireUuid(value.conversationId, 'conversationId'),
-    reasonCode: value.reasonCode as Extract<IcpAutonomyReasonCode,
-      'fatigue_exhausted' | 'charge_pressure' | 'cost_hard_stop'
-        | 'inactivity_timeout' | 'conversation_ended'>,
+    reasonCode: value.reasonCode as IcpActivityEndReasonCode,
   };
 }
 

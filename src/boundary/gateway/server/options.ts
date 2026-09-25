@@ -4,6 +4,7 @@ import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import type { EmbeddingProviderPort } from '../../../shared/contracts/embedding-provider.js';
 import type { ChannelOutboundDock } from '../../../channels/backplane/types.js';
 import type { GatewayRoomReplyOutbound } from '../room-reply-outbound.js';
+import type { ModelBudgetController } from '../../../primitives/llm/model-budget.js';
 import type { CapabilityTier, WyomingShardRoutingConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { GatewayRpcEndpoint } from '../transport.js';
 import type {
@@ -79,6 +80,8 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
   gitOps?: GitOperations;
   imageConfig?: ImageRuntimeConfig;
   modelUsageRecorder?: ModelUsageRecorder;
+  /** Model budget admission for non-token dispatches such as paid images (6da92). */
+  modelBudget?: ModelBudgetController;
   /** Remote (Jev) decision backend for `llm.decide` (epic 4lf3r). */
   jevDecisions?: GatewayJevDecisionService;
   credentialVault?: CredentialVaultPort;

@@ -139,7 +139,9 @@ export async function runOpenRouterImage(input: {
     );
   }
   const requestId = randomUUID();
-  const images = parseImages(await response.json() as unknown).map((image, index) => ({
+  const body = await response.json() as unknown;
+  const providerCostUsd = parseProviderCost(body);
+  const images = parseImages(body).map((image, index) => ({
     ...image,
     fileName: `openrouter-${requestId.slice(0, 8)}-${index + 1}.${image.contentType?.split('/')[1]?.replace('jpeg', 'jpg') ?? 'png'}`,
   }));
@@ -150,5 +152,13 @@ export async function runOpenRouterImage(input: {
     fallbackUsed: false,
     requestId: `openrouter:${requestId}`,
     images,
+    ...(providerCostUsd !== undefined ? { providerCostUsd } : {}),
   };
+}
+
+/** OpenRouter reports the billed amount as `usage.cost` (USD). */
+function parseProviderCost(body: unknown): number | undefined {
+  if (!isRecord(body) || !isRecord(body.usage)) return undefined;
+  const cost = body.usage.cost;
+  return typeof cost === 'number' && Number.isFinite(cost) && cost >= 0 ? cost : undefined;
 }

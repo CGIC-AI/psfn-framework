@@ -218,7 +218,7 @@
     },
     "appraiser": {
       "enabled": true,
-      "appraisalDeadlineMs": 8000,
+      "appraisalDeadlineMs": 30000,
       "appraisalMaxOutputTokens": 200,
       "transcriptMessageCap": 8,
       "transcriptMessageChars": 500

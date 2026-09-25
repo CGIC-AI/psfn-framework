@@ -324,6 +324,22 @@ function describeSummons(candidate: ParticipationCandidate): string {
   return candidate.matchedDirectAddress ? 'you were addressed directly' : 'your name/alias was mentioned in passing';
 }
 
+/**
+ * Fail-closed reasons that describe the appraisal machinery failing, not a
+ * decision about the conversation (0eq2x). `appraiser_unavailable` is the
+ * caller's reason when no appraiser result exists at all.
+ */
+const APPRAISER_SYSTEM_FAILURE_REASONS: ReadonlySet<string> = new Set([
+  'appraiser_timeout',
+  'appraiser_error',
+  'appraiser_unparseable',
+  'appraiser_unavailable',
+]);
+
+export function isAppraiserSystemFailureReason(reason: string | undefined): boolean {
+  return reason !== undefined && APPRAISER_SYSTEM_FAILURE_REASONS.has(reason);
+}
+
 function failClosed(reason: string): ParticipationAppraisalResult {
   const appraisal: ParticipationAppraisal = {
     action: 'ignore',

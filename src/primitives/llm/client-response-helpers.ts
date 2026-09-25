@@ -735,3 +735,18 @@ export function resolveAbortedAttemptWorstCaseUsd(input: {
     cacheWriteTokens: 0,
   }, input.rates);
 }
+
+/**
+ * The input-token estimate serializes message content, so an inline image's
+ * base64 bytes count as text (2sm32). No request can exceed the routed model's
+ * context window, which is therefore the ceiling for budget estimates.
+ */
+export function capInputTokensToContextWindow(
+  estimatedInputTokens: number,
+  candidate: Pick<RoutingCandidate, 'contextWindow'>,
+): number {
+  const window = candidate.contextWindow;
+  return window !== undefined && Number.isFinite(window) && window > 0
+    ? Math.min(estimatedInputTokens, window)
+    : estimatedInputTokens;
+}

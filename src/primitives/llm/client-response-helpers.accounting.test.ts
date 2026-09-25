@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeLLMUsageDetails } from './client-response-helpers.js';
+import { capInputTokensToContextWindow, normalizeLLMUsageDetails } from './client-response-helpers.js';
 
 describe('normalizeLLMUsageDetails accounting evidence', () => {
   it('rejects an unknown nonempty provider usage shape', () => {
@@ -71,5 +71,13 @@ describe('normalizeLLMUsageDetails accounting evidence', () => {
       cacheWrite: 0,
       totalTokens: 105,
     });
+  });
+});
+
+describe('capInputTokensToContextWindow (2sm32)', () => {
+  it('caps a base64-inflated estimate at the routed context window', () => {
+    expect(capInputTokensToContextWindow(3_600_000, { contextWindow: 65_536 })).toBe(65_536);
+    expect(capInputTokensToContextWindow(1_200, { contextWindow: 65_536 })).toBe(1_200);
+    expect(capInputTokensToContextWindow(3_600_000, {})).toBe(3_600_000);
   });
 });

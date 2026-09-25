@@ -1,3 +1,4 @@
+import { isRetryableError } from './retry.js';
 import { createHash } from 'node:crypto';
 import { fromAny } from '@total-typescript/shoehorn';
 import { Type } from '@sinclair/typebox';
@@ -1027,6 +1028,26 @@ describe('LLMClient provider observability', () => {
     expect(streamedVisibleText.join('')).toBe(expected);
     expect(response.content).toBe(expected);
     expect(response.stopReason).toBe('unknown');
+  });
+
+  it('does not deliver a withheld kimi-k3 tail when the stream fails (p3of8)', async () => {
+    const client = new LLMClient(makeKimiConfig(), {});
+    mocks.streamSimple.mockImplementation(async function* kimiStreamThatFails() {
+      yield { type: 'text_delta', delta: '<|end_' };
+      yield { type: 'error', reason: 'error', error: { errorMessage: 'terminated' } };
+    });
+    const streamedVisibleText: string[] = [];
+    const failure = await client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Reply normally' }],
+    }, {
+      onText: delta => streamedVisibleText.push(delta),
+    }).then(() => null, (error: unknown) => error as Error);
+
+    expect(failure?.message).toContain('terminated');
+    // Nothing was shown, so the failure must stay retryable for fallback.
+    expect(streamedVisibleText).toEqual([]);
+    expect(isRetryableError(failure!, ['terminated'])).toBe(true);
   });
 
   it('preserves end-message-looking text outside the proven kimi-k3 terminal position', () => {
@@ -4898,6 +4919,54 @@ describe('LLMClient model budget gates and usage metering', () => {
         enforcementEnabled: false,
       }),
     ]);
+  });
+
+  it('attributes a companion-private call to its companion for a fleet budget query (ygx6f)', async () => {
+    const config = makeConfig();
+    config.modelRegistry = {
+      ...config.modelRegistry!,
+      budgetPolicy: { enabled: true, dailyUsdLimit: 10, monthlyUsdLimit: 100, currency: 'USD' },
+      models: config.modelRegistry!.models.map(entry => ({
+        ...entry,
+        cost: { inputPer1MUsd: 0, outputPer1MUsd: 0, currency: 'USD' },
+      })),
+    };
+    const scopes: unknown[] = [];
+    const client = new LLMClient(config, {
+      usageBudgetQuery: {
+        async getModelBudgetSpend(_nowMs, scope) {
+          scopes.push(scope);
+          // Mirrors the fleet store: an unattributed budget query fails closed.
+          if (!scope?.companionId) {
+            throw new Error('Fleet model budget queries require an explicit companionId');
+          }
+          return {
+            dayKey: '2026-09-25',
+            monthKey: '2026-09',
+            dailyEstimatedCostUsd: 0,
+            monthlyEstimatedCostUsd: 0,
+            dailyUnknownCostAttempts: 0,
+            monthlyUnknownCostAttempts: 0,
+          };
+        },
+      },
+    });
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'private decision' }],
+      model: 'deepseek/deepseek-v3.2',
+      usage: { input: 25, output: 5, cost: 0 },
+      stopReason: 'stop',
+    });
+
+    await expect(client.complete(
+      { systemPrompt: 'System', messages: [{ role: 'user', content: 'Private background work' }] },
+      'background',
+      {
+        disableRetry: true,
+        correlation: { ...COMPANION_PRIVATE_BACKGROUND_TELEMETRY, companionId: 'companion-b', turnId: 'source-turn' },
+      },
+    )).resolves.toMatchObject({ content: 'private decision' });
+    expect(scopes[0]).toMatchObject({ companionId: 'companion-b' });
   });
 
   it('stops all fallback candidates when canonical budget accounting is unavailable', async () => {

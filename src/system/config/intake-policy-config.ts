@@ -225,6 +225,12 @@ export interface IntakeInjectionClassifierPolicyConfig {
    * mapped explicitly — no implicit defaults.
    */
   scoreThresholdsByTier: Record<IntakeSourceRiskTier, number>;
+  /**
+   * Largest content span the L1.5 classifier scores (jerq6). Longer content
+   * is scored over its leading span and escalated fail closed. Absent: the
+   * same span the L2 screener reads (`l2Screener.maxContentChars`).
+   */
+  maxContentChars?: number;
 }
 
 /**
@@ -1152,7 +1158,7 @@ function validateInjectionClassifier(
     throw invalid(sourcePath, 'injectionClassifier must be an object');
   }
   const unknownKeys = Object.keys(raw)
-    .filter((key) => !['labelThreshold', 'scoreThresholdsByTier'].includes(key));
+    .filter((key) => !['labelThreshold', 'scoreThresholdsByTier', 'maxContentChars'].includes(key));
   if (unknownKeys.length > 0) {
     throw invalid(sourcePath, `injectionClassifier has unsupported keys: ${unknownKeys.join(', ')}`);
   }
@@ -1164,7 +1170,21 @@ function validateInjectionClassifier(
       'injectionClassifier.scoreThresholdsByTier',
       validateProbability,
     ),
+    ...(raw.maxContentChars !== undefined
+      ? {
+        maxContentChars: validatePositiveInteger(
+          raw.maxContentChars,
+          sourcePath,
+          'injectionClassifier.maxContentChars',
+        ),
+      }
+      : {}),
   };
+}
+
+/** The L1.5 scoring span: its own owner-file bound, else the L2 screener's (jerq6). */
+export function injectionClassifierMaxContentChars(config: IntakePolicyConfig): number {
+  return config.injectionClassifier.maxContentChars ?? config.l2Screener.maxContentChars;
 }
 
 function assertNoRetiredScreenerModelKeys(

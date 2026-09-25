@@ -24,6 +24,11 @@ export interface BudgetPreflightParams {
   estimatedOutputTokens?: number;
   correlation?: Partial<CorrelationMetadata>;
   nowMs?: number;
+  /**
+   * A non-token dispatch (e.g. image generation) priced by its caller at its
+   * worst case from owner-file pricing; replaces the registry token estimate.
+   */
+  fixedEstimatedCostUsd?: number;
 }
 
 export interface BudgetPreflightResult {
@@ -337,6 +342,11 @@ export class ModelBudgetController {
     private readonly usageQuery?: ModelUsageBudgetQueryPort,
   ) {}
 
+  /** True when the owner-file budget policy refuses over-budget dispatch. */
+  isEnforced(): boolean {
+    return this.config.modelRegistry?.budgetPolicy?.enabled === true;
+  }
+
   requiresPreflightEstimate(): boolean {
     return this.config.modelRegistry?.budgetPolicy !== undefined;
   }
@@ -427,24 +437,31 @@ export class ModelBudgetController {
       };
     }
 
-    const entry = resolveRegistryEntryForIdentity(this.config, params.candidate, params.purpose);
-    const rates = resolveUsdCostRates(entry);
-    if (!rates) {
-      return {
-        allowed: !policy.enabled,
-        estimatedRequestCostUsd: 0,
-        snapshot,
-        ...(policy.enabled
-          ? { blockedEvent: buildBlockedEvent('missing_cost_metadata', nowMs, params, 0, snapshot) }
-          : {}),
-      };
+    let estimatedRequestCostUsd: number;
+    if (params.fixedEstimatedCostUsd !== undefined) {
+      if (!Number.isFinite(params.fixedEstimatedCostUsd) || params.fixedEstimatedCostUsd < 0) {
+        throw new Error('fixedEstimatedCostUsd must be a finite number >= 0');
+      }
+      estimatedRequestCostUsd = params.fixedEstimatedCostUsd;
+    } else {
+      const entry = resolveRegistryEntryForIdentity(this.config, params.candidate, params.purpose);
+      const rates = resolveUsdCostRates(entry);
+      if (!rates) {
+        return {
+          allowed: !policy.enabled,
+          estimatedRequestCostUsd: 0,
+          snapshot,
+          ...(policy.enabled
+            ? { blockedEvent: buildBlockedEvent('missing_cost_metadata', nowMs, params, 0, snapshot) }
+            : {}),
+        };
+      }
+      estimatedRequestCostUsd = estimateCostUsd(
+        params.estimatedInputTokens,
+        params.estimatedOutputTokens ?? params.candidate.maxTokens,
+        rates,
+      );
     }
-
-    const estimatedRequestCostUsd = estimateCostUsd(
-      params.estimatedInputTokens,
-      params.estimatedOutputTokens ?? params.candidate.maxTokens,
-      rates,
-    );
     if (snapshot.dailySpentUsd + estimatedRequestCostUsd > snapshot.dailyLimitUsd) {
       const budgetEvent = buildBlockedEvent(
         'daily_budget_exceeded', nowMs, params, estimatedRequestCostUsd, snapshot,

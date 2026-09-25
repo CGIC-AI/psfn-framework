@@ -1,5 +1,6 @@
 import type { ChannelOutboundDock } from '../../channels/backplane/types.js';
 import type { GatewayRoomReplyOutbound } from './room-reply-outbound.js';
+import { ModelBudgetController } from '../../primitives/llm/model-budget.js';
 import { createGatewayJevDecisionService } from './jev-decision-service.js';
 import {
   createEligibilityGate,
@@ -604,6 +605,7 @@ export async function buildGatewayPrivilegedCore(
       gitOps,
       imageConfig: input.config,
       ...(privilegedServices.modelUsageStore ? { modelUsageRecorder: privilegedServices.modelUsageStore } : {}),
+      modelBudget: new ModelBudgetController(input.config, privilegedServices.modelUsageStore ?? undefined),
       jevDecisions,
       ...(input.config.credentialVault ? { credentialVault: input.config.credentialVault } : {}),
       intakeScreeningMode: intakeScreening.globalMode,

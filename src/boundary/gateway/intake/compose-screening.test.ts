@@ -258,6 +258,36 @@ describe('composeGatewayIntakeScreening vision wiring (htm9.8)', () => {
     await composition.dispose();
   });
 
+  it('escalates oversized content fail closed with a maximal L1.5 score (jerq6)', async () => {
+    const input = makeDataDirs('shadow', false);
+    const policyPath = join(input.systemDataDir, 'intake-policy.json');
+    const policy = JSON.parse(readFileSync(policyPath, 'utf8')) as Record<string, Record<string, unknown>>;
+    policy.injectionClassifier = { ...policy.injectionClassifier, maxContentChars: 200 };
+    writeFileSync(policyPath, JSON.stringify(policy, null, 2));
+    const composition = await composeGatewayIntakeScreening({
+      ...input,
+      config: loadSeedIntakeScreenerTestConfig(input.systemDataDir),
+      screenerBackend: TEST_SCREENER_BACKEND,
+      screenerTestCompletion: unusedScreenerCompletion,
+      injectionBackendFactory: fakeInjectionBackendFactory,
+    });
+
+    const result = await composition.screening!.screen(
+      'A calm note about watering tomato plants in the summer heat. '.repeat(20),
+      {
+        sourceClass: 'primary_user',
+        origin: { ref: 'discord:channel-1:message-2' },
+        scope: 'context',
+        sourceChannelId: 'channel-1',
+        sourceMessageId: 'message-2',
+        surface: { channelClass: 'group_chat' },
+      },
+    );
+
+    expect(result.envelope.scores['onnx-prompt-injection']).toBe(1);
+    await composition.dispose();
+  });
+
   it('signals only after an image fail-closed quarantine hold is durable', async () => {
     const input = makeDataDirs('strict', true);
     const durableCounts: number[] = [];

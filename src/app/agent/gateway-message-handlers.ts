@@ -1,3 +1,4 @@
+import type { IcpActivityEndReasonCode } from '../../shared/contracts/icp-autonomy.js';
 import type { AgentResponse, Attachment, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { ObservedGroupMemoryLane } from './observed-group-memory-lane.js';
 import {
@@ -245,8 +246,7 @@ export interface GatewayMessageGateway {
   }): Promise<{ outcome: string }>;
   companionEndIcpEpisodeActivity(input: {
     conversationId: string;
-    reasonCode: 'fatigue_exhausted' | 'charge_pressure' | 'cost_hard_stop'
-      | 'inactivity_timeout' | 'conversation_ended';
+    reasonCode: IcpActivityEndReasonCode;
   }): Promise<unknown>;
   companionReportFailure(params: CompanionMessageFailureReportParams): Promise<unknown>;
   onCompanionDeliveryFailure(

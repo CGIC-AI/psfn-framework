@@ -431,3 +431,40 @@ describe('screener completion cap exhausted by reasoning (L3 GLM)', () => {
     expect(calls).toBe(1);
   });
 });
+
+describe('screener worst-case input bound (2sm32)', () => {
+  async function attemptFor(userMessage: Parameters<typeof callValidatedToolLessJsonScreener>[0]['userMessage']) {
+    const attempts: Array<{ worstCaseTokens: { input: number; output: number } }> = [];
+    await callValidatedToolLessJsonScreener({
+      backend: {},
+      model: fromAny({ provider: 'openrouter', model: 'vendor/vision-model', maxTokens: 4096, contextWindow: 65_536 }),
+      timeoutMs: 5_000,
+      maxOutputTokens: 1_600,
+      systemPrompt: 'classifier',
+      userMessage,
+      testCompletion: async () => '{"ok":true}',
+      screenerName: 'vision screener',
+      makeError: (message: string) => new Error(message),
+      validateContent: (content: string) => JSON.parse(content) as object,
+      isValidationError: () => false,
+      onAttempt: attempt => attempts.push(attempt),
+    });
+    return attempts[0]!;
+  }
+
+  it('caps an image request at the model context window instead of counting base64 bytes', async () => {
+    const hugeImage = `data:image/png;base64,${'A'.repeat(3_500_000)}`;
+    const attempt = await attemptFor([
+      { type: 'text', text: 'describe this' },
+      { type: 'image_url', image_url: { url: hugeImage } },
+    ]);
+    expect(attempt.worstCaseTokens).toEqual({ input: 65_536, output: 1_600 });
+  });
+
+  it('keeps text bytes as the bound for a text-only request under the window', async () => {
+    const attempt = await attemptFor('short untrusted text');
+    expect(attempt.worstCaseTokens.input).toBe(
+      Buffer.byteLength('classifier', 'utf8') + Buffer.byteLength('short untrusted text', 'utf8'),
+    );
+  });
+});

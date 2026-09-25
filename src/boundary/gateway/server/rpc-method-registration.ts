@@ -140,6 +140,7 @@ export class GatewayConnectionRpcMethods {
       ...(this.ports.options.modelDiscovery ? { modelDiscovery: this.ports.options.modelDiscovery } : {}),
       discordAdapter: this.ports.connectionScope.resolveConnectionDiscordDock(conn),
       ...(this.ports.options.telegramDock ? { telegramDock: this.ports.options.telegramDock } : {}),
+      ...(this.ports.options.modelBudget ? { modelBudget: this.ports.options.modelBudget } : {}),
       ...(this.ports.options.roomReplyOutbound
         ? { roomReplyOutbound: this.ports.options.roomReplyOutbound }
         : {}),

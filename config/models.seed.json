@@ -240,7 +240,8 @@
       "provider": "openrouter",
       "model": "google/gemini-2.5-flash-image",
       "modes": ["create", "edit"],
-      "primary": true
+      "primary": true,
+      "cost": { "perImageUsd": 0.04, "currency": "USD" }
     }
   ]
 }

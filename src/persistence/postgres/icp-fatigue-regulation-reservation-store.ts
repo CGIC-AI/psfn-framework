@@ -800,12 +800,19 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
               ELSE 0 END
           ), 0) AS directional_charged_pressure,
           COUNT(*) FILTER (WHERE decision = 'charged') AS reservation_count
-        FROM icp_fatigue_turn_reservations
+        FROM icp_fatigue_turn_reservations AS reservation
         WHERE ((local_companion_id = $1 AND peer_companion_id = $2)
             OR (local_companion_id = $2 AND peer_companion_id = $1))
           AND outcome IN ('pending', 'delivering', 'delivered', 'no_reply')
           AND reserved_at_ms BETWEEN $5::bigint AND $4::bigint
           AND ($11::uuid IS NULL OR turn_id <> $11::uuid)
+          -- 0eq2x: a turn the peer's appraisal failed to process (system
+          -- timeout/error) is not relationship pressure.
+          AND NOT EXISTS (
+            SELECT 1 FROM icp_conversation_episodes AS episode
+            WHERE episode.conversation_id::text = reservation.conversation_id::text
+              AND episode.close_reason_code = 'peer_appraisal_unavailable'
+          )
       ), episode_pressure AS (
         SELECT
           COALESCE(SUM(CASE WHEN status = 'declined' THEN

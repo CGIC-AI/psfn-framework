@@ -21,6 +21,7 @@ import {
   applyIntakeSourceListMutation,
   assertIntakeUnscreenedPostureAcknowledged,
   createSkillWriteSinkRule,
+  injectionClassifierMaxContentChars,
   injectionScoreThresholdForTier,
   normalizeIntakePersonPattern,
   normalizeIntakeSitePattern,
@@ -152,6 +153,20 @@ describe('intake policy owner file', () => {
     expect(thresholds.untrusted).toBeLessThanOrEqual(thresholds.standard);
     expect(thresholds.standard).toBeLessThanOrEqual(thresholds.trusted);
     expect(injectionScoreThresholdForTier(policy, 'hostile')).toBe(thresholds.hostile);
+  });
+
+  it('bounds the L1.5 scoring span by its owner-file limit, else the L2 span (jerq6)', () => {
+    const policy = seedPolicy();
+    expect(injectionClassifierMaxContentChars(policy)).toBe(policy.l2Screener.maxContentChars);
+    const bounded = validateIntakePolicy(
+      { ...policy, injectionClassifier: { ...policy.injectionClassifier, maxContentChars: 12_000 } },
+      INTAKE_POLICY_FILE_NAME,
+    );
+    expect(injectionClassifierMaxContentChars(bounded)).toBe(12_000);
+    expect(() => validateIntakePolicy(
+      { ...policy, injectionClassifier: { ...policy.injectionClassifier, maxContentChars: 0 } },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/maxContentChars/);
   });
 
   it('fails closed on missing or invalid injection classifier config', () => {

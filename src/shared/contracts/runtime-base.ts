@@ -364,6 +364,8 @@ export interface CorrelationMetadata extends LLMRequestMetadata {
   purpose: string;
   /** Caller-owned completion ceiling propagated to the final provider request. */
   requestedMaxOutputTokens?: number;
+  /** The turn's reply is delivered only on completion (see MessageRoutingMetadata). */
+  bufferedTextDelivery?: boolean;
   viewerTrustLevel?: TrustLevel;
   /**
    * Origin of the requester driving this turn, independent of `viewerTrustLevel`.
@@ -424,6 +426,7 @@ export const CORRELATION_METADATA_KEYS = [
   'callType',
   'purpose',
   'requestedMaxOutputTokens',
+  'bufferedTextDelivery',
   'viewerTrustLevel',
   'requesterProvenance',
   'requestAudience',
@@ -545,6 +548,13 @@ export interface MessageRoutingMetadata {
   channelPrivacy?: ChannelPrivacy;
   /** Validated OpenAI-compatible `max_tokens` limit for this turn. */
   completionMaxTokens?: number;
+  /**
+   * The ingress delivers this turn's reply only once, when it completes (e.g. a
+   * non-streaming API request): no consumer receives partial text, so a model
+   * stream that fails mid-reply can still fall back to the next candidate
+   * (p3of8). Absent means text may be streamed live to someone.
+   */
+  bufferedTextDelivery?: true;
   modelOverride?: MessageModelOverride;
   promptOverride?: MessagePromptOverride;
   responseStyle?: ResponseStyle;
@@ -1592,6 +1602,17 @@ export interface ImageModelRegistryEntry {
   modes: ('create' | 'edit')[];
   /** At most one primary per mode; the primary is the default for that mode. */
   primary: boolean;
+  /**
+   * Worst-case price of one generated image (6da92). The budget gate admits a
+   * request only when its images fit the budget at this price; an unpriced
+   * image model is refused while the model budget is enforced.
+   */
+  cost?: ImageModelCost;
+}
+
+export interface ImageModelCost {
+  perImageUsd: number;
+  currency: 'USD';
 }
 
 export interface CanonicalModelRegistry {

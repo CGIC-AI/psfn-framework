@@ -551,7 +551,10 @@ describe('registerGatewayMessageHandlers', () => {
       route: 'discord',
       channelId: 'discord:general',
       messageId: 'discord-observe-memory-dup',
-      disposition: 'in_flight',
+      // qvwem: the first observation returned without waiting for its memory
+      // scheduling (still pending here), so the replay hits the completed
+      // cache instead of the in-flight map; either way it never re-schedules.
+      disposition: 'cached',
     });
 
     deferredSchedule.resolve({
@@ -2330,6 +2333,37 @@ describe('registerGatewayMessageHandlers — participation appraiser wiring (jp3
       watermarkLagMessageIds: 1,
     });
     await receipt;
+  });
+
+  it('returns from observing a group line while its memory extraction never completes (qvwem)', async () => {
+    const candidate = makeParticipationCandidate();
+    // The extraction never settles: observe latency must not depend on it.
+    const observedGroupMemoryScheduler: ObservedGroupMemorySchedulerPort = {
+      observeMessage: vi.fn(() => new Promise<never>(() => undefined)),
+    };
+    const appraiser: ParticipationAppraiserPort = {
+      appraise: vi.fn(async (): Promise<ParticipationAppraisalResult> => ({
+        appraisal: { action: 'ignore', reasonCode: 'room_context', confidence: 0.7 },
+        failClosed: false,
+      })),
+    };
+    const harness = createHarness({
+      observedGroupMemoryScheduler,
+      passiveNameCandidateBuilder: createdBuilder(candidate),
+      participationAppraiser: appraiser,
+    });
+
+    const outcome = await Promise.race([
+      harness.onDiscordMessage(observeMessage()).then(() => 'returned' as const),
+      new Promise<'blocked'>(resolve => setTimeout(() => resolve('blocked'), 1_000)),
+    ]);
+
+    expect(outcome).toBe('returned');
+    // The line was journaled, handed to memory scheduling, and still got its
+    // participation decision.
+    expect(harness.agentLoop.observeMessage).toHaveBeenCalledTimes(1);
+    expect(observedGroupMemoryScheduler.observeMessage).toHaveBeenCalledTimes(1);
+    expect(appraiser.appraise).toHaveBeenCalledWith(candidate);
   });
 
   it('records a fail-closed appraisal on the audit trail and bus (no reply invented)', async () => {

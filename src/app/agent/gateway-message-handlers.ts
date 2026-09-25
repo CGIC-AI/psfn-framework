@@ -1,4 +1,5 @@
 import type { AgentResponse, Attachment, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import { ObservedGroupMemoryLane } from './observed-group-memory-lane.js';
 import type { MessageHandlerOptions } from '../../channels/backplane/types.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
@@ -444,6 +445,12 @@ export interface GatewayMessageHandlersDeps {
 
 export interface RegisteredGatewayMessageHandlers {
   icpTargetChannelInitiator: IcpTargetChannelInitiator & IcpTargetChannelContinuation;
+  /**
+   * Observed group memory scheduling that the observe path no longer awaits
+   * (psfn-framework-qvwem); undefined when no scheduler is wired. Shutdown
+   * stops and drains it before the memory extractor drains.
+   */
+  observedGroupMemory: Pick<ObservedGroupMemoryLane, 'stop' | 'pendingCount'> | undefined;
 }
 
 export function registerGatewayMessageHandlers(
@@ -468,6 +475,13 @@ export function registerGatewayMessageHandlers(
     companionAuthorName,
     eventBus,
   } = deps;
+  const observedGroupMemoryLane = observedGroupMemoryScheduler
+    ? new ObservedGroupMemoryLane({
+      scheduler: observedGroupMemoryScheduler,
+      audit: safeguardAuditTrail,
+      log,
+    })
+    : undefined;
   const localCompanionId = resolveCompanionIdFromConfig(config);
   const targetHumanRelayReplayGuard = createInMemoryHumanRelayReplayGuard();
   const sourceHumanRelayReplayGuard = createInMemoryHumanRelayReplayGuard();
@@ -984,55 +998,13 @@ export function registerGatewayMessageHandlers(
       messageId: message.id,
       authorId: message.authorId,
     });
-    // Memory extraction can involve a slow background-model call. Start it now,
-    // but do not serialize the latency-sensitive participation decision behind
-    // it: both consumers already see the source entry recorded above.
-    const observedMemoryWork = (async (): Promise<void> => {
-      if (observedGroupMemoryScheduler) {
-        try {
-          const decision = await observedGroupMemoryScheduler.observeMessage(message);
-          if (decision.status === 'scheduled') {
-            safeguardAuditTrail.append('memory.group_observed.scheduled', {
-              channelId: decision.channelId,
-              messageId: message.id,
-              triggerReason: decision.triggerReason,
-              spanStartMessageId: decision.spanStartMessageId,
-              spanEndMessageId: decision.spanEndMessageId,
-              newEntryCount: decision.newEntryCount,
-              watermarkLagMessageIds: decision.watermarkLagMessageIds,
-              hasDeferredBacklog: decision.hasDeferredBacklog,
-            });
-          } else if (decision.reason === 'extraction_failed') {
-            log.warn('Observed group memory extraction failed', {
-              channelId: decision.channelId,
-              messageId: message.id,
-              watermarkLagMessageIds: decision.watermarkLagMessageIds,
-              error: decision.error,
-            });
-            safeguardAuditTrail.append('memory.group_observed.error', {
-              channelId: decision.channelId,
-              messageId: message.id,
-              reason: decision.reason,
-              error: decision.error,
-            });
-          }
-        } catch (schedulerError) {
-          const errorText = toErrorMessage(schedulerError);
-          log.warn('Observed group memory scheduling failed', {
-            channelId: message.channelId,
-            messageId: message.id,
-            error: errorText,
-          });
-          safeguardAuditTrail.append('memory.group_observed.error', {
-            channelId: message.channelId,
-            messageId: message.id,
-            error: errorText,
-          });
-        }
-      }
-    })();
+    // psfn-framework-qvwem: observed memory scheduling (a slow background-model
+    // extraction) runs on its own per-channel lane and is NEVER awaited here,
+    // so observing a line returns once it is journaled and the participation
+    // gate has run. The lane preserves per-channel order, audits every outcome,
+    // and its enqueue promise never rejects; shutdown drains it.
+    if (observedGroupMemoryLane) void observedGroupMemoryLane.enqueue(message);
     if (!passiveNameCandidateBuilder) {
-      await observedMemoryWork;
       return;
     }
     try {
@@ -1079,7 +1051,6 @@ export function registerGatewayMessageHandlers(
         } else if (participationAppraiser) {
           await appraiseParticipationCandidate(candidate);
         }
-        await observedMemoryWork;
         return;
       }
       safeguardAuditTrail.append('participation.candidate.suppressed', {
@@ -1115,7 +1086,6 @@ export function registerGatewayMessageHandlers(
         timestamp: nowMonotonicMs(),
       });
     }
-    await observedMemoryWork;
   };
 
   const pruneDuplicateCaches = (now: number): void => {
@@ -1998,6 +1968,7 @@ export function registerGatewayMessageHandlers(
   });
 
   return {
+    observedGroupMemory: observedGroupMemoryLane,
     icpTargetChannelInitiator: {
       ...createIcpTargetChannelInitiator({
         localCompanionId,

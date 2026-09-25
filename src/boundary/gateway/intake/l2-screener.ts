@@ -369,7 +369,7 @@ export type L2ScreeningOutcome =
   };
 
 /** Content-free class of an L2 screener failure. */
-export type L2ScreenerFailureCause = 'timeout' | 'provider_rejected' | 'failed';
+type L2ScreenerFailureCause = 'timeout' | 'provider_rejected' | 'failed';
 
 /**
  * Routing + fail-closed wrapper. Skips L2 for below-threshold, non-mandatory

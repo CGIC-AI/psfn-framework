@@ -5,11 +5,17 @@ import type {
   FleetAuthRole,
 } from '../../system/config/fleet-auth-config.js';
 
+import {
+  applySiblingContactName,
+  placeholderSiblingContactName,
+  resolveSiblingContactName,
+  type SiblingContactName,
+  type SiblingNameSource,
+} from './sibling-contact-name.js';
+
 const PROVISIONING_ACTOR = 'operator:provision:fleet-contacts';
 
-interface FleetContactCompanion {
-  readonly companionId: string;
-}
+type FleetContactCompanion = SiblingNameSource;
 
 interface FleetContactPlanEntry {
   readonly ownerCompanionId: string;
@@ -18,6 +24,8 @@ interface FleetContactPlanEntry {
   readonly displayName: string;
   readonly relationshipType: RelationshipType;
   readonly contactId?: string;
+  /** A sibling's real name (7frk9); absent for human contacts. */
+  readonly siblingName?: SiblingContactName;
 }
 
 export interface FleetContactTopologyOptions {
@@ -84,16 +92,23 @@ function buildFleetContactPlan(
     administrators.map(entry => entry.providerSubjectId),
   )].sort();
 
+  const siblingNames = new Map(companions.map(companion => [
+    companion.companionId,
+    resolveSiblingContactName(companion),
+  ] as const));
   const plan: FleetContactPlanEntry[] = [];
   for (const owner of companions) {
     for (const peer of companions) {
       if (peer.companionId === owner.companionId) continue;
+      const siblingName = siblingNames.get(peer.companionId);
+      if (!siblingName) throw new Error(`Fleet contact provisioning lost the name of ${peer.companionId}`);
       plan.push({
         ownerCompanionId: owner.companionId,
         channel: 'companion',
         channelUserId: peer.companionId,
-        displayName: `Companion ${peer.companionId.slice(0, 8)}`,
+        displayName: siblingName.displayName,
         relationshipType: 'ai_companion',
+        siblingName,
       });
     }
     for (const providerSubjectId of administratorSubjects) {
@@ -175,7 +190,7 @@ export async function provisionFleetContactTopology(
         contact = await store.resolveChannelIdentity(
           entry.channel,
           entry.channelUserId,
-          entry.displayName,
+          placeholderSiblingContactName(entry.channelUserId),
         );
       } else {
         contact = await store.upsert({
@@ -191,6 +206,9 @@ export async function provisionFleetContactTopology(
           }],
         }, { actor: PROVISIONING_ACTOR });
       }
+    }
+    if (entry.siblingName) {
+      await applySiblingContactName(store, contact, entry.channelUserId, entry.siblingName, PROVISIONING_ACTOR);
     }
     if (contact.relationshipType !== entry.relationshipType) {
       const updated = await store.updateRelationshipType(

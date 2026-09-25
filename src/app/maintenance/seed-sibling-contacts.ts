@@ -6,6 +6,12 @@ import { createPostgresContactStore } from '../../core/contacts/postgres-adapter
 import { resolveSystemOwnerFleetContext } from './system-owner-fleet-context.js';
 import type { TrustLevel } from '../../system/trust/types.js';
 import {
+  applySiblingContactName,
+  placeholderSiblingContactName,
+  resolveSiblingContactName,
+  type SiblingNameSource,
+} from './sibling-contact-name.js';
+import {
   bootstrapMaintenanceRuntime,
   isMaintenanceCliEntrypoint,
   parseCommonMaintenanceArgs,
@@ -80,14 +86,19 @@ function parseArgs(argv: readonly string[]): CliOptions {
  */
 export async function seedSiblingContact(
   store: ContactStorePort,
-  peerCompanionId: string,
+  peer: SiblingNameSource,
   trust: TrustLevel,
+  readCardName?: (path: string) => string,
 ): Promise<string> {
+  // Resolve the name first so a nameless sibling fails before any write (7frk9).
+  const name = resolveSiblingContactName(peer, readCardName);
+  const peerCompanionId = peer.companionId;
   const contact = await store.resolveChannelIdentity(
     'companion',
     peerCompanionId,
-    `Companion ${peerCompanionId.slice(0, 8)}`,
+    placeholderSiblingContactName(peerCompanionId),
   );
+  await applySiblingContactName(store, contact, peerCompanionId, name, SEED_ACTOR);
   await store.setMachineIntelligence(contact.id, true, SEED_ACTOR);
   await store.setTrustLevel(contact.id, trust, SEED_ACTOR);
   await store.updateRelationshipType(contact.id, 'ai_companion', SEED_ACTOR);
@@ -95,7 +106,7 @@ export async function seedSiblingContact(
 }
 
 /** The companions.json fields that pin one companion's contact-store authority. */
-interface SiblingContactOwner {
+interface SiblingContactOwner extends SiblingNameSource {
   companionId: string;
   postgresSchema: string;
   postgresRole: string;
@@ -117,6 +128,7 @@ export async function applySiblingContactSeeding(input: {
   companions: readonly SiblingContactOwner[];
   trust: TrustLevel;
   createStore: SiblingContactStoreFactory;
+  readCardName?: (path: string) => string;
 }): Promise<Array<{ owner: string; peer: string; contactId: string }>> {
   const seeded: Array<{ owner: string; peer: string; contactId: string }> = [];
   for (const owner of input.companions) {
@@ -127,7 +139,7 @@ export async function applySiblingContactSeeding(input: {
     const store = await input.createStore(input.databaseUrl, { schema: owner.postgresSchema, role });
     for (const peer of input.companions) {
       if (peer.companionId === owner.companionId) continue;
-      const contactId = await seedSiblingContact(store, peer.companionId, input.trust);
+      const contactId = await seedSiblingContact(store, peer, input.trust, input.readCardName);
       seeded.push({ owner: owner.companionId, peer: peer.companionId, contactId });
     }
   }

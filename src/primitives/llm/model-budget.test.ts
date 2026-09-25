@@ -263,6 +263,59 @@ describe('ModelBudgetController', () => {
     expect(preflight.blockedEvent?.reason).toBe('missing_cost_metadata');
   });
 
+  it('admits an explicitly zero-priced candidate as known $0 pricing', async () => {
+    const dataDir = '/tmp/model-budget-zero-rate';
+    const baseRegistry = makeConfig(dataDir).modelRegistry!;
+    const config = makeConfig(dataDir, {
+      modelRegistry: {
+        ...baseRegistry,
+        models: baseRegistry.models.map(entry => (entry.id === 'chat'
+          ? {
+            ...entry,
+            cost: {
+              inputPer1MUsd: 0,
+              outputPer1MUsd: 0,
+              cacheReadPer1MUsd: 0,
+              cacheWritePer1MUsd: 0,
+              currency: 'USD',
+            },
+          }
+          : entry)),
+      },
+    });
+    const controller = new ModelBudgetController(config, makeQuery());
+    const preflight = await controller.evaluatePreflight(preflightInput);
+
+    expect(preflight.allowed).toBe(true);
+    expect(preflight.estimatedRequestCostUsd).toBe(0);
+    expect(preflight.blockedEvent).toBeUndefined();
+    expect(resolveModelUsageCostRates(config, preflightInput.candidate, 'chat')).toEqual({
+      inputPer1MUsd: 0,
+      outputPer1MUsd: 0,
+      cacheReadPer1MUsd: 0,
+      cacheWritePer1MUsd: 0,
+      currency: 'USD',
+    });
+  });
+
+  it('still fails closed when a cost block carries no rates', async () => {
+    const dataDir = '/tmp/model-budget-empty-cost';
+    const baseRegistry = makeConfig(dataDir).modelRegistry!;
+    const config = makeConfig(dataDir, {
+      modelRegistry: {
+        ...baseRegistry,
+        models: baseRegistry.models.map(entry => (entry.id === 'chat'
+          ? { ...entry, cost: { currency: 'USD' } }
+          : entry)),
+      },
+    });
+    const controller = new ModelBudgetController(config, makeQuery());
+    const preflight = await controller.evaluatePreflight(preflightInput);
+
+    expect(preflight.allowed).toBe(false);
+    expect(preflight.blockedEvent?.reason).toBe('missing_cost_metadata');
+  });
+
   it('keeps tracking-only calls allowed while reporting configured threshold crossings', async () => {
     const dataDir = '/tmp/psfn-model-budget-disabled';
     const baseRegistry = makeConfig(dataDir).modelRegistry!;

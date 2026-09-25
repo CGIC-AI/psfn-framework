@@ -49,8 +49,12 @@ export class ModelBudgetExceededError extends Error {
   }
 }
 
-function toPositiveNumber(value: unknown): number | undefined {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+/**
+ * An explicit zero rate is known pricing (subscription or free route); only an
+ * absent or invalid rate is unknown.
+ */
+function toNonNegativeRate(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
     return undefined;
   }
   return value;
@@ -126,8 +130,8 @@ function resolveUsdCostRates(
     : 'USD';
   if (currency !== 'USD') return null;
 
-  const inputRate = toPositiveNumber(entry.cost?.inputPer1MUsd);
-  const outputRate = toPositiveNumber(entry.cost?.outputPer1MUsd);
+  const inputRate = toNonNegativeRate(entry.cost?.inputPer1MUsd);
+  const outputRate = toNonNegativeRate(entry.cost?.outputPer1MUsd);
   if (inputRate === undefined && outputRate === undefined) return null;
   return {
     inputPer1MUsd: inputRate ?? outputRate ?? 0,
@@ -158,11 +162,7 @@ function resolveCostRatesForEntry(
     ? entry.cost.currency.trim().toUpperCase()
     : 'USD';
   if (currency !== 'USD') return undefined;
-  const rate = (value: unknown): number | undefined => (
-    typeof value === 'number' && Number.isFinite(value) && value >= 0
-      ? value
-      : undefined
-  );
+  const rate = toNonNegativeRate;
   const rates: ModelUsageCostRates = {
     ...(rate(entry.cost.inputPer1MUsd) !== undefined
       ? { inputPer1MUsd: rate(entry.cost.inputPer1MUsd) }

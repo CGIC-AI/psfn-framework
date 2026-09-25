@@ -4,6 +4,9 @@ import { PROMPT_RUNTIME_MACRO_HINTS } from '../../identity/prompt-runtime/macro-
 import { listCanonicalToolSurfaces } from './registry.js';
 import { TOOL_VIEWER_GATE_DECISIONS, TOOL_WITHOUT_ACTIONS } from './viewer-gates.js';
 import { withViewerReadGate } from './viewer-read-gate.js';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join, relative } from 'node:path';
+import { MESSAGE_CLASSES } from '../message-classes.js';
 
 /**
  * Companion-wide state sweep (psfn-framework-o5wf5): every tool action and
@@ -316,5 +319,61 @@ describe('central viewer read gate (o5wf5)', () => {
     const { tool, calls } = fakeTool('contact');
     await asViewer('public', () => tool.execute('w1', { action: 'note', contactId: 'c', notes: 'x' }));
     expect(calls).toHaveLength(1);
+  });
+});
+
+/**
+ * Messages injected into a run outside the prompt template (r5 o5wf5: a
+ * private intention whisper from a trusted room reached a public room's run
+ * through the follow-up queue, which the tool and token tables did not
+ * cover). Every context message class and every site that pushes a message
+ * into a live run must carry a gate decision.
+ */
+const CONTEXT_MESSAGE_CLASS_GATE_DECISIONS: Readonly<Record<string, string>> = {
+  outwardSpeech: 'current conversation: this channel\'s own session history',
+  musing: 'current conversation: this channel\'s own session history',
+  letter: 'current conversation: this channel\'s own session history',
+  compaction: 'current conversation: summary of this channel\'s own history',
+  continuity: 'cross-channel continuity gated by viewer (canViewerReadSessionChannel)',
+  mirror: 'mirrored only between rooms whose envelopes share continuity and memory policy allows (mirroring.ts)',
+  systemNote: 'joins a live run only in its own conversation (follow-up-ingress activeRunServesChannel)',
+  internalWhisper: 'joins a live run only in its own conversation; deferred whispers flush only to their own channel; completion notices route by logical session',
+};
+
+/** Reviewed sites that push a message into a live pi run, with their gate. */
+const LIVE_RUN_INJECTION_SITES: Readonly<Record<string, { count: number; gate: string }>> = {
+  'src/core/agent/substrate-agent.ts': { count: 1, gate: 'steer joins only a run of its own conversation' },
+  'src/core/agent/substrate-agent/follow-up-ingress.ts': {
+    count: 3,
+    gate: 'completion notice by logical session; follow-ups via activeRunServesChannel',
+  },
+  'src/core/agent/substrate-agent/turn-queue-ingress.ts': { count: 1, gate: 'deferred whispers flush only to their own channel' },
+};
+
+function listSourceFiles(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) return listSourceFiles(path);
+    return entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts') ? [path] : [];
+  });
+}
+
+describe('context message injection gate decisions (o5wf5 r5)', () => {
+  it('has a decision for every context message class', () => {
+    expect(Object.values(MESSAGE_CLASSES).filter(value => !(value in CONTEXT_MESSAGE_CLASS_GATE_DECISIONS))).toEqual([]);
+    expect(Object.keys(CONTEXT_MESSAGE_CLASS_GATE_DECISIONS)
+      .filter(key => !(Object.values(MESSAGE_CLASSES) as string[]).includes(key))).toEqual([]);
+  });
+
+  it('has a reviewed gate for every site that injects into a live run', () => {
+    const root = join(__dirname, '../../../..');
+    const found: Record<string, number> = {};
+    for (const file of listSourceFiles(join(root, 'src'))) {
+      const matches = readFileSync(file, 'utf8').match(/\bagent\.(?:followUp|steer)\(/g);
+      if (matches) found[relative(root, file)] = matches.length;
+    }
+    expect(found).toEqual(Object.fromEntries(
+      Object.entries(LIVE_RUN_INJECTION_SITES).map(([file, site]) => [file, site.count]),
+    ));
   });
 });

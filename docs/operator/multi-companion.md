@@ -159,6 +159,22 @@ The root `postgres` block owns the dedicated shared-schema migration role and a
 gateway-only credential reference for shared DDL — independent of
 `fleet-auth.json`.
 
+It may also declare `gatewayAuditReaderRole`, an optional least-privilege
+read-only role for audit and test tooling (for example a shakedown harness
+driving a follower) that must read the gateway-owned `gateway_audit` and
+`model_usage_events` tables in the primary companion's schema. The operator
+creates the role only — `CREATE ROLE <reader> LOGIN NOINHERIT NOSUPERUSER
+NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT <n> PASSWORD
+'<secret>'`, no grants and no memberships. Gateway startup proves that posture,
+resets the role to exactly `USAGE` on the primary schema plus `SELECT` on those
+two tables once they have migrated, proves the result, and admits it in the
+exact-grantee check on that schema only. It must differ from the shared
+migration role and every companion role. An undeclared reader, a reader
+holding any grant on another schema, or one without a finite connection limit
+still fails startup closed. The gateway never connects as this role; its
+credential stays with the tooling. A fleet restore (`--no-acl`) drops its
+grants until the next gateway start re-applies them.
+
 Cross-entry validation rejects duplicate `companionId`, `postgresSchema`,
 `postgresRole`, and credential env names; overlapping `companionDataDir`
 entries; a companion role or credential that collides with the shared migration

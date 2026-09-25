@@ -693,6 +693,13 @@
       "note": "psfn-framework-znuav: upgrade path for the retired fleet welfare verifier against the real containerized PostgreSQL harness - a fleet carrying the legacy cross-schema USAGE/SELECT grants boots, the shared-schema startup authority revokes them, a second boot is idempotent, and a stray grantee still fails closed. Focused local full-file wall baseline was 0.72s on 2026-09-08 with a warm harness slot; 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
     },
     {
+      "file": "src/persistence/backups/gateway-audit-reader.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 1000,
+      "baselineSource": "measured",
+      "note": "psfn-framework-jqg13: a declared read-only gateway audit reader against the real containerized PostgreSQL harness - startup admits it on the gateway schema only, the post-readiness grant is exact SELECT on gateway_audit/model_usage_events, a restart with the grants converges, and an undeclared, foreign-schema, unbounded or authority-reusing reader fails closed. 120s matches the repo integration cap and preserves headroom for cold image startup and shared harness-slot contention."
+    },
+    {
       "file": "src/persistence/postgres/background-work-operator.integration.test.ts",
       "timeoutMs": 120000,
       "measuredBaselineMs": 1200,

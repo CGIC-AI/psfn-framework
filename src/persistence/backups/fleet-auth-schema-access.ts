@@ -14,6 +14,10 @@ import { parseExactPostgresCredential } from '../../shared/utils/postgres-creden
 import { assertPostgresRolesAreLeastPrivilege } from '../postgres/role-posture.js';
 import { grantBackupReadAccessToTenantSchema } from '../postgres/backup-schema-access.js';
 import {
+  applyGatewayAuditReaderAccess,
+  type GatewayAuditReaderGrant,
+} from '../postgres/gateway-audit-reader-access.js';
+import {
   describeSchemaGranteeResidue,
   readSchemaGranteeResidue,
 } from '../postgres/schema-grantee-residue.js';
@@ -615,10 +619,24 @@ export async function applyFleetAuthSchemaAccessContracts(options: {
   contracts: readonly FleetAuthSchemaAccessContract[];
   ownerDatabaseUrls: Readonly<Record<string, string>>;
   backupRole?: string;
+  /** Declared read-only gateway audit reader (jqg13); admitted on its schema only. */
+  gatewayAuditReader?: GatewayAuditReaderGrant;
 }): Promise<void> {
   const backupRole = options.backupRole === undefined
     ? undefined
     : assertValidRoleName(options.backupRole, 'backupRole');
+  const auditReader = options.gatewayAuditReader;
+  if (auditReader) {
+    const reader = assertValidRoleName(auditReader.role, 'gatewayAuditReader.role');
+    const schemaContract = options.contracts.find(contract => contract.schema === auditReader.schema);
+    if (!schemaContract || schemaContract.kind !== 'companion') {
+      throw new Error('Gateway audit reader schema must be a fleet companion schema');
+    }
+    const authorityRoles = options.contracts.flatMap(contract => [contract.ownerRole, ...contract.runtimeRoles]);
+    if (authorityRoles.includes(reader) || reader === backupRole) {
+      throw new Error('Gateway audit reader role must be distinct from every fleet authority role');
+    }
+  }
   const mappedRuntimeRoles = [...new Set(options.contracts.flatMap(
     contract => contract.runtimeRoles,
   ))].sort();
@@ -683,10 +701,15 @@ export async function applyFleetAuthSchemaAccessContracts(options: {
           backupRole,
         });
       }
+      const readerHere = auditReader?.schema === contract.schema ? auditReader : undefined;
+      if (readerHere) {
+        await applyGatewayAuditReaderAccess(client, readerHere);
+      }
       const allowedGrantees = [
         contract.ownerRole,
         ...(backupRole ? [backupRole] : []),
         ...contract.runtimeRoles,
+        ...(readerHere ? [readerHere.role] : []),
       ];
       await assertExactSchemaGrantees(client, {
         schema: contract.schema,

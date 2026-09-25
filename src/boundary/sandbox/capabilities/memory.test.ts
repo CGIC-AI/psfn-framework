@@ -514,4 +514,20 @@ describe('createMemoryCapabilities session_search', () => {
     expect(result.hits).toHaveLength(0);
     expect(result.gatedOutCount).toBe(1);
   });
+
+  it('exposes no cross-channel session write helper (4i11j)', () => {
+    const appendSystemNote = vi.fn();
+    const capabilities = createMemoryCapabilities({
+      llmProvider: mockLLM('unused'),
+      embeddingService: null,
+      memoryStore: null,
+      sessionManager: {
+        getRecentMessages: vi.fn(() => []),
+        appendSystemNote,
+      } as unknown as SessionManager,
+      pushEvidence: vi.fn(),
+    });
+    expect('session_append_note' in capabilities).toBe(false);
+    expect(appendSystemNote).not.toHaveBeenCalled();
+  });
 });

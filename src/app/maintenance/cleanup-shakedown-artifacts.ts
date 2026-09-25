@@ -150,6 +150,7 @@ export function runShakedownCleanupCli(
           databaseUrl,
           mode: options.apply ? 'apply' : 'dry-run',
           multiCompanion: runtime.config.multiCompanion === true,
+          ...(resolved.postgresRole ? { postgresRole: resolved.postgresRole } : {}),
           postgresSchema: resolved.postgresSchema,
           sessionsDir: resolved.sessionsDir,
           target,

@@ -489,6 +489,27 @@ describe('session tool channel visibility gate (k0sr0)', () => {
       .toContain('Sibling words');
   });
 
+  it('refuses a cross-conversation wake_return write into a sibling DM (4i11j)', async () => {
+    const result = await asPublicApiCaller(() => makeTool().execute('wake-gated', {
+      action: 'wake_return',
+      sessionId: SIBLING_DM,
+      summary: 'Planted continuity text from a stranger room.',
+    }));
+    expect((result.details as { isError?: boolean }).isError).toBe(true);
+    expect(toolText(result)).toContain('not writable from this conversation');
+    expect(manager.listSessionContinuityArtifacts(SIBLING_DM, { kind: 'wake_return' })).toEqual([]);
+  });
+
+  it('refuses a wake_return write into an unknown session the caller cannot read (4i11j)', async () => {
+    const result = await asPublicApiCaller(() => makeTool().execute('wake-unknown', {
+      action: 'wake_return',
+      sessionId: 'api:someone-else-room',
+      summary: 'Planted continuity text.',
+    }));
+    expect((result.details as { isError?: boolean }).isError).toBe(true);
+    expect(manager.listSessionContinuityArtifacts('api:someone-else-room', { kind: 'wake_return' })).toEqual([]);
+  });
+
   it('refuses to resume a sibling DM from a public caller without echoing its content', async () => {
     const result = await asPublicApiCaller(() => makeTool().execute('resume-gated', {
       action: 'resume',
@@ -723,12 +744,19 @@ class InMemoryTranscriptSearch {
       facets: ['task'],
     })).toBe(true);
 
-    const result = await tool.execute('session-wake-return', {
+    // The turn's own conversation may always record its wake-return.
+    const result = await runWithRequestContext({
+      callType: 'tool',
+      purpose: 'agent.turn.prompt',
+      channelId: 'api:session-one',
+      viewerTrustLevel: 'regular',
+      viewerChannelPrivacy: 'private',
+    }, () => tool.execute('session-wake-return', {
       action: 'wake_return',
       summary: 'Paused mid-refactor with tests still pending.',
       nextAnchor: 'Resume with the runtime-context test.',
       facets: ['task'],
-    });
+    }));
     const payload = JSON.parse(toolText(result)) as {
       action: string;
       recorded: boolean;

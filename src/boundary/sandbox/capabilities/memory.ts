@@ -120,13 +120,11 @@ export interface MemoryCapabilities {
     limit?: number,
     options?: SessionSearchOptions,
   ) => Promise<SessionSearchResult>;
-  session_append_note: (channelId: string, note: string) => boolean;
   memory_get_by_id: (id: string) => Promise<Record<string, unknown> | null>;
 }
 
 interface MemoryCapabilitySessionPort {
   getRecentMessages: SessionManager['getRecentMessages'];
-  appendSystemNote: SessionManager['appendSystemNote'];
   isSessionRetiredOrQuarantined?: SessionManager['isSessionRetiredOrQuarantined'];
   getRetiredLogicalSessionIds?: SessionManager['getRetiredLogicalSessionIds'];
   searchByKeywords?: (query: string, limit?: number) => Promise<SessionSearchHit[]>;
@@ -565,14 +563,6 @@ export function createMemoryCapabilities(options: CreateMemoryCapabilitiesOption
     return result;
   };
 
-  const session_append_note = (channelId: string, note: string): boolean => {
-    if (!options.sessionManager) {
-      return false;
-    }
-    options.sessionManager.appendSystemNote(channelId, note);
-    return true;
-  };
-
   const memory_get_by_id = async (id: string): Promise<Record<string, unknown> | null> => {
     if (!memoryStore || (isSelfDirectedReflectionRequest() && !sessionQuarantineFilter)) {
       return null;
@@ -615,7 +605,6 @@ export function createMemoryCapabilities(options: CreateMemoryCapabilitiesOption
     memory_redact,
     session_messages,
     session_search,
-    session_append_note,
     memory_get_by_id,
   };
 }

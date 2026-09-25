@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { fromAny } from '@total-typescript/shoehorn';
+import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
 import {
   chargeSurface,
@@ -192,10 +193,54 @@ describe('createSelfStatusTool', () => {
     resetRunChargeRollingWindowForTests();
   });
 
+  it('withholds channel ids of sessions a public caller cannot read (s6a6o)', async () => {
+    const siblingDm = 'companion-dm:aaaaaaaa-0000-4000-8000-00000000000a:bbbbbbbb-0000-4000-8000-00000000000b';
+    const caller = 'api:api-key-publiccaller:stranger-room';
+    const runtime = makeRuntime({
+      listRecentSessions: () => [
+        {
+          sessionId: siblingDm,
+          channelId: siblingDm,
+          lastActivityAt: 1_700_000_110_000,
+          messageCount: 21,
+          lastRole: 'user',
+          lastMessagePreview: 'sibling words',
+        },
+        {
+          sessionId: caller,
+          channelId: caller,
+          channelType: 'api',
+          lastActivityAt: 1_700_000_100_000,
+          messageCount: 2,
+          lastRole: 'user',
+          lastMessagePreview: 'hello',
+        },
+      ],
+    });
+    const result = await runWithRequestContext({
+      callType: 'tool',
+      purpose: 'agent.turn.prompt',
+      channelId: caller,
+      viewerTrustLevel: 'public',
+      viewerChannelPrivacy: 'private',
+    }, () => createSelfStatusTool(runtime).execute('self-status-gated', {}));
+    const payload = parseResult(result);
+
+    expect(payload.channels.gatedOutCount).toBe(1);
+    expect(payload.channels.recent.map((session: { channelId: string }) => session.channelId)).toEqual([caller]);
+    expect(JSON.stringify(result)).not.toContain(siblingDm);
+  });
+
   it('returns structured allowed runtime fields without message previews', async () => {
     const runtime = makeRuntime();
     const tool = createSelfStatusTool(runtime);
-    const payload = parseResult(await tool.execute('self-status-1', {}));
+    const payload = parseResult(await runWithRequestContext({
+      callType: 'tool',
+      purpose: 'agent.turn.prompt',
+      channelId: 'api:owner-console',
+      viewerTrustLevel: 'primary',
+      viewerChannelPrivacy: 'private',
+    }, () => tool.execute('self-status-1', {})));
 
     expect(payload.schemaVersion).toBe(1);
     expect(payload.capability).toEqual({

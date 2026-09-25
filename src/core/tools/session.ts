@@ -577,6 +577,16 @@ export function createSessionTool(options: UnifiedSessionToolOptions): Substrate
               options.dataDir,
               params.sessionId,
             );
+            // A wake_return artifact is injected into that session's future
+            // prompt context, so writing it obeys the same viewer gate as
+            // reading the session (psfn-framework-4i11j). Fail closed.
+            const targetChannelId = options.manager.getSessionActivity(sessionId)?.channelId ?? sessionId;
+            if (!canViewerReadSessionChannel(resolveViewerContextFromRequest(), targetChannelId)) {
+              return textResultWithError(
+                `session action="wake_return" refused: ${sessionId} is not writable from this conversation.`,
+                true,
+              );
+            }
             const nextAnchor = normalizeWakeReturnNextAnchor(params.nextAnchor);
             const artifact = options.manager.recordSessionContinuityArtifact({
               sessionId,

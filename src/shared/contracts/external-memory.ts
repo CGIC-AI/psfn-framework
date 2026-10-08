@@ -11,7 +11,6 @@ export const externalMemorySourceSchema = Type.Object({
   chatId: text,
   chatType: Type.Literal('dm'),
 }, strict);
-export type ExternalMemorySource = Static<typeof externalMemorySourceSchema>;
 const session = { sessionId: text, source: Type.Optional(externalMemorySourceSchema) };
 const event = { ...session, eventId: text };
 

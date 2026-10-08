@@ -57,6 +57,15 @@ user fact even when the background job succeeds. The smoke uses a complete
 two-entry pair. The interval-one source/coverage contract is tracked separately
 as `psfn-framework-rws51`; a passing smoke does not certify that setting.
 
+The main Companion UI conversation currently renders a final gateway result,
+and its remembered transcript lives in a process-local browser map. The HTTP
+streaming journey therefore does not establish incremental browser rendering,
+and rereading a durable Garden turn after reload does not establish visible
+transcript restoration. Those product capabilities are tracked as
+`psfn-framework-mg891` and `psfn-framework-jtr6e`, respectively. Key-only fleet
+authentication exercises one owner; it does not certify multiple OAuth accounts
+or an external identity provider's session revocation.
+
 ## Evidence and failure diagnosis
 
 Docker journeys connect public streaming output to its durable TurnRecord and

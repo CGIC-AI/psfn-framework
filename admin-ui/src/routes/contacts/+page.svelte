@@ -1,5 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { buildPrivacyChangeCandidates, contactPrivacyKey, contactChannelPrivacy, saveContactPolicyPrivacy } from './contact-privacy';
+  import ContactChannelPrivacy from './ContactChannelPrivacy.svelte';
+  import { getChannelEnvelopeData, type ChannelEnvelopeData } from '$lib/api/endpoints/channels';
   import { EXTERNAL_MEMORY_CHANNEL } from '../../../../src/shared/routing/external-memory-channel.js';
   import ContactSocialGraphPanel from './ContactSocialGraphPanel.svelte';
   import BiographicalClaimsPanel from '../memory/BiographicalClaimsPanel.svelte';
@@ -33,6 +36,8 @@
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
 
   let data = $state<AdminContactListData | null>(null);
+  let channelPolicies = $state<ChannelEnvelopeData | null>(null);
+  let channelPolicyError = $state('');
   let loading = $state(true);
   let error = $state('');
   let saving = $state(false);
@@ -120,18 +125,25 @@
     public:   { cls: 'border border-bark-300 bg-bark-100 text-shadow-700', label: 'Public' },
   };
 
-  const PRIVACY_BADGE_STYLES: Record<string, { cls: string; label: string }> = {
-    private:      { cls: 'border border-moss-300 bg-moss-50 text-moss-800', label: 'Private' },
-    invite_only: { cls: 'border border-gold-300 bg-gold-50 text-gold-800', label: 'Invite-Only' },
-    public:       { cls: 'border border-petal-300 bg-petal-50 text-petal-700', label: 'Public' },
-  };
-
   const VERIFICATION_STATUS: Record<string, { cls: string; label: string }> = {
     pending:  { cls: 'bg-bark-200 text-shadow-800', label: 'Pending' },
     verified: { cls: 'bg-moss-100 text-moss-700', label: 'Verified' },
     failed:   { cls: 'bg-wilt-100 text-wilt-600', label: 'Failed' },
     expired:  { cls: 'bg-shadow-100 text-shadow-600', label: 'Expired' },
   };
+
+  async function reloadContacts() {
+    data = await listContacts();
+    channelPolicies = null;
+    channelPolicyError = '';
+    if (!data.contacts.some(contact => (contact.channels ?? []).some(ch => ch.channel === EXTERNAL_MEMORY_CHANNEL))
+      && !Object.values(data.relatedChannelMap).some(rows => rows.some(ch => ch.policyChannelId))) return;
+    try {
+      channelPolicies = await getChannelEnvelopeData();
+    } catch (e) {
+      channelPolicyError = e instanceof Error ? e.message : 'Failed to load channel privacy';
+    }
+  }
 
   // Helpers
 
@@ -184,10 +196,6 @@
 
   function trustBadge(trust: string) {
     return TRUST_BADGE_STYLES[trust] ?? TRUST_BADGE_STYLES.public;
-  }
-
-  function privacyBadge(level: string) {
-    return PRIVACY_BADGE_STYLES[level] ?? PRIVACY_BADGE_STYLES.public;
   }
 
   function formatRelType(rt: string): string {
@@ -281,63 +289,10 @@
     return `identity:${ch.channel}:${ch.userId}`;
   }
 
-  function conversationChannelKey(ch: { channel: string; channelId: string }): string {
-    return `conversation:${ch.channel}:${ch.channelId}`;
-  }
-
   function hasPersistedConversationChannel(contact: Contact, channel: { channel: string; channelId: string }): boolean {
     return contact.conversationChannels?.some(entry => (
       entry.channel === channel.channel && entry.channelId === channel.channelId
     )) ?? false;
-  }
-
-  type ChannelPrivacyChangeCandidate =
-    | {
-      key: string;
-      target: 'identity';
-      channel: string;
-      userId: string;
-      privacyLevel: ChannelPrivacyLevel;
-    }
-    | {
-      key: string;
-      target: 'conversation';
-      channel: string;
-      channelId: string;
-      privacyLevel: ChannelPrivacyLevel;
-    };
-
-  function buildPrivacyChangeCandidates(
-    contact: Contact,
-    relatedChannels: ContactConversationChannelView[],
-  ): ChannelPrivacyChangeCandidate[] {
-    const candidates = new Map<string, ChannelPrivacyChangeCandidate>();
-
-    for (const ch of contact.channels ?? []) {
-      if (ch.channel === EXTERNAL_MEMORY_CHANNEL) continue;
-      const key = contactChannelKey(ch);
-      candidates.set(key, {
-        key,
-        target: 'identity',
-        channel: ch.channel,
-        userId: ch.userId,
-        privacyLevel: ch.privacyLevel as ChannelPrivacyLevel,
-      });
-    }
-
-    for (const ch of relatedChannels) {
-      if (!ch.privacyLevel || ch.policyChannelId) continue;
-      const key = conversationChannelKey(ch);
-      candidates.set(key, {
-        key,
-        target: 'conversation',
-        channel: ch.channel,
-        channelId: ch.channelId,
-        privacyLevel: ch.privacyLevel,
-      });
-    }
-
-    return [...candidates.values()];
   }
 
   function startEdit(contact: Contact) {
@@ -359,13 +314,10 @@
     channelPrivacyEdits = {};
     channelBondingEdits = {};
     for (const ch of contact.channels ?? []) {
-      channelPrivacyEdits[contactChannelKey(ch)] = ch.privacyLevel as ChannelPrivacyLevel;
       channelBondingEdits[contactChannelKey(ch)] = ch.bonded === true;
     }
-    for (const ch of getChannels(contact.id)) {
-      const key = conversationChannelKey(ch);
-      if (!ch.privacyLevel || ch.policyChannelId) continue;
-      channelPrivacyEdits[key] = ch.privacyLevel;
+    for (const candidate of buildPrivacyChangeCandidates(contact, getChannels(contact.id), channelPolicies)) {
+      channelPrivacyEdits[candidate.key] = candidate.privacyLevel;
     }
   }
 
@@ -377,6 +329,7 @@
 
   async function saveEdit(contactId: string) {
     saving = true;
+    let policySaved = false;
     try {
       const patch: ContactUpdatePayload = {};
       const contact = data?.contacts.find(c => c.id === contactId);
@@ -421,10 +374,13 @@
         channelId?: string;
         privacyLevel: ChannelPrivacyLevel;
       }> = [];
-      for (const ch of buildPrivacyChangeCandidates(contact, getChannels(contactId))) {
+      const policyChanges: Array<{ channelId: string; privacy: ChannelPrivacyLevel }> = [];
+      for (const ch of buildPrivacyChangeCandidates(contact, getChannels(contactId), channelPolicies)) {
         const newPrivacy = channelPrivacyEdits[ch.key];
         if (newPrivacy && newPrivacy !== ch.privacyLevel) {
-          if (ch.target === 'identity') {
+          if (ch.target === 'policy') {
+            policyChanges.push({ channelId: ch.channelId, privacy: newPrivacy });
+          } else if (ch.target === 'identity') {
             privacyChanges.push({ channel: ch.channel, userId: ch.userId, privacyLevel: newPrivacy });
           } else {
             privacyChanges.push({ channel: ch.channel, channelId: ch.channelId, privacyLevel: newPrivacy });
@@ -456,7 +412,7 @@
         };
       }
 
-      if (Object.keys(patch).length === 0) {
+      if (Object.keys(patch).length === 0 && policyChanges.length === 0) {
         flash(true, 'No changes to save');
         editingContactId = null;
         channelPrivacyEdits = {};
@@ -464,18 +420,26 @@
         return;
       }
 
-      const result = await updateContact(contactId, patch);
+      for (const change of policyChanges) {
+        const updatedPolicies = await saveContactPolicyPrivacy(change.channelId, change.privacy, confirm);
+        if (!updatedPolicies) return;
+        channelPolicies = updatedPolicies;
+        policySaved = true;
+      }
+      const result = Object.keys(patch).length > 0
+        ? await updateContact(contactId, patch)
+        : { ok: true, message: 'Channel privacy updated' };
       if (result.ok) {
-        data = await listContacts();
+        await reloadContacts();
         editingContactId = null;
         channelPrivacyEdits = {};
         channelBondingEdits = {};
         flash(true, result.message || 'Contact updated');
       } else {
-        flash(false, result.message || 'Update failed');
+        flash(false, `${policySaved ? 'Channel privacy saved; contact changes failed: ' : ''}${result.message || 'Update failed'}`);
       }
     } catch (e) {
-      flash(false, e instanceof Error ? e.message : 'Failed to update contact');
+      flash(false, `${policySaved ? 'Channel privacy saved; remaining changes failed: ' : ''}${e instanceof Error ? e.message : 'Failed to update contact'}`);
     } finally {
       saving = false;
     }
@@ -500,7 +464,7 @@
     try {
       const result = await updateContact(contactId, { trustLevel: quickTrustValue });
       if (result.ok) {
-        data = await listContacts();
+        await reloadContacts();
         quickTrustId = null;
         flash(true, 'Trust level updated');
       } else {
@@ -527,7 +491,7 @@
       if (createNotes.trim()) payload.notes = createNotes.trim();
       const result = await createContact(payload);
       if (result.ok) {
-        data = await listContacts();
+        await reloadContacts();
         showCreateForm = false;
         createDisplayName = '';
         createTrustLevel = 'regular';
@@ -561,7 +525,7 @@
     try {
       const result = await deleteContact(contactId);
       if (result.ok) {
-        data = await listContacts();
+        await reloadContacts();
         editingContactId = null;
         flash(true, result.message || 'Contact archived');
       } else {
@@ -585,7 +549,7 @@
     try {
       const result = await mergeContacts(targetId, sourceId);
       if (result.ok) {
-        data = await listContacts();
+        await reloadContacts();
         mergeSourceId = '';
         flash(true, result.message || 'Contacts merged');
       } else {
@@ -604,7 +568,7 @@
     try {
       const result = await unlinkChannelIdentity(contactId, channel, userId);
       if (result.ok) {
-        data = await listContacts();
+        await reloadContacts();
         // Re-open edit with refreshed data
         const refreshed = data?.contacts.find(c => c.id === contactId);
         if (refreshed && editingContactId === contactId) startEdit(refreshed);
@@ -625,7 +589,7 @@
     try {
       const result = await deleteConversationChannel(contactId, channel, channelId);
       if (result.ok) {
-        data = await listContacts();
+        await reloadContacts();
         const refreshed = data?.contacts.find(c => c.id === contactId);
         if (refreshed && editingContactId === contactId) startEdit(refreshed);
         flash(true, result.message || 'Conversation channel deleted');
@@ -642,7 +606,7 @@
   // Init
   onMount(async () => {
     try {
-      data = await listContacts();
+      await reloadContacts();
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to load contacts';
     } finally {
@@ -1059,7 +1023,6 @@
                   </thead>
                   <tbody>
                     {#each contact.channels as ch}
-                      {@const pb = privacyBadge(ch.privacyLevel)}
                       <tr class="border-b border-bark-100">
                         <td class="py-1.5 pr-2 text-shadow-800 font-medium">{ch.channel}</td>
                         <td class="py-1.5 pr-2 text-shadow-800 text-sm break-all">
@@ -1067,11 +1030,7 @@
                           <ContactIntroductionProvenance link={ch} />
                         </td>
                         <td class="py-1.5 pr-2">
-                          {#if ch.channel === EXTERNAL_MEMORY_CHANNEL}
-                            <a class="text-gold-700 underline" href={scopeGardenPath('/channels')}>Channel settings</a>
-                          {:else}
-                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-sm font-medium {pb.cls}">{pb.label}</span>
-                          {/if}
+                          <ContactChannelPrivacy level={contactChannelPrivacy(ch, channelPolicies)} label={`${ch.channel} privacy`} />
                         </td>
                         <td class="py-1.5 text-shadow-600 text-sm">
                           {#if ch.firstSeen || ch.lastSeen}
@@ -1121,15 +1080,11 @@
                     <span class="text-sm text-shadow-800 font-medium">{ch.policyChannelId ?? ch.channel}</span>
                     {#if ch.policyChannelId}
                       <span class="text-sm text-shadow-600">{ch.sessionCount} sessions</span>
-                      <a class="text-sm text-gold-700 underline" href={scopeGardenPath('/channels')}>Channel settings</a>
                     {:else}
                       <span class="font-mono text-sm text-shadow-700 break-all">{ch.channelId}</span>
                     {/if}
-                    {#if ch.privacyLevel && !ch.policyChannelId}
-                      {@const pb = privacyBadge(ch.privacyLevel)}
-                      <span class="inline-flex items-center px-2 py-0.5 rounded-full text-sm font-medium {pb.cls}">
-                        {pb.label}
-                      </span>
+                    {#if ch.privacyLevel || ch.policyChannelId}
+                      <ContactChannelPrivacy level={contactChannelPrivacy(ch, channelPolicies)} label={`${ch.policyChannelId ?? ch.channel} privacy`} />
                     {/if}
                   </div>
                 {/each}
@@ -1149,15 +1104,11 @@
                     <span class="text-sm text-shadow-800 font-medium">{ch.policyChannelId ?? ch.channel}</span>
                     {#if ch.policyChannelId}
                       <span class="text-sm text-shadow-600">{ch.sessionCount} sessions</span>
-                      <a class="text-sm text-gold-700 underline" href={scopeGardenPath('/channels')}>Channel settings</a>
                     {:else}
                       <span class="font-mono text-sm text-shadow-700 break-all">{ch.channelId}</span>
                     {/if}
-                    {#if ch.privacyLevel && !ch.policyChannelId}
-                      {@const pb = privacyBadge(ch.privacyLevel)}
-                      <span class="inline-flex items-center px-2 py-0.5 rounded-full text-sm font-medium {pb.cls}">
-                        {pb.label}
-                      </span>
+                    {#if ch.privacyLevel || ch.policyChannelId}
+                      <ContactChannelPrivacy level={contactChannelPrivacy(ch, channelPolicies)} label={`${ch.policyChannelId ?? ch.channel} privacy`} />
                     {/if}
                     {#if ch.lastSeen}
                       <span class="text-xs text-shadow-600">Last seen {formatDateTime(ch.lastSeen)}</span>
@@ -1374,6 +1325,9 @@
                 </button>
               </div>
 
+              {#if channelPolicyError}
+                <p class="text-sm text-wilt-700" role="alert">Channel privacy could not be loaded: {channelPolicyError}</p>
+              {/if}
               <!-- Channel Privacy Editing -->
               {#if contact.channels && contact.channels.length > 0}
                 <div>
@@ -1383,21 +1337,10 @@
                       {@const key = contactChannelKey(ch)}
                       <div class="flex items-center gap-2 flex-wrap">
                         <span class="font-mono text-sm text-shadow-800 min-w-0 truncate">{ch.channel}:{ch.userId}</span>
-                        {#if ch.channel === EXTERNAL_MEMORY_CHANNEL}
-                          <a class="text-sm text-gold-700 underline" href={scopeGardenPath('/channels')}>Channel settings · applies to all sessions</a>
-                        {:else}
-                        <select
-                          value={channelPrivacyEdits[key] ?? ch.privacyLevel}
-                          onchange={(e) => {
-                            channelPrivacyEdits[key] = (e.target as HTMLSelectElement).value as ChannelPrivacyLevel;
-                          }}
-                          class="text-sm px-2 py-1 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800
-                                 focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400">
-                          {#each CHANNEL_PRIVACY_LEVELS as pl}
-                            <option value={pl}>{pl.replace('_', ' ')}</option>
-                          {/each}
-                        </select>
-                        {/if}
+                        <ContactChannelPrivacy editing
+                          level={contactChannelPrivacy(ch, channelPolicies)} value={channelPrivacyEdits[contactPrivacyKey(ch)]}
+                          label={`${ch.channel} privacy`}
+                          onchange={(level) => { channelPrivacyEdits[contactPrivacyKey(ch)] = level; }} />
                         <label class="flex items-center gap-1 text-xs text-shadow-700"
                           title="Cross-channel capable: bonded identities operate as one logical conversation at the lowest-common privacy of the bonded set">
                           <input
@@ -1426,30 +1369,21 @@
                   <p class="text-sm font-medium text-shadow-800 mb-2">Channel Privacy Levels</p>
                   <div class="space-y-2">
                     {#each channels as ch}
-                      {@const key = conversationChannelKey(ch)}
                       <div class="flex items-center gap-2 flex-wrap">
                         <div class="min-w-0">
                           <span class="font-mono text-sm text-shadow-800 min-w-0 truncate">{ch.policyChannelId ?? `${ch.channel}:${ch.channelId}`}</span>
                           {#if ch.policyChannelId}
                             <span class="text-sm text-shadow-600"> · {ch.sessionCount} sessions</span>
-                            <a class="text-sm text-gold-700 underline" href={scopeGardenPath('/channels')}>Channel settings</a>
                           {/if}
                           {#if ch.userId}
                             <p class="text-xs text-shadow-600">Linked identity {ch.userId}</p>
                           {/if}
                         </div>
-                        {#if ch.privacyLevel && !ch.policyChannelId}
-                          <select
-                            value={channelPrivacyEdits[key] ?? ch.privacyLevel}
-                            onchange={(e) => {
-                              channelPrivacyEdits[key] = (e.target as HTMLSelectElement).value as ChannelPrivacyLevel;
-                            }}
-                            class="text-sm px-2 py-1 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800
-                                   focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400">
-                            {#each CHANNEL_PRIVACY_LEVELS as pl}
-                              <option value={pl}>{pl.replace('_', ' ')}</option>
-                            {/each}
-                          </select>
+                        {#if ch.privacyLevel || ch.policyChannelId}
+                          <ContactChannelPrivacy editing
+                            level={contactChannelPrivacy(ch, channelPolicies)} value={channelPrivacyEdits[contactPrivacyKey(ch)]}
+                            label={`${ch.policyChannelId ?? ch.channel} privacy`}
+                            onchange={(level) => { channelPrivacyEdits[contactPrivacyKey(ch)] = level; }} />
                         {/if}
                         {#if ch.lastSeen}
                           <span class="text-xs text-shadow-600">Last seen {formatDateTime(ch.lastSeen)}</span>
@@ -1465,30 +1399,21 @@
                   <p class="text-sm font-medium text-shadow-800 mb-2">Observed Conversation Channels</p>
                   <div class="space-y-2">
                     {#each channels as ch}
-                      {@const key = conversationChannelKey(ch)}
                       <div class="flex items-center gap-2 flex-wrap">
                         <div class="min-w-0">
                           <span class="font-mono text-sm text-shadow-800 min-w-0 truncate">{ch.policyChannelId ?? `${ch.channel}:${ch.channelId}`}</span>
                           {#if ch.policyChannelId}
                             <span class="text-sm text-shadow-600"> · {ch.sessionCount} sessions</span>
-                            <a class="text-sm text-gold-700 underline" href={scopeGardenPath('/channels')}>Channel settings</a>
                           {/if}
                           {#if ch.userId}
                             <p class="text-xs text-shadow-600">Linked identity {ch.userId}</p>
                           {/if}
                         </div>
-                        {#if ch.privacyLevel && !ch.policyChannelId}
-                          <select
-                            value={channelPrivacyEdits[key] ?? ch.privacyLevel}
-                            onchange={(e) => {
-                              channelPrivacyEdits[key] = (e.target as HTMLSelectElement).value as ChannelPrivacyLevel;
-                            }}
-                            class="text-sm px-2 py-1 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800
-                                   focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400">
-                            {#each CHANNEL_PRIVACY_LEVELS as pl}
-                              <option value={pl}>{pl.replace('_', ' ')}</option>
-                            {/each}
-                          </select>
+                        {#if ch.privacyLevel || ch.policyChannelId}
+                          <ContactChannelPrivacy editing
+                            level={contactChannelPrivacy(ch, channelPolicies)} value={channelPrivacyEdits[contactPrivacyKey(ch)]}
+                            label={`${ch.policyChannelId ?? ch.channel} privacy`}
+                            onchange={(level) => { channelPrivacyEdits[contactPrivacyKey(ch)] = level; }} />
                         {/if}
                         {#if ch.lastSeen}
                           <span class="text-xs text-shadow-600">Last seen {formatDateTime(ch.lastSeen)}</span>

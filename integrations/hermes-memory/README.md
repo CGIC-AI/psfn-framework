@@ -156,7 +156,10 @@ PSFN keeps screened processing intents in the companion's
 returned only after the canonical session journal is flushed and processing is
 durably queued. Accepted conversations are linked to the credential's configured
 contact for subject-scoped session views. The contact card shows one Hermes
-channel with a session count and a link to the channel's actual privacy controls.
+channel with a session count, the effective privacy badge, and the same inline
+privacy selector as other channels when editing the contact. That selector saves
+the shared channel policy for every Hermes session; the Channels page exposes
+the same policy.
 The channel identity uses the configured body ID. Hashed session IDs remain in
 history for provenance, isolation, and deduplication; they are not separate
 privacy controls or contact-card rows. Restarts replay pending intents; model failures reschedule the

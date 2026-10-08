@@ -121,6 +121,7 @@ async function analyzePage(context, pageDef) {
     const missingExpectations = pageDef.expect.filter((needle) => !bodyText.includes(needle));
     const consoleWarnings = [...consoleErrors];
     const errorSignals = [
+      ...consoleErrors,
       ...pageErrors,
       ...['Application Error', 'Internal Error', 'Failed to load', 'Unhandled']
         .filter((needle) => bodyText.includes(needle)),
@@ -255,6 +256,7 @@ async function main() {
             pageCount: PAGES.length,
             failures: output.failures,
           }, null, 2));
+          process.exitCode = 1;
           return;
         }
       } finally {
@@ -274,9 +276,13 @@ async function main() {
       ignoreHTTPSErrors: IGNORE_HTTPS_ERRORS,
       auth,
       pages,
-      failures: pages.filter((page) => !page.ok).map((page) => page.name),
+      failures: [
+        ...(!auth.ok ? ['authentication'] : []),
+        ...pages.filter((page) => !page.ok).map((page) => page.name),
+      ],
     };
     writeFileSync(OUTPUT_PATH, JSON.stringify(output, null, 2));
+    if (output.failures.length > 0) process.exitCode = 1;
     console.log(JSON.stringify({
       ok: output.failures.length === 0,
       outputPath: OUTPUT_PATH,

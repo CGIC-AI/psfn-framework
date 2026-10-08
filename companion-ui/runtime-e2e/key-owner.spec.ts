@@ -34,8 +34,12 @@ async function sessionStatus(page: Page): Promise<Record<string, unknown>> {
 async function signIn(page: Page): Promise<void> {
   await page.goto('/fleet/login');
   await page.getByLabel('Administrator token').fill(adminToken!);
-  await page.getByRole('button', { name: 'Login with administrator token' }).click();
-  await expect(page).toHaveURL(/\/fleet\/?$/u);
+  // Finish the form's redirect before issuing a second document navigation.
+  // A URL match alone can race the portal's initial document/assets load.
+  await Promise.all([
+    page.waitForURL(/\/fleet\/?$/u, { waitUntil: 'load' }),
+    page.getByRole('button', { name: 'Login with administrator token' }).click(),
+  ]);
   await page.goto('/companion-ui/');
   await expect(page.getByLabel('Connection ready', { exact: true })).toBeVisible();
   expect(await sessionStatus(page)).toMatchObject({

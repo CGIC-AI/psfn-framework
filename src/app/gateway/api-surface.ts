@@ -908,6 +908,10 @@ export async function startOptionalGatewayApiServer(
             // is read without an attachment (m1is8); embodiment handoff stays
             // device-bound; everything else maps onto the key routes.
             execute: async input => {
+              const registered = options.config.companionFleet
+                ? options.config.companionFleet.companions.some(entry => entry.companionId === input.companionId)
+                : options.config.companionId === input.companionId;
+              if (!registered) throw new CompanionUiActionDeniedError();
               const compiled = compileCompanionUiAction(
                 input.rawBody,
                 input.companionId,
@@ -960,6 +964,7 @@ export async function startOptionalGatewayApiServer(
               const interaction = beginCompanionUiInteraction(frame.requestId, input.signal);
               try {
                 const result = await gatewayApiRuntime.handleChatCompletion({
+                  companionId: input.companionId,
                   request: {
                     model: input.companionId,
                     messages: [{ role: 'user', content }],
@@ -970,7 +975,10 @@ export async function startOptionalGatewayApiServer(
                   signal: interaction.signal,
                 });
                 if (!result.ok) throw new Error(result.error.type);
-                return result.response;
+                // Routing provenance stays at the gateway; the browser receives
+                // only its canonical response fields for the selected socket.
+                const { companionId: _companionId, ...response } = result.response;
+                return response;
               } finally {
                 interaction.release();
               }

@@ -106,12 +106,12 @@ async function main() {
     },
     databaseRoles: roles,
     verifierKeys: [{
-      issuer: 'psfn-smoke-fleet', kid: 'smoke-fleet-v1',
+      issuer: 'smoke-fleet', kid: 'smoke-fleet-v1',
       publicKeyPem: createPublicKey(secrets.FLEET_AUTH_ASSERTION_PRIVATE_KEY).export({ type: 'spki', format: 'pem' }).toString(),
       notBefore: '2026-01-01T00:00:00.000Z', notAfter: '2099-01-01T00:00:00.000Z', status: 'active',
     }],
     hubDeviceAssertions: {
-      issuer: 'psfn-smoke-hub', audience: origin.origin, maxTtlSeconds: 60, clockSkewSeconds: 2,
+      issuer: 'smoke-hub', audience: origin.origin, maxTtlSeconds: 60, clockSkewSeconds: 2,
       keys: [{
         kid: 'smoke-hub-device-assertion-v1', publicKeyPem: hubPublicKey,
         notBefore: '2026-01-01T00:00:00.000Z', notAfter: '2099-01-01T00:00:00.000Z', status: 'active',

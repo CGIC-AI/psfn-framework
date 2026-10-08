@@ -526,7 +526,7 @@ services:
       REALTIME_VOICE_PORT: "8787"
       ARTIFACT_ROOT: /app/.artifacts/runtime-ts
       HUB_DEVICE_REGISTRY_PATH: /app/hub-device/devices.json
-      HUB_DEVICE_ASSERTION_ISSUER: psfn-smoke-hub
+      HUB_DEVICE_ASSERTION_ISSUER: smoke-hub
       HUB_DEVICE_ASSERTION_KID: smoke-hub-device-assertion-v1
       HUB_DEVICE_ASSERTION_AUDIENCE: ${PSFN_SMOKE_FLEET_ORIGIN}
       HUB_DEVICE_ASSERTION_PRIVATE_KEY_PATH: /app/hub-device/device-assertion-key.pem

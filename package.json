@@ -158,7 +158,7 @@
     "verify:shell-sandbox-image": "node scripts/verify-shell-sandbox-image.mjs",
     "verify:garden-ui": "npm run deps:ensure -- --project admin-ui && npm run garden:build && npm run test:garden-ui && npm run verify:knip -- --project admin-ui",
     "verify:companion-ui": "npm run deps:ensure -- --project companion-ui && npm --prefix companion-ui run lint && npm --prefix companion-ui run build && npm --prefix companion-ui test && npm run verify:knip -- --project companion-ui",
-    "verify:companion-browser": "npm run deps:ensure -- --project companion-ui && npm --prefix companion-ui exec -- playwright install chromium && npm --prefix companion-ui run test:browser",
+    "verify:companion-browser": "npm run deps:ensure -- --project companion-ui && node companion-ui/node_modules/@playwright/test/cli.js install chromium && npm --prefix companion-ui run test:browser",
     "install:satellite-hub": "npm run deps:ensure -- --project apps/satellite-hub && uv sync --project apps/satellite-hub --frozen --group dev",
     "verify:satellite-hub": "npm run install:satellite-hub && npm --prefix apps/satellite-hub run verify:fast",
     "verify:evals": "npm run deps:ensure -- --project tools/evals && npm --prefix tools/evals run verify:fast",

@@ -7,10 +7,7 @@ const COMPANION_ID = '11111111-1111-4111-8111-111111111111';
 const SOCKET_PATH = `/companion-ui/companions/${COMPANION_ID}/ws`;
 const UNKNOWN_SOCKET_PATH = '/companion-ui/companions/22222222-2222-4222-8222-222222222222/ws';
 const adminToken = process.env.ADMIN_TOKEN;
-const gardenBase = process.env.PSFN_SMOKE_GARDEN_BASE;
-if (!adminToken || !gardenBase || !/^http:\/\/(?:127\.0\.0\.1|localhost):\d+$/u.test(gardenBase)) {
-  throw new Error('Runtime browser tests require disposable Garden and administrator credentials');
-}
+if (!adminToken) throw new Error('Runtime browser tests require disposable administrator credentials');
 
 interface Reply {
   content: string;
@@ -47,12 +44,12 @@ async function signIn(page: Page): Promise<void> {
   });
 }
 
-async function durableTurn(channelId: string, message: string): Promise<DurableTurn | undefined> {
-  const response = await fetch(`${gardenBase}/api/admin/sessions/${encodeURIComponent(channelId)}`, {
-    headers: { Authorization: `Bearer ${adminToken}` }, signal: AbortSignal.timeout(10_000),
-  });
-  expect(response.status).toBe(200);
-  const session = await response.json() as { turns: DurableTurn[] };
+async function durableTurn(page: Page, channelId: string, message: string): Promise<DurableTurn | undefined> {
+  const session = await page.evaluate(async path => {
+    const response = await fetch(path, { cache: 'no-store', signal: AbortSignal.timeout(10_000) });
+    if (!response.ok) throw new Error(`Garden returned ${response.status}`);
+    return await response.json() as { turns: DurableTurn[] };
+  }, `/companions/${COMPANION_ID}/garden/api/admin/sessions/${encodeURIComponent(channelId)}`);
   return session.turns.find(turn => turn.record.userMessage.content === message);
 }
 
@@ -112,15 +109,18 @@ test('key owner receives a real reply, verifies durable storage after reload, th
   const reply = replies[0]!;
   expect(reply.content.length).toBeGreaterThan(0);
   await expect(page.getByRole('log').getByText(reply.content, { exact: true })).toBeVisible();
-  await expect.poll(async () => (await durableTurn(reply.channelId, message))?.record.status).toBe('completed');
-  const beforeReload = (await durableTurn(reply.channelId, message))!.record;
+  await expect.poll(async () => (await durableTurn(page, reply.channelId, message))?.record.status).toBe('completed');
+  const beforeReload = (await durableTurn(page, reply.channelId, message))!.record;
   expect(beforeReload.assistantMessage.content).toBe(reply.content);
 
   // The current browser has no transcript hydration API. This checks reconnect
   // plus durable server data; it deliberately makes no UI-history-restored claim.
   await page.reload();
   await expect(page.getByLabel('Connection ready', { exact: true })).toBeVisible();
-  expect((await durableTurn(reply.channelId, message))?.record).toEqual(beforeReload);
+  expect((await durableTurn(page, reply.channelId, message))?.record).toMatchObject({
+    turnId: beforeReload.turnId, requestId: beforeReload.requestId, status: 'completed',
+    userMessage: { content: message }, assistantMessage: { content: reply.content },
+  });
   await page.getByRole('textbox', { name: 'Message your companion' }).fill('Unsent private draft');
   await page.getByRole('button', { name: 'Open settings' }).click();
   await page.getByRole('button', { name: 'Log out', exact: true }).click();

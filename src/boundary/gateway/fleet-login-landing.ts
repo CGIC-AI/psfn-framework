@@ -299,7 +299,9 @@ export class GatewayFleetLoginLanding {
       Expires: '0',
       'Permissions-Policy': 'camera=(), display-capture=(), geolocation=(), microphone=()',
       Pragma: 'no-cache',
-      'Referrer-Policy': 'no-referrer',
+      // The browser must preserve the same-origin form POST's Origin header.
+      // no-referrer makes Chromium send Origin: null, which the router denies.
+      'Referrer-Policy': 'same-origin',
       Vary: 'Cookie',
       'X-Content-Type-Options': 'nosniff',
       'X-Frame-Options': 'DENY',

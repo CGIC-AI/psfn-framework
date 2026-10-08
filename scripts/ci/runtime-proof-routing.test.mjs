@@ -15,9 +15,14 @@ test('runtime changes require a real-process journey, including agent and schedu
     'src/app/gateway/main.ts',
     'src/persistence/sessions/store.ts',
     'companion-ui/src/App.tsx',
+    'companion-ui/runtime-e2e/conversation.spec.ts',
+    'companion-ui/playwright.runtime.config.ts',
+    'companion-ui/vite.config.ts',
+    'companion-ui/package-lock.json',
     'apps/satellite-hub/src/ts/hub/main.ts',
     'docker/docker-compose.smoke.yml',
     'scripts/smoke-docker.mjs',
+    'scripts/smoke-docker/memory-journey.mjs',
     'scripts/ops/psfn-compose-smoke-provider-stub.mjs',
   ]) {
     const gate = selectedGate(path, 'runtime-journeys');

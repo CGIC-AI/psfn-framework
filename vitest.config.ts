@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { defineConfig } from 'vitest/config';
 
 const DEFAULT_INCLUDE = ['src/**/*.test.ts', 'scripts/**/*.test.ts'];
@@ -15,10 +16,10 @@ const POSTGRES_HARNESS_TESTS = [
 const INTEGRATION_INCLUDE = ['src/**/*.integration.test.ts', ...POSTGRES_HARNESS_TESTS];
 const PHASE_V_AUTONOMY_SMOKE_PROFILE = 'phase-v-autonomy-smoke';
 const PHASE_V_AUTONOMY_SMOKE_INCLUDE = [
-  'src/agent/substrate-agent.test.ts',
-  'src/agent-main/gateway-message-handlers.test.ts',
-  'src/tools/session.test.ts',
-  'src/shards/manager.test.ts',
+  'src/core/agent/substrate-agent.test.ts',
+  'src/app/agent/gateway-message-handlers.test.ts',
+  'src/core/tools/session.test.ts',
+  'src/faculties/shards/manager.test.ts',
   'src/channels/discord/adapter.test.ts',
   'src/channels/telegram/adapter.test.ts',
 ];
@@ -40,11 +41,20 @@ function resolveVitestExclude(): string[] {
   return [];
 }
 
+const include = resolveVitestInclude();
+// Vitest can succeed on a surviving subset after a listed file moves. Exact
+// profile entries must all exist so a smaller suite cannot claim full proof.
+for (const path of include.filter(path => !path.includes('*'))) {
+  if (!existsSync(new URL(path, import.meta.url))) {
+    throw new Error(`Missing test profile entry: ${path}`);
+  }
+}
+
 export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    include: resolveVitestInclude(),
+    include,
     exclude: resolveVitestExclude(),
     setupFiles: ['./src/test-support/fleet-auth-persistence-boundary.ts'],
     testTimeout: 10_000,

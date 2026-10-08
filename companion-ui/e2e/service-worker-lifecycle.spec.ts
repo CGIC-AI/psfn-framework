@@ -250,11 +250,7 @@ test('legacy root control is retired when the client migrates to the subpath', a
     await page.waitForFunction(() => Boolean(navigator.serviceWorker.controller));
     await expect(page.locator('html')).toHaveAttribute('data-test-build', legacy.marker);
     await page.getByLabel('Open settings').click();
-    await page.locator('input[type="file"]').first().setInputFiles({
-      name: 'unfinished-notes.txt',
-      mimeType: 'text/plain',
-      buffer: Buffer.from('unfinished attachment'),
-    });
+    await page.getByRole('checkbox', { name: 'Animation enabled' }).uncheck();
 
     server.use(current);
     // This is deliberately the first browser action after deploy. The current
@@ -309,11 +305,7 @@ test('generated A to B ignores a legacy cache, keeps active state, and remains a
     await expect(page.locator('html')).toHaveAttribute('data-test-build', buildA.marker);
     await expect(page.getByText('Update ready')).toHaveCount(0);
     await page.getByLabel('Open settings').click();
-    await page.locator('input[type="file"]').first().setInputFiles({
-      name: 'active-draft.txt',
-      mimeType: 'text/plain',
-      buffer: Buffer.from('active attachment'),
-    });
+    await page.getByRole('checkbox', { name: 'Animation enabled' }).uncheck();
     await page.evaluate(async () => {
       await caches.open('psfn-satellite-mobile-chat-app-v1');
     });
@@ -326,7 +318,8 @@ test('generated A to B ignores a legacy cache, keeps active state, and remains a
     await waitForWorkerRevision(page, buildB.revision, 'psfn-satellite-mobile-chat-app-v1');
 
     await expect(page.locator('html')).toHaveAttribute('data-test-build', buildA.marker);
-    await expect(page.getByText('active-draft.txt')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
+    await expect(page.getByRole('checkbox', { name: 'Animation enabled' })).not.toBeChecked();
     await expect(page.getByText('Update ready')).toBeVisible();
     await expect(page.getByText(/reload this page when your draft and live work are safe/i)).toBeVisible();
     expect(await navigationHistory(page)).toEqual([buildA.marker]);

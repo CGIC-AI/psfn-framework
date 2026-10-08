@@ -30,7 +30,7 @@ export function buildRootValidationScope({ paths, fullRoot }) {
   ));
   const runtimeJourneys = fullRoot || paths.some((path) => (
     !isRootTestPath(path) && !ROOT_RUNNABLE_TEST_PATTERN.test(path)
-    && /^(?:src\/|docker\/|companion-ui\/(?:src|public|e2e)\/|apps\/satellite-hub\/|scripts\/(?:smoke-docker[^/]*\.|compose-(?:hub-)?verification\.|ops\/psfn-compose-smoke-)|package(?:-lock)?\.json$)/.test(path)
+    && /^(?:src\/|docker\/|companion-ui\/(?:(?:src|public|e2e|runtime-e2e)\/|(?:playwright[^/]*\.config\.ts|vite\.config\.ts|package(?:-lock)?\.json)$)|apps\/satellite-hub\/|scripts\/(?:smoke-docker(?:\/|[^/]*\.)|compose-(?:hub-)?verification\.|ops\/psfn-compose-smoke-)|package(?:-lock)?\.json$)/.test(path)
   ));
 
   return {

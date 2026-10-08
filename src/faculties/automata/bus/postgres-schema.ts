@@ -6,8 +6,7 @@ export const AUTOMATA_BUS_POSTGRES_RELATIONS = [
   'automata_bus_vector_lag',
 ] as const;
 
-export const AUTOMATA_BUS_POSTGRES_READINESS = {
-  requiredRelations: AUTOMATA_BUS_POSTGRES_RELATIONS,
+const AUTOMATA_BUS_POSTGRES_READINESS = {
   optionalAnnIndexPrefix: 'automata_bus_finding_vectors_hnsw_',
 } as const;
 

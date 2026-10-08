@@ -1,7 +1,7 @@
 import type { AgentTool } from '../../pi-agent/index.js';
 import type { ToolRegistrar } from '../../../core/agent/tool-registrar.js';
 import type { WirableTool, ToolWiringMeta } from '../../../core/agent/tool-wiring-validator.js';
-import { GitOps, type GitOpsConfig, type GitOperations } from './ops.js';
+import type { GitOperations } from './ops.js';
 import { createRepoTool } from './tools.js';
 
 export interface GitRuntimeTarget {
@@ -47,14 +47,4 @@ export function registerGitTools(
   // companion's default social/expressive stack. It remains cataloged as an
   // extended tool while capability and turn-policy gates decide callability.
   target.registerTool(tool, 'extended');
-}
-
-export function wireGitRuntime(
-  target: GitRuntimeTarget,
-  config?: Partial<GitOpsConfig>,
-  options?: RegisterGitToolsOptions,
-): GitOps {
-  const gitOps = new GitOps(config);
-  registerGitTools(target, gitOps, options);
-  return gitOps;
 }

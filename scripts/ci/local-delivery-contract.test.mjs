@@ -726,7 +726,7 @@ test('gate plan splits the heavy product suite from parallel-safe preflight', ()
   // Product test processes are heavy; cheap script contracts stay preflight.
   assert.deepEqual(
     heavy.filter(({ skip }) => !skip).map(({ name }) => name),
-    ['unit-tests', 'integration-tests'],
+    ['unit-tests', 'integration-tests', 'runtime-journeys'],
   );
   assert.equal(plan.find(({ name }) => name === 'unit-tests').phase, GATE_PHASE.HEAVY);
   assert.ok(!preflight.some(({ name }) => name === 'unit-tests'));

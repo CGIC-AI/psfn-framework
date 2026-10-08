@@ -8,6 +8,7 @@ import {
   ROOT_LINT_INPUTS,
   ROOT_TEST_INPUTS,
   ROOT_TYPECHECK_INPUTS,
+  RUNTIME_JOURNEY_INPUTS,
   SCRIPT_TEST_INPUTS,
   SEMGREP_RULE_INPUTS,
   specialistInputs,
@@ -124,6 +125,7 @@ export function buildGatePlan({
     rootRuntimeBuild,
     rootScriptTests,
     rootTypecheck,
+    runtimeJourneys,
   } = buildRootValidationScope({ paths, fullRoot });
   const rootHygiene = fullRoot || scope.root_validation;
   const fullLint = fullRoot || matches(/^eslint[^/]*\.[cm]?[jt]s$/);
@@ -276,6 +278,11 @@ export function buildGatePlan({
         contentInputs: ROOT_TEST_INPUTS,
       },
     ),
+    command('runtime-journeys', 'npm', ['run', 'smoke:docker'], {
+      skip: !runtimeJourneys,
+      phase: GATE_PHASE.HEAVY,
+      contentInputs: RUNTIME_JOURNEY_INPUTS,
+    }),
   ];
 
   if (
@@ -315,6 +322,18 @@ export function buildGatePlan({
   if (companionUi) {
     plan.push(command('companion-ui', 'npm', ['run', 'verify:companion-ui'], {
       contentInputs: specialistInputs('companion-ui'),
+    }));
+    plan.push(command('companion-browser', 'npm', ['run', 'verify:companion-browser'], {
+      phase: GATE_PHASE.HEAVY,
+      contentInputs: specialistInputs('companion-ui'),
+    }));
+  }
+  if (canary || matches(/^shakedown\/harness\//)) {
+    plan.push(command('shakedown-harness', 'npm', ['run', 'test:shakedown'], {
+      phase: GATE_PHASE.HEAVY,
+      contentInputs: {
+        include: [...ROOT_TEST_INPUTS.include, /^shakedown\/harness\//],
+      },
     }));
   }
   if (satelliteHub) {

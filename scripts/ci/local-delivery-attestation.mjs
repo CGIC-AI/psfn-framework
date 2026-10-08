@@ -6,7 +6,7 @@ export const REMOTE_ATTESTATION_CONTEXT = 'local-gate/v1';
 
 // Identity of gate semantics and command shapes. Bump this whenever the
 // planner changes what a pass means so old stages and attestations rerun.
-export const GATE_VERSION = 10;
+export const GATE_VERSION = 11;
 export const STAGE_SCHEMA_VERSION = 2;
 
 function assertSha(value, name) {

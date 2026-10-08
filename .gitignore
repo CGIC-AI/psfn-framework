@@ -101,6 +101,10 @@ admin-ui/node_modules/
 admin-ui/build/
 admin-ui/.svelte-kit/
 
+# Browser failure evidence is local and may contain fixture credentials.
+companion-ui/test-results/
+companion-ui/playwright-report/
+
 # Dolt database files (added by bd init)
 .dolt/
 

@@ -54,6 +54,14 @@ export const SCRIPT_TEST_INPUTS = Object.freeze({
   ],
 });
 
+export const RUNTIME_JOURNEY_INPUTS = Object.freeze({
+  include: [
+    ...ROOT_TEST_INPUTS.include,
+    /^companion-ui\//,
+    /^apps\/satellite-hub\//,
+  ],
+});
+
 export const ROOT_LINT_INPUTS = Object.freeze({
   include: [
     /^(?:src|tests|scripts|admin-ui|companion-ui)\//,

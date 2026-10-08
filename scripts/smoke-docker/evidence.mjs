@@ -18,7 +18,7 @@ export function projectEvent(frame) {
   for (const name of ['requestId', 'turnId', 'traceId', 'companionId', 'toolCallId']) {
     if (typeof data[name] === 'string') result[name] = data[name];
   }
-  for (const name of ['stage', 'stageStatus', 'outcome', 'backgroundJobState', 'backgroundJobReason']) {
+  for (const name of ['stage', 'stageStatus', 'outcome', 'cancellationOutcome', 'backgroundJobState', 'backgroundJobReason']) {
     if (typeof data[name] === 'string' && /^[a-z0-9_-]+$/u.test(data[name])) result[name] = data[name];
   }
   for (const name of ['timestampMs', 'monotonicAtMs', 'durationMs', 'elapsedMs', 'count']) {
@@ -27,9 +27,10 @@ export function projectEvent(frame) {
   return result;
 }
 
-export async function collectTelemetry({ gardenBase, adminToken }) {
+export async function collectTelemetry({ gardenBase, adminToken, gardenCa }) {
   const socket = new WebSocket(`${gardenBase.replace(/^http/u, 'ws')}/api/admin/events`, {
-    headers: { Authorization: `Bearer ${adminToken}` },
+    headers: { Authorization: `Bearer ${adminToken}`, Origin: new URL(gardenBase).origin },
+    ...(gardenCa ? { ca: gardenCa } : {}),
   });
   const events = [];
   const errors = [];

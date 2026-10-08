@@ -1,3 +1,4 @@
+import { fixtureFetch } from './https.mjs';
 import assert from 'node:assert/strict';
 import { assertTurnEvidence, collectTelemetry, streamChat } from './evidence.mjs';
 
@@ -11,8 +12,9 @@ export async function eventually(read, accept, label, timeoutMs = 30_000) {
   throw new Error(`Timed out waiting for ${label}`);
 }
 
-export async function gardenJson({ gardenBase, adminToken }, path) {
-  const response = await fetch(`${gardenBase}${path}`, {
+export async function gardenJson(options, path) {
+  const { gardenBase, adminToken } = options;
+  const response = await fixtureFetch(options, `${gardenBase}${path}`, {
     headers: { Authorization: `Bearer ${adminToken}` }, signal: AbortSignal.timeout(10_000),
   });
   assert.equal(response.status, 200, `Garden returned HTTP ${response.status} for ${path.split('?')[0]}`);
@@ -20,10 +22,13 @@ export async function gardenJson({ gardenBase, adminToken }, path) {
 }
 
 export async function runStreamRestartJourney(options) {
-  const { apiBase, apiKey, gardenBase, adminToken, channelId, sessionId, message, restartAgent, waitForHealth, report } = options;
-  let collector = await collectTelemetry({ gardenBase, adminToken });
+  const { apiBase, apiKey, channelId, sessionId, message, restartAgent, waitForHealth, report } = options;
+  options.checkpoint?.('stream');
+  let collector = await collectTelemetry(options);
+  options.capture?.(collector);
   try {
     const delivered = await streamChat({ apiBase, apiKey, sessionId, message });
+    options.checkpoint?.('persist_and_correlate');
     const sessionPath = `/api/admin/sessions/${encodeURIComponent(channelId)}`;
     const session = await eventually(() => gardenJson(options, sessionPath),
       value => value.turns?.some(turn => turn.record?.userMessage?.content === message && turn.record?.status === 'completed'),
@@ -37,6 +42,7 @@ export async function runStreamRestartJourney(options) {
     report('streamed response equals its durable turn; correlated provider and completion stages present');
     collector.close();
     collector = undefined;
+    options.checkpoint?.('restart');
     await restartAgent();
     await waitForHealth(120_000);
     const reread = await gardenJson(options, `${sessionPath}/turns/${encodeURIComponent(proof.turnId)}`);

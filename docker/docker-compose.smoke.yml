@@ -61,7 +61,7 @@ x-runtime-image: &runtime-image
   build:
     context: ..
     dockerfile: docker/Dockerfile.agent
-  image: psfn-framework:smoke
+  image: ${COMPOSE_PROJECT_NAME:-psfn-smoke}-framework:smoke
 
 # Non-secret runtime layout + identity shared by gateway and agent. Production
 # split-root layout: SYSTEM_DATA_DIR and COMPANION_DATA_DIR are separate volumes.
@@ -135,8 +135,7 @@ x-provider-stub-reply: &provider-stub-reply ${PSFN_SMOKE_PROVIDER_STUB_REPLY:-Sm
 
 services:
   postgres:
-    image: ${PSFN_SMOKE_POSTGRES_IMAGE:-pgvector/pgvector:pg17}
-    container_name: psfn-smoke-postgres
+    image: ${PSFN_SMOKE_POSTGRES_IMAGE:-pgvector/pgvector:pg17@sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f}
     environment:
       POSTGRES_DB: psfn_smoke
       POSTGRES_USER: psfn
@@ -155,7 +154,6 @@ services:
 
   seed:
     <<: *runtime-image
-    container_name: psfn-smoke-seed
     user: "0:0"
     entrypoint: ["sh", "/app/scripts/ops/psfn-compose-smoke-seed.sh"]
     environment:
@@ -213,7 +211,6 @@ services:
   # offline. Compose analogue of the Helm model-prefetch Job.
   model-prefetch:
     <<: *runtime-image
-    container_name: psfn-smoke-model-prefetch
     depends_on:
       seed:
         condition: service_completed_successfully
@@ -242,7 +239,6 @@ services:
   # host port, no external network, no credentials, and stores/logs no payload.
   operator-alert-sink:
     <<: *runtime-image
-    container_name: psfn-smoke-operator-alert-sink
     entrypoint: ["node", "/app/scripts/ops/psfn-compose-smoke-operator-alert-sink.mjs"]
     environment:
       PSFN_SMOKE_OPERATOR_ALERT_HOST: 0.0.0.0
@@ -273,7 +269,6 @@ services:
   # this Compose profile and cannot itself call out.
   provider-stub:
     <<: *runtime-image
-    container_name: psfn-smoke-provider-stub
     entrypoint: ["node", "/app/scripts/ops/psfn-compose-smoke-provider-stub.mjs"]
     environment:
       PSFN_SMOKE_PROVIDER_STUB_HOST: 0.0.0.0
@@ -300,7 +295,6 @@ services:
 
   gateway:
     <<: *runtime-image
-    container_name: psfn-smoke-gateway
     depends_on:
       postgres:
         condition: service_healthy
@@ -382,7 +376,6 @@ services:
 
   agent:
     <<: *runtime-image
-    container_name: psfn-smoke-agent
     depends_on:
       gateway:
         condition: service_healthy
@@ -435,7 +428,6 @@ services:
   # smoke:docker can prove it is healthy alongside the rest of the stack.
   garden:
     <<: *runtime-image
-    container_name: psfn-smoke-garden
     depends_on:
       agent:
         condition: service_started
@@ -494,8 +486,7 @@ services:
       # package-lock.json); `dockerfile` resolves relative to that context.
       context: ../apps/satellite-hub
       dockerfile: ../../docker/satellite-hub/Dockerfile
-    image: psfn-satellite-hub:smoke
-    container_name: psfn-smoke-satellite-hub
+    image: ${COMPOSE_PROJECT_NAME:-psfn-smoke}-satellite-hub:smoke
     depends_on:
       gateway:
         condition: service_healthy
@@ -555,8 +546,7 @@ services:
     build:
       context: ..
       dockerfile: docker/companion-ui/Dockerfile
-    image: psfn-companion-ui:smoke
-    container_name: psfn-smoke-companion-ui
+    image: ${COMPOSE_PROJECT_NAME:-psfn-smoke}-companion-ui:smoke
     environment:
       # nginx-unprivileged listens on 8080 as an arbitrary non-root uid.
       NGINX_ENTRYPOINT_QUIET_LOGS: "1"
@@ -575,19 +565,16 @@ networks:
   # No external route: postgres + agent live here only, so the agent has no
   # outbound egress and boots past its network-isolation guard.
   psfn-smoke-internal:
-    name: psfn-smoke-internal
     internal: true
   # External bridge for the gateway only. The smoke turn does not use it (the
   # provider double is internal); it exists so the gateway keeps the production
   # egress-holder shape.
   psfn-smoke-egress:
-    name: psfn-smoke-egress
   # Published loopback ports need a routable bridge: an internal network cannot
   # be reached from the host. This network exists ONLY so the smoke harness can
   # talk to the hub and the companion-ui surface from the host; it does grant
   # those two containers outbound bridge routing that neither service needs.
   psfn-smoke-edge:
-    name: psfn-smoke-edge
 
 volumes:
   pgdata:

@@ -993,6 +993,12 @@ function parseApiChannelSection(
   };
 }
 
+/** Read current channel policy without resolving transport credentials or restarting adapters. */
+export function loadChannelContextEnvelope(dataDir: string): ReturnType<typeof parseContextEnvelopeSection> {
+  const root = loadChannelsOwnerFile(dataDir);
+  return parseContextEnvelopeSection(parseSectionObject(root, 'channels') ?? root);
+}
+
 export function loadRuntimeChannelsConfig(
   dataDir: string,
   env: NodeJS.ProcessEnv = process.env,

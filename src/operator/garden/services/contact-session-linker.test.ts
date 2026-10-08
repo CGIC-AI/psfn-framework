@@ -30,6 +30,18 @@ function createContact(overrides: Partial<Contact> = {}): Contact {
 }
 
 describe('buildRelatedConversationChannelMap', () => {
+  it('shows one Hermes channel for rotating CLI and Telegram sessions without changing session attribution', () => {
+    const contact = createContact({ conversationChannels: Array.from({ length: 100 }, (_, i) => ({
+      channel: i % 2 ? 'telegram' : 'hermes',
+      channelId: `api:hermes:${i.toString(16).padStart(64, '0')}`,
+      privacyLevel: 'private', firstSeen: '2026-03-18T00:00:00.000Z', lastSeen: '2026-03-18T06:00:00.000Z',
+    })) });
+    const related = buildRelatedConversationChannelMap({ contacts: [contact], sessionStore: createSessionStoreStub({}) }).get(contact.id);
+    expect(related).toHaveLength(1);
+    expect(related?.[0]).toMatchObject({ channel: 'api', channelId: 'hermes', policyChannelId: 'api:hermes', sessionCount: 100 });
+    expect(contact.conversationChannels).toHaveLength(100);
+  });
+
   it('enriches persisted conversation channels with linked identity privacy', () => {
     const contact = createContact({
       channels: [{

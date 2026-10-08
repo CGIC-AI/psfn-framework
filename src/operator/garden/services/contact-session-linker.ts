@@ -1,3 +1,5 @@
+import { EXTERNAL_MEMORY_CHANNEL, externalMemoryPolicyChannelId } from '../../../shared/routing/external-memory-channel.js';
+import { classifyChannelEnvelope } from '../../../system/trust/policy.js';
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
 import type {
@@ -16,6 +18,9 @@ export interface ContactIdentityLinkView {
 }
 
 export interface ContactConversationChannelView {
+  /** One policy applies across the archived sessions shown by this row. */
+  policyChannelId?: string;
+  sessionCount?: number;
   channel: string;
   channelId: string;
   userId?: string;
@@ -377,7 +382,18 @@ export function buildRelatedConversationChannelMap(options: {
       }
     }
 
-    map.set(contact.id, relatedChannels);
+    const hermesSessions = relatedChannels.filter(entry =>
+      externalMemoryPolicyChannelId(entry.channelId) === EXTERNAL_MEMORY_CHANNEL);
+    const visibleChannels = relatedChannels.filter(entry =>
+      externalMemoryPolicyChannelId(entry.channelId) !== EXTERNAL_MEMORY_CHANNEL);
+    if (hermesSessions.length > 0) {
+      visibleChannels.push({ channel: 'api', channelId: 'hermes', policyChannelId: EXTERNAL_MEMORY_CHANNEL,
+        sessionCount: new Set(hermesSessions.map(entry => entry.channelId)).size,
+        privacyLevel: classifyChannelEnvelope(EXTERNAL_MEMORY_CHANNEL, { isDirectMessage: true }).privacy,
+        lastSeen: hermesSessions.flatMap(entry => entry.lastSeen ? [entry.lastSeen] : []).sort().at(-1),
+      });
+    }
+    map.set(contact.id, visibleChannels);
   }
 
   return map;

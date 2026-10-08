@@ -1,3 +1,5 @@
+import { EXTERNAL_MEMORY_CHANNEL } from '../../../shared/routing/external-memory-channel.js';
+import { classifyChannelDisclosure } from '../../../system/trust/policy.js';
 import { createHash } from 'node:crypto';
 import { createDmConversationScope } from '../../../core/session/conversation-scope.js';
 import { v7 as uuidv7 } from 'uuid';
@@ -20,7 +22,6 @@ import {
   type ExternalMemoryExecuteParams,
   type ExternalMemoryExecuteResult,
   type ExternalMemoryRequest,
-  type ExternalMemorySource,
 } from '../../../shared/contracts/external-memory.js';
 import { runWithRequestContext } from '../../../primitives/llm/request-context.js';
 import { createComponentLogger } from '../../../shared/logger.js';
@@ -47,9 +48,10 @@ const actionKind = 'memory.external.process';
 interface ExternalMemoryServiceOptions {
   companionId: string;
   companionName: string;
+  refreshChannelPolicy: () => void;
   intakeStore: ExternalMemoryIntakeStore;
   sessions: Pick<SessionStore, 'append' | 'getRecent' | 'getEntriesInRange' | 'flushSessionJournal'>;
-  contacts: Pick<ContactStorePort, 'getById' | 'getByChannelIdentity' | 'recordChannelActivity'>;
+  contacts: Pick<ContactStorePort, 'getById' | 'linkChannelIdentity' | 'recordChannelActivity'>;
   memoryStore: MemoryStorePort;
   memoryProvider: MemoryProvider | null;
   writer: Pick<MemoryWriter, 'write'>;
@@ -96,22 +98,13 @@ export class ExternalMemoryService {
     }
   }
 
-  private async contact(binding: ExternalMemoryBinding, source?: ExternalMemorySource): Promise<Contact> {
+  private async contact(binding: ExternalMemoryBinding): Promise<Contact> {
     if (binding.companionId !== this.options.companionId) {
       throw new Error('External memory companion binding does not match this core');
     }
     const contact = await this.options.contacts.getById(binding.contactId);
     if (!contact || contact.id !== binding.contactId || contact.archivedAt) {
       throw new Error('External memory requires a live configured contact');
-    }
-    if (source) {
-      if (source.chatId !== source.userId) {
-        throw new Error('External Telegram memory requires a private sender DM');
-      }
-      const sender = await this.options.contacts.getByChannelIdentity('telegram', source.userId);
-      if (!sender || sender.id !== contact.id || sender.archivedAt) {
-        throw new Error('External Telegram sender must be linked to the configured contact');
-      }
     }
     return contact;
   }
@@ -124,7 +117,9 @@ export class ExternalMemoryService {
 
   async execute(input: ExternalMemoryExecuteParams): Promise<ExternalMemoryExecuteResult> {
     const { binding, request } = parseExternalMemoryExecuteParams(input);
-    const contact = await this.contact(binding, request.source);
+    this.options.refreshChannelPolicy();
+    const disclosure = classifyChannelDisclosure(EXTERNAL_MEMORY_CHANNEL, { isDirectMessage: true });
+    const contact = await this.contact(binding);
     const channelId = externalMemorySessionId(binding, request.sessionId);
     this.assertActive(channelId);
     return runWithRequestContext({
@@ -133,7 +128,7 @@ export class ExternalMemoryService {
       sessionId: channelId,
       viewerMemorySubjectContactId: contact.id,
       viewerTrustLevel: contact.trustLevel,
-      viewerChannelPrivacy: 'private',
+      viewerChannelPrivacy: disclosure.channelPrivacy,
       viewerIsDirectMessage: true,
       requesterProvenance: 'human',
     }, async () => {
@@ -150,7 +145,8 @@ export class ExternalMemoryService {
           undefined, undefined, undefined, undefined, undefined, undefined,
           createDmConversationScope({ channelId, contact: { contactId: contact.id } }),
         );
-        const goals = contact.trustLevel === 'primary' ? this.options.goals() : '';
+        const goals = contact.trustLevel === 'primary' && disclosure.channelPrivacy === 'private' && !disclosure.broadcast
+          ? this.options.goals() : '';
         return { context: [goals, recalled].filter(Boolean).join('\n\n') };
       }
       const store = createSubjectAuthorizedMemoryStore(this.options.memoryStore, () => ({
@@ -163,7 +159,7 @@ export class ExternalMemoryService {
       const current = filterQuarantinedMemories(this.options.quarantine,
         candidates.filter(isCurrentMemory)).memories;
       const visible = partitionVisibleMemories(current, {
-        trustLevel: contact.trustLevel, channelPrivacy: 'private', broadcast: false,
+        trustLevel: contact.trustLevel, ...disclosure,
         canonicalContactId: contact.id,
       }).visible.map(({ id, text, type }) => ({ id, text, type }));
       return request.operation === 'get'
@@ -198,7 +194,9 @@ export class ExternalMemoryService {
         sourceClass, scope: 'strict',
         origin: { ref: `external:hermes:${sourceMessageId}` },
         sourceChannelId: channelId, sourceMessageId,
-        canonicalContactId: contact.id, channelPrivacy: 'private', atMs: timestamp,
+        canonicalContactId: contact.id,
+        channelPrivacy: classifyChannelDisclosure(EXTERNAL_MEMORY_CHANNEL, { isDirectMessage: true }).channelPrivacy,
+        atMs: timestamp,
       });
       if (result.withheld) {
         // An ingest with any withheld message is refused whole, exactly like
@@ -252,7 +250,7 @@ export class ExternalMemoryService {
         throw new Error('External conversation evidence does not match its durable intake');
       }
       return existing?.id ?? this.options.sessions.append({ ...entry, channelId,
-        channelVisibility: 'private' });
+        channelVisibility: classifyChannelDisclosure(EXTERNAL_MEMORY_CHANNEL, { isDirectMessage: true }).channelPrivacy });
     });
     this.options.sessions.flushSessionJournal(channelId);
     record.messageIds = messageIds;
@@ -260,8 +258,14 @@ export class ExternalMemoryService {
     // The credential's contact binding is also the stable attribution used by
     // the contact card and subject-scoped session views. Persist it only after
     // screened evidence is durable, and require success before acknowledging.
+    const privacy = classifyChannelDisclosure(EXTERNAL_MEMORY_CHANNEL, { isDirectMessage: true }).channelPrivacy;
+    const linked = await this.options.contacts.linkChannelIdentity(record.binding.contactId,
+      EXTERNAL_MEMORY_CHANNEL, record.binding.bodyId, { privacyLevel: privacy });
+    if (linked !== 'linked' && linked !== 'already_linked') {
+      throw new Error('External memory channel identity does not match its configured contact');
+    }
     await this.options.contacts.recordChannelActivity(
-      record.binding.contactId, record.source?.platform ?? 'hermes', channelId, 'private',
+      record.binding.contactId, EXTERNAL_MEMORY_CHANNEL, channelId, privacy,
     );
   }
 
@@ -313,7 +317,8 @@ export class ExternalMemoryService {
     await this.serialized(`processing:${receiptId}`, async () => {
       const record = this.options.intakeStore.read(receiptId)!;
       if (record.completed) return;
-      await this.contact(record.binding, record.source);
+      this.options.refreshChannelPolicy();
+      await this.contact(record.binding);
       this.assertActive(channelId);
       await this.serialized(channelId, () => this.archive(record));
       if (record.operation === 'ingest') {

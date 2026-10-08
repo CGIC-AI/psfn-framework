@@ -123,22 +123,19 @@ use; `subagent`, `cron`, `tool`, and `flush` are rejected. The network timeout
 belongs to the MCP connection; keep recall calls within Hermes's outer eight
 second prefetch limit.
 
-For the Hermes Telegram gateway, add `telegram` to `platforms` and link the
-sender's Telegram user ID to the same PSFN contact as the body credential.
-The adapter captures Hermes's gateway sender, chat ID, and DM scope for recall
-and completed-turn delivery. PSFN verifies that sender against the existing
-contact identity before reading or accepting memory, and retains the source in
-the imported session. Retries keep their captured sender even when another
-platform drains the outbox. A missing identity, another contact, or a Telegram
-group cannot use this private, single-contact memory binding. The companion's
-trust policy and the contact's existing trust level still govern disclosure;
-the adapter never promotes trust or creates an account identity implicitly.
+Hermes CLI, Desktop, TUI, and its Telegram gateway use one logical PSFN channel:
+`api:hermes`. The profile credential binds that connection to its configured
+companion and existing contact. Add `telegram` to `platforms` to include its
+completed exchanges; it does not require a second Telegram contact binding.
+Optional transport metadata is retained as provenance, not contact authority.
+Select only that contact's interactive profile surfaces; a shared multi-user
+profile requires separate credentials and profiles.
 
-Legacy CLI/Desktop requests without Telegram source metadata continue to use
-the profile credential's configured contact. Select only that contact's
-interactive profile surfaces; a shared multi-user profile needs separate body
-credentials and profiles. Manual MCP calls from Telegram should include the
-same `source` object (`platform`, `userId`, `chatId`, `chatType: "dm"`).
+The Channels page lists `api:hermes` even before an explicit label exists.
+Its channel-owned privacy and disclosure settings apply to every Hermes
+session. External requests and deferred processing reload the validated channel
+policy, so label changes apply without restarting Hermes. Existing contact
+trust and relationship remain authoritative; the adapter never promotes trust.
 
 ## Delivery and scope
 
@@ -158,9 +155,11 @@ PSFN keeps screened processing intents in the companion's
 `state/external-memory` directory, alongside existing runtime state. A receipt is
 returned only after the canonical session journal is flushed and processing is
 durably queued. Accepted conversations are linked to the credential's configured
-contact for the contact card and subject-scoped session views. This records a
-private conversation, not a new human account identity. Restarts replay pending
-intents; model failures reschedule the
+contact for subject-scoped session views. The contact card shows one Hermes
+channel with a session count and a link to the channel's actual privacy controls.
+The channel identity uses the configured body ID. Hashed session IDs remain in
+history for provenance, isolation, and deduplication; they are not separate
+privacy controls or contact-card rows. Restarts replay pending intents; model failures reschedule the
 same captured evidence. Successful processing clears the intent's duplicate chat
 text while retaining its identity and digest. Imported conversation entries carry
 the external body/session/event provenance and remain eligible for ordinary

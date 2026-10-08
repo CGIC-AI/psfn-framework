@@ -1,3 +1,6 @@
+import { loadChannelContextEnvelope } from '../../channels/backplane/config.js';
+import { setRuntimeChannelEnvelopeLabels } from '../../system/trust/runtime-channel-labels.js';
+import { setRuntimeChannelClassificationEpochs } from '../../system/trust/runtime-classification-epochs.js';
 import {
   applyConcernCandidateDecision,
   listPendingConcernCandidates as listPendingConcernCandidatesFrom,
@@ -1521,6 +1524,11 @@ async function main(): Promise<void> {
     memoryRetrievalPolicy: () => config.memoryRetrievalPolicy,
   });
   const externalMemory = new ExternalMemoryService({
+    refreshChannelPolicy: () => {
+      const section = loadChannelContextEnvelope(pathSnapshot.systemDataDir);
+      setRuntimeChannelEnvelopeLabels(section.channels);
+      setRuntimeChannelClassificationEpochs(section.classificationEpochs);
+    },
     companionId: resolveCoreCompanionIdFromConfig(config),
     companionName: card.data.name,
     intakeStore: new ExternalMemoryIntakeStore(resolveExternalMemoryIntakeDir(pathSnapshot.companionDataDir)),

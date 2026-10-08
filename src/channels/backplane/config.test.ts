@@ -7,6 +7,7 @@ import {
   buildExternalChannelProfiles,
   loadRuntimeChannelsConfig,
   loadChannelsOwnerFile,
+  loadChannelContextEnvelope,
   loadTestingHarnessGardenAdminConfig,
   resolveTestingHarnessGardenVerifierConfig,
   resolveDiscordCompanionView,
@@ -14,6 +15,21 @@ import {
 } from './config.js';
 
 describe('loadRuntimeChannelsConfig', () => {
+  it('reloads channel policy alone from the owner file without requiring transport credentials', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-policy-'));
+    try {
+      for (const privacy of ['private', 'invite_only']) {
+        writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({ channels: {
+          telegram: { enabled: true, tokenRef: { kind: 'env', envName: 'UNAVAILABLE_TRANSPORT_TOKEN' } },
+          contextEnvelope: { channels: { 'api:hermes': { privacy } } },
+        } }));
+        expect(loadChannelContextEnvelope(dataDir).channels['api:hermes']).toEqual({ privacy });
+      }
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({ contextEnvelope: { channels: { 'api:hermes': { privacy: 'invalid' } } } }));
+      expect(() => loadChannelContextEnvelope(dataDir)).toThrow();
+    } finally { rmSync(dataDir, { recursive: true, force: true }); }
+  });
+
   it('returns defaults when data/channels.json is missing', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
     try {

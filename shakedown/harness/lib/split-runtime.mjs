@@ -17,6 +17,8 @@ const RUNTIME_ENV = [
 ];
 
 export function prepareSplitRuntime(config, env) {
+  const apiKey = env.API_KEY?.trim();
+  if (!apiKey) throw new Error('API_KEY is required for authenticated shakedown health checks');
   if (!env.PSFN_BACKUP_ENCRYPTION_KEY?.trim()) {
     throw new Error('PSFN_BACKUP_ENCRYPTION_KEY is required for isolated shakedown persistence');
   }
@@ -40,7 +42,7 @@ export function prepareSplitRuntime(config, env) {
       ADMIN_HOST: env.ADMIN_HOST,
       ADMIN_PORT: env.ADMIN_PORT,
       ADMIN_TOKEN: env.ADMIN_TOKEN,
-      GATEWAY_OPERATOR_API_BASE_URL: env.PSFN_API_BASE,
+      GATEWAY_OPERATOR_API_BASE_URL: `${config.apiBase}/v1`,
     };
     const gatewayEnv = { ...env };
     for (const name of ['POSTGRES_ADMIN_DATABASE_URL', 'PSFN_COMPANION_DATABASE_PASSWORD', 'PSFN_SHARED_MIGRATION_DATABASE_PASSWORD', 'PSFN_LIVE_POSTGRES_DATABASE_URL']) {
@@ -48,7 +50,10 @@ export function prepareSplitRuntime(config, env) {
     }
     return {
       processes: [
-        { name: 'gateway', args: [join(config.repoRoot, 'dist/gateway-main.js')], env: gatewayEnv, readyUrl: `${config.apiBase}/health` },
+        {
+          name: 'gateway', args: [join(config.repoRoot, 'dist/gateway-main.js')], env: gatewayEnv,
+          readyUrl: `${config.apiBase}/health`, readyHeaders: { Authorization: `Bearer ${apiKey}` },
+        },
         { name: 'agent', args: [join(config.repoRoot, 'dist/agent-main.js')], env: agentEnv },
         { name: 'operator', args: [join(config.repoRoot, 'dist/operator-main.js')], env: operatorEnv },
       ],
@@ -89,7 +94,10 @@ export async function superviseSplitRuntime({ processes, cwd, signals = process 
         let ready = false;
         while (!startupAbort.signal.aborted && Date.now() < deadline) {
           try {
-            const response = await fetch(spec.readyUrl, { signal: AbortSignal.any([startupAbort.signal, AbortSignal.timeout(1_000)]) });
+            const response = await fetch(spec.readyUrl, {
+              headers: spec.readyHeaders,
+              signal: AbortSignal.any([startupAbort.signal, AbortSignal.timeout(1_000)]),
+            });
             const health = await response.json();
             // ApiServer returns 503 for GatewayApiRuntime's disconnected-agent
             // health. That exact startup state permits launching the agent;

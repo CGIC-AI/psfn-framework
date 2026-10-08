@@ -43,7 +43,9 @@ behavioral coverage. It did not classify every assertion in every file.
 | Scheduler and Garden tests required internal names or CSS classes. | Remove structure/style inventories. Retain callable scheduler settings, navigation, editor state, and independent security checks. |
 | Browser and shakedown checks could be omitted by local gate routing. | Select the relevant suites explicitly. Runtime source and Docker journey changes select the real-process smoke stack under the heavy-suite lock. |
 | Fleet browser fixture used a retired login URL; service-worker tests targeted a removed upload control. | Exercise the current login route, private draft clearing, and active UI state across service-worker updates. |
+| Real Chromium login submitted a null origin; a real unknown-companion action reached the sole agent. | Preserve exact origin validation while enabling the same-origin login form. Reject unregistered targets before dispatch and pass the selected companion explicitly to runtime routing. |
 | Autonomy regression profile silently selected two of six named files after source moves. | Repair the paths and fail configuration if any exact profile entry is missing. All six now execute. |
+| Shakedown used a removed launch command, killed listeners by port, and accepted unrelated readiness responses. | Supervise only owned children, pass role-scoped credentials, and recognize canonical healthy or agent-disconnected health responses. |
 
 Source-text checks that still protect a distinct security or client-wiring
 boundary remain until executable replacement proof exists. For example,
@@ -56,6 +58,12 @@ The Docker extraction scenario also exposed a product edge case:
 user fact even when the background job succeeds. The smoke uses a complete
 two-entry pair. The interval-one source/coverage contract is tracked separately
 as `psfn-framework-rws51`; a passing smoke does not certify that setting.
+
+Memory scope remains part of the proof. Session-route reset can quarantine
+derived memories; it is not a safe shortcut for testing ordinary recall. The
+runtime also refreshes retrieval asynchronously after restart. A recall journey
+must distinguish a cold turn from a subsequent turn consuming refreshed memory,
+and exclude the expected fact from recent conversation and continuity summaries.
 
 The main Companion UI conversation currently renders a final gateway result,
 and its remembered transcript lives in a process-local browser map. The HTTP

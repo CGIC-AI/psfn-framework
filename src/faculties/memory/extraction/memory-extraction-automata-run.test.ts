@@ -76,6 +76,22 @@ async function registry(): Promise<AutomataRunRegistry> {
 }
 
 describe('memory extraction Automata run lifecycle', () => {
+  it('redelivers an external intake interrupted by process restart without reopening cancelled work', async () => {
+    const store = new InMemoryAutomataRunStore();
+    const hydrate = (nowMs: number) => AutomataRunRegistry.hydrate({
+      redelivery: NO_AUTOMATA_REDELIVERY, companionId: 'companion-a', policy: automataPolicy(), store, nowMs,
+    });
+    const input = { runId: 'external-restart', taskId: 'room', sessionId: 'session',
+      triggerReason: 'external_conversation' as const, createdAtMs: 100 };
+    let runs = await hydrate(100);
+    await createMemoryExtractionAutomataRunPort(runs, input).begin();
+    runs = await hydrate(200);
+    expect(runs.getRun(input.runId)).toMatchObject({ status: 'failed', statusReason: 'process_restart_interrupted' });
+    const retry = await createMemoryExtractionAutomataRunPort(runs, input).begin();
+    expect(retry).toMatchObject({ execute: true, attempt: 2 });
+    expect(runs.getRun(retry.lineage.runId)).toMatchObject({ sourceRunId: input.runId, status: 'running' });
+  });
+
   it('recovers failed external attempts after retention hydration and terminalizes the bound retry', async () => {
     const store = new InMemoryAutomataRunStore();
     const hydrate = (nowMs: number) => AutomataRunRegistry.hydrate({

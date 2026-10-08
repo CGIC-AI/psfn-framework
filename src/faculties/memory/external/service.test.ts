@@ -69,6 +69,28 @@ function fixture() {
 }
 
 describe('external companion memory service', () => {
+  it('acknowledges a new exchange while an earlier exchange is still extracting', async () => {
+    const h = fixture();
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    h.extract.mockImplementationOnce(async () => { started.resolve(); await release.promise; });
+    await h.service.execute(h.input());
+    const processing = h.run();
+    await started.promise;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await expect(Promise.race([
+        h.service.execute(h.input('next-event')),
+        new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('ingestion waited for extraction')), 500); }),
+      ])).resolves.toMatchObject({ receipt: { status: 'accepted' } });
+      expect(h.sessions.getRecent(externalMemorySessionId(binding, 'session-one'), 10)).toHaveLength(4);
+    } finally {
+      clearTimeout(timeout);
+      release.resolve();
+      await processing;
+    }
+  });
+
   it('validates the Telegram sender against the bound contact and preserves private DM provenance', async () => {
     const h = fixture();
     const source = { platform: 'telegram', userId: '12345', chatId: '12345', chatType: 'dm' };

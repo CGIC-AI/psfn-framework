@@ -847,7 +847,7 @@ describe('wirePostTurnActionRuntime', () => {
     })).not.toThrow();
   });
 
-  it('retains maintenance demand beyond the runnable admission window and eventually drains it', async () => {
+  it.each(['heartbeat.run_template', 'memory.external.process'])('retains %s demand beyond the runnable admission window and eventually drains it', async (kind) => {
     const nowSpy = vi.spyOn(Date, 'now');
     try {
       nowSpy.mockReturnValue(1_700_000_350_000);
@@ -865,7 +865,7 @@ describe('wirePostTurnActionRuntime', () => {
         intervalMs: 10,
       });
       const handler = vi.fn().mockResolvedValue(undefined);
-      runtime.registerHandler('heartbeat.run_template', handler, {
+      runtime.registerHandler(kind, handler, {
         executionMode: 'background',
       });
 
@@ -883,6 +883,7 @@ describe('wirePostTurnActionRuntime', () => {
         message: makeMessage(),
         response: makeResponse(),
         actions: [0, 1, 2, 3].map((index) => makeAction({
+          kind,
           id: `maintenance-${index}`,
           dedupeKey: `maintenance:${index}`,
           inferredAt: 1_700_000_350_000 + index,
@@ -921,6 +922,28 @@ describe('wirePostTurnActionRuntime', () => {
     } finally {
       nowSpy.mockRestore();
     }
+  });
+
+  it('migrates persisted external-memory demand from the appraisal lane to maintenance', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'external-memory-lane-'));
+    const persistencePath = join(directory, 'queue.json');
+    const create = () => {
+      const eventBus = new EventBus();
+      return wirePostTurnActionRuntime({ eventBus, scheduler: new Scheduler(eventBus, {
+        tickIntervalMs: 100, heartbeatIntervalMs: 1_000,
+      }), agentLoop: { waitForIdle: vi.fn().mockResolvedValue(undefined) }, intervalMs: 10, persistencePath });
+    };
+    try {
+      const runtime = create();
+      runtime.enqueue(makeAction({ kind: 'memory.external.process' }));
+      const persisted = JSON.parse(readFileSync(persistencePath, 'utf8'));
+      persisted.entries[0].runtimeClass = 'post_turn_appraisal';
+      writeFileSync(persistencePath, JSON.stringify(persisted));
+      const restarted = create();
+      expect(restarted.listQueued()[0]?.runtimeClass).toBe(MAINTENANCE_REFLECTION_RUNTIME_CLASS);
+      expect(JSON.parse(readFileSync(persistencePath, 'utf8')).entries[0].runtimeClass)
+        .toBe(MAINTENANCE_REFLECTION_RUNTIME_CLASS);
+    } finally { rmSync(directory, { recursive: true, force: true }); }
   });
 
   it('reports overflow maintenance demand as deferred instead of dropped', async () => {

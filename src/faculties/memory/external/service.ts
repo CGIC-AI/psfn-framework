@@ -308,12 +308,14 @@ export class ExternalMemoryService {
     const initial = this.options.intakeStore.read(receiptId);
     if (!initial) throw new Error('External memory evidence is missing');
     const channelId = this.options.intakeStore.channelId(initial);
-    await this.serialized(channelId, async () => {
+    // Serialize retries of this receipt, but let new exchanges in the same
+    // conversation archive while a model is extracting earlier evidence.
+    await this.serialized(`processing:${receiptId}`, async () => {
       const record = this.options.intakeStore.read(receiptId)!;
       if (record.completed) return;
       await this.contact(record.binding, record.source);
       this.assertActive(channelId);
-      await this.archive(record);
+      await this.serialized(channelId, () => this.archive(record));
       if (record.operation === 'ingest') {
         const entries = record.messageIds.flatMap(id => this.options.sessions.getEntriesInRange(channelId, id, id));
         if (entries.length !== record.entries.length) throw new Error('External conversation evidence is incomplete');

@@ -13,6 +13,7 @@ import { resolveSessionEntryTurnContext } from '../../../core/session/turn-prove
 import { SessionStore } from '../../../persistence/sessions/store.js';
 import { ExternalMemoryService } from './service.js';
 import { ExternalMemoryIntakeStore } from './intake-store.js';
+import { getStableLinkedContactForSession } from '../../../operator/garden/services/contact-session-linker.js';
 
 const binding = {
   companionId: '11111111-1111-4111-8111-111111111111',
@@ -45,11 +46,12 @@ function fixture() {
   const write = vi.fn().mockResolvedValue({ action: 'created', memory: { id: 'memory-one' } });
   const getById = vi.fn(async (id: string) => id === binding.contactId
     ? { id, displayName: 'Alex', trustLevel: 'primary' } : undefined);
+  const recordChannelActivity = vi.fn().mockResolvedValue(undefined);
   const query = vi.fn().mockResolvedValue({ memories: [], total: 0 });
   const retrieve = vi.fn().mockResolvedValue('Recalled context');
   const quarantine = { isSessionRetiredOrQuarantined: vi.fn(() => false) };
   const options = { companionId: binding.companionId, companionName: 'Lyra', intakeStore: store,
-    sessions, contacts: { getById }, memoryStore: { queryAuthorizedMemorySubjects: query },
+    sessions, contacts: { getById, recordChannelActivity }, memoryStore: { queryAuthorizedMemorySubjects: query },
     memoryProvider: { retrieve }, writer: { write }, screening: { screen }, quarantine,
     actions, retryDelayMs: 100, completedReceiptRetentionMs: 60_000, searchLimit: 5, goals: () => 'Finish the garden project', extract };
   const makeService = () => new ExternalMemoryService(fromAny(options));
@@ -61,10 +63,37 @@ function fixture() {
   });
   const run = (index = 0) => handler!(queued[index]!);
   return { service, makeService, input, run, sessions, store, storeDirectory, queued, screen, extract,
-    write, getById, query, retrieve, quarantine, actions, setPersistence: (value: boolean) => { persisted = value; } };
+    write, getById, recordChannelActivity, query, retrieve, quarantine, actions, setPersistence: (value: boolean) => { persisted = value; } };
 }
 
 describe('external companion memory service', () => {
+  it('links accepted conversations to the authenticated contact for the contact card and subject session view', async () => {
+    const h = fixture();
+    const input = h.input();
+    const channelId = externalMemorySessionId(binding, input.request.sessionId);
+    await h.service.execute(input);
+    expect(h.recordChannelActivity).toHaveBeenCalledWith(binding.contactId, 'hermes', channelId, 'private');
+    const [contactId, channel, recordedChannelId, privacyLevel] = h.recordChannelActivity.mock.calls[0]!;
+    const contact = fromAny({ id: contactId, displayName: 'Alex', conversationChannels: [
+      { channel, channelId: recordedChannelId, privacyLevel },
+    ] });
+    expect(getStableLinkedContactForSession({ channelId, contacts: [contact], sessionStore: h.sessions })).toBe(contact);
+  });
+
+  it('withholds acknowledgment on contact-link failure and recovers without duplicating the archived pair', async () => {
+    const h = fixture();
+    const input = h.input();
+    h.recordChannelActivity.mockRejectedValueOnce(new Error('contact store unavailable'));
+    await expect(h.service.execute(input)).rejects.toThrow('contact store unavailable');
+    expect(h.queued).toHaveLength(0);
+    const restarted = h.makeService();
+    await restarted.recover();
+    await h.run();
+    expect(h.recordChannelActivity).toHaveBeenCalledTimes(2);
+    await expect(restarted.execute(input)).resolves.toMatchObject({ receipt: { status: 'accepted' } });
+    expect(h.sessions.getRecent(externalMemorySessionId(binding, input.request.sessionId), 10)).toHaveLength(2);
+  });
+
   it('acknowledges durable top-level evidence and queues normal memory processing without a turn record', async () => {
     const h = fixture();
     const input = h.input();
@@ -168,6 +197,7 @@ describe('external companion memory service', () => {
     await expect(h.service.execute({ binding, request: { operation: 'remember', sessionId: 'session', eventId: 'bad-note', text: 'Rejected source' } })).rejects.toThrow('withheld by intake policy');
     expect(h.queued).toHaveLength(0);
     expect(h.write).not.toHaveBeenCalled();
+    expect(h.recordChannelActivity).not.toHaveBeenCalled();
   });
 
   it('isolates session and body identifiers including hostile namespace/path characters', async () => {
@@ -193,6 +223,7 @@ describe('external companion memory service', () => {
     h.quarantine.isSessionRetiredOrQuarantined.mockReturnValue(true);
     await expect(h.service.execute(input)).rejects.toThrow('retired or quarantined');
     expect(h.screen).not.toHaveBeenCalled();
+    expect(h.recordChannelActivity).not.toHaveBeenCalled();
   });
 
   it('uses subject-authorized search and exact known-contact recall context', async () => {
@@ -204,6 +235,7 @@ describe('external companion memory service', () => {
     }));
     await expect(h.service.execute({ binding, request: { operation: 'get', sessionId: 'session', id: 'unknown' } })).resolves.toEqual({ memory: null });
     await expect(h.service.execute({ binding, request: { operation: 'context', sessionId: 'session', query: 'garden' } })).resolves.toEqual({ context: 'Finish the garden project\n\nRecalled context' });
+    expect(h.recordChannelActivity).not.toHaveBeenCalled();
     expect(h.retrieve).toHaveBeenCalledWith(
       'garden', externalMemorySessionId(binding, 'session'), 'primary', { isDirectMessage: true }, binding.contactId,
       undefined, undefined, undefined, undefined, undefined, undefined,

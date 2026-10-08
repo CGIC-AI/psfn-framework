@@ -48,7 +48,7 @@ interface ExternalMemoryServiceOptions {
   companionName: string;
   intakeStore: ExternalMemoryIntakeStore;
   sessions: Pick<SessionStore, 'append' | 'getRecent' | 'getEntriesInRange' | 'flushSessionJournal'>;
-  contacts: Pick<ContactStorePort, 'getById'>;
+  contacts: Pick<ContactStorePort, 'getById' | 'recordChannelActivity'>;
   memoryStore: MemoryStorePort;
   memoryProvider: MemoryProvider | null;
   writer: Pick<MemoryWriter, 'write'>;
@@ -218,7 +218,7 @@ export class ExternalMemoryService {
       messageIds: [], completed: false };
   }
 
-  private archive(record: ExternalMemoryIntakeRecord): void {
+  private async archive(record: ExternalMemoryIntakeRecord): Promise<void> {
     if (record.completed || record.operation !== 'ingest') return;
     // A durable intake prepared before withheld ingests were refused must not
     // reach the session either.
@@ -245,6 +245,12 @@ export class ExternalMemoryService {
     this.options.sessions.flushSessionJournal(channelId);
     record.messageIds = messageIds;
     this.options.intakeStore.write(record);
+    // The credential's contact binding is also the stable attribution used by
+    // the contact card and subject-scoped session views. Persist it only after
+    // screened evidence is durable, and require success before acknowledging.
+    await this.options.contacts.recordChannelActivity(
+      record.binding.contactId, 'hermes', channelId, 'private',
+    );
   }
 
   private enqueue(record: ExternalMemoryIntakeRecord): void {
@@ -276,7 +282,7 @@ export class ExternalMemoryService {
       record = await this.prepare(binding, request, contact, receiptId, contentHash);
       this.options.intakeStore.write(record, true);
     }
-    this.archive(record);
+    await this.archive(record);
     this.enqueue(record);
     return { receipt: externalMemoryReceipt(record) };
   }
@@ -290,7 +296,7 @@ export class ExternalMemoryService {
       if (record.completed) return;
       await this.contact(record.binding);
       this.assertActive(channelId);
-      this.archive(record);
+      await this.archive(record);
       if (record.operation === 'ingest') {
         const entries = record.messageIds.flatMap(id => this.options.sessions.getEntriesInRange(channelId, id, id));
         if (entries.length !== record.entries.length) throw new Error('External conversation evidence is incomplete');

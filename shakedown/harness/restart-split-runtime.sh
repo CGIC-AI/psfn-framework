@@ -104,10 +104,10 @@ while (( SECONDS < deadline )); do
     echo "Shakedown runtime exited before readiness; inspect $LOG_PATH" >&2
     exit 1
   fi
-  if curl -fsS "$API_HEALTH_URL" >/dev/null 2>&1; then
+  if curl -fsS -H "Authorization: Bearer $API_KEY" "$API_HEALTH_URL" >/dev/null 2>&1; then
     api_ready=1
   fi
-  if curl -fsS "$ADMIN_HEALTH_URL" >/dev/null 2>&1; then
+  if curl -fsS -H "Authorization: Bearer $ADMIN_TOKEN" "$ADMIN_HEALTH_URL" >/dev/null 2>&1; then
     admin_ready=1
   fi
   if [[ -f "$LOG_PATH" ]] && grep -q 'Ready — waiting for messages' "$LOG_PATH"; then

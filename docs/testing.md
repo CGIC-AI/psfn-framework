@@ -44,6 +44,7 @@ behavioral coverage. It did not classify every assertion in every file.
 | Browser and shakedown checks could be omitted by local gate routing. | Select the relevant suites explicitly. Runtime source and Docker journey changes select the real-process smoke stack under the heavy-suite lock. |
 | Fleet browser fixture used a retired login URL; service-worker tests targeted a removed upload control. | Exercise the current login route, private draft clearing, and active UI state across service-worker updates. |
 | Real Chromium login submitted a null origin; a real unknown-companion action reached the sole agent. | Preserve exact origin validation while enabling the same-origin login form. Reject unregistered targets before dispatch and pass the selected companion explicitly to runtime routing. |
+| Hub configuration test passed raw Compose template values into a signer. | Remove the static wiring inventory; the actual disposable Hub must start, reject unenrolled credentials, authenticate the generated device, and deliver a decoded emotion event. Keep focused credential and capability contracts. |
 | Autonomy regression profile silently selected two of six named files after source moves. | Repair the paths and fail configuration if any exact profile entry is missing. All six now execute. |
 | Shakedown used a removed launch command, killed listeners by port, and accepted unrelated readiness responses. | Supervise only owned children, pass role-scoped credentials, and recognize canonical healthy or agent-disconnected health responses. |
 

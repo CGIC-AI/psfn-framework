@@ -1,11 +1,7 @@
-import { readFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
-import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { WebSocketServer, type WebSocket as WsSocket } from 'ws';
-import { parse as parseYaml } from 'yaml';
 import { buildSatelliteHello, MOBILE_CHAT_APP_CAPABILITIES } from '../companion-ui/src/lib/api/auth.js';
-import { createHubDeviceAssertionIssuer } from '../apps/satellite-hub/src/ts/hub/device-assertion.js';
 import {
   authenticateHubDevice,
   createHubDeviceRegistryAuthority,
@@ -25,7 +21,6 @@ import {
 } from './compose-hub-verification.js';
 import {
   buildSmokeHubDeviceRegistry,
-  generateSmokeHubDeviceAssertionKey,
   SMOKE_HUB_DEVICE_ID,
 } from './ops/psfn-compose-smoke-hub-device.mjs';
 import {
@@ -224,36 +219,6 @@ describe('Compose smoke Hub device enrollment', () => {
       endpointId: 'smoke-hub-endpoint',
       claimType: 'satellite.endpoint',
     })).toThrow(/companionId/u);
-  });
-
-  it('wires a registry-mode Hub whose assertion signing config the Hub accepts, with no committed credential', () => {
-    const repoRoot = resolve(import.meta.dirname, '..');
-    const composeText = readFileSync(join(repoRoot, 'docker/docker-compose.smoke.yml'), 'utf8');
-    const compose = parseYaml(composeText) as {
-      services: Record<string, {
-        environment?: Record<string, string>;
-        volumes?: string[];
-        depends_on?: Record<string, { condition: string }>;
-      }>;
-    };
-    const hub = compose.services['satellite-hub']!;
-    const seed = compose.services.seed!;
-    const env = hub.environment!;
-    expect(hub.volumes).toContain('hub-device:/app/hub-device:ro');
-    expect(hub.depends_on?.seed).toEqual({ condition: 'service_completed_successfully' });
-    expect(seed.volumes).toContain('hub-device:/run/psfn-hub-device');
-    expect(env.HUB_DEVICE_REGISTRY_PATH).toBe('/app/hub-device/devices.json');
-    expect(env.HUB_DEVICE_ASSERTION_PRIVATE_KEY_PATH).toBe('/app/hub-device/device-assertion-key.pem');
-    expect(seed.environment?.PSFN_SMOKE_HUB_DEVICE_CREDENTIAL).toBe('${PSFN_SMOKE_HUB_DEVICE_CREDENTIAL:-}');
-    const issuer = createHubDeviceAssertionIssuer({
-      issuer: env.HUB_DEVICE_ASSERTION_ISSUER!,
-      kid: env.HUB_DEVICE_ASSERTION_KID!,
-      audience: env.HUB_DEVICE_ASSERTION_AUDIENCE!,
-      privateKeyPem: generateSmokeHubDeviceAssertionKey(),
-      ttlSeconds: Number(env.HUB_DEVICE_ASSERTION_TTL_SECONDS),
-    });
-    const device = authenticateHubDevice(smokeDeviceRegistry(), TEST_DEVICE.credential)!;
-    expect(issuer.issue({ device, sessionId: 'realtime:smoke' }).split('.')).toHaveLength(3);
   });
 });
 

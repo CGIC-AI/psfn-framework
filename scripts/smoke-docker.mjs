@@ -394,6 +394,7 @@ async function main() {
           const result = compose(['restart', 'agent'], { capture: true });
           if (result.status !== 0) throw new Error('Smoke agent restart failed');
         }, waitForHealth, report: pass,
+        companionId: process.env.PSFN_SMOKE_COMPANION_ID || '11111111-1111-4111-8111-111111111111',
         channelForSession: sessionId => `api:${API_PRINCIPAL_ID}:${sessionId}`,
         readDeletionEffect: async memoryId => {
           if (!/^[a-f0-9-]+$/u.test(memoryId)) throw new Error('Invalid case memory identity');

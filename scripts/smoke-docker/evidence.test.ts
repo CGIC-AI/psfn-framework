@@ -35,6 +35,15 @@ describe('portable full-runtime evidence', () => {
     expect(JSON.stringify(evidence)).not.toMatch(/private|synthetic-secret/u);
   });
 
+  it('fails a successful outcome when any captured transport lost evidence', async () => {
+    const evidence = { journeys: [] };
+    await expect(runWithEvidence(evidence, 'transport-gap', async options => {
+      options.capture({ events, errors: ['telemetry_disconnected'] });
+      return { durable: true };
+    }, {})).rejects.toThrow('Telemetry collector lost evidence');
+    expect(evidence.journeys[0]).toMatchObject({ status: 'failed', failureCode: 'assertion_failed' });
+  });
+
   it('exports IDs and timing while discarding payloads, arguments and synthetic credentials', () => {
     const projected = projectEvent({ type: 'agent.tool.end', data: {
       requestId: 'request-1', turnId: 'turn-1', toolCallId: 'call-1', outcome: 'executed',

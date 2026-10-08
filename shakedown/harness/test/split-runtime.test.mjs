@@ -5,13 +5,31 @@ import { mkdtempSync, mkdirSync, readFileSync, existsSync, rmSync, statSync, wri
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { GatewayApiRuntime } from '../../../src/channels/api/gateway-runtime.js';
 import { prepareSplitRuntime, superviseSplitRuntime } from '../lib/split-runtime.mjs';
 
 test('real child processes receive only their role credentials and stop together after failure', async () => {
   const root = mkdtempSync(join(tmpdir(), 'psfn-split-regression-'));
   const signals = new EventEmitter();
   let prepared;
-  const health = createServer((_req, res) => { res.end("ready"); });
+  const gatewayRuntime = new GatewayApiRuntime({
+    requestAgent: async () => { throw new Error('No agent connected'); },
+  });
+  const disconnectedHealth = await gatewayRuntime.handleHealth();
+  let healthRequests = 0;
+  const health = createServer((_req, res) => {
+    healthRequests += 1;
+    // Reject a wrong route, an unrelated 200, and degraded health whose agent
+    // is connected. Only the real disconnected-agent response permits launch.
+    const responses = [
+      [404, disconnectedHealth],
+      [200, { status: 'healthy' }],
+      [503, { ...disconnectedHealth, continuity: { checks: { gatewayLink: { meta: { agentConnected: true } } } } }],
+      [503, disconnectedHealth],
+    ];
+    const [status, body] = responses[Math.min(healthRequests - 1, responses.length - 1)];
+    res.writeHead(status, { 'Content-Type': 'application/json' }).end(JSON.stringify(body));
+  });
   await new Promise(resolve => health.listen(0, '127.0.0.1', resolve));
   try {
     mkdirSync(join(root, 'dist'));
@@ -42,6 +60,7 @@ test('real child processes receive only their role credentials and stop together
       `);
     }
     assert.equal(await superviseSplitRuntime({ processes: prepared.processes, cwd: root, signals }), 1);
+    assert.equal(healthRequests, 4, 'dependent runtimes must wait for canonical gateway health');
     const gateway = JSON.parse(readFileSync(output('gateway'))).env;
     const agent = JSON.parse(readFileSync(output('agent'))).env;
     const operator = JSON.parse(readFileSync(output('operator'))).env;

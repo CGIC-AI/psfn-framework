@@ -90,10 +90,17 @@ export async function superviseSplitRuntime({ processes, cwd, signals = process 
         while (!startupAbort.signal.aborted && Date.now() < deadline) {
           try {
             const response = await fetch(spec.readyUrl, { signal: AbortSignal.any([startupAbort.signal, AbortSignal.timeout(1_000)]) });
-            await response.body?.cancel();
-            // A gateway with no agent yet can be degraded; the listener must
-            // exist before the agent attempts its initial socket connection.
-            if (response.status < 500) { ready = true; break; }
+            const health = await response.json();
+            // ApiServer returns 503 for GatewayApiRuntime's disconnected-agent
+            // health. That exact startup state permits launching the agent;
+            // unrelated HTTP errors or other degraded states do not.
+            const hasHealthEnvelope = typeof health?.checkedAt === 'string'
+              && Number.isFinite(health?.uptimeSeconds)
+              && ['healthy', 'degraded'].includes(health?.subsystems?.memory?.status);
+            const healthy = response.status === 200 && health?.status === 'healthy';
+            const waitingForAgent = response.status === 503 && health?.status === 'degraded'
+              && health?.continuity?.checks?.gatewayLink?.meta?.agentConnected === false;
+            if (hasHealthEnvelope && (healthy || waitingForAgent)) { ready = true; break; }
           } catch (error) {
             if (startupAbort.signal.aborted) break;
             if (!(error instanceof Error)) throw error;

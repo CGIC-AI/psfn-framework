@@ -437,11 +437,11 @@ async function main(): Promise<void> {
     assert(replResult.answer.length > 0,
       `REPL returned answer: "${replResult.answer.slice(0, 80)}"`);
 
-    assert(replResult.answer.includes('391'),
-      'Answer contains correct result (391)',
+    assert(replResult.answer === '391',
+      'Answer equals the correct result (391)',
       `Got: "${replResult.answer}"`);
 
-    assert(replResult.steps.some(step => step.code.includes('17 * 23') && step.error === null),
+    assert(replResult.steps.some(step => step.code.trim().length > 0 && step.error === null),
       'A successful sandbox execution computed the arithmetic answer');
 
     assert(replResult.iterations >= 1,

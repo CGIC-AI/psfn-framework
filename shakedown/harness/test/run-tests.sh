@@ -1,55 +1,16 @@
 #!/usr/bin/env bash
-# Runs the shakedown harness regression tests. The dependency-light Node scripts
-# stub the Garden settings API / tier CLI so no live cluster is touched. The
-# Vitest verdict suite exercises production harness scoring. Each command exits
-# non-zero on failure.
+# Run every executable harness regression, plus the distinct Vitest verdict
+# suite. These use disposable fixtures; none connects to a live runtime.
 set -euo pipefail
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TEST_DIR/../../.." && pwd)"
+cd "$REPO_ROOT"
 
-tests=(
-  "bootstrap-config.test.mjs"  # bootstrap rejects unsafe roots before any write
-  "bootstrap-postgres.test.mjs" # bootstrap proves a disposable isolated database/schema
-  "bootstrap-runner.test.mjs"  # bootstrap sequences seed/readiness/proof and explicit resume
-  "bootstrap-services.test.mjs" # readiness plus exact persisted-turn proof
-  "capability-matrix.test.mjs" # 65rk.6: exact 22-token tier/refusal contract
-  "case-tier-floors.test.mjs" # mfr7t: floored cases never run below their minimum tier
-  "companion-feedback.test.mjs" # 7wa3d: companion commentary is feedback, not failure
-  "assistant-answer.test.mjs"  # 7wa3d: malformed-but-readable answers are judged on values
-  "case-execution.test.mjs" # per-step recovery fits the case budget; timeout stays case-local
-  "memory-tier-catalog.test.mjs" # memory write/patch and delete/restore stay in their capability tiers
-  "operator-approval-target.test.mjs" # SSO chat and independent Operator authority stay distinct
-  "production-capability-probe.test.mjs" # 65rk.6: production gate and shard boundary
-  "host-cleanup.test.mjs" # 65rk.6: host cleanup continues and reports failures
-  "probe-provenance.test.mjs" # chat cases auto-attach testing-harness provenance headers
-  "case-chat-provenance.test.mjs" # every case-module chat dispatch carries run provenance
-  "target-contract.test.mjs"   # A: tier flip uses the canonical capabilities editor
-  "target-companion.test.mjs"  # gz50o: kube COMPANION_ID selects one fleet companion, fail closed
-  "prompt-layer-restore.test.mjs" # 2pz3o: marker sweep and byte-identical prompt restore
-  "operator-garden.test.mjs"   # xpgnr: prompt/skill residue maintenance runs as the ADMIN_TOKEN operator
-  "postgres.test.mjs"          # ypah0: gateway-owned tables read from the gateway schema, fail closed
-  "chat-companion-selector.test.mjs" # cx97d: every harness-bearer chat dispatch carries the companion selector
-  "flip-abort.test.mjs"        # C: an unconfirmed forward flip aborts the phase
-  "coverage-hole-continuation.test.mjs" # case-local config holes do not abort later tiers
-  "persisted-proofs.test.mjs"  # S10 persisted-state proofs fail closed
-  "revert-on-signal.test.mjs"  # B: pre-sweep tier restored on SIGINT/SIGTERM
-  "tier-conformance-sweep.test.mjs" # D: 3-tier conformance sweep restores + counts ok:false
-  "scorecard-coverage-artifacts.test.mjs" # external proof artifacts feed coverage
-  "sprint10-catalog.test.mjs"  # S10 catalog metadata and seam inventory
-  "hardening-proofs.test.mjs"  # 65rk.9: model-lane attribution + backup encryption proofs fail closed
-  "hardening-catalog.test.mjs" # 65rk.9: July hardening catalog metadata and disposition boundary
-  "sse-probe.test.mjs"         # first non-empty SSE delta precedes terminal
-  "profile-runner.test.mjs"    # 65rk.8: --profile lite|full runner, deadline + signal-safe restore
-  "scorecard-profile.test.mjs" # 65rk.8: scorecard profile:lite stamp + attestation gate; full unchanged
-)
-
-for t in "${tests[@]}"; do
-  echo "===== $t ====="
-  node "$TEST_DIR/$t"
-  echo
+for test_file in "$TEST_DIR"/*.test.mjs; do
+  # This one suite imports Vitest; all other harness files run with Node.
+  [[ "$(basename "$test_file")" == "harness-verdicts.test.mjs" ]] && continue
+  node --import tsx "$test_file"
 done
 
-npm --prefix "$REPO_ROOT" run test:shakedown-harness
-
-echo "All harness regression tests passed."
+npm exec -- vitest run --config shakedown/harness/vitest.config.mjs

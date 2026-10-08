@@ -30,13 +30,15 @@ REPO_ROOT="$PSFN_REPO_ROOT"
 API_HEALTH_URL="http://${API_HOST}:${API_PORT}/health"
 ADMIN_HEALTH_URL="http://${ADMIN_HOST}:${ADMIN_PORT}/health"
 LOG_DIR="$PSFN_LOGS_DIR"
-PID_FILE="${PSFN_RUNTIME_PID_FILE:-$PSFN_SHAKEDOWN_ROOT/runtime.pid}"
 LOG_PATH="$LOG_DIR/split-runtime-$(date +%Y%m%dT%H%M%S).log"
-TMUX_SESSION="${PSFN_TMUX_SESSION:-psfn-shakedown}"
-SOCKET_SUFFIX="$(basename "$REPO_ROOT" | tr -cs 'A-Za-z0-9._-' '-')"
-SOCKET_DIR="${XDG_RUNTIME_DIR:-/tmp}/psfn-gateway-${SOCKET_SUFFIX}"
-GATEWAY_SOCKET_PATH="${SOCKET_DIR}/gateway.sock"
-ADMIN_SOCKET_PATH="${SOCKET_DIR}/garden-admin.sock"
+ROUND_ID="$(printf '%s' "$PSFN_SHAKEDOWN_ROOT" | sha256sum | cut -c1-16)"
+TMUX_SESSION="${PSFN_TMUX_SESSION:-psfn-shakedown-$ROUND_ID}"
+# A dedicated tmux server inherits this round's freshly sourced environment.
+# Reusing the desktop tmux server would silently retain old credentials/paths.
+round_tmux() { tmux -L "psfn-shakedown-$ROUND_ID" "$@"; }
+export GATEWAY_SOCKET="${GATEWAY_SOCKET:-$PSFN_TEMP_DIR/gateway.sock}"
+export ADMIN_TRANSPORT_MODE=socket
+export ADMIN_TRANSPORT_SOCKET="${ADMIN_TRANSPORT_SOCKET:-$PSFN_TEMP_DIR/garden-admin-$COMPANION_ID.sock}"
 
 # Runtime stores are Postgres-only. Pin the backend and the split/layout mode
 # for the child; everything else is inherited from the sourced shakedown env.
@@ -60,76 +62,52 @@ ensure_garden_ui_build() {
   fi
 }
 
-kill_pid_if_running() {
-  local pid="$1"
-  if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
-    kill "$pid" 2>/dev/null || true
+# Revalidate protected roots and the disposable Postgres target before stopping
+# anything. Restart may be invoked directly, outside bootstrap-local.mjs.
+node --input-type=module -e 'import(process.argv[1]).then(m => m.resolveBootstrapConfig())' \
+  "$REPO_ROOT/shakedown/harness/lib/bootstrap-config.mjs"
+
+mkdir -p "$LOG_DIR" "$PSFN_TEMP_DIR"
+if round_tmux has-session -t "=$TMUX_SESSION" 2>/dev/null; then
+  owner="$(round_tmux show-option -qv -t "=$TMUX_SESSION" @psfn-shakedown-root)"
+  if [[ "$owner" != "$PSFN_SHAKEDOWN_ROOT" ]]; then
+    echo "Refusing to stop a tmux session not owned by this shakedown round." >&2
+    exit 1
   fi
-}
-
-kill_port_listeners() {
-  local port="$1"
-  mapfile -t port_pids < <(
-    ss -ltnp "sport = :${port}" 2>/dev/null \
-      | sed -n 's/.*pid=\([0-9]\+\).*/\1/p' \
-      | sort -u
-  )
-  for pid in "${port_pids[@]:-}"; do
-    kill_pid_if_running "$pid"
+  supervisor_pid="$(round_tmux list-panes -t "=$TMUX_SESSION" -F '#{pane_pid}')"
+  round_tmux kill-session -t "=$TMUX_SESSION"
+  stop_deadline=$((SECONDS + 20))
+  while kill -0 "$supervisor_pid" 2>/dev/null; do
+    if (( SECONDS >= stop_deadline )); then
+      echo "Previous shakedown supervisor did not finish stopping; refusing a second runtime." >&2
+      exit 1
+    fi
+    sleep 1
   done
-}
-
-kill_repo_runtime_processes() {
-  mapfile -t runtime_pids < <(
-    ps -eo pid=,args= \
-      | grep -F "$REPO_ROOT" \
-      | grep -E 'npm run split|src/app/(gateway|agent|operator)/main\.ts' \
-      | awk '{ print $1 }'
-  )
-  for pid in "${runtime_pids[@]:-}"; do
-    kill_pid_if_running "$pid"
-  done
-}
-
-mkdir -p "$LOG_DIR"
-mkdir -p "$DATA_DIR"
-
-if [[ -f "$PID_FILE" ]]; then
-  existing_pid="$(cat "$PID_FILE" || true)"
-  kill_pid_if_running "$existing_pid"
-  sleep 2
 fi
-
-if tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
-  tmux kill-session -t "$TMUX_SESSION" || true
-  sleep 1
-fi
-
-kill_repo_runtime_processes
-kill_port_listeners "$API_PORT"
-kill_port_listeners "$ADMIN_PORT"
-rm -f "$GATEWAY_SOCKET_PATH" "$ADMIN_SOCKET_PATH"
-sleep 2
 
 ensure_garden_ui_build
-
-# tmux inherits the current (sourced) environment, so every secret and path
-# already exported by the shakedown env — POSTGRES_DATABASE_URL,
-# OPENROUTER_API_KEY, DISCORD_*, layout dirs — is passed straight through to `npm run split`.
-tmux new-session -d -s "$TMUX_SESSION" \
-  "cd \"$REPO_ROOT\" && npm run split > \"$LOG_PATH\" 2>&1"
-
-tmux list-panes -t "$TMUX_SESSION" -F '#{pane_pid}' | head -n 1 > "$PID_FILE"
+# Pass paths through tmux's environment, not a shell-interpolated command.
+# exec makes the tracked supervisor the pane process; SIGHUP/TERM stops its
+# children and removes the temporary credential file.
+round_tmux new-session -d -s "$TMUX_SESSION" -c "$REPO_ROOT" \
+  -e "PSFN_SPLIT_LOG=$LOG_PATH" \
+  'exec node --import tsx shakedown/harness/run-split-runtime.mjs > "$PSFN_SPLIT_LOG" 2>&1'
+round_tmux set-option -t "=$TMUX_SESSION" @psfn-shakedown-root "$PSFN_SHAKEDOWN_ROOT"
 
 deadline=$((SECONDS + 90))
 api_ready=0
 admin_ready=0
 agent_ready=0
 while (( SECONDS < deadline )); do
-  if curl -sS "$API_HEALTH_URL" >/dev/null 2>&1; then
+  if ! round_tmux has-session -t "=$TMUX_SESSION" 2>/dev/null; then
+    echo "Shakedown runtime exited before readiness; inspect $LOG_PATH" >&2
+    exit 1
+  fi
+  if curl -fsS "$API_HEALTH_URL" >/dev/null 2>&1; then
     api_ready=1
   fi
-  if curl -sS "$ADMIN_HEALTH_URL" >/dev/null 2>&1; then
+  if curl -fsS "$ADMIN_HEALTH_URL" >/dev/null 2>&1; then
     admin_ready=1
   fi
   if [[ -f "$LOG_PATH" ]] && grep -q 'Ready — waiting for messages' "$LOG_PATH"; then

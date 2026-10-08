@@ -41,7 +41,7 @@ function makeResponse(content: string, inputTokens = 96, outputTokens = 24): LLM
   };
 }
 
-function renderChatResponse(promptText: string): string {
+function renderChatResponse(promptText: string, systemPrompt: string): string {
   if (promptText.includes('private consent moment')) {
     return '{"action":"send"}';
   }
@@ -50,12 +50,15 @@ function renderChatResponse(promptText: string): string {
     return 'I wanted to check in and share a quiet hello.';
   }
 
-  if (promptText.includes('favorite dessert') || promptText.includes('tiramisu')) {
-    return 'I heard the Partner\'s favorite dessert is tiramisu.';
+  if (promptText.includes('favorite dessert')) {
+    // Only runtime-supplied context may answer recall. A query or an earlier
+    // conversational turn containing the keyword is not retrieval evidence.
+    const fact = /favorite dessert is ([^.!\n<]+)/iu.exec(systemPrompt);
+    return fact ? `The Partner's favorite dessert is ${fact[1]!.trim()}.` : 'No dessert fact was supplied in memory context.';
   }
 
   if (promptText.includes('thunderstorms')) {
-    return 'I heard the Partner loves watching thunderstorms at night.';
+    return 'The supplied facts were noted.';
   }
 
   if (promptText.includes('hello')) {
@@ -73,7 +76,10 @@ function renderChatResponse(promptText: string): string {
   return 'Acknowledged.';
 }
 
-function renderExtractionXml(): string {
+function renderExtractionXml(promptText: string): string {
+  if (!promptText.includes('favorite dessert is tiramisu') || !promptText.includes('watching thunderstorms')) {
+    return '<response></response>';
+  }
   return [
     '<response>',
     '<fact>',
@@ -100,15 +106,11 @@ function renderExtractionXml(): string {
 
 function renderReasoningResponse(promptText: string): string {
   if (promptText.includes('17 * 23') || promptText.includes('calculate 17 * 23')) {
-    return 'FINAL("391")';
+    return '```repl\nFINAL(String(17 * 23));\n```';
   }
 
-  if (promptText.includes('how many memories mention the Partner')) {
-    return 'FINAL("2 memories mention the Partner: tiramisu and thunderstorms.")';
-  }
-
-  if (promptText.includes('memory search')) {
-    return 'FINAL("2")';
+  if (promptText.includes('how many memories mention the partner') || promptText.includes('memory search')) {
+    return '```repl\nconst memories = await memory_search("Partner", 20);\nFINAL(JSON.stringify(memories.map(memory => memory.text)));\n```';
   }
 
   return 'FINAL("done")';
@@ -118,14 +120,14 @@ function respond(context: LLMContext, purpose: CompletionPurpose): LLMResponse {
   const promptText = collectPromptText(context);
 
   if (purpose === 'extraction') {
-    return makeResponse(renderExtractionXml(), 128, 88);
+    return makeResponse(renderExtractionXml(promptText), 128, 88);
   }
 
   if (purpose === 'reasoning') {
     return makeResponse(renderReasoningResponse(promptText), 128, 40);
   }
 
-  return makeResponse(renderChatResponse(promptText), 128, 36);
+  return makeResponse(renderChatResponse(promptText, context.systemPrompt), 128, 36);
 }
 
 export function createScriptedE2ELLMProvider(): LLMProviderPort {

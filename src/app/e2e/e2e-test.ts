@@ -1,14 +1,13 @@
 // ── E2E Integration Test ──
-// Non-interactive test that exercises all live features through the full runtime stack.
-// Run: npx tsx src/app/e2e/e2e-test.ts
-//
-// Requirements:
-//   - An LLM provider configured via providers.json (OpenRouter or a shared OpenAI-compatible router)
-//   - Embedding provider configured via EMBEDDING_PROVIDER (defaults to Ollama)
-//   - .env configured
+// In-process composition integration with a scripted model and real persistence.
+// Production transport and browser journeys live in the Docker smoke stack.
+// Run: npm run e2e
+// Requires an explicitly configured scratch Postgres database and embedding
+// service. The scripted model makes no paid provider requests.
 
 import '../../shared/utils/load-dotenv.js';
 import { join } from 'node:path';
+import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 import { copyFileSync, mkdirSync } from 'node:fs';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { sanitizeCoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
@@ -323,21 +322,30 @@ async function main(): Promise<void> {
   }
 
   // ────────────────────────────────────────
-  // TEST 6: Memory retrieval in context
+  // TEST 6: Authorized companion-private retrieval without transcript reuse
   // ────────────────────────────────────────
-  section('Test 6: Memory Retrieval');
+  section('Test 6: Companion-private Memory Retrieval');
 
   try {
-    process.stdout.write('  Asking about Morgan\'s dessert...');
-    const r3 = await agentLoop.handleMessage(
-      makeMessage(CHANNEL, "What's the Partner's favorite dessert? I forgot."),
-    );
-    console.log(' done');
-
-    const mentionsTiramisu = r3.content.toLowerCase().includes('tiramisu');
-    assert(mentionsTiramisu,
-      `${companionName} recalls tiramisu from memory`,
-      mentionsTiramisu ? undefined : `Response: "${r3.content.slice(0, 120)}"`);
+    const question = "What's the Partner's favorite dessert? I forgot.";
+    const withoutMemory = await llmClient.stream({ systemPrompt, messages: [{ role: 'user', content: question }] });
+    assert(!withoutMemory.content.toLowerCase().includes('tiramisu'),
+      'A recall question without retrieved context does not invent the stored fact');
+    const memoryContext = await runWithRequestContext({
+      channelId: 'internal:reflection:e2e-memory', requesterProvenance: 'self_directed', requestAudience: 'self',
+    }, () => agentLoop.memoryProvider!.retrieve(
+      question, 'internal:reflection:e2e-memory', 'primary', undefined, undefined,
+      undefined, undefined, undefined, undefined, { accessScope: 'companion_self_reflection' },
+    ));
+    assert(memoryContext.toLowerCase().includes('tiramisu'),
+      'The real memory retriever supplies the stored dessert fact');
+    // No old messages are supplied: the answer must come from retrieved context.
+    const recalled = await llmClient.stream({
+      systemPrompt: `${systemPrompt}\n${memoryContext}`,
+      messages: [{ role: 'user', content: question }],
+    });
+    assert(recalled.content.toLowerCase().includes('tiramisu'),
+      'The model adapter answers from retrieved context without the seeded transcript');
   } catch (err) {
     assert(false, 'Memory retrieval succeeded', String(err));
   }
@@ -433,6 +441,9 @@ async function main(): Promise<void> {
       'Answer contains correct result (391)',
       `Got: "${replResult.answer}"`);
 
+    assert(replResult.steps.some(step => step.code.includes('17 * 23') && step.error === null),
+      'A successful sandbox execution computed the arithmetic answer');
+
     assert(replResult.iterations >= 1,
       `Completed in ${replResult.iterations} iteration(s)`);
 
@@ -452,7 +463,9 @@ async function main(): Promise<void> {
 
   try {
     process.stdout.write('  Running RLM loop (memory search)...');
-    const replMemResult = await runRLMLoop(
+    const replMemResult = await runWithRequestContext({
+      channelId: 'internal:reflection:e2e-memory', requesterProvenance: 'self_directed', requestAudience: 'self',
+    }, () => runRLMLoop(
       'Search memories for facts about the Partner. How many memories mention the Partner? Return a count and brief summary.',
       {
         llmProvider: llmClient,
@@ -461,8 +474,13 @@ async function main(): Promise<void> {
         sessionManager,
         config: { ...DEFAULT_REPL_CONFIG, budget: { ...DEFAULT_REPL_CONFIG.budget, maxIterations: 5 } },
       },
-    );
+    ));
     console.log(' done');
+
+    assert(replMemResult.evidence.some(item => item.source === 'memory_search' && (item.resultCount ?? 0) > 0),
+      'Workbench evidence records a real nonempty memory search');
+    assert(replMemResult.answer.toLowerCase().includes('tiramisu'),
+      'Workbench answer includes the retrieved dessert fact');
 
     assert(replMemResult.answer.length > 0,
       `REPL memory search returned: "${replMemResult.answer.slice(0, 100)}"`);
@@ -474,11 +492,9 @@ async function main(): Promise<void> {
   }
 
   // ────────────────────────────────────────
-  // TEST 12: Multi-companion fleet (flag-gated)
+  // TEST 12: Multi-companion fleet provisioning
   // ────────────────────────────────────────
-  // No-op in single-companion runs: skipped and logged, leaving existing e2e
-  // behavior untouched. Runs only under PSFN_MULTI_COMPANION=1, exercising
-  // fleet resolution and per-companion + shared Postgres schema provisioning.
+  // Exercise fleet resolution and per-companion + shared Postgres schemas.
   section('Test 12: Multi-Companion Fleet resolution');
 
   {
@@ -569,14 +585,15 @@ async function main(): Promise<void> {
 
     if (failed > 0) {
       console.log('\nSome tests FAILED.');
-      process.exit(1);
+      process.exitCode = 1;
     } else {
       console.log('\nAll tests PASSED.');
-      process.exit(0);
+      process.exitCode = 0;
     }
   } finally {
     runtime.cleanup();
   }
+  process.exit(failed > 0 ? 1 : 0);
 }
 
 main().catch((err) => {

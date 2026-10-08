@@ -40,7 +40,7 @@ test('harness changes execute harness regressions rather than only policy checks
   ]) {
     const gate = selectedGate(path, 'shakedown-harness');
     assert.ok(gate, path);
-    assert.deepEqual([gate.executable, ...gate.args], ['npm', 'run', 'test:shakedown']);
+    assert.deepEqual([gate.executable, ...gate.args], ['npm', 'run', 'test:shakedown-harness']);
   }
 });
 

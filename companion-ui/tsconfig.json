@@ -17,11 +17,13 @@
   },
   "include": [
     "e2e/**/*.ts",
+    "runtime-e2e/**/*.ts",
     "scripts/**/*.ts",
     "src/**/*.ts",
     "src/**/*.tsx",
     "vite/**/*.ts",
     "playwright.config.ts",
+    "playwright.runtime.config.ts",
     "vite.config.ts",
     "vitest.config.ts"
   ],

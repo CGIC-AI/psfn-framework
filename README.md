@@ -150,6 +150,7 @@ and infrastructure inventory remain external to this public repository.
 
 - [`docs/setup.md`](./docs/setup.md), [`docs/operations.md`](./docs/operations.md)
 - [`docs/process/shakedown.md`](./docs/process/shakedown.md) — cumulative release recertification
+- [`docs/testing.md`](./docs/testing.md) — test boundaries, runtime evidence, and audit decisions
 - [`docs/development-status.md`](./docs/development-status.md) — where the project stands
 - [`AGENTS.md`](./AGENTS.md) — the operating contract for coding agents
 
@@ -202,7 +203,9 @@ npm run verify:settings-contract  # settings/config changes
 npm run verify:repository-hygiene # repo-surface changes
 npm run verify:backup-restore     # persistence safety
 npm run smoke:chat                # chat cockpit smoke
-npm run e2e                       # integration tests
+npm run smoke:docker              # disposable real-process runtime journeys
+npm run verify:companion-browser  # browser behavior and service-worker lifecycle
+npm run e2e                       # scripted in-process scenarios
 npm run verify:satellite-hub      # bounded Hub TypeScript + Python checks
 npm run verify:evals              # bounded offline eval checks
 mise run hub:check                # pinned-tool equivalent via mise

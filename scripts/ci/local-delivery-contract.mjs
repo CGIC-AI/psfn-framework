@@ -329,7 +329,7 @@ export function buildGatePlan({
     }));
   }
   if (canary || matches(/^shakedown\/harness\//)) {
-    plan.push(command('shakedown-harness', 'npm', ['run', 'test:shakedown'], {
+    plan.push(command('shakedown-harness', 'npm', ['run', 'test:shakedown-harness'], {
       phase: GATE_PHASE.HEAVY,
       contentInputs: {
         include: [...ROOT_TEST_INPUTS.include, /^shakedown\/harness\//],

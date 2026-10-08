@@ -74,6 +74,13 @@ transcript restoration. Those product capabilities are tracked as
 authentication exercises one owner; it does not certify multiple OAuth accounts
 or an external identity provider's session revocation.
 
+Approval effects are exercised through the dedicated gateway operator endpoint,
+`/v1/operator/confirmations/resolve`, with an explicit companion. Ordinary chat
+credentials must be rejected. The fleet Garden resolver currently omits the
+gateway-owned queue client in operator startup and returns `not_found` for
+those entries; its separately scoped wiring repair is `psfn-framework-wi8z6`.
+The passing operator-endpoint journey does not certify Garden's approve button.
+
 ## Evidence and failure diagnosis
 
 Docker journeys connect public streaming output to its durable TurnRecord and
@@ -87,6 +94,10 @@ explicit metadata fields and content hashes rather than raw prompts, replies,
 tool arguments, or credentials. Browser failure traces and screenshots stay in
 ignored, worktree-local `companion-ui/test-results/`; they may contain rendered
 fixture content and should be inspected before sharing.
+
+The adjacent `connection.json` is a private reconnect descriptor containing the
+disposable Hub credential. It is not part of the sanitized evidence JSON and
+must stay local; share selected evidence, not the whole artifact directory.
 
 The runtime performance event stream is bounded, process-local telemetry. A
 correlated test artifact is useful diagnostic proof, but it is not a durable,

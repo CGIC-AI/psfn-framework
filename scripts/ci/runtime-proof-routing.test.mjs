@@ -16,6 +16,8 @@ test('runtime changes require a real-process journey, including agent and schedu
     'src/persistence/sessions/store.ts',
     'companion-ui/src/App.tsx',
     'companion-ui/runtime-e2e/conversation.spec.ts',
+    'companion-ui/runtime-e2e/conversation.test.ts',
+    'companion-ui/e2e/conversation.test.ts',
     'companion-ui/playwright.runtime.config.ts',
     'companion-ui/vite.config.ts',
     'companion-ui/package-lock.json',

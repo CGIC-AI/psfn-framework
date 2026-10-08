@@ -298,7 +298,8 @@ describe('gateway-only fleet auth HTTP routes', () => {
     );
   });
 
-  it('sets only an opaque secure HttpOnly __Host- cookie on an exact TLS callback', async () => {
+  it.each(['', '&iss=https%3A%2F%2Fdiscord.com'])(
+    'sets only an opaque secure HttpOnly __Host- cookie on an exact TLS callback (%s)', async (issuerQuery) => {
     const { handler, broker } = routes();
     const res = response();
     const tlsSocket = new TLSSocket(new Socket());
@@ -308,7 +309,7 @@ describe('gateway-only fleet auth HTTP routes', () => {
         cookie: `__Host-psfn_preauth=${'p'.repeat(43)}`,
       }, tlsSocket),
       res,
-      new URL('https://fleet.example.test/auth/discord/callback?state=opaque&code=code'),
+      new URL(`https://fleet.example.test/auth/discord/callback?state=opaque&code=code${issuerQuery}`),
     );
     expect(res.statusCode).toBe(303);
     expect(res.headers.get('location')).toBe('/fleet');
@@ -326,7 +327,8 @@ describe('gateway-only fleet auth HTTP routes', () => {
     tlsSocket.destroy();
   });
 
-  it('accepts only the exact configured trusted-proxy callback provenance', async () => {
+  it.each(['', '&iss=https%3A%2F%2Fdiscord.com'])(
+    'accepts only the exact configured trusted-proxy callback provenance (%s)', async (issuerQuery) => {
     const { handler, broker } = routes({}, { trustProxy: true });
     const exactProxyHeaders = {
       host: 'fleet.example.test',
@@ -340,7 +342,7 @@ describe('gateway-only fleet auth HTTP routes', () => {
     await handler.handle(
       request('GET', exactProxyHeaders),
       accepted,
-      new URL('https://fleet.example.test/auth/discord/callback?state=opaque&code=code'),
+      new URL(`https://fleet.example.test/auth/discord/callback?state=opaque&code=code${issuerQuery}`),
     );
     expect(accepted.statusCode).toBe(303);
     expect(broker.completeOAuthCallback).toHaveBeenLastCalledWith(expect.objectContaining({
@@ -359,6 +361,41 @@ describe('gateway-only fleet auth HTTP routes', () => {
     );
     expect(spoofed.statusCode).toBe(400);
     expect(spoofed.headers.get('set-cookie')).toBe(
+      '__Host-psfn_preauth=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax',
+    );
+  });
+
+  it.each([
+    'iss=',
+    'iss=https%3A%2F%2Fother.example.test',
+    'iss=https%3A%2F%2Fdiscord.com%2F',
+    'iss=http%3A%2F%2Fdiscord.com',
+    'iss=https%3A%2F%2Fdiscord.com.evil.example',
+    'iss=https%3A%2F%2Fdiscord.com%40evil.example',
+    'iss=https%3A%2F%2Fdiscord.com&iss=https%3A%2F%2Fdiscord.com',
+    'iss=https%3A%2F%2Fdiscord.com&iss=',
+    'iss=https%3A%2F%2Fdiscord.com&unexpected=value',
+    'iss=https%3A%2F%2Fdiscord.com&code=duplicate',
+    'iss=https%3A%2F%2Fdiscord.com&state=duplicate',
+  ])('rejects malformed callback parameters before calling the broker (%s)', async (query) => {
+    const { handler, broker } = routes({}, { trustProxy: true });
+    const res = response();
+    await handler.handle(
+      request('GET', {
+        host: 'fleet.example.test',
+        'x-forwarded-host': 'fleet.example.test',
+        'x-forwarded-proto': 'https',
+        'x-forwarded-for': '192.0.2.1',
+        cookie: `__Host-psfn_preauth=${'p'.repeat(43)}`,
+      }),
+      res,
+      new URL(`https://fleet.example.test/auth/discord/callback?state=opaque&code=code&${query}`),
+    );
+
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error.type).toBe('invalid_oauth_callback');
+    expect(broker.completeOAuthCallback).not.toHaveBeenCalled();
+    expect(res.headers.get('set-cookie')).toBe(
       '__Host-psfn_preauth=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax',
     );
   });
@@ -435,7 +472,8 @@ describe('gateway-only fleet auth HTTP routes', () => {
     );
   });
 
-  it('returns a purpose-bound lifecycle proof without creating or exposing a session token', async () => {
+  it.each(['', '&iss=https%3A%2F%2Fdiscord.com'])(
+    'returns a purpose-bound lifecycle proof without creating or exposing a session token (%s)', async (issuerQuery) => {
     const callbackTransactionId = '00000000-0000-4000-8000-000000000302';
     const { handler } = routes({
       completeOAuthCallback: vi.fn(async () => ({
@@ -460,7 +498,7 @@ describe('gateway-only fleet auth HTTP routes', () => {
         cookie: `__Host-psfn_preauth=${'p'.repeat(43)}; __Host-psfn_session=${'a'.repeat(43)}`,
       }, tlsSocket),
       res,
-      new URL('https://fleet.example.test/auth/discord/callback?state=opaque&code=code'),
+      new URL(`https://fleet.example.test/auth/discord/callback?state=opaque&code=code${issuerQuery}`),
     );
 
     expect(res.statusCode).toBe(200);

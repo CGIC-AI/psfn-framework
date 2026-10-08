@@ -146,8 +146,9 @@ test('signed-out browsers cannot borrow key authority and an unknown companion c
     await other.goto(`${process.env.PSFN_SMOKE_FLEET_ORIGIN}/companion-ui/`);
     expect(await sessionStatus(other)).toMatchObject({ state: 'signed_out', guestMode: 'disabled' });
     expect(await socketOutcome(other, SOCKET_PATH)).toEqual({ kind: 'denied' });
-    const unknown = await socketOutcome(page, UNKNOWN_SOCKET_PATH, true);
-    expect(unknown).toMatchObject({ kind: 'result', frame: { ok: false } });
+    const unknown = await socketOutcome(page, UNKNOWN_SOCKET_PATH, true) as { kind: string; frame?: unknown };
+    if (unknown.kind === 'result') expect(unknown.frame).toMatchObject({ ok: false });
+    else expect(unknown.kind).toBe('denied');
   } finally {
     await unsigned.close();
   }

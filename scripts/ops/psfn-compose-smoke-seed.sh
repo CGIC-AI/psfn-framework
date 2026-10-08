@@ -152,6 +152,16 @@ node -e '
 ' "$AUTOMATA_POLICY_OWNER" "${SYSTEM_DATA_DIR}/models.json"
 echo "[smoke-seed] pointed the automata reviewer at the smoke stub: $AUTOMATA_POLICY_OWNER"
 
+# Exercise the production post-turn extraction lane after every disposable
+# scenario turn. No testingHarness flag is used and no runtime gate is bypassed.
+node -e '
+  const fs = require("node:fs");
+  const file = process.argv[1];
+  const settings = JSON.parse(fs.readFileSync(file, "utf8"));
+  settings.extractionInterval = 1;
+  fs.writeFileSync(file, `${JSON.stringify(settings, null, 2)}\n`);
+' "${SYSTEM_DATA_DIR}/settings.json"
+
 # ── Fleet manifest ──
 # Every PSFN deployment is a fleet of one or more companions and the gateway
 # fails closed without companions.json, so write a one-entry fleet naming THIS

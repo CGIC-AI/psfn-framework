@@ -36,6 +36,7 @@
 //   PSFN_SMOKE_PROVIDER_STUB_REPLY    the deterministic assistant reply text
 
 import { createServer } from 'node:http';
+import { smokeScenario } from './psfn-compose-smoke-scenarios.mjs';
 import process from 'node:process';
 
 const MAX_PORT = 65_535;
@@ -245,6 +246,8 @@ function modelCatalog() {
   };
 }
 
+const scenarioEvidence = { failure: 0, hold: 0, cancelled: 0, extraction: 0, recall: 0, memorize: 0 };
+
 const server = createServer((request, response) => {
   const path = (request.url ?? '/').split('?', 1)[0];
 
@@ -256,6 +259,11 @@ const server = createServer((request, response) => {
   if (!isAuthorized(request)) {
     request.resume();
     sendError(response, HTTP_UNAUTHORIZED, 'missing or invalid bearer credential');
+    return;
+  }
+  if (request.method === 'GET' && path === '/__smoke/evidence') {
+    request.resume();
+    sendJson(response, HTTP_OK, scenarioEvidence);
     return;
   }
   if (request.method === 'GET' && path === '/v1/models') {
@@ -272,7 +280,21 @@ const server = createServer((request, response) => {
   readJsonBody(request)
     .then((body) => {
       const model = typeof body.model === 'string' ? body.model : 'smoke-stub-chat';
-      const content = resolveResponseContent(body);
+      const scenario = smokeScenario(body);
+      if (scenario) scenarioEvidence[scenario.kind] += 1;
+      if (scenario?.status) {
+        sendError(response, scenario.status, 'Synthetic provider failure');
+        return;
+      }
+      const content = scenario?.content ?? resolveResponseContent(body);
+      if (scenario?.delayMs) {
+        const timer = setTimeout(() => sendStream(response, model, content), scenario.delayMs);
+        response.once('close', () => {
+          clearTimeout(timer);
+          if (!response.writableEnded) scenarioEvidence.cancelled += 1;
+        });
+        return;
+      }
       if (body.stream === true) sendStream(response, model, content);
       else sendCompletion(response, model, content);
     })

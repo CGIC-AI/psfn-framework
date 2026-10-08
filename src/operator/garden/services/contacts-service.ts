@@ -507,11 +507,6 @@ export class AdminContactsDataService implements AdminContactsService {
       return { ok: false, message: `Invalid relationship type: ${payload.relationshipType}` };
     }
 
-    if (payload.channelPrivacy?.some(cp => cp.channel === EXTERNAL_MEMORY_CHANNEL
-      || (cp.channelId && externalMemoryPolicyChannelId(cp.channelId) === EXTERNAL_MEMORY_CHANNEL))) {
-      return { ok: false, message: 'Hermes privacy is owned by api:hermes in Channels; edit its channel settings.' };
-    }
-
     const timezonePayload = normalizeContactTimezonePayload(payload);
     if (!timezonePayload.ok) {
       return { ok: false, message: timezonePayload.message };

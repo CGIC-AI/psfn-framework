@@ -144,6 +144,10 @@ test('signed-out browsers cannot borrow key authority and an unknown companion c
   try {
     const other = await unsigned.newPage();
     await other.goto(`${process.env.PSFN_SMOKE_FLEET_ORIGIN}/companion-ui/`);
+    await expect(other.getByLabel('Administrator token')).toBeVisible();
+    // Probe from the public status document so the login page's connect-src
+    // policy cannot substitute for actual server-side WebSocket rejection.
+    await other.goto(`${process.env.PSFN_SMOKE_FLEET_ORIGIN}/v1/fleet-auth/session/status`);
     expect(await sessionStatus(other)).toMatchObject({ state: 'signed_out', guestMode: 'disabled' });
     expect(await socketOutcome(other, SOCKET_PATH)).toEqual({ kind: 'denied' });
     const unknown = await socketOutcome(page, UNKNOWN_SOCKET_PATH, true) as { kind: string; frame?: unknown };

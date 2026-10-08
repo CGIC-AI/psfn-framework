@@ -1,3 +1,4 @@
+import { externalMemoryPolicyChannelId } from '../../shared/routing/external-memory-channel.js';
 // ── Trust Policy Engine ──
 // Canonical precedence matrix for memory access decisions.
 // Consumed by: MemoryRetriever, UserContinuityStore, persona composition, broadcast safety.
@@ -416,6 +417,7 @@ export function resolveChannelEnvelopeClassification(
     trustPolicy: TrustPolicyConfig;
   },
 ): ChannelEnvelopeClassification {
+  channelId = externalMemoryPolicyChannelId(channelId);
   const { label, trustPolicy } = inputs;
   const contactTracking = label?.contactTracking ?? DEFAULT_CONTACT_TRACKING_MODE;
   const needsReview = label?.needsReview === true;
@@ -518,7 +520,7 @@ export function classifyChannelEnvelope(
   meta?: ChannelMeta,
 ): ChannelEnvelopeClassification {
   return resolveChannelEnvelopeClassification(channelId, meta, {
-    label: getRuntimeChannelEnvelopeLabels()[channelId],
+    label: getRuntimeChannelEnvelopeLabels()[externalMemoryPolicyChannelId(channelId)],
     trustPolicy: getRuntimeTrustPolicy(),
   });
 }

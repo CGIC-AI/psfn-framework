@@ -42,8 +42,11 @@ class Outbox:
         finally:
             db.close()
 
-    def enqueue(self, session_id: str, user: str, assistant: str, *, source_key: str | None = None) -> str:
+    def enqueue(self, session_id: str, user: str, assistant: str, *, source_key: str | None = None,
+                source: dict | None = None) -> str:
         content = {"sessionId": session_id, "user": user, "assistant": assistant}
+        if source is not None:
+            content["source"] = source
         digest = hashlib.sha256(_encode(content).encode()).hexdigest()
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")

@@ -59,6 +59,15 @@ afterEach(() => {
 });
 
 describe('classifyChannelEnvelope precedence', () => {
+  it('applies one Hermes channel policy to every external session, including adapter DM hints', () => {
+    setRuntimeChannelEnvelopeLabels({ 'api:hermes': { privacy: 'invite_only', contactTracking: 'off' } });
+    for (const id of ['a'.repeat(64), 'b'.repeat(64)]) {
+      expect(classifyChannelEnvelope(`api:hermes:${id}`, { isDirectMessage: true }))
+        .toMatchObject({ privacy: 'invite_only', contactTracking: 'off', source: 'channel_label' });
+    }
+    expect(classifyChannelEnvelope('api:other-session', { isDirectMessage: true }).privacy).toBe('private');
+  });
+
   it('resolves the channel-owned label above operator overrides and derived defaults', () => {
     setRuntimeTrustPolicy(policyWithOverrides({
       exact: { 'discord:friends-room': { privacy: 'public', broadcast: false } },

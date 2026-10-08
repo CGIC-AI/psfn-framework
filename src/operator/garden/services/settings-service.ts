@@ -1,3 +1,4 @@
+import { EXTERNAL_MEMORY_CHANNEL, externalMemoryPolicyChannelId } from '../../../shared/routing/external-memory-channel.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import {
@@ -1325,9 +1326,16 @@ export class AdminSettingsDataService implements AdminSettingsService {
     const trustPolicy = this.deps.configStore.loadTrustPolicy();
 
     const channelIds = new Set<string>([
-      ...Object.keys(labels),
-      ...Object.keys(trustPolicy.channelClassification.visibilityOverrides.exact),
+      ...Object.keys(labels).map(externalMemoryPolicyChannelId),
+      ...Object.keys(trustPolicy.channelClassification.visibilityOverrides.exact).map(externalMemoryPolicyChannelId),
     ]);
+
+    const api = isRecord(scopedRoot.api) ? scopedRoot.api : {};
+    const external = isRecord(api.externalMemory) ? api.externalMemory : {};
+    if (Array.isArray(external.bindings) && external.bindings.some(binding => isRecord(binding)
+      && (!this.deps.config.companionId || binding.companionId === this.deps.config.companionId))) {
+      channelIds.add(EXTERNAL_MEMORY_CHANNEL);
+    }
 
     const channels: AdminChannelEnvelopeRow[] = [...channelIds]
       .sort((a, b) => a.localeCompare(b))
@@ -1377,7 +1385,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
    * generic path cannot change any non-public channel to public/broadcast.
    */
   async saveChannelEnvelopeLabel(channelIdRaw: string, label: unknown): Promise<ConfigUpdateResult> {
-    const channelId = channelIdRaw.trim();
+    const channelId = externalMemoryPolicyChannelId(channelIdRaw.trim());
     if (!channelId) {
       return { ok: false, message: 'channelId must be a non-empty string' };
     }
@@ -1587,7 +1595,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
    * state an invite-only → public demotion applies to.
    */
   getChannelDemotionNotice(channelIdRaw: string): AdminChannelDemotionNotice {
-    const channelId = channelIdRaw.trim();
+    const channelId = externalMemoryPolicyChannelId(channelIdRaw.trim());
     const base = {
       channelId,
       from: 'invite_only' as const,

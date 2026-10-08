@@ -1,3 +1,4 @@
+import { resetRuntimeChannelEnvelopeLabels, setRuntimeChannelEnvelopeLabels } from '../../../system/trust/runtime-channel-labels.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fromAny } from '@total-typescript/shoehorn';
 import { existsSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
@@ -13,13 +14,14 @@ import { resolveSessionEntryTurnContext } from '../../../core/session/turn-prove
 import { SessionStore } from '../../../persistence/sessions/store.js';
 import { ExternalMemoryService } from './service.js';
 import { ExternalMemoryIntakeStore } from './intake-store.js';
+import { getStableLinkedContactForSession } from '../../../operator/garden/services/contact-session-linker.js';
 
 const binding = {
   companionId: '11111111-1111-4111-8111-111111111111',
   bodyId: 'workstation', contactId: 'contact-alex',
 };
 const directories: string[] = [];
-afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
+afterEach(() => { resetRuntimeChannelEnvelopeLabels(); for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
 
 function fixture() {
   const directory = mkdtempSync(join(tmpdir(), 'psfn-external-memory-'));
@@ -45,11 +47,16 @@ function fixture() {
   const write = vi.fn().mockResolvedValue({ action: 'created', memory: { id: 'memory-one' } });
   const getById = vi.fn(async (id: string) => id === binding.contactId
     ? { id, displayName: 'Alex', trustLevel: 'primary' } : undefined);
+  const linkChannelIdentity = vi.fn().mockResolvedValue('already_linked');
+  const refreshChannelPolicy = vi.fn();
+  const recordChannelActivity = vi.fn().mockResolvedValue(undefined);
+  const getByChannelIdentity = vi.fn(async (_channel: string, userId: string) =>
+    userId === '12345' ? getById(binding.contactId) : undefined);
   const query = vi.fn().mockResolvedValue({ memories: [], total: 0 });
   const retrieve = vi.fn().mockResolvedValue('Recalled context');
   const quarantine = { isSessionRetiredOrQuarantined: vi.fn(() => false) };
   const options = { companionId: binding.companionId, companionName: 'Lyra', intakeStore: store,
-    sessions, contacts: { getById }, memoryStore: { queryAuthorizedMemorySubjects: query },
+    refreshChannelPolicy, sessions, contacts: { getById, linkChannelIdentity, recordChannelActivity }, memoryStore: { queryAuthorizedMemorySubjects: query },
     memoryProvider: { retrieve }, writer: { write }, screening: { screen }, quarantine,
     actions, retryDelayMs: 100, completedReceiptRetentionMs: 60_000, searchLimit: 5, goals: () => 'Finish the garden project', extract };
   const makeService = () => new ExternalMemoryService(fromAny(options));
@@ -61,10 +68,124 @@ function fixture() {
   });
   const run = (index = 0) => handler!(queued[index]!);
   return { service, makeService, input, run, sessions, store, storeDirectory, queued, screen, extract,
-    write, getById, query, retrieve, quarantine, actions, setPersistence: (value: boolean) => { persisted = value; } };
+    write, getById, getByChannelIdentity, linkChannelIdentity, refreshChannelPolicy, recordChannelActivity, query, retrieve, quarantine, actions, setPersistence: (value: boolean) => { persisted = value; } };
 }
 
 describe('external companion memory service', () => {
+  it('uses the authenticated Hermes contact for Telegram sessions without a second transport identity', async () => {
+    const h = fixture();
+    h.getByChannelIdentity.mockResolvedValue(undefined);
+    await expect(h.service.execute(fromAny({ binding, request: {
+      operation: 'context', sessionId: 'telegram-session', query: 'shared context',
+      source: { platform: 'telegram', userId: '12345', chatId: '12345', chatType: 'dm' },
+    } }))).resolves.toHaveProperty('context');
+    expect(h.retrieve).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'primary',
+      expect.anything(), binding.contactId, undefined, undefined, undefined, undefined, undefined,
+      undefined, expect.anything());
+  });
+
+  it('acknowledges a new exchange while an earlier exchange is still extracting', async () => {
+    const h = fixture();
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    h.extract.mockImplementationOnce(async () => { started.resolve(); await release.promise; });
+    await h.service.execute(h.input());
+    const processing = h.run();
+    await started.promise;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await expect(Promise.race([
+        h.service.execute(h.input('next-event')),
+        new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('ingestion waited for extraction')), 500); }),
+      ])).resolves.toMatchObject({ receipt: { status: 'accepted' } });
+      expect(h.sessions.getRecent(externalMemorySessionId(binding, 'session-one'), 10)).toHaveLength(4);
+    } finally {
+      clearTimeout(timeout);
+      release.resolve();
+      await processing;
+    }
+  });
+
+  it('retains Telegram provenance inside the same authenticated Hermes channel', async () => {
+    const h = fixture();
+    const source = { platform: 'telegram', userId: '12345', chatId: '12345', chatType: 'dm' };
+    const input = h.input();
+    const response = await h.service.execute(fromAny({ ...input, request: { ...input.request, source } }));
+    await expect(h.service.execute(fromAny({ ...input, request: { ...input.request,
+      source: { chatType: 'dm', chatId: '12345', userId: '12345', platform: 'telegram' },
+    } }))).resolves.toEqual(response);
+    await expect(h.service.execute(input)).rejects.toThrow('different content');
+    const channelId = externalMemorySessionId(binding, input.request.sessionId);
+    expect(h.getByChannelIdentity).not.toHaveBeenCalled();
+    expect(h.recordChannelActivity).toHaveBeenCalledWith(binding.contactId, 'api:hermes', channelId, 'private');
+    for (const entry of h.sessions.getRecent(channelId, 10)) {
+      expect(JSON.parse(entry.metadata!)).toMatchObject({ externalOrigin: { source, contactId: binding.contactId },
+        conversationOrigin: { kind: 'direct_message' } });
+      expect(entry.channelVisibility).toBe('private');
+    }
+    // Recovery rechecks the canonical contact, not a second transport account.
+    h.getById.mockResolvedValue(undefined);
+    await h.run();
+    expect(h.extract).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed optional transport metadata without treating it as contact authority', async () => {
+    const h = fixture();
+    const source = { platform: 'telegram', userId: '12345', chatId: '12345', chatType: 'dm' };
+    for (const patch of [{ chatType: 'group' }, { userId: '' }]) {
+      await expect(h.service.execute(fromAny({ binding, request: {
+        operation: 'context', sessionId: 'session', query: 'preferences', source: { ...source, ...patch },
+      } }))).rejects.toThrow();
+    }
+    expect(h.retrieve).not.toHaveBeenCalled();
+    expect(h.sessions.listChannels()).toEqual([]);
+  });
+
+  it('inherits changed channel privacy on the next session without restarting or changing contact trust', async () => {
+    const h = fixture();
+    await h.service.execute(h.input());
+    h.refreshChannelPolicy.mockImplementation(() => setRuntimeChannelEnvelopeLabels({
+      'api:hermes': { privacy: 'invite_only' },
+    }));
+    await h.service.execute(h.input('second-event', 'second-session'));
+    const channelId = externalMemorySessionId(binding, 'second-session');
+    expect(h.sessions.getRecent(channelId, 10).map(entry => entry.channelVisibility)).toEqual(['invite_only', 'invite_only']);
+    expect(h.screen.mock.calls.at(-1)?.[1]).toMatchObject({ channelPrivacy: 'invite_only', canonicalContactId: binding.contactId });
+    expect(h.linkChannelIdentity).toHaveBeenLastCalledWith(binding.contactId, 'api:hermes', binding.bodyId,
+      { privacyLevel: 'invite_only' });
+    await h.service.execute({ binding, request: { operation: 'context', sessionId: 'second-session', query: 'preferences' } });
+    expect(h.retrieve.mock.calls.at(-1)?.at(-1)).toMatchObject({
+      contact: { contactId: binding.contactId }, envelope: { channelPrivacy: 'invite_only' },
+    });
+  });
+
+  it('links accepted conversations to the authenticated contact for the contact card and subject session view', async () => {
+    const h = fixture();
+    const input = h.input();
+    const channelId = externalMemorySessionId(binding, input.request.sessionId);
+    await h.service.execute(input);
+    expect(h.recordChannelActivity).toHaveBeenCalledWith(binding.contactId, 'api:hermes', channelId, 'private');
+    const [contactId, channel, recordedChannelId, privacyLevel] = h.recordChannelActivity.mock.calls[0]!;
+    const contact = fromAny({ id: contactId, displayName: 'Alex', conversationChannels: [
+      { channel, channelId: recordedChannelId, privacyLevel },
+    ] });
+    expect(getStableLinkedContactForSession({ channelId, contacts: [contact], sessionStore: h.sessions })).toBe(contact);
+  });
+
+  it('withholds acknowledgment on contact-link failure and recovers without duplicating the archived pair', async () => {
+    const h = fixture();
+    const input = h.input();
+    h.recordChannelActivity.mockRejectedValueOnce(new Error('contact store unavailable'));
+    await expect(h.service.execute(input)).rejects.toThrow('contact store unavailable');
+    expect(h.queued).toHaveLength(0);
+    const restarted = h.makeService();
+    await restarted.recover();
+    await h.run();
+    expect(h.recordChannelActivity).toHaveBeenCalledTimes(2);
+    await expect(restarted.execute(input)).resolves.toMatchObject({ receipt: { status: 'accepted' } });
+    expect(h.sessions.getRecent(externalMemorySessionId(binding, input.request.sessionId), 10)).toHaveLength(2);
+  });
+
   it('acknowledges durable top-level evidence and queues normal memory processing without a turn record', async () => {
     const h = fixture();
     const input = h.input();
@@ -168,6 +289,7 @@ describe('external companion memory service', () => {
     await expect(h.service.execute({ binding, request: { operation: 'remember', sessionId: 'session', eventId: 'bad-note', text: 'Rejected source' } })).rejects.toThrow('withheld by intake policy');
     expect(h.queued).toHaveLength(0);
     expect(h.write).not.toHaveBeenCalled();
+    expect(h.recordChannelActivity).not.toHaveBeenCalled();
   });
 
   it('isolates session and body identifiers including hostile namespace/path characters', async () => {
@@ -193,6 +315,20 @@ describe('external companion memory service', () => {
     h.quarantine.isSessionRetiredOrQuarantined.mockReturnValue(true);
     await expect(h.service.execute(input)).rejects.toThrow('retired or quarantined');
     expect(h.screen).not.toHaveBeenCalled();
+    expect(h.recordChannelActivity).not.toHaveBeenCalled();
+  });
+
+  it('enforces the logical channel privacy on memory search instead of forcing every session private', async () => {
+    const h = fixture();
+    h.query.mockResolvedValue(fromAny({ memories: [{ id: 'memory-private', type: 'semantic',
+      text: 'A private preference', sensitivity: 'personal', contactId: binding.contactId, tags: [],
+    }], total: 1 }));
+    const request = { operation: 'search' as const, sessionId: 'new-session', query: 'preference' };
+    await expect(h.service.execute({ binding, request })).resolves.toMatchObject({ memories: [{ id: 'memory-private' }] });
+    setRuntimeChannelEnvelopeLabels({ 'api:hermes': { privacy: 'public', broadcast: true } });
+    await expect(h.service.execute({ binding, request })).resolves.toEqual({ memories: [] });
+    await expect(h.service.execute({ binding, request: { operation: 'context', sessionId: 'new-session', query: 'preference' } }))
+      .resolves.toEqual({ context: 'Recalled context' });
   });
 
   it('uses subject-authorized search and exact known-contact recall context', async () => {
@@ -204,6 +340,7 @@ describe('external companion memory service', () => {
     }));
     await expect(h.service.execute({ binding, request: { operation: 'get', sessionId: 'session', id: 'unknown' } })).resolves.toEqual({ memory: null });
     await expect(h.service.execute({ binding, request: { operation: 'context', sessionId: 'session', query: 'garden' } })).resolves.toEqual({ context: 'Finish the garden project\n\nRecalled context' });
+    expect(h.recordChannelActivity).not.toHaveBeenCalled();
     expect(h.retrieve).toHaveBeenCalledWith(
       'garden', externalMemorySessionId(binding, 'session'), 'primary', { isDirectMessage: true }, binding.contactId,
       undefined, undefined, undefined, undefined, undefined, undefined,

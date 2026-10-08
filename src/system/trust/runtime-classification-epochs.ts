@@ -1,3 +1,4 @@
+import { externalMemoryPolicyChannelId } from '../../shared/routing/external-memory-channel.js';
 // ── Runtime channel classification epochs (jp36.6.4) ──
 // Process-wide holder for the channels.json `contextEnvelope.classificationEpochs`
 // records, mirroring the runtime-channel-labels.ts pattern. Startup hydration
@@ -58,7 +59,7 @@ export function deriveChannelClassificationEpoch(
   channelId: string,
   asOf?: Date,
 ): number | undefined {
-  const id = channelId.trim();
+  const id = externalMemoryPolicyChannelId(channelId.trim());
   if (!id) return undefined;
 
   let boundaryMs: number | undefined;

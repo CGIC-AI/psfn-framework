@@ -7,21 +7,36 @@ the companion's core memory service; it does not run a PSFN conversation turn.
 PSFN screens the exchange, archives the accepted evidence durably, and processes
 its normal memory lifecycle.
 
-Compatibility is pinned to Hermes commit
-`5bd439d3ed4ae5f099857813383389dcd0ab4369` (Python 3.11–3.13). The adapter uses
-Hermes's existing MCP registry and adds no runtime dependencies. This is an
+The adapter supports Python 3.11–3.14, uses Hermes's existing MCP registry,
+and adds no runtime dependencies. This is an
 internal Hermes interface, so check the included tests before upgrading Hermes.
 
 ## Installation
 
-Install this package into the Python environment of that exact Hermes checkout:
+For Hermes with managed Python environments, install the native profile plugin.
+Choose a reviewed, full PSFN commit SHA containing this integration:
+
+```sh
+hermes --profile example plugins install \
+  CGIC-AI/psfn-framework/integrations/hermes-memory/psfn_memory \
+  --ref "$PSFN_COMMIT" --enable
+```
+
+The manifest names the plugin `psfn`, matching `memory.provider`. It lives under
+the selected profile's `plugins/psfn` directory and survives Python environment
+replacement. Restart the profile's CLI/Desktop agent after installation so its
+memory manager loads the provider. A configured MCP server alone enables tools;
+automatic recall and turn ingestion also require the lifecycle provider.
+
+For older Hermes installations with a fixed virtual environment (tested against
+Hermes `5bd439d3ed4ae5f099857813383389dcd0ab4369`), install the Python package:
 
 ```sh
 # From integrations/hermes-memory, with the Hermes environment active:
 python -m pip install .
 ```
 
-The package registers the `psfn` entry point in `hermes_agent.memory_providers`;
+The Python package registers the `psfn` entry point in `hermes_agent.memory_providers`;
 no files need to be copied into Hermes's source tree. The build backend is
 exactly pinned in `pyproject.toml`. Select a dedicated Hermes profile for each
 companion/body binding. Keep that companion's persona in its existing
@@ -108,6 +123,20 @@ use; `subagent`, `cron`, `tool`, and `flush` are rejected. The network timeout
 belongs to the MCP connection; keep recall calls within Hermes's outer eight
 second prefetch limit.
 
+Hermes CLI, Desktop, TUI, and its Telegram gateway use one logical PSFN channel:
+`api:hermes`. The profile credential binds that connection to its configured
+companion and existing contact. Add `telegram` to `platforms` to include its
+completed exchanges; it does not require a second Telegram contact binding.
+Optional transport metadata is retained as provenance, not contact authority.
+Select only that contact's interactive profile surfaces; a shared multi-user
+profile requires separate credentials and profiles.
+
+The Channels page lists `api:hermes` even before an explicit label exists.
+Its channel-owned privacy and disclosure settings apply to every Hermes
+session. External requests and deferred processing reload the validated channel
+policy, so label changes apply without restarting Hermes. Existing contact
+trust and relationship remain authoritative; the adapter never promotes trust.
+
 ## Delivery and scope
 
 The adapter persists completed exchanges under
@@ -125,7 +154,12 @@ digests remain locally for duplicate-callback detection.
 PSFN keeps screened processing intents in the companion's
 `state/external-memory` directory, alongside existing runtime state. A receipt is
 returned only after the canonical session journal is flushed and processing is
-durably queued. Restarts replay pending intents; model failures reschedule the
+durably queued. Accepted conversations are linked to the credential's configured
+contact for subject-scoped session views. The contact card shows one Hermes
+channel with a session count and a link to the channel's actual privacy controls.
+The channel identity uses the configured body ID. Hashed session IDs remain in
+history for provenance, isolation, and deduplication; they are not separate
+privacy controls or contact-card rows. Restarts replay pending intents; model failures reschedule the
 same captured evidence. Successful processing clears the intent's duplicate chat
 text while retaining its identity and digest. Imported conversation entries carry
 the external body/session/event provenance and remain eligible for ordinary
@@ -175,11 +209,11 @@ reuse. Automatic chat ingestion already supplies and persists its event IDs.
 
 ## Tests
 
-Use the pinned Hermes source and its Python environment. Tests do not contact
+Use the target Hermes source and its Python environment. Tests do not contact
 PSFN or a model provider, and use temporary Hermes homes and queues.
 
 ```sh
-# HERMES_SOURCE is an immutable checkout of the commit above.
+# HERMES_SOURCE is the immutable source for the Hermes runtime being verified.
 PYTHONPATH="$PWD:$HERMES_SOURCE" python -m unittest discover -s tests -v
 ```
 

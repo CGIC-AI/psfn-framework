@@ -79,6 +79,17 @@ function authenticatedContactMutationContext(input: {
 }
 
 describe('AdminContactsDataService', () => {
+  it('refuses per-session Hermes privacy edits that cannot control the channel policy', async () => {
+    const { contactStore, service } = await createServiceHarness();
+    const contact = await contactStore.upsert({ displayName: 'Alex' });
+    const channelId = `api:hermes:${'a'.repeat(64)}`;
+    await contactStore.recordChannelActivity(contact.id, 'hermes', channelId, 'private');
+    await expect(service.updateContact(contact.id, JSON.stringify({ channelPrivacy: [{
+      channel: 'hermes', channelId, privacyLevel: 'public',
+    }] }))).resolves.toMatchObject({ ok: false, message: expect.stringContaining('api:hermes in Channels') });
+    expect((await contactStore.getById(contact.id))?.conversationChannels?.[0].privacyLevel).toBe('private');
+  });
+
   it('persists protected sole-owner mutations under the canonical operator actor with SSO metadata', async () => {
     const { contactStore, service } = await createServiceHarness();
     const owner = await contactStore.upsert({ displayName: 'Fleet Owner' });

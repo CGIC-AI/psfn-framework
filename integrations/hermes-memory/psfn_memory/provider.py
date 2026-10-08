@@ -83,6 +83,7 @@ class PSFNMemoryProvider(MemoryProvider):
         self._active = False
         self._session_id = ""
         self._status_callback = None
+        self._source = None
 
     @property
     def name(self) -> str:
@@ -110,6 +111,13 @@ class PSFNMemoryProvider(MemoryProvider):
             if kwargs.get("platform", "cli") not in config.platforms:
                 logger.info("PSFN memory delivery disabled for nonselected platform")
                 return
+            if kwargs.get("platform") == "telegram":
+                user_id, chat_id = kwargs.get("user_id"), kwargs.get("chat_id")
+                if (not isinstance(user_id, str) or not user_id.strip()
+                        or chat_id != user_id or kwargs.get("chat_type") != "dm"):
+                    raise ValueError("PSFN Telegram memory requires a private DM with a known sender")
+                self._source = {"platform": "telegram", "userId": user_id,
+                                "chatId": chat_id, "chatType": "dm"}
             self._outbox = Outbox(kwargs["hermes_home"], body_id=config.body_id, companion_id=config.companion_id)
             context = contextvars.copy_context()
             self._worker = threading.Thread(target=context.run, args=(self._run_worker,), name="psfn-memory-delivery", daemon=True)
@@ -153,7 +161,10 @@ class PSFNMemoryProvider(MemoryProvider):
             return ""
         self._wake.set()
         try:
-            result = self._call("context", {"sessionId": self._session(session_id), "query": query})
+            args = {"sessionId": self._session(session_id), "query": query}
+            if self._source is not None:
+                args["source"] = self._source
+            result = self._call("context", args)
             if set(result) != {"context"} or not isinstance(result["context"], str):
                 raise ProtocolError("Invalid PSFN memory context response")
             return result["context"]
@@ -180,7 +191,8 @@ class PSFNMemoryProvider(MemoryProvider):
         with self._state_lock:
             if self._closing:
                 raise RuntimeError("PSFN provider is shutting down; turn was not queued")
-            self._outbox.enqueue(session, user_content, assistant_content, source_key=source_key)
+            self._outbox.enqueue(session, user_content, assistant_content,
+                                 source_key=source_key, source=self._source)
             self._wake.set()
 
     def on_session_switch(self, new_session_id: str, **kwargs) -> None:

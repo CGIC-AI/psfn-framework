@@ -112,12 +112,38 @@ class ProviderTests(unittest.TestCase):
             result.update(self.bad_receipt)
         return envelope({"receipt": result})
 
-    def start(self, *, platform="cli", session="old-session"):
+    def start(self, *, platform="cli", session="old-session", **identity):
         provider = PSFNMemoryProvider()
         provider.initialize(session, hermes_home=self.temp.name, platform=platform,
-                            warning_callback=self.warnings.append)
+                            warning_callback=self.warnings.append, **identity)
         self.providers.append(provider)
         return provider
+
+    def test_telegram_identity_is_captured_for_recall_and_survives_retry_from_cli(self):
+        Config(BODY_ID, COMPANION_ID, platforms=("cli", "telegram")).save(self.temp.name)
+        source = {"platform": "telegram", "userId": "12345", "chatId": "12345", "chatType": "dm"}
+        p = self.start(platform="telegram", user_id="12345", chat_id="12345", chat_type="dm")
+        p.prefetch("preferences")
+        self.assertEqual(self.calls[-1][1].get("source"), source)
+        self.offline = True
+        self.attempted.clear()
+        p.sync_turn("hello", "welcome")
+        self.assertTrue(self.attempted.wait(3))
+        p.shutdown()
+        original = p._outbox.pending(1)[0]
+        self.assertEqual(original.get("source"), source)
+        self.offline = False
+        restarted = self.start(platform="cli")
+        wait_for(lambda: restarted._outbox.pending_count() == 0)
+        self.assertEqual(self.calls[-1][1], original)
+
+    def test_telegram_requires_a_private_dm_with_a_known_sender(self):
+        Config(BODY_ID, COMPANION_ID, platforms=("telegram",)).save(self.temp.name)
+        for identity in ({}, {"user_id": "12345", "chat_id": "-777", "chat_type": "group"},
+                         {"user_id": "12345", "chat_id": "999", "chat_type": "dm"}):
+            with self.subTest(identity=identity), self.assertRaises(ValueError):
+                self.start(platform="telegram", **identity)
+        self.assertEqual(self.calls, [])
 
     def test_real_abc_entrypoint_and_recall(self):
         class Context:

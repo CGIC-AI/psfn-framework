@@ -64,6 +64,10 @@ describe('external memory MCP', () => {
     expect(result.isError).not.toBe(true);
     expect(result.structuredContent).toEqual({ context: 'A useful remembered preference.' });
     expect(execute).toHaveBeenCalledWith({ binding, request: { operation: 'context', sessionId: 's1', query: 'preferences' } });
+    const source = { platform: 'telegram', userId: '12345', chatId: '12345', chatType: 'dm' };
+    const telegram = await instance.callTool({ name: 'psfn_memory_context', arguments: { sessionId: 's2', query: 'preferences', source } });
+    expect(telegram.isError).not.toBe(true);
+    expect(execute).toHaveBeenLastCalledWith({ binding, request: { operation: 'context', sessionId: 's2', query: 'preferences', source } });
   });
 
   it('supports the Hermes 2025 protocol initialization and tool calls', async () => {

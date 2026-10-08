@@ -369,9 +369,14 @@ export function wirePostTurnActionRuntime(
     const nextRunAt = normalizeActionRunAt(value.nextRunAt);
     const maxRetries = normalizePositiveInteger(value.maxRetries);
     const expectedCapability = resolveActionCapability(action.kind);
-    const runtimeClass = typeof value.runtimeClass === 'string' && isRuntimeLaneClass(value.runtimeClass)
+    const persistedRuntimeClass = typeof value.runtimeClass === 'string' && isRuntimeLaneClass(value.runtimeClass)
       ? value.runtimeClass
       : undefined;
+    // External intake originally fell through to the lossy appraisal queue.
+    // Reclassify its durable demand on hydration as well as on new admission.
+    const runtimeClass = action.kind === 'memory.external.process' && persistedRuntimeClass !== undefined
+      ? resolveRuntimeClassForKind(action.kind)
+      : persistedRuntimeClass;
     if (
       attempt === undefined
       || nextRunAt === undefined
@@ -408,6 +413,7 @@ export function wirePostTurnActionRuntime(
       migrated: normalizedPayload.migrated,
       requiresRewrite:
         normalizedPayload.requiresRewrite
+        || runtimeClass !== persistedRuntimeClass
         || queueFileVersion === LEGACY_PERSISTED_QUEUE_VERSION,
     };
   };

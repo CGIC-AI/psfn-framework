@@ -4,7 +4,7 @@ import type {
   AutomataWorkerRunPort,
 } from '../../automata/bus/worker-access.js';
 import type { AutomataRunRecord } from '../../automata/registry-contract.js';
-import type { AutomataRunRegistry } from '../../automata/run-registry.js';
+import { AUTOMATA_RUN_PROCESS_RESTART_REASON, type AutomataRunRegistry } from '../../automata/run-registry.js';
 import {
   readCommittedAutomataTerminalHandoff,
   type AutomataTerminalLifecyclePort,
@@ -95,9 +95,12 @@ async function beginMemoryExtractionAutomataRun(
   assertExactMemoryExtractionRun(run, input);
   while (run.workerId === MEMORY_EXTRACTION_WORKER_ID
     && run.status === 'failed'
-    && run.statusReason === MEMORY_EXTRACTION_FAILED_REASON
-    && ((input.triggerReason === 'external_conversation' && run.failureReason === 'orchestration_failure')
-      || run.failureReason === MEMORY_EXTRACTION_PREEMPTED_FAILURE)) {
+    && ((run.statusReason === MEMORY_EXTRACTION_FAILED_REASON
+      && ((input.triggerReason === 'external_conversation' && run.failureReason === 'orchestration_failure')
+        || run.failureReason === MEMORY_EXTRACTION_PREEMPTED_FAILURE))
+      // Durable external intake is its redelivery owner. It survives a restart
+      // even when the background-work oracle does not own this extraction run.
+      || (input.triggerReason === 'external_conversation' && run.statusReason === AUTOMATA_RUN_PROCESS_RESTART_REASON))) {
     const sourceRunId: string = run.runId;
     const retryRunId = `memory-extraction-retry:${createHash('sha256').update(sourceRunId).digest('hex')}`;
     const existingRetry: AutomataRunRecord | null = await registry.loadExactRun(retryRunId);

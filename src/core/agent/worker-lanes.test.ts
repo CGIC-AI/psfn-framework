@@ -102,6 +102,9 @@ describe('worker lanes', () => {
     expect(resolveRuntimeLaneClassForPostTurnActionKind('heartbeat.run_template')).toBe(
       MAINTENANCE_REFLECTION_RUNTIME_CLASS,
     );
+    expect(resolveRuntimeLaneClassForPostTurnActionKind('memory.external.process')).toBe(
+      MAINTENANCE_REFLECTION_RUNTIME_CLASS,
+    );
   });
 
   it('maps model-bound work into explicit runtime classes for contention control', () => {

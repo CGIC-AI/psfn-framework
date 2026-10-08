@@ -157,6 +157,14 @@ describe('deriveChannelClassificationEpoch (monotonic count model)', () => {
     noticeVersion: DEMOTION_EPOCH_NOTICE_VERSION,
   });
 
+  it('inherits the Hermes disclosure epoch across rotating session IDs', () => {
+    const records = [epoch('api:hermes', '2026-01-01T00:00:00.000Z')];
+    for (const digest of ['a'.repeat(64), 'b'.repeat(64)]) {
+      expect(deriveChannelClassificationEpoch(records, `api:hermes:${digest}`)).toBe(1);
+      expect(deriveChannelClassificationEpoch(records, `api:hermes:${digest}`, new Date('2025-12-31T00:00:00Z'))).toBeUndefined();
+    }
+  });
+
   it('returns undefined for a channel with no records (untracked, byte-identical)', () => {
     expect(deriveChannelClassificationEpoch([], PROJECT_CHANNEL)).toBeUndefined();
     expect(deriveChannelClassificationEpoch(

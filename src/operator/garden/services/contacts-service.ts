@@ -1,3 +1,4 @@
+import { EXTERNAL_MEMORY_CHANNEL, externalMemoryPolicyChannelId } from '../../../shared/routing/external-memory-channel.js';
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import {
   haveCompatibleContactIntelligenceKinds,
@@ -763,6 +764,11 @@ export class AdminContactsDataService implements AdminContactsService {
       payload = JSON.parse(body) as ContactUpdatePayload;
     } catch {
       return { ok: false, message: 'Request body must be valid JSON' };
+    }
+
+    if (payload.channelPrivacy?.some(cp => cp.channel === EXTERNAL_MEMORY_CHANNEL
+      || (cp.channelId && externalMemoryPolicyChannelId(cp.channelId) === EXTERNAL_MEMORY_CHANNEL))) {
+      return { ok: false, message: 'Hermes privacy is owned by api:hermes in Channels; edit its channel settings.' };
     }
 
     const timezonePayload = normalizeContactTimezonePayload(payload);

@@ -46,6 +46,17 @@ afterEach(() => {
 });
 
 describe('AdminSettingsDataService channel envelope surface', () => {
+  it('lists the configured Hermes channel before any per-session labels exist', () => {
+    const root = makeTempDir();
+    writeFileSync(join(root, 'channels.json'), JSON.stringify({ api: { externalMemory: { bindings: [{
+      bodyId: 'example-desktop', companionId: '11111111-1111-4111-8111-111111111111',
+      contactId: 'contact-alex', tokenRef: { kind: 'env', envName: 'EXAMPLE_HERMES_TOKEN' },
+    }] } } }));
+    expect(buildService(root).getChannelEnvelopeData().channels).toEqual([
+      expect.objectContaining({ channelId: 'api:hermes', privacy: 'private' }),
+    ]);
+  });
+
   it('lists labeled channels and exact operator overrides with envelope columns and source tiers', () => {
     const root = makeTempDir();
     writeFileSync(join(root, 'channels.json'), JSON.stringify({

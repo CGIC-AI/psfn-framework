@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { EXTERNAL_MEMORY_CHANNEL } from '../../../../src/shared/routing/external-memory-channel.js';
   import ContactSocialGraphPanel from './ContactSocialGraphPanel.svelte';
   import BiographicalClaimsPanel from '../memory/BiographicalClaimsPanel.svelte';
   import ContactIntroductionProvenance from './ContactIntroductionProvenance.svelte';
@@ -313,6 +314,7 @@
     const candidates = new Map<string, ChannelPrivacyChangeCandidate>();
 
     for (const ch of contact.channels ?? []) {
+      if (ch.channel === EXTERNAL_MEMORY_CHANNEL) continue;
       const key = contactChannelKey(ch);
       candidates.set(key, {
         key,
@@ -324,7 +326,7 @@
     }
 
     for (const ch of relatedChannels) {
-      if (!ch.privacyLevel) continue;
+      if (!ch.privacyLevel || ch.policyChannelId) continue;
       const key = conversationChannelKey(ch);
       candidates.set(key, {
         key,
@@ -362,7 +364,7 @@
     }
     for (const ch of getChannels(contact.id)) {
       const key = conversationChannelKey(ch);
-      if (!ch.privacyLevel) continue;
+      if (!ch.privacyLevel || ch.policyChannelId) continue;
       channelPrivacyEdits[key] = ch.privacyLevel;
     }
   }
@@ -1065,9 +1067,11 @@
                           <ContactIntroductionProvenance link={ch} />
                         </td>
                         <td class="py-1.5 pr-2">
-                          <span class="inline-flex items-center px-2 py-0.5 rounded-full text-sm font-medium {pb.cls}">
-                            {pb.label}
-                          </span>
+                          {#if ch.channel === EXTERNAL_MEMORY_CHANNEL}
+                            <a class="text-gold-700 underline" href={scopeGardenPath('/channels')}>Channel settings</a>
+                          {:else}
+                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-sm font-medium {pb.cls}">{pb.label}</span>
+                          {/if}
                         </td>
                         <td class="py-1.5 text-shadow-600 text-sm">
                           {#if ch.firstSeen || ch.lastSeen}
@@ -1114,9 +1118,14 @@
               <div class="space-y-1">
                 {#each channels as ch}
                   <div class="flex items-center gap-2">
-                    <span class="text-sm text-shadow-800 font-medium">{ch.channel}</span>
-                    <span class="font-mono text-sm text-shadow-700 break-all">{ch.channelId}</span>
-                    {#if ch.privacyLevel}
+                    <span class="text-sm text-shadow-800 font-medium">{ch.policyChannelId ?? ch.channel}</span>
+                    {#if ch.policyChannelId}
+                      <span class="text-sm text-shadow-600">{ch.sessionCount} sessions</span>
+                      <a class="text-sm text-gold-700 underline" href={scopeGardenPath('/channels')}>Channel settings</a>
+                    {:else}
+                      <span class="font-mono text-sm text-shadow-700 break-all">{ch.channelId}</span>
+                    {/if}
+                    {#if ch.privacyLevel && !ch.policyChannelId}
                       {@const pb = privacyBadge(ch.privacyLevel)}
                       <span class="inline-flex items-center px-2 py-0.5 rounded-full text-sm font-medium {pb.cls}">
                         {pb.label}
@@ -1137,9 +1146,14 @@
               <div class="space-y-1.5">
                 {#each channels as ch}
                   <div class="flex flex-wrap items-center gap-2">
-                    <span class="text-sm text-shadow-800 font-medium">{ch.channel}</span>
-                    <span class="font-mono text-sm text-shadow-700 break-all">{ch.channelId}</span>
-                    {#if ch.privacyLevel}
+                    <span class="text-sm text-shadow-800 font-medium">{ch.policyChannelId ?? ch.channel}</span>
+                    {#if ch.policyChannelId}
+                      <span class="text-sm text-shadow-600">{ch.sessionCount} sessions</span>
+                      <a class="text-sm text-gold-700 underline" href={scopeGardenPath('/channels')}>Channel settings</a>
+                    {:else}
+                      <span class="font-mono text-sm text-shadow-700 break-all">{ch.channelId}</span>
+                    {/if}
+                    {#if ch.privacyLevel && !ch.policyChannelId}
                       {@const pb = privacyBadge(ch.privacyLevel)}
                       <span class="inline-flex items-center px-2 py-0.5 rounded-full text-sm font-medium {pb.cls}">
                         {pb.label}
@@ -1369,6 +1383,9 @@
                       {@const key = contactChannelKey(ch)}
                       <div class="flex items-center gap-2 flex-wrap">
                         <span class="font-mono text-sm text-shadow-800 min-w-0 truncate">{ch.channel}:{ch.userId}</span>
+                        {#if ch.channel === EXTERNAL_MEMORY_CHANNEL}
+                          <a class="text-sm text-gold-700 underline" href={scopeGardenPath('/channels')}>Channel settings · applies to all sessions</a>
+                        {:else}
                         <select
                           value={channelPrivacyEdits[key] ?? ch.privacyLevel}
                           onchange={(e) => {
@@ -1380,6 +1397,7 @@
                             <option value={pl}>{pl.replace('_', ' ')}</option>
                           {/each}
                         </select>
+                        {/if}
                         <label class="flex items-center gap-1 text-xs text-shadow-700"
                           title="Cross-channel capable: bonded identities operate as one logical conversation at the lowest-common privacy of the bonded set">
                           <input
@@ -1411,12 +1429,16 @@
                       {@const key = conversationChannelKey(ch)}
                       <div class="flex items-center gap-2 flex-wrap">
                         <div class="min-w-0">
-                          <span class="font-mono text-sm text-shadow-800 min-w-0 truncate">{ch.channel}:{ch.channelId}</span>
+                          <span class="font-mono text-sm text-shadow-800 min-w-0 truncate">{ch.policyChannelId ?? `${ch.channel}:${ch.channelId}`}</span>
+                          {#if ch.policyChannelId}
+                            <span class="text-sm text-shadow-600"> · {ch.sessionCount} sessions</span>
+                            <a class="text-sm text-gold-700 underline" href={scopeGardenPath('/channels')}>Channel settings</a>
+                          {/if}
                           {#if ch.userId}
                             <p class="text-xs text-shadow-600">Linked identity {ch.userId}</p>
                           {/if}
                         </div>
-                        {#if ch.privacyLevel}
+                        {#if ch.privacyLevel && !ch.policyChannelId}
                           <select
                             value={channelPrivacyEdits[key] ?? ch.privacyLevel}
                             onchange={(e) => {
@@ -1446,12 +1468,16 @@
                       {@const key = conversationChannelKey(ch)}
                       <div class="flex items-center gap-2 flex-wrap">
                         <div class="min-w-0">
-                          <span class="font-mono text-sm text-shadow-800 min-w-0 truncate">{ch.channel}:{ch.channelId}</span>
+                          <span class="font-mono text-sm text-shadow-800 min-w-0 truncate">{ch.policyChannelId ?? `${ch.channel}:${ch.channelId}`}</span>
+                          {#if ch.policyChannelId}
+                            <span class="text-sm text-shadow-600"> · {ch.sessionCount} sessions</span>
+                            <a class="text-sm text-gold-700 underline" href={scopeGardenPath('/channels')}>Channel settings</a>
+                          {/if}
                           {#if ch.userId}
                             <p class="text-xs text-shadow-600">Linked identity {ch.userId}</p>
                           {/if}
                         </div>
-                        {#if ch.privacyLevel}
+                        {#if ch.privacyLevel && !ch.policyChannelId}
                           <select
                             value={channelPrivacyEdits[key] ?? ch.privacyLevel}
                             onchange={(e) => {

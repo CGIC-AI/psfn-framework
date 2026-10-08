@@ -281,6 +281,7 @@ export function resolveRuntimeLaneClassForPostTurnActionKind(
     || normalized === 'memory.sleeptime.run'
     || normalized === 'memory.near-turn.run'
     || normalized === 'memory.episode-synthesis.run'
+    || normalized === 'memory.external.process'
   ) {
     return MAINTENANCE_REFLECTION_RUNTIME_CLASS;
   }

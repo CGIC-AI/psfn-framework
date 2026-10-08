@@ -4,9 +4,15 @@ import { createHash } from 'node:crypto';
 import { requireUuid } from '../utils/uuid.js';
 
 const text = Type.String({ minLength: 1 });
-const session = { sessionId: text };
-const event = { ...session, eventId: text };
 const strict = { additionalProperties: false } as const;
+export const externalMemorySourceSchema = Type.Object({
+  platform: Type.Literal('telegram'),
+  userId: text,
+  chatId: text,
+  chatType: Type.Literal('dm'),
+}, strict);
+const session = { sessionId: text, source: Type.Optional(externalMemorySourceSchema) };
+const event = { ...session, eventId: text };
 
 export const EXTERNAL_MEMORY_TOOL_SCHEMAS = {
   context: Type.Object({ ...session, query: text }, strict),

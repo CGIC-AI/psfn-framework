@@ -16,6 +16,6 @@ export async function runBrowserJourney(options) {
   run(process.execPath, [cli, 'install', 'chromium']);
   options.checkpoint('browser_journeys');
   run(process.execPath, [cli, 'test', '--config', 'companion-ui/playwright.runtime.config.ts']);
-  options.report('real browser login, streamed interaction, durable reload readback, authority isolation and logout passed');
+  options.report('real browser login, final reply, durable reload readback, authority isolation and logout passed');
   return { browser: 'chromium', realTransport: true };
 }

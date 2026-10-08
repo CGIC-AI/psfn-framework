@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 // Deterministic external-provider responses. No runtime state access: recalled
 // values must arrive in the provider request through real history/retrieval.
 export function textOf(content) {
@@ -27,7 +29,7 @@ export function smokeScenario(body) {
     const last = messages.at(-1);
     if (last?.role === 'tool') return { kind: 'deletion', content: 'The memory deletion proposal awaits operator validation.' };
     if (!body.tools?.some(tool => tool.function?.name === 'memory')) throw new Error('Actual memory tool was not offered');
-    return { kind: 'deletion', toolCall: { id: 'call_smoke_delete_' + deletion[1].replaceAll('-', ''), name: 'memory',
+    return { kind: 'deletion', toolCall: { id: 'call_smoke_delete_' + createHash('sha256').update(current).digest('hex').slice(0, 24), name: 'memory',
       arguments: { action: 'delete', memory_id: deletion[1], justification_category: 'privacy_or_consent',
         explanation: 'Consent withdrawn for this disposable smoke fact.' } } };
   }

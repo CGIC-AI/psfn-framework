@@ -1,3 +1,5 @@
+import assert from 'node:assert/strict';
+
 // Keep the failing case, including all projected frames received before the
 // assertion, instead of publishing only preceding successful scenarios.
 export async function runWithEvidence(evidence, name, run, options) {
@@ -9,6 +11,7 @@ export async function runWithEvidence(evidence, name, run, options) {
       checkpoint(stage) { proof.stage = stage; },
       capture(collector) { collectors.push(collector); },
     });
+    assert.deepEqual(collectors.flatMap(collector => collector.errors), [], 'Telemetry collector lost evidence');
     Object.assign(proof, result, { status: 'passed', stage: 'complete' });
     return result;
   } catch (error) {

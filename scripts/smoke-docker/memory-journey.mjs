@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
-import { collectTelemetry, hashContent, streamChat } from './evidence.mjs';
+import { assertTurnEvidence, collectTelemetry, hashContent, streamChat } from './evidence.mjs';
 import { eventually, gardenJson } from './journeys.mjs';
 
 export async function readCaseTurn(options, channelId, message, status = 'completed') {
@@ -26,6 +26,13 @@ export async function runMemoryJourney(options) {
     const sourceTurn = await readCaseTurn(options, options.channelForSession(sourceSession), message);
     assert.equal(sourceTurn.record.assistantMessage.content, source.text);
     assert.ok(sourceTurn.record.backgroundWorkHandoff, 'Production turn did not persist a background handoff');
+    await eventually(async () => collector.events,
+      events => events.some(event => event.requestId === sourceTurn.record.requestId && event.stage === 'turn_complete'),
+      'source-turn terminal telemetry');
+    assertTurnEvidence({ turn: sourceTurn, message, reply: source.text, events: collector.events });
+    assert.deepEqual(collector.errors, []);
+    collector.close();
+    collector = undefined;
     options.checkpoint?.('automatic_extraction');
     const jobs = await eventually(() => options.readBackgroundJobs(sourceTurn.record.turnId),
       values => values.some(job => job.kind === 'memory_extraction' && job.state === 'succeeded'),
@@ -45,8 +52,6 @@ export async function runMemoryJourney(options) {
       await streamChat({ ...options, sessionId: sourceSession,
         message: `Context window passage ${index}: ${'The orchard paths are quiet today. '.repeat(450)}` });
     }
-    collector.close();
-    collector = undefined;
     options.checkpoint?.('restart');
     await options.restartAgent();
     await options.waitForHealth(120_000);

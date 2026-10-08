@@ -5,6 +5,7 @@ import { Type, type Static } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
 import {
   externalMemorySessionId,
+  externalMemorySourceSchema,
   parseExternalMemoryBinding,
   type ExternalMemoryBinding,
   type ExternalMemoryReceipt,
@@ -29,6 +30,7 @@ const recordSchema = Type.Object({
   schemaVersion: Type.Literal(1),
   receiptId: text,
   binding: Type.Object({ bodyId: text, companionId: text, contactId: text }, strict),
+  source: Type.Optional(externalMemorySourceSchema),
   sessionId: text,
   eventId: text,
   contentHash: text,

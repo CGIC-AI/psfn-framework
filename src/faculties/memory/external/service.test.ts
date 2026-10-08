@@ -47,11 +47,13 @@ function fixture() {
   const getById = vi.fn(async (id: string) => id === binding.contactId
     ? { id, displayName: 'Alex', trustLevel: 'primary' } : undefined);
   const recordChannelActivity = vi.fn().mockResolvedValue(undefined);
+  const getByChannelIdentity = vi.fn(async (_channel: string, userId: string) =>
+    userId === '12345' ? getById(binding.contactId) : undefined);
   const query = vi.fn().mockResolvedValue({ memories: [], total: 0 });
   const retrieve = vi.fn().mockResolvedValue('Recalled context');
   const quarantine = { isSessionRetiredOrQuarantined: vi.fn(() => false) };
   const options = { companionId: binding.companionId, companionName: 'Lyra', intakeStore: store,
-    sessions, contacts: { getById, recordChannelActivity }, memoryStore: { queryAuthorizedMemorySubjects: query },
+    sessions, contacts: { getById, getByChannelIdentity, recordChannelActivity }, memoryStore: { queryAuthorizedMemorySubjects: query },
     memoryProvider: { retrieve }, writer: { write }, screening: { screen }, quarantine,
     actions, retryDelayMs: 100, completedReceiptRetentionMs: 60_000, searchLimit: 5, goals: () => 'Finish the garden project', extract };
   const makeService = () => new ExternalMemoryService(fromAny(options));
@@ -63,10 +65,50 @@ function fixture() {
   });
   const run = (index = 0) => handler!(queued[index]!);
   return { service, makeService, input, run, sessions, store, storeDirectory, queued, screen, extract,
-    write, getById, recordChannelActivity, query, retrieve, quarantine, actions, setPersistence: (value: boolean) => { persisted = value; } };
+    write, getById, getByChannelIdentity, recordChannelActivity, query, retrieve, quarantine, actions, setPersistence: (value: boolean) => { persisted = value; } };
 }
 
 describe('external companion memory service', () => {
+  it('validates the Telegram sender against the bound contact and preserves private DM provenance', async () => {
+    const h = fixture();
+    const source = { platform: 'telegram', userId: '12345', chatId: '12345', chatType: 'dm' };
+    const input = h.input();
+    const response = await h.service.execute(fromAny({ ...input, request: { ...input.request, source } }));
+    await expect(h.service.execute(fromAny({ ...input, request: { ...input.request,
+      source: { chatType: 'dm', chatId: '12345', userId: '12345', platform: 'telegram' },
+    } }))).resolves.toEqual(response);
+    await expect(h.service.execute(input)).rejects.toThrow('different content');
+    const channelId = externalMemorySessionId(binding, input.request.sessionId);
+    expect(h.getByChannelIdentity).toHaveBeenCalledWith('telegram', '12345');
+    expect(h.recordChannelActivity).toHaveBeenCalledWith(binding.contactId, 'telegram', channelId, 'private');
+    for (const entry of h.sessions.getRecent(channelId, 10)) {
+      expect(JSON.parse(entry.metadata!)).toMatchObject({ externalOrigin: { source, contactId: binding.contactId },
+        conversationOrigin: { kind: 'direct_message' } });
+      expect(entry.channelVisibility).toBe('private');
+    }
+    // Recovery must recheck identity ownership, not trust a once-valid binding.
+    h.getByChannelIdentity.mockResolvedValue(undefined);
+    await h.run();
+    expect(h.extract).not.toHaveBeenCalled();
+  });
+
+  it('refuses unknown Telegram senders, another contact, and non-DM chat scope before recall or archival', async () => {
+    const h = fixture();
+    const source = { platform: 'telegram', userId: '12345', chatId: '12345', chatType: 'dm' };
+    const request = { operation: 'context', sessionId: 'session', query: 'private preferences', source };
+    h.getByChannelIdentity.mockResolvedValueOnce(undefined);
+    await expect(h.service.execute(fromAny({ binding, request }))).rejects.toThrow('Telegram sender');
+    h.getByChannelIdentity.mockResolvedValueOnce(fromAny({ id: 'someone-else' }));
+    await expect(h.service.execute(fromAny({ binding, request }))).rejects.toThrow('Telegram sender');
+    h.getByChannelIdentity.mockResolvedValueOnce(fromAny({ id: binding.contactId, archivedAt: '2025-01-01' }));
+    await expect(h.service.execute(fromAny({ binding, request }))).rejects.toThrow('Telegram sender');
+    for (const patch of [{ chatType: 'group' }, { chatId: '-54321' }, { userId: '' }]) {
+      await expect(h.service.execute(fromAny({ binding, request: { ...request, source: { ...source, ...patch } } }))).rejects.toThrow();
+    }
+    expect(h.retrieve).not.toHaveBeenCalled();
+    expect(h.sessions.listChannels()).toEqual([]);
+  });
+
   it('links accepted conversations to the authenticated contact for the contact card and subject session view', async () => {
     const h = fixture();
     const input = h.input();

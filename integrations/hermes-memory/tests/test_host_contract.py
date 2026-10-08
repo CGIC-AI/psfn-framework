@@ -35,6 +35,9 @@ class HermesHostContractTests(unittest.TestCase):
     def test_desktop_startup_loads_native_provider_and_delivers_completed_turn(self):
         self._exercise_startup("desktop")
 
+    def test_telegram_gateway_identity_reaches_recall_and_completed_turn(self):
+        self._exercise_startup("telegram")
+
     def _exercise_startup(self, platform):
         from tools.registry import registry
         from tools.mcp_tool_handlers import _render_call_tool_result
@@ -59,7 +62,7 @@ class HermesHostContractTests(unittest.TestCase):
         # Newer Hermes redirects tempfile.tempdir into its home during startup.
         # Restore it before the temporary profile is removed.
         with tempfile.TemporaryDirectory() as directory, patch.object(tempfile, "tempdir", tempfile.gettempdir()):
-            Config(BODY_ID, COMPANION_ID, platforms=("cli", "desktop")).save(directory)
+            Config(BODY_ID, COMPANION_ID, platforms=("cli", "desktop", "telegram")).save(directory)
             shutil.copytree(Path(__file__).resolve().parents[1] / "psfn_memory",
                             Path(directory) / "plugins" / "psfn",
                             ignore=shutil.ignore_patterns("__pycache__"))
@@ -82,6 +85,8 @@ class HermesHostContractTests(unittest.TestCase):
                     api_key="test-key-not-a-credential", base_url="https://llm.example.com/v1",
                     quiet_mode=True, skip_context_files=True, skip_memory=False,
                     disabled_toolsets=["memory"], session_id="root-session", platform=platform,
+                    **({"user_id": "12345", "chat_id": "12345", "chat_type": "dm"}
+                       if platform == "telegram" else {}),
                 )
                 try:
                     self.assertIsNone(agent._memory_store)
@@ -96,6 +101,10 @@ class HermesHostContractTests(unittest.TestCase):
                     wait_for(lambda: len(calls) == 2 and provider._outbox.pending_count() == 0)
                     self.assertEqual(calls[1]["sessionId"], "root-session")
                     self.assertEqual(calls[1]["user"], "human chat")
+                    if platform == "telegram":
+                        source = {"platform": "telegram", "userId": "12345", "chatId": "12345", "chatType": "dm"}
+                        self.assertEqual(calls[0]["source"], source)
+                        self.assertEqual(calls[1]["source"], source)
                     agent._sync_external_memory_for_turn(
                         original_user_message="interrupted", final_response="partial", interrupted=True,
                     )

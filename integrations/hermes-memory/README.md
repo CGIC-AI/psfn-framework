@@ -123,6 +123,23 @@ use; `subagent`, `cron`, `tool`, and `flush` are rejected. The network timeout
 belongs to the MCP connection; keep recall calls within Hermes's outer eight
 second prefetch limit.
 
+For the Hermes Telegram gateway, add `telegram` to `platforms` and link the
+sender's Telegram user ID to the same PSFN contact as the body credential.
+The adapter captures Hermes's gateway sender, chat ID, and DM scope for recall
+and completed-turn delivery. PSFN verifies that sender against the existing
+contact identity before reading or accepting memory, and retains the source in
+the imported session. Retries keep their captured sender even when another
+platform drains the outbox. A missing identity, another contact, or a Telegram
+group cannot use this private, single-contact memory binding. The companion's
+trust policy and the contact's existing trust level still govern disclosure;
+the adapter never promotes trust or creates an account identity implicitly.
+
+Legacy CLI/Desktop requests without Telegram source metadata continue to use
+the profile credential's configured contact. Select only that contact's
+interactive profile surfaces; a shared multi-user profile needs separate body
+credentials and profiles. Manual MCP calls from Telegram should include the
+same `source` object (`platform`, `userId`, `chatId`, `chatType: "dm"`).
+
 ## Delivery and scope
 
 The adapter persists completed exchanges under

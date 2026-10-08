@@ -20,6 +20,7 @@ import {
   type ExternalMemoryExecuteParams,
   type ExternalMemoryExecuteResult,
   type ExternalMemoryRequest,
+  type ExternalMemorySource,
 } from '../../../shared/contracts/external-memory.js';
 import { runWithRequestContext } from '../../../primitives/llm/request-context.js';
 import { createComponentLogger } from '../../../shared/logger.js';
@@ -48,7 +49,7 @@ interface ExternalMemoryServiceOptions {
   companionName: string;
   intakeStore: ExternalMemoryIntakeStore;
   sessions: Pick<SessionStore, 'append' | 'getRecent' | 'getEntriesInRange' | 'flushSessionJournal'>;
-  contacts: Pick<ContactStorePort, 'getById' | 'recordChannelActivity'>;
+  contacts: Pick<ContactStorePort, 'getById' | 'getByChannelIdentity' | 'recordChannelActivity'>;
   memoryStore: MemoryStorePort;
   memoryProvider: MemoryProvider | null;
   writer: Pick<MemoryWriter, 'write'>;
@@ -95,13 +96,22 @@ export class ExternalMemoryService {
     }
   }
 
-  private async contact(binding: ExternalMemoryBinding): Promise<Contact> {
+  private async contact(binding: ExternalMemoryBinding, source?: ExternalMemorySource): Promise<Contact> {
     if (binding.companionId !== this.options.companionId) {
       throw new Error('External memory companion binding does not match this core');
     }
     const contact = await this.options.contacts.getById(binding.contactId);
     if (!contact || contact.id !== binding.contactId || contact.archivedAt) {
       throw new Error('External memory requires a live configured contact');
+    }
+    if (source) {
+      if (source.chatId !== source.userId) {
+        throw new Error('External Telegram memory requires a private sender DM');
+      }
+      const sender = await this.options.contacts.getByChannelIdentity('telegram', source.userId);
+      if (!sender || sender.id !== contact.id || sender.archivedAt) {
+        throw new Error('External Telegram sender must be linked to the configured contact');
+      }
     }
     return contact;
   }
@@ -114,7 +124,7 @@ export class ExternalMemoryService {
 
   async execute(input: ExternalMemoryExecuteParams): Promise<ExternalMemoryExecuteResult> {
     const { binding, request } = parseExternalMemoryExecuteParams(input);
-    const contact = await this.contact(binding);
+    const contact = await this.contact(binding, request.source);
     const channelId = externalMemorySessionId(binding, request.sessionId);
     this.assertActive(channelId);
     return runWithRequestContext({
@@ -204,6 +214,7 @@ export class ExternalMemoryService {
         turn: { turnId, sourceMessageId },
         conversationOrigin: { schemaVersion: 1, kind: 'direct_message' },
         externalOrigin: { schemaVersion: 1, runtime: 'hermes', ...binding,
+          ...(request.source ? { source: request.source } : {}),
           sessionId: request.sessionId, eventId: request.eventId, receiptId, role: message.role },
       }), { mode: result.mode, withheld: result.withheld, envelopes: [result.snapshot] });
       entries.push({ role: message.role, content: result.effectiveText, metadata, timestamp,
@@ -213,6 +224,7 @@ export class ExternalMemoryService {
           : this.options.companionName });
     }
     return { schemaVersion: 1, receiptId, binding, sessionId: request.sessionId,
+      ...(request.source ? { source: request.source } : {}),
       eventId: request.eventId, contentHash, operation: request.operation, entries,
       afterMessageId: this.options.sessions.getRecent(channelId, 1)[0]?.id ?? 0,
       messageIds: [], completed: false };
@@ -249,7 +261,7 @@ export class ExternalMemoryService {
     // the contact card and subject-scoped session views. Persist it only after
     // screened evidence is durable, and require success before acknowledging.
     await this.options.contacts.recordChannelActivity(
-      record.binding.contactId, 'hermes', channelId, 'private',
+      record.binding.contactId, record.source?.platform ?? 'hermes', channelId, 'private',
     );
   }
 
@@ -271,9 +283,14 @@ export class ExternalMemoryService {
     binding: ExternalMemoryBinding, request: ExternalMemoryMutation, contact: Contact,
   ): Promise<ExternalMemoryExecuteResult> {
     const receiptId = externalMemoryReceiptId(binding, request.sessionId, request.eventId);
-    const contentHash = createHash('sha256').update(JSON.stringify(request.operation === 'ingest'
+    const contentIdentity: unknown[] = request.operation === 'ingest'
       ? [request.operation, request.sessionId, request.eventId, request.user, request.assistant, request.occurredAt]
-      : [request.operation, request.sessionId, request.eventId, request.text])).digest('hex');
+      : [request.operation, request.sessionId, request.eventId, request.text];
+    // Preserve legacy receipt hashes; source-bearing retries bind their sender too.
+    if (request.source) contentIdentity.push([
+      request.source.platform, request.source.userId, request.source.chatId, request.source.chatType,
+    ]);
+    const contentHash = createHash('sha256').update(JSON.stringify(contentIdentity)).digest('hex');
     let record = this.options.intakeStore.read(receiptId);
     if (record && record.contentHash !== contentHash) {
       throw new Error('External memory event ID was already used for different content');
@@ -294,7 +311,7 @@ export class ExternalMemoryService {
     await this.serialized(channelId, async () => {
       const record = this.options.intakeStore.read(receiptId)!;
       if (record.completed) return;
-      await this.contact(record.binding);
+      await this.contact(record.binding, record.source);
       this.assertActive(channelId);
       await this.archive(record);
       if (record.operation === 'ingest') {

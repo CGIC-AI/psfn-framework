@@ -45,6 +45,7 @@ const APPROVALS_PATH = '/v1/fleet-auth/approvals';
 const LOGOUT_PATH = '/v1/fleet-auth/logout';
 const PROVIDER_REVOKE_PATH = '/v1/fleet-auth/provider/revoke';
 const PREAUTH_COOKIE_NAME = '__Host-psfn_preauth';
+const DISCORD_OAUTH_ISSUER = 'https://discord.com';
 const CSRF_HEADER_NAME = 'x-psfn-csrf';
 const MUTATION_BODY_LIMIT = 2048;
 const LIFECYCLE_CORS_ALLOWED_HEADERS = 'Content-Type, X-PSFN-CSRF';
@@ -434,7 +435,11 @@ export class FleetAuthHttpRoutes {
       if (request.method === 'GET' && url.pathname === this.callbackPath) {
         const state = requireSingleQuery(url, 'state');
         const code = requireSingleQuery(url, 'code');
-        if (!state || !code || [...url.searchParams.keys()].some(key => key !== 'state' && key !== 'code')) {
+        // RFC 9207 requires exact issuer comparison, without URL normalization.
+        const invalidIssuer = url.searchParams.has('iss')
+          && requireSingleQuery(url, 'iss') !== DISCORD_OAUTH_ISSUER;
+        if (!state || !code || invalidIssuer
+          || [...url.searchParams.keys()].some(key => key !== 'state' && key !== 'code' && key !== 'iss')) {
           throw new FleetAuthBrokerError('invalid_oauth_callback', 400, 'OAuth callback is malformed');
         }
         const completed = await this.broker.completeOAuthCallback({

@@ -162,7 +162,7 @@ function completionId() {
 }
 
 /** SSE shape pi-ai's openai-completions client consumes (stream_options.include_usage). */
-function sendStream(response, model, content) {
+function sendStream(response, model, content, toolCall) {
   const id = completionId();
   const created = Math.floor(Date.now() / MILLISECONDS_PER_SECOND);
   response.writeHead(HTTP_OK, {
@@ -175,14 +175,14 @@ function sendStream(response, model, content) {
     object: 'chat.completion.chunk',
     created,
     model,
-    choices: [{ index: 0, delta: { role: 'assistant', content }, finish_reason: null }],
+    choices: [{ index: 0, delta: toolCall ? { role: 'assistant', tool_calls: [{ index: 0, id: toolCall.id, type: 'function', function: { name: toolCall.name, arguments: JSON.stringify(toolCall.arguments) } }] } : { role: 'assistant', content }, finish_reason: null }],
   })}\n\n`);
   response.write(`data: ${JSON.stringify({
     id,
     object: 'chat.completion.chunk',
     created,
     model,
-    choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+    choices: [{ index: 0, delta: {}, finish_reason: toolCall ? 'tool_calls' : 'stop' }],
     usage: usageBlock(),
   })}\n\n`);
   response.end('data: [DONE]\n\n');
@@ -246,7 +246,7 @@ function modelCatalog() {
   };
 }
 
-const scenarioEvidence = { failure: 0, hold: 0, cancelled: 0, extraction: 0, recall: 0, memorize: 0 };
+const scenarioEvidence = { failure: 0, hold: 0, cancelled: 0, extraction: 0, recall: 0, memorize: 0, deletion: 0 };
 
 const server = createServer((request, response) => {
   const path = (request.url ?? '/').split('?', 1)[0];
@@ -295,7 +295,7 @@ const server = createServer((request, response) => {
         });
         return;
       }
-      if (body.stream === true) sendStream(response, model, content);
+      if (body.stream === true) sendStream(response, model, content, scenario?.toolCall);
       else sendCompletion(response, model, content);
     })
     .catch((error) => {

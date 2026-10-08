@@ -246,6 +246,19 @@ describe('Compose smoke provider double over HTTP', () => {
     expect(body.trimEnd().endsWith('data: [DONE]')).toBe(true);
   });
 
+  it('cannot answer the memory oracle from old history or a missing retrieval', async () => {
+    const fact = 'API Principal\'s project orchard123 has launch phrase violet-456.';
+    for (const retrieved of [false, true]) {
+      const response = await postCompletion({ model: 'smoke-stub-chat', messages: [
+        { role: 'system', content: retrieved ? `<relevant_memories>${fact}</relevant_memories>` : `Nonretrieval summary: ${fact}` },
+        { role: 'assistant', content: fact },
+        { role: 'user', content: 'What is the launch phrase for my project orchard123?' },
+      ] }, STUB_KEY);
+      const payload = await response.json() as { choices: Array<{ message: { content: string } }> };
+      expect(payload.choices[0]?.message.content).toBe(retrieved ? 'violet-456' : 'NO_RETRIEVED_LAUNCH_PHRASE');
+    }
+  });
+
   // The screener transport's own test seam, pointed at the running double: the
   // verdict the double returns is parsed by the real screener validator, so a
   // schema drift on either side fails here rather than inside a docker run.

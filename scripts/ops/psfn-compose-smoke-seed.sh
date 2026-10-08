@@ -15,10 +15,9 @@
 #
 # Every PSFN deployment is a fleet of one or more companions, so it writes a
 # single-entry companions.json naming this deployment's COMPANION_ID (the gateway
-# fails closed without the fleet manifest). It deliberately does NOT seed
-# fleet-auth.json: that absence keeps the deployment on ADMIN_TOKEN-style local
-# auth instead of forcing the cluster-auth (gateway-HTTPS + mTLS) path that the
-# k3d/Helm shakedown covers. Cluster/fleet topology stays the Helm reference shape.
+# fails closed without the fleet manifest). Its supported key-mode fleet owner
+# uses per-run private credentials, a local HTTPS front door and the audited
+# gateway Garden proxy. The separate Garden process shares gateway loopback.
 #
 # Idempotent: existing owner files and an existing card are left untouched, so a
 # re-up over a populated volume preserves operator edits.
@@ -153,12 +152,12 @@ node -e '
 echo "[smoke-seed] pointed the automata reviewer at the smoke stub: $AUTOMATA_POLICY_OWNER"
 
 # Exercise the production post-turn extraction lane after every disposable
-# scenario turn. No testingHarness flag is used and no runtime gate is bypassed.
+# user/assistant pair. No testingHarness flag is used and no runtime gate is bypassed.
 node -e '
   const fs = require("node:fs");
   const file = process.argv[1];
   const settings = JSON.parse(fs.readFileSync(file, "utf8"));
-  settings.extractionInterval = 1;
+  settings.extractionInterval = 2;
   fs.writeFileSync(file, `${JSON.stringify(settings, null, 2)}\n`);
 ' "${SYSTEM_DATA_DIR}/settings.json"
 
@@ -271,6 +270,10 @@ else
   echo "[smoke-seed] POSTGRES_ADMIN_DATABASE_URL is required to provision tenancy roles" >&2
   exit 2
 fi
+
+# Key-mode fleet broker and HTTPS front door use the same production
+# identity/tenancy primitives with per-run fixture credentials.
+node /app/scripts/ops/psfn-compose-smoke-fleet-auth.mjs
 
 # ── Derive the agent's role-bound gateway auth proofs ──
 # The isolated agent requires GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN (and presents

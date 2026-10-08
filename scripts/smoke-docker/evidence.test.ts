@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { runWithEvidence } from './journey-evidence.mjs';
 import { assertTurnEvidence, projectEvent } from './evidence.mjs';
 
 const message = 'Synthetic request';
@@ -21,6 +22,17 @@ describe('portable full-runtime evidence', () => {
     }
     expect(() => assertTurnEvidence({ ...input, events: events.map(event => ({ ...event, requestId: 'unrelated' })) })).toThrow('Missing correlated');
     expect(() => assertTurnEvidence({ ...input, events: events.map(event => ({ ...event, turnId: 'unrelated' })) })).toThrow('mixes turns');
+  });
+
+  it('retains partial failing traces and transport gaps without raw error content', async () => {
+    const evidence = { journeys: [] };
+    await expect(runWithEvidence(evidence, 'negative-control', async options => {
+      options.checkpoint('persist_and_correlate');
+      options.capture({ events, errors: ['telemetry_disconnected'] });
+      throw new Error('Bearer synthetic-secret in private upstream failure');
+    }, {})).rejects.toThrow('private upstream failure');
+    expect(evidence.journeys).toEqual([{ name: 'negative-control', status: 'failed', stage: 'persist_and_correlate', failureCode: 'journey_failed', events, collectorErrors: ['telemetry_disconnected'] }]);
+    expect(JSON.stringify(evidence)).not.toMatch(/private|synthetic-secret/u);
   });
 
   it('exports IDs and timing while discarding payloads, arguments and synthetic credentials', () => {

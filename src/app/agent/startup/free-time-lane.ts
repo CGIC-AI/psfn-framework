@@ -229,6 +229,9 @@ export function registerFreeTimeLane(deps: FreeTimeLaneDeps): void {
         focusHint: project.nextStep,
       })),
     companionName,
+    // The same canonical identity/policy prompt reflection deliberation uses, so
+    // the choice is made in her own voice rather than by a nameless model.
+    resolveIdentityPrompt: () => agentLoop.getCurrentAuthoritativeSystemPrompt(),
     // Free-time chooser tunables (incl. the rest / silence-persistence window)
     // are owned by scheduler.json socialAutonomy.freeTimeChooser (jp36.8.2).
     settings: chooserSettings,

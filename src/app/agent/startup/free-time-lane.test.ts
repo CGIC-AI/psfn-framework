@@ -72,6 +72,7 @@ function makeProvider(): LLMProviderPort {
     stream: vi.fn(),
     complete: vi.fn(async (context) => ({
       content: context.systemPrompt.includes('choosing how')
+        && context.systemPrompt.startsWith('You are Companion, who loves moon gardens.')
         ? '{"optionId":"resume:project:moon-garden","reason":"continue"}'
         : 'continued the moon-garden checkpoint',
       toolCalls: [],
@@ -179,6 +180,7 @@ describe('registerFreeTimeLane production composition', () => {
 
     const observedPriorAssistantContent: string[][] = [];
     const makeAgent = (responseContent: string): SubstrateAgent => ({
+      getCurrentAuthoritativeSystemPrompt: () => 'You are Companion, who loves moon gardens.',
       handleMessage: vi.fn(async (
         message: SubstrateMessage,
         _deliveryLifecycle: Parameters<SubstrateAgent['handleMessage']>[1],

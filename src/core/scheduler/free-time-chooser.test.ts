@@ -279,11 +279,11 @@ describe('FreeTimeChooser.chooseWorkspace — fail closed to rest', () => {
     expect(context.systemPrompt).not.toContain('never manufacture activity');
   });
 
-  it('rests without a model call or silence when identity is unavailable', async () => {
+  it('defers to the block without a model call or silence when identity is unavailable', async () => {
     for (const identity of [null, '   ']) {
       const { chooser, provider, restWindowPolicy } = makeChooser({ resolveIdentityPrompt: () => identity });
       const outcome = await chooser.chooseWorkspace(CTX);
-      expect(outcome).toEqual({ kind: 'rest', reason: 'identity_unavailable' });
+      expect(outcome).toEqual({ kind: 'defer_to_block', reason: 'identity_unavailable' });
       expect(provider.complete).not.toHaveBeenCalled();
       await expect(restWindowPolicy.isSilenced({ lane: 'quiet_hours', nowMs: 2_000 })).resolves.toBe(false);
     }

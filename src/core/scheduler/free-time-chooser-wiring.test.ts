@@ -152,6 +152,19 @@ describe('free-time chooser wiring', () => {
     expect(PRIVATE_WORKSPACE_OUTCOME.workspace.sessionId).toBe('internal:free-time:private');
   });
 
+  it('a deferred choice runs the block on the default private session for her to decide', async () => {
+    const chooseWorkspace = vi.fn(async (): Promise<FreeTimeChooserOutcome> => ({
+      kind: 'defer_to_block',
+      reason: 'identity_unavailable',
+    }));
+    const { scheduler, invokeTurn } = buildRuntime(chooseWorkspace);
+    await runIdleHandler(scheduler);
+    expect(invokeTurn).toHaveBeenCalledTimes(1);
+    expect(invokeTurn).toHaveBeenCalledWith(expect.objectContaining({
+      channelId: freeTimeWorkspaceChannelId(),
+    }));
+  });
+
   it('without a chooser wired, the block uses its default private session', async () => {
     const { scheduler, invokeTurn } = buildRuntime(undefined);
     await runIdleHandler(scheduler);

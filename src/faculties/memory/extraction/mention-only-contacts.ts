@@ -86,6 +86,7 @@ export interface MentionOnlyContactCandidate {
 
 interface ResolveMentionOnlyContactParams {
   fact: ExtractedFact;
+  subjectName?: string;
   channelId: string;
   canonicalContactId?: string;
   canonicalContactName?: string;
@@ -354,7 +355,10 @@ export async function resolveMentionOnlyContactForFact(
   });
   if (!candidate) return undefined;
 
-  const existing = findExistingMentionOnlyContact(contacts, candidate);
+  if (params.subjectName && normalizeNameKey(candidate.name) !== normalizeNameKey(params.subjectName)) return undefined;
+  const liveMatches = contacts.filter(contact => !contact.archivedAt && contactNameKeys(contact).has(candidate.normalizedKey));
+  if (liveMatches.length > 1) return undefined;
+  const existing = findExistingMentionOnlyContact(liveMatches, candidate);
   const channelMemories = await params.memoryStore.getMemoriesByChannel(params.channelId, 50);
 
   if (existing) {

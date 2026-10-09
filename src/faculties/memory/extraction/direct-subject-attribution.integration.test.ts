@@ -119,11 +119,15 @@ describe('DM extraction subject attribution (mg8x3)', () => {
     expect((await biographySources()).evidence.map(entry => entry.memory.id)).not.toContain(id);
   });
 
+  it('preserves an unresolved third party as unbound rather than assigning the speaker as subject', async () => {
+    expect(await persistFact('dm-third-party', `${SOURCE}<subject_name>Someone Else</subject_name>`))
+      .toMatchObject({ subjectClass: 'unbound_person', subjectContactIds: [] });
+  });
+
   it.each([
     ['conflicting ID', `${SOURCE}<subject_name>Morgan</subject_name><subject_contact_id>contact-other</subject_contact_id>`],
     ['unknown ID', `${SOURCE}<subject_name>Morgan</subject_name><subject_contact_id>contact-unknown</subject_contact_id>`],
     ['conflicting name', `${SOURCE}<subject_name>Someone Else</subject_name><subject_contact_id>${CONTACT_ID}</subject_contact_id>`],
-    ['unsupported third party', `${SOURCE}<subject_name>Someone Else</subject_name>`],
     ['missing source message', '<source_message_ids>99</source_message_ids><subject_name>Morgan</subject_name>'],
     ['conflicting source speaker', '<source_message_ids>12</source_message_ids><source_speaker_name>Someone Else</source_speaker_name><subject_name>Morgan</subject_name>'],
   ])('rejects a subject claim with %s', async (_label, attribution) => {

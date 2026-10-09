@@ -1,3 +1,5 @@
+import { buildSpeakerRoutingContext, resolveFactRouting } from './speaker-routing.js';
+import { buildExtractionFactRoutingTelemetry } from './write-execution.js';
 import { fromAny } from '@total-typescript/shoehorn';
 // ── E3.4 contact-tracking policy gate: extraction behavior ──
 // AC2: memories from untracked speakers keep speaker-name provenance but
@@ -125,6 +127,46 @@ describe('MemoryExtractor contact-tracking gate (E3.4)', () => {
     expect(memory.contactId ?? null).toBeNull();
     expect(memory.provenance?.sourceContactId).toBeUndefined();
     expect(memory.provenance?.subjectContactId).toBeUndefined();
+  });
+
+  it.each([true, false])('routes recurring named third-party facts with contact creation allowed=%s', async allowed => {
+    const primary = await contactStore.upsert({ displayName: 'Avery', discordUserId: PRIMARY_USER_ID });
+    const extractor = makeExtractor(() => allowed);
+    const channelId = 'discord:dm:family-example';
+    for (const [index, text] of [
+      "Avery's sister Alex is moving to Seattle",
+      'Alex called before dinner with the family',
+    ].entries()) {
+      const id = index + 1;
+      const extracted = makeFact(text, {
+        tags: ['family'],
+        attribution: { sourceMessageIds: [id], sourceSpeakerName: 'Avery', subjectName: 'Alex' },
+      });
+      const context = await buildSpeakerRoutingContext([{
+        id, channelId, role: 'user', authorId: PRIMARY_USER_ID, authorName: 'Avery', content: text, timestamp: id * 1000,
+      }], async () => primary.id, { contacts: await contactStore.listAll() });
+      const route = resolveFactRouting(extracted, context, primary.id);
+      expect(route.status).toBe('route');
+      if (route.status !== 'route') throw new Error(route.reason);
+      await (fromAny(extractor)).processFact(
+        extracted, `${channelId}:${id}`, route.contactId, undefined, channelId, undefined,
+        primary.displayName, 'Companion', undefined, undefined,
+        buildExtractionFactRoutingTelemetry(route, primary.id),
+      );
+    }
+    const subject = (await contactStore.listAll()).find(contact => contact.displayName === 'Alex');
+    const memories = memoryStore.getMemoriesByChannel(channelId, 10);
+    expect(memories).toHaveLength(2);
+    if (allowed) {
+      expect(subject).toBeDefined();
+      expect(memories.find(memory => memory.text.startsWith('Alex called'))).toMatchObject({
+        contactId: subject!.id, provenance: { subjectContactId: subject!.id, sourceContactId: primary.id },
+      });
+    } else {
+      expect(subject).toBeUndefined();
+      expect(memories.every(memory => memory.provenance?.subjectName === 'Alex')).toBe(true);
+      expect(memories.every(memory => !memory.provenance?.subjectContactId)).toBe(true);
+    }
   });
 
   it('leaves auto channels byte-identical: absent predicate keeps the mention-only path active', async () => {

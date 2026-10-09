@@ -22,6 +22,7 @@ export type StrictGroupAddressingValidation = {
 
 export interface StrictGroupSubjectSpeaker {
   normalizedName: string;
+  aliases?: readonly string[];
   contactId?: string;
 }
 
@@ -40,7 +41,8 @@ export function resolveCanonicalFactSubject<Speaker extends StrictGroupSubjectSp
 ): StrictGroupSubjectResolution<Speaker> {
   const normalizedSubject = normalizeSpeakerPhrase(attribution.subjectName ?? '');
   const matches = normalizedSubject
-    ? speakers.filter(speaker => speaker.normalizedName === normalizedSubject)
+    ? speakers.filter(speaker => speaker.normalizedName === normalizedSubject
+      || speaker.aliases?.some(alias => normalizeSpeakerPhrase(alias) === normalizedSubject))
     : [];
   if (matches.length > 1) {
     return { status: 'skip', reason: 'conflicting_subject_contact' };

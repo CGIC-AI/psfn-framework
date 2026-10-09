@@ -768,3 +768,140 @@ describe('legacy (attribution-less) fact routing', () => {
     expect(decision).toEqual({ status: 'skip', reason: 'ambiguous_group_speaker' });
   });
 });
+
+
+describe('canonical direct-message speaker attribution', () => {
+  it('uses the turn contact for a structured single-speaker DM and stamps its subject', async () => {
+    const routingContext = await buildSpeakerRoutingContext([
+      entry(1, 'transport-alex', 'Alex', 'I collect telescopes.'),
+    ], async () => undefined);
+    expect(resolveFactRouting(fact({
+      text: 'Alex collects telescopes.',
+      attribution: { sourceMessageIds: [1], sourceSpeakerName: 'Alex', subjectName: 'Alex' },
+    }), routingContext, 'contact-alex')).toMatchObject({
+      status: 'route', contactId: 'contact-alex', sourceContactId: 'contact-alex',
+      subjectContactId: 'contact-alex',
+    });
+  });
+
+  it('does not use a triggering DM contact to repair unresolved group sources', async () => {
+    const routingContext = await buildSpeakerRoutingContext([
+      entry(1, 'dragon', 'Example Partner', 'I collect telescopes.', {
+        metadata: addressedTo({ authorId: 'current-companion-bot', authorName: 'Lyra' }),
+      }),
+    ], async () => undefined);
+    expect(resolveFactRouting(fact({
+      text: 'Example Partner collects telescopes.',
+      attribution: { sourceMessageIds: [1], sourceSpeakerName: 'Example Partner',
+        subjectName: 'Example Partner', addressMode: 'direct_to_companion' },
+    }), routingContext, 'contact-unrelated', { requireStructuredAddressing: true }))
+      .toMatchObject({ status: 'skip', reason: 'unresolved_speaker_contact' });
+  });
+
+  it('fails closed on conflicting canonical attribution for the same author', async () => {
+    await expect(buildSpeakerRoutingContext(['contact-alex', 'contact-other'].map((contactId, index) => (
+      entry(index + 1, 'transport-alex', 'Alex', 'I collect telescopes.', {
+        metadata: JSON.stringify({ speakerAttribution: { schemaVersion: 1, canonicalContactId: contactId } }),
+      })
+    )))).rejects.toThrow('Conflicting canonical extraction speaker attribution');
+  });
+
+  it('uses canonical entry attribution when transport lookup has no match', async () => {
+    const routingContext = await buildSpeakerRoutingContext([
+      entry(1, 'transport-alex', 'Alex', 'I collect telescopes.', {
+        metadata: JSON.stringify({ speakerAttribution: { schemaVersion: 1, canonicalContactId: 'contact-alex' } }),
+      }),
+    ], async () => undefined);
+    expect(resolveFactRouting(fact({
+      text: 'Alex collects telescopes.',
+      attribution: { sourceMessageIds: [1], sourceSpeakerName: 'Alex', subjectName: 'Alex' },
+    }), routingContext, undefined)).toMatchObject({
+      status: 'route', contactId: 'contact-alex', subjectContactId: 'contact-alex',
+    });
+  });
+});
+
+describe('direct conversation subjects and aliases', () => {
+  const alex = {
+    id: 'contact-alex', displayName: 'Alex', nickname: 'Lex',
+    trustLevel: 'trusted' as const, relationshipType: 'friend' as const,
+    firstSeen: '', lastSeen: '',
+  };
+  const robin = { ...alex, id: 'contact-robin', displayName: 'Robin', nickname: 'Rob' };
+  const userEntry = entry(1, 'transport-alex', 'Alex', 'My sister Robin loves sailing.');
+  const assistantEntry = entry(2, 'assistant-id', 'Lyra', 'I want to learn sailing.', { role: 'assistant' });
+
+  async function directContext(contacts = [alex, robin]) {
+    return buildSpeakerRoutingContext([userEntry, assistantEntry], async () => undefined, {
+      canonicalContactId: alex.id, contacts, companionName: 'Lyra',
+    });
+  }
+
+  it('accepts preferred aliases for both the evidence speaker and subject', async () => {
+    expect(resolveFactRouting(fact({
+      text: 'Lex enjoys sailing.',
+      attribution: { sourceMessageIds: [1], sourceSpeakerName: 'Lex', subjectName: 'Lex' },
+    }), await directContext(), alex.id)).toMatchObject({
+      status: 'route', sourceContactId: alex.id, subjectContactId: alex.id,
+    });
+  });
+
+  it('resolves a non-speaking contact while preserving the actual source', async () => {
+    expect(resolveFactRouting(fact({
+      text: 'Robin loves sailing.',
+      attribution: { sourceMessageIds: [1], sourceSpeakerName: 'Alex', subjectName: 'Rob' },
+    }), await directContext(), alex.id)).toMatchObject({
+      status: 'route', contactId: robin.id, sourceContactId: alex.id, subjectContactId: robin.id,
+    });
+  });
+
+  it('rejects duplicate subject aliases and fabricated contact IDs', async () => {
+    const ambiguous = await directContext([alex, robin, { ...robin, id: 'contact-another-robin' }]);
+    for (const routingContext of [ambiguous, await directContext()]) {
+      expect(resolveFactRouting(fact({
+        text: 'Robin loves sailing.',
+        attribution: { sourceMessageIds: [1], subjectName: 'Robin', subjectContactId: 'invented' },
+      }), routingContext, alex.id)).toMatchObject({ status: 'skip', reason: 'conflicting_subject_contact' });
+    }
+    expect(resolveFactRouting(fact({
+      text: 'Robin loves sailing.', attribution: { sourceMessageIds: [1], subjectName: 'Robin' },
+    }), ambiguous, alex.id)).toMatchObject({ status: 'skip', reason: 'conflicting_subject_contact' });
+  });
+
+  it('preserves an unknown third-party subject without labelling it as the source contact', async () => {
+    const decision = resolveFactRouting(fact({
+      text: 'Robin loves sailing.', attribution: { sourceMessageIds: [1], subjectName: 'Robin' },
+    }), await directContext([alex]), alex.id);
+    expect(decision).toMatchObject({ status: 'route', sourceContactId: alex.id, subjectName: 'Robin' });
+    expect(decision).not.toHaveProperty('subjectContactId');
+  });
+
+  it.each([{ sourceMessageIds: [2] }, { sourceMessageIds: [1, 2] }])('routes companion self-knowledge from cited entries $sourceMessageIds without human ownership', async ({ sourceMessageIds }) => {
+    const decision = resolveFactRouting(fact({
+      text: 'Lyra wants to learn sailing.',
+      attribution: { sourceMessageIds, sourceSpeakerName: 'Lyra', subjectName: 'Lyra' },
+    }), await directContext(), alex.id);
+    expect(decision).toMatchObject({ status: 'route', reason: 'conversational_companion', subjectName: 'Lyra' });
+    expect(decision).not.toHaveProperty('contactId');
+    expect(decision).not.toHaveProperty('subjectContactId');
+  });
+
+  it('routes human evidence about the companion as companion-owned', async () => {
+    expect(resolveFactRouting(fact({
+      text: 'Lyra likes sailing.', attribution: { sourceMessageIds: [1], subjectName: 'Lyra' },
+    }), await directContext(), alex.id)).toMatchObject({
+      status: 'route', reason: 'conversational_companion', sourceContactId: alex.id,
+    });
+  });
+
+  it('requires human evidence for a companion paraphrase about a human', async () => {
+    for (const sourceMessageIds of [[2], [1, 2]]) {
+      const decision = resolveFactRouting(fact({
+        text: 'Alex enjoys sailing.',
+        attribution: { sourceMessageIds, sourceSpeakerName: 'Lyra', subjectName: 'Alex' },
+      }), await directContext(), alex.id);
+      expect(decision.status).toBe(sourceMessageIds.length === 1 ? 'skip' : 'route');
+      if (decision.status === 'route') expect(decision.subjectContactId).toBe(alex.id);
+    }
+  });
+});

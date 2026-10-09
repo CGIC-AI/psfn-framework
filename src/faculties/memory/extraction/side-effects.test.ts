@@ -164,6 +164,12 @@ describe('runExtractionSideEffects', () => {
 });
 
 describe('groupAcceptedWritesByContact', () => {
+  it('does not put companion self-knowledge in the triggering contact profile', () => {
+    expect(groupAcceptedWritesByContact([
+      write({ subjectScope: 'companion_internal', sourceContactId: 'contact-alex' }),
+    ], 'contact-alex').size).toBe(0);
+  });
+
   it('returns a single fallback group when there are no writes', () => {
     const groups = groupAcceptedWritesByContact([], 'contact-alex');
     expect([...groups.entries()]).toEqual([['contact-alex', []]]);

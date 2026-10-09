@@ -1,3 +1,4 @@
+import type { Contact } from '../../../core/contacts/types.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { LLMProviderPort, MemoryExtractionOutputs } from '../../../core/agent/contracts.js';
 import { buildLLMWorkSpec, completeWithWorkSpec } from '../../../primitives/llm/work-spec.js';
@@ -155,6 +156,7 @@ export interface ExtractionRunOptions {
     canonicalContactId?: string,
   ) => ExtractionParticipantNames;
   resolveSourceSpeakerContactId?: (speaker: ExtractionSourceSpeaker) => Promise<string | undefined>;
+  resolveContacts?: () => Promise<Contact[]>;
   /** Current companion's channel-authoritative author ids for mention matching. */
   companionAuthorIds?: readonly string[];
   llmClient: LLMProviderPort;
@@ -343,6 +345,11 @@ export async function runExtractionOrchestration(
       : await buildSpeakerRoutingContext(
         recentEntries,
         options.resolveSourceSpeakerContactId,
+        {
+          contacts: await options.resolveContacts?.(),
+          companionName: groupRoomExtraction ? undefined : participantNames.companionName ?? options.sessionManager.characterName,
+          canonicalContactId: groupRoomExtraction ? undefined : canonicalContactId,
+        },
       );
 
     const existing = await options.memoryStore.getMemoriesByChannel(options.channelId, 30);

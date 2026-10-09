@@ -400,6 +400,7 @@ describe('MemoryExtractor telemetry payloads', () => {
       upsertRecentContactShape: vi.fn(),
     });
     const contactStore = fromAny({
+      listAll: vi.fn().mockResolvedValue([]),
       updateEmotionalBaseline: vi.fn(),
     });
     const eventBus = fromAny({
@@ -2709,6 +2710,7 @@ describe('MemoryExtractor emotional state persistence', () => {
     });
 
     const contactStore = fromAny({
+      listAll: vi.fn().mockResolvedValue([]),
       updateEmotionalBaseline: vi.fn().mockReturnValue({
         id: 'contact-canonical-1',
         emotionalBaseline: {
@@ -2940,6 +2942,9 @@ describe('MemoryExtractor crash recovery markers', () => {
     });
     const memoryStore = fromAny({
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
+      searchByEmbedding: vi.fn().mockReturnValue([]),
+      persistMemoryWrite: vi.fn(),
+      runInTransaction: vi.fn(async (operation: () => Promise<unknown>) => operation()),
     });
     const embeddingService = fromAny({
       embed: vi.fn().mockResolvedValue(new Float32Array(8)),
@@ -2950,6 +2955,8 @@ describe('MemoryExtractor crash recovery markers', () => {
       emit: vi.fn().mockResolvedValue(undefined),
     });
     const contactStore = fromAny({
+      updateEmotionalBaseline: vi.fn(),
+      listAll: vi.fn().mockResolvedValue([]),
       getById: vi.fn().mockReturnValue({
         id: 'contact-1',
         displayName: 'Alex Example',

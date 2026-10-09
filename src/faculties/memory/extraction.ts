@@ -9,6 +9,7 @@ import type { PromptRegistryStatePort } from '../../core/identity/prompt-state-p
 import type { PersonaPreamblePort } from '../../core/identity/persona-preamble.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import type { Contact } from '../../core/contacts/types.js';
+import { resolveExtractionSourceContactId } from './extraction/contact-resolution.js';
 import { resolvePreferredContactName } from '../../core/contacts/preferred-name.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
 import type { SessionEntry } from '../../core/session/types.js';
@@ -47,7 +48,6 @@ import {
 } from './extraction/types.js';
 import type {
   ExtractionFactRouting,
-  ExtractionSourceSpeaker,
 } from './extraction/speaker-routing.js';
 import {
   normalizeMaxWrites,
@@ -843,7 +843,8 @@ export class MemoryExtractor {
         canonicalContactName: extractionCanonicalContactId ? canonicalContactName : undefined,
         companionName: this.sessionManager.characterName,
       }),
-      resolveSourceSpeakerContactId: speaker => this.resolveSourceSpeakerContactId(channelId, speaker),
+      resolveSourceSpeakerContactId: speaker => resolveExtractionSourceContactId(channelId, speaker, this.contactStore),
+      resolveContacts: async () => this.contactStore ? await this.contactStore.listAll() : [],
       ...(this.runtimeConfig?.discordBotId
         ? { companionAuthorIds: [this.runtimeConfig.discordBotId] }
         : {}),
@@ -1045,6 +1046,7 @@ export class MemoryExtractor {
   ): Promise<WriteResult> {
     await assertEffectAllowed?.();
     const selfDirectedMemory = routing?.routingReason === 'self_directed_companion';
+    const companionOwned = selfDirectedMemory || routing?.routingReason === 'conversational_companion';
     let factContactId = canonicalContactId;
     // Contact-tracking policy gate (E3.4): non-'auto' channels must not have
     // extraction create contact rows (mention-only path included). Facts keep
@@ -1052,9 +1054,13 @@ export class MemoryExtractor {
     const contactCreationAllowed = !channelId
       || this.isAutoContactCreationAllowed === null
       || this.isAutoContactCreationAllowed(channelId);
-    if (fact.type === 'relational' && this.contactStore && channelId && contactCreationAllowed) {
+    if (
+      !companionOwned && !routing?.subjectContactId && fact.type === 'relational'
+      && this.contactStore && channelId && contactCreationAllowed
+    ) {
       const mentionOnlyContact = await resolveMentionOnlyContactForFact({
         fact,
+        subjectName: routing?.subjectName,
         channelId,
         canonicalContactId,
         canonicalContactName,
@@ -1066,6 +1072,10 @@ export class MemoryExtractor {
       });
       if (mentionOnlyContact) {
         factContactId = mentionOnlyContact.id;
+        if (routing) routing = {
+          ...routing, routedContactId: mentionOnlyContact.id, subjectContactId: mentionOnlyContact.id,
+          subjectName: routing.subjectName ?? mentionOnlyContact.displayName,
+        };
       }
     }
 
@@ -1084,7 +1094,8 @@ export class MemoryExtractor {
       && contactCreationAllowed
       && canonicalContactId
       && factContactId === canonicalContactId
-      && !routing?.subjectContactId
+      && (!routing?.subjectContactId
+        || (routing.subjectContactId === canonicalContactId && routing.sourceContactId === canonicalContactId))
     ) {
       const relationshipMutation = await resolveInterlocutorRelationshipRatchet({
         fact,
@@ -1150,7 +1161,7 @@ export class MemoryExtractor {
             } : {}),
             ...(turnId ? { turnId } : {}),
             ...(triggerReason ? { reason: triggerReason } : {}),
-          ...(selfDirectedMemory ? { actor: 'companion' } : {}),
+          ...(companionOwned ? { actor: 'companion', subjectScope: 'companion_internal' } : {}),
           ...(routing?.triggerContactId ? { triggerContactId: routing.triggerContactId } : {}),
           ...(routing?.routedContactId ? { routedContactId: routing.routedContactId } : {}),
           ...(routing?.sourceContactId ? { sourceContactId: routing.sourceContactId } : {}),
@@ -1183,35 +1194,6 @@ export class MemoryExtractor {
       sensitivity: fact.sensitivity,
       contactId: factContactId,
     });
-  }
-
-  private async resolveSourceSpeakerContactId(
-    channelId: string,
-    speaker: ExtractionSourceSpeaker,
-  ): Promise<string | undefined> {
-    if (!this.contactStore) return undefined;
-
-    const authorId = speaker.authorId?.trim();
-    if (authorId) {
-      const channel = resolveExtractionIdentityChannel(channelId);
-      const byChannelIdentity = await this.contactStore.getByChannelIdentity(channel, authorId);
-      if (byChannelIdentity) return byChannelIdentity.id;
-
-      if (channel === 'discord') {
-        const byDiscordUserId = await this.contactStore.getByDiscordUserId(authorId);
-        if (byDiscordUserId) return byDiscordUserId.id;
-      }
-    }
-
-    const speakerNameKey = normalizeContactNameKey(speaker.name);
-    if (!speakerNameKey || GENERIC_SOURCE_SPEAKER_KEYS.has(speakerNameKey)) return undefined;
-
-    const matches = (await this.contactStore.listAll())
-      .filter((contact) => {
-        const contactName = resolvePreferredContactName(contact, contact.displayName);
-        return normalizeContactNameKey(contactName) === speakerNameKey;
-      });
-    return matches.length === 1 ? matches[0]?.id : undefined;
   }
 
   private adjustFactImportanceByEmotion(
@@ -1326,35 +1308,6 @@ export class MemoryExtractor {
   private isTelemetryEnabled(): boolean {
     return resolveTelemetryEnabled(this.runtimeConfig, this.telemetryEnabled);
   }
-}
-
-const GENERIC_SOURCE_SPEAKER_KEYS = new Set([
-  'assistant',
-  'companion',
-  'the assistant',
-  'the companion',
-  'the user',
-  'user',
-]);
-
-function resolveExtractionIdentityChannel(channelId: string): string {
-  if (channelId.startsWith('discord:') || channelId.startsWith('discord-voice:')) return 'discord';
-  if (channelId.startsWith('api:')) return 'api';
-  if (channelId.startsWith('telegram:')) return 'telegram';
-  if (channelId.startsWith('internal:')) return 'internal';
-
-  const separatorIndex = channelId.indexOf(':');
-  if (separatorIndex > 0) return channelId.slice(0, separatorIndex);
-  return 'unknown';
-}
-
-function normalizeContactNameKey(value: string | undefined): string {
-  return (value ?? '')
-    .normalize('NFKD')
-    .replace(/[^\p{L}\p{N}\s'-]+/gu, ' ')
-    .toLowerCase()
-    .replace(/\s+/g, ' ')
-    .trim();
 }
 
 export { parseFactsXml };

@@ -189,6 +189,8 @@ export async function executeAcceptedFactWrites(
           writeCount++;
           acceptedWrites.push({
             memoryId: result.memory.id,
+            ...((routing.reason === 'conversational_companion' || routing.reason === 'self_directed_companion')
+              ? { subjectScope: 'companion_internal' as const } : {}),
             importance: fact.importance,
             confidence: fact.confidence,
             ...(routing.contactId ? { contactId: routing.contactId } : {}),
@@ -204,6 +206,8 @@ export async function executeAcceptedFactWrites(
           supersededCount++;
           acceptedWrites.push({
             memoryId: result.memory.id,
+            ...((routing.reason === 'conversational_companion' || routing.reason === 'self_directed_companion')
+              ? { subjectScope: 'companion_internal' as const } : {}),
             importance: fact.importance,
             confidence: fact.confidence,
             ...(routing.contactId ? { contactId: routing.contactId } : {}),

@@ -74,6 +74,8 @@ const MOON_PROJECT: Record<string, FreeTimeProjectRecord> = {
   'project:moon': { projectRef: 'project:moon', workspace: { kind: 'private' } },
 };
 
+const IDENTITY_PROMPT = 'You are Companion. You love tide pools and writing small poems.';
+
 function makeChooser(overrides: Partial<FreeTimeChooserPorts> = {}): {
   chooser: FreeTimeChooser;
   restWindowPolicy: DurableRestWindowPolicy;
@@ -97,6 +99,7 @@ function makeChooser(overrides: Partial<FreeTimeChooserPorts> = {}): {
     restWindowPolicy,
     listResumableProjects,
     companionName: 'Companion',
+    resolveIdentityPrompt: overrides.resolveIdentityPrompt ?? (() => IDENTITY_PROMPT),
     ...(overrides.offerNewWorkspace ? { offerNewWorkspace: overrides.offerNewWorkspace } : {}),
     ...(overrides.settings ? { settings: overrides.settings } : {}),
     ...(overrides.companionId ? { companionId: overrides.companionId } : {}),
@@ -265,6 +268,25 @@ describe('FreeTimeChooser.chooseWorkspace — fail closed to rest', () => {
     });
     const outcome = await chooser.chooseWorkspace(CTX);
     expect(outcome).toEqual({ kind: 'rest', reason: 'resolve_failed' });
+  });
+
+  it('puts the companion identity first in the chooser system prompt', async () => {
+    const { chooser, provider } = makeChooser();
+    await chooser.chooseWorkspace(CTX);
+    const context = provider.complete.mock.calls[0]?.[0] as LLMContext;
+    expect(context.systemPrompt.startsWith(IDENTITY_PROMPT)).toBe(true);
+    expect(context.systemPrompt).toContain('[Free-time choice]');
+    expect(context.systemPrompt).not.toContain('never manufacture activity');
+  });
+
+  it('rests without a model call or silence when identity is unavailable', async () => {
+    for (const identity of [null, '   ']) {
+      const { chooser, provider, restWindowPolicy } = makeChooser({ resolveIdentityPrompt: () => identity });
+      const outcome = await chooser.chooseWorkspace(CTX);
+      expect(outcome).toEqual({ kind: 'rest', reason: 'identity_unavailable' });
+      expect(provider.complete).not.toHaveBeenCalled();
+      await expect(restWindowPolicy.isSilenced({ lane: 'quiet_hours', nowMs: 2_000 })).resolves.toBe(false);
+    }
   });
 
   it('rests without a model call or silence when disabled', async () => {

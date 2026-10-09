@@ -4,7 +4,7 @@ import { inferSessionChannelType } from '../../../core/session/session-id.js';
 import { COMPANION_CHANNEL_TYPE, parseCompanionChannelId } from '../../../shared/contracts/companion-channels.js';
 import { EXTERNAL_MEMORY_CHANNEL, externalMemoryPolicyChannelId } from '../../../shared/routing/external-memory-channel.js';
 import { normalizeSpeakerPhrase } from './strict-group-routing.js';
-import type { ExtractionSourceSpeaker } from './speaker-routing.js';
+import type { ExtractionSourceSpeaker } from './types.js';
 
 const GENERIC_SOURCE_SPEAKER_KEYS = new Set([
   'assistant', 'companion', 'the assistant', 'the companion', 'the user', 'user',

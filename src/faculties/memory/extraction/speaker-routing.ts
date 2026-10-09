@@ -1,3 +1,4 @@
+import type { ExtractionSourceSpeaker, TranscriptSpeaker } from './types.js';
 import { resolveClearSourceSpeaker } from './legacy-speaker-routing.js';
 import type { Contact } from '../../../core/contacts/types.js';
 import { extractionContactNames } from './contact-resolution.js';
@@ -22,6 +23,8 @@ import {
   type FactRoutingOptions,
 } from './message-address-mode.js';
 
+export type { ExtractionSourceSpeaker } from './types.js';
+
 export {
   classifySessionEntryCompanionRelevance,
   type FactRoutingOptions,
@@ -36,11 +39,6 @@ type ExtractionFactRoutingReason =
   | 'structured_room_context'
   | 'self_directed_companion'
   | 'conversational_companion';
-
-export interface ExtractionSourceSpeaker {
-  name: string;
-  authorId?: string;
-}
 
 export interface ExtractionFactRouting {
   triggerContactId?: string;
@@ -72,17 +70,6 @@ export interface ExtractionFactRouting {
   /** `AutomataWorkerLineage.runId` of the extraction run that derived the fact. */
   derivationRunId?: string;
   routingReason: ExtractionFactRoutingReason;
-}
-
-export interface TranscriptSpeaker {
-  key: string;
-  name: string;
-  normalizedName: string;
-  aliases?: string[];
-  companion?: boolean;
-  authorId?: string;
-  entries: SessionEntry[];
-  contactId?: string;
 }
 
 export interface SpeakerRoutingContext {

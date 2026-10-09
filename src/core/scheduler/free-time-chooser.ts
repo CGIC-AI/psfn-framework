@@ -12,8 +12,9 @@
 //      rest / private wander / resume a project / begin something new. The call
 //      carries the companion's authoritative identity prompt so the choice is
 //      made by who she is, with her interests, not by a nameless model. With no
-//      identity yet (no default turn since start) the block rests WITHOUT
-//      persisting silence, so she is asked again once identity exists.
+//      identity yet (no default turn since start) the chooser defers to the
+//      block itself: that turn runs through the ordinary agent loop with her
+//      full persona, where ending quietly is always open to her.
 //   3. Rest ends the block WITHOUT a second model call and persists silence via
 //      `RestWindowPolicyPort` so the companion is not re-prompted this period.
 //   4. Any work choice is validated against the pre-built menu and resolved
@@ -91,7 +92,6 @@ export interface FreeTimeChoiceContext {
 export type FreeTimeRestReason =
   | 'companion_rested'
   | 'chooser_disabled'
-  | 'identity_unavailable'
   | 'chooser_timeout'
   | 'chooser_error'
   | 'chooser_unparseable'
@@ -101,6 +101,12 @@ export type FreeTimeRestReason =
 export type FreeTimeChooserOutcome =
   | { readonly kind: 'suppressed'; readonly reason: 'rest_silenced' | 'rest_state_unavailable' }
   | { readonly kind: 'rest'; readonly reason: FreeTimeRestReason }
+  /**
+   * No identity prompt exists yet, so no persona-faithful menu choice can be
+   * made. The block opens on her default private workspace instead and she
+   * decides inside it, with her full identity, whether to do anything at all.
+   */
+  | { readonly kind: 'defer_to_block'; readonly reason: 'identity_unavailable' }
   | {
       readonly kind: 'workspace';
       readonly optionId: string;
@@ -163,7 +169,7 @@ export interface FreeTimeChooserPorts {
   /**
    * The companion's authoritative identity system prompt (persona, interests,
    * policy), as assembled by the last default agent turn. `null` until one has
-   * run; the chooser then rests without persisting silence.
+   * run; the chooser then defers the choice to the block itself.
    */
   readonly resolveIdentityPrompt: () => string | null;
   readonly companionId?: string;
@@ -250,9 +256,9 @@ export class FreeTimeChooser {
     const identityPrompt = this.ports.resolveIdentityPrompt()?.trim();
     if (!identityPrompt) {
       // Without her identity the choice would be made by a nameless model, which
-      // always rests. Like disabled, this is a runtime state, not her decision:
-      // do NOT persist silence, so she is asked again once identity exists.
-      return { kind: 'rest', reason: 'identity_unavailable' };
+      // always rests. Let the block's full-identity turn decide instead; it also
+      // captures the identity prompt for later chooser calls. No silence.
+      return { kind: 'defer_to_block', reason: 'identity_unavailable' };
     }
 
     const choiceSet = this.listChoices(context);

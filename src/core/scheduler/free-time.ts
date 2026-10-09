@@ -851,6 +851,12 @@ function makeLaneHandler(
         endedAtMs: nowMs,
       };
     } else {
+      if (chosen?.kind === 'defer_to_block') {
+        log.info('Free-time chooser deferred to the block (no identity prompt yet)', {
+          lane,
+          reason: chosen.reason,
+        });
+      }
       const projectContext = chosen?.kind === 'workspace'
         ? buildChosenWorkspaceFraming(chosen.workspace, chosen.label)
         : (options.loadProjectContext ? await options.loadProjectContext() : null);

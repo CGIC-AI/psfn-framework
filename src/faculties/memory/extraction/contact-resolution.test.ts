@@ -21,7 +21,7 @@ describe('extraction contact resolution', () => {
   it.each([
     ['123456789012345678', 'discord'],
     ['discord-voice:123456789012345678', 'discord'],
-    ['companion-dm:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222', 'companion'],
+    [['companion-dm', '11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222'].join(':'), 'companion'],
     [`api:hermes:${'a'.repeat(64)}`, 'api:hermes'],
     ['api:other:session', 'api'],
   ])('uses the canonical identity channel for %s', async (channelId, identityChannel) => {

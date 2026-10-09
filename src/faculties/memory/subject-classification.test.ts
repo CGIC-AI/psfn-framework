@@ -120,6 +120,16 @@ describe('classifyMemorySubject', () => {
     }), { memoryRevision: 1 }).subjectClass).toBe('unattributed');
   });
 
+  it.each([undefined, 'contact-other-trigger'])('keeps an unresolved named subject unbound with trigger %s', triggerContactId => {
+    expect(classifyMemorySubject(memory({
+      contactId: 'contact-speaker',
+      provenance: {
+        sourceContactId: 'contact-speaker', routedContactId: 'contact-speaker',
+        subjectName: 'Robin', ...(triggerContactId ? { triggerContactId } : {}),
+      },
+    }), { memoryRevision: 1 })).toMatchObject({ subjectClass: 'unbound_person', subjectContactIds: [] });
+  });
+
   it('keeps explicit subject evidence authoritative when routing points elsewhere', () => {
     const result = classifyMemorySubject(memory({
       contactId: 'contact-routed',

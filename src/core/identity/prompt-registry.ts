@@ -84,7 +84,7 @@ Never output raw character-card macros such as "{{user}}", "{{char}}", "{{charac
 Do NOT extract:
 - Small talk or social filler ("thanks", "good morning", "lol", "see you")
 - Conversation logistics or transient status ("brb", "typing from phone", "on my way")
-- Facts about the assistant/system/tools/platform rather than a durable participant/contact/relationship
+- System/tool/platform mechanics rather than durable participant/contact/relationship facts. The companion is a participant: retain their enduring preferences, commitments, and self-knowledge.
 - Meta conversation mechanics ("someone asked to remember this", "we are chatting now")
 - Generic low-value chatter that does not reveal stable preferences, identity, relationships, or meaningful emotional patterns
 

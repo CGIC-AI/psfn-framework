@@ -60,8 +60,11 @@ export function renderExtractionChunkPrompt(
       + 'Use the supporting transcript message IDs and the actual participant names. '
       + 'The person speaking or owning a DM is not automatically the subject of every fact. '
       + 'Never invent a subject_contact_id; omit it unless explicitly supplied with the transcript '
-      + 'and bound to the named subject. Skip facts about unresolved third parties rather than '
-      + 'assigning them to the speaker. These attribution requirements also apply to direct messages.';
+      + 'and bound to the named subject. Preserve named third-party facts with their subject_name '
+      + 'and the speaker as source; contact resolution happens after extraction. '
+      + 'Include durable companion preferences, commitments, and self-knowledge from assistant replies, '
+      + 'using the companion name as source and subject where appropriate. For human facts, cite '
+      + 'the human evidence as well as any companion paraphrase. These attribution requirements also apply to direct messages.';
   const taskPrompt = [renderedPrompt, subjectAttributionGuidance, namingGuidance, selfDirectedGuidance]
     .filter((section): section is string => Boolean(section))
     .join('\n\n');

@@ -123,6 +123,7 @@ export interface ProfileSynthesisConfig {
 }
 
 export interface AcceptedFactWrite {
+  subjectScope?: 'companion_internal';
   memoryId: string;
   importance: number;
   confidence: number;

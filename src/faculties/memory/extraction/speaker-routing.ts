@@ -1,3 +1,7 @@
+import { resolveClearSourceSpeaker } from './legacy-speaker-routing.js';
+import type { Contact } from '../../../core/contacts/types.js';
+import { extractionContactNames } from './contact-resolution.js';
+import { resolveSessionEntrySpeakerContactId } from '../../../core/session/speaker-attribution.js';
 import type { SessionEntry } from '../../../core/session/types.js';
 import type {
   ExtractedFact,
@@ -8,7 +12,6 @@ import type {
 import type { CogSecStructuredProvenanceRef } from '../../../shared/contracts/provenance-ref.js';
 import { isExtractionTranscriptEntry } from './chunk-compose.js';
 import {
-  hasSpeakerWord,
   normalizeSpeakerPhrase,
   resolveCanonicalFactSubject,
   validateStrictGroupAddressing,
@@ -31,7 +34,8 @@ type ExtractionFactRoutingReason =
   | 'structured_source_metadata'
   | 'structured_subject_metadata'
   | 'structured_room_context'
-  | 'self_directed_companion';
+  | 'self_directed_companion'
+  | 'conversational_companion';
 
 export interface ExtractionSourceSpeaker {
   name: string;
@@ -70,10 +74,12 @@ export interface ExtractionFactRouting {
   routingReason: ExtractionFactRoutingReason;
 }
 
-interface TranscriptSpeaker {
+export interface TranscriptSpeaker {
   key: string;
   name: string;
   normalizedName: string;
+  aliases?: string[];
+  companion?: boolean;
   authorId?: string;
   entries: SessionEntry[];
   contactId?: string;
@@ -83,6 +89,7 @@ export interface SpeakerRoutingContext {
   speakers: TranscriptSpeaker[];
   mixedHumanSpeakers: boolean;
   entries: SessionEntry[];
+  contacts?: readonly Contact[];
 }
 
 export type FactRoutingDecision =
@@ -128,22 +135,46 @@ export type FactRoutingDecision =
 export async function buildSpeakerRoutingContext(
   entries: readonly SessionEntry[],
   resolveSourceSpeakerContactId?: (speaker: ExtractionSourceSpeaker) => Promise<string | undefined>,
+  options: {
+    contacts?: readonly Contact[];
+    canonicalContactId?: string;
+    companionName?: string;
+  } = {},
 ): Promise<SpeakerRoutingContext> {
   const speakers = collectTranscriptSpeakers(entries);
-  if (resolveSourceSpeakerContactId) {
-    for (const speaker of speakers) {
+  for (const speaker of speakers) {
+    const canonicalIds = new Set(speaker.entries.map(resolveSessionEntrySpeakerContactId).filter(Boolean));
+    if (canonicalIds.size > 1) throw new Error('Conflicting canonical extraction speaker attribution');
+    speaker.contactId = canonicalIds.values().next().value;
+    if (!speaker.contactId && resolveSourceSpeakerContactId) {
       const contactId = await resolveSourceSpeakerContactId({
         name: speaker.name,
         ...(speaker.authorId ? { authorId: speaker.authorId } : {}),
       });
       if (contactId) speaker.contactId = contactId;
     }
+    if (!speaker.contactId && speakers.length === 1) speaker.contactId = options.canonicalContactId;
+    const contact = options.contacts?.find(item => item.id === speaker.contactId && !item.archivedAt);
+    speaker.aliases = [...new Set([
+      ...speaker.entries.flatMap(entry => entry.authorName ? [entry.authorName] : []),
+      ...(contact ? extractionContactNames(contact) : []),
+    ])];
   }
 
+  const mixedHumanSpeakers = speakers.length > 1;
+  if (options.companionName) {
+    speakers.push({
+      key: 'companion', name: options.companionName,
+      normalizedName: normalizeSpeakerPhrase(options.companionName),
+      companion: true,
+      entries: entries.filter(entry => isExtractionTranscriptEntry(entry) && entry.role === 'assistant'),
+    });
+  }
   return {
     speakers,
-    mixedHumanSpeakers: speakers.length > 1,
+    mixedHumanSpeakers,
     entries: entries.filter(isExtractionTranscriptEntry),
+    contacts: options.contacts,
   };
 }
 
@@ -175,6 +206,20 @@ export function resolveFactRouting(
   triggerContactId: string | undefined,
   options: FactRoutingOptions = {},
 ): FactRoutingDecision {
+  // A turn contact is proof for the sole user in a direct conversation only.
+  // Group extraction must continue to resolve each source independently.
+  if (
+    !options.requireStructuredAddressing
+    && context.speakers.filter(speaker => !speaker.companion).length === 1
+    && triggerContactId
+  ) {
+    context = {
+      ...context,
+      speakers: context.speakers.map(speaker => ({
+        ...speaker, contactId: speaker.companion ? undefined : speaker.contactId ?? triggerContactId,
+      })),
+    };
+  }
   const conversationAt = latestSourceEntryTimestamp(context.entries);
   const structuredRouting = resolveStructuredFactRouting(
     fact,
@@ -187,7 +232,7 @@ export function resolveFactRouting(
   }
 
   if (!context.mixedHumanSpeakers) {
-    const speaker = context.speakers.at(0);
+    const speaker = context.speakers.find(speaker => !speaker.companion);
     return {
       status: 'route',
       ...(triggerContactId ? { contactId: triggerContactId } : {}),
@@ -202,7 +247,7 @@ export function resolveFactRouting(
     };
   }
 
-  const match = resolveClearSourceSpeaker(fact, context.speakers);
+  const match = resolveClearSourceSpeaker(fact, context.speakers.filter(speaker => !speaker.companion));
   if (!match) {
     return { status: 'skip', reason: 'ambiguous_group_speaker' };
   }
@@ -261,7 +306,15 @@ function resolveStructuredFactRouting(
     return { status: 'skip', reason: 'missing_source_message_ids' };
   }
 
-  const sourceSpeakers = resolveSourceSpeakers(sourceEntries, context.speakers);
+  const citedSpeakers = resolveSourceSpeakers(sourceEntries, context.speakers);
+  // A named source can select the evidence speaker in a cited user/assistant
+  // exchange. Two different users remain ambiguous, as in strict group routing.
+  const sourceSpeakers = !options.requireStructuredAddressing
+    && citedSpeakers.some(speaker => speaker.companion)
+    && citedSpeakers.filter(speaker => !speaker.companion).length <= 1
+    && attribution.sourceSpeakerName
+    ? citedSpeakers.filter(speaker => speakerMatchesName(speaker, attribution.sourceSpeakerName!))
+    : citedSpeakers;
   if (sourceSpeakers.length !== 1) {
     return { status: 'skip', reason: 'ambiguous_source_message_ids' };
   }
@@ -272,7 +325,7 @@ function resolveStructuredFactRouting(
   }
   if (
     attribution.sourceSpeakerName
-    && normalizeSpeakerPhrase(attribution.sourceSpeakerName) !== sourceSpeaker.normalizedName
+    && !speakerMatchesName(sourceSpeaker, attribution.sourceSpeakerName)
   ) {
     return {
       status: 'skip',
@@ -280,7 +333,7 @@ function resolveStructuredFactRouting(
       sourceSpeakerName: sourceSpeaker.name,
     };
   }
-  if (!sourceSpeaker.contactId) {
+  if (!sourceSpeaker.contactId && !sourceSpeaker.companion) {
     return {
       status: 'skip',
       reason: 'unresolved_speaker_contact',
@@ -311,7 +364,19 @@ function resolveStructuredFactRouting(
     };
   }
 
-  const canonicalSubject = resolveCanonicalFactSubject(attribution, context.speakers);
+  const subjects = options.requireStructuredAddressing
+    ? context.speakers
+    : [
+      ...context.speakers,
+      ...(context.contacts ?? []).filter(contact => !contact.archivedAt
+        && !context.speakers.some(speaker => speaker.contactId === contact.id))
+        .map(contact => ({
+          key: `contact:${contact.id}`, name: contact.displayName,
+          normalizedName: normalizeSpeakerPhrase(contact.displayName),
+          aliases: extractionContactNames(contact), contactId: contact.id, entries: [],
+        })),
+    ];
+  const canonicalSubject = resolveCanonicalFactSubject<TranscriptSpeaker>(attribution, subjects);
   if (canonicalSubject.status === 'skip') {
     return {
       status: 'skip',
@@ -320,13 +385,22 @@ function resolveStructuredFactRouting(
     };
   }
   const subject = canonicalSubject.speaker;
+  if (subject?.companion) {
+    return buildStructuredRoute({
+      attribution, sourceSpeaker, sourceEntries,
+      addressMode: addressModeDecision.addressMode,
+      reason: 'conversational_companion', subjectName: subject.name,
+    });
+  }
+  // The companion's paraphrase alone is not confirmation of a human fact.
+  if (sourceSpeaker.companion && !sourceEntries.some(entry => entry.role === 'user')) {
+    return { status: 'skip', reason: 'unresolved_subject_contact', sourceSpeakerName: sourceSpeaker.name };
+  }
   const roomContextScope = resolveRoomContextScope(attribution, context.entries);
   const subjectContactId = subject?.contactId;
-  // A named subject whose contact could not be resolved — either no matching
-  // speaker, or a name-matched speaker that still lacks a contactId — must not
-  // fall back to the source speaker's contact, or the subject's fact would be
-  // misattributed to the source. Route room-scoped context where applicable,
-  // otherwise skip.
+  // Group subjects must resolve independently. In a DM, an unknown third
+  // party can retain source ownership and an unbound subject name until the
+  // governed mention-contact path has enough evidence to create a contact.
   if (attribution.subjectName && !subjectContactId) {
     if (roomContextScope) {
       return buildStructuredRoute({
@@ -350,6 +424,19 @@ function resolveStructuredFactRouting(
         addressMode: addressModeDecision.addressMode,
         reason: 'structured_source_metadata',
         contactId: sourceSpeaker.contactId,
+        subjectName: attribution.subjectName,
+      });
+    }
+    if (
+      !options.requireStructuredAddressing
+      && !context.mixedHumanSpeakers
+      && !subject
+      && sourceSpeaker.contactId
+    ) {
+      return buildStructuredRoute({
+        attribution, sourceSpeaker, sourceEntries,
+        addressMode: addressModeDecision.addressMode,
+        reason: 'structured_source_metadata', contactId: sourceSpeaker.contactId,
         subjectName: attribution.subjectName,
       });
     }
@@ -504,7 +591,7 @@ function resolveSourceSpeakers(
   const speakersByKey = new Map(speakers.map(speaker => [speaker.key, speaker]));
   const sourceKeys = new Set<string>();
   for (const entry of sourceEntries) {
-    if (entry.role !== 'user') continue;
+    if (entry.role !== 'user' && entry.role !== 'assistant') continue;
     const key = speakerKeyForEntry(entry);
     if (key) sourceKeys.add(key);
   }
@@ -542,259 +629,15 @@ function collectTranscriptSpeakers(entries: readonly SessionEntry[]): Transcript
 }
 
 function speakerKeyForEntry(entry: SessionEntry): string | undefined {
+  if (entry.role === 'assistant') return 'companion';
   const authorId = entry.authorId?.trim();
   if (authorId) return `author:${authorId}`;
   const normalizedName = normalizeSpeakerPhrase(entry.authorName?.trim() || 'user');
   return normalizedName ? `name:${normalizedName}` : undefined;
 }
 
-function resolveClearSourceSpeaker(
-  fact: ExtractedFact,
-  speakers: readonly TranscriptSpeaker[],
-): { speaker: TranscriptSpeaker; reason: ExtractionFactRoutingReason } | undefined {
-  const prefixMatches = speakers.filter(speaker => factHasSpeakerAttributionPrefix(fact.text, speaker));
-  if (prefixMatches.length === 1) {
-    const matched = prefixMatches.at(0);
-    if (!matched) return undefined;
-    if (factMentionsOtherSpeaker(fact.text, matched, speakers)) return undefined;
-    return {
-      speaker: matched,
-      reason: 'speaker_name_prefix',
-    };
-  }
-  if (prefixMatches.length > 1) return undefined;
-
-  const contentMatch = resolveTranscriptContentSpeaker(fact.text, speakers);
-  if (contentMatch && factMentionsOtherSpeaker(fact.text, contentMatch, speakers)) {
-    return undefined;
-  }
-  return contentMatch
-    ? { speaker: contentMatch, reason: 'transcript_content_match' }
-    : undefined;
-}
-
-function factMentionsOtherSpeaker(
-  factText: string,
-  sourceSpeaker: TranscriptSpeaker,
-  speakers: readonly TranscriptSpeaker[],
-): boolean {
-  const normalizedFact = normalizeSpeakerPhrase(factText);
-  if (!normalizedFact) return false;
-  return speakers.some(speaker => (
-    speaker.key !== sourceSpeaker.key
-    && speaker.normalizedName
-    && hasSpeakerWord(normalizedFact, speaker.normalizedName)
+function speakerMatchesName(speaker: TranscriptSpeaker, name: string): boolean {
+  return [speaker.name, ...(speaker.aliases ?? [])].some(alias => (
+    normalizeSpeakerPhrase(alias) === normalizeSpeakerPhrase(name)
   ));
-}
-
-const ATTRIBUTION_START_WORDS = new Set([
-  'asked',
-  'asks',
-  'believe',
-  'believes',
-  'directly',
-  'dislike',
-  'dislikes',
-  'enjoy',
-  'enjoys',
-  'feel',
-  'feels',
-  'felt',
-  'had',
-  'has',
-  'have',
-  'is',
-  'like',
-  'likes',
-  'mention',
-  'mentioned',
-  'mentions',
-  'need',
-  'needed',
-  'needs',
-  'note',
-  'noted',
-  'notes',
-  'oppose',
-  'opposes',
-  'prefer',
-  'prefers',
-  'report',
-  'reported',
-  'reports',
-  'said',
-  'says',
-  'state',
-  'stated',
-  'states',
-  'support',
-  'supports',
-  'think',
-  'thinks',
-  'use',
-  'uses',
-  'want',
-  'wants',
-  'was',
-  'work',
-  'works',
-  'worry',
-  'worries',
-]);
-
-function factHasSpeakerAttributionPrefix(factText: string, speaker: TranscriptSpeaker): boolean {
-  if (!speaker.normalizedName) return false;
-  const normalizedFact = normalizeSpeakerPhrase(factText);
-  if (!normalizedFact) return false;
-
-  const accordingPrefix = `according to ${speaker.normalizedName}`;
-  if (normalizedFact === accordingPrefix || normalizedFact.startsWith(`${accordingPrefix} `)) {
-    return true;
-  }
-
-  if (normalizedFact === speaker.normalizedName) return true;
-  if (!normalizedFact.startsWith(`${speaker.normalizedName} `)) return false;
-
-  const afterName = normalizedFact.slice(speaker.normalizedName.length).trim();
-  const firstWord = afterName.split(' ')[0] ?? '';
-  return ATTRIBUTION_START_WORDS.has(firstWord);
-}
-
-function resolveTranscriptContentSpeaker(
-  factText: string,
-  speakers: readonly TranscriptSpeaker[],
-): TranscriptSpeaker | undefined {
-  const speakerNameTokens = collectSpeakerNameTokens(speakers);
-  const factTokens = tokenizeForSourceMatch(factText, speakerNameTokens);
-  if (factTokens.size < 3) return undefined;
-
-  const scores = speakers
-    .map(speaker => scoreSpeakerContentMatch(speaker, factTokens, speakerNameTokens))
-    .sort((left, right) => (
-      right.overlap - left.overlap
-        || right.ratio - left.ratio
-        || left.speaker.key.localeCompare(right.speaker.key)
-    ));
-  const best = scores.at(0);
-  if (!best || best.overlap < 3 || best.ratio < 0.45) return undefined;
-
-  const second = scores.at(1);
-  if (!second || best.overlap - second.overlap < 2) return undefined;
-
-  return best.speaker;
-}
-
-function scoreSpeakerContentMatch(
-  speaker: TranscriptSpeaker,
-  factTokens: ReadonlySet<string>,
-  speakerNameTokens: ReadonlySet<string>,
-): { speaker: TranscriptSpeaker; overlap: number; ratio: number } {
-  let bestOverlap = 0;
-  let bestRatio = 0;
-
-  for (const entry of speaker.entries) {
-    const entryTokens = tokenizeForSourceMatch(entry.content, speakerNameTokens);
-    if (entryTokens.size === 0) continue;
-    let overlap = 0;
-    for (const token of entryTokens) {
-      if (factTokens.has(token)) overlap++;
-    }
-    const ratio = overlap / Math.min(entryTokens.size, factTokens.size);
-    if (overlap > bestOverlap || (overlap === bestOverlap && ratio > bestRatio)) {
-      bestOverlap = overlap;
-      bestRatio = ratio;
-    }
-  }
-
-  return {
-    speaker,
-    overlap: bestOverlap,
-    ratio: bestRatio,
-  };
-}
-
-function collectSpeakerNameTokens(speakers: readonly TranscriptSpeaker[]): Set<string> {
-  const tokens = new Set<string>();
-  for (const speaker of speakers) {
-    for (const token of normalizeSpeakerPhrase(speaker.name).split(' ')) {
-      if (token) tokens.add(token);
-    }
-  }
-  return tokens;
-}
-
-const SOURCE_MATCH_STOPWORDS = new Set([
-  'about',
-  'also',
-  'and',
-  'are',
-  'because',
-  'been',
-  'being',
-  'believe',
-  'believes',
-  'but',
-  'can',
-  'could',
-  'did',
-  'does',
-  'for',
-  'from',
-  'had',
-  'has',
-  'have',
-  'her',
-  'him',
-  'his',
-  'i',
-  'if',
-  'into',
-  'its',
-  'mean',
-  'not',
-  'our',
-  'said',
-  'says',
-  'she',
-  'that',
-  'the',
-  'their',
-  'them',
-  'then',
-  'they',
-  'this',
-  'was',
-  'were',
-  'with',
-  'would',
-  'you',
-]);
-
-function tokenizeForSourceMatch(
-  text: string,
-  speakerNameTokens: ReadonlySet<string>,
-): Set<string> {
-  const normalized = normalizeSpeakerPhrase(text)
-    .replace(/\byt\b/g, 'youtube')
-    .replace(/\byoutube\b/g, 'youtube')
-    .replace(/\byou tube\b/g, 'youtube')
-    .replace(/\bticktok\b/g, 'tiktok');
-  const tokens = new Set<string>();
-
-  for (const rawToken of normalized.split(' ')) {
-    const token = normalizeSourceMatchToken(rawToken);
-    if (!token || token.length < 3) continue;
-    if (SOURCE_MATCH_STOPWORDS.has(token)) continue;
-    if (speakerNameTokens.has(token)) continue;
-    tokens.add(token);
-  }
-
-  return tokens;
-}
-
-function normalizeSourceMatchToken(token: string): string {
-  if (token === 'needed') return 'need';
-  if (token === 'needs') return 'need';
-  if (token === 'putting') return 'put';
-  return token;
 }

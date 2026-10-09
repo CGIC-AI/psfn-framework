@@ -131,6 +131,7 @@ export function resolveProfileRefreshContactIds(
   write: AcceptedFactWrite,
   fallbackContactId: string | undefined,
 ): string[] {
+  if (write.subjectScope === 'companion_internal') return [];
   const contactIds = new Set<string>();
   if (write.contactId) contactIds.add(write.contactId);
   if (write.subjectContactId) contactIds.add(write.subjectContactId);

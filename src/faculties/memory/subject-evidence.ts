@@ -30,6 +30,13 @@ export function resolveCanonicalMemorySubjectContactId(
     return mentionContactId;
   }
 
-  if (!routedContactId || routedContactId === triggerContactId) return undefined;
+  // An unresolved named subject remains distinct from its evidence speaker,
+  // including extraction runs whose trigger contact was not supplied.
+  if (
+    !routedContactId || routedContactId === triggerContactId
+    || (provenance?.subjectName?.trim() && routedContactId === sourceContactId)
+  ) {
+    return undefined;
+  }
   return routedContactId;
 }

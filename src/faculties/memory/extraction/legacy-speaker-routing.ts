@@ -1,5 +1,5 @@
 import type { ExtractedFact } from '../types.js';
-import type { TranscriptSpeaker } from './speaker-routing.js';
+import type { TranscriptSpeaker } from './types.js';
 import { hasSpeakerWord, normalizeSpeakerPhrase } from './strict-group-routing.js';
 
 export function resolveClearSourceSpeaker(

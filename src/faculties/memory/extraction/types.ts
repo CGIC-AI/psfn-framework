@@ -192,3 +192,19 @@ export const DEFAULT_PROFILE_MIN_SOURCE_MEMORIES = 2;
 
 export const RECOVERY_CONTEXT_MESSAGE_LIMIT = 50;
 export const TRANSCRIPT_EMOTIONAL_SIGNAL_LIMIT = 12;
+
+export interface ExtractionSourceSpeaker {
+  name: string;
+  authorId?: string;
+}
+
+export interface TranscriptSpeaker {
+  key: string;
+  name: string;
+  normalizedName: string;
+  aliases?: string[];
+  companion?: boolean;
+  authorId?: string;
+  entries: SessionEntry[];
+  contactId?: string;
+}

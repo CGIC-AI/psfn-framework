@@ -846,6 +846,42 @@ describe('direct conversation subjects and aliases', () => {
     });
   });
 
+  it('keeps group source and subject matching bound to journal names', async () => {
+    const routingContext = await buildSpeakerRoutingContext([
+      entry(1, 'dragon', 'Example Partner', 'Lex collects telescopes.', {
+        metadata: addressedTo({ authorId: 'current-companion-bot', authorName: 'Lyra' }),
+      }),
+    ], async () => alex.id, { contacts: [alex] });
+    for (const [sourceSpeakerName, subjectName, reason] of [
+      ['Example Partner', 'Lex', 'unresolved_subject_contact'],
+      ['Lex', 'Example Partner', 'conflicting_source_attribution'],
+    ]) {
+      expect(resolveFactRouting(fact({
+        text: `${subjectName} collects telescopes.`,
+        attribution: { sourceMessageIds: [1], sourceSpeakerName, subjectName, addressMode: 'direct_to_companion' },
+      }), routingContext, alex.id, { requireStructuredAddressing: true }))
+        .toMatchObject({ status: 'skip', reason });
+    }
+  });
+
+  it('uses the sole human in mixed DM citations when the source name is omitted', async () => {
+    expect(resolveFactRouting(fact({
+      text: 'Alex likes sailing.', attribution: { sourceMessageIds: [1, 2], subjectName: 'Alex' },
+    }), await directContext(), alex.id)).toMatchObject({
+      status: 'route', sourceContactId: alex.id, subjectContactId: alex.id, sourceMessageIds: [1, 2],
+    });
+  });
+
+  it.each([{ sourceMessageIds: [1, 2] }, { sourceMessageIds: [1, 2, 3] }])('keeps a multi-human exchange ambiguous for cited IDs $sourceMessageIds', async ({ sourceMessageIds }) => {
+    const routingContext = await buildSpeakerRoutingContext([
+      userEntry, assistantEntry, entry(3, 'transport-robin', 'Robin', 'I also enjoy sailing.'),
+    ], async speaker => speaker.authorId === 'transport-alex' ? alex.id : robin.id,
+    { contacts: [alex, robin], companionName: 'Lyra' });
+    expect(resolveFactRouting(fact({
+      text: 'Alex enjoys sailing.', attribution: { sourceMessageIds, subjectName: 'Alex' },
+    }), routingContext, alex.id)).toMatchObject({ status: 'skip', reason: 'ambiguous_source_message_ids' });
+  });
+
   it('resolves a non-speaking contact while preserving the actual source', async () => {
     expect(resolveFactRouting(fact({
       text: 'Robin loves sailing.',
@@ -876,10 +912,14 @@ describe('direct conversation subjects and aliases', () => {
     expect(decision).not.toHaveProperty('subjectContactId');
   });
 
-  it.each([{ sourceMessageIds: [2] }, { sourceMessageIds: [1, 2] }])('routes companion self-knowledge from cited entries $sourceMessageIds without human ownership', async ({ sourceMessageIds }) => {
+  it.each([
+    { sourceMessageIds: [2], sourceSpeakerName: 'Lyra' },
+    { sourceMessageIds: [1, 2], sourceSpeakerName: 'Lyra' },
+    { sourceMessageIds: [1, 2], sourceSpeakerName: undefined },
+  ])('routes companion self-knowledge from cited entries $sourceMessageIds without human ownership', async ({ sourceMessageIds, sourceSpeakerName }) => {
     const decision = resolveFactRouting(fact({
       text: 'Lyra wants to learn sailing.',
-      attribution: { sourceMessageIds, sourceSpeakerName: 'Lyra', subjectName: 'Lyra' },
+      attribution: { sourceMessageIds, sourceSpeakerName, subjectName: 'Lyra' },
     }), await directContext(), alex.id);
     expect(decision).toMatchObject({ status: 'route', reason: 'conversational_companion', subjectName: 'Lyra' });
     expect(decision).not.toHaveProperty('contactId');

@@ -44,6 +44,14 @@ describe('extraction contact resolution', () => {
       .toBe(contact.id);
   });
 
+  it('does not guess an unstored bare-name alias from an organization suffix', async () => {
+    const tagged = { ...contact, displayName: 'Alex [Observatory]', nickname: undefined };
+    expect(await resolveExtractionSourceContactId('api:session', { name: 'Alex' }, store([tagged])))
+      .toBeUndefined();
+    expect(await resolveExtractionSourceContactId('api:session', { name: 'Alex [Observatory]' }, store([tagged])))
+      .toBe(tagged.id);
+  });
+
   it('rejects ambiguous names and excludes archived contacts', async () => {
     const duplicate = { ...contact, id: 'contact-other', displayName: 'Lex', nickname: undefined };
     expect(await resolveExtractionSourceContactId('api:session', { name: 'Lex' }, store([contact, duplicate])))

@@ -46,8 +46,9 @@ import {
   type MemoryExtractorDrainOptions,
   type ProfileSynthesisConfig,
 } from './extraction/types.js';
-import type {
-  ExtractionFactRouting,
+import {
+  isCompanionOwnedRouting,
+  type ExtractionFactRouting,
 } from './extraction/speaker-routing.js';
 import {
   normalizeMaxWrites,
@@ -844,7 +845,7 @@ export class MemoryExtractor {
         companionName: this.sessionManager.characterName,
       }),
       resolveSourceSpeakerContactId: speaker => resolveExtractionSourceContactId(channelId, speaker, this.contactStore),
-      resolveContacts: async () => this.contactStore ? await this.contactStore.listAll() : [],
+      resolveContacts: async () => this.contactStore ? this.contactStore.listAll() : [],
       ...(this.runtimeConfig?.discordBotId
         ? { companionAuthorIds: [this.runtimeConfig.discordBotId] }
         : {}),
@@ -1046,7 +1047,8 @@ export class MemoryExtractor {
   ): Promise<WriteResult> {
     await assertEffectAllowed?.();
     const selfDirectedMemory = routing?.routingReason === 'self_directed_companion';
-    const companionOwned = selfDirectedMemory || routing?.routingReason === 'conversational_companion';
+    const companionOwned = isCompanionOwnedRouting(routing?.routingReason);
+    let resolvedRouting = routing;
     let factContactId = canonicalContactId;
     // Contact-tracking policy gate (E3.4): non-'auto' channels must not have
     // extraction create contact rows (mention-only path included). Facts keep
@@ -1055,7 +1057,8 @@ export class MemoryExtractor {
       || this.isAutoContactCreationAllowed === null
       || this.isAutoContactCreationAllowed(channelId);
     if (
-      !companionOwned && !routing?.subjectContactId && fact.type === 'relational'
+      !companionOwned && !routing?.subjectContactId
+      && (fact.type === 'relational' || routing?.routingReason === 'unresolved_direct_subject')
       && this.contactStore && channelId && contactCreationAllowed
     ) {
       const mentionOnlyContact = await resolveMentionOnlyContactForFact({
@@ -1072,7 +1075,7 @@ export class MemoryExtractor {
       });
       if (mentionOnlyContact) {
         factContactId = mentionOnlyContact.id;
-        if (routing) routing = {
+        if (routing) resolvedRouting = {
           ...routing, routedContactId: mentionOnlyContact.id, subjectContactId: mentionOnlyContact.id,
           subjectName: routing.subjectName ?? mentionOnlyContact.displayName,
         };
@@ -1094,8 +1097,8 @@ export class MemoryExtractor {
       && contactCreationAllowed
       && canonicalContactId
       && factContactId === canonicalContactId
-      && (!routing?.subjectContactId
-        || (routing.subjectContactId === canonicalContactId && routing.sourceContactId === canonicalContactId))
+      && (!resolvedRouting?.subjectContactId
+        || (resolvedRouting.subjectContactId === canonicalContactId && resolvedRouting.sourceContactId === canonicalContactId))
     ) {
       const relationshipMutation = await resolveInterlocutorRelationshipRatchet({
         fact,
@@ -1107,25 +1110,25 @@ export class MemoryExtractor {
       if (relationshipMutation) recordMutatedContactId?.(canonicalContactId);
     }
 
-    if (routing && this.isTelemetryEnabled()) {
+    if (resolvedRouting && this.isTelemetryEnabled()) {
       log.debug('Resolved extracted fact contact routing', {
         channelId,
         triggerReason,
         turnId,
-        triggerContactId: routing.triggerContactId,
-        routedContactId: routing.routedContactId,
-        sourceContactId: routing.sourceContactId,
-        sourceAuthorId: routing.sourceAuthorId,
-        sourceSpeakerName: routing.sourceSpeakerName,
-        subjectContactId: routing.subjectContactId,
-        subjectName: routing.subjectName,
-        addressMode: routing.addressMode,
-        scopeRef: routing.scopeRef,
-        scopeTags: routing.scopeTags,
-        sourceMessageIds: routing.sourceMessageIds,
-        sourceSpanStartMessageId: routing.sourceSpanStartMessageId,
-        sourceSpanEndMessageId: routing.sourceSpanEndMessageId,
-        routingReason: routing.routingReason,
+        triggerContactId: resolvedRouting.triggerContactId,
+        routedContactId: resolvedRouting.routedContactId,
+        sourceContactId: resolvedRouting.sourceContactId,
+        sourceAuthorId: resolvedRouting.sourceAuthorId,
+        sourceSpeakerName: resolvedRouting.sourceSpeakerName,
+        subjectContactId: resolvedRouting.subjectContactId,
+        subjectName: resolvedRouting.subjectName,
+        addressMode: resolvedRouting.addressMode,
+        scopeRef: resolvedRouting.scopeRef,
+        scopeTags: resolvedRouting.scopeTags,
+        sourceMessageIds: resolvedRouting.sourceMessageIds,
+        sourceSpanStartMessageId: resolvedRouting.sourceSpanStartMessageId,
+        sourceSpanEndMessageId: resolvedRouting.sourceSpanEndMessageId,
+        routingReason: resolvedRouting.routingReason,
       });
     }
 
@@ -1148,8 +1151,8 @@ export class MemoryExtractor {
         : triggerReason === 'pre_compaction'
           ? 'compaction_summary'
           : undefined,
-      ...(routing?.scopeRef ? { scopeRef: routing.scopeRef } : {}),
-      ...(routing?.scopeTags ? { scopeTags: routing.scopeTags } : {}),
+      ...(resolvedRouting?.scopeRef ? { scopeRef: resolvedRouting.scopeRef } : {}),
+      ...(resolvedRouting?.scopeTags ? { scopeTags: resolvedRouting.scopeTags } : {}),
         provenance: channelId
           ? {
             channelId,
@@ -1162,33 +1165,33 @@ export class MemoryExtractor {
             ...(turnId ? { turnId } : {}),
             ...(triggerReason ? { reason: triggerReason } : {}),
           ...(companionOwned ? { actor: 'companion', subjectScope: 'companion_internal' } : {}),
-          ...(routing?.triggerContactId ? { triggerContactId: routing.triggerContactId } : {}),
-          ...(routing?.routedContactId ? { routedContactId: routing.routedContactId } : {}),
-          ...(routing?.sourceContactId ? { sourceContactId: routing.sourceContactId } : {}),
-          ...(routing?.sourceAuthorId ? { sourceAuthorId: routing.sourceAuthorId } : {}),
-          ...(routing?.sourceSpeakerName ? { sourceSpeakerName: routing.sourceSpeakerName } : {}),
-          ...(routing?.subjectContactId ? { subjectContactId: routing.subjectContactId } : {}),
-          ...(routing?.subjectName ? { subjectName: routing.subjectName } : {}),
-          ...(routing?.addressMode ? { addressMode: routing.addressMode } : {}),
-          ...(routing?.routingReason ? { routingReason: routing.routingReason } : {}),
-          ...(routing?.sourceMessageIds ? { sourceMessageIds: routing.sourceMessageIds } : {}),
-          ...(routing?.sourceSpanStartMessageId
-            ? { sourceSpanStartMessageId: routing.sourceSpanStartMessageId }
+          ...(resolvedRouting?.triggerContactId ? { triggerContactId: resolvedRouting.triggerContactId } : {}),
+          ...(resolvedRouting?.routedContactId ? { routedContactId: resolvedRouting.routedContactId } : {}),
+          ...(resolvedRouting?.sourceContactId ? { sourceContactId: resolvedRouting.sourceContactId } : {}),
+          ...(resolvedRouting?.sourceAuthorId ? { sourceAuthorId: resolvedRouting.sourceAuthorId } : {}),
+          ...(resolvedRouting?.sourceSpeakerName ? { sourceSpeakerName: resolvedRouting.sourceSpeakerName } : {}),
+          ...(resolvedRouting?.subjectContactId ? { subjectContactId: resolvedRouting.subjectContactId } : {}),
+          ...(resolvedRouting?.subjectName ? { subjectName: resolvedRouting.subjectName } : {}),
+          ...(resolvedRouting?.addressMode ? { addressMode: resolvedRouting.addressMode } : {}),
+          ...(resolvedRouting?.routingReason ? { routingReason: resolvedRouting.routingReason } : {}),
+          ...(resolvedRouting?.sourceMessageIds ? { sourceMessageIds: resolvedRouting.sourceMessageIds } : {}),
+          ...(resolvedRouting?.sourceSpanStartMessageId
+            ? { sourceSpanStartMessageId: resolvedRouting.sourceSpanStartMessageId }
             : {}),
-          ...(routing?.sourceSpanEndMessageId
-            ? { sourceSpanEndMessageId: routing.sourceSpanEndMessageId }
+          ...(resolvedRouting?.sourceSpanEndMessageId
+            ? { sourceSpanEndMessageId: resolvedRouting.sourceSpanEndMessageId }
             : {}),
-          ...(routing?.sourceConversationAt !== undefined
-            ? { sourceConversationAt: routing.sourceConversationAt }
+          ...(resolvedRouting?.sourceConversationAt !== undefined
+            ? { sourceConversationAt: resolvedRouting.sourceConversationAt }
             : {}),
-          ...(routing?.icpDyadId ? { icpDyadId: routing.icpDyadId } : {}),
-          ...(routing?.sourceActivityIds ? { sourceActivityIds: routing.sourceActivityIds } : {}),
-          ...(routing?.sourceTurnIds ? { sourceTurnIds: routing.sourceTurnIds } : {}),
+          ...(resolvedRouting?.icpDyadId ? { icpDyadId: resolvedRouting.icpDyadId } : {}),
+          ...(resolvedRouting?.sourceActivityIds ? { sourceActivityIds: resolvedRouting.sourceActivityIds } : {}),
+          ...(resolvedRouting?.sourceTurnIds ? { sourceTurnIds: resolvedRouting.sourceTurnIds } : {}),
           // ccgdz.3: admission identity of the source bytes and the identity of
           // the run that derived this memory. Both are verified upstream; an
           // absent field means the chain is unproven here, never that it is clean.
-          ...(routing?.sourceAdmissions ? { sourceAdmissions: routing.sourceAdmissions } : {}),
-          ...(routing?.derivationRunId ? { derivationRunId: routing.derivationRunId } : {}),
+          ...(resolvedRouting?.sourceAdmissions ? { sourceAdmissions: resolvedRouting.sourceAdmissions } : {}),
+          ...(resolvedRouting?.derivationRunId ? { derivationRunId: resolvedRouting.derivationRunId } : {}),
         }
         : undefined,
       sensitivity: fact.sensitivity,

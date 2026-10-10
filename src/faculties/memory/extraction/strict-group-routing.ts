@@ -38,11 +38,11 @@ export type StrictGroupSubjectResolution<Speaker extends StrictGroupSubjectSpeak
 export function resolveCanonicalFactSubject<Speaker extends StrictGroupSubjectSpeaker>(
   attribution: ExtractedFactAttribution,
   speakers: readonly Speaker[],
+  allowAliases = false,
 ): StrictGroupSubjectResolution<Speaker> {
   const normalizedSubject = normalizeSpeakerPhrase(attribution.subjectName ?? '');
   const matches = normalizedSubject
-    ? speakers.filter(speaker => speaker.normalizedName === normalizedSubject
-      || speaker.aliases?.some(alias => normalizeSpeakerPhrase(alias) === normalizedSubject))
+    ? speakers.filter(speaker => speakerMatchesName(speaker, normalizedSubject, allowAliases))
     : [];
   if (matches.length > 1) {
     return { status: 'skip', reason: 'conflicting_subject_contact' };
@@ -55,6 +55,17 @@ export function resolveCanonicalFactSubject<Speaker extends StrictGroupSubjectSp
     return { status: 'skip', reason: 'conflicting_subject_contact' };
   }
   return { status: 'ok', ...(speaker ? { speaker } : {}) };
+}
+
+/** Group attribution stays bound to journal names; DMs may use known aliases. */
+export function speakerMatchesName(
+  speaker: StrictGroupSubjectSpeaker,
+  name: string,
+  allowAliases: boolean,
+): boolean {
+  const normalized = normalizeSpeakerPhrase(name);
+  return speaker.normalizedName === normalized
+    || (allowAliases && (speaker.aliases ?? []).some(alias => normalizeSpeakerPhrase(alias) === normalized));
 }
 
 export function validateStrictGroupAddressing(

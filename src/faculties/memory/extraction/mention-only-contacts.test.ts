@@ -34,6 +34,18 @@ function makeEmbedding(): Float32Array {
 }
 
 describe('extractMentionOnlyContactCandidate', () => {
+  it('requires an explicit, grounded third-party subject for semantic facts', () => {
+    const input = {
+      fact: makeFact('Alex studies marine biology.', { type: 'semantic' }),
+      canonicalContactName: 'Avery', companionName: 'Aster',
+    };
+    expect(extractMentionOnlyContactCandidate({ ...input, subjectName: 'Alex' }))
+      .toEqual({ name: 'Alex', normalizedKey: 'alex', relationshipType: 'stranger' });
+    for (const subjectName of [undefined, 'Robin', 'Al', 'Avery', 'Aster', 'someone']) {
+      expect(extractMentionOnlyContactCandidate({ ...input, subjectName })).toBeUndefined();
+    }
+  });
+
   it('extracts a family member name from relationship mentions', () => {
     const candidate = extractMentionOnlyContactCandidate({
       fact: makeFact("Avery's sister Alex is moving to Seattle", { tags: ['family'] }),

@@ -1,3 +1,4 @@
+import { resolveCanonicalMemorySubjectContactId } from '../subject-evidence.js';
 import { buildSpeakerRoutingContext, resolveFactRouting } from './speaker-routing.js';
 import { buildExtractionFactRoutingTelemetry } from './write-execution.js';
 import { fromAny } from '@total-typescript/shoehorn';
@@ -129,17 +130,20 @@ describe('MemoryExtractor contact-tracking gate (E3.4)', () => {
     expect(memory.provenance?.subjectContactId).toBeUndefined();
   });
 
-  it.each([true, false])('routes recurring named third-party facts with contact creation allowed=%s', async allowed => {
+  it.each([
+    { allowed: true, type: 'relational' as const }, { allowed: false, type: 'relational' as const },
+    { allowed: true, type: 'semantic' as const }, { allowed: false, type: 'semantic' as const },
+  ])('routes recurring named $type third-party facts with contact creation allowed=$allowed', async ({ allowed, type }) => {
     const primary = await contactStore.upsert({ displayName: 'Avery', discordUserId: PRIMARY_USER_ID });
     const extractor = makeExtractor(() => allowed);
     const channelId = 'discord:dm:family-example';
-    for (const [index, text] of [
-      "Avery's sister Alex is moving to Seattle",
-      'Alex called before dinner with the family',
-    ].entries()) {
+    const texts = type === 'semantic'
+      ? ['Alex studies marine biology at university', 'Alex enjoys hiking in the mountains']
+      : ["Avery's sister Alex is moving to Seattle", 'Alex called before dinner with the family'];
+    for (const [index, text] of texts.entries()) {
       const id = index + 1;
       const extracted = makeFact(text, {
-        tags: ['family'],
+        type, tags: type === 'relational' ? ['family'] : [],
         attribution: { sourceMessageIds: [id], sourceSpeakerName: 'Avery', subjectName: 'Alex' },
       });
       const context = await buildSpeakerRoutingContext([{
@@ -153,20 +157,41 @@ describe('MemoryExtractor contact-tracking gate (E3.4)', () => {
         primary.displayName, 'Companion', undefined, undefined,
         buildExtractionFactRoutingTelemetry(route, primary.id),
       );
+      if (index === 0) {
+        expect((await contactStore.listAll()).find(contact => contact.displayName === 'Alex')).toBeUndefined();
+        const first = memoryStore.getMemoriesByChannel(channelId, 10)[0]!;
+        expect(first.provenance?.subjectName).toBe('Alex');
+        expect(resolveCanonicalMemorySubjectContactId(first)).toBeUndefined();
+      }
     }
     const subject = (await contactStore.listAll()).find(contact => contact.displayName === 'Alex');
     const memories = memoryStore.getMemoriesByChannel(channelId, 10);
     expect(memories).toHaveLength(2);
     if (allowed) {
       expect(subject).toBeDefined();
-      expect(memories.find(memory => memory.text.startsWith('Alex called'))).toMatchObject({
+      expect(memories.find(memory => memory.text === texts[1])).toMatchObject({
         contactId: subject!.id, provenance: { subjectContactId: subject!.id, sourceContactId: primary.id },
       });
+      expect(subject?.relationshipType).toBe('stranger');
+      expect(memories.every(memory => resolveCanonicalMemorySubjectContactId(memory) === subject?.id)).toBe(true);
     } else {
       expect(subject).toBeUndefined();
       expect(memories.every(memory => memory.provenance?.subjectName === 'Alex')).toBe(true);
       expect(memories.every(memory => !memory.provenance?.subjectContactId)).toBe(true);
     }
+  });
+
+  it('does not expand group mention creation to semantic facts', async () => {
+    const primary = await contactStore.upsert({ displayName: 'Avery', discordUserId: PRIMARY_USER_ID });
+    const extractor = makeExtractor(() => true);
+    for (const [index, text] of ['Alex studies marine biology', 'Alex enjoys mountain hiking'].entries()) {
+      await (fromAny(extractor)).processFact(
+        makeFact(text, { type: 'semantic' }), `group-example:${index}`, primary.id,
+        undefined, 'discord-room', undefined, primary.displayName, 'Companion', undefined, undefined,
+        { routingReason: 'structured_source_metadata', subjectName: 'Alex', sourceContactId: primary.id },
+      );
+    }
+    expect((await contactStore.listAll()).find(contact => contact.displayName === 'Alex')).toBeUndefined();
   });
 
   it('leaves auto channels byte-identical: absent predicate keeps the mention-only path active', async () => {

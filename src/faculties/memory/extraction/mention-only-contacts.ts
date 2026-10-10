@@ -1,6 +1,7 @@
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import { looksLikeOpaqueIdentifier } from '../../../core/contacts/store/identity-utils.js';
 import type { Contact, RelationshipType } from '../../../core/contacts/types.js';
+import { hasSpeakerWord } from './strict-group-routing.js';
 import type { MemoryStorePort } from '../memory-store-port.js';
 import type { ExtractedFact, PurrMemory } from '../types.js';
 
@@ -195,17 +196,27 @@ function isExcludedCandidateName(
 
 export function extractMentionOnlyContactCandidate(params: {
   fact: ExtractedFact;
+  subjectName?: string;
   canonicalContactName?: string;
   canonicalContactNames?: readonly string[];
   companionName?: string;
 }): MentionOnlyContactCandidate | undefined {
-  if (params.fact.type !== 'relational') return undefined;
-
   const excludedNames = [
     params.canonicalContactName,
     ...(params.canonicalContactNames ?? []),
     params.companionName,
   ].filter((value): value is string => Boolean(value?.trim()));
+
+  if (params.fact.type === 'semantic') {
+    // Only the routed, explicit subject can nominate a semantic mention.
+    // Capitalized words in ordinary facts must never create contacts.
+    const name = cleanCandidateName(params.subjectName ?? '');
+    const normalizedKey = normalizeNameKey(name);
+    if (isExcludedCandidateName(name, excludedNames)
+      || !hasSpeakerWord(normalizeNameKey(params.fact.text), normalizedKey)) return undefined;
+    return { name, normalizedKey, relationshipType: 'stranger' };
+  }
+  if (params.fact.type !== 'relational') return undefined;
 
   const inferredRelationship = inferRelationshipTypeFromFact(params.fact);
   if (!inferredRelationship || inferredRelationship === 'ai_companion') return undefined;
@@ -283,7 +294,7 @@ function shouldPromoteRelationship(
 }
 
 function candidateMatchesMemory(
-  memory: Pick<PurrMemory, 'text' | 'type' | 'tags'>,
+  memory: Pick<PurrMemory, 'text' | 'type' | 'tags' | 'provenance'>,
   candidate: MentionOnlyContactCandidate,
   excludedNames: {
     canonicalContactName?: string;
@@ -291,8 +302,9 @@ function candidateMatchesMemory(
     companionName?: string;
   },
 ): boolean {
-  if (memory.type !== 'relational') return false;
+  if (memory.type === 'semantic' && memory.provenance?.routingReason !== 'unresolved_direct_subject') return false;
   const memoryCandidate = extractMentionOnlyContactCandidate({
+    subjectName: memory.provenance?.subjectName,
     fact: {
       text: memory.text,
       type: memory.type,
@@ -349,6 +361,7 @@ export async function resolveMentionOnlyContactForFact(
 
   const candidate = extractMentionOnlyContactCandidate({
     fact: params.fact,
+    subjectName: params.subjectName,
     canonicalContactName: params.canonicalContactName,
     canonicalContactNames,
     companionName: params.companionName,

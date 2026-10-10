@@ -1,5 +1,5 @@
 import type { ExtractionSourceSpeaker, TranscriptSpeaker } from './types.js';
-import { resolveClearSourceSpeaker } from './legacy-speaker-routing.js';
+import { resolveClearSourceSpeaker } from './implicit-speaker-routing.js';
 import type { Contact } from '../../../core/contacts/types.js';
 import { extractionContactNames } from './contact-resolution.js';
 import { resolveSessionEntrySpeakerContactId } from '../../../core/session/speaker-attribution.js';
@@ -15,6 +15,7 @@ import { isExtractionTranscriptEntry } from './chunk-compose.js';
 import {
   normalizeSpeakerPhrase,
   resolveCanonicalFactSubject,
+  speakerMatchesName,
   validateStrictGroupAddressing,
 } from './strict-group-routing.js';
 import {
@@ -35,10 +36,15 @@ type ExtractionFactRoutingReason =
   | 'speaker_name_prefix'
   | 'transcript_content_match'
   | 'structured_source_metadata'
+  | 'unresolved_direct_subject'
   | 'structured_subject_metadata'
   | 'structured_room_context'
   | 'self_directed_companion'
   | 'conversational_companion';
+
+export function isCompanionOwnedRouting(reason: ExtractionFactRoutingReason | undefined): boolean {
+  return reason === 'conversational_companion' || reason === 'self_directed_companion';
+}
 
 export interface ExtractionFactRouting {
   triggerContactId?: string;
@@ -195,22 +201,20 @@ export function resolveFactRouting(
 ): FactRoutingDecision {
   // A turn contact is proof for the sole user in a direct conversation only.
   // Group extraction must continue to resolve each source independently.
-  if (
-    !options.requireStructuredAddressing
+  const routingContext = !options.requireStructuredAddressing
     && context.speakers.filter(speaker => !speaker.companion).length === 1
     && triggerContactId
-  ) {
-    context = {
+    ? {
       ...context,
       speakers: context.speakers.map(speaker => ({
         ...speaker, contactId: speaker.companion ? undefined : speaker.contactId ?? triggerContactId,
       })),
-    };
-  }
-  const conversationAt = latestSourceEntryTimestamp(context.entries);
+    }
+    : context;
+  const conversationAt = latestSourceEntryTimestamp(routingContext.entries);
   const structuredRouting = resolveStructuredFactRouting(
     fact,
-    context,
+    routingContext,
     options,
   );
   if (structuredRouting) return structuredRouting;
@@ -218,8 +222,8 @@ export function resolveFactRouting(
     return { status: 'skip', reason: 'missing_structured_attribution' };
   }
 
-  if (!context.mixedHumanSpeakers) {
-    const speaker = context.speakers.find(speaker => !speaker.companion);
+  if (!routingContext.mixedHumanSpeakers) {
+    const speaker = routingContext.speakers.find(speaker => !speaker.companion);
     return {
       status: 'route',
       ...(triggerContactId ? { contactId: triggerContactId } : {}),
@@ -234,7 +238,7 @@ export function resolveFactRouting(
     };
   }
 
-  const match = resolveClearSourceSpeaker(fact, context.speakers.filter(speaker => !speaker.companion));
+  const match = resolveClearSourceSpeaker(fact, routingContext.speakers.filter(speaker => !speaker.companion));
   if (!match) {
     return { status: 'skip', reason: 'ambiguous_group_speaker' };
   }
@@ -246,7 +250,7 @@ export function resolveFactRouting(
     };
   }
 
-  // Legacy (attribution-less) group routing must still carry the social-graph
+  // Implicit (attribution-less) group routing must still carry the social-graph
   // evidence fields: the matched speaker IS the source contact, and the address
   // mode is inferable from that speaker's own entries. Without these, room
   // memories can never qualify as social-graph evidence (psfn-framework-0zd9).
@@ -294,13 +298,18 @@ function resolveStructuredFactRouting(
   }
 
   const citedSpeakers = resolveSourceSpeakers(sourceEntries, context.speakers);
-  // A named source can select the evidence speaker in a cited user/assistant
-  // exchange. Two different users remain ambiguous, as in strict group routing.
+  // In a direct user/assistant exchange, an explicit source selects the
+  // evidence speaker. Without one, the sole human supplies the human evidence.
+  // More than one human stays ambiguous, including outside the cited range.
+  const humanSpeakers = citedSpeakers.filter(speaker => !speaker.companion);
+  const sourceName = attribution.sourceSpeakerName;
   const sourceSpeakers = !options.requireStructuredAddressing
+    && !context.mixedHumanSpeakers
     && citedSpeakers.some(speaker => speaker.companion)
-    && citedSpeakers.filter(speaker => !speaker.companion).length <= 1
-    && attribution.sourceSpeakerName
-    ? citedSpeakers.filter(speaker => speakerMatchesName(speaker, attribution.sourceSpeakerName!))
+    && humanSpeakers.length === 1
+    ? sourceName
+      ? citedSpeakers.filter(speaker => speakerMatchesName(speaker, sourceName, true))
+      : humanSpeakers
     : citedSpeakers;
   if (sourceSpeakers.length !== 1) {
     return { status: 'skip', reason: 'ambiguous_source_message_ids' };
@@ -312,7 +321,7 @@ function resolveStructuredFactRouting(
   }
   if (
     attribution.sourceSpeakerName
-    && !speakerMatchesName(sourceSpeaker, attribution.sourceSpeakerName)
+    && !speakerMatchesName(sourceSpeaker, attribution.sourceSpeakerName, !options.requireStructuredAddressing)
   ) {
     return {
       status: 'skip',
@@ -363,7 +372,9 @@ function resolveStructuredFactRouting(
           aliases: extractionContactNames(contact), contactId: contact.id, entries: [],
         })),
     ];
-  const canonicalSubject = resolveCanonicalFactSubject<TranscriptSpeaker>(attribution, subjects);
+  const canonicalSubject = resolveCanonicalFactSubject<TranscriptSpeaker>(
+    attribution, subjects, !options.requireStructuredAddressing,
+  );
   if (canonicalSubject.status === 'skip') {
     return {
       status: 'skip',
@@ -423,7 +434,7 @@ function resolveStructuredFactRouting(
       return buildStructuredRoute({
         attribution, sourceSpeaker, sourceEntries,
         addressMode: addressModeDecision.addressMode,
-        reason: 'structured_source_metadata', contactId: sourceSpeaker.contactId,
+        reason: 'unresolved_direct_subject', contactId: sourceSpeaker.contactId,
         subjectName: attribution.subjectName,
       });
     }
@@ -621,10 +632,4 @@ function speakerKeyForEntry(entry: SessionEntry): string | undefined {
   if (authorId) return `author:${authorId}`;
   const normalizedName = normalizeSpeakerPhrase(entry.authorName?.trim() || 'user');
   return normalizedName ? `name:${normalizedName}` : undefined;
-}
-
-function speakerMatchesName(speaker: TranscriptSpeaker, name: string): boolean {
-  return [speaker.name, ...(speaker.aliases ?? [])].some(alias => (
-    normalizeSpeakerPhrase(alias) === normalizeSpeakerPhrase(name)
-  ));
 }

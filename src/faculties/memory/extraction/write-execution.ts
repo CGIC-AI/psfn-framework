@@ -2,7 +2,7 @@ import { createComponentLogger } from '../../../shared/logger.js';
 import type { TurnID } from '../../../shared/contracts/runtime.js';
 import type { ExtractedFact } from '../types.js';
 import { MemoryWritePolicyError, type WriteResult } from '../writer.js';
-import type { ExtractionFactRouting, FactRoutingDecision } from './speaker-routing.js';
+import { isCompanionOwnedRouting, type ExtractionFactRouting, type FactRoutingDecision } from './speaker-routing.js';
 import type { RoutedAcceptedFactCandidate } from './fact-acceptance.js';
 import {
   buildAdmissionProvenanceRefs,
@@ -189,7 +189,7 @@ export async function executeAcceptedFactWrites(
           writeCount++;
           acceptedWrites.push({
             memoryId: result.memory.id,
-            ...((routing.reason === 'conversational_companion' || routing.reason === 'self_directed_companion')
+            ...(isCompanionOwnedRouting(routing.reason)
               ? { subjectScope: 'companion_internal' as const } : {}),
             importance: fact.importance,
             confidence: fact.confidence,
@@ -206,7 +206,7 @@ export async function executeAcceptedFactWrites(
           supersededCount++;
           acceptedWrites.push({
             memoryId: result.memory.id,
-            ...((routing.reason === 'conversational_companion' || routing.reason === 'self_directed_companion')
+            ...(isCompanionOwnedRouting(routing.reason)
               ? { subjectScope: 'companion_internal' as const } : {}),
             importance: fact.importance,
             confidence: fact.confidence,

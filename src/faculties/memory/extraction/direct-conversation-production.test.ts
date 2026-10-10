@@ -15,7 +15,7 @@ const alex: Contact = {
 const robin: Contact = { ...alex, id: 'contact-robin', displayName: 'Robin', nickname: undefined, isMachineIntelligence: true };
 const channelId = '123456789012345678';
 
-async function extract(text: string, subject: string, source: string, ids: number[], contacts = [alex, robin]) {
+async function extract(text: string, subject: string, source: string | undefined, ids: number[], contacts = [alex, robin]) {
   const entries: SessionEntry[] = [
     { id: 1, channelId, role: 'user', authorId: 'transport-alex', authorName: 'Alex',
       content: 'Robin studies marine biology at the local university. We went sailing last summer.', timestamp: 1000,
@@ -24,7 +24,7 @@ async function extract(text: string, subject: string, source: string, ids: numbe
   ];
   const llm = { complete: vi.fn().mockResolvedValue({ content: `<response><fact>
 <text>${text}</text><type>semantic</type><importance>0.9</importance><confidence>0.95</confidence>
-<source_message_ids>${ids.join(',')}</source_message_ids><source_speaker_name>${source}</source_speaker_name>
+<source_message_ids>${ids.join(',')}</source_message_ids>${source ? `<source_speaker_name>${source}</source_speaker_name>` : ''}
 <subject_name>${subject}</subject_name></fact></response>` }) };
   const memoryStore = new InMemoryMemoryStore();
   const contactStore = fromPartial<ContactStorePort>({
@@ -54,6 +54,14 @@ describe('direct extraction through the production writer', () => {
     expect(classifyMemorySubject(memories[0]!, { memoryRevision: 1 })).toMatchObject({
       subjectClass: 'single_contact', subjectContactIds: [alex.id],
     });
+  });
+
+  it('persists mixed user/assistant evidence without a model-supplied source name', async () => {
+    const { memories } = await extract('Alex went sailing last summer.', 'Alex', undefined, [1, 2]);
+    expect(memories).toHaveLength(1);
+    expect(memories[0]).toMatchObject({ contactId: alex.id, provenance: {
+      subjectContactId: alex.id, sourceContactId: alex.id, sourceMessageIds: [1, 2],
+    } });
   });
 
   it('links a known sibling subject without requiring them to speak or creating a new contact', async () => {

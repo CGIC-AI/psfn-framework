@@ -97,7 +97,7 @@ export const DEFAULT_FREE_TIME_CONFIG: FreeTimeConfig = {
     minIdleMinutes: 180,
   },
   budget: {
-    maxTurns: 6,
+    maxTurns: 1,
     maxChargeUnits: 8,
   },
   returnNote: {

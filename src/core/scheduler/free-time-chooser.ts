@@ -86,6 +86,8 @@ export interface FreeTimeChoiceSet {
 export interface FreeTimeChoiceContext {
   readonly lane: FreeTimeLane;
   readonly nowMs: number;
+  /** Persist the opportunity before a model can be asked to choose. */
+  readonly beforePrompt?: () => Promise<void>;
 }
 
 /** Why a chooser run ended in rest (explicit choice OR a fail-closed reason). */
@@ -262,6 +264,7 @@ export class FreeTimeChooser {
     }
 
     const choiceSet = this.listChoices(context);
+    await context.beforePrompt?.();
 
     let content: string;
     try {

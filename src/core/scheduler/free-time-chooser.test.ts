@@ -109,6 +109,25 @@ function makeChooser(overrides: Partial<FreeTimeChooserPorts> = {}): {
 
 const CTX = { lane: 'quiet_hours' as const, nowMs: 1_000 };
 
+describe('free-time opportunity reservation', () => {
+  it('persists the opportunity before the chooser calls the model', async () => {
+    const { chooser, provider } = makeChooser();
+    const beforePrompt = vi.fn(async () => {
+      expect(provider.complete).not.toHaveBeenCalled();
+    });
+    await chooser.chooseWorkspace({ ...CTX, beforePrompt });
+    expect(beforePrompt).toHaveBeenCalledOnce();
+    expect(provider.complete).toHaveBeenCalledOnce();
+  });
+
+  it('does not ask when the opportunity cannot be durably reserved', async () => {
+    const { chooser, provider } = makeChooser();
+    const beforePrompt = vi.fn(async () => { throw new Error('store unavailable'); });
+    await expect(chooser.chooseWorkspace({ ...CTX, beforePrompt })).rejects.toThrow('store unavailable');
+    expect(provider.complete).not.toHaveBeenCalled();
+  });
+});
+
 // ── listChoices ──
 
 describe('FreeTimeChooser.listChoices', () => {

@@ -60,6 +60,7 @@ import type { FleetSlotStagger, ScheduledTaskRun } from './types.js';
 import { staggerFleetOrdinalWithinWindow } from './fleet-maintenance-coordinator.js';
 import type { FreeTimeChooserOutcome, FreeTimeRestReason } from './free-time-chooser.js';
 import type { FreeTimeLane } from './free-time-lane.js';
+import type { RestWindowPolicyPort } from './rest-window-policy.js';
 import {
   hasRecentFreeTimePartnerActivity,
   type FreeTimeActivityPort,
@@ -433,6 +434,8 @@ export interface FreeTimeRuntimeOptions {
   config: FreeTimeConfig;
   /** Rest window used by the quiet-hours lane; shared with episodicProcessing. */
   restWindow: EpisodicProcessingRestWindowConfig;
+  /** Shared durable cadence: reserve both trigger lanes before any prompt. */
+  opportunityPolicy?: RestWindowPolicyPort;
   /**
    * Fleet position and stagger window (scheduler.json `fleetStagger`). When
    * present, each lane's poll phase is offset by the companion's fleet ordinal
@@ -529,6 +532,7 @@ export interface FreeTimeRuntimeOptions {
   chooseWorkspace?: (input: {
     lane: FreeTimeLane;
     nowMs: number;
+    beforePrompt: () => Promise<void>;
   }) => Promise<FreeTimeChooserOutcome>;
   /** Optional recorder for the Garden read surface (recent blocks + spend). */
   recordBlock?: (record: FreeTimeBlockRecord) => void;
@@ -539,14 +543,7 @@ interface FreeTimeLaneCadenceState {
   lastBlockAtMs?: number;
   blocksTodayKey?: string;
   blocksToday: number;
-  /**
-   * bead 75ci: the local-day key on which a block ended in silence
-   * (loafed/companion_stopped). While it matches the current day the gate stays
-   * closed for the remainder of the day, so a silent exit is not re-prompted up
-   * to the daily cap. Naturally clears on day rollover (a new dayKey no longer
-   * matches).
-   */
-  silencedForDayKey?: string;
+  inProgress?: boolean;
 }
 
 /**
@@ -720,7 +717,7 @@ function makeLaneHandler(
     ? resolveActiveTimezone()
     : options.restWindow.timeZone;
 
-  return async ({ signal }) => {
+  const handle = async ({ signal }: ScheduledTaskRun) => {
     const nowMs = now();
 
     // Daily block counter resets on local-day rollover.
@@ -730,22 +727,13 @@ function makeLaneHandler(
       state.blocksToday = 0;
     }
 
-    // bead 75ci: if a prior block today ended because she chose silence
-    // (loafed/companion_stopped), do not bother her again for the remainder of
-    // the day, regardless of the block interval or daily cap.
-    if (state.silencedForDayKey === dayKey) {
-      if (options.eventBus) {
-        void options.eventBus.emit(FREE_TIME_GATE_EVENT, {
-          lane: FREE_TIME_GATE_LANE,
-          outcome: 'skipped',
-          reason: `${lane}:silenced_after_stop`,
-          inputs: {},
-          timestamp: nowMs,
-          channelId: defaultChannelId,
-        });
+    if (options.opportunityPolicy) {
+      for (const triggerLane of ['quiet_hours', 'idle'] as const) {
+        if (await options.opportunityPolicy.isSilenced({ lane: triggerLane, nowMs })) {
+          log.debug('Free-time opportunity suppressed until its next scheduled window', { lane });
+          return;
+        }
       }
-      log.debug('Free-time block skipped: silenced after a prior silent exit today', { lane });
-      return;
     }
 
     const activeConversationGuardMinutes = lane === 'idle'
@@ -788,6 +776,24 @@ function makeLaneHandler(
       log.debug('Free-time block skipped', { lane, reason: gate.reason });
       return;
     }
+    let reserved = false;
+    const beforePrompt = async (): Promise<void> => {
+      if (reserved) return;
+      signal.throwIfAborted();
+      // Reserve before the first model call, not after successful completion:
+      // failures, aborts and restarts cannot turn one offer into repeated asks.
+      state.lastBlockAtMs = nowMs;
+      if (options.opportunityPolicy) {
+        for (const triggerLane of ['quiet_hours', 'idle'] as const) {
+          await options.opportunityPolicy.recordSilence({
+            lane: triggerLane,
+            nowMs,
+            durationMs: options.config.minBlockIntervalMinutes * MINUTE_MS,
+          });
+        }
+      }
+      reserved = true;
+    };
     // ── Companion chooser (jp36.2.1.2) ──
     // When wired, the chooser supersedes the LRU auto-select: the companion
     // picks rest / private wander / resume / create through ONE cheap background
@@ -797,7 +803,7 @@ function makeLaneHandler(
     // guard regardless of interval config.
     let chosen: FreeTimeChooserOutcome | undefined;
     if (options.chooseWorkspace) {
-      chosen = await options.chooseWorkspace({ lane, nowMs });
+      chosen = await options.chooseWorkspace({ lane, nowMs, beforePrompt });
     }
 
     // Resolve the continuity workspace ONLY now that a block is committed to
@@ -832,6 +838,7 @@ function makeLaneHandler(
     }
 
     let result: FreeTimeBlockResult;
+    await beforePrompt();
     if (chosen?.kind === 'rest') {
       // Rest is a first-class outcome (bible §6.7/§10.2): the block ends here
       // with NO free-time turn. The chooser's single call is the only spend;
@@ -898,11 +905,6 @@ function makeLaneHandler(
     if (result.endReason !== 'rested') {
       state.blocksToday += 1;
     }
-    // bead 75ci: she chose silence and free time ended — close the gate for the
-    // rest of the day so she is not re-prompted up to the daily cap.
-    if (result.endReason === 'loafed' || result.endReason === 'companion_stopped') {
-      state.silencedForDayKey = dayKey;
-    }
 
     // Provenance marker on the internal transcript (inspectable, tagged).
     options.sessionManager.appendSystemNote(
@@ -965,6 +967,15 @@ function makeLaneHandler(
         returnSurfaced,
         timestamp: nowMs,
       });
+    }
+  };
+  return async run => {
+    if (state.inProgress) return;
+    state.inProgress = true;
+    try {
+      await handle(run);
+    } finally {
+      state.inProgress = false;
     }
   };
 }

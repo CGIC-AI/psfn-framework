@@ -11,8 +11,11 @@ import type {
   EpisodicProcessingRestWindowConfig,
   FreeTimeConfig,
 } from '../../system/config/scheduler-config.js';
+import { DEFAULT_FREE_TIME_CONFIG } from '../../system/config/scheduler-config.js';
 import { REFLECTION_SILENT_TOKEN } from './reflection-policy.js';
 import { Scheduler } from './scheduler.js';
+import { DurableRestWindowPolicy } from './rest-window-policy.js';
+import { InMemoryRestSilenceStore } from '../../test-support/in-memory-rest-silence-store.js';
 import {
   accumulateDisclosureSource,
   beginDisclosureAccumulation,
@@ -187,6 +190,9 @@ describe('evaluateFreeTimeGate', () => {
 // ── Framing ──
 
 describe('free-time framing', () => {
+  it('defaults to one invitation turn per free-time opportunity', () => {
+    expect(DEFAULT_FREE_TIME_CONFIG.budget.maxTurns).toBe(1);
+  });
   it('uses only free-time framing and the open seed, with no duplicated persona text', () => {
     const prompt = buildFreeTimeFramingPrompt({
       seedText: 'You have some time to yourself. You can do nothing if you want.',
@@ -791,7 +797,7 @@ describe('registerFreeTimeTasks', () => {
     expect(gateReasons).toEqual(['quiet_hours:daily_block_cap']);
   });
 
-  it('suppresses further free-time blocks for the rest of the day after a silent exit (bead 75ci)', async () => {
+  it('honors silence until the next scheduled opportunity, including on the same day', async () => {
     let nowMs = Date.parse('2026-06-11T01:00:00.000Z');
     const { scheduler, invokeTurn, runtime, eventBus } = buildRuntime({
       // First (and only) turn is silent — the block ends 'loafed'.
@@ -812,12 +818,65 @@ describe('registerFreeTimeTasks', () => {
     expect(invokeTurn).toHaveBeenCalledTimes(1);
     gateReasons.length = 0;
 
-    // Well past the 240-minute min-block interval, still the same local day: the
-    // silent exit — not the interval or daily cap — must keep the gate closed.
-    nowMs += 5 * 60 * 60_000;
+    nowMs += 60_000;
     await handler({ signal: new AbortController().signal });
     expect(invokeTurn).toHaveBeenCalledTimes(1);
-    expect(gateReasons).toEqual(['quiet_hours:silenced_after_stop']);
+
+    // A later scheduled opportunity is hers to accept or decline again.
+    nowMs += 5 * 60 * 60_000;
+    await handler({ signal: new AbortController().signal });
+    expect(invokeTurn).toHaveBeenCalledTimes(2);
+    expect(gateReasons).toContain('quiet_hours:open');
+  });
+
+  it('does not repeat a silent opportunity through another lane or after restart', async () => {
+    let nowMs = Date.parse('2026-06-11T01:00:00.000Z');
+    const store = new InMemoryRestSilenceStore();
+    const build = () => {
+      const built = buildRuntime({ turnScript: [REFLECTION_SILENT_TOKEN], now: () => nowMs });
+      registerFreeTimeTasks({ ...built.runtime, opportunityPolicy: new DurableRestWindowPolicy(store) });
+      return built;
+    };
+    const first = build();
+    await first.scheduler.getTask(FREE_TIME_QUIET_HOURS_TASK_ID)!.handler({ signal: new AbortController().signal });
+    expect(first.invokeTurn).toHaveBeenCalledTimes(1);
+    await first.scheduler.getTask(FREE_TIME_IDLE_TASK_ID)!.handler({ signal: new AbortController().signal });
+    expect(first.invokeTurn).toHaveBeenCalledTimes(1);
+    const restarted = build();
+    await restarted.scheduler.getTask(FREE_TIME_IDLE_TASK_ID)!.handler({ signal: new AbortController().signal });
+    expect(restarted.invokeTurn).not.toHaveBeenCalled();
+    nowMs += 240 * 60_000;
+    await restarted.scheduler.getTask(FREE_TIME_IDLE_TASK_ID)!.handler({ signal: new AbortController().signal });
+    expect(restarted.invokeTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it('reserves a failed block before spending and holds it across restart', async () => {
+    const nowMs = Date.parse('2026-06-11T01:00:00.000Z');
+    const store = new InMemoryRestSilenceStore();
+    const first = buildRuntime({ turnScript: [], now: () => nowMs });
+    first.invokeTurn.mockRejectedValue(new Error('turn interrupted'));
+    registerFreeTimeTasks({ ...first.runtime, opportunityPolicy: new DurableRestWindowPolicy(store) });
+    await expect(first.scheduler.getTask(FREE_TIME_IDLE_TASK_ID)!.handler({ signal: new AbortController().signal }))
+      .rejects.toThrow('turn interrupted');
+    const restarted = buildRuntime({ turnScript: [REFLECTION_SILENT_TOKEN], now: () => nowMs });
+    registerFreeTimeTasks({ ...restarted.runtime, opportunityPolicy: new DurableRestWindowPolicy(store) });
+    await restarted.scheduler.getTask(FREE_TIME_QUIET_HOURS_TASK_ID)!.handler({ signal: new AbortController().signal });
+    expect(restarted.invokeTurn).not.toHaveBeenCalled();
+  });
+
+  it('does not offer the same opportunity concurrently from both lanes', async () => {
+    const nowMs = Date.parse('2026-06-11T01:00:00.000Z');
+    const built = buildRuntime({ turnScript: [], now: () => nowMs });
+    let finish: ((value: { content: string }) => void) | undefined;
+    const invokeTurn = vi.fn(async () => new Promise<{ content: string }>(resolve => { finish = resolve; }));
+    built.runtime.invokeTurn = invokeTurn;
+    registerFreeTimeTasks(built.runtime);
+    const first = built.scheduler.getTask(FREE_TIME_IDLE_TASK_ID)!.handler({ signal: new AbortController().signal });
+    await vi.waitFor(() => expect(invokeTurn).toHaveBeenCalledOnce());
+    await built.scheduler.getTask(FREE_TIME_QUIET_HOURS_TASK_ID)!.handler({ signal: new AbortController().signal });
+    finish!({ content: REFLECTION_SILENT_TOKEN });
+    await first;
+    expect(invokeTurn).toHaveBeenCalledOnce();
   });
 
   it('does not suppress after a block that ended normally (bead 75ci)', async () => {

@@ -5,12 +5,15 @@
     "src/main.tsx",
     "vite.config.ts",
     "playwright.config.ts",
+    "playwright.runtime.config.ts",
+    "runtime-e2e/**/*.ts",
     "e2e/fixtures/legacy-main.tsx",
     "e2e/fixtures/mobile-reading.tsx"
   ],
   "project": [
     "src/**/*.{ts,tsx}",
     "e2e/**/*.{ts,tsx}",
+    "runtime-e2e/**/*.{ts,tsx}",
     "vite/**/*.{ts,tsx}"
   ]
 }

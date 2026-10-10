@@ -377,7 +377,7 @@ describe('Automata Bus concrete Postgres query adapters', () => {
         embedding: new Float32Array([1, 0, 0]),
         modelIdentity: MODEL,
       });
-      await pool.query(buildAutomataBusAnnIndexStatement(MODEL.dimensions));
+      await pool.query(buildAutomataBusAnnIndexStatement(MODEL.dimensions, { concurrent: true }));
       await vectorAdapter.setState({
         modelIdentity: MODEL,
         indexState: 'ready',

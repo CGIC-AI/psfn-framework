@@ -37,6 +37,7 @@
         "gh",
         "helm",
         "kubectl",
+        "openssl",
         "rg",
         "tail",
         "uv"

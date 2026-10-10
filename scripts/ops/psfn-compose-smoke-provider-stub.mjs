@@ -36,6 +36,7 @@
 //   PSFN_SMOKE_PROVIDER_STUB_REPLY    the deterministic assistant reply text
 
 import { createServer } from 'node:http';
+import { smokeScenario } from './psfn-compose-smoke-scenarios.mjs';
 import process from 'node:process';
 
 const MAX_PORT = 65_535;
@@ -161,7 +162,7 @@ function completionId() {
 }
 
 /** SSE shape pi-ai's openai-completions client consumes (stream_options.include_usage). */
-function sendStream(response, model, content) {
+function sendStream(response, model, content, toolCall) {
   const id = completionId();
   const created = Math.floor(Date.now() / MILLISECONDS_PER_SECOND);
   response.writeHead(HTTP_OK, {
@@ -174,14 +175,14 @@ function sendStream(response, model, content) {
     object: 'chat.completion.chunk',
     created,
     model,
-    choices: [{ index: 0, delta: { role: 'assistant', content }, finish_reason: null }],
+    choices: [{ index: 0, delta: toolCall ? { role: 'assistant', tool_calls: [{ index: 0, id: toolCall.id, type: 'function', function: { name: toolCall.name, arguments: JSON.stringify(toolCall.arguments) } }] } : { role: 'assistant', content }, finish_reason: null }],
   })}\n\n`);
   response.write(`data: ${JSON.stringify({
     id,
     object: 'chat.completion.chunk',
     created,
     model,
-    choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+    choices: [{ index: 0, delta: {}, finish_reason: toolCall ? 'tool_calls' : 'stop' }],
     usage: usageBlock(),
   })}\n\n`);
   response.end('data: [DONE]\n\n');
@@ -245,6 +246,8 @@ function modelCatalog() {
   };
 }
 
+const scenarioEvidence = { failure: 0, hold: 0, cancelled: 0, extraction: 0, recall: 0, memorize: 0, deletion: 0 };
+
 const server = createServer((request, response) => {
   const path = (request.url ?? '/').split('?', 1)[0];
 
@@ -256,6 +259,11 @@ const server = createServer((request, response) => {
   if (!isAuthorized(request)) {
     request.resume();
     sendError(response, HTTP_UNAUTHORIZED, 'missing or invalid bearer credential');
+    return;
+  }
+  if (request.method === 'GET' && path === '/__smoke/evidence') {
+    request.resume();
+    sendJson(response, HTTP_OK, scenarioEvidence);
     return;
   }
   if (request.method === 'GET' && path === '/v1/models') {
@@ -272,8 +280,22 @@ const server = createServer((request, response) => {
   readJsonBody(request)
     .then((body) => {
       const model = typeof body.model === 'string' ? body.model : 'smoke-stub-chat';
-      const content = resolveResponseContent(body);
-      if (body.stream === true) sendStream(response, model, content);
+      const scenario = smokeScenario(body);
+      if (scenario) scenarioEvidence[scenario.kind] += 1;
+      if (scenario?.status) {
+        sendError(response, scenario.status, 'Synthetic provider failure');
+        return;
+      }
+      const content = scenario?.content ?? resolveResponseContent(body);
+      if (scenario?.delayMs) {
+        const timer = setTimeout(() => sendStream(response, model, content), scenario.delayMs);
+        response.once('close', () => {
+          clearTimeout(timer);
+          if (!response.writableEnded) scenarioEvidence.cancelled += 1;
+        });
+        return;
+      }
+      if (body.stream === true) sendStream(response, model, content, scenario?.toolCall);
       else sendCompletion(response, model, content);
     })
     .catch((error) => {

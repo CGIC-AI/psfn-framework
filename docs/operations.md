@@ -198,12 +198,19 @@ verifies the Satellite Hub and companion-ui surfaces (including the hub
 one chat turn while a hub websocket session is open. That turn's `post_turn`
 `emotion.snapshot` must arrive on the session through the gateway companion
 relay and the hub, which proves a relay payload end to end. Its exit codes are
-`0` (full turn and relay), `3` (hub/companion-ui source-contract divergence),
+`0` (all selected runtime journeys), `3` (hub/companion-ui source-contract divergence),
 and `1` (failure). Host ports are loopback-only and overridable with
 `PSFN_SMOKE_API_PORT`, `PSFN_SMOKE_HUB_PORT`, `PSFN_SMOKE_COMPANION_UI_PORT`,
 and `PSFN_SMOKE_GARDEN_PORT`.
 `--keep-up` leaves the stack running; the default tears it down with
 `docker compose down -v`.
+
+The smoke also drives the runtime journeys described in
+[`testing.md`](./testing.md): streamed/durable turn agreement and restart,
+automatic memory, failure/cancellation recovery, approval effects, and a real
+key-auth browser. Each invocation owns a unique Compose project and chooses
+available loopback ports unless explicitly configured. Evidence is written to
+`PSFN_SMOKE_ARTIFACT_PATH` or the project's temporary evidence directory.
 
 #### The keyless contract
 
@@ -237,7 +244,7 @@ fail-closed path is intact and exercised:
 
 What the smoke stack therefore proves: the split runtime boots, migrations
 apply, the gateway/agent RPC connects, the hub and companion-ui surfaces verify,
-and one chat turn completes and lands in the canonical session journal. What it
+and runtime journeys produce their asserted durable outcomes. What it
 does **not** prove: that a real provider account, model slug, or egress path
 works. That is `npm run compose:verify` against `docker/compose.yml`, which
 drives a real provider-backed turn. Do not point the smoke stack at a real

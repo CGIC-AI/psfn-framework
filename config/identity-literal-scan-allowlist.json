@@ -1,6 +1,18 @@
 {
   "entries": [
     {
+      "path": "scripts/ci/local-delivery-scope.mjs",
+      "contains": "ops\\/psfn-compose-smoke-",
+      "reason": "Gate routing matches existing smoke harness filenames; this path pattern cannot supply a companion identity.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "scripts/ops/psfn-compose-smoke-provider-stub.mjs",
+      "contains": "from './psfn-compose-smoke-scenarios.mjs'",
+      "reason": "The provider fixture imports its scenario module by its repository filename, not a runtime identity or persona.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
       "path": "src/app/maintenance/migrate-free-time-visibility.ts",
       "contains": "psfn-framework-jp36",
       "reason": "Implementation comment cites the project bead that owns the one-time free-time visibility migration.",

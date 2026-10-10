@@ -39,7 +39,8 @@
 
 import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { rmSync } from 'node:fs';
+import { rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import process from 'node:process';
@@ -50,6 +51,14 @@ import {
   verifyComposeHub,
 } from './compose-hub-verification.ts';
 import { stageSmokeBuildContext } from './ops/psfn-compose-smoke-context.mjs';
+import { runBrowserJourney } from './smoke-docker/browser-journey.mjs';
+import { runApprovalJourney } from './smoke-docker/approval-journey.mjs';
+import { runMemoryJourney } from './smoke-docker/memory-journey.mjs';
+import { runFailureJourney } from './smoke-docker/failure-journey.mjs';
+import { runStreamRestartJourney } from './smoke-docker/journeys.mjs';
+import { fixtureFetch } from './smoke-docker/https.mjs';
+import { runWithEvidence } from './smoke-docker/journey-evidence.mjs';
+import { writeEvidence } from './smoke-docker/evidence.mjs';
 import { SMOKE_HUB_DEVICE_ID } from './ops/psfn-compose-smoke-hub-device.mjs';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -59,7 +68,25 @@ const COMPOSE_RELATIVE_PATH = 'docker/docker-compose.smoke.yml';
 const CONTEXT_STAGE_ROOT = resolve(process.env.PSFN_SMOKE_CONTEXT_ROOT || tmpdir());
 // The compose project root: the checkout for --no-up, the staged copy for up.
 let composeRoot = REPO_ROOT;
-const API_PORT = process.env.PSFN_SMOKE_API_PORT || '13000';
+// Every invocation owns its containers, images, networks and volumes. Reusing
+// an existing stack requires its explicit project name; never discover one.
+if (process.argv.includes('--no-up') && !process.env.COMPOSE_PROJECT_NAME) {
+  throw new Error('--no-up requires COMPOSE_PROJECT_NAME for the disposable stack');
+}
+process.env.COMPOSE_PROJECT_NAME ||= `psfn-smoke-${Date.now()}-${randomBytes(4).toString('hex')}`;
+for (const name of ['PSFN_SMOKE_API_PORT', 'PSFN_SMOKE_HUB_PORT', 'PSFN_SMOKE_COMPANION_UI_PORT', 'PSFN_SMOKE_FLEET_PORT']) {
+  if (!process.env[name]) {
+    if (process.argv.includes('--no-up')) throw new Error(`--no-up requires ${name} for the existing stack`);
+    const server = createServer();
+    await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+    process.env[name] = String(server.address().port);
+    await new Promise(resolve => server.close(resolve));
+  }
+}
+process.env.PSFN_SMOKE_FLEET_ORIGIN = `https://127.0.0.1:${process.env.PSFN_SMOKE_FLEET_PORT}`;
+const ARTIFACT_PATH = resolve(process.env.PSFN_SMOKE_ARTIFACT_PATH || `${tmpdir()}/${process.env.COMPOSE_PROJECT_NAME}/evidence.json`);
+const evidence = { schemaVersion: 1, project: process.env.COMPOSE_PROJECT_NAME, status: 'failed', journeys: [] };
+const API_PORT = process.env.PSFN_SMOKE_API_PORT;
 const API_BASE = `http://127.0.0.1:${API_PORT}`;
 const API_KEY = process.env.PSFN_SMOKE_API_KEY || 'psfn-smoke-api-key-please-rotate';
 const AUTH_HEADERS = { Authorization: `Bearer ${API_KEY}` };
@@ -68,7 +95,8 @@ const API_PRINCIPAL_ID = `api-key-${createHash('sha256').update(API_KEY.trim()).
 const SMOKE_CHANNEL_ID = `api:${API_PRINCIPAL_ID}:${SMOKE_SESSION_ID}`;
 const HUB_PORT = process.env.PSFN_SMOKE_HUB_PORT || '18787';
 const COMPANION_UI_PORT = process.env.PSFN_SMOKE_COMPANION_UI_PORT || '18080';
-const GARDEN_PORT = process.env.PSFN_SMOKE_GARDEN_PORT || '18053';
+const GARDEN_BASE = `${process.env.PSFN_SMOKE_FLEET_ORIGIN}/companions/${process.env.PSFN_SMOKE_COMPANION_ID || '11111111-1111-4111-8111-111111111111'}/garden`;
+let gardenCa;
 const SATELLITE_API_KEY = process.env.PSFN_SMOKE_SATELLITE_API_KEY
   || 'psfn-smoke-satellite-key-please-rotate';
 const HUB_VERIFY_TIMEOUT_MS = 20_000;
@@ -135,7 +163,7 @@ async function fetchWithTimeout(url, init, timeoutMs) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    return await fixtureFetch({ gardenCa }, url, { ...init, signal: controller.signal });
   } finally {
     clearTimeout(timer);
   }
@@ -231,10 +259,29 @@ function contractExit(code, contractBoundary) {
 
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
-  let exitCode = 1;
-
+  log(`isolated project: ${process.env.COMPOSE_PROJECT_NAME}`);
+  log(`portable evidence: ${ARTIFACT_PATH}`);
+  // Refuse before writing artifacts or entering the cleanup boundary. Include
+  // stopped containers so an inherited name cannot adopt another stack.
+  if (opts.up) {
+    for (const kind of ['container', 'volume', 'network']) {
+      const listed = spawnSync('docker', [kind, 'ls', '-q', ...(kind === 'container' ? ['-a'] : []),
+        '--filter', `label=com.docker.compose.project=${process.env.COMPOSE_PROJECT_NAME}`], { encoding: 'utf8' });
+      if (listed.error || listed.status !== 0) throw new Error('Could not prove disposable project ownership');
+      if (listed.stdout.trim()) throw new Error('Refusing to reuse an existing Compose project; select a fresh name or explicit --no-up');
+    }
+  }
+  let ownsStack = false;
   try {
     const hubDevice = resolveHubDevice(opts.up);
+    const connectionPath = resolve(ARTIFACT_PATH, '../connection.json');
+    mkdirSync(dirname(connectionPath), { recursive: true, mode: 0o700 });
+    writeFileSync(connectionPath, JSON.stringify({
+      project: process.env.COMPOSE_PROJECT_NAME, apiBase: API_BASE, fleetOrigin: process.env.PSFN_SMOKE_FLEET_ORIGIN,
+      gardenBase: GARDEN_BASE,
+      companionUiBase: `http://127.0.0.1:${COMPANION_UI_PORT}`,
+      hubBase: `http://127.0.0.1:${HUB_PORT}`, hubDevice,
+    }), { mode: 0o600 });
     if (opts.up) {
       // Build and bind-mount from a mode-normalized copy of the working tree so
       // a checkout written under a restrictive umask (e.g. 0027) still yields
@@ -247,6 +294,7 @@ async function main() {
       log(`staged ${staged.files} working-tree files with normalized modes at ${staged.root}`);
       log('Bringing up postgres + provider-stub + gateway + agent + garden + satellite-hub '
         + '+ companion-ui (docker compose up -d --build --wait)...');
+      ownsStack = true;
       const up = compose(['up', '-d', '--build', '--wait', '--wait-timeout', '240']);
       if (up.status !== 0) {
         fail('docker compose up did not reach a healthy state');
@@ -282,13 +330,16 @@ async function main() {
     pass(`Postgres reachable; companion_smoke + shared schemas hold ${tableCount} tables `
       + '(runtime migrations ran)');
 
-    const garden = await fetchWithTimeout(`http://127.0.0.1:${GARDEN_PORT}/health`, { method: 'GET' }, 10_000)
+    const ca = compose(['exec', '-T', 'fleet-proxy', 'cat', '/run/psfn-fleet-tls/localhost.crt'], { capture: true });
+    if (ca.status !== 0) throw new Error('Could not read the disposable HTTPS public certificate');
+    gardenCa = ca.stdout;
+    const garden = await fetchWithTimeout(`${GARDEN_BASE}/api/admin/confirmations`, { method: 'GET', headers: { Authorization: `Bearer ${process.env.PSFN_SMOKE_ADMIN_TOKEN || 'psfn-smoke-admin-token-please-rotate'}` } }, 10_000)
       .catch((err) => err);
     if (!(garden instanceof Response) || !garden.ok) {
       fail(`Garden /health is not ready: ${garden instanceof Response ? `HTTP ${garden.status}` : String(garden)}`);
       return 1;
     }
-    pass(`Garden (operator) /health answered HTTP ${garden.status} on 127.0.0.1:${GARDEN_PORT}`);
+    pass(`Garden operator route answered HTTP ${garden.status} through the authenticated HTTPS broker`);
 
     log('Verifying the Satellite Hub and companion-ui surfaces ...');
     let hubContractBoundary = null;
@@ -332,7 +383,55 @@ async function main() {
       return 1;
     }
     try {
-      return await driveTurnAndRelay(opts, relaySession, hubContractBoundary);
+      const initial = await driveTurnAndRelay(opts, relaySession, hubContractBoundary);
+      if (initial !== 0) return initial;
+      const journeyOptions = {
+        apiBase: API_BASE, apiKey: API_KEY, gardenBase: GARDEN_BASE, gardenCa,
+        adminToken: process.env.PSFN_SMOKE_ADMIN_TOKEN || 'psfn-smoke-admin-token-please-rotate',
+        channelId: SMOKE_CHANNEL_ID, sessionId: SMOKE_SESSION_ID,
+        message: `Stream restart proof ${randomBytes(8).toString('hex')}.`,
+        restartAgent: async () => {
+          const result = compose(['restart', 'agent'], { capture: true });
+          if (result.status !== 0) throw new Error('Smoke agent restart failed');
+        }, waitForHealth, report: pass,
+        companionId: process.env.PSFN_SMOKE_COMPANION_ID || '11111111-1111-4111-8111-111111111111',
+        channelForSession: sessionId => `api:${API_PRINCIPAL_ID}:${sessionId}`,
+        readDeletionEffect: async memoryId => {
+          if (!/^[a-f0-9-]+$/u.test(memoryId)) throw new Error('Invalid case memory identity');
+          const result = compose(['exec', '-T', 'postgres', 'psql', '-U', 'psfn', '-d', 'psfn_smoke', '-tAc',
+            `SELECT json_build_object('deleted', deleted_at IS NOT NULL, 'checkpointCount', (SELECT count(*) FROM companion_smoke.l2_memory_delete_versions WHERE memory_id = '${memoryId}')) FROM companion_smoke.l2_memories WHERE id = '${memoryId}'`], { capture: true });
+          if (result.status !== 0) throw new Error('Could not read durable deletion effect');
+          return JSON.parse(result.stdout.trim());
+        },
+        readCaseMemory: async project => {
+          if (!/^orchard[a-f0-9]+$/u.test(project)) throw new Error('Invalid case project');
+          const result = compose(['exec', '-T', 'postgres', 'psql', '-U', 'psfn', '-d', 'psfn_smoke', '-tAc',
+            `SELECT coalesce(json_agg(row_to_json(memory)), '[]'::json) FROM (SELECT id, text FROM companion_smoke.l2_memories WHERE text LIKE '%${project}%') memory`], { capture: true });
+          if (result.status !== 0) throw new Error('Could not read case memory persistence');
+          return JSON.parse(result.stdout.trim());
+        },
+        readBackgroundJobs: async turnId => {
+          if (!/^[a-f0-9-]+$/u.test(turnId)) throw new Error('Invalid case turn identity');
+          const result = compose(['exec', '-T', 'postgres', 'psql', '-U', 'psfn', '-d', 'psfn_smoke', '-tAc',
+            `SELECT coalesce(json_agg(row_to_json(job)), '[]'::json) FROM (SELECT job_id, kind, state FROM companion_smoke.agent_background_work_jobs WHERE source_turn_id = '${turnId}') job`], { capture: true });
+          if (result.status !== 0) throw new Error('Could not read source-bound background jobs');
+          return JSON.parse(result.stdout.trim());
+        },
+        providerEvidence: async () => {
+          const result = compose(['exec', '-T', 'provider-stub', 'node', '--input-type=module', '-e',
+            `const response = await fetch('http://127.0.0.1:3000/__smoke/evidence', { headers: { Authorization: 'Bearer ' + process.env.PSFN_SMOKE_PROVIDER_STUB_API_KEY } }); if (!response.ok) process.exit(1); console.log(JSON.stringify(await response.json()));`], { capture: true });
+          if (result.status !== 0) throw new Error('Provider scenario evidence unavailable');
+          return JSON.parse(result.stdout.trim());
+        },
+      };
+      await runWithEvidence(evidence, 'stream-persist-restart', runStreamRestartJourney, journeyOptions);
+      await runWithEvidence(evidence, 'provider-failure-cancel-recovery', runFailureJourney, journeyOptions);
+      const memory = await runWithEvidence(evidence, 'automatic-memory-restart-retrieval', runMemoryJourney, journeyOptions);
+      await runWithEvidence(evidence, 'tool-approval-once', runApprovalJourney, { ...journeyOptions, memoryId: memory.memoryId, sourceSession: memory.sourceSession });
+      await runWithEvidence(evidence, 'real-browser', runBrowserJourney, { ...journeyOptions,
+        repoRoot: REPO_ROOT, fleetOrigin: process.env.PSFN_SMOKE_FLEET_ORIGIN, evidenceDir: dirname(ARTIFACT_PATH) });
+      evidence.status = 'passed';
+      return 0;
     } finally {
       relaySession.close();
     }
@@ -340,12 +439,18 @@ async function main() {
     fail(err instanceof Error ? err.message : String(err));
     return 1;
   } finally {
-    if (opts.up && !opts.keepUp) {
+    if (ownsStack && !opts.keepUp) {
       log('Tearing down (docker compose down -v)...');
-      compose(['down', '-v']);
+      const cleanup = compose(['down', '-v']);
+      evidence.cleanup = { status: cleanup.status === 0 ? 'passed' : 'failed' };
+      if (cleanup.status !== 0) {
+        evidence.status = 'failed';
+        writeEvidence(ARTIFACT_PATH, evidence);
+        throw new Error('Disposable stack cleanup failed; staged context retained for retry');
+      }
       if (composeRoot !== REPO_ROOT) rmSync(composeRoot, { recursive: true, force: true });
     }
-    void exitCode;
+    writeEvidence(ARTIFACT_PATH, evidence);
   }
 }
 

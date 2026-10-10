@@ -242,6 +242,7 @@ export function registerFreeTimeLane(deps: FreeTimeLaneDeps): void {
     sessionManager,
     config,
     restWindow,
+    opportunityPolicy: freeTimeRestWindowPolicy,
     ...(fleetStagger ? { fleetStagger } : {}),
     eventBus,
     renderPendingConcernCandidates: async () => renderPendingConcernCandidatesSection(
@@ -354,10 +355,10 @@ export function registerFreeTimeLane(deps: FreeTimeLaneDeps): void {
     )?.context ?? null,
     // Companion chooser drives rest / workspace selection; rest persists silence
     // for the quiet period (fails closed to rest, never a forced workspace).
-    chooseWorkspace: async ({ lane, nowMs }) => {
+    chooseWorkspace: async ({ lane, nowMs, beforePrompt }) => {
       selectedWorkspace = undefined;
       selectedContactDmSession = null;
-      const outcome = await freeTimeChooser.chooseWorkspace({ lane, nowMs });
+      const outcome = await freeTimeChooser.chooseWorkspace({ lane, nowMs, beforePrompt });
       if (outcome.kind === 'workspace') {
         selectedWorkspace = outcome.workspace;
         try {

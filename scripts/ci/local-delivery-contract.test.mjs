@@ -380,6 +380,7 @@ test('delivery and product gates validate only their owned change surface', () =
     'repository-hygiene',
     'startup-owner-files',
     'supply-chain',
+    'osv-scan',
   ]) {
     assert.ok(lockfileNames.includes(rootGate), `root lockfile must run ${rootGate}`);
   }
@@ -423,6 +424,7 @@ test('delivery and product gates validate only their owned change surface', () =
     'integration-tests',
     'settings-contract',
     'supply-chain',
+    'osv-scan',
     'changed-workflow-analysis',
   ]) {
     assert.ok(names.includes(required), `missing local gate: ${required}`);
@@ -816,6 +818,8 @@ test('canary plan forces whole-repo gates on and skips diff-scoped gates explici
     'repository-hygiene',
     'startup-owner-files',
     'semgrep-rules',
+    'semgrep-full',
+    'osv-scan',
     'tests',
   ]) {
     assert.ok(active.includes(gate), `canary must run ${gate} against main`);
@@ -857,6 +861,8 @@ test('clean-main canary runs the full gate against main and records an attestati
     'typecheck',
     'repository-hygiene',
     'startup-owner-files',
+    'semgrep-full',
+    'osv-scan',
     'tests',
   ]) {
     assert.ok(executed.includes(gate), `canary must run ${gate}`);
@@ -1315,16 +1321,18 @@ test('GitHub CI trusts the exact local gate and runs only cheap host policy chec
   assert.match(workflow, /run: node scripts\/public-sanitize-check\.mjs/);
 });
 
-test('specialist security workflows avoid irrelevant PR runs and full-history checkout', () => {
-  const osv = readFileSync('.github/workflows/osv-scan.yml', 'utf8');
+test('specialist security workflows are manual-only and avoid scheduled or PR runs and full-history checkout', () => {
   for (const ownedInput of [
-    '**/package-lock.json',
-    '**/Dockerfile*',
-    '.github/workflows/osv-scan.yml',
+    'package-lock.json',
+    'companion-ui/package-lock.json',
+    'docker/Dockerfile.agent',
     'scripts/ci/npm-project-contract.mjs',
     'scripts/ci/run-osv-scan.mjs',
   ]) {
-    assert.ok(osv.includes(`- "${ownedInput}"`), `OSV PR filter must include ${ownedInput}`);
+    const names = buildGatePlan({ paths: [ownedInput] })
+      .filter(({ skip }) => !skip)
+      .map(({ name }) => name);
+    assert.ok(names.includes('osv-scan'), `${ownedInput} must plan local osv-scan`);
   }
   for (const workflowPath of [
     '.github/workflows/osv-scan.yml',
@@ -1332,7 +1340,17 @@ test('specialist security workflows avoid irrelevant PR runs and full-history ch
     '.github/workflows/semgrep-full.yml',
     '.github/workflows/zizmor-audit.yml',
   ]) {
-    assert.doesNotMatch(readFileSync(workflowPath, 'utf8'), /fetch-depth:\s*0/u, workflowPath);
+    const content = readFileSync(workflowPath, 'utf8');
+    assert.doesNotMatch(content, /fetch-depth:\s*0/u, workflowPath);
+    assert.doesNotMatch(content, /^  (?:schedule|pull_request|push):/mu, workflowPath);
+    assert.match(content, /^  workflow_dispatch:/mu, workflowPath);
+  }
+  for (const workflowPath of [
+    '.github/workflows/ci.yml',
+    '.github/workflows/pr-labels.yml',
+    '.github/workflows/openwiki-docs.yml',
+  ]) {
+    assert.doesNotMatch(readFileSync(workflowPath, 'utf8'), /^  schedule:/mu, workflowPath);
   }
   assert.match(readFileSync('.github/workflows/ci.yml', 'utf8'), /fetch-depth:\s*0/u);
 });

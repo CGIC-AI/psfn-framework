@@ -1,6 +1,6 @@
 name: Trivy Image Vulnerability Rescan
 
-# Periodic OS/library vulnerability rescan of an immutable built container image.
+# Manual OS/library vulnerability rescan of an immutable built container image.
 #
 # Feed policy: Trivy's vulnerability database is a MUTABLE security feed. This
 # workflow refreshes it on every run (Trivy downloads the latest DB by default),
@@ -15,8 +15,6 @@ name: Trivy Image Vulnerability Rescan
 # the run fails loudly instead of skipping.
 
 on:
-  schedule:
-    - cron: "47 6 * * *"
   workflow_dispatch:
     inputs:
       image_digest:

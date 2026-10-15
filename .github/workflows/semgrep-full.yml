@@ -1,8 +1,7 @@
 name: Semgrep Full Scan
 
+# Manual only: local gate runs semgrep-diff on PRs and semgrep-full on canary.
 on:
-  schedule:
-    - cron: "17 7 * * 1"
   workflow_dispatch:
 
 permissions:

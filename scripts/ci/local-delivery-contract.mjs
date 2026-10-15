@@ -206,11 +206,15 @@ export function buildGatePlan({
     command('startup-owner-files', 'npm', ['run', 'verify:startup-owner-files'], {
       parallelSafe: true,
     }),
-    // Canary runs the semgrep ruleset self-test unconditionally (it validates the
-    // committed rules, not a diff); otherwise it runs only when the rules change.
+    // Canary runs the semgrep ruleset self-test and full scan unconditionally
+    // (they validate the committed rules and repository, not a diff); otherwise
+    // semgrep-rules runs only when the rules change and semgrep-diff scans the diff.
     command('semgrep-rules', 'npm', ['run', 'semgrep:test'], {
       skip: canary ? false : !matches(/^config\/semgrep\//),
       contentInputs: SEMGREP_RULE_INPUTS,
+    }),
+    command('semgrep-full', 'npm', ['run', 'semgrep'], {
+      skip: !canary,
     }),
     command(
       'semgrep-diff',
@@ -300,6 +304,14 @@ export function buildGatePlan({
     plan.push(
       command('supply-chain', 'npm', ['run', 'verify:supply-chain', '--', '--ref', base]),
     );
+  }
+  if (
+    canary
+    || matches(
+      /(?:^|\/)package(?:-lock)?\.json$|(?:^|\/)Dockerfile[^/]*$|^scripts\/ci\/(?:npm-project-contract|run-osv-scan)\.mjs$/,
+    )
+  ) {
+    plan.push(command('osv-scan', 'node', ['scripts/ci/run-osv-scan.mjs']));
   }
   if (adminUi) {
     plan.push(command('garden-ui', 'npm', ['run', 'verify:garden-ui'], {

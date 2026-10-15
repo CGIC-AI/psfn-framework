@@ -1,8 +1,7 @@
 name: Zizmor Full Audit
 
+# Manual only: local gate runs changed-workflow-analysis on workflow edits.
 on:
-  schedule:
-    - cron: "37 7 * * 1"
   workflow_dispatch:
 
 permissions:

@@ -1,29 +1,20 @@
 name: OSV Dependency Scan
 
+# Manual only: the local delivery gate runs `node scripts/ci/run-osv-scan.mjs`
+# on lockfile/Dockerfile/OSV-wrapper changes and canary runs.
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - "**/package-lock.json"
-      - "**/Dockerfile*"
-      - ".github/workflows/osv-scan.yml"
-      - "scripts/ci/npm-project-contract.mjs"
-      - "scripts/ci/run-osv-scan.mjs"
-  schedule:
-    - cron: "23 6 * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: osv-scan-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: osv-scan-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   osv:
     name: OSV lockfile scan
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -31,7 +22,7 @@ jobs:
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
 
       - name: Set up Node.js
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0

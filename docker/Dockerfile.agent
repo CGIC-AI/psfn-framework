@@ -89,15 +89,15 @@ RUN apt-get update \
       bubblewrap=0.8.0-2+deb12u1 \
       file=1:5.44-3 \
       git=1:2.39.5-0+deb12u3 \
-      jq=1.6-2.1+deb12u2 \
+      jq=1.6-2.1+deb12u3 \
       pandoc=2.17.1.1-2~deb12u1 \
       poppler-utils=22.12.0-2+deb12u3 \
       python3=3.11.2-1+b1 \
       python3-venv=3.11.2-1+b1 \
       ripgrep=13.0.0-4+b2 \
       sqlite3=3.40.1-2+deb12u2 \
-      unzip=6.0-28 \
-      zip=3.0-13 \
+      unzip=6.0-28+deb12u1 \
+      zip=3.0-13+deb12u1 \
     && npm install -g @beads/bd@1.1.0 \
     && npm cache clean --force \
     && rm -rf /var/lib/apt/lists/*

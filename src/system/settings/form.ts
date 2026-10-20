@@ -15,6 +15,7 @@ import {
   toConfiguredTtsProvider,
   toImportProcessingRouteMode,
   toSessionRestartBehavior,
+  toActiveMemoryRetrievalMode,
 } from './coercion.js';
 import {
   normalizeCanonicalModelRegistry,
@@ -76,6 +77,7 @@ export const SETTINGS_VALIDATION = {
   // test in runtime-bounds-settings.test.ts (psfn-framework-bxnyu).
   sharedWorkspaceListPageBytes: { min: 1000000, max: 1000000000 },
   memoryRefreshFailureAlertThreshold: { min: 1, max: 100 },
+  activeMemoryInlineBudgetMs: { min: 100, max: 30000 },
   intakeScreeningFailureAlertThreshold: { min: 1, max: 100 },
   analysisWorkbenchMaxTokens: { min: 1000, max: 1000000 },
   analysisWorkbenchMaxWallTimeMs: { min: 5000, max: 600000 },
@@ -506,6 +508,16 @@ export function parseSettingsForm(
         );
       } else {
         settings.sessionRestartBehavior = behavior;
+      }
+    }
+
+    const activeMemoryRetrievalModeRaw = params.get('activeMemoryRetrievalMode');
+    if (activeMemoryRetrievalModeRaw !== null) {
+      const mode = toActiveMemoryRetrievalMode(activeMemoryRetrievalModeRaw);
+      if (!mode) {
+        errors.push('activeMemoryRetrievalMode must be one of: background, inline');
+      } else {
+        settings.activeMemoryRetrievalMode = mode;
       }
     }
 

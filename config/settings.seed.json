@@ -286,6 +286,8 @@
   },
   "backgroundFailureEscalationThreshold": 3,
   "memoryRefreshFailureAlertThreshold": 3,
+  "activeMemoryRetrievalMode": "background",
+  "activeMemoryInlineBudgetMs": 2000,
   "intakeScreeningFailureAlertThreshold": 3,
   "healthEventStreamMaxRows": 5000,
   "operationalMetadataRetentionDays": 30,

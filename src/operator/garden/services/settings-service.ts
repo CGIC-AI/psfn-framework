@@ -25,6 +25,7 @@ import {
   buildSettingsContractData,
   IMPORT_PROCESSING_ROUTE_MODE_VALUES,
   SESSION_RESTART_BEHAVIOR_VALUES,
+  ACTIVE_MEMORY_RETRIEVAL_MODE_VALUES,
   SETTINGS_BOOLEAN_FIELDS,
   SETTINGS_OWNER_FILE_BY_FIELD,
   SETTINGS_STRING_ARRAY_FIELDS,
@@ -123,6 +124,7 @@ import { resolveCompanionNameFromConfig } from '../../../core/identity/companion
 
 const IMPORT_ROUTE_MODE_VALUES = new Set(IMPORT_PROCESSING_ROUTE_MODE_VALUES);
 const SESSION_RESTART_BEHAVIOR_VALUES_SET = new Set(SESSION_RESTART_BEHAVIOR_VALUES);
+const ACTIVE_MEMORY_RETRIEVAL_MODE_VALUES_SET = new Set(ACTIVE_MEMORY_RETRIEVAL_MODE_VALUES);
 const IMAGE_PROVIDER_VALUES_SET = new Set<string>(IMAGE_PROVIDER_VALUES);
 const FAL_CREATE_MODEL_VALUES_SET = new Set<string>(FAL_CREATE_MODELS);
 const FAL_EDIT_MODEL_VALUES_SET = new Set<string>(FAL_EDIT_MODELS);
@@ -1019,6 +1021,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
 
     this.validateEnumField(payload, 'importProcessingRouteMode', IMPORT_ROUTE_MODE_VALUES, errors);
     this.validateEnumField(payload, 'sessionRestartBehavior', SESSION_RESTART_BEHAVIOR_VALUES_SET, errors);
+    this.validateEnumField(payload, 'activeMemoryRetrievalMode', ACTIVE_MEMORY_RETRIEVAL_MODE_VALUES_SET, errors);
     this.validateEnumField(payload, 'imageProvider', IMAGE_PROVIDER_VALUES_SET, errors);
     this.validateEnumField(payload, 'imageFalCreateModel', FAL_CREATE_MODEL_VALUES_SET, errors);
     this.validateEnumField(payload, 'imageFalEditModel', FAL_EDIT_MODEL_VALUES_SET, errors);

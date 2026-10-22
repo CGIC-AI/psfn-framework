@@ -106,7 +106,7 @@ generated: { by: "openwiki/0.4.3", at: "2026-08-28T13:30:04.287Z" }
 and experimentation tooling: harnesses, fixtures, model probes, calibration
 tools, and report generators that do not need to ship with the live runtime. It
 is a separate npm project named `psfn-eval-toolkit` (Node.js 24 LTS, npm
-11.17.0, engines `>=24.19.0 <25`). The monorepo root keeps the runtime seams
+11.17.0, engines `>=24.22.1 <25`). The monorepo root keeps the runtime seams
 that evals hook into; toolkit code may import those seams only through explicit
 monorepo-relative paths (for example `../../../src/core/emotion/state.js` or
 `../../../src/app/e2e/runtime-harness.js`) and never copies runtime state into

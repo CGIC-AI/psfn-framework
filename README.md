@@ -217,7 +217,7 @@ mise run evals:check
 | Component | Technology |
 |-----------|-----------|
 | Language | TypeScript (strict) |
-| Runtime | Node.js 24 LTS (24.19.0 or newer 24.x) |
+| Runtime | Node.js 24 LTS (24.22.1 or newer 24.x) |
 | LLM | `@earendil-works/pi-ai@0.84.1` + `@earendil-works/pi-agent-core@0.84.1` |
 | Database | PostgreSQL 17 + pgvector (no SQLite) |
 | Garden UI | Svelte 5 |

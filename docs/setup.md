@@ -85,8 +85,8 @@ verified. When prose and code disagree, the code wins — lifecycle scripts,
 
 All three paths share a base set of prerequisites:
 
-- **Node.js 24.19.0 or newer in the Node 24 LTS line** (`.node-version` pins
-  24.19.0) and npm. The repository declares `npm@11.17.0` as its package
+- **Node.js 24.22.1 or newer in the Node 24 LTS line** (`.node-version` pins
+  24.22.1) and npm. The repository declares `npm@11.17.0` as its package
   manager and expects a `npm ci`-produced `node_modules`.
 - A supported **LLM provider credential** and outbound HTTPS to that provider.
   A first install also downloads pinned local embedding, text-emotion, and

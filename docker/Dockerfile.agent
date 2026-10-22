@@ -17,7 +17,7 @@ RUN set -eux; \
       chmod 0755 "/opt/postgresql-client/wrappers/${binary}"; \
     done
 
-FROM node:24.19.0-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03 AS native-toolchain
+FROM node:24.22.1-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS native-toolchain
 
 WORKDIR /app
 
@@ -62,7 +62,7 @@ COPY admin-ui/package*.json ./admin-ui/
 RUN npm_config_nodedir=/usr/local npm ci --omit=dev \
     && rm -rf /root/.npm /app/admin-ui/node_modules
 
-FROM node:24.19.0-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03 AS runtime
+FROM node:24.22.1-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS runtime
 
 WORKDIR /app
 
@@ -89,7 +89,7 @@ RUN apt-get update \
       bubblewrap=0.8.0-2+deb12u1 \
       file=1:5.44-3 \
       git=1:2.39.5-0+deb12u3 \
-      jq=1.6-2.1+deb12u2 \
+      jq=1.6-2.1+deb12u3 \
       pandoc=2.17.1.1-2~deb12u1 \
       poppler-utils=22.12.0-2+deb12u3 \
       python3=3.11.2-1+b1 \

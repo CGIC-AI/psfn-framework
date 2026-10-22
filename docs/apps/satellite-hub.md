@@ -696,7 +696,7 @@ Commands (see [`README.md`](/apps/satellite-hub/README.md)):
 ```bash
 npm run verify:satellite-hub        # bounded monorepo gate (TS + Python, no live devices/providers)
 uv sync --dev                       # Python deps for the ESPHome fallback path
-npm ci                              # TS deps; Node.js 24 LTS (>=24.19.0) with npm 11.17.0
+npm ci                              # TS deps; Node.js 24 LTS (>=24.22.1) with npm 11.17.0
 uv run hub run                      # Python fallback bridge (esphome/realtime/hybrid)
 uv run hub probe --host <ip> --noise-psk <psk>
 uv run hub transport-spike --host <ip> --noise-psk <psk>

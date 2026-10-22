@@ -7,7 +7,7 @@ tools, and report generators that do not need to ship with the live runtime.
 The monorepo root keeps the runtime seams that evals hook into. Toolkit code may
 import those seams through explicit monorepo-relative paths.
 
-The toolkit standard is Node.js 24 LTS (24.19.0 or newer 24.x) with npm 11.17.0,
+The toolkit standard is Node.js 24 LTS (24.22.1 or newer 24.x) with npm 11.17.0,
 also recorded in `.node-version` and `package.json`.
 
 ## Common Commands

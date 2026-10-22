@@ -96,8 +96,8 @@ RUN apt-get update \
       python3-venv=3.11.2-1+b1 \
       ripgrep=13.0.0-4+b2 \
       sqlite3=3.40.1-2+deb12u2 \
-      unzip=6.0-28 \
-      zip=3.0-13 \
+      unzip=6.0-28+deb12u1 \
+      zip=3.0-13+deb12u1 \
     && npm install -g @beads/bd@1.1.0 \
     && npm cache clean --force \
     && rm -rf /var/lib/apt/lists/*

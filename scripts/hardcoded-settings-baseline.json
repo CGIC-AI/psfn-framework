@@ -11102,6 +11102,13 @@
     },
     {
       "file": "src/shared/contracts/settings-garden-contract.ts",
+      "name": "SETTINGS_GARDEN_FIELD_EXPOSURE.activeMemoryInlineBudgetMs",
+      "value": "{ sectionId: 'memory', surface: 'advanced' }",
+      "form": "object-member",
+      "note": "Canonical owner-file/schema metadata SETTINGS_GARDEN_FIELD_EXPOSURE.activeMemoryInlineBudgetMs; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
+    },
+    {
+      "file": "src/shared/contracts/settings-garden-contract.ts",
       "name": "SETTINGS_GARDEN_FIELD_EXPOSURE.adaptiveContextBudgetsEnabled",
       "value": "{ sectionId: 'budget', surface: 'advanced' }",
       "form": "object-member",
@@ -12350,6 +12357,11 @@
     },
     {
       "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_ACTIVE_MEMORY_INLINE_BUDGET_MS",
+      "value": "2_000"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
       "name": "DEFAULT_COMPACTION_EMOTIONAL_SALIENCE_THRESHOLD_PCT",
       "value": "75"
     },
@@ -13243,7 +13255,7 @@
     {
       "file": "src/system/config/scheduler-config/free-time.ts",
       "name": "DEFAULT_FREE_TIME_CONFIG.budget.maxTurns",
-      "value": "6",
+      "value": "1",
       "form": "object-member",
       "note": "Scheduler owner-file default; operator-editable via scheduler.json."
     },
@@ -14005,6 +14017,13 @@
       "value": "'sessionMessageLimit has been removed; session history now trims by token budget only'",
       "form": "object-member",
       "note": "Canonical owner-file/schema metadata REMOVED_CONTEXT_CONTROL_FIELD_MESSAGES.sessionMessageLimit; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
+    },
+    {
+      "file": "src/system/settings/form.ts",
+      "name": "SETTINGS_VALIDATION.activeMemoryInlineBudgetMs",
+      "value": "{ min: 100, max: 30000 }",
+      "form": "object-member",
+      "note": "Canonical owner-file/schema metadata SETTINGS_VALIDATION.activeMemoryInlineBudgetMs; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
     },
     {
       "file": "src/system/settings/form.ts",

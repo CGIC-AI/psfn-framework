@@ -35,6 +35,11 @@ export const SESSION_RESTART_BEHAVIOR_VALUES = [
   'new_session',
 ] as const;
 
+export const ACTIVE_MEMORY_RETRIEVAL_MODE_VALUES = [
+  'background',
+  'inline',
+] as const;
+
 export type SettingsSubsystemId =
   | 'runtime'
   | 'models'
@@ -318,6 +323,7 @@ const SETTINGS_INTEGER_FIELDS = new Set<string>([
   'sharedWorkspaceListPageBytes',
   'memoryExtractionMaxWrites',
   'memoryRefreshFailureAlertThreshold',
+  'activeMemoryInlineBudgetMs',
   'intakeScreeningFailureAlertThreshold',
   'profileSynthesisRefreshIntervalMs',
   'profileSynthesisCooldownMs',
@@ -426,6 +432,7 @@ const STRUCTURED_SETTINGS_FIELD_KEYS = [...new Set<string>([
 const BASE_ENUM_VALUES_BY_FIELD = new Map<string, readonly string[]>([
   ['importProcessingRouteMode', IMPORT_PROCESSING_ROUTE_MODE_VALUES],
   ['sessionRestartBehavior', SESSION_RESTART_BEHAVIOR_VALUES],
+  ['activeMemoryRetrievalMode', ACTIVE_MEMORY_RETRIEVAL_MODE_VALUES],
   ['capabilityTier', CAPABILITY_TIER_VALUES],
   ['embeddingProvider', ['ollama', 'transformers', 'api']],
   ['textEmotionDtype', ['auto', 'fp32', 'fp16', 'q8', 'int8', 'uint8', 'q4', 'bnb4', 'q4f16']],

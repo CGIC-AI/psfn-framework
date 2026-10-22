@@ -7567,6 +7567,167 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     expect(buildContext.mock.calls[0]?.[2]).toBe('last-good memory block');
   });
 
+  describe('active memory retrieval mode (psfn-framework-d5e0p.20)', () => {
+    const makeActiveSnapshot = (contextBlock: string, refreshStatus: 'ready' | 'refreshing') => ({
+      key: 'active-memory:mode-key',
+      subjectKey: 'contact:contact-1',
+      channelId: 'ch1',
+      trustLevel: 'regular',
+      channelVisibility: 'private',
+      visibilityScope: 'non_broadcast',
+      contextBlock,
+      contextChars: contextBlock.length,
+      selectedMemoryIds: ['mem-1'],
+      generatedAt: Date.now(),
+      lastRefreshStartedAt: Date.now(),
+      refreshStatus,
+      versionPointer: `active-memory-${contextBlock}`,
+    });
+
+    function createModeRuntime(input: {
+      eventBus: EventBus;
+      buildContext: ReturnType<typeof vi.fn>;
+      getActiveMemoryContext: ReturnType<typeof vi.fn>;
+      refreshActiveMemoryContext: ReturnType<typeof vi.fn>;
+      configOverrides: Partial<SubstrateConfig>;
+    }) {
+      return createRuntime({
+        eventBus: input.eventBus,
+        sessionManager: {} as SessionManager,
+        buildContext: input.buildContext,
+        scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+        awaitPendingAutoCompaction: vi.fn(async () => undefined),
+        recordUserMessage: vi.fn(() => 1),
+        recordAssistantMessage: vi.fn(() => 2),
+        memoryProvider: {
+          getActiveMemoryContext: input.getActiveMemoryContext,
+          refreshActiveMemoryContext: input.refreshActiveMemoryContext,
+        } as unknown as TurnExecutionRuntime['memoryProvider'],
+        configOverrides: input.configOverrides,
+      });
+    }
+
+    function memoryStagePayload(runtime: TurnExecutionRuntime): Record<string, unknown> | undefined {
+      const emitTurnStage = runtime.emitTurnStage as unknown as ReturnType<typeof vi.fn>;
+      const call = emitTurnStage.mock.calls.find(args => args[4] === 'memory');
+      return call?.[6] as Record<string, unknown> | undefined;
+    }
+
+    const newBuildContext = () => vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: makeContextManifestFixture(),
+    }));
+
+    it('inline mode answers with the memories refreshed for the current message', async () => {
+      const eventBus = new EventBus();
+      const buildContext = newBuildContext();
+      let current = makeActiveSnapshot('memories for the previous message', 'ready');
+      const refreshActiveMemoryContext = vi.fn(async () => {
+        await Promise.resolve();
+        current = makeActiveSnapshot('memories for this message', 'ready');
+        return current;
+      });
+      const getActiveMemoryContext = vi.fn(() => current);
+      const runtime = createModeRuntime({
+        eventBus,
+        buildContext,
+        getActiveMemoryContext,
+        refreshActiveMemoryContext,
+        configOverrides: { activeMemoryRetrievalMode: 'inline', activeMemoryInlineBudgetMs: 1_000 },
+      });
+
+      await expect(handleMessageForTurn(runtime, createMessage('msg-inline-fresh')))
+        .resolves.toMatchObject({ content: 'assistant reply', channelId: 'ch1' });
+
+      expect(buildContext.mock.calls[0]?.[2]).toBe('memories for this message');
+      expect(refreshActiveMemoryContext).toHaveBeenCalledTimes(1);
+      expect(refreshActiveMemoryContext.mock.invocationCallOrder[0])
+        .toBeLessThan(getActiveMemoryContext.mock.invocationCallOrder[0]!);
+      expect(memoryStagePayload(runtime)).toMatchObject({
+        activeMemoryRetrievalMode: 'inline',
+        activeMemoryInlineOutcome: 'fresh',
+        activeMemoryRefreshStatus: 'ready',
+      });
+    });
+
+    it('inline mode falls back to the last-good context when the refresh exceeds its budget', async () => {
+      const eventBus = new EventBus();
+      const degradedEvents: Array<EventMap['memory.active_context.turn_degraded']> = [];
+      eventBus.on('memory.active_context.turn_degraded', event => {
+        degradedEvents.push(event);
+      });
+      const buildContext = newBuildContext();
+      const pendingRefresh = createDeferred<null>();
+      const runtime = createModeRuntime({
+        eventBus,
+        buildContext,
+        getActiveMemoryContext: vi.fn(() => makeActiveSnapshot('last-good memories', 'refreshing')),
+        refreshActiveMemoryContext: vi.fn(() => pendingRefresh.promise),
+        configOverrides: { activeMemoryRetrievalMode: 'inline', activeMemoryInlineBudgetMs: 20 },
+      });
+
+      await expect(handleMessageForTurn(runtime, createMessage('msg-inline-timeout')))
+        .resolves.toMatchObject({ content: 'assistant reply', channelId: 'ch1' });
+      await flushAsyncWork();
+      pendingRefresh.resolve(null);
+
+      expect(buildContext.mock.calls[0]?.[2]).toBe('last-good memories');
+      expect(memoryStagePayload(runtime)).toMatchObject({
+        activeMemoryRetrievalMode: 'inline',
+        activeMemoryInlineOutcome: 'timeout',
+      });
+      expect(degradedEvents).toHaveLength(1);
+      expect(degradedEvents[0]).toMatchObject({ reason: 'stale', refreshStatus: 'refreshing' });
+    });
+
+    it('inline mode rejects the turn when no inline budget is configured', async () => {
+      const eventBus = new EventBus();
+      const buildContext = newBuildContext();
+      const refreshActiveMemoryContext = vi.fn(async () => null);
+      const runtime = createModeRuntime({
+        eventBus,
+        buildContext,
+        getActiveMemoryContext: vi.fn(() => null),
+        refreshActiveMemoryContext,
+        configOverrides: { activeMemoryRetrievalMode: 'inline' },
+      });
+
+      await expect(handleMessageForTurn(runtime, createMessage('msg-inline-no-budget')))
+        .rejects.toThrow(/Invalid activeMemoryInlineBudgetMs/);
+      expect(refreshActiveMemoryContext).not.toHaveBeenCalled();
+      expect(buildContext).not.toHaveBeenCalled();
+    });
+
+    it('background mode serves the last-good context and schedules the refresh after reading it', async () => {
+      const eventBus = new EventBus();
+      const buildContext = newBuildContext();
+      const pendingRefresh = createDeferred<null>();
+      const getActiveMemoryContext = vi.fn(() => makeActiveSnapshot('memories for the previous message', 'ready'));
+      const refreshActiveMemoryContext = vi.fn(() => pendingRefresh.promise);
+      const runtime = createModeRuntime({
+        eventBus,
+        buildContext,
+        getActiveMemoryContext,
+        refreshActiveMemoryContext,
+        configOverrides: { activeMemoryRetrievalMode: 'background' },
+      });
+
+      await expect(handleMessageForTurn(runtime, createMessage('msg-background-mode')))
+        .resolves.toMatchObject({ content: 'assistant reply', channelId: 'ch1' });
+      pendingRefresh.resolve(null);
+
+      expect(buildContext.mock.calls[0]?.[2]).toBe('memories for the previous message');
+      expect(getActiveMemoryContext.mock.invocationCallOrder[0])
+        .toBeLessThan(refreshActiveMemoryContext.mock.invocationCallOrder[0]!);
+      expect(memoryStagePayload(runtime)).toMatchObject({
+        activeMemoryRetrievalMode: 'background',
+        activeMemoryInlineOutcome: 'not_requested',
+        activeMemoryInlineWaitMs: 0,
+      });
+    });
+  });
+
   it('emits stale when the served snapshot is still refreshing from an earlier pass and stays silent when ready', async () => {
     const eventBus = new EventBus();
     const degradedEvents: Array<EventMap['memory.active_context.turn_degraded']> = [];

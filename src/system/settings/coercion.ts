@@ -1,5 +1,5 @@
 import type { ImportProcessingRouteMode } from '../../shared/contracts/runtime.js';
-import type { SessionRestartBehavior, SubstrateConfig } from '../config/runtime-config-contracts.js';
+import type { ActiveMemoryRetrievalMode, SessionRestartBehavior, SubstrateConfig } from '../config/runtime-config-contracts.js';
 import {
   isStreamingSttProvider,
 } from '../../primitives/voice/connectors/stt/index.js';
@@ -16,6 +16,10 @@ const IMPORT_PROCESSING_ROUTE_MODE_VALUES = new Set<ImportProcessingRouteMode>([
 const SESSION_RESTART_BEHAVIOR_VALUES = new Set<SessionRestartBehavior>([
   'reuse_latest_session',
   'new_session',
+]);
+const ACTIVE_MEMORY_RETRIEVAL_MODE_VALUES = new Set<ActiveMemoryRetrievalMode>([
+  'background',
+  'inline',
 ]);
 const EMBEDDING_PROVIDER_VALUES = new Set<NonNullable<SubstrateConfig['embeddingProvider']>>([
   'ollama',
@@ -149,6 +153,13 @@ export function toSessionRestartBehavior(value: unknown): SessionRestartBehavior
   const trimmed = value.trim().toLowerCase();
   if (!SESSION_RESTART_BEHAVIOR_VALUES.has(trimmed as SessionRestartBehavior)) return undefined;
   return trimmed as SessionRestartBehavior;
+}
+
+export function toActiveMemoryRetrievalMode(value: unknown): ActiveMemoryRetrievalMode | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim().toLowerCase();
+  if (!ACTIVE_MEMORY_RETRIEVAL_MODE_VALUES.has(trimmed as ActiveMemoryRetrievalMode)) return undefined;
+  return trimmed as ActiveMemoryRetrievalMode;
 }
 
 export function toEmbeddingProvider(

@@ -124,6 +124,8 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   memoryDeletionPolicy: { sectionId: 'memory', surface: 'advanced' },
   memoryPresentationProfile: { sectionId: 'memory', surface: 'advanced' },
   memoryRefreshFailureAlertThreshold: { sectionId: 'memory', surface: 'advanced' },
+  activeMemoryRetrievalMode: { sectionId: 'memory', surface: 'advanced' },
+  activeMemoryInlineBudgetMs: { sectionId: 'memory', surface: 'advanced' },
   intakeScreeningFailureAlertThreshold: { sectionId: 'trust', surface: 'advanced' },
   groupMemory: { sectionId: 'extraction-tuning', surface: 'advanced' },
   emotionScoping: { sectionId: 'memory', surface: 'advanced' },

@@ -61,6 +61,7 @@ import {
   toNumberInRange,
   toPositiveInteger,
   toSessionRestartBehavior,
+  toActiveMemoryRetrievalMode,
   toStringList,
 } from './coercion.js';
 import {
@@ -1333,6 +1334,15 @@ function normalizeCapabilityAndSessionSettings(
       normalized.sessionRestartBehavior = behavior;
     } else {
       deleteSetting(normalized, 'sessionRestartBehavior');
+    }
+  }
+
+  if ('activeMemoryRetrievalMode' in settings) {
+    const mode = toActiveMemoryRetrievalMode(settings.activeMemoryRetrievalMode);
+    if (mode) {
+      normalized.activeMemoryRetrievalMode = mode;
+    } else {
+      deleteSetting(normalized, 'activeMemoryRetrievalMode');
     }
   }
 

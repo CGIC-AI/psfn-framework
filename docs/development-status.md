@@ -104,7 +104,7 @@ SQLite-centered prototype shape: SQLite implementations and packages are removed
 | --- | --- | --- |
 | Runtime split | Gateway owns secrets, provider credentials, and external network; the agent runs isolated and talks over gateway RPC; the operator hosts Garden. Split runtime is the only supported shape. | `src/app/gateway/main.ts`, `src/app/agent/main.ts`, `src/app/operator/main.ts` |
 | Legacy entrypoint | `src/app/startup/index.ts` is disabled and exits fail-closed with an error directing operators to the split entrypoints. | `src/app/startup/index.ts` |
-| Package identity | `psfn-framework` 0.1.0, AGPL-3.0-only, ESM, npm 11.17.0, Node `>=24.19.0 <25`. | `package.json` |
+| Package identity | `psfn-framework` 0.1.0, AGPL-3.0-only, ESM, npm 11.17.0, Node `>=24.22.1 <25`. | `package.json` |
 | Persistence | PostgreSQL + pgvector is required for runtime memory, episodes, contacts, intentions, concerns, internal state, scheduled prompts, background work, automata state, and searchable projections; L0 session archives remain JSONL. | `src/persistence/runtime-factory.ts`, `src/app/startup/composition/composition.ts`, `src/faculties/memory/postgres-store.ts` |
 | Config authority | Mutable runtime settings live in JSON owner files with startup verification; `.env` is limited to secrets and process/bootstrap wiring. | `src/system/config/startup-owner-files.ts`, `docs/specifications.md` |
 | Memory | L0 JSONL archive, L0.1 episodic landmarks/arcs, L2 typed memories, group-memory extraction, scratchpad, wiki, and journal surfaces are distinct. | `src/faculties/memory/`, `docs/memory.md` |

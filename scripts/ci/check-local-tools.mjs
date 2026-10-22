@@ -5,7 +5,8 @@ import { pathToFileURL } from 'node:url';
 
 const REQUIRED_UBS_VERSION = '5.3.7';
 const REQUIRED_NODE_MAJOR = 24;
-const REQUIRED_NODE_MINOR = 19;
+const REQUIRED_NODE_MINOR = 22;
+const REQUIRED_NODE_PATCH = 1;
 
 function run(executable, args) {
   try {
@@ -23,8 +24,12 @@ export function validateToolReport({ nodeVersion, ubsVersion }) {
   const match = /^v?(\d+)\.(\d+)\.(\d+)$/u.exec(nodeVersion);
   const major = Number(match?.[1]);
   const minor = Number(match?.[2]);
-  if (major !== REQUIRED_NODE_MAJOR || minor < REQUIRED_NODE_MINOR) {
-    throw new Error(`Node >=24.19.0 <25 is required; found ${nodeVersion || 'unknown'}`);
+  const patch = Number(match?.[3]);
+  const belowMinimum =
+    minor < REQUIRED_NODE_MINOR
+    || (minor === REQUIRED_NODE_MINOR && patch < REQUIRED_NODE_PATCH);
+  if (major !== REQUIRED_NODE_MAJOR || belowMinimum) {
+    throw new Error(`Node >=24.22.1 <25 is required; found ${nodeVersion || 'unknown'}`);
   }
   if (!new RegExp(`\\bv${REQUIRED_UBS_VERSION.replaceAll('.', '\\.')}\\b`).test(ubsVersion)) {
     throw new Error(`UBS ${REQUIRED_UBS_VERSION} is required; found ${ubsVersion || 'unknown'}`);

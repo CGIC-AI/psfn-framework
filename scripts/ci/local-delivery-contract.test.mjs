@@ -467,22 +467,26 @@ test('delivery and product gates validate only their owned change surface', () =
 
 test('local tool doctor pins UBS while accepting supported Node releases', () => {
   assert.doesNotThrow(() =>
-    validateToolReport({ nodeVersion: 'v24.19.0', ubsVersion: 'UBS Meta-Runner v5.3.7' }),
+    validateToolReport({ nodeVersion: 'v24.22.1', ubsVersion: 'UBS Meta-Runner v5.3.7' }),
   );
   assert.throws(
     () => validateToolReport({ nodeVersion: 'v22.23.2', ubsVersion: 'UBS Meta-Runner v5.3.7' }),
-    /Node >=24\.19\.0 <25/,
+    /Node >=24\.22\.1 <25/,
   );
   assert.throws(
     () => validateToolReport({ nodeVersion: 'v24.18.1', ubsVersion: 'UBS Meta-Runner v5.3.7' }),
-    /Node >=24\.19\.0 <25/,
+    /Node >=24\.22\.1 <25/,
+  );
+  assert.throws(
+    () => validateToolReport({ nodeVersion: 'v24.22.0', ubsVersion: 'UBS Meta-Runner v5.3.7' }),
+    /Node >=24\.22\.1 <25/,
   );
   assert.throws(
     () => validateToolReport({ nodeVersion: 'v25.9.0', ubsVersion: 'UBS Meta-Runner v5.3.7' }),
-    /Node >=24\.19\.0 <25/,
+    /Node >=24\.22\.1 <25/,
   );
   assert.throws(
-    () => validateToolReport({ nodeVersion: 'v24.19.0', ubsVersion: 'UBS Meta-Runner v5.4.0' }),
+    () => validateToolReport({ nodeVersion: 'v24.22.1', ubsVersion: 'UBS Meta-Runner v5.4.0' }),
     /UBS 5\.3\.7/,
   );
 });

@@ -18,7 +18,7 @@ function fixture(t, { attested = true } = {}) {
   t.after(() => rmSync(repositoryRoot, { recursive: true, force: true }));
   const cacheDir = join(repositoryRoot, 'npm-cache');
   const projectName = 'psfn-bootstrap-fixture';
-  writeFileSync(join(repositoryRoot, '.node-version'), '24.19.0\n');
+  writeFileSync(join(repositoryRoot, '.node-version'), '24.22.1\n');
   const addProject = (projectPath, name, projectAttested = true) => {
     const projectRoot = resolve(repositoryRoot, projectPath);
     mkdirSync(projectRoot, { recursive: true });
@@ -48,7 +48,7 @@ test('a fresh worktree receives an isolated offline lockfile install', (t) => {
   const result = bootstrapWorktree({
     repositoryRoot,
     cacheDir,
-    nodeVersion: 'v24.19.0',
+    nodeVersion: 'v24.22.1',
     runNpm(args) {
       calls.push(args);
       mkdirSync(join(repositoryRoot, 'node_modules'), { recursive: true });
@@ -74,7 +74,7 @@ test('default bootstrap leaves unrelated specialist projects uninstalled', (t) =
   const result = bootstrapWorktree({
     repositoryRoot,
     cacheDir,
-    nodeVersion: 'v24.19.0',
+    nodeVersion: 'v24.22.1',
     runNpm(_args, { repositoryRoot: projectRoot }) {
       installed.push(projectRoot);
       mkdirSync(join(projectRoot, 'node_modules'), { recursive: true });
@@ -112,7 +112,7 @@ test('every explicitly selected lockfile-owned project receives its own isolated
   const result = bootstrapWorktree({
     repositoryRoot,
     cacheDir,
-    nodeVersion: 'v24.19.0',
+    nodeVersion: 'v24.22.1',
     projectPaths: ['.', 'companion-ui'],
     runNpm(_args, { repositoryRoot: projectRoot }) {
       installed.push(projectRoot);
@@ -137,7 +137,7 @@ test('an exact lockfile marker makes repeated checkouts a no-op', (t) => {
   const result = bootstrapWorktree({
     repositoryRoot,
     cacheDir,
-    nodeVersion: 'v24.19.0',
+    nodeVersion: 'v24.22.1',
     runNpm() { invoked = true; },
   });
 
@@ -156,7 +156,7 @@ test('bootstrap fails before npm when the executing Node is not the repository v
       nodeVersion: 'v22.22.2',
       runNpm() { invoked = true; },
     }),
-    /requires Node v24\.19\.0; bootstrap is running under v22\.22\.2/u,
+    /requires Node v24\.22\.1; bootstrap is running under v22\.22\.2/u,
   );
   assert.equal(invoked, false);
 });
@@ -168,7 +168,7 @@ test('bootstrap refuses to attest an install that did not create node_modules', 
     () => bootstrapWorktree({
       repositoryRoot,
       cacheDir,
-      nodeVersion: 'v24.19.0',
+      nodeVersion: 'v24.22.1',
       runNpm() {},
     }),
     /npm ci completed without creating node_modules/u,
@@ -182,7 +182,7 @@ test('bootstrap automatically prepares an unattested cache before installing', (
   const result = bootstrapWorktree({
     repositoryRoot,
     cacheDir,
-    nodeVersion: 'v24.19.0',
+    nodeVersion: 'v24.22.1',
     prewarm() {
       events.push('prewarm');
       attest();
@@ -204,7 +204,7 @@ test('bootstrap refuses an install when cache preparation does not attest it', (
   assert.throws(() => bootstrapWorktree({
     repositoryRoot,
     cacheDir,
-    nodeVersion: 'v24.19.0',
+    nodeVersion: 'v24.22.1',
     prewarm() {},
     runNpm() { invoked = true; },
   }), /did not create an attestation/u);

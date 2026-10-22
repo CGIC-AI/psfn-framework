@@ -8,7 +8,7 @@
 #
 # Build context is the repo root (mirrors docker/Dockerfile.agent), so the
 # builder can read companion-ui/ source and this directory's nginx.conf.
-FROM node:24.19.0-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03 AS build
+FROM node:24.22.1-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS build
 
 WORKDIR /build/companion-ui
 

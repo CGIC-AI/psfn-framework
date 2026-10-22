@@ -24,7 +24,7 @@
   },
   "dependencies": {
     "@fal-ai/client": "1.10.1",
-    "@modelcontextprotocol/client": "2.2.0",
+    "@modelcontextprotocol/client": "2.3.0",
     "dotenv": "16.6.1",
     "openai": "5.23.2",
     "three": "0.184.0",
@@ -40,7 +40,7 @@
     "typescript": "5.9.3"
   },
   "engines": {
-    "node": ">=24.19.0 <25"
+    "node": ">=24.22.1 <25"
   },
   "allowScripts": {
     "esbuild@0.28.2": true

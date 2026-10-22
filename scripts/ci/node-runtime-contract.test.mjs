@@ -5,9 +5,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../..');
-const nodeVersion = '24.19.0';
+const nodeVersion = '24.22.1';
 const nodeTypesVersion = '24.13.3';
-const nodeImage = `node:${nodeVersion}-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03`;
+const nodeImage = `node:${nodeVersion}-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205`;
 
 function read(relativePath) {
   return readFileSync(join(repoRoot, relativePath), 'utf8');
@@ -37,7 +37,7 @@ test('framework, UI builders, and CI share the exact Node 24 LTS standard', () =
   }
   assert.equal(read('apps/satellite-hub/.node-version').trim(), nodeVersion);
   assert.equal(read('tools/evals/.node-version').trim(), nodeVersion);
-  assert.match(read('mise.toml'), /node = "24\.19\.0"/u);
+  assert.match(read('mise.toml'), /node = "24\.22\.1"/u);
   assert.match(read('mise.toml'), /npm = "11\.17\.0"/u);
   assert.match(read('tsconfig.json'), /"target": "ES2024"/u);
   assert.match(read('tsup.config.ts'), /target: 'node24'/u);
@@ -70,7 +70,10 @@ test('active runtime and operator docs do not retain the Node 22 split', () => {
   ].map(read).join('\n');
 
   assert.match(activeSurfaces, /Node(?:\.js)? 24/u);
-  assert.doesNotMatch(activeSurfaces, /Node(?:\.js)? 22|node:22|node22|24\.13\.1|22\.22\.2/u);
+  assert.doesNotMatch(
+    activeSurfaces,
+    /Node(?:\.js)? 22|node:22|node22|24\.13\.1|24\.19\.0|22\.22\.2/u,
+  );
 });
 
 test('root installation stays small and specialist dependencies are lazy', () => {

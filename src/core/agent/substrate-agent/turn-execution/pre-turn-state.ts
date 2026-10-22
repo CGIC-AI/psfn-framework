@@ -37,6 +37,13 @@ import type {
   ObserverEvalRoutingSource,
 } from '../../../eval/observer-sidecar/types.js';
 import { createComponentLogger } from '../../../../shared/logger.js';
+import {
+  awaitInlineActiveMemoryRefresh,
+  INLINE_ACTIVE_MEMORY_NOT_REQUESTED,
+  requireActiveMemoryInlineBudgetMs,
+  resolveActiveMemoryRetrievalMode,
+  type InlineActiveMemoryResult,
+} from './inline-active-memory.js';
 import { toErrorMessage } from '../../../../shared/utils/errors.js';
 import { resolveActiveEmanationState } from '../../active-emanation-state.js';
 import { resolveContinuitySubjectKey, resolveRequesterProvenance, type ResolvedAuthorContext } from '../runtime-context.js';
@@ -883,44 +890,16 @@ export async function computePreTurnState(input: {
     ...(effectiveRetrievalCallerContext ? { callerContext: effectiveRetrievalCallerContext } : {}),
     ...(temporalRetrievalMode ? { retrievalMode: temporalRetrievalMode } : {}),
   };
-  const activeMemoryContext = activeMemorySurface
-    ? activeMemorySurface.getActiveMemoryContext(activeMemoryRequest)
-    : null;
-  // E5.5: degraded state is explicit, never silent. When the turn proceeds
-  // without a fresh active context (cold start, failed refresh, or a refresh
-  // still in flight from an earlier pass) a typed event records why. The turn
-  // itself continues on the last-good context: the background refresh catches
-  // up next pass, and remembering a turn late is acceptable in this design.
-  const activeMemoryDegradedReason = activeMemorySurface
-    ? resolveActiveMemoryTurnDegradedReason(activeMemoryContext)
-    : null;
-  if (activeMemoryDegradedReason) {
-    void runtime.eventBus.emit('memory.active_context.turn_degraded', {
-      channelId: message.channelId,
-      key: activeMemoryContext?.key ?? 'unresolved',
-      reason: activeMemoryDegradedReason,
-      refreshStatus: activeMemoryContext?.refreshStatus === 'degraded'
-        || activeMemoryContext?.refreshStatus === 'refreshing'
-        ? activeMemoryContext.refreshStatus
-        : null,
-      turnId,
-      requestId,
-      ...(activeMemoryContext?.lastRefreshError ? { lastRefreshError: activeMemoryContext.lastRefreshError } : {}),
-      timestamp: Date.now(),
-    }).catch((emitError: unknown) => {
-      log.debug('Failed to emit active memory turn degradation event', {
-        channelId: message.channelId,
-        turnId,
-        requestId,
-        error: toErrorMessage(emitError),
-      });
-    });
-  }
   const refreshActiveMemoryContext = activeMemorySurface
     ? activeMemorySurface.refreshActiveMemoryContext
     : undefined;
   const activeMemoryRefreshScheduled = refreshActiveMemoryContext !== undefined;
-  if (refreshActiveMemoryContext) {
+  const activeMemoryRetrievalMode = resolveActiveMemoryRetrievalMode(runtime.config);
+  // Read lazily by the refresh failure handler: in inline mode the refresh is
+  // scheduled before the context is read.
+  let activeMemoryContext: ActiveMemoryContextSnapshot | null = null;
+  const scheduleActiveMemoryRefresh = (): Promise<ActiveMemoryContextSnapshot | null> | null => {
+    if (!refreshActiveMemoryContext) return null;
     const refresh = (): Promise<ActiveMemoryContextSnapshot | null> => (
       refreshActiveMemoryContext(activeMemoryRequest)
     );
@@ -975,6 +954,65 @@ export async function computePreTurnState(input: {
         });
       });
     });
+    return refreshPromise;
+  };
+  let inlineActiveMemory: InlineActiveMemoryResult = INLINE_ACTIVE_MEMORY_NOT_REQUESTED;
+  if (activeMemoryRetrievalMode === 'inline') {
+    // Pull memories for THIS message before the prompt is assembled. The
+    // refresh is the same sticky merge as the background lane; on timeout the
+    // turn uses the last-good context and the refresh lands for the next turn.
+    const inlineBudgetMs = requireActiveMemoryInlineBudgetMs(runtime.config);
+    const inlineRefresh = scheduleActiveMemoryRefresh();
+    if (inlineRefresh) {
+      inlineActiveMemory = await awaitInlineActiveMemoryRefresh(inlineRefresh, inlineBudgetMs);
+      if (inlineActiveMemory.outcome !== 'fresh') {
+        log.info('Inline active memory refresh did not complete in time; using last-good context', {
+          channelId: message.channelId,
+          turnId,
+          requestId,
+          outcome: inlineActiveMemory.outcome,
+          waitMs: inlineActiveMemory.waitMs,
+          budgetMs: inlineBudgetMs,
+        });
+      }
+    }
+  }
+  activeMemoryContext = activeMemorySurface
+    ? activeMemorySurface.getActiveMemoryContext(activeMemoryRequest)
+    : null;
+  // E5.5: degraded state is explicit, never silent. When the turn proceeds
+  // without a fresh active context (cold start, failed refresh, or a refresh
+  // still in flight from an earlier pass) a typed event records why. The turn
+  // itself continues on the last-good context: the background refresh catches
+  // up next pass. Background mode accepts remembering a turn late; inline mode
+  // only reaches here degraded when its bounded wait ran out or failed.
+  const activeMemoryDegradedReason = activeMemorySurface
+    ? resolveActiveMemoryTurnDegradedReason(activeMemoryContext)
+    : null;
+  if (activeMemoryDegradedReason) {
+    void runtime.eventBus.emit('memory.active_context.turn_degraded', {
+      channelId: message.channelId,
+      key: activeMemoryContext?.key ?? 'unresolved',
+      reason: activeMemoryDegradedReason,
+      refreshStatus: activeMemoryContext?.refreshStatus === 'degraded'
+        || activeMemoryContext?.refreshStatus === 'refreshing'
+        ? activeMemoryContext.refreshStatus
+        : null,
+      turnId,
+      requestId,
+      ...(activeMemoryContext?.lastRefreshError ? { lastRefreshError: activeMemoryContext.lastRefreshError } : {}),
+      timestamp: Date.now(),
+    }).catch((emitError: unknown) => {
+      log.debug('Failed to emit active memory turn degradation event', {
+        channelId: message.channelId,
+        turnId,
+        requestId,
+        error: toErrorMessage(emitError),
+      });
+    });
+  }
+  if (activeMemoryRetrievalMode === 'background') {
+    void scheduleActiveMemoryRefresh();
   }
   const emotionObservationStartedAt = performance.now();
   const emotionSnapshot = await runtime.emotionSelfModelRuntime.observeEmotionState(
@@ -1232,6 +1270,9 @@ export async function computePreTurnState(input: {
     activeMemoryContextVersion: activeMemoryContext?.versionPointer ?? null,
     activeMemoryRefreshStatus: activeMemoryContext?.refreshStatus ?? 'not_ready',
     activeMemoryRefreshScheduled,
+    activeMemoryRetrievalMode,
+    activeMemoryInlineOutcome: inlineActiveMemory.outcome,
+    activeMemoryInlineWaitMs: inlineActiveMemory.waitMs,
     scratchpadChars: scratchpadBlock.length,
     scratchpadIncluded: scratchpadBlock.length > 0,
   });

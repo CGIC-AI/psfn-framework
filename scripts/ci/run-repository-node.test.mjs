@@ -31,7 +31,7 @@ function fixture(t) {
   const nvmRoot = join(root, 'nvm root');
   mkdirSync(repositoryRoot, { recursive: true });
   mkdirSync(ambientBin, { recursive: true });
-  writeFileSync(join(repositoryRoot, '.node-version'), '24.19.0\n');
+  writeFileSync(join(repositoryRoot, '.node-version'), '24.22.1\n');
   return { ambientBin, miseDataRoot, nvmRoot, repositoryRoot };
 }
 
@@ -50,7 +50,7 @@ function run({ ambientBin, miseDataRoot, nvmRoot, repositoryRoot }) {
 test('uses the repository-pinned NVM runtime instead of an ambient Node 22', (t) => {
   const paths = fixture(t);
   writeNode(join(paths.ambientBin, 'node'), 'v22.22.2', 'ambient');
-  writeNode(join(paths.nvmRoot, 'versions/node/v24.19.0/bin/node'), 'v24.19.0', 'pinned');
+  writeNode(join(paths.nvmRoot, 'versions/node/v24.22.1/bin/node'), 'v24.22.1', 'pinned');
 
   const result = run(paths);
 
@@ -60,7 +60,7 @@ test('uses the repository-pinned NVM runtime instead of an ambient Node 22', (t)
 
 test('uses ambient node when it already matches the repository pin', (t) => {
   const paths = fixture(t);
-  writeNode(join(paths.ambientBin, 'node'), 'v24.19.0', 'ambient');
+  writeNode(join(paths.ambientBin, 'node'), 'v24.22.1', 'ambient');
 
   const result = run(paths);
 
@@ -71,7 +71,7 @@ test('uses ambient node when it already matches the repository pin', (t) => {
 test('uses the repository-pinned mise runtime when it is installed', (t) => {
   const paths = fixture(t);
   writeNode(join(paths.ambientBin, 'node'), 'v22.22.2', 'ambient');
-  writeNode(join(paths.miseDataRoot, 'installs/node/24.19.0/bin/node'), 'v24.19.0', 'pinned');
+  writeNode(join(paths.miseDataRoot, 'installs/node/24.22.1/bin/node'), 'v24.22.1', 'pinned');
 
   const result = run(paths);
 
@@ -86,6 +86,6 @@ test('fails with an actionable error when the pinned runtime is unavailable', (t
   const result = run(paths);
 
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /Node 24\.19\.0 is required/u);
-  assert.match(result.stderr, /nvm install 24\.19\.0/u);
+  assert.match(result.stderr, /Node 24\.22\.1 is required/u);
+  assert.match(result.stderr, /nvm install 24\.22\.1/u);
 });

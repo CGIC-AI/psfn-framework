@@ -141,6 +141,7 @@ const DIRECT_DEFINED_CONFIG_SETTINGS = [
   'memoryExtractionTelemetryEnabled',
   'memoryRetrievalTelemetryEnabled',
   'memoryRefreshFailureAlertThreshold',
+  'activeMemoryInlineBudgetMs',
   'intakeScreeningFailureAlertThreshold',
   'groupMemory',
   'emotionScoping',
@@ -331,6 +332,8 @@ function getMemorySettingsSnapshot(config: SubstrateConfig) {
     ),
     memoryRefreshFailureAlertThreshold:
       config.memoryRefreshFailureAlertThreshold ?? null,
+    activeMemoryRetrievalMode: config.activeMemoryRetrievalMode ?? 'background',
+    activeMemoryInlineBudgetMs: config.activeMemoryInlineBudgetMs ?? null,
     groupMemory: cloneGroupMemorySettings(
       config.groupMemory ?? createDefaultGroupMemorySettings(),
     ),
@@ -384,6 +387,8 @@ function getMemorySettingsSnapshot(config: SubstrateConfig) {
     | 'biographicalCandidatePolicy'
     | 'memoryPresentationProfile'
     | 'memoryRefreshFailureAlertThreshold'
+    | 'activeMemoryRetrievalMode'
+    | 'activeMemoryInlineBudgetMs'
     | 'groupMemory'
     | 'emotionScoping'
     | 'narrativeEmotionAppraisal'
@@ -823,6 +828,10 @@ function applyCoreSettings(
     const behavior = settings.sessionRestartBehavior;
     config.sessionRestartBehavior =
       behavior === 'new_session' ? 'new_session' : 'reuse_latest_session';
+  }
+  if ('activeMemoryRetrievalMode' in settings) {
+    config.activeMemoryRetrievalMode =
+      settings.activeMemoryRetrievalMode === 'inline' ? 'inline' : 'background';
   }
 }
 

@@ -193,11 +193,11 @@
   "dependencies": {
     "@character-foundry/character-foundry": "0.5.0",
     "@discordjs/voice": "0.19.2",
-    "@huggingface/transformers": "4.2.0",
     "@earendil-works/pi-agent-core": "0.84.1",
     "@earendil-works/pi-ai": "0.84.1",
-    "@modelcontextprotocol/client": "2.2.0",
-    "@modelcontextprotocol/server": "2.2.0",
+    "@huggingface/transformers": "4.2.0",
+    "@modelcontextprotocol/client": "2.3.0",
+    "@modelcontextprotocol/server": "2.3.0",
     "@peculiar/x509": "1.14.3",
     "@redis/client": "6.0.1",
     "@sinclair/typebox": "0.34.48",
@@ -246,7 +246,7 @@
     "sharp": "0.35.5",
     "source-map-js": "1.2.2",
     "vite": {
-      ".": "7.3.6"
+      ".": "7.3.7"
     },
     "eslint": {
       "minimatch": "10.2.4"
@@ -268,9 +268,9 @@
     "tsup": "8.5.1",
     "tsx": "4.23.1",
     "typescript": "5.9.3",
-    "vitest": "4.1.11"
+    "vitest": "4.1.12"
   },
   "engines": {
-    "node": ">=24.19.0 <25"
+    "node": ">=24.22.1 <25"
   }
 }

@@ -13,7 +13,7 @@ loopback-only Garden/API connections.
 
 ## Prerequisites
 
-- Node.js 24.19 or newer in the Node 24 LTS line and `npm ci`
+- Node.js 24.22.1 or newer in the Node 24 LTS line and `npm ci`
 - `kubectl` and Helm
 - an existing Kubernetes cluster with a default StorageClass
 - Docker and k3d only when building directly into a local k3d cluster

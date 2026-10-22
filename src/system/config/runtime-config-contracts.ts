@@ -58,6 +58,7 @@ import type { CogSecPersonaConformanceSettings } from '../../shared/contracts/co
 export type { CapabilityTier } from '../capabilities/tier-types.js';
 export type ShardToolsetConfig = Partial<Record<CapabilityTier, string[]>>;
 export type SessionRestartBehavior = 'reuse_latest_session' | 'new_session';
+export type ActiveMemoryRetrievalMode = 'background' | 'inline';
 export type PersistenceBackend = 'postgres';
 export const PROMOTED_EXTENDED_TOOL_SLOTS_MAX = 4;
 
@@ -377,6 +378,20 @@ export interface SubstrateConfig {
    * path (E5.5). Owned by settings.json.
    */
   memoryRefreshFailureAlertThreshold?: number;
+  /**
+   * When a foreground turn gets its active memory context. `background` serves
+   * the last-good context and refreshes it for the next turn. `inline` awaits
+   * the refresh for the current message (same sticky merge) for at most
+   * `activeMemoryInlineBudgetMs`, then falls back to the last-good context.
+   * Owned by settings.json.
+   */
+  activeMemoryRetrievalMode?: ActiveMemoryRetrievalMode;
+  /**
+   * Inline active-memory wait budget in milliseconds. Must exceed the sum of
+   * the enabled memory decision-site latency budgets or inline turns will
+   * regularly fall back to the last-good context. Owned by settings.json.
+   */
+  activeMemoryInlineBudgetMs?: number;
   /**
    * Fail-closed intake screening events per stage/source class before one
    * deduplicated operator alert is raised. Owned by settings.json.

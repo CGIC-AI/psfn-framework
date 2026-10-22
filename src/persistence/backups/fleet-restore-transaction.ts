@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -191,7 +192,15 @@ function stageRestoreTrees(
         throw error;
       }
       claimed.push(tree);
-      cpSync(tree.source, tree.staging, { recursive: true, errorOnExist: true, force: false });
+      // The staging root is our exclusive claim. Copy its children separately so
+      // errorOnExist still guards content races without rejecting that root.
+      for (const entry of readdirSync(tree.source)) {
+        cpSync(join(tree.source, entry), join(tree.staging, entry), {
+          recursive: true,
+          errorOnExist: true,
+          force: false,
+        });
+      }
     }
     prepareStaging?.(staged);
     for (const tree of staged) {

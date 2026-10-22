@@ -85,6 +85,7 @@ const DEFAULT_MEMORY_EXTRACTION_MIN_NOVELTY = 0.35;
 const DEFAULT_MEMORY_EXTRACTION_EMOTIONAL_INTENSITY_WEIGHT = 0.2;
 const DEFAULT_MEMORY_EXTRACTION_MAX_WRITES = 2;
 const DEFAULT_MEMORY_REFRESH_FAILURE_ALERT_THRESHOLD = 3;
+const DEFAULT_ACTIVE_MEMORY_INLINE_BUDGET_MS = 2_000;
 const DEFAULT_INTAKE_SCREENING_FAILURE_ALERT_THRESHOLD = 3;
 const DEFAULT_PROFILE_SYNTHESIS_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_PROFILE_SYNTHESIS_COOLDOWN_MS = 5 * 60 * 1000;
@@ -524,6 +525,8 @@ function loadConfigForMode(
     biographicalCandidatePolicy: createDefaultBiographicalCandidatePolicy(),
     memoryPresentationProfile: createDefaultMemoryPresentationProfile(),
     memoryRefreshFailureAlertThreshold: DEFAULT_MEMORY_REFRESH_FAILURE_ALERT_THRESHOLD,
+    activeMemoryRetrievalMode: 'background',
+    activeMemoryInlineBudgetMs: DEFAULT_ACTIVE_MEMORY_INLINE_BUDGET_MS,
     intakeScreeningFailureAlertThreshold: DEFAULT_INTAKE_SCREENING_FAILURE_ALERT_THRESHOLD,
     groupMemory: createDefaultGroupMemorySettings(),
     emotionScoping: createDefaultEmotionScopingSettings(),

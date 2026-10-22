@@ -29,8 +29,8 @@
     "eslint": "10.0.0",
     "jsdom": "29.1.1",
     "typescript": "5.9.3",
-    "vite": "7.3.5",
-    "vitest": "4.1.11"
+    "vite": "7.3.7",
+    "vitest": "4.1.12"
   },
   "dependencies": {
     "@pixiv/three-vrm": "3.5.4",

@@ -104,6 +104,65 @@ class FirstReplyStallingVoxtaTts implements VoxtaTtsAdapter {
   }
 }
 
+for (const chunks of [["é".repeat(32), "é".repeat(32)], ["é".repeat(64), "x"], ["x".repeat(512)]]) {
+  const over = Buffer.byteLength(chunks.join("")) > 128;
+  test(`Voxta retained reply ${over ? "overflow" : "exact limit"} (${Buffer.byteLength(chunks.join(""))} bytes) bounds all side effects`, async () => {
+    const artifactsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "voxta-reply-budget-"));
+    const ttsCalls: string[] = [];
+    const histories: ConversationMessage[][] = [];
+    let turns = 0;
+    const agent: FrameworkAgentAdapter = {
+      async *streamReply(input) {
+        histories.push([...(input.history ?? [])]);
+        for (const chunk of turns++ === 0 ? chunks : ["recovered"]) yield chunk;
+        return "";
+      },
+      async close() {},
+    };
+    const config = testHubConfig({ artifactsRoot, audioFolder: artifactsRoot });
+    config.limits = { maxQueuedBytes: 128 };
+    const server = new RealtimeHubServer(config, { agent, voxtaTts: {
+      async synthesizeWav(text) {
+        ttsCalls.push(text);
+        return wrapPcmAsWav(Buffer.alloc(32), { sampleRate: 16000, channels: 1, bitsPerSample: 16 });
+      },
+    } });
+    let socket: WebSocket | null = null;
+    try {
+      await server.start();
+      socket = await openSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}/hub`);
+      const frames: unknown[] = [];
+      socket.on("message", raw => frames.push(...decodeSignalRFrames(raw)));
+      socket.send(encodeFrame({ protocol: "json", version: 1 }));
+      await waitForFrame(frames, frame => isRecord(frame) && Object.keys(frame).length === 0);
+      socket.send(encodeFrame(invocation("a", { $type: "authenticate" })));
+      await waitForCompletion(frames, "a");
+      socket.send(encodeFrame(invocation("s", { $type: "startChat" })));
+      await waitForCompletion(frames, "s");
+      socket.send(encodeFrame(invocation("t", { $type: "send", text: "go" })));
+      await waitForCompletion(frames, "t");
+      if (over) {
+        assert.equal(ttsCalls.length, 0);
+        assert.deepEqual(fs.readdirSync(artifactsRoot), []);
+        assert.equal(frames.some(frame => isRecord(frame) && Array.isArray(frame.arguments) && isRecord(frame.arguments[0]) && frame.arguments[0].$type === "replyChunk"), false);
+      } else {
+        assert.deepEqual(ttsCalls, [chunks.join("")]);
+        assert.equal(fs.readdirSync(artifactsRoot).filter(name => name.endsWith(".wav")).length, 1);
+        const chunk = await waitForVoxta(frames, "replyChunk");
+        assert.equal(chunk.text, chunks.join(""));
+      }
+      socket.send(encodeFrame(invocation("r", { $type: "send", text: "next" })));
+      await waitForCompletion(frames, "r");
+      assert.deepEqual(histories[1]?.filter(message => message.role === "assistant").map(message => message.content), over ? [] : [chunks.join("")]);
+      assert.equal(ttsCalls.at(-1), "recovered");
+    } finally {
+      socket?.close();
+      await server.close();
+      fs.rmSync(artifactsRoot, { recursive: true, force: true });
+    }
+  });
+}
+
 test("Voxta facade negotiates SignalR and routes SendMessage into the embodied session", async () => {
   const agent = new FakeAgent();
   const server = new RealtimeHubServer(testHubConfig(), { agent, voxtaTts: null });

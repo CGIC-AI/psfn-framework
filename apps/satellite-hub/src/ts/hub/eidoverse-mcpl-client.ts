@@ -1,3 +1,4 @@
+import { resolveHubResourceLimits, type HubResourceLimits } from "./transport-resources.js";
 /**
  * MCP-over-WebSocket (MCPL) client for the Eidoverse door.
  *
@@ -77,6 +78,7 @@ export type EidoverseMcplIncomingHandler = (
 export type EidoverseMcplWorldHandler = (world: string) => void;
 
 export interface EidoverseMcplClientOptions {
+  limits?: Partial<HubResourceLimits>;
   logger?: EidoverseMcpLogger;
   connect?: EidoverseMcplSocketFactory;
 }
@@ -126,6 +128,7 @@ export class EidoverseMcplClient {
   private sensitiveValues: readonly string[] = [];
   private readonly logger: EidoverseMcpLogger;
   private readonly connect: EidoverseMcplSocketFactory;
+  private readonly limits: HubResourceLimits;
   private onIncoming: EidoverseMcplIncomingHandler | null = null;
   private onWorld: EidoverseMcplWorldHandler | null = null;
 
@@ -136,7 +139,8 @@ export class EidoverseMcplClient {
   ) {
     this.remainingReconnectAttempts = config.reconnectMaxAttempts;
     this.logger = privateHubLogger(options.logger ?? SILENT_LOGGER);
-    this.connect = options.connect ?? createWebSocketConnector;
+    this.limits = resolveHubResourceLimits(options.limits);
+    this.connect = options.connect ?? (url => createWebSocketConnector(url, this.limits));
   }
 
   /**
@@ -532,6 +536,7 @@ export class EidoverseMcplClient {
    * buffer that could silently join two unrelated frames.
    */
   private receive(session: McplSession, data: string): void {
+    if (Buffer.byteLength(data) > this.limits.maxFrameBytes) { session.socket.close(); return; }
     for (const line of data.split("\n")) this.consumeLine(session, line);
   }
 
@@ -785,11 +790,11 @@ function parseIncomingMessages(params: unknown): McplIncomingChannelMessage[] | 
   return parsed;
 }
 
-function createWebSocketConnector(url: string): EidoverseMcplSocket {
-  const socket = new WebSocket(url);
+function createWebSocketConnector(url: string, limits: HubResourceLimits): EidoverseMcplSocket {
+  const socket = new WebSocket(url, { maxPayload: limits.maxFrameBytes, perMessageDeflate: false, handshakeTimeout: limits.providerTimeoutMs });
   return {
     send: (data) => socket.send(data),
-    close: () => socket.close(),
+    close: () => socket.terminate(),
     onOpen: (handler) => { socket.on("open", handler); },
     onMessage: (handler) => {
       socket.on("message", (data: unknown) => {

@@ -1,3 +1,4 @@
+import { Utf8ByteBudget, UpstreamResponseError } from "../shared/upstream-response.js";
 import { hubConsole as console } from "../shared/private-log.js";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -33,6 +34,7 @@ import {
   type ArtifactTurn,
 } from "./artifacts.js";
 import type { TranscriptResult } from "./deepgram-live.js";
+import { transcribePcmClip } from "./deepgram-prerecorded.js";
 import type { FrameworkAgentAdapter, FrameworkReplyInputMode } from "./framework-agent.js";
 import {
   CompanionBridge,
@@ -173,7 +175,7 @@ export class RealtimeHubServer {
     this.eidoverseSupportsTravel = Boolean(options.eidoverse?.travel);
     this.companion = options.companion !== undefined
       ? options.companion
-      : (config.companion ? new CompanionBridge(config.companion) : null);
+      : (config.companion ? new CompanionBridge(config.companion, config.limits) : null);
     this.locationGeofence = config.location
       ? new HubLocationGeofence(config.location, options.locationNow)
       : null;
@@ -181,6 +183,7 @@ export class RealtimeHubServer {
       config.elevenlabsApiKey ?? "",
       config.elevenlabsModelId,
       config.elevenlabsVoiceId ?? "",
+      config.limits,
     );
     if (config.companionBrowser && !config.deviceRegistry) {
       throw new Error("Companion browser bridge requires the Hub device registry");
@@ -192,11 +195,11 @@ export class RealtimeHubServer {
     const voxtaTts = options.voxtaTts === null
       ? undefined
       : options.voxtaTts
-        ?? (config.elevenlabsApiKey && config.elevenlabsVoiceId ? new ElevenLabsVoxtaTts(this.tts) : undefined);
+        ?? (config.elevenlabsApiKey && config.elevenlabsVoiceId ? new ElevenLabsVoxtaTts(this.tts, this.resources.limits) : undefined);
     const voxtaStt = options.voxtaStt === null
       ? undefined
       : options.voxtaStt
-        ?? (config.deepgramApiKey ? new DeepgramVoxtaStt(config.deepgramApiKey) : undefined);
+        ?? (config.deepgramApiKey ? new DeepgramVoxtaStt(config.deepgramApiKey, this.resources.limits) : undefined);
     this.voxta = new VoxtaFacade({
       resources: this.resources,
       access: this.access,
@@ -226,7 +229,7 @@ export class RealtimeHubServer {
     this.httpServer.requestTimeout = this.resources.limits.httpBodyTimeoutMs;
     this.realtimeStt = options.realtimeStt ?? ((pcm, signal) => {
       if (!config.deepgramApiKey) throw new Error("Deepgram STT is not configured for this hub");
-      return transcribePcmClip(config.deepgramApiKey, pcm, signal);
+      return transcribePcmClip(config.deepgramApiKey, pcm, signal, this.resources.limits);
     });
     this.stopArtifactRetention = startPrivateArtifactRetention([config.artifactsRoot, config.voxta.audioFolder].filter((root): root is string => Boolean(root)));
   }
@@ -435,10 +438,10 @@ export class RealtimeHubServer {
 }
 
 class DeepgramVoxtaStt implements VoxtaSttAdapter {
-  constructor(private readonly apiKey: string) {}
+  constructor(private readonly apiKey: string, private readonly limits: HubResources["limits"]) {}
 
   async transcribePcm(input: { pcm: Buffer; signal: AbortSignal }): Promise<{ text: string; provider: string }> {
-    const transcript = await transcribePcmClip(this.apiKey, input.pcm, input.signal);
+    const transcript = await transcribePcmClip(this.apiKey, input.pcm, input.signal, this.limits);
     return {
       text: transcript.text,
       provider: transcript.provider,
@@ -447,12 +450,16 @@ class DeepgramVoxtaStt implements VoxtaSttAdapter {
 }
 
 class ElevenLabsVoxtaTts implements VoxtaTtsAdapter {
-  constructor(private readonly tts: StreamingTtsAdapter) {}
+  constructor(private readonly tts: StreamingTtsAdapter, private readonly limits: HubResources["limits"]) {}
 
   async synthesizeWav(text: string, signal: AbortSignal): Promise<Buffer> {
+    signal = AbortSignal.any([signal, AbortSignal.timeout(this.limits.providerTimeoutMs)]);
     const mp3Chunks: Buffer[] = [];
+    let bytes = 0;
     const audio = this.tts.streamText(singleValueStream(text), { signal });
     for await (const chunk of abortableAsyncIterable(audio, signal)) {
+      bytes += chunk.byteLength;
+      if (bytes > this.limits.maxAudioBytes) throw new Error("Hub TTS audio exceeds byte limit");
       mp3Chunks.push(chunk);
     }
     throwIfAborted(signal);
@@ -460,12 +467,12 @@ class ElevenLabsVoxtaTts implements VoxtaTtsAdapter {
     if (mp3.length === 0) {
       return Buffer.alloc(0);
     }
-    return convertMp3ToWav(mp3, signal);
+    return convertMp3ToWav(mp3, signal, this.limits.maxAudioBytes);
   }
 }
 
 function createFrameworkAgent(config: HubConfig): FrameworkAgentAdapter {
-  return new PsfnModelAdapter(config.psfn, undefined, config.deviceRegistry);
+  return new PsfnModelAdapter(config.psfn, undefined, config.deviceRegistry, config.limits);
 }
 
 function resolveChannelType(config: HubConfig): string {
@@ -1149,8 +1156,8 @@ class RealtimeConnection {
       });
     } catch (error) {
       const detail = error instanceof CompanionRequestError
-        ? error.message
-        : `Approval decision failed: ${error instanceof Error ? error.message : String(error)}`;
+        ? `Companion approval decision failed (${error.status})`
+        : "Companion approval decision failed";
       await this.send({
         type: "error-event",
         data: { message: detail },
@@ -1297,7 +1304,9 @@ class RealtimeConnection {
         data: preview.dataBase64,
       });
     } catch (error) {
-      await sendError(error instanceof Error ? error.message : String(error));
+      await sendError(error instanceof UpstreamResponseError ? error.message
+        : error instanceof CompanionRequestError ? `Companion artifact preview failed (${error.status})`
+        : "Companion artifact preview failed");
     }
   }
 
@@ -1395,6 +1404,7 @@ class RealtimeConnection {
     const replyAbortController = new AbortController();
     this.replyAbortController = replyAbortController;
     let responseText = "";
+    const replyBytes = new Utf8ByteBudget(this.resources.limits.maxQueuedBytes);
     const shouldStreamAudio = canReceiveStreamingAudio(this.capabilities);
     const audioSegmentQueue = shouldStreamAudio ? new AsyncQueue<string>(this.resources.limits.maxQueuedMessages) : null;
 
@@ -1460,9 +1470,7 @@ class RealtimeConnection {
       });
       for await (const delta of stream) {
         this.assertReplyActive(replyId, replyAbortController);
-        if (Buffer.byteLength(responseText) + Buffer.byteLength(delta) > this.resources.limits.maxQueuedBytes) {
-          throw new Error("Hub reply exceeds byte limit");
-        }
+        replyBytes.append(delta);
         responseText += delta;
         await this.send({
           type: "message",
@@ -1531,12 +1539,12 @@ class RealtimeConnection {
           sessionId: this.sessionId,
           turnId: turn.turnId,
           transcript,
-          error: String(error),
+          error: "Hub reply failed",
         });
         await this.send({
           type: "error-event",
           data: {
-            message: String(error),
+            message: "Hub reply failed",
           },
         });
       }
@@ -1598,13 +1606,13 @@ class RealtimeConnection {
   private async sendRelayError(
     operation: "stt" | "tts",
     requestId: string,
-    error: unknown,
+    _error: unknown,
   ): Promise<void> {
     await this.send({
       type: "relay.error",
       requestId,
       operation,
-      message: error instanceof Error ? error.message : String(error),
+      message: `${operation.toUpperCase()} provider failed`,
     });
   }
 
@@ -1746,7 +1754,7 @@ async function* singleValueStream(text: string): AsyncGenerator<string, void, vo
   yield text;
 }
 
-async function convertMp3ToWav(mp3: Buffer, signal: AbortSignal): Promise<Buffer> {
+async function convertMp3ToWav(mp3: Buffer, signal: AbortSignal, maxBytes: number): Promise<Buffer> {
   throwIfAborted(signal);
   const ffmpeg = spawn("ffmpeg", [
     "-hide_banner",
@@ -1767,9 +1775,15 @@ async function convertMp3ToWav(mp3: Buffer, signal: AbortSignal): Promise<Buffer
     stdio: ["pipe", "pipe", "pipe"],
   });
   const stdout: Buffer[] = [];
-  const stderr: Buffer[] = [];
-  ffmpeg.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-  ffmpeg.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+  let stdoutBytes = 0;
+  let overflow = false;
+  ffmpeg.stdout.on("data", (chunk: Buffer) => {
+    stdoutBytes += chunk.length;
+    if (stdoutBytes > maxBytes) { overflow = true; ffmpeg.kill("SIGKILL"); }
+    else if (!overflow) stdout.push(chunk);
+  });
+  // Provider-generated audio may put content in decoder diagnostics. Drain it.
+  ffmpeg.stderr.resume();
   const exit = new Promise<void>((resolve, reject) => {
     let settled = false;
     const finish = (error?: unknown): void => {
@@ -1796,7 +1810,7 @@ async function convertMp3ToWav(mp3: Buffer, signal: AbortSignal): Promise<Buffer
         return;
       }
       finish(new Error(
-        `ffmpeg failed converting Voxta TTS audio: ${Buffer.concat(stderr).toString("utf8").trim()}`,
+        "ffmpeg failed converting Voxta TTS audio",
       ));
     });
     signal.addEventListener("abort", onAbort, { once: true });
@@ -1806,61 +1820,11 @@ async function convertMp3ToWav(mp3: Buffer, signal: AbortSignal): Promise<Buffer
   });
   ffmpeg.stdin.end(mp3);
   await exit;
+  if (overflow) throw new Error("Hub TTS audio exceeds byte limit");
   throwIfAborted(signal);
   return Buffer.concat(stdout);
 }
 
-async function transcribePcmClip(
-  apiKey: string,
-  pcm: Buffer,
-  signal?: AbortSignal,
-): Promise<TranscriptResult> {
-  const startedAt = Date.now();
-  const response = await fetch(
-    "https://api.deepgram.com/v1/listen" +
-      "?model=nova-3" +
-      "&encoding=linear16" +
-      "&sample_rate=16000" +
-      "&channels=1" +
-      "&smart_format=true",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Token ${apiKey}`,
-        "Content-Type": "audio/raw",
-      },
-      body: new Uint8Array(pcm),
-      signal,
-    },
-  );
-  if (!response.ok) {
-    throw new Error(await formatDeepgramError(response));
-  }
-
-  const payload = await response.json() as {
-    results?: {
-      channels?: Array<{
-        alternatives?: Array<{
-          transcript?: string;
-        }>;
-      }>;
-    };
-  };
-  const text = payload.results?.channels?.[0]?.alternatives?.[0]?.transcript?.trim() || "";
-  return {
-    text,
-    provider: "deepgram-prerecorded",
-    latencyMs: Date.now() - startedAt,
-  };
-}
-
-async function formatDeepgramError(response: Response): Promise<string> {
-  const body = (await response.text()).trim();
-  if (body) {
-    return `Deepgram transcription failed (${response.status}): ${body}`;
-  }
-  return `Deepgram transcription failed (${response.status})`;
-}
 
 function decodeRawData(raw: RawData): string | null {
   if (typeof raw === "string") {

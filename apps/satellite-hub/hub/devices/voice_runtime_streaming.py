@@ -4,7 +4,7 @@ from hub.storage.artifacts import ArtifactStore
 
 import asyncio
 import array
-from contextlib import suppress
+from contextlib import AsyncExitStack, suppress
 from dataclasses import dataclass
 from datetime import datetime
 from io import BytesIO
@@ -99,6 +99,24 @@ class StreamingVoiceAssistantRuntime:
         self._response_task: asyncio.Task[None] | None = None
         self._discard_audio_until_stop = False
         self._finalize_lock = asyncio.Lock()
+
+    async def aclose(self) -> None:
+        tasks = {task for task in (self._watchdog_task, self._response_task) if task is not None}
+        try:
+            async with AsyncExitStack() as resources:
+                resources.callback(self._artifacts.close)
+                if self._active is not None or self._response_task is not None:
+                    resources.push_async_callback(self._stt.abort_turn)
+                for task in tasks:
+                    task.cancel()
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                failures = [result for result in results if isinstance(result, Exception)]
+                if failures:
+                    raise ExceptionGroup("Voice runtime shutdown failed", failures)
+        finally:
+            self._active = None
+            self._watchdog_task = None
+            self._response_task = None
 
     async def handle_start(
         self,

@@ -24,6 +24,7 @@ import {
 } from '../../boundary/gateway/url-policy.js';
 
 export const REMOTE_FETCH_TIMEOUT_MS = 30_000;
+const REMOTE_FETCH_ENCODING_OVERHEAD_BYTES = 64 * 1024;
 const MAX_REDIRECT_HOPS = 3;
 const REDIRECT_STATUS_CODES = new Set([301, 302, 303, 307, 308]);
 
@@ -147,6 +148,9 @@ export async function fetchRemoteResource(
   }
   const timeoutMs = options.timeoutMs ?? REMOTE_FETCH_TIMEOUT_MS;
   const policy = options.urlPolicy ?? {};
+  // Bound encoded input separately: framing/metadata may exceed a tiny decoded
+  // cap. Large bodies get at most twice that cap; small ones get 64 KiB slack.
+  const maxWireBytes = options.maxBytes + Math.max(options.maxBytes, REMOTE_FETCH_ENCODING_OVERHEAD_BYTES);
 
   const abort = new AbortController();
   const state = { timedOut: false };
@@ -163,7 +167,7 @@ export async function fetchRemoteResource(
         address,
         connectTimeoutMs: timeoutMs,
         requestTimeoutMs: timeoutMs,
-        maxResponseBytes: options.maxBytes,
+        maxResponseBytes: maxWireBytes,
         maxOrigins: 1,
         connections: 1,
       });

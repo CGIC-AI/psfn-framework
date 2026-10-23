@@ -3,6 +3,7 @@ import { createServer, type Server } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
 import type { Socket } from 'node:net';
 import { getCACertificates, setDefaultCACertificates, type TLSSocket } from 'node:tls';
+import { gzipSync } from 'node:zlib';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { generateCaMaterial, issueCertificate, loadCa } from '../../app/cert-manager/pki.js';
 import type { DnsResolver } from '../../boundary/gateway/url-policy.js';
@@ -195,6 +196,70 @@ describe('fetchRemoteResource (Sprint-10 6ny2, shared across channel adapters)',
   });
 
   // ── Streaming byte cap ──
+
+  it('accepts an in-cap decoded gzip body when its wire representation exceeds maxBytes', async () => {
+    const sockets = new Set<Socket>();
+    const { server, url } = await listen((_req, res) => {
+      res.writeHead(200, { 'content-encoding': 'gzip', 'content-type': 'text/plain' });
+      res.end(gzipSync('approved'));
+    });
+    servers.push(server);
+    server.on('connection', socket => {
+      sockets.add(socket);
+      socket.once('close', () => sockets.delete(socket));
+    });
+    const response = await fetchRemoteResource(`${url}/compressed`, {
+      maxBytes: 8, urlPolicy: localServerPolicy,
+    });
+    expect(response.bytes.toString()).toBe('approved');
+    await vi.waitFor(() => expect(sockets.size).toBe(0));
+  });
+
+  it.each([
+    { name: 'one byte over the decoded cap', body: Buffer.from('approved!') },
+    { name: 'a highly compressed expansion', body: Buffer.alloc(1024 * 1024, 0x61) },
+  ])('rejects gzip containing $name and closes its socket', async ({ body }) => {
+    const sockets = new Set<Socket>();
+    const { server, url } = await listen((_req, res) => {
+      res.writeHead(200, { 'content-encoding': 'gzip' });
+      // Keep the HTTP stream open: decoded overflow must abort before EOF.
+      res.write(gzipSync(body));
+    });
+    servers.push(server);
+    server.on('connection', socket => {
+      sockets.add(socket);
+      socket.once('close', () => sockets.delete(socket));
+    });
+    const error = await fetchRemoteResource(`${url}/compressed-overflow`, {
+      maxBytes: 8, timeoutMs: 1000, urlPolicy: localServerPolicy,
+    }).catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({ message: 'Remote fetch body too large: exceeded 8 bytes' });
+    // Encoded input fits its own bound; this denial is from the decoded stream.
+    expect((error as Error).cause).toBeUndefined();
+    await vi.waitFor(() => expect(sockets.size).toBe(0));
+  });
+
+  it('bounds gzip wire input that produces no decoded bytes and closes its socket', async () => {
+    const sockets = new Set<Socket>();
+    const { server, url } = await listen((_req, res) => {
+      res.writeHead(200, { 'content-encoding': 'gzip' });
+      // Valid concatenated empty members defeat a decoded-byte-only safeguard.
+      res.write(Buffer.concat(Array.from({ length: 4096 }, () => gzipSync(Buffer.alloc(0)))));
+    });
+    servers.push(server);
+    server.on('connection', socket => {
+      sockets.add(socket);
+      socket.once('close', () => sockets.delete(socket));
+    });
+    await expect(fetchRemoteResource(`${url}/encoded-input-overflow`, {
+      maxBytes: 8, timeoutMs: 1000, urlPolicy: localServerPolicy,
+    })).rejects.toMatchObject({
+      message: 'Remote fetch body too large: exceeded 8 bytes',
+      cause: { cause: { code: 'UND_ERR_RES_EXCEEDED_MAX_SIZE' } },
+    });
+    await vi.waitFor(() => expect(sockets.size).toBe(0));
+  });
 
   it('rejects a chunked length-omitted body exceeding maxBytes during streaming', async () => {
     let responseClosed = false;

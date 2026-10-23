@@ -6,6 +6,7 @@ export function createPinnedAddressAgent(options: {
   address: string;
   connectTimeoutMs: number;
   requestTimeoutMs: number;
+  /** Encoded response-body limit on the wire, before fetch content decoding. */
   maxResponseBytes: number;
   maxOrigins: number;
   connections?: number;

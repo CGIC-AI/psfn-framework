@@ -10,7 +10,7 @@ import httpx
 import pytest
 import websockets
 from websockets.exceptions import ConnectionClosed
-from websockets.frames import Frame, OP_BINARY, OP_CLOSE, OP_PING, OP_PONG
+from websockets.frames import Frame, OP_BINARY, OP_CLOSE, OP_PING, OP_PONG, OP_TEXT
 
 from hub.devices.realtime_output import RealtimeOutputLimits
 
@@ -315,3 +315,34 @@ async def test_cancelled_shutdown_awaits_terminal_cleanup_and_can_repeat(tmp_pat
         writer.transport.abort()
         await _close(writer)
         await hub.__aexit__(None, None, None)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("buffered_audio", (False, True))
+async def test_output_overflow_does_not_admit_trailing_application_work(tmp_path: Path, buffered_audio: bool) -> None:
+    limits = RealtimeOutputLimits(max_frames=3, max_bytes=1024)
+    async with server(tmp_path, output_limits=limits) as hub:
+        reader, writer, peer = await _unread_peer(hub)
+        try:
+            if buffered_audio:
+                writer.transport.resume_reading()
+                for payload in ({"type": "turn.start"}, {"type": "audio", "audio": "AQACAAMA"}, {"type": "hello"}):
+                    writer.write(Frame(OP_TEXT, json.dumps(payload).encode()).serialize(mask=True))
+                await writer.drain()
+                assert json.loads((await _read_frame(reader))[1])["type"] == "turn.started"
+                assert json.loads((await _read_frame(reader))[1])["type"] == "hello.ack"
+                writer.transport.pause_reading()
+            frames = [Frame(OP_PING, b"p" * 125) for _ in range(4)]
+            payloads = ({"type": "turn.end"},) if buffered_audio else (
+                {"type": "turn.start"}, {"type": "audio", "audio": "AQACAAMA"}, {"type": "turn.end"})
+            for payload in payloads:
+                frames.append(Frame(OP_TEXT, json.dumps(payload).encode()))
+            writer.write(b"".join(frame.serialize(mask=True) for frame in frames))
+            await writer.drain()
+            await _eventually(lambda: peer.connection_lost_waiter.done())
+            await _clean(hub, hub._server)
+            assert not (tmp_path / "artifacts").exists()
+            await _recover(hub, hub._server)
+        finally:
+            writer.transport.abort()
+            await _close(writer)

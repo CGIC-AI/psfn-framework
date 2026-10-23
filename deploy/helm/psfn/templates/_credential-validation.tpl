@@ -23,19 +23,7 @@
 {{- fail (printf "%s must name a valid Kubernetes Secret" $label) -}}
 {{- end -}}
 {{- end -}}
-{{- $roleKeys := dict -}}
-{{/* The complete mapping is the authority, including optional provider/channel
-     references, the harness credential and the aggregated satellite list.
-     Keep this independent of Secret creation: external references must not
-     wire one physical key into two credential roles either. */}}
-{{- $requiredRoles := .Files.Get "files/credential-key-roles.json" | fromJsonArray -}}
-{{- range $role := concat $requiredRoles (keys .Values.secrets.keys) | uniq -}}
-{{- $key := get $root.Values.secrets.keys $role | default "" -}}
-{{- if or (not (regexMatch "^[a-zA-Z0-9._-]+$" $key)) (hasKey $roleKeys $key) -}}
-{{- fail "secrets.keys must assign a valid, distinct Secret data key to each credential role" -}}
-{{- end -}}
-{{- $_ := set $roleKeys $key true -}}
-{{- end -}}
+{{- include "psfn.validateSecretCredentialReferences" . -}}
 {{- if .Values.secrets.allowMissingRequired -}}{{- fail "secrets.allowMissingRequired=true is no longer supported; select secrets.existingSecret or provide strong, distinct credentials" -}}{{- end -}}
 {{- if not .Values.secrets.existingSecret -}}
 {{- if not .Values.secrets.create -}}{{- fail "secrets.create=false requires secrets.existingSecret; no credential may be omitted" -}}{{- end -}}

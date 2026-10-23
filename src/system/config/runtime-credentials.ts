@@ -1,4 +1,4 @@
-import { assertDistinctCredentials, assertStrongCredential } from '../../shared/security/credentials.js';
+import { assertDistinctCredentials, assertStrongCredential, parseStrongSessionHmacRotationKeys } from '../../shared/security/credentials.js';
 import { parseExactPostgresCredential } from '../../shared/utils/postgres-credential.js';
 
 export function assertStrongPostgresCredential(value: string, role: string): void {
@@ -23,6 +23,14 @@ export function assertRuntimeCredentials(env: NodeJS.ProcessEnv): void {
     credentials[`API_SATELLITE_KEYS[${index}]`] = token.trim();
   }
   assertDistinctCredentials(credentials);
+  if (env.GATEWAY_SESSION_HMAC_KEYS !== undefined) {
+    for (const key of parseStrongSessionHmacRotationKeys(env.GATEWAY_SESSION_HMAC_KEYS)) {
+      // A singular HMAC and its versioned entry are the same role. Every
+      // rotation key must still differ from API/admin/all other roles.
+      assertDistinctCredentials({ ...credentials, GATEWAY_SESSION_HMAC_KEY: undefined,
+        GATEWAY_SESSION_HMAC_KEYS: key });
+    }
+  }
   for (const role of ['POSTGRES_DATABASE_URL', 'PSFN_SHARED_MIGRATION_DATABASE_URL']) {
     if (env[role] !== undefined) assertStrongPostgresCredential(env[role], role);
   }

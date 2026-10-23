@@ -32,6 +32,53 @@ async function stop(surface: { stop(): Promise<void> }) {
 }
 
 describe('public credential startup boundaries', () => {
+  it.each(['API_KEY', 'ADMIN_TOKEN', 'GATEWAY_COMPANION_AUTH_TOKEN', 'GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN',
+    'PSFN_BACKUP_ENCRYPTION_KEY', 'PSFN_API_KEY', 'HUB_CONTROL_TOKEN', 'API_SATELLITE_KEYS'])(
+    'rejects effective HMAC rotation reuse with %s in the executable gateway before owner hydration', role => {
+    const directory = mkdtempSync(join(tmpdir(), 'psfn-startup-hmac-rotation-'));
+    const apiKey = randomBytes(32).toString('hex');
+    try {
+      const result = spawnSync(process.execPath, ['--import', resolve('node_modules/tsx/dist/loader.mjs'), resolve('src/app/gateway/main.ts')], {
+        cwd: directory, encoding: 'utf8', env: { PATH: process.env.PATH, TZ: 'UTC', [role]: apiKey,
+          GATEWAY_SESSION_HMAC_KEY: randomBytes(32).toString('hex'),
+          GATEWAY_SESSION_HMAC_KEYS: `v1:${apiKey},v2=${randomBytes(32).toString('hex')}`,
+          GATEWAY_SESSION_HMAC_ACTIVE_VERSION: 'v2' },
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain('must not reuse');
+      expect(result.stdout + result.stderr).not.toContain(apiKey);
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  it.each(['fresh', 'retained'] as const)('preserves a valid %s HMAC rotation at executable startup', mode => {
+    const directory = mkdtempSync(join(tmpdir(), 'psfn-startup-valid-rotation-'));
+    const single = randomBytes(32).toString('hex');
+    const current = mode === 'retained' ? single : randomBytes(32).toString('hex');
+    const env = { PATH: process.env.PATH, TZ: 'UTC', API_KEY: randomBytes(32).toString('hex'),
+      GATEWAY_SESSION_HMAC_KEY: single, GATEWAY_SESSION_HMAC_KEYS: `v1:${single},v2=${current}`,
+      GATEWAY_SESSION_HMAC_ACTIVE_VERSION: 'v2' };
+    try {
+      const keyring = createSessionHmacBoundaryService({ env }).requireKeyring('missing');
+      expect(keyring.activeVersion).toBe('v2');
+      expect(keyring.keys.v2 === current && keyring.keys.v1 === single).toBe(true);
+      const result = spawnSync(process.execPath, ['--import', resolve('node_modules/tsx/dist/loader.mjs'), resolve('src/app/gateway/main.ts')], {
+        cwd: directory, encoding: 'utf8', env,
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.status).not.toBe(0);
+      expect(result.stdout + result.stderr).toContain('The fleet manifest is required but missing');
+      expect(result.stdout + result.stderr).not.toContain(single);
+      expect(result.stdout + result.stderr).not.toContain(current);
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+  it.each(['__proto__', 'constructor', 'prototype', 'has space', 'v1=alias'])(
+    'rejects an unsafe HMAC rotation version label (%#) without disclosing key material', version => {
+      const key = randomBytes(32).toString('hex');
+      const service = createSessionHmacBoundaryService({ env: { GATEWAY_SESSION_HMAC_KEYS: `${version}:${key}` } });
+      expect(() => service.requireKeyring('missing')).toThrow(/malformed|credential/u);
+      try { service.requireKeyring('missing'); } catch (error) { expect(String(error)).not.toContain(key); }
+    },
+  );
   it.each(['password', '%70assword', 'pass%77ord'])('rejects a PostgreSQL %s query override in the executable gateway before owner hydration', parameter => {
     const directory = mkdtempSync(join(tmpdir(), 'psfn-startup-pg-override-'));
     const password = randomBytes(32).toString('hex');

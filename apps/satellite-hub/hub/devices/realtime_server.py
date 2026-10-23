@@ -582,7 +582,10 @@ class RealtimeVoiceServer:
             await server.wait_closed()
             raise
         finally:
-            self._server = None
+            # Repeated cancellation can interrupt the cleanup wait. Keep the
+            # closing server reachable so another exit can finish awaiting it.
+            if server.close_task.done() and self._server is server:
+                self._server = None
 
     async def _handle_connection(self, websocket) -> None:
         connection = _RealtimeConnection(

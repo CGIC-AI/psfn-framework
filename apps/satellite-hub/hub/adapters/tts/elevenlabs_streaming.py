@@ -233,7 +233,10 @@ class ElevenLabsStreamingTTS:
 
     async def _ensure_connected(self, voice_id: str) -> None:
         if self._close_task is not None:
-            await asyncio.shield(self._close_task)
+            if not self._close_task.done():
+                raise RuntimeError("Provider connection closing")
+            await self._close_task
+            self._close_task = None
         generation = self._connector.generation
         async with self._connect_lock:
             if _is_open(self._ws):

@@ -461,6 +461,12 @@ async def test_repeated_shutdown_cancellation_retains_lifecycle_until_settlement
             with pytest.raises(asyncio.CancelledError):
                 await repeated
             assert provider._ws is connection
+            if kind == "elevenlabs":
+                during_close = provider.stream_text(text_chunks=asyncio.Queue(), context_id="during-close")
+                with pytest.raises(RuntimeError, match="Provider"):
+                    await asyncio.wait_for(anext(during_close), 0.3)
+                await during_close.aclose()
+                assert provider._ws is connection
         finally:
             release.set()
             connection.transport.abort()

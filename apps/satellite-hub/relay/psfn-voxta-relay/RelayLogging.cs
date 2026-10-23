@@ -22,6 +22,9 @@ public enum RelayEvent
     MicrophoneFailed,
     AudioSocketOpened,
     AudioSocketSendFailed,
+    ArtifactExpired,
+    ArtifactCleanupRejected,
+    ArtifactRetentionFailed,
 }
 
 // Only this closed event schema may cross a log transport. Framework log state,
@@ -68,6 +71,9 @@ public static class RelayLogging
             RelayEvent.MicrophoneFailed => ("microphone.failed", LogLevel.Error),
             RelayEvent.AudioSocketOpened => ("audio.socket_opened", LogLevel.Information),
             RelayEvent.AudioSocketSendFailed => ("audio.socket_send_failed", LogLevel.Warning),
+            RelayEvent.ArtifactExpired => ("artifact.expired", LogLevel.Information),
+            RelayEvent.ArtifactCleanupRejected => ("artifact.cleanup_rejected", LogLevel.Warning),
+            RelayEvent.ArtifactRetentionFailed => ("artifact.retention_failed", LogLevel.Error),
             _ => throw new ArgumentOutOfRangeException(nameof(relayEvent)),
         };
         var entry = new Entry(DateTimeOffset.UtcNow, level.ToString(), name,

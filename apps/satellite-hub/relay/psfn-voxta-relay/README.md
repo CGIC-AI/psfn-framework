@@ -49,7 +49,8 @@ Source validation (explicit .NET opt-in), from the repository root:
 ```bash
 npm --prefix apps/satellite-hub run build:ts
 dotnet build apps/satellite-hub/relay/psfn-voxta-relay/PsfnVoxtaRelay.csproj --nologo --verbosity quiet
-node --test apps/satellite-hub/relay/auth.test.mjs
+dotnet run --project apps/satellite-hub/relay/psfn-voxta-relay.tests/PsfnVoxtaRelay.Tests.csproj --nologo
+node --test apps/satellite-hub/relay/auth.test.mjs apps/satellite-hub/relay/privacy.test.mjs
 ```
 
 The socket test runs the actual Hub and relay and checks authenticated REST,
@@ -89,6 +90,39 @@ dotnet run --project relay/psfn-voxta-relay/PsfnVoxtaRelay.csproj -- `
 
 `--remote <url>` is a shortcut for `--remote-hub <url>/hub` and `--api <url>`.
 Precedence is CLI, then environment, then `appsettings.json`.
+
+`AudioFolder` is the approved local artifact root. Set it to the VaM plugin's
+audio directory before connecting. The plugin can select that directory or a
+subdirectory beneath it; outside paths, symlinked directories and Windows
+reparse points are rejected. Local/file audio sources are also limited to
+regular, singly linked WAV/MP3 files beneath this root. Remote HTTP(S) audio
+still requires the configured upstream API origin and cannot redirect.
+
+Audio transfers have a 32 MiB limit and a 30-second total deadline, including
+response headers and streaming. A private temporary file is flushed and
+atomically renamed only after the complete transfer succeeds. Existing linked
+or non-regular destinations are refused. Failed transfers remove their temporary
+file and do not replace a previous playable file or forward the rejected URL.
+
+Relay-owned `psfn_<24-or-32-hex-digits>.wav`, `.mp3` and `.partial` artifacts
+expire after 24 hours. Cleanup runs at startup, every 15 minutes and before a
+download in the selected folder. It leaves fresh files, client-owned names and
+unsafe links alone. Root directories and selected subdirectories use Unix 0700;
+new audio and temporary files use 0600. On Windows, protected owner-only DACLs
+provide the corresponding access restriction. The root must belong to the
+current account and reside on a filesystem supporting these protections.
+
+Linux uses no-follow, descriptor-relative file operations and checks link counts.
+Windows pins ancestor directories against rename, opens reparse points without
+following them, checks regular disk-file/link-count metadata, and renames by
+handle. Unsupported platforms or filesystems fail closed. Windows integration
+tests require permission to create symbolic links; Linux validation does not
+certify Windows hardware or filesystem behavior.
+
+Config reads are bounded to 1 MiB and reject linked or non-regular files without
+changing the operator file's contents, permissions or modification time. Logs
+contain fixed JSON event names, numeric fields and fresh correlation IDs;
+paths, URLs, tokens, transcripts, replies and raw exception text are excluded.
 
 ## Build
 

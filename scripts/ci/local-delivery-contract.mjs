@@ -308,7 +308,7 @@ export function buildGatePlan({
   if (
     canary
     || matches(
-      /(?:^|\/)package(?:-lock)?\.json$|(?:^|\/)Dockerfile[^/]*$|^scripts\/ci\/(?:npm-project-contract|run-osv-scan)\.mjs$/,
+      /(?:^|\/)package(?:-lock)?\.json$|(?:^|\/)(?:pyproject\.toml|uv\.lock|packages\.lock\.json)$|(?:^|\/)Dockerfile[^/]*$|^scripts\/ci\/(?:npm-project-contract|run-osv-scan)\.mjs$/,
     )
   ) {
     plan.push(command('osv-scan', 'node', ['scripts/ci/run-osv-scan.mjs']));

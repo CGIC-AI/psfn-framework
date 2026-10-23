@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
-// Pinned OSV-Scanner supply-chain gate for every committed npm lockfile.
+// Pinned OSV-Scanner supply-chain gate for every committed dependency lockfile.
 //
-// OSV-Scanner is the sole owner of npm dependency-vulnerability scanning here.
+// OSV-Scanner owns npm, Python, and NuGet dependency-vulnerability scanning here.
 // The image is pinned by immutable digest (never a latest/stable tag or a
 // floating Action). The binary at this digest reports `osv-scanner version:
 // 2.4.0`, verified at runtime by `interpretOsvVersion`; a version drift fails
@@ -30,10 +30,15 @@ export const OSV_IMAGE =
   'ghcr.io/google/osv-scanner@sha256:bcb04b6bab5ab578898b3ff8b81b381e7961b1eac6aa87639b53aaea0d266003';
 export const OSV_VERSION = '2.4.0';
 
-// The exact, complete set of committed npm lockfiles this gate owns. Every one is
-// named explicitly and scanned on every run; a missing or unreadable lockfile is
+// The exact, complete set of committed npm, uv, and NuGet lockfiles this gate owns.
+// Every one is named explicitly and scanned on every run; a missing lockfile is
 // a loud failure, never a silent skip.
-export const OSV_LOCKFILES = NPM_LOCKFILES;
+export const OSV_LOCKFILES = Object.freeze([
+  ...NPM_LOCKFILES,
+  'apps/satellite-hub/uv.lock',
+  'apps/satellite-hub/relay/psfn-voxta-relay/packages.lock.json',
+  'apps/satellite-hub/relay/psfn-voxta-relay.tests/packages.lock.json',
+]);
 
 const FORMATS = new Set(['table', 'json', 'sarif']);
 

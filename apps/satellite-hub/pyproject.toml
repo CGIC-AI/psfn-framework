@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "aioesphomeapi==42.7.0",
-  "cryptography==46.0.5",
+  "cryptography==50.0.2",
   "httpx==0.28.1",
   "python-dotenv==1.2.2",
   "typer==0.24.1",
@@ -28,5 +28,5 @@ packages = ["hub"]
 
 [dependency-groups]
 dev = [
-  "pytest==8.4.2",
+  "pytest==9.1.1",
 ]

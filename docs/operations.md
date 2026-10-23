@@ -132,6 +132,53 @@ The Hub device verifier ring is an owner-file block of its own
 and wins when both exist, but is not needed. The key-only recipe is in
 [operator/fleet-auth.md](operator/fleet-auth.md#hub-device-authority-without-fleet-auth).
 
+## Credential migration
+
+Chart and runtime credential validation uses the shared policy in
+`deploy/helm/psfn/files/credential-policy.json`: 32–512 printable ASCII characters,
+at least 12 distinct characters, no published placeholders, and no repeated
+patterns. These checks are a screening rule, not a measurement of entropy;
+generate each local credential independently from 32 cryptographically random
+bytes. API, Garden, gateway HMAC, backup, role proofs, satellite and PostgreSQL
+credentials are checked before serving their respective runtime surfaces,
+including database URLs loaded from agent credential files. Chart-created
+Redis and inline third-party credentials receive the same checks. The explicit
+local insecure modes still allow absent credentials on their supported loopback
+surfaces; they do not make a supplied weak credential acceptable.
+
+Upgrading does not rotate credentials automatically. `helm:up` preserves valid
+application and PostgreSQL values; a weak retained value or failed Kubernetes
+Secret read stops the operation with a role-only diagnostic. Secret application
+errors suppress Kubernetes response bodies, which may contain secret material.
+Offline Helm rendering cannot verify the contents or existence of a named
+external Secret; references must name operator-provisioned Secrets with the
+configured required keys. Runtime checks remain active for those inputs.
+
+For a deployment that used published defaults or shorter credentials:
+
+1. Keep a tested restore point and the previous pinned release available. Stop
+   all writers sharing the companion journals and database. Inventory the
+   affected roles privately; do not paste values into tickets, logs or Helm
+   values/history. Treat published defaults as compromised.
+2. Generate independent replacement API, Garden, satellite and database
+   credentials in the operator's secret store. Coordinate PostgreSQL role
+   password changes with every corresponding credential URL/file and Secret;
+   changing only the Kubernetes Secret does not change the database password.
+   Update satellite clients and their governed principal bindings together.
+3. Preserve journal integrity and backup readability before retiring keys.
+   Using the previous pinned release offline, verify old journal chains, select
+   a strong active HMAC key, and perform the sanctioned, reason-bearing
+   `session:repair:integrity` re-sign procedure with a durable audit record and
+   backup. Verify the resulting chains with the new key before removing the
+   weak old key from the runtime keyring. Do not just replace the HMAC key.
+   Restore/decrypt existing backup archives with their original keys and create
+   verified replacement archives under a strong new backup key; retain original
+   keys securely offline for as long as original archives are retained.
+4. Update operator-owned Secrets without printing their contents, then run
+   `helm:up` and `helm:doctor`. Verify authenticated API/Garden access, satellite
+   principals, journal integrity and a backup/restore round trip before resuming
+   ordinary operation. Keep the tested restore point until validation succeeds.
+
 ## Access and readiness
 
 `*:doctor` is the routine readiness check on every path. It verifies the

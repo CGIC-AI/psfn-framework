@@ -1,5 +1,6 @@
 import type { CredentialVaultPort } from '../../boundary/custody/credential-vault.js';
 import { parseExactPostgresCredential } from '../../shared/utils/postgres-credential.js';
+import { assertStrongPostgresCredential } from './runtime-credentials.js';
 import type {
   ResolvedCompanionFleetEntry,
   ResolvedCompanionsFleetConfig,
@@ -34,6 +35,7 @@ function resolveDatabaseCredential(
   if (parsed.username !== role) {
     throw new Error(`${description} must authenticate as configured role ${role}`);
   }
+  assertStrongPostgresCredential(value, description);
   return { value, url: parsed.url };
 }
 
@@ -57,6 +59,7 @@ export function resolveCompanionDatabaseTopology(options: {
       + options.fleet.postgres.sharedMigrationRole,
     );
   }
+  assertStrongPostgresCredential(sharedValue, 'Shared schema migration database');
   const companions = options.fleet.companions.map((companion) => {
     const credential = resolveDatabaseCredential(
       options.credentialVault,

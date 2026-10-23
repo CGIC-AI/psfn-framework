@@ -532,7 +532,7 @@ describe('AdminServer JSON API routes', () => {
   let refreshCapabilitiesSpy: ReturnType<typeof vi.fn>;
   let invalidateSkillsSpy: ReturnType<typeof vi.fn>;
   let updateSkillSpy: ReturnType<typeof vi.fn>;
-  const token = 'test-admin-token';
+  const token = 'test-admin-token-6f82db13a507e9c4b1062ad9';
   const authHeaders = {
     Authorization: `Bearer ${token}`,
     'Content-Type': 'application/json',

@@ -23,8 +23,8 @@ import { CompanionStimulusIngress } from './companion-stimuli.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import type { CompanionUiAudioOutputFrame } from '../../../shared/contracts/companion-ui-audio-output.js';
 
-const API_KEY = 'companion-relay-test-key';
-const OPERATOR_API_KEY = 'companion-relay-operator-key';
+const API_KEY = 'companion-relay-test-key-b812ca4097ed536f';
+const OPERATOR_API_KEY = 'companion-relay-operator-key-517ab3fc902e6d84';
 const HUB_PRINCIPAL_ID = deriveApiKeyPrincipalId(API_KEY);
 const AUTH = { Authorization: `Bearer ${API_KEY}` };
 const HUB_QUERY = 'satelliteId=hub-node&endpointId=hub-endpoint&claimType=satellite-hub';

@@ -999,7 +999,7 @@ describe('AdminServer Garden routing', () => {
 
   describe('auth/login/logout and telemetry websocket', () => {
     let harness: ServerHarness;
-    const token = 'test-admin-secret';
+    const token = 'test-admin-secret-814e2f6bac930d57';
     const bearerHeaders = { Authorization: `Bearer ${token}` };
 
     async function browserLogin() {

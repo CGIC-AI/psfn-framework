@@ -30,7 +30,7 @@ describe('ICP certification production-shape fixture', () => {
 
   it('keeps a one-entry fixture bound to its canonical fleet tuple', () => {
     fixture = createIcpCertificationFixture({
-      databaseUrl: 'postgres://certification:certification@127.0.0.1:5432/certification',
+      databaseUrl: 'postgres://certification:8af35109b4dc6e27c90281e5ad7463bf@127.0.0.1:5432/certification',
       topology: 'single_companion',
     });
 
@@ -46,7 +46,7 @@ describe('ICP certification production-shape fixture', () => {
 
   it('loads two fleet-bound agents from canonical owner files and isolated roots', () => {
     fixture = createIcpCertificationFixture({
-      databaseUrl: 'postgres://certification:certification@127.0.0.1:5432/certification',
+      databaseUrl: 'postgres://certification:8af35109b4dc6e27c90281e5ad7463bf@127.0.0.1:5432/certification',
     });
 
     const [configA, configB] = fixture.companions.map(companion => hydrateJsonBackedRuntimeConfig(
@@ -91,7 +91,7 @@ describe('ICP certification production-shape fixture', () => {
       const credentialPath = companion.env.POSTGRES_DATABASE_URL_FILE;
       expect(credentialPath).toBeTypeOf('string');
       expect(readFileSync(credentialPath!, 'utf8').trim()).toBe(
-        'postgres://certification:certification@127.0.0.1:5432/certification',
+        'postgres://certification:8af35109b4dc6e27c90281e5ad7463bf@127.0.0.1:5432/certification',
       );
     }
     expect(configA.companionFleet?.companions).toHaveLength(3);
@@ -174,7 +174,7 @@ describe('ICP certification production-shape fixture', () => {
   it('can boot the canonical owner surface with autonomous initiation disabled', () => {
     fixture = createIcpCertificationFixture({
       autonomyEnabled: false,
-      databaseUrl: 'postgres://certification:certification@127.0.0.1:5432/certification',
+      databaseUrl: 'postgres://certification:8af35109b4dc6e27c90281e5ad7463bf@127.0.0.1:5432/certification',
     });
 
     expect(existsSync(join(fixture.systemDataDir, 'scheduler.json'))).toBe(false);
@@ -187,7 +187,7 @@ describe('ICP certification production-shape fixture', () => {
 
   it('bounds room-continuity conversations before durable fatigue is exhausted', () => {
     fixture = createIcpCertificationFixture({
-      databaseUrl: 'postgres://certification:certification@127.0.0.1:5432/certification',
+      databaseUrl: 'postgres://certification:8af35109b4dc6e27c90281e5ad7463bf@127.0.0.1:5432/certification',
       fatigueProfile: 'room_continuity',
     });
 
@@ -219,7 +219,7 @@ describe('ICP certification production-shape fixture', () => {
     (costProfile, warningThresholdUsd, hardLimitUsd) => {
       fixture = createIcpCertificationFixture({
         costProfile,
-        databaseUrl: 'postgres://certification:certification@127.0.0.1:5432/certification',
+        databaseUrl: 'postgres://certification:8af35109b4dc6e27c90281e5ad7463bf@127.0.0.1:5432/certification',
       });
       const systemDecoyPath = join(fixture.systemDataDir, 'charge-policy.json');
       expect(existsSync(systemDecoyPath)).toBe(false);

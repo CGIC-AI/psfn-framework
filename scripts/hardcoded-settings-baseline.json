@@ -2474,11 +2474,6 @@
       "note": "Nonempty text is a structural external-memory protocol and persisted-record invariant. minLength 1 excludes missing identity/evidence; it is not an operator-tunable content limit."
     },
     {
-      "file": "src/channels/backplane/http/auth.ts",
-      "name": "MIN_SATELLITE_API_KEY_LENGTH",
-      "value": "16"
-    },
-    {
       "file": "src/channels/backplane/http/client-cert.ts",
       "name": "MIN_TRUSTED_PROXY_TOKEN_LENGTH",
       "value": "32"

@@ -12,7 +12,7 @@
 // Requires the `helm` binary. Run it with: npm run verify:chart-render
 
 import { spawnSync } from 'node:child_process';
-import { generateKeyPairSync } from 'node:crypto';
+import { generateKeyPairSync, randomBytes } from 'node:crypto';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -24,6 +24,15 @@ import { isRecord } from '../src/shared/utils/types.js';
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CHART_DIR = join(REPO_ROOT, 'deploy', 'helm', 'psfn');
 const RELEASE_NAME = 'psfn';
+const RENDER_FIXTURE = join(REPO_ROOT, 'scripts', 'fixtures', 'helm-nonproduction-values.yaml');
+const verificationSecrets = Object.fromEntries([
+  'apiKey', 'adminToken', 'gatewaySessionHmacKey', 'gatewaySessionIntegrityAuthToken',
+  'gatewayCompanionAuthToken', 'backupEncryptionKey',
+].map(role => [role, randomBytes(32).toString('hex')]));
+const satelliteKey = randomBytes(32).toString('hex');
+const controlToken = randomBytes(32).toString('hex');
+const joinToken = randomBytes(32).toString('hex');
+const homeAssistantToken = randomBytes(32).toString('hex');
 
 export interface RenderedEnvEntry {
   value?: string;
@@ -103,12 +112,18 @@ interface HelmResult {
 }
 
 function helmTemplate(valuesFiles: string[]): HelmResult {
-  const args = ['template', RELEASE_NAME, CHART_DIR];
+  const args = ['template', RELEASE_NAME, CHART_DIR, '-f', RENDER_FIXTURE, '-f', '-'];
   // Explicit standalone HTTPS proxy fixture; never inherit deployment peers.
   args.push('--set-string', 'gardenBrowser.publicOrigin=https://garden.example.test',
     '--set-json', 'gardenBrowser.trustedProxyAddresses=["192.0.2.0/24"]');
   for (const file of valuesFiles) args.push('-f', file);
-  const result = spawnSync('helm', args, { cwd: REPO_ROOT, encoding: 'utf8' });
+  const result = spawnSync('helm', args, {
+    cwd: REPO_ROOT, encoding: 'utf8',
+    input: JSON.stringify({
+      secrets: { create: true, existingSecret: '', values: verificationSecrets },
+      postgres: { auth: { existingSecret: '', password: randomBytes(32).toString('hex') } },
+    }),
+  });
   if (result.error) {
     const code = (result.error as NodeJS.ErrnoException).code;
     if (code === 'ENOENT') {
@@ -153,7 +168,7 @@ function baseValues(): Record<string, unknown> {
         claimType: 'satellite.endpoint',
       },
     },
-    secrets: { values: { satelliteHubApiKey: '0123456789abcdef0123' } },
+    secrets: { values: { satelliteHubApiKey: satelliteKey } },
   };
 }
 
@@ -185,11 +200,11 @@ function enabledValues(overrides: Record<string, unknown> = {}): Record<string, 
     },
     secrets: {
       values: {
-        satelliteHubApiKey: '0123456789abcdef0123',
-        eidoverseJoinToken: 'example-join-token',
+        satelliteHubApiKey: satelliteKey,
+        eidoverseJoinToken: joinToken,
         // The world path drives the hub over its control channel, which the
         // chart now renders whenever eidoverse is enabled (psfn-framework-r70pb).
-        satelliteHubControlToken: 'hub-control-token-01234',
+        satelliteHubControlToken: controlToken,
       },
     },
   };
@@ -246,7 +261,7 @@ function hubDeviceValues(hubOverrides: Record<string, unknown> = {}): Record<str
       },
       ...hubOverrides,
     },
-    secrets: { values: { satelliteHubApiKey: '0123456789abcdef0123' } },
+    secrets: { values: { satelliteHubApiKey: satelliteKey } },
     hubDeviceAssertions: {
       enabled: true,
       issuer: 'psfn-satellite-hub',
@@ -336,7 +351,7 @@ function main(): number {
     // Home Assistant; a missing bearer fails closed.
     const controlOnly = helmTemplate([write('control-only', {
       satelliteHub: { ...(baseValues().satelliteHub as Record<string, unknown>), control: { enabled: true } },
-      secrets: { values: { satelliteHubApiKey: '0123456789abcdef0123', satelliteHubControlToken: 'hub-control-token-01234' } },
+      secrets: { values: { satelliteHubApiKey: satelliteKey, satelliteHubControlToken: controlToken } },
     })]);
     check(controlOnly.status === 0, 'render succeeds with the hub control channel enabled on its own', controlOnly.stderr.trim());
     if (controlOnly.status === 0) {
@@ -410,7 +425,7 @@ function main(): number {
 
     const controlWithoutToken = helmTemplate([write('control-without-token', {
       satelliteHub: { ...(baseValues().satelliteHub as Record<string, unknown>), control: { enabled: true } },
-      secrets: { values: { satelliteHubApiKey: '0123456789abcdef0123' } },
+      secrets: { values: { satelliteHubApiKey: satelliteKey } },
     })]);
     check(
       controlWithoutToken.status !== 0 && controlWithoutToken.stderr.includes('requires secrets.values.satelliteHubControlToken'),
@@ -829,7 +844,7 @@ function main(): number {
           },
         },
       },
-      secrets: { values: { satelliteHubApiKey: '0123456789abcdef0123' } },
+      secrets: { values: { satelliteHubApiKey: satelliteKey } },
     })]);
     check(
       orphanedPlaceMap.status !== 0
@@ -996,9 +1011,9 @@ function main(): number {
       }),
       secrets: {
         values: {
-          satelliteHubApiKey: '0123456789abcdef0123',
-          homeAssistantToken: 'home-assistant-token-0123',
-          satelliteHubControlToken: 'hub-control-token-01234',
+          satelliteHubApiKey: satelliteKey,
+          homeAssistantToken: homeAssistantToken,
+          satelliteHubControlToken: controlToken,
         },
       },
     })]);

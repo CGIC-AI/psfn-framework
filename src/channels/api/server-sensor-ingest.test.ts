@@ -86,7 +86,7 @@ describe('ApiServer sensor ingest wiring', () => {
       agentLoop: fromAny<SubstrateAgent>({}),
       eventBus,
       sessionManager: fromAny<SessionManager>({}),
-      apiKey: 'test-secret-key',
+      apiKey: 'test-secret-key-6714bd2fc093e8a5',
       sensorIngest,
     });
     await server.init();
@@ -101,7 +101,7 @@ describe('ApiServer sensor ingest wiring', () => {
       channelId: 'ops-room',
       scope: 'cluster-a',
     }, {
-      Authorization: 'Bearer test-secret-key',
+      Authorization: 'Bearer test-secret-key-6714bd2fc093e8a5',
     });
 
     expect(res.status).toBe(202);
@@ -133,7 +133,7 @@ describe('ApiServer sensor ingest wiring', () => {
       eventBus,
       sessionManager: fromAny<SessionManager>({}),
       sensorIngest,
-      satelliteApiKeys: ['dedicated-satellite-key'],
+      satelliteApiKeys: ['dedicated-satellite-key-0172a4cef96b35d8'],
       fleetAuthHttpRoutes: fromAny<FleetAuthHttpRoutes>({
         applyLifecycleCorsPolicy: () => 'not_applicable',
         matches: () => false,
@@ -149,7 +149,7 @@ describe('ApiServer sensor ingest wiring', () => {
       nonce: 'nonce-fleet-telemetry-port',
       payload: { status: 'green' },
     }, {
-      Authorization: 'Bearer dedicated-satellite-key',
+      Authorization: 'Bearer dedicated-satellite-key-0172a4cef96b35d8',
     });
 
     expect(res.status).toBe(202);

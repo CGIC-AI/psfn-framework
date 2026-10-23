@@ -82,7 +82,7 @@ describe('hydrateJsonBackedRuntimeConfig', () => {
     process.env.CHARACTER_CARD_PATH = join(layout.companionDataDir, 'companion.json');
     process.env.COMPANION_ID = TEST_COMPANION_ID;
     process.env.COMPANION_PG_SCHEMA = 'public';
-    process.env.POSTGRES_DATABASE_URL = 'postgresql://test:test@127.0.0.1:5432/test';
+    process.env.POSTGRES_DATABASE_URL = 'postgresql://test:bf92741a0ce5d683bf1087d49ea5326c@127.0.0.1:5432/test';
     process.env.CONFIG_DIR = 'config';
   }
 

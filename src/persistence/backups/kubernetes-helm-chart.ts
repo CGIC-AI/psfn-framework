@@ -20,7 +20,7 @@ const CHART_ROOT_FILES = new Set([
   'values.schema.json',
   'values.yaml',
 ]);
-const CHART_ROOT_DIRECTORIES = new Set(['charts', 'crds', 'overlays', 'templates']);
+const CHART_ROOT_DIRECTORIES = new Set(['charts', 'crds', 'files', 'overlays', 'templates']);
 const EXCLUDED_CHART_DOCUMENT_NAMES = /^(?:README(?:\.[^.]+)?|LICENSE(?:\.[^.]+)?)$/i;
 const VALUES_DOCUMENT_NAME = /^values.*\.ya?ml$/i;
 const NON_SECRET_KEY_MAP_PATHS = new Set([
@@ -66,7 +66,7 @@ const SENSITIVE_VALUE_KEY_SUFFIXES = [
 ] as const;
 const SAFE_COMPOSED_SECRET_EXPRESSIONS = new Set([
   'include "psfn.satelliteApiKeysValue" $ | quote',
-  'printf "postgresql://%s:%s@%s:%v/%s" .Values.postgres.auth.username .Values.postgres.auth.password (include "psfn.postgresServiceName" .) .Values.ports.postgres .Values.postgres.auth.database | quote',
+  'printf "postgresql://%s:%s@%s:%v/%s" (.Values.postgres.auth.username | urlquery) (.Values.postgres.auth.password | urlquery) (include "psfn.postgresServiceName" .) .Values.ports.postgres .Values.postgres.auth.database | quote',
 ]);
 const SAFE_NON_SECRET_DYNAMIC_KINDS = new Set([
   '{{ .Values.certificates.issuer.kind }}',

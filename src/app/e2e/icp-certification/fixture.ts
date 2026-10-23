@@ -318,7 +318,7 @@ function makeCompanion(input: {
     PSFN_LOGS_DIR: join(dirname(input.runtimeRoot), `logs-${input.companionId}`),
     PSFN_TEMP_DIR: join(dirname(input.runtimeRoot), `tmp-${input.companionId}`),
     BACKUP_ROOT_DIR: join(dirname(input.runtimeRoot), `backups-${input.companionId}`),
-    PSFN_BACKUP_ENCRYPTION_KEY: 'icp-certification-backup-key-not-for-production',
+    PSFN_BACKUP_ENCRYPTION_KEY: 'icp-certification-backup-key-90182fe6a735cb4d',
     CONFIG_DIR: input.configDir,
     PERSISTENCE_BACKEND: 'postgres',
     POSTGRES_DATABASE_URL_FILE: postgresCredentialPath,

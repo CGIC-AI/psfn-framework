@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, openSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import { loadAgentConfig, loadOperatorConfig } from './load-config.js';
@@ -59,7 +59,7 @@ function clearRuntimePathEnv(): void {
   process.env.COMPANION_ID = '11111111-1111-4111-8111-111111111111';
   process.env.COMPANION_PG_SCHEMA = 'public';
   process.env.GATEWAY_COMPANION_AUTH_TOKEN = 'v1.agent-token';
-  process.env.POSTGRES_DATABASE_URL = 'postgres://postgres:secret@localhost:5432/psfn_test';
+  process.env.POSTGRES_DATABASE_URL = 'postgres://postgres:8ec0db3f5a927641ec7d05a3b269814f@localhost:5432/psfn_test';
 }
 
 const DEFAULT_TEST_COMPANION_ID = '11111111-1111-4111-8111-111111111111';
@@ -189,7 +189,7 @@ describe('loadConfig path defaults', () => {
     const postgresCredentialPath = join(root, 'postgres-database-url');
     writeFileSync(
       postgresCredentialPath,
-      'postgres://postgres:secret@localhost:5432/psfn_test\n',
+      'postgres://postgres:8ec0db3f5a927641ec7d05a3b269814f@localhost:5432/psfn_test\n',
       'utf8',
     );
     delete process.env.POSTGRES_DATABASE_URL;
@@ -300,7 +300,7 @@ describe('loadConfig path defaults', () => {
     const config = loadConfig();
 
     expect(config.persistenceBackend).toBe('postgres');
-    expect(config.postgresDatabaseUrl).toBe('postgres://postgres:secret@localhost:5432/psfn_test');
+    expect(config.postgresDatabaseUrl).toBe('postgres://postgres:8ec0db3f5a927641ec7d05a3b269814f@localhost:5432/psfn_test');
   });
 
   it('accepts the testing-harness Garden verifier without fleet auth (SSO is optional)', () => {
@@ -333,12 +333,12 @@ describe('loadConfig path defaults', () => {
   it('loads postgres backend wiring when explicitly configured', () => {
     clearRuntimePathEnv();
     process.env.PERSISTENCE_BACKEND = 'postgres';
-    process.env.POSTGRES_DATABASE_URL = 'postgres://postgres:secret@localhost:5432/psfn';
+    process.env.POSTGRES_DATABASE_URL = 'postgres://postgres:8ec0db3f5a927641ec7d05a3b269814f@localhost:5432/psfn';
 
     const config = loadConfig();
 
     expect(config.persistenceBackend).toBe('postgres');
-    expect(config.postgresDatabaseUrl).toBe('postgres://postgres:secret@localhost:5432/psfn');
+    expect(config.postgresDatabaseUrl).toBe('postgres://postgres:8ec0db3f5a927641ec7d05a3b269814f@localhost:5432/psfn');
   });
 
   it('fails closed without a postgres database url', () => {
@@ -350,12 +350,23 @@ describe('loadConfig path defaults', () => {
     );
   });
 
+  it('rejects weak PostgreSQL startup passwords without disclosing a credential URL', () => {
+    clearRuntimePathEnv();
+    const password = 'CHANGE_ME_private-postgres-credential-0123456789';
+    process.env.POSTGRES_DATABASE_URL = `postgresql://postgres:${password}@localhost/psfn`;
+    expect(() => loadConfig()).toThrow(/credential/u);
+    try { loadConfig(); } catch (error) {
+      expect(String(error)).not.toContain(password);
+      expect(String(error)).not.toContain('postgresql://');
+    }
+  });
+
   it('loads the agent database credential from a secret file without a raw DSN env var', () => {
     clearRuntimePathEnv();
     const root = mkdtempSync(join(tmpdir(), 'psfn-load-agent-postgres-'));
     tempDirs.push(root);
     const credentialPath = join(root, 'database-url');
-    writeFileSync(credentialPath, 'postgresql://psfn:file-secret@postgres/psfn\n', 'utf8');
+    writeFileSync(credentialPath, 'postgresql://psfn:file-secret-8d209ef57ab614c39e580b62@postgres/psfn\n', 'utf8');
     delete process.env.POSTGRES_DATABASE_URL;
     process.env.POSTGRES_DATABASE_URL_FILE = credentialPath;
     process.env.GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN = 'v1.worker-proof';
@@ -366,7 +377,22 @@ describe('loadConfig path defaults', () => {
     const config = loadAgentConfig();
 
     expect(process.env.POSTGRES_DATABASE_URL).toBeUndefined();
-    expect(config.postgresDatabaseUrl).toBe('postgresql://psfn:file-secret@postgres/psfn');
+    expect(config.postgresDatabaseUrl).toBe('postgresql://psfn:file-secret-8d209ef57ab614c39e580b62@postgres/psfn');
+  });
+
+  it.each(['FILE', 'FD'])('rejects weak database passwords read from an isolated agent credential %s', source => {
+    clearRuntimePathEnv();
+    const root = mkdtempSync(join(tmpdir(), 'psfn-weak-agent-postgres-'));
+    tempDirs.push(root);
+    const path = join(root, 'database-url');
+    const password = 'CHANGE_ME_private-agent-database-credential';
+    writeFileSync(path, `postgresql://psfn:${password}@postgres/psfn\n`, { mode: 0o600 });
+    delete process.env.POSTGRES_DATABASE_URL;
+    process.env.GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN = 'v1.worker-proof';
+    process.env.WORKSPACE_PATH = resolve('./workspaces/personal/11111111-1111-4111-8111-111111111111');
+    const fd = source === 'FD' ? openSync(path, 'r') : undefined;
+    process.env[`POSTGRES_DATABASE_URL_${source}`] = fd === undefined ? path : String(fd);
+    expect(() => loadAgentConfig()).toThrow(/credential must be/u);
   });
 
   it('rejects a raw database credential in the agent process environment', () => {
@@ -587,7 +613,7 @@ describe('loadConfig path defaults', () => {
     const postgresCredentialPath = join(root, 'postgres-database-url');
     writeFileSync(
       postgresCredentialPath,
-      'postgres://postgres:secret@localhost:5432/psfn_test\n',
+      'postgres://postgres:8ec0db3f5a927641ec7d05a3b269814f@localhost:5432/psfn_test\n',
       'utf8',
     );
     delete process.env.POSTGRES_DATABASE_URL;
@@ -672,7 +698,7 @@ describe('loadConfig path defaults', () => {
     const postgresCredentialPath = join(root, 'postgres-database-url');
     writeFileSync(
       postgresCredentialPath,
-      'postgres://companion_main_runtime:secret@localhost:5432/psfn_test\n',
+      'postgres://companion_main_runtime:97b2fa63d451e80c6be904f72d3185ac@localhost:5432/psfn_test\n',
       'utf8',
     );
     process.env.PSFN_RUNTIME_ROOT = root;

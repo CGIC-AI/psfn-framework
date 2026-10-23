@@ -240,13 +240,13 @@ async function identifySessionIntegrityConnection(
 describe('resolveGatewaySessionHmacKeyring', () => {
   it('parses versioned keyrings with explicit active version', () => {
     const keyring = resolveGatewaySessionHmacKeyring({
-      GATEWAY_SESSION_HMAC_KEYS: 'v1:old-secret,v2:new-secret',
+      GATEWAY_SESSION_HMAC_KEYS: 'v1:old-secret-810ab93f52de6c478c1247af,v2:new-secret-470be3af156d908c1e4765ba',
       GATEWAY_SESSION_HMAC_ACTIVE_VERSION: 'v2',
     });
     expect(keyring).not.toBeNull();
     expect(keyring?.activeVersion).toBe('v2');
-    expect(keyring?.keys.v1).toBe('old-secret');
-    expect(keyring?.keys.v2).toBe('new-secret');
+    expect(keyring?.keys.v1).toBe('old-secret-810ab93f52de6c478c1247af');
+    expect(keyring?.keys.v2).toBe('new-secret-470be3af156d908c1e4765ba');
   });
 
   it('returns null when gateway HMAC env vars are absent', () => {

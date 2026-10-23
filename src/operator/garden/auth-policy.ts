@@ -1,5 +1,6 @@
-import { isLoopbackHost } from '../../shared/net/hosts.js';
 import { isIP } from 'node:net';
+import { isLoopbackHost } from '../../shared/net/hosts.js';
+import { assertStrongCredential } from '../../shared/security/credentials.js';
 import { validateGardenProxySources } from './browser-proxy-policy.js';
 
 interface AdminAuthStartupLogger {
@@ -22,6 +23,7 @@ const ADMIN_INSECURE_LOOPBACK_ERROR =
   'ADMIN_ALLOW_INSECURE=true requires ADMIN_HOST to be loopback (127.0.0.1, ::1, or localhost)';
 
 export function validateAdminAuthStartupPolicy(config: AdminAuthStartupPolicyConfig): void {
+  if (config.token !== undefined) assertStrongCredential(config.token, 'ADMIN_TOKEN');
   const loopback = isLoopbackHost(config.host)
     && (isIP(config.host) !== 0 || config.host.toLowerCase() === 'localhost');
   if (!config.token && !config.allowInsecureWithoutToken) {

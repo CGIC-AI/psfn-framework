@@ -9,6 +9,7 @@ import {
 import { RUNTIME_LAYOUT_MODE, resolveCompanionStateDir, resolveRuntimePathLayout } from '../../persistence/layout.js';
 import { assertValidPostgresSchemaName } from '../../persistence/postgres.js';
 import { parseOptionalStringEnv } from '../../shared/utils/env.js';
+import { assertStrongPostgresCredential } from './runtime-credentials.js';
 import { createCompanionId, type CompanionId } from '../../shared/routing/companion-id.js';
 import type {
   CanonicalModelRegistry,
@@ -445,6 +446,7 @@ function loadConfigForMode(
   if (!postgresDatabaseUrl && mode === 'gateway') {
     throw new Error('POSTGRES_DATABASE_URL is required for runtime persistence');
   }
+  if (postgresDatabaseUrl) assertStrongPostgresCredential(postgresDatabaseUrl, 'POSTGRES_DATABASE_URL');
 
   return {
     multiCompanion,

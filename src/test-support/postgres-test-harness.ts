@@ -22,7 +22,7 @@ import {
 export const DEFAULT_POSTGRES_TEST_IMAGE = 'postgres:16.8-alpine';
 export const PGVECTOR_POSTGRES_TEST_IMAGE = 'pgvector/pgvector:0.8.2-pg16-bookworm@sha256:6f2fedef8e4311682b3a5989a21bf527d3310ab5421258ad6e41e52955c16294';
 const POSTGRES_USER = 'postgres';
-const POSTGRES_PASSWORD = 'postgres';
+const POSTGRES_PASSWORD = '8af35109b4dc6e27c90281e5ad7463bf';
 const POSTGRES_DATABASE = 'postgres';
 const POSTGRES_PORT = 5432;
 const TEST_POSTGRES_LABEL = 'io.test-harness.postgres';
@@ -105,7 +105,7 @@ const POSTGRES_TEST_RUNTIME = Object.freeze({
   // Leaving it at v1 would silently reuse existing 512m containers and the new
   // tmpfs size would never take effect on any machine that already ran tests.
   // Old v1 containers linger until `npm run test:postgres:down`.
-  profile: 'tmpfs-v3-max-connections',
+  profile: 'tmpfs-v4-strong-credentials',
   sharedMemorySize: '128m',
   tmpfsSize: resolvePostgresTestTmpfsSize(),
 });

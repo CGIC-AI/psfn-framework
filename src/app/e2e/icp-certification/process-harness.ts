@@ -54,7 +54,7 @@ import { IcpCertificationArtifactRecorder } from './artifact-recorder.js';
 const AGENT_PROCESS_ENTRY = resolve('src/app/e2e/icp-certification/agent-process.ts');
 // Password for the disposable per-companion tenant login the agents connect as.
 // Test-only; the whole cluster is a throwaway dockerized postgres.
-const CERTIFICATION_TENANT_PASSWORD = 'icp-certification-tenant-role-not-for-production';
+const CERTIFICATION_TENANT_PASSWORD = 'icp-certification-tenant-role-1df40c3867e5ba92';
 const START_TIMEOUT_MS = 60_000;
 const COMMAND_TIMEOUT_MS = 60_000;
 const STOP_TIMEOUT_MS = 15_000;

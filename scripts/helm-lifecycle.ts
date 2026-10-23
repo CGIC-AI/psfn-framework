@@ -17,6 +17,7 @@ import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { parseEnv } from 'node:util';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { assertDistinctCredentials, assertStrongCredential } from '../src/shared/security/credentials.js';
 import {
   assertCompletedPersistedTurn,
   composeApiPrincipalId,
@@ -337,7 +338,11 @@ function kubectl(context: HelmContext, args: string[], options: Parameters<typeo
 }
 
 function applyKubernetesObject(context: HelmContext, value: unknown): void {
-  kubectl(context, ['apply', '-f', '-'], { input: `${JSON.stringify(value)}\n`, capture: true });
+  const secret = record(value)?.kind === 'Secret';
+  const result = kubectl(context, ['apply', '-f', '-'], {
+    input: `${JSON.stringify(value)}\n`, capture: true, allowFailure: secret,
+  });
+  if (secret && result.status !== 0) fail('Kubernetes Secret apply failed; response details suppressed to protect credentials.');
 }
 
 function ensureNamespace(context: HelmContext): void {
@@ -383,15 +388,25 @@ function decodeSecretData(value: unknown): Record<string, string> | undefined {
 }
 
 function existingSecret(context: HelmContext, name: string): Record<string, string> | undefined {
-  const result = kubectl(context, ['get', 'secret', name, '-o', 'json'], {
+  const result = kubectl(context, ['get', 'secret', name, '--ignore-not-found', '-o', 'json'], {
     capture: true,
     allowFailure: true,
   });
-  return result.status === 0 ? decodeSecretData(JSON.parse(result.stdout) as unknown) : undefined;
+  if (result.status !== 0) fail('Cannot read existing Kubernetes credentials; refusing to generate replacement secrets.');
+  if (!result.stdout.trim()) return undefined;
+  try {
+    const data = decodeSecretData(JSON.parse(result.stdout) as unknown);
+    if (!data) fail('invalid secret data');
+    return data;
+  } catch {
+    fail('Cannot decode existing Kubernetes credentials; refusing to generate replacement secrets.');
+  }
 }
 
 function retained(existing: Record<string, string> | undefined, key: string): string {
-  return existing?.[key]?.trim() || randomBytes(32).toString('hex');
+  const value = existing?.[key] ?? randomBytes(32).toString('hex');
+  assertStrongCredential(value, key);
+  return value;
 }
 
 function deriveRoleProof(hmacKey: string, role: string, companionId: string): string {
@@ -403,7 +418,7 @@ function deriveRoleProof(hmacKey: string, role: string, companionId: string): st
 function resolveSecrets(context: HelmContext): RuntimeSecrets {
   const app = existingSecret(context, context.appSecret);
   const postgres = existingSecret(context, context.postgresSecret);
-  return {
+  const secrets = {
     apiKey: retained(app, 'API_KEY'),
     adminToken: retained(app, 'ADMIN_TOKEN'),
     hmacKey: retained(app, 'GATEWAY_SESSION_HMAC_KEY'),
@@ -412,14 +427,16 @@ function resolveSecrets(context: HelmContext): RuntimeSecrets {
     companionPassword: retained(postgres, 'companion-database-password'),
     sharedPassword: retained(postgres, 'shared-migration-database-password'),
   };
+  assertDistinctCredentials({ ...secrets, providerApiKey: context.providerApiKey });
+  return secrets;
 }
 
 function stageSecrets(context: HelmContext): void {
   const secrets = resolveSecrets(context);
   const postgresHost = `${context.release}-postgres`;
-  const adminUrl = `postgresql://postgres:${secrets.postgresPassword}@${postgresHost}:5432/psfn`;
-  const companionUrl = `postgresql://companion_main_runtime:${secrets.companionPassword}@${postgresHost}:5432/psfn`;
-  const sharedUrl = `postgresql://shared_schema_migration:${secrets.sharedPassword}@${postgresHost}:5432/psfn`;
+  const adminUrl = `postgresql://postgres:${encodeURIComponent(secrets.postgresPassword)}@${postgresHost}:5432/psfn`;
+  const companionUrl = `postgresql://companion_main_runtime:${encodeURIComponent(secrets.companionPassword)}@${postgresHost}:5432/psfn`;
+  const sharedUrl = `postgresql://shared_schema_migration:${encodeURIComponent(secrets.sharedPassword)}@${postgresHost}:5432/psfn`;
   applyKubernetesObject(context, {
     apiVersion: 'v1',
     kind: 'Secret',

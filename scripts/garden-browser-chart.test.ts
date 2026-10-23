@@ -3,7 +3,12 @@ import { describe, expect, it } from 'vitest';
 
 function render(overrides: Record<string, unknown> = {}) {
   return spawnSync('helm', ['template', 'garden-security', 'deploy/helm/psfn', '--values', '-'], {
-    encoding: 'utf8', input: JSON.stringify(overrides),
+    encoding: 'utf8',
+    input: JSON.stringify({
+      secrets: { create: false, existingSecret: 'garden-browser-test-app' },
+      postgres: { auth: { existingSecret: 'garden-browser-test-postgres' } },
+      ...overrides,
+    }),
   });
 }
 

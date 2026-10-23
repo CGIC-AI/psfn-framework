@@ -83,7 +83,7 @@ describe('resolveGatewayBootstrapInput', () => {
         WORKSPACE_PATH: '/workspace',
         GIT_REPO_ROOT: process.cwd(),
         MODULE_REGISTRY_PATH: 'registry/module-registry.json',
-        GATEWAY_SESSION_HMAC_KEY: 'v1:test-session-secret',
+        GATEWAY_SESSION_HMAC_KEY: 'v1:test-session-secret-3150d9be47ac628f',
         BEADS_TOOLS_ENABLED: 'true',
         // Explicit enablement requires a provisioned database (psfn-framework-povuo).
         BEADS_DIR: mkdtempSync(join(tmpdir(), 'bootstrap-beads-')),
@@ -164,7 +164,7 @@ describe('resolveGatewayBootstrapInput', () => {
       GATEWAY_SOCKET: '/run/psfn/gateway.sock',
       WORKSPACE_PATH: '/workspace',
       GIT_REPO_ROOT: process.cwd(),
-      GATEWAY_SESSION_HMAC_KEY: 'v1:test-session-secret',
+      GATEWAY_SESSION_HMAC_KEY: 'v1:test-session-secret-3150d9be47ac628f',
     };
 
     const flagOff = resolveGatewayBootstrapInput({
@@ -258,7 +258,7 @@ describe('resolveGatewayBootstrapInput', () => {
       env: {
         PSFN_RUNTIME_MODE: 'split',
         WORKSPACE_PATH: '/workspace',
-        GATEWAY_SESSION_HMAC_KEY: 'v1:test-session-secret',
+        GATEWAY_SESSION_HMAC_KEY: 'v1:test-session-secret-3150d9be47ac628f',
         BEADS_TOOLS_ENABLED: 'false',
       },
       startupHydration: createStartupHydration(),
@@ -276,7 +276,7 @@ describe('resolveGatewayBootstrapInput', () => {
       env: {
         PSFN_RUNTIME_MODE: 'split',
         WORKSPACE_PATH: '/workspace',
-        GATEWAY_SESSION_HMAC_KEY: 'v1:test-session-secret',
+        GATEWAY_SESSION_HMAC_KEY: 'v1:test-session-secret-3150d9be47ac628f',
         GATEWAY_RPC_ENDPOINT: 'wss://gateway-rpc.local:10054/rpc',
         GATEWAY_RPC_TLS_CA_PATH: '/certs/ca.pem',
         GATEWAY_RPC_TLS_CERT_PATH: '/certs/gateway.pem',
@@ -308,7 +308,7 @@ describe('resolveGatewayBootstrapInput', () => {
       env: {
         PSFN_RUNTIME_MODE: 'split',
         WORKSPACE_PATH: '/workspace',
-        GATEWAY_SESSION_HMAC_KEY: 'v1:test-session-secret',
+        GATEWAY_SESSION_HMAC_KEY: 'v1:test-session-secret-3150d9be47ac628f',
         GATEWAY_RPC_ENDPOINT: 'wss://gateway-rpc.local:10054/rpc',
       },
       startupHydration: createStartupHydration(),
@@ -322,7 +322,7 @@ describe('resolveGatewayBootstrapInput', () => {
       env: {
         PSFN_RUNTIME_MODE: 'split',
         WORKSPACE_PATH: '/workspace',
-        GATEWAY_SESSION_HMAC_KEY: 'v1:test-session-secret',
+        GATEWAY_SESSION_HMAC_KEY: 'v1:test-session-secret-3150d9be47ac628f',
         VAULT_TOOLS_ENABLED: 'true',
         VAULT_ALLOW_ACTIONS: 'read,search',
       },

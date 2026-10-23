@@ -103,7 +103,7 @@ describe('resolveBackupRuntimeConfig', () => {
       const config = resolveBackupRuntimeConfig({
         dataDir,
         env: {
-          PSFN_BACKUP_TEST_KEY: 'backup-secret',
+          PSFN_BACKUP_TEST_KEY: 'backup-secret-9d18b27a4ec06f35c71082af',
         },
       });
 
@@ -114,7 +114,7 @@ describe('resolveBackupRuntimeConfig', () => {
       expect(config.rootDir).toBe(`${dataDir}/backups`);
       expect(config.verifyRestore).toBe(DEFAULT_BACKUP_VERIFY_RESTORE);
       expect(config.encryption.keyRef.envName).toBe('PSFN_BACKUP_TEST_KEY');
-      expect(config.encryption.passphrase).toBe('backup-secret');
+      expect(config.encryption.passphrase).toBe('backup-secret-9d18b27a4ec06f35c71082af');
     });
   });
 
@@ -127,6 +127,13 @@ describe('resolveBackupRuntimeConfig', () => {
     });
   });
 
+  it.each(['CHANGE_ME_BACKUP_ENCRYPTION_KEY', 'short-private-value', 'a'.repeat(64)])('rejects weak encryption credentials during backup startup (%#)', value => {
+    withBackupOwnerFile(dataDir => {
+      expect(() => resolveBackupRuntimeConfig({ dataDir, env: { PSFN_BACKUP_TEST_KEY: value } }))
+        .toThrow(/credential/u);
+    });
+  });
+
   it('uses env overrides and enforces minimum values', () => {
     withBackupOwnerFile((dataDir) => {
       const config = resolveBackupRuntimeConfig({
@@ -136,7 +143,7 @@ describe('resolveBackupRuntimeConfig', () => {
           BACKUP_RETENTION_COUNT: '0',
           BACKUP_ROOT_DIR: '/tmp/custom-backups',
           BACKUP_VERIFY_RESTORE: 'false',
-          PSFN_BACKUP_TEST_KEY: 'backup-secret',
+          PSFN_BACKUP_TEST_KEY: 'backup-secret-9d18b27a4ec06f35c71082af',
         },
       });
 
@@ -151,13 +158,13 @@ describe('resolveBackupRuntimeConfig', () => {
     withBackupOwnerFile((dataDir) => {
       const off = resolveBackupRuntimeConfig({
         dataDir,
-        env: { PSFN_BACKUP_TEST_KEY: 'backup-secret' },
+        env: { PSFN_BACKUP_TEST_KEY: 'backup-secret-9d18b27a4ec06f35c71082af' },
       });
       expect(off.groupMode).toBe(false);
 
       const on = resolveBackupRuntimeConfig({
         dataDir,
-        env: { PSFN_BACKUP_TEST_KEY: 'backup-secret', BACKUP_GROUP_MODE: 'true' },
+        env: { PSFN_BACKUP_TEST_KEY: 'backup-secret-9d18b27a4ec06f35c71082af', BACKUP_GROUP_MODE: 'true' },
       });
       expect(on.groupMode).toBe(true);
     });
@@ -169,7 +176,7 @@ describe('resolveBackupRuntimeConfig', () => {
         dataDir,
         defaultRootDir: '/srv/psfn/runtime/production/backups',
         env: {
-          PSFN_BACKUP_TEST_KEY: 'backup-secret',
+          PSFN_BACKUP_TEST_KEY: 'backup-secret-9d18b27a4ec06f35c71082af',
         },
       });
 
@@ -181,7 +188,7 @@ describe('resolveBackupRuntimeConfig', () => {
     withCustomBackupOwnerFile({ maxDailyBackups: 5 }, (dataDir) => {
       const config = resolveBackupRuntimeConfig({
         dataDir,
-        env: { PSFN_BACKUP_TEST_KEY: 'backup-secret' },
+        env: { PSFN_BACKUP_TEST_KEY: 'backup-secret-9d18b27a4ec06f35c71082af' },
       });
       expect(config.maxDailyBackups).toBe(5);
     });
@@ -191,7 +198,7 @@ describe('resolveBackupRuntimeConfig', () => {
     withCustomBackupOwnerFile({ maxDailyBackups: 0 }, (dataDir) => {
       const config = resolveBackupRuntimeConfig({
         dataDir,
-        env: { PSFN_BACKUP_TEST_KEY: 'backup-secret' },
+        env: { PSFN_BACKUP_TEST_KEY: 'backup-secret-9d18b27a4ec06f35c71082af' },
       });
       expect(config.maxDailyBackups).toBe(0);
     });
@@ -203,7 +210,7 @@ describe('resolveBackupRuntimeConfig', () => {
     withCustomBackupOwnerFile({}, (dataDir) => {
       const config = resolveBackupRuntimeConfig({
         dataDir,
-        env: { PSFN_BACKUP_TEST_KEY: 'backup-secret' },
+        env: { PSFN_BACKUP_TEST_KEY: 'backup-secret-9d18b27a4ec06f35c71082af' },
       });
       expect(config.maxDailyBackups).toBe(DEFAULT_BACKUP_DAILY_COUNT);
     });
@@ -213,7 +220,7 @@ describe('resolveBackupRuntimeConfig', () => {
     withCustomBackupOwnerFile({ maxDailyBackups: -1 }, (dataDir) => {
       expect(() => resolveBackupRuntimeConfig({
         dataDir,
-        env: { PSFN_BACKUP_TEST_KEY: 'backup-secret' },
+        env: { PSFN_BACKUP_TEST_KEY: 'backup-secret-9d18b27a4ec06f35c71082af' },
       })).toThrow('maxDailyBackups must be a number >= 0');
     });
   });
@@ -222,7 +229,7 @@ describe('resolveBackupRuntimeConfig', () => {
     withCustomBackupOwnerFile({ maxDailyBackups: 'seven' }, (dataDir) => {
       expect(() => resolveBackupRuntimeConfig({
         dataDir,
-        env: { PSFN_BACKUP_TEST_KEY: 'backup-secret' },
+        env: { PSFN_BACKUP_TEST_KEY: 'backup-secret-9d18b27a4ec06f35c71082af' },
       })).toThrow('maxDailyBackups must be a number >= 0');
     });
   });

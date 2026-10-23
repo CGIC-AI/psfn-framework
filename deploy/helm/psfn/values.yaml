@@ -419,14 +419,13 @@ provider:
 secrets:
   create: true
   existingSecret: ""
-  # Keep true for helm lint/template with placeholder or externally supplied
-  # secrets. Set false in install values to fail rendering when required keys
-  # are missing.
-  allowMissingRequired: true
+  # Required credentials are always validated. Use an existing Secret for
+  # production and the explicit non-production fixture for lint/template.
+  allowMissingRequired: false
   values:
-    apiKey: CHANGE_ME_API_KEY
-    adminToken: CHANGE_ME_ADMIN_TOKEN
-    gatewaySessionHmacKey: CHANGE_ME_GATEWAY_SESSION_HMAC_KEY
+    apiKey: ""
+    adminToken: ""
+    gatewaySessionHmacKey: ""
     # Role-bound worker proof derived from gatewaySessionHmacKey for
     # COMPANION_ID. Production operators may supply it through an existing
     # Secret instead of persisting it in Helm values.
@@ -439,7 +438,7 @@ secrets:
     # into the gateway inside API_SATELLITE_KEYS, so the hub authenticates as a
     # DISTINCT satellite-scoped principal (api-key-<sha256(key)[:24]>) that the
     # matching satellites.json endpoint must list in auth.apiKeyPrincipalIds.
-    # Required when satelliteHub.enabled=true (>=16 chars).
+    # Required when satelliteHub.enabled=true (>=32 chars, strong and distinct).
     satelliteHubApiKey: ""
     homeAssistantToken: ""
     satelliteHubControlToken: ""
@@ -450,12 +449,12 @@ secrets:
     eidoverseJoinToken: ""
     # Optional comma-separated additional per-satellite bearer keys appended to
     # the gateway's API_SATELLITE_KEYS list (for LAN satellites that are not
-    # the hub). Each key must be >=16 chars and distinct.
+    # the hub). Each key must be >=32 chars, strong and distinct.
     extraSatelliteApiKeys: ""
     providerApiKey: ""
     openRouterApiKey: ""
     openAiApiKey: ""
-    backupEncryptionKey: CHANGE_ME_BACKUP_ENCRYPTION_KEY
+    backupEncryptionKey: ""
     embeddingApiKey: ""
     hfToken: ""
     discordToken: ""
@@ -501,7 +500,7 @@ postgres:
   auth:
     database: psfn
     username: postgres
-    password: CHANGE_ME_POSTGRES_PASSWORD
+    password: ""
     existingSecret: ""
     keys:
       password: postgres-password
@@ -536,7 +535,7 @@ redis:
     digest: sha256:c22af04bb576503bf16b3e34a1fd2fd82de0f765afd866d2e380145e0af30d78
     pullPolicy: IfNotPresent
   auth:
-    password: CHANGE_ME_REDIS_PASSWORD
+    password: ""
     existingSecret: ""
     key: redis-password
   persistence:

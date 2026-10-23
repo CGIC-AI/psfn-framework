@@ -1401,7 +1401,7 @@
     },
     {
       "file": "src/boundary/gateway/server/work-budget.ts",
-      "name": "GatewayRpcWorkBudget.activeCount",
+      "name": "GatewayRpcWorkBudget.retainedCount",
       "value": "0",
       "form": "class-field",
       "note": "Code-owned Gateway RPC resource admission invariant (psfn-framework-zbbxj.12): finite work/output ceilings and zero-charge counter initialization cannot be widened by peers or runtime settings."

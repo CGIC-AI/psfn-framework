@@ -13,12 +13,13 @@ interface PendingFrame {
   message: unknown;
   bytes: number;
   control: boolean;
+  release: () => void;
 }
 
 /** One owner for all admitted parsed frames, workers, deadlines and health leases. */
 export class GatewayConnectionWork {
   private readonly queue: PendingFrame[] = [];
-  private readonly active = new Map<PendingFrame, { stop: () => void; release: () => void }>();
+  private readonly active = new Map<PendingFrame, () => void>();
   private retainedRequestBytes = 0;
   private retainedControlBytes = 0;
   private retainedRequests = 0;
@@ -46,9 +47,14 @@ export class GatewayConnectionWork {
       this.reject();
       return;
     }
+    const release = this.budget.reserve(bytes);
+    if (!release) {
+      this.reject();
+      return;
+    }
     if (control) { this.retainedControlBytes += bytes; this.retainedControls++; }
     else { this.retainedRequestBytes += bytes; this.retainedRequests++; }
-    this.queue.push({ message, bytes, control });
+    this.queue.push({ message, bytes, control, release });
     this.pump();
   }
 
@@ -61,7 +67,7 @@ export class GatewayConnectionWork {
     this.queue.length = 0;
     // Stop timers/health leases immediately. Actual handler charges remain until
     // settlement: a peer cannot free orphan work by disconnecting and retrying.
-    for (const entry of this.active.values()) entry.stop();
+    for (const stop of this.active.values()) stop();
   }
 
   private reject(): void {
@@ -77,12 +83,6 @@ export class GatewayConnectionWork {
         ? this.controlCount === 0 : this.requestCount < GATEWAY_RPC_REQUEST_CONCURRENCY);
       if (index < 0) return;
       const frame = this.queue.splice(index, 1)[0]!;
-      const releaseWork = this.budget.reserve(frame.bytes);
-      if (!releaseWork) {
-        this.releaseRetained(frame);
-        this.reject();
-        return;
-      }
       if (frame.control) this.controlCount++;
       else this.requestCount++;
       const releaseHealth = this.beginHealthcheck();
@@ -95,7 +95,7 @@ export class GatewayConnectionWork {
         clearTimeout(timer);
         releaseHealth();
       };
-      this.active.set(frame, { stop, release: releaseWork });
+      this.active.set(frame, stop);
       const message = frame.message;
       frame.message = undefined;
       void withGatewayRpcWorkLifetime(() => this.dispatch(message)).then(() => this.finish(frame), () => {
@@ -106,15 +106,15 @@ export class GatewayConnectionWork {
   }
 
   private releaseRetained(frame: PendingFrame): void {
+    frame.release();
     if (frame.control) { this.retainedControlBytes -= frame.bytes; this.retainedControls--; }
     else { this.retainedRequestBytes -= frame.bytes; this.retainedRequests--; }
   }
 
   private finish(frame: PendingFrame): void {
-    const entry = this.active.get(frame);
-    if (!entry) return;
-    entry.stop();
-    entry.release();
+    const stop = this.active.get(frame);
+    if (!stop) return;
+    stop();
     this.active.delete(frame);
     this.releaseRetained(frame);
     if (frame.control) this.controlCount--;

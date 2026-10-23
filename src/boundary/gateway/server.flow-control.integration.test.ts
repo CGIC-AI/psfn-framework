@@ -27,7 +27,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 1000): Promise<void
   }
 }
 
-async function harness(kind: 'unix' | 'wss', embedBatch: () => Promise<number[][]>) {
+async function harness(kind: 'unix' | 'wss', embedBatch: () => Promise<number[][]>, fleetCompanionIds?: ReturnType<typeof createCompanionId>[]) {
   const socketPath = join(tmpdir(), `psfn-frame-admission-${randomUUID()}.sock`);
   const fixture = kind === 'wss' ? createGatewayRpcTlsFixture() : undefined;
   const listener = net.createServer();
@@ -61,14 +61,23 @@ async function harness(kind: 'unix' | 'wss', embedBatch: () => Promise<number[][
     eventBus: new EventBus(),
     auditStore,
     intakeScreeningMode: 'shadow',
-    intakeScreening: testShadowIntakeScreening(),
+    ...(fleetCompanionIds ? {
+      intakeScreeningProvider: testShadowIntakeScreening,
+      visionIntakeProvider: () => null,
+      multiCompanion: {
+        enabled: true,
+        fleetCompanionIds,
+        channelRouting: {}, discordAccounts: {}, pluginAccounts: {},
+        personalWorkspaceByCompanionId: Object.fromEntries(fleetCompanionIds.map(id => [id, `/workspace/${id}`])),
+      },
+    } : { intakeScreening: testShadowIntakeScreening() }),
   });
   const peers: Array<net.Socket | WebSocket> = [];
   server.start();
   return {
     auditRecords,
     server,
-    async open() {
+    async open(companionId = A) {
       const peer = fixture
         ? new WebSocket(url, GATEWAY_RPC_WS_PROTOCOL, loadRawWebSocketTlsOptions(fixture.clientTls))
         : net.createConnection(socketPath);
@@ -95,9 +104,14 @@ async function harness(kind: 'unix' | 'wss', embedBatch: () => Promise<number[][
         get destroyed() { return peer instanceof WebSocket ? peer.readyState === WebSocket.CLOSED : peer.destroyed; },
         destroy() { if (peer instanceof WebSocket) peer.terminate(); else peer.destroy(); },
         async ready() {
-          identify(this);
+          identify(this, companionId);
           await waitFor(() => frames.some(frame => frame.id === 1));
           expect(frames.find(frame => frame.id === 1)?.result).toMatchObject({ success: true });
+          if (fleetCompanionIds) {
+            this.write('{"jsonrpc":"2.0","id":0,"method":"gateway.client.ready","params":{}}\n');
+            await waitFor(() => frames.some(frame => frame.id === 0));
+            expect(frames.find(frame => frame.id === 0)?.result).toMatchObject({ success: true });
+          }
         },
       };
     },
@@ -328,6 +342,102 @@ describe.each(['unix', 'wss'] as const)('%s Gateway per-connection RPC flow cont
       const next = await app.open();
       await next.ready();
     } finally { await app.close(); }
+  });
+
+
+  it('bounds aggregate queued bytes across authenticated connections before starting queued handlers', async () => {
+    let release!: () => void;
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const embedBatch = vi.fn(async () => { await blocked; return [[1]]; });
+    const fleet = [A, createCompanionId('22222222-2222-4222-8222-222222222222'), createCompanionId('33333333-3333-4333-8333-333333333333')];
+    const app = await harness(kind, embedBatch, fleet);
+    const peers: Array<Awaited<ReturnType<typeof app.open>>> = [];
+    const request = (id: number, bytes?: number) => {
+      const frame = { jsonrpc: '2.0', id, method: 'llm.embed', params: { texts: ['work'] }, padding: '' };
+      if (bytes) frame.padding = '☃'.repeat(Math.floor((bytes - Buffer.byteLength(JSON.stringify(frame))) / 3));
+      return JSON.stringify(frame) + '\n';
+    };
+    const barrier = async (index: number) => {
+      const peer = peers[index]!;
+      const before = peer.frames.length;
+      const reverse = app.server.requestCompanionAgent(fleet[index]!, 'health.test', {});
+      await waitFor(() => peer.frames.slice(before).some(frame => frame.method === 'health.test'));
+      const frame = peer.frames.slice(before).find(frame => frame.method === 'health.test')!;
+      peer.write(JSON.stringify({ jsonrpc: '2.0', id: frame.id, result: { ok: true } }) + '\n');
+      await expect(reverse).resolves.toEqual({ ok: true });
+    };
+    try {
+      for (const companionId of fleet) {
+        const peer = await app.open(companionId);
+        await peer.ready();
+        peers.push(peer);
+        for (let id = 2; id < 6; id++) peer.write(request(id));
+      }
+      await waitFor(() => embedBatch.mock.calls.length === 12);
+      // 48 + 48 + 24 MiB stays below the independent global 128 MiB ceiling.
+      // Reverse responses are ordered barriers behind the queued frames.
+      for (let index = 0; index < 3; index++) {
+        peers[index]!.write(request(6, 24 * 1024 * 1024));
+        if (index < 2) peers[index]!.write(request(7, 24 * 1024 * 1024));
+        await barrier(index);
+      }
+      expect(peers.every(peer => !peer.destroyed)).toBe(true);
+      peers[2]!.write(request(7, 24 * 1024 * 1024));
+      await waitFor(() => peers[2]!.destroyed);
+      expect(peers.slice(0, 2).every(peer => !peer.destroyed)).toBe(true);
+      expect(embedBatch).toHaveBeenCalledTimes(12);
+      // Closing the overflowing connection releases its queued 24 MiB, while
+      // its four abort-ignoring active operations keep their own charges.
+      const replacement = await app.open(fleet[2]);
+      await replacement.ready();
+      peers[2] = replacement;
+      for (let id = 2; id < 6; id++) replacement.write(request(id));
+      await waitFor(() => embedBatch.mock.calls.length === 16);
+      replacement.write(request(6, 24 * 1024 * 1024));
+      await barrier(2);
+      replacement.write(request(7, 24 * 1024 * 1024));
+      await waitFor(() => replacement.destroyed);
+      expect(embedBatch).toHaveBeenCalledTimes(16);
+    } finally { release(); await app.close(); }
+  });
+
+  it('bounds aggregate queued frame counts and releases queued slots without freeing active work', async () => {
+    let release!: () => void;
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const embedBatch = vi.fn(async () => { await blocked; return [[1]]; });
+    const fleet = [A, ...Array.from({ length: 16 }, (_, index) => createCompanionId(`${String(index + 2).padStart(8, '0')}-2222-4222-8222-222222222222`))];
+    const app = await harness(kind, embedBatch, fleet);
+    const peers: Array<Awaited<ReturnType<typeof app.open>>> = [];
+    const request = (id: number) => JSON.stringify({ jsonrpc: '2.0', id, method: 'llm.embed', params: { texts: ['work'] } }) + '\n';
+    try {
+      for (const companionId of fleet) {
+        const peer = await app.open(companionId);
+        await peer.ready();
+        peers.push(peer);
+      }
+      for (let index = 0; index < 16; index++) {
+        for (let id = 2; id < 18; id++) peers[index]!.write(request(id));
+        await waitFor(() => embedBatch.mock.calls.length === (index + 1) * 4);
+      }
+      await realDelay(20);
+      expect(peers.every(peer => !peer.destroyed)).toBe(true);
+      // 16 connections x 16 retained requests fills exactly 256 global slots.
+      peers[16]!.write(request(2));
+      await waitFor(() => peers[16]!.destroyed);
+      expect(embedBatch).toHaveBeenCalledTimes(64);
+      peers[0]!.destroy();
+      await waitFor(() => app.server.getFleetConnectionSnapshot().connections.length === 15);
+      const replacement = await app.open(fleet[0]);
+      await replacement.ready();
+      // Twelve queued slots were released; the four active charges survived.
+      for (let id = 2; id < 14; id++) replacement.write(request(id));
+      await waitFor(() => embedBatch.mock.calls.length === 68);
+      await realDelay(20);
+      expect(replacement.destroyed).toBe(false);
+      replacement.write(request(14));
+      await waitFor(() => replacement.destroyed);
+      expect(embedBatch).toHaveBeenCalledTimes(68);
+    } finally { release(); await app.close(); }
   });
 
 });

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+from contextlib import AsyncExitStack
 from datetime import timedelta
 from pathlib import Path
 
@@ -133,14 +134,14 @@ async def _run_esphome_runtime(
                 continue
             await asyncio.sleep(2)
     finally:
-        for task in interaction_tasks:
-            task.cancel()
-        if interaction_tasks:
-            await asyncio.gather(*interaction_tasks, return_exceptions=True)
-        audio_server.stop()
-        await agent.aclose()
-        await stt.aclose()
-        await tts.aclose()
+        async with AsyncExitStack() as resources:
+            resources.push_async_callback(tts.aclose)
+            resources.push_async_callback(stt.aclose)
+            resources.push_async_callback(agent.aclose)
+            for task in interaction_tasks:
+                task.cancel()
+            if interaction_tasks:
+                await asyncio.gather(*interaction_tasks, return_exceptions=True)
 
 
 async def _run_realtime_runtime(
@@ -192,6 +193,56 @@ async def _artifact_cleanup(stores: tuple[ArtifactStore, ...], interval_seconds:
                 logging.getLogger(__name__).error("Artifact cleanup failed")
 
 
+async def _finish_shutdown(shutdown: asyncio.Task[None]) -> None:
+    cancelled = False
+    while not shutdown.done():
+        try:
+            await asyncio.shield(shutdown)
+        except asyncio.CancelledError:
+            cancelled = True
+    shutdown.result()
+    if cancelled:
+        raise asyncio.CancelledError
+
+
+async def _cancel_runtime_task(task: asyncio.Task[None]) -> None:
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass  # This task's owner requested its cancellation and has joined it.
+
+
+async def _shutdown_runtime(*, endpoints, maintenance, audio_server, artifacts) -> None:
+    async with AsyncExitStack() as resources:
+        resources.callback(artifacts.close)
+        resources.callback(audio_server.stop)
+        if maintenance is not None:
+            resources.push_async_callback(_cancel_runtime_task, maintenance)
+        if endpoints is not None:
+            resources.push_async_callback(_cancel_runtime_task, endpoints)
+
+
+async def _run_endpoints(*, config, audio_server, session_cache) -> None:
+    async with asyncio.TaskGroup() as task_group:
+        if config.device_transport in {"esphome", "hybrid"}:
+            task_group.create_task(
+                _run_esphome_runtime(
+                    config=config,
+                    audio_server=audio_server,
+                    session_cache=session_cache,
+                )
+            )
+        if config.device_transport in {"realtime", "hybrid"}:
+            task_group.create_task(
+                _run_realtime_runtime(
+                    config=config,
+                    audio_server=audio_server,
+                    session_cache=session_cache,
+                )
+            )
+
+
 async def _run_runtime(project_root: Path, *, artifact_cleanup_interval_seconds: float = 60) -> None:
     if not math.isfinite(artifact_cleanup_interval_seconds) or artifact_cleanup_interval_seconds <= 0:
         raise ValueError("Artifact cleanup interval must be positive and finite")
@@ -210,6 +261,7 @@ async def _run_runtime(project_root: Path, *, artifact_cleanup_interval_seconds:
     )
     session_cache = SessionCache(ttl=timedelta(seconds=config.session_ttl_seconds), max_sessions=config.session_max_sessions)
     maintenance: asyncio.Task | None = None
+    endpoints: asyncio.Task | None = None
     try:
         audio_server.start()
         maintenance = asyncio.create_task(
@@ -218,31 +270,19 @@ async def _run_runtime(project_root: Path, *, artifact_cleanup_interval_seconds:
         )
         typer.echo("Voice bridge listeners started")
         typer.echo("Voice bridge is running. Press Ctrl-C to stop.")
-        async with asyncio.TaskGroup() as task_group:
-            if config.device_transport in {"esphome", "hybrid"}:
-                task_group.create_task(
-                    _run_esphome_runtime(
-                        config=config,
-                        audio_server=audio_server,
-                        session_cache=session_cache,
-                    )
-                )
-            if config.device_transport in {"realtime", "hybrid"}:
-                task_group.create_task(
-                    _run_realtime_runtime(
-                        config=config,
-                        audio_server=audio_server,
-                        session_cache=session_cache,
-                    )
-                )
+        endpoints = asyncio.create_task(
+            _run_endpoints(config=config, audio_server=audio_server, session_cache=session_cache),
+            name="hub-endpoints",
+        )
+        await asyncio.shield(endpoints)
     finally:
-        if maintenance is not None:
-            maintenance.cancel()
-            await asyncio.gather(maintenance, return_exceptions=True)
-        try:
-            audio_server.stop()
-        finally:
-            artifacts.close()
+        shutdown = asyncio.create_task(
+            _shutdown_runtime(
+                endpoints=endpoints, maintenance=maintenance, audio_server=audio_server, artifacts=artifacts,
+            ),
+            name="hub-runtime-shutdown",
+        )
+        await _finish_shutdown(shutdown)
 
 
 def run() -> None:

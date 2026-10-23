@@ -21,6 +21,7 @@ from websockets.exceptions import ConnectionClosed
 from hub.adapters.agent.psfn_streaming import PsfnStreamingProvider
 from hub.adapters.stt.deepgram_live import DeepgramLiveSTTProvider
 from hub.adapters.tts.elevenlabs_streaming import ElevenLabsStreamingTTS
+from hub.devices.realtime_admission import RealtimeAdmission
 from hub.media.http_audio import StaticAudioServer
 from hub.satellite_claims import ClientCertificateConfig, SatelliteClaimConfig
 from hub.security.realtime_access import RealtimeAccess
@@ -503,11 +504,11 @@ class RealtimeVoiceServer:
             if not isinstance(value, (int, float)) or not 0 < value <= 2_147_483_647:
                 raise ValueError("Realtime resource limits must be positive bounded numbers")
         self._max_frame_bytes = max_frame_bytes
-        self._max_connections = max_connections
+        self._admission = RealtimeAdmission(max_connections)
         self._max_audio_bytes = max_audio_bytes
         self._max_audio_duration = max_audio_duration_seconds
         self._idle_timeout = idle_timeout_seconds
-        self._connections: set = set()
+        self._connections = self._admission.connections
         self._host = host
         self._port = port
         self._artifacts_root = artifacts_root
@@ -528,11 +529,13 @@ class RealtimeVoiceServer:
         self._server = None
 
     async def __aenter__(self) -> "RealtimeVoiceServer":
+        self._admission.accepting = True
         self._server = await serve(
             self._handle_connection,
             self._host,
             self._port,
             process_request=self._process_request,
+            create_connection=self._admission.create_connection,
             max_size=self._max_frame_bytes,
             max_queue=32,
             write_limit=1024 * 1024,
@@ -553,21 +556,19 @@ class RealtimeVoiceServer:
     def _process_request(self, websocket, request):
         from http import HTTPStatus
 
+        if websocket not in self._connections:
+            return websocket.respond(HTTPStatus.SERVICE_UNAVAILABLE, "Realtime access denied\n")
         try:
             status = self._access.reject_status(request, websocket.remote_address[0])
         except (ValueError, TypeError):
             status = HTTPStatus.BAD_REQUEST
         if status is not None:
             return websocket.respond(status, "Realtime access denied\n")
-        if len(self._connections) >= self._max_connections:
-            return websocket.respond(HTTPStatus.TOO_MANY_REQUESTS, "Realtime connection quota exceeded\n")
-        self._connections.add(websocket)
-        task = asyncio.create_task(websocket.wait_closed())
-        task.add_done_callback(lambda _: self._connections.discard(websocket))
         return None
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
         assert self._server is not None
+        self._admission.stop()
         self._server.close()
         await self._server.wait_closed()
         self._server = None
@@ -602,7 +603,6 @@ class RealtimeVoiceServer:
             await websocket.close(1008, "Invalid or expired realtime input")
         finally:
             await connection.aclose()
-            self._connections.discard(websocket)
 
 
 def _clean_optional(value: object) -> str | None:

@@ -45,6 +45,22 @@ reject; reads repair owned file permissions before serving.
 
 ## Resource defaults
 
+Python realtime has one aggregate TCP budget: `max_connections` (64 by default)
+is the ceiling for both total sockets and pending handshakes. Every accepted TCP
+connection reserves a slot synchronously in the production `create_connection`
+factory, before reading headers or evaluating credentials. A full budget closes
+excess TCP sockets immediately, without creating a WebSocket handler or reading
+their request. Authentication retains the same slot; it cannot open a transfer
+window or expand the authenticated limit. The slot is released only on TCP
+connection loss, including denial, malformed input, timeout and normal/abrupt
+close. No per-connection watcher task is used for accounting.
+
+The absolute opening handshake deadline stays five seconds; header progress does
+not extend it. Shutdown stops admission, aborts pending handshakes immediately,
+and awaits the WebSocket server's handlers and TCP cleanup. Open WebSockets use
+the existing five-second close deadline. Neither admission nor rejection logs
+request content, headers, peer addresses or credentials.
+
 All `AUDIO_*` capacities are positive integers; seconds are positive finite
 numbers. Invalid settings fail startup. The complete listener reads these values
 from the CLI-created runtime configuration.

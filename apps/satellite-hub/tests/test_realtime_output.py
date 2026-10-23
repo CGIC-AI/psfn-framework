@@ -60,6 +60,15 @@ async def _unread_peer(hub):
     return reader, writer, peer
 
 
+async def _buffer_turn_audio(reader, writer):
+    writer.transport.resume_reading()
+    for payload in ({"type": "turn.start"}, {"type": "audio", "audio": "AQACAAMA"}, {"type": "hello"}):
+        writer.write(Frame(OP_TEXT, json.dumps(payload).encode()).serialize(mask=True))
+    await writer.drain()
+    assert json.loads((await _read_frame(reader))[1])["type"] == "turn.started"
+    assert json.loads((await _read_frame(reader))[1])["type"] == "hello.ack"
+
+
 @pytest.mark.anyio
 async def test_legal_ping_flood_cannot_bypass_native_output_cap(monkeypatch, tmp_path: Path, record_property) -> None:
     async with server(tmp_path, max_connections=1) as hub:
@@ -326,12 +335,7 @@ async def test_output_overflow_does_not_admit_trailing_application_work(tmp_path
         reader, writer, peer = await _unread_peer(hub)
         try:
             if buffered_audio:
-                writer.transport.resume_reading()
-                for payload in ({"type": "turn.start"}, {"type": "audio", "audio": "AQACAAMA"}, {"type": "hello"}):
-                    writer.write(Frame(OP_TEXT, json.dumps(payload).encode()).serialize(mask=True))
-                await writer.drain()
-                assert json.loads((await _read_frame(reader))[1])["type"] == "turn.started"
-                assert json.loads((await _read_frame(reader))[1])["type"] == "hello.ack"
+                await _buffer_turn_audio(reader, writer)
                 writer.transport.pause_reading()
             frames = [Frame(OP_PING, b"p" * 125) for _ in range(4)]
             payloads = ({"type": "turn.end"},) if buffered_audio else (
@@ -381,12 +385,7 @@ async def test_output_failure_after_receive_prevents_turn_dispatch(monkeypatch, 
         reader, writer, peer = await _unread_peer(hub)
         tasks = tuple(websocket_server.handlers.values())
         try:
-            writer.transport.resume_reading()
-            for payload in ({"type": "turn.start"}, {"type": "audio", "audio": "AQACAAMA"}, {"type": "hello"}):
-                writer.write(Frame(OP_TEXT, json.dumps(payload).encode()).serialize(mask=True))
-            await writer.drain()
-            assert json.loads((await _read_frame(reader))[1])["type"] == "turn.started"
-            assert json.loads((await _read_frame(reader))[1])["type"] == "hello.ack"
+            await _buffer_turn_audio(reader, writer)
             assert not (tmp_path / "artifacts").exists()
             writer.write(Frame(OP_TEXT, turn_end.encode()).serialize(mask=True))
             await writer.drain()

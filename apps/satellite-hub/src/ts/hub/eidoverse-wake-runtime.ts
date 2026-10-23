@@ -1,3 +1,4 @@
+import { HubResources } from "./transport-resources.js";
 import { hubConsole as console, privateHubLogger } from "../shared/private-log.js";
 import { createHash } from "node:crypto";
 
@@ -21,6 +22,7 @@ interface EidoverseWakeRuntimeLogger {
 }
 
 interface EidoverseWakeRuntimeOptions {
+  resources?: HubResources;
   logger?: EidoverseWakeRuntimeLogger;
   delay?: EidoversePollDelay;
 }
@@ -89,8 +91,9 @@ export function createEidoverseWakeRuntime(
   config: EidoverseWakeFilterConfig & EidoversePendingPingsPollConfig,
   options: EidoverseWakeRuntimeOptions = {},
 ): EidoverseWakeRuntime {
+  const resources = options.resources ?? new HubResources();
   return new EidoverseWakeRuntime(
-    source,
+    { pendingPings: () => resources.runProvider(() => source.pendingPings()) },
     target,
     config,
     options.logger ?? console,

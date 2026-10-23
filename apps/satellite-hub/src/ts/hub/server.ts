@@ -1,14 +1,13 @@
 import { Utf8ByteBudget, UpstreamResponseError } from "../shared/upstream-response.js";
 import { hubConsole as console } from "../shared/private-log.js";
 import { spawn } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 
 import WebSocket, { WebSocketServer, type RawData } from "ws";
 
 import {
-  abortableAsyncIterable,
   abortReason,
   throwIfAborted,
 } from "../shared/abort.js";
@@ -123,6 +122,7 @@ export class RealtimeHubServer {
   constructor(
     private readonly config: HubConfig,
     options: {
+      resources?: HubResources;
       agent?: FrameworkAgentAdapter;
       realtimeTts?: StreamingTtsAdapter;
       voxtaTts?: VoxtaTtsAdapter | null;
@@ -139,7 +139,7 @@ export class RealtimeHubServer {
       locationNow?: () => number;
     } = {},
   ) {
-    this.resources = new HubResources(config.limits);
+    this.resources = options.resources ?? new HubResources(config.limits);
     this.wsServer = new WebSocketServer({ noServer: true, maxPayload: this.resources.limits.maxFrameBytes, perMessageDeflate: false });
     this.access = new HubAccess(config);
     if (config.deviceRegistry && !config.psfn.deviceAssertionIssuer) {
@@ -157,6 +157,7 @@ export class RealtimeHubServer {
           embodiedSessions: this.embodiedSessions,
           sessions: this.sessions,
           agent: this.agent,
+          resources: this.resources,
           look: options.eidoverse.look,
           ...(options.eidoverse.onLookError ? { onLookError: options.eidoverse.onLookError } : {}),
           say: options.eidoverse.say,
@@ -190,7 +191,7 @@ export class RealtimeHubServer {
     }
     this.companionBrowser = config.companionBrowser && config.deviceRegistry
       ? new CompanionBrowserBridge(config.companionBrowser, config.psfn, config.deviceRegistry,
-          config.elevenlabsApiKey && config.elevenlabsVoiceId ? this.tts : null)
+          config.elevenlabsApiKey && config.elevenlabsVoiceId ? this.tts : null, undefined, this.resources)
       : null;
     const voxtaTts = options.voxtaTts === null
       ? undefined
@@ -237,6 +238,7 @@ export class RealtimeHubServer {
   private readonly realtimeStt: (pcm: Buffer, signal: AbortSignal) => Promise<TranscriptResult>;
 
   async start(): Promise<void> {
+    if (this.closing) throw new Error("Hub has stopped");
     if (this.config.access?.developerMode) {
       console.warn("Satellite Hub developer mode: local unauthenticated callers can invoke providers; use only on a trusted loopback host");
     }
@@ -408,8 +410,6 @@ export class RealtimeHubServer {
   }
 
   private async shutdown(): Promise<void> {
-    const providers = this.resources.close();
-    void providers.catch(() => undefined);
     const steps: Array<() => unknown> = [
       this.stopArtifactRetention,
       () => this.eidoverse?.disconnect(),
@@ -429,11 +429,8 @@ export class RealtimeHubServer {
       () => new Promise<void>((resolve, reject) => this.httpServer.close(error => {
         if (error && (error as NodeJS.ErrnoException).code !== "ERR_SERVER_NOT_RUNNING") reject(error); else resolve();
       })),
-      () => providers,
     ];
-    const results = await Promise.allSettled(steps.map(step => Promise.resolve().then(step)));
-    const errors = results.filter((result): result is PromiseRejectedResult => result.status === "rejected").map(result => result.reason);
-    if (errors.length) throw new AggregateError(errors, "Hub shutdown failed");
+    await this.resources.shutdown(steps);
   }
 }
 
@@ -457,7 +454,8 @@ class ElevenLabsVoxtaTts implements VoxtaTtsAdapter {
     const mp3Chunks: Buffer[] = [];
     let bytes = 0;
     const audio = this.tts.streamText(singleValueStream(text), { signal });
-    for await (const chunk of abortableAsyncIterable(audio, signal)) {
+    for await (const chunk of audio) {
+      throwIfAborted(signal);
       bytes += chunk.byteLength;
       if (bytes > this.limits.maxAudioBytes) throw new Error("Hub TTS audio exceeds byte limit");
       mp3Chunks.push(chunk);
@@ -971,36 +969,38 @@ class RealtimeConnection {
       this.activeTurn = null;
     }
 
-    const turn = createArtifactTurn(this.config.artifactsRoot, this.sessionId);
-    appendEvent(turn, "start", {
-      inputMode: "text",
-      sessionId: this.sessionId,
-      channelId: this.channelId,
-      satelliteId: this.satelliteId,
-      turnId: turn.turnId,
-    });
-    appendEvent(turn, "transcript", {
-      text: userText,
-      provider: "typed",
-      latencyMs: 0,
-    });
-    writeJson(turn, turn.transcriptPath, {
-      text: userText,
-      provider: "typed",
-      latencyMs: 0,
-    });
+    this.startReply(async () => {
+      const turn = createArtifactTurn(this.config.artifactsRoot, this.sessionId);
+      appendEvent(turn, "start", {
+        inputMode: "text",
+        sessionId: this.sessionId,
+        channelId: this.channelId,
+        satelliteId: this.satelliteId,
+        turnId: turn.turnId,
+      });
+      appendEvent(turn, "transcript", {
+        text: userText,
+        provider: "typed",
+        latencyMs: 0,
+      });
+      writeJson(turn, turn.transcriptPath, {
+        text: userText,
+        provider: "typed",
+        latencyMs: 0,
+      });
 
-    await this.send({
-      type: "message",
-      data: {
-        role: "user",
-        content: userText,
-        final: true,
-      },
-    });
+      await this.send({
+        type: "message",
+        data: {
+          role: "user",
+          content: userText,
+          final: true,
+        },
+      });
 
-    this.sessions.append(this.sessionId, { role: "user", content: userText });
-    this.startReply(turn, userText, "text");
+      this.sessions.append(this.sessionId, { role: "user", content: userText });
+      return turn;
+    }, userText, "text");
   }
 
   private async handleTextSignal(signal: string): Promise<void> {
@@ -1063,13 +1063,14 @@ class RealtimeConnection {
       if (!this.config.elevenlabsApiKey || !this.config.elevenlabsVoiceId) {
         throw new Error("ElevenLabs TTS is not configured for this hub");
       }
-      for await (const audioChunk of this.tts.streamText(singleValueStream(spokenText))) {
+      await this.resources.runProviderStream(signal => this.tts.streamText(singleValueStream(spokenText), { signal }), async (audioChunk, signal) => {
+        throwIfAborted(signal);
         await this.send({
           type: "relay.tts.chunk",
           requestId: message.requestId,
           audio: encodeAudioChunk(audioChunk),
         });
-      }
+      }, this.lifetime.signal);
       await this.send({
         type: "relay.tts.done",
         requestId: message.requestId,
@@ -1373,11 +1374,11 @@ class RealtimeConnection {
   }
 
   private startReply(
-    turn: ArtifactTurn,
+    prepareTurn: ArtifactTurn | (() => Promise<ArtifactTurn>),
     transcript: string,
     inputMode: FrameworkReplyInputMode,
   ): void {
-    const task = this.runReply(turn, transcript, inputMode);
+    const task = this.runReply(prepareTurn, transcript, inputMode);
     this.replyTask = task;
     void this.observeReplyTask(task);
   }
@@ -1395,10 +1396,11 @@ class RealtimeConnection {
   }
 
   private async runReply(
-    turn: ArtifactTurn,
+    prepareTurn: ArtifactTurn | (() => Promise<ArtifactTurn>),
     transcript: string,
     inputMode: FrameworkReplyInputMode,
   ): Promise<void> {
+    let turn: ArtifactTurn | undefined;
     const replyId = ++this.replySequence;
     this.replyAbort = false;
     const replyAbortController = new AbortController();
@@ -1408,6 +1410,7 @@ class RealtimeConnection {
     const shouldStreamAudio = canReceiveStreamingAudio(this.capabilities);
     const audioSegmentQueue = shouldStreamAudio ? new AsyncQueue<string>(this.resources.limits.maxQueuedMessages) : null;
 
+    let audioFailed = false;
     const audioTask: Promise<void> = shouldStreamAudio && audioSegmentQueue ? (async () => {
       for await (const segmentText of audioSegmentQueue) {
         this.assertReplyActive(replyId, replyAbortController);
@@ -1419,17 +1422,16 @@ class RealtimeConnection {
           throw new Error("ElevenLabs TTS is not configured for this hub");
         }
         let emittedAudio = false;
-        const audio = this.tts.streamText(singleValueStream(spokenSegmentText), {
-          signal: replyAbortController.signal,
-        });
         try {
-          for await (const audioChunk of abortableAsyncIterable(audio, replyAbortController.signal)) {
+          await this.resources.runProviderStream(signal => this.tts.streamText(singleValueStream(spokenSegmentText), { signal }), async (audioChunk, signal) => {
+            throwIfAborted(signal);
             this.assertReplyActive(replyId, replyAbortController);
             if (!emittedAudio) {
               await this.deliverSpokenAudioFrame({
                 type: "text",
                 data: "audio-init",
               });
+              throwIfAborted(signal);
               this.assertReplyActive(replyId, replyAbortController);
             }
             emittedAudio = true;
@@ -1438,7 +1440,7 @@ class RealtimeConnection {
               data: encodeAudioChunk(audioChunk),
             });
             this.assertReplyActive(replyId, replyAbortController);
-          }
+          }, replyAbortController.signal);
         } finally {
           if (emittedAudio) {
             this.assertReplyActive(replyId, replyAbortController);
@@ -1451,24 +1453,34 @@ class RealtimeConnection {
         }
       }
     })() : Promise.resolve();
-    void audioTask.catch(() => undefined);
+    void audioTask.catch(error => {
+      audioSegmentQueue?.close();
+      if (!replyAbortController.signal.aborted) {
+        audioFailed = true;
+        replyAbortController.abort(error);
+      }
+    });
 
     try {
       let pendingAudioText = "";
       let audioHasStarted = false;
-      const stream = this.agent.streamReply({
-        inputMode,
-        userText: transcript,
-        conversationId: this.sessionId,
-        history: this.sessions.getHistory(this.sessionId),
-        channel: this.embodiedSessions.getContext(
-          this.sessionId,
-          this.satelliteId,
-          this.requireAttachmentOwnership(),
-        ),
-        signal: replyAbortController.signal,
-      });
-      for await (const delta of stream) {
+      await this.resources.runProviderStream(async signal => {
+        turn = typeof prepareTurn === "function" ? await prepareTurn() : prepareTurn;
+        throwIfAborted(signal);
+        return this.agent.streamReply({
+          inputMode,
+          userText: transcript,
+          conversationId: this.sessionId,
+          history: this.sessions.getHistory(this.sessionId),
+          channel: this.embodiedSessions.getContext(
+            this.sessionId,
+            this.satelliteId,
+            this.requireAttachmentOwnership(),
+          ),
+          signal,
+        });
+      }, async (delta, signal) => {
+        throwIfAborted(signal);
         this.assertReplyActive(replyId, replyAbortController);
         replyBytes.append(delta);
         responseText += delta;
@@ -1496,7 +1508,7 @@ class RealtimeConnection {
             audioHasStarted = true;
           }
         }
-      }
+      }, replyAbortController.signal);
       this.assertReplyActive(replyId, replyAbortController);
       if (audioSegmentQueue && pendingAudioText.trim()) {
         audioSegmentQueue.push(pendingAudioText.trim());
@@ -1505,6 +1517,7 @@ class RealtimeConnection {
       await audioTask;
       this.assertReplyActive(replyId, replyAbortController);
 
+      if (!turn) throw new Error("Hub reply turn unavailable");
       responseText = responseText.trim();
       this.sessions.append(this.sessionId, { role: "assistant", content: responseText });
       appendEvent(turn, "reply", { text: responseText });
@@ -1524,7 +1537,7 @@ class RealtimeConnection {
         },
       });
     } catch (error) {
-      const wasCancelled = this.replyAbort || replyId !== this.replySequence || replyAbortController.signal.aborted;
+      const wasCancelled = !audioFailed && (this.replyAbort || replyId !== this.replySequence || replyAbortController.signal.aborted);
       audioSegmentQueue?.close();
       replyAbortController.abort(error);
       await audioTask.catch(() => undefined);
@@ -1533,9 +1546,9 @@ class RealtimeConnection {
         // cancelled because the client disconnected or interrupted. This is a
         // normal cancel, not a reply failure, so it must not surface as an
         // error-event.
-        appendEvent(turn, "reply.cancel", { reason: "client_interrupt" });
+        if (turn) appendEvent(turn, "reply.cancel", { reason: "client_interrupt" });
       } else {
-        writeJson(turn, turn.replyPath, {
+        if (turn) writeJson(turn, turn.replyPath, {
           sessionId: this.sessionId,
           turnId: turn.turnId,
           transcript,

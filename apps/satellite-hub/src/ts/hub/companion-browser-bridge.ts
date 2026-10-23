@@ -1,3 +1,4 @@
+import { HubResources } from "./transport-resources.js";
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
@@ -24,7 +25,8 @@ export class CompanionBrowserBridge {
     private readonly runtime: PsfnRuntimeConfig,
     private readonly registry: HubDeviceRegistryAuthority,
     private readonly tts: StreamingTtsAdapter | null,
-    private readonly connectGateway = (url: string, options: ClientOptions) => new WebSocket(url, options)) {
+    private readonly connectGateway = (url: string, options: ClientOptions) => new WebSocket(url, options),
+    private readonly resources = new HubResources()) {
     exactHttpsOrigin(config.canonicalOrigin);
     exactHttpsOrigin(config.gatewayOrigin);
     if (!runtime.apiKey || !runtime.deviceAssertionIssuer) {
@@ -124,7 +126,7 @@ export class CompanionBrowserBridge {
     };
     const speech = new CompanionBrowserSpeech(this.tts, value => {
       try { send(browser, JSON.stringify(value), false); } catch { close(); }
-    });
+    }, this.resources);
     const scheduleRenewal = () => {
       clearTimeout(renewalTimer);
       renewalTimer = setTimeout(() => {

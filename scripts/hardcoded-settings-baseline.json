@@ -1099,13 +1099,6 @@
     },
     {
       "file": "src/boundary/gateway/mcp/secure-fetch.ts",
-      "name": "createMcpSecureFetchController.secureFetch.connect.minVersion",
-      "value": "'TLSv1.2'",
-      "form": "object-member",
-      "note": "Code-owned transport safety floor: external MCP connections reject obsolete TLS protocol versions."
-    },
-    {
-      "file": "src/boundary/gateway/mcp/secure-fetch.ts",
       "name": "createMcpSecureFetchController.secureFetch.policy.maxRedirectHops",
       "value": "0",
       "form": "object-member",
@@ -1324,6 +1317,13 @@
       "name": "MOVE_TIMEOUT_MS",
       "value": "25_000",
       "note": "Code-owned protocol bound: the gateway waits at most this long for the hub to report a body move; derived from MAX_MOVE_WAIT_MS plus transport slack. Deferred plumbing to an owned world setting (n66dn.3 follow-up)."
+    },
+    {
+      "file": "src/boundary/gateway/pinned-address-agent.ts",
+      "name": "createPinnedAddressAgent.connect.minVersion",
+      "value": "'TLSv1.2'",
+      "form": "object-member",
+      "note": "Code-owned transport safety floor: shared pinned media/MCP connections reject obsolete TLS protocol versions. Extracted from the existing MCP transport."
     },
     {
       "file": "src/boundary/gateway/postgres-audit.ts",
@@ -2478,6 +2478,13 @@
       "file": "src/channels/backplane/http/primitives.ts",
       "name": "MIN_COMPRESSED_JSON_BYTES",
       "value": "1024"
+    },
+    {
+      "file": "src/channels/backplane/safe-remote-fetch.ts",
+      "name": "fetchRemoteResource.dispatcher.maxOrigins",
+      "value": "1",
+      "form": "object-member",
+      "note": "Code-owned SSRF boundary: each media hop owns one origin and one approved address; its dispatcher is destroyed before the next hop."
     },
     {
       "file": "src/channels/backplane/safe-remote-fetch.ts",

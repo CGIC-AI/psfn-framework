@@ -6,16 +6,20 @@
 //
 // - `evaluateUrlPolicy` in the strict default lane (HTTPS only, private hosts
 //   blocked) unless the caller explicitly relaxes it (tests only),
-// - `checkResolvedIP` on every hop so hostnames resolving to private/metadata
-//   addresses are refused,
+// - `checkResolvedIP` on every answer at every hop so mixed/private/metadata
+//   DNS snapshots are refused, and an address-pinned transport prevents rebinding,
 // - manual redirect handling with per-hop re-validation,
 // - a hard timeout via AbortController,
 // - a byte cap enforced WHILE streaming the body (never trusts content-length).
 
+import { type LookupAddress } from 'node:dns';
+import { lookup } from 'node:dns/promises';
+import { isIP } from 'node:net';
+import { errors, fetch as undiciFetch, type Response } from 'undici';
+import { createPinnedAddressAgent } from '../../boundary/gateway/pinned-address-agent.js';
 import {
   checkResolvedIP,
   evaluateUrlPolicy,
-  type DnsResolver,
   type UrlPolicyConfig,
 } from '../../boundary/gateway/url-policy.js';
 
@@ -29,8 +33,8 @@ export interface RemoteFetchOptions {
   timeoutMs?: number;
   /** URL policy override. Production callers omit this (strict default lane). */
   urlPolicy?: UrlPolicyConfig;
-  /** DNS resolver override for tests. */
-  dnsResolver?: DnsResolver;
+  /** DNS resolver override for tests; a single answer remains supported. */
+  dnsResolver?: (hostname: string) => Promise<LookupAddress | LookupAddress[]>;
 }
 
 export interface RemoteFetchResult {
@@ -44,19 +48,40 @@ export interface RemoteFetchResult {
 async function validateRemoteUrl(
   url: string,
   policy: UrlPolicyConfig,
-  dnsResolver: DnsResolver | undefined,
-): Promise<void> {
+  dnsResolver: RemoteFetchOptions['dnsResolver'],
+): Promise<string> {
   const decision = evaluateUrlPolicy(url, policy, 'default');
   if (!decision.allowed) {
     throw new Error(`Remote fetch blocked: ${decision.reason}`);
   }
   const parsed = new URL(url);
-  const resolved = await checkResolvedIP(parsed.hostname, dnsResolver, {
+  if (parsed.username || parsed.password) {
+    throw new Error('Remote fetch blocked: URL credentials are not allowed');
+  }
+  const dnsPolicy = {
     allowPrivateResolvedIp: policy.allowInternalNetwork === true,
-  });
-  if (!resolved.allowed) {
+  };
+  let answers: LookupAddress[] = [];
+  const resolved = await checkResolvedIP(parsed.hostname, async hostname => {
+    const result = await (dnsResolver ? dnsResolver(hostname) : lookup(hostname, { all: true }));
+    answers = Array.isArray(result) ? result : [result];
+    const first = answers[0];
+    if (!first) throw new Error('DNS yielded no usable address');
+    return first;
+  }, dnsPolicy);
+  if (!resolved.allowed || !resolved.address) {
     throw new Error(`Remote fetch blocked: ${resolved.reason}`);
   }
+  // Authorize the complete DNS snapshot, then connect only to its first answer.
+  // Checking outside the resolver prevents a policy denial becoming a DNS retry.
+  for (const answer of answers) {
+    if ((answer.family !== 4 && answer.family !== 6) || isIP(answer.address) !== answer.family) {
+      throw new Error('Remote fetch blocked: DNS address family mismatch');
+    }
+    const decision = await checkResolvedIP(answer.address, undefined, dnsPolicy);
+    if (!decision.allowed) throw new Error(`Remote fetch blocked: ${decision.reason}`);
+  }
+  return resolved.address;
 }
 
 async function readBodyWithCap(
@@ -88,6 +113,23 @@ async function readBodyWithCap(
   return Buffer.concat(chunks);
 }
 
+async function validateBeforeAbort(
+  url: string,
+  policy: UrlPolicyConfig,
+  dnsResolver: RemoteFetchOptions['dnsResolver'],
+  signal: AbortSignal,
+): Promise<string> {
+  signal.throwIfAborted();
+  const aborted = Promise.withResolvers<never>();
+  const onAbort = (): void => aborted.reject(signal.reason);
+  signal.addEventListener('abort', onAbort, { once: true });
+  try {
+    return await Promise.race([validateRemoteUrl(url, policy, dnsResolver), aborted.promise]);
+  } finally {
+    signal.removeEventListener('abort', onAbort);
+  }
+}
+
 /**
  * Fetch a remote HTTP(S) resource with SSRF policy checks, redirect
  * re-validation, a hard timeout, and a streaming byte cap.
@@ -116,41 +158,58 @@ export async function fetchRemoteResource(
   try {
     let currentUrl = url;
     for (let hop = 0; ; hop += 1) {
-      await validateRemoteUrl(currentUrl, policy, options.dnsResolver);
-
-      const response = await fetch(currentUrl, {
-        redirect: 'manual',
-        signal: abort.signal,
+      const address = await validateBeforeAbort(currentUrl, policy, options.dnsResolver, abort.signal);
+      const dispatcher = createPinnedAddressAgent({
+        address,
+        connectTimeoutMs: timeoutMs,
+        requestTimeoutMs: timeoutMs,
+        maxResponseBytes: options.maxBytes,
+        maxOrigins: 1,
+        connections: 1,
       });
 
-      const location = response.headers.get('location');
-      if (REDIRECT_STATUS_CODES.has(response.status) && location) {
-        await response.body?.cancel();
-        if (hop >= MAX_REDIRECT_HOPS) {
-          throw new Error(`Remote fetch exceeded ${MAX_REDIRECT_HOPS} redirect hops`);
-        }
-        let redirectUrl: string;
-        try {
-          redirectUrl = new URL(location, currentUrl).href;
-        } catch {
-          throw new Error(`Remote fetch received invalid redirect location: ${location}`);
-        }
-        currentUrl = redirectUrl;
-        continue;
-      }
+      try {
+        const response = await undiciFetch(currentUrl, {
+          // This API carries no caller headers, cookies, or redirect credentials.
+          redirect: 'manual',
+          signal: abort.signal,
+          dispatcher,
+        });
 
-      const contentType = response.headers.get('content-type');
-      if (!response.ok) {
-        await response.body?.cancel();
-        return { ok: false, status: response.status, bytes: Buffer.alloc(0), contentType };
-      }
+        const location = response.headers.get('location');
+        if (REDIRECT_STATUS_CODES.has(response.status) && location) {
+          await response.body?.cancel();
+          if (hop >= MAX_REDIRECT_HOPS) {
+            throw new Error(`Remote fetch exceeded ${MAX_REDIRECT_HOPS} redirect hops`);
+          }
+          let redirectUrl: string;
+          try {
+            redirectUrl = new URL(location, currentUrl).href;
+          } catch {
+            throw new Error(`Remote fetch received invalid redirect location: ${location}`);
+          }
+          currentUrl = redirectUrl;
+          continue;
+        }
 
-      const bytes = await readBodyWithCap(response, options.maxBytes, abort);
-      return { ok: true, status: response.status, bytes, contentType };
+        const contentType = response.headers.get('content-type');
+        if (!response.ok) {
+          await response.body?.cancel();
+          return { ok: false, status: response.status, bytes: Buffer.alloc(0), contentType };
+        }
+
+        const bytes = await readBodyWithCap(response, options.maxBytes, abort);
+        return { ok: true, status: response.status, bytes, contentType };
+      } finally {
+        await dispatcher.destroy();
+      }
     }
   } catch (error) {
     if (state.timedOut) {
       throw new Error(`Remote fetch timed out after ${timeoutMs}ms`);
+    }
+    if (error instanceof Error && error.cause instanceof errors.ResponseExceededMaxSizeError) {
+      throw new Error(`Remote fetch body too large: exceeded ${options.maxBytes} bytes`, { cause: error });
     }
     throw error;
   } finally {

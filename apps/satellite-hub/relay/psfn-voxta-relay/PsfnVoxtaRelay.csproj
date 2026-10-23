@@ -5,11 +5,13 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>PsfnVoxtaRelay</RootNamespace>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RestoreLockedMode>true</RestoreLockedMode>
   </PropertyGroup>
 
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
-    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="8.0.26" />
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="[8.0.32]" />
     <PackageReference Include="NAudio" Version="2.2.1" />
   </ItemGroup>
 

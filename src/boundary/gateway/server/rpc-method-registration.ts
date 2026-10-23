@@ -17,6 +17,7 @@ import { registerGatewayIcpAutonomyRpc } from '../icp-autonomy-rpc.js';
 import { GatewayInlineImageRetention } from '../inline-image-retention.js';
 import { GatewayLLMRequestCancellation } from '../llm-request-cancellation.js';
 import { GatewayMcpRequestCancellation } from '../methods/mcp.js';
+import { FilesystemSearchCancellation } from '../../integrations/filesystem/search-cancellation.js';
 import { GatewayMcpInvocationAuthority } from '../mcp/invocation-authority.js';
 import type { GatewayVisionIntakeScreener } from '../intake/compose-screening.js';
 import type { PolicyConfig } from '../policy.js';
@@ -50,6 +51,7 @@ export class GatewayConnectionRpcMethods {
       | 'inlineImageRetentionByConnection'
       | 'llmRequestCancellationByConnection'
       | 'mcpRequestCancellationByConnection'
+      | 'filesystemSearchCancellationByConnection'
       | 'mcpInvocationAuthorityByConnection'
       | 'sessionHmacKeyring'
       | 'capabilityTierProvider'
@@ -118,6 +120,8 @@ export class GatewayConnectionRpcMethods {
     this.ports.llmRequestCancellationByConnection.set(conn, llmRequestCancellation);
     const mcpRequestCancellation = new GatewayMcpRequestCancellation();
     this.ports.mcpRequestCancellationByConnection.set(conn, mcpRequestCancellation);
+    const filesystemSearchCancellation = new FilesystemSearchCancellation();
+    this.ports.filesystemSearchCancellationByConnection.set(conn, filesystemSearchCancellation);
     const mcpInvocationAuthority = new GatewayMcpInvocationAuthority();
     this.ports.mcpInvocationAuthorityByConnection.set(conn, mcpInvocationAuthority);
     const resolveWorkspacePath = (): string => this.ports.connectionScope.resolveConnectionWorkspacePath(conn);
@@ -135,6 +139,7 @@ export class GatewayConnectionRpcMethods {
       llmProvider: this.ports.options.llmProvider,
       llmRequestCancellation,
       mcpRequestCancellation,
+      filesystemSearchCancellation,
       mcpInvocationAuthority,
       embeddingService: this.ports.options.embeddingService,
       ...(this.ports.options.modelDiscovery ? { modelDiscovery: this.ports.options.modelDiscovery } : {}),

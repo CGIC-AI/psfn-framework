@@ -24,6 +24,15 @@ import {
   readUtf8TextFilePage,
   readUtf8TextFilePageFromHandle,
 } from './text-file-paging.js';
+import {
+  MAX_PREVIEW_CHARS,
+  MAX_SEARCH_LINE_CHARS,
+  RegexSearch,
+  SearchAbortedError,
+  SearchBudgetExceededError,
+  SEARCH_TIME_BUDGET_MS,
+} from './regex-search.js';
+export { SearchBudgetExceededError } from './regex-search.js';
 
 const DEFAULT_LIST_GLOB = '**/*';
 const DEFAULT_DIRECTORY_LIST_GLOB = '*';
@@ -40,32 +49,11 @@ const DEFAULT_SEARCH_MAX_BYTES_PER_FILE = 40_000;
 const MAX_SEARCH_MAX_BYTES_PER_FILE = 200_000;
 const DEFAULT_SEARCH_CONTEXT_LINES = 0;
 const MAX_SEARCH_CONTEXT_LINES = 2;
-const MAX_PREVIEW_CHARS = 500;
-
-// ── fs.search ReDoS containment (nw90) ──
-//
-// Agent-supplied regex patterns run in the gateway event loop. A single
-// catastrophically-backtracking regex (e.g. `(a+)+$` against `aaaa…b`) can
-// pin the loop for the whole scan. Without a native RE2 dependency we bound
-// the blast radius three ways:
-//   (a) reject the classic nested-unbounded-quantifier ReDoS signature up
-//       front (cheap static lint — a genuinely pathological regex never runs);
-//   (b) cap the length of each line handed to the regex, so no single exec can
-//       chew through a megabyte-long line;
-//   (c) enforce a wall-clock budget checked between lines/files and yield to
-//       the event loop periodically, so a slow-but-not-nested pattern is
-//       aborted with a clear error instead of hanging.
-const MAX_SEARCH_LINE_CHARS = 8_192;
+// Regex compilation and matching run in a killable worker. This lint remains
+// an early rejection aid; isolation enforces the deadline for all accepted JS
+// patterns, including signatures this deliberately small lint cannot detect.
 const MAX_SEARCH_REGEX_PATTERN_CHARS = 1_000;
-const SEARCH_TIME_BUDGET_MS = 2_000;
 const SEARCH_YIELD_INTERVAL = 256;
-
-export class SearchBudgetExceededError extends Error {
-  constructor() {
-    super('fs search budget exceeded: pattern took too long to evaluate and was aborted');
-    this.name = 'SearchBudgetExceededError';
-  }
-}
 
 export class UnsafeSearchRegexError extends Error {
   constructor(detail: string) {
@@ -78,16 +66,18 @@ interface SearchBudget {
   readonly deadline: number;
   readonly now: () => number;
   ticks: number;
+  readonly signal?: AbortSignal;
 }
 
-function createSearchBudget(now: () => number = Date.now): SearchBudget {
-  return { deadline: now() + SEARCH_TIME_BUDGET_MS, now, ticks: 0 };
+function createSearchBudget(now: () => number = () => performance.now(), signal?: AbortSignal): SearchBudget {
+  return { deadline: now() + SEARCH_TIME_BUDGET_MS, now, ticks: 0, signal };
 }
 
 // Cooperative checkpoint: abort past the wall-clock budget, and hand the event
 // loop back every SEARCH_YIELD_INTERVAL checkpoints so a slow scan cannot
 // monopolize it for the entire duration.
 async function checkpointSearchBudget(budget: SearchBudget): Promise<void> {
+  if (budget.signal?.aborted) throw new SearchAbortedError();
   budget.ticks += 1;
   if (budget.now() > budget.deadline) {
     throw new SearchBudgetExceededError();
@@ -348,27 +338,23 @@ function normalizeSearchPreview(lines: string[], lineIndex: number, contextLines
   return `${preview.slice(0, MAX_PREVIEW_CHARS)}\n... (truncated)`;
 }
 
-async function collectLineMatches(
+async function collectLiteralLineMatches(
   path: string,
   content: string,
   query: string,
-  mode: FilesystemSearchMode,
   contextLines: number,
   remainingMatches: number,
   budget: SearchBudget,
 ): Promise<FilesystemSearchMatch[]> {
   const lines = content.split('\n');
   const matches: FilesystemSearchMatch[] = [];
-  const regex = mode === 'regex'
-    ? new RegExp(query, 'g')
-    : new RegExp(escapeRegExp(query), 'g');
+  const regex = new RegExp(escapeRegExp(query), 'g');
 
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
     await checkpointSearchBudget(budget);
     regex.lastIndex = 0;
     const rawLine = lines[lineIndex] ?? '';
-    // Cap the slice handed to the regex so no single exec can scan an
-    // unbounded-length line (nw90 mitigation (b)).
+    // Preserve the same bounded line view for literal and regex modes.
     const line = rawLine.length > MAX_SEARCH_LINE_CHARS
       ? rawLine.slice(0, MAX_SEARCH_LINE_CHARS)
       : rawLine;
@@ -504,18 +490,27 @@ export async function searchWorkspaceFiles(root: string, options: FilesystemSear
 
   const mode = normalizeSearchMode(options.mode);
   if (mode === 'regex') {
-    // Reject the classic exponential-ReDoS signature before compiling or
-    // scanning — a genuinely pathological pattern never reaches the engine.
     assertSafeSearchRegex(query);
-    try {
-      // Compile once so invalid patterns fail closed before scanning files.
-      new RegExp(query, 'g');
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`fs search regex is invalid: ${message}`);
-    }
   }
+  const budget = createSearchBudget(options.now, options.signal);
+  await checkpointSearchBudget(budget);
+  const regex = mode === 'regex' ? new RegexSearch(options.signal) : undefined;
+  try {
+    await regex?.compile(query);
+    return await scanWorkspaceFiles(root, options, query, mode, budget, regex);
+  } finally {
+    await regex?.close();
+  }
+}
 
+async function scanWorkspaceFiles(
+  root: string,
+  options: FilesystemSearchOptions,
+  query: string,
+  mode: FilesystemSearchMode,
+  budget: SearchBudget,
+  regex?: RegexSearch,
+): Promise<FilesystemSearchResult> {
   const normalizedGlob = normalizeSearchGlob(options);
 
   const maxMatches = clampFiniteInteger(options.maxMatches, DEFAULT_SEARCH_MAX_MATCHES, 1, MAX_SEARCH_MAX_MATCHES);
@@ -563,7 +558,6 @@ export async function searchWorkspaceFiles(root: string, options: FilesystemSear
   const matches: FilesystemSearchMatch[] = [];
   const truncatedFiles: string[] = [];
   let scannedFiles = 0;
-  const budget = createSearchBudget(options.now);
 
   for (const [index, candidate] of candidates.entries()) {
     await checkpointSearchBudget(budget);
@@ -608,15 +602,16 @@ export async function searchWorkspaceFiles(root: string, options: FilesystemSear
       break;
     }
 
-    const fileMatches = await collectLineMatches(
-      path,
-      readResult.content,
-      query,
-      mode,
-      contextLines,
-      remainingMatches,
-      budget,
-    );
+    const fileMatches = regex
+      ? await regex.match(path, readResult.content, contextLines, remainingMatches)
+      : await collectLiteralLineMatches(
+        path,
+        readResult.content,
+        query,
+        contextLines,
+        remainingMatches,
+        budget,
+      );
     matches.push(...fileMatches);
     if (matches.length >= maxMatches) {
       break;
@@ -625,6 +620,7 @@ export async function searchWorkspaceFiles(root: string, options: FilesystemSear
 
   // Linearization point for the returned result: a quarantine transition at
   // any point after the batch verdict invalidates the whole scan fail-closed.
+  await checkpointSearchBudget(budget);
   assertReadScreeningCurrent();
   return {
     query,

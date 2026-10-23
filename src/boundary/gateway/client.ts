@@ -1549,8 +1549,11 @@ export class GatewayClient implements
     }) as FsListResult;
   }
 
-  async fsSearch(params: FsSearchParams): Promise<FsSearchResult> {
-    return await this.transportRuntime.request('fs.search', params) as FsSearchResult;
+  async fsSearch(params: FsSearchParams & { signal?: AbortSignal }): Promise<FsSearchResult> {
+    const { signal, ...request } = params;
+    return signal
+      ? await this.requestWithAbortSignal<FsSearchResult>('fs.search', request, signal, 'fs')
+      : await this.transportRuntime.request<FsSearchResult>('fs.search', request);
   }
 
   async fsEdit(params: FsEditParams): Promise<FsEditResult> {
@@ -1781,7 +1784,7 @@ export class GatewayClient implements
     method: string,
     params: Record<string, unknown>,
     signal?: AbortSignal,
-    remoteCancellation?: 'llm' | 'mcp',
+    remoteCancellation?: 'llm' | 'mcp' | 'fs',
   ): Promise<T> {
     return await this.transportRuntime.requestWithAbortSignal<T>(
       method,

@@ -141,6 +141,7 @@ and infrastructure inventory remain external to this public repository.
 - [`docs/security/context-envelope.md`](./docs/security/context-envelope.md) — privacy classification
 - [`docs/runtime/chat-turn-lifecycle.md`](./docs/runtime/chat-turn-lifecycle.md) — anatomy of a turn
 - [`docs/runtime/tool-surface.md`](./docs/runtime/tool-surface.md) — canonical model-facing tools
+- [`docs/security/filesystem-search.md`](./docs/security/filesystem-search.md) — filesystem search compatibility, limits, and cancellation
 - [`docs/operator/multi-companion.md`](./docs/operator/multi-companion.md) — fleet topology
 - [`docs/apps/satellite-hub.md`](./docs/apps/satellite-hub.md) — Satellite Hub (ESPHome + realtime; not gateway Wyoming)
 - [`docs/tools/evals.md`](./docs/tools/evals.md) — offline eval toolkit

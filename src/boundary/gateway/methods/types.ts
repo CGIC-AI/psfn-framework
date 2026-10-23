@@ -52,6 +52,7 @@ import type { GatewaySystemDataWriterPort } from '../system-data-writer.js';
 import type { McpGatewayBroker } from '../mcp/broker.js';
 import type { GatewayMcpInvocationAuthority } from '../mcp/invocation-authority.js';
 import type { PersonaMutationAttemptGuard } from '../persona-mutation-attempt-guard.js';
+import type { FilesystemSearchCancellation } from '../../integrations/filesystem/search-cancellation.js';
 
 /**
  * Gateway-created authority passed to a shard backend executor only after the
@@ -74,6 +75,7 @@ export type ShardBackendExecutor = (
 
 export interface GatewayMethodRuntime {
   target: JSONRPCServerAndClient;
+  filesystemSearchCancellation?: FilesystemSearchCancellation;
   llmProvider: LLMProviderPort;
   /** Cancellable provider calls owned exclusively by this authenticated connection. */
   llmRequestCancellation: GatewayLLMRequestCancellation;

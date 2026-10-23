@@ -32,6 +32,7 @@ import { createCompanionDisplayIdentityResolver } from '../../shared/companion-d
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { GatewayLLMRequestCancellation } from './llm-request-cancellation.js';
 import { GatewayMcpRequestCancellation } from './methods/mcp.js';
+import type { FilesystemSearchCancellation } from '../integrations/filesystem/search-cancellation.js';
 import { GatewayMcpInvocationAuthority } from './mcp/invocation-authority.js';
 import type { PolicyConfig } from './policy.js';
 import {
@@ -114,6 +115,8 @@ export type {
 // ── Gateway Server Class ──
 
 export class GatewayServer {
+  private readonly filesystemSearchCancellationByConnection = new Map<GatewayRpcConnection, FilesystemSearchCancellation>();
+  private stopping = false;
   private rpcServer: net.Server | https.Server | null = null;
   private readonly connections = new Set<GatewayRpcConnection>();
   private readonly rpcClients = new Map<GatewayRpcConnection, JSONRPCServerAndClient>();
@@ -210,6 +213,7 @@ export class GatewayServer {
       inlineImageRetentionByConnection: this.inlineImageRetentionByConnection,
       llmRequestCancellationByConnection: this.llmRequestCancellationByConnection,
       mcpRequestCancellationByConnection: this.mcpRequestCancellationByConnection,
+      filesystemSearchCancellationByConnection: this.filesystemSearchCancellationByConnection,
       mcpInvocationAuthorityByConnection: this.mcpInvocationAuthorityByConnection,
       sessionHmacKeyring: this.sessionHmacKeyring,
       capabilityTierProvider: this.capabilityTierProvider,
@@ -570,6 +574,7 @@ export class GatewayServer {
   // ── Connection management ──
 
   start(): void {
+    this.stopping = false;
     const endpoint = this.options.gatewayRpcEndpoint ?? {
       kind: 'unix' as const,
       socketPath: this.options.socketPath,
@@ -586,6 +591,10 @@ export class GatewayServer {
   }
 
   private registerConnection(conn: GatewayRpcConnection): void {
+    if (this.stopping) {
+      conn.destroy();
+      return;
+    }
     log.info('Agent connected');
     this.connections.add(conn);
     this.connectionStatuses.set(conn, {
@@ -770,6 +779,11 @@ export class GatewayServer {
     this.llmRequestCancellationByConnection.delete(conn);
     this.mcpRequestCancellationByConnection.get(conn)?.abortAll();
     this.mcpRequestCancellationByConnection.delete(conn);
+    const searches = this.filesystemSearchCancellationByConnection.get(conn);
+    // Retain an in-flight close so a concurrent server shutdown also joins it.
+    void searches?.close().then(() => {
+      this.filesystemSearchCancellationByConnection.delete(conn);
+    });
     this.mcpInvocationAuthorityByConnection.get(conn)?.clear();
     this.mcpInvocationAuthorityByConnection.delete(conn);
     const companionId = status?.companionId ?? this.options.companionId;
@@ -874,6 +888,9 @@ export class GatewayServer {
   }
 
   async stop(): Promise<void> {
+    this.stopping = true;
+    await Promise.all([...this.filesystemSearchCancellationByConnection.values()].map(searches => searches.close()));
+    this.filesystemSearchCancellationByConnection.clear();
     for (const retention of this.inlineImageRetentionByConnection.values()) {
       retention.clear();
     }

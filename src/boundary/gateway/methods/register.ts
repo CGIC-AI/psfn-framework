@@ -38,6 +38,10 @@ export function registerAuditedDescriptors(
 export function registerGatedDescriptors(
   runtime: GatewayMethodRuntime,
   descriptors: ReadonlyArray<GatedMethodDescriptor>,
+  wrapDispatch?: (
+    method: string,
+    dispatch: (params: unknown) => Promise<unknown>,
+  ) => (params: unknown) => Promise<unknown>,
 ): void {
   const approvalBoundary = (runtime as Partial<GatewayMethodRuntime>).approvalBoundary;
   if (!approvalBoundary || typeof approvalBoundary.gate !== 'function') {
@@ -80,22 +84,20 @@ export function registerGatedDescriptors(
   };
 
   for (const descriptor of descriptors) {
-    runtime.target.addMethod(
-      descriptor.name,
-      gateMethod({
-        method: descriptor.name,
-        handler: (params: unknown) => descriptor.handler(params, runtime),
-        prepareParams: descriptor.decode,
-        paramsSummary: descriptor.summary,
-        authenticatedCompanionId: runtime.authenticatedCompanionId,
-        approvalAction: descriptor.approvalAction,
-        approvalScope: descriptor.approvalScope,
-        approvalReason: descriptor.approvalReason,
-        ...(descriptor.prePolicyGuard
-          ? { prePolicyGuard: (params: unknown) => descriptor.prePolicyGuard!(params, runtime) }
-          : {}),
-        policyConfigProvider: () => runtime.policyConfig,
-      }),
-    );
+    const dispatch = gateMethod({
+      method: descriptor.name,
+      handler: (params: unknown) => descriptor.handler(params, runtime),
+      prepareParams: descriptor.decode,
+      paramsSummary: descriptor.summary,
+      authenticatedCompanionId: runtime.authenticatedCompanionId,
+      approvalAction: descriptor.approvalAction,
+      approvalScope: descriptor.approvalScope,
+      approvalReason: descriptor.approvalReason,
+      ...(descriptor.prePolicyGuard
+        ? { prePolicyGuard: (params: unknown) => descriptor.prePolicyGuard!(params, runtime) }
+        : {}),
+      policyConfigProvider: () => runtime.policyConfig,
+    });
+    runtime.target.addMethod(descriptor.name, wrapDispatch?.(descriptor.name, dispatch) ?? dispatch);
   }
 }

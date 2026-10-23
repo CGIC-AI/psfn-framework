@@ -3446,6 +3446,21 @@ describe('GatewayClient filesystem RPC wrappers', () => {
     client = new GatewayClient(conn.conn, 1024);
   });
 
+  it('forwards caller abort to its exact fs.search without serializing the signal', async () => {
+    const controller = new AbortController();
+    const search = client.fsSearch({ query: '^(a|aa)+$', mode: 'regex', signal: controller.signal });
+    const request = conn.sent[0] as { id: number; params: Record<string, unknown> };
+    expect(request.params).toEqual({
+      query: '^(a|aa)+$', mode: 'regex', cancellationId: expect.any(String),
+    });
+    controller.abort();
+    await expect(search).rejects.toMatchObject({ name: 'AbortError' });
+    expect(conn.sent[1]).toEqual({
+      jsonrpc: '2.0', method: 'fs.cancel', params: { cancellationId: request.params.cancellationId },
+    });
+    conn._emit({ jsonrpc: '2.0', id: request.id, error: { code: -32000, message: 'fs search aborted' } });
+  });
+
   it('routes filesystem methods with typed payloads', async () => {
     const readPromise = client.fsReadDetailed('notes.txt', { maxBytes: 12, offsetBytes: 24 });
     const readReq = conn.sent[0] as { id: number; method: string; params: Record<string, unknown> };

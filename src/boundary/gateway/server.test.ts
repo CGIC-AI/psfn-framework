@@ -106,7 +106,7 @@ async function setupServerConnection(
   let onConnectionCb: ((conn: GatewayRpcConnection) => void) | null = null;
   mockedCreateSocketServer.mockImplementation((_path, cb) => {
     onConnectionCb = cb;
-    return fromAny({ close: vi.fn(), listen: vi.fn() });
+    return fromAny({ close: vi.fn((callback?: () => void) => callback?.()), listen: vi.fn() });
   });
   server.start();
   const conn = createMockConnection(onSend);
@@ -934,6 +934,82 @@ describe('GatewayServer', () => {
       expect(editResponse.result).toEqual({ success: true, replacements: 1 });
       expect(readFileSync(join(workspace, 'notes.txt'), 'utf-8')).toBe('alpha\ngamma\nalpha\n');
     } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it('cancels only the owning connection fs.search and joins workers during shutdown', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'gw-fs-search-cancel-'));
+    writeFileSync(join(workspace, 'hostile.txt'), `${'a'.repeat(8_191)}!`);
+    writeFileSync(join(workspace, 'healthy.txt'), 'healthy');
+    const options = { ...createMinimalOptions(), policyConfig: { workspacePath: workspace } };
+    const first = await setupServerConnection(options);
+    const acceptFirst = mockedCreateSocketServer.mock.calls.at(-1)![1];
+    const second = await setupServerConnection(options);
+    const cancellationId = '11111111-1111-4111-8111-111111111112';
+    try {
+      first.conn._emit({
+        jsonrpc: '2.0', id: 1100, method: 'fs.search',
+        params: { query: '^(a|aa)+$', mode: 'regex', glob: 'hostile.txt', cancellationId },
+      });
+      await new Promise(resolve => setTimeout(resolve, 100));
+      const stranger = await invokeRpc(second.conn, 1101, 'fs.cancel', { cancellationId });
+      expect(stranger.result).toEqual({ cancelled: false });
+      const owner = await invokeRpc(first.conn, 1102, 'fs.cancel', { cancellationId });
+      expect(owner.result).toEqual({ cancelled: true });
+      await vi.waitFor(() => {
+        expect(first.conn.sent).toContainEqual(expect.objectContaining({
+          id: 1100, error: expect.objectContaining({ message: 'fs search aborted' }),
+        }));
+      });
+      const healthy = await invokeRpc(first.conn, 1103, 'fs.search', {
+        query: 'healthy', mode: 'regex', glob: 'healthy.txt',
+      });
+      expect(healthy.result.matches).toHaveLength(1);
+
+      first.conn._emit({
+        jsonrpc: '2.0', id: 1104, method: 'fs.search',
+        params: { query: 'healthy', mode: 'regex', glob: 'healthy.txt', cancellationId },
+      });
+      const immediateCancel = await invokeRpc(first.conn, 1105, 'fs.cancel', { cancellationId });
+      expect(immediateCancel.result).toEqual({ cancelled: true });
+      await vi.waitFor(() => {
+        expect(first.conn.sent).toContainEqual(expect.objectContaining({
+          id: 1104, error: expect.objectContaining({ message: 'fs search aborted' }),
+        }));
+      });
+
+      first.conn._emit({
+        jsonrpc: '2.0', id: 1106, method: 'fs.search',
+        params: { query: '^(a|aa)+$', mode: 'regex', glob: 'hostile.txt' },
+      });
+      await new Promise(resolve => setTimeout(resolve, 100));
+      const stopped = Date.now();
+      const stopping = first.server.stop();
+      const lateConnection = createMockConnection();
+      acceptFirst(lateConnection.conn);
+      expect.soft(lateConnection.conn.destroyed).toBe(true);
+      await stopping;
+      expect(lateConnection.conn.destroyed).toBe(true);
+      expect(Date.now() - stopped).toBeLessThan(1_000);
+      expect(first.conn.sent).toContainEqual(expect.objectContaining({
+        id: 1106, error: expect.objectContaining({ message: 'fs search aborted' }),
+      }));
+
+      second.conn._emit({
+        jsonrpc: '2.0', id: 1107, method: 'fs.search',
+        params: { query: '^(a|aa)+$', mode: 'regex', glob: 'hostile.txt' },
+      });
+      await new Promise(resolve => setTimeout(resolve, 100));
+      second.conn._emitClose();
+      const disconnected = Date.now();
+      await second.server.stop();
+      expect(Date.now() - disconnected).toBeLessThan(1_000);
+      expect(second.conn.sent).toContainEqual(expect.objectContaining({
+        id: 1107, error: expect.objectContaining({ message: 'fs search aborted' }),
+      }));
+    } finally {
+      await Promise.all([first.server.stop(), second.server.stop()]);
       rmSync(workspace, { recursive: true, force: true });
     }
   });

@@ -23,6 +23,7 @@ import type { ApprovalBoundaryService } from '../approval-boundary.js';
 import type { GatewayInlineImageRetention } from '../inline-image-retention.js';
 import type { GatewayLLMRequestCancellation } from '../llm-request-cancellation.js';
 import type { GatewayMcpRequestCancellation } from '../methods/mcp.js';
+import type { FilesystemSearchCancellation } from '../../integrations/filesystem/search-cancellation.js';
 import type { GatewayMcpInvocationAuthority } from '../mcp/invocation-authority.js';
 import type { GatewayShardWorkloadRegistrar } from '../shard-workload-registrar.js';
 import type { SessionHmacKeyring } from '../../../persistence/journals/journal-utils.js';
@@ -51,6 +52,7 @@ export interface GatewayServerPorts {
   readonly inlineImageRetentionByConnection: Map<GatewayRpcConnection, GatewayInlineImageRetention>;
   readonly llmRequestCancellationByConnection: Map<GatewayRpcConnection, GatewayLLMRequestCancellation>;
   readonly mcpRequestCancellationByConnection: Map<GatewayRpcConnection, GatewayMcpRequestCancellation>;
+  readonly filesystemSearchCancellationByConnection: Map<GatewayRpcConnection, FilesystemSearchCancellation>;
   readonly mcpInvocationAuthorityByConnection: Map<GatewayRpcConnection, GatewayMcpInvocationAuthority>;
   readonly sessionHmacKeyring: SessionHmacKeyring;
   readonly capabilityTierProvider: (companionId?: string) => CapabilityTier;

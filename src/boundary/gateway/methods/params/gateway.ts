@@ -161,7 +161,7 @@ export const gatewayOperationalParamDecoders = {
     query: Type.String(), glob: optionalString,
     mode: Type.Optional(enumSchema(['literal', 'regex'])),
     maxMatches: optionalNumber, maxFiles: optionalNumber, maxBytesPerFile: optionalNumber,
-    contextLines: optionalNumber,
+    contextLines: optionalNumber, cancellationId: optionalString,
   })),
   'fs.edit': gatewayDecoder('fs.edit', strictObject({
     path: Type.String(), oldText: Type.String(), newText: Type.String(), replaceAll: optionalBoolean,

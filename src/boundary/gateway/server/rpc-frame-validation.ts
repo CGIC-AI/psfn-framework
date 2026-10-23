@@ -1,17 +1,11 @@
-// JSON-RPC frame shape validation and bounded frame previews for gateway audits.
+// JSON-RPC frame shape validation; diagnostics never retain frame content.
 import { isRecord } from '../../../shared/utils/types.js';
+import { GatewayRpcFrameSizeError } from '../transport-framing.js';
 
-const FRAME_PREVIEW_LIMIT = 200;
-
-export function normalizeNdjsonFrameError(error: unknown): { reason: string; preview?: string } {
-  const reason = error instanceof Error ? error.message : 'Malformed NDJSON frame received';
-  if (isRecord(error)) {
-    const previewValue = error.preview;
-    if (typeof previewValue === 'string' && previewValue.trim()) {
-      return { reason, preview: summarizeFramePreview(previewValue) };
-    }
-  }
-  return { reason };
+export function normalizeNdjsonFrameError(error: unknown): { reason: string } {
+  return { reason: error instanceof GatewayRpcFrameSizeError
+    ? 'Gateway RPC frame exceeds the UTF-8 byte limit'
+    : 'Malformed transport frame received' };
 }
 
 export function validateJsonRpcFrame(message: unknown): string | null {
@@ -71,23 +65,4 @@ function isValidJsonRpcError(value: unknown): boolean {
     && Number.isFinite(value.code)
     && typeof value.message === 'string'
     && value.message.trim().length > 0;
-}
-
-export function summarizeFramePreview(message: unknown): string {
-  if (typeof message === 'string') {
-    return truncateFramePreview(message.trim());
-  }
-  try {
-    const serialized = JSON.stringify(message);
-    return truncateFramePreview(typeof serialized === 'string' ? serialized : String(message));
-  } catch {
-    return truncateFramePreview(String(message));
-  }
-}
-
-function truncateFramePreview(value: string): string {
-  if (value.length <= FRAME_PREVIEW_LIMIT) {
-    return value;
-  }
-  return `${value.slice(0, FRAME_PREVIEW_LIMIT)}... (${value.length} chars)`;
 }

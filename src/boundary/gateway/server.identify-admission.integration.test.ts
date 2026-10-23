@@ -186,7 +186,7 @@ describe('gateway identify admission (multi-companion)', () => {
     const error = await rejected(worker, { jsonrpc: '2.0', id: 2, method: 'llm.embed', params: { texts: ['x'] } });
     expect(error).toEqual({
       code: GatewayErrors.CONNECTION_ROLE_DENIED,
-      message: 'Gateway role "internal_session_integrity" is not authorized for llm.embed',
+      message: 'Gateway role "internal_session_integrity" is not authorized for this method',
     });
     expectAlarmBeforeError(harness, 'connection_role_denied', 2);
   });
@@ -226,7 +226,7 @@ describe('gateway identify admission (multi-companion)', () => {
     expectAlarmBeforeError(harness, 'identify_auth_failed', 7);
   });
 
-  it('alarms identify_rebind_rejected and keeps the original binding when a bound connection re-identifies', async () => {
+  it('alarms identify_rebind_rejected and closes the binding when a bound connection changes identity', async () => {
     const harness = setup();
     const conn = harness.connect();
     conn.emit(signedIdentify(8, 'agent', A));
@@ -236,11 +236,14 @@ describe('gateway identify admission (multi-companion)', () => {
     expect(rebind.message).toBe('Gateway connection is already identified and cannot change role or companion identity');
     expectAlarmBeforeError(harness, 'identify_rebind_rejected', 9);
 
-    const roleChange = await rejected(conn, signedIdentify(10, 'internal_session_integrity', A));
+    const replacement = harness.connect();
+    replacement.emit(signedIdentify(10, 'agent', A));
+    await replacement.response(10);
+    const roleChange = await rejected(replacement, signedIdentify(20, 'internal_session_integrity', A));
     expect(roleChange.message).toBe('Gateway connection is already identified and cannot change role or companion identity');
-    expectAlarmBeforeError(harness, 'identify_rebind_rejected', 10);
+    expectAlarmBeforeError(harness, 'identify_rebind_rejected', 20);
 
-    expect(harness.server.getFleetConnectionSnapshot().connections.map(entry => entry.companionId)).toEqual([A]);
+    expect(harness.server.getFleetConnectionSnapshot().connections).toEqual([]);
   });
 
   it('keeps exact idempotent re-identify successful without an alarm', async () => {
@@ -260,13 +263,13 @@ describe('gateway identify admission (multi-companion)', () => {
     conn.emit(signedIdentify(14, 'agent', B));
     const [first, second] = await Promise.all([conn.response(13), conn.response(14)]);
 
-    expect(first.result).toEqual({ success: true, role: 'agent', companionId: A });
+    expect(first.error).toBeDefined();
     expect(second.error).toEqual({
       code: expect.any(Number),
       message: 'Gateway connection already has an identify request in flight; concurrent identify rejected',
     });
     expectAlarmBeforeError(harness, 'identify_concurrent_rejected', 14);
-    expect(harness.server.getFleetConnectionSnapshot().connections.map(entry => entry.companionId)).toEqual([A]);
+    expect(harness.server.getFleetConnectionSnapshot().connections).toEqual([]);
   });
 
   it('rejects a session-integrity identify racing a pending agent identify on the same connection', async () => {
@@ -276,18 +279,12 @@ describe('gateway identify admission (multi-companion)', () => {
     conn.emit(signedIdentify(16, 'internal_session_integrity', B));
     const [first, second] = await Promise.all([conn.response(15), conn.response(16)]);
 
-    expect(first.result).toEqual({ success: true, role: 'agent', companionId: A });
+    expect(first.error).toBeDefined();
     expect(second.error?.message).toBe(
       'Gateway connection already has an identify request in flight; concurrent identify rejected',
     );
-    // The connection stays an agent for A: signing methods remain denied.
-    const signing = await rejected(conn, {
-      jsonrpc: '2.0',
-      id: 17,
-      method: 'session.hmac.sign',
-      params: { entry: { type: 'message', id: 1 }, previousHmac: null },
-    });
-    expect(signing.code).toBe(GatewayErrors.CONNECTION_ROLE_DENIED);
+    // Failure releases the connection and cannot leave a signing identity.
+    expect(harness.server.getFleetConnectionSnapshot().connections).toEqual([]);
   });
 
   it('does not bind a connection that closed while its identify was pending', async () => {

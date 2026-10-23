@@ -2,13 +2,16 @@ import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import * as net from 'node:net';
+import * as https from 'node:https';
+import * as tls from 'node:tls';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import type { AddressInfo, Server as NetServer } from 'node:net';
 import type { Server as HttpsServer } from 'node:https';
-import { WebSocket } from 'ws';
+import { WebSocket, WebSocketServer } from 'ws';
 import { describe, it, expect, vi } from 'vitest';
+import { logger } from '../../shared/logger.js';
 import {
   computeReconnectDelayMs,
   createSocketClient,
@@ -22,10 +25,21 @@ import {
   type GatewayRpcConnection,
   type GatewayRpcTlsFileConfig,
 } from './transport.js';
+import { GatewayRpcSocketAdmission } from './transport-admission.js';
 
 const GATEWAY_SPIFFE_URI = 'spiffe://cluster.local/psfn/gateway';
 const AGENT_SPIFFE_URI = 'spiffe://cluster.local/psfn/agent/test-companion';
 const OTHER_AGENT_SPIFFE_URI = 'spiffe://cluster.local/psfn/agent/other-companion';
+// Protocol acceptance cases deliberately pin the reviewed limit independently.
+const FRAME_BUDGET_BYTES = 64 * 1024 * 1024;
+
+function budgetRequest(bytes: number, character = 'x'): { jsonrpc: string; id: string; method: string; params: string } {
+  const frame = { jsonrpc: '2.0', id: 'budget', method: 'gateway.test', params: '' };
+  const payloadBytes = bytes - Buffer.byteLength(JSON.stringify(frame));
+  const characterBytes = Buffer.byteLength(character);
+  frame.params = character.repeat(Math.floor(payloadBytes / characterBytes)) + 'x'.repeat(payloadBytes % characterBytes);
+  return frame;
+}
 
 async function sleep(ms: number): Promise<void> {
   await new Promise(resolve => setTimeout(resolve, ms));
@@ -250,6 +264,7 @@ function loadRawWebSocketTlsOptions(tls: GatewayRpcTlsFileConfig): WebSocket.Cli
 async function createWssHarness(
   onConnection: (conn: GatewayRpcConnection) => void,
   selectServerTls: (fixture: GatewayRpcTlsFixture) => GatewayRpcTlsFileConfig = fixture => fixture.serverTls,
+  connectionLimits?: { total: number },
 ): Promise<{
   server: HttpsServer;
   url: string;
@@ -262,6 +277,7 @@ async function createWssHarness(
     port: 0,
     path: '/rpc',
     tls: selectServerTls(fixture),
+    connectionLimits,
   }, onConnection);
   await once(server, 'listening');
   const address = server.address() as AddressInfo;
@@ -270,6 +286,7 @@ async function createWssHarness(
     url: `wss://localhost:${address.port}/rpc`,
     fixture,
     close: async () => {
+      GatewayRpcSocketAdmission.closeServer(server);
       await closeServer(server);
       fixture.cleanup();
     },
@@ -904,7 +921,7 @@ describe('WebSocket RPC transport', () => {
       await waitFor(() => clientClosed);
 
       expect(frameErrors[0]).toBeInstanceOf(NdjsonFramingError);
-      expect((frameErrors[0] as NdjsonFramingError).preview).toContain('"method":"bad"');
+      expect(frameErrors[0]).not.toHaveProperty('preview');
       expect(receivedMessages).toEqual([]);
     } finally {
       client.terminate();
@@ -914,7 +931,7 @@ describe('WebSocket RPC transport', () => {
 });
 
 describe('NdjsonConnection framing', () => {
-  it('releases connection, readline, and socket listeners when destroyed', async () => {
+  it('releases connection and socket listeners when destroyed', async () => {
     const socketPath = join(tmpdir(), `psfn-transport-${randomUUID()}.sock`);
     let serverConn: NdjsonConnection | null = null;
     const closeEvents: string[] = [];
@@ -930,7 +947,6 @@ describe('NdjsonConnection framing', () => {
       await waitFor(() => serverConn !== null);
       const conn = serverConn;
       const internals = conn as unknown as {
-        rl: { listenerCount(eventName: string): number };
         socket: net.Socket;
       };
 
@@ -941,7 +957,7 @@ describe('NdjsonConnection framing', () => {
       conn.on('error', () => undefined);
 
       expect(conn.listenerCount('message')).toBe(1);
-      expect(internals.rl.listenerCount('line')).toBeGreaterThan(0);
+      expect(internals.socket.listenerCount('data')).toBeGreaterThan(0);
       expect(internals.socket.listenerCount('close')).toBeGreaterThan(0);
 
       conn.destroy();
@@ -952,8 +968,9 @@ describe('NdjsonConnection framing', () => {
       expect(conn.listenerCount('message')).toBe(0);
       expect(conn.listenerCount('close')).toBe(0);
       expect(conn.listenerCount('error')).toBe(0);
-      expect(internals.rl.listenerCount('line')).toBe(0);
-      expect(internals.rl.listenerCount('error')).toBe(0);
+      expect(internals.socket.listenerCount('data')).toBe(0);
+      // net.Socket owns its readable-end lifecycle listener.
+      expect(internals.socket.listenerCount('end')).toBeLessThanOrEqual(1);
       expect(internals.socket.listenerCount('close')).toBe(0);
       expect(internals.socket.listenerCount('error')).toBe(0);
     } finally {
@@ -962,7 +979,7 @@ describe('NdjsonConnection framing', () => {
     }
   });
 
-  it('forwards readline socket errors instead of crashing the process', async () => {
+  it('forwards socket errors instead of crashing the process', async () => {
     const socketPath = join(tmpdir(), `psfn-transport-${randomUUID()}.sock`);
     let serverConn: NdjsonConnection | null = null;
     const connectionErrors: unknown[] = [];
@@ -982,9 +999,8 @@ describe('NdjsonConnection framing', () => {
         code: 'ECONNRESET',
       });
 
-      // Intentional private-property access to the internal readline interface;
-      // shoehorn cannot express property access on a hidden field (psfn-framework-aicg6.13).
-      (serverConn as any).rl.emit('error', resetError);
+      const rawSocket = (serverConn as unknown as { socket: net.Socket }).socket;
+      rawSocket.destroy(resetError);
 
       await waitFor(() => connectionErrors.length === 1);
       await waitFor(() => serverConn?.destroyed === true);
@@ -1027,10 +1043,406 @@ describe('NdjsonConnection framing', () => {
       await waitFor(() => clientClosed);
 
       expect(frameErrors[0]).toBeInstanceOf(NdjsonFramingError);
-      expect((frameErrors[0] as NdjsonFramingError).preview).toContain('"method":"bad"');
+      expect(frameErrors[0]).not.toHaveProperty('preview');
       expect(receivedMessages).toEqual([]);
     } finally {
       client.destroy();
+      await closeServer(server);
+    }
+  });
+});
+
+describe('Gateway RPC frame byte budget', () => {
+  it('terminates a persistent oversized WSS peer that never acknowledges close and releases its total slot', async () => {
+    const connections: GatewayRpcConnection[] = [];
+    const harness = await createWssHarness(conn => {
+      connections.push(conn);
+      conn.onMessage(() => {
+        conn.completeAdmission?.();
+        conn.send({ identified: true });
+      });
+      conn.on('frameError', () => conn.destroy());
+    }, fixture => fixture.serverTls, { total: 4 });
+    const peers: WebSocket[] = [];
+    try {
+      for (let index = 0; index < 4; index += 1) {
+        const peer = await openRawWebSocket(harness.url, GATEWAY_RPC_WS_PROTOCOL, harness.fixture.clientTls);
+        peers.push(peer);
+        const identified = once(peer, 'message');
+        peer.send('{"jsonrpc":"2.0","id":1,"method":"gateway.client.identify"}');
+        await identified;
+      }
+      await expect(openRawWebSocket(harness.url, GATEWAY_RPC_WS_PROTOCOL, harness.fixture.clientTls)).rejects.toThrow();
+      const stubborn = peers[0];
+      stubborn.on('error', () => undefined);
+      stubborn.pause();
+      const socket = (stubborn as unknown as { _socket: net.Socket })._socket;
+      const oversizedHeader = Buffer.alloc(14);
+      oversizedHeader[0] = 0x81;
+      oversizedHeader[1] = 0xff;
+      oversizedHeader.writeBigUInt64BE(BigInt(FRAME_BUDGET_BYTES + 1), 2);
+      const serverSocket = (connections[0] as unknown as { socket: WebSocket }).socket;
+      socket.write(oversizedHeader);
+      await waitFor(() => serverSocket.readyState === WebSocket.CLOSING);
+      expect(serverSocket.readyState).not.toBe(WebSocket.CLOSED);
+      await waitFor(() => serverSocket.readyState === WebSocket.CLOSED, 6_000);
+      expect(connections[0].eventNames()).toEqual([]);
+      const recovered = await openRawWebSocket(harness.url, GATEWAY_RPC_WS_PROTOCOL, harness.fixture.clientTls);
+      peers.push(recovered);
+      const response = once(recovered, 'message');
+      recovered.send('{"jsonrpc":"2.0","id":2,"method":"gateway.client.identify"}');
+      await response;
+      expect(peers.slice(1, 4).every(peer => peer.readyState === WebSocket.OPEN)).toBe(true);
+    } finally {
+      peers.forEach(peer => peer.terminate());
+      connections.forEach(conn => conn.destroy());
+      await harness.close();
+    }
+  });
+
+  it('bounds raw TLS and partial HTTP upgrade peers before RPC registration, then recovers after timeout', async () => {
+    const accepted: GatewayRpcConnection[] = [];
+    const harness = await createWssHarness(conn => {
+      accepted.push(conn);
+      conn.onMessage(() => conn.completeAdmission?.());
+    }, fixture => fixture.serverTls, { total: 4 });
+    const port = (harness.server.address() as AddressInfo).port;
+    const raw = net.createConnection(port, '127.0.0.1');
+    const partial = tls.connect({
+      host: '127.0.0.1', port, servername: 'localhost',
+      ca: readFileSync(harness.fixture.clientTls.caPath),
+      cert: readFileSync(harness.fixture.clientTls.certPath),
+      key: readFileSync(harness.fixture.clientTls.keyPath),
+    });
+    raw.on('error', () => undefined);
+    partial.on('error', () => undefined);
+    try {
+      await once(partial, 'secureConnect');
+      partial.write('GET /rpc HTTP/1.1\r\nHost: localhost\r\nX-Partial: ');
+      const excess = net.createConnection(port, '127.0.0.1');
+      excess.on('error', () => undefined);
+      await waitFor(() => excess.destroyed);
+      expect(accepted).toHaveLength(0);
+      expect(raw.destroyed).toBe(false);
+      expect(partial.destroyed).toBe(false);
+      await waitFor(() => raw.destroyed && partial.destroyed, 6_000);
+      const healthy = await openRawWebSocket(harness.url, GATEWAY_RPC_WS_PROTOCOL, harness.fixture.clientTls);
+      healthy.send('{"jsonrpc":"2.0","id":1,"method":"test"}');
+      await waitFor(() => accepted.length === 1);
+      healthy.terminate();
+    } finally {
+      raw.destroy();
+      partial.destroy();
+      for (const conn of accepted) conn.destroy();
+      await harness.close();
+    }
+  });
+
+  it('releases raw admission after a socket error and closes pending sockets on shutdown', async () => {
+    const socketPath = join(tmpdir(), `psfn-admission-error-${randomUUID()}.sock`);
+    const connections: GatewayRpcConnection[] = [];
+    const server = createSocketServer(socketPath, conn => {
+      connections.push(conn);
+      conn.on('error', () => conn.destroy());
+    }, { connectionLimits: { total: 4 } });
+    await once(server, 'listening');
+    const peers = [net.createConnection(socketPath), net.createConnection(socketPath)];
+    peers.forEach(peer => peer.on('error', () => undefined));
+    try {
+      await waitFor(() => connections.length === 2);
+      const socket = (connections[0] as unknown as { socket: net.Socket }).socket;
+      socket.destroy(new Error('invented-sensitive-error'));
+      await waitFor(() => peers[0].destroyed);
+      const next = net.createConnection(socketPath);
+      next.on('error', () => undefined);
+      peers.push(next);
+      await waitFor(() => connections.length === 3);
+      GatewayRpcSocketAdmission.closeServer(server);
+      await waitFor(() => peers.every(peer => peer.destroyed));
+      expect(connections.every(conn => conn.destroyed)).toBe(true);
+    } finally {
+      peers.forEach(peer => peer.destroy());
+      connections.forEach(conn => conn.destroy());
+      await closeServer(server);
+    }
+  });
+
+  it('closes a fragmented multibyte WebSocket one byte over budget before application dispatch', async () => {
+    let outcome: unknown;
+    let connection: GatewayRpcConnection | undefined;
+    const errors: unknown[] = [];
+    const harness = await createWssHarness(conn => {
+      connection = conn;
+      conn.onMessage(() => { outcome = 'dispatched'; });
+      conn.on('frameError', error => errors.push(error));
+    });
+    const client = await openRawWebSocket(harness.url, GATEWAY_RPC_WS_PROTOCOL, harness.fixture.clientTls);
+    client.on('close', code => { outcome = code; });
+    try {
+      const frame = Buffer.from(JSON.stringify(budgetRequest(FRAME_BUDGET_BYTES + 1, 'é')));
+      client.send(frame.subarray(0, frame.length / 2), { binary: false, fin: false });
+      client.send(frame.subarray(frame.length / 2), { binary: false, fin: true });
+      await waitFor(() => outcome !== undefined);
+      expect(outcome).toBe(1009);
+      await waitFor(() => connection?.eventNames().length === 0);
+      expect(errors).toEqual([expect.objectContaining({ message: 'Gateway RPC frame exceeds the UTF-8 byte limit' })]);
+    } finally {
+      client.terminate();
+      await harness.close();
+    }
+  });
+
+  it('closes a slow NDJSON line when it crosses budget without waiting for newline', async () => {
+    let connection: GatewayRpcConnection | undefined;
+    const received: unknown[] = [];
+    const server = net.createServer(socket => {
+      connection = new NdjsonConnection(socket);
+      connection.onMessage(frame => received.push(frame));
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const client = net.createConnection((server.address() as AddressInfo).port, '127.0.0.1');
+    client.on('error', () => undefined);
+    await once(client, 'connect');
+    try {
+      const chunk = Buffer.alloc(64 * 1024, 'x');
+      for (let written = 0; written < FRAME_BUDGET_BYTES; written += chunk.length) {
+        if (!client.write(chunk)) await once(client, 'drain');
+        if (written % (1024 * 1024) === 0) await sleep(1);
+      }
+      client.write('x');
+      await waitFor(() => connection?.destroyed === true);
+      expect(received).toEqual([]);
+    } finally {
+      client.destroy();
+      connection?.destroy();
+      await closeServer(server);
+    }
+  });
+
+  it.each(['ndjson', 'websocket'] as const)('rejects oversized %s outbound frames atomically', async kind => {
+    const received: unknown[] = [];
+    let connection: GatewayRpcConnection;
+    let close: () => Promise<void>;
+    if (kind === 'ndjson') {
+      const socketPath = join(tmpdir(), `psfn-frame-budget-${randomUUID()}.sock`);
+      const server = createSocketServer(socketPath, conn => conn.onMessage(frame => received.push(frame)));
+      connection = await createSocketClient({ socketPath, reconnect: false });
+      close = () => closeServer(server);
+    } else {
+      const harness = await createWssHarness(conn => conn.onMessage(frame => received.push(frame)));
+      connection = await createWebSocketRpcClient({ url: harness.url, tls: harness.fixture.clientTls, reconnect: false });
+      close = () => harness.close();
+    }
+    connection.on('error', () => undefined);
+    try {
+      expect(connection.send(budgetRequest(FRAME_BUDGET_BYTES + 1))).toBe(false);
+      expect(connection.serializedTransportStats.frameCount).toBe(0);
+      expect(connection.send({ ok: true })).toBe(true);
+      await waitFor(() => received.length > 0);
+      expect(received).toEqual([{ ok: true }]);
+    } finally {
+      connection.destroy();
+      await close();
+    }
+  });
+
+  it.each(['ndjson', 'websocket'] as const)('accepts exact-budget multibyte %s frames and counts only accepted bytes', async kind => {
+    let receivedBytes = 0;
+    let connection: GatewayRpcConnection;
+    let close: () => Promise<void>;
+    let compression = '';
+    const onConnection = (conn: GatewayRpcConnection): void => {
+      conn.onMessage(frame => {
+        receivedBytes = Buffer.byteLength(JSON.stringify(frame));
+        conn.send({ acceptedBytes: receivedBytes });
+      });
+    };
+    if (kind === 'ndjson') {
+      const socketPath = join(tmpdir(), `psfn-frame-budget-${randomUUID()}.sock`);
+      const server = createSocketServer(socketPath, onConnection);
+      connection = await createSocketClient({ socketPath, reconnect: false });
+      close = () => closeServer(server);
+    } else {
+      const harness = await createWssHarness(onConnection);
+      // Request compression at the peer boundary; the production server refuses it.
+      const peer = await openRawWebSocket(harness.url, GATEWAY_RPC_WS_PROTOCOL, harness.fixture.clientTls);
+      compression = peer.extensions;
+      peer.terminate();
+      connection = await createWebSocketRpcClient({ url: harness.url, tls: harness.fixture.clientTls, reconnect: false });
+      close = () => harness.close();
+    }
+    const responses: unknown[] = [];
+    connection.onMessage(frame => responses.push(frame));
+    try {
+      expect(connection.send(budgetRequest(FRAME_BUDGET_BYTES, '☃'))).toBe(true);
+      await waitFor(() => responses.length === 1);
+      expect(receivedBytes).toBe(67_108_864);
+      expect(responses).toEqual([{ acceptedBytes: 67_108_864 }]);
+      expect(connection.serializedTransportStats).toEqual({
+        frameCount: 1,
+        serializedBytes: 67_108_864,
+        rpcCallCount: 1,
+        byMethod: { 'gateway.test': { callCount: 1, serializedBytes: 67_108_864 } },
+      });
+      expect(compression).toBe('');
+      expect(connection.sendHeartbeat()).toBe(true);
+      expect(connection.serializedTransportStats.frameCount).toBe(1);
+    } finally {
+      connection.destroy();
+      await close();
+    }
+  });
+
+  it('bounds frames received by the WSS client and leaves the next connection healthy', async () => {
+    const fixture = createGatewayRpcTlsFixture();
+    const server = https.createServer({
+      ca: readFileSync(fixture.serverTls.caPath),
+      cert: readFileSync(fixture.serverTls.certPath),
+      key: readFileSync(fixture.serverTls.keyPath),
+      requestCert: true,
+      rejectUnauthorized: true,
+    });
+    const peers = new WebSocketServer({ server });
+    let rawPeer: WebSocket | undefined;
+    peers.on('connection', peer => { rawPeer = peer; });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const url = `wss://localhost:${(server.address() as AddressInfo).port}/rpc`;
+    const client = await createWebSocketRpcClient({ url, tls: fixture.clientTls, reconnect: false });
+    const received: unknown[] = [];
+    const errors: unknown[] = [];
+    client.onMessage(frame => received.push(frame));
+    client.on('frameError', error => errors.push(error));
+    let healthy: GatewayRpcConnection | undefined;
+    try {
+      await waitFor(() => rawPeer !== undefined);
+      expect(rawPeer!.extensions).toBe('');
+      const close = once(rawPeer!, 'close');
+      rawPeer!.send(JSON.stringify(budgetRequest(FRAME_BUDGET_BYTES + 1)));
+      expect((await close)[0]).toBe(1009);
+      await waitFor(() => client.eventNames().length === 0);
+      expect(received).toEqual([]);
+      expect(errors).toHaveLength(1);
+      rawPeer = undefined;
+      healthy = await createWebSocketRpcClient({ url, tls: fixture.clientTls, reconnect: false });
+      await waitFor(() => rawPeer !== undefined);
+      const next: unknown[] = [];
+      healthy.onMessage(frame => next.push(frame));
+      rawPeer!.send('{"ok":true}');
+      await waitFor(() => next.length === 1);
+      expect(next).toEqual([{ ok: true }]);
+    } finally {
+      client.destroy();
+      healthy?.destroy();
+      for (const peer of peers.clients) peer.terminate();
+      await closeServer(server);
+      peers.close();
+      fixture.cleanup();
+    }
+  });
+
+  it('bounds repeated streaming attacks, releases listeners and keeps other NDJSON connections responsive', async () => {
+    const connections: GatewayRpcConnection[] = [];
+    const sockets: net.Socket[] = [];
+    const server = net.createServer(socket => {
+      sockets.push(socket);
+      const conn = new NdjsonConnection(socket);
+      connections.push(conn);
+      conn.onMessage(() => conn.send({ ok: true }));
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const port = (server.address() as AddressInfo).port;
+    const open = async (): Promise<net.Socket> => {
+      const peer = net.createConnection(port, '127.0.0.1');
+      peer.on('error', () => undefined);
+      await once(peer, 'connect');
+      return peer;
+    };
+    const healthy = await open();
+    const replies: string[] = [];
+    healthy.on('data', chunk => replies.push(chunk.toString()));
+    let ticks = 0;
+    let lastTick = performance.now();
+    let largestGapMs = 0;
+    const timer = setInterval(() => {
+      const now = performance.now();
+      largestGapMs = Math.max(largestGapMs, now - lastTick);
+      lastTick = now;
+      ticks += 1;
+    }, 10);
+    const baselineBuffers = process.memoryUsage().arrayBuffers;
+    let peakBuffers = baselineBuffers;
+    try {
+      const chunk = Buffer.alloc(64 * 1024, 'x');
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const attacker = await open();
+        const conn = connections.at(-1)!;
+        const socket = sockets.at(-1)!;
+        try {
+          for (let written = 0; written < FRAME_BUDGET_BYTES; written += chunk.length) {
+            if (!attacker.write(chunk)) await once(attacker, 'drain');
+            if (written % (1024 * 1024) === 0) {
+              await sleep(1);
+              peakBuffers = Math.max(peakBuffers, process.memoryUsage().arrayBuffers);
+            }
+          }
+          attacker.write('x');
+          await waitFor(() => conn.destroyed && attacker.destroyed);
+          expect(conn.eventNames()).toEqual([]);
+          expect(socket.eventNames().filter(event => event !== 'end')).toEqual([]);
+          expect(socket.listenerCount('end')).toBeLessThanOrEqual(1);
+          healthy.write('{"probe":true}\r');
+          await waitFor(() => replies.length === attempt + 1);
+          healthy.write('\n');
+        } finally {
+          attacker.destroy();
+        }
+      }
+      const fresh = await open();
+      const response = once(fresh, 'data');
+      fresh.write('{"new":true}\n');
+      expect((await response)[0].toString()).toBe('{"ok":true}\n');
+      fresh.destroy();
+      expect(ticks).toBeGreaterThan(2);
+      expect(largestGapMs).toBeLessThan(500);
+      // Allows buffer growth/copying and network queues, but not retained lines per attack.
+      expect(peakBuffers - baselineBuffers).toBeLessThan(4 * FRAME_BUDGET_BYTES);
+    } finally {
+      clearInterval(timer);
+      healthy.destroy();
+      for (const conn of connections) conn.destroy();
+      await closeServer(server);
+    }
+  });
+
+  it('keeps malformed transport logs and errors content-free', async () => {
+    const marker = 'invented-private-frame-marker';
+    const logs: unknown[] = [];
+    const capture = (entry: { component?: string }): void => {
+      if (entry.component === 'Transport') logs.push(entry);
+    };
+    logger.on('data', capture);
+    const errors: unknown[] = [];
+    const server = net.createServer(socket => {
+      const conn = new NdjsonConnection(socket);
+      conn.on('frameError', error => errors.push(error));
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const peer = net.createConnection((server.address() as AddressInfo).port, '127.0.0.1');
+    peer.on('error', () => undefined);
+    try {
+      peer.write(`{"secret":"${marker}"\n`);
+      await waitFor(() => peer.destroyed);
+      expect(errors).toHaveLength(1);
+      expect(logs.length).toBeGreaterThan(0);
+      expect(JSON.stringify(logs)).not.toContain(marker);
+      expect(JSON.stringify(errors)).not.toContain(marker);
+    } finally {
+      logger.removeListener('data', capture);
+      peer.destroy();
       await closeServer(server);
     }
   });

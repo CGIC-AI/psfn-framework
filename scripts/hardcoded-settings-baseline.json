@@ -1400,11 +1400,6 @@
       "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."
     },
     {
-      "file": "src/boundary/gateway/server/rpc-frame-validation.ts",
-      "name": "FRAME_PREVIEW_LIMIT",
-      "value": "200"
-    },
-    {
       "file": "src/boundary/gateway/session-integrity-worker-source.ts",
       "name": "SESSION_INTEGRITY_VERIFY_CACHE_MAX_ENTRIES",
       "value": "4_096"
@@ -1428,9 +1423,22 @@
       "note": "Code-owned RPC parsing ceiling that bounds untrusted display-label allocation and diagnostic amplification."
     },
     {
-      "file": "src/boundary/gateway/transport.ts",
-      "name": "FRAME_PREVIEW_LIMIT",
-      "value": "200"
+      "file": "src/boundary/gateway/transport-admission.ts",
+      "name": "GATEWAY_RPC_FIRST_FRAME_TIMEOUT_MS",
+      "value": "5_000",
+      "note": "Code-owned protocol safety deadline bounds raw socket, TLS/HTTP setup, and initial frame/identity resource retention independently of peer activity (psfn-framework-iwl12)."
+    },
+    {
+      "file": "src/boundary/gateway/transport-admission.ts",
+      "name": "GATEWAY_RPC_MAX_CONNECTIONS",
+      "value": "64",
+      "note": "Code-owned aggregate RPC resource ceiling; trusted topology may reserve fewer slots but cannot raise this fixed maximum (psfn-framework-iwl12)."
+    },
+    {
+      "file": "src/boundary/gateway/transport-framing.ts",
+      "name": "GATEWAY_RPC_MAX_FRAME_BYTES",
+      "value": "64 * 1024 * 1024",
+      "note": "Code-owned psfn-rpc-v1 UTF-8 frame safety ceiling shared by both transports and directions (psfn-framework-iwl12). A 25 MiB attachment expands to about 33.3 MiB in base64, leaving envelope headroom under 64 MiB; operator tuning cannot bypass transport admission."
     },
     {
       "file": "src/boundary/gateway/transport.ts",

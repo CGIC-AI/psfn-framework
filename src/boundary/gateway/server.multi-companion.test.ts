@@ -335,7 +335,7 @@ async function identifyAgent(
     companionId,
     authToken: deriveCompanionAuthToken(companionId, 'agent', TEST_SESSION_HMAC_KEYRING),
   });
-  await invokeRpc(conn, rpcId + 10_000, 'gateway.client.ready', {});
+  if (identified.result) await invokeRpc(conn, rpcId + 10_000, 'gateway.client.ready', {});
   return identified;
 }
 
@@ -922,7 +922,7 @@ describe('GatewayServer API readiness', () => {
 });
 
 describe('GatewayServer single-companion parity (flag off)', () => {
-  it('accepts identify with a companionId and does not reject duplicates', async () => {
+  it('accepts one agent identity and rejects a duplicate persistent role', async () => {
     const { connect } = await setupServer(createMinimalOptions());
     const connA = await connect();
     const connB = await connect();
@@ -930,7 +930,7 @@ describe('GatewayServer single-companion parity (flag off)', () => {
     const first = await identifyAgent(connA, '11111111-1111-4111-8111-111111111111', 901);
     const second = await identifyAgent(connB, '11111111-1111-4111-8111-111111111111', 902);
     expect(first.result).toEqual({ success: true, role: 'agent', companionId: '11111111-1111-4111-8111-111111111111' });
-    expect(second.result).toEqual({ success: true, role: 'agent', companionId: '11111111-1111-4111-8111-111111111111' });
+    expect(second.error.message).toBe('Gateway connection identity slot is already occupied');
   });
 
   it('keeps satellite voice on the single ready-agent path while the flag is off', async () => {
@@ -2038,7 +2038,7 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
     expect(auditAppend).toHaveBeenCalledWith(expect.objectContaining({
       method: 'gateway.companion.identity_claim_invalid',
       decision: 'DENY',
-      params: expect.objectContaining({ boundCompanionId: '11111111-1111-4111-8111-111111111111' }),
+      params: {},
     }));
   });
 });

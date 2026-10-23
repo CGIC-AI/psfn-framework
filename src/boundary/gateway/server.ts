@@ -14,6 +14,7 @@ import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { GatewayRpcConnection } from './transport.js';
 import { GatewayInlineImageRetention } from './inline-image-retention.js';
 import { createSocketServer, createWebSocketRpcServer } from './transport.js';
+import { GatewayRpcSocketAdmission } from './transport-admission.js';
 import {
   type RuntimeHealthResult,
   type OperatorAlertResult,
@@ -29,7 +30,6 @@ import type { ChannelPluginAccountRoute } from '../../channels/plugins/types.js'
 import type { SessionHmacKeyring } from '../../persistence/journals/journal-utils.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { createCompanionDisplayIdentityResolver } from '../../shared/companion-display-identity.js';
-import { toErrorMessage } from '../../shared/utils/errors.js';
 import { GatewayLLMRequestCancellation } from './llm-request-cancellation.js';
 import { GatewayMcpRequestCancellation } from './methods/mcp.js';
 import type { FilesystemSearchCancellation } from '../integrations/filesystem/search-cancellation.js';
@@ -81,6 +81,7 @@ import { GatewayConnectionRpcMethods } from './server/rpc-method-registration.js
 import { GatewayAgentRequests } from './server/agent-request-routing.js';
 import { GatewayIcpInvalidationQueue } from './server/icp-invalidation-queue.js';
 import { GatewayConnectionAdmission } from './server/connection-admission.js';
+import { GatewayConnectionBudget } from './server/connection-budget.js';
 import {
   assertGatewayFleetScreeningAndDocks,
   assertGatewayTopologyOptions,
@@ -96,7 +97,6 @@ import {
 import type { GatewayConnectionStatus } from './server/connection-status.js';
 import {
   normalizeNdjsonFrameError,
-  summarizeFramePreview,
   validateJsonRpcFrame,
 } from './server/rpc-frame-validation.js';
 
@@ -170,6 +170,8 @@ export class GatewayServer {
   private readonly agentRequests: GatewayAgentRequests;
   private readonly icpInvalidations: GatewayIcpInvalidationQueue;
   private readonly connectionAdmission: GatewayConnectionAdmission;
+  private readonly connectionBudget: GatewayConnectionBudget;
+  private readonly pendingConnectionIdentities = new WeakSet<GatewayRpcConnection>();
 
   private companionDisplayLabel(companionId: string): string {
     return this.options.approvalParentLabelProvider?.(companionId)?.trim()
@@ -221,7 +223,23 @@ export class GatewayServer {
       shardApprovalGrants: this.shardApprovalGrants,
       shardWorkloadRegistrar: this.shardWorkloadRegistrar,
       getRuntimeHealth: companionId => this.getRuntimeHealth(companionId),
-      identifyConnection: (conn, params) => this.connectionAdmission.identifyConnection(conn, params),
+      identifyConnection: async (conn, params) => {
+        this.pendingConnectionIdentities.add(conn);
+        try {
+          const result = await this.connectionAdmission.identifyConnection(conn, params);
+          if (!this.connections.has(conn) || !this.connectionBudget.reserve(conn, result.role, result.companionId)) {
+            throw new Error('Gateway connection identity slot is already occupied');
+          }
+          return result;
+        } catch (error) {
+          // A failed identify cannot retain a pending or persistent slot.
+          this.removeConnection(conn);
+          setImmediate(() => conn.destroy());
+          throw error;
+        } finally {
+          this.pendingConnectionIdentities.delete(conn);
+        }
+      },
       markConnectionReady: (conn, params) => this.connectionAdmission.markConnectionReady(conn, params),
       recordConnectionPosture: (conn, params) => this.connectionAdmission.recordConnectionPosture(conn, params),
       runtimeHealthTracker: this.runtimeHealthTracker,
@@ -248,6 +266,10 @@ export class GatewayServer {
     this.sessionHmacKeyring = options.sessionHmacKeyring;
     this.multiCompanion = options.multiCompanion ?? disabledGatewayMultiCompanionConfig();
     this.fleetCompanionIds = new Set(this.multiCompanion.fleetCompanionIds);
+    this.connectionBudget = new GatewayConnectionBudget(
+      this.multiCompanion.enabled,
+      this.multiCompanion.enabled ? this.fleetCompanionIds.size : 1,
+    );
     this.sharedWorkspaceReader = this.multiCompanion.enabled && this.multiCompanion.sharedWorkspacePath
       ? new SharedCompanionWorkspaceReader(this.multiCompanion.sharedWorkspacePath)
       : null;
@@ -581,12 +603,15 @@ export class GatewayServer {
     };
 
     this.rpcServer = endpoint.kind === 'unix'
-      ? createSocketServer(endpoint.socketPath, (conn) => this.registerConnection(conn))
+      ? createSocketServer(endpoint.socketPath, (conn) => this.registerConnection(conn), {
+          connectionLimits: { total: this.connectionBudget.total },
+        })
       : createWebSocketRpcServer({
           host: endpoint.host,
           port: endpoint.port,
           path: endpoint.path,
           tls: endpoint.tls,
+          connectionLimits: { total: this.connectionBudget.total },
         }, (conn) => this.registerConnection(conn));
   }
 
@@ -611,8 +636,9 @@ export class GatewayServer {
     this.connectionLifecycle.appendConnectionTransition(conn, 'none', 'registering', 'connection_opened');
 
     const serverAndClient = new JSONRPCServerAndClient(
-      new JSONRPCServer(),
+      new JSONRPCServer({ errorListener: () => log.error('Gateway RPC method execution failed') }),
       new JSONRPCClient((request) => { conn.send(request); }),
+      { errorListener: () => log.error('Gateway RPC message processing failed') },
     );
     this.rpcMethods.registerMethods(serverAndClient, conn);
     this.rpcClients.set(conn, serverAndClient);
@@ -622,7 +648,7 @@ export class GatewayServer {
 
     conn.on('frameError', (error: unknown) => {
       const frameError = normalizeNdjsonFrameError(error);
-      this.connectionAdmission.handleMalformedFrame(conn, 'ndjson', frameError.reason, frameError.preview);
+      this.connectionAdmission.handleMalformedFrame(conn, 'ndjson', frameError.reason);
     });
 
     conn.on('heartbeat', () => {
@@ -641,7 +667,15 @@ export class GatewayServer {
             conn,
             'jsonrpc',
             validationError,
-            summarizeFramePreview(message),
+          );
+          return;
+        }
+        if (this.pendingConnectionIdentities.has(conn)
+          && (message as Record<string, unknown>).method !== 'gateway.client.identify') {
+          this.connectionAdmission.handleMalformedFrame(
+            conn,
+            'jsonrpc',
+            'JSON-RPC frame received before identity verification completed',
           );
           return;
         }
@@ -653,6 +687,12 @@ export class GatewayServer {
           !this.multiCompanion.enabled
           && (message as Record<string, unknown>).method !== 'gateway.client.identify'
         ) {
+          const status = this.connectionStatuses.get(conn);
+          if (!status || !this.connectionBudget.reserve(conn, status.role, status.companionId)) {
+            this.removeConnection(conn);
+            conn.destroy();
+            return;
+          }
           this.connectionLifecycle.transitionConnectionState(conn, 'ready', 'rpc_message_received');
         }
         const releaseInFlightHealthcheck = this.connectionLifecycle.beginInFlightHealthcheck(conn);
@@ -660,21 +700,19 @@ export class GatewayServer {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         try {
           await serverAndClient.receiveAndSend(message as any);
-        } catch (error) {
-          const messageText = toErrorMessage(error);
+        } catch {
           this.connectionAdmission.handleMalformedFrame(
             conn,
             'jsonrpc',
-            `JSON-RPC receive/send failed: ${messageText}`,
-            summarizeFramePreview(message),
+            'JSON-RPC receive/send failed',
           );
         } finally {
           releaseInFlightHealthcheck();
         }
-      })().catch((handlingError: unknown) => {
-        log.error('Gateway connection message handling failed', {
-          error: toErrorMessage(handlingError),
-        });
+      })().catch(() => {
+        log.error('Gateway connection message handling failed');
+        this.removeConnection(conn);
+        conn.destroy();
       });
     });
 
@@ -684,12 +722,13 @@ export class GatewayServer {
       this.removeConnection(conn);
     });
 
-    conn.on('error', (err) => {
-      const messageText = err instanceof Error ? err.message : String(err);
-      log.error('Connection error', { error: messageText });
+    conn.on('error', () => {
+      const messageText = 'Gateway RPC connection failed';
+      log.error('Connection error');
       this.connectionLifecycle.transitionConnectionState(conn, 'degraded', 'connection_error', messageText);
       this.connectionLifecycle.transitionConnectionState(conn, 'offline', 'connection_error', messageText);
       this.removeConnection(conn);
+      conn.destroy();
     });
   }
 
@@ -748,6 +787,7 @@ export class GatewayServer {
   }
 
   private removeConnection(conn: GatewayRpcConnection): void {
+    this.connectionBudget.release(conn);
     // A crashed/restarted agent cannot leave a grant-bearing generation live.
     this.shardWorkloadRegistrar?.releaseConnection(conn);
     const status = this.connectionStatuses.get(conn);
@@ -764,10 +804,9 @@ export class GatewayServer {
         companionId: status.companionId,
       });
       void this.icpInvalidations.queueIcpInvalidation(status.companionId, 'peer_offline')
-        .catch((error: unknown) => {
+        .catch(() => {
           log.error('Failed to invalidate ICP permits after companion disconnect', {
             companionId: status.companionId,
-            error: toErrorMessage(error),
           });
         });
     }
@@ -788,10 +827,9 @@ export class GatewayServer {
     this.mcpInvocationAuthorityByConnection.delete(conn);
     const companionId = status?.companionId ?? this.options.companionId;
     if (companionId && this.options.mcpBroker) {
-      void this.options.mcpBroker.releaseCompanion(companionId).catch((error: unknown) => {
+      void this.options.mcpBroker.releaseCompanion(companionId).catch(() => {
         log.error('Failed to release MCP sessions after companion disconnect', {
           companionId,
-          error: toErrorMessage(error),
         });
       });
     }
@@ -930,6 +968,7 @@ export class GatewayServer {
     this.companionMessageLane.clearDeliveryFailureReceipts();
 
     if (this.rpcServer) {
+      GatewayRpcSocketAdmission.closeServer(this.rpcServer);
       await new Promise<void>((resolve) => {
         this.rpcServer!.close(() => resolve());
       });

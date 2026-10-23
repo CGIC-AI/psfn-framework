@@ -2033,9 +2033,9 @@ describe('GatewayServer', () => {
 
       server.start();
 
-      const internalConn = createMockConnection();
-      onConnectionCb!(internalConn.conn);
-      const missingProofResponse = await invokeRpc(internalConn, 300, 'gateway.client.identify', {
+      const failedInternalConn = createMockConnection();
+      onConnectionCb!(failedInternalConn.conn);
+      const missingProofResponse = await invokeRpc(failedInternalConn, 300, 'gateway.client.identify', {
         role: 'internal_session_integrity',
         companionId: '11111111-1111-4111-8111-111111111111',
       });
@@ -2043,6 +2043,8 @@ describe('GatewayServer', () => {
         code: GatewayErrors.COMPANION_AUTH_FAILED,
       });
 
+      const internalConn = createMockConnection();
+      onConnectionCb!(internalConn.conn);
       const identifyResponse = await invokeRpc(internalConn, 301, 'gateway.client.identify', {
         role: 'internal_session_integrity',
         companionId: '11111111-1111-4111-8111-111111111111',
@@ -2252,7 +2254,7 @@ describe('GatewayServer', () => {
       expect(auditComplete).toHaveBeenCalledWith(
         222,
         expect.any(Number),
-        'Malformed NDJSON frame received',
+        'Malformed transport frame received',
       );
       expect(conn.conn.destroyed).toBe(true);
       await expect(server.requestAgent('test', {})).rejects.toThrow('No agent connected');

@@ -7,7 +7,6 @@
 import { isRecord } from '../../../shared/utils/types.js';
 import { JSONRPCErrorException } from 'json-rpc-2.0';
 import { createComponentLogger } from '../../../shared/logger.js';
-import { toErrorMessage } from '../../../shared/utils/errors.js';
 import type { CompanionId } from '../../../shared/routing/companion-id.js';
 import { verifyCompanionAuthToken } from '../companion-auth.js';
 import type { GatewayRpcConnection } from '../transport.js';
@@ -115,7 +114,6 @@ export class GatewayConnectionAdmission {
     conn: GatewayRpcConnection,
     frameKind: MalformedFrameKind,
     reason: string,
-    preview?: string,
   ): void {
     if (!this.ports.connectionStatuses.has(conn)) {
       return;
@@ -125,15 +123,13 @@ export class GatewayConnectionAdmission {
     const params: Record<string, unknown> = {
       frameKind,
       reason,
-      ...(preview ? { preview } : {}),
     };
     void (async (): Promise<void> => {
       const auditId = await this.ports.auditTrail.audit(INVALID_FRAME_AUDIT_METHOD, 'DENY', params);
       await this.ports.auditTrail.auditComplete(auditId, startedAt, reason);
-    })().catch((auditError: unknown) => {
+    })().catch(() => {
       log.error('Malformed IPC frame audit persistence failed after disconnecting peer fail closed', {
         ...params,
-        error: toErrorMessage(auditError),
       });
     });
 

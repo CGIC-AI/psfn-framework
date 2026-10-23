@@ -31,9 +31,9 @@ describe('decideFrameAuthorization (fptm)', () => {
     expect(decideFrameAuthorization({ frame: frame('memory.search'), status: { role: 'unidentified' }, multiCompanionEnabled: false }))
       .toMatchObject({ kind: 'reject', violation: { event: 'identify_required' }, error: { code: GatewayErrors.COMPANION_IDENTIFY_REQUIRED } });
     expect(decideFrameAuthorization({ frame: frame('memory.search'), status: { role: 'internal_session_integrity', companionId: A }, multiCompanionEnabled: true }))
-      .toMatchObject({ kind: 'reject', violation: { event: 'connection_role_denied', details: { companionId: A } }, error: { code: GatewayErrors.CONNECTION_ROLE_DENIED } });
+      .toMatchObject({ kind: 'reject', violation: { event: 'connection_role_denied', details: { role: 'internal_session_integrity' } }, error: { code: GatewayErrors.CONNECTION_ROLE_DENIED } });
     expect(decideFrameAuthorization({ frame: frame('session.hmac.sign'), status: { role: 'agent' }, multiCompanionEnabled: false }))
-      .toMatchObject({ kind: 'reject', violation: { event: 'connection_role_denied', details: { method: 'session.hmac.sign', role: 'agent' } } });
+      .toMatchObject({ kind: 'reject', violation: { event: 'connection_role_denied', details: { role: 'agent' } } });
     expect(decideFrameAuthorization({ frame: frame('session.hmac.verify'), status: { role: 'internal_session_integrity', companionId: A }, multiCompanionEnabled: false }))
       .toEqual({ kind: 'pass' });
   });
@@ -57,7 +57,7 @@ describe('decideFrameAuthorization (fptm)', () => {
         violation: {
           event: 'identity_mismatch',
           message: 'Companion identity mismatch on RPC frame; disconnecting connection',
-          details: { method: 'memory.search', boundCompanionId: A, claimedCompanionId: B },
+          details: { boundCompanionId: A, claimedCompanionId: B },
         },
       });
     expect(decideFrameAuthorization({ frame: frame('memory.search', { companionId: A }), status: { role: 'agent', companionId: A }, multiCompanionEnabled: true }))

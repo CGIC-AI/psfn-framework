@@ -36,8 +36,19 @@ Configure `PSFN_VOXTA_RELAY_REMOTE_BEARER_TOKEN` with the Hub's dedicated
 `VOXTA_AUTH_TOKEN` (or an enrolled device credential with the required Voxta
 capabilities). Keep it outside tracked files and command-line arguments. The
 relay sends Authorization headers on SignalR, REST, audio downloads and
-microphone upgrades. It refuses non-loopback listeners and foreign browser
-Origins; remote HTTP audio URLs must match the configured API origin and
+microphone upgrades. Every local request, including SignalR negotiate and
+WebSocket upgrades, requires a loopback TCP peer and the configured literal
+loopback Host address and port. Point the plugin at exactly the `ListenUrl`
+authority: `localhost`, another loopback address and DNS aliases are refused.
+Bracketed IPv6 addresses normalize by address value; an omitted port means HTTP
+port 80. IPv4 must use dotted decimal. `Forwarded` and `X-Forwarded-*` headers
+never grant access. Absolute-form HTTP request targets are refused.
+
+Native requests may omit Origin only with the correct Host. A present browser
+Origin must independently match the configured HTTP address and port; duplicate
+or malformed Host/Origin values are refused before upstream credentials or
+sessions are used. Rejections have an empty body and logs exclude caller values.
+Remote HTTP audio URLs must match the configured API origin and
 redirects are not followed. Use HTTPS for remote Hub traffic.
 
 The Hub disables Voxta by default. Set `VOXTA_FACADE_ENABLED=true` and rotate
@@ -50,11 +61,14 @@ Source validation (explicit .NET opt-in), from the repository root:
 npm --prefix apps/satellite-hub run build:ts
 dotnet build apps/satellite-hub/relay/psfn-voxta-relay/PsfnVoxtaRelay.csproj --nologo --verbosity quiet
 dotnet run --project apps/satellite-hub/relay/psfn-voxta-relay.tests/PsfnVoxtaRelay.Tests.csproj --nologo
-node --test apps/satellite-hub/relay/auth.test.mjs apps/satellite-hub/relay/privacy.test.mjs
+node --test apps/satellite-hub/relay/auth.test.mjs apps/satellite-hub/relay/host.test.mjs apps/satellite-hub/relay/privacy.test.mjs
 ```
 
-The socket test runs the actual Hub and relay and checks authenticated REST,
-SignalR turns, audio downloads, Origin rejection, and wildcard-bind rejection.
+The socket tests run the actual relay and check IPv4 and, where available, IPv6
+Host/Origin rejection across REST, negotiate and WebSocket routes, with no
+upstream, credential, session, audio or microphone side effects. They verify
+native/browser access and recovery after rejection. The actual Hub test also
+checks authenticated REST, SignalR turns, audio downloads and wildcard binds.
 
 The published folder includes `appsettings.json` beside the EXE:
 

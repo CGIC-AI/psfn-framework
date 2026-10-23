@@ -102,6 +102,24 @@ async function login(port: number) {
 }
 
 describe('standalone Garden browser security through real listeners', () => {
+  it('keeps browser challenges and authority at their issuing listener, requiring one replica per origin', async () => {
+    const issuer = await listen();
+    const other = await listen();
+    const session = await login(issuer);
+    expect(await upgrade(issuer, { Cookie: session.cookie, Origin: 'https://garden.example.test' })).toBe(101);
+    expect((await request(other, 'GET', '/', '', { Cookie: session.cookie })).status).toBe(401);
+    expect(await upgrade(other, { Cookie: session.cookie, Origin: 'https://garden.example.test' })).toBe(403);
+
+    const challenge = await request(issuer, 'GET', '/login');
+    const proof = /name="csrf" value="([^"]+)"/.exec(challenge.body)![1]!;
+    const cookie = challenge.headers['set-cookie']!.map(value => value.split(';')[0]).join('; ');
+    const crossListenerLogin = await request(other, 'POST', '/login', new URLSearchParams({
+      token: 'invented-standalone-operator-secret', csrf: proof,
+    }).toString(), { Cookie: cookie, Origin: 'https://garden.example.test' });
+    expect(crossListenerLogin.status).toBe(403);
+    expect(crossListenerLogin.headers['set-cookie']).toBeUndefined();
+  });
+
   it('refuses token-authenticated plaintext on a non-loopback listener', async () => {
     const server = surface('0.0.0.0');
     // Register only a listener that actually started so the RED run cleans up.

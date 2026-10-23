@@ -18,6 +18,9 @@
 {{- end -}}
 {{- end -}}
 {{- if not .Values.fleetAuth.enabled -}}
+{{- if ne (int .Values.workloads.garden.replicaCount) 1 -}}
+{{- fail "standalone Garden requires workloads.garden.replicaCount=1 because login challenges, sessions, and revocation are process-local" -}}
+{{- end -}}
 {{- if or (not .Values.gardenBrowser.publicOrigin) (not (len .Values.gardenBrowser.trustedProxyAddresses)) -}}
 {{- fail "standalone Garden requires gardenBrowser.publicOrigin and gardenBrowser.trustedProxyAddresses for an explicit HTTPS TLS-terminating proxy contract" -}}
 {{- end -}}

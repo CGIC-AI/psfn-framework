@@ -82,6 +82,10 @@ and `ADMIN_TRUSTED_PROXY_ADDRESSES` (or the corresponding `gardenBrowser` chart
 values). Native ingress also needs `ADMIN_TLS_SECRET_NAME`, an existing TLS
 Secret for the exact Garden host. Doctors use bearer authentication through the
 configured public origin. See [Garden browser sessions](../../../docs/security/garden-browser-sessions.md).
+Keep `workloads.garden.replicaCount=1`: standalone browser challenges, sessions,
+and revocation are process-local, so the chart rejects other counts. Multiple
+standalone replicas or a horizontal autoscaler require a shared session authority
+that this chart does not provide.
 
 The local Garden forwarding port defaults to `127.0.0.1:10053`; the API defaults to
 `http://127.0.0.1:10054/v1`. Override the local ports with

@@ -32,6 +32,22 @@ describe('standalone Garden chart browser transport', () => {
     expect(result.stdout).toContain('ADMIN_TRANSPORT_TLS_EXPECTED_PEER_SPIFFE_URI');
   });
 
+  it.each([0, 2])('refuses %i standalone replicas because browser authority is process-local', replicaCount => {
+    const result = render({ gardenBrowser: proxy, workloads: { garden: { replicaCount } } });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('standalone Garden requires workloads.garden.replicaCount=1');
+    expect(result.stderr).toContain('process-local');
+  });
+
+  it('preserves the fleet single-replica guard independently of standalone browser policy', () => {
+    const result = render({
+      fleet: { enabled: true }, fleetAuth: { enabled: true },
+      bootstrap: { seedOwnerFiles: false }, workloads: { garden: { replicaCount: 2 } },
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('fleet.enabled=true requires workloads.garden.replicaCount=1');
+  });
+
   it('requires actual ingress TLS and an exact public host match', () => {
     const missing = render({ gardenBrowser: proxy, ingress: { enabled: true, garden: { enabled: true } } });
     expect(missing.status).not.toBe(0);

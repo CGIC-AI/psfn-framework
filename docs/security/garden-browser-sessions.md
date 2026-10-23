@@ -55,6 +55,16 @@ Expiry also closes WebSockets. Restarting Garden revokes all sessions. Rotating
 The store holds at most 1,024 challenges and sessions; when full, new challenges
 return 503 until entries expire. A challenge flood cannot evict active operators.
 
+Standalone Garden requires exactly one replica. Login challenges, authenticated
+sessions, expiry timers, and WebSocket revocation belong to the process that
+created them; a different listener rejects that process's cookie. There is no
+shared browser session authority or configured request affinity. Helm therefore
+rejects `workloads.garden.replicaCount` values other than `1` in standalone mode.
+Do not add a second standalone Garden behind the same origin or a horizontal
+autoscaler. Horizontal browser serving requires a shared authority design that
+also coordinates logout and active WebSocket revocation; it is not implemented.
+The separate fleet single-replica and mTLS requirements remain in force.
+
 Browser responses include CSP, frame denial, MIME sniffing prevention, referrer
 suppression, and HSTS on validated HTTPS proxy requests. The built SPA's inline
 bootstrap is authorized by a content hash; arbitrary inline scripts stay blocked.

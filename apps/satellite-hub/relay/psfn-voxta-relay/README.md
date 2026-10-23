@@ -125,6 +125,22 @@ changing the operator file's contents, permissions or modification time. Logs
 contain fixed JSON event names, numeric fields and fresh correlation IDs;
 paths, URLs, tokens, transcripts, replies and raw exception text are excluded.
 
+Microphone callbacks synchronously copy into one owned send queue. Its hard
+limits are 16 chunks, 960 bytes per chunk and 15,360 bytes total, including the
+active send (at most 480 ms of PCM). A full queue or oversized callback stops the
+recording; audio is never dropped while recording continues. Connect, format
+header and PCM sends each have a five-second deadline. Overflow, timeout and
+transport failure emit fixed event names and cancel the stream. A subsequent
+recording request creates a fresh stream.
+
+Shutdown stops capture, cancels and aborts the socket, then gives the active
+operation two seconds to drain. Queue and active audio contents are cleared;
+repeated/concurrent disposal shares one pump completion. The socket is disposed
+only after its active operation exits. If an injected or faulty transport ignores
+both cancellation and abort, the pump still terminates at the drain deadline and
+defers disposal of that single transport operation until it exits, retaining only
+cleared audio. This case emits `microphone.shutdown_timed_out`.
+
 ## Build
 
 ```bash

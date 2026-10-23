@@ -1,0 +1,136 @@
+# PSFN application security audit — 2026-10-22
+
+## Executive summary
+
+This source-level audit reviewed PSFN at baseline commit `e6a9546051f4`. It confirmed nine first-pass findings: **1 Critical, 4 High, 3 Medium, and 1 Low**. The most serious issue allowed an anonymous network caller to enter Satellite Hub and Voxta conversation paths, select or predict sessions, invoke paid providers, and receive model output. Other findings covered remotely triggerable process termination and resource exhaustion, deployable weak credentials, unsafe standalone Garden browser authentication, conversation-data leakage, regular-expression denial of service, and a DNS-rebinding race.
+
+All nine source findings have remediations in the release-candidate branch. The remediation review also found and fixed additional denial-of-service and supply-chain weaknesses. Source status is therefore **remediated, pending merge and live private-environment validation**. It is not a claim that production has been deployed, rotated, penetration-tested, or certified.
+
+| Item | Value |
+| --- | --- |
+| Audited baseline | `e6a9546051f4` |
+| Validated implementation head | `1e3ca6fbcbeaa0ae5cda436d14b33af0da74cf4f` |
+| Primary findings | 1 Critical / 4 High / 3 Medium / 1 Low |
+| Tracker epic | `psfn-framework-zbbxj` |
+| Source certification | `psfn-framework-zbbxj.8` |
+| Deferred live validation | `psfn-framework-9yibw` |
+
+## Scope and method
+
+The review covered application trust boundaries in the TypeScript services, Python Satellite Hub, .NET Voxta relay, Garden browser surface, Gateway transports and filesystem tools, Helm chart and lifecycle scripts, remote-media networking, logs, local artifacts, and locked third-party dependencies.
+
+The audit used manual data-flow and authorization review, adversarial input analysis, configuration and secret tracing, dependency-vulnerability scans, and exploit-shaped unit, process, HTTP, WebSocket, filesystem, chart-render, and network-seam tests. It did not use production credentials or mutate a live deployment.
+
+Severity reflects a combination of exploitability, required access, confidentiality/integrity/availability impact, and blast radius. “Remediated” below means the control and a regression test are present in the release candidate; it does not mean the corresponding change is already on `main` or deployed.
+
+## Primary findings
+
+| ID | Severity | Finding | Baseline evidence | Release-candidate disposition |
+| --- | --- | --- | --- | --- |
+| PSFN-SA-01 | Critical | Satellite Hub and Voxta accepted anonymous callers | `apps/satellite-hub/src/ts/hub/server.ts:458-480`; `apps/satellite-hub/src/ts/hub/voxta-facade.ts:115-156` | Remediated: fail-closed authority, dedicated credentials, principal-bound sessions, Origin policy, Voxta disabled by default, loopback-only development exception |
+| PSFN-SA-02 | High | Malformed WebSocket JSON and percent-encoded Voxta paths could terminate the process | `apps/satellite-hub/src/ts/hub/server.ts:474-485`; `apps/satellite-hub/src/ts/hub/voxta-facade.ts:1390-1435` | Remediated: guarded parsing and stable request/socket-local rejection; forked-process recovery tests |
+| PSFN-SA-03 | High | Hub messages, bodies, audio, queues, negotiations, connections, and provider responses lacked complete aggregate limits | `apps/satellite-hub/src/ts/hub/server.ts:98`; `apps/satellite-hub/src/ts/hub/voxta-facade.ts:115-126` | Remediated: streaming byte/time caps, bounded queues and populations, transport backpressure, idle/send deadlines, provider-response limits |
+| PSFN-SA-04 | High | Helm and runtime admitted published, weak, or reused credentials | `deploy/helm/psfn/values.yaml:412-451`; `deploy/helm/psfn/values.yaml:485-498` | Remediated: production defaults fail closed, role-aware effective-key validation, placeholder/reuse rejection, safe existing-Secret lifecycle |
+| PSFN-SA-05 | High | Standalone Garden could expose a raw long-lived administrator token over plaintext HTTP | `src/operator/garden/server-routes.ts:145-168`; `src/operator/garden/server-auth.ts:10-37`; `src/operator/garden/auth-policy.ts:16-38` | Remediated: non-loopback TLS/proxy requirement and short-lived opaque server-side sessions; raw token is never stored in a cookie |
+| PSFN-SA-06 | Medium | Conversation content leaked to logs; content artifacts inherited ambient permissions and had no bounded retention | `apps/satellite-hub/src/ts/hub/server.ts:1256-1258,1425-1433`; `apps/satellite-hub/src/ts/hub/artifacts.ts:20-70` | Remediated: closed-schema content-free logging; contained no-follow artifacts; private modes/ACLs; atomic creation; bounded retention |
+| PSFN-SA-07 | Medium | `fs.search` executed attacker-shaped JavaScript regular expressions synchronously | `src/boundary/integrations/filesystem/workspace-ops.ts:351-390` | Remediated: isolated killable workers, hard deadline, bounded transfer, cleanup, and literal-mode preservation |
+| PSFN-SA-08 | Medium | Garden cookie-authenticated requests and WebSocket upgrades lacked complete Origin and CSRF binding | `src/operator/garden/server.ts:133-165,258-263`; `src/operator/garden/server-auth.ts:10-37` | Remediated: exact trusted HTTPS Origin/Host checks, CSRF proofs, strict secure cookies, rotation/logout revocation, browser security headers |
+| PSFN-SA-09 | Low | Remote media validation resolved a hostname, then global `fetch` could resolve it again | `src/channels/backplane/safe-remote-fetch.ts:44-60,116-124` | Remediated: each hop connects to the policy-approved address while preserving hostname/SNI verification; redirect revalidation and cleanup retained |
+
+## Detailed risk and remediation notes
+
+### PSFN-SA-01 — anonymous Hub and Voxta authority
+
+The baseline treated a realtime connection as authenticated whenever no device registry was configured, attached it to Satellite/companion processing immediately, and handed Voxta upgrades and HTTP routes to handlers without a caller identity. A network-reachable default could therefore expose conversation state and provider-backed actions without a server-verifiable principal.
+
+The candidate centralizes Hub admission, requires enrolled-device or dedicated Voxta credentials outside an explicit loopback-only development mode, binds sessions to the authenticated principal, rejects untrusted browser origins, and makes Voxta opt-in. Negative tests exercise the main realtime socket, negotiation, raw SignalR WebSocket, service toggles, audio artifacts/input, vision routes, cross-principal session attachment, and valid credential paths.
+
+### PSFN-SA-02 — parser-triggered process termination
+
+The baseline parsed realtime JSON inside an event callback before the promise rejection chain and called `decodeURIComponent` in route parsers without converting `URIError` into a request-local failure. One malformed frame or path could escape the intended error boundary.
+
+The candidate guards protocol and URL parsing, emits stable content-free errors, and closes only the offending request or socket. Child-process tests send malformed JSON, SignalR records, percent encodings, multipart data, and audio specifications and then prove a legitimate request still succeeds.
+
+### PSFN-SA-03 — incomplete resource accounting
+
+Several individually plausible operations had no aggregate budget: WebSocket payloads inherited permissive library defaults, HTTP bodies and uploads were fully buffered, audio sessions and negotiation tokens accumulated, provider responses could expand, and slow or abandoned producers could hold work indefinitely.
+
+The candidate introduces shared transport budgets, bounded streaming reads, per-principal and global admission, queue and buffered-byte accounting, idle/operation deadlines, early rejection before provider or artifact side effects, and deterministic cleanup. Exact-limit, one-over-limit, concurrency, slow-client, abandonment, recovery, and no-side-effect tests cover both TypeScript and Python Hub paths.
+
+### PSFN-SA-04 — deployable weak credentials
+
+The checked-in chart set `secrets.allowMissingRequired: true` and supplied known `CHANGE_ME` values for multiple privileged roles. Runtime checks generally proved only that a value existed, not that it was strong, distinct, or actually the key consumed through an alias or database URL.
+
+The candidate makes production rendering fail closed unless strong values or a valid existing Secret are supplied, validates the effective physical key behind role aliases and database overrides, rejects published placeholders and prohibited reuse, and keeps synthetic non-production fixtures separate. Lifecycle tests cover generated and preserved Secrets without printing their values.
+
+### PSFN-SA-05 and PSFN-SA-08 — standalone Garden browser boundary
+
+The baseline reused the raw long-lived `ADMIN_TOKEN` as a cookie, did not mark it `Secure`, allowed non-loopback plaintext operation when a token existed, and authenticated WebSocket upgrades without validating browser Origin. A stolen token had a long lifetime, and a hostile same-site origin could ride a browser cookie.
+
+The candidate requires a trusted HTTPS origin for non-loopback standalone use, exchanges the administrator credential for a random bounded server-side session, uses strict secure cookie attributes, rotates and revokes sessions, requires CSRF proof for unsafe methods, validates WebSocket Origin before authentication, and emits defensive browser headers. The Helm chart enforces a single standalone session replica because the store is intentionally process-local.
+
+### PSFN-SA-06 — privacy and artifact lifecycle
+
+The baseline wrote transcript and reply text at ordinary log levels and persisted audio, transcript, reply, event, and vision data with inherited filesystem permissions. There was no uniform containment/no-follow policy or bounded default retention.
+
+The candidate replaces open-ended logging with content-free structured fields and sentinel tests across stdout/stderr. TypeScript, Python, and .NET artifact stores use private directories/files, containment and link/reparse defenses, bounded downloads, atomic finalization, and a documented 24-hour default retention sweep. Native Windows ACL behavior still requires the live validation described below.
+
+### PSFN-SA-07 — regular-expression denial of service
+
+The baseline applied caller-provided ECMAScript regex directly in the Gateway event loop. Cooperative checks between matches could not interrupt catastrophic backtracking inside one `RegExp.exec` call; `^(a|aa)+$` against an 8,192-character near miss reproduced the stall.
+
+The candidate runs regex work in isolated workers under a parent-enforced deadline and resource budget, terminates timed-out workers, and preserves literal search semantics. Tests prove event-loop responsiveness, repeated-attack cleanup, caller cancellation cleanup, content-free error output, and successful searches after abuse.
+
+### PSFN-SA-09 — DNS validation/connect race
+
+The baseline checked a resolver result for private or metadata addresses but then passed the hostname to global `fetch`, allowing connection-time DNS to return a different address.
+
+The candidate pins connection establishment to an approved address for every hop while retaining the original hostname for HTTP Host, TLS SNI, and certificate validation. Controlled resolver/connector tests cover rebinding, mixed answers, address-family changes, redirects, failures, and socket cleanup.
+
+## Additional findings discovered during remediation
+
+These items are not retroactively included in the original nine-finding severity total.
+
+| ID | Severity | Finding | Disposition |
+| --- | --- | --- | --- |
+| PSFN-AF-01 | High | Gateway RPC WebSocket/NDJSON frames and pre-identification connections lacked a repository-owned aggregate memory/socket bound | Remediated with a common 64 MiB UTF-8 frame ceiling, incremental NDJSON framing, compression disabled, two pending slots, topology-derived role slots capped at 64, five-second identification deadline, and terminal-path charge release (`psfn-framework-iwl12`) |
+| PSFN-AF-02 | High | The Windows Voxta relay created one fire-and-forget microphone send task per callback; stalled upstream sends retained audio without a hard aggregate bound or coordinated shutdown | Remediated with synchronous bounded admission, one owned send pump, active-send byte/chunk accounting, fixed operation and shutdown deadlines, idempotent cleanup, and concurrency regressions (`psfn-framework-zbbxj.11`) |
+| PSFN-AF-03 | Mixed: 3 Critical / 3 High / 10 Medium / 1 Low | The pinned Python graph contained 17 fixable OSV advisories across `anyio`, `certifi`, `cryptography`, `idna`, `pygments`, `pytest`, and `zeroconf`; the repository scanner omitted `uv.lock` | Remediated with stable upgrades, a clean direct pinned scan, and permanent `uv.lock` coverage (`psfn-framework-zbbxj.9`) |
+| PSFN-AF-04 | High | The .NET relay resolved vulnerable `Microsoft.AspNetCore.SignalR.Common` 8.0.26 through an unlocked graph (GHSA-334f-vvp4-7g6p / CVE-2026-70159) | Remediated with exact SignalR 8.0.32, committed NuGet locks, locked restore, clean NuGet/OSV scans, and supported Windows publish validation (`psfn-framework-zbbxj.10`) |
+
+The remediation review also closed credential-role alias and database-override bypasses, synchronized credential policy copies, added provider-response bounds, refreshed stale security fixtures, and separated encoded transport limits from decoded media limits. These are defense-in-depth corrections within the primary findings rather than separately counted vulnerabilities.
+
+## Validation evidence
+
+The root validator reproduced implementation-agent claims on the assembled branch at `1e3ca6fbcbeaa0ae5cda436d14b33af0da74cf4f`. Because the pre-PR gate and independent exact-head reviews must run after this report itself is committed, their final commit/result attestations are recorded on `psfn-framework-zbbxj.8` and the pull request rather than self-referentially embedded here.
+
+| Control | Evidence |
+| --- | --- |
+| Hub authentication, parser survival, resources, privacy | `npm run verify:satellite-hub`: 356 TypeScript tests and 107 Python tests; build/type checks passed |
+| Gateway framing and admission | 240 independently selected tests passed; implementation lane passed 286 tests plus type, lint, privacy, and structural checks |
+| Filesystem regex isolation | 153 independently selected unit/integration tests passed, including hostile near-miss, cancellation, cleanup, and recovery |
+| Garden browser security | 82 focused browser-session tests and 118 Garden/chart tests passed |
+| Helm credentials and lifecycle | 1,402 focused assertions, 1,274 Helm assertions, and 124 chart/lifecycle checks passed; recovery chart digest verified |
+| DNS pinning and media limits | 277 focused remote-fetch and channel transport tests passed |
+| Python dependencies | Frozen Python 3.11 sync, 107 Python tests, wheel/sdist build, and pinned OSV scan passed with 36 packages and zero findings |
+| .NET relay | Two locked restores, two builds with zero warnings/errors, two format checks, logger/artifact/microphone/build-contract harness, five actual-process auth/privacy tests, two online transitive NuGet scans, and locked self-contained `win-x64` single-file publish passed |
+| Repository dependency scan | Digest-pinned OSV-Scanner 2.4.0 scanned eight committed lockfiles and 1,366 resolved package records with zero known findings and no suppressions |
+| Final repository gate | Run once on the final committed pull-request head; exact result and SHA are recorded on `psfn-framework-zbbxj.8` and the pull request |
+| Independent exact-head review | Standards, specification, adversarial, and scanner results are recorded on `psfn-framework-zbbxj.8` and the pull request after this report commit |
+
+## Residual risk and required live validation
+
+The source candidate cannot prove properties owned by a private deployment. Bead `psfn-framework-9yibw` remains open for an explicitly authorized non-production cluster and Windows relay host. It requires:
+
+- exact image and chart digest deployment with rollback evidence;
+- preservation and rotation of real Kubernetes Secrets;
+- real TLS ingress identity and authenticated Hub, Voxta, and Garden clients;
+- anonymous, hostile-Origin, CSRF, cross-principal, oversized, malformed, slow-client, abandoned-stream, provider-amplification, regex, and DNS-flip probes;
+- bounded RSS, threads, descriptors, sockets, queues, and retention under sustained native load; and
+- Windows NTFS execution of the relay artifact harness to prove protected owner-only ACLs, reparse-point and hard-link rejection, atomic finalization, cleanup, and content-free errors.
+
+Until that evidence exists, operators should treat the candidate as source-remediated but not production-certified. Deployment must use fresh role-distinct credentials; published examples or values from the audited baseline must never be reused.
+
+## Tracking and closure policy
+
+The implementation beads remain open or in progress until their commits land on `main`. Completion evidence is recorded on each bead, and the integrated certification bead is the dependency for the final pull request. This prevents a pushed branch or passing agent-local test from being misrepresented as shipped remediation.

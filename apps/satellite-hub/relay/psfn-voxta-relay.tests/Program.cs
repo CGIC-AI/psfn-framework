@@ -82,6 +82,7 @@ Require(download.GetProperty("correlation").GetString() == correlation.ToString(
 Require(stderr.ToString().Contains("audio.localization_failed"), "Errors did not reach stderr");
 Console.WriteLine("PASS: actual relay logger rejects private fields, exceptions, scopes and formatters before its sinks");
 await ArtifactTests.RunAsync();
+await MicrophoneTests.RunAsync();
 
 static void Require(bool condition, string failure)
 {

@@ -254,10 +254,12 @@ Transport ping/pong bypasses the JSON-RPC work queue. Active work has a fixed
 five-minute deadline; overflow or expiry destroys the connection and discards
 queued work before further handlers start.
 
-A server-wide ceiling of **256 active operations and 128 MiB of charged frame
-bytes** also covers work left behind by disconnected peers. These charges are
-released only when the actual operation settles, including LLM/MCP operations
-whose cancellation response settled earlier. Disconnect and shutdown cancel
+A server-wide ceiling of **256 retained frames and 128 MiB of charged frame
+bytes** covers every queued and active frame before it enters a connection's
+queue, including work left behind by disconnected peers. Queued charges are
+released immediately on close; active charges are released only when the actual
+operation settles, including LLM/MCP operations whose cancellation response
+settled earlier. Disconnect and shutdown cancel
 supported operations, clear work/health timers, and stop queued dispatch. A
 handler that ignores cancellation may complete already-started side effects;
 its charge remains quarantined, so reconnecting cannot grow orphan work without

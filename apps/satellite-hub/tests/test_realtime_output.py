@@ -346,3 +346,58 @@ async def test_output_overflow_does_not_admit_trailing_application_work(tmp_path
         finally:
             writer.transport.abort()
             await _close(writer)
+
+
+@pytest.mark.anyio
+async def test_repeated_shutdown_cancellation_retains_cleanup_ownership(monkeypatch, tmp_path: Path) -> None:
+    from hub.devices.realtime_server import _RealtimeConnection
+
+    cleanup_started = asyncio.Event()
+    finish_cleanup = asyncio.Event()
+    aclose = _RealtimeConnection.aclose
+
+    async def gated_cleanup(connection):
+        cleanup_started.set()
+        await finish_cleanup.wait()
+        await aclose(connection)
+
+    monkeypatch.setattr(_RealtimeConnection, "aclose", gated_cleanup)
+    hub = server(tmp_path, max_connections=1)
+    await hub.__aenter__()
+    websocket_server = hub._server
+    _, writer, peer = await _unread_peer(hub)
+    tasks = tuple(websocket_server.handlers.values())
+    repeated = None
+    try:
+        closing = asyncio.create_task(hub.__aexit__(None, None, None))
+        await asyncio.sleep(0)
+        closing.cancel()
+        await asyncio.wait_for(cleanup_started.wait(), 1)
+        closing.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await closing
+        assert peer.connection_lost_waiter.done()
+        assert hub._server is websocket_server
+        assert not websocket_server.close_task.done()
+        repeated = asyncio.create_task(hub.__aexit__(None, None, None))
+        await asyncio.sleep(0)
+        assert not repeated.done()
+        assert hub._server is websocket_server
+        finish_cleanup.set()
+        await asyncio.wait_for(repeated, 1)
+        await _clean(hub, websocket_server, tasks)
+        assert websocket_server.close_task.done()
+        assert hub._server is None
+        assert peer.output.timer is None
+        assert not peer.protocol.writes
+        await hub.__aexit__(None, None, None)
+        async with hub:
+            await _recover(hub, hub._server)
+    finally:
+        finish_cleanup.set()
+        writer.transport.abort()
+        await _close(writer)
+        await websocket_server.wait_closed()
+        if repeated is not None:
+            await repeated
+        await hub.__aexit__(None, None, None)

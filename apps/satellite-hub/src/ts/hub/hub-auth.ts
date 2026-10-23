@@ -3,6 +3,7 @@ import type http from "node:http";
 import type { Duplex } from "node:stream";
 
 import type { HubConfig } from "../shared/env.js";
+import { assertStrongHubCredential } from "../shared/credentials.js";
 import { authenticateHubDevice, requireCurrentHubDeviceEnrollment, type HubDeviceIdentity } from "./device-registry.js";
 
 export interface HubAccessConfig {
@@ -31,6 +32,7 @@ export class HubAccess {
     }
     const token = config.access?.voxtaToken;
     if (token !== undefined) {
+      assertStrongHubCredential(token, "VOXTA_AUTH_TOKEN");
       if (!/^[A-Za-z0-9_-]{43,}$/u.test(token)) {
         throw new Error("VOXTA_AUTH_TOKEN must contain at least 43 base64url characters (32 random bytes)");
       }
@@ -104,8 +106,13 @@ export class HubAccess {
     let session = this.realtimeSessions.get(key);
     if (!session) {
       session = `realtime:${randomUUID()}`;
+      if (this.realtimeSessions.size >= (this.config.limits?.maxSessions ?? 128)) {
+        this.realtimeSessions.delete(this.realtimeSessions.keys().next().value!);
+      }
       this.realtimeSessions.set(key, session);
     }
+    this.realtimeSessions.delete(key);
+    this.realtimeSessions.set(key, session);
     return session;
   }
 
@@ -124,8 +131,8 @@ export class HubAccess {
   }
 }
 
-export function rejectHubUpgrade(socket: Duplex, status: 401 | 403 | 404): void {
-  socket.end(`HTTP/1.1 ${status} ${status === 401 ? "Unauthorized" : status === 403 ? "Forbidden" : "Not Found"}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
+export function rejectHubUpgrade(socket: Duplex, status: 400 | 401 | 403 | 404 | 429): void {
+  socket.end(`HTTP/1.1 ${status} Rejected\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
 }
 
 function hasQueryCredential(request: http.IncomingMessage): boolean {

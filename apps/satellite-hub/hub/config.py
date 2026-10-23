@@ -16,6 +16,6 @@ class ESPHomeTarget:
 
 @dataclass(slots=True)
 class RealtimeTarget:
-    bind_host: str = "0.0.0.0"
+    bind_host: str = "127.0.0.1"
     port: int = 8787
     public_host: str | None = None

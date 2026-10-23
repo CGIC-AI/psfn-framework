@@ -11,7 +11,7 @@ import type {
 
 const log = createComponentLogger('VoiceWebSocketServer');
 
-const DEFAULT_MAX_FRAME_BYTES = 256 * 1024;
+export const DEFAULT_MAX_FRAME_BYTES = 256 * 1024;
 const DEFAULT_SESSION_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_PENDING_FRAMES = 32;
 

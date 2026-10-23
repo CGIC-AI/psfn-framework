@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, createPrivateKey } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -91,7 +92,7 @@ test("developer mode and exposed runtime startup fail closed on ambiguous author
 test("HTTP and WebSocket Origin allowlists enforce the same authenticated boundary", async () => {
   const runtime = config();
   runtime.voxta.enabled = true;
-  runtime.access = { developerMode: false, allowedOrigins: ["https://client.example.test"], voxtaToken: "c".repeat(64) };
+  runtime.access = { developerMode: false, allowedOrigins: ["https://client.example.test"], voxtaToken: "Origin_8bQ6ZcP4fV9mR2tY7aS3dG5hJ0kL1nW_uEoXiCvBN" };
   const server = new RealtimeHubServer(runtime, { agent: agent() });
   await server.start();
   const address = server.address();
@@ -315,6 +316,38 @@ test("realtime hub requires registry authentication before accepting messages", 
   await new Promise<void>((resolve) => socket.once("close", () => resolve()));
   assert.equal(messages.at(-1)?.type, "error-event");
   await server.close();
+});
+
+test("unauthenticated socket quotas expire and authenticated promotion quotas recover", async () => {
+  const runtime = config();
+  runtime.limits = { maxUnauthenticatedConnections: 1, maxAuthenticatedConnections: 1, authenticationTimeoutMs: 100 };
+  const server = new RealtimeHubServer(runtime, { agent: agent() });
+  await server.start();
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const url = `ws://127.0.0.1:${address.port}/`;
+  const sockets: WebSocket[] = [];
+  const open = async (): Promise<WebSocket> => {
+    const socket = new WebSocket(url); sockets.push(socket); await once(socket, "open"); return socket;
+  };
+  try {
+    const silent = await open();
+    assert.equal(await upgradeStatus(url), 429);
+    assert.equal((await once(silent, "close"))[0], 1008);
+    const authenticated = await open();
+    const ready = once(authenticated, "message");
+    authenticated.send(JSON.stringify({ type: "hello", deviceId: "office-device", credential }));
+    await ready;
+    const excess = await open();
+    const denied = once(excess, "close");
+    excess.send(JSON.stringify({ type: "hello", deviceId: "office-device", credential }));
+    assert.equal((await denied)[0], 1013);
+    const closed = once(authenticated, "close"); authenticated.close(); await closed;
+    const recovered = await open();
+    const accepted = once(recovered, "message");
+    recovered.send(JSON.stringify({ type: "hello", deviceId: "office-device", credential }));
+    assert.equal((JSON.parse((await accepted)[0].toString()) as { type: string }).type, "session.ready");
+  } finally { for (const socket of sockets) socket.terminate(); await server.close(); }
 });
 
 test("explicit loopback developer hello keeps the hub-minted identity", async () => {

@@ -910,10 +910,11 @@ export function createApiVoiceWebSocketRuntime(
     },
   });
 
-  const server = new WebSocketVoiceServer({
+  const transportOptions = {
     ...buildVoiceWebSocketServerOptions(options.config),
     ...options.serverOptions,
-  }, {
+  };
+  const server = new WebSocketVoiceServer(transportOptions, {
     onFrame: (session, frame) => runtime.handleFrame(session, frame),
     onSessionClose: async (session, reason) => {
       await runtime.closeConnection(session.connectionId, `transport.${toCloseReason(reason)}`);
@@ -923,6 +924,7 @@ export function createApiVoiceWebSocketRuntime(
   });
 
   return {
+    maxFrameBytes: transportOptions.maxFrameBytes,
     attach(connection, context): () => void {
       contexts.set(connection.id, context);
       connections.set(connection.id, connection);

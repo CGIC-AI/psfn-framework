@@ -30,11 +30,7 @@ import {
   writeJson,
   type ArtifactTurn,
 } from "./artifacts.js";
-import {
-  DeepgramRealtimeSession,
-  type TranscriptInterim,
-  type TranscriptResult,
-} from "./deepgram-live.js";
+import type { TranscriptResult } from "./deepgram-live.js";
 import type { FrameworkAgentAdapter, FrameworkReplyInputMode } from "./framework-agent.js";
 import {
   CompanionBridge,
@@ -84,6 +80,7 @@ import {
   type HubDeviceRegistryAuthority,
 } from "./device-registry.js";
 import { HubAccess, rejectHubUpgrade } from "./hub-auth.js";
+import { HubAudioBuffer, HubResources, HubSocketFlow, rejectHttp, type HubSocketAdmission } from "./transport-resources.js";
 import type { PsfnChannelContext } from "./embodied-session.js";
 import { CompanionBrowserBridge } from "./companion-browser-bridge.js";
 import {
@@ -95,7 +92,9 @@ const COMPANION_AUDIO_OUTPUT_PUBLISH_WARNING = "Companion audio output publish f
 
 export class RealtimeHubServer {
   private readonly httpServer: http.Server;
-  private readonly wsServer = new WebSocketServer({ noServer: true });
+  private readonly wsServer: WebSocketServer;
+  private readonly resources: HubResources;
+  private readonly admissions = new WeakMap<WebSocket, HubSocketAdmission>();
   private readonly sessions: SessionStore;
   private readonly embodiedSessions: EmbodiedSessionRegistry;
   private readonly agent: FrameworkAgentAdapter;
@@ -123,6 +122,7 @@ export class RealtimeHubServer {
       realtimeTts?: StreamingTtsAdapter;
       voxtaTts?: VoxtaTtsAdapter | null;
       voxtaStt?: VoxtaSttAdapter | null;
+      realtimeStt?: (pcm: Buffer, signal: AbortSignal) => Promise<TranscriptResult>;
       companion?: CompanionBridge | null;
       eidoverse?: (
         Pick<EidoverseEmbodiedSessionConfig, "worldName" | "agentName">
@@ -134,11 +134,13 @@ export class RealtimeHubServer {
       locationNow?: () => number;
     } = {},
   ) {
+    this.resources = new HubResources(config.limits);
+    this.wsServer = new WebSocketServer({ noServer: true, maxPayload: this.resources.limits.maxFrameBytes, perMessageDeflate: false });
     this.access = new HubAccess(config);
     if (config.deviceRegistry && !config.psfn.deviceAssertionIssuer) {
       throw new Error("Hub device registry requires the device assertion signing authority");
     }
-    this.sessions = new SessionStore(config.sessionTtlSeconds);
+    this.sessions = new SessionStore(config.sessionTtlSeconds, this.resources.limits.maxSessions);
     this.embodiedSessions = new EmbodiedSessionRegistry(resolveChannelType(config));
     this.agent = options.agent ?? createFrameworkAgent(config);
     this.eidoverse = options.eidoverse
@@ -193,6 +195,7 @@ export class RealtimeHubServer {
       : options.voxtaStt
         ?? (config.deepgramApiKey ? new DeepgramVoxtaStt(config.deepgramApiKey) : undefined);
     this.voxta = new VoxtaFacade({
+      resources: this.resources,
       access: this.access,
       config: config.voxta,
       sessions: this.sessions,
@@ -203,13 +206,28 @@ export class RealtimeHubServer {
       stt: voxtaStt,
     });
     this.httpServer = http.createServer((request, response) => {
-      if (this.voxta.handleHttp(request, response)) {
-        return;
+      request.on("error", () => response.destroy());
+      if (!this.resources.admitHttp(request, response)) return;
+      try {
+        if (this.voxta.handleHttp(request, response)) return;
+        response.statusCode = 200;
+        response.end("psfn-satellite-hub\n");
+      } catch (error) {
+        rejectHttp(request, response, error);
       }
-      response.statusCode = 200;
-      response.end("psfn-satellite-hub\n");
+    });
+    this.httpServer.setTimeout(this.resources.limits.idleTimeoutMs, socket => socket.destroy());
+    this.httpServer.maxConnections = this.resources.limits.maxHttpConnections
+      + this.resources.limits.maxAuthenticatedConnections + this.resources.limits.maxUnauthenticatedConnections;
+    this.httpServer.headersTimeout = this.resources.limits.httpBodyTimeoutMs;
+    this.httpServer.requestTimeout = this.resources.limits.httpBodyTimeoutMs;
+    this.realtimeStt = options.realtimeStt ?? ((pcm, signal) => {
+      if (!config.deepgramApiKey) throw new Error("Deepgram STT is not configured for this hub");
+      return transcribePcmClip(config.deepgramApiKey, pcm, signal);
     });
   }
+
+  private readonly realtimeStt: (pcm: Buffer, signal: AbortSignal) => Promise<TranscriptResult>;
 
   async start(): Promise<void> {
     if (this.config.access?.developerMode) {
@@ -235,12 +253,16 @@ export class RealtimeHubServer {
           ? (name, args) => { this.submitEidoverseBodyAction(name, args); }
           : null,
         this.access,
+        this.resources,
+        this.admissions.get(socket)!,
+        this.realtimeStt,
       );
       connection.run().catch((error) => {
         console.error("Realtime connection failed:", error);
       });
     });
     this.httpServer.on("upgrade", (request, socket, head) => {
+      try {
       if (!this.access.originAllowed(request)) {
         rejectHubUpgrade(socket, 403);
         return;
@@ -254,9 +276,16 @@ export class RealtimeHubServer {
         rejectHubUpgrade(socket, 401);
         return;
       }
+      const admission = this.resources.admitSocket(this.access.developerAllowed(request));
+      if (!admission) return rejectHubUpgrade(socket, 429);
+      socket.once("close", admission.release);
       this.wsServer.handleUpgrade(request, socket, head, (websocket) => {
+        this.admissions.set(websocket, admission);
         this.wsServer.emit("connection", websocket, request);
       });
+      } catch {
+        rejectHubUpgrade(socket, 400);
+      }
     });
 
     await new Promise<void>((resolve) => {
@@ -434,12 +463,13 @@ class RealtimeConnection {
   private satelliteName = this.deviceName;
   private capabilities: Required<SatelliteCapabilities> = DEFAULT_REALTIME_CAPABILITIES;
   private activeTurn: ArtifactTurn | null = null;
-  private sttSession: DeepgramRealtimeSession | null = null;
+  private readonly flow: HubSocketFlow;
+  private readonly audioInput: HubAudioBuffer;
+  private readonly lifetime = new AbortController();
   private replyAbort = false;
   private replySequence = 0;
   private replyTask: Promise<void> | null = null;
   private replyAbortController: AbortController | null = null;
-  private messageChain: Promise<void> = Promise.resolve();
   private identityTask: Promise<RuntimeIdentity | undefined> | null = null;
   private claimIdentity: PsfnChannelContext["claimIdentity"];
   private authenticated: boolean;
@@ -470,8 +500,13 @@ class RealtimeConnection {
      */
     private readonly eidoverseBody: EidoverseBodyActionHandler | null = null,
     private readonly access: HubAccess,
+    private readonly resources: HubResources,
+    private readonly admission: HubSocketAdmission,
+    private readonly transcribe: (pcm: Buffer, signal: AbortSignal) => Promise<TranscriptResult>,
   ) {
     this.authenticated = !this.deviceRegistry && this.config.access?.developerMode === true;
+    this.flow = new HubSocketFlow(socket, resources.limits, this.authenticated, () => { void this.cleanup(); });
+    this.audioInput = new HubAudioBuffer(resources.limits, () => this.flow.fail(1008, "Audio utterance timeout"));
     if (!this.deviceRegistry) this.attachSatellite();
     if (!this.deviceRegistry) this.subscribeCompanion();
   }
@@ -479,27 +514,25 @@ class RealtimeConnection {
   private subscribeCompanion(): void {
     if (this.unsubscribeCompanion || !this.companion) return;
     this.unsubscribeCompanion = this.companion.addListener((event) => {
-      this.messageChain = this.messageChain
-        .then(() => this.relayCompanionEvent(event))
-        .catch((error) => {
-          console.error("Companion event relay failed:", error);
-        });
+      this.flow.enqueue(Buffer.from(JSON.stringify(event)), () => this.relayCompanionEvent(event));
     });
   }
 
   async run(): Promise<void> {
-    this.socket.on("message", (raw) => {
-      const json = decodeRawData(raw);
-      if (!json) {
+    this.socket.on("error", () => { this.socket.terminate(); });
+    this.socket.on("message", (raw, isBinary) => this.flow.enqueue(raw, async () => {
+      let payload: ClientToHubMessage;
+      try {
+        const decoded: unknown = JSON.parse(decodeRawData(raw) ?? "");
+        if (isBinary || !decoded || typeof decoded !== "object" || Array.isArray(decoded)
+          || typeof (decoded as { type?: unknown }).type !== "string") throw new Error("Invalid realtime frame");
+        payload = decoded as ClientToHubMessage;
+      } catch {
+        this.flow.fail(1008, "Invalid realtime frame");
         return;
       }
-      const payload = JSON.parse(json) as ClientToHubMessage;
-      this.messageChain = this.messageChain
-        .then(() => this.handleMessage(payload))
-        .catch((error) => {
-          console.error("Realtime message handling failed:", error);
-        });
-    });
+      await this.handleMessage(payload);
+    }));
     this.socket.on("close", () => {
       void this.cleanup();
     });
@@ -570,6 +603,11 @@ class RealtimeConnection {
             this.socket.close(1008, "device authentication failed");
             return;
           }
+          if (!this.admission.authenticate()) {
+            this.flow.fail(1013, "Hub authenticated connection quota exceeded");
+            return;
+          }
+          this.flow.authenticate();
           this.deviceId = device.deviceId;
           this.authenticatedDevice = device;
           this.deviceName = device.deviceName;
@@ -632,6 +670,7 @@ class RealtimeConnection {
         await this.send({ type: "pong", sentAt: message.sentAt });
         return;
       case "interrupt":
+        this.audioInput.clear();
         if (!await this.cancelReply("client_interrupt")) {
           await this.send({ type: "assistant.interrupted", sessionId: this.sessionId });
         }
@@ -649,10 +688,16 @@ class RealtimeConnection {
         await this.handleUserText(message);
         return;
       case "audio":
-        await this.handleAudio(decodeAudioChunk(message.audio));
+        if (typeof message.audio !== "string" || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(message.audio)) {
+          throw new Error("Invalid PCM base64");
+        }
+        if (this.audioInput.append(decodeAudioChunk(message.audio))) await this.finishAudioInput();
         return;
       case "turn.start":
+        this.audioInput.start();
+        return;
       case "turn.end":
+        await this.finishAudioInput();
         return;
       case "approval.decision":
         await this.handleApprovalDecision(message);
@@ -944,14 +989,18 @@ class RealtimeConnection {
   private async handleRelaySttRequest(
     message: Extract<ClientToHubMessage, { type: "relay.stt" }>,
   ): Promise<void> {
+    if (typeof message.audio !== "string" || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(message.audio)) {
+      throw new Error("Invalid PCM base64");
+    }
+    const bytes = Buffer.byteLength(message.audio, "base64");
+    if (bytes % 2 !== 0 || bytes > Math.min(this.resources.limits.maxAudioBytes, this.resources.limits.maxAudioDurationMs * 32)) {
+      throw new Error("Relay audio exceeds PCM limit");
+    }
     try {
       if (!this.config.deepgramApiKey) {
         throw new Error("Deepgram STT is not configured for this hub");
       }
-      const transcript = await transcribePcmClip(
-        this.config.deepgramApiKey,
-        decodeAudioChunk(message.audio),
-      );
+      const transcript = await this.transcribe(decodeAudioChunk(message.audio), this.lifetime.signal);
       await this.send({
         type: "relay.stt.result",
         requestId: message.requestId,
@@ -1222,40 +1271,14 @@ class RealtimeConnection {
     }
   }
 
-  private async handleAudio(chunk: Buffer): Promise<void> {
-    if (chunk.length === 0) {
-      return;
-    }
-    if (!this.config.deepgramApiKey) {
-      await this.send({
-        type: "error-event",
-        data: { message: "Deepgram STT is not configured for this hub" },
-      });
-      return;
-    }
-    await this.ensureSttSession();
-    if (this.replyTask && !this.replyAbort) {
-      return;
-    }
+  private async finishAudioInput(): Promise<void> {
+    const pcm = this.audioInput.finish();
+    if (pcm.length === 0) return;
+    const event = await this.transcribe(pcm, this.lifetime.signal);
+    if (this.socket.readyState !== WebSocket.OPEN) return;
     const turn = this.ensureActiveTurn();
-    appendPcm(turn, chunk);
-    this.sttSession?.sendAudio(chunk);
-  }
-
-  private async handleInterim(event: TranscriptInterim): Promise<void> {
-    if (!event.text.trim()) {
-      return;
-    }
-    const turn = this.ensureActiveTurn();
-    appendEvent(turn, "transcript.live", event);
-    await this.send({
-      type: "message",
-      data: {
-        role: "user",
-        content: event.text,
-        live: true,
-      },
-    });
+    appendPcm(turn, pcm);
+    await this.handleUtterance(event);
   }
 
   private async handleUtterance(event: TranscriptResult): Promise<void> {
@@ -1337,7 +1360,7 @@ class RealtimeConnection {
     this.replyAbortController = replyAbortController;
     let responseText = "";
     const shouldStreamAudio = canReceiveStreamingAudio(this.capabilities);
-    const audioSegmentQueue = shouldStreamAudio ? new AsyncQueue<string>() : null;
+    const audioSegmentQueue = shouldStreamAudio ? new AsyncQueue<string>(this.resources.limits.maxQueuedMessages) : null;
 
     const audioTask: Promise<void> = shouldStreamAudio && audioSegmentQueue ? (async () => {
       for await (const segmentText of audioSegmentQueue) {
@@ -1401,6 +1424,9 @@ class RealtimeConnection {
       });
       for await (const delta of stream) {
         this.assertReplyActive(replyId, replyAbortController);
+        if (Buffer.byteLength(responseText) + Buffer.byteLength(delta) > this.resources.limits.maxQueuedBytes) {
+          throw new Error("Hub reply exceeds byte limit");
+        }
         responseText += delta;
         await this.send({
           type: "message",
@@ -1454,9 +1480,11 @@ class RealtimeConnection {
         },
       });
     } catch (error) {
+      const wasCancelled = this.replyAbort || replyId !== this.replySequence || replyAbortController.signal.aborted;
       audioSegmentQueue?.close();
+      replyAbortController.abort(error);
       await audioTask.catch(() => undefined);
-      if (this.replyAbort || replyId !== this.replySequence || replyAbortController.signal.aborted) {
+      if (wasCancelled) {
         // The in-flight request (including any bounded fallback attempt) was
         // cancelled because the client disconnected or interrupted. This is a
         // normal cancel, not a reply failure, so it must not surface as an
@@ -1557,36 +1585,10 @@ class RealtimeConnection {
     return turn;
   }
 
-  private async ensureSttSession(): Promise<void> {
-    if (this.sttSession) {
-      return;
-    }
-    if (!this.config.deepgramApiKey) {
-      throw new Error("Deepgram STT is not configured for this hub");
-    }
-    this.sttSession = new DeepgramRealtimeSession(this.config.deepgramApiKey, 16000, {
-      onInterim: (event) => {
-        this.messageChain = this.messageChain
-          .then(() => this.handleInterim(event))
-          .catch((error) => {
-            console.error("Realtime interim handling failed:", error);
-          });
-      },
-      onUtterance: (event) => {
-        this.messageChain = this.messageChain
-          .then(() => this.handleUtterance(event))
-          .catch((error) => {
-            console.error("Realtime utterance handling failed:", error);
-          });
-      },
-      onError: (error) => {
-        console.error("Deepgram realtime session failed:", error);
-      },
-    });
-    await this.sttSession.start();
-  }
-
   private async cleanup(): Promise<void> {
+    this.lifetime.abort(new Error("Realtime connection closed"));
+    this.audioInput.clear();
+    this.admission.release();
     this.unsubscribeCompanion?.();
     this.unsubscribeCompanion = null;
     if (this.attachmentOwnership) {
@@ -1595,10 +1597,6 @@ class RealtimeConnection {
     }
     await this.cancelReply("connection_closed");
     this.activeTurn = null;
-    if (this.sttSession) {
-      await this.sttSession.close();
-      this.sttSession = null;
-    }
   }
 
   private async ensureCurrentDeviceEnrollment(): Promise<boolean> {
@@ -1634,7 +1632,7 @@ class RealtimeConnection {
     if (this.socket.readyState !== WebSocket.OPEN) {
       return;
     }
-    this.socket.send(JSON.stringify(message));
+    await this.flow.send(JSON.stringify(message));
   }
 
   private attachSatellite(
@@ -1779,6 +1777,7 @@ async function convertMp3ToWav(mp3: Buffer, signal: AbortSignal): Promise<Buffer
 async function transcribePcmClip(
   apiKey: string,
   pcm: Buffer,
+  signal?: AbortSignal,
 ): Promise<TranscriptResult> {
   const startedAt = Date.now();
   const response = await fetch(
@@ -1795,6 +1794,7 @@ async function transcribePcmClip(
         "Content-Type": "audio/raw",
       },
       body: new Uint8Array(pcm),
+      signal,
     },
   );
   if (!response.ok) {

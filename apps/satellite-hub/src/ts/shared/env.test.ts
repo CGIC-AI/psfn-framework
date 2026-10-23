@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { loadHubConfig, loadPsfnRuntime } from "./env.js";
+import { loadHubConfig, loadHubControlConfig, loadPsfnRuntime } from "./env.js";
 
 const PSFN_ENV_KEYS = [
   "PSFN_API_BASE_URL",
@@ -86,6 +86,19 @@ const HUB_ASSERTION_PRIVATE_KEY = createPrivateKey({
   format: "der",
   type: "pkcs8",
 }).export({ format: "pem", type: "pkcs8" }).toString();
+
+test("standalone Hub loaders reject weak control and PSFN credentials without disclosing them", () => {
+  for (const value of ["weak", "x".repeat(64), "abcdefghijklmno".repeat(4), "replace-me-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"]) {
+    withEnv(HUB_ENV_KEYS, {
+      PSFN_API_BASE_URL: "https://api.example.test/v1", PSFN_API_KEY: value,
+      HUB_CONTROL_BIND_HOST: "127.0.0.1", HUB_CONTROL_PORT: "8788", HUB_CONTROL_TOKEN: value,
+    }, () => {
+      for (const load of [() => loadPsfnRuntime(process.cwd()), () => loadHubControlConfig(false)]) {
+        assert.throws(load, error => error instanceof Error && error.message.includes("credential") && !error.message.includes(value));
+      }
+    });
+  }
+});
 
 test("loadPsfnRuntime reads registry claim identity and certificate paths", () => {
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "psfn-runtime-"));
@@ -348,7 +361,7 @@ test("loadHubConfig loads paired Home Assistant and private control config", () 
     HOME_ASSISTANT_TOKEN: "ha-secret",
     HUB_CONTROL_BIND_HOST: "127.0.0.1",
     HUB_CONTROL_PORT: "8788",
-    HUB_CONTROL_TOKEN: "0123456789abcdef",
+    HUB_CONTROL_TOKEN: "Control_8bQ6ZcP4fV9mR2tY7aS3dG5hJ0kL1nW_uEoXiCvBN",
     HUB_DEVICE_REGISTRY_PATH: "devices.json",
     HUB_DEVICE_ASSERTION_ISSUER: "psfn-satellite-hub",
     HUB_DEVICE_ASSERTION_KID: "hub-test",
@@ -373,7 +386,7 @@ test("loadHubConfig loads paired Home Assistant and private control config", () 
     assert.equal(config.deviceRegistry?.readCurrent().devices[0]?.enrollmentVersion, 2);
 
     updated.devices[0]!.credentialSha256 = createHash("sha256")
-      .update("0123456789abcdef")
+      .update("Control_8bQ6ZcP4fV9mR2tY7aS3dG5hJ0kL1nW_uEoXiCvBN")
       .digest("hex");
     fs.writeFileSync(registryPath, JSON.stringify(updated));
     assert.throws(
@@ -434,7 +447,7 @@ test("loadHubConfig loads the companion bridge config with PSFN auth fallback", 
   withEnv(HUB_ENV_KEYS, {
     HUB_TEXT_ONLY: "true",
     PSFN_API_BASE_URL: "http://127.0.0.1:10053/v1",
-    PSFN_API_KEY: "psfn-key",
+    PSFN_API_KEY: "Psfn_8bQ6ZcP4fV9mR2tY7aS3dG5hJ0kL1nW_uEoXiCvBN",
     PSFN_CAPABILITY_PROFILE: "text-only",
     PSFN_SATELLITE_ID: "hub-main",
     PSFN_ENDPOINT_ID: "hub-endpoint",
@@ -445,7 +458,7 @@ test("loadHubConfig loads the companion bridge config with PSFN auth fallback", 
     const config = loadHubConfig(projectRoot);
 
     assert.equal(config.companion?.baseUrl, "http://127.0.0.1:10053/v1");
-    assert.equal(config.companion?.apiKey, "psfn-key");
+    assert.equal(config.companion?.apiKey, "Psfn_8bQ6ZcP4fV9mR2tY7aS3dG5hJ0kL1nW_uEoXiCvBN");
     assert.deepEqual(config.companion?.identity, {
       satelliteId: "hub-main",
       endpointId: "hub-endpoint",
@@ -480,12 +493,12 @@ test("loadHubConfig prefers the explicit companion API key over the PSFN key", (
   withEnv(HUB_ENV_KEYS, {
     HUB_TEXT_ONLY: "true",
     PSFN_API_BASE_URL: "http://127.0.0.1:10053/v1",
-    PSFN_API_KEY: "psfn-key",
+    PSFN_API_KEY: "Psfn_8bQ6ZcP4fV9mR2tY7aS3dG5hJ0kL1nW_uEoXiCvBN",
     PSFN_COMPANION_BASE_URL: "http://127.0.0.1:10054",
-    PSFN_COMPANION_API_KEY: "companion-key",
+    PSFN_COMPANION_API_KEY: "Companion_8bQ6ZcP4fV9mR2tY7aS3dG5hJ0kL1nW_uEoXiCvBN",
   }, () => {
     const config = loadHubConfig(projectRoot);
-    assert.equal(config.companion?.apiKey, "companion-key");
+    assert.equal(config.companion?.apiKey, "Companion_8bQ6ZcP4fV9mR2tY7aS3dG5hJ0kL1nW_uEoXiCvBN");
   });
 });
 

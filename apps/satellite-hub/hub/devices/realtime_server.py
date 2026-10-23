@@ -9,10 +9,11 @@ from io import BytesIO
 import json
 import logging
 from pathlib import Path
+import time
 import uuid
 import wave
 
-import websockets
+from websockets.asyncio.server import serve
 from websockets.exceptions import ConnectionClosed
 
 from hub.adapters.agent.psfn_streaming import PsfnStreamingProvider
@@ -20,6 +21,7 @@ from hub.adapters.stt.deepgram_live import DeepgramLiveSTTProvider
 from hub.adapters.tts.elevenlabs_streaming import ElevenLabsStreamingTTS
 from hub.media.http_audio import StaticAudioServer
 from hub.satellite_claims import ClientCertificateConfig, SatelliteClaimConfig
+from hub.security.realtime_access import RealtimeAccess
 from hub.storage.session_cache import SessionCache
 from hub.util import ensure_directory, isoformat_z, to_jsonable, utc_now, write_json
 
@@ -62,6 +64,9 @@ class _RealtimeConnection:
         psfn_author_name: str | None,
         psfn_satellite_claim: SatelliteClaimConfig,
         psfn_client_certificate: ClientCertificateConfig | None,
+        max_audio_bytes: int = 4 * 1024 * 1024,
+        max_audio_duration_seconds: float = 120,
+        idle_timeout_seconds: float = 30,
     ) -> None:
         self._websocket = websocket
         self._audio_server = audio_server
@@ -89,6 +94,13 @@ class _RealtimeConnection:
         self._active_turn: _RealtimeTurn | None = None
         self._reply_task: asyncio.Task[None] | None = None
         self._send_lock = asyncio.Lock()
+        self._max_audio_bytes = max_audio_bytes
+        self._max_audio_duration = max_audio_duration_seconds
+        self._idle_timeout = idle_timeout_seconds
+        self._pending_audio: bytearray | None = None
+        self._pending_started = 0.0
+        self._pending_wake_word: str | None = None
+        self._pending_turn_id: str | None = None
 
     async def run(self) -> None:
         await self._send_json(
@@ -100,13 +112,24 @@ class _RealtimeConnection:
                 "audio_format": "pcm_s16le_16000_mono_in/mp3_44100_out",
             }
         )
-        async for raw_message in self._websocket:
-            if isinstance(raw_message, bytes):
-                continue
+        iterator = self._websocket.__aiter__()
+        while True:
+            timeout = self._idle_timeout
+            if self._pending_audio is not None:
+                timeout = min(timeout, self._max_audio_duration - (time.monotonic() - self._pending_started))
+            try:
+                raw_message = await asyncio.wait_for(anext(iterator), max(0, timeout))
+            except StopAsyncIteration:
+                return
+            if not isinstance(raw_message, str):
+                raise ValueError("Realtime requires JSON text frames")
             payload = json.loads(raw_message)
+            if not isinstance(payload, dict) or not isinstance(payload.get("type"), str):
+                raise ValueError("Invalid realtime frame")
             await self._handle_message(payload)
 
     async def aclose(self) -> None:
+        self._pending_audio = None
         await self._cancel_reply(reason="connection_closed")
         if self._active_turn is not None:
             with suppress(Exception):
@@ -119,13 +142,7 @@ class _RealtimeConnection:
     async def _handle_message(self, payload: dict[str, object]) -> None:
         message_type = str(payload.get("type") or "")
         if message_type == "hello":
-            self._device_id = str(payload.get("device_id") or self._device_id)
             self._device_name = str(payload.get("device_name") or self._device_name)
-            conversation_id = str(payload.get("conversation_id") or "").strip()
-            if conversation_id:
-                self._session_id = conversation_id
-            else:
-                self._session_id = f"realtime:{self._device_id}"
             self._session_cache.touch(self._session_id)
             await self._send_json(
                 {
@@ -138,23 +155,47 @@ class _RealtimeConnection:
             return
 
         if message_type == "interrupt":
+            self._pending_audio = None
             await self._cancel_reply(reason="client_interrupt")
             await self._send_json({"type": "assistant.interrupted", "session_id": self._session_id})
             return
 
         if message_type == "turn.start":
-            await self._start_turn(wake_word_phrase=_clean_optional(payload.get("wake_word_phrase")))
+            if self._pending_audio is not None:
+                raise ValueError("Overlapping audio turn")
+            self._pending_audio = bytearray()
+            self._pending_started = time.monotonic()
+            self._pending_wake_word = _clean_optional(payload.get("wake_word_phrase"))
+            self._pending_turn_id = f"turn-{uuid.uuid4().hex[:8]}"
+            await self._send_json({"type": "turn.started", "session_id": self._session_id,
+                                   "turn_id": self._pending_turn_id, "wake_word_phrase": self._pending_wake_word})
             return
 
         if message_type == "audio":
-            await self._handle_audio(_decode_audio(str(payload.get("audio") or "")))
+            value = payload.get("audio")
+            if not isinstance(value, str) or self._pending_audio is None:
+                raise ValueError("Audio requires an active turn")
+            data = base64.b64decode(value, validate=True)
+            if len(data) % 2 or len(self._pending_audio) + len(data) > min(self._max_audio_bytes, int(self._max_audio_duration * 32000)) or time.monotonic() - self._pending_started > self._max_audio_duration:
+                self._pending_audio = None
+                raise ValueError("Audio turn exceeds PCM limit")
+            self._pending_audio.extend(data)
             return
 
         if message_type == "turn.end":
+            pcm = bytes(self._pending_audio or b"")
+            self._pending_audio = None
+            if not pcm:
+                return
+            if time.monotonic() - self._pending_started > self._max_audio_duration:
+                raise ValueError("Audio turn exceeds duration")
+            await self._start_turn(wake_word_phrase=self._pending_wake_word)
+            await self._handle_audio(pcm)
             await self._finish_turn(reason=str(payload.get("reason") or "client_end"))
             return
 
         if message_type == "session.reset":
+            self._pending_audio = None
             await self._cancel_reply(reason="session_reset")
             if self._active_turn is not None:
                 with suppress(Exception):
@@ -165,7 +206,7 @@ class _RealtimeConnection:
             await self._send_json({"type": "session.reset.ack", "session_id": self._session_id})
             return
 
-        await self._send_json({"type": "error", "message": f"Unsupported message type: {message_type}"})
+        raise ValueError("Unsupported realtime frame")
 
     async def _start_turn(self, *, wake_word_phrase: str | None) -> None:
         await self._cancel_reply(reason="new_turn")
@@ -173,7 +214,7 @@ class _RealtimeConnection:
             with suppress(Exception):
                 await self._stt.abort_turn()
         started_at = utc_now()
-        turn_id = f"turn-{uuid.uuid4().hex[:8]}"
+        turn_id = self._pending_turn_id or f"turn-{uuid.uuid4().hex[:8]}"
         safe_session = self._session_id.replace("/", "_").replace(":", "_")
         directory = ensure_directory(
             self._artifacts_root / started_at.strftime("%Y%m%d") / f"{started_at.strftime('%H%M%S')}_{safe_session}_{turn_id}"
@@ -216,14 +257,6 @@ class _RealtimeConnection:
                 "turn_id": turn_id,
                 "wake_word_phrase": wake_word_phrase,
             },
-        )
-        await self._send_json(
-            {
-                "type": "turn.started",
-                "session_id": self._session_id,
-                "turn_id": turn_id,
-                "wake_word_phrase": wake_word_phrase,
-            }
         )
 
     async def _handle_audio(self, data: bytes) -> None:
@@ -287,7 +320,7 @@ class _RealtimeConnection:
 
     async def _run_reply(self, *, turn: _RealtimeTurn, transcript: str, reason: str) -> None:
         response_text = ""
-        text_chunks: asyncio.Queue[str | None] = asyncio.Queue()
+        text_chunks: asyncio.Queue[str | None] = asyncio.Queue(maxsize=32)
         tts_task = asyncio.create_task(self._stream_audio_chunks(turn=turn, text_chunks=text_chunks))
         await self._send_json(
             {
@@ -332,9 +365,9 @@ class _RealtimeConnection:
             )
         except asyncio.CancelledError:
             with suppress(asyncio.QueueFull):
-                await text_chunks.put(None)
+                text_chunks.put_nowait(None)
             tts_task.cancel()
-            with suppress(Exception):
+            with suppress(asyncio.CancelledError, Exception):
                 await tts_task
             write_json(
                 turn.reply_path,
@@ -366,6 +399,10 @@ class _RealtimeConnection:
                 }
             )
         finally:
+            if not tts_task.done():
+                tts_task.cancel()
+                with suppress(asyncio.CancelledError, Exception):
+                    await tts_task
             if self._reply_task is asyncio.current_task():
                 self._reply_task = None
 
@@ -443,7 +480,27 @@ class RealtimeVoiceServer:
         psfn_author_name: str | None,
         psfn_satellite_claim: SatelliteClaimConfig,
         psfn_client_certificate: ClientCertificateConfig | None,
+        auth_token: str | None = None,
+        developer_mode: bool = False,
+        allowed_origins: tuple[str, ...] = (),
+        max_frame_bytes: int = 256 * 1024,
+        max_connections: int = 64,
+        max_audio_bytes: int = 4 * 1024 * 1024,
+        max_audio_duration_seconds: float = 120,
+        idle_timeout_seconds: float = 30,
     ) -> None:
+        self._access = RealtimeAccess(host, auth_token, developer_mode, allowed_origins)
+        if auth_token and auth_token in {psfn_api_key, deepgram_api_key, elevenlabs_api_key}:
+            raise ValueError("HUB_REALTIME_AUTH_TOKEN must not reuse another credential")
+        for value in (max_frame_bytes, max_connections, max_audio_bytes, max_audio_duration_seconds, idle_timeout_seconds):
+            if not isinstance(value, (int, float)) or not 0 < value <= 2_147_483_647:
+                raise ValueError("Realtime resource limits must be positive bounded numbers")
+        self._max_frame_bytes = max_frame_bytes
+        self._max_connections = max_connections
+        self._max_audio_bytes = max_audio_bytes
+        self._max_audio_duration = max_audio_duration_seconds
+        self._idle_timeout = idle_timeout_seconds
+        self._connections: set = set()
         self._host = host
         self._port = port
         self._artifacts_root = artifacts_root
@@ -464,15 +521,43 @@ class RealtimeVoiceServer:
         self._server = None
 
     async def __aenter__(self) -> "RealtimeVoiceServer":
-        self._server = await websockets.serve(
+        self._server = await serve(
             self._handle_connection,
             self._host,
             self._port,
-            max_size=None,
+            process_request=self._process_request,
+            max_size=self._max_frame_bytes,
+            max_queue=32,
+            write_limit=1024 * 1024,
+            open_timeout=5,
+            close_timeout=5,
+            compression=None,
             ping_interval=20,
             ping_timeout=20,
         )
         return self
+
+    @property
+    def port(self) -> int:
+        if self._server is None:
+            raise RuntimeError("Realtime server is not listening")
+        return self._server.sockets[0].getsockname()[1]
+
+    def _process_request(self, websocket, request):
+        from http import HTTPStatus
+
+        try:
+            status = self._access.reject_status(request, websocket.remote_address[0])
+        except (ValueError, TypeError):
+            status = HTTPStatus.BAD_REQUEST
+        if status is not None:
+            return websocket.respond(status, "Realtime access denied\n")
+        if len(self._connections) >= self._max_connections:
+            return websocket.respond(HTTPStatus.TOO_MANY_REQUESTS, "Realtime connection quota exceeded\n")
+        self._connections.add(websocket)
+        task = asyncio.create_task(websocket.wait_closed())
+        task.add_done_callback(lambda _: self._connections.discard(websocket))
+        return None
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
         assert self._server is not None
@@ -498,13 +583,19 @@ class RealtimeVoiceServer:
             psfn_author_name=self._psfn_author_name,
             psfn_satellite_claim=self._psfn_satellite_claim,
             psfn_client_certificate=self._psfn_client_certificate,
+            max_audio_bytes=self._max_audio_bytes,
+            max_audio_duration_seconds=self._max_audio_duration,
+            idle_timeout_seconds=self._idle_timeout,
         )
         try:
             await connection.run()
         except ConnectionClosed:
             return
+        except (ValueError, TypeError, TimeoutError):
+            await websocket.close(1008, "Invalid or expired realtime input")
         finally:
             await connection.aclose()
+            self._connections.discard(websocket)
 
 
 def _clean_optional(value: object) -> str | None:

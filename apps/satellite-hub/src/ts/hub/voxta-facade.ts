@@ -14,10 +14,11 @@ import {
   EmbodiedSessionRegistry,
   VOXTA_VAM_CAPABILITIES,
 } from "./embodied-session.js";
-import type { PsfnChannelContext, VisionCaptureImage, VisionCaptureMetadata } from "./embodied-session.js";
+import type { PsfnChannelContext, SatelliteAttachmentOwnership, VisionCaptureImage, VisionCaptureMetadata } from "./embodied-session.js";
 import type { ConversationMessage } from "./session-store.js";
 import { SessionStore } from "./session-store.js";
 import { HubAccess, rejectHubUpgrade, type HubPrincipal } from "./hub-auth.js";
+import { HubResources, HubSocketFlow, HubRequestError, readHubBody, rejectHttp, type HubSocketAdmission } from "./transport-resources.js";
 
 const SIGNALR_RECORD_SEPARATOR = "\x1e";
 const SIGNALR_KEEPALIVE_INTERVAL_MS = 15_000;
@@ -26,6 +27,7 @@ const VOXTA_SERVER_VERSION = "1.1.3";
 const VAM_PLUGIN_VERSION = "1.1.1";
 
 interface VoxtaFacadeDependencies {
+  resources: HubResources;
   access: HubAccess;
   config: VoxtaFacadeConfig;
   sessions: SessionStore;
@@ -119,7 +121,7 @@ interface VoxtaParticipant {
 
 export class VoxtaFacade {
   private readonly principalSessions = new Map<string, { sessionId: string; chatId: string }>();
-  private readonly wsServer = new WebSocketServer({ noServer: true });
+  private readonly wsServer: WebSocketServer;
   private readonly pendingConnections = new Map<string, PendingConnection>();
   private readonly runtime: VoxtaFacadeRuntime = {
     audioOwners: new Map(),
@@ -129,10 +131,14 @@ export class VoxtaFacade {
     pendingVisionRequests: new Map(),
     connections: new Set(),
   };
-  private readonly audioWsServer = new WebSocketServer({ noServer: true });
+  private readonly audioWsServer: WebSocketServer;
   private readonly principals = new WeakMap<http.IncomingMessage, HubPrincipal>();
+  private readonly admissions = new WeakMap<http.IncomingMessage, HubSocketAdmission>();
 
   constructor(private readonly deps: VoxtaFacadeDependencies) {
+    const options = { noServer: true, maxPayload: deps.resources.limits.maxFrameBytes, perMessageDeflate: false } as const;
+    this.wsServer = new WebSocketServer(options);
+    this.audioWsServer = new WebSocketServer(options);
     this.wsServer.on("connection", (socket, request) => {
       const url = new URL(request.url || "/hub", "http://localhost");
       const connectionToken = url.searchParams.get("id") || "";
@@ -142,6 +148,9 @@ export class VoxtaFacade {
       let session = this.principalSessions.get(principal.id);
       if (!session) {
         session = { sessionId: crypto.randomUUID(), chatId: crypto.randomUUID() };
+        if (this.principalSessions.size >= this.deps.resources.limits.maxSessions) {
+          this.principalSessions.delete(this.principalSessions.keys().next().value!);
+        }
         this.principalSessions.set(principal.id, session);
       }
       const connection = new VoxtaConnection(
@@ -152,6 +161,7 @@ export class VoxtaFacade {
         publicBaseUrlForRequest(this.deps.config.publicBaseUrl, request),
         principal,
         session,
+        this.admissions.get(request)!,
       );
       connection.run();
     });
@@ -164,6 +174,8 @@ export class VoxtaFacade {
         normalizedString(url.searchParams.get("sessionId")) ?? "",
         this.principals.get(request)!,
         this.deps.access,
+        this.deps.resources,
+        this.admissions.get(request)!,
       );
       stream.run();
     });
@@ -200,18 +212,14 @@ export class VoxtaFacade {
     const visionRequest = parseVisionRequestPath(url.pathname);
     if (visionRequest) {
       void this.handleVisionRequest(request, response, url, visionRequest).catch((error) => {
-        writeJson(response, 500, {
-          error: error instanceof Error ? error.message : String(error),
-        });
+        rejectHttp(request, response, error);
       });
       return true;
     }
     const serviceToggle = parseServiceTogglePath(url.pathname);
     if (serviceToggle) {
       void this.handleServiceToggle(request, response, serviceToggle).catch((error) => {
-        writeJson(response, 500, {
-          error: error instanceof Error ? error.message : String(error),
-        });
+        rejectHttp(request, response, error);
       });
       return true;
     }
@@ -229,8 +237,19 @@ export class VoxtaFacade {
       return true;
     }
 
+    void this.negotiate(request, response, principal).catch(error => rejectHttp(request, response, error));
+    return true;
+  }
+
+  private async negotiate(request: http.IncomingMessage, response: http.ServerResponse, principal: HubPrincipal): Promise<void> {
+    await readHubBody(request, this.deps.resources.limits.maxHttpBodyBytes, this.deps.resources.limits.httpBodyTimeoutMs);
     const connectionId = crypto.randomUUID();
     const connectionToken = crypto.randomUUID();
+    this.prunePendingConnections();
+    if (this.pendingConnections.size >= this.deps.resources.limits.maxPendingNegotiations) {
+      writeJson(response, 429, { error: "Hub pending negotiation quota exceeded" });
+      return;
+    }
     this.pendingConnections.set(connectionToken, {
       principalId: principal.id,
       connectionId,
@@ -249,7 +268,6 @@ export class VoxtaFacade {
         },
       ],
     });
-    return true;
   }
 
   shouldHandleUpgrade(request: http.IncomingMessage): boolean {
@@ -278,6 +296,10 @@ export class VoxtaFacade {
     } else {
       return rejectHubUpgrade(socket, 404);
     }
+    const admission = this.deps.resources.admitSocket(true);
+    if (!admission) return rejectHubUpgrade(socket, 429);
+    this.admissions.set(request, admission);
+    socket.once("close", admission.release);
     const server = isAudioInputStreamPath(url.pathname) ? this.audioWsServer : this.wsServer;
     server.handleUpgrade(request, socket, head, (websocket) => {
       server.emit("connection", websocket, request);
@@ -300,7 +322,7 @@ export class VoxtaFacade {
   }
 
   private prunePendingConnections(): void {
-    const expiresBefore = Date.now() - 60_000;
+    const expiresBefore = Date.now() - this.deps.resources.limits.negotiationTtlMs;
     for (const [token, pending] of this.pendingConnections) {
       if (pending.createdAt < expiresBefore) {
         this.pendingConnections.delete(token);
@@ -363,7 +385,7 @@ export class VoxtaFacade {
       writeJson(response, 405, { error: "Voxta service updates require PUT" });
       return;
     }
-    const body = await readJsonBody(request);
+    const body = await readJsonBody(request, this.deps.resources);
     if (!isRecord(body) || typeof body.enabled !== "boolean") {
       writeJson(response, 400, { error: "Voxta service update body must be { enabled: boolean }" });
       return;
@@ -451,8 +473,8 @@ export class VoxtaFacade {
       return;
     }
     const label = normalizedString(url.searchParams.get("label")) ?? "virtamate";
-    const upload = await readMultipartUpload(request);
-    const capture = persistVisionCapture({
+    const upload = await readMultipartUpload(request, this.deps.resources);
+    const capture = await persistVisionCapture({
       root: this.deps.artifactsRoot,
       requestId: visionRequest.requestId,
       sessionId,
@@ -477,11 +499,13 @@ export class VoxtaFacade {
 }
 
 class VoxtaConnection {
+  private readonly flow: HubSocketFlow;
   private readonly assistant: VoxtaParticipant;
   private readonly user: VoxtaParticipant;
   private readonly actionAllowlist: Set<string>;
   private servicesConfigurationsSetId: string = crypto.randomUUID();
-  private messageChain: Promise<void> = Promise.resolve();
+  private attachmentOwnership: SatelliteAttachmentOwnership | null = null;
+  private released = false;
   private sessionId: string;
   private chatId: string;
   private registeredSessionId: string | null = null;
@@ -501,7 +525,9 @@ class VoxtaConnection {
     private readonly publicBaseUrl: string,
     private readonly principal: HubPrincipal,
     session: { sessionId: string; chatId: string },
+    admission: HubSocketAdmission,
   ) {
+    this.flow = new HubSocketFlow(socket, deps.resources.limits, true, () => { admission.release(); this.release(); });
     // Only the authenticated transport may choose its conversation. Client or
     // environment session hints cannot join another connection's history.
     this.sessionId = session.sessionId;
@@ -530,22 +556,32 @@ class VoxtaConnection {
 
   run(): void {
     this.keepAlive = setInterval(() => {
-      void this.sendFrame({ type: 6 });
+      void this.sendFrame({ type: 6 }).catch(() => this.flow.fail(1011, "Hub output failed"));
     }, SIGNALR_KEEPALIVE_INTERVAL_MS);
-    this.socket.on("message", (raw) => {
-      for (const frame of decodeSignalRFrames(raw)) {
-        this.messageChain = this.messageChain
-          .then(() => this.handleFrame(frame))
-          .catch((error) => {
-            console.error("Voxta message handling failed:", error);
-            void this.sendReceive({
-              $type: "error",
-              message: error instanceof Error ? error.message : String(error),
-            });
-          });
+    this.socket.on("error", () => { this.socket.terminate(); });
+    this.socket.on("message", (raw, isBinary) => this.flow.enqueue(raw, async () => {
+      let frames: unknown[];
+      try {
+        if (isBinary) throw new Error("Invalid SignalR frame");
+        frames = decodeSignalRFrames(raw);
+        if (frames.some(frame => !isValidSignalRFrame(frame))) throw new Error("Invalid SignalR frame");
+      } catch {
+        this.flow.fail(1008, "Invalid SignalR frame");
+        return;
       }
-    });
-    this.socket.on("close", () => {
+      if (frames.length > this.deps.resources.limits.maxQueuedMessages) {
+        this.flow.fail(1008, "SignalR batch exceeds queue limit"); return;
+      }
+      for (const frame of frames) {
+        await this.handleFrame(frame);
+      }
+    }));
+    this.socket.on("close", () => this.release());
+  }
+
+  private release(): void {
+      if (this.released) return;
+      this.released = true;
       if (this.keepAlive) {
         clearInterval(this.keepAlive);
         this.keepAlive = null;
@@ -554,6 +590,7 @@ class VoxtaConnection {
       for (const [configurationId, connection] of this.runtime.connectionsByConfigurationId) {
         if (connection === this) {
           this.runtime.connectionsByConfigurationId.delete(configurationId);
+          this.runtime.serviceStates.delete(configurationId);
         }
       }
       this.runtime.connections.delete(this);
@@ -561,7 +598,11 @@ class VoxtaConnection {
         this.runtime.connectionsBySessionId.delete(this.registeredSessionId);
         this.registeredSessionId = null;
       }
-    });
+      if (this.attachmentOwnership) {
+        this.deps.embodiedSessions.detachSatellite(this.sessionId,
+          this.principal.device?.satelliteId ?? this.deps.config.satelliteId, this.attachmentOwnership);
+        this.attachmentOwnership = null;
+      }
   }
 
   private async handleFrame(frame: unknown): Promise<void> {
@@ -697,6 +738,7 @@ class VoxtaConnection {
     for (const [id, connection] of this.runtime.connectionsByConfigurationId) {
       if (connection === this) {
         this.runtime.connectionsByConfigurationId.delete(id);
+        this.runtime.serviceStates.delete(id);
       }
     }
     this.servicesConfigurationsSetId = nextId;
@@ -1036,6 +1078,9 @@ class VoxtaConnection {
       }
       const filename = `voxta_${safePathPart(this.sessionId)}_${safePathPart(messageId)}_0.wav`;
       this.runtime.audioOwners.set(filename, this.principal.id);
+      if (this.runtime.audioOwners.size > this.deps.resources.limits.maxSessions) {
+        this.runtime.audioOwners.delete(this.runtime.audioOwners.keys().next().value!);
+      }
       const audioFolder = this.deps.config.audioFolder;
       if (!audioFolder) {
         const directory = voxtaAudioArtifactsRoot(this.deps.artifactsRoot);
@@ -1173,15 +1218,7 @@ class VoxtaConnection {
       return;
     }
     const wirePayload = sanitizeVoxtaWireValue(payload) as Record<string, unknown>;
-    const sendOperation = new Promise<void>((resolve, reject) => {
-      this.socket.send(`${JSON.stringify(wirePayload)}${SIGNALR_RECORD_SEPARATOR}`, (error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-        resolve();
-      });
-    });
+    const sendOperation = this.flow.send(`${JSON.stringify(wirePayload)}${SIGNALR_RECORD_SEPARATOR}`);
     // SAFETY: reply cancellation releases only the logical waiter. The shared
     // authenticated socket stays open, and awaitWithAbort keeps observing a
     // callback that settles after detachment so it cannot reject unhandled.
@@ -1194,7 +1231,7 @@ class VoxtaConnection {
 
   private attachSatellite(): void {
     const device = this.principal.device;
-    this.deps.embodiedSessions.attachSatellite({
+    const attachment = this.deps.embodiedSessions.attachSatellite({
       sessionId: this.sessionId,
       satelliteId: device?.satelliteId ?? this.deps.config.satelliteId,
       satelliteName: device?.satelliteName ?? this.deps.config.satelliteName,
@@ -1205,6 +1242,7 @@ class VoxtaConnection {
         deviceAuthority: device,
       } : {}),
     });
+    this.attachmentOwnership = attachment.ownership;
   }
 
   private agentChannelContext(): PsfnChannelContext {
@@ -1366,8 +1404,11 @@ class VoxtaConnection {
 }
 
 class VoxtaAudioInputStream {
+  private readonly flow: HubSocketFlow;
+  private bytes = 0;
+  private audioTimer: NodeJS.Timeout | undefined;
   private spec: VoxtaAudioInputSpec | null = null;
-  private readonly chunks: Buffer[] = [];
+  private audio: Buffer | null = null;
   private started = false;
   private closed = false;
 
@@ -1378,47 +1419,71 @@ class VoxtaAudioInputStream {
     private readonly sessionId: string,
     private readonly principal: HubPrincipal,
     private readonly access: HubAccess,
-  ) {}
+    private readonly resources: HubResources,
+    admission: HubSocketAdmission,
+  ) {
+    this.flow = new HubSocketFlow(socket, resources.limits, true, rejected => {
+      admission.release();
+      if (rejected) { this.closed = true; this.audio = null; clearTimeout(this.audioTimer); }
+    });
+  }
 
   run(): void {
+    this.socket.on("error", () => { this.closed = true; this.audio = null; clearTimeout(this.audioTimer); });
     if (!normalizeGuid(this.sessionId) || !this.runtime.connectionsBySessionId.has(this.sessionId)) {
       this.socket.close(1008, "Unknown Voxta audio input session");
       return;
     }
     this.socket.on("message", (raw, isBinary) => {
-      void this.handleMessage(raw, isBinary).catch((error) => {
-        console.error("Voxta audio input stream failed:", error);
-        this.socket.close(1011, error instanceof Error ? error.message : String(error));
-      });
+      this.flow.touch();
+      try { this.handleMessage(raw, isBinary); } catch {
+        this.closed = true;
+        this.audio = null;
+        clearTimeout(this.audioTimer);
+        this.flow.fail(1008, "Invalid Voxta audio input");
+      }
     });
-    this.socket.on("close", () => {
+    this.socket.on("close", code => {
+      if (code !== 1000 && code !== 1005) { this.closed = true; this.audio = null; clearTimeout(this.audioTimer); }
       void this.finish().catch((error) => {
         console.error("Voxta audio input finalization failed:", error);
       });
     });
   }
 
-  private async handleMessage(raw: RawData, isBinary: boolean): Promise<void> {
+  private handleMessage(raw: RawData, isBinary: boolean): void {
     this.access.assertCurrent(this.principal);
     if (!this.spec) {
       if (isBinary) {
         throw new Error("Voxta audio input stream must start with a JSON stream spec");
       }
       this.spec = parseAudioInputSpec(decodeRawData(raw));
+      this.audio = Buffer.allocUnsafe(Math.min(this.resources.limits.maxAudioBytes,
+        Math.floor(this.resources.limits.maxAudioDurationMs * 32)));
+      this.audioTimer = setTimeout(() => {
+        this.closed = true; this.audio = null; this.flow.fail(1008, "Voxta audio duration exceeded");
+      }, this.resources.limits.maxAudioDurationMs);
       return;
     }
+    if (!isBinary || this.closed) throw new Error("Audio chunks must be binary");
     const chunk = rawDataToBuffer(raw);
     if (chunk.length === 0) {
       return;
     }
-    this.chunks.push(chunk);
+    const maxDurationBytes = Math.floor(this.spec.sampleRate * this.spec.channels * (this.spec.bitsPerSample / 8)
+      * this.resources.limits.maxAudioDurationMs / 1000);
+    if (chunk.length % (this.spec.channels * (this.spec.bitsPerSample / 8)) !== 0
+      || this.bytes + chunk.length > Math.min(this.resources.limits.maxAudioBytes, maxDurationBytes)) {
+      throw new Error("Voxta audio aggregate exceeded");
+    }
+    chunk.copy(this.audio!, this.bytes); this.bytes += chunk.length;
     if (!this.started) {
       this.started = true;
-      await this.connection()?.emitSpeechRecognitionStart();
     }
   }
 
   private async finish(): Promise<void> {
+    clearTimeout(this.audioTimer);
     if (this.closed) {
       return;
     }
@@ -1427,7 +1492,8 @@ class VoxtaAudioInputStream {
     if (!connection || !this.started || !this.spec) {
       return;
     }
-    const pcm = Buffer.concat(this.chunks);
+    const pcm = this.audio?.subarray(0, this.bytes) ?? Buffer.alloc(0);
+    this.audio = null;
     if (pcm.length === 0) {
       await connection.emitSpeechRecognitionEnd("");
       return;
@@ -1437,6 +1503,7 @@ class VoxtaAudioInputStream {
       await connection.emitSpeechRecognitionEnd("");
       return;
     }
+    await connection.emitSpeechRecognitionStart();
     const result = await this.stt.transcribePcm({
       sessionId: this.sessionId,
       spec: this.spec,
@@ -1543,31 +1610,29 @@ interface MultipartUpload {
   filename: string;
 }
 
-async function readMultipartUpload(request: http.IncomingMessage): Promise<MultipartUpload> {
+async function readMultipartUpload(request: http.IncomingMessage, resources: HubResources): Promise<MultipartUpload> {
   const contentType = String(request.headers["content-type"] || "");
   const boundary = /boundary=([^;]+)/i.exec(contentType)?.[1]?.trim();
-  if (!boundary) {
-    throw new Error("Voxta vision upload must be multipart/form-data with a boundary");
+  if (!/^multipart\/form-data\s*;/iu.test(contentType) || !boundary || boundary.length > 70) {
+    throw new HubRequestError(400, "Voxta vision upload requires a valid multipart boundary");
   }
-  const body = await readRequestBuffer(request);
+  const body = await readHubBody(request, resources.limits.maxVisionBodyBytes, resources.limits.httpBodyTimeoutMs);
   const part = extractMultipartFile(body, boundary.replace(/^"|"$/g, ""), "file");
-  if (!part) {
-    throw new Error("Voxta vision upload must include a file field");
+  if (!part || !extensionForMimeType(part.mimeType)) {
+    throw new HubRequestError(400, "Voxta vision upload requires one JPEG or PNG file");
   }
+  if (part.data.length > resources.limits.maxVisionFileBytes) throw new HubRequestError(413, "Voxta vision file exceeds byte limit");
   return part;
-}
-
-async function readRequestBuffer(request: http.IncomingMessage): Promise<Buffer> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks);
 }
 
 function extractMultipartFile(body: Buffer, boundary: string, fieldName: string): MultipartUpload | null {
   const delimiter = Buffer.from(`--${boundary}`);
+  const ending = Buffer.from(`--${boundary}--`);
+  const tail = body.subarray(body.length - ending.length - 2);
+  if (!body.subarray(0, delimiter.length + 2).equals(Buffer.from(`--${boundary}\r\n`))
+    || (!body.subarray(body.length - ending.length).equals(ending) && !tail.equals(Buffer.concat([ending, Buffer.from("\r\n")])))) return null;
   let offset = 0;
+  let file: MultipartUpload | null = null;
   while (offset < body.length) {
     const partStart = body.indexOf(delimiter, offset);
     if (partStart === -1) {
@@ -1575,7 +1640,7 @@ function extractMultipartFile(body: Buffer, boundary: string, fieldName: string)
     }
     const headersStart = partStart + delimiter.length;
     if (body.subarray(headersStart, headersStart + 2).toString("ascii") === "--") {
-      return null;
+      return file;
     }
     const partBodyStart = body.indexOf(Buffer.from("\r\n\r\n"), headersStart);
     if (partBodyStart === -1) {
@@ -1592,9 +1657,10 @@ function extractMultipartFile(body: Buffer, boundary: string, fieldName: string)
     const disposition = /content-disposition:\s*form-data;([^\r\n]+)/i.exec(headerText)?.[1] || "";
     const name = /name="([^"]+)"/i.exec(disposition)?.[1] || "";
     if (name === fieldName) {
+      if (file) return null;
       const filename = /filename="([^"]*)"/i.exec(disposition)?.[1] || "upload.jpg";
       const mimeType = /content-type:\s*([^\r\n]+)/i.exec(headerText)?.[1]?.trim() || "application/octet-stream";
-      return {
+      file = {
         data: body.subarray(partBodyStart + 4, partBodyEnd),
         filename,
         mimeType,
@@ -1602,27 +1668,27 @@ function extractMultipartFile(body: Buffer, boundary: string, fieldName: string)
     }
     offset = nextPart;
   }
-  return null;
+  return file;
 }
 
-function persistVisionCapture(input: {
+async function persistVisionCapture(input: {
   root: string;
   requestId: string;
   sessionId: string;
   source: VoxtaVisionSource;
   label: string;
   upload: MultipartUpload;
-}): VisionCaptureImage {
+}): Promise<VisionCaptureImage> {
   const capturedAt = new Date();
   const dateKey = capturedAt.toISOString().slice(0, 10).replaceAll("-", "");
   const directory = path.join(input.root, "voxta-vision", dateKey);
-  fs.mkdirSync(directory, { recursive: true });
+  await fs.promises.mkdir(directory, { recursive: true });
   const extension = extensionForMimeType(input.upload.mimeType) ?? (path.extname(input.upload.filename) || ".bin");
   const filePath = path.join(
     directory,
     `voxta_${safePathPart(input.sessionId)}_${safePathPart(input.requestId)}_${input.source}${extension}`,
   );
-  fs.writeFileSync(filePath, input.upload.data);
+  await fs.promises.writeFile(filePath, input.upload.data);
   return {
     requestId: input.requestId,
     sessionId: input.sessionId,
@@ -1652,8 +1718,8 @@ function extensionForMimeType(mimeType: string): string | undefined {
   return undefined;
 }
 
-async function readJsonBody(request: http.IncomingMessage): Promise<unknown> {
-  const raw = (await readRequestBuffer(request)).toString("utf8").trim();
+async function readJsonBody(request: http.IncomingMessage, resources: HubResources): Promise<unknown> {
+  const raw = (await readHubBody(request, resources.limits.maxHttpBodyBytes, resources.limits.httpBodyTimeoutMs)).toString("utf8").trim();
   if (!raw) {
     return null;
   }
@@ -1670,6 +1736,14 @@ function decodeSignalRFrames(raw: RawData): unknown[] {
     .map((frame) => frame.trim())
     .filter(Boolean)
     .map((frame) => JSON.parse(frame) as unknown);
+}
+
+function isValidSignalRFrame(frame: unknown): boolean {
+  if (!isRecord(frame) || Array.isArray(frame)) return false;
+  if (Object.hasOwn(frame, "protocol")) return frame.protocol === "json" && frame.version === 1;
+  if (frame.type === 6) return true;
+  return frame.type === 1 && typeof frame.target === "string" && Array.isArray(frame.arguments)
+    && (frame.invocationId === undefined || typeof frame.invocationId === "string");
 }
 
 function decodeRawData(raw: RawData): string | null {
@@ -1729,6 +1803,11 @@ function parseAudioInputSpec(raw: string | null): VoxtaAudioInputSpec {
   };
   if (!spec.contentType) {
     throw new Error("Voxta audio input stream spec contentType is required");
+  }
+  if (spec.sampleRate !== 16000 || spec.channels !== 1 || spec.bitsPerSample !== 16
+    || !Number.isSafeInteger(spec.bufferMilliseconds) || spec.bufferMilliseconds < 1
+    || !["audio/wav", "audio/pcm", "audio/raw"].includes(spec.contentType)) {
+    throw new Error("Voxta audio requires 16kHz mono PCM16");
   }
   return spec;
 }

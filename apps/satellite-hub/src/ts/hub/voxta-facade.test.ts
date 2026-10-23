@@ -19,7 +19,7 @@ import type { ConversationMessage } from "./session-store.js";
 import type { VoxtaTtsAdapter } from "./voxta-facade.js";
 
 const SIGNALR_RECORD_SEPARATOR = "\x1e";
-const VOXTA_TEST_TOKEN = "a".repeat(64);
+const VOXTA_TEST_TOKEN = "Voxta_8bQ6ZcP4fV9mR2tY7aS3dG5hJ0kL1nW_uEoXiCvBN";
 
 class FakeAgent implements FrameworkAgentAdapter {
   readonly calls: Array<{

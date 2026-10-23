@@ -157,6 +157,9 @@ async def _run_realtime_runtime(
     async with RealtimeVoiceServer(
         host=config.realtime_target.bind_host,
         port=config.realtime_target.port,
+        auth_token=config.realtime_access.token,
+        developer_mode=config.realtime_access.developer_mode,
+        allowed_origins=config.realtime_access.allowed_origins,
         artifacts_root=config.artifacts_root,
         audio_server=audio_server,
         session_cache=session_cache,

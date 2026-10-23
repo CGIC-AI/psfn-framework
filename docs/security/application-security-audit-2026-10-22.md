@@ -9,7 +9,7 @@ All nine source findings have remediations in the release-candidate branch. The 
 | Item | Value |
 | --- | --- |
 | Audited baseline | `e6a9546051f4` |
-| Validated implementation head | `1e3ca6fbcbeaa0ae5cda436d14b33af0da74cf4f` |
+| Validated implementation head | `c388c84d9dfbf358641fc6e34b0e8326ce9cefe5` |
 | Primary findings | 1 Critical / 4 High / 3 Medium / 1 Low |
 | Tracker epic | `psfn-framework-zbbxj` |
 | Source certification | `psfn-framework-zbbxj.8` |
@@ -97,22 +97,26 @@ These items are not retroactively included in the original nine-finding severity
 | PSFN-AF-02 | High | The Windows Voxta relay created one fire-and-forget microphone send task per callback; stalled upstream sends retained audio without a hard aggregate bound or coordinated shutdown | Remediated with synchronous bounded admission, one owned send pump, active-send byte/chunk accounting, fixed operation and shutdown deadlines, idempotent cleanup, and concurrency regressions (`psfn-framework-zbbxj.11`) |
 | PSFN-AF-03 | Mixed: 3 Critical / 3 High / 10 Medium / 1 Low | The pinned Python graph contained 17 fixable OSV advisories across `anyio`, `certifi`, `cryptography`, `idna`, `pygments`, `pytest`, and `zeroconf`; the repository scanner omitted `uv.lock` | Remediated with stable upgrades, a clean direct pinned scan, and permanent `uv.lock` coverage (`psfn-framework-zbbxj.9`) |
 | PSFN-AF-04 | High | The .NET relay resolved vulnerable `Microsoft.AspNetCore.SignalR.Common` 8.0.26 through an unlocked graph (GHSA-334f-vvp4-7g6p / CVE-2026-70159) | Remediated with exact SignalR 8.0.32, committed NuGet locks, locked restore, clean NuGet/OSV scans, and supported Windows publish validation (`psfn-framework-zbbxj.10`) |
+| PSFN-AF-05 | High | Valid Gateway RPC requests could start unbounded concurrent handlers and accumulate unbounded native outbound buffers; disconnected cancellation-ignoring work could be replaced by reconnecting | Remediated with four request workers per connection, separate bounded control capacity, 16-frame/64 MiB connection admission, a global 256-frame/128 MiB retained-work budget, native-buffer-aware output limits, operation deadlines, and charges retained until actual settlement (`psfn-framework-zbbxj.12`) |
+| PSFN-AF-06 | High | Python realtime sockets were counted only after the HTTP/WebSocket handshake, so incomplete handshakes bypassed `max_connections` | Remediated by charging accepted sockets before protocol allocation, rejecting excess sockets with a lightweight aborting protocol, and holding each charge through terminal TCP cleanup (`psfn-framework-zbbxj.13`) |
+| PSFN-AF-07 | High | Voxta replies and several Hub HTTP, SSE, provider-WebSocket, generated-image, STT, and TTS response paths could retain upstream-controlled data beyond the configured budgets | Remediated with shared declared/chunked response readers, UTF-8 reply accounting, SSE idle/frame limits, provider frame/audio caps, bounded decoder output, response disposal, content-free errors, and exact/one-over/recovery tests (`psfn-framework-zbbxj.14`) |
+| PSFN-AF-08 | High | The Helm physical-role registry omitted Voxta and other effective Secret consumers, allowing a Voxta reference to select an administrator or unrelated private key tuple | Remediated with an authoritative effective tuple inventory, dedicated chart-owned Voxta role, source-derived and rendered-manifest coverage, mutation testing, and reuse rejection without value disclosure (`psfn-framework-zbbxj.15`) |
 
-The remediation review also closed credential-role alias and database-override bypasses, synchronized credential policy copies, added provider-response bounds, refreshed stale security fixtures, and separated encoded transport limits from decoded media limits. These are defense-in-depth corrections within the primary findings rather than separately counted vulnerabilities.
+The first independent review of the assembled candidate found AF-05 through AF-08; each finding was reproduced, assigned a blocking bead, remediated, and independently retested before this report was updated. The remediation review also closed credential-role alias and database-override bypasses, synchronized credential policy copies, refreshed stale security fixtures, and separated encoded transport limits from decoded media limits. These are defense-in-depth corrections within the primary findings rather than separately counted vulnerabilities.
 
 ## Validation evidence
 
-The root validator reproduced implementation-agent claims on the assembled branch at `1e3ca6fbcbeaa0ae5cda436d14b33af0da74cf4f`. Because the pre-PR gate and independent exact-head reviews must run after this report itself is committed, their final commit/result attestations are recorded on `psfn-framework-zbbxj.8` and the pull request rather than self-referentially embedded here.
+The root validator reproduced implementation-agent claims on the assembled branch at `c388c84d9dfbf358641fc6e34b0e8326ce9cefe5`. Because the pre-PR gate and independent exact-head reviews must run after this report itself is committed, their final commit/result attestations are recorded on `psfn-framework-zbbxj.8` and the pull request rather than self-referentially embedded here.
 
 | Control | Evidence |
 | --- | --- |
-| Hub authentication, parser survival, resources, privacy | `npm run verify:satellite-hub`: 356 TypeScript tests and 107 Python tests; build/type checks passed |
-| Gateway framing and admission | 240 independently selected tests passed; implementation lane passed 286 tests plus type, lint, privacy, and structural checks |
+| Hub authentication, parser survival, resources, privacy | `npm run verify:satellite-hub`: 375 TypeScript tests and 120 Python tests; build/type checks passed. The final additions cover pre-handshake admission and bounded HTTP, mTLS, SSE, provider-WebSocket, reply, STT, TTS, and generated-image paths |
+| Gateway framing, admission, and RPC flow control | 75 exact Unix/mTLS-WebSocket transport and flow-control regressions passed on the assembled head; the implementation lane passed 460 tests across 22 files plus type, lint, build, privacy, and applicable structural checks |
 | Filesystem regex isolation | 153 independently selected unit/integration tests passed, including hostile near-miss, cancellation, cleanup, and recovery |
 | Garden browser security | 82 focused browser-session tests and 118 Garden/chart tests passed |
-| Helm credentials and lifecycle | 1,402 focused assertions, 1,274 Helm assertions, and 124 chart/lifecycle checks passed; recovery chart digest verified |
+| Helm credentials and lifecycle | 1,439 selected Helm/lifecycle/chart tests passed; the final physical-role inventory matrix passed 64 tests, the root validator reproduced 1,345 focused tests, and all 124 chart checks passed; recovery chart digest verified over 34 files |
 | DNS pinning and media limits | 277 focused remote-fetch and channel transport tests passed |
-| Python dependencies | Frozen Python 3.11 sync, 107 Python tests, wheel/sdist build, and pinned OSV scan passed with 36 packages and zero findings |
+| Python dependencies | Frozen Python 3.11 sync, 120 Python tests on the assembled head, wheel/sdist build, and pinned OSV scan passed with 36 packages and zero findings |
 | .NET relay | Two locked restores, two builds with zero warnings/errors, two format checks, logger/artifact/microphone/build-contract harness, five actual-process auth/privacy tests, two online transitive NuGet scans, and locked self-contained `win-x64` single-file publish passed |
 | Repository dependency scan | Digest-pinned OSV-Scanner 2.4.0 scanned eight committed lockfiles and 1,366 resolved package records with zero known findings and no suppressions |
 | Final repository gate | Run once on the final committed pull-request head; exact result and SHA are recorded on `psfn-framework-zbbxj.8` and the pull request |

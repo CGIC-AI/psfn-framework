@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import ExitStack
 from functools import partial
 from http.server import BaseHTTPRequestHandler
 import os
@@ -226,14 +227,19 @@ class StaticAudioServer:
         if self._httpd is None:
             self._artifacts.close()
             return
-        self._httpd.shutdown()
-        self._httpd.close_active()
-        self._httpd.server_close()
-        self._httpd = None
-        if self._thread is not None:
-            self._thread.join(timeout=2)
-            self._thread = None
-        self._artifacts.close()
+        httpd, thread = self._httpd, self._thread
+        try:
+            with ExitStack() as resources:
+                resources.callback(self._artifacts.close)
+                if thread is not None:
+                    resources.callback(thread.join, timeout=2)
+                resources.callback(httpd.server_close)
+                resources.callback(httpd.close_active)
+                httpd.shutdown()
+        finally:
+            if httpd.socket.fileno() == -1 and (thread is None or not thread.is_alive()):
+                self._httpd = None
+                self._thread = None
 
     def _open_file(self, relative: Path) -> int:
         return self._artifacts.open_read(self._root / relative)

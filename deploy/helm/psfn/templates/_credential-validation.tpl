@@ -16,6 +16,7 @@
 
 {{- define "psfn.validateCredentials" -}}
 {{- $root := . -}}
+{{- include "psfn.validateCredentialEnvironmentNames" . -}}
 {{- $credentials := dict -}}
 {{- range $label, $name := dict "secrets.existingSecret" .Values.secrets.existingSecret "postgres.auth.existingSecret" .Values.postgres.auth.existingSecret "redis.auth.existingSecret" .Values.redis.auth.existingSecret -}}
 {{- if and $name (or (gt (len $name) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" $name))) -}}
@@ -23,7 +24,12 @@
 {{- end -}}
 {{- end -}}
 {{- $roleKeys := dict -}}
-{{- range $role := list "apiKey" "adminToken" "gatewaySessionHmacKey" "gatewaySessionIntegrityAuthToken" "gatewayCompanionAuthToken" "backupEncryptionKey" "satelliteHubApiKey" "satelliteHubControlToken" "satelliteApiKeys" -}}
+{{/* The complete mapping is the authority, including optional provider/channel
+     references, the harness credential and the aggregated satellite list.
+     Keep this independent of Secret creation: external references must not
+     wire one physical key into two credential roles either. */}}
+{{- $requiredRoles := .Files.Get "files/credential-key-roles.json" | fromJsonArray -}}
+{{- range $role := concat $requiredRoles (keys .Values.secrets.keys) | uniq -}}
 {{- $key := get $root.Values.secrets.keys $role | default "" -}}
 {{- if or (not (regexMatch "^[a-zA-Z0-9._-]+$" $key)) (hasKey $roleKeys $key) -}}
 {{- fail "secrets.keys must assign a valid, distinct Secret data key to each credential role" -}}

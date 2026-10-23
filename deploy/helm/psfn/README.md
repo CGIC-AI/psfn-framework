@@ -125,6 +125,22 @@ also receive the strength and separation checks. An offline render can validate
 an existing Secret reference, but cannot inspect its contents; runtime startup
 and lifecycle validation still apply to credentials read from it.
 
+Every `secrets.keys` entry must select a distinct Secret data key, including
+optional provider/channel credentials, testing-harness authentication, Home
+Assistant, Hub credentials, and `satelliteApiKeys` (the combined Hub and extra
+satellite key list). This also applies to existing Secrets: custom key names
+are supported, but one data key cannot supply multiple credential roles.
+Credential environment names (`provider.envName`, Eidoverse `tokenRef`, and
+`fleetAuth.credentialEnv`) must not alias another credential role or a managed
+or security-sensitive variable. Distinct custom names remain supported.
+`extraEnv` cannot replace chart-managed or custom credential bindings, nor
+repeat a name. On upgrade, move any such overrides to their dedicated chart
+settings (for example `fleetAuth.testingHarnessGardenVerifierEnabled`) and
+give each external credential its own key and environment name.
+PostgreSQL URLs must not carry routing or authentication query overrides such
+as `?password=`; encoded parameter names are rejected too. Non-authentication
+options such as `application_name` and `sslmode` remain supported.
+
 Lint and render checks use an explicit non-production fixture containing only
 external Secret references:
 

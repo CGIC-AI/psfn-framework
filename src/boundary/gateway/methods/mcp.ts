@@ -1,3 +1,4 @@
+import { retainGatewayRpcOperation } from '../rpc-work-lifetime.js';
 import { isDeepStrictEqual } from 'node:util';
 import { JSONRPCErrorException } from 'json-rpc-2.0';
 import { readConfirmedApprovalExecution } from '../../../system/capabilities/confirmation-queue.js';
@@ -42,7 +43,7 @@ export class GatewayMcpRequestCancellation {
     this.activeById.set(cancellationId, active);
     let pending: Promise<T>;
     try {
-      pending = operation(active.controller.signal);
+      pending = retainGatewayRpcOperation(operation(active.controller.signal));
     } catch (error) {
       this.release(active);
       return Promise.reject(error);

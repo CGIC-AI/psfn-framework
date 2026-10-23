@@ -28,6 +28,9 @@ import {
   type GatewayRpcConnectionLimits,
 } from './transport-admission.js';
 
+import { GatewayRpcOutputBudget } from './transport-output-budget.js';
+import { GATEWAY_RPC_WIRE_OVERHEAD_BYTES } from './transport-flow-limits.js';
+
 const log = createComponentLogger('Transport');
 const GATEWAY_RPC_HEARTBEAT_PING_FRAME = 'PSFN_RPC_HEARTBEAT_PING';
 const GATEWAY_RPC_HEARTBEAT_PONG_FRAME = 'PSFN_RPC_HEARTBEAT_PONG';
@@ -42,6 +45,7 @@ export const GATEWAY_RPC_TLS_SERVER_NAME_ENV = 'GATEWAY_RPC_TLS_SERVER_NAME';
 const webSocketFrameOptions = {
   maxPayload: GATEWAY_RPC_MAX_FRAME_BYTES,
   perMessageDeflate: false,
+  autoPong: false,
 };
 
 export interface TransportOptions {
@@ -53,7 +57,7 @@ export interface SocketServerOptions {
   connectionLimits?: GatewayRpcConnectionLimits;
 }
 
-type MessageHandler = (message: unknown) => void;
+type MessageHandler = (message: unknown, serializedBytes?: number) => void;
 
 export interface GatewayRpcMethodSerializedTransportStats {
   callCount: number;
@@ -250,6 +254,7 @@ export class NdjsonConnection extends EventEmitter implements GatewayRpcConnecti
   private closed = false;
   private heartbeatAwaitingAck = false;
   private readonly outboundStats = createSerializedTransportStats();
+  private readonly outputBudget = new GatewayRpcOutputBudget();
   private readonly cleanupSocketListeners: () => void;
 
   constructor(socket: net.Socket, readonly completeAdmission?: () => void) {
@@ -268,7 +273,7 @@ export class NdjsonConnection extends EventEmitter implements GatewayRpcConnecti
       if (!line.trim()) return;
       try {
         const parsed = JSON.parse(line);
-        this.emit('message', parsed);
+        this.emit('message', parsed, Buffer.byteLength(line, 'utf8'));
       } catch {
         const framingError = new NdjsonFramingError();
         log.error('Malformed NDJSON frame received; closing connection');
@@ -305,10 +310,7 @@ export class NdjsonConnection extends EventEmitter implements GatewayRpcConnecti
     if (this.socket.destroyed) return false;
     try {
       const { serialized, serializedBytes } = serializeGatewayRpcFrame(data);
-      // Node's boolean reports buffer pressure, not frame acceptance: false
-      // means this frame was queued, not rejected, so it cannot be reused as
-      // the delivery-receipt result.
-      this.socket.write(serialized + '\n');
+      if (!this.writeFrame(serialized + '\n', serializedBytes + 1)) return false;
       recordSerializedTransportFrame(this.outboundStats, data, serializedBytes);
       return true;
     } catch (error) {
@@ -357,10 +359,34 @@ export class NdjsonConnection extends EventEmitter implements GatewayRpcConnecti
   private writeHeartbeatFrame(frame: string): boolean {
     if (this.socket.destroyed) return false;
     try {
-      this.socket.write(`${frame}\n`);
-      return true;
+      return this.writeFrame(`${frame}\n`, Buffer.byteLength(frame) + 1);
     } catch (error) {
       this.emitConnectionError(error);
+      return false;
+    }
+  }
+
+  private writeFrame(frame: string, bytes: number): boolean {
+    const release = this.outputBudget.reserve(bytes, this.socket.writableLength);
+    if (!release) {
+      log.warn('Gateway RPC outbound pressure limit; closing connection');
+      this.destroy();
+      return false;
+    }
+    try {
+      // write(false) accepted this whole frame. Budget rejection occurs above.
+      this.socket.write(frame, error => {
+        release();
+        if (error && !this.closed) {
+          this.emitConnectionError(new Error('Gateway RPC outbound write failed'));
+          this.destroy();
+        }
+      });
+      return true;
+    } catch {
+      release();
+      this.emitConnectionError(new Error('Gateway RPC outbound write failed'));
+      this.destroy();
       return false;
     }
   }
@@ -368,6 +394,8 @@ export class NdjsonConnection extends EventEmitter implements GatewayRpcConnecti
   private finishClose(): void {
     if (this.closed) return;
     this.closed = true;
+    this.outputBudget.close();
+    this.heartbeatAwaitingAck = false;
     this.emit('close');
     this.framer.close();
     this.cleanupSocketListeners();
@@ -377,6 +405,7 @@ export class NdjsonConnection extends EventEmitter implements GatewayRpcConnecti
 
 class WebSocketRpcConnection extends EventEmitter implements GatewayRpcConnection {
   private readonly outboundStats = createSerializedTransportStats();
+  private readonly outputBudget = new GatewayRpcOutputBudget();
   private heartbeatAwaitingAck = false;
   private closed = false;
   private frameCloseTimer: NodeJS.Timeout | undefined;
@@ -385,6 +414,7 @@ class WebSocketRpcConnection extends EventEmitter implements GatewayRpcConnectio
     super();
 
     socket.on('message', (data, isBinary) => {
+      if (this.destroyed) return;
       if (isBinary) {
         const framingError = new NdjsonFramingError();
         log.error('Binary websocket RPC frame received; closing connection');
@@ -397,7 +427,7 @@ class WebSocketRpcConnection extends EventEmitter implements GatewayRpcConnectio
       if (!text.trim()) return;
       try {
         const parsed = JSON.parse(text);
-        this.emit('message', parsed);
+        this.emit('message', parsed, Buffer.byteLength(text, 'utf8'));
       } catch {
         const framingError = new NdjsonFramingError();
         log.error('Malformed websocket RPC frame received; closing connection');
@@ -407,12 +437,8 @@ class WebSocketRpcConnection extends EventEmitter implements GatewayRpcConnectio
     });
 
     socket.on('close', () => {
-      if (this.closed) return;
-      this.closed = true;
-      clearTimeout(this.frameCloseTimer);
-      this.emit('close');
+      this.finishClose();
       socket.removeAllListeners();
-      this.removeAllListeners();
     });
     socket.on('error', (err: Error & { code?: string }) => {
       if (err.code === 'WS_ERR_UNSUPPORTED_MESSAGE_LENGTH') {
@@ -426,7 +452,11 @@ class WebSocketRpcConnection extends EventEmitter implements GatewayRpcConnectio
       }
       this.emitConnectionError(err);
     });
-    socket.on('ping', () => this.emit('heartbeat'));
+    socket.on('ping', data => {
+      if (this.destroyed) return;
+      this.emit('heartbeat');
+      this.writeFrame(data.length + GATEWAY_RPC_WIRE_OVERHEAD_BYTES, done => socket.pong(data, undefined, done));
+    });
     socket.on('pong', () => {
       this.heartbeatAwaitingAck = false;
     });
@@ -436,7 +466,7 @@ class WebSocketRpcConnection extends EventEmitter implements GatewayRpcConnectio
     if (this.destroyed || this.socket.readyState !== WebSocket.OPEN) return false;
     try {
       const { serialized, serializedBytes } = serializeGatewayRpcFrame(data);
-      this.socket.send(serialized);
+      if (!this.writeFrame(serializedBytes + GATEWAY_RPC_WIRE_OVERHEAD_BYTES, done => this.socket.send(serialized, done))) return false;
       recordSerializedTransportFrame(this.outboundStats, data, serializedBytes);
       return true;
     } catch (error) {
@@ -451,8 +481,9 @@ class WebSocketRpcConnection extends EventEmitter implements GatewayRpcConnectio
     }
     this.heartbeatAwaitingAck = true;
     try {
-      this.socket.ping();
-      return true;
+      const accepted = this.writeFrame(GATEWAY_RPC_WIRE_OVERHEAD_BYTES, done => this.socket.ping(undefined, undefined, done));
+      if (!accepted) this.heartbeatAwaitingAck = false;
+      return accepted;
     } catch (error) {
       this.heartbeatAwaitingAck = false;
       this.emitConnectionError(error);
@@ -465,13 +496,12 @@ class WebSocketRpcConnection extends EventEmitter implements GatewayRpcConnectio
   }
 
   destroy(): void {
-    if (
-      this.socket.readyState === WebSocket.CLOSING
-      || this.socket.readyState === WebSocket.CLOSED
-    ) {
-      return;
-    }
+    this.outputBudget.close();
+    clearTimeout(this.frameCloseTimer);
+    if (this.socket.readyState === WebSocket.CLOSED) return;
+    // terminate also destroys a peer that is already CLOSING but never acks.
     this.socket.terminate();
+    this.finishClose();
   }
 
   get destroyed(): boolean {
@@ -483,6 +513,41 @@ class WebSocketRpcConnection extends EventEmitter implements GatewayRpcConnectio
 
   get serializedTransportStats(): GatewayRpcSerializedTransportStats {
     return snapshotSerializedTransportStats(this.outboundStats);
+  }
+
+  private finishClose(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.outputBudget.close();
+    this.heartbeatAwaitingAck = false;
+    clearTimeout(this.frameCloseTimer);
+    this.emit('close');
+    this.removeAllListeners();
+  }
+
+  private writeFrame(bytes: number, write: (done: (error?: Error) => void) => void): boolean {
+    if (this.destroyed) return false;
+    const release = this.outputBudget.reserve(bytes, this.socket.bufferedAmount);
+    if (!release) {
+      log.warn('Gateway RPC outbound pressure limit; closing connection');
+      this.destroy();
+      return false;
+    }
+    try {
+      write(error => {
+        release();
+        if (error && !this.closed) {
+          this.emitConnectionError(new Error('Gateway RPC outbound write failed'));
+          this.destroy();
+        }
+      });
+      return true;
+    } catch {
+      release();
+      this.emitConnectionError(new Error('Gateway RPC outbound write failed'));
+      this.destroy();
+      return false;
+    }
   }
 
   private emitConnectionError(err: unknown): void {

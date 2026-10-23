@@ -244,6 +244,37 @@ false for oversized or unserializable frames without updating delivery stats.
 NDJSON write backpressure still counts as acceptance of a complete frame, and
 transport heartbeats remain separate from JSON-RPC and its byte statistics.
 
+Each Gateway connection owns at most **16 active plus queued request frames
+and 64 MiB of their original UTF-8 bytes**, with four active request handlers.
+A separate **one-frame, 64 MiB** lane admits a response to a currently pending
+reverse RPC or a known cancellation method (`llm.cancel`, `mcp.cancel`,
+`fs.cancel`), even when request capacity is full. Unsolicited responses use the
+ordinary request budget. Reverse RPCs also have a 128-pending-request ceiling.
+Transport ping/pong bypasses the JSON-RPC work queue. Active work has a fixed
+five-minute deadline; overflow or expiry destroys the connection and discards
+queued work before further handlers start.
+
+A server-wide ceiling of **256 active operations and 128 MiB of charged frame
+bytes** also covers work left behind by disconnected peers. These charges are
+released only when the actual operation settles, including LLM/MCP operations
+whose cancellation response settled earlier. Disconnect and shutdown cancel
+supported operations, clear work/health timers, and stop queued dispatch. A
+handler that ignores cancellation may complete already-started side effects;
+its charge remains quarantined, so reconnecting cannot grow orphan work without
+bound. Shutdown closes sockets without waiting indefinitely for such a handler.
+
+Outbound writes accept at most **128 outstanding complete frames and
+67,108,878 wire bytes** per connection (64 MiB plus the maximum 14-byte
+WebSocket envelope). The byte check includes `net.Socket.writableLength` or
+WebSocket `bufferedAmount`, as well as accepted writes awaiting completion.
+NDJSON includes its newline; WebSocket conservatively charges 14 bytes per
+frame, including ping/pong. The transport reserves the whole frame before
+writing. Aggregate overflow returns false without accepting any part of the
+rejected frame, destroys the connection, and releases native output buffers;
+true reports complete-frame acceptance rather than remote delivery. Successful
+write callbacks release charges, and close makes late callbacks harmless.
+All flow-control failure diagnostics are content-free.
+
 Gateway connection admission reserves one agent and one session-integrity slot
 per configured companion, with two additional pending sockets. The total is
 `2 * companionCount + 2`, with a fixed maximum of 64; startup refuses a topology

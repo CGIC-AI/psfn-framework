@@ -28,12 +28,13 @@ SignalR public API files have no changes. The shared
 adds cancellation and abort handling for stalled replay. No relay call-site
 migration was required.
 
-| Package group | Before | After |
+| net8.0 package group | Before | After |
 | --- | --- | --- |
 | SignalR.Client; Client.Core; Common; Protocols.Json | 8.0.26 | 8.0.32 |
 | Connections.Abstractions; Http.Connections.Client; Common | 8.0.26 | 8.0.32 |
 | Microsoft.Extensions.Features | 8.0.26 | 8.0.32 |
 | NAudio and other transitive dependencies | unchanged | unchanged |
+| SDK single-file analyzer tool | implicit at publish | ILLink.Tasks 8.0.32 locked |
 
 Both executable projects commit `packages.lock.json`, including resolved versions
 and content hashes. [NuGet's lock-file guidance](https://learn.microsoft.com/en-us/nuget/consume-packages/package-references-in-project-files#locking-dependencies)
@@ -41,6 +42,14 @@ explains that a referenced project's lock does not lock its consuming project's
 graph, so the harness has its own lock. A future intentional upgrade regenerates
 these files with `--force-evaluate -p:RestoreLockedMode=false`, followed by locked
 restore and review. Do not use that override in ordinary builds.
+
+The relay explicitly includes the documented Windows x64 publish and Linux x64
+validation runtime identifiers. This keeps a self-contained Windows publish in
+the locked graph; adding a runtime identifier only at publish time otherwise
+fails NuGet's locked restore with NU1004.
+The single-file analyzer is enabled for ordinary builds too, so the SDK's
+implicit Microsoft.NET.ILLink.Tasks 8.0.32 dependency is locked rather than added
+only when publishing. This enables analysis; it does not enable trimming.
 
 ## Validation
 
@@ -61,9 +70,11 @@ Both locked restores, both builds and both format checks passed. Builds produced
 zero warnings/errors. The real logger/artifact harness and all five actual relay
 auth/privacy process tests passed. Online NuGet scans report no vulnerable
 packages for either project, including transitive dependencies.
+Locked win-x64 restore and Release self-contained single-file publishing also
+passed from the Linux build host; the Windows executable was not run here.
 
 The repository's digest-pinned OSV-Scanner 2.4.0 wrapper also passed with these
-two lockfiles supplied explicitly: 26 package entries in the relay graph and 27
+two lockfiles supplied explicitly: 33 package entries in the relay graph and 27
 in the harness graph, with only the local project-reference entry unscannable.
 No advisory suppressions were used. Default shared-wrapper coverage is delivered
 separately by psfn-framework-zbbxj.9 and requires integrated validation.

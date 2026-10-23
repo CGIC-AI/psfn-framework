@@ -413,7 +413,7 @@ test("authenticated Voxta interruption detaches stalled TTS before admitting a r
 
     const oldTtsCall = tts.calls[0];
     assert.ok(oldTtsCall?.signal);
-    assert.equal(oldTtsCall.signal, agent.calls[0]?.signal);
+    assert.equal(oldTtsCall.signal.reason, agent.calls[0]?.signal?.reason);
     assert.equal(oldTtsCall.signal.aborted, true);
     assert.deepEqual(agent.calls[1]?.history?.map((message) => message.content), [
       "old reply",

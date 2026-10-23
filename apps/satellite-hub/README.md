@@ -457,6 +457,40 @@ retain at most 128 entries and evict the least recently used entry. Provider
 speech queues allow 32 segments. Oversized input closes only its connection or
 returns 413/429; abandoned bodies return 408.
 
+The TypeScript Hub admits at most `maxProviderOperations` external operations
+(8 by default) across all surfaces. Each operation has `providerTimeoutMs`
+(30 seconds by default), combined with caller cancellation and Hub shutdown.
+Admission precedes provider invocation. Cancellation or expiry detaches the
+caller promptly; the slot remains occupied until the underlying promise or raw
+iterator, including its cleanup, actually settles. Reconnecting cannot replace
+that work. Shutdown stops admission and bounds every subsystem wait by
+`authenticationTimeoutMs`; a stopped server instance cannot be restarted.
+
+| Provider work | Admission owner |
+| --- | --- |
+| Realtime, Voxta and Eidoverse model replies | `HubResources.runProviderStream`, consuming the raw agent iterator |
+| Realtime microphone STT and relay STT | `HubResources.runProvider` around prerecorded transcription |
+| Voxta microphone STT | `HubResources.runProvider` around the outer STT adapter |
+| Realtime spoken replies and relay TTS | `HubResources.runProviderStream` around the raw TTS iterator |
+| Browser spoken replies | The same Hub resources passed through the browser bridge into speech synthesis |
+| Voxta WAV synthesis | `HubResources.runProvider` around the complete outer synthesis, including raw TTS consumption and audio conversion |
+| Eidoverse look, tool/clip lists, body actions, travel, snapshots and say | `HubResources.runProvider` around each external port operation |
+| Eidoverse pending-ping polling | The same Hub resources passed to the production wake lifecycle |
+
+Inner Deepgram/ElevenLabs adapters and world clients do not acquire another slot
+for work already admitted by their caller. Model streaming and simultaneous
+speech synthesis consume separate slots. If speech cannot acquire a slot, the
+turn fails with a content-free error, closes its speech queue and cancels the
+model; it creates no successful assistant history or speech artifact. Already
+delivered text deltas remain visible. Voxta model and speech run sequentially,
+so a single slot supports a successful complete turn.
+
+Local formatting, session/artifact writes and audio encoding are not separate
+provider operations. Identity metadata, companion control/SSE/audio relay,
+device tooling and world connection handshakes/notifications are bounded
+transport/control traffic rather than model or media provider invocations.
+Device Studio image generation runs outside the Hub server lifecycle.
+
 Upstream HTTP reads reject oversized `Content-Length` before reading, count
 received bytes before decoding, and cancel fetch bodies or destroy mTLS streams
 on overflow, cancellation, or expiry. Header/connect waits and finite body

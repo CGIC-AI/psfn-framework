@@ -117,6 +117,7 @@ export class HubResources {
     if (this.closed || this.providers.size >= this.limits.maxProviderOperations) throw new HubRequestError(429, "Hub provider quota exceeded");
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(new Error("Hub provider deadline exceeded")), this.limits.providerTimeoutMs);
+    controller.signal.addEventListener("abort", () => clearTimeout(timer), { once: true });
     const signal = parent ? AbortSignal.any([parent, controller.signal]) : controller.signal;
     const pending = Promise.resolve().then(() => { throwIfAborted(signal); return operation(signal); });
     this.providers.set(controller, pending);
@@ -125,12 +126,41 @@ export class HubResources {
     return await awaitWithAbort(pending, signal);
   }
 
+  /** Consume the raw provider iterator inside its retained promise. Racing an
+   * abortable iterator instead would release admission while next()/return()
+   * was still running. Values arriving after detachment never reach callers. */
+  runProviderStream<T>(
+    operation: (signal: AbortSignal) => AsyncIterable<T> | Promise<AsyncIterable<T>>,
+    consume: (value: T, signal: AbortSignal) => void | Promise<void>,
+    parent?: AbortSignal,
+  ): Promise<void> {
+    return this.runProvider(async signal => {
+      const source = await operation(signal);
+      for await (const value of source) {
+        throwIfAborted(signal);
+        await consume(value, signal);
+        throwIfAborted(signal);
+      }
+      throwIfAborted(signal);
+    }, parent);
+  }
+
   providerAvailable(): boolean { return !this.closed && this.providers.size < this.limits.maxProviderOperations; }
 
   async close(): Promise<void> {
     this.closed = true;
     for (const controller of this.providers.keys()) controller.abort(new Error("Hub shutting down"));
     await awaitWithAbort(Promise.allSettled(this.providers.values()), AbortSignal.timeout(this.limits.authenticationTimeoutMs));
+  }
+
+  async shutdown(steps: ReadonlyArray<() => unknown>): Promise<void> {
+    // Abort providers before waiting for consumers such as world wake queues.
+    // Otherwise those consumers can prevent shutdown cancellation from starting.
+    const providers = this.close();
+    const results = await Promise.allSettled([() => providers, ...steps].map(step =>
+      awaitWithAbort(Promise.resolve().then(step), AbortSignal.timeout(this.limits.authenticationTimeoutMs))));
+    const errors = results.filter((result): result is PromiseRejectedResult => result.status === "rejected").map(result => result.reason);
+    if (errors.length) throw new AggregateError(errors, "Hub shutdown failed");
   }
 
   admitSocket(authenticated: boolean): HubSocketAdmission | null {

@@ -1,3 +1,4 @@
+import { HubResources, HubRequestError } from "./transport-resources.js";
 import { hubConsole as console, privateHubLogger } from "../shared/private-log.js";
 import { createHash } from "node:crypto";
 
@@ -193,6 +194,7 @@ export interface EidoverseEmbodiedSessionDependencies {
   embodiedSessions: EmbodiedSessionRegistry;
   sessions: SessionStore;
   agent: FrameworkAgentAdapter;
+  resources?: HubResources;
   look: EidoverseLookSource;
   onLookError?: () => void;
   say: EidoverseSayPublisher;
@@ -228,6 +230,7 @@ export interface EidoverseEmbodiedSessionDependencies {
  */
 export class EidoverseEmbodiedSessionAdapter {
   readonly conversationId: string;
+  private readonly resources: HubResources;
 
   private readonly worldName: string;
   /**
@@ -264,6 +267,7 @@ export class EidoverseEmbodiedSessionAdapter {
     private readonly config: EidoverseEmbodiedSessionConfig,
     private readonly deps: EidoverseEmbodiedSessionDependencies,
   ) {
+    this.resources = deps.resources ?? new HubResources();
     this.deps = { ...deps, logger: privateHubLogger(deps.logger ?? console) };
     this.worldName = requireNonEmpty(config.worldName, "Eidoverse world name");
     this.currentWorldName = this.worldName;
@@ -356,7 +360,9 @@ export class EidoverseEmbodiedSessionAdapter {
     if (!body) {
       throw new Error("Eidoverse body actions are not enabled for this capability profile");
     }
-    body.submit(parseEidoverseBodyAction(name, args));
+    const action = parseEidoverseBodyAction(name, args);
+    if (!this.resources.providerAvailable()) throw new HubRequestError(429, "Hub provider quota exceeded");
+    body.noteWhenDone(this.resources.runProvider(() => body.start(action)));
   }
 
   /** The world the body is in right now, as the Hub believes it. */
@@ -382,7 +388,7 @@ export class EidoverseEmbodiedSessionAdapter {
    */
   async perceive(): Promise<EidoverseAvatarPerception> {
     this.requireConnection();
-    const parsed = parseEidoverseLook(await this.deps.look.look());
+    const parsed = parseEidoverseLook(await this.resources.runProvider(() => this.deps.look.look()));
     const place = this.resolvePlace(this.currentRegion);
     return {
       ...parsed,
@@ -402,7 +408,7 @@ export class EidoverseEmbodiedSessionAdapter {
    */
   async map(): Promise<EidoverseWorldMap> {
     this.requireConnection();
-    const parsed = parseEidoverseLook(await this.deps.look.look());
+    const parsed = parseEidoverseLook(await this.resources.runProvider(() => this.deps.look.look()));
     const world = this.currentWorldName;
     const mapping = this.config.placeMap?.worlds[world];
     const places: EidoverseWorldMap["places"] = [];
@@ -415,7 +421,7 @@ export class EidoverseEmbodiedSessionAdapter {
     let tools: EidoverseWorldMap["tools"] = [];
     if (this.deps.look.listTools) {
       try {
-        tools = await this.deps.look.listTools();
+        tools = await this.resources.runProvider(() => this.deps.look.listTools!());
       } catch {
         tools = [];
       }
@@ -423,7 +429,7 @@ export class EidoverseEmbodiedSessionAdapter {
     let clips: string[] | undefined;
     if (this.deps.look.listClips && tools.some((tool) => tool.name === "list_clips")) {
       try {
-        clips = await this.deps.look.listClips();
+        clips = await this.resources.runProvider(() => this.deps.look.listClips!());
       } catch {
         clips = undefined;
       }
@@ -460,7 +466,7 @@ export class EidoverseEmbodiedSessionAdapter {
     const region = normalizeOptional(input.region);
     let target = input.position ? { x: input.position.x, z: input.position.z } : null;
     if (!target && input.participant) {
-      const perception = parseEidoverseLook(await this.deps.look.look());
+      const perception = parseEidoverseLook(await this.resources.runProvider(() => this.deps.look.look()));
       const person = findEidoversePerson(perception, input.participant);
       if (!person) return this.refuseMove("participant_unknown");
       if (!person.positionKnown || person.x === undefined || person.z === undefined) {
@@ -504,7 +510,7 @@ export class EidoverseEmbodiedSessionAdapter {
     }
     const body = this.deps.body;
     if (!body) return this.refuseMove("not_configured");
-    const run = body.start({ name: "walk_to", x: target.x, z: target.z, run: false });
+    const run = this.resources.runProvider(() => body.start({ name: "walk_to", x: target.x, z: target.z, run: false }));
     const result = await withBoundedWait(run, input.waitMs ?? DEFAULT_MOVE_WAIT_MS);
     if (result === "pending") {
       body.noteWhenDone(run);
@@ -548,7 +554,8 @@ export class EidoverseEmbodiedSessionAdapter {
     if (!body) return { accepted: false, verb, reason: "not_configured" };
     let run: Promise<EidoverseBodyRunResult>;
     try {
-      run = body.start(parseEidoverseBodyAction(verb, args));
+      const action = parseEidoverseBodyAction(verb, args);
+      run = this.resources.runProvider(() => body.start(action));
     } catch (error) {
       if (error instanceof EidoverseBodyActionRejectedError) {
         return { accepted: false, verb, reason: "not_allowlisted" };
@@ -594,20 +601,19 @@ export class EidoverseEmbodiedSessionAdapter {
     const channel = this.channelContext(input.region, ownership, lookNotes, capture, input.speaker);
     const controller = new AbortController();
     this.activeReplies.add(controller);
-    this.deps.sessions.append(this.conversationId, { role: "user", content: userText });
     try {
       let responseText = "";
-      const stream = this.deps.agent.streamReply({
-        inputMode: "text",
-        userText,
-        conversationId: this.conversationId,
-        history: this.deps.sessions.getHistory(this.conversationId),
-        channel,
-        signal: controller.signal,
-      });
-      for await (const delta of stream) {
-        responseText += delta;
-      }
+      await this.resources.runProviderStream(signal => {
+        this.deps.sessions.append(this.conversationId, { role: "user", content: userText });
+        return this.deps.agent.streamReply({
+          inputMode: "text",
+          userText,
+          conversationId: this.conversationId,
+          history: this.deps.sessions.getHistory(this.conversationId),
+          channel,
+          signal,
+        });
+      }, delta => { responseText += delta; }, controller.signal);
       responseText = responseText.trim();
       if (responseText) {
         this.deps.sessions.append(this.conversationId, { role: "assistant", content: responseText });
@@ -649,7 +655,7 @@ export class EidoverseEmbodiedSessionAdapter {
       return this.refuseTravel("unmapped_world");
     }
     try {
-      await port.travel(destination);
+      await this.resources.runProvider(() => port.travel(destination));
     } catch {
       return this.refuseTravel("refused");
     }
@@ -747,7 +753,7 @@ export class EidoverseEmbodiedSessionAdapter {
     const sayText = responseText.trim().slice(0, EIDOVERSE_SAY_MAX_TEXT_LENGTH);
     if (!sayText) return;
     try {
-      await this.deps.say.say(sayText);
+      await this.resources.runProvider(() => this.deps.say.say(sayText));
     } catch {
       (this.deps.logger ?? console).warn("Eidoverse in-world say failed");
     }
@@ -814,7 +820,7 @@ export class EidoverseEmbodiedSessionAdapter {
     const snapshot = this.deps.snapshot;
     if (!snapshot) return { available: false, world, view, reason: "not_configured" };
     try {
-      const image = await snapshot.capture(this.conversationId, world, view);
+      const image = await this.resources.runProvider(() => snapshot.capture(this.conversationId, world, view));
       if (!image) return { available: false, world, view, reason: "unavailable" };
       return {
         available: true,
@@ -837,7 +843,7 @@ export class EidoverseEmbodiedSessionAdapter {
     try {
       // The world the body is in right now, not the one the session was
       // founded in: travel moves the avatar out of the boot world entirely.
-      return await snapshot.capture(this.conversationId, this.currentWorldName);
+      return await this.resources.runProvider(() => snapshot.capture(this.conversationId, this.currentWorldName));
     } catch {
       // A snapshot never fails a turn; the text look notes remain the tier.
       (this.deps.logger ?? console).warn("Eidoverse snapshot failed");
@@ -848,7 +854,7 @@ export class EidoverseEmbodiedSessionAdapter {
   private async lookContextNotes(): Promise<NonNullable<PsfnChannelContext["contextNotes"]>> {
     let lookText: string;
     try {
-      lookText = await this.deps.look.look();
+      lookText = await this.resources.runProvider(() => this.deps.look.look());
     } catch {
       this.deps.onLookError?.();
       return [];

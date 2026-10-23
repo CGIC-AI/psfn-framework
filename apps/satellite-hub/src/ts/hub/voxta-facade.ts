@@ -850,8 +850,8 @@ class VoxtaConnection {
       // the replacement user turn cannot enter the prior reply's history.
       await previousReply.catch(() => undefined);
     }
-    this.deps.sessions.append(this.sessionId, { role: "user", content: input.promptText });
     if (!shouldReplyToVoxtaSend(input, payload.doReply)) {
+      this.deps.sessions.append(this.sessionId, { role: "user", content: input.promptText });
       await this.sendReceive({
         $type: "chatFlow",
         state: "WaitingForUser",
@@ -975,45 +975,49 @@ class VoxtaConnection {
   ): Promise<void> {
     let responseText = "";
     const replyBytes = new Utf8ByteBudget(this.deps.resources.limits.maxQueuedBytes);
-    await this.requestVisionCapturesIfNeeded(replyAbortController.signal);
-    this.assertReplyActive(replyId, replyAbortController);
+    await this.deps.resources.runProviderStream(async signal => {
+      this.deps.sessions.append(this.sessionId, { role: "user", content: userText });
+      await this.requestVisionCapturesIfNeeded(signal);
+      this.assertReplyActive(replyId, replyAbortController);
 
-    await this.sendReceive({
-      $type: "chatFlow",
-      state: "Thinking",
-      sessionId: this.sessionId,
-    }, replyAbortController.signal);
-    this.assertReplyActive(replyId, replyAbortController);
-    await this.sendReceive({
-      $type: "replyGenerating",
-      sessionId: this.sessionId,
-      messageId,
-      senderId: this.assistant.id,
-      role: this.assistant.role,
-      thinkingSpeechUrl: "",
-      isNarration: false,
-    }, replyAbortController.signal);
-    this.assertReplyActive(replyId, replyAbortController);
-    await this.sendReceive({
-      $type: "replyStart",
-      sessionId: this.sessionId,
-      messageId,
-      senderId: this.assistant.id,
-      senderName: this.assistant.name,
-      role: this.assistant.role,
-      timestamp: new Date().toISOString(),
-    }, replyAbortController.signal);
-    this.assertReplyActive(replyId, replyAbortController);
+      await this.sendReceive({
+        $type: "chatFlow",
+        state: "Thinking",
+        sessionId: this.sessionId,
+      }, signal);
+      this.assertReplyActive(replyId, replyAbortController);
+      await this.sendReceive({
+        $type: "replyGenerating",
+        sessionId: this.sessionId,
+        messageId,
+        senderId: this.assistant.id,
+        role: this.assistant.role,
+        thinkingSpeechUrl: "",
+        isNarration: false,
+      }, signal);
+      this.assertReplyActive(replyId, replyAbortController);
+      await this.sendReceive({
+        $type: "replyStart",
+        sessionId: this.sessionId,
+        messageId,
+        senderId: this.assistant.id,
+        senderName: this.assistant.name,
+        role: this.assistant.role,
+        timestamp: new Date().toISOString(),
+      }, signal);
+      this.assertReplyActive(replyId, replyAbortController);
 
-    const stream = this.deps.agent.streamReply({
-      inputMode: "voice",
-      userText,
-      conversationId: this.sessionId,
-      history: this.deps.sessions.getHistory(this.sessionId) as ConversationMessage[],
-      channel: this.agentChannelContext(),
-      signal: replyAbortController.signal,
-    });
-    for await (const delta of stream) {
+      throwIfAborted(signal);
+      return this.deps.agent.streamReply({
+        inputMode: "voice",
+        userText,
+        conversationId: this.sessionId,
+        history: this.deps.sessions.getHistory(this.sessionId) as ConversationMessage[],
+        channel: this.agentChannelContext(),
+        signal,
+      });
+    }, (delta, signal) => {
+      throwIfAborted(signal);
       this.assertReplyActive(replyId, replyAbortController);
       try { replyBytes.append(delta); }
       catch {
@@ -1021,7 +1025,7 @@ class VoxtaConnection {
         throw new Error("Hub retained reply exceeds byte limit");
       }
       responseText += delta;
-    }
+    }, replyAbortController.signal);
 
     this.assertReplyActive(replyId, replyAbortController);
     responseText = responseText.trim();
@@ -1082,7 +1086,7 @@ class VoxtaConnection {
       return "silence:0";
     }
     try {
-      const wav = await awaitWithAbort(this.deps.tts.synthesizeWav(spokenText, signal), signal);
+      const wav = await this.deps.resources.runProvider(providerSignal => this.deps.tts!.synthesizeWav(spokenText, providerSignal), signal);
       throwIfAborted(signal);
       if (wav.length > this.deps.resources.limits.maxAudioBytes) throw new Error("Hub TTS audio exceeds byte limit");
       if (wav.length === 0) {
@@ -1108,7 +1112,7 @@ class VoxtaConnection {
         throw abortReason(signal);
       }
       console.error("Voxta TTS artifact generation failed:", error);
-      return "silence:0";
+      throw new Error("Voxta speech unavailable");
     }
   }
 

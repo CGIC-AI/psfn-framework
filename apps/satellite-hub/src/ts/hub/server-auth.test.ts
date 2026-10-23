@@ -779,7 +779,7 @@ test("authenticated realtime interruption detaches stalled TTS before admitting 
 
     const oldTtsCall = tts.calls[0];
     assert.ok(oldTtsCall?.signal);
-    assert.equal(oldTtsCall.signal, replyAgent.calls[0]?.signal);
+    assert.equal(oldTtsCall.signal.reason, replyAgent.calls[0]?.signal?.reason);
     assert.equal(oldTtsCall.signal.aborted, true);
     assert.deepEqual(replyAgent.calls[1]?.history?.map((message) => message.content), [
       "old reply",

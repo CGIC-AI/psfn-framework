@@ -1,5 +1,6 @@
 import type { StreamingTtsAdapter } from "./elevenlabs-stream.js";
-import { abortableAsyncIterable } from "../shared/abort.js";
+import { HubResources } from "./transport-resources.js";
+import { throwIfAborted } from "../shared/abort.js";
 import { sanitizeSpokenText } from "../shared/text.js";
 
 /** Only final companion text already authorized by the gateway enters TTS. */
@@ -11,7 +12,8 @@ export class CompanionBrowserSpeech {
     stopping: boolean; pendingInterrupts: number } | null = null;
 
   constructor(private readonly tts: StreamingTtsAdapter | null,
-    private readonly send: (value: unknown) => void) {}
+    private readonly send: (value: unknown) => void,
+    private readonly resources = new HubResources()) {}
 
   observeBrowser(value: Record<string, unknown>): void {
     if (typeof value.requestId === "string"
@@ -94,16 +96,14 @@ export class CompanionBrowserSpeech {
     const text = sanitizeSpokenText(content);
     void (async () => {
       let started = false;
-      for await (const chunk of abortableAsyncIterable(
-        tts.streamText((async function* () { yield text; })(), { signal: controller.signal }),
-        controller.signal,
-      )) {
-        if (controller.signal.aborted) return;
-        if (chunk.length === 0) continue;
+      await this.resources.runProviderStream(signal =>
+        tts.streamText((async function* () { yield text; })(), { signal }), (chunk, signal) => {
+        throwIfAborted(signal);
+        if (chunk.length === 0) return;
         if (!started) this.event({ type: "text", data: "audio-init" });
         started = true;
         this.event({ type: "audio", data: chunk.toString("base64") });
-      }
+      }, controller.signal);
       if (started && !controller.signal.aborted) this.event({ type: "text", data: "audio-end" });
     })().catch(() => {
       if (!controller.signal.aborted) {

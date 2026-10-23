@@ -1,3 +1,4 @@
+import { HubResources } from "./transport-resources.js";
 import { hubConsole as console } from "../shared/private-log.js";
 import { privateDirectory } from "../shared/private-artifacts.js";
 
@@ -33,6 +34,7 @@ import { HubControlServer, type HubWorldControlPort } from "./home-assistant/con
 async function main(): Promise<void> {
   const projectRoot = resolveProjectRoot();
   const config = loadHubConfig(projectRoot);
+  const resources = new HubResources(config.limits);
   // Transport selection is explicit and defaults to the Phase 1 poll, so a
   // deployment whose world fronts only the stdio MCP door keeps working when
   // this Hub learns to speak MCPL.
@@ -95,6 +97,7 @@ async function main(): Promise<void> {
       })
     : null;
   const server = new RealtimeHubServer(config, {
+    resources,
     eidoverse: eidoverseMcplConfig && eidoverseMcpl
       ? {
           worldName: eidoverseMcplConfig.worldName,
@@ -131,6 +134,7 @@ async function main(): Promise<void> {
       }, { logger: hubLogger })
     : eidoverseConfig && eidoverse
       ? createEidoverseProductionWakeLifecycle(eidoverse, server, eidoverseConfig, {
+          resources,
           logger: hubLogger,
         })
       : null;
@@ -159,12 +163,12 @@ async function main(): Promise<void> {
       await server.start();
     }
   } catch (error) {
-    await Promise.allSettled([
-      control?.close(),
-      homeAssistant?.close(),
-      eidoverseBody?.close(),
-      eidoverseProduction ? eidoverseProduction.close() : server.close(),
-    ]);
+    await resources.shutdown([
+      () => control?.close(),
+      () => homeAssistant?.close(),
+      () => eidoverseBody?.close(),
+      () => eidoverseProduction ? eidoverseProduction.close() : server.close(),
+    ]).catch(() => undefined);
     throw error;
   }
   console.info("hub.listen", { port: config.port });
@@ -176,18 +180,12 @@ async function main(): Promise<void> {
   const stop = async (): Promise<void> => {
     if (stopping) return;
     stopping = true;
-    const results = await Promise.allSettled([
-      control?.close(),
-      homeAssistant?.close(),
-      eidoverseBody?.close(),
-      eidoverseProduction ? eidoverseProduction.close() : server.close(),
+    await resources.shutdown([
+      () => control?.close(),
+      () => homeAssistant?.close(),
+      () => eidoverseBody?.close(),
+      () => eidoverseProduction ? eidoverseProduction.close() : server.close(),
     ]);
-    const errors = results
-      .filter((result): result is PromiseRejectedResult => result.status === "rejected")
-      .map((result) => result.reason);
-    if (errors.length > 0) {
-      throw new AggregateError(errors, "Satellite Hub shutdown failed");
-    }
   };
   const requestStop = () => { void stop().catch((error) => { console.error("Hub shutdown failed", error); process.exitCode = 1; }); };
   process.once("SIGINT", requestStop);

@@ -57,7 +57,16 @@ it('fs.search interrupts overlapping alternation while its event loop stays resp
         query: '^(a|aa)+$', mode: 'regex', glob: 'hostile.txt',
       });
       console.log(reply.error ? 'search-error:' + reply.error.message : 'unexpected-success');
-      const healthy = await request(2, { query: 'healthy', mode: 'regex', glob: 'healthy.txt' });
+      const oversizedStarted = performance.now();
+      let id = 2;
+      for (const mode of ['literal', 'regex']) {
+        for (const query of ['PRIVATE-CONTENT'.repeat(100_000), '界'.repeat(2_731), ' '.repeat(8_192) + 'healthy']) {
+          const rejected = await request(id++, { query, mode, glob: 'healthy.txt' });
+          console.log('oversized-' + mode + '-error:' + (rejected.error?.message ?? 'unexpected-success'));
+        }
+      }
+      console.log('query-limit-elapsed:' + Math.ceil(performance.now() - oversizedStarted));
+      const healthy = await request(id++, { query: 'healthy', mode: 'regex', glob: 'healthy.txt' });
       console.log('next-search-matches:' + healthy.result?.matches.length);
     } finally {
       clearInterval(heartbeat);
@@ -103,6 +112,12 @@ it('fs.search interrupts overlapping alternation while its event loop stays resp
     expect.soft(observed.expired, JSON.stringify(observed)).toBe(false);
     expect.soft(observed.heartbeats, JSON.stringify(observed)).toBeGreaterThan(10);
     expect(observed.output).toContain('search-error:fs search budget exceeded: pattern took too long to evaluate and was aborted');
+    for (const mode of ['literal', 'regex']) {
+      expect(observed.output.match(new RegExp(`oversized-${mode}-error:fs search query exceeds the supported size limit`, 'g')))
+        .toHaveLength(3);
+    }
+    const elapsed = Number(/query-limit-elapsed:(\d+)/u.exec(observed.output)?.[1]);
+    expect(elapsed).toBeLessThan(500);
     expect(observed.output).toContain('next-search-matches:1');
   } finally {
     await rm(root, { recursive: true, force: true });

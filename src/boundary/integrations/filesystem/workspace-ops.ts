@@ -6,7 +6,10 @@ import {
   resolveWorkspaceFsPathFromRoot,
 } from '../../gateway/filesystem-paths.js';
 import { isInsideAllowedPaths } from '../../gateway/policy.js';
-import { FILESYSTEM_READ_PAGE_CONTRACT } from '../../../shared/contracts/filesystem.js';
+import {
+  assertFilesystemSearchQuerySize,
+  FILESYSTEM_READ_PAGE_CONTRACT,
+} from '../../../shared/contracts/filesystem.js';
 import type {
   FilesystemEditOptions,
   FilesystemEditResult,
@@ -271,10 +274,6 @@ function workspaceRelativePath(absolutePath: string, root: string): string {
   return relative(root, absolutePath).replace(/\\/g, '/').replace(/^\.\//, '') || '.';
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 function normalizeSearchMode(value: unknown): FilesystemSearchMode {
   return value === 'regex' ? 'regex' : DEFAULT_SEARCH_MODE;
 }
@@ -348,31 +347,28 @@ async function collectLiteralLineMatches(
 ): Promise<FilesystemSearchMatch[]> {
   const lines = content.split('\n');
   const matches: FilesystemSearchMatch[] = [];
-  const regex = new RegExp(escapeRegExp(query), 'g');
 
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
     await checkpointSearchBudget(budget);
-    regex.lastIndex = 0;
     const rawLine = lines[lineIndex] ?? '';
     // Preserve the same bounded line view for literal and regex modes.
     const line = rawLine.length > MAX_SEARCH_LINE_CHARS
       ? rawLine.slice(0, MAX_SEARCH_LINE_CHARS)
       : rawLine;
-    let match: RegExpExecArray | null = regex.exec(line);
-    while (match) {
+    let matchIndex = line.indexOf(query);
+    while (matchIndex !== -1) {
       matches.push({
         path,
         line: lineIndex + 1,
-        column: match.index + 1,
+        column: matchIndex + 1,
         preview: normalizeSearchPreview(lines, lineIndex, contextLines),
       });
       if (matches.length >= remainingMatches) {
         return matches;
       }
-      if (match[0].length === 0) {
-        regex.lastIndex += 1;
-      }
-      match = regex.exec(line);
+      // Queries are nonempty. Advance past the entire match, preserving the
+      // prior global-regex non-overlap and UTF-16 indexing semantics.
+      matchIndex = line.indexOf(query, matchIndex + query.length);
     }
   }
 
@@ -483,6 +479,7 @@ function normalizeSearchGlob(options: FilesystemSearchOptions): string {
 }
 
 export async function searchWorkspaceFiles(root: string, options: FilesystemSearchOptions): Promise<FilesystemSearchResult> {
+  if (typeof options.query === 'string') assertFilesystemSearchQuerySize(options.query);
   const query = typeof options.query === 'string' ? options.query.trim() : '';
   if (!query) {
     throw new Error('fs search query must be a non-empty string');

@@ -667,6 +667,11 @@ describe('evaluatePolicy', () => {
   });
 
   it('denies invalid fs.search parameters', () => {
+    for (const mode of ['literal', 'regex']) {
+      for (const query of ['x'.repeat(8_193), '界'.repeat(2_731), `${' '.repeat(8_192)}needle`]) {
+        expect(evaluatePolicy({ method: 'fs.search', params: { query, mode } }, policyConfig)).toBe('DENY');
+      }
+    }
     expect(evaluatePolicy(
       { method: 'fs.search', params: { query: '', glob: 'src/**/*.ts' } },
       policyConfig,

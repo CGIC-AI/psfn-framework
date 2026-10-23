@@ -7,6 +7,8 @@ import { textResult, textResultWithError } from '../../../core/tools/results.js'
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import {
   FILESYSTEM_READ_PAGE_CONTRACT,
+  FILESYSTEM_SEARCH_QUERY_CONTRACT,
+  assertFilesystemSearchQuerySize,
   validateFilesystemReadMaxBytes,
 } from '../../../shared/contracts/filesystem.js';
 import { PARTIAL_TOOL_RESULT_DETAILS_KEY } from '../../../shared/contracts/tool-call-outcome.js';
@@ -196,7 +198,10 @@ export function createFsTool(
           'Used with action=read. Byte cursor for the page; start at 0, then pass the returned next_offset_bytes.',
       })),
       query: Type.Optional(Type.String({
-        description: 'Used with action=search. Literal text or regex pattern to find.',
+        maxLength: FILESYSTEM_SEARCH_QUERY_CONTRACT.maxChars,
+        description: 'Used with action=search. Literal text or regex pattern; raw query is limited to '
+          + `${String(FILESYSTEM_SEARCH_QUERY_CONTRACT.maxChars)} UTF-16 units and `
+          + `${String(FILESYSTEM_SEARCH_QUERY_CONTRACT.maxUtf8Bytes)} UTF-8 bytes.`,
       })),
       mode: Type.Optional(Type.Union([
         Type.Literal('literal'),
@@ -314,6 +319,7 @@ export function createFsTool(
           }
 
           case 'search': {
+            if (typeof params.query === 'string') assertFilesystemSearchQuerySize(params.query);
             const glob = normalizeSearchGlobParam(params.glob);
             const searched = await ops.search({
               query: requireString(params.query, 'query'),

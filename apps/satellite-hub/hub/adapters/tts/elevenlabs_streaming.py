@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from functools import partial
 import json
 import time
 import uuid
@@ -12,7 +11,7 @@ import websockets
 from websockets.protocol import State
 
 from hub.adapters.bounds import ProviderLimits, ProviderLimitError, bounded_request, decode_json
-from hub.adapters.provider_socket import ProviderClientConnection
+from hub.adapters.provider_socket import ProviderSocketConnect
 from hub.devices.realtime_output import RealtimeOutputLimits
 
 
@@ -46,7 +45,7 @@ class ElevenLabsStreamingTTS:
     ) -> None:
         self._api_key, self._voice_id, self._model_id = api_key, voice_id, model_id
         self._limits = limits or ProviderLimits()
-        self._output_limits = output_limits or RealtimeOutputLimits()
+        self._connector = ProviderSocketConnect(output_limits or RealtimeOutputLimits())
         self._websocket_url = websocket_url
         self._http_client = http_client or httpx.AsyncClient(timeout=30.0)
         self._owns_client = http_client is None
@@ -54,6 +53,7 @@ class ElevenLabsStreamingTTS:
         self._reader_task: asyncio.Task | None = None
         self._close_task: asyncio.Task | None = None
         self._context_cleanups: set[asyncio.Task] = set()
+        self._context_close_lock = asyncio.Lock()
         self._contexts: dict[str, _ContextState] = {}
         self._send_lock = asyncio.Lock()
         self._connect_lock = asyncio.Lock()
@@ -102,6 +102,8 @@ class ElevenLabsStreamingTTS:
 
         try:
             voice_id = await asyncio.wait_for(self._resolve_voice_id(), self._limits.idle_seconds)
+            if state.failure:
+                raise ProviderLimitError(state.failure)
             await asyncio.wait_for(self._ensure_connected(voice_id), self._limits.idle_seconds)
             if state.failure:
                 raise ProviderLimitError(state.failure)
@@ -141,6 +143,10 @@ class ElevenLabsStreamingTTS:
         if sender_task is not None:
             sender_task.cancel()
             await asyncio.gather(sender_task, return_exceptions=True)
+        async with self._context_close_lock:
+            await self._remove_context(ctx_id, state)
+
+    async def _remove_context(self, ctx_id, state) -> None:
         state.fail("Provider context closed")
         ws = state.connection
         current = self._contexts.get(ctx_id)
@@ -185,6 +191,7 @@ class ElevenLabsStreamingTTS:
                 self._close_task = None
 
     async def _settle_close(self) -> None:
+        await self._connector.cancel_pending()
         for state in self._contexts.values():
             state.fail("Provider connection closed")
         reader = self._reader_task
@@ -227,6 +234,7 @@ class ElevenLabsStreamingTTS:
     async def _ensure_connected(self, voice_id: str) -> None:
         if self._close_task is not None:
             await asyncio.shield(self._close_task)
+        generation = self._connector.generation
         async with self._connect_lock:
             if _is_open(self._ws):
                 return
@@ -235,11 +243,10 @@ class ElevenLabsStreamingTTS:
             uri = (f"wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/multi-stream-input"
                    f"?model_id={self._model_id}&output_format=mp3_44100_128"
                    "&inactivity_timeout=180&auto_mode=true")
-            self._ws = await websockets.connect(
-                self._websocket_url or uri, additional_headers={"xi-api-key": self._api_key},
+            self._ws = await self._connector.connect(
+                self._websocket_url or uri, generation=generation, additional_headers={"xi-api-key": self._api_key},
                 ping_interval=20, ping_timeout=20, max_size=self._limits.max_ws_message_bytes,
                 max_queue=self._limits.max_ws_queue, compression=None, close_timeout=2,
-                create_connection=partial(ProviderClientConnection, output_limits=self._output_limits),
             )
             self._reader_task = asyncio.create_task(self._reader_loop(self._ws))
 

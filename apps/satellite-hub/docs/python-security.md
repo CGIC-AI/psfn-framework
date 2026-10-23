@@ -137,7 +137,12 @@ automatic pongs, explicit ping/pong and close. Per socket, the defaults are 8,19
 retained frames, 1,048,576 bytes and a five-second absolute completion deadline.
 Each frame reserves its payload plus the maximum 14-byte RFC 6455 header;
 native asyncio output and pending protocol writes share the byte cap without an
-additional overshoot allowance. HTTP handshake output also passes the byte cap.
+additional overshoot allowance. TLS counts both the SSL/BIO output and underlying
+TCP buffer. Each frame also reserves up to 2,053 bytes of TLS record header and
+expansion per 16,384 plaintext bytes, within the same byte ceiling. The explicit
+CPython asyncio SSL transport seam fails closed if its underlying buffer cannot
+be inspected; an alternate event loop must provide that seam before use.
+HTTP handshake output also passes the byte cap.
 Compression is disabled. Kernel TCP buffers, source objects and inbound queues
 are separate from this output budget.
 
@@ -147,7 +152,9 @@ results, and retains its charge until TCP loss. Reader, Deepgram keepalive and
 TTS sender tasks settle before provider cleanup completes. A canceled shutdown
 caller leaves one shielded cleanup task for subsequent callers to join. The last
 TTS context closes its socket; overlapping contexts retain their shared socket
-until their own completion or a socket failure. Fresh streams reconnect after
+until their own completion or a socket failure. Context cleanup serializes final
+removal and the last-socket decision. Pending handshake work is canceled and its
+TCP loss is awaited before provider shutdown returns. Fresh streams reconnect after
 settlement. Python has no separate global provider-work counter; these lifecycle
 rules preserve its per-turn and context ownership. TypeScript global provider
 admission is unchanged. Local regression peers reduce TCP buffers and exercise

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 import json
 import socket
+import ssl
+import datetime
 
 import httpx
 import pytest
@@ -11,6 +13,10 @@ import websockets
 from websockets.asyncio.server import serve
 from websockets.exceptions import ConnectionClosed
 from websockets.frames import Frame, OP_CLOSE, OP_PING, OP_TEXT
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
 
 from hub.adapters.bounds import ProviderLimits
 from hub.adapters.stt.deepgram_live import DeepgramLiveSTTProvider
@@ -29,7 +35,7 @@ def loopback_only(monkeypatch):
     connect = websockets.connect
 
     def local_connect(uri, **kwargs):
-        assert uri.startswith("ws://127.0.0.1:")
+        assert uri.startswith(("ws://127.0.0.1:", "wss://127.0.0.1:"))
         return connect(uri, proxy=None, **kwargs)
 
     async def reject_http(*args, **kwargs):
@@ -92,6 +98,144 @@ async def provider_peer(kind, **options):
         finally:
             if provider._ws is not None:
                 provider._ws.transport.abort()
+            if task is not None:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+            if stream is not None:
+                await stream.aclose()
+            await provider.aclose()
+            stopped.set()
+
+
+@pytest.mark.anyio
+async def test_simultaneous_tts_context_cancellation_closes_last_socket_under_send_contention():
+    accepted = asyncio.Queue()
+
+    async def handler(ws):
+        await accepted.put(ws)
+        await ws.wait_closed()
+
+    async with serve(handler, "127.0.0.1", 0, close_timeout=0.1) as server:
+        provider = ElevenLabsStreamingTTS(api_key="invented", voice_id="fixture",
+            websocket_url=f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}")
+        streams = [provider.stream_text(text_chunks=asyncio.Queue(), context_id=str(index)) for index in range(2)]
+        tasks = [asyncio.create_task(anext(stream)) for stream in streams]
+        try:
+            await accepted.get()
+            await eventually(lambda: len(provider._contexts) == 2 and all(state.sender is not None for state in provider._contexts.values()))
+            connection = provider._ws
+            async with provider._send_lock:
+                for task in tasks:
+                    task.cancel()
+                await eventually(lambda: len(provider._context_cleanups) == 2)
+                await asyncio.sleep(0.02)  # Let both finalizers reach the held send lock.
+            await asyncio.gather(*tasks, return_exceptions=True)
+            await eventually(lambda: provider._reader_task is None, timeout=0.3)
+            assert connection.connection_lost_waiter.done()
+            assert not provider._contexts
+            assert not provider._context_cleanups
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            for stream in streams:
+                await stream.aclose()
+            await provider.aclose()
+
+
+@pytest.fixture
+def tls_contexts(tmp_path):
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
+    now = datetime.datetime.now(datetime.timezone.utc)
+    certificate = (x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())
+        .serial_number(x509.random_serial_number()).not_valid_before(now - datetime.timedelta(minutes=1))
+        .not_valid_after(now + datetime.timedelta(days=1)).sign(key, hashes.SHA256()))
+    cert_path, key_path = tmp_path / "certificate.pem", tmp_path / "key.pem"
+    cert_path.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                         serialization.NoEncryption()))
+    server = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server.load_cert_chain(cert_path, key_path)
+    client = ssl.create_default_context(cafile=str(cert_path))
+    client.check_hostname = False
+    return server, client
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("kind", ("deepgram", "elevenlabs"))
+@pytest.mark.parametrize("action", ("second_write", "deadline", "ping_flood", "exact", "one_over"))
+async def test_tls_output_accounts_tcp_buffers_record_expansion_and_deadline(kind, action, tls_contexts, monkeypatch, record_property):
+    server_context, client_context = tls_contexts
+    connect = websockets.connect
+
+    def tls_connect(uri, **kwargs):
+        return connect(uri, ssl=client_context, **kwargs)
+
+    monkeypatch.setattr(websockets, "connect", tls_connect)
+    accepted = asyncio.Queue()
+    stopped = asyncio.Event()
+
+    async def handler(ws):
+        await accepted.put(ws)
+        await stopped.wait()
+
+    async with serve(handler, "127.0.0.1", 0, ssl=server_context, compression=None,
+                     ping_interval=None, close_timeout=0.1) as server:
+        url = f"wss://127.0.0.1:{server.sockets[0].getsockname()[1]}"
+        limits = RealtimeOutputLimits(max_bytes=900_611 if action == "exact" else 900_610 if action == "one_over" else 1_048_576,
+                                      completion_timeout=0.15)
+        options = {"api_key": "invented", "websocket_url": url, "output_limits": limits}
+        provider = (DeepgramLiveSTTProvider(**options) if kind == "deepgram"
+                    else ElevenLabsStreamingTTS(voice_id="fixture", **options))
+        stream = task = None
+        try:
+            if kind == "deepgram":
+                await provider.start_turn("fixture")
+            else:
+                stream = provider.stream_text(text_chunks=asyncio.Queue(), context_id="fixture")
+                task = asyncio.create_task(anext(stream))
+            peer = await accepted.get()
+            await eventually(lambda: provider._ws is not None)
+            connection = provider._ws
+            raw = connection.transport._ssl_protocol._transport
+            peer.transport.get_extra_info("socket").setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+            connection.transport.get_extra_info("socket").setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+            if kind == "elevenlabs":
+                await asyncio.wait_for(peer.recv(), 1)
+            peer.transport.pause_reading()
+            peak = 0
+            send_frame = connection.protocol.send_frame
+
+            def observe(frame):
+                nonlocal peak
+                send_frame(frame)
+                retained = (connection.transport.get_write_buffer_size() + raw.get_write_buffer_size()
+                            + sum(map(len, connection.protocol.writes)))
+                peak = max(peak, retained)
+
+            monkeypatch.setattr(connection.protocol, "send_frame", observe)
+            if action == "one_over":
+                with pytest.raises(ConnectionClosed):
+                    await connection.send(b"d" * 800_000)
+            elif action == "ping_flood":
+                peer.transport.write(Frame(OP_PING, b"p" * 125).serialize(mask=False) * 18_000)
+            else:
+                await connection.send(b"d" * 800_000)
+                assert raw.get_write_buffer_size() > 0
+                assert connection.output.bytes > 0
+                assert connection.output.deadline is not None
+                if action == "second_write":
+                    with pytest.raises(ConnectionClosed):
+                        await connection.send(b"d" * 800_000)
+            await eventually(lambda: connection.connection_lost_waiter.done())
+            record_property("tls_native_plus_pending_peak_bytes", peak)
+            assert peak <= limits.max_bytes
+            assert connection.transport.get_write_buffer_size() + raw.get_write_buffer_size() == 0
+            assert connection.output.bytes == 0
+            assert connection.output.timer is None
+            await eventually(lambda: provider._reader_task is None)
+        finally:
             if task is not None:
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
@@ -375,3 +519,50 @@ async def test_control_overflow_discards_provider_result_in_same_read_batch(kind
         assert not list(tmp_path.iterdir())
         assert "invented-result-content" not in caplog.text
         await recover(provider, kind)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("kind", ("deepgram", "elevenlabs"))
+async def test_shutdown_settles_inflight_provider_handshake(kind):
+    arrived = asyncio.Event()
+    release = asyncio.Event()
+    peers = []
+
+    async def gate(connection, request):
+        peers.append(connection)
+        arrived.set()
+        await release.wait()
+
+    async def handler(ws):
+        await ws.wait_closed()
+
+    async with serve(handler, "127.0.0.1", 0, process_request=gate, close_timeout=0.1) as server:
+        url = f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}"
+        provider = (DeepgramLiveSTTProvider(api_key="invented", websocket_url=url) if kind == "deepgram"
+                    else ElevenLabsStreamingTTS(api_key="invented", voice_id="fixture", websocket_url=url))
+        stream = None
+        if kind == "deepgram":
+            opening = asyncio.create_task(provider.start_turn("fixture"))
+        else:
+            stream = provider.stream_text(text_chunks=asyncio.Queue(), context_id="fixture")
+            opening = asyncio.create_task(anext(stream))
+        try:
+            await asyncio.wait_for(arrived.wait(), 1)
+            await asyncio.wait_for(provider.aclose(), 1)
+            release.set()
+            with suppress(RuntimeError, asyncio.CancelledError):
+                await asyncio.wait_for(opening, 1)
+            assert provider._ws is None
+            assert provider._reader_task is None
+            if kind == "deepgram":
+                assert provider._keepalive_task is None
+            else:
+                assert not provider._contexts
+            await eventually(lambda: all(peer.connection_lost_waiter.done() for peer in peers))
+        finally:
+            release.set()
+            opening.cancel()
+            await asyncio.gather(opening, return_exceptions=True)
+            if stream is not None:
+                await stream.aclose()
+            await provider.aclose()

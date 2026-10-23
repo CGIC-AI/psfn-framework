@@ -271,7 +271,8 @@ Each listener or provider socket has its own finite budget. The
 production defaults are 8,192 retained frames, 1,048,576 bytes, and a five-second
 absolute completion deadline. Admission occurs before serialization with a
 conservative 14-byte charge per frame; the native asyncio transport buffer and
-pending protocol output share that byte ceiling. HTTP handshake writes also
+pending protocol output share that byte ceiling. TLS also counts the underlying
+TCP buffer and reserves record expansion inside that ceiling. HTTP handshake writes also
 pass the byte boundary. Compression stays disabled. The gate uses the pinned
 websockets 15.0.1 `send_frame` boundary, including its synchronous automatic
 control replies; `write_limit` and `drain` provide flow control only.
@@ -291,6 +292,8 @@ results, and settle reader, keepalive and context sender tasks. Shutdown owns a
 shielded cleanup task; repeated or canceled callers cannot release the socket
 early. A new stream reconnects after settlement. Python has no separate global
 provider-work counter; TypeScript's existing provider admission remains separate.
+Pending handshakes belong to cleanup as well; shutdown cancels connection setup
+and awaits terminal TCP cleanup before releasing the provider lifecycle.
 The cap measures process-owned serialized output and conservative frame charges;
 kernel TCP buffers and provider/application source objects have their own limits.
 Local socket regressions cover unread peers with reduced TCP buffers, exact and

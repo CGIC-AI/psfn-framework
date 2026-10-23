@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from functools import partial
 import json
 import logging
 from time import perf_counter
@@ -14,7 +13,7 @@ from websockets.protocol import State
 
 from hub.adapters.interfaces import TranscriptResult
 from hub.adapters.bounds import ProviderLimits, ProviderLimitError
-from hub.adapters.provider_socket import ProviderClientConnection
+from hub.adapters.provider_socket import ProviderSocketConnect
 from hub.devices.realtime_output import RealtimeOutputLimits
 
 _LOGGER = logging.getLogger(__name__)
@@ -48,7 +47,7 @@ class DeepgramLiveSTTProvider:
     ) -> None:
         self._api_key = api_key
         self._limits = limits or ProviderLimits()
-        self._output_limits = output_limits or RealtimeOutputLimits()
+        self._connector = ProviderSocketConnect(output_limits or RealtimeOutputLimits())
         self._websocket_url = websocket_url
         self._model = model
         self._sample_rate = sample_rate
@@ -136,9 +135,13 @@ class DeepgramLiveSTTProvider:
             await self._disconnect()
         if _is_open(self._ws):
             return
+        generation = self._connector.generation
         async with self._connect_lock:
+            if generation != self._connector.generation:
+                raise RuntimeError("Provider connection closed")
             if self._reader_task is not None and not _is_open(self._ws):
                 await self._disconnect()
+                generation = self._connector.generation
             if _is_open(self._ws):
                 return
             url = (
@@ -153,8 +156,9 @@ class DeepgramLiveSTTProvider:
                 "&vad_events=true"
                 "&smart_format=true"
             )
-            self._ws = await websockets.connect(
+            self._ws = await self._connector.connect(
                 self._websocket_url or url,
+                generation=generation,
                 additional_headers={"Authorization": f"Token {self._api_key}"},
                 ping_interval=20,
                 ping_timeout=20,
@@ -162,7 +166,6 @@ class DeepgramLiveSTTProvider:
                 max_queue=self._limits.max_ws_queue,
                 compression=None,
                 close_timeout=2,
-                create_connection=partial(ProviderClientConnection, output_limits=self._output_limits),
             )
             self._reader_task = asyncio.create_task(self._reader_loop())
             self._keepalive_task = asyncio.create_task(self._keepalive_loop())
@@ -301,6 +304,7 @@ class DeepgramLiveSTTProvider:
                 self._disconnect_task = None
 
     async def _settle_disconnect(self) -> None:
+        await self._connector.cancel_pending()
         tasks = [task for task in (self._keepalive_task, self._reader_task) if task is not None and task is not asyncio.current_task()]
         for task in tasks:
             task.cancel()

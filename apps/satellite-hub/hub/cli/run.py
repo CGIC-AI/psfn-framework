@@ -30,18 +30,36 @@ from hub.storage.session_cache import SessionCache
 from hub.storage.artifacts import ArtifactStore
 
 
-def _owned_voice_callback(tasks: set[asyncio.Task], callback):
-    @wraps(callback)
-    async def owned(*args, **kwargs):
-        task = asyncio.current_task()
-        assert task is not None
-        tasks.add(task)
-        try:
-            return await callback(*args, **kwargs)
-        finally:
-            tasks.discard(task)
+class _VoiceCallbacks:
+    def __init__(self) -> None:
+        self._tasks: set[asyncio.Task] = set()
+        self._closed = False
 
-    return owned
+    def wrap(self, callback):
+        @wraps(callback)
+        async def owned(*args, **kwargs):
+            if self._closed:
+                return None
+            task = asyncio.current_task()
+            assert task is not None
+            self._tasks.add(task)
+            try:
+                return await callback(*args, **kwargs)
+            finally:
+                self._tasks.discard(task)
+
+        return owned
+
+    def close(self) -> None:
+        self._closed = True
+
+    async def aclose(self) -> None:
+        self.close()
+        async with AsyncExitStack() as resources:
+            for task in tuple(self._tasks):
+                if not task.cancelling():
+                    task.cancel()
+                resources.push_async_callback(_cancel_runtime_task, task)
 
 
 async def _run_esphome_runtime(
@@ -88,7 +106,7 @@ async def _run_esphome_runtime(
     try:
         while True:
             runtime: StreamingVoiceAssistantRuntime | None = None
-            callback_tasks: set[asyncio.Task] = set()
+            callbacks = _VoiceCallbacks()
             try:
                 async with ESPHomeSession(config.esphome_target) as session:
                     await session.device_info()
@@ -135,12 +153,13 @@ async def _run_esphome_runtime(
                         pinned_conversation_id=config.voice_conversation_id,
                     )
                     unsubscribe = session.subscribe_voice_assistant(
-                        handle_start=_owned_voice_callback(callback_tasks, runtime.handle_start),
-                        handle_stop=_owned_voice_callback(callback_tasks, runtime.handle_stop),
-                        handle_audio=_owned_voice_callback(callback_tasks, runtime.handle_audio),
+                        handle_start=callbacks.wrap(runtime.handle_start),
+                        handle_stop=callbacks.wrap(runtime.handle_stop),
+                        handle_audio=callbacks.wrap(runtime.handle_audio),
                     )
                     async with AsyncExitStack() as endpoint:
                         endpoint.callback(unsubscribe)
+                        endpoint.callback(callbacks.close)
                         typer.echo("ESPHome connected")
                         await session.wait_disconnected()
                 typer.echo("ESPHome connection lost; reconnecting in 2 seconds")
@@ -154,10 +173,7 @@ async def _run_esphome_runtime(
                 async with AsyncExitStack() as endpoint:
                     if runtime is not None:
                         endpoint.push_async_callback(runtime.aclose)
-                    for task in tuple(callback_tasks):
-                        if not task.cancelling():
-                            task.cancel()
-                        endpoint.push_async_callback(_cancel_runtime_task, task)
+                    endpoint.push_async_callback(callbacks.aclose)
             await asyncio.sleep(2)
     finally:
         async with AsyncExitStack() as resources:

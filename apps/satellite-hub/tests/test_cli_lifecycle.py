@@ -91,7 +91,7 @@ def local_esphome_session(monkeypatch):
     monkeypatch.setenv("ESPHOME_HOST", "esphome.example.test")
     subscribed = asyncio.Queue()
     callback_tasks = []
-    controls = {"unsubscribe_error": None}
+    controls = {"unsubscribe_error": None, "queue_stop": False, "queued_stops": []}
 
     class LocalSession:
         def __init__(self, target):
@@ -110,6 +110,7 @@ def local_esphome_session(monkeypatch):
             return [], []
 
         def subscribe_voice_assistant(self, **callbacks):
+            self.callbacks = callbacks
             subscribed.put_nowait(callbacks)
 
             def unsubscribe():
@@ -121,7 +122,11 @@ def local_esphome_session(monkeypatch):
             return unsubscribe
 
         async def wait_disconnected(self):
-            await asyncio.Future()
+            try:
+                await asyncio.Future()
+            finally:
+                if controls["queue_stop"]:
+                    controls["queued_stops"].append(asyncio.create_task(self.callbacks["handle_stop"](False)))
 
     monkeypatch.setattr(importlib.import_module("hub.cli.run"), "ESPHomeSession", LocalSession)
     return subscribed, callback_tasks, controls
@@ -461,6 +466,45 @@ async def test_cli_joins_inflight_esphome_callback_cancellation_cleanup(
         for callback in callback_tasks:
             callback.cancel()
         await asyncio.gather(task, *callback_tasks, return_exceptions=True)
+        audio.stop()
+
+
+@pytest.mark.anyio
+async def test_cli_rejects_queued_device_callbacks_after_shutdown_starts(
+    local_runtime, local_esphome_session, monkeypatch,
+):
+    subscribed, _, controls = local_esphome_session
+    finish_entered = asyncio.Event()
+
+    class LocalProvider(_FakeSTT):
+        def __init__(self, **kwargs):
+            super().__init__()
+
+        async def finish_turn(self):
+            finish_entered.set()
+            await asyncio.Future()
+
+        async def aclose(self):
+            pass
+
+    module = importlib.import_module("hub.cli.run")
+    for name in ("PsfnStreamingProvider", "DeepgramLiveSTTProvider", "ElevenLabsStreamingTTS"):
+        monkeypatch.setattr(module, name, LocalProvider)
+    task, audio = await local_runtime()
+    try:
+        callbacks = await asyncio.wait_for(subscribed.get(), 2)
+        await callbacks["handle_start"]("invented-queued-turn", 0, VoiceAssistantAudioSettings(), None)
+        controls["queue_stop"] = True
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert not finish_entered.is_set(), "A queued callback started provider work during shutdown"
+        assert controls["queued_stops"] and all(stop.done() for stop in controls["queued_stops"])
+    finally:
+        task.cancel()
+        for stop in controls["queued_stops"]:
+            stop.cancel()
+        await asyncio.gather(task, *controls["queued_stops"], return_exceptions=True)
         audio.stop()
 
 

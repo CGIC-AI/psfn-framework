@@ -430,7 +430,11 @@ describe('Helm credential installation boundary', () => {
     const result = render({ secrets: { create: false, existingSecret: 'shared-credentials' },
       postgres: { auth: { existingSecret: 'shared-credentials', keys: { password: 'custom-pg-password', databaseUrl: 'custom-companion-url' } } },
       runtimeBootstrap: { keys: { companionDatabaseUrl: 'custom-companion-url' } },
-      redis: { enabled: true, auth: { existingSecret: 'shared-credentials', key: 'custom-cache-password' } } });
+      redis: { enabled: true, auth: { existingSecret: 'shared-credentials', key: 'custom-cache-password' } },
+      gardenBrowser: {
+        publicOrigin: 'https://garden.credential-test.invalid',
+        trustedProxyAddresses: ['192.0.2.0/24'],
+      } });
     expect(result.status).toBe(0);
     expect(result.stdout).not.toMatch(/^kind: Secret$/mu);
     const env = extractContainerEnv(result.stdout, 'credential-test-psfn-gateway', 'gateway');

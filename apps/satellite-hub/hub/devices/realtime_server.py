@@ -133,6 +133,9 @@ class _RealtimeConnection:
                 raw_message = await asyncio.wait_for(anext(iterator), max(0, timeout))
             except StopAsyncIteration:
                 return
+            # Output can fail while wait_for hands the received frame back.
+            if self._websocket.output.failed:
+                return
             if not isinstance(raw_message, str):
                 raise ValueError("Realtime requires JSON text frames")
             payload = json.loads(raw_message)

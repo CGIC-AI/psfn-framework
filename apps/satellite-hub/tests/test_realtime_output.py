@@ -5,6 +5,7 @@ from contextlib import suppress
 import json
 from pathlib import Path
 import socket
+import sys
 
 import httpx
 import pytest
@@ -343,6 +344,58 @@ async def test_output_overflow_does_not_admit_trailing_application_work(tmp_path
             await _clean(hub, hub._server)
             assert not (tmp_path / "artifacts").exists()
             await _recover(hub, hub._server)
+        finally:
+            writer.transport.abort()
+            await _close(writer)
+
+
+@pytest.mark.anyio
+async def test_output_failure_after_receive_prevents_turn_dispatch(monkeypatch, tmp_path: Path) -> None:
+    from hub.devices.realtime_admission import _AdmittedConnection
+
+    provider_calls = []
+    failure_scheduled = asyncio.Event()
+    recv = _AdmittedConnection.recv
+    turn_end = json.dumps({"type": "turn.end"})
+    pings = Frame(OP_PING, b"p" * 125).serialize(mask=True) * 4
+
+    async def receive_then_schedule_overflow(connection, decode=None):
+        message = await recv(connection, decode)
+        if message == turn_end:
+            connection.loop.call_soon(connection.data_received, pings)
+            failure_scheduled.set()
+            # Python 3.11 wait_for yields at the receive child-task handoff.
+            # Newer versions await inline; expose the same scheduling gap.
+            if sys.version_info >= (3, 12):
+                await asyncio.sleep(0)
+        return message
+
+    async def start_turn(provider, conversation_id):
+        provider_calls.append(True)
+
+    monkeypatch.setattr(_AdmittedConnection, "recv", receive_then_schedule_overflow)
+    monkeypatch.setattr("hub.devices.realtime_server.DeepgramLiveSTTProvider.start_turn", start_turn)
+    limits = RealtimeOutputLimits(max_frames=3, max_bytes=1024)
+    async with server(tmp_path, max_connections=1, output_limits=limits) as hub:
+        websocket_server = hub._server
+        reader, writer, peer = await _unread_peer(hub)
+        tasks = tuple(websocket_server.handlers.values())
+        try:
+            writer.transport.resume_reading()
+            for payload in ({"type": "turn.start"}, {"type": "audio", "audio": "AQACAAMA"}, {"type": "hello"}):
+                writer.write(Frame(OP_TEXT, json.dumps(payload).encode()).serialize(mask=True))
+            await writer.drain()
+            assert json.loads((await _read_frame(reader))[1])["type"] == "turn.started"
+            assert json.loads((await _read_frame(reader))[1])["type"] == "hello.ack"
+            assert not (tmp_path / "artifacts").exists()
+            writer.write(Frame(OP_TEXT, turn_end.encode()).serialize(mask=True))
+            await writer.drain()
+            await asyncio.wait_for(failure_scheduled.wait(), 1)
+            await _eventually(lambda: peer.connection_lost_waiter.done())
+            await _clean(hub, websocket_server, tasks)
+            assert peer.output.failed
+            assert (len(provider_calls), (tmp_path / "artifacts").exists()) == (0, False)
+            await _recover(hub, websocket_server)
         finally:
             writer.transport.abort()
             await _close(writer)

@@ -30,6 +30,11 @@ function stubDocker({
 const scanCall = (calls) => calls.find((args) => args.includes(OSV_IMAGE) && !args.includes('--version'));
 const allExist = () => true;
 
+test('OSV scanner keeps its immutable image pin and reviewed runtime version', () => {
+  assert.match(OSV_IMAGE, /^ghcr\.io\/google\/osv-scanner@sha256:[a-f0-9]{64}$/);
+  assert.equal(OSV_VERSION, '2.4.0');
+});
+
 test('OSV_LOCKFILES names every committed lockfile', () => {
   assert.deepEqual(OSV_LOCKFILES, [
     'package-lock.json',
@@ -37,6 +42,9 @@ test('OSV_LOCKFILES names every committed lockfile', () => {
     'companion-ui/package-lock.json',
     'apps/satellite-hub/package-lock.json',
     'tools/evals/package-lock.json',
+    'apps/satellite-hub/uv.lock',
+    'apps/satellite-hub/relay/psfn-voxta-relay/packages.lock.json',
+    'apps/satellite-hub/relay/psfn-voxta-relay.tests/packages.lock.json',
   ]);
 });
 
@@ -72,6 +80,9 @@ test('buildOsvScanArgs mounts the repo read-only and names every owned lockfile'
       '--lockfile=/repo/companion-ui/package-lock.json',
       '--lockfile=/repo/apps/satellite-hub/package-lock.json',
       '--lockfile=/repo/tools/evals/package-lock.json',
+      '--lockfile=/repo/apps/satellite-hub/uv.lock',
+      '--lockfile=/repo/apps/satellite-hub/relay/psfn-voxta-relay/packages.lock.json',
+      '--lockfile=/repo/apps/satellite-hub/relay/psfn-voxta-relay.tests/packages.lock.json',
     ],
   );
 });
@@ -79,8 +90,11 @@ test('buildOsvScanArgs mounts the repo read-only and names every owned lockfile'
 test('runOsv returns 0 for a clean scan of every lockfile', () => {
   const { runDocker, calls } = stubDocker();
   assert.equal(runOsv({ argv: [], runDocker, fileExists: allExist }), 0);
+  assert.deepEqual(calls[0], [
+    'run', '--rm', '--platform', 'linux/amd64', OSV_IMAGE, '--version',
+  ]);
   const scan = scanCall(calls);
-  assert.equal(scan.filter((arg) => arg.startsWith('--lockfile=')).length, 5);
+  assert.equal(scan.filter((arg) => arg.startsWith('--lockfile=')).length, 8);
 });
 
 test('runOsv fails closed on findings (exit 1) under table and json formats', () => {
@@ -109,11 +123,13 @@ test('runOsv refuses to scan when the version probe itself fails', () => {
 });
 
 test('runOsv fails closed on a missing lockfile and never probes or scans', () => {
-  const { runDocker, calls } = stubDocker();
-  const fileExists = (path) => path !== 'companion-ui/package-lock.json';
-  assert.throws(
-    () => runOsv({ argv: [], runDocker, fileExists }),
-    /missing committed lockfile\(s\): companion-ui\/package-lock\.json/,
-  );
-  assert.equal(calls.length, 0);
+  for (const missing of OSV_LOCKFILES) {
+    const { runDocker, calls } = stubDocker();
+    const fileExists = (path) => path !== missing;
+    assert.throws(
+      () => runOsv({ argv: [], runDocker, fileExists }),
+      { message: `Refusing to scan: missing committed lockfile(s): ${missing}` },
+    );
+    assert.equal(calls.length, 0);
+  }
 });

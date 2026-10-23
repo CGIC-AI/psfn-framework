@@ -1329,6 +1329,10 @@ test('specialist security workflows are manual-only and avoid scheduled or PR ru
   for (const ownedInput of [
     'package-lock.json',
     'companion-ui/package-lock.json',
+    'apps/satellite-hub/pyproject.toml',
+    'apps/satellite-hub/uv.lock',
+    'apps/satellite-hub/relay/psfn-voxta-relay/packages.lock.json',
+    'apps/satellite-hub/relay/psfn-voxta-relay.tests/packages.lock.json',
     'docker/Dockerfile.agent',
     'scripts/ci/npm-project-contract.mjs',
     'scripts/ci/run-osv-scan.mjs',

@@ -6,81 +6,13 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.SignalR.Client;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NAudio.Wave;
 
-var builder = WebApplication.CreateBuilder(args);
-if (RelayOptions.ShouldShowHelp(args))
-{
-    Console.WriteLine(RelayOptions.Usage);
-    return;
-}
-
-var options = RelayOptions.FromArgs(args);
-RelayAccess.ValidateOptions(options);
-
-builder.WebHost.UseUrls(options.ListenUrl);
-builder.Services.AddSignalR(options =>
-{
-    options.MaximumReceiveMessageSize = 1024 * 1024 * 32;
-});
-builder.Services.AddSingleton(options);
-builder.Services.AddSingleton(new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }));
-builder.Services.AddSingleton<RelaySessionRegistry>();
-builder.Services.AddSingleton<AudioArtifactStore>();
-builder.Services.AddSingleton<RemoteApiProxy>();
-
-var app = builder.Build();
-app.Use(async (context, next) =>
-{
-    if (!RelayAccess.Allows(context.Request, options))
-    {
-        context.Response.StatusCode = StatusCodes.Status403Forbidden;
-        return;
-    }
-    await next(context);
-});
-
-app.MapHub<VoxtaRelayHub>("/hub", signalr =>
-{
-    signalr.Transports = HttpTransportType.WebSockets;
-});
-
-app.Map("/{**path}", async (
-    HttpContext context,
-    RemoteApiProxy proxy,
-    RelayOptions relayOptions,
-    ILoggerFactory loggerFactory) =>
-{
-    if (context.Request.Path.StartsWithSegments("/api"))
-    {
-        await proxy.ProxyAsync(context);
-        return;
-    }
-
-    loggerFactory.CreateLogger("Relay").LogInformation(
-        "PSFN Voxta relay running. Local={LocalUrl} RemoteHub={RemoteHubUrl}",
-        relayOptions.ListenUrl,
-        relayOptions.RemoteHubUrl);
-    context.Response.ContentType = "text/plain";
-    await context.Response.WriteAsync("psfn-voxta-relay\n");
-});
-
-app.Logger.LogInformation(
-    "PSFN Voxta relay starting. Local={LocalUrl} RemoteHub={RemoteHubUrl} RemoteApi={RemoteApiBaseUrl}",
-    options.ListenUrl,
-    options.RemoteHubUrl,
-    options.RemoteApiBaseUrl);
-app.Logger.LogInformation("Audio fallback folder: {AudioFolder}", options.FallbackAudioFolder);
-
-await app.RunAsync();
+return await RelayApplication.RunAsync(args);
 
 public sealed class VoxtaRelayHub(
     RelaySessionRegistry sessions,
@@ -91,14 +23,21 @@ public sealed class VoxtaRelayHub(
     public override async Task OnConnectedAsync()
     {
         var session = new BridgeSession(
-            Context.ConnectionId,
             Clients.Client(Context.ConnectionId),
             options,
             audioStore,
             logger);
         sessions.Add(Context.ConnectionId, session);
-        await session.ConnectAsync(Context.ConnectionAborted);
-        logger.LogInformation("Registered VaM client {ConnectionId}", Context.ConnectionId);
+        try
+        {
+            await session.ConnectAsync(Context.ConnectionAborted);
+        }
+        catch (Exception)
+        {
+            RelayLogging.Write(logger, RelayEvent.SessionConnectionFailed, session.CorrelationId);
+            throw;
+        }
+        RelayLogging.Write(logger, RelayEvent.ClientRegistered, session.CorrelationId);
         await base.OnConnectedAsync();
     }
 
@@ -108,7 +47,7 @@ public sealed class VoxtaRelayHub(
         {
             await session.DisposeAsync();
         }
-        logger.LogInformation("Unregistered VaM client {ConnectionId}", Context.ConnectionId);
+        RelayLogging.Write(logger, RelayEvent.ClientUnregistered, session?.CorrelationId);
         await base.OnDisconnectedAsync(exception);
     }
 
@@ -126,7 +65,6 @@ public sealed class BridgeSession : IAsyncDisposable
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-    private readonly string _localConnectionId;
     private readonly ISingleClientProxy _localClient;
     private readonly RelayOptions _options;
     private readonly AudioArtifactStore _audioStore;
@@ -137,14 +75,14 @@ public sealed class BridgeSession : IAsyncDisposable
     private MicrophoneStream? _microphone;
     private string? _audioFolder;
 
+    public Guid CorrelationId { get; } = Guid.NewGuid();
+
     public BridgeSession(
-        string localConnectionId,
         ISingleClientProxy localClient,
         RelayOptions options,
         AudioArtifactStore audioStore,
         ILogger logger)
     {
-        _localConnectionId = localConnectionId;
         _localClient = localClient;
         _options = options;
         _audioStore = audioStore;
@@ -167,10 +105,7 @@ public sealed class BridgeSession : IAsyncDisposable
     public async Task ConnectAsync(CancellationToken cancellationToken)
     {
         await _remote.StartAsync(cancellationToken);
-        _logger.LogInformation(
-            "Session {ConnectionId} connected to remote {RemoteHubUrl}",
-            _localConnectionId,
-            _options.RemoteHubUrl);
+        RelayLogging.Write(_logger, RelayEvent.SessionConnected, CorrelationId);
     }
 
     public async Task SendLocalMessageAsync(JsonElement message, CancellationToken cancellationToken)
@@ -231,10 +166,7 @@ public sealed class BridgeSession : IAsyncDisposable
         {
             _audioFolder = audioFolder;
             Directory.CreateDirectory(_audioFolder);
-            _logger.LogInformation(
-                "Session {ConnectionId} audio folder updated to {AudioFolder}",
-                _localConnectionId,
-                _audioFolder);
+            RelayLogging.Write(_logger, RelayEvent.AudioFolderUpdated, CorrelationId);
         }
 
         capabilities ??= new JsonObject();
@@ -261,9 +193,9 @@ public sealed class BridgeSession : IAsyncDisposable
         {
             message[fieldName] = await _audioStore.EnsureLocalAsync(audioUrl, localAudioFolder);
         }
-        catch (Exception error)
+        catch (Exception)
         {
-            _logger.LogError(error, "Failed to localize {FieldName} {AudioUrl}", fieldName, audioUrl);
+            RelayLogging.Write(_logger, RelayEvent.AudioLocalizationFailed, CorrelationId);
         }
     }
 
@@ -283,7 +215,7 @@ public sealed class BridgeSession : IAsyncDisposable
         var sessionId = ReadString(message["sessionId"]);
         if (string.IsNullOrWhiteSpace(sessionId))
         {
-            _logger.LogWarning("Ignoring recordingRequest without sessionId");
+            RelayLogging.Write(_logger, RelayEvent.RecordingSessionMissing, CorrelationId);
             return;
         }
 
@@ -291,7 +223,7 @@ public sealed class BridgeSession : IAsyncDisposable
         {
             await _microphone.DisposeAsync();
         }
-        _microphone = new MicrophoneStream(_options, sessionId, _logger);
+        _microphone = new MicrophoneStream(_options, sessionId, _logger, CorrelationId);
         await _microphone.StartAsync();
     }
 
@@ -429,7 +361,7 @@ public sealed class AudioArtifactStore(HttpClient httpClient, RelayOptions optio
         var localPath = Path.Combine(audioFolder, $"psfn_{Hash(uri.ToString())}{extension}");
         await using var output = File.Create(localPath);
         await response.Content.CopyToAsync(output);
-        logger.LogInformation("Downloaded remote audio {AudioUrl} -> {LocalPath}", uri, localPath);
+        RelayLogging.Write(logger, RelayEvent.AudioDownloaded, bytes: output.Length);
         return localPath;
     }
 
@@ -476,23 +408,25 @@ public sealed class MicrophoneStream : IAsyncDisposable
     private readonly RelayOptions _options;
     private readonly string _sessionId;
     private readonly ILogger _logger;
+    private readonly Guid _correlationId;
     private readonly ClientWebSocket _socket = new();
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private WaveInEvent? _waveIn;
     private bool _disposed;
 
-    public MicrophoneStream(RelayOptions options, string sessionId, ILogger logger)
+    public MicrophoneStream(RelayOptions options, string sessionId, ILogger logger, Guid correlationId)
     {
         _options = options;
         _sessionId = sessionId;
         _logger = logger;
+        _correlationId = correlationId;
     }
 
     public async Task StartAsync()
     {
         if (!OperatingSystem.IsWindows())
         {
-            _logger.LogWarning("Microphone streaming requires Windows; recordingRequest ignored on this platform");
+            RelayLogging.Write(_logger, RelayEvent.MicrophoneUnsupported, _correlationId);
             return;
         }
 
@@ -521,11 +455,11 @@ public sealed class MicrophoneStream : IAsyncDisposable
         {
             if (args.Exception is not null)
             {
-                _logger.LogError(args.Exception, "Microphone recording stopped with error");
+                RelayLogging.Write(_logger, RelayEvent.MicrophoneFailed, _correlationId);
             }
         };
         _waveIn.StartRecording();
-        _logger.LogInformation("Audio websocket opened for session {SessionId}: {Url}", _sessionId, wsUrl);
+        RelayLogging.Write(_logger, RelayEvent.AudioSocketOpened, _correlationId);
     }
 
     public async ValueTask DisposeAsync()
@@ -565,9 +499,9 @@ public sealed class MicrophoneStream : IAsyncDisposable
                 await _socket.SendAsync(pcm, WebSocketMessageType.Binary, true, CancellationToken.None);
             }
         }
-        catch (Exception error)
+        catch (Exception)
         {
-            _logger.LogWarning(error, "Audio websocket send failed");
+            RelayLogging.Write(_logger, RelayEvent.AudioSocketSendFailed, _correlationId);
         }
         finally
         {

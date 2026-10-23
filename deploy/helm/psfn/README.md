@@ -131,10 +131,25 @@ Assistant, Hub credentials, and `satelliteApiKeys` (the combined Hub and extra
 satellite key list). This also applies to existing Secrets: custom key names
 are supported, but one data key cannot supply multiple credential roles.
 The same separation applies across application, PostgreSQL, Redis, bootstrap,
-Fleet and subordinate references when their Secret name and key coincide.
+Fleet, Voxta, custom `extraEnv` Secret references, and subordinate references
+when their Secret name and key coincide. TLS private-key tuples are reserved
+for their certificate identities. This inventory is evaluated after existing
+Secret names, key overrides, and per-companion database URL defaults resolve.
 PostgreSQL password and URL keys must differ. The runtime database URL may be
 shared by its consumers (including the bootstrap companion URL); references
 to different Secret names may use identical key spelling.
+Voxta's `satelliteHub.voxta.authTokenSecretRef` must select its own credential:
+never select an administrator, API, HMAC, backup, database, satellite, provider,
+Eidoverse, Fleet, or TLS private-key tuple. Prefer a dedicated external Secret.
+A shared existing app Secret may hold the distinct key selected by
+`secrets.keys.voxtaAuthToken` (default `VOXTA_AUTH_TOKEN`). For nonproduction
+chart-owned Secrets, `secrets.values.voxtaAuthToken` supplies that role and
+receives the same strength and value-distinctness checks as other credentials;
+set the Voxta reference to the rendered app Secret and that key explicitly.
+External Secret contents remain opaque to an offline render: distinct tuples
+must also contain independently generated values. Errors name roles and fields,
+without including Secret key names or values.
+
 Credential environment names (`provider.envName`, Eidoverse `tokenRef`, and
 `fleetAuth.credentialEnv`) must not alias another credential role or a managed
 or security-sensitive variable. Distinct custom names remain supported.

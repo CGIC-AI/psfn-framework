@@ -30,7 +30,7 @@
 {{- range $role := list "apiKey" "adminToken" "gatewaySessionHmacKey" "gatewaySessionIntegrityAuthToken" "gatewayCompanionAuthToken" "backupEncryptionKey" -}}
 {{- $_ := set $credentials (printf "secrets.values.%s" $role) (get $root.Values.secrets.values $role | default "") -}}
 {{- end -}}
-{{- range $role := list "satelliteHubApiKey" "satelliteHubControlToken" "homeAssistantToken" "eidoverseJoinToken" "providerApiKey" "openRouterApiKey" "openAiApiKey" "embeddingApiKey" "hfToken" "discordToken" "deepgramApiKey" "elevenLabsApiKey" "falApiKey" "ntfyToken" -}}
+{{- range $role := list "satelliteHubApiKey" "satelliteHubControlToken" "homeAssistantToken" "voxtaAuthToken" "eidoverseJoinToken" "providerApiKey" "openRouterApiKey" "openAiApiKey" "embeddingApiKey" "hfToken" "discordToken" "deepgramApiKey" "elevenLabsApiKey" "falApiKey" "ntfyToken" -}}
 {{- with get $root.Values.secrets.values $role -}}{{- $_ := set $credentials (printf "secrets.values.%s" $role) . -}}{{- end -}}
 {{- end -}}
 {{- if .Values.satelliteHub.enabled -}}
@@ -53,5 +53,11 @@
 {{- include "psfn.validateCredential" (dict "root" $root "label" $label "value" $value) -}}
 {{- if hasKey $seen $value -}}{{- fail (printf "%s credential must not reuse another role's credential" $label) -}}{{- end -}}
 {{- $_ := set $seen $value true -}}
+{{- end -}}
+{{/* A composed chart-owned database URL also exposes a database credential.
+     Compare it without imposing a token-length policy on the URI itself. */}}
+{{- if and .Values.postgres.enabled (not .Values.postgres.external.enabled) (not .Values.postgres.auth.existingSecret) -}}
+{{- $databaseUrl := printf "postgresql://%s:%s@%s:%v/%s" (.Values.postgres.auth.username | urlquery) (.Values.postgres.auth.password | urlquery) (include "psfn.postgresServiceName" .) .Values.ports.postgres .Values.postgres.auth.database -}}
+{{- if hasKey $seen $databaseUrl -}}{{- fail "postgres database URL credential must not reuse another role's credential" -}}{{- end -}}
 {{- end -}}
 {{- end -}}

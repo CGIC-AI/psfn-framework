@@ -443,6 +443,8 @@ secrets:
     # matching satellites.json endpoint must list in auth.apiKeyPrincipalIds.
     # Required when satelliteHub.enabled=true (>=32 chars, strong and distinct).
     satelliteHubApiKey: ""
+    # Optional chart-owned Voxta token; prefer an external Secret in production.
+    voxtaAuthToken: ""
     homeAssistantToken: ""
     satelliteHubControlToken: ""
     # Eidoverse world join token. Delivered to the hub under the environment
@@ -474,6 +476,7 @@ secrets:
     gatewaySessionIntegrityAuthToken: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN
     gatewayCompanionAuthToken: GATEWAY_COMPANION_AUTH_TOKEN
     satelliteHubApiKey: SATELLITE_HUB_API_KEY
+    voxtaAuthToken: VOXTA_AUTH_TOKEN
     homeAssistantToken: HOME_ASSISTANT_TOKEN
     satelliteHubControlToken: SATELLITE_HUB_CONTROL_TOKEN
     eidoverseJoinToken: EIDOVERSE_JOIN_TOKEN

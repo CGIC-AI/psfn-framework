@@ -9,6 +9,14 @@ from hub.media.http_audio import StaticAudioServer
 from hub.runtime import _load_hub_device_assertion_config, load_runtime_config
 
 
+@pytest.fixture(autouse=True)
+def authenticated_audio_relay(monkeypatch):
+    monkeypatch.setenv("HUB_DEVELOPER_MODE", "false")
+    monkeypatch.setenv("AUDIO_SERVER_BIND_HOST", "127.0.0.1")
+    monkeypatch.setenv("AUDIO_PUBLIC_BASE_URL", "https://audio.example.test")
+    monkeypatch.setenv("AUDIO_RELAY_AUTH_TOKEN", "Au_xP8rQ2vK6tW0yL9eR3cF7dH1mZ5sG4bN_jTiEoCzB")
+
+
 def test_load_runtime_config_reads_psfn_and_project_env(tmp_path: Path, monkeypatch) -> None:
     for name in (
         "ESPHOME_HOST",
@@ -255,7 +263,8 @@ def test_load_runtime_config_rejects_unknown_capability_profile(tmp_path: Path, 
         load_runtime_config(tmp_path)
 
 
-def test_load_runtime_config_requires_public_host_in_realtime_mode(tmp_path: Path, monkeypatch) -> None:
+def test_load_runtime_config_requires_https_audio_origin_in_realtime_mode(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("AUDIO_PUBLIC_BASE_URL", raising=False)
     for name in (
         "DEVICE_TRANSPORT",
         "AUDIO_PUBLIC_HOST",
@@ -274,7 +283,7 @@ def test_load_runtime_config_requires_public_host_in_realtime_mode(tmp_path: Pat
 
     with pytest.raises(
         ValueError,
-        match="AUDIO_PUBLIC_HOST or REALTIME_VOICE_PUBLIC_HOST is required when DEVICE_TRANSPORT=realtime",
+        match="HTTPS public origin",
     ):
         load_runtime_config(tmp_path)
 
@@ -336,20 +345,18 @@ def test_load_runtime_config_requires_concrete_model_with_provider(tmp_path: Pat
 def test_static_audio_server_uses_public_host_for_urls(tmp_path: Path) -> None:
     root = tmp_path / "audio"
     root.mkdir()
-    audio_path = root / "reply.mp3"
-    audio_path.write_bytes(b"test")
-
     server = StaticAudioServer(
-        host="0.0.0.0",
+        host="127.0.0.1",
         port=8099,
         root=root,
-        public_host="192.0.2.50",
-        public_port=18099,
+        public_base_url="https://audio.example.test:18099",
+        relay_token="Au_xP8rQ2vK6tW0yL9eR3cF7dH1mZ5sG4bN_jTiEoCzB",
     )
-
-    assert server.url_for(audio_path) == "http://192.0.2.50:18099/reply.mp3"
+    audio_path = server.root / "reply.mp3"
+    audio_path.write_bytes(b"test")
+    assert server.url_for(audio_path).startswith("https://audio.example.test:18099/files/")
     stream = server.open_stream()
-    assert stream.url.startswith("http://192.0.2.50:18099/streams/")
+    assert stream.url.startswith("https://audio.example.test:18099/streams/")
     stream.close()
 
 
@@ -358,15 +365,16 @@ def test_static_audio_server_open_stream_uses_stream_endpoint(tmp_path: Path) ->
     root.mkdir()
 
     server = StaticAudioServer(
-        host="0.0.0.0",
+        host="127.0.0.1",
         port=8099,
         root=root,
-        public_host="192.0.2.50",
+        public_base_url="https://audio.example.test",
+        relay_token="Au_xP8rQ2vK6tW0yL9eR3cF7dH1mZ5sG4bN_jTiEoCzB",
     )
 
     stream = server.open_stream(content_type="audio/mpeg")
 
-    assert stream.url.startswith("http://192.0.2.50:8099/streams/")
+    assert stream.url.startswith("https://audio.example.test/streams/")
     stream.write(b"test")
     stream.close()
 

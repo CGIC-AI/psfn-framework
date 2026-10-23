@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from hub.storage.artifacts import ArtifactStore
+
 import asyncio
 import array
 from dataclasses import dataclass
@@ -18,7 +20,7 @@ from hub.adapters.interfaces import AgentProvider, STTProvider, TTSProvider
 from hub.devices.esphome_session import ESPHomeSession
 from hub.media.http_audio import StaticAudioServer
 from hub.storage.session_cache import SessionCache
-from hub.util import ensure_directory, isoformat_z, to_jsonable, utc_now, write_json
+from hub.util import isoformat_z, to_jsonable, utc_now
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -66,7 +68,8 @@ class VoiceAssistantRuntime:
         self._tts = tts
         self._audio_server = audio_server
         self._session_cache = session_cache
-        self._artifacts_root = ensure_directory(artifacts_root)
+        self._artifacts = ArtifactStore(artifacts_root)
+        self._artifacts_root = self._artifacts.root
         self._continue_conversation = continue_conversation
         self._announcement_timeout_seconds = announcement_timeout_seconds
         self._endpointing_grace_seconds = endpointing_grace_seconds
@@ -87,13 +90,13 @@ class VoiceAssistantRuntime:
         wake_word_phrase: str | None,
     ) -> int | None:
         if self._active is not None:
-            _LOGGER.warning("Replacing active turn %s", self._active.session_id)
+            _LOGGER.warning("Replacing active turn")
         self._cancel_watchdog()
 
         session_id = self._resolve_session_id(conversation_id)
         started_at = utc_now()
-        safe_id = session_id.replace("/", "_")
-        directory = ensure_directory(
+        safe_id = uuid.uuid4().hex
+        directory = self._artifacts.directory(
             self._artifacts_root / started_at.strftime("%Y%m%d") / f"{started_at.strftime('%H%M%S')}_{safe_id}"
         )
         active = ActiveTurn(
@@ -110,7 +113,7 @@ class VoiceAssistantRuntime:
             reply_path=directory / "reply.json",
             events_path=directory / "events.jsonl",
         )
-        active.pcm_path.touch()
+        self._artifacts.write_bytes(active.pcm_path, b"")
         self._active = active
         self._discard_audio_until_stop = False
         self._session_cache.touch(session_id)
@@ -133,7 +136,7 @@ class VoiceAssistantRuntime:
             VoiceAssistantEventType.VOICE_ASSISTANT_STT_START,
             None,
         )
-        _LOGGER.info("Voice turn started: session=%s raw_id=%s", session_id, conversation_id)
+        _LOGGER.info("Voice turn started")
         self._watchdog_task = asyncio.create_task(self._watch_active_turn(active))
         return 0
 
@@ -144,8 +147,7 @@ class VoiceAssistantRuntime:
             _LOGGER.warning("Dropping audio chunk because no active turn exists")
             return
 
-        with self._active.pcm_path.open("ab") as handle:
-            handle.write(data)
+        self._artifacts.append_bytes(self._active.pcm_path, data)
         self._active.chunks += 1
         self._active.bytes_received += len(data)
         rms = self._chunk_rms(data)
@@ -204,24 +206,21 @@ class VoiceAssistantRuntime:
         return buffer.getvalue()
 
     def _append_event(self, active: ActiveTurn, event_type: str, payload: object) -> None:
-        ensure_directory(active.events_path.parent)
         line = {
             "timestamp": isoformat_z(utc_now()),
             "type": event_type,
             "payload": payload,
         }
-        with active.events_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(to_jsonable(line), sort_keys=True) + "\n")
+        self._artifacts.append_bytes(active.events_path, (json.dumps(to_jsonable(line), sort_keys=True) + "\n").encode("utf-8"))
 
     def _append_runtime_event(self, event_type: str, payload: object) -> None:
-        runtime_path = ensure_directory(self._artifacts_root) / "runtime-events.jsonl"
+        runtime_path = self._artifacts_root / "announcements" / uuid.uuid4().hex / "events.jsonl"
         line = {
             "timestamp": isoformat_z(utc_now()),
             "type": event_type,
             "payload": payload,
         }
-        with runtime_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(to_jsonable(line), sort_keys=True) + "\n")
+        self._artifacts.append_bytes(runtime_path, (json.dumps(to_jsonable(line), sort_keys=True) + "\n").encode("utf-8"))
 
     async def _watch_active_turn(self, active: ActiveTurn) -> None:
         try:
@@ -276,7 +275,7 @@ class VoiceAssistantRuntime:
         )
 
         if abort:
-            write_json(
+            self._artifacts.write_json(
                 active.reply_path,
                 {
                     "session_id": active.session_id,
@@ -286,9 +285,9 @@ class VoiceAssistantRuntime:
             )
             return
 
-        pcm_audio = active.pcm_path.read_bytes()
+        pcm_audio = self._artifacts.read_bytes(active.pcm_path)
         wav_audio = self._wav_bytes(pcm_audio)
-        active.wav_path.write_bytes(wav_audio)
+        self._artifacts.write_bytes(active.wav_path, wav_audio)
         self._session.client.send_voice_assistant_event(
             VoiceAssistantEventType.VOICE_ASSISTANT_INTENT_START,
             None,
@@ -296,7 +295,7 @@ class VoiceAssistantRuntime:
 
         try:
             transcript = await self._stt.transcribe(wav_audio)
-            write_json(active.transcript_path, transcript)
+            self._artifacts.write_json(active.transcript_path, transcript)
             self._append_event(active, "transcript", transcript)
 
             if transcript.text:
@@ -307,8 +306,10 @@ class VoiceAssistantRuntime:
                     history=session.history,
                 )
                 self._session_cache.set_history(active.session_id, agent_reply.history)
-                response_text = agent_reply.text.strip() or "I don't have a response yet."
-                write_json(
+                response_text = agent_reply.text.strip()
+                if not response_text:
+                    raise RuntimeError("PSFN completion returned no text")
+                self._artifacts.write_json(
                     active.reply_path,
                     {
                         "session_id": active.session_id,
@@ -318,16 +319,20 @@ class VoiceAssistantRuntime:
                     },
                 )
             else:
-                response_text = "I didn't catch that."
-                write_json(
+                self._artifacts.write_json(
                     active.reply_path,
                     {
                         "session_id": active.session_id,
                         "transcript": "",
-                        "response": response_text,
+                        "status": "no_input",
                         "reason": stop_reason,
                     },
                 )
+                self._session.client.send_voice_assistant_event(
+                    VoiceAssistantEventType.VOICE_ASSISTANT_INTENT_END,
+                    {"continue_conversation": "0"},
+                )
+                return
 
             self._session.client.send_voice_assistant_event(
                 VoiceAssistantEventType.VOICE_ASSISTANT_INTENT_END,
@@ -335,8 +340,8 @@ class VoiceAssistantRuntime:
             )
             await self._speak_text(response_text, start_conversation=self._continue_conversation)
         except Exception as exc:
-            _LOGGER.exception("Voice turn failed: %s", active.session_id)
-            write_json(
+            _LOGGER.error("Voice turn failed")
+            self._artifacts.write_json(
                 active.reply_path,
                 {
                     "session_id": active.session_id,
@@ -349,10 +354,6 @@ class VoiceAssistantRuntime:
                 VoiceAssistantEventType.VOICE_ASSISTANT_ERROR,
                 {"code": "bridge_error", "message": str(exc)},
             )
-            try:
-                await self._speak_text("Sorry, something went wrong.", start_conversation=False)
-            except Exception:
-                _LOGGER.exception("Failed to speak fallback error message")
 
     @staticmethod
     def _chunk_rms(data: bytes) -> float:

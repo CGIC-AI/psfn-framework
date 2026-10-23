@@ -259,6 +259,10 @@ PI_USER=<pi-user> PI_PASSWORD='<pi-password>' HUB_WS_URL=ws://<hub-host>:8787/ D
 
 Runtime config comes from the project-local `.env`.
 
+The Python audio listener now requires explicit local development or a trusted
+HTTPS/auth relay. See [Python listener, resource, and artifact security](docs/python-security.md)
+for migration, exact admission rules, defaults, and retention.
+
 Important settings for the TypeScript realtime path:
 
 - `HUB_WS_URL`

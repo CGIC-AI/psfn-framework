@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from hub.storage.artifacts import ArtifactStore
+
 import asyncio
 import base64
 from contextlib import suppress
@@ -23,7 +25,7 @@ from hub.media.http_audio import StaticAudioServer
 from hub.satellite_claims import ClientCertificateConfig, SatelliteClaimConfig
 from hub.security.realtime_access import RealtimeAccess
 from hub.storage.session_cache import SessionCache
-from hub.util import ensure_directory, isoformat_z, to_jsonable, utc_now, write_json
+from hub.util import isoformat_z, to_jsonable, utc_now
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -72,6 +74,7 @@ class _RealtimeConnection:
         self._audio_server = audio_server
         self._session_cache = session_cache
         self._artifacts_root = artifacts_root
+        self._artifact_store: ArtifactStore | None = None
         self._stt = DeepgramLiveSTTProvider(api_key=deepgram_api_key)
         self._tts = ElevenLabsStreamingTTS(
             api_key=elevenlabs_api_key,
@@ -101,6 +104,13 @@ class _RealtimeConnection:
         self._pending_started = 0.0
         self._pending_wake_word: str | None = None
         self._pending_turn_id: str | None = None
+
+    @property
+    def _artifacts(self) -> ArtifactStore:
+        if self._artifact_store is None:
+            self._artifact_store = ArtifactStore(self._artifacts_root)
+            self._artifacts_root = self._artifact_store.root
+        return self._artifact_store
 
     async def run(self) -> None:
         await self._send_json(
@@ -138,6 +148,8 @@ class _RealtimeConnection:
         await self._stt.aclose()
         await self._tts.aclose()
         await self._agent.aclose()
+        if self._artifact_store is not None:
+            self._artifact_store.close()
 
     async def _handle_message(self, payload: dict[str, object]) -> None:
         message_type = str(payload.get("type") or "")
@@ -215,8 +227,8 @@ class _RealtimeConnection:
                 await self._stt.abort_turn()
         started_at = utc_now()
         turn_id = self._pending_turn_id or f"turn-{uuid.uuid4().hex[:8]}"
-        safe_session = self._session_id.replace("/", "_").replace(":", "_")
-        directory = ensure_directory(
+        safe_session = uuid.uuid4().hex
+        directory = self._artifacts.directory(
             self._artifacts_root / started_at.strftime("%Y%m%d") / f"{started_at.strftime('%H%M%S')}_{safe_session}_{turn_id}"
         )
         turn = _RealtimeTurn(
@@ -231,15 +243,12 @@ class _RealtimeConnection:
             reply_path=directory / "reply.json",
             events_path=directory / "events.jsonl",
         )
-        turn.pcm_path.touch()
+        self._artifacts.write_bytes(turn.pcm_path, b"")
         try:
             await self._stt.start_turn(self._session_id)
         except Exception as exc:
-            _LOGGER.exception("Failed to start realtime STT turn")
-            with suppress(FileNotFoundError):
-                turn.pcm_path.unlink()
-            with suppress(OSError):
-                turn.directory.rmdir()
+            _LOGGER.error("Failed to start realtime STT turn")
+            self._artifacts.remove(turn.pcm_path)
             await self._send_json(
                 {
                     "type": "error",
@@ -262,8 +271,7 @@ class _RealtimeConnection:
     async def _handle_audio(self, data: bytes) -> None:
         if not data or self._active_turn is None:
             return
-        with self._active_turn.pcm_path.open("ab") as handle:
-            handle.write(data)
+        self._artifacts.append_bytes(self._active_turn.pcm_path, data)
         self._active_turn.bytes_received += len(data)
         self._active_turn.chunks += 1
         await self._stt.send_audio(data)
@@ -274,8 +282,8 @@ class _RealtimeConnection:
             return
         self._active_turn = None
         transcript = await self._stt.finish_turn()
-        turn.wav_path.write_bytes(_wav_bytes(turn.pcm_path.read_bytes()))
-        write_json(turn.transcript_path, transcript)
+        self._artifacts.write_bytes(turn.wav_path, _wav_bytes(self._artifacts.read_bytes(turn.pcm_path)))
+        self._artifacts.write_json(turn.transcript_path, transcript)
         self._append_event(
             turn,
             "stop",
@@ -297,7 +305,7 @@ class _RealtimeConnection:
             }
         )
         if not transcript.text.strip():
-            write_json(
+            self._artifacts.write_json(
                 turn.reply_path,
                 {
                     "session_id": self._session_id,
@@ -345,7 +353,7 @@ class _RealtimeConnection:
                 await text_chunks.put(delta)
             await text_chunks.put(None)
             await tts_task
-            write_json(
+            self._artifacts.write_json(
                 turn.reply_path,
                 {
                     "session_id": turn.session_id,
@@ -369,7 +377,7 @@ class _RealtimeConnection:
             tts_task.cancel()
             with suppress(asyncio.CancelledError, Exception):
                 await tts_task
-            write_json(
+            self._artifacts.write_json(
                 turn.reply_path,
                 {
                     "session_id": turn.session_id,
@@ -380,7 +388,7 @@ class _RealtimeConnection:
             )
             raise
         except Exception as exc:
-            write_json(
+            self._artifacts.write_json(
                 turn.reply_path,
                 {
                     "session_id": turn.session_id,
@@ -455,8 +463,7 @@ class _RealtimeConnection:
             "type": event_type,
             "payload": payload,
         }
-        with turn.events_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(entry, sort_keys=True) + "\n")
+        self._artifacts.append_bytes(turn.events_path, (json.dumps(entry, sort_keys=True) + "\n").encode("utf-8"))
 
 
 class RealtimeVoiceServer:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from hub.storage.artifacts import ArtifactStore
+
 import asyncio
 import array
 from contextlib import suppress
@@ -22,7 +24,7 @@ from hub.devices.esphome_session import ESPHomeSession
 from hub.media.audio_transcoder import FfmpegMp3ToFlacTranscoder, StreamingAudioTranscoder
 from hub.media.http_audio import LiveAudioStream, StaticAudioServer
 from hub.storage.session_cache import SessionCache
-from hub.util import ensure_directory, isoformat_z, to_jsonable, utc_now, write_json
+from hub.util import isoformat_z, to_jsonable, utc_now
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -77,7 +79,8 @@ class StreamingVoiceAssistantRuntime:
         self._tts = tts
         self._audio_server = audio_server
         self._session_cache = session_cache
-        self._artifacts_root = ensure_directory(artifacts_root)
+        self._artifacts = ArtifactStore(artifacts_root)
+        self._artifacts_root = self._artifacts.root
         self._continue_conversation = continue_conversation
         self._announcement_timeout_seconds = announcement_timeout_seconds
         self._reply_timeout_seconds = reply_timeout_seconds
@@ -105,7 +108,7 @@ class StreamingVoiceAssistantRuntime:
         wake_word_phrase: str | None,
     ) -> int | None:
         if self._active is not None:
-            _LOGGER.warning("Replacing active turn %s", self._active.session_id)
+            _LOGGER.warning("Replacing active turn")
             await self._finish_turn(abort=True, stop_reason="superseded")
         self._cancel_watchdog()
         was_responding = self._response_task is not None and not self._response_task.done()
@@ -118,8 +121,8 @@ class StreamingVoiceAssistantRuntime:
 
         session_id = self._resolve_session_id(conversation_id)
         started_at = utc_now()
-        safe_id = session_id.replace("/", "_")
-        directory = ensure_directory(
+        safe_id = uuid.uuid4().hex
+        directory = self._artifacts.directory(
             self._artifacts_root / started_at.strftime("%Y%m%d") / f"{started_at.strftime('%H%M%S')}_{safe_id}"
         )
         active = ActiveTurn(
@@ -136,7 +139,7 @@ class StreamingVoiceAssistantRuntime:
             reply_path=directory / "reply.json",
             events_path=directory / "events.jsonl",
         )
-        active.pcm_path.touch()
+        self._artifacts.write_bytes(active.pcm_path, b"")
         self._active = active
         self._discard_audio_until_stop = False
         self._session_cache.touch(session_id)
@@ -160,7 +163,7 @@ class StreamingVoiceAssistantRuntime:
             VoiceAssistantEventType.VOICE_ASSISTANT_STT_START,
             None,
         )
-        _LOGGER.info("Voice turn started: session=%s raw_id=%s", session_id, conversation_id)
+        _LOGGER.info("Voice turn started")
         self._watchdog_task = asyncio.create_task(self._watch_active_turn(active))
         return 0
 
@@ -171,8 +174,7 @@ class StreamingVoiceAssistantRuntime:
             _LOGGER.warning("Dropping audio chunk because no active turn exists")
             return
 
-        with self._active.pcm_path.open("ab") as handle:
-            handle.write(data)
+        self._artifacts.append_bytes(self._active.pcm_path, data)
         self._active.chunks += 1
         self._active.bytes_received += len(data)
         rms = self._chunk_rms(data)
@@ -242,14 +244,14 @@ class StreamingVoiceAssistantRuntime:
             return
         if task is asyncio.current_task():
             return
-        _LOGGER.info("Interrupting active response pipeline: %s", reason)
+        _LOGGER.info("Interrupting active response pipeline")
         task.cancel()
         try:
             await task
         except asyncio.CancelledError:
             return
         except Exception:
-            _LOGGER.exception("Response pipeline failed while interrupting active output")
+            _LOGGER.error("Response pipeline failed while interrupting active output")
         finally:
             with suppress(Exception):
                 await self._stt.abort_turn()
@@ -291,7 +293,7 @@ class StreamingVoiceAssistantRuntime:
         if abort:
             with suppress(Exception):
                 await self._stt.abort_turn()
-            write_json(
+            self._artifacts.write_json(
                 active.reply_path,
                 {
                     "session_id": active.session_id,
@@ -307,10 +309,10 @@ class StreamingVoiceAssistantRuntime:
 
         try:
             transcript = await self._stt.finish_turn()
-            pcm_audio = active.pcm_path.read_bytes()
+            pcm_audio = self._artifacts.read_bytes(active.pcm_path)
             wav_audio = self._wav_bytes(pcm_audio)
-            active.wav_path.write_bytes(wav_audio)
-            write_json(active.transcript_path, transcript)
+            self._artifacts.write_bytes(active.wav_path, wav_audio)
+            self._artifacts.write_json(active.transcript_path, transcript)
             self._append_event(active, "transcript", transcript)
 
             self._session.client.send_voice_assistant_event(
@@ -329,7 +331,7 @@ class StreamingVoiceAssistantRuntime:
                     VoiceAssistantEventType.VOICE_ASSISTANT_INTENT_END,
                     {"continue_conversation": "0"},
                 )
-                write_json(
+                self._artifacts.write_json(
                     active.reply_path,
                     {
                         "session_id": active.session_id,
@@ -339,7 +341,7 @@ class StreamingVoiceAssistantRuntime:
                     },
                 )
                 return
-            write_json(
+            self._artifacts.write_json(
                 active.reply_path,
                 {
                     "session_id": active.session_id,
@@ -349,10 +351,10 @@ class StreamingVoiceAssistantRuntime:
                 },
             )
         except asyncio.CancelledError:
-            _LOGGER.info("Voice turn interrupted: %s", active.session_id)
+            _LOGGER.info("Voice turn interrupted")
             with suppress(Exception):
                 await self._stt.abort_turn()
-            write_json(
+            self._artifacts.write_json(
                 active.reply_path,
                 {
                     "session_id": active.session_id,
@@ -362,8 +364,8 @@ class StreamingVoiceAssistantRuntime:
             )
             raise
         except TimeoutError as exc:
-            _LOGGER.warning("Voice turn reply timed out: %s", active.session_id)
-            write_json(
+            _LOGGER.warning("Voice turn reply timed out")
+            self._artifacts.write_json(
                 active.reply_path,
                 {
                     "session_id": active.session_id,
@@ -389,8 +391,8 @@ class StreamingVoiceAssistantRuntime:
                 },
             )
         except Exception as exc:
-            _LOGGER.exception("Voice turn failed: %s", active.session_id)
-            write_json(
+            _LOGGER.error("Voice turn failed")
+            self._artifacts.write_json(
                 active.reply_path,
                 {
                     "session_id": active.session_id,
@@ -456,11 +458,14 @@ class StreamingVoiceAssistantRuntime:
                 announcement_task.cancel()
             if not tts_task.done():
                 tts_task.cancel()
+            await asyncio.gather(announcement_task, tts_task, return_exceptions=True)
             self._session.client.send_voice_assistant_event(
                 VoiceAssistantEventType.VOICE_ASSISTANT_TTS_STREAM_END,
                 None,
             )
-        return response_text.strip() or "I don't have a response yet."
+        if not response_text.strip():
+            raise RuntimeError("PSFN completion returned no text")
+        return response_text.strip()
 
     async def _stream_speech(self, text: str) -> None:
         text_chunks: asyncio.Queue[str | None] = asyncio.Queue()
@@ -489,6 +494,7 @@ class StreamingVoiceAssistantRuntime:
                 announcement_task.cancel()
             if not tts_task.done():
                 tts_task.cancel()
+            await asyncio.gather(announcement_task, tts_task, return_exceptions=True)
             self._session.client.send_voice_assistant_event(
                 VoiceAssistantEventType.VOICE_ASSISTANT_TTS_STREAM_END,
                 None,
@@ -522,14 +528,12 @@ class StreamingVoiceAssistantRuntime:
         return buffer.getvalue()
 
     def _append_event(self, active: ActiveTurn, event_type: str, payload: object) -> None:
-        ensure_directory(active.events_path.parent)
         line = {
             "timestamp": isoformat_z(utc_now()),
             "type": event_type,
             "payload": payload,
         }
-        with active.events_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(to_jsonable(line), sort_keys=True) + "\n")
+        self._artifacts.append_bytes(active.events_path, (json.dumps(to_jsonable(line), sort_keys=True) + "\n").encode("utf-8"))
 
     @staticmethod
     def _chunk_rms(data: bytes) -> float:

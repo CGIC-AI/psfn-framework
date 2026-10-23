@@ -12,4 +12,10 @@ app.command("run")(run)
 
 
 def main() -> None:
-    app()
+    try:
+        app()
+    except typer.Exit:
+        raise
+    except Exception:
+        typer.echo("Hub operation failed; verify configuration and service availability", err=True)
+        raise typer.Exit(1) from None

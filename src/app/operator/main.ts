@@ -1,4 +1,5 @@
 import { resolveRuntimePathSnapshotFromConfig } from '../../persistence/layout.js';
+import { assertRuntimeCredentials } from '../../system/config/runtime-credentials.js';
 import { ensureActiveTimezone } from '../../shared/time/active-timezone.js';
 import { createComponentLogger, configureOperationalLogPersistence, closeOperationalLogPersistence } from '../../shared/logger.js';
 import { requireOperationalMetadataRetentionDays } from '../../shared/diagnostics/retention-policy.js';
@@ -39,6 +40,7 @@ import { resolveGatewayAuthPlan } from './gateway-auth-plan.js';
 const log = createComponentLogger('OperatorSurface');
 const DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS = 15_000;
 
+assertRuntimeCredentials(process.env);
 ensureActiveTimezone();
 
 async function main(): Promise<void> {

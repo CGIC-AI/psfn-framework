@@ -7,8 +7,8 @@ import type { SessionManager } from '../../core/session/manager.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { ApiServer } from './server.js';
 
-const API_TOKEN = 'api-token';
-const ADMIN_TOKEN = 'admin-token';
+const API_TOKEN = 'api-token-70e9db3a18264cf5b8d10a92';
+const ADMIN_TOKEN = 'admin-token-6f82db13a507e9c4b1062ad9';
 const TEST_COMPANION_ID = '11111111-1111-4111-8111-111111111111';
 
 async function allocatePort(): Promise<number> {

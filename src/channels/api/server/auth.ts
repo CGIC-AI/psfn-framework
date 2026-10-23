@@ -5,11 +5,13 @@ import {
   resolveApiRequestPrincipal,
 } from '../http-policy.js';
 import { sendApiError, type ApiServerLogger } from './http.js';
+import { assertDistinctCredentials } from '../../../shared/security/credentials.js';
 
 export interface ApiServerAuthConfig {
   host: string;
   port: number;
   apiKey?: string;
+  adminToken?: string;
   allowInsecureWithoutAuth: boolean;
   /**
    * True when the server authenticates through a principal source other than
@@ -31,6 +33,7 @@ export interface ResolveApiServerPrincipalOptions {
 }
 
 export function validateApiServerAuthConfig(config: ApiServerAuthConfig): void {
+  assertDistinctCredentials({ API_KEY: config.apiKey, ADMIN_TOKEN: config.adminToken });
   const authenticated = Boolean(config.apiKey) || config.hasAlternatePrincipalSource === true;
   if (!authenticated && !config.allowInsecureWithoutAuth) {
     const err = new Error('API_KEY is required unless ALLOW_INSECURE_LOCAL_API=true');

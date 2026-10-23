@@ -26,7 +26,7 @@ import type {
   AdminShardFoldReviewService,
 } from './services/types.js';
 
-const ADMIN_TOKEN = 'postgres-cutover-smoke-token';
+const ADMIN_TOKEN = 'postgres-cutover-smoke-token-17be308d64a2c5f9';
 const CUTOVER_CHANNEL_ID = 'discord:postgres-cutover';
 const CUTOVER_SESSION_ID = 'session:postgres-cutover';
 const CUTOVER_MEMORY_ID = 'memory-postgres-cutover';

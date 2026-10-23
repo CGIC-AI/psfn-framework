@@ -393,6 +393,18 @@ uppercase environment variable.
    readiness check rolls the release back while retained storage stays in
    place.
 
+The production chart has no default credentials. Direct `helm install` fails
+unless strong, role-distinct values or explicit existing Secret references are
+provided. The supported lifecycle generates each missing credential from 32
+cryptographically random bytes and retains existing valid credentials exactly.
+It refuses weak or placeholder values and Kubernetes read failures, without
+printing credentials or silently rotating them. The chart and runtime share a
+32–512 printable ASCII character minimum/maximum, a 12 distinct-character
+minimum, and placeholder/repeated-pattern rejection. Use a separate generated
+value for every role; externally issued inline provider credentials must also
+satisfy these checks. Existing deployments with weak credentials must follow
+[credential migration](operations.md#credential-migration) before upgrading.
+
 ```mermaid
 flowchart TD
     A["npm run helm:up"] --> B["Export provider key and PSFN_KUBE_CONTEXT"]

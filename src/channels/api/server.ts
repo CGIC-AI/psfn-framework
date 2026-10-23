@@ -72,7 +72,6 @@ import {
   sendJson,
 } from '../backplane/http/primitives.js';
 import {
-  clampHttpHeader as clampHeaderValue,
   normalizeCorsAllowedOrigins,
 } from './http-policy.js';
 import type { ExternalChannelProfileConfig } from '../backplane/config.js';
@@ -588,8 +587,8 @@ export class ApiServer implements ChannelAdapterPort {
     this.runtime = config.runtime ?? null;
     this.externalMemoryMcp = config.externalMemoryMcp;
     this.externalChannelMcp = config.externalChannelMcp;
-    this.apiKey = clampHeaderValue(config.apiKey, 512);
-    this.adminToken = clampHeaderValue(config.adminToken, 512);
+    this.apiKey = config.apiKey;
+    this.adminToken = config.adminToken;
     // Re-validate satellite keys at the trust boundary (fail closed on weak
     // keys or collisions with the shared credentials), even when the caller
     // already parsed them from env.
@@ -704,6 +703,7 @@ export class ApiServer implements ChannelAdapterPort {
       port: this.port,
       apiKey: this.apiKey,
       allowInsecureWithoutAuth: this.allowInsecureWithoutAuth,
+      adminToken: this.adminToken,
       hasAlternatePrincipalSource: alternatePrincipalSources,
       logger: log,
     });

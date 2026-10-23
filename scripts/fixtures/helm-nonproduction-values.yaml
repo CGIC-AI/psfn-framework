@@ -1,0 +1,8 @@
+# Non-production render/lint only. These references contain no credentials and
+# do not provision Secrets. Production operators must supply their own Secrets.
+secrets:
+  create: false
+  existingSecret: psfn-render-fixture-app
+postgres:
+  auth:
+    existingSecret: psfn-render-fixture-postgres

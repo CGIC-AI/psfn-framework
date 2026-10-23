@@ -56,29 +56,29 @@ describe('hasCookieValue', () => {
 
 describe('bearer auth helpers', () => {
   it('matches bearer token using normalized values', () => {
-    const req = requestWithAuthorization('Bearer test-secret-key   ');
-    expect(hasBearerToken(req, 'test-secret-key')).toBe(true);
+    const req = requestWithAuthorization('Bearer test-secret-key-6714bd2fc093e8a5   ');
+    expect(hasBearerToken(req, 'test-secret-key-6714bd2fc093e8a5')).toBe(true);
   });
 
   it('returns a stable principal derived from api key', () => {
-    const req = requestWithAuthorization('Bearer test-secret-key');
-    const principal = getBearerPrincipal(req, 'test-secret-key');
+    const req = requestWithAuthorization('Bearer test-secret-key-6714bd2fc093e8a5');
+    const principal = getBearerPrincipal(req, 'test-secret-key-6714bd2fc093e8a5');
     expect(principal).not.toBeNull();
-    expect(principal?.id).toBe(deriveApiKeyPrincipalId('test-secret-key'));
+    expect(principal?.id).toBe(deriveApiKeyPrincipalId('test-secret-key-6714bd2fc093e8a5'));
     expect(principal?.mode).toBe('api_key');
   });
 
   it('rejects mismatched bearer tokens', () => {
     const req = requestWithAuthorization('Bearer wrong-key');
-    expect(getBearerPrincipal(req, 'test-secret-key')).toBeNull();
-    expect(hasBearerToken(req, 'test-secret-key')).toBe(false);
+    expect(getBearerPrincipal(req, 'test-secret-key-6714bd2fc093e8a5')).toBeNull();
+    expect(hasBearerToken(req, 'test-secret-key-6714bd2fc093e8a5')).toBe(false);
   });
 });
 
 describe('parseSatelliteApiKeys (Sprint-10 H4)', () => {
   it('parses distinct keys into distinct satellite-scoped principals', () => {
-    const keys = parseSatelliteApiKeys('satellite-key-alpha-0001, satellite-key-beta-0002');
-    expect(keys).toEqual(['satellite-key-alpha-0001', 'satellite-key-beta-0002']);
+    const keys = parseSatelliteApiKeys('satellite-key-alpha-0001-93e42f6078a1b5cd, satellite-key-beta-0002-605b18cf3a9e42d7');
+    expect(keys).toEqual(['satellite-key-alpha-0001-93e42f6078a1b5cd', 'satellite-key-beta-0002-605b18cf3a9e42d7']);
     const principalA = principalFromSatelliteApiKeyToken(keys[0]!);
     const principalB = principalFromSatelliteApiKeyToken(keys[1]!);
     expect(principalA.scope).toBe('satellite');
@@ -92,10 +92,10 @@ describe('parseSatelliteApiKeys (Sprint-10 H4)', () => {
   });
 
   it('fails closed on weak, duplicate, or shared-credential-colliding keys', () => {
-    expect(() => parseSatelliteApiKeys('short')).toThrow('at least 16 characters');
-    expect(() => parseSatelliteApiKeys('satellite-key-alpha-0001,satellite-key-alpha-0001')).toThrow('distinct');
-    expect(() => parseSatelliteApiKeys('satellite-key-alpha-0001', {
-      reservedTokens: ['satellite-key-alpha-0001'],
+    expect(() => parseSatelliteApiKeys('short')).toThrow('32-512 printable ASCII characters');
+    expect(() => parseSatelliteApiKeys('satellite-key-alpha-0001-93e42f6078a1b5cd,satellite-key-alpha-0001-93e42f6078a1b5cd')).toThrow('distinct');
+    expect(() => parseSatelliteApiKeys('satellite-key-alpha-0001-93e42f6078a1b5cd', {
+      reservedTokens: ['satellite-key-alpha-0001-93e42f6078a1b5cd'],
     })).toThrow('must not reuse API_KEY or ADMIN_TOKEN');
   });
 });

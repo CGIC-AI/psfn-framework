@@ -1,3 +1,4 @@
+{{- include "psfn.validateCredentials" . -}}
 {{- if not .Values.certificates.enabled -}}
 {{- fail "certificates.enabled must be true because PSFN Kubernetes network transports require mTLS certificates" -}}
 {{- end -}}
@@ -357,7 +358,7 @@ never back a ClusterIssuer. */ -}}
 {{- end -}}
 {{- end -}}
 {{- if and .Values.secrets.create (not .Values.secrets.existingSecret) (not .Values.secrets.allowMissingRequired) -}}
-{{- $_ := required "secrets.values.backupEncryptionKey is required when secrets.allowMissingRequired=false" .Values.secrets.values.backupEncryptionKey -}}
+{{- $_ := required "Backup credential is required: select secrets.existingSecret or supply strong, distinct secrets.values credentials" .Values.secrets.values.backupEncryptionKey -}}
 {{- end -}}
 {{- if .Values.modelPrefetch.enabled -}}
 {{- if not .Values.persistence.modelCache.enabled -}}
@@ -526,20 +527,6 @@ never back a ClusterIssuer. */ -}}
 {{- end -}}
 {{- if and .Values.satelliteHub.enabled .Values.secrets.create (not .Values.secrets.existingSecret) (not .Values.secrets.allowMissingRequired) -}}
 {{- $_ := required "secrets.values.satelliteHubApiKey is required for satelliteHub.enabled=true when secrets.allowMissingRequired=false (dedicated satellite-scoped credential; never reuse the shared API_KEY)" .Values.secrets.values.satelliteHubApiKey -}}
-{{- end -}}
-{{- with .Values.secrets.values.satelliteHubApiKey -}}
-{{- if lt (len (trim .)) 16 -}}
-{{- fail "secrets.values.satelliteHubApiKey must be at least 16 characters (gateway API_SATELLITE_KEYS minimum)" -}}
-{{- end -}}
-{{- if or (eq (trim .) ($.Values.secrets.values.apiKey | default "")) (eq (trim .) ($.Values.secrets.values.adminToken | default "")) -}}
-{{- fail "secrets.values.satelliteHubApiKey must not reuse secrets.values.apiKey or secrets.values.adminToken" -}}
-{{- end -}}
-{{- end -}}
-{{- range splitList "," (.Values.secrets.values.extraSatelliteApiKeys | default "") -}}
-{{- $entry := trim . -}}
-{{- if and $entry (lt (len $entry) 16) -}}
-{{- fail "secrets.values.extraSatelliteApiKeys entries must each be at least 16 characters" -}}
-{{- end -}}
 {{- end -}}
 {{- if .Values.fleetAuth.enabled -}}
 {{- $authorityFloor := .Values.fleetAuth.authorityFloor | default dict -}}

@@ -581,7 +581,7 @@ describe('ApiServer', () => {
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
         sessionManager: createMockSessionManager(),
-        apiKey: 'shared-api-key-for-test',
+        apiKey: 'shared-api-key-for-test-7924cf0e8b5da631',
         testingHarnessPrincipal: {
           principalId: 'testing-harness',
           apiKey: 'dedicated-testing-harness-key',
@@ -660,7 +660,7 @@ describe('ApiServer', () => {
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
         sessionManager: createMockSessionManager(),
-        apiKey: 'readiness-test-key',
+        apiKey: 'readiness-test-key-931b7e2af460c85d',
         runtime: new GatewayApiRuntime({
           isApiReady,
           requestAgent,
@@ -670,7 +670,7 @@ describe('ApiServer', () => {
       });
       await server.init();
       await server.start();
-      const headers = { Authorization: 'Bearer readiness-test-key' };
+      const headers = { Authorization: 'Bearer readiness-test-key-931b7e2af460c85d' };
       expect((await request(port, 'GET', '/readyz')).status).toBe(401);
       expect(isApiReady).not.toHaveBeenCalled();
       const result = await request(port, 'GET', '/readyz', undefined, headers);
@@ -692,13 +692,13 @@ describe('ApiServer', () => {
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
         sessionManager: createMockSessionManager(),
-        apiKey: 'readiness-test-key',
+        apiKey: 'readiness-test-key-931b7e2af460c85d',
         healthChecks: createHealthyHealthChecks(),
       });
       await server.init();
       await server.start();
       const result = await request(port, 'GET', '/readyz', undefined, {
-        Authorization: 'Bearer readiness-test-key',
+        Authorization: 'Bearer readiness-test-key-931b7e2af460c85d',
       });
       expect(result.status).toBe(503);
     });
@@ -876,7 +876,7 @@ describe('ApiServer', () => {
         }),
         eventBus,
         sessionManager: createMockSessionManager(),
-        apiKey: 'shared-api-key-for-test',
+        apiKey: 'shared-api-key-for-test-7924cf0e8b5da631',
         testingHarnessPrincipal: {
           principalId: 'testing-harness',
           apiKey: 'dedicated-testing-harness-key',
@@ -926,7 +926,7 @@ describe('ApiServer', () => {
         agentLoop,
         eventBus,
         sessionManager: createMockSessionManager(),
-        apiKey: 'shared-api-key-for-test',
+        apiKey: 'shared-api-key-for-test-7924cf0e8b5da631',
         testingHarnessPrincipal: {
           principalId: 'testing-harness',
           apiKey: 'dedicated-testing-harness-key',
@@ -2505,8 +2505,8 @@ describe('ApiServer startup auth guard', () => {
   it('starts without API_KEY when another principal source is wired', async () => {
     const eventBus = new EventBus();
     for (const source of [
-      { satelliteApiKeys: ['dedicated-satellite-key'] },
-      { adminToken: 'dedicated-admin-token' },
+      { satelliteApiKeys: ['dedicated-satellite-key-0172a4cef96b35d8'] },
+      { adminToken: 'dedicated-admin-token-483b62fc095ae71d' },
       { testingHarnessPrincipal: { principalId: 'testing-harness', apiKey: 'dedicated-testing-harness-key' } },
     ]) {
       const server = createApiServer({
@@ -2555,13 +2555,13 @@ describe('ApiServer with fleet auth configured alongside key auth', () => {
       agentLoop: createMockAgentLoop(eventBus),
       eventBus,
       sessionManager: createMockSessionManager(),
-      apiKey: 'legacy-api-key',
-      adminToken: 'dedicated-admin-token',
+      apiKey: 'legacy-api-key-0293b7efc1684a5d9c6013bf',
+      adminToken: 'dedicated-admin-token-483b62fc095ae71d',
       testingHarnessPrincipal: {
         principalId: 'testing-harness',
         apiKey: 'dedicated-testing-harness-key',
       },
-      satelliteApiKeys: ['dedicated-satellite-key'],
+      satelliteApiKeys: ['dedicated-satellite-key-0172a4cef96b35d8'],
       // The registry endpoint admits the satellite key's derived principal, as
       // a Hub deployment lists its SATELLITE_HUB_API_KEY principal in satellites.json.
       satelliteRegistry: {
@@ -2572,7 +2572,7 @@ describe('ApiServer with fleet auth configured alongside key auth', () => {
             ...endpoint,
             auth: {
               mode: 'api_key' as const,
-              apiKeyPrincipalIds: [deriveApiKeyPrincipalId('dedicated-satellite-key')],
+              apiKeyPrincipalIds: [deriveApiKeyPrincipalId('dedicated-satellite-key-0172a4cef96b35d8')],
             },
           })),
         })),
@@ -2599,13 +2599,13 @@ describe('ApiServer with fleet auth configured alongside key auth', () => {
     expect(login.headers.location).toContain('discord.com/oauth2/authorize');
 
     const apiKeyAttempt = await request(port, 'GET', '/v1/models', undefined, {
-      Authorization: 'Bearer legacy-api-key',
+      Authorization: 'Bearer legacy-api-key-0293b7efc1684a5d9c6013bf',
     });
     expect(apiKeyAttempt.status).toBe(200);
     expect(JSON.parse(apiKeyAttempt.body).data[0].id).toBe(DEFAULT_COMPANION_ID);
 
     const adminTokenAttempt = await request(port, 'GET', '/v1/models', undefined, {
-      Authorization: 'Bearer dedicated-admin-token',
+      Authorization: 'Bearer dedicated-admin-token-483b62fc095ae71d',
     });
     expect(adminTokenAttempt.status).toBe(200);
 
@@ -2627,7 +2627,7 @@ describe('ApiServer with fleet auth configured alongside key auth', () => {
       agentLoop: createMockAgentLoop(eventBus),
       eventBus,
       sessionManager: createMockSessionManager(),
-      apiKey: 'legacy-api-key',
+      apiKey: 'legacy-api-key-0293b7efc1684a5d9c6013bf',
       corsAllowedOrigins: resolveApiCorsAllowedOrigins({
         explicitAllowlist: ['https://old-console.example.test'],
         canonicalOrigin: 'https://fleet.example.test',
@@ -2666,7 +2666,7 @@ describe('ApiServer with fleet auth configured alongside key auth', () => {
   });
 
   it('answers /health for key principals without any SSO resolver', async () => {
-    for (const bearer of ['legacy-api-key', 'dedicated-admin-token']) {
+    for (const bearer of ['legacy-api-key-0293b7efc1684a5d9c6013bf', 'dedicated-admin-token-483b62fc095ae71d']) {
       const health = await request(port, 'GET', '/health', undefined, {
         Authorization: `Bearer ${bearer}`,
       });
@@ -2684,7 +2684,7 @@ describe('ApiServer with fleet auth configured alongside key auth', () => {
       model: DEFAULT_COMPANION_ID,
       messages: [{ role: 'user', content: 'hello from the hub' }],
     }, {
-      Authorization: 'Bearer dedicated-satellite-key',
+      Authorization: 'Bearer dedicated-satellite-key-0172a4cef96b35d8',
       'X-PSFN-Satellite-Claim-Type': 'android-mobile',
       'X-PSFN-Satellite-ID': 'android-phone',
       'X-PSFN-Satellite-Endpoint-ID': 'companion-app',
@@ -2703,8 +2703,8 @@ describe('ApiServer with fleet auth configured alongside key auth', () => {
       agentLoop: mockAgent,
       eventBus,
       sessionManager: createMockSessionManager(),
-      apiKey: 'legacy-api-key',
-      satelliteApiKeys: ['dedicated-satellite-key'],
+      apiKey: 'legacy-api-key-0293b7efc1684a5d9c6013bf',
+      satelliteApiKeys: ['dedicated-satellite-key-0172a4cef96b35d8'],
       satelliteRegistry: {
         ...SATELLITE_TEST_REGISTRY,
         satellites: SATELLITE_TEST_REGISTRY.satellites.map(satellite => ({
@@ -2713,7 +2713,7 @@ describe('ApiServer with fleet auth configured alongside key auth', () => {
             ...endpoint,
             auth: {
               mode: 'api_key' as const,
-              apiKeyPrincipalIds: [deriveApiKeyPrincipalId('dedicated-satellite-key')],
+              apiKeyPrincipalIds: [deriveApiKeyPrincipalId('dedicated-satellite-key-0172a4cef96b35d8')],
             },
           })),
         })),
@@ -2726,7 +2726,7 @@ describe('ApiServer with fleet auth configured alongside key auth', () => {
       model: DEFAULT_COMPANION_ID,
       messages: [{ role: 'user', content: 'hello from another companion in the world' }],
     }, {
-      Authorization: 'Bearer dedicated-satellite-key',
+      Authorization: 'Bearer dedicated-satellite-key-0172a4cef96b35d8',
       'X-PSFN-Satellite-Claim-Type': 'android-mobile',
       'X-PSFN-Satellite-ID': 'android-phone',
       'X-PSFN-Satellite-Endpoint-ID': 'companion-app',
@@ -2785,7 +2785,7 @@ describe('ApiServer with fleet auth configured alongside key auth', () => {
           ...endpoint,
           auth: {
             mode: 'api_key' as const,
-            apiKeyPrincipalIds: [deriveApiKeyPrincipalId('dedicated-satellite-key')],
+            apiKeyPrincipalIds: [deriveApiKeyPrincipalId('dedicated-satellite-key-0172a4cef96b35d8')],
           },
           hubDeviceEnrollment: {
             deviceId: 'world-emanation', enrollmentVersion: 2, enrollmentStatus: 'active' as const, projection,
@@ -2799,8 +2799,8 @@ describe('ApiServer with fleet auth configured alongside key auth', () => {
         agentLoop: mockAgent,
         eventBus,
         sessionManager: createMockSessionManager(),
-        apiKey: 'legacy-api-key',
-        satelliteApiKeys: ['dedicated-satellite-key'],
+        apiKey: 'legacy-api-key-0293b7efc1684a5d9c6013bf',
+        satelliteApiKeys: ['dedicated-satellite-key-0172a4cef96b35d8'],
         satelliteRegistry: enrolledRegistry(projection),
         hubDeviceIngress: { verifyVirtualSpaceAssertion, admit, fenceRejectedAssertion } as never,
         hubDeviceCompanionId: DEFAULT_COMPANION_ID,
@@ -2813,7 +2813,7 @@ describe('ApiServer with fleet auth configured alongside key auth', () => {
       user: 'eidoverse:world-session',
       messages: [{ role: 'user', content: 'visitor: @nova are you a registered surface?' }],
     }, {
-      Authorization: 'Bearer dedicated-satellite-key',
+      Authorization: 'Bearer dedicated-satellite-key-0172a4cef96b35d8',
       'X-PSFN-Satellite-Claim-Type': 'android-mobile',
       'X-PSFN-Satellite-ID': 'android-phone',
       'X-PSFN-Satellite-Endpoint-ID': 'companion-app',
@@ -2899,7 +2899,7 @@ describe('ApiServer with fleet auth configured alongside key auth', () => {
           ...endpoint,
           auth: {
             mode: 'api_key' as const,
-            apiKeyPrincipalIds: [deriveApiKeyPrincipalId('dedicated-satellite-key')],
+            apiKeyPrincipalIds: [deriveApiKeyPrincipalId('dedicated-satellite-key-0172a4cef96b35d8')],
           },
         })),
       })),
@@ -2912,8 +2912,8 @@ describe('ApiServer with fleet auth configured alongside key auth', () => {
         agentLoop: mockAgent,
         eventBus,
         sessionManager: createMockSessionManager(),
-        apiKey: 'legacy-api-key',
-        satelliteApiKeys: ['dedicated-satellite-key'],
+        apiKey: 'legacy-api-key-0293b7efc1684a5d9c6013bf',
+        satelliteApiKeys: ['dedicated-satellite-key-0172a4cef96b35d8'],
         satelliteRegistry: fixtureRegistry(input.withProvenance),
         ...(input.devicesFlag ? { testingHarnessDevices: { enabled: true as const } } : {}),
         healthChecks: createHealthyHealthChecks(),
@@ -2925,7 +2925,7 @@ describe('ApiServer with fleet auth configured alongside key auth', () => {
       model: DEFAULT_COMPANION_ID,
       messages: [{ role: 'user', content: 'harness probe on a satellite bearer' }],
     }, {
-      Authorization: 'Bearer dedicated-satellite-key',
+      Authorization: 'Bearer dedicated-satellite-key-0172a4cef96b35d8',
       'X-PSFN-Satellite-Claim-Type': 'android-mobile',
       'X-PSFN-Satellite-ID': 'android-phone',
       'X-PSFN-Satellite-Endpoint-ID': 'companion-app',
@@ -2964,7 +2964,7 @@ describe('ApiServer with fleet auth configured alongside key auth', () => {
       model: DEFAULT_COMPANION_ID,
       messages: [{ role: 'user', content: 'hello' }],
     }, {
-      Authorization: 'Bearer dedicated-satellite-key',
+      Authorization: 'Bearer dedicated-satellite-key-0172a4cef96b35d8',
       'X-PSFN-Hub-Device-Assertion': 'header.claims.signature',
     });
     expect(response.status).toBe(400);
@@ -2977,7 +2977,7 @@ describe('ApiServer with fleet auth configured alongside key auth', () => {
     expect(unauthenticated.status).toBe(401);
     expect(JSON.parse(unauthenticated.body).error.type).toBe('invalid_api_key');
 
-    for (const bearer of ['dedicated-satellite-key', 'legacy-api-key', 'dedicated-admin-token']) {
+    for (const bearer of ['dedicated-satellite-key-0172a4cef96b35d8', 'legacy-api-key-0293b7efc1684a5d9c6013bf', 'dedicated-admin-token-483b62fc095ae71d']) {
       const attempt = await request(port, 'GET', relayPath, undefined, {
         Authorization: `Bearer ${bearer}`,
       });
@@ -2988,7 +2988,7 @@ describe('ApiServer with fleet auth configured alongside key auth', () => {
 
   it('accepts voice WebSocket upgrades with the API key', async () => {
     const ws = await openWebSocket(port, '/v1/voice/ws', {
-      Authorization: 'Bearer legacy-api-key',
+      Authorization: 'Bearer legacy-api-key-0293b7efc1684a5d9c6013bf',
     });
     ws.send('voice-frame-under-fleet-auth');
     await waitFor(() => voice.probe.messages.includes('voice-frame-under-fleet-auth'));
@@ -3103,7 +3103,7 @@ describe('ApiServer with auth', () => {
       agentLoop: createMockAgentLoop(eventBus),
       eventBus,
       sessionManager: createMockSessionManager(),
-      apiKey: 'test-secret-key',
+      apiKey: 'test-secret-key-6714bd2fc093e8a5',
     });
     await server.init();
     await server.start();
@@ -3129,7 +3129,7 @@ describe('ApiServer with auth', () => {
 
   it('accepts requests with correct key', async () => {
     const res = await request(port, 'GET', '/v1/models', undefined, {
-      Authorization: 'Bearer test-secret-key',
+      Authorization: 'Bearer test-secret-key-6714bd2fc093e8a5',
     });
     expect(res.status).toBe(200);
   });
@@ -3141,7 +3141,7 @@ describe('ApiServer with auth', () => {
       agentLoop: createMockAgentLoop(eventBus),
       eventBus,
       sessionManager: createMockSessionManager(),
-      apiKey: 'test-secret-key',
+      apiKey: 'test-secret-key-6714bd2fc093e8a5',
       satelliteRegistry: SATELLITE_TEST_REGISTRY,
     });
     await server.init();
@@ -3152,7 +3152,7 @@ describe('ApiServer with auth', () => {
       'GET',
       '/v1/satellites/config?satelliteId=android-phone&endpointId=companion-app&claimType=android-mobile',
       undefined,
-      { Authorization: 'Bearer test-secret-key' },
+      { Authorization: 'Bearer test-secret-key-6714bd2fc093e8a5' },
     );
     expect(res.status).toBe(200);
     expect(res.headers['cache-control']).toBe('no-store');
@@ -3205,7 +3205,7 @@ describe('ApiServer with auth', () => {
       'GET',
       '/v1/satellites/config?satelliteId=android-phone&endpointId=companion-app&claimType=android-mobile',
       undefined,
-      { Authorization: 'Bearer test-secret-key' },
+      { Authorization: 'Bearer test-secret-key-6714bd2fc093e8a5' },
     );
     expect(res.status).toBe(503);
     expect(JSON.parse(res.body).error.type).toBe('satellite_registry_not_configured');
@@ -3218,14 +3218,14 @@ describe('ApiServer with auth', () => {
       agentLoop: createMockAgentLoop(eventBus),
       eventBus,
       sessionManager: createMockSessionManager(),
-      apiKey: 'test-secret-key',
-      adminToken: 'test-admin-token',
+      apiKey: 'test-secret-key-6714bd2fc093e8a5',
+      adminToken: 'test-admin-token-1548e02bf76ca39d',
     });
     await server.init();
     await server.start();
 
     const res = await request(port, 'GET', '/v1/models', undefined, {
-      Authorization: 'Bearer test-admin-token',
+      Authorization: 'Bearer test-admin-token-1548e02bf76ca39d',
     });
     expect(res.status).toBe(200);
   });
@@ -3237,14 +3237,14 @@ describe('ApiServer with auth', () => {
       agentLoop: createMockAgentLoop(eventBus),
       eventBus,
       sessionManager: createMockSessionManager(),
-      apiKey: 'test-secret-key',
-      adminToken: 'test-admin-token',
+      apiKey: 'test-secret-key-6714bd2fc093e8a5',
+      adminToken: 'test-admin-token-1548e02bf76ca39d',
     });
     await server.init();
     await server.start();
 
     const res = await request(port, 'GET', '/v1/models', undefined, {
-      Cookie: 'psfn_token=test-admin-token',
+      Cookie: 'psfn_token=test-admin-token-1548e02bf76ca39d',
     });
     expect(res.status).toBe(200);
   });
@@ -3256,7 +3256,7 @@ describe('ApiServer with auth', () => {
     expect(unauthenticatedBody.error.type).toBe('invalid_api_key');
 
     const authenticated = await request(port, 'GET', '/health', undefined, {
-      Authorization: 'Bearer test-secret-key',
+      Authorization: 'Bearer test-secret-key-6714bd2fc093e8a5',
     });
     expect(authenticated.status).not.toBe(401);
     const authenticatedBody = JSON.parse(authenticated.body);
@@ -3272,7 +3272,7 @@ describe('ApiServer with auth', () => {
       agentLoop: mockAgent,
       eventBus,
       sessionManager: createMockSessionManager(),
-      apiKey: 'test-secret-key',
+      apiKey: 'test-secret-key-6714bd2fc093e8a5',
       externalChannelProfiles: {
         'psfn-amica': {
           canonicalContactId: 'contact-primary-user',
@@ -3287,14 +3287,14 @@ describe('ApiServer with auth', () => {
       model: DEFAULT_COMPANION_ID,
       messages: [{ role: 'user', content: 'identity test' }],
     }, {
-      Authorization: 'Bearer test-secret-key',
+      Authorization: 'Bearer test-secret-key-6714bd2fc093e8a5',
       'X-User-ID': 'spoofed-user',
       'X-User-Name': 'Spoof Name',
       'X-Session-ID': 'identity-session',
     });
     expect(res.status).toBe(200);
 
-    const principalId = deriveApiKeyPrincipalId('test-secret-key');
+    const principalId = deriveApiKeyPrincipalId('test-secret-key-6714bd2fc093e8a5');
     const call = (fromAny(mockAgent.handleMessage)).mock.calls[0][0];
     expect(call.authorId).toBe(principalId);
     expect(call.authorName).toBe('API Principal');
@@ -3309,7 +3309,7 @@ describe('ApiServer with auth', () => {
       agentLoop: mockAgent,
       eventBus,
       sessionManager: createMockSessionManager(),
-      apiKey: 'test-secret-key',
+      apiKey: 'test-secret-key-6714bd2fc093e8a5',
       externalChannelProfiles: {
         'psfn-amica': {
           canonicalContactId: 'contact-primary-user',
@@ -3324,7 +3324,7 @@ describe('ApiServer with auth', () => {
       model: DEFAULT_COMPANION_ID,
       messages: [{ role: 'user', content: 'satellite hello' }],
     }, {
-      Authorization: 'Bearer test-secret-key',
+      Authorization: 'Bearer test-secret-key-6714bd2fc093e8a5',
       'X-PSFN-Channel-Type': 'psfn-amica',
       'X-PSFN-Channel-ID': 'psfn-amica:test:display',
       'X-PSFN-Author-ID': 'primary-user',
@@ -3350,7 +3350,7 @@ describe('ApiServer with auth', () => {
       agentLoop: mockAgent,
       eventBus,
       sessionManager: createMockSessionManager(),
-      apiKey: 'test-secret-key',
+      apiKey: 'test-secret-key-6714bd2fc093e8a5',
       satelliteRegistry: SATELLITE_TEST_REGISTRY,
     });
     await server.init();
@@ -3360,7 +3360,7 @@ describe('ApiServer with auth', () => {
       model: DEFAULT_COMPANION_ID,
       messages: [{ role: 'user', content: 'walk with me' }],
     }, {
-      Authorization: 'Bearer test-secret-key',
+      Authorization: 'Bearer test-secret-key-6714bd2fc093e8a5',
       'X-PSFN-Satellite-Claim-Type': 'android-mobile',
       'X-PSFN-Satellite-ID': 'android-phone',
       'X-PSFN-Satellite-Endpoint-ID': 'companion-app',
@@ -3409,7 +3409,7 @@ describe('ApiServer with auth', () => {
       agentLoop: createMockAgentLoop(eventBus, message => receivedMessages.push(message)),
       eventBus,
       sessionManager: createMockSessionManager(),
-      apiKey: 'test-secret-key',
+      apiKey: 'test-secret-key-6714bd2fc093e8a5',
       satelliteRegistryProvider: () => {
         if (providerFailure) {
           throw new Error('satellite owner file unavailable');
@@ -3429,7 +3429,7 @@ describe('ApiServer with auth', () => {
         messages: [{ role: 'user', content: 'who owns this app?' }],
       },
       {
-        Authorization: 'Bearer test-secret-key',
+        Authorization: 'Bearer test-secret-key-6714bd2fc093e8a5',
         'X-PSFN-Satellite-Claim-Type': 'android-mobile',
         'X-PSFN-Satellite-ID': 'android-phone',
         'X-PSFN-Satellite-Endpoint-ID': 'companion-app',
@@ -3460,7 +3460,7 @@ describe('ApiServer with auth', () => {
       agentLoop: mockAgent,
       eventBus,
       sessionManager: createMockSessionManager(),
-      apiKey: 'test-secret-key',
+      apiKey: 'test-secret-key-6714bd2fc093e8a5',
       externalChannelProfiles: {
         'psfn-amica': {
           authorId: 'primary-user',
@@ -3477,7 +3477,7 @@ describe('ApiServer with auth', () => {
       model: DEFAULT_COMPANION_ID,
       messages: [{ role: 'user', content: 'satellite hello' }],
     }, {
-      Authorization: 'Bearer test-secret-key',
+      Authorization: 'Bearer test-secret-key-6714bd2fc093e8a5',
       'X-PSFN-Channel-Type': 'psfn-amica',
       'X-PSFN-Channel-ID': 'psfn-amica:test:display',
     });
@@ -3500,7 +3500,7 @@ describe('ApiServer with auth', () => {
       agentLoop: createMockAgentLoop(eventBus),
       eventBus,
       sessionManager: createMockSessionManager(),
-      apiKey: 'test-secret-key',
+      apiKey: 'test-secret-key-6714bd2fc093e8a5',
     });
     await server.init();
     await server.start();
@@ -3509,7 +3509,7 @@ describe('ApiServer with auth', () => {
       model: DEFAULT_COMPANION_ID,
       messages: [{ role: 'user', content: 'satellite hello' }],
     }, {
-      Authorization: 'Bearer test-secret-key',
+      Authorization: 'Bearer test-secret-key-6714bd2fc093e8a5',
       'X-PSFN-Channel-Type': 'psfn-amica',
       'X-PSFN-Channel-ID': 'psfn-amica:test:display',
     });
@@ -3531,18 +3531,18 @@ describe('ApiServer with auth', () => {
       agentLoop: createMockAgentLoop(eventBus),
       eventBus,
       sessionManager: createMockSessionManager(),
-      apiKey: 'test-secret-key',
+      apiKey: 'test-secret-key-6714bd2fc093e8a5',
       contactStore,
     });
     await server.init();
     await server.start();
 
-    const principalId = deriveApiKeyPrincipalId('test-secret-key');
+    const principalId = deriveApiKeyPrincipalId('test-secret-key-6714bd2fc093e8a5');
     const challenge = await request(port, 'POST', '/v1/chat/completions', {
       model: DEFAULT_COMPANION_ID,
       messages: [{ role: 'user', content: 'claim identity' }],
     }, {
-      Authorization: 'Bearer test-secret-key',
+      Authorization: 'Bearer test-secret-key-6714bd2fc093e8a5',
       'X-User-ID': 'spoofed-a',
       'X-Canonical-Contact-ID': contact.id,
       'X-Identity-Claim-Channel': 'discord',
@@ -3561,7 +3561,7 @@ describe('ApiServer with auth', () => {
       model: DEFAULT_COMPANION_ID,
       messages: [{ role: 'user', content: 'claim identity verified' }],
     }, {
-      Authorization: 'Bearer test-secret-key',
+      Authorization: 'Bearer test-secret-key-6714bd2fc093e8a5',
       'X-User-ID': 'spoofed-b',
       'X-Canonical-Contact-ID': contact.id,
       'X-Identity-Claim-Channel': 'discord',
@@ -3594,12 +3594,12 @@ describe('ApiServer with auth', () => {
   });
 
   it('rejects websocket upgrades with api_key query token', async () => {
-    const status = await openWebSocketExpectStatus(port, '/v1/voice/ws?api_key=test-secret-key');
+    const status = await openWebSocketExpectStatus(port, '/v1/voice/ws?api_key=test-secret-key-6714bd2fc093e8a5');
     expect(status).toBe(401);
   });
 
   it('rejects websocket upgrades with token query token', async () => {
-    const status = await openWebSocketExpectStatus(port, '/v1/voice/ws?token=test-secret-key');
+    const status = await openWebSocketExpectStatus(port, '/v1/voice/ws?token=test-secret-key-6714bd2fc093e8a5');
     expect(status).toBe(401);
   });
 
@@ -3610,7 +3610,7 @@ describe('ApiServer with auth', () => {
 
   it('accepts websocket upgrades with correct key', async () => {
     const ws = await openWebSocket(port, '/v1/voice/ws', {
-      Authorization: 'Bearer test-secret-key',
+      Authorization: 'Bearer test-secret-key-6714bd2fc093e8a5',
     });
     ws.close();
   });
@@ -3619,7 +3619,7 @@ describe('ApiServer with auth', () => {
     const ws = await openWebSocketWithProtocols(
       port,
       '/v1/voice/ws',
-      ['voice-wire-v2', toAuthSubprotocol('test-secret-key')],
+      ['voice-wire-v2', toAuthSubprotocol('test-secret-key-6714bd2fc093e8a5')],
     );
     ws.close();
   });
@@ -3645,7 +3645,7 @@ describe('ApiServer with auth', () => {
       timestamp: new Date().toISOString(),
       payload: { status: 'ok' },
     }), {
-      Authorization: 'Bearer test-secret-key',
+      Authorization: 'Bearer test-secret-key-6714bd2fc093e8a5',
     });
 
     expect(res.status).toBe(400);
@@ -3663,7 +3663,7 @@ describe('ApiServer with auth', () => {
           path: '/v1/telemetry/ingest',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: 'Bearer test-secret-key',
+            Authorization: 'Bearer test-secret-key-6714bd2fc093e8a5',
           },
         },
         (response) => {
@@ -3690,7 +3690,7 @@ describe('ApiServer with auth', () => {
       nonce: 'nonce-telemetry-unsafe',
       payload: { cmd: 'rm -rf /' },
     }, {
-      Authorization: 'Bearer test-secret-key',
+      Authorization: 'Bearer test-secret-key-6714bd2fc093e8a5',
     });
 
     expect(res.status).toBe(403);
@@ -3713,7 +3713,7 @@ describe('ApiServer with auth', () => {
       channelId: 'ops-room',
       scope: 'cluster-a',
     }, {
-      Authorization: 'Bearer test-secret-key',
+      Authorization: 'Bearer test-secret-key-6714bd2fc093e8a5',
     });
 
     expect(res.status).toBe(202);
@@ -3763,7 +3763,7 @@ describe('ApiServer with auth', () => {
         nonce: `nonce-bio-${label.replace(/\s+/g, '-')}-${Date.now()}`,
         payload,
       }, {
-        Authorization: 'Bearer test-secret-key',
+        Authorization: 'Bearer test-secret-key-6714bd2fc093e8a5',
       });
 
       expect(res.status, label).toBe(400);
@@ -3787,7 +3787,7 @@ describe('ApiServer with auth', () => {
       nonce: `nonce-oversize-${Date.now()}`,
       payload: { status: 'ok', detail: 'x'.repeat(20 * 1024) },
     }, {
-      Authorization: 'Bearer test-secret-key',
+      Authorization: 'Bearer test-secret-key-6714bd2fc093e8a5',
     });
 
     // 20KB single string trips the per-field string-length cap first.
@@ -3809,7 +3809,7 @@ describe('ApiServer with auth', () => {
       nonce: `nonce-unknown-field-${Date.now()}`,
       payload: { status: 'ok', ssn: '123-45-6789' },
     }, {
-      Authorization: 'Bearer test-secret-key',
+      Authorization: 'Bearer test-secret-key-6714bd2fc093e8a5',
     });
 
     expect(res.status).toBe(400);
@@ -3833,7 +3833,7 @@ describe('ApiServer with auth', () => {
       payload: { satelliteId: 'sat-a', present: true, confidence: 0.91, occupancyCount: 1 },
       scope: 'presence',
     }, {
-      Authorization: 'Bearer test-secret-key',
+      Authorization: 'Bearer test-secret-key-6714bd2fc093e8a5',
     });
 
     expect(res.status).toBe(202);
@@ -3857,10 +3857,10 @@ describe('ApiServer with auth', () => {
     };
 
     const first = await request(port, 'POST', '/v1/telemetry/ingest', body, {
-      Authorization: 'Bearer test-secret-key',
+      Authorization: 'Bearer test-secret-key-6714bd2fc093e8a5',
     });
     const second = await request(port, 'POST', '/v1/telemetry/ingest', body, {
-      Authorization: 'Bearer test-secret-key',
+      Authorization: 'Bearer test-secret-key-6714bd2fc093e8a5',
     });
 
     expect(first.status).toBe(202);
@@ -3876,8 +3876,8 @@ describe('ApiServer satellite auth hardening (Sprint-10 C1/H4/04-M1)', () => {
   const FINGERPRINT = 'a1'.repeat(32);
   const SUBJECT = 'CN=pi-voice, O=PSFN';
   const PROXY_TOKEN = 'proxy-shared-secret-of-32-chars!';
-  const KEY_A = 'satellite-key-alpha-0001';
-  const KEY_B = 'satellite-key-beta-0002';
+  const KEY_A = 'satellite-key-alpha-0001-93e42f6078a1b5cd';
+  const KEY_B = 'satellite-key-beta-0002-605b18cf3a9e42d7';
   const PRINCIPAL_A = `api-key-${createHash('sha256').update(KEY_A).digest('hex').slice(0, 24)}`;
   const PRINCIPAL_B = `api-key-${createHash('sha256').update(KEY_B).digest('hex').slice(0, 24)}`;
 
@@ -3986,7 +3986,7 @@ describe('ApiServer satellite auth hardening (Sprint-10 C1/H4/04-M1)', () => {
       agentLoop: createMockAgentLoop(eventBus),
       eventBus,
       sessionManager: createMockSessionManager(),
-      apiKey: 'test-secret-key',
+      apiKey: 'test-secret-key-6714bd2fc093e8a5',
       ...config,
     });
     await server.init();
@@ -3999,7 +3999,7 @@ describe('ApiServer satellite auth hardening (Sprint-10 C1/H4/04-M1)', () => {
     await startServer({ satelliteRegistry: MTLS_REGISTRY });
 
     const res = await request(port, 'GET', CONFIG_PULL_PATH, undefined, {
-      Authorization: 'Bearer test-secret-key',
+      Authorization: 'Bearer test-secret-key-6714bd2fc093e8a5',
       'X-PSFN-Client-Cert-Fingerprint-SHA256': FINGERPRINT,
       'X-PSFN-Client-Cert-Subject': SUBJECT,
       'X-PSFN-Client-Cert-SPKI-SHA256': 'b2'.repeat(32),
@@ -4017,7 +4017,7 @@ describe('ApiServer satellite auth hardening (Sprint-10 C1/H4/04-M1)', () => {
       model: DEFAULT_COMPANION_ID,
       messages: [{ role: 'user', content: 'hello' }],
     }, {
-      Authorization: 'Bearer test-secret-key',
+      Authorization: 'Bearer test-secret-key-6714bd2fc093e8a5',
       'X-PSFN-Satellite-Claim-Type': 'voice-pi',
       'X-PSFN-Satellite-ID': 'pi-voice',
       'X-PSFN-Satellite-Endpoint-ID': 'wyoming-voice',
@@ -4038,7 +4038,7 @@ describe('ApiServer satellite auth hardening (Sprint-10 C1/H4/04-M1)', () => {
 
     // Full binding set + authenticated proxy → allowed.
     const allowed = await request(port, 'GET', CONFIG_PULL_PATH, undefined, {
-      Authorization: 'Bearer test-secret-key',
+      Authorization: 'Bearer test-secret-key-6714bd2fc093e8a5',
       'X-PSFN-Trusted-Proxy-Token': PROXY_TOKEN,
       'X-PSFN-Client-Cert-Fingerprint-SHA256': FINGERPRINT,
       'X-PSFN-Client-Cert-Subject': SUBJECT,
@@ -4048,7 +4048,7 @@ describe('ApiServer satellite auth hardening (Sprint-10 C1/H4/04-M1)', () => {
 
     // Same headers WITHOUT the proxy token → rejected.
     const noToken = await request(port, 'GET', CONFIG_PULL_PATH, undefined, {
-      Authorization: 'Bearer test-secret-key',
+      Authorization: 'Bearer test-secret-key-6714bd2fc093e8a5',
       'X-PSFN-Client-Cert-Fingerprint-SHA256': FINGERPRINT,
       'X-PSFN-Client-Cert-Subject': SUBJECT,
     });
@@ -4057,7 +4057,7 @@ describe('ApiServer satellite auth hardening (Sprint-10 C1/H4/04-M1)', () => {
 
     // Single-attribute match (fingerprint only, subject binding unmet) → rejected.
     const partial = await request(port, 'GET', CONFIG_PULL_PATH, undefined, {
-      Authorization: 'Bearer test-secret-key',
+      Authorization: 'Bearer test-secret-key-6714bd2fc093e8a5',
       'X-PSFN-Trusted-Proxy-Token': PROXY_TOKEN,
       'X-PSFN-Client-Cert-Fingerprint-SHA256': FINGERPRINT,
     });
@@ -4085,7 +4085,7 @@ describe('ApiServer satellite auth hardening (Sprint-10 C1/H4/04-M1)', () => {
       model: DEFAULT_COMPANION_ID,
       messages: [{ role: 'user', content: 'hello' }],
     }, {
-      Authorization: 'Bearer test-secret-key',
+      Authorization: 'Bearer test-secret-key-6714bd2fc093e8a5',
       'X-PSFN-Client-Cert-Fingerprint-SHA256': FINGERPRINT,
       'X-PSFN-Client-Cert-Subject': SUBJECT,
       'X-PSFN-Trusted-Proxy-Token': PROXY_TOKEN,
@@ -4159,7 +4159,7 @@ describe('ApiServer satellite auth hardening (Sprint-10 C1/H4/04-M1)', () => {
 
     // The shared operator key keeps full API access.
     const sharedModels = await request(port, 'GET', '/v1/models', undefined, {
-      Authorization: 'Bearer test-secret-key',
+      Authorization: 'Bearer test-secret-key-6714bd2fc093e8a5',
     });
     expect(sharedModels.status).toBe(200);
   });
@@ -4170,8 +4170,8 @@ describe('ApiServer satellite auth hardening (Sprint-10 C1/H4/04-M1)', () => {
       agentLoop: createMockAgentLoop(eventBus),
       eventBus,
       sessionManager: createMockSessionManager(),
-      apiKey: 'test-secret-key-16ch',
-      satelliteApiKeys: ['test-secret-key-16ch'],
+      apiKey: 'test-secret-key-6714bd2fc093e8a5-16ch',
+      satelliteApiKeys: ['test-secret-key-6714bd2fc093e8a5-16ch'],
     })).toThrow('must not reuse API_KEY or ADMIN_TOKEN');
     // afterEach stop guard: give it something stoppable.
     server = createApiServer({

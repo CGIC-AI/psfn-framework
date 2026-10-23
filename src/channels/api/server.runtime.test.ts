@@ -6,7 +6,7 @@ import type { SessionManager } from '../../core/session/manager.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { SensorIngestPort } from '../../shared/telemetry/sensor-ingest-port.js';
 
-const API_KEY = 'runtime-test-key';
+const API_KEY = 'runtime-test-key-630d94b5ef2817ac';
 
 function createInertEventBus(): EventBus {
   return {

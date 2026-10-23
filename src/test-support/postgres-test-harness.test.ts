@@ -71,7 +71,7 @@ describe('RAM-backed Postgres test containers', () => {
     // Bumped with the tmpfs/memory raise: the profile is part of the container
     // name and the reuse check, so warm containers built on the old shape are
     // rotated out instead of silently reused at the old size.
-    expect(args).toContain('io.test-harness.postgres.profile=tmpfs-v3-max-connections');
+    expect(args).toContain('io.test-harness.postgres.profile=tmpfs-v4-strong-credentials');
     expect(args).toContain('POSTGRES_INITDB_ARGS=--nosync');
 
     const imageIndex = args.lastIndexOf(DEFAULT_POSTGRES_TEST_IMAGE);

@@ -3,6 +3,7 @@
 // Run: npx tsx src/app/gateway/main.ts
 
 import '../../shared/utils/load-dotenv.js';
+import { assertRuntimeCredentials } from '../../system/config/runtime-credentials.js';
 import { ensureActiveTimezone } from '../../shared/time/active-timezone.js';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -185,6 +186,7 @@ import {
 const log = createComponentLogger('Gateway');
 const postgresPoolOwner = new PostgresPoolOwner('gateway');
 
+assertRuntimeCredentials(process.env);
 ensureActiveTimezone();
 
 function logStartupHydrationDiagnostics(diagnostics: StartupConfigHydrationDiagnostics): void {

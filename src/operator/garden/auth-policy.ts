@@ -1,4 +1,5 @@
 import { isLoopbackHost } from '../../shared/net/hosts.js';
+import { assertStrongCredential } from '../../shared/security/credentials.js';
 
 interface AdminAuthStartupLogger {
   error(message: string, metadata?: Record<string, unknown>): void;
@@ -18,6 +19,7 @@ const ADMIN_INSECURE_LOOPBACK_ERROR =
   'ADMIN_ALLOW_INSECURE=true requires ADMIN_HOST to be loopback (127.0.0.1, ::1, or localhost)';
 
 export function validateAdminAuthStartupPolicy(config: AdminAuthStartupPolicyConfig): void {
+  if (config.token !== undefined) assertStrongCredential(config.token, 'ADMIN_TOKEN');
   if (!config.token && !config.allowInsecureWithoutToken) {
     const error = new Error(ADMIN_TOKEN_REQUIRED_ERROR);
     config.logger.error(`Refusing to start ${config.componentLabel} without authentication`, {

@@ -16,6 +16,7 @@ import { resolveMemoryRetrievalPolicy } from '../../system/config/memory-retriev
 
 import { join, resolve } from 'node:path';
 import { ensureActiveTimezone } from '../../shared/time/active-timezone.js';
+import { assertRuntimeCredentials } from '../../system/config/runtime-credentials.js';
 import { createComponentLogger, configureOperationalLogPersistence, closeOperationalLogPersistence } from '../../shared/logger.js';
 import { requireOperationalMetadataRetentionDays } from '../../shared/diagnostics/retention-policy.js';
 import { GatewayClient } from '../../boundary/gateway/client.js';
@@ -274,6 +275,7 @@ import { staggerQuietHoursRelease } from '../../core/scheduler/quiet-hours-relea
 
 const log = createComponentLogger('Agent');
 const postgresPoolOwner = new PostgresPoolOwner('agent');
+assertRuntimeCredentials(process.env);
 ensureActiveTimezone();
 const DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS = 15_000;
 

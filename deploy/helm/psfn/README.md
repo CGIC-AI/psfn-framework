@@ -97,11 +97,36 @@ when absent, so an upgrade does not overwrite changes made through Garden.
 ## Advanced chart use
 
 Direct `helm install` is an advanced integration boundary. The default values
-contain empty/placeholder secret inputs and expect the named owner ConfigMap;
+contain empty secret inputs and fail rendering or installation until credentials
+are supplied. `secrets.allowMissingRequired=true` is rejected. They also expect
+the named owner ConfigMap;
 the supported lifecycle creates those objects without leaking credential values
 into Helm history. Operators who bypass it must provide an existing Secret and
 owner ConfigMap, pin the application image, preserve all volume-retention rules,
 and independently satisfy the tenancy and mTLS contracts.
+
+The chart and runtime share `files/credential-policy.json`: credentials require
+32–512 printable ASCII characters, at least 12 distinct characters, and no
+published placeholders or repeated patterns. Generate each role independently
+with 32 cryptographically random bytes (the lifecycle uses 64 hexadecimal
+characters). API, administrator, HMAC, backup, worker, satellite, database and
+cache credentials must not be reused across roles. Inline third-party credentials
+also receive the strength and separation checks. An offline render can validate
+an existing Secret reference, but cannot inspect its contents; runtime startup
+and lifecycle validation still apply to credentials read from it.
+
+Lint and render checks use an explicit non-production fixture containing only
+external Secret references:
+
+```bash
+helm lint deploy/helm/psfn -f scripts/fixtures/helm-nonproduction-values.yaml
+npm run verify:chart-render
+```
+
+The render verifier generates fresh temporary credentials for scenarios that
+test chart-created Secrets. Never install the fixture into a real deployment.
+For upgrades from placeholder or weak credentials, follow the staged rotation
+procedure in [operations](../../../docs/operations.md#credential-migration).
 
 The chart contains advanced fleet, ingress, Redis, Satellite Hub, Kubernetes
 self-management, and observer-eval values for operator-owned deployments. They

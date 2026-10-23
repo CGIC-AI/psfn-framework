@@ -34,12 +34,20 @@ const FLEET: ResolvedCompanionsFleetConfig = {
 };
 
 const CREDENTIALS = {
-  SHARED_MIGRATION_URL: 'postgres://shared_schema_migration:shared@db.example.test/psfn',
-  ALPHA_DATABASE_URL: 'postgres://companion_alpha_runtime:alpha@db.example.test/psfn',
-  BETA_DATABASE_URL: 'postgres://companion_beta_runtime:beta@db.example.test/psfn',
+  SHARED_MIGRATION_URL: 'postgres://shared_schema_migration:a7492bc5ef36081dad06e98f25341bc7@db.example.test/psfn',
+  ALPHA_DATABASE_URL: 'postgres://companion_alpha_runtime:27b81acef06495d32d7018aef35946bc@db.example.test/psfn',
+  BETA_DATABASE_URL: 'postgres://companion_beta_runtime:3be7d920145af8c68513eb02d7ca649f@db.example.test/psfn',
 };
 
 describe('multi-companion database topology resolution', () => {
+  it.each(['SHARED_MIGRATION_URL', 'ALPHA_DATABASE_URL', 'BETA_DATABASE_URL'] as const)('rejects weak %s credentials before opening topology databases', role => {
+    const url = new URL(CREDENTIALS[role]);
+    url.password = 'CHANGE_ME_private-database-credential-0123456789';
+    const credentials = { ...CREDENTIALS, [role]: url.toString() };
+    expect(() => resolveCompanionDatabaseTopology({
+      fleet: FLEET, credentialVault: createStaticCredentialVault(credentials), gatewayDatabaseUrl: credentials.ALPHA_DATABASE_URL,
+    })).toThrow(/credential must be/u);
+  });
   it('resolves one exact distinct credential per companion and keeps shared migration separate', () => {
     const resolved = resolveCompanionDatabaseTopology({
       fleet: FLEET,
@@ -74,7 +82,7 @@ describe('multi-companion database topology resolution', () => {
       .toThrow(/configured role companion_beta_runtime|distinct database credential/);
     expect(() => resolve({
       ...CREDENTIALS,
-      BETA_DATABASE_URL: 'postgres://companion_beta_runtime:beta@other.example.test/psfn',
+      BETA_DATABASE_URL: 'postgres://companion_beta_runtime:3be7d920145af8c68513eb02d7ca649f@other.example.test/psfn',
     })).toThrow(/same exact database/);
     expect(() => resolve(CREDENTIALS, 'postgres://other:other@db.example.test/psfn'))
       .toThrow(/Gateway POSTGRES_DATABASE_URL must exactly match/);

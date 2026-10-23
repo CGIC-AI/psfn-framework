@@ -1,9 +1,9 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import { timingSafeStringEqual } from '../../../shared/utils/secret-compare.js';
+import { assertStrongCredential } from '../../../shared/security/credentials.js';
 
 const API_KEY_PRINCIPAL_DIGEST_LENGTH = 24;
-const MIN_SATELLITE_API_KEY_LENGTH = 16;
 export const INSECURE_LOCAL_API_PRINCIPAL_ID = 'local-insecure';
 export const TESTING_HARNESS_API_PRINCIPAL_ID = 'testing-harness';
 
@@ -155,9 +155,7 @@ export function validateSatelliteApiKeys(
     .filter((token): token is string => Boolean(token));
   const seenPrincipalIds = new Set<string>();
   for (const key of normalized) {
-    if (key.length < MIN_SATELLITE_API_KEY_LENGTH) {
-      throw new Error(`API_SATELLITE_KEYS entries must be at least ${MIN_SATELLITE_API_KEY_LENGTH} characters`);
-    }
+    assertStrongCredential(key, 'API_SATELLITE_KEYS');
     if (reserved.some(token => token === key)) {
       throw new Error('API_SATELLITE_KEYS entries must not reuse API_KEY or ADMIN_TOKEN');
     }

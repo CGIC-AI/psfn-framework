@@ -16,7 +16,7 @@ import type { ApiRuntimeChatRequest, ApiServerRuntime } from './types.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { SessionManager } from '../../core/session/manager.js';
 
-const TOKEN = 'hub-satellite-secret-key';
+const TOKEN = 'hub-satellite-secret-key-4bec9085fa617d23';
 const COMPANION_ID = '11111111-1111-4111-8111-111111111111';
 const ASSERTION = 'header.claims.signature';
 

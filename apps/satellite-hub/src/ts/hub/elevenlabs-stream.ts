@@ -1,6 +1,7 @@
 import { resolveHubResourceLimits, type HubResourceLimits } from "./transport-resources.js";
 import { hubConsole as console } from "../shared/private-log.js";
 import crypto from "node:crypto";
+import { ProviderSocketOutput } from "./provider-socket-output.js";
 
 import WebSocket from "ws";
 
@@ -27,6 +28,7 @@ interface TtsContext {
 
 export class ElevenLabsStream implements StreamingTtsAdapter {
   private ws: WebSocket | null = null;
+  private output: ProviderSocketOutput | null = null;
   private connecting: Promise<void> | null = null;
   private readonly contexts = new Map<string, TtsContext>();
   private readonly limits: HubResourceLimits;
@@ -121,12 +123,21 @@ export class ElevenLabsStream implements StreamingTtsAdapter {
       "&inactivity_timeout=180" +
       "&auto_mode=true";
     const ws = this.connect(uri, {
-      maxPayload: this.limits.maxFrameBytes, perMessageDeflate: false, handshakeTimeout: this.limits.providerTimeoutMs,
+      maxPayload: this.limits.maxFrameBytes, perMessageDeflate: false, autoPong: false, handshakeTimeout: this.limits.providerTimeoutMs,
       headers: {
         "xi-api-key": this.apiKey,
       },
     });
     this.ws = ws;
+    const output = new ProviderSocketOutput(ws, this.limits, error => {
+      if (this.ws !== ws) return;
+      for (const context of this.contexts.values()) {
+        context.error = error;
+        context.queue.close();
+      }
+    });
+    this.output = output;
+    ws.on("ping", data => { try { output.pong(data); } catch { /* Failure closes all contexts. */ } });
     ws.on("message", (data) => {
       if (this.ws !== ws) return;
       try { this.handleMessage(String(data)); }
@@ -148,6 +159,7 @@ export class ElevenLabsStream implements StreamingTtsAdapter {
       }
     });
     ws.on("close", () => {
+      output.closed();
       if (this.ws === ws) {
         this.ws = null;
         for (const context of this.contexts.values()) {
@@ -209,7 +221,7 @@ export class ElevenLabsStream implements StreamingTtsAdapter {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       return;
     }
-    this.ws.send(JSON.stringify(payload));
+    this.output!.send(JSON.stringify(payload));
   }
 }
 

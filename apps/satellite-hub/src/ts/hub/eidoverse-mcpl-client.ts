@@ -1,3 +1,4 @@
+import { ProviderSocketOutput } from "./provider-socket-output.js";
 import { resolveHubResourceLimits, type HubResourceLimits } from "./transport-resources.js";
 /**
  * MCP-over-WebSocket (MCPL) client for the Eidoverse door.
@@ -57,7 +58,10 @@ const HUB_CLIENT_INFO = { name: "psfn-satellite-hub", version: "0.1.0" } as cons
 
 /** Minimal socket seam so tests can drive a local door without a real dial. */
 export interface EidoverseMcplSocket {
-  send(data: string): void;
+  readonly bufferedAmount: number;
+  send(data: string, callback: (error?: Error) => void): void;
+  pong(data: Buffer, callback: (error?: Error) => void): void;
+  onPing(handler: (data: Buffer) => void): void;
   close(): void;
   onOpen(handler: () => void): void;
   onMessage(handler: (data: string) => void): void;
@@ -96,6 +100,7 @@ interface PendingRequest {
 
 interface McplSession {
   socket: EidoverseMcplSocket;
+  output: ProviderSocketOutput;
   pending: Map<JsonRpcId, PendingRequest>;
   responder: EidoverseMcplResponder;
   nextId: number;
@@ -382,8 +387,15 @@ export class EidoverseMcplClient {
       ...new Set([credential, this.config.tokenRef, this.config.doorUrl].filter((v) => v.length > 0)),
     ];
 
+    const socket = this.connect(dialUrl(this.config.doorUrl, credential));
+    const output = new ProviderSocketOutput({
+      get bufferedAmount() { return socket.bufferedAmount; },
+      send: (data, callback) => socket.send(String(data), callback),
+      pong: (data, _mask, callback) => socket.pong(data, callback),
+      terminate: () => socket.close(),
+    }, this.limits, () => this.handleDisconnect(session));
     const session: McplSession = {
-      socket: this.connect(dialUrl(this.config.doorUrl, credential)),
+      socket, output,
       pending: new Map(),
       responder: new EidoverseMcplResponder({
         warn: (message) => this.logger.warn(message),
@@ -392,8 +404,9 @@ export class EidoverseMcplClient {
       closed: false,
       degradedFeatureSets: new Set<string>(),
     };
+    session.socket.onPing(data => { try { output.pong(data); } catch { /* Failure tears down the session. */ } });
     session.socket.onMessage((data) => this.receive(session, data));
-    session.socket.onClose(() => this.handleDisconnect(session));
+    session.socket.onClose(() => { output.closed(); this.handleDisconnect(session); });
     session.socket.onError(() => session.socket.close());
 
     let world: string;
@@ -596,7 +609,7 @@ export class EidoverseMcplClient {
       messageId: message.messageId,
       accepted: true,
     }));
-    this.sendResult(session, id, { results });
+    if (!this.sendResult(session, id, { results })) return;
     if (!this.onIncoming || messages.length === 0) return;
     try {
       this.onIncoming(messages);
@@ -649,7 +662,7 @@ export class EidoverseMcplClient {
       timer.unref?.();
       session.pending.set(id, { resolve, reject, timer });
       try {
-        session.socket.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
+        session.output.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
       } catch {
         session.pending.delete(id);
         clearTimeout(timer);
@@ -662,8 +675,8 @@ export class EidoverseMcplClient {
     this.write(session, { jsonrpc: "2.0", method, params });
   }
 
-  private sendResult(session: McplSession, id: JsonRpcId, result: unknown): void {
-    this.write(session, { jsonrpc: "2.0", id, result });
+  private sendResult(session: McplSession, id: JsonRpcId, result: unknown): boolean {
+    return this.write(session, { jsonrpc: "2.0", id, result });
   }
 
   private sendError(
@@ -674,12 +687,14 @@ export class EidoverseMcplClient {
     this.write(session, { jsonrpc: "2.0", id, error });
   }
 
-  private write(session: McplSession, frame: Record<string, unknown>): void {
-    if (session.closed) return;
+  private write(session: McplSession, frame: Record<string, unknown>): boolean {
+    if (session.closed) return false;
     try {
-      session.socket.send(JSON.stringify(frame));
+      session.output.send(JSON.stringify(frame));
+      return true;
     } catch {
       this.logger.warn("Eidoverse MCPL frame could not be sent");
+      return false;
     }
   }
 
@@ -791,9 +806,12 @@ function parseIncomingMessages(params: unknown): McplIncomingChannelMessage[] | 
 }
 
 function createWebSocketConnector(url: string, limits: HubResourceLimits): EidoverseMcplSocket {
-  const socket = new WebSocket(url, { maxPayload: limits.maxFrameBytes, perMessageDeflate: false, handshakeTimeout: limits.providerTimeoutMs });
+  const socket = new WebSocket(url, { maxPayload: limits.maxFrameBytes, perMessageDeflate: false, autoPong: false, handshakeTimeout: limits.providerTimeoutMs });
   return {
-    send: (data) => socket.send(data),
+    get bufferedAmount() { return socket.bufferedAmount; },
+    send: (data, callback) => socket.send(data, callback),
+    pong: (data, callback) => socket.pong(data, undefined, callback),
+    onPing: handler => { socket.on("ping", handler); },
     close: () => socket.terminate(),
     onOpen: (handler) => { socket.on("open", handler); },
     onMessage: (handler) => {

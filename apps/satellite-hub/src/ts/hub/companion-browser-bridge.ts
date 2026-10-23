@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import { ProviderSocketOutput } from "./provider-socket-output.js";
+import { resolveHubResourceLimits } from "./transport-resources.js";
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
@@ -31,7 +33,7 @@ export class CompanionBrowserBridge {
       throw new Error("Companion browser bridge requires Hub API and assertion authority");
     }
     resolveBrowserDevices(config, registry);
-    this.server = new WebSocketServer({ noServer: true, maxPayload: config.maxFrameBytes, perMessageDeflate: false });
+    this.server = new WebSocketServer({ noServer: true, maxPayload: config.maxFrameBytes, perMessageDeflate: false, autoPong: false });
   }
 
   handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): boolean {
@@ -51,7 +53,7 @@ export class CompanionBrowserBridge {
       const tls = this.runtime.satelliteClaim.tls;
       const upstream = this.connectGateway(
         `${this.config.gatewayOrigin.replace(/^https:/u, "wss:")}${request.url}`,
-        { headers, maxPayload: this.config.maxFrameBytes, perMessageDeflate: false,
+        { headers, maxPayload: this.config.maxFrameBytes, perMessageDeflate: false, autoPong: false,
           handshakeTimeout: this.config.handshakeTimeoutMs,
           ...(tls?.certPath ? { cert: fs.readFileSync(tls.certPath) } : {}),
           ...(tls?.keyPath ? { key: fs.readFileSync(tls.keyPath) } : {}),
@@ -107,20 +109,24 @@ export class CompanionBrowserBridge {
       clearInterval(enrollmentTimer);
       clearTimeout(renewalTimer);
       speech.stop(false);
-      browser.close(4401, "Companion connection closed");
-      upstream.close(1000);
+      browser.terminate();
+      upstream.terminate();
     };
+    const limits = resolveHubResourceLimits({ maxFrameBytes: this.config.maxFrameBytes,
+      maxBufferedBytes: this.config.maxBufferedBytes, providerTimeoutMs: this.config.handshakeTimeoutMs });
+    const outputs = new Map([browser, upstream].map(socket => {
+      const output = new ProviderSocketOutput(socket, limits, close);
+      socket.once("close", () => output.closed());
+      socket.on("ping", data => { try { output.pong(data); } catch { close(); } });
+      return [socket, output] as const;
+    }));
     const send = (socket: WebSocket, data: RawData | string, binary: boolean) => {
       if (closed) return;
       assertEnrollment();
-      const length = typeof data === "string" ? Buffer.byteLength(data)
-        : Array.isArray(data) ? data.reduce((sum, part) => sum + part.byteLength, 0) : data.byteLength;
-      if (socket.readyState !== WebSocket.OPEN || length > this.config.maxFrameBytes
-        || socket.bufferedAmount + length > this.config.maxBufferedBytes) {
-        close();
-        return;
-      }
-      socket.send(data, { binary }, error => { if (error) close(); });
+      if (socket.readyState !== WebSocket.OPEN) { close(); return; }
+      const payload = typeof data === "string" ? data
+        : Array.isArray(data) ? Buffer.concat(data) : data instanceof ArrayBuffer ? Buffer.from(data) : data;
+      outputs.get(socket)!.send(binary ? Buffer.from(payload) : payload.toString());
     };
     const speech = new CompanionBrowserSpeech(this.tts, value => {
       try { send(browser, JSON.stringify(value), false); } catch { close(); }

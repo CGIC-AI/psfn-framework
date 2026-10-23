@@ -1,5 +1,6 @@
 import { resolveHubResourceLimits, type HubResourceLimits } from "./transport-resources.js";
 import WebSocket from "ws";
+import { ProviderSocketOutput } from "./provider-socket-output.js";
 
 export interface TranscriptInterim {
   text: string;
@@ -21,6 +22,7 @@ interface DeepgramRealtimeCallbacks {
 
 export class DeepgramRealtimeSession {
   private ws: WebSocket | null = null;
+  private output: ProviderSocketOutput | null = null;
   private keepAliveTimer: NodeJS.Timeout | null = null;
   private lastSendAt = Date.now();
   private readonly finalSegments: string[] = [];
@@ -54,12 +56,31 @@ export class DeepgramRealtimeSession {
       "&smart_format=true";
 
     this.ws = this.connect(url, {
-      maxPayload: this.limits.maxFrameBytes, perMessageDeflate: false, handshakeTimeout: this.limits.providerTimeoutMs,
+      maxPayload: this.limits.maxFrameBytes, perMessageDeflate: false, autoPong: false, handshakeTimeout: this.limits.providerTimeoutMs,
       headers: {
         Authorization: `Token ${this.apiKey}`,
       },
     });
+    const ws = this.ws;
+    const output = new ProviderSocketOutput(ws, this.limits, error => {
+      if (this.ws !== ws) return;
+      this.resetUtterance();
+      if (this.keepAliveTimer) clearInterval(this.keepAliveTimer);
+      this.keepAliveTimer = null;
+      this.callbacks.onError?.(error);
+    });
+    this.output = output;
+    ws.on("ping", data => { try { output.pong(data); } catch { /* Failure was delivered to onError. */ } });
+    ws.on("close", () => {
+      output.closed();
+      if (this.ws !== ws) return;
+      this.ws = null;
+      if (this.keepAliveTimer) clearInterval(this.keepAliveTimer);
+      this.keepAliveTimer = null;
+      this.resetUtterance();
+    });
     this.ws.on("message", (data) => {
+      if (this.ws !== ws) return;
       try {
         this.handleMessage(String(data));
       } catch {
@@ -69,6 +90,7 @@ export class DeepgramRealtimeSession {
       }
     });
     this.ws.on("error", () => {
+      if (this.ws !== ws) return;
       this.callbacks.onError?.(new Error("Deepgram provider stream failed"));
     });
     await waitForOpen(this.ws);
@@ -79,7 +101,7 @@ export class DeepgramRealtimeSession {
       if ((Date.now() - this.lastSendAt) < 8000) {
         return;
       }
-      this.ws.send(JSON.stringify({ type: "KeepAlive" }));
+      try { output.send(JSON.stringify({ type: "KeepAlive" })); } catch { /* Failure was delivered to onError. */ }
     }, 8000);
   }
 
@@ -90,7 +112,7 @@ export class DeepgramRealtimeSession {
     if (this.utteranceStartedAt === 0) {
       this.utteranceStartedAt = Date.now();
     }
-    this.ws.send(chunk);
+    this.output!.send(chunk);
     this.lastSendAt = Date.now();
   }
 
@@ -101,6 +123,7 @@ export class DeepgramRealtimeSession {
     }
     const ws = this.ws;
     this.ws = null;
+    this.resetUtterance();
     if (!ws) {
       return;
     }

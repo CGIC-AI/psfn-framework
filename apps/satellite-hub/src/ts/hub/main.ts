@@ -40,7 +40,7 @@ async function main(): Promise<void> {
   const eidoverseConfig = eidoverseTransport === "poll" ? loadEidoverseMcpConfig() : null;
   const eidoverseMcplConfig = eidoverseTransport === "mcpl" ? loadEidoverseMcplConfig() : null;
   privateDirectory(config.artifactsRoot);
-  const homeAssistant = config.homeAssistant ? new HomeAssistantClient(config.homeAssistant) : null;
+  const homeAssistant = config.homeAssistant ? new HomeAssistantClient(config.homeAssistant, undefined, config.limits) : null;
   const hubLogger = console;
   const eidoverse = eidoverseConfig
     ? new EidoverseMcpClient(eidoverseConfig, resolveEidoverseCredentialFromEnv, {

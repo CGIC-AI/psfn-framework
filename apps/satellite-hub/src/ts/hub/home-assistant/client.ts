@@ -1,3 +1,5 @@
+import { ProviderSocketOutput } from "../provider-socket-output.js";
+import { resolveHubResourceLimits, type HubResourceLimits } from "../transport-resources.js";
 import WebSocket, { type RawData } from "ws";
 
 import type { HomeAssistantConfig } from "../../shared/env.js";
@@ -26,10 +28,12 @@ interface HaResultMessage {
   error?: { code?: string; message?: string };
 }
 
-export type HomeAssistantWebSocketFactory = (url: string) => WebSocket;
+export type HomeAssistantWebSocketFactory = (url: string, options: WebSocket.ClientOptions) => WebSocket;
 
 export class HomeAssistantClient {
   private socket: WebSocket | null = null;
+  private output: ProviderSocketOutput | null = null;
+  private readonly limits: HubResourceLimits;
   private readonly states = new Map<string, HomeAssistantState>();
   private readonly pending = new Map<number, PendingCommand>();
   private nextId = 1;
@@ -45,7 +49,8 @@ export class HomeAssistantClient {
   constructor(
     private readonly config: HomeAssistantConfig,
     private readonly createSocket: HomeAssistantWebSocketFactory = defaultWebSocketFactory,
-  ) {}
+    limits?: Partial<HubResourceLimits>,
+  ) { this.limits = resolveHubResourceLimits(limits); }
 
   start(): void {
     if (!this.stopped) return;
@@ -66,9 +71,10 @@ export class HomeAssistantClient {
     this.socket = null;
     if (!socket || socket.readyState === WebSocket.CLOSED) return;
     await new Promise<void>((resolve) => {
-      socket.once("close", () => resolve());
-      socket.close(1000, "hub shutdown");
-      setTimeout(resolve, 1_000).unref();
+      const timer = setTimeout(() => { socket.terminate(); resolve(); }, 1_000);
+      timer.unref();
+      socket.once("close", () => { clearTimeout(timer); resolve(); });
+      socket.terminate();
     });
   }
 
@@ -125,17 +131,29 @@ export class HomeAssistantClient {
     this.status = "connecting";
     let socket: WebSocket;
     try {
-      socket = this.createSocket(toWebSocketUrl(this.config.baseUrl));
+      socket = this.createSocket(toWebSocketUrl(this.config.baseUrl), { maxPayload: MAX_WS_PAYLOAD_BYTES,
+        autoPong: false, perMessageDeflate: false, handshakeTimeout: this.limits.providerTimeoutMs });
     } catch (error) {
       this.handleDisconnect(error);
       return;
     }
     this.socket = socket;
-    socket.on("message", (raw) => this.handleMessage(raw));
+    const output = new ProviderSocketOutput(socket, this.limits, () => {
+      if (this.socket !== socket) return;
+      this.rejectPending(new HomeAssistantUnavailableError("Home Assistant output failed"));
+      this.lastError = "Home Assistant output failed";
+      this.status = "degraded";
+    });
+    this.output = output;
+    socket.on("ping", data => { try { output.pong(data); } catch { /* Failure rejects all commands. */ } });
+    socket.on("message", (raw) => { if (this.socket === socket) this.handleMessage(raw); });
     socket.on("error", (error) => {
       this.lastError = safeError(error);
     });
-    socket.on("close", () => this.handleDisconnect(new Error("Home Assistant websocket closed")));
+    socket.on("close", () => {
+      output.closed();
+      if (this.socket === socket) this.handleDisconnect(new Error("Home Assistant websocket closed"));
+    });
   }
 
   private handleMessage(raw: RawData): void {
@@ -152,7 +170,7 @@ export class HomeAssistantClient {
     }
 
     if (message.type === "auth_required") {
-      this.socket?.send(JSON.stringify({ type: "auth", access_token: this.config.token }));
+      try { this.output?.send(JSON.stringify({ type: "auth", access_token: this.config.token })); } catch { /* The socket failure rejects all commands. */ }
       return;
     }
     if (message.type === "auth_invalid") {
@@ -243,12 +261,12 @@ export class HomeAssistantClient {
       }, this.config.requestTimeoutMs);
       timer.unref();
       this.pending.set(id, { resolve, reject, timer });
-      socket.send(JSON.stringify({ id, ...command }), (error) => {
-        if (!error) return;
+      try { this.output!.send(JSON.stringify({ id, ...command })); }
+      catch {
         clearTimeout(timer);
         this.pending.delete(id);
         reject(new HomeAssistantUnavailableError("Home Assistant command send failed"));
-      });
+      }
     });
   }
 
@@ -287,8 +305,8 @@ export class HomeAssistantClient {
   }
 }
 
-function defaultWebSocketFactory(url: string): WebSocket {
-  return new WebSocket(url, { maxPayload: MAX_WS_PAYLOAD_BYTES });
+function defaultWebSocketFactory(url: string, options: WebSocket.ClientOptions): WebSocket {
+  return new WebSocket(url, options);
 }
 
 export function toWebSocketUrl(baseUrl: string): string {
@@ -333,5 +351,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function safeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return error instanceof HomeAssistantUnavailableError || error instanceof HomeAssistantRequestError
+    ? error.message : "Home Assistant connection failed";
 }

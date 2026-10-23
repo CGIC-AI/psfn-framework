@@ -2,7 +2,7 @@
      collision cases from every literal binding to detect inventory drift. */}}
 {{- define "psfn.managedEnvironmentNames" -}}
 {{- $policy := .Files.Get "files/environment-authority.json" | fromJson -}}
-{{- toJson $policy.managed -}}
+{{- toJson (concat $policy.managed $policy.securitySensitive | uniq) -}}
 {{- end -}}
 
 {{/* Credential names are roles, not arbitrary extraEnv overrides. Each may use

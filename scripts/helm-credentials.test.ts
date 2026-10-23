@@ -23,6 +23,15 @@ const securitySensitiveEnvNames = ['ADMIN_PUBLIC_ORIGIN', 'ADMIN_TRUSTED_PROXY_A
   'VOXTA_AUTH_USERNAME', 'VOXTA_AUTH_PASSWORD', 'NODE_OPTIONS', 'NODE_PATH', 'LD_PRELOAD',
   'LD_LIBRARY_PATH', 'BASH_ENV', 'ENV', 'PATH', 'PGSERVICE', 'PGSERVICEFILE', 'PGPASSFILE',
   'SSLKEYLOGFILE', 'EIDOVERSE_JOIN_TOKEN'];
+const environmentPolicy: { managed: string[]; securitySensitive: string[] } = parse(
+  readFileSync(join(chart, 'files/environment-authority.json'), 'utf8'),
+);
+const extraEnvSurfaces = ['gateway', 'agent', 'garden', 'satelliteHub'] as const;
+const reservedExtraEnvCases = extraEnvSurfaces.flatMap(surface => [...new Set([
+  ...literalManagedEnvNames, ...securitySensitiveEnvNames, ...environmentPolicy.managed,
+  ...environmentPolicy.securitySensitive,
+])].map(name => ({ surface, name })));
+const bootstrapKeyMappings: Record<string, string> = parse(readFileSync(join(chart, 'values.yaml'), 'utf8')).runtimeBootstrap.keys;
 const roles = ['apiKey', 'adminToken', 'gatewaySessionHmacKey', 'gatewaySessionIntegrityAuthToken',
   'gatewayCompanionAuthToken', 'backupEncryptionKey', 'satelliteHubApiKey', 'satelliteHubControlToken',
   'homeAssistantToken', 'eidoverseJoinToken', 'providerApiKey', 'openRouterApiKey', 'openAiApiKey',
@@ -47,11 +56,11 @@ function validValues() {
   };
 }
 
-function appSecretEntries(manifest: string): Array<[string, string]> {
+function appSecretEntries(manifest: string, name = 'credential-test-psfn-app'): Array<[string, string]> {
   // Preserve duplicate YAML pairs: converting straight to an object would
   // silently discard precisely the credential overwrite this test detects.
   const secret = parseAllDocuments(manifest, { uniqueKeys: false }).find(document =>
-    document.get('kind') === 'Secret' && document.getIn(['metadata', 'name']) === 'credential-test-psfn-app');
+    document.get('kind') === 'Secret' && document.getIn(['metadata', 'name']) === name);
   const data = secret?.get('stringData', true);
   if (!isMap(data)) throw new Error('Expected the rendered application Secret data');
   return data.items.map(pair => {
@@ -75,6 +84,21 @@ function fleetAuthValues(credentialEnv: unknown[]) {
   return { fleetAuth: { enabled: true, credentialEnv },
     ingress: { enabled: true, gateway: { enabled: true, host: 'gateway.example.test',
       path: '/', pathType: 'Prefix', tls: { enabled: true, secretName: 'gateway-tls' } } } };
+}
+
+function extraEnvValues(surface: typeof extraEnvSurfaces[number], name: string) {
+  const entry = { name, value: 'private-override-sentinel-0123456789' };
+  return { ...validValues(), ...(surface === 'satelliteHub'
+    ? { satelliteHub: { ...hubValues(), extraEnv: [entry] } }
+    : { workloads: { [surface]: { extraEnv: [entry] } } }) };
+}
+
+function fleetValues(authSecret: Record<string, string> = {}) {
+  const id = '11111111-1111-4111-8111-111111111111';
+  return { ...validValues(), ...fleetAuthValues([]), bootstrap: { seedOwnerFiles: false },
+    fleet: { enabled: true, companions: [{ companionId: id, postgresSchema: 'companion_main', authSecret }] },
+    runtime: { companionId: id, companionDataDir: `/runtime/companions/${id}`,
+      characterCardPath: `/runtime/companions/${id}/companion.json`, workspacePath: `/runtime/workspaces/personal/${id}` } };
 }
 
 describe('Helm credential installation boundary', () => {
@@ -300,5 +324,150 @@ describe('Helm credential installation boundary', () => {
     const entry = { name: 'CUSTOM_OPERATOR_FLAG', value: 'enabled' };
     expect(render({ ...validValues(), workloads: { gateway: { extraEnv: [entry] } } }).status).toBe(0);
     expect(render({ ...validValues(), workloads: { gateway: { extraEnv: [entry, entry] } } }).status).not.toBe(0);
+  });
+
+  it.each(extraEnvSurfaces)('rejects a security-sensitive HMAC rotation override in %s extraEnv', surface => {
+    const result = render(extraEnvValues(surface, 'GATEWAY_SESSION_HMAC_KEYS'));
+    if (result.status === 0) {
+      const deployment = surface === 'satelliteHub' ? 'satellite-hub' : surface;
+      const env = extractContainerEnv(result.stdout, `credential-test-psfn-${deployment}`, deployment);
+      expect(env.has('GATEWAY_SESSION_HMAC_KEYS')).toBe(false);
+    }
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('managed by the chart');
+    expect(result.stdout + result.stderr).not.toContain('private-override-sentinel-0123456789');
+  });
+
+  it('rejects a rendered rotation keyring that reuses the API credential despite a distinct singular HMAC', () => {
+    const values = validValues();
+    const result = render({ ...values, workloads: { gateway: { extraEnv: [
+      { name: 'GATEWAY_SESSION_HMAC_KEYS', value: `v1:${values.secrets.values.apiKey}` },
+    ] } } });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('managed by the chart');
+    expect(result.stdout + result.stderr).not.toContain(values.secrets.values.apiKey);
+  });
+
+  it.each(reservedExtraEnvCases)('rejects reserved $name on the $surface extraEnv surface', ({ surface, name }) => {
+    const result = render(extraEnvValues(surface, name));
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('managed by the chart');
+  });
+
+  it.each(extraEnvSurfaces)('preserves a distinct safe custom flag on the %s extraEnv surface', surface => {
+    const result = render(extraEnvValues(surface, 'CUSTOM_SAFE_OPERATOR_FLAG'));
+    expect(result.status).toBe(0);
+    const deployment = surface === 'satelliteHub' ? 'satellite-hub' : surface;
+    const env = extractContainerEnv(result.stdout, `credential-test-psfn-${deployment}`, deployment);
+    expect(env.get('CUSTOM_SAFE_OPERATOR_FLAG')?.value).toBe('private-override-sentinel-0123456789');
+  });
+
+  it('prevents PostgreSQL password and database URL roles from overwriting the same rendered Secret key', () => {
+    const values = validValues();
+    const result = render({ ...values, postgres: { auth: { ...values.postgres.auth,
+      keys: { password: 'DUPLICATE_DATABASE_KEY', databaseUrl: 'DUPLICATE_DATABASE_KEY' } } } });
+    if (result.status === 0) {
+      const entries = appSecretEntries(result.stdout, 'credential-test-psfn-postgres');
+      expect(new Set(entries.map(([key]) => key)).size === entries.length).toBe(true);
+      expect(entries.filter(([key, value]) => key === 'DUPLICATE_DATABASE_KEY'
+        && value === values.postgres.auth.password).length === 1).toBe(true);
+    }
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('Secret data key');
+    expect(result.stdout + result.stderr).not.toContain(values.postgres.auth.password);
+  });
+
+  it.each(['password-url', 'app-postgres', 'app-redis', 'postgres-redis', 'bootstrap'] as const)(
+    'rejects physical external Secret name/key aliases across %s credential roles', scenario => {
+      const settings = { secrets: { create: false, existingSecret: 'shared-credentials' },
+        postgres: { auth: { existingSecret: 'shared-credentials', keys: { password: 'pg-password', databaseUrl: 'pg-url' } } },
+        redis: { enabled: true, auth: { existingSecret: 'shared-credentials', key: 'redis-password' } },
+        runtimeBootstrap: { keys: { adminDatabaseUrl: 'admin-url' } } };
+      if (scenario === 'password-url') settings.postgres.auth.keys.password = 'pg-url';
+      if (scenario === 'app-postgres') settings.postgres.auth.keys.password = 'ADMIN_TOKEN';
+      if (scenario === 'app-redis') settings.redis.auth.key = 'API_KEY';
+      if (scenario === 'postgres-redis') settings.redis.auth.key = 'pg-password';
+      if (scenario === 'bootstrap') settings.runtimeBootstrap.keys.adminDatabaseUrl = 'pg-url';
+      const result = render(settings);
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain('Secret data key');
+    },
+  );
+
+  it.each(['postgres-password', 'postgres-url', 'redis-password', 'bootstrap-admin', 'bootstrap-companion',
+    'bootstrap-shared', 'bootstrap-companion-password', 'bootstrap-shared-password', 'external-postgres', 'external-redis'])(
+    'rejects invalid Kubernetes Secret data keys for %s', role => {
+      const values = validValues();
+      const settings = role === 'postgres-password' ? { postgres: { auth: { ...values.postgres.auth, keys: { password: 'invalid/key' } } } }
+        : role === 'postgres-url' ? { postgres: { auth: { ...values.postgres.auth, keys: { databaseUrl: 'invalid/key' } } } }
+          : role === 'redis-password' ? { redis: { enabled: true, auth: { ...values.redis.auth, key: 'invalid/key' } } }
+            : role === 'external-postgres' ? { postgres: { external: { enabled: true, databaseUrlSecret: { name: 'external-db', key: 'invalid/key' } } } }
+              : role === 'external-redis' ? { redis: { enabled: true, mode: 'external', external: { url: 'rediss://cache.example.test:6380',
+                passwordSecret: { name: 'external-cache', key: 'invalid/key' } } } }
+                : { runtimeBootstrap: { keys: { [{ 'bootstrap-admin': 'adminDatabaseUrl', 'bootstrap-companion': 'companionDatabaseUrl',
+                  'bootstrap-shared': 'sharedMigrationDatabaseUrl', 'bootstrap-companion-password': 'companionRoleKey',
+                  'bootstrap-shared-password': 'sharedMigrationRoleKey' }[role]!]: 'invalid/key' } } };
+      const result = render({ ...values, ...settings });
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain('Secret data key');
+    },
+  );
+
+  it('preserves valid custom keys in a shared existing Secret and intentional runtime database URL sharing', () => {
+    const result = render({ secrets: { create: false, existingSecret: 'shared-credentials' },
+      postgres: { auth: { existingSecret: 'shared-credentials', keys: { password: 'custom-pg-password', databaseUrl: 'custom-companion-url' } } },
+      runtimeBootstrap: { keys: { companionDatabaseUrl: 'custom-companion-url' } },
+      redis: { enabled: true, auth: { existingSecret: 'shared-credentials', key: 'custom-cache-password' } } });
+    expect(result.status).toBe(0);
+    expect(result.stdout).not.toMatch(/^kind: Secret$/mu);
+    const env = extractContainerEnv(result.stdout, 'credential-test-psfn-gateway', 'gateway');
+    expect(env.get('POSTGRES_DATABASE_URL')?.secretKeyRef).toEqual({ name: 'shared-credentials', key: 'custom-companion-url' });
+  });
+
+  it.each(Object.keys(bootstrapKeyMappings))('rejects bootstrap %s aliasing the PostgreSQL password role', role => {
+    const values = validValues();
+    const result = render({ ...values, runtimeBootstrap: { keys: { [role]: 'postgres-password' } } });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('Secret data key');
+  });
+
+  it.each(['audit-pepper', 'hub-private-key', 'embedding', 'fleet-oauth'])(
+    'rejects subordinate %s external references reusing an application credential key', role => {
+      const settings = role === 'audit-pepper' ? { hubDeviceAssertions: { auditPepperSecretRef: { name: 'external-app', key: 'API_KEY' } } }
+        : role === 'hub-private-key' ? { satelliteHub: { deviceAssertion: { privateKeySecretRef: { name: 'external-app', key: 'API_KEY' } } } }
+          : role === 'embedding' ? { embeddings: { api: { apiKeySecret: { name: 'external-app', key: 'API_KEY' } } } }
+            : fleetAuthValues([{ name: 'FLEET_AUTH_CLIENT_SECRET', secretRef: { name: 'external-app', key: 'API_KEY' } }]);
+      const result = render({ secrets: { create: false, existingSecret: 'external-app' },
+        postgres: { auth: { existingSecret: 'external-postgres' } }, ...settings });
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain('Secret data key');
+    },
+  );
+
+  it('preserves the canonical primary Fleet auth references and distinct custom Fleet references', () => {
+    expect(render(fleetValues()).status).toBe(0);
+    expect(render(fleetValues({ name: 'external-agent', sessionIntegrityKey: 'integrity', companionAuthKey: 'auth' })).status).toBe(0);
+  });
+
+  it.each(['duplicate', 'app-alias', 'invalid'] as const)('rejects %s per-companion Fleet auth Secret keys', scenario => {
+    const refs = scenario === 'duplicate' ? { name: 'external-agent', sessionIntegrityKey: 'same-key', companionAuthKey: 'same-key' }
+      : scenario === 'app-alias' ? { sessionIntegrityKey: 'ADMIN_TOKEN' }
+        : { name: 'external-agent', sessionIntegrityKey: 'invalid/key', companionAuthKey: 'auth' };
+    const result = render(fleetValues(refs));
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('Secret data key');
+  });
+
+  it('preserves identical key spelling in separate chart-created Secrets without duplicate data entries', () => {
+    const values = validValues();
+    const result = render({ ...values, secrets: { ...values.secrets, keys: { apiKey: 'same-key' } },
+      postgres: { auth: { ...values.postgres.auth, keys: { password: 'same-key' } } },
+      redis: { enabled: true, auth: { ...values.redis.auth, key: 'same-key' } } });
+    expect(result.status).toBe(0);
+    for (const [name, expected] of [['app', values.secrets.values.apiKey], ['postgres', values.postgres.auth.password], ['redis', values.redis.auth.password]]) {
+      const entries = appSecretEntries(result.stdout, `credential-test-psfn-${name}`);
+      expect(new Set(entries.map(([key]) => key)).size === entries.length).toBe(true);
+      expect(entries.filter(([key, value]) => key === 'same-key' && value === expected).length === 1).toBe(true);
+    }
   });
 });

@@ -120,16 +120,26 @@ optional provider/channel credentials, testing-harness authentication, Home
 Assistant, Hub credentials, and `satelliteApiKeys` (the combined Hub and extra
 satellite key list). This also applies to existing Secrets: custom key names
 are supported, but one data key cannot supply multiple credential roles.
+The same separation applies across application, PostgreSQL, Redis, bootstrap,
+Fleet and subordinate references when their Secret name and key coincide.
+PostgreSQL password and URL keys must differ. The runtime database URL may be
+shared by its consumers (including the bootstrap companion URL); references
+to different Secret names may use identical key spelling.
 Credential environment names (`provider.envName`, Eidoverse `tokenRef`, and
 `fleetAuth.credentialEnv`) must not alias another credential role or a managed
 or security-sensitive variable. Distinct custom names remain supported.
-`extraEnv` cannot replace chart-managed or custom credential bindings, nor
+`extraEnv` cannot replace chart-managed, security-sensitive or custom credential bindings, nor
 repeat a name. On upgrade, move any such overrides to their dedicated chart
 settings (for example `fleetAuth.testingHarnessGardenVerifierEnabled`) and
 give each external credential its own key and environment name.
 PostgreSQL URLs must not carry routing or authentication query overrides such
 as `?password=`; encoded parameter names are rejected too. Non-authentication
 options such as `application_name` and `sslmode` remain supported.
+Serialized HMAC rotation keys are checked against other credential roles at
+startup. Trimmed version labels must match `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`;
+JavaScript prototype-property names are forbidden. Duplicate version labels
+fail. Multiple labels may retain the same HMAC key during migration, but no
+rotation key may reuse an API, administrator or other role's credential.
 
 Lint and render checks use an explicit non-production fixture containing only
 external Secret references:

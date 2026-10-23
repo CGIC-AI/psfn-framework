@@ -2,17 +2,21 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import json
 from http.client import HTTPConnection
 from pathlib import Path
 import socket
 import threading
 
 import pytest
+from aioesphomeapi.model import VoiceAssistantAudioSettings
+from websockets.asyncio.client import connect
 
 from hub.cli.run import _run_realtime_runtime, _run_runtime
 from hub.devices.realtime_server import RealtimeVoiceServer
 from hub.storage.artifacts import ArtifactStore
 from test_http_audio_security import configure_cli_listener_environment
+from test_voice_runtime import _FakeClient, _FakeSTT
 
 
 @pytest.fixture
@@ -62,6 +66,22 @@ def listener_status(port: int) -> int:
         return response.status
     finally:
         connection.close()
+
+
+@pytest.fixture
+def realtime_servers(monkeypatch):
+    monkeypatch.setenv("REALTIME_VOICE_BIND_HOST", "127.0.0.1")
+    monkeypatch.setenv("REALTIME_VOICE_PORT", "0")
+    ready = asyncio.Queue()
+    enter = RealtimeVoiceServer.__aenter__
+
+    async def observed_enter(server):
+        await enter(server)
+        await ready.put(server)
+        return server
+
+    monkeypatch.setattr(RealtimeVoiceServer, "__aenter__", observed_enter)
+    return ready
 
 
 @pytest.mark.anyio
@@ -127,21 +147,12 @@ async def test_cli_cancellation_retains_cleanup_and_listener_until_safe_restart(
 
 
 @pytest.mark.anyio
-async def test_cli_repeated_cancellation_closes_real_realtime_and_audio_listeners(local_runtime, monkeypatch):
-    monkeypatch.setenv("REALTIME_VOICE_BIND_HOST", "127.0.0.1")
-    monkeypatch.setenv("REALTIME_VOICE_PORT", "0")
-    ready = asyncio.Queue()
-    enter = RealtimeVoiceServer.__aenter__
-
-    async def observed_enter(server):
-        await enter(server)
-        await ready.put(server)
-        return server
-
-    monkeypatch.setattr(RealtimeVoiceServer, "__aenter__", observed_enter)
+async def test_cli_repeated_cancellation_closes_real_realtime_and_audio_listeners(
+    local_runtime, realtime_servers, monkeypatch,
+):
     task, audio = await local_runtime(realtime_listener=True)
     try:
-        realtime = await asyncio.wait_for(ready.get(), 2)
+        realtime = await asyncio.wait_for(realtime_servers.get(), 2)
         realtime_port, audio_port = realtime.port, audio.port
         realtime_socket = realtime._server.sockets[0]
         listener, httpd = audio._thread, audio._httpd
@@ -157,7 +168,7 @@ async def test_cli_repeated_cancellation_closes_real_realtime_and_audio_listener
         monkeypatch.setenv("REALTIME_VOICE_PORT", str(realtime_port))
         restarted, replacement = await local_runtime(audio_port, realtime_listener=True)
         try:
-            fresh_realtime = await asyncio.wait_for(ready.get(), 2)
+            fresh_realtime = await asyncio.wait_for(realtime_servers.get(), 2)
             assert fresh_realtime.port == realtime_port
             assert await asyncio.to_thread(listener_status, audio_port) == 401
         finally:
@@ -274,6 +285,139 @@ async def test_cli_waits_for_provider_teardown_and_attempts_every_provider_close
         assert not any(t.get_name().startswith("hub-") for t in asyncio.all_tasks() if not t.done())
     finally:
         release.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        audio.stop()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("responding", [False, True])
+async def test_cli_joins_active_esphome_turn_tasks_before_closing_providers(local_runtime, monkeypatch, responding):
+    module = importlib.import_module("hub.cli.run")
+    monkeypatch.setenv("DEVICE_TRANSPORT", "hybrid")
+    monkeypatch.setenv("ESPHOME_HOST", "esphome.example.test")
+    subscribed = asyncio.Queue()
+    response_entered = asyncio.Event()
+    providers = []
+
+    class LocalProvider(_FakeSTT):
+        def __init__(self, **kwargs):
+            super().__init__()
+            self.closed = False
+            providers.append(self)
+
+        async def finish_turn(self):
+            response_entered.set()
+            await asyncio.Future()
+
+        async def aclose(self):
+            self.closed = True
+
+    class LocalSession:
+        def __init__(self, target):
+            self.client = _FakeClient()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def device_info(self):
+            return None
+
+        async def list_entities_services(self):
+            return [], []
+
+        def subscribe_voice_assistant(self, **callbacks):
+            subscribed.put_nowait(callbacks)
+            return lambda: None
+
+        async def wait_disconnected(self):
+            await asyncio.Future()
+
+    monkeypatch.setattr(module, "ESPHomeSession", LocalSession)
+    for name in ("PsfnStreamingProvider", "DeepgramLiveSTTProvider", "ElevenLabsStreamingTTS"):
+        monkeypatch.setattr(module, name, LocalProvider)
+    task, audio = await local_runtime()
+    turn_tasks = []
+    try:
+        callbacks = await asyncio.wait_for(subscribed.get(), 2)
+        await callbacks["handle_start"]("invented-turn", 0, VoiceAssistantAudioSettings(), None)
+        voice = callbacks["handle_start"].__self__
+        turn_tasks.append(voice._watchdog_task)
+        if responding:
+            response = asyncio.create_task(callbacks["handle_stop"](False))
+            turn_tasks.append(response)
+            await asyncio.wait_for(response_entered.wait(), 2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert all(turn.done() for turn in turn_tasks), "CLI abandoned an active voice turn task"
+        assert voice._active is None
+        assert all(provider.closed and not provider.active for provider in providers)
+    finally:
+        task.cancel()
+        for turn in turn_tasks:
+            turn.cancel()
+        await asyncio.gather(task, *turn_tasks, return_exceptions=True)
+        audio.stop()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("failing_provider", ["stt", "tts", "agent"])
+async def test_cli_connected_realtime_provider_failure_still_closes_every_resource(
+    local_runtime, realtime_servers, monkeypatch, failing_provider,
+):
+    closed = []
+    closed_stores = set()
+    close_store = ArtifactStore.close
+
+    def provider(name):
+        class LocalProvider(_FakeSTT):
+            def __init__(self, **kwargs):
+                super().__init__()
+
+            async def aclose(self):
+                closed.append(name)
+                if name == failing_provider:
+                    raise RuntimeError("Synthetic close failure")
+
+        return LocalProvider
+
+    def observed_close(store):
+        closed_stores.add(store)
+        close_store(store)
+
+    module = importlib.import_module("hub.devices.realtime_server")
+    monkeypatch.setattr(module, "DeepgramLiveSTTProvider", provider("stt"))
+    monkeypatch.setattr(module, "ElevenLabsStreamingTTS", provider("tts"))
+    monkeypatch.setattr(module, "PsfnStreamingProvider", provider("agent"))
+    monkeypatch.setattr(ArtifactStore, "close", observed_close)
+    task, audio = await local_runtime(realtime_listener=True)
+    listener, httpd = audio._thread, audio._httpd
+    try:
+        realtime = await asyncio.wait_for(realtime_servers.get(), 2)
+        async with connect(
+            f"ws://127.0.0.1:{realtime.port}",
+            additional_headers={"Authorization": "Bearer RT_8bQ6ZcP4fV9mR2tY7aS3dG5hJ0kL1nW_uEoXiCvBN"},
+        ) as client:
+            assert json.loads(await client.recv())["type"] == "session.ready"
+            await client.send(json.dumps({"type": "turn.start"}))
+            await client.send(json.dumps({"type": "audio", "audio": "AQACAAMA"}))
+            await client.send(json.dumps({"type": "turn.end"}))
+            async with asyncio.timeout(2):
+                while json.loads(await client.recv())["type"] != "turn.no_input":
+                    pass
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        assert closed == ["stt", "tts", "agent"]
+        assert len(closed_stores) == 3
+        assert not listener.is_alive()
+        assert httpd.socket.fileno() == -1
+        assert realtime._server is None
+    finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
         audio.stop()

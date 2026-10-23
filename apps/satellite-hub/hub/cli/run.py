@@ -122,11 +122,11 @@ async def _run_esphome_runtime(
                         handle_stop=runtime.handle_stop,
                         handle_audio=runtime.handle_audio,
                     )
-                    try:
+                    async with AsyncExitStack() as endpoint:
+                        endpoint.push_async_callback(runtime.aclose)
+                        endpoint.callback(unsubscribe)
                         typer.echo("ESPHome connected")
                         await session.wait_disconnected()
-                    finally:
-                        unsubscribe()
                 typer.echo("ESPHome connection lost; reconnecting in 2 seconds")
             except Exception:
                 typer.echo("ESPHome connection failed; reconnecting in 5 seconds")

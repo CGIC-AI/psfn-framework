@@ -4,7 +4,7 @@ from hub.storage.artifacts import ArtifactStore
 
 import asyncio
 import base64
-from contextlib import suppress
+from contextlib import AsyncExitStack, suppress
 from dataclasses import dataclass
 from datetime import datetime
 from io import BytesIO
@@ -144,17 +144,17 @@ class _RealtimeConnection:
             await self._handle_message(payload)
 
     async def aclose(self) -> None:
-        self._pending_audio = None
-        await self._cancel_reply(reason="connection_closed")
-        if self._active_turn is not None:
-            with suppress(Exception):
+        async with AsyncExitStack() as resources:
+            if self._artifact_store is not None:
+                resources.callback(self._artifact_store.close)
+            resources.push_async_callback(self._agent.aclose)
+            resources.push_async_callback(self._tts.aclose)
+            resources.push_async_callback(self._stt.aclose)
+            self._pending_audio = None
+            await self._cancel_reply(reason="connection_closed")
+            if self._active_turn is not None:
+                self._active_turn = None
                 await self._stt.abort_turn()
-            self._active_turn = None
-        await self._stt.aclose()
-        await self._tts.aclose()
-        await self._agent.aclose()
-        if self._artifact_store is not None:
-            self._artifact_store.close()
 
     async def _handle_message(self, payload: dict[str, object]) -> None:
         message_type = str(payload.get("type") or "")

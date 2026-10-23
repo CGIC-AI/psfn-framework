@@ -187,6 +187,7 @@ const log = createComponentLogger('Gateway');
 const postgresPoolOwner = new PostgresPoolOwner('gateway');
 
 assertRuntimeCredentials(process.env);
+log.info('Startup stage completed', { phase: 'runtime_credentials_validated' });
 ensureActiveTimezone();
 
 function logStartupHydrationDiagnostics(diagnostics: StartupConfigHydrationDiagnostics): void {

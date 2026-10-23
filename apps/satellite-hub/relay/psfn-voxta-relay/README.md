@@ -149,12 +149,23 @@ dotnet build relay/psfn-voxta-relay/PsfnVoxtaRelay.csproj
 
 ## Publish Windows EXE
 
+From the repository root, restore the complete locked runtime graph before
+selecting the Windows publish target:
+
 ```bash
-dotnet publish relay/psfn-voxta-relay/PsfnVoxtaRelay.csproj \
+dotnet restore apps/satellite-hub/relay/psfn-voxta-relay/PsfnVoxtaRelay.csproj --locked-mode
+dotnet publish apps/satellite-hub/relay/psfn-voxta-relay/PsfnVoxtaRelay.csproj \
+  --no-restore \
   -c Release \
-  -r win-x64 \
+  -p:RuntimeIdentifier=win-x64 \
   --self-contained true \
   -p:PublishSingleFile=true \
   -p:PublishTrimmed=false \
-  -o .artifacts/psfn-voxta-relay-win-x64
+  -o apps/satellite-hub/.artifacts/psfn-voxta-relay-win-x64
 ```
+
+Use the scalar MSBuild property `-p:RuntimeIdentifier=win-x64` for this
+multi-runtime lock. The CLI shorthand `-r win-x64` also replaces the plural
+`RuntimeIdentifiers` list with only `win-x64`, which disagrees with the locked
+`linux-x64;win-x64` graph and causes NU1004. The scalar property selects the
+publish target while preserving that complete restore graph.

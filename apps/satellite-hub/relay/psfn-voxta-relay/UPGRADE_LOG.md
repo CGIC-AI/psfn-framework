@@ -47,6 +47,14 @@ The relay explicitly includes the documented Windows x64 publish and Linux x64
 validation runtime identifiers. This keeps a self-contained Windows publish in
 the locked graph; adding a runtime identifier only at publish time otherwise
 fails NuGet's locked restore with NU1004.
+Restore the full graph with ordinary `dotnet restore --locked-mode`. Select the
+publish target with `-p:RuntimeIdentifier=win-x64`, which preserves the plural
+`RuntimeIdentifiers=linux-x64;win-x64` project property. The CLI shorthand
+`-r win-x64` also overrides that plural list with only `win-x64`; the resulting
+restore graph disagrees with the lock and fails with NU1004. This applies even
+when publishing with `--no-restore`, because the SDK can validate the restore
+graph during publish. Keep the multi-runtime lock intact.
+
 The single-file analyzer is enabled for ordinary builds too, so the SDK's
 implicit Microsoft.NET.ILLink.Tasks 8.0.32 dependency is locked rather than added
 only when publishing. This enables analysis; it does not enable trimming.
@@ -66,12 +74,28 @@ denotes `apps/satellite-hub/relay/psfn-voxta-relay.tests/PsfnVoxtaRelay.Tests.cs
 | Actual process/auth/privacy tests | `node --test apps/satellite-hub/relay/auth.test.mjs apps/satellite-hub/relay/privacy.test.mjs` |
 | Online advisory scan | `dotnet list <relay-or-harness> package --vulnerable --include-transitive` |
 
+The exact locked Windows publish sequence, from the repository root, is:
+
+```bash
+dotnet restore apps/satellite-hub/relay/psfn-voxta-relay/PsfnVoxtaRelay.csproj --locked-mode
+dotnet publish apps/satellite-hub/relay/psfn-voxta-relay/PsfnVoxtaRelay.csproj \
+  --no-restore \
+  -c Release \
+  -p:RuntimeIdentifier=win-x64 \
+  --self-contained true \
+  -p:PublishSingleFile=true \
+  -p:PublishTrimmed=false \
+  -o apps/satellite-hub/.artifacts/psfn-voxta-relay-win-x64
+```
+
 Both locked restores, both builds and both format checks passed. Builds produced
 zero warnings/errors. The real logger/artifact harness and all five actual relay
 auth/privacy process tests passed. Online NuGet scans report no vulnerable
 packages for either project, including transitive dependencies.
-Locked win-x64 restore and Release self-contained single-file publishing also
-passed from the Linux build host; the Windows executable was not run here.
+The full-graph locked restore and Release self-contained single-file publish
+above passed from the Linux build host; the Windows executable was not run here.
+The harness also evaluates the actual MSBuild publish properties and checks that
+the selected target preserves every runtime group in the committed lock.
 
 The repository's digest-pinned OSV-Scanner 2.4.0 wrapper also passed with these
 two lockfiles supplied explicitly: 33 package entries in the relay graph and 27

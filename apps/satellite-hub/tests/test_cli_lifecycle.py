@@ -12,21 +12,12 @@ import pytest
 from hub.cli.run import _run_realtime_runtime, _run_runtime
 from hub.devices.realtime_server import RealtimeVoiceServer
 from hub.storage.artifacts import ArtifactStore
+from test_http_audio_security import configure_cli_listener_environment
 
 
 @pytest.fixture
 def local_runtime(tmp_path: Path, monkeypatch):
-    for key in ("AUDIO_PUBLIC_HOST", "AUDIO_PUBLIC_PORT", "HUB_DEVICE_ASSERTION_PRIVATE_KEY_PATH"):
-        monkeypatch.delenv(key, raising=False)
-    for key, value in {
-        "DEVICE_TRANSPORT": "realtime",
-        "HUB_REALTIME_AUTH_TOKEN": "RT_8bQ6ZcP4fV9mR2tY7aS3dG5hJ0kL1nW_uEoXiCvBN",
-        "DEEPGRAM_API_KEY": "invented-dg", "ELEVENLABS_API_KEY": "invented-el",
-        "AUDIO_SERVER_BIND_HOST": "127.0.0.1", "AUDIO_SERVER_PORT": "0",
-        "AUDIO_PUBLIC_BASE_URL": "https://audio.example.test",
-        "AUDIO_RELAY_AUTH_TOKEN": "Au_xP8rQ2vK6tW0yL9eR3cF7dH1mZ5sG4bN_jTiEoCzB",
-    }.items():
-        monkeypatch.setenv(key, value)
+    configure_cli_listener_environment(monkeypatch)
     ready = asyncio.Queue()
     use_realtime_listener = False
 

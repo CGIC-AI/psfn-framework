@@ -28,8 +28,7 @@ def request(port: int, path: str, token: str | None = None, method: str = "GET")
         connection.close()
 
 
-@asynccontextmanager
-async def cli_listener(tmp_path: Path, monkeypatch, *, artifact_cleanup_interval_seconds=60):
+def configure_cli_listener_environment(monkeypatch) -> None:
     for key in ("AUDIO_PUBLIC_HOST", "AUDIO_PUBLIC_PORT", "HUB_DEVICE_ASSERTION_PRIVATE_KEY_PATH"):
         monkeypatch.delenv(key, raising=False)
     for key, value in {
@@ -39,6 +38,11 @@ async def cli_listener(tmp_path: Path, monkeypatch, *, artifact_cleanup_interval
         "AUDIO_PUBLIC_BASE_URL": "https://audio.example.test", "AUDIO_RELAY_AUTH_TOKEN": TOKEN,
     }.items():
         monkeypatch.setenv(key, value)
+
+
+@asynccontextmanager
+async def cli_listener(tmp_path: Path, monkeypatch, *, artifact_cleanup_interval_seconds=60):
+    configure_cli_listener_environment(monkeypatch)
     ready = asyncio.Future()
 
     async def endpoint_runtime(*, audio_server, **kwargs):

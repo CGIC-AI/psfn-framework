@@ -135,7 +135,7 @@ export class EidoverseMcplClient {
     options: EidoverseMcplClientOptions = {},
   ) {
     this.remainingReconnectAttempts = config.reconnectMaxAttempts;
-    this.logger = options.logger ?? SILENT_LOGGER;
+    this.logger = privateHubLogger(options.logger ?? SILENT_LOGGER);
     this.connect = options.connect ?? createWebSocketConnector;
   }
 
@@ -521,7 +521,7 @@ export class EidoverseMcplClient {
         : entry.featureSet);
     }
     if (degraded.length === 0) return;
-    this.logger.warn(`Eidoverse MCPL feature sets degraded: ${degraded.join(", ")}`);
+    this.logger.warn("Eidoverse MCPL feature sets degraded", { degradedSets: degraded.length });
   }
 
   /**
@@ -800,3 +800,4 @@ function createWebSocketConnector(url: string): EidoverseMcplSocket {
     onError: (handler) => { socket.on("error", () => handler()); },
   };
 }
+import { privateHubLogger } from "../shared/private-log.js";

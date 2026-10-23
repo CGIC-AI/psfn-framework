@@ -1,3 +1,4 @@
+import { hubConsole as console, privateHubLogger } from "../shared/private-log.js";
 import { createHash } from "node:crypto";
 
 import type { EidoverseAddressedUtterance } from "./eidoverse-adapter.js";
@@ -46,6 +47,7 @@ class EidoverseWakeRuntime {
     private readonly logger: EidoverseWakeRuntimeLogger,
     delay?: EidoversePollDelay,
   ) {
+    this.logger = privateHubLogger(logger);
     this.filter = new EidoverseWakeFilter(config, {
       onWake: async (event) => this.handleWake(event),
     });

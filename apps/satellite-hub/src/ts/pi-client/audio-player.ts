@@ -1,3 +1,4 @@
+import { hubConsole as console } from "../shared/private-log.js";
 import type { ChildProcessByStdio } from "node:child_process";
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";

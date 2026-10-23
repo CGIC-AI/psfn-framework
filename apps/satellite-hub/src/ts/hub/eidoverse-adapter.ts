@@ -1,3 +1,4 @@
+import { hubConsole as console, privateHubLogger } from "../shared/private-log.js";
 import { createHash } from "node:crypto";
 
 import type { PsfnSatelliteClaimConfig } from "./satellite-claim.js";
@@ -112,8 +113,8 @@ export type EidoverseTravelOutcome =
   | { accepted: false; world: string; reason: EidoverseTravelRefusal };
 
 export interface EidoverseEmbodiedSessionLogger {
-  warn(message: string): void;
-  info?(message: string): void;
+  warn(message: string, fields?: Record<string, unknown>): void;
+  info?(message: string, fields?: Record<string, unknown>): void;
 }
 
 /** The companion's own reading of the world it has a body in. */
@@ -263,6 +264,7 @@ export class EidoverseEmbodiedSessionAdapter {
     private readonly config: EidoverseEmbodiedSessionConfig,
     private readonly deps: EidoverseEmbodiedSessionDependencies,
   ) {
+    this.deps = { ...deps, logger: privateHubLogger(deps.logger ?? console) };
     this.worldName = requireNonEmpty(config.worldName, "Eidoverse world name");
     this.currentWorldName = this.worldName;
     requireNonEmpty(config.agentName, "Eidoverse agent name");
@@ -316,12 +318,12 @@ export class EidoverseEmbodiedSessionAdapter {
     });
     if (!binding) {
       (this.deps.logger ?? console).warn(
-        `Eidoverse world emanation "${claim.satelliteId}/${claim.endpointId}" has no active Hub device enrollment; wake turns carry no device assertion`,
+        "Eidoverse world emanation has no active Hub device enrollment; wake turns carry no device assertion",
       );
       return null;
     }
     this.log(
-      `Eidoverse world emanation enrolled as Hub device "${binding.deviceId}" (v${binding.enrollmentVersion}, place ${binding.placeId ?? "unbound"})`,
+      "Eidoverse world emanation enrolled", { deviceId: binding.deviceId },
     );
     return binding;
   }
@@ -487,7 +489,7 @@ export class EidoverseEmbodiedSessionAdapter {
         // The place map binds regions to places, not coordinates: a bare
         // region cannot be walked to. Say so instead of answering a silent
         // accept (psfn-framework-zsoo8).
-        this.log(`Eidoverse body walk_to skipped: region "${region}" in world "${this.currentWorldName}" has no position`);
+        this.log("Eidoverse body walk_to no_position");
         return {
           accepted: true,
           world: this.currentWorldName,
@@ -507,13 +509,12 @@ export class EidoverseEmbodiedSessionAdapter {
     if (result === "pending") {
       body.noteWhenDone(run);
       this.currentRegion = region;
-      this.log(`Eidoverse body walk_to (${target.x}, ${target.z}) in world "${this.currentWorldName}" still walking after bounded wait`);
+      this.log("Eidoverse body walk_to walking");
       // The deferred completion is also the only proof a long walk ended;
       // log it the same way a walk that fit the wait is logged
       // (psfn-framework-f5vd8).
-      const world = this.currentWorldName;
       void run.then((settled) => {
-        this.log(this.describeWalkResult(settled, world));
+        this.log("Eidoverse body walk_to completed", { outcome: settled.outcome });
       }).catch(() => undefined);
       return {
         accepted: true,
@@ -527,7 +528,7 @@ export class EidoverseEmbodiedSessionAdapter {
       : result.outcome === "interrupted-or-timed-out" ? "interrupted" : "failed";
     if (status === "arrived") this.currentRegion = region;
     const position = result.position;
-    this.log(this.describeWalkResult(result, this.currentWorldName));
+    this.log("Eidoverse body walk_to completed", { outcome: result.outcome });
     return {
       accepted: true,
       world: this.currentWorldName,
@@ -559,30 +560,21 @@ export class EidoverseEmbodiedSessionAdapter {
       body.noteWhenDone(run);
       return { accepted: true, verb, outcome: "pending", reply: null };
     }
-    this.log(`Eidoverse body ${verb} ${result.outcome} in world "${this.currentWorldName}"`);
+    this.log("Eidoverse body action completed", { outcome: result.outcome });
     return { accepted: true, verb, outcome: result.outcome, reply: result.reply };
-  }
-
-  /** One info line per settled walk, whether it fit the bounded wait or not. */
-  private describeWalkResult(result: EidoverseBodyRunResult, world: string): string {
-    const status: EidoverseAvatarWalkStatus = result.outcome === "arrived"
-      ? "arrived"
-      : result.outcome === "interrupted-or-timed-out" ? "interrupted" : "failed";
-    const position = result.position;
-    return `Eidoverse body walk_to ${status}${position ? ` at (${position.x}, ${position.z})` : ""} in world "${world}"`;
   }
 
   private refuseMove(
     reason: Extract<EidoverseAvatarMoveOutcome, { accepted: false }>["reason"],
   ): EidoverseAvatarMoveOutcome {
-    (this.deps.logger ?? console).warn(`Eidoverse move refused: ${reason}`);
+    (this.deps.logger ?? console).warn("Eidoverse move refused", { outcome: reason });
     return { accepted: false, world: this.currentWorldName, reason };
   }
 
-  private log(message: string): void {
+  private log(message: string, fields?: Record<string, unknown>): void {
     const logger = this.deps.logger;
-    if (logger?.info) logger.info(message);
-    else if (!logger) console.info(message);
+    if (logger?.info) logger.info(message, fields);
+    else if (!logger) console.info(message, fields);
   }
 
   async handleAddressedUtterance(input: EidoverseAddressedUtterance): Promise<string | null> {
@@ -697,7 +689,7 @@ export class EidoverseEmbodiedSessionAdapter {
   }
 
   private refuseTravel(reason: EidoverseTravelRefusal): EidoverseTravelOutcome {
-    (this.deps.logger ?? console).warn(`Eidoverse travel refused: ${reason}`);
+    (this.deps.logger ?? console).warn("Eidoverse travel refused", { outcome: reason });
     return { accepted: false, world: this.currentWorldName, reason };
   }
 

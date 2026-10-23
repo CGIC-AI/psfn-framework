@@ -78,8 +78,8 @@ test("ambient chat naming the companion wakes it; its own echo and untagged acts
 
   assert.deepEqual(target.turns, ["visitor: Nova, come over here", "visitor: @nova by tag"]);
   assert.equal(info.length, 2, info.join("\n"));
-  assert.match(info[0]!, /^Eidoverse wake: message m1 from visitor \(human\) kind=mention reason=name-match text="visitor: Nova, come over here"/u);
-  assert.match(info[1]!, /^Eidoverse wake: message m5 from visitor \(human\) kind=mention reason=tag:chat:mention,chat:addressed/u);
+  assert.deepEqual(info.map(line => JSON.parse(line)), Array.from({ length: 2 }, () => ({ level: "info", event: "Eidoverse wake accepted" })));
+  assert.doesNotMatch(info.join("\n"), /visitor|Nova|m1|m5/);
 });
 
 test("the world's own human/ai classification rides every wake and is learned for every chat line", async () => {
@@ -123,10 +123,8 @@ test("a door-tagged mention that explicitly @-addresses another participant is s
 
   assert.deepEqual(target.turns, []);
   assert.equal(info.length, 1, info.join("\n"));
-  assert.match(
-    info[0]!,
-    /^Eidoverse wake skipped: message m1 @-addresses another participant text="@nova-kube come over here"/u,
-  );
+  assert.deepEqual(JSON.parse(info[0]!), { level: "info", event: "Eidoverse wake skipped: addressed another participant" });
+  assert.doesNotMatch(info[0]!, /nova-kube|come over here|m1/);
 });
 
 test("an explicit @-address of this body's door handle (an alias) is its own mention, markdown or not (q1kit, mech8)", async () => {

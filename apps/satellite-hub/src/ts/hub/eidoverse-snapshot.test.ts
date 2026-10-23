@@ -201,6 +201,8 @@ test("a served frame becomes a persisted vision capture on the door's exact quer
   assert.equal(capture?.bytes, PNG_BYTES.length);
   assert.equal(capture?.dataBase64, PNG_BYTES.toString("base64"));
   assert.deepEqual(fs.readFileSync(capture?.filePath ?? ""), PNG_BYTES);
+  assert.equal(fs.statSync(capture!.filePath).mode & 0o777, 0o600);
+  assert.equal(fs.statSync(path.dirname(capture!.filePath)).mode & 0o777, 0o700);
   assert.deepEqual(server.requestedUrls, [
     "/snap?world=demo-world&follow=Aster+Example&view=first",
   ]);
@@ -374,7 +376,7 @@ test("a capture source that throws never fails the turn", async () => {
   );
   adapter.disconnect();
   assert.equal(agent.calls[0]?.channel?.visionCaptures, undefined);
-  assert.deepEqual(warnings, ["Eidoverse snapshot failed"]);
+  assert.deepEqual(warnings.map(line => JSON.parse(line)), [{ level: "warn", event: "Eidoverse snapshot failed" }]);
 });
 
 function createAdapter(

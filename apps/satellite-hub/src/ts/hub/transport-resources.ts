@@ -2,6 +2,7 @@ import fs from "node:fs";
 import type http from "node:http";
 import path from "node:path";
 import WebSocket, { type RawData } from "ws";
+import { awaitWithAbort, throwIfAborted } from "../shared/abort.js";
 
 // Deployment admission defaults and their rationale are documented in the Hub
 // README. HUB_RESOURCE_LIMITS_PATH owns overrides; tests use the same loader.
@@ -27,6 +28,8 @@ export const DEFAULT_HUB_LIMITS = Object.freeze({
   negotiationTtlMs: 30_000,
   audioEndpointSilenceMs: 800,
   audioSpeechRmsThreshold: 25,
+  maxProviderOperations: 8,
+  providerTimeoutMs: 30_000,
 });
 
 export type HubResourceLimits = { -readonly [K in keyof typeof DEFAULT_HUB_LIMITS]: number };
@@ -105,10 +108,33 @@ export class HubResources {
   private authenticated = 0;
   private unauthenticated = 0;
   private requests = 0;
+  private closed = false;
+  private readonly providers = new Map<AbortController, Promise<unknown>>();
   readonly limits: HubResourceLimits;
   constructor(limits?: Partial<HubResourceLimits>) { this.limits = resolveHubResourceLimits(limits); }
 
+  async runProvider<T>(operation: (signal: AbortSignal) => Promise<T>, parent?: AbortSignal): Promise<T> {
+    if (this.closed || this.providers.size >= this.limits.maxProviderOperations) throw new HubRequestError(429, "Hub provider quota exceeded");
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error("Hub provider deadline exceeded")), this.limits.providerTimeoutMs);
+    const signal = parent ? AbortSignal.any([parent, controller.signal]) : controller.signal;
+    const pending = Promise.resolve().then(() => { throwIfAborted(signal); return operation(signal); });
+    this.providers.set(controller, pending);
+    const release = (): void => { clearTimeout(timer); this.providers.delete(controller); };
+    void pending.then(release, release);
+    return await awaitWithAbort(pending, signal);
+  }
+
+  providerAvailable(): boolean { return !this.closed && this.providers.size < this.limits.maxProviderOperations; }
+
+  async close(): Promise<void> {
+    this.closed = true;
+    for (const controller of this.providers.keys()) controller.abort(new Error("Hub shutting down"));
+    await awaitWithAbort(Promise.allSettled(this.providers.values()), AbortSignal.timeout(this.limits.authenticationTimeoutMs));
+  }
+
   admitSocket(authenticated: boolean): HubSocketAdmission | null {
+    if (this.closed) return null;
     if (authenticated ? this.authenticated >= this.limits.maxAuthenticatedConnections
       : this.unauthenticated >= this.limits.maxUnauthenticatedConnections) return null;
     if (authenticated) this.authenticated += 1; else this.unauthenticated += 1;
@@ -130,7 +156,7 @@ export class HubResources {
   }
 
   admitHttp(request: http.IncomingMessage, response: http.ServerResponse): boolean {
-    if (this.requests >= this.limits.maxHttpRequests) {
+    if (this.closed || this.requests >= this.limits.maxHttpRequests) {
       rejectHttp(request, response, new HubRequestError(429, "Hub request quota exceeded"));
       return false;
     }

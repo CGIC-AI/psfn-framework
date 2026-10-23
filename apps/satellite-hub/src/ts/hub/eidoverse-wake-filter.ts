@@ -1,3 +1,4 @@
+import { hubConsole as console } from "../shared/private-log.js";
 export type EidoversePingKind =
   | "mention"
   | "whisper"

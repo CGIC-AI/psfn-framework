@@ -630,7 +630,7 @@ test("gateway audio publish failure is sanitized and does not abort local audio 
     assert.equal(backplane.audioOutputRequests.length, 3);
     assert.deepEqual(warnings, Array.from(
       { length: 3 },
-      () => ["Companion audio output publish failed"],
+      () => [JSON.stringify({ level: "warn", event: "Companion audio output publish failed" })],
     ));
     assert.doesNotMatch(JSON.stringify(warnings), /sensitive-audio|c2Vuc2l0aXZlLWF1ZGlv/u);
   } finally {

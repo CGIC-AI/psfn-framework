@@ -1,3 +1,4 @@
+import { hubConsole as console } from "../shared/private-log.js";
 import { loadPiClientConfig, resolveProjectRoot } from "../shared/env.js";
 import { PiRealtimeClient } from "./client.js";
 import { PiClientApiServer } from "./mic-control-server.js";

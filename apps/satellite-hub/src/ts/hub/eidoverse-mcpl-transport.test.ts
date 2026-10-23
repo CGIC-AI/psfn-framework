@@ -194,9 +194,9 @@ test("a door that degrades a selected feature set is heard, named, and failed cl
     await client.start();
     await door.waitForHandshake();
     assert.deepEqual(
-      warnings.filter((message) => message.includes("degraded")),
-      ["Eidoverse MCPL feature sets degraded: eidoverse.travel [channels.streaming]"],
-      "the drifted set is named, with no door prose",
+      warnings.filter((message) => message.includes("degraded")).map(line => JSON.parse(line)),
+      [{ level: "warn", event: "Eidoverse MCPL feature sets degraded", degradedSets: 1 }],
+      "degraded sets are counted without door prose",
     );
     assert.equal(
       warnings.some((message) => message.includes("never heard of")),
@@ -241,7 +241,7 @@ test("a refused or unreadable policy receipt degrades every selected feature set
       await client.start();
       await door.waitForHandshake();
       assert.equal(
-        warnings.includes(testCase.warning),
+        warnings.some(line => JSON.parse(line).event === testCase.warning),
         true,
         `${testCase.label} receipts are reported once, content-free`,
       );

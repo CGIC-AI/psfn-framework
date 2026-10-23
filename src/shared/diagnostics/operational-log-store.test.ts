@@ -62,7 +62,7 @@ describe('durable operational metadata', () => {
     const body = readFileSync(join(store.directory, readdirSync(store.directory)[0]!), 'utf8');
     const record = JSON.parse(body);
     expect(record.metadata.eligibility).toEqual({ thoughtCount: 3, blockedBy: ['foreground_active'], available: false });
-    expect(record.metadata.error.errors[0].summary).toBe('lease renewal rejected');
+    expect(record.metadata.error.errors[0]).toEqual({ name: 'Error', summary: '[REDACTED_ERROR_DETAIL]' });
     expect(body).not.toMatch(/private prompt|private response|private-credential/);
   });
 

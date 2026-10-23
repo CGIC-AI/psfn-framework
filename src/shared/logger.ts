@@ -5,7 +5,7 @@
 
 import { createLogger, format, transports } from 'winston';
 import { OperationalLogStore, type DiagnosticLogRecord } from './diagnostics/operational-log-store.js';
-import { sanitizeDiagnosticText, sanitizeDiagnosticValue } from './diagnostics/redaction.js';
+import { sanitizeDiagnosticText, sanitizeDiagnosticValue, sanitizeOperationalMetadata } from './diagnostics/redaction.js';
 
 export type { DiagnosticLogRecord } from './diagnostics/operational-log-store.js';
 
@@ -81,7 +81,7 @@ export function closeOperationalLogPersistence(): void {
   try {
     operationalLogStore?.close();
   } catch (error) {
-    process.stderr.write(`Operational metadata flush failed: ${sanitizeDiagnosticText(error)}\n`);
+    process.stderr.write('Operational metadata flush failed; inspect sink health\n');
     throw error;
   }
 }
@@ -119,7 +119,7 @@ function captureDiagnosticLogRecord(info: Record<string, unknown>): void {
     operationalLogStore?.record(record, meta);
   } catch (error) {
     // Never recurse through the logger when its own durable sink has failed.
-    process.stderr.write(`Operational metadata append failed: ${sanitizeDiagnosticText(error)}\n`);
+    process.stderr.write('Operational metadata append failed; inspect sink health\n');
     throw error;
   }
   if (level !== 'warn' && level !== 'error') return;
@@ -134,6 +134,28 @@ const diagnosticCaptureFormat = format((info) => {
   return info;
 });
 
+// Sanitize once before capture, formatting, and every attached transport.
+const privacyFormat = format((info) => {
+  // Build a fresh record: Winston's symbol-keyed splat retains the original
+  // arguments, and Error has non-enumerable stack/cause fields. Neither may
+  // bypass sanitation when a transport applies its own formatter.
+  const safe: typeof info = { level: info.level, message: '' };
+  safe[Symbol.for('level')] = info[Symbol.for('level')];
+  if (info instanceof Error) {
+    safe.errorName = ['Error', 'TypeError', 'RangeError', 'SyntaxError', 'URIError', 'AggregateError', 'AbortError', 'TimeoutError'].includes(info.name) ? info.name : 'Error';
+    safe.message = 'Operation failed';
+  } else {
+    safe.message = sanitizeDiagnosticText(info.message);
+  }
+  if (typeof info.component === 'string') safe.component = sanitizeDiagnosticText(info.component);
+  if (typeof info.timestamp === 'string') safe.timestamp = sanitizeDiagnosticText(info.timestamp);
+  for (const key of Object.keys(info)) {
+    if (['message', 'component', 'level', 'timestamp'].includes(key)) continue;
+    safe[key] = (sanitizeOperationalMetadata({ [key]: info[key] }) as Record<string, unknown>)[key];
+  }
+  return safe;
+});
+
 export const logger = createLogger({
   level: LOG_LEVEL,
   levels: {
@@ -145,6 +167,7 @@ export const logger = createLogger({
   },
   format: format.combine(
     format.timestamp({ format: 'HH:mm:ss' }),
+    privacyFormat(),
     diagnosticCaptureFormat(),
     format.printf(({ timestamp, level, message, component, ...meta }) => {
       const tag = component ? `[${component}]` : '';

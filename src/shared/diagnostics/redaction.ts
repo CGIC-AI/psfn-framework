@@ -6,7 +6,9 @@ const SECRET_KEY_PATTERN = /(?:authorization|api[_-]?key|apikey|access[_-]?token
 const CAPABILITY_SECRET_KEY_PATTERN = /(?:^|[_-])(?:permit(?:[_-]?(?:id|token))?|grant[_-]?(?:id|digest)|csrf(?:[_-]?token)?)(?:$|[_-])|^x-psfn-(?:csrf|escalation(?:-grant)?)$/i;
 const CAMEL_CAPABILITY_SECRET_KEY_PATTERN = /(?:Permit(?:Id|Token)?|Grant(?:Id|Digest)|Csrf(?:Token)?)$|^(?:permit(?:Id|Token)?|grant(?:Id|Digest)|csrf(?:Token)?)$/;
 const EXACT_SECRET_KEY_PATTERN = /^(?:auth|code|key|session|sig|signature)$/i;
-const CONTENT_KEY_PATTERN = /(?:content|conversation|message|messages|prompt|response|transcript|utterance|delta|partialresult|body|text)/i;
+const CONTENT_KEY_PATTERN = /(?:content|conversation|message|messages|prompt|response|transcript|utterance|delta|partialresult|body|text|attachment|filename|filepath|originalname|excerpt)/i;
+const OPERATIONAL_STRING_KEY = /^(?:requestId|correlationId|companionId|runId|jobId|receiptId|proposalId|taskId|routeId|siteId|eventId|providerResponseId|provider|backendProvider|servingProvider|model|modelSlot|slotKey|component|status|state|phase|action|outcome|code|errorName|toolName|process|source|timestamp|finishReason|purpose|digest|blockedBy)$/;
+const OPERATIONAL_STRING_VALUE = /^[a-zA-Z0-9][a-zA-Z0-9._:/+ -]{0,127}$/;
 
 function truncateDiagnosticText(value: string): string {
   if (value.length <= MAX_DIAGNOSTIC_TEXT_CHARS) return value;
@@ -24,12 +26,13 @@ export function isDiagnosticContentKey(key: string): boolean {
 }
 
 export function sanitizeDiagnosticText(input: unknown): string {
-  const raw = String(input ?? '').trim();
+  const raw = String(input ?? '').trim().replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/gu,
+    character => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`);
   if (!raw) return '';
 
   const redacted = redactSecretsInText(raw)
     .replace(/\b(user|assistant)\s+(said|wrote|asked)\s*[:=]\s*.+$/gi, (_match, actor, verb) => `${actor} ${verb}: ${CONTENT_VALUE}`)
-    .replace(/\b(private\s+message|message\s+body|conversation|transcript|prompt|response|content)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\n\r;]+)/gi, (_match, label) => `${label}=${CONTENT_VALUE}`);
+    .replace(/\b(private\s+message|message\s+body|conversation|transcript|prompt|response|reply|attachment|filename|content|text)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\n\r;]+)/gi, (_match, label) => `${label}=${CONTENT_VALUE}`);
 
   return truncateDiagnosticText(redacted);
 }
@@ -91,18 +94,20 @@ export function sanitizeOperationalMetadata(value: unknown): unknown {
     if (key && (isDiagnosticSecretKey(key) || isDiagnosticContentKey(key))) {
       return sanitizeDiagnosticValue(entry, key);
     }
+    if (typeof entry === 'string') return OPERATIONAL_STRING_KEY.test(key) && OPERATIONAL_STRING_VALUE.test(entry)
+      ? sanitizeDiagnosticText(entry) : CONTENT_VALUE;
     if (entry === null || typeof entry !== 'object') return sanitizeDiagnosticValue(entry, key);
     if (seen.has(entry)) return '[CIRCULAR]';
     seen.add(entry);
     if (entry instanceof Error) {
       return {
-        name: entry.name,
-        summary: sanitizeDiagnosticText(entry.message),
+        name: ['Error', 'TypeError', 'RangeError', 'SyntaxError', 'URIError', 'AggregateError', 'AbortError', 'TimeoutError'].includes(entry.name) ? entry.name : 'Error',
+        summary: '[REDACTED_ERROR_DETAIL]',
         ...(entry.cause !== undefined ? { cause: visit(entry.cause) } : {}),
         ...(entry instanceof AggregateError ? { errors: visit(entry.errors) } : {}),
       };
     }
-    if (Array.isArray(entry)) return entry.map(item => visit(item));
+    if (Array.isArray(entry)) return entry.map(item => visit(item, key));
     return Object.fromEntries(Object.entries(entry).map(([field, fieldValue]) => [field, visit(fieldValue, field)]));
   };
   return visit(value);

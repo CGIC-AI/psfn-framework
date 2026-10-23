@@ -171,7 +171,7 @@ test("an unmapped world stays put and never fabricates a place", async () => {
     assert.deepEqual(outcome, { accepted: false, world: "commons", reason: "unmapped_world" });
     assert.deepEqual(door.requested, [], "an unmapped destination never reaches the wire");
     assert.equal(await placeIdOfNextTurn(session, agent, "after"), "eidoverse:commons");
-    assert.deepEqual(warnings, ["Eidoverse travel refused: unmapped_world"]);
+    assert.deepEqual(warnings.map(line => JSON.parse(line)), [{ level: "warn", event: "Eidoverse travel refused", outcome: "unmapped_world" }]);
   } finally {
     session.disconnect();
   }
@@ -187,7 +187,7 @@ test("a door that refuses or times out leaves the placeId exactly where it was",
     const outcome = await session.travelTo("annex");
     assert.deepEqual(outcome, { accepted: false, world: "commons", reason: "refused" });
     assert.equal(await placeIdOfNextTurn(session, agent, "after"), "eidoverse:commons");
-    assert.deepEqual(warnings, ["Eidoverse travel refused: refused"]);
+    assert.deepEqual(warnings.map(line => JSON.parse(line)), [{ level: "warn", event: "Eidoverse travel refused", outcome: "refused" }]);
   } finally {
     session.disconnect();
   }

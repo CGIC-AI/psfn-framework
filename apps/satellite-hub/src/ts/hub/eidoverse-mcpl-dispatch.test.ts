@@ -83,10 +83,9 @@ test("the wake dispatch queue drops past its budget and accounts for it content-
     "drops are counted per batch and per message",
   );
   assert.deepEqual(
-    warnings,
+    warnings.map(line => JSON.parse(line)),
     [
-      "Eidoverse MCPL wake dispatch queue is full (limit 2); "
-      + "episode dropped batches 1, dropped messages 2; cumulative dropped batches 1, dropped messages 2",
+      { level: "warn", event: "Eidoverse MCPL wake dispatch queue full", limit: 2, episodeDroppedBatches: 1, episodeDroppedMessages: 2, droppedBatches: 1, droppedMessages: 2 },
     ],
     "one bounded line per overflow episode, carrying counts only",
   );
@@ -100,10 +99,9 @@ test("the wake dispatch queue drops past its budget and accounts for it content-
   await waitFor(() => target.started.length === 3, "the queued batches to run");
   assert.deepEqual(target.started.length, 3, "only the batches inside the budget started a turn");
   assert.equal(warnings.length, 2, "the episode reports its totals once the backlog drains");
-  assert.equal(
-    warnings[1],
-    "Eidoverse MCPL wake dispatch queue drained; "
-      + "episode dropped batches 2, dropped messages 3; cumulative dropped batches 2, dropped messages 3",
+  assert.deepEqual(
+    JSON.parse(warnings[1]!),
+    { level: "warn", event: "Eidoverse MCPL wake dispatch queue drained", episodeDroppedBatches: 2, episodeDroppedMessages: 3, droppedBatches: 2, droppedMessages: 3 },
     "the closing line carries what the opening line could not yet know",
   );
 
@@ -122,17 +120,15 @@ test("the wake dispatch queue drops past its budget and accounts for it content-
   wake.deliver([knock("m9")]);
   wake.deliver([knock("m10")]);
   wake.deliver([knock("m11")]);
-  assert.equal(
-    warnings[2],
-    "Eidoverse MCPL wake dispatch queue is full (limit 2); "
-      + "episode dropped batches 1, dropped messages 1; cumulative dropped batches 3, dropped messages 4",
+  assert.deepEqual(
+    JSON.parse(warnings[2]!),
+    { level: "warn", event: "Eidoverse MCPL wake dispatch queue full", limit: 2, episodeDroppedBatches: 1, episodeDroppedMessages: 1, droppedBatches: 3, droppedMessages: 4 },
   );
   target.open();
   await waitFor(() => warnings.length === 4, "the second episode to drain");
-  assert.equal(
-    warnings[3],
-    "Eidoverse MCPL wake dispatch queue drained; "
-      + "episode dropped batches 1, dropped messages 1; cumulative dropped batches 3, dropped messages 4",
+  assert.deepEqual(
+    JSON.parse(warnings[3]!),
+    { level: "warn", event: "Eidoverse MCPL wake dispatch queue drained", episodeDroppedBatches: 1, episodeDroppedMessages: 1, droppedBatches: 3, droppedMessages: 4 },
   );
   await wake.close();
 });

@@ -1,3 +1,4 @@
+import { hubConsole as console } from "../shared/private-log.js";
 import type { CompanionBridgeConfig } from "../shared/env.js";
 import type {
   ApprovalRequestedMessage,

@@ -1,3 +1,4 @@
+import { hubConsole as console } from "../shared/private-log.js";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import http from "node:http";
@@ -11,6 +12,7 @@ import {
   throwIfAborted,
 } from "../shared/abort.js";
 import { AsyncQueue } from "../shared/async-queue.js";
+import { startPrivateArtifactRetention } from "../shared/private-artifacts.js";
 import type { HubConfig } from "../shared/env.js";
 import {
   decodeAudioChunk,
@@ -114,6 +116,7 @@ export class RealtimeHubServer {
   private readonly locationGeofence: HubLocationGeofence | null;
   private readonly companionBrowser: CompanionBrowserBridge | null;
   private readonly access: HubAccess;
+  private readonly stopArtifactRetention: () => void;
 
   constructor(
     private readonly config: HubConfig,
@@ -225,6 +228,7 @@ export class RealtimeHubServer {
       if (!config.deepgramApiKey) throw new Error("Deepgram STT is not configured for this hub");
       return transcribePcmClip(config.deepgramApiKey, pcm, signal);
     });
+    this.stopArtifactRetention = startPrivateArtifactRetention([config.artifactsRoot, config.voxta.audioFolder].filter((root): root is string => Boolean(root)));
   }
 
   private readonly realtimeStt: (pcm: Buffer, signal: AbortSignal) => Promise<TranscriptResult>;
@@ -394,27 +398,47 @@ export class RealtimeHubServer {
     return this.eidoverse.travelTo(world);
   }
 
-  async close(): Promise<void> {
-    this.eidoverse?.disconnect();
-    await this.companionBrowser?.close();
-    await this.companion?.stop();
-    await this.agent.close();
-    await this.tts.close();
-    await new Promise<void>((resolve, reject) => {
-      this.wsServer.close((error) => (error ? reject(error) : resolve()));
-    });
-    await this.voxta.close();
-    await new Promise<void>((resolve, reject) => {
-      this.httpServer.close((error) => (error ? reject(error) : resolve()));
-    });
+  private closing: Promise<void> | undefined;
+
+  close(): Promise<void> {
+    return this.closing ??= this.shutdown();
+  }
+
+  private async shutdown(): Promise<void> {
+    const providers = this.resources.close();
+    void providers.catch(() => undefined);
+    const steps: Array<() => unknown> = [
+      this.stopArtifactRetention,
+      () => this.eidoverse?.disconnect(),
+      () => this.companionBrowser?.close(),
+      () => this.companion?.stop(),
+      () => this.agent.close(),
+      () => this.tts.close(),
+      () => {
+        for (const socket of this.wsServer.clients) {
+          socket.close(1001, "Hub shutting down");
+          const timer = setTimeout(() => socket.terminate(), this.resources.limits.authenticationTimeoutMs);
+          timer.unref(); socket.once("close", () => clearTimeout(timer));
+        }
+        return new Promise<void>((resolve, reject) => this.wsServer.close(error => error ? reject(error) : resolve()));
+      },
+      () => this.voxta.close(),
+      () => new Promise<void>((resolve, reject) => this.httpServer.close(error => {
+        if (error && (error as NodeJS.ErrnoException).code !== "ERR_SERVER_NOT_RUNNING") reject(error); else resolve();
+      })),
+      () => providers,
+    ];
+    const results = await Promise.allSettled(steps.map(step => Promise.resolve().then(step)));
+    const errors = results.filter((result): result is PromiseRejectedResult => result.status === "rejected").map(result => result.reason);
+    if (errors.length) throw new AggregateError(errors, "Hub shutdown failed");
   }
 }
 
 class DeepgramVoxtaStt implements VoxtaSttAdapter {
   constructor(private readonly apiKey: string) {}
 
-  async transcribePcm(input: { pcm: Buffer }): Promise<{ text: string; provider: string }> {
-    const transcript = await transcribePcmClip(this.apiKey, input.pcm);
+  async transcribePcm(input: { pcm: Buffer; signal: AbortSignal }): Promise<{ text: string; provider: string }> {
+    const transcript = await transcribePcmClip(this.apiKey, input.pcm, input.signal);
     return {
       text: transcript.text,
       provider: transcript.provider,
@@ -466,6 +490,8 @@ class RealtimeConnection {
   private readonly flow: HubSocketFlow;
   private readonly audioInput: HubAudioBuffer;
   private readonly lifetime = new AbortController();
+  private audioTask: Promise<void> | null = null;
+  private audioAbort: AbortController | null = null;
   private replyAbort = false;
   private replySequence = 0;
   private replyTask: Promise<void> | null = null;
@@ -649,7 +675,7 @@ class RealtimeConnection {
           this.attachSatellite(undefined, ceilUnregisteredCapabilities(message.capabilities));
         }
         this.sessions.touch(this.sessionId);
-        console.log(`hello device=${this.deviceId} session=${this.sessionId}`);
+        console.info("hub.realtime.hello", { deviceId: this.deviceId, sessionId: this.sessionId });
         await this.send({
           type: "hello.ack",
           sessionId: this.sessionId,
@@ -670,6 +696,7 @@ class RealtimeConnection {
         await this.send({ type: "pong", sentAt: message.sentAt });
         return;
       case "interrupt":
+        this.audioAbort?.abort(new Error("Audio interrupted"));
         this.audioInput.clear();
         if (!await this.cancelReply("client_interrupt")) {
           await this.send({ type: "assistant.interrupted", sessionId: this.sessionId });
@@ -691,13 +718,15 @@ class RealtimeConnection {
         if (typeof message.audio !== "string" || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(message.audio)) {
           throw new Error("Invalid PCM base64");
         }
-        if (this.audioInput.append(decodeAudioChunk(message.audio))) await this.finishAudioInput();
+        if (this.audioTask || this.replyTask) return;
+        if (this.audioInput.append(decodeAudioChunk(message.audio))) this.finishAudioInput();
         return;
       case "turn.start":
+        if (this.audioTask || this.replyTask) return;
         this.audioInput.start();
         return;
       case "turn.end":
-        await this.finishAudioInput();
+        this.finishAudioInput();
         return;
       case "approval.decision":
         await this.handleApprovalDecision(message);
@@ -948,7 +977,7 @@ class RealtimeConnection {
       provider: "typed",
       latencyMs: 0,
     });
-    writeJson(turn.transcriptPath, {
+    writeJson(turn, turn.transcriptPath, {
       text: userText,
       provider: "typed",
       latencyMs: 0,
@@ -1000,7 +1029,8 @@ class RealtimeConnection {
       if (!this.config.deepgramApiKey) {
         throw new Error("Deepgram STT is not configured for this hub");
       }
-      const transcript = await this.transcribe(decodeAudioChunk(message.audio), this.lifetime.signal);
+      const pcm = decodeAudioChunk(message.audio);
+      const transcript = await this.resources.runProvider(signal => this.transcribe(pcm, signal), this.lifetime.signal);
       await this.send({
         type: "relay.stt.result",
         requestId: message.requestId,
@@ -1271,14 +1301,20 @@ class RealtimeConnection {
     }
   }
 
-  private async finishAudioInput(): Promise<void> {
+  private finishAudioInput(): void {
     const pcm = this.audioInput.finish();
-    if (pcm.length === 0) return;
-    const event = await this.transcribe(pcm, this.lifetime.signal);
-    if (this.socket.readyState !== WebSocket.OPEN) return;
-    const turn = this.ensureActiveTurn();
-    appendPcm(turn, pcm);
-    await this.handleUtterance(event);
+    if (pcm.length === 0 || this.audioTask) return;
+    const controller = new AbortController();
+    this.audioAbort = controller;
+    const task = this.resources.runProvider(signal => this.transcribe(pcm, signal), AbortSignal.any([this.lifetime.signal, controller.signal]))
+      .then(async event => {
+        if (this.socket.readyState !== WebSocket.OPEN || this.lifetime.signal.aborted || controller.signal.aborted) return;
+        const turn = this.ensureActiveTurn(); appendPcm(turn, pcm);
+        await this.handleUtterance(event);
+      }).catch(async () => {
+        if (!this.lifetime.signal.aborted && !controller.signal.aborted) await this.send({ type: "error-event", data: { message: "Speech recognition unavailable" } });
+      }).finally(() => { if (this.audioTask === task) { this.audioTask = null; this.audioAbort = null; } });
+    this.audioTask = task;
   }
 
   private async handleUtterance(event: TranscriptResult): Promise<void> {
@@ -1291,11 +1327,11 @@ class RealtimeConnection {
       chunks: turn.chunks,
     });
     appendEvent(turn, "transcript", event);
-    writeJson(turn.transcriptPath, event);
-    console.log(`transcript turn=${turn.turnId} latency_ms=${event.latencyMs} text=${JSON.stringify(event.text)}`);
+    writeJson(turn, turn.transcriptPath, event);
+    console.info("hub.realtime.transcript", { turnId: turn.turnId, latencyMs: event.latencyMs, chars: event.text.length });
 
     if (!event.text.trim()) {
-      writeJson(turn.replyPath, {
+      writeJson(turn, turn.replyPath, {
         sessionId: this.sessionId,
         turnId: turn.turnId,
         status: "no_input",
@@ -1314,7 +1350,7 @@ class RealtimeConnection {
 
     if (this.replyTask && !this.replyAbort) {
       appendEvent(turn, "ignored", { reason: "reply_in_progress" });
-      writeJson(turn.replyPath, {
+      writeJson(turn, turn.replyPath, {
         sessionId: this.sessionId,
         turnId: turn.turnId,
         transcript: event.text,
@@ -1464,13 +1500,13 @@ class RealtimeConnection {
       responseText = responseText.trim();
       this.sessions.append(this.sessionId, { role: "assistant", content: responseText });
       appendEvent(turn, "reply", { text: responseText });
-      writeJson(turn.replyPath, {
+      writeJson(turn, turn.replyPath, {
         sessionId: this.sessionId,
         turnId: turn.turnId,
         transcript,
         response: responseText,
       });
-      console.log(`reply turn=${turn.turnId} text=${JSON.stringify(responseText)}`);
+      console.info("hub.realtime.reply", { turnId: turn.turnId, chars: responseText.length, outcome: "success" });
       await this.send({
         type: "message",
         data: {
@@ -1491,7 +1527,7 @@ class RealtimeConnection {
         // error-event.
         appendEvent(turn, "reply.cancel", { reason: "client_interrupt" });
       } else {
-        writeJson(turn.replyPath, {
+        writeJson(turn, turn.replyPath, {
           sessionId: this.sessionId,
           turnId: turn.turnId,
           transcript,

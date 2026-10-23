@@ -1,3 +1,4 @@
+import { hubConsole as console } from "../shared/private-log.js";
 import fs from "node:fs";
 import https from "node:https";
 import type { IncomingMessage } from "node:http";
@@ -826,5 +827,5 @@ function defaultTelemetrySink(telemetry: PsfnReplyTelemetry): void {
   // Structured single-line record. Only accepted-content character counts are
   // included, never the assistant text of any attempt, so discarded deltas
   // cannot leak into logs.
-  console.log(`psfn.reply ${JSON.stringify(telemetry)}`);
+  console.info("psfn.reply", telemetry);
 }

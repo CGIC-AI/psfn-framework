@@ -1,3 +1,4 @@
+import { hubConsole as console } from "../shared/private-log.js";
 import { randomUUID } from "node:crypto";
 
 import WebSocket, { type RawData } from "ws";

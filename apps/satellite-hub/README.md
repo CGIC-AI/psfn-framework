@@ -277,7 +277,8 @@ Charges release when pending protocol output and the native transport buffer
 both empty. Partial drain and new frames never extend an outstanding deadline.
 Overflow, expiry, or write failure aborts TCP and clears pending output; close
 frames have no extra capacity reserve. The connection slot stays charged until
-terminal TCP cleanup. A single timer handle checks retained output every 10 ms
+terminal TCP cleanup. Failed output owners reject parsed and already queued
+application input before it can finalize a buffered audio turn. A single timer handle checks retained output every 10 ms
 and is canceled on cleanup; no output watcher task is created. Library tests can
 inject smaller `RealtimeOutputLimits` through `RealtimeVoiceServer.output_limits`.
 The cap measures process-owned serialized output and conservative frame charges;

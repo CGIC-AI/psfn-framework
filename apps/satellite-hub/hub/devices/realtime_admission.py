@@ -61,6 +61,19 @@ class _AdmittedConnection(ServerConnection):
         if not self._admission.accepting:
             transport.abort()
 
+    def process_event(self, event) -> None:
+        if not self.output.failed:
+            super().process_event(event)
+
+    async def recv(self, decode: bool | None = None) -> str | bytes:
+        message = await super().recv(decode)
+        # recv() may already have queued a message when synchronous automatic
+        # control output fails. Never hand it to the application after failure.
+        if self.output.failed:
+            await self.wait_closed()
+            raise self.protocol.close_exc
+        return message
+
     def send_data(self) -> None:
         self.output.before_write()
         try:

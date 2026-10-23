@@ -59,6 +59,7 @@ export async function collectTurnResponseAttachments(input: {
     personalFilesDir: input.runtime.config.workspacePath ?? '',
     paidDeliverables: input.paidDeliverables,
     galleryContext: input.galleryContext,
+    imageRuntimeConfig: input.runtime.config,
   });
   if (attachments.length > 0) {
     // Companion relay artifact announcement choke point (w9hj.1): redacted at

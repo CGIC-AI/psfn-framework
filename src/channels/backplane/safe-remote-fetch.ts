@@ -36,6 +36,8 @@ export interface RemoteFetchOptions {
   urlPolicy?: UrlPolicyConfig;
   /** DNS resolver override for tests; a single answer remains supported. */
   dnsResolver?: (hostname: string) => Promise<LookupAddress | LookupAddress[]>;
+  /** Request seam for callers that already inject fetch; production uses undici. */
+  fetchImpl?: typeof globalThis.fetch;
 }
 
 export interface RemoteFetchResult {
@@ -44,6 +46,7 @@ export interface RemoteFetchResult {
   /** Response body; empty when `ok` is false (error bodies are discarded). */
   bytes: Buffer;
   contentType: string | null;
+  finalUrl: string;
 }
 
 async function validateRemoteUrl(
@@ -173,12 +176,13 @@ export async function fetchRemoteResource(
       });
 
       try {
-        const response = await undiciFetch(currentUrl, {
+        const fetchImpl = options.fetchImpl ?? (undiciFetch as unknown as typeof globalThis.fetch);
+        const response = await fetchImpl(currentUrl, {
           // This API carries no caller headers, cookies, or redirect credentials.
           redirect: 'manual',
           signal: abort.signal,
           dispatcher,
-        });
+        } as RequestInit);
 
         const location = response.headers.get('location');
         if (REDIRECT_STATUS_CODES.has(response.status) && location) {
@@ -199,11 +203,25 @@ export async function fetchRemoteResource(
         const contentType = response.headers.get('content-type');
         if (!response.ok) {
           await response.body?.cancel();
-          return { ok: false, status: response.status, bytes: Buffer.alloc(0), contentType };
+          return {
+            ok: false,
+            status: response.status,
+            bytes: Buffer.alloc(0),
+            contentType,
+            finalUrl: currentUrl,
+          };
         }
 
-        const bytes = await readBodyWithCap(response, options.maxBytes, abort);
-        return { ok: true, status: response.status, bytes, contentType };
+        const reportedLength = Number.parseInt(response.headers.get('content-length') ?? '', 10);
+        const reportedLimit = response.headers.has('content-encoding') ? maxWireBytes : options.maxBytes;
+        if (Number.isFinite(reportedLength) && reportedLength > reportedLimit) {
+          abort.abort();
+          await response.body?.cancel().catch(() => undefined);
+          throw new Error(`Remote fetch body too large: exceeded ${options.maxBytes} bytes`);
+        }
+
+        const bytes = await readBodyWithCap(response as unknown as Response, options.maxBytes, abort);
+        return { ok: true, status: response.status, bytes, contentType, finalUrl: currentUrl };
       } finally {
         await dispatcher.destroy();
       }

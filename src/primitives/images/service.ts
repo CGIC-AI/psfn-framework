@@ -31,6 +31,7 @@ import type {
   ImageRuntimeConfig,
 } from './types.js';
 import { buildImageFileName } from './file-naming.js';
+import { fetchRemoteImageBinary } from './remote-fetch.js';
 import { resolveOpenRouterImageTarget, runOpenRouterImage } from './openrouter-image.js';
 import {
   buildComfyUiMcpArguments,
@@ -665,24 +666,9 @@ export class ImageService implements ImageOperations {
       // not megabytes of base64, is what travels onward and into metadata.
       const sourceUrl = inline ? `inline:${result.requestId ?? 'image'}#${index}` : asset.url;
       try {
-        let contentType: string;
-        let bytes: Buffer;
-        if (inline) {
-          contentType = inline[1]!;
-          bytes = Buffer.from(inline[2]!, 'base64');
-        } else {
-          const response = await this.fetchImpl(asset.url);
-          if (!response.ok) {
-            throw new Error(`download failed with ${response.status}`);
-          }
-          contentType = (response.headers.get('content-type')?.split(';')[0] ?? '').trim().toLowerCase()
-            || asset.contentType
-            || 'image/png';
-          if (!contentType.startsWith('image/')) {
-            throw new Error(`provider returned non-image content type ${contentType}`);
-          }
-          bytes = Buffer.from(await response.arrayBuffer());
-        }
+        const remote = await fetchRemoteImageBinary(asset.url, this.config, this.fetchImpl);
+        const contentType = remote.contentType;
+        const bytes = Buffer.from(remote.bytes);
         if (bytes.length === 0) {
           throw new Error('provider returned an empty image body');
         }

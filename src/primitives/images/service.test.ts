@@ -630,6 +630,7 @@ describe('ImageService', () => {
         falApiKey: 'fal-key',
         companionDataDir,
         systemDataDir: join(companionDataDir, '..', 'system-data'),
+        webFetchDnsResolver: async () => ({ address: '93.184.216.34', family: 4 }),
       }),
       fetchMock as typeof fetch,
     );
@@ -641,6 +642,47 @@ describe('ImageService', () => {
     expect(result.images[0]?.localPath).toBeTruthy();
     expect(existsSync(result.images[0]!.localPath!)).toBe(true);
     expect(readFileSync(result.images[0]!.localPath!)).toEqual(Buffer.from(imageBytes));
+  });
+
+  it('does not fetch or persist a provider-supplied private-network image URL', async () => {
+    const companionDataDir = mkdtempSync(join(tmpdir(), 'psfn-image-private-provider-'));
+    tempDirs.push(companionDataDir);
+    let privateAssetFetches = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === 'https://queue.fal.run/xai/grok-imagine-image') {
+        return jsonResponse({
+          status: 'COMPLETED',
+          request_id: 'fal-private-asset',
+          response_url: 'https://queue.fal.run/xai/grok-imagine-image/requests/fal-private-asset',
+        });
+      }
+      if (url === 'https://queue.fal.run/xai/grok-imagine-image/requests/fal-private-asset') {
+        return jsonResponse({
+          images: [{
+            url: 'https://127.0.0.1/private.png',
+            content_type: 'image/png',
+            file_name: 'private.png',
+          }],
+        });
+      }
+      if (url === 'https://127.0.0.1/private.png') {
+        privateAssetFetches += 1;
+        return binaryResponse(Uint8Array.from([1, 2, 3]));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    const service = new ImageService(fromAny({
+      falApiKey: 'fal-key',
+      companionDataDir,
+      systemDataDir: join(companionDataDir, '..', 'system-data'),
+    }), fetchMock as typeof fetch);
+
+    const result = await service.create({ prompt: 'an inaccessible service' });
+
+    expect(privateAssetFetches).toBe(0);
+    expect(result.images[0]?.localPath).toBeUndefined();
   });
 
   it('persists generated images under the personal files root when configured', async () => {
@@ -681,6 +723,7 @@ describe('ImageService', () => {
         falApiKey: 'fal-key',
         companionDataDir,
         systemDataDir: join(companionDataDir, '..', 'system-data'),
+        webFetchDnsResolver: async () => ({ address: '93.184.216.34', family: 4 }),
       }),
       fetchMock as typeof fetch,
       { personalFilesDir },
@@ -1482,7 +1525,7 @@ describe('ImageService', () => {
       provider: 'comfyui',
       prompt: 'turn the chair blue',
       imageUrls: ['https://example.test/input.png'],
-    })).rejects.toThrow('URL blocked: Private IP 127.0.0.1 blocked');
+    })).rejects.toThrow('Remote fetch blocked: Private IP 127.0.0.1 blocked');
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -1529,7 +1572,7 @@ describe('ImageService', () => {
       provider: 'comfyui',
       prompt: 'turn the chair blue',
       imageUrls: ['https://example.test/input.png'],
-    })).rejects.toThrow('Remote image fetch exceeded 8388608 bytes (99999999 reported)');
+    })).rejects.toThrow('Remote fetch body too large: exceeded 8388608 bytes');
   });
 
   it('rejects ComfyUI remote image downloads with non-image content types', async () => {

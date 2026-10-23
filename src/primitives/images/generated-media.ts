@@ -30,6 +30,8 @@ import {
   inferImageExtension,
 } from './file-naming.js';
 import { selectGeneratedImageAssetsForDelivery } from './delivery-selection.js';
+import { fetchRemoteImageBinary } from './remote-fetch.js';
+import type { ImageRuntimeConfig } from './types.js';
 
 const log = createComponentLogger('ImageGeneratedMedia');
 // Live tool names first; retired names ('media', 'image_create', 'image_edit')
@@ -290,8 +292,9 @@ async function persistImageAsset(params: {
   index: number;
   storageDir: string;
   fetchImpl: typeof fetch;
+  imageRuntimeConfig: ImageRuntimeConfig;
 }): Promise<Attachment> {
-  const { asset, requestId, index, storageDir, fetchImpl } = params;
+  const { asset, requestId, index, storageDir, fetchImpl, imageRuntimeConfig } = params;
   const extension = inferImageExtension(asset.url, asset.contentType);
   const fileStem = deriveImageFileStem(asset, requestId, index);
   const existingLocalPath = asset.localPath?.trim();
@@ -307,16 +310,12 @@ async function persistImageAsset(params: {
   const storedPath = join(storageDir, fileName);
 
   try {
-    const response = await fetchImpl(asset.url);
-    if (!response.ok) {
-      throw new Error(`download failed with ${response.status}`);
-    }
-    const buffer = Buffer.from(await response.arrayBuffer());
+    const remote = await fetchRemoteImageBinary(asset.url, imageRuntimeConfig, fetchImpl);
+    const buffer = Buffer.from(remote.bytes);
     await writeFile(storedPath, buffer);
-    const responseContentType = response.headers.get('content-type')?.trim() || undefined;
     return {
       url: asset.url,
-      contentType: responseContentType || asset.contentType || 'image/png',
+      contentType: remote.contentType || asset.contentType || 'image/png',
       name: resolveAttachmentName(storedPath, asset),
       localPath: storedPath,
     };
@@ -550,6 +549,7 @@ export async function collectGeneratedImageAttachments(params: {
   /** Authenticated companion Personal Workspace, never companion runtime data. */
   personalFilesDir: string;
   fetchImpl?: typeof fetch;
+  imageRuntimeConfig?: ImageRuntimeConfig;
   galleryContext?: GeneratedImageGalleryContext;
   paidDeliverables?: readonly PendingPaidDeliverable[];
 }): Promise<Attachment[]> {
@@ -637,6 +637,7 @@ export async function collectGeneratedImageAttachments(params: {
         index,
         storageDir,
         fetchImpl,
+        imageRuntimeConfig: params.imageRuntimeConfig ?? {},
       });
       if (selectedAssets.has(asset)) {
         attachments.push(attachment);

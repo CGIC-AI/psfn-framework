@@ -12,12 +12,23 @@ import { fromAny } from '@total-typescript/shoehorn';
 import { tmpdir } from 'node:os';
 import { describe, expect, it, afterEach } from 'vitest';
 import {
-  collectGeneratedImageAttachments,
+  collectGeneratedImageAttachments as collectGeneratedImageAttachmentsImpl,
   mergeChargedImageDeliverableSummaries,
   summarizeChargedImageDeliverables,
   summarizePendingPaidImageDeliverables,
 } from './generated-media.js';
 import { resolvePersonalImagesDir } from '../../persistence/layout.js';
+
+async function collectGeneratedImageAttachments(
+  params: Parameters<typeof collectGeneratedImageAttachmentsImpl>[0],
+): ReturnType<typeof collectGeneratedImageAttachmentsImpl> {
+  return await collectGeneratedImageAttachmentsImpl({
+    ...params,
+    imageRuntimeConfig: params.imageRuntimeConfig ?? {
+      webFetchDnsResolver: async () => ({ address: '93.184.216.34', family: 4 }),
+    },
+  });
+}
 
 describe('collectGeneratedImageAttachments', () => {
   const tempDirs: string[] = [];
@@ -133,6 +144,47 @@ describe('collectGeneratedImageAttachments', () => {
         { ref: 'turn:turn-gallery-1', sensitivity: 'personal' },
       ]),
     });
+  });
+
+  it('does not fetch or persist a provider-supplied private-network attachment URL', async () => {
+    const personalFilesDir = mkdtempSync(join(tmpdir(), 'psfn-private-generated-media-'));
+    tempDirs.push(personalFilesDir);
+    let privateAssetFetches = 0;
+
+    const attachments = await collectGeneratedImageAttachments({
+      personalFilesDir,
+      turnMessages: [fromAny({
+        role: 'toolResult',
+        toolName: 'generate_image',
+        content: [],
+        details: {
+          mediaResult: {
+            provider: 'fal',
+            mode: 'create',
+            fallbackUsed: false,
+            images: [{
+              url: 'https://169.254.169.254/latest/meta-data/role.png',
+              contentType: 'image/png',
+              fileName: 'role.png',
+            }],
+          },
+        },
+      })],
+      fetchImpl: async () => {
+        privateAssetFetches += 1;
+        return new Response(Buffer.from('metadata'), {
+          status: 200,
+          headers: { 'content-type': 'image/png' },
+        });
+      },
+    });
+
+    expect(privateAssetFetches).toBe(0);
+    expect(attachments).toEqual([{
+      url: 'https://169.254.169.254/latest/meta-data/role.png',
+      contentType: 'image/png',
+      name: 'role.png',
+    }]);
   });
 
   it('attaches generate_image results from structured tool details', async () => {

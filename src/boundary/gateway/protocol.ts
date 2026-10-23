@@ -547,6 +547,7 @@ export interface FsSearchParams {
   maxFiles?: number;
   maxBytesPerFile?: number;
   contextLines?: number;
+  cancellationId?: string;
 }
 
 export interface FsEditParams {
@@ -1400,6 +1401,7 @@ export interface GatewayMethods {
   'fs.write': [FsWriteParams, FsWriteResult];
   'fs.list': [FsListParams, FsListResult];
   'fs.search': [FsSearchParams, FsSearchResult];
+  'fs.cancel': [{ cancellationId: string }, { cancelled: boolean }];
   'fs.edit': [FsEditParams, FsEditResult];
   'git.status': [GitStatusParams, GitStatusResult];
   'git.diff': [GitDiffParams, GitDiffResult];

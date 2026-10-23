@@ -1496,6 +1496,30 @@
       "value": "200"
     },
     {
+      "file": "src/boundary/integrations/filesystem/regex-search.ts",
+      "name": "MAX_PREVIEW_CHARS",
+      "value": "500",
+      "note": "Existing fs.search output compatibility and disclosure ceiling, shared with its isolated evaluator; code-owned protocol bound, not mutable tuning (psfn-framework-zbbxj.6)."
+    },
+    {
+      "file": "src/boundary/integrations/filesystem/regex-search.ts",
+      "name": "MAX_SEARCH_LINE_CHARS",
+      "value": "8_192",
+      "note": "Existing fs.search line-view compatibility and hard per-execution input ceiling; code-owned denial-of-service guard (psfn-framework-zbbxj.6)."
+    },
+    {
+      "file": "src/boundary/integrations/filesystem/regex-search.ts",
+      "name": "MAX_SEARCH_WORKERS",
+      "value": "4",
+      "note": "Process-wide hard safety ceiling with fail-fast admission and no queue; prevents concurrent hostile searches from creating unbounded workers (psfn-framework-zbbxj.6)."
+    },
+    {
+      "file": "src/boundary/integrations/filesystem/regex-search.ts",
+      "name": "SEARCH_TIME_BUDGET_MS",
+      "value": "2_000",
+      "note": "Existing fs.search safety deadline, now enforced by parent termination of the native evaluator; code-owned denial-of-service guard (psfn-framework-zbbxj.6)."
+    },
+    {
       "file": "src/boundary/integrations/filesystem/tools.ts",
       "name": "DEFAULT_LIST_MAX_ENTRIES",
       "value": "200"
@@ -1587,18 +1611,8 @@
     },
     {
       "file": "src/boundary/integrations/filesystem/workspace-ops.ts",
-      "name": "MAX_PREVIEW_CHARS",
-      "value": "500"
-    },
-    {
-      "file": "src/boundary/integrations/filesystem/workspace-ops.ts",
       "name": "MAX_SEARCH_CONTEXT_LINES",
       "value": "2"
-    },
-    {
-      "file": "src/boundary/integrations/filesystem/workspace-ops.ts",
-      "name": "MAX_SEARCH_LINE_CHARS",
-      "value": "8_192"
     },
     {
       "file": "src/boundary/integrations/filesystem/workspace-ops.ts",
@@ -1619,11 +1633,6 @@
       "file": "src/boundary/integrations/filesystem/workspace-ops.ts",
       "name": "MAX_SEARCH_REGEX_PATTERN_CHARS",
       "value": "1_000"
-    },
-    {
-      "file": "src/boundary/integrations/filesystem/workspace-ops.ts",
-      "name": "SEARCH_TIME_BUDGET_MS",
-      "value": "2_000"
     },
     {
       "file": "src/boundary/integrations/filesystem/workspace-ops.ts",

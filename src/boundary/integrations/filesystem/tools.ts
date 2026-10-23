@@ -242,6 +242,7 @@ export function createFsTool(
     execute: async (
       _toolCallId: string,
       params: Record<string, unknown>,
+      signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       try {
         const action = normalizeAction(params);
@@ -316,6 +317,7 @@ export function createFsTool(
             const glob = normalizeSearchGlobParam(params.glob);
             const searched = await ops.search({
               query: requireString(params.query, 'query'),
+              ...(signal ? { signal } : {}),
               ...(glob ? { glob } : {}),
               ...(params.mode === 'regex' ? { mode: 'regex' as const } : {}),
               ...(typeof params.max_matches === 'number' ? { maxMatches: params.max_matches } : {}),

@@ -94,7 +94,7 @@ export class GatewayClientTransportRuntime {
     method: string,
     params: Record<string, unknown>,
     signal?: AbortSignal,
-    remoteCancellation?: 'llm' | 'mcp',
+    remoteCancellation?: 'llm' | 'mcp' | 'fs',
     companionId?: string,
   ): Promise<T> {
     const cancellationId = remoteCancellation ? randomUUID() : undefined;

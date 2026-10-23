@@ -36,6 +36,8 @@ import {
 } from '../../integrations/filesystem/workspace-ops.js';
 import { normalizeFilesystemReadOptions } from '../../integrations/filesystem/ops.js';
 import { readUtf8TextFilePageFromHandle } from '../../integrations/filesystem/text-file-paging.js';
+import { FilesystemSearchCancellation } from '../../integrations/filesystem/search-cancellation.js';
+import { assertNoUnknownKeys, isRecord } from '../../../shared/utils/types.js';
 
 const log = createComponentLogger('GatewayFilesystem');
 
@@ -562,6 +564,7 @@ const fsDescriptors = [
       const searchRoot = resolveReadRoot(runtime);
       return await searchWorkspaceFiles(searchRoot, {
         query: params.query,
+        signal: runtime.filesystemSearchCancellation?.signal,
         ...(typeof params.glob === 'string' && !isBroadSearchGlob(params.glob)
           ? { glob: params.glob }
           : { glob: resolveDefaultSearchGlob(runtime) }),
@@ -687,5 +690,13 @@ const fsDescriptors = [
 ];
 
 export function registerFilesystemMethods(runtime: GatewayMethodRuntime): void {
-  registerGatedDescriptors(runtime, fsDescriptors);
+  const cancellation = runtime.filesystemSearchCancellation ??= new FilesystemSearchCancellation();
+  registerGatedDescriptors(runtime, fsDescriptors, (method, dispatch) => method === 'fs.search'
+    ? params => cancellation.run(isRecord(params) ? params.cancellationId : undefined, () => dispatch(params))
+    : dispatch);
+  runtime.target.addMethod('fs.cancel', runtime.audited('fs.cancel', async (params: unknown) => {
+    if (!isRecord(params)) throw new Error('fs.cancel params must be an object');
+    assertNoUnknownKeys(params, ['cancellationId'], 'fs.cancel params');
+    return { cancelled: cancellation.cancel(params.cancellationId) };
+  }, () => ({})));
 }

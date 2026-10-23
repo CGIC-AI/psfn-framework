@@ -140,6 +140,18 @@ describe('fs tool', () => {
     expect(classifyExecutedToolCallOutcome({ details: capped.details })).toBe('partial_result');
   });
 
+  it('passes caller cancellation to search without exposing its abort reason', async () => {
+    const tool = createFsTool(ops);
+    const controller = new AbortController();
+    controller.abort(new Error('PRIVATE-ABORT-REASON'));
+    const cancelled = await tool.execute('search-cancelled', {
+      action: 'search', query: 'alpha', mode: 'regex', glob: 'docs/*.txt',
+    }, controller.signal);
+    expect(cancelled.details).toMatchObject({ isError: true });
+    expect(resultText(cancelled)).toContain('fs search aborted');
+    expect(resultText(cancelled)).not.toContain('PRIVATE-ABORT-REASON');
+  });
+
   it('advertises the shared hard read cap and the provenance-preserving large-document path', () => {
     const tool = createFsTool(ops);
 

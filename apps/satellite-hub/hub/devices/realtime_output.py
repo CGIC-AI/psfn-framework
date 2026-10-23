@@ -61,7 +61,8 @@ class RealtimeOutput:
         # TCP output is independently retained below it. Unknown TLS seams deny.
         protocol = getattr(transport, "_ssl_protocol", None)
         native = getattr(protocol, "_transport", None)
-        if native is None or not callable(getattr(native, "get_write_buffer_size", None)):
+        if (native is None or not callable(getattr(native, "get_write_buffer_size", None))
+                or native.get_extra_info("ssl_object") is not None):
             self.fail()
             raise OSError("WebSocket output transport unsupported")
         return native

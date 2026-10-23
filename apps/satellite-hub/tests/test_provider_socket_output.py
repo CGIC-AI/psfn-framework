@@ -164,7 +164,7 @@ def tls_contexts(tmp_path):
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("kind", ("deepgram", "elevenlabs"))
-@pytest.mark.parametrize("action", ("second_write", "deadline", "ping_flood", "exact", "one_over"))
+@pytest.mark.parametrize("action", ("second_write", "deadline", "ping_flood", "exact", "one_over", "unsupported_tls"))
 async def test_tls_output_accounts_tcp_buffers_record_expansion_and_deadline(kind, action, tls_contexts, monkeypatch, record_property):
     server_context, client_context = tls_contexts
     connect = websockets.connect
@@ -215,7 +215,16 @@ async def test_tls_output_accounts_tcp_buffers_record_expansion_and_deadline(kin
                 peak = max(peak, retained)
 
             monkeypatch.setattr(connection.protocol, "send_frame", observe)
-            if action == "one_over":
+            if action == "unsupported_tls":
+                extra_info = raw.get_extra_info
+
+                def nested_tls(name, default=None):
+                    return object() if name == "ssl_object" else extra_info(name, default)
+
+                monkeypatch.setattr(raw, "get_extra_info", nested_tls)
+                with pytest.raises(ConnectionClosed):
+                    await connection.send(b"data")
+            elif action == "one_over":
                 with pytest.raises(ConnectionClosed):
                     await connection.send(b"d" * 800_000)
             elif action == "ping_flood":

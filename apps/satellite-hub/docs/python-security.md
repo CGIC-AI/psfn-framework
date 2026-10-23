@@ -141,7 +141,8 @@ additional overshoot allowance. TLS counts both the SSL/BIO output and underlyin
 TCP buffer. Each frame also reserves up to 2,053 bytes of TLS record header and
 expansion per 16,384 plaintext bytes, within the same byte ceiling. The explicit
 CPython asyncio SSL transport seam fails closed if its underlying buffer cannot
-be inspected; an alternate event loop must provide that seam before use.
+be inspected, or if it wraps another TLS transport (such as a TLS proxy tunnel).
+An alternate event loop must provide that seam before use.
 HTTP handshake output also passes the byte cap.
 Compression is disabled. Kernel TCP buffers, source objects and inbound queues
 are separate from this output budget.

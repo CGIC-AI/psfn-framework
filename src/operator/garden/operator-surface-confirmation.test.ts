@@ -30,7 +30,7 @@ interface CaptureUpstream {
   requests: CapturedRequest[];
 }
 
-function startCaptureUpstream(socketPath: string): Promise<CaptureUpstream> {
+function startCaptureUpstream(socketPath: string, responseHeaders: Record<string, string> = {}): Promise<CaptureUpstream> {
   const requests: CapturedRequest[] = [];
   return new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => {
@@ -38,7 +38,7 @@ function startCaptureUpstream(socketPath: string): Promise<CaptureUpstream> {
       req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
       req.on('end', () => {
         requests.push({ method: req.method, url: req.url, headers: req.headers, body });
-        res.writeHead(200, { 'content-type': 'application/json' });
+        res.writeHead(200, { 'content-type': 'application/json', ...responseHeaders });
         res.end(JSON.stringify({
           ok: true,
           status: 'approved',
@@ -80,12 +80,12 @@ function requestPort(
   path: string,
   body?: string,
   headers?: Record<string, string>,
-): Promise<{ status: number; body: string }> {
+): Promise<{ status: number; body: string; headers: http.IncomingHttpHeaders }> {
   return new Promise((resolve, reject) => {
     const req = http.request({ hostname: '127.0.0.1', port, method, path, headers }, (res) => {
       let data = '';
       res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
-      res.on('end', () => resolve({ status: res.statusCode ?? 0, body: data }));
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, body: data, headers: res.headers }));
     });
     req.on('error', reject);
     if (body !== undefined) req.write(body);
@@ -112,10 +112,11 @@ const harnesses: Harness[] = [];
 
 async function createHarness(
   resolver?: GatewayOperatorConfirmationClient,
+  responseHeaders: Record<string, string> = {},
 ): Promise<Harness> {
   const tempDir = mkdtempSync(join(tmpdir(), 'operator-confirmation-test-'));
   const socketPath = join(tempDir, 'agent-admin.sock');
-  const upstream = await startCaptureUpstream(socketPath);
+  const upstream = await startCaptureUpstream(socketPath, responseHeaders);
   const port = await allocatePort();
   const surface = new GardenOperatorSurface({
     port,
@@ -150,11 +151,30 @@ function mockResolver(result: ConfirmationResolveResult): GatewayOperatorConfirm
 }
 
 describe('Garden operator confirmation resolution (x5rt.10)', () => {
+  it('keeps browser policy at the operator boundary and removes spoofed forwarded authority', async () => {
+    const harness = await createHarness(undefined, {
+      'content-security-policy': "default-src * 'unsafe-inline'",
+      'x-frame-options': 'ALLOWALL', 'cache-control': 'public, max-age=3600',
+      'set-cookie': '__Host-psfn_session=attacker; Path=/; Secure',
+    });
+    const response = await requestPort(harness.port, 'GET', '/api/admin/dashboard', undefined, {
+      'x-forwarded-host': 'hostile.invalid', 'x-forwarded-proto': 'https', 'x-forwarded-for': '192.0.2.1',
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers['content-security-policy']).toContain("frame-ancestors 'none'");
+    expect(response.headers['x-frame-options']).toBe('DENY');
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(response.headers['set-cookie']).toBeUndefined();
+    expect(harness.upstream.requests[0]!.headers['x-forwarded-host']).toBe(`127.0.0.1:${harness.port}`);
+    expect(harness.upstream.requests[0]!.headers['x-forwarded-proto']).toBe('http');
+    expect(harness.upstream.requests[0]!.headers['x-forwarded-for']).toBeUndefined();
+  });
+
   it('strips the operator ADMIN_TOKEN from every request proxied to the agent', async () => {
     const harness = await createHarness();
     const res = await requestPort(harness.port, 'GET', '/api/admin/dashboard', undefined, {
       authorization: 'Bearer super-secret-admin-token',
-      cookie: 'psfn_token=super-secret-admin-token; psfn_garden_session=browser-123',
+      cookie: 'psfn_token=super-secret-admin-token; __Host-psfn_session=opaque-operator-session; __Host-psfn_csrf=opaque-csrf; psfn_garden_session=browser-123',
     });
     expect(res.status).toBe(200);
 
@@ -163,6 +183,8 @@ describe('Garden operator confirmation resolution (x5rt.10)', () => {
     // The admin credential must never reach the agent transport.
     expect(captured.headers.authorization).toBeUndefined();
     expect(captured.headers.cookie ?? '').not.toContain('psfn_token');
+    expect(captured.headers.cookie ?? '').not.toContain('__Host-psfn_session');
+    expect(captured.headers.cookie ?? '').not.toContain('__Host-psfn_csrf');
     // Non-credential cookies (browser session keying) survive.
     expect(captured.headers.cookie).toContain('psfn_garden_session=browser-123');
   });
@@ -184,7 +206,6 @@ describe('Garden operator confirmation resolution (x5rt.10)', () => {
       {
         'content-type': 'application/json',
         authorization: 'Bearer super-secret-admin-token',
-        cookie: 'psfn_token=super-secret-admin-token',
       },
     );
 
@@ -202,7 +223,6 @@ describe('Garden operator confirmation resolution (x5rt.10)', () => {
       {
         kind: 'standalone_operator',
         authorization: 'Bearer super-secret-admin-token',
-        cookie: 'psfn_token=super-secret-admin-token',
       },
     );
     // The agent (upstream) was never asked to resolve an operator-owned entry.

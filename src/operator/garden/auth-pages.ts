@@ -124,7 +124,7 @@ button:hover { background: #c29a2b; border-color: #c29a2b; }
 }
 `;
 
-function loginPage(gardenTitle: string, error?: string): string {
+function loginPage(gardenTitle: string, error?: string, csrf?: string): string {
   const errorBlock = error
     ? `<p class="error" role="alert">${escapeHtml(error)}</p>`
     : '';
@@ -153,6 +153,7 @@ function loginPage(gardenTitle: string, error?: string): string {
         <p class="intro">Enter your admin token to continue.</p>
         ${errorBlock}
         <form method="POST" action="/login">
+          ${csrf ? `<input type="hidden" name="csrf" value="${escapeHtml(csrf)}">` : ''}
           <label for="token">Admin token</label>
           <input id="token" name="token" type="password" autocomplete="current-password">
           <button type="submit">Sign in</button>
@@ -169,11 +170,12 @@ export function sendGardenLoginPage(
   config: SubstrateConfig,
   error?: string,
   status: number = 200,
+  csrf?: string,
 ): void {
   sendText(
     res,
     status,
-    loginPage(resolveGardenTitle(config), error),
+    loginPage(resolveGardenTitle(config), error, csrf),
     {
       'Cache-Control': 'no-store',
       'Content-Type': 'text/html; charset=utf-8',

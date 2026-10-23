@@ -9054,12 +9054,6 @@
       "note": "Code-owned operator credential propagation bound that prevents oversized Authorization headers crossing processes."
     },
     {
-      "file": "src/operator/garden/operator-surface.ts",
-      "name": "MAX_OPERATOR_COOKIE_TOKEN_LENGTH",
-      "value": "512",
-      "note": "Code-owned operator credential propagation bound that prevents oversized cookie tokens crossing processes."
-    },
-    {
       "file": "src/operator/garden/routes/drift-review-routes.ts",
       "name": "MAX_NOTE_CHARS",
       "value": "1024"

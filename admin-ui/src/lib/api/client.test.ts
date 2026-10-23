@@ -38,6 +38,22 @@ afterEach(async () => {
 });
 
 describe('admin api client errors', () => {
+  it('adds the standalone CSRF proof only to unsafe same-origin requests', async () => {
+    vi.stubGlobal('window', { location: {
+      pathname: '/', href: 'https://garden.example.test/', origin: 'https://garden.example.test',
+    } });
+    vi.stubGlobal('document', { cookie: '__Host-psfn_csrf=browser-proof' });
+    mockFetch(new Response('ok'));
+    await apiPostForm('/api/admin/logout', new URLSearchParams());
+    const sameOrigin = vi.mocked(fetch).mock.calls[0]![1]!;
+    expect(new Headers(sameOrigin.headers).get('X-CSRF-Token')).toBe('browser-proof');
+
+    mockFetch(new Response('ok'));
+    await apiPostForm('https://outside.example.test/upload', new URLSearchParams());
+    const outside = vi.mocked(fetch).mock.calls[0]![1]!;
+    expect(new Headers(outside.headers).has('X-CSRF-Token')).toBe(false);
+  });
+
   it('uses browser conditional revalidation for GET requests', async () => {
     mockFetch(new Response(JSON.stringify({ channels: [] }), {
       status: 200,

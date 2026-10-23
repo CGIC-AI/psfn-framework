@@ -76,6 +76,7 @@ import type { AdminSubjectVisibleAuditService } from './services/subject-visible
 import type { AdminBiographicalReviewService } from './services/biographical-review-service.js';
 import type { OwnerFileReloadWatcher } from './services/owner-file-reload-watcher.js';
 import type { GardenRequestContext } from './garden-request-context.js';
+import type { GardenBrowserTransport } from './browser-sessions.js';
 
 export interface ConfirmationQueueAdminApi {
   listConfirmationQueue(context?: GardenRequestContext): Promise<ConfirmationListResult>;
@@ -284,7 +285,7 @@ export interface GardenAdminDomainServices {
   chatBootstrap: AdminChatBootstrapApi;
 }
 
-export interface AdminServerConfig {
+export interface AdminServerConfig extends GardenBrowserTransport {
   port: number;
   host?: string;
   token?: string;

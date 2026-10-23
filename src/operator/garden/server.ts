@@ -27,6 +27,7 @@ import {
   type GardenRequestContext,
 } from './garden-request-context.js';
 import { recordGardenDenial } from './garden-denial-observability.js';
+import { GardenBrowserSessions } from './browser-sessions.js';
 
 const log = createComponentLogger('AdminServer');
 const ADMIN_MAX_BODY_SIZE = 65_536; // 64KB
@@ -37,6 +38,8 @@ export class AdminServer implements Lifecycle {
   private host: string;
   private token?: string;
   private allowInsecureWithoutToken: boolean;
+  private readonly browserTransport: Pick<AdminServerConfig, 'publicOrigin' | 'trustedProxyAddresses'>;
+  private readonly browserSessions: GardenBrowserSessions;
   private readonly admission: GardenAdmissionMode;
   private readonly companionId?: string;
   private readonly bufferedFleetBodies = new WeakMap<IncomingMessage, string>();
@@ -49,6 +52,8 @@ export class AdminServer implements Lifecycle {
     this.host = config.host ?? '127.0.0.1';
     this.token = config.token;
     this.allowInsecureWithoutToken = config.allowInsecureWithoutToken ?? false;
+    this.browserTransport = { publicOrigin: config.publicOrigin, trustedProxyAddresses: config.trustedProxyAddresses };
+    this.browserSessions = new GardenBrowserSessions(config);
     const modeSelection = {
       fleetAuthVerifier: config.config.fleetAuthVerifier,
       companionId: config.config.companionId,
@@ -63,8 +68,8 @@ export class AdminServer implements Lifecycle {
       (req) => this.checkUpgradeAuth(req),
     );
     this.routes = buildAdminRoutes({
-      token: this.token,
       standaloneSessionRoutes: isStandaloneTokenGardenAdmission(this.admission),
+      browserSessions: this.browserSessions,
       services: config.services,
       config: config.config,
       withBody: (req, res, cb) => this.withBody(req, res, cb),
@@ -84,6 +89,7 @@ export class AdminServer implements Lifecycle {
         port: this.port,
         token: this.token,
         allowInsecureWithoutToken: this.allowInsecureWithoutToken,
+        ...this.browserTransport,
         componentLabel: 'admin server',
         logger: log,
       });
@@ -119,6 +125,7 @@ export class AdminServer implements Lifecycle {
   }
 
   async stop(): Promise<void> {
+    this.browserSessions.close();
     return new Promise((resolve, reject) => {
       this.server.closeAllConnections();
       this.telemetryTransport.close(() => {
@@ -135,6 +142,7 @@ export class AdminServer implements Lifecycle {
       void this.handleFleetRequest(req, res);
       return;
     }
+    if (!this.browserSessions.checkHttpSecurity(req, res)) return;
     this.dispatchRequest(req, res, this.token);
   }
 
@@ -159,6 +167,11 @@ export class AdminServer implements Lifecycle {
   private handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     if (this.admission.kind === 'fleet-principal') {
       void this.handleFleetUpgrade(req, socket, head);
+      return;
+    }
+    if (!this.browserSessions.checkUpgradeSecurity(req)) {
+      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+      socket.destroy();
       return;
     }
     this.telemetryTransport.handleUpgrade(req, socket, head);
@@ -256,11 +269,11 @@ export class AdminServer implements Lifecycle {
   }
 
   private checkAuth(req: IncomingMessage, res: ServerResponse): boolean {
-    return checkAdminRequestAuth(req, res, this.token);
+    return checkAdminRequestAuth(req, res, this.token, this.browserSessions);
   }
 
   private checkUpgradeAuth(req: IncomingMessage): boolean {
-    return checkAdminUpgradeAuth(req, this.token);
+    return checkAdminUpgradeAuth(req, this.token, this.browserSessions);
   }
 
   private send404(res: ServerResponse, path: string): void {

@@ -16,6 +16,24 @@
 {{- end -}}
 {{- end -}}
 {{- end -}}
+{{- if not .Values.fleetAuth.enabled -}}
+{{- if or (not .Values.gardenBrowser.publicOrigin) (not (len .Values.gardenBrowser.trustedProxyAddresses)) -}}
+{{- fail "standalone Garden requires gardenBrowser.publicOrigin and gardenBrowser.trustedProxyAddresses for an explicit HTTPS TLS-terminating proxy contract" -}}
+{{- end -}}
+{{- range .Values.gardenBrowser.trustedProxyAddresses -}}
+{{- if or (not (regexMatch "^[0-9a-fA-F:.]+(/[1-9][0-9]*)?$" .)) (hasSuffix "/0" .) (eq . "0.0.0.0") (eq . "::") -}}
+{{- fail "gardenBrowser.trustedProxyAddresses must contain literal IPs or bounded CIDRs, never wildcard/all-network sources" -}}
+{{- end -}}
+{{- end -}}
+{{- if and .Values.ingress.enabled .Values.ingress.garden.enabled -}}
+{{- if or (not .Values.ingress.garden.tls.enabled) (not .Values.ingress.garden.tls.secretName) -}}
+{{- fail "standalone Garden ingress requires ingress.garden.tls.enabled and an existing TLS secretName" -}}
+{{- end -}}
+{{- if ne .Values.gardenBrowser.publicOrigin (printf "https://%s" .Values.ingress.garden.host) -}}
+{{- fail "gardenBrowser.publicOrigin must exactly match the HTTPS Garden ingress host" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- if not (regexMatch "^[A-Z][A-Z0-9_]*$" .Values.provider.envName) -}}
 {{- fail "provider.envName must match the providers.json uppercase env-name contract" -}}
 {{- end -}}

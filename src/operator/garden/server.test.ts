@@ -99,7 +99,7 @@ function request(
 ): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string }> {
   return new Promise((resolve, reject) => {
     const req = http.request(
-      { hostname: '127.0.0.1', port, method, path, headers: { ...headers } },
+      { hostname: '127.0.0.1', port, method, path, headers: { 'X-Forwarded-Proto': 'https', ...headers } },
       (res) => {
         let data = '';
         res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
@@ -114,7 +114,7 @@ function request(
 
 function openWebSocket(port: number, path: string, headers?: Record<string, string>): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}${path}`, { headers });
+    const ws = new WebSocket(`ws://127.0.0.1:${port}${path}`, { headers: { 'X-Forwarded-Proto': 'https', ...headers } });
     const cleanup = () => {
       ws.removeAllListeners('open');
       ws.removeAllListeners('error');
@@ -491,6 +491,9 @@ async function createHarness(options: {
     host: options.host,
     token: options.token,
     allowInsecureWithoutToken: options.allowInsecureWithoutToken ?? false,
+    ...(options.token && !options.fleetAuthEnabled
+      ? { publicOrigin: `https://127.0.0.1:${port}`, trustedProxyAddresses: ['127.0.0.1'] }
+      : {}),
     eventBus,
     config,
     services,
@@ -999,6 +1002,20 @@ describe('AdminServer Garden routing', () => {
     const token = 'test-admin-secret';
     const bearerHeaders = { Authorization: `Bearer ${token}` };
 
+    async function browserLogin() {
+      const page = await request(harness.port, 'GET', '/login');
+      const csrf = /name="csrf" value="([^"]+)"/.exec(page.body)![1]!;
+      const challenge = page.headers['set-cookie']!.map(value => value.split(';')[0]).join('; ');
+      const response = await request(harness.port, 'POST', '/login', new URLSearchParams({ token, csrf }).toString(), {
+        Cookie: challenge, Origin: `https://127.0.0.1:${harness.port}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+      expect(response.status).toBe(302);
+      const cookies = response.headers['set-cookie']!;
+      return { response, cookie: cookies.map(value => value.split(';')[0]).join('; '),
+        csrf: /^__Host-psfn_csrf=([^;]+)/.exec(cookies.find(value => value.startsWith('__Host-psfn_csrf='))!)![1]! };
+    }
+
     beforeEach(async () => {
       harness = await createHarness({ token });
     });
@@ -1051,18 +1068,14 @@ describe('AdminServer Garden routing', () => {
       expect(loginPageRes.body).toContain(`Login - ${escapedExpectedGardenTitle}`);
       expect(loginPageRes.body).not.toContain('PSFN\'s Garden');
 
-      const loginBody = new URLSearchParams({ token }).toString();
-      const loginRes = await request(harness.port, 'POST', '/login', loginBody, {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      });
+      const { response: loginRes, cookie: cookieHeader } = await browserLogin();
       expect(loginRes.status).toBe(302);
       expect(loginRes.headers.location).toBe('/');
 
       const setCookie = loginRes.headers['set-cookie'];
       const cookie = Array.isArray(setCookie) ? setCookie[0] : setCookie;
-      expect(cookie).toContain('psfn_token=');
-
-      const cookieHeader = cookie!.split(';')[0];
+      expect(cookie).toContain('__Host-psfn_session=');
+      expect(cookie).not.toContain(token);
       const authorizedApi = await request(harness.port, 'GET', '/api/admin/dashboard', undefined, {
         Cookie: cookieHeader,
       });
@@ -1070,21 +1083,17 @@ describe('AdminServer Garden routing', () => {
     });
 
     it('clears auth cookie on /api/admin/logout', async () => {
-      const loginBody = new URLSearchParams({ token }).toString();
-      const loginRes = await request(harness.port, 'POST', '/login', loginBody, {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      });
-      const setCookie = loginRes.headers['set-cookie'];
-      const cookie = Array.isArray(setCookie) ? setCookie[0] : setCookie;
-      const cookieHeader = cookie!.split(';')[0];
+      const { cookie: cookieHeader, csrf } = await browserLogin();
 
       const logoutRes = await request(harness.port, 'POST', '/api/admin/logout', undefined, {
         Cookie: cookieHeader,
+        Origin: `https://127.0.0.1:${harness.port}`,
+        'X-CSRF-Token': csrf,
       });
       expect(logoutRes.status).toBe(200);
       const logoutCookie = logoutRes.headers['set-cookie'];
       const cleared = Array.isArray(logoutCookie) ? logoutCookie[0] : logoutCookie;
-      expect(cleared).toContain('psfn_token=');
+      expect(cleared).toContain('__Host-psfn_session=');
       expect(cleared).toContain('Max-Age=0');
     });
 
@@ -1095,17 +1104,12 @@ describe('AdminServer Garden routing', () => {
 
     it('preserves /api/admin/events websocket auth and event streaming', async () => {
       const unauthorizedStatus = await openWebSocketExpectStatus(harness.port, '/api/admin/events');
-      expect(unauthorizedStatus).toBe(401);
+      expect(unauthorizedStatus).toBe(403);
 
-      const loginBody = new URLSearchParams({ token }).toString();
-      const loginRes = await request(harness.port, 'POST', '/login', loginBody, {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      });
-      const setCookie = loginRes.headers['set-cookie'];
-      const cookie = Array.isArray(setCookie) ? setCookie[0] : setCookie;
-      const cookieHeader = cookie!.split(';')[0];
+      const { cookie: cookieHeader } = await browserLogin();
       const ws = await openWebSocket(harness.port, '/api/admin/events', {
         Cookie: cookieHeader,
+        Origin: `https://127.0.0.1:${harness.port}`,
       });
       const messagePromise = new Promise<{ type: string }>((resolve, reject) => {
         const timeout = setTimeout(() => reject(new Error('Timed out waiting for websocket telemetry')), 2000);

@@ -318,7 +318,7 @@ export function loadHelmContext(): HelmContext {
     apiPort,
     gardenPort,
     apiBase: `http://127.0.0.1:${apiPort}`,
-    gardenBase: `${nativeGarden ? 'https' : 'http'}://127.0.0.1:${gardenPort}`,
+    gardenBase: env.ADMIN_PUBLIC_ORIGIN || `${nativeGarden ? 'https' : 'http'}://127.0.0.1:${gardenPort}`,
     ...(k3dCluster ? { k3dCluster } : {}),
     nativeGarden,
     publishTailnet,
@@ -537,7 +537,9 @@ function helmSetArgs(context: HelmContext): string[] {
     ['postgres.auth.username', 'postgres'],
     ['postgres.auth.existingSecret', context.postgresSecret],
     ['postgres.restoreVerify.roles.companionSchemaOwners[0]', 'companion_main_runtime'],
-    ['ingress.garden.host', context.nativeGarden ? '' : 'psfn-garden.local'],
+    ['gardenBrowser.publicOrigin', context.env.ADMIN_PUBLIC_ORIGIN ?? ''],
+    ['ingress.garden.host', context.env.ADMIN_PUBLIC_ORIGIN ? new URL(context.env.ADMIN_PUBLIC_ORIGIN).hostname : 'psfn-garden.local'],
+    ['ingress.garden.tls.secretName', context.env.ADMIN_TLS_SECRET_NAME ?? ''],
   ];
   const booleans: Array<[string, boolean]> = [
     ['fleet.enabled', false],
@@ -550,12 +552,14 @@ function helmSetArgs(context: HelmContext): string[] {
     ['ingress.enabled', context.nativeGarden],
     ['ingress.gateway.enabled', false],
     ['ingress.garden.enabled', context.nativeGarden],
+    ['ingress.garden.tls.enabled', context.nativeGarden],
     ['hostPorts.gatewayApi.enabled', false],
     ['hostPorts.garden.enabled', false],
   ];
   return [
     ...strings.flatMap(([name, value]) => ['--set-string', `${name}=${value}`]),
     ...booleans.flatMap(([name, value]) => ['--set', `${name}=${String(value)}`]),
+    '--set-json', `gardenBrowser.trustedProxyAddresses=${JSON.stringify(context.env.ADMIN_TRUSTED_PROXY_ADDRESSES?.split(',').map(value => value.trim()) ?? [])}`,
   ];
 }
 
@@ -670,18 +674,16 @@ async function requestGarden(
       timeoutMs,
       ...(input.token ? { token: input.token } : {}),
       ...(input.cookie ? { cookie: input.cookie } : {}),
+      ...(context.env.ADMIN_PUBLIC_ORIGIN ? { publicOrigin: context.env.ADMIN_PUBLIC_ORIGIN } : {}),
     });
   }
   const response = await fetch(`${context.gardenBase}${path}`, {
     method: input.method,
     redirect: 'manual',
-    ...(input.token
-      ? {
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: new URLSearchParams({ token: input.token }),
-        }
-      : {}),
-    ...(input.cookie ? { headers: { Cookie: input.cookie } } : {}),
+    headers: {
+      ...(input.token ? { Authorization: `Bearer ${input.token}` } : {}),
+      ...(input.cookie ? { Cookie: input.cookie } : {}),
+    },
     signal: AbortSignal.timeout(timeoutMs),
   });
   const text = await response.text();
@@ -840,16 +842,8 @@ async function doctor(context: HelmContext): Promise<void> {
   if (!gardenHealth.ok || record(gardenHealthBody)?.status !== 'ok') {
     fail(`Garden health failed (HTTP ${gardenHealth.status}).`);
   }
-  const login = await requestGarden(context, '/login', {
-    method: 'POST',
-    token: secrets.ADMIN_TOKEN,
-  });
-  const cookie = login.setCookie?.split(';', 1)[0];
-  if (login.status !== 302 || !cookie?.includes('psfn_token=')) {
-    fail(`Garden rejected the runtime Secret token (HTTP ${login.status}).`);
-  }
   const dashboard = await requestGarden(context, '/', {
-    cookie,
+    token: secrets.ADMIN_TOKEN,
   });
   const body = dashboard.text;
   if (!dashboard.ok || !body.toLowerCase().includes('<!doctype html')) {

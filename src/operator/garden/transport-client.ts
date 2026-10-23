@@ -86,7 +86,7 @@ function firstHeader(value: string | string[] | undefined): string | undefined {
 }
 
 /**
- * Removes the operator ADMIN_TOKEN session cookie (`psfn_token`) from a Cookie
+ * Removes standalone operator authority cookies from a Cookie
  * header while preserving every other cookie (e.g. `psfn_garden_session`).
  * Returns undefined when nothing survives.
  */
@@ -99,7 +99,7 @@ function stripAdminSessionCookie(cookieHeader: string | undefined): string | und
       if (!part) return false;
       const eq = part.indexOf('=');
       const name = eq < 0 ? part : part.slice(0, eq);
-      return name !== PSFN_ADMIN_SESSION_COOKIE;
+      return name !== PSFN_ADMIN_SESSION_COOKIE && name !== '__Host-psfn_session' && name !== '__Host-psfn_csrf';
     });
   return kept.length > 0 ? kept.join('; ') : undefined;
 }
@@ -123,6 +123,7 @@ function buildProxyHeaders(
   // process where it could be captured or replayed (x5rt.10). Strip the bearer
   // credential and the `psfn_token` session cookie; other cookies are kept.
   delete forwardedHeaders.authorization;
+  delete forwardedHeaders['x-csrf-token'];
   if (!trustedAuthorityHeaders) {
     const strippedCookie = stripAdminSessionCookie(firstHeader(headers.cookie));
     if (strippedCookie === undefined) {
@@ -162,6 +163,25 @@ function buildWebSocketHeaders(
     }
   }
   return normalized;
+}
+
+function buildProxyResponseHeaders(headers: IncomingHttpHeaders, res: ServerResponse): IncomingHttpHeaders {
+  if (!res.hasHeader('Content-Security-Policy')) return headers;
+  const forwarded = { ...headers };
+  // The less-trusted agent cannot weaken the operator browser boundary.
+  for (const name of ['content-security-policy', 'x-frame-options', 'x-content-type-options',
+    'referrer-policy', 'strict-transport-security', 'cache-control']) delete forwarded[name];
+  const cookies = forwarded['set-cookie']?.filter(value => {
+    const name = value.split('=', 1)[0]?.trim();
+    return name !== 'psfn_token' && name !== '__Host-psfn_session' && name !== '__Host-psfn_csrf';
+  });
+  if (cookies?.length) {
+    const existing = res.getHeader('Set-Cookie');
+    const previous = Array.isArray(existing) ? existing : (existing ? [String(existing)] : []);
+    forwarded['set-cookie'] = [...previous, ...cookies];
+  }
+  else delete forwarded['set-cookie'];
+  return forwarded;
 }
 
 function toWebSocketTlsOptions(tlsOptions: TlsRequestOptions): WebSocketTlsRequestOptions {
@@ -397,7 +417,7 @@ export class GardenAdminTransportProxy {
       req.method,
       buildProxyHeaders(req.headers),
       (proxyResponse) => {
-        res.writeHead(proxyResponse.statusCode ?? 502, proxyResponse.headers);
+        res.writeHead(proxyResponse.statusCode ?? 502, buildProxyResponseHeaders(proxyResponse.headers, res));
         proxyResponse.pipe(res);
         proxyResponse.on('error', (error) => {
           log.warn('Garden admin proxy response stream failed', {
@@ -438,7 +458,7 @@ export class GardenAdminTransportProxy {
       req.method,
       headers,
       (proxyResponse) => {
-        res.writeHead(proxyResponse.statusCode ?? 502, proxyResponse.headers);
+        res.writeHead(proxyResponse.statusCode ?? 502, buildProxyResponseHeaders(proxyResponse.headers, res));
         proxyResponse.pipe(res);
         proxyResponse.on('error', (error) => {
           log.warn('Garden admin proxy response stream failed', {

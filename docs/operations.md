@@ -86,8 +86,8 @@ and never silently switches providers or deployment paths.
 | Logs | `npm run compose:logs` | `npm run local:logs` | `npm run helm:logs` |
 | Stop, preserving data | `npm run compose:down` | `npm run local:down` | `npm run helm:down` |
 
-All three lifecycles expose the same default local endpoints: Garden login at
-`http://127.0.0.1:10053/login` and the OpenAI-compatible API at
+All three lifecycles use the same default local forwarding ports: Garden at
+`127.0.0.1:10053` and the OpenAI-compatible API at
 `http://127.0.0.1:10054/v1`. Ports are overridable per path: `PSFN_API_PORT` /
 `PSFN_GARDEN_PORT` for Compose and Helm, `API_PORT` / `ADMIN_PORT` for the
 repository-native path, whose in-process operator alert sink additionally
@@ -95,6 +95,13 @@ defaults to `PSFN_LOCAL_ALERT_PORT` 10055. Compose and repository-native take
 the Garden `ADMIN_TOKEN` from the ignored `.env`; Kubernetes keeps it in the
 retained application Secret and exposes it only through `npm run helm:token` on
 explicit request.
+
+Standalone browser login requires an explicitly configured HTTPS proxy origin
+and immediate peer allowlist; local bearer automation remains available on
+loopback. Compose and Helm refuse unconfigured non-loopback browser listeners.
+See [Garden browser sessions](security/garden-browser-sessions.md) for configuration,
+cookie lifetime, CSRF, logout, and proxy requirements. Lifecycle doctors probe
+Garden with bearer credentials rather than browser login cookies.
 
 ## Authentication
 
@@ -130,7 +137,7 @@ and wins when both exist, but is not needed. The key-only recipe is in
 `*:doctor` is the routine readiness check on every path. It verifies the
 supervisor/workloads, the Postgres role/schema topology, gateway
 `/health` with the `memory`, `embeddings`, and `scheduler` subsystems healthy,
-Garden `/health`, the Garden token login challenge, and the authenticated Garden
+Garden `/health` and the bearer-authenticated Garden
 UI. `*:verify` goes further: it runs one real provider-backed chat turn, proves
 the exact user/assistant pair landed in the canonical `_turn_records` JSONL
 journal, performs a full runtime restart (Compose restart, supervised restart,

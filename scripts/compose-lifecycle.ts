@@ -83,7 +83,7 @@ function loadContext(): LifecycleContext {
     env,
     dataRoot,
     apiBase: `http://127.0.0.1:${apiPort}`,
-    gardenBase: `http://127.0.0.1:${gardenPort}`,
+    gardenBase: env.ADMIN_PUBLIC_ORIGIN || `http://127.0.0.1:${gardenPort}`,
   };
 }
 
@@ -193,24 +193,9 @@ async function doctor(context: LifecycleContext): Promise<void> {
   if (!gardenHealth.response.ok || record(gardenHealth.body)?.status !== 'ok') {
     fail(`Garden /health is not ready (HTTP ${gardenHealth.response.status}).`);
   }
-  const loginPage = await fetch(`${context.gardenBase}/login`, { signal: AbortSignal.timeout(10_000) });
-  if (!loginPage.ok || !(await loginPage.text()).includes('name="token"')) {
-    fail(`Garden login page is unavailable (HTTP ${loginPage.status}).`);
-  }
-  const login = await fetch(`${context.gardenBase}/login`, {
-    method: 'POST',
-    redirect: 'manual',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ token: context.env.ADMIN_TOKEN! }),
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (login.status !== 302 || !login.headers.get('set-cookie')?.includes('psfn_token=')) {
-    fail(`Garden rejected the configured ADMIN_TOKEN (HTTP ${login.status}).`);
-  }
-  const sessionCookie = login.headers.get('set-cookie')?.split(';', 1)[0];
   const dashboard = await fetch(`${context.gardenBase}/`, {
     redirect: 'manual',
-    headers: { Cookie: sessionCookie! },
+    headers: { Authorization: `Bearer ${context.env.ADMIN_TOKEN}` },
     signal: AbortSignal.timeout(10_000),
   });
   const dashboardBody = await dashboard.text();
@@ -229,7 +214,7 @@ async function doctor(context: LifecycleContext): Promise<void> {
 
   console.log('PASS: Postgres, gateway, agent, and Garden are running.');
   console.log('PASS: Gateway memory, embeddings, and scheduler subsystems are healthy.');
-  console.log('PASS: Garden health, login challenge, and authenticated UI succeeded.');
+  console.log('PASS: Garden health and bearer-authenticated UI succeeded.');
   console.log(`Gateway: ${context.apiBase}`);
   console.log(`Garden:  ${context.gardenBase}/login`);
 }

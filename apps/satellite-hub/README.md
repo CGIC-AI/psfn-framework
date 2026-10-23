@@ -430,6 +430,44 @@ Never print tokens or put them in Helm values or release history. Helm uses
 exposed Hub without either registry authority or enabled dedicated Voxta
 authority. No live deployment is changed by these defaults.
 
+The supported Python `hub run` realtime/hybrid entrypoint follows the same
+literal-loopback development and `HUB_ALLOWED_ORIGINS` contract. For native
+authenticated access set a separate `HUB_REALTIME_AUTH_TOKEN` (32 random bytes
+as hex/base64url) and send it as a bearer header on upgrade. Python cannot
+enroll or impersonate a device; client conversation/device IDs cannot select
+server history. Both runtimes reject placeholder, repeated, and low-diversity
+access tokens. The standalone TypeScript loaders apply the shared deployment
+credential policy to PSFN, companion API, and control credentials as well.
+
+Hub transport admission defaults are 256 KiB per WebSocket frame (compression
+disabled), 64 KiB per JSON body, 4 MiB per vision file plus 64 KiB multipart
+overhead, and 4 MiB or 120 seconds per 16 kHz mono PCM16 utterance, whichever
+comes first. Bodies expire after 10 seconds. The TypeScript Hub allows 64
+authenticated and 8 awaiting-authentication sockets, 8 active HTTP requests,
+and 32 additional TCP connections; the total TCP population is capped at the
+sum. Authentication expires after 5 seconds, idle sockets after 30 seconds,
+and unused negotiations after 30 seconds, with at most 128 pending negotiations.
+Incoming queues allow 32 messages and 1 MiB including the active message;
+outgoing buffering and retained reply text allow 1 MiB. Session/history caches
+retain at most 128 entries and evict the least recently used entry. Provider
+speech queues allow 32 segments. Oversized input closes only its connection or
+returns 413/429; abandoned bodies return 408.
+
+`HUB_RESOURCE_LIMITS_PATH` optionally points to a JSON object
+`{"schemaVersion":1,"limits":{"maxFrameBytes":262144}}` relative to the Hub
+root. Omitted limits retain these defaults; unknown keys and nonpositive or
+unbounded integers reject startup. The complete keys are declared in
+`src/ts/hub/transport-resources.ts`. Explicit `turn.start`/`turn.end` frames
+buffer a complete utterance before transcription or artifact creation. Existing
+continuous PCM clients still complete automatically after speech followed by
+800 ms of silence (RMS threshold 25 in PCM sample units); continuous silence,
+overflow, expiry, interrupt, or disconnect cannot submit an incomplete utterance.
+Python uses explicit turn frames, the same frame/audio/idle defaults, 64
+authenticated sockets, and a 32-frame bounded incoming queue; WebSocket writes
+apply backpressure. Its server constructor exposes smaller limits for embedding
+and focused tests. No paid provider or hardware checks are required to verify
+these transport boundaries.
+
 Supported Voxta client messages:
 
 | `$type` | Behavior |

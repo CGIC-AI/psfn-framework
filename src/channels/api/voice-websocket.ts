@@ -7,6 +7,7 @@ import type {
   VoiceWireTransportData,
   WebSocketVoiceConnection,
 } from '../../primitives/voice/transports/websocket/types.js';
+import { DEFAULT_MAX_FRAME_BYTES } from '../../primitives/voice/transports/websocket/server.js';
 import {
   getBearerToken,
   getCookieValue,
@@ -38,6 +39,7 @@ export interface VoiceWebSocketRuntimeContext {
 }
 
 export interface VoiceWebSocketRuntime {
+  readonly maxFrameBytes?: number;
   attach(connection: WebSocketVoiceConnection, context: VoiceWebSocketRuntimeContext): () => void;
   stop(): void | Promise<void>;
 }
@@ -155,6 +157,8 @@ function redactRequestPath(rawUrl: string | undefined): string {
 function createVoiceConnection(connectionId: string, socket: WebSocket): WebSocketVoiceConnection {
   const messageHandlers = new Set<(data: VoiceWireTransportData) => void>();
   const closeHandlers = new Set<() => void>();
+  // ws emits errors for transport-level rejection before application parsing.
+  socket.on('error', () => { socket.terminate(); });
 
   socket.on('message', (raw: RawData, isBinary: boolean) => {
     const data = isBinary
@@ -269,9 +273,13 @@ export class ApiVoiceWebSocketAdapter {
     this.path = config.path ?? DEFAULT_VOICE_WEBSOCKET_PATH;
     this.now = config.now ?? (() => Date.now());
     this.runtime = config.runtime ?? createHookVoiceWebSocketRuntime(config.runtimeHooks, this.now);
+    const maxPayload = this.runtime.maxFrameBytes ?? DEFAULT_MAX_FRAME_BYTES;
+    if (!Number.isSafeInteger(maxPayload) || maxPayload < 1) {
+      throw new Error('API voice maxFrameBytes must be a positive integer');
+    }
     this.webSocketServer = config.createWebSocketServer
       ? config.createWebSocketServer()
-      : new WebSocketServer({ noServer: true });
+      : new WebSocketServer({ noServer: true, maxPayload, perMessageDeflate: false });
   }
 
   handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): boolean {

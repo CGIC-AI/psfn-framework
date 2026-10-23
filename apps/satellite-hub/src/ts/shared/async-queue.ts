@@ -3,6 +3,8 @@ export class AsyncQueue<T> implements AsyncIterable<T> {
   private readonly waiters: Array<(value: IteratorResult<T>) => void> = [];
   private closed = false;
 
+  constructor(private readonly maxItems = Number.POSITIVE_INFINITY) {}
+
   push(item: T): void {
     if (this.closed) {
       return;
@@ -12,6 +14,7 @@ export class AsyncQueue<T> implements AsyncIterable<T> {
       waiter({ done: false, value: item });
       return;
     }
+    if (this.items.length >= this.maxItems) throw new Error("Hub output queue exceeded");
     this.items.push(item);
   }
 

@@ -11,7 +11,7 @@ interface SessionState {
 export class SessionStore {
   private readonly sessions = new Map<string, SessionState>();
 
-  constructor(private readonly ttlSeconds: number) {}
+  constructor(private readonly ttlSeconds: number, private readonly maxSessions = 128) {}
 
   getHistory(sessionId: string): ConversationMessage[] {
     this.cleanup();
@@ -19,6 +19,7 @@ export class SessionStore {
   }
 
   append(sessionId: string, message: ConversationMessage): void {
+    this.touch(sessionId);
     const current = this.sessions.get(sessionId) ?? { updatedAt: Date.now(), messages: [] };
     current.updatedAt = Date.now();
     current.messages.push(message);
@@ -29,8 +30,11 @@ export class SessionStore {
   }
 
   touch(sessionId: string): void {
+    this.cleanup();
     const current = this.sessions.get(sessionId) ?? { updatedAt: Date.now(), messages: [] };
     current.updatedAt = Date.now();
+    this.sessions.delete(sessionId);
+    if (this.sessions.size >= this.maxSessions) this.sessions.delete(this.sessions.keys().next().value!);
     this.sessions.set(sessionId, current);
   }
 

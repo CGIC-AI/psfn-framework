@@ -3,7 +3,9 @@ import os from "node:os";
 import path from "node:path";
 
 import dotenv from "dotenv";
+import { assertStrongHubCredential } from "./credentials.js";
 import type { HubAccessConfig } from "../hub/hub-auth.js";
+import { loadHubResourceLimits, type HubResourceLimits } from "../hub/transport-resources.js";
 import { loadCompanionBrowserConfig, type CompanionBrowserConfig } from "../hub/companion-browser-config.js";
 import {
   loadHubDeviceRegistryAuthority,
@@ -99,6 +101,7 @@ export interface HubControlConfig {
 }
 
 export interface HubConfig {
+  limits?: Partial<HubResourceLimits>;
   access?: HubAccessConfig;
   companionBrowser?: CompanionBrowserConfig | null;
   textOnlyMode: boolean;
@@ -199,6 +202,7 @@ export function loadPsfnRuntime(projectRoot: string): PsfnRuntimeConfig {
   const baseUrl = required("PSFN_API_BASE_URL");
   const model = process.env.PSFN_MODEL?.trim() || "psfn";
   const apiKey = process.env.PSFN_API_KEY?.trim() || undefined;
+  if (apiKey) assertStrongHubCredential(apiKey, "PSFN_API_KEY");
   const capabilityProfile = parseCapabilityProfile(process.env.PSFN_CAPABILITY_PROFILE) ?? DEFAULT_CAPABILITY_PROFILE;
   const profileDefaults = CAPABILITY_PROFILE_DEFAULTS[capabilityProfile];
   const claimNamespace = process.env.PSFN_CLAIM_NAMESPACE?.trim() || SATELLITE_CLAIM_NAMESPACE;
@@ -265,6 +269,8 @@ export function loadCompanionBridgeConfig(
   if (!baseUrl) {
     return null;
   }
+  const companionKey = optional("PSFN_COMPANION_API_KEY") ?? optional("PSFN_API_KEY");
+  if (companionKey) assertStrongHubCredential(companionKey, "PSFN_COMPANION_API_KEY");
   const identity: CompanionBridgeIdentity = {
     satelliteId: satelliteClaim.satelliteId?.trim() || "",
     endpointId: satelliteClaim.endpointId?.trim() || "",
@@ -291,7 +297,7 @@ export function loadCompanionBridgeConfig(
   }
   return {
     baseUrl: normalizedBaseUrl,
-    apiKey: optional("PSFN_COMPANION_API_KEY") ?? optional("PSFN_API_KEY"),
+    apiKey: companionKey,
     identity,
     previewMaxBytes,
     reconnectBaseMs,
@@ -334,6 +340,7 @@ export function loadHubConfig(projectRoot: string): HubConfig {
 
   return {
     textOnlyMode,
+    limits: loadHubResourceLimits(projectRoot),
     access: {
       developerMode: process.env.HUB_DEVELOPER_MODE?.trim() === "true",
       allowedOrigins: splitCsv(process.env.HUB_ALLOWED_ORIGINS || ""),
@@ -453,9 +460,7 @@ export function loadHubControlConfig(requiredForHomeAssistant: boolean): HubCont
         : "HUB_CONTROL_BIND_HOST, HUB_CONTROL_PORT, and HUB_CONTROL_TOKEN must all be set together",
     );
   }
-  if (token.length < 16) {
-    throw new Error("HUB_CONTROL_TOKEN must be at least 16 characters");
-  }
+  assertStrongHubCredential(token, "HUB_CONTROL_TOKEN");
   const port = Number.parseInt(portValue, 10);
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {
     throw new Error("HUB_CONTROL_PORT must be a valid TCP port");

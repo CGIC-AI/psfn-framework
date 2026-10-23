@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 
 from hub.config import ESPHomeTarget, RealtimeTarget
 from hub.security.device_assertion import HubDeviceAssertionConfig
+from hub.security.realtime_access import RealtimeAccess
 from hub.satellite_claims import (
     CAPABILITY_PROFILE_DEFAULTS,
     DEFAULT_CAPABILITY_PROFILE,
@@ -70,6 +71,7 @@ class HubRuntimeConfig:
     device_transport: str
     esphome_target: ESPHomeTarget | None
     realtime_target: RealtimeTarget
+    realtime_access: RealtimeAccess
     deepgram_api_key: str
     elevenlabs_api_key: str
     elevenlabs_voice_id: str | None
@@ -136,7 +138,7 @@ def load_runtime_config(project_root: Path) -> HubRuntimeConfig:
     configured_audio_public_host = os.getenv("AUDIO_PUBLIC_HOST") or None
     audio_port = int(os.getenv("AUDIO_SERVER_PORT", "8099"))
     audio_public_port = int(os.getenv("AUDIO_PUBLIC_PORT") or str(audio_port))
-    realtime_bind_host = os.getenv("REALTIME_VOICE_BIND_HOST", "0.0.0.0")
+    realtime_bind_host = os.getenv("REALTIME_VOICE_BIND_HOST", "127.0.0.1")
     realtime_port = int(os.getenv("REALTIME_VOICE_PORT", "8787"))
     configured_realtime_public_host = os.getenv("REALTIME_VOICE_PUBLIC_HOST") or None
     if configured_audio_public_host:
@@ -176,6 +178,12 @@ def load_runtime_config(project_root: Path) -> HubRuntimeConfig:
     if not voice_conversation_id:
         raise ValueError("VOICE_CONVERSATION_ID must be non-empty")
     artifacts_root = _resolve_path(project_root, os.getenv("ARTIFACT_ROOT", ".artifacts/runtime"))
+    realtime_access = RealtimeAccess(
+        host=realtime_bind_host,
+        token=os.getenv("HUB_REALTIME_AUTH_TOKEN") or None,
+        developer_mode=os.getenv("HUB_DEVELOPER_MODE", "").strip() == "true",
+        allowed_origins=tuple(_split_csv(os.getenv("HUB_ALLOWED_ORIGINS"))),
+    )
 
     return HubRuntimeConfig(
         project_root=project_root,
@@ -186,6 +194,7 @@ def load_runtime_config(project_root: Path) -> HubRuntimeConfig:
             port=realtime_port,
             public_host=realtime_public_host,
         ),
+        realtime_access=realtime_access,
         deepgram_api_key=_required("DEEPGRAM_API_KEY"),
         elevenlabs_api_key=_required("ELEVENLABS_API_KEY"),
         elevenlabs_voice_id=os.getenv("ELEVENLABS_VOICE_ID") or None,

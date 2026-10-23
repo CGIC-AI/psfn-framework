@@ -1,3 +1,4 @@
+import { readUpstreamBytes } from "../shared/upstream-response.js";
 import { hubConsole as console } from "../shared/private-log.js";
 import { writePrivateArtifact } from "../shared/private-artifacts.js";
 import path from "node:path";
@@ -146,28 +147,9 @@ export class EidoverseSnapshotSource {
    * budget, not after it has been held in memory.
    */
   private async readBounded(response: Response): Promise<Buffer | null> {
-    const body = response.body;
-    if (!body) return null;
-    const reader = body.getReader();
-    const chunks: Uint8Array[] = [];
-    let total = 0;
     try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (!value) continue;
-        total += value.byteLength;
-        if (total > this.config.maxBytes) {
-          await reader.cancel();
-          return null;
-        }
-        chunks.push(value);
-      }
-    } catch {
-      await reader.cancel().catch(() => undefined);
-      return null;
-    }
-    return Buffer.concat(chunks);
+      return await readUpstreamBytes(response, { maxBytes: this.config.maxBytes, timeoutMs: this.config.timeoutMs });
+    } catch { return null; }
   }
 
   private persist(sessionId: string, requestId: string, image: Buffer, view: EidoverseSnapshotView): VisionCaptureImage {

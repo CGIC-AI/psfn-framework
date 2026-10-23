@@ -2,6 +2,8 @@ import { hubConsole as console } from "../shared/private-log.js";
 import fs from "node:fs";
 import https from "node:https";
 import type { IncomingMessage } from "node:http";
+import { fetchUpstream, discardUpstream, readUpstreamJson, readUpstreamText, UpstreamResponseError, type UpstreamReadBudget } from "../shared/upstream-response.js";
+import { resolveHubResourceLimits, type HubResourceLimits } from "./transport-resources.js";
 import { setTimeout as delay } from "node:timers/promises";
 
 import type { ConversationMessage } from "./session-store.js";
@@ -24,12 +26,16 @@ interface CompletionResponse {
   ok: boolean;
   status: number;
   text(): Promise<string>;
-  chunks(): AsyncIterable<Uint8Array>;
+  discard(): Promise<void>;
+}
+
+class PsfnHttpError extends Error {
+  constructor(status: number) { super(`PSFN chat completion failed (${status})`); }
 }
 
 class KnownHttpResponseReadError extends Error {
-  constructor(readonly status: number, cause: unknown) {
-    super(`PSFN chat completion failed (${status}): response body unavailable`, { cause });
+  constructor(readonly status: number) {
+    super(`PSFN chat completion failed (${status}): response body unavailable`);
     this.name = "KnownHttpResponseReadError";
   }
 }
@@ -79,13 +85,16 @@ export type PsfnTelemetrySink = (telemetry: PsfnReplyTelemetry) => void;
 export class PsfnModelAdapter implements FrameworkAgentAdapter {
   private readonly apiBaseUrl: string;
   private readonly onTelemetry: PsfnTelemetrySink;
+  private readonly limits: HubResourceLimits;
   private identityRequest: Promise<RuntimeIdentity | null> | null = null;
 
   constructor(
     private readonly runtime: PsfnRuntimeConfig,
     onTelemetry?: PsfnTelemetrySink,
     private readonly deviceRegistryAuthority: HubDeviceRegistryAuthority | null = null,
+    limits?: Partial<HubResourceLimits>,
   ) {
+    this.limits = resolveHubResourceLimits(limits);
     const baseUrl = runtime.baseUrl.replace(/\/$/, "");
     this.apiBaseUrl = baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`;
     this.onTelemetry = onTelemetry ?? defaultTelemetrySink;
@@ -165,9 +174,8 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
           () => this.assertCurrentDeviceAuthority(channel),
         );
         if (!response.ok) {
-          const errorText = await formatError(response);
           attempts.push({ attempt, status: "error", elapsedMs: Date.now() - attemptStart, httpStatus: response.status });
-          throw new Error(errorText);
+          throw new PsfnHttpError(response.status);
         }
         const fullText = extractCompletionText(await response.text()).trim();
         if (fullText) {
@@ -204,7 +212,8 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
           if (!deviceAuthenticated) continue;
         }
         emit("failed");
-        throw error;
+        throw error instanceof KnownHttpResponseReadError || error instanceof PsfnHttpError || error instanceof UpstreamResponseError
+          ? error : new Error("PSFN chat completion failed");
       } finally {
         scope.dispose();
       }
@@ -224,18 +233,21 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
   }
 
   private async fetchIdentity(): Promise<RuntimeIdentity | null> {
-    const response = await fetch(`${this.apiBaseUrl}/identity`, {
+    const response = await fetchUpstream(`${this.apiBaseUrl}/identity`, {
       method: "GET",
       headers: this.buildIdentityHeaders(),
-    });
+      signal: AbortSignal.timeout(this.limits.providerTimeoutMs),
+    }, this.limits.providerTimeoutMs);
     if (response.status === 404) {
+      await discardUpstream(response);
       return null;
     }
     if (!response.ok) {
+      await discardUpstream(response);
       console.warn(`PSFN identity endpoint failed (${response.status})`);
       return null;
     }
-    const payload = await response.json().catch(() => null);
+    const payload = await readUpstreamJson(response, { maxBytes: this.limits.maxHttpBodyBytes, timeoutMs: this.limits.providerTimeoutMs }).catch(() => null);
     return extractRuntimeIdentity(payload);
   }
 
@@ -259,30 +271,22 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
     if (tls?.certPath && tls.keyPath) {
       return this.postChatCompletionWithClientCertificate(url, headers, body, tls, signal);
     }
-    const response = await fetch(url, {
+    const response = await fetchUpstream(url, {
       method: "POST",
       headers,
       body,
       signal,
-    });
+    }, this.limits.providerTimeoutMs);
     return {
       ok: response.ok,
       status: response.status,
-      text: () => response.text(),
-      chunks: async function* chunks() {
-        if (!response.body) {
-          throw new Error("PSFN chat completion response did not include a body");
-        }
-        const reader = response.body.getReader();
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) {
-            break;
-          }
-          yield value;
-        }
-      },
+      text: () => readUpstreamText(response, this.responseBudget(signal)),
+      discard: () => discardUpstream(response),
     };
+  }
+
+  private responseBudget(signal?: AbortSignal): UpstreamReadBudget {
+    return { maxBytes: this.limits.maxQueuedBytes, timeoutMs: this.limits.providerTimeoutMs, signal };
   }
 
   private async postChatCompletionWithBusyRetry(
@@ -301,11 +305,15 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
       if (response.ok) {
         return response;
       }
+      if (response.status !== 503) {
+        await response.discard();
+        return responseFromText(response.status, "");
+      }
       let responseText: string;
       try {
         responseText = await response.text();
-      } catch (error) {
-        throw new KnownHttpResponseReadError(response.status, error);
+      } catch {
+        throw new KnownHttpResponseReadError(response.status);
       }
       if (!isAgentBusyResponse(response.status, responseText) || attempt >= maxRetries) {
         return responseFromText(response.status, responseText);
@@ -355,7 +363,7 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
           message.once("close", cleanup);
           message.once("end", cleanup);
           message.once("error", cleanup);
-          resolve(responseFromIncomingMessage(message, cleanup));
+          resolve(responseFromIncomingMessage(message, this.responseBudget(signal), cleanup));
         },
       );
       const onAbort = (): void => {
@@ -668,13 +676,6 @@ function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-async function formatError(response: CompletionResponse): Promise<string> {
-  const body = (await response.text()).trim();
-  if (body) {
-    return `PSFN chat completion failed (${response.status}): ${body}`;
-  }
-  return `PSFN chat completion failed (${response.status})`;
-}
 
 function isAgentBusyResponse(status: number, body: string): boolean {
   return status === 503 && (
@@ -703,35 +704,18 @@ function responseFromText(status: number, body: string): CompletionResponse {
     ok: status >= 200 && status < 300,
     status,
     text: async () => body,
-    chunks: async function* chunks() {
-      yield Buffer.from(body, "utf8");
-    },
+    discard: async () => undefined,
   };
 }
 
-function responseFromIncomingMessage(message: IncomingMessage, onConsumed: () => void = () => {}): CompletionResponse {
+function responseFromIncomingMessage(message: IncomingMessage, budget: UpstreamReadBudget, onConsumed: () => void): CompletionResponse {
   return {
     ok: Boolean(message.statusCode && message.statusCode >= 200 && message.statusCode < 300),
     status: message.statusCode ?? 0,
+    discard: async () => { await discardUpstream(message); onConsumed(); },
     text: async () => {
-      try {
-        const chunks: Buffer[] = [];
-        for await (const chunk of message) {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-        }
-        return Buffer.concat(chunks).toString("utf8");
-      } finally {
-        onConsumed();
-      }
-    },
-    chunks: async function* chunks() {
-      try {
-        for await (const chunk of message) {
-          yield Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-        }
-      } finally {
-        onConsumed();
-      }
+      try { return await readUpstreamText(message, budget); }
+      finally { onConsumed(); }
     },
   };
 }
@@ -812,14 +796,11 @@ function createAttemptScope(external: AbortSignal | undefined, timeoutMs: number
 }
 
 function isAbortError(error: unknown): boolean {
-  return error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError");
+  return error instanceof UpstreamResponseError ? (error.code === "timeout" || error.code === "cancelled")
+    : error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError");
 }
 
-function abortReason(signal?: AbortSignal): Error {
-  const reason = signal?.reason;
-  if (reason instanceof Error) {
-    return reason;
-  }
+function abortReason(_signal?: AbortSignal): Error {
   return new DOMException("The PSFN reply was aborted", "AbortError");
 }
 

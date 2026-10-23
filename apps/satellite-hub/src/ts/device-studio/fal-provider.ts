@@ -1,3 +1,6 @@
+import { discardUpstream, fetchUpstream, readUpstreamJson } from "../shared/upstream-response.js";
+import { DEFAULT_HUB_LIMITS } from "../hub/transport-resources.js";
+
 export type FalGenerationMode = "text-to-image" | "image-to-image" | "edit";
 
 export interface FalImageProviderConfig {
@@ -108,20 +111,21 @@ export class FalImageProvider {
     const prompt = requireNonEmptyString(request.prompt, "FAL prompt is required");
     const modelId = this.resolveModelId(mode, request.modelId);
     const imageUrls = mode === "text-to-image" ? [] : collectImageUrls(request as FalImageToImageRequest);
-    const response = await this.#fetch(this.buildUrl(modelId), {
+    const response = await fetchUpstream(this.buildUrl(modelId), {
       method: "POST",
       headers: {
         Authorization: `Key ${apiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(buildFalRequestBody({ mode, prompt, seed: request.seed, options: request.options, imageUrls })),
-    });
+    }, DEFAULT_HUB_LIMITS.providerTimeoutMs, this.#fetch);
 
     if (!response.ok) {
-      throw new FalImageProviderError(await formatFalHttpError(response, apiKey), { status: response.status });
+      await discardUpstream(response);
+      throw new FalImageProviderError(`FAL image generation failed (${response.status})`, { status: response.status });
     }
 
-    const payload = await readJsonResponse(response, apiKey);
+    const payload = await readJsonResponse(response);
     const images = parseImages(payload);
     if (!images.length) {
       throw new FalImageProviderError("FAL image generation response did not include image URLs");
@@ -272,40 +276,10 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-async function readJsonResponse(response: Response, apiKey: string): Promise<unknown> {
+async function readJsonResponse(response: Response): Promise<unknown> {
   try {
-    return await response.json() as unknown;
-  } catch (error) {
-    throw new FalImageProviderError("FAL image generation response was not valid JSON", {
-      cause: sanitizeUnknown(error, apiKey),
-    });
+    return await readUpstreamJson(response, { maxBytes: DEFAULT_HUB_LIMITS.maxHttpBodyBytes, timeoutMs: DEFAULT_HUB_LIMITS.providerTimeoutMs });
+  } catch {
+    throw new FalImageProviderError("FAL image generation response is unavailable or invalid");
   }
-}
-
-async function formatFalHttpError(response: Response, apiKey: string): Promise<string> {
-  const body = sanitizeForMessage((await response.text()).trim(), apiKey);
-  const statusText = sanitizeForMessage(response.statusText.trim(), apiKey);
-  const statusLabel = statusText ? `${response.status} ${statusText}` : String(response.status);
-  if (!body) {
-    return `FAL image generation failed (${statusLabel})`;
-  }
-  return `FAL image generation failed (${statusLabel}): ${body}`;
-}
-
-function sanitizeUnknown(error: unknown, apiKey: string): unknown {
-  if (error instanceof Error) {
-    return new Error(sanitizeForMessage(error.message, apiKey));
-  }
-  if (typeof error === "string") {
-    return sanitizeForMessage(error, apiKey);
-  }
-  return error;
-}
-
-function sanitizeForMessage(value: string, apiKey: string): string {
-  const redactedKey = apiKey ? value.split(apiKey).join("[redacted]") : value;
-  return redactedKey
-    .replace(/Authorization:\s*Key\s+[^\s"'<>]+/gi, "Authorization: Key [redacted]")
-    .replace(/"authorization"\s*:\s*"Key\s+[^"]+"/gi, '"authorization":"Key [redacted]"')
-    .slice(0, 2000);
 }

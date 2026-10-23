@@ -25,6 +25,7 @@ const vendorAssets = [
 
 const browserExcludedModuleNames = new Set([
   "fal-provider.js",
+  "generated-image.js",
   "sprite-cli.js",
   "sprites.js",
 ]);

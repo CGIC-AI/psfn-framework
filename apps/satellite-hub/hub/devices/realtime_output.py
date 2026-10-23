@@ -51,7 +51,32 @@ class RealtimeOutput:
 
     def _empty(self) -> bool:
         return (not self.connection.protocol.writes
-                and self.connection.transport.get_write_buffer_size() == 0)
+                and self._native_bytes() == 0)
+
+    def _tls_transport(self):
+        transport = self.connection.transport
+        if transport.get_extra_info("ssl_object") is None:
+            return None
+        # CPython's SSL transport reports BIO/plaintext retention only; encrypted
+        # TCP output is independently retained below it. Unknown TLS seams deny.
+        protocol = getattr(transport, "_ssl_protocol", None)
+        native = getattr(protocol, "_transport", None)
+        if native is None or not callable(getattr(native, "get_write_buffer_size", None)):
+            self.fail()
+            raise OSError("WebSocket output transport unsupported")
+        return native
+
+    def _native_bytes(self) -> int:
+        native = self.connection.transport.get_write_buffer_size()
+        tls = self._tls_transport()
+        return native if tls is None else native + tls.get_write_buffer_size()
+
+    def _wire_charge(self, size: int) -> int:
+        if not size or self._tls_transport() is None:
+            return size
+        # RFC 5246: at most 2^14 plaintext bytes and 2048 expansion bytes per
+        # record, plus its five-byte header. This exceeds TLS 1.3's expansion.
+        return size + ((size + 16383) // 16384) * 2053
 
     def _release(self) -> None:
         self.frames = self.bytes = self.pending_bytes = 0
@@ -96,8 +121,8 @@ class RealtimeOutput:
             return
         if self._empty():
             self._release()
-        charge = len(frame.data) + 14
-        native = self.connection.transport.get_write_buffer_size()
+        charge = self._wire_charge(len(frame.data) + 14)
+        native = self._native_bytes()
         if (self.connection.protocol.extensions
                 or self.frames + 1 > self.limits.max_frames
                 or max(self.bytes, native + self.pending_bytes) + charge > self.limits.max_bytes
@@ -118,8 +143,8 @@ class RealtimeOutput:
 
     def before_write(self) -> None:
         # Includes HTTP upgrade/rejection output, which isn't a WebSocket frame.
-        wire_bytes = sum(map(len, self.connection.protocol.writes))
-        native = self.connection.transport.get_write_buffer_size()
+        wire_bytes = sum(self._wire_charge(len(data)) for data in self.connection.protocol.writes)
+        native = self._native_bytes()
         if (self.failed or native + wire_bytes > self.limits.max_bytes
                 or (self.deadline is not None and self.connection.loop.time() >= self.deadline)):
             self.fail()

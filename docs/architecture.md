@@ -222,6 +222,41 @@ drop-in provider inside the isolated process. A gateway disconnect outside the
 startup path triggers the disconnect-recovery exit through the supervised
 restart path.
 
+Gateway RPC transport frames (`psfn-rpc-v1`) have a fixed **64 MiB
+(67,108,864-byte) UTF-8 JSON payload ceiling**, shared by Unix NDJSON and WSS,
+inbound and outbound. CR/LF delimiters and WebSocket framing do not count.
+The transport checks the byte budget before JSON parsing or dispatch: WSS sets
+`maxPayload` with compression disabled on both peers, and NDJSON counts incoming
+bytes incrementally, destroying an over-budget connection even before newline.
+WSS oversize rejection uses close code 1009. Malformed and oversized transport
+diagnostics contain no payload preview. Other connections remain available.
+
+The ceiling allows the existing 25 MiB per-attachment materialization limit
+(34,952,536 base64 bytes) plus substantial JSON envelope space. The inline-image
+retention test sends 4,096 base64 characters once before replacing them with a
+handle; ordinary filesystem read responses use a 200,000-byte budget. These
+paths fit comfortably. The transport limit applies to the **whole aggregate
+frame**, so multiple individually valid attachments or very large histories may
+require smaller calls. The former WSS library default was 100 MiB and NDJSON
+had no repository-owned line limit; payloads above 64 MiB are now refused on
+both. Outbound serialization measures UTF-8 bytes before any write and returns
+false for oversized or unserializable frames without updating delivery stats.
+NDJSON write backpressure still counts as acceptance of a complete frame, and
+transport heartbeats remain separate from JSON-RPC and its byte statistics.
+
+Gateway connection admission reserves one agent and one session-integrity slot
+per configured companion, with two additional pending sockets. The total is
+`2 * companionCount + 2`, with a fixed maximum of 64; startup refuses a topology
+that cannot fit. Single-companion mode has the same two role slots and two
+pending slots. An agent credential cannot claim the session-integrity slot.
+Raw sockets count before TLS or HTTP upgrade and must deliver their first valid
+JSON-RPC frame (single-companion) or complete identity verification (fleet mode)
+within five seconds. Heartbeats and rejected frames do not extend that deadline.
+TLS handshakes, HTTP headers and requests also have five-second bounds. Failed
+or duplicate identity claims close the new peer, preserving an existing binding.
+Timeout, framing failure, transport error, close and shutdown release charges;
+malformed JSON-RPC audits retain fixed reasons and no payload or exception text.
+
 If the bounded connect retry budget is exhausted before the gateway becomes
 ready, the agent exits through the lifecycle restart contract (supervised
 restart code) so a fresh process re-attempts the connection rather than dying

@@ -7,7 +7,6 @@
 // JSON-RPC error frames, connection-state transitions, disconnects, and the
 // companion connection/posture bindings), applied in the same order as before.
 import { isRecord } from '../../../shared/utils/types.js';
-import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { createCompanionId, type CompanionId } from '../../../shared/routing/companion-id.js';
 import { GatewayErrors } from '../protocol.js';
 import {
@@ -86,8 +85,8 @@ export function decideFrameAuthorization(input: Readonly<{
       kind: 'reject',
       violation: {
         event: 'identify_required',
-        message: `RPC "${method}" rejected: connection has not authenticated a role`,
-        details: { method },
+        message: 'RPC rejected: connection has not authenticated a role',
+        details: {},
       },
       error: {
         code: GatewayErrors.COMPANION_IDENTIFY_REQUIRED,
@@ -105,12 +104,12 @@ export function decideFrameAuthorization(input: Readonly<{
       kind: 'reject',
       violation: {
         event: 'connection_role_denied',
-        message: `RPC "${method}" is not permitted for gateway role "${status.role}"`,
-        details: { method, role: status.role, ...(boundCompanionId ? { companionId: boundCompanionId } : {}) },
+        message: 'RPC is not permitted for the authenticated gateway role',
+        details: { role: status.role },
       },
       error: {
         code: GatewayErrors.CONNECTION_ROLE_DENIED,
-        message: `Gateway role "${status.role}" is not authorized for ${method}`,
+        message: `Gateway role "${status.role}" is not authorized for this method`,
       },
     };
   }
@@ -119,13 +118,13 @@ export function decideFrameAuthorization(input: Readonly<{
   if (hasClaimedCompanionId) {
     try {
       claimedCompanionId = createCompanionId(claimedRaw, 'RPC frame companionId');
-    } catch (error) {
+    } catch {
       return {
         kind: 'disconnect',
         violation: {
           event: 'identity_claim_invalid',
           message: 'RPC frame carried an invalid companionId claim; disconnecting connection',
-          details: { method, boundCompanionId, reason: toErrorMessage(error) },
+          details: {},
         },
         reason: 'companion_identity_claim_invalid',
       };
@@ -145,7 +144,7 @@ export function decideFrameAuthorization(input: Readonly<{
       violation: {
         event: 'identity_mismatch',
         message: 'Companion identity mismatch on RPC frame; disconnecting connection',
-        details: { method, boundCompanionId, claimedCompanionId },
+        details: { boundCompanionId, claimedCompanionId },
       },
       reason: 'companion_identity_mismatch',
     };
@@ -156,8 +155,8 @@ export function decideFrameAuthorization(input: Readonly<{
       kind: 'reject',
       violation: {
         event: 'identify_required',
-        message: `RPC "${method}" rejected: agent connection has not identified a companionId`,
-        details: { method },
+        message: 'RPC rejected: agent connection has not identified a companionId',
+        details: {},
       },
       error: {
         code: GatewayErrors.COMPANION_IDENTIFY_REQUIRED,
@@ -190,9 +189,14 @@ export function parseIdentifyRequest(params: unknown, assertActive: () => void):
     && (typeof params.companionId !== 'string' || !params.companionId.trim())) {
     throw new Error('gateway.client.identify companionId must be a non-empty string');
   }
-  const companionId = typeof params.companionId === 'string'
-    ? createCompanionId(params.companionId, 'gateway.client.identify companionId')
-    : undefined;
+  let companionId: CompanionId | undefined;
+  if (typeof params.companionId === 'string') {
+    try {
+      companionId = createCompanionId(params.companionId);
+    } catch {
+      throw new Error('gateway.client.identify companionId must be a lowercase RFC-4122 UUID');
+    }
+  }
   if (params.authToken !== undefined && typeof params.authToken !== 'string') {
     throw new Error('gateway.client.identify authToken must be a string when provided');
   }

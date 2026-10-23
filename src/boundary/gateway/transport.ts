@@ -3,7 +3,6 @@
 
 import * as net from 'node:net';
 import * as https from 'node:https';
-import * as readline from 'node:readline';
 import { EventEmitter } from 'node:events';
 import { unlinkSync, chmodSync, readFileSync } from 'node:fs';
 import type { IncomingMessage } from 'node:http';
@@ -17,9 +16,19 @@ import {
   requireMtlsPeerFileConfig,
   verifyPeerCertificateSpiffeUri,
 } from '../../shared/net/mtls.js';
+import {
+  GATEWAY_RPC_MAX_FRAME_BYTES,
+  GatewayRpcFrameSizeError,
+  GatewayRpcNdjsonFramer,
+  serializeGatewayRpcFrame,
+} from './transport-framing.js';
+import {
+  GATEWAY_RPC_FIRST_FRAME_TIMEOUT_MS,
+  GatewayRpcSocketAdmission,
+  type GatewayRpcConnectionLimits,
+} from './transport-admission.js';
 
 const log = createComponentLogger('Transport');
-const FRAME_PREVIEW_LIMIT = 200;
 const GATEWAY_RPC_HEARTBEAT_PING_FRAME = 'PSFN_RPC_HEARTBEAT_PING';
 const GATEWAY_RPC_HEARTBEAT_PONG_FRAME = 'PSFN_RPC_HEARTBEAT_PONG';
 export const GATEWAY_RPC_WS_PROTOCOL = 'psfn-rpc-v1';
@@ -30,6 +39,10 @@ export const GATEWAY_RPC_TLS_CERT_PATH_ENV = 'GATEWAY_RPC_TLS_CERT_PATH';
 export const GATEWAY_RPC_TLS_KEY_PATH_ENV = 'GATEWAY_RPC_TLS_KEY_PATH';
 export const GATEWAY_RPC_TLS_EXPECTED_PEER_SPIFFE_URI_ENV = 'GATEWAY_RPC_TLS_EXPECTED_PEER_SPIFFE_URI';
 export const GATEWAY_RPC_TLS_SERVER_NAME_ENV = 'GATEWAY_RPC_TLS_SERVER_NAME';
+const webSocketFrameOptions = {
+  maxPayload: GATEWAY_RPC_MAX_FRAME_BYTES,
+  perMessageDeflate: false,
+};
 
 export interface TransportOptions {
   socketPath: string;
@@ -37,6 +50,7 @@ export interface TransportOptions {
 
 export interface SocketServerOptions {
   onStartupError?: (error: NodeJS.ErrnoException) => void;
+  connectionLimits?: GatewayRpcConnectionLimits;
 }
 
 type MessageHandler = (message: unknown) => void;
@@ -63,6 +77,7 @@ export interface GatewayRpcConnection extends EventEmitter {
   send(data: unknown): boolean;
   /** Send a transport-level liveness probe without entering JSON-RPC or audit handling. */
   sendHeartbeat(): boolean;
+  completeAdmission?(): void;
   onMessage(handler: MessageHandler): void;
   destroy(): void;
   readonly destroyed: boolean;
@@ -88,9 +103,8 @@ function createSerializedTransportStats(): MutableSerializedTransportStats {
 function recordSerializedTransportFrame(
   stats: MutableSerializedTransportStats,
   data: unknown,
-  serialized: string,
+  serializedBytes: number,
 ): void {
-  const serializedBytes = Buffer.byteLength(serialized, 'utf8');
   stats.frameCount += 1;
   stats.serializedBytes += serializedBytes;
   const method = typeof data === 'object'
@@ -222,38 +236,26 @@ export function formatGatewayRpcEndpoint(endpoint: GatewayRpcEndpoint): string {
 }
 
 export class NdjsonFramingError extends Error {
-  readonly preview: string;
-
-  constructor(line: string) {
+  constructor() {
     super('Malformed NDJSON frame received');
     this.name = 'NdjsonFramingError';
-    this.preview = summarizeFramePreview(line);
   }
-}
-
-function summarizeFramePreview(line: string): string {
-  const trimmed = line.trim();
-  if (trimmed.length <= FRAME_PREVIEW_LIMIT) {
-    return trimmed;
-  }
-  return `${trimmed.slice(0, FRAME_PREVIEW_LIMIT)}... (${trimmed.length} chars)`;
 }
 
 // ── Socket connection wrapper (both client and server connections) ──
 
 export class NdjsonConnection extends EventEmitter implements GatewayRpcConnection {
   private socket: net.Socket;
-  private rl: readline.Interface;
+  private readonly framer = new GatewayRpcNdjsonFramer();
   private closed = false;
   private heartbeatAwaitingAck = false;
   private readonly outboundStats = createSerializedTransportStats();
+  private readonly cleanupSocketListeners: () => void;
 
-  constructor(socket: net.Socket) {
+  constructor(socket: net.Socket, readonly completeAdmission?: () => void) {
     super();
     this.socket = socket;
-    this.rl = readline.createInterface({ input: socket, crlfDelay: Infinity });
-
-    this.rl.on('line', (line) => {
+    const onFrame = (line: string): void => {
       if (line === GATEWAY_RPC_HEARTBEAT_PING_FRAME) {
         this.emit('heartbeat');
         this.writeHeartbeatFrame(GATEWAY_RPC_HEARTBEAT_PONG_FRAME);
@@ -268,32 +270,46 @@ export class NdjsonConnection extends EventEmitter implements GatewayRpcConnecti
         const parsed = JSON.parse(line);
         this.emit('message', parsed);
       } catch {
-        const framingError = new NdjsonFramingError(line);
-        log.error('Malformed NDJSON frame received; closing connection', {
-          preview: framingError.preview,
-        });
+        const framingError = new NdjsonFramingError();
+        log.error('Malformed NDJSON frame received; closing connection');
         this.emit('frameError', framingError);
         this.destroy();
       }
-    });
-    this.rl.on('error', (err) => {
-      this.emitConnectionError(err);
-      this.destroy();
-    });
-
-    socket.on('close', () => this.finishClose());
-    socket.on('error', (err) => this.emitConnectionError(err));
+    };
+    const onData = (chunk: Buffer): void => {
+      try {
+        this.framer.push(chunk, onFrame);
+      } catch (error) {
+        if (!(error instanceof GatewayRpcFrameSizeError)) throw error;
+        log.error('Oversized NDJSON frame received; closing connection');
+        this.emit('frameError', error);
+        this.destroy();
+      }
+    };
+    const onEnd = (): void => this.framer.end(onFrame);
+    const onClose = (): void => this.finishClose();
+    const onError = (err: Error): void => this.emitConnectionError(err);
+    socket.on('data', onData);
+    socket.on('end', onEnd);
+    socket.on('close', onClose);
+    socket.on('error', onError);
+    this.cleanupSocketListeners = () => {
+      socket.removeListener('data', onData);
+      socket.removeListener('end', onEnd);
+      socket.removeListener('close', onClose);
+      socket.removeListener('error', onError);
+    };
   }
 
   send(data: unknown): boolean {
     if (this.socket.destroyed) return false;
     try {
-      const serialized = JSON.stringify(data);
+      const { serialized, serializedBytes } = serializeGatewayRpcFrame(data);
       // Node's boolean reports buffer pressure, not frame acceptance: false
       // means this frame was queued, not rejected, so it cannot be reused as
       // the delivery-receipt result.
       this.socket.write(serialized + '\n');
-      recordSerializedTransportFrame(this.outboundStats, data, serialized);
+      recordSerializedTransportFrame(this.outboundStats, data, serializedBytes);
       return true;
     } catch (error) {
       this.emitConnectionError(error);
@@ -317,7 +333,7 @@ export class NdjsonConnection extends EventEmitter implements GatewayRpcConnecti
 
   destroy(): void {
     if (this.closed) return;
-    this.rl.close();
+    this.framer.close();
     this.socket.destroy();
     this.finishClose();
   }
@@ -335,9 +351,7 @@ export class NdjsonConnection extends EventEmitter implements GatewayRpcConnecti
       this.emit('error', err);
       return;
     }
-    log.warn('Socket connection error without listener', {
-      error: err instanceof Error ? err.message : String(err),
-    });
+    log.warn('Socket connection error without listener');
   }
 
   private writeHeartbeatFrame(frame: string): boolean {
@@ -355,8 +369,8 @@ export class NdjsonConnection extends EventEmitter implements GatewayRpcConnecti
     if (this.closed) return;
     this.closed = true;
     this.emit('close');
-    this.rl.removeAllListeners();
-    this.socket.removeAllListeners();
+    this.framer.close();
+    this.cleanupSocketListeners();
     this.removeAllListeners();
   }
 }
@@ -364,13 +378,15 @@ export class NdjsonConnection extends EventEmitter implements GatewayRpcConnecti
 class WebSocketRpcConnection extends EventEmitter implements GatewayRpcConnection {
   private readonly outboundStats = createSerializedTransportStats();
   private heartbeatAwaitingAck = false;
+  private closed = false;
+  private frameCloseTimer: NodeJS.Timeout | undefined;
 
-  constructor(private readonly socket: WebSocket) {
+  constructor(private readonly socket: WebSocket, readonly completeAdmission?: () => void) {
     super();
 
     socket.on('message', (data, isBinary) => {
       if (isBinary) {
-        const framingError = new NdjsonFramingError('<binary websocket frame>');
+        const framingError = new NdjsonFramingError();
         log.error('Binary websocket RPC frame received; closing connection');
         this.emit('frameError', framingError);
         this.destroy();
@@ -383,17 +399,33 @@ class WebSocketRpcConnection extends EventEmitter implements GatewayRpcConnectio
         const parsed = JSON.parse(text);
         this.emit('message', parsed);
       } catch {
-        const framingError = new NdjsonFramingError(text);
-        log.error('Malformed websocket RPC frame received; closing connection', {
-          preview: framingError.preview,
-        });
+        const framingError = new NdjsonFramingError();
+        log.error('Malformed websocket RPC frame received; closing connection');
         this.emit('frameError', framingError);
         this.destroy();
       }
     });
 
-    socket.on('close', () => this.emit('close'));
-    socket.on('error', (err) => this.emitConnectionError(err));
+    socket.on('close', () => {
+      if (this.closed) return;
+      this.closed = true;
+      clearTimeout(this.frameCloseTimer);
+      this.emit('close');
+      socket.removeAllListeners();
+      this.removeAllListeners();
+    });
+    socket.on('error', (err: Error & { code?: string }) => {
+      if (err.code === 'WS_ERR_UNSUPPORTED_MESSAGE_LENGTH') {
+        // ws already initiated close(1009) before emitting this error.
+        // A peer need not acknowledge that close: bound its resource lifetime.
+        this.frameCloseTimer = setTimeout(() => socket.terminate(), GATEWAY_RPC_FIRST_FRAME_TIMEOUT_MS);
+        this.frameCloseTimer.unref();
+        log.error('Oversized websocket RPC frame received; closing connection');
+        this.emit('frameError', new GatewayRpcFrameSizeError());
+        return;
+      }
+      this.emitConnectionError(err);
+    });
     socket.on('ping', () => this.emit('heartbeat'));
     socket.on('pong', () => {
       this.heartbeatAwaitingAck = false;
@@ -403,9 +435,9 @@ class WebSocketRpcConnection extends EventEmitter implements GatewayRpcConnectio
   send(data: unknown): boolean {
     if (this.destroyed || this.socket.readyState !== WebSocket.OPEN) return false;
     try {
-      const serialized = JSON.stringify(data);
+      const { serialized, serializedBytes } = serializeGatewayRpcFrame(data);
       this.socket.send(serialized);
-      recordSerializedTransportFrame(this.outboundStats, data, serialized);
+      recordSerializedTransportFrame(this.outboundStats, data, serializedBytes);
       return true;
     } catch (error) {
       this.emitConnectionError(error);
@@ -458,9 +490,7 @@ class WebSocketRpcConnection extends EventEmitter implements GatewayRpcConnectio
       this.emit('error', err);
       return;
     }
-    log.warn('Websocket RPC connection error without listener', {
-      error: err instanceof Error ? err.message : String(err),
-    });
+    log.warn('Websocket RPC connection error without listener');
   }
 }
 
@@ -494,10 +524,13 @@ export function createSocketServer(
     }
   }
 
+  const admission = options.connectionLimits ? new GatewayRpcSocketAdmission(options.connectionLimits) : undefined;
   const server = net.createServer((socket) => {
-    const conn = new NdjsonConnection(socket);
+    if (admission && !admission.accept(socket)) return;
+    const conn = new NdjsonConnection(socket, admission ? () => admission.complete(socket) : undefined);
     onConnection(conn);
   });
+  admission?.bindServer(server);
 
   let listening = false;
 
@@ -585,19 +618,35 @@ export function createWebSocketRpcServer(
     ?? ((input) => authorizeMutualTlsPeer(input, tlsConfig.expectedPeerSpiffeUri));
   const webSocketServer = new WebSocketServer({
     noServer: true,
+    ...webSocketFrameOptions,
     handleProtocols: (protocols) => (
       protocols.has(GATEWAY_RPC_WS_PROTOCOL) ? GATEWAY_RPC_WS_PROTOCOL : false
     ),
   });
-  const server = https.createServer(tlsOptions, (_req, res) => {
+  const server = https.createServer({ ...tlsOptions, handshakeTimeout: GATEWAY_RPC_FIRST_FRAME_TIMEOUT_MS }, (_req, res) => {
+    res.setHeader('Connection', 'close');
     res.writeHead(404);
     res.end('Not found');
   });
+  server.headersTimeout = GATEWAY_RPC_FIRST_FRAME_TIMEOUT_MS;
+  server.requestTimeout = GATEWAY_RPC_FIRST_FRAME_TIMEOUT_MS;
+  const admission = options.connectionLimits ? new GatewayRpcSocketAdmission(options.connectionLimits) : undefined;
+  if (admission) {
+    admission.bindServer(server);
+    server.on('connection', (socket: net.Socket) => admission.accept(socket));
+  }
 
   let listening = false;
 
   server.on('upgrade', (req, socket, head) => {
-    const requestPath = new URL(req.url ?? '/', 'https://localhost').pathname;
+    if (socket.destroyed) return;
+    let requestPath: string;
+    try {
+      requestPath = new URL(req.url ?? '/', 'https://localhost').pathname;
+    } catch {
+      socket.destroy();
+      return;
+    }
     if (requestPath !== path) {
       socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
       socket.destroy();
@@ -610,9 +659,15 @@ export function createWebSocketRpcServer(
       return;
     }
 
-    const rejectionReason = authorizePeer({ request: req });
-    if (rejectionReason) {
-      log.warn('Rejected gateway RPC websocket peer', { reason: rejectionReason });
+    let authorized = false;
+    try {
+      authorized = authorizePeer({ request: req }) === null;
+    } catch {
+      // Peer verification errors must not persist certificate/header content.
+      log.warn('Gateway RPC websocket peer verification failed');
+    }
+    if (!authorized) {
+      log.warn('Rejected gateway RPC websocket peer');
       socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
       socket.destroy();
       return;
@@ -623,7 +678,7 @@ export function createWebSocketRpcServer(
         ws.close(1002, 'unsupported_protocol');
         return;
       }
-      onConnection(new WebSocketRpcConnection(ws));
+      onConnection(new WebSocketRpcConnection(ws, admission ? () => admission.complete(req.socket) : undefined));
     });
   });
 
@@ -796,7 +851,10 @@ export function createWebSocketRpcClient(
     const connectOnce = () => {
       if (settled) return;
       attempts++;
-      const socket = new WebSocket(url, GATEWAY_RPC_WS_PROTOCOL, tlsOptions);
+      const socket = new WebSocket(url, GATEWAY_RPC_WS_PROTOCOL, {
+        ...tlsOptions,
+        ...webSocketFrameOptions,
+      });
 
       const cleanupStartupListeners = () => {
         socket.removeListener('open', onOpen);

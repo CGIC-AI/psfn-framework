@@ -112,7 +112,8 @@ new audio and temporary files use 0600. On Windows, protected owner-only DACLs
 provide the corresponding access restriction. The root must belong to the
 current account and reside on a filesystem supporting these protections.
 
-Linux uses no-follow, descriptor-relative file operations and checks link counts.
+Linux x64/arm64 uses ABI-specific no-follow, descriptor-relative file operations
+and checks link counts; other Linux ABIs are rejected.
 Windows pins ancestor directories against rename, opens reparse points without
 following them, checks regular disk-file/link-count metadata, and renames by
 handle. Unsupported platforms or filesystems fail closed. Windows integration

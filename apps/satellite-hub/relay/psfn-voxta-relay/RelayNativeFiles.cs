@@ -8,9 +8,21 @@ using Microsoft.Win32.SafeHandles;
 // without delete sharing and uses no-follow handles for files and directories.
 internal static class RelayNativeFiles
 {
-    private const int NoFollow = 0x20000;
+    // arm64 keeps ARM's distinct fcntl bits; do not assume asm-generic values.
+    // https://github.com/torvalds/linux/blob/v6.12/arch/arm64/include/uapi/asm/fcntl.h
+    private static int NoFollow => RuntimeInformation.ProcessArchitecture switch
+    {
+        Architecture.X64 => 0x20000,
+        Architecture.Arm64 => 0x8000,
+        _ => throw new PlatformNotSupportedException("Secure relay files require Linux x64/arm64 or Windows"),
+    };
     private const int CloseOnExec = 0x80000;
-    private const int DirectoryFlag = 0x10000;
+    private static int DirectoryFlag => RuntimeInformation.ProcessArchitecture switch
+    {
+        Architecture.X64 => 0x10000,
+        Architecture.Arm64 => 0x4000,
+        _ => throw new PlatformNotSupportedException("Secure relay files require Linux x64/arm64 or Windows"),
+    };
     private const uint ReparsePoint = 0x400;
     private const uint DirectoryAttribute = 0x10;
 

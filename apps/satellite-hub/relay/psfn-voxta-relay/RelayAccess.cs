@@ -1,11 +1,25 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Net.Sockets;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
 
 // The relay holds the remote Hub credential on behalf of a local native client.
 // Keep its listener local and never attach that credential to model-chosen URLs.
-public static class RelayAccess
+public sealed class RelayAccess
 {
+    private readonly IPAddress _listenAddress;
+    private readonly int _listenPort;
+
+    public RelayAccess(RelayOptions options)
+    {
+        ValidateOptions(options);
+        var listen = new Uri(options.ListenUrl);
+        _listenAddress = IPAddress.Parse(listen.Host);
+        _listenPort = listen.Port;
+    }
+
     public static void ValidateOptions(RelayOptions options)
     {
         if (!Uri.TryCreate(options.ListenUrl, UriKind.Absolute, out var listen)
@@ -25,13 +39,54 @@ public static class RelayAccess
         }
     }
 
-    public static bool Allows(HttpRequest request, RelayOptions options)
+    public bool Allows(HttpRequest request)
     {
         var peer = request.HttpContext.Connection.RemoteIpAddress;
         if (peer is null || !IsLoopback(peer)) return false;
+        // Kestrel can replace Host from an absolute-form target. Accept only
+        // origin-form targets so two different authorities cannot be hidden here.
+        var target = request.HttpContext.Features.Get<IHttpRequestFeature>()?.RawTarget;
+        if (target is not null && !target.StartsWith('/')) return false;
+        var host = request.Headers.Host;
+        if (host.Count != 1 || !MatchesAuthority(host[0])) return false;
         var origin = request.Headers.Origin;
         return origin.Count == 0 || (origin.Count == 1
-            && origin[0] == new Uri(options.ListenUrl).GetLeftPart(UriPartial.Authority));
+            && origin[0] is { } value
+            && value.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+            && MatchesAuthority(value["http://".Length..]));
+    }
+
+    private bool MatchesAuthority(string? authority)
+    {
+        if (string.IsNullOrEmpty(authority)) return false;
+        string host;
+        string port;
+        IPAddress address;
+        if (authority[0] == '[')
+        {
+            var end = authority.IndexOf(']');
+            if (end < 0) return false;
+            host = authority[1..end];
+            port = authority[(end + 1)..];
+            if (host.Contains('%') || !IPAddress.TryParse(host, out address!)
+                || address.AddressFamily != AddressFamily.InterNetworkV6) return false;
+        }
+        else
+        {
+            var separator = authority.IndexOf(':');
+            host = separator < 0 ? authority : authority[..separator];
+            port = separator < 0 ? "" : authority[separator..];
+            // IPAddress also accepts shortened, integer, octal and hexadecimal
+            // IPv4 aliases. Require the literal dotted-decimal authority instead.
+            if (!IPAddress.TryParse(host, out address!)
+                || address.AddressFamily != AddressFamily.InterNetwork
+                || address.ToString() != host) return false;
+        }
+        var effectivePort = 80;
+        if (port.Length > 0 && (port[0] != ':'
+            || !int.TryParse(port.AsSpan(1), NumberStyles.None, CultureInfo.InvariantCulture, out effectivePort)
+            || effectivePort is < 1 or > 65535)) return false;
+        return address.Equals(_listenAddress) && effectivePort == _listenPort;
     }
 
     public static void Authenticate(HttpRequestMessage request, RelayOptions options)

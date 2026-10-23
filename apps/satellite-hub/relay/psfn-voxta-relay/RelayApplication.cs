@@ -22,7 +22,7 @@ public static class RelayApplication
             }
 
             var options = RelayOptions.FromArgs(args);
-            RelayAccess.ValidateOptions(options);
+            var access = new RelayAccess(options);
             var builder = WebApplication.CreateBuilder(args);
             RelayLogging.Configure(builder.Logging);
             builder.WebHost.UseUrls(options.ListenUrl);
@@ -44,7 +44,7 @@ public static class RelayApplication
                 var started = Stopwatch.GetTimestamp();
                 try
                 {
-                    if (!RelayAccess.Allows(context.Request, options))
+                    if (!access.Allows(context.Request))
                     {
                         context.Response.StatusCode = StatusCodes.Status403Forbidden;
                         return;
@@ -71,6 +71,9 @@ public static class RelayApplication
                 }
             });
 
+            // Set the routing position explicitly; WebApplication otherwise
+            // inserts its implicit routing middleware before this access guard.
+            app.UseRouting();
             app.MapHub<VoxtaRelayHub>("/hub", signalr =>
             {
                 signalr.Transports = HttpTransportType.WebSockets;

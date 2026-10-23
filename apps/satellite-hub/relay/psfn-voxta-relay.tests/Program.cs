@@ -81,6 +81,7 @@ Require(download.GetProperty("bytes").GetInt64() == 23, "Audio byte count was lo
 Require(download.GetProperty("correlation").GetString() == correlation.ToString("N"), "Safe correlation was lost");
 Require(stderr.ToString().Contains("audio.localization_failed"), "Errors did not reach stderr");
 Console.WriteLine("PASS: actual relay logger rejects private fields, exceptions, scopes and formatters before its sinks");
+AccessTests.Run();
 await ArtifactTests.RunAsync();
 await MicrophoneTests.RunAsync();
 await BuildContractTests.RunAsync();

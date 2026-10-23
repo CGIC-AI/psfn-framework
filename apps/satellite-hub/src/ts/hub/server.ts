@@ -140,7 +140,7 @@ export class RealtimeHubServer {
     } = {},
   ) {
     this.resources = options.resources ?? new HubResources(config.limits);
-    this.wsServer = new WebSocketServer({ noServer: true, maxPayload: this.resources.limits.maxFrameBytes, perMessageDeflate: false });
+    this.wsServer = new WebSocketServer({ noServer: true, autoPong: false, maxPayload: this.resources.limits.maxFrameBytes, perMessageDeflate: false });
     this.access = new HubAccess(config);
     if (config.deviceRegistry && !config.psfn.deviceAssertionIssuer) {
       throw new Error("Hub device registry requires the device assertion signing authority");
@@ -287,8 +287,10 @@ export class RealtimeHubServer {
       }
       const admission = this.resources.admitSocket(this.access.developerAllowed(request));
       if (!admission) return rejectHubUpgrade(socket, 429);
-      socket.once("close", admission.release);
+      const releaseUpgrade = (): void => admission.release();
+      socket.once("close", releaseUpgrade);
       this.wsServer.handleUpgrade(request, socket, head, (websocket) => {
+        socket.off("close", releaseUpgrade);
         this.admissions.set(websocket, admission);
         this.wsServer.emit("connection", websocket, request);
       });
@@ -420,8 +422,6 @@ export class RealtimeHubServer {
       () => {
         for (const socket of this.wsServer.clients) {
           socket.close(1001, "Hub shutting down");
-          const timer = setTimeout(() => socket.terminate(), this.resources.limits.authenticationTimeoutMs);
-          timer.unref(); socket.once("close", () => clearTimeout(timer));
         }
         return new Promise<void>((resolve, reject) => this.wsServer.close(error => error ? reject(error) : resolve()));
       },
@@ -536,7 +536,7 @@ class RealtimeConnection {
     private readonly transcribe: (pcm: Buffer, signal: AbortSignal) => Promise<TranscriptResult>,
   ) {
     this.authenticated = !this.deviceRegistry && this.config.access?.developerMode === true;
-    this.flow = new HubSocketFlow(socket, resources.limits, this.authenticated, () => { void this.cleanup(); });
+    this.flow = new HubSocketFlow(socket, resources.limits, this.authenticated, () => { void this.cleanup(); }, admission.release);
     this.audioInput = new HubAudioBuffer(resources.limits, () => this.flow.fail(1008, "Audio utterance timeout"));
     if (!this.deviceRegistry) this.attachSatellite();
     if (!this.deviceRegistry) this.subscribeCompanion();
@@ -550,7 +550,6 @@ class RealtimeConnection {
   }
 
   async run(): Promise<void> {
-    this.socket.on("error", () => { this.socket.terminate(); });
     this.socket.on("message", (raw, isBinary) => this.flow.enqueue(raw, async () => {
       let payload: ClientToHubMessage;
       try {
@@ -564,10 +563,6 @@ class RealtimeConnection {
       }
       await this.handleMessage(payload);
     }));
-    this.socket.on("close", () => {
-      void this.cleanup();
-    });
-
     console.log("Realtime client connected");
     // Without a device registry the pre-hello session.ready is provisional:
     // it advertises the presentation-only defaults under connection-minted
@@ -1645,7 +1640,6 @@ class RealtimeConnection {
   private async cleanup(): Promise<void> {
     this.lifetime.abort(new Error("Realtime connection closed"));
     this.audioInput.clear();
-    this.admission.release();
     this.unsubscribeCompanion?.();
     this.unsubscribeCompanion = null;
     if (this.attachmentOwnership) {

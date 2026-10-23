@@ -537,8 +537,21 @@ pong control frames use the same admission and callbacks.
 | Companion browser relay (attached by the Hub server) | Gateway and browser JSON/binary writes, assertion renewal, pong; uses its configured frame/byte caps, 32 pending frames and its handshake deadline |
 
 HTTP-only providers retain the HTTP limits above. Device Studio and Pi client
-sockets are endpoint clients, and the Hub/Voxta listener output is client
-transport rather than a provider connection.
+sockets are endpoint clients.
+
+The main realtime, Voxta SignalR and Voxta audio listeners use the same
+socket-owned output admission for data, actual pong replies and close frames,
+including realtime sockets still awaiting hello authentication. Automatic pong
+is disabled. Each write must fit `maxFrameBytes`, `maxBufferedBytes` and
+`maxQueuedMessages`; native buffering also reserves the next unmasked frame
+header before enqueue. Callback-pending writes remain charged after caller
+cancellation. Listener writes and close handshakes have the existing
+`authenticationTimeoutMs` deadline. Overflow, callback failure or expiry
+terminates the connection with content-free errors; shutdown uses the same
+bounded close path. Logical cleanup cancels application work promptly, while
+connection admission remains held until terminal transport close. A normal
+Voxta microphone close still finalizes its accepted audio and retains its slot
+until STT finishes. New connections receive fresh output budgets.
 
 SSE remains a long-lived stream: completed frames release the frame budget and
 refresh the idle deadline. Delimiter fragments and UTF-8 characters spanning

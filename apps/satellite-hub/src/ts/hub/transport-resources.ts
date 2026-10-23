@@ -3,6 +3,7 @@ import type http from "node:http";
 import path from "node:path";
 import WebSocket, { type RawData } from "ws";
 import { awaitWithAbort, throwIfAborted } from "../shared/abort.js";
+import { SocketOutput } from "./socket-output.js";
 
 // Deployment admission defaults and their rationale are documented in the Hub
 // README. HUB_RESOURCE_LIMITS_PATH owns overrides; tests use the same loader.
@@ -205,13 +206,46 @@ export class HubSocketFlow {
   private bytes = 0;
   private stopped = false;
   private rejected = false;
+  private readonly output: SocketOutput;
   private idle: NodeJS.Timeout;
+  private closeTimer: NodeJS.Timeout | undefined;
   private authenticationTimer: NodeJS.Timeout | undefined;
   constructor(private readonly socket: WebSocket, private readonly limits: HubResourceLimits,
-    authenticated: boolean, private readonly cleanup: (rejected: boolean) => void = () => undefined) {
+    authenticated: boolean, private readonly cleanup: (rejected: boolean) => void = () => undefined,
+    terminal: () => void = () => undefined) {
+    const close = socket.close.bind(socket);
+    this.output = new SocketOutput({
+      get bufferedAmount() { return socket.bufferedAmount; },
+      send: (data, callback) => socket.send(data, callback),
+      pong: (data, mask, callback) => socket.pong(data, mask, callback),
+      close,
+      terminate: () => socket.terminate(),
+    }, { ...limits, providerTimeoutMs: limits.authenticationTimeoutMs }, () => {
+      clearTimeout(this.closeTimer);
+      this.rejected = true;
+      this.stop();
+    }, "Hub", true);
+    // ws calls close() itself when echoing a peer close frame. That write and
+    // all application/shutdown closes must use this same socket admission.
+    socket.close = (code, reason) => {
+      if (socket.readyState === WebSocket.CLOSING || socket.readyState === WebSocket.CLOSED) {
+        close(code, reason); // Completes an existing handshake; sends no frame.
+      } else this.close(code, reason);
+    };
+    socket.on("ping", data => {
+      if (this.stopped || socket.readyState !== WebSocket.OPEN) return;
+      try { this.output.pong(data); this.touch(); }
+      catch { /* Output failure already fenced and terminated the transport. */ }
+    });
     this.idle = setTimeout(() => this.fail(1008, "Hub idle timeout"), limits.idleTimeoutMs);
     if (!authenticated) this.authenticationTimer = setTimeout(() => this.fail(1008, "Hub authentication timeout"), limits.authenticationTimeoutMs);
-    socket.once("error", () => this.stop()); socket.once("close", () => this.stop());
+    socket.once("error", () => this.output.terminate());
+    socket.once("close", () => {
+      clearTimeout(this.closeTimer);
+      this.output.closed();
+      this.stop();
+      terminal();
+    });
   }
   authenticate(): void { clearTimeout(this.authenticationTimer); }
   touch(): void { if (!this.stopped) this.idle.refresh(); }
@@ -226,21 +260,25 @@ export class HubSocketFlow {
       .catch(() => this.fail(1008, "Invalid Hub frame"))
       .finally(() => { this.queued -= 1; this.bytes -= bytes; });
   }
-  async send(data: string): Promise<void> {
-    if (this.stopped || this.socket.readyState !== WebSocket.OPEN) return;
-    if (this.socket.bufferedAmount + Buffer.byteLength(data) > this.limits.maxBufferedBytes) {
-      this.fail(1008, "Hub output buffer exceeded"); throw new Error("Hub output buffer exceeded");
-    }
-    await new Promise<void>((resolve, reject) => this.socket.send(data, error => error ? reject(error) : resolve()));
+  async send(data: string | Buffer): Promise<void> {
+    if (this.stopped || this.socket.readyState !== WebSocket.OPEN) throw new Error("Hub output is closed");
+    await this.output.sendAndWait(data);
   }
   fail(code: number, reason: string): void {
     if (this.stopped) return;
     this.rejected = true;
+    this.close(code, reason);
+  }
+  close(code?: number, reason?: string | Buffer): void {
+    if (this.stopped) return;
+    // A peer refusing the close handshake cannot retain output or admission.
+    this.closeTimer = setTimeout(() => this.output.terminate(), this.limits.authenticationTimeoutMs);
+    this.closeTimer.unref();
+    try { this.output.close(code, reason); }
+    catch { /* Failure already terminated the transport; never enqueue an error. */ }
+    // Mark the transport closing before cleanup: active audio teardown may
+    // otherwise attempt a final application write while admission is stopped.
     this.stop();
-    this.socket.close(code, reason);
-    // A peer refusing the close handshake must not retain a quota or buffers.
-    const timer = setTimeout(() => this.socket.terminate(), this.limits.authenticationTimeoutMs);
-    timer.unref(); this.socket.once("close", () => clearTimeout(timer));
   }
   private stop(): void {
     if (this.stopped) return;

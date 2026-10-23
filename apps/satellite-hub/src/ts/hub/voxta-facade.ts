@@ -141,7 +141,7 @@ export class VoxtaFacade {
   private readonly admissions = new WeakMap<http.IncomingMessage, HubSocketAdmission>();
 
   constructor(private readonly deps: VoxtaFacadeDependencies) {
-    const options = { noServer: true, maxPayload: deps.resources.limits.maxFrameBytes, perMessageDeflate: false } as const;
+    const options = { noServer: true, autoPong: false, maxPayload: deps.resources.limits.maxFrameBytes, perMessageDeflate: false } as const;
     this.wsServer = new WebSocketServer(options);
     this.audioWsServer = new WebSocketServer(options);
     this.wsServer.on("connection", (socket, request) => {
@@ -317,10 +317,10 @@ export class VoxtaFacade {
   async close(): Promise<void> {
     for (const input of this.runtime.audioInputs) input.abort();
     for (const client of this.wsServer.clients) {
-      client.close();
+      client.close(1001, "Hub shutting down");
     }
     for (const client of this.audioWsServer.clients) {
-      client.close();
+      client.close(1001, "Hub shutting down");
     }
     await new Promise<void>((resolve, reject) => {
       this.wsServer.close((error) => (error ? reject(error) : resolve()));
@@ -532,7 +532,7 @@ class VoxtaConnection {
     session: { sessionId: string; chatId: string },
     admission: HubSocketAdmission,
   ) {
-    this.flow = new HubSocketFlow(socket, deps.resources.limits, true, () => { admission.release(); this.release(); });
+    this.flow = new HubSocketFlow(socket, deps.resources.limits, true, () => this.release(), admission.release);
     // Only the authenticated transport may choose its conversation. Client or
     // environment session hints cannot join another connection's history.
     this.sessionId = session.sessionId;
@@ -563,7 +563,6 @@ class VoxtaConnection {
     this.keepAlive = setInterval(() => {
       void this.sendFrame({ type: 6 }).catch(() => this.flow.fail(1011, "Hub output failed"));
     }, SIGNALR_KEEPALIVE_INTERVAL_MS);
-    this.socket.on("error", () => { this.socket.terminate(); });
     this.socket.on("message", (raw, isBinary) => this.flow.enqueue(raw, async () => {
       let frames: unknown[];
       try {
@@ -1437,15 +1436,20 @@ class VoxtaAudioInputStream {
     private readonly admission: HubSocketAdmission,
   ) {
     this.flow = new HubSocketFlow(socket, resources.limits, true, rejected => {
-      if (rejected) { admission.release(); this.closed = true; this.audio = null; clearTimeout(this.audioTimer); this.runtime.audioInputs.delete(this); }
+      if (rejected) { this.closed = true; this.audio = null; clearTimeout(this.audioTimer); this.runtime.audioInputs.delete(this); }
     });
     runtime.audioInputs.add(this);
   }
 
-  abort(): void { this.closed = true; this.audio = null; clearTimeout(this.audioTimer); this.admission.release(); this.flow.fail(1001, "Hub shutting down"); this.runtime.audioInputs.delete(this); }
+  abort(): void { this.closed = true; this.audio = null; clearTimeout(this.audioTimer); this.flow.fail(1001, "Hub shutting down"); this.runtime.audioInputs.delete(this); }
 
   run(): void {
-    this.socket.on("error", () => { this.closed = true; this.audio = null; clearTimeout(this.audioTimer); });
+    this.socket.once("close", code => {
+      if (code !== 1000 && code !== 1005) { this.closed = true; this.audio = null; clearTimeout(this.audioTimer); }
+      void this.finish().catch((error) => {
+        console.error("Voxta audio input finalization failed:", error);
+      }).finally(() => { this.admission.release(); this.runtime.audioInputs.delete(this); });
+    });
     if (!normalizeGuid(this.sessionId) || !this.runtime.connectionsBySessionId.has(this.sessionId)) {
       this.flow.fail(1008, "Unknown Voxta audio input session");
       return;
@@ -1458,12 +1462,6 @@ class VoxtaAudioInputStream {
         clearTimeout(this.audioTimer);
         this.flow.fail(1008, "Invalid Voxta audio input");
       }
-    });
-    this.socket.on("close", code => {
-      if (code !== 1000 && code !== 1005) { this.closed = true; this.audio = null; clearTimeout(this.audioTimer); }
-      void this.finish().catch((error) => {
-        console.error("Voxta audio input finalization failed:", error);
-      }).finally(() => { this.admission.release(); this.runtime.audioInputs.delete(this); });
     });
   }
 

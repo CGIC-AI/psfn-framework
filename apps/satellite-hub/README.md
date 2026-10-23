@@ -308,9 +308,9 @@ Important settings for the Python ESPHome fallback path:
 - the companion bridge identifies itself on `GET` requests with `satelliteId`/`endpointId`/`claimType` query params taken from the existing `PSFN_SATELLITE_ID`, `PSFN_ENDPOINT_ID`, and `PSFN_CLAIM_TYPE`/`PSFN_CAPABILITY_PROFILE` registry identity; an incomplete identity fails closed at startup
 - `PSFN_COMPANION_PREVIEW_MAX_BYTES` caps artifact preview payloads relayed to satellites, defaulting to 1048576
 - `PSFN_COMPANION_RECONNECT_BASE_MS` and `PSFN_COMPANION_RECONNECT_MAX_MS` tune the companion SSE reconnect backoff
-- `VOXTA_FACADE_ENABLED` enables the Voxta-compatible SignalR facade on `/hub`, defaulting to `true`
+- `VOXTA_FACADE_ENABLED=true` opts into the Voxta-compatible SignalR facade on `/hub`; the default is `false`
 - `VOXTA_SATELLITE_ID` and `VOXTA_SATELLITE_NAME` identify the VaM/Voxta satellite in PSFN channel metadata
-- `VOXTA_SESSION_ID` and `VOXTA_CHAT_ID` optionally pin the VaM/Voxta conversation IDs; when unset the hub derives stable IDs from the Voxta satellite, assistant, and user IDs
+- Voxta session/chat IDs are random and bound to the authenticated principal by the server; reconnects retain that principal's IDs for the Hub process lifetime
 - `VOXTA_ASSISTANT_NAME`, `VOXTA_USER_NAME`, and related ID vars shape the Voxta welcome/chat payloads
 - `VOXTA_PUBLIC_BASE_URL` optionally overrides the public base URL used for proxy-fetchable Voxta audio artifacts
 - `VOXTA_AUDIO_FOLDER` enables direct VaM TTS playback by writing local `.wav` files, typically VaM `Custom\Sounds\Voxta`; when unset, TTS uses HTTP WAV URLs under `/api/voxta/audio/`
@@ -372,6 +372,63 @@ Supported HTTP and websocket routes:
 | `DELETE /api/vision/requests/{id}?sessionId=<guid>` | AcidBubbles vision capture cancellation |
 | `POST /voxta/hub/negotiate?negotiateVersion=1` | Alternate namespaced negotiation route |
 | `WS /voxta/hub?id=<connectionToken>` | Alternate namespaced websocket route |
+
+### Hub authentication and migration
+
+The Hub now defaults to `127.0.0.1:8787`, with Voxta and anonymous development
+disabled. A loopback listener without authority serves health information but
+rejects client traffic. Every non-loopback listener requires an enrolled device
+registry with its signing authority, or an enabled Voxta facade with a dedicated
+credential. Keep network traffic behind TLS; a remote address never implies trust.
+
+Enrolled realtime clients retain the existing `hello` handshake: supply the
+registry's exact `deviceId` and device `credential`. No session metadata,
+companion subscription, or turn is admitted before validation. The returned
+`hello.ack.sessionId` is authoritative. A requested thread label is scoped to
+that device, companion, and enrollment version; it cannot name another device's
+history. Channel and satellite identity come from the server.
+
+For native Voxta clients, send `Authorization: Bearer <credential>` on every
+HTTP request and WebSocket upgrade, including audio downloads, microphone
+streams, service toggles, and vision uploads. Use an enrolled device credential
+with the required capabilities, or configure `VOXTA_AUTH_TOKEN` with at least
+32 random bytes encoded as hex/base64url (for example, `openssl rand -hex 32`).
+The dedicated token represents one Voxta principal; enroll separate devices
+when callers need separate histories. The Hub rejects credential reuse with
+device, gateway, control, companion, Home Assistant, or provider credentials.
+Never send credentials in URLs. SignalR negotiation IDs are single-use,
+short-lived, and bound to the credential that negotiated them. A native raw
+`/hub` upgrade still works when its Authorization header is valid; the Voxta
+`authenticate` message alone is not an authentication credential.
+
+Set `HUB_ALLOWED_ORIGINS` to exact comma-separated browser origins, such as
+`https://client.example.test`. Wildcards and `null` are rejected. Native
+clients may omit Origin; all supplied Origins must match, even in developer
+mode. Companion UI bridge deployments must include their canonical browser
+origin. CORS preflight grants no session or turn authority.
+
+For local development, explicitly set `HUB_DEVELOPER_MODE=true` and bind to
+`127.0.0.1` or `::1`. Startup rejects wildcard, hostname, and remote binds and
+prints a warning that local callers can spend provider resources. Local clients
+receive connection-scoped identities and cannot choose session/channel IDs.
+Device-only powers remain unavailable without enrollment.
+
+Migration: remove old `VOXTA_SESSION_ID` / `VOXTA_CHAT_ID` pins, enable Voxta
+only when needed, configure its dedicated token on both Hub and native relay
+(`PSFN_VOXTA_RELAY_REMOTE_BEARER_TOKEN`), and replace cached IDs with those
+returned by the authenticated server. The relay must listen on a literal
+loopback address; it forwards credentials on SignalR, REST, audio downloads,
+and microphone upgrades. Clients unable to set headers must use this local
+relay. Anonymous remote clients are no longer supported.
+
+Rotate a Voxta token by replacing the secret on Hub and relay and restarting
+both, which closes old sockets and discards in-memory sessions and artifact
+ownership. Device rotation updates the registry digest and increments
+`enrollmentVersion`; revoke entries to deny the next authenticated event.
+Never print tokens or put them in Helm values or release history. Helm uses
+`satelliteHub.voxta.authTokenSecretRef`, defaults Voxta off, and rejects an
+exposed Hub without either registry authority or enabled dedicated Voxta
+authority. No live deployment is changed by these defaults.
 
 Supported Voxta client messages:
 

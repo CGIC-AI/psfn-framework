@@ -19,6 +19,7 @@ import type { ConversationMessage } from "./session-store.js";
 import type { VoxtaTtsAdapter } from "./voxta-facade.js";
 
 const SIGNALR_RECORD_SEPARATOR = "\x1e";
+const VOXTA_TEST_TOKEN = "a".repeat(64);
 
 class FakeAgent implements FrameworkAgentAdapter {
   readonly calls: Array<{
@@ -112,7 +113,7 @@ test("Voxta facade negotiates SignalR and routes SendMessage into the embodied s
     await server.start();
     const address = server.address() as AddressInfo;
     const baseUrl = `http://127.0.0.1:${address.port}`;
-    const negotiate = await fetch(`${baseUrl}/hub/negotiate?negotiateVersion=1`, {
+    const negotiate = await voxtaFetch(`${baseUrl}/hub/negotiate?negotiateVersion=1`, {
       method: "POST",
     });
     assert.equal(negotiate.status, 200);
@@ -888,7 +889,7 @@ test("Voxta facade serves proxy-fetchable WAV artifacts when no local VaM audio 
     assert.deepEqual(ttsCalls, ["Hello from PSFN"]);
     assert.equal(typeof chunk.audioUrl, "string");
     assert.match(String(chunk.audioUrl), new RegExp(`^http://127\\.0\\.0\\.1:${address.port}/api/voxta/audio/.+\\.wav$`));
-    const audio = await fetch(String(chunk.audioUrl));
+    const audio = await voxtaFetch(String(chunk.audioUrl));
     assert.equal(audio.status, 200);
     assert.equal(audio.headers.get("content-type"), "audio/x-wav");
     const wav = Buffer.from(await audio.arrayBuffer());
@@ -928,7 +929,7 @@ test("Voxta facade accepts AcidBubbles-style raw /hub WebSocket without negotiat
     const configurationId = activeConfigurationId(configuration);
     await waitForCompletion(frames, "auth-raw");
 
-    const toggleStt = await fetch(`${baseUrl}/api/configurations/${configurationId}/services/SpeechToText`, {
+    const toggleStt = await voxtaFetch(`${baseUrl}/api/configurations/${configurationId}/services/SpeechToText`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enabled: false }),
@@ -941,7 +942,7 @@ test("Voxta facade accepts AcidBubbles-style raw /hub WebSocket without negotiat
     );
     assert.equal(serviceEnabled(sttDisabled, "TextToSpeech"), true);
 
-    const toggleTts = await fetch(`${baseUrl}/api/configurations/${configurationId}/services/TextToSpeech`, {
+    const toggleTts = await voxtaFetch(`${baseUrl}/api/configurations/${configurationId}/services/TextToSpeech`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enabled: false }),
@@ -954,7 +955,7 @@ test("Voxta facade accepts AcidBubbles-style raw /hub WebSocket without negotiat
     );
 
     const proxyConfigurationId = crypto.randomUUID();
-    const toggleUnknownVision = await fetch(`${baseUrl}/api/configurations/${proxyConfigurationId}/services/ComputerVision`, {
+    const toggleUnknownVision = await voxtaFetch(`${baseUrl}/api/configurations/${proxyConfigurationId}/services/ComputerVision`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enabled: true }),
@@ -1092,7 +1093,7 @@ test("Voxta facade accepts AcidBubbles vision capture uploads and exposes metada
     const chatStarted = await waitForVoxta(frames, "chatStarted");
     await waitForCompletion(frames, "start-vision");
 
-    const toggleVision = await fetch(`${baseUrl}/api/configurations/${configurationId}/services/ComputerVision`, {
+    const toggleVision = await voxtaFetch(`${baseUrl}/api/configurations/${configurationId}/services/ComputerVision`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enabled: true }),
@@ -1120,7 +1121,7 @@ test("Voxta facade accepts AcidBubbles vision capture uploads and exposes metada
       (payload) => payload.source === "Eyes",
     );
     const upload = multipartBody("file", "virtamate.jpg", "image/jpeg", Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
-    const screenUpload = await fetch(
+    const screenUpload = await voxtaFetch(
       `${baseUrl}/api/vision/requests/${screenRequest.visionCaptureRequestId}/send`
         + `?sessionId=${chatStarted.sessionId}&source=Screen&label=virtamate`,
       {
@@ -1130,7 +1131,7 @@ test("Voxta facade accepts AcidBubbles vision capture uploads and exposes metada
       },
     );
     assert.equal(screenUpload.status, 200);
-    const eyesCancel = await fetch(
+    const eyesCancel = await voxtaFetch(
       `${baseUrl}/api/vision/requests/${eyesRequest.visionCaptureRequestId}?sessionId=${chatStarted.sessionId}`,
       { method: "DELETE" },
     );
@@ -1173,6 +1174,7 @@ function testHubConfig(overrides: {
     displayName: "Voxta VaM",
   });
   return {
+    access: { developerMode: false, allowedOrigins: [], voxtaToken: VOXTA_TEST_TOKEN },
     textOnlyMode: false,
     bindHost: "127.0.0.1",
     port: 0,
@@ -1221,12 +1223,18 @@ function testHubConfig(overrides: {
 }
 
 async function openSocket(url: string): Promise<WebSocket> {
-  const socket = new WebSocket(url);
+  const socket = new WebSocket(url, { headers: { Authorization: `Bearer ${VOXTA_TEST_TOKEN}` } });
   await new Promise<void>((resolve, reject) => {
     socket.once("open", resolve);
     socket.once("error", reject);
   });
   return socket;
+}
+
+async function voxtaFetch(url: string, options: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(options.headers);
+  headers.set("Authorization", `Bearer ${VOXTA_TEST_TOKEN}`);
+  return fetch(url, { ...options, headers });
 }
 
 function invocation(invocationId: string, payload: Record<string, unknown>): Record<string, unknown> {

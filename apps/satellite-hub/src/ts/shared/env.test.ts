@@ -32,6 +32,12 @@ const PSFN_ENV_KEYS = [
 ] as const;
 
 const HUB_ENV_KEYS = [
+  "HUB_DEVELOPER_MODE",
+  "HUB_ALLOWED_ORIGINS",
+  "VOXTA_AUTH_TOKEN",
+  "VOXTA_FACADE_ENABLED",
+  "VOXTA_SESSION_ID",
+  "VOXTA_CHAT_ID",
   "HUB_TEXT_ONLY",
   "REALTIME_VOICE_BIND_HOST",
   "REALTIME_VOICE_PORT",
@@ -268,6 +274,23 @@ test("loadHubConfig supports text-only mode without voice provider secrets", () 
     assert.equal(config.eidoversePlaceMap, null);
     assert.equal(config.location, null);
   });
+});
+
+test("Hub environment defaults disable anonymous development and Voxta exposure", () => {
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hub-secure-defaults-"));
+  try {
+    withEnv(HUB_ENV_KEYS, { HUB_TEXT_ONLY: "true", PSFN_API_BASE_URL: "http://127.0.0.1:1/v1" }, () => {
+      const config = loadHubConfig(projectRoot);
+      assert.equal(config.bindHost, "127.0.0.1");
+      assert.equal(config.voxta.enabled, false);
+      assert.deepEqual(config.access, { developerMode: false, allowedOrigins: [] });
+    });
+    withEnv(HUB_ENV_KEYS, { HUB_TEXT_ONLY: "true", PSFN_API_BASE_URL: "http://127.0.0.1:1/v1", VOXTA_SESSION_ID: "chosen" }, () => {
+      assert.throws(() => loadHubConfig(projectRoot), /Remove VOXTA_SESSION_ID and VOXTA_CHAT_ID/);
+    });
+  } finally {
+    fs.rmSync(projectRoot, { recursive: true, force: true });
+  }
 });
 
 test("loadHubConfig loads the Hub-owned Eidoverse place map", () => {

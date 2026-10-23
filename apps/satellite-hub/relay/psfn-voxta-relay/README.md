@@ -32,6 +32,29 @@ Published executable on the VaM Windows machine:
 
 Configure the AcidBubbles plugin to `127.0.0.1:8789`.
 
+Configure `PSFN_VOXTA_RELAY_REMOTE_BEARER_TOKEN` with the Hub's dedicated
+`VOXTA_AUTH_TOKEN` (or an enrolled device credential with the required Voxta
+capabilities). Keep it outside tracked files and command-line arguments. The
+relay sends Authorization headers on SignalR, REST, audio downloads and
+microphone upgrades. It refuses non-loopback listeners and foreign browser
+Origins; remote HTTP audio URLs must match the configured API origin and
+redirects are not followed. Use HTTPS for remote Hub traffic.
+
+The Hub disables Voxta by default. Set `VOXTA_FACADE_ENABLED=true` and rotate
+the Hub/relay token together by replacing it and restarting both processes.
+See the [Hub migration guide](../../README.md#hub-authentication-and-migration).
+
+Source validation (explicit .NET opt-in), from the repository root:
+
+```bash
+npm --prefix apps/satellite-hub run build:ts
+dotnet build apps/satellite-hub/relay/psfn-voxta-relay/PsfnVoxtaRelay.csproj --nologo --verbosity quiet
+node --test apps/satellite-hub/relay/auth.test.mjs
+```
+
+The socket test runs the actual Hub and relay and checks authenticated REST,
+SignalR turns, audio downloads, Origin rejection, and wildcard-bind rejection.
+
 The published folder includes `appsettings.json` beside the EXE:
 
 ```json

@@ -52,6 +52,26 @@
     "satelliteHub": {
       "type": "object",
       "properties": {
+        "allowedOrigins": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^https?://[^/?#@,\\s*]+$" },
+          "uniqueItems": true
+        },
+        "voxta": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "authTokenSecretRef": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "name": { "type": "string" },
+                "key": { "type": "string" }
+              }
+            }
+          }
+        },
         "eidoverse": {
           "type": "object",
           "additionalProperties": false,

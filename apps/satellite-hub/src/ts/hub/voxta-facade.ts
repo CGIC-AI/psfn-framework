@@ -17,6 +17,7 @@ import {
 import type { PsfnChannelContext, VisionCaptureImage, VisionCaptureMetadata } from "./embodied-session.js";
 import type { ConversationMessage } from "./session-store.js";
 import { SessionStore } from "./session-store.js";
+import { HubAccess, rejectHubUpgrade, type HubPrincipal } from "./hub-auth.js";
 
 const SIGNALR_RECORD_SEPARATOR = "\x1e";
 const SIGNALR_KEEPALIVE_INTERVAL_MS = 15_000;
@@ -25,6 +26,7 @@ const VOXTA_SERVER_VERSION = "1.1.3";
 const VAM_PLUGIN_VERSION = "1.1.1";
 
 interface VoxtaFacadeDependencies {
+  access: HubAccess;
   config: VoxtaFacadeConfig;
   sessions: SessionStore;
   embodiedSessions: EmbodiedSessionRegistry;
@@ -55,6 +57,7 @@ export interface VoxtaSttAdapter {
 }
 
 interface PendingConnection {
+  principalId: string;
   connectionId: string;
   connectionToken: string;
   createdAt: number;
@@ -74,6 +77,7 @@ type VoxtaServiceState = Record<VoxtaServiceType, boolean>;
 type VoxtaVisionSource = "Screen" | "Eyes";
 
 interface VoxtaFacadeRuntime {
+  audioOwners: Map<string, string>;
   serviceStates: Map<string, VoxtaServiceState>;
   connectionsByConfigurationId: Map<string, VoxtaConnection>;
   connectionsBySessionId: Map<string, VoxtaConnection>;
@@ -114,9 +118,11 @@ interface VoxtaParticipant {
 }
 
 export class VoxtaFacade {
+  private readonly principalSessions = new Map<string, { sessionId: string; chatId: string }>();
   private readonly wsServer = new WebSocketServer({ noServer: true });
   private readonly pendingConnections = new Map<string, PendingConnection>();
   private readonly runtime: VoxtaFacadeRuntime = {
+    audioOwners: new Map(),
     serviceStates: new Map(),
     connectionsByConfigurationId: new Map(),
     connectionsBySessionId: new Map(),
@@ -124,19 +130,28 @@ export class VoxtaFacade {
     connections: new Set(),
   };
   private readonly audioWsServer = new WebSocketServer({ noServer: true });
+  private readonly principals = new WeakMap<http.IncomingMessage, HubPrincipal>();
 
   constructor(private readonly deps: VoxtaFacadeDependencies) {
     this.wsServer.on("connection", (socket, request) => {
       const url = new URL(request.url || "/hub", "http://localhost");
-      const connectionToken = url.searchParams.get("id") || crypto.randomUUID();
+      const connectionToken = url.searchParams.get("id") || "";
       const pending = this.pendingConnections.get(connectionToken);
       this.pendingConnections.delete(connectionToken);
+      const principal = this.principals.get(request)!;
+      let session = this.principalSessions.get(principal.id);
+      if (!session) {
+        session = { sessionId: crypto.randomUUID(), chatId: crypto.randomUUID() };
+        this.principalSessions.set(principal.id, session);
+      }
       const connection = new VoxtaConnection(
         socket,
         this.deps,
         this.runtime,
         pending?.connectionId ?? crypto.randomUUID(),
         publicBaseUrlForRequest(this.deps.config.publicBaseUrl, request),
+        principal,
+        session,
       );
       connection.run();
     });
@@ -147,6 +162,8 @@ export class VoxtaFacade {
         this.runtime,
         this.deps.stt,
         normalizedString(url.searchParams.get("sessionId")) ?? "",
+        this.principals.get(request)!,
+        this.deps.access,
       );
       stream.run();
     });
@@ -154,21 +171,34 @@ export class VoxtaFacade {
 
   handleHttp(request: http.IncomingMessage, response: http.ServerResponse): boolean {
     const url = new URL(request.url || "/", "http://localhost");
+    if (!isVoxtaPath(url.pathname)) return false;
+    if (!this.deps.access.originAllowed(request)) {
+      writeJson(response, 403, { error: "Origin is not allowed" });
+      return true;
+    }
+    this.deps.access.writeCors(request, response);
+    if (!this.deps.config.enabled) {
+      writeJson(response, 404, { error: "Voxta facade is disabled" });
+      return true;
+    }
     if (isCorsPreflight(request, url.pathname)) {
-      writeCorsHeaders(response);
       response.statusCode = 204;
       response.end();
       return true;
     }
+    const principal = this.deps.access.authenticate(request);
+    if (!principal) {
+      writeJson(response, 401, { error: "Hub authentication required" });
+      return true;
+    }
+    this.principals.set(request, principal);
     const audioArtifact = parseAudioArtifactPath(url.pathname);
     if (audioArtifact) {
-      writeCorsHeaders(response);
       this.handleAudioArtifact(request, response, audioArtifact);
       return true;
     }
     const visionRequest = parseVisionRequestPath(url.pathname);
     if (visionRequest) {
-      writeCorsHeaders(response);
       void this.handleVisionRequest(request, response, url, visionRequest).catch((error) => {
         writeJson(response, 500, {
           error: error instanceof Error ? error.message : String(error),
@@ -178,7 +208,6 @@ export class VoxtaFacade {
     }
     const serviceToggle = parseServiceTogglePath(url.pathname);
     if (serviceToggle) {
-      writeCorsHeaders(response);
       void this.handleServiceToggle(request, response, serviceToggle).catch((error) => {
         writeJson(response, 500, {
           error: error instanceof Error ? error.message : String(error),
@@ -187,9 +216,9 @@ export class VoxtaFacade {
       return true;
     }
     if (!isNegotiatePath(url.pathname)) {
-      return false;
+      writeJson(response, 404, { error: "Unknown Voxta route" });
+      return true;
     }
-    writeCorsHeaders(response);
     if (!this.deps.config.enabled) {
       writeJson(response, 404, { error: "Voxta facade is disabled" });
       return true;
@@ -203,6 +232,7 @@ export class VoxtaFacade {
     const connectionId = crypto.randomUUID();
     const connectionToken = crypto.randomUUID();
     this.pendingConnections.set(connectionToken, {
+      principalId: principal.id,
       connectionId,
       connectionToken,
       createdAt: Date.now(),
@@ -223,15 +253,31 @@ export class VoxtaFacade {
   }
 
   shouldHandleUpgrade(request: http.IncomingMessage): boolean {
-    if (!this.deps.config.enabled) {
-      return false;
-    }
     const url = new URL(request.url || "/", "http://localhost");
-    return isHubPath(url.pathname) || isAudioInputStreamPath(url.pathname);
+    return isVoxtaPath(url.pathname);
   }
 
   handleUpgrade(request: http.IncomingMessage, socket: Duplex, head: Buffer): void {
     const url = new URL(request.url || "/", "http://localhost");
+    if (!this.deps.config.enabled) return rejectHubUpgrade(socket, 404);
+    const principal = this.deps.access.authenticate(request);
+    if (!principal) return rejectHubUpgrade(socket, 401);
+    this.principals.set(request, principal);
+    this.prunePendingConnections();
+    if (isAudioInputStreamPath(url.pathname)) {
+      const connection = this.runtime.connectionsBySessionId.get(url.searchParams.get("sessionId") ?? "");
+      if (!connection || !connection.ownedBy(principal)) return rejectHubUpgrade(socket, 403);
+      if (principal.device && !principal.device.maxCapabilities.input.includes("microphone_pcm")) return rejectHubUpgrade(socket, 403);
+      if (!this.deps.config.sttStreamEnabled) return rejectHubUpgrade(socket, 404);
+    } else if (isHubPath(url.pathname)) {
+      const id = url.searchParams.get("id");
+      if (id !== null) {
+        const pending = this.pendingConnections.get(id);
+        if (!pending || pending.principalId !== principal.id) return rejectHubUpgrade(socket, 401);
+      }
+    } else {
+      return rejectHubUpgrade(socket, 404);
+    }
     const server = isAudioInputStreamPath(url.pathname) ? this.audioWsServer : this.wsServer;
     server.handleUpgrade(request, socket, head, (websocket) => {
       server.emit("connection", websocket, request);
@@ -276,6 +322,10 @@ export class VoxtaFacade {
       writeJson(response, 405, { error: "Voxta audio artifacts require GET or HEAD" });
       return;
     }
+    if (this.runtime.audioOwners.get(artifact.filename) !== this.principals.get(request)?.id) {
+      writeJson(response, 404, { error: "Voxta audio artifact not found" });
+      return;
+    }
     const filePath = path.join(voxtaAudioArtifactsRoot(this.deps.artifactsRoot), artifact.filename);
     let stats: fs.Stats;
     try {
@@ -318,13 +368,18 @@ export class VoxtaFacade {
       writeJson(response, 400, { error: "Voxta service update body must be { enabled: boolean }" });
       return;
     }
+    const principal = this.principals.get(request)!;
     let connection = this.runtime.connectionsByConfigurationId.get(toggle.configurationId);
     if (!connection && this.runtime.connections.size === 1) {
       const soleConnection = [...this.runtime.connections][0];
-      if (soleConnection) {
+      if (soleConnection?.ownedBy(principal)) {
         connection = soleConnection;
         connection.adoptConfigurationId(toggle.configurationId);
       }
+    }
+    if (!connection || !connection.ownedBy(principal)) {
+      writeJson(response, 404, { error: "Voxta configuration not found" });
+      return;
     }
     let state = this.runtime.serviceStates.get(toggle.configurationId);
     if (!state) {
@@ -361,8 +416,18 @@ export class VoxtaFacade {
       return;
     }
     const connection = this.runtime.connectionsBySessionId.get(sessionId);
-    if (!connection) {
+    if (!connection || !connection.ownedBy(this.principals.get(request)!)) {
       writeJson(response, 404, { error: `Unknown Voxta session: ${sessionId}` });
+      return;
+    }
+    const principal = this.principals.get(request)!;
+    if (principal.device && !principal.device.maxCapabilities.input.includes("vision_upload")) {
+      writeJson(response, 403, { error: "Voxta vision capability required" });
+      return;
+    }
+    const pending = this.runtime.pendingVisionRequests.get(visionRequest.requestId);
+    if (pending && pending.sessionId !== sessionId) {
+      writeJson(response, 404, { error: "Voxta vision request not found" });
       return;
     }
     if (visionRequest.action === "cancel") {
@@ -434,10 +499,13 @@ class VoxtaConnection {
     private readonly runtime: VoxtaFacadeRuntime,
     _connectionId: string,
     private readonly publicBaseUrl: string,
+    private readonly principal: HubPrincipal,
+    session: { sessionId: string; chatId: string },
   ) {
-    const persistentKey = `${deps.config.satelliteId}:${deps.config.assistantId}:${deps.config.userId}`;
-    this.sessionId = stableVoxtaGuid("session", deps.config.sessionId ?? persistentKey);
-    this.chatId = stableVoxtaGuid("chat", deps.config.chatId ?? persistentKey);
+    // Only the authenticated transport may choose its conversation. Client or
+    // environment session hints cannot join another connection's history.
+    this.sessionId = session.sessionId;
+    this.chatId = session.chatId;
     this.assistant = {
       id: stableVoxtaGuid("assistant", deps.config.assistantId),
       name: deps.config.assistantName,
@@ -454,6 +522,10 @@ class VoxtaConnection {
     this.runtime.connections.add(this);
     this.attachSatellite();
     this.registerSession();
+  }
+
+  ownedBy(principal: HubPrincipal): boolean {
+    return this.principal.id === principal.id;
   }
 
   run(): void {
@@ -493,6 +565,13 @@ class VoxtaConnection {
   }
 
   private async handleFrame(frame: unknown): Promise<void> {
+    try {
+      this.deps.access.assertCurrent(this.principal);
+    } catch {
+      this.cancelReply();
+      this.socket.close(1008, "Hub device authority changed");
+      return;
+    }
     if (!isRecord(frame)) {
       return;
     }
@@ -520,6 +599,11 @@ class VoxtaConnection {
     }
 
     const clientPayload = payload as VoxtaClientPayload;
+    if ((clientPayload.sessionId && clientPayload.sessionId !== this.sessionId)
+      || (clientPayload.chatId && clientPayload.chatId !== this.chatId)) {
+      await this.sendCompletion(invocation.invocationId, "Voxta session does not belong to this connection");
+      return;
+    }
     const type = typeof clientPayload.$type === "string" ? clientPayload.$type : "";
     switch (type) {
       case "authenticate":
@@ -698,6 +782,10 @@ class VoxtaConnection {
   }
 
   private async handleSend(invocationId: string | undefined, payload: VoxtaClientPayload): Promise<void> {
+    if (this.principal.device && !this.principal.device.maxCapabilities.input.includes("text")) {
+      await this.sendCompletion(invocationId, "Voxta text capability required");
+      return;
+    }
     const rawText = normalizedString(payload.text);
     if (!rawText) {
       await this.sendCompletion(invocationId, "Voxta send text is empty");
@@ -947,6 +1035,7 @@ class VoxtaConnection {
         return "silence:0";
       }
       const filename = `voxta_${safePathPart(this.sessionId)}_${safePathPart(messageId)}_0.wav`;
+      this.runtime.audioOwners.set(filename, this.principal.id);
       const audioFolder = this.deps.config.audioFolder;
       if (!audioFolder) {
         const directory = voxtaAudioArtifactsRoot(this.deps.artifactsRoot);
@@ -1104,16 +1193,23 @@ class VoxtaConnection {
   }
 
   private attachSatellite(): void {
+    const device = this.principal.device;
     this.deps.embodiedSessions.attachSatellite({
       sessionId: this.sessionId,
-      satelliteId: this.deps.config.satelliteId,
-      satelliteName: this.deps.config.satelliteName,
-      capabilities: VOXTA_VAM_CAPABILITIES,
+      satelliteId: device?.satelliteId ?? this.deps.config.satelliteId,
+      satelliteName: device?.satelliteName ?? this.deps.config.satelliteName,
+      capabilities: device?.maxCapabilities ?? VOXTA_VAM_CAPABILITIES,
+      ...(device ? {
+        claimIdentity: { satelliteId: device.satelliteId, endpointId: device.endpointId,
+          claimType: device.claimType, displayName: device.satelliteName },
+        deviceAuthority: device,
+      } : {}),
     });
   }
 
   private agentChannelContext(): PsfnChannelContext {
-    const context = this.deps.embodiedSessions.getContext(this.sessionId, this.deps.config.satelliteId);
+    this.deps.access.assertCurrent(this.principal);
+    const context = this.deps.embodiedSessions.getContext(this.sessionId, this.principal.device?.satelliteId ?? this.deps.config.satelliteId);
     return {
       ...context,
       visionCaptures: this.visionCaptures.slice(-4).map(stripVisionCaptureImageData),
@@ -1280,6 +1376,8 @@ class VoxtaAudioInputStream {
     private readonly runtime: VoxtaFacadeRuntime,
     private readonly stt: VoxtaSttAdapter | undefined,
     private readonly sessionId: string,
+    private readonly principal: HubPrincipal,
+    private readonly access: HubAccess,
   ) {}
 
   run(): void {
@@ -1301,6 +1399,7 @@ class VoxtaAudioInputStream {
   }
 
   private async handleMessage(raw: RawData, isBinary: boolean): Promise<void> {
+    this.access.assertCurrent(this.principal);
     if (!this.spec) {
       if (isBinary) {
         throw new Error("Voxta audio input stream must start with a JSON stream spec");
@@ -1351,7 +1450,9 @@ class VoxtaAudioInputStream {
   }
 
   private connection(): VoxtaConnection | undefined {
-    return this.runtime.connectionsBySessionId.get(this.sessionId);
+    this.access.assertCurrent(this.principal);
+    const connection = this.runtime.connectionsBySessionId.get(this.sessionId);
+    return connection?.ownedBy(this.principal) ? connection : undefined;
   }
 }
 
@@ -1377,10 +1478,10 @@ function isCorsPreflight(request: http.IncomingMessage, pathname: string): boole
   );
 }
 
-function writeCorsHeaders(response: http.ServerResponse): void {
-  response.setHeader("Access-Control-Allow-Origin", "*");
-  response.setHeader("Access-Control-Allow-Methods", "GET, HEAD, POST, PUT, DELETE, OPTIONS");
-  response.setHeader("Access-Control-Allow-Headers", "content-type, authorization");
+function isVoxtaPath(pathname: string): boolean {
+  return isHubPath(pathname) || isNegotiatePath(pathname) || isAudioInputStreamPath(pathname)
+    || pathname.startsWith("/api/voxta/") || pathname.startsWith("/api/vision/")
+    || pathname.startsWith("/api/configurations/");
 }
 
 function writeJson(response: http.ServerResponse, statusCode: number, payload: unknown): void {

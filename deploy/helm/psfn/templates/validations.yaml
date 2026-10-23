@@ -1,6 +1,21 @@
 {{- if not .Values.certificates.enabled -}}
 {{- fail "certificates.enabled must be true because PSFN Kubernetes network transports require mTLS certificates" -}}
 {{- end -}}
+{{- if .Values.satelliteHub.enabled -}}
+{{- $voxta := .Values.satelliteHub.voxta -}}
+{{- $tokenRef := $voxta.authTokenSecretRef -}}
+{{- if ne (empty $tokenRef.name) (empty $tokenRef.key) -}}
+{{- fail "satelliteHub.voxta.authTokenSecretRef requires both name and key" -}}
+{{- end -}}
+{{- if and (not (include "psfn.satelliteHubDeviceRegistryEnabled" .)) (not .Values.satelliteHub.deviceAssertion.enabled) (not (and $voxta.enabled $tokenRef.name $tokenRef.key)) -}}
+{{- fail "Satellite Hub requires an enrolled device registry or enabled Voxta with a dedicated authTokenSecretRef" -}}
+{{- end -}}
+{{- range .Values.satelliteHub.allowedOrigins -}}
+{{- if or (not (regexMatch "^https?://[^/?#@,[:space:]]+$" .)) (contains "*" .) -}}
+{{- fail "satelliteHub.allowedOrigins must contain exact http(s) origins without paths or wildcards" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- if not (regexMatch "^[A-Z][A-Z0-9_]*$" .Values.provider.envName) -}}
 {{- fail "provider.envName must match the providers.json uppercase env-name contract" -}}
 {{- end -}}

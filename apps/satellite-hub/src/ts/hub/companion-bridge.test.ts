@@ -578,7 +578,7 @@ test("hub publishes one TTS lifecycle to both the local device and gateway relay
         claimType: "text-only",
         satelliteId: "hub-companion-test",
         endpointId: "companion-test",
-        sessionId: "companion-test:phone",
+        sessionId: client?.sessionId,
         capabilities: "audio_output",
       })),
     );
@@ -607,10 +607,10 @@ test("gateway audio publish failure is sanitized and does not abort local audio 
   const warnings: unknown[][] = [];
   const originalWarn = console.warn;
   let client: TestClient | null = null;
-  console.warn = (...args: unknown[]) => warnings.push(args);
 
   try {
     await server.start();
+    console.warn = (...args: unknown[]) => warnings.push(args);
     const port = (server.address() as AddressInfo).port;
     client = await TestClient.connect(port, "phone", STREAMING_AUDIO_CAPABILITIES);
     client.send({ type: "user.text", text: "speak despite relay failure" });
@@ -667,7 +667,7 @@ test("hub publishes an interruption reset after an opened gateway audio bracket"
     assert.deepEqual(backplane.audioOutputRequests.map(request => request.body), [
       { type: "text", data: "audio-init" },
       { type: "audio", data: Buffer.from("open-audio").toString("base64") },
-      { type: "assistant.interrupted", sessionId: "companion-test:phone" },
+      { type: "assistant.interrupted", sessionId: client.sessionId },
     ]);
     assert.equal(backplane.audioOutputRequests.some(request => (
       (request.body as { data?: unknown }).data === "audio-end"
@@ -803,7 +803,7 @@ test("hub forwards a capable client's typed touch interaction and relays the com
     await waitFor(() => backplane.stimulusRequests.length === 1, "touch stimulus forwarding");
     assert.deepEqual(backplane.stimulusRequests[0]?.body, {
       ...TEST_IDENTITY,
-      sessionId: "realtime:companion-app-device",
+      sessionId: client.sessionId,
       deviceId: "companion-app-device",
       kind: "headpat",
       region: "head",
@@ -989,7 +989,7 @@ test("authenticated Hub geofences device.location and forwards only typed transi
     await waitFor(() => backplane.stimulusRequests.length === 1, "left transition");
     assert.deepEqual(backplane.stimulusRequests[0]?.body, {
       ...TEST_IDENTITY,
-      sessionId: "realtime:phone",
+      sessionId: client.sessionId,
       deviceId: "phone",
       kind: "left",
       placeId: "home",
@@ -1015,7 +1015,7 @@ test("authenticated Hub geofences device.location and forwards only typed transi
     await waitFor(() => backplane.stimulusRequests.length === 2, "arrived transition");
     assert.deepEqual(backplane.stimulusRequests[1]?.body, {
       ...TEST_IDENTITY,
-      sessionId: "realtime:phone",
+      sessionId: client.sessionId,
       deviceId: "phone",
       kind: "arrived",
       placeId: "home",
@@ -1325,6 +1325,7 @@ class InterruptibleAudioTts implements StreamingTtsAdapter {
 
 class TestClient {
   readonly messages: HubToClientMessage[] = [];
+  sessionId = "";
 
   private constructor(
     private readonly socket: WebSocket,
@@ -1354,7 +1355,8 @@ class TestClient {
       satelliteName: satelliteId,
       capabilities,
     });
-    await client.waitForMessage("hello.ack");
+    const ack = await client.waitForMessage("hello.ack");
+    if (ack.type === "hello.ack") client.sessionId = ack.sessionId;
     return client;
   }
 
@@ -1380,7 +1382,8 @@ class TestClient {
     });
     const client = new TestClient(socket);
     client.send(hello);
-    await client.waitForMessage("hello.ack");
+    const ack = await client.waitForMessage("hello.ack");
+    if (ack.type === "hello.ack") client.sessionId = ack.sessionId;
     return client;
   }
 
@@ -1609,6 +1612,7 @@ function testHubConfig(options: {
   });
   return {
     textOnlyMode: !options.streamingAudio,
+    access: { developerMode: true, allowedOrigins: [] },
     bindHost: "127.0.0.1",
     port: 0,
     deepgramApiKey: null,

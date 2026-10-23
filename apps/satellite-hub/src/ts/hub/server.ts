@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 
@@ -78,12 +78,12 @@ import {
   takeFlushChunk,
 } from "../shared/text.js";
 import {
-  authenticateHubDevice,
   intersectCapabilities,
   requireCurrentHubDeviceEnrollment,
   type HubDeviceIdentity,
   type HubDeviceRegistryAuthority,
 } from "./device-registry.js";
+import { HubAccess, rejectHubUpgrade } from "./hub-auth.js";
 import type { PsfnChannelContext } from "./embodied-session.js";
 import { CompanionBrowserBridge } from "./companion-browser-bridge.js";
 import {
@@ -114,6 +114,7 @@ export class RealtimeHubServer {
   private readonly eidoverseSupportsTravel: boolean;
   private readonly locationGeofence: HubLocationGeofence | null;
   private readonly companionBrowser: CompanionBrowserBridge | null;
+  private readonly access: HubAccess;
 
   constructor(
     private readonly config: HubConfig,
@@ -133,6 +134,7 @@ export class RealtimeHubServer {
       locationNow?: () => number;
     } = {},
   ) {
+    this.access = new HubAccess(config);
     if (config.deviceRegistry && !config.psfn.deviceAssertionIssuer) {
       throw new Error("Hub device registry requires the device assertion signing authority");
     }
@@ -191,6 +193,7 @@ export class RealtimeHubServer {
       : options.voxtaStt
         ?? (config.deepgramApiKey ? new DeepgramVoxtaStt(config.deepgramApiKey) : undefined);
     this.voxta = new VoxtaFacade({
+      access: this.access,
       config: config.voxta,
       sessions: this.sessions,
       embodiedSessions: this.embodiedSessions,
@@ -209,6 +212,9 @@ export class RealtimeHubServer {
   }
 
   async start(): Promise<void> {
+    if (this.config.access?.developerMode) {
+      console.warn("Satellite Hub developer mode: local unauthenticated callers can invoke providers; use only on a trusted loopback host");
+    }
     this.eidoverse?.connect();
     this.companion?.start();
     this.wsServer.on("connection", (socket) => {
@@ -228,15 +234,24 @@ export class RealtimeHubServer {
         this.eidoverseSupportsBodyActions
           ? (name, args) => { this.submitEidoverseBodyAction(name, args); }
           : null,
+        this.access,
       );
       connection.run().catch((error) => {
         console.error("Realtime connection failed:", error);
       });
     });
     this.httpServer.on("upgrade", (request, socket, head) => {
+      if (!this.access.originAllowed(request)) {
+        rejectHubUpgrade(socket, 403);
+        return;
+      }
       if (this.companionBrowser?.handleUpgrade(request, socket, head)) return;
       if (this.voxta.shouldHandleUpgrade(request)) {
         this.voxta.handleUpgrade(request, socket, head);
+        return;
+      }
+      if (!this.access.allowRealtimeUpgrade(request)) {
+        rejectHubUpgrade(socket, 401);
         return;
       }
       this.wsServer.handleUpgrade(request, socket, head, (websocket) => {
@@ -411,7 +426,7 @@ type EidoverseTravelRequestHandler = (world: string) => Promise<EidoverseTravelO
 type EidoverseBodyActionHandler = (name: string, args: unknown) => void;
 
 class RealtimeConnection {
-  private deviceId = `client-${Math.random().toString(16).slice(2, 10)}`;
+  private deviceId = `client-${randomUUID()}`;
   private deviceName = "Opanhome TS Client";
   private sessionId = `realtime:${this.deviceId}`;
   private channelId = "";
@@ -454,8 +469,9 @@ class RealtimeConnection {
      * the `world.body` command structurally unavailable.
      */
     private readonly eidoverseBody: EidoverseBodyActionHandler | null = null,
+    private readonly access: HubAccess,
   ) {
-    this.authenticated = !this.deviceRegistry;
+    this.authenticated = !this.deviceRegistry && this.config.access?.developerMode === true;
     if (!this.deviceRegistry) this.attachSatellite();
     if (!this.deviceRegistry) this.subscribeCompanion();
   }
@@ -536,7 +552,7 @@ class RealtimeConnection {
           }
           let device: HubDeviceIdentity | null;
           try {
-            device = authenticateHubDevice(this.deviceRegistry.readCurrent(), message.credential);
+            device = this.access.verifyDevice(message.credential);
           } catch (error) {
             console.error("Hub device registry reload failed:", error);
             await this.send({
@@ -565,7 +581,7 @@ class RealtimeConnection {
             claimType: device.claimType,
             displayName: device.satelliteName,
           };
-          this.sessionId = deriveAuthenticatedSessionId(device.deviceId, message.sessionId);
+          this.sessionId = this.access.realtimeSession(device, message.sessionId);
           try {
             this.attachSatellite(
               undefined,
@@ -589,12 +605,10 @@ class RealtimeConnection {
           // authority in hello; keep the connection-scoped identity the Hub
           // minted instead of adopting an undefined id that would break the
           // session key and embodied-session attach.
-          this.deviceId = message.deviceId?.trim() || this.deviceId;
           this.deviceName = message.deviceName?.trim() || this.deviceName;
-          this.sessionId = message.sessionId?.trim() || `realtime:${this.deviceId}`;
-          this.satelliteId = message.satelliteId?.trim() || this.deviceId;
+          // Development callers never select another connection's session.
           this.satelliteName = message.satelliteName?.trim() || this.deviceName;
-          this.attachSatellite(message.channelId, ceilUnregisteredCapabilities(message.capabilities));
+          this.attachSatellite(undefined, ceilUnregisteredCapabilities(message.capabilities));
         }
         this.sessions.touch(this.sessionId);
         console.log(`hello device=${this.deviceId} session=${this.sessionId}`);
@@ -1692,13 +1706,6 @@ function hasBrowserAuthoredAuthority(message: ClientToHubMessage): boolean {
     "humanSessionId",
     "channelId",
   ].some(field => Object.hasOwn(untrusted, field));
-}
-
-function deriveAuthenticatedSessionId(deviceId: string, requested: string | undefined): string {
-  const requestedSession = requested?.trim();
-  if (!requestedSession) return `realtime:${deviceId}`;
-  const digest = createHash("sha256").update(requestedSession, "utf8").digest("hex").slice(0, 20);
-  return `realtime:${deviceId}:${digest}`;
 }
 
 async function* singleValueStream(text: string): AsyncGenerator<string, void, void> {

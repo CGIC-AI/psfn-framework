@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import dotenv from "dotenv";
+import type { HubAccessConfig } from "../hub/hub-auth.js";
 import { loadCompanionBrowserConfig, type CompanionBrowserConfig } from "../hub/companion-browser-config.js";
 import {
   loadHubDeviceRegistryAuthority,
@@ -98,6 +99,7 @@ export interface HubControlConfig {
 }
 
 export interface HubConfig {
+  access?: HubAccessConfig;
   companionBrowser?: CompanionBrowserConfig | null;
   textOnlyMode: boolean;
   bindHost: string;
@@ -332,8 +334,13 @@ export function loadHubConfig(projectRoot: string): HubConfig {
 
   return {
     textOnlyMode,
+    access: {
+      developerMode: process.env.HUB_DEVELOPER_MODE?.trim() === "true",
+      allowedOrigins: splitCsv(process.env.HUB_ALLOWED_ORIGINS || ""),
+      ...(optional("VOXTA_AUTH_TOKEN") ? { voxtaToken: optional("VOXTA_AUTH_TOKEN") } : {}),
+    },
     companionBrowser: loadCompanionBrowserConfig(projectRoot),
-    bindHost: process.env.REALTIME_VOICE_BIND_HOST || "0.0.0.0",
+    bindHost: process.env.REALTIME_VOICE_BIND_HOST || "127.0.0.1",
     port: Number.parseInt(process.env.REALTIME_VOICE_PORT || "8787", 10),
     deepgramApiKey: textOnlyMode ? optional("DEEPGRAM_API_KEY") ?? null : required("DEEPGRAM_API_KEY"),
     elevenlabsApiKey: textOnlyMode ? optional("ELEVENLABS_API_KEY") ?? null : required("ELEVENLABS_API_KEY"),
@@ -519,12 +526,15 @@ function validateReplyBudget(
 }
 
 function loadVoxtaFacadeConfig(projectRoot: string): VoxtaFacadeConfig {
+  if (optional("VOXTA_SESSION_ID") || optional("VOXTA_CHAT_ID")) {
+    throw new Error("Remove VOXTA_SESSION_ID and VOXTA_CHAT_ID: authenticated sessions are allocated by the Hub");
+  }
   return {
-    enabled: process.env.VOXTA_FACADE_ENABLED?.trim() !== "false",
+    enabled: process.env.VOXTA_FACADE_ENABLED?.trim() === "true",
     satelliteId: process.env.VOXTA_SATELLITE_ID?.trim() || "voxta-vam",
     satelliteName: process.env.VOXTA_SATELLITE_NAME?.trim() || "Voxta VaM",
-    sessionId: process.env.VOXTA_SESSION_ID?.trim() || null,
-    chatId: process.env.VOXTA_CHAT_ID?.trim() || null,
+    sessionId: null,
+    chatId: null,
     assistantId: process.env.VOXTA_ASSISTANT_ID?.trim() || "psfn-assistant",
     assistantName: process.env.VOXTA_ASSISTANT_NAME?.trim() || "PSFN",
     userId: process.env.VOXTA_USER_ID?.trim() || "voxta-user",

@@ -1,8 +1,9 @@
 import { randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { fromPartial } from '@total-typescript/shoehorn';
 import { describe, expect, it } from 'vitest';
 import { ApiServer, type ApiServerConfig } from '../../channels/api/server.js';
@@ -44,8 +45,10 @@ describe('public credential startup boundaries', () => {
           GATEWAY_SESSION_HMAC_KEYS: `v1:${apiKey},v2=${randomBytes(32).toString('hex')}`,
           GATEWAY_SESSION_HMAC_ACTIVE_VERSION: 'v2' },
       });
+      expect(result.error).toBeUndefined();
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain('must not reuse');
+      expect(result.stdout + result.stderr).not.toContain('runtime_credentials_validated');
       expect(result.stdout + result.stderr).not.toContain(apiKey);
     } finally { rmSync(directory, { recursive: true, force: true }); }
   });
@@ -58,19 +61,66 @@ describe('public credential startup boundaries', () => {
       GATEWAY_SESSION_HMAC_KEY: single, GATEWAY_SESSION_HMAC_KEYS: `v1:${single},v2=${current}`,
       GATEWAY_SESSION_HMAC_ACTIVE_VERSION: 'v2' };
     try {
+      // Attach the public diagnostic sink before the real entrypoint starts;
+      // this fixture intentionally has no owner files to hydrate.
+      const diagnosticPreload = join(directory, 'diagnostic-preload.mjs');
+      writeFileSync(diagnosticPreload, `
+        import { configureOperationalLogPersistence } from ${JSON.stringify(pathToFileURL(resolve('src/shared/logger.ts')).href)};
+        configureOperationalLogPersistence({ logsDir: ${JSON.stringify(directory)}, process: 'gateway', retentionDays: 30 });
+      `);
       const keyring = createSessionHmacBoundaryService({ env }).requireKeyring('missing');
       expect(keyring.activeVersion).toBe('v2');
       expect(keyring.keys.v2 === current && keyring.keys.v1 === single).toBe(true);
-      const result = spawnSync(process.execPath, ['--import', resolve('node_modules/tsx/dist/loader.mjs'), resolve('src/app/gateway/main.ts')], {
+      const result = spawnSync(process.execPath, ['--import', resolve('node_modules/tsx/dist/loader.mjs'), '--import', diagnosticPreload, resolve('src/app/gateway/main.ts')], {
         cwd: directory, encoding: 'utf8', env,
       });
       expect(result.error).toBeUndefined();
       expect(result.status).not.toBe(0);
-      expect(result.stdout + result.stderr).toContain('The fleet manifest is required but missing');
-      expect(result.stdout + result.stderr).not.toContain(single);
-      expect(result.stdout + result.stderr).not.toContain(current);
+      expect((result.stdout + result.stderr).split('\n').map(line => line.replace(/^\d{2}:\d{2}:\d{2} /u, '')))
+        .toContain('INFO  [Gateway] Startup stage completed {"phase":"runtime_credentials_validated"}');
+      const diagnosticDirectory = join(directory, 'system');
+      const diagnostics = readdirSync(diagnosticDirectory).map(file => readFileSync(join(diagnosticDirectory, file), 'utf8')).join('');
+      expect(diagnostics).toContain('"message":"Startup stage completed"');
+      expect(diagnostics).toContain('"phase":"runtime_credentials_validated"');
+      for (const output of [result.stdout + result.stderr, diagnostics]) {
+        expect(output).toContain('Fatal error');
+        expect(output.indexOf('runtime_credentials_validated')).toBeLessThan(output.indexOf('Fatal error'));
+        expect(output).toContain('"error":"[REDACTED_CONTENT]"');
+        expect(output).not.toContain('The fleet manifest is required but missing');
+        expect(output).not.toContain(directory);
+        for (const credential of [single, current, env.API_KEY]) expect(output).not.toContain(credential);
+      }
     } finally { rmSync(directory, { recursive: true, force: true }); }
   });
+
+  it.each(['weak inactive key', 'weak active key', 'duplicate version', 'unparsed entry', 'empty key', 'unsafe version'] as const)(
+    'rejects HMAC rotation with %s in the executable gateway before the accepted startup stage', mode => {
+      const directory = mkdtempSync(join(tmpdir(), 'psfn-startup-invalid-rotation-'));
+      const old = randomBytes(32).toString('hex');
+      const current = randomBytes(32).toString('hex');
+      const weak = 'CHANGE_ME_nonsecret-rotation-probe-0123456789';
+      const serialized = {
+        'weak inactive key': `v1:${weak},v2:${current}`,
+        'weak active key': `v1:${old},v2:${weak}`,
+        'duplicate version': `v1:${old},v1:${current}`,
+        'unparsed entry': `v1:${old},${current}`,
+        'empty key': `v1:${old},v2:`,
+        'unsafe version': `v1:${old},__proto__:${current}`,
+      }[mode];
+      try {
+        const result = spawnSync(process.execPath, ['--import', resolve('node_modules/tsx/dist/loader.mjs'), resolve('src/app/gateway/main.ts')], {
+          cwd: directory, encoding: 'utf8', env: { PATH: process.env.PATH, TZ: 'UTC',
+            GATEWAY_SESSION_HMAC_KEYS: serialized, GATEWAY_SESSION_HMAC_ACTIVE_VERSION: 'v2' },
+        });
+        expect(result.error).toBeUndefined();
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(mode.startsWith('weak') || mode === 'empty key'
+          ? 'credential must be' : 'malformed or duplicate credential entries');
+        expect(result.stdout + result.stderr).not.toContain('runtime_credentials_validated');
+        for (const credential of [old, current, weak]) expect(result.stdout + result.stderr).not.toContain(credential);
+      } finally { rmSync(directory, { recursive: true, force: true }); }
+    },
+  );
   it.each(['__proto__', 'constructor', 'prototype', 'has space', 'v1=alias'])(
     'rejects an unsafe HMAC rotation version label (%#) without disclosing key material', version => {
       const key = randomBytes(32).toString('hex');
@@ -90,6 +140,7 @@ describe('public credential startup boundaries', () => {
       });
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain('routing or authentication query override');
+      expect(result.stdout + result.stderr).not.toContain('runtime_credentials_validated');
       expect(result.stdout + result.stderr).not.toContain(password);
       expect(result.stdout + result.stderr).not.toContain(override);
       expect(result.stdout + result.stderr).not.toContain(databaseUrl);
@@ -105,6 +156,7 @@ describe('public credential startup boundaries', () => {
         });
         expect(result.status).not.toBe(0);
         expect(result.stderr).toContain('credential must be');
+        if (component === 'gateway') expect(result.stdout + result.stderr).not.toContain('runtime_credentials_validated');
         expect(result.stdout + result.stderr).not.toContain(value);
       } finally { rmSync(directory, { recursive: true, force: true }); }
     },

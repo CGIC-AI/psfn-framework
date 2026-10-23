@@ -8,8 +8,6 @@ import {
 } from '../../boundary/fleet-auth/request-capability-target.js';
 import { stripBrowserRequestCapabilityHeaders } from '../../boundary/fleet-auth/request-capability-transport.js';
 
-export const GARDEN_PREFIX = '/';
-
 const GARDEN_CLIENT_ROUTE_SET = new Set<string>([
   ...GARDEN_CLIENT_ROUTES,
   '/wishlist',

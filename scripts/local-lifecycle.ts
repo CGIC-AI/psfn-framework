@@ -175,7 +175,7 @@ export function loadLocalContext(
     releasePath: join(tempDir, 'local-release.json'),
     logPath: join(logsDir, 'local-runtime.log'),
     apiBase: `http://127.0.0.1:${apiPort}`,
-    gardenBase: `http://127.0.0.1:${gardenPort}`,
+    gardenBase: env.ADMIN_PUBLIC_ORIGIN || `http://127.0.0.1:${gardenPort}`,
     alertBase: `http://127.0.0.1:${alertPort}`,
   };
 }
@@ -293,6 +293,8 @@ export function gardenEnvironment(context: LocalContext): NodeJS.ProcessEnv {
     ADMIN_HOST: context.env.ADMIN_HOST,
     ADMIN_PORT: context.env.ADMIN_PORT,
     ADMIN_TOKEN: context.env.ADMIN_TOKEN,
+    ADMIN_PUBLIC_ORIGIN: context.env.ADMIN_PUBLIC_ORIGIN,
+    ADMIN_TRUSTED_PROXY_ADDRESSES: context.env.ADMIN_TRUSTED_PROXY_ADDRESSES,
   };
 }
 
@@ -423,24 +425,9 @@ async function doctor(context: LocalContext, quiet = false): Promise<void> {
   if (!gardenHealth.response.ok || record(gardenHealth.body)?.status !== 'ok') {
     fail(`Garden /health is not ready (HTTP ${gardenHealth.response.status}).`);
   }
-  const loginPage = await fetch(`${context.gardenBase}/login`, { signal: AbortSignal.timeout(10_000) });
-  if (!loginPage.ok || !(await loginPage.text()).includes('name="token"')) {
-    fail(`Garden login page is unavailable (HTTP ${loginPage.status}).`);
-  }
-  const login = await fetch(`${context.gardenBase}/login`, {
-    method: 'POST',
-    redirect: 'manual',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ token: context.env.ADMIN_TOKEN! }),
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (login.status !== 302 || !login.headers.get('set-cookie')?.includes('psfn_token=')) {
-    fail(`Garden rejected the configured ADMIN_TOKEN (HTTP ${login.status}).`);
-  }
-  const sessionCookie = login.headers.get('set-cookie')?.split(';', 1)[0];
   const dashboard = await fetch(`${context.gardenBase}/`, {
     redirect: 'manual',
-    headers: { Cookie: sessionCookie! },
+    headers: { Authorization: `Bearer ${context.env.ADMIN_TOKEN}` },
     signal: AbortSignal.timeout(10_000),
   });
   const dashboardBody = await dashboard.text();
@@ -467,7 +454,7 @@ async function doctor(context: LocalContext, quiet = false): Promise<void> {
   }
   if (!quiet) {
     console.log('PASS: supervised gateway, agent, Garden, alert sink, and Postgres are healthy.');
-    console.log('PASS: Garden login challenge and authenticated UI both succeeded.');
+    console.log('PASS: Garden bearer authentication and authenticated UI both succeeded.');
     console.log(`Gateway: ${context.apiBase}`);
     console.log(`Garden:  ${context.gardenBase}/login`);
   }

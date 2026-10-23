@@ -10,19 +10,16 @@ import {
   getGardenDenialsLastHour,
   recordGardenDenial,
 } from './garden-denial-observability.js';
-import { timingSafeStringEqual } from '../../shared/utils/secret-compare.js';
 import {
   readBodyWithLimit,
   sendJson,
-  sendRedirect,
   sendText,
 } from '../../channels/backplane/http/primitives.js';
 import { checkAdminRequestAuth, checkAdminUpgradeAuth } from './server-auth.js';
-import { getCookieValue } from '../../channels/backplane/http/auth.js';
 import { handleAdminRequest } from './server-request-routing.js';
 import { AdminServerTransport } from './server-transport.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import { sendGardenLoginPage } from './auth-pages.js';
+import { GardenBrowserSessions, type GardenBrowserTransport } from './browser-sessions.js';
 import type { FleetGardenTransportProxyPort } from './fleet-transport-client.js';
 import type { GardenAdminTransportClientEndpoint } from './transport-paths.js';
 import { validateAdminAuthStartupPolicy } from './auth-policy.js';
@@ -55,9 +52,8 @@ import {
 const log = createComponentLogger('GardenOperatorSurface');
 const ADMIN_MAX_BODY_SIZE = 65_536;
 const MAX_OPERATOR_AUTHORIZATION_LENGTH = 1_024;
-const MAX_OPERATOR_COOKIE_TOKEN_LENGTH = 512;
 
-export interface GardenOperatorSurfaceConfig {
+export interface GardenOperatorSurfaceConfig extends GardenBrowserTransport {
   port: number;
   host?: string;
   token?: string;
@@ -89,33 +85,14 @@ export interface GardenOperatorSurfaceConfig {
 
 export type { FleetGardenTransportProxyPort } from './fleet-transport-client.js';
 
-/**
- * Extracts the operator ADMIN_TOKEN material (bearer header and/or `psfn_token`
- * cookie) from an already-authenticated Garden operator request, to be handed
- * only to the direct operator → gateway confirmation call (x5rt.10).
- */
-function extractOperatorConfirmationAuth(req: IncomingMessage): ConfirmationOperatorAuthContext {
-  const authorizationHeader = req.headers.authorization;
-  const authorization = typeof authorizationHeader === 'string'
-    && authorizationHeader.length <= MAX_OPERATOR_AUTHORIZATION_LENGTH
-    ? authorizationHeader
-    : undefined;
-  const adminCookieToken = getCookieValue(req, 'psfn_token');
-  const cookie = adminCookieToken && adminCookieToken.length <= MAX_OPERATOR_COOKIE_TOKEN_LENGTH
-    ? `psfn_token=${encodeURIComponent(adminCookieToken)}`
-    : undefined;
-  return {
-    ...(authorization ? { authorization } : {}),
-    ...(cookie ? { cookie } : {}),
-  };
-}
-
 export class GardenOperatorSurface implements Lifecycle {
   private readonly server: Server | HttpsServer;
   private readonly transport: AdminServerTransport;
   private readonly routing: GardenOperatorRouting;
+  private readonly browserSessions: GardenBrowserSessions;
 
   constructor(private readonly config: GardenOperatorSurfaceConfig) {
+    this.browserSessions = new GardenBrowserSessions(config);
     this.routing = new GardenOperatorRouting({
       config: config.config,
       ...(config.token ? { token: config.token } : {}),
@@ -180,6 +157,8 @@ export class GardenOperatorSurface implements Lifecycle {
         port: this.config.port,
         token: this.config.token,
         allowInsecureWithoutToken: this.config.allowInsecureWithoutToken,
+        publicOrigin: this.config.publicOrigin,
+        trustedProxyAddresses: this.config.trustedProxyAddresses,
         componentLabel: 'Garden operator surface',
         logger: log,
       });
@@ -212,6 +191,7 @@ export class GardenOperatorSurface implements Lifecycle {
   }
 
   async stop(): Promise<void> {
+    this.browserSessions.close();
     return await new Promise((resolve, reject) => {
       this.server.closeAllConnections();
       this.routing.close(() => {
@@ -238,6 +218,7 @@ export class GardenOperatorSurface implements Lifecycle {
       void this.handleFleetRequest(req, res);
       return;
     }
+    if (!this.browserSessions.checkHttpSecurity(req, res)) return;
     this.dispatchRequest(req, res, this.config.token);
   }
 
@@ -250,7 +231,7 @@ export class GardenOperatorSurface implements Lifecycle {
       token,
       checkAuth: this.routing.isFleetPrincipal()
         ? () => true
-        : (request, response) => checkAdminRequestAuth(request, response, this.config.token),
+        : (request, response) => checkAdminRequestAuth(request, response, this.config.token, this.browserSessions),
       isGardenUiEnabled: () => this.transport.isGardenUiEnabled(),
       serveGardenBuildAsset: (path, request, response) => this.transport.serveGardenBuildAsset(path, request, response),
       serveGardenPage: (path, request, response) => this.transport.serveGardenPage(path, request, response),
@@ -283,6 +264,11 @@ export class GardenOperatorSurface implements Lifecycle {
       void this.handleFleetUpgrade(req, socket, head);
       return;
     }
+    if (!this.browserSessions.checkUpgradeSecurity(req)) {
+      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+      socket.destroy();
+      return;
+    }
     stripBrowserRequestCapabilityHeaders(req.headers);
     let target;
     try {
@@ -305,7 +291,7 @@ export class GardenOperatorSurface implements Lifecycle {
       return;
     }
 
-    if (!checkAdminUpgradeAuth(req, this.config.token)) {
+    if (!checkAdminUpgradeAuth(req, this.config.token, this.browserSessions)) {
       socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
       socket.destroy();
       return;
@@ -376,46 +362,19 @@ export class GardenOperatorSurface implements Lifecycle {
     res: ServerResponse,
   ): boolean {
     if (method === 'GET' && path === '/login') {
-      sendGardenLoginPage(res, this.config.config);
+      this.browserSessions.handleLoginPage(req, res, this.config.config);
       return true;
     }
 
     if (method === 'POST' && path === '/login') {
       this.withBody(req, res, (body) => {
-        if (!this.config.token) {
-          sendGardenLoginPage(
-            res,
-            this.config.config,
-            'Login is unavailable when ADMIN_TOKEN is unset.',
-            503,
-          );
-          return;
-        }
-
-        const params = new URLSearchParams(body);
-        const token = params.get('token') ?? '';
-        if (timingSafeStringEqual(token, this.config.token)) {
-          const encodedToken = encodeURIComponent(token);
-          sendRedirect(res, '/', 302, {
-            'Set-Cookie': `psfn_token=${encodedToken}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`,
-          });
-          return;
-        }
-
-        sendGardenLoginPage(res, this.config.config, 'Invalid token');
+        this.browserSessions.handleLogin(req, res, body, this.config.config);
       });
       return true;
     }
 
     if (method === 'POST' && path === '/api/admin/logout') {
-      sendJson(
-        res,
-        200,
-        { ok: true },
-        {
-          'Set-Cookie': 'psfn_token=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0',
-        },
-      );
+      this.browserSessions.handleLogout(req, res);
       return true;
     }
 
@@ -473,7 +432,13 @@ export class GardenOperatorSurface implements Lifecycle {
 
       const bodyBuffer = Buffer.from(body, 'utf8');
       const resolver = this.config.operatorConfirmationResolver;
-      const auth = extractOperatorConfirmationAuth(req);
+      // The request was authenticated locally; the opaque session never leaves
+      // Garden. Only this operator process sends its held token to the gateway.
+      const auth: ConfirmationOperatorAuthContext = this.config.token
+        ? { authorization: `Bearer ${this.config.token}` }
+        : (typeof req.headers.authorization === 'string' && req.headers.authorization.length <= MAX_OPERATOR_AUTHORIZATION_LENGTH
+            ? { authorization: req.headers.authorization }
+            : {});
       const hasOperatorCredential = auth.authorization !== undefined || auth.cookie !== undefined;
 
       if (!resolver || !hasOperatorCredential) {

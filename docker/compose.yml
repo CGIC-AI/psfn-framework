@@ -219,6 +219,8 @@ services:
       ADMIN_HOST: 0.0.0.0
       ADMIN_PORT: "3001"
       ADMIN_TOKEN: ${ADMIN_TOKEN:?run npm run onboard first}
+      ADMIN_PUBLIC_ORIGIN: ${ADMIN_PUBLIC_ORIGIN:?configure the exact HTTPS Garden proxy origin}
+      ADMIN_TRUSTED_PROXY_ADDRESSES: ${ADMIN_TRUSTED_PROXY_ADDRESSES:?configure the immediate TLS proxy IPs or CIDRs}
       NTFY_BASE_URL: ${NTFY_BASE_URL:-http://operator-alert-sink:3000}
       NTFY_TOPIC: ${NTFY_TOPIC:-local-operator-alerts}
     ports:

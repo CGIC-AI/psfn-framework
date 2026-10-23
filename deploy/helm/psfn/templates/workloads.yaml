@@ -697,6 +697,10 @@ spec:
                 secretKeyRef:
                   name: {{ include "psfn.appSecretName" . }}
                   key: {{ .Values.secrets.keys.adminToken }}
+            - name: ADMIN_PUBLIC_ORIGIN
+              value: {{ .Values.gardenBrowser.publicOrigin | quote }}
+            - name: ADMIN_TRUSTED_PROXY_ADDRESSES
+              value: {{ join "," .Values.gardenBrowser.trustedProxyAddresses | quote }}
             {{- end }}
             {{- if .Values.fleetAuth.enabled }}
             - name: FLEET_SSO_GARDEN_TLS_CA_PATH
@@ -734,7 +738,7 @@ spec:
             - name: FLEET_GARDEN_ADMIN_DNS_SUFFIX
               value: {{ printf ".%s.svc" .Release.Namespace | quote }}
             {{- end }}
-            {{- include "psfn.extraEnv" (dict "entries" .Values.workloads.garden.extraEnv "label" "workloads.garden.extraEnv" "managed" "ADMIN_TOKEN ADMIN_PORT PSFN_FLEET_AUTH SYSTEM_DATA_DIR ADMIN_TRANSPORT_MODE") | nindent 12 }}
+            {{- include "psfn.extraEnv" (dict "entries" .Values.workloads.garden.extraEnv "label" "workloads.garden.extraEnv" "managed" "ADMIN_TOKEN ADMIN_PORT ADMIN_HOST ADMIN_PUBLIC_ORIGIN ADMIN_TRUSTED_PROXY_ADDRESSES PSFN_FLEET_AUTH SYSTEM_DATA_DIR ADMIN_TRANSPORT_MODE") | nindent 12 }}
           readinessProbe:
             {{- if .Values.fleet.enabled }}
             {{- /*

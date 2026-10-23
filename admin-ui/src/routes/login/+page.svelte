@@ -1,7 +1,6 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
   import { base } from '$app/paths';
-  import { setToken } from '$lib/stores/auth.svelte';
   import { getCompanionName } from '$lib/stores/companion.svelte';
 
   let tokenInput = $state('');
@@ -25,7 +24,18 @@
     error = '';
 
     try {
-      const body = new URLSearchParams({ token });
+      const challenge = await fetch('/login', { credentials: 'include', cache: 'no-store' });
+      if (!challenge.ok) {
+        error = 'Secure browser sign-in is unavailable.';
+        return;
+      }
+      const loginDocument = new DOMParser().parseFromString(await challenge.text(), 'text/html');
+      const csrf = loginDocument.querySelector<HTMLInputElement>('input[name="csrf"]')?.value;
+      if (!csrf) {
+        error = 'Could not obtain a sign-in challenge.';
+        return;
+      }
+      const body = new URLSearchParams({ token, csrf });
       const res = await fetch('/login', {
         method: 'POST',
         headers: {
@@ -37,7 +47,7 @@
       });
 
       if (res.redirected) {
-        setToken(token);
+        tokenInput = '';
         if (typeof window !== 'undefined') {
           window.location.assign(resolveGardenRootPath());
         } else {

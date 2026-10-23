@@ -55,6 +55,7 @@
   import { createVisibilityAwarePoller } from '$lib/polling/visibility-aware-poller';
   import { reconcilePollingSnapshot } from '$lib/polling/silent-background-revalidation';
   import { logoutFleetSession } from '$lib/api/fleet-session';
+  import { apiFetch } from '$lib/api/client';
   import { canonicalGardenDestination } from '$lib/nav/canonical-routes';
 
   let { children } = $props();
@@ -258,18 +259,20 @@
       ? { Authorization: `Bearer ${token}` }
       : undefined;
     try {
-      await fetch('/api/admin/logout', {
+      const response = await apiFetch('/api/admin/logout', {
         method: 'POST',
         ...(headers ? { headers } : {}),
         credentials: 'include',
       });
+      if (!response.ok) throw new Error('Server sign out failed');
     } catch {
-      // Best-effort server-side cookie clear; client token clear still executes.
+      fleetProjectionError = 'Sign out failed. Please try again.';
+      return;
     }
     clearJournalDisclosures();
     clearToken();
     clearAttentionCounts();
-    goto(`${base}/login`);
+    window.location.assign(`${base}/login`);
   }
 
   function isActive(navPath: string): boolean {

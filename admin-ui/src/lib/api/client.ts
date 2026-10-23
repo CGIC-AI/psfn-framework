@@ -86,8 +86,19 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
   try {
     let response: Response;
     try {
+      let requestInit = init;
+      if (typeof document !== 'undefined' && !['GET', 'HEAD', 'OPTIONS'].includes((init.method ?? 'GET').toUpperCase())) {
+        const csrf = document.cookie.split(';').map(value => value.trim())
+          .find(value => value.startsWith('__Host-psfn_csrf='))?.slice('__Host-psfn_csrf='.length);
+        if (csrf && typeof window !== 'undefined'
+          && new URL(url, window.location.href).origin === window.location.origin) {
+          const headers = new Headers(init.headers);
+          headers.set('X-CSRF-Token', csrf);
+          requestInit = { ...init, headers };
+        }
+      }
       const request = async (requestSignal: AbortSignal): Promise<Response> => (
-        await fetch(url, { ...init, signal: requestSignal })
+        await fetch(url, { ...requestInit, signal: requestSignal })
       );
       if (currentCompanionGardenScope(pathname) || isFleetOverviewPath(pathname)) {
         response = init.signal && isFleetSessionTransitionSignal(init.signal)

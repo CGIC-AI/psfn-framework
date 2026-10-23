@@ -149,7 +149,7 @@ describe('native Tailscale Garden edge', () => {
     };
     expect(reconcileNativeGardenEdge({
       cwd: '/repo',
-      env: { PSFN_TAILSCALE_CLI: cli },
+      env: { PSFN_TAILSCALE_CLI: cli, ADMIN_PUBLIC_ORIGIN: 'https://demo-node.example.ts.net' },
       gardenPort: 10053,
       publishTailnet: true,
       run,
@@ -162,6 +162,9 @@ describe('native Tailscale Garden edge', () => {
     });
     expect(calls.at(-1)?.command).toBe('/mnt/c/WINDOWS/System32/curl.exe');
     expect(calls.at(-1)?.args.at(-1)).toBe('https://demo-node.example.ts.net/');
+    const localProbe = calls.find(call => call.command === 'curl');
+    expect(localProbe?.args).toContain('Host: demo-node.example.ts.net');
+    expect(localProbe?.args).toContain('Accept: text/html,application/xhtml+xml');
   });
 
   it('refuses to replace an operator-owned HTTPS root', () => {
@@ -233,30 +236,30 @@ describe('native Tailscale Garden edge', () => {
 });
 
 describe('native Garden HTTPS request boundary', () => {
-  it('keeps the login token on stdin while accepting only loopback cluster TLS', () => {
+  it('keeps bearer automation credentials on stdin while accepting only loopback cluster TLS', () => {
     let captured: { args: readonly string[]; stdin?: string } | undefined;
     const response = requestNativeGarden({
       cwd: '/repo',
       gardenPort: 10053,
-      method: 'POST',
-      path: '/login',
+      method: 'GET',
+      path: '/',
       run: (_command, args, options) => {
         captured = { args, ...(options.stdin ? { stdin: options.stdin } : {}) };
         return result([
-          'HTTP/1.1 302 Found\r',
-          'Set-Cookie: psfn_token=signed; Path=/\r',
+          'HTTP/1.1 200 OK\r',
           '\r',
           '',
-          '__PSFN_NATIVE_GARDEN_STATUS__:302',
+          '__PSFN_NATIVE_GARDEN_STATUS__:200',
         ].join('\n'));
       },
       timeoutMs: 10_000,
       token: 'private-login-token',
     });
-    expect(response.status).toBe(302);
-    expect(response.setCookie).toBe('psfn_token=signed; Path=/');
+    expect(response.status).toBe(200);
     expect(captured?.args).toContain('--insecure');
     expect(captured?.args.join(' ')).not.toContain('private-login-token');
-    expect(captured?.stdin).toBe('private-login-token');
+    expect(captured?.args).toContain('@-');
+    expect(captured?.args).not.toContain('--data-urlencode');
+    expect(captured?.stdin).toBe('Authorization: Bearer private-login-token\n');
   });
 });

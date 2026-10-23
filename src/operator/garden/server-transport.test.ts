@@ -31,6 +31,8 @@ function createResponseCapture(): {
   });
 
   const response = {
+    hasHeader: () => false,
+    getHeader: () => undefined,
     writeHead: vi.fn((status: number, headers?: Record<string, string>) => {
       capture.status = status;
       capture.headers = { ...(headers ?? {}) };

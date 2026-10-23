@@ -104,6 +104,9 @@ interface HelmResult {
 
 function helmTemplate(valuesFiles: string[]): HelmResult {
   const args = ['template', RELEASE_NAME, CHART_DIR];
+  // Explicit standalone HTTPS proxy fixture; never inherit deployment peers.
+  args.push('--set-string', 'gardenBrowser.publicOrigin=https://garden.example.test',
+    '--set-json', 'gardenBrowser.trustedProxyAddresses=["192.0.2.0/24"]');
   for (const file of valuesFiles) args.push('-f', file);
   const result = spawnSync('helm', args, { cwd: REPO_ROOT, encoding: 'utf8' });
   if (result.error) {

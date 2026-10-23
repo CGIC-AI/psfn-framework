@@ -77,7 +77,13 @@ npm run helm:token        # explicitly print the Garden login token
 npm run helm:down         # scale to zero and retain persistent state
 ```
 
-Garden defaults to `http://127.0.0.1:10053/login`; the API defaults to
+Standalone Garden requires an explicit HTTPS proxy: set `ADMIN_PUBLIC_ORIGIN`
+and `ADMIN_TRUSTED_PROXY_ADDRESSES` (or the corresponding `gardenBrowser` chart
+values). Native ingress also needs `ADMIN_TLS_SECRET_NAME`, an existing TLS
+Secret for the exact Garden host. Doctors use bearer authentication through the
+configured public origin. See [Garden browser sessions](../../../docs/security/garden-browser-sessions.md).
+
+The local Garden forwarding port defaults to `127.0.0.1:10053`; the API defaults to
 `http://127.0.0.1:10054/v1`. Override the local ports with
 `PSFN_GARDEN_PORT` and `PSFN_API_PORT`. Override the default `psfn`
 namespace/release with `PSFN_HELM_NAMESPACE` and `PSFN_HELM_RELEASE`.

@@ -7,10 +7,8 @@ import {
   type RouteParams,
 } from './route-matchers.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import { GARDEN_PREFIX } from './server-request-routing.js';
-import { bindRequestForResponse, sendJson, sendRedirect } from '../../channels/backplane/http/primitives.js';
-import { sendGardenLoginPage } from './auth-pages.js';
-import { timingSafeStringEqual } from '../../shared/utils/secret-compare.js';
+import { bindRequestForResponse, sendJson } from '../../channels/backplane/http/primitives.js';
+import type { GardenBrowserSessions } from './browser-sessions.js';
 import type {
   AdminAuditActionType,
   AdminAuditActor,
@@ -49,8 +47,8 @@ interface AdminRouteDeclaration {
 export type AdminRoute = AuthorizedGardenRoute<AdminRouteDeclaration>;
 
 interface AdminRouteDependencies {
-  token?: string;
   standaloneSessionRoutes: boolean;
+  browserSessions: GardenBrowserSessions;
   services: GardenAdminDomainServices;
   config: SubstrateConfig;
   withBody: (req: IncomingMessage, res: ServerResponse, cb: (body: string) => void) => void;
@@ -125,8 +123,8 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
     {
       method: 'GET',
       match: exactPath('/login'),
-      handle: (_req, res) => {
-        sendGardenLoginPage(res, deps.config);
+      handle: (req, res) => {
+        deps.browserSessions.handleLoginPage(req, res, deps.config);
       },
     },
     {
@@ -134,40 +132,15 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
       match: exactPath('/login'),
       handle: (req, res) => {
         deps.withBody(req, res, (body) => {
-          if (!deps.token) {
-            sendGardenLoginPage(
-              res,
-              deps.config,
-              'Login is unavailable when ADMIN_TOKEN is unset.',
-              503,
-            );
-            return;
-          }
-          const params = new URLSearchParams(body);
-          const token = params.get('token') ?? '';
-          if (timingSafeStringEqual(token, deps.token)) {
-            const encodedToken = encodeURIComponent(token);
-            sendRedirect(res, GARDEN_PREFIX, 302, {
-              'Set-Cookie': `psfn_token=${encodedToken}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`,
-            });
-            return;
-          }
-          sendGardenLoginPage(res, deps.config, 'Invalid token');
+          deps.browserSessions.handleLogin(req, res, body, deps.config);
         });
       },
     },
     {
       method: 'POST',
       match: exactPath('/api/admin/logout'),
-      handle: (_req, res) => {
-        sendJson(
-          res,
-          200,
-          { ok: true },
-          {
-            'Set-Cookie': 'psfn_token=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0',
-          },
-        );
+      handle: (req, res) => {
+        deps.browserSessions.handleLogout(req, res);
       },
     },
   ] : [];

@@ -4,6 +4,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { extname, join, normalize, resolve } from 'node:path';
 import { brotliCompressSync, constants as zlibConstants, gzipSync } from 'node:zlib';
 import { sendText } from '../../channels/backplane/http/primitives.js';
+import { gardenBrowserCsp } from './browser-headers.js';
 
 const GARDEN_MIME_TYPES: Record<string, string> = {
   '.html': 'text/html',
@@ -166,9 +167,16 @@ export class AdminServerTransport {
     const ext = extname(resolvedPath).toLowerCase();
     const mimeType = GARDEN_MIME_TYPES[ext];
     const isHtml = ext === '.html';
+    if (isHtml && res.hasHeader('Content-Security-Policy')) {
+      const htmlPolicy = gardenBrowserCsp(await readFile(resolvedPath, 'utf8'));
+      const scriptSources = /script-src [^;]+/.exec(htmlPolicy)![0];
+      const policy = String(res.getHeader('Content-Security-Policy'));
+      res.setHeader('Content-Security-Policy', policy.replace(/script-src [^;]+/, scriptSources));
+    }
     const compressible = GARDEN_COMPRESSIBLE_EXTENSIONS.has(ext);
 
-    const cacheControl = context.cacheControlOverride
+    const cacheControl = (isHtml && res.getHeader('Cache-Control') === 'no-store' ? 'no-store' : undefined)
+      ?? context.cacheControlOverride
       ?? (isHtml
         ? GARDEN_HTML_CACHE_CONTROL
         : context.isImmutable

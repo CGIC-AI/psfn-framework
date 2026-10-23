@@ -61,6 +61,10 @@ spec:
   {{- with .Values.ingress.className }}
   ingressClassName: {{ . | quote }}
   {{- end }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.garden.host | quote }}
+      secretName: {{ .Values.ingress.garden.tls.secretName | quote }}
   rules:
     - {{- with .Values.ingress.garden.host }}
       host: {{ . | quote }}

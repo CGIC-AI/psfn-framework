@@ -251,10 +251,16 @@ export function requestNativeGarden(input: {
   run?: CommandRunner;
   timeoutMs: number;
   token?: string;
+  publicOrigin?: string;
 }): { status: number; ok: boolean; text: string; setCookie?: string } {
   if (!/^\/[^\r\n]*$/u.test(input.path)) throw new Error('Native Garden request path must be an absolute HTTP path.');
   if (input.cookie?.includes('\n') || input.cookie?.includes('\r')) {
     throw new Error('Native Garden session cookie contains an invalid line break.');
+  }
+  if (input.token && /[\r\n]/.test(input.token)) throw new Error('Native Garden bearer contains an invalid line break.');
+  if (input.publicOrigin && (new URL(input.publicOrigin).protocol !== 'https:'
+    || new URL(input.publicOrigin).origin !== input.publicOrigin)) {
+    throw new Error('Native Garden publicOrigin must be an exact HTTPS origin.');
   }
   if (input.cookie && input.token) throw new Error('Native Garden requests cannot send a token and cookie together.');
   const run = input.run ?? defaultRun;
@@ -262,18 +268,15 @@ export function requestNativeGarden(input: {
   const statusMarker = '\n__PSFN_NATIVE_GARDEN_STATUS__:';
   const args = [
     '--silent', '--show-error', '--max-time', maxTimeSeconds,
-    '--insecure',
+    ...(input.publicOrigin ? [] : ['--insecure']),
     '--dump-header', '-',
     '--output', '-',
     '--write-out', `${statusMarker}%{http_code}`,
     '--request', input.method ?? 'GET',
-    ...(input.token
-      ? ['--header', 'Content-Type: application/x-www-form-urlencoded', '--data-urlencode', 'token@-']
-      : []),
-    ...(input.cookie ? ['--header', '@-'] : []),
-    `https://127.0.0.1:${input.gardenPort}${input.path}`,
+    ...(input.cookie || input.token ? ['--header', '@-'] : []),
+    `${input.publicOrigin ?? `https://127.0.0.1:${input.gardenPort}`}${input.path}`,
   ];
-  const stdin = input.token ?? (input.cookie ? `Cookie: ${input.cookie}\n` : undefined);
+  const stdin = input.token ? `Authorization: Bearer ${input.token}\n` : (input.cookie ? `Cookie: ${input.cookie}\n` : undefined);
   const result = run('curl', args, { cwd: input.cwd, timeoutMs: input.timeoutMs, ...(stdin ? { stdin } : {}) });
   if (result.status !== 0) throw commandFailure('curl', args, result);
   const markerIndex = result.stdout.lastIndexOf(statusMarker);
@@ -346,6 +349,10 @@ export function reconcileNativeGardenEdge(input: {
   verifyTokenLoginRedirect({
     curlCommand: 'curl',
     cwd: input.cwd,
+    headers: [
+      'Accept: text/html,application/xhtml+xml',
+      ...(input.env.ADMIN_PUBLIC_ORIGIN ? [`Host: ${new URL(input.env.ADMIN_PUBLIC_ORIGIN).host}`] : []),
+    ],
     insecureLocalTls: true,
     run,
     timeoutMs: input.timeoutMs,

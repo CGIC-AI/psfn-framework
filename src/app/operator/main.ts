@@ -110,6 +110,10 @@ async function main(): Promise<void> {
     host: process.env.ADMIN_HOST || undefined,
     token: process.env.ADMIN_TOKEN || undefined,
     allowInsecureWithoutToken: isExplicitTrue(process.env.ADMIN_ALLOW_INSECURE),
+    publicOrigin: process.env.ADMIN_PUBLIC_ORIGIN || undefined,
+    trustedProxyAddresses: process.env.ADMIN_TRUSTED_PROXY_ADDRESSES
+      ? process.env.ADMIN_TRUSTED_PROXY_ADDRESSES.split(',').map(address => address.trim())
+      : undefined,
     config,
     intakeQuarantineReads: new GardenIntakeQuarantineReads({ config }),
     ...(fleetControlPlane

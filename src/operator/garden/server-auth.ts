@@ -2,24 +2,25 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
   acceptsHtml,
   hasBearerToken,
-  hasCookieValue,
   isHtmxRequest,
 } from '../../channels/backplane/http/auth.js';
 import { sendRedirect, sendText } from '../../channels/backplane/http/primitives.js';
+import type { GardenBrowserSessions } from './browser-sessions.js';
 
-export function hasAdminRequestAuthCredentials(req: IncomingMessage, token?: string): boolean {
+export function hasAdminRequestAuthCredentials(req: IncomingMessage, token?: string, sessions?: GardenBrowserSessions): boolean {
   if (!token) return true;
   if (hasBearerToken(req, token)) return true;
-  return hasCookieValue(req, 'psfn_token', token);
+  return sessions?.isAuthenticated(req) ?? false;
 }
 
 export function checkAdminRequestAuth(
   req: IncomingMessage,
   res: ServerResponse,
   token?: string,
+  sessions?: GardenBrowserSessions,
 ): boolean {
   if (!token) return true;
-  if (hasAdminRequestAuthCredentials(req, token)) {
+  if (hasAdminRequestAuthCredentials(req, token, sessions)) {
     return true;
   }
 
@@ -32,7 +33,7 @@ export function checkAdminRequestAuth(
   return false;
 }
 
-export function checkAdminUpgradeAuth(req: IncomingMessage, token?: string): boolean {
+export function checkAdminUpgradeAuth(req: IncomingMessage, token?: string, sessions?: GardenBrowserSessions): boolean {
   if (!token) return true;
-  return hasAdminRequestAuthCredentials(req, token);
+  return hasAdminRequestAuthCredentials(req, token, sessions);
 }

@@ -72,6 +72,14 @@ runtime:
   # Empty means no authoritative checkout is available (reported as unavailable).
   repositoryDir: ""
 
+# Standalone Garden binds inside the pod and accepts browser traffic only from
+# explicitly trusted TLS proxy peers. Supply the exact public HTTPS origin and
+# the ingress controller's immediate source IPs/CIDRs; never 0.0.0.0/0 or ::/0.
+# Fleet-auth Garden instead keeps its existing gateway-to-Garden mTLS contract.
+gardenBrowser:
+  publicOrigin: ""
+  trustedProxyAddresses: []
+
 # Advanced fleet topology. The supported public lifecycle leaves this disabled
 # and deploys one gateway, one agent, and one Garden for the one companion in
 # generated companions.json. Enabling fleet renders a separately addressed
@@ -208,8 +216,7 @@ hostPorts:
     port: 10053
     hostIP: ""
     sourceCIDRs: []
-  # Optional direct Garden access for non-SSO deployments. ADMIN_TOKEN remains
-  # mandatory. Prefer a loopback hostIP or restrict sourceCIDRs when possible.
+  # Standalone access requires the explicit gardenBrowser HTTPS proxy contract.
   garden:
     enabled: false
     port: 10054
@@ -756,6 +763,9 @@ ingress:
     host: psfn-garden.local
     path: /
     pathType: Prefix
+    tls:
+      enabled: false
+      secretName: ""
   satelliteHub:
     enabled: false
     host: psfn-hub.local

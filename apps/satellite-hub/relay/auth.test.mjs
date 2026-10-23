@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
@@ -11,7 +12,7 @@ import WebSocket from 'ws';
 
 const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
 const relayDll = 'apps/satellite-hub/relay/psfn-voxta-relay/bin/Debug/net8.0/PsfnVoxtaRelay.dll';
-const token = 'd'.repeat(64);
+const token = randomBytes(32).toString('hex');
 
 test('local Voxta relay authenticates REST requests to the actual Hub', async () => {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'voxta-relay-auth-'));
@@ -111,7 +112,7 @@ test('credential-holding Voxta relay refuses a wildcard listener', () => {
     cwd: repoRoot, encoding: 'utf8',
   });
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /literal loopback/);
+  assert.equal(JSON.parse(result.stderr).event, 'relay.failed');
 });
 
 async function waitFor(condition) {

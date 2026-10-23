@@ -1,8 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net;
-using System.Net.Http.Headers;
 using System.Net.WebSockets;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -164,8 +162,7 @@ public sealed class BridgeSession : IAsyncDisposable
         var audioFolder = ReadString(capabilities?["audioFolder"]) ?? ReadString(message["audioFolder"]);
         if (!string.IsNullOrWhiteSpace(audioFolder))
         {
-            _audioFolder = audioFolder;
-            Directory.CreateDirectory(_audioFolder);
+            _audioFolder = _audioStore.ApproveAudioFolder(audioFolder);
             RelayLogging.Write(_logger, RelayEvent.AudioFolderUpdated, CorrelationId);
         }
 
@@ -195,6 +192,7 @@ public sealed class BridgeSession : IAsyncDisposable
         }
         catch (Exception)
         {
+            message.Remove(fieldName);
             RelayLogging.Write(_logger, RelayEvent.AudioLocalizationFailed, CorrelationId);
         }
     }
@@ -322,84 +320,6 @@ public sealed class BridgeSession : IAsyncDisposable
             }
         }
         return output.ToString();
-    }
-}
-
-public sealed class AudioArtifactStore(HttpClient httpClient, RelayOptions options, ILogger<AudioArtifactStore> logger)
-{
-    public async Task<string> EnsureLocalAsync(string audioUrl, string audioFolder)
-    {
-        Directory.CreateDirectory(audioFolder);
-
-        if (Uri.TryCreate(audioUrl, UriKind.Absolute, out var uri))
-        {
-            if (uri.Scheme is "http" or "https")
-            {
-                return await DownloadAsync(uri, audioFolder);
-            }
-            if (uri.Scheme == "file")
-            {
-                return await CopyLocalAsync(uri.LocalPath, audioFolder);
-            }
-        }
-
-        if (File.Exists(audioUrl))
-        {
-            return await CopyLocalAsync(audioUrl, audioFolder);
-        }
-
-        throw new FileNotFoundException("Audio URL is not a reachable HTTP/file/local path", audioUrl);
-    }
-
-    private async Task<string> DownloadAsync(Uri uri, string audioFolder)
-    {
-        using var request = new HttpRequestMessage(HttpMethod.Get, uri);
-        RelayAccess.Authenticate(request, options);
-        using var response = await httpClient.SendAsync(request);
-        response.EnsureSuccessStatusCode();
-        var extension = InferExtension(uri, response.Content.Headers.ContentType);
-        var localPath = Path.Combine(audioFolder, $"psfn_{Hash(uri.ToString())}{extension}");
-        await using var output = File.Create(localPath);
-        await response.Content.CopyToAsync(output);
-        RelayLogging.Write(logger, RelayEvent.AudioDownloaded, bytes: output.Length);
-        return localPath;
-    }
-
-    private static async Task<string> CopyLocalAsync(string sourcePath, string audioFolder)
-    {
-        var extension = Path.GetExtension(sourcePath);
-        if (string.IsNullOrWhiteSpace(extension))
-        {
-            extension = ".wav";
-        }
-        var localPath = Path.Combine(audioFolder, $"psfn_{Hash(Path.GetFullPath(sourcePath))}{extension}");
-        if (!Path.GetFullPath(sourcePath).Equals(Path.GetFullPath(localPath), StringComparison.OrdinalIgnoreCase))
-        {
-            await using var input = File.OpenRead(sourcePath);
-            await using var output = File.Create(localPath);
-            await input.CopyToAsync(output);
-        }
-        return localPath;
-    }
-
-    private static string InferExtension(Uri uri, MediaTypeHeaderValue? contentType)
-    {
-        var extension = Path.GetExtension(uri.LocalPath);
-        if (!string.IsNullOrWhiteSpace(extension))
-        {
-            return extension;
-        }
-        return contentType?.MediaType?.ToLowerInvariant() switch
-        {
-            "audio/wav" or "audio/x-wav" or "audio/wave" => ".wav",
-            "audio/mpeg" or "audio/mp3" => ".mp3",
-            _ => ".wav",
-        };
-    }
-
-    private static string Hash(string value)
-    {
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)))[..24].ToLowerInvariant();
     }
 }
 
@@ -644,7 +564,7 @@ public sealed record RelayOptions(
           --remote-hub <url>     Full upstream SignalR hub URL.
           --api <url>            Upstream REST/API base URL. Default: inferred from --remote-hub
           --listen <url>         Local VaM listen URL. Default: http://127.0.0.1:8789
-          --audio-folder <path>  Fallback VaM audio folder. The plugin authenticate packet can override this.
+          --audio-folder <path>  Approved VaM audio root. The plugin may select a contained subdirectory.
           --token <token>        Optional bearer token for the upstream hub.
           --help                 Print this help.
 
@@ -750,7 +670,7 @@ public sealed record RelayOptions(
             var arg = args[index];
             if (!arg.StartsWith("--", StringComparison.Ordinal))
             {
-                throw new ArgumentException($"Unexpected argument '{arg}'. Use --help for usage.");
+                throw new ArgumentException("Unexpected relay argument. Use --help for usage.");
             }
 
             var keyValue = arg[2..];
@@ -820,12 +740,12 @@ public sealed record RelayFileConfig(
 
     public static RelayFileConfig Load(string path)
     {
-        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        using var document = RelayConfigReader.Read(path);
+        if (document is null)
         {
             return Empty;
         }
 
-        using var document = JsonDocument.Parse(File.ReadAllBytes(path));
         var root = document.RootElement;
         if (root.ValueKind != JsonValueKind.Object)
         {

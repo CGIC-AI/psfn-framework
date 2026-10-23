@@ -34,9 +34,11 @@ public static class RelayApplication
             builder.Services.AddSingleton(new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }));
             builder.Services.AddSingleton<RelaySessionRegistry>();
             builder.Services.AddSingleton<AudioArtifactStore>();
+            builder.Services.AddHostedService<RelayArtifactRetentionService>();
             builder.Services.AddSingleton<RemoteApiProxy>();
 
             await using var app = builder.Build();
+            app.Services.GetRequiredService<AudioArtifactStore>().ApproveAudioFolder(options.FallbackAudioFolder);
             app.Use(async (context, next) =>
             {
                 var started = Stopwatch.GetTimestamp();

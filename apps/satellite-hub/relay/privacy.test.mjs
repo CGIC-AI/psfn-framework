@@ -27,6 +27,12 @@ for (const level of ['Information', 'Trace']) {
   test(`relay ${level} logs preserve operational events without private data or injection`, async () => {
     const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'voxta-relay-privacy-'));
     const audioFolder = path.join(scratch, sentinels.folder);
+    fs.mkdirSync(audioFolder, { mode: 0o755 });
+    const expired = path.join(audioFolder, `psfn_${'e'.repeat(24)}.wav`);
+    const fresh = path.join(audioFolder, `psfn_${'f'.repeat(24)}.wav`);
+    fs.writeFileSync(expired, 'expired invented audio');
+    fs.writeFileSync(fresh, 'fresh invented audio');
+    fs.utimesSync(expired, new Date(Date.now() - 25 * 60 * 60 * 1000), new Date(Date.now() - 25 * 60 * 60 * 1000));
     const upstreamSockets = new WebSocketServer({ noServer: true });
     const upstream = http.createServer((request, response) => {
       if (request.url.startsWith('/hub/negotiate')) {
@@ -106,6 +112,9 @@ for (const level of ['Information', 'Trace']) {
         if (relay.exitCode !== null) throw new Error('Relay exited before listening');
         try { return (await fetch(relayUrl)).status === 200; } catch { return false; }
       });
+      assert.equal(fs.existsSync(expired), false, 'The runtime must wire its retention sweep at startup');
+      assert.equal(fs.existsSync(fresh), true);
+      if (process.platform !== 'win32') assert.equal(fs.statSync(audioFolder).mode & 0o777, 0o700);
       assert.equal((await fetch(`${relayUrl}/api/${sentinels.filename}?access_token=${sentinels.query}`)).status, 502);
       assert.equal((await fetch(`${relayUrl}/api/broken/${sentinels.filename}`)).status, 500);
       assert.equal((await fetch(relayUrl, { headers: { Origin: 'https://attacker.example.test' } })).status, 403);
@@ -119,6 +128,15 @@ for (const level of ['Information', 'Trace']) {
       await once(socket, 'open');
       socket.send('{"protocol":"json","version":1}\x1e');
       await waitFor(() => frames.some(frame => Object.keys(frame).length === 0));
+      const outsideFolder = path.join(scratch, 'invented-private-unapproved-folder');
+      socket.send(`${JSON.stringify({ type: 1, target: 'SendMessage', invocationId: 'bad-folder', arguments: [{
+        $type: 'authenticate', capabilities: { audioFolder: outsideFolder },
+      }] })}\x1e`);
+      await waitFor(() => frames.some(frame => frame.invocationId === 'bad-folder'));
+      const rejected = frames.find(frame => frame.invocationId === 'bad-folder');
+      assert.equal(typeof rejected.error, 'string');
+      assert.equal(rejected.error.includes('invented-private'), false);
+      assert.equal(fs.existsSync(outsideFolder), false);
       socket.send(`${JSON.stringify({
         type: 1, target: 'SendMessage', invocationId: 'auth', arguments: [{
           $type: 'authenticate', text: sentinels.transcript, capabilities: { audioFolder },
@@ -128,6 +146,8 @@ for (const level of ['Information', 'Trace']) {
       const reply = frames.find(frame => frame.arguments?.[0]?.$type === 'replyChunk').arguments[0];
       assert.equal(reply.text, sentinels.reply, 'Privacy logging must preserve the reply transport');
       assert.equal(fs.readFileSync(reply.audioUrl, 'utf8'), 'RIFF invented audio fixture');
+      if (process.platform !== 'win32') assert.equal(fs.statSync(reply.audioUrl).mode & 0o777, 0o600);
+      assert.equal(reply.thinkingSpeechUrl, undefined, 'Rejected media must not be forwarded to the native client');
       socket.close();
       await once(socket, 'close');
       await waitFor(() => output.includes('Unregistered') || output.includes('client.unregistered'));

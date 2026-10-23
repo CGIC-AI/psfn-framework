@@ -1,5 +1,10 @@
 import { Type } from '@sinclair/typebox';
 import { IMAGE_PROVIDER_PREFERENCE_VALUES } from '../../../../primitives/images/types.js';
+import { isRecord } from '../../../../shared/utils/types.js';
+import {
+  assertFilesystemSearchQuerySize,
+  FILESYSTEM_SEARCH_QUERY_CONTRACT,
+} from '../../../../shared/contracts/filesystem.js';
 
 import {
   attachment,
@@ -66,6 +71,13 @@ const imageCommon = {
   sourceToolName: optionalString,
   referenceImageIds: Type.Optional(stringArray),
 };
+
+const decodeFilesystemSearchParams = gatewayDecoder('fs.search', strictObject({
+  query: Type.String({ maxLength: FILESYSTEM_SEARCH_QUERY_CONTRACT.maxChars }), glob: optionalString,
+  mode: Type.Optional(enumSchema(['literal', 'regex'])),
+  maxMatches: optionalNumber, maxFiles: optionalNumber, maxBytesPerFile: optionalNumber,
+  contextLines: optionalNumber, cancellationId: optionalString,
+}));
 
 export const gatewayOperationalParamDecoders = {
   'discord.send': gatewayDecoder('discord.send', strictObject({
@@ -157,12 +169,10 @@ export const gatewayOperationalParamDecoders = {
     path: optionalString, glob: optionalString, maxEntries: optionalNumber,
     maxScannedEntries: optionalNumber,
   })),
-  'fs.search': gatewayDecoder('fs.search', strictObject({
-    query: Type.String(), glob: optionalString,
-    mode: Type.Optional(enumSchema(['literal', 'regex'])),
-    maxMatches: optionalNumber, maxFiles: optionalNumber, maxBytesPerFile: optionalNumber,
-    contextLines: optionalNumber, cancellationId: optionalString,
-  })),
+  'fs.search': (params: unknown) => {
+    if (isRecord(params) && typeof params.query === 'string') assertFilesystemSearchQuerySize(params.query);
+    return decodeFilesystemSearchParams(params);
+  },
   'fs.edit': gatewayDecoder('fs.edit', strictObject({
     path: Type.String(), oldText: Type.String(), newText: Type.String(), replaceAll: optionalBoolean,
   })),

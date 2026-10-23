@@ -14,7 +14,10 @@ import {
   resolveWorkspaceFsPathFromRoot,
   resolveWorkspaceRoot,
 } from './filesystem-paths.js';
-import { FILESYSTEM_READ_PAGE_CONTRACT } from '../../shared/contracts/filesystem.js';
+import {
+  FILESYSTEM_READ_PAGE_CONTRACT,
+  isFilesystemSearchQueryWithinLimit,
+} from '../../shared/contracts/filesystem.js';
 
 export interface BeadsPolicyConfig {
   enabled?: boolean;
@@ -573,7 +576,7 @@ export function evaluatePolicy(ctx: GatewayPolicyContext, policyConfig: PolicyCo
       const maxFiles = (params as Record<string, unknown>).maxFiles;
       const maxBytesPerFile = (params as Record<string, unknown>).maxBytesPerFile;
 
-      if (typeof query !== 'string' || query.trim().length === 0) {
+      if (typeof query !== 'string' || !isFilesystemSearchQueryWithinLimit(query) || query.trim().length === 0) {
         return 'DENY';
       }
       if (glob !== undefined && (typeof glob !== 'string' || !normalizeWorkspaceRelativeGlob(glob))) {

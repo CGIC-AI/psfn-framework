@@ -36,6 +36,20 @@ describe('fs tool', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
+  it('rejects oversized raw search queries with content-free tool errors', async () => {
+    const tool = createFsTool(ops);
+    for (const mode of ['literal', 'regex']) {
+      const result = await tool.execute('oversized-search', {
+        action: 'search', query: `${' '.repeat(8_192)}alpha`, mode, glob: 'docs/notes.txt',
+      });
+      expect(result.details).toMatchObject({ isError: true });
+      expect(resultText(result)).toContain('fs search query exceeds the supported size limit');
+      expect(resultText(result)).not.toContain('alpha');
+    }
+    const healthy = await tool.execute('healthy-search', { action: 'search', query: 'alpha', glob: 'docs/notes.txt' });
+    expect(JSON.parse(resultText(healthy)).match_count).toBe(2);
+  });
+
   it('lists, reads, and searches through the unified fs surface', async () => {
     writeFileSync(join(workspace, 'docs', 'long.txt'), 'x'.repeat(25_000), 'utf-8');
     const tool = createFsTool(ops, { defaultMaxBytes: 20_000 });

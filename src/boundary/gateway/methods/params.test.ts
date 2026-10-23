@@ -99,6 +99,16 @@ function expectInvalid(decoder: UnknownDecoder, params: unknown): void {
 }
 
 describe('gateway RPC parameter decoder catalog', () => {
+  it('bounds fs.search raw query characters and UTF-8 bytes in both modes', () => {
+    for (const mode of ['literal', 'regex'] as const) {
+      for (const query of ['PRIVATE-CONTENT'.repeat(100_000), '界'.repeat(2_731), `${' '.repeat(8_192)}cat`]) {
+        expect(() => gatewayMethodParamDecoders['fs.search']({ query, mode }))
+          .toThrow(/^fs search query exceeds the supported size limit$/u);
+      }
+      expect(gatewayMethodParamDecoders['fs.search']({ query: 'cat', mode })).toEqual({ query: 'cat', mode });
+    }
+  });
+
   it('keeps the reviewed 59 gateway plus 19 reverse-agent decoder inventory exact', () => {
     expect(Object.keys(gatewayMethodParamDecoders)).toEqual(expectedGatewayMethods);
     expect(Object.keys(agentMethodParamDecoders)).toEqual(expectedAgentMethods);

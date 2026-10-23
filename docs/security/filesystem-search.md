@@ -6,7 +6,16 @@ Both modes trim the query, scan files in sorted path order, and report one-based
 line and UTF-16 column positions. Matching is case-sensitive and global within
 each line; regex flags are fixed to `g`. Flags such as `i`, `m`, `s`, and `u`
 cannot be supplied. JavaScript lookbehind and backreferences remain supported.
-Zero-length matches advance by one UTF-16 unit, including a match at line end.
+Zero-length regex matches advance by one UTF-16 unit, including a match at line
+end. Literal mode uses bounded string search without constructing a regular
+expression and advances past each complete match, so occurrences do not overlap.
+Empty or whitespace-only queries reject in both modes.
+
+Raw queries in either mode must fit both 8,192 UTF-16 units and 8,192 UTF-8 bytes,
+including any whitespace that trimming would remove. The gateway decoder, tool,
+and runtime check this before trimming, escaping, compilation, or file access.
+The UTF-16 check bounds the work of counting UTF-8 bytes; no encoded query copy
+is allocated. Regex queries retain the stricter 1,000-unit pattern limit below.
 
 The existing bounds apply to both modes: matching sees the first 8,192 UTF-16
 units of each line; previews include the requested zero to two context lines
@@ -49,6 +58,7 @@ Errors never echo file content, patterns, worker diagnostics, or abort reasons:
 
 | Condition | Message |
 | --- | --- |
+| Raw query exceeds either size limit | `fs search query exceeds the supported size limit` |
 | Invalid or unsupported regex syntax | `fs search regex is invalid` |
 | Deadline | `fs search budget exceeded: pattern took too long to evaluate and was aborted` |
 | Admission limit, worker failure, or worker resource exhaustion | `fs search regex resources unavailable` |

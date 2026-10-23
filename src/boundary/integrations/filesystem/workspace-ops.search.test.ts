@@ -15,6 +15,7 @@ describe('fs.search compatibility and isolated evaluator lifecycle', () => {
     await writeFile(join(root, 'line.txt'), `${'x'.repeat(8_192)}beyond`);
     await writeFile(join(root, 'page.txt'), 'abcdabcdZZ');
     await writeFile(join(root, 'hostile.txt'), `${'a'.repeat(8_191)}!`);
+    await writeFile(join(root, 'overlap.txt'), 'aaaaa\nabababa\n🙂🙂🙂');
   });
   afterAll(async () => { await rm(root, { recursive: true, force: true }); });
 
@@ -72,6 +73,30 @@ describe('fs.search compatibility and isolated evaluator lifecycle', () => {
     }
   });
 
+  it('preserves non-overlapping literal matches, trimming and UTF-16 columns', async () => {
+    expect((await searchWorkspaceFiles(root, { query: '  aa  ', glob: 'overlap.txt' })).matches).toEqual([
+      { path: 'overlap.txt', line: 1, column: 1, preview: 'aaaaa' },
+      { path: 'overlap.txt', line: 1, column: 3, preview: 'aaaaa' },
+    ]);
+    expect((await searchWorkspaceFiles(root, { query: 'aba', glob: 'overlap.txt' })).matches).toEqual([
+      { path: 'overlap.txt', line: 2, column: 1, preview: 'abababa' },
+      { path: 'overlap.txt', line: 2, column: 5, preview: 'abababa' },
+    ]);
+    expect((await searchWorkspaceFiles(root, { query: '🙂🙂', glob: 'overlap.txt' })).matches).toEqual([
+      { path: 'overlap.txt', line: 3, column: 1, preview: '🙂🙂🙂' },
+    ]);
+    expect((await searchWorkspaceFiles(root, { query: '\ude42', glob: 'overlap.txt' })).matches).toEqual([
+      { path: 'overlap.txt', line: 3, column: 2, preview: '🙂🙂🙂' },
+      { path: 'overlap.txt', line: 3, column: 4, preview: '🙂🙂🙂' },
+      { path: 'overlap.txt', line: 3, column: 6, preview: '🙂🙂🙂' },
+    ]);
+    expect((await searchWorkspaceFiles(root, { query: 'aa\nab', glob: 'overlap.txt' })).matches).toEqual([]);
+    for (const query of ['', ' ', '\n\t']) {
+      await expect(searchWorkspaceFiles(root, { query, glob: 'overlap.txt' }))
+        .rejects.toThrow(/^fs search query must be a non-empty string$/u);
+    }
+  });
+
   it('preserves preview truncation and the 8192 UTF-16-unit line view', async () => {
     for (const mode of ['literal', 'regex'] as const) {
       expect((await searchWorkspaceFiles(root, { query: 'tail', glob: 'preview.txt', mode })).matches)
@@ -87,6 +112,30 @@ describe('fs.search compatibility and isolated evaluator lifecycle', () => {
     }
     expect((await searchWorkspaceFiles(root, { query: 'cat', mode: 'regex', glob: 'notes.txt' })).matches)
       .toHaveLength(3);
+  });
+
+  it('rejects oversized raw queries in both modes without exposing content and leaves search healthy', async () => {
+    for (const mode of ['literal', 'regex'] as const) {
+      for (const query of ['PRIVATE-CONTENT'.repeat(100_000), '界'.repeat(2_731), `${' '.repeat(8_192)}cat`]) {
+        const rejected = await searchWorkspaceFiles(root, { query, mode, glob: 'notes.txt' })
+          .then(() => null, (error: unknown) => error);
+        expect(rejected).toMatchObject({ message: 'fs search query exceeds the supported size limit' });
+      }
+      expect((await searchWorkspaceFiles(root, { query: 'cat', mode, glob: 'notes.txt' })).matches)
+        .toHaveLength(3);
+    }
+  });
+
+  it('accepts literal queries exactly at the ASCII and multibyte byte boundaries', async () => {
+    const ascii = await searchWorkspaceFiles(root, { query: 'x'.repeat(8_192), glob: 'line.txt' });
+    expect(ascii.matches).toHaveLength(1);
+    expect(ascii.matches[0]).toMatchObject({ line: 1, column: 1 });
+    const unicode = '🙂'.repeat(2_048);
+    await writeFile(join(root, 'query-boundary.txt'), unicode);
+    expect((await searchWorkspaceFiles(root, { query: unicode, glob: 'query-boundary.txt' })).matches)
+      .toHaveLength(1);
+    await expect(searchWorkspaceFiles(root, { query: `${unicode}🙂`, glob: 'query-boundary.txt' }))
+      .rejects.toThrow(/^fs search query exceeds the supported size limit$/u);
   });
 
   it('rechecks quarantine after the final budget checkpoint yields', async () => {

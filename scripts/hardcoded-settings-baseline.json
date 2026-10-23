@@ -11015,6 +11015,20 @@
       "note": "Immutable parser/wire/schema contract FILESYSTEM_READ_PAGE_CONTRACT.minBytes; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
     },
     {
+      "file": "src/shared/contracts/filesystem.ts",
+      "name": "FILESYSTEM_SEARCH_QUERY_CONTRACT.maxChars",
+      "value": "8_192",
+      "form": "object-member",
+      "note": "Fixed fs.search denial-of-service input ceiling checked in constant time before trimming, byte counting or compilation; code-owned parser safety bound, not runtime tuning (psfn-framework-zbbxj.6)."
+    },
+    {
+      "file": "src/shared/contracts/filesystem.ts",
+      "name": "FILESYSTEM_SEARCH_QUERY_CONTRACT.maxUtf8Bytes",
+      "value": "8_192",
+      "form": "object-member",
+      "note": "Fixed fs.search UTF-8 query transfer ceiling shared by decoder, policy, tool and runtime; code-owned input safety contract preventing multibyte bypass of character limits (psfn-framework-zbbxj.6)."
+    },
+    {
       "file": "src/shared/contracts/health-event.ts",
       "name": "MAX_EVIDENCE_ENTRIES",
       "value": "16",

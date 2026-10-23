@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { isIP } from 'node:net';
-import { Agent, fetch as undiciFetch, type Dispatcher } from 'undici';
+import { fetch as undiciFetch, type Agent, type Dispatcher } from 'undici';
+import { createPinnedAddressAgent } from '../pinned-address-agent.js';
 import {
   checkResolvedIP,
   evaluateUrlPolicy,
@@ -37,21 +37,6 @@ function targetKey(target: McpSecureFetchTarget, address: string): string {
     ? createHash('sha256').update(target.tlsCa, 'utf8').digest('hex')
     : '';
   return JSON.stringify([new URL(target.url).origin, address, caHash]);
-}
-
-function pinnedLookup(address: string) {
-  return (
-    _hostname: string,
-    lookupOptions: { all?: boolean },
-    callback: (...args: unknown[]) => void,
-  ): void => {
-    const normalizedFamily = isIP(address) === 6 ? 6 : 4;
-    if (lookupOptions.all) {
-      callback(null, [{ address, family: normalizedFamily }]);
-      return;
-    }
-    callback(null, address, normalizedFamily);
-  };
 }
 
 export function createMcpSecureFetchController(options: {
@@ -101,18 +86,13 @@ export function createMcpSecureFetchController(options: {
     const key = targetKey(target, dns.address);
     let dispatcher = dispatchers.get(key);
     if (!dispatcher) {
-      dispatcher = new Agent({
-        connectTimeout: options.connectTimeoutMs,
-        headersTimeout: options.requestTimeoutMs,
-        bodyTimeout: options.requestTimeoutMs,
-        maxResponseSize: options.maxResponseBytes,
+      dispatcher = createPinnedAddressAgent({
+        address: dns.address,
+        connectTimeoutMs: options.connectTimeoutMs,
+        requestTimeoutMs: options.requestTimeoutMs,
+        maxResponseBytes: options.maxResponseBytes,
         maxOrigins: options.targets.length,
-        connect: {
-          lookup: pinnedLookup(dns.address) as never,
-          rejectUnauthorized: true,
-          minVersion: 'TLSv1.2',
-          ...(target.tlsCa ? { ca: target.tlsCa } : {}),
-        },
+        ...(target.tlsCa ? { tlsCa: target.tlsCa } : {}),
       });
       dispatchers.set(key, dispatcher);
     }

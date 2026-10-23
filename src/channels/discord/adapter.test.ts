@@ -125,6 +125,17 @@ vi.mock('node:dns/promises', async (importOriginal) => {
   };
 });
 
+// Adapter fixtures supply external HTTP responses through the existing global
+// fetch stub. Transport pinning and real sockets are covered at the shared
+// fetchRemoteResource public seam in safe-remote-fetch.test.ts.
+vi.mock('undici', async importOriginal => {
+  const actual = await importOriginal<typeof import('undici')>();
+  return {
+    ...actual,
+    fetch: (...args: Parameters<typeof globalThis.fetch>) => globalThis.fetch(...args),
+  };
+});
+
 vi.mock('./voice.js', () => {
   return {
     DiscordVoiceRuntime: class MockVoiceRuntime {

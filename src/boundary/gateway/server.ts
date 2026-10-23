@@ -5,7 +5,6 @@ import * as net from 'node:net';
 import type * as https from 'node:https';
 import {
   JSONRPCServer,
-  JSONRPCClient,
   JSONRPCServerAndClient,
 } from 'json-rpc-2.0';
 import { DEFAULT_COMPANION_ID } from '../../core/identity/companion-naming.js';
@@ -15,6 +14,9 @@ import type { GatewayRpcConnection } from './transport.js';
 import { GatewayInlineImageRetention } from './inline-image-retention.js';
 import { createSocketServer, createWebSocketRpcServer } from './transport.js';
 import { GatewayRpcSocketAdmission } from './transport-admission.js';
+import { GatewayConnectionWork } from './server/connection-work.js';
+import { GatewayRpcWorkBudget } from './server/work-budget.js';
+import { GatewayRpcClient } from './server/rpc-client.js';
 import {
   type RuntimeHealthResult,
   type OperatorAlertResult,
@@ -119,6 +121,8 @@ export class GatewayServer {
   private stopping = false;
   private rpcServer: net.Server | https.Server | null = null;
   private readonly connections = new Set<GatewayRpcConnection>();
+  private readonly workBudget = new GatewayRpcWorkBudget();
+  private readonly connectionWork = new Map<GatewayRpcConnection, GatewayConnectionWork>();
   private readonly rpcClients = new Map<GatewayRpcConnection, JSONRPCServerAndClient>();
   private readonly connectionStatuses = new Map<GatewayRpcConnection, GatewayConnectionStatus>();
   private readonly inlineImageRetentionByConnection = new Map<
@@ -635,9 +639,12 @@ export class GatewayServer {
     });
     this.connectionLifecycle.appendConnectionTransition(conn, 'none', 'registering', 'connection_opened');
 
+    const rpcClient = new GatewayRpcClient((request) => {
+      if (!conn.send(request)) throw new Error('Gateway RPC outbound frame rejected');
+    });
     const serverAndClient = new JSONRPCServerAndClient(
       new JSONRPCServer({ errorListener: () => log.error('Gateway RPC method execution failed') }),
-      new JSONRPCClient((request) => { conn.send(request); }),
+      rpcClient,
       { errorListener: () => log.error('Gateway RPC message processing failed') },
     );
     this.rpcMethods.registerMethods(serverAndClient, conn);
@@ -655,65 +662,66 @@ export class GatewayServer {
       this.connectionLifecycle.touchConnectionHealthcheck(conn);
     });
 
-    conn.onMessage((message) => {
-      void (async (): Promise<void> => {
-        if (!this.connections.has(conn)) {
-          return;
-        }
-        this.connectionLifecycle.touchConnectionHealthcheck(conn);
-        const validationError = validateJsonRpcFrame(message);
-        if (validationError) {
-          this.connectionAdmission.handleMalformedFrame(
-            conn,
-            'jsonrpc',
-            validationError,
-          );
-          return;
-        }
-        if (this.pendingConnectionIdentities.has(conn)
-          && (message as Record<string, unknown>).method !== 'gateway.client.identify') {
-          this.connectionAdmission.handleMalformedFrame(
-            conn,
-            'jsonrpc',
-            'JSON-RPC frame received before identity verification completed',
-          );
-          return;
-        }
-        const verdict = this.connectionAdmission.enforceCompanionFrameIdentity(conn, message as Record<string, unknown>);
-        if (verdict !== 'pass') {
-          return;
-        }
-        if (
-          !this.multiCompanion.enabled
-          && (message as Record<string, unknown>).method !== 'gateway.client.identify'
-        ) {
-          const status = this.connectionStatuses.get(conn);
-          if (!status || !this.connectionBudget.reserve(conn, status.role, status.companionId)) {
-            this.removeConnection(conn);
-            conn.destroy();
-            return;
-          }
-          this.connectionLifecycle.transitionConnectionState(conn, 'ready', 'rpc_message_received');
-        }
-        const releaseInFlightHealthcheck = this.connectionLifecycle.beginInFlightHealthcheck(conn);
-        // json-rpc-2.0 receiveAndSend() payload param is typed as `any`; message is parsed JSON
+    const work = new GatewayConnectionWork(
+      this.workBudget,
+      async message => {
+        if (conn.destroyed || !this.connections.has(conn)) return;
+        // json-rpc-2.0 intentionally accepts parsed JSON as any.
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        try {
-          await serverAndClient.receiveAndSend(message as any);
-        } catch {
-          this.connectionAdmission.handleMalformedFrame(
-            conn,
-            'jsonrpc',
-            'JSON-RPC receive/send failed',
-          );
-        } finally {
-          releaseInFlightHealthcheck();
-        }
-      })().catch(() => {
-        log.error('Gateway connection message handling failed');
+        await serverAndClient.receiveAndSend(message as any);
+      },
+      () => this.connectionLifecycle.beginInFlightHealthcheck(conn),
+      () => {
+        log.error('Gateway RPC connection work limit or processing failure; closing connection');
         this.removeConnection(conn);
         conn.destroy();
-      });
+      },
+    );
+    this.connectionWork.set(conn, work);
+    conn.onMessage((message, serializedBytes) => {
+      if (!this.connections.has(conn)) {
+        return;
+      }
+      this.connectionLifecycle.touchConnectionHealthcheck(conn);
+      const validationError = validateJsonRpcFrame(message);
+      if (validationError) {
+        this.connectionAdmission.handleMalformedFrame(
+          conn,
+          'jsonrpc',
+          validationError,
+        );
+        return;
+      }
+      if (this.pendingConnectionIdentities.has(conn)
+        && (message as Record<string, unknown>).method !== 'gateway.client.identify') {
+        this.connectionAdmission.handleMalformedFrame(
+          conn,
+          'jsonrpc',
+          'JSON-RPC frame received before identity verification completed',
+        );
+        return;
+      }
+      const verdict = this.connectionAdmission.enforceCompanionFrameIdentity(conn, message as Record<string, unknown>);
+      if (verdict !== 'pass') {
+        return;
+      }
+      if (
+        !this.multiCompanion.enabled
+        && (message as Record<string, unknown>).method !== 'gateway.client.identify'
+      ) {
+        const status = this.connectionStatuses.get(conn);
+        if (!status || !this.connectionBudget.reserve(conn, status.role, status.companionId)) {
+          this.removeConnection(conn);
+          conn.destroy();
+          return;
+        }
+        this.connectionLifecycle.transitionConnectionState(conn, 'ready', 'rpc_message_received');
+      }
+      const bytes = serializedBytes ?? Buffer.byteLength(JSON.stringify(message), 'utf8');
+      const frame = message as Record<string, unknown>;
+      const control = rpcClient.expectsResponse(frame)
+        || frame.method === 'llm.cancel' || frame.method === 'mcp.cancel' || frame.method === 'fs.cancel';
+      work.accept(message, bytes, control);
     });
 
     conn.on('close', () => {
@@ -787,6 +795,9 @@ export class GatewayServer {
   }
 
   private removeConnection(conn: GatewayRpcConnection): void {
+    this.connectionWork.get(conn)?.close();
+    this.connectionWork.delete(conn);
+    this.rpcClients.get(conn)?.rejectAllPendingRequests('Gateway RPC connection closed');
     this.connectionBudget.release(conn);
     // A crashed/restarted agent cannot leave a grant-bearing generation live.
     this.shardWorkloadRegistrar?.releaseConnection(conn);
@@ -927,6 +938,8 @@ export class GatewayServer {
 
   async stop(): Promise<void> {
     this.stopping = true;
+    for (const work of this.connectionWork.values()) work.close();
+    this.connectionWork.clear();
     await Promise.all([...this.filesystemSearchCancellationByConnection.values()].map(searches => searches.close()));
     this.filesystemSearchCancellationByConnection.clear();
     for (const retention of this.inlineImageRetentionByConnection.values()) {

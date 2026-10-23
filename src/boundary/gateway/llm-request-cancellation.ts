@@ -1,3 +1,5 @@
+import { retainGatewayRpcOperation } from './rpc-work-lifetime.js';
+
 const CANONICAL_UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -58,7 +60,7 @@ export class GatewayLLMRequestCancellation {
 
     let pending: Promise<T>;
     try {
-      pending = operation(active.controller.signal);
+      pending = retainGatewayRpcOperation(operation(active.controller.signal));
     } catch (error) {
       this.release(active);
       return Promise.reject(error);

@@ -497,6 +497,42 @@ test("authenticated spoken replies advertise and emit one bracketed audio stream
   }
 });
 
+for (const closing of ["peer", "shutdown"] as const) {
+  test(`${closing} close during active speech cancels cleanup without sending into a closed output owner`, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "hub-active-speech-close-"));
+    const runtime = config({ streamingAudio: true });
+    runtime.artifactsRoot = root;
+    const tts = new FirstReplyStallingTts();
+    const server = new RealtimeHubServer(runtime, { agent: fixedReplyAgent("Active speech."), realtimeTts: tts });
+    await server.start();
+    const address = server.address(); assert.ok(address && typeof address !== "string");
+    const socket = new WebSocket(`ws://127.0.0.1:${address.port}`);
+    const messages: HubToClientMessage[] = [];
+    socket.on("message", raw => messages.push(JSON.parse(raw.toString()) as HubToClientMessage));
+    try {
+      await once(socket, "open");
+      socket.send(JSON.stringify({ type: "hello", deviceId: "office-device", credential,
+        capabilities: { input: ["text"], output: ["text", "streamed_audio"], control: [], safety: [] } }));
+      await waitFor(() => messages.some(message => message.type === "hello.ack"));
+      socket.send(JSON.stringify({ type: "user.text", text: "speak" }));
+      await tts.firstStarted;
+      const closed = once(socket, "close");
+      if (closing === "peer") socket.close(1000, "done");
+      else await server.close();
+      assert.equal((await closed)[0], closing === "peer" ? 1000 : 1001);
+      await waitFor(() => tts.calls[0]?.signal?.aborted === true);
+      tts.releaseFirst();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.deepEqual(finalAssistantMessages(messages), []);
+      assert.deepEqual(audioPayloads(messages), []);
+    } finally {
+      tts.releaseFirst(); socket.terminate();
+      await server.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
 test("authenticated spoken replies fail closed for an audio-incapable client", async () => {
   const tts = new RecordingTts(["must-not-send"]);
   const server = new RealtimeHubServer(

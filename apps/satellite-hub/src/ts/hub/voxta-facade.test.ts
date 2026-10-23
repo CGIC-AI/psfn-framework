@@ -491,7 +491,12 @@ test("Voxta interrupt detaches a stalled replyChunk send before admitting a repl
     delayedFirstReplyChunk = true;
     notifyReplyChunkSendStarted();
     const delayedCallback: SendCallback = (error) => {
-      void replyChunkSendRelease.then((lateError) => sendCallback(lateError ?? error));
+      void replyChunkSendRelease.then((duplicateError) => {
+        sendCallback(error);
+        // Cancellation does not erase the socket write. Its genuine first
+        // completion releases admission; only a replay is stale afterward.
+        if (duplicateError) sendCallback(duplicateError);
+      });
     };
     if (typeof optionsOrCallback === "function") {
       Reflect.apply(originalSend, this, [data, delayedCallback]);
@@ -565,7 +570,7 @@ test("Voxta interrupt detaches a stalled replyChunk send before admitting a repl
     );
 
     const payloadsBeforeLateCallback = voxtaPayloads(frames);
-    releaseReplyChunkSend(new Error("late stale replyChunk send failure"));
+    releaseReplyChunkSend(new Error("late duplicate replyChunk send failure"));
     await new Promise((resolve) => setTimeout(resolve, 30));
     assert.deepEqual(voxtaPayloads(frames), payloadsBeforeLateCallback);
 

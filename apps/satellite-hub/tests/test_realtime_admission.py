@@ -246,3 +246,41 @@ async def test_shutdown_aborts_pending_handshakes_awaits_tasks_and_can_restart(t
 def test_connection_budget_requires_integer_capacity(tmp_path: Path, limit) -> None:
     with pytest.raises(ValueError, match="connection limit"):
         server(tmp_path, max_connections=limit)
+
+
+@pytest.mark.anyio
+async def test_shutdown_handles_synchronous_release_and_later_tcp_cleanup(monkeypatch, tmp_path: Path) -> None:
+    hub = server(tmp_path, max_connections=3)
+    failures = []
+    monkeypatch.setattr(asyncio.get_running_loop(), "call_exception_handler", failures.append)
+    async with hub:
+        websocket_server = hub._server
+        clients = [await _partial(hub) for _ in range(3)]
+        await _eventually(lambda: len(websocket_server.handlers) == 3)
+        tasks = tuple(websocket_server.handlers.values())
+        aborted = []
+
+        def synchronous_abort(connection, abort):
+            def wrapped() -> None:
+                # Exercise synchronous registry mutation on the real accepted
+                # connection, followed by its actual asyncio TCP close callback.
+                hub._connections.discard(connection)
+                aborted.append(connection)
+                abort()
+            return wrapped
+
+        for connection in tuple(hub._connections):
+            transport = connection.transport
+            monkeypatch.setattr(transport, "abort", synchronous_abort(connection, transport.abort))
+        hub._admission.stop()
+        hub._admission.stop()
+        assert len(aborted) == 3
+        assert not hub._connections
+        for reader, writer in clients:
+            await _eof(reader)
+            await _close(writer)
+        await _clean(hub, websocket_server, tasks)
+        assert not failures
+    async with hub:
+        await _recover(hub, hub._server)
+    assert not failures

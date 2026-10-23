@@ -32,7 +32,7 @@ class RealtimeAdmission:
 
     def stop(self) -> None:
         self.accepting = False
-        for connection in self.connections:
+        for connection in tuple(self.connections):
             if connection.protocol.state is CONNECTING:
                 transport = getattr(connection, "transport", None)
                 if transport is not None:
@@ -60,4 +60,4 @@ class _AdmittedConnection(ServerConnection):
         try:
             super().connection_lost(exc)
         finally:
-            self._admission.connections.remove(self)
+            self._admission.connections.discard(self)

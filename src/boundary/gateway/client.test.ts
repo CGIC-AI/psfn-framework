@@ -3446,19 +3446,36 @@ describe('GatewayClient filesystem RPC wrappers', () => {
     client = new GatewayClient(conn.conn, 1024);
   });
 
-  it('forwards caller abort to its exact fs.search without serializing the signal', async () => {
+  it.each(['error', 'result'] as const)('waits for its exact fs.search %s reply after caller abort without serializing the signal', async completion => {
     const controller = new AbortController();
     const search = client.fsSearch({ query: '^(a|aa)+$', mode: 'regex', signal: controller.signal });
     const request = conn.sent[0] as { id: number; params: Record<string, unknown> };
     expect(request.params).toEqual({
       query: '^(a|aa)+$', mode: 'regex', cancellationId: expect.any(String),
     });
-    controller.abort();
-    await expect(search).rejects.toMatchObject({ name: 'AbortError' });
+    let settled = false;
+    const observed = search.then(
+      value => ({ status: 'fulfilled', value }),
+      reason => ({ status: 'rejected', reason }),
+    ).finally(() => { settled = true; });
+    controller.abort(new Error('PRIVATE-SEARCH-ABORT-REASON'));
+    await new Promise(resolve => setImmediate(resolve));
+    expect(settled).toBe(false);
     expect(conn.sent[1]).toEqual({
       jsonrpc: '2.0', method: 'fs.cancel', params: { cancellationId: request.params.cancellationId },
     });
-    conn._emit({ jsonrpc: '2.0', id: request.id, error: { code: -32000, message: 'fs search aborted' } });
+    conn._emit({ jsonrpc: '2.0', id: request.id + 1, result: { cancelled: true } });
+    await new Promise(resolve => setImmediate(resolve));
+    expect(settled).toBe(false);
+    conn._emit({
+      jsonrpc: '2.0', id: request.id,
+      ...(completion === 'error'
+        ? { error: { code: -32000, message: 'fs search aborted' } }
+        : { result: { matches: [] } }),
+    });
+    expect(await observed).toMatchObject({
+      status: 'rejected', reason: { name: 'SearchAbortedError', message: 'fs search aborted' },
+    });
   });
 
   it('routes filesystem methods with typed payloads', async () => {

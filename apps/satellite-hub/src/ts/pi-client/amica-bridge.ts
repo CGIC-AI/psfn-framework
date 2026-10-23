@@ -1,3 +1,4 @@
+import { discardUpstream, fetchUpstream } from "../shared/upstream-response.js";
 import { Buffer } from "node:buffer";
 
 import type { AmicaBridgeConfig } from "../shared/env.js";
@@ -203,7 +204,7 @@ export class AmicaBridge {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.config.requestTimeoutMs);
     try {
-      const response = await fetch(this.endpointUrl, {
+      const response = await fetchUpstream(this.endpointUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -211,20 +212,13 @@ export class AmicaBridge {
         },
         body: JSON.stringify(event),
         signal: controller.signal,
-      });
+      }, this.config.requestTimeoutMs);
+      await discardUpstream(response);
       if (!response.ok) {
-        throw new Error(await formatError(response));
+        throw new Error(`Amica bridge request failed (${response.status})`);
       }
     } finally {
       clearTimeout(timeout);
     }
   }
-}
-
-async function formatError(response: Response): Promise<string> {
-  const body = (await response.text()).trim();
-  if (body) {
-    return `Amica bridge request failed (${response.status}): ${body}`;
-  }
-  return `Amica bridge request failed (${response.status})`;
 }

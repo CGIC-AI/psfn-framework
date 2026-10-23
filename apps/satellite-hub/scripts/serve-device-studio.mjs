@@ -178,7 +178,7 @@ async function handleSpriteGenerate(req, res) {
       sendError(res, 400, "validation_error", message);
       return;
     }
-    sendError(res, 502, "fal_error", message);
+    sendError(res, 502, "fal_error", "FAL image generation failed");
   }
 }
 
@@ -202,7 +202,8 @@ async function normalizeFalImageInputs(body) {
 async function uploadFalDataUrl(value, index) {
   const { mediaType, bytes } = decodeImageDataUrl(value);
   const { fal } = await import("@fal-ai/client");
-  fal.config({ credentials: process.env.FAL_KEY });
+  const { boundedFalFetch } = await import(moduleUrl("dist", "ts", "device-studio", "generated-image.js"));
+  fal.config({ credentials: process.env.FAL_KEY, fetch: boundedFalFetch });
   const blob = new Blob([bytes], { type: mediaType });
   const extension = mediaType.split("/")[1]?.replace("jpeg", "jpg") || "png";
   const file = new File([blob], `device-studio-reference-${Date.now()}-${index}.${extension}`, { type: mediaType });
@@ -230,49 +231,8 @@ function decodeImageDataUrl(value) {
 }
 
 async function attachGeneratedImageDataUrls(result) {
-  return {
-    ...result,
-    images: await Promise.all((result.images || []).map(async (image) => ({
-      ...image,
-      ...await readGeneratedImageDataUrl(image.url),
-    }))),
-  };
-}
-
-async function readGeneratedImageDataUrl(url) {
-  const imageUrl = readString(url);
-  if (!imageUrl) {
-    return {};
-  }
-
-  const response = await fetch(imageUrl);
-  if (!response.ok) {
-    return {
-      packReady: false,
-      packIssue: `Generated image download failed (${response.status})`,
-    };
-  }
-
-  const contentType = response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase() || "application/octet-stream";
-  if (contentType !== "image/png") {
-    return {
-      packReady: false,
-      packIssue: `Generated image is ${contentType}; import a PNG or configure the model for PNG output before packing`,
-    };
-  }
-
-  const bytes = Buffer.from(await response.arrayBuffer());
-  if (bytes.byteLength > maxJsonBodyBytes) {
-    return {
-      packReady: false,
-      packIssue: "Generated image exceeds Device Studio pack review size limit",
-    };
-  }
-
-  return {
-    packReady: true,
-    dataUrl: `data:image/png;base64,${bytes.toString("base64")}`,
-  };
+  const { downloadGeneratedImages } = await import(moduleUrl("dist", "ts", "device-studio", "generated-image.js"));
+  return { ...result, images: await downloadGeneratedImages(result.images || [], maxJsonBodyBytes) };
 }
 
 function isFalValidationError(message) {

@@ -1,3 +1,5 @@
+import { fetchUpstream, discardUpstream, readUpstreamBytes, readUpstreamJson, upstreamChunks, UpstreamResponseError } from "../shared/upstream-response.js";
+import { resolveHubResourceLimits, type HubResourceLimits } from "./transport-resources.js";
 import { hubConsole as console } from "../shared/private-log.js";
 import type { CompanionBridgeConfig } from "../shared/env.js";
 import type {
@@ -76,7 +78,10 @@ export class CompanionBridge {
   private runTask: Promise<void> | null = null;
   private stopped = false;
 
-  constructor(private readonly config: CompanionBridgeConfig) {
+  private readonly limits: HubResourceLimits;
+
+  constructor(private readonly config: CompanionBridgeConfig, limits?: Partial<HubResourceLimits>) {
+    this.limits = resolveHubResourceLimits(limits);
     const { satelliteId, endpointId, claimType } = config.identity;
     if (!satelliteId.trim() || !endpointId.trim() || !claimType.trim()) {
       throw new Error(
@@ -123,10 +128,11 @@ export class CompanionBridge {
     if (!approvalId) {
       throw new Error("Approval decision requires a non-empty approval id");
     }
-    const response = await fetch(
+    const response = await fetchUpstream(
       `${this.config.baseUrl}/companion/approvals/${encodeURIComponent(approvalId)}`,
       {
         method: "POST",
+        signal: AbortSignal.timeout(this.limits.providerTimeoutMs),
         headers: {
           ...this.buildHeaders(),
           "Content-Type": "application/json",
@@ -137,15 +143,16 @@ export class CompanionBridge {
           deviceId: input.deviceId,
         }),
       },
+      this.limits.providerTimeoutMs,
     );
     if (!response.ok) {
-      const body = (await response.text()).trim();
+      await discardUpstream(response);
       throw new CompanionRequestError(
         response.status,
-        `Companion approval decision failed (${response.status})${body ? `: ${body}` : ""}`,
+        `Companion approval decision failed (${response.status})`,
       );
     }
-    const payload = await response.json() as { id?: unknown; status?: unknown };
+    const payload = await readUpstreamJson(response, { maxBytes: this.limits.maxHttpBodyBytes, timeoutMs: this.limits.providerTimeoutMs }) as { id?: unknown; status?: unknown };
     const id = readRequiredString(payload.id, "approval decision response id");
     const status = readRequiredString(payload.status, "approval decision response status");
     return { id, status };
@@ -160,8 +167,9 @@ export class CompanionBridge {
     durationMs: number;
     responseMode: "respond" | "observe";
   }): Promise<{ status: "accepted"; messageId: string; response?: string }> {
-    const response = await fetch(`${this.config.baseUrl}/companion/stimuli`, {
+    const response = await fetchUpstream(`${this.config.baseUrl}/companion/stimuli`, {
       method: "POST",
+      signal: AbortSignal.timeout(this.limits.providerTimeoutMs),
       headers: {
         ...this.buildHeaders(),
         "Content-Type": "application/json",
@@ -176,15 +184,15 @@ export class CompanionBridge {
         durationMs: input.durationMs,
         responseMode: input.responseMode,
       }),
-    });
+    }, this.limits.providerTimeoutMs);
     if (!response.ok) {
-      const body = (await response.text()).trim();
+      await discardUpstream(response);
       throw new CompanionRequestError(
         response.status,
-        `Companion touch stimulus failed (${response.status})${body ? `: ${body}` : ""}`,
+        `Companion touch stimulus failed (${response.status})`,
       );
     }
-    const payload = await response.json() as {
+    const payload = await readUpstreamJson(response, { maxBytes: this.limits.maxHttpBodyBytes, timeoutMs: this.limits.providerTimeoutMs }) as {
       status?: unknown;
       messageId?: unknown;
       response?: unknown;
@@ -211,8 +219,9 @@ export class CompanionBridge {
     placeLabel: string;
     responseMode: "observe" | "respond";
   }): Promise<{ status: "accepted"; messageId: string; response?: string }> {
-    const response = await fetch(`${this.config.baseUrl}/companion/stimuli`, {
+    const response = await fetchUpstream(`${this.config.baseUrl}/companion/stimuli`, {
       method: "POST",
+      signal: AbortSignal.timeout(this.limits.providerTimeoutMs),
       headers: {
         ...this.buildHeaders(),
         "Content-Type": "application/json",
@@ -226,15 +235,15 @@ export class CompanionBridge {
         placeLabel: input.placeLabel,
         responseMode: input.responseMode,
       }),
-    });
+    }, this.limits.providerTimeoutMs);
     if (!response.ok) {
-      const body = (await response.text()).trim();
+      await discardUpstream(response);
       throw new CompanionRequestError(
         response.status,
-        `Companion location transition failed (${response.status})${body ? `: ${body}` : ""}`,
+        `Companion location transition failed (${response.status})`,
       );
     }
-    const payload = await response.json() as {
+    const payload = await readUpstreamJson(response, { maxBytes: this.limits.maxHttpBodyBytes, timeoutMs: this.limits.providerTimeoutMs }) as {
       status?: unknown;
       messageId?: unknown;
       response?: unknown;
@@ -271,8 +280,9 @@ export class CompanionBridge {
       throw new Error("Companion audio output requires a non-empty session id");
     }
     const frame = projectCompanionAudioOutputFrame(input.frame, sessionId);
-    const response = await fetch(`${this.config.baseUrl}/companion/audio-output`, {
+    const response = await fetchUpstream(`${this.config.baseUrl}/companion/audio-output`, {
       method: "POST",
+      signal: AbortSignal.timeout(this.limits.providerTimeoutMs),
       headers: {
         ...this.buildHeaders(),
         "Content-Type": "application/json",
@@ -283,7 +293,8 @@ export class CompanionBridge {
         "X-PSFN-Satellite-Capabilities": "audio_output",
       },
       body: JSON.stringify(frame),
-    });
+    }, this.limits.providerTimeoutMs);
+    await discardUpstream(response);
     if (!response.ok) {
       throw new CompanionRequestError(
         response.status,
@@ -299,19 +310,21 @@ export class CompanionBridge {
       throw new Error("Artifact preview requires a non-empty artifact id");
     }
     const controller = new AbortController();
-    const response = await fetch(
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(this.limits.providerTimeoutMs)]);
+    const response = await fetchUpstream(
       `${this.config.baseUrl}/companion/artifacts/${encodeURIComponent(normalizedId)}/preview?${this.identityQuery()}`,
       {
         method: "GET",
         headers: this.buildHeaders(),
-        signal: controller.signal,
+        signal,
       },
+      this.limits.providerTimeoutMs,
     );
     if (!response.ok) {
-      const body = (await response.text()).trim();
+      await discardUpstream(response);
       throw new CompanionRequestError(
         response.status,
-        `Companion artifact preview failed (${response.status})${body ? `: ${body}` : ""}`,
+        `Companion artifact preview failed (${response.status})`,
       );
     }
     const mediaType = response.headers.get("content-type")?.split(";")[0]?.trim();
@@ -319,36 +332,12 @@ export class CompanionBridge {
       controller.abort();
       throw new Error("Companion artifact preview response did not include a content type");
     }
-    const declaredLength = Number.parseInt(response.headers.get("content-length") ?? "", 10);
-    if (Number.isInteger(declaredLength) && declaredLength > this.config.previewMaxBytes) {
-      controller.abort();
-      throw new Error(
-        `Companion artifact preview exceeds the size cap (${declaredLength} > ${this.config.previewMaxBytes} bytes)`,
-      );
-    }
-    if (!response.body) {
-      throw new Error("Companion artifact preview response did not include a body");
-    }
-    const chunks: Buffer[] = [];
-    let receivedBytes = 0;
-    const reader = response.body.getReader();
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) {
-        break;
-      }
-      receivedBytes += value.byteLength;
-      if (receivedBytes > this.config.previewMaxBytes) {
-        controller.abort();
-        throw new Error(
-          `Companion artifact preview exceeds the size cap (> ${this.config.previewMaxBytes} bytes)`,
-        );
-      }
-      chunks.push(Buffer.from(value));
-    }
+    const bytes = await readUpstreamBytes(response, {
+      maxBytes: this.config.previewMaxBytes, timeoutMs: this.limits.providerTimeoutMs, signal,
+    });
     return {
       mediaType,
-      dataBase64: Buffer.concat(chunks).toString("base64"),
+      dataBase64: bytes.toString("base64"),
     };
   }
 
@@ -394,32 +383,29 @@ export class CompanionBridge {
 
   private async consumeEventStream(): Promise<boolean> {
     const signal = this.abortController?.signal;
-    const response = await fetch(`${this.config.baseUrl}/companion/events?${this.identityQuery()}`, {
+    const response = await fetchUpstream(`${this.config.baseUrl}/companion/events?${this.identityQuery()}`, {
       method: "GET",
       headers: {
         ...this.buildHeaders(),
         Accept: "text/event-stream",
       },
       signal,
-    });
+    }, this.limits.providerTimeoutMs);
     if (!response.ok) {
-      const body = (await response.text()).trim();
+      await discardUpstream(response);
       throw new CompanionRequestError(
         response.status,
-        `Companion event stream request failed (${response.status})${body ? `: ${body}` : ""}`,
+        `Companion event stream request failed (${response.status})`,
       );
     }
     if (!response.body) {
       throw new Error("Companion event stream response did not include a body");
     }
-    const parser = new SseStreamParser();
+    const parser = new SseStreamParser(this.limits.maxFrameBytes);
     const decoder = new TextDecoder();
-    const reader = response.body.getReader();
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) {
-        break;
-      }
+    for await (const value of upstreamChunks(response, {
+      maxBytes: this.limits.maxQueuedBytes, timeoutMs: this.limits.idleTimeoutMs, signal, eventStream: true,
+    })) {
       for (const rawEvent of parser.push(decoder.decode(value, { stream: true }))) {
         this.dispatchRawEvent(rawEvent);
       }
@@ -484,39 +470,54 @@ export interface SseEvent {
  * fields are used; comments and other fields are ignored per the SSE spec.
  */
 export class SseStreamParser {
-  private buffer = "";
+  private fragments: string[] = [];
+  private bytes = 0;
+  private tail = "";
+  private trailingHighSurrogate = false;
+
+  constructor(private readonly maxBytes = resolveHubResourceLimits().maxFrameBytes) {}
 
   push(chunk: string): SseEvent[] {
-    this.buffer += chunk;
     const events: SseEvent[] = [];
-    while (true) {
-      const boundary = findEventBoundary(this.buffer);
-      if (!boundary) {
-        break;
-      }
-      const rawBlock = this.buffer.slice(0, boundary.index);
-      this.buffer = this.buffer.slice(boundary.index + boundary.length);
-      const event = parseEventBlock(rawBlock);
-      if (event) {
-        events.push(event);
-      }
+    // Only three prior characters can participate in a split delimiter. Scan
+    // each new chunk once; join retained fragments only when a frame completes.
+    const scan = this.tail + chunk;
+    const tailLength = this.tail.length;
+    let cursor = 0;
+    for (const match of scan.matchAll(/\r\n\r\n|\n\n|\r\r/gu)) {
+      const end = match.index + match[0].length - tailLength;
+      this.append(chunk.slice(cursor, end));
+      const block = this.fragments.join("").slice(0, -match[0].length);
+      this.fragments = [];
+      this.bytes = 0;
+      this.trailingHighSurrogate = false;
+      const event = parseEventBlock(block);
+      if (event) events.push(event);
+      cursor = end;
     }
+    this.append(chunk.slice(cursor));
+    this.tail = (cursor > 0 ? chunk.slice(cursor) : scan).slice(-3);
     return events;
+  }
+
+  private append(fragment: string): void {
+    if (!fragment) return;
+    const first = fragment.charCodeAt(0);
+    const bytes = Buffer.byteLength(fragment) - (this.trailingHighSurrogate && first >= 0xdc00 && first <= 0xdfff ? 2 : 0);
+    if (this.bytes + bytes > this.maxBytes) {
+      this.fragments = [];
+      this.bytes = 0;
+      this.tail = "";
+      this.trailingHighSurrogate = false;
+      throw new UpstreamResponseError("size");
+    }
+    this.bytes += bytes;
+    this.fragments.push(fragment);
+    const last = fragment.charCodeAt(fragment.length - 1);
+    this.trailingHighSurrogate = last >= 0xd800 && last <= 0xdbff;
   }
 }
 
-function findEventBoundary(buffer: string): { index: number; length: number } | null {
-  const candidates = [
-    { index: buffer.indexOf("\r\n\r\n"), length: 4 },
-    { index: buffer.indexOf("\n\n"), length: 2 },
-    { index: buffer.indexOf("\r\r"), length: 2 },
-  ].filter((candidate) => candidate.index >= 0);
-  if (candidates.length === 0) {
-    return null;
-  }
-  candidates.sort((a, b) => a.index - b.index);
-  return candidates[0] ?? null;
-}
 
 function parseEventBlock(block: string): SseEvent | null {
   let eventName = "message";

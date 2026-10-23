@@ -519,7 +519,7 @@ test("companion bridge enforces the artifact preview size cap and relays denials
       contentType: "image/png",
       body: Buffer.alloc(64, 1),
     };
-    await assert.rejects(bridge.fetchArtifactPreview("art-2"), /size cap/);
+    await assert.rejects(bridge.fetchArtifactPreview("art-2"), /rejected \(size\)/);
 
     backplane.previewResponse = { status: 403, contentType: "application/json", body: Buffer.from("{\"error\":\"denied\"}") };
     await assert.rejects(
@@ -1208,7 +1208,7 @@ test("hub serves artifact previews to capable satellites and fails closed otherw
     const tooLarge = await capable.waitForMessage("artifact.preview.error");
     assert.match(
       (tooLarge as Extract<HubToClientMessage, { type: "artifact.preview.error" }>).message,
-      /size cap/,
+      /rejected \(size\)/,
     );
 
     plain.send({ type: "artifact.preview", requestId: "req-4", artifactId: "art-1" });
@@ -1712,3 +1712,54 @@ async function waitFor(condition: () => boolean, label: string, timeoutMs = 5_00
   }
   throw new Error(`Timed out waiting for ${label}`);
 }
+
+test("SSE frame admission counts UTF-8 across delimiter splits without rescanning tiny chunks", () => {
+  for (const delimiter of ["\n\n", "\r\r", "\r\n\r\n"]) {
+    const frame = `data: é🙂${delimiter}`;
+    for (let split = 0; split <= frame.length; split++) {
+      const parser = new SseStreamParser(Buffer.byteLength(frame));
+      assert.deepEqual([...parser.push(frame.slice(0, split)), ...parser.push(frame.slice(split))], [{ event: "message", data: "é🙂" }]);
+    }
+  }
+  const parser = new SseStreamParser(128);
+  parser.push("data: ");
+  parser.push("é".repeat(61));
+  assert.throws(() => parser.push("x"), /rejected \(size\)/u);
+  const tiny = new SseStreamParser(200_000);
+  const start = performance.now();
+  tiny.push("data: ");
+  for (let index = 0; index < 199_992; index++) tiny.push("x");
+  assert.equal(tiny.push("\n\n")[0]?.data.length, 199_992);
+  assert.ok(performance.now() - start < 1000, "frame accumulation must be linear in received bytes");
+});
+
+test("Companion SSE closes oversized frames and reconnects for a valid event", async () => {
+  let connections = 0;
+  let closed = 0;
+  const event = { kind: "emotion.snapshot", payload: EMOTION_PAYLOAD, emittedAt: "2026-07-09T00:00:04.000Z" };
+  const frame = `event: companion\ndata: ${JSON.stringify(event)}\n\n`;
+  const maxFrameBytes = Buffer.byteLength(frame);
+  const server = http.createServer((request, response) => {
+    request.resume();
+    response.on("close", () => closed++);
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    if (connections++ === 0) {
+      response.write("data: ");
+      response.write("x".repeat(maxFrameBytes));
+    } else response.write(frame);
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const bridge = new CompanionBridge(bridgeConfig(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, { reconnectBaseMs: 1, reconnectMaxMs: 1 }), { maxFrameBytes, idleTimeoutMs: 1000 });
+  const events: CompanionEvent[] = [];
+  bridge.addListener(event => events.push(event));
+  try {
+    bridge.start();
+    await waitFor(() => events.length === 1, "valid event after bounded reconnect");
+    assert.equal(connections, 2);
+    assert.ok(closed >= 1);
+  } finally {
+    await bridge.stop();
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
+});

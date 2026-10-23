@@ -281,10 +281,10 @@ test("FAL HTTP errors are sanitized before throwing or stringifying", async () =
     (error: unknown) => {
       assert(error instanceof FalImageProviderError);
       assert.equal(error.status, 503);
-      assert(error.message.includes("FAL image generation failed (503 Service Unavailable)"));
+      assert(error.message.includes("FAL image generation failed (503)"));
       assert(!error.message.includes(secret));
       assert(!JSON.stringify(error).includes(secret));
-      assert(JSON.stringify(error).includes("[redacted]"));
+      assert(!JSON.stringify(error).includes("upstream echoed"));
       return true;
     },
   );

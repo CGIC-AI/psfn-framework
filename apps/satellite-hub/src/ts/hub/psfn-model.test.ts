@@ -373,17 +373,17 @@ test("authenticated turns fail instead of retrying an ambiguous timeout or trans
         '{"choices":[{"message":{"role":"assistant","content":"Too late"}}]}',
         init?.signal,
       ),
-      expectedError: /exceeded/,
+      expectedError: /rejected \(cancelled\)/,
     },
     {
       name: "consumed transport loss",
       respond: async () => { throw new TypeError("fetch failed after Framework consumed the request"); },
-      expectedError: /fetch failed after Framework consumed the request/,
+      expectedError: /rejected \(cancelled\)|rejected \(unavailable\)/,
     },
     {
       name: "ECONNRESET",
       respond: async () => { throw Object.assign(new Error("socket closed after write"), { code: "ECONNRESET" }); },
-      expectedError: /socket closed after write/,
+      expectedError: /rejected \(unavailable\)/,
     },
   ];
 
@@ -439,7 +439,7 @@ test("unauthenticated transport loss does not retry without replay protection", 
         userText: "do not replay me",
         conversationId: "unauthenticated-transport-loss",
       }),
-      /without an authenticated replay assertion/,
+      /rejected \(unavailable\)/,
     );
     assert.equal(calls, 1);
   } finally {
@@ -457,12 +457,12 @@ test("authenticated recovery does not retry deterministic auth denials or arbitr
     {
       name: "auth denial",
       respond: async () => new Response('{"error":"denied"}', { status: 401 }),
-      expectedError: /failed \(401\).*denied/,
+      expectedError: /failed \(401\)/,
     },
     {
       name: "arbitrary exception",
       respond: async () => { throw new RangeError("not a transport failure"); },
-      expectedError: /not a transport failure/,
+      expectedError: /rejected \(unavailable\)/,
     },
   ];
 
@@ -557,7 +557,7 @@ test("authenticated recovery fences a device whose enrollment version changes be
         conversationId: authenticatedChannel().sessionId,
         channel: authenticatedChannel(),
       }),
-      /enrollment version changed/,
+      /PSFN chat completion failed/,
     );
     assert.equal(calls, 1, "no request may leave after the authority version changes");
   } finally {
@@ -1062,7 +1062,7 @@ test("mTLS transport aborts stalled response bodies on deadline and external can
     await assert.rejects(cancelledReply, (error: unknown) => (
       error instanceof Error
       && error.name === "AbortError"
-      && error.message === "test external cancellation"
+      && error.message === "The PSFN reply was aborted"
     ));
     await waitForCondition(() => closedResponseCount === 3);
   } finally {
@@ -1219,3 +1219,66 @@ Xd3JhHpN1z6fUlJ7JiS8CEMqUivXu1jP4HRMGTJ0LN/zzDxiYzPcGhXJNJztpJ6f
 qr60QKLGS7zUfVl5Ruc3j49A3P9sSwfpn/WaarnEEkIuowpfR5b030mT1NehYkv1
 6zqit3QdaW+hsr73CJymx8U=
 -----END PRIVATE KEY-----`;
+
+for (const clientCertificate of [false, true]) {
+  test(`PSFN ${clientCertificate ? "mTLS" : "fetch"} bounds declared/chunked bodies and private failures before recovery`, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "psfn-response-budget-"));
+    const certPath = path.join(root, "cert.pem");
+    const keyPath = path.join(root, "key.pem");
+    fs.writeFileSync(certPath, TEST_TLS_CERTIFICATE);
+    fs.writeFileSync(keyPath, TEST_TLS_PRIVATE_KEY);
+    const body = Buffer.from(JSON.stringify({ choices: [{ message: { content: "é🙂" } }] }));
+    let mode = "exact-declared";
+    let closed = 0;
+    const handler: import("node:http").RequestListener = (request, response) => {
+      request.resume();
+      response.once("close", () => closed++);
+      response.statusCode = mode === "private-error" ? 401 : mode === "busy-over" ? 503 : 200;
+      if (mode.includes("declared")) response.setHeader("Content-Length", body.length + (mode.startsWith("over") ? 1 : 0));
+      response.flushHeaders();
+      if (mode === "over-declared") return;
+      if (mode === "private-error") { response.write("PRIVATE provider body and credential"); return; }
+      if (mode === "busy-over") { response.write("PRIVATE".repeat(body.length)); return; }
+      response.write(body.subarray(0, body.indexOf(Buffer.from("🙂")) + 1));
+      response.write(body.subarray(body.indexOf(Buffer.from("🙂")) + 1));
+      response.end(mode.startsWith("over") ? " " : undefined);
+    };
+    const server = clientCertificate ? https.createServer({
+      key: TEST_TLS_PRIVATE_KEY, cert: TEST_TLS_CERTIFICATE, ca: TEST_TLS_CERTIFICATE, requestCert: true, rejectUnauthorized: true,
+    }, handler) : (await import("node:http")).createServer(handler);
+    server.on("clientError", (_error, socket) => socket.destroy());
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    const runtime = buildRuntimeConfig({ baseUrl: `${clientCertificate ? "https" : "http"}://127.0.0.1:${(server.address() as AddressInfo).port}` });
+    if (clientCertificate) runtime.satelliteClaim = { ...runtime.satelliteClaim, tls: { certPath, keyPath, caPath: certPath } };
+    const adapter = new PsfnModelAdapter(runtime, () => {}, null, { maxQueuedBytes: body.length, providerTimeoutMs: 100 });
+    const call = async () => {
+      const chunks: string[] = [];
+      for await (const chunk of adapter.streamReply({ inputMode: "text", userText: "hello", conversationId: "budget" })) chunks.push(chunk);
+      return chunks;
+    };
+    try {
+      for (const framing of ["chunked", "declared"]) {
+        mode = `exact-${framing}`;
+        assert.equal((await call()).join(""), "é🙂");
+        mode = `over-${framing}`;
+        await assert.rejects(call(), /rejected \(size\)/u);
+      }
+      mode = "private-error";
+      await assert.rejects(call(), error => {
+        assert.ok(error instanceof Error);
+        assert.equal(error.message, "PSFN chat completion failed (401)");
+        assert.equal(error.cause, undefined);
+        return true;
+      });
+      mode = "busy-over";
+      await assert.rejects(call(), { message: "PSFN chat completion failed (503): response body unavailable" });
+      mode = "exact-chunked";
+      assert.equal((await call()).join(""), "é🙂");
+      await waitForCondition(() => closed === 7);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>(resolve => server.close(() => resolve()));
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+}

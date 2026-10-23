@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from hub.storage.artifacts import ArtifactStore
+
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import uuid
 from typing import Literal, Protocol
 
 from aioesphomeapi.model import BinarySensorInfo, BinarySensorState, EntityInfo, EntityState
@@ -78,7 +81,7 @@ class ESPHomeInteractionRecorder:
     ) -> None:
         self._headpat_signal_key = headpat_signal_key
         self._endpoint_id = endpoint_id
-        self._events_path = artifacts_root / "interactions" / "events.jsonl"
+        self._artifacts = ArtifactStore(artifacts_root)
         self._now = now or (lambda: datetime.now(timezone.utc))
 
     def handle_state(self, state: EntityState) -> SatelliteInteraction | None:
@@ -97,8 +100,6 @@ class ESPHomeInteractionRecorder:
             endpoint_id=self._endpoint_id,
             occurred_at=occurred_at.astimezone(timezone.utc).isoformat(),
         )
-        self._events_path.parent.mkdir(parents=True, exist_ok=True)
-        with self._events_path.open("a", encoding="utf-8") as stream:
-            stream.write(json.dumps(interaction.to_wire(), separators=(",", ":"), sort_keys=True))
-            stream.write("\n")
+        path = self._artifacts.root / "interactions" / uuid.uuid4().hex / "events.jsonl"
+        self._artifacts.write_bytes(path, (json.dumps(interaction.to_wire(), separators=(",", ":"), sort_keys=True) + "\n").encode("utf-8"))
         return interaction

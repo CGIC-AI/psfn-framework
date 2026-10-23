@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import math
 from datetime import timedelta
 from pathlib import Path
 
@@ -23,6 +25,7 @@ from hub.media.http_audio import StaticAudioServer
 from hub.runtime import load_runtime_config
 from hub.security.device_assertion import HubDeviceAssertionIssuer
 from hub.storage.session_cache import SessionCache
+from hub.storage.artifacts import ArtifactStore
 
 
 async def _run_esphome_runtime(
@@ -57,22 +60,20 @@ async def _run_esphome_runtime(
 
     async def deliver_headpat(interaction: SatelliteInteraction) -> None:
         try:
-            result = await deliver_interaction(
+            await deliver_interaction(
                 interaction,
                 submitter=agent,
                 conversation_id=config.voice_conversation_id,
             )
-            response = result.get("response", "").strip()
-            detail = f": {response}" if response else ""
-            typer.echo(f"Headpat delivered to Companion{detail}")
-        except Exception as exc:
-            typer.echo(f"Headpat delivery failed: {exc}")
+            typer.echo("Headpat delivered")
+        except Exception:
+            typer.echo("Headpat delivery failed")
 
     try:
         while True:
             try:
                 async with ESPHomeSession(config.esphome_target) as session:
-                    device_info = await session.device_info()
+                    await session.device_info()
                     entities, _ = await session.list_entities_services()
                     media_player_key = next(
                         (entity.key for entity in entities if isinstance(entity, MediaPlayerInfo)),
@@ -89,10 +90,7 @@ async def _run_esphome_runtime(
                         def handle_interaction_state(state) -> None:
                             interaction = interaction_recorder.handle_state(state)
                             if interaction is not None:
-                                typer.echo(
-                                    f"Interaction received: {interaction.interaction_type} "
-                                    f"from {interaction.endpoint_id}",
-                                )
+                                typer.echo("Interaction received")
                                 task = asyncio.create_task(deliver_headpat(interaction))
                                 interaction_tasks.add(task)
                                 task.add_done_callback(interaction_tasks.discard)
@@ -124,16 +122,13 @@ async def _run_esphome_runtime(
                         handle_audio=runtime.handle_audio,
                     )
                     try:
-                        typer.echo(
-                            f"Connected to {device_info.friendly_name or device_info.name} at "
-                            f"{config.esphome_target.host}:{config.esphome_target.port}"
-                        )
+                        typer.echo("ESPHome connected")
                         await session.wait_disconnected()
                     finally:
                         unsubscribe()
                 typer.echo("ESPHome connection lost; reconnecting in 2 seconds")
-            except Exception as exc:
-                typer.echo(f"ESPHome connection failed: {exc}; reconnecting in 5 seconds")
+            except Exception:
+                typer.echo("ESPHome connection failed; reconnecting in 5 seconds")
                 await asyncio.sleep(5)
                 continue
             await asyncio.sleep(2)
@@ -180,32 +175,49 @@ async def _run_realtime_runtime(
             await asyncio.sleep(3600)
 
 
-async def _run_runtime(project_root: Path) -> None:
+async def _artifact_cleanup(stores: tuple[ArtifactStore, ...], interval_seconds: float) -> None:
+    while True:
+        await asyncio.sleep(interval_seconds)
+        for store in stores:
+            cleanup = asyncio.create_task(asyncio.to_thread(store.cleanup))
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                try:
+                    await cleanup
+                except Exception:
+                    logging.getLogger(__name__).error("Artifact cleanup failed")
+                raise
+            except Exception:
+                logging.getLogger(__name__).error("Artifact cleanup failed")
+
+
+async def _run_runtime(project_root: Path, *, artifact_cleanup_interval_seconds: float = 60) -> None:
+    if not math.isfinite(artifact_cleanup_interval_seconds) or artifact_cleanup_interval_seconds <= 0:
+        raise ValueError("Artifact cleanup interval must be positive and finite")
     config = load_runtime_config(project_root)
+    artifacts = ArtifactStore(config.artifacts_root)
     audio_server = StaticAudioServer(
         host=config.audio_bind_host,
         port=config.audio_port,
         root=config.audio_root,
         public_host=config.audio_public_host,
         public_port=config.audio_public_port,
+        public_base_url=config.audio_access.public_base_url,
+        relay_token=config.audio_access.relay_token,
+        developer_mode=config.audio_access.developer_mode,
+        limits=config.audio_limits,
     )
-    audio_server.start()
-    session_cache = SessionCache(ttl=timedelta(seconds=config.session_ttl_seconds))
-
-    typer.echo(f"Device transport: {config.device_transport}")
-    typer.echo(f"PSFN API base: {config.psfn_api_base_url}")
-    if config.psfn_provider:
-        typer.echo(f"PSFN provider override: {config.psfn_provider}")
-    typer.echo(f"PSFN model: {config.psfn_model}")
-    if config.psfn_author_id and config.psfn_author_name:
-        typer.echo(f"PSFN author assertion: {config.psfn_author_name} ({config.psfn_author_id})")
-    typer.echo(f"Audio server: http://{config.audio_public_host}:{config.audio_public_port}/")
-    if config.device_transport in {"realtime", "hybrid"}:
-        realtime_host = config.realtime_target.public_host or config.realtime_target.bind_host
-        typer.echo(f"Realtime voice server: ws://{realtime_host}:{config.realtime_target.port}/")
-    typer.echo("Voice bridge is running. Press Ctrl-C to stop.")
-
+    session_cache = SessionCache(ttl=timedelta(seconds=config.session_ttl_seconds), max_sessions=config.session_max_sessions)
+    maintenance: asyncio.Task | None = None
     try:
+        audio_server.start()
+        maintenance = asyncio.create_task(
+            _artifact_cleanup((artifacts, audio_server.artifact_store), artifact_cleanup_interval_seconds),
+            name="hub-artifact-cleanup",
+        )
+        typer.echo("Voice bridge listeners started")
+        typer.echo("Voice bridge is running. Press Ctrl-C to stop.")
         async with asyncio.TaskGroup() as task_group:
             if config.device_transport in {"esphome", "hybrid"}:
                 task_group.create_task(
@@ -224,7 +236,13 @@ async def _run_runtime(project_root: Path) -> None:
                     )
                 )
     finally:
-        audio_server.stop()
+        if maintenance is not None:
+            maintenance.cancel()
+            await asyncio.gather(maintenance, return_exceptions=True)
+        try:
+            audio_server.stop()
+        finally:
+            artifacts.close()
 
 
 def run() -> None:
@@ -233,3 +251,6 @@ def run() -> None:
         asyncio.run(_run_runtime(Path.cwd()))
     except KeyboardInterrupt:
         typer.echo("Stopped voice bridge")
+    except Exception:
+        typer.echo("Voice bridge failed; verify configuration and service availability", err=True)
+        raise typer.Exit(1) from None

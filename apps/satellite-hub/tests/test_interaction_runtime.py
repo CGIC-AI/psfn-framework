@@ -37,7 +37,7 @@ def test_headpat_event_is_recorded_as_a_typed_interaction(tmp_path) -> None:
     assert recorded.interaction_type == "headpat"
     assert recorded.endpoint_id == "fixture-satellite"
     assert recorded.occurred_at == "2026-07-14T02:30:00+00:00"
-    lines = (tmp_path / "interactions" / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    lines = next((tmp_path / ".hub-artifacts-v1" / "interactions").rglob("events.jsonl")).read_text(encoding="utf-8").splitlines()
     assert [json.loads(line) for line in lines] == [
         {
             "endpointId": "fixture-satellite",
@@ -58,7 +58,7 @@ def test_interaction_recorder_ignores_other_entities_and_event_types(tmp_path) -
 
     assert recorder.handle_state(BinarySensorState(key=99, state=True)) is None
     assert recorder.handle_state(BinarySensorState(key=42, state=False)) is None
-    assert not (tmp_path / "interactions" / "events.jsonl").exists()
+    assert not list(tmp_path.rglob("events.jsonl"))
 
 
 @pytest.mark.anyio

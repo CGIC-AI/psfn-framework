@@ -11,6 +11,8 @@ from dotenv import load_dotenv
 from hub.config import ESPHomeTarget, RealtimeTarget
 from hub.security.device_assertion import HubDeviceAssertionConfig
 from hub.security.realtime_access import RealtimeAccess
+from hub.security.audio_access import AudioAccess
+from hub.media.audio_limits import AudioLimits
 from hub.satellite_claims import (
     CAPABILITY_PROFILE_DEFAULTS,
     DEFAULT_CAPABILITY_PROFILE,
@@ -90,9 +92,12 @@ class HubRuntimeConfig:
     audio_public_host: str
     audio_port: int
     audio_public_port: int
+    audio_access: AudioAccess
+    audio_limits: AudioLimits
     artifacts_root: Path
     continue_conversation: bool
     session_ttl_seconds: int
+    session_max_sessions: int
     announcement_timeout_seconds: float
     reply_timeout_seconds: float
     voice_initial_silence_timeout_seconds: float
@@ -134,7 +139,8 @@ def load_runtime_config(project_root: Path) -> HubRuntimeConfig:
         detect_host = host
         detect_port = port
 
-    audio_bind_host = os.getenv("AUDIO_SERVER_BIND_HOST", "0.0.0.0")
+    audio_bind_host = os.getenv("AUDIO_SERVER_BIND_HOST", "127.0.0.1")
+    audio_public_base_url = os.getenv("AUDIO_PUBLIC_BASE_URL") or None
     configured_audio_public_host = os.getenv("AUDIO_PUBLIC_HOST") or None
     audio_port = int(os.getenv("AUDIO_SERVER_PORT", "8099"))
     audio_public_port = int(os.getenv("AUDIO_PUBLIC_PORT") or str(audio_port))
@@ -143,15 +149,8 @@ def load_runtime_config(project_root: Path) -> HubRuntimeConfig:
     configured_realtime_public_host = os.getenv("REALTIME_VOICE_PUBLIC_HOST") or None
     if configured_audio_public_host:
         audio_public_host = configured_audio_public_host
-    elif device_transport == "realtime":
-        if not configured_realtime_public_host:
-            raise ValueError(
-                "AUDIO_PUBLIC_HOST or REALTIME_VOICE_PUBLIC_HOST is required when DEVICE_TRANSPORT=realtime",
-            )
-        audio_public_host = configured_realtime_public_host
     else:
-        assert detect_host is not None and detect_port is not None
-        audio_public_host = detect_outbound_host(detect_host, detect_port)
+        audio_public_host = configured_realtime_public_host or audio_bind_host
     realtime_public_host = configured_realtime_public_host or audio_public_host
 
     psfn_api_base_url = os.getenv("PSFN_API_BASE_URL", "http://127.0.0.1:3100/v1").strip()
@@ -178,12 +177,24 @@ def load_runtime_config(project_root: Path) -> HubRuntimeConfig:
     if not voice_conversation_id:
         raise ValueError("VOICE_CONVERSATION_ID must be non-empty")
     artifacts_root = _resolve_path(project_root, os.getenv("ARTIFACT_ROOT", ".artifacts/runtime"))
+    if artifacts_root.absolute() == project_root.absolute() or artifacts_root.absolute() in project_root.absolute().parents:
+        raise ValueError("ARTIFACT_ROOT must be a dedicated artifact directory")
     realtime_access = RealtimeAccess(
         host=realtime_bind_host,
         token=os.getenv("HUB_REALTIME_AUTH_TOKEN") or None,
         developer_mode=os.getenv("HUB_DEVELOPER_MODE", "").strip() == "true",
         allowed_origins=tuple(_split_csv(os.getenv("HUB_ALLOWED_ORIGINS"))),
     )
+    audio_access = AudioAccess(
+        host=audio_bind_host,
+        public_base_url=audio_public_base_url or f"http://{'[' + audio_public_host + ']' if ':' in audio_public_host else audio_public_host}:{audio_public_port}",
+        relay_token=os.getenv("AUDIO_RELAY_AUTH_TOKEN") or None,
+        developer_mode=os.getenv("HUB_DEVELOPER_MODE", "").strip() == "true",
+    )
+    if audio_access.relay_token and audio_access.relay_token in {
+        value.strip() for value in (realtime_access.token, psfn_api_key, os.getenv("DEEPGRAM_API_KEY"), os.getenv("ELEVENLABS_API_KEY")) if value
+    }:
+        raise ValueError("AUDIO_RELAY_AUTH_TOKEN must not reuse another runtime credential")
 
     return HubRuntimeConfig(
         project_root=project_root,
@@ -213,9 +224,12 @@ def load_runtime_config(project_root: Path) -> HubRuntimeConfig:
         audio_public_host=audio_public_host,
         audio_port=audio_port,
         audio_public_port=audio_public_port,
+        audio_access=audio_access,
+        audio_limits=AudioLimits.from_env(),
         artifacts_root=artifacts_root,
         continue_conversation=_env_bool("CONTINUE_CONVERSATION", True),
         session_ttl_seconds=int(os.getenv("SESSION_TTL_SECONDS", "300")),
+        session_max_sessions=int(os.getenv("SESSION_MAX_SESSIONS", "128")),
         announcement_timeout_seconds=float(os.getenv("ANNOUNCEMENT_TIMEOUT_SECONDS", "120")),
         reply_timeout_seconds=float(os.getenv("VOICE_REPLY_TIMEOUT_SECONDS", "30")),
         voice_initial_silence_timeout_seconds=float(os.getenv("VOICE_INITIAL_SILENCE_TIMEOUT_SECONDS", "4.0")),

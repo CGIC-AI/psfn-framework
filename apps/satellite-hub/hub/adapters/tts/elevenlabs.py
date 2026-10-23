@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+from hub.storage.artifacts import ArtifactStore
+
 from pathlib import Path
 import uuid
 
 import httpx
 
 from hub.adapters.interfaces import SynthesizedAudio, TTSProvider
-from hub.util import ensure_directory
+from hub.adapters.bounds import ProviderLimits, bounded_request, decode_json
 
 
 class ElevenLabsTTSProvider(TTSProvider):
@@ -17,17 +19,27 @@ class ElevenLabsTTSProvider(TTSProvider):
         output_root: Path,
         voice_id: str | None = None,
         model_id: str = "eleven_multilingual_v2",
+        client: httpx.AsyncClient | None = None,
+        limits: ProviderLimits | None = None,
     ) -> None:
         self._api_key = api_key
-        self._output_root = ensure_directory(output_root)
+        self._artifacts = ArtifactStore(output_root)
+        self._output_root = self._artifacts.root
         self._voice_id = voice_id
         self._model_id = model_id
-        self._client = httpx.AsyncClient(timeout=60.0)
+        self._client = client or httpx.AsyncClient(timeout=60.0)
+        self._owns_client = client is None
+        self._limits = limits or ProviderLimits()
 
     async def synthesize(self, text: str) -> SynthesizedAudio:
+        if len(text.encode("utf-8")) > self._limits.max_text_bytes:
+            raise RuntimeError("Provider text limit exceeded")
         voice_id = await self._resolve_voice_id()
-        response = await self._client.post(
+        body = await bounded_request(
+            self._client, "POST",
             f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
+            max_bytes=self._limits.max_http_bytes,
+            timeout_seconds=self._limits.max_age_seconds,
             params={"output_format": "mp3_44100_128"},
             headers={
                 "xi-api-key": self._api_key,
@@ -39,10 +51,9 @@ class ElevenLabsTTSProvider(TTSProvider):
                 "model_id": self._model_id,
             },
         )
-        response.raise_for_status()
         filename = f"{uuid.uuid4().hex}.mp3"
         output_path = self._output_root / filename
-        output_path.write_bytes(response.content)
+        self._artifacts.write_bytes(output_path, body)
         return SynthesizedAudio(
             provider="elevenlabs",
             audio_path=output_path,
@@ -53,12 +64,14 @@ class ElevenLabsTTSProvider(TTSProvider):
         if self._voice_id:
             return self._voice_id
 
-        response = await self._client.get(
+        body = await bounded_request(
+            self._client, "GET",
             "https://api.elevenlabs.io/v1/voices",
+            max_bytes=self._limits.max_json_bytes,
+            timeout_seconds=self._limits.max_age_seconds,
             headers={"xi-api-key": self._api_key},
         )
-        response.raise_for_status()
-        payload = response.json()
+        payload = decode_json(body)
         voices = payload.get("voices", [])
         if not voices:
             raise RuntimeError("ElevenLabs returned no voices for this account")
@@ -71,4 +84,6 @@ class ElevenLabsTTSProvider(TTSProvider):
         return voice_id
 
     async def aclose(self) -> None:
-        await self._client.aclose()
+        if self._owns_client:
+            await self._client.aclose()
+        self._artifacts.close()

@@ -11,6 +11,7 @@ from hub.config import ESPHomeTarget
 from hub.devices.esphome_session import ESPHomeSession, ProbeSnapshot
 from hub.devices.voice_flow import PCMFormatAssumption, VoiceTransportSpike
 from hub.util import to_jsonable, write_json
+from hub.storage.artifacts import ArtifactStore
 
 
 def _build_target(
@@ -91,16 +92,12 @@ def probe(
         )
     )
 
-    typer.echo(f"Name: {snapshot.device_info.name}")
-    typer.echo(f"Friendly name: {getattr(snapshot.device_info, 'friendly_name', '')}")
-    typer.echo(f"Model: {snapshot.device_info.model}")
-    typer.echo(f"ESPHome version: {snapshot.device_info.esphome_version}")
-    typer.echo(f"Voice assistant flags: {snapshot.device_info.voice_assistant_feature_flags}")
+    typer.echo("Probe completed")
     typer.echo(f"Entities: {len(snapshot.entities)}")
     typer.echo(f"Services: {len(snapshot.services)}")
     typer.echo(f"State updates captured: {len(snapshot.state_updates)}")
     if output_path is not None:
-        typer.echo(f"Wrote probe snapshot to {output_path}")
+        typer.echo("Wrote private probe snapshot")
 
 
 async def _run_transport_spike(
@@ -135,16 +132,18 @@ async def _run_transport_spike(
     )
     async with ESPHomeSession(target) as session:
         device_info = await session.device_info()
-        write_json(output_root / "device_info.json", device_info)
+        artifacts = ArtifactStore(output_root)
+        artifacts.write_json(artifacts.root / "device_info.json", device_info)
         unsubscribe = session.subscribe_voice_assistant(
             handle_start=spike.handle_start,
             handle_stop=spike.handle_stop,
             handle_audio=spike.handle_audio,
             handle_announcement_finished=spike.handle_announcement_finished,
         )
-        typer.echo(f"Subscribed to voice assistant on {device_info.name} ({host}:{port})")
-        typer.echo(f"Artifacts: {output_root}")
+        typer.echo("Voice transport subscribed")
         typer.echo("Press Ctrl-C to stop")
+        from hub.cli.run import _artifact_cleanup
+        maintenance = asyncio.create_task(_artifact_cleanup((artifacts,), 60), name="hub-artifact-cleanup")
         try:
             if duration_seconds is None:
                 while True:
@@ -153,6 +152,9 @@ async def _run_transport_spike(
                 await asyncio.sleep(duration_seconds)
         finally:
             unsubscribe()
+            maintenance.cancel()
+            await asyncio.gather(maintenance, return_exceptions=True)
+            artifacts.close()
 
 
 def transport_spike(

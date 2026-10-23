@@ -3,13 +3,21 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
+import os
 from collections.abc import AsyncIterator
+from datetime import datetime, timedelta
+from typing import Callable
 from typing import Any, Literal
 
 import httpx
 
 from hub.adapters.interfaces import AgentReply
+from hub.adapters.bounds import bounded_request, bounded_lines, decode_json
 from hub.security.device_assertion import HubDeviceAssertionIssuer
+from hub.storage.history import bounded_history
+from hub.storage.session_cache import SessionCache
+from hub.util import utc_now
 from hub.satellite_claims import (
     ClientCertificateConfig,
     SatelliteClaimConfig,
@@ -42,7 +50,29 @@ class PsfnStreamingProvider:
         device_assertion_issuer: HubDeviceAssertionIssuer | None = None,
         client: httpx.AsyncClient | None = None,
         timeout_seconds: float = 60.0,
+        history_max_conversations: int | None = None,
+        history_max_messages: int | None = None,
+        history_max_bytes: int | None = None,
+        history_ttl_seconds: float | None = None,
+        now_provider: Callable[[], datetime] = utc_now,
+        max_provider_response_bytes: int | None = None,
+        max_provider_line_bytes: int | None = None,
     ) -> None:
+        self._history_max_messages = history_max_messages if history_max_messages is not None else int(os.getenv("HUB_HISTORY_MAX_MESSAGES", "64"))
+        self._history_max_bytes = history_max_bytes if history_max_bytes is not None else int(os.getenv("HUB_HISTORY_MAX_BYTES", "65536"))
+        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+            raise ValueError("Provider timeout must be positive and finite")
+        self._provider_timeout_seconds = timeout_seconds
+        self._provider_response_bytes = max_provider_response_bytes if max_provider_response_bytes is not None else self._history_max_bytes * 8 + 65536
+        self._provider_line_bytes = max_provider_line_bytes if max_provider_line_bytes is not None else self._history_max_bytes * 6 + 8192
+        if self._provider_response_bytes < 1 or self._provider_line_bytes < 1:
+            raise ValueError("Provider response capacities must be positive")
+        self._history_cache = SessionCache(
+            max_sessions=history_max_conversations if history_max_conversations is not None else int(os.getenv("HUB_HISTORY_MAX_CONVERSATIONS", "128")),
+            ttl=timedelta(seconds=history_ttl_seconds if history_ttl_seconds is not None else float(os.getenv("HUB_HISTORY_TTL_SECONDS", "300"))),
+            max_history_messages=self._history_max_messages, max_history_bytes=self._history_max_bytes,
+            now_provider=now_provider,
+        )
         base_url = api_base_url.rstrip("/")
         if not base_url.endswith("/v1"):
             base_url = f"{base_url}/v1"
@@ -70,7 +100,6 @@ class PsfnStreamingProvider:
         self._author_id = author_id.strip() if author_id else None
         self._author_name = author_name.strip() if author_name else None
         self._device_assertion_issuer = device_assertion_issuer
-        self._history_by_conversation: dict[str, list[dict[str, str]]] = {}
         self._history_lock = asyncio.Lock()
 
     async def reply(
@@ -80,11 +109,11 @@ class PsfnStreamingProvider:
         conversation_id: str,
         history: list[dict[str, str]],
     ) -> AgentReply:
-        normalized_history = _normalize_history(history)
+        normalized_history = self._bounded(history)
         messages = self._build_messages(history=normalized_history, text=text)
         response_text = await self._complete(messages=messages, conversation_id=conversation_id, stream=False)
-        final_text = response_text.strip() or "I don't have a response yet."
-        updated_history = [*normalized_history, {"role": "user", "content": text}, {"role": "assistant", "content": final_text}]
+        final_text = self._validate_reply(response_text)
+        updated_history = self._bounded([*normalized_history, {"role": "user", "content": text}, {"role": "assistant", "content": final_text}])
         await self._set_history(conversation_id, updated_history)
         return AgentReply(text=final_text, history=updated_history)
 
@@ -97,16 +126,20 @@ class PsfnStreamingProvider:
         prior_history = await self._get_history(conversation_id)
         messages = self._build_messages(history=prior_history, text=text)
         response_text = ""
+        response_bytes = 0
         completed = False
         try:
             async for delta in self._stream_completion(messages=messages, conversation_id=conversation_id):
+                response_bytes += len(delta.encode("utf-8"))
+                if response_bytes > self._history_max_bytes:
+                    raise ValueError("Conversation reply exceeds byte limit")
                 response_text += delta
                 yield delta
             completed = True
         finally:
             if completed:
-                final_text = response_text.strip() or "I don't have a response yet."
-                updated_history = [*prior_history, {"role": "user", "content": text}, {"role": "assistant", "content": final_text}]
+                final_text = self._validate_reply(response_text)
+                updated_history = self._bounded([*prior_history, {"role": "user", "content": text}, {"role": "assistant", "content": final_text}])
                 await self._set_history(conversation_id, updated_history)
 
     async def submit_touch_stimulus(
@@ -131,14 +164,15 @@ class PsfnStreamingProvider:
             "durationMs": duration_ms,
             "responseMode": response_mode,
         }
-        response = await self._client.post(
+        body = await bounded_request(
+            self._client, "POST",
             "/companion/stimuli",
+            max_bytes=self._provider_response_bytes,
+            timeout_seconds=self._provider_timeout_seconds,
             json=payload,
             headers=self._with_device_assertion(self._request_headers, conversation_id),
         )
-        if response.status_code >= 400:
-            raise RuntimeError(_format_http_error(response))
-        data = response.json()
+        data = decode_json(body)
         if not isinstance(data, dict) or data.get("status") != "accepted" or not isinstance(data.get("messageId"), str):
             raise RuntimeError("PSFN companion stimulus returned an invalid response")
         result = {"status": "accepted", "messageId": data["messageId"]}
@@ -151,18 +185,31 @@ class PsfnStreamingProvider:
             await self._client.aclose()
 
     def _build_messages(self, *, history: list[dict[str, str]], text: str) -> list[dict[str, str]]:
+        if len(text) > self._history_max_bytes or len(text.encode("utf-8")) > self._history_max_bytes:
+            raise ValueError("Conversation message exceeds byte limit")
         messages = [dict(message) for message in history if message.get("role") in {"user", "assistant"} and message.get("content")]
         messages.append({"role": "user", "content": text})
-        return messages
+        return self._bounded(messages)
+
+    def _bounded(self, history: list[dict[str, str]]) -> list[dict[str, str]]:
+        return bounded_history(history, max_messages=self._history_max_messages, max_bytes=self._history_max_bytes)
+
+    def _validate_reply(self, text: str) -> str:
+        if len(text) > self._history_max_bytes or len(text.encode("utf-8")) > self._history_max_bytes:
+            raise ValueError("Conversation reply exceeds byte limit")
+        if not text.strip():
+            raise RuntimeError("PSFN completion returned no text")
+        return text.strip()
 
     async def _get_history(self, conversation_id: str) -> list[dict[str, str]]:
         async with self._history_lock:
-            history = self._history_by_conversation.get(conversation_id, [])
+            session = self._history_cache.get(conversation_id)
+            history = session.history if session is not None else []
             return [dict(message) for message in history]
 
     async def _set_history(self, conversation_id: str, history: list[dict[str, str]]) -> None:
         async with self._history_lock:
-            self._history_by_conversation[conversation_id] = [dict(message) for message in history]
+            self._history_cache.set_history(conversation_id, history)
 
     async def _complete(
         self,
@@ -178,14 +225,15 @@ class PsfnStreamingProvider:
             stream=stream,
             satellite_claim=satellite_claim,
         )
-        response = await self._client.post(
+        body = await bounded_request(
+            self._client, "POST",
             "/chat/completions",
+            max_bytes=self._provider_response_bytes,
+            timeout_seconds=self._provider_timeout_seconds,
             json=payload,
             headers=self._build_request_headers(conversation_id, satellite_claim=satellite_claim),
         )
-        if response.status_code >= 400:
-            raise RuntimeError(_format_http_error(response))
-        data = response.json()
+        data = decode_json(body)
         return _extract_completion_text(data)
 
     async def _stream_completion(
@@ -201,16 +249,15 @@ class PsfnStreamingProvider:
             stream=True,
             satellite_claim=satellite_claim,
         )
-        async with self._client.stream(
+        async with asyncio.timeout(self._provider_timeout_seconds), self._client.stream(
             "POST",
             "/chat/completions",
             json=payload,
-            headers=self._build_request_headers(conversation_id, satellite_claim=satellite_claim),
+            headers={**self._build_request_headers(conversation_id, satellite_claim=satellite_claim), "Accept-Encoding": "identity"},
         ) as response:
             if response.status_code >= 400:
-                body = await response.aread()
-                raise RuntimeError(_format_http_error(response, body=body))
-            async for line in response.aiter_lines():
+                raise RuntimeError(_format_http_error(response))
+            async for line in bounded_lines(response, max_bytes=self._provider_response_bytes, max_line_bytes=self._provider_line_bytes):
                 if not line:
                     continue
                 if not line.startswith("data:"):
@@ -298,17 +345,6 @@ class PsfnStreamingProvider:
         return derive_channel_id(self._claim_config.channel_type, normalized)
 
 
-def _normalize_history(history: list[dict[str, str]]) -> list[dict[str, str]]:
-    normalized: list[dict[str, str]] = []
-    for message in history:
-        role = str(message.get("role") or "").strip()
-        content = str(message.get("content") or "").strip()
-        if role not in {"user", "assistant"} or not content:
-            continue
-        normalized.append({"role": role, "content": content})
-    return normalized
-
-
 def _extract_completion_text(payload: dict[str, Any]) -> str:
     choices = payload.get("choices")
     if not isinstance(choices, list) or not choices:
@@ -336,7 +372,7 @@ def _extract_delta_text(data: str) -> str:
     try:
         payload = json.loads(data)
     except json.JSONDecodeError:
-        _LOGGER.debug("Ignoring non-JSON PSFN stream payload: %s", data)
+        _LOGGER.debug("Ignoring non-JSON PSFN stream payload")
         return ""
     choices = payload.get("choices")
     if not isinstance(choices, list) or not choices:
@@ -364,14 +400,4 @@ def _extract_delta_text(data: str) -> str:
 
 
 def _format_http_error(response: httpx.Response, *, body: bytes | None = None) -> str:
-    detail = ""
-    if body:
-        detail = body.decode("utf-8", errors="replace").strip()
-    if not detail:
-        try:
-            detail = response.text.strip()
-        except Exception:
-            detail = ""
-    if detail:
-        return f"PSFN chat completion failed ({response.status_code}): {detail}"
     return f"PSFN chat completion failed ({response.status_code})"

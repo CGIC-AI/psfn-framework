@@ -5,6 +5,7 @@ from time import perf_counter
 import httpx
 
 from hub.adapters.interfaces import STTProvider, TranscriptResult
+from hub.adapters.bounds import ProviderLimits, bounded_request, decode_json
 
 
 class DeepgramSTTProvider(STTProvider):
@@ -13,15 +14,24 @@ class DeepgramSTTProvider(STTProvider):
         *,
         api_key: str,
         model: str = "nova-3",
+        client: httpx.AsyncClient | None = None,
+        limits: ProviderLimits | None = None,
     ) -> None:
         self._api_key = api_key
         self._model = model
-        self._client = httpx.AsyncClient(timeout=60.0)
+        self._client = client or httpx.AsyncClient(timeout=60.0)
+        self._owns_client = client is None
+        self._limits = limits or ProviderLimits()
 
     async def transcribe(self, pcm_audio: bytes) -> TranscriptResult:
+        if len(pcm_audio) > self._limits.max_audio_bytes:
+            raise RuntimeError("Provider audio limit exceeded")
         started = perf_counter()
-        response = await self._client.post(
+        body = await bounded_request(
+            self._client, "POST",
             "https://api.deepgram.com/v1/listen",
+            max_bytes=self._limits.max_json_bytes,
+            timeout_seconds=self._limits.max_age_seconds,
             params={
                 "model": self._model,
                 "smart_format": "true",
@@ -32,8 +42,7 @@ class DeepgramSTTProvider(STTProvider):
             },
             content=pcm_audio,
         )
-        response.raise_for_status()
-        payload = response.json()
+        payload = decode_json(body)
         transcript = (
             payload.get("results", {})
             .get("channels", [{}])[0]
@@ -41,6 +50,8 @@ class DeepgramSTTProvider(STTProvider):
             .get("transcript", "")
             .strip()
         )
+        if len(transcript.encode("utf-8")) > self._limits.max_text_bytes:
+            raise RuntimeError("Provider transcript limit exceeded")
         return TranscriptResult(
             text=transcript,
             provider="deepgram",
@@ -49,4 +60,5 @@ class DeepgramSTTProvider(STTProvider):
         )
 
     async def aclose(self) -> None:
-        await self._client.aclose()
+        if self._owns_client:
+            await self._client.aclose()

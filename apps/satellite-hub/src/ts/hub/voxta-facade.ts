@@ -1,5 +1,5 @@
+import { hubConsole as console } from "../shared/private-log.js";
 import crypto from "node:crypto";
-import fs from "node:fs";
 import type http from "node:http";
 import path from "node:path";
 import type { Duplex } from "node:stream";
@@ -7,6 +7,7 @@ import type { Duplex } from "node:stream";
 import WebSocket, { WebSocketServer, type RawData } from "ws";
 
 import { abortReason, awaitWithAbort, throwIfAborted } from "../shared/abort.js";
+import { readPrivateArtifact, writePrivateArtifact } from "../shared/private-artifacts.js";
 import type { VoxtaFacadeConfig } from "../shared/env.js";
 import { sanitizeSpokenText } from "../shared/text.js";
 import type { FrameworkAgentAdapter } from "./framework-agent.js";
@@ -55,6 +56,7 @@ export interface VoxtaSttAdapter {
     sessionId: string;
     spec: VoxtaAudioInputSpec;
     pcm: Buffer;
+    signal: AbortSignal;
   }): Promise<{ text: string; provider?: string }>;
 }
 
@@ -85,6 +87,7 @@ interface VoxtaFacadeRuntime {
   connectionsBySessionId: Map<string, VoxtaConnection>;
   pendingVisionRequests: Map<string, PendingVisionRequest>;
   connections: Set<VoxtaConnection>;
+  audioInputs: Set<VoxtaAudioInputStream>;
 }
 
 interface PendingVisionRequest {
@@ -130,6 +133,7 @@ export class VoxtaFacade {
     connectionsBySessionId: new Map(),
     pendingVisionRequests: new Map(),
     connections: new Set(),
+    audioInputs: new Set(),
   };
   private readonly audioWsServer: WebSocketServer;
   private readonly principals = new WeakMap<http.IncomingMessage, HubPrincipal>();
@@ -283,6 +287,7 @@ export class VoxtaFacade {
     this.principals.set(request, principal);
     this.prunePendingConnections();
     if (isAudioInputStreamPath(url.pathname)) {
+      if (!this.deps.resources.providerAvailable()) return rejectHubUpgrade(socket, 429);
       const connection = this.runtime.connectionsBySessionId.get(url.searchParams.get("sessionId") ?? "");
       if (!connection || !connection.ownedBy(principal)) return rejectHubUpgrade(socket, 403);
       if (principal.device && !principal.device.maxCapabilities.input.includes("microphone_pcm")) return rejectHubUpgrade(socket, 403);
@@ -299,14 +304,17 @@ export class VoxtaFacade {
     const admission = this.deps.resources.admitSocket(true);
     if (!admission) return rejectHubUpgrade(socket, 429);
     this.admissions.set(request, admission);
-    socket.once("close", admission.release);
+    const releaseUpgrade = (): void => admission.release();
+    socket.once("close", releaseUpgrade);
     const server = isAudioInputStreamPath(url.pathname) ? this.audioWsServer : this.wsServer;
     server.handleUpgrade(request, socket, head, (websocket) => {
+      socket.off("close", releaseUpgrade);
       server.emit("connection", websocket, request);
     });
   }
 
   async close(): Promise<void> {
+    for (const input of this.runtime.audioInputs) input.abort();
     for (const client of this.wsServer.clients) {
       client.close();
     }
@@ -349,26 +357,22 @@ export class VoxtaFacade {
       return;
     }
     const filePath = path.join(voxtaAudioArtifactsRoot(this.deps.artifactsRoot), artifact.filename);
-    let stats: fs.Stats;
+    let bytes: Buffer;
     try {
-      stats = fs.statSync(filePath);
+      bytes = readPrivateArtifact(this.deps.artifactsRoot, filePath, this.deps.resources.limits.maxAudioBytes + 44);
     } catch {
-      writeJson(response, 404, { error: "Voxta audio artifact not found" });
-      return;
-    }
-    if (!stats.isFile()) {
       writeJson(response, 404, { error: "Voxta audio artifact not found" });
       return;
     }
     response.statusCode = 200;
     response.setHeader("Content-Type", "audio/x-wav");
-    response.setHeader("Content-Length", String(stats.size));
+    response.setHeader("Content-Length", String(bytes.length));
     response.setHeader("Cache-Control", "no-store");
     if (request.method === "HEAD") {
       response.end();
       return;
     }
-    fs.createReadStream(filePath).pipe(response);
+    response.end(bytes);
   }
 
   private async handleServiceToggle(
@@ -1084,14 +1088,12 @@ class VoxtaConnection {
       const audioFolder = this.deps.config.audioFolder;
       if (!audioFolder) {
         const directory = voxtaAudioArtifactsRoot(this.deps.artifactsRoot);
-        fs.mkdirSync(directory, { recursive: true });
         const filePath = path.join(directory, filename);
-        fs.writeFileSync(filePath, wav);
+        writePrivateArtifact(this.deps.artifactsRoot, filePath, wav);
         return `${this.publicBaseUrl}/api/voxta/audio/${encodeURIComponent(filename)}`;
       }
-      fs.mkdirSync(audioFolder, { recursive: true });
       const filePath = path.join(audioFolder, filename);
-      fs.writeFileSync(filePath, wav);
+      writePrivateArtifact(audioFolder, filePath, wav);
       return filePath;
     } catch (error) {
       if (signal.aborted) {
@@ -1420,18 +1422,20 @@ class VoxtaAudioInputStream {
     private readonly principal: HubPrincipal,
     private readonly access: HubAccess,
     private readonly resources: HubResources,
-    admission: HubSocketAdmission,
+    private readonly admission: HubSocketAdmission,
   ) {
     this.flow = new HubSocketFlow(socket, resources.limits, true, rejected => {
-      admission.release();
-      if (rejected) { this.closed = true; this.audio = null; clearTimeout(this.audioTimer); }
+      if (rejected) { admission.release(); this.closed = true; this.audio = null; clearTimeout(this.audioTimer); this.runtime.audioInputs.delete(this); }
     });
+    runtime.audioInputs.add(this);
   }
+
+  abort(): void { this.closed = true; this.audio = null; clearTimeout(this.audioTimer); this.admission.release(); this.flow.fail(1001, "Hub shutting down"); this.runtime.audioInputs.delete(this); }
 
   run(): void {
     this.socket.on("error", () => { this.closed = true; this.audio = null; clearTimeout(this.audioTimer); });
     if (!normalizeGuid(this.sessionId) || !this.runtime.connectionsBySessionId.has(this.sessionId)) {
-      this.socket.close(1008, "Unknown Voxta audio input session");
+      this.flow.fail(1008, "Unknown Voxta audio input session");
       return;
     }
     this.socket.on("message", (raw, isBinary) => {
@@ -1447,7 +1451,7 @@ class VoxtaAudioInputStream {
       if (code !== 1000 && code !== 1005) { this.closed = true; this.audio = null; clearTimeout(this.audioTimer); }
       void this.finish().catch((error) => {
         console.error("Voxta audio input finalization failed:", error);
-      });
+      }).finally(() => { this.admission.release(); this.runtime.audioInputs.delete(this); });
     });
   }
 
@@ -1504,11 +1508,13 @@ class VoxtaAudioInputStream {
       return;
     }
     await connection.emitSpeechRecognitionStart();
-    const result = await this.stt.transcribePcm({
+    const spec = this.spec;
+    const result = await this.resources.runProvider(signal => this.stt!.transcribePcm({
       sessionId: this.sessionId,
-      spec: this.spec,
+      spec,
       pcm,
-    });
+      signal,
+    }));
     const text = result.text.trim();
     if (text) {
       await connection.emitSpeechRecognitionPartial(text);
@@ -1682,13 +1688,12 @@ async function persistVisionCapture(input: {
   const capturedAt = new Date();
   const dateKey = capturedAt.toISOString().slice(0, 10).replaceAll("-", "");
   const directory = path.join(input.root, "voxta-vision", dateKey);
-  await fs.promises.mkdir(directory, { recursive: true });
-  const extension = extensionForMimeType(input.upload.mimeType) ?? (path.extname(input.upload.filename) || ".bin");
+  const extension = extensionForMimeType(input.upload.mimeType) ?? ".bin";
   const filePath = path.join(
     directory,
     `voxta_${safePathPart(input.sessionId)}_${safePathPart(input.requestId)}_${input.source}${extension}`,
   );
-  await fs.promises.writeFile(filePath, input.upload.data);
+  writePrivateArtifact(input.root, filePath, input.upload.data);
   return {
     requestId: input.requestId,
     sessionId: input.sessionId,

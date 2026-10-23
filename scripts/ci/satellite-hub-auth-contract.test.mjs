@@ -7,7 +7,7 @@ import { parseAllDocuments } from 'yaml';
 
 const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
 const baseArgs = ['template', 'hub-auth', 'deploy/helm/psfn',
-  '--set', 'secrets.allowMissingRequired=true',
+  '--set', 'secrets.existingSecret=hub-auth-fixture',
   '--set', 'satelliteHub.enabled=true',
   '--set', 'satelliteHub.image.repository=example.invalid/hub',
   '--set', 'satelliteHub.image.tag=test-pinned',
@@ -22,7 +22,7 @@ function render(overrides = []) {
   });
 }
 
-test('exposed Hub Helm rendering rejects missing caller authority even in test secret mode', () => {
+test('exposed Hub Helm rendering rejects missing caller authority with an existing Secret', () => {
   const result = render();
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /Satellite Hub requires.*device registry.*Voxta/);

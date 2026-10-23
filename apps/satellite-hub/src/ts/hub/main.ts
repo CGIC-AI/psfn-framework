@@ -1,4 +1,5 @@
-import fs from "node:fs";
+import { hubConsole as console } from "../shared/private-log.js";
+import { privateDirectory } from "../shared/private-artifacts.js";
 
 import { loadHubConfig, resolveProjectRoot } from "../shared/env.js";
 import {
@@ -38,12 +39,9 @@ async function main(): Promise<void> {
   const eidoverseTransport = loadEidoverseMcpTransport();
   const eidoverseConfig = eidoverseTransport === "poll" ? loadEidoverseMcpConfig() : null;
   const eidoverseMcplConfig = eidoverseTransport === "mcpl" ? loadEidoverseMcplConfig() : null;
-  fs.mkdirSync(config.artifactsRoot, { recursive: true });
+  privateDirectory(config.artifactsRoot);
   const homeAssistant = config.homeAssistant ? new HomeAssistantClient(config.homeAssistant) : null;
-  const hubLogger = {
-    info: (message: string) => console.info(message),
-    warn: (message: string) => console.warn(message),
-  };
+  const hubLogger = console;
   const eidoverse = eidoverseConfig
     ? new EidoverseMcpClient(eidoverseConfig, resolveEidoverseCredentialFromEnv, {
         logger: hubLogger,
@@ -61,7 +59,7 @@ async function main(): Promise<void> {
   const eidoverseBody = eidoverseTools
     && claimGrantsEidoverseBodyActions(config.psfn.satelliteClaim)
     ? new EidoverseBodyRunner(loadEidoverseBodyRunnerConfig(), eidoverseTools, {
-        logger: { warn: (message) => console.warn(message) },
+        logger: hubLogger,
       })
     : null;
   // Snapshot works on either transport. Each one names the URL its origin may
@@ -92,7 +90,7 @@ async function main(): Promise<void> {
   const eidoverseSnapshot = eidoverseSnapshotConfig
     ? new EidoverseSnapshotSource(eidoverseSnapshotConfig, {
         artifactsRoot: config.artifactsRoot,
-        logger: { warn: (message) => console.warn(message) },
+        logger: hubLogger,
       })
     : null;
   const server = new RealtimeHubServer(config, {
@@ -132,7 +130,7 @@ async function main(): Promise<void> {
       }, { logger: hubLogger })
     : eidoverseConfig && eidoverse
       ? createEidoverseProductionWakeLifecycle(eidoverse, server, eidoverseConfig, {
-          logger: { warn: (message) => console.warn(message) },
+          logger: hubLogger,
         })
       : null;
   // The control port carries the companion's own world-avatar surface whenever
@@ -168,9 +166,9 @@ async function main(): Promise<void> {
     ]);
     throw error;
   }
-  console.log(`TS hub listening on ws://${config.bindHost}:${config.port}/`);
+  console.info("hub.listen", { port: config.port });
   if (control) {
-    console.log(`Hub control listening on http://${config.control?.bindHost}:${config.control?.port}/internal/v1/`);
+    console.info("hub.control.listen", { port: config.control?.port });
   }
 
   let stopping = false;
@@ -190,8 +188,9 @@ async function main(): Promise<void> {
       throw new AggregateError(errors, "Satellite Hub shutdown failed");
     }
   };
-  process.once("SIGINT", () => { void stop(); });
-  process.once("SIGTERM", () => { void stop(); });
+  const requestStop = () => { void stop().catch((error) => { console.error("Hub shutdown failed", error); process.exitCode = 1; }); };
+  process.once("SIGINT", requestStop);
+  process.once("SIGTERM", requestStop);
 }
 
 main().catch((error) => {

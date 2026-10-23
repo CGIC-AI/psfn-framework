@@ -1,9 +1,11 @@
-import fs from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 
 import { wrapPcmAsWav } from "../shared/audio.js";
+import { privateDirectory, readPrivateArtifact, writePrivateArtifact } from "../shared/private-artifacts.js";
 
 export interface ArtifactTurn {
+  root: string;
   sessionId: string;
   turnId: string;
   directory: string;
@@ -21,13 +23,14 @@ export function createArtifactTurn(root: string, sessionId: string): ArtifactTur
   const startedAt = new Date();
   const dateKey = startedAt.toISOString().slice(0, 10).replaceAll("-", "");
   const timeKey = startedAt.toISOString().slice(11, 19).replaceAll(":", "");
-  const safeSession = sessionId.replaceAll(/[/:]/g, "_");
-  const turnId = `turn-${Math.random().toString(16).slice(2, 10)}`;
+  const safeSession = createHash("sha256").update(sessionId).digest("hex").slice(0, 16);
+  const turnId = `turn-${randomUUID()}`;
   const directory = path.join(root, dateKey, `${timeKey}_${safeSession}_${turnId}`);
-  fs.mkdirSync(directory, { recursive: true });
+  privateDirectory(root, directory);
   const pcmPath = path.join(directory, "audio.pcm");
-  fs.writeFileSync(pcmPath, "");
+  writePrivateArtifact(root, pcmPath, "");
   return {
+    root,
     sessionId,
     turnId,
     directory,
@@ -43,14 +46,14 @@ export function createArtifactTurn(root: string, sessionId: string): ArtifactTur
 }
 
 export function appendPcm(turn: ArtifactTurn, chunk: Buffer): void {
-  fs.appendFileSync(turn.pcmPath, chunk);
+  writePrivateArtifact(turn.root, turn.pcmPath, chunk, true);
   turn.bytesReceived += chunk.length;
   turn.chunks += 1;
 }
 
 export function finalizeWav(turn: ArtifactTurn): void {
-  const pcm = fs.readFileSync(turn.pcmPath);
-  fs.writeFileSync(
+  const pcm = readPrivateArtifact(turn.root, turn.pcmPath);
+  writePrivateArtifact(turn.root,
     turn.wavPath,
     wrapPcmAsWav(pcm, {
       sampleRate: 16000,
@@ -60,13 +63,13 @@ export function finalizeWav(turn: ArtifactTurn): void {
   );
 }
 
-export function writeJson(filePath: string, value: unknown): void {
-  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
+export function writeJson(turn: ArtifactTurn, filePath: string, value: unknown): void {
+  writePrivateArtifact(turn.root, filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 export function appendEvent(turn: ArtifactTurn, type: string, payload: unknown): void {
-  fs.appendFileSync(
+  writePrivateArtifact(turn.root,
     turn.eventsPath,
-    `${JSON.stringify({ type, payload, timestamp: new Date().toISOString() })}\n`,
+    `${JSON.stringify({ type, payload, timestamp: new Date().toISOString() })}\n`, true,
   );
 }

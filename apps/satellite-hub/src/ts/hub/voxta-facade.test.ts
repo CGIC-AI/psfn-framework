@@ -831,6 +831,8 @@ test("Voxta facade writes VaM-playable WAV artifacts when VOXTA audio folder is 
     assert.match(String(chunk.audioUrl), /\.wav$/);
     assert.equal(path.dirname(String(chunk.audioUrl)), audioFolder);
     assert.equal(fs.existsSync(String(chunk.audioUrl)), true);
+    assert.equal(fs.statSync(String(chunk.audioUrl)).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(audioFolder).mode & 0o777, 0o700);
     const wav = fs.readFileSync(String(chunk.audioUrl));
     assert.equal(wav.toString("ascii", 0, 4), "RIFF");
     assert.equal(wav.toString("ascii", 8, 12), "WAVE");
@@ -1149,6 +1151,8 @@ test("Voxta facade accepts AcidBubbles vision capture uploads and exposes metada
     assert.equal(capture.mimeType, "image/jpeg");
     assert.equal(capture.bytes, 4);
     assert.equal(fs.existsSync(capture.filePath), true);
+    assert.equal(fs.statSync(capture.filePath).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(path.dirname(capture.filePath)).mode & 0o777, 0o700);
     assert.equal(fs.readFileSync(capture.filePath).toString("hex"), "ffd8ffd9");
     const image = agent.calls[0]?.channel?.visionCaptureImages?.[0];
     assert.ok(image);

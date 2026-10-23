@@ -28,8 +28,8 @@ export interface EidoverseMcpConfig {
 }
 
 export interface EidoverseMcpLogger {
-  info(message: string): void;
-  warn(message: string): void;
+  info(message: string, fields?: Record<string, unknown>): void;
+  warn(message: string, fields?: Record<string, unknown>): void;
 }
 
 export type EidoverseCredentialResolver = (reference: string) => Promise<string>;
@@ -92,7 +92,7 @@ export class EidoverseMcpClient {
     options: EidoverseMcpClientOptions = {},
   ) {
     this.remainingReconnectAttempts = config.reconnectMaxAttempts;
-    this.logger = options.logger ?? SILENT_LOGGER;
+    this.logger = privateHubLogger(options.logger ?? SILENT_LOGGER);
   }
 
   start(): Promise<void> {
@@ -507,3 +507,4 @@ export function optionalEnv(
 function uniqueNonEmpty(values: readonly string[]): readonly string[] {
   return [...new Set(values.filter((value) => value.length > 0))];
 }
+import { privateHubLogger } from "../shared/private-log.js";

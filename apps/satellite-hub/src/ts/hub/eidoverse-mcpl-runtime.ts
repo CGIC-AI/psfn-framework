@@ -1,3 +1,4 @@
+import { hubConsole as console, privateHubLogger } from "../shared/private-log.js";
 /**
  * Push-driven wake runtime for the MCPL transport.
  *
@@ -40,12 +41,10 @@ interface EidoverseMcplWakeTarget {
 }
 
 interface EidoverseMcplWakeLogger {
-  warn(message: string): void;
+  warn(message: string, fields?: Record<string, unknown>): void;
   info?(message: string): void;
 }
 
-/** How many characters of a waking message the info log line carries. */
-const WAKE_LOG_TEXT_PREFIX = 120;
 /** Producer tag on the Hub's own echoed speech (eidoverse `chat:from-agent`). */
 const FROM_AGENT_TAG = "chat:from-agent";
 
@@ -108,6 +107,7 @@ class EidoverseMcplWakeRuntime {
     private readonly config: EidoverseMcplWakeConfig,
     private readonly logger: EidoverseMcplWakeLogger,
   ) {
+    this.logger = privateHubLogger(logger);
     if (!Number.isInteger(config.wakeQueueLimit) || config.wakeQueueLimit <= 0) {
       throw new Error("Eidoverse MCPL wake queue limit must be a positive integer");
     }
@@ -165,13 +165,13 @@ class EidoverseMcplWakeRuntime {
   private reportDrain(): void {
     if (!this.overflowReported) return;
     this.overflowReported = false;
-    this.logger.warn(`Eidoverse MCPL wake dispatch queue drained; ${this.dropCounts()}`);
+    this.logger.warn("Eidoverse MCPL wake dispatch queue drained", this.dropCounts());
   }
 
-  private dropCounts(): string {
-    return `episode dropped batches ${this.droppedBatches - this.episodeBaseBatches}, `
-      + `dropped messages ${this.droppedMessages - this.episodeBaseMessages}; `
-      + `cumulative dropped batches ${this.droppedBatches}, dropped messages ${this.droppedMessages}`;
+  private dropCounts(): Record<string, number> {
+    return { episodeDroppedBatches: this.droppedBatches - this.episodeBaseBatches,
+      episodeDroppedMessages: this.droppedMessages - this.episodeBaseMessages,
+      droppedBatches: this.droppedBatches, droppedMessages: this.droppedMessages };
   }
 
   /**
@@ -189,8 +189,7 @@ class EidoverseMcplWakeRuntime {
     if (this.overflowReported) return;
     this.overflowReported = true;
     this.logger.warn(
-      `Eidoverse MCPL wake dispatch queue is full (limit ${this.config.wakeQueueLimit}); `
-      + this.dropCounts(),
+      "Eidoverse MCPL wake dispatch queue full", { limit: this.config.wakeQueueLimit, ...this.dropCounts() },
     );
   }
 
@@ -213,8 +212,7 @@ class EidoverseMcplWakeRuntime {
         // reaches `nova`. An explicit @-address that names none of our
         // names is somebody else's mention (psfn-framework-q1kit).
         this.logger.info?.(
-          `Eidoverse wake skipped: message ${message.messageId ?? "?"} @-addresses another participant `
-          + `text=${JSON.stringify(pingLine.slice(0, WAKE_LOG_TEXT_PREFIX))}`,
+          "Eidoverse wake skipped: addressed another participant",
         );
         continue;
       }
@@ -266,9 +264,7 @@ class EidoverseMcplWakeRuntime {
     const utteranceId = deterministicUtteranceId(this.nextWakeSequence, event);
     this.nextWakeSequence += 1;
     this.logger.info?.(
-      `Eidoverse wake: message ${event.messageId ?? "?"} from ${event.author?.id ?? "?"} `
-      + `(${event.speaker?.kind ?? "unknown"}) kind=${event.kind} reason=${event.reason ?? "tag"} `
-      + `text=${JSON.stringify(event.pingLine.slice(0, WAKE_LOG_TEXT_PREFIX))}`,
+      "Eidoverse wake accepted",
     );
     try {
       await this.target.handleEidoverseAddressedUtterance({

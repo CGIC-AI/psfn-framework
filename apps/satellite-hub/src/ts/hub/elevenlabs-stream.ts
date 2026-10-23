@@ -1,3 +1,4 @@
+import { hubConsole as console } from "../shared/private-log.js";
 import crypto from "node:crypto";
 
 import WebSocket from "ws";

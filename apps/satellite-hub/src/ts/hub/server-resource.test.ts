@@ -331,3 +331,158 @@ test("large declared negotiation bodies never allocate their advertised size", a
     assert.equal((await fetch(`http://127.0.0.1:${hub.port}/`)).status, 200);
   } finally { await hub.close(); }
 });
+
+test("closed audio sockets retain their quota until deferred STT settles", async () => {
+  const hub = await startHub({ HUB_TEST_DEFER_VOXTA_STT: "true" }, { maxAuthenticatedConnections: 2 });
+  const client = await voxtaClient(hub.port);
+  const route = `ws://127.0.0.1:${hub.port}/ws/audio/input/stream?sessionId=${client.sessionId}`;
+  try {
+    const first = new WebSocket(route, { headers: { Authorization: `Bearer ${token}` } });
+    await once(first, "open");
+    first.send(JSON.stringify({ sampleRate: 16000, channels: 1, bitsPerSample: 16, bufferMilliseconds: 30, contentType: "audio/pcm" }));
+    first.send(Buffer.alloc(8)); first.close(1000); await once(first, "close");
+    const blocked = await new Promise<number>((resolve, reject) => {
+      const socket = new WebSocket(route, { headers: { Authorization: `Bearer ${token}` } });
+      socket.once("unexpected-response", (_request, response) => { response.resume(); socket.terminate(); resolve(response.statusCode!); });
+      socket.once("error", () => undefined);
+      socket.once("open", () => { socket.terminate(); reject(new Error("Closed-socket STT escaped its quota")); });
+    });
+    assert.equal(blocked, 429);
+    hub.child.send("releaseStt");
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const status = once(hub.child, "message"); hub.child.send("status");
+      if ((await status)[0].pendingProviders === 0) break;
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    const recovered = new WebSocket(route, { headers: { Authorization: `Bearer ${token}` } });
+    await once(recovered, "open"); recovered.terminate();
+  } finally { client.socket.terminate(); hub.child.send("releaseStt"); await hub.close(); }
+});
+
+test("continuous Pi PCM remains healthy while an accepted utterance waits for slow STT", async () => {
+  const hub = await startHub({ HUB_TEST_DEFER_REALTIME_STT: "true" }, { maxQueuedMessages: 4, maxAudioBytes: 2048, audioEndpointSilenceMs: 1 });
+  const socket = new WebSocket(`ws://127.0.0.1:${hub.port}/`);
+  try {
+    const messages: string[] = [];
+    socket.on("message", raw => messages.push(raw.toString()));
+    await once(socket, "open");
+    socket.send(JSON.stringify({ type: "audio", audio: Buffer.alloc(32, 20).toString("base64") }));
+    socket.send(JSON.stringify({ type: "audio", audio: Buffer.alloc(32).toString("base64") }));
+    for (let sample = 0; sample < 12; sample += 1) {
+      await new Promise(resolve => setTimeout(resolve, 20));
+      if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "audio", audio: Buffer.alloc(640).toString("base64") }));
+    }
+    assert.equal(socket.readyState, WebSocket.OPEN);
+    const waiting = once(hub.child, "message"); hub.child.send("status");
+    assert.equal((await waiting)[0].pendingProviders, 1);
+    hub.child.send("releaseStt");
+    for (let attempt = 0; attempt < 100 && !messages.some(message => message.includes("Valid reply")); attempt += 1) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.ok(messages.some(message => message.includes("Valid reply")));
+    const status = once(hub.child, "message"); hub.child.send("status");
+    const counts = (await status)[0];
+    assert.equal(counts.pendingProviders, 0);
+    assert.equal(counts.acceptedPcmBytes, 64);
+  } finally { socket.terminate(); hub.child.send("releaseStt"); await hub.close(); }
+});
+
+test("post-close provider deadlines release quotas and shutdown aborts pending work", async () => {
+  const hub = await startHub({ HUB_TEST_DEFER_VOXTA_STT: "true" }, { maxAuthenticatedConnections: 2, maxProviderOperations: 1, providerTimeoutMs: 100 });
+  const client = await voxtaClient(hub.port);
+  const begin = async (): Promise<void> => {
+    const socket = new WebSocket(`ws://127.0.0.1:${hub.port}/ws/audio/input/stream?sessionId=${client.sessionId}`, { headers: { Authorization: `Bearer ${token}` } });
+    await once(socket, "open");
+    socket.send(JSON.stringify({ sampleRate: 16000, channels: 1, bitsPerSample: 16, bufferMilliseconds: 30, contentType: "audio/pcm" }));
+    socket.send(Buffer.alloc(8)); socket.close(1000); await once(socket, "close");
+  };
+  try {
+    await begin();
+    await new Promise(resolve => setTimeout(resolve, 150));
+    const status = once(hub.child, "message"); hub.child.send("status");
+    assert.equal((await status)[0].pendingProviders, 0);
+    await begin();
+    const exited = once(hub.child, "exit"); hub.child.kill("SIGTERM");
+    assert.equal((await exited)[0], 0);
+  } finally { client.socket.terminate(); await hub.close(); }
+});
+
+test("abort-ignoring provider work remains charged after timeout and shutdown has a hard bound", async () => {
+  const hub = await startHub({ HUB_TEST_DEFER_VOXTA_STT: "true", HUB_TEST_IGNORE_PROVIDER_ABORT: "true" },
+    { maxAuthenticatedConnections: 2, maxProviderOperations: 1, providerTimeoutMs: 80, authenticationTimeoutMs: 80 });
+  const client = await voxtaClient(hub.port);
+  const route = `ws://127.0.0.1:${hub.port}/ws/audio/input/stream?sessionId=${client.sessionId}`;
+  const begin = async (): Promise<void> => {
+    const socket = new WebSocket(route, { headers: { Authorization: `Bearer ${token}` } }); await once(socket, "open");
+    socket.send(JSON.stringify({ sampleRate: 16000, channels: 1, bitsPerSample: 16, bufferMilliseconds: 30, contentType: "audio/pcm" }));
+    socket.send(Buffer.alloc(8)); socket.close(1000); await once(socket, "close");
+  };
+  const status = async (): Promise<{ pendingProviders: number; providerCalls: number }> => {
+    const result = once(hub.child, "message"); hub.child.send("status"); return (await result)[0];
+  };
+  try {
+    await begin(); await new Promise(resolve => setTimeout(resolve, 120));
+    assert.equal((await status()).pendingProviders, 1);
+    const denied = await new Promise<number>((resolve, reject) => {
+      const socket = new WebSocket(route, { headers: { Authorization: `Bearer ${token}` } });
+      socket.once("unexpected-response", (_request, response) => { response.resume(); socket.terminate(); resolve(response.statusCode!); });
+      socket.once("error", () => undefined); socket.once("open", () => { socket.terminate(); reject(new Error("Detached provider quota bypass")); });
+    });
+    assert.equal(denied, 429); assert.equal((await status()).providerCalls, 1);
+    hub.child.send("releaseStt");
+    for (let attempt = 0; attempt < 100 && (await status()).pendingProviders; attempt += 1) await new Promise(resolve => setTimeout(resolve, 5));
+    await begin(); assert.equal((await status()).pendingProviders, 1);
+    const started = Date.now(); const exited = once(hub.child, "exit"); hub.child.kill("SIGTERM");
+    assert.equal((await exited)[0], 1);
+    assert.ok(Date.now() - started < 1000);
+  } finally { client.socket.terminate(); await hub.close(); }
+});
+
+test("interrupt aborts pending STT without a transcript artifact and the next utterance recovers", async () => {
+  const hub = await startHub({ HUB_TEST_DEFER_REALTIME_STT: "true" }, { maxProviderOperations: 1 });
+  const socket = new WebSocket(`ws://127.0.0.1:${hub.port}/`);
+  const messages: string[] = []; socket.on("message", raw => messages.push(raw.toString()));
+  const status = async (): Promise<{ pendingProviders: number; providerCalls: number; providerAborts: number }> => {
+    const result = once(hub.child, "message"); hub.child.send("status"); return (await result)[0];
+  };
+  const utterance = (): void => {
+    for (const message of [{ type: "turn.start" }, { type: "audio", audio: "AQACAAMA" }, { type: "turn.end" }]) socket.send(JSON.stringify(message));
+  };
+  try {
+    await once(socket, "open"); utterance();
+    for (let attempt = 0; attempt < 100 && !(await status()).pendingProviders; attempt += 1) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.equal((await status()).pendingProviders, 1);
+    const interruptedAt = Date.now();
+    socket.send('{"type":"interrupt"}');
+    for (let attempt = 0; attempt < 40 && !messages.some(message => message.includes("assistant.interrupted")); attempt += 1) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.ok(messages.some(message => message.includes("assistant.interrupted")));
+    assert.ok(Date.now() - interruptedAt < 250);
+    assert.equal((await status()).pendingProviders, 0);
+    assert.equal((await status()).providerAborts, 1);
+    assert.ok(!messages.some(message => /Valid transcript|Valid reply/.test(message)));
+    assert.equal(fs.existsSync(path.join(hub.root, "artifacts")), false);
+    utterance();
+    for (let attempt = 0; attempt < 100 && !(await status()).pendingProviders; attempt += 1) await new Promise(resolve => setTimeout(resolve, 5));
+    hub.child.send("releaseStt");
+    for (let attempt = 0; attempt < 100 && !messages.some(message => message.includes("Valid reply")); attempt += 1) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.ok(messages.some(message => message.includes("Valid reply")));
+  } finally { socket.terminate(); hub.child.send("releaseStt"); await hub.close(); }
+});
+
+test("a throwing subsystem cannot prevent real socket, HTTP, and provider shutdown", async () => {
+  const hub = await startHub({ HUB_TEST_DEFER_REALTIME_STT: "true", HUB_TEST_AGENT_CLOSE_FAIL: "true" }, { authenticationTimeoutMs: 80 });
+  const socket = new WebSocket(`ws://127.0.0.1:${hub.port}/`);
+  try {
+    await once(socket, "open");
+    for (const message of [{ type: "turn.start" }, { type: "audio", audio: "AQACAA==" }, { type: "turn.end" }]) socket.send(JSON.stringify(message));
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const pending = once(hub.child, "message"); hub.child.send("status");
+      if ((await pending)[0].pendingProviders === 1) break;
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    const closed = once(socket, "close"); const result = once(hub.child, "message"); hub.child.send("closeServer");
+    const state = (await result)[0];
+    assert.equal(state.type, "closed"); assert.equal(state.outcome, "failed");
+    assert.equal(state.address, null); assert.equal(state.pendingProviders, 0); assert.equal(state.providerAborts, 1);
+    assert.equal((await closed)[0], 1001);
+    await assert.rejects(fetch(`http://127.0.0.1:${hub.port}/`));
+  } finally { socket.terminate(); await hub.close(); }
+});

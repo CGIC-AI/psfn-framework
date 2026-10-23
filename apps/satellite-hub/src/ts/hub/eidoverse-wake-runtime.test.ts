@@ -67,7 +67,7 @@ test("production wake runtime sanitizes turn failures and continues without retr
   try {
     await runtime.pollOnce();
     assert.equal(calls, 1);
-    assert.deepEqual(warnings, ["Eidoverse wake turn failed"]);
+    assert.deepEqual(warnings.map(line => JSON.parse(line)), [{ level: "warn", event: "Eidoverse wake turn failed" }]);
     assert.doesNotMatch(warnings.join("\n"), /secret visitor payload/);
   } finally {
     await runtime.close();
@@ -97,7 +97,7 @@ test("production wake runtime sanitizes pending_pings failures", async () => {
   await waiting;
   await runtime.close();
 
-  assert.deepEqual(warnings, ["Eidoverse pending_pings poll failed"]);
+  assert.deepEqual(warnings.map(line => JSON.parse(line)), [{ level: "warn", event: "Eidoverse pending_pings poll failed" }]);
   assert.doesNotMatch(warnings.join("\n"), /secret MCP failure/);
 });
 

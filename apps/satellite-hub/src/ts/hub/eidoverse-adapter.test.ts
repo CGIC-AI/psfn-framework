@@ -320,7 +320,7 @@ test("world adapter logs one sanitized MCP say failure without retrying or faili
       userText: "Are you there?",
     }), "Still here.");
     assert.deepEqual(readSayCalls(recordPath), ["Still here."], "say failure must not retry");
-    assert.deepEqual(warnings, ["Eidoverse in-world say failed"]);
+    assert.deepEqual(warnings.map(line => JSON.parse(line)), [{ level: "warn", event: "Eidoverse in-world say failed" }]);
     assert.doesNotMatch(warnings.join("\n"), new RegExp(`${JOIN_TOKEN}|${TOKEN_REF}|${WORLD_URL}`));
     assert.deepEqual(sessions.getHistory(adapter.conversationId), [
       { role: "user", content: "Are you there?" },

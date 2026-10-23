@@ -1,3 +1,4 @@
+import { hubConsole as console } from "../shared/private-log.js";
 import {
   defaultCapabilitiesForProfile,
   frameworkCapabilitiesForSatelliteCapabilities,
@@ -317,7 +318,7 @@ export class EidoverseBodyRunner {
     if (config.walkTimeoutMs <= 0 || config.maxPendingNotes <= 0) {
       throw new Error("Eidoverse body runner timeouts and note budget must be positive");
     }
-    this.logger = options.logger ?? console;
+    this.logger = privateHubLogger(options.logger ?? console);
   }
 
   /**
@@ -540,3 +541,4 @@ function positiveIntegerEnv(
   }
   return value;
 }
+import { privateHubLogger } from "../shared/private-log.js";

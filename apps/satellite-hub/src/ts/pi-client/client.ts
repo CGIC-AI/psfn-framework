@@ -1,3 +1,4 @@
+import { hubConsole as console } from "../shared/private-log.js";
 import WebSocket, { type RawData } from "ws";
 
 import type { PiClientConfig } from "../shared/env.js";

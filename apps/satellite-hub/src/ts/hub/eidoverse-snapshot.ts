@@ -1,4 +1,5 @@
-import fs from "node:fs";
+import { hubConsole as console } from "../shared/private-log.js";
+import { writePrivateArtifact } from "../shared/private-artifacts.js";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 
@@ -76,7 +77,7 @@ export class EidoverseSnapshotSource {
     if (config.timeoutMs <= 0 || config.maxBytes <= 0) {
       throw new Error("Eidoverse snapshot timeout and size budget must be positive");
     }
-    this.logger = deps.logger ?? console;
+    this.logger = privateHubLogger(deps.logger ?? console);
     this.fetchImpl = deps.fetchImpl ?? fetch;
   }
 
@@ -103,7 +104,7 @@ export class EidoverseSnapshotSource {
     }
     if (!response.ok) {
       await discardBody(response);
-      this.logger.warn(`Eidoverse snapshot is unavailable (status ${response.status})`);
+      this.logger.warn("Eidoverse snapshot is unavailable");
       return null;
     }
     const mimeType = (response.headers.get("content-type") ?? "").split(";")[0]?.trim() ?? "";
@@ -173,12 +174,11 @@ export class EidoverseSnapshotSource {
     const capturedAt = new Date();
     const dateKey = capturedAt.toISOString().slice(0, 10).replaceAll("-", "");
     const directory = path.join(this.deps.artifactsRoot, "eidoverse-vision", dateKey);
-    fs.mkdirSync(directory, { recursive: true });
     const filePath = path.join(
       directory,
       `eidoverse_${safePathPart(sessionId)}_${safePathPart(requestId)}.png`,
     );
-    fs.writeFileSync(filePath, image);
+    writePrivateArtifact(this.deps.artifactsRoot, filePath, image);
     return {
       requestId,
       sessionId,
@@ -324,3 +324,4 @@ function positiveIntegerEnv(
   }
   return value;
 }
+import { privateHubLogger } from "../shared/private-log.js";

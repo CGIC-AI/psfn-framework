@@ -137,7 +137,8 @@ test("an enrolled world emanation signs its wake turns: device authority attache
   const agent = new FakeAgent();
   const info: string[] = [];
   const { adapter } = adapterWith(door, agent, info, { emanationRegistry: emanationRegistry([WORLD_EMANATION]) });
-  assert.ok(info.some((line) => /world emanation enrolled as Hub device "world-emanation" \(v2, place eidoverse:commons\)/u.test(line)), info.join("\n"));
+  assert.ok(info.some((line) => JSON.parse(line).event === "Eidoverse world emanation enrolled" && typeof JSON.parse(line).deviceIdTag === "string"), info.join("\n"));
+  assert.doesNotMatch(info.join("\n"), /world-emanation|eidoverse:commons/);
   await adapter.moveTo({ world: "commons", region: "plaza", position: { x: 8, z: -2 } });
   await adapter.handleAddressedUtterance({ utteranceId: "e1", userText: "visitor: are you registered?" });
   const channel = agent.calls[0]?.channel;
@@ -191,7 +192,8 @@ test("move to a participant walks to a standoff beside them and reports arrival 
   assert.equal(outcome.walk?.status, "arrived");
   assert.deepEqual(door.walks, [{ x: 3.5, z: 0 }]);
   assert.deepEqual([outcome.walk?.x, outcome.walk?.z], [3.5, 0]);
-  assert.ok(info.some((line) => /walk_to arrived at \(3\.5, 0\) in world "commons"/u.test(line)), info.join("\n"));
+  assert.ok(info.some((line) => JSON.parse(line).event === "Eidoverse body walk_to completed" && JSON.parse(line).outcome === "arrived"), info.join("\n"));
+  assert.doesNotMatch(info.join("\n"), /commons|3\.5/);
 
   const unknown = await adapter.moveTo({ participant: "ghost" });
   assert.deepEqual(unknown, { accepted: false, world: "commons", reason: "participant_unknown" });
@@ -253,7 +255,8 @@ test("a region-only move answers no_position instead of a silent accept, and rem
   assert.equal(outcome.accepted && outcome.placeId, "eidoverse:commons:plaza");
   assert.equal(outcome.accepted && outcome.walk?.status, "no_position");
   assert.deepEqual(door.walks, [], "nothing walked");
-  assert.ok(lines.some((line) => /walk_to skipped: region "plaza" .* has no position/u.test(line)));
+  assert.ok(lines.some((line) => JSON.parse(line).event === "Eidoverse body walk_to no_position"));
+  assert.doesNotMatch(lines.join("\n"), /plaza|commons/);
   const perception = await adapter.perceive();
   assert.equal(perception.region, "plaza");
   adapter.disconnect();
@@ -266,11 +269,11 @@ test("a walk that outlasts the bounded wait still logs its arrival when it settl
   const { adapter, runner } = adapterWith(door, new FakeAgent(), lines);
   const outcome = await adapter.moveTo({ position: { x: 4, z: 4 }, waitMs: 5 });
   assert.equal(outcome.accepted && outcome.walk?.status, "walking");
-  assert.ok(lines.some((line) => /still walking after bounded wait/u.test(line)));
+  assert.ok(lines.some((line) => JSON.parse(line).event === "Eidoverse body walk_to walking"));
   await runner.close();
   await new Promise((resolve) => setImmediate(resolve));
   assert.ok(
-    lines.some((line) => /Eidoverse body walk_to arrived at \(4, 4\) in world "commons"/u.test(line)),
+    lines.some((line) => JSON.parse(line).event === "Eidoverse body walk_to completed" && JSON.parse(line).outcome === "arrived"),
     `arrival was logged after the deferred walk settled: ${lines.join(" | ")}`,
   );
   adapter.disconnect();

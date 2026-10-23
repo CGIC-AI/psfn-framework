@@ -83,6 +83,7 @@ Require(stderr.ToString().Contains("audio.localization_failed"), "Errors did not
 Console.WriteLine("PASS: actual relay logger rejects private fields, exceptions, scopes and formatters before its sinks");
 await ArtifactTests.RunAsync();
 await MicrophoneTests.RunAsync();
+await BuildContractTests.RunAsync();
 
 static void Require(bool condition, string failure)
 {

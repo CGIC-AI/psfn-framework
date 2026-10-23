@@ -141,6 +141,8 @@ function baseValues(): Record<string, unknown> {
     satelliteHub: {
       enabled: true,
       textOnly: true,
+      // Eidoverse-only render fixtures still need explicit caller authority.
+      voxta: { enabled: true, authTokenSecretRef: { name: 'hub-voxta-test', key: 'VOXTA_AUTH_TOKEN' } },
       image: { repository: 'localhost/psfn-satellite-hub', tag: '0.1.0-verify-000000000000' },
       identity: {
         satelliteId: 'hub-example',
@@ -228,6 +230,7 @@ function hubDeviceValues(hubOverrides: Record<string, unknown> = {}): Record<str
   return {
     satelliteHub: {
       ...(baseValues().satelliteHub as Record<string, unknown>),
+      voxta: { enabled: false, authTokenSecretRef: { name: '', key: '' } },
       deviceRegistry: { enabled: true, devices: hubDevices() },
       deviceAssertion: {
         enabled: true,

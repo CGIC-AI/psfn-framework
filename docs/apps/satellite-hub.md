@@ -223,7 +223,7 @@ The hub keeps a per-session **EmbodiedSessionRegistry**
 The TypeScript hub entrypoint is `src/ts/hub/main.ts`. It builds a
 `RealtimeHubServer` from `loadHubConfig`, starts the optional companion bridge
 and Home Assistant integration, and binds the websocket/HTTP server on
-`REALTIME_VOICE_BIND_HOST` / `REALTIME_VOICE_PORT` (default `0.0.0.0:8787`). The
+`REALTIME_VOICE_BIND_HOST` / `REALTIME_VOICE_PORT` (default `127.0.0.1:8787`). The
 Voxta facade shares the same HTTP server: its HTTP routes and `/hub` upgrade are
 served before the realtime websocket path
 ([`server.ts`](/apps/satellite-hub/src/ts/hub/server.ts#L71-L178)).
@@ -442,7 +442,13 @@ duration 0–60000 ms) and a 429 from PSFN maps to a "cooling down" error
 
 The Voxta facade (`voxta-facade.ts`) is a Voxta-server-shaped surface for VaM /
 AcidBubbles clients that still routes every conversation through PSFN. It is
-mounted on the TypeScript hub and enabled by default (`VOXTA_FACADE_ENABLED`):
+mounted on the TypeScript hub and disabled by default. Enable it explicitly with
+`VOXTA_FACADE_ENABLED=true` and enrolled-device or dedicated `VOXTA_AUTH_TOKEN`
+authority. All HTTP requests and WebSocket upgrades require an Authorization
+Bearer header; the SignalR `authenticate` payload is protocol presentation only.
+The local native relay supplies headers for clients that cannot. See the
+[authentication migration and rotation guide](../../apps/satellite-hub/README.md#hub-authentication-and-migration).
+The facade supports:
 
 - `POST /hub/negotiate?negotiateVersion=1` and `WS /hub?id=<connectionToken>`
   (SignalR JSON framing, record separator `\x1e`, 15 s keepalive), plus the
@@ -460,9 +466,9 @@ mounted on the TypeScript hub and enabled by default (`VOXTA_FACADE_ENABLED`):
 - outbound `ReceiveMessage` events: `chatFlow` (Thinking / WaitingForUser),
   `replyGenerating`, `replyStart`, `replyChunk` (with `audioUrl`), `replyEnd`,
   `chatStarted`, `recordingRequest`, `visionCaptureRequest`, and
-  `appTrigger`; the Voxta session/chat/assistant/user ids are stable GUIDs
-  derived from the satellite, assistant, and user ids unless pinned by
-  `VOXTA_SESSION_ID` / `VOXTA_CHAT_ID`
+  `appTrigger`; session/chat IDs are server-minted GUIDs scoped to the
+  authenticated principal and retained across reconnects for the Hub process
+  lifetime. Client-selected session IDs cannot attach to another principal
   ([`voxta-facade.ts`](/apps/satellite-hub/src/ts/hub/voxta-facade.ts#L700-L749));
 - TTS artifacts: with `VOXTA_AUDIO_FOLDER` set, `replyChunk.audioUrl` is a local
   `.wav` written into the VaM audio folder (typically
@@ -681,8 +687,10 @@ Runtime config comes from the project-local `.env`. Key settings:
   `<gateway>/v1` value as `PSFN_API_BASE_URL`), `PSFN_COMPANION_API_KEY`,
   `PSFN_COMPANION_PREVIEW_MAX_BYTES`, `PSFN_COMPANION_RECONNECT_BASE_MS`,
   `PSFN_COMPANION_RECONNECT_MAX_MS`.
-- **Voxta**: `VOXTA_FACADE_ENABLED` (default true), `VOXTA_SATELLITE_ID`,
-  `VOXTA_SATELLITE_NAME`, `VOXTA_SESSION_ID`, `VOXTA_CHAT_ID`,
+- **Hub access**: `HUB_DEVELOPER_MODE` (default false, literal loopback only),
+  `HUB_ALLOWED_ORIGINS` (exact browser origins, empty by default).
+- **Voxta**: `VOXTA_FACADE_ENABLED` (default false), `VOXTA_AUTH_TOKEN`, `VOXTA_SATELLITE_ID`,
+  `VOXTA_SATELLITE_NAME`,
   `VOXTA_ASSISTANT_NAME`, `VOXTA_USER_NAME`, `VOXTA_PUBLIC_BASE_URL`,
   `VOXTA_AUDIO_FOLDER`, `VOXTA_STT_STREAM_ENABLED`,
   `VOXTA_VISION_CAPTURE_TIMEOUT_MS`, `VOXTA_APP_TRIGGER_ALLOWLIST`.

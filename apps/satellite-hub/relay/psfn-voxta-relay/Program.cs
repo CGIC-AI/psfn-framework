@@ -24,6 +24,7 @@ if (RelayOptions.ShouldShowHelp(args))
 }
 
 var options = RelayOptions.FromArgs(args);
+RelayAccess.ValidateOptions(options);
 
 builder.WebHost.UseUrls(options.ListenUrl);
 builder.Services.AddSignalR(options =>
@@ -31,12 +32,21 @@ builder.Services.AddSignalR(options =>
     options.MaximumReceiveMessageSize = 1024 * 1024 * 32;
 });
 builder.Services.AddSingleton(options);
-builder.Services.AddSingleton(new HttpClient());
+builder.Services.AddSingleton(new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }));
 builder.Services.AddSingleton<RelaySessionRegistry>();
 builder.Services.AddSingleton<AudioArtifactStore>();
 builder.Services.AddSingleton<RemoteApiProxy>();
 
 var app = builder.Build();
+app.Use(async (context, next) =>
+{
+    if (!RelayAccess.Allows(context.Request, options))
+    {
+        context.Response.StatusCode = StatusCodes.Status403Forbidden;
+        return;
+    }
+    await next(context);
+});
 
 app.MapHub<VoxtaRelayHub>("/hub", signalr =>
 {
@@ -383,7 +393,7 @@ public sealed class BridgeSession : IAsyncDisposable
     }
 }
 
-public sealed class AudioArtifactStore(HttpClient httpClient, ILogger<AudioArtifactStore> logger)
+public sealed class AudioArtifactStore(HttpClient httpClient, RelayOptions options, ILogger<AudioArtifactStore> logger)
 {
     public async Task<string> EnsureLocalAsync(string audioUrl, string audioFolder)
     {
@@ -411,7 +421,9 @@ public sealed class AudioArtifactStore(HttpClient httpClient, ILogger<AudioArtif
 
     private async Task<string> DownloadAsync(Uri uri, string audioFolder)
     {
-        using var response = await httpClient.GetAsync(uri);
+        using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+        RelayAccess.Authenticate(request, options);
+        using var response = await httpClient.SendAsync(request);
         response.EnsureSuccessStatusCode();
         var extension = InferExtension(uri, response.Content.Headers.ContentType);
         var localPath = Path.Combine(audioFolder, $"psfn_{Hash(uri.ToString())}{extension}");
@@ -485,6 +497,10 @@ public sealed class MicrophoneStream : IAsyncDisposable
         }
 
         var wsUrl = BuildAudioStreamUrl(_options.RemoteApiBaseUrl, _sessionId);
+        if (!string.IsNullOrWhiteSpace(_options.RemoteBearerToken))
+        {
+            _socket.Options.SetRequestHeader("Authorization", $"Bearer {_options.RemoteBearerToken}");
+        }
         await _socket.ConnectAsync(wsUrl, CancellationToken.None);
         await SendJsonAsync(new
         {
@@ -616,6 +632,7 @@ public sealed class RemoteApiProxy(HttpClient httpClient, RelayOptions options)
             }
         }
 
+        RelayAccess.Authenticate(request, options);
         using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, context.RequestAborted);
         context.Response.StatusCode = (int)response.StatusCode;
         foreach (var header in response.Headers)

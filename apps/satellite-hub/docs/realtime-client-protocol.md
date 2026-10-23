@@ -23,6 +23,12 @@ ws://<hub-host>:8787/
 
 Set `DEVICE_TRANSPORT=realtime` to run only this path, or `DEVICE_TRANSPORT=hybrid` to run it beside the ESPHome fallback.
 
+The listener defaults to loopback and requires enrolled-device credentials.
+Unauthenticated local development requires explicit `HUB_DEVELOPER_MODE=true`
+and a literal `127.0.0.1` or `::1` bind. Every supplied browser Origin must match
+`HUB_ALLOWED_ORIGINS`; an absent Origin is permitted for native clients. See
+the [authentication and migration guide](../README.md#hub-authentication-and-migration).
+
 ## Client To Hub
 
 All client messages are JSON text frames.
@@ -34,8 +40,8 @@ All client messages are JSON text frames.
   "type": "hello",
   "deviceId": "pi-zero-2w-kitchen",
   "deviceName": "Kitchen Pi",
+  "credential": "<device credential from the operator>",
   "sessionId": "optional-stable-thread-id",
-  "channelId": "optional-explicit-psfn-channel-id",
   "satelliteId": "pi-zero-2w-kitchen",
   "satelliteName": "Kitchen Pi",
   "capabilities": {
@@ -47,10 +53,12 @@ All client messages are JSON text frames.
 }
 ```
 
-`channelId` is optional. If omitted, the hub derives a stable PSFN channel id
-as `<PSFN_CHANNEL_TYPE>:<sessionId>`, defaulting to
-`satellite.endpoint:<sessionId>`. Endpoint identity and current capabilities are
-advertised to PSFN separately through the satellite claim envelope.
+Use the returned `hello.ack.sessionId` and `channelId`. The server scopes any
+requested thread label to the enrolled device, companion, and enrollment
+version and mints an opaque session ID. Development callers receive a fresh
+connection identity; supplied session/channel/device IDs grant no attachment.
+Endpoint identity and current capabilities are advertised to PSFN separately
+through the satellite claim envelope.
 
 When `HUB_DEVICE_REGISTRY_PATH` is configured, the enrolled protocol is
 stricter: `credential` and the exact registry `deviceId` are required, while

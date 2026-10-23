@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash, createPrivateKey } from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import WebSocket from "ws";
 
@@ -30,6 +33,273 @@ const DEVICE_ASSERTION_ISSUER = createHubDeviceAssertionIssuer({
   ttlSeconds: 30,
 });
 
+test("default hub refuses anonymous HTTP and raw WebSocket Voxta bypasses", async () => {
+  const runtime = config();
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "hub-anonymous-"));
+  runtime.artifactsRoot = path.join(temporary, "artifacts");
+  runtime.deviceRegistry = null;
+  runtime.voxta.enabled = true;
+  const server = new RealtimeHubServer(runtime, { agent: agent() });
+  await server.start();
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  try {
+    for (const [route, method] of [
+      ["/hub/negotiate", "POST"],
+      ["/api/configurations/chosen/services/SpeechToText", "PUT"],
+      ["/api/voxta/audio/chosen.wav", "GET"],
+      ["/api/vision/requests/chosen/send?sessionId=chosen", "POST"],
+    ] as const) {
+      const response: Response = await fetch(`http://127.0.0.1:${address.port}${route}`, { method });
+      assert.equal(response.status, 401, route);
+    }
+    for (const route of ["/", "/hub", "/hub?id=chosen", "/ws/audio/input/stream?sessionId=chosen"]) {
+      assert.equal(await upgradeStatus(`ws://127.0.0.1:${address.port}${route}`), 401, route);
+    }
+    assert.equal(fs.existsSync(runtime.artifactsRoot), false);
+  } finally {
+    await server.close();
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
+test("developer mode and exposed runtime startup fail closed on ambiguous authority", () => {
+  for (const bindHost of ["0.0.0.0", "::", "localhost", "192.0.2.7"]) {
+    assert.throws(() => new RealtimeHubServer({
+      ...config(), bindHost, access: { developerMode: true, allowedOrigins: [] },
+    }, { agent: agent() }), /literal loopback/);
+  }
+  assert.throws(() => new RealtimeHubServer({
+    ...config(), bindHost: "0.0.0.0", deviceRegistry: null,
+  }, { agent: agent() }), /Non-loopback Hub requires/);
+  assert.throws(() => new RealtimeHubServer({
+    ...config(), access: { developerMode: false, allowedOrigins: ["*"] },
+  }, { agent: agent() }), /exact http\(s\) origins/);
+  for (const voxtaToken of ["weak", "b".repeat(64), credential.padEnd(64, "x")]) {
+    const runtime = config();
+    runtime.access = { developerMode: false, allowedOrigins: [], voxtaToken };
+    if (voxtaToken === "b".repeat(64)) runtime.psfn.apiKey = voxtaToken;
+    if (voxtaToken.startsWith(credential)) {
+      runtime.deviceRegistry = createHubDeviceRegistryAuthority(() => registry({
+        credentialSha256: createHash("sha256").update(voxtaToken).digest("hex"),
+      }));
+    }
+    assert.throws(() => new RealtimeHubServer(runtime, { agent: agent() }), /VOXTA_AUTH_TOKEN/);
+  }
+});
+
+test("HTTP and WebSocket Origin allowlists enforce the same authenticated boundary", async () => {
+  const runtime = config();
+  runtime.voxta.enabled = true;
+  runtime.access = { developerMode: false, allowedOrigins: ["https://client.example.test"], voxtaToken: "c".repeat(64) };
+  const server = new RealtimeHubServer(runtime, { agent: agent() });
+  await server.start();
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const base = `http://127.0.0.1:${address.port}`;
+  const headers = { Authorization: `Bearer ${runtime.access.voxtaToken}` };
+  try {
+    const denied = await fetch(`${base}/hub/negotiate`, { method: "POST", headers: { ...headers, Origin: "https://attacker.example.test" } });
+    assert.equal(denied.status, 403);
+    assert.equal(denied.headers.get("access-control-allow-origin"), null);
+    const allowed = await fetch(`${base}/hub/negotiate`, { method: "POST", headers: { ...headers, Origin: "https://client.example.test" } });
+    assert.equal(allowed.status, 200);
+    assert.equal(allowed.headers.get("access-control-allow-origin"), "https://client.example.test");
+    const { connectionToken } = await allowed.json() as { connectionToken: string };
+    assert.equal(await upgradeStatus(`ws://127.0.0.1:${address.port}/hub?id=${connectionToken}`, { Authorization: `Bearer ${credential}` }), 401);
+    assert.equal(await upgradeStatus(`ws://127.0.0.1:${address.port}/hub`, { ...headers, Origin: "https://attacker.example.test" }), 403);
+    assert.equal(await upgradeStatus(`ws://127.0.0.1:${address.port}/`, { Origin: "https://attacker.example.test" }), 403);
+    assert.equal(await upgradeStatus(`ws://127.0.0.1:${address.port}/hub?id=${connectionToken}`, { ...headers, Origin: "https://client.example.test" }), 101);
+    assert.equal((await fetch(`${base}/hub/negotiate?access_token=forbidden`, { method: "POST", headers })).status, 401);
+    const preflight = await fetch(`${base}/hub/negotiate`, { method: "OPTIONS", headers: { Origin: "https://client.example.test" } });
+    assert.equal(preflight.status, 204);
+    assert.equal(preflight.headers.get("access-control-allow-origin"), "https://client.example.test");
+  } finally {
+    await server.close();
+  }
+});
+
+test("authenticated Voxta sessions isolate histories and auxiliary routes between enrolled principals", async () => {
+  const runtime = config();
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "hub-isolation-"));
+  runtime.artifactsRoot = temporary;
+  runtime.voxta.enabled = true;
+  runtime.voxta.sttStreamEnabled = true;
+  const secondCredential = "second-device-secret";
+  const firstDevice = registry().devices[0]!;
+  runtime.deviceRegistry = createHubDeviceRegistryAuthority(() => ({
+    schemaVersion: 1,
+    devices: [firstDevice, { ...firstDevice, deviceId: "second", satelliteId: "second", endpointId: "second",
+      credentialSha256: createHash("sha256").update(secondCredential).digest("hex") }],
+  }));
+  const captureAgent = new BlockingAgent();
+  const server = new RealtimeHubServer(runtime, { agent: captureAgent, voxtaTts: {
+    async synthesizeWav() { return Buffer.from("RIFF invented audio fixture"); },
+  } });
+  await server.start();
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const base = `http://127.0.0.1:${address.port}`;
+  const first = await connectVoxta(address.port, credential);
+  const second = await connectVoxta(address.port, secondCredential);
+  try {
+    assert.notEqual(first.sessionId, second.sessionId);
+    first.send("send-first", { $type: "send", sessionId: first.sessionId, text: "first private history" });
+    await waitFor(() => first.frames.some(frame => frame.$type === "replyEnd"));
+    second.send("steal-session", { $type: "send", sessionId: first.sessionId, text: "steal history" });
+    await waitFor(() => second.frames.some(frame => frame.invocationId === "steal-session"));
+    assert.match(String(second.frames.find(frame => frame.invocationId === "steal-session")?.error), /does not belong/);
+    second.send("send-second", { $type: "send", sessionId: second.sessionId, text: "second private history" });
+    await waitFor(() => second.frames.some(frame => frame.$type === "replyEnd"));
+    assert.equal(captureAgent.calls.length, 2);
+    assert.deepEqual(captureAgent.calls[1]?.history?.map(message => message.content), ["second private history"]);
+    assert.equal(captureAgent.calls[0]?.channel?.deviceAuthority?.deviceId, "office-device");
+    const audioUrl = String(first.frames.find(frame => frame.$type === "replyChunk")?.audioUrl);
+    assert.equal((await fetch(audioUrl)).status, 401);
+    assert.equal((await fetch(audioUrl, { headers: { Authorization: `Bearer ${secondCredential}` } })).status, 404);
+    assert.equal((await fetch(audioUrl, { headers: { Authorization: `Bearer ${credential}` } })).status, 200);
+    const headers = { Authorization: `Bearer ${secondCredential}`, "Content-Type": "application/json" };
+    assert.equal((await fetch(`${base}/api/configurations/${first.configurationId}/services/TextToSpeech`, {
+      method: "PUT", headers, body: JSON.stringify({ enabled: false }),
+    })).status, 404);
+    assert.equal((await fetch(`${base}/api/vision/requests/chosen/send?sessionId=${first.sessionId}`, {
+      method: "POST", headers,
+    })).status, 404);
+    assert.equal(await upgradeStatus(`ws://127.0.0.1:${address.port}/ws/audio/input/stream?sessionId=${first.sessionId}`, headers), 403);
+    firstDevice.enrollmentStatus = "revoked";
+    first.send("revoked", { $type: "send", text: "must not enter history" });
+    await waitFor(() => first.socket.readyState === WebSocket.CLOSED);
+    assert.equal(captureAgent.calls.length, 2);
+  } finally {
+    first.socket.terminate();
+    second.socket.terminate();
+    await server.close();
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
+test("realtime thread labels cannot collide across enrolled device principals", async () => {
+  const runtime = config();
+  const secondCredential = "second-realtime-secret";
+  const firstDevice = registry().devices[0]!;
+  // The old device-id:hash concatenation let a crafted second device ID
+  // collide with another principal's selected thread.
+  const secondDeviceId = `${firstDevice.deviceId}:${createHash("sha256").update("chosen").digest("hex").slice(0, 20)}`;
+  runtime.deviceRegistry = createHubDeviceRegistryAuthority(() => ({ schemaVersion: 1, devices: [
+    firstDevice, { ...firstDevice, deviceId: secondDeviceId, satelliteId: "second", endpointId: "second",
+      credentialSha256: createHash("sha256").update(secondCredential).digest("hex") },
+  ] }));
+  const captureAgent = new BlockingAgent();
+  const server = new RealtimeHubServer(runtime, { agent: captureAgent });
+  await server.start();
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const sockets: WebSocket[] = [];
+  const histories: HubToClientMessage[][] = [];
+  try {
+    for (const [deviceId, token, sessionId] of [
+      [firstDevice.deviceId, credential, "chosen"], [secondDeviceId, secondCredential, undefined],
+    ] as const) {
+      const socket = new WebSocket(`ws://127.0.0.1:${address.port}`);
+      sockets.push(socket);
+      const messages: HubToClientMessage[] = [];
+      histories.push(messages);
+      socket.on("message", raw => messages.push(JSON.parse(raw.toString()) as HubToClientMessage));
+      await new Promise<void>(resolve => socket.once("open", resolve));
+      socket.send(JSON.stringify({ type: "hello", deviceId, credential: token, sessionId }));
+      await waitFor(() => messages.some(message => message.type === "hello.ack"));
+      socket.send(JSON.stringify({ type: "user.text", text: deviceId }));
+      await waitFor(() => messages.some(message => message.type === "message" && message.data.role === "assistant" && message.data.final));
+    }
+    const firstAck = histories[0]?.find(message => message.type === "hello.ack");
+    const secondAck = histories[1]?.find(message => message.type === "hello.ack");
+    assert.ok(firstAck?.type === "hello.ack" && secondAck?.type === "hello.ack");
+    assert.notEqual(firstAck.sessionId, secondAck.sessionId);
+    assert.deepEqual(captureAgent.calls[1]?.history?.map(message => message.content), [secondDeviceId]);
+  } finally {
+    for (const socket of sockets) socket.terminate();
+    await server.close();
+  }
+});
+
+async function connectVoxta(port: number, token: string): Promise<{
+  socket: WebSocket; frames: Record<string, unknown>[]; sessionId: string; configurationId: string;
+  send: (id: string, payload: Record<string, unknown>) => void;
+}> {
+  const response = await fetch(`http://127.0.0.1:${port}/hub/negotiate`, {
+    method: "POST", headers: { Authorization: `Bearer ${token}` },
+  });
+  assert.equal(response.status, 200);
+  const { connectionToken } = await response.json() as { connectionToken: string };
+  const socket = new WebSocket(`ws://127.0.0.1:${port}/hub?id=${connectionToken}`, { headers: { Authorization: `Bearer ${token}` } });
+  const frames: Record<string, unknown>[] = [];
+  socket.on("message", raw => {
+    for (const frame of raw.toString().split("\x1e").filter(Boolean)) {
+      const parsed = JSON.parse(frame) as Record<string, unknown>;
+      const args = parsed.arguments as Record<string, unknown>[] | undefined;
+      frames.push(args?.[0] ?? parsed);
+    }
+  });
+  await new Promise<void>((resolve, reject) => { socket.once("open", resolve); socket.once("error", reject); });
+  const send = (id: string, payload: Record<string, unknown>): void => {
+    socket.send(`${JSON.stringify({ type: 1, target: "SendMessage", invocationId: id, arguments: [payload] })}\x1e`);
+  };
+  socket.send(`${JSON.stringify({ protocol: "json", version: 1 })}\x1e`);
+  send("auth", { $type: "authenticate" });
+  send("start", { $type: "startChat" });
+  await waitFor(() => frames.some(frame => frame.$type === "chatStarted"));
+  const configurations = frames.find(frame => frame.$type === "configuration")?.configurations as { id: string }[];
+  return { socket, frames, send, sessionId: String(frames.find(frame => frame.$type === "chatStarted")?.sessionId), configurationId: configurations[0]!.id };
+}
+
+function upgradeStatus(url: string, headers?: Record<string, string>): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket(url, { headers });
+    socket.once("open", () => {
+      socket.terminate();
+      resolve(101);
+    });
+    socket.once("unexpected-response", (_request, response) => {
+      response.resume();
+      socket.terminate();
+      resolve(response.statusCode ?? 0);
+    });
+    socket.once("error", reject);
+  });
+}
+
+test("loopback developer callers cannot select a device identity or attach to another connection session", async () => {
+  const runtime = { ...config(), access: { developerMode: true, allowedOrigins: [] }, deviceRegistry: null };
+  const server = new RealtimeHubServer(runtime, { agent: agent() });
+  await server.start();
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const sockets: WebSocket[] = [];
+  const acknowledgements: Extract<HubToClientMessage, { type: "hello.ack" }>[] = [];
+  try {
+    for (let index = 0; index < 2; index += 1) {
+      const socket = new WebSocket(`ws://127.0.0.1:${address.port}`);
+      sockets.push(socket);
+      socket.on("message", raw => {
+        const message = JSON.parse(raw.toString()) as HubToClientMessage;
+        if (message.type === "hello.ack") acknowledgements.push(message);
+      });
+      await new Promise<void>(resolve => socket.once("open", resolve));
+      socket.send(JSON.stringify({ type: "hello", deviceId: "chosen", satelliteId: "chosen", sessionId: "chosen", channelId: "chosen" }));
+      await waitFor(() => acknowledgements.length === index + 1);
+    }
+    assert.notEqual(acknowledgements[0]?.sessionId, acknowledgements[1]?.sessionId);
+    for (const ack of acknowledgements) {
+      assert.notEqual(ack.deviceId, "chosen");
+      assert.notEqual(ack.satelliteId, "chosen");
+      assert.notEqual(ack.channelId, "chosen");
+    }
+  } finally {
+    for (const socket of sockets) socket.terminate();
+    await server.close();
+  }
+});
+
 test("realtime hub requires registry authentication before accepting messages", async () => {
   const server = new RealtimeHubServer(config(), { agent: agent() });
   await server.start();
@@ -47,8 +317,8 @@ test("realtime hub requires registry authentication before accepting messages", 
   await server.close();
 });
 
-test("browser hello without device authority keeps the hub-minted identity when no registry is configured", async () => {
-  const server = new RealtimeHubServer({ ...config(), deviceRegistry: null }, { agent: agent() });
+test("explicit loopback developer hello keeps the hub-minted identity", async () => {
+  const server = new RealtimeHubServer({ ...config(), access: { developerMode: true, allowedOrigins: [] }, deviceRegistry: null }, { agent: agent() });
   await server.start();
   const address = server.address();
   assert.ok(address && typeof address !== "string");
@@ -64,7 +334,7 @@ test("browser hello without device authority keeps the hub-minted identity when 
   await waitFor(() => messages.some((message) => message.type === "hello.ack"));
   const ack = messages.find((message) => message.type === "hello.ack");
   assert.ok(ack && ack.type === "hello.ack");
-  assert.match(ack.deviceId, /^client-[0-9a-f]+$/);
+  assert.match(ack.deviceId, /^client-[0-9a-f-]+$/);
   assert.equal(ack.sessionId, `realtime:${ack.deviceId}`);
   assert.equal(ack.deviceName, "Opanhome TS Client");
   const ready = messages.find((message) => message.type === "session.ready");
@@ -76,7 +346,7 @@ test("browser hello without device authority keeps the hub-minted identity when 
 });
 
 test("hub without a registry is presentation-only and never adopts browser-declared relay capabilities", async () => {
-  const server = new RealtimeHubServer({ ...config(), deviceRegistry: null }, { agent: agent() });
+  const server = new RealtimeHubServer({ ...config(), access: { developerMode: true, allowedOrigins: [] }, deviceRegistry: null }, { agent: agent() });
   await server.start();
   const address = server.address();
   assert.ok(address && typeof address !== "string");

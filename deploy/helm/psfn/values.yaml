@@ -764,6 +764,15 @@ ingress:
 
 satelliteHub:
   enabled: false
+  # Native clients may omit Origin; browsers must send an exact allowed origin.
+  allowedOrigins: []
+  # Voxta is opt-in. Use a distinct random token when clients cannot enroll a
+  # device; keep plaintext credentials outside Helm values and release history.
+  voxta:
+    enabled: false
+    authTokenSecretRef:
+      name: ""
+      key: ""
   image:
     # Build apps/satellite-hub with docker/satellite-hub/Dockerfile, then set
     # repository plus a monorepo-revision-pinned tag

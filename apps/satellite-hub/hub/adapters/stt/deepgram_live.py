@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+from functools import partial
 import json
 import logging
 from time import perf_counter
@@ -13,6 +14,8 @@ from websockets.protocol import State
 
 from hub.adapters.interfaces import TranscriptResult
 from hub.adapters.bounds import ProviderLimits, ProviderLimitError
+from hub.adapters.provider_socket import ProviderClientConnection
+from hub.devices.realtime_output import RealtimeOutputLimits
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -41,9 +44,11 @@ class DeepgramLiveSTTProvider:
         utterance_end_ms: int = 1000,
         limits: ProviderLimits | None = None,
         websocket_url: str | None = None,
+        output_limits: RealtimeOutputLimits | None = None,
     ) -> None:
         self._api_key = api_key
         self._limits = limits or ProviderLimits()
+        self._output_limits = output_limits or RealtimeOutputLimits()
         self._websocket_url = websocket_url
         self._model = model
         self._sample_rate = sample_rate
@@ -52,6 +57,7 @@ class DeepgramLiveSTTProvider:
         self._ws: websockets.ClientConnection | None = None
         self._reader_task: asyncio.Task[None] | None = None
         self._keepalive_task: asyncio.Task[None] | None = None
+        self._disconnect_task: asyncio.Task[None] | None = None
         self._active_turn: _TurnState | None = None
         self._send_lock = asyncio.Lock()
         self._connect_lock = asyncio.Lock()
@@ -75,7 +81,12 @@ class DeepgramLiveSTTProvider:
             await self._disconnect()
             raise ProviderLimitError("Provider audio limit exceeded")
         turn.audio_bytes += len(data)
-        await self._send_binary(data)
+        try:
+            await self._send_binary(data)
+        except BaseException:
+            self._fail_turn("Provider stream failed")
+            await self._disconnect()
+            raise
 
     async def finish_turn(self) -> TranscriptResult:
         turn = self._active_turn
@@ -93,9 +104,11 @@ class DeepgramLiveSTTProvider:
         except (TimeoutError, ConnectionClosed):
             raise RuntimeError("Provider transcription did not complete") from None
         finally:
-            self._active_turn = None
             await self._disconnect()
+            self._active_turn = None
 
+        if turn.failure:
+            raise ProviderLimitError(turn.failure)
         transcript = " ".join(segment for segment in turn.final_segments if segment).strip()
         if not transcript:
             transcript = turn.interim_text.strip()
@@ -109,17 +122,23 @@ class DeepgramLiveSTTProvider:
     async def abort_turn(self) -> None:
         if self._active_turn is None and not _is_open(self._ws):
             return
-        self._active_turn = None
+        self._fail_turn("Provider turn aborted")
         await self._disconnect()
+        self._active_turn = None
 
     async def aclose(self) -> None:
+        self._fail_turn("Provider connection closed")
         await self._disconnect()
         self._active_turn = None
 
     async def _ensure_connected(self) -> None:
+        if self._disconnect_task is not None:
+            await self._disconnect()
         if _is_open(self._ws):
             return
         async with self._connect_lock:
+            if self._reader_task is not None and not _is_open(self._ws):
+                await self._disconnect()
             if _is_open(self._ws):
                 return
             url = (
@@ -143,6 +162,7 @@ class DeepgramLiveSTTProvider:
                 max_queue=self._limits.max_ws_queue,
                 compression=None,
                 close_timeout=2,
+                create_connection=partial(ProviderClientConnection, output_limits=self._output_limits),
             )
             self._reader_task = asyncio.create_task(self._reader_loop())
             self._keepalive_task = asyncio.create_task(self._keepalive_loop())
@@ -162,10 +182,14 @@ class DeepgramLiveSTTProvider:
             self._fail_turn("Provider stream failed")
         finally:
             turn = self._active_turn
-            if turn is not None and not turn.finalize_event.is_set():
+            if turn is not None and (not turn.finalize_event.is_set() or (ws is not None and ws.output.failed)):
                 self._fail_turn("Provider stream closed")
             if ws is not None:
                 await ws.close()
+            keepalive = self._keepalive_task
+            if keepalive is not None and keepalive is not asyncio.current_task():
+                keepalive.cancel()
+                await asyncio.gather(keepalive, return_exceptions=True)
             if self._ws is ws:
                 self._ws = None
             if self._reader_task is asyncio.current_task():
@@ -173,7 +197,7 @@ class DeepgramLiveSTTProvider:
 
     def _handle_message(self, payload: dict[str, Any]) -> None:
         turn = self._active_turn
-        if turn is None:
+        if turn is None or turn.failure:
             return
         if not isinstance(payload, dict):
             raise ValueError("Provider stream invalid")
@@ -229,16 +253,22 @@ class DeepgramLiveSTTProvider:
 
     async def _send_binary(self, data: bytes) -> None:
         async with self._send_lock:
-            await self._ensure_connected()
-            assert self._ws is not None
-            await self._ws.send(data)
+            if not _is_open(self._ws):
+                raise RuntimeError("Provider connection unavailable")
+            try:
+                await self._ws.send(data)
+            except ConnectionClosed:
+                raise RuntimeError("Provider output unavailable") from None
             self._last_send_at = perf_counter()
 
     async def _send_text(self, payload: dict[str, Any]) -> None:
         async with self._send_lock:
-            await self._ensure_connected()
-            assert self._ws is not None
-            await self._ws.send(json.dumps(payload))
+            if not _is_open(self._ws):
+                raise RuntimeError("Provider connection unavailable")
+            try:
+                await self._ws.send(json.dumps(payload))
+            except ConnectionClosed:
+                raise RuntimeError("Provider output unavailable") from None
             self._last_send_at = perf_counter()
 
     async def _keepalive_loop(self) -> None:
@@ -251,7 +281,8 @@ class DeepgramLiveSTTProvider:
                     continue
                 try:
                     await self._send_text({"type": "KeepAlive"})
-                except ConnectionClosed:
+                except RuntimeError:
+                    self._fail_turn("Provider stream failed")
                     return
         except asyncio.CancelledError:
             return
@@ -260,15 +291,27 @@ class DeepgramLiveSTTProvider:
                 self._keepalive_task = None
 
     async def _disconnect(self) -> None:
+        if self._disconnect_task is None:
+            self._disconnect_task = asyncio.create_task(self._settle_disconnect())
+        task = self._disconnect_task
+        try:
+            await asyncio.shield(task)
+        finally:
+            if task.done() and self._disconnect_task is task:
+                self._disconnect_task = None
+
+    async def _settle_disconnect(self) -> None:
         tasks = [task for task in (self._keepalive_task, self._reader_task) if task is not None and task is not asyncio.current_task()]
-        self._keepalive_task = self._reader_task = None
         for task in tasks:
             task.cancel()
-        ws, self._ws = self._ws, None
+        ws = self._ws
         if ws is not None:
             await ws.close()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        if self._ws is ws:
+            self._ws = None
+        self._keepalive_task = self._reader_task = None
 
 
 def _is_open(connection: websockets.ClientConnection | None) -> bool:

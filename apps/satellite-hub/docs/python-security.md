@@ -130,6 +130,31 @@ consumer is abandoned. Deepgram turns disconnect after finalization; its existin
 data. Constructors accept smaller injected budgets and local provider URLs for
 system-boundary tests; runtime defaults stay finite.
 
+Both streaming provider clients install `ProviderClientConnection` in the real
+WebSocket connection factory. It uses the listener's shared `RealtimeOutput`
+owner before frame serialization, covering binary/text data, fragments,
+automatic pongs, explicit ping/pong and close. Per socket, the defaults are 8,192
+retained frames, 1,048,576 bytes and a five-second absolute completion deadline.
+Each frame reserves its payload plus the maximum 14-byte RFC 6455 header;
+native asyncio output and pending protocol writes share the byte cap without an
+additional overshoot allowance. HTTP handshake output also passes the byte cap.
+Compression is disabled. Kernel TCP buffers, source objects and inbound queues
+are separate from this output budget.
+
+Partial drain and new frames do not extend the deadline. Output overflow,
+expiry or write failure aborts only that provider socket, discards pending
+results, and retains its charge until TCP loss. Reader, Deepgram keepalive and
+TTS sender tasks settle before provider cleanup completes. A canceled shutdown
+caller leaves one shielded cleanup task for subsequent callers to join. The last
+TTS context closes its socket; overlapping contexts retain their shared socket
+until their own completion or a socket failure. Fresh streams reconnect after
+settlement. Python has no separate global provider-work counter; these lifecycle
+rules preserve its per-turn and context ownership. TypeScript global provider
+admission is unchanged. Local regression peers reduce TCP buffers and exercise
+legal ping floods, application/control competition, exact and one-over limits,
+deadlines, write errors, cancellation, repeated shutdown and fresh recovery.
+Live provider and sustained live-load validation remain pending.
+
 ## Private artifacts and diagnostics
 
 Runtime files are confined beneath a reserved `.hub-artifacts-v1` directory in

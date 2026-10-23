@@ -265,6 +265,9 @@ for migration, exact admission rules, defaults, and retention.
 
 Python realtime output has one per-socket budget shared by application frames,
 automatic pong replies, explicit ping/pong, fragments, and close frames. The
+Deepgram live STT and ElevenLabs streaming TTS clients use the same owner through
+an explicit client connection factory, including automatic protocol replies.
+Each listener or provider socket has its own finite budget. The
 production defaults are 8,192 retained frames, 1,048,576 bytes, and a five-second
 absolute completion deadline. Admission occurs before serialization with a
 conservative 14-byte charge per frame; the native asyncio transport buffer and
@@ -275,12 +278,19 @@ control replies; `write_limit` and `drain` provide flow control only.
 
 Charges release when pending protocol output and the native transport buffer
 both empty. Partial drain and new frames never extend an outstanding deadline.
-Overflow, expiry, or write failure aborts TCP and clears pending output; close
+Overflow, expiry, or write failure aborts TCP and clears pending output; failed
+owners retain their charges until terminal TCP cleanup. Close
 frames have no extra capacity reserve. The connection slot stays charged until
 terminal TCP cleanup. Failed output owners reject parsed and already queued
 application input before it can finalize a buffered audio turn. A single timer handle checks retained output every 10 ms
 and is canceled on cleanup; no output watcher task is created. Library tests can
 inject smaller `RealtimeOutputLimits` through `RealtimeVoiceServer.output_limits`.
+Both Python provider constructors accept the same `output_limits` injection.
+Provider output failures clear affected transcript/audio buffers, reject queued
+results, and settle reader, keepalive and context sender tasks. Shutdown owns a
+shielded cleanup task; repeated or canceled callers cannot release the socket
+early. A new stream reconnects after settlement. Python has no separate global
+provider-work counter; TypeScript's existing provider admission remains separate.
 The cap measures process-owned serialized output and conservative frame charges;
 kernel TCP buffers and provider/application source objects have their own limits.
 Local socket regressions cover unread peers with reduced TCP buffers, exact and

@@ -1,4 +1,4 @@
-"""Finite output ownership for the pinned websockets Sans-I/O write boundary."""
+"""Shared finite output ownership at the pinned websockets Sans-I/O boundary."""
 
 from __future__ import annotations
 
@@ -65,7 +65,10 @@ class RealtimeOutput:
             return
         self.failed = True
         self.connection.protocol.writes.clear()
-        self._release()
+        if self.timer is not None:
+            self.timer.cancel()
+            self.timer = None
+        # Retain the charge until connection_lost confirms terminal cleanup.
         self.connection.transport.abort()
 
     def closed(self) -> None:
@@ -106,7 +109,11 @@ class RealtimeOutput:
         self.pending_bytes += charge
         if self.deadline is None:
             self.deadline = self.connection.loop.time() + self.limits.completion_timeout
-        self._serialize_frame(frame)
+        try:
+            self._serialize_frame(frame)
+        except (OSError, RuntimeError):
+            self.fail()
+            raise OSError("WebSocket output unavailable") from None
         self._watch()
 
     def before_write(self) -> None:

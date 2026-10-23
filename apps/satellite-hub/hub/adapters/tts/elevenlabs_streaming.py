@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+from functools import partial
 import json
 import time
 import uuid
@@ -11,6 +12,8 @@ import websockets
 from websockets.protocol import State
 
 from hub.adapters.bounds import ProviderLimits, ProviderLimitError, bounded_request, decode_json
+from hub.adapters.provider_socket import ProviderClientConnection
+from hub.devices.realtime_output import RealtimeOutputLimits
 
 
 @dataclass(slots=True)
@@ -23,6 +26,7 @@ class _ContextState:
     created: float = field(default_factory=time.monotonic)
     last_read: float = field(default_factory=time.monotonic)
     connection: object | None = None
+    sender: asyncio.Task | None = None
 
     def fail(self, message: str) -> None:
         self.failure = message
@@ -38,14 +42,18 @@ class ElevenLabsStreamingTTS:
         self, *, api_key: str, voice_id: str | None,
         model_id: str = "eleven_flash_v2_5", limits: ProviderLimits | None = None,
         websocket_url: str | None = None, http_client: httpx.AsyncClient | None = None,
+        output_limits: RealtimeOutputLimits | None = None,
     ) -> None:
         self._api_key, self._voice_id, self._model_id = api_key, voice_id, model_id
         self._limits = limits or ProviderLimits()
+        self._output_limits = output_limits or RealtimeOutputLimits()
         self._websocket_url = websocket_url
         self._http_client = http_client or httpx.AsyncClient(timeout=30.0)
         self._owns_client = http_client is None
         self._ws = None
         self._reader_task: asyncio.Task | None = None
+        self._close_task: asyncio.Task | None = None
+        self._context_cleanups: set[asyncio.Task] = set()
         self._contexts: dict[str, _ContextState] = {}
         self._send_lock = asyncio.Lock()
         self._connect_lock = asyncio.Lock()
@@ -89,6 +97,8 @@ class ElevenLabsStreamingTTS:
                 await self._send_json({"context_id": ctx_id, "close_context": True})
             except Exception:
                 state.fail("Provider text stream failed")
+                if state.connection is not None:
+                    state.connection.transport.abort()
 
         try:
             voice_id = await asyncio.wait_for(self._resolve_voice_id(), self._limits.idle_seconds)
@@ -101,6 +111,7 @@ class ElevenLabsStreamingTTS:
                 "voice_settings": {"stability": 0.35, "similarity_boost": 0.7, "speed": 1.0},
             })
             sender_task = asyncio.create_task(sender())
+            state.sender = sender_task
             while True:
                 remaining = self._limits.max_age_seconds - (time.monotonic() - state.created)
                 if remaining <= 0:
@@ -110,47 +121,91 @@ class ElevenLabsStreamingTTS:
                 except TimeoutError:
                     state.fail("Provider context expired")
                     raise ProviderLimitError("Provider context expired") from None
+                if state.failure:
+                    raise ProviderLimitError(state.failure)
+                if state.connection is not None and state.connection.output.failed:
+                    state.fail("Provider stream failed")
+                    raise ProviderLimitError("Provider stream failed")
                 if chunk is None:
-                    if state.failure:
-                        raise ProviderLimitError(state.failure)
                     return
                 state.queued_bytes -= len(chunk)
                 state.last_read = time.monotonic()
                 yield chunk
         finally:
-            if sender_task is not None:
-                sender_task.cancel()
-                await asyncio.gather(sender_task, return_exceptions=True)
-            current = self._contexts.get(ctx_id)
-            may_close = current is None or current is state
-            if current is state:
-                self._contexts.pop(ctx_id)
-            state.fail("Provider context closed")
-            if may_close and _is_open(self._ws):
+            cleanup = asyncio.create_task(self._settle_context(ctx_id, state, sender_task))
+            self._context_cleanups.add(cleanup)
+            cleanup.add_done_callback(self._context_cleanups.discard)
+            await asyncio.shield(cleanup)
+
+    async def _settle_context(self, ctx_id, state, sender_task) -> None:
+        if sender_task is not None:
+            sender_task.cancel()
+            await asyncio.gather(sender_task, return_exceptions=True)
+        state.fail("Provider context closed")
+        ws = state.connection
+        current = self._contexts.get(ctx_id)
+        if current is not None and current is not state:
+            return
+        # A provider shutdown retains the registry until its reader settles.
+        if self._close_task is not None:
+            return
+        siblings = any(other is not state and other.connection is ws for other in self._contexts.values())
+        if ws is not None and self._ws is ws:
+            if siblings and _is_open(ws):
                 try:
                     await asyncio.wait_for(self._send_json({"context_id": ctx_id, "close_context": True}), 1)
                 except Exception:
-                    pass  # The original stream failure remains authoritative.
+                    ws.transport.abort()
+            else:
+                await ws.close()
+                reader = self._reader_task
+                if reader is not None:
+                    await asyncio.shield(reader)
+        if self._contexts.get(ctx_id) is state:
+            self._contexts.pop(ctx_id)
 
     def _expire_contexts(self) -> None:
         now = time.monotonic()
         for ctx_id, state in list(self._contexts.items()):
             if now - state.created >= self._limits.max_age_seconds or now - state.last_read >= self._limits.idle_seconds:
                 state.fail("Provider context expired")
-                self._contexts.pop(ctx_id, None)
+                if state.sender is not None and not state.sender.done():
+                    state.sender.cancel()
+                else:
+                    self._contexts.pop(ctx_id, None)
 
     async def aclose(self) -> None:
+        if self._close_task is None:
+            self._close_task = asyncio.create_task(self._settle_close())
+        task = self._close_task
+        try:
+            await asyncio.shield(task)
+        finally:
+            if task.done() and self._close_task is task:
+                self._close_task = None
+
+    async def _settle_close(self) -> None:
         for state in self._contexts.values():
             state.fail("Provider connection closed")
-        self._contexts.clear()
-        reader, self._reader_task = self._reader_task, None
+        reader = self._reader_task
         if reader is not None:
             reader.cancel()
-        ws, self._ws = self._ws, None
+        ws = self._ws
         if ws is not None:
             await ws.close()
         if reader is not None:
             await asyncio.gather(reader, return_exceptions=True)
+        senders = [state.sender for state in self._contexts.values() if state.sender is not None]
+        for sender in senders:
+            sender.cancel()
+        if senders:
+            await asyncio.gather(*senders, return_exceptions=True)
+        if self._context_cleanups:
+            await asyncio.gather(*self._context_cleanups, return_exceptions=True)
+        self._contexts.clear()
+        if self._ws is ws:
+            self._ws = None
+        self._reader_task = None
         if self._owns_client:
             await self._http_client.aclose()
 
@@ -170,9 +225,13 @@ class ElevenLabsStreamingTTS:
         return voice_id
 
     async def _ensure_connected(self, voice_id: str) -> None:
+        if self._close_task is not None:
+            await asyncio.shield(self._close_task)
         async with self._connect_lock:
             if _is_open(self._ws):
                 return
+            if self._reader_task is not None:
+                await asyncio.shield(self._reader_task)
             uri = (f"wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/multi-stream-input"
                    f"?model_id={self._model_id}&output_format=mp3_44100_128"
                    "&inactivity_timeout=180&auto_mode=true")
@@ -180,6 +239,7 @@ class ElevenLabsStreamingTTS:
                 self._websocket_url or uri, additional_headers={"xi-api-key": self._api_key},
                 ping_interval=20, ping_timeout=20, max_size=self._limits.max_ws_message_bytes,
                 max_queue=self._limits.max_ws_queue, compression=None, close_timeout=2,
+                create_connection=partial(ProviderClientConnection, output_limits=self._output_limits),
             )
             self._reader_task = asyncio.create_task(self._reader_loop(self._ws))
 
@@ -230,12 +290,21 @@ class ElevenLabsStreamingTTS:
         except Exception:
             pass  # Every affected consumer receives a static failure below.
         finally:
+            affected = [(ctx_id, state) for ctx_id, state in self._contexts.items() if state.connection is ws]
+            for _, state in affected:
+                if not state.finished or ws.output.failed:
+                    state.fail("Provider stream failed")
+                if state.sender is not None:
+                    state.sender.cancel()
+            await ws.close()
+            senders = [state.sender for _, state in affected if state.sender is not None]
+            if senders:
+                await asyncio.gather(*senders, return_exceptions=True)
+            for ctx_id, state in affected:
+                if self._contexts.get(ctx_id) is state:
+                    self._contexts.pop(ctx_id)
             if self._ws is ws:
                 self._ws = None
-            for state in self._contexts.values():
-                if state.connection is ws and not state.finished:
-                    state.fail("Provider stream failed")
-            await ws.close()
             if self._reader_task is asyncio.current_task():
                 self._reader_task = None
 
@@ -243,7 +312,10 @@ class ElevenLabsStreamingTTS:
         async with self._send_lock:
             if self._ws is None:
                 raise RuntimeError("Provider connection unavailable")
-            await self._ws.send(json.dumps(payload))
+            try:
+                await self._ws.send(json.dumps(payload))
+            except websockets.ConnectionClosed:
+                raise RuntimeError("Provider output unavailable") from None
 
 
 def _decode_audio(value: str) -> bytes:

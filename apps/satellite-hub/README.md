@@ -457,6 +457,37 @@ retain at most 128 entries and evict the least recently used entry. Provider
 speech queues allow 32 segments. Oversized input closes only its connection or
 returns 413/429; abandoned bodies return 408.
 
+Upstream HTTP reads reject oversized `Content-Length` before reading, count
+received bytes before decoding, and cancel fetch bodies or destroy mTLS streams
+on overflow, cancellation, or expiry. Header/connect waits and finite body
+reads each have the configured `providerTimeoutMs` deadline (30 seconds by
+default); PSFN attempts also retain their shorter mode-specific deadlines.
+Error statuses that do not require the bounded PSFN 503 busy check cancel their
+bodies immediately. Diagnostics contain status/cause categories, never provider
+bodies, status text, credentials, or exception messages.
+
+| Upstream consumer | Streaming byte budget |
+| --- | --- |
+| PSFN completion, including 503 busy replies, fetch and mTLS | `maxQueuedBytes` (1 MiB), including the JSON envelope |
+| Identity, companion control JSON, prerecorded Deepgram STT | `maxHttpBodyBytes` (64 KiB) |
+| Device Studio FAL metadata JSON | Hub default `maxHttpBodyBytes` (64 KiB); default provider deadline |
+| Device Studio generated PNG / FAL SDK upload-control replies | Existing 12 MiB pack-review cap shared across sequential image downloads / 64 KiB metadata cap; default provider deadline |
+| Companion artifact preview | `PSFN_COMPANION_PREVIEW_MAX_BYTES` (1 MiB) |
+| Eidoverse snapshot | `EIDOVERSE_SNAPSHOT_MAX_BYTES` (4,000,000 bytes), snapshot deadline |
+| Companion SSE | `maxFrameBytes` (256 KiB) per retained UTF-8 frame; each decoded transport chunk is at most `maxQueuedBytes`; `idleTimeoutMs` between reads |
+| ElevenLabs / Deepgram / MCPL WebSocket receives | `maxFrameBytes` (256 KiB), compression disabled |
+| ElevenLabs TTS context and Voxta MP3 / WAV buffers | `maxAudioBytes` (4 MiB); TTS queue also limits message count |
+| Deepgram realtime retained transcript | `maxQueuedBytes` (1 MiB) per utterance |
+| Home Assistant WebSocket receives | Existing 2 MiB transport cap |
+| Amica acknowledgement | Body cancelled immediately; configured request deadline |
+
+SSE remains a long-lived stream: completed frames release the frame budget and
+refresh the idle deadline. Delimiter fragments and UTF-8 characters spanning
+reads count toward the same frame. Voxta and realtime reply retention count
+cumulative UTF-8 bytes before each append; a Voxta overflow aborts the turn
+before TTS, artifact writes, assistant history, or `replyChunk`. Counters avoid
+rescanning retained text for every small delta.
+
 `HUB_RESOURCE_LIMITS_PATH` optionally points to a JSON object
 `{"schemaVersion":1,"limits":{"maxFrameBytes":262144}}` relative to the Hub
 root. Omitted limits retain these defaults; unknown keys and nonpositive or

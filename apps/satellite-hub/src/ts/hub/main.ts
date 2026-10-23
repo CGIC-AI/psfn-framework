@@ -50,6 +50,7 @@ async function main(): Promise<void> {
   const eidoverseMcpl = eidoverseMcplConfig
     ? new EidoverseMcplClient(eidoverseMcplConfig, resolveEidoverseCredentialFromEnv, {
         logger: hubLogger,
+        limits: config.limits,
       })
     : null;
   // The body runner reaches its tools through a narrow structural port, so it

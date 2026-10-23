@@ -1,3 +1,4 @@
+import { resolveHubResourceLimits, type HubResourceLimits } from "./transport-resources.js";
 import WebSocket from "ws";
 
 export interface TranscriptInterim {
@@ -24,6 +25,8 @@ export class DeepgramRealtimeSession {
   private lastSendAt = Date.now();
   private readonly finalSegments: string[] = [];
   private interimText = "";
+  private finalBytes = 0;
+  private readonly limits: HubResourceLimits;
   private utteranceStartedAt = 0;
   private readonly endpointingMs = parsePositiveInt(process.env.DEEPGRAM_ENDPOINTING_MS, 800);
   private readonly utteranceEndMs = parsePositiveInt(process.env.DEEPGRAM_UTTERANCE_END_MS, 1800);
@@ -33,7 +36,9 @@ export class DeepgramRealtimeSession {
     private readonly sampleRate: number,
     private readonly callbacks: DeepgramRealtimeCallbacks,
     private readonly model = "nova-3",
-  ) {}
+    limits?: Partial<HubResourceLimits>,
+    private readonly connect = (url: string, options: WebSocket.ClientOptions) => new WebSocket(url, options),
+  ) { this.limits = resolveHubResourceLimits(limits); }
 
   async start(): Promise<void> {
     const url =
@@ -48,7 +53,8 @@ export class DeepgramRealtimeSession {
       "&vad_events=true" +
       "&smart_format=true";
 
-    this.ws = new WebSocket(url, {
+    this.ws = this.connect(url, {
+      maxPayload: this.limits.maxFrameBytes, perMessageDeflate: false, handshakeTimeout: this.limits.providerTimeoutMs,
       headers: {
         Authorization: `Token ${this.apiKey}`,
       },
@@ -56,12 +62,14 @@ export class DeepgramRealtimeSession {
     this.ws.on("message", (data) => {
       try {
         this.handleMessage(String(data));
-      } catch (error) {
-        this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+      } catch {
+        this.resetUtterance();
+        this.ws?.terminate();
+        this.callbacks.onError?.(new Error("Deepgram provider response rejected"));
       }
     });
-    this.ws.on("error", (error) => {
-      this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+    this.ws.on("error", () => {
+      this.callbacks.onError?.(new Error("Deepgram provider stream failed"));
     });
     await waitForOpen(this.ws);
     this.keepAliveTimer = setInterval(() => {
@@ -102,7 +110,7 @@ export class DeepgramRealtimeSession {
         return;
       }
       ws.once("close", () => resolve());
-      ws.close();
+      ws.terminate();
     });
   }
 
@@ -127,8 +135,13 @@ export class DeepgramRealtimeSession {
       if (this.utteranceStartedAt === 0) {
         this.utteranceStartedAt = Date.now();
       }
+      if ((!isFinal || this.finalSegments[this.finalSegments.length - 1] !== transcript)
+        && this.finalBytes + Buffer.byteLength(transcript) + (this.finalSegments.length > 0 ? 1 : 0) > this.limits.maxQueuedBytes) {
+        throw new Error("Hub transcript exceeds byte limit");
+      }
       if (isFinal) {
         if (this.finalSegments[this.finalSegments.length - 1] !== transcript) {
+          this.finalBytes += Buffer.byteLength(transcript) + (this.finalSegments.length > 0 ? 1 : 0);
           this.finalSegments.push(transcript);
         }
         this.interimText = "";
@@ -172,6 +185,7 @@ export class DeepgramRealtimeSession {
 
   private resetUtterance(): void {
     this.finalSegments.length = 0;
+    this.finalBytes = 0;
     this.interimText = "";
     this.utteranceStartedAt = 0;
   }

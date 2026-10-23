@@ -206,7 +206,7 @@ export class HomeAssistantClient {
     const result = message as unknown as HaResultMessage;
     if (!result.success) {
       pending.reject(new HomeAssistantRequestError(
-        `Home Assistant command failed: ${result.error?.message ?? result.error?.code ?? "unknown error"}`,
+        "Home Assistant command failed",
       ));
       return;
     }

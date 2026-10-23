@@ -1,3 +1,4 @@
+import { Utf8ByteBudget } from "../shared/upstream-response.js";
 import { hubConsole as console } from "../shared/private-log.js";
 import crypto from "node:crypto";
 import type http from "node:http";
@@ -890,7 +891,7 @@ class VoxtaConnection {
       console.error("Voxta message handling failed:", error);
       await this.sendReceive({
         $type: "error",
-        message: error instanceof Error ? error.message : String(error),
+        message: "Voxta reply failed",
       });
     } finally {
       if (this.replyTask === task) {
@@ -973,6 +974,7 @@ class VoxtaConnection {
     replyAbortController: AbortController,
   ): Promise<void> {
     let responseText = "";
+    const replyBytes = new Utf8ByteBudget(this.deps.resources.limits.maxQueuedBytes);
     await this.requestVisionCapturesIfNeeded(replyAbortController.signal);
     this.assertReplyActive(replyId, replyAbortController);
 
@@ -1013,6 +1015,11 @@ class VoxtaConnection {
     });
     for await (const delta of stream) {
       this.assertReplyActive(replyId, replyAbortController);
+      try { replyBytes.append(delta); }
+      catch {
+        replyAbortController.abort(new Error("Hub retained reply exceeds byte limit"));
+        throw new Error("Hub retained reply exceeds byte limit");
+      }
       responseText += delta;
     }
 
@@ -1077,6 +1084,7 @@ class VoxtaConnection {
     try {
       const wav = await awaitWithAbort(this.deps.tts.synthesizeWav(spokenText, signal), signal);
       throwIfAborted(signal);
+      if (wav.length > this.deps.resources.limits.maxAudioBytes) throw new Error("Hub TTS audio exceeds byte limit");
       if (wav.length === 0) {
         return "silence:0";
       }

@@ -771,3 +771,21 @@ test("the identity token reaches neither the derived origin, the snapshot reques
     `no log line may carry the identity token: ${turn.warnings.join(" | ")}`,
   );
 });
+
+test("MCPL accepts an exact UTF-8 receive frame and drops one byte over before returning tool content", async () => {
+  const maxFrameBytes = 4096;
+  const overhead = Buffer.byteLength(JSON.stringify({ jsonrpc: "2.0", id: 4, result: { content: [{ type: "text", text: "" }] } }));
+  const text = "é".repeat(Math.floor((maxFrameBytes - overhead) / 2)) + "x".repeat((maxFrameBytes - overhead) % 2);
+  const options = { world: "commons", tokens: [TOKEN], lookText: text };
+  const door = await EidoverseMcplDoor.start(options);
+  const client = new EidoverseMcplClient(config(door), credential, { limits: { maxFrameBytes } });
+  try {
+    await client.start();
+    assert.equal(await client.look(), text);
+    options.lookText = text + "x";
+    await assert.rejects(client.look());
+    options.lookText = "recovered";
+    await waitFor(() => door.admittedTokens.length >= 2, "a new connection after frame rejection");
+    await waitFor(async () => { try { return await client.look() === "recovered"; } catch { return false; } }, "a valid tool response after reconnect");
+  } finally { await client.close(); await door.close(); }
+});

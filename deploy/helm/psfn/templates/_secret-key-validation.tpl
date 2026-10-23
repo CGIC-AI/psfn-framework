@@ -12,12 +12,12 @@
 {{- end -}}
 {{- $tuple := printf "%s/%s" $name $key -}}
 {{- if and (hasKey .seen $tuple) (ne (get .seen $tuple) .role) -}}
-{{- fail (printf "%s must assign a distinct Secret data key to each credential role" .label) -}}
+{{- fail (printf "%s must assign a distinct Secret data key to each credential role (%s conflicts with %s)" .label .role (get .seen $tuple)) -}}
 {{- end -}}
 {{- $_ := set .seen $tuple .role -}}
 {{- end -}}
 
-{{- define "psfn.validateSecretCredentialReferences" -}}
+{{- define "psfn.secretCredentialInventory" -}}
 {{- $root := . -}}
 {{- $seen := dict -}}
 {{- $appName := include "psfn.appSecretName" . -}}
@@ -35,13 +35,14 @@
 {{- else if .Values.postgres.external.enabled -}}
 {{- include "psfn.registerSecretCredential" (dict "seen" $seen "label" "postgres.external.databaseUrlSecret" "role" "postgres.runtimeDatabaseUrl" "name" .Values.postgres.external.databaseUrlSecret.name "key" (include "psfn.databaseUrlSecretKey" .)) -}}
 {{- end -}}
-{{- if .Values.runtimeBootstrap.enabled -}}
 {{- range $role := concat (list "adminDatabaseUrl" "companionDatabaseUrl" "sharedMigrationDatabaseUrl" "companionRoleKey" "sharedMigrationRoleKey") (keys .Values.runtimeBootstrap.keys) | uniq -}}
 {{- $semanticRole := printf "postgres.%s" $role -}}
 {{- if eq $role "companionDatabaseUrl" -}}{{- $semanticRole = "postgres.runtimeDatabaseUrl" -}}{{- end -}}
 {{- include "psfn.registerSecretCredential" (dict "seen" $seen "label" "runtimeBootstrap.keys" "role" $semanticRole "name" $postgresName "key" (get $root.Values.runtimeBootstrap.keys $role)) -}}
 {{- end -}}
-{{- end -}}
+{{/* Runtime URL consumers exist even when PostgreSQL or bootstrap is external/disabled.
+     Resolve through the same helpers as env and file mounts, including fleet overrides. */}}
+{{- include "psfn.registerSecretCredential" (dict "seen" $seen "label" "runtime database URL reference" "role" "postgres.runtimeDatabaseUrl" "name" (include "psfn.databaseUrlSecretName" .) "key" (include "psfn.databaseUrlSecretKey" .)) -}}
 {{- if .Values.redis.enabled -}}
 {{- include "psfn.registerSecretCredential" (dict "seen" $seen "label" "redis password reference" "role" "redis.password" "name" (include "psfn.redisPasswordSecretName" .) "key" (include "psfn.redisPasswordSecretKey" .)) -}}
 {{- end -}}
@@ -49,6 +50,7 @@
   (dict "label" "redis.external.tls.caSecret" "role" "redis.tlsCA" "ref" .Values.redis.external.tls.caSecret)
   (dict "label" "embeddings.api.apiKeySecret" "role" "app.embeddingApiKey" "ref" .Values.embeddings.api.apiKeySecret)
   (dict "label" "hubDeviceAssertions.auditPepperSecretRef" "role" "hub.auditPepper" "ref" .Values.hubDeviceAssertions.auditPepperSecretRef)
+  (dict "label" "satelliteHub.voxta.authTokenSecretRef" "role" "app.voxtaAuthToken" "ref" .Values.satelliteHub.voxta.authTokenSecretRef)
   (dict "label" "satelliteHub.deviceAssertion.privateKeySecretRef" "role" "hub.devicePrivateKey" "ref" .Values.satelliteHub.deviceAssertion.privateKeySecretRef) -}}
 {{- if $entry.ref.name -}}
 {{- include "psfn.registerSecretCredential" (dict "seen" $seen "label" $entry.label "role" $entry.role "name" $entry.ref.name "key" $entry.ref.key) -}}
@@ -76,4 +78,50 @@
 {{- end -}}
 {{- end -}}
 {{- end -}}
+{{/* extraEnv Secret references are credentials even under custom environment names. */}}
+{{- range $surface, $entries := dict "gateway" .Values.workloads.gateway.extraEnv "agent" .Values.workloads.agent.extraEnv "garden" .Values.workloads.garden.extraEnv "satelliteHub" .Values.satelliteHub.extraEnv -}}
+{{- range $entry := $entries -}}
+{{- if kindIs "map" $entry -}}
+{{- $source := $entry.valueFrom | default dict -}}
+{{- with $source.secretKeyRef -}}
+{{- include "psfn.registerSecretCredential" (dict "seen" $seen "label" (printf "%s.extraEnv.valueFrom.secretKeyRef" $surface) "role" (printf "extraEnv.%s" $entry.name) "name" .name "key" .key) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{/* Certificate private keys are privileged credentials too. Reserve their tuples
+     so an external token reference cannot select a mounted TLS identity. */}}
+{{- $certificates := list "ca" "gatewayRpc" "gardenAdminClient" "satelliteHubClient" "gardenSsoServer" "gatewaySsoClient" -}}
+{{- if not .Values.fleet.enabled -}}{{- $certificates = concat $certificates (list "agentRpcClient" "agentAdmin") -}}{{- end -}}
+{{- range $certificate := $certificates -}}
+{{- $helper := printf "psfn.%sCertSecretName" $certificate -}}
+{{- if eq $certificate "ca" -}}{{- $helper = "psfn.caSecretName" -}}{{- end -}}
+{{- $name := include $helper $root -}}
+{{- include "psfn.registerSecretCredential" (dict "seen" $seen "label" "certificates" "role" (printf "tls.%s" $certificate) "name" $name "key" "tls.key") -}}
+{{- end -}}
+{{- if .Values.fleet.enabled -}}
+{{- range $companion := .Values.fleet.companions -}}
+{{- $target := dict "root" $root "companionId" $companion.companionId -}}
+{{- range $kind := list "RpcClient" "Admin" -}}
+{{- include "psfn.registerSecretCredential" (dict "seen" $seen "label" "fleet certificates" "role" (printf "tls.fleet.%s.%s" $companion.companionId $kind) "name" (include (printf "psfn.fleetAgent%sCertSecretName" $kind) $target) "key" "tls.key") -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- range $component := list "gateway" "garden" "satelliteHub" -}}
+{{- $ingress := get $root.Values.ingress $component -}}
+{{- if and $root.Values.ingress.enabled $ingress.enabled $ingress.tls.enabled $ingress.tls.secretName -}}
+{{- include "psfn.registerSecretCredential" (dict "seen" $seen "label" "ingress TLS Secret" "role" "tls.ingress" "name" $ingress.tls.secretName "key" "tls.key") -}}
+{{- end -}}
+{{- end -}}
+{{- $voxta := .Values.satelliteHub.voxta -}}
+{{- if and .Values.satelliteHub.enabled $voxta.enabled (not .Values.secrets.existingSecret) (eq $voxta.authTokenSecretRef.name $appName) -}}
+{{- if or (ne $voxta.authTokenSecretRef.key .Values.secrets.keys.voxtaAuthToken) (not .Values.secrets.values.voxtaAuthToken) -}}
+{{- fail "satelliteHub.voxta.authTokenSecretRef must select secrets.keys.voxtaAuthToken with secrets.values.voxtaAuthToken in the chart-owned app Secret" -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $seen -}}
+{{- end -}}
+
+{{- define "psfn.validateSecretCredentialReferences" -}}
+{{- $_ := include "psfn.secretCredentialInventory" . -}}
 {{- end -}}

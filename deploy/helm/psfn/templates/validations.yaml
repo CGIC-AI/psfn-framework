@@ -8,6 +8,9 @@
 {{- if ne (empty $tokenRef.name) (empty $tokenRef.key) -}}
 {{- fail "satelliteHub.voxta.authTokenSecretRef requires both name and key" -}}
 {{- end -}}
+{{- if and $voxta.enabled (not (and $tokenRef.name $tokenRef.key)) -}}
+{{- fail "satelliteHub.voxta.enabled requires a dedicated authTokenSecretRef with name and key" -}}
+{{- end -}}
 {{- if and (not (include "psfn.satelliteHubDeviceRegistryEnabled" .)) (not .Values.satelliteHub.deviceAssertion.enabled) (not (and $voxta.enabled $tokenRef.name $tokenRef.key)) -}}
 {{- fail "Satellite Hub requires an enrolled device registry or enabled Voxta with a dedicated authTokenSecretRef" -}}
 {{- end -}}

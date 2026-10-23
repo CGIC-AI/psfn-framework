@@ -34,7 +34,7 @@ const reservedExtraEnvCases = extraEnvSurfaces.flatMap(surface => [...new Set([
 const bootstrapKeyMappings: Record<string, string> = parse(readFileSync(join(chart, 'values.yaml'), 'utf8')).runtimeBootstrap.keys;
 const roles = ['apiKey', 'adminToken', 'gatewaySessionHmacKey', 'gatewaySessionIntegrityAuthToken',
   'gatewayCompanionAuthToken', 'backupEncryptionKey', 'satelliteHubApiKey', 'satelliteHubControlToken',
-  'homeAssistantToken', 'eidoverseJoinToken', 'providerApiKey', 'openRouterApiKey', 'openAiApiKey',
+  'homeAssistantToken', 'voxtaAuthToken', 'eidoverseJoinToken', 'providerApiKey', 'openRouterApiKey', 'openAiApiKey',
   'embeddingApiKey', 'hfToken', 'discordToken', 'deepgramApiKey', 'elevenLabsApiKey', 'falApiKey', 'ntfyToken'];
 
 function render(values: unknown, command = 'template') {

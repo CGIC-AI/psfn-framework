@@ -9,7 +9,7 @@ All nine source findings have remediations in the release-candidate branch. The 
 | Item | Value |
 | --- | --- |
 | Audited baseline | `e6a9546051f4` |
-| Validated implementation head | `c5c9d3e4309186569a9e87817bc58b4e5bfdbabb` |
+| Validated implementation head | `f72b2fbd8d58b550dcb3ed02ab4c87c54a90ce7b` |
 | Primary findings | 1 Critical / 4 High / 3 Medium / 1 Low |
 | Tracker epic | `psfn-framework-zbbxj` |
 | Source certification | `psfn-framework-zbbxj.8` |
@@ -104,16 +104,17 @@ These items are not retroactively included in the original nine-finding severity
 | PSFN-AF-09 | High | Model and TTS execution bypassed the Hub-wide provider budget, so disconnecting and reconnecting could accumulate cancellation-ignoring provider work after socket admission was released | Remediated by charging model, streaming TTS, browser speech, Voxta, and Eidoverse execution through actual iterable settlement and cleanup; timeout and shutdown remain hard-bounded without prematurely releasing the provider charge (`psfn-framework-zbbxj.16`) |
 | PSFN-AF-10 | High | Cancelled provider contexts could release logical state while outbound WebSocket sends remained in native or callback-pending buffers; 50 cancelled ElevenLabs turns retained more than 2 MiB despite a 1 KiB configured limit | Remediated with socket-owned byte/frame/callback admission, native-buffer accounting, bounded send completion, budgeted protocol pongs, terminal teardown, content-free errors, and fresh-connection recovery across ElevenLabs, Deepgram, MCPL, Home Assistant, and the companion browser relay (`psfn-framework-zbbxj.18`) |
 | PSFN-AF-11 | Medium | The loopback Voxta relay accepted a hostile HTTP `Host` when `Origin` was absent, then attached its stored upstream bearer credential, leaving a DNS-rebinding path to authenticated upstream GET routes | Remediated with exact configured literal-loopback IP and port authority binding, absolute-form rejection, independent Origin checks, and IPv4/IPv6 process tests proving hostile authorities have no upstream, session, microphone, or artifact effects (`psfn-framework-zbbxj.17`) |
+| PSFN-AF-12 | High | Main realtime and Voxta listener WebSockets left automatic pong enabled, allowing control replies to bypass application output budgets; an unauthenticated pre-hello peer retained about 8.4 MiB despite a 1 KiB configured limit | Remediated by disabling automatic pong on realtime, SignalR, and audio listeners and sharing socket-owned data/pong/close admission, native frame-header projection, callback/frame limits, bounded completion, terminal-only connection release, and real unread-peer recovery tests (`psfn-framework-zbbxj.19`) |
 
-Independent reviews of successive assembled candidates found AF-05 through AF-11; each finding was reproduced, assigned a blocking bead, remediated, and independently retested before this report was updated. The remediation review also closed credential-role alias and database-override bypasses, synchronized credential policy copies, refreshed stale security fixtures, and separated encoded transport limits from decoded media limits. These are defense-in-depth corrections within the primary findings rather than separately counted vulnerabilities.
+Independent reviews of successive assembled candidates found AF-05 through AF-12; each finding was reproduced, assigned a blocking bead, remediated, and independently retested before this report was updated. The remediation review also closed credential-role alias and database-override bypasses, synchronized credential policy copies, refreshed stale security fixtures, and separated encoded transport limits from decoded media limits. These are defense-in-depth corrections within the primary findings rather than separately counted vulnerabilities.
 
 ## Validation evidence
 
-The root validator reproduced implementation-agent claims on the assembled branch at `c5c9d3e4309186569a9e87817bc58b4e5bfdbabb`. Because the pre-PR gate and independent exact-head reviews must run after this report itself is committed, their final commit/result attestations are recorded on `psfn-framework-zbbxj.8` and the pull request rather than self-referentially embedded here.
+The root validator reproduced implementation-agent claims on the assembled branch at `f72b2fbd8d58b550dcb3ed02ab4c87c54a90ce7b`. Because the pre-PR gate and independent exact-head reviews must run after this report itself is committed, their final commit/result attestations are recorded on `psfn-framework-zbbxj.8` and the pull request rather than self-referentially embedded here.
 
 | Control | Evidence |
 | --- | --- |
-| Hub authentication, parser survival, resources, privacy | `npm run verify:satellite-hub`: 427 TypeScript tests and 120 Python tests; build/type checks passed. The final additions cover pre-handshake admission, provider-work lifetime, outbound provider-socket ownership, and bounded HTTP, mTLS, SSE, provider-WebSocket, reply, STT, TTS, and generated-image paths |
+| Hub authentication, parser survival, resources, privacy | `npm run verify:satellite-hub`: 455 TypeScript tests and 120 Python tests; build/type checks passed. The final additions cover pre-handshake admission, provider-work lifetime, provider- and listener-socket output ownership, data/control/close frames, and bounded HTTP, mTLS, SSE, provider-WebSocket, reply, STT, TTS, and generated-image paths |
 | Gateway framing, admission, and RPC flow control | 75 exact Unix/mTLS-WebSocket transport and flow-control regressions passed on the assembled head; the implementation lane passed 460 tests across 22 files plus type, lint, build, privacy, and applicable structural checks |
 | Filesystem regex isolation | 153 independently selected unit/integration tests passed, including hostile near-miss, cancellation, cleanup, and recovery |
 | Garden browser security | 82 focused browser-session tests and 118 Garden/chart tests passed |

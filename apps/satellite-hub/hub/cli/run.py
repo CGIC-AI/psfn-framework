@@ -5,6 +5,7 @@ import logging
 import math
 from contextlib import AsyncExitStack
 from datetime import timedelta
+from functools import wraps
 from pathlib import Path
 
 import typer
@@ -27,6 +28,20 @@ from hub.runtime import load_runtime_config
 from hub.security.device_assertion import HubDeviceAssertionIssuer
 from hub.storage.session_cache import SessionCache
 from hub.storage.artifacts import ArtifactStore
+
+
+def _owned_voice_callback(tasks: set[asyncio.Task], callback):
+    @wraps(callback)
+    async def owned(*args, **kwargs):
+        task = asyncio.current_task()
+        assert task is not None
+        tasks.add(task)
+        try:
+            return await callback(*args, **kwargs)
+        finally:
+            tasks.discard(task)
+
+    return owned
 
 
 async def _run_esphome_runtime(
@@ -72,6 +87,8 @@ async def _run_esphome_runtime(
 
     try:
         while True:
+            runtime: StreamingVoiceAssistantRuntime | None = None
+            callback_tasks: set[asyncio.Task] = set()
             try:
                 async with ESPHomeSession(config.esphome_target) as session:
                     await session.device_info()
@@ -118,20 +135,29 @@ async def _run_esphome_runtime(
                         pinned_conversation_id=config.voice_conversation_id,
                     )
                     unsubscribe = session.subscribe_voice_assistant(
-                        handle_start=runtime.handle_start,
-                        handle_stop=runtime.handle_stop,
-                        handle_audio=runtime.handle_audio,
+                        handle_start=_owned_voice_callback(callback_tasks, runtime.handle_start),
+                        handle_stop=_owned_voice_callback(callback_tasks, runtime.handle_stop),
+                        handle_audio=_owned_voice_callback(callback_tasks, runtime.handle_audio),
                     )
                     async with AsyncExitStack() as endpoint:
-                        endpoint.push_async_callback(runtime.aclose)
                         endpoint.callback(unsubscribe)
                         typer.echo("ESPHome connected")
                         await session.wait_disconnected()
                 typer.echo("ESPHome connection lost; reconnecting in 2 seconds")
             except Exception:
+                if asyncio.current_task().cancelling():
+                    raise
                 typer.echo("ESPHome connection failed; reconnecting in 5 seconds")
                 await asyncio.sleep(5)
                 continue
+            finally:
+                async with AsyncExitStack() as endpoint:
+                    if runtime is not None:
+                        endpoint.push_async_callback(runtime.aclose)
+                    for task in tuple(callback_tasks):
+                        if not task.cancelling():
+                            task.cancel()
+                        endpoint.push_async_callback(_cancel_runtime_task, task)
             await asyncio.sleep(2)
     finally:
         async with AsyncExitStack() as resources:
@@ -206,7 +232,8 @@ async def _finish_shutdown(shutdown: asyncio.Task[None]) -> None:
 
 
 async def _cancel_runtime_task(task: asyncio.Task[None]) -> None:
-    task.cancel()
+    if not task.cancelling():
+        task.cancel()
     try:
         await task
     except asyncio.CancelledError:

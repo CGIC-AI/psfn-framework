@@ -105,8 +105,7 @@ class StreamingVoiceAssistantRuntime:
         try:
             async with AsyncExitStack() as resources:
                 resources.callback(self._artifacts.close)
-                if self._active is not None or self._response_task is not None:
-                    resources.push_async_callback(self._stt.abort_turn)
+                resources.push_async_callback(self._stt.abort_turn)
                 for task in tasks:
                     task.cancel()
                 results = await asyncio.gather(*tasks, return_exceptions=True)

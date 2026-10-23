@@ -46,7 +46,10 @@ function appendCookies(res: ServerResponse, values: string[]): void {
   res.setHeader('Set-Cookie', [...previous, ...values]);
 }
 
-/** Standalone browser authority lives only in this process, never in ADMIN_TOKEN cookies. */
+/**
+ * Standalone browser authority lives only in this listener's process. The chart
+ * requires one replica because challenges and revocation are not shared.
+ */
 export class GardenBrowserSessions {
   private readonly sessions = new Map<string, BrowserSession>();
 

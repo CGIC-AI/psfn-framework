@@ -289,6 +289,9 @@ workloads:
       - /app/backups
       - /run/psfn
   garden:
+    # Exactly one: standalone login challenges, sessions, and revocation live in
+    # this process. No shared session authority or cross-replica affinity exists.
+    # Fleet deployments independently require one Garden replica as well.
     replicaCount: 1
     image:
       repository: ""

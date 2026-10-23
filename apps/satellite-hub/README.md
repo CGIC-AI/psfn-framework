@@ -263,6 +263,30 @@ The Python audio listener now requires explicit local development or a trusted
 HTTPS/auth relay. See [Python listener, resource, and artifact security](docs/python-security.md)
 for migration, exact admission rules, defaults, and retention.
 
+Python realtime output has one per-socket budget shared by application frames,
+automatic pong replies, explicit ping/pong, fragments, and close frames. The
+production defaults are 8,192 retained frames, 1,048,576 bytes, and a five-second
+absolute completion deadline. Admission occurs before serialization with a
+conservative 14-byte charge per frame; the native asyncio transport buffer and
+pending protocol output share that byte ceiling. HTTP handshake writes also
+pass the byte boundary. Compression stays disabled. The gate uses the pinned
+websockets 15.0.1 `send_frame` boundary, including its synchronous automatic
+control replies; `write_limit` and `drain` provide flow control only.
+
+Charges release when pending protocol output and the native transport buffer
+both empty. Partial drain and new frames never extend an outstanding deadline.
+Overflow, expiry, or write failure aborts TCP and clears pending output; close
+frames have no extra capacity reserve. The connection slot stays charged until
+terminal TCP cleanup. A single timer handle checks retained output every 10 ms
+and is canceled on cleanup; no output watcher task is created. Library tests can
+inject smaller `RealtimeOutputLimits` through `RealtimeVoiceServer.output_limits`.
+The cap measures process-owned serialized output and conservative frame charges;
+kernel TCP buffers and provider/application source objects have their own limits.
+Local socket regressions cover unread peers with reduced TCP buffers, exact and
+one-over admission, a legal 125-byte ping flood, control competition, deadlines,
+cancellation, shutdown, and fresh authenticated recovery. Live load validation
+remains pending.
+
 Important settings for the TypeScript realtime path:
 
 - `HUB_WS_URL`

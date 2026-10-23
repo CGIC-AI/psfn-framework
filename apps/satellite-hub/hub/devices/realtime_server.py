@@ -22,6 +22,7 @@ from hub.adapters.agent.psfn_streaming import PsfnStreamingProvider
 from hub.adapters.stt.deepgram_live import DeepgramLiveSTTProvider
 from hub.adapters.tts.elevenlabs_streaming import ElevenLabsStreamingTTS
 from hub.devices.realtime_admission import RealtimeAdmission
+from hub.devices.realtime_output import RealtimeOutputLimits
 from hub.media.http_audio import StaticAudioServer
 from hub.satellite_claims import ClientCertificateConfig, SatelliteClaimConfig
 from hub.security.realtime_access import RealtimeAccess
@@ -493,6 +494,7 @@ class RealtimeVoiceServer:
         allowed_origins: tuple[str, ...] = (),
         max_frame_bytes: int = 256 * 1024,
         max_connections: int = 64,
+        output_limits: RealtimeOutputLimits | None = None,
         max_audio_bytes: int = 4 * 1024 * 1024,
         max_audio_duration_seconds: float = 120,
         idle_timeout_seconds: float = 30,
@@ -504,7 +506,7 @@ class RealtimeVoiceServer:
             if not isinstance(value, (int, float)) or not 0 < value <= 2_147_483_647:
                 raise ValueError("Realtime resource limits must be positive bounded numbers")
         self._max_frame_bytes = max_frame_bytes
-        self._admission = RealtimeAdmission(max_connections)
+        self._admission = RealtimeAdmission(max_connections, output_limits)
         self._max_audio_bytes = max_audio_bytes
         self._max_audio_duration = max_audio_duration_seconds
         self._idle_timeout = idle_timeout_seconds
@@ -567,11 +569,20 @@ class RealtimeVoiceServer:
         return None
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
-        assert self._server is not None
+        server = self._server
+        if server is None:
+            return
         self._admission.stop()
-        self._server.close()
-        await self._server.wait_closed()
-        self._server = None
+        server.close()
+        try:
+            await server.wait_closed()
+        except asyncio.CancelledError:
+            for connection in tuple(self._connections):
+                connection.transport.abort()
+            await server.wait_closed()
+            raise
+        finally:
+            self._server = None
 
     async def _handle_connection(self, websocket) -> None:
         connection = _RealtimeConnection(

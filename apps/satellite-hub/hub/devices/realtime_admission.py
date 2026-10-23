@@ -7,6 +7,8 @@ import asyncio
 from websockets.asyncio.server import ServerConnection
 from websockets.protocol import CONNECTING
 
+from hub.devices.realtime_output import RealtimeOutput, RealtimeOutputLimits
+
 
 class RealtimeAdmission:
     """One fixed budget shared by pending and authenticated TCP connections.
@@ -16,9 +18,10 @@ class RealtimeAdmission:
     background wait_closed task. Rejected sockets create no WebSocket handler.
     """
 
-    def __init__(self, limit: int) -> None:
+    def __init__(self, limit: int, output_limits: RealtimeOutputLimits | None = None) -> None:
         if isinstance(limit, bool) or not isinstance(limit, int) or not 0 < limit <= 2_147_483_647:
             raise ValueError("Realtime connection limit must be a positive bounded integer")
+        self.output_limits = output_limits or RealtimeOutputLimits()
         self.limit = limit
         self.connections: set[ServerConnection] = set()
         self.accepting = False
@@ -48,6 +51,8 @@ class _AdmittedConnection(ServerConnection):
     def __init__(self, *args, admission: RealtimeAdmission, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._admission = admission
+        self.output = RealtimeOutput(self, admission.output_limits)
+        self._tcp_closed = False
 
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
         super().connection_made(transport)
@@ -56,8 +61,21 @@ class _AdmittedConnection(ServerConnection):
         if not self._admission.accepting:
             transport.abort()
 
+    def send_data(self) -> None:
+        self.output.before_write()
+        try:
+            super().send_data()
+        except (OSError, RuntimeError):
+            self.output.fail()
+            raise
+        self.output.flushed()
+
     def connection_lost(self, exc: Exception | None) -> None:
+        if self._tcp_closed:
+            return
+        self._tcp_closed = True
         try:
             super().connection_lost(exc)
         finally:
+            self.output.closed()
             self._admission.connections.discard(self)

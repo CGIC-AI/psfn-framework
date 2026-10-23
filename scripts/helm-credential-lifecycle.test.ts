@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { extractContainerEnv } from './verify-chart-render.js';
 
 // Only the Kubernetes/cert-manager infrastructure is substituted. The public
 // lifecycle executable, cryptographic generation and Helm renderer are real.
@@ -30,9 +31,9 @@ const args = process.argv.slice(2);
 if (args[0] === 'get') process.exit(1);
 if (args[0] === 'upgrade' && args[2] === 'credential-test') {
   const settings = [];
-  for (let i = 4; i < args.length; i++) if (args[i] === '--set' || args[i] === '--set-string') settings.push(args[i], args[++i]);
+  for (let i = 4; i < args.length; i++) if (['--set', '--set-string', '--set-json'].includes(args[i])) settings.push(args[i], args[++i]);
   const result = cp.spawnSync(process.env.CREDENTIAL_TEST_HELM, ['template', 'credential-test', args[3], ...settings], {encoding:'utf8'});
-  fs.writeFileSync(path.join(process.env.CREDENTIAL_TEST_ROOT, 'render-result.json'), JSON.stringify(result));
+  fs.writeFileSync(path.join(process.env.CREDENTIAL_TEST_ROOT, 'render-result.json'), JSON.stringify({ ...result, settings }));
   process.stderr.write('Stopped after real Helm rendering at the external install boundary'); process.exit(43);
 }
 `;
@@ -50,19 +51,40 @@ function lifecycle(existing: Record<string, Record<string, string>> = {}, scenar
   for (const name of ['companion', 'scheduler', 'capability-tier', 'charge-policy', 'skills', 'partner-affect-shadow']) writeFileSync(join(companion, `${name}.json`), '{}');
   writeFileSync(join(bin, 'kubectl'), kubernetesBoundary, { mode: 0o700 });
   writeFileSync(join(bin, 'helm'), helmBoundary, { mode: 0o700 });
-  const result = spawnSync(process.execPath, ['--import', 'tsx', resolve('scripts/helm-lifecycle.ts'), 'up'], {
-    encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, SYSTEM_DATA_DIR: system,
+  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, SYSTEM_DATA_DIR: system,
       COMPANION_DATA_DIR: join(root, 'companion'), PSFN_KUBE_CONTEXT: 'credential-test', PSFN_HELM_RELEASE: 'credential-test',
       PSFN_HELM_NAMESPACE: 'credential-test', PSFN_IMAGE: 'registry.example/psfn:1.2.3',
+      ADMIN_PUBLIC_ORIGIN: 'https://garden.example.test', ADMIN_TRUSTED_PROXY_ADDRESSES: '192.0.2.0/24',
       CREDENTIAL_TEST_ROOT: root, CREDENTIAL_TEST_HELM: realHelm,
       CREDENTIAL_TEST_SCENARIO: scenario, CREDENTIAL_TEST_SENTINEL: 'private-response-sentinel-0123456789',
-      CREDENTIAL_TEST_PROVIDER: existing['credential-test-runtime-secrets']?.['provider-api-key'] ?? randomBytes(32).toString('hex') },
+      CREDENTIAL_TEST_PROVIDER: existing['credential-test-runtime-secrets']?.['provider-api-key'] ?? randomBytes(32).toString('hex') };
+  const result = spawnSync(process.execPath, ['--import', 'tsx', resolve('scripts/helm-lifecycle.ts'), 'up'], {
+    encoding: 'utf8', env,
   });
-  return { root, result, read: (name: string) => JSON.parse(readFileSync(join(root, `${name}.json`), 'utf8')) as Record<string, string>,
+  return { root, result, env, read: (name: string) => JSON.parse(readFileSync(join(root, `${name}.json`), 'utf8')) as Record<string, string>,
     cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
 describe('public Helm lifecycle credential staging', () => {
+  it('forwards structured Helm settings to the real renderer without dropping key mappings', () => {
+    const run = lifecycle();
+    try {
+      const setting = 'secrets.keys={"apiKey":"STRUCTURED_API_KEY","adminToken":"STRUCTURED_ADMIN_TOKEN"}';
+      spawnSync(join(run.root, 'bin', 'helm'), ['upgrade', '--install', 'credential-test', resolve('deploy/helm/psfn'),
+        '--set', 'secrets.create=false', '--set-string', 'secrets.existingSecret=external-app',
+        '--set-string', 'postgres.auth.existingSecret=external-postgres', '--set-json', setting,
+        '--set-string', 'gardenBrowser.publicOrigin=https://garden.example.test',
+        '--set-json', 'gardenBrowser.trustedProxyAddresses=["192.0.2.0/24"]'], {
+        env: run.env, encoding: 'utf8',
+      });
+      const result = JSON.parse(readFileSync(join(run.root, 'render-result.json'), 'utf8'));
+      expect(result.status).toBe(0);
+      const env = extractContainerEnv(result.stdout, 'credential-test-psfn-gateway', 'gateway');
+      expect(env.get('API_KEY')?.secretKeyRef?.key).toBe('STRUCTURED_API_KEY');
+      expect(env.get('ADMIN_TOKEN')?.secretKeyRef?.key).toBe('STRUCTURED_ADMIN_TOKEN');
+      expect(result.settings).toContain(setting);
+    } finally { run.cleanup(); }
+  });
   it('generates independent random credentials and preserves them exactly on upgrade through real Helm', () => {
     const first = lifecycle();
     try {

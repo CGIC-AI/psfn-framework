@@ -369,10 +369,10 @@ function main(): number {
     const extraEnvValues = (): Record<string, unknown> => ({
       ...baseValues(),
       workloads: {
-        gateway: { extraEnv: [{ name: 'PSFN_TESTING_HARNESS_GARDEN_VERIFIER', value: 'true' }] },
-        garden: { extraEnv: [{ name: 'PSFN_TESTING_HARNESS_GARDEN_VERIFIER', value: true }] },
+        gateway: { extraEnv: [{ name: 'EXAMPLE_EXTRA_FLAG', value: 'true' }] },
+        garden: { extraEnv: [{ name: 'EXAMPLE_EXTRA_FLAG', value: true }] },
         agent: { extraEnv: [
-          { name: 'PSFN_TESTING_HARNESS_GARDEN_VERIFIER', value: 'true' },
+          { name: 'EXAMPLE_EXTRA_FLAG', value: 'true' },
           { name: 'EXAMPLE_FROM_SECRET', valueFrom: { secretKeyRef: { name: 'example', key: 'token' } } },
         ] },
       },
@@ -390,9 +390,9 @@ function main(): number {
       ] as const) {
         const env = extractContainerEnv(extraEnv.stdout, deployment, container);
         check(
-          env.get('PSFN_TESTING_HARNESS_GARDEN_VERIFIER')?.value === 'true',
-          `${container} carries the harness Garden verifier flag from extraEnv`,
-          `rendered: ${String(env.get('PSFN_TESTING_HARNESS_GARDEN_VERIFIER')?.value)}`,
+          env.get('EXAMPLE_EXTRA_FLAG')?.value === 'true',
+          `${container} carries a custom operator flag from extraEnv`,
+          `rendered: ${String(env.get('EXAMPLE_EXTRA_FLAG')?.value)}`,
         );
       }
       check(

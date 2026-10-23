@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { randomBytes } from 'node:crypto';
 import { existsSync, mkdtempSync, mkdirSync, openSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
@@ -359,6 +360,27 @@ describe('loadConfig path defaults', () => {
       expect(String(error)).not.toContain(password);
       expect(String(error)).not.toContain('postgresql://');
     }
+  });
+
+  it.each(['password=postgres', '%70assword=postgres', 'pass%77ord=postgres', 'password=%70%6f%73%74%67%72%65%73', 'password=unused&password=postgres'])(
+    'rejects PostgreSQL authentication query overrides before config startup (%#)', query => {
+      clearRuntimePathEnv();
+      const password = randomBytes(32).toString('hex');
+      const databaseUrl = `postgresql://postgres:${password}@127.0.0.1:5432/psfn?${query}`;
+      process.env.POSTGRES_DATABASE_URL = databaseUrl;
+      expect(() => loadConfig()).toThrow(/routing or authentication query override/u);
+      try { loadConfig(); } catch (error) {
+        expect(String(error)).not.toContain(password);
+        expect(String(error)).not.toContain(databaseUrl);
+      }
+    },
+  );
+
+  it('preserves non-authentication PostgreSQL query options in a strong startup credential', () => {
+    clearRuntimePathEnv();
+    const databaseUrl = `postgresql://postgres:${randomBytes(32).toString('hex')}@127.0.0.1:5432/psfn?application_name=credential-test&sslmode=require`;
+    process.env.POSTGRES_DATABASE_URL = databaseUrl;
+    expect(loadConfig().postgresDatabaseUrl).toBe(databaseUrl);
   });
 
   it('loads the agent database credential from a secret file without a raw DSN env var', () => {

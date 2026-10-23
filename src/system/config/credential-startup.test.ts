@@ -32,6 +32,22 @@ async function stop(surface: { stop(): Promise<void> }) {
 }
 
 describe('public credential startup boundaries', () => {
+  it.each(['password', '%70assword', 'pass%77ord'])('rejects a PostgreSQL %s query override in the executable gateway before owner hydration', parameter => {
+    const directory = mkdtempSync(join(tmpdir(), 'psfn-startup-pg-override-'));
+    const password = randomBytes(32).toString('hex');
+    const override = 'weak-query-credential-probe';
+    const databaseUrl = `postgresql://postgres:${password}@127.0.0.1:5432/psfn?${parameter}=${override}`;
+    try {
+      const result = spawnSync(process.execPath, ['--import', resolve('node_modules/tsx/dist/loader.mjs'), resolve('src/app/gateway/main.ts')], {
+        cwd: directory, encoding: 'utf8', env: { PATH: process.env.PATH, TZ: 'UTC', POSTGRES_DATABASE_URL: databaseUrl },
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain('routing or authentication query override');
+      expect(result.stdout + result.stderr).not.toContain(password);
+      expect(result.stdout + result.stderr).not.toContain(override);
+      expect(result.stdout + result.stderr).not.toContain(databaseUrl);
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
   it.each([['gateway', 'API_KEY'], ['operator', 'ADMIN_TOKEN'], ['agent', 'GATEWAY_SESSION_HMAC_KEY']])(
     'rejects weak credentials in the executable %s entrypoint before owner-file hydration', (component, role) => {
       const directory = mkdtempSync(join(tmpdir(), 'psfn-startup-credentials-'));

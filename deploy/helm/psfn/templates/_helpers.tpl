@@ -1291,14 +1291,18 @@ Sprig merge mutation.
 {{/*
      Operator-supplied extra environment for one container (psfn-framework-v4mxw).
      Renders a validated list of EnvVar entries: each needs an uppercase `name`
-     and exactly one of `value` / `valueFrom`; names the chart manages for that
-     container (passed as `managed`, a space-separated list) are rejected so an
-     override can never shadow chart-owned wiring.
-     Usage: include "psfn.extraEnv" (dict "entries" .Values.x.extraEnv "label" "x.extraEnv" "managed" "A B")
+     and exactly one of `value` / `valueFrom`; names from the shared chart
+     authority, custom credential roles and container-local `managed` list
+     are rejected so an override can never shadow chart-owned wiring.
+     Usage: include "psfn.extraEnv" (dict "root" . "entries" .Values.x.extraEnv "label" "x.extraEnv" "managed" "A B")
 */}}
 {{- define "psfn.extraEnv" -}}
 {{- $label := .label -}}
-{{- $managed := splitList " " (default "" .managed) -}}
+{{- $managed := concat (splitList " " (default "" .managed)) (include "psfn.managedEnvironmentNames" .root | fromJsonArray) -}}
+{{- range $binding := include "psfn.credentialEnvironmentBindings" .root | fromJsonArray -}}
+{{- $managed = append $managed $binding.name -}}
+{{- end -}}
+{{- $seen := dict -}}
 {{- range $index, $entry := (default (list) .entries) -}}
 {{- if not (kindIs "map" $entry) -}}
 {{- fail (printf "%s[%d] must be an EnvVar object" $label $index) -}}
@@ -1310,6 +1314,10 @@ Sprig merge mutation.
 {{- if has $name $managed -}}
 {{- fail (printf "%s[%d] (%s) is managed by the chart and cannot be overridden" $label $index $name) -}}
 {{- end -}}
+{{- if hasKey $seen $name -}}
+{{- fail (printf "%s requires distinct environment names" $label) -}}
+{{- end -}}
+{{- $_ := set $seen $name true -}}
 {{- $hasValue := hasKey $entry "value" -}}
 {{- $hasFrom := hasKey $entry "valueFrom" -}}
 {{- if eq $hasValue $hasFrom -}}

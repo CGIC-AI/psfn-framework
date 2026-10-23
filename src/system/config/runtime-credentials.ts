@@ -1,10 +1,10 @@
 import { assertDistinctCredentials, assertStrongCredential } from '../../shared/security/credentials.js';
+import { parseExactPostgresCredential } from '../../shared/utils/postgres-credential.js';
 
 export function assertStrongPostgresCredential(value: string, role: string): void {
+  const { url } = parseExactPostgresCredential(value, role);
   let password: string;
   try {
-    const url = new URL(value);
-    if (url.protocol !== 'postgres:' && url.protocol !== 'postgresql:') throw new Error();
     password = decodeURIComponent(url.password);
   } catch {
     throw new Error(`${role} must be a PostgreSQL URL containing a strong password credential`);

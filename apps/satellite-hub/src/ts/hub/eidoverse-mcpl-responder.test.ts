@@ -185,6 +185,7 @@ test("malformed and unknown inbound requests fail closed", () => {
  * notification form the responder only ever sees through it — without a port.
  */
 class ScriptedDoorSocket implements EidoverseMcplSocket {
+  readonly bufferedAmount = 0;
   readonly sent: Array<Record<string, unknown>> = [];
   private readonly openHandlers: Array<() => void> = [];
   private readonly messageHandlers: Array<(data: string) => void> = [];
@@ -195,7 +196,8 @@ class ScriptedDoorSocket implements EidoverseMcplSocket {
     }, 0);
   }
 
-  send(data: string): void {
+  send(data: string, callback: (error?: Error) => void): void {
+    callback();
     const frame = JSON.parse(data) as Record<string, unknown>;
     this.sent.push(frame);
     const id = frame.id;
@@ -211,6 +213,8 @@ class ScriptedDoorSocket implements EidoverseMcplSocket {
     if (frame.method === "channels/list") this.answer(id, { channels: [COMMONS] });
   }
 
+  pong(_data: Buffer, callback: (error?: Error) => void): void { callback(); }
+  onPing(): void {}
   close(): void {}
 
   onOpen(handler: () => void): void {

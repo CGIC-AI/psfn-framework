@@ -515,6 +515,31 @@ bodies, status text, credentials, or exception messages.
 | Home Assistant WebSocket receives | Existing 2 MiB transport cap |
 | Amica acknowledgement | Body cancelled immediately; configured request deadline |
 
+Every outbound provider WebSocket write is admitted before enqueue: a frame
+must fit `maxFrameBytes`, aggregate output must fit `maxBufferedBytes`, and at
+most `maxQueuedMessages` send callbacks may remain pending. The socket owns
+these charges: cancelling a TTS context, resolving a request, or timing out a
+command cannot release an unfinished write. Native `bufferedAmount` overlaps
+callback-pending writes, so admission uses the larger byte charge instead of
+counting the same payload twice. Callbacks release their own charges once;
+terminal socket close releases abandoned callbacks. A write exceeding capacity,
+failing, or retaining its callback beyond `providerTimeoutMs` terminates that
+connection and fails its logical operations with content-free errors. A fresh
+connection creates a fresh budget. WebSocket automatic pong is disabled; actual
+pong control frames use the same admission and callbacks.
+
+| Outbound socket | Writes covered |
+| --- | --- |
+| ElevenLabs (created by the Hub server) | Context initialization, text/flush, cancellation/close, pong |
+| Deepgram realtime (reusable adapter; currently no production caller) | PCM audio, keepalive, pong |
+| MCPL (created by the Hub entrypoint) | Initialize, initialized notification, feature grant, requests, results/errors, pong |
+| Home Assistant (created by the Hub entrypoint) | Authentication, state/subscription initialization, service commands, pong |
+| Companion browser relay (attached by the Hub server) | Gateway and browser JSON/binary writes, assertion renewal, pong; uses its configured frame/byte caps, 32 pending frames and its handshake deadline |
+
+HTTP-only providers retain the HTTP limits above. Device Studio and Pi client
+sockets are endpoint clients, and the Hub/Voxta listener output is client
+transport rather than a provider connection.
+
 SSE remains a long-lived stream: completed frames release the frame budget and
 refresh the idle deadline. Delimiter fragments and UTF-8 characters spanning
 reads count toward the same frame. Voxta and realtime reply retention count

@@ -38,6 +38,13 @@ only the same authenticated connection can cancel that ID. A cancel response
 acknowledges the request; the original search settles after cleanup. Connection
 shutdown cancels searches even when their callers did not provide IDs.
 
+A client search aborted in flight waits for its original RPC reply, which proves
+the evaluator has exited, before rejecting. A disconnected client rejects its
+pending request without waiting for an unavailable reply. Pre-aborted client
+signals reject before sending a search. Client aborts always produce
+`SearchAbortedError` with `fs search aborted`; caller reasons are never attached
+or exposed in filesystem tool text or structured error details.
+
 Errors never echo file content, patterns, worker diagnostics, or abort reasons:
 
 | Condition | Message |

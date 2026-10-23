@@ -10,6 +10,7 @@ import { createComponentLogger } from '../../../shared/logger.js';
 import type { FleetCompanionPostureSummary } from '../../../shared/telemetry/fleet-posture.js';
 import { abortError } from '../../../shared/utils/errors.js';
 import { isRecord } from '../../../shared/utils/types.js';
+import { SearchAbortedError } from '../../integrations/filesystem/regex-search.js';
 import type {
   GatewayRpcConnection,
   GatewayRpcSerializedTransportStats,
@@ -100,7 +101,9 @@ export class GatewayClientTransportRuntime {
     const cancellationId = remoteCancellation ? randomUUID() : undefined;
     const requestParams = cancellationId ? { ...params, cancellationId } : params;
     if (!signal) return await this.request<T>(method, requestParams);
-    if (signal.aborted) throw abortError(signal.reason);
+    if (signal.aborted) {
+      throw remoteCancellation === 'fs' ? new SearchAbortedError() : abortError(signal.reason);
+    }
 
     return await new Promise<T>((resolve, reject) => {
       let settled = false;
@@ -108,7 +111,8 @@ export class GatewayClientTransportRuntime {
         if (settled) return;
         settled = true;
         signal.removeEventListener('abort', onAbort);
-        if (kind === 'resolve') resolve(value as T);
+        if (remoteCancellation === 'fs' && signal.aborted) reject(new SearchAbortedError());
+        else if (kind === 'resolve') resolve(value as T);
         else reject(value);
       };
       const onAbort = () => {
@@ -118,6 +122,10 @@ export class GatewayClientTransportRuntime {
             ...(remoteCancellation === 'llm' && companionId ? { companionId } : {}),
           });
         }
+        // Search replies arrive only after the gateway joins its evaluator.
+        // Keep the original request correlated until that reply or disconnect;
+        // a cancellation notification alone does not release its worker slot.
+        if (remoteCancellation === 'fs') return;
         finalize('reject', abortError(signal.reason));
       };
       signal.addEventListener('abort', onAbort, { once: true });

@@ -1,0 +1,4 @@
+postgres:
+  appArmorProfile:
+    type: Localhost
+    localhostProfile: psfn-postgres

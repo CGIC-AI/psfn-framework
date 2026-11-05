@@ -425,6 +425,11 @@ postgres:
     tag: 0.8.1-pg17
     digest: sha256:3e8b3adfd27b5707128f60956f62a793c3c9326ea8cfaf0eab7adccb5d700b21
     pullPolicy: IfNotPresent
+  # On hosts with Ubuntu stacked-label signal denials, load
+  # deploy/apparmor/psfn-postgres on each eligible database node and set
+  # type: Localhost and localhostProfile: psfn-postgres.
+  appArmorProfile:
+    type: RuntimeDefault
   auth:
     database: psfn
     username: psfn

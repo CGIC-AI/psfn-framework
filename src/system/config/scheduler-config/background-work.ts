@@ -7,7 +7,7 @@ export const DEFAULT_BACKGROUND_WORK_TUNING: BackgroundWorkRuntimeTuning = {
   supervisor: {
     maxConcurrentSessions: 4,
     leaseDurationMs: 5 * 60_000,
-    retryBaseDelayMs: 1_000,
+    retryBaseDelayMs: 15_000,
     retryMaxDelayMs: 5 * 60_000,
     shutdownTimeoutMs: 5_000,
     terminalRetentionMs: 7 * 24 * 60 * 60_000,
@@ -15,8 +15,8 @@ export const DEFAULT_BACKGROUND_WORK_TUNING: BackgroundWorkRuntimeTuning = {
   },
   postTurn: {
     maxAttempts: 5,
-    extractionDrainRequeueDelayMs: 1_000,
-    foregroundPreemptionDeferDelayMs: 1_000,
+    extractionDrainRequeueDelayMs: 5_000,
+    foregroundPreemptionDeferDelayMs: 15_000,
   },
 };
 

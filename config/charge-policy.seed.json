@@ -10,7 +10,7 @@
   },
   "surfaceCosts": {
     "localImageGeneration": 0,
-    "paidImageGeneration": 6,
+    "paidImageGeneration": 2,
     "analysisWorkbenchExtensionBand": 4,
     "subagentLaunch": 1,
     "shardLaunch": 8,
@@ -85,12 +85,12 @@
         "maxHardCap": 5
       },
       "busy_human_group": {
-        "maxSoftTarget": 2,
-        "maxHardCap": 5
+        "maxSoftTarget": 4,
+        "maxHardCap": 10
       },
       "public_group": {
-        "maxSoftTarget": 3,
-        "maxHardCap": 7
+        "maxSoftTarget": 6,
+        "maxHardCap": 14
       },
       "one_human_companion_hosted": {
         "maxSoftTarget": 5,

@@ -296,7 +296,7 @@ export interface EgressLeaseTunables extends Omit<EgressLeasePhaseSettings, 'ena
 
 export function createDefaultEgressLeaseTunables(): EgressLeaseTunables {
   const { enabled: _enabled, ...tunables } = createDefaultEgressLeasePhaseSettings();
-  return { mode: 'off', ...tunables };
+  return { mode: 'on', ...tunables };
 }
 
 // ── Owner-file parsers (jp36.8.2) ────────────────────────────────────────────
@@ -627,17 +627,17 @@ interface RoomParticipationLeaseOpenOnSettings {
  */
 export function createDefaultRoomParticipationLeaseSettings(): RoomParticipationLeaseSettings {
   return {
-    enabled: false,
+    enabled: true,
     leaseTtlMs: 15 * 60 * 1000,
     silenceTimeoutMs: 5 * 60 * 1000,
     continuationCooldownMs: 20 * 1000,
     maxContinuationCandidates: 6,
-    maxConsecutiveMachineContinuations: 2,
+    maxConsecutiveMachineContinuations: 4,
     maxConsecutiveIgnores: 3,
     minContentChars: 8,
     openOn: {
-      directSummons: false,
-      passiveSummons: false,
+      directSummons: true,
+      passiveSummons: true,
       reaction: true,
       reply: true,
       endogenousRoomEntry: true,
@@ -810,8 +810,8 @@ interface RoomSignalClassifierSettings {
  */
 export function createDefaultRoomSignalSettings(): RoomSignalSettings {
   return {
-    enabled: false,
-    contextualEligibleSourceClasses: ['operator', 'primary_user'],
+    enabled: true,
+    contextualEligibleSourceClasses: ['operator', 'primary_user', 'trusted_contact', 'companion_self'],
     contextualEligibleRoomRoles: [],
     velocityWindowMs: 60 * 1000,
     maxRoomVelocity: 12,
@@ -820,8 +820,8 @@ export function createDefaultRoomSignalSettings(): RoomSignalSettings {
     companionInterests: [],
     classifier: {
       enabled: false,
-      deadlineMs: 4_000,
-      maxOutputTokens: 16,
+      deadlineMs: 30_000,
+      maxOutputTokens: 256,
       excerptChars: 280,
     },
   };

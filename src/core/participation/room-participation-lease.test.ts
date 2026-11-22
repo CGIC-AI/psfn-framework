@@ -210,7 +210,15 @@ describe('evaluateRoomParticipationContinuation', () => {
 describe('RoomParticipationLeaseCoordinator', () => {
   it('opens membership only for an owner-admitted disposition', async () => {
     const store = new FakeRoomParticipationLeaseStore();
-    const coordinator = makeCoordinator({ store });
+    const coordinator = makeCoordinator({
+      store,
+      settings: settings({
+        openOn: {
+          ...createDefaultRoomParticipationLeaseSettings().openOn,
+          passiveSummons: false,
+        },
+      }),
+    });
     const summons = await coordinator.recordDisposition({
       channelId: ROOM,
       channelType: 'discord',

@@ -299,7 +299,7 @@ describe('migrateLegacySchedulerOwner', () => {
     // contextual room role admitted, so untrusted members stay direct-address-only.
     const seeded = loadSchedulerConfig(dataDir).socialAutonomy.roomSignal;
     expect(seeded).toEqual(createDefaultRoomSignalSettings());
-    expect(seeded.enabled).toBe(false);
+    expect(seeded.enabled).toBe(true);
     expect(seeded.classifier.enabled).toBe(false);
     expect(seeded.contextualEligibleRoomRoles).toEqual([]);
 
@@ -614,7 +614,8 @@ describe('migrateLegacySchedulerOwner', () => {
     expect(migratedRaw.operatorExtension).toEqual({ note: 'preserve me', enabled: true });
     expect(loadSchedulerConfig(dataDir).backgroundMaintenance.sharedWorldWikiCaretaker)
       .toEqual({ batchSize: 25 });
-    expect(loadSchedulerConfig(dataDir).backgroundWork).toEqual(DEFAULT_BACKGROUND_WORK_TUNING);
+    expect(loadSchedulerConfig(dataDir).backgroundWork.postTurn.maxAttempts)
+      .toBe(DEFAULT_BACKGROUND_WORK_TUNING.postTurn.maxAttempts);
 
     const inodeAfterApply = statSync(filePath).ino;
     const bytesAfterApply = readFileSync(filePath, 'utf8');

@@ -65,6 +65,9 @@ describe('isBusyTurnError', () => {
     expect(isBusyTurnError('Already PROCESSING this channel')).toBe(true);
     expect(isBusyTurnError(new Error('AGENT_BUSY while another turn runs'))).toBe(true);
     expect(isBusyTurnError({ toString: () => 'CHANNEL_BUSY' })).toBe(true);
+    const preempted = new Error('Model call on openai:test preempted (maintenance_reflection) by higher-priority foreground_reply');
+    preempted.name = 'ModelCallPreemptedError';
+    expect(isBusyTurnError(preempted)).toBe(true);
   });
 
   it('returns false for unrelated errors', () => {
@@ -83,6 +86,10 @@ describe('isAgentProcessingPromptError', () => {
     expect(isAgentProcessingPromptError(new Error('Sleeptime review failed', { cause: busyError })))
       .toBe(true);
     expect(isAgentProcessingPromptError(new Error('Agent is already processing.'))).toBe(true);
+    const modelPreempted = new Error('Model call on openrouter:bg preempted (maintenance_reflection) by higher-priority foreground_reply');
+    modelPreempted.name = 'ModelCallPreemptedError';
+    expect(isAgentProcessingPromptError(modelPreempted)).toBe(true);
+    expect(isAgentProcessingPromptError(new Error('Deliberation failed', { cause: modelPreempted }))).toBe(true);
   });
 
   it('rejects unrelated busy and already-processing failures', () => {

@@ -29,7 +29,27 @@ export function emitTurnContentionTelemetry(
   eventBus.emit('channel.queue.telemetry', payload).catch(() => undefined);
 }
 
+function isModelCallPreemptedLikeError(error: unknown): boolean {
+  const visited = new Set<Error>();
+  let current: unknown = error;
+  while (current instanceof Error && !visited.has(current)) {
+    if (current.name === 'ModelCallPreemptedError') return true;
+    const normalized = current.message.trim().toLowerCase();
+    if (normalized.startsWith('model call on ') && normalized.includes(' preempted (')) {
+      return true;
+    }
+    visited.add(current);
+    current = current.cause;
+  }
+  if (typeof current === 'string') {
+    const normalized = current.trim().toLowerCase();
+    return normalized.startsWith('model call on ') && normalized.includes(' preempted (');
+  }
+  return false;
+}
+
 export function isBusyTurnError(error: unknown): boolean {
+  if (isModelCallPreemptedLikeError(error)) return true;
   const text = String(error ?? '').toLowerCase();
   return text.includes('already processing')
     || text.includes('agent_busy')
@@ -46,8 +66,9 @@ function isAgentProcessingPromptMessage(message: string): boolean {
     || normalized.startsWith('agent is already processing another prompt.');
 }
 
-/** Matches the prompt runtime's active-run rejection without classifying unrelated busy failures. */
+/** Matches the prompt runtime's active-run rejection or model-call preemption without classifying unrelated busy failures. */
 export function isAgentProcessingPromptError(error: unknown): boolean {
+  if (isModelCallPreemptedLikeError(error)) return true;
   const visited = new Set<Error>();
   let current = error;
   while (current instanceof Error && !visited.has(current)) {

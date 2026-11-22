@@ -167,8 +167,11 @@ export interface ResolvedAuthorContext {
 }
 
 function isInternalJournalChannel(channelId: string): boolean {
-  // `internal:heartbeat` is a persisted reflection-session channel id.
-  return channelId === 'internal:heartbeat' || channelId.startsWith('internal:reflection:');
+  // `internal:heartbeat` is a persisted reflection-session channel id;
+  // `internal:free-time:` is a self-directed companion free-time session.
+  return channelId === 'internal:heartbeat'
+    || channelId.startsWith('internal:reflection:')
+    || channelId.startsWith('internal:free-time:');
 }
 
 /**
@@ -801,7 +804,8 @@ export async function resolveAuthorContext(input: {
     // reflection-turn channel id.
     const isReflectionTurnChannel = input.message.channelId === 'internal:heartbeat';
     const isScopedReflectionChannel = input.message.channelId.startsWith('internal:reflection:');
-    if (isReflectionTurnChannel || isScopedReflectionChannel) {
+    const isFreeTimeChannel = input.message.channelId.startsWith('internal:free-time:');
+    if (isReflectionTurnChannel || isScopedReflectionChannel || isFreeTimeChannel) {
       // Reflection turns are executed by the scheduler, but the subject
       // of the turn is the companion. Reflection turns may also carry a bound
       // canonical contact hint so self-model and memory subsystems can stay scoped

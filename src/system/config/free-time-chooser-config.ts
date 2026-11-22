@@ -18,15 +18,15 @@ import { isRecord } from '../../shared/utils/types.js';
 import { assertNoUnknownKeys, assertPositiveInteger } from './validators.js';
 
 export interface FreeTimeChooserSettings {
-  /** Master switch. When false the chooser fails closed to `rest`. */
+  /** Master switch. When false the chooser is bypassed and free time opens directly. */
   enabled: boolean;
   /**
-   * Hard wall-clock ceiling for the single background chooser call. On expiry
-   * the call is aborted and the chooser fails closed to `rest` — never a forced
-   * workspace (bible §18 / fail-closed posture).
+   * Wall-clock ceiling for the optional background chooser call. On expiry
+   * the call is aborted and surfaced as chooser degradation (never disguised as
+   * companion-chosen rest and never persisting a silence lockout).
    */
   chooserDeadlineMs: number;
-  /** Output-token ceiling for the choice contract; only a small object is needed. */
+  /** Output-token ceiling for the choice contract. */
   chooserMaxOutputTokens: number;
   /**
    * Bounded count of resumable projects rendered into the datamarked menu so a
@@ -46,9 +46,9 @@ export interface FreeTimeChooserSettings {
 
 export function createDefaultFreeTimeChooserSettings(): FreeTimeChooserSettings {
   return {
-    enabled: true,
-    chooserDeadlineMs: 8_000,
-    chooserMaxOutputTokens: 200,
+    enabled: false,
+    chooserDeadlineMs: 60_000,
+    chooserMaxOutputTokens: 1_024,
     projectListCap: 8,
     projectMetadataChars: 120,
     silencePersistenceMinutes: 180,

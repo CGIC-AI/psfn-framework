@@ -74,13 +74,11 @@ export interface FreeTimeConfig {
 }
 
 export const DEFAULT_FREE_TIME_SEED_TEXT =
-  'You have some time to yourself. You can explore something, make something, '
-  + 'think about something, try a tool, write something down, or do nothing if you want. '
-  + 'If you like, you could wander back through your journal, your wiki, your notes, or your '
-  + 'memories; follow a curiosity; try a tool; or make something — a poem, a picture, a note, '
-  + 'whatever you feel like. There is no task here and nothing you owe anyone. Resting, '
-  + 'loafing in a sunbeam, doing nothing at all — that is a completely real and valid way to '
-  + 'spend this time too.';
+  'You have some free time to yourself. Your full context, memory, active projects, and normal '
+  + 'tools are available — explore something that sparks your curiosity, work on a project, '
+  + 'write in your journal or wiki, make something, or reach out to a companion if you would '
+  + 'like. There is no required task; follow whatever genuinely interests you, and stop '
+  + 'whenever you feel done.';
 
 export const DEFAULT_FREE_TIME_CONFIG: FreeTimeConfig = {
   enabled: true,
@@ -97,7 +95,7 @@ export const DEFAULT_FREE_TIME_CONFIG: FreeTimeConfig = {
     minIdleMinutes: 180,
   },
   budget: {
-    maxTurns: 1,
+    maxTurns: 6,
     maxChargeUnits: 8,
   },
   returnNote: {

@@ -606,9 +606,11 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
       eventBus.on('scheduler.free_time.block', (payload) => {
         this.record('free_time', {
           at: trimNumber(payload.timestamp) ?? this.now(),
-          outcome: payload.endReason === 'rested' && payload.restReason !== 'companion_rested'
-            ? payload.restReason === 'chooser_disabled' ? 'skipped' : 'failed'
-            : payload.endReason === 'rest_suppressed' ? 'skipped' : 'ran',
+          outcome: payload.endReason === 'chooser_degraded'
+            ? 'failed'
+            : payload.endReason === 'rested' && payload.restReason !== 'companion_rested'
+              ? payload.restReason === 'chooser_disabled' ? 'skipped' : 'failed'
+              : payload.endReason === 'rest_suppressed' ? 'skipped' : 'ran',
           // restReason distinguishes rest-by-choice (companion_rested) from a
           // fail-closed chooser (chooser_error/timeout/…) in the Garden lane
           // (psfn-framework-hrmrq.69).

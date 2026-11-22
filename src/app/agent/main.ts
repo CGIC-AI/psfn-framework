@@ -1509,10 +1509,14 @@ async function main(): Promise<void> {
     sessionQuarantineFilter: episodeSessionQuarantineFilter,
     retrievalAccessScope: () => {
       const context = getRequestContext();
-      return context?.requesterProvenance === 'self_directed'
-        && context.channelId?.startsWith('internal:reflection:') === true
-        ? 'companion_self_reflection'
-        : undefined;
+      if (context?.requesterProvenance !== 'self_directed') return undefined;
+      if (context.channelId?.startsWith('internal:reflection:') === true) {
+        return 'companion_self_reflection';
+      }
+      if (context.channelId?.startsWith('internal:free-time:') === true) {
+        return 'companion_self_creation';
+      }
+      return undefined;
     },
     contactStore,
     memoryDeletionProposalStore,
@@ -2227,6 +2231,7 @@ async function main(): Promise<void> {
       : {}),
     listPendingConcernCandidates,
     restSilenceStore: persistenceRuntime.schedulerLaneStateStore,
+    postTurnActions,
   });
   // ── Weighted-thought outreach lane (E?/1xb.2) + Law 27 contradiction
   // dampening: extracted to startup/weighted-thought-outreach-lane.ts.

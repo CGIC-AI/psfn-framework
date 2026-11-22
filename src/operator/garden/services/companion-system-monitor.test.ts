@@ -19,13 +19,18 @@ describe('companion system monitor evidence', () => {
     expect(JSON.stringify(snapshot)).not.toContain('PRIVATE');
   });
   it.each([
-    ['companion_rested', 'ok'], ['chooser_timeout', 'failed'], ['chooser_error', 'failed'], ['chooser_disabled', 'skipped'],
-  ])('reports free-time %s as %s without exporting session content', async (restReason, status) => {
+    ['rested', 'companion_rested', 'ok'],
+    ['chooser_degraded', 'chooser_timeout', 'failed'],
+    ['chooser_degraded', 'chooser_error', 'failed'],
+    ['rested', 'chooser_timeout', 'failed'],
+    ['rested', 'chooser_error', 'failed'],
+    ['rested', 'chooser_disabled', 'skipped'],
+  ])('reports free-time %s/%s as %s without exporting session content', async (endReason, restReason, status) => {
     const bus = new EventBus();
     const service = new AdminSubsystemHealthDataService({ eventBus: bus, now: () => 100 });
     await bus.emit('scheduler.free_time.block', {
       lane: 'idle', channelId: 'PRIVATE CHANNEL', turnsUsed: 0, activity: false,
-      endReason: 'rested', restReason, spentChargeUnits: 0, maxChargeUnits: 10, maxTurns: 1,
+      endReason, restReason, spentChargeUnits: 0, maxChargeUnits: 10, maxTurns: 1,
       startedAtMs: 80, endedAtMs: 90, returnSurfaced: false, timestamp: 90,
     });
     const snapshot = await service.getSnapshot();

@@ -55,6 +55,7 @@ import {
   runGovernedAutomataClass,
   type AutomataClassLifecycleRuntime,
 } from '../../../faculties/automata/bus/class-lifecycle.js';
+import type { PostTurnActionRuntime } from '../../../core/agent/post-turn-action-runtime.js';
 import type { ProductionAutomataClassId } from '../../../faculties/automata/registry-contract.js';
 
 export interface FreeTimeLaneDeps {
@@ -80,6 +81,8 @@ export interface FreeTimeLaneDeps {
   listPendingConcernCandidates: () => Promise<readonly PendingConcernCandidate[]>;
   /** Companion-private durable rest silence (89muv); survives restart. */
   restSilenceStore: RestSilenceStorePort;
+  /** Optional durable post-turn queue for retrying preempted free-time blocks. */
+  postTurnActions?: Pick<PostTurnActionRuntime, 'enqueue' | 'registerHandler'>;
 }
 
 const FREE_TIME_CLASS: ProductionAutomataClassId = 'scheduler.free_time';
@@ -244,6 +247,8 @@ export function registerFreeTimeLane(deps: FreeTimeLaneDeps): void {
     restWindow,
     opportunityPolicy: freeTimeRestWindowPolicy,
     ...(fleetStagger ? { fleetStagger } : {}),
+    ...(companionId ? { companionId } : {}),
+    ...(deps.postTurnActions ? { postTurnActions: deps.postTurnActions } : {}),
     eventBus,
     renderPendingConcernCandidates: async () => renderPendingConcernCandidatesSection(
       await deps.listPendingConcernCandidates(),
@@ -350,9 +355,22 @@ export function registerFreeTimeLane(deps: FreeTimeLaneDeps): void {
       maxTokens: config.returnNote.summaryMaxTokens,
       purpose: 'free_time_return',
     }),
-    loadProjectContext: async () => (
-      await personalProjects.resumeNextActiveProject()
-    )?.context ?? null,
+    loadProjectContext: async () => {
+      const activeProjects = personalProjects.listProjects()
+        .filter(project => project.status === 'active')
+        .slice(0, Math.max(0, chooserSettings.projectListCap));
+      const resumed = (await personalProjects.resumeNextActiveProject())?.context ?? null;
+      if (activeProjects.length === 0) return resumed;
+      const summaryLines = [
+        '[Your active projects]',
+        ...activeProjects.map(project => (
+          project.nextStep.trim()
+            ? `- ${project.title} (${project.ref}): ${project.nextStep.trim()}`
+            : `- ${project.title} (${project.ref})`
+        )),
+      ].join('\n');
+      return resumed ? `${summaryLines}\n\n${resumed}` : summaryLines;
+    },
     // Companion chooser drives rest / workspace selection; rest persists silence
     // for the quiet period (fails closed to rest, never a forced workspace).
     chooseWorkspace: async ({ lane, nowMs, beforePrompt }) => {

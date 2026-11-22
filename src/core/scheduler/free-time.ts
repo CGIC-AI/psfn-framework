@@ -73,6 +73,19 @@ import {
   routeReturnNote,
   type ContactDmSessionResolver,
 } from './return-note-routing.js';
+import {
+  registerDurablePreemptedTaskRetry,
+  type DurablePreemptedTaskRetry,
+} from './preempted-task-retry.js';
+import type { PostTurnActionRuntime } from '../agent/post-turn-action-runtime.js';
+import {
+  emitHealthEvent,
+  hashHealthEventSubject,
+  processObserverId,
+  type HealthEventEvidence,
+  type HealthEventOwner,
+} from '../../shared/contracts/health-event.js';
+import { parseCompanionId } from '../../shared/routing/companion-id.js';
 
 const log = createComponentLogger('FreeTime');
 
@@ -230,12 +243,10 @@ export function evaluateFreeTimeGate(input: FreeTimeGateInput): GateDecision {
 // establishes that nothing is required and how to end the block. The ordinary
 // agent loop supplies the authoritative base identity system prompt.
 
-const FREE_TIME_CLOSING = 'There is no task and nothing to prove. When you feel done — or if you '
-  + `would simply rather rest — reply with only "${REFLECTION_SILENT_TOKEN}" and the time is `
-  + 'yours to end. Anything you make or note goes into your own journal, wiki, memory, or notes '
-  + 'through your normal tools. Your replies and this private transcript are not automatically sent '
-  + 'to anyone. You may choose to contact a known companion through your normal governed messaging tools, '
-  + 'with the usual consent, availability, and capability checks. Reaching out and resting are both optional.';
+const FREE_TIME_CLOSING = 'Your normal tools, memory, journal, wiki, notes, and workspace are '
+  + 'all available. Anything you write or create stays in your own surfaces; this private '
+  + 'transcript is not automatically sent to anyone. You can also reach out to a companion '
+  + 'through your messaging tools whenever you want. Stop whenever you feel done.';
 
 export function buildFreeTimeFramingPrompt(input: {
   seedText: string;
@@ -278,9 +289,8 @@ export function buildChosenWorkspaceFraming(
 export function buildFreeTimeContinuationPrompt(): string {
   return [
     '[Free time — still yours]',
-    'You still have some time to yourself. Keep going with whatever you are doing, follow it '
-    + 'somewhere new, or let it rest.',
-    `If you are done or would rather just be, reply with only "${REFLECTION_SILENT_TOKEN}".`,
+    'You still have time to yourself. Keep going with what you are exploring or making, '
+    + 'switch to something else that interests you, or wrap up whenever you feel done.',
   ].join('\n');
 }
 
@@ -299,6 +309,10 @@ export type FreeTimeBlockEndReason =
   // The companion chose rest at the chooser (bible §10.2): the block ends with
   // no free-time turn — the chooser's single model call is the only spend.
   | 'rested'
+  // The optional pre-block chooser failed (timeout, provider error, unparseable
+  // or invalid output, resolve failure). Never disguised as rest and never
+  // persists rest silence (Charter Law 20, psfn-framework-ik47b.5).
+  | 'chooser_degraded'
   // A prior rest silenced this quiet period; the block never prompted (§10.2
   // silence persistence). Distinct from `rested` so telemetry can tell a fresh
   // rest from a suppressed re-check.
@@ -389,14 +403,15 @@ export async function runFreeTimeBlock(input: FreeTimeBlockRunInput): Promise<Fr
 
 export function buildFreeTimeBlockNote(result: FreeTimeBlockResult): string {
   // A `rested` outcome is only a choice when the chooser actually produced one.
-  // Every other rest reason is the chooser failing closed (disabled, timeout,
-  // error, unparseable output, invalid option, resolve failure) — telling the
-  // companion that was "a valid way to spend the time" would misrepresent her
-  // own agency back to her (psfn-framework-hrmrq.69). Fail closed: an
-  // unattributed rest is NOT affirmed as a choice.
-  const failedRest = result.endReason === 'rested' && result.restReason !== 'companion_rested';
+  // Every other rest reason (or explicit `chooser_degraded`) is the chooser
+  // failing — telling the companion that was "a valid way to spend the time"
+  // would misrepresent her own agency back to her (psfn-framework-hrmrq.69,
+  // psfn-framework-ik47b.5). Fail closed: an unattributed rest is NOT affirmed
+  // as a choice.
+  const failedRest = result.endReason === 'chooser_degraded'
+    || (result.endReason === 'rested' && result.restReason !== 'companion_rested');
   const outcomeLine = failedRest
-    ? `Lane: ${result.lane}. Turns used: ${result.turnsUsed}. Outcome: rested (${result.restReason ?? 'reason unrecorded'} — not a choice).`
+    ? `Lane: ${result.lane}. Turns used: ${result.turnsUsed}. Outcome: ${result.endReason} (${result.restReason ?? 'reason unrecorded'} — not a choice).`
     : `Lane: ${result.lane}. Turns used: ${result.turnsUsed}. Outcome: ${result.endReason}.`;
   const activityLine = result.activity
     ? 'Something was made or explored this block.'
@@ -534,6 +549,10 @@ export interface FreeTimeRuntimeOptions {
     nowMs: number;
     beforePrompt: () => Promise<void>;
   }) => Promise<FreeTimeChooserOutcome>;
+  /** Optional companion UUID for health-event ownership. */
+  companionId?: string;
+  /** Optional durable post-turn queue for retrying preempted free-time blocks. */
+  postTurnActions?: Pick<PostTurnActionRuntime, 'enqueue' | 'registerHandler'>;
   /** Optional recorder for the Garden read surface (recent blocks + spend). */
   recordBlock?: (record: FreeTimeBlockRecord) => void;
   now?: () => number;
@@ -543,7 +562,48 @@ interface FreeTimeLaneCadenceState {
   lastBlockAtMs?: number;
   blocksTodayKey?: string;
   blocksToday: number;
+  consecutiveRestCount: number;
   inProgress?: boolean;
+}
+
+function resolveFreeTimeHealthOwner(companionId?: string): HealthEventOwner {
+  if (companionId) {
+    const parsed = parseCompanionId(companionId);
+    if (parsed) {
+      return { kind: 'companion', companionId: parsed };
+    }
+  }
+  return { kind: 'system' };
+}
+
+async function emitFreeTimeDegradedHealthEvent(input: {
+  eventBus?: EventBus;
+  companionId?: string;
+  subject: string;
+  observedAtMs: number;
+  evidence?: HealthEventEvidence;
+}): Promise<void> {
+  if (!input.eventBus) return;
+  try {
+    await emitHealthEvent(input.eventBus, {
+      owner: resolveFreeTimeHealthOwner(input.companionId),
+      severity: 'degraded',
+      code: 'scheduler_task_failed',
+      provenance: {
+        process: 'agent',
+        component: 'scheduler',
+        observerId: processObserverId(),
+        subjectHash: hashHealthEventSubject(input.subject),
+      },
+      ...(input.evidence ? { evidence: input.evidence } : {}),
+      observedAtMs: input.observedAtMs,
+    });
+  } catch (error) {
+    log.error('Free-time degraded health event emission failed', {
+      subject: input.subject,
+      error: String(error),
+    });
+  }
 }
 
 /**
@@ -704,7 +764,11 @@ function makeLaneHandler(
   options: FreeTimeRuntimeOptions,
   lane: FreeTimeLane,
   state: FreeTimeLaneCadenceState,
-): (run: ScheduledTaskRun) => Promise<void> {
+  preemptedRetry?: () => DurablePreemptedTaskRetry | undefined,
+): {
+  taskHandler: (run: ScheduledTaskRun) => Promise<void>;
+  retryHandler: (run: ScheduledTaskRun) => Promise<void>;
+} {
   const now = options.now ?? (() => Date.now());
   // Lane-independent continuity: identity comes from the chosen workspace, never
   // from `lane`. The default segment resolves to one shared continuity session
@@ -717,7 +781,7 @@ function makeLaneHandler(
     ? resolveActiveTimezone()
     : options.restWindow.timeZone;
 
-  const handle = async ({ signal }: ScheduledTaskRun) => {
+  const handle = async ({ signal }: ScheduledTaskRun, isPreemptedRetry: boolean) => {
     const nowMs = now();
 
     // Daily block counter resets on local-day rollover.
@@ -727,7 +791,7 @@ function makeLaneHandler(
       state.blocksToday = 0;
     }
 
-    if (options.opportunityPolicy) {
+    if (!isPreemptedRetry && options.opportunityPolicy) {
       for (const triggerLane of ['quiet_hours', 'idle'] as const) {
         if (await options.opportunityPolicy.isSilenced({ lane: triggerLane, nowMs })) {
           log.debug('Free-time opportunity suppressed until its next scheduled window', { lane });
@@ -739,7 +803,7 @@ function makeLaneHandler(
     const activeConversationGuardMinutes = lane === 'idle'
       ? options.config.idle.minIdleMinutes
       : Math.max(1, options.restWindow.inactivityThresholdMinutes);
-    const minutesSinceLastBlock = state.lastBlockAtMs === undefined
+    const minutesSinceLastBlock = isPreemptedRetry || state.lastBlockAtMs === undefined
       ? NO_PRIOR_SENTINEL_MINUTES
       : Math.max(0, nowMs - state.lastBlockAtMs) / MINUTE_MS;
     const laneDecision = evaluateFreeTimeLaneEligibility({
@@ -780,8 +844,8 @@ function makeLaneHandler(
     const beforePrompt = async (): Promise<void> => {
       if (reserved) return;
       signal.throwIfAborted();
-      // Reserve before the first model call, not after successful completion:
-      // failures, aborts and restarts cannot turn one offer into repeated asks.
+      // Reserve before the first model call of a real block or companion-chosen
+      // rest — never before an infra-degraded chooser failure (Law 20).
       state.lastBlockAtMs = nowMs;
       if (options.opportunityPolicy) {
         for (const triggerLane of ['quiet_hours', 'idle'] as const) {
@@ -794,16 +858,18 @@ function makeLaneHandler(
       }
       reserved = true;
     };
-    // ── Companion chooser (jp36.2.1.2) ──
-    // When wired, the chooser supersedes the LRU auto-select: the companion
-    // picks rest / private wander / resume / create through ONE cheap background
-    // call. It is only reached once the deterministic gate has opened, so a
-    // silenced re-check is rare (the min-block interval usually holds first) —
-    // but silence persistence is the authoritative "not again this quiet period"
-    // guard regardless of interval config.
+    // ── Optional companion chooser ──
+    // When enabled, the chooser selects a workspace or genuine rest. When
+    // disabled (default), it returns `defer_to_block` and the block opens
+    // directly with her full live context and active projects. Infrastructure
+    // failures return `degraded` without persisting rest silence (Law 20).
     let chosen: FreeTimeChooserOutcome | undefined;
     if (options.chooseWorkspace) {
-      chosen = await options.chooseWorkspace({ lane, nowMs, beforePrompt });
+      chosen = await options.chooseWorkspace({
+        lane,
+        nowMs,
+        beforePrompt: async () => undefined,
+      });
     }
 
     // Resolve the continuity workspace ONLY now that a block is committed to
@@ -838,13 +904,61 @@ function makeLaneHandler(
     }
 
     let result: FreeTimeBlockResult;
-    await beforePrompt();
-    if (chosen?.kind === 'rest') {
-      // Rest is a first-class outcome (bible §6.7/§10.2): the block ends here
-      // with NO free-time turn. The chooser's single call is the only spend;
-      // there is no second model call.
-      // Info, not debug: rest-by-failure (chooser_error/timeout/…) must be
-      // visible in ordinary logs, not only under debug (psfn-framework-hrmrq.69).
+    if (chosen?.kind === 'degraded') {
+      // Charter Law 20 (psfn-framework-ik47b.5): chooser infra failure is NEVER
+      // disguised as companion-chosen rest and NEVER locks out the lanes for
+      // 180-240 minutes. Surface explicitly to logs, Garden, and health stream.
+      log.warn('Free-time block degraded at chooser; no rest silence persisted', {
+        lane,
+        restReason: chosen.reason,
+      });
+      await emitFreeTimeDegradedHealthEvent({
+        eventBus: options.eventBus,
+        companionId: options.companionId,
+        subject: `free-time:${lane}:chooser_degraded`,
+        observedAtMs: nowMs,
+        evidence: { failureCount: 1 },
+      });
+      result = {
+        lane,
+        channelId,
+        turnsUsed: 0,
+        activity: false,
+        endReason: 'chooser_degraded',
+        restReason: chosen.reason,
+        spentChargeUnits: 0,
+        startedAtMs: nowMs,
+        endedAtMs: nowMs,
+      };
+    } else if (chosen?.kind === 'rest') {
+      const isGenuineRest = chosen.reason === 'companion_rested';
+      if (isGenuineRest) {
+        await beforePrompt();
+        state.consecutiveRestCount += 1;
+        const escalationThreshold = Math.max(1, options.config.maxBlocksPerDay);
+        if (state.consecutiveRestCount >= escalationThreshold) {
+          log.warn('Free-time companion rested across consecutive blocks; escalating health signal', {
+            lane,
+            consecutiveRestCount: state.consecutiveRestCount,
+            escalationThreshold,
+          });
+          await emitFreeTimeDegradedHealthEvent({
+            eventBus: options.eventBus,
+            companionId: options.companionId,
+            subject: 'free-time:repeated-rest',
+            observedAtMs: nowMs,
+            evidence: { sampleCount: state.consecutiveRestCount },
+          });
+        }
+      } else {
+        await emitFreeTimeDegradedHealthEvent({
+          eventBus: options.eventBus,
+          companionId: options.companionId,
+          subject: `free-time:${lane}:chooser_degraded`,
+          observedAtMs: nowMs,
+          evidence: { failureCount: 1 },
+        });
+      }
       log.info('Free-time block ended at chooser (rest)', { lane, restReason: chosen.reason });
       result = {
         lane,
@@ -858,8 +972,9 @@ function makeLaneHandler(
         endedAtMs: nowMs,
       };
     } else {
+      await beforePrompt();
       if (chosen?.kind === 'defer_to_block') {
-        log.info('Free-time chooser deferred to the block (no identity prompt yet)', {
+        log.info('Free-time chooser bypassed; opening block directly', {
           lane,
           reason: chosen.reason,
         });
@@ -876,33 +991,44 @@ function makeLaneHandler(
         pendingConcerns,
       });
 
-      result = await options.runBlock({
-        lane,
-        run: (readSpentChargeUnits) => runFreeTimeBlock({
+      try {
+        result = await options.runBlock({
           lane,
-          channelId,
-          maxTurns: options.config.budget.maxTurns,
-          maxChargeUnits: options.config.budget.maxChargeUnits,
-          framingPrompt,
-          readSpentChargeUnits,
-          invokeTurn: ({ turnIndex, content }) => options.invokeTurn({
+          run: (readSpentChargeUnits) => runFreeTimeBlock({
             lane,
             channelId,
-            audience: 'self',
-            turnIndex,
-            content,
+            maxTurns: options.config.budget.maxTurns,
+            maxChargeUnits: options.config.budget.maxChargeUnits,
+            framingPrompt,
+            readSpentChargeUnits,
+            invokeTurn: ({ turnIndex, content }) => options.invokeTurn({
+              lane,
+              channelId,
+              audience: 'self',
+              turnIndex,
+              content,
+            }),
+            now,
+            signal,
           }),
-          now,
-          signal,
-        }),
-      });
+        });
+      } catch (error) {
+        if (!isPreemptedRetry && preemptedRetry?.()?.deferIfPreempted(error, lane)) {
+          return;
+        }
+        throw error;
+      }
+      if (result.activity) {
+        state.consecutiveRestCount = 0;
+      }
     }
 
-    state.lastBlockAtMs = result.endedAtMs;
-    // A rest outcome consumed a free-time opportunity but not a full block; it
-    // does not draw down the daily block budget (silence persistence, not the
-    // day cap, prevents re-prompting this period).
-    if (result.endReason !== 'rested') {
+    if (result.endReason !== 'chooser_degraded') {
+      state.lastBlockAtMs = result.endedAtMs;
+    }
+    // A rest or degraded outcome did not run a full block; do not draw down the
+    // daily block budget.
+    if (result.endReason !== 'rested' && result.endReason !== 'chooser_degraded') {
       state.blocksToday += 1;
     }
 
@@ -969,14 +1095,18 @@ function makeLaneHandler(
       });
     }
   };
-  return async run => {
+  const guarded = (isPreemptedRetry: boolean) => async (run: ScheduledTaskRun) => {
     if (state.inProgress) return;
     state.inProgress = true;
     try {
-      await handle(run);
+      await handle(run, isPreemptedRetry);
     } finally {
       state.inProgress = false;
     }
+  };
+  return {
+    taskHandler: guarded(false),
+    retryHandler: guarded(true),
   };
 }
 
@@ -1009,17 +1139,22 @@ export function registerFreeTimeTasks(options: FreeTimeRuntimeOptions): void {
   // daily-block cap bound total free-time spend, not per-lane spend. Scheduler
   // tick execution is sequential, so a block in one lane updates this state
   // before the other lane's gate is evaluated in the same tick.
-  const sharedState: FreeTimeLaneCadenceState = { blocksToday: 0 };
+  const sharedState: FreeTimeLaneCadenceState = { blocksToday: 0, consecutiveRestCount: 0 };
+  const retryHandlers = new Map<FreeTimeLane, (run: ScheduledTaskRun) => Promise<void>>();
+  let preemptedRetry: DurablePreemptedTaskRetry | undefined;
+  const getPreemptedRetry = () => preemptedRetry;
 
   if (options.config.quietHours.enabled) {
     const intervalMs = Math.max(1_000, options.config.quietHours.checkIntervalMs);
+    const laneHandlers = makeLaneHandler(options, 'quiet_hours', sharedState, getPreemptedRetry);
+    retryHandlers.set('quiet_hours', laneHandlers.retryHandler);
     options.scheduler.register({
       id: FREE_TIME_QUIET_HOURS_TASK_ID,
       name: FREE_TIME_QUIET_HOURS_TASK_NAME,
       type: 'every',
       intervalMs,
-      availability: 'do_not_disturb',
-      handler: makeLaneHandler(options, 'quiet_hours', sharedState),
+      availability: 'idle',
+      handler: laneHandlers.taskHandler,
       eligibility: { requiredTokens: ['memory.write'] },
       state: 'idle',
     }, freeTimePollRegistration(intervalMs, options.fleetStagger));
@@ -1027,16 +1162,37 @@ export function registerFreeTimeTasks(options: FreeTimeRuntimeOptions): void {
 
   if (options.config.idle.enabled) {
     const intervalMs = Math.max(1_000, options.config.idle.checkIntervalMs);
+    const laneHandlers = makeLaneHandler(options, 'idle', sharedState, getPreemptedRetry);
+    retryHandlers.set('idle', laneHandlers.retryHandler);
     options.scheduler.register({
       id: FREE_TIME_IDLE_TASK_ID,
       name: FREE_TIME_IDLE_TASK_NAME,
       type: 'every',
       intervalMs,
-      availability: 'do_not_disturb',
-      handler: makeLaneHandler(options, 'idle', sharedState),
+      availability: 'idle',
+      handler: laneHandlers.taskHandler,
       eligibility: { requiredTokens: ['memory.write'] },
       state: 'idle',
     }, freeTimePollRegistration(intervalMs, options.fleetStagger));
+  }
+
+  if (options.postTurnActions && retryHandlers.size > 0) {
+    const retryDelayMs = () => Math.min(
+      options.config.quietHours.checkIntervalMs,
+      options.config.idle.checkIntervalMs,
+    );
+    preemptedRetry = registerDurablePreemptedTaskRetry({
+      actions: options.postTurnActions,
+      taskId: FREE_TIME_GATE_LANE,
+      retryDelayMs,
+      ...(options.now ? { now: options.now } : {}),
+      run: async (scope) => {
+        const targetLane = scope === 'quiet_hours' || scope === 'idle' ? scope : null;
+        const retryRun = targetLane ? retryHandlers.get(targetLane) : undefined;
+        if (!retryRun) return;
+        await retryRun({ signal: new AbortController().signal });
+      },
+    });
   }
 
   log.info('Free-time lanes registered', {

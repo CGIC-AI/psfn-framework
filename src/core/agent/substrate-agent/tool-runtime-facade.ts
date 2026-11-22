@@ -982,6 +982,14 @@ export class ToolRuntimeFacade {
     intent: string | null | undefined,
     correlation: CorrelationMetadata | null,
   ): ActiveToolResolution {
+    if (message.channelId === 'internal:reflection:sleeptime-review') {
+      return {
+        tools: [],
+        snapshotTools: [],
+        promotedSkipped: [],
+        counts: { core: 0, extended: 0, total: 0 },
+      };
+    }
     return this.applyWorldPlaneToolPolicy(
       this.applySatelliteCapabilityToolPolicy(
         this.applyRoutineIntentCoreToolPolicy(
@@ -1129,6 +1137,7 @@ export class ToolRuntimeFacade {
     correlation: CorrelationMetadata | null,
   ): ActiveToolResolution {
     if (taskKind === 'reflection'
+      || message.channelId.startsWith('internal:free-time:')
       || !isRoutineIntentForAnalysisWorkbench(intent) || hasAnalysisWorkbenchEligibleInput(message)) {
       return resolution;
     }

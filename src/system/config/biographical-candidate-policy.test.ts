@@ -9,9 +9,9 @@ import {
 import { resolveSettingsDomainForField } from './settings-domain-registry.js';
 
 describe('biographical candidate owner policy', () => {
-  it('keeps the companion portability choice off by default and absent-means-off for older owners', () => {
+  it('enables companion portability choice by default in seeds while keeping absent-means-off for older owners', () => {
     const seeded = createDefaultBiographicalCandidatePolicy();
-    expect(seeded.companionPortabilityChoice).toEqual({ enabled: false, maximumSensitivity: 'personal' });
+    expect(seeded.companionPortabilityChoice).toEqual({ enabled: true, maximumSensitivity: 'personal' });
     const { companionPortabilityChoice: _omitted, ...older } = seeded;
     const normalized = normalizeBiographicalCandidatePolicy(older);
     expect(normalized.companionPortabilityChoice).toBeUndefined();

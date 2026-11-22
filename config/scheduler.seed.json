@@ -66,7 +66,7 @@
     "supervisor": {
       "maxConcurrentSessions": 4,
       "leaseDurationMs": 300000,
-      "retryBaseDelayMs": 1000,
+      "retryBaseDelayMs": 15000,
       "retryMaxDelayMs": 300000,
       "shutdownTimeoutMs": 5000,
       "terminalRetentionMs": 604800000,
@@ -74,8 +74,8 @@
     },
     "postTurn": {
       "maxAttempts": 5,
-      "extractionDrainRequeueDelayMs": 1000,
-      "foregroundPreemptionDeferDelayMs": 1000
+      "extractionDrainRequeueDelayMs": 5000,
+      "foregroundPreemptionDeferDelayMs": 15000
     }
   },
   "episodicProcessing": {
@@ -229,31 +229,31 @@
       "minReserveDrawUnits": 1
     },
     "egressLease": {
-      "mode": "off",
+      "mode": "on",
       "leaseTtlMs": 60000,
       "egressDrawUnits": 1,
       "minReplyConfidence": 0.5
     },
     "roomParticipationLease": {
-      "enabled": false,
+      "enabled": true,
       "leaseTtlMs": 900000,
       "silenceTimeoutMs": 300000,
       "continuationCooldownMs": 20000,
       "maxContinuationCandidates": 6,
-      "maxConsecutiveMachineContinuations": 2,
+      "maxConsecutiveMachineContinuations": 4,
       "maxConsecutiveIgnores": 3,
       "minContentChars": 8,
       "openOn": {
-        "directSummons": false,
-        "passiveSummons": false,
+        "directSummons": true,
+        "passiveSummons": true,
         "reaction": true,
         "reply": true,
         "endogenousRoomEntry": true
       }
     },
     "roomSignal": {
-      "enabled": false,
-      "contextualEligibleSourceClasses": ["operator", "primary_user"],
+      "enabled": true,
+      "contextualEligibleSourceClasses": ["operator", "primary_user", "trusted_contact", "companion_self"],
       "contextualEligibleRoomRoles": [],
       "velocityWindowMs": 60000,
       "maxRoomVelocity": 12,
@@ -262,8 +262,8 @@
       "companionInterests": [],
       "classifier": {
         "enabled": false,
-        "deadlineMs": 4000,
-        "maxOutputTokens": 16,
+        "deadlineMs": 30000,
+        "maxOutputTokens": 256,
         "excerptChars": 280
       }
     },
@@ -277,7 +277,7 @@
     }
   },
   "weightedThoughtOutreach": {
-    "enabled": false,
+    "enabled": true,
     "checkIntervalMs": 1800000,
     "nudgeThreshold": 0.75,
     "maxNudgesPerRun": 1,

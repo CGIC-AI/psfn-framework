@@ -3,7 +3,7 @@
   "memoryRetrievalBudgetPct": 2,
   "moodCongruenceWeight": 0.15,
   "adaptiveContextBudgetsEnabled": false,
-  "wikiRetrievalEnabled": false,
+  "wikiRetrievalEnabled": true,
   "wikiRetrievalChatTokenCap": 1000,
   "wikiRetrievalGroupTokenCap": 400,
   "wikiRetrievalFocusTokenCap": 2000,
@@ -231,7 +231,7 @@
       "explicitly_relevant_subject"
     ],
     "companionPortabilityChoice": {
-      "enabled": false,
+      "enabled": true,
       "maximumSensitivity": "personal"
     }
   },
@@ -286,7 +286,7 @@
   },
   "backgroundFailureEscalationThreshold": 3,
   "memoryRefreshFailureAlertThreshold": 3,
-  "activeMemoryRetrievalMode": "background",
+  "activeMemoryRetrievalMode": "inline",
   "activeMemoryInlineBudgetMs": 2000,
   "intakeScreeningFailureAlertThreshold": 3,
   "healthEventStreamMaxRows": 5000,

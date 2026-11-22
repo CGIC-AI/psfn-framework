@@ -1,4 +1,5 @@
 import { createComponentLogger } from '../../../shared/logger.js';
+import { toErrorMessage } from '../../../shared/utils/errors.js';
 import type { InferredPostTurnAction, PostTurnActionCandidate, SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import type { Episode, EpisodeArc } from '../../../shared/contracts/episodic-memory.js';
 import type { SessionEntry } from '../../../core/session/types.js';
@@ -15,6 +16,11 @@ import type { EpisodeSynthesisLaneConfig } from '../../../system/config/schedule
 import type { MemoryWriteOptions, MemoryWriter } from '../writer.js';
 import type { NearTurnMemoryScopeClassifierPort } from '../near-turn-memory-lane.js';
 import { classifySessionEntryCompanionRelevance } from '../extraction/speaker-routing.js';
+import {
+  resolveSessionMemoryAttribution,
+  type SessionCounterpartyContactStore,
+  type SessionMemoryAttribution,
+} from '../session-counterparty-resolution.js';
 import type { EpisodicSynthesisRunResult, EpisodicSynthesizer } from './synthesis.js';
 import type {
   EpisodicStorePort,
@@ -37,11 +43,27 @@ interface BehavioralSummaryWrite {
 
 class BehavioralSummaryWriteError extends Error {
   readonly stage: string;
+  readonly logicalSessionId: string;
 
-  constructor(stage: string, cause: unknown) {
+  constructor(logicalSessionId: string, stage: string, cause: unknown) {
     super(cause instanceof Error ? cause.message : String(cause));
     this.name = 'BehavioralSummaryWriteError';
+    this.logicalSessionId = logicalSessionId;
     this.stage = stage;
+  }
+}
+
+class EpisodeSynthesisSessionError extends Error {
+  readonly logicalSessionId: string;
+  readonly stage: string;
+  override readonly cause: unknown;
+
+  constructor(logicalSessionId: string, stage: string, cause: unknown) {
+    super(toErrorMessage(cause));
+    this.name = 'EpisodeSynthesisSessionError';
+    this.logicalSessionId = logicalSessionId;
+    this.stage = stage;
+    this.cause = cause;
   }
 }
 
@@ -86,6 +108,7 @@ export interface EpisodeSynthesisDrainOptions {
 
 export interface EpisodeSynthesisDrainOutcome {
   outcome: 'complete' | 'yield';
+  nextEligibleAtMs?: number;
 }
 
 type SynthesisLaneSessionReader = Pick<SessionManager, 'resolveSessionChannelId' | 'getRecentMessages'>
@@ -113,6 +136,10 @@ export interface EpisodeSynthesisLaneOptions {
   companionAuthorIds?: readonly string[];
   /** Deterministic behavioral-summary writes derived from synthesis arcs. */
   memoryWriter?: Pick<MemoryWriter, 'write'> | null;
+  /** Contact lookup for attributing single-counterparty behavioral summary writes. */
+  contactStore?: SessionCounterpartyContactStore | null;
+  /** Local companion UUID used to identify the peer participant on companion-dm sessions. */
+  companionId?: string;
   /** Gate telemetry sink; wired to the runtime event bus by composition. */
   onGateEvent?: (event: EpisodeSynthesisGateEvent) => void;
   now?: () => number;
@@ -165,6 +192,7 @@ function buildBehavioralSummaryWrites(input: {
   sessionId: string;
   actionId: string;
   sourceMessageId?: string;
+  attribution?: SessionMemoryAttribution;
   synthesis: EpisodicSynthesisRunResult;
 }): BehavioralSummaryWrite[] {
   const arcs = input.synthesis.linkedArcs
@@ -172,6 +200,7 @@ function buildBehavioralSummaryWrites(input: {
     .filter(arc => arc.arcKind !== 'same_theme')
     .slice(0, MAX_BEHAVIORAL_SUMMARY_WRITES);
   const episodesById = new Map(input.synthesis.createdEpisodes.map(episode => [episode.id, episode]));
+  const attribution = input.attribution;
   return arcs.map(arc => {
     const themes = arc.themes.slice(0, 3).join(', ') || 'recent continuity';
     const sourceRef = `source:episode_synthesis|session:${input.sessionId}|episode_arc:${arc.id}`;
@@ -187,11 +216,20 @@ function buildBehavioralSummaryWrites(input: {
         sensitivity: 'personal',
         sourceRef,
         sourceType: 'autonomous_action',
+        ...(attribution?.kind === 'single_contact' ? { contactId: attribution.contactId } : {}),
         provenance: {
           channelId: input.sessionId,
           sessionId: input.sessionId,
           actor: 'system',
           reason: 'episode_synthesis_behavioral_summary',
+          ...(attribution?.kind === 'single_contact'
+            ? {
+                subjectContactId: attribution.contactId,
+                subjectContactIds: [attribution.contactId],
+              }
+            : attribution?.kind === 'companion_private'
+              ? { subjectScope: 'companion_internal' as const }
+              : {}),
           ...(sourceConversationAt !== undefined ? { sourceConversationAt } : {}),
         },
         provenanceRefs: [
@@ -276,6 +314,8 @@ export class EpisodeSynthesisLane {
   private readonly companionNames: readonly string[];
   private readonly companionAuthorIds: readonly string[];
   private readonly memoryWriter: Pick<MemoryWriter, 'write'> | null;
+  private readonly contactStore: SessionCounterpartyContactStore | null;
+  private readonly companionId: string | undefined;
   private readonly onGateEvent?: (event: EpisodeSynthesisGateEvent) => void;
   private readonly now: () => number;
   private readonly claimantId: string;
@@ -296,6 +336,8 @@ export class EpisodeSynthesisLane {
     this.companionNames = options.companionNames ?? [];
     this.companionAuthorIds = options.companionAuthorIds ?? [];
     this.memoryWriter = options.memoryWriter ?? null;
+    this.contactStore = options.contactStore ?? null;
+    this.companionId = options.companionId?.trim() || undefined;
     this.onGateEvent = options.onGateEvent;
     this.now = options.now ?? (() => Date.now());
     this.claimantId = options.claimantId?.trim() || EPISODE_SYNTHESIS_DRAIN_CLAIMANT_ID;
@@ -384,6 +426,17 @@ export class EpisodeSynthesisLane {
         });
       } catch (error) {
         const normalizedError = error instanceof Error ? error : new Error(String(error));
+        const stage = error instanceof BehavioralSummaryWriteError ? error.stage : 'episode_synthesis';
+        const errorSummary = toErrorMessage(normalizedError);
+        log.warn('Episode synthesis failed for session', {
+          actionId: action.id,
+          logicalSessionId: claim.logicalSessionId,
+          revision: claim.revision,
+          stage,
+          error: errorSummary.startsWith(claim.logicalSessionId)
+            ? errorSummary
+            : `${claim.logicalSessionId}/${stage}: ${errorSummary}`,
+        });
         if (error instanceof BehavioralSummaryWriteError) {
           try {
             await this.workset.recordFailure({
@@ -395,14 +448,23 @@ export class EpisodeSynthesisLane {
               message: error.message,
             });
           } catch (recordError) {
+            log.warn('Episode behavioral-summary failure checkpoint failed', {
+              actionId: action.id,
+              logicalSessionId: claim.logicalSessionId,
+              revision: claim.revision,
+              stage: error.stage,
+              error: toErrorMessage(recordError),
+            });
             failures.push(new AggregateError(
-              [normalizedError, recordError],
+              [error, recordError],
               `Episode behavioral-summary failure could not be checkpointed for ${claim.logicalSessionId}`,
             ));
             continue;
           }
+          failures.push(error);
+          continue;
         }
-        failures.push(normalizedError);
+        failures.push(new EpisodeSynthesisSessionError(claim.logicalSessionId, stage, normalizedError));
         continue;
       }
       const disposition = await options.onSafeBoundary?.({
@@ -468,7 +530,7 @@ export class EpisodeSynthesisLane {
       .filter(isConversational);
     const channelId = entries[0]?.channelId ?? sessionId;
 
-    if (await this.resumeBehavioralSummary(action, workItem)) {
+    if (await this.resumeBehavioralSummary(action, workItem, entries)) {
       log.info('Episode synthesis lane resumed its pending behavioral summary', {
         sessionId,
         actionId: action.id,
@@ -561,10 +623,19 @@ export class EpisodeSynthesisLane {
       sessionId,
       sourceMessageId: action.sourceMessageId,
     });
+    const attribution = await resolveSessionMemoryAttribution({
+      sessionId,
+      activityKind: workItem.activityKind,
+      entries,
+      contactStore: this.contactStore,
+      ...(this.companionId ? { localCompanionId: this.companionId } : {}),
+      companionAuthorIds: this.companionAuthorIds,
+    });
     await this.writeBehavioralSummaries({
       sessionId,
       actionId: action.id,
       sourceMessageId: action.sourceMessageId,
+      attribution,
       synthesis,
     });
     if (synthesis.segmentationFailedChunkCount > 0) {
@@ -649,6 +720,7 @@ export class EpisodeSynthesisLane {
     sessionId: string;
     actionId: string;
     sourceMessageId?: string;
+    attribution?: SessionMemoryAttribution;
     synthesis: EpisodicSynthesisRunResult;
   }): Promise<void> {
     if (!this.memoryWriter) return;
@@ -656,7 +728,7 @@ export class EpisodeSynthesisLane {
       try {
         await this.memoryWriter.write(write.payload);
       } catch (error) {
-        throw new BehavioralSummaryWriteError(behavioralSummaryStage(write.arc), error);
+        throw new BehavioralSummaryWriteError(input.sessionId, behavioralSummaryStage(write.arc), error);
       }
     }
   }
@@ -664,6 +736,7 @@ export class EpisodeSynthesisLane {
   private async resumeBehavioralSummary(
     action: Pick<InferredPostTurnAction, 'id' | 'sourceMessageId'>,
     workItem: ConversationalActivityWorkItem,
+    entries: readonly SessionEntry[] = [],
   ): Promise<boolean> {
     const completedBehavioralSummaryStage = workItem.completedStages.find(
       stage => stage.startsWith(BEHAVIORAL_SUMMARY_STAGE_PREFIX),
@@ -698,10 +771,19 @@ export class EpisodeSynthesisLane {
     if (episodes.length !== 2) {
       throw new Error(`Episode behavioral-summary recovery could not resolve both endpoints for arc "${pending.arcId}"`);
     }
+    const attribution = await resolveSessionMemoryAttribution({
+      sessionId: workItem.logicalSessionId,
+      activityKind: workItem.activityKind,
+      entries,
+      contactStore: this.contactStore,
+      ...(this.companionId ? { localCompanionId: this.companionId } : {}),
+      companionAuthorIds: this.companionAuthorIds,
+    });
     await this.writeBehavioralSummaries({
       sessionId: workItem.logicalSessionId,
       actionId: action.id,
       sourceMessageId: action.sourceMessageId,
+      attribution,
       synthesis: {
         consideredEntries: 0,
         claimedEntriesSkipped: 0,

@@ -2704,9 +2704,10 @@ describe('PostgresBackgroundWorkStore', () => {
         { extractionInterval: 25 },
       );
 
-      // The handler sizes the bounded snapshot to the interval, not a fixed ten.
+      // The handler sizes the bounded snapshot to the recovery window so
+      // intervals up to 50 are reachable without clipping uncovered entries.
       const snapshotLimit = extractor.getBoundedExtractionSnapshotLimit();
-      expect(snapshotLimit).toBe(25);
+      expect(snapshotLimit).toBe(50);
 
       // No live-history fallback: a fenced snapshot must never trigger a newer read.
       const liveSpy = vi.spyOn(consumer, 'getRecentMessages');

@@ -373,6 +373,29 @@ describe('extraction acceptance gates', () => {
     expect(decision.allowed).toBe(true);
     expect(decision.reason).toBeUndefined();
   });
+
+  it('blocks pure and stacked phatic greeting/farewell turns but allows substantive turns containing greeting words', () => {
+    const purePhatic = extractionTestUtils.evaluateExtractionPreLlmGate([
+      { role: 'user', content: 'Good morning, how are you?' },
+      { role: 'assistant', content: 'Doing well.' },
+      { role: 'user', content: 'Thanks so much, bye!' },
+    ] as never);
+    expect(purePhatic.allowed).toBe(false);
+    expect(purePhatic.reason).toBe('low_signal');
+
+    for (const content of [
+      'Hey! I switched to Neovim and built a walnut bookshelf this weekend.',
+      'Thanks for checking earlier, by the way I am allergic to shellfish.',
+      'I wanted to check in and share a quiet hello.',
+    ]) {
+      const decision = extractionTestUtils.evaluateExtractionPreLlmGate([
+        { role: 'user', content },
+        { role: 'assistant', content: 'Got it.' },
+      ] as never);
+      expect(decision.allowed, content).toBe(true);
+      expect(decision.reason, content).toBeUndefined();
+    }
+  });
 });
 
 describe('MemoryExtractor telemetry payloads', () => {
@@ -3324,7 +3347,7 @@ describe('MemoryExtractor group range in-flight reuse (mlwk.22)', () => {
   });
 });
 
-describe('MemoryExtractor bounded snapshot sizing (u5bv.10)', () => {
+describe('MemoryExtractor bounded snapshot sizing (u5bv.10, d5e0p.13)', () => {
   function makeExtractor(extractionInterval: number): MemoryExtractor {
     return new MemoryExtractor(
       fromAny({ complete: vi.fn() }),
@@ -3336,23 +3359,78 @@ describe('MemoryExtractor bounded snapshot sizing (u5bv.10)', () => {
     );
   }
 
-  // The interval upper bound (50) equals the extraction recovery window by
-  // construction, so every accepted interval is snapshot one-for-one.
+  // The bounded snapshot always spans up to the recovery window (50) countable
+  // conversational entries so small/odd intervals (e.g. 5 with 2 messages/turn)
+  // never clip uncovered messages when a turn jumps from 4 -> 6 uncovered rows.
   it.each([
-    [1, 1],
-    [10, 10],
-    [11, 11],
+    [1, 50],
+    [5, 50],
+    [10, 50],
+    [11, 50],
     [50, 50],
-  ])('snapshots the exact configured interval %i as %i entries', (interval, expected) => {
+  ])('sizes the bounded snapshot for interval %i to the recovery window %i', (interval, expected) => {
     expect(makeExtractor(interval).getBoundedExtractionSnapshotLimit()).toBe(expected);
   });
 
-  it('fails safe by clamping an out-of-contract interval to the recovery window', () => {
-    // Above the recovery window: never snapshot more than the LLM prompt sees, or
-    // coverage would advance over unprocessed entries.
+  it('bounds out-of-contract intervals to the recovery window', () => {
     expect(makeExtractor(999).getBoundedExtractionSnapshotLimit()).toBe(50);
-    // Never below one — a durable no-op snapshot is not a valid extraction window.
-    expect(makeExtractor(0).getBoundedExtractionSnapshotLimit()).toBeGreaterThanOrEqual(1);
+    expect(makeExtractor(0).getBoundedExtractionSnapshotLimit()).toBe(50);
+  });
+
+  it('extracts only uncovered entries from a full recovery-window snapshot without re-sending already-covered rows (d5e0p.13)', async () => {
+    extractionTestUtils.resetLastExtractionCount();
+    const channelId = 'discord:dm-uncovered-window';
+    const promptsSeen: string[] = [];
+    const llmClient = fromAny({
+      complete: vi.fn(async (input: { systemPrompt?: string; messages: Array<{ content: string }> }) => {
+        promptsSeen.push([input.systemPrompt ?? '', ...input.messages.map(message => message.content)].join('\n'));
+        return { content: '<response></response>' };
+      }),
+    });
+    const extractor = new MemoryExtractor(
+      llmClient,
+      fromAny({ getMessageCount: vi.fn().mockReturnValue(0), getRecentMessages: vi.fn().mockReturnValue([]) }),
+      fromAny({ getMemoriesByChannel: vi.fn().mockResolvedValue([]) }),
+      fromAny({ embed: vi.fn().mockResolvedValue(new Float32Array(8)), embedBatch: vi.fn(), dims: 8 }),
+      fromAny({ emit: vi.fn().mockResolvedValue(undefined) }),
+      { extractionInterval: 5 },
+    );
+    const makeEntry = (id: number, role: 'user' | 'assistant', marker: string): SessionEntry => ({
+      id,
+      channelId,
+      role,
+      authorName: role === 'user' ? 'Partner' : 'Companion',
+      content: `${marker} detailed conversation line ${id}`,
+      timestamp: id * 1_000,
+    });
+
+    const firstWindow = [
+      makeEntry(1, 'user', 'TURN1_HUMAN'),
+      makeEntry(2, 'assistant', 'TURN1_ASSISTANT'),
+      makeEntry(3, 'user', 'TURN2_HUMAN'),
+      makeEntry(4, 'assistant', 'TURN2_ASSISTANT'),
+      makeEntry(5, 'user', 'TURN3_HUMAN'),
+      makeEntry(6, 'assistant', 'TURN3_ASSISTANT'),
+    ];
+    await extractor.maybeExtract(channelId, undefined, undefined, undefined, undefined, undefined, firstWindow);
+    expect(promptsSeen).toHaveLength(1);
+    expect(promptsSeen[0]).toContain('TURN1_HUMAN');
+    expect(promptsSeen[0]).toContain('TURN3_HUMAN');
+
+    const secondWindow = [
+      ...firstWindow,
+      makeEntry(7, 'user', 'TURN4_HUMAN'),
+      makeEntry(8, 'assistant', 'TURN4_ASSISTANT'),
+      makeEntry(9, 'user', 'TURN5_HUMAN'),
+      makeEntry(10, 'assistant', 'TURN5_ASSISTANT'),
+      makeEntry(11, 'user', 'TURN6_HUMAN'),
+      makeEntry(12, 'assistant', 'TURN6_ASSISTANT'),
+    ];
+    await extractor.maybeExtract(channelId, undefined, undefined, undefined, undefined, undefined, secondWindow);
+    expect(promptsSeen).toHaveLength(2);
+    expect(promptsSeen[1]).toContain('TURN4_HUMAN');
+    expect(promptsSeen[1]).toContain('TURN6_HUMAN');
+    expect(promptsSeen[1]).not.toContain('TURN1_HUMAN');
   });
 });
 

@@ -39,6 +39,56 @@ export interface AuthorizedMemorySubjectQueryOptions {
  */
 export const MEMORY_SUBJECT_DETAILS_BATCH_MAX = 256;
 
+const FTS_QUERY_TERM_SLOTS = 24;
+const FTS_PREFERRED_TERM_CHARS = 3;
+const FTS_FALLBACK_TERM_CHARS = 2;
+const FTS_STOP_WORDS = new Set([
+  'about', 'also', 'and', 'any', 'are', 'been', 'but', 'can', 'could', 'did',
+  'does', 'for', 'from', 'get', 'going', 'got', 'had', 'has', 'have', 'her',
+  'here', 'him', 'his', 'how', 'into', 'its', 'just', 'know', 'let', 'like',
+  'make', 'more', 'need', 'not', 'now', 'okay', 'one', 'only', 'onto', 'our',
+  'out', 'over', 'really', 'said', 'says', 'see', 'she', 'should', 'some',
+  'still', 'sure', 'tell', 'than', 'that', 'the', 'their', 'them', 'then',
+  'there', 'they', 'think', 'this', 'told', 'too', 'two', 'very', 'want',
+  'was', 'well', 'were', 'what', 'when', 'where', 'which', 'who', 'why',
+  'will', 'with', 'would', 'yeah', 'yes', 'you', 'your',
+]);
+
+/**
+ * Extracts bounded, sanitized disjunctive lexemes for Postgres `to_tsquery('simple', $N)`
+ * so multi-turn conversational queries match any distinctive keyword (names,
+ * places, rare terms) rather than AND-ing every word via `plainto_tsquery`
+ * (psfn-framework-d5e0p.24).
+ */
+function buildDisjunctiveTsQuery(rawQuery: string): string | null {
+  const rawTokens = rawQuery.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+  if (rawTokens.length === 0) return null;
+
+  const preferred: string[] = [];
+  const fallback: string[] = [];
+  const seenPreferred = new Set<string>();
+  const seenFallback = new Set<string>();
+
+  for (let index = rawTokens.length - 1; index >= 0; index -= 1) {
+    const token = rawTokens[index]!;
+    if (token.length >= FTS_PREFERRED_TERM_CHARS && !FTS_STOP_WORDS.has(token)) {
+      if (!seenPreferred.has(token)) {
+        seenPreferred.add(token);
+        preferred.push(token);
+        if (preferred.length >= FTS_QUERY_TERM_SLOTS) break;
+      }
+    } else if (token.length >= FTS_FALLBACK_TERM_CHARS && !seenFallback.has(token)) {
+      seenFallback.add(token);
+      if (fallback.length < FTS_QUERY_TERM_SLOTS) {
+        fallback.push(token);
+      }
+    }
+  }
+
+  const terms = preferred.length > 0 ? preferred : fallback;
+  return terms.length > 0 ? terms.join(' | ') : null;
+}
+
 const MEMORY_SUBJECT_METADATA_COLUMNS = `
   memory.id, memory.text, memory.type, memory.importance, memory.confidence,
   memory.emotional_valence, memory.formation_vad, memory.emotional_texture, memory.salience,
@@ -228,8 +278,15 @@ function buildSelector(
     case 'text_search': {
       const query = selector.query.trim();
       if (!query) throw new Error('Authorized memory text search requires a query');
-      values.push(query);
-      const textQuerySql = `plainto_tsquery('simple', $${values.length})`;
+      const disjunctiveQuery = buildDisjunctiveTsQuery(query);
+      let textQuerySql: string;
+      if (disjunctiveQuery !== null) {
+        values.push(disjunctiveQuery);
+        textQuerySql = `to_tsquery('simple', $${values.length})`;
+      } else {
+        values.push(query);
+        textQuerySql = `plainto_tsquery('simple', $${values.length})`;
+      }
       where.push(`memory.search_vector @@ ${textQuerySql}`);
       similaritySql = `ts_rank_cd(memory.search_vector, ${textQuerySql})::double precision`;
       orderBy = `${similaritySql} DESC, memory.salience DESC, memory.extracted_at DESC`;

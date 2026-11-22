@@ -34,6 +34,11 @@ import type {
   ConversationalActivityWorkItem,
   ConversationalActivityWorksetPort,
 } from '../../core/session/conversational-activity-workset.js';
+import { classifyMemorySubject } from './subject-classification.js';
+import {
+  clearDiagnosticLogRingBufferForTests,
+  getRecentDiagnosticLogRecords,
+} from '../../shared/logger.js';
 
 /** start == end means the window covers the whole day. */
 function alwaysOpenRestWindow(): EpisodicProcessingRestWindowConfig {
@@ -102,14 +107,15 @@ function makeConversationalWorkset(
   logicalSessionId = 'terminal:test',
   occurredAtMs = 1,
   revision = Number.MAX_SAFE_INTEGER,
+  activityKind?: ConversationalActivityWorkItem['activityKind'],
 ): ConversationalActivityWorksetPort {
   const item: ConversationalActivityWorkItem = {
     purpose: 'sleeptime_consolidation',
     logicalSessionId,
     revision,
-    activityKind: logicalSessionId.startsWith('free-time:')
+    activityKind: activityKind ?? (logicalSessionId.startsWith('free-time:')
       ? 'experiential_free_time'
-      : 'direct_message',
+      : 'direct_message'),
     occurredAtMs,
     checkpointRevision: 0,
     completedStages: [],
@@ -2048,6 +2054,8 @@ describe('SleeptimeMemoryAgent', () => {
     const sleepConsolidator = { run: vi.fn() };
     const arcWeaver = { run: vi.fn() };
     const dreamMeaningPass = { run: vi.fn() };
+    const nowMs = Date.parse('2026-03-17T01:05:00.000Z');
+    const recentActivityMs = Date.parse('2026-03-17T00:55:00.000Z');
     const agent = new SleeptimeMemoryAgent(makeAgentOptions({
       agent: reviewAgent,
       sessionManager,
@@ -2055,20 +2063,427 @@ describe('SleeptimeMemoryAgent', () => {
       sleepConsolidator,
       arcWeaver,
       dreamMeaningPass,
-      conversationalActivityWorkset: makeConversationalWorkset('terminal:test', Date.now()),
+      now: () => nowMs,
+      conversationalActivityWorkset: makeConversationalWorkset('terminal:test', recentActivityMs),
     }));
 
-    await agent.execute(makeSleeptimeAction({
+    const outcome = await agent.execute(makeSleeptimeAction({
       payload: {
         sessionId: 'terminal:test',
-        lastUserActivityAtMs: Date.now(),
+        lastUserActivityAtMs: recentActivityMs,
       },
     }));
 
+    expect(outcome).toEqual({
+      outcome: 'yield',
+      completedSessions: 0,
+      remainingSessions: 1,
+      nextEligibleAtMs: recentActivityMs + 60 * 60_000,
+    });
     expect(sleepConsolidator.run).not.toHaveBeenCalled();
     expect(arcWeaver.run).not.toHaveBeenCalled();
     expect(dreamMeaningPass.run).not.toHaveBeenCalled();
     expect(reviewAgent.handleMessage).not.toHaveBeenCalled();
     expect(coreMemoryStore.rethink).not.toHaveBeenCalled();
+  });
+
+  it('parses fenced JSON surrounded by prose braces and accepts case-insensitive memory types (ik47b.2)', async () => {
+    const planReply = [
+      'Reflecting on the evening {notes: keep brief} before outputting the plan.',
+      '```text',
+      'scratchpad {not valid json}',
+      '```',
+      '```json',
+      JSON.stringify({
+        orient: {
+          persona: 'Calm and attentive during evening gateway debugging.',
+          human: 'Prefers concise checklist updates after debugging sessions.',
+          goals: 'Keep gateway checklists crisp.',
+        },
+        memory_writes: [
+          {
+            text: 'Prefers concise checklist updates after gateway debugging sessions.',
+            type: 'Semantic',
+            importance: 0.72,
+            confidence: 0.88,
+            emotionalValence: 0.15,
+            tags: ['workflow'],
+            sensitivity: 'Personal',
+          },
+        ],
+      }),
+      '```',
+      'Trailing note {done}.',
+    ].join('\n');
+    const reviewAgent = makeReviewAgent(planReply);
+    const coreMemoryStore = makeCoreMemoryStore();
+    const memoryWriter = { write: vi.fn().mockResolvedValue({ action: 'created' }) };
+    const agent = new SleeptimeMemoryAgent(makeAgentOptions({
+      agent: reviewAgent,
+      coreMemoryStore,
+      memoryWriter,
+      sessionManager: {
+        resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+        getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
+          {
+            id: 10,
+            channelId: 'terminal:test',
+            role: 'user',
+            content: 'Please give me concise checklist updates after gateway debugging sessions.',
+            timestamp: Date.now(),
+          },
+        ]),
+      },
+    }));
+
+    const outcome = await agent.execute(makeSleeptimeAction());
+
+    expect(outcome).toMatchObject({ outcome: 'complete', completedSessions: 1 });
+    expect(reviewAgent.handleMessage).toHaveBeenCalledTimes(1);
+    expect(memoryWriter.write).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'semantic',
+      sensitivity: 'personal',
+    }));
+  });
+
+  it('preserves unchanged orient blocks on partial orient plans and still rejects unknown memory types (ik47b.2)', async () => {
+    const coreMemoryStore = makeCoreMemoryStore();
+    coreMemoryStore.getSnapshot.mockReturnValue({
+      version: 2,
+      updatedAt: '2026-03-01T00:00:00.000Z',
+      blocks: {
+        persona: { label: 'persona', content: 'Steady and curious.', maxChars: 2400 },
+        human: { label: 'human', content: 'Enjoys telescope calibration.', maxChars: 2400, trustLevel: 'trusted' },
+        goals: { label: 'goals', content: 'Document mount alignment checks.', maxChars: 1600 },
+      },
+    });
+    const handleMessage = vi.fn()
+      // First attempt: unknown memory type must still fail closed and trigger retry with schema feedback.
+      .mockResolvedValueOnce({
+        content: JSON.stringify({
+          orient: { human: 'Calibrated the telescope mount cleanly.' },
+          memory_writes: [{
+            text: 'Calibrated the telescope mount cleanly.',
+            type: 'hallucinated_type',
+            importance: 0.7,
+            confidence: 0.9,
+          }],
+        }),
+      })
+      // Second attempt: partial orient update (only human updated, persona omitted, goals blank).
+      .mockResolvedValueOnce({
+        content: JSON.stringify({
+          orient: { human: 'Calibrated the telescope mount cleanly.', goals: '   ' },
+          memory_writes: [],
+        }),
+      });
+    const agent = new SleeptimeMemoryAgent(makeAgentOptions({
+      agent: { handleMessage },
+      coreMemoryStore,
+      sessionManager: {
+        resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+        getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
+          {
+            id: 21,
+            channelId: 'terminal:test',
+            role: 'user',
+            content: 'We calibrated the telescope mount cleanly tonight.',
+            timestamp: Date.now(),
+          },
+        ]),
+      },
+      orientationRewriteGate: { minNewEntriesSinceRewrite: 1, refreshAfterQuietDays: 1 },
+    }));
+
+    const outcome = await agent.execute(makeSleeptimeAction());
+
+    expect(outcome).toMatchObject({ outcome: 'complete', completedSessions: 1 });
+    expect(handleMessage).toHaveBeenCalledTimes(2);
+    const retryPrompt = (handleMessage.mock.calls[1]?.[0] as { content: string }).content;
+    expect(retryPrompt).toContain('hallucinated_type');
+    expect(retryPrompt).toContain('is invalid');
+    expect(retryPrompt).toContain('episodic|semantic|emotional|procedural|boundary|reflection|relational');
+    expect(coreMemoryStore.rethink).toHaveBeenCalledWith(
+      {
+        persona: 'Steady and curious.',
+        human: 'Calibrated the telescope mount cleanly.',
+        goals: 'Document mount alignment checks.',
+      },
+      { scope: coreMemoryChannelScope({ channelId: 'terminal:test' }) },
+    );
+  });
+
+  it('surfaces error logs and operator failure callback when review retries are exhausted (ik47b.2)', async () => {
+    clearDiagnosticLogRingBufferForTests();
+    const handleMessage = vi.fn().mockResolvedValue({
+      content: 'Sorry, I forgot to include JSON.',
+    });
+    const onReviewFailure = vi.fn();
+    const agent = new SleeptimeMemoryAgent(makeAgentOptions({
+      agent: { handleMessage },
+      onReviewFailure,
+      sessionManager: {
+        resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+        getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
+          {
+            id: 31,
+            channelId: 'terminal:test',
+            role: 'user',
+            content: 'Testing exhausted review turns.',
+            timestamp: Date.now(),
+          },
+        ]),
+      },
+    }));
+
+    const outcome = await agent.execute(makeSleeptimeAction());
+
+    expect(handleMessage).toHaveBeenCalledTimes(3);
+    expect(outcome).toMatchObject({
+      outcome: 'retry',
+      failures: [
+        expect.objectContaining({
+          stage: 'orientation_review',
+          message: expect.stringContaining('Sleeptime review produced no usable plan'),
+        }),
+      ],
+    });
+    expect(onReviewFailure).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'terminal:test',
+      stage: 'orientation_review',
+      error: expect.stringContaining('JSON object'),
+    }));
+    const errorLogs = getRecentDiagnosticLogRecords().filter(
+      record => record.level === 'error' && record.message.includes('exhausted retries'),
+    );
+    expect(errorLogs).toHaveLength(1);
+  });
+
+  it('attributes human DM sleeptime writes to the counterparty contact with finite sourceMessageIds (d5e0p.16)', async () => {
+    const dmSessionId = 'discord:dm-channel-55';
+    const contactId = 'contact-maya-1';
+    const reviewAgent = makeReviewAgent(JSON.stringify({
+      orient: {
+        persona: 'Attentive to Maya.',
+        human: 'Maya prefers early morning tea before standup.',
+        goals: 'Remember Maya morning tea routine.',
+      },
+      memory_writes: [{
+        text: 'Maya prefers early morning oolong tea before standup.',
+        type: 'semantic',
+        importance: 0.75,
+        confidence: 0.9,
+        emotionalValence: 0.2,
+        tags: ['preference'],
+        sensitivity: 'personal',
+      }],
+    }));
+    const memoryWriter = { write: vi.fn().mockResolvedValue({ action: 'created' }) };
+    const contactStore = {
+      getByChannelIdentity: vi.fn(async (channel: string, userId: string) => (
+        channel === 'discord' && userId === 'discord-user-77'
+          ? {
+            id: contactId,
+            displayName: 'Maya',
+            channels: [{ channel: 'discord', userId: 'discord-user-77', privacyLevel: 'private' }],
+          }
+          : undefined
+      )),
+    };
+    const agent = new SleeptimeMemoryAgent(makeAgentOptions({
+      agent: reviewAgent,
+      memoryWriter,
+      contactStore: contactStore as never,
+      conversationalActivityWorkset: makeConversationalWorkset(dmSessionId, 1, 12, 'direct_message'),
+      sessionManager: {
+        resolveSessionChannelId: vi.fn(() => dmSessionId),
+        getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
+          {
+            id: 11,
+            channelId: dmSessionId,
+            role: 'user',
+            authorId: 'discord-user-77',
+            authorName: 'Maya',
+            content: 'I always drink early morning oolong tea before standup.',
+            timestamp: Date.parse('2026-03-16T01:00:00.000Z'),
+          },
+          {
+            id: 12,
+            channelId: dmSessionId,
+            role: 'assistant',
+            content: 'Noted — early morning oolong tea before standup.',
+            timestamp: Date.parse('2026-03-16T01:01:00.000Z'),
+          },
+        ]),
+      },
+    }));
+
+    await agent.execute(makeSleeptimeAction({
+      channelId: dmSessionId,
+      payload: { sessionId: dmSessionId },
+      sourceMessageId: 'sleeptime-idle:1776000000',
+    }));
+
+    expect(memoryWriter.write).toHaveBeenCalledTimes(1);
+    const written = memoryWriter.write.mock.calls[0]?.[0];
+    expect(written).toMatchObject({
+      contactId,
+      provenance: expect.objectContaining({
+        channelId: dmSessionId,
+        subjectContactId: contactId,
+        subjectContactIds: [contactId],
+        sourceMessageIds: [11, 12],
+      }),
+    });
+    expect(written.provenance.sourceMessageIds.every((id: number) => Number.isFinite(id))).toBe(true);
+    const classification = classifyMemorySubject({
+      id: 'mem-dm-1',
+      text: written.text,
+      type: written.type,
+      importance: written.importance,
+      confidence: written.confidence,
+      emotionalValence: written.emotionalValence,
+      salience: written.importance,
+      sourceRef: written.sourceRef,
+      extractedAt: Date.now(),
+      lastAccessed: Date.now(),
+      accessCount: 0,
+      tags: written.tags,
+      sensitivity: written.sensitivity,
+      contactId: written.contactId,
+      provenance: written.provenance,
+    }, { memoryRevision: 1 });
+    expect(classification.subjectClass).toBe('single_contact');
+    expect(classification.subjectContactIds).toEqual([contactId]);
+  });
+
+  it('attributes companion-dm writes to peer contact, free-time writes as companion_private, and fails closed on groups (d5e0p.16)', async () => {
+    const localUuid = '11111111-1111-4111-8111-111111111111';
+    const peerUuid = '22222222-2222-4222-8222-222222222222';
+    const companionDmSession = `companion-dm:${localUuid}:${peerUuid}`;
+    const peerContactId = 'contact-peer-sol';
+    const contactStore = {
+      getByChannelIdentity: vi.fn(async (channel: string, userId: string) => (
+        channel === 'companion' && userId === peerUuid
+          ? {
+            id: peerContactId,
+            displayName: 'Sol',
+            channels: [{ channel: 'companion', userId: peerUuid, privacyLevel: 'private' }],
+          }
+          : undefined
+      )),
+    };
+
+    const runCase = async (
+      sessionId: string,
+      activityKind: ConversationalActivityWorkItem['activityKind'],
+      entries: Array<{ id: number; authorId?: string; authorName?: string; content: string }>,
+    ) => {
+      const memoryWriter = { write: vi.fn().mockResolvedValue({ action: 'created' }) };
+      const reviewAgent = makeReviewAgent(JSON.stringify({
+        orient: {
+          persona: 'Reflective about acoustic guitar tuning.',
+          human: 'Discussed acoustic guitar tuning habits.',
+          goals: 'Remember guitar tuning notes.',
+        },
+        memory_writes: [{
+          text: 'Sol prefers open-D acoustic guitar tuning for evening sketches.',
+          type: 'semantic',
+          importance: 0.72,
+          confidence: 0.88,
+          emotionalValence: 0.2,
+          tags: ['music'],
+          sensitivity: 'personal',
+        }],
+      }));
+      const agent = new SleeptimeMemoryAgent(makeAgentOptions({
+        agent: reviewAgent,
+        memoryWriter,
+        contactStore: contactStore as never,
+        companionId: localUuid,
+        conversationalActivityWorkset: makeConversationalWorkset(
+          sessionId,
+          1,
+          Math.max(...entries.map(entry => entry.id)),
+          activityKind,
+        ),
+        sessionManager: {
+          resolveSessionChannelId: vi.fn(() => sessionId),
+          getRecentMessagesAtOrBefore: vi.fn().mockReturnValue(
+            entries.map(entry => ({
+              id: entry.id,
+              channelId: sessionId,
+              role: 'user' as const,
+              authorId: entry.authorId,
+              authorName: entry.authorName,
+              content: entry.content,
+              timestamp: Date.parse('2026-03-16T01:00:00.000Z'),
+            })),
+          ),
+        },
+      }));
+      await agent.execute(makeSleeptimeAction({
+        channelId: sessionId,
+        payload: { sessionId },
+        sourceMessageId: 'sleeptime-idle:1776000001',
+      }));
+      return memoryWriter.write.mock.calls[0]?.[0];
+    };
+
+    const companionDmWrite = await runCase(companionDmSession, 'direct_message', [{
+      id: 41,
+      content: 'Sol prefers open-D acoustic guitar tuning for evening sketches.',
+    }]);
+    expect(companionDmWrite.contactId).toBe(peerContactId);
+    expect(companionDmWrite.provenance.subjectContactId).toBe(peerContactId);
+    expect(classifyMemorySubject({
+      id: 'mem-cdm',
+      text: companionDmWrite.text,
+      type: companionDmWrite.type,
+      importance: 0.72,
+      confidence: 0.88,
+      emotionalValence: 0.2,
+      salience: 0.72,
+      sourceRef: companionDmWrite.sourceRef,
+      extractedAt: Date.now(),
+      lastAccessed: Date.now(),
+      accessCount: 0,
+      tags: companionDmWrite.tags,
+      sensitivity: companionDmWrite.sensitivity,
+      contactId: companionDmWrite.contactId,
+      provenance: companionDmWrite.provenance,
+    }, { memoryRevision: 1 }).subjectClass).toBe('single_contact');
+
+    const freeTimeWrite = await runCase('free-time:evening-reflection', 'experiential_free_time', [{
+      id: 51,
+      content: 'Sol prefers open-D acoustic guitar tuning for evening sketches.',
+    }]);
+    expect(freeTimeWrite.contactId).toBeUndefined();
+    expect(freeTimeWrite.provenance.subjectScope).toBe('companion_internal');
+    expect(classifyMemorySubject({
+      id: 'mem-ft',
+      text: freeTimeWrite.text,
+      type: freeTimeWrite.type,
+      importance: 0.72,
+      confidence: 0.88,
+      emotionalValence: 0.2,
+      salience: 0.72,
+      sourceRef: freeTimeWrite.sourceRef,
+      extractedAt: Date.now(),
+      lastAccessed: Date.now(),
+      accessCount: 0,
+      tags: freeTimeWrite.tags,
+      sensitivity: freeTimeWrite.sensitivity,
+      provenance: freeTimeWrite.provenance,
+    }, { memoryRevision: 1 }).subjectClass).toBe('companion_private');
+
+    const groupWrite = await runCase('discord:guild-room-9', 'group_conversation', [{
+      id: 61,
+      authorId: peerUuid,
+      authorName: 'Sol',
+      content: 'Sol prefers open-D acoustic guitar tuning for evening sketches.',
+    }]);
+    expect(groupWrite.contactId).toBeUndefined();
+    expect(groupWrite.provenance.subjectContactId).toBeUndefined();
   });
 });

@@ -4855,6 +4855,89 @@ describe('SessionManager', () => {
     expect(ctx.systemPrompt).not.toContain('Assistant');
     expect(ctx.systemPrompt).not.toContain('I helped with something.');
   });
+
+  it('prevents interleaved system and tool rows from starving post-turn extraction snapshots (d5e0p.13)', async () => {
+    const channelId = 'companion-dm:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const mgr = new SessionManager(store, makeConfig({ dataDir: dir }));
+    const promptsSeen: string[] = [];
+    const llmClient = {
+      complete: vi.fn(async (input: { systemPrompt?: string; messages: Array<{ content: string }> }) => {
+        promptsSeen.push([input.systemPrompt ?? '', ...input.messages.map(message => message.content)].join('\n'));
+        return { content: '<response></response>' };
+      }),
+    } as unknown as LLMProviderPort;
+    const memoryStore = new InMemoryMemoryStore();
+    const extractor = new MemoryExtractor(
+      llmClient,
+      mgr,
+      memoryStore,
+      {
+        embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+        embedBatch: vi.fn(),
+        dims: 8,
+      } as never,
+      new EventBus(),
+      { extractionInterval: 5 },
+    );
+    const snapshotLimit = extractor.getBoundedExtractionSnapshotLimit();
+    const humanMarkers: string[] = [];
+
+    for (let turn = 1; turn <= 6; turn += 1) {
+      const marker = `PEER_TURN_${turn}_UNIQUE`;
+      humanMarkers.push(marker);
+      mgr.recordUserMessage(
+        channelId,
+        `${marker}: sharing an update about the greenhouse project.`,
+        'peer-companion-1',
+        'Sol',
+      );
+      // Interleave tool and system rows on every turn (matching ICP delivery/outbox patterns).
+      store.append({
+        channelId,
+        role: 'tool',
+        content: `[Tool result: lookup] turn ${turn}`,
+        timestamp: Date.now() + turn * 10 + 1,
+      });
+      const assistantId = mgr.recordAssistantMessage(
+        channelId,
+        `Noted turn ${turn} update on the greenhouse project.`,
+      );
+      store.append({
+        channelId,
+        role: 'system',
+        content: `{"schemaVersion":1,"kind":"icp_delivery","sourceMessageId":"src-${turn}","status":"delivered"}`,
+        timestamp: Date.now() + turn * 10 + 3,
+      });
+      store.append({
+        channelId,
+        role: 'system',
+        content: `Outreach delivery audit record for turn ${turn}`,
+        timestamp: Date.now() + turn * 10 + 4,
+      });
+
+      const snapshot = mgr.getRecentMessagesAtOrBefore(channelId, assistantId, snapshotLimit);
+      expect(snapshot.every(entry => entry.role === 'user' || entry.role === 'assistant')).toBe(true);
+      await extractor.maybeExtract(
+        channelId,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        snapshot,
+      );
+    }
+
+    // 6 turns = 12 countable entries at interval=5 => fires on turn 3 (6 entries) and turn 6 (6 entries).
+    expect(promptsSeen).toHaveLength(2);
+    for (const marker of humanMarkers.slice(0, 3)) {
+      expect(promptsSeen[0]).toContain(marker);
+    }
+    for (const marker of humanMarkers.slice(3, 6)) {
+      expect(promptsSeen[1]).toContain(marker);
+    }
+    expect(promptsSeen[1]).not.toContain('PEER_TURN_1_UNIQUE');
+  });
 });
 
 describe('resolveRoleName', () => {

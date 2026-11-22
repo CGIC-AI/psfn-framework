@@ -33,6 +33,7 @@ export {
 
 export type MemoryType = MemoryPolicyType;
 export type MemoryRetentionClass = 'standard' | 'durable';
+export type RetrievalCandidateChannel = 'embedding' | 'fts' | 'lexical_augment';
 export type MemorySourceType =
   | 'unknown'
   | 'turn'

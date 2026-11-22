@@ -54,6 +54,7 @@ import {
   type RuntimeLaneClass,
 } from '../../../shared/contracts/runtime-lanes.js';
 import { createComponentLogger } from '../../../shared/logger.js';
+import { formatErrorSummary } from '../../../shared/utils/errors.js';
 import { writeJsonAtomic } from '../../../shared/utils/fs.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import { emitTurnPerformance } from '../../../shared/telemetry/turn-performance.js';
@@ -1276,7 +1277,7 @@ export function wirePostTurnActionRuntime(
       advancePastFinishedAction(entry);
       emitTelemetry('succeeded', entry);
     } catch (error) {
-      const errorText = String(error);
+      const errorText = formatErrorSummary(error);
       const contentionKind = classifyPostTurnActionContention(error);
       if (contentionKind) {
         entry.attempt = Math.max(0, entry.attempt - 1);

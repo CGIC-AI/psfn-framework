@@ -384,4 +384,72 @@ describe('reflection post-turn lane split (E5.2)', () => {
       .toBeLessThan(coordinator.commitCheckpoint.mock.invocationCallOrder[0] ?? 0);
     expect(coordinator.release).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'yield' }));
   });
+
+  it('reschedules rest-window ineligible sleeptime yield at nextEligibleAtMs instead of short fleet retryDelayMs (d5e0p.5)', async () => {
+    const nowMs = Date.parse('2026-10-09T03:00:00.000Z');
+    const recentActivityMs = nowMs - 5 * 60_000; // 5m ago; inactivity threshold is 60m => eligible at 03:55Z
+    const expectedNextEligibleAtMs = recentActivityMs + 60 * 60_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(nowMs);
+    try {
+      const lease = {
+        companionId: '11111111-1111-4111-8111-111111111111',
+        fencingToken: 1,
+        acquiredAtMs: nowMs,
+        expiresAtMs: nowMs + 5_000,
+        phase: 'sleeptime',
+        checkpointRef: null,
+        preemptRequested: false,
+      };
+      const coordinator = {
+        companionId: lease.companionId,
+        manifestOrdinal: 0,
+        fleetSize: 3,
+        announceDemand: vi.fn(async () => undefined),
+        tryAcquire: vi.fn(async () => ({ outcome: 'acquired', lease })),
+        renew: vi.fn(),
+        commitCheckpoint: vi.fn(),
+        release: vi.fn(async () => undefined),
+        requestForegroundPreemption: vi.fn(),
+        withdrawDemand: vi.fn(),
+        readCheckpoint: vi.fn(),
+        close: vi.fn(),
+      };
+      const harness = wireLanes({
+        fleetMaintenance: {
+          coordinator,
+          leaseDurationMs: 5_000,
+          retryDelayMs: 900,
+        },
+      });
+      harness.conversationalActivityWorkset.enumerate.mockResolvedValueOnce([{
+        purpose: 'sleeptime_consolidation',
+        logicalSessionId: 'terminal:rest-window-ineligible',
+        revision: 3,
+        activityKind: 'direct_message',
+        occurredAtMs: recentActivityMs,
+        checkpointRevision: 0,
+        completedStages: [],
+      }]);
+      const registration = harness.postTurnActions.registerHandler.mock.calls.find(
+        call => call[0] === SLEEPTIME_MEMORY_ACTION_KIND,
+      );
+      const handler = registration?.[1];
+      if (typeof handler !== 'function') throw new Error('Sleeptime handler was not registered');
+
+      const result = await handler(fromAny({
+        id: 'sleeptime-rest-window-yield',
+        sourceMessageId: 'source-message',
+        payload: { trigger: 'idle_rest_window' },
+      }));
+
+      expect(result).toMatchObject({
+        rescheduleAt: expectedNextEligibleAtMs,
+        detail: expect.stringContaining('outside rest-window eligibility'),
+      });
+      expect(result.rescheduleAt).toBeGreaterThan(nowMs + 900);
+      expect(coordinator.release).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'yield' }));
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
 });

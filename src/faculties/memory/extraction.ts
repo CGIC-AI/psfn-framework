@@ -376,6 +376,9 @@ export class MemoryExtractor {
         this.extractionInterval,
       );
     if (!trigger) return;
+    const uncoveredBoundedEntries = boundedEntries === undefined
+      ? undefined
+      : selectUncoveredSnapshotEntries(channelId, boundedEntries);
     // Epic 4lf3r: only the "every N messages" interval trigger may be
     // pre-gated — the live foreground path and the durable post-turn snapshot
     // path alike. Threshold, pre-compaction, crash-recovery and manual runs
@@ -388,7 +391,7 @@ export class MemoryExtractor {
         channelId,
         entries: boundedEntries === undefined
           ? this.sessionManager.getRecentMessages(channelId, trigger.currentCount - trigger.lastCount)
-          : selectUncoveredSnapshotEntries(channelId, boundedEntries),
+          : uncoveredBoundedEntries!,
       })
     ) {
       log.debug('Extraction pre-gate found nothing to remember; skipping this interval', { channelId });
@@ -415,11 +418,16 @@ export class MemoryExtractor {
       });
     }
 
+    const extractionEntries = boundedEntries === undefined
+      ? undefined
+      : (uncoveredBoundedEntries && uncoveredBoundedEntries.length > 0
+        ? uncoveredBoundedEntries
+        : boundedEntries);
     const outputs = await this.trackExtraction(
       channelId,
       trigger.triggerReason,
       canonicalContactId,
-      boundedEntries,
+      extractionEntries,
       turnId,
       undefined,
       placeId,
@@ -444,25 +452,15 @@ export class MemoryExtractor {
   }
 
   /**
-   * Entry count a durable post-turn handler must read into its bounded snapshot
-   * for this extractor's interval to be reachable. The interval trigger counts
-   * exact uncovered entries inside the supplied snapshot, so a snapshot smaller
-   * than the interval can never satisfy it — the original fixed ten-entry window
-   * left every configured interval of 11-50 permanently unable to interval-fire.
-   *
-   * Sized to the effective interval and clamped to the extraction recovery
-   * window: the interval upper bound (50) equals that window by construction, so
-   * a valid interval is never truncated. The clamp only fails safe on an
-   * out-of-contract interval — the snapshot must never exceed the recovery window
-   * the orchestrator feeds the LLM, or coverage would advance over entries the
-   * extractor never actually processed.
+   * Countable conversational entry bound a durable post-turn handler reads
+   * into its snapshot. Returning the full recovery window (50) ensures every
+   * uncovered conversational entry since the channel's extraction coverage
+   * watermark is captured — including odd/small intervals where multi-message
+   * turns jump past `interval` (e.g. 4 -> 6 on interval 5) and would otherwise
+   * drop the oldest uncovered user message (psfn-framework-d5e0p.13).
    */
   getBoundedExtractionSnapshotLimit(): number {
-    const interval = this.runtimeConfig?.extractionInterval ?? this.extractionInterval;
-    const normalized = Number.isSafeInteger(interval) && interval >= 1
-      ? interval
-      : MEMORY_CONFIG.extractionInterval;
-    return Math.max(1, Math.min(normalized, RECOVERY_CONTEXT_MESSAGE_LIMIT));
+    return RECOVERY_CONTEXT_MESSAGE_LIMIT;
   }
 
   async extract(

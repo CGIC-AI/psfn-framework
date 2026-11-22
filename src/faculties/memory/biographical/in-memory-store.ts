@@ -166,7 +166,13 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
     this.candidates.set(candidate.id, { candidateJson: serializeCandidate(candidate) });
   }
 
-  /** Advisory pending-budget read (a18qq); `writeCandidate` stays authoritative. */
+  /**
+   * Advisory pending-budget read (a18qq); `writeCandidate` stays authoritative.
+   * Counts only candidates in the active automated pipeline
+   * (`automata_synthesis`, `companion_review`). Candidates escalated to
+   * `human_review` wait on operator attention and must not deadlock fleet-wide
+   * synthesis for other claims or companion-self autoactivation.
+   */
   async countPendingCandidates(): Promise<number> {
     return this.pendingCandidates().length;
   }
@@ -174,7 +180,10 @@ export class InMemoryBiographicalProfileStore implements BiographicalProfileStor
   private pendingCandidates(): BiographicalCandidateRecord[] {
     return [...this.candidates.values()]
       .map(row => deserializeCandidate(row.candidateJson))
-      .filter(candidate => !['active', 'rejected', 'superseded'].includes(candidate.stage));
+      .filter(candidate => (
+        candidate.stage === 'automata_synthesis'
+        || candidate.stage === 'companion_review'
+      ));
   }
 
   async writeCandidate(

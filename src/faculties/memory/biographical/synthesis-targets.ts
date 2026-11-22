@@ -26,25 +26,32 @@ import type {
 import type { BiographicalSubjectRef } from './types.js';
 
 /**
- * Relationship types the depth policy recognizes. `acquaintance`, `stranger`
- * and `ai_companion` map to `other`, which never on its own reaches full depth.
+ * Relationship types the depth policy recognizes. `partner`, `family`, `friend`,
+ * and `ai_companion` peers can reach `full` depth at high trust; `acquaintance`
+ * and `stranger` map to `other` (capped at `developing` for verified `regular`+
+ * contacts).
  */
 function depthRelationshipType(
   relationshipType: RelationshipType,
 ): NonNullable<VerifiedContactDepthEvidence['relationship']>['type'] {
-  if (relationshipType === 'partner' || relationshipType === 'family'
-    || relationshipType === 'friend') {
+  if (
+    relationshipType === 'partner'
+    || relationshipType === 'family'
+    || relationshipType === 'friend'
+    || relationshipType === 'ai_companion'
+  ) {
     return relationshipType;
   }
   return 'other';
 }
 
 /**
- * Trust levels worth enumerating. Depth requires at least `regular` trust, and
- * only a verified high-tier contact can reach developing or full, so the scan
- * never walks the entire contact table.
+ * Trust levels worth enumerating. Depth requires at least `regular` trust, so
+ * scanning `primary`, `trusted`, and `regular` contacts covers established
+ * friends, regular contacts, and sibling `ai_companion` peers without walking
+ * `public` contacts.
  */
-const SCANNED_TRUST_LEVELS: readonly TrustLevel[] = HIGH_TIER_TRUST_LEVELS;
+const SCANNED_TRUST_LEVELS: readonly TrustLevel[] = [...HIGH_TIER_TRUST_LEVELS, 'regular'];
 
 /**
  * One verified group the companion belongs to (psfn-framework-uz787).

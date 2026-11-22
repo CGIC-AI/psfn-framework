@@ -194,7 +194,12 @@ Live canonical source memories (most relevant first):
 
 Write a concise recent shape in 1-2 short paragraphs. Keep current interaction themes, communication style, and emotionally important anchors. Exclude trivial chatter and transient logistics. This summary is not durable biography.
 
-Emit at most {biographical_candidate_limit} durable biography candidates. Each candidate must be a JSON object with exactly kind, value, basis, confidence, and sourceMemoryIds, plus only the optional proposedSensitivity, validFrom, and validTo fields. Allowed kinds are role, stable-preference, and shared-language. Values must use their registered versioned schema. sourceMemoryIds must cite one or more ids from Live canonical source memories. Do not emit subject, relatedSubject, status, depth, digests, grants, notes, or free-form claim prose; the trusted runtime owns those fields.
+Emit at most {biographical_candidate_limit} durable biography candidates. Each candidate must be a JSON object with exact required keys kind, value, basis, confidence, and sourceMemoryIds, plus only optional keys proposedSensitivity, validFrom, and validTo. Allowed kinds are role, stable-preference, and shared-language. basis must be one of explicit|observed|inferred|imported; confidence is a number in [0,1]; optional proposedSensitivity is public|personal|intimate|confidential.
+Exact closed value schemas (no extra keys, no omitted required keys):
+- role (candidate top-level MUST include canonical UTC ISO-8601 validFrom, e.g. "2026-01-01T00:00:00.000Z"; optional validTo): {"kind":"role","schemaVersion":1,"roleType":"employment|education|family|community|creative","title":"...","organization":"..."} (organization is optional).
+- stable-preference: {"kind":"stable-preference","schemaVersion":1,"domain":"food|media|activity|environment|communication","target":"...","polarity":"likes|dislikes|prefers|avoids"}.
+- shared-language: {"kind":"shared-language","schemaVersion":1,"languageType":"phrase|ritual|reference|signal","phrase":"...","meaning":"..."}.
+sourceMemoryIds must cite one or more ids from Live canonical source memories. Do not emit subject, relatedSubject, status, depth, digests, grants, notes, or free-form claim prose; the trusted runtime owns those fields.
 
 Attribution rules:
 - The target contact is the person described in the Target contact block.
@@ -224,7 +229,15 @@ Subject under synthesis:
 Live canonical source memories (exact ids; the only admissible evidence):
 {memory_facts}
 
-Emit at most {biographical_candidate_limit} candidates. Each candidate must be a JSON object with exactly kind, value, basis, confidence, and sourceMemoryIds, plus only the optional proposedSensitivity, validFrom, and validTo fields. Allowed kinds are {admitted_kinds}. Values must use their registered versioned schema. sourceMemoryIds must cite one or more ids from Live canonical source memories.
+Emit at most {biographical_candidate_limit} candidates. Each candidate must be a JSON object with exact required keys kind, value, basis, confidence, and sourceMemoryIds, plus only optional keys proposedSensitivity, validFrom, and validTo. Allowed kinds are {admitted_kinds}. basis must be one of explicit|observed|inferred|imported; confidence is a number in [0,1]; optional proposedSensitivity is public|personal|intimate|confidential.
+Exact closed value schemas (every extra key is rejected — do NOT include schemaVersion on name, nickname, or relationship):
+- name (NO schemaVersion): {"kind":"name","name":"...","role":"primary|alias"}
+- nickname (NO schemaVersion): {"kind":"nickname","nickname":"...","scope":"self|relational"}
+- relationship (NO schemaVersion): {"kind":"relationship","relationshipType":"..."}
+- role (requires schemaVersion: 1 AND top-level canonical UTC ISO-8601 validFrom, e.g. "2026-01-01T00:00:00.000Z"; optional validTo): {"kind":"role","schemaVersion":1,"roleType":"employment|education|family|community|creative","title":"...","organization":"..."} (organization is optional)
+- stable-preference (requires schemaVersion: 1): {"kind":"stable-preference","schemaVersion":1,"domain":"food|media|activity|environment|communication","target":"...","polarity":"likes|dislikes|prefers|avoids"}
+- shared-language (requires schemaVersion: 1): {"kind":"shared-language","schemaVersion":1,"languageType":"phrase|ritual|reference|signal","phrase":"...","meaning":"..."}
+sourceMemoryIds must cite one or more ids from Live canonical source memories.
 
 Hard boundaries:
 - Do not emit subject, relatedSubject, status, stage, depth, digests, grants, review notes, rationale, or any free-form profile prose. The trusted runtime owns every one of those fields.

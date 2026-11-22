@@ -20,7 +20,7 @@ export interface VerifiedContactDepthEvidence {
   };
   readonly relationship?: {
     readonly verified: boolean;
-    readonly type: 'partner' | 'friend' | 'family' | 'other';
+    readonly type: 'partner' | 'friend' | 'family' | 'ai_companion' | 'other';
     readonly authorityRef: string;
   };
   readonly governedContexts: readonly VerifiedGovernedContextEvidence[];
@@ -72,10 +72,11 @@ export function deriveBiographicalCollectionDepth(input: {
     || !hasAuthorityRef(trust.authorityRef)
   ) return 'recognition';
   const relationship = evidence.relationship;
-  if (
-    relationship !== undefined
+  const hasVerifiedRelationship = relationship !== undefined
     && relationship.verified
-    && hasAuthorityRef(relationship.authorityRef)
+    && hasAuthorityRef(relationship.authorityRef);
+  if (
+    hasVerifiedRelationship
     && relationship.type !== 'other'
     && trustAtLeast(trust.level, 'trusted')
   ) {
@@ -93,6 +94,7 @@ export function deriveBiographicalCollectionDepth(input: {
     && (
       contextKeys.size >= input.policy.developingIndependentContextMinimum
       || (trust.level === 'primary' && primaryVerifiedDm)
+      || hasVerifiedRelationship
     )
   ) {
     return 'developing';

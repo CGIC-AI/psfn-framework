@@ -76,8 +76,70 @@ describe('biography synthesis canonical contacts', () => {
     contact.archivedAt = '2026-09-02T00:00:00.000Z';
     expect(await port.listTargets(10)).toHaveLength(1);
     delete contact.archivedAt;
-    contact.trustLevel = 'stranger';
+    contact.trustLevel = 'stranger' as Contact['trustLevel'];
     expect(await port.listTargets(10)).toHaveLength(1);
+  });
+
+  it('includes regular trust contacts and ai_companion peers while skipping public contacts', async () => {
+    const regularFriend: Contact = {
+      id: 'contact-regular-friend',
+      displayName: 'Rowan',
+      trustLevel: 'regular',
+      relationshipType: 'friend',
+      firstSeen: '2025-01-01T00:00:00.000Z',
+      lastSeen: '2026-09-01T00:00:00.000Z',
+    };
+    const siblingPeer: Contact = {
+      id: 'contact-sibling-peer',
+      displayName: 'Lyra',
+      trustLevel: 'trusted',
+      relationshipType: 'ai_companion',
+      firstSeen: '2025-01-01T00:00:00.000Z',
+      lastSeen: '2026-09-01T00:00:00.000Z',
+    };
+    const publicVisitor: Contact = {
+      id: 'contact-public-visitor',
+      displayName: 'Passerby',
+      trustLevel: 'public',
+      relationshipType: 'acquaintance',
+      firstSeen: '2025-01-01T00:00:00.000Z',
+      lastSeen: '2026-09-01T00:00:00.000Z',
+    };
+    const contactStore = emptyContactStore();
+    contactStore.getByTrustLevel = vi.fn(async level => {
+      if (level === 'trusted') return [siblingPeer];
+      if (level === 'regular') return [regularFriend];
+      if (level === 'public') return [publicVisitor];
+      return [];
+    });
+    const port = createBiographySynthesisTargetPort({
+      contactStore,
+      companionSubject: COMPANION_SUBJECT,
+      depthPolicy: () => createDefaultBiographicalDepthPolicy(),
+    });
+
+    const targets = await port.listTargets(10);
+    expect(targets).toContainEqual({
+      subject: { kind: 'contact', contactId: siblingPeer.id, subjectVersion: 1 },
+      socialContext: {
+        kind: 'companion_contact_dyad',
+        companionId: COMPANION_SUBJECT.companionId,
+        contactId: siblingPeer.id,
+      },
+      depth: 'full',
+    });
+    expect(targets).toContainEqual({
+      subject: { kind: 'contact', contactId: regularFriend.id, subjectVersion: 1 },
+      socialContext: {
+        kind: 'companion_contact_dyad',
+        companionId: COMPANION_SUBJECT.companionId,
+        contactId: regularFriend.id,
+      },
+      depth: 'developing',
+    });
+    expect(targets.some(
+      target => target.subject.kind === 'contact' && target.subject.contactId === publicVisitor.id,
+    )).toBe(false);
   });
 });
 

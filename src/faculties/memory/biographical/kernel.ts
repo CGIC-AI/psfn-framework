@@ -277,6 +277,43 @@ export function assertPortabilityScope(input: {
   return 'subject_present';
 }
 
+function isSafePortableClaimKind(kind: BiographicalClaimKind): boolean {
+  return kind === 'name'
+    || kind === 'nickname'
+    || kind === 'relationship'
+    || kind === 'stable-preference';
+}
+
+/**
+ * Resolve the safe default portability scope for an activated non-sensitive
+ * biographical claim. `intimate` and `confidential` claims always stay
+ * `origin_only` (non-portable across group rooms). Non-sensitive (`public` or
+ * `personal`) core identity/preference claims (`name`, `nickname`,
+ * `relationship`, `stable-preference`) default to `subject_present` when bound
+ * to one or more canonical contacts, or `universal` when purely companion-self.
+ */
+export function resolveSafeDefaultPortabilityScope(input: {
+  claim: Pick<BiographicalClaim, 'kind' | 'subject' | 'relatedSubject' | 'participants'>;
+  effectiveSensitivity: SensitivityLevel;
+}): BiographicalPortabilityScope {
+  if (input.effectiveSensitivity !== 'public' && input.effectiveSensitivity !== 'personal') {
+    return 'origin_only';
+  }
+  if (!isSafePortableClaimKind(input.claim.kind)) {
+    return 'origin_only';
+  }
+  const hasBoundContact = input.claim.subject.kind === 'contact'
+    || input.claim.relatedSubject?.kind === 'contact'
+    || (input.claim.participants ?? []).some(subject => subject.kind === 'contact');
+  if (hasBoundContact) {
+    return 'subject_present';
+  }
+  if (input.claim.subject.kind === 'companion') {
+    return 'universal';
+  }
+  return 'origin_only';
+}
+
 function assertPositiveInteger(value: unknown, field: string): number {
   if (
     typeof value !== 'number'

@@ -115,6 +115,7 @@ function resolveContactBiographicalDepth(
   const relationshipType = contact.relationshipType === 'partner'
     || contact.relationshipType === 'friend'
     || contact.relationshipType === 'family'
+    || contact.relationshipType === 'ai_companion'
     ? contact.relationshipType
     : 'other';
   return deriveBiographicalCollectionDepth({

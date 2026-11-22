@@ -931,10 +931,11 @@ describe('uz787 group-context claims and companion portability choice', () => {
       });
 
       const seedPolicy = createDefaultBiographicalCandidatePolicy();
-      expect(seedPolicy.companionPortabilityChoice).toEqual({ enabled: false, maximumSensitivity: 'personal' });
-      await expect(recordCompanionPortabilityChoice({ store, policy: seedPolicy, claimId: selfClaim.id, now: NOW }))
+      expect(seedPolicy.companionPortabilityChoice).toEqual({ enabled: true, maximumSensitivity: 'personal' });
+      const disabled = { ...seedPolicy, companionPortabilityChoice: { enabled: false, maximumSensitivity: 'personal' as const } };
+      await expect(recordCompanionPortabilityChoice({ store, policy: disabled, claimId: selfClaim.id, now: NOW }))
         .rejects.toMatchObject({ reason: 'policy_disabled' });
-      const enabled = { ...seedPolicy, companionPortabilityChoice: { enabled: true, maximumSensitivity: 'personal' as const } };
+      const enabled = seedPolicy;
       await expect(recordCompanionPortabilityChoice({ store, policy: enabled, claimId: relational.id, now: NOW }))
         .rejects.toMatchObject({ reason: 'claim_names_a_person' });
       const publicOnly = { ...seedPolicy, companionPortabilityChoice: { enabled: true, maximumSensitivity: 'public' as const } };

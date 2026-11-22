@@ -1393,7 +1393,69 @@ describe('registerGatewayMessageHandlers', () => {
     }));
   });
 
-  it('routes an inbound ICP turn through the existing appraiser and durably chooses no reply before generation', async () => {
+  it('bypasses pre-generation appraiser suppression for approved 1:1 companion_dm turns (eoj3s.5)', async () => {
+    const participationAppraiser: ParticipationAppraiserPort = {
+      appraise: vi.fn(async () => ({
+        appraisal: { action: 'ignore', reasonCode: 'prefer_ignore', confidence: 0.99 },
+        failClosed: false,
+      })),
+    };
+    const reply = {
+      ...makeResponse('direct sibling reply'),
+      channelId: ICP_CHANNEL,
+      metadata: {
+        ...makeResponse('').metadata,
+        turnId: replyIcpCorrelation.turnId,
+        requestId: replyIcpCorrelation.requestId,
+        icpCorrelation: replyIcpCorrelation,
+      },
+    };
+    const harness = createHarness({
+      config: { companionId: ICP_B, multiCompanion: true } as SubstrateConfig,
+      participationAppraiser,
+      handleMessage: async (_message, lifecycle, turnControl) => {
+        expect(turnControl?.precomputedNoReplyDisposition).toBeUndefined();
+        if (!lifecycle) throw new Error('test expected delivery lifecycle');
+        await lifecycle.finalizeDelivery(reply);
+        return reply;
+      },
+      companionSend: async channelId => ({
+        channelId,
+        messageId: 'companion-dm-delivered',
+        deliveredTo: [ICP_A],
+        skippedOffline: [],
+      }),
+    });
+
+    await harness.onCompanionMessage(makeCorrelatedCompanionMessage());
+
+    await vi.waitFor(() => {
+      expect(harness.agentLoop.handleMessage).toHaveBeenCalledOnce();
+    });
+    expect(participationAppraiser.appraise).not.toHaveBeenCalled();
+    expect(harness.gateway.companionSend).toHaveBeenCalledWith(
+      ICP_CHANNEL,
+      'direct sibling reply',
+      'Selene',
+      replyIcpCorrelation,
+    );
+  });
+
+  it('routes an inbound companion_room ICP turn through the existing appraiser and durably chooses no reply before generation', async () => {
+    const ICP_ROOM_CHANNEL = 'companion-room:garden-bench';
+    const roomInboundCorrelation: IcpConversationCorrelation = {
+      ...inboundIcpCorrelation,
+      channelId: ICP_ROOM_CHANNEL,
+      surface: 'companion_room',
+    };
+    const roomMessageId = deriveIcpTransportMessageId(roomInboundCorrelation);
+    const roomReplyCorrelation: IcpConversationCorrelation = {
+      ...replyIcpCorrelation,
+      channelId: ICP_ROOM_CHANNEL,
+      surface: 'companion_room',
+      messageId: roomMessageId,
+      requestId: roomMessageId,
+    };
     const participationAppraiser: ParticipationAppraiserPort = {
       appraise: vi.fn(async () => ({
         appraisal: { action: 'ignore', reasonCode: 'conversation_complete', confidence: 0.94 },
@@ -1402,21 +1464,21 @@ describe('registerGatewayMessageHandlers', () => {
     };
     const suppressed = {
       ...makeResponse(''),
-      channelId: ICP_CHANNEL,
+      channelId: ICP_ROOM_CHANNEL,
       metadata: {
         ...makeResponse('').metadata,
-        turnId: replyIcpCorrelation.turnId,
-        requestId: replyIcpCorrelation.requestId,
-        icpCorrelation: replyIcpCorrelation,
+        turnId: roomReplyCorrelation.turnId,
+        requestId: roomReplyCorrelation.requestId,
+        icpCorrelation: roomReplyCorrelation,
         noReply: {
           schemaVersion: 1 as const,
           disposition: 'intentional_no_reply' as const,
           source: 'participation_appraiser' as const,
           auditId: 'no-reply:appraiser',
           decidedAt: Date.parse('2026-03-02T00:00:00.000Z'),
-          turnId: replyIcpCorrelation.turnId as TurnID,
-          requestId: replyIcpCorrelation.requestId,
-          channelId: ICP_CHANNEL,
+          turnId: roomReplyCorrelation.turnId as TurnID,
+          requestId: roomReplyCorrelation.requestId,
+          channelId: ICP_ROOM_CHANNEL,
           reason: 'conversation_complete',
         },
       },
@@ -1437,13 +1499,22 @@ describe('registerGatewayMessageHandlers', () => {
       },
     });
 
-    await harness.onCompanionMessage(makeCorrelatedCompanionMessage());
+    await harness.onCompanionMessage(makeCorrelatedCompanionMessage({
+      id: roomMessageId,
+      channelId: ICP_ROOM_CHANNEL,
+      isDirectMessage: false,
+      routing: {
+        source: 'companion',
+        authorIsMachineIntelligence: true,
+        icpCorrelation: roomInboundCorrelation,
+      },
+    }));
 
     await vi.waitFor(() => {
       expect(participationAppraiser.appraise).toHaveBeenCalledWith(expect.objectContaining({
-        participationSurface: 'companion_dm',
-        channelId: ICP_CHANNEL,
-        sourceMessageId: INBOUND_ICP_MESSAGE_ID,
+        participationSurface: 'group_room',
+        channelId: ICP_ROOM_CHANNEL,
+        sourceMessageId: roomMessageId,
         triggerAuthorId: ICP_A,
         // An authenticated inbound ICP turn is a peer companion.
         triggerAuthorIsMachine: true,
@@ -1452,7 +1523,7 @@ describe('registerGatewayMessageHandlers', () => {
     });
     expect(harness.gateway.companionSend).not.toHaveBeenCalled();
     expect(harness.gateway.companionEndIcpEpisodeActivity).toHaveBeenCalledWith({
-      conversationId: inboundIcpCorrelation.conversationId,
+      conversationId: roomInboundCorrelation.conversationId,
       reasonCode: 'conversation_ended',
     });
   });
@@ -1506,7 +1577,14 @@ describe('registerGatewayMessageHandlers', () => {
     });
   });
 
-  it('appraises an inbound ICP turn with its own DM history and logs a typed decline (p6s1f)', async () => {
+  it('appraises an inbound companion_room ICP turn with its own room history and logs a typed decline (p6s1f)', async () => {
+    const ICP_ROOM_CHANNEL = 'companion-room:garden-bench';
+    const roomInboundCorrelation: IcpConversationCorrelation = {
+      ...inboundIcpCorrelation,
+      channelId: ICP_ROOM_CHANNEL,
+      surface: 'companion_room',
+    };
+    const roomMessageId = deriveIcpTransportMessageId(roomInboundCorrelation);
     const participationAppraiser: ParticipationAppraiserPort = {
       appraise: vi.fn(async () => ({
         appraisal: { action: 'ignore', reasonCode: 'decision_backend', confidence: 0.61 },
@@ -1514,10 +1592,10 @@ describe('registerGatewayMessageHandlers', () => {
       })),
     };
     const history: SessionEntry[] = [
-      { id: 1, channelId: ICP_CHANNEL, role: 'assistant', content: 'Earlier I asked about the runbook.', timestamp: 1_000 },
-      { id: 2, channelId: ICP_CHANNEL, role: 'tool', content: '{"tool":"output"}', timestamp: 1_100 },
-      { id: 3, channelId: ICP_CHANNEL, role: 'system', content: '{"kind":"icp_delivery"}', timestamp: 1_200 },
-      { id: 4, channelId: ICP_CHANNEL, role: 'user', authorName: 'Nova', content: 'Runbook v2 is stamped.', timestamp: 1_300 },
+      { id: 1, channelId: ICP_ROOM_CHANNEL, role: 'assistant', content: 'Earlier I asked about the runbook.', timestamp: 1_000 },
+      { id: 2, channelId: ICP_ROOM_CHANNEL, role: 'tool', content: '{"tool":"output"}', timestamp: 1_100 },
+      { id: 3, channelId: ICP_ROOM_CHANNEL, role: 'system', content: '{"kind":"icp_delivery"}', timestamp: 1_200 },
+      { id: 4, channelId: ICP_ROOM_CHANNEL, role: 'user', authorName: 'Nova', content: 'Runbook v2 is stamped.', timestamp: 1_300 },
       { id: 5, channelId: 'api:someone-else', role: 'user', content: 'other conversation text', timestamp: 1_400 },
     ];
     const harness = createHarness({
@@ -1527,7 +1605,16 @@ describe('registerGatewayMessageHandlers', () => {
       handleMessage: async () => makeResponse(''),
     });
 
-    await harness.onCompanionMessage(makeCorrelatedCompanionMessage());
+    await harness.onCompanionMessage(makeCorrelatedCompanionMessage({
+      id: roomMessageId,
+      channelId: ICP_ROOM_CHANNEL,
+      isDirectMessage: false,
+      routing: {
+        source: 'companion',
+        authorIsMachineIntelligence: true,
+        icpCorrelation: roomInboundCorrelation,
+      },
+    }));
 
     await vi.waitFor(() => {
       expect(participationAppraiser.appraise).toHaveBeenCalledOnce();
@@ -1540,8 +1627,8 @@ describe('registerGatewayMessageHandlers', () => {
     expect(JSON.stringify(candidate)).not.toContain('other conversation text');
     await vi.waitFor(() => {
       expect(harness.log.info).toHaveBeenCalledWith('Inbound ICP message declined before generation', expect.objectContaining({
-        channelId: ICP_CHANNEL,
-        messageId: INBOUND_ICP_MESSAGE_ID,
+        channelId: ICP_ROOM_CHANNEL,
+        messageId: roomMessageId,
         reasonCode: 'decision_backend',
         confidence: 0.61,
         precedingContextCount: 2,

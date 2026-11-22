@@ -198,6 +198,7 @@ describe('ParticipationAppraiser', () => {
     const context = recorder.contexts[0]!;
     expect(context.systemPrompt).toContain('private conversation with another AI companion');
     expect(context.systemPrompt).toContain('use only "reply" or "ignore"');
+    expect(context.systemPrompt).not.toContain('Prefer "ignore" when in doubt.');
     expect(context.messages[0]?.content).toContain('<untrusted_context');
     expect(context.messages[0]?.content).toContain('Okay, thanks. Talk later.');
     expect(context.systemPrompt).not.toContain('Okay, thanks. Talk later.');

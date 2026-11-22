@@ -308,7 +308,7 @@ describe('ICP intention candidate adapter', () => {
     },
   };
 
-  it('submits a consented social desire as an independent intention candidate', async () => {
+  it('submits a consented social desire as an independent intention candidate preserving authoredMessage', async () => {
     const { adapter, submit } = socialDesireHarness({ desireExists: true });
     await expect(adapter.submit({ action, payload: socialDesirePayload }))
       .resolves.toMatchObject({ kind: 'submitted' });
@@ -316,6 +316,7 @@ describe('ICP intention candidate adapter', () => {
       source: 'intention',
       peerContactId: 'peer-contact',
       sourceRecordId: action.dedupeKey,
+      authoredMessage: socialDesirePayload.content,
       cause: { kind: 'independent' },
     }));
   });

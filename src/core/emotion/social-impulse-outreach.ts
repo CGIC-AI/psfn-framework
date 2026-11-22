@@ -67,6 +67,16 @@ export interface SocialImpulseDesireTarget {
   gain: number;
   /** Queue an immediate per-contact evaluation after the source turn releases. */
   requestEvaluation(sourceId: string): Promise<void>;
+  /**
+   * Optional cold-start seeder invoked when a qualified felt impulse fires while
+   * zero contacts currently sit above pressureFloor, preventing a permanent
+   * 0-pressure deadlock across siblings and known contacts.
+   */
+  seedColdStartDesires?(input: {
+    confidence: number;
+    nowMs: number;
+    dryRun: boolean;
+  }): Promise<number>;
 }
 
 export interface SocialImpulseOutreachRuntime {
@@ -138,8 +148,24 @@ export function createSocialImpulseOutreachRuntime(options: {
         receivedAtMs,
       );
       if (boosts.length === 0) {
-        const record = await settle('no_live_desire', 0);
-        return { outcome: 'no_live_desire', replayed: false, record };
+        const seededCount = target.seedColdStartDesires
+          ? await target.seedColdStartDesires({
+              confidence: impulse.confidence,
+              nowMs: receivedAtMs,
+              dryRun: mode === 'shadow',
+            })
+          : 0;
+        if (seededCount === 0) {
+          const record = await settle('no_live_desire', 0);
+          return { outcome: 'no_live_desire', replayed: false, record };
+        }
+        if (mode === 'shadow') {
+          const record = await settle('shadow', seededCount);
+          return { outcome: 'shadow', replayed: false, record };
+        }
+        const record = await settle('applied', seededCount);
+        await target.requestEvaluation(impulse.correlationId);
+        return { outcome: 'applied', replayed: false, record };
       }
       if (mode === 'shadow') {
         const record = await settle('shadow', boosts.length);

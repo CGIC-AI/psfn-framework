@@ -406,7 +406,9 @@ function buildAppraiserSystemPrompt(
     '  { "action": "ignore" | "react" | "reply", "reasonCode": string, "confidence": number }',
     'When action is "react", also include "reactionClass": string (a short semantic class such'
       + ' as "acknowledge", "agree", or "amused").',
-    '"confidence" is a number in [0, 1]. Prefer "ignore" when in doubt.',
+    surface === 'companion_dm'
+      ? '"confidence" is a number in [0, 1]. Reply naturally unless the exchange has clearly reached a natural close.'
+      : '"confidence" is a number in [0, 1]. Prefer "ignore" when in doubt.',
   ].join('\n');
 }
 

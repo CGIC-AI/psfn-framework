@@ -219,7 +219,7 @@ function getContextSettingsSnapshot(config: SubstrateConfig) {
       config.moodCongruenceWeight ?? DEFAULT_MOOD_CONGRUENCE_WEIGHT,
     adaptiveContextBudgetsEnabled:
       config.adaptiveContextBudgetsEnabled ?? false,
-    wikiRetrievalEnabled: config.wikiRetrievalEnabled ?? false,
+    wikiRetrievalEnabled: config.wikiRetrievalEnabled ?? true,
     wikiRetrievalChatTokenCap: config.wikiRetrievalChatTokenCap ?? 1000,
     wikiRetrievalGroupTokenCap: config.wikiRetrievalGroupTokenCap ?? 400,
     wikiRetrievalFocusTokenCap: config.wikiRetrievalFocusTokenCap ?? 2000,
@@ -332,7 +332,7 @@ function getMemorySettingsSnapshot(config: SubstrateConfig) {
     ),
     memoryRefreshFailureAlertThreshold:
       config.memoryRefreshFailureAlertThreshold ?? null,
-    activeMemoryRetrievalMode: config.activeMemoryRetrievalMode ?? 'background',
+    activeMemoryRetrievalMode: config.activeMemoryRetrievalMode ?? 'inline',
     activeMemoryInlineBudgetMs: config.activeMemoryInlineBudgetMs ?? null,
     groupMemory: cloneGroupMemorySettings(
       config.groupMemory ?? createDefaultGroupMemorySettings(),

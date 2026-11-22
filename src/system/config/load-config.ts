@@ -525,7 +525,7 @@ function loadConfigForMode(
     biographicalCandidatePolicy: createDefaultBiographicalCandidatePolicy(),
     memoryPresentationProfile: createDefaultMemoryPresentationProfile(),
     memoryRefreshFailureAlertThreshold: DEFAULT_MEMORY_REFRESH_FAILURE_ALERT_THRESHOLD,
-    activeMemoryRetrievalMode: 'background',
+    activeMemoryRetrievalMode: 'inline',
     activeMemoryInlineBudgetMs: DEFAULT_ACTIVE_MEMORY_INLINE_BUDGET_MS,
     intakeScreeningFailureAlertThreshold: DEFAULT_INTAKE_SCREENING_FAILURE_ALERT_THRESHOLD,
     groupMemory: createDefaultGroupMemorySettings(),

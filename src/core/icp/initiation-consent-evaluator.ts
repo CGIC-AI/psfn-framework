@@ -13,17 +13,24 @@ const SYSTEM_PROMPT = [
   'You are deciding, as yourself, whether you still want to initiate a conversation with a peer companion.',
   'All deterministic identity, trust, availability, quiet-hours, pressure, fatigue, charge, and cost gates have already passed.',
   'This is a private consent moment. Sending, deferring, and declining are equally valid choices.',
-  'This decision does not author the message. If you choose send, a separate ordinary turn in the target channel will decide what to say from that channel\'s real history and context.',
-  'Return exactly one JSON object with no markdown and no extra keys:',
+  'This decision does not author the message. If you choose send, either your already-authored message or an ordinary turn in the target channel will speak to the peer.',
+  'Return exactly one JSON object with no extra keys:',
   '{"action":"send"}',
+  'or {"action":"send","reason":"optional private reason"}',
   'or {"action":"defer","reason":"optional private reason"}',
   'or {"action":"decline","reason":"optional private reason"}.',
   'Never include message text or instructions for the peer-visible turn.',
 ].join('\n');
 
+function stripMarkdownJsonFence(content: string): string {
+  const trimmed = content.trim();
+  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/iu.exec(trimmed);
+  return fenced ? fenced[1]!.trim() : trimmed;
+}
+
 function parseExactObject(content: string): Record<string, unknown> | null {
   try {
-    const parsed: unknown = JSON.parse(content.trim());
+    const parsed: unknown = JSON.parse(stripMarkdownJsonFence(content));
     return isRecord(parsed) ? parsed : null;
   } catch {
     return null;
@@ -38,10 +45,9 @@ function parseConsent(content: string): IcpInitiationConsent | null {
   } catch {
     return null;
   }
-  if (value.action === 'send') {
-    return value.reason === undefined ? { action: 'send' } : null;
+  if (value.action !== 'send' && value.action !== 'defer' && value.action !== 'decline') {
+    return null;
   }
-  if (value.action !== 'defer' && value.action !== 'decline') return null;
   if (value.reason === undefined) return { action: value.action };
   if (typeof value.reason !== 'string' || !value.reason.trim()) return null;
   return { action: value.action, reason: value.reason.trim() };
@@ -77,17 +83,25 @@ export function createLlmIcpInitiationConsentEvaluator(input: {
             purpose: 'agent.intention.appraisal',
           },
         }));
-        return parseConsent(completion.content) ?? {
-          action: 'decline',
-          reason: 'invalid_consent_response',
-        };
+        const parsed = parseConsent(completion.content);
+        if (!parsed) {
+          log.warn('ICP initiation consent response was malformed; deferring without fatigue penalty', {
+            candidateId: candidate.candidateId,
+            peerCompanionId: candidate.peerCompanionId,
+          });
+          return {
+            action: 'defer',
+            reason: 'invalid_consent_response',
+          };
+        }
+        return parsed;
       } catch (error) {
-        log.warn('ICP initiation consent evaluation failed closed', {
+        log.warn('ICP initiation consent evaluation failed; deferring without fatigue penalty', {
           candidateId: candidate.candidateId,
           peerCompanionId: candidate.peerCompanionId,
           error: error instanceof Error ? error.message : String(error),
         });
-        return { action: 'decline', reason: 'consent_evaluation_failed' };
+        return { action: 'defer', reason: 'consent_evaluation_failed' };
       }
     },
   };

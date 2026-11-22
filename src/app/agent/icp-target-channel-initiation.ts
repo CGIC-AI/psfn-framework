@@ -38,6 +38,7 @@ export interface IcpTargetChannelAgentPort {
     message: SubstrateMessage,
     deliveryLifecycle: {
       recoveredResponse?: AgentResponse;
+      preAuthoredContent?: string;
       finalizeDelivery(response: AgentResponse): Promise<void>;
     },
   ): Promise<AgentResponse>;
@@ -95,6 +96,8 @@ export interface IcpTargetChannelInitiationRequest {
   peerContactId: string;
   /** Private scheduler-owned work intent; never derived from motivation prose. */
   continuationTaskKind?: IcpContinuationTaskKind;
+  /** Optional companion-authored DM text preserved from the originating turn (avoids blank rewrite). */
+  authoredMessage?: string;
 }
 
 export type IcpTargetChannelInitiationResult =
@@ -489,10 +492,12 @@ export function createIcpTargetChannelInitiator(input: {
       });
       content = '';
       const finalization: { result?: IcpTargetChannelInitiationResult } = {};
+      const preAuthoredContent = request.authoredMessage?.trim() || undefined;
       await input.agent.handleMessage(buildPrivateTurnMessage(
         correlation,
         continuationTaskKind,
       ), {
+        ...(preAuthoredContent ? { preAuthoredContent } : {}),
         finalizeDelivery: async (response) => {
           turnResponse = response;
           content = response.content;

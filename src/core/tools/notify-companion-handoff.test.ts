@@ -270,6 +270,118 @@ describe('permit-governed notify companion handoff', () => {
     expect(actions[0]?.payload).not.toHaveProperty('contactId');
   });
 
+  it('allows direct authored sibling DM messages on an open dyad during free time and blocks reflection/journal turns (eoj3s.5)', async () => {
+    const owner = runtime();
+    const directParams = {
+      action: 'send' as const,
+      target_kind: 'companion' as const,
+      dyad_id: '77777777-7777-4777-8777-777777777777',
+      message: 'Hey! I was just sketching an idea during free time and thought of you.',
+    };
+    expect(Value.Check(tool(owner).parameters, directParams)).toBe(true);
+
+    const freeTimeResult = await runWithRequestContext({ channelId: 'internal:free-time:private' }, async () => (
+      await tool(owner).execute('call-direct', directParams)
+    ));
+    expect(text(freeTimeResult)).toBe(COMPANION_NOTIFY_QUEUED_TEXT);
+    const actions = inferDeferredCompanionOutreachActions({
+      message: { id: 'source-ft', channelId: 'internal:free-time:private', routing: {} } as never,
+      turnMessages: [
+        { role: 'assistant', content: [{ type: 'toolCall', id: 'call-direct', name: 'notify', arguments: directParams }] } as never,
+        { role: 'toolResult', toolCallId: 'call-direct', toolName: 'notify', isError: false,
+          content: [{ type: 'text', text: COMPANION_NOTIFY_QUEUED_TEXT }] } as never,
+      ],
+      turnId: 'turn-ft' as never,
+      completedAt: 1_000,
+    }, 'extended');
+    expect(actions).toHaveLength(1);
+    expect(actions[0]?.payload).toMatchObject({
+      mode: 'continuation',
+      dyadId: directParams.dyad_id,
+      authoredMessage: directParams.message,
+    });
+
+    const reflectionResult = await runWithRequestContext({ channelId: 'internal:reflection:daily' }, async () => (
+      await tool(owner).execute('call-reflection', directParams)
+    ));
+    expect(reflectionResult.details?.isError).toBe(true);
+    expect(text(reflectionResult)).toMatch(/not allowed during reflection or journal turns/i);
+  });
+
+  it('permits action=relay when a classified human DM lineage scopes to the requesting human contact (eoj3s.5)', async () => {
+    const owner = runtime();
+    const humanScopedLineage: DisclosureLineage = {
+      ...RELAY_DISCLOSURE_LINEAGE,
+      sourceSnapshots: [{
+        ...RELAY_DISCLOSURE_LINEAGE.sourceSnapshots[0]!,
+        permittedDestinations: [{ kind: 'contact_dm', contactIds: ['contact:invented-human'] }],
+      }],
+      permittedDestinations: [{ kind: 'contact_dm', contactIds: ['contact:invented-human'] }],
+    };
+    const params = {
+      action: 'relay' as const,
+      target_kind: 'companion' as const,
+      dyad_id: '77777777-7777-4777-8777-777777777777',
+      intent: 'Ask if they are free for tea later.',
+    };
+
+    const queued = await humanContext(async () => (
+      await tool(owner, humanScopedLineage).execute('call-relay-human', params)
+    ));
+    expect(text(queued)).toBe(COMPANION_NOTIFY_QUEUED_TEXT);
+
+    const actions = await inferDeferredHumanRelayActions({
+      runtime: owner,
+      localCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      originCatalogSource: 'extended',
+      context: {
+        message: {
+          id: 'invented-source-message-2',
+          channelId: 'discord:owner',
+          channelType: 'discord',
+          authorId: 'discord-user:invented-human',
+          authorName: 'Invented Human',
+          content: 'Ask if they are free for tea later.',
+          timestamp: new Date('2026-08-28T12:00:00.000Z'),
+        },
+        response: {
+          content: '',
+          channelId: 'discord:owner',
+          metadata: {
+            model: 'invented-test-model', inputTokens: 1, outputTokens: 1, durationMs: 1,
+            requestId: 'invented-source-request',
+          },
+        },
+        turnMessages: [
+          { role: 'assistant', content: [{ type: 'toolCall', id: 'call-relay-human', name: 'notify', arguments: params }] } as never,
+          { role: 'toolResult', toolCallId: 'call-relay-human', toolName: 'notify', isError: false,
+            content: [{ type: 'text', text: COMPANION_NOTIFY_QUEUED_TEXT }] } as never,
+        ],
+        turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7083' as never,
+        completedAt: Date.parse('2026-08-28T12:00:00.000Z'),
+        canonicalContactKey: 'contact:invented-human',
+        disclosureLineage: humanScopedLineage,
+        capturedSessionReads: {} as never,
+      },
+    });
+    expect(actions).toHaveLength(1);
+    expect(actions[0]?.payload).toMatchObject({
+      mode: 'human_relay',
+      dyadId: params.dyad_id,
+      capsule: { intent: params.intent },
+    });
+
+    const unclassifiedLineage: DisclosureLineage = {
+      ...humanScopedLineage,
+      hasUnclassifiedSource: true,
+    };
+    const denied = await humanContext(async () => (
+      await tool(owner, unclassifiedLineage).execute('call-relay-unclassified', params)
+    ));
+    expect(denied.details?.isError).toBe(true);
+    expect(text(denied)).toMatch(/source disclosure denied/i);
+  });
+
   it('exposes action=relay only for an attributable human turn with source disclosure authority', async () => {
     const owner = runtime();
     const params = {

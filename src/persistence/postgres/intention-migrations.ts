@@ -501,4 +501,9 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
   `,
   `CREATE INDEX IF NOT EXISTS idx_social_impulse_outreach_ledger_companion
     ON social_impulse_outreach_ledger (companion_id, fired_at_ms DESC);`,
+  // psfn-framework-eoj3s.5: preserve companion-local authored DM text on
+  // private initiation candidates so sibling outreach delivers verbatim
+  // without spawning a blank third turn.
+  `ALTER TABLE icp_initiation_candidates
+    ADD COLUMN IF NOT EXISTS authored_message TEXT;`,
 ];

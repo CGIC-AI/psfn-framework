@@ -47,6 +47,7 @@ interface CandidateRow extends QueryResultRow {
   source: string;
   provenance_ref: string;
   reason_summary: string;
+  authored_message: string | null;
   continuation_task_kind: string | null;
   created_at_ms: string | number;
   expires_at_ms: string | number;
@@ -63,6 +64,7 @@ interface CandidateRow extends QueryResultRow {
 const CANDIDATE_COLUMNS = `
   candidate_id, root_initiation_id, local_companion_id, peer_contact_id,
   peer_companion_id, preferred_channel, source, provenance_ref, reason_summary,
+  authored_message,
   target_channel_id,
   continuation_task_kind, created_at_ms, expires_at_ms, status, reason_code, initiation_permit_id,
   pending_follow_up_id, delivery_disposition, retry_attempt, retry_eligible_at_ms,
@@ -91,6 +93,9 @@ function mapCandidate(row: CandidateRow): IcpInitiationCandidate {
     source: row.source,
     provenanceRef: row.provenance_ref,
     reasonSummary: row.reason_summary,
+    ...(row.authored_message !== null
+      ? { authoredMessage: row.authored_message }
+      : {}),
     ...(row.continuation_task_kind !== null
       ? { continuationTaskKind: row.continuation_task_kind }
       : {}),
@@ -172,12 +177,13 @@ export class PostgresIcpInitiationCandidateStore implements IcpInitiationCandida
         INSERT INTO icp_initiation_candidates (
           candidate_id, root_initiation_id, local_companion_id, peer_contact_id,
           peer_companion_id, preferred_channel, source, provenance_ref, reason_summary,
+          authored_message,
           target_channel_id, continuation_task_kind, created_at_ms, expires_at_ms, status, reason_code, initiation_permit_id,
           pending_follow_up_id, delivery_disposition, retry_attempt, retry_eligible_at_ms,
           lifecycle_claim_token, lifecycle_claim_expires_at_ms, revision
         ) VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-          $18, $19, $20, $21, $22, $23
+          $18, $19, $20, $21, $22, $23, $24
         )
         RETURNING ${CANDIDATE_COLUMNS}
       `, this.candidateInsertValues(candidate, claim));
@@ -289,12 +295,13 @@ export class PostgresIcpInitiationCandidateStore implements IcpInitiationCandida
       INSERT INTO icp_initiation_candidates (
         candidate_id, root_initiation_id, local_companion_id, peer_contact_id,
         peer_companion_id, preferred_channel, source, provenance_ref, reason_summary,
+        authored_message,
         target_channel_id, continuation_task_kind, created_at_ms, expires_at_ms, status, reason_code, initiation_permit_id,
         pending_follow_up_id, delivery_disposition, retry_attempt, retry_eligible_at_ms,
         lifecycle_claim_token, lifecycle_claim_expires_at_ms, revision
       ) VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-        $18, $19, $20, $21, $22, $23
+        $18, $19, $20, $21, $22, $23, $24
       )
       RETURNING ${CANDIDATE_COLUMNS}
     `, this.candidateInsertValues(candidate, claim));
@@ -322,6 +329,7 @@ export class PostgresIcpInitiationCandidateStore implements IcpInitiationCandida
       candidate.source,
       candidate.provenanceRef,
       candidate.reasonSummary,
+      candidate.authoredMessage ?? null,
       candidate.targetChannelId ?? null,
       candidate.continuationTaskKind ?? null,
       candidate.createdAtMs,

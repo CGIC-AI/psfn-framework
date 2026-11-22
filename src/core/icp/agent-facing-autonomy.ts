@@ -112,11 +112,13 @@ export interface IcpTargetChannelCommandPort {
     rootInitiationId: string;
     peerContactId: string;
     continuationTaskKind?: IcpContinuationTaskKind;
+    authoredMessage?: string;
   }): Promise<IcpCompanionOutreachExecutionResult>;
   executeContinuation?(input: {
     authorization: import('../../boundary/gateway/icp-autonomy-contract.js').IcpDyadContinuationAuthorization;
     peerContactId: string;
-    privateIntent: string;
+    privateIntent?: string;
+    authoredMessage?: string;
     continuationTaskKind?: IcpContinuationTaskKind;
   }): Promise<IcpCompanionOutreachExecutionResult>;
   executeHumanRelay?(input: {
@@ -150,7 +152,8 @@ export interface AgentFacingIcpAutonomyRuntime {
     dyadId: string;
     deliveryId: string;
     conversationId: string;
-    privateIntent: string;
+    privateIntent?: string;
+    authoredMessage?: string;
     initiationSource: IcpInitiationSource;
     sourceDyadId?: string;
     continuationTaskKind?: IcpContinuationTaskKind;
@@ -166,6 +169,7 @@ export interface AgentFacingIcpAutonomyRuntime {
     permitId: string,
     candidateOrigin?: IcpAutonomyCandidateOrigin,
     isExecutionAuthorized?: () => boolean,
+    authoredMessage?: string,
   ): Promise<IcpCompanionOutreachExecutionResult>;
 }
 
@@ -406,7 +410,12 @@ export function createAgentFacingIcpAutonomyRuntime(input: {
       return await input.command.executeContinuation({
         authorization: prepared.authorization,
         peerContactId: dyad.peerContactId,
-        privateIntent: continuation.privateIntent,
+        ...(continuation.privateIntent !== undefined
+          ? { privateIntent: continuation.privateIntent }
+          : {}),
+        ...(continuation.authoredMessage !== undefined
+          ? { authoredMessage: continuation.authoredMessage }
+          : {}),
         ...(continuation.continuationTaskKind
           ? { continuationTaskKind: continuation.continuationTaskKind }
           : {}),
@@ -448,6 +457,7 @@ export function createAgentFacingIcpAutonomyRuntime(input: {
       permitId,
       candidateOrigin,
       isExecutionAuthorized,
+      authoredMessage,
     ) {
       const { peer, handoff } = await prepare(contactId, permitId);
       const parsedOrigin = candidateOrigin === undefined
@@ -469,6 +479,7 @@ export function createAgentFacingIcpAutonomyRuntime(input: {
         ...(parsedOrigin?.continuationTaskKind
           ? { continuationTaskKind: parsedOrigin.continuationTaskKind }
           : {}),
+        ...(authoredMessage !== undefined ? { authoredMessage } : {}),
       });
     },
   };

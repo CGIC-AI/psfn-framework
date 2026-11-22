@@ -179,6 +179,8 @@ function cloneComputedInternalStateForResponse(internalState: InternalState): In
 export interface TurnDeliveryLifecycle {
   /** Durable response from an earlier attempt whose transport failed after generation. */
   recoveredResponse?: AgentResponse;
+  /** Companion-authored message from the originating turn delivered directly without a blank rewrite LLM call. */
+  preAuthoredContent?: string;
   /** The deterministic inbound envelope was already durably written before a process crash. */
   sourceAlreadyPersisted?: true;
   finalizeDelivery(response: AgentResponse): Promise<void>;
@@ -454,6 +456,14 @@ export async function handleMessageForTurn(
   }
   if (recoveredResponse && !message.routing?.icpCorrelation) {
     throw new Error('Recovered delivery requires durable ICP correlation');
+  }
+  const preAuthoredContent = !recoveredResponse
+    && typeof deliveryLifecycle?.preAuthoredContent === 'string'
+    && deliveryLifecycle.preAuthoredContent.trim().length > 0
+    ? deliveryLifecycle.preAuthoredContent.trim()
+    : undefined;
+  if (preAuthoredContent && !privateIcpCorrelation) {
+    throw new Error('Pre-authored delivery content is restricted to private ICP target turns');
   }
   if (privateIcpCorrelation) {
     const expectedPrivateAuthorId = privateIcpCorrelation.dyadId
@@ -1212,6 +1222,26 @@ export async function handleMessageForTurn(
           turnIntent: null,
         }
       : null;
+    const preAuthoredInvocationResult: AgentInvocationResult | null = !recoveredResponse
+      && preAuthoredContent
+      ? {
+          firstTokenAt: null,
+          turnMessages: [],
+          turnUsage: {
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheReadTokens: 0,
+            llmCalls: 0,
+            toolCalls: 0,
+            contextUtilization: 0,
+          },
+          responseModel: 'pre-authored-icp',
+          responseText: preAuthoredContent,
+          fallbackDiagnostics: undefined,
+          runtimeContradictionDiagnostics: undefined,
+          turnIntent: null,
+        }
+      : null;
     const invokeWithCanary = () => canaryToken
       ? runWithCanaryContext(canaryToken, invokeWithPaidDeliverableTracking)
       : invokeWithPaidDeliverableTracking();
@@ -1219,7 +1249,9 @@ export async function handleMessageForTurn(
       getLineage: runtime.getCurrentTurnDisclosureLineage,
     }, invokeWithCanary);
     assertForegroundWorkOwned(foregroundLease);
-    const invocationResult = recoveredInvocationResult ?? await invokeWithCompanionSocialCharge({
+    const invocationResult = recoveredInvocationResult
+      ?? preAuthoredInvocationResult
+      ?? await invokeWithCompanionSocialCharge({
       chargePolicy: runtime.config.chargePolicy,
       correlation: turnCorrelationBase,
       fatigue: fatigueDecision?.metadata,

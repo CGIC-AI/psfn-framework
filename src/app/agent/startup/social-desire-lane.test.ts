@@ -172,4 +172,44 @@ describe('registerSocialDesireLane composition wiring (psfn-framework-hrmrq.85)'
     expect(outcome?.outcome).toBe('created');
     expect(store.snapshotDesires()).toHaveLength(1);
   });
+
+  it('seeds cold-start social desire for canonical sibling companions when impulse fires at 0 pressure (eoj3s.5)', async () => {
+    const store = createSocialDesireStorePort(createInMemorySocialDesireBackend());
+    const siblingContact = {
+      id: 'contact-sibling',
+      displayName: 'Sibling',
+      trustLevel: 'regular' as const,
+      relationshipType: 'ai_companion' as const,
+      isMachineIntelligence: true,
+      firstSeen: '2026-01-01T00:00:00.000Z',
+      lastSeen: '2026-07-30T00:00:00.000Z',
+    };
+    const result = registerSocialDesireLane(makeDeps({
+      socialDesireStore: store,
+      localCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      icpPeers: {
+        resolveKnownPeer: vi.fn(async () => ({
+          contactId: 'contact-sibling',
+          displayName: 'Sibling',
+          peerCompanionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        })),
+      } as never,
+      contactStore: {
+        getById: async (id: string) => (id === 'contact-sibling' ? siblingContact : undefined),
+        listAll: async () => [siblingContact],
+      },
+    }));
+
+    expect(result.impulseTarget?.seedColdStartDesires).toBeDefined();
+    const seeded = await result.impulseTarget!.seedColdStartDesires!({
+      confidence: 0.7,
+      nowMs: Date.parse('2026-07-30T12:00:00.000Z'),
+      dryRun: false,
+    });
+    expect(seeded).toBe(1);
+    const stored = await store.getByContactId('contact-sibling');
+    expect(stored).not.toBeNull();
+    expect(stored!.warmPressure).toBeGreaterThan(0);
+    expect(stored!.tierAtLastTick).toBe('ai_companion');
+  });
 });

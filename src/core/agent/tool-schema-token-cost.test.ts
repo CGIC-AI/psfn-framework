@@ -104,13 +104,15 @@ describe('full callable catalog schema token cost', () => {
       // (conversation | companion_global): +213 bytes / +40 tokens.
       // psfn-framework-e46hi reordered presentation ranks (memory/journal/orient
       // first, async letters demoted): +0 bytes / +0 tokens, hash updated.
-      beforeTokens: 20_253,
-      afterTokens: 24_549,
+      // psfn-framework-eoj3s.5 added direct companion DM `message` variant on
+      // approved open dyads in `notify`: +511 bytes / +108 tokens.
+      beforeTokens: 20_361,
+      afterTokens: 24_657,
       deltaTokens: 4_296,
-      beforeBytes: 94_558,
-      afterBytes: 113_660,
-      providerSchemaHash: '264c3e9bd4fda9b61d16e3170c417c8518dc6c35f5309d90182820a608a6153b',
-      parameterSchemaHash: '056be12849bd3511220b0bd511557598ce52ea67d804eccce697b3d3d682d029',
+      beforeBytes: 95_069,
+      afterBytes: 114_171,
+      providerSchemaHash: 'bdaa3dbca9857058ee0972f1cf90171a53a1088ae78a0d74e51f7a9a5b20988f',
+      parameterSchemaHash: 'a70642ce5cfc01f31bfa8874e564221451f96a0b2aa228fac0972f9e6393b4bc',
     });
 
     // The additional description tokens affect an uncached request. A stable

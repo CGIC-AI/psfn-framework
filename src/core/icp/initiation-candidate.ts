@@ -37,6 +37,8 @@ export interface IcpInitiationCandidate {
   provenanceRef: string;
   /** Bounded private motivation; prohibited from shared schema and gateway payloads. */
   reasonSummary: string;
+  /** Optional companion-authored DM text preserved from the originating turn (never projected to gateway). */
+  authoredMessage?: string;
   /** Private scheduler-owned intent. Never included in shared arbitration. */
   continuationTaskKind?: IcpContinuationTaskKind;
   createdAtMs: number;
@@ -62,6 +64,7 @@ export type IcpInitiationCandidateSharedMetadata = Omit<
   | 'peerContactId'
   | 'targetChannelId'
   | 'reasonSummary'
+  | 'authoredMessage'
   | 'continuationTaskKind'
   | 'permitId'
   | 'pendingFollowUpId'
@@ -77,6 +80,7 @@ export const MAX_ICP_CANDIDATE_REASON_CHARS = 1_000;
 const CANDIDATE_KEYS = [
   'candidateId', 'rootInitiationId', 'localCompanionId', 'peerContactId',
   'peerCompanionId', 'preferredChannel', 'source', 'provenanceRef', 'reasonSummary',
+  'authoredMessage',
   'targetChannelId',
   'continuationTaskKind', 'createdAtMs', 'expiresAtMs', 'status', 'reasonCode', 'permitId',
   'pendingFollowUpId', 'deliveryDisposition', 'retryAttempt', 'retryEligibleAtMs',
@@ -222,6 +226,15 @@ export function parseIcpInitiationCandidate(
       'ICP candidate.reasonSummary',
       MAX_ICP_CANDIDATE_REASON_CHARS,
     ),
+    ...(value.authoredMessage !== undefined
+      ? {
+          authoredMessage: requireString(
+            value.authoredMessage,
+            'ICP candidate.authoredMessage',
+            MAX_ICP_CANDIDATE_REASON_CHARS * 4,
+          ),
+        }
+      : {}),
     ...(value.continuationTaskKind !== undefined
       ? { continuationTaskKind: value.continuationTaskKind }
       : {}),

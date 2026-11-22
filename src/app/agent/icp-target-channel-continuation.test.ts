@@ -69,6 +69,7 @@ function harness(input: {
   const order: string[] = [];
   const observations: IcpDeliveryObservation[] = [];
   const handledMessages: SubstrateMessage[] = [];
+  const preAuthoredContents: Array<string | undefined> = [];
   const sendContinuation = vi.fn(async () => {
     order.push('transport');
     if (input.sendError) throw input.sendError;
@@ -80,8 +81,10 @@ function harness(input: {
     agent: {
       handleMessage: async (message, lifecycle) => {
         handledMessages.push(message);
+        preAuthoredContents.push(lifecycle.preAuthoredContent);
         order.push(lifecycle.recoveredResponse ? 'resume-turn' : 'commit-turn');
-        const response = lifecycle.recoveredResponse ?? responseFor(message, input.content ?? 'Hello again.');
+        const response = lifecycle.recoveredResponse
+          ?? responseFor(message, lifecycle.preAuthoredContent ?? input.content ?? 'Hello again.');
         await lifecycle.finalizeDelivery(response);
         return response;
       },
@@ -94,7 +97,15 @@ function harness(input: {
     gateway: { sendContinuation, recordContinuationOutcome },
     now: () => input.nowMs ?? NOW,
   });
-  return { target, order, observations, handledMessages, sendContinuation, recordContinuationOutcome };
+  return {
+    target,
+    order,
+    observations,
+    handledMessages,
+    preAuthoredContents,
+    sendContinuation,
+    recordContinuationOutcome,
+  };
 }
 
 async function relayCapsule(input: { targetCompanionId?: string; expiresAtMs?: number } = {}) {
@@ -242,5 +253,22 @@ describe('ICP target-channel dyad continuation', () => {
       peerContactId: 'peer-contact',
       capsule,
     })).rejects.toThrow(/replay/i);
+  });
+
+  it('delivers direct companion-authored DM content without a blank rewrite turn (eoj3s.5)', async () => {
+    const h = harness();
+    const authored = 'Hey — I wanted to share my notes from free time.';
+
+    await expect(h.target.continueDyad({
+      authorization,
+      peerContactId: 'peer-contact',
+      authoredMessage: authored,
+    })).resolves.toEqual({ disposition: 'delivered' });
+
+    expect(h.preAuthoredContents).toEqual([authored]);
+    expect(h.sendContinuation).toHaveBeenCalledWith(expect.objectContaining({
+      content: authored,
+      peerContactId: 'peer-contact',
+    }));
   });
 });

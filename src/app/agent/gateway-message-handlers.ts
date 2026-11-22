@@ -724,9 +724,9 @@ export function registerGatewayMessageHandlers(
 
   /**
    * Reuse the existing cheap participation arbiter for authenticated inbound
-   * ICP turns. A DM has no room-speaking lease to contend for: the semantic
-   * appraisal decides reply/no-reply, then an affirmative reply still enters
-   * the ordinary turn where ICP fatigue and every other policy gate apply.
+   * ICP group-room turns. Approved 1:1 sibling DMs bypass pre-generation
+   * "prefer ignore" suppression so messages always arrive in the peer's DM
+   * turn, where the companion itself plus ICP fatigue/cost gates decide.
    */
   const resolveInboundIcpNoReplyDisposition = async (
     message: SubstrateMessage,
@@ -734,7 +734,8 @@ export function registerGatewayMessageHandlers(
     const correlation = message.routing?.icpCorrelation;
     if (config.multiCompanion !== true
       || message.channelType !== 'companion'
-      || !correlation) {
+      || !correlation
+      || correlation.surface === 'companion_dm') {
       return undefined;
     }
     const timestampMs = message.timestamp instanceof Date
@@ -747,9 +748,7 @@ export function registerGatewayMessageHandlers(
       schemaVersion: 1,
       channelId: message.channelId,
       channelType: message.channelType,
-      participationSurface: correlation.surface === 'companion_dm'
-        ? 'companion_dm'
-        : 'group_room',
+      participationSurface: 'group_room',
       sourceMessageId: message.id,
       trigger: 'companion_message',
       triggerAuthorId: message.authorId,
@@ -759,7 +758,7 @@ export function registerGatewayMessageHandlers(
       triggerContent: message.content,
       triggerTimestampMs: timestampMs,
       matchedName: false,
-      matchedDirectAddress: correlation.surface === 'companion_dm',
+      matchedDirectAddress: false,
       precedingContext: await loadIcpAppraisalPrecedingContext(icpAppraisalContext, {
         channelId: message.channelId,
         messageId: message.id,

@@ -49,7 +49,7 @@ describe('DecisionRoomAmbiguityClassifier', () => {
     expect(request?.siteId).toBe('room.ambiguity');
     expect(request?.state).toEqual({ excerpt: 'the migration is stuck again', interests: ['persistence'] });
     expect(Object.keys(request?.questions ?? {})).toEqual(['relevant']);
-    expect(request?.workSpec).toMatchObject({ purpose: 'decision', maxOutputTokens: 64, deadlineMs: 4_000 });
+    expect(request?.workSpec).toMatchObject({ purpose: 'decision', maxOutputTokens: 64, deadlineMs: 30_000 });
   });
 
   it('fails closed to not relevant on a decision failure', async () => {

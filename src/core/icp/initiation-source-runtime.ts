@@ -257,12 +257,20 @@ export function createIcpInitiationSourceRuntime(
   ): Promise<IcpInitiationSourceResult> => {
     let execution: Awaited<ReturnType<IcpInitiationSourcePeerPort['executeCompanionOutreach']>>;
     try {
-      execution = await peerPort.executeCompanionOutreach(
-        peerContactId,
-        permitId,
-        toIcpCandidateOrigin(permitted),
-        dependencies.isExternalCompanionAuthorized,
-      );
+      execution = permitted.authoredMessage !== undefined
+        ? await peerPort.executeCompanionOutreach(
+            peerContactId,
+            permitId,
+            toIcpCandidateOrigin(permitted),
+            dependencies.isExternalCompanionAuthorized,
+            permitted.authoredMessage,
+          )
+        : await peerPort.executeCompanionOutreach(
+            peerContactId,
+            permitId,
+            toIcpCandidateOrigin(permitted),
+            dependencies.isExternalCompanionAuthorized,
+          );
     } catch (error) {
       const unusable = unusablePermitTerminal(error);
       if (!unusable) throw error;
@@ -403,6 +411,7 @@ export function createIcpInitiationSourceRuntime(
       source: request.source,
       provenanceRef,
       reasonSummary: request.reasonSummary,
+      ...(request.authoredMessage !== undefined ? { authoredMessage: request.authoredMessage } : {}),
       createdAtMs: currentNow,
       expiresAtMs: currentNow + ttlMs,
       status: 'pending',

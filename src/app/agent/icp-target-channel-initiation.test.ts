@@ -1041,4 +1041,22 @@ describe('ICP target-channel initiation', () => {
     expect(harness.handleMessage).not.toHaveBeenCalled();
     expect(harness.sendInitiation).not.toHaveBeenCalled();
   });
+
+  it('passes companion-authored message through as preAuthoredContent without erasing it (eoj3s.5)', async () => {
+    const harness = createHarness();
+    const authored = 'I kept thinking about our conversation yesterday and wanted to check in.';
+
+    const result = await harness.initiator.initiate({
+      permit: permit(),
+      rootInitiationId: ROOT,
+      peerContactId: CONTACT_ID,
+      authoredMessage: authored,
+    });
+
+    expect(result.disposition).toBe('delivered');
+    expect(harness.handleMessage).toHaveBeenCalledTimes(1);
+    expect(harness.handleMessage.mock.calls[0]?.[1]).toMatchObject({
+      preAuthoredContent: authored,
+    });
+  });
 });

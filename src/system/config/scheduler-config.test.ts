@@ -1056,9 +1056,9 @@ describe('social-autonomy owner-file config (jp36.8.2)', () => {
     ]);
   });
 
-  it('defaults autonomous room egress off and exposes an explicit off/shadow/on mode', () => {
+  it('defaults autonomous room egress on and exposes an explicit off/shadow/on mode', () => {
     expect(DEFAULT_SOCIAL_AUTONOMY_CONFIG.egressLease).not.toHaveProperty('enabled');
-    expect(DEFAULT_SOCIAL_AUTONOMY_CONFIG.egressLease.mode).toBe('off');
+    expect(DEFAULT_SOCIAL_AUTONOMY_CONFIG.egressLease.mode).toBe('on');
     for (const mode of ['off', 'shadow', 'on'] as const) {
       expect(validateSchedulerConfig(
         {

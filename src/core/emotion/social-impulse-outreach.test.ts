@@ -142,6 +142,36 @@ describe('social impulse -> per-contact pressure', () => {
     expect(requestEvaluation).not.toHaveBeenCalled();
   });
 
+  it('breaks the 0-pressure cold-start deadlock when seedColdStartDesires is wired (eoj3s.5)', async () => {
+    const ledger = memoryLedger();
+    const store = createSocialDesireStorePort(createInMemorySocialDesireBackend([]));
+    const requestEvaluation = vi.fn(async () => undefined);
+    const seedColdStartDesires = vi.fn(async () => 2);
+    const runtime = createSocialImpulseOutreachRuntime({
+      companionId: COMPANION_ID,
+      store: ledger,
+      getMode: () => 'on',
+      getDesireTarget: () => ({
+        store,
+        lifecycle: DEFAULT_SOCIAL_DESIRE_CONFIG.lifecycle,
+        gain: 0.4,
+        requestEvaluation,
+        seedColdStartDesires,
+      }),
+      now: () => T0,
+    });
+
+    const result = await runtime.onImpulse(impulse());
+    expect(result).toMatchObject({ outcome: 'applied', replayed: false });
+    expect(result.record.boostedContactCount).toBe(2);
+    expect(seedColdStartDesires).toHaveBeenCalledWith({
+      confidence: 0.5,
+      nowMs: T0,
+      dryRun: false,
+    });
+    expect(requestEvaluation).toHaveBeenCalledWith(IMPULSE_ID);
+  });
+
   it('settles fail-closed when the social-desire lane is not composed', async () => {
     const ledger = memoryLedger();
     const runtime = createSocialImpulseOutreachRuntime({

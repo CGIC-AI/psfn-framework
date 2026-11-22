@@ -1361,6 +1361,7 @@ async function main(): Promise<void> {
   };
   const episodicSynthesizer = new EpisodicSynthesizer(firstPersonPreservingEpisodicStore, sessionManager, {
     onThreadAssignment: emitThreadAssignment,
+    decisions: coreRuntime.decisionRuntime,
     transcriptMessageLimit: schedulerConfig.episodeSynthesis.transcriptMessageLimit,
     maxEpisodesPerRun: schedulerConfig.episodeSynthesis.maxEpisodesPerRun,
     maxPriorCandidates: schedulerConfig.episodeSynthesis.maxPriorCandidates,

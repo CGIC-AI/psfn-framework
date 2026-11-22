@@ -36,8 +36,10 @@ export async function resolveEpisodicChains(input: {
   try {
     return filterQuarantinedEpisodicChains(
       input.sessionQuarantineFilter,
-      (await retrieveEpisodicChains(input.episodicStore, input.request))
-        .map(cloneEpisodicRetrievalChain),
+      (await retrieveEpisodicChains(input.episodicStore, {
+        ...input.request,
+        sessionQuarantineFilter: input.sessionQuarantineFilter,
+      })).map(cloneEpisodicRetrievalChain),
     );
   } catch (error) {
     throw input.wrapError(error);

@@ -22,6 +22,7 @@ const SITE_PRIVACY: Readonly<Record<DecisionSiteId, DecisionSitePrivacy>> = {
   'room.ambiguity': 'shareable',
   'memory.rerank': 'shareable',
   'memory.query_intent': 'shareable',
+  'memory.episodic_themes': 'shareable',
   'intake.l2': 'shareable',
   'memory.extraction_pregate': 'shareable',
   // The post-turn appraisal payload is the companion's own inner state.

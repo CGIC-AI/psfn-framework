@@ -7,10 +7,8 @@ import {
   resolveMemoryWithheldRelevanceBand,
   type MemoryWithheldSummary,
 } from '../withheld-summary.js';
-import {
-  cloneEpisodicRetrievalChain,
-  type EpisodicRetrievalChain,
-} from './episodic.js';
+import { cloneEpisodicRetrievalChain } from './episodic-cloning.js';
+import type { EpisodicRetrievalChain } from './episodic-types.js';
 
 export interface MemorySessionQuarantineFilter {
   isSessionRetiredOrQuarantined(logicalSessionId: string): boolean;

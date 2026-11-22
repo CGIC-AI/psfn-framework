@@ -762,14 +762,46 @@ export class EpisodeSynthesisLane {
     );
     const arc = arcs.find(candidate => candidate.id === pending.arcId);
     if (!arc) {
-      throw new Error(`Episode behavioral-summary recovery could not resolve arc "${pending.arcId}"`);
+      // Dead-letter recovery (psfn-framework-eoj3s.1 / d5e0p.3): nightly sleep
+      // consolidation may have merged or superseded the target episode or arc
+      // while this behavioral-summary stage waited for retry. Checkpoint the
+      // obsolete stage so the session's synthesis lane cannot wedge forever.
+      log.warn('Skipping behavioral-summary recovery for missing or superseded arc; checkpointing stage', {
+        sessionId: workItem.logicalSessionId,
+        arcId: pending.arcId,
+        targetEpisodeId: pending.targetEpisodeId,
+        failedStage,
+      });
+      await this.workset.checkpointStage({
+        purpose: 'episodic_synthesis',
+        logicalSessionId: workItem.logicalSessionId,
+        revision: workItem.revision,
+        claimantId: workItem.claimantId ?? this.claimantId,
+        stage: failedStage ?? `${BEHAVIORAL_SUMMARY_STAGE_PREFIX}${pending.targetEpisodeId}:${pending.arcId}`,
+      });
+      return true;
     }
     const episodes = await this.behavioralSummaryStore.getEpisodesByIds([
       arc.sourceEpisodeId,
       arc.targetEpisodeId,
     ]);
     if (episodes.length !== 2) {
-      throw new Error(`Episode behavioral-summary recovery could not resolve both endpoints for arc "${pending.arcId}"`);
+      log.warn('Skipping behavioral-summary recovery for superseded arc endpoint; checkpointing stage', {
+        sessionId: workItem.logicalSessionId,
+        arcId: pending.arcId,
+        sourceEpisodeId: arc.sourceEpisodeId,
+        targetEpisodeId: arc.targetEpisodeId,
+        resolvedCount: episodes.length,
+        failedStage,
+      });
+      await this.workset.checkpointStage({
+        purpose: 'episodic_synthesis',
+        logicalSessionId: workItem.logicalSessionId,
+        revision: workItem.revision,
+        claimantId: workItem.claimantId ?? this.claimantId,
+        stage: failedStage ?? behavioralSummaryStage(arc),
+      });
+      return true;
     }
     const attribution = await resolveSessionMemoryAttribution({
       sessionId: workItem.logicalSessionId,

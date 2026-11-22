@@ -156,6 +156,7 @@ export function createHybridEpisodeSearch(
           maxDepth: input.maxDepth,
           maxEpisodesPerChain: input.maxEpisodesPerChain,
           memoryRetrievalPolicy: policy,
+          sessionQuarantineFilter: input.sessionQuarantineFilter ?? null,
         });
         if (!chain) continue;
         const [visibleChain] = filterQuarantinedEpisodicChains(
@@ -220,6 +221,7 @@ export function createHybridEpisodeSearch(
           query,
           limit: candidateLimit,
           memoryRetrievalPolicy: policy,
+          sessionQuarantineFilter: quarantineFilter,
           includeChain: chain => (
             filterQuarantinedEpisodicChains(quarantineFilter, [chain]).length === 1
           ),

@@ -23,12 +23,17 @@ import type {
 import {
   buildArcInput,
   compareConsolidationScores,
+  episodesShareLinkableScope,
   findRelatedSource,
   mergeEpisodeWithCandidate,
   scoreConsolidationCandidate,
   type ConsolidationCandidateScore,
   type EpisodeCandidateInput,
 } from './synthesis/consolidation.js';
+import {
+  classifyEpisodeThemes,
+  type EpisodicThemeDecisionPort,
+} from './theme-classification.js';
 import { resolveEpisodeParticipantContactIds } from './synthesis/participant-attribution.js';
 import { proposeTopicSegments, type TopicSegment } from './topic-segmentation.js';
 import { applyThreadUnionForArc, type ThreadAssignmentEvent } from './thread-assignment.js';
@@ -97,6 +102,8 @@ export interface EpisodicSynthesisOptions {
   maxThreadEpisodes?: number;
   /** Topic-thread materialization telemetry sink (apq0). */
   onThreadAssignment?: (event: ThreadAssignmentEvent) => void;
+  /** Low-cost decision runtime for semantic episode theme classification (eoj3s.1). */
+  decisions?: EpisodicThemeDecisionPort | null;
 }
 
 export interface EpisodicSynthesisRunInput {
@@ -139,6 +146,7 @@ export interface EpisodicSynthesisProcessingWatermark extends EpisodicSynthesisW
 
 interface EpisodeGroup {
   entries: SessionEntry[];
+  topic?: string;
 }
 
 interface SynthesisRunState {
@@ -156,10 +164,6 @@ interface SegmentationRunOutcome {
   candidateEpisodeCount: number;
 }
 
-interface ThemeScore {
-  theme: string;
-  score: number;
-}
 interface CandidateDecisionResult {
   status: EpisodeCandidateDecisionStatus;
   action: 'create' | 'extend' | 'discard';
@@ -184,36 +188,7 @@ const EPISODIC_SYNTHESIS_PROCESSOR = 'episodic_synthesis';
 const CLAIM_LOOKUP_CHUNK_SIZE = 200;
 const MINUTE_MS = 60_000;
 const ISO_INSTANT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
-const STOP_WORDS = new Set([
-  'about',
-  'after',
-  'again',
-  'also',
-  'because',
-  'been',
-  'before',
-  'being',
-  'could',
-  'from',
-  'have',
-  'into',
-  'just',
-  'like',
-  'more',
-  'need',
-  'only',
-  'over',
-  'please',
-  'that',
-  'their',
-  'then',
-  'there',
-  'this',
-  'through',
-  'with',
-  'would',
-  'your',
-]);
+const SEGMENTATION_OUTER_CHUNK_MULTIPLIER = 4;
 
 
 function normalizeBoundedUnit(value: number): number {
@@ -325,30 +300,15 @@ function isSalientGroup(
   return totalChars >= minimums.minSingleEntryChars;
 }
 
-function extractWords(entries: readonly SessionEntry[]): string[] {
-  return entries
-    .flatMap(entry => normalizeContent(entry.content).toLowerCase().match(/[a-z][a-z0-9_-]{3,}/g) ?? [])
-    .filter(word => !STOP_WORDS.has(word));
-}
-
-function inferThemes(entries: readonly SessionEntry[]): string[] {
-  const scores = new Map<string, number>();
-  for (const word of extractWords(entries)) {
-    scores.set(word, (scores.get(word) ?? 0) + 1);
+function summarizeTitle(
+  entries: readonly SessionEntry[],
+  themes: readonly string[],
+  topic?: string,
+): string {
+  const normalizedTopic = topic?.trim();
+  if (normalizedTopic && normalizedTopic.length > 0) {
+    return normalizedTopic;
   }
-
-  const ranked: ThemeScore[] = [...scores.entries()]
-    .map(([theme, score]) => ({ theme, score }))
-    .sort((left, right) => {
-      if (right.score !== left.score) return right.score - left.score;
-      return left.theme.localeCompare(right.theme);
-    });
-
-  const themes = ranked.slice(0, 5).map(entry => entry.theme);
-  return themes.length > 0 ? themes : ['conversation'];
-}
-
-function summarizeTitle(entries: readonly SessionEntry[], themes: readonly string[]): string {
   const firstUserEntry = entries.find(entry => entry.role === 'user') ?? entries.at(0);
   if (!firstUserEntry) {
     return `Conversation about ${themes.slice(0, 2).join(' and ')}`;
@@ -602,6 +562,7 @@ function narrativeEntries(entries: readonly SessionEntry[]): readonly SessionEnt
 function buildEpisodeInput(
   sessionId: string,
   group: EpisodeGroup,
+  themes: string[],
 ): EpisodeCandidateInput {
   const entries = group.entries;
   const first = entries.at(0);
@@ -611,7 +572,6 @@ function buildEpisodeInput(
   }
 
   const narrative = narrativeEntries(entries);
-  const themes = inferThemes(narrative);
   const spanRef = buildSpanRef(sessionId, entries);
   const id = stableId('episode', [
     sessionId,
@@ -621,7 +581,7 @@ function buildEpisodeInput(
 
   return {
     id,
-    title: summarizeTitle(narrative, themes),
+    title: summarizeTitle(narrative, themes, group.topic),
     landmark: summarizeLandmark(narrative, themes),
     startedAt: toIso(first.timestamp),
     endedAt: toIso(last.timestamp),
@@ -723,6 +683,7 @@ export class EpisodicSynthesizer {
   private readonly segmentationPersonaPreamble: PersonaPreamblePort | null;
   private readonly onSegmentationEvent?: (event: EpisodeSegmentationEvent) => void;
   private readonly segmentationNow: () => number;
+  private readonly decisions: EpisodicThemeDecisionPort | null;
   private readonly now: () => number;
   private readonly processingWatermarks = new Map<string, EpisodicSynthesisProcessingWatermark>();
 
@@ -771,6 +732,7 @@ export class EpisodicSynthesizer {
       DEFAULT_MAX_THREAD_EPISODES,
     );
     this.now = options.now ?? (() => Date.now());
+    this.decisions = options.decisions ?? null;
     this.onThreadAssignment = options.onThreadAssignment;
     const segmentation = options.topicSegmentation;
     this.segmentationEnabled = segmentation?.enabled === true;
@@ -818,9 +780,15 @@ export class EpisodicSynthesizer {
     const entries = await this.filterClaimedEntries(lookbackEntries);
     const claimedEntriesSkipped = lookbackEntries.length - entries.length;
 
+    const outerMaxEntries = this.segmentationEnabled
+      ? Math.min(
+        this.transcriptMessageLimit,
+        this.maxEntriesPerEpisode * SEGMENTATION_OUTER_CHUNK_MULTIPLIER,
+      )
+      : this.maxEntriesPerEpisode;
     const salientGroups = groupEntries(entries, {
       gapSplitMs: this.gapSplitMs,
-      maxEntriesPerEpisode: this.maxEntriesPerEpisode,
+      maxEntriesPerEpisode: outerMaxEntries,
       minConversationalEntries: this.minConversationalEntries,
       minSingleEntryChars: this.minSingleEntryChars,
     });
@@ -932,7 +900,7 @@ export class EpisodicSynthesizer {
           heldForChunk = segmentEntries.length;
           continue;
         }
-        segmentGroups.push({ entries: segmentEntries });
+        segmentGroups.push({ entries: segmentEntries, topic: segment.topic });
       }
       heldBackEntryCount += heldForChunk;
       this.emitSegmentationEvent({
@@ -970,7 +938,15 @@ export class EpisodicSynthesizer {
     state: SynthesisRunState,
   ): Promise<void> {
     state.candidatesProcessed++;
-    const episodeInput = buildEpisodeInput(input.sessionId, group);
+    const narrative = narrativeEntries(group.entries);
+    const themes = await classifyEpisodeThemes({
+      sessionId: input.sessionId,
+      channelId: group.entries.at(0)?.channelId ?? input.sessionId,
+      entries: narrative,
+      ...(group.topic ? { topic: group.topic } : {}),
+      decisions: this.decisions,
+    });
+    const episodeInput = buildEpisodeInput(input.sessionId, group, themes);
     const claims = group.entries.map(entry => ({
       claimKey: sessionEntryClaimKey(entry),
       turnId: getTurnId(entry),
@@ -1148,7 +1124,11 @@ export class EpisodicSynthesizer {
       limit: this.maxPriorCandidates,
     });
     return [...persisted, ...currentRunEpisodes]
-      .filter(candidate => candidate.id !== episode.id && candidate.startedAt <= episode.startedAt)
+      .filter(candidate => (
+        candidate.id !== episode.id
+        && candidate.startedAt <= episode.startedAt
+        && episodesShareLinkableScope(episode, candidate)
+      ))
       .sort((left, right) => {
         const startedDiff = Date.parse(right.startedAt) - Date.parse(left.startedAt);
         if (startedDiff !== 0) return startedDiff;

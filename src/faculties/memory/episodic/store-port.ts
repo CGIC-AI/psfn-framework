@@ -406,6 +406,8 @@ export interface EpisodeSubjectFilterOptions {
 export interface EpisodeListOptions extends EpisodeSubjectFilterOptions {
   limit?: number;
   offset?: number;
+  /** Sort direction by started_at (defaults to 'asc' for backward compatibility). */
+  order?: 'asc' | 'desc';
 }
 
 export interface EpisodeEmbeddingProfile {

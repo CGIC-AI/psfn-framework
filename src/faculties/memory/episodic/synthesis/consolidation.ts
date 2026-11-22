@@ -9,6 +9,10 @@ import type {
   EpisodeCreateInput,
   FirstPersonPreservingEpisodeUpdateInput,
 } from '../store-port.js';
+import {
+  isBroadTaxonomyTheme,
+  isNonSubstantiveTheme,
+} from '../theme-classification.js';
 
 type EpisodeArcWriteInput = Omit<
   EpisodeArc,
@@ -31,15 +35,51 @@ export interface ConsolidationCandidateScore {
 const MIN_CONSOLIDATION_THEME_OVERLAP = 1;
 const MIN_CONSOLIDATION_SPAN_OVERLAP_RATIO = 0.5;
 const MAX_CONSOLIDATION_BOUNDARY_GAP_MS = 10 * 60_000;
-const MIN_RELATED_THEME_OVERLAP = 1;
+const MIN_RELATED_THEME_OVERLAP = 2;
 
 function normalizeBoundedUnit(value: number): number {
   return Math.max(0, Math.min(1, Number(value.toFixed(3))));
 }
 
+function substantiveThemes(themes: readonly string[]): string[] {
+  return themes
+    .map(theme => theme.trim().toLowerCase())
+    .filter(theme => !isNonSubstantiveTheme(theme));
+}
+
+function specificThemeOverlap(left: readonly string[], right: readonly string[]): number {
+  const leftSpecific = new Set(substantiveThemes(left).filter(theme => !isBroadTaxonomyTheme(theme)));
+  const rightSpecific = new Set(substantiveThemes(right).filter(theme => !isBroadTaxonomyTheme(theme)));
+  let count = 0;
+  for (const theme of leftSpecific) {
+    if (rightSpecific.has(theme)) count += 1;
+  }
+  return count;
+}
+
 function themeOverlap(left: readonly string[], right: readonly string[]): number {
-  const rightSet = new Set(right);
-  return left.reduce((count, theme) => count + (rightSet.has(theme) ? 1 : 0), 0);
+  const leftSubstantive = new Set(substantiveThemes(left));
+  const rightSubstantive = new Set(substantiveThemes(right));
+  let count = 0;
+  for (const theme of leftSubstantive) {
+    if (rightSubstantive.has(theme)) count += 1;
+  }
+  return count;
+}
+
+export function episodesShareLinkableScope(
+  left: Pick<Episode, 'channelId' | 'participantContactIds'>,
+  right: Pick<Episode, 'channelId' | 'participantContactIds'>,
+): boolean {
+  if (left.channelId && right.channelId && left.channelId === right.channelId) {
+    return true;
+  }
+  if (left.participantContactIds.length > 0 && right.participantContactIds.length > 0) {
+    const leftKey = [...new Set(left.participantContactIds)].sort().join(',');
+    const rightKey = [...new Set(right.participantContactIds)].sort().join(',');
+    return leftKey === rightKey;
+  }
+  return !left.channelId && !right.channelId;
 }
 
 function spanTimeRange(
@@ -341,12 +381,28 @@ export function findRelatedSource(
 ): { episode: Episode; overlap: number } | null {
   let best: { episode: Episode; overlap: number; distanceMs: number } | null = null;
   const targetStart = Date.parse(target.startedAt);
+  const targetSubstantive = new Set(substantiveThemes(target.themes));
 
   for (const candidate of candidates) {
     if (candidate.id === target.id || candidate.startedAt > target.startedAt) continue;
+    if (!episodesShareLinkableScope(target, candidate)) continue;
     const overlap = themeOverlap(candidate.themes, target.themes);
+    const specificOverlap = specificThemeOverlap(candidate.themes, target.themes);
     const sameThread = candidate.threadId !== undefined && candidate.threadId === target.threadId;
-    if (overlap < MIN_RELATED_THEME_OVERLAP && !sameThread) continue;
+    const sharedArtifact = artifactOverlap(candidate.artifactRefs, target.artifactRefs) > 0;
+    const candidateSubstantive = new Set(substantiveThemes(candidate.themes));
+    const exactSingleTopicMatch = overlap === 1
+      && targetSubstantive.size === 1
+      && candidateSubstantive.size === 1;
+    if (
+      overlap < MIN_RELATED_THEME_OVERLAP
+      && specificOverlap < 1
+      && !exactSingleTopicMatch
+      && !sharedArtifact
+      && !sameThread
+    ) {
+      continue;
+    }
 
     const distanceMs = Math.max(0, targetStart - Date.parse(candidate.endedAt));
     if (

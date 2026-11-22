@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { fromAny } from '@total-typescript/shoehorn';
 import {
   resolveDiscordPrimaryUsers,
+  resolveDiscordTrustedUsers,
   resolveChannelSurfaceCompanionId,
   resolveChannelIntakeScreening,
   resolveGatewayDiscordOperatorAlertSurface,
@@ -350,6 +351,11 @@ describe('gateway channel intake ownership', () => {
       userId: '323456789012345678',
       canonicalContactId: 'contact-owner-b',
     }]);
+    expect(resolveDiscordTrustedUsers(config, companionA)).toEqual([{
+      userId: '223456789012345678',
+      canonicalContactId: 'contact-admin-a',
+    }]);
+    expect(resolveDiscordTrustedUsers(config, companionB)).toEqual([]);
   });
 
   it('resolves each fleet surface to its exact companion service', () => {

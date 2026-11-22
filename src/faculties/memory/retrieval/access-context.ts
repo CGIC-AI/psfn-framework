@@ -120,11 +120,12 @@ export async function resolveRecentContactShapeAccess(input: {
 
   const sourceMemories = (await resolveMemoriesByIds(input.memoryStore, sourceMemoryIds))
     .map(memory => ({ ...memory, similarity: 1 }));
-  if (sourceMemories.length !== sourceMemoryIds.length) {
-    const loadedIds = new Set(sourceMemories.map(memory => memory.id));
+  const loadedIds = new Set(sourceMemories.map(memory => memory.id));
+  const missingIds = sourceMemoryIds.filter(id => !loadedIds.has(id));
+  if (sourceMemories.length === 0) {
     return {
       authorizedSourceMemories: [],
-      withheldSourceMemoryIds: sourceMemoryIds.filter(id => !loadedIds.has(id)),
+      withheldSourceMemoryIds: missingIds,
     };
   }
 
@@ -150,18 +151,25 @@ export async function resolveRecentContactShapeAccess(input: {
   const quarantine = summarizeQuarantinedMemories(input.sessionQuarantineFilter, sourceMemories);
   const { summary, withheldIds } = summarizeWithheldMemories(sourceMemories, input.options);
   const withheldSummary = mergeMemoryWithheldSummaries(quarantine.summary, summary);
-  const blockedIds = [...new Set([...quarantine.withheldIds, ...withheldIds])];
-  if (blockedIds.length === 0) {
+  const blockedIds = [...new Set([...missingIds, ...quarantine.withheldIds, ...withheldIds])];
+  const blockedSet = new Set(blockedIds);
+  const authorizedSourceMemories = sourceMemories
+    .filter(memory => !blockedSet.has(memory.id))
+    .map(memory => ({ ...memory }));
+  if (authorizedSourceMemories.length === 0) {
     return {
-      recentContactShape: cloneRecentContactShapeArtifact(shape),
-      authorizedSourceMemories: sourceMemories.map(memory => ({ ...memory })),
-      withheldSourceMemoryIds: [],
+      authorizedSourceMemories: [],
+      ...(withheldSummary ? { withheldSummary } : {}),
+      withheldSourceMemoryIds: blockedIds,
     };
   }
 
+  const filteredShape = cloneRecentContactShapeArtifact(shape);
+  filteredShape.sourceMemoryIds = authorizedSourceMemories.map(memory => memory.id);
   return {
-    authorizedSourceMemories: [],
-    withheldSummary,
+    recentContactShape: filteredShape,
+    authorizedSourceMemories,
+    ...(withheldSummary ? { withheldSummary } : {}),
     withheldSourceMemoryIds: blockedIds,
   };
 }

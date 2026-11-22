@@ -2989,12 +2989,16 @@ describe('DiscordAdapter multi-account bindings (multi-companion W1-P2)', () => 
     siblings?: () => readonly Array<{ botUserId: string; companionId: ReturnType<typeof createCompanionId> }>;
     allowedBotUserIds?: string[];
     primaryUsers?: Array<{ userId: string; canonicalContactId?: string }>;
+    trustedUsers?: Array<{ userId: string; canonicalContactId?: string; trustLevel?: 'trusted' | 'regular' }>;
+    resolveAuthorTrust?: (userId: string) => Promise<{ trustLevel: 'primary' | 'trusted' | 'regular' | 'public'; canonicalContactId?: string } | undefined>;
     intakeScreening?: IntakeScreeningService;
   }): { adapter: DiscordAdapter; eventBus: EventBus } {
     const eventBus = new EventBus();
     const adapter = new DiscordAdapter(makeConfig(), eventBus, {
       ...(overrides?.allowedBotUserIds ? { allowedBotUserIds: overrides.allowedBotUserIds } : {}),
       ...(overrides?.primaryUsers ? { primaryUsers: overrides.primaryUsers } : {}),
+      ...(overrides?.trustedUsers ? { trustedUsers: overrides.trustedUsers } : {}),
+      ...(overrides?.resolveAuthorTrust ? { resolveAuthorTrust: overrides.resolveAuthorTrust } : {}),
       ...(overrides?.intakeScreening ? { intakeScreening: overrides.intakeScreening } : {}),
       account: {
         accountId: 'acct-a',
@@ -3281,6 +3285,113 @@ describe('DiscordAdapter multi-account bindings (multi-companion W1-P2)', () => 
         },
       },
     });
+  });
+
+  it('classifies trusted group friends as trusted_contact without misclassifying them as untrusted public_contact', async () => {
+    const screen = vi.fn(async (content: string, input: IntakeScreeningInput) => ({
+      effectiveText: content,
+      snapshot: {
+        envelopeId: `env-${input.origin.ref}`,
+        sourceClass: input.sourceClass,
+        sourceRiskTier: input.sourceClass === 'public_contact' ? 'untrusted' as const : 'standard' as const,
+        state: 'released' as const,
+        riskLabels: [],
+        subject: { kind: 'body' as const },
+      },
+    }));
+    const { adapter } = makeAccountAdapter({
+      primaryUsers: [{ userId: 'owner-user', canonicalContactId: 'contact-owner' }],
+      trustedUsers: [{ userId: 'rostered-friend', canonicalContactId: 'contact-rostered-friend' }],
+      resolveAuthorTrust: async userId => {
+        if (userId === 'db-trusted-friend') {
+          return { trustLevel: 'trusted', canonicalContactId: 'contact-db-trusted' };
+        }
+        if (userId === 'db-regular-friend') {
+          return { trustLevel: 'regular', canonicalContactId: 'contact-db-regular' };
+        }
+        return undefined;
+      },
+      intakeScreening: { mode: 'enforce', screen } as unknown as IntakeScreeningService,
+    });
+    await adapter.init();
+    (fromAny(adapter)).client.user = {
+      id: 'bot-a',
+      username: 'Companion A',
+      displayName: 'Companion A',
+    };
+
+    const channelId = 'guild-friends-room';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+    const handler = vi.fn(async (message: SubstrateMessage) => ({
+      content: '',
+      channelId: message.channelId,
+      metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+    }));
+    adapter.onMessage(handler);
+
+    await (fromAny(adapter)).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'msg-rostered-friend',
+        guildId: 'guild-1',
+        authorId: 'rostered-friend',
+        content: 'hey from rostered friend',
+      }),
+    );
+    expect(screen).toHaveBeenLastCalledWith(
+      'hey from rostered friend',
+      expect.objectContaining({
+        sourceClass: 'trusted_contact',
+        canonicalContactId: 'contact-rostered-friend',
+      }),
+    );
+
+    await (fromAny(adapter)).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'msg-db-trusted',
+        guildId: 'guild-1',
+        authorId: 'db-trusted-friend',
+        content: 'hey from trusted friend',
+      }),
+    );
+    expect(screen).toHaveBeenLastCalledWith(
+      'hey from trusted friend',
+      expect.objectContaining({
+        sourceClass: 'trusted_contact',
+        canonicalContactId: 'contact-db-trusted',
+      }),
+    );
+
+    await (fromAny(adapter)).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'msg-db-regular',
+        guildId: 'guild-1',
+        authorId: 'db-regular-friend',
+        content: 'hey from regular friend',
+      }),
+    );
+    expect(screen).toHaveBeenLastCalledWith(
+      'hey from regular friend',
+      expect.objectContaining({
+        sourceClass: 'regular_contact',
+        canonicalContactId: 'contact-db-regular',
+      }),
+    );
+
+    await (fromAny(adapter)).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'msg-stranger',
+        guildId: 'guild-1',
+        authorId: 'unknown-stranger',
+        content: 'hey from unknown stranger',
+      }),
+    );
+    expect(screen).toHaveBeenLastCalledWith(
+      'hey from unknown stranger',
+      expect.objectContaining({
+        sourceClass: 'public_contact',
+      }),
+    );
   });
 
   it('resolves siblings lazily so bots that log in later are recognized', async () => {

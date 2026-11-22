@@ -567,18 +567,14 @@ describe('evaluateEgressTrifecta (htm9.3)', () => {
       egressDescription: 'tool:notify',
     });
     expect(shadowAssessment.triggered).toBe(true);
-    // hrmrq.77: in shadow mode the quarantined content was DELIVERED (never
-    // withheld), so the trifecta is fully armed — a hard deny blocks even
-    // during the observe-only rollout.
+    // In shadow mode the quarantined content was delivered, so the trifecta
+    // verdict (`deny`, `hard`) is recorded without hard-blocking egress.
     expect(shadowAssessment.verdict).toBe('deny');
-    expect(shadowAssessment.allowed).toBe(false);
+    expect(shadowAssessment.enforcement).toBe('hard');
+    expect(shadowAssessment.allowed).toBe(true);
   });
 
-  // hrmrq.77 regression: live deployment evidence 2026-07-30 showed kind
-  // egress_trifecta, verdict deny, enforcement hard, mode shadow → allowed
-  // true. Per the fail-closed doctrine the hard tier overrides global shadow
-  // mode; the full shadow × enforcement matrix pins the ruling.
-  describe('shadow × enforcement matrix (hrmrq.77)', () => {
+  describe('shadow × enforcement matrix', () => {
     const hardEnvelope = () => makeSnapshot({ state: 'released', sourceRiskTier: 'untrusted' });
     const softEnvelope = () => makeSnapshot({
       state: 'released',
@@ -587,11 +583,11 @@ describe('evaluateEgressTrifecta (htm9.3)', () => {
     });
 
     const cases: Array<{
-      mode: 'shadow' | 'enforce';
+      mode: 'shadow' | 'strict';
       enforcement: 'hard' | 'soft';
       expected: { verdict: 'deny' | 'review'; allowed: boolean; reviewRequired: boolean };
     }> = [
-      { mode: 'shadow', enforcement: 'hard', expected: { verdict: 'deny', allowed: false, reviewRequired: false } },
+      { mode: 'shadow', enforcement: 'hard', expected: { verdict: 'deny', allowed: true, reviewRequired: false } },
       { mode: 'shadow', enforcement: 'soft', expected: { verdict: 'review', allowed: true, reviewRequired: true } },
       { mode: 'strict', enforcement: 'hard', expected: { verdict: 'deny', allowed: false, reviewRequired: false } },
       { mode: 'strict', enforcement: 'soft', expected: { verdict: 'review', allowed: true, reviewRequired: true } },
@@ -612,22 +608,25 @@ describe('evaluateEgressTrifecta (htm9.3)', () => {
       });
     }
 
-    it('a shadow-mode hard deny records the override in the auditable reason', () => {
+    it('a shadow-mode hard deny records shadow observation in the auditable reason without blocking', () => {
       const assessment = evaluateEgressTrifecta(makePolicy('shadow'), {
         envelopes: [hardEnvelope()],
         privateDataInPath: true,
         egressDescription: 'tool:fs',
       });
-      expect(assessment.reason).toContain("enforcement 'hard' overrides shadow mode");
+      expect(assessment.allowed).toBe(true);
+      expect(assessment.verdict).toBe('deny');
+      expect(assessment.reason).toContain('shadow mode: verdict recorded without blocking');
     });
 
-    it('an enforce-mode hard deny does not claim a shadow override', () => {
+    it('an enforce-mode hard deny blocks and does not claim shadow observation', () => {
       const assessment = evaluateEgressTrifecta(makePolicy('strict'), {
         envelopes: [hardEnvelope()],
         privateDataInPath: true,
         egressDescription: 'tool:fs',
       });
-      expect(assessment.reason).not.toContain('overrides shadow mode');
+      expect(assessment.allowed).toBe(false);
+      expect(assessment.reason).not.toContain('shadow mode');
     });
 
     it('untriggered assessments stay allowed in both modes', () => {
@@ -682,7 +681,7 @@ describe('gate service audit hook', () => {
 
   it('fails loud when a blocked hard trifecta cannot record its durable incident', () => {
     const gate = createIntakeSinkGate({
-      policy: makePolicy('shadow'),
+      policy: makePolicy('strict'),
       actor: 'test:gate',
       onBlockedEgressTrifecta: () => {
         throw new Error('incident store unavailable');
@@ -690,7 +689,7 @@ describe('gate service audit hook', () => {
     });
 
     expect(() => gate.assessEgressTrifecta({
-      envelopes: [makeSnapshot({ state: 'quarantined', sourceRiskTier: 'untrusted' })],
+      envelopes: [makeSnapshot({ state: 'released', sourceRiskTier: 'untrusted' })],
       privateDataInPath: true,
       egressDescription: 'tool:fs',
       blockedIncidentContext: {
@@ -701,12 +700,49 @@ describe('gate service audit hook', () => {
     })).toThrow(/incident store unavailable/);
   });
 
-  it('blocks both live shadow-mode hard trifecta attempts and records operator-visible cases', () => {
+  it('audits shadow-mode hard trifecta verdicts without hard-blocking or recording a block incident', () => {
+    const audited: IntakeSinkGateAuditEvent[] = [];
+    const onBlocked = vi.fn();
+    const gate = createIntakeSinkGate({
+      policy: makePolicy('shadow'),
+      actor: 'test:gate',
+      onAudit: event => audited.push(event),
+      onBlockedEgressTrifecta: onBlocked,
+    });
+    const outcome = gate.assessEgressTrifecta({
+      envelopes: [makeSnapshot({
+        envelopeId: '8b70243e',
+        sourceClass: 'tool_output',
+        sourceRiskTier: 'untrusted',
+        state: 'quarantined',
+      })],
+      privateDataInPath: true,
+      egressDescription: 'tool:fs',
+    });
+
+    expect(outcome).toEqual(expect.objectContaining({
+      mode: 'shadow',
+      triggered: true,
+      verdict: 'deny',
+      enforcement: 'hard',
+      allowed: true,
+      envelopeIds: ['8b70243e'],
+    }));
+    expect(audited).toEqual([expect.objectContaining({
+      kind: 'egress_trifecta',
+      mode: 'shadow',
+      verdict: 'deny',
+      allowed: true,
+    })]);
+    expect(onBlocked).not.toHaveBeenCalled();
+  });
+
+  it('blocks enforce-mode hard trifecta attempts and records operator-visible cases', () => {
     const dir = mkdtempSync(join(tmpdir(), 'psfn-trifecta-incident-'));
     try {
       const eventStorePath = join(dir, 'cogsec-events.json');
       const gate = createIntakeSinkGate({
-        policy: makePolicy('shadow'),
+        policy: makePolicy('strict'),
         actor: 'test:gate',
         onBlockedEgressTrifecta: createIntakeSinkGateIncidentRecorder({
           cogSecEvents: () => new CogSecEventStore(eventStorePath),
@@ -716,7 +752,7 @@ describe('gate service audit hook', () => {
         envelopeId: '8b70243e',
         sourceClass: 'tool_output',
         sourceRiskTier: 'untrusted',
-        state: 'quarantined',
+        state: 'released',
       });
 
       const outcomes = [1, 2].map(() => gate.assessEgressTrifecta({
@@ -736,14 +772,14 @@ describe('gate service audit hook', () => {
 
       expect(outcomes).toEqual([
         expect.objectContaining({
-          mode: 'shadow',
+          mode: 'enforce',
           verdict: 'deny',
           enforcement: 'hard',
           allowed: false,
           envelopeIds: ['8b70243e'],
         }),
         expect.objectContaining({
-          mode: 'shadow',
+          mode: 'enforce',
           verdict: 'deny',
           enforcement: 'hard',
           allowed: false,

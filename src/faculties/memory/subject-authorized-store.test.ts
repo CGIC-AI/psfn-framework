@@ -319,6 +319,38 @@ describe('subject-authorized memory store', () => {
     });
   });
 
+  it('permits shared_room subject class alongside co-subjects during product recall', async () => {
+    const queryAuthorizedMemorySubjects = vi.fn(async () => ({
+      memories: [memory('room-shared', 'shared room memory')],
+      total: 1,
+    }));
+    const store = createSubjectAuthorizedMemoryStore({
+      queryAuthorizedMemorySubjects,
+    } as unknown as MemoryStorePort, {
+      viewerContactId: 'contact-alice',
+      viewerCoSubjectContactIds: ['contact-bob'],
+      includeCompanionPrivateRecallCandidates: true,
+    });
+
+    await store.getById('room-shared');
+    expect(queryAuthorizedMemorySubjects).toHaveBeenCalledWith({
+      authorization: {
+        action: 'detail',
+        viewerContactIds: ['contact-alice', 'contact-bob'],
+        allowedSubjectClasses: [
+          'single_contact',
+          'multiple_contacts',
+          'shared_room',
+          'companion_private',
+        ],
+        allowedViewerRelations: ['self', 'co_subject', 'none'],
+        classifierVersion: 1,
+        grantBindings: [],
+      },
+      selector: { kind: 'detail', memoryId: 'room-shared' },
+    });
+  });
+
   it('D1 admin projection: sole_admin widens every class/relation with no sensitivity carve-out', async () => {
     const queryAuthorizedMemorySubjects = vi.fn(async () => ({
       memories: [memory('visible', 'anything')],

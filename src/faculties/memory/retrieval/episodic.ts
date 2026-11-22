@@ -27,6 +27,11 @@ import {
   cloneEpisode,
   cloneEpisodeArc,
 } from './episodic-cloning.js';
+import {
+  isEpisodeArcQuarantined,
+  isEpisodeQuarantined,
+  type MemorySessionQuarantineFilter,
+} from './session-quarantine.js';
 import type {
   EpisodicLexicalSearchResult,
   EpisodicRetrievalChain,
@@ -75,6 +80,12 @@ export interface EpisodicRetrievalInput {
   maxEpisodesPerChain?: number;
   memoryRetrievalPolicy?: MemoryRetrievalPolicy;
   /**
+   * Optional retired-session quarantine filter applied BEFORE root scoring and
+   * BFS arc expansion so one quarantined neighbor never wipes a clean chain
+   * (psfn-framework-eoj3s.1 / ik47b.4).
+   */
+  sessionQuarantineFilter?: MemorySessionQuarantineFilter | null;
+  /**
    * Receives the id of each candidate episode the visibility gate withholds
    * from this turn, so deliberate tool results can report a content-free
    * gated count instead of implying no memory exists (psfn-framework-jequ8).
@@ -117,6 +128,12 @@ export interface EpisodicTimelineInput {
   maxDepth?: number;
   maxEpisodesPerRoot?: number;
   memoryRetrievalPolicy?: MemoryRetrievalPolicy;
+  /**
+   * Optional retired-session quarantine filter applied BEFORE root scoring and
+   * BFS arc expansion so one quarantined neighbor never wipes a clean chain
+   * (psfn-framework-eoj3s.1 / ik47b.4).
+   */
+  sessionQuarantineFilter?: MemorySessionQuarantineFilter | null;
   /**
    * Receives the id of each candidate episode the visibility gate withholds
    * from this turn, so deliberate tool results can report a content-free
@@ -204,12 +221,16 @@ export async function retrieveEpisodicChains(
   const queryTokens = tokenizeQuery(input.contextText);
   const episodicPolicy = resolveMemoryRetrievalPolicy(input.memoryRetrievalPolicy).episodic;
   const maxChains = positiveIntegerOr(input.maxChains, episodicPolicy.maxChains);
+  const quarantineFilter = input.sessionQuarantineFilter ?? null;
   const rolledOutBreadcrumbs = await retrieveRolledOutBreadcrumbs({
     store,
     boundary: input.rolledOutSessionBoundary,
     maxChains,
     scanLimit: positiveIntegerOr(input.scanLimit, episodicPolicy.scanLimit),
-    isVisible: episode => isEpisodeVisibleForTurn(episode, input),
+    isVisible: episode => (
+      !isEpisodeQuarantined(quarantineFilter, episode)
+      && isEpisodeVisibleForTurn(episode, input)
+    ),
   });
   if (queryTokens.length === 0 && !input.scopeQuery) {
     return rolledOutBreadcrumbs;
@@ -231,8 +252,10 @@ async function retrieveRankedEpisodicChains(
     input.maxEpisodesPerChain,
     episodicPolicy.maxEpisodesPerChain,
   );
+  const quarantineFilter = input.sessionQuarantineFilter ?? null;
   const episodes = (await store.listEpisodes({
     limit: positiveIntegerOr(input.scanLimit, episodicPolicy.scanLimit),
+    order: 'desc',
   })).map(cloneEpisode);
   const episodeIndex = new Map<string, Episode>();
   const isRootCandidate = (candidate: EpisodeCandidate | null): candidate is EpisodeCandidate => (
@@ -241,6 +264,7 @@ async function retrieveRankedEpisodicChains(
   const roots = episodes
     .map((episode) => parseEpisode(episode))
     .filter((episode) => {
+      if (isEpisodeQuarantined(quarantineFilter, episode)) return false;
       if (isEpisodeVisibleForTurn(episode, input)) return true;
       // Report only withheld episodes that would have matched the query.
       if (
@@ -344,6 +368,10 @@ export async function buildEpisodicChainFromRoot(
   const root = await store.getEpisode(input.episodeId);
   if (!root) return null;
   const parsedRoot = parseEpisode(cloneEpisode(root));
+  const quarantineFilter = input.sessionQuarantineFilter ?? null;
+  if (isEpisodeQuarantined(quarantineFilter, parsedRoot)) {
+    return null;
+  }
   const rootVisibilityInput = { ...input, contextText: input.contextText ?? '' };
   if (!isEpisodeVisibleForTurn(parsedRoot, rootVisibilityInput)) {
     if (isEpisodeWithheldByVisibility(parsedRoot, rootVisibilityInput)) {
@@ -366,6 +394,7 @@ export async function buildEpisodicChainFromRoot(
   ]);
   const episodes = await store.listEpisodes({
     limit: positiveIntegerOr(input.scanLimit, episodicPolicy.scanLimit),
+    order: 'desc',
   });
   const episodeIndex = new Map(
     episodes.map(episode => {
@@ -614,14 +643,17 @@ async function buildEpisodeChain(input: {
       .map(arc => parseEpisodeArc(cloneEpisodeArc(arc)))
       .sort(compareArcs);
 
+    const quarantineFilter = input.input.sessionQuarantineFilter ?? null;
     for (const arc of relatedArcs) {
       if (episodes.length >= input.maxEpisodesPerChain) break;
+      if (isEpisodeArcQuarantined(quarantineFilter, arc)) continue;
       const relatedEpisodeId = arc.sourceEpisodeId === current.episode.id
         ? arc.targetEpisodeId
         : arc.sourceEpisodeId;
       if (visited.has(relatedEpisodeId)) continue;
 
       const related = await resolveEpisode(input.store, input.episodeIndex, relatedEpisodeId, arc.id);
+      if (isEpisodeQuarantined(quarantineFilter, related)) continue;
       if (!isEpisodeVisibleForTurn(related, input.input)) continue;
       if (input.input.scopeQuery?.mode === 'only' && !episodeMatchesScopeQuery(related, input.input.scopeQuery)) {
         continue;

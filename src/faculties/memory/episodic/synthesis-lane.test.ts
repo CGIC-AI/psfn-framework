@@ -1011,6 +1011,89 @@ describe('EpisodeSynthesisLane', () => {
     await expect(workset.enumerate('episodic_synthesis')).resolves.toEqual([]);
   });
 
+  it('checkpoints superseded behavioral_summary failed_stage instead of deadlocking forever (eoj3s.1 / d5e0p.3)', async () => {
+    const sessionId = 'discord:room-superseded';
+    const targetEpisode = makeEpisode('episode-2', '2026-04-01T12:00:00.000Z');
+    const sourceEpisode = makeEpisode('episode-1', '2026-04-01T10:00:00.000Z');
+    const arc = {
+      id: 'arc-superseded-1',
+      schemaVersion: 1 as const,
+      sourceEpisodeId: sourceEpisode.id,
+      targetEpisodeId: targetEpisode.id,
+      arcKind: 'recurrence' as const,
+      confidence: 0.78,
+      salience: 0.78,
+      themes: ['atlas', 'validation'],
+      spanRefs: [],
+      artifactRefs: [],
+      provenanceRefs: [],
+      createdAt: '2026-04-01T12:00:00.000Z',
+      updatedAt: '2026-04-01T12:00:00.000Z',
+    };
+    const workset = makeStatefulWorkset([sessionId]);
+    let watermarkEndedAt: string | undefined;
+    const watermarkStore = {
+      getProcessingWatermark: vi.fn(async () => watermarkEndedAt
+        ? {
+            id: 'watermark-1',
+            processor: 'episodic_synthesis',
+            sourceRef: sessionId,
+            processedEndedAt: watermarkEndedAt,
+            updatedAt: watermarkEndedAt,
+          }
+        : undefined),
+    };
+    let arcSuperseded = false;
+    const behavioralSummaryStore = {
+      listEpisodeArcsForEpisodes: vi.fn(async () => (arcSuperseded ? [] : [arc])),
+      getEpisodesByIds: vi.fn(async () => (arcSuperseded ? [] : [sourceEpisode, targetEpisode])),
+    };
+    const memoryWriter = {
+      write: vi.fn().mockRejectedValueOnce(new Error('transient write failure')),
+    };
+    const firstSynthesizer = {
+      run: vi.fn(async () => {
+        watermarkEndedAt = new Date(WATERMARK_END_MS + 12_000).toISOString();
+        return {
+          consideredEntries: 12,
+          candidateEpisodeCount: 2,
+          createdEpisodes: [sourceEpisode, targetEpisode],
+          skippedEpisodeIds: [],
+          linkedArcs: [arc],
+        };
+      }),
+    };
+    const laneOptions = {
+      sessionManager: {
+        resolveSessionChannelId: (channelId: string) => channelId,
+        getRecentMessages: () => mentionEntries(12),
+      },
+      watermarkStore: watermarkStore as never,
+      behavioralSummaryStore: behavioralSummaryStore as never,
+      workset,
+      config: gateConfig(),
+      scopeClassifier: { classifyChannelMemoryScope: vi.fn(async () => 'direct' as const) },
+      companionNames: [COMPANION_NAME],
+      companionAuthorIds: [COMPANION_AUTHOR_ID],
+      memoryWriter,
+    };
+    const firstLane = new EpisodeSynthesisLane({ ...laneOptions, synthesizer: firstSynthesizer });
+    await expect(firstLane.execute(timerAction())).rejects.toThrow(
+      'Episode synthesis drain failed for 1 session(s)',
+    );
+
+    // Nightly consolidation merged/superseded the arc before retry.
+    arcSuperseded = true;
+    const retryLane = new EpisodeSynthesisLane({ ...laneOptions, synthesizer: { run: vi.fn() } });
+    await retryLane.execute(timerAction());
+
+    expect(workset.checkpointStage).toHaveBeenCalledWith(expect.objectContaining({
+      stage: expect.stringMatching(/^behavioral_summary:/u),
+    }));
+    expect(workset.checkpoint).toHaveBeenCalledTimes(1);
+    await expect(workset.enumerate('episodic_synthesis')).resolves.toEqual([]);
+  });
+
   // psfn-framework-ca980 — a behavioral summary must carry the arc's episode
   // source-content time (target episode `endedAt`), not the deferred synthesis run
   // clock, so a room widened after that content denies the auto-share.

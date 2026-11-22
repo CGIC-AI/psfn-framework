@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { SessionEntry } from '../../../core/session/types.js';
 import { isRuntimeAuthoredFallbackSessionEntry } from '../../../core/session/runtime-fallback-provenance.js';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
+import { isNonSubstantiveTheme } from './theme-classification.js';
 import type { PersonaPreamblePort } from '../../../core/identity/persona-preamble.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import type {
@@ -256,18 +257,71 @@ function episodeScopeKey(episode: Episode): string {
   ].join('\u0000');
 }
 
-function sameSitting(chain: readonly Episode[], next: Episode, adjacencyGapMs: number): boolean {
+interface BuildMergeChainsOptions {
+  /** Maximum episodes merged into one chain (when bounded by caller). */
+  maxChainEpisodes?: number;
+  /** Maximum total elapsed duration from chain head start to next end (when bounded by caller). */
+  maxChainDurationMs?: number;
+  /**
+   * When true (default), adjacent episodes that both carry substantive themes
+   * must share at least one substantive theme to merge into one chain.
+   */
+  requireTopicContinuity?: boolean;
+}
+
+function substantiveEpisodeThemes(episode: Episode): Set<string> {
+  return new Set(
+    episode.themes
+      .map(theme => theme.trim().toLowerCase())
+      .filter(theme => !isNonSubstantiveTheme(theme)),
+  );
+}
+
+function hasTopicContinuity(chain: readonly Episode[], next: Episode): boolean {
+  const nextThemes = substantiveEpisodeThemes(next);
+  if (nextThemes.size === 0) return true;
+  const chainThemes = new Set<string>();
+  for (const episode of chain) {
+    for (const theme of substantiveEpisodeThemes(episode)) {
+      chainThemes.add(theme);
+    }
+  }
+  if (chainThemes.size === 0) return true;
+  for (const theme of nextThemes) {
+    if (chainThemes.has(theme)) return true;
+  }
+  return false;
+}
+
+function sameSitting(
+  chain: readonly Episode[],
+  next: Episode,
+  adjacencyGapMs: number,
+  options: BuildMergeChainsOptions,
+): boolean {
   if (chain.length === 0) return false;
+  if (options.maxChainEpisodes !== undefined && chain.length >= options.maxChainEpisodes) return false;
   const anchor = chain[0];
   if (!anchor) return false;
   if (!sameEpisodeScope(anchor, next)) return false;
+  const chainStartMs = Math.min(...chain.map(episode => parseInstant(episode.startedAt)));
   const chainEndMs = Math.max(...chain.map(episode => parseInstant(episode.endedAt)));
-  const gapMs = parseInstant(next.startedAt) - chainEndMs;
-  return gapMs <= adjacencyGapMs;
+  const nextStartMs = parseInstant(next.startedAt);
+  const nextEndMs = parseInstant(next.endedAt);
+  const gapMs = nextStartMs - chainEndMs;
+  if (gapMs > adjacencyGapMs) return false;
+  const combinedDurationMs = Math.max(chainEndMs, nextEndMs) - Math.min(chainStartMs, nextStartMs);
+  if (options.maxChainDurationMs !== undefined && combinedDurationMs > options.maxChainDurationMs) return false;
+  if ((options.requireTopicContinuity ?? true) && !hasTopicContinuity(chain, next)) return false;
+  return true;
 }
 
 /** Chains of time-adjacent same-scope episodes; chains of length >= 2 merge into their head. */
-export function buildMergeChains(episodes: readonly Episode[], adjacencyGapMs: number): Episode[][] {
+export function buildMergeChains(
+  episodes: readonly Episode[],
+  adjacencyGapMs: number,
+  options: BuildMergeChainsOptions = {},
+): Episode[][] {
   const ordered = [...episodes].sort((left, right) => (
     left.startedAt.localeCompare(right.startedAt) || left.id.localeCompare(right.id)
   ));
@@ -283,7 +337,7 @@ export function buildMergeChains(episodes: readonly Episode[], adjacencyGapMs: n
   for (const scopedEpisodes of byScope.values()) {
     let currentChain: Episode[] = [];
     for (const episode of scopedEpisodes) {
-      if (sameSitting(currentChain, episode, adjacencyGapMs)) {
+      if (sameSitting(currentChain, episode, adjacencyGapMs, options)) {
         currentChain.push(episode);
       } else {
         currentChain = [episode];
@@ -791,7 +845,12 @@ export class SleepCycleEpisodeConsolidator {
     }
 
     const consolidated: Episode[] = [...claimProtected];
-    for (const chain of buildMergeChains(repairEligible, this.adjacencyGapMs)) {
+    const stage2Chains = buildMergeChains(repairEligible, this.adjacencyGapMs, {
+      maxChainEpisodes: Math.max(2, Math.floor(this.maxRefinementsPerRun / 2)),
+      maxChainDurationMs: this.adjacencyGapMs * 4,
+      requireTopicContinuity: true,
+    });
+    for (const chain of stage2Chains) {
       if (chain.length === 1) {
         const only = chain[0];
         if (only) consolidated.push(only);
@@ -984,7 +1043,11 @@ export class SleepCycleEpisodeConsolidator {
     result.candidateEpisodesReviewed = candidates.length;
     if (candidates.length === 0) return [];
 
-    const clusters = buildMergeChains(candidates, this.adjacencyGapMs);
+    const clusters = buildMergeChains(candidates, this.adjacencyGapMs, {
+      maxChainEpisodes: Math.max(2, this.maxRefinementsPerRun),
+      maxChainDurationMs: this.adjacencyGapMs * 4,
+      requireTopicContinuity: false,
+    });
     result.candidateClusters = clusters.length;
 
     const created: Episode[] = [];

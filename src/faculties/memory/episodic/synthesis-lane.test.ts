@@ -25,6 +25,7 @@ import {
   clearDiagnosticLogRingBufferForTests,
   getRecentDiagnosticLogRecords,
 } from '../../../shared/logger.js';
+import { classifyMemorySubject } from '../subject-classification.js';
 
 function synthMemory(provenance: MemoryProvenance, extractedAt: number): ScoredMemory {
   const memory: PurrMemory = {
@@ -1146,18 +1147,159 @@ describe('EpisodeSynthesisLane', () => {
     const records = getRecentDiagnosticLogRecords();
     const failureLogs = records.filter(record => record.message === 'Episode synthesis failed for session');
     expect(failureLogs).toHaveLength(2);
-    expect(failureLogs[0]?.context).toMatchObject({
-      revision: 1,
-      error: expect.stringContaining('discord:fail-a/episode_synthesis: upstream rate limit'),
-    });
-    expect(failureLogs[1]?.context).toMatchObject({
-      revision: 2,
-      error: expect.stringContaining('discord:fail-b/episode_synthesis: segmentation schema mismatch'),
-    });
+    expect(failureLogs.map(record => record.context)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        revision: 1,
+        error: expect.stringContaining('discord:fail-a/episode_synthesis: upstream rate limit'),
+      }),
+      expect.objectContaining({
+        revision: 2,
+        error: expect.stringContaining('discord:fail-b/episode_synthesis: segmentation schema mismatch'),
+      }),
+    ]));
 
     const { toErrorMessage } = await import('../../../shared/utils/errors.js');
     const serialized = toErrorMessage(caught);
     expect(serialized).toContain('discord:fail-a/episode_synthesis: upstream rate limit');
     expect(serialized).toContain('discord:fail-b/episode_synthesis: segmentation schema mismatch');
+  });
+
+  it('attributes behavioral summary writes to single counterparty contacts and companion_private for self-directed sessions (d5e0p.16)', async () => {
+    const localUuid = '11111111-1111-4111-8111-111111111111';
+    const peerUuid = '22222222-2222-4222-8222-222222222222';
+    const companionDmSession = `companion-dm:${localUuid}:${peerUuid}`;
+    const contactStore = {
+      getByChannelIdentity: vi.fn(async (channel: string, userId: string) => {
+        if (channel === 'discord' && userId === 'user-a') {
+          return {
+            id: 'contact-alice',
+            displayName: 'Alice',
+            channels: [{ channel: 'discord', userId: 'user-a', privacyLevel: 'private' }],
+          };
+        }
+        if (channel === 'companion' && userId === peerUuid) {
+          return {
+            id: 'contact-peer',
+            displayName: 'Peer',
+            channels: [{ channel: 'companion', userId: peerUuid, privacyLevel: 'private' }],
+          };
+        }
+        return undefined;
+      }),
+    };
+
+    const runSummaryForSession = async (
+      sessionId: string,
+      activityKind: ConversationalActivityWorkItem['activityKind'],
+    ) => {
+      const workset = makeStatefulWorkset([sessionId]);
+      const baseEnumerate = workset.enumerate;
+      workset.enumerate = vi.fn(async (purpose) => (
+        (await baseEnumerate(purpose)).map(item => ({ ...item, activityKind }))
+      ));
+      const baseClaim = workset.claim;
+      workset.claim = vi.fn(async (input) => {
+        const claimed = await baseClaim(input);
+        return claimed ? { ...claimed, activityKind } : null;
+      });
+      const memoryWriter = { write: vi.fn().mockResolvedValue({ action: 'created' }) };
+      const synthesizer = {
+        run: vi.fn().mockResolvedValue({
+          consideredEntries: 12,
+          candidateEpisodeCount: 2,
+          createdEpisodes: [makeEpisode('episode-2', '2026-06-01T10:12:00.000Z')],
+          skippedEpisodeIds: [],
+          linkedArcs: [{
+            id: `arc-${sessionId}`,
+            sourceEpisodeId: 'episode-1',
+            targetEpisodeId: 'episode-2',
+            arcKind: 'recurrence',
+            confidence: 0.82,
+            themes: ['validation', 'cadence'],
+          }],
+        }),
+      };
+      const lane = new EpisodeSynthesisLane({
+        sessionManager: {
+          resolveSessionChannelId: (channelId: string) => channelId,
+          getRecentMessages: () => mentionEntries(12).map(entry => ({ ...entry, channelId: sessionId })),
+        },
+        synthesizer,
+        watermarkStore: {
+          getProcessingWatermark: vi.fn(async () => ({
+            id: 'wm-1',
+            processor: 'episodic_synthesis',
+            sourceRef: sessionId,
+            processedEndedAt: new Date(WATERMARK_END_MS).toISOString(),
+            updatedAt: new Date(WATERMARK_END_MS).toISOString(),
+          })),
+        } as never,
+        workset,
+        config: gateConfig(),
+        scopeClassifier: { classifyChannelMemoryScope: vi.fn(async () => 'direct' as const) },
+        companionNames: [COMPANION_NAME],
+        companionAuthorIds: [COMPANION_AUTHOR_ID],
+        contactStore: contactStore as never,
+        companionId: localUuid,
+        memoryWriter,
+      });
+      await lane.execute(timerAction());
+      return memoryWriter.write.mock.calls[0]?.[0];
+    };
+
+    const humanDmWrite = await runSummaryForSession('discord:dm-alice', 'direct_message');
+    expect(humanDmWrite).toMatchObject({
+      contactId: 'contact-alice',
+      provenance: expect.objectContaining({
+        subjectContactId: 'contact-alice',
+        subjectContactIds: ['contact-alice'],
+      }),
+    });
+    expect(classifyMemorySubject({
+      id: 'mem-beh-dm',
+      text: humanDmWrite.text,
+      type: humanDmWrite.type,
+      importance: humanDmWrite.importance,
+      confidence: humanDmWrite.confidence,
+      emotionalValence: humanDmWrite.emotionalValence,
+      salience: humanDmWrite.importance,
+      sourceRef: humanDmWrite.sourceRef,
+      extractedAt: Date.now(),
+      lastAccessed: Date.now(),
+      accessCount: 0,
+      tags: humanDmWrite.tags,
+      sensitivity: humanDmWrite.sensitivity,
+      contactId: humanDmWrite.contactId,
+      provenance: humanDmWrite.provenance,
+    }, { memoryRevision: 1 }).subjectClass).toBe('single_contact');
+
+    const companionDmWrite = await runSummaryForSession(companionDmSession, 'direct_message');
+    expect(companionDmWrite).toMatchObject({
+      contactId: 'contact-peer',
+      provenance: expect.objectContaining({
+        subjectContactId: 'contact-peer',
+        subjectContactIds: ['contact-peer'],
+      }),
+    });
+
+    const selfDirectedWrite = await runSummaryForSession('internal:free-time:evening', 'experiential_free_time');
+    expect(selfDirectedWrite.contactId).toBeUndefined();
+    expect(selfDirectedWrite.provenance.subjectScope).toBe('companion_internal');
+    expect(classifyMemorySubject({
+      id: 'mem-beh-ft',
+      text: selfDirectedWrite.text,
+      type: selfDirectedWrite.type,
+      importance: selfDirectedWrite.importance,
+      confidence: selfDirectedWrite.confidence,
+      emotionalValence: selfDirectedWrite.emotionalValence,
+      salience: selfDirectedWrite.importance,
+      sourceRef: selfDirectedWrite.sourceRef,
+      extractedAt: Date.now(),
+      lastAccessed: Date.now(),
+      accessCount: 0,
+      tags: selfDirectedWrite.tags,
+      sensitivity: selfDirectedWrite.sensitivity,
+      provenance: selfDirectedWrite.provenance,
+    }, { memoryRevision: 1 }).subjectClass).toBe('companion_private');
   });
 });

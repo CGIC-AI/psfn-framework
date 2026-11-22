@@ -502,7 +502,7 @@ export interface EventMap {
     sessionId: string;
     scopeKey: string;
     candidateEpisodeIds: string[];
-    stage: 'thematic_grouping';
+    stage: 'thematic_grouping' | 'orientation_review';
     error: string;
     timestamp: number;
   };

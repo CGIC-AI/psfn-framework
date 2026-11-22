@@ -178,6 +178,26 @@ describe('scheduled operator alerts', () => {
     }));
   });
 
+  it('alerts on exhausted sleeptime orientation_review failures (ik47b.2)', async () => {
+    const { notifier, notify } = makeFakeNotifier();
+    const handler = createSleepConsolidationFailureAlertHandler(notifier, 'PSFN');
+
+    await handler({
+      sessionId: 'discord:dm-1',
+      scopeKey: 'sleeptime:discord:dm-1',
+      candidateEpisodeIds: ['ep-1'],
+      stage: 'orientation_review',
+      error: 'Sleeptime review produced no usable plan after 3 turn(s): no JSON object found',
+      timestamp: 4,
+    });
+
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'PSFN sleeptime failure',
+      priority: 5,
+      message: expect.stringContaining('Stage: orientation_review'),
+    }));
+  });
+
   it('alerts once when fail-closed screening reaches the configured repetition threshold', async () => {
     const { notifier, notify } = makeFakeNotifier();
     const handler = createRepeatedScreeningFailureAlertHandler({

@@ -1,3 +1,4 @@
+import type { ProcessableConversationKind } from '../../core/session/conversational-activity.js';
 import type {
   ClaimedConversationalActivityWorkItem,
   ConversationalActivityWorksetPort,
@@ -17,6 +18,7 @@ export interface SleeptimeWorksetStageInput {
   logicalSessionId: string;
   revision: number;
   occurredAtMs: number;
+  activityKind?: ProcessableConversationKind;
   stage: SleeptimeWorksetStage;
 }
 
@@ -129,6 +131,7 @@ export class SleeptimeWorksetRunner {
             logicalSessionId: claim.logicalSessionId,
             revision: claim.revision,
             occurredAtMs: claim.occurredAtMs,
+            activityKind: claim.activityKind,
             stage,
           };
           await this.runStage(stageInput);

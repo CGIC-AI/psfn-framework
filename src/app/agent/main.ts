@@ -2443,6 +2443,7 @@ async function main(): Promise<void> {
       nearTurnMemoryCadence: schedulerConfig.nearTurnMemory,
       episodeSynthesis: schedulerConfig.episodeSynthesis,
       episodicWatermarkStore: episodicStore,
+      ...(config.companionId ? { companionId: config.companionId } : {}),
       companionNames: [card.data.name],
       companionAuthorIds: config.discordBotId ? [config.discordBotId] : [],
       memoryScopeClassifier: observedGroupMemoryScheduler,

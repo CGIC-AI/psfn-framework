@@ -37,7 +37,8 @@ import {
   type EpisodicProcessingRestWindowConfig,
   type OrientationRewriteGateConfig,
 } from '../../system/config/scheduler-config.js';
-import type { DeterministicGateEvent } from '../../shared/event-bus.js';
+import type { ProcessableConversationKind } from '../../core/session/conversational-activity.js';
+import type { DeterministicGateEvent, EventMap } from '../../shared/event-bus.js';
 import {
   evaluateDeterministicGate,
   type DeterministicGateDefinition,
@@ -80,6 +81,11 @@ import {
 import { classifyPostTurnActionContention } from '../../core/agent/post-turn-action-contention.js';
 import type { ConcernStorePort } from '../../core/intention/concern-store-port.js';
 import { loadSleeptimeReviewGrounding } from './sleeptime-review-grounding.js';
+import {
+  resolveSessionMemoryAttribution,
+  type SessionCounterpartyContactStore,
+  type SessionMemoryAttribution,
+} from './session-counterparty-resolution.js';
 
 const log = createComponentLogger('SleeptimeMemoryAgent');
 
@@ -227,6 +233,14 @@ export interface SleeptimeMemoryAgentOptions {
   orientationRewriteGate?: OrientationRewriteGateConfig;
   /** Typed gate telemetry sink; wired to the runtime event bus by composition. */
   onGateEvent?: (event: DeterministicGateEvent) => void;
+  /** Operator-alerting sink when sleeptime review exhausts retries without a usable plan. */
+  onReviewFailure?: (event: EventMap['memory.sleep_consolidation.failure']) => void;
+  /** Contact lookup for attributing single-counterparty DM and companion-dm sleeptime writes. */
+  contactStore?: SessionCounterpartyContactStore | null;
+  /** Local companion UUID used to identify the peer participant on companion-dm sessions. */
+  companionId?: string;
+  /** Companion author IDs excluded when identifying human speakers in transcripts. */
+  companionAuthorIds?: readonly string[];
   now?: () => number;
   sleepConsolidator: SleeptimeEpisodeConsolidator;
   arcWeaver: SleeptimeArcWeaver;
@@ -257,7 +271,7 @@ function normalizeMemoryType(raw: unknown): MemoryType {
   if (typeof raw !== 'string') {
     throw new Error('Sleeptime memory write type must be a string');
   }
-  const normalized = raw.trim() as MemoryType;
+  const normalized = raw.trim().toLowerCase() as MemoryType;
   if (!VALID_MEMORY_TYPES.includes(normalized)) {
     throw new Error(`Sleeptime memory write type "${raw}" is invalid`);
   }
@@ -266,7 +280,7 @@ function normalizeMemoryType(raw: unknown): MemoryType {
 
 function normalizeSensitivity(raw: unknown): SensitivityLevel {
   if (typeof raw !== 'string') return 'personal';
-  const normalized = raw.trim() as SensitivityLevel;
+  const normalized = raw.trim().toLowerCase() as SensitivityLevel;
   if (!VALID_SENSITIVITY_LEVELS.includes(normalized)) {
     return 'personal';
   }
@@ -288,28 +302,107 @@ function normalizeTags(raw: unknown): string[] {
   return [...out];
 }
 
+function extractBalancedJsonObjects(text: string): string[] {
+  const objects: string[] = [];
+  let depth = 0;
+  let startIndex = -1;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const ch = text[index]!;
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === '\\') {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === '{') {
+      if (depth === 0) {
+        startIndex = index;
+      }
+      depth += 1;
+    } else if (ch === '}' && depth > 0) {
+      depth -= 1;
+      if (depth === 0 && startIndex >= 0) {
+        objects.push(text.slice(startIndex, index + 1));
+        startIndex = -1;
+      }
+    }
+  }
+  return objects;
+}
+
+function tryParseJsonObject(candidate: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(candidate) as unknown;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function selectBestJsonObject(candidates: readonly string[]): string | null {
+  let firstValid: string | null = null;
+  for (const candidate of candidates) {
+    const parsed = tryParseJsonObject(candidate);
+    if (!parsed) continue;
+    if ('orient' in parsed || 'memory_writes' in parsed) {
+      return candidate;
+    }
+    if (firstValid === null) {
+      firstValid = candidate;
+    }
+  }
+  return firstValid;
+}
+
 function extractJsonPayload(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) {
     throw new Error('Sleeptime model returned empty output');
   }
 
-  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+  if (tryParseJsonObject(trimmed)) {
     return trimmed;
   }
 
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fenced?.[1]) {
-    const candidate = fenced[1].trim();
-    if (candidate.startsWith('{') && candidate.endsWith('}')) {
-      return candidate;
-    }
+  const fencedCandidates: string[] = [];
+  const fenceRegex = /```(?:json)?\s*([\s\S]*?)```/gi;
+  let match: RegExpExecArray | null;
+  while ((match = fenceRegex.exec(trimmed)) !== null) {
+    const block = match[1]?.trim();
+    if (!block) continue;
+    fencedCandidates.push(block);
+    fencedCandidates.push(...extractBalancedJsonObjects(block));
+  }
+  const bestFenced = selectBestJsonObject(fencedCandidates);
+  if (bestFenced) {
+    return bestFenced;
   }
 
-  const firstBrace = trimmed.indexOf('{');
-  const lastBrace = trimmed.lastIndexOf('}');
-  if (firstBrace >= 0 && lastBrace > firstBrace) {
-    return trimmed.slice(firstBrace, lastBrace + 1);
+  const balanced = extractBalancedJsonObjects(trimmed);
+  const bestBalanced = selectBestJsonObject(balanced);
+  if (bestBalanced) {
+    return bestBalanced;
+  }
+
+  if (fencedCandidates.length > 0) {
+    return fencedCandidates[0]!;
+  }
+  if (balanced.length > 0) {
+    return balanced[0]!;
   }
 
   throw new Error('Sleeptime model did not return a JSON object');
@@ -328,7 +421,9 @@ function normalizeConcernDecisions(
     }
     const record = entry as Record<string, unknown>;
     const id = typeof record['id'] === 'string' ? record['id'].trim() : '';
-    const decision = record['decision'];
+    const decision = typeof record['decision'] === 'string'
+      ? record['decision'].trim().toLowerCase()
+      : record['decision'];
     if (!offeredIds.has(id)) throw new Error(`concern_decisions id "${id}" was not one of the offered concerns`);
     if (decision !== 'keep' && decision !== 'let_go') {
       throw new Error('concern_decisions decision must be "keep" or "let_go"');
@@ -338,10 +433,26 @@ function normalizeConcernDecisions(
   return [...decisions.entries()].map(([id, decision]) => ({ id, decision }));
 }
 
+function normalizeOrientBlock(
+  raw: unknown,
+  blockName: SleeptimeOrientBlockName,
+  fallbackContent: string,
+): string {
+  if (raw === undefined || raw === null) {
+    return fallbackContent.trim();
+  }
+  if (typeof raw !== 'string') {
+    throw new Error(`Sleeptime plan orient.${blockName} must be a string`);
+  }
+  const trimmed = raw.trim();
+  return trimmed || fallbackContent.trim();
+}
+
 function normalizeSleeptimePlan(
   raw: string,
   maxMemoryWrites: number,
   offeredConcernIds: ReadonlySet<string> = new Set(),
+  currentOrientBlocks?: Record<SleeptimeOrientBlockName, { content: string }>,
 ): NormalizedSleeptimePlan {
   const parsed = JSON.parse(extractJsonPayload(raw)) as unknown;
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -356,11 +467,26 @@ function normalizeSleeptimePlan(
 
   const orientRecord = orientRaw as Record<string, unknown>;
   const orient = {
-    persona: normalizeText(orientRecord['persona']),
-    human: normalizeText(orientRecord['human']),
-    goals: normalizeText(orientRecord['goals']),
+    persona: normalizeOrientBlock(
+      orientRecord['persona'],
+      'persona',
+      currentOrientBlocks?.persona.content ?? '',
+    ),
+    human: normalizeOrientBlock(
+      orientRecord['human'],
+      'human',
+      currentOrientBlocks?.human.content ?? '',
+    ),
+    goals: normalizeOrientBlock(
+      orientRecord['goals'],
+      'goals',
+      currentOrientBlocks?.goals.content ?? '',
+    ),
   };
 
+  if (record['memory_writes'] !== undefined && !Array.isArray(record['memory_writes'])) {
+    throw new Error('Sleeptime plan memory_writes must be an array');
+  }
   const memoryWritesRaw = Array.isArray(record['memory_writes'])
     ? record['memory_writes']
     : [];
@@ -368,7 +494,7 @@ function normalizeSleeptimePlan(
 
   for (const rawWrite of memoryWritesRaw) {
     if (!rawWrite || typeof rawWrite !== 'object' || Array.isArray(rawWrite)) {
-      continue;
+      throw new Error('each memory_writes entry must be an object');
     }
     const writeRecord = rawWrite as Record<string, unknown>;
     memoryWrites.push({
@@ -387,10 +513,20 @@ function normalizeSleeptimePlan(
     }
   }
 
+  const concernDecisions = normalizeConcernDecisions(record['concern_decisions'], offeredConcernIds);
+  const hasAnyOrientContent = (
+    orient.persona.length > 0
+    || orient.human.length > 0
+    || orient.goals.length > 0
+  );
+  if (!hasAnyOrientContent && memoryWrites.length === 0 && concernDecisions.length === 0) {
+    throw new Error('Sleeptime plan orient must contain at least one non-empty block');
+  }
+
   return {
     orient,
     memoryWrites,
-    concernDecisions: normalizeConcernDecisions(record['concern_decisions'], offeredConcernIds),
+    concernDecisions,
   };
 }
 
@@ -399,6 +535,7 @@ function evaluateSleeptimeOrientCandidacy(
 ): SleeptimeOrientCandidacyRejection | null {
   const blocks: SleeptimeOrientBlockName[] = ['persona', 'human', 'goals'];
   for (const block of blocks) {
+    if (!orient[block].trim()) continue;
     const decision = evaluateCogSecMemoryCandidacy({
       text: orient[block],
       type: 'reflection',
@@ -550,11 +687,32 @@ function reviewSubjectForMemoryWrite(input: {
   };
 }
 
+function resolveFiniteSourceMessageIds(
+  entryIds: readonly number[] | undefined,
+  fallbackSourceMessageId: string | undefined,
+): number[] {
+  const normalizedEntryIds = [...new Set(
+    (entryIds ?? []).filter(id => Number.isSafeInteger(id) && id > 0),
+  )];
+  if (normalizedEntryIds.length > 0) {
+    return normalizedEntryIds;
+  }
+  if (fallbackSourceMessageId) {
+    const parsed = Number(fallbackSourceMessageId);
+    if (Number.isSafeInteger(parsed) && parsed > 0) {
+      return [parsed];
+    }
+  }
+  return [];
+}
+
 function buildSleepTimeMemoryWritePayload(input: {
   memory: NormalizedMemoryWrite;
   sessionId: string;
   actionId: string;
   sourceMessageId?: string;
+  sourceMessageIds?: readonly number[];
+  attribution?: SessionMemoryAttribution;
   evidenceCount: number;
   /**
    * Latest instant (epoch ms) of the reviewed source transcript — the memory's
@@ -569,6 +727,11 @@ function buildSleepTimeMemoryWritePayload(input: {
 }): MemoryWriteOptions {
   const sourceRef = `source:sleeptime|session:${input.sessionId}|message:${input.sourceMessageId ?? 'unknown'}`;
   const repeatedFact = input.evidenceCount >= 2 && input.memory.confidence >= 0.72 && input.memory.importance >= 0.65;
+  const sourceMessageIds = resolveFiniteSourceMessageIds(
+    input.sourceMessageIds,
+    input.sourceMessageId,
+  );
+  const attribution = input.attribution;
   return {
     text: input.memory.text,
     type: input.memory.type,
@@ -578,13 +741,22 @@ function buildSleepTimeMemoryWritePayload(input: {
     sensitivity: input.memory.sensitivity,
     sourceRef,
     sourceType: 'autonomous_action',
+    ...(attribution?.kind === 'single_contact' ? { contactId: attribution.contactId } : {}),
     provenance: {
       channelId: input.sessionId,
       sessionId: input.sessionId,
       actor: 'system',
       reason: 'sleeptime',
+      ...(attribution?.kind === 'single_contact'
+        ? {
+            subjectContactId: attribution.contactId,
+            subjectContactIds: [attribution.contactId],
+          }
+        : attribution?.kind === 'companion_private'
+          ? { subjectScope: 'companion_internal' as const }
+          : {}),
       ...(input.sourceConversationAt !== undefined ? { sourceConversationAt: input.sourceConversationAt } : {}),
-      ...(input.sourceMessageId ? { sourceMessageIds: [Number(input.sourceMessageId)].filter(Number.isFinite) } : {}),
+      ...(sourceMessageIds.length > 0 ? { sourceMessageIds } : {}),
     },
     provenanceRefs: [
       sourceRef,
@@ -621,6 +793,10 @@ export class SleeptimeMemoryAgent {
   private readonly restWindow: EpisodicProcessingRestWindowConfig;
   private readonly orientationRewriteGate: DeterministicGateDefinition;
   private readonly onGateEvent: ((event: DeterministicGateEvent) => void) | null;
+  private readonly onReviewFailure: ((event: EventMap['memory.sleep_consolidation.failure']) => void) | null;
+  private readonly contactStore: SessionCounterpartyContactStore | null;
+  private readonly companionId: string | undefined;
+  private readonly companionAuthorIds: readonly string[];
   private readonly now: () => number;
   private readonly sleepConsolidator: SleeptimeEpisodeConsolidator;
   private readonly arcWeaver: SleeptimeArcWeaver;
@@ -676,6 +852,10 @@ export class SleeptimeMemoryAgent {
       options.orientationRewriteGate ?? DEFAULT_ORIENTATION_REWRITE_GATE,
     );
     this.onGateEvent = options.onGateEvent ?? null;
+    this.onReviewFailure = options.onReviewFailure ?? null;
+    this.contactStore = options.contactStore ?? null;
+    this.companionId = options.companionId?.trim() || undefined;
+    this.companionAuthorIds = options.companionAuthorIds ?? [];
     this.now = options.now ?? (() => Date.now());
     this.sleepConsolidator = options.sleepConsolidator;
     this.arcWeaver = options.arcWeaver;
@@ -838,7 +1018,13 @@ export class SleeptimeMemoryAgent {
         await this.sleeptimeWikiPass.run(passInput);
         return;
       case 'orientation_review':
-        await this.runOrientationReview(sessionId, action, recentEntries, input.occurredAtMs);
+        await this.runOrientationReview(
+          sessionId,
+          action,
+          recentEntries,
+          input.occurredAtMs,
+          input.activityKind,
+        );
         return;
     }
   }
@@ -848,6 +1034,7 @@ export class SleeptimeMemoryAgent {
     action: Pick<InferredPostTurnAction, 'id' | 'sourceMessageId'>,
     recentEntries: readonly SessionEntry[],
     throughOccurredAtMs: number,
+    activityKind?: ProcessableConversationKind,
   ): Promise<void> {
 
     const coreMemoryScope = coreMemoryChannelScope({ channelId: sessionId });
@@ -885,7 +1072,7 @@ export class SleeptimeMemoryAgent {
       concernStore: this.resolvedConcernStore,
       supportsConcernText: text => countSupportingTranscriptEntries(text, orientationCorpus) > 0,
     });
-    const plan = await this.runReviewConversation({
+    const reviewOutcome = await this.runReviewConversation({
       sessionId,
       actionId: action.id,
       orientBlocks: currentSnapshot.blocks,
@@ -894,13 +1081,25 @@ export class SleeptimeMemoryAgent {
       temporalGrounding: temporalGrounding.prompt,
       throughOccurredAtMs,
     });
-    if (!plan) {
-      log.warn('Sleeptime review produced no usable plan; orientation and memories left untouched', {
+    if (!reviewOutcome.plan) {
+      const errorDetail = `Sleeptime review produced no usable plan after ${MAX_REVIEW_TURNS} turns: ${reviewOutcome.lastError}`;
+      log.error('Sleeptime review exhausted retries without a usable plan; orientation and memories left untouched', {
         sessionId,
         actionId: action.id,
+        attempts: MAX_REVIEW_TURNS,
+        error: reviewOutcome.lastError,
       });
-      throw new Error('Sleeptime review produced no usable plan');
+      this.onReviewFailure?.({
+        sessionId,
+        scopeKey: `session:${sessionId}`,
+        candidateEpisodeIds: dayEpisodes.map(episode => episode.id),
+        stage: 'orientation_review',
+        error: errorDetail,
+        timestamp: this.now(),
+      });
+      throw new Error(errorDetail);
     }
+    const plan = reviewOutcome.plan;
 
     if (plan.concernDecisions.length > 0) {
       if (!this.concernCandidates) {
@@ -952,6 +1151,17 @@ export class SleeptimeMemoryAgent {
     // stamps. Never the sleeptime run clock — this pass runs deferred, so `now()`
     // would post-date the conversation and risk resolving a since-widened epoch.
     const sourceConversationAt = latestSourceEntryTimestamp(recentEntries);
+    const attribution = plan.memoryWrites.length > 0
+      ? await resolveSessionMemoryAttribution({
+          sessionId,
+          ...(activityKind ? { activityKind } : {}),
+          entries: recentEntries,
+          contactStore: this.contactStore,
+          ...(this.companionId ? { localCompanionId: this.companionId } : {}),
+          companionAuthorIds: this.companionAuthorIds,
+        })
+      : { kind: 'none' as const };
+    const sourceMessageIds = recentEntries.map(entry => entry.id);
     let writtenCount = 0;
     let reviewQueuedCount = 0;
     let ungroundedRejectedCount = 0;
@@ -985,6 +1195,8 @@ export class SleeptimeMemoryAgent {
         sessionId,
         actionId: action.id,
         sourceMessageId: action.sourceMessageId,
+        sourceMessageIds,
+        attribution,
         evidenceCount,
         ...(sourceConversationAt !== undefined ? { sourceConversationAt } : {}),
       });
@@ -1119,7 +1331,7 @@ export class SleeptimeMemoryAgent {
     episodes: readonly Episode[];
     temporalGrounding: string;
     throughOccurredAtMs: number;
-  }): Promise<NormalizedSleeptimePlan | null> {
+  }): Promise<{ plan: NormalizedSleeptimePlan } | { plan: null; lastError: string }> {
     const pendingConcerns = this.concernCandidates ? await this.concernCandidates.list() : [];
     const offeredConcernIds = new Set(pendingConcerns.map(candidate => candidate.id));
     const pendingConcernSection = renderPendingConcernCandidatesSection(pendingConcerns, 'sleeptime_plan');
@@ -1143,6 +1355,7 @@ export class SleeptimeMemoryAgent {
       `Return strict JSON with keys "orient" and "memory_writes" (max ${this.maxMemoryWrites}).`,
     ].join('\n');
 
+    let lastError = 'no review turn completed';
     for (let turn = 1; turn <= MAX_REVIEW_TURNS; turn += 1) {
       const response = await this.agent.handleMessage({
         id: `sleeptime-review-${input.actionId}-${String(turn)}`,
@@ -1157,9 +1370,17 @@ export class SleeptimeMemoryAgent {
         },
       });
       try {
-        return normalizeSleeptimePlan(response.content, this.maxMemoryWrites, offeredConcernIds);
+        return {
+          plan: normalizeSleeptimePlan(
+            response.content,
+            this.maxMemoryWrites,
+            offeredConcernIds,
+            input.orientBlocks,
+          ),
+        };
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
+        lastError = reason;
         log.warn('Sleeptime review turn produced an unusable plan; asking again with feedback', {
           sessionId: input.sessionId,
           turn,
@@ -1167,11 +1388,13 @@ export class SleeptimeMemoryAgent {
         });
         prompt = [
           `Your previous reply could not be used: ${reason}`,
-          `Reply again with ONLY the strict JSON object ("orient" and "memory_writes", max ${this.maxMemoryWrites}).`,
+          'Reply again with ONLY a single strict JSON object matching:',
+          `{"orient":{"persona":"...","human":"...","goals":"..."},"memory_writes":[{"text":"...","type":"${VALID_MEMORY_TYPES.join('|')}","importance":0.0,"confidence":0.0,"emotionalValence":0.0,"tags":[],"sensitivity":"${VALID_SENSITIVITY_LEVELS.join('|')}"}]}`,
+          `Constraints: max ${this.maxMemoryWrites} memory_writes; omit or leave blank any orient block you want to keep unchanged${offeredConcernIds.size > 0 ? '; optional "concern_decisions":[{"id":"<offered-id>","decision":"keep"|"let_go"}]' : ''}.`,
         ].join('\n');
       }
     }
-    return null;
+    return { plan: null, lastError };
   }
 
   private async queueMaintenanceReview(

@@ -168,8 +168,19 @@ export function createSchedulerOwnedPostTurnLanes(
           onGateEvent: (event: DeterministicGateEvent): void => {
             void telemetryEventBus.emit('memory.orientation_rewrite.gate', event);
           },
+          onReviewFailure: (failure): void => {
+            telemetryEventBus.emit('memory.sleep_consolidation.failure', failure).catch((error: unknown) => {
+              log.warn('Sleeptime orientation-review failure event emit failed', {
+                sessionId: failure.sessionId,
+                error: String(error),
+              });
+            });
+          },
         }
         : {}),
+      contactStore: runtimeOptions.contactStore ?? null,
+      ...(runtimeOptions.companionId ? { companionId: runtimeOptions.companionId } : {}),
+      ...(runtimeOptions.companionAuthorIds ? { companionAuthorIds: runtimeOptions.companionAuthorIds } : {}),
       sleepConsolidator: runtimeOptions.sleepConsolidator,
       arcWeaver: runtimeOptions.arcWeaver,
       dreamMeaningPass: runtimeOptions.dreamMeaningPass,
@@ -234,6 +245,8 @@ export function createSchedulerOwnedPostTurnLanes(
       scopeClassifier: runtimeOptions.memoryScopeClassifier ?? null,
       ...(runtimeOptions.companionNames ? { companionNames: runtimeOptions.companionNames } : {}),
       ...(runtimeOptions.companionAuthorIds ? { companionAuthorIds: runtimeOptions.companionAuthorIds } : {}),
+      ...(runtimeOptions.companionId ? { companionId: runtimeOptions.companionId } : {}),
+      contactStore: runtimeOptions.contactStore ?? null,
       memoryWriter: runtimeOptions.memoryWriter ?? null,
       ...(telemetryEventBus
         ? {

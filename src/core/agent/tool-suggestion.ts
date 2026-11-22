@@ -1,5 +1,6 @@
 import type { CapabilityAccess } from '../../system/capabilities/gate.js';
 import type { CapabilityToken } from '../../system/capabilities/tokens.js';
+import { isToolDisabledByAccess } from '../../system/capabilities/tool-overrides.js';
 import type { RuntimeToolCatalogEntry } from './tool-catalog.js';
 import type { AdaptiveToolRuntimeState } from './adaptive-tools-telemetry.js';
 import { uniqueStrings } from '../../shared/utils/strings.js';
@@ -355,6 +356,12 @@ function resolveAvailability(input: {
   runtimeState: AdaptiveToolRuntimeState;
   access: CapabilityAccess;
 }): Pick<RankedCandidate, 'availabilityStatus' | 'availabilityNote' | 'missingTokens'> {
+  if (isToolDisabledByAccess(input.access, input.entry.name)) {
+    return {
+      availabilityStatus: 'capability_denied',
+      availabilityNote: 'Disabled by per-companion tool override (disabledTools).',
+    };
+  }
   const missingTokens = resolveActionCapabilities(input.entry, input.action)
     .filter(token => !input.access.has(token));
   if (missingTokens.length > 0) {

@@ -1,6 +1,7 @@
 import type { CapabilityAccess, CapabilityAccessProvider } from './access.js';
 import type { CapabilityTier } from './tier-types.js';
 import type { CapabilityToken } from './tokens.js';
+import { isToolDisabledByAccess } from './tool-overrides.js';
 
 export type RuntimeTier = CapabilityTier;
 export type EligibilityLLMPurpose = 'chat' | 'background' | 'memory' | 'reasoning' | 'import_processing';
@@ -16,6 +17,7 @@ export type EligibilityOperation =
 
 export type EligibilityReasonCode =
   | 'allowed'
+  | 'tool_disabled_by_override'
   | 'missing_capability_tokens'
   | 'tier_below_minimum'
   | 'custom_tier_minimum_unsupported'
@@ -46,9 +48,11 @@ const DEFAULT_LLM_PURPOSE_REQUIREMENTS: Readonly<Record<EligibilityLLMPurpose, E
   import_processing: { requiredTokens: ['memory.write'] },
 };
 
+// All standard (non-custom) tiers carry full baseline capability; legacy
+// `nursery` and `apprentice` owner files satisfy any non-custom minimumTier.
 const TIER_ORDER: Readonly<Record<Exclude<RuntimeTier, 'custom'>, number>> = {
-  nursery: 0,
-  apprentice: 1,
+  nursery: 2,
+  apprentice: 2,
   autonomous: 2,
 };
 
@@ -62,7 +66,9 @@ export class EligibilityDeniedError extends Error {
       ? `missing tokens: ${decision.missingTokens.join(', ')}`
       : decision.reasonCode === 'tier_below_minimum'
         ? `minimum tier: ${decision.minimumTier}`
-        : decision.reasonCode;
+        : decision.reasonCode === 'tool_disabled_by_override'
+          ? 'disabled by per-companion tool override'
+          : decision.reasonCode;
     super(`Eligibility denied for ${descriptor} (${detail})`);
     this.name = 'EligibilityDeniedError';
     this.decision = decision;
@@ -131,6 +137,17 @@ export function evaluateEligibilityDecision(
   }
 
   const requiredTokens = [...new Set((resolvedRequirements.requiredTokens ?? []).filter(Boolean))];
+  if (operation.kind === 'tool.execute' && isToolDisabledByAccess(access, operation.toolName)) {
+    return {
+      allowed: false,
+      reasonCode: 'tool_disabled_by_override',
+      operation,
+      tier,
+      requiredTokens,
+      missingTokens: [],
+      ...(resolvedRequirements.minimumTier ? { minimumTier: resolvedRequirements.minimumTier } : {}),
+    };
+  }
   const missingTokens = requiredTokens.filter(token => !access.has(token));
   if (missingTokens.length > 0) {
     return {

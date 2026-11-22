@@ -2426,7 +2426,8 @@ describe('runtime subject identity', () => {
       now: new Date('2026-03-17T12:00:00Z'),
       templateVariables: {},
       modelId: 'test-model',
-      capabilityTier: 'nursery',
+      capabilityTier: 'custom',
+      capabilityGrantedTokens: new Set(['identity.read', 'memory.write']),
       activeToolCounts: {
         core: 1,
         extended: 0,
@@ -2960,7 +2961,8 @@ describe('runtime subject identity', () => {
       now: new Date('2026-03-17T12:00:00Z'),
       modelId: 'test-model',
       contextWindow: 4096,
-      capabilityTier: 'nursery',
+      capabilityTier: 'custom',
+      capabilityGrantedTokens: new Set(['identity.read', 'memory.write']),
       activeToolCounts: {
         core: 1,
         extended: 0,

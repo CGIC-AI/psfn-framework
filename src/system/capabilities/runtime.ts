@@ -10,6 +10,7 @@ import type { CapabilityAccess, CapabilityGrantSnapshot } from './access.js';
 import { canonicalizeCapabilityTokens } from './shard-derivation.js';
 import { resolveTierCapabilityTokens } from './tiers.js';
 import type { CapabilityToken } from './tokens.js';
+import { canonicalizeDisabledTools } from './tool-overrides.js';
 
 export interface CapabilityRuntimeOptions {
   dataDir: string;
@@ -22,6 +23,7 @@ export class CapabilityRuntime implements CapabilityAccess {
   private readonly filePath: string;
   private currentConfig: CapabilityTierConfig;
   private grantedTokens = new Set<CapabilityToken>();
+  private disabledTools = new Set<string>();
   private lastFileVersion: string | null;
 
   constructor(options: CapabilityRuntimeOptions) {
@@ -34,7 +36,7 @@ export class CapabilityRuntime implements CapabilityAccess {
     });
 
     this.currentConfig = config;
-    this.setGrantedTokens(config);
+    this.applyLoadedConfig(config);
     this.lastFileVersion = this.readFileVersion();
   }
 
@@ -53,12 +55,22 @@ export class CapabilityRuntime implements CapabilityAccess {
     return this.grantedTokens.has(token);
   }
 
+  getDisabledTools(): ReadonlySet<string> {
+    this.ensureFresh();
+    return this.disabledTools;
+  }
+
+  isToolDisabled(toolName: string): boolean {
+    this.ensureFresh();
+    return this.disabledTools.has(toolName);
+  }
+
   /**
    * One atomic authoritative owner snapshot (mus2.1): a single validated disk
-   * read produces the tier, the authoritative custom token list, and the
-   * effective granted tokens together, so the result can never mix two
-   * owner-file versions the way sequenced `getTier()`/`getGrantedTokens()`
-   * calls can. The internal cache is refreshed from that same read.
+   * read produces the tier, the authoritative custom token list, the effective
+   * granted tokens, and the per-companion disabled tool overrides together, so
+   * the result can never mix two owner-file versions the way sequenced getters
+   * can. The internal cache is refreshed from that same read.
    */
   snapshotOwnerGrant(): CapabilityGrantSnapshot {
     const loaded = this.refreshFromDisk();
@@ -67,10 +79,12 @@ export class CapabilityRuntime implements CapabilityAccess {
       resolveTierCapabilityTokens(loaded.tier, loaded.customTokens),
       `tier "${loaded.tier}" grant`,
     );
+    const disabledTools = canonicalizeDisabledTools(loaded.disabledTools, 'disabledTools');
     return Object.freeze({
       tier: loaded.tier,
       customTokens,
       grantedTokens,
+      disabledTools,
     });
   }
 
@@ -79,15 +93,16 @@ export class CapabilityRuntime implements CapabilityAccess {
       seedDir: this.seedDir,
     });
     this.currentConfig = loaded;
-    this.setGrantedTokens(loaded);
+    this.applyLoadedConfig(loaded);
     this.lastFileVersion = this.readFileVersion();
     return loaded;
   }
 
-  private setGrantedTokens(config: CapabilityTierConfig): void {
+  private applyLoadedConfig(config: CapabilityTierConfig): void {
     this.grantedTokens = new Set(
       resolveTierCapabilityTokens(config.tier, config.customTokens),
     );
+    this.disabledTools = new Set(config.disabledTools);
   }
 
   private ensureFresh(): void {

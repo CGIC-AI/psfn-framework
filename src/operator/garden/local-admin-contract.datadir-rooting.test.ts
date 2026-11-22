@@ -279,10 +279,10 @@ describe('createInProcessGardenAdminContract per-companion dataDir rooting (dnll
     expect(notices).toHaveLength(1);
     expect(notices[0]?.content).toContain('[System notice: capability access changed]');
     expect(notices[0]?.content).toContain('from "nursery" to "custom"');
-    expect(notices[0]?.content).toContain('Newly granted: memory.delete.');
-    expect(notices[0]?.content).toContain(
-      'Withdrawn: identity.write.runtime, memory.write, automata.bus.read, automata.bus.write, git.read, issue.read, repl.execute.',
-    );
+    expect(notices[0]?.content).toContain('Newly granted: none.');
+    expect(notices[0]?.content).toContain('Withdrawn:');
+    expect(notices[0]?.content).toContain('identity.write.runtime');
+    expect(notices[0]?.content).toContain('memory.write');
     expect(notices[0]?.content).toContain('not a fault in you');
   });
 
@@ -306,8 +306,8 @@ describe('createInProcessGardenAdminContract per-companion dataDir rooting (dnll
 
     let saveSettled = false;
     const save = services.settings.saveSubConfigJson('capabilities', JSON.stringify({
-      tier: 'apprentice',
-      customTokens: [],
+      tier: 'custom',
+      customTokens: ['identity.read'],
     }));
     void save.finally(() => {
       saveSettled = true;
@@ -345,8 +345,8 @@ describe('createInProcessGardenAdminContract per-companion dataDir rooting (dnll
     const services = buildContract();
 
     const result = await services.settings.saveSubConfigJson('capabilities', JSON.stringify({
-      tier: 'apprentice',
-      customTokens: [],
+      tier: 'custom',
+      customTokens: ['identity.read'],
     }));
 
     expect(result).toMatchObject({

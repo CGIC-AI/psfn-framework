@@ -8,6 +8,7 @@ import type { CapabilityAccess, CapabilityAccessProvider } from './access.js';
 import type { CapabilityToken } from './tokens.js';
 import { resolveToolCapabilityRequirement } from './requirements.js';
 import { evaluateEligibilityDecision } from './eligibility.js';
+import { isToolDisabledByAccess } from './tool-overrides.js';
 import {
   buildRedactedPreToolAudit,
   type PreToolHookGateProvider,
@@ -19,6 +20,12 @@ export interface ToolCapabilityEligibility {
   allowed: boolean;
   requiredTokens: CapabilityToken[];
   missingTokens: CapabilityToken[];
+  /**
+   * True when the tool is explicitly excluded by the companion's
+   * `disabledTools` override in `capability-tier.json`. Refused fail-closed
+   * even for tools that declare no required capability tokens.
+   */
+  disabledByOverride?: boolean;
   /**
    * True when the tool declares no capability-requirement path at all. Such a
    * tool is refused fail-closed rather than treated as unrestricted (02-M2):
@@ -33,6 +40,14 @@ export function evaluateToolCapabilityEligibility(
   params: unknown,
   access: CapabilityAccess,
 ): ToolCapabilityEligibility {
+  if (isToolDisabledByAccess(access, tool.name)) {
+    return {
+      allowed: false,
+      requiredTokens: [],
+      missingTokens: [],
+      disabledByOverride: true,
+    };
+  }
   const resolution = resolveToolCapabilityRequirement(tool, params);
   if (!resolution.declared) {
     return {
@@ -62,6 +77,23 @@ function toTextResult(
     content: [{ type: 'text', text }] satisfies TextContent[],
     details,
   };
+}
+
+function disabledByOverrideResult(
+  toolName: string,
+  tier: CapabilityTier,
+): AgentToolResult<Record<string, unknown>> {
+  return toTextResult(
+    `Capability denied: tool "${toolName}" is disabled for this companion by operator tool override (disabledTools).`,
+    {
+      isError: true,
+      capabilityDenied: true,
+      policyDenied: true,
+      toolDisabledByOverride: true,
+      toolName,
+      tier,
+    },
+  );
 }
 
 function undeclaredResult(
@@ -266,6 +298,7 @@ export function gateToolWithCapabilities<T extends AgentTool<any>>(
       const gateCandidate = async (candidate: unknown): Promise<GatedCandidate> => {
         const eligibility = evaluateToolCapabilityEligibility(tool, candidate, access);
         const transportAllowed = !eligibility.allowed
+          && !eligibility.disabledByOverride
           && !eligibility.undeclared
           && eligibility.missingTokens.length > 0
           && allowDeniedTransport?.({
@@ -275,6 +308,9 @@ export function gateToolWithCapabilities<T extends AgentTool<any>>(
             missingTokens: eligibility.missingTokens,
           }) === true;
         if (!eligibility.allowed && !transportAllowed) {
+          if (eligibility.disabledByOverride) {
+            return { denial: disabledByOverrideResult(tool.name, access.getTier()), commit: null };
+          }
           if (eligibility.undeclared) {
             return { denial: undeclaredResult(tool.name, access.getTier()), commit: null };
           }

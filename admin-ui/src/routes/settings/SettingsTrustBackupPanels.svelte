@@ -8,9 +8,13 @@
   import type { AdminSettingsData } from '$lib/types';
   import type { SettingAuthorityInfo } from '$lib/settings/authority';
   import {
+    COMMON_TOOL_OVERRIDE_NAMES,
     SETTINGS_FIELD_ERRORS_CONTEXT,
     formatSettingOptionLabel,
+    formatTrustCapabilitiesSummary,
     settingControlId,
+    splitCsv,
+    toggleCsvToken,
     type RawEditorKey,
     type SettingsFieldErrorsAccessor,
   } from './settings-page-helpers';
@@ -27,8 +31,9 @@
     rawEditorLabel,
     fieldErrors,
     toggleSection,
-    capabilityTier = $bindable('apprentice'),
+    capabilityTier = $bindable('autonomous'),
     capabilityCustomTokens = $bindable(''),
+    capabilityDisabledTools = $bindable(''),
     backupIntervalHours = $bindable(12),
     backupMaxRotating = $bindable(9),
     backupMaxWeekly = $bindable(2),
@@ -49,6 +54,7 @@
     toggleSection: (id: string) => void;
     capabilityTier: string;
     capabilityCustomTokens: string;
+    capabilityDisabledTools: string;
     backupIntervalHours: number;
     backupMaxRotating: number;
     backupMaxWeekly: number;
@@ -56,6 +62,16 @@
     backupMirrorDir: string;
     backupVerifyRestore: boolean;
   }>();
+
+  let disabledToolSet = $derived(new Set(splitCsv(capabilityDisabledTools)));
+  let trustSummary = $derived(formatTrustCapabilitiesSummary({
+    capabilityTier,
+    capabilityDisabledTools,
+  }));
+
+  function handleToggleDisabledTool(toolName: string): void {
+    capabilityDisabledTools = toggleCsvToken(capabilityDisabledTools, toolName);
+  }
 
   // Publish the validation-error accessor to descendant SettingFieldLabels so
   // curated controls render their field's errors inline (ybm3).
@@ -72,46 +88,98 @@
     onToggle={() => toggleSection('trust')}
   >
     {#snippet summary()}
-      <span class="text-sm text-shadow-500">Tier: {capabilityTier}</span>
+      <span class="text-sm text-shadow-500">{trustSummary}</span>
     {/snippet}
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+    <div class="space-y-5">
+      <div class="rounded-lg border border-bark-200 bg-bark-50/70 p-3.5 text-sm text-shadow-600">
+        Companions run with full baseline capability from day one. Disable specific tools below for this companion; disabled tools are pruned from the model tool list up front and blocked fail-closed at execution time.
+      </div>
+
       <div>
         <SettingFieldLabel
-          label="Capability Tier"
-          keys="capabilityTier"
-          source={getSource('capabilityTier')}
-          forId={settingControlId('capabilityTier')}
+          label="Disabled Tools (Per-Companion Overrides)"
+          keys="disabledTools"
+          source={getSource('disabledTools')}
+          forId={settingControlId('disabledTools')}
           class={labelClass}
         />
-        <select id={settingControlId('capabilityTier')} bind:value={capabilityTier} class={inputClass}>
-          {#each capabilityTierOptions as tier}
-            <option value={tier}>{formatSettingOptionLabel('capabilityTier', tier)}</option>
+        <div class="mb-3 flex flex-wrap gap-2" role="group" aria-label="Quick toggle disabled tools">
+          {#each COMMON_TOOL_OVERRIDE_NAMES as toolName}
+            {@const isDisabled = disabledToolSet.has(toolName)}
+            <button
+              type="button"
+              aria-pressed={isDisabled}
+              onclick={() => handleToggleDisabledTool(toolName)}
+              class="rounded-full border px-2.5 py-1 font-mono text-xs transition-colors {isDisabled
+                ? 'border-wilt-400 bg-wilt-50 text-wilt-700 font-semibold'
+                : 'border-bark-300 bg-bark-50 text-shadow-700 hover:bg-bark-100'}"
+            >
+              {isDisabled ? `× ${toolName}` : toolName}
+            </button>
           {/each}
-        </select>
-        <p class="text-sm text-shadow-500 mt-1">Controls agent autonomy level</p>
-        <SettingAuthorityHint info={getSettingAuthority('capabilityTier')} />
-      </div>
-      <div class="md:col-span-2">
-        <SettingFieldLabel
-          label="Custom Capability Tokens"
-          keys="customTokens"
-          source={getSource('customTokens')}
-          forId={settingControlId('customTokens')}
-          class={labelClass}
-        />
+        </div>
         <input
-          id={settingControlId('customTokens')}
+          id={settingControlId('disabledTools')}
           type="text"
-          bind:value={capabilityCustomTokens}
+          bind:value={capabilityDisabledTools}
           class={inputClass}
-          placeholder="identity.read, git.read"
-          disabled={capabilityTier !== 'custom'}
+          placeholder="shell, web, group_chat"
         />
         <p class="text-sm text-shadow-500 mt-1">
-          Comma-separated capability tokens for the <span class="font-mono">custom</span> tier. Saved to {rawEditorLabel('capabilities')}.
+          Comma-separated tool names to disable for this companion (supports canonical and plugin/channel tools). Saved to {rawEditorLabel('capabilities')}.
         </p>
-        <SettingAuthorityHint info={getSettingAuthority('customTokens')} />
+        <SettingAuthorityHint info={getSettingAuthority('disabledTools')} />
       </div>
+
+      <details
+        class="rounded-lg border border-bark-200 bg-bark-50/50 p-4"
+        open={capabilityTier === 'custom'}
+      >
+        <summary class="cursor-pointer text-sm font-medium text-shadow-700">
+          Advanced / Legacy Capability Mode ({capabilityTier})
+        </summary>
+        <p class="mt-2 text-xs text-shadow-500">
+          Standard tiers (<span class="font-mono">autonomous</span>, legacy <span class="font-mono">nursery</span>/<span class="font-mono">apprentice</span>) all grant full baseline capability. Select <span class="font-mono">custom</span> only when restricting this companion to an explicit token allowlist.
+        </p>
+        <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-5">
+          <div>
+            <SettingFieldLabel
+              label="Capability Mode (Legacy Tier)"
+              keys="capabilityTier"
+              source={getSource('capabilityTier')}
+              forId={settingControlId('capabilityTier')}
+              class={labelClass}
+            />
+            <select id={settingControlId('capabilityTier')} bind:value={capabilityTier} class={inputClass}>
+              {#each capabilityTierOptions as tier}
+                <option value={tier}>{formatSettingOptionLabel('capabilityTier', tier)}</option>
+              {/each}
+            </select>
+            <SettingAuthorityHint info={getSettingAuthority('capabilityTier')} />
+          </div>
+          <div class="md:col-span-2">
+            <SettingFieldLabel
+              label="Custom Capability Tokens"
+              keys="customTokens"
+              source={getSource('customTokens')}
+              forId={settingControlId('customTokens')}
+              class={labelClass}
+            />
+            <input
+              id={settingControlId('customTokens')}
+              type="text"
+              bind:value={capabilityCustomTokens}
+              class={inputClass}
+              placeholder="identity.read, git.read"
+              disabled={capabilityTier !== 'custom'}
+            />
+            <p class="text-sm text-shadow-500 mt-1">
+              Comma-separated capability tokens for the <span class="font-mono">custom</span> mode. Saved to {rawEditorLabel('capabilities')}.
+            </p>
+            <SettingAuthorityHint info={getSettingAuthority('customTokens')} />
+          </div>
+        </div>
+      </details>
     </div>
   </SettingsCollapsibleSection>
 </section>

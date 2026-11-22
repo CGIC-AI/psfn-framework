@@ -239,6 +239,7 @@ export const SETTINGS_OWNER_FILE_BY_FIELD = new Map<string, string>([
   ['episodeSynthesisTurnThreshold', SCHEDULER_FILE_NAME],
   ['capabilityTier', CAPABILITY_TIER_FILE_NAME],
   ['customTokens', CAPABILITY_TIER_FILE_NAME],
+  ['disabledTools', CAPABILITY_TIER_FILE_NAME],
 ]);
 
 const SETTINGS_OWNER_SUBSYSTEM_BY_FIELD = new Map<string, SettingsSubsystemId>([
@@ -263,6 +264,7 @@ const SETTINGS_OWNER_SUBSYSTEM_BY_FIELD = new Map<string, SettingsSubsystemId>([
   ['episodeSynthesisTurnThreshold', 'scheduler'],
   ['capabilityTier', 'capabilities'],
   ['customTokens', 'capabilities'],
+  ['disabledTools', 'capabilities'],
 ]);
 
 export const SETTINGS_BOOLEAN_FIELDS = new Set<string>([
@@ -291,6 +293,7 @@ export const SETTINGS_STRING_ARRAY_FIELDS = new Set<string>([
   'promotedExtendedTools',
   'moaReferenceModels',
   'customTokens',
+  'disabledTools',
   'episodeSynthesisDaytimeSlots',
 ]);
 

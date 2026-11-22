@@ -54,7 +54,7 @@ export const EGRESS_CAPABILITY_MATRIX_CASES = Object.freeze([
       delivery_target: 'matrix:discord:local-sink',
       message: 'Capability-matrix Discord probe; local recording adapter only.',
     },
-    allowedTiers: ['apprentice', 'autonomous'],
+    allowedTiers: ['nursery', 'apprentice', 'autonomous'],
   },
   {
     id: 'external_email_notify_send',
@@ -68,7 +68,7 @@ export const EGRESS_CAPABILITY_MATRIX_CASES = Object.freeze([
       delivery_target: 'matrix@example.invalid',
       message: 'Capability-matrix email probe; local recording adapter only.',
     },
-    allowedTiers: ['apprentice', 'autonomous'],
+    allowedTiers: ['nursery', 'apprentice', 'autonomous'],
   },
   {
     id: 'external_web_notify_brief',
@@ -81,7 +81,7 @@ export const EGRESS_CAPABILITY_MATRIX_CASES = Object.freeze([
       title: 'Local capability matrix',
       topic: 'matrix-local-sink',
     },
-    allowedTiers: ['apprentice', 'autonomous'],
+    allowedTiers: ['nursery', 'apprentice', 'autonomous'],
   },
   {
     id: 'external_companion_notify_consider',
@@ -94,7 +94,7 @@ export const EGRESS_CAPABILITY_MATRIX_CASES = Object.freeze([
       contact_id: 'matrix-contact-local-only',
       reason_summary: 'Capability-matrix companion candidate; no permit or delivery.',
     },
-    allowedTiers: ['autonomous'],
+    allowedTiers: ['nursery', 'apprentice', 'autonomous'],
   },
   {
     id: 'external_mcp_local_call',
@@ -107,7 +107,7 @@ export const EGRESS_CAPABILITY_MATRIX_CASES = Object.freeze([
       tool_name: 'matrix_noop',
       arguments: {},
     },
-    allowedTiers: ['apprentice', 'autonomous'],
+    allowedTiers: ['nursery', 'apprentice', 'autonomous'],
   },
 ] as const satisfies readonly EgressCapabilityMatrixCase[]);
 

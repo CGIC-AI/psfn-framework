@@ -11,6 +11,7 @@ import {
   NO_CAPABILITY_REQUIREMENT,
   withCapabilityRequirement,
 } from '../../../system/capabilities/requirements.js';
+import { gateToolWithCapabilities } from '../../../system/capabilities/gate.js';
 import { createIcpAutonomyCandidateSchedulerMessage } from '../../icp/candidate-scheduler-origin.js';
 import type { IcpInitiationCandidate } from '../../icp/initiation-candidate.js';
 import type { IcpInitiationPermit } from '../../../shared/contracts/icp-autonomy.js';
@@ -35,6 +36,7 @@ function createFacade(
   taskKind: string | null = null,
   grantedTokens: readonly string[] = ['external.companion'],
   configOverrides: Partial<SubstrateConfig> = {},
+  disabledTools: readonly string[] = [],
 ) {
   // pi-agent-core 0.73 replaced Agent.setTools() with assignment to
   // agent.state.tools; the mock records each assignment via setTools so the
@@ -59,14 +61,18 @@ function createFacade(
     callType: 'background' as const,
     purpose: 'agent.turn',
   };
+  const disabledToolSet = new Set(disabledTools);
+  const resolveAccess = () => ({
+    getTier: () => grantedTokens.includes('external.companion') ? 'autonomous' : 'custom',
+    getGrantedTokens: () => new Set(grantedTokens),
+    has: (token: string) => grantedTokens.includes(token),
+    getDisabledTools: () => disabledToolSet,
+    isToolDisabled: (toolName: string) => disabledToolSet.has(toolName),
+  }) as never;
   const facade = new ToolRuntimeFacade({
     config: configOverrides as SubstrateConfig,
     agent: agent as never,
-    resolveCapabilityAccess: () => ({
-      getTier: () => grantedTokens.includes('external.companion') ? 'autonomous' : 'nursery',
-      getGrantedTokens: () => new Set(grantedTokens),
-      has: (token: string) => grantedTokens.includes(token),
-    }) as never,
+    resolveCapabilityAccess: resolveAccess,
     withCapabilityGates: tools => tools,
     withAdaptiveCorrelation: (correlation, purpose) => ({
       ...(correlation ? {
@@ -1530,5 +1536,124 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
 
     const tools = agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
     expect(tools).toEqual([]);
+  });
+
+  it('prunes per-companion disabledTools from LLM turn tools, catalog, tool_search, and toolset while enforcing execute fail-closed', async () => {
+    const shellExecute = vi.fn(async () => ({
+      content: [{ type: 'text', text: 'shell ran' }],
+      details: {},
+    }));
+    const webExecute = vi.fn(async () => ({
+      content: [{ type: 'text', text: 'web ran' }],
+      details: {},
+    }));
+    const disabledSet = new Set(['shell', 'web', 'group_chat']);
+    const access = {
+      getTier: () => 'autonomous' as const,
+      getGrantedTokens: () => new Set(['identity.read', 'memory.write', 'repl.execute', 'external.companion'] as const),
+      has: () => true,
+      getDisabledTools: () => disabledSet,
+      isToolDisabled: (name: string) => disabledSet.has(name),
+    };
+    const setTools = vi.fn((_tools: AgentTool<any>[]): void => undefined);
+    const agent = {
+      setTools,
+      state: {
+        get tools(): AgentTool<any>[] {
+          return setTools.mock.lastCall?.[0] ?? [];
+        },
+        set tools(tools: AgentTool<any>[]) {
+          setTools(tools);
+        },
+      },
+    };
+    const correlation = {
+      turnId: 'turn-disabled-override',
+      requestId: 'req-disabled-override',
+      channelId: 'discord:general',
+      callType: 'chat' as const,
+      purpose: 'agent.turn',
+    };
+    const facade = new ToolRuntimeFacade({
+      config: {} as SubstrateConfig,
+      agent: agent as never,
+      resolveCapabilityAccess: () => access as never,
+      withCapabilityGates: tools => tools.map(tool => gateToolWithCapabilities(tool, () => access as never)),
+      withAdaptiveCorrelation: (_corr, purpose) => ({ purpose }),
+      emitAdaptiveToolDecision: vi.fn(),
+      emitTelemetry: vi.fn(),
+      getActiveTurnCorrelation: () => correlation,
+      getActiveTurnTaskKind: () => null,
+    });
+
+    const memoryTool = makeTool('memory');
+    const webTool = makeTool('web', webExecute);
+    const shellTool = makeTool('shell', shellExecute);
+    const groupChatTool = withCapabilityRequirement(makeTool('group_chat'), NO_CAPABILITY_REQUIREMENT);
+    facade.registerTool(memoryTool, 'core');
+    facade.registerTool(webTool, 'core');
+    facade.registerTool(shellTool, 'extended');
+    facade.registerTool(groupChatTool, 'extended');
+    const toolSearch = facade.createToolSearchTool();
+    const toolset = facade.createToolsetTool();
+    facade.registerTool(toolSearch, 'core');
+    facade.registerTool(toolset, 'core');
+
+    facade.applyActiveToolsToAgentForTurn({
+      id: 'msg-disabled-override',
+      channelId: 'discord:general',
+      channelType: 'discord',
+      authorId: 'user-1',
+      authorName: 'User',
+      content: 'run a command or browse the web',
+      timestamp: new Date('2026-07-30T12:00:00Z'),
+    } as never, undefined, 'chat', correlation, { intent: null });
+
+    const activeNames = (agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>).map(t => t.name);
+    expect(activeNames).toContain('memory');
+    expect(activeNames).not.toContain('web');
+    expect(activeNames).not.toContain('shell');
+    expect(activeNames).not.toContain('group_chat');
+
+    // Catalog, prompt-visible extended list, tool_search, and toolset omit disabled tools.
+    expect(facade.getToolCatalog().core.map(t => t.name)).not.toContain('web');
+    expect(facade.getExtendedTools().map(t => t.name)).not.toContain('shell');
+    expect(facade.getExtendedTools().map(t => t.name)).not.toContain('group_chat');
+
+    const searchResult = await toolSearch.execute('call-search', { query: 'shell' });
+    expect(fromAny(searchResult.details).toolSearch.matches).toEqual([]);
+
+    const describeResult = await toolset.execute('call-describe', { action: 'describe', tool: 'web' });
+    expect(JSON.parse(fromAny(describeResult.content[0]).text).tools).toEqual([]);
+
+    const pinResult = await facade.addPromotedExtendedTool('shell');
+    expect(pinResult.ok).toBe(false);
+    expect(pinResult.message).toContain('disabled by per-companion tool override');
+
+    // Direct execute on a gated disabled tool still fails closed.
+    const gatedShell = gateToolWithCapabilities(shellTool, () => access as never);
+    const directDenied = await gatedShell.execute('call-direct-shell', { action: 'exec', command: 'ls' });
+    expect(shellExecute).not.toHaveBeenCalled();
+    expect(fromAny(directDenied.details).toolDisabledByOverride).toBe(true);
+
+    // Re-enabling the tool via hot-reload immediately restores it on refreshActiveTools().
+    disabledSet.delete('shell');
+    facade.refreshActiveTools();
+    const restoredNames = (agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>).map(t => t.name);
+    expect(restoredNames).toContain('shell');
+    expect(restoredNames).not.toContain('web');
+  });
+
+  it('blocks ICP candidate notify scope when notify is disabled by override', async () => {
+    const { facade } = createFacade(null, ['external.companion'], {}, ['notify']);
+    facade.registerTool(withCapabilityRequirement(
+      makeTool('notify'),
+      'external.companion',
+    ), 'extended');
+
+    await expect(facade.runWithIcpAutonomyCandidateNotifyScope(
+      makeCandidateMessage(),
+      async () => undefined,
+    )).rejects.toThrow('not capability authorized');
   });
 });

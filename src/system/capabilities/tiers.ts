@@ -1,5 +1,5 @@
 import type { CapabilityTier } from './tier-types.js';
-import type { CapabilityToken } from './tokens.js';
+import { CAPABILITY_TOKENS, type CapabilityToken } from './tokens.js';
 
 export const CAPABILITY_TIER_VALUES: readonly CapabilityTier[] = [
   'nursery',
@@ -8,77 +8,21 @@ export const CAPABILITY_TIER_VALUES: readonly CapabilityTier[] = [
   'custom',
 ] as const;
 
-const NURSERY_TOKENS: readonly CapabilityToken[] = [
-  'identity.read',
-  'identity.write.runtime',
-  'memory.write',
-  // The tier token alone cannot authorize a Bus mutation. Runtime composition
-  // separately binds an owner-eligible automata class plus authoritative
-  // companion/run/task scope, and the canonical store rechecks that scope.
-  'automata.bus.read',
-  'automata.bus.write',
-  'git.read',
-  'issue.read',
-  'repl.execute',
-];
-
-const APPRENTICE_TOKENS: readonly CapabilityToken[] = [
-  'identity.read',
-  'internal.read',
-  'identity.write.runtime',
-  'memory.write',
-  'automata.bus.read',
-  'automata.bus.write',
-  'external.discord',
-  'external.email',
-  'external.web',
-  'external.mcp',
-  'git.read',
-  'issue.read',
-  'issue.write',
-  'repl.execute',
-  'shard.spawn',
-  // world.read grants live world perception (perceive/list) from apprentice up.
-  // world.control is deliberately WITHHELD from every default tier: effector
-  // actuation ships staged-off (see WORLD_CONTROL_RUNTIME_ENABLED) and must be
-  // granted by an explicit tier/custom-token change once proven end-to-end.
-  'world.read',
-];
-
-const AUTONOMOUS_TOKENS: readonly CapabilityToken[] = [
-  'identity.read',
-  'internal.read',
-  'identity.write.runtime',
-  'identity.write.base',
-  'identity.write.operator',
-  'memory.write',
-  'memory.delete',
-  'automata.bus.read',
-  'automata.bus.write',
-  'external.discord',
-  'external.email',
-  'external.web',
-  'external.companion',
-  'external.mcp',
-  'git.read',
-  'git.write',
-  'issue.read',
-  'issue.write',
-  'issue.close',
-  'lifecycle.restart',
-  'lifecycle.rebuild',
-  'repl.execute',
-  'shard.spawn',
-  'world.read',
-  // Reversible, registry-bound world actuation. The world tool and gateway
-  // independently restrict unattended control to safe lighting operations.
-  'world.control',
-];
+/**
+ * Full baseline capability grant shared by all non-custom tiers.
+ *
+ * Legacy progression tiers (`nursery`, `apprentice`) are retained in the
+ * schema union strictly for backward compatibility with existing on-disk
+ * `capability-tier.json` files; every standard companion receives full
+ * baseline capability from day one, while per-companion tool exclusions live
+ * in `disabledTools` and explicit narrow token sets continue to use `custom`.
+ */
+const FULL_CAPABILITY_TOKENS: readonly CapabilityToken[] = CAPABILITY_TOKENS;
 
 export const CAPABILITY_TIER_DEFAULTS: Readonly<Record<Exclude<CapabilityTier, 'custom'>, readonly CapabilityToken[]>> = {
-  nursery: NURSERY_TOKENS,
-  apprentice: APPRENTICE_TOKENS,
-  autonomous: AUTONOMOUS_TOKENS,
+  nursery: FULL_CAPABILITY_TOKENS,
+  apprentice: FULL_CAPABILITY_TOKENS,
+  autonomous: FULL_CAPABILITY_TOKENS,
 };
 
 export function isCapabilityTier(value: unknown): value is CapabilityTier {
@@ -87,7 +31,7 @@ export function isCapabilityTier(value: unknown): value is CapabilityTier {
 
 export function normalizeCapabilityTier(
   value: unknown,
-  fallback: CapabilityTier = 'nursery',
+  fallback: CapabilityTier = 'autonomous',
 ): CapabilityTier {
   return isCapabilityTier(value) ? value : fallback;
 }

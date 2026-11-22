@@ -383,8 +383,43 @@ export function fmtMs(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
-function splitCsv(str: string): string[] {
+export function splitCsv(str: string): string[] {
   return str.split(',').map(s => s.trim()).filter(Boolean);
+}
+
+export const COMMON_TOOL_OVERRIDE_NAMES = [
+  'shell',
+  'web',
+  'world',
+  'notify',
+  'repo',
+  'fs',
+  'beads',
+  'subagent',
+  'mcp',
+  'vault',
+  'generate_image',
+  'selfie_create',
+  'analysis_workbench',
+] as const;
+
+export function toggleCsvToken(csv: string, token: string): string {
+  const current = [...new Set(splitCsv(csv))];
+  const next = current.includes(token)
+    ? current.filter((entry) => entry !== token)
+    : [...current, token];
+  return next.join(', ');
+}
+
+export function formatTrustCapabilitiesSummary(
+  state: Pick<SettingsSimpleFormState, 'capabilityTier' | 'capabilityDisabledTools'>,
+): string {
+  const disabledCount = [...new Set(splitCsv(state.capabilityDisabledTools))].length;
+  const modeLabel = state.capabilityTier === 'custom' ? 'Custom tokens' : 'Full capability';
+  if (disabledCount === 0) {
+    return `${modeLabel} · all tools enabled`;
+  }
+  return `${modeLabel} · ${disabledCount} tool${disabledCount === 1 ? '' : 's'} disabled`;
 }
 
 export function normalizeDiscordListenWindowSeconds(value: number): number {
@@ -410,6 +445,7 @@ export type SchedulerEditorConfig = {
 export type CapabilitiesEditorConfig = {
   tier?: string;
   customTokens?: string[];
+  disabledTools?: string[];
 };
 
 export interface SettingsSimpleFormState {
@@ -432,6 +468,7 @@ export interface SettingsSimpleFormState {
   webFetchTlsCaCertPaths: string;
   capabilityTier: string;
   capabilityCustomTokens: string;
+  capabilityDisabledTools: string;
   extractionInterval: number;
   compactionEmotionalSalienceThresholdPct: number;
   backgroundMaintenanceIntervalMs: number;
@@ -495,7 +532,7 @@ export function buildAdvancedSettingsSections(input: {
     profile: () => state.profileSynthesisEnabled ? `Enabled, refresh ${Math.round(state.profileSynthesisRefreshIntervalMs / 60000)}min` : 'Disabled',
     'analysis-workbench': () => `Max iterations: ${state.analysisWorkbenchMaxIterations}, Tokens: ${state.analysisWorkbenchMaxTokens.toLocaleString()}, Wall time: ${Math.round(state.analysisWorkbenchMaxWallTimeMs / 1000)}s`,
     compositional: () => input.compositionalPolicySummary,
-    trust: () => `Tier: ${state.capabilityTier}`,
+    trust: () => formatTrustCapabilitiesSummary(state),
     llm: () => `Max retries: ${state.retryMaxAttempts}, Base delay: ${state.retryBaseDelayMs}ms`,
     import: () => `Route: ${state.importRouteMode}${state.importStrictPolicy ? ' (strict)' : ''}`,
     fetch: () => {
@@ -551,8 +588,9 @@ export function populateSimpleSettingsForm(settingsData: AdminSettingsData): Set
     webFetchDomainAllowlist: Array.isArray(config.webFetchDomainAllowlist) ? config.webFetchDomainAllowlist.join(', ') : '',
     webFetchAllowInternalNetwork: Boolean(config.webFetchAllowInternalNetwork),
     webFetchTlsCaCertPaths: Array.isArray(config.webFetchTlsCaCertPaths) ? config.webFetchTlsCaCertPaths.join(', ') : '',
-    capabilityTier: String(capabilities?.tier ?? 'apprentice'),
+    capabilityTier: String(capabilities?.tier ?? 'autonomous'),
     capabilityCustomTokens: Array.isArray(capabilities?.customTokens) ? capabilities.customTokens.join(', ') : '',
+    capabilityDisabledTools: Array.isArray(capabilities?.disabledTools) ? capabilities.disabledTools.join(', ') : '',
     extractionInterval: Number(config.extractionInterval ?? 5),
     compactionEmotionalSalienceThresholdPct: Number(config.compactionEmotionalSalienceThresholdPct ?? 75),
     backgroundMaintenanceIntervalMs: Number(
@@ -628,6 +666,7 @@ export function syncCuratedSettingsField(
     case 'webFetchTlsCaCertPaths': return { webFetchTlsCaCertPaths: stringFromConfigValue(value) };
     case 'capabilityTier': return { capabilityTier: stringFromConfigValue(value) };
     case 'customTokens': return { capabilityCustomTokens: stringFromConfigValue(value) };
+    case 'disabledTools': return { capabilityDisabledTools: stringFromConfigValue(value) };
     case 'extractionInterval': return { extractionInterval: numberFromConfigValue(value, current.extractionInterval) };
     case 'compactionEmotionalSalienceThresholdPct': return { compactionEmotionalSalienceThresholdPct: numberFromConfigValue(value, current.compactionEmotionalSalienceThresholdPct) };
     case 'backgroundMaintenanceIntervalMs': return {
@@ -796,15 +835,20 @@ export function buildBackupSettingsPayload(
 
 export function buildCapabilitiesSettingsPayload(
   current: CapabilitiesEditorConfig,
-  state: Pick<SettingsSimpleFormState, 'capabilityTier' | 'capabilityCustomTokens'>,
+  state: Pick<
+    SettingsSimpleFormState,
+    'capabilityTier' | 'capabilityCustomTokens' | 'capabilityDisabledTools'
+  >,
 ): Record<string, unknown> {
   const customTokens = state.capabilityTier === 'custom'
     ? splitCsv(state.capabilityCustomTokens)
     : (Array.isArray(current.customTokens) ? current.customTokens : []);
+  const disabledTools = [...new Set(splitCsv(state.capabilityDisabledTools))];
   return {
     ...current,
     tier: state.capabilityTier,
     customTokens,
+    disabledTools,
   };
 }
 
@@ -926,6 +970,7 @@ export const CURATED_SETTINGS_FIELD_KEYS: ReadonlySet<string> = new Set<string>(
   // Trust & Backup panel
   'capabilityTier',
   'customTokens',
+  'disabledTools',
   'intervalHours',
   'maxRotatingBackups',
   'maxWeeklyBackups',

@@ -12,12 +12,16 @@ import { resolveTierCapabilityTokens } from './tiers.js';
 function accessForTier(
   tier: CapabilityTier,
   customTokens: CapabilityToken[] = [],
+  disabledTools: string[] = [],
 ): CapabilityAccess {
   const granted = new Set(resolveTierCapabilityTokens(tier, customTokens));
+  const disabled = new Set(disabledTools);
   return {
     getTier: () => tier,
     getGrantedTokens: () => granted,
     has: (token) => granted.has(token),
+    getDisabledTools: () => disabled,
+    isToolDisabled: (toolName) => disabled.has(toolName),
   };
 }
 
@@ -39,31 +43,49 @@ describe('EligibilityGate', () => {
     expect(decision.missingTokens).toEqual(['memory.write']);
   });
 
-  it('enforces minimum tier when configured', () => {
+  it('grants full baseline capability across standard legacy tiers while still rejecting custom for minimumTier', () => {
     const operation: EligibilityOperation = {
       kind: 'scheduler.task',
       taskId: 'task-1',
       taskName: 'Task 1',
       taskType: 'every',
     };
-    const decision = evaluateEligibilityDecision(
-      accessForTier('nursery'),
+    for (const tier of ['nursery', 'apprentice', 'autonomous'] as const) {
+      const decision = evaluateEligibilityDecision(
+        accessForTier(tier),
+        operation,
+        { minimumTier: 'autonomous' },
+      );
+      expect(decision.allowed).toBe(true);
+      expect(decision.reasonCode).toBe('allowed');
+    }
+
+    const customDecision = evaluateEligibilityDecision(
+      accessForTier('custom', ['memory.write']),
       operation,
       { minimumTier: 'apprentice' },
     );
-    expect(decision.allowed).toBe(false);
-    expect(decision.reasonCode).toBe('tier_below_minimum');
-    expect(decision.minimumTier).toBe('apprentice');
+    expect(customDecision.allowed).toBe(false);
+    expect(customDecision.reasonCode).toBe('custom_tier_minimum_unsupported');
+    expect(customDecision.minimumTier).toBe('apprentice');
   });
 
-  it('allows tool execution when required tokens are granted', () => {
-    const decision = evaluateEligibilityDecision(
-      accessForTier('apprentice'),
+  it('allows tool execution when required tokens are granted and denies when disabled by override', () => {
+    const allowed = evaluateEligibilityDecision(
+      accessForTier('autonomous'),
       { kind: 'tool.execute', toolName: 'memory' },
       { requiredTokens: ['memory.write'] },
     );
-    expect(decision.allowed).toBe(true);
-    expect(decision.reasonCode).toBe('allowed');
+    expect(allowed.allowed).toBe(true);
+    expect(allowed.reasonCode).toBe('allowed');
+
+    const disabled = evaluateEligibilityDecision(
+      accessForTier('autonomous', [], ['shell']),
+      { kind: 'tool.execute', toolName: 'shell' },
+      { requiredTokens: ['repl.execute'] },
+    );
+    expect(disabled.allowed).toBe(false);
+    expect(disabled.reasonCode).toBe('tool_disabled_by_override');
   });
 
   it('fails closed for plugin activation without explicit eligibility requirements', () => {
@@ -77,14 +99,21 @@ describe('EligibilityGate', () => {
   });
 
   it('enforces explicit eligibility requirements for plugin actions', () => {
-    const decision = evaluateEligibilityDecision(
-      accessForTier('nursery'),
+    const customDenied = evaluateEligibilityDecision(
+      accessForTier('custom', ['identity.read']),
       { kind: 'plugin.action', pluginType: 'tts', pluginId: 'plugin-test', action: 'synthesize_stream' },
       { requiredTokens: ['external.web'] },
     );
 
-    expect(decision.allowed).toBe(false);
-    expect(decision.reasonCode).toBe('missing_capability_tokens');
-    expect(decision.missingTokens).toEqual(['external.web']);
+    expect(customDenied.allowed).toBe(false);
+    expect(customDenied.reasonCode).toBe('missing_capability_tokens');
+    expect(customDenied.missingTokens).toEqual(['external.web']);
+
+    const standardAllowed = evaluateEligibilityDecision(
+      accessForTier('nursery'),
+      { kind: 'plugin.action', pluginType: 'tts', pluginId: 'plugin-test', action: 'synthesize_stream' },
+      { requiredTokens: ['external.web'] },
+    );
+    expect(standardAllowed.allowed).toBe(true);
   });
 });

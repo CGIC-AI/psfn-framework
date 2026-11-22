@@ -548,7 +548,7 @@ describe('AdminServer JSON API routes', () => {
       refreshModels: refreshModelsSpy,
       refreshCapabilities: refreshCapabilitiesSpy,
     };
-    testConfig.capabilityTier = 'nursery';
+    testConfig.capabilityTier = 'autonomous';
     testConfig.dataDir = tempDir;
     testConfig.characterCardPath = join(tempDir, 'character.json');
     writeFileSync(testConfig.characterCardPath, `${JSON.stringify(testCard, null, 2)}\n`, 'utf-8');

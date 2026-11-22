@@ -159,11 +159,13 @@ export type CapabilityTierChangeHandler = (
 function toCapabilityGrantSnapshot(input: {
   tier: CapabilityGrantSnapshot['tier'];
   customTokens: readonly CapabilityToken[];
+  disabledTools?: readonly string[];
 }): CapabilityGrantSnapshot {
   return {
     tier: input.tier,
     customTokens: [...input.customTokens],
     grantedTokens: resolveTierCapabilityTokens(input.tier, input.customTokens),
+    ...(input.disabledTools ? { disabledTools: [...input.disabledTools] } : {}),
   };
 }
 
@@ -298,6 +300,7 @@ export async function applyAdminCapabilityTierMutation(options: {
     const saved = configStore.saveCapabilityTier(payload);
     const current = toCapabilityGrantSnapshot(saved);
     config.capabilityTier = saved.tier;
+    config.disabledTools = [...saved.disabledTools];
     const divergences: AdminSettingsDivergence[] = [];
     const refreshDivergence = refreshCapabilities(config);
     if (refreshDivergence) divergences.push(refreshDivergence);

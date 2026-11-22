@@ -33,6 +33,7 @@ const baseData = {
     capabilities: {
       tier: 'custom',
       customTokens: ['identity.read', 'memory.read', 'memory.write', 'audit.read'],
+      disabledTools: ['shell', 'world'],
     },
   },
   voiceProviders: {
@@ -69,6 +70,12 @@ const baseSchema = {
       ownerFile: 'capability-tier.json',
       type: 'string_array',
     },
+    disabledTools: {
+      key: 'disabledTools',
+      ownerSubsystem: 'capabilities',
+      ownerFile: 'capability-tier.json',
+      type: 'string_array',
+    },
     sessionHistoryBudgetPct: {
       key: 'sessionHistoryBudgetPct',
       ownerSubsystem: 'runtime',
@@ -92,6 +99,13 @@ test('custom capability tokens authority shows dormant/active precedence', () =>
   assert.equal(info.sourceLabel, 'capability-tier.json');
   assert.equal(info.effectiveValue, 'identity.read, memory.read, memory.write +1 more');
   assert.match(info.precedence ?? '', /current tier is custom/);
+});
+
+test('disabled tools authority reports capability-tier.json ownership and active exclusions', () => {
+  const info = resolveSettingAuthority(baseData, baseSchema, 'disabledTools');
+  assert.equal(info.sourceLabel, 'capability-tier.json');
+  assert.equal(info.effectiveValue, 'shell, world');
+  assert.match(info.detail, /capability-tier\.json > disabledTools/);
 });
 
 test('generic runtime setting authority falls back to owner file guidance', () => {

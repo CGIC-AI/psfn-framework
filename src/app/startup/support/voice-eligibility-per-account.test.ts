@@ -24,7 +24,7 @@ import { buildConfiguredTtsConnectors } from '../../../channels/discord/voice-pr
 // gateway root is higher-tier. Uses the real per-companion resolver.
 
 const COMPANION_A = 'companion-a'; // autonomous: external.web granted
-const COMPANION_B = 'companion-b'; // nursery: external.web withheld
+const COMPANION_B = 'companion-b'; // custom without external.web: withheld
 
 const cleanups: Array<() => void> = [];
 
@@ -35,10 +35,15 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function makeTierDir(root: string, name: string, tier: 'autonomous' | 'nursery'): string {
+function makeTierDir(
+  root: string,
+  name: string,
+  tier: 'autonomous' | 'custom',
+  customTokens: string[] = [],
+): string {
   const dir = join(root, name);
   mkdirSync(dir, { recursive: true });
-  saveCapabilityTierConfig(dir, { tier, customTokens: [] });
+  saveCapabilityTierConfig(dir, { tier, customTokens });
   return dir;
 }
 
@@ -47,7 +52,7 @@ function makePerCompanionEligibilityGate(input: { multiCompanion: boolean }) {
   cleanups.push(() => rmSync(root, { recursive: true, force: true }));
 
   const dirA = makeTierDir(root, COMPANION_A, 'autonomous');
-  const dirB = makeTierDir(root, COMPANION_B, 'nursery');
+  const dirB = makeTierDir(root, COMPANION_B, 'custom', ['identity.read']);
   // The gateway ROOT is autonomous (grants external.web) — the fleet-wide
   // "leaky" baseline the bug fell back to for every account.
   const baseDir = makeTierDir(root, 'gateway-root', 'autonomous');
@@ -158,7 +163,7 @@ describe('per-account Discord voice eligibility resolves the account companion t
     expect(denied).toBeInstanceOf(EligibilityDeniedError);
     const decision = (denied as EligibilityDeniedError).decision;
     expect(decision.missingTokens).toContain('external.web');
-    expect(decision.tier).toBe('nursery');
+    expect(decision.tier).toBe('custom');
     expect(stt.createConnector).not.toHaveBeenCalled();
 
     // Discord's TTS builder disables voice by yielding no connectors for the

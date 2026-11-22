@@ -104,6 +104,10 @@ import { CapabilityRuntime } from '../../system/capabilities/runtime.js';
 import type { CapabilityGrantSnapshot } from '../../system/capabilities/access.js';
 import { normalizeCapabilityTier, resolveTierCapabilityTokens } from '../../system/capabilities/tiers.js';
 import type { CapabilityToken } from '../../system/capabilities/tokens.js';
+import {
+  canonicalizeDisabledTools,
+  getDisabledToolsFromAccess,
+} from '../../system/capabilities/tool-overrides.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
   type GatewayToolMetadataCoverage,
@@ -1052,16 +1056,21 @@ export class SubstrateAgent {
       // Explicit access is an immutable launch artifact: it never re-reads
       // disk, and owner-file churn must not widen or narrow it (mus2.1).
       this.config.capabilityTier = this.explicitCapabilityAccess.getTier();
+      this.config.disabledTools = [...getDisabledToolsFromAccess(this.explicitCapabilityAccess)];
+      this.toolRuntimeFacade.refreshActiveTools();
       return;
     }
 
     if (this.capabilityRuntime) {
       const refreshed = this.capabilityRuntime.refreshFromDisk();
       this.config.capabilityTier = refreshed.tier;
+      this.config.disabledTools = [...refreshed.disabledTools];
+      this.toolRuntimeFacade.refreshActiveTools();
       return;
     }
 
     this.config.capabilityTier = this.resolveCapabilityTier();
+    this.toolRuntimeFacade.refreshActiveTools();
   }
 
   private resolveCapabilityTier(): CapabilityTier {
@@ -1074,28 +1083,40 @@ export class SubstrateAgent {
 
     const tier = this.resolveCapabilityTier();
     const grantedTokens = new Set(resolveTierCapabilityTokens(tier));
+    const disabledTools = new Set(
+      this.config.disabledTools
+        ? canonicalizeDisabledTools(this.config.disabledTools, 'disabledTools')
+        : [],
+    );
     return {
       getTier: () => tier,
       getGrantedTokens: () => grantedTokens,
       has: (token: CapabilityToken) => grantedTokens.has(token),
+      getDisabledTools: () => disabledTools,
+      isToolDisabled: (toolName: string) => disabledTools.has(toolName),
     };
   }
 
   /**
-   * Capture the tier and effective grant once for prompt assembly. The mutable
-   * disk-backed runtime uses its authoritative atomic snapshot; the other
-   * access variants are immutable for their lifetime, so copying their one
-   * resolved grant preserves the same prompt/tool-gate semantics.
+   * Capture the tier, effective grant, and tool overrides once for prompt
+   * assembly. The mutable disk-backed runtime uses its authoritative atomic
+   * snapshot; the other access variants are immutable for their lifetime, so
+   * copying their one resolved grant preserves the same prompt/tool-gate
+   * semantics.
    */
-  private snapshotCapabilityGrant(): Pick<CapabilityGrantSnapshot, 'tier' | 'grantedTokens'> {
+  private snapshotCapabilityGrant(): Pick<CapabilityGrantSnapshot, 'tier' | 'grantedTokens' | 'disabledTools'> {
     if (!this.explicitCapabilityAccess && this.capabilityRuntime) {
       return this.capabilityRuntime.snapshotOwnerGrant();
     }
 
     const access = this.resolveCapabilityAccess();
+    const disabledTools = Object.freeze(
+      [...getDisabledToolsFromAccess(access)].sort((left, right) => left.localeCompare(right)),
+    );
     return Object.freeze({
       tier: access.getTier(),
       grantedTokens: Object.freeze([...access.getGrantedTokens()]),
+      ...(disabledTools.length > 0 ? { disabledTools } : {}),
     });
   }
 

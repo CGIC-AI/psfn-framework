@@ -247,11 +247,11 @@ describe('ShardManager digest-bound capability launches', () => {
       error: /does not grant shard\.spawn/,
     },
     {
-      name: 'a nursery parent without shard.spawn',
+      name: 'a custom parent with no granted tokens',
       snapshotParentCapabilityGrant: () => ({
-        tier: 'nursery',
+        tier: 'custom',
         customTokens: [],
-        grantedTokens: [...CAPABILITY_TIER_DEFAULTS.nursery],
+        grantedTokens: [],
       }) as CapabilityGrantSnapshot,
       error: /does not grant shard\.spawn/,
     },

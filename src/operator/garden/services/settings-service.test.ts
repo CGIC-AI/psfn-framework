@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { loadBackupConfig } from '../../../system/config/backup-config.js';
 import { loadCapabilityTierConfig } from '../../../system/config/capability-tier-config.js';
+import { resolveTierCapabilityTokens } from '../../../system/capabilities/tiers.js';
 import { loadChargePolicyConfig } from '../../../system/config/charge-policy-config.js';
 import { loadModelsConfig } from '../../../system/config/models-config.js';
 import { loadProvidersConfig } from '../../../system/config/providers-config.js';
@@ -1049,34 +1050,44 @@ describe('AdminSettingsDataService', () => {
     }));
 
     expect(result.ok).toBe(true);
+    const fullTokens = resolveTierCapabilityTokens('autonomous');
     expect(onCapabilityTierChanged).toHaveBeenCalledWith({
       previous: {
-        tier: 'nursery',
-        grantedTokens: [
-          'identity.read',
-          'identity.write.runtime',
-          'memory.write',
-          'automata.bus.read',
-          'automata.bus.write',
-          'git.read',
-          'issue.read',
-          'repl.execute',
-        ],
+        tier: 'autonomous',
+        grantedTokens: fullTokens,
       },
       current: {
         tier: 'custom',
         grantedTokens: ['identity.read', 'memory.delete'],
       },
-      granted: ['memory.delete'],
-      withdrawn: [
-        'identity.write.runtime',
-        'memory.write',
-        'automata.bus.read',
-        'automata.bus.write',
-        'git.read',
-        'issue.read',
-        'repl.execute',
-      ],
+      granted: [],
+      withdrawn: fullTokens.filter(token => token !== 'identity.read' && token !== 'memory.delete'),
+    });
+  });
+
+  it('persists disabledTools overrides via capabilities owner save and syncs live config', async () => {
+    const root = makeTempDir();
+    const config = buildConfig(root);
+    const onCapabilityTierChanged = vi.fn<CapabilityTierChangeHandler>();
+    const service = buildService(config, undefined, onCapabilityTierChanged);
+
+    const result = await service.saveSubConfigJson('capabilities', JSON.stringify({
+      tier: 'autonomous',
+      customTokens: [],
+      disabledTools: ['shell', 'web', 'group_chat'],
+    }));
+
+    expect(result.ok).toBe(true);
+    expect(config.disabledTools).toEqual(['shell', 'web', 'group_chat']);
+    expect(onCapabilityTierChanged).toHaveBeenCalledWith(expect.objectContaining({
+      disabledToolsAdded: ['shell', 'web', 'group_chat'],
+    }));
+
+    const settingsData = await service.getSettingsData();
+    expect(settingsData.editors.capabilities).toEqual({
+      tier: 'autonomous',
+      customTokens: [],
+      disabledTools: ['shell', 'web', 'group_chat'],
     });
   });
 

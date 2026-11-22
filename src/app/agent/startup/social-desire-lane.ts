@@ -177,8 +177,8 @@ export function registerSocialDesireLane(deps: SocialDesireLaneDeps): SocialDesi
         },
       });
       // Fail-closed delivery-channel policy: companion peers route to
-      // their canonical companion DM (ICP candidate path); primary humans
-      // deliver to the approved heartbeat DM; other accumulating-tier humans
+      // their canonical companion DM (ICP candidate path); primary-trust contacts
+      // deliver to the approved heartbeat DM; other accumulating-tier contacts
       // deliver only to their own verified direct DM channel.
       const resolveDeliveryChannel = async (contactId: string): Promise<SocialDesireDeliveryChannel | null> => {
         const contact = await contactStore.getById(contactId);

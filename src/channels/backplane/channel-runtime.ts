@@ -6,7 +6,9 @@ import { ApiServer, type ApiServerConfig } from '../api/server.js';
 import {
   DiscordAdapter,
   type DiscordAdapterAccountBinding,
+  type DiscordAuthorTrustResolution,
   type DiscordPrimaryUserBinding,
+  type DiscordTrustedUserBinding,
 } from '../discord/adapter.js';
 import type {
   DiscordChannelConfig,
@@ -45,6 +47,10 @@ export interface DiscordChannelAdapterFactoryOptions {
   account?: DiscordAdapterAccountBinding;
   allowedBotUserIds?: string[];
   primaryUsers?: readonly DiscordPrimaryUserBinding[];
+  trustedUsers?: readonly DiscordTrustedUserBinding[];
+  resolveAuthorTrust?: (
+    userId: string,
+  ) => Promise<DiscordAuthorTrustResolution | undefined> | DiscordAuthorTrustResolution | undefined;
   /**
    * jp36.3.1.2: per-guild custom-emoji meanings for this adapter. On the
    * multi-account path this is supplied explicitly (per account) since
@@ -77,6 +83,8 @@ export function createDiscordChannelAdapterFactoryEntry(
         ...(options.eligibilityGate ? { eligibilityGate: options.eligibilityGate } : {}),
         ...(allowedBotUserIds ? { allowedBotUserIds } : {}),
         ...(options.primaryUsers ? { primaryUsers: options.primaryUsers } : {}),
+        ...(options.trustedUsers ? { trustedUsers: options.trustedUsers } : {}),
+        ...(options.resolveAuthorTrust ? { resolveAuthorTrust: options.resolveAuthorTrust } : {}),
         ...(customEmojiMeanings ? { customEmojiMeanings } : {}),
         ...(options.personalFilesDir ? { personalFilesDir: options.personalFilesDir } : {}),
         ...(options.intakeScreening ? { intakeScreening: options.intakeScreening } : {}),

@@ -138,6 +138,21 @@ describe('PromptRegistryStore', () => {
     expect(prompt).toContain('{target_contact}');
     expect(prompt).toContain('Do not infer aliases for the target from names merely mentioned');
     expect(prompt).toContain('If the target mentioned or discussed another person');
+    expect(prompt).toContain('"roleType":"employment|education|family|community|creative"');
+    expect(prompt).toContain('validFrom');
+  });
+
+  it('aligns biography candidate synthesis prompt with exact claim-kinds schemas', () => {
+    const prompt = getDefaultPromptText(BIOGRAPHY_CANDIDATE_SYNTHESIS_PROMPT_KEY);
+
+    expect(prompt).toContain('do NOT include schemaVersion on name, nickname, or relationship');
+    expect(prompt).toContain('{"kind":"name","name":"...","role":"primary|alias"}');
+    expect(prompt).toContain('{"kind":"nickname","nickname":"...","scope":"self|relational"}');
+    expect(prompt).toContain('{"kind":"relationship","relationshipType":"..."}');
+    expect(prompt).toContain('"roleType":"employment|education|family|community|creative"');
+    expect(prompt).toContain('"domain":"food|media|activity|environment|communication"');
+    expect(prompt).toContain('"polarity":"likes|dislikes|prefers|avoids"');
+    expect(prompt).toContain('"languageType":"phrase|ritual|reference|signal"');
   });
 
   it('seeds the sleeptime orientation prompt without assigning companion identity or mood', () => {

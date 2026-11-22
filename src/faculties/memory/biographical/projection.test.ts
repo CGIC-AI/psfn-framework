@@ -131,18 +131,37 @@ describe('reviewed companion self roles and preferences', () => {
       .toEqual([`biographical:${preference.id}`, `biographical:${role.id}`].sort());
   });
 
-  it.each(['origin', 'future', 'expired', 'drift', 'intimate', 'foreign'] as const)(
+  it('allows an origin_only self claim inside its own origin room while blocking cross-room projection', async () => {
+    const h = harness();
+    const claim = await selfClaim(h, { portabilityScope: 'origin_only' });
+
+    const inOrigin = await project(h, dmWithV('dm:with-v'));
+    expect(inOrigin.admittedClaimIds).toEqual([claim.id]);
+    expect(inOrigin.promptSection).toContain('likes tea (food)');
+    expect(inOrigin.disclosureSources.map(item => item.ref)).toEqual([`biographical:${claim.id}`]);
+
+    const otherRoom = await project(h, inviteOnlyGroup('group:other'));
+    expect(otherRoom.admittedClaimIds).toEqual([]);
+    expect(otherRoom.promptSection).toBe('');
+    expect(otherRoom.withheld).toContainEqual(expect.objectContaining({
+      claimId: claim.id,
+      reason: 'portability-origin-only',
+    }));
+  });
+
+  it.each(['origin-cross-room', 'future', 'expired', 'drift', 'intimate', 'foreign'] as const)(
     'keeps %s self evidence closed', async reason => {
       const h = harness();
       const claim = await selfClaim(h, {
-        ...(reason === 'origin' || reason === 'intimate' ? { portabilityScope: 'origin_only' } : {}),
+        ...(reason === 'origin-cross-room' || reason === 'intimate' ? { portabilityScope: 'origin_only' } : {}),
         ...(reason === 'future' ? { validFrom: '2027-01-01T00:00:00.000Z' } : {}),
         ...(reason === 'expired' ? { validTo: '2026-08-01T00:00:00.000Z' } : {}),
         ...(reason === 'intimate' ? { sources: [source('memory:intimate', { sensitivityAtProjection: 'intimate' })] } : {}),
         ...(reason === 'foreign' ? { subject: { kind: 'contact', contactId: 'other', subjectVersion: 1 }, portabilityScope: 'subject_present' } : {}),
       });
       if (reason === 'drift') h.revalidator.drift(claim.sources[0]!.ref, { evidenceDigest: 'b'.repeat(64) });
-      const result = await project(h, dmWithV());
+      const targetScope = reason === 'origin-cross-room' ? dmWithV('dm:other') : dmWithV();
+      const result = await project(h, targetScope);
       expect(result.promptSection).toBe('');
       expect(result.admittedClaimIds).toEqual([]);
       expect(result.disclosureSources).toEqual([]);
@@ -182,7 +201,7 @@ describe('destinationFromScope / destinationConstraint — destination policy sh
   it('maps each scope kind to its outward destination and constraint', () => {
     expect(destinationFromScope(publicGroup('group:public'))).toEqual({ kind: 'public_room', channelId: 'group:public' });
     expect(destinationFromScope(inviteOnlyGroup('group:invite'))).toEqual({ kind: 'invite_only_room', channelId: 'group:invite' });
-    expect(destinationFromScope(privateGroup('group:private'))).toEqual({ kind: 'companion_self' });
+    expect(destinationFromScope(privateGroup('group:private'))).toEqual({ kind: 'invite_only_room', channelId: 'group:private' });
     expect(destinationFromScope(dmWithV('dm:with-v'))).toEqual({ kind: 'contact_dm', contactId: 'v' });
 
     expect(destinationConstraint({ kind: 'public_room', channelId: 'group:public' }))
@@ -444,13 +463,41 @@ describe('projectBiographicalContext — destination policy', () => {
     ]);
   });
 
-  it('projects nothing outward in a private group', async () => {
+  it('projects safe public/personal claims into a private group while keeping intimate claims blocked', async () => {
     const h = harness();
     const a = await seed(h, 'Sunbeam loaf', 'memory:m-1');
-    await publish(h, a.claim.id);
-    const result = await project(h, privateGroup());
-    expect(result.admittedClaimIds).toEqual([]);
-    expect(destinationFromScope(privateGroup())).toEqual({ kind: 'companion_self' });
+    const intimateSources = [source('memory:intimate-private', {
+      sourceChannelId: 'group:private',
+      sensitivityAtProjection: 'intimate',
+    })];
+    h.revalidator.seed(intimateSources);
+    const intimate = await h.store.writeClaim({
+      subject: COMPANION,
+      kind: 'stable-preference',
+      value: {
+        kind: 'stable-preference',
+        schemaVersion: 1,
+        domain: 'food',
+        target: 'secret tea blend',
+        polarity: 'likes',
+      },
+      basis: 'explicit',
+      status: 'active',
+      portabilityScope: 'origin_only',
+      confidence: 0.9,
+      sources: intimateSources,
+      now: NOW,
+    });
+    const result = await project(h, privateGroup('group:private'));
+    expect(destinationFromScope(privateGroup('group:private'))).toEqual({
+      kind: 'invite_only_room',
+      channelId: 'group:private',
+    });
+    expect(result.admittedClaimIds).toEqual([a.claim.id]);
+    expect(result.admittedClaimIds).not.toContain(intimate.id);
+    expect(result.disclosureSources[0]?.permittedDestinations).toEqual([
+      { kind: 'invite_only_room', channelIds: ['group:private'] },
+    ]);
   });
 
   it('honors the prompt token budget by omitting lowest-priority claims last', async () => {

@@ -396,9 +396,11 @@ describe('cross-channel biographical conformance — recognition and non-disclos
       //    never enters context merely because it exists.
       expect(withPartner.admittedClaimIds).not.toContain(fx.confidential.id);
 
-      // 4. origin_only never enters portable projection anywhere, even in the
-      //    room its sources came from — raw memory already serves that room.
-      for (const scope of [publicGroup(), inviteOnlyGroup(), partnerDm()]) {
+      // 4. origin_only projects inside its own origin room (partnerDm) while
+      //    never crossing into other rooms.
+      const originRoomResult = await project({ ...base, scope: partnerDm(), currentAuthor: PARTNER });
+      expect(originRoomResult.admittedClaimIds).toContain(fx.originOnly.id);
+      for (const scope of [publicGroup(), inviteOnlyGroup()]) {
         const result = await project({ ...base, scope, currentAuthor: PARTNER });
         expect(result.admittedClaimIds).not.toContain(fx.originOnly.id);
         expect(result.promptSection).not.toContain('Only here');
@@ -412,7 +414,7 @@ describe('cross-channel biographical conformance — recognition and non-disclos
 
       // 5. Intimate and confidential fixtures never cross into any destination,
       //    and never appear in any rendered text.
-      for (const scope of [publicGroup(), inviteOnlyGroup(), partnerDm()]) {
+      for (const scope of [publicGroup(), inviteOnlyGroup(), privateGroup(), partnerDm()]) {
         const result = await project({ ...base, scope, currentAuthor: PARTNER });
         for (const claim of [fx.intimate, fx.confidential]) {
           expect(result.admittedClaimIds).not.toContain(claim.id);
@@ -421,14 +423,19 @@ describe('cross-channel biographical conformance — recognition and non-disclos
         expect(result.promptSection).not.toContain('never said out loud');
       }
 
-      // 6. A private group is the private sink: nothing projects outward there.
+      // 6. A private group projects safe public/personal biographical claims
+      //    with atomic disclosure lineage while keeping intimate/confidential
+      //    and cross-room origin_only claims withheld.
       const privateResult = await project({
         ...base,
         scope: privateGroup(),
         currentAuthor: PARTNER,
       });
-      expect(privateResult.admittedClaimIds).toEqual([]);
-      expect(privateResult.promptSection).toBe('');
+      expect(privateResult.admittedClaimIds).toContain(fx.published.id);
+      expect(privateResult.admittedClaimIds).toContain(fx.relational.id);
+      expect(privateResult.admittedClaimIds).not.toContain(fx.originOnly.id);
+      expect(privateResult.admittedClaimIds).not.toContain(fx.intimate.id);
+      expect(privateResult.admittedClaimIds).not.toContain(fx.confidential.id);
 
       // 7. Multi-companion isolation on one database: companion A's turn never
       //    yields companion B's claims, and vice versa.

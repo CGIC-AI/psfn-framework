@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { fromPartial } from '@total-typescript/shoehorn';
 
+import { createGroupConversationScope } from '../../../core/session/conversation-scope.js';
 import type { MemoryStorePort, RecentContactShapeArtifact } from '../memory-store-port.js';
 import { classifyMemorySubject } from '../subject-classification.js';
 import type { PurrMemory } from '../types.js';
@@ -104,5 +105,86 @@ describe('Recent Contact Shape access', () => {
     expect(result.recentContactShape).toBeUndefined();
     expect(result.authorizedSourceMemories).toEqual([]);
     expect(result.withheldSourceMemoryIds).toEqual(['memory-1']);
+  });
+
+  it('filters out blocked DM/intimate sources per-source while retaining shareable group sources', async () => {
+    const sharedRoomId = 'discord:guild:friends-lounge';
+    const dmIntimateSource: PurrMemory = {
+      ...source('memory-dm-intimate'),
+      sensitivity: 'intimate',
+      provenance: { channelId: 'dm:contact-1', subjectContactId: 'contact-1' },
+    };
+    const sharedSourceA: PurrMemory = {
+      ...source('memory-shared-a'),
+      sensitivity: 'personal',
+      provenance: { channelId: sharedRoomId, subjectContactId: 'contact-1' },
+    };
+    const sharedSourceB: PurrMemory = {
+      ...source('memory-shared-b'),
+      sensitivity: 'public',
+      provenance: { channelId: sharedRoomId, subjectContactId: 'contact-1' },
+    };
+
+    const result = await resolveRecentContactShapeAccess({
+      memoryStore: store([dmIntimateSource, sharedSourceA, sharedSourceB]),
+      sessionQuarantineFilter: null,
+      recentContactShape: shape({
+        sourceMemoryIds: ['memory-dm-intimate', 'memory-shared-a', 'memory-shared-b'],
+      }),
+      options: {
+        trustLevel: 'trusted',
+        channelPrivacy: 'invite_only',
+        broadcast: false,
+        canonicalContactId: 'contact-1',
+        roomVisibility: {
+          currentChannelId: sharedRoomId,
+          conversationScope: createGroupConversationScope({ channelId: sharedRoomId }),
+        },
+      },
+      now: NOW,
+    });
+
+    expect(result.recentContactShape).toBeDefined();
+    expect(result.recentContactShape?.summary).toBe('A recent, bounded impression.');
+    expect(result.recentContactShape?.sourceMemoryIds).toEqual([
+      'memory-shared-a',
+      'memory-shared-b',
+    ]);
+    expect(result.authorizedSourceMemories.map(memory => memory.id)).toEqual([
+      'memory-shared-a',
+      'memory-shared-b',
+    ]);
+    expect(result.withheldSourceMemoryIds).toEqual(['memory-dm-intimate']);
+    expect(result.withheldSummary?.totalCount).toBe(1);
+  });
+
+  it('drops the shape when zero shareable sources remain after per-source filtering', async () => {
+    const sharedRoomId = 'discord:guild:friends-lounge';
+    const dmOnlySource: PurrMemory = {
+      ...source('memory-dm-only'),
+      sensitivity: 'personal',
+      provenance: { channelId: 'dm:contact-1', subjectContactId: 'contact-1' },
+    };
+
+    const result = await resolveRecentContactShapeAccess({
+      memoryStore: store([dmOnlySource]),
+      sessionQuarantineFilter: null,
+      recentContactShape: shape({ sourceMemoryIds: ['memory-dm-only'] }),
+      options: {
+        trustLevel: 'trusted',
+        channelPrivacy: 'invite_only',
+        broadcast: false,
+        canonicalContactId: 'contact-1',
+        roomVisibility: {
+          currentChannelId: sharedRoomId,
+          conversationScope: createGroupConversationScope({ channelId: sharedRoomId }),
+        },
+      },
+      now: NOW,
+    });
+
+    expect(result.recentContactShape).toBeUndefined();
+    expect(result.authorizedSourceMemories).toEqual([]);
+    expect(result.withheldSourceMemoryIds).toEqual(['memory-dm-only']);
   });
 });

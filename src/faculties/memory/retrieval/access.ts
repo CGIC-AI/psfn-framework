@@ -123,6 +123,13 @@ function isRecallableCompanionSelfExperience(
     && tags.has('self_experience');
 }
 
+function isCompanionSelfMemory(
+  memory: Pick<PurrMemory, 'tags' | 'provenance'>,
+): boolean {
+  return isRecallableCompanionSelfExperience(memory)
+    || memory.provenance?.subjectScope === 'companion_internal';
+}
+
 function resolveMemorySourceRoom(memory: Pick<PurrMemory, 'provenance' | 'scopeRef'>): {
   roomId?: string;
   inconsistent: boolean;
@@ -162,10 +169,14 @@ function isPrimaryPrivateDmSubject(
     return true;
   }
 
+  const hasForeignNonInternalRoom = source.roomId !== undefined
+    && !source.roomId.startsWith('internal:')
+    && !options.roomVisibility?.canonicalContactRoomIds?.has(source.roomId);
+
   return memory.scopeRef?.kind !== 'conversation'
     && !hasRoomContextScopeTag(memory)
-    && !isHighIntimacySensitivityLevel(memory.sensitivity)
-    && isRecallableCompanionSelfExperience(memory);
+    && !hasForeignNonInternalRoom
+    && isCompanionSelfMemory(memory);
 }
 
 function violatesHighIntimacyContactScope(
@@ -204,7 +215,13 @@ function evaluateRoomVisibilityDecision(
   }
   if (isPrimaryPrivateDmSubject(memory, options)) return undefined;
   if (!source.roomId) {
-    if (requiresRoomProofWhenSourceMissing(memory)) {
+    const canonicalContactId = normalizeContactId(options.canonicalContactId);
+    const subjectContactId = resolveMemorySubjectContactId(memory);
+    const thirdPartyCoSubjectInGroup = roomVisibility.conversationScope?.kind === 'group'
+      && canonicalContactId !== undefined
+      && subjectContactId !== undefined
+      && subjectContactId !== canonicalContactId;
+    if (requiresRoomProofWhenSourceMissing(memory) || thirdPartyCoSubjectInGroup) {
       return {
         allowed: false,
         rejectionKind: 'room_visibility',

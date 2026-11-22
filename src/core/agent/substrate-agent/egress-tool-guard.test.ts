@@ -11,16 +11,29 @@ import {
 import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../../cogsec/intake-firewall-notice-templates.js';
 import { gateToolWithCapabilities } from '../../../system/capabilities/gate.js';
 import { withCapabilityRequirement } from '../../../system/capabilities/requirements.js';
+import type { DisclosureLineage } from '../../cogsec/disclosure/index.js';
 import { buildEgressToolGuard } from './egress-tool-guard.js';
 
 const POLICY_SEED_PATH = join(process.cwd(), 'config', 'intake-policy.seed.json');
 
+function makeLineage(overrides: Partial<DisclosureLineage> = {}): DisclosureLineage {
+  return {
+    effectiveSensitivity: 'public',
+    permittedDestinations: null,
+    subjectContactIds: [],
+    hasUnclassifiedSource: false,
+    sourceCount: 1,
+    sourceSnapshots: [],
+    ...overrides,
+  };
+}
+
 describe('buildEgressToolGuard', () => {
-  it('attaches the active session identity to a hard trifecta block audit', async () => {
+  it('attaches the active session identity to a hard trifecta block audit in enforce mode', async () => {
     const seed = JSON.parse(readFileSync(POLICY_SEED_PATH, 'utf8')) as Record<string, unknown>;
     const auditEvents: IntakeSinkGateAuditEvent[] = [];
     const gate = createIntakeSinkGate({
-      policy: validateIntakePolicy({ ...seed, mode: 'shadow' }, 'intake-policy.test'),
+      policy: validateIntakePolicy({ ...seed, mode: 'strict' }, 'intake-policy.test'),
       actor: 'test:egress-tool-guard',
       onAudit: event => auditEvents.push(event),
     });
@@ -29,14 +42,14 @@ describe('buildEgressToolGuard', () => {
       envelopeId: '8b70243e',
       sourceClass: 'tool_output',
       sourceRiskTier: 'untrusted',
-      state: 'quarantined',
+      state: 'released',
       riskLabels: [],
       subject: { kind: 'body' },
     };
     const guard = buildEgressToolGuard({
       intakeSinkGate: gate,
       getActiveTurnIntakeEnvelopes: () => [envelope],
-      getCurrentTurnDisclosureLineage: () => undefined,
+      getCurrentTurnDisclosureLineage: () => makeLineage({ effectiveSensitivity: 'personal' }),
       getActiveTurnSessionIdentity: () => ({
         sourceChannelId: 'discord:live-channel',
         logicalSessionId: 'discord:live-session',
@@ -75,6 +88,121 @@ describe('buildEgressToolGuard', () => {
     );
   });
 
+  it('derives privateDataInPath from actual turn disclosure lineage instead of hardcoding true', async () => {
+    const seed = JSON.parse(readFileSync(POLICY_SEED_PATH, 'utf8')) as Record<string, unknown>;
+    const auditEvents: IntakeSinkGateAuditEvent[] = [];
+    const gate = createIntakeSinkGate({
+      policy: validateIntakePolicy({ ...seed, mode: 'strict' }, 'intake-policy.test'),
+      actor: 'test:egress-tool-guard',
+      onAudit: event => auditEvents.push(event),
+    });
+    const envelope: IntakeEnvelopeSnapshot = {
+      envelopeId: 'pub-turn-env',
+      sourceClass: 'public_contact',
+      sourceRiskTier: 'untrusted',
+      state: 'released',
+      riskLabels: [],
+      subject: { kind: 'body' },
+    };
+    let currentLineage: DisclosureLineage | undefined = makeLineage({
+      effectiveSensitivity: 'public',
+      sourceCount: 1,
+      hasUnclassifiedSource: false,
+    });
+    const guard = buildEgressToolGuard({
+      intakeSinkGate: gate,
+      getActiveTurnIntakeEnvelopes: () => [envelope],
+      getCurrentTurnDisclosureLineage: () => currentLineage,
+      getActiveTurnSessionIdentity: () => ({
+        sourceChannelId: 'discord:public-room',
+        logicalSessionId: 'discord:public-session',
+      }),
+      getCurrentTurnCustodyProof: () => undefined,
+      getActiveTurnId: () => undefined,
+      egressDeliveryRecorder: null,
+    });
+
+    // Public-only lineage: privateDataInPath is false, so trifecta does not trigger.
+    const publicDecision = await guard?.evaluate({
+      toolCallId: 'egress-call-public',
+      toolName: 'fs',
+      requiredTokens: ['repl.execute'],
+      params: {},
+    });
+    expect(publicDecision?.allowed).toBe(true);
+    expect(auditEvents.at(-1)).toMatchObject({
+      kind: 'egress_trifecta',
+      verdict: 'allow',
+      allowed: true,
+      context: expect.objectContaining({ triggered: false }),
+    });
+
+    // Private/intimate lineage: privateDataInPath is true, so trifecta triggers and blocks.
+    currentLineage = makeLineage({
+      effectiveSensitivity: 'intimate',
+      sourceCount: 2,
+      hasUnclassifiedSource: false,
+    });
+    const privateDecision = await guard?.evaluate({
+      toolCallId: 'egress-call-private',
+      toolName: 'fs',
+      requiredTokens: ['repl.execute'],
+      params: {},
+    });
+    expect(privateDecision).toEqual({
+      allowed: false,
+      noticeText: INTAKE_FIREWALL_NOTICE_TEMPLATES.sinkHeld,
+    });
+    expect(auditEvents.at(-1)).toMatchObject({
+      kind: 'egress_trifecta',
+      verdict: 'deny',
+      allowed: false,
+      context: expect.objectContaining({ triggered: true, enforcement: 'hard' }),
+    });
+  });
+
+  it('records shadow-mode trifecta verdicts without hard-blocking egress', async () => {
+    const seed = JSON.parse(readFileSync(POLICY_SEED_PATH, 'utf8')) as Record<string, unknown>;
+    const auditEvents: IntakeSinkGateAuditEvent[] = [];
+    const gate = createIntakeSinkGate({
+      policy: validateIntakePolicy({ ...seed, mode: 'shadow' }, 'intake-policy.test'),
+      actor: 'test:egress-tool-guard',
+      onAudit: event => auditEvents.push(event),
+    });
+    const guard = buildEgressToolGuard({
+      intakeSinkGate: gate,
+      getActiveTurnIntakeEnvelopes: () => [{
+        envelopeId: 'shadow-env',
+        sourceClass: 'public_contact',
+        sourceRiskTier: 'untrusted',
+        state: 'released',
+        riskLabels: [],
+        subject: { kind: 'body' },
+      }],
+      getCurrentTurnDisclosureLineage: () => makeLineage({ effectiveSensitivity: 'personal' }),
+      getActiveTurnSessionIdentity: () => ({
+        sourceChannelId: 'discord:live-channel',
+        logicalSessionId: 'discord:live-session',
+      }),
+      getCurrentTurnCustodyProof: () => undefined,
+      getActiveTurnId: () => undefined,
+      egressDeliveryRecorder: null,
+    });
+
+    const decision = await guard?.evaluate({
+      toolCallId: 'egress-call-shadow',
+      toolName: 'fs',
+      requiredTokens: ['repl.execute'],
+      params: {},
+    });
+    expect(decision?.allowed).toBe(true);
+    expect(auditEvents.find(event => event.kind === 'egress_trifecta')).toMatchObject({
+      mode: 'shadow',
+      verdict: 'deny',
+      allowed: true,
+    });
+  });
+
   it('returns the block notice and a diagnostic when durable incident recording fails', async () => {
     const seed = JSON.parse(readFileSync(POLICY_SEED_PATH, 'utf8')) as Record<string, unknown>;
     const execute = vi.fn().mockResolvedValue({
@@ -82,7 +210,7 @@ describe('buildEgressToolGuard', () => {
       details: {},
     });
     const gate = createIntakeSinkGate({
-      policy: validateIntakePolicy({ ...seed, mode: 'shadow' }, 'intake-policy.test'),
+      policy: validateIntakePolicy({ ...seed, mode: 'strict' }, 'intake-policy.test'),
       actor: 'test:egress-tool-guard',
       onBlockedEgressTrifecta: () => {
         throw new Error('incident store unavailable');
@@ -94,7 +222,7 @@ describe('buildEgressToolGuard', () => {
         envelopeId: '8b70243e',
         sourceClass: 'tool_output',
         sourceRiskTier: 'untrusted',
-        state: 'quarantined',
+        state: 'released',
         riskLabels: [],
         subject: { kind: 'body' },
       }],
@@ -103,6 +231,9 @@ describe('buildEgressToolGuard', () => {
         sourceChannelId: 'discord:live-channel',
         logicalSessionId: 'discord:live-session',
       }),
+      getCurrentTurnCustodyProof: () => undefined,
+      getActiveTurnId: () => undefined,
+      egressDeliveryRecorder: null,
     });
     const tool = withCapabilityRequirement({
       name: 'test_egress',

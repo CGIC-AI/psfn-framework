@@ -389,19 +389,19 @@ export function evaluateEgressTrifecta(
   }
 
   const verdict = enforcement === 'hard' ? 'deny' : 'review';
-  // Fail closed (hrmrq.77): a hard-enforcement deny blocks in BOTH modes.
-  // Shadow mode stays observe-only for every other gate, but the lethal
-  // trifecta's hard tier must never be waved through during staged rollout.
-  const shadowOverridden = mode === 'shadow' && verdict === 'deny';
+  // Shadow mode records the full verdict (`deny` + `hard` enforcement) for
+  // operator telemetry/audit without hard-blocking live egress; enforce mode
+  // blocks hard denials.
+  const shadowObserved = mode === 'shadow' && verdict === 'deny';
   const reason = `lethal trifecta at ${input.egressDescription}: `
     + `${String(contentInPath.length)} enveloped item(s) (strongest tier '${strongestTier}') `
     + `+ private data + egress; enforcement '${enforcement}' per trifecta.enforcementByTier`
-    + (shadowOverridden ? "; enforcement 'hard' overrides shadow mode (fail closed)" : '');
+    + (shadowObserved ? ' (shadow mode: verdict recorded without blocking)' : '');
   return {
     triggered: true,
     enforcement,
     verdict,
-    allowed: verdict !== 'deny',
+    allowed: mode === 'shadow' ? true : verdict !== 'deny',
     reviewRequired: verdict === 'review',
     mode,
     reason,

@@ -618,6 +618,87 @@ describe('BiographySynthesisService', () => {
         policy: policyWithPendingCap(2),
       })).rejects.toThrow('biography candidate pending budget exhausted');
     });
+
+    it('does not let a saturated human_review backlog deadlock synthesis for other claims', async () => {
+      const { memories, profileStore } = fixture();
+      const capTwoPolicy = policyWithPendingCap(2);
+
+      // Escalate two human_review candidates, filling the nominal cap of 2.
+      for (const nickname of ['Pebble', 'Clover']) {
+        const staged = await profileStore.writeCandidate({
+          claim: {
+            subject: CONTACT_SUBJECT,
+            kind: 'nickname',
+            value: { kind: 'nickname', nickname, scope: 'relational' },
+            relatedSubject: COMPANION_SUBJECT,
+            basis: 'explicit',
+            confidence: 0.9,
+            sources: [{
+              ref: `memory:human-review-${nickname}`,
+              revision: '1',
+              evidenceDigest: 'e'.repeat(64),
+              sensitivityAtProjection: 'personal',
+              subjectEvidenceDigest: 'f'.repeat(64),
+              consentFingerprint: 'a'.repeat(64),
+              sourceType: 'semantic',
+              lifecycleStateAtProjection: 'active',
+            }],
+            now: NOW,
+          },
+          automataRunId: `biography-synthesis:seed-${nickname}`,
+          automataAuthorityRef: 'automata:test',
+          policy: capTwoPolicy,
+          socialContext: {
+            kind: 'companion_contact_dyad',
+            companionId: COMPANION_SUBJECT.companionId,
+            contactId: CONTACT_SUBJECT.contactId,
+          },
+        });
+        const inReview = await profileStore.transitionCandidate({
+          candidateId: staged.id,
+          expectedRevision: staged.revision,
+          to: 'companion_review',
+          receipts: [{
+            authority: 'companion',
+            decision: 'approved',
+            actorAuthorityRef: `companion:${COMPANION_SUBJECT.companionId}`,
+            reason: 'reviewer_approved',
+          }],
+          now: NOW,
+        });
+        await profileStore.transitionCandidate({
+          candidateId: inReview.id,
+          expectedRevision: inReview.revision,
+          to: 'human_review',
+          receipts: [{
+            authority: 'companion',
+            decision: 'approved',
+            actorAuthorityRef: `companion:${COMPANION_SUBJECT.companionId}`,
+            reason: 'reviewer_approved',
+          }],
+          now: NOW,
+        });
+      }
+
+      // Active automated pipeline count is 0 because both items are in human_review.
+      expect(await profileStore.countPendingCandidates()).toBe(0);
+      expect(await profileStore.listCandidates({ stages: ['human_review'], limit: 10 }))
+        .toHaveLength(2);
+
+      const model = recordingModel([candidatesResponse([preferenceCandidate(['mem-self-a'])])]);
+      const telemetry = await buildService({
+        memoryStore: memories.asPort(),
+        profileStore,
+        model,
+        targets: [COMPANION_TARGET],
+        policy: capTwoPolicy,
+        runId: 'biography-synthesis:after-human-backlog',
+      }).run();
+
+      expect(telemetry.pendingBudgetExhausted).toBe(false);
+      expect(telemetry.candidatesStaged).toBe(1);
+      expect(model.prompts).toHaveLength(1);
+    });
   });
 
   it('stages typed candidates from sources in different sessions without activating them', async () => {

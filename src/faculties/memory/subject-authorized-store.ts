@@ -151,7 +151,7 @@ function authorization(
     allowedSubjectClasses: companionInternal
       ? ['companion_private']
       : includeCompanionPrivateRecall
-        ? ['single_contact', 'multiple_contacts', 'companion_private']
+        ? ['single_contact', 'multiple_contacts', 'shared_room', 'companion_private']
         : ['single_contact'],
     allowedViewerRelations: companionInternal
       ? ['none']

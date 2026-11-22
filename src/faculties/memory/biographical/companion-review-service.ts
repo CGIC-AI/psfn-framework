@@ -27,10 +27,12 @@ import { buildLLMWorkSpec, completeWithWorkSpec } from '../../../primitives/llm/
 import { createComponentLogger } from '../../../shared/logger.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import type { BiographicalCandidatePolicy } from '../../../system/config/biographical-candidate-policy.js';
+import type { MemoryStorePort } from '../memory-store-port.js';
 import {
   biographicalCandidateDerivation,
   findCandidateReceipt,
 } from './candidate-state.js';
+import { resolveSafeDefaultPortabilityScope } from './kernel.js';
 import {
   assertCompanionReviewAuthority,
   BIOGRAPHICAL_COMPANION_REVIEW_ACTIONS,
@@ -84,6 +86,8 @@ export interface BiographyCompanionReviewTelemetry {
 export interface BiographyCompanionReviewServiceOptions {
   readonly profileStore: BiographicalProfileStorePort;
   readonly llmClient: LLMProviderPort;
+  /** Optional memory store for bounded safe (`public`/`personal`) source verification context. */
+  readonly memoryStore?: Pick<MemoryStorePort, 'getById'> | null;
   readonly personaPreamble?: PersonaPreamblePort | null;
   readonly companionId: string;
   readonly candidatePolicy: () => BiographicalCandidatePolicy;
@@ -147,7 +151,16 @@ function contextLabel(context: BiographicalCandidateSocialContext): string {
   return `companion_contact_dyad(companionId=${context.companionId}, contactId=${context.contactId})`;
 }
 
-function candidateBlock(subject: BiographicalCompanionReviewSubject): string {
+function stripMarkdownCodeFence(raw: string): string {
+  const trimmed = raw.trim();
+  const fenced = /^```(?:json)?\s*\r?\n?([\s\S]*?)\r?\n?```$/iu.exec(trimmed);
+  return fenced?.[1] !== undefined ? fenced[1].trim() : trimmed;
+}
+
+function candidateBlock(
+  subject: BiographicalCompanionReviewSubject,
+  safeSourceContext: ReadonlyMap<string, string>,
+): string {
   const { claim, candidate } = subject;
   return [
     `Candidate stage: ${candidate.stage} (revision ${candidate.revision})`,
@@ -160,11 +173,13 @@ function candidateBlock(subject: BiographicalCompanionReviewSubject): string {
     `Current social context: ${
       candidate.socialContext ? contextLabel(candidate.socialContext) : '(none recorded)'
     }`,
-    'Bound evidence (refs and snapshots only; bodies stay in their origin room):',
-    ...claim.sources.map(source => (
-      `- ${source.ref} (revision ${source.revision}, type ${source.sourceType ?? 'unknown'}, `
-      + `sensitivity ${source.sensitivityAtProjection})`
-    )),
+    'Bound evidence (safe public/personal context where available; sensitive bodies stay in their origin room):',
+    ...claim.sources.map(source => {
+      const metadata = `${source.ref} (revision ${source.revision}, type ${source.sourceType ?? 'unknown'}, `
+        + `sensitivity ${source.sensitivityAtProjection})`;
+      const excerpt = safeSourceContext.get(source.ref);
+      return excerpt !== undefined ? `- ${metadata}: "${excerpt}"` : `- ${metadata}`;
+    }),
     'Authorized contexts:',
     ...subject.authorizedContexts.map(context => `- ${contextLabel(context)}`),
   ].join('\n');
@@ -343,7 +358,7 @@ export class BiographyCompanionReviewService {
     let decision: BiographicalCompanionReviewDecision;
     try {
       decision = parseCompanionReviewDecision(
-        await this.decide(subject, input.reviewRunId),
+        await this.decide(subject, input.policy, input.reviewRunId),
         subject,
         { now },
       );
@@ -431,21 +446,54 @@ export class BiographyCompanionReviewService {
     return contexts;
   }
 
+  private async loadBoundedSafeSourceContext(
+    claim: BiographicalClaim,
+    policy: BiographicalCandidatePolicy,
+  ): Promise<Map<string, string>> {
+    const excerpts = new Map<string, string>();
+    const memoryStore = this.options.memoryStore;
+    if (!memoryStore) return excerpts;
+    const boundedSources = claim.sources.slice(0, policy.budgets.maxSourcesPerCandidate);
+    for (const source of boundedSources) {
+      if (
+        source.sensitivityAtProjection !== 'public'
+        && source.sensitivityAtProjection !== 'personal'
+      ) {
+        continue;
+      }
+      if (!source.ref.startsWith('memory:')) continue;
+      const memoryId = source.ref.slice('memory:'.length).trim();
+      if (!memoryId) continue;
+      const memory = await memoryStore.getById(memoryId);
+      if (!memory) continue;
+      if (memory.sensitivity !== 'public' && memory.sensitivity !== 'personal') continue;
+      if (memory.consentFlags?.allowRecall === false) continue;
+      if (memory.deletedAt !== undefined || memory.supersededBy !== undefined) continue;
+      const normalized = memory.text.replace(/\s+/gu, ' ').trim();
+      if (normalized.length > 0) {
+        excerpts.set(source.ref, normalized);
+      }
+    }
+    return excerpts;
+  }
+
   private async decide(
     subject: BiographicalCompanionReviewSubject,
+    policy: BiographicalCandidatePolicy,
     reviewRunId: string,
   ): Promise<unknown> {
     const task = [REVIEW_SYSTEM_PROMPT, '', reviewSchemaBlock()].join('\n');
     const systemPrompt = this.options.personaPreamble
       ? this.options.personaPreamble.prepend('biography_companion_review', task)
       : task;
+    const safeSourceContext = await this.loadBoundedSafeSourceContext(subject.claim, policy);
     const response = await completeWithWorkSpec(
       this.options.llmClient,
       {
         systemPrompt,
         messages: [{
           role: 'user',
-          content: `${candidateBlock(subject)}\n\nDecide now. Return JSON only.`,
+          content: `${candidateBlock(subject, safeSourceContext)}\n\nDecide now. Return JSON only.`,
         }],
       },
       buildLLMWorkSpec({
@@ -461,7 +509,7 @@ export class BiographyCompanionReviewService {
         },
       }),
     );
-    return JSON.parse(response.content) as unknown;
+    return JSON.parse(stripMarkdownCodeFence(response.content)) as unknown;
   }
 
   private async applyDecision(input: {
@@ -570,10 +618,15 @@ export class BiographyCompanionReviewService {
   }): Promise<boolean> {
     if (biographicalCandidateDerivation(input.claim) === 'human_derived') return false;
     try {
+      const portabilityScope = resolveSafeDefaultPortabilityScope({
+        claim: input.claim,
+        effectiveSensitivity: input.claim.effectiveSensitivity,
+      });
       await input.store.transitionCandidate({
         candidateId: input.candidate.id,
         expectedRevision: input.candidate.revision,
         to: 'active',
+        portabilityScope,
         receipts: [
           this.receipt('approved', 'reviewer_approved'),
           {

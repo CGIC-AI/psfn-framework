@@ -1032,6 +1032,61 @@ describe('runtime subject identity', () => {
     expect(authorContext.channelBond).toBeUndefined();
   });
 
+  it('treats internal:free-time channels as self-directed companion turns rather than a fake user named Free Time (bo1e0)', async () => {
+    const message = makeMessage({
+      channelId: 'internal:free-time:wandering',
+      channelType: 'terminal',
+      authorId: 'scheduler',
+      authorName: 'Free Time',
+      content: '[Free time]',
+    });
+    const authorContext = await resolveAuthorContext({
+      message,
+      contactStore: {} as never,
+      logger: { warn: () => undefined, debug: () => undefined },
+      companionIdentityKey: DEFAULT_COMPANION_ID,
+      companionDisplayName: 'Companion',
+    });
+
+    expect(authorContext).toMatchObject({
+      trustLevel: 'primary',
+      speakerRole: 'system',
+      actorKind: 'system',
+      resolvedUserName: 'Companion',
+      subjectIdentityKey: DEFAULT_COMPANION_ID,
+      continuitySubjectKey: DEFAULT_COMPANION_ID,
+    });
+    expect(authorContext.canonicalContactKey).toBeUndefined();
+
+    const vars = buildDynamicPromptTemplateVariables({
+      message,
+      conversationScope: {
+        kind: 'dm',
+        channelId: message.channelId,
+        envelope: {
+          channelPrivacy: 'private',
+          audienceScope: 'dm',
+          audienceKnowledge: 'all_known',
+          broadcast: false,
+        },
+      },
+      resolvedUserName: authorContext.resolvedUserName,
+      trustLevel: authorContext.trustLevel,
+      channelType: 'terminal',
+      responseStyle: 'concise',
+      now: new Date('2026-06-11T12:00:00Z'),
+      modelId: 'test-model',
+      capabilityTier: 'autonomous',
+      capabilityGrantedTokens: new Set(),
+      activeToolCounts: { core: 0, extended: 0, total: 0 },
+      extendedTools: [],
+      coreToolNames: new Set(),
+      config: {},
+    });
+    expect(vars.runtime_speaking_with_name).toBe('');
+    expect(vars.runtime_current_message_author_xml).not.toContain('Free Time');
+  });
+
   it('binds an internal human outreach authoring turn to its authorized contact', async () => {
     const authorContext = await resolveAuthorContext({
       message: makeMessage({

@@ -1,3 +1,4 @@
+import type { ProcessableConversationKind } from '../../core/session/conversational-activity.js';
 import type {
   ClaimedConversationalActivityWorkItem,
   ConversationalActivityWorksetPort,
@@ -17,6 +18,7 @@ export interface SleeptimeWorksetStageInput {
   logicalSessionId: string;
   revision: number;
   occurredAtMs: number;
+  activityKind?: ProcessableConversationKind;
   stage: SleeptimeWorksetStage;
 }
 
@@ -37,6 +39,8 @@ export type SleeptimeWorksetRunOutcome =
     outcome: 'yield';
     completedSessions: number;
     remainingSessions: number;
+    /** When yielding outside rest-window eligibility, the earliest instant sleeptime can retry. */
+    nextEligibleAtMs?: number;
   }
   | {
     outcome: 'retry';
@@ -127,6 +131,7 @@ export class SleeptimeWorksetRunner {
             logicalSessionId: claim.logicalSessionId,
             revision: claim.revision,
             occurredAtMs: claim.occurredAtMs,
+            activityKind: claim.activityKind,
             stage,
           };
           await this.runStage(stageInput);

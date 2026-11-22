@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { fromPartial } from '@total-typescript/shoehorn';
-import { resolveActiveTools } from './tool-orchestration-runtime.js';
+import {
+  inferToolConcurrencyClass,
+  resolveActiveTools,
+} from './tool-orchestration-runtime.js';
 import { buildToolUsageRanking } from '../tool-surface/usage-ranking.js';
 import type { AgentTool } from '../../../boundary/pi-agent/index.js';
 
@@ -117,5 +120,24 @@ describe('resolveActiveTools', () => {
       usageRanking,
     });
     expect(result.tools.map(tool => tool.name)).toEqual(['mu_tool', 'alpha_tool']);
+  });
+
+  it('ranks memory, journal, and orient ahead of asynchronous letters (e46hi)', () => {
+    const result = resolveActiveTools({
+      coreTools: [makeTool('letter'), makeTool('orient'), makeTool('journal'), makeTool('memory')],
+      extendedTools: [],
+      promotedResolution: { activeNames: new Set<string>(), orderedNames: [], skipped: [] },
+    });
+    expect(result.tools.map(tool => tool.name)).toEqual(['journal', 'memory', 'orient', 'letter']);
+  });
+});
+
+describe('inferToolConcurrencyClass (e46hi)', () => {
+  it('marks canonical pure read-only tools as read_only and keeps multiplexed or retired names exclusive', () => {
+    expect(inferToolConcurrencyClass('tool_search')).toBe('read_only');
+    expect(inferToolConcurrencyClass('subagent')).toBe('spawn_subagent');
+    expect(inferToolConcurrencyClass('memory')).toBe('exclusive');
+    expect(inferToolConcurrencyClass('repo')).toBe('exclusive');
+    expect(inferToolConcurrencyClass('repo_status')).toBe('exclusive');
   });
 });

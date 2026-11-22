@@ -55,18 +55,13 @@ export interface PromotedToolResolution {
 
 export const DEFAULT_PARALLEL_READ_MAX = 3;
 
+// Canonical first-party tools whose every invocation is unconditionally
+// read-only (psfn-framework-e46hi). Multiplexed canonical tools that combine
+// read and write actions (memory, journal, wiki, orient, repo, fs, beads,
+// skill, identity, north_star, system, etc.) stay 'exclusive' at the
+// tool-name level so mutating actions never share a read-only class.
 const PARALLEL_READ_ONLY_TOOL_NAMES = new Set([
-  'repo_status',
-  'repo_diff',
-  'issue_ready',
-  'issue_show',
-  'settings_get',
-  'skill_list',
-  'skill_view',
-  'prompt_layer_list',
-  'prompt_layer_get',
-  'north_star_list',
-  'identity_diff',
+  'tool_search',
 ]);
 
 type AdaptiveDecisionPayload = Omit<AdaptiveToolDecisionTelemetry, 'timestamp'>;

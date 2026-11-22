@@ -101,7 +101,7 @@ function makeChooser(overrides: Partial<FreeTimeChooserPorts> = {}): {
     companionName: 'Companion',
     resolveIdentityPrompt: overrides.resolveIdentityPrompt ?? (() => IDENTITY_PROMPT),
     ...(overrides.offerNewWorkspace ? { offerNewWorkspace: overrides.offerNewWorkspace } : {}),
-    ...(overrides.settings ? { settings: overrides.settings } : {}),
+    settings: overrides.settings ?? { ...createDefaultFreeTimeChooserSettings(), enabled: true },
     ...(overrides.companionId ? { companionId: overrides.companionId } : {}),
   });
   return { chooser, restWindowPolicy, resolver, provider };
@@ -211,7 +211,7 @@ describe('FreeTimeChooser.chooseWorkspace — rest and silence persistence', () 
   });
 
   it('does not re-prompt within the quiet period after a rest, then re-prompts once it expires', async () => {
-    const settings = { ...createDefaultFreeTimeChooserSettings(), silencePersistenceMinutes: 10 };
+    const settings = { ...createDefaultFreeTimeChooserSettings(), enabled: true, silencePersistenceMinutes: 10 };
     const { chooser, provider } = makeChooser({
       llmProvider: providerReturning('{"optionId":"rest"}'),
       settings,
@@ -238,47 +238,50 @@ describe('FreeTimeChooser.chooseWorkspace — rest and silence persistence', () 
   });
 });
 
-// ── fail-closed posture ──
+// ── degraded posture (Charter Law 20, psfn-framework-ik47b.5) ──
 
-describe('FreeTimeChooser.chooseWorkspace — fail closed to rest', () => {
-  it('falls closed to rest and records silence when the provider throws', async () => {
+describe('FreeTimeChooser.chooseWorkspace — degraded without faking rest', () => {
+  it('surfaces degradation without persisting silence when the provider throws', async () => {
     const complete = vi.fn().mockRejectedValue(new Error('provider down'));
     const { chooser, restWindowPolicy } = makeChooser({ llmProvider: { complete } });
     const outcome = await chooser.chooseWorkspace(CTX);
-    expect(outcome).toEqual({ kind: 'rest', reason: 'chooser_error' });
-    await expect(restWindowPolicy.isSilenced({ lane: 'quiet_hours', nowMs: 2_000 })).resolves.toBe(true);
+    expect(outcome).toEqual({ kind: 'degraded', reason: 'chooser_error' });
+    await expect(restWindowPolicy.isSilenced({ lane: 'quiet_hours', nowMs: 2_000 })).resolves.toBe(false);
   });
 
-  it('falls closed to rest on a chooser timeout', async () => {
+  it('surfaces degradation without persisting silence on a chooser timeout', async () => {
     const complete = vi.fn(() => new Promise<LLMResponse>(() => {
       /* never resolves — force the deadline to win */
     }));
-    const settings = { ...createDefaultFreeTimeChooserSettings(), chooserDeadlineMs: 10 };
-    const { chooser } = makeChooser({ llmProvider: { complete }, settings });
+    const settings = { ...createDefaultFreeTimeChooserSettings(), enabled: true, chooserDeadlineMs: 10 };
+    const { chooser, restWindowPolicy } = makeChooser({ llmProvider: { complete }, settings });
     const outcome = await chooser.chooseWorkspace(CTX);
-    expect(outcome).toEqual({ kind: 'rest', reason: 'chooser_timeout' });
+    expect(outcome).toEqual({ kind: 'degraded', reason: 'chooser_timeout' });
+    await expect(restWindowPolicy.isSilenced({ lane: 'quiet_hours', nowMs: 2_000 })).resolves.toBe(false);
   });
 
-  it('falls closed to rest on unparseable output', async () => {
-    const { chooser } = makeChooser({ llmProvider: providerReturning('no json here, just prose') });
+  it('surfaces degradation without persisting silence on unparseable output', async () => {
+    const { chooser, restWindowPolicy } = makeChooser({ llmProvider: providerReturning('no json here, just prose') });
     const outcome = await chooser.chooseWorkspace(CTX);
-    expect(outcome).toEqual({ kind: 'rest', reason: 'chooser_unparseable' });
+    expect(outcome).toEqual({ kind: 'degraded', reason: 'chooser_unparseable' });
+    await expect(restWindowPolicy.isSilenced({ lane: 'quiet_hours', nowMs: 2_000 })).resolves.toBe(false);
   });
 
-  it('falls closed to rest when the model invents an unoffered option', async () => {
-    const { chooser } = makeChooser({ llmProvider: providerReturning('{"optionId":"resume:project:ghost"}') });
+  it('surfaces degradation without persisting silence when the model invents an unoffered option', async () => {
+    const { chooser, restWindowPolicy } = makeChooser({ llmProvider: providerReturning('{"optionId":"resume:project:ghost"}') });
     const outcome = await chooser.chooseWorkspace(CTX);
-    expect(outcome).toEqual({ kind: 'rest', reason: 'chooser_invalid_option' });
+    expect(outcome).toEqual({ kind: 'degraded', reason: 'chooser_invalid_option' });
+    await expect(restWindowPolicy.isSilenced({ lane: 'quiet_hours', nowMs: 2_000 })).resolves.toBe(false);
   });
 
-  it('falls closed to rest when the resolver rejects a chosen option', async () => {
+  it('surfaces degradation without persisting silence when the resolver rejects a chosen option', async () => {
     // The menu offers a project ref that the directory does not know, so the
-    // resolver throws — the chooser must fail closed to rest, never a workspace.
+    // resolver throws — surface degradation honestly, never a forced workspace or fake rest.
     const resolver = new FreeTimeWorkspaceResolver({
       projectDirectory: () => null,
       roomChannelResolver: () => null,
     });
-    const { chooser } = makeChooser({
+    const { chooser, restWindowPolicy } = makeChooser({
       resolver,
       llmProvider: providerReturning('{"optionId":"resume:project:moon"}'),
       listResumableProjects: () => [
@@ -286,7 +289,8 @@ describe('FreeTimeChooser.chooseWorkspace — fail closed to rest', () => {
       ],
     });
     const outcome = await chooser.chooseWorkspace(CTX);
-    expect(outcome).toEqual({ kind: 'rest', reason: 'resolve_failed' });
+    expect(outcome).toEqual({ kind: 'degraded', reason: 'resolve_failed' });
+    await expect(restWindowPolicy.isSilenced({ lane: 'quiet_hours', nowMs: 2_000 })).resolves.toBe(false);
   });
 
   it('puts the companion identity first in the chooser system prompt', async () => {
@@ -308,11 +312,12 @@ describe('FreeTimeChooser.chooseWorkspace — fail closed to rest', () => {
     }
   });
 
-  it('rests without a model call or silence when disabled', async () => {
-    const settings = { ...createDefaultFreeTimeChooserSettings(), enabled: false };
+  it('defers directly to the full-context block without a model call or silence when disabled (default)', async () => {
+    const settings = createDefaultFreeTimeChooserSettings();
+    expect(settings.enabled).toBe(false);
     const { chooser, provider, restWindowPolicy } = makeChooser({ settings });
     const outcome = await chooser.chooseWorkspace(CTX);
-    expect(outcome).toEqual({ kind: 'rest', reason: 'chooser_disabled' });
+    expect(outcome).toEqual({ kind: 'defer_to_block', reason: 'chooser_disabled' });
     expect(provider.complete).not.toHaveBeenCalled();
     await expect(restWindowPolicy.isSilenced({ lane: 'quiet_hours', nowMs: 2_000 })).resolves.toBe(false);
   });

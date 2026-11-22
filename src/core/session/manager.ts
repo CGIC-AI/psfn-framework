@@ -67,6 +67,7 @@ import {
   isNonConversationalSessionEntry,
   type SessionMessageRecordOptions,
 } from './manager-primitives.js';
+import { isRuntimeAuthoredFallbackSessionEntry } from './runtime-fallback-provenance.js';
 import {
   bootstrapImportedHistory,
   type ImportedHistoryBootstrapChunk,
@@ -199,6 +200,14 @@ export type {
 };
 
 const log = createComponentLogger('SessionManager');
+
+const BOUNDED_SNAPSHOT_SCAN_BATCH = 64;
+
+function isCountableConversationalSnapshotEntry(entry: SessionEntry): boolean {
+  return (entry.role === 'user' || entry.role === 'assistant')
+    && !isNonConversationalSessionEntry(entry)
+    && !isRuntimeAuthoredFallbackSessionEntry(entry);
+}
 
 /**
  * Initial per-channel scan depth used by listRecentlyActiveChannels to confirm
@@ -2271,9 +2280,48 @@ export class SessionManager implements SessionManagerTypeSurface {
     if (!Number.isSafeInteger(limit) || limit < 1) {
       throw new Error('limit must be a positive safe integer');
     }
-    return this.deliveryProjectionStore
-      .getEntriesBefore(resolvedChannelId, maxEntryId + 1, limit)
-      .filter(entry => !isNonConversationalSessionEntry(entry));
+    // Non-countable rows (system ICP delivery records, tool rows, internal-lane
+    // markers, runtime-authored fallbacks) must not consume conversational
+    // snapshot slots and starve post-turn extraction (psfn-framework-d5e0p.13).
+    const batchSize = Math.max(limit, BOUNDED_SNAPSHOT_SCAN_BATCH);
+    let cursor = maxEntryId + 1;
+    let countableEntries: SessionEntry[] = [];
+    let boundaryAnchorEntry: SessionEntry | undefined;
+
+    while (cursor > 1 && countableEntries.length < limit) {
+      const page = this.deliveryProjectionStore.getEntriesBefore(
+        resolvedChannelId,
+        cursor,
+        batchSize,
+      );
+      if (page.length === 0) break;
+      const earliestEntry = page[0]!;
+      if (earliestEntry.id >= cursor) {
+        throw new Error('SessionStore getEntriesBefore returned a non-decreasing page');
+      }
+
+      const pageCountable: SessionEntry[] = [];
+      for (const entry of page) {
+        if (isCountableConversationalSnapshotEntry(entry)) {
+          pageCountable.push(entry);
+        } else if (entry.id === maxEntryId && !isNonConversationalSessionEntry(entry)) {
+          boundaryAnchorEntry = entry;
+        }
+      }
+      if (pageCountable.length > 0) {
+        countableEntries = [...pageCountable, ...countableEntries];
+      }
+      cursor = earliestEntry.id;
+      if (page.length < batchSize) break;
+    }
+
+    const bounded = countableEntries.length > limit
+      ? countableEntries.slice(-limit)
+      : countableEntries;
+    if (boundaryAnchorEntry && !bounded.some(entry => entry.id === boundaryAnchorEntry.id)) {
+      return [...bounded, boundaryAnchorEntry];
+    }
+    return bounded;
   }
 
   getMessageCount(channelId: string): number {

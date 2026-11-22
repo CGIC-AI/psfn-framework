@@ -151,7 +151,7 @@ function splitCompactionSummaryParts(summary: string): CompactionSummaryParts {
 
 function escapeForUntrustedPromptBlock(text: string): string {
   return stripControlCharacters(text)
-    .replace(/```/g, '`\u200b``')
+    .replace(/```/g, '`` `')
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;');

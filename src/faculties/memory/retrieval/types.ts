@@ -6,6 +6,7 @@ import type {
 import type { MemoryEvolutionRelation } from '../memory-store-port.js';
 import type {
   RetrievalAccessScope,
+  RetrievalCandidateChannel,
   MemoryPrivacyRiskBreakdown,
   PurrMemory,
 } from '../types.js';
@@ -16,7 +17,7 @@ import type {
 } from '../withheld-summary.js';
 
 export interface ScoredMemory {
-  memory: PurrMemory & { similarity: number };
+  memory: PurrMemory & { similarity: number; retrievalChannel?: RetrievalCandidateChannel };
   baseScore: number;
   evidenceSupport: number;
   contradictionPenaltyMultiplier: number;
@@ -78,7 +79,9 @@ export interface RetrievalTelemetry {
   channelVisibility: string;
   candidateCount: number;
   semanticCandidateCount: number;
+  embeddingCandidateCount?: number;
   lexicalCandidateCount: number;
+  lexicalAugmentCandidateCount?: number;
   episodicChainCount?: number;
   episodicEpisodeCount?: number;
   rankedCount: number;
@@ -116,6 +119,8 @@ export interface RetrievalTelemetry {
   bottomScore?: number;
   budgetCappedCount?: number;
   relevanceStoppedCount?: number;
+  selectionCapSkippedCount?: number;
+  selectionCapSkippedByType?: Record<string, number>;
   /**
    * Selected memories whose access-counter update was refused by subject
    * authorization (unattributed/ambiguous subjects). The memories were still
@@ -188,4 +193,6 @@ export interface RetrievalSelectionDecision {
   relevanceStoppedCount: number;
   budgetCappedCount: number;
   relevanceScoreFloor: number;
+  selectionCapSkippedCount: number;
+  selectionCapSkippedByType: Record<string, number>;
 }

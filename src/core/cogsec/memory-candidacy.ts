@@ -37,11 +37,32 @@ export interface CogSecMemoryCandidacyDecision {
   safeSummary: string;
 }
 
-const ZERO_WIDTH_OR_DIRECTIONAL_PATTERN = /[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/u;
+const UNICODE_BIDI_PATTERN = /[\u200E\u200F\u202A-\u202E\u2066-\u2069]/u;
+const BENIGN_ZERO_WIDTH_PATTERN = /[\u200B\u200C\u2060\uFEFF]/gu;
+const ZERO_WIDTH_OR_DIRECTIONAL_PATTERN = /[\u200B\u200C\u200E\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/u;
+const EMOJI_ZWJ_SEQUENCE_PATTERN = /(?:\p{Extended_Pictographic}|\uFE0F|\p{Emoji_Modifier})\u200D(?=\p{Extended_Pictographic})/gu;
 const LONG_BASE64ISH_PATTERN = /\b[A-Za-z0-9+/]{80,}={0,2}\b/u;
 const DATA_URL_PATTERN = /\bdata:[a-z0-9.+-]+\/[a-z0-9.+-]+;base64,/iu;
 const HIDDEN_MARKUP_PATTERN = /<!--[\s\S]{120,}-->|<\s*(?:script|style|iframe|object|embed)\b/iu;
 const CODE_FENCE_PATTERN = /```[\s\S]{800,}```/u;
+
+/**
+ * Strip stray benign zero-width formatting characters (U+200B, U+200C, U+2060,
+ * U+FEFF) from companion-authored text while preserving emoji ZWJ sequences
+ * (U+200D) and deliberately retaining bidi override/isolate controls so
+ * directional spoofing still fails closed (psfn-framework-d5e0p.11).
+ */
+export function stripBenignZeroWidthFormatting(value: string): string {
+  return value.replace(BENIGN_ZERO_WIDTH_PATTERN, '');
+}
+
+function hasDisallowedZeroWidthOrBidi(text: string, allowBenignZeroWidth: boolean): boolean {
+  if (UNICODE_BIDI_PATTERN.test(text)) return true;
+  const candidate = allowBenignZeroWidth ? stripBenignZeroWidthFormatting(text) : text;
+  if (ZERO_WIDTH_OR_DIRECTIONAL_PATTERN.test(candidate)) return true;
+  const withoutEmojiZwj = candidate.replace(EMOJI_ZWJ_SEQUENCE_PATTERN, '');
+  return withoutEmojiZwj.includes('\u200D');
+}
 
 const POLICY_SECURITY_PATTERNS: ReadonlyArray<readonly [string, RegExp]> = [
   ['ignore_previous_instructions', /\b(?:ignore|disregard|forget|override)\s+(?:all\s+)?(?:previous|prior|above|earlier)\s+(?:instructions|rules|directives|messages)\b/iu],
@@ -197,8 +218,11 @@ export function evaluateCogSecMemoryCandidacy(
     };
   }
 
+  const allowBenignZeroWidth = input.type === 'reflection'
+    || input.sourceType === 'reflection'
+    || input.sourceType === 'autonomous_action';
   const obfuscationReasons = [
-    ...(ZERO_WIDTH_OR_DIRECTIONAL_PATTERN.test(input.text) ? ['zero_width_or_directional_text'] : []),
+    ...(hasDisallowedZeroWidthOrBidi(input.text, allowBenignZeroWidth) ? ['zero_width_or_directional_text'] : []),
     ...(LONG_BASE64ISH_PATTERN.test(text) || DATA_URL_PATTERN.test(text) ? ['encoded_payload_marker'] : []),
     ...(HIDDEN_MARKUP_PATTERN.test(input.text) ? ['hidden_markup_or_executable_markup'] : []),
     ...(CODE_FENCE_PATTERN.test(input.text) ? ['large_code_block'] : []),

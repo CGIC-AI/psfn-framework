@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { createDefaultMemoryRetrievalPolicy } from '../../../system/config/memory-retrieval-policy.js';
 import type { MemoryStorePort } from '../memory-store-port.js';
 import type { PurrMemory } from '../types.js';
-import { collectRecentLexicalMemoryCandidates } from './candidates.js';
+import {
+  collectRecentLexicalMemoryCandidates,
+  fuseHybridMemoryCandidates,
+} from './candidates.js';
 
 function makeMemory(id: string, overrides: Partial<PurrMemory> = {}): PurrMemory {
   return {
@@ -160,5 +163,40 @@ describe('collectRecentLexicalMemoryCandidates bounded pagination', () => {
     ]);
     expect(candidates.map(candidate => candidate.id)).toContain('ordered-110');
     expect(listActiveMemories).not.toHaveBeenCalledWith(expect.objectContaining({ offset: 120 }));
+  });
+
+  it('calibrates lexical-augment similarity to embedding scale so augment hits do not outrank stronger semantic hits (d5e0p.19)', async () => {
+    const augmentMemory = makeMemory('augment-recent', {
+      text: 'The greenhouse irrigation schedule needs recalibrating tomorrow morning',
+      importance: 0.9,
+      salience: 0.9,
+    });
+    const augmentCandidates = await collectRecentLexicalMemoryCandidates({
+      memoryStore: makeStore([augmentMemory]),
+      contextText,
+      existingIds: new Set(),
+      scopeQuery: undefined,
+    });
+
+    expect(augmentCandidates).toHaveLength(1);
+    expect(augmentCandidates[0]?.retrievalChannel).toBe('lexical_augment');
+    expect(augmentCandidates[0]?.similarity).toBeLessThanOrEqual(0.58);
+
+    const strongSemantic = {
+      ...makeMemory('semantic-strong', {
+        text: 'Strong semantic match on irrigation pump pressure.',
+      }),
+      similarity: 0.72,
+      retrievalChannel: 'embedding' as const,
+    };
+    const fused = fuseHybridMemoryCandidates({
+      embedding: [strongSemantic],
+      fts: [],
+      lexicalAugment: augmentCandidates,
+    });
+
+    expect(fused.map(candidate => candidate.id)).toEqual(['semantic-strong', 'augment-recent']);
+    expect(fused[0]?.similarity).toBe(0.72);
+    expect(fused[1]?.retrievalChannel).toBe('lexical_augment');
   });
 });

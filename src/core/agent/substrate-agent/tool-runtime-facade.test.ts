@@ -895,10 +895,10 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
 
     const tools = agent.state.tools;
     expect(tools.map(tool => tool.name)).toEqual([
+      'memory',
+      'contact',
       'selfie_create',
       'generate_image',
-      'contact',
-      'memory',
       'fs',
       'system',
     ]);
@@ -957,8 +957,8 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
 
     const tools = agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
     expect(tools.map(tool => tool.name)).toEqual([
-      'contact',
       'memory',
+      'contact',
       'session',
       'identity',
       'analysis_workbench',
@@ -1490,5 +1490,45 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
       undefined,
     );
     expect(result.content).toEqual([{ type: 'text', text: 'capability grant ok' }]);
+  });
+
+  it('keeps analysis_workbench available on internal:free-time turns despite ops intent classification (bo1e0)', () => {
+    const { facade, agent, correlation } = createFacade(null);
+    facade.registerTool(makeTool('journal'), 'core');
+    facade.registerTool(makeTool('analysis_workbench'), 'core');
+
+    facade.applyActiveToolsToAgentForTurn({
+      id: 'msg-free-time-1',
+      channelId: 'internal:free-time:wandering',
+      channelType: 'terminal',
+      authorId: 'scheduler',
+      authorName: 'Free Time',
+      content: '[Free time]',
+      timestamp: new Date('2026-07-30T12:00:00Z'),
+    }, undefined, 'background', correlation, { intent: 'ops' });
+
+    const names = (agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>).map(tool => tool.name);
+    expect(names).toContain('journal');
+    expect(names).toContain('analysis_workbench');
+  });
+
+  it('strips all tool schemas on sleeptime JSON review turns (ik47b.2)', () => {
+    const { facade, agent, correlation } = createFacade('reflection');
+    facade.registerTool(makeTool('memory'), 'core');
+    facade.registerTool(makeTool('journal'), 'core');
+    facade.registerTool(makeTool('analysis_workbench'), 'core');
+
+    facade.applyActiveToolsToAgentForTurn({
+      id: 'msg-sleeptime-review-1',
+      channelId: 'internal:reflection:sleeptime-review',
+      channelType: 'terminal',
+      authorId: 'scheduler',
+      authorName: 'Sleeptime Review',
+      content: 'Return strict JSON.',
+      timestamp: new Date('2026-07-30T12:00:00Z'),
+    }, 'reflection', 'background', correlation, { intent: 'reflection' });
+
+    const tools = agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
+    expect(tools).toEqual([]);
   });
 });

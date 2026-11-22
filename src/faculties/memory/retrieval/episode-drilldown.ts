@@ -222,7 +222,8 @@ export async function retrieveEpisodeDrilldown(
       sessionReader,
       episode.spanRefs,
       input.channelId,
-      input.accessScope === 'companion_self_reflection',
+      input.accessScope === 'companion_self_reflection'
+        || input.accessScope === 'companion_self_creation',
     ),
     arcSiblings: toArcSiblings(episode.id, visibleMemberships),
     threadSiblings,

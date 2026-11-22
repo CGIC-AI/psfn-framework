@@ -190,12 +190,12 @@ describe('evaluateFreeTimeGate', () => {
 // ── Framing ──
 
 describe('free-time framing', () => {
-  it('defaults to one invitation turn per free-time opportunity', () => {
-    expect(DEFAULT_FREE_TIME_CONFIG.budget.maxTurns).toBe(1);
+  it('defaults to 6 multi-turn steps per free-time block (matching scheduler.seed.json)', () => {
+    expect(DEFAULT_FREE_TIME_CONFIG.budget.maxTurns).toBe(6);
   });
-  it('uses only free-time framing and the open seed, with no duplicated persona text', () => {
+  it('uses only free-time framing and the open seed without duplicated persona or silent-bias anchoring', () => {
     const prompt = buildFreeTimeFramingPrompt({
-      seedText: 'You have some time to yourself. You can do nothing if you want.',
+      seedText: 'You have some time to yourself.',
     });
     expect(prompt.startsWith('[Free time]\n\n')).toBe(true);
     expect(prompt).not.toContain('I am Companion');
@@ -203,22 +203,21 @@ describe('free-time framing', () => {
     expect(prompt).not.toContain('DESCRIPTION_SENTINEL');
     expect(prompt).not.toContain('SCENARIO_SENTINEL');
     expect(prompt).toContain('some time to yourself');
-    expect(prompt).toContain(REFLECTION_SILENT_TOKEN);
-    expect(prompt).toContain('Your replies and this private transcript are not automatically sent');
-    expect(prompt).toContain('You may choose to contact a known companion through your normal');
-    expect(prompt).toContain('governed messaging tools');
+    expect(prompt).not.toContain(`reply with only "${REFLECTION_SILENT_TOKEN}"`);
+    expect(prompt).toContain('this private transcript is not automatically sent to anyone');
+    expect(prompt).toContain('reach out to a companion through your messaging tools');
     expect(prompt).not.toContain('nothing here is sent to anyone');
     expect(prompt.toLowerCase()).not.toContain('you must');
     expect(prompt.toLowerCase()).not.toContain('your task');
   });
 
-  it('continuation prompt keeps it optional', () => {
+  it('continuation prompt stays open and avoids silent-bias anchoring', () => {
     const prompt = buildFreeTimeContinuationPrompt();
-    expect(prompt).toContain(REFLECTION_SILENT_TOKEN);
+    expect(prompt).not.toContain(`reply with only "${REFLECTION_SILENT_TOKEN}"`);
     expect(prompt.toLowerCase()).not.toContain('you must');
   });
 
-  it('places an active project intention and recent artifacts in the opening frame', () => {
+  it('places an active project intention and recent artifacts in the opening frame before the closing note', () => {
     const prompt = buildFreeTimeFramingPrompt({
       seedText: 'You have some time to yourself.',
       projectContext: [
@@ -232,7 +231,7 @@ describe('free-time framing', () => {
     expect(prompt).toContain('project:moon-garden');
     expect(prompt).toContain('Your last intention: paint the second panel.');
     expect(prompt.indexOf('Returning to one of your projects'))
-      .toBeLessThan(prompt.indexOf('There is no task and nothing to prove'));
+      .toBeLessThan(prompt.indexOf('Your normal tools, memory, journal, wiki, notes, and workspace'));
   });
 });
 
@@ -1480,5 +1479,103 @@ describe('rest-by-choice vs rest-by-failure visibility (psfn-framework-hrmrq.69)
     } finally {
       nowSpy.mockRestore();
     }
+  });
+
+  it('surfaces degraded chooser outcome as chooser_degraded without persisting silence (Law 20, ik47b.5)', async () => {
+    let nowMs = Date.parse('2026-06-11T06:00:00.000Z');
+    const store = new InMemoryRestSilenceStore();
+    const policy = new DurableRestWindowPolicy(store);
+    const { scheduler, runtime, eventBus } = buildRuntime({
+      turnScript: ['should not run'],
+      now: () => nowMs,
+    });
+    const blockEvents: Array<{ endReason: string; restReason?: string }> = [];
+    const healthEvents: Array<{ event?: { code?: string } }> = [];
+    eventBus.on('scheduler.free_time.block', (payload) => blockEvents.push({
+      endReason: payload.endReason,
+      ...(payload.restReason !== undefined ? { restReason: payload.restReason } : {}),
+    }));
+    eventBus.on('runtime.health.event', (payload: { event?: { code?: string } }) => healthEvents.push(payload));
+    runtime.opportunityPolicy = policy;
+    runtime.chooseWorkspace = async () => ({ kind: 'degraded', reason: 'chooser_timeout' });
+    registerFreeTimeTasks(runtime);
+
+    await scheduler.getTask(FREE_TIME_QUIET_HOURS_TASK_ID)!.handler({ signal: new AbortController().signal });
+
+    expect(blockEvents).toEqual([{ endReason: 'chooser_degraded', restReason: 'chooser_timeout' }]);
+    expect(healthEvents).toContainEqual(expect.objectContaining({
+      event: expect.objectContaining({ code: 'scheduler_task_failed' }),
+    }));
+    await expect(policy.isSilenced({ lane: 'quiet_hours', nowMs: nowMs + 1_000 })).resolves.toBe(false);
+    await expect(policy.isSilenced({ lane: 'idle', nowMs: nowMs + 1_000 })).resolves.toBe(false);
+  });
+
+  it('escalates repeated consecutive companion_rested blocks via health events (ik47b.5)', async () => {
+    let nowMs = Date.parse('2026-06-11T01:00:00.000Z');
+    const { scheduler, runtime, eventBus } = buildRuntime({
+      turnScript: [],
+      config: freeTimeConfig({ maxBlocksPerDay: 2, minBlockIntervalMinutes: 60 }),
+      now: () => nowMs,
+    });
+    const healthEvents: Array<{ event?: { code?: string; evidence?: { sampleCount?: number } } }> = [];
+    eventBus.on('runtime.health.event', (payload: { event?: { code?: string; evidence?: { sampleCount?: number } } }) => {
+      healthEvents.push(payload);
+    });
+    runtime.chooseWorkspace = async () => ({ kind: 'rest', reason: 'companion_rested' });
+    registerFreeTimeTasks(runtime);
+
+    const handler = scheduler.getTask(FREE_TIME_QUIET_HOURS_TASK_ID)!.handler;
+    await handler({ signal: new AbortController().signal });
+    expect(healthEvents).toHaveLength(0);
+
+    nowMs += 65 * 60_000;
+    await handler({ signal: new AbortController().signal });
+    expect(healthEvents).toContainEqual(expect.objectContaining({
+      event: expect.objectContaining({
+        code: 'scheduler_task_failed',
+        evidence: expect.objectContaining({ sampleCount: 2 }),
+      }),
+    }));
+  });
+
+  it('registers free-time tasks as idle availability and queues durable retry on preemption (bo1e0)', async () => {
+    const nowMs = Date.parse('2026-06-11T01:00:00.000Z');
+    const { scheduler, runtime } = buildRuntime({
+      turnScript: [],
+      config: freeTimeConfig({ budget: { maxTurns: 1, maxChargeUnits: 8 } }),
+      now: () => nowMs,
+    });
+    const enqueued: Array<{ kind: string; payload: unknown }> = [];
+    const handlers = new Map<string, (action: { id: string; payload: unknown }) => Promise<void>>();
+    let attempt = 0;
+    runtime.invokeTurn = vi.fn(async () => {
+      attempt += 1;
+      if (attempt === 1) {
+        const preempted = new Error('Model call on openrouter:bg preempted (maintenance_reflection) by higher-priority foreground_reply');
+        preempted.name = 'ModelCallPreemptedError';
+        throw preempted;
+      }
+      return { content: 'Finished sketching in the journal.' };
+    });
+    runtime.postTurnActions = {
+      enqueue: vi.fn((action) => {
+        enqueued.push({ kind: action.kind, payload: action.payload });
+        return 'enqueued';
+      }),
+      registerHandler: vi.fn((kind, handler) => {
+        handlers.set(kind, handler as (action: { id: string; payload: unknown }) => Promise<void>);
+      }),
+    };
+    registerFreeTimeTasks(runtime);
+
+    const task = scheduler.getTask(FREE_TIME_QUIET_HOURS_TASK_ID) as { availability?: string; handler: (run: { signal: AbortSignal }) => Promise<void> };
+    expect(task.availability).toBe('idle');
+    await task.handler({ signal: new AbortController().signal });
+    expect(enqueued).toEqual([{ kind: 'scheduler.preempted_retry:free_time', payload: { scope: 'quiet_hours' } }]);
+
+    const retryHandler = handlers.get('scheduler.preempted_retry:free_time');
+    expect(retryHandler).toBeDefined();
+    await retryHandler!({ id: 'retry-1', payload: { scope: 'quiet_hours' } });
+    expect(runtime.invokeTurn).toHaveBeenCalledTimes(2);
   });
 });

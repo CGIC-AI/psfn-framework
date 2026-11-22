@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { abortError, toError, toErrorMessage } from './errors.js';
+import { abortError, formatErrorSummary, toError, toErrorMessage } from './errors.js';
 
 describe('error helpers', () => {
   it('preserves Error instances and normalizes non-Error values', () => {
@@ -65,5 +65,39 @@ describe('error helpers', () => {
       name: 'AbortError',
       message: '',
     });
+  });
+
+  it('expands AggregateError inner messages in toErrorMessage and formatErrorSummary (d5e0p.4)', () => {
+    const first = Object.assign(new Error('provider timed out'), {
+      logicalSessionId: 'discord:session-alpha',
+      stage: 'episode_synthesis',
+    });
+    const second = new Error('discord:session-beta/orientation_review: invalid plan JSON');
+    const aggregate = new AggregateError(
+      [first, second],
+      'Sleeptime workset has 2 session failure(s)',
+    );
+
+    const message = toErrorMessage(aggregate);
+    expect(message).toContain('Sleeptime workset has 2 session failure(s)');
+    expect(message).toContain('discord:session-alpha/episode_synthesis: provider timed out');
+    expect(message).toContain('discord:session-beta/orientation_review: invalid plan JSON');
+
+    const summary = formatErrorSummary(aggregate);
+    expect(summary).toContain('AggregateError:');
+    expect(summary).toContain('discord:session-alpha/episode_synthesis: provider timed out');
+    expect(summary).toContain('discord:session-beta/orientation_review: invalid plan JSON');
+
+    // Preserves String(error) format for ordinary Error instances.
+    expect(formatErrorSummary(new Error('plain fault'))).toBe('Error: plain fault');
+  });
+
+  it('bounds AggregateError inner count and total serialized length', () => {
+    const many = Array.from({ length: 12 }, (_, idx) => new Error(`s-${idx}: ${'x'.repeat(400)}`));
+    const aggregate = new AggregateError(many, 'Batch failed');
+
+    const message = toErrorMessage(aggregate);
+    expect(message.length).toBeLessThanOrEqual(1024);
+    expect(message).toContain('s-0:');
   });
 });

@@ -326,12 +326,10 @@ async function runPostTurnBackgroundWork(
     const maxSessionEntryId = requireMaxSessionEntryId(payload.source);
     const extractor = dependencies.getMemoryExtractor();
     if (!extractor) throw new Error('Memory extraction background handler is not wired');
-    // Size the bounded snapshot to the configured extraction interval instead of
-    // a fixed ten entries. A snapshot capped at ten can never contain the 11-50
-    // uncovered entries a valid interval requires, so those configs would never
-    // interval-fire and every job receipt completed as a durable no-op. The
-    // extractor clamps this to its recovery window, keeping coverage aligned with
-    // the entries its LLM prompt actually consumes.
+    // Read up to the extractor's bounded countable conversational snapshot limit
+    // (RECOVERY_CONTEXT_MESSAGE_LIMIT) so interleaved system/tool rows and
+    // multi-message turns cannot starve the configured interval or drop earlier
+    // uncovered human messages (psfn-framework-d5e0p.13).
     const snapshotLimit = extractor.getBoundedExtractionSnapshotLimit();
     await withStableConsumedSnapshot(
       input,

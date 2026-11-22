@@ -163,11 +163,12 @@ export function evaluateExtractionTriggerForSnapshot(
   const covered = previous?.covered ?? emptyCoverageRanges();
   // Exact uncovered count: a countable entry is uncovered iff its id is not in
   // the covered set — an out-of-order lower id is never masked by a higher one.
-  const uncoveredCount = entries.filter(entry => (
+  const uncoveredEntries = entries.filter(entry => (
     isCountableExtractionEntry(entry)
     && Number.isSafeInteger(entry.id)
     && !isCoveredId(covered, entry.id)
-  )).length;
+  ));
+  const uncoveredCount = uncoveredEntries.length;
   const currentCount = lastCount + uncoveredCount;
   return evaluateExtractionTriggerInputs({
     currentCount,
@@ -175,7 +176,7 @@ export function evaluateExtractionTriggerForSnapshot(
     deltaMessages: uncoveredCount,
     runtimeConfig,
     extractionInterval,
-    thresholdEntries: () => entries,
+    thresholdEntries: () => uncoveredEntries,
   });
 }
 

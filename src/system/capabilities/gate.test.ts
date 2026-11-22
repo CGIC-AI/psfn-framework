@@ -705,6 +705,56 @@ describe('capability tool gating', () => {
     expect(orient.executeSpy).toHaveBeenCalledTimes(1);
   });
 
+  it('gates memory episode_search/shared_background, orient introspection consent, automata_bus note, and contact relationship actions accurately (e46hi)', async () => {
+    const memory = createTool('memory');
+    const memoryReadOnly = gateToolWithCapabilities(
+      memory.tool,
+      () => accessForTier('custom', ['identity.read']),
+    );
+    await memoryReadOnly.execute('mem-ep-search', { action: 'episode_search', query: 'workshop' });
+    await memoryReadOnly.execute('mem-shared-bg', { action: 'shared_background', contact_a: 'a', contact_b: 'b' });
+    expect(memory.executeSpy).toHaveBeenCalledTimes(2);
+
+    const orient = createTool('orient');
+    const orientReadOnly = gateToolWithCapabilities(
+      orient.tool,
+      () => accessForTier('custom', ['identity.read']),
+    );
+    await orientReadOnly.execute('orient-consent-get', { action: 'introspection_consent_get' });
+    expect(orient.executeSpy).toHaveBeenCalledTimes(1);
+
+    const consentSetDenied = await orientReadOnly.execute('orient-consent-set-denied', {
+      action: 'introspection_consent_set',
+    });
+    expect(orient.executeSpy).toHaveBeenCalledTimes(1);
+    expect(fromAny(consentSetDenied.content[0]).text).toContain('identity.write.runtime');
+
+    const orientWriteOnly = gateToolWithCapabilities(
+      orient.tool,
+      () => accessForTier('custom', ['identity.write.runtime']),
+    );
+    await orientWriteOnly.execute('orient-consent-set', { action: 'introspection_consent_set' });
+    await orientWriteOnly.execute('orient-sensitivity-set', { action: 'introspection_turn_sensitivity_set' });
+    expect(orient.executeSpy).toHaveBeenCalledTimes(3);
+
+    const automataBus = createTool('automata_bus');
+    const busWriteOnly = gateToolWithCapabilities(
+      automataBus.tool,
+      () => accessForTier('custom', ['automata.bus.write']),
+    );
+    await busWriteOnly.execute('bus-note', { action: 'note', text: 'Working summary' });
+    expect(automataBus.executeSpy).toHaveBeenCalledTimes(1);
+
+    const contact = createTool('contact');
+    const contactWriteOnly = gateToolWithCapabilities(
+      contact.tool,
+      () => accessForTier('custom', ['identity.write.runtime']),
+    );
+    await contactWriteOnly.execute('contact-set-rel', { action: 'set_relationship' });
+    await contactWriteOnly.execute('contact-propose-rel', { action: 'propose_relationship' });
+    expect(contact.executeSpy).toHaveBeenCalledTimes(2);
+  });
+
   it('gates unified session actions by read versus runtime-write capability tokens', async () => {
     const session = createTool('session');
     const readGated = gateToolWithCapabilities(

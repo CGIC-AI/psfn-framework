@@ -134,7 +134,13 @@ export interface ReflectionRuntimeOptions {
   contactStore?: Pick<ContactStorePort, 'getById' | 'getEmotionalSnapshot' | 'getEmotionalTimeSeries'>
     & Partial<Pick<
       ContactStorePort,
-      'listAll' | 'countVerifiedIdentityLinks' | 'getContactMaintenanceWatermark' | 'setContactMaintenanceWatermark'
+      | 'getByChannelIdentity'
+      | 'getByDiscordUserId'
+      | 'listAll'
+      | 'listRoomRoster'
+      | 'countVerifiedIdentityLinks'
+      | 'getContactMaintenanceWatermark'
+      | 'setContactMaintenanceWatermark'
     >>;
   getActiveConcerns?: (input: {
     channelId: string;
@@ -264,6 +270,8 @@ export interface ReflectionRuntimeOptions {
   };
   /** Stable fleet position for lightweight wall-clock task spreading. */
   fleetScheduleStagger?: FleetSlotStagger;
+  /** Companion UUID used to distinguish peer companion identities on companion-dm sessions. */
+  companionId?: string;
   /** Companion aliases for deterministic relevance classification. */
   companionNames?: readonly string[];
   /** Companion author ids (e.g. Discord bot id) for mention detection. */

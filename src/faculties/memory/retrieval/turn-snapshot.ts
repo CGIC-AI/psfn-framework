@@ -203,50 +203,63 @@ export async function captureTurnMemorySnapshot(
     deps.filterQuarantinedMemories(contactEmotionalMemories),
   );
 
-  let semanticCandidates: Array<PurrMemory & { similarity: number }> = [];
-  let lexicalCandidates: Array<PurrMemory & { similarity: number }> = [];
+  let semanticCandidates: Array<PurrMemory & { similarity: number; retrievalChannel?: 'embedding' | 'fts' | 'lexical_augment' }> = [];
+  let lexicalCandidates: Array<PurrMemory & { similarity: number; retrievalChannel?: 'embedding' | 'fts' | 'lexical_augment' }> = [];
 
   if (contextText.trim().length > 0) {
     if (input.retrievalQueryEmbedding && !deps.embeddingProvenance) {
       throw new Error('Shared turn retrieval query embedding requires configured memory embedding provenance');
     }
-    const embedding = input.retrievalQueryEmbedding
-      ? await input.retrievalQueryEmbedding.value.resolve({
-        turnId: input.retrievalQueryEmbedding.turnId,
-        requestId: input.retrievalQueryEmbedding.requestId,
-        companionId: input.retrievalQueryEmbedding.companionId,
-        channelId,
-        ...(canonicalContactId ? { canonicalContactId } : {}),
-        queryText: contextText,
-        provenance: deps.embeddingProvenance!,
-      })
-      : await deps.embeddingService.embed(contextText);
     const candidateLimit = Math.max(40, limit * 4);
-    semanticCandidates = await deps.memoryStore.searchByEmbedding(
-      embedding,
-      deps.retrievalThreshold,
-      candidateLimit,
-      normalizedScopeQuery,
-      // Product recall snapshot: the retriever supplies the authorization stance
-      // it was configured with. In production `deps.memoryStore` is the subject-
-      // authorized projection and the stance is 'subject-enforced'.
-      deps.embeddingSearchAuthorization,
-    );
-    semanticCandidates = semanticCandidates
+    const [rawEmbeddingCandidates, rawLexicalCandidates] = await Promise.all([
+      (async () => {
+        const embedding = input.retrievalQueryEmbedding
+          ? await input.retrievalQueryEmbedding.value.resolve({
+            turnId: input.retrievalQueryEmbedding.turnId,
+            requestId: input.retrievalQueryEmbedding.requestId,
+            companionId: input.retrievalQueryEmbedding.companionId,
+            channelId,
+            ...(canonicalContactId ? { canonicalContactId } : {}),
+            queryText: contextText,
+            provenance: deps.embeddingProvenance!,
+          })
+          : await deps.embeddingService.embed(contextText);
+        return await deps.memoryStore.searchByEmbedding(
+          embedding,
+          deps.retrievalThreshold,
+          candidateLimit,
+          normalizedScopeQuery,
+          // Product recall snapshot: the retriever supplies the authorization stance
+          // it was configured with. In production `deps.memoryStore` is the subject-
+          // authorized projection and the stance is 'subject-enforced'.
+          deps.embeddingSearchAuthorization,
+        );
+      })(),
+      (async () => {
+        const searchByText = (deps.memoryStore as Partial<Pick<MemoryStorePort, 'searchByText'>>).searchByText;
+        if (typeof searchByText !== 'function') {
+          return [];
+        }
+        return await searchByText.call(
+          deps.memoryStore,
+          contextText,
+          candidateLimit,
+          normalizedScopeQuery,
+        );
+      })(),
+    ]);
+    semanticCandidates = rawEmbeddingCandidates
       .filter(memory => !isInternalMemoryArtifact(memory))
-      .map(cloneScoredMemory);
+      .map(memory => cloneScoredMemory({ ...memory, retrievalChannel: 'embedding' }));
     semanticCandidates = applyQuarantineResult(
       deps.filterQuarantinedMemories(semanticCandidates),
     );
-    if (semanticCandidates.length === 0) {
-      lexicalCandidates = (await deps.memoryStore
-        .searchByText(contextText, candidateLimit, normalizedScopeQuery))
-        .filter(memory => !isInternalMemoryArtifact(memory))
-        .map(cloneScoredMemory);
-      lexicalCandidates = applyQuarantineResult(
-        deps.filterQuarantinedMemories(lexicalCandidates),
-      );
-    }
+    lexicalCandidates = rawLexicalCandidates
+      .filter(memory => !isInternalMemoryArtifact(memory))
+      .map(memory => cloneScoredMemory({ ...memory, retrievalChannel: 'fts' }));
+    lexicalCandidates = applyQuarantineResult(
+      deps.filterQuarantinedMemories(lexicalCandidates),
+    );
     const recentLexicalCandidates = await collectRecentLexicalMemoryCandidates({
       memoryStore: deps.memoryStore,
       contextText,
@@ -277,7 +290,13 @@ export async function captureTurnMemorySnapshot(
     canonicalContactId,
     scopeQuery: normalizedScopeQuery,
   }));
-  const retrievalCandidates = semanticCandidates.length > 0 ? semanticCandidates : lexicalCandidates;
+  const retrievalCandidatesById = new Map<string, PurrMemory & { similarity: number }>();
+  for (const candidate of [...semanticCandidates, ...lexicalCandidates]) {
+    if (!retrievalCandidatesById.has(candidate.id)) {
+      retrievalCandidatesById.set(candidate.id, candidate);
+    }
+  }
+  const retrievalCandidates = [...retrievalCandidatesById.values()];
   const {
     summary: candidateWithheldSummary,
     withheldIds: withheldCandidateIds,

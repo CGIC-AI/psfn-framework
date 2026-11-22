@@ -215,7 +215,7 @@ describe('registerFreeTimeLane production composition', () => {
         sessionManager,
         config: freeTimeConfig(),
         restWindow,
-        chooserSettings: createDefaultFreeTimeChooserSettings(),
+        chooserSettings: { ...createDefaultFreeTimeChooserSettings(), enabled: true },
         eventBus,
         agentLoop: makeAgent(responseContent),
         llmProvider: makeProvider(),
@@ -249,5 +249,85 @@ describe('registerFreeTimeLane production composition', () => {
       expect.stringContaining('continued the moon-garden checkpoint'),
       'free_time_return',
     );
+  });
+
+  it('opens directly into a full-context block with active project summaries when chooser defaults to disabled (bo1e0)', async () => {
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, { tickIntervalMs: 100, heartbeatIntervalMs: 500 });
+    const complete = vi.fn(async () => ({
+      content: 'worked on moon garden',
+      toolCalls: [],
+      model: 'test-model',
+      inputTokens: 0,
+      outputTokens: 0,
+      stopReason: 'stop' as const,
+    }));
+    const promptsReceived: string[] = [];
+    const agentLoop = {
+      getCurrentAuthoritativeSystemPrompt: () => 'You are Companion.',
+      handleMessage: vi.fn(async (message: SubstrateMessage) => {
+        promptsReceived.push(message.content);
+        return {
+          content: 'Explored moon garden ideas.',
+          channelId: message.channelId,
+          metadata: { model: 'test-model', inputTokens: 0, outputTokens: 0, durationMs: 0 },
+        };
+      }),
+    } as unknown as SubstrateAgent;
+    const personalProjects = {
+      listProjects: () => [{
+        schemaVersion: 2,
+        kind: 'personal_project',
+        id: 'moon-garden',
+        ref: 'project:moon-garden',
+        title: 'Moon Garden',
+        status: 'active',
+        visibility: 'private',
+        workContext: { kind: 'private' },
+        continuitySessionRef: PROJECT_CHANNEL,
+        returnPolicy: { kind: 'private_self' },
+        nextStep: 'sketch the lantern border',
+        artifacts: [],
+        resumeCount: 0,
+        createdAt: '2026-08-01T00:00:00.000Z',
+        updatedAt: '2026-08-29T00:00:00.000Z',
+      }],
+      resumeNextActiveProject: vi.fn(async () => null),
+    } as unknown as PersonalProjectLibrary;
+
+    registerFreeTimeLane({
+      scheduler,
+      sessionManager: {
+        listRecentlyActiveChannels: () => [],
+        getRecentMessages: () => [],
+        getRecentSessionEntries: () => [],
+        findAssistantEntryForSourceMessage: () => null,
+        appendSystemNote: vi.fn(),
+        appendContextSystemNote: vi.fn(),
+      },
+      config: freeTimeConfig(),
+      restWindow,
+      chooserSettings: createDefaultFreeTimeChooserSettings(),
+      eventBus,
+      agentLoop,
+      llmProvider: { stream: vi.fn(), complete },
+      promptRegistry: null,
+      companionName: 'Companion',
+      companionId: 'companion:test',
+      chargePolicy: undefined,
+      personalProjects,
+      contactStore: { getById: vi.fn(async () => undefined) },
+      listPendingConcernCandidates: async () => [],
+      restSilenceStore: new InMemoryRestSilenceStore(),
+    });
+
+    const handler = scheduler.getTask(FREE_TIME_IDLE_TASK_ID)?.handler;
+    if (!handler) throw new Error('free-time idle handler was not registered');
+    await handler({ signal: new AbortController().signal });
+
+    expect(complete).not.toHaveBeenCalled();
+    expect(promptsReceived).toHaveLength(1);
+    expect(promptsReceived[0]).toContain('[Your active projects]');
+    expect(promptsReceived[0]).toContain('Moon Garden (project:moon-garden): sketch the lantern border');
   });
 });

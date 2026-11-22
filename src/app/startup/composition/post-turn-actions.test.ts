@@ -1450,6 +1450,82 @@ describe('wirePostTurnActionRuntime', () => {
     }
   });
 
+  it('preserves AggregateError inner error messages in retry/exhausted logs, telemetry, and recentFailures (d5e0p.4)', async () => {
+    clearDiagnosticLogRingBufferForTests();
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
+    try {
+      const eventBus = new EventBus();
+      const scheduler = new Scheduler(eventBus, {
+        tickIntervalMs: 100,
+        heartbeatIntervalMs: 1_000,
+      });
+      const runtime = wirePostTurnActionRuntime({
+        eventBus,
+        scheduler,
+        agentLoop: { waitForIdle: vi.fn().mockResolvedValue(undefined) },
+        intervalMs: 10,
+        defaultMaxRetries: 1,
+        baseRetryDelayMs: 50,
+        maxRetryDelayMs: 200,
+      });
+      const telemetryErrors: Array<{ phase: string; error?: string }> = [];
+      eventBus.on('agent.post_turn.action.telemetry', ({ phase, error }) => {
+        if (phase === 'retry_scheduled' || phase === 'failed') {
+          telemetryErrors.push({ phase, error });
+        }
+      });
+      const aggregate = new AggregateError(
+        [
+          new Error('discord:alpha/orientation_review: missing orient block'),
+          new Error('discord:beta/sleep_consolidation: database deadlock'),
+        ],
+        'Sleeptime workset has 2 session failure(s)',
+      );
+      runtime.registerHandler('memory.sleeptime.run', vi.fn().mockRejectedValue(aggregate), {
+        executionMode: 'background',
+      });
+
+      runtime.enqueue(makeAction({
+        id: 'agg-sleeptime-action',
+        kind: 'memory.sleeptime.run',
+        dedupeKey: 'memory.sleeptime.run:agg-test',
+        maxRetries: 1,
+      }));
+
+      await scheduler.tick();
+      nowSpy.mockReturnValue(1_700_000_000_100);
+      await scheduler.tick();
+
+      const status = runtime.getStatus();
+      const failure = status.failures.recentFailures.find(f => f.actionId === 'agg-sleeptime-action');
+      expect(failure).toBeDefined();
+      expect(failure?.error).toContain('Sleeptime workset has 2 session failure(s)');
+      expect(failure?.error).toContain('discord:alpha/orientation_review: missing orient block');
+      expect(failure?.error).toContain('discord:beta/sleep_consolidation: database deadlock');
+
+      expect(telemetryErrors).toEqual([
+        expect.objectContaining({
+          phase: 'retry_scheduled',
+          error: expect.stringContaining('discord:alpha/orientation_review: missing orient block'),
+        }),
+        expect.objectContaining({
+          phase: 'failed',
+          error: expect.stringContaining('discord:beta/sleep_consolidation: database deadlock'),
+        }),
+      ]);
+
+      const logs = getRecentDiagnosticLogRecords();
+      const retryLog = logs.find(r => r.message === 'Deferred action retry scheduled');
+      const exhaustedLog = logs.find(r => r.message === 'Deferred action exhausted retries');
+      expect(String(retryLog?.context?.error ?? '')).toContain('discord:alpha/orientation_review: missing orient block');
+      expect(String(retryLog?.context?.error ?? '')).toContain('discord:beta/sleep_consolidation: database deadlock');
+      expect(String(exhaustedLog?.context?.error ?? '')).toContain('discord:alpha/orientation_review: missing orient block');
+      expect(String(exhaustedLog?.context?.error ?? '')).toContain('discord:beta/sleep_consolidation: database deadlock');
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('restores the retryable-failure count with a durable retry checkpoint', async () => {
     const nowSpy = vi.spyOn(Date, 'now');
     const tempDir = mkdtempSync(join(tmpdir(), 'psfn-post-turn-retry-restart-'));

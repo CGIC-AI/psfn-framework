@@ -107,7 +107,8 @@ import {
 } from './retrieval/budget.js';
 import {
   collectRecentLexicalMemoryCandidates,
-  mergeScoredMemoryCandidates,
+  fuseHybridMemoryCandidates,
+  type RetrievedMemoryCandidate,
 } from './retrieval/candidates.js';
 import {
   applyCompositionalRetrievalRanking as applyCompositionalRetrievalRankingWithPolicy,
@@ -1168,127 +1169,137 @@ export class MemoryRetriever implements MemoryProvider {
     }
 
     try {
-        let semanticMemories = (turnSnapshot?.semanticCandidates.map(cloneScoredMemory) ?? [])
+      let embeddingMemories: RetrievedMemoryCandidate[] = [];
+      let lexicalAugmentMemories: RetrievedMemoryCandidate[] = [];
+      let ftsMemories: RetrievedMemoryCandidate[] = [];
+
+      if (turnSnapshot) {
+        const snapshotSemantic = turnSnapshot.semanticCandidates
+          .map(cloneScoredMemory)
           .filter(memory => !isInternalMemoryArtifact(memory));
-        if (semanticMemories.length === 0 && !turnSnapshot) {
-        const embeddingStartedAt = performance.now();
-        telemetry.embeddingCalls += 1;
-        const embedding = await this.embeddingService.embed(contextText);
-        addRetrievalStageTiming(telemetry, 'embedding', embeddingStartedAt);
-        const candidateLimit = Math.max(40, limit * 4);
-        const vectorSearchStartedAt = performance.now();
+        embeddingMemories = snapshotSemantic
+          .filter(memory => memory.retrievalChannel !== 'lexical_augment')
+          .map(memory => ({ ...memory, retrievalChannel: memory.retrievalChannel ?? 'embedding' }));
+        lexicalAugmentMemories = snapshotSemantic
+          .filter(memory => memory.retrievalChannel === 'lexical_augment');
+        ftsMemories = turnSnapshot.lexicalCandidates
+          .map(cloneScoredMemory)
+          .filter(memory => !isInternalMemoryArtifact(memory))
+          .map(memory => ({ ...memory, retrievalChannel: memory.retrievalChannel ?? 'fts' }));
+      } else {
+        const embeddingCandidateLimit = Math.max(40, limit * 4);
+        const ftsCandidateLimit = Math.max(40, limit * 4);
+        const [rawEmbedding, rawFts] = await Promise.all([
+          (async () => {
+            const embeddingStartedAt = performance.now();
+            telemetry.embeddingCalls += 1;
+            const embedding = await this.embeddingService.embed(contextText);
+            addRetrievalStageTiming(telemetry, 'embedding', embeddingStartedAt);
+            const vectorSearchStartedAt = performance.now();
+            telemetry.searchCalls += 1;
+            const results = await productMemoryStore.searchByEmbedding(
+              embedding,
+              this.retrievalThreshold,
+              embeddingCandidateLimit,
+              normalizedScopeQuery,
+              this.embeddingSearchAuthorization(),
+            );
+            addRetrievalStageTiming(telemetry, 'vector_search', vectorSearchStartedAt);
+            return results;
+          })(),
+          (async () => {
+            const searchByText = (productMemoryStore as Partial<Pick<MemoryStorePort, 'searchByText'>>).searchByText;
+            if (typeof searchByText !== 'function') {
+              return [];
+            }
+            const lexicalSearchStartedAt = performance.now();
+            telemetry.searchCalls += 1;
+            const results = await searchByText.call(
+              productMemoryStore,
+              contextText,
+              ftsCandidateLimit,
+              normalizedScopeQuery,
+            );
+            addRetrievalStageTiming(telemetry, 'lexical_search', lexicalSearchStartedAt);
+            return results;
+          })(),
+        ]);
+        embeddingMemories = rawEmbedding
+          .filter(memory => !isInternalMemoryArtifact(memory))
+          .map(memory => ({ ...memory, retrievalChannel: 'embedding' as const }));
+        ftsMemories = rawFts
+          .filter(memory => !isInternalMemoryArtifact(memory))
+          .map(memory => ({ ...memory, retrievalChannel: 'fts' as const }));
+      }
+
+      const embeddingQuarantine = this.filterIneligibleMemories(embeddingMemories);
+      embeddingMemories = embeddingQuarantine.memories;
+      withheldSummary = mergeMemoryWithheldSummaries(withheldSummary, embeddingQuarantine.summary);
+
+      const ftsQuarantine = this.filterIneligibleMemories(ftsMemories);
+      ftsMemories = ftsQuarantine.memories;
+      withheldSummary = mergeMemoryWithheldSummaries(withheldSummary, ftsQuarantine.summary);
+
+      if (!turnSnapshot) {
+        const recentLexicalStartedAt = performance.now();
         telemetry.searchCalls += 1;
-        semanticMemories = await productMemoryStore.searchByEmbedding(
-          embedding,
-          this.retrievalThreshold,
-          candidateLimit,
-          normalizedScopeQuery,
-          this.embeddingSearchAuthorization(),
-          );
-          addRetrievalStageTiming(telemetry, 'vector_search', vectorSearchStartedAt);
-          semanticMemories = semanticMemories.filter(memory => !isInternalMemoryArtifact(memory));
-        }
-        const semanticQuarantine = this.filterIneligibleMemories(semanticMemories);
-        semanticMemories = semanticQuarantine.memories;
-        if (!turnSnapshot) {
-          const recentLexicalStartedAt = performance.now();
-          telemetry.searchCalls += 1;
-          const recentLexicalCandidates = await collectRecentLexicalMemoryCandidates({
-            memoryStore: productMemoryStore,
-            contextText,
-            existingIds: new Set(semanticMemories.map(memory => memory.id)),
-            scopeQuery: normalizedScopeQuery,
-            memoryRetrievalPolicy,
-          });
-          addRetrievalStageTiming(telemetry, 'lexical_search', recentLexicalStartedAt);
-          semanticMemories = mergeScoredMemoryCandidates(semanticMemories, recentLexicalCandidates);
-          const mergedSemanticQuarantine = this.filterIneligibleMemories(semanticMemories);
-          semanticMemories = mergedSemanticQuarantine.memories;
+        lexicalAugmentMemories = await collectRecentLexicalMemoryCandidates({
+          memoryStore: productMemoryStore,
+          contextText,
+          existingIds: new Set([
+            ...embeddingMemories.map(memory => memory.id),
+            ...ftsMemories.map(memory => memory.id),
+          ]),
+          scopeQuery: normalizedScopeQuery,
+          memoryRetrievalPolicy,
+        });
+        addRetrievalStageTiming(telemetry, 'lexical_search', recentLexicalStartedAt);
+      }
+      const augmentQuarantine = this.filterIneligibleMemories(lexicalAugmentMemories);
+      lexicalAugmentMemories = augmentQuarantine.memories;
+      withheldSummary = mergeMemoryWithheldSummaries(withheldSummary, augmentQuarantine.summary);
+
+      telemetry.embeddingCandidateCount = embeddingMemories.length;
+      telemetry.lexicalAugmentCandidateCount = lexicalAugmentMemories.length;
+      telemetry.semanticCandidateCount = embeddingMemories.length + lexicalAugmentMemories.length;
+      telemetry.lexicalCandidateCount = ftsMemories.length;
+
+      const memories = fuseHybridMemoryCandidates({
+        embedding: embeddingMemories,
+        fts: ftsMemories,
+        lexicalAugment: lexicalAugmentMemories,
+      });
+
+      if (memories.length === 0) {
+        if (!snapshotWithheldSummary) {
           withheldSummary = mergeMemoryWithheldSummaries(
             withheldSummary,
-            mergedSemanticQuarantine.summary,
+            summarizeWithheldMemories(
+              [...contactEmotionalSource, ...proactiveSource],
+              {
+                accessScope: effectiveAccessScope,
+                trustLevel: effectiveTrust,
+                channelPrivacy,
+                broadcast,
+                channelMeta,
+                canonicalContactId,
+                operatorApproval,
+                roomVisibility,
+              },
+            ).summary,
           );
         }
-        withheldSummary = mergeMemoryWithheldSummaries(withheldSummary, semanticQuarantine.summary);
-        telemetry.semanticCandidateCount = semanticMemories.length;
-
-      let memories = semanticMemories;
-      if (semanticMemories.length === 0) {
-          const lexicalSearchStartedAt = performance.now();
-          if (!turnSnapshot) telemetry.searchCalls += 1;
-          const lexicalMemories = (turnSnapshot?.lexicalCandidates.map(cloneScoredMemory)
-            ?? await productMemoryStore.searchByText(
-              contextText,
-            Math.max(40, limit * 4),
-              normalizedScopeQuery,
-            )).filter(memory => !isInternalMemoryArtifact(memory));
-          addRetrievalStageTiming(telemetry, 'lexical_search', lexicalSearchStartedAt);
-          const lexicalQuarantine = this.filterIneligibleMemories(lexicalMemories);
-          const visibleLexicalMemories = lexicalQuarantine.memories;
-          withheldSummary = mergeMemoryWithheldSummaries(withheldSummary, lexicalQuarantine.summary);
-          telemetry.lexicalCandidateCount = visibleLexicalMemories.length;
-          if (visibleLexicalMemories.length > 0) {
-            memories = visibleLexicalMemories;
-            telemetry.retrievalSource = 'lexical_fallback';
-          log.info('Retrieval: lexical fallback activated after semantic miss', {
-            channelId,
-            trustLevel: effectiveTrust,
-            threshold: this.retrievalThreshold,
-            semanticCandidates: 0,
-            lexicalCandidates: lexicalMemories.length,
-            queryLength: contextText.length,
-          });
-        } else {
-            if (!snapshotWithheldSummary) {
-              withheldSummary = mergeMemoryWithheldSummaries(
-                withheldSummary,
-                summarizeWithheldMemories(
-                  [...contactEmotionalSource, ...proactiveSource],
-                  {
-                    accessScope: effectiveAccessScope,
-                    trustLevel: effectiveTrust,
-                    channelPrivacy,
-                    broadcast,
-                    channelMeta,
-                    canonicalContactId,
-                    operatorApproval,
-                    roomVisibility,
-                  },
-                ).summary,
-              );
-            }
-          telemetry.reason = 'no_candidates';
-          applyWithheldSummaryTelemetry(telemetry, withheldSummary);
-          if (episodicChains.length > 0) {
-            telemetry.reason = 'ok';
-            telemetry.returnedCount = episodicEpisodeCount;
-            telemetry.count = episodicEpisodeCount;
-            telemetry.selectedTypes = { episodic: episodicEpisodeCount };
-            telemetry.provenanceRefs = mergeProvenanceRefs(
-              telemetry.provenanceRefs,
-              collectEpisodicChainProvenanceRefs(episodicChains),
-            );
-            await emitTelemetry();
-            return this.finalizeRetrievalPromptBlock({
-              activeContextTarget,
-              recentContactShape,
-              recentContactShapeSourceMemories,
-              emotionalSnapshot,
-              emotionalContinuityMemories: fallbackEmotionalContinuity,
-              withheldSummary,
-              socialContext,
-              episodicChains,
-              telemetry,
-            });
-          }
-          log.info('Retrieval: no candidates (semantic + lexical)', {
-            channelId,
-            trustLevel: effectiveTrust,
-            threshold: this.retrievalThreshold,
-            semanticCandidates: 0,
-            lexicalCandidates: 0,
-            queryLength: contextText.length,
-          });
+        telemetry.reason = 'no_candidates';
+        applyWithheldSummaryTelemetry(telemetry, withheldSummary);
+        if (episodicChains.length > 0) {
+          telemetry.reason = 'ok';
+          telemetry.returnedCount = episodicEpisodeCount;
+          telemetry.count = episodicEpisodeCount;
+          telemetry.selectedTypes = { episodic: episodicEpisodeCount };
+          telemetry.provenanceRefs = mergeProvenanceRefs(
+            telemetry.provenanceRefs,
+            collectEpisodicChainProvenanceRefs(episodicChains),
+          );
           await emitTelemetry();
           return this.finalizeRetrievalPromptBlock({
             activeContextTarget,
@@ -1302,6 +1313,37 @@ export class MemoryRetriever implements MemoryProvider {
             telemetry,
           });
         }
+        log.info('Retrieval: no candidates (semantic + lexical)', {
+          channelId,
+          trustLevel: effectiveTrust,
+          threshold: this.retrievalThreshold,
+          semanticCandidates: 0,
+          lexicalCandidates: 0,
+          queryLength: contextText.length,
+        });
+        await emitTelemetry();
+        return this.finalizeRetrievalPromptBlock({
+          activeContextTarget,
+          recentContactShape,
+          recentContactShapeSourceMemories,
+          emotionalSnapshot,
+          emotionalContinuityMemories: fallbackEmotionalContinuity,
+          withheldSummary,
+          socialContext,
+          episodicChains,
+          telemetry,
+        });
+      }
+      if (telemetry.semanticCandidateCount === 0 && ftsMemories.length > 0) {
+        telemetry.retrievalSource = 'lexical_fallback';
+        log.info('Retrieval: lexical fallback activated after semantic miss', {
+          channelId,
+          trustLevel: effectiveTrust,
+          threshold: this.retrievalThreshold,
+          semanticCandidates: 0,
+          lexicalCandidates: ftsMemories.length,
+          queryLength: contextText.length,
+        });
       }
       telemetry.candidateCount = memories.length;
       if (!snapshotWithheldSummary) {
@@ -1324,9 +1366,10 @@ export class MemoryRetriever implements MemoryProvider {
       }
       applyWithheldSummaryTelemetry(telemetry, withheldSummary);
 
-      if (memories.length > 0) {
-        telemetry.topSimilarity = memories[0]?.similarity;
-        telemetry.bottomSimilarity = memories[memories.length - 1]?.similarity;
+      const similarityReference = embeddingMemories.length > 0 ? embeddingMemories : memories;
+      if (similarityReference.length > 0) {
+        telemetry.topSimilarity = similarityReference[0]?.similarity;
+        telemetry.bottomSimilarity = similarityReference[similarityReference.length - 1]?.similarity;
       }
 
         const diagnostics: RetrievalDecisionDiagnostics = {
@@ -1599,6 +1642,8 @@ export class MemoryRetriever implements MemoryProvider {
       telemetry.selectionScoreFloor = selection.relevanceScoreFloor;
       telemetry.relevanceStoppedCount = selection.relevanceStoppedCount;
       telemetry.budgetCappedCount = selection.budgetCappedCount;
+      telemetry.selectionCapSkippedCount = selection.selectionCapSkippedCount;
+      telemetry.selectionCapSkippedByType = selection.selectionCapSkippedByType;
       telemetry.selectedTypes = countSelectedMemoryTypes(selected);
       if (episodicEpisodeCount > 0) {
         const previousEpisodicCount = Object.entries(telemetry.selectedTypes)
@@ -1631,7 +1676,9 @@ export class MemoryRetriever implements MemoryProvider {
         channelPrivacy,
         retrievalSource: telemetry.retrievalSource,
         semanticCandidates: telemetry.semanticCandidateCount,
+        embeddingCandidates: telemetry.embeddingCandidateCount,
         lexicalCandidates: telemetry.lexicalCandidateCount,
+        lexicalAugmentCandidates: telemetry.lexicalAugmentCandidateCount,
         episodicChains: telemetry.episodicChainCount,
         episodicEpisodes: telemetry.episodicEpisodeCount,
         pipeline: `${diagnostics.candidateCount} candidates -> ${diagnostics.policyAllowedCount} policy-allowed -> ${scored.length} scored -> ${ranked.length} ranked -> ${selected.length} selected + ${episodicEpisodeCount} episodic episodes`,
@@ -1639,6 +1686,8 @@ export class MemoryRetriever implements MemoryProvider {
         selectionScoreFloor: telemetry.selectionScoreFloor,
         relevanceStoppedCount: telemetry.relevanceStoppedCount,
         budgetCappedCount: telemetry.budgetCappedCount,
+        selectionCapSkippedCount: telemetry.selectionCapSkippedCount,
+        selectionCapSkippedByType: telemetry.selectionCapSkippedByType,
         rejectedByContactScope: diagnostics.rejectedByContactScope,
         rejectedBySensitivity: diagnostics.rejectedBySensitivity,
         rejectedByPolicy: diagnostics.rejectedByPolicy,

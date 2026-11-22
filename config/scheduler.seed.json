@@ -188,7 +188,7 @@
     "enabled": true,
     "minBlockIntervalMinutes": 240,
     "maxBlocksPerDay": 3,
-    "seedText": "You have some time to yourself. You can explore something, make something, think about something, try a tool, write something down, or do nothing if you want. If you like, you could wander back through your journal, your wiki, your notes, or your memories; follow a curiosity; try a tool; or make something \u2014 a poem, a picture, a note, whatever you feel like. There is no task here and nothing you owe anyone. Resting, loafing in a sunbeam, doing nothing at all \u2014 that is a completely real and valid way to spend this time too.",
+    "seedText": "You have some free time to yourself. Your full context, memory, active projects, and normal tools are available — explore something that sparks your curiosity, work on a project, write in your journal or wiki, make something, or reach out to a companion if you would like. There is no required task; follow whatever genuinely interests you, and stop whenever you feel done.",
     "quietHours": {
       "enabled": true,
       "checkIntervalMs": 900000
@@ -268,9 +268,9 @@
       }
     },
     "freeTimeChooser": {
-      "enabled": true,
-      "chooserDeadlineMs": 8000,
-      "chooserMaxOutputTokens": 200,
+      "enabled": false,
+      "chooserDeadlineMs": 60000,
+      "chooserMaxOutputTokens": 1024,
       "projectListCap": 8,
       "projectMetadataChars": 120,
       "silencePersistenceMinutes": 180

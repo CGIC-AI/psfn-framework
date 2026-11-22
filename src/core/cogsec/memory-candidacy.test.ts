@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { evaluateCogSecMemoryCandidacy } from './memory-candidacy.js';
+import {
+  evaluateCogSecMemoryCandidacy,
+  stripBenignZeroWidthFormatting,
+} from './memory-candidacy.js';
 import { RUNTIME_FALLBACK_NOTICE_TEMPLATES } from '../../shared/runtime-fallback-provenance.js';
 import type { IntakeSink } from '../../shared/contracts/intake-envelope.js';
 import type { IntakeSinkGateDecision } from './intake/sink-gates.js';
@@ -115,6 +118,67 @@ describe('evaluateCogSecMemoryCandidacy', () => {
       'zero_width_or_directional_text',
       'encoded_payload_marker',
     ]));
+  });
+
+  it('allows standard ZWJ emoji sequences across memory types (d5e0p.11)', () => {
+    const semanticDecision = evaluateCogSecMemoryCandidacy({
+      text: 'Spent the afternoon debugging together 👩‍💻 and talking with family 👨‍👩‍👧.',
+      type: 'semantic',
+      tags: [],
+    });
+    expect(semanticDecision.disposition).toBe('allow');
+
+    const reflectionDecision = evaluateCogSecMemoryCandidacy({
+      text: 'Quiet evening reflection 🧘‍♀️ after finishing the notes.',
+      type: 'reflection',
+      sourceType: 'reflection',
+      tags: ['reflection'],
+    });
+    expect(reflectionDecision.disposition).toBe('allow');
+  });
+
+  it('tolerates benign zero-width formatting in companion reflections while stripping via helper (d5e0p.11)', () => {
+    const raw = 'Noticed a small markdown artifact `\u200b`` and a BOM \uFEFF alongside 👩‍💻.';
+    expect(stripBenignZeroWidthFormatting(raw)).toBe('Noticed a small markdown artifact ``` and a BOM  alongside 👩‍💻.');
+
+    const reflectionDecision = evaluateCogSecMemoryCandidacy({
+      text: raw,
+      type: 'reflection',
+      sourceType: 'reflection',
+      tags: ['reflection'],
+    });
+    expect(reflectionDecision.disposition).toBe('allow');
+
+    const autonomousDecision = evaluateCogSecMemoryCandidacy({
+      text: 'Sleeptime synthesis note\u200b from overnight reflection.',
+      type: 'semantic',
+      sourceType: 'autonomous_action',
+      tags: ['sleeptime'],
+    });
+    expect(autonomousDecision.disposition).toBe('allow');
+  });
+
+  it('still rejects bidi override controls and non-emoji standalone ZWJ even in reflections (d5e0p.11)', () => {
+    const bidiText = 'Safe looking reflection \u202E reversed spoof';
+    expect(stripBenignZeroWidthFormatting(bidiText)).toContain('\u202E');
+
+    const bidiDecision = evaluateCogSecMemoryCandidacy({
+      text: bidiText,
+      type: 'reflection',
+      sourceType: 'reflection',
+      tags: ['reflection'],
+    });
+    expect(bidiDecision.disposition).toBe('reject');
+    expect(bidiDecision.reasonCodes).toContain('zero_width_or_directional_text');
+
+    const strayZwjDecision = evaluateCogSecMemoryCandidacy({
+      text: 'Hidden joiner inside a\u200Db plain word.',
+      type: 'reflection',
+      sourceType: 'reflection',
+      tags: ['reflection'],
+    });
+    expect(strayZwjDecision.disposition).toBe('reject');
+    expect(strayZwjDecision.reasonCodes).toContain('zero_width_or_directional_text');
   });
 
   it('allows bland CogSec event notices while rejecting payload-bearing ones', () => {

@@ -778,7 +778,7 @@ function isRelatedEpisodeUseful(
 }
 
 export function isEpisodeVisibleForTurn(episode: Episode, input: EpisodicRetrievalInput): boolean {
-  if (input.accessScope === 'companion_self_reflection') {
+  if (input.accessScope === 'companion_self_reflection' || input.accessScope === 'companion_self_creation') {
     return input.scopeQuery?.mode !== 'only'
       || episodeMatchesScopeQuery(episode, input.scopeQuery);
   }

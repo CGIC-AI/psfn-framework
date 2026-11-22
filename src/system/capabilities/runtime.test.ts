@@ -102,15 +102,22 @@ describe('CapabilityRuntime', () => {
       saveCapabilityTierConfig(dataDir, {
         tier: 'apprentice',
         customTokens: [],
+        disabledTools: ['shell', 'web'],
       });
       expect(snapshot.tier).toBe('custom');
       expect(snapshot.grantedTokens).toEqual(['identity.read', 'shard.spawn', 'world.read']);
+      expect(snapshot.disabledTools).toEqual([]);
 
       const next = runtime.snapshotOwnerGrant();
       expect(next.tier).toBe('apprentice');
       expect(next.customTokens).toEqual([]);
       expect(next.grantedTokens).toContain('shard.spawn');
-      expect(next.grantedTokens).not.toContain('git.write');
+      expect(next.grantedTokens).toContain('git.write');
+      expect(next.grantedTokens).toContain('external.companion');
+      expect(next.disabledTools).toEqual(['shell', 'web']);
+      expect(Object.isFrozen(next.disabledTools)).toBe(true);
+      expect(runtime.isToolDisabled('shell')).toBe(true);
+      expect(runtime.isToolDisabled('memory')).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -5,6 +5,10 @@ import type { Agent, AgentTool } from '../../../boundary/pi-agent/index.js';
 import { tagToolWithReversibility } from '../../../system/capabilities/safeguards.js';
 import { assertToolsHaveDeclaredCapabilityPolicies } from '../../../system/capabilities/requirements.js';
 import type { CapabilityAccess } from '../../../system/capabilities/gate.js';
+import {
+  getDisabledToolsFromAccess,
+  isToolDisabledByAccess,
+} from '../../../system/capabilities/tool-overrides.js';
 import type {
   CorrelationMetadata,
   IcpAutonomyCandidateOrigin,
@@ -473,6 +477,12 @@ export class ToolRuntimeFacade {
     }
   }
 
+  refreshActiveTools(): void {
+    if (!this.getCandidateTurnContext()) {
+      this.applyActiveToolsToAgent();
+    }
+  }
+
   getAdaptiveToolRuntimeState(): AdaptiveToolRuntimeState {
     const candidateContext = this.getCandidateTurnContext();
     if (candidateContext) {
@@ -541,7 +551,7 @@ export class ToolRuntimeFacade {
       throw new Error('Trusted ICP candidate notify scope requires its canonical scheduler turn');
     }
     const access = this.resolveCapabilityAccess();
-    if (!access.has('external.companion')) {
+    if (!access.has('external.companion') || isToolDisabledByAccess(access, 'notify')) {
       throw new Error('Trusted ICP candidate notify scope is not capability authorized');
     }
     const toolName = 'notify';
@@ -796,7 +806,9 @@ export class ToolRuntimeFacade {
   }
 
   private getCoreToolsForCurrentTurn(): AgentTool<any>[] {
-    return this.isCandidateTurn() ? [] : [...this.coreTools];
+    if (this.isCandidateTurn()) return [];
+    const access = this.resolveCapabilityAccess();
+    return this.coreTools.filter(tool => !isToolDisabledByAccess(access, tool.name));
   }
 
   private resolveCandidateActiveTools(context: ToolTurnContext): ActiveToolResolution {
@@ -865,6 +877,7 @@ export class ToolRuntimeFacade {
       extendedTools: this.extendedTools,
       promotedResolution: this.resolvePromotedToolActivation(),
       additionalSkipped,
+      disabledTools: getDisabledToolsFromAccess(this.resolveCapabilityAccess()),
       ...(this.toolUsageRanking ? { usageRanking: this.toolUsageRanking } : {}),
     });
     return resolution;
@@ -872,7 +885,9 @@ export class ToolRuntimeFacade {
 
   private getExtendedToolsForCurrentTurn(): AgentTool<any>[] {
     const context = this.getCandidateTurnContext();
-    return context ? this.getCandidateTools(context) : [...this.extendedTools];
+    if (context) return this.getCandidateTools(context);
+    const access = this.resolveCapabilityAccess();
+    return this.extendedTools.filter(tool => !isToolDisabledByAccess(access, tool.name));
   }
 
   private getCandidateTools(context: ToolTurnContext): AgentTool<any>[] {
@@ -930,7 +945,9 @@ export class ToolRuntimeFacade {
       || requestContext.callType !== context.correlation.callType) {
       return false;
     }
-    return this.resolveCapabilityAccess().has('external.companion')
+    const access = this.resolveCapabilityAccess();
+    return access.has('external.companion')
+      && !isToolDisabledByAccess(access, 'notify')
       && this.extendedTools.some(tool => tool.name === 'notify');
   }
 

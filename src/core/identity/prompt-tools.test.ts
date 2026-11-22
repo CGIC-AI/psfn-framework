@@ -612,9 +612,9 @@ describe('Prompt Layer Tools', () => {
   });
 
   describe('identity action=update_layer', () => {
-    it('denies base layer updates in nursery tier', async () => {
-      const layer = createNonFoundationBaseLayer('Base', 'base-nursery');
-      const tool = identityTool('nursery');
+    it('denies base layer updates when identity.write.base is withheld', async () => {
+      const layer = createNonFoundationBaseLayer('Base', 'base-custom');
+      const tool = identityTool('custom', {}, ['identity.read', 'identity.write.runtime']);
 
       const result = await tool.execute('test', { action: 'update_layer', layer_id: layer.id, content: 'modified' });
       const text = resultText(result);
@@ -786,9 +786,9 @@ describe('Prompt Layer Tools', () => {
       expect(store.getById(layer.id)?.content).toBe('original');
     });
 
-    it('denies operator layer updates in nursery tier', async () => {
+    it('denies operator layer updates when identity.write.operator is withheld', async () => {
       const layer = store.create({ type: 'operator', name: 'Operator', content: 'original' });
-      const tool = identityTool('nursery');
+      const tool = identityTool('custom', {}, ['identity.read', 'identity.write.runtime']);
 
       const result = await tool.execute('test', { action: 'update_layer', layer_id: layer.id, content: 'modified' });
       const text = resultText(result);
@@ -881,12 +881,12 @@ describe('Prompt Layer Tools', () => {
   });
 
   describe('identity action=rollback_layer', () => {
-    it('denies base rollbacks in nursery tier', async () => {
-      const layer = createNonFoundationBaseLayer('Base', 'rollback-nursery');
+    it('denies base rollbacks when identity.write.base is withheld', async () => {
+      const layer = createNonFoundationBaseLayer('Base', 'rollback-custom');
       store.update(layer.id, 'base-v2', 'agent', {}, 'base update');
-      const tool = identityTool('nursery');
+      const tool = identityTool('custom', {}, ['identity.read', 'identity.write.runtime']);
 
-      const result = await tool.execute('rollback-nursery', {
+      const result = await tool.execute('rollback-custom', {
         action: 'rollback_layer',
         layer_id: layer.id,
         version: 1,
@@ -943,9 +943,9 @@ describe('Prompt Layer Tools', () => {
   });
 
   describe('identity action=toggle_layer', () => {
-    it('denies base toggles in nursery tier', async () => {
-      const layer = createNonFoundationBaseLayer('Base', 'toggle-nursery');
-      const tool = identityTool('nursery');
+    it('denies base toggles when identity.write.base is withheld', async () => {
+      const layer = createNonFoundationBaseLayer('Base', 'toggle-custom');
+      const tool = identityTool('custom', {}, ['identity.read', 'identity.write.runtime']);
 
       const result = await tool.execute('test', { action: 'toggle_layer', layer_id: layer.id });
       const text = resultText(result);
@@ -991,9 +991,9 @@ describe('Prompt Layer Tools', () => {
       }
     });
 
-    it('denies operator toggles in nursery tier', async () => {
+    it('denies operator toggles when identity.write.operator is withheld', async () => {
       const layer = store.create({ type: 'operator', name: 'Operator', content: 'policy' });
-      const tool = identityTool('nursery');
+      const tool = identityTool('custom', {}, ['identity.read', 'identity.write.runtime']);
 
       const result = await tool.execute('test', { action: 'toggle_layer', layer_id: layer.id });
       const text = resultText(result);

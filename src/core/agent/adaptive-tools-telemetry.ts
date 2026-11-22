@@ -29,7 +29,7 @@ export interface AdaptiveToolSnapshotTool {
 
 export interface AdaptiveToolSnapshotSkip {
   toolName: string;
-  source: 'extended';
+  source: AdaptiveToolCatalogSource;
   reason: string;
   missingTokens?: CapabilityToken[];
 }

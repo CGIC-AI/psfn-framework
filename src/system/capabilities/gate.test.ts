@@ -41,12 +41,16 @@ import {
 function accessForTier(
   tier: CapabilityTier,
   customTokens: CapabilityToken[] = [],
+  disabledTools: string[] = [],
 ): CapabilityAccess {
   const granted = new Set(resolveTierCapabilityTokens(tier, customTokens));
+  const disabled = new Set(disabledTools);
   return {
     getTier: () => tier,
     getGrantedTokens: () => granted,
     has: (token) => granted.has(token),
+    getDisabledTools: () => disabled,
+    isToolDisabled: (toolName) => disabled.has(toolName),
   };
 }
 
@@ -71,29 +75,38 @@ function createTool(name: string): {
 }
 
 describe('capability tool gating', () => {
-  it('enforces nursery grants and denials', async () => {
-    const memoryWrite = createTool('memory');
-    const memoryGated = gateToolWithCapabilities(
-      memoryWrite.tool,
-      () => accessForTier('nursery'),
-    );
+  it('grants full baseline capability to legacy nursery and apprentice tiers while custom enforces token denials', async () => {
+    for (const tier of ['nursery', 'apprentice', 'autonomous'] as const) {
+      const memoryWrite = createTool('memory');
+      const memoryGated = gateToolWithCapabilities(
+        memoryWrite.tool,
+        () => accessForTier(tier),
+      );
+      await memoryGated.execute(`call-mem-${tier}`, { action: 'write' });
+      expect(memoryWrite.executeSpy).toHaveBeenCalledTimes(1);
 
-    await memoryGated.execute('call-1', { action: 'write' });
-    expect(memoryWrite.executeSpy).toHaveBeenCalledTimes(1);
+      const repoCommit = createTool('repo_commit');
+      const commitGated = gateToolWithCapabilities(
+        repoCommit.tool,
+        () => accessForTier(tier),
+      );
+      await commitGated.execute(`call-commit-${tier}`, {});
+      expect(repoCommit.executeSpy).toHaveBeenCalledTimes(1);
+    }
 
     const repoCommit = createTool('repo_commit');
-    const commitGated = gateToolWithCapabilities(
+    const customGated = gateToolWithCapabilities(
       repoCommit.tool,
-      () => accessForTier('nursery'),
+      () => accessForTier('custom', ['git.read']),
     );
-    const denied = await commitGated.execute('call-2', {});
+    const denied = await customGated.execute('call-custom-commit', {});
 
     expect(repoCommit.executeSpy).not.toHaveBeenCalled();
     expect(fromAny(denied.details).isError).toBe(true);
     expect(fromAny(denied.content[0]).text).toContain('git.write');
   });
 
-  it('enforces apprentice grants and denials', async () => {
+  it('grants lifecycle restart on standard tiers and enforces lifecycle.restart on custom tier', async () => {
     const repoStatus = createTool('repo_status');
     const statusGated = gateToolWithCapabilities(
       repoStatus.tool,
@@ -103,13 +116,21 @@ describe('capability tool gating', () => {
     expect(repoStatus.executeSpy).toHaveBeenCalledTimes(1);
 
     const restart = createTool('system');
-    const restartGated = gateToolWithCapabilities(
+    const allowedRestartGated = gateToolWithCapabilities(
       restart.tool,
       () => accessForTier('apprentice'),
     );
-    const denied = await restartGated.execute('call-2', { action: 'restart', reason: 'apply config' });
+    await allowedRestartGated.execute('call-2', { action: 'restart', reason: 'apply config' });
+    expect(restart.executeSpy).toHaveBeenCalledTimes(1);
 
-    expect(restart.executeSpy).not.toHaveBeenCalled();
+    const deniedRestart = createTool('system');
+    const deniedRestartGated = gateToolWithCapabilities(
+      deniedRestart.tool,
+      () => accessForTier('custom', ['internal.read']),
+    );
+    const denied = await deniedRestartGated.execute('call-3', { action: 'restart', reason: 'apply config' });
+
+    expect(deniedRestart.executeSpy).not.toHaveBeenCalled();
     expect(fromAny(denied.details).capabilityDenied).toBe(true);
     expect(fromAny(denied.content[0]).text).toContain('lifecycle.restart');
   });
@@ -133,7 +154,7 @@ describe('capability tool gating', () => {
     expect(system.executeSpy).toHaveBeenCalledTimes(1);
   });
 
-  it('lets every tier inspect its own capability grant without opening the broader self snapshot', async () => {
+  it('lets every tier inspect its own capability grant without opening the broader self snapshot on narrow custom tiers', async () => {
     for (const tier of ['nursery', 'apprentice', 'autonomous', 'custom'] as const) {
       const selfStatus = createTool('self_status');
       const gated = gateToolWithCapabilities(
@@ -146,33 +167,29 @@ describe('capability tool gating', () => {
       expect(selfStatus.executeSpy).toHaveBeenCalledTimes(1);
     }
 
-    const nurserySnapshot = createTool('self_status');
+    const customSnapshot = createTool('self_status');
     const snapshotGated = gateToolWithCapabilities(
-      nurserySnapshot.tool,
-      () => accessForTier('nursery'),
+      customSnapshot.tool,
+      () => accessForTier('custom', ['identity.read']),
     );
-    const denied = await snapshotGated.execute('snapshot-nursery', { action: 'snapshot' });
+    const denied = await snapshotGated.execute('snapshot-custom', { action: 'snapshot' });
     expect(fromAny(denied.details).capabilityDenied).toBe(true);
-    expect(nurserySnapshot.executeSpy).not.toHaveBeenCalled();
+    expect(customSnapshot.executeSpy).not.toHaveBeenCalled();
   });
 
   it('gates unified memory delete-like actions by memory.delete capability token', async () => {
     const memoryDelete = createTool('memory');
-    const nurseryGated = gateToolWithCapabilities(
+    const customGated = gateToolWithCapabilities(
       memoryDelete.tool,
-      () => accessForTier('nursery'),
+      () => accessForTier('custom', ['memory.write']),
     );
-    const denied = await nurseryGated.execute('call-1', { action: 'delete' });
+    const denied = await customGated.execute('call-1', { action: 'delete' });
     expect(memoryDelete.executeSpy).not.toHaveBeenCalled();
     expect(fromAny(denied.content[0]).text).toContain('memory.delete');
 
-    const apprenticeGated = gateToolWithCapabilities(
-      memoryDelete.tool,
-      () => accessForTier('apprentice'),
-    );
-    const apprenticeDenied = await apprenticeGated.execute('call-2', { action: 'restore' });
+    const restoreDenied = await customGated.execute('call-2', { action: 'restore' });
     expect(memoryDelete.executeSpy).not.toHaveBeenCalled();
-    expect(fromAny(apprenticeDenied.content[0]).text).toContain('memory.delete');
+    expect(fromAny(restoreDenied.content[0]).text).toContain('memory.delete');
 
     const autonomousGated = gateToolWithCapabilities(
       memoryDelete.tool,
@@ -184,21 +201,13 @@ describe('capability tool gating', () => {
 
   it('gates unified memory redact by memory.delete capability token', async () => {
     const memory = createTool('memory');
-    const nurseryGated = gateToolWithCapabilities(
+    const customGated = gateToolWithCapabilities(
       memory.tool,
-      () => accessForTier('nursery'),
+      () => accessForTier('custom', ['memory.write']),
     );
-    const denied = await nurseryGated.execute('call-1b', { action: 'redact' });
+    const denied = await customGated.execute('call-1b', { action: 'redact' });
     expect(memory.executeSpy).not.toHaveBeenCalled();
     expect(fromAny(denied.content[0]).text).toContain('memory.delete');
-
-    const apprenticeGated = gateToolWithCapabilities(
-      memory.tool,
-      () => accessForTier('apprentice'),
-    );
-    const apprenticeDenied = await apprenticeGated.execute('call-2b', { action: 'redact' });
-    expect(memory.executeSpy).not.toHaveBeenCalled();
-    expect(fromAny(apprenticeDenied.content[0]).text).toContain('memory.delete');
 
     const autonomousGated = gateToolWithCapabilities(
       memory.tool,
@@ -313,11 +322,11 @@ describe('capability tool gating', () => {
     expect(resolveToolRequiredCapabilities(createTool('journal').tool, { action: 'append' })).toEqual(['memory.write']);
   });
 
-  it('denies apprentice companion consideration before tool execution', async () => {
+  it('denies companion consideration when external.companion is withheld on a custom tier', async () => {
     const notify = createTool('notify');
     const gated = gateToolWithCapabilities(
       notify.tool,
-      () => accessForTier('apprentice'),
+      () => accessForTier('custom', ['external.web']),
     );
 
     const denied = await gated.execute('consider-companion', {
@@ -330,19 +339,22 @@ describe('capability tool gating', () => {
     expect(fromAny(denied.content[0]).text).toContain('external.companion');
   });
 
-  it('grants companion egress only to autonomous and explicit custom tiers', () => {
-    expect(resolveTierCapabilityTokens('nursery')).not.toContain('external.companion');
-    expect(resolveTierCapabilityTokens('apprentice')).not.toContain('external.companion');
+  it('grants companion egress across all standard tiers and explicit custom grants', () => {
+    expect(resolveTierCapabilityTokens('nursery')).toContain('external.companion');
+    expect(resolveTierCapabilityTokens('apprentice')).toContain('external.companion');
     expect(resolveTierCapabilityTokens('autonomous')).toContain('external.companion');
     expect(resolveTierCapabilityTokens('custom', ['external.companion']))
       .toContain('external.companion');
+    expect(resolveTierCapabilityTokens('custom', ['identity.read']))
+      .not.toContain('external.companion');
   });
 
-  it('grants external MCP only above nursery or through an explicit custom grant', () => {
-    expect(resolveTierCapabilityTokens('nursery')).not.toContain('external.mcp');
+  it('grants external MCP across all standard tiers and explicit custom grants', () => {
+    expect(resolveTierCapabilityTokens('nursery')).toContain('external.mcp');
     expect(resolveTierCapabilityTokens('apprentice')).toContain('external.mcp');
     expect(resolveTierCapabilityTokens('autonomous')).toContain('external.mcp');
     expect(resolveTierCapabilityTokens('custom', ['external.mcp'])).toContain('external.mcp');
+    expect(resolveTierCapabilityTokens('custom', ['identity.read'])).not.toContain('external.mcp');
   });
 
   it.each([
@@ -563,29 +575,29 @@ describe('capability tool gating', () => {
     }
   });
 
-  it('keeps read-only internal state at apprentice tier', async () => {
+  it('gates read-only internal state by internal.read on custom tier and grants it on standard tiers', async () => {
     const settings = createTool('settings_get');
-    const nurserySettings = gateToolWithCapabilities(
+    const customSettings = gateToolWithCapabilities(
       settings.tool,
-      () => accessForTier('nursery'),
+      () => accessForTier('custom', ['identity.read']),
     );
-    const settingsDenied = await nurserySettings.execute('settings-nursery', {});
+    const settingsDenied = await customSettings.execute('settings-custom', {});
     expect(settings.executeSpy).not.toHaveBeenCalled();
     expect(fromAny(settingsDenied.content[0]).text).toContain('internal.read');
 
-    const apprenticeSettings = gateToolWithCapabilities(
+    const standardSettings = gateToolWithCapabilities(
       settings.tool,
-      () => accessForTier('apprentice'),
+      () => accessForTier('nursery'),
     );
-    await apprenticeSettings.execute('settings-apprentice', {});
+    await standardSettings.execute('settings-standard', {});
     expect(settings.executeSpy).toHaveBeenCalledTimes(1);
 
     const selfStatus = createTool('self_status');
-    const nurseryStatus = gateToolWithCapabilities(
+    const customStatus = gateToolWithCapabilities(
       selfStatus.tool,
-      () => accessForTier('nursery'),
+      () => accessForTier('custom', ['identity.read']),
     );
-    const statusDenied = await nurseryStatus.execute('status-nursery', {});
+    const statusDenied = await customStatus.execute('status-custom', {});
     expect(selfStatus.executeSpy).not.toHaveBeenCalled();
     expect(fromAny(statusDenied.content[0]).text).toContain('internal.read');
   });
@@ -615,23 +627,16 @@ describe('capability tool gating', () => {
       params.layer === 'base' ? 'identity.write.base' : 'identity.write.runtime'
     ));
 
-    const nursery = gateToolWithCapabilities(
+    const runtimeOnly = gateToolWithCapabilities(
       annotated,
-      () => accessForTier('nursery'),
+      () => accessForTier('custom', ['identity.write.runtime']),
     );
-    await nursery.execute('call-1', { layer: 'runtime' });
+    await runtimeOnly.execute('call-1', { layer: 'runtime' });
     expect(dynamic.executeSpy).toHaveBeenCalledTimes(1);
 
-    const denied = await nursery.execute('call-2', { layer: 'base' });
+    const denied = await runtimeOnly.execute('call-2', { layer: 'base' });
     expect(fromAny(denied.details).capabilityDenied).toBe(true);
     expect(fromAny(denied.content[0]).text).toContain('identity.write.base');
-
-    const apprentice = gateToolWithCapabilities(
-      annotated,
-      () => accessForTier('apprentice'),
-    );
-    const apprenticeDenied = await apprentice.execute('call-3', { layer: 'base' });
-    expect(fromAny(apprenticeDenied.content[0]).text).toContain('identity.write.base');
     expect(dynamic.executeSpy).toHaveBeenCalledTimes(1);
 
     const autonomous = gateToolWithCapabilities(
@@ -859,7 +864,7 @@ describe('capability tool gating', () => {
 
     const writeGated = gateToolWithCapabilities(
       fsTool.tool,
-      () => accessForTier('apprentice'),
+      () => accessForTier('custom', ['git.read']),
     );
     const writeDenied = await writeGated.execute('fs-write', {
       action: 'write',
@@ -889,7 +894,7 @@ describe('capability tool gating', () => {
 
     const writeGated = gateToolWithCapabilities(
       repoTool.tool,
-      () => accessForTier('apprentice'),
+      () => accessForTier('custom', ['git.read']),
     );
     const patchDenied = await writeGated.execute('repo-patch', {
       action: 'patch',
@@ -1091,24 +1096,20 @@ describe('undeclared capability fail-closed (02-M2)', () => {
 });
 
 describe('world capability gating', () => {
-  it('grants world.control only at autonomous tier', () => {
-    expect(resolveTierCapabilityTokens('nursery')).not.toContain('world.read');
-    expect(resolveTierCapabilityTokens('apprentice')).toContain('world.read');
-    expect(resolveTierCapabilityTokens('autonomous')).toContain('world.read');
-
-    for (const tier of ['nursery', 'apprentice'] as const) {
-      expect(resolveTierCapabilityTokens(tier)).not.toContain('world.control');
+  it('grants world.read and world.control across all standard tiers and enforces them on custom tiers', () => {
+    for (const tier of ['nursery', 'apprentice', 'autonomous'] as const) {
+      expect(resolveTierCapabilityTokens(tier)).toContain('world.read');
+      expect(resolveTierCapabilityTokens(tier)).toContain('world.control');
     }
-    expect(resolveTierCapabilityTokens('autonomous')).toContain('world.control');
+    expect(resolveTierCapabilityTokens('custom', ['world.read'])).toContain('world.read');
+    expect(resolveTierCapabilityTokens('custom', ['world.read'])).not.toContain('world.control');
   });
 
   it('resolves per-action world requirements: perceive/list/move -> world.read, control -> world.control', () => {
     const world = createTool('world');
     expect(resolveToolRequiredCapabilities(world.tool, { action: 'perceive' })).toEqual(['world.read']);
     expect(resolveToolRequiredCapabilities(world.tool, { action: 'list' })).toEqual(['world.read']);
-    // `move` (vinz.26) is read-tier virtual navigation — requiring world.control
-    // here would silently block move everywhere (control is withheld from all
-    // default tiers).
+    // `move` (vinz.26) is read-tier virtual navigation.
     expect(resolveToolRequiredCapabilities(world.tool, { action: 'move' })).toEqual(['world.read']);
     expect(resolveToolRequiredCapabilities(world.tool, { action: 'control' })).toEqual(['world.control']);
     // S13 MOVE: body verbs ride read-tier like move; creation verbs are world-editing.
@@ -1123,7 +1124,7 @@ describe('world capability gating', () => {
 
   it('hides control when world.control is absent while keeping perceive/list live', async () => {
     const world = createTool('world');
-    const gated = gateToolWithCapabilities(world.tool, () => accessForTier('apprentice'));
+    const gated = gateToolWithCapabilities(world.tool, () => accessForTier('custom', ['world.read']));
 
     await gated.execute('world-perceive', { action: 'perceive', placeId: 'place.living-room' });
     await gated.execute('world-list', { action: 'list' });
@@ -1135,10 +1136,10 @@ describe('world capability gating', () => {
     expect(fromAny(denied.content[0]).text).toContain('world.control');
   });
 
-  it('refuses world.read for nursery (no world.read token)', async () => {
+  it('refuses world.read when a custom tier withholds world.read', async () => {
     const world = createTool('world');
-    const gated = gateToolWithCapabilities(world.tool, () => accessForTier('nursery'));
-    const denied = await gated.execute('world-perceive-nursery', { action: 'perceive', placeId: 'place.living-room' });
+    const gated = gateToolWithCapabilities(world.tool, () => accessForTier('custom', ['identity.read']));
+    const denied = await gated.execute('world-perceive-custom', { action: 'perceive', placeId: 'place.living-room' });
     expect(world.executeSpy).not.toHaveBeenCalled();
     expect(fromAny(denied.content[0]).text).toContain('world.read');
   });
@@ -1259,13 +1260,71 @@ describe('egress tool guard (htm9.3)', () => {
     const guardSpy = vi.fn();
     const gated = gateToolWithCapabilities(
       repoCommit.tool,
-      () => accessForTier('nursery'),
+      () => accessForTier('custom', ['git.read']),
       () => ({ evaluate: guardSpy }),
     );
-    const denied = await gated.execute('repo-commit-nursery', { message: 'test' });
+    const denied = await gated.execute('repo-commit-custom', { message: 'test' });
     expect(fromAny(denied.details).capabilityDenied).toBe(true);
     expect(repoCommit.executeSpy).not.toHaveBeenCalled();
     expect(guardSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('per-companion disabledTools overrides', () => {
+  it('blocks a disabled tool fail-closed at execute time even on autonomous tier and for zero-token tools', async () => {
+    const shell = createTool('shell');
+    const web = createTool('web');
+    const guardSpy = vi.fn();
+    const hookSpy = vi.fn();
+
+    const gatedShell = gateToolWithCapabilities(
+      shell.tool,
+      () => accessForTier('autonomous', [], ['shell', 'web']),
+      () => ({ evaluate: guardSpy }),
+      () => true,
+      () => ({ evaluate: hookSpy, onDecision: () => {} }),
+    );
+    const shellDenied = await gatedShell.execute('shell-disabled', { action: 'exec', command: 'echo hi' });
+    expect(shell.executeSpy).not.toHaveBeenCalled();
+    expect(guardSpy).not.toHaveBeenCalled();
+    expect(hookSpy).not.toHaveBeenCalled();
+    expect(fromAny(shellDenied.details)).toMatchObject({
+      isError: true,
+      capabilityDenied: true,
+      policyDenied: true,
+      toolDisabledByOverride: true,
+      toolName: 'shell',
+    });
+
+    const gatedWeb = gateToolWithCapabilities(
+      web.tool,
+      () => accessForTier('autonomous', [], ['shell', 'web']),
+    );
+    const webDenied = await gatedWeb.execute('web-disabled', { action: 'search', query: 'test' });
+    expect(web.executeSpy).not.toHaveBeenCalled();
+    expect(fromAny(webDenied.details)).toMatchObject({
+      isError: true,
+      capabilityDenied: true,
+      toolDisabledByOverride: true,
+      toolName: 'web',
+    });
+  });
+
+  it('cannot bypass a disabled tool via allowDeniedTransport', async () => {
+    const world = createTool('world');
+    const gated = gateToolWithCapabilities(
+      world.tool,
+      () => accessForTier('custom', ['world.read'], ['world']),
+      undefined,
+      allowShardRequestScopedCapabilityTransport,
+    );
+    const denied = await gated.execute('world-disabled-transport', {
+      action: 'control',
+      affordanceId: 'lr_lights',
+      command: 'on',
+    });
+    expect(world.executeSpy).not.toHaveBeenCalled();
+    expect(fromAny(denied.details).toolDisabledByOverride).toBe(true);
   });
 });
 
@@ -1456,13 +1515,13 @@ describe('pre_tool_use hook enforcement (7ym.3.2)', () => {
     const evaluateSpy = vi.fn();
     const gated = gateToolWithCapabilities(
       repoCommit.tool,
-      () => accessForTier('nursery'),
+      () => accessForTier('custom', ['git.read']),
       undefined,
       undefined,
       () => ({ evaluate: evaluateSpy, onDecision: () => {} }),
     );
 
-    const denied = await gated.execute('repo-commit-nursery-hook', { message: 'test' });
+    const denied = await gated.execute('repo-commit-custom-hook', { message: 'test' });
     expect(fromAny(denied.details).capabilityDenied).toBe(true);
     expect(repoCommit.executeSpy).not.toHaveBeenCalled();
     // The hook gate must not even run once the capability gate has denied.

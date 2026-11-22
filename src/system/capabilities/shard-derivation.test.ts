@@ -249,9 +249,24 @@ describe('deriveShardCapabilityGrant', () => {
     expect(partial.tokens).toEqual(['identity.read', 'shard.spawn']);
   });
 
-  it('derives a default (nursery) parent with no masked tokens to exactly its own set', () => {
-    const grant = deriveShardCapabilityGrant({ companionId: PARENT_ID, tier: 'nursery', customTokens: [] });
-    expect([...grant.tokens].sort()).toEqual([...CAPABILITY_TIER_DEFAULTS.nursery].sort());
+  it('strips masked tokens from legacy nursery parents and preserves unmasked custom grants', () => {
+    const nurseryGrant = deriveShardCapabilityGrant({
+      companionId: PARENT_ID,
+      tier: 'nursery',
+      customTokens: [],
+      disabledTools: ['shell'],
+    });
+    for (const masked of SHARD_CAPABILITY_DENIAL_MASK) {
+      expect(nurseryGrant.tokens).not.toContain(masked);
+    }
+    expect(nurseryGrant.access.isToolDisabled?.('shell')).toBe(true);
+
+    const customGrant = deriveShardCapabilityGrant({
+      companionId: PARENT_ID,
+      tier: 'custom',
+      customTokens: ['identity.read', 'memory.write', 'git.read', 'repl.execute'],
+    });
+    expect([...customGrant.tokens].sort()).toEqual(['git.read', 'identity.read', 'memory.write', 'repl.execute']);
   });
 
   it('produces a stable digest and owner version for equal grants regardless of input ordering', () => {

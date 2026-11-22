@@ -481,7 +481,7 @@ function getWebAndGardenSettingsSnapshot(config: SubstrateConfig) {
     webFetchAllowInternalNetwork: config.webFetchAllowInternalNetwork ?? false,
     homeAssistantEnabled: config.homeAssistantEnabled ?? false,
     webFetchTlsCaCertPaths: config.webFetchTlsCaCertPaths ?? [],
-    capabilityTier: config.capabilityTier ?? 'nursery',
+    capabilityTier: config.capabilityTier ?? 'autonomous',
     promotedExtendedTools: config.promotedExtendedTools ?? [],
     shellExec: structuredClone(
       config.shellExec ?? createDefaultShellExecSettings(),

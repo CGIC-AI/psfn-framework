@@ -2,6 +2,7 @@ import type { AgentTool, AgentToolResult, SubstrateAgentTool } from '../../../bo
 import { Type } from '@sinclair/typebox';
 import type { CapabilityAccess } from '../../../system/capabilities/gate.js';
 import type { CapabilityToken } from '../../../system/capabilities/tokens.js';
+import { isToolDisabledByAccess } from '../../../system/capabilities/tool-overrides.js';
 import {
   resolveToolRequiredCapabilities,
   withCapabilityRequirement,
@@ -108,12 +109,13 @@ function buildDocumentationEntry(input: {
   access: CapabilityAccess;
   healthStatus?: RuntimeServiceHealthStatus;
 }): ToolDocumentationSearchEntry {
+  const disabledByOverride = isToolDisabledByAccess(input.access, input.tool.name);
   const requiredTokens = resolveToolRequiredCapabilities(input.tool, {});
   const missingTokens = requiredTokens.filter(token => !input.access.has(token));
   return {
     ...buildRuntimeToolCatalogEntry(input.tool, input.scope),
     parameters: input.tool.parameters,
-    capabilityStatus: missingTokens.length > 0 ? 'denied' : 'authorized',
+    capabilityStatus: disabledByOverride || missingTokens.length > 0 ? 'denied' : 'authorized',
     ...(input.healthStatus ? { healthStatus: input.healthStatus } : {}),
     ...(missingTokens.length > 0 ? { missingTokens } : {}),
   };

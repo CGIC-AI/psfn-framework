@@ -56,6 +56,7 @@ describe('capability-tier config', () => {
       expect(loadCapabilityTierConfig(dataDir, { seedDir })).toEqual({
         tier: 'custom',
         customTokens: ['git.read'],
+        disabledTools: [],
       });
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -76,13 +77,22 @@ describe('capability-tier config', () => {
       expect(loadCapabilityTierSeedDefaults({ seedDir })).toEqual({
         tier: 'custom',
         customTokens: ['identity.read', 'git.read'],
+        disabledTools: [],
       });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it('validates and saves custom tier token selections', () => {
+  it('defaults the repository seed to full capability (autonomous) with empty disabledTools', () => {
+    expect(loadCapabilityTierSeedDefaults({ seedDir: './config' })).toEqual({
+      tier: 'autonomous',
+      customTokens: [],
+      disabledTools: [],
+    });
+  });
+
+  it('validates and saves custom tier token selections and disabledTools overrides', () => {
     const root = mkdtempSync(join(tmpdir(), 'capability-tier-save-'));
     const dataDir = join(root, 'data');
     mkdirSync(dataDir, { recursive: true });
@@ -91,11 +101,13 @@ describe('capability-tier config', () => {
       const saved = saveCapabilityTierConfig(dataDir, {
         tier: 'custom',
         customTokens: ['identity.read', 'git.read', 'identity.read'],
+        disabledTools: ['shell', 'web', 'shell', 'group_chat'],
       });
 
       expect(saved).toEqual({
         tier: 'custom',
         customTokens: ['identity.read', 'git.read'],
+        disabledTools: ['shell', 'web', 'group_chat'],
       });
 
       const persisted = JSON.parse(readFileSync(join(dataDir, CAPABILITY_TIER_FILE_NAME), 'utf-8'));
@@ -106,7 +118,7 @@ describe('capability-tier config', () => {
     }
   });
 
-  it('rejects unknown capability tokens', () => {
+  it('rejects unknown capability tokens, invalid disabledTools, and unknown keys fail-closed', () => {
     const root = mkdtempSync(join(tmpdir(), 'capability-tier-invalid-token-'));
     const dataDir = join(root, 'data');
     mkdirSync(dataDir, { recursive: true });
@@ -116,6 +128,30 @@ describe('capability-tier config', () => {
         tier: 'custom',
         customTokens: ['identity.read', 'unknown.token'],
       })).toThrow('unknown token');
+
+      expect(() => saveCapabilityTierConfig(dataDir, {
+        tier: 'autonomous',
+        customTokens: [],
+        disabledTools: 'shell',
+      })).toThrow('disabledTools must be an array');
+
+      expect(() => saveCapabilityTierConfig(dataDir, {
+        tier: 'autonomous',
+        customTokens: [],
+        disabledTools: [' shell '],
+      })).toThrow('invalid tool name');
+
+      expect(() => saveCapabilityTierConfig(dataDir, {
+        tier: 'autonomous',
+        customTokens: [],
+        disabledTools: [''],
+      })).toThrow('invalid tool name');
+
+      expect(() => saveCapabilityTierConfig(dataDir, {
+        tier: 'autonomous',
+        customTokens: [],
+        disabled_tools: ['shell'],
+      })).toThrow('unknown key "disabled_tools"');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

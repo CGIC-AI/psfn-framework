@@ -164,6 +164,7 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   emosimProactivity: { sectionId: 'analysis-workbench', surface: 'advanced' },
   capabilityTier: { sectionId: 'trust', surface: 'custom', editorId: 'capabilities' },
   customTokens: { sectionId: 'trust', surface: 'custom', editorId: 'capabilities' },
+  disabledTools: { sectionId: 'trust', surface: 'custom', editorId: 'capabilities' },
   retryMaxAttempts: { sectionId: 'llm', surface: 'advanced' },
   retryBaseDelayMs: { sectionId: 'llm', surface: 'advanced' },
   documentIngestMaxBytes: { sectionId: 'import', surface: 'advanced' },

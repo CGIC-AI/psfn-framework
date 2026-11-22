@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import { test } from 'vitest';
 import {
   buildBackupSettingsPayload,
+  buildCapabilitiesSettingsPayload,
   buildRawEditorJsonMap,
   buildUnifiedSaveSkipNote,
+  formatTrustCapabilitiesSummary,
   listDirtyRawEditorKeys,
   listUnifiedSaveSkippedOwnerFiles,
   loadRawEditorConfigs,
@@ -12,6 +14,7 @@ import {
   rebaselineRawJsonByKey,
   resolveReloadedRawJsonByKey,
   resolveUnifiedSaveSettingsJsonConflict,
+  toggleCsvToken,
   UNIFIED_SAVE_OWNER_FILE_KEYS,
   UNIFIED_SAVE_SETTINGS_JSON_CONFLICT_MESSAGE,
   type UnifiedOwnerConfigSaveEntry,
@@ -404,4 +407,36 @@ test('backup payload with no curated change round-trips the loaded config unchan
   // Semantic identity: an untouched backup form must not diverge from the
   // loaded owner file, so the unified save leaves backup.json alone.
   assert.deepEqual(payload, REALISTIC_BACKUP_CONFIG);
+});
+
+test('capabilities payload persists deduplicated disabledTools alongside tier and customTokens', () => {
+  const payload = buildCapabilitiesSettingsPayload(
+    { tier: 'autonomous', customTokens: [], disabledTools: [] },
+    {
+      capabilityTier: 'autonomous',
+      capabilityCustomTokens: '',
+      capabilityDisabledTools: 'shell, web, shell, group_chat',
+    },
+  );
+  assert.deepEqual(payload, {
+    tier: 'autonomous',
+    customTokens: [],
+    disabledTools: ['shell', 'web', 'group_chat'],
+  });
+  assert.equal(toggleCsvToken('shell, web', 'web'), 'shell');
+  assert.equal(toggleCsvToken('shell', 'world'), 'shell, world');
+  assert.equal(
+    formatTrustCapabilitiesSummary({
+      capabilityTier: 'autonomous',
+      capabilityDisabledTools: '',
+    }),
+    'Full capability · all tools enabled',
+  );
+  assert.equal(
+    formatTrustCapabilitiesSummary({
+      capabilityTier: 'autonomous',
+      capabilityDisabledTools: 'shell, web',
+    }),
+    'Full capability · 2 tools disabled',
+  );
 });

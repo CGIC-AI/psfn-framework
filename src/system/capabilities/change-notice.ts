@@ -15,6 +15,7 @@ import type { CapabilityGrantSnapshot } from './access.js';
 import { isCapabilityToken, type CapabilityToken } from './tokens.js';
 import type { CapabilityTier } from './tier-types.js';
 import { isCapabilityTier } from './tiers.js';
+import { normalizeDisabledTools } from './tool-overrides.js';
 
 export const CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_ID = 'system:capability-policy';
 export const CAPABILITY_TIER_CHANGE_NOTICE_AUTHOR_NAME = 'Capability policy';
@@ -101,6 +102,8 @@ export interface CapabilityTierChange {
   };
   granted: readonly CapabilityToken[];
   withdrawn: readonly CapabilityToken[];
+  disabledToolsAdded?: readonly string[];
+  disabledToolsRemoved?: readonly string[];
 }
 
 export function buildCapabilityTierChange(
@@ -111,10 +114,18 @@ export function buildCapabilityTierChange(
   const currentTokens = new Set(current.grantedTokens);
   const granted = current.grantedTokens.filter(token => !previousTokens.has(token));
   const withdrawn = previous.grantedTokens.filter(token => !currentTokens.has(token));
+  const previousDisabledList = previous.disabledTools ?? [];
+  const currentDisabledList = current.disabledTools ?? [];
+  const previousDisabled = new Set(previousDisabledList);
+  const currentDisabled = new Set(currentDisabledList);
+  const disabledToolsAdded = currentDisabledList.filter(tool => !previousDisabled.has(tool));
+  const disabledToolsRemoved = previousDisabledList.filter(tool => !currentDisabled.has(tool));
   if (
     previous.tier === current.tier
     && granted.length === 0
     && withdrawn.length === 0
+    && disabledToolsAdded.length === 0
+    && disabledToolsRemoved.length === 0
   ) {
     return null;
   }
@@ -130,6 +141,8 @@ export function buildCapabilityTierChange(
     },
     granted,
     withdrawn,
+    ...(disabledToolsAdded.length > 0 ? { disabledToolsAdded } : {}),
+    ...(disabledToolsRemoved.length > 0 ? { disabledToolsRemoved } : {}),
   };
 }
 
@@ -138,15 +151,24 @@ function formatTokenList(tokens: readonly CapabilityToken[]): string {
 }
 
 export function formatCapabilityTierChangeNotice(change: CapabilityTierChange): string {
-  return [
+  const parts = [
     CAPABILITY_TIER_CHANGE_NOTICE_PREFIX,
     `The Operator changed your capability tier from "${change.previous.tier}" to "${change.current.tier}".`,
     `Current granted capabilities: ${formatTokenList(change.current.grantedTokens)}.`,
     `Newly granted: ${formatTokenList(change.granted)}.`,
     `Withdrawn: ${formatTokenList(change.withdrawn)}.`,
+  ];
+  if (change.disabledToolsAdded && change.disabledToolsAdded.length > 0) {
+    parts.push(`Tools disabled by override: ${change.disabledToolsAdded.join(', ')}.`);
+  }
+  if (change.disabledToolsRemoved && change.disabledToolsRemoved.length > 0) {
+    parts.push(`Tools re-enabled: ${change.disabledToolsRemoved.join(', ')}.`);
+  }
+  parts.push(
     'This was an operator change, not a fault in you. If it affects a conversation, '
       + 'you can relay this exact status to your Partner and ask the Operator about the change.',
-  ].join(' ');
+  );
+  return parts.join(' ');
 }
 
 interface PendingCapabilityTierChangeRecord {
@@ -175,6 +197,12 @@ function parsePendingRecord(value: unknown): PendingCapabilityTierChangeRecord {
   if (!isRecord(value) || value.schemaVersion !== 1 || !isRecord(value.change)) {
     throw new Error('Invalid pending capability notice record');
   }
+  const disabledToolsAdded = value.change.disabledToolsAdded !== undefined
+    ? normalizeDisabledTools(value.change.disabledToolsAdded, 'disabledToolsAdded')
+    : undefined;
+  const disabledToolsRemoved = value.change.disabledToolsRemoved !== undefined
+    ? normalizeDisabledTools(value.change.disabledToolsRemoved, 'disabledToolsRemoved')
+    : undefined;
   return {
     schemaVersion: 1,
     change: {
@@ -182,6 +210,8 @@ function parsePendingRecord(value: unknown): PendingCapabilityTierChangeRecord {
       current: parseGrantState(value.change.current, 'current'),
       granted: parseTokenList(value.change.granted, 'granted'),
       withdrawn: parseTokenList(value.change.withdrawn, 'withdrawn'),
+      ...(disabledToolsAdded && disabledToolsAdded.length > 0 ? { disabledToolsAdded } : {}),
+      ...(disabledToolsRemoved && disabledToolsRemoved.length > 0 ? { disabledToolsRemoved } : {}),
     },
   };
 }

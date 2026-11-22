@@ -789,8 +789,18 @@ describe('SubagentFaculty', () => {
   }>([
     {
       tier: 'nursery',
-      callable: ['core_identity_read', 'extended_git_read'],
-      grantedCapabilities: ['identity.read', 'git.read', 'issue.read'],
+      callable: [
+        'core_identity_read',
+        'extended_git_read',
+        'extended_world_read',
+      ],
+      grantedCapabilities: [
+        'identity.read',
+        'internal.read',
+        'git.read',
+        'issue.read',
+        'world.read',
+      ],
     },
     {
       tier: 'apprentice',
@@ -1024,8 +1034,13 @@ describe('SubagentFaculty', () => {
       sessionStore,
       embeddingService: null,
       memoryProvider: null,
-      config: { ...TEST_CONFIG, capabilityTier: 'apprentice' },
+      config: { ...TEST_CONFIG, capabilityTier: 'custom' },
       parentSystemPrompt: 'test prompt',
+      snapshotParentCapabilityGrant: () => Object.freeze({
+        tier: 'custom' as const,
+        customTokens: Object.freeze(['identity.read', 'git.read'] as const),
+        grantedTokens: Object.freeze(['identity.read', 'git.read'] as const),
+      }),
     });
 
     await expect(faculty.execute({

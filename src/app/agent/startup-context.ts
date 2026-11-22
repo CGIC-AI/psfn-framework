@@ -166,6 +166,7 @@ export function prepareAgentStartupContext(input: {
     seedDir: input.env.CONFIG_DIR,
   });
   config.capabilityTier = capabilityRuntime.getTier();
+  config.disabledTools = [...capabilityRuntime.getDisabledTools()];
   const eligibilityGate = createEligibilityGate(
     () => capabilityRuntime,
     (decision) => emitEligibilityDecisionTelemetry(eventBus, decision, input.log),

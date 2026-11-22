@@ -27,6 +27,7 @@ export const DECISION_SITE_IDS = [
   'room.ambiguity',
   'memory.rerank',
   'memory.query_intent',
+  'memory.episodic_themes',
   'intake.l2',
   'memory.extraction_pregate',
   'intention.post_turn_pregate',

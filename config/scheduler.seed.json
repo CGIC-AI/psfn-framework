@@ -110,7 +110,7 @@
     "maxEntriesPerEpisode": 14,
     "minConversationalEntries": 2,
     "minSingleEntryChars": 120,
-    "topicSegmentationEnabled": false,
+    "topicSegmentationEnabled": true,
     "maxPriorCandidates": 24
   },
   "sleepConsolidation": {

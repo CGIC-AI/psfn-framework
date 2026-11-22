@@ -1279,6 +1279,10 @@ export class SubstrateAgent {
     return this.toolRuntimeFacade.getToolCatalog();
   }
 
+  getGatedRegisteredTools(): readonly AgentTool<any>[] {
+    return this.toolRuntimeFacade.getGatedRegisteredTools();
+  }
+
   /**
    * Refresh the durable-usage presentation-ordering signal (psfn-framework-b0yl.5).
    * Fed by the periodic tool-usage evaluator; presentation-only, never gates callability.

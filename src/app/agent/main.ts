@@ -1549,6 +1549,7 @@ async function main(): Promise<void> {
     completedReceiptRetentionMs: schedulerConfig.backgroundWork.supervisor.terminalRetentionMs,
     searchLimit: resolveMemoryRetrievalPolicy(config.memoryRetrievalPolicy).lexicalAugment.selectedLimit,
     goals: () => new NorthStarStore(resolveNorthStarPath(pathSnapshot.companionDataDir)).buildPromptLayer()?.content ?? '',
+    tools: () => agentLoop.getGatedRegisteredTools(),
     extract: input => memoryExtractor.extractExternalConversation(input),
   });
   gateway.onExternalMemoryExecute(input => externalMemory.execute(input));

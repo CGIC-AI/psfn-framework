@@ -27,11 +27,28 @@ export const EXTERNAL_MEMORY_TOOL_SCHEMAS = {
   }, strict),
 } as const;
 
-type ExternalMemoryOperation = keyof typeof EXTERNAL_MEMORY_TOOL_SCHEMAS;
-export type ExternalMemoryRequest = {
-  [K in ExternalMemoryOperation]: { operation: K } & Static<typeof EXTERNAL_MEMORY_TOOL_SCHEMAS[K]>
-}[ExternalMemoryOperation];
+export const EXTERNAL_COMPANION_TOOL_REQUEST_SCHEMAS = {
+  list_tools: Type.Object({
+    sessionId: Type.Optional(text),
+    source: Type.Optional(externalMemorySourceSchema),
+  }, strict),
+  call_tool: Type.Object({
+    tool: text,
+    arguments: Type.Record(Type.String(), Type.Unknown()),
+    sessionId: Type.Optional(text),
+    source: Type.Optional(externalMemorySourceSchema),
+  }, strict),
+} as const;
 
+const ALL_EXTERNAL_REQUEST_SCHEMAS = {
+  ...EXTERNAL_MEMORY_TOOL_SCHEMAS,
+  ...EXTERNAL_COMPANION_TOOL_REQUEST_SCHEMAS,
+} as const;
+
+type ExternalMemoryOperation = keyof typeof ALL_EXTERNAL_REQUEST_SCHEMAS;
+export type ExternalMemoryRequest = {
+  [K in ExternalMemoryOperation]: { operation: K } & Static<typeof ALL_EXTERNAL_REQUEST_SCHEMAS[K]>
+}[ExternalMemoryOperation];
 const bindingSchema = Type.Object({ bodyId: text, companionId: text, contactId: text }, strict);
 
 /** Only gateway owner configuration supplies this identity; tool arguments never do. */
@@ -51,11 +68,29 @@ export interface ExternalMemoryReceipt {
   status: 'accepted';
 }
 
+export interface ExternalCompanionToolDescriptor {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+}
+
+type ExternalCompanionToolContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'image'; data: string; mimeType: string };
+
+export interface ExternalCompanionToolCallResult {
+  content: ExternalCompanionToolContentBlock[];
+  details?: Record<string, unknown>;
+  isError?: boolean;
+}
+
 export type ExternalMemoryExecuteResult =
   | { context: string }
   | { memories: Array<{ id: string; text: string; type: string }> }
   | { memory: { id: string; text: string; type: string } | null }
-  | { receipt: ExternalMemoryReceipt };
+  | { receipt: ExternalMemoryReceipt }
+  | { tools: ExternalCompanionToolDescriptor[] }
+  | { toolResult: ExternalCompanionToolCallResult };
 
 export function parseExternalMemoryBinding(input: unknown): ExternalMemoryBinding {
   if (!Value.Check(bindingSchema, input)) throw new Error('Invalid external memory binding');
@@ -67,14 +102,14 @@ export function parseExternalMemoryRequest(
   operation: string,
   input: unknown,
 ): ExternalMemoryRequest {
-  if (!Object.hasOwn(EXTERNAL_MEMORY_TOOL_SCHEMAS, operation)) {
+  if (!Object.hasOwn(ALL_EXTERNAL_REQUEST_SCHEMAS, operation)) {
     throw new Error('Unknown external memory operation');
   }
   const key = operation as ExternalMemoryOperation;
-  if (!Value.Check(EXTERNAL_MEMORY_TOOL_SCHEMAS[key], input)) {
+  if (!Value.Check(ALL_EXTERNAL_REQUEST_SCHEMAS[key], input)) {
     throw new Error('Invalid external memory arguments');
   }
-  return { ...input, operation: key } as ExternalMemoryRequest;
+  return { ...(input as Record<string, unknown>), operation: key } as ExternalMemoryRequest;
 }
 
 export function parseExternalMemoryExecuteParams(input: unknown): ExternalMemoryExecuteParams {

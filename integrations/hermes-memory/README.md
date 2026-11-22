@@ -89,12 +89,6 @@ mcp_servers:
       Authorization: Bearer ${HERMES_MEMORY_TOKEN}
     timeout: 5
     tools:
-      include:
-        - psfn_memory_context
-        - psfn_memory_search
-        - psfn_memory_get
-        - psfn_memory_remember
-        - psfn_memory_ingest
       resources: false
       prompts: false
 ```
@@ -171,8 +165,12 @@ deduplication; this is not an exactly-once guarantee for every downstream effect
 
 The context tool recalls relevant memories and includes enabled North Star goals
 for the bound primary contact. Search and get use normal contact-subject and
-memory-disclosure checks. This surface exposes no deletion, editing, restoration,
-persona synchronization, or general PSFN tooling.
+memory-disclosure checks. Alongside the `psfn_memory_*` lifecycle operations,
+the endpoint exposes the bound companion's registered internal PSFN tools
+(`memory`, `orient`, `north_star`, `identity`, `journal`, `letter`, `wiki`,
+`contact`, `session`, `self_status`, `schedule`, `notify`, `world`, `scratchpad`,
+and others) under the credential's companion, contact, channel-privacy, and
+capability gates.
 
 The queue is bound to one body/companion. Reusing it with a different identity
 fails; create a separate profile. Preserve this profile's queue during moves and

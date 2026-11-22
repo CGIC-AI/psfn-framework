@@ -16,6 +16,7 @@ import { ExternalMemoryService } from './service.js';
 import { ExternalMemoryIntakeStore } from './intake-store.js';
 import { getStableLinkedContactForSession } from '../../../operator/garden/services/contact-session-linker.js';
 
+import { getRequestContext } from '../../../primitives/llm/request-context.js';
 const binding = {
   companionId: '11111111-1111-4111-8111-111111111111',
   bodyId: 'workstation', contactId: 'contact-alex',
@@ -58,7 +59,9 @@ function fixture() {
   const options = { companionId: binding.companionId, companionName: 'Lyra', intakeStore: store,
     refreshChannelPolicy, sessions, contacts: { getById, linkChannelIdentity, recordChannelActivity }, memoryStore: { queryAuthorizedMemorySubjects: query },
     memoryProvider: { retrieve }, writer: { write }, screening: { screen }, quarantine,
-    actions, retryDelayMs: 100, completedReceiptRetentionMs: 60_000, searchLimit: 5, goals: () => 'Finish the garden project', extract };
+    actions, retryDelayMs: 100, completedReceiptRetentionMs: 60_000, searchLimit: 5, goals: () => 'Finish the garden project',
+    tools: () => registeredTools, extract };
+  let registeredTools: Array<Record<string, unknown>> = [];
   const makeService = () => new ExternalMemoryService(fromAny(options));
   const service = makeService();
   const input = (eventId = 'event-one', sessionId = 'session-one'): ExternalMemoryExecuteParams => ({
@@ -68,7 +71,9 @@ function fixture() {
   });
   const run = (index = 0) => handler!(queued[index]!);
   return { service, makeService, input, run, sessions, store, storeDirectory, queued, screen, extract,
-    write, getById, getByChannelIdentity, linkChannelIdentity, refreshChannelPolicy, recordChannelActivity, query, retrieve, quarantine, actions, setPersistence: (value: boolean) => { persisted = value; } };
+    write, getById, getByChannelIdentity, linkChannelIdentity, refreshChannelPolicy, recordChannelActivity, query, retrieve, quarantine, actions,
+    setTools: (tools: Array<Record<string, unknown>>) => { registeredTools = tools; },
+    setPersistence: (value: boolean) => { persisted = value; } };
 }
 
 describe('external companion memory service', () => {
@@ -408,5 +413,94 @@ describe('external companion memory service', () => {
     // The corrupt file is left for inspection, never deleted by pruning.
     expect(h.store.pruneCompleted(Date.now() + 1)).toBe(0);
     expect(existsSync(join(h.storeDirectory, `${corruptId}.json`))).toBe(true);
+  });
+
+  it('lists and executes the bound companion internal tools under the authenticated contact and session context', async () => {
+    const h = fixture();
+    const executeOrient = vi.fn(async (_toolCallId: string, params: Record<string, unknown>) => {
+      const ctx = getRequestContext();
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            action: params.action,
+            companionId: ctx?.companionId,
+            channelId: ctx?.channelId,
+            viewerMemorySubjectContactId: ctx?.viewerMemorySubjectContactId,
+            viewerTrustLevel: ctx?.viewerTrustLevel,
+            viewerChannelPrivacy: ctx?.viewerChannelPrivacy,
+            turnIdPresent: Boolean(ctx?.turnId),
+          }),
+        }],
+        details: { executed: true },
+      };
+    });
+    h.setTools([
+      {
+        name: 'orient',
+        description: 'Read or update orientation.',
+        parameters: {
+          type: 'object',
+          properties: { action: { type: 'string' } },
+          required: ['action'],
+        },
+        execute: executeOrient,
+      },
+    ]);
+
+    // First establish the active Hermes session via context recall.
+    await h.service.execute({
+      binding,
+      request: { operation: 'context', sessionId: 'hermes-live-session', query: 'goals' },
+    });
+
+    const listed = await h.service.execute({
+      binding,
+      request: { operation: 'list_tools' },
+    });
+    expect(listed).toEqual({
+      tools: [
+        {
+          name: 'orient',
+          description: 'Read or update orientation.',
+          inputSchema: {
+            type: 'object',
+            properties: { action: { type: 'string' } },
+            required: ['action'],
+          },
+        },
+      ],
+    });
+
+    const called = await h.service.execute({
+      binding,
+      request: {
+        operation: 'call_tool',
+        tool: 'orient',
+        arguments: { action: 'values_list' },
+      },
+    });
+    expect('toolResult' in called).toBe(true);
+    if ('toolResult' in called) {
+      expect(called.toolResult.details).toEqual({ executed: true });
+      const firstBlock = called.toolResult.content[0];
+      expect(firstBlock?.type).toBe('text');
+      if (firstBlock?.type === 'text') {
+        expect(JSON.parse(firstBlock.text)).toEqual({
+          action: 'values_list',
+          companionId: binding.companionId,
+          channelId: externalMemorySessionId(binding, 'hermes-live-session'),
+          viewerMemorySubjectContactId: binding.contactId,
+          viewerTrustLevel: 'primary',
+          viewerChannelPrivacy: 'private',
+          turnIdPresent: true,
+        });
+      }
+    }
+
+    await expect(h.service.execute({
+      binding,
+      request: { operation: 'call_tool', tool: 'unknown_tool', arguments: {} },
+    })).rejects.toThrow('Unknown companion tool');
   });
 });

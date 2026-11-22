@@ -132,6 +132,75 @@ describe('external memory MCP', () => {
     expect(agent).not.toHaveBeenCalled();
   });
 
+
+  it('exposes and dispatches the bound companion internal tools alongside psfn_memory operations', async () => {
+    execute.mockImplementation(async (params: ExternalMemoryExecuteParams) => {
+      if (params.request.operation === 'list_tools') {
+        return {
+          tools: [
+            {
+              name: 'orient',
+              description: 'Read or update orientation, values, and concerns.',
+              inputSchema: {
+                type: 'object',
+                properties: { action: { type: 'string' }, content: { type: 'string' } },
+                required: ['action'],
+              },
+            },
+            {
+              name: 'notify',
+              description: 'Send notifications.',
+              inputSchema: {
+                anyOf: [
+                  {
+                    type: 'object',
+                    properties: { action: { const: 'brief' }, message: { type: 'string' } },
+                    required: ['action', 'message'],
+                  },
+                ],
+              },
+            },
+          ],
+        };
+      }
+      if (params.request.operation === 'call_tool') {
+        return {
+          toolResult: {
+            content: [{ type: 'text', text: `Executed ${params.request.tool}:${String(params.request.arguments.action)}` }],
+            details: { ok: true, tool: params.request.tool },
+          },
+        };
+      }
+      return { context: 'A useful remembered preference.' };
+    });
+
+    const instance = await client(await listen(route()));
+    const listed = await instance.listTools();
+    expect(listed.tools.map(tool => tool.name).sort()).toEqual([
+      'notify',
+      'orient',
+      'psfn_memory_context',
+      'psfn_memory_get',
+      'psfn_memory_ingest',
+      'psfn_memory_remember',
+      'psfn_memory_search',
+    ]);
+    const orientCall = await instance.callTool({
+      name: 'orient',
+      arguments: { action: 'values_list' },
+    });
+    expect(orientCall.isError).not.toBe(true);
+    expect(orientCall.content).toEqual([{ type: 'text', text: 'Executed orient:values_list' }]);
+    expect(orientCall.structuredContent).toEqual({ ok: true, tool: 'orient' });
+    expect(execute).toHaveBeenCalledWith({
+      binding,
+      request: {
+        operation: 'call_tool',
+        tool: 'orient',
+        arguments: { action: 'values_list' },
+      },
+    });
+  });
   it('fails startup on ambiguous or reused credentials', () => {
     expect(() => new ExternalMemoryMcpRoute({ bindings: [{ ...binding, apiKey: '' }] }, execute, [])).toThrow('unique');
     expect(() => route([{ ...binding, apiKey: 'different-key' }])).toThrow('unique');

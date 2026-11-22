@@ -435,6 +435,13 @@ export class ToolRuntimeFacade {
     };
   }
 
+  getGatedRegisteredTools(): readonly AgentTool<any>[] {
+    return this.withCapabilityGates([
+      ...this.getCoreToolsForCurrentTurn(),
+      ...this.getExtendedToolsForCurrentTurn(),
+    ]);
+  }
+
   getToolCatalogSnapshot(): RuntimeToolCatalogSnapshot {
     const toSnapshotEntry = (tool: AgentTool<any>, scope: 'core' | 'extended') => {
       const wiringMeta = cloneToolWiringMeta((tool as WirableTool).wiringMeta);

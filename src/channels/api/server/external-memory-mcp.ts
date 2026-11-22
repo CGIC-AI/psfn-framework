@@ -4,6 +4,7 @@ import {
   EXTERNAL_MEMORY_TOOL_SCHEMAS,
   parseExternalMemoryBinding,
   parseExternalMemoryRequest,
+  type ExternalCompanionToolDescriptor,
   type ExternalMemoryBinding,
   type ExternalMemoryExecuteParams,
   type ExternalMemoryExecuteResult,
@@ -12,6 +13,7 @@ import type { ExternalMemoryApiConfig } from '../../backplane/external-memory-co
 import { getBearerToken, isExpectedApiToken } from '../../backplane/http/auth.js';
 import { readJsonBodyWithLimit, sendJson } from '../../backplane/http/primitives.js';
 import { createComponentLogger } from '../../../shared/logger.js';
+import { isRecord } from '../../../shared/utils/types.js';
 import { MAX_BODY_SIZE } from './http.js';
 
 const log = createComponentLogger('ExternalMemoryMcp');
@@ -25,7 +27,7 @@ const descriptions = {
 
 type Execute = (params: ExternalMemoryExecuteParams) => Promise<ExternalMemoryExecuteResult>;
 
-/** A separate service credential admits only the fixed companion memory surface. */
+/** A separate service credential admits the bound companion's memory and internal tool surface. */
 export class ExternalMemoryMcpRoute {
   private readonly bindings: ExternalMemoryApiConfig['bindings'];
 
@@ -76,32 +78,47 @@ export class ExternalMemoryMcpRoute {
       return;
     }
     const { apiKey: _apiKey, ...binding } = credential;
-    const handler = createMcpHandler(() => this.createServer(binding), {
-      onerror: error => log.warn('External memory MCP request rejected', { error: error.message }),
-    });
     try {
-      const headers = new Headers();
-      for (const [name, value] of Object.entries(req.headers)) {
-        if (value !== undefined && name !== 'authorization' && name !== 'cookie') {
-          headers.set(name, Array.isArray(value) ? value.join(', ') : value);
-        }
-      }
-      const request = new Request('http://localhost/v1/memory/mcp', {
-        method: 'POST', headers, body: parsed.rawBody,
+      const companionTools = await this.resolveCompanionToolsForPayload(binding, parsed.value);
+      const handler = createMcpHandler(() => this.createServer(binding, companionTools), {
+        onerror: error => log.warn('External memory MCP request rejected', { error: error.message }),
       });
-      const response = await handler.fetch(request, { parsedBody: parsed.value });
-      res.writeHead(response.status, Object.fromEntries(response.headers));
-      res.end(Buffer.from(await response.arrayBuffer()));
+      try {
+        const headers = new Headers();
+        for (const [name, value] of Object.entries(req.headers)) {
+          if (value !== undefined && name !== 'authorization' && name !== 'cookie') {
+            headers.set(name, Array.isArray(value) ? value.join(', ') : value);
+          }
+        }
+        const request = new Request('http://localhost/v1/memory/mcp', {
+          method: 'POST', headers, body: parsed.rawBody,
+        });
+        const response = await handler.fetch(request, { parsedBody: parsed.value });
+        res.writeHead(response.status, Object.fromEntries(response.headers));
+        res.end(Buffer.from(await response.arrayBuffer()));
+      } finally {
+        await handler.close();
+      }
     } catch (error) {
       log.error('External memory MCP transport failed', { error });
       if (!res.headersSent) sendJson(res, 500, { error: 'External memory transport failed' });
       else res.destroy();
-    } finally {
-      await handler.close();
     }
   }
 
-  private createServer(binding: ExternalMemoryBinding): McpServer {
+  private async resolveCompanionToolsForPayload(
+    binding: ExternalMemoryBinding,
+    payload: unknown,
+  ): Promise<ExternalCompanionToolDescriptor[]> {
+    if (!payloadNeedsCompanionTools(payload)) return [];
+    const result = await this.execute({ binding, request: { operation: 'list_tools' } });
+    return 'tools' in result && Array.isArray(result.tools) ? result.tools : [];
+  }
+
+  private createServer(
+    binding: ExternalMemoryBinding,
+    companionTools: readonly ExternalCompanionToolDescriptor[] = [],
+  ): McpServer {
     const server = new McpServer({ name: 'companion-memory', version: '1.0.0' });
     for (const [operation, schema] of Object.entries(EXTERNAL_MEMORY_TOOL_SCHEMAS)) {
       server.registerTool(`psfn_memory_${operation}`, {
@@ -113,6 +130,46 @@ export class ExternalMemoryMcpRoute {
         return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result };
       });
     }
+    const registeredNames = new Set(
+      Object.keys(EXTERNAL_MEMORY_TOOL_SCHEMAS).map(operation => `psfn_memory_${operation}`),
+    );
+    for (const tool of companionTools) {
+      if (!tool.name || tool.name.startsWith('psfn_memory_') || registeredNames.has(tool.name)) continue;
+      registeredNames.add(tool.name);
+      const inputSchema = fromJsonSchema({ type: 'object', ...tool.inputSchema } as JsonSchemaType);
+      server.registerTool(tool.name, {
+        description: tool.description,
+        inputSchema,
+      }, async args => {
+        const argumentsRecord = isRecord(args) ? args : {};
+        const request = parseExternalMemoryRequest('call_tool', {
+          tool: tool.name,
+          arguments: argumentsRecord,
+        });
+        const result = await this.execute({ binding, request });
+        if (!('toolResult' in result)) {
+          throw new Error(`Unexpected result for companion tool "${tool.name}"`);
+        }
+        const { toolResult } = result;
+        return {
+          content: toolResult.content,
+          ...(toolResult.details ? { structuredContent: toolResult.details } : {}),
+          ...(toolResult.isError ? { isError: true } : {}),
+        };
+      });
+    }
     return server;
   }
+}
+
+function payloadNeedsCompanionTools(payload: unknown): boolean {
+  const messages = Array.isArray(payload) ? payload : [payload];
+  return messages.some(message => {
+    if (!isRecord(message)) return false;
+    if (message.method === 'tools/list') return true;
+    if (message.method !== 'tools/call') return false;
+    if (!isRecord(message.params)) return false;
+    const name = message.params.name;
+    return typeof name === 'string' && name.length > 0 && !name.startsWith('psfn_memory_');
+  });
 }

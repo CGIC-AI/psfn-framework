@@ -3,6 +3,7 @@ import { classifyChannelDisclosure } from '../../../system/trust/policy.js';
 import { createHash } from 'node:crypto';
 import { createDmConversationScope } from '../../../core/session/conversation-scope.js';
 import { v7 as uuidv7 } from 'uuid';
+import type { AgentToolResult, SubstrateAgentTool } from '../../../boundary/pi-agent/index.js';
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import type { Contact } from '../../../core/contacts/types.js';
 import { resolvePreferredContactName } from '../../../core/contacts/preferred-name.js';
@@ -18,6 +19,8 @@ import type { SessionStore } from '../../../persistence/sessions/store.js';
 import {
   externalMemorySessionId,
   parseExternalMemoryExecuteParams,
+  type ExternalCompanionToolCallResult,
+  type ExternalCompanionToolDescriptor,
   type ExternalMemoryBinding,
   type ExternalMemoryExecuteParams,
   type ExternalMemoryExecuteResult,
@@ -25,6 +28,7 @@ import {
 } from '../../../shared/contracts/external-memory.js';
 import { runWithRequestContext } from '../../../primitives/llm/request-context.js';
 import { createComponentLogger } from '../../../shared/logger.js';
+import { isRecord } from '../../../shared/utils/types.js';
 import type { MemoryStorePort } from '../memory-store-port.js';
 import type { MemoryWriter } from '../writer.js';
 import type { PurrMemory } from '../types.js';
@@ -64,6 +68,7 @@ interface ExternalMemoryServiceOptions {
   now?: () => number;
   searchLimit: number;
   goals: () => string;
+  tools?: () => readonly SubstrateAgentTool[];
   extract: (input: {
     sessionId: string; entries: readonly SessionEntry[]; canonicalContactId: string;
   }) => Promise<unknown>;
@@ -74,7 +79,7 @@ type ExternalMemoryMutation = Extract<ExternalMemoryRequest, { eventId: string }
 /** A companion-bound memory surface. It never enters the foreground action loop. */
 export class ExternalMemoryService {
   private readonly inFlight = new Map<string, Promise<unknown>>();
-
+  private readonly latestSessionByBody = new Map<string, string>();
   constructor(private readonly options: ExternalMemoryServiceOptions) {
     options.actions.registerHandler(actionKind, async action => {
       const receiptId = action.payload.receiptId;
@@ -120,18 +125,41 @@ export class ExternalMemoryService {
     this.options.refreshChannelPolicy();
     const disclosure = classifyChannelDisclosure(EXTERNAL_MEMORY_CHANNEL, { isDirectMessage: true });
     const contact = await this.contact(binding);
-    const channelId = externalMemorySessionId(binding, request.sessionId);
+    const sessionId = request.sessionId ?? this.latestSessionByBody.get(binding.bodyId) ?? binding.bodyId;
+    if (request.sessionId) {
+      this.latestSessionByBody.set(binding.bodyId, request.sessionId);
+    }
+    const channelId = externalMemorySessionId(binding, sessionId);
     this.assertActive(channelId);
+    const turnId = uuidv7();
+    const requestId = `external:${binding.bodyId}:${turnId}`;
+    const requestAudience = contact.trustLevel === 'primary' && disclosure.channelPrivacy === 'private' && !disclosure.broadcast
+      ? 'primary_contact'
+      : 'external';
     return runWithRequestContext({
       companionId: binding.companionId,
       channelId,
+      channelType: 'api',
       sessionId: channelId,
+      turnId,
+      requestId,
+      callType: 'chat',
+      purpose: request.operation === 'call_tool' ? `external.mcp.tool.${request.tool}` : `external.mcp.${request.operation}`,
+      ...(request.operation === 'call_tool' ? { toolName: request.tool, toolCallId: `external-mcp:${turnId}` } : {}),
+      viewerAuthorId: contact.id,
       viewerMemorySubjectContactId: contact.id,
       viewerTrustLevel: contact.trustLevel,
       viewerChannelPrivacy: disclosure.channelPrivacy,
       viewerIsDirectMessage: true,
       requesterProvenance: 'human',
+      requestAudience,
     }, async () => {
+      if (request.operation === 'list_tools') {
+        return { tools: this.listCompanionTools() };
+      }
+      if (request.operation === 'call_tool') {
+        return { toolResult: await this.callCompanionTool(request.tool, request.arguments, `external-mcp:${turnId}`) };
+      }
       if (request.operation === 'ingest' || request.operation === 'remember') {
         return this.serialized(channelId, () => this.accept(binding, request, contact));
       }
@@ -166,6 +194,44 @@ export class ExternalMemoryService {
         ? { memory: visible[0] ?? null }
         : { memories: visible };
     });
+  }
+
+  private listCompanionTools(): ExternalCompanionToolDescriptor[] {
+    const registered = this.options.tools?.() ?? [];
+    const seen = new Set<string>();
+    const descriptors: ExternalCompanionToolDescriptor[] = [];
+    for (const tool of registered) {
+      if (!tool.name || tool.name.startsWith('psfn_memory_') || seen.has(tool.name)) continue;
+      seen.add(tool.name);
+      const serializedSchema: unknown = tool.parameters
+        ? JSON.parse(JSON.stringify(tool.parameters))
+        : { type: 'object' };
+      const inputSchema = isRecord(serializedSchema)
+        ? { type: 'object', ...serializedSchema }
+        : { type: 'object' };
+      descriptors.push({
+        name: tool.name,
+        description: tool.description,
+        inputSchema,
+      });
+    }
+    return descriptors;
+  }
+
+  private async callCompanionTool(
+    toolName: string,
+    args: Record<string, unknown>,
+    toolCallId: string,
+  ): Promise<ExternalCompanionToolCallResult> {
+    if (toolName.startsWith('psfn_memory_')) {
+      throw new Error(`Unknown companion tool: ${toolName}`);
+    }
+    const targetTool = (this.options.tools?.() ?? []).find(tool => tool.name === toolName);
+    if (!targetTool) {
+      throw new Error(`Unknown companion tool: ${toolName}`);
+    }
+    const result = await targetTool.execute(toolCallId, args);
+    return formatCompanionToolResult(result);
   }
 
   private async prepare(
@@ -356,4 +422,26 @@ export class ExternalMemoryService {
       });
     }
   }
+}
+
+function formatCompanionToolResult(result: AgentToolResult<unknown>): ExternalCompanionToolCallResult {
+  const content: ExternalCompanionToolCallResult['content'] = [];
+  for (const block of result.content) {
+    if (!isRecord(block)) continue;
+    if (block.type === 'text' && typeof block.text === 'string') {
+      content.push({ type: 'text', text: block.text });
+    } else if (block.type === 'image' && typeof block.data === 'string' && typeof block.mimeType === 'string') {
+      content.push({ type: 'image', data: block.data, mimeType: block.mimeType });
+    }
+  }
+  const serializedDetails: unknown = isRecord(result.details)
+    ? JSON.parse(JSON.stringify(result.details))
+    : undefined;
+  const details = isRecord(serializedDetails) ? serializedDetails : undefined;
+  const isError = details?.isError === true;
+  return {
+    content: content.length > 0 ? content : [{ type: 'text', text: JSON.stringify(details ?? {}) }],
+    ...(details ? { details } : {}),
+    ...(isError ? { isError: true } : {}),
+  };
 }

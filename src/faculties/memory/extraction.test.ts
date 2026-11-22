@@ -373,6 +373,29 @@ describe('extraction acceptance gates', () => {
     expect(decision.allowed).toBe(true);
     expect(decision.reason).toBeUndefined();
   });
+
+  it('blocks pure and stacked phatic greeting/farewell turns but allows substantive turns containing greeting words', () => {
+    const purePhatic = extractionTestUtils.evaluateExtractionPreLlmGate([
+      { role: 'user', content: 'Good morning, how are you?' },
+      { role: 'assistant', content: 'Doing well.' },
+      { role: 'user', content: 'Thanks so much, bye!' },
+    ] as never);
+    expect(purePhatic.allowed).toBe(false);
+    expect(purePhatic.reason).toBe('low_signal');
+
+    for (const content of [
+      'Hey! I switched to Neovim and built a walnut bookshelf this weekend.',
+      'Thanks for checking earlier, by the way I am allergic to shellfish.',
+      'I wanted to check in and share a quiet hello.',
+    ]) {
+      const decision = extractionTestUtils.evaluateExtractionPreLlmGate([
+        { role: 'user', content },
+        { role: 'assistant', content: 'Got it.' },
+      ] as never);
+      expect(decision.allowed, content).toBe(true);
+      expect(decision.reason, content).toBeUndefined();
+    }
+  });
 });
 
 describe('MemoryExtractor telemetry payloads', () => {

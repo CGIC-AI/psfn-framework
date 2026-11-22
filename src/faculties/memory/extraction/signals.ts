@@ -143,6 +143,15 @@ const MEANINGFUL_SIGNAL_HINTS = new Set([
   'kids',
 ]);
 
+/**
+ * Unanchored task/meta filler patterns that suppress extraction unless the turn
+ * also carries strong personal, relational, or emotional signal.
+ *
+ * Bare greetings, gratitude, check-in pleasantries, and farewells are handled
+ * separately by anchored `PHATIC_PREFIX_PATTERNS` below so substantive messages
+ * opening with "Hey, ...", "Thanks, ...", or companion check-ins are never
+ * falsely dropped before extraction (psfn-framework-d5e0p.13).
+ */
 const LOW_SIGNAL_TURN_PATTERNS = [
   /\bplease\s+summarize\b/,
   /\bplease\s+recap\b/,
@@ -150,15 +159,6 @@ const LOW_SIGNAL_TURN_PATTERNS = [
   /\bcan\s+you\s+summarize\b/,
   /\bcould\s+you\s+summarize\b/,
   /\bwhat\s+are\s+the\s+findings\b/,
-  /\bthanks?\b/,
-  /\bthank\s+you\b/,
-  /\bgood\s+(morning|afternoon|evening)\b/,
-  /\bhello\b/,
-  /\bhi\b/,
-  /\bhey\b/,
-  /\bbye\b/,
-  /\bgoodbye\b/,
-  /\bsee\s+you\b/,
   /\bsmall\s+talk\b/,
   /\bpleasantries\b/,
 ];
@@ -269,7 +269,7 @@ function scoreExtractionEntrySignal(content: string): number {
   const tokens = tokenizeForSimilarity(normalized);
   let score = 0;
 
-  if (LOW_SIGNAL_EXACT_TEXT.has(normalized) || LOW_SIGNAL_TURN_PATTERNS.some(pattern => pattern.test(normalized))) {
+  if (isNormalizedLowSignalTurn(normalized)) {
     score -= 1.4;
   }
 
@@ -302,11 +302,38 @@ function scoreExtractionEntrySignal(content: string): number {
   return score;
 }
 
-function isExplicitLowSignalTurn(content: string): boolean {
-  const normalized = normalizeForSimilarity(content);
+const PHATIC_PREFIX_PATTERNS = [
+  /^(?:hi|hey|hello)(?:\s+there)?(?:\s+|$)/,
+  /^good\s+(?:morning|afternoon|evening|night)(?:\s+|$)/,
+  /^(?:many\s+)?thanks?(?:\s+(?:so\s+much|a\s+lot|very\s+much|again))?(?:\s+|$)/,
+  /^thank\s+you(?:\s+(?:so\s+much|very\s+much|again))?(?:\s+|$)/,
+  /^(?:good\s*)?bye(?:\s+for\s+now)?(?:\s+|$)/,
+  /^see\s+you(?:\s+(?:later|soon|tomorrow))?(?:\s+|$)/,
+  /^talk\s+(?:to\s+you\s+)?later(?:\s+|$)/,
+  /^how\s+are\s+you(?:\s+doing)?(?:\s+|$)/,
+  /^what\s*s\s+up(?:\s+|$)/,
+];
+
+function isPurePhaticTurn(normalized: string): boolean {
   if (!normalized) return true;
   if (LOW_SIGNAL_EXACT_TEXT.has(normalized)) return true;
+  let remaining = normalized;
+  while (remaining.length > 0) {
+    const matched = PHATIC_PREFIX_PATTERNS.find(pattern => pattern.test(remaining));
+    if (!matched) return false;
+    remaining = remaining.replace(matched, '').replace(/^and\s+/, '');
+  }
+  return true;
+}
+
+function isNormalizedLowSignalTurn(normalized: string): boolean {
+  if (!normalized) return true;
+  if (isPurePhaticTurn(normalized)) return true;
   return LOW_SIGNAL_TURN_PATTERNS.some(pattern => pattern.test(normalized));
+}
+
+function isExplicitLowSignalTurn(content: string): boolean {
+  return isNormalizedLowSignalTurn(normalizeForSimilarity(content));
 }
 
 function isLowSignalFact(text: string): boolean {

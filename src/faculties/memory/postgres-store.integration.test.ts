@@ -394,7 +394,9 @@ describe('postgres memory store integration', () => {
   it('makes patched text immediately retrievable through new semantic and lexical projections', async () => {
     await withMemoryDatabase(async (pool) => {
       const store = await createPostgresMemoryStoreFromPool(pool, 4);
-      const oldText = 'obsolete amber baseline memory';
+      // Share no lexical tokens with `retrievalRequest.contextText` ('patched memory query')
+      // so the pre-patch assertion verifies neither vector nor hybrid FTS matches the old row.
+      const oldText = 'obsolete amber baseline record';
       const patchedText = 'shakedown probe cobalt thunderstamp 7749 [PATCHED]';
       const oldEmbedding = new Float32Array([1, 0, 0, 0]);
       const patchedEmbedding = new Float32Array([0, 1, 0, 0]);

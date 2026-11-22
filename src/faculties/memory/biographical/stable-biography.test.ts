@@ -192,7 +192,19 @@ describe('deterministic conflict and correction policy', () => {
       .toEqual(['coexisting', 'coexisting', 'contested']);
     expect((await store.getClaim(tea.claim.id))?.status).toBe('contested');
     expect((await store.getClaim(coffee.claim.id))?.status).toBe('active');
+    expect((await store.getClaim(coffee.claim.id))?.portabilityScope).toBe('subject_present');
     expect(opposition.claim.status).toBe('contested');
+
+    const intimate = await admitBiographicalCandidate({
+      store,
+      candidate: {
+        ...preferenceCandidate('prefers', 'explicit', 'quiet evenings'),
+        proposedSensitivity: 'intimate',
+        sources: [source('memory:intimate-pref', 'intimate')],
+      },
+    });
+    expect(intimate.claim.effectiveSensitivity).toBe('intimate');
+    expect(intimate.claim.portabilityScope).toBe('origin_only');
   });
 
   it('keeps a re-extracted candidate contested while its conflict key is unresolved', async () => {

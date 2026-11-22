@@ -266,7 +266,7 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
       );
       const counts = await client.query<{ pending_count: string; run_count: string }>(
         `SELECT
-           COUNT(*) FILTER (WHERE stage NOT IN ('active', 'rejected', 'superseded'))::text AS pending_count,
+           COUNT(*) FILTER (WHERE stage IN ('automata_synthesis', 'companion_review'))::text AS pending_count,
            COUNT(*) FILTER (
              WHERE automata_run_id = $1
            )::text AS run_count
@@ -347,11 +347,14 @@ export class PostgresBiographicalProfileStore implements BiographicalProfileStor
    * and no transaction: it is a hint for the caller's spend decision, never the
    * admission decision. `writeCandidate` re-counts the identical predicate
    * under `pg_advisory_xact_lock` and is what actually admits or refuses.
+   * Counts only active automated pipeline stages (`automata_synthesis`,
+   * `companion_review`) so an unreviewed `human_review` backlog cannot halt
+   * fleet-wide synthesis.
    */
   async countPendingCandidates(): Promise<number> {
     const row = await this.queryOne<{ pending_count: string }>(
       `SELECT COUNT(*) FILTER (
-         WHERE stage NOT IN ('active', 'rejected', 'superseded')
+         WHERE stage IN ('automata_synthesis', 'companion_review')
        )::text AS pending_count
        FROM biographical_candidates`,
     );

@@ -76,6 +76,7 @@ import type {
 import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 import { screenChatMessageEnvelope } from '../../core/cogsec/intake/chat-message-screening.js';
 import { classifyChannelEnvelope } from '../../system/trust/policy.js';
+import type { TrustLevel } from '../../system/trust/types.js';
 import type { CompanionId } from '../../shared/routing/companion-id.js';
 import {
   DISCORD_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE,
@@ -151,11 +152,28 @@ export interface DiscordPrimaryUserBinding {
   canonicalContactId?: string;
 }
 
+/** Trusted/regular non-owner Discord user binding so group friends aren't treated as untrusted public strangers. */
+export interface DiscordTrustedUserBinding {
+  userId: string;
+  canonicalContactId?: string;
+  trustLevel?: 'trusted' | 'regular';
+}
+
+export interface DiscordAuthorTrustResolution {
+  trustLevel: TrustLevel;
+  canonicalContactId?: string;
+}
+
 interface DiscordAdapterOptions {
   sessionStore?: SessionStore;
   eligibilityGate?: EligibilityGate;
   allowedBotUserIds?: string[];
   primaryUsers?: readonly DiscordPrimaryUserBinding[];
+  trustedUsers?: readonly DiscordTrustedUserBinding[];
+  /** Optional contact-trust resolver for known Discord users in group rooms (never elevates to primary_user). */
+  resolveAuthorTrust?: (
+    userId: string,
+  ) => Promise<DiscordAuthorTrustResolution | undefined> | DiscordAuthorTrustResolution | undefined;
   personalFilesDir?: string;
   /**
    * jp36.3.1.2: per-guild custom-emoji one-line meanings from channels.json.
@@ -250,6 +268,8 @@ export class DiscordAdapter implements ChannelAdapterPort {
   private readonly longRunningToolStatus: LongRunningToolStatusTracker;
   private allowedBotUserIds: Set<string>;
   private primaryUsersById: Map<string, DiscordPrimaryUserBinding>;
+  private trustedUsersById: Map<string, DiscordTrustedUserBinding>;
+  private readonly resolveAuthorTrust: DiscordAdapterOptions['resolveAuthorTrust'] | null;
   private readonly customEmojiMeanings: CustomEmojiMeaningsByGuild;
   private personalFilesDir: string | null;
   private initialized = false;
@@ -277,6 +297,13 @@ export class DiscordAdapter implements ChannelAdapterPort {
         .filter(binding => binding.userId.length > 0)
         .map(binding => [binding.userId, binding]),
     );
+    this.trustedUsersById = new Map(
+      (options.trustedUsers ?? [])
+        .map(binding => ({ ...binding, userId: binding.userId.trim() }))
+        .filter(binding => binding.userId.length > 0)
+        .map(binding => [binding.userId, binding]),
+    );
+    this.resolveAuthorTrust = options.resolveAuthorTrust ?? null;
     this.customEmojiMeanings = options.customEmojiMeanings ?? {};
     this.config = {
       enabled: Boolean(this.resolveLoginToken()),
@@ -1091,7 +1118,11 @@ export class DiscordAdapter implements ChannelAdapterPort {
       }
     }
     let content = this.sanitizeMessageContent(msg.content, runtimeBotId);
-    const sourceClass = this.resolveMessageSourceClass(msg, isDirectMessage, runtimeBotId);
+    const { sourceClass, canonicalContactId } = await this.resolveMessageSourceClass(
+      msg,
+      isDirectMessage,
+      runtimeBotId,
+    );
     let addressing = buildDiscordMessageAddressing({
       message: msg, isDirectMessage, runtimeBotId,
       observer: this.client.user ?? undefined,
@@ -1099,9 +1130,6 @@ export class DiscordAdapter implements ChannelAdapterPort {
       sourceClass,
     });
     const channelPrivacy = classifyChannelEnvelope(msg.channelId, { isDirectMessage }).privacy;
-    const primaryUser = sourceClass === 'primary_user'
-      ? this.primaryUsersById.get(msg.author.id)
-      : undefined;
     let intakeEnvelopes: IntakeEnvelopeSnapshot[] = [];
     if (content !== '(empty message)') {
       const screenedMessage = await screenChatMessageEnvelope({
@@ -1113,9 +1141,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
         messageId: msg.id,
         channelPrivacy,
         channelTopology: isDirectMessage ? 'direct' : 'group',
-        ...(primaryUser?.canonicalContactId
-          ? { canonicalContactId: primaryUser.canonicalContactId }
-          : {}),
+        ...(canonicalContactId ? { canonicalContactId } : {}),
       });
       content = screenedMessage.envelope.content;
       addressing = screenedMessage.envelope.addressing;
@@ -1288,18 +1314,64 @@ export class DiscordAdapter implements ChannelAdapterPort {
       && isCompanionReadyLifecycleNotification(msg.content, siblingCompanionId);
   }
 
-  private resolveMessageSourceClass(
+  private async resolveMessageSourceClass(
     msg: Message,
     isDirectMessage: boolean,
     runtimeBotId?: string,
-  ): IntakeSourceClass {
+  ): Promise<{ sourceClass: IntakeSourceClass; canonicalContactId?: string }> {
     if (msg.author.bot && this.isSiblingCompanionBot(msg.author.id, runtimeBotId)) {
-      return 'companion_self';
+      return { sourceClass: 'companion_self' };
     }
-    if (!msg.author.bot && this.primaryUsersById.has(msg.author.id)) {
-      return 'primary_user';
+    if (!msg.author.bot) {
+      const primaryUser = this.primaryUsersById.get(msg.author.id);
+      if (primaryUser) {
+        return {
+          sourceClass: 'primary_user',
+          ...(primaryUser.canonicalContactId
+            ? { canonicalContactId: primaryUser.canonicalContactId }
+            : {}),
+        };
+      }
+      const trustedUser = this.trustedUsersById.get(msg.author.id);
+      if (trustedUser) {
+        return {
+          sourceClass: trustedUser.trustLevel === 'regular' ? 'regular_contact' : 'trusted_contact',
+          ...(trustedUser.canonicalContactId
+            ? { canonicalContactId: trustedUser.canonicalContactId }
+            : {}),
+        };
+      }
+      if (this.resolveAuthorTrust) {
+        try {
+          const resolved = await this.resolveAuthorTrust(msg.author.id);
+          if (resolved) {
+            // Gateway owner authority stays exclusively with primaryUsersById;
+            // contact trust resolves trusted/regular friends without ever
+            // elevating a non-owner to primary_user.
+            const resolvedClass: IntakeSourceClass = resolved.trustLevel === 'primary'
+              || resolved.trustLevel === 'trusted'
+              ? 'trusted_contact'
+              : resolved.trustLevel === 'regular'
+                ? 'regular_contact'
+                : isDirectMessage
+                  ? 'regular_contact'
+                  : 'public_contact';
+            return {
+              sourceClass: resolvedClass,
+              ...(resolved.canonicalContactId
+                ? { canonicalContactId: resolved.canonicalContactId }
+                : {}),
+            };
+          }
+        } catch (error) {
+          log.warn('Discord author trust lookup failed; falling back to default source class', {
+            channelId: msg.channelId,
+            error: toErrorMessage(error),
+          });
+        }
+      }
     }
-    return isDirectMessage ? 'regular_contact' : 'public_contact';
+    return { sourceClass: isDirectMessage ? 'regular_contact' : 'public_contact' };
   }
 
   private listeningWindowKey(channelId: string, userId: string): string {

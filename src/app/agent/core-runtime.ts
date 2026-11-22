@@ -1136,6 +1136,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   const biographyCompanionReview = new BiographyCompanionReviewService({
     profileStore: biographicalStore,
     llmClient: llmProvider,
+    memoryStore,
     personaPreamble,
     companionId,
     candidatePolicy: () => (

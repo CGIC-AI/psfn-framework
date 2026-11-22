@@ -2,6 +2,7 @@ import type { EligibilityGate } from '../../system/capabilities/eligibility.js';
 import type {
   DiscordAdapter,
   DiscordPrimaryUserBinding,
+  DiscordTrustedUserBinding,
 } from '../../channels/discord/adapter.js';
 import type { TelegramAdapter } from '../../channels/telegram/adapter.js';
 import { ChannelAdapterRegistry } from '../../channels/backplane/registry-port.js';
@@ -103,6 +104,27 @@ export function resolveDiscordPrimaryUsers(
   if (!companionId || config.fleetAuth?.provider.kind !== 'discord') return [];
   return (config.fleetAuth.accountRoster ?? [])
     .filter(entry => entry.companionId === companionId && entry.role === 'owner')
+    .map(entry => ({
+      userId: entry.providerSubjectId,
+      ...(entry.contactId ? { canonicalContactId: entry.contactId } : {}),
+    }));
+}
+
+/**
+ * Resolve non-owner rostered companion users (`admin`/`member`) so trusted
+ * friends and members are classified as `trusted_contact` instead of untrusted
+ * `public_contact` in group rooms. Never promotes non-owners to `primary_user`.
+ */
+export function resolveDiscordTrustedUsers(
+  config: DiscordPrimaryUserAuthority,
+  companionId: CompanionId | undefined,
+): DiscordTrustedUserBinding[] {
+  if (!companionId || config.fleetAuth?.provider.kind !== 'discord') return [];
+  return (config.fleetAuth.accountRoster ?? [])
+    .filter(entry => (
+      entry.companionId === companionId
+      && (entry.role === 'admin' || entry.role === 'member')
+    ))
     .map(entry => ({
       userId: entry.providerSubjectId,
       ...(entry.contactId ? { canonicalContactId: entry.contactId } : {}),
@@ -321,6 +343,7 @@ export async function loadGatewayChannelSurfaces(
         ),
         allowedBotUserIds: account.allowedBotUserIds,
         primaryUsers: resolveDiscordPrimaryUsers(input.config, account.companionId),
+        trustedUsers: resolveDiscordTrustedUsers(input.config, account.companionId),
         ...(account.customEmojiMeanings
           ? { customEmojiMeanings: account.customEmojiMeanings }
           : {}),
@@ -362,6 +385,10 @@ export async function loadGatewayChannelSurfaces(
           'discord',
         ),
         primaryUsers: resolveDiscordPrimaryUsers(
+          input.config,
+          singleDiscordCompanionId,
+        ),
+        trustedUsers: resolveDiscordTrustedUsers(
           input.config,
           singleDiscordCompanionId,
         ),

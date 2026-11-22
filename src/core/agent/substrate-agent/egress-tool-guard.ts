@@ -86,6 +86,14 @@ function resolveCustodyHold(input: {
   return { withholds: input.posture === 'enforce', reason: input.reason };
 }
 
+function hasPrivateDataInPath(lineage: DisclosureLineage | undefined): boolean {
+  // Fail closed when turn disclosure lineage has not been published yet or
+  // includes any unclassified source.
+  if (!lineage || lineage.hasUnclassifiedSource) return true;
+  if (lineage.sourceCount === 0) return false;
+  return lineage.effectiveSensitivity !== 'public';
+}
+
 export function buildEgressToolGuard(deps: EgressToolGuardDeps): EgressToolGuard | null {
   const gate = deps.intakeSinkGate;
   if (!gate) return null;
@@ -158,6 +166,7 @@ export function buildEgressToolGuard(deps: EgressToolGuardDeps): EgressToolGuard
       if (!requiredTokens.some(isEgressCapabilityToken)) return null;
       const envelopes = deps.getActiveTurnIntakeEnvelopes();
       const turnIdentity = deps.getActiveTurnSessionIdentity();
+      const lineage = deps.getCurrentTurnDisclosureLineage();
       const access = gate.evaluate('tool_egress', envelopes, { toolName }, {
         attemptRef: toolCallId,
         correlationRef: turnIdentity
@@ -177,7 +186,7 @@ export function buildEgressToolGuard(deps: EgressToolGuardDeps): EgressToolGuard
         try {
           trifecta = gate.assessEgressTrifecta({
             envelopes,
-            privateDataInPath: true,
+            privateDataInPath: hasPrivateDataInPath(lineage),
             egressDescription: `tool:${toolName}`,
             ...(turnIdentity
               ? {
@@ -243,7 +252,6 @@ export function buildEgressToolGuard(deps: EgressToolGuardDeps): EgressToolGuard
             : disclosure;
         },
       });
-      const lineage = deps.getCurrentTurnDisclosureLineage();
       const composed = composeEgressDisclosureDecision({
         sinkAllowed,
         sinkReason,

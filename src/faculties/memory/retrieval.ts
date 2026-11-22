@@ -365,18 +365,74 @@ export class MemoryRetriever implements MemoryProvider {
     };
   }
 
-  private productMemoryStore(canonicalContactId?: string): MemoryStorePort {
+  private productMemoryStore(
+    canonicalContactId?: string,
+    viewerCoSubjectContactIds?: readonly string[],
+  ): MemoryStorePort {
     if (!this.enforceSubjectAuthorization) return this.memoryStore;
     const context = memorySubjectAccessContextFromCorrelation(getRequestContext());
     if (context.companionSelfReflection) {
       return createSubjectAuthorizedMemoryStore(this.memoryStore, context);
     }
+    const normalizedViewerId = canonicalContactId?.trim() || undefined;
+    const coSubjects = normalizedViewerId
+      ? [...new Set(
+        (viewerCoSubjectContactIds ?? [])
+          .map(id => id.trim())
+          .filter(id => id.length > 0 && id !== normalizedViewerId),
+      )].sort()
+      : [];
     return createSubjectAuthorizedMemoryStore(this.memoryStore, {
       ...context,
-      ...(canonicalContactId ? { viewerContactId: canonicalContactId } : {}),
-      includeCompanionPrivateRecallCandidates: Boolean(canonicalContactId),
-      companionInternal: !canonicalContactId && context.companionInternal === true,
+      ...(normalizedViewerId ? { viewerContactId: normalizedViewerId } : {}),
+      ...(coSubjects.length > 0 ? { viewerCoSubjectContactIds: coSubjects } : {}),
+      includeCompanionPrivateRecallCandidates: Boolean(normalizedViewerId),
+      companionInternal: !normalizedViewerId && context.companionInternal === true,
     });
+  }
+
+  private async resolveGroupCoSubjectContactIds(
+    roomVisibility: RetrievalRoomVisibilityContext | undefined,
+    canonicalContactId: string | undefined,
+  ): Promise<string[]> {
+    const scope = roomVisibility?.conversationScope;
+    if (!scope || scope.kind !== 'group' || !this.contactStore) return [];
+    const normalizedViewerId = canonicalContactId?.trim();
+    const coSubjectIds = new Set<string>();
+    const separator = scope.channelId.indexOf(':');
+    const inferredSource = separator > 0 ? scope.channelId.slice(0, separator) : undefined;
+
+    for (const speaker of scope.recentSpeakers) {
+      const authorId = speaker.authorId.trim();
+      if (!authorId) continue;
+      let contact = typeof this.contactStore.getById === 'function'
+        ? await this.contactStore.getById(authorId)
+        : undefined;
+      if (!contact && inferredSource && typeof this.contactStore.getByChannelIdentity === 'function') {
+        contact = await this.contactStore.getByChannelIdentity(inferredSource, authorId);
+      }
+      if (!contact && typeof this.contactStore.getByDiscordUserId === 'function') {
+        contact = await this.contactStore.getByDiscordUserId(authorId);
+      }
+      if (contact && !contact.archivedAt && contact.id !== normalizedViewerId) {
+        coSubjectIds.add(contact.id);
+      }
+    }
+
+    if (typeof this.contactStore.listRoomRoster === 'function') {
+      const roster = await this.contactStore.listRoomRoster(scope.channelId);
+      for (const member of roster) {
+        const memberId = member.contactId.trim();
+        if (!memberId || memberId === normalizedViewerId) continue;
+        if (typeof this.contactStore.getById === 'function') {
+          const contact = await this.contactStore.getById(memberId);
+          if (contact?.archivedAt) continue;
+        }
+        coSubjectIds.add(memberId);
+      }
+    }
+
+    return [...coSubjectIds].sort();
   }
 
   private filterIneligibleMemories<T extends CurrentMemoryCandidate>(
@@ -893,7 +949,11 @@ export class MemoryRetriever implements MemoryProvider {
     roomVisibility?: RetrievalRoomVisibilityContext,
     rolledOutSessionBoundary?: RolledOutSessionBoundary,
   ): Promise<TurnMemorySnapshot> {
-    const productMemoryStore = this.productMemoryStore(canonicalContactId);
+    const coSubjectContactIds = await this.resolveGroupCoSubjectContactIds(
+      roomVisibility,
+      canonicalContactId,
+    );
+    const productMemoryStore = this.productMemoryStore(canonicalContactId, coSubjectContactIds);
     return captureTurnMemorySnapshotWithDeps(
       {
         contextText,
@@ -991,7 +1051,6 @@ export class MemoryRetriever implements MemoryProvider {
     activeContextTarget?: ActiveMemoryRefreshTarget,
   ): Promise<string> {
     const retrievalStartedAt = performance.now();
-    const productMemoryStore = this.productMemoryStore(canonicalContactId);
     const hasDirectRetrievalContext = callerContext !== undefined || retrievalMode !== undefined;
     const effectiveCallerContext = hasDirectRetrievalContext
       ? callerContext
@@ -1023,6 +1082,11 @@ export class MemoryRetriever implements MemoryProvider {
         canonicalContactId,
         conversationScope,
       );
+    const coSubjectContactIds = await this.resolveGroupCoSubjectContactIds(
+      roomVisibility,
+      canonicalContactId,
+    );
+    const productMemoryStore = this.productMemoryStore(canonicalContactId, coSubjectContactIds);
     const socialContext = canonicalContactId
       ? await resolveRetrievalSocialContext(this.contactStore, canonicalContactId, effectiveTrust, channelPrivacy)
       : undefined;

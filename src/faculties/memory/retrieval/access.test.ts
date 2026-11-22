@@ -180,6 +180,78 @@ describe('evaluateRetrievalAccessDecision participant-aware DM access', () => {
       withheldReason: 'room_visibility.blocked',
     });
   });
+
+  it.each(['intimate', 'confidential'] as const)(
+    'allows the primary partner in a private DM to access %s companion_self self-experiences (d5e0p.28)',
+    (sensitivity) => {
+      const selfExperience = memory({
+        sensitivity,
+        tags: ['self_directed', 'self_experience'],
+        provenance: { actor: 'companion', subjectScope: 'companion_internal' },
+      });
+
+      expect(evaluateRetrievalAccessDecision(selfExperience, primaryDmOptions())).toEqual({
+        allowed: true,
+      });
+
+      // Non-primary DM viewer stays strictly blocked.
+      expect(evaluateRetrievalAccessDecision(selfExperience, {
+        trustLevel: 'trusted',
+        channelPrivacy: 'private',
+        broadcast: false,
+        canonicalContactId: 'contact-friend',
+        roomVisibility: {
+          currentChannelId: 'discord:dm:friend',
+          conversationScope: createDmConversationScope({
+            channelId: 'discord:dm:friend',
+            contact: { contactId: 'contact-friend' },
+          }),
+          canonicalContactRoomIds: new Set(['discord:dm:friend']),
+        },
+      }).allowed).toBe(false);
+
+      // Group room viewer (even primary) stays strictly blocked.
+      expect(evaluateRetrievalAccessDecision(selfExperience, {
+        trustLevel: 'primary',
+        channelPrivacy: 'invite_only',
+        broadcast: false,
+        canonicalContactId: PRIMARY_CONTACT_ID,
+        roomVisibility: {
+          currentChannelId: 'discord:guild:shared-room',
+          conversationScope: createGroupConversationScope({
+            channelId: 'discord:guild:shared-room',
+          }),
+        },
+      }).allowed).toBe(false);
+    },
+  );
+
+  it('blocks a third-party co-subject memory with missing room provenance in a group room', () => {
+    const decision = evaluateRetrievalAccessDecision(
+      memory({
+        sensitivity: 'personal',
+        contactId: 'contact-other',
+      }),
+      {
+        trustLevel: 'trusted',
+        channelPrivacy: 'invite_only',
+        broadcast: false,
+        canonicalContactId: PRIMARY_CONTACT_ID,
+        roomVisibility: {
+          currentChannelId: 'discord:guild:shared-room',
+          conversationScope: createGroupConversationScope({
+            channelId: 'discord:guild:shared-room',
+          }),
+        },
+      },
+    );
+
+    expect(decision).toEqual({
+      allowed: false,
+      rejectionKind: 'room_visibility',
+      withheldReason: 'room_visibility.blocked',
+    });
+  });
 });
 
 describe('evaluateRetrievalAccessDecision companion self access', () => {

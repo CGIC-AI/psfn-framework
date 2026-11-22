@@ -96,8 +96,9 @@ export type BiographicalDestination = DisclosureDestination;
 /**
  * Derive the destination a biographical claim would project into from the
  * conversation scope. Mirrors the disclosure population seam's session-history
- * rule: DM → that contact's DM, invite-only group → that room, public group →
- * that room, private group → companion-self (no outward destination).
+ * rule: DM → that contact's DM, invite-only or private group → that room as an
+ * invite-only destination (strictly admitting at most `personal`, never
+ * `intimate`/`confidential`), public group → that room.
  */
 export function destinationFromScope(scope: ConversationScope): BiographicalDestination {
   if (scope.kind === 'dm') {
@@ -106,11 +107,9 @@ export function destinationFromScope(scope: ConversationScope): BiographicalDest
   if (scope.envelope.channelPrivacy === 'public') {
     return { kind: 'public_room', channelId: scope.channelId };
   }
-  if (scope.envelope.channelPrivacy === 'invite_only') {
-    return { kind: 'invite_only_room', channelId: scope.channelId };
-  }
-  // Private group: the private sink. Nothing projects outward.
-  return { kind: 'companion_self' };
+  // Both invite_only and private group rooms project as invite_only_room
+  // (admitting at most `personal`, never `intimate`/`confidential`).
+  return { kind: 'invite_only_room', channelId: scope.channelId };
 }
 
 /**
@@ -178,6 +177,13 @@ export interface TurnBiographicalContext {
   readonly currentAuthor?: CurrentAuthorResolution;
   /** Transport-authoritative reply/mention metadata captured at ingress. */
   readonly messageAddressing?: MessageAddressingMetadata;
+  /**
+   * Canonical contact IDs proven present in this room by the runtime
+   * (e.g. resolved recent room speakers). Used only for `subject_present` and
+   * n-ary group presence checks — never to ambiently select unaddressed
+   * single-contact profiles.
+   */
+  readonly presentContactIds?: readonly string[];
   readonly conversationScope: ConversationScope;
   readonly tokenBudget?: number;
   readonly estimateTokens?: (text: string) => number;
@@ -424,12 +430,13 @@ export async function projectBiographicalContext(
       maxSubjects: deps.explicitAddressing.maxSubjects,
     });
   // Every canonical contact this turn can prove is part of it: the verified
-  // current author, and every explicitly addressed verified contact. Room
-  // membership is deliberately absent — an unproven roster is not presence, and
-  // a display name is never identity.
+  // current author, every explicitly addressed verified contact, and any
+  // runtime-verified present room speakers. Unverified rosters and display
+  // names are never accepted here.
   const presentContactIds = new Set<string>([
     ...(currentAuthor !== undefined ? [currentAuthor.subject.contactId] : []),
     ...explicitSelection.subjects.map(subject => subject.subject.contactId),
+    ...(turn.presentContactIds ?? []),
   ]);
   const explicitClaimsBySubject = await Promise.all(explicitSelection.subjects.map(
     async subject => ({
@@ -602,7 +609,15 @@ export async function projectBiographicalContext(
     // drift reason, and before the destination gate so scope narrows the
     // audience rather than pretending to widen it: a portable claim still has
     // to clear sensitivity, trust, ContextEnvelope and CogSec exactly as before.
-    if (claim.portabilityScope === 'origin_only') {
+    // An `origin_only` claim is permitted inside its own origin room (when every
+    // live source originates in `destinationChannelId`), and withheld everywhere
+    // else.
+    const allSourcesInOriginRoom = currentSources.length > 0
+      && currentSources.every(source => (
+        source.sourceChannelId !== undefined
+        && source.sourceChannelId === destinationChannelId
+      ));
+    if (claim.portabilityScope === 'origin_only' && !allSourcesInOriginRoom) {
       withheld.push({
         claimId: claim.id,
         reason: 'portability-origin-only',

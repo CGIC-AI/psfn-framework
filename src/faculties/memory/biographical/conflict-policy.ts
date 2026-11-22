@@ -1,4 +1,5 @@
 import { claimConflictKey, claimValuesCanCoexist } from './claim-kinds.js';
+import { resolveSafeDefaultPortabilityScope } from './kernel.js';
 import { prepareBiographicalClaim } from './store-port.js';
 import type {
   BiographicalClaimWriteInput,
@@ -149,11 +150,20 @@ async function admitBiographicalCandidateInTransaction(
     return { claim: identical, disposition: 'deduplicated', affectedClaims: [] };
   }
 
+  const resolvedPortabilityScope = input.candidate.portabilityScope
+    ?? resolveSafeDefaultPortabilityScope({
+      claim: prepared,
+      effectiveSensitivity: prepared.automaticSensitivity,
+    });
   const conflicts = activeAtKey.filter(claim =>
     !claimValuesCanCoexist(prepared.kind, prepared.value, claim.value)
   );
   if (conflicts.length === 0) {
-    const claim = await input.store.writeClaim({ ...input.candidate, status: 'active' });
+    const claim = await input.store.writeClaim({
+      ...input.candidate,
+      status: 'active',
+      portabilityScope: resolvedPortabilityScope,
+    });
     return { claim, disposition: 'coexisting', affectedClaims: [] };
   }
 
@@ -200,8 +210,15 @@ async function admitBiographicalCandidateInTransaction(
       to: 'active',
       ...(input.candidate.now !== undefined ? { now: input.candidate.now } : {}),
     });
+    const portable = resolvedPortabilityScope === 'origin_only'
+      ? activated
+      : await input.store.setClaimPortability({
+        claimId: activated.id,
+        portabilityScope: resolvedPortabilityScope,
+        ...(input.candidate.now !== undefined ? { now: input.candidate.now } : {}),
+      });
     return {
-      claim: activated,
+      claim: portable,
       disposition: 'corrected',
       affectedClaims: [result.superseded, ...supersededAdditional],
     };

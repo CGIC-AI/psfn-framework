@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
+import type { MemoryStorePort } from '../memory-store-port.js';
+import type { PurrMemory } from '../types.js';
 import { normalizeBiographicalCandidatePolicy } from '../../../system/config/biographical-candidate-policy.js';
 import type { BiographicalCandidatePolicy } from '../../../system/config/biographical-candidate-policy.js';
 import { BiographyCompanionReviewService } from './companion-review-service.js';
@@ -586,5 +588,130 @@ describe('BiographyCompanionReviewService', () => {
     // The reviewer is told what it cannot do, in the prompt and in the schema.
     expect(rendered).toContain('I cannot make a proposal less sensitive');
     expect(rendered).toContain('bodies stay in their origin room');
+  });
+
+  it('strips markdown code fences before JSON parsing and advances the stage cursor', async () => {
+    const store = new InMemoryBiographicalProfileStore(() => NOW);
+    const candidate = await stageCandidate({
+      store,
+      subject: COMPANION,
+      socialContext: SELF_CONTEXT,
+    });
+    const service = new BiographyCompanionReviewService({
+      profileStore: store,
+      llmClient: {
+        complete: async () => ({
+          content: '```json\n{"action":"approve","reason":"evidence_supports_claim"}\n```',
+          model: 'test-model',
+          usage: { inputTokens: 0, outputTokens: 0 },
+        }),
+      } as unknown as LLMProviderPort,
+      companionId: COMPANION_ID,
+      candidatePolicy: () => POLICY,
+      now: () => NOW,
+      newRunId: () => 'review-fenced-1',
+    });
+
+    const first = await service.run();
+    expect(first.malformedDecisions).toBe(0);
+    expect(first.approved).toBe(1);
+    expect(first.autoactivated).toBe(1);
+
+    const claim = await store.getClaim(candidate.claimId);
+    expect(claim?.status).toBe('active');
+    expect(claim?.portabilityScope).toBe('universal');
+
+    // Cursor advanced cleanly: queue is now empty, and subsequent run hits the no-change gate.
+    const second = await service.run();
+    expect(second.candidatesConsidered).toBe(0);
+    const third = await service.run();
+    expect(third.unchanged).toBe(true);
+  });
+
+  it('supplies bounded safe public/personal source context while withholding sensitive bodies', async () => {
+    const store = new InMemoryBiographicalProfileStore(() => NOW);
+    await store.writeCandidate({
+      automataRunId: 'biography-synthesis:safe-context',
+      automataAuthorityRef: 'maintenance:biography-synthesis',
+      policy: POLICY,
+      socialContext: DYAD_CONTEXT,
+      rationale: 'new_subject_claim',
+      claim: {
+        subject: CONTACT,
+        kind: 'stable-preference',
+        value: preferenceValue(),
+        basis: 'explicit',
+        confidence: 0.9,
+        sources: [
+          source('memory:safe-personal'),
+          source('memory:secret-intimate'),
+        ],
+        now: NOW,
+      },
+    });
+    const memories = new Map<string, PurrMemory>([
+      ['safe-personal', {
+        id: 'safe-personal',
+        text: 'Mentioned preferring concise checklists in group threads.',
+        type: 'semantic',
+        sourceType: 'conversation',
+        importance: 0.7,
+        confidence: 0.9,
+        emotionalValence: 0,
+        salience: 0.5,
+        sourceRef: 'memory:safe-personal',
+        extractedAt: NOW.getTime(),
+        lastAccessed: NOW.getTime(),
+        accessCount: 1,
+        tags: [],
+        sensitivity: 'personal',
+        consentFlags: { allowRecall: true },
+      }],
+      ['secret-intimate', {
+        id: 'secret-intimate',
+        text: 'INTIMATE-SECRET-BODY must never appear in reviewer prompt.',
+        type: 'semantic',
+        sourceType: 'conversation',
+        importance: 0.9,
+        confidence: 0.9,
+        emotionalValence: 0,
+        salience: 0.9,
+        sourceRef: 'memory:secret-intimate',
+        extractedAt: NOW.getTime(),
+        lastAccessed: NOW.getTime(),
+        accessCount: 1,
+        tags: [],
+        sensitivity: 'intimate',
+        consentFlags: { allowRecall: true },
+      }],
+    ]);
+    const memoryStore = {
+      getById: async (id: string) => memories.get(id),
+    } as Pick<MemoryStorePort, 'getById'>;
+
+    let capturedUserPrompt = '';
+    const service = new BiographyCompanionReviewService({
+      profileStore: store,
+      memoryStore,
+      llmClient: {
+        complete: async (request: { messages: Array<{ content: string }> }) => {
+          capturedUserPrompt = request.messages[0]?.content ?? '';
+          return {
+            content: JSON.stringify({ action: 'approve', reason: 'evidence_supports_claim' }),
+            model: 'test-model',
+            usage: { inputTokens: 0, outputTokens: 0 },
+          };
+        },
+      } as unknown as LLMProviderPort,
+      companionId: COMPANION_ID,
+      candidatePolicy: () => POLICY,
+      now: () => NOW,
+      newRunId: () => 'review-safe-context-1',
+    });
+
+    const telemetry = await service.run();
+    expect(telemetry.approved).toBe(1);
+    expect(capturedUserPrompt).toContain('Mentioned preferring concise checklists in group threads.');
+    expect(capturedUserPrompt).not.toContain('INTIMATE-SECRET-BODY');
   });
 });

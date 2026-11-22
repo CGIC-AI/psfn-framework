@@ -1,11 +1,14 @@
+import type { Pool } from 'pg';
 import { describe, expect, it } from 'vitest';
 import { composeCompanionDmChannelId } from '../../shared/contracts/companion-channels.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import { fromAny } from '@total-typescript/shoehorn';
 import { InMemoryMemoryStore } from '../../test-support/in-memory-memory-store.js';
+import { FakeEpisodicPool } from '../../test-support/fake-postgres-episodic-pool.js';
 import { getRequestContext, runWithRequestContext } from '../../primitives/llm/request-context.js';
 import { createSubjectAuthorizedMemoryStore, memorySubjectAccessContextFromCorrelation } from './subject-authorized-store.js';
 import { createSharedBackgroundProvider } from './retrieval/shared-background.js';
+import { PostgresEpisodicStore } from './episodic/postgres-store.js';
 import { MemoryRetriever } from './retrieval.js';
 import { createMemoryTool } from './tools.js';
 import type { PurrMemory } from './types.js';
@@ -119,5 +122,106 @@ describe('private reflection memory tool authority', () => {
     }, () => tool.execute('spoofed-reflection', { action: 'search', query: 'Reflection evidence' }));
     expect(result.details?.isError).toBe(true);
     expect(JSON.stringify(result)).not.toContain('must-stay-private');
+  });
+
+  it('authorizes audience=self free-time tool calls (search/timeline/census/exists) while excluding sibling memories', async () => {
+    const ownStore = new InMemoryMemoryStore();
+    for (const memory of [
+      { ...fixtureMemory('free-time-private'), sourceType: 'reflection' as const },
+      fixtureMemory('free-time-contact-a', 'contact-a'),
+    ]) {
+      await ownStore.insertMemory(memory, new Float32Array([1]));
+    }
+    await ownStore.insertMemory({
+      ...fixtureMemory('sibling-only'),
+      provenance: {
+        channelId: composeCompanionDmChannelId(
+          createCompanionId('22222222-2222-4222-8222-222222222222'),
+          createCompanionId('33333333-3333-4333-8333-333333333333'),
+        ),
+      },
+    }, new Float32Array([1]));
+
+    const store = createSubjectAuthorizedMemoryStore(ownStore, () => memorySubjectAccessContextFromCorrelation(getRequestContext()));
+    const episodicStore = new PostgresEpisodicStore(
+      new FakeEpisodicPool() as unknown as Pool,
+      { now: () => new Date('2026-07-17T12:00:00.000Z') },
+    );
+    await episodicStore.createCompanionAuthoredEpisode({
+      id: 'ep-free-time-1',
+      title: 'Greenhouse afternoon',
+      landmark: 'Reviewed greenhouse framing plans.',
+      startedAt: '2026-07-17T10:00:00.000Z',
+      endedAt: '2026-07-17T10:30:00.000Z',
+      threadId: 'thread:greenhouse',
+      channelId: 'discord:partner-dm',
+      participantContactIds: ['contact-a'],
+      salience: { score: 0.8 },
+      affect: { labels: ['warm'] },
+      themes: ['greenhouse'],
+      spanRefs: [{ spanId: 'span-ft-1', sessionId: 'discord:partner-dm' }],
+      artifactRefs: [],
+      provenanceRefs: [],
+      meaning: {
+        text: 'Talked through greenhouse layout plans.',
+        recordedAt: '2026-07-17T10:35:00.000Z',
+        source: 'companion_direct',
+      },
+    });
+    const tool = createMemoryTool(fromAny({}), store, {
+      episodicStore,
+      retrievalAccessScope: () => 'companion_self_creation',
+      companionId: '11111111-1111-4111-8111-111111111111',
+    });
+    const freeTimeToolContext = {
+      channelId: 'internal:free-time:wandering',
+      requesterProvenance: 'self_directed' as const,
+      requestAudience: 'self' as const,
+      callType: 'scheduled' as const,
+      originType: 'scheduled' as const,
+      purpose: 'agent.turn.prompt',
+      originStage: 'agent.turn.prompt',
+      viewerTrustLevel: 'primary' as const,
+      viewerChannelPrivacy: 'private' as const,
+    };
+
+    for (const params of [
+      { action: 'search', query: 'Reflection evidence' },
+      { action: 'timeline', date: '2026-07-17', limit: 10 },
+      { action: 'census', query: 'Reflection evidence' },
+      { action: 'exists', query: 'Reflection evidence' },
+    ]) {
+      const result = await runWithRequestContext(
+        freeTimeToolContext,
+        () => tool.execute(`free-time-${params.action}`, params),
+      );
+      expect(result.details?.isError, params.action).not.toBe(true);
+      const text = result.content.filter(item => item.type === 'text').map(item => item.text).join('\n');
+      expect(text, params.action).not.toContain('sibling-only');
+      if (params.action === 'search') {
+        expect(text, params.action).toContain('free-time-private');
+        expect(text, params.action).toContain('free-time-contact-a');
+      }
+      if (params.action === 'timeline') {
+        expect(text, params.action).toContain('ep-free-time-1');
+      }
+    }
+
+    for (const spoofed of [
+      { channelId: 'api:external', requesterProvenance: 'human' as const, requestAudience: 'external' as const },
+      { channelId: 'internal:free-time:wandering', requesterProvenance: 'human' as const, requestAudience: 'self' as const },
+      { channelId: 'internal:free-time:wandering', requesterProvenance: 'self_directed' as const, requestAudience: 'external' as const },
+      { channelId: 'internal:free-time:wandering', requesterProvenance: 'self_directed' as const },
+    ]) {
+      const denied = await runWithRequestContext({
+        ...spoofed,
+        callType: 'scheduled',
+        purpose: 'agent.turn.prompt',
+        viewerTrustLevel: 'primary',
+        viewerChannelPrivacy: 'private',
+      }, () => tool.execute('spoofed-free-time', { action: 'timeline', limit: 10 }));
+      expect(denied.details?.isError).toBe(true);
+      expect(JSON.stringify(denied)).not.toContain('free-time-private');
+    }
   });
 });

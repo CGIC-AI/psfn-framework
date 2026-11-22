@@ -19,7 +19,10 @@ import type {
   MemorySubjectAdminResult,
 } from './memory-store-port.js';
 import type { PurrMemory } from './types.js';
-import { isCompanionSelfReflectionContext } from '../../primitives/llm/request-context.js';
+import {
+  isCompanionSelfCreationContext,
+  isCompanionSelfReflectionContext,
+} from '../../primitives/llm/request-context.js';
 
 export interface MemorySubjectAccessContext {
   /** Must come from resolved ingress/contact context, never tool or request parameters. */
@@ -65,7 +68,7 @@ const COMPANION_PRIVATE_RECALL_ACTIONS = new Set<MemorySubjectQueryAuthorization
 export function memorySubjectAccessContextFromCorrelation(
   context: Partial<CorrelationMetadata> | undefined,
 ): MemorySubjectAccessContext {
-  if (isCompanionSelfReflectionContext(context)) {
+  if (isCompanionSelfReflectionContext(context) || isCompanionSelfCreationContext(context)) {
     return { companionInternal: true, companionSelfReflection: true };
   }
   const viewerContactId = context?.viewerMemorySubjectContactId?.trim();

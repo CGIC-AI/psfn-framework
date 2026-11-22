@@ -51,6 +51,14 @@ import {
   type ReflectionSubstrateContext,
 } from '../../persistence/journals/reflection-substrate.js';
 import { isBusyTurnError } from '../../system/lifecycle/turn-contention.js';
+import { stripBenignZeroWidthFormatting } from '../cogsec/memory-candidacy.js';
+import {
+  emitHealthEvent,
+  hashHealthEventSubject,
+  processObserverId,
+  type HealthEventEvidence,
+} from '../../shared/contracts/health-event.js';
+import { isRecord } from '../../shared/utils/types.js';
 import { runDeliberation } from '../../primitives/llm/deliberation.js';
 import type { DeliberationResult } from '../../primitives/llm/deliberation.js';
 import {
@@ -568,6 +576,35 @@ export function createReflectionTemplateRuntime(
     }
   };
 
+  const preemptionCounts = new Map<string, number>();
+
+  const emitReflectionHealthDegradation = async (
+    subject: string,
+    evidence: HealthEventEvidence,
+  ): Promise<void> => {
+    if (!runtimeOptions.eventBus) return;
+    try {
+      await emitHealthEvent(runtimeOptions.eventBus, {
+        owner: { kind: 'system' },
+        severity: 'degraded',
+        code: 'scheduler_task_failed',
+        provenance: {
+          process: 'agent',
+          component: 'scheduler',
+          observerId: processObserverId(),
+          subjectHash: hashHealthEventSubject(subject),
+        },
+        evidence,
+        observedAtMs: Date.now(),
+      });
+    } catch (error) {
+      log.error('Failed to emit reflection degraded health event', {
+        subject,
+        error: String(error),
+      });
+    }
+  };
+
   /**
    * Publish the degraded-evidence cause as a typed, content-free bus event
    * (psfn-framework-sap72 AC6). The log line stays for operators; this makes
@@ -694,7 +731,9 @@ export function createReflectionTemplateRuntime(
     return Boolean(runtimeOptions.llmProvider);
   };
 
-  const normalizeTemplateReflectionOutput = (reflection: string): string => reflection.trim();
+  const normalizeTemplateReflectionOutput = (reflection: string): string => (
+    stripBenignZeroWidthFormatting(reflection).trim()
+  );
 
   const runTemplateDeliberation = async (
     template: ReflectionTemplate,
@@ -1134,8 +1173,17 @@ export function createReflectionTemplateRuntime(
         try {
           await persistDeliberationMemory(template, reflectionText, deliberationMetadata);
         } catch (error) {
-          log.warn(`Reflection "${template.id}" memory persistence skipped`, {
+          const decision = isRecord(error) && isRecord(error.decision) ? error.decision : null;
+          const reasonCodes = Array.isArray(decision?.reasonCodes)
+            ? decision.reasonCodes.filter((code): code is string => typeof code === 'string')
+            : [];
+          log.error(`Reflection "${template.id}" memory persistence skipped`, {
+            templateId: template.id,
+            ...(reasonCodes.length > 0 ? { reasonCodes } : {}),
             error: String(error),
+          });
+          await emitReflectionHealthDegradation(`reflection:memory_persist:${template.id}`, {
+            failureCount: 1,
           });
         }
       } catch (error) {
@@ -1432,10 +1480,36 @@ export function createReflectionTemplateRuntime(
           createdAt: new Date(),
         });
       } catch (error) {
-        log.warn(`Reflection "${template.id}" vault publish skipped`, { error: String(error) });
+        // Charter Law 12.6 (psfn-framework-ik47b.16): never swallow journal
+        // auto-publish failures silently with log.warn only; surface them to
+        // logs, event bus, and runtime health / operator alerting.
+        log.error(`Reflection "${template.id}" journal auto-publish failed`, {
+          templateId: template.id,
+          error: String(error),
+        });
+        if (runtimeOptions.eventBus) {
+          try {
+            await runtimeOptions.eventBus.emit('reflection.journal_publish.failed', {
+              templateId: template.id,
+              templateName: template.name,
+              mode: reflectionMode,
+              error: String(error),
+              timestamp: Date.now(),
+            });
+          } catch (emitError) {
+            log.warn('Failed to emit reflection journal-publish failure event', {
+              templateId: template.id,
+              error: String(emitError),
+            });
+          }
+        }
+        await emitReflectionHealthDegradation(`reflection:journal_publish:${template.id}`, {
+          failureCount: 1,
+        });
       }
     }
 
+    preemptionCounts.delete(template.id);
 
     await advanceReflectionNoveltyWatermark({
       template,
@@ -1481,11 +1555,27 @@ export function createReflectionTemplateRuntime(
       if (!isBusyTurnError(error)) {
         throw error;
       }
+      // Clear the rapid re-fire marker so the rescheduled attempt is not blocked
+      // when foreground contention clears (psfn-framework-ik47b.7).
+      lastScheduledRunAt.delete(template.id);
+      const nextPreemptions = (preemptionCounts.get(template.id) ?? 0) + 1;
+      preemptionCounts.set(template.id, nextPreemptions);
+      const candidate = buildDeferredReflectionAction(template);
+      const escalationThreshold = candidate.maxRetries ?? 2;
+      if (nextPreemptions >= escalationThreshold) {
+        log.warn(`Scheduled reflection "${template.id}" repeatedly preempted by foreground turns; escalating health signal`, {
+          templateId: template.id,
+          preemptionCount: nextPreemptions,
+          escalationThreshold,
+        });
+        await emitReflectionHealthDegradation(`reflection:preempted:${template.id}`, {
+          attemptCount: nextPreemptions,
+        });
+      }
       // tpkqi: a preempted or busy scheduled reflection is deferred through
       // the durable action queue when one is wired, so a restart does not
       // lose it; the in-process one-shot remains only for rigs without it.
       if (runtimeOptions.postTurnActions) {
-        const candidate = buildDeferredReflectionAction(template);
         const dedupeKey = candidate.dedupeKey ?? `${candidate.kind}:${template.id}`;
         const inferredAt = Date.now();
         const result = runtimeOptions.postTurnActions.enqueue({
@@ -1504,6 +1594,7 @@ export function createReflectionTemplateRuntime(
         log.info('Deferred scheduled reflection template execution through the durable queue', {
           templateId: template.id,
           enqueue: result,
+          preemptionCount: nextPreemptions,
         });
         return;
       }
@@ -1511,6 +1602,7 @@ export function createReflectionTemplateRuntime(
       log.info('Deferred scheduled reflection template execution', {
         templateId: template.id,
         queuedNow: deferred.queuedNow,
+        preemptionCount: nextPreemptions,
       });
     }
   };
@@ -1526,9 +1618,10 @@ export function createReflectionTemplateRuntime(
 
   const queueDeferredTemplateRun = (
     templateId: string,
-    options: { requestedSource?: ReflectionRequestSource } = {},
+    options: { requestedSource?: ReflectionRequestSource; attempt?: number } = {},
   ): { templateName: string; queuedNow: boolean; requestedSource: ReflectionRequestSource } => {
     const requestedSource = options.requestedSource ?? 'scheduled';
+    const attempt = options.attempt ?? 1;
     const current = store.load();
     const template = findReflectionTemplateById(current, templateId);
     if (!template) {
@@ -1546,9 +1639,10 @@ export function createReflectionTemplateRuntime(
         name: `Deferred ${requestedSource} reflection run: ${template.name}`,
         type: 'one-shot',
         intervalMs: 0,
-        runAt: Date.now() + 250,
+        runAt: Date.now() + 250 * attempt,
         availability: 'do_not_disturb',
         handler: async ({ signal }) => {
+          let requeueAfterBusy = false;
           try {
             await agentLoop.waitForIdle?.();
             // Waiting for idle can outlast the task budget; an aborted
@@ -1573,10 +1667,31 @@ export function createReflectionTemplateRuntime(
               });
               return;
             }
+            const maxAttempts = (buildDeferredReflectionAction(template).maxRetries ?? 2) + 1;
+            if (isBusyTurnError(error)) {
+              const nextPreemptions = (preemptionCounts.get(template.id) ?? 0) + 1;
+              preemptionCounts.set(template.id, nextPreemptions);
+              if (attempt < maxAttempts) {
+                requeueAfterBusy = true;
+                log.info(`Deferred reflection "${template.id}" preempted again; rescheduling backoff retry`, {
+                  templateId: template.id,
+                  attempt,
+                  maxAttempts,
+                });
+                return;
+              }
+              await emitReflectionHealthDegradation(`reflection:preempted:${template.id}`, {
+                attemptCount: nextPreemptions,
+                terminal: true,
+              });
+            }
             log.error(`Deferred reflection "${template.id}" failed`, { error: String(error) });
             throw error;
           } finally {
             pendingDeferredTemplates.delete(template.id);
+            if (requeueAfterBusy) {
+              queueDeferredTemplateRun(template.id, { requestedSource, attempt: attempt + 1 });
+            }
           }
         },
         state: 'idle',

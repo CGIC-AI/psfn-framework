@@ -1558,6 +1558,19 @@ export interface EventMap {
     cause: ReflectionEvidenceDegradationCause;
     timestamp: number;
   };
+  /**
+   * Auto-publishing a completed reflection into the local workspace markdown
+   * journal failed (Charter Law 12.6, psfn-framework-ik47b.16). Emitted so
+   * failures are observable on the bus alongside runtime health events rather
+   * than swallowed with a warn log.
+   */
+  'reflection.journal_publish.failed': {
+    templateId: string;
+    templateName: string;
+    mode: string;
+    error: string;
+    timestamp: number;
+  };
   'reflection.guardrail': {
     templateId: string;
     templateName: string;

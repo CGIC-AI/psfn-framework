@@ -3012,3 +3012,259 @@ describe('createReflectionTemplateRuntime concern-resolution projection (Outcome
     expect(prompt).toContain('spiraling');
   });
 });
+
+describe('createReflectionTemplateRuntime reliability and health surfacing (ik47b.7, ik47b.16, d5e0p.11)', () => {
+  let tempDir: string;
+
+  afterEach(() => {
+    if (tempDir) {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  function makeInternalStateFixture() {
+    const internalState = new InternalStateComputer().computeState({
+      emotionState: {
+        vad: { valence: 0.2, arousal: 0.3, dominance: 0.1 },
+        mood: { valence: 0.2, arousal: 0.3, dominance: 0.1 },
+        discrete: {},
+        confidence: 0.8,
+      },
+      activeConcerns: [],
+      trustLevel: 'trusted',
+      contactId: 'contact-1',
+      sessionMetrics: {
+        userMessageText: 'Checking in.',
+        responseText: 'All good.',
+        toolCallCount: 0,
+        recentTurnCount: 1,
+        lastSeenDeltaSeconds: 60,
+      },
+    });
+    return {
+      internalState,
+      snapshotRef: buildInternalStateSnapshotRef(internalState),
+    };
+  }
+
+  function makeModelCallPreemptedError(): Error {
+    const error = new Error('Model call on background preempted (foreground turn arrived)');
+    error.name = 'ModelCallPreemptedError';
+    return error;
+  }
+
+  it('defers and retries a reflection preempted by ModelCallPreemptedError without silent starvation', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'reflection-preemption-retry-'));
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, { tickIntervalMs: 50, heartbeatIntervalMs: 1_000 });
+    const { internalState, snapshotRef } = makeInternalStateFixture();
+    let callCount = 0;
+
+    const handleMessage = vi.fn<ReflectionAgent['handleMessage']>(async () => {
+      callCount += 1;
+      if (callCount === 1) {
+        throw makeModelCallPreemptedError();
+      }
+      return { content: 'Completed after preemption retry.' };
+    });
+
+    const runtime = createReflectionTemplateRuntime({
+      scheduler,
+      agentLoop: {
+        handleMessage,
+        waitForIdle: async () => undefined,
+        getCurrentInternalState: () => internalState,
+        getCurrentInternalStateSnapshotRef: () => snapshotRef,
+        getCurrentMetacognitiveFlags: () => [],
+      },
+      dataDir: tempDir,
+      runtimeOptions: {
+        eventBus,
+      },
+    });
+
+    await expect(runtime.runTemplateNow('daily-review', { deferIfBusy: true })).resolves.toMatchObject({
+      queued: true,
+      queuedVia: 'scheduler',
+    });
+    expect(handleMessage).toHaveBeenCalledTimes(1);
+
+    // Trigger the scheduled deferred one-shot task once its backoff window elapses.
+    const deferredTasks = scheduler.listTasks().filter(task => task.type === 'one-shot');
+    expect(deferredTasks).toHaveLength(1);
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue((deferredTasks[0]?.runAt ?? Date.now()) + 1_000);
+    try {
+      await scheduler.tick();
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(handleMessage).toHaveBeenCalledTimes(2);
+    const journalEntries = new ReflectionJournalStore(resolveReflectionJournalPath(tempDir)).listRecent();
+    expect(journalEntries[0]?.reflection).toContain('Completed after preemption retry.');
+  });
+
+  it('escalates repeated scheduled reflection preemptions via runtime.health.event', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'reflection-preemption-health-'));
+    const eventBus = new EventBus();
+    const healthEvents: Array<EventMap['runtime.health.event']> = [];
+    eventBus.on('runtime.health.event', (payload) => {
+      healthEvents.push(payload);
+    });
+
+    const scheduler = new Scheduler(eventBus, { tickIntervalMs: 50, heartbeatIntervalMs: 1_000 });
+    const { internalState, snapshotRef } = makeInternalStateFixture();
+    const handleMessage = vi.fn<ReflectionAgent['handleMessage']>(async () => {
+      throw makeModelCallPreemptedError();
+    });
+
+    const runtime = createReflectionTemplateRuntime({
+      scheduler,
+      agentLoop: {
+        handleMessage,
+        waitForIdle: async () => undefined,
+        getCurrentInternalState: () => internalState,
+        getCurrentInternalStateSnapshotRef: () => snapshotRef,
+        getCurrentMetacognitiveFlags: () => [],
+      },
+      dataDir: tempDir,
+      runtimeOptions: {
+        eventBus,
+      },
+    });
+
+    runtime.syncReflectionTasks();
+    const scheduledTask = scheduler.listTasks().find(task => task.id === 'reflection:daily-review');
+    expect(scheduledTask).toBeDefined();
+
+    // First scheduled attempt preempts and clears lastScheduledRunAt so retry isn't blocked.
+    await scheduledTask!.handler({ signal: new AbortController().signal });
+    expect(healthEvents).toHaveLength(0);
+
+    // Second scheduled attempt hits escalationThreshold and emits scheduler_task_failed health event.
+    await scheduledTask!.handler({ signal: new AbortController().signal });
+    expect(healthEvents.some(payload => payload.event.code === 'scheduler_task_failed')).toBe(true);
+  });
+
+  it('emits reflection.journal_publish.failed and runtime.health.event when journal auto-publish fails', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'reflection-publish-failure-'));
+    const eventBus = new EventBus();
+    const publishFailures: Array<EventMap['reflection.journal_publish.failed']> = [];
+    const healthEvents: Array<EventMap['runtime.health.event']> = [];
+    eventBus.on('reflection.journal_publish.failed', (payload) => {
+      publishFailures.push(payload);
+    });
+    eventBus.on('runtime.health.event', (payload) => {
+      healthEvents.push(payload);
+    });
+
+    const { internalState, snapshotRef } = makeInternalStateFixture();
+    const scheduler = new Scheduler(eventBus, { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 });
+    const runtime = createReflectionTemplateRuntime({
+      scheduler,
+      agentLoop: {
+        handleMessage: async () => ({ content: 'Reflection text for journal publish test.' }),
+        getCurrentInternalState: () => internalState,
+        getCurrentInternalStateSnapshotRef: () => snapshotRef,
+        getCurrentMetacognitiveFlags: () => [],
+      },
+      dataDir: tempDir,
+      runtimeOptions: {
+        eventBus,
+        vaultAutoPublisher: {
+          publishReflection: async () => {
+            throw new Error('disk full');
+          },
+        },
+      },
+    });
+
+    await runtime.runTemplateNow('daily-review', { deferIfBusy: false });
+
+    expect(publishFailures).toHaveLength(1);
+    expect(publishFailures[0]).toMatchObject({
+      templateId: 'daily-review',
+      error: expect.stringContaining('disk full'),
+    });
+    expect(healthEvents.some(payload => payload.event.code === 'scheduler_task_failed')).toBe(true);
+  });
+
+  it('normalizes benign zero-width formatting while preserving ZWJ emoji and surfaces memory persistence failures', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'reflection-zw-normalize-'));
+    const eventBus = new EventBus();
+    const healthEvents: Array<EventMap['runtime.health.event']> = [];
+    eventBus.on('runtime.health.event', (payload) => {
+      healthEvents.push(payload);
+    });
+
+    const publishedTexts: string[] = [];
+    const writtenMemories: string[] = [];
+    const { internalState, snapshotRef } = makeInternalStateFixture();
+    const scheduler = new Scheduler(eventBus, { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 });
+    const llmProvider: LLMProviderPort = {
+      stream: vi.fn(async () => ({
+        content: '',
+        toolCalls: [],
+        model: 'mock-stream',
+        inputTokens: 0,
+        outputTokens: 0,
+        stopReason: 'stop',
+      })),
+      complete: vi.fn(async (_context: LLMContext, purpose) => ({
+        content: purpose === 'reasoning'
+          ? 'Good progress\u200b today 👩‍💻\uFEFF.'
+          : 'Noticed clean momentum today.',
+        toolCalls: [],
+        model: `mock-${purpose}`,
+        inputTokens: 12,
+        outputTokens: 18,
+        stopReason: 'stop',
+      })),
+    };
+
+    const runtime = createReflectionTemplateRuntime({
+      scheduler,
+      agentLoop: {
+        handleMessage: async () => ({
+          content: 'unused',
+        }),
+        getCurrentInternalState: () => internalState,
+        getCurrentInternalStateSnapshotRef: () => snapshotRef,
+        getCurrentMetacognitiveFlags: () => [],
+        getCurrentAuthoritativeSystemPrompt: () => [
+          '<immutable_human_safety_amendments>IMMUTABLE</immutable_human_safety_amendments>',
+          '<identity>IDENTITY</identity>',
+          '<personality>PERSONALITY</personality>',
+          '<runtime_emotional_affect>AFFECT</runtime_emotional_affect>',
+        ].join('\n\n'),
+      },
+      dataDir: tempDir,
+      runtimeOptions: {
+        eventBus,
+        llmProvider: fromAny(llmProvider),
+        vaultAutoPublisher: {
+          publishReflection: async (input) => {
+            publishedTexts.push(input.reflection);
+          },
+        },
+        memoryWriter: {
+          write: async (input) => {
+            writtenMemories.push(input.text);
+            throw Object.assign(new Error('candidacy rejected'), {
+              decision: { reasonCodes: ['zero_width_or_directional_text'] },
+            });
+          },
+        },
+      },
+    });
+
+    await runtime.runTemplateNow('daily-review', { deferIfBusy: false });
+
+    expect(publishedTexts).toEqual(['Good progress today 👩‍💻.']);
+    expect(writtenMemories).toHaveLength(1);
+    expect(writtenMemories[0]).not.toContain('\u200B');
+    expect(writtenMemories[0]).not.toContain('\uFEFF');
+    expect(writtenMemories[0]).toContain('👩‍💻');
+    expect(healthEvents.some(payload => payload.event.code === 'scheduler_task_failed')).toBe(true);
+  });
+});

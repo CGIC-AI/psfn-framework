@@ -2452,7 +2452,7 @@ async function main(): Promise<void> {
       companionAuthorIds: config.discordBotId ? [config.discordBotId] : [],
       memoryScopeClassifier: observedGroupMemoryScheduler,
       intentionAppraisalEnabled: config.intentionAppraisalEnabled !== false,
-      ...(journalAutoPublisher ? { vaultAutoPublisher: journalAutoPublisher } : {}),
+      vaultAutoPublisher: journalAutoPublisher,
     },
   );
 

@@ -245,7 +245,7 @@ export function normalizeSystemLanguageTemplateText(value: string): string {
 function sanitizeInterpolationValue(value: unknown): string {
   const raw = value == null ? '' : String(value);
   return normalizeSystemLanguageTemplateText(raw)
-    .replace(/```/g, '`\u200b``')
+    .replace(/```/g, '`` `')
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;');

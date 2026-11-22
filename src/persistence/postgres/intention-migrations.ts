@@ -332,8 +332,6 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
     ADD COLUMN IF NOT EXISTS lifecycle_claim_token UUID;`,
   `ALTER TABLE icp_initiation_candidates
     ADD COLUMN IF NOT EXISTS lifecycle_claim_expires_at_ms BIGINT;`,
-  `ALTER TABLE icp_initiation_candidates
-    ADD COLUMN IF NOT EXISTS authored_message TEXT;`,
   `CREATE INDEX IF NOT EXISTS idx_icp_initiation_candidates_lifecycle_due
     ON icp_initiation_candidates (
       status, retry_eligible_at_ms, expires_at_ms, lifecycle_claim_expires_at_ms, candidate_id
@@ -503,4 +501,9 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
   `,
   `CREATE INDEX IF NOT EXISTS idx_social_impulse_outreach_ledger_companion
     ON social_impulse_outreach_ledger (companion_id, fired_at_ms DESC);`,
+  // psfn-framework-eoj3s.5: preserve companion-local authored DM text on
+  // private initiation candidates so sibling outreach delivers verbatim
+  // without spawning a blank third turn.
+  `ALTER TABLE icp_initiation_candidates
+    ADD COLUMN IF NOT EXISTS authored_message TEXT;`,
 ];

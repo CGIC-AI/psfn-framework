@@ -153,4 +153,28 @@ describe('capability tier change notice', () => {
       .toThrow('current live capability tier');
     expect(renderFreshCapabilityTierChangePromptBlock([], 'stale')).toBe('');
   });
+
+  it('tracks disabledTools additions and removals through notice building and durable queue delivery', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'pending-capability-override-notice-'));
+    const change = buildCapabilityTierChange(
+      { tier: 'autonomous', customTokens: [], grantedTokens: ['identity.read'], disabledTools: ['web'] },
+      { tier: 'autonomous', customTokens: [], grantedTokens: ['identity.read'], disabledTools: ['shell'] },
+    );
+    expect(change).not.toBeNull();
+    expect(change?.disabledToolsAdded).toEqual(['shell']);
+    expect(change?.disabledToolsRemoved).toEqual(['web']);
+
+    try {
+      enqueuePendingCapabilityTierChangeNotice(dataDir, change!);
+      const delivered: string[] = [];
+      expect(deliverPendingCapabilityTierChangeNotices(
+        dataDir,
+        notice => delivered.push(notice),
+      )).toBe(1);
+      expect(delivered[0]).toContain('Tools disabled by override: shell.');
+      expect(delivered[0]).toContain('Tools re-enabled: web.');
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
 });

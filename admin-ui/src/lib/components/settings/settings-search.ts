@@ -136,6 +136,7 @@ export const CURATED_RENDERED_FIELD_KEYS: ReadonlySet<string> = new Set<string>(
   // SettingsTrustBackupPanels.svelte
   'capabilityTier',
   'customTokens',
+  'disabledTools',
 ]);
 
 // Caption text for fields that live only in the generic advanced editor. Matches

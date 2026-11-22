@@ -8,6 +8,7 @@ import {
   normalizeCapabilityTokens,
   type CapabilityToken,
 } from '../../system/capabilities/tokens.js';
+import { canonicalizeDisabledTools } from '../../system/capabilities/tool-overrides.js';
 
 const GENERAL_SUBAGENT_READ_TOKENS: readonly CapabilityToken[] = Object.freeze([
   'identity.read',
@@ -77,10 +78,15 @@ export function deriveSubagentCapabilityGrant(
   const grantedTokens = [...requestedTokens].filter(token => parentTokenSet.has(token));
   const deniedExplicitTokens = [...explicitTokens].filter(token => !parentTokenSet.has(token));
   const grantedTokenSet: ReadonlySet<CapabilityToken> = new Set(grantedTokens);
+  const disabledToolSet: ReadonlySet<string> = new Set(
+    canonicalizeDisabledTools(snapshot.disabledTools ?? [], 'subagent parent disabledTools'),
+  );
   const access: CapabilityAccess = Object.freeze({
     getTier: () => 'custom' as const,
     getGrantedTokens: () => grantedTokenSet,
     has: (token: CapabilityToken) => grantedTokenSet.has(token),
+    getDisabledTools: () => disabledToolSet,
+    isToolDisabled: (toolName: string) => disabledToolSet.has(toolName),
   });
 
   return Object.freeze({

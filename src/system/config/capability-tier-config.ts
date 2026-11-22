@@ -3,6 +3,7 @@ import type { CapabilityTier } from './runtime-config-contracts.js';
 import { isCapabilityTier } from '../capabilities/tiers.js';
 import type { CapabilityToken } from '../capabilities/tokens.js';
 import { normalizeCapabilityTokens } from '../capabilities/tokens.js';
+import { normalizeDisabledTools } from '../capabilities/tool-overrides.js';
 import {
   loadRequiredJson,
   loadSeedJson,
@@ -17,6 +18,7 @@ export const CAPABILITY_TIER_SEED_FILE_NAME = 'capability-tier.seed.json';
 export interface CapabilityTierConfig {
   tier: CapabilityTier;
   customTokens: CapabilityToken[];
+  disabledTools: string[];
 }
 
 interface CapabilityTierLoadOptions {
@@ -26,6 +28,12 @@ interface CapabilityTierLoadOptions {
 function validateCapabilityTierConfig(raw: unknown, sourcePath: string): CapabilityTierConfig {
   if (!isRecord(raw)) {
     throw new Error(`Invalid capability config at ${sourcePath}: expected object`);
+  }
+
+  for (const key of Object.keys(raw)) {
+    if (key !== 'tier' && key !== 'customTokens' && key !== 'disabledTools') {
+      throw new Error(`Invalid capability config at ${sourcePath}: unknown key "${key}"`);
+    }
   }
 
   const tier = raw.tier;
@@ -38,9 +46,15 @@ function validateCapabilityTierConfig(raw: unknown, sourcePath: string): Capabil
     'customTokens',
   );
 
+  const disabledTools = normalizeDisabledTools(
+    raw.disabledTools ?? [],
+    'disabledTools',
+  );
+
   return {
     tier,
     customTokens,
+    disabledTools,
   };
 }
 

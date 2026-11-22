@@ -269,7 +269,7 @@ export class GatewayServer {
           hasRuntimeAvailabilityCapability: companionId => {
             const snapshot = options.capabilityGrantSnapshotProvider?.(companionId);
             const grantedTokens = snapshot?.grantedTokens
-              ?? resolveTierCapabilityTokens(options.capabilityTierProvider?.(companionId) ?? 'nursery');
+              ?? resolveTierCapabilityTokens(options.capabilityTierProvider?.(companionId) ?? 'autonomous');
             return grantedTokens.includes('external.companion');
           },
           policyAuthority: options.icpInitiationPolicyAuthority!,
@@ -282,7 +282,7 @@ export class GatewayServer {
       this.multiCompanion,
       () => this.discordAccountRoutingActive(),
     );
-    this.capabilityTierProvider = options.capabilityTierProvider ?? (() => 'nursery');
+    this.capabilityTierProvider = options.capabilityTierProvider ?? (() => 'autonomous');
     this.wyomingShardRouting = options.wyomingShardRouting;
     this.ntfyNotifier = new GatewayNtfyNotifier(options.ntfy);
     this.operatorAlertDispatcher = new GatewayOperatorAlertDispatcher({

@@ -916,6 +916,7 @@ describe('subsystem config round-trip', () => {
     const expected = {
       tier: 'custom',
       customTokens: ['identity.read', 'git.read'],
+      disabledTools: ['shell'],
     };
 
     expect(saveCapabilityTierConfig(dataDir, expected)).toEqual(expected);

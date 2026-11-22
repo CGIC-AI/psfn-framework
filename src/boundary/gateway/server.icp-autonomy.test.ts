@@ -703,7 +703,7 @@ async function setup(
 
 describe('GatewayServer ICP autonomy RPC', () => {
   it('fails closed against the current gateway-owned companion capability authority', async () => {
-    let capabilityTier: 'autonomous' | 'apprentice' = 'autonomous';
+    let capabilityTier: 'autonomous' | 'custom' = 'autonomous';
     const { connect } = await setup(OPEN_POLICY, {
       capabilityTierProvider: () => capabilityTier,
     });
@@ -716,7 +716,7 @@ describe('GatewayServer ICP autonomy RPC', () => {
     });
     expect(available.result).toMatchObject({ eligible: true, control: 'runtime' });
 
-    capabilityTier = 'apprentice';
+    capabilityTier = 'custom';
     const withdrawn = await invoke(a, 902, 'companion.availability.refresh_runtime', {
       state: 'available',
       expiresAtMs: Date.now() + 120_000,

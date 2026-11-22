@@ -439,6 +439,7 @@ export interface SubstrateConfig {
   /** settings.json-owned typed-decision backend selection (epic 4lf3r); absent = local. */
   decisionBackend?: DecisionBackendSettings;
   capabilityTier?: CapabilityTier;
+  disabledTools?: string[];
   compositionalPolicy?: CompositionalPolicyConfig;
   observerEvalSidecar?: ObserverEvalSidecarSettings;
   emosimProactivity?: EmoSimProactivitySettings;

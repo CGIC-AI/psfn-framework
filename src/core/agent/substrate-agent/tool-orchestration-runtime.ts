@@ -243,7 +243,7 @@ export function resolvePromotedToolActivation(
       skipped.push({
         toolName: tool.name,
         source: 'extended',
-        reason: 'capability_denied',
+        reason: eligibility.disabledByOverride ? 'disabled_by_override' : 'capability_denied',
         ...(eligibility.missingTokens.length > 0 ? { missingTokens: eligibility.missingTokens } : {}),
       });
       continue;
@@ -282,6 +282,13 @@ interface ResolveActiveToolsParams {
   promotedResolution: PromotedToolResolution;
   additionalSkipped?: AdaptiveToolSnapshotSkip[];
   /**
+   * Per-companion tool names explicitly disabled in `capability-tier.json`
+   * (`disabledTools`). Omitted up front from the active tool schema list sent
+   * to the LLM and recorded in `promotedSkipped` with reason
+   * `disabled_by_override`.
+   */
+  disabledTools?: ReadonlySet<string> | readonly string[];
+  /**
    * Durable-usage ordering signal (psfn-framework-b0yl.5). Applied only as a
    * tie-break INSIDE a presentation band — after explicit pins and after the
    * social/expressive-first domain rank — so it never overrides deliberate
@@ -293,8 +300,22 @@ interface ResolveActiveToolsParams {
 export function resolveActiveTools(
   params: ResolveActiveToolsParams,
 ): ActiveToolResolution {
+  const disabledToolSet: ReadonlySet<string> | null = params.disabledTools === undefined
+    ? null
+    : params.disabledTools instanceof Set
+      ? params.disabledTools
+      : new Set(params.disabledTools);
+  const disabledSkipped: AdaptiveToolSnapshotSkip[] = [];
   const activeByName = new Map<string, { tool: AgentTool<any>; source: 'core' | 'extended' }>();
   for (const tool of params.coreTools) {
+    if (disabledToolSet?.has(tool.name)) {
+      disabledSkipped.push({
+        toolName: tool.name,
+        source: 'core',
+        reason: 'disabled_by_override',
+      });
+      continue;
+    }
     if (!activeByName.has(tool.name)) {
       activeByName.set(tool.name, {
         tool,
@@ -304,6 +325,14 @@ export function resolveActiveTools(
   }
 
   for (const tool of params.extendedTools) {
+    if (disabledToolSet?.has(tool.name)) {
+      disabledSkipped.push({
+        toolName: tool.name,
+        source: 'extended',
+        reason: 'disabled_by_override',
+      });
+      continue;
+    }
     if (!activeByName.has(tool.name)) {
       activeByName.set(tool.name, {
         tool,
@@ -360,7 +389,11 @@ export function resolveActiveTools(
   return {
     tools: orderedActiveEntries.map(entry => entry.tool),
     snapshotTools,
-    promotedSkipped: mergeAdaptiveSkips(params.promotedResolution.skipped, params.additionalSkipped ?? []),
+    promotedSkipped: mergeAdaptiveSkips(
+      params.promotedResolution.skipped,
+      disabledSkipped,
+      params.additionalSkipped ?? [],
+    ),
     counts,
   };
 }
@@ -560,7 +593,9 @@ export async function addPromotedExtendedTool(
       ok: false,
       changed: false,
       promotedTools: current,
-      message: `Tool "${normalizedName}" is not allowed for capability tier "${access.getTier()}".`,
+      message: eligibility.disabledByOverride
+        ? `Tool "${normalizedName}" is disabled by per-companion tool override (disabledTools).`
+        : `Tool "${normalizedName}" is not allowed for capability tier "${access.getTier()}".`,
       errorCode: 'capability_denied',
       requiredTokens: eligibility.requiredTokens,
       missingTokens: eligibility.missingTokens,

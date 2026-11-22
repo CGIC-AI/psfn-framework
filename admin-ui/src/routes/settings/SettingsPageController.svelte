@@ -219,9 +219,10 @@
   let telegramEnabled = $state(false);
   let telegramAuthorizedUsers = $state('');
 
-  // ── Capability tier ──
-  let capabilityTier = $state('apprentice');
+  // ── Capability overrides & legacy tier ──
+  let capabilityTier = $state('autonomous');
   let capabilityCustomTokens = $state('');
+  let capabilityDisabledTools = $state('');
 
   // ── LLM retries ──
   let retryBaseDelayMs = $state(2000);
@@ -305,6 +306,7 @@
       webFetchTlsCaCertPaths,
       capabilityTier,
       capabilityCustomTokens,
+      capabilityDisabledTools,
       extractionInterval,
       compactionEmotionalSalienceThresholdPct,
       backgroundMaintenanceIntervalMs,
@@ -372,6 +374,7 @@
     if (next.webFetchTlsCaCertPaths !== undefined) webFetchTlsCaCertPaths = next.webFetchTlsCaCertPaths;
     if (next.capabilityTier !== undefined) capabilityTier = next.capabilityTier;
     if (next.capabilityCustomTokens !== undefined) capabilityCustomTokens = next.capabilityCustomTokens;
+    if (next.capabilityDisabledTools !== undefined) capabilityDisabledTools = next.capabilityDisabledTools;
     if (next.extractionInterval !== undefined) extractionInterval = next.extractionInterval;
     if (next.compactionEmotionalSalienceThresholdPct !== undefined) compactionEmotionalSalienceThresholdPct = next.compactionEmotionalSalienceThresholdPct;
     if (next.backgroundMaintenanceIntervalMs !== undefined) {
@@ -1495,7 +1498,7 @@
             {data} {openSections} {capabilityTierOptions}
             inputClass={INPUT_CLS} labelClass={LABEL_CLS} toggleClass={TOGGLE_CLS}
             {getSource} {getSettingAuthority} {rawEditorLabel} {fieldErrors} {toggleSection}
-            bind:capabilityTier bind:capabilityCustomTokens
+            bind:capabilityTier bind:capabilityCustomTokens bind:capabilityDisabledTools
             bind:backupIntervalHours bind:backupMaxRotating bind:backupMaxWeekly bind:backupMaxMonthly
             bind:backupMirrorDir bind:backupVerifyRestore
           />

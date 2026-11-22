@@ -24,12 +24,13 @@ function gateway(result?: McpExecuteResult): McpToolGatewayPort & { mcpExecute: 
 
 describe('canonical MCP tool', () => {
   it.each([
-    ['nursery', false],
-    ['apprentice', true],
-    ['autonomous', true],
+    ['nursery', [], true],
+    ['apprentice', [], true],
+    ['autonomous', [], true],
+    ['custom', ['identity.read'], false],
   ] as const)(
     'applies the production capability gate to external.mcp at the %s tier without external I/O',
-    async (tier, expectedAllowed) => {
+    async (tier, customTokens, expectedAllowed) => {
       const mcpGateway = gateway({
         action: 'call',
         serverId: 'bounded-test-server',
@@ -38,7 +39,7 @@ describe('canonical MCP tool', () => {
         effectiveText: '[bounded local gateway response]',
         withheld: false,
       });
-      const grantedTokens = new Set(resolveTierCapabilityTokens(tier));
+      const grantedTokens = new Set(resolveTierCapabilityTokens(tier, [...customTokens]));
       const tool = gateToolWithCapabilities(
         createMcpTool({ gateway: mcpGateway }),
         () => ({
@@ -64,7 +65,7 @@ describe('canonical MCP tool', () => {
         expect(result.details).toMatchObject({
           isError: true,
           capabilityDenied: true,
-          tier: 'nursery',
+          tier: 'custom',
           missingTokens: ['external.mcp'],
         });
         expect(text(result)).toContain('external.mcp');

@@ -1,4 +1,5 @@
 {
-  "tier": "nursery",
-  "customTokens": []
+  "tier": "autonomous",
+  "customTokens": [],
+  "disabledTools": []
 }

@@ -603,7 +603,7 @@ export interface AdminAdaptiveToolSnapshotTool {
 
 export interface AdminAdaptiveToolSnapshotSkip {
   toolName: string;
-  source: 'extended';
+  source: AdaptiveToolCatalogSource;
   reason: string;
   missingTokens?: CapabilityToken[];
 }

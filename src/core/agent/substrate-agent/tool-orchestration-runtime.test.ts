@@ -130,6 +130,32 @@ describe('resolveActiveTools', () => {
     });
     expect(result.tools.map(tool => tool.name)).toEqual(['journal', 'memory', 'orient', 'letter']);
   });
+
+  it('prunes per-companion disabledTools up front across core and extended catalogs and records skip telemetry', () => {
+    const result = resolveActiveTools({
+      coreTools: [makeTool('memory'), makeTool('web'), makeTool('fs')],
+      extendedTools: [makeTool('shell'), makeTool('world'), makeTool('group_chat')],
+      promotedResolution: {
+        activeNames: new Set<string>(),
+        orderedNames: [],
+        skipped: [{ toolName: 'shell', source: 'extended', reason: 'disabled_by_override' }],
+      },
+      disabledTools: new Set(['web', 'shell', 'group_chat']),
+    });
+
+    expect(result.tools.map(tool => tool.name)).toEqual(['memory', 'fs', 'world']);
+    expect(result.snapshotTools).toEqual([
+      { toolName: 'memory', source: 'core' },
+      { toolName: 'fs', source: 'core' },
+      { toolName: 'world', source: 'extended' },
+    ]);
+    expect(result.counts).toEqual({ core: 2, extended: 1, total: 3 });
+    expect(result.promotedSkipped).toEqual([
+      { toolName: 'shell', source: 'extended', reason: 'disabled_by_override' },
+      { toolName: 'web', source: 'core', reason: 'disabled_by_override' },
+      { toolName: 'group_chat', source: 'extended', reason: 'disabled_by_override' },
+    ]);
+  });
 });
 
 describe('inferToolConcurrencyClass (e46hi)', () => {

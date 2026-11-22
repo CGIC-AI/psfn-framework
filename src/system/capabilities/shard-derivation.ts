@@ -14,6 +14,7 @@ import type { CapabilityAccess, CapabilityGrantSnapshot } from './access.js';
 import type { CapabilityTier } from './tier-types.js';
 import { CAPABILITY_TIER_DEFAULTS, isCapabilityTier } from './tiers.js';
 import { CAPABILITY_TOKENS, isCapabilityToken, type CapabilityToken } from './tokens.js';
+import { canonicalizeDisabledTools } from './tool-overrides.js';
 
 /**
  * Shard-grant derivation contract version. Any change to the denial mask, the
@@ -165,6 +166,8 @@ export interface ShardParentGrantInput {
    * fails closed instead.
    */
   readonly customTokens?: readonly unknown[];
+  /** Optional per-companion disabled tool overrides inherited by derived shards. */
+  readonly disabledTools?: readonly unknown[];
 }
 
 /** Atomic authoritative parent grant snapshot (canonical, frozen). */
@@ -341,6 +344,19 @@ function immutableTokenSet(tokens: readonly CapabilityToken[]): ReadonlySet<Capa
   return Object.freeze(set) as ReadonlySet<CapabilityToken>;
 }
 
+function immutableDisabledToolSet(tools: readonly string[]): ReadonlySet<string> {
+  const set = new Set<string>(tools);
+  const reject = (): never => {
+    throw new Error('Shard capability access is immutable');
+  };
+  Object.defineProperties(set, {
+    add: { value: reject },
+    delete: { value: reject },
+    clear: { value: reject },
+  });
+  return Object.freeze(set) as ReadonlySet<string>;
+}
+
 /**
  * Derive the immutable shard capability grant from one atomic authoritative
  * parent owner read. This is the single canonical primitive both the shard
@@ -354,6 +370,7 @@ export function deriveShardCapabilityGrant(
   const tokens = Object.freeze(
     parent.tokens.filter(token => !SHARD_DENIAL_MASK_SET.has(token)),
   );
+  const disabledTools = canonicalizeDisabledTools(input.disabledTools ?? [], 'disabledTools');
   const payload = buildShardGrantDigestPayload({
     parent,
     denialMask: SHARD_CAPABILITY_DENIAL_MASK,
@@ -361,6 +378,7 @@ export function deriveShardCapabilityGrant(
   });
   const grantDigest = computeShardGrantDigest(payload);
   const grantedTokens = immutableTokenSet(tokens);
+  const disabledToolSet = immutableDisabledToolSet(disabledTools);
   const access: ShardCapabilityAccess = Object.freeze({
     derivationVersion: SHARD_GRANT_DERIVATION_VERSION,
     ownerVersion: parent.ownerVersion,
@@ -368,6 +386,8 @@ export function deriveShardCapabilityGrant(
     getTier: (): CapabilityTier => 'custom',
     getGrantedTokens: (): ReadonlySet<CapabilityToken> => grantedTokens,
     has: (token: CapabilityToken): boolean => grantedTokens.has(token),
+    getDisabledTools: (): ReadonlySet<string> => disabledToolSet,
+    isToolDisabled: (toolName: string): boolean => disabledToolSet.has(toolName),
   });
 
   return Object.freeze({
@@ -395,6 +415,7 @@ export function deriveShardCapabilityGrantFromSnapshot(
     companionId,
     tier: snapshot.tier,
     customTokens: snapshot.customTokens,
+    ...(snapshot.disabledTools !== undefined ? { disabledTools: snapshot.disabledTools } : {}),
   });
   const effectiveTokens = canonicalizeCapabilityTokens(
     snapshot.grantedTokens,

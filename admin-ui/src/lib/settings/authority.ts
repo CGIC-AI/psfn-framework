@@ -17,6 +17,7 @@ interface SchedulerEditorConfig {
 interface CapabilitiesEditorConfig {
   tier?: unknown;
   customTokens?: unknown;
+  disabledTools?: unknown;
 }
 
 interface ModelCatalogEntryLike {
@@ -145,7 +146,7 @@ export function resolveSettingAuthority(
       sourceLabel: fallback.sourceLabel,
       ...(effectiveTier ? { effectiveValue: effectiveTier } : {}),
       detail:
-        'Authoritative source: capability-tier.json > tier. Saving here writes capability-tier.json; runtime capability gating reads the persisted tier from there.',
+        'Authoritative source: capability-tier.json > tier. All standard tiers (nursery, apprentice, autonomous) grant full baseline capability; use custom only for explicit narrow token sets.',
       precedence:
         'capability-tier.json wins over any stale runtime copy, so Garden should be read as the owner-file view for this control.',
     };
@@ -163,6 +164,19 @@ export function resolveSettingAuthority(
       precedence: effectiveTier === 'custom'
         ? 'These tokens are active because the current tier is custom.'
         : `These tokens stay dormant until the tier is set to custom${effectiveTier ? ` (current: ${effectiveTier})` : ''}.`,
+    };
+  }
+
+  if (key === 'disabledTools') {
+    const capabilities = (data?.editors?.capabilities as CapabilitiesEditorConfig | undefined) ?? {};
+    const disabledTools = asStringArray(capabilities.disabledTools);
+    return {
+      sourceLabel: fallback.sourceLabel,
+      effectiveValue: summarizeList(disabledTools) ?? 'none (all tools enabled)',
+      detail:
+        'Authoritative source: capability-tier.json > disabledTools. Excluded tools are pruned from the model tool list up front and blocked fail-closed at execution time.',
+      precedence:
+        'Applies per companion independently of capability tier; saving writes capability-tier.json and hot-reloads the companion tool surface.',
     };
   }
 

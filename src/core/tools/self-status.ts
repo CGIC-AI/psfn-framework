@@ -58,7 +58,7 @@ type MaybeAvailable<T> = (T & { status: Extract<SectionStatus, 'available'> })
   | SectionError;
 
 export interface SelfStatusToolRuntime {
-  config: Pick<SubstrateConfig, 'capabilityTier' | 'chargePolicy' | 'shardToolsets'>;
+  config: Pick<SubstrateConfig, 'capabilityTier' | 'disabledTools' | 'chargePolicy' | 'shardToolsets'>;
   startedAtMs?: number;
   now?: () => number;
   getCapabilityTier?: () => CapabilityTier;
@@ -125,6 +125,7 @@ type ToolCatalogSection = {
 function resolveCapabilityTier(runtime: SelfStatusToolRuntime): MaybeAvailable<{
   tier: CapabilityTier;
   grantedTokens: readonly string[];
+  disabledTools?: readonly string[];
   source: 'runtime' | 'config';
 }> {
   if (runtime.getCapabilityGrantSnapshot) {
@@ -134,6 +135,9 @@ function resolveCapabilityTier(runtime: SelfStatusToolRuntime): MaybeAvailable<{
         status: 'available',
         tier: snapshot.tier,
         grantedTokens: [...snapshot.grantedTokens],
+        ...(snapshot.disabledTools && snapshot.disabledTools.length > 0
+          ? { disabledTools: [...snapshot.disabledTools] }
+          : {}),
         source: 'runtime',
       };
     } catch {
@@ -151,6 +155,9 @@ function resolveCapabilityTier(runtime: SelfStatusToolRuntime): MaybeAvailable<{
         status: 'available',
         tier,
         grantedTokens: resolveTierCapabilityTokens(tier),
+        ...(runtime.config.disabledTools && runtime.config.disabledTools.length > 0
+          ? { disabledTools: [...runtime.config.disabledTools] }
+          : {}),
         source: 'runtime',
       };
     } catch {
@@ -166,6 +173,9 @@ function resolveCapabilityTier(runtime: SelfStatusToolRuntime): MaybeAvailable<{
       status: 'available',
       tier: runtime.config.capabilityTier,
       grantedTokens: resolveTierCapabilityTokens(runtime.config.capabilityTier),
+      ...(runtime.config.disabledTools && runtime.config.disabledTools.length > 0
+        ? { disabledTools: [...runtime.config.disabledTools] }
+        : {}),
       source: 'config',
     };
   }

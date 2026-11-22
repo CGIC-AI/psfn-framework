@@ -895,10 +895,10 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
 
     const tools = agent.state.tools;
     expect(tools.map(tool => tool.name)).toEqual([
+      'memory',
+      'contact',
       'selfie_create',
       'generate_image',
-      'contact',
-      'memory',
       'fs',
       'system',
     ]);
@@ -957,8 +957,8 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
 
     const tools = agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
     expect(tools.map(tool => tool.name)).toEqual([
-      'contact',
       'memory',
+      'contact',
       'session',
       'identity',
       'analysis_workbench',

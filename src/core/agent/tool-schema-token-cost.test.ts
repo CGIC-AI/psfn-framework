@@ -102,13 +102,15 @@ describe('full callable catalog schema token cost', () => {
       // on the date parameter: +54 bytes / +15 tokens.
       // psfn-framework-yy0r2 added the scratchpad scope parameter
       // (conversation | companion_global): +213 bytes / +40 tokens.
+      // psfn-framework-e46hi reordered presentation ranks (memory/journal/orient
+      // first, async letters demoted): +0 bytes / +0 tokens, hash updated.
       beforeTokens: 20_253,
       afterTokens: 24_549,
       deltaTokens: 4_296,
       beforeBytes: 94_558,
       afterBytes: 113_660,
-      providerSchemaHash: '77f54c9af5d44ab800df6a96ae1a846df4b15e21df73154f88006687db73d244',
-      parameterSchemaHash: '93d4e737391aabe676517523fc4ddc1cbd48e2309c4cd3bf433992ffc486297a',
+      providerSchemaHash: '264c3e9bd4fda9b61d16e3170c417c8518dc6c35f5309d90182820a608a6153b',
+      parameterSchemaHash: '056be12849bd3511220b0bd511557598ce52ea67d804eccce697b3d3d682d029',
     });
 
     // The additional description tokens affect an uncached request. A stable

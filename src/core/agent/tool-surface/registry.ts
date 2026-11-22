@@ -318,6 +318,10 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'letter',
     domain: 'self_expression',
     exposure: 'core',
+    // Letters are asynchronous correspondence, not primary turn-to-turn tools;
+    // keep them ranked behind continuity, memory, orientation, and sync tools
+    // (psfn-framework-e46hi).
+    presentationRankOverride: 95,
     description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.letter,
     actions: ['compose', 'list', 'read', 'place', 'archive', 'disposition_list', 'disposition_read'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
@@ -509,22 +513,25 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
 
 // ── Model-facing presentation order ──
 //
-// The active tool list handed to the model is ordered social/expressive
-// first and admin/boundary/system last, with name as the tie-breaker inside
-// each domain. Non-canonical tools (plugins, channel extras) are unaudited
-// third-party surfaces; they rank at the very tail, after every first-party
-// domain including boundary/system, so the model's attention anchors on the
+// The active tool list handed to the model puts continuity and grounding tools
+// first (memory/journal, orientation, contacts, sessions, knowledge), followed
+// by expressive/media tools, asynchronous notifications/letters, scheduler, and
+// finally admin/boundary/system surfaces, with name (and within-band durable
+// usage) as the tie-breaker inside each domain (psfn-framework-e46hi).
+// Non-canonical tools (plugins, channel extras) are unaudited third-party
+// surfaces; they rank at the very tail, after every first-party domain
+// including boundary/system, so the model's attention anchors on the
 // companion's own audited toolset before any plugin verb (image-tools img2 audit).
 const TOOL_PRESENTATION_DOMAIN_RANK: Readonly<Record<FirstPartyToolDomain, number>> = {
-  self_expression: 10,
-  media: 20,
-  notification: 30,
-  contacts: 40,
-  memory: 50,
-  sessions: 60,
-  orientation: 70,
+  memory: 10,
+  orientation: 20,
+  contacts: 30,
+  sessions: 40,
+  knowledge: 50,
+  self_expression: 60,
+  media: 70,
   identity: 80,
-  knowledge: 90,
+  notification: 90,
   scheduler: 100,
   analysis: 110,
   subagents: 120,

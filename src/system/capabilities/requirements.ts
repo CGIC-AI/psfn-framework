@@ -87,7 +87,17 @@ function resolveIdentityRequirement(action: string | null): CapabilityRequiremen
   return IDENTITY_LAYER_REQUIREMENTS;
 }
 
-const MEMORY_READ_ACTIONS = new Set(['search', 'census', 'exists', 'timeline', 'list', 'read', 'get']);
+const MEMORY_READ_ACTIONS = new Set([
+  'search',
+  'episode_search',
+  'shared_background',
+  'census',
+  'exists',
+  'timeline',
+  'list',
+  'read',
+  'get',
+]);
 const MEMORY_WRITE_ACTIONS = new Set(['write', 'add', 'patch', 'import']);
 const MEMORY_DELETE_ACTIONS = new Set(['delete', 'restore', 'redact']);
 
@@ -99,7 +109,7 @@ function resolveMemoryRequirement(action: string | null): CapabilityRequirement 
 }
 
 const AUTOMATA_BUS_READ_ACTIONS = new Set(['brief', 'search', 'runs', 'inspect']);
-const AUTOMATA_BUS_WRITE_ACTIONS = new Set(['append', 'correct', 'handoff']);
+const AUTOMATA_BUS_WRITE_ACTIONS = new Set(['note', 'append', 'correct', 'handoff']);
 
 function resolveAutomataBusRequirement(action: string | null): CapabilityRequirement {
   if (actionIn(action, AUTOMATA_BUS_READ_ACTIONS)) return 'automata.bus.read';
@@ -149,6 +159,8 @@ const CONTACT_WRITE_ACTIONS = new Set([
   'note',
   'set_trust',
   'propose_trust',
+  'set_relationship',
+  'propose_relationship',
   'link_identity',
   'set_channel_privacy',
   'set_machine_intelligence',
@@ -173,7 +185,11 @@ function resolveContactRequirement(
   return IDENTITY_READ_RUNTIME_WRITE;
 }
 
-const ORIENT_READ_ACTIONS = new Set(['values_list', 'list_concerns']);
+const ORIENT_READ_ACTIONS = new Set([
+  'values_list',
+  'list_concerns',
+  'introspection_consent_get',
+]);
 const ORIENT_WRITE_ACTIONS = new Set([
   'append',
   'replace',
@@ -183,6 +199,8 @@ const ORIENT_WRITE_ACTIONS = new Set([
   'create_concern',
   'resolve_concern',
   'transition_concern',
+  'introspection_consent_set',
+  'introspection_turn_sensitivity_set',
 ]);
 
 function resolveOrientRequirement(action: string | null): CapabilityRequirement {

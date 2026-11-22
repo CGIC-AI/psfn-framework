@@ -306,6 +306,23 @@ describe('first-party tool surface registry', () => {
     }
   });
 
+  it('ranks memory, journal, and orient ahead of async letters and media/admin surfaces (e46hi)', () => {
+    for (const primaryTool of ['memory', 'journal', 'orient']) {
+      expect(resolveToolPresentationRank(primaryTool))
+        .toBeLessThan(resolveToolPresentationRank('letter'));
+      expect(resolveToolPresentationRank(primaryTool))
+        .toBeLessThan(resolveToolPresentationRank('selfie_create'));
+      expect(resolveToolPresentationRank(primaryTool))
+        .toBeLessThan(resolveToolPresentationRank('generate_image'));
+      expect(resolveToolPresentationRank(primaryTool))
+        .toBeLessThan(resolveToolPresentationRank('system'));
+    }
+    for (const syncTool of ['memory', 'journal', 'orient', 'contact', 'session', 'wiki']) {
+      expect(resolveToolPresentationRank(syncTool))
+        .toBeLessThan(resolveToolPresentationRank('letter'));
+    }
+  });
+
   it('registers the image tools as core surfaces ranked before admin/dev domains', () => {
     expect(getCanonicalToolSurface('generate_image')?.exposure).toBe('core');
     expect(getCanonicalToolSurface('selfie_create')?.exposure).toBe('core');

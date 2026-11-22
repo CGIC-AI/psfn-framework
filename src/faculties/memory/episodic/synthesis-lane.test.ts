@@ -1117,4 +1117,47 @@ describe('EpisodeSynthesisLane', () => {
     });
     expect(getRecentDiagnosticLogRecords()[0]?.message).toContain('retired or quarantined session');
   });
+
+  it('logs per-session failure details and preserves inner session errors in the thrown AggregateError (d5e0p.4)', async () => {
+    const sessionIds = ['discord:fail-a', 'discord:fail-b'];
+    const workset = makeStatefulWorkset(sessionIds);
+    const harness = makeHarness({ entries: mentionEntries(12), scope: 'direct' });
+    harness.synthesizer.run.mockImplementation(async ({ sessionId }: { sessionId: string }) => {
+      if (sessionId === 'discord:fail-a') throw new Error('upstream rate limit');
+      throw new Error('segmentation schema mismatch');
+    });
+    const lane = new EpisodeSynthesisLane({
+      sessionManager: harness.sessionManager,
+      synthesizer: harness.synthesizer,
+      watermarkStore: harness.watermarkStore as never,
+      workset,
+      config: gateConfig(),
+      scopeClassifier: harness.scopeClassifier,
+    });
+
+    let caught: unknown;
+    try {
+      await lane.execute(timerAction());
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(AggregateError);
+    const records = getRecentDiagnosticLogRecords();
+    const failureLogs = records.filter(record => record.message === 'Episode synthesis failed for session');
+    expect(failureLogs).toHaveLength(2);
+    expect(failureLogs[0]?.context).toMatchObject({
+      revision: 1,
+      error: expect.stringContaining('discord:fail-a/episode_synthesis: upstream rate limit'),
+    });
+    expect(failureLogs[1]?.context).toMatchObject({
+      revision: 2,
+      error: expect.stringContaining('discord:fail-b/episode_synthesis: segmentation schema mismatch'),
+    });
+
+    const { toErrorMessage } = await import('../../../shared/utils/errors.js');
+    const serialized = toErrorMessage(caught);
+    expect(serialized).toContain('discord:fail-a/episode_synthesis: upstream rate limit');
+    expect(serialized).toContain('discord:fail-b/episode_synthesis: segmentation schema mismatch');
+  });
 });

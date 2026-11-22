@@ -743,7 +743,15 @@ export class SleeptimeMemoryAgent {
         requiredInactiveMs: restWindowDecision.requiredInactiveMs,
         timeZone: restWindowDecision.timeZone,
       });
-      return { outcome: 'yield', completedSessions: 0, remainingSessions: snapshot.length };
+      return {
+        outcome: 'yield',
+        completedSessions: 0,
+        remainingSessions: snapshot.length,
+        ...(typeof restWindowDecision.nextEligibleAtMs === 'number'
+          && Number.isFinite(restWindowDecision.nextEligibleAtMs)
+          ? { nextEligibleAtMs: restWindowDecision.nextEligibleAtMs }
+          : {}),
+      };
     }
 
     const snapshotRevisions = new Map(

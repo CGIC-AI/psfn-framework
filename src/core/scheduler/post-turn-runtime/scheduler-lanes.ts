@@ -478,17 +478,33 @@ export function registerSchedulerOwnedPostTurnLanes(
           );
         }
         if (outcome.outcome === 'yield') {
-          const delayMs = fleetMaintenance
+          const nowMs = Date.now();
+          const maxRescheduleAtMs = nowMs + DAY_MS;
+          const restWindowRescheduleAt = typeof outcome.nextEligibleAtMs === 'number'
+            && Number.isFinite(outcome.nextEligibleAtMs)
+            && outcome.nextEligibleAtMs > nowMs
+            ? Math.ceil(Math.min(outcome.nextEligibleAtMs, maxRescheduleAtMs))
+            : undefined;
+          const fallbackDelayMs = fleetMaintenance
             ? fleetMaintenance.retryDelayMs
             : runtimeOptions.episodicProcessingRestWindow!.inactivityThresholdMinutes * 60_000;
+          const minFutureMs = fleetMaintenance
+            ? nowMs + fleetMaintenance.retryDelayMs
+            : nowMs + 1;
+          const rescheduleAt = restWindowRescheduleAt !== undefined
+            ? Math.max(minFutureMs, restWindowRescheduleAt)
+            : nowMs + fallbackDelayMs;
+          const detail = restWindowRescheduleAt !== undefined
+            ? `Sleeptime yielded outside rest-window eligibility with ${outcome.remainingSessions} session(s) remaining`
+            : `Sleeptime yielded with ${outcome.remainingSessions} session(s) remaining`;
           return {
             value: {
-              rescheduleAt: Date.now() + delayMs,
-              detail: `Sleeptime yielded with ${outcome.remainingSessions} session(s) remaining`,
+              rescheduleAt,
+              detail,
             },
             outcome: 'budget_limited',
             resultKind: 'partial',
-            summary: `Sleeptime yielded with ${outcome.remainingSessions} session(s) remaining`,
+            summary: detail,
           };
         }
         // Session counts only: no episode, memory, or transcript content
@@ -731,12 +747,27 @@ export function registerSchedulerOwnedPostTurnLanes(
         }
         const outcome = batonRun?.result ?? await episodeSynthesisLane.execute(action);
         if (outcome.outcome === 'yield') {
-          if (!fleetMaintenance) {
+          const nowMs = Date.now();
+          const maxRescheduleAtMs = nowMs + DAY_MS;
+          const boundedNextEligibleAtMs = typeof outcome.nextEligibleAtMs === 'number'
+            && Number.isFinite(outcome.nextEligibleAtMs)
+            && outcome.nextEligibleAtMs > nowMs
+            ? Math.ceil(Math.min(outcome.nextEligibleAtMs, maxRescheduleAtMs))
+            : undefined;
+          if (!fleetMaintenance && boundedNextEligibleAtMs === undefined) {
             throw new Error('Episode synthesis cannot yield without fleet maintenance authority');
           }
+          const minFutureMs = fleetMaintenance
+            ? nowMs + fleetMaintenance.retryDelayMs
+            : nowMs + 1;
+          const rescheduleAt = boundedNextEligibleAtMs !== undefined
+            ? Math.max(minFutureMs, boundedNextEligibleAtMs)
+            : nowMs + fleetMaintenance!.retryDelayMs;
           return {
-            rescheduleAt: Date.now() + fleetMaintenance.retryDelayMs,
-            detail: 'Episode synthesis yielded for fleet preemption',
+            rescheduleAt,
+            detail: boundedNextEligibleAtMs !== undefined
+              ? 'Episode synthesis yielded until next eligibility window'
+              : 'Episode synthesis yielded for fleet preemption',
           };
         }
         return { detail: 'Episode synthesis drain completed' };

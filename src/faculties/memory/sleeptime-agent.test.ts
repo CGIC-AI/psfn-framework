@@ -2048,6 +2048,8 @@ describe('SleeptimeMemoryAgent', () => {
     const sleepConsolidator = { run: vi.fn() };
     const arcWeaver = { run: vi.fn() };
     const dreamMeaningPass = { run: vi.fn() };
+    const nowMs = Date.parse('2026-03-17T01:05:00.000Z');
+    const recentActivityMs = Date.parse('2026-03-17T00:55:00.000Z');
     const agent = new SleeptimeMemoryAgent(makeAgentOptions({
       agent: reviewAgent,
       sessionManager,
@@ -2055,16 +2057,23 @@ describe('SleeptimeMemoryAgent', () => {
       sleepConsolidator,
       arcWeaver,
       dreamMeaningPass,
-      conversationalActivityWorkset: makeConversationalWorkset('terminal:test', Date.now()),
+      now: () => nowMs,
+      conversationalActivityWorkset: makeConversationalWorkset('terminal:test', recentActivityMs),
     }));
 
-    await agent.execute(makeSleeptimeAction({
+    const outcome = await agent.execute(makeSleeptimeAction({
       payload: {
         sessionId: 'terminal:test',
-        lastUserActivityAtMs: Date.now(),
+        lastUserActivityAtMs: recentActivityMs,
       },
     }));
 
+    expect(outcome).toEqual({
+      outcome: 'yield',
+      completedSessions: 0,
+      remainingSessions: 1,
+      nextEligibleAtMs: recentActivityMs + 60 * 60_000,
+    });
     expect(sleepConsolidator.run).not.toHaveBeenCalled();
     expect(arcWeaver.run).not.toHaveBeenCalled();
     expect(dreamMeaningPass.run).not.toHaveBeenCalled();

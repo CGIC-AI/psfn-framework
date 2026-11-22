@@ -37,6 +37,8 @@ export type SleeptimeWorksetRunOutcome =
     outcome: 'yield';
     completedSessions: number;
     remainingSessions: number;
+    /** When yielding outside rest-window eligibility, the earliest instant sleeptime can retry. */
+    nextEligibleAtMs?: number;
   }
   | {
     outcome: 'retry';

@@ -1,4 +1,5 @@
 import { createComponentLogger } from '../../../shared/logger.js';
+import { toErrorMessage } from '../../../shared/utils/errors.js';
 import type { InferredPostTurnAction, PostTurnActionCandidate, SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import type { Episode, EpisodeArc } from '../../../shared/contracts/episodic-memory.js';
 import type { SessionEntry } from '../../../core/session/types.js';
@@ -37,11 +38,27 @@ interface BehavioralSummaryWrite {
 
 class BehavioralSummaryWriteError extends Error {
   readonly stage: string;
+  readonly logicalSessionId: string;
 
-  constructor(stage: string, cause: unknown) {
+  constructor(logicalSessionId: string, stage: string, cause: unknown) {
     super(cause instanceof Error ? cause.message : String(cause));
     this.name = 'BehavioralSummaryWriteError';
+    this.logicalSessionId = logicalSessionId;
     this.stage = stage;
+  }
+}
+
+class EpisodeSynthesisSessionError extends Error {
+  readonly logicalSessionId: string;
+  readonly stage: string;
+  override readonly cause: unknown;
+
+  constructor(logicalSessionId: string, stage: string, cause: unknown) {
+    super(toErrorMessage(cause));
+    this.name = 'EpisodeSynthesisSessionError';
+    this.logicalSessionId = logicalSessionId;
+    this.stage = stage;
+    this.cause = cause;
   }
 }
 
@@ -86,6 +103,7 @@ export interface EpisodeSynthesisDrainOptions {
 
 export interface EpisodeSynthesisDrainOutcome {
   outcome: 'complete' | 'yield';
+  nextEligibleAtMs?: number;
 }
 
 type SynthesisLaneSessionReader = Pick<SessionManager, 'resolveSessionChannelId' | 'getRecentMessages'>
@@ -384,6 +402,17 @@ export class EpisodeSynthesisLane {
         });
       } catch (error) {
         const normalizedError = error instanceof Error ? error : new Error(String(error));
+        const stage = error instanceof BehavioralSummaryWriteError ? error.stage : 'episode_synthesis';
+        const errorSummary = toErrorMessage(normalizedError);
+        log.warn('Episode synthesis failed for session', {
+          actionId: action.id,
+          logicalSessionId: claim.logicalSessionId,
+          revision: claim.revision,
+          stage,
+          error: errorSummary.startsWith(claim.logicalSessionId)
+            ? errorSummary
+            : `${claim.logicalSessionId}/${stage}: ${errorSummary}`,
+        });
         if (error instanceof BehavioralSummaryWriteError) {
           try {
             await this.workset.recordFailure({
@@ -395,14 +424,23 @@ export class EpisodeSynthesisLane {
               message: error.message,
             });
           } catch (recordError) {
+            log.warn('Episode behavioral-summary failure checkpoint failed', {
+              actionId: action.id,
+              logicalSessionId: claim.logicalSessionId,
+              revision: claim.revision,
+              stage: error.stage,
+              error: toErrorMessage(recordError),
+            });
             failures.push(new AggregateError(
-              [normalizedError, recordError],
+              [error, recordError],
               `Episode behavioral-summary failure could not be checkpointed for ${claim.logicalSessionId}`,
             ));
             continue;
           }
+          failures.push(error);
+          continue;
         }
-        failures.push(normalizedError);
+        failures.push(new EpisodeSynthesisSessionError(claim.logicalSessionId, stage, normalizedError));
         continue;
       }
       const disposition = await options.onSafeBoundary?.({
@@ -656,7 +694,7 @@ export class EpisodeSynthesisLane {
       try {
         await this.memoryWriter.write(write.payload);
       } catch (error) {
-        throw new BehavioralSummaryWriteError(behavioralSummaryStage(write.arc), error);
+        throw new BehavioralSummaryWriteError(input.sessionId, behavioralSummaryStage(write.arc), error);
       }
     }
   }

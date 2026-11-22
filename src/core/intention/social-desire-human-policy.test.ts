@@ -129,4 +129,50 @@ describe('social desire human delivery policy', () => {
       nowMs: Date.parse(now),
     })).resolves.toEqual(expected);
   });
+
+  it('allows trusted non-primary contacts on their own direct DM channel while still protecting heartbeatChannel (eoj3s.5)', async () => {
+    const friend = contact({
+      id: 'contact-friend',
+      displayName: 'Friend',
+      trustLevel: 'trusted',
+      relationshipType: 'friend',
+      conversationChannels: [{
+        channel: 'discord',
+        channelId: 'discord:friend-dm',
+        firstSeen: '2026-01-01T00:00:00.000Z',
+        lastSeen: '2026-07-20T00:00:00.000Z',
+        privacyLevel: 'private',
+      }],
+    });
+    const policy = createSocialDesireHumanDeliveryPolicy({
+      contacts: { getById: () => friend },
+      approvedHeartbeatChannel: { channelId: 'discord:primary', channelType: 'discord' },
+      quietHours: {
+        enabled: false,
+        startLocalTime: '22:00',
+        endLocalTime: '07:00',
+        timeZone: 'UTC',
+        inactivityThresholdMinutes: 60,
+      },
+    });
+    const nowMs = Date.parse('2026-07-20T12:00:00.000Z');
+    await expect(policy.evaluate({
+      contactId: friend.id,
+      channelId: 'discord:friend-dm',
+      channelType: 'discord',
+      nowMs,
+    })).resolves.toEqual({ allowed: true });
+    await expect(policy.evaluate({
+      contactId: friend.id,
+      channelId: 'discord:primary',
+      channelType: 'discord',
+      nowMs,
+    })).resolves.toEqual({ allowed: false, reason: 'social_desire_contact_not_primary' });
+    await expect(policy.evaluate({
+      contactId: friend.id,
+      channelId: 'discord:unknown-dm',
+      channelType: 'discord',
+      nowMs,
+    })).resolves.toEqual({ allowed: false, reason: 'social_desire_channel_not_approved' });
+  });
 });

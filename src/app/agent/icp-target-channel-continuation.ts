@@ -33,7 +33,8 @@ import {
 export interface IcpTargetChannelContinuationRequest {
   authorization: IcpDyadContinuationAuthorization;
   peerContactId: string;
-  privateIntent: string;
+  privateIntent?: string;
+  authoredMessage?: string;
   continuationTaskKind?: IcpContinuationTaskKind;
   humanRelayRequest?: HumanRelayIntentCapsule;
 }
@@ -113,9 +114,19 @@ function buildCorrelation(input: {
   });
 }
 
+function requireDirectAuthoredMessage(value: string): string {
+  const message = value.trim();
+  if (!message || message.length > COMPANION_PRIVATE_INTENT_MAX_LENGTH * 4) {
+    throw new Error(
+      `ICP dyad continuation authoredMessage must be non-empty and at most ${COMPANION_PRIVATE_INTENT_MAX_LENGTH * 4} characters`,
+    );
+  }
+  return message;
+}
+
 function buildPrivateTurnMessage(
   correlation: IcpConversationCorrelation,
-  privateIntent: string,
+  privateIntent?: string,
   continuationTaskKind?: IcpContinuationTaskKind,
 ): SubstrateMessage {
   return {
@@ -124,7 +135,9 @@ function buildPrivateTurnMessage(
     channelType: 'companion',
     authorId: 'system:icp-continuation',
     authorName: 'ICP Continuation',
-    content: 'Continue this established conversation naturally. Private intent: ' + privateIntent,
+    content: privateIntent
+      ? 'Continue this established conversation naturally. Private intent: ' + privateIntent
+      : 'Deliver this companion-authored direct message in the established conversation.',
     timestamp: new Date(),
     isDirectMessage: true,
     routing: {
@@ -176,7 +189,14 @@ export function createIcpTargetChannelContinuation(input: {
       || !authorization.episode.participantCompanionIds.includes(authorization.peerCompanionId)) {
       throw new Error('ICP dyad continuation authorization does not bind the local companion');
     }
-    const intent = requirePrivateIntent(request.privateIntent);
+    const preAuthoredContent = request.authoredMessage !== undefined
+      ? requireDirectAuthoredMessage(request.authoredMessage)
+      : undefined;
+    const intent = request.privateIntent !== undefined
+      ? requirePrivateIntent(request.privateIntent)
+      : preAuthoredContent
+        ? undefined
+        : requirePrivateIntent('');
     const correlation = buildCorrelation({
       authorization,
       localCompanionId: input.localCompanionId,
@@ -265,6 +285,7 @@ export function createIcpTargetChannelContinuation(input: {
       buildPrivateTurnMessage(correlation, intent, request.continuationTaskKind),
       {
         ...(response ? { recoveredResponse: response } : {}),
+        ...(!response && preAuthoredContent ? { preAuthoredContent } : {}),
         finalizeDelivery: finalize,
       },
     );

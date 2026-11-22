@@ -34,6 +34,9 @@ function input() {
 describe('ICP initiation consent evaluator', () => {
   it.each([
     ['{"action":"send"}', { action: 'send' }],
+    ['{"action":"send","reason":"want to share an update"}', { action: 'send', reason: 'want to share an update' }],
+    ['```json\n{"action":"send"}\n```', { action: 'send' }],
+    ['```\n{"action":"send","reason":"catch up"}\n```', { action: 'send', reason: 'catch up' }],
     ['{"action":"defer","reason":"later"}', { action: 'defer', reason: 'later' }],
     ['{"action":"decline","reason":"no"}', { action: 'decline', reason: 'no' }],
   ] as const)('parses structured %s without accepting peer-visible text', async (content, expected) => {
@@ -51,26 +54,25 @@ describe('ICP initiation consent evaluator', () => {
     '{"action":"send","message":"bypass"}',
     '{"action":"unknown"}',
     'Sure: {"action":"send"}',
-    '```json\n{"action":"send"}\n```',
   ])(
-    'fails closed on malformed or message-authoring output: %s',
+    'defers without fatigue penalty on malformed or message-authoring output: %s',
     async (content) => {
       const evaluator = createLlmIcpInitiationConsentEvaluator({
         llmProvider: { complete: vi.fn().mockResolvedValue({ content }) },
       });
       await expect(evaluator.evaluate(input())).resolves.toEqual({
-        action: 'decline',
+        action: 'defer',
         reason: 'invalid_consent_response',
       });
     },
   );
 
-  it('fails closed when the model provider errors', async () => {
+  it('defers without fatigue penalty when the model provider errors', async () => {
     const evaluator = createLlmIcpInitiationConsentEvaluator({
       llmProvider: { complete: vi.fn().mockRejectedValue(new Error('offline')) },
     });
     await expect(evaluator.evaluate(input())).resolves.toEqual({
-      action: 'decline',
+      action: 'defer',
       reason: 'consent_evaluation_failed',
     });
   });

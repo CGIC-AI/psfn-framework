@@ -5,6 +5,7 @@ import {
   evaluateProactiveOutboundTimeGate,
   isValidProactiveTimeZone,
 } from './proactive-time-gate.js';
+import { isSocialDesireAccumulatingTier } from './social-desire.js';
 
 export type SocialDesireHumanDeliveryDecision =
   | { allowed: true }
@@ -34,12 +35,29 @@ export function createSocialDesireHumanDeliveryPolicy(options: {
       if (contact.isMachineIntelligence) {
         return { allowed: false, reason: 'social_desire_human_target_is_companion' };
       }
-      if (contact.trustLevel !== 'primary') {
-        return { allowed: false, reason: 'social_desire_contact_not_primary' };
-      }
-      if (input.channelId.trim() !== approvedChannelId
-        || input.channelType !== options.approvedHeartbeatChannel.channelType) {
-        return { allowed: false, reason: 'social_desire_channel_not_approved' };
+      const targetChannelId = input.channelId.trim();
+      const targetsHeartbeatChannel = targetChannelId === approvedChannelId;
+      if (contact.trustLevel === 'primary') {
+        if (!targetsHeartbeatChannel
+          || input.channelType !== options.approvedHeartbeatChannel.channelType) {
+          return { allowed: false, reason: 'social_desire_channel_not_approved' };
+        }
+      } else {
+        if (targetsHeartbeatChannel) {
+          return { allowed: false, reason: 'social_desire_contact_not_primary' };
+        }
+        if (contact.trustLevel === 'public'
+          || !isSocialDesireAccumulatingTier(contact.relationshipType)) {
+          return { allowed: false, reason: 'social_desire_contact_not_eligible' };
+        }
+        const ownsDirectChannel = (contact.conversationChannels ?? []).some(conversation => (
+          conversation.channelId.trim() === targetChannelId
+          && conversation.channel === input.channelType
+          && conversation.privacyLevel !== 'public'
+        ));
+        if (!ownsDirectChannel) {
+          return { allowed: false, reason: 'social_desire_channel_not_approved' };
+        }
       }
       if (options.quietHours.enabled
         && contact.timezone !== undefined

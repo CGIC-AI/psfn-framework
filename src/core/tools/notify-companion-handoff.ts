@@ -41,7 +41,8 @@ export type CompanionNotifyParams =
       action: 'send';
       target_kind: 'companion';
       dyad_id: string;
-      private_intent: string;
+      private_intent?: string;
+      message?: string;
     }
   | {
       mode: 'human_relay';
@@ -90,7 +91,8 @@ type DeferredCompanionOutreachPayload = ({
 } | {
   mode: 'continuation';
   dyadId: string;
-  privateIntent: string;
+  privateIntent?: string;
+  authoredMessage?: string;
   deliveryId: string;
   conversationId: string;
   sourceDyadId?: string;
@@ -222,6 +224,29 @@ function parseCompanionNotifyParams(value: unknown): CompanionNotifyParams {
     };
   }
   if (value.action === 'send' && value.dyad_id !== undefined) {
+    const hasMessage = value.message !== undefined;
+    const hasPrivateIntent = value.private_intent !== undefined;
+    if (hasMessage && !hasPrivateIntent) {
+      assertNoUnknownKeys(
+        value,
+        ['action', 'target_kind', 'dyad_id', 'message'],
+        'companion direct message params',
+      );
+      if (value.target_kind !== COMPANION_NOTIFY_TARGET_KIND || !isRfc4122Uuid(value.dyad_id)) {
+        throw new Error('companion continuation requires an exact dyad_id');
+      }
+      if (typeof value.message !== 'string' || !value.message.trim()
+        || value.message.trim().length > COMPANION_PRIVATE_INTENT_MAX_LENGTH * 4) {
+        throw new Error('companion direct message must be a non-empty string up to 4000 characters');
+      }
+      return {
+        mode: 'continuation',
+        action: 'send',
+        target_kind: 'companion',
+        dyad_id: value.dyad_id,
+        message: value.message.trim(),
+      };
+    }
     assertNoUnknownKeys(
       value,
       ['action', 'target_kind', 'dyad_id', 'private_intent'],
@@ -274,6 +299,7 @@ function parseDeferredPayload(value: unknown): DeferredCompanionOutreachPayload 
       value,
       [
         'mode', 'contactId', 'permitId', 'candidateOrigin', 'dyadId', 'privateIntent',
+        'authoredMessage',
         'deliveryId', 'conversationId', 'sourceDyadId', 'continuationTaskKind', 'authorization',
         'capsule',
       ],
@@ -314,11 +340,19 @@ function parseDeferredPayload(value: unknown): DeferredCompanionOutreachPayload 
       authorization,
     };
   }
+  const hasValidPrivateIntent = typeof value.privateIntent === 'string'
+    && Boolean(value.privateIntent.trim())
+    && value.privateIntent.trim() === value.privateIntent
+    && value.privateIntent.length <= COMPANION_PRIVATE_INTENT_MAX_LENGTH;
+  const hasValidAuthoredMessage = typeof value.authoredMessage === 'string'
+    && Boolean(value.authoredMessage.trim())
+    && value.authoredMessage.trim() === value.authoredMessage
+    && value.authoredMessage.length <= COMPANION_PRIVATE_INTENT_MAX_LENGTH * 4;
   if (value.mode !== 'continuation' || !isRfc4122Uuid(value.dyadId)
     || !isRfc4122Uuid(value.deliveryId) || !isRfc4122Uuid(value.conversationId)
-    || typeof value.privateIntent !== 'string' || !value.privateIntent.trim()
-    || value.privateIntent.trim() !== value.privateIntent
-    || value.privateIntent.length > COMPANION_PRIVATE_INTENT_MAX_LENGTH
+    || (value.privateIntent !== undefined && !hasValidPrivateIntent)
+    || (value.authoredMessage !== undefined && !hasValidAuthoredMessage)
+    || (!hasValidPrivateIntent && !hasValidAuthoredMessage)
     || (value.sourceDyadId !== undefined && !isRfc4122Uuid(value.sourceDyadId))) return null;
   const continuationTaskKind = value.continuationTaskKind;
   if (continuationTaskKind !== undefined
@@ -327,13 +361,47 @@ function parseDeferredPayload(value: unknown): DeferredCompanionOutreachPayload 
   return {
     mode: 'continuation',
     dyadId: value.dyadId,
-    privateIntent: value.privateIntent,
+    ...(hasValidPrivateIntent ? { privateIntent: value.privateIntent as string } : {}),
+    ...(hasValidAuthoredMessage ? { authoredMessage: value.authoredMessage as string } : {}),
     deliveryId: value.deliveryId,
     conversationId: value.conversationId,
     ...(value.sourceDyadId ? { sourceDyadId: value.sourceDyadId } : {}),
     ...(continuationTaskKind ? { continuationTaskKind } : {}),
     authorization,
   };
+}
+
+function isReflectiveJournalChannel(channelId: string | undefined): boolean {
+  const normalized = channelId?.trim() ?? '';
+  return normalized === 'internal:heartbeat'
+    || normalized.startsWith('internal:reflection:')
+    || normalized.startsWith('internal:journal')
+    || normalized.startsWith('internal:sleeptime');
+}
+
+/**
+ * Assess source disclosure for a human-authorized relay capsule.
+ * The relay capsule itself enforces `stated_intent_only` and strips all adjacent
+ * source chat, so a classified human turn whose lineage permits either the peer
+ * companion's DM or the requesting human's own DM is eligible; missing, empty,
+ * or unclassified/tainted lineage still fails closed.
+ */
+function assessHumanRelaySourceDisclosure(
+  lineage: DisclosureLineage | undefined,
+  peerContactId: string,
+  humanContactId: string,
+) {
+  const peerDecision = assessDisclosure(lineage, {
+    kind: 'contact_dm',
+    contactId: peerContactId,
+  });
+  if (peerDecision.allowed) return peerDecision;
+  const requesterDecision = assessDisclosure(lineage, {
+    kind: 'contact_dm',
+    contactId: humanContactId,
+  });
+  if (requesterDecision.allowed) return requesterDecision;
+  return peerDecision;
 }
 
 export async function executeCompanionNotify(input: {
@@ -367,14 +435,18 @@ export async function executeCompanionNotify(input: {
         throw new Error('human relay requires an attributable human source turn outside ICP');
       }
       const dyad = await input.runtime.inspectOpenDyad(params.dyad_id);
-      const disclosure = assessDisclosure(input.sourceDisclosureLineage, {
-        kind: 'contact_dm',
-        contactId: dyad.peerContactId,
-      });
+      const disclosure = assessHumanRelaySourceDisclosure(
+        input.sourceDisclosureLineage,
+        dyad.peerContactId,
+        requestContext.viewerMemorySubjectContactId,
+      );
       if (!disclosure.allowed) {
         throw new Error(`human relay source disclosure denied: ${disclosure.reason}`);
       }
       return textResult(COMPANION_NOTIFY_QUEUED_TEXT);
+    }
+    if (isReflectiveJournalChannel(requestContext.channelId)) {
+      throw new Error('companion DM sends are not allowed during reflection or journal turns');
     }
     if (params.mode === 'continuation') {
       const dyad = await input.runtime.inspectOpenDyad(params.dyad_id);
@@ -452,7 +524,12 @@ export function inferDeferredCompanionOutreachActions(
             }
           : {
               mode: 'continuation', dyadId: params.dyad_id,
-              privateIntent: params.private_intent,
+              ...(params.private_intent !== undefined
+                ? { privateIntent: params.private_intent }
+                : {}),
+              ...(params.message !== undefined
+                ? { authoredMessage: params.message }
+                : {}),
               deliveryId: deriveContinuationUuid('delivery', context.turnId, content.id),
               conversationId: deriveContinuationUuid('conversation', context.turnId, content.id),
               ...(context.message.routing?.icpCorrelation
@@ -519,10 +596,11 @@ export async function inferDeferredHumanRelayActions(input: {
     const request = requests.get(message.toolCallId);
     if (!request) continue;
     const dyad = await input.runtime.inspectOpenDyad(request.dyad_id);
-    const disclosure = assessDisclosure(context.disclosureLineage, {
-      kind: 'contact_dm',
-      contactId: dyad.peerContactId,
-    });
+    const disclosure = assessHumanRelaySourceDisclosure(
+      context.disclosureLineage,
+      dyad.peerContactId,
+      context.canonicalContactKey,
+    );
     if (!disclosure.allowed || !context.disclosureLineage) continue;
     const capsuleId = deriveContinuationUuid('human-relay-capsule', context.turnId, message.toolCallId);
     const deliveryId = deriveContinuationUuid('human-relay-delivery', context.turnId, message.toolCallId);
@@ -629,7 +707,8 @@ export function registerDeferredCompanionOutreachRuntime(input: {
           dyadId: payload.dyadId,
           deliveryId: payload.deliveryId,
           conversationId: payload.conversationId,
-          privateIntent: payload.privateIntent,
+          ...(payload.privateIntent !== undefined ? { privateIntent: payload.privateIntent } : {}),
+          ...(payload.authoredMessage !== undefined ? { authoredMessage: payload.authoredMessage } : {}),
           initiationSource: 'foreground',
           ...(payload.sourceDyadId ? { sourceDyadId: payload.sourceDyadId } : {}),
           ...(payload.continuationTaskKind

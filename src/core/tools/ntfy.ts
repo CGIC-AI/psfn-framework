@@ -1028,6 +1028,17 @@ const notifyToolParameters = Type.Union([
     }),
   }, { additionalProperties: false }),
   Type.Object({
+    action: Type.Literal('send'),
+    target_kind: Type.Literal(COMPANION_NOTIFY_TARGET_KIND),
+    dyad_id: Type.String({
+      description: 'Exact already-approved open dyad UUID returned by action=list_dyads.',
+    }),
+    message: Type.String({
+      maxLength: COMPANION_PRIVATE_INTENT_MAX_LENGTH * 4,
+      description: 'Direct message to send to the approved peer companion in your own voice (delivers directly without a separate rewrite turn).',
+    }),
+  }, { additionalProperties: false }),
+  Type.Object({
     action: Type.Literal('list_dyads'),
     target_kind: Type.Literal(COMPANION_NOTIFY_TARGET_KIND),
   }, { additionalProperties: false }),
@@ -1098,7 +1109,7 @@ const notifyModelParameters = Type.Object({
     description: 'Required notify action. Supply every field required for the selected action.',
   }),
   message: Type.Optional(Type.String({
-    description: 'Required for action=brief, action=send, or action=outreach_send (the words you want to send them).',
+    description: 'Body text for action=brief, action=send (external or approved companion dyad_id), or action=outreach_send.',
   })),
   title: Type.Optional(Type.String({ description: 'Optional title for action=brief.' })),
   priority: Type.Optional(Type.Integer({
@@ -1139,7 +1150,7 @@ const notifyModelParameters = Type.Object({
   })),
   private_intent: Type.Optional(Type.String({
     maxLength: COMPANION_PRIVATE_INTENT_MAX_LENGTH,
-    description: 'Required private target-turn instruction for an open-dyad continuation.',
+    description: 'Optional private target-turn instruction for an open-dyad continuation (use message instead to send directly).',
   })),
   expected_revision: Type.Optional(Type.Integer({ minimum: 1 })),
   lifecycle_action: Type.Optional(Type.Union([

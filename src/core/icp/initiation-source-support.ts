@@ -47,12 +47,14 @@ export interface IcpInitiationSourceRequest {
   pendingFollowUpId?: string;
   /** Private companion-local motivation. Never projected to the gateway. */
   reasonSummary: string;
+  /** Optional companion-authored DM text preserved from the originating turn (never projected to gateway). */
+  authoredMessage?: string;
   cause: IcpInitiationCause;
   ttlMs?: number;
 }
 
 export type IcpInitiationConsent =
-  | { action: 'send' }
+  | { action: 'send'; reason?: string }
   | { action: 'defer'; reason?: string }
   | { action: 'decline'; reason?: string };
 
@@ -71,6 +73,7 @@ export interface IcpInitiationSourcePeerPort {
     permitId: string,
     candidateOrigin: IcpAutonomyCandidateOrigin,
     isExecutionAuthorized?: () => boolean,
+    authoredMessage?: string,
   ): Promise<IcpCompanionOutreachExecutionResult>;
 }
 
@@ -221,6 +224,7 @@ export function isSameIcpCandidate(
     && left.source === right.source
     && left.provenanceRef === right.provenanceRef
     && left.reasonSummary === right.reasonSummary
+    && left.authoredMessage === right.authoredMessage
     && left.pendingFollowUpId === right.pendingFollowUpId;
 }
 

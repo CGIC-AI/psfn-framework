@@ -23,7 +23,11 @@ import {
   createSocialDesireFeltSignalWriter,
   type SocialDesireFeltSignalWriter,
 } from '../../../core/intention/social-desire-felt-signal.js';
-import { createContactSocialDesireTierSource } from '../../../core/intention/social-desire-store-port.js';
+import {
+  createContactSocialDesireTierSource,
+  recordSocialDesireFeltSignal,
+} from '../../../core/intention/social-desire-store-port.js';
+import { isSocialDesireAccumulatingTier } from '../../../core/intention/social-desire.js';
 import {
   createSocialDesireConsentLedger,
   createSocialDesireOutboundRuntime,
@@ -66,8 +70,8 @@ export interface SocialDesireLaneDeps {
   /** Narrowed to the desire-budget read the lane performs. */
   outreachOutbox: Pick<OutreachOutboxStore, 'countSentSince'>;
   heartbeatChannel: { channelId: string; channelType: ChannelType } | undefined;
-  /** Narrowed to the single read the lane performs (testable without a full port). */
-  contactStore: Pick<ContactStorePort, 'getById'>;
+  /** Narrowed to the reads the lane performs (listAll optional for cold-start seeding). */
+  contactStore: Pick<ContactStorePort, 'getById'> & Partial<Pick<ContactStorePort, 'listAll'>>;
   icpPeers: AgentFacingIcpAutonomyRuntime | undefined;
   localCompanionId: string | undefined;
   /** Runs the companion's persona-loaded outreach turn (the agent loop). */
@@ -173,9 +177,9 @@ export function registerSocialDesireLane(deps: SocialDesireLaneDeps): SocialDesi
         },
       });
       // Fail-closed delivery-channel policy: companion peers route to
-      // their canonical companion DM (ICP candidate path); humans deliver
-      // only to the primary contact's approved heartbeat DM. Anything
-      // else has no channel — no consent moment, desire keeps pressure.
+      // their canonical companion DM (ICP candidate path); primary humans
+      // deliver to the approved heartbeat DM; other accumulating-tier humans
+      // deliver only to their own verified direct DM channel.
       const resolveDeliveryChannel = async (contactId: string): Promise<SocialDesireDeliveryChannel | null> => {
         const contact = await contactStore.getById(contactId);
         if (!contact) return null;
@@ -197,15 +201,33 @@ export function registerSocialDesireLane(deps: SocialDesireLaneDeps): SocialDesi
             throw error;
           }
         }
-        if (contact.trustLevel !== 'primary' || !heartbeatChannel) return null;
-        // The heartbeat channel must be this person's own direct messages (PR #609).
-        if (!resolvePrimaryContactOutreachIdentity(deps.sessions, contact, heartbeatChannel.channelId)) return null;
-        return {
-          channelId: heartbeatChannel.channelId,
-          channelType: heartbeatChannel.channelType,
-          contactName: contact.displayName,
-          companionTarget: false,
-        };
+        if (contact.trustLevel === 'primary') {
+          if (!heartbeatChannel) return null;
+          // The heartbeat channel must be this person's own direct messages (PR #609).
+          if (!resolvePrimaryContactOutreachIdentity(deps.sessions, contact, heartbeatChannel.channelId)) return null;
+          return {
+            channelId: heartbeatChannel.channelId,
+            channelType: heartbeatChannel.channelType,
+            contactName: contact.displayName,
+            companionTarget: false,
+          };
+        }
+        if (contact.trustLevel === 'public') return null;
+        if (!isSocialDesireAccumulatingTier(contact.relationshipType)) return null;
+        for (const conversation of contact.conversationChannels ?? []) {
+          const dmChannelId = conversation.channelId.trim();
+          if (!dmChannelId || dmChannelId === heartbeatChannel?.channelId) continue;
+          if (conversation.channel !== 'discord') continue;
+          if (resolvePrimaryContactOutreachIdentity(deps.sessions, contact, dmChannelId)) {
+            return {
+              channelId: dmChannelId,
+              channelType: 'discord',
+              contactName: contact.displayName,
+              companionTarget: false,
+            };
+          }
+        }
+        return null;
       };
       const resolveContactTimeZone = async (contactId: string): Promise<string | null> => (
         (await contactStore.getById(contactId))?.timezone ?? null
@@ -263,11 +285,50 @@ export function registerSocialDesireLane(deps: SocialDesireLaneDeps): SocialDesi
         actions: postTurnActions,
         evaluate: () => outreachTask.runNow(),
       });
+      const tierSource = createContactSocialDesireTierSource(contactStore);
       impulseTarget = {
         store: socialDesireStore,
         lifecycle: schedulerConfig.socialDesire.lifecycle,
         gain: schedulerConfig.socialDesire.impulse.gain,
         requestEvaluation: evaluationQueue.request,
+        ...(contactStore.listAll
+          ? {
+              seedColdStartDesires: async ({ confidence, nowMs, dryRun }) => {
+                if (!(confidence > 0) || !contactStore.listAll) return 0;
+                const contacts = await contactStore.listAll();
+                let seeded = 0;
+                for (const contact of contacts) {
+                  if (!contact.isMachineIntelligence && contact.trustLevel === 'public') continue;
+                  const tier = contact.isMachineIntelligence
+                    ? 'ai_companion'
+                    : contact.relationshipType;
+                  if (!isSocialDesireAccumulatingTier(tier)) continue;
+                  const channel = await resolveDeliveryChannel(contact.id);
+                  if (!channel) continue;
+                  if (dryRun) {
+                    seeded += 1;
+                    continue;
+                  }
+                  const recorded = await recordSocialDesireFeltSignal(
+                    socialDesireStore,
+                    tierSource,
+                    schedulerConfig.socialDesire.lifecycle,
+                    {
+                      contactId: contact.id,
+                      orientation: 'warm',
+                      intensity: confidence,
+                      sourceRef: `social_impulse_cold_start:${nowMs}`,
+                    },
+                    nowMs,
+                  );
+                  if (recorded.outcome === 'created' || recorded.outcome === 'strengthened') {
+                    seeded += 1;
+                  }
+                }
+                return seeded;
+              },
+            }
+          : {}),
       };
     }
   }

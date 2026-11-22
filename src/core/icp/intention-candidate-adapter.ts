@@ -154,6 +154,7 @@ export function createIcpIntentionCandidateAdapter(input: {
         return { kind: 'blocked', reason: 'stale_provenance' };
       }
       const inheritedRoot = [...lineageRoots][0];
+      const authoredMessage = payload.content.trim();
       const result = await input.sourceRuntime.submit({
         source: 'intention',
         peerContactId: contactId!,
@@ -162,6 +163,7 @@ export function createIcpIntentionCandidateAdapter(input: {
         sourceRecordId: action.dedupeKey,
         ...(payload.pendingFollowUpId ? { pendingFollowUpId: payload.pendingFollowUpId } : {}),
         reasonSummary: (payload.reason?.trim() || payload.content).slice(0, 1_000),
+        ...(authoredMessage ? { authoredMessage } : {}),
         cause: inheritedRoot
           ? { kind: 'icp_conversation', rootInitiationId: inheritedRoot }
           : { kind: 'independent' },

@@ -17,8 +17,8 @@ import type {
   ScoredMemory,
 } from './types.js';
 
-const RELEVANCE_TERMINATION_ABSOLUTE_FLOOR = 0.12;
-const RELEVANCE_TERMINATION_RELATIVE_FLOOR = 0.25;
+const RELEVANCE_TERMINATION_ABSOLUTE_FLOOR = 0.02;
+const RELEVANCE_TERMINATION_RELATIVE_FLOOR = 0.12;
 
 function estimateMemoryPromptTokens(memory: PurrMemory): number {
   return Math.max(1, countTokens(`[${memory.type}] ${memory.text}`));
@@ -74,18 +74,20 @@ export function selectWithinRelevanceAndTokenBudget(
       relevanceStoppedCount: 0,
       budgetCappedCount: 0,
       relevanceScoreFloor: RELEVANCE_TERMINATION_ABSOLUTE_FLOOR,
+      selectionCapSkippedCount: ZERO_QUOTA_SKIP_COUNT,
+      selectionCapSkippedByType: {},
     };
   }
 
-  const topScore = scored[0]?.score ?? RELEVANCE_TERMINATION_ABSOLUTE_FLOOR;
+  const floorAnchorScore = resolveRelevanceFloorAnchorScore(scored, policy);
   const relevanceScoreFloor = Math.max(
-    RELEVANCE_TERMINATION_ABSOLUTE_FLOOR,
-    topScore * RELEVANCE_TERMINATION_RELATIVE_FLOOR,
-  );
+    RELEVANCE_TERMINATION_ABSOLUTE_FLOOR, floorAnchorScore * RELEVANCE_TERMINATION_RELATIVE_FLOOR);
   let usedTokens = 0;
   const selected: ScoredMemory[] = [];
   let stopReason: RetrievalSelectionDecision['stopReason'] = 'exhausted';
   let relevanceStoppedCount = 0, budgetCappedCount = 0;
+  let skippedByTypeQuota = 0;
+  const skippedByTypeQuotaMap: Record<string, number> = {};
   const selectedTypeCounts = new Map<string, number>();
 
   for (let index = 0; index < scored.length; index++) {
@@ -98,6 +100,8 @@ export function selectWithinRelevanceAndTokenBudget(
       selectionCap !== undefined
       && (selectedTypeCounts.get(item.memory.type) ?? 0) >= selectionCap
     ) {
+      skippedByTypeQuota += 1;
+      skippedByTypeQuotaMap[item.memory.type] = (skippedByTypeQuotaMap[item.memory.type] ?? 0) + 1;
       continue;
     }
     const itemTokens = estimateMemoryPromptTokens(item.memory);
@@ -130,5 +134,32 @@ export function selectWithinRelevanceAndTokenBudget(
     relevanceStoppedCount,
     budgetCappedCount,
     relevanceScoreFloor,
+    selectionCapSkippedCount: skippedByTypeQuota,
+    selectionCapSkippedByType: skippedByTypeQuotaMap,
   };
+}
+
+const ZERO_QUOTA_SKIP_COUNT = 0;
+
+/**
+ * Anchors the relative relevance floor on genuine non-augment, uncapped
+ * candidates when present so a single lexical-augment hit or capped reflection
+ * burst cannot inflate the floor and crush semantic recall (psfn-framework-d5e0p.19).
+ */
+function resolveRelevanceFloorAnchorScore(
+  scored: readonly ScoredMemory[],
+  policy: MemoryRetrievalPolicy,
+): number {
+  const uncappedSemantic = scored.find(item => (
+    item.memory.retrievalChannel !== 'lexical_augment'
+    && resolveMemorySelectionCap(policy, item.memory.type) === undefined
+  ));
+  if (uncappedSemantic !== undefined) {
+    return uncappedSemantic.score;
+  }
+  const nonAugment = scored.find(item => item.memory.retrievalChannel !== 'lexical_augment');
+  if (nonAugment !== undefined) {
+    return nonAugment.score;
+  }
+  return scored[0]?.score ?? RELEVANCE_TERMINATION_ABSOLUTE_FLOOR;
 }

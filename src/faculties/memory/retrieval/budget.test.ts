@@ -4,7 +4,12 @@ import { resolveGuaranteedSelectionFloor, selectWithinRelevanceAndTokenBudget } 
 import type { ScoredMemory } from './types.js';
 import { createDefaultMemoryRetrievalPolicy } from '../../../system/config/memory-retrieval-policy.js';
 
-function scored(id: string, type: PurrMemory['type'], score: number): ScoredMemory {
+function scored(
+  id: string,
+  type: PurrMemory['type'],
+  score: number,
+  retrievalChannel?: 'embedding' | 'fts' | 'lexical_augment',
+): ScoredMemory {
   return {
     memory: {
       id,
@@ -21,6 +26,7 @@ function scored(id: string, type: PurrMemory['type'], score: number): ScoredMemo
       tags: [],
       sensitivity: 'personal',
       similarity: 0.8,
+      ...(retrievalChannel ? { retrievalChannel } : {}),
     },
     baseScore: score,
     evidenceSupport: 1,
@@ -96,5 +102,30 @@ describe('memory retrieval selection caps', () => {
       'reflection-2',
       'semantic-1',
     ]);
+    expect(result.selectionCapSkippedCount).toBe(1);
+    expect(result.selectionCapSkippedByType).toEqual({ reflection: 1 });
+  });
+
+  it('prevents an augment-topped or reflection-capped outlier from crushing semantic recall and counts cap skips (d5e0p.19)', () => {
+    const ranked = [
+      scored('augment-top', 'reflection', 0.95, 'lexical_augment'),
+      scored('reflection-2', 'reflection', 0.82, 'embedding'),
+      scored('reflection-3', 'reflection', 0.78, 'embedding'),
+      scored('reflection-4', 'reflection', 0.74, 'embedding'),
+      scored('semantic-1', 'semantic', 0.16, 'embedding'),
+      scored('semantic-2', 'semantic', 0.12, 'embedding'),
+      scored('semantic-3', 'semantic', 0.08, 'embedding'),
+      scored('semantic-4', 'semantic', 0.05, 'embedding'),
+    ];
+
+    const result = selectWithinRelevanceAndTokenBudget(ranked, 10_000, 1);
+
+    expect(result.selectionCapSkippedCount).toBe(2);
+    expect(result.selectionCapSkippedByType).toEqual({ reflection: 2 });
+    const selectedIds = result.selected.map(item => item.memory.id);
+    expect(selectedIds).toContain('semantic-1');
+    expect(selectedIds).toContain('semantic-2');
+    expect(selectedIds).toContain('semantic-3');
+    expect(selectedIds).toContain('semantic-4');
   });
 });

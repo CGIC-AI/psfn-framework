@@ -3220,7 +3220,7 @@ describe('MemoryRetriever basic behavior', () => {
       compositionalEvaluationBatchCount: 1,
       compositionalFinalistCount: 2,
       embeddingCalls: 1,
-      searchCalls: 2,
+      searchCalls: 3,
     });
     const stageTimings = calls[0][1].stageTimingsMs as Record<string, number>;
     expect(stageTimings).toEqual(expect.objectContaining({
@@ -4854,5 +4854,148 @@ describe('MemoryRetriever caller-context retrieval modes', () => {
     expect(result.indexOf('Same-day concrete timeline evidence')).toBeLessThan(
       result.indexOf('Week-old but higher-similarity memory'),
     );
+  });
+
+  it('keeps embedding topSimilarity, records selectionCapSkippedCount, and selects semantic items past reflection caps (d5e0p.19)', async () => {
+    const now = Date.now();
+    const embeddingMemories = [
+      makeMemory({
+        id: 'refl-1',
+        text: 'Reflection note one about evening observatory schedule.',
+        type: 'reflection',
+        similarity: 0.56,
+        importance: 0.9,
+        salience: 0.9,
+        extractedAt: now - 1_000,
+      }),
+      makeMemory({
+        id: 'refl-2',
+        text: 'Reflection note two about evening observatory schedule.',
+        type: 'reflection',
+        similarity: 0.54,
+        importance: 0.9,
+        salience: 0.9,
+        extractedAt: now - 2_000,
+      }),
+      makeMemory({
+        id: 'refl-3',
+        text: 'Reflection note three capped by reflection quota.',
+        type: 'reflection',
+        similarity: 0.52,
+        importance: 0.9,
+        salience: 0.9,
+        extractedAt: now - 3_000,
+      }),
+      makeMemory({
+        id: 'sem-1',
+        text: 'Mateo keeps the brass compass beside the workbench.',
+        type: 'semantic',
+        similarity: 0.45,
+        importance: 0.75,
+        salience: 0.7,
+        extractedAt: now - 45 * 24 * 60 * 60 * 1000,
+      }),
+      makeMemory({
+        id: 'sem-2',
+        text: 'Mateo calibrates the tripod mount before autumn equinox.',
+        type: 'semantic',
+        similarity: 0.42,
+        importance: 0.75,
+        salience: 0.7,
+        extractedAt: now - 60 * 24 * 60 * 60 * 1000,
+      }),
+    ];
+    const augmentOnlyReflection = makeMemory({
+      id: 'augment-refl',
+      text: 'Fresh observatory calibration checklist for evening dome preparation.',
+      type: 'reflection',
+      similarity: 0.1,
+      importance: 0.95,
+      salience: 0.95,
+      extractedAt: now,
+    });
+    const store = makeMockStore(embeddingMemories);
+    store.listActiveMemories = vi.fn(keysetActiveMemoryPages(() => [augmentOnlyReflection, ...embeddingMemories]));
+    const eventBus = makeMockEventBus();
+    const retriever = new MemoryRetriever(store, makeMockEmbedding(), { retrievalLimit: 20 }, eventBus);
+
+    const output = await retriever.retrieve(
+      'observatory calibration checklist evening dome preparation',
+      'api:test',
+      'primary',
+    );
+
+    expect(output).toContain('Mateo keeps the brass compass beside the workbench.');
+    expect(output).toContain('Mateo calibrates the tripod mount before autumn equinox.');
+    const telemetry = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(telemetry.topSimilarity).toBe(0.56);
+    expect(telemetry.embeddingCandidateCount).toBe(5);
+    expect(telemetry.lexicalAugmentCandidateCount).toBe(1);
+    expect(telemetry.selectionCapSkippedCount).toBe(2);
+    expect(telemetry.selectionCapSkippedByType).toEqual({ reflection: 2 });
+    expect((telemetry.selectedTypes as Record<string, number>).semantic).toBe(2);
+    expect((telemetry.selectedTypes as Record<string, number>).reflection).toBe(2);
+  });
+
+  it('queries Postgres FTS in parallel on ordinary turns so an older rare-keyword memory is recalled alongside semantic hits (d5e0p.24)', async () => {
+    const now = Date.now();
+    const embeddingHit = makeMemory({
+      id: 'embed-recent',
+      text: 'Recent general conversation about weekend reading.',
+      type: 'semantic',
+      similarity: 0.62,
+      importance: 0.8,
+      salience: 0.8,
+      extractedAt: now - 2 * 24 * 60 * 60 * 1000,
+    });
+    // Older memory outside the lexical-augment window whose embedding similarity
+    // was below threshold (absent from searchByEmbedding), matched only by FTS.
+    const oldRareKeywordHit = makeMemory({
+      id: 'fts-rare-old',
+      text: 'Mateo restored a brass astrolabe inherited from his grandfather in Oaxaca.',
+      type: 'semantic',
+      similarity: 0.08, // realistic small ts_rank_cd score from Postgres
+      importance: 0.8,
+      salience: 0.7,
+      extractedAt: now - 180 * 24 * 60 * 60 * 1000,
+    });
+    const store = makeMockStore([embeddingHit]);
+    (store.searchByText as ReturnType<typeof vi.fn>).mockResolvedValue([oldRareKeywordHit]);
+    // Augment window contains only recent unrelated memories (oldRareKeywordHit is beyond it).
+    store.listActiveMemories = vi.fn(keysetActiveMemoryPages(() => [embeddingHit]));
+    const eventBus = makeMockEventBus();
+    const retriever = new MemoryRetriever(store, makeMockEmbedding(), { retrievalLimit: 20 }, eventBus);
+
+    const directOutput = await retriever.retrieve(
+      'Did Mateo ever finish restoring that brass astrolabe?',
+      'api:test',
+      'primary',
+    );
+
+    expect(store.searchByEmbedding).toHaveBeenCalledTimes(1);
+    expect(store.searchByText).toHaveBeenCalledTimes(1);
+    expect(directOutput).toContain('Recent general conversation about weekend reading.');
+    expect(directOutput).toContain('Mateo restored a brass astrolabe');
+    const directTelemetry = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(directTelemetry.retrievalSource).toBe('embedding');
+    expect(directTelemetry.embeddingCandidateCount).toBe(1);
+    expect(directTelemetry.lexicalCandidateCount).toBe(1);
+
+    // Also verify the turn-snapshot capture path queries FTS in parallel and fuses it.
+    const snapshot = await retriever.captureTurnMemorySnapshot(
+      'Did Mateo ever finish restoring that brass astrolabe?',
+      'api:test',
+      'primary',
+    );
+    expect(snapshot.lexicalCandidates.map(memory => memory.id)).toEqual(['fts-rare-old']);
+    const snapshotOutput = await retriever.retrieve(
+      'Did Mateo ever finish restoring that brass astrolabe?',
+      'api:test',
+      'primary',
+      undefined,
+      undefined,
+      snapshot,
+    );
+    expect(snapshotOutput).toContain('Mateo restored a brass astrolabe');
   });
 });

@@ -6,6 +6,7 @@ import type { RecentContactShapeArtifact } from '../../faculties/memory/memory-s
 import type {
   PurrMemory,
   RetrievalCallerContext,
+  RetrievalCandidateChannel,
   RetrievalModeInput,
 } from '../../faculties/memory/types.js';
 import type { EpisodicRetrievalChain } from '../../faculties/memory/retrieval/episodic.js';
@@ -146,8 +147,8 @@ export interface TurnMemorySnapshot {
   recentContactShape?: RecentContactShapeArtifact;
   emotionalSnapshot?: EmotionalSnapshot;
   contactEmotionalMemories: PurrMemory[];
-  semanticCandidates: Array<PurrMemory & { similarity: number }>;
-  lexicalCandidates: Array<PurrMemory & { similarity: number }>;
+  semanticCandidates: Array<PurrMemory & { similarity: number; retrievalChannel?: RetrievalCandidateChannel }>;
+  lexicalCandidates: Array<PurrMemory & { similarity: number; retrievalChannel?: RetrievalCandidateChannel }>;
   episodicChains?: EpisodicRetrievalChain[];
   proactiveCandidates: PurrMemory[];
   withheldSummary?: MemoryWithheldSummary;
@@ -375,10 +376,11 @@ export function cloneMemory<T extends PurrMemory>(memory: T): T {
 }
 
 export function cloneScoredMemory(
-  memory: PurrMemory & { similarity: number },
-): PurrMemory & { similarity: number } {
+  memory: PurrMemory & { similarity: number; retrievalChannel?: RetrievalCandidateChannel },
+): PurrMemory & { similarity: number; retrievalChannel?: RetrievalCandidateChannel } {
   return {
     ...cloneMemory(memory),
     similarity: memory.similarity,
+    ...(memory.retrievalChannel ? { retrievalChannel: memory.retrievalChannel } : {}),
   };
 }

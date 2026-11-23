@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { render } from 'svelte/server';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -56,5 +57,10 @@ describe('Conversations unified surface', () => {
 
     expect(body).toContain('Active Routes');
     expect(body).toContain('Start Fresh Lane');
+  });
+
+  it('uses an authenticated admin endpoint instead of public /health when fleet-scoped', () => {
+    const source = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
+    expect(source).toContain("apiFetch(fleetScoped ? '/api/admin/chat/bootstrap' : '/health')");
   });
 });

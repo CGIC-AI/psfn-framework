@@ -24,14 +24,14 @@
       label: 'Scheduler tasks',
       value: schedulerTasks.toLocaleString(),
       hint: 'configured runtime tasks',
-      href: scopeGardenPath('/scheduler'),
+      href: scopeGardenPath('/autonomy?tab=scheduler'),
       warning: false,
     },
     {
       label: 'Active shards',
       value: activeShards.toLocaleString(),
       hint: activeShards === 0 ? 'no shard pressure' : 'currently active',
-      href: scopeGardenPath('/shards'),
+      href: scopeGardenPath('/tools?tab=shards'),
       warning: false,
     },
     {
@@ -42,14 +42,14 @@
           ? 'over configured limit'
           : 'active session'
         : 'awaiting session telemetry',
-      href: scopeGardenPath('/sessions'),
+      href: scopeGardenPath('/chat?tab=sessions'),
       warning: contextPressure.isOverLimit,
     },
     {
       label: 'Last TTFT',
       value: lastTtft,
       hint: `average ${averageTtft}`,
-      href: scopeGardenPath('/sessions'),
+      href: scopeGardenPath('/chat?tab=sessions'),
       warning: false,
     },
   ]);

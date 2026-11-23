@@ -16,6 +16,7 @@ import {
 } from '../../../shared/resilience/circuit-breaker.js';
 import { MAX_LIST_MAX_SCANNED_ENTRIES } from '../../integrations/filesystem/workspace-ops.js';
 import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../../../core/cogsec/intake-firewall-notice-templates.js';
+import { SHELL_EXEC_SETTINGS_RANGES } from '../../../system/config/shell-exec-config.js';
 
 const shellCircuitBreaker = new SlidingWindowCircuitBreaker({
   failureThreshold: 3,
@@ -87,6 +88,77 @@ export function resetShellCircuitBreakersForTests(): void {
 /** Cap on quarantine-guard lookups per shell.exec call (each loads the store file). */
 const MAX_GUARD_PATH_CANDIDATES = 128;
 const MAX_SHELL_QUARANTINE_SCANNED_ENTRIES = MAX_LIST_MAX_SCANNED_ENTRIES * 10;
+const SHELL_TRACE_PREVIEW_LIMIT = SHELL_EXEC_SETTINGS_RANGES.outputChars.min * 2;
+
+function boundTraceText(value: string): string {
+  if (value.length <= SHELL_TRACE_PREVIEW_LIMIT) return value;
+  return `${value.slice(0, SHELL_TRACE_PREVIEW_LIMIT)}…[+${String(value.length - SHELL_TRACE_PREVIEW_LIMIT)} chars]`;
+}
+
+function summarizeShellArgs(args: readonly string[] | undefined): string {
+  if (!Array.isArray(args) || args.length === 0) return '';
+  return boundTraceText(args.join(' '));
+}
+
+async function recordShellExecutionObservability(
+  runtime: GatewayMethodRuntime,
+  params: ShellExecParams,
+  result: ShellExecResult,
+  options: {
+    decision: 'ALLOW' | 'DENY';
+    withheldReason?: 'quarantined_artifact' | 'quarantine_revision_race';
+  },
+): Promise<void> {
+  const companionId = runtime.authenticatedCompanionId() ?? '';
+  const rawResult = result as Partial<ShellExecResult>;
+  const command = typeof rawResult.command === 'string' ? rawResult.command : params.command;
+  const resolvedArgs = Array.isArray(rawResult.args)
+    ? rawResult.args
+    : Array.isArray(params.args)
+      ? params.args
+      : [];
+  const cwd = typeof rawResult.cwd === 'string'
+    ? rawResult.cwd
+    : (params.cwd ?? runtime.workspacePath);
+  const stdout = typeof rawResult.stdout === 'string' ? rawResult.stdout : '';
+  const stderr = typeof rawResult.stderr === 'string' ? rawResult.stderr : '';
+  const argsPreview = summarizeShellArgs(resolvedArgs);
+  const stdoutPreview = options.withheldReason ? '' : boundTraceText(stdout);
+  const stderrPreview = options.withheldReason ? '' : boundTraceText(stderr);
+  const trace = {
+    ...(companionId ? { companionId } : {}),
+    command,
+    argCount: resolvedArgs.length,
+    ...(argsPreview ? { argsPreview } : {}),
+    cwd,
+    exitCode: result.exitCode,
+    durationMs: result.durationMs,
+    timedOut: result.timedOut,
+    truncated: result.truncated,
+    stdoutChars: options.withheldReason ? 0 : stdout.length,
+    stderrChars: options.withheldReason ? 0 : stderr.length,
+    stdoutPreview,
+    stderrPreview,
+    ...(options.withheldReason ? { withheldReason: options.withheldReason } : {}),
+  };
+  log.info('Shell exec observability trace recorded', trace);
+  if (runtime.recordAuditEvent) {
+    try {
+      await runtime.recordAuditEvent({
+        method: 'shell.exec.result',
+        decision: options.decision,
+        params: trace,
+        durationMs: result.durationMs,
+        ...(options.withheldReason ? { error: options.withheldReason } : {}),
+      });
+    } catch (error) {
+      log.warn('Failed to persist shell.exec observability audit event', {
+        command,
+        error: toErrorMessage(error),
+      });
+    }
+  }
+}
 
 /**
  * Best-effort path candidates named by a shell.exec request: the resolved
@@ -236,7 +308,13 @@ const shellDescriptors = [
         // hrmrq.54 (a): descriptor-level guard — parseable artifact reads are
         // withheld with the quarantine notice and an audited attempt.
         const withheldResult = checkShellQuarantinedArtifacts(params, runtime);
-        if (withheldResult) return withheldResult;
+        if (withheldResult) {
+          await recordShellExecutionObservability(runtime, params, withheldResult, {
+            decision: 'DENY',
+            withheldReason: 'quarantined_artifact',
+          });
+          return withheldResult;
+        }
         // hrmrq.54 (b): physical backstop — every active quarantined artifact
         // is /dev/null-shadowed inside the sandbox (enforce mode), covering
         // argv shapes the descriptor cannot parse. An unenumerable deny set
@@ -288,7 +366,7 @@ const shellDescriptors = [
           if (currentPaths.length > 0) {
             guard.checkMany(currentPaths, { via: 'gateway:shell.exec:revision-race' });
           }
-          return {
+          const raceWithheld: ShellExecResult = {
             command: params.command,
             args: Array.isArray(params.args) ? params.args : [],
             cwd: typeof params.cwd === 'string' && params.cwd.trim()
@@ -301,7 +379,15 @@ const shellDescriptors = [
             truncated: false,
             durationMs: result.durationMs,
           };
+          await recordShellExecutionObservability(runtime, params, raceWithheld, {
+            decision: 'DENY',
+            withheldReason: 'quarantine_revision_race',
+          });
+          return raceWithheld;
         }
+        await recordShellExecutionObservability(runtime, params, result, {
+          decision: 'ALLOW',
+        });
         return result;
       } catch (error) {
         if (error instanceof CircuitOpenError) {
@@ -316,13 +402,17 @@ const shellDescriptors = [
         );
       }
     },
-    summary: (params: ShellExecParams) => ({
-      command: params.command,
-      argCount: Array.isArray(params.args) ? params.args.length : 0,
-      cwd: params.cwd,
-      timeoutMs: params.timeoutMs,
-      maxOutputChars: params.maxOutputChars,
-    }),
+    summary: (params: ShellExecParams) => {
+      const argsPreview = summarizeShellArgs(params.args);
+      return {
+        command: params.command,
+        argCount: Array.isArray(params.args) ? params.args.length : 0,
+        ...(argsPreview ? { argsPreview } : {}),
+        cwd: params.cwd,
+        timeoutMs: params.timeoutMs,
+        maxOutputChars: params.maxOutputChars,
+      };
+    },
     approvalAction: 'shell.exec',
     approvalScope: (params: ShellExecParams) => params.command,
   }),

@@ -72,9 +72,9 @@ describe('full callable catalog schema token cost', () => {
       parameterSchemaHash: sha256(parameterSchemas),
     }).toEqual({
       fixture: 'agent-state-tools-provider-v2',
-      coreTools: 25,
-      extendedTools: 6,
-      totalTools: 31,
+      coreTools: 26,
+      extendedTools: 4,
+      totalTools: 30,
       includesLibrary: false,
       // n66dn.3 (Eidoverse plane: world move/perceive/act) +1440 bytes / +383 tokens pre, +2096 / +545 post.
       // psfn-framework-lpxg3.3 added the optional skill `base_version` binding:
@@ -114,13 +114,16 @@ describe('full callable catalog schema token cost', () => {
       // marked action required on all action-multiplexed tools, and compacted
       // descriptions into scannable bulleted contracts:
       // -226 bytes / -104 tokens before, -2897 bytes / -212 tokens after.
-      beforeTokens: 18_757,
-      afterTokens: 22_763,
-      deltaTokens: 4_006,
-      beforeBytes: 88_143,
-      afterBytes: 103_730,
-      providerSchemaHash: '8fe703fa667f306267c21565a7d14f46b5016d8cf1e16b02d0830e6c80760bef',
-      parameterSchemaHash: '567ff7a54c2949232239ed1306589b5a39b6a49fc998fa73473a1bee8bf9f7e7',
+      // psfn-framework-b3h5p.3 retired redundant fs and repo wrapper tools in favor
+      // of concise file_editor + gateway-observable bash shell (core):
+      // -3878 bytes / -823 tokens before, -4378 bytes / -969 tokens after.
+      beforeTokens: 17_934,
+      afterTokens: 21_794,
+      deltaTokens: 3_860,
+      beforeBytes: 84_265,
+      afterBytes: 99_352,
+      providerSchemaHash: '20fb2e72023cf47bf81c80a88065322dfb51602f66ca1463e02ca686723f6fb3',
+      parameterSchemaHash: 'd902b933bd9ac3e7915237a0fdacb9bec2aa03de48b5bd2e527b6e29969250b2',
     });
 
     // The additional description tokens affect an uncached request. A stable

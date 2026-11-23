@@ -1176,10 +1176,10 @@ describe('tool-call-scheduler', () => {
 
     const message = result.toolResults[0] as ToolResultMessage;
     expect(message.isError).toBe(true);
-    expect(message.content[0]?.text).toContain('Call "fs" with action="read"');
+    expect(message.content[0]?.text).toContain('Call "file_editor" with action="read"');
     expect(telemetry).toHaveBeenCalledWith(
       'agent.tools.correction.reprompt',
-      expect.objectContaining({ defectClass: 'unknown_tool', suggestedTool: 'fs' }),
+      expect.objectContaining({ defectClass: 'unknown_tool', suggestedTool: 'file_editor' }),
     );
   });
 

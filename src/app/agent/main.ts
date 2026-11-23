@@ -82,11 +82,9 @@ import {
   createSubjectAuthorizedMemoryStore,
   memorySubjectAccessContextFromCorrelation,
 } from '../../faculties/memory/subject-authorized-store.js';
-import { registerGitTools } from '../../boundary/integrations/git/runtime-wiring.js';
 import { registerShellTools } from '../../boundary/integrations/shell/runtime-wiring.js';
 import { GatewayShellOps } from '../../boundary/integrations/shell/gateway-ops.js';
 import type { SandboxExecutionPort } from '../../boundary/sandbox/capabilities/contracts.js';
-import { GatewayGitOps } from '../../boundary/integrations/git/gateway-ops.js';
 import { registerWorldTools } from '../../boundary/integrations/world/runtime-wiring.js';
 import { GatewayWorldOps } from '../../boundary/integrations/world/gateway-ops.js';
 import { WorldPlaneMapCache } from '../../shared/contracts/world-plane-map.js';
@@ -1551,14 +1549,9 @@ async function main(): Promise<void> {
   await externalMemory.recover();
   log.info('Context feedback runtime deferred (Phase VI): background context-scoring LLM calls disabled');
 
-  // Git tools — parent turns stay read-only; mutation must return through shard outputs.
-  registerGitTools(agentLoop, new GatewayGitOps(gatewayOps), {
-    gatewayMode: true,
-    access: 'read_only',
-  });
-  log.info('Git repository inspection tools enabled for parent agent');
-
-  // Direct shell tool — sandboxed CLI via the gateway shell.exec policy path.
+  // Direct shell tool — sandboxed Bash/CLI via the gateway shell.exec policy
+  // path (also covers git/repo inspection and workspace search/listing after
+  // retiring the redundant repo and fs wrapper tools in b3h5p.3).
   // Gate registration on the same settings-owned enablement signal the gateway
   // policy enforces so registration and policy agree (beads e7s0 pattern);
   // the gateway DENYs shell.exec when shellExec.enabled is false, so

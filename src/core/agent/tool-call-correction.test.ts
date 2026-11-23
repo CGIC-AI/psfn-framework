@@ -10,11 +10,11 @@ import {
 describe('tool-call-correction', () => {
   describe('unknown_tool', () => {
     it('resolves a retired first-party alias to its canonical replacement + action', () => {
-      const correction = buildUnknownToolCorrection('fs_read', ['fs', 'web', 'memory']);
+      const correction = buildUnknownToolCorrection('fs_read', ['file_editor', 'web', 'memory']);
       expect(correction.defectClass).toBe('unknown_tool');
-      expect(correction.suggestion).toBe('fs');
+      expect(correction.suggestion).toBe('file_editor');
       expect(correction.text).toContain('"fs_read" is not callable');
-      expect(correction.text).toContain('Call "fs" with action="read"');
+      expect(correction.text).toContain('Call "file_editor" with action="read"');
     });
 
     it('suggests the nearest catalog name for a near-miss and echoes availability', () => {

@@ -44,6 +44,7 @@ function createHarness(
   options: {
     quarantinedArtifactGuard?: QuarantinedArtifactAccessGuard;
     personaMutationAttemptGuard?: GatewayMethodRuntime['personaMutationAttemptGuard'];
+    recordAuditEvent?: GatewayMethodRuntime['recordAuditEvent'];
     workspacePath?: string;
   } = {},
 ): { invoke(params: Record<string, unknown>): Promise<any> } {
@@ -54,6 +55,9 @@ function createHarness(
       : {}),
     ...(options.personaMutationAttemptGuard
       ? { personaMutationAttemptGuard: options.personaMutationAttemptGuard }
+      : {}),
+    ...(options.recordAuditEvent
+      ? { recordAuditEvent: options.recordAuditEvent }
       : {}),
     target: fromAny({
       addMethod(name: string, handler: (params: Record<string, unknown>) => Promise<any>) {
@@ -94,6 +98,53 @@ describe('registerShellMethods', () => {
     resetShellCircuitBreakersForTests();
     shellRunnerMock.execute.mockReset();
     shellRunnerMock.execute.mockImplementation(shellRunnerMock.actualExecute!);
+  });
+
+  it('records structured gateway observability audit events with command, duration, exit status, and bounded output trace (b3h5p.3)', async () => {
+    const longStdout = 'A'.repeat(700);
+    const recordAuditEvent = vi.fn(async () => {});
+    shellRunnerMock.execute.mockResolvedValue({
+      command: 'bash',
+      args: ['-lc', 'git status --short'],
+      cwd: process.cwd(),
+      exitCode: 0,
+      stdout: longStdout,
+      stderr: 'minor warning',
+      timedOut: false,
+      truncated: false,
+      durationMs: 42,
+    });
+    const harness = createHarness({
+      workspacePath: process.cwd(),
+      shellExec: { enabled: true, allowlist: ['bash'], allowedCwd: [process.cwd()] },
+    }, { recordAuditEvent });
+
+    await harness.invoke({ command: 'bash', args: ['-lc', 'git status --short'] });
+
+    expect(recordAuditEvent).toHaveBeenCalledWith(expect.objectContaining({
+      method: 'shell.exec.result',
+      decision: 'ALLOW',
+      durationMs: 42,
+      params: expect.objectContaining({
+        companionId: 'companion-a',
+        command: 'bash',
+        argCount: 2,
+        argsPreview: '-lc git status --short',
+        exitCode: 0,
+        durationMs: 42,
+        timedOut: false,
+        truncated: false,
+        stdoutChars: 700,
+        stderrChars: 'minor warning'.length,
+        stderrPreview: 'minor warning',
+      }),
+    }));
+    const firstAuditCall = recordAuditEvent.mock.calls[0] as
+      | [{ params?: { stdoutPreview?: string } }]
+      | undefined;
+    const recordedStdoutPreview = firstAuditCall?.[0].params?.stdoutPreview ?? '';
+    expect(recordedStdoutPreview.length).toBeLessThan(longStdout.length);
+    expect(recordedStdoutPreview).toContain('[+188 chars]');
   });
 
   it('reaches the persona mutation guard before starting the shell runner', async () => {

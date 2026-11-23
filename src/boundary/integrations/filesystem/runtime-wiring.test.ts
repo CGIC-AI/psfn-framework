@@ -14,7 +14,7 @@ function createMockTarget(): FilesystemRuntimeTarget & { registerTool: ReturnTyp
 }
 
 describe('filesystem runtime wiring', () => {
-  it('registers the unified fs tool as core', () => {
+  it('registers the concise file_editor tool as core', () => {
     const target = createMockTarget();
     const ops = {
       read: vi.fn(async () => ({
@@ -48,7 +48,7 @@ describe('filesystem runtime wiring', () => {
 
     registerFilesystemTools(target, ops);
 
-    expect(target.registerTool.mock.calls.map((call: any[]) => call[0].name)).toEqual(['fs']);
+    expect(target.registerTool.mock.calls.map((call: any[]) => call[0].name)).toEqual(['file_editor']);
     expect(target.registerTool.mock.calls.every((call: any[]) => call[1] === 'core')).toBe(true);
   });
 
@@ -91,8 +91,6 @@ describe('filesystem runtime wiring', () => {
 
     expect(target.registerTool.mock.calls[0]?.[0].wiringMeta?.requiredGatewayMethods).toEqual([
       'fs.read',
-      'fs.list',
-      'fs.search',
       'fs.write',
       'fs.edit',
     ]);

@@ -23,7 +23,7 @@ export const CATALOG_BOUNDARY_TOOL_CONTRACTS = {
     ],
     output: 'Every registered tool is already callable without activation; it returns catalog or ordering state and never performs a domain operation or grants capability.',
     guidance: 'Do not search again after choosing a tool; call its canonical name directly.',
-    example: { action: 'describe', tool: 'repo' },
+    example: { action: 'describe', tool: 'notify' },
   },
   mcp: {
     purpose: 'Progressively use operator-configured external MCP tools without loading every remote schema into the conversation.',
@@ -45,61 +45,37 @@ export const CATALOG_BOUNDARY_TOOL_CONTRACTS = {
     guidance: 'Do not use it while a generated paid attachment still needs an ordinary reply for delivery.',
     example: { action: 'no_reply', reason: 'The message requests no response.' },
   },
-  fs: {
+  file_editor: {
     purpose:
-      `Read and safely mutate files within the configured personal-file boundary; one direct read has a hard cap of ${FILESYSTEM_READ_PAGE_CONTRACT.maxBytes.toLocaleString('en-US')} bytes.`,
+      `Read, write, and perform exact text edits on files within the Personal Workspace; one direct read has a hard cap of ${FILESYSTEM_READ_PAGE_CONTRACT.maxBytes.toLocaleString('en-US')} bytes.`,
     actions: [
-      action('list', [], ['path', 'glob', 'max_entries', 'max_scanned_entries']),
       action('read', ['path'], ['max_bytes', 'offset_bytes']),
-      action('search', ['query'], ['glob', 'mode', 'max_matches', 'max_files', 'max_bytes_per_file', 'context_lines']),
       action('write', ['path', 'content'], ['overwrite']),
       action('edit', ['path', 'old_text', 'new_text'], ['replace_all']),
     ],
-    output: 'It returns bounded file data and fails closed on unsafe paths or ambiguous mutation.',
+    output: 'It returns bounded file data or mutation status and fails closed on unsafe paths, journal paths, or ambiguous edits.',
     guidance:
-      `Do not request more than ${FILESYSTEM_READ_PAGE_CONTRACT.maxBytes.toLocaleString('en-US')} bytes from one read. Inspect larger files sequentially by passing each returned `
-      + 'next_offset_bytes as the next offset_bytes until eof. For a long document or evidence job, prefer a bounded '
-      + 'automaton using analysis_workbench so its temporary context can be discarded after a bounded result; direct '
-      + 'analysis_workbench use is still permitted but may occupy the primary turn for several minutes. Require '
-      + 'provenance-bearing excerpts with the source path and line or byte ranges; do not rely on a summary-only handoff. '
-      + 'To pull one arbitrary byte range instead of paging to it, use shell action exec with a byte-addressed filter '
-      + '(tail -c +OFFSET file | head -c LENGTH); the shell sandbox reads any range of any size inside the Personal '
-      + 'Workspace. Do not use fs for git state; use repo.',
-    example: { action: 'search', query: 'TODO', glob: 'notes/**/*.md' },
-  },
-  repo: {
-    purpose: 'Inspect a git repository and, in full-access variants, perform guarded repository mutations.',
-    actions: [
-      action('inspect', [], ['target', 'staged']),
-      action('patch', ['file_path', 'content']),
-      action('branch', ['name'], ['start_point']),
-      action('commit', ['message', 'intent'], ['scope']),
-      action('publish', ['title', 'body'], ['base']),
-    ],
-    output: 'It returns explicit repository state and mutations remain subject to branch, path, capability, and confirmation policy.',
-    guidance: 'Do not use it for ordinary personal files; use fs for those.',
-    example: { action: 'inspect', target: 'both' },
+      `Use file_editor for targeted file reads, writes, and exact replacements (never exceeding ${FILESYSTEM_READ_PAGE_CONTRACT.maxBytes.toLocaleString('en-US')} bytes per read; page with next_offset_bytes). `
+      + 'Use shell for directory listing, ripgrep search, git commands, scripts, or arbitrary byte-range reads; use journal for companion journal notes, and analysis_workbench for large multi-stage document synthesis.',
+    example: { action: 'edit', path: 'notes/plan.md', old_text: 'draft', new_text: 'ready' },
   },
   shell: {
     purpose:
-      'Run a one-shot Bash or CLI command while puttering through the entire Personal Workspace, including any Git checkout stored inside it.',
-    actions: [action('exec', ['command'], ['args', 'cwd', 'timeout_ms', 'max_output_chars', 'env_vars'])],
+      'Run audited, sandboxed Bash scripts or allowlisted CLI commands across the Personal Workspace, including file listing/search, scripts, tests, and Git repositories stored inside it.',
+    actions: [action('exec', [], ['script', 'session', 'command', 'args', 'cwd', 'timeout_ms', 'max_output_chars', 'env_vars'], {
+      id: 'exec',
+      requiredAnyOf: [['script'], ['command']],
+      rule: 'pass script for bash -lc (with optional session to keep workspace cwd across calls) or command+args for a direct executable',
+    })],
     output:
-      'Each exec starts in a fresh isolated process, returns bounded stdout, stderr, exit status, timing, and truncation state, and leaves intentional workspace writes persisted for later calls.',
+      'Each exec runs in a fresh isolated sandbox with full gateway observability logging (command, duration, exit status, bounded output trace), returns stdout, stderr, exit status, and timing, and persists intentional workspace writes.',
     guidance:
-      'The default wall budget is ten minutes and the operator-owned ceiling is one hour. The sandbox has no network, '
-      + 'clears inherited secrets, exposes only read-only image CLI binaries, and cannot see host or runtime-state paths '
-      + 'outside the Personal Workspace. The workspace is mounted read-write at /workspace (the default cwd); when the '
-      + 'operator enables it, a read-only copy of the source repository is mounted at /repo (also exposed as $PSFN_REPO). '
-      + 'The image carries analysis and document tooling — bash, rg, jq, file, unzip/zip, sqlite3, pdftotext (poppler), '
-      + 'pandoc, python3, and uv — so prefer targeted CLI filters and small scripts over dumping whole files. '
-      + 'Use a relative cwd to move around the workspace. Prefer fs or repo when their '
-      + 'structured action is clearer; use shell for direct CLI exploration, scripts, builds, tests, Git commands, and '
-      + 'for reading one arbitrary byte range of a document larger than a single fs read page.',
+      'Default timeout is 10 minutes (ceiling 1 hour); the sandbox has no network by default, clears inherited secrets, mounts /workspace read-write (and optional read-only /repo as $PSFN_REPO), and cannot see host or runtime-state paths. '
+      + 'Image tools include bash, git, rg, jq, file, unzip/zip, sqlite3, pdftotext (poppler), pandoc, python3, and uv. '
+      + 'Prefer file_editor for clean file writes and exact text edits; do not dump whole large files when a targeted rg or byte-range filter works.',
     example: {
       action: 'exec',
-      command: 'bash',
-      args: ['-lc', 'pwd; git status --short; rg -n "needle" .'],
+      script: 'git status --short && rg -n "needle" .',
       cwd: '.',
     },
   },
@@ -110,7 +86,7 @@ export const CATALOG_BOUNDARY_TOOL_CONTRACTS = {
       action('search', ['target'], ['max_urls']),
     ],
     output: 'It returns external untrusted content, with target interpreted as a URL for fetch and a query for search.',
-    guidance: 'Do not use it for local files, transcripts, or remembered facts; use fs, session, or memory.',
+    guidance: 'Do not use it for local files, transcripts, or remembered facts; use file_editor, shell, session, or memory.',
     example: { action: 'fetch', target: 'https://example.com/reference' },
   },
   world: {
@@ -139,7 +115,7 @@ export const CATALOG_BOUNDARY_TOOL_CONTRACTS = {
     actions: [action('analyze', ['task'], ['maxIterations', 'maxTokens'], { id: 'analyze', actionField: false })],
     output: 'It returns a bounded synthesis and does not mutate source state.',
     guidance:
-      `Use it when material is too large for the fs ${FILESYSTEM_READ_PAGE_CONTRACT.maxBytes.toLocaleString('en-US')}-byte direct-read cap. Prefer delegating long analyses to a `
+      `Use it when material is too large for the file_editor ${FILESYSTEM_READ_PAGE_CONTRACT.maxBytes.toLocaleString('en-US')}-byte direct-read cap. Prefer delegating long analyses to a `
       + 'bounded automaton so the primary channel stays responsive; direct use is permitted when capability '
       + 'policy allows it, but the call may occupy the primary turn for several minutes. Bring only the bounded answer '
       + 'plus source paths and relevant line or byte ranges back into the conversation before its temporary context is discarded. '

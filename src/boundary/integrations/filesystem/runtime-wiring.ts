@@ -3,14 +3,14 @@ import type { ToolRegistrar } from '../../../core/agent/tool-registrar.js';
 import type { ToolWiringMeta, WirableTool } from '../../../core/agent/tool-wiring-validator.js';
 import type { FilesystemOperations } from './ops.js';
 import { WorkspaceFilesystemOps } from './local-ops.js';
-import { createFsTool } from './tools.js';
+import { createFileEditorTool } from './file-editor-tool.js';
 
 export interface FilesystemRuntimeTarget {
   registerTool: ToolRegistrar;
 }
 
 const FILESYSTEM_TOOL_GATEWAY_METHODS: Record<string, string[]> = {
-  fs: ['fs.read', 'fs.list', 'fs.search', 'fs.write', 'fs.edit'],
+  file_editor: ['fs.read', 'fs.write', 'fs.edit'],
 };
 
 function attachWiringMeta(tool: AgentTool<any>, meta: ToolWiringMeta): WirableTool {
@@ -29,7 +29,7 @@ export function registerFilesystemTools(
   ops: FilesystemOperations,
   options?: RegisterFilesystemToolsOptions,
 ): void {
-  const tools: AgentTool<any>[] = [createFsTool(ops, {
+  const tools: AgentTool<any>[] = [createFileEditorTool(ops, {
     ...(options?.defaultReadMaxBytes !== undefined
       ? { defaultMaxBytes: options.defaultReadMaxBytes }
       : {}),

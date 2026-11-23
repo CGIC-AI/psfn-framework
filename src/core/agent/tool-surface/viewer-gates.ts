@@ -40,20 +40,11 @@ export const TOOL_VIEWER_GATE_DECISIONS: Readonly<Record<string, Readonly<Record
   tool_search: { [TOOL_WITHOUT_ACTIONS]: CATALOG },
   toolset: { list: CATALOG, suggest: CATALOG, describe: CATALOG, pin: CATALOG, unpin: CATALOG },
   response_control: { no_reply: na('turn control') },
-  fs: {
+  file_editor: {
     // The Personal Workspace holds material saved from many conversations.
     read: PERSONAL,
-    list: PERSONAL,
-    search: PERSONAL,
     write: write('workspace file'),
     edit: write('workspace file'),
-  },
-  repo: {
-    inspect: na('source repository, governed by capability tier'),
-    patch: write('repository'),
-    commit: write('repository'),
-    branch: write('repository'),
-    publish: write('repository'),
   },
   shell: { exec: na('host execution, governed by capability tier') },
   web: { fetch: na('external web content'), search: na('external web content') },

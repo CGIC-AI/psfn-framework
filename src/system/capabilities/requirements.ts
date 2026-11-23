@@ -247,21 +247,12 @@ function resolveSubagentRequirement(action: string | null): CapabilityRequiremen
   return ['identity.read', 'shard.spawn'];
 }
 
-const FS_READ_ACTIONS = new Set(['read', 'list', 'search']);
-const FS_WRITE_ACTIONS = new Set(['write', 'edit']);
+const FILE_EDITOR_READ_ACTIONS = new Set(['read']);
+const FILE_EDITOR_WRITE_ACTIONS = new Set(['write', 'edit']);
 
-function resolveFsRequirement(action: string | null): CapabilityRequirement {
-  if (actionIn(action, FS_WRITE_ACTIONS)) return 'git.write';
-  if (action === null || actionIn(action, FS_READ_ACTIONS)) return 'git.read';
-  return GIT_READ_WRITE;
-}
-
-const REPO_READ_ACTIONS = new Set(['inspect', 'status', 'diff']);
-const REPO_WRITE_ACTIONS = new Set(['patch', 'branch', 'create_branch', 'commit', 'publish', 'open_pr']);
-
-function resolveRepoRequirement(action: string | null): CapabilityRequirement {
-  if (actionIn(action, REPO_WRITE_ACTIONS)) return 'git.write';
-  if (action === null || actionIn(action, REPO_READ_ACTIONS)) return 'git.read';
+function resolveFileEditorRequirement(action: string | null): CapabilityRequirement {
+  if (actionIn(action, FILE_EDITOR_WRITE_ACTIONS)) return 'git.write';
+  if (action === null || actionIn(action, FILE_EDITOR_READ_ACTIONS)) return 'git.read';
   return GIT_READ_WRITE;
 }
 
@@ -357,8 +348,7 @@ const UNIFIED_TOOL_REQUIREMENT_RESOLVERS: Readonly<Partial<Record<string, Unifie
   shard: () => 'shard.spawn',
   generate_image: () => NO_CAPABILITY_REQUIREMENT,
   selfie_create: () => NO_CAPABILITY_REQUIREMENT,
-  fs: (action) => resolveFsRequirement(action),
-  repo: (action) => resolveRepoRequirement(action),
+  file_editor: (action) => resolveFileEditorRequirement(action),
   world: resolveWorldRequirement,
   mcp: (action) => resolveMcpRequirement(action),
   notify: resolveNotifyRequirement,

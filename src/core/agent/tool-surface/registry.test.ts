@@ -282,22 +282,22 @@ describe('first-party tool surface registry', () => {
       'tool_search', 'toolset', 'response_control',
       'selfie_create', 'generate_image',
       'memory', 'scratchpad', 'journal',
-      'orient', 'contact', 'session', 'self_status', 'system', 'identity',
-      'fs', 'web', 'mcp',
+      'orient', 'concerns', 'contact', 'session', 'self_status', 'system', 'identity',
+      'file_editor', 'shell', 'web', 'mcp',
       'skill', 'wiki', 'schedule', 'subagent', 'analysis_workbench',
     ];
     for (const name of expectedCore) {
       expect(getCanonicalToolSurface(name)?.exposure, `${name} should be core`).toBe('core');
     }
-    // Extended = dev / admin / infrequent / heavy, reached via toolset + promotion.
-    const expectedExtended = ['repo', 'shell', 'north_star', 'notify'];
+    // Extended = infrequent / asynchronous / specialized, reached via toolset + promotion.
+    const expectedExtended = ['projects', 'world', 'north_star', 'notify'];
     for (const name of expectedExtended) {
       expect(getCanonicalToolSurface(name)?.exposure, `${name} should be extended`).toBe('extended');
     }
-    // Retired redundant writing/tracker surfaces and internal automatic passes
-    // must not be registered as canonical foreground companion tools (b3h5p.1).
+    // Retired redundant writing/tracker/wrapper surfaces and internal automatic passes
+    // must not be registered as canonical foreground companion tools (b3h5p.1 / b3h5p.3).
     for (const retiredOrBackground of [
-      'vault', 'letter', 'beads',
+      'vault', 'letter', 'beads', 'fs', 'repo',
       'dream', 'dream_pass', 'episodic_consolidation', 'introspection',
     ]) {
       expect(getCanonicalToolSurface(retiredOrBackground), `${retiredOrBackground} should not be canonical`).toBeUndefined();
@@ -308,7 +308,7 @@ describe('first-party tool surface registry', () => {
   it('ranks unknown/plugin tools behind every audited first-party domain', () => {
     // psfn img2 audit decision: unaudited third-party/plugin verbs sort to the
     // very tail, after boundary and system, so audited tools present first.
-    const tailCanonicalRanks = ['system', 'shell', 'repo', 'web', 'fs'].map(resolveToolPresentationRank);
+    const tailCanonicalRanks = ['system', 'shell', 'web', 'file_editor'].map(resolveToolPresentationRank);
     const unknownRank = resolveToolPresentationRank('some_plugin_tool_xyz');
     for (const rank of tailCanonicalRanks) {
       expect(unknownRank).toBeGreaterThan(rank);
@@ -339,7 +339,7 @@ describe('first-party tool surface registry', () => {
     // selfie_create (self_expression) leads generate_image (media).
     expect(resolveToolPresentationRank('selfie_create'))
       .toBeLessThan(resolveToolPresentationRank('generate_image'));
-    for (const adminToolName of ['fs', 'repo', 'shell', 'web', 'system', 'self_status', 'toolset', 'tool_search']) {
+    for (const adminToolName of ['file_editor', 'shell', 'web', 'system', 'self_status', 'toolset', 'tool_search']) {
       expect(resolveToolPresentationRank('generate_image'))
         .toBeLessThan(resolveToolPresentationRank(adminToolName));
       expect(resolveToolPresentationRank('selfie_create'))

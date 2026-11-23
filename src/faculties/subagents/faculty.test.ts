@@ -926,16 +926,16 @@ describe('SubagentFaculty', () => {
         ),
       },
       {
-        name: 'fs',
+        name: 'file_editor',
         params: { action: 'write', path: 'journal.md', content: 'mutation' },
         requirement: 'git.write' as const,
-        ...makeUnannotatedCatalogTool('fs'),
+        ...makeUnannotatedCatalogTool('file_editor'),
       },
       {
-        name: 'repo',
-        params: { action: 'commit', message: 'Child commit', intent: 'test' },
-        requirement: 'git.write' as const,
-        ...makeUnannotatedCatalogTool('repo'),
+        name: 'shell',
+        params: { action: 'exec', script: 'git status --short' },
+        requirement: 'repl.execute' as const,
+        ...makeUnannotatedCatalogTool('shell'),
       },
     ];
     const faculty = new SubagentFaculty({
@@ -978,7 +978,7 @@ describe('SubagentFaculty', () => {
   });
 
   it('grants an explicitly requested tool capability only when the parent grants it', async () => {
-    const writableFs = makeUnannotatedCatalogTool('fs');
+    const writableEditor = makeUnannotatedCatalogTool('file_editor');
     const writableWorld = makeUnannotatedCatalogTool('world');
     const snapshotParentCapabilityGrant = vi.fn(() => Object.freeze({
       tier: 'custom' as const,
@@ -995,7 +995,7 @@ describe('SubagentFaculty', () => {
       parentSystemPrompt: 'test prompt',
       snapshotParentCapabilityGrant,
       toolCatalogProvider: () => ({
-        core: [writableFs.tool, writableWorld.tool],
+        core: [writableEditor.tool, writableWorld.tool],
         extended: [],
       }),
     });
@@ -1008,12 +1008,12 @@ describe('SubagentFaculty', () => {
     });
 
     const installedByName = new Map(mockFirstPromptTools.map(tool => [tool.name, tool] as const));
-    const fsResult = await installedByName.get('fs')!.execute(
-      'call-fs-write',
+    const editorResult = await installedByName.get('file_editor')!.execute(
+      'call-file-editor-write',
       { action: 'write', path: 'report.md', content: 'bounded output' },
     );
-    expect(fsResult.details).toEqual({ toolName: 'fs' });
-    expect(writableFs.execute).toHaveBeenCalledTimes(1);
+    expect(editorResult.details).toEqual({ toolName: 'file_editor' });
+    expect(writableEditor.execute).toHaveBeenCalledTimes(1);
 
     const worldResult = await installedByName.get('world')!.execute(
       'call-world-control',

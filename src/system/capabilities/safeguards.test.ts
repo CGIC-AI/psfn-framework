@@ -29,7 +29,8 @@ describe('tool reversibility tagging', () => {
     expect(resolveToolReversibility('north_star')).toBe('irreversible');
     expect(resolveToolReversibility('scratchpad')).toBe('irreversible');
     expect(resolveToolReversibility('system')).toBe('irreversible');
-    expect(resolveToolReversibility('repo')).toBe('irreversible');
+    expect(resolveToolReversibility('file_editor')).toBe('irreversible');
+    expect(resolveToolReversibility('shell')).toBe('irreversible');
     expect(resolveToolReversibility('repo_commit')).toBe('irreversible');
     expect(resolveToolReversibility('skill')).toBe('irreversible');
     expect(resolveToolReversibility('generate_image')).toBe('irreversible');

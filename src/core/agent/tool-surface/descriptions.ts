@@ -38,15 +38,6 @@ interface CanonicalToolSurfaceVariant {
 }
 
 const CANONICAL_TOOL_SURFACE_VARIANTS = {
-  read_only: {
-    tool: 'repo',
-    actionIds: ['inspect'],
-    purpose: 'Inspect repository status and diffs through the read-only repo projection.',
-    output: 'It returns bounded repository status and diff state.',
-    guidance: 'Do not use it for ordinary personal files; use fs for those.',
-    boundary: 'This projection returns inspection state only and cannot call repository mutation actions.',
-    example: { action: 'inspect', target: 'both' },
-  },
   companion_candidate: {
     tool: 'notify',
     actionIds: ['initiate_companion'],

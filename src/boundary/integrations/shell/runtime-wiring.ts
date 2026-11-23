@@ -33,9 +33,9 @@ export function registerShellTools(
     if (options?.gatewayMode) {
       attachWiringMeta(tool, { requiredGatewayMethods: SHELL_TOOL_GATEWAY_METHODS[tool.name] });
     }
-    // Image-tools img2 audit: shell is the heaviest/most-dangerous boundary surface
-    // and a deliberate dev/ops tool, never part of the default social stack.
-    // Registered extended so it stays behind toolset/load + promotion.
-    target.registerTool(tool, 'extended');
+    // Phase 3.3 (b3h5p.3): shell is a core workspace surface replacing retired
+    // repo and fs list/search wrappers; operators can still disable it per
+    // companion via capability-tier.json disabledTools.
+    target.registerTool(tool, 'core');
   }
 }

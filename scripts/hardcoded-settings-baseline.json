@@ -1482,61 +1482,6 @@
       "value": "200"
     },
     {
-      "file": "src/boundary/integrations/filesystem/tools.ts",
-      "name": "DEFAULT_LIST_MAX_ENTRIES",
-      "value": "200"
-    },
-    {
-      "file": "src/boundary/integrations/filesystem/tools.ts",
-      "name": "DEFAULT_LIST_MAX_SCANNED_ENTRIES",
-      "value": "5_000"
-    },
-    {
-      "file": "src/boundary/integrations/filesystem/tools.ts",
-      "name": "DEFAULT_SEARCH_MAX_BYTES_PER_FILE",
-      "value": "40_000"
-    },
-    {
-      "file": "src/boundary/integrations/filesystem/tools.ts",
-      "name": "DEFAULT_SEARCH_MAX_FILES",
-      "value": "200"
-    },
-    {
-      "file": "src/boundary/integrations/filesystem/tools.ts",
-      "name": "DEFAULT_SEARCH_MAX_MATCHES",
-      "value": "50"
-    },
-    {
-      "file": "src/boundary/integrations/filesystem/tools.ts",
-      "name": "MAX_CONTEXT_LINES",
-      "value": "2"
-    },
-    {
-      "file": "src/boundary/integrations/filesystem/tools.ts",
-      "name": "MAX_LIST_MAX_ENTRIES",
-      "value": "500"
-    },
-    {
-      "file": "src/boundary/integrations/filesystem/tools.ts",
-      "name": "MAX_LIST_MAX_SCANNED_ENTRIES",
-      "value": "20_000"
-    },
-    {
-      "file": "src/boundary/integrations/filesystem/tools.ts",
-      "name": "MAX_SEARCH_MAX_BYTES_PER_FILE",
-      "value": "200_000"
-    },
-    {
-      "file": "src/boundary/integrations/filesystem/tools.ts",
-      "name": "MAX_SEARCH_MAX_FILES",
-      "value": "500"
-    },
-    {
-      "file": "src/boundary/integrations/filesystem/tools.ts",
-      "name": "MAX_SEARCH_MAX_MATCHES",
-      "value": "200"
-    },
-    {
       "file": "src/boundary/integrations/filesystem/workspace-ops.ts",
       "name": "DEFAULT_LIST_MAX_ENTRIES",
       "value": "200"
@@ -1643,11 +1588,6 @@
       "value": "30_000",
       "form": "object-member",
       "note": "Existing mutable policy candidate DEFAULT_CONFIG.execTimeoutMs; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
-    },
-    {
-      "file": "src/boundary/integrations/git/tools.ts",
-      "name": "MAX_DIFF_CHARS",
-      "value": "8000"
     },
     {
       "file": "src/boundary/integrations/journal/bounded-io.ts",

@@ -77,24 +77,36 @@ describe('autonomous LLMWorkSpec enforcement (src/core + src/faculties)', () => 
       .toEqual([]);
   });
 
-  it('every adopted call site references completeWithWorkSpec', () => {
+  it('every adopted call site references completeWithWorkSpec (directly or via completeSealedJsonObject)', () => {
     // Spot-check representative raw-completion files import/use the typed
     // entry. Sleeptime review is intentionally absent: it now routes through
     // the companion agent loop instead of owning an LLM provider call.
-    const adopted = [
+    const sealedRunnerSource = readFileSync(join(SRC_ROOT, 'primitives/llm/sealed-json-runner.ts'), 'utf8');
+    expect(sealedRunnerSource, 'primitives/llm/sealed-json-runner.ts must delegate to completeWithWorkSpec')
+      .toContain('completeWithWorkSpec(');
+
+    const adoptedDirect = [
       'core/emotion/appraisal.ts',
       'core/intention/concern-candidates.ts',
-      'core/icp/initiation-consent-evaluator.ts',
       'core/session/manager/compaction-service.ts',
       'core/tools/focus.ts',
       'core/tools/analysis-workbench/loop.ts',
       'faculties/memory/extraction/orchestrator.ts',
-      'faculties/introspection/model-runtime.ts',
       'faculties/context-feedback/evaluator.ts',
     ];
-    for (const rel of adopted) {
+    for (const rel of adoptedDirect) {
       const source = readFileSync(join(SRC_ROOT, rel), 'utf8');
       expect(source, `${rel} should use completeWithWorkSpec`).toContain('completeWithWorkSpec(');
+    }
+
+    const adoptedSealed = [
+      'core/cogsec/blind-review/model-runtime.ts',
+      'core/icp/initiation-consent-evaluator.ts',
+      'faculties/introspection/model-runtime.ts',
+    ];
+    for (const rel of adoptedSealed) {
+      const source = readFileSync(join(SRC_ROOT, rel), 'utf8');
+      expect(source, `${rel} should use completeSealedJsonObject`).toContain('completeSealedJsonObject(');
     }
   });
 });

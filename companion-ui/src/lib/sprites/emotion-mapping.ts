@@ -172,6 +172,7 @@ export const TOOL_DOMAIN_ICON: Readonly<Record<FirstPartyToolDomain, ToolDomain>
 /** Canonical tool NAME -> FirstPartyToolDomain (mirror of registry entries). */
 export const TOOL_NAME_DOMAIN: Readonly<Record<string, FirstPartyToolDomain>> = Object.freeze({
   tool_search: 'adaptive_tooling',
+  execute: 'adaptive_tooling',
   toolset: 'adaptive_tooling',
   response_control: 'system',
   file_editor: 'boundary',

@@ -18,6 +18,7 @@ import type {
   AdaptiveToolSnapshotTool,
 } from '../adaptive-tools-telemetry.js';
 import { resolveToolPresentationRank } from '../tool-surface/registry.js';
+import { HYBRID_CODE_MODE_DIRECT_WIRE_TOOLS } from '../../tools/code-mode-execute.js';
 import type { ToolUsageRanking } from '../tool-surface/usage-ranking.js';
 import type { ToolCategory } from '../tool-registrar.js';
 import type {
@@ -408,6 +409,42 @@ export function applyActiveToolsToAgent(
   params: ApplyActiveToolsToAgentParams,
 ): void {
   params.setAgentTools(params.withCapabilityGates(params.resolution.tools));
+}
+
+interface SelectHybridCodeModeWireToolsOptions {
+  /**
+   * Active tool names explicitly commanded by the participant message (e.g.
+   * "call memory with ..."), kept directly on the provider wire alongside the
+   * core Hybrid Code Mode surface so explicit-tool contracts remain satisfied.
+   */
+  explicitlyRequestedToolNames?: readonly string[];
+}
+
+/**
+ * Project a turn's full gated active tool set onto the compact Hybrid Code Mode
+ * provider wire surface when `execute` is active on the turn.
+ *
+ * - Keeps `tool_search`, `execute`, and direct permit-bound egress / turn
+ *   control tools (`notify`, `mcp`, `publication`, `response_control`).
+ * - Preserves explicitly requested active tools from participant directives.
+ * - Falls back transparently to the full active tool list on turns where
+ *   `execute` is not active (0-tool turns, ICP candidate notify-only turns,
+ *   maintenance read-only turns, or `disabledTools: ['execute']`).
+ */
+export function selectHybridCodeModeWireTools(
+  activeTools: readonly AgentTool<any>[],
+  options: SelectHybridCodeModeWireToolsOptions = {},
+): AgentTool<any>[] {
+  if (!activeTools.some(tool => tool.name === 'execute')) {
+    return [...activeTools];
+  }
+  const explicit = options.explicitlyRequestedToolNames && options.explicitlyRequestedToolNames.length > 0
+    ? new Set(options.explicitlyRequestedToolNames)
+    : null;
+  return activeTools.filter(tool => (
+    HYBRID_CODE_MODE_DIRECT_WIRE_TOOLS.has(tool.name)
+    || (explicit !== null && explicit.has(tool.name))
+  ));
 }
 
 interface BuildAdaptiveToolSnapshotParams {

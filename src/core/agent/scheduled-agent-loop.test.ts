@@ -104,6 +104,74 @@ describe('scheduled-agent-loop stream result contract', () => {
     },
   );
 
+  it('sends getProviderWireTools to streamFn while executing tool calls against full getTools (b3h5p.4)', async () => {
+    const observedWireToolNames: string[][] = [];
+    const memoryExecute = vi.fn(async () => ({
+      content: [{ type: 'text' as const, text: JSON.stringify({ hit: true }) }],
+      details: {},
+    }));
+    const memoryTool = fromAny({
+      name: 'memory',
+      label: 'memory',
+      description: 'Memory tool',
+      parameters: { type: 'object', properties: { action: { type: 'string' } }, required: ['action'] },
+      execute: memoryExecute,
+    });
+    const executeTool = fromAny({
+      name: 'execute',
+      label: 'execute',
+      description: 'Execute tool',
+      parameters: { type: 'object', properties: { code: { type: 'string' } }, required: ['code'] },
+      execute: vi.fn(async () => ({ content: [{ type: 'text' as const, text: 'ok' }], details: {} })),
+    });
+    let callCount = 0;
+    const streamFn = vi.fn(async (_model: unknown, context: { tools?: Array<{ name: string }> }) => {
+      callCount += 1;
+      observedWireToolNames.push((context.tools ?? []).map(t => t.name));
+      const msg = callCount === 1
+        ? fromAny({
+            ...makeAssistantMessage(''),
+            content: [{
+              type: 'toolCall',
+              id: 'call-mem-1',
+              name: 'memory',
+              arguments: { action: 'search' },
+            }],
+            stopReason: 'toolUse',
+          })
+        : makeAssistantMessage('done');
+      return fromAny({
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'start', partial: msg };
+          yield { type: 'done', message: msg };
+        },
+        result: msg,
+      });
+    });
+
+    const stream = agentLoopWithScheduler(
+      [fromAny({ role: 'user', content: [{ type: 'text', text: 'hello' }] })],
+      fromAny({
+        systemPrompt: 'system prompt',
+        messages: [],
+        tools: [memoryTool, executeTool],
+        getTools: () => [memoryTool, executeTool],
+        getProviderWireTools: () => [executeTool],
+      }),
+      fromAny(makeLoopConfig()),
+      new AbortController().signal,
+      fromAny(streamFn),
+      { maxParallelToolCalls: 1 },
+    );
+
+    for await (const _event of stream) {
+      // consume stream
+    }
+
+    expect(observedWireToolNames).toEqual([['execute'], ['execute']]);
+    expect(memoryExecute).toHaveBeenCalledTimes(1);
+  });
+
   it('terminates the turn after a successful response_control no-reply result', async () => {
     const toolCallMessage = fromAny({
       ...makeAssistantMessage(''),

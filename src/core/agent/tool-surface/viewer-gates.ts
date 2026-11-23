@@ -38,6 +38,9 @@ const CATALOG = na('tool catalog and pin state; no conversation content');
 
 export const TOOL_VIEWER_GATE_DECISIONS: Readonly<Record<string, Readonly<Record<string, ToolViewerGateDecision>>>> = {
   tool_search: { [TOOL_WITHOUT_ACTIONS]: CATALOG },
+  execute: {
+    [TOOL_WITHOUT_ACTIONS]: inTool('invokes live viewer-gated canonical AgentTools inside the preserved AsyncLocalStorage request context'),
+  },
   toolset: { list: CATALOG, suggest: CATALOG, describe: CATALOG, pin: CATALOG, unpin: CATALOG },
   response_control: { no_reply: na('turn control') },
   file_editor: {

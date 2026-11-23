@@ -503,4 +503,42 @@ describe('external companion memory service', () => {
       request: { operation: 'call_tool', tool: 'unknown_tool', arguments: {} },
     })).rejects.toThrow('Unknown companion tool');
   });
+
+  it('excludes turn-local meta-tools from /v1/memory/mcp listing and direct calls (b3h5p.4)', async () => {
+    const h = fixture();
+    const metaExec = vi.fn(async () => ({ content: [{ type: 'text', text: 'should not execute' }], details: {} }));
+    const orientExec = vi.fn(async () => ({ content: [{ type: 'text', text: 'orient ok' }], details: {} }));
+    h.setTools([
+      { name: 'orient', description: 'Orient', parameters: { type: 'object' }, execute: orientExec },
+      { name: 'response_control', description: 'Turn control', parameters: { type: 'object' }, execute: metaExec },
+      { name: 'tool_search', description: 'Tool search', parameters: { type: 'object' }, execute: metaExec },
+      { name: 'toolset', description: 'Toolset', parameters: { type: 'object' }, execute: metaExec },
+      { name: 'system', description: 'System lifecycle', parameters: { type: 'object' }, execute: metaExec },
+      { name: 'execute', description: 'Primary-turn REPL', parameters: { type: 'object' }, execute: metaExec },
+    ]);
+
+    const listed = await h.service.execute({
+      binding,
+      request: { operation: 'list_tools' },
+    });
+    expect('tools' in listed).toBe(true);
+    if ('tools' in listed) {
+      expect(listed.tools.map(tool => tool.name)).toEqual(['orient']);
+    }
+
+    for (const excluded of ['response_control', 'tool_search', 'toolset', 'system', 'execute']) {
+      await expect(h.service.execute({
+        binding,
+        request: { operation: 'call_tool', tool: excluded, arguments: {} },
+      })).rejects.toThrow(`Unknown companion tool: ${excluded}`);
+    }
+    expect(metaExec).not.toHaveBeenCalled();
+
+    const ok = await h.service.execute({
+      binding,
+      request: { operation: 'call_tool', tool: 'orient', arguments: {} },
+    });
+    expect('toolResult' in ok).toBe(true);
+    expect(orientExec).toHaveBeenCalledOnce();
+  });
 });

@@ -18,6 +18,8 @@ import { isRecord } from '../../shared/utils/types.js';
 
 type LiveToolAgentContext = AgentContext & {
   getTools?: () => AgentTool<any>[] | undefined;
+  /** Compact provider wire schemas (Hybrid Code Mode); defaults to getTools/tools. */
+  getProviderWireTools?: () => AgentTool<any>[] | undefined;
   /** PromptPlan cachePlan boundaries for systemPrompt (E2.4); forwarded to the stream transport. */
   promptCacheBoundaries?: LLMSystemPromptCacheBoundaries;
 };
@@ -351,7 +353,7 @@ async function streamAssistantResponse(
   const llmContext = {
     systemPrompt: context.systemPrompt,
     messages: llmMessages,
-    tools: resolveCurrentTools(context),
+    tools: resolveProviderWireTools(context),
     ...(context.promptCacheBoundaries ? { promptCacheBoundaries: context.promptCacheBoundaries } : {}),
   };
 
@@ -422,6 +424,10 @@ async function streamAssistantResponse(
 
 function resolveCurrentTools(context: LiveToolAgentContext): AgentTool<any>[] | undefined {
   return context.getTools?.() ?? context.tools;
+}
+
+function resolveProviderWireTools(context: LiveToolAgentContext): AgentTool<any>[] | undefined {
+  return context.getProviderWireTools?.() ?? resolveCurrentTools(context);
 }
 
 function terminateStreamWithError(

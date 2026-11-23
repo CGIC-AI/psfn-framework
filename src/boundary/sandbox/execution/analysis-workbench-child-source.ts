@@ -48,6 +48,7 @@ const BUILTIN_NAMES = new Set([
   'print',
   'console',
   'FINAL',
+  'sdk',
   'globalThis',
   'JSON',
   'Math',
@@ -471,9 +472,23 @@ async function executeSandbox(message) {
     ...PURE_HELPERS,
   };
 
+  const sdkNamespace = Object.create(null);
+  let hasSdkHelpers = false;
   for (const name of helperNames) {
+    if (name.startsWith('sdk.')) {
+      const methodName = name.slice(4);
+      if (!methodName || DANGEROUS_KEYS.has(methodName) || !/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(methodName)) {
+        continue;
+      }
+      sdkNamespace[methodName] = createHostHelper(name);
+      hasSdkHelpers = true;
+      continue;
+    }
     if (BUILTIN_NAMES.has(name) || DANGEROUS_KEYS.has(name)) continue;
     contextValues[name] = createHostHelper(name);
+  }
+  if (hasSdkHelpers) {
+    contextValues.sdk = Object.freeze(sdkNamespace);
   }
 
   const context = vm.createContext(contextValues, {

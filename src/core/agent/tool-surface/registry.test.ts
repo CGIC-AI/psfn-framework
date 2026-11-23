@@ -279,7 +279,7 @@ describe('first-party tool surface registry', () => {
     // Core = tools the companion reaches for in ordinary social/self/expressive
     // interaction, plus the discovery/control surfaces that reach everything else.
     const expectedCore = [
-      'tool_search', 'toolset', 'response_control',
+      'tool_search', 'execute', 'toolset', 'response_control',
       'selfie_create', 'generate_image',
       'memory', 'scratchpad', 'journal',
       'orient', 'concerns', 'contact', 'session', 'self_status', 'system', 'identity',

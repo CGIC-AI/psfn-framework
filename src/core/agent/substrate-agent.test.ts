@@ -4499,9 +4499,9 @@ describe('SubstrateAgent.handleMessage', () => {
         { toolName: 'extended_beta', source: 'extended' },
       ]),
       counts: {
-        core: 3,
+        core: 4,
         extended: 2,
-        total: 5,
+        total: 6,
       },
     });
   });

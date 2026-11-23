@@ -358,6 +358,7 @@ const UNIFIED_TOOL_REQUIREMENT_RESOLVERS: Readonly<Partial<Record<string, Unifie
 
 const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> = {
   tool_search: 'identity.read',
+  execute: 'identity.read',
   identity_changelog: 'identity.read',
   identity_diff: 'identity.read',
   notify_operator: 'external.web',

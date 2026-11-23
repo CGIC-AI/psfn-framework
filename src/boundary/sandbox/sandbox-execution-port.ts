@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import type {
@@ -294,6 +295,10 @@ async function executeCodeInChildProcess(
   request: SandboxCodeExecutionRequest,
 ): Promise<SandboxCodeExecutionResponse> {
   const timeoutMs = normalizeTimeoutMs(request.timeoutMs);
+  // Capture the caller's active AsyncLocalStorage contexts (request context,
+  // turn tool ownership, viewer gate) before crossing the child-process IPC
+  // boundary so every host helper executes inside the exact originating turn.
+  const runInCallerContext = AsyncLocalStorage.snapshot();
 
   return await new Promise<SandboxCodeExecutionResponse>((resolve) => {
     const child: ChildProcess = spawn(
@@ -348,7 +353,7 @@ async function executeCodeInChildProcess(
         return;
       }
 
-      void handleHelperCall(child, request, rawMessage);
+      void runInCallerContext(() => handleHelperCall(child, request, rawMessage));
     });
 
     child.on('error', (error: Error) => {

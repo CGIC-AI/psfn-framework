@@ -44,4 +44,6 @@ export const PRE_DESCRIPTION_REWRITE_TOOL_DESCRIPTIONS: Readonly<Partial<Record<
   projects: 'Manage companion-owned personal projects, asynchronous wishes, and named wardrobe looks. Use action=wish_list|wish_read|wish_create|project_list|project_read|project_create|project_update|project_add_artifact|project_share|wardrobe_list|wardrobe_read|wardrobe_save|wardrobe_revise.',
   // file_editor replaced the wider fs wrapper in psfn-framework-b3h5p.3.
   file_editor: 'Read, write, and perform exact text edits on files within the Personal Workspace. Use action=read|write|edit with a required path. Use shell for directory listing, search, and git operations.',
+  // execute joined the catalog as the primary-turn Hybrid Code Mode REPL in psfn-framework-b3h5p.4.
+  execute: 'Run a short async JavaScript script in an isolated sandbox VM with direct `await sdk.<tool>(args)` access to your gated canonical companion tools.',
 };

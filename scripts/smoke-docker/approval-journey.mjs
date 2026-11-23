@@ -26,7 +26,10 @@ export async function runApprovalJourney(options) {
       const message = `SMOKE_DELETE_MEMORY ${options.memoryId} ${decision} ${randomBytes(8).toString('hex')}`;
       await streamChat({ ...options, sessionId, message });
       const turn = await readCaseTurn(options, options.channelForSession(sessionId), message);
-      const tool = turn.record.toolCalls?.find(call => call.toolName === 'memory' && call.arguments?.memory_id === options.memoryId);
+      const tool = turn.record.toolCalls?.find(call => (
+        (call.toolName === 'memory' && call.arguments?.memory_id === options.memoryId)
+        || (call.toolName === 'execute' && typeof call.arguments?.code === 'string' && call.arguments.code.includes(options.memoryId))
+      ));
       assert.equal(tool?.outcome, 'success', 'Actual memory tool did not produce a deletion proposal');
       const matchesProposal = entry => entry.params?.memoryId === options.memoryId
         && tool.resultText?.includes(entry.params.proposalId);

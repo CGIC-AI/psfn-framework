@@ -19,6 +19,11 @@ import type { IntakeEnvelopeSnapshot } from '../../../shared/contracts/intake-en
 import { isRecord } from '../../../shared/utils/types.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { textResultWithError } from '../../tools/results.js';
+import {
+  createCodeModeExecuteTool,
+  type CodeModeExecuteToolRuntime,
+} from '../../tools/code-mode-execute.js';
+import { resolveExplicitlyRequestedToolNames } from '../../../shared/tools/explicit-tool-request.js';
 import type { ToolCategory } from '../tool-registrar.js';
 import type {
   AdaptiveToolDecisionTelemetry,
@@ -45,6 +50,7 @@ import {
   removePromotedExtendedTool,
   resolveActiveTools,
   resolvePromotedToolActivation,
+  selectHybridCodeModeWireTools,
   setPromotedExtendedToolNames,
   swapPromotedExtendedTools,
   withToolConcurrencyMetadata,
@@ -584,6 +590,31 @@ export class ToolRuntimeFacade {
     return context?.candidateOrigin ? [this.getCandidateNotifyTool(context)] : undefined;
   }
 
+  /**
+   * Compact Hybrid Code Mode provider wire projection for the exact async turn.
+   * When `execute` is active on this turn, ships only the minimal wire set
+   * (`tool_search`, `execute`, permit-bound egress tools, plus any active tool
+   * explicitly demanded by the participant message) while keeping the full
+   * gated active tool set executable inside `execute`'s `sdk` namespace and via
+   * the scheduler.
+   */
+  resolveOwnedTurnProviderWireTools(): readonly AgentTool<any>[] | undefined {
+    const activeTools = this.resolveOwnedTurnTools();
+    if (!activeTools) return undefined;
+    const context = this.toolTurnContext.getStore();
+    const messageContent = typeof context?.message.content === 'string'
+      ? context.message.content
+      : '';
+    const explicitlyRequestedToolNames = messageContent.length > 0
+      ? resolveExplicitlyRequestedToolNames(messageContent, activeTools.map(tool => tool.name))
+      : undefined;
+    return selectHybridCodeModeWireTools(activeTools, {
+      ...(explicitlyRequestedToolNames && explicitlyRequestedToolNames.length > 0
+        ? { explicitlyRequestedToolNames }
+        : {}),
+    });
+  }
+
   getActiveTurnTools(): readonly AgentTool<any>[] {
     return this.resolveOwnedTurnTools() ?? [...this.agent.state.tools];
   }
@@ -633,6 +664,15 @@ export class ToolRuntimeFacade {
       getToolHealthStatusByName: () => this.getToolHealthStatusByName(),
       resolveCapabilityAccess: () => this.resolveCapabilityAccess(),
       emitTelemetry: (event, payload) => this.emitTelemetry(event, payload),
+    });
+  }
+
+  createCodeModeExecuteTool(
+    options: Omit<CodeModeExecuteToolRuntime, 'getCallableTools'> = {},
+  ): AgentTool<any> {
+    return createCodeModeExecuteTool({
+      ...options,
+      getCallableTools: () => this.resolveOwnedTurnTools() ?? this.getGatedRegisteredTools(),
     });
   }
 

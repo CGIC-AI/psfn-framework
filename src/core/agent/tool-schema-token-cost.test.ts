@@ -10,6 +10,7 @@ import {
   CANONICAL_FIRST_PARTY_TOOL_SURFACES,
   resolveToolPresentationRank,
 } from './tool-surface/registry.js';
+import { selectHybridCodeModeWireTools } from './substrate-agent/tool-orchestration-runtime.js';
 
 const FIXTURE_NAME = 'agent-state-tools-provider-v2';
 
@@ -72,9 +73,9 @@ describe('full callable catalog schema token cost', () => {
       parameterSchemaHash: sha256(parameterSchemas),
     }).toEqual({
       fixture: 'agent-state-tools-provider-v2',
-      coreTools: 26,
+      coreTools: 27,
       extendedTools: 4,
-      totalTools: 30,
+      totalTools: 31,
       includesLibrary: false,
       // n66dn.3 (Eidoverse plane: world move/perceive/act) +1440 bytes / +383 tokens pre, +2096 / +545 post.
       // psfn-framework-lpxg3.3 added the optional skill `base_version` binding:
@@ -117,17 +118,41 @@ describe('full callable catalog schema token cost', () => {
       // psfn-framework-b3h5p.3 retired redundant fs and repo wrapper tools in favor
       // of concise file_editor + gateway-observable bash shell (core):
       // -3878 bytes / -823 tokens before, -4378 bytes / -969 tokens after.
-      beforeTokens: 17_934,
-      afterTokens: 21_794,
-      deltaTokens: 3_860,
-      beforeBytes: 84_265,
-      afterBytes: 99_352,
-      providerSchemaHash: '20fb2e72023cf47bf81c80a88065322dfb51602f66ca1463e02ca686723f6fb3',
-      parameterSchemaHash: 'd902b933bd9ac3e7915237a0fdacb9bec2aa03de48b5bd2e527b6e29969250b2',
+      // psfn-framework-b3h5p.4 added primary-turn `execute` REPL (core) and updated
+      // `tool_search` for progressive TypeScript SDK discovery; full catalog grows
+      // slightly (+1525 bytes / +338 tokens) while the upfront Hybrid Code Mode
+      // provider wire payload drops ~87% below the pre-Phase-3 baseline (measured below).
+      beforeTokens: 18_066,
+      afterTokens: 22_127,
+      deltaTokens: 4_061,
+      beforeBytes: 84_879,
+      afterBytes: 100_863,
+      providerSchemaHash: '2f15face55a151850cd49c78d9760415942007d85ef94eedd303f21ebe2f0ec4',
+      parameterSchemaHash: 'a5535ded768a6fb4f5c76c40f4b9d84fc857cdfd2323c66c7f2eb708328103be',
     });
 
     // The additional description tokens affect an uncached request. A stable
     // serialized prefix is eligible for provider prompt caching where that
     // provider supports it; this fixture does not claim or simulate a cache hit.
+  });
+
+  it('shrinks the upfront Hybrid Code Mode provider wire payload by >= 80% vs pre-Phase-3 baseline (b3h5p.4)', () => {
+    const PRE_PHASE_3_BASELINE_TOKENS = 24_657;
+    const fullCatalog = orderLikeAgentState(createProviderFactoryToolCatalog());
+    const wireTools = selectHybridCodeModeWireTools(fullCatalog);
+    const wireSerialized = serializeProviderSchemas(wireTools);
+    const wireTokens = countTokens(`${FIXTURE_NAME}\n${wireSerialized}`);
+    const reductionRatio = 1 - (wireTokens / PRE_PHASE_3_BASELINE_TOKENS);
+
+    expect(wireTools.map(tool => tool.name).sort()).toEqual([
+      'execute',
+      'mcp',
+      'notify',
+      'publication',
+      'response_control',
+      'tool_search',
+    ]);
+    expect(reductionRatio).toBeGreaterThanOrEqual(0.8);
+    expect(wireTokens).toBeLessThan(4_000);
   });
 });

@@ -49,6 +49,25 @@ import {
 const log = createComponentLogger('ExternalMemory');
 const actionKind = 'memory.external.process';
 
+/**
+ * Turn-local meta-tools and lifecycle controls that belong strictly to an
+ * interactive foreground turn and must not pollute `/v1/memory/mcp`.
+ */
+const EXTERNAL_MCP_EXCLUDED_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'response_control',
+  'tool_search',
+  'toolset',
+  'system',
+  'execute',
+]);
+
+function isExternalMcpCompanionToolAllowed(toolName: string): boolean {
+  const normalized = toolName.trim();
+  return normalized.length > 0
+    && !normalized.startsWith('psfn_memory_')
+    && !EXTERNAL_MCP_EXCLUDED_TOOL_NAMES.has(normalized);
+}
+
 interface ExternalMemoryServiceOptions {
   companionId: string;
   companionName: string;
@@ -201,7 +220,7 @@ export class ExternalMemoryService {
     const seen = new Set<string>();
     const descriptors: ExternalCompanionToolDescriptor[] = [];
     for (const tool of registered) {
-      if (!tool.name || tool.name.startsWith('psfn_memory_') || seen.has(tool.name)) continue;
+      if (!isExternalMcpCompanionToolAllowed(tool.name) || seen.has(tool.name)) continue;
       seen.add(tool.name);
       const serializedSchema: unknown = tool.parameters
         ? JSON.parse(JSON.stringify(tool.parameters))
@@ -223,7 +242,7 @@ export class ExternalMemoryService {
     args: Record<string, unknown>,
     toolCallId: string,
   ): Promise<ExternalCompanionToolCallResult> {
-    if (toolName.startsWith('psfn_memory_')) {
+    if (!isExternalMcpCompanionToolAllowed(toolName)) {
       throw new Error(`Unknown companion tool: ${toolName}`);
     }
     const targetTool = (this.options.tools?.() ?? []).find(tool => tool.name === toolName);

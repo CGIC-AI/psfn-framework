@@ -2,9 +2,13 @@ import { fromAny } from '@total-typescript/shoehorn';
 import { Type } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
 import { describe, expect, it, vi } from 'vitest';
+import { runWithRequestContext } from '../../../primitives/llm/request-context.js';
 import type { CapabilityToken } from '../../../system/capabilities/tokens.js';
 import type { AdaptiveToolRuntimeState } from '../adaptive-tools-telemetry.js';
-import { createToolSearchTool, createToolsetTool } from './adaptive-tools-runtime.js';
+import {
+  createToolSearchTool,
+  createToolsetTool,
+} from './adaptive-tools-runtime.js';
 
 function capabilityAccess(granted: readonly CapabilityToken[] = []) {
   const tokens = new Set(granted);
@@ -147,6 +151,60 @@ describe('createToolSearchTool', () => {
     const result = await (fromAny(toolSearch)).execute('search-3', { limit: 20 });
     expect(result.details?.toolSearch?.matches.map((match: { name: string }) => match.name))
       .toEqual(['generate_image']);
+  });
+
+  it('returns compact TypeScript SDK signatures and filters live by disabledTools and viewer permissions (b3h5p.4)', async () => {
+    const fileEditorTool = actionTool(
+      'file_editor',
+      'Read, write, and edit workspace files.',
+      ['read', 'write', 'edit'],
+    );
+    const shellTool = actionTool('shell', 'Run sandboxed shell scripts.', ['exec']);
+    const toolSearch = createToolSearchTool({
+      getCoreTools: () => fromAny([fileEditorTool, shellTool, sessionTool]),
+      getExtendedTools: () => fromAny([notifyTool]),
+      getToolHealthStatusByName: () => new Map(),
+      resolveCapabilityAccess: () => ({
+        ...capabilityAccess(['identity.read', 'external.web']),
+        getDisabledTools: () => new Set(['shell']),
+      }),
+      emitTelemetry: vi.fn(),
+    });
+
+    const publicResult = await runWithRequestContext({
+      channelId: 'discord:public-room',
+      turnId: 'turn-public',
+      requestId: 'req-public',
+      viewerTrustLevel: 'stranger',
+      viewerChannelPrivacy: 'public',
+    }, async () => (fromAny(toolSearch)).execute('search-public', { limit: 20 }));
+
+    const matches = publicResult.details?.toolSearch?.matches as Array<{
+      name: string;
+      invocationMode: string;
+      sdkSignature: string;
+      viewerWithheldActions?: string[];
+      parameters: { properties?: { action?: { anyOf?: Array<{ const: string }> } } };
+    }>;
+
+    // Disabled tool is omitted completely from discovery.
+    expect(matches.map(match => match.name)).not.toContain('shell');
+
+    // file_editor.read is PERSONAL-gated, so in a public stranger room only write|edit remain in signature & schema.
+    const fileEditorMatch = matches.find(match => match.name === 'file_editor');
+    expect(fileEditorMatch).toBeDefined();
+    expect(fileEditorMatch?.invocationMode).toBe('sdk');
+    expect(fileEditorMatch?.sdkSignature).toBe('sdk.file_editor(args: { action: "write" | "edit" }): Promise<unknown>');
+    expect(fileEditorMatch?.viewerWithheldActions).toEqual(['read']);
+    expect(fileEditorMatch?.parameters.properties?.action?.anyOf?.map(b => b.const)).toEqual(['write', 'edit']);
+
+    // Permit-bound egress tool notify stays marked as a direct wire tool.
+    const notifyMatch = matches.find(match => match.name === 'notify');
+    expect(notifyMatch?.invocationMode).toBe('direct_wire');
+    expect(notifyMatch?.sdkSignature).toBe('notify(args: { action: "brief" | "send" }) /* direct wire tool */');
+    const sessionMatch = matches.find(match => match.name === 'session');
+    expect(sessionMatch?.sdkSignature)
+      .toBe('sdk.session(args: { action: "list" | "search" }): Promise<unknown>');
   });
 });
 

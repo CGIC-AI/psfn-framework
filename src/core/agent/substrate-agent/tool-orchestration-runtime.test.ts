@@ -3,6 +3,7 @@ import { fromPartial } from '@total-typescript/shoehorn';
 import {
   inferToolConcurrencyClass,
   resolveActiveTools,
+  selectHybridCodeModeWireTools,
 } from './tool-orchestration-runtime.js';
 import { buildToolUsageRanking } from '../tool-surface/usage-ranking.js';
 import type { AgentTool } from '../../../boundary/pi-agent/index.js';
@@ -165,5 +166,48 @@ describe('inferToolConcurrencyClass (e46hi)', () => {
     expect(inferToolConcurrencyClass('memory')).toBe('exclusive');
     expect(inferToolConcurrencyClass('repo')).toBe('exclusive');
     expect(inferToolConcurrencyClass('repo_status')).toBe('exclusive');
+  });
+});
+
+describe('selectHybridCodeModeWireTools (b3h5p.4)', () => {
+  it('projects active tools down to discovery, execute, permit-bound egress tools, and explicit requests when execute is active', () => {
+    const active = [
+      'memory', 'journal', 'orient', 'file_editor', 'shell', 'wiki',
+      'tool_search', 'execute', 'toolset', 'notify', 'mcp', 'publication', 'response_control',
+    ].map(makeTool);
+
+    expect(selectHybridCodeModeWireTools(active).map(t => t.name)).toEqual([
+      'tool_search',
+      'execute',
+      'notify',
+      'mcp',
+      'publication',
+      'response_control',
+    ]);
+
+    expect(selectHybridCodeModeWireTools(active, {
+      explicitlyRequestedToolNames: ['memory', 'file_editor'],
+    }).map(t => t.name)).toEqual([
+      'memory',
+      'file_editor',
+      'tool_search',
+      'execute',
+      'notify',
+      'mcp',
+      'publication',
+      'response_control',
+    ]);
+  });
+
+  it('passes through active tools unchanged when execute is not active (maintenance, ICP candidate, or disabledTools)', () => {
+    const notifyOnly = [makeTool('notify')];
+    expect(selectHybridCodeModeWireTools(notifyOnly).map(t => t.name)).toEqual(['notify']);
+
+    const withoutExecute = ['memory', 'journal', 'tool_search'].map(makeTool);
+    expect(selectHybridCodeModeWireTools(withoutExecute).map(t => t.name)).toEqual([
+      'memory',
+      'journal',
+      'tool_search',
+    ]);
   });
 });

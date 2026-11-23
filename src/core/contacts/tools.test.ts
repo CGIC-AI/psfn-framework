@@ -61,24 +61,30 @@ describe('contact tools', () => {
       expect(typeof tool.execute).toBe('function');
     });
 
-    it('defaults to list when called without params', async () => {
-      await store.upsert({ displayName: 'Grace', trustLevel: 'trusted', relationshipType: 'friend' });
+    it('rejects calls without an explicit action', async () => {
+      const contact = await store.upsert({ displayName: 'Grace', trustLevel: 'trusted', relationshipType: 'friend' });
       const tool = createContactTool(store);
 
-      const result = await tool.execute('contact-list-default', {});
+      const empty = await tool.execute('contact-missing-action', {});
+      expect(empty.details?.isError).toBe(true);
+      expect(resultText(empty)).toContain('action is required');
 
-      expect(resultText(result)).toContain('Contacts (1)');
-      expect(resultText(result)).toContain('Grace [trusted/friend]');
+      const lookupWithoutAction = await tool.execute('contact-lookup-missing-action', { contactId: contact.id });
+      expect(lookupWithoutAction.details?.isError).toBe(true);
+      expect(resultText(lookupWithoutAction)).toContain('action is required');
     });
 
-    it('defaults to lookup when only contactId is provided', async () => {
+    it('lists contacts and looks up by contactId when action is explicit', async () => {
       const contact = await store.upsert({ displayName: 'Dana', notes: 'Works in design' });
       const tool = createContactTool(store);
 
-      const result = await tool.execute('contact-lookup-default', { contactId: contact.id });
+      const listed = await tool.execute('contact-list', { action: 'list' });
+      expect(resultText(listed)).toContain('Contacts (1)');
+      expect(resultText(listed)).toContain('Dana');
 
-      expect(resultText(result)).toContain(`Canonical ID: ${contact.id}`);
-      expect(resultText(result)).toContain('Notes: Works in design');
+      const lookedUp = await tool.execute('contact-lookup', { action: 'lookup', contactId: contact.id });
+      expect(resultText(lookedUp)).toContain(`Canonical ID: ${contact.id}`);
+      expect(resultText(lookedUp)).toContain('Notes: Works in design');
     });
 
     it('enriches exact MI lookup with coarse broker availability without private candidate data', async () => {

@@ -211,9 +211,8 @@ function clonePolicy(policy: ReflectionPolicy): ReflectionPolicy {
 }
 
 function normalizeAction(value: unknown): ScheduleToolAction {
-  if (value === undefined) return 'list';
-  if (typeof value !== 'string') {
-    throw new Error(`action must be one of: ${SCHEDULE_TOOL_ACTIONS.join(', ')}`);
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new Error(`action is required. Supported actions: ${SCHEDULE_TOOL_ACTIONS.join(', ')}`);
   }
   const normalized = value.trim();
   switch (normalized) {

@@ -223,12 +223,19 @@ describe('createSelfStatusTool', () => {
       channelId: caller,
       viewerTrustLevel: 'public',
       viewerChannelPrivacy: 'private',
-    }, () => createSelfStatusTool(runtime).execute('self-status-gated', {}));
+    }, () => createSelfStatusTool(runtime).execute('self-status-gated', { action: 'snapshot' }));
     const payload = parseResult(result);
 
     expect(payload.channels.gatedOutCount).toBe(1);
     expect(payload.channels.recent.map((session: { channelId: string }) => session.channelId)).toEqual([caller]);
     expect(JSON.stringify(result)).not.toContain(siblingDm);
+  });
+
+  it('rejects empty arguments when action is omitted', async () => {
+    const runtime = makeRuntime();
+    const result = await createSelfStatusTool(runtime).execute('self-status-empty', {});
+    expect((result.details as { isError?: boolean }).isError).toBe(true);
+    expect(resultText(result)).toContain('action is required');
   });
 
   it('returns structured allowed runtime fields without message previews', async () => {
@@ -240,7 +247,7 @@ describe('createSelfStatusTool', () => {
       channelId: 'api:owner-console',
       viewerTrustLevel: 'primary',
       viewerChannelPrivacy: 'private',
-    }, () => tool.execute('self-status-1', {})));
+    }, () => tool.execute('self-status-1', { action: 'snapshot' })));
 
     expect(payload.schemaVersion).toBe(1);
     expect(payload.capability).toEqual({

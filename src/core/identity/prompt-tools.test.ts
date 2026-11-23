@@ -139,11 +139,12 @@ describe('Prompt Layer Tools', () => {
       }
     });
 
-    it('defaults empty-argument calls to list_layers', async () => {
+    it('rejects empty-argument calls without an explicit action', async () => {
       const tool = identityTool('nursery');
-      const result = await tool.execute('identity-default-list', {});
+      const result = await tool.execute('identity-missing-action', {});
 
-      expect(resultText(result)).toBe('No prompt layers configured.');
+      expect(result.details?.isError).toBe(true);
+      expect(resultText(result)).toContain('action is required');
     });
 
     it('fails closed on ambiguous cross-surface parameters', async () => {

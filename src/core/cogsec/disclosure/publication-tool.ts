@@ -121,12 +121,14 @@ interface CandidateStatusView {
 }
 
 function normalizeAction(params: PublicationToolParams): PublicationAction {
-  const raw = params.action;
-  if (raw === undefined) return 'status';
-  if (!PUBLICATION_ACTIONS.includes(raw)) {
+  const raw = typeof params.action === 'string' ? params.action.trim() : '';
+  if (!raw) {
+    throw new Error(`action is required. Supported actions: ${PUBLICATION_ACTIONS.join(', ')}`);
+  }
+  if (!PUBLICATION_ACTIONS.includes(raw as PublicationAction)) {
     throw new Error(`action must be one of: ${PUBLICATION_ACTIONS.join(', ')}`);
   }
-  return raw;
+  return raw as PublicationAction;
 }
 
 function rejectForbiddenMetadata(rawParams: unknown): void {

@@ -187,21 +187,7 @@ async function formatContactIdRecoveryGuidance(contactStore: ContactStorePort): 
 function normalizeContactAction(params: ContactToolParams): ContactAction {
   const rawAction = typeof params.action === 'string' ? params.action.trim() : '';
   if (!rawAction) {
-    const nonActionKeys = Object.entries(params)
-      .filter(([key, value]) => key !== 'action' && value !== undefined)
-      .map(([key]) => key);
-
-    if (nonActionKeys.length === 0) {
-      return 'list';
-    }
-
-    if (nonActionKeys.length === 1 && nonActionKeys[0] === 'contactId') {
-      return 'lookup';
-    }
-
-    throw new Error(
-      `action is required unless using default list behavior or lookup by contactId (${CONTACT_ACTION_HELP})`,
-    );
+    throw new Error(`action is required. Supported actions: ${CONTACT_ACTION_HELP}`);
   }
 
   switch (rawAction) {

@@ -448,7 +448,7 @@ function resolveHistoricalPromptVersion(
 function resolveIdentityAction(params: Record<string, unknown>): IdentityAction | null {
   const rawAction = typeof params.action === 'string' ? params.action.trim() : '';
   if (!rawAction) {
-    return Object.keys(params).length === 0 ? 'list_layers' : null;
+    return null;
   }
 
   return Object.hasOwn(IDENTITY_ACTION_METADATA, rawAction)

@@ -3,6 +3,7 @@ import type { AgentTool, AgentToolResult } from '../../../boundary/pi-agent/inde
 import { runToolConformanceSweep } from './harness.js';
 import type { ToolProbeSpec, ActionProbeSpec } from './probe-registry.js';
 import { ToolConformanceHarnessError } from './types.js';
+import { createProviderFactoryToolCatalog } from '../tool-surface/canonical-tool-catalog.test-support.js';
 import { withViewerReadGate } from '../tool-surface/viewer-read-gate.js';
 import { getRequestContext, runWithRequestContext } from '../../../primitives/llm/request-context.js';
 
@@ -610,5 +611,20 @@ describe('tool conformance harness never writes session entries', () => {
     expect(sessionSpy.append).not.toHaveBeenCalled();
     expect(sessionSpy.recordUserMessage).not.toHaveBeenCalled();
     expect(sessionSpy.recordAssistantMessage).not.toHaveBeenCalled();
+  });
+
+  it('rejects empty args {} across every canonical factory tool whose schema requires action', async () => {
+    const catalog = createProviderFactoryToolCatalog();
+    const schemaOnlySpecs = Object.fromEntries(
+      catalog.map((entry) => [entry.name, { kind: 'schema_only' as const }]),
+    );
+    const result = await sweep(catalog, schemaOnlySpecs);
+    const rejectionProbes = result.results.filter((probe) => probe.probeKind === 'rejection_check');
+    const failures = rejectionProbes.filter((probe) => !probe.ok);
+
+    expect(rejectionProbes.length).toBeGreaterThanOrEqual(20);
+    expect(
+      failures.map((probe) => `${probe.toolName}:${probe.classification ?? 'fail'}:${probe.error ?? ''}`),
+    ).toEqual([]);
   });
 });

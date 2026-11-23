@@ -748,7 +748,11 @@ class InMemoryTranscriptSearch {
     expect(Value.Check((fromAny(tool)).parameters, { action: 'session_resume', sessionId: 'api:session-two' })).toBe(false);
     expect(Value.Check((fromAny(tool)).parameters, { action: 'focus_start', scope: 'diagnose' })).toBe(false);
 
-    const listed = await asPrimaryPrivateViewer(() => tool.execute('session-list', {}));
+    const missingAction = await asPrimaryPrivateViewer(() => tool.execute('session-missing-action', {}));
+    expect((missingAction.details as { isError?: boolean }).isError).toBe(true);
+    expect(toolText(missingAction)).toContain('action is required');
+
+    const listed = await asPrimaryPrivateViewer(() => tool.execute('session-list', { action: 'list' }));
     const listedPayload = JSON.parse(toolText(listed)) as {
       activeSessionId: string | null;
       sessions: Array<{ sessionId: string }>;

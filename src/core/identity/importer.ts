@@ -7,8 +7,6 @@ import {
   type CCv3Data,
   type ContainerFormat,
   type ExtractedAsset,
-  type SourceFormat,
-  type Spec,
 } from '@character-foundry/character-foundry/loader';
 import type { CharacterCardV2 } from './types.js';
 
@@ -18,8 +16,8 @@ const LOREBOOK_KEYWORD_LIMIT = 6;
 
 interface ParseMetadata {
   containerFormat: ContainerFormat;
-  sourceFormat: SourceFormat;
-  spec: Spec;
+  sourceFormat: string;
+  spec: string;
   warnings: string[];
 }
 
@@ -227,8 +225,8 @@ export function parseImportedCharacterCard(raw: Uint8Array): Omit<CharacterImpor
     primaryAsset: pickPrimaryAsset(assetMetadata),
     memorySeeds: mapCharacterBookEntriesToMemorySeeds(parsed.card),
     containerFormat: parsed.containerFormat,
-    sourceFormat: parsed.sourceFormat,
-    spec: parsed.spec,
+    sourceFormat: String(parsed.sourceFormat),
+    spec: String(parsed.spec),
     warnings: parsed.warnings ?? [],
   };
 }

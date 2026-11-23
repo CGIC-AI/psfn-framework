@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
   writeFileSync,
 } from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -14,7 +15,7 @@ import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
 import { ensurePersonalFilesLayout } from '../layout.js';
 
-export const COMPANION_LIBRARY_SEED_VERSION = 'companion-library-v7';
+export const COMPANION_LIBRARY_SEED_VERSION = 'companion-library-v8';
 export const COMPANION_LIBRARY_MANIFEST_FILE = 'companion-library-manifest.json';
 export const SHARED_WORKSPACE_POLICY_VERSION = 1;
 
@@ -167,12 +168,44 @@ function validateAppliedSeedManifest(path: string, sourceBundle: CompanionLibrar
     if (!isRecord(appliedFile)
       || appliedFile.path !== sourceFile.path
       || appliedFile.sha256 !== sourceFile.sha256
-      || (appliedFile.outcome !== 'seeded' && appliedFile.outcome !== 'preserved')) {
+      || (appliedFile.outcome !== 'seeded'
+        && appliedFile.outcome !== 'updated'
+        && appliedFile.outcome !== 'preserved')) {
       throw new Error(
         `Invalid Companion Library seed manifest ${path}: applied file hashes do not match the immutable source bundle`,
       );
     }
   }
+}
+
+function loadPriorSeedHashesByPath(stateDir: string): Map<string, Set<string>> {
+  const hashes = new Map<string, Set<string>>();
+  if (!existsSync(stateDir)) return hashes;
+  for (const entry of readdirSync(stateDir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+    try {
+      const parsed = JSON.parse(readFileSync(join(stateDir, entry.name), 'utf8'));
+      if (!isRecord(parsed) || !Array.isArray(parsed.files)) continue;
+      for (const file of parsed.files) {
+        if (!isRecord(file) || typeof file.path !== 'string' || typeof file.sha256 !== 'string') continue;
+        let known = hashes.get(file.path);
+        if (!known) {
+          known = new Set<string>();
+          hashes.set(file.path, known);
+        }
+        known.add(file.sha256);
+      }
+    } catch {
+      // Ignore unrelated or unparseable prior state files while collecting known hashes.
+    }
+  }
+  return hashes;
+}
+
+function copyFileAtomic(sourcePath: string, destinationPath: string): void {
+  const tempPath = `${destinationPath}.tmp-${process.pid}-${Date.now()}`;
+  writeFileSync(tempPath, readFileSync(sourcePath));
+  renameSync(tempPath, destinationPath);
 }
 
 function seedCompanionLibrary(personalWorkspacePath: string, sourceDir: string): void {
@@ -187,17 +220,27 @@ function seedCompanionLibrary(personalWorkspacePath: string, sourceDir: string):
   const destinationDir = join(personalWorkspacePath, 'docs', 'companion-library');
   mkdirSync(destinationDir, { recursive: true });
   mkdirSync(stateDir, { recursive: true });
+  const priorSeedHashesByPath = loadPriorSeedHashesByPath(stateDir);
   const files = sourceBundle.files.map((sourceFile) => {
     const sourcePath = resolve(sourceDir, sourceFile.path);
     const destinationPath = join(destinationDir, basename(sourceFile.path));
-    let outcome: 'seeded' | 'preserved' = 'seeded';
-    try {
+    if (!existsSync(destinationPath)) {
       copyFileSync(sourcePath, destinationPath, constants.COPYFILE_EXCL);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      outcome = 'preserved';
+      return { path: sourceFile.path, sha256: sourceFile.sha256, outcome: 'seeded' as const };
     }
-    return { path: sourceFile.path, sha256: sourceFile.sha256, outcome };
+    const existingSha = sha256(destinationPath);
+    if (existingSha === sourceFile.sha256) {
+      return { path: sourceFile.path, sha256: sourceFile.sha256, outcome: 'preserved' as const };
+    }
+    const knownPriorHashes = priorSeedHashesByPath.get(sourceFile.path);
+    if (!knownPriorHashes?.has(existingSha)) {
+      const backupPath = `${destinationPath}.pre-${sourceBundle.bundleVersion}.bak`;
+      if (!existsSync(backupPath)) {
+        copyFileSync(destinationPath, backupPath, constants.COPYFILE_EXCL);
+      }
+    }
+    copyFileAtomic(sourcePath, destinationPath);
+    return { path: sourceFile.path, sha256: sourceFile.sha256, outcome: 'updated' as const };
   });
 
   writeJsonAtomic(statePath, {
@@ -206,7 +249,7 @@ function seedCompanionLibrary(personalWorkspacePath: string, sourceDir: string):
     sourceManifestSha256: sourceBundle.sourceManifestSha256,
     appliedAt: new Date().toISOString(),
     destination: 'docs/companion-library',
-    overwritePolicy: 'never',
+    overwritePolicy: 'refresh-on-version-bump',
     files,
   });
 }

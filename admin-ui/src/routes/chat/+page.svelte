@@ -566,12 +566,18 @@ ${context}`;
   // ── Connection check ──
 
   async function checkConnection() {
+    const fleetScoped = typeof window !== 'undefined'
+      && currentCompanionGardenScope(window.location.pathname) !== null;
     try {
-      const res = await apiFetch('/health');
+      const res = await apiFetch(fleetScoped ? '/api/admin/chat/bootstrap' : '/health');
       if (res.ok) {
         connectionStatus = 'connected';
-        const data = await res.json() as { status?: string; uptime?: number };
-        statusDetail = data.uptime ? `Uptime: ${formatUptime(data.uptime)}` : 'Connected';
+        if (fleetScoped) {
+          statusDetail = 'Connected';
+        } else {
+          const data = await res.json() as { status?: string; uptime?: number };
+          statusDetail = data.uptime ? `Uptime: ${formatUptime(data.uptime)}` : 'Connected';
+        }
       } else {
         connectionStatus = 'error';
         statusDetail = `HTTP ${res.status}`;
